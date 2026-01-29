@@ -46,6 +46,7 @@ Author: Integrated with validated gradient_engine.py
 Date: November 2025
 """
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -141,8 +142,19 @@ def _compute_vfe_gradients_block_diagonal(
         block_end = block_start + d
         gen_block = generators[:, block_start:block_end, block_start:block_end]
         phi_matrix_block = torch.einsum('bna,aij->bnij', phi, gen_block)
-        block_exp_phi.append(torch.matrix_exp(phi_matrix_block))
-        block_exp_neg_phi.append(torch.matrix_exp(-phi_matrix_block))
+        # Float64 + re-orthogonalization for large block dimensions
+        if d >= 16:
+            phi_matrix_block_f64 = phi_matrix_block.double()
+            exp_phi_block = torch.matrix_exp(phi_matrix_block_f64).to(dtype)
+            exp_neg_phi_block = torch.matrix_exp(-phi_matrix_block_f64).to(dtype)
+            eye_d = torch.eye(d, device=device, dtype=dtype)
+            exp_phi_block = exp_phi_block @ ((3.0 * eye_d - exp_phi_block.transpose(-1, -2) @ exp_phi_block) / 2.0)
+            exp_neg_phi_block = exp_neg_phi_block @ ((3.0 * eye_d - exp_neg_phi_block.transpose(-1, -2) @ exp_neg_phi_block) / 2.0)
+        else:
+            exp_phi_block = torch.matrix_exp(phi_matrix_block)
+            exp_neg_phi_block = torch.matrix_exp(-phi_matrix_block)
+        block_exp_phi.append(exp_phi_block)
+        block_exp_neg_phi.append(exp_neg_phi_block)
         block_start = block_end
 
     # Accumulators for alignment gradients
@@ -223,8 +235,9 @@ def _compute_vfe_gradients_block_diagonal(
                 logdet_i = torch.zeros(B, C_actual, device=device, dtype=dtype)
 
             kl_block = 0.5 * (trace_block + mahal_block - d + logdet_j - logdet_i[:, :, None])
-            # Clamp KL to [0, 100] for numerical stability
-            kl_values[:, i_start:i_end, :] = kl_values[:, i_start:i_end, :] + kl_block.clamp(min=0.0, max=100.0)
+            # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
+            kl_ceil = max(100.0, 5.0 * K)
+            kl_values[:, i_start:i_end, :] = kl_values[:, i_start:i_end, :] + kl_block.clamp(min=0.0, max=kl_ceil)
 
             # Sigma alignment gradient for this block
             if compute_sigma_align_grad:
@@ -243,9 +256,11 @@ def _compute_vfe_gradients_block_diagonal(
     grad_mu_direct = lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
 
     # Softmax coupling term
+    # Scale kappa by √K to match attention temperature scaling
+    kappa_scaled = kappa * math.sqrt(max(K, 1))
     avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
     grad_deviation = grad_kl_per_pair_full - avg_grad.unsqueeze(2)
-    d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa
+    d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
     grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
 
     grad_mu_align = grad_mu_direct + grad_mu_softmax
@@ -297,9 +312,18 @@ def _compute_vfe_gradients_chunked(
     # 2. Alignment Gradient (chunked processing)
     # =================================================================
     # Precompute matrix exponentials for all positions
+    # Float64 + re-orthogonalization for large K
     phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
-    exp_phi = torch.matrix_exp(phi_matrix)
-    exp_neg_phi = torch.matrix_exp(-phi_matrix)
+    if K >= 16:
+        phi_matrix_f64 = phi_matrix.double()
+        exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
+        exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
+        eye_K = torch.eye(K, device=device, dtype=dtype)
+        exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
+        exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
+    else:
+        exp_phi = torch.matrix_exp(phi_matrix)
+        exp_neg_phi = torch.matrix_exp(-phi_matrix)
     del phi_matrix
 
     # Expand diagonal to full for transport
@@ -309,6 +333,9 @@ def _compute_vfe_gradients_chunked(
     grad_mu_direct = torch.zeros_like(mu_q)
     grad_mu_softmax = torch.zeros_like(mu_q)
     grad_sigma_align = torch.zeros_like(sigma_q)
+
+    # Scale kappa by √K to match attention temperature scaling
+    kappa_scaled = kappa * math.sqrt(max(K, 1))
 
     for i_start in range(0, N, chunk_size):
         i_end = min(i_start + chunk_size, N)
@@ -376,8 +403,9 @@ def _compute_vfe_gradients_chunked(
 
             logdet_q = torch.sum(torch.log(sigma_i), dim=-1)[:, :, None].expand(-1, -1, n_j).clone()
 
-            # Clamp KL to [0, 100] for numerical stability
-            kl_chunk = 0.5 * (trace_term + mahal - K + logdet_p - logdet_q).clamp(min=0.0, max=100.0)
+            # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
+            kl_ceil = max(100.0, 5.0 * K)
+            kl_chunk = 0.5 * (trace_term + mahal - K + logdet_p - logdet_q).clamp(min=0.0, max=kl_ceil)
 
             # Accumulate weighted gradient for avg_grad (non-inplace)
             chunk_beta_grad_kl_sum = chunk_beta_grad_kl_sum + torch.einsum('bij,bijk->bik', beta_chunk, grad_kl)
@@ -386,7 +414,7 @@ def _compute_vfe_gradients_chunked(
             # This division provides numerical stability
             avg_grad_i = chunk_beta_grad_kl_sum / (beta_i.sum(dim=-1, keepdim=True) + eps)
             grad_deviation = grad_kl - avg_grad_i.unsqueeze(2)
-            d_beta_d_mu = beta_chunk.unsqueeze(-1) * grad_deviation / kappa
+            d_beta_d_mu = beta_chunk.unsqueeze(-1) * grad_deviation / kappa_scaled
             softmax_contrib = lambda_belief * torch.einsum('bij,bijk->bik', kl_chunk, d_beta_d_mu)
             grad_mu_softmax[:, i_start:i_end] = grad_mu_softmax[:, i_start:i_end] + softmax_contrib
 
@@ -552,9 +580,18 @@ def compute_vfe_gradients_gpu(
             Omega = cached_transport['Omega']
         else:
             # Compute transport operators (vectorized)
+            # Float64 + re-orthogonalization for large K
             phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
-            exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
-            exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+            if K >= 16:
+                phi_matrix_f64 = phi_matrix.double()
+                exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
+                exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
+                eye_K = torch.eye(K, device=device, dtype=dtype)
+                exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
+                exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
+            else:
+                exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
+                exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
 
             # Transport: Ω_ij = exp(φ_i) @ exp(-φ_j)
             # For all pairs: (B, N, N, K, K)
@@ -618,8 +655,9 @@ def compute_vfe_gradients_gpu(
 
         # Full KL divergence
         kl_values = 0.5 * (trace_term + mahal_term - K + logdet_j_t - logdet_i_expanded)
-        # Clamp KL to [0, 100] for numerical stability
-        kl_values = kl_values.clamp(min=0.0, max=100.0)  # (B, N, N)
+        # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
+        kl_ceil = max(100.0, 5.0 * K)
+        kl_values = kl_values.clamp(min=0.0, max=kl_ceil)  # (B, N, N)
 
         # =================================================================
         # 2a. Direct term: Σ_j β_ij · ∂KL_ij/∂μ_i
@@ -639,7 +677,9 @@ def compute_vfe_gradients_gpu(
         grad_deviation = grad_kl_per_pair - avg_grad.unsqueeze(2)  # (B, N, N, K)
 
         # Softmax coupling gradient: ∂β_ij/∂μ_i = β_ij · grad_deviation / κ
-        d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa  # (B, N, N, K)
+        # Scale kappa by √K to match attention temperature scaling
+        kappa_scaled = kappa * math.sqrt(max(K, 1))
+        d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled  # (B, N, N, K)
 
         # Weight by KL values and sum: Σ_j KL_ij · ∂β_ij/∂μ_i
         grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
@@ -677,9 +717,18 @@ def compute_vfe_gradients_gpu(
         if cached_transport is not None and 'Omega' in cached_transport:
             Omega = cached_transport['Omega']
         else:
+            # Float64 + re-orthogonalization for large K
             phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
-            exp_phi = torch.matrix_exp(phi_matrix)
-            exp_neg_phi = torch.matrix_exp(-phi_matrix)
+            if K >= 16:
+                phi_matrix_f64 = phi_matrix.double()
+                exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
+                exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
+                eye_K = torch.eye(K, device=device, dtype=dtype)
+                exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
+                exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
+            else:
+                exp_phi = torch.matrix_exp(phi_matrix)
+                exp_neg_phi = torch.matrix_exp(-phi_matrix)
             Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
 
         # Transport means
@@ -730,16 +779,19 @@ def compute_vfe_gradients_gpu(
 
         # Full KL divergence
         kl_values = 0.5 * (trace_term + mahal_term - K + logdet_j_t - logdet_i_expanded)
-        # Clamp KL to [0, 100] for numerical stability
-        kl_values = kl_values.clamp(min=0.0, max=100.0)  # (B, N, N)
+        # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
+        kl_ceil = max(100.0, 5.0 * K)
+        kl_values = kl_values.clamp(min=0.0, max=kl_ceil)  # (B, N, N)
 
         # Direct term
         grad_mu_direct = lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair)
 
         # Softmax coupling term
+        # Scale kappa by √K to match attention temperature scaling
+        kappa_scaled = kappa * math.sqrt(max(K, 1))
         avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair)
         grad_deviation = grad_kl_per_pair - avg_grad.unsqueeze(2)
-        d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa
+        d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
         grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
 
         grad_mu_align = grad_mu_direct + grad_mu_softmax
