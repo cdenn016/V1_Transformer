@@ -300,3 +300,21 @@ For SO(3) with K ≤ 45, the effects are mild:
 - Float32 matrix_exp on 3×3 matrices is exact to machine precision
 - KL ceiling of 100 is rarely hit
 - Phi has only 3 dims, no gradient budget imbalance
+
+---
+
+## Files Modified
+
+The fixes were applied consistently across all numerical paths:
+
+| File | Fixes Applied |
+|------|---------------|
+| `transformer/core/attention.py` | √K attention scaling, float64 transport, re-orthogonalization, KL ceiling |
+| `transformer/core/variational_ffn.py` | √K softmax coupling, float64 transport, re-orthogonalization, KL ceiling |
+| `transformer/train.py` | √K loss normalization, per-group grad clipping, KL ceiling |
+| `transformer/train_publication.py` | Per-group grad clipping |
+
+The VFE FFN (`variational_ffn.py`) required the same fixes as attention because it:
+1. Computes its own KL values for the softmax coupling gradient
+2. Computes transport operators internally when not using cached transport
+3. Uses `∂β_ij/∂μ_i ∝ 1/κ` which must match attention's temperature scaling
