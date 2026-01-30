@@ -251,6 +251,7 @@ VFE_EM_CONFIG = {
     'mu_init_std': 7.0,
     'mu_normalize': False,
     'mu_max_norm': None,
+    'phi_scale': 1.0,             # Gauge frame initialization scale (try 1.0-2.0 for clustering)
 
     # VFE dynamics
     'ffn_n_iterations': 1,
@@ -408,6 +409,7 @@ PURE_FEP_CONFIG = {
     'mu_init_std': 7.0,
     'mu_normalize': False,
     'mu_max_norm': None,
+    'phi_scale': 1.0,             # Gauge frame initialization scale (try 1.0-2.0 for clustering)
 
     # VFE dynamics (more iterations for belief convergence)
     'ffn_n_iterations': 10,       # More belief updates per step
