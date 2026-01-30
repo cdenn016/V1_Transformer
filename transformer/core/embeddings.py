@@ -69,6 +69,7 @@ class GaugeTokenEmbedding(nn.Module):
         max_seq_len: int = 2048,
         use_positional_embedding: bool = False,
         phi_dim: int = 3,  # 3 for SO(3), N(N-1)/2 for SO(N)
+        phi_scale: float = 0.3,  # Target ||φ|| norm for gauge frame initialization
         # Mean embedding normalization options
         mu_normalize: bool = False,  # If True, project μ to unit sphere
         mu_max_norm: Optional[float] = None,  # If set, clamp ||μ|| ≤ max_norm
@@ -96,8 +97,11 @@ class GaugeTokenEmbedding(nn.Module):
                                      (like standard transformers). This provides position
                                      info in the content while keeping gauge transport Ω_ij.
             phi_dim: Dimension of gauge frame φ. 3 for SO(3), N(N-1)/2 for SO(N).
+            phi_scale: Target ||φ|| norm for gauge frame initialization. Higher values
+                      (e.g., 1.0-2.0) encourage semantic clustering in gauge frames.
         """
         super().__init__()
+        self.phi_scale = phi_scale
         self.vocab_size = vocab_size
         self.embed_dim = embed_dim
         self.irrep_spec = irrep_spec
@@ -194,12 +198,11 @@ class GaugeTokenEmbedding(nn.Module):
             # Phi will grow during training via learnable_phi=True.
             #
             # IMPORTANT: Scale std inversely with sqrt(phi_dim) to maintain consistent
-            # norm across different SO(N) dimensions. Target ||φ|| ≈ 0.3 regardless of N.
-            # - SO(3): phi_dim=3, std=0.173, ||φ||≈0.3
-            # - SO(50): phi_dim=1225, std=0.0086, ||φ||≈0.3
-            # - SO(100): phi_dim=4950, std=0.0043, ||φ||≈0.3
-            target_phi_norm = 0.3  # Small enough for accurate matrix exp
-            phi_init_std = target_phi_norm / (phi_dim ** 0.5)
+            # norm across different SO(N) dimensions. Target ||φ|| ≈ phi_scale regardless of N.
+            # - SO(3): phi_dim=3, phi_scale=1.0 → std=0.577, ||φ||≈1.0
+            # - SO(50): phi_dim=1225, phi_scale=1.0 → std=0.029, ||φ||≈1.0
+            # - SO(100): phi_dim=4950, phi_scale=1.0 → std=0.014, ||φ||≈1.0
+            phi_init_std = phi_scale / (phi_dim ** 0.5)
             nn.init.normal_(self.phi_embed.weight, mean=0.0, std=phi_init_std)
         else:
             # All tokens start at identity frame
