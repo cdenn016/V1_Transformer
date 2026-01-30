@@ -245,7 +245,7 @@ class PublicationFigures:
         tracker: TrainingTracker,
         save_name: str = "training_curves",
         show_components: bool = True,
-        start_step: int = 5,
+        start_step: int = 100,
     ) -> plt.Figure:
         """
         Plot training curves: Loss, PPL, BPC.
@@ -339,8 +339,7 @@ class PublicationFigures:
 
         plt.tight_layout()
 
-        # Save
-        fig.savefig(self.save_dir / f"{save_name}.pdf")
+        
         fig.savefig(self.save_dir / f"{save_name}.png", dpi=300)
 
         return fig
@@ -406,7 +405,7 @@ class PublicationFigures:
 
         plt.tight_layout()
 
-        fig.savefig(self.save_dir / f"{save_name}.pdf")
+        
         fig.savefig(self.save_dir / f"{save_name}.png", dpi=300)
 
         return fig
@@ -472,7 +471,7 @@ class PublicationFigures:
 
         plt.tight_layout()
 
-        fig.savefig(self.save_dir / f"{save_name}.pdf")
+        
         fig.savefig(self.save_dir / f"{save_name}.png", dpi=300)
 
         return fig
@@ -529,7 +528,7 @@ class PublicationFigures:
 
         plt.tight_layout()
 
-        fig.savefig(self.save_dir / f"{save_name}.pdf")
+        
         fig.savefig(self.save_dir / f"{save_name}.png", dpi=300)
 
         return fig
@@ -585,7 +584,7 @@ class PublicationFigures:
 
         plt.tight_layout()
 
-        fig.savefig(self.save_dir / f"{save_name}.pdf")
+        
         fig.savefig(self.save_dir / f"{save_name}.png", dpi=300)
 
         return fig
@@ -594,7 +593,7 @@ class PublicationFigures:
         self,
         tracker: TrainingTracker,
         save_name: str = "attention_entropy",
-        start_step: int = 5,
+        start_step: int = 100,
     ) -> plt.Figure:
         """
         Plot attention entropy over training.
