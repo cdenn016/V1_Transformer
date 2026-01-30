@@ -620,14 +620,14 @@ Figure~\ref{fig:training_curves} shows training and validation loss curves over 
     \centering
     \begin{subfigure}[b]{0.48\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{VFE_LLM_Manuscript/SO50_training_curves.png}
+        \includegraphics[width=\textwidth]{VFE_LLM_Manuscript/figures/SO50_training_curves.png}
         \caption{Gauge VFE (SO(20))}
         \label{fig:train_vfe}
     \end{subfigure}
     \hfill
     \begin{subfigure}[b]{0.48\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{training_curves_std_24M.png}
+        \includegraphics[width=\textwidth]{VFE_LLM_Manuscript/figures/training_curves_std_24M.png}
         \caption{Standard Transformer (param-matched, 24M)}
         \label{fig:train_baseline}
     \end{subfigure}
@@ -691,14 +691,14 @@ To assess generalization quality, we analyze the train-validation gap throughout
     \centering
     \begin{subfigure}[b]{0.48\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{VFE_LLM_Manuscript/SO50_train_val_gap.png}
+        \includegraphics[width=\textwidth]{VFE_LLM_Manuscript/figures/SO50_train_val_gap.png}
         \caption{Gauge VFE (SO(50))}
         \label{fig:gap_vfe}
     \end{subfigure}
     \hfill
     \begin{subfigure}[b]{0.48\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{train_val_gap_std_24M.png}
+        \includegraphics[width=\textwidth]{VFE_LLM_Manuscript/figures/train_val_gap_std_24M.png}
         \caption{Standard Transformer (param-matched, 24M)}
         \label{fig:gap_baseline}
     \end{subfigure}
@@ -779,14 +779,14 @@ Our geometric reformulation of transformers allows previously ill-understood and
     \centering
     \begin{subfigure}[b]{0.48\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{Symmetric Vacuum.png}
+        \includegraphics[width=\textwidth]{VFE_LLM_Manuscript/figures/Symmetric Vacuum.png}
         \caption{Vacuum dynamics (no observations)}
         \label{fig:vacuum}
     \end{subfigure}
     \hfill
     \begin{subfigure}[b]{0.48\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{Symmetry Breaking.png}
+        \includegraphics[width=\textwidth]{VFE_LLM_Manuscript/figures/Symmetry Breaking.png}
         \caption{Observation-driven symmetry breaking}
         \label{fig:symmetry_breaking}
     \end{subfigure}
@@ -851,14 +851,14 @@ A striking empirical finding is that the learned gauge frames $\phi_i$ develop s
 
 \begin{figure}[t]
     \centering
-    \includegraphics[width=\textwidth]{VFE_LLM_Manuscript/SO50_belief_clustering_step200000.png}
+    \includegraphics[width=\textwidth]{VFE_LLM_Manuscript/figures/SO50_belief_clustering_step200000.png}
     \caption{Semantic clustering in $\mu$ for SO(50) with $K=100$. Left: 3D PCA projection of the 190-dimensional gauge frame space $\mathfrak{so}(50)$. Right: 2D projection (PC1 vs PC2). Punctuation (green) forms a tight cluster near the origin, while content words (orange) and function words (purple) separate along PC2. The first three principal components capture $\sim$[PCA-TOTAL-VARIANCE]\% of variance ([PCA-PC1]\% + [PCA-PC2]\% + [PCA-PC3]\%), yet reveal clear linguistic organization. This structure emerges without supervision, purely from variational free energy minimization.}
     \label{fig:gauge_clustering}
 \end{figure}
 
 \begin{figure}[t]
     \centering
-    \includegraphics[width=\textwidth]{VFE_LLM_Manuscript/SO50_gauge_frame_clustering_step200000.png}
+    \includegraphics[width=\textwidth]{VFE_LLM_Manuscript/figures/SO50_gauge_frame_clustering_step200000.png}
     \caption{Semantic clustering in learned gauge frames for SO(50) with $K=100$. Left: 3D PCA projection of the 190-dimensional gauge frame space $\mathfrak{so}(50)$. Right: 2D projection (PC1 vs PC2). Punctuation (green) forms a tight cluster near the origin, while content words (orange) and function words (purple) separate along PC2. The first three principal components capture $\sim$[PCA-TOTAL-VARIANCE]\% of variance ([PCA-PC1]\% + [PCA-PC2]\% + [PCA-PC3]\%), yet reveal clear linguistic organization. This structure emerges without supervision, purely from variational free energy minimization.}
     \label{fig:gauge_clustering}
 \end{figure}
