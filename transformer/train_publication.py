@@ -987,9 +987,10 @@ class PublicationTrainer(FastTrainer):
         target_ids = target_ids.to(self.device)
 
         # Check if we should compute RG metrics this step
+        # NOTE: Use (step + 1) to align with eval_interval which also uses (step + 1)
         compute_rg = (
             getattr(self.config, 'compute_rg_metrics', False) and
-            self.global_step % getattr(self.config, 'rg_metrics_interval', 100) == 0
+            (self.global_step + 1) % getattr(self.config, 'rg_metrics_interval', 100) == 0
         )
 
         # Check if using standard transformer (no VFE loss)
