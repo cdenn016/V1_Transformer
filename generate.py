@@ -157,11 +157,16 @@ def main():
             _, attn_info = model.forward_with_attention(input_ids)
 
         tokens = [tokenizer.decode([tid]) for tid in token_ids]
+
+        # Save to same directory as checkpoint
+        output_dir = Path(CHECKPOINT_PATH).parent
+        save_path = output_dir / "attention_pattern.pdf"
+
         plot_attention_publication(
             attn_info['beta'][0].cpu(),
             attn_info['kl'][0].cpu(),
             tokens,
-            save_path="attention_pattern.pdf",
+            save_path=str(save_path),
             title=f"Attention: \"{INPUT_TEXT[:40]}{'...' if len(INPUT_TEXT) > 40 else ''}\"",
         )
 
