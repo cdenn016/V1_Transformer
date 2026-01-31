@@ -14,6 +14,58 @@ from typing import Tuple, Dict, Any, Optional
 from transformer.core.model import GaugeTransformerLM
 
 
+def save_checkpoint(
+    model: GaugeTransformerLM,
+    optimizer,
+    config: Dict[str, Any],
+    epoch: int,
+    step: int,
+    save_path: str,
+    **kwargs
+):
+    """
+    Save a model checkpoint.
+
+    Args:
+        model: The model to save
+        optimizer: Optimizer state to save
+        config: Model configuration
+        epoch: Current epoch
+        step: Current step
+        save_path: Path to save checkpoint
+        **kwargs: Additional items to save
+    """
+    checkpoint = {
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict() if optimizer else None,
+        'config': config,
+        'epoch': epoch,
+        'step': step,
+        **kwargs
+    }
+    torch.save(checkpoint, save_path)
+    print(f"Saved checkpoint to {save_path}")
+
+
+def load_checkpoint(checkpoint_path: str, device: str = 'cpu') -> Dict[str, Any]:
+    """
+    Load a raw checkpoint dictionary.
+
+    Args:
+        checkpoint_path: Path to checkpoint file
+        device: Device to load tensors to
+
+    Returns:
+        checkpoint: Dictionary with model_state_dict, config, etc.
+    """
+    checkpoint_path = Path(checkpoint_path)
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    return checkpoint
+
+
 def load_model(checkpoint_path: str) -> Tuple[GaugeTransformerLM, Dict[str, Any]]:
     """
     Load a trained GaugeTransformerLM model from checkpoint.
