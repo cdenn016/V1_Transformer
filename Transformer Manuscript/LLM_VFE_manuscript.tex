@@ -546,7 +546,7 @@ The gauge VFE maps each token to variational parameters $(\mu, \Sigma, \phi) \in
 
 \subsection{Belief/Prior Initialization and Evolution}
 
-Agent beliefs $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ represent context-dependent semantic interpretations that evolve through communication with other agents. Token priors $p_c = \mathcal{N}(\mu_p^c, \Sigma_p^c)$ and gauge frames $\phi_c \in \mathfrak{g}$ are randomly initialized from $\mathcal{N}(0, \sigma_{\text{init}}^2 I)$ with small variance $\sigma_{\text{init}} = 0.1$, serving as learnable token representations analogous to embedding matrices in standard transformers. At the start of each training sequence, agent beliefs are initialized to match their token priors:
+Agent beliefs $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ represent context-dependent semantic interpretations that evolve through communication with other agents. Token priors $p_c = \mathcal{N}(\mu_p^c, \Sigma_p^c)$ and gauge frame coefficients $\phi_c^a \in \mathbb{R}$ are randomly initialized from $\mathcal{N}(0, \sigma_{\text{init}}^2)$ with small variance $\sigma_{\text{init}} = 0.1$, serving as learnable token representations analogous to embedding matrices in standard transformers. The Lie algebra element is constructed via basis expansion $\phi_c = \sum_a \phi_c^a T_a \in \mathfrak{g}$, where $\{T_a\}$ are the standard skew-symmetric generators of $\mathfrak{so}(N)$, ensuring that transport operators $\Omega = \exp(\phi)$ always lie in SO($N$) by construction. At the start of each training sequence, agent beliefs are initialized to match their token priors:
 
 \begin{equation}
 q_i(t=0) = p_{\text{token}(i)},
@@ -1036,6 +1036,8 @@ This finding has significant theoretical implications:
 To verify that transport structure carries contextual information, we computed the variance of transported beliefs $\Omega_{ij}[\mu_j]$ across context positions $j$ for fixed query position $i$. Despite uniform attention weights, the transported beliefs show substantial variation, confirming that geometric transport---not attention weighting---differentiates context. The standard deviation of $\|\Omega_{ij}[\mu_j]\|$ across $j$ remains comparable to models with non-uniform attention, indicating that the transport operators successfully encode positional and semantic relationships.
 
 This phenomenon differs fundamentally from ``attention collapse'' failure modes in standard transformers, where uniform attention indicates optimization pathology. Here, attention starts structured and systematically converges to uniformity as training progresses, while performance continues to improve. Uniform attention is not a failure but rather the \emph{equilibrium configuration} when transport geometry is sufficiently expressive. The gauge framework reveals that attention weighting and geometric transport are two distinct mechanisms for encoding context---and for this architecture, transport dominates.
+
+We note that attention equilibration is not universal across all configurations: some model variants maintain structured (non-uniform) attention throughout training while achieving comparable performance. This variability suggests that the attention-vs-transport tradeoff depends on hyperparameters, gauge group structure, and initialization. The key insight is that uniform attention \emph{can} succeed when transport is expressive---not that it \emph{must} occur.
 
 \subsubsection{Curvature minimization hypothesis}
 
