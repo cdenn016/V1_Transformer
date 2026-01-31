@@ -116,18 +116,32 @@ def get_tokenizer(config: Dict[str, Any], dataset_name: Optional[str] = None):
     """
     Get tokenizer for a given config.
 
-    Tries WikiTextDataset first, falls back to tiktoken.
+    Tries multiple tokenizer backends in order:
+    1. tiktoken (GPT-2 BPE, fast and lightweight)
+    2. WikiTextDataset (full dataset with tokenizer)
 
     Args:
         config: Model configuration dict
-        dataset_name: Dataset name override (default: from config or 'wikitext-2')
+        dataset_name: Dataset name override (default: from config or 'wikitext-103')
 
     Returns:
         tokenizer: Object with encode/decode methods
     """
     if dataset_name is None:
-        dataset_name = config.get('dataset', 'wikitext-2')
+        dataset_name = config.get('dataset', 'wikitext-103')
 
+    vocab_size = config.get('vocab_size', 50257)
+
+    # Try tiktoken first (faster, lighter)
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("gpt2")
+        print(f"Using tiktoken GPT-2 tokenizer (vocab_size={enc.n_vocab})")
+        return enc
+    except ImportError:
+        pass
+
+    # Fall back to WikiTextDataset
     try:
         from transformer.data.datasets import WikiTextDataset
         dataset = WikiTextDataset(
@@ -135,12 +149,50 @@ def get_tokenizer(config: Dict[str, Any], dataset_name: Optional[str] = None):
             max_seq_len=128,
             dataset_name=dataset_name
         )
+        print(f"Using WikiTextDataset tokenizer")
         return dataset
     except Exception as e:
         print(f"Warning: Could not load dataset tokenizer: {e}")
-        try:
-            import tiktoken
-            return tiktoken.get_encoding("gpt2")
-        except ImportError:
-            print("Warning: tiktoken not available")
-            return None
+
+    print("Warning: No tokenizer available. Install tiktoken: pip install tiktoken")
+    return None
+
+
+def load_checkpoint_info(checkpoint_path: str) -> Dict[str, Any]:
+    """
+    Load metadata from a checkpoint without loading the full model.
+
+    Useful for inspecting checkpoints before loading.
+
+    Args:
+        checkpoint_path: Path to checkpoint file
+
+    Returns:
+        Dict with config, epoch, step, and other metadata
+    """
+    checkpoint_path = Path(checkpoint_path)
+
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+
+    info = {}
+
+    # Extract config
+    if 'config' in checkpoint:
+        info['config'] = checkpoint['config']
+
+    # Extract training state
+    info['epoch'] = checkpoint.get('epoch', 'unknown')
+    info['step'] = checkpoint.get('step', 'unknown')
+
+    # Check for optimizer state (indicates training checkpoint vs inference)
+    info['has_optimizer'] = 'optimizer_state_dict' in checkpoint
+
+    # Model parameter count
+    if 'model_state_dict' in checkpoint:
+        n_params = sum(p.numel() for p in checkpoint['model_state_dict'].values())
+        info['n_parameters'] = n_params
+
+    return info
