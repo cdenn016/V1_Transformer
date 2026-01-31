@@ -1098,9 +1098,56 @@ In this extension, agents with coherent beliefs (low mutual KL divergence) and h
 
 Unlike continual learning approaches requiring explicit memory buffers or parameter isolation, gauge-theoretic emergence naturally preserves knowledge through geometric structure: stable patterns crystallize into meta-agents that resist perturbation, while unstable patterns remain fluid. The non-equilibrium steady state balances plasticity (adapting to new data) with stability (preserving learned structure), potentially resolving the fundamental tension in continual learning without architectural modifications (albeit at high computational cost). Currently, our research is progressing along these lines.
 
+\subsubsection{Pathways to Dynamic Language Modeling}
+\label{sec:dynamic_language}
+
+The preceding sections establish that information geometry succeeds at conventional language modeling. We now outline concrete mechanisms within the VFE framework that could enable genuinely dynamical language models---systems where linguistic structure evolves rather than remaining frozen after training.
+
+\paragraph{Timescale hierarchy.} The VFE framework naturally accommodates multiple timescales of adaptation:
+\begin{enumerate}
+    \item \textbf{Fast (within-sequence):} Beliefs $q_i$ update via VFE descent during the forward pass, adapting to context within milliseconds.
+    \item \textbf{Intermediate (across-sequences):} Priors $p_i$ can update via mechanisms like P-flow (Section~\ref{sec:p_flow}), allowing token representations to drift toward successful beliefs over minutes to hours.
+    \item \textbf{Slow (training):} All parameters update via backpropagation over days to weeks.
+    \item \textbf{Very slow (meta-learning):} Model hyperparameters $s_i$, $r_i$ and inter-model couplings $\gamma_{ij}$ could evolve over months, capturing long-term linguistic drift.
+\end{enumerate}
+
+Standard transformers collapse this hierarchy: embeddings are fixed during inference (no fast adaptation) and update only via backpropagation (no intermediate timescale). The VFE framework preserves all levels.
+
+\paragraph{Model alignment for prior communication.} The full VFE functional (Eq.~\ref{eq:free_energy_decomposed}) includes a model alignment term we currently omit:
+%
+\begin{equation}
+\mathcal{F}_{\text{model}} = \sum_{i,j} \gamma_{ij} D_{\mathrm{KL}}(s_i \| \Omega_{ij} s_j),
+\label{eq:model_alignment}
+\end{equation}
+%
+where $s_i$ represents agent $i$'s generative model (hyperparameters governing how priors themselves are structured) and $\gamma_{ij}$ are model-level attention weights. This term enables \emph{priors to communicate}: when agents with compatible models interact, their priors can align through geometric transport, implementing a form of linguistic convention formation.
+
+Including this term would allow token meanings to co-evolve: if ``computer'' shifts meaning in one context, the model alignment term propagates this shift to related contexts where ``computer'' appears with similar model-level neighbors. This is precisely the mechanism needed for semantic drift.
+
+\paragraph{P-flow as linguistic adaptation.} The P-flow mechanism (Section~\ref{sec:p_flow}) already implements intermediate-timescale adaptation: priors move toward beliefs that successfully predicted observations. In a dynamic language model, P-flow could be run continuously during deployment:
+%
+\begin{equation}
+\mu_p^{(t+1)} = (1 - \eta) \mu_p^{(t)} + \eta \, \mathbb{E}_{\text{success}}[\mu_q^*],
+\end{equation}
+%
+where the expectation is over successful predictions. Over time, token priors would drift to reflect evolving usage patterns. The EMA rate $\eta$ controls the adaptation timescale: small $\eta$ yields slow, stable drift; large $\eta$ yields rapid but potentially unstable adaptation.
+
+\paragraph{Gauge frame evolution.} Gauge frames $\phi_i$ define the coordinate systems in which agents express beliefs. Currently, these are learned during training and fixed at inference. Allowing gauge frames to evolve during deployment would enable the \emph{relational structure} of language to adapt---not just individual word meanings, but how words relate to each other geometrically. The curvature minimization hypothesis (Section~\ref{sec:discussion}) suggests that gauge frames should evolve toward configurations that minimize transport curvature, potentially explaining why languages develop systematic, compositional structure.
+
+\paragraph{Implementation roadmap.} A concrete path toward dynamic language modeling:
+\begin{enumerate}
+    \item \textbf{Phase 1 (this work):} Validate that information geometry succeeds at frozen language modeling. \emph{(Complete)}
+    \item \textbf{Phase 2:} Enable P-flow during inference, measuring whether token priors adapt meaningfully to domain-specific corpora without catastrophic forgetting.
+    \item \textbf{Phase 3:} Implement the model alignment term $\gamma_{ij} D_{\mathrm{KL}}(s_i \| \Omega_{ij} s_j)$, enabling prior communication and convention formation.
+    \item \textbf{Phase 4:} Allow gauge frame evolution during deployment, enabling relational structure to adapt.
+    \item \textbf{Phase 5:} Extend to temporal base manifolds (Section~\ref{sec:beyond_0d}), modeling language change over historical timescales.
+\end{enumerate}
+
+Each phase introduces dynamics at a different level of the representational hierarchy, progressively moving from frozen snapshots toward a fully dynamical theory of language.
 
 
-\subsubsection{Beyond 0D: Spatial gauge theories.} 
+\subsubsection{Beyond 0D: Spatial gauge theories.}
+\label{sec:beyond_0d} 
 
 Our transformer implementation uses 0-dimensional base manifolds (all tokens at one point). Extensions to $n$-dimensional base manifolds would create fields of transformers with:
 
