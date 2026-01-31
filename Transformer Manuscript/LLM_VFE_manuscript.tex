@@ -58,7 +58,7 @@ Transformer architectures~\citep{vaswani2017attention} have revolutionized natur
 
 In companion theoretical work, we propose that transformers implicitly implement geometric operations on statistical manifolds. We derive attention mechanisms from first principles using gauge theory on principal bundles, where tokens behave as autonomous agents maintaining probabilistic beliefs, attention weights emerge from KL divergences measuring belief alignment, and feed-forward computation reduces to variational free energy minimization. This framework predicts that transformer-like behavior should emerge from pure geometric structure without neural networks, learned weight matrices, or activation functions.
 
-The variational free energy principle (FEP)~\citep{friston2010free} provides precisely the mathematical machinery needed for dynamical modeling: agents that actively minimize surprise, update beliefs through interaction, and maintain themselves far from equilibrium. Embedding language within this framework opens a path toward models where linguistic structure can evolve, adapt, and self-organize---not merely reproduce frozen statistics. But first, we must establish that information geometry succeeds at conventional language modeling. This paper provides that proof of principle.
+The variational free energy principle (FEP)~\citep{friston2010free} provides precisely the mathematical machinery needed for dynamical modeling: agents that actively minimize surprise, update beliefs through interaction, and maintain themselves far from equilibrium. Embedding language within this framework opens a path toward models where linguistic structure can evolve, adapt, and self-organize---not merely reproduce frozen statistics. Crucially, within-sequence belief dynamics---where token representations evolve through VFE descent in response to context---already constitute the fastest timescale of this dynamical hierarchy, and we demonstrate these dynamics succeed at language modeling. Slower timescales (cross-sequence prior adaptation, model alignment) remain future work, but the foundational dynamics are validated here.
 
 We present the first implementation of an information-theoretic transformer at production scale, testing whether explicit geometric inference can perform meaningful language modeling. We implement complete gauge variational free energy (VFE) architectures using SO(3) and SO(50) gauge symmetries, KL-divergence attention, and natural gradient descent on statistical manifolds, where all computation derives from geometric operations on probability distributions.
 
@@ -179,7 +179,7 @@ Given the action of the group $G$ on the statistical fibers we are able to deriv
 \label{eq:free_energy_decomposed}
 \end{align}
 
-where $q_i$ and $p_i$ are an agent's belief and prior at an individual base manifold point $c$, $s_i$ and $r_i$ are model hyperparameters, $\beta_{ij}$ and $\gamma_{ij}$ are attention weights and the observation likelihood term is the expected negative log-likelihood of observations $o$ given latent states $\{k_i\}$ and models $\{m_i\}$, averaged over the recognition distributions $\{q_i\}$, grounded in sensory observations/data. Without this term, the system is a pure vacuum theory where agents converge to a shared belief norm modulo gauge transformations. Observations break the vacuum symmetry, forcing agents to specialize based on local sensory evidence (see Appendix).
+where $q_i$ and $p_i$ are an agent's belief and prior at an individual base manifold point $c$, $s_i$ and $r_i$ are model hyperparameters, and $\beta_{ij}$ and $\gamma_{ij}$ are attention weights. The observation likelihood term is the expected negative log-likelihood of observations $o$ given latent states $\{k_i\}$ (samples from $q_i$, representing agent $i$'s inferred semantic content) and models $\{m_i\}$ (samples from $s_i$, representing agent $i$'s generative model parameters), averaged over the recognition distributions. Without this term, the system is a pure vacuum theory where agents converge to a shared belief norm modulo gauge transformations. Observations break the vacuum symmetry, forcing agents to specialize based on local sensory evidence (see Appendix).
 
 \textbf{Timescale separation and omitted terms.} In our present implementation, we omit the model prior term (2) and model alignment term (4), retaining only the belief prior (1), belief alignment (3), and observation likelihood (5). This simplification reflects a timescale separation common in hierarchical Bayesian inference and active inference frameworks: beliefs $q_i$ serve as ``fast'' variables that update rapidly within the forward pass via VFE descent, while priors $p_i$ serve as ``slow'' variables that remain quasi-static during inference and update only via backpropagation (the M-step). The model terms $s_i$, $r_i$, and $\gamma_{ij}$ would represent an even slower "meta-learning" timescale governing how priors themselves communicate and adapt.
 
@@ -627,7 +627,7 @@ Figure~\ref{fig:training_curves} shows training and validation loss curves over 
     \begin{subfigure}[b]{0.48\textwidth}
         \centering
         \includegraphics[width=\textwidth]{VFE_LLM_Manuscript/figures/SO50_training_curves.png}
-        \caption{Gauge VFE (SO(20))}
+        \caption{Gauge VFE (SO(50))}
         \label{fig:train_vfe}
     \end{subfigure}
     \hfill
@@ -938,26 +938,26 @@ An open question is how best to initialize beliefs for new sequences at inferenc
 \item \textbf{Retrieval-based:} Initialize from cached training beliefs via nearest neighbor lookup (memory overhead)
 \end{enumerate}
 
-Each has trade-offs between computational cost, architectural purity, and performance. Our proof-of-principle study performs per-sequence optimization during training but does not address inference-time requirements.
+Each has trade-offs between computational cost, architectural purity, and performance. Our proof-of-principle study performs per-sequence optimization during training. For inference, our implementation (\texttt{generate.py} in the code repository) uses iterative VFE descent: given a prompt, beliefs are initialized from token priors and evolved via natural gradient descent before sampling the next token. This is computationally expensive but maintains architectural purity and serves as a baseline for future optimization.
 
 
 \subsubsection{Semantic Emergence in Gauge Frames}
 \label{sec:semantic_emergence}
 
-A striking empirical finding is that the learned gauge frames $\phi_i$ develop semantically meaningful structure during training. Principal component analysis (PCA) of the gauge frame parameters reveals that tokens spontaneously cluster according to linguistic categories: punctuation marks, function words, content words, letters, and digits separate into distinct regions of gauge frame space (Figure~\ref{fig:gauge_clustering}).
+A striking empirical finding is that the learned gauge frames $\phi_i$ develop semantically meaningful structure during training. Principal component analysis (PCA) of the gauge frame parameters reveals that tokens spontaneously cluster according to linguistic categories: punctuation marks, function words, content words, letters, and digits separate into distinct regions of gauge frame space (Figure~\ref{fig:gauge_frame_clustering}). Similar clustering emerges in the belief means $\mu$ (Figure~\ref{fig:belief_clustering}).
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=\textwidth]{VFE_LLM_Manuscript/figures/SO50_belief_clustering_step200000.png}
-    \caption{Semantic clustering in $\mu$ for SO(50) with $K=100$. Left: 3D PCA projection of the 190-dimensional gauge frame space $\mathfrak{so}(50)$. Right: 2D projection (PC1 vs PC2). Punctuation (green) forms a tight cluster near the origin, while content words (orange) and function words (purple) separate along PC2. The first three principal components capture $\sim$[PCA-TOTAL-VARIANCE]\% of variance ([PCA-PC1]\% + [PCA-PC2]\% + [PCA-PC3]\%), yet reveal clear linguistic organization. This structure emerges without supervision, purely from variational free energy minimization.}
-    \label{fig:gauge_clustering}
+    \caption{Semantic clustering in learned belief means $\mu$ for SO(50) with $K=100$. Left: 3D PCA projection of the 100-dimensional belief mean space. Right: 2D projection (PC1 vs PC2). Punctuation (green) forms a tight cluster, while content words (orange) and function words (purple) separate along principal components. This structure emerges without supervision, purely from variational free energy minimization.}
+    \label{fig:belief_clustering}
 \end{figure}
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=\textwidth]{VFE_LLM_Manuscript/figures/SO50_gauge_frame_clustering_step200000.png}
-    \caption{Semantic clustering in learned gauge frames for SO(50) with $K=100$. Left: 3D PCA projection of the 190-dimensional gauge frame space $\mathfrak{so}(50)$. Right: 2D projection (PC1 vs PC2). Punctuation (green) forms a tight cluster near the origin, while content words (orange) and function words (purple) separate along PC2. The first three principal components capture $\sim$[PCA-TOTAL-VARIANCE]\% of variance ([PCA-PC1]\% + [PCA-PC2]\% + [PCA-PC3]\%), yet reveal clear linguistic organization. This structure emerges without supervision, purely from variational free energy minimization.}
-    \label{fig:gauge_clustering}
+    \caption{Semantic clustering in learned gauge frames for SO(50) with $K=100$. Left: 3D PCA projection of the 1225-dimensional gauge frame space $\mathfrak{so}(50)$. Right: 2D projection (PC1 vs PC2). Punctuation (green) forms a tight cluster near the origin, while content words (orange) and function words (purple) separate along PC2. The first three principal components capture $\sim$[PCA-TOTAL-VARIANCE]\% of variance ([PCA-PC1]\% + [PCA-PC2]\% + [PCA-PC3]\%), yet reveal clear linguistic organization. This structure emerges without supervision, purely from variational free energy minimization.}
+    \label{fig:gauge_frame_clustering}
 \end{figure}
 
 
@@ -1069,29 +1069,7 @@ This derivative structure creates positive feedback that drives cluster formatio
 
 This mechanism suggests an interpretation of standard transformer nonlinearities as approximations to the gauge attention derivative structure. The GELU activation $x \cdot \Phi(x)$, where $\Phi$ is the Gaussian CDF, produces smooth thresholding that amplifies large activations while suppressing small ones. The $\partial \beta / \partial \mu$ derivative achieves a similar effect through statistical geometry: beliefs that align well with their neighbors receive amplified influence, while outliers are attenuated. The key difference is that gauge nonlinearity emerges from the information-geometric structure of the belief space rather than being imposed as an architectural choice. If this interpretation holds, it suggests that learned nonlinearities in standard transformers are discovered approximations to a deeper variational principle.
 
-\subsubsection{Connection to Information Bottleneck Theory}
-
-The variational free energy functional bears a precise relationship to Tishby's information bottleneck (IB) principle~\citep{tishby2000information}, which seeks representations $Z$ of input $X$ that maximally predict target $Y$ while minimizing retained information: $\mathcal{L}_{\mathrm{IB}} = I(Z; Y) - \beta \cdot I(Z; X)$. The first term rewards predictive accuracy while the second penalizes complexity, with $\beta$ controlling the tradeoff.
-
-The VFE decomposes into terms that map directly onto this structure. The belief-prior KL divergence $D_{\mathrm{KL}}(q_i \| p_i)$ measures how far agent beliefs have departed from their uninformative priors, which corresponds to the mutual information $I(Z; X)$ in the IB framework: beliefs at the prior carry zero bits about the input, while deviations encode information. The cross-entropy observation term $-\log p(o_i | \mu_i)$ rewards accurate prediction, corresponding to $I(Z; Y)$. The hyperparameters $\alpha$ and $\kappa$ play the role of the IB tradeoff $\beta$, controlling the balance between compression and prediction.
-
-The belief alignment term $\sum_{ij} \beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ introduces a coherence constraint absent in the standard IB formulation. This term encourages agents to maintain consistent beliefs under parallel transport, penalizing configurations where nearby agents hold incompatible representations. In information-theoretic terms, this implements a form of distributed compression: agents that could be represented by a shared summary (low inter-agent KL) are encouraged to converge, pooling their information into a common representation.
-
-The dynamic attention weights $\beta_{ij}$ implement input-dependent compression that adapts to the structure of each sequence. When agents hold similar beliefs, their high mutual $\beta_{ij}$ causes them to pool information aggressively, discarding redundant variation. When agents hold distinct beliefs, low $\beta_{ij}$ preserves their representations separately. This is precisely the behavior prescribed by optimal IB solutions: merge redundant information, preserve predictively relevant distinctions.
-
-The temperature $\kappa$ thus acquires a second interpretation beyond controlling attention sharpness: it sets the IB tradeoff between compression and accuracy. High $\kappa$ produces soft attention that aggressively compresses by pooling across many agents, potentially sacrificing fine-grained distinctions. Low $\kappa$ produces sharp attention that preserves local structure at the cost of reduced compression. The optimal $\kappa$ depends on the predictive task: tasks requiring fine discrimination favor low $\kappa$, while tasks tolerating coarse representations favor high $\kappa$ for its regularizing effect.
-
-\subsubsection{VFE Dynamics as Renormalization Group Flow}
-
-The gauge VFE framework exhibits a self-similar structure characteristic of renormalization group (RG) theories in statistical physics~\citep{wilson1974renormalization}. The defining property of an RG is that coarse-grained degrees of freedom satisfy the same dynamical equations as fine-grained ones, enabling a flow across scales that preserves the form of the theory while changing its effective parameters. In the VFE context, this self-similarity manifests in the observation that meta-agents whereby emergent clusters of tokens with coherent beliefs are themselves agents in the formal sense, with their own beliefs, priors, and inter-agent couplings.
-
-Consider the dynamics at the token level: agents $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ interact via attention weights $\beta_{ij}$ computed from KL divergences. As VFE descent proceeds, agents with similar beliefs develop high mutual $\beta_{ij}$ and converge toward shared statistics. When a subset $\mathcal{C}$ of agents achieves near-zero internal KL divergence, they can be replaced by a single meta-agent $q_{\mathcal{C}} = \mathcal{N}(\mu_{\mathcal{C}}, \Sigma_{\mathcal{C}})$ representing their consensus distribution. The meta-agent then interacts with other agents and meta-agents via the same KL-based attention mechanism, with transported beliefs $\Omega_{\mathcal{C}\mathcal{C}'}[q_{\mathcal{C}'}]$ computed from averaged gauge frames.
-
-This coarse-graining procedure defines an RG transformation: the space of agent configurations maps to a space of meta-agent configurations with fewer degrees of freedom but identical dynamical structure. Repeated application generates an RG flow from fine-grained token representations toward coarse-grained semantic summaries. The flow terminates at fixed points where no further compression is possible without sacrificing predictive accuracy such that these fixed points represent optimal representations in the information bottleneck sense.
-
-Several observables characterize the RG flow. The effective rank of the attention matrix $\beta_{ij}$ decreases as agents cluster, reflecting the reduction in independent degrees of freedom. The modularity of $\beta_{ij}$, measuring the strength of block-diagonal structure, increases as meta-agents consolidate. The within-cluster KL divergence decreases as agents converge, while between-cluster KL remains stable or increases as clusters differentiate. These signatures provide empirical diagnostics for whether a given VFE configuration exhibits healthy RG behavior.
-
-The connection to physics RG suggests that tools from statistical field theory may apply to transformer analysis. Critical phenomena, where the RG flow passes near unstable fixed points, might correspond to phase transitions in learned representations. Relevant and irrelevant operators, which grow or shrink under RG flow, might classify which features of the input persist to deep layers versus being discarded. Universality, where different microscopic theories flow to the same fixed point, might explain why diverse transformer architectures learn similar representations. These correspondences remain speculative but suggest a rich program for future investigation.
+The gauge VFE framework also admits deep connections to information bottleneck theory and renormalization group methods from physics; we develop these theoretical correspondences in Appendix~\ref{app:theoretical_connections}.
 
 \subsubsection{Continual Learning via Meta-Agent Emergence}
 
@@ -1497,6 +1475,36 @@ For beliefs with discrete latent structure, mixture distributions $q_i(\xi) = \s
 \subsection{Scope of Current Work}
 
 This paper restricts to SO($N$) groups and Gaussians because this pairing admits closed-form computations throughout: the KL divergence, Fisher information, natural gradients, and parallel transport all have explicit expressions. The orthogonal group preserves the Euclidean structure natural for embedding spaces, and its fundamental representation provides interpretable attention heads. The generalizations sketched above indicate that the framework is not limited to these choices---richer group structures and distribution families may capture more complex phenomena---but realizing these extensions requires careful attention to the compatibility between gauge symmetry and statistical divergence.
+
+\section{Theoretical Connections}
+\label{app:theoretical_connections}
+
+This appendix develops connections between the gauge VFE framework and established theoretical frameworks from information theory and physics.
+
+\subsection{Connection to Information Bottleneck Theory}
+
+The variational free energy functional bears a precise relationship to Tishby's information bottleneck (IB) principle~\citep{tishby2000information}, which seeks representations $Z$ of input $X$ that maximally predict target $Y$ while minimizing retained information: $\mathcal{L}_{\mathrm{IB}} = I(Z; Y) - \beta \cdot I(Z; X)$. The first term rewards predictive accuracy while the second penalizes complexity, with $\beta$ controlling the tradeoff.
+
+The VFE decomposes into terms that map directly onto this structure. The belief-prior KL divergence $D_{\mathrm{KL}}(q_i \| p_i)$ measures how far agent beliefs have departed from their uninformative priors, which corresponds to the mutual information $I(Z; X)$ in the IB framework: beliefs at the prior carry zero bits about the input, while deviations encode information. The cross-entropy observation term $-\log p(o_i | \mu_i)$ rewards accurate prediction, corresponding to $I(Z; Y)$. The hyperparameters $\alpha$ and $\kappa$ play the role of the IB tradeoff $\beta$, controlling the balance between compression and prediction.
+
+The belief alignment term $\sum_{ij} \beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ introduces a coherence constraint absent in the standard IB formulation. This term encourages agents to maintain consistent beliefs under parallel transport, penalizing configurations where nearby agents hold incompatible representations. In information-theoretic terms, this implements a form of distributed compression: agents that could be represented by a shared summary (low inter-agent KL) are encouraged to converge, pooling their information into a common representation.
+
+The dynamic attention weights $\beta_{ij}$ implement input-dependent compression that adapts to the structure of each sequence. When agents hold similar beliefs, their high mutual $\beta_{ij}$ causes them to pool information aggressively, discarding redundant variation. When agents hold distinct beliefs, low $\beta_{ij}$ preserves their representations separately. This is precisely the behavior prescribed by optimal IB solutions: merge redundant information, preserve predictively relevant distinctions.
+
+The temperature $\kappa$ thus acquires a second interpretation beyond controlling attention sharpness: it sets the IB tradeoff between compression and accuracy. High $\kappa$ produces soft attention that aggressively compresses by pooling across many agents, potentially sacrificing fine-grained distinctions. Low $\kappa$ produces sharp attention that preserves local structure at the cost of reduced compression. The optimal $\kappa$ depends on the predictive task: tasks requiring fine discrimination favor low $\kappa$, while tasks tolerating coarse representations favor high $\kappa$ for its regularizing effect.
+
+\subsection{VFE Dynamics as Renormalization Group Flow}
+
+The gauge VFE framework exhibits a self-similar structure characteristic of renormalization group (RG) theories in statistical physics~\citep{wilson1974renormalization}. The defining property of an RG is that coarse-grained degrees of freedom satisfy the same dynamical equations as fine-grained ones, enabling a flow across scales that preserves the form of the theory while changing its effective parameters. In the VFE context, this self-similarity manifests in the observation that meta-agents whereby emergent clusters of tokens with coherent beliefs are themselves agents in the formal sense, with their own beliefs, priors, and inter-agent couplings.
+
+Consider the dynamics at the token level: agents $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ interact via attention weights $\beta_{ij}$ computed from KL divergences. As VFE descent proceeds, agents with similar beliefs develop high mutual $\beta_{ij}$ and converge toward shared statistics. When a subset $\mathcal{C}$ of agents achieves near-zero internal KL divergence, they can be replaced by a single meta-agent $q_{\mathcal{C}} = \mathcal{N}(\mu_{\mathcal{C}}, \Sigma_{\mathcal{C}})$ representing their consensus distribution. The meta-agent then interacts with other agents and meta-agents via the same KL-based attention mechanism, with transported beliefs $\Omega_{\mathcal{C}\mathcal{C}'}[q_{\mathcal{C}'}]$ computed from averaged gauge frames.
+
+This coarse-graining procedure defines an RG transformation: the space of agent configurations maps to a space of meta-agent configurations with fewer degrees of freedom but identical dynamical structure. Repeated application generates an RG flow from fine-grained token representations toward coarse-grained semantic summaries. The flow terminates at fixed points where no further compression is possible without sacrificing predictive accuracy such that these fixed points represent optimal representations in the information bottleneck sense.
+
+Several observables characterize the RG flow. The effective rank of the attention matrix $\beta_{ij}$ decreases as agents cluster, reflecting the reduction in independent degrees of freedom. The modularity of $\beta_{ij}$, measuring the strength of block-diagonal structure, increases as meta-agents consolidate. The within-cluster KL divergence decreases as agents converge, while between-cluster KL remains stable or increases as clusters differentiate. These signatures provide empirical diagnostics for whether a given VFE configuration exhibits healthy RG behavior.
+
+The connection to physics RG suggests that tools from statistical field theory may apply to transformer analysis. Critical phenomena, where the RG flow passes near unstable fixed points, might correspond to phase transitions in learned representations. Relevant and irrelevant operators, which grow or shrink under RG flow, might classify which features of the input persist to deep layers versus being discarded. Universality, where different microscopic theories flow to the same fixed point, might explain why diverse transformer architectures learn similar representations. These correspondences remain speculative but suggest a rich program for future investigation.
+
 
 \section{Reduction to Standard Transformer Attention}
 \label{app:transformer_reduction}
