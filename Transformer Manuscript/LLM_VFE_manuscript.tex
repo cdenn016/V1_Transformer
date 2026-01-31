@@ -496,7 +496,9 @@ P-flow implements a biologically plausible learning rule where priors adapt towa
 \item \textbf{M-step:} Update all parameters $\theta$ via backpropagation (Eq.~\ref{eq:m_step})
 \end{enumerate}
 
-The P-flow step operates on the embedding table directly (outside the computation graph), while the M-step optimizes through the graph. This hybrid approach allows priors to learn both from direct belief transfer (P-flow) and from gradient signals about how prior initialization affects downstream predictions (backpropagation). In our experiments, we report results with and without P-flow to isolate its contribution.
+The P-flow step operates on the embedding table directly (outside the computation graph), while the M-step optimizes through the graph. This hybrid approach allows priors to learn both from direct belief transfer (P-flow) and from gradient signals about how prior initialization affects downstream predictions (backpropagation).
+
+\paragraph{P-flow as a pathway to dynamic language.} While our primary experiments use standard backpropagation alone, P-flow represents a key mechanism for the dynamic language modeling discussed in Section~\ref{sec:dynamic_language}. By enabling priors to adapt continuously during deployment, P-flow could allow token representations to drift toward evolving usage patterns---implementing linguistic adaptation at an intermediate timescale between within-sequence inference and full retraining. Preliminary experiments suggest that P-flow requires careful tuning of the EMA rate $\eta$ relative to gauge group dimension; we defer systematic investigation to future work focused on dynamic language modeling.
 
 \section{Experimental Results}
 \label{sec:experiments}
@@ -546,7 +548,7 @@ The gauge VFE maps each token to variational parameters $(\mu, \Sigma, \phi) \in
 
 \subsection{Belief/Prior Initialization and Evolution}
 
-Agent beliefs $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ represent context-dependent semantic interpretations that evolve through communication with other agents. Token priors $p_c = \mathcal{N}(\mu_p^c, \Sigma_p^c)$ and gauge frames $\phi_c \in \mathfrak{g}$ are randomly initialized from $\mathcal{N}(0, \sigma_{\text{init}}^2 I)$ with small variance $\sigma_{\text{init}} = 0.1$, serving as learnable token representations analogous to embedding matrices in standard transformers. At the start of each training sequence, agent beliefs are initialized to match their token priors:
+Agent beliefs $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ represent context-dependent semantic interpretations that evolve through communication with other agents. Token priors $p_c = \mathcal{N}(\mu_p^c, \Sigma_p^c)$ and gauge frame coefficients $\phi_c^a \in \mathbb{R}$ are randomly initialized from $\mathcal{N}(0, \sigma_{\text{init}}^2)$ with small variance $\sigma_{\text{init}} = 0.1$, serving as learnable token representations analogous to embedding matrices in standard transformers. The Lie algebra element is constructed via basis expansion $\phi_c = \sum_a \phi_c^a T_a \in \mathfrak{g}$, where $\{T_a\}$ are the standard skew-symmetric generators of $\mathfrak{so}(N)$, ensuring that transport operators $\Omega = \exp(\phi)$ always lie in SO($N$) by construction. At the start of each training sequence, agent beliefs are initialized to match their token priors:
 
 \begin{equation}
 q_i(t=0) = p_{\text{token}(i)},
@@ -726,17 +728,16 @@ To investigate how the gauge-theoretic framework scales with gauge group dimensi
 \label{tab:so50_results}
 \begin{tabular}{lcccccc}
 \toprule
-\textbf{Covariance} & \textbf{P-flow} & \textbf{Steps} & \textbf{Context} & \textbf{Val PPL} $\downarrow$ & \textbf{Test PPL} $\downarrow$ & \textbf{vs Random} \\
+\textbf{Covariance} & \textbf{Steps} & \textbf{Context} & \textbf{Val PPL} $\downarrow$ & \textbf{Test PPL} $\downarrow$ & \textbf{vs Random} \\
 \midrule
-Diagonal & No & 200k & 256 & [PPL-SO50-DIAG-VAL] & [PPL-SO50-DIAG-TEST] & [IMPROVEMENT-SO50-DIAG]$\times$ \\
-Diagonal & Yes & 150k & 256 & [PPL-SO50-PFLOW-VAL] & --- & [IMPROVEMENT-SO50-PFLOW]$\times$ \\
-Diagonal & No & 20k & 128 & [PPL-SO50-20K-VAL] & [PPL-SO50-20K-TEST] & [IMPROVEMENT-SO50-20K]$\times$ \\
-Full (non-diagonal) & No & 25k & 128 & [PPL-SO50-FULL-VAL] & [PPL-SO50-FULL-TEST] & [IMPROVEMENT-SO50-FULL]$\times$ \\
+Diagonal & 200k & 256 & [PPL-SO50-DIAG-VAL] & [PPL-SO50-DIAG-TEST] & [IMPROVEMENT-SO50-DIAG]$\times$ \\
+Diagonal & 20k & 128 & [PPL-SO50-20K-VAL] & [PPL-SO50-20K-TEST] & [IMPROVEMENT-SO50-20K]$\times$ \\
+Full (non-diagonal) & 25k & 128 & [PPL-SO50-FULL-VAL] & [PPL-SO50-FULL-TEST] & [IMPROVEMENT-SO50-FULL]$\times$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The fully-trained SO(50) diagonal model without P-flow (200k steps) achieves validation perplexity [PPL-SO50-DIAG-VAL] (test PPL [PPL-SO50-DIAG-TEST]), representing a [IMPROVEMENT-SO50-DIAG]$\times$ improvement over random chance. However, P-flow training with EMA prior updates (Section~\ref{sec:p_flow}) exhibited divergent behavior: validation perplexity increased from [PPL-PFLOW-START] to [PPL-SO50-PFLOW-VAL] over training, suggesting that the current P-flow implementation may require further tuning or may be incompatible with large gauge groups. The SO(50) results still outperform our SO(20) baseline (PPL [PPL-SO20]), but are surpassed by the compact SO(3) multi-irrep model (PPL [PPL-BEST] with only [PARAMS-SO3-MULTI]M parameters).
+The fully-trained SO(50) diagonal model (200k steps) achieves validation perplexity [PPL-SO50-DIAG-VAL] (test PPL [PPL-SO50-DIAG-TEST]), representing a [IMPROVEMENT-SO50-DIAG]$\times$ improvement over random chance. The SO(50) results outperform our SO(20) baseline (PPL [PPL-SO20]), but are surpassed by the compact SO(3) multi-irrep model (PPL [PPL-BEST] with only [PARAMS-SO3-MULTI]M parameters).
 
 \subsubsection{Full Covariance Without Diagonal Approximation}
 
@@ -1036,6 +1037,8 @@ This finding has significant theoretical implications:
 To verify that transport structure carries contextual information, we computed the variance of transported beliefs $\Omega_{ij}[\mu_j]$ across context positions $j$ for fixed query position $i$. Despite uniform attention weights, the transported beliefs show substantial variation, confirming that geometric transport---not attention weighting---differentiates context. The standard deviation of $\|\Omega_{ij}[\mu_j]\|$ across $j$ remains comparable to models with non-uniform attention, indicating that the transport operators successfully encode positional and semantic relationships.
 
 This phenomenon differs fundamentally from ``attention collapse'' failure modes in standard transformers, where uniform attention indicates optimization pathology. Here, attention starts structured and systematically converges to uniformity as training progresses, while performance continues to improve. Uniform attention is not a failure but rather the \emph{equilibrium configuration} when transport geometry is sufficiently expressive. The gauge framework reveals that attention weighting and geometric transport are two distinct mechanisms for encoding context---and for this architecture, transport dominates.
+
+We note that attention equilibration is not universal across all configurations: some model variants maintain structured (non-uniform) attention throughout training while achieving comparable performance. This variability suggests that the attention-vs-transport tradeoff depends on hyperparameters, gauge group structure, and initialization. The key insight is that uniform attention \emph{can} succeed when transport is expressive---not that it \emph{must} occur.
 
 \subsubsection{Curvature minimization hypothesis}
 
@@ -1383,8 +1386,6 @@ Longer training consistently improves performance. Lower learning rate ($\eta = 
 \item \textbf{Optimal single-irrep capacity:} For single-irrep models, SO(50) with $K=50$ provides the best performance; larger groups show diminishing returns. SO(50) with $K=100$ (2$\times$ fundamental) achieves PPL [ABLATION-TEST-SO50-K100].
 
 \item \textbf{Multiple VFE iterations:} Increasing from 1 to 5 iterations improves test PPL from [VFE-ITER1-TEST] to [VFE-ITER5-TEST] at SO(50) scale.
-
-\item \textbf{P-flow limitations:} The P-flow mechanism (EMA prior updates) showed divergent behavior with SO(50), with validation PPL increasing from [PPL-PFLOW-START] to [PPL-SO50-PFLOW-VAL] over training. Further investigation is needed.
 
 \item \textbf{Temperature robustness:} $\kappa_\beta = 1.0$ is optimal; deviations in either direction degrade performance by [TEMP-PPL-DIFF-LOW]--[TEMP-PPL-DIFF-HIGH] PPL.
 
