@@ -1054,22 +1054,7 @@ If confirmed, this provides first principles justification for architecture choi
 
 This hypothesis gains support from an empirical observation: learning requires gauge frustration. When token embeddings (priors) are initialized as gauge-equivalent---related by parallel transport so that $p_i = \Omega_{ij}[p_j]$---the system possesses a stable fixed point at $q_i = p_i$ with $\mathcal{F} = 0$ and vanishing gradients. Learning fails because there is no potential energy to drive differentiation. Successful training requires non-equivalent priors that create frustration: the incompatibility between local preferences provides gradient signal. This apparent paradox---needing high curvature to reach low curvature---resolves by recognizing frustration as \emph{potential energy}. The system minimizes curvature subject to explaining the data; whatever curvature survives is semantically essential. This parallels crystal formation, where thermal energy (disorder) enables the system to find minimum-energy configurations with specific structure. The prediction is testable: during training, curvature should decrease monotonically as gauge frames learn to reconcile priors, with residual curvature encoding irreducible linguistic geometry.
 
-\subsubsection{Emergent Nonlinearity from Attention Dynamics}
-
-Standard transformers interleave linear projections with pointwise nonlinearities such as ReLU or GELU, whose functional forms were discovered through empirical search rather than theoretical derivation. The gauge VFE framework contains no such activation functions, yet achieves nonlinear computation through a different mechanism: the derivative structure of softmax attention weights with respect to belief parameters.
-
-The attention weights $\beta_{ij} = \mathrm{softmax}_j(-D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j) / \kappa)$ depend nonlinearly on the belief statistics $(\mu_i, \Sigma_i)$ and gauge frames $\phi_i$. Differentiating with respect to the mean parameter yields
-\begin{equation}
-\frac{\partial \beta_{ij}}{\partial \mu_i} = \frac{\beta_{ij}}{\kappa} \left[ \frac{\partial D_{\mathrm{KL},ij}}{\partial \mu_i} - \sum_k \beta_{ik} \frac{\partial D_{\mathrm{KL},ik}}{\partial \mu_i} \right],
-\label{eq:beta_derivative}
-\end{equation}
-where the term in brackets is the deviation of the $j$-th KL gradient from the attention-weighted average across all $k$. This expression encodes a form of competitive dynamics: when agent $i$ moves in parameter space, its attention to agent $j$ increases if the KL divergence to $j$ decreases faster than the weighted average, and decreases otherwise.
-
-This derivative structure creates positive feedback that drives cluster formation. Agents with similar beliefs have low mutual KL divergence, hence high $\beta_{ij}$, which pulls their beliefs closer together during VFE descent, further increasing $\beta_{ij}$. The temperature $\kappa$ controls the sharpness of this feedback: low $\kappa$ amplifies small differences in KL divergence into large differences in attention, while high $\kappa$ produces softer, more distributed attention. The analogous derivatives with respect to $\Sigma_i$ and $\phi_i$ follow the same pattern, coupling covariance and gauge frame evolution to the attention dynamics.
-
-This mechanism suggests an interpretation of standard transformer nonlinearities as approximations to the gauge attention derivative structure. The GELU activation $x \cdot \Phi(x)$, where $\Phi$ is the Gaussian CDF, produces smooth thresholding that amplifies large activations while suppressing small ones. The $\partial \beta / \partial \mu$ derivative achieves a similar effect through statistical geometry: beliefs that align well with their neighbors receive amplified influence, while outliers are attenuated. The key difference is that gauge nonlinearity emerges from the information-geometric structure of the belief space rather than being imposed as an architectural choice. If this interpretation holds, it suggests that learned nonlinearities in standard transformers are discovered approximations to a deeper variational principle.
-
-The gauge VFE framework also admits deep connections to information bottleneck theory and renormalization group methods from physics; we develop these theoretical correspondences in Appendix~\ref{app:theoretical_connections}.
+The gauge VFE framework also admits deep connections to information bottleneck theory, renormalization group methods from physics, and emergent nonlinearity through attention dynamics; we develop these theoretical correspondences in Appendix~\ref{app:theoretical_connections}.
 
 \subsubsection{Continual Learning via Meta-Agent Emergence}
 
@@ -1504,6 +1489,21 @@ This coarse-graining procedure defines an RG transformation: the space of agent 
 Several observables characterize the RG flow. The effective rank of the attention matrix $\beta_{ij}$ decreases as agents cluster, reflecting the reduction in independent degrees of freedom. The modularity of $\beta_{ij}$, measuring the strength of block-diagonal structure, increases as meta-agents consolidate. The within-cluster KL divergence decreases as agents converge, while between-cluster KL remains stable or increases as clusters differentiate. These signatures provide empirical diagnostics for whether a given VFE configuration exhibits healthy RG behavior.
 
 The connection to physics RG suggests that tools from statistical field theory may apply to transformer analysis. Critical phenomena, where the RG flow passes near unstable fixed points, might correspond to phase transitions in learned representations. Relevant and irrelevant operators, which grow or shrink under RG flow, might classify which features of the input persist to deep layers versus being discarded. Universality, where different microscopic theories flow to the same fixed point, might explain why diverse transformer architectures learn similar representations. These correspondences remain speculative but suggest a rich program for future investigation.
+
+\subsection{Emergent Nonlinearity from Attention Dynamics}
+
+Standard transformers interleave linear projections with pointwise nonlinearities such as ReLU or GELU, whose functional forms were discovered through empirical search rather than theoretical derivation. The gauge VFE framework contains no such activation functions, yet achieves nonlinear computation through a different mechanism: the derivative structure of softmax attention weights with respect to belief parameters.
+
+The attention weights $\beta_{ij} = \mathrm{softmax}_j(-D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j) / \kappa)$ depend nonlinearly on the belief statistics $(\mu_i, \Sigma_i)$ and gauge frames $\phi_i$. Differentiating with respect to the mean parameter yields
+\begin{equation}
+\frac{\partial \beta_{ij}}{\partial \mu_i} = \frac{\beta_{ij}}{\kappa} \left[ \frac{\partial D_{\mathrm{KL},ij}}{\partial \mu_i} - \sum_k \beta_{ik} \frac{\partial D_{\mathrm{KL},ik}}{\partial \mu_i} \right],
+\label{eq:beta_derivative}
+\end{equation}
+where the term in brackets is the deviation of the $j$-th KL gradient from the attention-weighted average across all $k$. This expression encodes a form of competitive dynamics: when agent $i$ moves in parameter space, its attention to agent $j$ increases if the KL divergence to $j$ decreases faster than the weighted average, and decreases otherwise.
+
+This derivative structure creates positive feedback that drives cluster formation. Agents with similar beliefs have low mutual KL divergence, hence high $\beta_{ij}$, which pulls their beliefs closer together during VFE descent, further increasing $\beta_{ij}$. The temperature $\kappa$ controls the sharpness of this feedback: low $\kappa$ amplifies small differences in KL divergence into large differences in attention, while high $\kappa$ produces softer, more distributed attention. The analogous derivatives with respect to $\Sigma_i$ and $\phi_i$ follow the same pattern, coupling covariance and gauge frame evolution to the attention dynamics.
+
+This mechanism suggests an interpretation of standard transformer nonlinearities as approximations to the gauge attention derivative structure. The GELU activation $x \cdot \Phi(x)$, where $\Phi$ is the Gaussian CDF, produces smooth thresholding that amplifies large activations while suppressing small ones. The $\partial \beta / \partial \mu$ derivative achieves a similar effect through statistical geometry: beliefs that align well with their neighbors receive amplified influence, while outliers are attenuated. The key difference is that gauge nonlinearity emerges from the information-geometric structure of the belief space rather than being imposed as an architectural choice. If this interpretation holds, it suggests that learned nonlinearities in standard transformers are discovered approximations to a deeper variational principle.
 
 
 \section{Reduction to Standard Transformer Attention}
