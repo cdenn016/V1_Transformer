@@ -736,13 +736,13 @@ Diagonal & 100k & 128 & [PPL-SO50-FULL-VAL] & [PPL-SO50-FULL-TEST] & [IMPROVEMEN
 \end{tabular}
 \end{table}
 
-The fully-trained SO(50) diagonal model (200k steps) achieves validation perplexity [PPL-SO50-DIAG-VAL] (test PPL [PPL-SO50-DIAG-TEST]), representing a [IMPROVEMENT-SO50-DIAG]$\times$ improvement over random chance. The SO(50) results outperform our SO(20) baseline (PPL [PPL-SO20]), but are surpassed by the compact SO(3) multi-irrep model (PPL [PPL-BEST] with only [PARAMS-SO3-MULTI]M parameters).
+The fully-trained SO(20) diagonal model (100k steps) achieves validation perplexity [PPL-SO50-DIAG-VAL] (test PPL [PPL-SO50-DIAG-TEST]), representing a [IMPROVEMENT-SO50-DIAG]$\times$ improvement over random chance. The SO(20) results outperform our SO(20) baseline (PPL [PPL-SO20]), but are surpassed by the compact SO(3) multi-irrep model (PPL [PPL-BEST] with only [PARAMS-SO3-MULTI]M parameters).
 
 \subsubsection{Full Covariance Without Diagonal Approximation}
 
-A key implementation detail in our primary experiments is the diagonal covariance approximation $\Sigma_i = \text{diag}(\sigma_i^2)$, which reduces computational cost from $O(K^2)$ to $O(K)$ per agent. To validate that the framework functions without this approximation, we trained an SO(50) model with fully general (non-diagonal) covariance matrices.
+A key implementation detail in our primary experiments is the diagonal covariance approximation $\Sigma_i = \text{diag}(\sigma_i^2)$, which reduces computational cost from $O(K^2)$ to $O(K)$ per agent. To validate that the framework functions without this approximation, we trained an SO(20) model with fully general (non-diagonal) covariance matrices.
 
-At comparable training budgets (20k--25k steps, context length 128), the diagonal and non-diagonal models achieve nearly identical performance: the diagonal model reaches validation PPL [PPL-SO50-20K-VAL] (test [PPL-SO50-20K-TEST]) at 20k steps, while the non-diagonal model achieves validation PPL [PPL-SO50-FULL-VAL] (test [PPL-SO50-FULL-TEST]) at 25k steps. Remarkably, the non-diagonal model achieves slightly better test perplexity despite the diagonal model having a modest validation advantage. This demonstrates that the full covariance formulation incurs minimal performance penalty while enabling richer belief representations.
+At comparable training budgets (100k steps, context length 128), the diagonal and non-diagonal models achieve nearly identical performance: the diagonal model reaches validation PPL [PPL-SO50-20K-VAL] (test [PPL-SO50-20K-TEST]) at 100k steps, while the non-diagonal model achieves validation PPL [PPL-SO50-FULL-VAL] (test [PPL-SO50-FULL-TEST]) at 100k steps. Remarkably, the non-diagonal model achieves slightly better test perplexity despite the diagonal model having a modest validation advantage. This demonstrates that the full covariance formulation incurs minimal performance penalty while enabling richer belief representations.
 
 This result has several implications:
 \begin{enumerate}
