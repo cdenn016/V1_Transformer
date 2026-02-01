@@ -724,15 +724,14 @@ To investigate how the gauge-theoretic framework scales with gauge group dimensi
 \begin{table}[h]
 \centering
 \small
-\caption{SO(50) gauge VFE performance on WikiText-103. Fundamental SO(50) representation ($K=50$) with [PARAMS-SO50]M parameters unless noted.}
+\caption{SO(20) gauge VFE performance on WikiText-103. Fundamental SO(20) representation ($K=20$) with 12.6M parameters unless noted.}
 \label{tab:so50_results}
 \begin{tabular}{lcccccc}
 \toprule
 \textbf{Covariance} & \textbf{Steps} & \textbf{Context} & \textbf{Val PPL} $\downarrow$ & \textbf{Test PPL} $\downarrow$ & \textbf{vs Random} \\
 \midrule
-Diagonal & 200k & 256 & [PPL-SO50-DIAG-VAL] & [PPL-SO50-DIAG-TEST] & [IMPROVEMENT-SO50-DIAG]$\times$ \\
-Diagonal & 20k & 128 & [PPL-SO50-20K-VAL] & [PPL-SO50-20K-TEST] & [IMPROVEMENT-SO50-20K]$\times$ \\
-Full (non-diagonal) & 25k & 128 & [PPL-SO50-FULL-VAL] & [PPL-SO50-FULL-TEST] & [IMPROVEMENT-SO50-FULL]$\times$ \\
+Full (non-diagonal) & 100k & 128 & 188.4 & 175.8 & 285.9$\times$ \\
+Diagonal & 100k & 128 & [PPL-SO50-FULL-VAL] & [PPL-SO50-FULL-TEST] & [IMPROVEMENT-SO50-FULL]$\times$ \\
 \bottomrule
 \end{tabular}
 \end{table}
