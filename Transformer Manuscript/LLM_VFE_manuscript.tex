@@ -1329,6 +1329,7 @@ Table~\ref{tab:ablation_temp} shows sensitivity to the attention temperature par
 The model is relatively robust to temperature, with $\kappa_\beta = 1.0$ achieving best performance. Both lower ($\kappa_\beta < 1$) and higher ($\kappa_\beta > 1$) temperatures degrade performance modestly ([TEMP-PPL-DIFF-LOW]--[TEMP-PPL-DIFF-HIGH] PPL).
 
 \subsection{Gauge Group Structure: Single vs. Multiple Irreps}
+\label{sec:multi_irrep}
 
 Table~\ref{tab:ablation_irrep} compares single fundamental irreps against multiple irrep decompositions.
 
@@ -1351,6 +1352,29 @@ SO(50) & 2$\times$ fundamental & 100 & [ABLATION-PARAMS-SO50-K100]M & --- & [ABL
 \end{table}
 
 The SO(3) model with multiple irreps ($\ell=1,4,5,6,7$) achieves validation PPL [PPL-BEST] with only [PARAMS-SO3-MULTI]M parameters---outperforming both the [PARAMS-SO50]M parameter SO(50) model (PPL [PPL-SO50]) and the parameter-matched standard transformer (PPL [PPL-STD-PARAM]). This demonstrates that richer irrep decompositions are dramatically more parameter-efficient than larger gauge groups with single irreps, achieving better results with [PARAMS-RATIO-SO50]$\times$ fewer parameters. The critical insight is that higher-dimensional SO(3) irreps ($\ell=4,5,6,7$) capture richer geometric structure than larger gauge groups restricted to fundamental representations.
+
+\subsubsection{Irrep Scaling Laws}
+
+To systematically characterize how performance scales with irrep complexity, we conducted experiments across SO(3) configurations with increasing maximum spin $j_{\max} \in \{1, 2, 3, 4, 5, 7\}$, corresponding to embedding dimensions $K \in \{3, 8, 15, 24, 35, 63\}$. Figure~\ref{fig:irrep_scaling} presents the complete scaling analysis.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\textwidth]{figures/irrep_scaling_combined.png}
+    \caption{Scaling analysis for SO(3) multi-irrep gauge transformers. \textbf{(a)} Test loss vs.\ embedding dimension shows $L \propto K^{-0.09}$ scaling. \textbf{(b)} Test perplexity vs.\ embedding dimension shows $\text{PPL} \propto K^{-0.55}$ scaling, indicating substantial returns from richer irrep structure. \textbf{(c)} Test perplexity vs.\ parameters shows $\text{PPL} \propto N^{-0.60}$ scaling---notably steeper than the $N^{-0.45}$ observed for SO($d$) gauge dimension scaling (Figure~\ref{fig:scaling_params}), demonstrating that irrep scaling is more parameter-efficient than gauge dimension scaling. \textbf{(d)} Training dynamics for all configurations, showing consistent convergence across irrep complexities.}
+    \label{fig:irrep_scaling}
+\end{figure}
+
+The irrep scaling analysis reveals several important findings:
+
+\begin{enumerate}
+    \item \textbf{Steeper parameter scaling:} The perplexity-vs-parameters exponent for irrep scaling ($\alpha = -0.60$) significantly exceeds that for gauge dimension scaling ($\alpha = -0.45$). This confirms that adding higher SO(3) irreps is more parameter-efficient than increasing gauge group dimension.
+
+    \item \textbf{Embedding efficiency:} Perplexity scales as $K^{-0.55}$ with embedding dimension, compared to $d^{-0.75}$ for gauge dimension. Since parameters scale more favorably with $K$ than with $d$, irrep expansion provides better performance per parameter.
+
+    \item \textbf{Consistent training dynamics:} All irrep configurations show stable convergence within the 102.4M token budget, with higher-$K$ models achieving lower final loss without training instabilities.
+\end{enumerate}
+
+These results establish that multi-irrep SO(3) architectures represent a more efficient scaling direction than increasing gauge group dimension, providing theoretical and empirical justification for the superior performance of the SO(3) multi-irrep model.
 
 \subsection{Training Steps and Learning Rate}
 
