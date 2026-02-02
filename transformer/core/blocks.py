@@ -114,6 +114,8 @@ class GaugeTransformerBlock(nn.Module):
         use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
         # Self-attention masking (prevents attention collapse)
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
+        # Gauge group control
+        enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
     ):
         """
         Initialize gauge transformer block.
@@ -189,6 +191,7 @@ class GaugeTransformerBlock(nn.Module):
             alibi_slope=alibi_slope,
             use_identity_transport=use_identity_transport,
             mask_self_attention=mask_self_attention,
+            enforce_orthogonal=enforce_orthogonal,
         )
 
         # Conditionally create LayerNorm and Dropout (disabled for pure VFE)
@@ -430,6 +433,8 @@ class GaugeTransformerStack(nn.Module):
         use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
         # Self-attention masking (prevents attention collapse)
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
+        # Gauge group control
+        enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
     ):
         """
         Initialize stack of transformer blocks.
@@ -514,6 +519,8 @@ class GaugeTransformerStack(nn.Module):
                 use_identity_transport=use_identity_transport,
                 # Self-attention masking
                 mask_self_attention=mask_self_attention,
+                # Gauge group control
+                enforce_orthogonal=enforce_orthogonal,
             )
             for _ in range(n_layers)
         ])

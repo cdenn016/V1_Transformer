@@ -306,9 +306,11 @@ VFE_EM_CONFIG = {
     #        fund ~1.0x, wedge2 ~1.5x, sym2 ~2.5x
     #      This provides genuine transformation diversity (like SO(3) spin-ℓ)
     # =================================================================
-    'gauge_group': 'SON',  # 'SO3' or 'SON'
+    'gauge_group': 'SON',  # 'SO3', 'SON', or 'GLK'
     'gauge_dim': 5,        # N for SO(N) - only used when gauge_group='SON'
     'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
+    'enforce_orthogonal': True,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
+                                 # Set False for GL(K) (faster, still gauge-invariant)
 
     # P-FLOW: EMA update of token embeddings toward successful beliefs
     # This is the key learning mechanism from fep_transformer.py
