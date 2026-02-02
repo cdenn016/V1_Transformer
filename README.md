@@ -142,6 +142,33 @@ See the `docs/` directory for technical documentation:
 
 ## Research Findings
 
+### Holy Shit! KL is Invariant Under GL(K)!
+
+**Major Discovery**: The KL divergence (and ALL f-divergences) are invariant under the full general linear group GL(K), not just SO(K)!
+
+For Gaussian beliefs under the action (μ, Σ) → (Ωμ, ΩΣΩᵀ):
+
+```
+D_KL(Ω·P || Ω·Q) = D_KL(P || Q)  for ANY invertible Ω ∈ GL(K)
+```
+
+**Why it works**:
+- **Trace term**: tr((ΩΣ₂Ωᵀ)⁻¹(ΩΣ₁Ωᵀ)) = tr(Ω⁻ᵀΣ₂⁻¹Ω⁻¹ΩΣ₁Ωᵀ) = tr(Σ₂⁻¹Σ₁) ✓
+- **Quadratic term**: Same cancellation via Ωᵀ Ω⁻ᵀ = I
+- **Log-det term**: log|ΩΣΩᵀ| = log|(det Ω)²|Σ|| → the (det Ω)² cancels in ratios!
+
+**Implications**:
+- **No orthogonality constraint needed!** Transport operators Ω_ij don't need to be orthogonal
+- **Simpler optimization**: No Newton-Schulz re-orthogonalization required
+- **Faster training**: Skip expensive projection steps
+- **Same gauge invariance**: VFE remains invariant under local gauge transformations
+
+The code now supports both:
+- `enforce_orthogonal=False` (default): GL(K) gauge structure - faster, simpler
+- `enforce_orthogonal=True`: SO(K) with Newton-Schulz projection (for Haar measure, etc.)
+
+### Other Recent Findings
+
 Recent experimental results:
 - SO(20) gauge groups outperform SO(3) in language modeling (PPL 166 vs 341)
 - VFE is mathematically equivalent to the Information Bottleneck principle
