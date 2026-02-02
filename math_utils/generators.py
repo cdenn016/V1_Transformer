@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-SO(3) Lie Algebra Generators
-=============================
+Lie Algebra Generators for Gauge Theory
+=======================================
 
-Construction and validation of SO(3) generators for gauge theory.
+Construction and validation of Lie algebra generators for gauge transformations.
 
+SO(3) / SO(K) Generators (Default):
+----------------------------------
 For SO(3), we use the spin-ℓ irreducible representations:
 - Dimension: K = 2ℓ + 1 (always odd)
 - Generators: Real skew-symmetric K×K matrices
@@ -12,6 +14,24 @@ For SO(3), we use the spin-ℓ irreducible representations:
 - Casimir eigenvalue: ℓ(ℓ+1)
 
 Uses real tesseral harmonics (not spherical) to avoid complex arithmetic.
+
+GL(K) Gauge Structure (NEW):
+---------------------------
+The VFE is invariant under GL(K) gauge transformations, not just SO(K)!
+This means:
+- Transport operators Ω = exp(φ·G) only need to be INVERTIBLE, not orthogonal
+- The current SO(K) generators define a subalgebra of gl(K)
+- For full GL(K) flexibility, you could extend to K² generators (full gl(K) basis)
+
+However, for most applications, the SO(K) subalgebra generators suffice:
+- They provide a natural parameterization with K(K-1)/2 or 3 parameters
+- The transport operators remain well-conditioned
+- exp(skew-symmetric) is always invertible (in fact, orthogonal)
+
+To use full GL(K), you would need to:
+1. Generate K² generators spanning gl(K) (e.g., E_ij basis)
+2. Use K² parameters in phi instead of 3 or K(K-1)/2
+3. Remove any skew-symmetry constraints in transport.py
 """
 
 import numpy as np

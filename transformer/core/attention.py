@@ -190,10 +190,7 @@ def compute_transport_operators(
     phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
 
     # For large K (≥16), compute matrix exponential in float64 to prevent
-    # numerical drift. 100×100 matrix_exp in float32 accumulates significant
-    # errors in the Padé scaling-squaring steps, causing transport operators
-    # to drift from SO(K). The numpy path (transport.py) already uses float64
-    # and SVD re-orthogonalization; this brings the PyTorch path to parity.
+    # numerical drift in the Padé scaling-squaring steps.
     if K >= 16:
         phi_matrix_f64 = phi_matrix.double()
         exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
@@ -203,16 +200,20 @@ def compute_transport_operators(
         exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
         exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
 
-    # Re-orthogonalize via one Newton-Schulz iteration for large K.
-    # For ideal orthogonal Q: Q^T Q = I. Newton-Schulz iteration:
-    #   Q_new = Q @ (3I - Q^T Q) / 2
-    # converges quadratically and is much cheaper than SVD.
-    # This corrects float32 rounding errors from matrix_exp composition.
-    # Uses regular tensor ops (not .data) to preserve autograd graph.
-    if K >= 16:
-        eye_K = torch.eye(K, device=phi.device, dtype=dtype)
-        exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
-        exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
+    # NOTE: Re-orthogonalization is NOT required for GL(K) gauge structure!
+    # The VFE is invariant under GL(K), not just SO(K). The Jacobian factors
+    # cancel in the KL density ratio:
+    #   D_KL(Ω·P || Ω·Q) = D_KL(P || Q) for any invertible Ω
+    #
+    # Previous code applied Newton-Schulz iteration here to project to SO(K).
+    # This is no longer needed. The only requirement is invertibility (det ≠ 0),
+    # which is guaranteed by the matrix exponential.
+    #
+    # To restore SO(K) behavior (e.g., for Haar measure averaging), uncomment:
+    # if K >= 16:
+    #     eye_K = torch.eye(K, device=phi.device, dtype=dtype)
+    #     exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
+    #     exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
 
     # Full pairwise transport: Ω_ij = exp(φ_i) @ exp(-φ_j)
     Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)  # (B, N, N, K, K)
@@ -650,15 +651,12 @@ def _compute_kl_matrix_torch(
             # phi: (B, N, n_gen) -> phi_matrix: (B, N, K, K)
             phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
 
-            # Float64 matrix_exp + re-orthogonalization for large K
+            # Float64 matrix_exp for large K (numerical precision)
+            # NOTE: No re-orthogonalization needed for GL(K) gauge structure!
             if K >= 16:
                 phi_matrix_f64 = phi_matrix.double()
                 exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
                 exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
-                # Newton-Schulz re-orthogonalization
-                eye_K = torch.eye(K, device=device, dtype=dtype)
-                exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
-                exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
             else:
                 exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
                 exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
@@ -879,14 +877,12 @@ def _compute_kl_matrix_diagonal(
         # Compute transport operators
         phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
 
-        # Float64 matrix_exp + re-orthogonalization for large K
+        # Float64 matrix_exp for large K (numerical precision)
+        # NOTE: No re-orthogonalization needed for GL(K) gauge structure!
         if K >= 16:
             phi_matrix_f64 = phi_matrix.double()
             exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
             exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
-            eye_K = torch.eye(K, device=device, dtype=dtype)
-            exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
-            exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
         else:
             exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
             exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)

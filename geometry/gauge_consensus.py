@@ -30,6 +30,28 @@ collective consensus metric is then:
 This construction is gauge-invariant by design - no agent's arbitrary
 frame choice affects the collective geometry.
 
+GL(K) Gauge Structure (NEW)
+---------------------------
+CRITICAL INSIGHT: The variational free energy (VFE) is invariant under
+GL(K) gauge transformations, not just SO(K)!
+
+This is because all f-divergences (including KL) are invariant under
+pushforward by invertible linear maps:
+
+    D_KL(Ω·P || Ω·Q) = D_KL(P || Q)  for any Ω ∈ GL(K)
+
+The Jacobian factors cancel in the density ratio. This means:
+1. We do NOT need orthogonality constraints for gauge invariance
+2. Transport operators can be any invertible matrix
+3. Gauge averaging over GL(K) is NOT required for VFE invariance
+
+However, GL(K) is non-compact, so there is NO uniform (Haar) measure.
+If you need to average over gauge orbits for other purposes (e.g.,
+metric consensus), you must use:
+- SO(K) Haar measure (compact subgroup)
+- A reference measure on GL(K) (e.g., element-wise Gaussian)
+- Skip gauge averaging entirely (VFE is already GL(K)-invariant)
+
 Physical Interpretation
 ----------------------
 Gauge invariance in physics may arise as a consistency requirement for
@@ -37,20 +59,19 @@ multi-agent consensus. For agents with different internal reference
 frames to agree on shared geometric structure, that structure must be
 gauge-invariant.
 
-Rather than gauge invariance being imposed on nature, it emerges from
-informational requirements of consensus formation among agents with
-diverse perspectives.
-
 Implementation Strategy
 ----------------------
 For computational tractability, we use Monte Carlo integration:
 
     ⟨G_i⟩ ≈ (1/N_samples) Σ_k G_i(c; φ_i → φ_i + g_k)
 
-where {g_k} are sampled from the Haar measure on SO(3).
+where {g_k} are sampled from:
+- SO(3) Haar measure (for metric consensus, volume-preserving)
+- GL(K) reference measure (element-wise Gaussian, for general use)
 
 Author: Chris & Christine
 Date: November 2025
+Updated: GL(K) generalization - February 2026
 """
 
 import numpy as np
@@ -138,6 +159,110 @@ def sample_so3_algebra_haar(
         phis[i] = so3_log(rotations[i])
 
     return phis.astype(np.float32)
+
+
+# =============================================================================
+# GL(K) Reference Measure Sampling (NEW)
+# =============================================================================
+
+def sample_glk_reference(
+    n_samples: int,
+    K: int,
+    n_generators: int,
+    *,
+    scale: float = 0.5,
+    rng: Optional[np.random.Generator] = None
+) -> np.ndarray:
+    """
+    Sample gauge transformations from a reference measure on GL(K).
+
+    IMPORTANT: GL(K) is non-compact, so there is NO uniform (Haar) measure!
+    This function samples from a Gaussian reference measure on the Lie algebra,
+    which induces a distribution on GL(K) via the exponential map.
+
+    The resulting exp(X) matrices are invertible with high probability
+    (singular matrices have measure zero under this distribution).
+
+    Args:
+        n_samples: Number of samples to generate
+        K: Dimension of GL(K) matrices
+        n_generators: Number of Lie algebra generators (e.g., 3 for so(3), K² for gl(K))
+        scale: Standard deviation for Gaussian sampling (controls spread)
+        rng: Random number generator
+
+    Returns:
+        phis: Lie algebra coefficients, shape (n_samples, n_generators)
+
+    Note:
+        For VFE-based objectives, you typically don't need gauge averaging
+        at all, since f-divergences are already GL(K)-invariant.
+
+        If you do need averaging (e.g., for metric consensus), consider:
+        1. Using SO(K) Haar measure instead (volume-preserving)
+        2. Using this reference measure (non-uniform but tractable)
+        3. Skipping averaging entirely (if your objective is GL(K)-invariant)
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    # Sample from Gaussian on Lie algebra coefficients
+    phis = rng.standard_normal((n_samples, n_generators)) * scale
+
+    return phis.astype(np.float32)
+
+
+def sample_glk_matrices(
+    n_samples: int,
+    K: int,
+    generators: np.ndarray,
+    *,
+    scale: float = 0.5,
+    rng: Optional[np.random.Generator] = None,
+    check_invertible: bool = True,
+    min_det: float = 1e-6,
+) -> np.ndarray:
+    """
+    Sample invertible matrices from GL(K) via exponential map.
+
+    Args:
+        n_samples: Number of samples
+        K: Matrix dimension
+        generators: Lie algebra generators, shape (n_generators, K, K)
+        scale: Spread of sampling distribution
+        rng: Random number generator
+        check_invertible: If True, verify all samples are invertible
+        min_det: Minimum absolute determinant threshold
+
+    Returns:
+        matrices: GL(K) matrices, shape (n_samples, K, K)
+
+    Raises:
+        ValueError: If any sampled matrix is singular (should be rare)
+    """
+    from scipy.linalg import expm as scipy_expm
+
+    if rng is None:
+        rng = np.random.default_rng()
+
+    n_generators = generators.shape[0]
+    phis = sample_glk_reference(n_samples, K, n_generators, scale=scale, rng=rng)
+
+    # Compute X = Σ_a φ^a G_a and exp(X)
+    matrices = np.zeros((n_samples, K, K), dtype=np.float64)
+
+    for i in range(n_samples):
+        X = np.einsum('a,aij->ij', phis[i], generators)
+        matrices[i] = scipy_expm(X)
+
+    if check_invertible:
+        for i in range(n_samples):
+            det = np.linalg.det(matrices[i])
+            if np.abs(det) < min_det:
+                raise ValueError(
+                    f"Sampled singular matrix at index {i}: |det| = {np.abs(det):.2e}"
+                )
+
+    return matrices.astype(np.float32)
 
 
 # =============================================================================

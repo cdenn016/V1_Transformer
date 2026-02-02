@@ -16,10 +16,21 @@ Key Insight from plan.py:
      Each token i → (μ_i, Σ_i, φ_i) where:
      - μ_i ∈ ℝ^K: mean belief vector (NO spatial dependence)
      - Σ_i ∈ SPD(K): covariance (scalar matrix per agent)
-     - φ_i ∈ so(3): gauge frame (3D vector, not a field)"
+     - φ_i ∈ gl(K): gauge frame (Lie algebra element)"
+
+GL(K) Gauge Structure (NEW):
+    The VFE is invariant under GL(K) gauge transformations, not just SO(K)!
+    This is because f-divergences are invariant under pushforward:
+        D_KL(Ω·P || Ω·Q) = D_KL(P || Q) for any Ω ∈ GL(K)
+
+    Parameterization options:
+    - phi_dim=3: so(3) subalgebra (3 generators, rotation-only)
+    - phi_dim=K(K-1)/2: so(K) subalgebra (skew-symmetric, orthogonal)
+    - phi_dim=K²: gl(K) full algebra (all K×K matrices, maximum flexibility)
 
 Author: Implementation from plan.py
 Date: November 2025
+Updated: GL(K) generalization - February 2026
 """
 
 import numpy as np
@@ -43,7 +54,17 @@ class GaugeTokenEmbedding(nn.Module):
     Each token i → (μ_i, Σ_i, φ_i) where:
     - μ_i ∈ ℝ^K: mean belief vector (NO spatial dependence)
     - Σ_i ∈ SPD(K): covariance (scalar matrix per agent)
-    - φ_i ∈ so(3): gauge frame (3D vector, not a field)
+    - φ_i ∈ gl(K): gauge frame (Lie algebra element)
+
+    GL(K) Gauge Structure:
+        The gauge group can be SO(K) (orthogonal) or GL(K) (general linear).
+        For VFE-based attention, GL(K) is sufficient because f-divergences
+        are invariant under all invertible linear transformations.
+
+        Parameterization:
+        - phi_dim=3: so(3) subalgebra (rotation-only, legacy)
+        - phi_dim=K(K-1)/2: so(K) subalgebra (orthogonal transformations)
+        - phi_dim=K²: gl(K) full algebra (maximum flexibility)
 
     Architecture:
         token_id → [Embedding Layer] → (μ, Σ, φ)
@@ -51,7 +72,7 @@ class GaugeTokenEmbedding(nn.Module):
         where:
         - μ: Learnable embedding (standard)
         - Σ: Initialized to small isotropic (σ²I), optionally learnable
-        - φ: Initialized to zero (identity gauge frame)
+        - φ: Initialized near zero (near-identity gauge frame)
     """
 
     def __init__(
@@ -85,10 +106,10 @@ class GaugeTokenEmbedding(nn.Module):
             init_sigma_scale: Initial scale for covariance (σ in σ²I)
             learnable_sigma: If True, Σ evolves during training
             learnable_phi: If True, φ evolves during training
-            gauge_fixed_priors: If True, priors are defined as SO(N) rotations of a
-                               single base prior: p_i = R_i ▷ p_0. This guarantees
-                               gauge covariance: p_i = Ω_ij[p_j] where Ω_ij = R_i R_j^{-1}.
-                               Requires generators for computing rotations.
+            gauge_fixed_priors: If True, priors are defined as GL(K) transformations of a
+                               single base prior: p_i = G_i ▷ p_0. This guarantees
+                               gauge covariance: p_i = Ω_ij[p_j] where Ω_ij = G_i G_j^{-1}.
+                               Requires generators for computing transformations.
             generators: Lie algebra generators (n_gen, K, K), required if gauge_fixed_priors=True
             diagonal_covariance: If True, output sigma as (B,N,K) diagonal variances
                                 instead of (B,N,K,K) full matrices. Saves O(K) memory.
@@ -96,7 +117,10 @@ class GaugeTokenEmbedding(nn.Module):
             use_positional_embedding: If True, add learnable positional embeddings to μ
                                      (like standard transformers). This provides position
                                      info in the content while keeping gauge transport Ω_ij.
-            phi_dim: Dimension of gauge frame φ. 3 for SO(3), N(N-1)/2 for SO(N).
+            phi_dim: Dimension of gauge frame φ. Options:
+                    - 3: so(3) subalgebra (rotation-only, legacy)
+                    - K(K-1)/2: so(K) subalgebra (orthogonal transformations)
+                    - K²: gl(K) full algebra (maximum flexibility for GL(K) gauge)
             phi_scale: Target ||φ|| norm for gauge frame initialization. Higher values
                       (e.g., 1.0-2.0) encourage semantic clustering in gauge frames.
         """
