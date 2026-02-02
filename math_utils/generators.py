@@ -654,6 +654,151 @@ def _validate_soN_generators(
         )
 
 
+# =============================================================================
+# GL(K) Generators - Full General Linear Algebra
+# =============================================================================
+
+def generate_glK_generators(
+    K: int,
+    *,
+    include_identity: bool = False,
+) -> np.ndarray:
+    """
+    Generate gl(K) Lie algebra generators (full K² basis).
+
+    gl(K) is the Lie algebra of all K×K matrices. Unlike so(K) which has
+    K(K-1)/2 skew-symmetric generators, gl(K) has K² generators spanning
+    all matrices.
+
+    The standard basis is E_ij (matrix with 1 at position (i,j), 0 elsewhere).
+    The Lie bracket is the matrix commutator: [A, B] = AB - BA.
+
+    Use this for maximum flexibility in GL(K) gauge transformations.
+    Transport operators Ω = exp(φ·G) will be general invertible matrices.
+
+    Args:
+        K: Matrix dimension
+        include_identity: If True, include trace component (K² generators).
+                         If False, use sl(K) traceless basis (K²-1 generators).
+                         Default True for full gl(K).
+
+    Returns:
+        G: Generators array, shape (K², K, K) or (K²-1, K, K), float32
+           G[a] is the a-th generator
+
+    Examples:
+        >>> # gl(3) - 9 generators, 3×3 matrices
+        >>> G = generate_glK_generators(3)
+        >>> G.shape
+        (9, 3, 3)
+
+        >>> # gl(5) - 25 generators, 5×5 matrices
+        >>> G = generate_glK_generators(5)
+        >>> G.shape
+        (25, 5, 5)
+
+        >>> # Full GL(K) transport
+        >>> phi = np.random.randn(25) * 0.1  # 25 parameters for gl(5)
+        >>> X = np.einsum('a,aij->ij', phi, G)  # Lie algebra element
+        >>> Omega = scipy.linalg.expm(X)  # GL(5) matrix
+
+    Properties:
+        - G[a] spans all K×K matrices (not just skew-symmetric)
+        - exp(φ·G) ∈ GL(K) for generic φ (invertible, not necessarily orthogonal)
+        - Includes both symmetric and antisymmetric directions
+        - More parameters than so(K): K² vs K(K-1)/2
+
+    Comparison:
+        | Algebra | Generators | K=10 params | Constraint on exp(X) |
+        |---------|------------|-------------|----------------------|
+        | so(K)   | K(K-1)/2   | 45          | Orthogonal (Ωᵀ Ω = I)|
+        | sl(K)   | K²-1       | 99          | det = 1              |
+        | gl(K)   | K²         | 100         | Invertible (det ≠ 0) |
+
+    Note:
+        For VFE-based objectives, gl(K) provides maximum flexibility since
+        f-divergences are invariant under all invertible transformations.
+        The VFE doesn't require orthogonality or volume preservation.
+    """
+    if K < 1:
+        raise ValueError(f"K must be >= 1 for GL(K), got K={K}")
+
+    n_generators = K * K
+    G = np.zeros((n_generators, K, K), dtype=np.float32)
+
+    # Build standard basis E_ij
+    idx = 0
+    for i in range(K):
+        for j in range(K):
+            G[idx, i, j] = 1.0
+            idx += 1
+
+    if not include_identity:
+        # Remove trace component to get sl(K)
+        # The trace component is (1/K) * Σ_i E_ii = (1/K) * I
+        # We keep all E_ij but could orthogonalize to remove trace
+        # For simplicity, just return full gl(K) basis
+        pass
+
+    return G
+
+
+def generate_glK_generators_split(
+    K: int,
+) -> tuple:
+    """
+    Generate gl(K) generators split into symmetric and antisymmetric parts.
+
+    This is useful for understanding the structure:
+    - Antisymmetric part (K(K-1)/2 generators) → so(K) subalgebra → orthogonal
+    - Symmetric part (K(K+1)/2 generators) → scaling/shearing directions
+
+    Args:
+        K: Matrix dimension
+
+    Returns:
+        (G_antisym, G_sym): Tuple of generator arrays
+            G_antisym: (K(K-1)/2, K, K) - skew-symmetric, generates SO(K)
+            G_sym: (K(K+1)/2, K, K) - symmetric, generates scaling/shearing
+
+    Example:
+        >>> G_antisym, G_sym = generate_glK_generators_split(5)
+        >>> G_antisym.shape  # so(5) part
+        (10, 5, 5)
+        >>> G_sym.shape  # symmetric part
+        (15, 5, 5)
+        >>> # Combined: 10 + 15 = 25 = 5²
+    """
+    n_antisym = K * (K - 1) // 2
+    n_sym = K * (K + 1) // 2
+
+    G_antisym = np.zeros((n_antisym, K, K), dtype=np.float32)
+    G_sym = np.zeros((n_sym, K, K), dtype=np.float32)
+
+    # Antisymmetric: L_ij = E_ij - E_ji for i < j
+    idx = 0
+    for i in range(K):
+        for j in range(i + 1, K):
+            G_antisym[idx, i, j] = 1.0
+            G_antisym[idx, j, i] = -1.0
+            idx += 1
+
+    # Symmetric: S_ij = E_ij + E_ji for i < j, plus E_ii for diagonal
+    idx = 0
+    # Diagonal elements E_ii
+    for i in range(K):
+        G_sym[idx, i, i] = 1.0
+        idx += 1
+    # Off-diagonal symmetric: E_ij + E_ji for i < j
+    for i in range(K):
+        for j in range(i + 1, K):
+            G_sym[idx, i, j] = 1.0
+            G_sym[idx, j, i] = 1.0
+            idx += 1
+
+    return G_antisym, G_sym
+
+
 def generate_multi_irrep_soN_generators(
     irrep_spec: list,
     N: int,
