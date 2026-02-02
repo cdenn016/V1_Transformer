@@ -158,24 +158,27 @@ def create_attention_mask(
 def compute_transport_operators(
     phi: torch.Tensor,         # (B, N, n_gen) gauge frames where n_gen is # of generators
     generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators
+    enforce_orthogonal: bool = False,  # If True, project to SO(K) via Newton-Schulz
 ) -> dict:
     """
     Precompute transport operators for caching when phi is fixed.
 
-    Works for both SO(3) and SO(N) gauge groups:
-    - SO(3): n_gen = 3, phi ∈ ℝ³
-    - SO(N): n_gen = N(N-1)/2, phi ∈ ℝ^{N(N-1)/2}
+    Works for SO(3), SO(N), and GL(K) gauge groups:
+    - SO(3): n_gen = 3, phi ∈ ℝ³, enforce_orthogonal=True
+    - SO(N): n_gen = N(N-1)/2, phi ∈ ℝ^{N(N-1)/2}, enforce_orthogonal=True
+    - GL(K): n_gen = K², phi ∈ ℝ^{K²}, enforce_orthogonal=False
 
     When evolve_phi=False, these operators are constant across layers.
     Computing once saves 2 matrix exponentials per head per layer.
 
     Args:
-        phi: Gauge frames (B, N, n_gen) in so(N) Lie algebra
+        phi: Gauge frames (B, N, n_gen) in Lie algebra
              - For SO(3): shape (B, N, 3)
              - For SO(N): shape (B, N, N*(N-1)/2)
+             - For GL(K): shape (B, N, K²)
         generators: Lie algebra generators (n_gen, K, K)
-             - For SO(3): shape (3, K, K)
-             - For SO(N): shape (N*(N-1)/2, K, K)
+        enforce_orthogonal: If True, apply Newton-Schulz to ensure Ω ∈ SO(K).
+                           If False, allow Ω ∈ GL(K) (faster, still gauge-invariant).
 
     Returns:
         dict with:
@@ -200,18 +203,13 @@ def compute_transport_operators(
         exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
         exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
 
-    # NOTE: Re-orthogonalization is NOT required for GL(K) gauge structure!
-    # The VFE is invariant under GL(K), not just SO(K). The Jacobian factors
-    # cancel in the KL density ratio:
-    #   D_KL(Ω·P || Ω·Q) = D_KL(P || Q) for any invertible Ω
-    #
-    # Previous code applied Newton-Schulz iteration here to project to SO(K).
-    # This is no longer needed. The only requirement is invertibility (det ≠ 0),
-    # which is guaranteed by the matrix exponential.
-    #
-    # To restore SO(K) behavior (e.g., for Haar measure averaging), uncomment:
-    # if K >= 16:
-    #     eye_K = torch.eye(K, device=phi.device, dtype=dtype)
+    # Re-orthogonalization for SO(K) gauge groups
+    # NOTE: For GL(K), this is NOT required - VFE is invariant under GL(K)!
+    # Only enable if you explicitly want SO(K) (e.g., for Haar measure averaging)
+    if enforce_orthogonal and K >= 16:
+        eye_K = torch.eye(K, device=phi.device, dtype=dtype)
+        exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
+        exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
     #     exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
     #     exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
 
@@ -250,6 +248,8 @@ def compute_attention_weights(
     use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
     # Self-attention masking (prevents attention collapse)
     mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
+    # Gauge group control
+    enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
 ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
     """
     Compute attention weights from KL divergences (0D version).
@@ -365,11 +365,13 @@ def compute_attention_weights(
         # sigma_q is (B, N, K) not (B, N, K, K)
         if chunk_size is not None:
             _compute_kl_matrix_diagonal_chunked(
-                mu_q, sigma_q, phi, generators, kl_matrix, chunk_size
+                mu_q, sigma_q, phi, generators, kl_matrix, chunk_size,
+                enforce_orthogonal=enforce_orthogonal
             )
         else:
             _compute_kl_matrix_diagonal(
-                mu_q, sigma_q, phi, generators, kl_matrix, cached_transport
+                mu_q, sigma_q, phi, generators, kl_matrix, cached_transport,
+                enforce_orthogonal=enforce_orthogonal
             )
     elif use_numba and NUMBA_AVAILABLE and TRANSPORT_AVAILABLE and not is_cuda:
         # Fast path: Use Numba kernels (CPU only)
@@ -381,7 +383,8 @@ def compute_attention_weights(
         # GPU path OR CPU fallback: Pure PyTorch (fully vectorized, CUDA-compatible)
         _compute_kl_matrix_torch(
             mu_q, sigma_q, phi, generators, kl_matrix, cached_transport,
-            use_identity_transport=use_identity_transport
+            use_identity_transport=use_identity_transport,
+            enforce_orthogonal=enforce_orthogonal
         )
 
     # =========================================================================
@@ -477,6 +480,7 @@ def compute_kl_matrix(
     irrep_dims: Optional[List[int]] = None,
     chunk_size: Optional[int] = None,
     use_identity_transport: bool = False,
+    enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
 ) -> torch.Tensor:
     """
     Compute pairwise KL divergence matrix: KL(q_i || Ω_ij[q_j]).
@@ -494,6 +498,7 @@ def compute_kl_matrix(
         irrep_dims: Optional list of irrep block dimensions for block-diagonal mode
         chunk_size: Optional chunk size for memory-efficient computation
         use_identity_transport: If True, Ω_ij = I (skip gauge transport)
+        enforce_orthogonal: If True, enforce Ω ∈ SO(K) via Newton-Schulz iteration
 
     Returns:
         kl_matrix: (B, N, N) pairwise KL divergences
@@ -535,11 +540,13 @@ def compute_kl_matrix(
     elif diagonal_covariance:
         if chunk_size is not None:
             _compute_kl_matrix_diagonal_chunked(
-                mu_q, sigma_q, phi, generators, kl_matrix, chunk_size
+                mu_q, sigma_q, phi, generators, kl_matrix, chunk_size,
+                enforce_orthogonal=enforce_orthogonal
             )
         else:
             _compute_kl_matrix_diagonal(
-                mu_q, sigma_q, phi, generators, kl_matrix, None
+                mu_q, sigma_q, phi, generators, kl_matrix, None,
+                enforce_orthogonal=enforce_orthogonal
             )
     elif NUMBA_AVAILABLE and TRANSPORT_AVAILABLE and not is_cuda:
         _compute_kl_matrix_numba(
@@ -548,7 +555,8 @@ def compute_kl_matrix(
     else:
         _compute_kl_matrix_torch(
             mu_q, sigma_q, phi, generators, kl_matrix, None,
-            use_identity_transport=use_identity_transport
+            use_identity_transport=use_identity_transport,
+            enforce_orthogonal=enforce_orthogonal
         )
 
     return kl_matrix
@@ -611,6 +619,7 @@ def _compute_kl_matrix_torch(
     kl_matrix: torch.Tensor,
     cached_transport: Optional[dict] = None,  # Precomputed transport operators
     use_identity_transport: bool = False,  # If True, bypass transport (Ω = I)
+    enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
 ) -> None:
     """
     VECTORIZED KL matrix computation using pure PyTorch.
@@ -625,6 +634,7 @@ def _compute_kl_matrix_torch(
         kl_matrix: (B, N, N) output tensor (modified in-place)
         cached_transport: Optional dict with precomputed 'Omega' from compute_transport_operators()
         use_identity_transport: If True, skip transport and compute raw KL(q_i || q_j)
+        enforce_orthogonal: If True, apply Newton-Schulz to ensure Ω ∈ SO(K)
     """
     B, N, K = mu_q.shape
     device = mu_q.device
@@ -652,7 +662,6 @@ def _compute_kl_matrix_torch(
             phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
 
             # Float64 matrix_exp for large K (numerical precision)
-            # NOTE: No re-orthogonalization needed for GL(K) gauge structure!
             if K >= 16:
                 phi_matrix_f64 = phi_matrix.double()
                 exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
@@ -660,6 +669,12 @@ def _compute_kl_matrix_torch(
             else:
                 exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
                 exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+
+            # Re-orthogonalization for SO(K) if requested
+            if enforce_orthogonal and K >= 16:
+                eye_K = torch.eye(K, device=device, dtype=dtype)
+                exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
+                exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
 
             # Omega_ij = exp(φ_i) @ exp(-φ_j)
             # Result: (B, N, N, K, K)
@@ -832,6 +847,7 @@ def _compute_kl_matrix_diagonal(
     generators: torch.Tensor,  # (3, K, K) SO(3) generators
     kl_matrix: torch.Tensor,   # (B, N, N) output tensor
     cached_transport: Optional[dict] = None,  # Precomputed transport operators
+    enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
 ) -> None:
     """
     DIAGONAL covariance KL computation - O(N²×K) instead of O(N²×K²).
@@ -878,7 +894,6 @@ def _compute_kl_matrix_diagonal(
         phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
 
         # Float64 matrix_exp for large K (numerical precision)
-        # NOTE: No re-orthogonalization needed for GL(K) gauge structure!
         if K >= 16:
             phi_matrix_f64 = phi_matrix.double()
             exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
@@ -886,6 +901,12 @@ def _compute_kl_matrix_diagonal(
         else:
             exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
             exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+
+        # Re-orthogonalization for SO(K) if requested
+        if enforce_orthogonal and K >= 16:
+            eye_K = torch.eye(K, device=mu_q.device, dtype=dtype)
+            exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
+            exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
 
         # Omega_ij = exp(φ_i) @ exp(-φ_j)
         Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)  # (B, N, N, K, K)
@@ -1113,6 +1134,7 @@ def _compute_kl_matrix_diagonal_chunked(
     generators: torch.Tensor,  # (n_gen, K, K) generators
     kl_matrix: torch.Tensor,   # (B, N, N) output tensor
     chunk_size: int = 32,      # Process chunk_size × chunk_size blocks at a time
+    enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
 ) -> None:
     """
     CHUNKED diagonal covariance KL computation - O(C²K) memory instead of O(N²K).
@@ -1126,6 +1148,7 @@ def _compute_kl_matrix_diagonal_chunked(
         generators: (n_gen, K, K) generators
         kl_matrix: (B, N, N) output tensor (modified in-place)
         chunk_size: Size of chunks to process
+        enforce_orthogonal: If True, apply Newton-Schulz to ensure Ω ∈ SO(K)
     """
     # Squeeze trailing singleton dimensions for robustness
     while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
@@ -1143,9 +1166,20 @@ def _compute_kl_matrix_diagonal_chunked(
     # Step 1: Precompute matrix exponentials for ALL positions
     # =========================================================================
     phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
-    exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
-    exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+    if K >= 16:
+        phi_matrix_f64 = phi_matrix.double()
+        exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
+        exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
+    else:
+        exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
+        exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
     del phi_matrix
+
+    # Re-orthogonalization for SO(K) if requested
+    if enforce_orthogonal and K >= 16:
+        eye_K = torch.eye(K, device=device, dtype=dtype)
+        exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
+        exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
 
     # =========================================================================
     # Step 2: Process in chunks
@@ -1768,6 +1802,7 @@ def compute_attention_weights_sparse(
     mask: torch.Tensor,        # (B, N, N) or (N, N) sparse mask
     epsilon: float = 1e-8,
     diagonal_covariance: bool = False,
+    enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Sparse attention that only computes KL for valid mask entries.
@@ -1783,6 +1818,7 @@ def compute_attention_weights_sparse(
         mask: Binary mask where 1 = can attend, 0 = cannot attend
         epsilon: Numerical stability
         diagonal_covariance: Use diagonal covariances
+        enforce_orthogonal: If True, enforce Ω ∈ SO(K) via Newton-Schulz iteration
 
     Returns:
         beta: Attention weights (B, N, N) - zeros where mask=0
@@ -1807,9 +1843,15 @@ def compute_attention_weights_sparse(
         # Fall back to full computation with masking
         kl_matrix = torch.zeros(B, N, N, device=device, dtype=dtype)
         if diagonal_covariance:
-            _compute_kl_matrix_diagonal(mu_q, sigma_q, phi, generators, kl_matrix, None)
+            _compute_kl_matrix_diagonal(
+                mu_q, sigma_q, phi, generators, kl_matrix, None,
+                enforce_orthogonal=enforce_orthogonal
+            )
         else:
-            _compute_kl_matrix_torch(mu_q, sigma_q, phi, generators, kl_matrix, None)
+            _compute_kl_matrix_torch(
+                mu_q, sigma_q, phi, generators, kl_matrix, None,
+                enforce_orthogonal=enforce_orthogonal
+            )
 
         logits = -kl_matrix / kappa
         logits = logits.masked_fill(mask == 0, float('-inf'))
@@ -2114,6 +2156,7 @@ class IrrepMultiHeadAttention(nn.Module):
         alibi_slope: Optional[float] = None,  # ALiBi-style positional bias (negative = recency bias)
         use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
+        enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
     ):
         """
         Initialize irrep-structured multi-head attention.
@@ -2151,6 +2194,7 @@ class IrrepMultiHeadAttention(nn.Module):
         self.alibi_slope = alibi_slope
         self.use_identity_transport = use_identity_transport
         self.mask_self_attention = mask_self_attention
+        self.enforce_orthogonal = enforce_orthogonal
 
         # Build irrep block structure
         self.irrep_dims = []
@@ -2323,7 +2367,9 @@ class IrrepMultiHeadAttention(nn.Module):
                 head_cached_transport = cached_head_transports[head_idx]
             else:
                 # Within-layer cache: compute once, reuse for KL and aggregation
-                head_cached_transport = compute_transport_operators(phi, gen_head)
+                head_cached_transport = compute_transport_operators(
+                    phi, gen_head, enforce_orthogonal=self.enforce_orthogonal
+                )
 
             # Compute attention for this head (with optional KL matrices)
             # Use efficient sparse attention if pattern is 'local'
@@ -2354,6 +2400,7 @@ class IrrepMultiHeadAttention(nn.Module):
                     mask=mask,
                     epsilon=self.epsilon,
                     diagonal_covariance=self.diagonal_covariance,
+                    enforce_orthogonal=self.enforce_orthogonal,
                 )  # (B, N, N), (B, N, N)
                 if return_attention:
                     all_attention_weights.append(beta_head)
@@ -2374,6 +2421,7 @@ class IrrepMultiHeadAttention(nn.Module):
                     alibi_slope=self.alibi_slope,
                     use_identity_transport=self.use_identity_transport,
                     mask_self_attention=self.mask_self_attention,
+                    enforce_orthogonal=self.enforce_orthogonal,
                 )  # (B, N, N), (B, N, N)
                 all_attention_weights.append(beta_head)
                 all_kl_matrices.append(kl_head)
@@ -2393,6 +2441,7 @@ class IrrepMultiHeadAttention(nn.Module):
                     alibi_slope=self.alibi_slope,
                     use_identity_transport=self.use_identity_transport,
                     mask_self_attention=self.mask_self_attention,
+                    enforce_orthogonal=self.enforce_orthogonal,
                 )  # (B, N, N)
                 kl_head = None  # Not computed
 

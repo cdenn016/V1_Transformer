@@ -349,6 +349,8 @@ class GaugeTransformerLM(nn.Module):
             use_identity_transport=use_identity_transport,
             # Self-attention masking (prevents attention collapse)
             mask_self_attention=config.get('mask_self_attention', False),
+            # Gauge group control
+            enforce_orthogonal=config.get('enforce_orthogonal', False),
         )
 
         # =================================================================

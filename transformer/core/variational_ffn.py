@@ -98,6 +98,7 @@ def _compute_vfe_gradients_block_diagonal(
     irrep_dims: List[int],
     chunk_size: Optional[int],
     compute_sigma_align_grad: bool,
+    enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Block-diagonal VFE gradient computation with optional chunking.
@@ -143,7 +144,6 @@ def _compute_vfe_gradients_block_diagonal(
         gen_block = generators[:, block_start:block_end, block_start:block_end]
         phi_matrix_block = torch.einsum('bna,aij->bnij', phi, gen_block)
         # Float64 for large block dimensions (numerical precision)
-        # NOTE: No re-orthogonalization needed for GL(K) gauge structure!
         if d >= 16:
             phi_matrix_block_f64 = phi_matrix_block.double()
             exp_phi_block = torch.matrix_exp(phi_matrix_block_f64).to(dtype)
@@ -151,6 +151,11 @@ def _compute_vfe_gradients_block_diagonal(
         else:
             exp_phi_block = torch.matrix_exp(phi_matrix_block)
             exp_neg_phi_block = torch.matrix_exp(-phi_matrix_block)
+        # Re-orthogonalization for SO(K) if requested
+        if enforce_orthogonal and d >= 16:
+            eye_d = torch.eye(d, device=device, dtype=dtype)
+            exp_phi_block = exp_phi_block @ ((3.0 * eye_d - exp_phi_block.transpose(-1, -2) @ exp_phi_block) / 2.0)
+            exp_neg_phi_block = exp_neg_phi_block @ ((3.0 * eye_d - exp_neg_phi_block.transpose(-1, -2) @ exp_neg_phi_block) / 2.0)
         block_exp_phi.append(exp_phi_block)
         block_exp_neg_phi.append(exp_neg_phi_block)
         block_start = block_end
@@ -282,6 +287,7 @@ def _compute_vfe_gradients_chunked(
     eps: float,
     chunk_size: int,
     compute_sigma_align_grad: bool,
+    enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Chunked VFE gradient computation for diagonal covariance mode.
@@ -311,7 +317,6 @@ def _compute_vfe_gradients_chunked(
     # =================================================================
     # Precompute matrix exponentials for all positions
     # Float64 for large K (numerical precision)
-    # NOTE: No re-orthogonalization needed for GL(K) gauge structure!
     phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
     if K >= 16:
         phi_matrix_f64 = phi_matrix.double()
@@ -321,6 +326,12 @@ def _compute_vfe_gradients_chunked(
         exp_phi = torch.matrix_exp(phi_matrix)
         exp_neg_phi = torch.matrix_exp(-phi_matrix)
     del phi_matrix
+
+    # Re-orthogonalization for SO(K) if requested
+    if enforce_orthogonal and K >= 16:
+        eye_K = torch.eye(K, device=device, dtype=dtype)
+        exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
+        exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
 
     # Expand diagonal to full for transport
     sigma_j_diag = torch.diag_embed(sigma_q_safe)  # (B, N, K, K)
@@ -453,6 +464,7 @@ def compute_vfe_gradients_gpu(
     # Memory-efficient options (NEW!)
     irrep_dims: Optional[List[int]] = None,  # Block dimensions for block-diagonal processing
     chunk_size: Optional[int] = None,  # Chunk size for memory-efficient processing
+    enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Compute VFE gradients entirely on GPU using PyTorch.
@@ -514,7 +526,7 @@ def compute_vfe_gradients_gpu(
         return _compute_vfe_gradients_block_diagonal(
             mu_q, sigma_q, mu_p, sigma_p, beta, phi, generators,
             alpha, lambda_belief, kappa, eps, irrep_dims, chunk_size,
-            compute_sigma_align_grad
+            compute_sigma_align_grad, enforce_orthogonal
         )
 
     # =================================================================
@@ -524,7 +536,7 @@ def compute_vfe_gradients_gpu(
         return _compute_vfe_gradients_chunked(
             mu_q, sigma_q, mu_p, sigma_p, beta, phi, generators,
             alpha, lambda_belief, kappa, eps, chunk_size,
-            compute_sigma_align_grad
+            compute_sigma_align_grad, enforce_orthogonal
         )
 
     # =================================================================
@@ -577,7 +589,6 @@ def compute_vfe_gradients_gpu(
         else:
             # Compute transport operators (vectorized)
             # Float64 for large K (numerical precision)
-            # NOTE: No re-orthogonalization needed for GL(K) gauge structure!
             phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
             if K >= 16:
                 phi_matrix_f64 = phi_matrix.double()
@@ -586,6 +597,12 @@ def compute_vfe_gradients_gpu(
             else:
                 exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
                 exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+
+            # Re-orthogonalization for SO(K) if requested
+            if enforce_orthogonal and K >= 16:
+                eye_K = torch.eye(K, device=device, dtype=dtype)
+                exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
+                exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
 
             # Transport: Ω_ij = exp(φ_i) @ exp(-φ_j)
             # For all pairs: (B, N, N, K, K)
@@ -712,7 +729,6 @@ def compute_vfe_gradients_gpu(
             Omega = cached_transport['Omega']
         else:
             # Float64 for large K (numerical precision)
-            # NOTE: No re-orthogonalization needed for GL(K) gauge structure!
             phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
             if K >= 16:
                 phi_matrix_f64 = phi_matrix.double()
@@ -721,6 +737,13 @@ def compute_vfe_gradients_gpu(
             else:
                 exp_phi = torch.matrix_exp(phi_matrix)
                 exp_neg_phi = torch.matrix_exp(-phi_matrix)
+
+            # Re-orthogonalization for SO(K) if requested
+            if enforce_orthogonal and K >= 16:
+                eye_K = torch.eye(K, device=device, dtype=dtype)
+                exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
+                exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
+
             Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
 
         # Transport means
