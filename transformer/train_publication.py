@@ -287,11 +287,15 @@ VFE_EM_CONFIG = {
     'patience': 5,
 
     # =================================================================
-    # GAUGE GROUP SELECTION
+    # GAUGE GROUP SELECTION (Generators from so(N), Transport in GL(K))
     # =================================================================
-    # SO3: Standard SO(3) gauge group with 3 generators
+    # NOTE: The VFE is invariant under GL(K), not just SO(K)!
+    # We use so(N) generators to parameterize φ, but transport operators
+    # Ω = exp(φ·G) live in GL(K). No orthogonality constraint is needed.
+    #
+    # SO3: so(3) generators with 3 parameters (rotation-only subalgebra)
     #      Requires embed_dim = sum(mult * dim) for irrep_spec or odd embed_dim
-    # SON: SO(N) gauge group with N(N-1)/2 generators
+    # SON: so(N) generators with N(N-1)/2 parameters
     #      Supports multiple irrep types for representational diversity:
     #        - 'scalar': dim = 1              (gauge-invariant)
     #        - 'fund':   dim = N              (fundamental/vector)
