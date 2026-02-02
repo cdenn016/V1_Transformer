@@ -1,5 +1,5 @@
 """
-Parallel Transport Operators on SO(3) Principal Bundle
+Parallel Transport Operators on GL(K) Principal Bundle
 ======================================================
 
 Implements Ω_ij(c) = exp(φ_i(c)) · exp(-φ_j(c)) for gauge-theoretic
@@ -9,19 +9,29 @@ Mathematical Framework:
 ----------------------
 **Transport Operator:**
     Ω_ij: Fiber_i → Fiber_j
-    Ω_ij(c) = g_i(c) · g_j(c)^{-1} where g = exp(φ) ∈ SO(3)
+    Ω_ij(c) = g_i(c) · g_j(c)^{-1} where g = exp(φ) ∈ GL(K)
 
 **Properties:**
-    - Ω_ij ∈ SO(K): det(Ω) = +1, Ω^T Ω = I
+    - Ω_ij ∈ GL(K): det(Ω) ≠ 0 (invertible)
     - Ω_ij(c) · Ω_jk(c) = Ω_ik(c) (transitivity)
     - Ω_ii(c) = I (self-transport is identity)
 
+**Key Insight (GL(K) vs SO(K)):**
+    All f-divergences (including KL) are invariant under GL(K) transformations!
+    This is because the action (μ, Σ) → (Ωμ, ΩΣΩᵀ) is the pushforward under
+    x → Ωx, and f-divergences are coordinate-invariant (Jacobians cancel in ratio).
+
+    We do NOT need orthogonality constraints for the variational free energy
+    to be gauge-invariant. The only requirement is invertibility: det(Ω) ≠ 0.
+
 **Implementation:**
-    For K=3 (SO(3)), use Rodrigues formula (closed form, exact)
-    For K>3, use matrix exponential via eigendecomposition
+    For K=3 with SO(3) generators, use Rodrigues formula (closed form, exact)
+    For general K, use matrix exponential via scipy.linalg.expm
+    NO projection to orthogonal matrices - allows full GL(K) flexibility
 
 Author: Clean Rebuild
 Date: November 2025
+Updated: GL(K) generalization - February 2026
 """
 
 import numpy as np
@@ -139,9 +149,10 @@ def compute_transport(
     validate: bool = False,
     eps: float = 1e-8,
     use_gpu: bool = False,
+    project_to_orthogonal: bool = False,  # NEW: opt-in orthogonal projection
 ) -> np.ndarray:
     """
-    Compute transport operator Ω_ij = exp(φ_i) · exp(-φ_j).
+    Compute transport operator Ω_ij = exp(φ_i) · exp(-φ_j) ∈ GL(K).
 
     NOW WITH NUMBA + CUDA ACCELERATION!
 
@@ -151,14 +162,22 @@ def compute_transport(
     3. NumPy fallback
 
     Args:
-        phi_i, phi_j: Gauge fields, shape (*S, 3)
-        generators: SO(3) generators, shape (3, K, K)
-        validate: Check orthogonality of result
-        eps: Small-angle threshold
+        phi_i, phi_j: Gauge fields, shape (*S, n_generators)
+        generators: Lie algebra generators, shape (n_generators, K, K)
+        validate: Check invertibility of result (det ≠ 0)
+        eps: Small-angle threshold / minimum determinant
         use_gpu: Force GPU computation
+        project_to_orthogonal: If True, project to SO(K) (legacy behavior).
+                              Default False for full GL(K) flexibility.
 
     Returns:
         Omega_ij: Transport operator, shape (*S, K, K)
+
+    Note:
+        GL(K) transport is sufficient for gauge-invariant VFE because all
+        f-divergences are invariant under invertible linear transformations.
+        Orthogonal projection is only needed for specific applications
+        (e.g., volume preservation, Haar measure averaging).
     """
     # Check if input is already on GPU (CuPy array)
     is_gpu_array = False
@@ -208,12 +227,12 @@ def compute_transport(
     exp_neg_phi_j = _matrix_exponential_so3(-phi_j, G)
 
     # ========================================================================
-    # EXISTING CODE: Compose and validate (unchanged)
+    # Compose transport operators
     # ========================================================================
     Omega_ij = np.matmul(exp_phi_i, exp_neg_phi_j)
 
     if validate:
-        _validate_orthogonal(Omega_ij, eps=eps)
+        _validate_invertible(Omega_ij, eps=eps)
 
     return Omega_ij.astype(np.float64, copy=False)
 
@@ -260,35 +279,40 @@ def _matrix_exponential_so3(
     generators: np.ndarray,
     *,
     small_threshold: float = 1e-4,
+    project_to_orthogonal: bool = False,  # NEW: opt-in for SO(K) projection
+    enforce_skew_symmetry: bool = False,  # NEW: opt-in for skew-symmetry
 ) -> np.ndarray:
     """
-    Compute exp(Σ φ^a G_a) for general SO(N).
+    Compute exp(Σ φ^a G_a) for general GL(K).
 
     Uses eigendecomposition for large angles, Taylor series for small.
 
     Args:
-        phi: Axis-angle, shape (*S, 3)
-        generators: Shape (3, K, K)
+        phi: Lie algebra coefficients, shape (*S, n_generators)
+        generators: Shape (n_generators, K, K)
         small_threshold: Switch point for Taylor series
+        project_to_orthogonal: If True, project result to SO(K) (legacy behavior)
+        enforce_skew_symmetry: If True, enforce X = -Xᵀ (for SO(K) generators)
 
     Returns:
-        exp_phi: Shape (*S, K, K), orthogonal matrices
+        exp_phi: Shape (*S, K, K), invertible matrices in GL(K)
+                 (orthogonal if project_to_orthogonal=True)
+
+    Note:
+        For GL(K) gauge transformations, we do NOT need orthogonal projection.
+        The VFE is invariant under GL(K) because f-divergences are invariant
+        under pushforward by invertible linear maps.
     """
     phi = np.asarray(phi, dtype=np.float64)
     G = np.asarray(generators, dtype=np.float64)
 
     # Clip phi values to prevent numerical overflow
-    # Angles larger than 2π are redundant anyway
+    # For GL(K), large values can still cause issues with expm
     phi_norm = np.linalg.norm(phi, axis=-1, keepdims=True)
     phi_norm_clipped = np.clip(phi_norm, 0, 2 * np.pi)
-    # Avoid division by zero: only divide where phi_norm is sufficiently large
-
-    # Use np.divide with where parameter to avoid evaluating division for small norms
 
     scale_factor = np.ones_like(phi_norm)
-
     np.divide(phi_norm_clipped, phi_norm, out=scale_factor, where=phi_norm > 1e-8)
-
     phi = phi * scale_factor
 
     batch_shape = phi.shape[:-1]
@@ -296,45 +320,47 @@ def _matrix_exponential_so3(
 
     # Compute algebra element: X = Σ_a φ^a G_a
     X = np.einsum('...a,aij->...ij', phi, G, optimize=True)  # (*S, K, K)
-    
-    # Enforce skew-symmetry
-    X = 0.5 * (X - np.swapaxes(X, -1, -2))
-    
+
+    # Optionally enforce skew-symmetry (for SO(K) subalgebra)
+    if enforce_skew_symmetry:
+        X = 0.5 * (X - np.swapaxes(X, -1, -2))
+
     # Compute norms
     phi_norms = np.linalg.norm(phi, axis=-1)  # (*S,)
-    
+
     # Allocate output
     exp_phi = np.empty(batch_shape + (K, K), dtype=np.float64)
-    
+
     # ========== Small angle: Taylor series ==========
     small_mask = phi_norms < small_threshold
-    
+
     if np.any(small_mask):
         X_small = X[small_mask]
         I = np.eye(K, dtype=np.float64)
-        
+
         X2 = X_small @ X_small
         X3 = X2 @ X_small
         X4 = X2 @ X2
-        
+
         exp_phi[small_mask] = I + X_small + 0.5*X2 + (1.0/6.0)*X3 + (1.0/24.0)*X4
-    
-    # ========== Large angle: Eigendecomposition ==========
+
+    # ========== Large angle: Matrix exponential ==========
     large_mask = ~small_mask
-    
+
     if np.any(large_mask):
         X_large = X[large_mask]
-        
+
         try:
             from scipy.linalg import expm as scipy_expm
             exp_phi[large_mask] = np.array([scipy_expm(X_i) for X_i in X_large])
         except ImportError:
             # Fallback: Padé approximation
             exp_phi[large_mask] = np.array([_expm_pade(X_i) for X_i in X_large])
-    
-    # Project to nearest orthogonal matrix
-    exp_phi = _project_to_orthogonal(exp_phi)
-    
+
+    # Optionally project to nearest orthogonal matrix (for SO(K) compatibility)
+    if project_to_orthogonal:
+        exp_phi = _project_to_orthogonal(exp_phi)
+
     return exp_phi
 
 
@@ -417,15 +443,57 @@ def _expm_pade(A: np.ndarray, order: int = 13) -> np.ndarray:
     return X
 
 
-def _validate_orthogonal(Omega: np.ndarray, eps: float = 1e-6) -> None:
-    """Check Ω is orthogonal: Ω^T Ω = I."""
-   
+def _validate_invertible(Omega: np.ndarray, eps: float = 1e-8) -> None:
+    """
+    Check Ω is invertible: |det(Ω)| > eps.
+
+    For GL(K) gauge transformations, we only need invertibility, not orthogonality.
+    This is because all f-divergences are invariant under GL(K) pushforward.
+
+    Args:
+        Omega: Transport operators, shape (*batch, K, K)
+        eps: Minimum absolute determinant threshold
+
+    Raises:
+        ValueError: If any transport operator is singular or near-singular
+    """
     K = Omega.shape[-1]
-    
+
+    # Flatten for checking
+    Omega_flat = Omega.reshape(-1, K, K)
+
+    for i, Om in enumerate(Omega_flat):
+        det = np.linalg.det(Om)
+        if np.abs(det) < eps:
+            raise ValueError(
+                f"Transport operator singular at index {i}:\n"
+                f"  |det(Ω)| = {np.abs(det):.2e} < {eps:.2e}"
+            )
+
+        # Also check condition number for numerical stability
+        cond = np.linalg.cond(Om)
+        if cond > 1e10:
+            import warnings
+            warnings.warn(
+                f"Transport operator ill-conditioned at index {i}:\n"
+                f"  cond(Ω) = {cond:.2e} (may cause numerical issues)",
+                RuntimeWarning
+            )
+
+
+def _validate_orthogonal(Omega: np.ndarray, eps: float = 1e-6) -> None:
+    """
+    Check Ω is orthogonal: Ω^T Ω = I (legacy function for SO(K) compatibility).
+
+    Note: For GL(K) gauge transformations, use _validate_invertible instead.
+    Orthogonality is NOT required for gauge-invariant VFE.
+    """
+    K = Omega.shape[-1]
+
     # Flatten for checking
     Omega_flat = Omega.reshape(-1, K, K)
     I = np.eye(K, dtype=Omega.dtype)
-    
+
     for i, Om in enumerate(Omega_flat):
         error = np.linalg.norm(Om.T @ Om - I, ord='fro')
         if error > eps:

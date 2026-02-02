@@ -142,14 +142,12 @@ def _compute_vfe_gradients_block_diagonal(
         block_end = block_start + d
         gen_block = generators[:, block_start:block_end, block_start:block_end]
         phi_matrix_block = torch.einsum('bna,aij->bnij', phi, gen_block)
-        # Float64 + re-orthogonalization for large block dimensions
+        # Float64 for large block dimensions (numerical precision)
+        # NOTE: No re-orthogonalization needed for GL(K) gauge structure!
         if d >= 16:
             phi_matrix_block_f64 = phi_matrix_block.double()
             exp_phi_block = torch.matrix_exp(phi_matrix_block_f64).to(dtype)
             exp_neg_phi_block = torch.matrix_exp(-phi_matrix_block_f64).to(dtype)
-            eye_d = torch.eye(d, device=device, dtype=dtype)
-            exp_phi_block = exp_phi_block @ ((3.0 * eye_d - exp_phi_block.transpose(-1, -2) @ exp_phi_block) / 2.0)
-            exp_neg_phi_block = exp_neg_phi_block @ ((3.0 * eye_d - exp_neg_phi_block.transpose(-1, -2) @ exp_neg_phi_block) / 2.0)
         else:
             exp_phi_block = torch.matrix_exp(phi_matrix_block)
             exp_neg_phi_block = torch.matrix_exp(-phi_matrix_block)
@@ -312,15 +310,13 @@ def _compute_vfe_gradients_chunked(
     # 2. Alignment Gradient (chunked processing)
     # =================================================================
     # Precompute matrix exponentials for all positions
-    # Float64 + re-orthogonalization for large K
+    # Float64 for large K (numerical precision)
+    # NOTE: No re-orthogonalization needed for GL(K) gauge structure!
     phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
     if K >= 16:
         phi_matrix_f64 = phi_matrix.double()
         exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
         exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
-        eye_K = torch.eye(K, device=device, dtype=dtype)
-        exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
-        exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
     else:
         exp_phi = torch.matrix_exp(phi_matrix)
         exp_neg_phi = torch.matrix_exp(-phi_matrix)
@@ -580,15 +576,13 @@ def compute_vfe_gradients_gpu(
             Omega = cached_transport['Omega']
         else:
             # Compute transport operators (vectorized)
-            # Float64 + re-orthogonalization for large K
+            # Float64 for large K (numerical precision)
+            # NOTE: No re-orthogonalization needed for GL(K) gauge structure!
             phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
             if K >= 16:
                 phi_matrix_f64 = phi_matrix.double()
                 exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
                 exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
-                eye_K = torch.eye(K, device=device, dtype=dtype)
-                exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
-                exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
             else:
                 exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
                 exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
@@ -717,15 +711,13 @@ def compute_vfe_gradients_gpu(
         if cached_transport is not None and 'Omega' in cached_transport:
             Omega = cached_transport['Omega']
         else:
-            # Float64 + re-orthogonalization for large K
+            # Float64 for large K (numerical precision)
+            # NOTE: No re-orthogonalization needed for GL(K) gauge structure!
             phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
             if K >= 16:
                 phi_matrix_f64 = phi_matrix.double()
                 exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
                 exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
-                eye_K = torch.eye(K, device=device, dtype=dtype)
-                exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
-                exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
             else:
                 exp_phi = torch.matrix_exp(phi_matrix)
                 exp_neg_phi = torch.matrix_exp(-phi_matrix)

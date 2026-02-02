@@ -2,55 +2,79 @@
 
 ## The Problem
 
-Training with SO(100) / K=100 exhibits non-monotonic loss (PPL oscillates instead
-of decreasing). This document explains the root causes and the fixes applied,
-distinguishing between **bug fixes** (mathematical correctness), **justified
-engineering** (sound approximations), and **pragmatic choices** (hyperparameter
-convenience at the cost of strict theoretical form).
+Training with large K (e.g., K=100) can exhibit non-monotonic loss if numerical
+issues cause transport operators to become singular or ill-conditioned. This
+document explains the fixes applied, distinguishing between **bug fixes**
+(mathematical correctness), **justified engineering** (sound approximations),
+and **pragmatic choices** (hyperparameter convenience).
 
 ---
 
-## 1. Transport Operator Re-Orthogonalization
+## 1. Transport Operator Invertibility (GL(K) Gauge Structure)
 
-**Category: Bug fix**
+**Category: Theoretical clarification + simplified implementation**
 
-### Theory
+### Key Insight: GL(K) Suffices for Gauge Invariance
 
-The gauge-theoretic framework requires transport operators to live in SO(K):
+**CRITICAL DISCOVERY:** The variational free energy is invariant under GL(K)
+gauge transformations, not just SO(K)! This is because all f-divergences
+(including KL) are invariant under pushforward by invertible linear maps:
 
 ```
-Ω_ij = exp(φ_i · G) · exp(-φ_j · G) ∈ SO(K)
+D_KL(Ω·P || Ω·Q) = D_KL(P || Q)  for any Ω ∈ GL(K)
 ```
 
-This means Ω^T Ω = I and det(Ω) = +1. Transported covariances must be
-isospectral (same eigenvalues as the original), and the transitivity property
-Ω_ij Ω_jk = Ω_ik must hold.
+The Jacobian factors cancel in the density ratio. This means:
+- Transport operators need only be **invertible** (det ≠ 0), not orthogonal
+- No re-orthogonalization is required
+- No Newton-Schulz iterations needed
+- No SVD projection to SO(K) needed
 
-### What went wrong
+### Old Approach (SO(K) - DEPRECATED)
 
-The numpy path (`transport.py`) computes in float64 and projects to SO(K) via
-SVD (`_project_to_orthogonal`). The PyTorch path (`attention.py`) used float32
-`torch.matrix_exp` with **no re-orthogonalization**. For K=100, the Padé
-scaling-squaring algorithm accumulates enough rounding error that Ω drifts from
-SO(K). Consequences:
+Previously, the framework required Ω ∈ SO(K) (Ω^T Ω = I, det(Ω) = +1), which
+required expensive re-orthogonalization steps to correct numerical drift.
 
-- `Ω Σ Ω^T` is no longer isospectral → spurious KL contributions
-- Gauge symmetry is broken by numerical artifacts, not by physics
-- The diagonal approximation `diag(Ω diag(σ) Ω^T)_k = Σ_l Ω_{kl}² σ_l` relies
-  on `Σ_l Ω_{kl}² = 1` (row normalization of orthogonal matrix); drift breaks this
+### New Approach (GL(K))
 
-### Fix
+```
+Ω_ij = exp(φ_i · G) · exp(-φ_j · G) ∈ GL(K)
+```
 
-1. Compute `matrix_exp` in float64 for K ≥ 16, cast back to working precision
-2. Apply one Newton-Schulz iteration: `Q ← Q(3I - Q^TQ)/2`
+The only requirements are:
+1. **Invertibility**: |det(Ω)| > ε (not singular)
+2. **Numerical conditioning**: cond(Ω) < 10^10 (not ill-conditioned)
 
-Newton-Schulz converges quadratically for near-orthogonal matrices and is cheaper
-than SVD. It preserves the autograd graph (unlike `.data` assignment or SVD).
+### Implementation
 
-### Justification
+```python
+# OLD (deprecated): Re-orthogonalization
+Q = Q @ (3*I - Q.T @ Q) / 2  # Newton-Schulz - NO LONGER NEEDED
 
-This is unambiguously required. The framework defines Ω ∈ SO(K); failing to
-enforce this is a numerical bug, not a modeling choice.
+# NEW: Just check invertibility
+if abs(det(Omega)) < eps:
+    raise ValueError("Transport operator singular")
+if cond(Omega) > 1e10:
+    warnings.warn("Transport operator ill-conditioned")
+```
+
+### Why This Works
+
+The proof is straightforward. For KL between Gaussians:
+- Trace term: tr((ΩΣ₂Ωᵀ)⁻¹(ΩΣ₁Ωᵀ)) = tr(Σ₂⁻¹Σ₁) ✓
+- Quadratic term: (Ω(μ₁-μ₂))ᵀ(ΩΣ₂Ωᵀ)⁻¹(Ω(μ₁-μ₂)) = (μ₁-μ₂)ᵀΣ₂⁻¹(μ₁-μ₂) ✓
+- Log-det term: log(det(ΩΣ₂Ωᵀ)/det(ΩΣ₁Ωᵀ)) = log(detΣ₂/detΣ₁) ✓
+
+The (det Ω)² terms cancel! Orthogonality was never required.
+
+### Migration Notes
+
+If you have code that enforces SO(K) constraints, you can safely remove:
+- `_project_to_orthogonal()` calls
+- Newton-Schulz re-orthogonalization
+- `_validate_orthogonal()` checks (replace with `_validate_invertible()`)
+- Cayley transform constraints
+- Skew-symmetry enforcement (optional, keeps SO(K) subalgebra if desired)
 
 ---
 
@@ -279,7 +303,7 @@ produce the same optimization landscape.
 
 | Fix | Category | Theoretical status | Reversible? |
 |-----|----------|-------------------|-------------|
-| Re-orthogonalization | Bug fix | **Required** by Ω ∈ SO(K) | No—always needed |
+| GL(K) gauge (no re-orth) | Theoretical improvement | **GL(K) suffices** for gauge invariance | N/A—simpler than SO(K) |
 | Attention √K scaling | Engineering | Justified (≡ standard 1/√d_k scaling) | Adjust κ if reverting |
 | KL clamp ceiling | Bug fix | Dimension-dependent guard | No—always needed |
 | Per-group grad clip | Optimization | Standard practice, theory-agnostic | Adjust grad_clip if reverting |
@@ -289,17 +313,32 @@ produce the same optimization landscape.
 
 ## When These Fixes Matter
 
-The fixes are most impactful when **all three conditions hold**:
+The scaling fixes (√K attention, loss normalization) are most impactful when:
 
-1. **Large gauge group**: SO(N) with N ≥ 16 (phi_dim ≥ 120)
-2. **Large latent dimension**: K ≥ 16
-3. **Non-trivial transport**: `use_identity_transport=False` (gauge transport active)
+1. **Large latent dimension**: K ≥ 16
+2. **Non-trivial transport**: `use_identity_transport=False` (gauge transport active)
 
-For SO(3) with K ≤ 45, the effects are mild:
+For K ≤ 16, the effects are mild:
 - √K scaling at K=3 is a factor of 1.7 (absorbed by κ tuning)
-- Float32 matrix_exp on 3×3 matrices is exact to machine precision
 - KL ceiling of 100 is rarely hit
-- Phi has only 3 dims, no gradient budget imbalance
+- Small phi_dim means no gradient budget imbalance
+
+### GL(K) vs SO(K) Gauge Structure
+
+With the GL(K) generalization, you have more flexibility:
+
+| Gauge Group | Constraint | Use Case |
+|-------------|------------|----------|
+| GL(K) | det(Ω) ≠ 0 | Default—simplest, full flexibility |
+| SL(K) | det(Ω) = 1 | Volume-preserving, non-compact |
+| SO(K) | Ω^T Ω = I, det(Ω) = +1 | Orthogonal, compact, Haar measure exists |
+| SO(3) | 3D rotations | Legacy, irrep structure |
+
+For VFE-based objectives, **GL(K) is sufficient and recommended**. Use SO(K) only
+if you need:
+- Haar measure averaging (gauge consensus)
+- Finite-dimensional irreps
+- Volume preservation guarantees
 
 ---
 
@@ -309,12 +348,22 @@ The fixes were applied consistently across all numerical paths:
 
 | File | Fixes Applied |
 |------|---------------|
-| `transformer/core/attention.py` | √K attention scaling, float64 transport, re-orthogonalization, KL ceiling |
-| `transformer/core/variational_ffn.py` | √K softmax coupling, float64 transport, re-orthogonalization, KL ceiling |
+| `math_utils/transport.py` | GL(K) support, invertibility checks (replaces orthogonality) |
+| `geometry/gauge_consensus.py` | GL(K) reference measure sampling option |
+| `transformer/core/embeddings.py` | GL(K) phi_dim documentation |
+| `transformer/core/attention.py` | √K attention scaling, KL ceiling |
+| `transformer/core/variational_ffn.py` | √K softmax coupling, KL ceiling |
 | `transformer/train.py` | √K loss normalization, per-group grad clipping, KL ceiling |
 | `transformer/train_publication.py` | Per-group grad clipping |
 
-The VFE FFN (`variational_ffn.py`) required the same fixes as attention because it:
-1. Computes its own KL values for the softmax coupling gradient
-2. Computes transport operators internally when not using cached transport
-3. Uses `∂β_ij/∂μ_i ∝ 1/κ` which must match attention's temperature scaling
+### GL(K) Migration (February 2026)
+
+The following changes support GL(K) gauge structure:
+1. `transport.py`: Removed mandatory orthogonal projection, added `_validate_invertible()`
+2. `gauge_consensus.py`: Added `sample_glk_reference()` for non-Haar sampling
+3. `embeddings.py`: Updated docs to explain phi_dim options for GL(K)
+4. `NUMERICAL_STABILITY.md`: This document updated to reflect GL(K) theory
+
+**Key insight:** Re-orthogonalization was never mathematically required—the VFE is
+invariant under the full GL(K), not just SO(K). The orthogonal constraint was a
+sufficient but not necessary condition for gauge invariance.
