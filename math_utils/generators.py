@@ -1666,6 +1666,246 @@ def _matrix_log_orthogonal_torch(
 
 
 # =============================================================================
+# GL(K) Lie Algebra Operations (full general linear group)
+# =============================================================================
+#
+# GL(K) is the group of invertible K×K matrices with Lie algebra gl(K).
+# gl(K) = all K×K matrices with Lie bracket [A,B] = AB - BA.
+#
+# Key difference from so(K): gl(K) includes non-skew-symmetric matrices,
+# so exp(φ·G) produces general invertible matrices, not just orthogonal ones.
+#
+# Since KL divergence (and all f-divergences) are invariant under GL(K),
+# we can use these more expressive transformations.
+
+
+def _get_glK_gauge_generators(
+    n_gen: int,
+    device: 'torch.device',
+    dtype: 'torch.dtype',
+) -> 'torch.Tensor':
+    """
+    Get K×K generators for GL(K) gauge group based on n_gen = K².
+
+    Uses elementary matrices E_ij (1 at position (i,j), 0 elsewhere).
+
+    Args:
+        n_gen: Number of generators (must be a perfect square K²)
+        device: PyTorch device
+        dtype: PyTorch dtype
+
+    Returns:
+        generators: (K², K, K) tensor of elementary matrices
+    """
+    import torch
+    import math
+
+    # Infer K from n_gen = K²
+    K = int(math.sqrt(n_gen))
+
+    if K * K != n_gen:
+        raise ValueError(f"n_gen={n_gen} is not a perfect square (needed for GL(K))")
+
+    # Build elementary matrices E_ij
+    generators = torch.zeros(n_gen, K, K, device=device, dtype=dtype)
+    idx = 0
+    for i in range(K):
+        for j in range(K):
+            generators[idx, i, j] = 1.0
+            idx += 1
+
+    return generators
+
+
+def glK_bracket_torch(
+    phi1: 'torch.Tensor',
+    phi2: 'torch.Tensor',
+    generators: 'torch.Tensor',
+) -> 'torch.Tensor':
+    """
+    Compute the Lie bracket [φ₁·G, φ₂·G] in gl(K) and return coordinates.
+
+    For gl(K), the Lie bracket is the matrix commutator: [A, B] = AB - BA
+
+    Args:
+        phi1: First Lie algebra element coordinates (..., n_gen) where n_gen = K²
+        phi2: Second Lie algebra element coordinates (..., n_gen)
+        generators: Transport generators (n_gen, dim, dim) - used only for n_gen count.
+                   The actual K×K generators are computed internally.
+
+    Returns:
+        bracket_coords: Coordinates of [φ₁·G, φ₂·G] in generator basis (..., n_gen)
+    """
+    import torch
+
+    n_gen = generators.shape[0]
+
+    # Get K×K gauge generators (elementary matrices)
+    gauge_gens = _get_glK_gauge_generators(n_gen, phi1.device, phi1.dtype)
+
+    # Build matrices using K×K gauge generators
+    A1 = torch.einsum('...a,aij->...ij', phi1, gauge_gens)  # (..., K, K)
+    A2 = torch.einsum('...a,aij->...ij', phi2, gauge_gens)  # (..., K, K)
+
+    # Lie bracket: [A, B] = AB - BA
+    bracket = A1 @ A2 - A2 @ A1  # (..., K, K)
+
+    # Extract coordinates
+    bracket_coords = extract_glK_coords_torch(bracket, gauge_gens)
+
+    return bracket_coords
+
+
+def extract_glK_coords_torch(
+    A: 'torch.Tensor',
+    generators: 'torch.Tensor',
+) -> 'torch.Tensor':
+    """
+    Extract gl(K) Lie algebra coordinates from a matrix.
+
+    Given A = Σ_a φ_a E_a where E_a are elementary matrices,
+    the coordinates are simply the matrix elements: φ_{ij} = A[i, j].
+
+    Args:
+        A: Matrix (..., K, K)
+        generators: Gauge generators (n_gen, K, K) - used for shape only
+
+    Returns:
+        phi: Lie algebra coordinates (..., n_gen) where n_gen = K²
+    """
+    import torch
+
+    K = A.shape[-1]
+    batch_shape = A.shape[:-2]
+
+    # Flatten the matrix to get coordinates
+    # E_ij has index i*K + j, so A[i,j] = phi[i*K + j]
+    phi = A.reshape(batch_shape + (K * K,))
+
+    return phi
+
+
+def glK_compose_bch_torch(
+    phi1: 'torch.Tensor',
+    phi2: 'torch.Tensor',
+    generators: 'torch.Tensor',
+    order: int = 1,
+) -> 'torch.Tensor':
+    """
+    Compose two gl(K) elements using Baker-Campbell-Hausdorff formula.
+
+    log(exp(φ₁·G)·exp(φ₂·G)) = φ₁ + φ₂ + ½[φ₁,φ₂] + (1/12)[φ₁,[φ₁,φ₂]] - ...
+
+    For gl(K), the Lie bracket is: [A, B] = AB - BA (matrix commutator)
+
+    Args:
+        phi1: First gl(K) element (..., n_gen) where n_gen = K²
+        phi2: Second gl(K) element (..., n_gen)
+        generators: Lie algebra generators (n_gen, dim, dim)
+        order: BCH expansion order (0=addition, 1=first correction, 2=second)
+
+    Returns:
+        phi_composed: Composed element in gl(K) (..., n_gen)
+    """
+    if order == 0:
+        # Simple addition (valid for small updates only)
+        return phi1 + phi2
+
+    # First-order BCH: φ₁ + φ₂ + ½[φ₁,φ₂]
+    bracket_12 = glK_bracket_torch(phi1, phi2, generators)
+    result = phi1 + phi2 + 0.5 * bracket_12
+
+    if order >= 2:
+        # Second-order: + (1/12)[φ₁,[φ₁,φ₂]] - (1/12)[φ₂,[φ₁,φ₂]]
+        bracket_1_12 = glK_bracket_torch(phi1, bracket_12, generators)
+        bracket_2_12 = glK_bracket_torch(phi2, bracket_12, generators)
+        result = result + (1.0/12.0) * bracket_1_12 - (1.0/12.0) * bracket_2_12
+
+    return result
+
+
+def retract_glK_torch(
+    phi: 'torch.Tensor',
+    delta_phi: 'torch.Tensor',
+    generators: 'torch.Tensor',
+    step_size: float = 1.0,
+    trust_region: float = 0.3,
+    max_norm: float = 3.14159,
+    bch_order: int = 1,
+    eps: float = 1e-6,
+) -> 'torch.Tensor':
+    """
+    Retract phi update in GL(K) with trust region.
+
+    Unlike SO(N), GL(K) doesn't require orthogonality constraints.
+    We just use BCH composition and norm clamping for stability.
+
+    Steps:
+    1. Scale update by step_size
+    2. Apply trust region (limit relative change)
+    3. Compose using BCH formula (proper Lie group composition)
+    4. Clamp final norm
+
+    Args:
+        phi: Current gauge frames (..., n_gen) where n_gen = K²
+        delta_phi: Update direction (typically -grad_phi) (..., n_gen)
+        generators: Lie algebra generators (n_gen, dim, dim)
+        step_size: Learning rate for the update
+        trust_region: Maximum relative change ||δφ|| / ||φ|| per update
+        max_norm: Maximum allowed norm for phi
+        bch_order: Order of BCH expansion (0=add, 1=first correction)
+        eps: Numerical stability constant
+
+    Returns:
+        phi_new: Updated gauge frames (..., n_gen)
+    """
+    import torch
+
+    # Scale update
+    update = step_size * delta_phi
+
+    # Trust region: limit step size relative to current phi
+    phi_norm = torch.norm(phi, dim=-1, keepdim=True).clamp(min=0.1)
+    update_norm = torch.norm(update, dim=-1, keepdim=True)
+
+    # Scale down if update is too large relative to current phi
+    scale = torch.clamp(trust_region * phi_norm / (update_norm + eps), max=1.0)
+    update = scale * update
+
+    # Compose using BCH (proper Lie group composition)
+    phi_new = glK_compose_bch_torch(phi, update, generators, order=bch_order)
+
+    # Clamp to max norm (retraction to ball)
+    phi_new_norm = torch.norm(phi_new, dim=-1, keepdim=True)
+    phi_new = torch.where(
+        phi_new_norm > max_norm,
+        phi_new * (max_norm / (phi_new_norm + eps)),
+        phi_new
+    )
+
+    return phi_new
+
+
+def is_glK_generators(n_gen: int) -> bool:
+    """Check if n_gen corresponds to GL(K) (perfect square)."""
+    import math
+    K = int(math.sqrt(n_gen))
+    return K * K == n_gen and K > 0
+
+
+def is_soN_generators(n_gen: int) -> bool:
+    """Check if n_gen corresponds to SO(N) (triangular number)."""
+    import math
+    # n_gen = N(N-1)/2 => 8*n_gen + 1 = (2N-1)² is a perfect odd square
+    discriminant = 1 + 8 * n_gen
+    sqrt_disc = int(math.sqrt(discriminant))
+    if sqrt_disc * sqrt_disc != discriminant:
+        return False
+    N = (1 + sqrt_disc) // 2
+    return N * (N - 1) // 2 == n_gen and N >= 2
+
+
+# =============================================================================
 # Cache
 # =============================================================================
 
