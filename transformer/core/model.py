@@ -50,6 +50,7 @@ try:
         generate_soN_generators,
         generate_multi_irrep_generators,
         generate_multi_irrep_soN_generators,
+        generate_glK_generators,
     )
     GENERATORS_AVAILABLE = True
 except ImportError:
@@ -183,10 +184,10 @@ class GaugeTransformerLM(nn.Module):
         self.ffn_window = config.get('ffn_window', 64)
 
         # =================================================================
-        # Gauge Group Generators (SO(3) or SO(N))
+        # Gauge Group Generators (SO(3), SO(N), or GL(K))
         # =================================================================
         gauge_group = config.get('gauge_group', 'SO3')
-        gauge_dim = config.get('gauge_dim', 3)  # N for SO(N)
+        gauge_dim = config.get('gauge_dim', 3)  # N for SO(N), K for GL(K)
         use_multi_irrep = config.get('use_multi_irrep', False)
 
         # Store gauge group info for position encoding and other components
@@ -196,6 +197,9 @@ class GaugeTransformerLM(nn.Module):
         # Compute phi dimension (number of generators)
         if gauge_group == 'SO3':
             self.phi_dim = 3  # SO(3) has 3 generators
+        elif gauge_group == 'GLK':
+            # GL(K) has K² generators (full matrix algebra)
+            self.phi_dim = embed_dim * embed_dim
         else:  # SO(N)
             self.phi_dim = gauge_dim * (gauge_dim - 1) // 2  # SO(N) has N(N-1)/2 generators
 
@@ -205,6 +209,10 @@ class GaugeTransformerLM(nn.Module):
                     generators = generate_multi_irrep_generators(irrep_spec)
                 else:
                     generators = generate_so3_generators(embed_dim)
+            elif gauge_group == 'GLK':
+                # GL(K) with full K² generators
+                generators = generate_glK_generators(embed_dim)
+                print(f"[INFO] GL(K) gauge group: {embed_dim}² = {embed_dim**2} generators")
             else:  # SO(N)
                 if use_multi_irrep and irrep_spec is not None:
                     generators = generate_multi_irrep_soN_generators(irrep_spec, gauge_dim)

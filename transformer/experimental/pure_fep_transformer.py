@@ -102,6 +102,7 @@ from math_utils.generators import (
     generate_multi_irrep_generators,
     generate_soN_generators,
     generate_multi_irrep_soN_generators,
+    generate_glK_generators,
 )
 from transformer.core.prior_bank import PriorBank
 
@@ -313,8 +314,13 @@ class PureFEPConfig:
     #         - Uses N-dimensional fundamental representation
     #         - More generators = richer gauge structure
     #         - Requires gauge_dim parameter
+    # 'GLK':  General linear group GL(K) with K² generators (φ ∈ ℝ^{K²})
+    #         - Full matrix algebra gl(K) = all KxK matrices
+    #         - KL divergence is invariant under GL(K), not just SO(K)!
+    #         - No orthogonality constraint needed (faster training)
+    #         - Uses embed_dim as K
     gauge_group: str = 'SO3'
-    gauge_dim: int = 3  # N for SO(N) when gauge_group='SON' (ignored for 'SO3')
+    gauge_dim: int = 3  # N for SO(N) when gauge_group='SON' (ignored for SO3/GLK)
 
     # Numerical stability
     eps: float = 1e-6             # General numerical stability floor
@@ -404,9 +410,9 @@ class PureFEPConfig:
     def __post_init__(self):
         """Validate configuration."""
         # Validate gauge group
-        if self.gauge_group not in ('SO3', 'SON'):
+        if self.gauge_group not in ('SO3', 'SON', 'GLK'):
             raise ValueError(
-                f"gauge_group must be 'SO3' or 'SON', got '{self.gauge_group}'"
+                f"gauge_group must be 'SO3', 'SON', or 'GLK', got '{self.gauge_group}'"
             )
 
         if self.gauge_group == 'SON' and self.gauge_dim < 2:
@@ -418,6 +424,11 @@ class PureFEPConfig:
         if self.gauge_group == 'SO3':
             self._phi_dim = 3  # so(3) has 3 generators
             self._n_generators = 3
+        elif self.gauge_group == 'GLK':
+            # GL(K) has K² generators (full matrix algebra)
+            K = self.embed_dim
+            self._phi_dim = K * K
+            self._n_generators = self._phi_dim
         else:  # SON
             N = self.gauge_dim
             self._phi_dim = N * (N - 1) // 2  # so(N) has N(N-1)/2 generators
@@ -434,6 +445,10 @@ class PureFEPConfig:
                         f"OR provide an irrep_spec for multi-irrep mode."
                     )
                 self.irrep_spec = self._generate_irrep_spec(self.embed_dim)
+            elif self.gauge_group == 'GLK':
+                # GL(K): Single block of full embed_dim (no irrep structure)
+                # For GL(K), the entire space transforms as one representation
+                self.irrep_spec = [('full', 1, self.embed_dim)]
             else:
                 # SO(N): Auto-generate as copies of fundamental rep
                 N = self.gauge_dim
@@ -574,7 +589,12 @@ class PureFEPLayer(nn.Module):
         # GENERATORS: Build SO(3) or SO(N) generators based on gauge_group
         # =====================================================================
         self.gauge_group = config.gauge_group
-        self.gauge_dim = config.gauge_dim if config.gauge_group == 'SON' else 3
+        if config.gauge_group == 'SON':
+            self.gauge_dim = config.gauge_dim
+        elif config.gauge_group == 'GLK':
+            self.gauge_dim = embed_dim  # GL(K) acts on K-dim space
+        else:
+            self.gauge_dim = 3  # SO3 default
 
         if config.gauge_group == 'SO3':
             # SO(3) mode: 3 generators, phi ∈ ℝ³
@@ -595,7 +615,7 @@ class PureFEPLayer(nn.Module):
                 # Single irrep: spin-ℓ where ℓ = (K-1)/2
                 self.irrep_attention = None
                 gen_np = generate_so3_generators(embed_dim)
-        else:
+        elif config.gauge_group == 'SON':
             # SO(N) mode: N(N-1)/2 generators, phi ∈ ℝ^{N(N-1)/2}
             N = config.gauge_dim
             self.irrep_attention = None  # IrrepMultiHeadAttention is SO(3)-specific
@@ -608,6 +628,15 @@ class PureFEPLayer(nn.Module):
             else:
                 # Single fundamental rep (only if embed_dim == N)
                 gen_np = generate_soN_generators(N)
+        elif config.gauge_group == 'GLK':
+            # GL(K) mode: K² generators spanning gl(K) = all KxK matrices
+            # KL divergence is invariant under full GL(K), not just SO(K)!
+            K = embed_dim
+            self.irrep_attention = None  # IrrepMultiHeadAttention is SO(3)-specific
+            gen_np = generate_glK_generators(K)
+            print(f"[INFO] GL(K) gauge group: {K}² = {K**2} generators")
+        else:
+            raise ValueError(f"Unknown gauge_group: {config.gauge_group}")
 
         self.register_buffer('generators', torch.from_numpy(gen_np).float())
 
@@ -1840,9 +1869,15 @@ class PureFEPTransformer(nn.Module):
                 gen_np = generate_multi_irrep_generators(config.irrep_spec, validate=True)
             else:
                 gen_np = generate_so3_generators(config.embed_dim)
-        else:  # SON
+        elif config.gauge_group == 'SON':
             N = config.gauge_dim
             gen_np = generate_multi_irrep_soN_generators(config.irrep_spec, N, validate=True)
+        elif config.gauge_group == 'GLK':
+            # GL(K) mode: K² generators spanning full gl(K)
+            K = config.embed_dim
+            gen_np = generate_glK_generators(K)
+        else:
+            raise ValueError(f"Unknown gauge_group: {config.gauge_group}")
         self.register_buffer('generators', torch.from_numpy(gen_np).float())
 
         # =====================================================================

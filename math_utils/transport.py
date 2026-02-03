@@ -550,10 +550,10 @@ def compute_transport_differential(
     if exp_phi_i is None:
         exp_phi_i = _matrix_exponential_so3(phi_i, G)
 
-    if exp_phi_j is None:
-        exp_neg_phi_j = _matrix_exponential_so3(-phi_j, G)
-    else:
-        exp_neg_phi_j = np.swapaxes(exp_phi_j, -1, -2)
+    # Always compute exp(-φ_j) directly for GL(K) compatibility
+    # NOTE: For GL(K), exp(φ)^T ≠ exp(-φ) unless generators are skew-symmetric
+    # and result is orthogonal. We cannot use the transpose shortcut.
+    exp_neg_phi_j = _matrix_exponential_so3(-phi_j, G)
 
     
     # ========== Differential of exp map ==========
