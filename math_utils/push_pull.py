@@ -331,28 +331,33 @@ def pull_gaussian(
     eps: float = 1e-8,
 ) -> GaussianDistribution:
     """
-    Pull Gaussian back via inverse transport Ω⁻¹ = Ωᵀ.
-    
+    Pull Gaussian back via inverse transport Ω⁻¹.
+
     Transformation:
-        N(μ, Σ) → N(Ωᵀ μ, Ωᵀ Σ Ω)
-    
+        N(μ, Σ) → N(Ω⁻¹ μ, Ω⁻¹ Σ Ω⁻ᵀ)
+
     Args:
         gaussian: Pushed distribution
         Omega: Transport operator (will be inverted)
         compute_precision: If True, compute Σ'⁻¹
         eps: Regularization
-    
+
     Returns:
         pulled: Original (source) distribution
-    
+
     Notes:
         - Inverse of push_gaussian
-        - For orthogonal Ω: Ω⁻¹ = Ωᵀ (cheap!)
+        - For GL(K): Uses actual matrix inverse (not transpose)
         - Used rarely (typically only push forward)
     """
-    # Invert transport: Ω⁻¹ = Ωᵀ for orthogonal matrices
-    Omega_inv = np.swapaxes(Omega, -1, -2)
-    
+    # Invert transport: use actual inverse for GL(K) compatibility
+    # NOTE: For orthogonal Ω, this equals Ωᵀ, but we use inv() for generality
+    batch_shape = Omega.shape[:-2]
+    K = Omega.shape[-1]
+    Omega_flat = Omega.reshape(-1, K, K)
+    Omega_inv_flat = np.linalg.inv(Omega_flat)
+    Omega_inv = Omega_inv_flat.reshape(batch_shape + (K, K))
+
     # Pull is push with inverted operator
     return push_gaussian(gaussian, Omega_inv, compute_precision=compute_precision, eps=eps)
 
