@@ -89,31 +89,43 @@ def _retract_phi(
     delta_phi: torch.Tensor,
     generators: torch.Tensor,
     step_size: float,
-    trust_region: float = 0.3,
-    max_norm: float = 3.14159,
-    bch_order: int = 1,
+    trust_region: float = None,  # None = auto-select based on gauge group
+    max_norm: float = None,  # None = auto-select based on gauge group
+    bch_order: int = None,  # None = auto-select based on gauge group
     eps: float = 1e-6,
 ) -> torch.Tensor:
     """
     Retract phi update using appropriate method for gauge group.
 
     Automatically selects SO(N) or GL(K) retraction based on n_gen:
-    - n_gen = N(N-1)/2 → SO(N)
-    - n_gen = K²       → GL(K)
+    - n_gen = N(N-1)/2 → SO(N): compact, uses trust_region=0.3, max_norm=π, bch_order=1
+    - n_gen = K²       → GL(K): non-compact, uses trust_region=0.1, max_norm=1.0, bch_order=0
 
     Args:
         phi: Current gauge frames (..., n_gen)
         delta_phi: Update direction (..., n_gen)
         generators: Lie algebra generators (n_gen, dim, dim)
         step_size: Learning rate
-        trust_region: Maximum relative change per update
-        max_norm: Maximum norm for phi
-        bch_order: BCH expansion order
+        trust_region: Maximum relative change per update (auto if None)
+        max_norm: Maximum norm for phi (auto if None)
+        bch_order: BCH expansion order (auto if None)
         eps: Numerical stability
 
     Returns:
         phi_new: Updated gauge frames
     """
+    n_gen = generators.shape[0]
+    is_glk = RETRACTION_AVAILABLE and is_glK_generators(n_gen)
+    is_son = RETRACTION_AVAILABLE and is_soN_generators(n_gen)
+
+    # Auto-select defaults based on gauge group
+    if trust_region is None:
+        trust_region = 0.1 if is_glk else 0.3
+    if max_norm is None:
+        max_norm = 1.0 if is_glk else 3.14159
+    if bch_order is None:
+        bch_order = 0 if is_glk else 1
+
     if not RETRACTION_AVAILABLE:
         # Fallback: simple gradient descent with trust region
         update = step_size * delta_phi
@@ -130,24 +142,22 @@ def _retract_phi(
         )
         return phi_new
 
-    n_gen = generators.shape[0]
-
     # Check if this is GL(K) (n_gen = K²) or SO(N) (n_gen = N(N-1)/2)
-    if is_glK_generators(n_gen):
-        # GL(K) needs more conservative settings to prevent instability
-        # The transport operators can become ill-conditioned easily
+    if is_glk:
+        # GL(K) is non-compact - needs conservative settings
         return retract_glK_torch(
             phi=phi,
             delta_phi=delta_phi,
             generators=generators,
             step_size=step_size,
-            trust_region=min(trust_region, 0.1),  # Tighter for GL(K)
-            max_norm=min(max_norm, 1.0),  # Smaller for GL(K)
-            bch_order=0,  # Simple addition - BCH can amplify noise
+            trust_region=trust_region,
+            max_norm=max_norm,
+            bch_order=bch_order,
             eps=eps,
-            grad_clip=10.0,  # Clip large gradients
+            grad_clip=10.0,
         )
-    elif is_soN_generators(n_gen):
+    elif is_son:
+        # SO(N) is compact - can use standard settings
         return retract_soN_torch(
             phi=phi,
             delta_phi=delta_phi,
@@ -159,7 +169,7 @@ def _retract_phi(
             eps=eps,
         )
     else:
-        # Unknown gauge group - use simple fallback
+        # Unknown gauge group - use conservative fallback
         update = step_size * delta_phi
         phi_norm = torch.norm(phi, dim=-1, keepdim=True).clamp(min=0.1)
         update_norm = torch.norm(update, dim=-1, keepdim=True)
@@ -1873,15 +1883,16 @@ class VariationalFFNDynamic(nn.Module):
                 )
 
                 # Update phi with proper retraction (auto-selects SO(N) or GL(K))
+                # SO(N): trust_region=0.3, bch_order=1 (compact group)
+                # GL(K): trust_region=0.1, bch_order=0 (non-compact, needs care)
                 phi_lr_iter = self.phi_lr / self.n_iterations  # Scale by iterations
                 phi_current = _retract_phi(
                     phi=phi_current,
                     delta_phi=-grad_phi,
                     generators=self.generators,
                     step_size=phi_lr_iter,
-                    trust_region=0.1,  # Tighter for stability
                     max_norm=self.phi_max_norm,
-                    bch_order=0,  # Simple addition for stability
+                    # trust_region and bch_order auto-selected based on gauge group
                 )
 
         # =================================================================
@@ -1954,15 +1965,15 @@ class VariationalFFNDynamic(nn.Module):
             )
 
             # Proper retraction with trust region (auto-selects SO(N) or GL(K))
-            # This ensures updates stay on the Lie algebra manifold
+            # SO(N): trust_region=0.3, bch_order=1 (compact group)
+            # GL(K): trust_region=0.1, bch_order=0 (non-compact, needs care)
             phi_current = _retract_phi(
                 phi=phi_current,
                 delta_phi=-grad_phi,  # Negative gradient for descent
                 generators=self.generators,
                 step_size=self.phi_lr,
-                trust_region=0.1,  # Tighter for stability
                 max_norm=self.phi_max_norm,
-                bch_order=0,  # Simple addition for stability
+                # trust_region and bch_order auto-selected based on gauge group
             )
 
         # Return results
