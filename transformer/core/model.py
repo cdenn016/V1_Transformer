@@ -171,7 +171,8 @@ class GaugeTransformerLM(nn.Module):
         alibi_slope = config.get('alibi_slope', None)
 
         # Identity transport mode: Ω_ij = I for all pairs (bypasses gauge transport)
-        # Useful for diagnostics or when gauge transport is not desired
+        # This is now primarily controlled by gauge_mode='trivial' for principled use.
+        # Direct use_identity_transport config is kept for backward compatibility.
         use_identity_transport = config.get('use_identity_transport', False)
 
         # Store evolve_phi for cross-layer transport caching optimization
@@ -184,15 +185,39 @@ class GaugeTransformerLM(nn.Module):
         self.ffn_window = config.get('ffn_window', 64)
 
         # =================================================================
-        # Gauge Group Generators (SO(3), SO(N), or GL(K))
+        # Gauge Group and Mode (SO(3), SO(N), or GL(K))
         # =================================================================
         gauge_group = config.get('gauge_group', 'SO3')
         gauge_dim = config.get('gauge_dim', 3)  # N for SO(N), K for GL(K)
         use_multi_irrep = config.get('use_multi_irrep', False)
 
+        # =================================================================
+        # Gauge Mode: Controls transport operator behavior
+        # =================================================================
+        # 'learned': Per-token gauge frames φ_i, transport Ω_ij = exp(φ_i)·exp(-φ_j)
+        #            This is the full gauge-theoretic attention.
+        # 'trivial': Global frame (φ = 0), transport Ω = I (identity)
+        #            This is the "trivial gauge fixing" that recovers standard
+        #            attention as a special case. Mathematically principled:
+        #            choosing a gauge where all tokens share one coordinate frame.
+        #            KL(q_i || Ω[q_j]) = KL(q_i || q_j) when Ω = I.
+        gauge_mode = config.get('gauge_mode', 'learned')
+        if gauge_mode not in ('learned', 'trivial'):
+            raise ValueError(f"gauge_mode must be 'learned' or 'trivial', got '{gauge_mode}'")
+
         # Store gauge group info for position encoding and other components
         self.gauge_group = gauge_group
         self.gauge_dim = gauge_dim
+        self.gauge_mode = gauge_mode
+
+        # Trivial gauge mode → Ω = I, no phi evolution
+        # This is the mathematically principled "gauge fixing" to a global frame
+        if gauge_mode == 'trivial':
+            use_identity_transport = True  # Ω = I for all pairs
+            evolve_phi = False  # No point updating φ when transport is identity
+            evolve_phi_e_step = False
+            print(f"[INFO] Trivial gauge mode: φ = 0, Ω = I (global frame / standard attention limit)")
+            print(f"       This recovers standard KL-attention: KL(q_i || q_j) with no transport.")
 
         # Compute phi dimension (number of generators)
         if gauge_group == 'SO3':
