@@ -134,15 +134,18 @@ def _retract_phi(
 
     # Check if this is GL(K) (n_gen = K²) or SO(N) (n_gen = N(N-1)/2)
     if is_glK_generators(n_gen):
+        # GL(K) needs more conservative settings to prevent instability
+        # The transport operators can become ill-conditioned easily
         return retract_glK_torch(
             phi=phi,
             delta_phi=delta_phi,
             generators=generators,
             step_size=step_size,
-            trust_region=trust_region,
-            max_norm=max_norm,
-            bch_order=bch_order,
+            trust_region=min(trust_region, 0.1),  # Tighter for GL(K)
+            max_norm=min(max_norm, 1.0),  # Smaller for GL(K)
+            bch_order=0,  # Simple addition - BCH can amplify noise
             eps=eps,
+            grad_clip=10.0,  # Clip large gradients
         )
     elif is_soN_generators(n_gen):
         return retract_soN_torch(
@@ -1861,6 +1864,14 @@ class VariationalFFNDynamic(nn.Module):
                     retain_graph=False,
                 )[0]
 
+                # Clip phi gradient to prevent explosions (especially for GL(K))
+                grad_phi_norm = torch.norm(grad_phi, dim=-1, keepdim=True)
+                grad_phi = torch.where(
+                    grad_phi_norm > 10.0,
+                    grad_phi * 10.0 / (grad_phi_norm + 1e-6),
+                    grad_phi
+                )
+
                 # Update phi with proper retraction (auto-selects SO(N) or GL(K))
                 phi_lr_iter = self.phi_lr / self.n_iterations  # Scale by iterations
                 phi_current = _retract_phi(
@@ -1868,9 +1879,9 @@ class VariationalFFNDynamic(nn.Module):
                     delta_phi=-grad_phi,
                     generators=self.generators,
                     step_size=phi_lr_iter,
-                    trust_region=0.3,
+                    trust_region=0.1,  # Tighter for stability
                     max_norm=self.phi_max_norm,
-                    bch_order=1,
+                    bch_order=0,  # Simple addition for stability
                 )
 
         # =================================================================
@@ -1934,6 +1945,14 @@ class VariationalFFNDynamic(nn.Module):
                 retain_graph=False,
             )[0]
 
+            # Clip phi gradient to prevent explosions (especially for GL(K))
+            grad_phi_norm = torch.norm(grad_phi, dim=-1, keepdim=True)
+            grad_phi = torch.where(
+                grad_phi_norm > 10.0,
+                grad_phi * 10.0 / (grad_phi_norm + 1e-6),
+                grad_phi
+            )
+
             # Proper retraction with trust region (auto-selects SO(N) or GL(K))
             # This ensures updates stay on the Lie algebra manifold
             phi_current = _retract_phi(
@@ -1941,9 +1960,9 @@ class VariationalFFNDynamic(nn.Module):
                 delta_phi=-grad_phi,  # Negative gradient for descent
                 generators=self.generators,
                 step_size=self.phi_lr,
-                trust_region=0.3,  # Max 30% relative change per update
+                trust_region=0.1,  # Tighter for stability
                 max_norm=self.phi_max_norm,
-                bch_order=1,  # First-order BCH (good balance of accuracy/speed)
+                bch_order=0,  # Simple addition for stability
             )
 
         # Return results

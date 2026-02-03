@@ -1829,22 +1829,25 @@ def retract_glK_torch(
     delta_phi: 'torch.Tensor',
     generators: 'torch.Tensor',
     step_size: float = 1.0,
-    trust_region: float = 0.3,
-    max_norm: float = 3.14159,
-    bch_order: int = 1,
+    trust_region: float = 0.1,  # Tighter than SO(N) for stability
+    max_norm: float = 1.0,  # Smaller than SO(N) - GL(K) doesn't have periodicity
+    bch_order: int = 0,  # Use simple addition - BCH bracket can amplify noise
     eps: float = 1e-6,
+    grad_clip: float = 10.0,  # Clip gradient norm before scaling
 ) -> 'torch.Tensor':
     """
     Retract phi update in GL(K) with trust region.
 
     Unlike SO(N), GL(K) doesn't require orthogonality constraints.
-    We just use BCH composition and norm clamping for stability.
+    We use conservative settings since GL(K) can produce ill-conditioned
+    transport operators more easily than SO(K).
 
     Steps:
-    1. Scale update by step_size
-    2. Apply trust region (limit relative change)
-    3. Compose using BCH formula (proper Lie group composition)
-    4. Clamp final norm
+    1. Clip gradient to prevent explosions
+    2. Scale update by step_size
+    3. Apply trust region (limit relative change)
+    4. Compose (simple addition for stability, or BCH if requested)
+    5. Clamp final norm
 
     Args:
         phi: Current gauge frames (..., n_gen) where n_gen = K²
@@ -1855,14 +1858,20 @@ def retract_glK_torch(
         max_norm: Maximum allowed norm for phi
         bch_order: Order of BCH expansion (0=add, 1=first correction)
         eps: Numerical stability constant
+        grad_clip: Maximum gradient norm (per-element clipping)
 
     Returns:
         phi_new: Updated gauge frames (..., n_gen)
     """
     import torch
 
+    # Clip gradient to prevent explosions
+    delta_norm = torch.norm(delta_phi, dim=-1, keepdim=True)
+    clip_scale = torch.clamp(grad_clip / (delta_norm + eps), max=1.0)
+    delta_phi_clipped = clip_scale * delta_phi
+
     # Scale update
-    update = step_size * delta_phi
+    update = step_size * delta_phi_clipped
 
     # Trust region: limit step size relative to current phi
     phi_norm = torch.norm(phi, dim=-1, keepdim=True).clamp(min=0.1)
@@ -1872,8 +1881,21 @@ def retract_glK_torch(
     scale = torch.clamp(trust_region * phi_norm / (update_norm + eps), max=1.0)
     update = scale * update
 
-    # Compose using BCH (proper Lie group composition)
-    phi_new = glK_compose_bch_torch(phi, update, generators, order=bch_order)
+    # Additional absolute clipping on update magnitude
+    update_norm_after = torch.norm(update, dim=-1, keepdim=True)
+    max_update = 0.5  # Max absolute update per step
+    update = torch.where(
+        update_norm_after > max_update,
+        update * max_update / (update_norm_after + eps),
+        update
+    )
+
+    # Compose: use simple addition for GL(K) stability (BCH bracket can explode)
+    if bch_order == 0:
+        phi_new = phi + update
+    else:
+        # BCH composition (use with caution for GL(K))
+        phi_new = glK_compose_bch_torch(phi, update, generators, order=bch_order)
 
     # Clamp to max norm (retraction to ball)
     phi_new_norm = torch.norm(phi_new, dim=-1, keepdim=True)
