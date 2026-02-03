@@ -71,12 +71,104 @@ from gradients.retraction import retract_spd  # For SPD manifold updates
 # Import attention computation for dynamic β
 from transformer.core.attention import compute_attention_weights
 
-# Import SO(N) retraction for proper phi updates
+# Import SO(N) and GL(K) retraction for proper phi updates
 try:
-    from math_utils.generators import retract_soN_torch
-    SON_RETRACTION_AVAILABLE = True
+    from math_utils.generators import (
+        retract_soN_torch,
+        retract_glK_torch,
+        is_soN_generators,
+        is_glK_generators,
+    )
+    RETRACTION_AVAILABLE = True
 except ImportError:
-    SON_RETRACTION_AVAILABLE = False
+    RETRACTION_AVAILABLE = False
+
+
+def _retract_phi(
+    phi: torch.Tensor,
+    delta_phi: torch.Tensor,
+    generators: torch.Tensor,
+    step_size: float,
+    trust_region: float = 0.3,
+    max_norm: float = 3.14159,
+    bch_order: int = 1,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """
+    Retract phi update using appropriate method for gauge group.
+
+    Automatically selects SO(N) or GL(K) retraction based on n_gen:
+    - n_gen = N(N-1)/2 → SO(N)
+    - n_gen = K²       → GL(K)
+
+    Args:
+        phi: Current gauge frames (..., n_gen)
+        delta_phi: Update direction (..., n_gen)
+        generators: Lie algebra generators (n_gen, dim, dim)
+        step_size: Learning rate
+        trust_region: Maximum relative change per update
+        max_norm: Maximum norm for phi
+        bch_order: BCH expansion order
+        eps: Numerical stability
+
+    Returns:
+        phi_new: Updated gauge frames
+    """
+    if not RETRACTION_AVAILABLE:
+        # Fallback: simple gradient descent with trust region
+        update = step_size * delta_phi
+        phi_norm = torch.norm(phi, dim=-1, keepdim=True).clamp(min=0.1)
+        update_norm = torch.norm(update, dim=-1, keepdim=True)
+        scale = torch.clamp(trust_region * phi_norm / (update_norm + eps), max=1.0)
+        phi_new = phi + scale * update
+        # Clamp to max norm
+        phi_new_norm = torch.norm(phi_new, dim=-1, keepdim=True)
+        phi_new = torch.where(
+            phi_new_norm > max_norm,
+            phi_new * max_norm / (phi_new_norm + eps),
+            phi_new
+        )
+        return phi_new
+
+    n_gen = generators.shape[0]
+
+    # Check if this is GL(K) (n_gen = K²) or SO(N) (n_gen = N(N-1)/2)
+    if is_glK_generators(n_gen):
+        return retract_glK_torch(
+            phi=phi,
+            delta_phi=delta_phi,
+            generators=generators,
+            step_size=step_size,
+            trust_region=trust_region,
+            max_norm=max_norm,
+            bch_order=bch_order,
+            eps=eps,
+        )
+    elif is_soN_generators(n_gen):
+        return retract_soN_torch(
+            phi=phi,
+            delta_phi=delta_phi,
+            generators=generators,
+            step_size=step_size,
+            trust_region=trust_region,
+            max_norm=max_norm,
+            bch_order=bch_order,
+            eps=eps,
+        )
+    else:
+        # Unknown gauge group - use simple fallback
+        update = step_size * delta_phi
+        phi_norm = torch.norm(phi, dim=-1, keepdim=True).clamp(min=0.1)
+        update_norm = torch.norm(update, dim=-1, keepdim=True)
+        scale = torch.clamp(trust_region * phi_norm / (update_norm + eps), max=1.0)
+        phi_new = phi + scale * update
+        phi_new_norm = torch.norm(phi_new, dim=-1, keepdim=True)
+        phi_new = torch.where(
+            phi_new_norm > max_norm,
+            phi_new * max_norm / (phi_new_norm + eps),
+            phi_new
+        )
+        return phi_new
 
 
 # =============================================================================
@@ -1769,30 +1861,17 @@ class VariationalFFNDynamic(nn.Module):
                     retain_graph=False,
                 )[0]
 
-                # Update phi with proper retraction
+                # Update phi with proper retraction (auto-selects SO(N) or GL(K))
                 phi_lr_iter = self.phi_lr / self.n_iterations  # Scale by iterations
-                if SON_RETRACTION_AVAILABLE:
-                    phi_current = retract_soN_torch(
-                        phi=phi_current,
-                        delta_phi=-grad_phi,
-                        generators=self.generators,
-                        step_size=phi_lr_iter,
-                        trust_region=0.3,
-                        max_norm=self.phi_max_norm,
-                        bch_order=1,
-                    )
-                else:
-                    delta_phi = -phi_lr_iter * grad_phi
-                    phi_norm = torch.norm(phi_current, dim=-1, keepdim=True).clamp(min=0.1)
-                    delta_norm = torch.norm(delta_phi, dim=-1, keepdim=True)
-                    trust_scale = torch.clamp(0.3 * phi_norm / (delta_norm + 1e-6), max=1.0)
-                    phi_current = phi_current + trust_scale * delta_phi
-                    phi_new_norm = torch.norm(phi_current, dim=-1, keepdim=True)
-                    phi_current = torch.where(
-                        phi_new_norm > self.phi_max_norm,
-                        phi_current * self.phi_max_norm / phi_new_norm,
-                        phi_current
-                    )
+                phi_current = _retract_phi(
+                    phi=phi_current,
+                    delta_phi=-grad_phi,
+                    generators=self.generators,
+                    step_size=phi_lr_iter,
+                    trust_region=0.3,
+                    max_norm=self.phi_max_norm,
+                    bch_order=1,
+                )
 
         # =================================================================
         # STEP 5: Optional Phi Evolution via VFE Gradient (after loop)
@@ -1855,38 +1934,17 @@ class VariationalFFNDynamic(nn.Module):
                 retain_graph=False,
             )[0]
 
-            # Proper SO(N) retraction with trust region
+            # Proper retraction with trust region (auto-selects SO(N) or GL(K))
             # This ensures updates stay on the Lie algebra manifold
-            if SON_RETRACTION_AVAILABLE:
-                # Use BCH composition with trust region for stable updates
-                phi_current = retract_soN_torch(
-                    phi=phi_current,
-                    delta_phi=-grad_phi,  # Negative gradient for descent
-                    generators=self.generators,
-                    step_size=self.phi_lr,
-                    trust_region=0.3,  # Max 30% relative change per update
-                    max_norm=self.phi_max_norm,
-                    bch_order=1,  # First-order BCH (good balance of accuracy/speed)
-                )
-            else:
-                # Fallback: simple gradient descent with trust region
-                delta_phi = -self.phi_lr * grad_phi
-
-                # Trust region: limit step size relative to current phi
-                phi_norm = torch.norm(phi_current, dim=-1, keepdim=True).clamp(min=0.1)
-                delta_norm = torch.norm(delta_phi, dim=-1, keepdim=True)
-                trust_scale = torch.clamp(0.3 * phi_norm / (delta_norm + 1e-6), max=1.0)
-                delta_phi = trust_scale * delta_phi
-
-                phi_current = phi_current + delta_phi
-
-                # Clamp to max norm
-                phi_new_norm = torch.norm(phi_current, dim=-1, keepdim=True)
-                phi_current = torch.where(
-                    phi_new_norm > self.phi_max_norm,
-                    phi_current * (self.phi_max_norm / (phi_new_norm + 1e-6)),
-                    phi_current
-                )
+            phi_current = _retract_phi(
+                phi=phi_current,
+                delta_phi=-grad_phi,  # Negative gradient for descent
+                generators=self.generators,
+                step_size=self.phi_lr,
+                trust_region=0.3,  # Max 30% relative change per update
+                max_norm=self.phi_max_norm,
+                bch_order=1,  # First-order BCH (good balance of accuracy/speed)
+            )
 
         # Return results
         # NOTE: Previously returned .detach() which BREAKS gradient flow!
