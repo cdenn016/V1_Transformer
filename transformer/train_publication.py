@@ -184,6 +184,7 @@ STANDARD_CONFIG = {
     'attention_window': 24,
     'gauge_group': 'SO3',
     'gauge_dim': 3,
+    'gauge_mode': 'learned',  # 'learned' or 'trivial' (Ω=I, standard attention limit)
     'use_multi_irrep': False,
     'gauge_fixed_priors': True,
     'irrep_spec': [('ℓ0', 5, 1)],
@@ -308,6 +309,8 @@ VFE_EM_CONFIG = {
     # =================================================================
     'gauge_group': 'SON',  # 'SO3', 'SON', or 'GLK'
     'gauge_dim': 5,        # N for SO(N) - only used when gauge_group='SON'
+    'gauge_mode': 'learned',  # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j)
+                              # 'trivial': global frame, φ = 0, Ω = I (standard attention limit)
     'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
     'enforce_orthogonal': True,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
                                  # Set False for GL(K) (faster, still gauge-invariant)
@@ -462,8 +465,9 @@ PURE_FEP_CONFIG = {
     # =================================================================
     'gauge_group': 'SON',  # 'SO3' or 'SON'
     'gauge_dim': 10,        # N for SO(N) - only used when gauge_group='SON'
+    'gauge_mode': 'learned',  # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j)
+                              # 'trivial': global frame, φ = 0, Ω = I (standard attention)
     'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
-
 
     # Irrep structure for SO(N)
     # Example for SO(10) with diverse irreps:
