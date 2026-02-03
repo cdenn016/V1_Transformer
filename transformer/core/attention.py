@@ -159,6 +159,7 @@ def compute_transport_operators(
     phi: torch.Tensor,         # (B, N, n_gen) gauge frames where n_gen is # of generators
     generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators
     enforce_orthogonal: bool = False,  # If True, project to SO(K) via Newton-Schulz
+    gauge_mode: str = 'learned',  # 'learned' or 'trivial'
 ) -> dict:
     """
     Precompute transport operators for caching when phi is fixed.
@@ -167,6 +168,14 @@ def compute_transport_operators(
     - SO(3): n_gen = 3, phi ∈ ℝ³, enforce_orthogonal=True
     - SO(N): n_gen = N(N-1)/2, phi ∈ ℝ^{N(N-1)/2}, enforce_orthogonal=True
     - GL(K): n_gen = K², phi ∈ ℝ^{K²}, enforce_orthogonal=False
+
+    Gauge Modes:
+    - 'learned': Standard mode where φ is learned per-token. Transport Ω_ij
+                 encodes relative frame transformations between tokens.
+    - 'trivial': Global frame mode where Ω = I for all pairs. This is the
+                 mathematically principled "trivial gauge" or "gauge fixing"
+                 that recovers standard attention as a special case.
+                 Equivalent to setting φ = 0 everywhere.
 
     When evolve_phi=False, these operators are constant across layers.
     Computing once saves 2 matrix exponentials per head per layer.
@@ -179,6 +188,7 @@ def compute_transport_operators(
         generators: Lie algebra generators (n_gen, K, K)
         enforce_orthogonal: If True, apply Newton-Schulz to ensure Ω ∈ SO(K).
                            If False, allow Ω ∈ GL(K) (faster, still gauge-invariant).
+        gauge_mode: 'learned' for per-token frames, 'trivial' for global frame (Ω=I)
 
     Returns:
         dict with:
@@ -186,9 +196,31 @@ def compute_transport_operators(
             'exp_neg_phi': (B, N, K, K) - exp(-φ·G) for each token
             'Omega': (B, N, N, K, K) - full pairwise transport Ω_ij = exp(φ_i)exp(-φ_j)
     """
+    B, N, _ = phi.shape
     K = generators.shape[1]
     dtype = phi.dtype
+    device = phi.device
 
+    # =================================================================
+    # TRIVIAL GAUGE: φ = 0, Ω = I (global frame, standard attention limit)
+    # =================================================================
+    # This is the mathematically principled gauge fixing where all tokens
+    # share a single coordinate frame. No transport between frames.
+    # KL(q_i || Ω_ij[q_j]) = KL(q_i || q_j) when Ω = I.
+    if gauge_mode == 'trivial':
+        eye_K = torch.eye(K, device=device, dtype=dtype)
+        exp_phi = eye_K.expand(B, N, K, K).contiguous()      # (B, N, K, K)
+        exp_neg_phi = eye_K.expand(B, N, K, K).contiguous()  # (B, N, K, K)
+        Omega = eye_K.expand(B, N, N, K, K).contiguous()     # (B, N, N, K, K)
+        return {
+            'exp_phi': exp_phi,
+            'exp_neg_phi': exp_neg_phi,
+            'Omega': Omega,
+        }
+
+    # =================================================================
+    # LEARNED GAUGE: φ per-token, Ω_ij = exp(φ_i)·exp(-φ_j)
+    # =================================================================
     # φ·G: combine gauge frames with generators
     phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
 
@@ -207,11 +239,9 @@ def compute_transport_operators(
     # NOTE: For GL(K), this is NOT required - VFE is invariant under GL(K)!
     # Only enable if you explicitly want SO(K) (e.g., for Haar measure averaging)
     if enforce_orthogonal and K >= 16:
-        eye_K = torch.eye(K, device=phi.device, dtype=dtype)
+        eye_K = torch.eye(K, device=device, dtype=dtype)
         exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
         exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
-    #     exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
-    #     exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
 
     # Full pairwise transport: Ω_ij = exp(φ_i) @ exp(-φ_j)
     Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)  # (B, N, N, K, K)
