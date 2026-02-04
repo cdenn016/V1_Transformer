@@ -731,25 +731,25 @@ p&(\{k_i\},\{m_i\},\{z_{ij}\},\{w_{ij}\})\\
 \label{eq:joint_distribution}
 \end{equation}
 
-The joint distribution \eqref{eq:joint_distribution} is properly normalized:
+\subsubsection{Marginal Structure and Partition Function}
 
+The product of two Gaussians in the auxiliary variable $z_{ij}$ yields
 \begin{equation}
-\int \prod_i dk_i\,dm_i \prod_{i,j} dz_{ij}\,dw_{ij} \;
-p(\{k_i\},\{m_i\},\{z_{ij}\},\{w_{ij}\}) = 1.
-\label{eq:normalization_check}
+\mathcal{N}(z_{ij};k_i,\Lambda_{ij}^{-1})\,\mathcal{N}(z_{ij};\Omega_{ij}k_j,\Lambda_{ij}^{-1})
+= C_{ij}(k_i,k_j)\;\mathcal{N}\!\left(z_{ij};\tfrac{k_i+\Omega_{ij}k_j}{2},\tfrac{\Lambda_{ij}^{-1}}{2}\right),
 \end{equation}
-
-\begin{proof}
-Each factor is a normalized Gaussian:
-\begin{itemize}
-  \item Base priors $p_i(k_i)$, $r_i(m_i)$: normalized by definition
-  \item Agreement couplings: products of Gaussians with identical precision, which yield normalized Gaussians after integrating over $z_{ij}, w_{ij}$
-\end{itemize}
-
-Since \eqref{eq:joint_distribution} is a product of normalized densities over disjoint variable sets (with auxiliary variables mediating), it is normalized.
-\end{proof}
-
-This is in contrast to unnormalized Markov random fields of the form $p(\{k_i\}) \propto \exp[-\sum_{ij} \psi_{ij}(k_i, k_j)]$, where the partition function $Z$ is intractable\citep{amari1985differential}. Our construction guarantees $Z = 1$ by design.
+where the coupling factor is
+\begin{equation}
+C_{ij}(k_i,k_j) \propto \exp\!\left(-\tfrac{\Lambda_{ij}}{4}\|k_i - \Omega_{ij}k_j\|^2\right).
+\end{equation}
+Integrating out the auxiliary variables, the marginal over primary latents takes the form of a pairwise Markov random field:
+\begin{equation}
+p(\{k_i\},\{m_i\}) = \frac{1}{Z}\prod_i p_i(k_i)\,r_i(m_i)
+\prod_{i,j} \exp\!\left(-\tfrac{\Lambda_{ij}}{4}\|k_i - \Omega_{ij}k_j\|^2\right)
+\exp\!\left(-\tfrac{\Gamma_{ij}}{4}\|m_i - \tilde{\Omega}_{ij}m_j\|^2\right),
+\label{eq:marginal_mrf}
+\end{equation}
+with partition function $Z$. The auxiliary variable representation \eqref{eq:joint_distribution} provides a convenient parameterization, but does not eliminate the partition function. For variational inference, explicit computation of $Z$ is unnecessary: the variational free energy depends only on expectations under the factorized posterior, not on the normalizing constant of the prior.
 \subsection{Variational Free Energy}
 We now form the variational free energy under a mean-field posterior approximation. Assume a factorized posterior
 \begin{equation}
