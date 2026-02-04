@@ -41,10 +41,10 @@ Degenerate Limits of the Variational Free Energy Principle}
 
 \ShortHeadings{Attention and Transformers as Free Energy}{Dennis}
 \begin{abstract}
-We present a unified gauge-theoretic formulation of attention and message communication in multi-agent Bayesian systems performing variational inference. Each agent is modeled as a smooth local section of an associated bundle with statistical manifold fiber over a noumenal base manifold $\mathcal{C}$. We demonstrate that in the isotropic, flat-bundle, Dirac-delta function limit (where all local frames coincide globally) the generalized attention weights reduce to the canonical transformer rule $\beta_{ij} \propto \softmax(Q_i K_j^\top)$ exactly and backpropagation training emerges as gradient descent on the free energy in the deterministic, flat-bundle limit—discarding the natural gradient structure that provides faster convergence. Starting from a generative model of inter-agent message exchange, we derive a generalized variational free-energy functional whose stationary points govern agent dynamics. In the absence of observations, this functional defines a gauge-symmetric vacuum theory in which all agents converge to identical beliefs modulo gauge orbit; introducing observations breaks this symmetry, leading to agent specialization. We validate our framework through simulations of $N=8$ agents with 9-dimensional Gaussian beliefs under SO(3) gauge transformations, demonstrating convergence to symmetric vacuum states and symmetry breaking under observation/training. We fully derive the equivalence to modern transformer architectures and backpropagation and show our framework suggests exponential speedup during training via natural gradient descent.
+We present a unified gauge-theoretic formulation of attention and message communication in multi-agent Bayesian systems performing variational inference. Each agent is modeled as a smooth local section of an associated bundle with statistical manifold fiber over a noumenal base manifold $\mathcal{C}$. A central theoretical contribution is the proof that KL divergence---and all $f$-divergences---are invariant under the full general linear group $\mathrm{GL}(K)$, not merely orthogonal subgroups. This $\mathrm{GL}(K)$ gauge invariance has profound implications: the learned projection matrices $W_Q, W_K$ in standard transformers are themselves gauge transformations, with $\Omega = W_Q W_K^\top \in \mathrm{GL}(d_k)$ serving as a learned, constant gauge transport. We demonstrate that in the deterministic, constant-gauge limit the generalized attention weights reduce exactly to the canonical transformer rule $\beta_{ij} \propto \softmax(Q_i K_j^\top)$, and backpropagation emerges as gradient descent on the free energy---discarding the natural gradient structure that provides faster convergence. Starting from a generative model of inter-agent message exchange, we derive a generalized variational free-energy functional whose stationary points govern agent dynamics. In the absence of observations, this functional defines a gauge-symmetric vacuum theory in which all agents converge to identical beliefs modulo gauge orbit; introducing observations breaks this symmetry, leading to agent specialization. We validate our framework through simulations of $N=8$ agents with 9-dimensional Gaussian beliefs under $\mathrm{SO}(3)$ gauge transformations, demonstrating convergence to symmetric vacuum states and symmetry breaking under observation/training. The $\mathrm{GL}(K)$ invariance theorem explains why transformers can learn arbitrary attention patterns and suggests that standard deep learning architectures already implement gauge-theoretic inference with gauge structure absorbed into learned parameters.
 \end{abstract}
 
-\noindent\textbf{Keywords:} gauge theory, free energy principle, transformer attention, variational inference, information geometry, natural gradient, symmetry breaking, multi-agent systems
+\noindent\textbf{Keywords:} gauge theory, free energy principle, transformer attention, variational inference, information geometry, natural gradient, symmetry breaking, multi-agent systems, $\mathrm{GL}(K)$ invariance
 
 \section{Introduction}
 
@@ -56,7 +56,7 @@ In this report we propose a unified, gauge-equivariant framework that connects t
 
 We then show that in the flat-bundle, isotropic, delta-function limit attention reduces to the standard transformer dot-product attention $QK^T$, thereby identifying transformer attention as a degenerate case of a broader geometric and statistical law of communication predicated upon the FEP.  We then show that hard, one-hot attention encoding is the zero-temperature limit of the FEP agent-agent coupling term and the large temperature limit leads to uniform encoding.  We demonstrate this by simulating a toy model of variational gradient descent under generalized free energy of multivariate Gaussian agents and by applying our alignment expression to a frozen transformer.  Finally, we describe the theory and numerical results that suggest that token encoding under data training (i.e. agent belief alignment) is a spontaneous symmetry breaking phenomenon of our gauge-theoretic framework.
 
-Finally, we mathematically show that modern machine learning back propagation gradient descent and attention transformers the identically the Dirac flat limit of a more general gauge equivariant theory under natural gradient descent of the variational free energy functional.  Our results suggests that deep learning architectures can potentially achieve an exponential speedup during training by leveraging our gauge equivariant free energy formalism. 
+Finally, we mathematically show that modern machine learning backpropagation and attention transformers are identically the deterministic, constant-gauge limit of a more general gauge-equivariant theory under natural gradient descent of the variational free energy functional. A key theoretical contribution is the proof that KL divergence is invariant under the full general linear group $\mathrm{GL}(K)$, not merely orthogonal subgroups. This has profound implications: the learned projection matrices $W_Q, W_K$ in standard transformers \emph{are themselves gauge transformations}, with $\Omega = W_Q W_K^\top$ serving as a learned gauge transport. Standard transformers thus already implement $\mathrm{GL}(K)$ gauge-theoretic attention, with the gauge structure absorbed into learned parameters rather than specified \emph{a priori}. Our results suggest that deep learning architectures can potentially achieve exponential speedup during training by leveraging the full gauge-equivariant free energy formalism with natural gradients. 
 
 \subsection{An intuitive simplification for non-geometers}
 For interdisciplinary readers, it may be helpful to visualize each agent in this framework as a vector and a matrix field defined over a finite spatial region. 
@@ -232,19 +232,20 @@ This gives $\mathcal{E}_q = \mathcal{E}_p =: \mathcal{E}$, and the bundle morphi
 
 Each agent then reduces to a single section $\sigma^i: \mathcal{U}_i \to \mathcal{E}$, with belief/prior distinction maintained through local fiber coordinates.
 
-\subsubsection{Gaussian Fiber and SO(3) Gauge Group}
-Next, we restrict to the exponential family of multi-variate Gaussian distributions with $G=SO(3)$.  That is,
+\subsubsection{Gaussian Fiber and $\mathrm{GL}(K)$ Gauge Symmetry}
+We restrict to the exponential family of multivariate Gaussian distributions. The fundamental observation (Theorem~\ref{thm:glk_invariance}) is that the KL divergence---and hence the variational free energy---is invariant under the full general linear group $\mathrm{GL}(K)$, not merely orthogonal subgroups. The natural gauge structure is therefore:
 
 \begin{itemize}
-  \item Fiber: $\mathcal{B} = \{(\mu, \Sigma) : \mu \in \mathbb{R}^3, \Sigma \in \mathbb{R}^{3 \times 3}, \Sigma \succ 0\}$ (Gaussian manifold)
-  \item Group: $G = SO(3)$ with representation:\\
-\\
+  \item Fiber: $\mathcal{B} = \{(\mu, \Sigma) : \mu \in \mathbb{R}^K, \Sigma \in \mathbb{R}^{K \times K}, \Sigma \succ 0\}$ (Gaussian manifold)
+  \item Gauge group: $G = \mathrm{GL}(K)$ with action:
 \begin{equation}
-\rho(\Omega) \cdot (\mu, \Sigma) = (\Omega\mu, \Omega\Sigma\Omega^\top)
+\rho(\Omega) \cdot (\mu, \Sigma) = (\Omega\mu, \Omega\Sigma\Omega^\top), \quad \Omega \in \mathrm{GL}(K)
 \end{equation}
 \end{itemize}
 
-The Gaussian manifold has constant negative curvature under the Fisher-Rao metric. The group $SO(3)$ has constant positive curvature and non-commutative composition.  These choices are motivated by computational flexibility while maintain a degree of geometric generality.  In particular, $SO(3)$ and its representation theory is well studied and present in a variety of fields.  However, our results can be directly extended to $SO(N)$ or even $SU(N)$ in the standard way \citep{nakahara2003geometry}\citep{hall2015lie}.
+The Gaussian manifold has constant negative curvature under the Fisher-Rao metric. While $\mathrm{GL}(K)$ is non-compact and has dimension $K^2$, important compact subgroups include $\mathrm{SO}(K)$ (dimension $K(K-1)/2$) and $\mathrm{O}(K)$.
+
+For computational tractability and physical interpretability, our simulations employ $G = \mathrm{SO}(3)$ acting via irreducible representations on higher-dimensional fibers. This choice is motivated by: (i) the well-understood representation theory of $\mathrm{SO}(3)$; (ii) compact group structure enabling Haar measure averaging; and (iii) physical relevance to rotation-equivariant systems \citep{nakahara2003geometry}\citep{hall2015lie}. However, the theoretical results---particularly the derivation of transformer attention---hold for the full $\mathrm{GL}(K)$ gauge group, which is essential for understanding how learned projection matrices implement gauge structure.
 
 \subsubsection{Gauge Group and Representations}
 Let us now consider the representation theory of $G = SO(3)$, which acts on the fibers via its representations:
@@ -346,24 +347,40 @@ Therefore in this limit we have the following simplifications which lead to the 
   \item The gauge-aligned KL reduces to standard KL
 \end{itemize}
 
-\subsubsection{Role of learned projections $W_Q, W_K$}
-In the trivial gauge limit, the query/key projections are not gauge transformations but rather are learned linear maps used to extract features.
+\subsubsection{Learned Projections $W_Q, W_K$ as $\mathrm{GL}(K)$ Gauge Transformations}
+\label{sec:wq_wk_gauge}
 
-$$
-Q_i = W_Q^T \mu_i \in \mathbb{R}^{d_k},
-$$
+A central insight enabled by the $\mathrm{GL}(K)$ invariance theorem is that the learned projection matrices in standard transformers are not merely ``feature extractors''---they \emph{are} gauge transformations. This fundamentally changes our understanding of what transformers learn.
 
-$$
-K_j = W_K^T \mu_j \in \mathbb{R}^{d_k}
-$$
-
-These project from the full embedding space $\mathbb{R}^d$ (where $d$ can be arbitrarily large) to a lower-dimensional attention subspace $\mathbb{R}^{d_k}$ where similarity is computed in the standard way:
-
+In standard transformer attention, query and key vectors are computed as:
 \begin{equation}
-\alpha_{ij} = \text{softmax}_j\left(\frac{Q_i K_j^\top}{\sqrt{d_k}}\right)
+Q_i = W_Q^\top \mu_i \in \mathbb{R}^{d_k}, \qquad K_j = W_K^\top \mu_j \in \mathbb{R}^{d_k},
+\end{equation}
+where $W_Q, W_K \in \mathbb{R}^{d \times d_k}$ are learned projection matrices. In practice, these matrices are full-rank (invertible when $d = d_k$), placing them in $\mathrm{GL}(d_k)$.
+
+The attention score $Q_i K_j^\top = \mu_i^\top W_Q W_K^\top \mu_j$ can be written as:
+\begin{equation}
+Q_i K_j^\top = \mu_i^\top \,\Omega\, \mu_j, \quad \text{where} \quad \Omega := W_Q W_K^\top \in \mathrm{GL}(d_k).
 \end{equation}
 
-The following table summarizes the transformer limit:
+This matrix $\Omega$ is precisely a gauge transformation! In the language of our framework:
+\begin{itemize}
+\item The \emph{query projection} $W_Q$ transforms agent $i$'s embedding into its local gauge frame
+\item The \emph{key projection} $W_K$ transforms agent $j$'s embedding into a comparison frame
+\item The \emph{composite} $\Omega = W_Q W_K^\top$ is the learned gauge transport from $j$'s frame to $i$'s frame
+\end{itemize}
+
+By Theorem~\ref{thm:glk_invariance}, the KL divergence is invariant under such $\mathrm{GL}(K)$ transformations. This explains why transformers can learn arbitrary (invertible) projections: the variational free energy structure permits any $\Omega \in \mathrm{GL}(K)$, and backpropagation discovers the optimal gauge transformation for the task.
+
+The ``trivial gauge limit'' of our framework does not correspond to ``no gauge structure.'' Rather, it corresponds to a \emph{constant} gauge transformation $\Omega = W_Q W_K^\top$ that is:
+\begin{enumerate}
+\item Independent of token position (same $\Omega$ for all pairs $i,j$)
+\item Learned from data rather than derived from geometric principles
+\item Applied in a flat (zero-curvature) bundle geometry
+\end{enumerate}
+
+This reframes the relationship between gauge theory and transformers: standard transformers \emph{already implement} $\mathrm{GL}(K)$ gauge-theoretic attention, but with the gauge structure absorbed into learned parameters rather than specified \emph{a priori}.
+
 \begin{table}[h]
 \centering
 \renewcommand{\arraystretch}{1.2}
@@ -371,36 +388,36 @@ The following table summarizes the transformer limit:
 \begin{tabularx}{\textwidth}{lXX}
 \hline
 \textbf{Property} &
-\textbf{Gauge Theory (SO(3))} &
-\textbf{Transformer (trivial gauge)} \\
+\textbf{Full Gauge Theory} &
+\textbf{Standard Transformer} \\
 \hline
 Gauge group $G$ &
-$SO(3)$ (non-trivial) &
-$\{e\}$ (trivial) \\
+$\mathrm{GL}(K)$ or subgroup &
+$\mathrm{GL}(d_k)$ (implicit) \\
+Gauge transformation &
+$\Omega_{ij} = e^{\phi_i} e^{-\phi_j}$ &
+$\Omega = W_Q W_K^\top$ (learned, constant) \\
 Frame field $\phi_i(c)$ &
-Varies spatially &
-$\phi_i = 0$ everywhere \\
-Transport $\Omega_{ij}$ &
-$e^{\phi_i} e^{-\phi_j} \neq \mathbb{I}$ &
-$\mathbb{I}$ \\
+Varies per agent/position &
+Absorbed into $W_Q, W_K$ \\
+Transport structure &
+Agent-pair dependent &
+Uniform across all pairs \\
 Connection $A_\mu$ &
 $-\partial_\mu \phi_i \neq 0$ &
-$0$ \\
+$0$ (flat connection) \\
 Curvature $F_{\mu\nu}$ &
 Can be $\neq 0$ &
-$0$ (flat) \\
+$0$ (trivial holonomy) \\
 KL coupling &
 $D_{\text{KL}}[q_i \,\|\, \Omega_{ij} q_j]$ &
-$D_{\text{KL}}[q_i \,\|\, q_j]$ \\
-$W_Q, W_K$ role &
-N/A (no projections) &
-Feature extractors in flat space \\
-Embedding dimension &
-Any &
-Any \\
+$D_{\text{KL}}[q_i \,\|\, \Omega q_j]$ with constant $\Omega$ \\
+What is learned &
+Frame fields $\phi_i$ &
+Global gauge $W_Q, W_K$ \\
 \hline
 \end{tabularx}
-\caption{Comparison between the full gauge-theoretic formulation and the transformer limit.}
+\caption{Comparison between full gauge-theoretic formulation and standard transformers. The key insight is that transformers implement $\mathrm{GL}(K)$ gauge structure through learned projections, not that they lack gauge structure.}
 \label{tab:gauge_vs_transformer}
 \end{table}
 
@@ -457,6 +474,65 @@ where for Gaussian beliefs:
 
 This divergence forms the basis of our attention mechanism.
 
+\subsubsection{Fundamental Theorem: $\mathrm{GL}(K)$ Gauge Invariance of KL Divergence}
+\label{sec:glk_invariance}
+
+A crucial observation, which significantly strengthens the theoretical foundation of our framework, is that the Kullback-Leibler divergence possesses a much larger gauge symmetry than initially apparent. While we have presented the framework using $SO(K)$ gauge groups for concreteness, the variational free energy is in fact invariant under the \emph{full general linear group} $\mathrm{GL}(K)$.
+
+\begin{theorem}[$\mathrm{GL}(K)$ Gauge Invariance]
+\label{thm:glk_invariance}
+For any two Gaussian distributions $P = \mathcal{N}(\mu_P, \Sigma_P)$ and $Q = \mathcal{N}(\mu_Q, \Sigma_Q)$ on $\mathbb{R}^K$, and any invertible linear transformation $\Omega \in \mathrm{GL}(K)$, the KL divergence is invariant under simultaneous pushforward:
+\begin{equation}
+D_{\mathrm{KL}}(\Omega_* P \,\|\, \Omega_* Q) = D_{\mathrm{KL}}(P \,\|\, Q),
+\label{eq:glk_invariance}
+\end{equation}
+where $\Omega_* P = \mathcal{N}(\Omega\mu_P, \Omega\Sigma_P\Omega^\top)$ denotes the pushforward of $P$ under $\Omega$.
+\end{theorem}
+
+\begin{proof}
+The KL divergence between Gaussians consists of three terms:
+\begin{equation}
+D_{\mathrm{KL}}(P \| Q) = \frac{1}{2}\left[\mathrm{Tr}(\Sigma_Q^{-1}\Sigma_P) + (\mu_P - \mu_Q)^\top \Sigma_Q^{-1}(\mu_P - \mu_Q) - K + \log\frac{\det\Sigma_Q}{\det\Sigma_P}\right].
+\end{equation}
+
+Under the pushforward $\Omega_* P = \mathcal{N}(\Omega\mu_P, \Omega\Sigma_P\Omega^\top)$ and $\Omega_* Q = \mathcal{N}(\Omega\mu_Q, \Omega\Sigma_Q\Omega^\top)$:
+
+\textbf{Trace term:}
+\begin{equation}
+\mathrm{Tr}\big[(\Omega\Sigma_Q\Omega^\top)^{-1}(\Omega\Sigma_P\Omega^\top)\big] = \mathrm{Tr}\big[\Omega^{-\top}\Sigma_Q^{-1}\Omega^{-1}\Omega\Sigma_P\Omega^\top\big] = \mathrm{Tr}(\Sigma_Q^{-1}\Sigma_P). \quad \checkmark
+\end{equation}
+
+\textbf{Quadratic term:}
+\begin{align}
+&(\Omega\mu_P - \Omega\mu_Q)^\top (\Omega\Sigma_Q\Omega^\top)^{-1} (\Omega\mu_P - \Omega\mu_Q) \nonumber\\
+&= (\mu_P - \mu_Q)^\top \Omega^\top \Omega^{-\top}\Sigma_Q^{-1}\Omega^{-1}\Omega (\mu_P - \mu_Q) = (\mu_P - \mu_Q)^\top \Sigma_Q^{-1}(\mu_P - \mu_Q). \quad \checkmark
+\end{align}
+
+\textbf{Log-determinant term:}
+\begin{equation}
+\log\frac{\det(\Omega\Sigma_Q\Omega^\top)}{\det(\Omega\Sigma_P\Omega^\top)} = \log\frac{(\det\Omega)^2 \det\Sigma_Q}{(\det\Omega)^2 \det\Sigma_P} = \log\frac{\det\Sigma_Q}{\det\Sigma_P}. \quad \checkmark
+\end{equation}
+
+The $(\det\Omega)^2$ factors cancel identically. Since all three components are invariant, $D_{\mathrm{KL}}(\Omega_* P \| \Omega_* Q) = D_{\mathrm{KL}}(P \| Q)$.
+\end{proof}
+
+This theorem has profound implications for our framework:
+
+\begin{enumerate}
+\item \textbf{Maximal gauge symmetry}: The natural gauge group for KL-based attention is $\mathrm{GL}(K)$, not merely $SO(K)$. The orthogonal group $SO(K)$ is a \emph{subgroup} of $\mathrm{GL}(K)$; requiring $\Omega^\top\Omega = I$ is a sufficient but not necessary condition for gauge invariance.
+
+\item \textbf{Generalization to $f$-divergences}: The proof extends to all $f$-divergences. For any convex function $f$ with $f(1) = 0$:
+\begin{equation}
+D_f(\Omega_* P \| \Omega_* Q) = D_f(P \| Q), \quad \forall\, \Omega \in \mathrm{GL}(K).
+\end{equation}
+The Jacobian factors $|\det\Omega|$ from the density transformation cancel in the ratio $p(x)/q(x)$.
+
+\item \textbf{Simplified implementation}: Transport operators need only satisfy $\det(\Omega_{ij}) \neq 0$ (invertibility), not $\Omega_{ij}^\top\Omega_{ij} = I$ (orthogonality). This eliminates the need for computationally expensive re-orthogonalization procedures.
+
+\item \textbf{Learned projections as gauge transformations}: As we shall demonstrate, the query and key projection matrices $W_Q, W_K \in \mathrm{GL}(d_k)$ in standard transformers are themselves gauge transformations. The ``trivial gauge limit'' corresponds not to the absence of gauge structure, but to a \emph{constant} gauge transformation $\Omega = W_Q W_K^{-1}$ applied uniformly across all token pairs.
+\end{enumerate}
+
+The $\mathrm{GL}(K)$ invariance reveals that the attention mechanism respects a form of general covariance: the information-geometric distance between beliefs is independent of the coordinate system (basis) used to represent them. This is the statistical analogue of coordinate independence in differential geometry.
 
 \begin{table}[h]
 \centering
@@ -470,12 +546,12 @@ This divergence forms the basis of our attention mechanism.
 $\mathcal{M}$ & Base manifold (spatial domain) & Manifold \\
 $Q_i$ & Belief fiber at agent $i$ & $\mathbb{R}^{K_q}$ \\
 $P_i$ & Model fiber at agent $i$ & $\mathbb{R}^{K_p}$ \\
-$G$ & Gauge group & $\mathrm{SO}(K)$ \\
-$\mathfrak{g}$ & Lie algebra of $G$ & $\mathfrak{so}(K)$ \\
+$G$ & Gauge group & $\mathrm{GL}(K)$ \\
+$\mathfrak{g}$ & Lie algebra of $G$ & $\mathfrak{gl}(K)$ \\
 \\
 \multicolumn{3}{l}{\textit{Gauge Fields and Connections}} \\
-$\Omega^q_{ij}$ & Connection $Q_j \to Q_i$ & $\mathrm{SO}(K_q)$ \\
-$\Omega^p_{ij}$ & Connection $P_j \to P_i$ & $\mathrm{SO}(K_p)$ \\
+$\Omega^q_{ij}$ & Connection $Q_j \to Q_i$ & $\mathrm{GL}(K_q)$ \\
+$\Omega^p_{ij}$ & Connection $P_j \to P_i$ & $\mathrm{GL}(K_p)$ \\
 $\phi_i$ & Gauge parameter (belief frame) & $\mathfrak{g}\!\cong\!\mathbb{R}^3$ \\
 $\tilde{\phi}_i$ & Gauge parameter (model frame) & $\mathfrak{g}\!\cong\!\mathbb{R}^3$ \\
 $A_\mu(x)$ & Gauge connection field & $\mathfrak{g}$-valued 1-form \\
@@ -1411,43 +1487,43 @@ We have established the following complete correspondence between our gauge-theo
 \renewcommand{\arraystretch}{1.3}
 \begin{tabular}{|l|l|l|}
 \hline
-\textbf{FEP Framework} & \textbf{Limit} & \textbf{Neural Network} \\
+\textbf{FEP Framework} & \textbf{Limit/Correspondence} & \textbf{Neural Network} \\
 \hline
 $\mathcal{F}[\{q_i\}]$ & $\Sigma_i \to 0$ & Loss $\mathcal{L}(\theta)$ \\
 $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ & $\Sigma_i \to 0$ & Embedding $h_i$ \\
-$\phi_i \in \mathfrak{so}(3)$ & $\phi_i = 0$ & No gauge structure \\
-$\Omega_{ij} = e^{\phi_i}e^{-\phi_j}$ & $\Omega_{ij} = I$ & Identity \\
-$D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ & All limits & $\frac{1}{2}\|\mu_i - \mu_j\|^2$ \\
-$\beta_{ij} \propto e^{-\mathrm{KL}/\tau}$ & All limits & $\mathrm{softmax}(QK^\top/\sqrt{d_k})$ \\
+$\Omega_{ij} \in \mathrm{GL}(K)$ & Constant $\Omega$ & $W_Q W_K^\top$ (learned gauge) \\
+$\phi_i \in \mathfrak{gl}(K)$ & Absorbed into $W_Q, W_K$ & Implicit in projections \\
+$D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ & $\mathrm{GL}(K)$-invariant & $\frac{1}{2}\|\mu_i - \Omega\mu_j\|^2$ \\
+$\beta_{ij} \propto e^{-\mathrm{KL}/\tau}$ & Exact correspondence & $\mathrm{softmax}(QK^\top/\sqrt{d_k})$ \\
 $-\mathbb{E}_q[\log p(o \mid k)]$ & $\Sigma_i \to 0$ & Cross-entropy loss \\
-$\frac{d\mu}{dt} = -\eta \nabla \mathcal{F}$ & All limits & Backpropagation \\
+$\frac{d\mu}{dt} = -\eta \nabla \mathcal{F}$ & Euclidean limit & Backpropagation \\
 Vacuum (no observations) & --- & Untrained network \\
 Symmetry breaking & --- & Training/learning \\
 \hline
 \end{tabular}
-\caption{Complete correspondence between gauge-equivariant FEP and neural networks.}
+\caption{Complete correspondence between gauge-equivariant FEP and neural networks. The crucial insight is that transformers possess $\mathrm{GL}(K)$ gauge structure through learned projections $W_Q, W_K$.}
 \label{tab:fep_nn_correspondence}
 \end{table}
 
 \paragraph{Key Implications.}
 
-This exact correspondence reveals several profound insights:
+This exact correspondence, strengthened by the $\mathrm{GL}(K)$ invariance theorem, reveals several profound insights:
 
 \begin{enumerate}
-  \item \textbf{Natural Gradient Speedup}: Our framework invokes natural gradient descent rather than Euclidean gradient descent. It is well-known that backpropagation reaches convergence in $k = O(1/\varepsilon)$ iterations (where $\varepsilon$ is step size), while natural gradient descent on the Fisher metric offers exponential convergence: $k = O(\log(1/\varepsilon))$. This scaling is evident in our simulations and suggests significant training speed-up potential. However, this comes with other computational costs due to the presence of KL terms in the variational free energy functional.  I
-  
-  \item \textbf{Standard ML as Degenerate Limit}: Neural networks are the $\Sigma \to 0$, $\Omega \to I$ limit of gauge-equivariant multi-agent inference. The full FEP framework contains uncertainty (non-zero $\Sigma$), geometry (non-trivial $\Omega$), gauge structure ($\text{SO}(3)$ symmetry), and natural gradients (Fisher metric preconditioning).
-  
-  \item \textbf{Training as Symmetry Breaking}: Without observations, the free energy is gauge-symmetric: $\mathcal{F}[\{q_i\}] = \mathcal{F}[\{g \cdot q_i\}]$ for all $g \in \text{SO}(3)$. All agents converge to the same magnitude $\|\mu_i\| = \mu^*$ (vacuum state). Observations break this symmetry, forcing agents to specialize---this is learning.
-  
+  \item \textbf{Natural Gradient Speedup}: Our framework invokes natural gradient descent rather than Euclidean gradient descent. It is well-known that backpropagation reaches convergence in $k = O(1/\varepsilon)$ iterations (where $\varepsilon$ is step size), while natural gradient descent on the Fisher metric offers exponential convergence: $k = O(\log(1/\varepsilon))$. This scaling is evident in our simulations and suggests significant training speed-up potential. However, this comes with other computational costs due to the presence of KL terms in the variational free energy functional.
+
+  \item \textbf{Transformers as $\mathrm{GL}(K)$ Gauge Theory}: Standard transformers are \emph{not} the ``gauge-free'' limit of our framework. Rather, they implement $\mathrm{GL}(K)$ gauge-theoretic attention with the gauge structure absorbed into learned projection matrices $W_Q, W_K$. The composite $\Omega = W_Q W_K^\top \in \mathrm{GL}(d_k)$ is a learned, constant gauge transformation. This explains the expressiveness of attention: transformers learn optimal gauge frames from data.
+
+  \item \textbf{Training as Symmetry Breaking}: Without observations, the free energy is gauge-symmetric: $\mathcal{F}[\{q_i\}] = \mathcal{F}[\{g \cdot q_i\}]$ for all $g \in \mathrm{GL}(K)$. All agents converge to the same magnitude $\|\mu_i\| = \mu^*$ (vacuum state). Observations break this symmetry, forcing agents to specialize---this is learning.
+
   \item \textbf{Backpropagation Isn't Arbitrary}: It emerges naturally as the gradient flow of information-minimizing systems. The chain rule is a consequence of variational inference, not an optimization trick.
-  
-  \item \textbf{Architecture as Gauge Constraint}: Transformer design choices (attention, layer norm, skip connections) can be understood as implementing gauge-theoretic principles---they preserve or restore geometric structure during propagation.
+
+  \item \textbf{Architecture as Gauge Constraint}: Transformer design choices (attention, layer norm, skip connections) can be understood as implementing gauge-theoretic principles---they preserve or restore geometric structure during propagation. Layer normalization, in particular, regulates key norms to satisfy the high-dimensional cancellation condition required for gauge-invariant attention (see Section~\ref{sec:glk_invariance}).
 \end{enumerate}
 
 \paragraph{Main Result.}
 
-Under the three successive limits---(i) deterministic beliefs ($\Sigma_i \to 0$), (ii) flat bundle ($\phi_i = 0 \implies \Omega_{ij} = I$), and (iii) learned projections ($Q = W_Q^\top\mu$, $K = W_K^\top\mu$, $V = W_V^\top\mu$)---variational gradient descent on the gauge-equivariant free energy:
+Under the successive limits---(i) deterministic beliefs ($\Sigma_i \to 0$), (ii) constant gauge ($\Omega_{ij} = \Omega$ for all pairs), and (iii) learned gauge via projections ($\Omega = W_Q W_K^\top \in \mathrm{GL}(d_k)$)---variational gradient descent on the gauge-equivariant free energy:
 \begin{equation}
 \theta_{k+1} = \theta_k - \eta \nabla_\theta \mathcal{F}(\theta_k)
 \end{equation}
@@ -1457,7 +1533,7 @@ is \textbf{mathematically identical} to backpropagation:
 \end{equation}
 where $\mathcal{F}$ (free energy) $\equiv$ $\mathcal{L}$ (loss + regularization), attention weights $\beta_{ij}$ $\equiv$ transformer attention $\alpha_{ij}$, observations $-\log p(o \mid \mu)$ $\equiv$ loss function, and symmetry breaking $\equiv$ training.
 
-This equivalence is exact and derived from first principles. \textbf{Standard machine learning is a special case of a much richer gauge-theoretic framework rooted in the Free Energy Principle.}
+This equivalence is exact and derived from first principles. The $\mathrm{GL}(K)$ gauge invariance theorem (Theorem~\ref{thm:glk_invariance}) is essential: it guarantees that the learned projections $W_Q, W_K$ are valid gauge transformations, explaining why transformers can learn arbitrary (invertible) attention patterns. \textbf{Standard machine learning implements $\mathrm{GL}(K)$ gauge-theoretic inference with gauge structure absorbed into learned parameters.}
 
 \subsubsection{Spatial Visualization of Attention}
 
@@ -1792,7 +1868,7 @@ The geometric framework necessarily demands higher computational resources; howe
 
 Our results demonstrate that attention mechanisms are not ad hoc architectural choices but rather natural consequences of variational free energy minimization in gauge geometry. This unification has deep conceptual power: it explains why attention works, predicts its limitations (key-norm bias), and suggests principled extensions (gauge structure, uncertainty propagation). Machine learning can thus be interpreted as a symmetry-breaking phenomenon within a wider field theory.
 
-By leveraging gauge theory coupled with informational geometry, we introduce geometric features that constrain model behavior according to standard symmetry principles—analogous to how convolutional neural networks impose translation equivariance or graph neural networks respect permutation invariance \citep{finzi2020generalizing,weiler20183d,kondor2018generalization}. Our KL gauge-equivariant attention shifts this paradigm toward a richer landscape of symmetry groups (SO(N), SU(N), Lorentz group), potentially enabling transformers to learn from fewer examples in domains with known physical structure or to infer patterns that flat bundles would otherwise miss.
+By leveraging gauge theory coupled with informational geometry, we introduce geometric features that constrain model behavior according to standard symmetry principles---analogous to how convolutional neural networks impose translation equivariance or graph neural networks respect permutation invariance \citep{finzi2020generalizing,weiler20183d,kondor2018generalization}. The $\mathrm{GL}(K)$ invariance theorem reveals that standard transformers already implement the maximal gauge symmetry compatible with KL-based attention. Our framework shifts this paradigm toward a richer landscape where specific subgroups ($\mathrm{SO}(N)$, $\mathrm{SU}(N)$, Lorentz group) can be imposed as inductive biases, potentially enabling transformers to learn from fewer examples in domains with known physical structure or to infer patterns that unconstrained $\mathrm{GL}(K)$ would otherwise miss.
 
 Standard attention transformers behave remarkably similar to a 0-dimensional gauge theory. This suggests a potentially powerful construction: $N$-dimensional fields of transformers coupled by induced gauge fields. The richness of differential geometry and information theory allows multiple lines of pursuit.
 
@@ -1801,13 +1877,15 @@ Most importantly, our work shows that attention emerges as a consequence of agen
 
 \section{Conclusion}
 
-We have shown that attention, transformers, and backpropagation are limiting cases of a more general statistical gauge-equivariant theory where tokens are modeled as agents with certainty of their beliefs (delta-function limit) naturally descending a free energy functional. The attention dot-product emerges from an agent-agent "communication" term in a generalized variational energy functional as an application of the free energy principle.
+We have shown that attention, transformers, and backpropagation are limiting cases of a more general statistical gauge-equivariant theory where tokens are modeled as agents with certainty of their beliefs (delta-function limit) naturally descending a free energy functional. The attention dot-product emerges from an agent-agent ``communication'' term in a generalized variational energy functional as an application of the free energy principle.
 
-The full framework possesses a vacuum state where all agents flow toward an average belief and gauge frame (embedding), mirroring machine learning without training. Agent observations break this symmetry, flowing to unique vectors $(\mu)$ that are equivalent under $SO(3)$ rotation. Free energy principle observations behave as a machine learning loss function, and training is a variational natural gradient descent of the generalized free energy we have derived.
+A central theoretical contribution is the $\mathrm{GL}(K)$ gauge invariance theorem (Theorem~\ref{thm:glk_invariance}), which establishes that KL divergence---and all $f$-divergences---are invariant under the full general linear group, not merely orthogonal subgroups. This result has profound implications for understanding transformer attention: the learned projection matrices $W_Q, W_K$ are themselves gauge transformations in $\mathrm{GL}(d_k)$, with the composite $\Omega = W_Q W_K^\top$ serving as a learned gauge transport. Standard transformers thus already implement $\mathrm{GL}(K)$ gauge-theoretic attention, but with the gauge structure absorbed into learned parameters rather than specified geometrically. This explains why transformers can learn arbitrary (invertible) attention patterns: the variational free energy structure permits any $\Omega \in \mathrm{GL}(K)$, and backpropagation discovers the optimal gauge transformation for the task.
+
+The full framework possesses a vacuum state where all agents flow toward an average belief and gauge frame (embedding), mirroring machine learning without training. Agent observations break this $\mathrm{GL}(K)$ symmetry, flowing to unique vectors $(\mu)$ that are equivalent under gauge transformation. Free energy principle observations behave as a machine learning loss function, and training is a variational natural gradient descent of the generalized free energy we have derived.
 
 Our framework naturally enables the emergence of higher-scale meta-agents and abstract organizations of agents. In separate studies, we have simulated randomly initialized agents on a two-dimensional grid and shown that under variational gradient descent, meta-agents emerge with cross-scale couplings. Time-scale separation occurs with meta-agents fluctuating on time-scales $10^4$--$10^6$ times slower than lower-scale agents (where time is defined in terms of agent belief updating).
 
-Our framework suggests a novel approach toward unifying the variational free energy principle with machine learning architectures by extending the free energy principle to include an agent-agent communication term, offering the potential for exponential speed-ups to convergence during training. We anticipate this approach will find application not only in machine learning and variational inference communities but also in linguistics, psychology, sociology, physics, philosophy, and other informational research domains.
+Our framework suggests a novel approach toward unifying the variational free energy principle with machine learning architectures by extending the free energy principle to include an agent-agent communication term, offering the potential for exponential speed-ups to convergence during training. The $\mathrm{GL}(K)$ invariance theorem provides the mathematical foundation for this unification: it reveals that the gauge symmetry of attention is maximal, encompassing all invertible linear transformations. We anticipate this approach will find application not only in machine learning and variational inference communities but also in linguistics, psychology, sociology, physics, philosophy, and other informational research domains.
 
 
 
