@@ -506,7 +506,7 @@ The Jacobian factors $|\det\Omega|$ from the density transformation cancel in th
 
 \item \textbf{Simplified implementation}: Transport operators need only satisfy $\det(\Omega_{ij}) \neq 0$ (invertibility), not $\Omega_{ij}^\top\Omega_{ij} = I$ (orthogonality). This eliminates the need for computationally expensive re-orthogonalization procedures.
 
-\item \textbf{Learned projections as gauge transformations}: As we shall demonstrate, the query and key projection matrices $W_Q, W_K \in \mathrm{GL}(d_k)$ in standard transformers are themselves gauge transformations. The ``trivial gauge limit'' corresponds not to the absence of gauge structure, but to a \emph{constant} gauge transformation $\Omega = W_Q W_K^{-1}$ applied uniformly across all token pairs.
+\item \textbf{Learned projections as gauge transformations}: As we shall demonstrate, the query and key projection matrices $W_Q, W_K \in \mathrm{GL}(d_k)$ in standard transformers are themselves gauge transformations. The ``trivial gauge limit'' corresponds not to the absence of gauge structure, but to a \emph{constant} gauge transformation $\Omega = W_Q W_K^\top$ applied uniformly across all token pairs.
 \end{enumerate}
 
 The $\mathrm{GL}(K)$ invariance reveals that the attention mechanism respects a form of general covariance: the information-geometric distance between beliefs is independent of the coordinate system (basis) used to represent them. This is the statistical analogue of coordinate independence in differential geometry.
@@ -577,7 +577,7 @@ m_i \in \mathbb{R}^{d_p} \quad \text{(model latent in $\mathcal{E}_p$)}.
 \label{eq:dual_latents}
 \end{equation}
 
-The full state of agent $i$ at base manifold point $c^*$is a Gaussian distribution over each latent:
+The full state of agent $i$ at base manifold point $c^*$ is a Gaussian distribution over each latent:
 
 \begin{equation}
 \begin{aligned}
@@ -647,7 +647,7 @@ w_{ij} \in \mathbb{R}^{d_p} \quad \text{(model agreement)}.
 
 These will be latent mediators that will be integrated out, leaving an effective pairwise coupling between $k_i, k_j$ and $m_i, m_j$.
 
-Agreement variables allow us to construct a normalized joint generative model whose marginal over latents $\{k_i, m_i\}$ yield the desired gauge covariant pair potentials. This is in contrast to un-normalized Markov random fields, where potentials are imposed by fiat.
+Agreement variables provide a convenient parameterization of the joint generative model. As shown in Section~\ref{sec:marginal_mrf}, integrating out the auxiliary variables yields a pairwise Markov random field with gauge-covariant potentials and a partition function $Z$. The auxiliary variable representation offers computational advantages for certain inference procedures, though it does not eliminate the partition function.
 
 \subsection{Normalized Joint Generative Model}
 We define the Gaussian couplings and enforce that each agreement variable $z_{ij}$,$w_{ij}$ simultaneously matches:
@@ -732,6 +732,7 @@ p&(\{k_i\},\{m_i\},\{z_{ij}\},\{w_{ij}\})\\
 \end{equation}
 
 \subsubsection{Marginal Structure and Partition Function}
+\label{sec:marginal_mrf}
 
 The product of two Gaussians in the auxiliary variable $z_{ij}$ yields
 \begin{equation}
@@ -873,7 +874,7 @@ To obtain the standard form, we define normalized alignment weights
 \gamma_{ij}:=\frac{\tau^{(p)}_{ij}}{2}.
 \label{eq:normalized_weights}
 \end{equation}
-These weights have a clear interpretation: $\beta_{ij}$ measures the strength of belief alignment between agents $i$ and $j$, while $\gamma_{ij}$ measures model alignment strength. In the limit $\beta_{ij} \to \infty$ with fixed $\gamma_{ij}$, agents' beliefs are forced to perfect agreement after transport, while their models may still differ. Conversely, $\gamma_{ij} = 0$ decouples model alignment entirely. In all subsequence equations we taked $\tau$ to be independent of each agent - a constant global value which we set to 1.
+These weights have a clear interpretation: $\beta_{ij}$ measures the strength of belief alignment between agents $i$ and $j$, while $\gamma_{ij}$ measures model alignment strength. In the limit $\beta_{ij} \to \infty$ with fixed $\gamma_{ij}$, agents' beliefs are forced to perfect agreement after transport, while their models may still differ. Conversely, $\gamma_{ij} = 0$ decouples model alignment entirely. In all subsequent equations we take $\tau$ to be independent of each agent---a constant global value which we set to 1.
 
 
 
@@ -948,13 +949,13 @@ p_i(k_i) = \int p_i(k_i \mid m_i) \, s_i(m_i) \, \mathrm{d}m_i
 \end{equation}
 This creates a two-level Bayesian hierarchy: uncertainty about states ($q_i$) and uncertainty about the model generating those states ($s_i$).
 
-(3) Belief Alignment: $\beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$\}
+(3) Belief Alignment: $\beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$
 
 Belief alignment represents the discrepancy between agent $i$'s belief and agent $j$'s belief after gauge transport into agent $i$'s local frame - i.e. agent $i$'s interpretation of agent $j$'s belief.
 
 This term enforces epistemic consensus— agents with high $\beta_{ij}$ are driven to agree on their beliefs about the current world state, modulo gauge transformations. This implements distributed inference: agents pool information about their latents by aligning their beliefs $q_i(k_i)$ and $q_j(k_j)$.
 
-(4) Model Alignment: $\gamma_{ij} D_{\mathrm{KL}}(s_i \| \tilde{\Omega}_{ij} s_j)$\}
+(4) Model Alignment: $\gamma_{ij} D_{\mathrm{KL}}(s_i \| \tilde{\Omega}_{ij} s_j)$
 
 Enforces a meta-cognitive consensus among agents with high $\gamma_{ij}$. Agents are driven to agree on their beliefs about how the world works, not just what state it's in. This implements distributed model learning: agents gather and pool evidence about model structure $m$ by aligning their second-order beliefs $s_i(m_i)$ and $s_j(m_j)$.
 
@@ -1061,7 +1062,7 @@ In gauge-theoretic terms, we interpret this variation as a local transformation 
 This quantity measures the epistemic deviation induced by a local frame change and highlights the informational change of shifting one's gauge frame.
 
 \subsubsection{Symmetry Breaking}
-In the absence of observations ($p(o|\cdot) = \text{const}$), the free energy \eqref{eq:free_energy_final} is invariant under $\text{SO}(3)$. The vacuum state corresponds to perfect alignment: $q_i = \Omega_{ij}q_j$ and $p_i = \tilde{\Omega}_{ij}p_j$ for all agent pairs $(i,j)$, meaning all agents maintain rotationally equivalent beliefs that differ only by frame transformations. In this regime, the dynamics drive the system toward a degenerate manifold of ground states parameterized by the gauge orbit.  Agents synchronize over gradient descent towards $\|\mu_i(c)\| = \mu^*$ , but the absolute orientations remain arbitrary. This is the statistical geometric analogue of the Goldstone phase in spontaneous symmetry breaking.\citep{weinberg1995quantum}\citep{goldstone1962field}
+In the absence of observations ($p(o|\cdot) = \text{const}$), the free energy \eqref{eq:free_energy_final} is invariant under the gauge group $G$ (which is $\mathrm{GL}(K)$ in general, or compact subgroups such as $\mathrm{SO}(K)$ in simulations). The vacuum state corresponds to perfect alignment: $q_i = \Omega_{ij}q_j$ and $p_i = \tilde{\Omega}_{ij}p_j$ for all agent pairs $(i,j)$, meaning all agents maintain gauge-equivalent beliefs that differ only by frame transformations. In this regime, the dynamics drive the system toward a degenerate manifold of ground states parameterized by the gauge orbit. Agents synchronize over gradient descent towards $\|\mu_i(c)\| = \mu^*$, but the absolute orientations remain arbitrary. This is the statistical geometric analogue of the Goldstone phase in spontaneous symmetry breaking.\citep{weinberg1995quantum}\citep{goldstone1962field}
 
 Observations destroy this degeneracy by coupling agent to external data through the likelihood terms. Each agent's sensory stream $o_i$ acts as an external field (source) that selects a preferred orientation in its fiber, pinning $q_i$ to a definite point. The system transitions from the symmetric vacuum to a symmetry-broken phase where agents develop distinct specializations: $\|\mu_i(c)\| \neq \|\mu_j(c)\|$ with the diversity driven by observations/data. The frame transformations $\Omega_{ij}$ then encode how these specialized representations relate geometrically. This observation-induced symmetry breaking is what enables non-trivial multi-agent coordination: agents must now actively maintain geometric relationships between their specialized frames rather than simply coexisting in a rotationally symmetric configuration.
 
@@ -1627,7 +1628,7 @@ We have shown that the machine learning attention mechanism and backpropagation 
 \subsection{Experimental Design}
 
 \subsubsection{Agent-Based Simulations}
-We simulated a set of 8 fixed and completely overlapping agents over a 2-dimensional flat base manifold under periodic boundary conditions. Agents were modeled as smooth open fields (sections) of Gaussians $(\mu_i(c), \Sigma_i(c))$ and $\mathfrak{so}(3)$ frame fields $(\phi_i(c))$ transforming under $K$-dimensional irreducible representations (irreps) of $SO(3)$. We explicitly considered the $\ell_q = 9$ irrep of $SO(3)$ for the fiber, yielding a 19-dimensional representation space. All covariances were continuously monitored to ensure they remained on the symmetric positive definite (SPD) manifold.
+We simulated a set of 8 fixed and completely overlapping agents over a 2-dimensional flat base manifold under periodic boundary conditions. Agents were modeled as smooth open fields (sections) of Gaussians $(\mu_i(c), \Sigma_i(c))$ and $\mathfrak{so}(3)$ frame fields $(\phi_i(c))$ transforming under irreducible representations (irreps) of $\mathrm{SO}(3)$. We used the $\ell = 4$ irrep, yielding a 9-dimensional representation space ($d_q = d_p = 2\ell + 1 = 9$). All covariances were continuously monitored to ensure they remained on the symmetric positive definite (SPD) manifold.
 
 Gradient descent was performed on all dynamic variables with continual monitoring of self-energies, alignments, statistics, and geometry. Due to simulation stability, all gradient/norm clipping were disabled. Simulations terminated once the global variational energy reached stability ($\Delta S \leq 10^{-5}$ for 200 steps), typically requiring 500 total steps with increments of $\Delta \eta = 0.1$ for all variables.
 
@@ -1916,7 +1917,7 @@ A meta-agent is a multi-agent system whose component agents share identical sect
 q_i(c) = q_j(c), \quad p_i(c) = p_j(c) \quad \text{for } c \in \mathcal{U}_i \cap \mathcal{U}_j.
 \end{equation}
 
-A set of agents is \textbackslash emph\{epistemically dead\} if they identically share both beliefs and models. While constituent agents of a meta-agent may be epistemically dead, the meta-agent itself need not be; such agents can be integrated out, yielding coarse-grained higher-order entities and a route toward emergence.
+A set of agents is \emph{epistemically dead} if they identically share both beliefs and models. While constituent agents of a meta-agent may be epistemically dead, the meta-agent itself need not be; such agents can be integrated out, yielding coarse-grained higher-order entities and a route toward emergence.
 
 \subsubsection{Bundle Morphisms and Transport Operators}
 Via standard horizontal lifting from the principal bundle $\mathcal{N}$ to the associated bundles, we obtain a hierarchy of morphisms and induced connections:
@@ -2461,8 +2462,7 @@ Under the natural assumptions of locality, linear coupling, and exponential-fami
 C_{ij}=D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)}
 \]
 
-is not merely a modeling choice but a necessary consequence\\
-of the variational and geometric structure underlying agent coordination.  It is furthermore rotationally invariant under $SO(N)$ and $SU(N)$.
+is not merely a modeling choice but a necessary consequence of the variational and geometric structure underlying agent coordination. By Theorem~\ref{thm:glk_invariance}, the KL divergence is invariant under the full general linear group $\mathrm{GL}(K)$, which includes compact subgroups such as $\mathrm{SO}(N)$ and $\mathrm{SU}(N)$.
 
 \subsubsection{Connection to the Gauge-Covariant Free Energy}
 The conditional uniqueness result above justifies the specific form of the alignment terms appearing in the generalized variational free energy:
@@ -2494,7 +2494,7 @@ is therefore not arbitrary: it arises uniquely from the requirement that
 
 Therefore, the forward KL plays the role of the canonical gauge-covariant coupling between agents' beliefs/models, unifying variational and geometric principles.
 
-Reverse or symmetric divergences would violate at least one of these constraints: they either destroy exponential-family closure, break dual consistency $\big(C_{ij} = \partial F_i / \partial \beta_{ij}\big)$, or fail to respect the gauge-covariant comparison structure. Thus, the gauge-covariant free energy \eqref{eq:generalized_F} naturally inherits the unique forward-KL alignment form as a direct consequence of its underlying variational geometry.
+Reverse or symmetric divergences would violate at least one of these constraints: they either destroy exponential-family closure, break dual consistency $\big(C_{ij} = \partial F_i / \partial \beta_{ij}\big)$, or fail to respect the gauge-covariant comparison structure. Thus, the gauge-covariant free energy \eqref{eq:free_energy_final} naturally inherits the unique forward-KL alignment form as a direct consequence of its underlying variational geometry.
 
 
 
@@ -2547,7 +2547,7 @@ Normalization $\sum_j \beta_{ij} = 1$ gives:
 \beta_{ij} = \frac{\exp(\mu C_{ij})}{\sum_k \exp(\mu C_{ik})}.
 \end{equation}
 
-Since we want to \textbackslash emph\{minimize\} expected cost (not maximize), we choose $\mu = -1/\tau < 0$:
+Since we want to \emph{minimize} expected cost (not maximize), we choose $\mu = -1/\tau < 0$:
 
 \begin{equation}
 \boxed{\beta_{ij} = \frac{\exp(-C_{ij}/\tau)}{\sum_k \exp(-C_{ik}/\tau)} = \operatorname{softmax}_j\left(-\frac{C_{ij}}{\tau}\right)}.
@@ -2702,7 +2702,7 @@ In addition to the global energy, we compute per-agent diagnostics including the
 \subsection{Numerical Stability Safeguards}
 The update procedure includes extensive numerical safeguards to ensure stability over long simulation runs. The \texttt{sanitize\_sigma} function is invoked after every covariance update to detect and repair ill-conditioned matrices, applying a spectral floor to eigenvalues, capping condition numbers if they exceed configurable thresholds (typically $10^8$ to $10^{10}$), and optionally renormalizing the trace to prevent runaway growth.
 
-For gauge transport operators $\Omega_{ij}$, the function \texttt{safe\_omega\_inv} verifies that these matrices remain approximately orthogonal by checking the deviation $\|\Omega^\top \Omega - I\|_F$ against a tolerance scaled by machine epsilon; if the deviation is excessive, the matrix is re-orthogonalized via QR decomposition with determinant correction to ensure it remains in $\mathrm{SO}(3)$.
+For gauge transport operators $\Omega_{ij}$, numerical monitoring ensures invertibility (the only theoretical requirement under $\mathrm{GL}(K)$). In our simulations using the compact subgroup $\mathrm{SO}(3)$, the function \texttt{safe\_omega\_inv} additionally verifies approximate orthogonality by checking $\|\Omega^\top \Omega - I\|_F$ against a tolerance; if excessive, the matrix is re-orthogonalized via QR decomposition. This orthogonality enforcement is a simulation choice for compact subgroups, not a theoretical necessity---as established in Theorem~\ref{thm:glk_invariance}, KL divergence is invariant under the full $\mathrm{GL}(K)$.
 
 Energy budget tracking, implemented via the \texttt{EnergyBudget} class, monitors the decomposition of the total free energy into its constituent terms at each step, verifying that energy conservation is approximately satisfied (within numerical tolerance) when no external observations are added. Similarly, a \texttt{StabilityMonitor} tracks condition numbers of all covariance matrices, checks for the emergence of NaN or infinite values, detects gradient explosions (gradients exceeding preset thresholds), and validates that the SPD property is maintained throughout the evolution. If critical stability issues are detected—such as covariance matrices losing positive-definiteness or gradients diverging—the monitor logs detailed diagnostics and optionally halts the simulation to prevent catastrophic numerical failure.
 
