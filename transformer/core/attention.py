@@ -2231,23 +2231,36 @@ class IrrepMultiHeadAttention(nn.Module):
         self.irrep_labels = []
         total_dim = 0
 
-        for label, multiplicity, dim in irrep_spec:
-            for _ in range(multiplicity):
-                self.irrep_dims.append(dim)
-                self.irrep_labels.append(label)
-                total_dim += dim
-
-        # Pad to embed_dim if needed - add SCALAR heads (dim=1), not one big head
-        if total_dim < embed_dim:
-            padding = embed_dim - total_dim
-            for _ in range(padding):
-                self.irrep_dims.append(1)  # Each padding is a scalar head
-                self.irrep_labels.append('ℓ0_pad')
+        # =================================================================
+        # GL(K) MODE: Override irrep_spec - single head with full generators
+        # =================================================================
+        # GL(K) has no natural irrep decomposition. The entire K-dim space
+        # transforms as one representation under GL(K). We use a single "head"
+        # with the full K² generators.
+        if gauge_group == 'GLK':
+            self.irrep_dims = [embed_dim]  # Single head spanning full space
+            self.irrep_labels = ['full']
             total_dim = embed_dim
-        elif total_dim > embed_dim:
-            raise ValueError(
-                f"Irrep spec sums to {total_dim}, exceeds embed_dim={embed_dim}"
-            )
+            print(f"[GL(K) mode] Single-head attention: dim={embed_dim}, generators={embed_dim}²={embed_dim**2}")
+        else:
+            # SO(3) / SO(N) mode: Use irrep decomposition
+            for label, multiplicity, dim in irrep_spec:
+                for _ in range(multiplicity):
+                    self.irrep_dims.append(dim)
+                    self.irrep_labels.append(label)
+                    total_dim += dim
+
+            # Pad to embed_dim if needed - add SCALAR heads (dim=1), not one big head
+            if total_dim < embed_dim:
+                padding = embed_dim - total_dim
+                for _ in range(padding):
+                    self.irrep_dims.append(1)  # Each padding is a scalar head
+                    self.irrep_labels.append('ℓ0_pad')
+                total_dim = embed_dim
+            elif total_dim > embed_dim:
+                raise ValueError(
+                    f"Irrep spec sums to {total_dim}, exceeds embed_dim={embed_dim}"
+                )
 
         self.n_heads = len(self.irrep_dims)
         self.total_dim = total_dim
@@ -2290,6 +2303,18 @@ class IrrepMultiHeadAttention(nn.Module):
                         f"SO(3) irreps must have odd dimensions (1, 3, 5, 7, ...). "
                         f"For even dimensions, use gauge_group='SON' with appropriate gauge_dim."
                     )
+            elif gauge_group == 'GLK':
+                # GL(K) mode: Full generators act on entire space
+                # GL(K) has no natural irrep decomposition - entire space is one irrep
+                # With single-head setup (dim = embed_dim), use full generators
+                if global_generators is None:
+                    raise ValueError(
+                        f"GL(K) mode requires global_generators to be provided."
+                    )
+                # Use the full K² generators - they're K×K matrices
+                # Single head means dim == embed_dim, so we use the full generators
+                gen = global_generators.clone()  # (K², K, K)
+                # gen shape: (n_gen, K, K) where n_gen = K²
             else:
                 # SO(N) mode: Extract block from global generators
                 if global_generators is None:
@@ -2313,28 +2338,35 @@ class IrrepMultiHeadAttention(nn.Module):
         # No output projection - pure VFE approach returns concatenated beliefs directly
         # (Removed nn.Linear to avoid neural network mixing between irrep blocks)
 
-        # Count scalar (ℓ=0) vs non-scalar heads for gauge frame analysis
-        n_scalar_heads = sum(1 for d in self.irrep_dims if d == 1)
-        n_gauge_active_heads = self.n_heads - n_scalar_heads
-        scalar_channels = sum(d for d in self.irrep_dims if d == 1)
+        # Print attention configuration
+        if gauge_group == 'GLK':
+            # GL(K) mode: single head with full generators
+            n_gen = global_generators.shape[0] if global_generators is not None else embed_dim**2
+            print(f"[GL(K) Attention] Single head, dim={embed_dim}, n_generators={n_gen}")
+            print(f"  → Full GL({embed_dim}) transport on entire embedding space")
+        else:
+            # SO(3) / SO(N) mode: count scalar vs non-scalar heads
+            n_scalar_heads = sum(1 for d in self.irrep_dims if d == 1)
+            n_gauge_active_heads = self.n_heads - n_scalar_heads
+            scalar_channels = sum(d for d in self.irrep_dims if d == 1)
 
-        print(f"IrrepMultiHeadAttention: {self.n_heads} heads, dims={self.irrep_dims}")
+            print(f"IrrepMultiHeadAttention: {self.n_heads} heads, dims={self.irrep_dims}")
 
-        # Warn if a large fraction of channels are gauge-invariant
-        if n_scalar_heads > 0:
-            import warnings
-            scalar_fraction = scalar_channels / embed_dim
-            if scalar_fraction > 0.5:
-                warnings.warn(
-                    f"IrrepMultiHeadAttention: {n_scalar_heads}/{self.n_heads} heads are ℓ=0 (scalar), "
-                    f"comprising {scalar_channels}/{embed_dim} = {100*scalar_fraction:.1f}% of channels. "
-                    f"Scalar channels are GAUGE-INVARIANT: transport Ω_ij acts as identity, "
-                    f"so gauge frame evolution (update_phi=True) won't affect them. "
-                    f"Consider increasing non-scalar irreps (ℓ≥1) for gauge-sensitive representations.",
-                    UserWarning
-                )
-            print(f"  → {n_scalar_heads} scalar (ℓ=0) heads: GAUGE-INVARIANT (Ω=I)")
-            print(f"  → {n_gauge_active_heads} non-scalar heads: gauge-active (transport via Wigner D)")
+            # Warn if a large fraction of channels are gauge-invariant
+            if n_scalar_heads > 0:
+                import warnings
+                scalar_fraction = scalar_channels / embed_dim
+                if scalar_fraction > 0.5:
+                    warnings.warn(
+                        f"IrrepMultiHeadAttention: {n_scalar_heads}/{self.n_heads} heads are ℓ=0 (scalar), "
+                        f"comprising {scalar_channels}/{embed_dim} = {100*scalar_fraction:.1f}% of channels. "
+                        f"Scalar channels are GAUGE-INVARIANT: transport Ω_ij acts as identity, "
+                        f"so gauge frame evolution (update_phi=True) won't affect them. "
+                        f"Consider increasing non-scalar irreps (ℓ≥1) for gauge-sensitive representations.",
+                        UserWarning
+                    )
+                print(f"  → {n_scalar_heads} scalar (ℓ=0) heads: GAUGE-INVARIANT (Ω=I)")
+                print(f"  → {n_gauge_active_heads} non-scalar heads: gauge-active (transport via Wigner D)")
 
     def forward(
         self,
