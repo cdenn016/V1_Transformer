@@ -248,104 +248,81 @@ The Gaussian manifold has constant negative curvature under the Fisher-Rao metri
 For computational tractability and physical interpretability, our simulations employ $G = \mathrm{SO}(3)$ acting via irreducible representations on higher-dimensional fibers. This choice is motivated by: (i) the well-understood representation theory of $\mathrm{SO}(3)$; (ii) compact group structure enabling Haar measure averaging; and (iii) physical relevance to rotation-equivariant systems \citep{nakahara2003geometry}\citep{hall2015lie}. However, the theoretical results---particularly the derivation of transformer attention---hold for the full $\mathrm{GL}(K)$ gauge group, which is essential for understanding how learned projection matrices implement gauge structure.
 
 \subsubsection{Gauge Group and Representations}
-Let us now consider the representation theory of $G = SO(3)$, which acts on the fibers via its representations:
+The natural gauge group for KL-based attention is $G = \mathrm{GL}(K)$, the general linear group of invertible $K \times K$ matrices. This acts on the fibers via representations:
 
 \begin{equation}
-\rho_q: SO(3) \to \mathrm{GL}(d_q), 
+\rho_q: \mathrm{GL}(K) \to \mathrm{GL}(d_q),
 \qquad
-\rho_p: SO(3) \to \mathrm{GL}(d_p).
+\rho_p: \mathrm{GL}(K) \to \mathrm{GL}(d_p).
 \label{eq:representations}
 \end{equation}
 
-In full generality these representations may be reducible or irreducible thereby allowing even or odd dimensions to be studied.  For example, a token dimension of $768$ could be broken into the appropriate number of irreps (see below) necessary for an even dimension action \citep{hall2015lie}
-
-For $\Omega \in SO(3)$, the gauge action on a Gaussian state is:
+For $\Omega \in \mathrm{GL}(K)$, the gauge action on a Gaussian state is:
 
 \begin{equation}
 \boxed{
 \begin{aligned}
-\rho_q(\Omega) \cdot (\mu_q, \Sigma_q) 
-&= \big(\rho_q(\Omega)\,\mu_q,\; 
+\rho_q(\Omega) \cdot (\mu_q, \Sigma_q)
+&= \big(\rho_q(\Omega)\,\mu_q,\;
 \rho_q(\Omega)\,\Sigma_q\,\rho_q(\Omega)^\top\big),\\
-\rho_p(\Omega) \cdot (\mu_p, \Sigma_p) 
-&= \big(\rho_p(\Omega)\,\mu_p,\; 
+\rho_p(\Omega) \cdot (\mu_p, \Sigma_p)
+&= \big(\rho_p(\Omega)\,\mu_p,\;
 \rho_p(\Omega)\,\Sigma_p\,\rho_p(\Omega)^\top\big).
 \end{aligned}
 }
 \label{eq:gauge_action_gaussians}
 \end{equation}
 
-\subsubsection{Representation Structure}
-The dimensions $d_q, d_p$ are not constrained to be 1, 3, 5, 7, $\ldots$ (irrep dimensions of $SO(3)$). Instead we may have $\rho_q, \rho_p$ as reducible representations built from direct sums of the irreps:
+By Theorem~\ref{thm:glk_invariance}, KL divergence is invariant under this action for any $\Omega \in \mathrm{GL}(K)$. The only requirement is invertibility ($\det \Omega \neq 0$), not orthogonality.
 
+\subsubsection{Compact Subgroups and Simulations}
+While $\mathrm{GL}(K)$ is the maximal gauge symmetry, compact subgroups such as $\mathrm{SO}(K)$ or $\mathrm{O}(K)$ are useful when:
+\begin{itemize}
+\item Haar measure averaging is required (e.g., gauge consensus)
+\item Finite-dimensional irreducible representations are desired
+\item Volume-preserving transformations are physically motivated
+\end{itemize}
+
+For computational tractability in our simulations, we employ $G = \mathrm{SO}(3)$ acting via irreducible representations on higher-dimensional fibers. Specifically, we used $d_q = d_p = 9$ with the spin-4 irrep:
 \begin{equation}
-\rho_q \cong \bigoplus_{k} n_k \cdot \ell_k,
+\rho_q = \rho_p = \ell_4,
 \quad
-d_q = \sum_{k} n_k (2\ell_k + 1),
-\label{eq:reducible_decomposition}
-\end{equation}
-
-where $\ell_k \in \{0, 1, 2, \ldots\}$ labels spin, $n_k \in \mathbb{N}$ is multiplicity, and irrep $\ell_k$ has dimension $2\ell_k + 1$.
-
-Example: A $d_q = 768$ dimensional embedding with gauge group $G = SO(3)$ could decompose as:
-
-\begin{equation}
-\rho_q \cong 109 \cdot \ell_0 \oplus 49 \cdot \ell_1 \oplus 32 \cdot \ell_2 \oplus \ldots
-\end{equation}
-
-(109 scalars + 49 vectors + 32 rank-2 tensors + $\ldots$), where the $SO(3)$ gauge group acts on this high-dimensional space via the representation $\rho_q: SO(3) \to GL(768)$.
-
-In the simulations we perform (see discussion) we used $d_q = d_p = 9$ with the irreducible spin-$4$ representation:
-
-\begin{equation}
-\rho_q = \rho_p = \ell_4, 
-\quad
-\text{(irrep, dimension $2 \cdot 4 + 1 = 9$)}.
+\text{(dimension $2 \cdot 4 + 1 = 9$)}.
 \label{eq:simulation_irrep}
 \end{equation}
+However, all theoretical results---particularly the derivation of transformer attention---hold for the full $\mathrm{GL}(K)$.
 
-\subsubsection{Gauge structure}
-The gauge structure of our framework is built via the following:
+\subsubsection{Gauge Structure}
+The gauge structure of our framework is built via:
 
 \begin{itemize}
-  \item Gauge group: $G = SO(3)$ (compact, 3 generators)
-  \item Frame fields: $\phi_i(c) \in \mathfrak{so}(3)$ vary spatially
-  \item Transport: $\Omega_{ij}(c) = e^{\phi_i(c)}e^{-\phi_j(c)} \in SO(3)$
-  \item Action on fiber: $\rho(\Omega_{ij}) \in GL(d_K)$
+  \item Gauge group: $G = \mathrm{GL}(K)$ (or compact subgroup for simulations)
+  \item Frame fields: $\phi_i(c) \in \mathfrak{gl}(K)$ vary spatially
+  \item Transport: $\Omega_{ij}(c) = e^{\phi_i(c)}e^{-\phi_j(c)} \in \mathrm{GL}(K)$
+  \item Action on fiber: $\rho(\Omega_{ij}) \in \mathrm{GL}(d_K)$
 \end{itemize}
 
-In the transformer limit we will show that the gauge group becomes trivial:
+In the transformer limit, the gauge structure simplifies in two key ways:
 
+\textbf{(1) Constant gauge transformation:} Rather than agent-dependent $\Omega_{ij}$, transformers use a single learned gauge:
 \begin{equation}
-G = SO(3) \to \{e\} \quad \text{(identity element only)}
+\Omega_{ij} = \Omega = W_Q W_K^\top \in \mathrm{GL}(d_k) \quad \forall\, i,j
 \end{equation}
 
-Therefore all gauge frames collapse to a single global shared space. I.e.
-
+\textbf{(2) Flat connection:} The gauge fields become spatially constant:
 \begin{equation}
-\phi_i(c) = \zeta =\text{const} \in \mathfrak{so}(3) \quad \forall i, c
+\phi_i(c) = \phi = \text{const} \in \mathfrak{gl}(K) \quad \forall\, i, c
 \end{equation}
 
-This then makes gauge transport trivial:
-
-\begin{equation}
-\Omega_{ij}(c) = \exp[\zeta] \exp[-\zeta] = \mathbb{I} \quad \forall i,j,c
-\end{equation}
-
-and the representation acts as the identity:
-
-\begin{equation}
-\rho(e) \cdot \mu_j = \mu_j 
-\end{equation}
-
-Therefore in this limit we have the following simplifications which lead to the transformer architecture from a more general and rich geometry:
-
+This yields:
 \begin{itemize}
-  \item Vanishing Induced Connection: $A_\mu = -\partial_\mu \phi_i = 0$
-  \item Vanishing Curvature: $F_{\mu\nu} = 0$ (flat bundle)
+  \item Vanishing induced connection: $A_\mu = -\partial_\mu \phi_i = 0$
+  \item Vanishing curvature: $F_{\mu\nu} = 0$ (flat bundle)
   \item A single global coordinate system
-  \item The gauge-aligned KL reduces to standard KL
+  \item Gauge transport absorbed into learned projections $W_Q, W_K$
 \end{itemize}
+
+Crucially, the transformer limit is \emph{not} gauge-free. The gauge structure persists as $\Omega = W_Q W_K^\top \in \mathrm{GL}(d_k)$---a learned, constant gauge transformation that backpropagation discovers from data.
 
 \subsubsection{Learned Projections $W_Q, W_K$ as $\mathrm{GL}(K)$ Gauge Transformations}
 \label{sec:wq_wk_gauge}
@@ -431,7 +408,7 @@ Global gauge $W_Q, W_K$ \\
 We consider the case of a flat base manifold (for simplicity and due to limited computational resources). Agents occupy finite support regions $\mathcal{U}_i$ as open subsets of $\mathbb{R}^2$ (where we invoke periodic boundary conditions in simulations).
 
 \subsubsection{Local Gauge Frames}
-Each agent $i$ has a gauge frame field $\phi_i: \mathcal{U}_i \to \mathfrak{so}(3)$ which may vary spatially. This induces a local connection:
+Each agent $i$ has a gauge frame field $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ which may vary spatially. (In simulations using compact subgroups, $\phi_i \in \mathfrak{so}(3)$.) This induces a local connection:
 
 \begin{equation}
 A^{(i)}_\mu(c) = -\partial_\mu \phi_i(c) + \mathcal{O}(\phi_i^2),
@@ -477,7 +454,7 @@ This divergence forms the basis of our attention mechanism.
 \subsubsection{Fundamental Theorem: $\mathrm{GL}(K)$ Gauge Invariance of KL Divergence}
 \label{sec:glk_invariance}
 
-A crucial observation, which significantly strengthens the theoretical foundation of our framework, is that the Kullback-Leibler divergence possesses a much larger gauge symmetry than initially apparent. While we have presented the framework using $SO(K)$ gauge groups for concreteness, the variational free energy is in fact invariant under the \emph{full general linear group} $\mathrm{GL}(K)$.
+A crucial observation underlying our entire framework is that the Kullback-Leibler divergence possesses a maximal gauge symmetry: it is invariant under the \emph{full general linear group} $\mathrm{GL}(K)$, not merely compact subgroups like $\mathrm{SO}(K)$.
 
 \begin{theorem}[$\mathrm{GL}(K)$ Gauge Invariance]
 \label{thm:glk_invariance}
@@ -714,35 +691,35 @@ where:
 \begin{itemize}
   \item $\Lambda_{ij} \in \mathbb{R}^{d_q \times d_q}$, $\Lambda_{ij} \succ 0$: Belief alignment precision
   \item $\Gamma_{ij} \in \mathbb{R}^{d_p \times d_p}$, $\Gamma_{ij} \succ 0$: Model alignment precision
-  \item $\Omega_{ij} \in SO(3)$: Gauge transport from agent $j$'s frame to agent $i$'s frame (belief channel)
-  \item $\tilde{\Omega}_{ij} \in SO(3)$: Gauge transport from agent $j$'s frame to agent $i$'s frame (model channel)
+  \item $\Omega_{ij} \in \mathrm{GL}(K)$: Gauge transport from agent $j$'s frame to agent $i$'s frame (belief channel)
+  \item $\tilde{\Omega}_{ij} \in \mathrm{GL}(K)$: Gauge transport from agent $j$'s frame to agent $i$'s frame (model channel)
 \end{itemize}
 
-\subsubsection{Gauge Transport as Frame Rotation}
-The gauge transport operators $\Omega_{ij}, \tilde{\Omega}_{ij}$ are not parallel transport along a connection in the usual sense (which would be path-dependent). Instead, they are pointwise gauge frame rotations:
+\subsubsection{Gauge Transport as Frame Transformation}
+The gauge transport operators $\Omega_{ij}, \tilde{\Omega}_{ij}$ are not parallel transport along a connection in the usual sense (which would be path-dependent). Instead, they are pointwise gauge frame transformations:
 
 \begin{equation}
-\Omega_{ij}(c) = e^{\phi_i(c)} \cdot e^{-\phi_j(c)} \in SO(3),
+\Omega_{ij}(c) = e^{\phi_i(c)} \cdot e^{-\phi_j(c)} \in \mathrm{GL}(K),
 \label{eq:gauge_frame_rotation}
 \end{equation}
 
-where $\phi_i: \mathcal{U}_i \to \mathfrak{so}(3)$ is agent $i$'s gauge frame field (a local section of the Lie algebra bundle).
+where $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ is agent $i$'s gauge frame field (a local section of the Lie algebra bundle).
 
 These act on the latent variables as
 
 \begin{equation}
 \begin{aligned}
-\Omega_{ij} k_j 
-&:= \rho_q(\Omega_{ij}) \, k_j 
+\Omega_{ij} k_j
+&:= \rho_q(\Omega_{ij}) \, k_j
 \in \mathbb{R}^{d_q},\\
-\tilde{\Omega}_{ij} m_j 
-&:= \rho_p(\tilde{\Omega}_{ij}) \, m_j 
+\tilde{\Omega}_{ij} m_j
+&:= \rho_p(\tilde{\Omega}_{ij}) \, m_j
 \in \mathbb{R}^{d_p}.
 \end{aligned}
 \label{eq:gauge_action_on_vectors}
 \end{equation}
 
-Later we invoke the transformer limit and take $\rho_q(\Omega_{ij}) = \mathbb{I}$, so $\Omega_{ij} k_j = k_j$ (trivial transport).
+In the transformer limit, $\Omega_{ij} = \Omega = W_Q W_K^\top$ becomes a constant learned gauge transformation (see Section~\ref{sec:wq_wk_gauge}).
 
 \subsubsection{Full Joint Distribution}
 The joint generative model over all latents and auxiliary variables is:
@@ -1585,7 +1562,7 @@ where each block $\rho_k(g)$ corresponds to the representation of $g$ in irrep $
 
 \paragraph{Generators and Geometric Modes.}
 
-The infinitesimal structure of the gauge group is encoded in its Lie algebra $\mathfrak{g}$. For $G = \text{SO}(N)$, the Lie algebra $\mathfrak{so}(N)$ consists of $N(N-1)/2$ linearly independent skew-symmetric generators $\{G_a\}_{a=1}^{\dim \mathfrak{g}}$, each corresponding to an infinitesimal rotation in a specific 2-plane of $\mathbb{R}^N$.
+The infinitesimal structure of a gauge group is encoded in its Lie algebra $\mathfrak{g}$. For the full gauge group $G = \mathrm{GL}(K)$, the Lie algebra $\mathfrak{gl}(K)$ has dimension $K^2$ with generators spanning all $K \times K$ matrices. For compact subgroups like $G = \text{SO}(N)$, the Lie algebra $\mathfrak{so}(N)$ consists of $N(N-1)/2$ linearly independent skew-symmetric generators $\{G_a\}_{a=1}^{\dim \mathfrak{g}}$, each corresponding to an infinitesimal rotation in a specific 2-plane of $\mathbb{R}^N$.
 
 When these generators act on the embedding space via the representation $\rho_q$, they inherit the block structure from the irrep decomposition:
 \begin{equation}
