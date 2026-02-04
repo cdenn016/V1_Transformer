@@ -164,9 +164,15 @@ class GaugeTransformerBlock(nn.Module):
         # Determine gauge group from generators shape
         if generators is not None:
             n_gen = generators.shape[0]
+            K = generators.shape[1]  # Embedding dimension
+
             if n_gen == 3:
                 gauge_group = 'SO3'
                 gauge_dim_inferred = 3
+            elif n_gen == K * K:
+                # n_gen = K² means GL(K) - full general linear group
+                gauge_group = 'GLK'
+                gauge_dim_inferred = K
             else:
                 # n_gen = N*(N-1)/2 => N = (1 + sqrt(1 + 8*n_gen)) / 2
                 import math
