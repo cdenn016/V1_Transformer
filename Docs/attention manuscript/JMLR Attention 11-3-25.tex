@@ -1105,9 +1105,9 @@ where $\mu_i \in \mathbb{R}^d$ is the agent's mean representation in its local g
 
 Communication between agents $i$ and $j$ is mediated by a gauge frame transport operator
 \begin{equation}
-\Omega_{ij} \in G \subset \text{GL}(d),
+\Omega_{ij} \in \mathrm{GL}(d),
 \end{equation}
-which maps representations from agent $j$'s local frame into agent $i$'s frame (specifically, we consider $d$-dimensional irreps of $\text{SO}(3)$).
+which maps representations from agent $j$'s local frame into agent $i$'s frame. By Theorem~\ref{thm:glk_invariance}, the KL divergence is invariant under simultaneous $\mathrm{GL}(d)$ transformation of both arguments, which is why gauge transformations preserve the information-geometric structure.
 
 In our general framework, agents share information via KL-divergence-weighted coupling:
 \begin{equation}
@@ -1161,9 +1161,13 @@ Therefore:
 D_{\mathrm{KL}}(q_i \| q_j) = \frac{1}{2\sigma^2}\|\mu_i - \mu_j\|^2.
 \end{equation}
 
-With gauge transport $\Omega_{ij}$, the transported Gaussian $\Omega_{ij}q_j$ has mean $\Omega_{ij}\mu_j$ and covariance $\Omega_{ij}\Sigma_j\Omega_{ij}^\top = \sigma^2(\Omega_{ij}\Omega_{ij}^\top)$. For orthogonal transformations $\Omega_{ij} \in \text{SO}(3)$, we have $\Omega_{ij}\Omega_{ij}^\top = I$, so:
+With gauge transport $\Omega_{ij} \in \mathrm{GL}(d)$, the transported Gaussian $\Omega_{ij}q_j$ has mean $\Omega_{ij}\mu_j$ and covariance $\Omega_{ij}\Sigma_j\Omega_{ij}^\top = \sigma^2(\Omega_{ij}\Omega_{ij}^\top)$. The full KL divergence is:
 \begin{equation}
-D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) = \frac{1}{2\sigma^2}\|\mu_i - \Omega_{ij}\mu_j\|^2.
+D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) = \frac{1}{2}\left[\log\det(\Omega_{ij}\Omega_{ij}^\top) + \mathrm{Tr}\big((\Omega_{ij}\Omega_{ij}^\top)^{-1}\big) - d + \frac{1}{\sigma^2}\|\mu_i - \Omega_{ij}\mu_j\|^2\right].
+\end{equation}
+However, for the purposes of attention computation, only the \emph{differences} in KL values matter (softmax is shift-invariant). The terms involving $\Omega_{ij}\Omega_{ij}^\top$ that depend only on $j$ (not on $i$) will cancel under softmax, leaving the essential structure:
+\begin{equation}
+D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) \sim \frac{1}{2\sigma^2}\|\mu_i - \Omega_{ij}\mu_j\|^2 + \text{(terms absorbed by learned projections)}.
 \end{equation}
 
 \paragraph{Limit 2: Flat Bundle ($\Omega_{ij} = \Omega$).}
@@ -1227,28 +1231,23 @@ Thus the effective logit is:
 
 \paragraph{Key Bias Cancellation.}
 
-The second term $-\frac{1}{2\sigma^2}\|\Omega\mu_j\|^2$ depends only on key $j$ and acts as a key-dependent bias. This bias vanishes under two complementary mechanisms:
+The second term $-\frac{1}{2\sigma^2}\|\Omega\mu_j\|^2$ depends only on key $j$ and acts as a key-dependent bias. For general $\Omega \in \mathrm{GL}(d_k)$, this bias becomes approximately constant under two complementary mechanisms:
 
-\textbf{(1) Gauge Invariance:}
-For orthogonal transformations $\Omega \in \text{SO}(3)$:
-\begin{equation}
-\|\Omega\mu_j\|^2 = \mu_j^\top\Omega^\top\Omega\mu_j = \mu_j^\top\mu_j = \|\mu_j\|^2.
-\end{equation}
-The bias reduces to $-\frac{1}{2\sigma^2}\|\mu_j\|^2$, depending only on the untransformed embedding norm.
+\textbf{(1) Learned Absorption:}
+For $\Omega = W_Q W_K^\top \in \mathrm{GL}(d_k)$, the key bias $\|\Omega\mu_j\|^2 = \|W_Q W_K^\top \mu_j\|^2$ is absorbed into the learned projections. The network learns $W_Q, W_K$ such that this term either: (a) becomes approximately constant across keys, or (b) provides useful key-dependent modulation that improves performance. Unlike orthogonal groups where $\|\Omega\mu_j\|^2 = \|\mu_j\|^2$ by construction, $\mathrm{GL}(K)$ allows the network to learn the optimal transformation of key norms.
 
-\textbf{(2) High-Dimensional Concentration:}
+\textbf{(2) High-Dimensional Concentration + Layer Normalization:}
 For embeddings in $\mathbb{R}^{d_k}$ with approximately independent components (e.g., $\mu_j^{(i)} \sim \mathcal{N}(0, \sigma_0^2)$), the concentration of measure implies:
 \begin{equation}
 \|\mu_j\|^2 = \sum_{i=1}^{d_k} (\mu_j^{(i)})^2 = d_k\sigma_0^2 \pm O(\sigma_0^2\sqrt{d_k}),
 \end{equation}
 with relative fluctuations $O(1/\sqrt{d_k}) \to 0$ as $d_k$ increases.
 
-For typical transformer dimensions ($d_k = 64, 128, \ldots$), $\|\mu_j\|^2 \approx d_k\sigma_0^2$ is approximately constant across tokens:
+Modern transformer architectures enforce constant key norms explicitly via \textbf{layer normalization}, which normalizes $\|\mu_j\|$ to be constant across tokens. This makes the key bias:
 \begin{equation}
--\frac{1}{2\sigma^2}\|\mu_j\|^2 \approx -\frac{d_k\sigma_0^2}{2\sigma^2} = C \quad \text{(constant in } j\text{)}.
+-\frac{1}{2\sigma^2}\|\Omega\mu_j\|^2 \approx C \quad \text{(constant in } j\text{)},
 \end{equation}
-
-This constant cancels under softmax. Modern transformer architectures enforce this explicitly via layer normalization, which normalizes $\|\mu_j\|$ to be constant.
+which cancels under softmax. Layer normalization thus serves a gauge-theoretic purpose: it ensures that the $\mathrm{GL}(K)$ gauge transformation does not introduce spurious key-dependent biases that would distort attention patterns.
 
 \paragraph{Factorization into Query-Key Dot Product.}
 
@@ -1257,28 +1256,30 @@ The leading term in $\tilde{s}_{ij}$ is:
 \frac{1}{\sigma^2}\mu_i^\top \Omega \mu_j.
 \end{equation}
 
-We define learned projection matrices $A, B \in \mathbb{R}^{d \times d_k}$ such that:
+This is precisely where the $\mathrm{GL}(K)$ gauge structure enters. We identify learned projection matrices $W_Q, W_K \in \mathbb{R}^{d \times d_k}$ such that:
 \begin{equation}
-A B^\top = \frac{1}{\sigma^2} \Omega.
+W_Q W_K^\top = \frac{1}{\sigma^2} \Omega \in \mathrm{GL}(d_k).
 \end{equation}
 
-Such a factorization always exists (e.g., via SVD, or choosing $A = \frac{1}{\sigma}\Omega^{1/2}$ and $B = \frac{1}{\sigma}\Omega^{1/2}$ if $\Omega$ is symmetric, or more generally via any matrix decomposition).
+Such a factorization always exists for any invertible $\Omega$: any matrix $M \in \mathrm{GL}(d_k)$ can be written as $M = AB^\top$ for suitable $A, B$ (e.g., via SVD: $M = U\Sigma V^\top = (U\Sigma^{1/2})(V\Sigma^{1/2})^\top$).
 
 Define query and key vectors:
 \begin{equation}
-Q_i \equiv \mu_i^\top A \in \mathbb{R}^{1\times d_k}, \qquad K_j \equiv \mu_j^\top B \in \mathbb{R}^{1\times d_k}.
+Q_i \equiv \mu_i^\top W_Q \in \mathbb{R}^{1\times d_k}, \qquad K_j \equiv \mu_j^\top W_K \in \mathbb{R}^{1\times d_k}.
 \end{equation}
 
 Then:
 \begin{equation}
-Q_i K_j^\top = \mu_i^\top A B^\top \mu_j = \frac{1}{\sigma^2}\mu_i^\top \Omega \mu_j.
+Q_i K_j^\top = \mu_i^\top W_Q W_K^\top \mu_j = \frac{1}{\sigma^2}\mu_i^\top \Omega \mu_j.
 \end{equation}
+
+This reveals the key insight: \textbf{the learned projections $W_Q, W_K$ encode the $\mathrm{GL}(K)$ gauge transformation}. The matrix $\Omega = \sigma^2 W_Q W_K^\top$ is the gauge transport that the network learns from data. The factorization $\Omega = W_Q W_K^\top$ is not a constraint but rather shows how the gauge structure is parametrized in standard transformers.
 
 Thus the compatibility term reduces to the \textbf{standard dot product}:
 \begin{equation}
 \tilde{s}_{ij} = Q_i K_j^\top + O(1),
 \end{equation}
-where $O(1)$ represents the approximately constant key bias.
+where $O(1)$ represents the approximately constant key bias (controlled by layer normalization).
 
 \paragraph{Temperature Scaling.}
 
