@@ -82,16 +82,22 @@ def categorize_token(tid: int) -> str:
 
 
 def identify_gauge_group(phi_dim: int) -> str:
-    """Identify gauge group from embedding dimension."""
+    """Identify gauge group from phi dimension (number of generators)."""
     # SO(2): 1 generator, SO(3): 3 generators, SO(N): N(N-1)/2 generators
+    # GL(K): K² generators
     if phi_dim == 1:
         return "SO(2)"
     elif phi_dim == 3:
         return "SO(3)"
     else:
-        # Solve N(N-1)/2 = phi_dim for N
-        n_approx = int((1 + np.sqrt(1 + 8 * phi_dim)) / 2)
-        return f"SO({n_approx})"
+        # Check if it's a perfect square (GL(K) has K² generators)
+        k_sqrt = int(np.sqrt(phi_dim))
+        if k_sqrt * k_sqrt == phi_dim:
+            return f"GL({k_sqrt})"
+        else:
+            # Solve N(N-1)/2 = phi_dim for N (SO(N))
+            n_approx = int((1 + np.sqrt(1 + 8 * phi_dim)) / 2)
+            return f"SO({n_approx})"
 
 
 # =============================================================================
