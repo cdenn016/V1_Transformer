@@ -1044,11 +1044,7 @@ This corresponds to a trivial principal bundle: parallel transport between any t
 
 \paragraph{Limit 3: Learned Projections.}
 
-With learned query, key, and value projection matrices $W_Q, W_K, W_V \in \mathbb{R}^{d \times d_k}$, we define:
-\begin{equation}
-Q_i = \mu_i^\top W_Q, \quad K_j = \mu_j^\top W_K, \quad V_j = \mu_j^\top W_V,
-\end{equation}
-where $Q_i, K_j, V_j \in \mathbb{R}^{1 \times d_k}$ are the projected representations. These projections allow the model to learn task-specific representations from the raw agent means $\mu_i$.
+We introduce learned projection matrices $W_Q, W_K, W_V \in \mathbb{R}^{d \times d_k}$ that will absorb both the gauge transport $\Omega$ and the scaling factor $\sigma^{-2}$. The precise identification emerges from the derivation below.
 
 \subsubsection{Derivation of Dot-Product Attention}
 
