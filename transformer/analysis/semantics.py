@@ -203,6 +203,162 @@ def analyze_token_classes(
     return results
 
 
+def compute_clustering_metrics(
+    embed: torch.Tensor,
+    n_tokens: int = 500,
+    embed_name: str = 'embed',
+) -> Dict[str, Any]:
+    """
+    Compute quantitative clustering metrics in the full-dimensional space.
+
+    These metrics address the concern that PCA projections can create
+    illusory cluster structure. All metrics are computed in the original
+    high-dimensional space, not in a PCA projection.
+
+    Metrics computed:
+        - silhouette_score: Mean silhouette coefficient [-1, 1]. Measures
+          how similar each token is to its own category vs. nearest other
+          category. Higher = better separation. Computed in full space.
+        - calinski_harabasz: Ratio of between-cluster to within-cluster
+          variance. Higher = better defined clusters. Unbounded.
+        - inter_intra_ratio: Ratio of mean inter-class to mean intra-class
+          distance across all categorized tokens in full space.
+        - anova_f_stat: Mean F-statistic from one-way ANOVA across dimensions.
+          Tests whether category means differ significantly.
+        - anova_p_value: Geometric mean of per-dimension ANOVA p-values.
+        - pca_variance_cumulative: Number of components for 50%, 90%, 95%
+          of variance, contextualizing low per-component explained variance.
+        - n_tokens_per_category: Counts per category used in analysis.
+
+    Args:
+        embed: Embedding tensor [vocab_size, embed_dim]
+        n_tokens: Number of tokens to analyze (first n_tokens)
+        embed_name: Name prefix for result keys (e.g., 'mu' or 'phi')
+
+    Returns:
+        Dictionary with all computed metrics.
+    """
+    embed_np = embed[:n_tokens].numpy() if isinstance(embed, torch.Tensor) else embed[:n_tokens]
+    embed_dim = embed_np.shape[1]
+    results = {}
+
+    # Categorize tokens
+    categories = [categorize_token(tid) for tid in range(len(embed_np))]
+    unique_cats = sorted(set(categories))
+
+    # Need at least 2 categories with 2+ members for clustering metrics
+    cat_counts = {c: categories.count(c) for c in unique_cats}
+    valid_cats = [c for c, cnt in cat_counts.items() if cnt >= 2]
+    results[f'{embed_name}_n_tokens_per_category'] = cat_counts
+
+    if len(valid_cats) < 2:
+        results[f'{embed_name}_clustering_error'] = 'fewer than 2 categories with 2+ members'
+        return results
+
+    # Build label array for valid categories only
+    cat_to_int = {c: i for i, c in enumerate(valid_cats)}
+    mask = [categories[i] in cat_to_int for i in range(len(embed_np))]
+    X = embed_np[mask]
+    labels = np.array([cat_to_int[categories[i]] for i in range(len(embed_np)) if mask[i]])
+
+    # --- Silhouette Score (full-dimensional) ---
+    try:
+        from sklearn.metrics import silhouette_score
+        sil = silhouette_score(X, labels, metric='euclidean', sample_size=min(len(X), 2000))
+        results[f'{embed_name}_silhouette_score'] = float(sil)
+    except Exception as e:
+        results[f'{embed_name}_silhouette_score'] = f'error: {e}'
+
+    # --- Calinski-Harabasz Index ---
+    try:
+        from sklearn.metrics import calinski_harabasz_score
+        ch = calinski_harabasz_score(X, labels)
+        results[f'{embed_name}_calinski_harabasz'] = float(ch)
+    except Exception as e:
+        results[f'{embed_name}_calinski_harabasz'] = f'error: {e}'
+
+    # --- Inter/Intra class distance ratio (full space, all tokens) ---
+    try:
+        intra_dists = []
+        inter_dists = []
+        # Sample within and between categories for efficiency
+        rng = np.random.RandomState(42)
+        for ci, cat in enumerate(valid_cats):
+            idx_cat = np.where(labels == ci)[0]
+            if len(idx_cat) < 2:
+                continue
+            # Sample pairs within category
+            n_pairs = min(200, len(idx_cat) * (len(idx_cat) - 1) // 2)
+            for _ in range(n_pairs):
+                i, j = rng.choice(len(idx_cat), 2, replace=False)
+                intra_dists.append(np.linalg.norm(X[idx_cat[i]] - X[idx_cat[j]]))
+            # Sample pairs between this category and others
+            other_idx = np.where(labels != ci)[0]
+            n_inter = min(200, len(idx_cat) * len(other_idx))
+            for _ in range(n_inter):
+                i = rng.choice(len(idx_cat))
+                j = rng.choice(len(other_idx))
+                inter_dists.append(np.linalg.norm(X[idx_cat[i]] - X[other_idx[j]]))
+
+        if intra_dists and inter_dists:
+            mean_intra = np.mean(intra_dists)
+            mean_inter = np.mean(inter_dists)
+            results[f'{embed_name}_mean_intra_dist'] = float(mean_intra)
+            results[f'{embed_name}_mean_inter_dist'] = float(mean_inter)
+            results[f'{embed_name}_inter_intra_ratio'] = float(mean_inter / mean_intra) if mean_intra > 0 else float('inf')
+    except Exception as e:
+        results[f'{embed_name}_inter_intra_ratio'] = f'error: {e}'
+
+    # --- Per-dimension ANOVA F-test ---
+    try:
+        from scipy.stats import f_oneway
+        f_stats = []
+        p_vals = []
+        # Test each dimension: do category means differ?
+        groups_per_dim = {ci: X[labels == ci] for ci in range(len(valid_cats))}
+        n_dims_to_test = min(embed_dim, 100)  # cap for efficiency
+        dim_indices = rng.choice(embed_dim, n_dims_to_test, replace=False) if embed_dim > 100 else range(embed_dim)
+        for d in dim_indices:
+            groups = [groups_per_dim[ci][:, d] for ci in range(len(valid_cats)) if len(groups_per_dim[ci]) >= 2]
+            if len(groups) >= 2:
+                f, p = f_oneway(*groups)
+                if np.isfinite(f):
+                    f_stats.append(f)
+                    p_vals.append(max(p, 1e-300))  # floor for log
+
+        if f_stats:
+            results[f'{embed_name}_anova_mean_f'] = float(np.mean(f_stats))
+            results[f'{embed_name}_anova_median_f'] = float(np.median(f_stats))
+            # Geometric mean of p-values (more robust than arithmetic for small p)
+            results[f'{embed_name}_anova_geomean_p'] = float(np.exp(np.mean(np.log(p_vals))))
+            results[f'{embed_name}_anova_frac_significant'] = float(np.mean([p < 0.05 for p in p_vals]))
+            results[f'{embed_name}_anova_n_dims_tested'] = len(f_stats)
+    except ImportError:
+        results[f'{embed_name}_anova_mean_f'] = 'scipy not available'
+    except Exception as e:
+        results[f'{embed_name}_anova_mean_f'] = f'error: {e}'
+
+    # --- PCA variance profile ---
+    try:
+        from sklearn.decomposition import PCA as PCA_full
+        n_components = min(embed_dim, len(X), 50)
+        pca = PCA_full(n_components=n_components)
+        pca.fit(X)
+        cumvar = np.cumsum(pca.explained_variance_ratio_)
+        results[f'{embed_name}_pca_var_3comp'] = float(cumvar[min(2, len(cumvar)-1)])
+        for threshold in [0.5, 0.9, 0.95]:
+            idx = np.searchsorted(cumvar, threshold)
+            if idx < len(cumvar):
+                results[f'{embed_name}_pca_n_components_{int(threshold*100)}pct'] = int(idx + 1)
+            else:
+                results[f'{embed_name}_pca_n_components_{int(threshold*100)}pct'] = f'>{n_components}'
+        results[f'{embed_name}_pca_total_components'] = embed_dim
+    except Exception as e:
+        results[f'{embed_name}_pca_variance_profile'] = f'error: {e}'
+
+    return results
+
+
 def analyze_word_pairs(
     mu_embed: torch.Tensor,
     phi_embed: Optional[torch.Tensor] = None,
@@ -337,6 +493,13 @@ def analyze_gauge_semantics(
     pair_results = analyze_word_pairs(mu_embed, phi_embed)
     results['word_pairs'] = pair_results
 
+    # Quantitative clustering metrics (full-dimensional, not PCA)
+    mu_cluster = compute_clustering_metrics(mu_embed, n_tokens=500, embed_name='mu')
+    results['mu_clustering'] = mu_cluster
+    if phi_embed is not None:
+        phi_cluster = compute_clustering_metrics(phi_embed, n_tokens=500, embed_name='phi')
+        results['phi_clustering'] = phi_cluster
+
     if verbose:
         step_str = f" (step {step})" if step is not None else ""
         print(f"\n{'='*60}")
@@ -358,6 +521,31 @@ def analyze_gauge_semantics(
         if 'phi_semantic_ratio' in pair_results:
             print(f"\nWord Pair Analysis:")
             print(f"  phi unrelated/related ratio: {pair_results['phi_semantic_ratio']:.2f}x")
+
+        # Report quantitative clustering metrics
+        for name, metrics in [('mu', mu_cluster)] + ([('phi', results.get('phi_clustering', {}))] if phi_embed is not None else []):
+            print(f"\n  {name} Clustering Metrics (full-dimensional):")
+            sil = metrics.get(f'{name}_silhouette_score')
+            if isinstance(sil, float):
+                print(f"    Silhouette score: {sil:.3f} (range [-1,1], higher=better)")
+            ch = metrics.get(f'{name}_calinski_harabasz')
+            if isinstance(ch, float):
+                print(f"    Calinski-Harabasz: {ch:.1f}")
+            ratio = metrics.get(f'{name}_inter_intra_ratio')
+            if isinstance(ratio, float):
+                print(f"    Inter/intra distance ratio: {ratio:.3f}")
+            f_stat = metrics.get(f'{name}_anova_mean_f')
+            if isinstance(f_stat, float):
+                p_val = metrics.get(f'{name}_anova_geomean_p', 'N/A')
+                frac_sig = metrics.get(f'{name}_anova_frac_significant', 0)
+                print(f"    ANOVA mean F: {f_stat:.1f}, geomean p: {p_val:.2e}, {frac_sig*100:.0f}% dims significant")
+            pca3 = metrics.get(f'{name}_pca_var_3comp')
+            if isinstance(pca3, float):
+                n50 = metrics.get(f'{name}_pca_n_components_50pct', '?')
+                n90 = metrics.get(f'{name}_pca_n_components_90pct', '?')
+                n95 = metrics.get(f'{name}_pca_n_components_95pct', '?')
+                total = metrics.get(f'{name}_pca_total_components', '?')
+                print(f"    PCA: 3 comp = {pca3*100:.1f}% var; 50%@{n50}, 90%@{n90}, 95%@{n95} of {total} dims")
 
     # Generate plots and save CSVs
     if save_plots:
