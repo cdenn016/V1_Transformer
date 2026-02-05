@@ -1236,14 +1236,14 @@ These are the standard loss functions in machine learning. The observation term 
 
 \paragraph{Deterministic Free Energy.}
 
-In the deterministic limit, the full free energy becomes:
+In the deterministic limit with flat bundle ($\Omega_{ij} = \Omega$), the full free energy becomes:
 \begin{equation}
-\mathcal{F}[\{\mu_i\}] = \underbrace{\sum_i \frac{\lambda_p}{2}\|\mu_i - \mu_{\text{prior}}\|^2}_{\text{Prior regularization}} + \underbrace{\sum_{i,j} \frac{\beta_{ij}}{2\sigma^2}\|\mu_i - \mu_j\|^2}_{\text{Alignment coupling}} - \underbrace{\sum_i \log p(o_i \mid \mu_i)}_{\text{Observation likelihood}},
+\mathcal{F}[\{\mu_i\}] = \underbrace{\sum_i \frac{\lambda_p}{2}\|\mu_i - \mu_{\text{prior}}\|^2}_{\text{Prior regularization}} + \underbrace{\sum_{i,j} \frac{\beta_{ij}}{2\sigma^2}\|\mu_i - \Omega\mu_j\|^2}_{\text{Alignment coupling}} - \underbrace{\sum_i \log p(o_i \mid \mu_i)}_{\text{Observation likelihood}},
 \end{equation}
 where:
 \begin{itemize}
   \item \textbf{First term}: KL divergence from prior $D_{\mathrm{KL}}(\delta(\mu_i) \| \mathcal{N}(\mu_{\text{prior}}, \sigma_p^2)) \propto \|\mu_i - \mu_{\text{prior}}\|^2$ (L2 regularization)
-  \item \textbf{Second term}: Pairwise alignment energy from KL coupling
+  \item \textbf{Second term}: Pairwise alignment energy from gauge-transported KL coupling
   \item \textbf{Third term}: Negative log-likelihood (loss function)
 \end{itemize}
 
@@ -1256,10 +1256,10 @@ The gradient of the free energy with respect to $\mu_i$ is:
 \frac{\partial \mathcal{F}}{\partial \mu_i}
 &= \lambda_p \left(\mu_i - \mu_{\text{prior}}\right) \\
 &\quad + \sum_j \left[
-    \frac{\beta_{ij}}{\sigma^2}\left(\mu_i - \mu_j\right)
+    \frac{\beta_{ij}}{\sigma^2}\left(\mu_i - \Omega\mu_j\right)
     + \frac{1}{2\sigma^2}
       \frac{\partial \beta_{ij}}{\partial \mu_i}
-      \left\|\mu_i - \mu_j\right\|^2
+      \left\|\mu_i - \Omega\mu_j\right\|^2
 \right] \\
 &\quad - \frac{\partial \log p(o_i \mid \mu_i)}{\partial \mu_i}.
 \end{aligned}
@@ -1269,8 +1269,8 @@ The gradient of the free energy with respect to $\mu_i$ is:
 \textbf{Interpretation of each term:}
 \begin{enumerate}
   \item $\lambda_p(\mu_i - \mu_{\text{prior}})$: Weight decay / L2 regularization
-  \item $\sum_j \frac{\beta_{ij}}{\sigma^2}(\mu_i - \mu_j)$: Attention-weighted message aggregation (pulls $\mu_i$ toward attended neighbors)
-  \item $\sum_j \frac{\partial \beta_{ij}}{\partial \mu_i}\|\mu_i - \mu_j\|^2/(2\sigma^2)$: Gradient flow through attention weights themselves (backpropagation through softmax)
+  \item $\sum_j \frac{\beta_{ij}}{\sigma^2}(\mu_i - \Omega\mu_j)$: Attention-weighted message aggregation (pulls $\mu_i$ toward gauge-transported neighbors)
+  \item $\sum_j \frac{\partial \beta_{ij}}{\partial \mu_i}\|\mu_i - \Omega\mu_j\|^2/(2\sigma^2)$: Gradient flow through attention weights themselves (backpropagation through softmax)
   \item $-\frac{\partial \log p(o_i \mid \mu_i)}{\partial \mu_i}$: Gradient of loss function (supervised learning signal)
 \end{enumerate}
 
@@ -1288,10 +1288,10 @@ Discretizing in time yields the \textbf{update rule}:
 - \eta \Bigg[
     \lambda_p \left(\mu_i - \mu_{\text{prior}}\right)
     + \sum_j \left(
-        \frac{\beta_{ij}}{\sigma^2}\left(\mu_i - \mu_j\right)
+        \frac{\beta_{ij}}{\sigma^2}\left(\mu_i - \Omega\mu_j\right)
         + \frac{1}{2\sigma^2}
           \frac{\partial \beta_{ij}}{\partial \mu_i}
-          \left\|\mu_i - \mu_j\right\|^2
+          \left\|\mu_i - \Omega\mu_j\right\|^2
       \right) \\
 &\qquad\qquad
     - \frac{\partial \log p(o_i \mid \mu_i)}{\partial \mu_i}
