@@ -850,7 +850,7 @@ Generally model-like terms can be expected to fluctuate slowly in contrast belie
 
 This term is the expected negative log-likelihood of observations $o$ given latent states $\{k_i\}$ and models $\{m_i\}$, averaged over the recognition distributions $\{q_i\}$, grounded in sensory observations/data. Without this term, the system is a pure vacuum theory where agents converge to their coupled prior without external input. Observations break the vacuum symmetry, forcing agents to specialize based on local sensory evidence (see Results).
 
-In the limit of deterministic beliefs ($q_i \to \delta(k_i - \mu_i)$), this reduces to a quadratic machine learning loss function (shown below) and suggests machine learning training is equivalent to variational free energy inference.
+In the limit of near-deterministic beliefs (isotropic covariances $\Sigma_i = \sigma^2 I$ with $\sigma^{-2}$ absorbed into learned projections), the free energy reduces to a quadratic machine learning loss function (shown below) and suggests machine learning training is equivalent to variational free energy inference.
 
 In the absence of observations ($o = \emptyset$), the free energy is symmetric under simultaneous gauge transformation of all agents: $\phi_i \to \phi_i + \phi_0$ for any $\phi_0 \in \mathfrak{g}$. Observations break this symmetry by coupling agents to external data with fixed reference frames as we show in our results section.  This is an epistemic analog to Goldstone's theorem in classical field theory.
 \subsubsection{Multi-Timescale Dynamics}
@@ -996,26 +996,32 @@ which is the gauge-theoretic analog of the attention aggregation $\sum_j \alpha_
 
 We now impose three simplifying assumptions that connect our gauge-theoretic framework to standard neural networks.
 
-\paragraph{Limit 1: Deterministic Beliefs ($\Sigma_i \to 0$).}
+\paragraph{Limit 1: Deterministic Beliefs via Scaled Limit.}
 
 We consider a degenerate single-point base space $\mathcal{C}$ with a finite set of agents $\{1,\dots,N\}$ (tokens). There is no spatial overlap integral; all quantities are evaluated at a single site.
 
-As covariances vanish, beliefs become delta functions:
+The deterministic limit requires care. Na\"ively setting $\Sigma_i \to 0$ yields Dirac delta beliefs $q_i(k_i) \to \delta(k_i - \mu_i)$, but the KL divergence between distinct Dirac measures is infinite:
 \begin{equation}
-q_i(k_i) \to \delta(k_i - \mu_i).
+D_{\mathrm{KL}}(\delta(k - \mu_i) \| \delta(k - \mu_j)) = +\infty \quad \text{for } \mu_i \neq \mu_j.
 \end{equation}
+This divergence makes the attention weights ill-defined. The resolution is to take a \textbf{joint scaling limit} where the belief variance $\sigma^2$ remains finite but is absorbed into learned parameters.
 
-
-We assume \textbf{isotropic covariances} $\Sigma_i = \Sigma_j = \sigma^2 I$. This implies:
+We assume \textbf{isotropic covariances} $\Sigma_i = \Sigma_j = \sigma^2 I$ with $\sigma^2 > 0$. This implies:
 \begin{itemize}
   \item Log-determinant terms cancel: $\log\frac{|\Sigma_j|}{|\Sigma_i|} = 0$
   \item Trace term simplifies: $\mathrm{Tr}(\Sigma_j^{-1}\Sigma_i) = \mathrm{Tr}(I) = d$
 \end{itemize}
 
-Therefore:
+The KL divergence becomes:
 \begin{equation}
 D_{\mathrm{KL}}(q_i \| q_j) = \frac{1}{2\sigma^2}\|\mu_i - \mu_j\|^2.
 \end{equation}
+
+Crucially, we define the \textbf{rescaled KL divergence}:
+\begin{equation}
+\widetilde{D}_{\mathrm{KL}}(q_i \| q_j) := \sigma^2 \cdot D_{\mathrm{KL}}(q_i \| q_j) = \frac{1}{2}\|\mu_i - \mu_j\|^2,
+\end{equation}
+which remains finite and equals half the squared Euclidean distance between means. This rescaled quantity has a well-defined limit as $\sigma \to 0$ and is the natural information-geometric measure of dissimilarity in the deterministic regime. The ``deterministic limit'' should be understood as the regime where $\sigma$ is small compared to characteristic scales of $\mu_i$, with $\sigma^{-2}$ absorbed into learned projections (see Limit 3).
 
 With gauge transport $\Omega_{ij} \in \mathrm{GL}(d)$, the transported Gaussian $\Omega_{ij}q_j$ has mean $\Omega_{ij}\mu_j$ and covariance $\Omega_{ij}\Sigma_j\Omega_{ij}^\top = \sigma^2(\Omega_{ij}\Omega_{ij}^\top)$. The full KL divergence is:
 \begin{equation}
@@ -1034,15 +1040,11 @@ We assume a single global frame shared by all agents---a flat connection with no
 \end{equation}
 where $\Omega$ is a fixed linear map (which we will later absorb into learned projections).
 
-This corresponds to a trivial principal bundle: parallel transport between any two agents is global and path-independent. In the complete Dirac $\delta$-function limit, $\Omega \to I$ (identity), but for now we retain it to see how it enters the formulas.
+This corresponds to a trivial principal bundle: parallel transport between any two agents is global and path-independent. We retain the general $\Omega$ to see how it enters the formulas and is subsequently absorbed into learned projections.
 
 \paragraph{Limit 3: Learned Projections.}
 
-With learned query, key, and value projection matrices $W_Q, W_K, W_V \in \mathbb{R}^{d \times d_k}$, we define:
-\begin{equation}
-Q_i = \mu_i^\top W_Q, \quad K_j = \mu_j^\top W_K, \quad V_j = \mu_j^\top W_V,
-\end{equation}
-where $Q_i, K_j, V_j \in \mathbb{R}^{1 \times d_k}$ are the projected representations. These projections allow the model to learn task-specific representations from the raw agent means $\mu_i$.
+We introduce learned projection matrices $W_Q, W_K, W_V \in \mathbb{R}^{d \times d_k}$ that will absorb both the gauge transport $\Omega$ and the scaling factor $\sigma^{-2}$. The precise identification emerges from the derivation below.
 
 \subsubsection{Derivation of Dot-Product Attention}
 
@@ -1112,10 +1114,12 @@ The leading term in $\tilde{s}_{ij}$ is:
 \frac{1}{\sigma^2}\mu_i^\top \Omega \mu_j.
 \end{equation}
 
-This is precisely where the $\mathrm{GL}(K)$ gauge structure enters. We identify learned projection matrices $W_Q, W_K \in \mathbb{R}^{d \times d_k}$ such that:
+This is precisely where the $\mathrm{GL}(K)$ gauge structure enters and where the scaling limit is completed. We identify learned projection matrices $W_Q, W_K \in \mathbb{R}^{d \times d_k}$ such that:
 \begin{equation}
 W_Q W_K^\top = \frac{1}{\sigma^2} \Omega \in \mathrm{GL}(d_k).
 \end{equation}
+
+\textbf{This absorption is the key to the scaling limit}: rather than taking $\sigma \to 0$ (which would make the KL divergence infinite and the projections singular), we recognize that $\sigma^{-2}$ and $\Omega$ always appear together in the combination $\sigma^{-2}\Omega$. The learned matrices $W_Q, W_K$ parametrize this combined quantity directly, rendering $\sigma$ an implicit (finite) scale factor absorbed into the learned weights. The ``deterministic limit'' is thus achieved not by $\sigma \to 0$ in isolation, but by the network learning projections that encode the effective gauge-scaled transformation.
 
 Such a factorization always exists for any invertible $\Omega$: any matrix $M \in \mathrm{GL}(d_k)$ can be written as $M = AB^\top$ for suitable $A, B$ (e.g., via SVD: $M = U\Sigma V^\top = (U\Sigma^{1/2})(V\Sigma^{1/2})^\top$).
 
@@ -1182,7 +1186,7 @@ identical to the standard transformer attention update $z_i = \sum_j \alpha_{ij}
 
 \subsubsection{Complete Attention Formula}
 
-In summary, under the three limits (deterministic beliefs, flat bundle, learned projections), our gauge-theoretic message communication:
+In summary, under the three limits (isotropic beliefs with $\sigma^{-2}$ absorbed, flat bundle, learned projections), our gauge-theoretic message communication:
 \begin{equation}
 \beta_{ij} \propto \exp\left(-\frac{1}{\tau}D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)\right), \quad m_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j,
 \end{equation}
@@ -1324,19 +1328,19 @@ We have established the following complete correspondence between our gauge-theo
 \hline
 \textbf{FEP Framework} & \textbf{Limit/Correspondence} & \textbf{Neural Network} \\
 \hline
-$\mathcal{F}[\{q_i\}]$ & $\Sigma_i \to 0$ & Loss $\mathcal{L}(\theta)$ \\
-$q_i = \mathcal{N}(\mu_i, \Sigma_i)$ & $\Sigma_i \to 0$ & Embedding $h_i$ \\
+$\mathcal{F}[\{q_i\}]$ & Scaled limit ($\sigma^{-2}$ absorbed) & Loss $\mathcal{L}(\theta)$ \\
+$q_i = \mathcal{N}(\mu_i, \sigma^2 I)$ & $\sigma^{-2}$ absorbed into $W_Q, W_K$ & Embedding $h_i$ \\
 $\Omega_{ij} \in \mathrm{GL}(K)$ & Constant $\Omega$ & $W_Q W_K^\top$ (learned gauge) \\
 $\phi_i \in \mathfrak{gl}(K)$ & Absorbed into $W_Q, W_K$ & Implicit in projections \\
-$D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ & $\mathrm{GL}(K)$-invariant & $\frac{1}{2}\|\mu_i - \Omega\mu_j\|^2$ \\
+$\sigma^2 D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ & Rescaled KL $\to$ $\frac{1}{2}\|\cdot\|^2$ & $\frac{1}{2}\|\mu_i - \Omega\mu_j\|^2$ \\
 $\beta_{ij} \propto e^{-\mathrm{KL}/\tau}$ & Exact correspondence & $\mathrm{softmax}(QK^\top/\sqrt{d_k})$ \\
-$-\mathbb{E}_q[\log p(o \mid k)]$ & $\Sigma_i \to 0$ & Cross-entropy loss \\
+$-\mathbb{E}_q[\log p(o \mid k)]$ & Expectation $\to$ point eval & Cross-entropy loss \\
 $\frac{d\mu}{dt} = -\eta \nabla \mathcal{F}$ & Euclidean limit & Backpropagation \\
 Vacuum (no observations) & --- & Untrained network \\
 Symmetry breaking & --- & Training/learning \\
 \hline
 \end{tabular}
-\caption{Complete correspondence between gauge-equivariant FEP and neural networks. The crucial insight is that transformers possess $\mathrm{GL}(K)$ gauge structure through learned projections $W_Q, W_K$.}
+\caption{Complete correspondence between gauge-equivariant FEP and neural networks. The crucial insight is that transformers possess $\mathrm{GL}(K)$ gauge structure through learned projections $W_Q, W_K$. The ``deterministic limit'' is achieved via a scaling limit where $\sigma^{-2}$ is absorbed into learned parameters, not by taking $\sigma \to 0$ directly.}
 \label{tab:fep_nn_correspondence}
 \end{table}
 
@@ -1358,7 +1362,7 @@ This exact correspondence, strengthened by the $\mathrm{GL}(K)$ invariance theor
 
 \paragraph{Main Result.}
 
-Under the successive limits---(i) deterministic beliefs ($\Sigma_i \to 0$), (ii) constant gauge ($\Omega_{ij} = \Omega$ for all pairs), and (iii) learned gauge via projections ($\Omega = W_Q W_K^\top \in \mathrm{GL}(d_k)$)---variational gradient descent on the gauge-equivariant free energy:
+Under the successive limits---(i) isotropic beliefs with $\sigma^{-2}$ absorbed into learned projections, (ii) constant gauge ($\Omega_{ij} = \Omega$ for all pairs), and (iii) learned gauge via projections ($\sigma^{-2}\Omega = W_Q W_K^\top \in \mathrm{GL}(d_k)$)---variational gradient descent on the gauge-equivariant free energy:
 \begin{equation}
 \theta_{k+1} = \theta_k - \eta \nabla_\theta \mathcal{F}(\theta_k)
 \end{equation}
@@ -1691,7 +1695,7 @@ The per-layer correlation structure suggests that deeper layers (8-11) exhibit h
 
 Our validation tested the flat bundle limit where all frames are globally aligned and the connection is trivial. This is appropriate for comparison with standard transformers, which lack explicit gauge structure. However, the full power of the geometric framework lies in handling non-trivial bundles with curvature. Future work should explore whether introducing learned gauge transformations $\Omega_{ij}(c)$ can improve upon standard attention in certain tasks.
 
-Our current comparison focused on the Dirac limit where uncertainty covariances collapse to zero. The full gauge theory incorporates non-trivial covariance matrices $\Sigma_i(c)$ that encode uncertainty about agent beliefs, corresponding to "fuzzy" vector embeddings in unique token/agent frames. Testing this framework against transformers with explicit uncertainty estimation (e.g., Bayesian neural networks, ensemble methods) represents an important future direction.
+Our current comparison focused on the scaled isotropic limit where uncertainty covariances $\Sigma_i = \sigma^2 I$ are absorbed into learned projections. The full gauge theory incorporates non-trivial covariance matrices $\Sigma_i(c)$ that encode uncertainty about agent beliefs, corresponding to ``fuzzy'' vector embeddings in unique token/agent frames. Testing this framework against transformers with explicit uncertainty estimation (e.g., Bayesian neural networks, ensemble methods) represents an important future direction.
 
 In Section 4.9, we developed the interpretation of multi-head attention as implementing irreducible representations of the gauge group. However, standard transformers use uniform head dimensions ($d_{\text{head}} = d/H$) rather than the geometrically natural dimensions dictated by irrep structure (e.g., $2\ell + 1$ for SO(3) irreps $\ell$). An intriguing question is whether transformers with non-uniform head dimensions matching irrep sizes could achieve better performance or sample efficiency on tasks with known symmetries.
 
