@@ -2232,16 +2232,40 @@ class IrrepMultiHeadAttention(nn.Module):
         total_dim = 0
 
         # =================================================================
-        # GL(K) MODE: Override irrep_spec - single head with full generators
+        # GL(K) MODE: Single-head or multi-head GL(K) attention
         # =================================================================
-        # GL(K) has no natural irrep decomposition. The entire K-dim space
-        # transforms as one representation under GL(K). We use a single "head"
-        # with the full K² generators.
+        # GL(K) has no natural irrep decomposition like SO(K). However, we can
+        # still use multi-head attention via block-diagonal structure:
+        #   GL(d_head)^H ⊂ GL(K)
+        # where d_head = K/H and each head has its own GL(d_head) gauge.
+        #
+        # Determine number of GL(K) heads from irrep_spec:
+        #   - [('fund', H, d_head)] → H heads of dimension d_head
+        #   - [('full', 1, K)] → single head (original behavior)
         if gauge_group == 'GLK':
-            self.irrep_dims = [embed_dim]  # Single head spanning full space
-            self.irrep_labels = ['full']
-            total_dim = embed_dim
-            print(f"[GL(K) mode] Single-head attention: dim={embed_dim}, generators={embed_dim}²={embed_dim**2}")
+            # Check if multi-head is requested via irrep_spec
+            if len(irrep_spec) == 1 and irrep_spec[0][0] == 'full':
+                # Single-head GL(K): original behavior
+                self.irrep_dims = [embed_dim]
+                self.irrep_labels = ['full']
+                total_dim = embed_dim
+                self.glk_multihead = False
+                print(f"[GL(K) mode] Single-head attention: dim={embed_dim}, generators={embed_dim}²={embed_dim**2}")
+            else:
+                # Multi-head GL(K): block-diagonal structure
+                # Parse irrep_spec as [(label, n_heads, d_head)]
+                label, n_heads, d_head = irrep_spec[0]
+                if n_heads * d_head != embed_dim:
+                    raise ValueError(
+                        f"GL(K) multi-head: n_heads({n_heads}) × d_head({d_head}) = {n_heads * d_head} "
+                        f"must equal embed_dim={embed_dim}"
+                    )
+                self.irrep_dims = [d_head] * n_heads
+                self.irrep_labels = [f'glk_head_{h}' for h in range(n_heads)]
+                total_dim = embed_dim
+                self.glk_multihead = True
+                self.glk_d_head = d_head
+                print(f"[GL(K) multi-head] {n_heads} heads × GL({d_head}), generators per head={d_head}²={d_head**2}")
         else:
             # SO(3) / SO(N) mode: Use irrep decomposition
             for label, multiplicity, dim in irrep_spec:
@@ -2304,17 +2328,30 @@ class IrrepMultiHeadAttention(nn.Module):
                         f"For even dimensions, use gauge_group='SON' with appropriate gauge_dim."
                     )
             elif gauge_group == 'GLK':
-                # GL(K) mode: Full generators act on entire space
-                # GL(K) has no natural irrep decomposition - entire space is one irrep
-                # With single-head setup (dim = embed_dim), use full generators
+                # GL(K) mode: Single-head or multi-head
                 if global_generators is None:
                     raise ValueError(
                         f"GL(K) mode requires global_generators to be provided."
                     )
-                # Use the full K² generators - they're K×K matrices
-                # Single head means dim == embed_dim, so we use the full generators
-                gen = global_generators.clone()  # (K², K, K)
-                # gen shape: (n_gen, K, K) where n_gen = K²
+
+                if hasattr(self, 'glk_multihead') and self.glk_multihead:
+                    # Multi-head GL(K): Extract this head's block from block-diagonal generators
+                    # global_generators shape: (n_heads * d_head², K, K)
+                    # Each head gets d_head² generators acting on its d_head-dim subspace
+                    d_head = self.glk_d_head
+                    n_gen_per_head = d_head * d_head
+                    gen_start = head_idx * n_gen_per_head
+                    gen_end = (head_idx + 1) * n_gen_per_head
+
+                    # Extract generators for this head, but only the relevant block
+                    # global_generators[gen_start:gen_end] are K×K but only act on [cum_dim:cum_dim+d_head]
+                    gen_full = global_generators[gen_start:gen_end]  # (d_head², K, K)
+
+                    # Extract just the d_head×d_head block that this head acts on
+                    gen = gen_full[:, cum_dim:cum_dim+dim, cum_dim:cum_dim+dim].clone()  # (d_head², d_head, d_head)
+                else:
+                    # Single-head GL(K): Use full K² generators on entire space
+                    gen = global_generators.clone()  # (K², K, K)
             else:
                 # SO(N) mode: Extract block from global generators
                 if global_generators is None:

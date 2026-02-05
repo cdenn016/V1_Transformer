@@ -51,6 +51,7 @@ try:
         generate_multi_irrep_generators,
         generate_multi_irrep_soN_generators,
         generate_glK_generators,
+        generate_glK_multihead_generators,
     )
     GENERATORS_AVAILABLE = True
 except ImportError:
@@ -235,9 +236,27 @@ class GaugeTransformerLM(nn.Module):
                 else:
                     generators = generate_so3_generators(embed_dim)
             elif gauge_group == 'GLK':
-                # GL(K) with full K² generators
-                generators = generate_glK_generators(embed_dim)
-                print(f"[INFO] GL(K) gauge group: {embed_dim}² = {embed_dim**2} generators")
+                # GL(K): Check if multi-head requested via irrep_spec
+                # Multi-head: irrep_spec = [('fund', n_heads, d_head)] where n_heads * d_head = embed_dim
+                # Single-head: irrep_spec = [('full', 1, embed_dim)] or no special format
+                is_multihead = (
+                    use_multi_irrep and
+                    irrep_spec is not None and
+                    len(irrep_spec) == 1 and
+                    irrep_spec[0][0] != 'full' and
+                    irrep_spec[0][1] > 1  # n_heads > 1
+                )
+
+                if is_multihead:
+                    # Multi-head GL(K): block-diagonal generators
+                    _, n_heads, d_head = irrep_spec[0]
+                    generators = generate_glK_multihead_generators(embed_dim, n_heads)
+                    print(f"[INFO] GL(K) multi-head: {n_heads} heads × GL({d_head}), "
+                          f"{n_heads * d_head**2} generators (vs {embed_dim**2} single-head)")
+                else:
+                    # Single-head GL(K): full K² generators
+                    generators = generate_glK_generators(embed_dim)
+                    print(f"[INFO] GL(K) single-head: {embed_dim}² = {embed_dim**2} generators")
             else:  # SO(N)
                 if use_multi_irrep and irrep_spec is not None:
                     generators = generate_multi_irrep_soN_generators(irrep_spec, gauge_dim)
