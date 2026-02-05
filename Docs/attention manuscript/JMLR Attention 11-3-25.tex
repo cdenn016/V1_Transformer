@@ -1783,6 +1783,31 @@ q_i(t=0) = p_{\text{token}(i)},
 \end{equation}
 where $\text{token}(i)$ denotes the token type at position $i$. Thus $\mu_i(0) = \mu_p^{\text{token}(i)}$ and $\Sigma_i(0) = \Sigma_p^{\text{token}(i)}$. All instances of the same token begin with identical beliefs regardless of position; context-dependent representations emerge through belief evolution during the E-step.
 
+\subsubsection{Emergent Semantic Structure}
+
+A striking finding is that both the learned belief embeddings $\mu$ and gauge frames $\phi$ develop interpretable semantic structure without explicit supervision. Figure~\ref{fig:gl30_semantic} shows PCA projections of the learned representations, with tokens colored by linguistic category (letter, digit, punctuation, function word, content word).
+
+\begin{figure*}[t]
+  \centering
+  \begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{gl30_belief_clustering.png}
+    \caption{Belief embeddings $\mu \in \mathbb{R}^{30}$}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{gl30_gauge_frame_clustering.png}
+    \caption{Gauge frames $\phi \in \mathfrak{gl}(30) \cong \mathbb{R}^{900}$}
+  \end{subfigure}
+  \caption{Emergent semantic organization in learned $\mathrm{GL}(30)$ representations. \textbf{(a)} PCA of belief means $\mu$ shows punctuation tokens (green) spreading along principal components while content words (orange) and letters (red) form tighter clusters. \textbf{(b)} PCA of gauge frame coefficients $\phi$ reveals clear separation between linguistic categories: punctuation clusters distinctly from content words and letters. This structure emerges purely from the language modeling objective---no category labels are provided during training.}
+  \label{fig:gl30_semantic}
+\end{figure*}
+
+\paragraph{Belief Embeddings.} The learned belief means $\mu \in \mathbb{R}^{30}$ show that punctuation tokens spread along the principal components while content words form a tighter central cluster. The first three principal components capture approximately 49\% of the variance, indicating moderate but interpretable low-dimensional structure.
+
+\paragraph{Gauge Frames.} More remarkably, the gauge frame coefficients $\phi \in \mathfrak{gl}(30) \cong \mathbb{R}^{900}$ exhibit clear categorical separation. Punctuation tokens (green) cluster distinctly from content words (orange), with letters (red) forming a separate region. This organization emerges in a 900-dimensional space purely from the language modeling objective---the model was never told about linguistic categories.
+
+This finding has important implications. The gauge frames $\phi$ parameterize the transport operators $\Omega = \exp(\phi)$ that mediate inter-token communication. The emergent categorical structure suggests that the model learns \emph{linguistically meaningful} transport---tokens of similar type communicate through similar geometric transformations. This provides evidence for the ``transport geometry over attention weighting'' hypothesis: the semantic content of attention is encoded not in which tokens attend to which, but in \emph{how} information is geometrically transformed during communication.
+
 These results demonstrate that the gauge-theoretic framework scales to production language modeling tasks, with the theoretical constructs ($\mu$, $\Sigma$, $\phi$, KL-attention) functioning as intended during actual training.
 
 
