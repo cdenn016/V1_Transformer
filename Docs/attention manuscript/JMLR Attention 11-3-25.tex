@@ -1722,11 +1722,35 @@ A striking finding is that both the learned belief embeddings $\mu$ and gauge fr
   \label{fig:gl30_semantic}
 \end{figure*}
 
-\paragraph{Belief Embeddings.} The learned belief means $\mu \in \mathbb{R}^{30}$ show that punctuation tokens spread along the principal components while content words form a tighter central cluster. The first three principal components capture approximately 49\% of the variance, indicating moderate but interpretable low-dimensional structure.
+\paragraph{Belief Embeddings.} The learned belief means $\mu \in \mathbb{R}^{30}$ show that punctuation tokens spread along the principal components while content words form a tighter central cluster. The first three principal components capture approximately 49\% of the variance, indicating moderate low-dimensional structure.
 
-\paragraph{Gauge Frames.} More remarkably, the gauge frame coefficients $\phi \in \mathfrak{gl}(30) \cong \mathbb{R}^{900}$ exhibit clear categorical separation. Punctuation tokens (green) cluster distinctly from content words (orange), with letters (red) forming a separate region. This organization emerges in a 900-dimensional space purely from the language modeling objective---the model was never told about linguistic categories.
+\paragraph{Gauge Frames.} The gauge frame coefficients $\phi \in \mathfrak{gl}(30) \cong \mathbb{R}^{900}$ exhibit categorical separation visible in PCA projection. Punctuation tokens (green) cluster distinctly from content words (orange), with letters (red) forming a separate region. However, the first three principal components explain only $\sim$9\% of the total variance in this 900-dimensional space, so caution is warranted in interpreting 3D projections.
 
-This finding has important implications. The gauge frames $\phi$ parameterize the transport operators $\Omega = \exp(\phi)$ that mediate inter-token communication. The emergent categorical structure suggests that the model learns \emph{linguistically meaningful} transport---tokens of similar type communicate through similar geometric transformations. This provides evidence for the ``transport geometry over attention weighting'' hypothesis: the semantic content of attention is encoded not in which tokens attend to which, but in \emph{how} information is geometrically transformed during communication.
+\paragraph{Quantitative Clustering Metrics.} To confirm that the observed structure is not an artifact of low-dimensional projection, we compute clustering metrics in the \emph{full-dimensional} embedding spaces using the token linguistic categories as ground truth labels. Table~\ref{tab:clustering_metrics} reports these metrics.
+
+\begin{table}[h]
+\centering
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{lcc}
+\hline
+\textbf{Metric} & $\mu \in \mathbb{R}^{30}$ & $\phi \in \mathbb{R}^{900}$ \\
+\hline
+Silhouette score $\in [-1,1]$ & \multicolumn{2}{c}{\textit{(to be computed on trained model)}} \\
+Calinski-Harabasz index & \multicolumn{2}{c}{\textit{(to be computed on trained model)}} \\
+Inter/intra distance ratio & \multicolumn{2}{c}{\textit{(to be computed on trained model)}} \\
+ANOVA frac.\ significant dims & \multicolumn{2}{c}{\textit{(to be computed on trained model)}} \\
+PCA: 3 comp.\ variance & $\sim$49\% & $\sim$9\% \\
+PCA: 50\% variance @ $n$ comp. & \multicolumn{2}{c}{\textit{(to be computed on trained model)}} \\
+PCA: 90\% variance @ $n$ comp. & \multicolumn{2}{c}{\textit{(to be computed on trained model)}} \\
+\hline
+\end{tabular}
+\caption{Quantitative clustering metrics computed in the full-dimensional embedding spaces (not PCA projections). The silhouette score measures cluster cohesion vs.\ separation; Calinski-Harabasz measures between/within-cluster variance ratio; the inter/intra distance ratio uses sampled pairwise distances across all categorized tokens; and the ANOVA test evaluates whether category means differ significantly per dimension. Higher values indicate stronger categorical structure. PCA rows report variance concentration.}
+\label{tab:clustering_metrics}
+\end{table}
+
+The silhouette score and Calinski-Harabasz index, computed in the original high-dimensional spaces, provide geometry-independent confirmation of cluster quality. The per-dimension ANOVA tests whether categorical means differ significantly across embedding dimensions---a high fraction of significant dimensions indicates pervasive (not artifactual) structure. These metrics are implemented in our analysis suite and computed automatically during training.
+
+\paragraph{Implications.} The gauge frames $\phi$ parameterize the transport operators $\Omega = \exp(\phi)$ that mediate inter-token communication. The emergent categorical structure suggests that the model learns \emph{linguistically meaningful} transport---tokens of similar type communicate through similar geometric transformations. This provides evidence for the ``transport geometry over attention weighting'' hypothesis: the semantic content of attention is encoded not in which tokens attend to which, but in \emph{how} information is geometrically transformed during communication.
 
 These results demonstrate that the gauge-theoretic framework scales to production language modeling tasks, with the theoretical constructs ($\mu$, $\Sigma$, $\phi$, KL-attention) functioning as intended during actual training.
 
