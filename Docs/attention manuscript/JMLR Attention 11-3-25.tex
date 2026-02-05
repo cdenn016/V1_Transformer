@@ -41,9 +41,9 @@ Degenerate Limits of the Variational Free Energy Principle}
 
 \ShortHeadings{Attention and Transformers as Free Energy}{Dennis}
 \begin{abstract}
-We derive attention, softmax, the $1/\sqrt{d_k}$ scaling, layer normalization, and backpropagation from a single variational principle---the minimization of a gauge-covariant free energy over communicating agents on a statistical fiber bundle. Each agent is modeled as a local section of an associated bundle with statistical manifold fiber over a base manifold, and inter-agent communication arises through gauge-connection parallel transport. The resulting generalized attention weights reduce, in the deterministic constant-gauge limit, exactly to the canonical transformer rule $\beta_{ij} \propto \operatorname{softmax}(Q_i K_j^\top / \sqrt{d_k})$, revealing standard transformer design choices as principled consequences of variational geometry rather than ad hoc engineering.
+We derive attention, softmax, the $1/\sqrt{d_k}$ scaling, layer normalization, non-linear activation, and backpropagation from a single variational principle: the minimization of a gauge-covariant free energy over communicating agents on a statistical fiber bundle. Each agent is modeled as a local section of an associated bundle with statistical manifold fiber over a base manifold, and inter-agent communication arises through gauge-connection parallel transport. The resulting generalized attention weights reduce, in the deterministic constant-gauge limit, exactly to the canonical transformer rule $\beta_{ij} \propto \operatorname{softmax}(Q_i K_j^\top / \sqrt{d_k})$, revealing standard transformer design choices as principled consequences of variational geometry rather than ad hoc engineering.
 
-To test whether this geometric structure alone suffices for language modeling, we implement a $\mathrm{GL}(30)$ gauge transformer that contains \emph{no} MLPs, activation functions, learned attention projections ($W_Q$, $W_K$, $W_V$), or positional encodings. Trained on WikiText-103 (vocabulary 50{,}257), this architecture achieves $370\times$ improvement over random chance using only KL divergences, gauge transport via $\Omega = \exp(\phi)$, and natural gradient descent on the Fisher--Rao manifold. The learned gauge frames develop emergent semantic structure, with tokens clustering by linguistic category in both belief and transport spaces.
+To test whether this geometric structure alone suffices for language modeling, we implement a $\mathrm{GL}(30)$ gauge transformer that contains no MLPs, activation functions, learned attention projections ($W_Q$, $W_K$, $W_V$), or positional encodings. Trained on WikiText-103 (vocabulary 50{,}257), this architecture achieves $370\times$ improvement over random chance using only KL divergences, gauge transport, and natural gradient descent on the Fisher-Rao manifold. The learned gauge frames develop emergent semantic structure, with tokens clustering by linguistic category in both belief and gauge spaces.
 
 The $\mathrm{GL}(K)$ invariance of $f$-divergences implies that the learned projection matrices $W_Q, W_K$ in standard transformers are themselves gauge transformations, with $\Omega = W_Q W_K^\top$ serving as a learned gauge transport. Standard transformers thus already implement gauge-theoretic attention with the geometric structure absorbed into learned parameters. In the absence of observations, the free energy defines a gauge-symmetric vacuum in which all agents converge to identical beliefs modulo gauge orbit; observations break this symmetry, providing a geometric interpretation of learning as spontaneous symmetry breaking.
 \end{abstract}
@@ -413,9 +413,9 @@ The $\mathrm{GL}(K)$ invariance reveals that the attention mechanism respects a 
 \textbf{Symbol} & \textbf{Description} & \textbf{Type/Dimension} \\
 \hline
 \multicolumn{3}{l}{\textit{Fiber Bundle Structure}} \\
-$\mathcal{C}$ & Base manifold (spatial domain) & Manifold \\
-$\mathcal{B}_q$ & Belief fiber at agent $i$ & $\mathbb{R}^{K_q}$ \\
-$\mathcal{B}_p$ & Model fiber at agent $i$ & $\mathbb{R}^{K_p}$ \\
+$\mathcal{M}$ & Base manifold (spatial domain) & Manifold \\
+$Q_i$ & Belief fiber at agent $i$ & $\mathbb{R}^{K_q}$ \\
+$P_i$ & Model fiber at agent $i$ & $\mathbb{R}^{K_p}$ \\
 $G$ & Gauge group & $\mathrm{GL}(K)$ \\
 $\mathfrak{g}$ & Lie algebra of $G$ & $\mathfrak{gl}(K)$ \\
 \\
@@ -432,7 +432,7 @@ $\tilde{\Phi}_i$ & Morphism $P_i \to Q_i$ & $\mathbb{R}^{K_q\times K_p}$ \\
 \\
 \multicolumn{3}{l}{\textit{Statistical Parameters}} \\
 $q_i(k_i)$ & Belief distribution & $\mathcal{N}(\mu_{q,i},\Sigma_{q,i})$ \\
-$p_i(k_i)$ & Prior distribution & $\mathcal{N}(\mu_{p,i},\Sigma_{p,i})$ \\
+$p_i(k_i)$ & Model distribution & $\mathcal{N}(\mu_{p,i},\Sigma_{p,i})$ \\
 $\mu_{q,i},\mu_{p,i}$ & Mean vectors & $\mathbb{R}^{K_q},\mathbb{R}^{K_p}$ \\
 $\Sigma_{q,i},\Sigma_{p,i}$ & Covariance matrices & $\mathbb{R}^{K\times K},\succ0$ \\
 \\
@@ -1109,7 +1109,7 @@ This is precisely where the $\mathrm{GL}(K)$ gauge structure enters and where th
 W_Q W_K^\top = \frac{1}{\sigma^2} \Omega \in \mathrm{GL}(d_k).
 \end{equation}
 
-\textbf{This absorption is crucial to the scaling limit}: rather than taking $\sigma \to 0$ (which would make the KL divergence infinite and the projections singular), we recognize that $\sigma^{-2}$ and $\Omega$ always appear together in the combination $\sigma^{-2}\Omega$. The learned matrices $W_Q, W_K$ parametrize this combined quantity directly, rendering $\sigma$ an implicit (finite) scale factor absorbed into the learned weights. The ``deterministic limit'' is thus achieved not by $\sigma \to 0$ in isolation, but by the network learning projections that encode the effective gauge-scaled transformation.
+\textbf{This absorption is the key to the scaling limit}: rather than taking $\sigma \to 0$ (which would make the KL divergence infinite and the projections singular), we recognize that $\sigma^{-2}$ and $\Omega$ always appear together in the combination $\sigma^{-2}\Omega$. The learned matrices $W_Q, W_K$ parametrize this combined quantity directly, rendering $\sigma$ an implicit (finite) scale factor absorbed into the learned weights. The ``deterministic limit'' is thus achieved not by $\sigma \to 0$ in isolation, but by the network learning projections that encode the effective gauge-scaled transformation.
 
 Such a factorization always exists for any invertible $\Omega$: any matrix $M \in \mathrm{GL}(d_k)$ can be written as $M = AB^\top$ for suitable $A, B$ (e.g., via SVD: $M = U\Sigma V^\top = (U\Sigma^{1/2})(V\Sigma^{1/2})^\top$).
 
@@ -1393,13 +1393,10 @@ a $(H \cdot d_{\text{head}}^2)$-dimensional subgroup of the $d_k^2$-dimensional 
 The Lie algebra $\mathfrak{gl}(d_k)$ has dimension $d_k^2$, with generators spanning all $d_k \times d_k$ matrices. The block-diagonal restriction to $\mathfrak{gl}(d_{\text{head}})^H$ projects out all off-diagonal blocks, retaining only $H \cdot d_{\text{head}}^2$ generators.
 
 Each head's Lie algebra $\mathfrak{gl}(d_{\text{head}})$ decomposes as:
-
 \begin{equation}
 \mathfrak{gl}(d_{\text{head}}) = \mathfrak{sl}(d_{\text{head}}) \oplus \mathbb{R},
 \end{equation}
-
 where $\mathfrak{sl}(d_{\text{head}})$ consists of traceless matrices (volume-preserving transformations) and $\mathbb{R}$ is the trace (overall scaling). This means each head independently controls:
-
 \begin{itemize}
   \item \textbf{Scaling}: Overall magnitude of attention in that subspace
   \item \textbf{Shearing/Rotation}: How different dimensions within the head interact
@@ -1415,9 +1412,9 @@ This suggests design principles for geometrically-aware transformers: non-unifor
 
 In summary, multi-head attention implements a block-diagonal restriction of $\mathrm{GL}(d_k)$ to $\mathrm{GL}(d_{\text{head}})^H$, revealing it as a general mechanism for decomposing the embedding space into geometrically coherent subspaces.
 
-We have shown that the machine learning attention mechanism and backpropagation have a natural explanation as the limit of natural gradient descent on our gauge-equivariant free energy principle. The information-geometric structure of this framework (natural gradients on statistical manifolds) offers theoretical convergence advantages over Euclidean gradient descent, though realizing these advantages in practice requires careful implementation and empirical validation.
+We have shown that the machine learning attention mechanism and backpropagation have a natural explanation as the limit of natural gradient descent on our gauge-equivariant free energy principle. The information-geometric structure of this framework---natural gradients on statistical manifolds---offers theoretical convergence advantages over Euclidean gradient descent, though realizing these advantages in practice requires careful implementation and empirical validation.
 
-
+% Refactored manuscript sections with redundancies removed
 
 \section{Simulations and Empirical Validation}
 
