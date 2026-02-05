@@ -1797,6 +1797,21 @@ By leveraging gauge theory coupled with informational geometry, we introduce geo
 
 Standard attention transformers can be described as a 0-dimensional gauge theory in which all geometric structure is absorbed into learned parameters. This suggests a potentially powerful construction: $N$-dimensional fields of transformers coupled by induced gauge fields. The richness of differential geometry and information theory allows multiple lines of pursuit.
 
+\subsection{Toward Language as a Dynamical Information System}
+
+The present work models language as a \emph{static} informational system: next-token prediction from a fixed model captures the statistical snapshot of a language at a moment in time. But language is fundamentally \emph{dynamic}---meanings drift, speakers adapt to listeners in real-time, and context reshapes interpretation on the fly. Our framework already contains the mathematical structure for this richer setting.
+
+The full variational free energy (Section~3.4) includes both the fast belief subsystem $\mathcal{F}_{\text{fast}}$ (Eq.~\ref{eq:fast_subsystem}) and the slow model subsystem $\mathcal{F}_{\text{slow}}$ (Eq.~\ref{eq:slow_subsystem}), with timescale separation $\eta_s \ll \eta_q$. Standard transformer training operates entirely within this separation: the forward pass (attention, belief updating) corresponds to fast-variable dynamics, while gradient descent on weights corresponds to slow-variable learning. Current transformers are thus the \emph{adiabatic limit} of the full VFE---the slow variables are frozen during inference, and only updated between forward passes via backpropagation.
+
+The full VFE, however, prescribes coupled dynamics at both timescales simultaneously. The model-model alignment term $\gamma_{ij} D_{\mathrm{KL}}(s_i \| \tilde{\Omega}_{ij} s_j)$ drives agents toward consensus not just on what the world state is (beliefs), but on \emph{how the world works} (models). Combined with hierarchical priors (Eq.~\ref{eq:hierarchical_prior}) that couple beliefs to model uncertainty, this yields a system where:
+\begin{itemize}
+  \item Fast dynamics ($q_i$): In-context belief updating---what current transformers implement as attention and residual stream processing.
+  \item Slow dynamics ($s_i$): Online model adaptation---analogous to in-context learning, meta-learning, or continual adaptation, but arising from the same variational principle rather than requiring separate mechanisms.
+  \item Cross-scale coupling: The hierarchical prior $p_i(k_i) = \int p_i(k_i \mid m_i) s_i(m_i) \mathrm{d}m_i$ ensures that model uncertainty propagates into belief uncertainty, so agents that are uncertain about world structure express appropriately broader beliefs.
+\end{itemize}
+
+This suggests a concrete research program: implementing the full VFE with both fast and slow subsystems active during inference would yield a model that treats language not as a static distribution to be memorized but as a dynamical information system to be tracked. The timescale separation naturally handles the distinction between within-context processing (fast) and cross-context adaptation (slow), without requiring separate architectural mechanisms for in-context learning, fine-tuning, or continual learning---these would all be limits of the same underlying variational dynamics.
+
 Most importantly, our work shows that attention can be understood as a consequence of agents minimizing a well-defined local variational free energy. The gauge-equivariant attention mechanism arises as an information aggregation strategy within this framework. Whether attention is a universal feature of multi-agent inference systems under geometric constraints---with implications beyond artificial neural networks to biological cognition and collective intelligence---remains a speculative but intriguing hypothesis that our framework makes mathematically precise and empirically testable.
 
 
