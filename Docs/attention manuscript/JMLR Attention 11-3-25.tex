@@ -41,7 +41,7 @@ Degenerate Limits of the Variational Free Energy Principle}
 
 \ShortHeadings{Attention and Transformers as Free Energy}{Dennis}
 \begin{abstract}
-We present a unified gauge-theoretic formulation of attention and message communication in multi-agent Bayesian systems performing variational inference. Each agent is modeled as a smooth local section of an associated bundle with statistical manifold fiber over a noumenal base manifold $\mathcal{C}$. A central theoretical contribution is the proof that KL divergence---and all $f$-divergences---are invariant under the full general linear group $\mathrm{GL}(K)$, not merely orthogonal subgroups. This $\mathrm{GL}(K)$ gauge invariance has profound implications: the learned projection matrices $W_Q, W_K$ in standard transformers are themselves gauge transformations, with $\Omega = W_Q W_K^\top \in \mathrm{GL}(d_k)$ serving as a learned, constant gauge transport. We demonstrate that in the deterministic, constant-gauge limit the generalized attention weights reduce exactly to the canonical transformer rule $\beta_{ij} \propto \softmax(Q_i K_j^\top)$, and backpropagation emerges as gradient descent on the free energy---discarding the natural gradient structure that provides faster convergence. Starting from a generative model of inter-agent message exchange, we derive a generalized variational free-energy functional whose stationary points govern agent dynamics. In the absence of observations, this functional defines a gauge-symmetric vacuum theory in which all agents converge to identical beliefs modulo gauge orbit; introducing observations breaks this symmetry, leading to agent specialization. We validate our framework through simulations of $N=8$ agents with 9-dimensional Gaussian beliefs under $\mathrm{SO}(3)$ gauge transformations, demonstrating convergence to symmetric vacuum states and symmetry breaking under observation/training. The $\mathrm{GL}(K)$ invariance theorem explains why transformers can learn arbitrary attention patterns and suggests that standard deep learning architectures already implement gauge-theoretic inference with gauge structure absorbed into learned parameters.
+We present a unified gauge-theoretic formulation of attention and message communication in multi-agent Bayesian systems performing variational inference. Each agent is modeled as a smooth local section of an associated bundle with statistical manifold fiber over a noumenal base manifold $\mathcal{C}$. A central interpretive insight follows from the well-known invariance of KL divergence---and all $f$-divergences---under the full general linear group $\mathrm{GL}(K)$: the learned projection matrices $W_Q, W_K$ in standard transformers are themselves gauge transformations, with $\Omega = W_Q W_K^\top \in \mathrm{GL}(d_k)$ serving as a learned, constant gauge transport. We demonstrate that in the deterministic, constant-gauge limit the generalized attention weights reduce exactly to the canonical transformer rule $\beta_{ij} \propto \softmax(Q_i K_j^\top)$, and backpropagation emerges as gradient descent on the free energy---discarding the natural gradient structure that provides faster convergence. Starting from a generative model of inter-agent message exchange, we derive a generalized variational free-energy functional whose stationary points govern agent dynamics. In the absence of observations, this functional defines a gauge-symmetric vacuum theory in which all agents converge to identical beliefs modulo gauge orbit; introducing observations breaks this symmetry, leading to agent specialization. We validate our framework through simulations of $N=8$ agents with 9-dimensional Gaussian beliefs under $\mathrm{SO}(3)$ gauge transformations, demonstrating convergence to symmetric vacuum states and symmetry breaking under observation/training. The $\mathrm{GL}(K)$ invariance explains why transformers can learn arbitrary attention patterns and suggests that standard deep learning architectures already implement gauge-theoretic inference with gauge structure absorbed into learned parameters.
 \end{abstract}
 
 \noindent\textbf{Keywords:} gauge theory, free energy principle, transformer attention, variational inference, information geometry, natural gradient, symmetry breaking, multi-agent systems, $\mathrm{GL}(K)$ invariance
@@ -340,10 +340,10 @@ where for Gaussian beliefs:
 
 This divergence forms the basis of our attention mechanism.
 
-\subsubsection{Fundamental Theorem: $\mathrm{GL}(K)$ Gauge Invariance of KL Divergence}
+\subsubsection{$\mathrm{GL}(K)$ Gauge Invariance of KL Divergence}
 \label{sec:glk_invariance}
 
-A crucial observation underlying our entire framework is that the Kullback-Leibler divergence possesses a maximal gauge symmetry: it is invariant under the full general linear group $\mathrm{GL}(K)$.
+A crucial observation underlying our framework is that the Kullback-Leibler divergence possesses a maximal gauge symmetry: it is invariant under the full general linear group $\mathrm{GL}(K)$, not merely orthogonal subgroups. This is a standard result in information geometry (see, e.g., \citet{amari2016information}), but its implications for transformer attention have not been previously recognized. We state it here for completeness.
 
 \begin{theorem}[$\mathrm{GL}(K)$ Gauge Invariance]
 \label{thm:glk_invariance}
@@ -382,7 +382,7 @@ Under the pushforward $\Omega_* P = \mathcal{N}(\Omega\mu_P, \Omega\Sigma_P\Omeg
 The $(\det\Omega)^2$ factors cancel identically. Since all three components are invariant, $D_{\mathrm{KL}}(\Omega_* P \| \Omega_* Q) = D_{\mathrm{KL}}(P \| Q)$.
 \end{proof}
 
-This theorem has profound implications for our framework:
+This invariance has several important implications for our framework:
 
 \begin{enumerate}
 \item \textbf{Maximal gauge symmetry}: The natural gauge group for KL-based attention is $\mathrm{GL}(K)$. 
