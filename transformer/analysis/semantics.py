@@ -81,8 +81,32 @@ def categorize_token(tid: int) -> str:
         return 'other'
 
 
+def format_gauge_group_label(gauge_group: str, gauge_dim: int) -> str:
+    """Format gauge group config values into a display label.
+
+    Args:
+        gauge_group: Config string ('SO3', 'SON', 'GLK')
+        gauge_dim: Gauge dimension (N for SO(N), K for GL(K))
+
+    Returns:
+        Human-readable label like 'SO(3)', 'SO(10)', 'GL(30)'
+    """
+    if gauge_group == 'SO3':
+        return "SO(3)"
+    elif gauge_group == 'SON':
+        return f"SO({gauge_dim})"
+    elif gauge_group == 'GLK':
+        return f"GL({gauge_dim})"
+    else:
+        return f"{gauge_group}({gauge_dim})"
+
+
 def identify_gauge_group(phi_dim: int) -> str:
-    """Identify gauge group from phi dimension (number of generators)."""
+    """Identify gauge group from phi dimension (number of generators).
+
+    This is a fallback heuristic used when the model config is not available.
+    Prefer format_gauge_group_label() with model.gauge_group when possible.
+    """
     # SO(2): 1 generator, SO(3): 3 generators, SO(N): N(N-1)/2 generators
     # GL(K): K² generators
     if phi_dim == 1:
@@ -91,13 +115,17 @@ def identify_gauge_group(phi_dim: int) -> str:
         return "SO(3)"
     else:
         # Check if it's a perfect square (GL(K) has K² generators)
-        k_sqrt = int(np.sqrt(phi_dim))
+        k_sqrt = int(round(np.sqrt(phi_dim)))
         if k_sqrt * k_sqrt == phi_dim:
             return f"GL({k_sqrt})"
         else:
             # Solve N(N-1)/2 = phi_dim for N (SO(N))
-            n_approx = int((1 + np.sqrt(1 + 8 * phi_dim)) / 2)
-            return f"SO({n_approx})"
+            n_approx = int(round((1 + np.sqrt(1 + 8 * phi_dim)) / 2))
+            # Verify the solution: n*(n-1)/2 should equal phi_dim
+            if n_approx * (n_approx - 1) // 2 == phi_dim:
+                return f"SO({n_approx})"
+            else:
+                return f"Gauge({phi_dim}D)"
 
 
 # =============================================================================
@@ -292,8 +320,14 @@ def analyze_gauge_semantics(
         'phi_shape': list(phi_embed.shape) if phi_embed is not None else None,
     }
 
+    # Determine gauge group label from model config (authoritative) or phi dim (fallback)
+    gauge_group_label = None
+    if model is not None and hasattr(model, 'gauge_group') and hasattr(model, 'gauge_dim'):
+        gauge_group_label = format_gauge_group_label(model.gauge_group, model.gauge_dim)
     if phi_embed is not None:
-        results['gauge_group'] = identify_gauge_group(phi_embed.shape[1])
+        if gauge_group_label is None:
+            gauge_group_label = identify_gauge_group(phi_embed.shape[1])
+        results['gauge_group'] = gauge_group_label
 
     # Token class analysis
     class_results = analyze_token_classes(mu_embed, phi_embed)
@@ -337,7 +371,8 @@ def analyze_gauge_semantics(
                     phi_embed,
                     embed_type='phi',
                     step=step,
-                    save_path=save_dir / f"gauge_frame_clustering{'_step'+str(step) if step is not None else ''}.png"
+                    save_path=save_dir / f"gauge_frame_clustering{'_step'+str(step) if step is not None else ''}.png",
+                    gauge_group_label=gauge_group_label,
                 )
                 plt.close(fig)
                 results['phi_plot_saved'] = True
@@ -399,6 +434,7 @@ def plot_embedding_clustering(
     step: Optional[int] = None,
     save_path: Optional[Path] = None,
     n_tokens: int = 500,
+    gauge_group_label: Optional[str] = None,
 ) -> plt.Figure:
     """
     Visualize embeddings (mu or phi) colored by token category.
@@ -409,6 +445,8 @@ def plot_embedding_clustering(
         step: Training step for title
         save_path: Path to save figure
         n_tokens: Number of tokens to plot
+        gauge_group_label: Override gauge group label (e.g. 'GL(30)').
+                          If None and embed_type='phi', inferred from dimension.
 
     Returns:
         matplotlib Figure
@@ -417,7 +455,7 @@ def plot_embedding_clustering(
     embed_dim = embed_np.shape[1]
 
     if embed_type == 'phi':
-        type_str = identify_gauge_group(embed_dim)
+        type_str = gauge_group_label if gauge_group_label else identify_gauge_group(embed_dim)
         title_prefix = f"{type_str} Gauge Frames"
     else:
         type_str = f"{embed_dim}D"
@@ -627,9 +665,9 @@ def save_embedding_csv(
 
 
 # Backwards compatibility aliases
-def plot_gauge_frame_clustering(phi_embed, step=None, save_path=None, n_tokens=500):
+def plot_gauge_frame_clustering(phi_embed, step=None, save_path=None, n_tokens=500, gauge_group_label=None):
     """Alias for plot_embedding_clustering with embed_type='phi'."""
-    return plot_embedding_clustering(phi_embed, embed_type='phi', step=step, save_path=save_path, n_tokens=n_tokens)
+    return plot_embedding_clustering(phi_embed, embed_type='phi', step=step, save_path=save_path, n_tokens=n_tokens, gauge_group_label=gauge_group_label)
 
 
 def save_gauge_frame_csv(phi_embed, step=None, save_dir=None, n_tokens=500):
