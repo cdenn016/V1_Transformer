@@ -799,6 +799,92 @@ def generate_glK_generators_split(
     return G_antisym, G_sym
 
 
+def generate_glK_multihead_generators(
+    K: int,
+    n_heads: int,
+    *,
+    include_identity: bool = True,
+) -> np.ndarray:
+    """
+    Generate block-diagonal gl(d_head) generators for multi-head GL(K) attention.
+
+    For multi-head attention in the GL(K) framework, we decompose the K-dimensional
+    embedding space into H heads, each with its own GL(d_head) gauge structure:
+
+        GL(d_head)^H ⊂ GL(K)
+
+    where d_head = K // n_heads.
+
+    Each head operates independently with its own gauge transport Ω^(h) ∈ GL(d_head).
+    The full transport is block-diagonal:
+
+        Ω = diag(Ω^(1), Ω^(2), ..., Ω^(H))
+
+    This is the GL(K) analogue of multi-head attention in transformers, where
+    each head learns its own gauge transformation.
+
+    Args:
+        K: Total embedding dimension
+        n_heads: Number of attention heads
+        include_identity: If True, include trace component per head
+
+    Returns:
+        G: Block-diagonal generators, shape (n_heads * d_head², K, K)
+           Each block G[h*d_head²:(h+1)*d_head², ...] contains the gl(d_head)
+           generators for head h, embedded in the full K×K space.
+
+    Example:
+        >>> # 30-dim embedding with 5 heads → each head has GL(6) structure
+        >>> G = generate_glK_multihead_generators(30, n_heads=5)
+        >>> G.shape
+        (180, 30, 30)  # 5 heads × 6² generators = 180 total
+
+        >>> # Each head's generators are block-diagonal
+        >>> # Head 0 acts on dims [0:6], Head 1 on [6:12], etc.
+
+    Comparison with single-head GL(K):
+        | Mode        | Generators | K=30, H=5 | Parameters (φ) |
+        |-------------|------------|-----------|----------------|
+        | GL(K)       | K²         | 900       | 900            |
+        | GL(K) MH    | H × d²     | 180       | 180            |
+
+    Note:
+        Multi-head reduces parameters from K² to H×(K/H)² = K²/H while
+        preserving the key property: each head learns its optimal gauge.
+        The block-diagonal structure means heads don't interfere.
+    """
+    if K % n_heads != 0:
+        raise ValueError(
+            f"K={K} must be divisible by n_heads={n_heads}. "
+            f"Got K % n_heads = {K % n_heads}"
+        )
+
+    d_head = K // n_heads
+    n_gen_per_head = d_head * d_head
+    n_generators = n_heads * n_gen_per_head
+
+    G = np.zeros((n_generators, K, K), dtype=np.float32)
+
+    # Build block-diagonal generators
+    for h in range(n_heads):
+        # This head acts on dimensions [h*d_head : (h+1)*d_head]
+        start = h * d_head
+        end = (h + 1) * d_head
+
+        # Generator index offset for this head
+        gen_offset = h * n_gen_per_head
+
+        # Build gl(d_head) basis E_ij within this block
+        idx = 0
+        for i in range(d_head):
+            for j in range(d_head):
+                # E_ij in the full K×K space, restricted to this head's block
+                G[gen_offset + idx, start + i, start + j] = 1.0
+                idx += 1
+
+    return G
+
+
 def generate_multi_irrep_soN_generators(
     irrep_spec: list,
     N: int,
