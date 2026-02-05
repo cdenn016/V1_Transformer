@@ -1744,6 +1744,45 @@ Learned gauge & 1 & $\Omega \in \mathrm{GL}(30)$ & 113.9 & 151.8 \\
 
 The 3-layer trivial-gauge model generalizes better (lower test PPL) despite higher train PPL, suggesting the trivial gauge acts as an implicit regularizer. The 1-layer learned-gauge model achieves lower train perplexity, demonstrating that learning the full $\mathrm{GL}(K)$ gauge transformation provides additional expressiveness at the cost of some overfitting.
 
+\subsubsection{Architectural Distinctions from Standard Transformers}
+
+The $\mathrm{GL}(K)$ gauge transformer differs fundamentally from standard transformers in several key respects:
+
+\paragraph{No Learned Attention Projections.}
+Standard transformers learn separate projection matrices $W_Q, W_K, W_V \in \mathbb{R}^{d \times d_k}$ that transform embeddings into query, key, and value spaces. In the gauge VFE architecture, \textbf{no such projections exist}. Attention weights $\beta_{ij}$ emerge directly from KL divergences between transported beliefs:
+\begin{equation}
+\beta_{ij} \propto \exp\left(-\frac{1}{\tau}D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)\right),
+\end{equation}
+computed using the learned gauge frames $\phi$ and embedding statistics $(\mu, \Sigma)$. This is a fundamental distinction: attention structure emerges from geometric relationships rather than learned projections.
+
+\paragraph{Absence of Positional Encoding.}
+Standard transformers require explicit positional encoding---sinusoidal functions or learned vectors added to embeddings~\citep{vaswani2017attention}. The gauge VFE operates \textbf{without any positional encoding}. The causal attention mask (agent $i$ attends only to $j < i$) provides implicit positional information, and the inherent asymmetry of KL divergence may encode relative relationships differently than symmetric dot-product attention. Our results (300--400$\times$ improvement over random) demonstrate that explicit positional encoding is not necessary for meaningful language modeling in this framework.
+
+\paragraph{Variational Inference Structure (E-step/M-step).}
+The architecture decomposes into an expectation-maximization structure:
+
+\textbf{E-step (Belief Inference):} Given current parameters, update agent beliefs $\{q_i\}$ via natural gradient descent on the free energy:
+\begin{equation}
+q_i^{(t+1)} \leftarrow q_i^{(t)} - \eta_E \, \tilde{\nabla}_{q_i} \mathcal{F}\big|_{q_i = q_i^{(t)}},
+\end{equation}
+where $\tilde{\nabla}$ denotes natural gradients projected via the Fisher-Rao metric. This corresponds to variational inference within the forward pass.
+
+\textbf{M-step (Learning):} After belief inference, gradients flow via backpropagation through the entire computation graph:
+\begin{equation}
+\theta \leftarrow \theta - \eta_M \, \nabla_{\theta} \mathcal{L}[\{q_i^*\}, \theta],
+\end{equation}
+where $\theta = \{\mu_{\text{embed}}, \Sigma_{\text{embed}}, \phi_{\text{embed}}, W_{\text{out}}\}$. Crucially, the evolved beliefs $\{q_i^*\}$ are \emph{not} detached---gradients flow through the VFE dynamics, enabling end-to-end learning of how embedding initializations affect belief evolution.
+
+\subsubsection{Belief and Prior Initialization}
+
+Agent beliefs $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ represent context-dependent semantic interpretations that evolve through communication. Token priors $p_c = \mathcal{N}(\mu_p^c, \Sigma_p^c)$ and gauge frame coefficients $\phi_c^a \in \mathbb{R}$ are initialized from $\mathcal{N}(0, \sigma_{\text{init}}^2)$ with $\sigma_{\text{init}} = 0.1$, serving as learnable token representations analogous to embedding matrices.
+
+For $\mathrm{GL}(K)$, the gauge frame $\phi_c$ directly parameterizes elements of $\mathfrak{gl}(K)$, with transport operators $\Omega = \exp(\phi)$ computed via matrix exponential. At the start of each training sequence, agent beliefs are initialized to match their token priors:
+\begin{equation}
+q_i(t=0) = p_{\text{token}(i)},
+\end{equation}
+where $\text{token}(i)$ denotes the token type at position $i$. Thus $\mu_i(0) = \mu_p^{\text{token}(i)}$ and $\Sigma_i(0) = \Sigma_p^{\text{token}(i)}$. All instances of the same token begin with identical beliefs regardless of position; context-dependent representations emerge through belief evolution during the E-step.
+
 These results demonstrate that the gauge-theoretic framework scales to production language modeling tasks, with the theoretical constructs ($\mu$, $\Sigma$, $\phi$, KL-attention) functioning as intended during actual training.
 
 
