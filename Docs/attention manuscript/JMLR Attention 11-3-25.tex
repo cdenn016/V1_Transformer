@@ -1391,106 +1391,113 @@ This equivalence is exact and derived from first principles. The $\mathrm{GL}(K)
 
 Figure~\ref{fig:beta_q_i0_j1} shows a typical spatial map of attention weights between two general two-dimensional agents in a stack of eight. The visualization reveals how gauge-geometric compatibility varies across the base manifold, with attention strength modulated by local frame alignment. Our degenerate limit occurs at a single pixel of the base space. Here we show a fully general "field of transformers" or, in our framework's language- an agent.
 
-\subsubsection{Multi-Head Attention and Gauge Group Generators}
+\subsubsection{Multi-Head Attention as Block-Diagonal $\mathrm{GL}(K)$ Structure}
 
 Standard transformer architectures employ multi-head attention, partitioning the $d_k$-dimensional embedding space into $H$ independent heads\citep{vaswani2017attention}:
 \begin{equation}
-\mu_i = [h_i^1, h_i^2, \ldots, h_i^H], \quad h_i^k \in \mathbb{R}^{d_{\text{head}}}, \quad d_k = H \times d_{\text{head}}.
+\mu_i = [h_i^1, h_i^2, \ldots, h_i^H], \quad h_i^a \in \mathbb{R}^{d_{\text{head}}}, \quad d_k = H \times d_{\text{head}}.
 \end{equation}
 
-Each head computes attention independently using separate query, key, and value projection matrices, and the results are concatenated and linearly combined.
+Each head computes attention independently using separate projection matrices $(W_Q^a, W_K^a, W_V^a)$, and the results are concatenated and linearly combined. The gauge-theoretic framework reveals this as implementing a \textbf{block-diagonal structure} within the full $\mathrm{GL}(d_k)$ gauge group.
 
-While this design is typically motivated by the empirical observation that it allows the model to attend to information from different representation subspaces at different positions, the gauge-theoretic framework provides a deeper geometric interpretation rooted in the structure of Lie group representations.
+\paragraph{Block-Diagonal Gauge Structure in $\mathrm{GL}(K)$.}
 
-\paragraph{Representation Theory and Irreducible Decomposition.}
-
-In our formulation, the embedding space $\mathbb{R}^d$ transforms under a representation $\rho_q : G \to \mathrm{GL}(d, \mathbb{R})$ of the gauge group $G$. For compact Lie groups such as $\text{SO}(N)$, every finite-dimensional representation decomposes into a direct sum of irreducible representations (irreps):
+Recall from Section~\ref{sec:glk_invariance} that standard transformers implement $\mathrm{GL}(K)$ gauge-theoretic attention with gauge transport $\Omega = \sigma^2 W_Q W_K^\top \in \mathrm{GL}(d_k)$. Multi-head attention restricts this to a \textbf{block-diagonal subgroup}:
 \begin{equation}
-\rho_q = \bigoplus_{k=1}^K n_k \ell_k,
-\label{eq:irrep_decomposition}
-\end{equation}
-where each $\ell_k$ is an irrep appearing with multiplicity $n_k$.
-
-Crucially, irreducible representations of different type transform independently under gauge transformations. If $g \in G$ acts on the embedding via $\rho_q(g)$, components belonging to different irreps $\ell_i$ and $\ell_j$ (with $i \neq j$) do not mix:
-\begin{equation}
-\rho_q(g) = \begin{pmatrix}
-\rho_1(g) & 0 & \cdots & 0 \\
-0 & \rho_2(g) & \cdots & 0 \\
+\Omega = \begin{pmatrix}
+\Omega^1 & 0 & \cdots & 0 \\
+0 & \Omega^2 & \cdots & 0 \\
 \vdots & \vdots & \ddots & \vdots \\
-0 & 0 & \cdots & \rho_K(g)
-\end{pmatrix},
+0 & 0 & \cdots & \Omega^H
+\end{pmatrix}, \quad \Omega^a = \sigma^2 W_Q^a (W_K^a)^\top \in \mathrm{GL}(d_{\text{head}}),
 \end{equation}
-where each block $\rho_k(g)$ corresponds to the representation of $g$ in irrep $\ell_k$ (repeated $n_k$ times). This block-diagonal structure is intrinsic to the group representation and reflects the fundamental decomposition into geometrically distinct transformation types.
+where each head $a$ learns its own $\mathrm{GL}(d_{\text{head}})$ gauge transformation. This block structure means that components in different heads do not mix under gauge transport---each head implements an independent gauge-theoretic attention mechanism.
 
-\paragraph{Generators and Geometric Modes.}
-
-The infinitesimal structure of a gauge group is encoded in its Lie algebra $\mathfrak{g}$. For the full gauge group $G = \mathrm{GL}(K)$, the Lie algebra $\mathfrak{gl}(K)$ has dimension $K^2$ with generators spanning all $K \times K$ matrices. For compact subgroups like $G = \text{SO}(N)$, the Lie algebra $\mathfrak{so}(N)$ consists of $N(N-1)/2$ linearly independent skew-symmetric generators $\{G_a\}_{a=1}^{\dim \mathfrak{g}}$, each corresponding to an infinitesimal rotation in a specific 2-plane of $\mathbb{R}^N$.
-
-When these generators act on the embedding space via the representation $\rho_q$, they inherit the block structure from the irrep decomposition:
+The full multi-head gauge group is thus the direct product:
 \begin{equation}
-\rho_q(G_a) = \begin{pmatrix}
-\rho_1(G_a) & 0 & \cdots & 0 \\
-0 & \rho_2(G_a) & \cdots & 0 \\
-\vdots & \vdots & \ddots & \vdots \\
-0 & 0 & \cdots & \rho_K(G_a)
-\end{pmatrix}.
+G_{\text{multi-head}} = \mathrm{GL}(d_{\text{head}})^H \subset \mathrm{GL}(d_k),
 \end{equation}
+a $(H \cdot d_{\text{head}}^2)$-dimensional subgroup of the $d_k^2$-dimensional $\mathrm{GL}(d_k)$.
 
-Each block $\rho_k(G_a)$ acts only within the subspace corresponding to irrep $\ell_k$. Different irreps correspond to different geometric transformation modes:
+\paragraph{Geometric Interpretation via Lie Algebra Decomposition.}
 
+The Lie algebra $\mathfrak{gl}(d_k)$ has dimension $d_k^2$, with generators spanning all $d_k \times d_k$ matrices. The block-diagonal restriction to $\mathfrak{gl}(d_{\text{head}})^H$ projects out all off-diagonal blocks, retaining only $H \cdot d_{\text{head}}^2$ generators.
+
+Each head's Lie algebra $\mathfrak{gl}(d_{\text{head}})$ decomposes as:
+\begin{equation}
+\mathfrak{gl}(d_{\text{head}}) = \mathfrak{sl}(d_{\text{head}}) \oplus \mathbb{R},
+\end{equation}
+where $\mathfrak{sl}(d_{\text{head}})$ consists of traceless matrices (volume-preserving transformations) and $\mathbb{R}$ is the trace (overall scaling). This means each head independently controls:
 \begin{itemize}
-  \item For $G = \text{SO}(3)$, the irreps $\ell_\ell$ are labeled by angular momentum quantum number $\ell \geq 0$, with dimension $\dim(\ell_\ell) = 2\ell + 1$:
-  \begin{itemize}
-    \item $\ell_0$: scalars (dimension 1)---rotationally invariant
-    \item $\ell_1$: vectors (dimension 3)---transform as ordinary 3-vectors
-    \item $\ell_2$: rank-2 symmetric traceless tensors (dimension 5)
-    \item $\ell_3$: dimension 7, and so on
-  \end{itemize}
-  \item For general $\text{SO}(N)$, irreps are characterized by Young diagrams or highest weight vectors, with dimensions determined by representation theory formulas.
+  \item \textbf{Scaling}: Overall magnitude of attention in that subspace
+  \item \textbf{Shearing/Rotation}: How different dimensions within the head interact
 \end{itemize}
 
-The key insight is that each generator $G_a$ defines a geometric direction of change, and its action is compartmentalized according to the irrep decomposition. This provides a natural partitioning of the embedding space based on transformation properties.
+\paragraph{Example: $\mathrm{SO}(3)$ Irreducible Representations.}
 
-\paragraph{Connection to Multi-Head Attention.}
+To make this concrete, consider the compact subgroup $G = \mathrm{SO}(3) \subset \mathrm{GL}(3)$. For $\mathrm{SO}(3)$, the representation theory is well-understood: every finite-dimensional representation decomposes into irreducible representations (irreps) labeled by angular momentum $\ell \geq 0$:
+\begin{equation}
+\rho = \bigoplus_{\ell=0}^{L} n_\ell \cdot D^\ell, \quad \dim(D^\ell) = 2\ell + 1,
+\end{equation}
+where $n_\ell$ is the multiplicity of irrep $\ell$. The irreps have clear physical meaning:
+\begin{itemize}
+  \item $\ell = 0$ (dimension 1): \textbf{Scalars}---rotationally invariant quantities
+  \item $\ell = 1$ (dimension 3): \textbf{Vectors}---transform as ordinary 3-vectors under rotation
+  \item $\ell = 2$ (dimension 5): \textbf{Symmetric traceless tensors}---quadrupole moments
+  \item $\ell = 3$ (dimension 7): \textbf{Octupole tensors}, and so on
+\end{itemize}
 
-Each irrep block can be viewed as a separate head with intrinsic geometric meaning. Components within irrep $\ell_k$ transform according to a specific geometric rule under gauge transformations, distinguishing them from other irreps.
+Under this decomposition, gauge transformations act block-diagonally:
+\begin{equation}
+\rho(R) = \begin{pmatrix}
+D^0(R) & 0 & 0 & \cdots \\
+0 & D^1(R) & 0 & \cdots \\
+0 & 0 & D^2(R) & \cdots \\
+\vdots & \vdots & \vdots & \ddots
+\end{pmatrix}, \quad R \in \mathrm{SO}(3).
+\end{equation}
 
-The $\dim \mathfrak{g} = N(N-1)/2$ generators of $\text{SO}(N)$ each correspond to a fundamental rotational degree of freedom. When acting on the embedding space, each generator respects the decomposition, thereby splitting the space into geometrically coherent subspaces.
+Each irrep block corresponds naturally to an attention head with \textbf{intrinsic geometric meaning}: the scalar head captures rotationally-invariant features, the vector head captures directional information, and higher-$\ell$ heads capture increasingly complex angular structure.
 
-In standard multi-head attention, the separation into heads is a purely learned partition. The projection matrices $W_Q^k, W_K^k, W_V^k$ for each head $k$ are trainable parameters with no inherent geometric structure. In contrast, \textbf{gauge-equivariant heads have intrinsic geometric meaning determined by group representation theory}.
+The $\mathrm{SO}(3)$ Lie algebra $\mathfrak{so}(3)$ has dimension 3, with generators $\{L_x, L_y, L_z\}$ corresponding to infinitesimal rotations about each axis. Within each irrep, these generators have specific matrix representations determined by the Wigner $D$-matrices.
+
+\paragraph{Contrast: Learned vs.\ Geometric Head Structure.}
+
+In standard multi-head attention:
+\begin{itemize}
+  \item Head dimensions are uniform: $d_{\text{head}} = d_k/H$
+  \item Head structure is \textbf{learned} from data with no geometric constraint
+  \item The projection matrices $W_Q^a, W_K^a$ can encode arbitrary $\mathrm{GL}(d_{\text{head}})$ transformations
+\end{itemize}
+
+In gauge-equivariant attention with a compact group like $\mathrm{SO}(3)$:
+\begin{itemize}
+  \item Head dimensions are \textbf{non-uniform}: $\{1, 3, 5, 7, \ldots\}$ for $\mathrm{SO}(3)$ irreps
+  \item Head structure has \textbf{intrinsic geometric meaning} from representation theory
+  \item Transformations are constrained to respect equivariance within each irrep
+\end{itemize}
+
+The $\mathrm{GL}(K)$ framework encompasses both: standard transformers learn unconstrained $\mathrm{GL}(d_{\text{head}})$ per head, while equivariant architectures restrict to compact subgroups with richer geometric structure.
 
 \paragraph{Implications for Architecture Design.}
 
-This geometric perspective suggests several design principles for transformer architectures:
+This perspective suggests design principles for geometrically-aware transformers:
 
 \begin{enumerate}
-  \item \textbf{Non-Uniform Head Dimensions}: Current transformers use uniform head dimensions $d_{\text{head}} = d/H$. The irrep decomposition suggests that heads should have dimensions matching the natural irrep sizes: $2\ell + 1$ for $\text{SO}(3)$ irreps.
-  
-  \item \textbf{Equivariance Constraints}: Within each irrep block, the attention mechanism should respect the transformation properties. For example, vector channels ($\ell_1$) should transform covariantly under rotations, enforced via equivariant query/key projections.
-  
-  \item \textbf{Physical Inductive Biases}: For domains with known physical symmetries (molecular dynamics, 3D vision, physics simulations), using gauge-equivariant multi-head attention provides strong inductive biases that match the problem structure.
-  
-  \item \textbf{Generator-Specific Attention}: Rather than learning separate $W_Q$, $W_K$, $W_V$ for each head, one could parameterize attention weights based on the generator structure:
-  \begin{equation}
-  \beta_{ij} = \mathrm{softmax}_j\left(-\sum_{a=1}^{\dim \mathfrak{g}} \lambda_a \|\rho_q(T_a)(\mu_i - \Omega_{ij}\mu_j)\|^2\right),
-  \end{equation}
-  where $\{\lambda_a\}$ are learnable weights for each generator direction, providing a geometrically meaningful parameterization of attention.
+  \item \textbf{Non-Uniform Head Dimensions}: For tasks with known symmetries, head dimensions should match irrep sizes rather than being uniform. For $\mathrm{SO}(3)$-equivariant attention: heads of dimension $1, 3, 5, \ldots$
+
+  \item \textbf{Equivariance Constraints}: Within each irrep block, attention should respect transformation properties. Vector channels ($\ell=1$) should transform covariantly under rotations.
+
+  \item \textbf{Physical Inductive Biases}: For domains with known symmetries (molecular dynamics, 3D vision, physics), gauge-equivariant multi-head attention provides strong inductive biases matching problem structure.
 \end{enumerate}
 
 \paragraph{Summary.}
 
-Multi-head attention, when viewed through the lens of gauge theory, implements a separation of geometric modes corresponding to the irreducible representation structure of the gauge group. Each head captures a distinct transformation type (scalar, vector, tensor, etc.), and the $N(N-1)/2$ generators of $\text{SO}(N)$ provide natural coordinates for these geometric modes.
+Multi-head attention implements a block-diagonal restriction of the full $\mathrm{GL}(d_k)$ gauge group to $\mathrm{GL}(d_{\text{head}})^H$. For compact subgroups like $\mathrm{SO}(3)$, this block structure has natural geometric interpretation via irreducible representations---each head captures a distinct angular momentum sector with specific transformation properties.
 
-This reveals that:
-\begin{itemize}
-  \item The number of heads should reflect the richness of the gauge group's representation theory
-  \item The dimension of each head should match the dimension of the corresponding irrep
-  \item The attention mechanism within each head should respect equivariance under gauge transformations
-\end{itemize}
+Standard transformers learn the block-diagonal $\mathrm{GL}(d_{\text{head}})$ structure from data, while geometrically-constrained architectures can leverage the richer structure of compact gauge groups. This reveals multi-head attention as a general mechanism for decomposing the embedding space into geometrically coherent subspaces, with the specific decomposition either learned ($\mathrm{GL}$) or prescribed by symmetry (compact subgroups).
 
-Unlike standard multi-head attention where heads are distinguished purely by learned parameters, gauge-equivariant heads have intrinsic geometric meaning tied to the symmetries of the problem. This provides a principled framework for designing attention mechanisms that are both expressive and structurally constrained by the underlying geometry.
-
-We have shown that the machine learning attention mechanism and backpropagation have a natural explanation as the degenerate limit of natural gradient descent on our gauge-equivariant free energy principle. Most remarkably, our framework predicts exponential speedup of training compared to standard backpropagation---a major bottleneck in modern AI architectures that currently requires enormous energy expenditure to train the most powerful platforms.
+We have shown that the machine learning attention mechanism and backpropagation have a natural explanation as the limit of natural gradient descent on our gauge-equivariant free energy principle. Most remarkably, our framework predicts exponential speedup of training compared to standard backpropagation---a major bottleneck in modern AI architectures that currently requires enormous energy expenditure to train the most powerful platforms.
 
 % Refactored manuscript sections with redundancies removed
 
