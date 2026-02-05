@@ -224,8 +224,21 @@ class GaugeTransformerLM(nn.Module):
         if gauge_group == 'SO3':
             self.phi_dim = 3  # SO(3) has 3 generators
         elif gauge_group == 'GLK':
-            # GL(K) has K² generators (full matrix algebra)
-            self.phi_dim = embed_dim * embed_dim
+            # GL(K): Check if multi-head requested
+            is_glk_multihead = (
+                use_multi_irrep and
+                irrep_spec is not None and
+                len(irrep_spec) == 1 and
+                irrep_spec[0][0] != 'full' and
+                irrep_spec[0][1] > 1  # n_heads > 1
+            )
+            if is_glk_multihead:
+                # Multi-head GL(K): H × d_head² generators
+                _, n_heads, d_head = irrep_spec[0]
+                self.phi_dim = n_heads * d_head * d_head
+            else:
+                # Single-head GL(K): K² generators
+                self.phi_dim = embed_dim * embed_dim
         else:  # SO(N)
             self.phi_dim = gauge_dim * (gauge_dim - 1) // 2  # SO(N) has N(N-1)/2 generators
 
