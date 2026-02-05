@@ -62,7 +62,7 @@ Finally, we mathematically show that modern machine learning backpropagation and
 For interdisciplinary readers, it may be helpful to visualize each agent in this framework as a vector and a matrix field defined over a finite spatial region. 
 Concretely, at every point $c$ in the base manifold, agent $i$ carries a mean vector $\mu_i(c)$ and a covariance matrix $\Sigma_i(c)$ representing, respectively, its local expected state and uncertainty. Together these form a smooth Gaussian field—the agent’s belief section of the statistical bundle. 
 
-We will see that the agent's local gauge frame $\phi_i(c)$ may be intuitively interpreted as the agent's subjective frame of reference—its internal coordinate system through which beliefs and models are represented and compared. In this sense, $\phi_i(c)$ captures an agent’s “internal orientation” toward the world: it determines how external information is projected into the agent’s internal representational space. Gauge transformations $\phi_i(c) \to \phi_i(c) + \xi(c)$ thus correspond to changes in perspective that leave the underlying informational content invariant, much like shifts of viewpoint in perception that preserve the same world model. 
+We will see that the agent's local gauge frame $\phi_i(c)$ may be intuitively interpreted as the agent's subjective frame of reference; its internal coordinate system through which beliefs and models are represented and compared. In this sense, $\phi_i(c)$ captures an agent’s “internal orientation” toward the world: it determines how external information is projected into the agent’s internal representational space. Gauge transformations $\phi_i(c) \to \phi_i(c) + \xi(c)$ thus correspond to changes in perspective that leave the underlying informational content invariant, much like shifts of viewpoint in perception that preserve the same world model. 
 
 \begin{figure}[h]
 \centering
@@ -200,16 +200,6 @@ The complete simulation suite that implements the gauge-theoretic variational in
 \begin{itemize}
 \item \href{https://github.com/cdenn016/epistemic-geometry}{https://github.com/cdenn016/epistemic-geometry}. 
 \end{itemize}
-The repository includes:
-\begin{itemize}
-  \item Core gradient modules (\lstinline|gradient_terms.py|, \lstinline|gradient_utils.py|)
-  \item Natural gradient implementations (\lstinline|numerical_utils.py|)
-  \item Gauge transport computations (\lstinline|transport_cache.py|, \lstinline|omega.py|)
-  \item Multi-agent update (\lstinline|update_compute_all_gradients.py|, \lstinline|update_rules.py|)
-  \item Stability monitoring and energy budget tracking (\lstinline|tests_and_stability|)
-  \item Simulation driver and configuration (\lstinline|generalized_simulation.py|, \lstinline|config.py|)
-  \item Diagnostic tools (\lstinline|diagnostics.py|, \lstinline|metrics_viz.py|)
-\end{itemize}
 
 
 All experiments reported in the results section can be reproduced using the provided configuration files and random number generator seeds documented in the repository. The codebase requires Python 3.9+ with NumPy, SciPy, and Joblib dependencies as specified in \texttt{requirements.txt}.
@@ -232,20 +222,7 @@ This gives $\mathcal{E}_q = \mathcal{E}_p =: \mathcal{E}$, and the bundle morphi
 
 Each agent then reduces to a single section $\sigma^i: \mathcal{U}_i \to \mathcal{E}$, with belief/prior distinction maintained through local fiber coordinates.
 
-\subsubsection{Gaussian Fiber and $\mathrm{GL}(K)$ Gauge Symmetry}
-We restrict to the exponential family of multivariate Gaussian distributions. The fundamental observation (Theorem~\ref{thm:glk_invariance}) is that the KL divergence---and hence the variational free energy---is invariant under the full general linear group $\mathrm{GL}(K)$, not merely orthogonal subgroups. The natural gauge structure is therefore:
 
-\begin{itemize}
-  \item Fiber: $\mathcal{B} = \{(\mu, \Sigma) : \mu \in \mathbb{R}^K, \Sigma \in \mathbb{R}^{K \times K}, \Sigma \succ 0\}$ (Gaussian manifold)
-  \item Gauge group: $G = \mathrm{GL}(K)$ with action:
-\begin{equation}
-\rho(\Omega) \cdot (\mu, \Sigma) = (\Omega\mu, \Omega\Sigma\Omega^\top), \quad \Omega \in \mathrm{GL}(K)
-\end{equation}
-\end{itemize}
-
-The Gaussian manifold has constant negative curvature under the Fisher-Rao metric. While $\mathrm{GL}(K)$ is non-compact and has dimension $K^2$, important compact subgroups include $\mathrm{SO}(K)$ (dimension $K(K-1)/2$) and $\mathrm{O}(K)$.
-
-For computational tractability and physical interpretability, our simulations employ $G = \mathrm{SO}(3)$ acting via irreducible representations on higher-dimensional fibers. This choice is motivated by: (i) the well-understood representation theory of $\mathrm{SO}(3)$; (ii) compact group structure enabling Haar measure averaging; and (iii) physical relevance to rotation-equivariant systems \citep{nakahara2003geometry}\citep{hall2015lie}. However, the theoretical results---particularly the derivation of transformer attention---hold for the full $\mathrm{GL}(K)$ gauge group, which is essential for understanding how learned projection matrices implement gauge structure.
 
 \subsubsection{Gauge Group and Representations}
 The natural gauge group for KL-based attention is $G = \mathrm{GL}(K)$, the general linear group of invertible $K \times K$ matrices. This acts on the fibers via representations:
@@ -275,88 +252,11 @@ For $\Omega \in \mathrm{GL}(K)$, the gauge action on a Gaussian state is:
 
 By Theorem~\ref{thm:glk_invariance}, KL divergence is invariant under this action for any $\Omega \in \mathrm{GL}(K)$. The only requirement is invertibility ($\det \Omega \neq 0$), not orthogonality.
 
-\subsubsection{Compact Subgroups and Simulations}
-While $\mathrm{GL}(K)$ is the maximal gauge symmetry, compact subgroups such as $\mathrm{SO}(K)$ or $\mathrm{O}(K)$ are useful when:
-\begin{itemize}
-\item Haar measure averaging is required (e.g., gauge consensus)
-\item Finite-dimensional irreducible representations are desired
-\item Volume-preserving transformations are physically motivated
-\end{itemize}
 
-For computational tractability in our simulations, we employ $G = \mathrm{SO}(3)$ acting via irreducible representations on higher-dimensional fibers. Specifically, we used $d_q = d_p = 9$ with the spin-4 irrep:
-\begin{equation}
-\rho_q = \rho_p = \ell_4,
-\quad
-\text{(dimension $2 \cdot 4 + 1 = 9$)}.
-\label{eq:simulation_irrep}
-\end{equation}
-However, all theoretical results---particularly the derivation of transformer attention---hold for the full $\mathrm{GL}(K)$.
 
-\subsubsection{Gauge Structure}
-The gauge structure of our framework is built via:
 
-\begin{itemize}
-  \item Gauge group: $G = \mathrm{GL}(K)$ (or compact subgroup for simulations)
-  \item Frame fields: $\phi_i(c) \in \mathfrak{gl}(K)$ vary spatially
-  \item Transport: $\Omega_{ij}(c) = e^{\phi_i(c)}e^{-\phi_j(c)} \in \mathrm{GL}(K)$
-  \item Action on fiber: $\rho(\Omega_{ij}) \in \mathrm{GL}(d_K)$
-\end{itemize}
 
-In the transformer limit, the gauge structure simplifies in two key ways:
 
-\textbf{(1) Constant gauge transformation:} Rather than agent-dependent $\Omega_{ij}$, transformers use a single learned gauge:
-\begin{equation}
-\Omega_{ij} = \Omega = W_Q W_K^\top \in \mathrm{GL}(d_k) \quad \forall\, i,j
-\end{equation}
-
-\textbf{(2) Flat connection:} The gauge fields become spatially constant:
-\begin{equation}
-\phi_i(c) = \phi = \text{const} \in \mathfrak{gl}(K) \quad \forall\, i, c
-\end{equation}
-
-This yields:
-\begin{itemize}
-  \item Vanishing induced connection: $A_\mu = -\partial_\mu \phi_i = 0$
-  \item Vanishing curvature: $F_{\mu\nu} = 0$ (flat bundle)
-  \item A single global coordinate system
-  \item Gauge transport absorbed into learned projections $W_Q, W_K$
-\end{itemize}
-
-Crucially, the transformer limit is \emph{not} gauge-free. The gauge structure persists as $\Omega = W_Q W_K^\top \in \mathrm{GL}(d_k)$---a learned, constant gauge transformation that backpropagation discovers from data.
-
-\subsubsection{Learned Projections $W_Q, W_K$ as $\mathrm{GL}(K)$ Gauge Transformations}
-\label{sec:wq_wk_gauge}
-
-A central insight enabled by the $\mathrm{GL}(K)$ invariance theorem is that the learned projection matrices in standard transformers are not merely ``feature extractors''---they \emph{are} gauge transformations. This fundamentally changes our understanding of what transformers learn.
-
-In standard transformer attention, query and key vectors are computed as:
-\begin{equation}
-Q_i = W_Q^\top \mu_i \in \mathbb{R}^{d_k}, \qquad K_j = W_K^\top \mu_j \in \mathbb{R}^{d_k},
-\end{equation}
-where $W_Q, W_K \in \mathbb{R}^{d \times d_k}$ are learned projection matrices. In practice, these matrices are full-rank (invertible when $d = d_k$), placing them in $\mathrm{GL}(d_k)$.
-
-The attention score $Q_i K_j^\top = \mu_i^\top W_Q W_K^\top \mu_j$ can be written as:
-\begin{equation}
-Q_i K_j^\top = \mu_i^\top \,\Omega\, \mu_j, \quad \text{where} \quad \Omega := W_Q W_K^\top \in \mathrm{GL}(d_k).
-\end{equation}
-
-This matrix $\Omega$ is precisely a gauge transformation! In the language of our framework:
-\begin{itemize}
-\item The \emph{query projection} $W_Q$ transforms agent $i$'s embedding into its local gauge frame
-\item The \emph{key projection} $W_K$ transforms agent $j$'s embedding into a comparison frame
-\item The \emph{composite} $\Omega = W_Q W_K^\top$ is the learned gauge transport from $j$'s frame to $i$'s frame
-\end{itemize}
-
-By Theorem~\ref{thm:glk_invariance}, the KL divergence is invariant under such $\mathrm{GL}(K)$ transformations. This explains why transformers can learn arbitrary (invertible) projections: the variational free energy structure permits any $\Omega \in \mathrm{GL}(K)$, and backpropagation discovers the optimal gauge transformation for the task.
-
-The ``trivial gauge limit'' of our framework does not correspond to ``no gauge structure.'' Rather, it corresponds to a \emph{constant} gauge transformation $\Omega = W_Q W_K^\top$ that is:
-\begin{enumerate}
-\item Independent of token position (same $\Omega$ for all pairs $i,j$)
-\item Learned from data rather than derived from geometric principles
-\item Applied in a flat (zero-curvature) bundle geometry
-\end{enumerate}
-
-This reframes the relationship between gauge theory and transformers: standard transformers \emph{already implement} $\mathrm{GL}(K)$ gauge-theoretic attention, but with the gauge structure absorbed into learned parameters rather than specified \emph{a priori}.
 
 \begin{table}[h]
 \centering
@@ -400,15 +300,10 @@ Global gauge $W_Q, W_K$ \\
 
 
 
-\subsubsection{Flat Base Manifold}
-\begin{equation}
-\mathcal{C} = \mathbb{R}^2 \quad \text{(Euclidean)}, 
-\end{equation}
 
-We consider the case of a flat base manifold (for simplicity and due to limited computational resources). Agents occupy finite support regions $\mathcal{U}_i$ as open subsets of $\mathbb{R}^2$ (where we invoke periodic boundary conditions in simulations).
 
 \subsubsection{Local Gauge Frames}
-Each agent $i$ has a gauge frame field $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ which may vary spatially. (In simulations using compact subgroups, $\phi_i \in \mathfrak{so}(3)$.) This induces a local connection:
+Each agent $i$ has a gauge frame field $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ which may vary spatially.  This induces a local connection:
 
 \begin{equation}
 A^{(i)}_\mu(c) = -\partial_\mu \phi_i(c) + \mathcal{O}(\phi_i^2),
@@ -420,21 +315,15 @@ with field strength:
 F^{(i)}_{\mu\nu}(c) = \partial_\mu A^{(i)}_\nu - \partial_\nu A^{(i)}_\mu + [A^{(i)}_\mu, A^{(i)}_\nu].
 \end{equation}
 
-In our simulations:
 
-\begin{enumerate}
-  \item Frames are smooth and slowly varying: $\|\partial_\mu \phi_i\| \ll 1$, so that $F^{(i)}_{\mu\nu} \approx 0$ locally
-  \item We compute inter-agent transport pointwise (within the same fiber) using the Baker-Campbell-Hausdorff (BCH) formula:\\
-\\
-\begin{equation}
-\Omega_{ij}(c) = e^{\phi_i(c)}e^{-\phi_j(c)}
-\end{equation}
-\end{enumerate}
+\subsubsection{0D Base Manifold}
 
-This effectively treats gauge transport as local frame rotations without considering holonomy or global topology, which shall be saved for future study.
+In order to connect the gauge theory to transformer architectures we consider the case of a 0-dimensional base manifold. Agents occupy a single point and overlap with each other completely. However, the full theory is extensible to arbitrary smooth base manifolds.
 
-\subsubsection{Intra-Scale Transport Only}
-We restrict to intra-scale transport operators $\Omega_{ij}: \Gamma(\mathcal{B}) \to \Gamma(\mathcal{B})$ between agents at the same hierarchical level. Cross-scale morphisms $\Lambda^s_{s'}$ and meta-agent emergence are deferred to future work with promising preliminary results.
+Since we are considering 0-dimensional base manifolds there exist no gauge connections or field strengths simplifying the geometry considerably.
+
+
+
 
 \subsubsection{Gauge-Aligned Divergence}
 With these assumptions, the gauge-aligned KL divergence between agents is (see appendix):
@@ -454,7 +343,7 @@ This divergence forms the basis of our attention mechanism.
 \subsubsection{Fundamental Theorem: $\mathrm{GL}(K)$ Gauge Invariance of KL Divergence}
 \label{sec:glk_invariance}
 
-A crucial observation underlying our entire framework is that the Kullback-Leibler divergence possesses a maximal gauge symmetry: it is invariant under the \emph{full general linear group} $\mathrm{GL}(K)$, not merely compact subgroups like $\mathrm{SO}(K)$.
+A crucial observation underlying our entire framework is that the Kullback-Leibler divergence possesses a maximal gauge symmetry: it is invariant under the full general linear group $\mathrm{GL}(K)$.
 
 \begin{theorem}[$\mathrm{GL}(K)$ Gauge Invariance]
 \label{thm:glk_invariance}
@@ -496,7 +385,7 @@ The $(\det\Omega)^2$ factors cancel identically. Since all three components are 
 This theorem has profound implications for our framework:
 
 \begin{enumerate}
-\item \textbf{Maximal gauge symmetry}: The natural gauge group for KL-based attention is $\mathrm{GL}(K)$, not merely $SO(K)$. The orthogonal group $SO(K)$ is a \emph{subgroup} of $\mathrm{GL}(K)$; requiring $\Omega^\top\Omega = I$ is a sufficient but not necessary condition for gauge invariance.
+\item \textbf{Maximal gauge symmetry}: The natural gauge group for KL-based attention is $\mathrm{GL}(K)$. 
 
 \item \textbf{Generalization to $f$-divergences}: The proof extends to all $f$-divergences. For any convex function $f$ with $f(1) = 0$:
 \begin{equation}
@@ -506,7 +395,7 @@ The Jacobian factors $|\det\Omega|$ from the density transformation cancel in th
 
 \item \textbf{Simplified implementation}: Transport operators need only satisfy $\det(\Omega_{ij}) \neq 0$ (invertibility), not $\Omega_{ij}^\top\Omega_{ij} = I$ (orthogonality). This eliminates the need for computationally expensive re-orthogonalization procedures.
 
-\item \textbf{Learned projections as gauge transformations}: As we shall demonstrate, the query and key projection matrices $W_Q, W_K \in \mathrm{GL}(d_k)$ in standard transformers are themselves gauge transformations. The ``trivial gauge limit'' corresponds not to the absence of gauge structure, but to a \emph{constant} gauge transformation $\Omega = W_Q W_K^\top$ applied uniformly across all token pairs.
+\item \textbf{Learned projections as gauge transformations}: As we shall demonstrate, the query and key projection matrices $W_Q, W_K \in \mathrm{GL}(d_k)$ in standard transformers are themselves gauge transformations. The "constant gauge limit" corresponds not to the absence of gauge structure, but to a constant gauge transformation $\Omega = W_Q W_K^\top$ applied uniformly across all token pairs.
 \end{enumerate}
 
 The $\mathrm{GL}(K)$ invariance reveals that the attention mechanism respects a form of general covariance: the information-geometric distance between beliefs is independent of the coordinate system (basis) used to represent them. This is the statistical analogue of coordinate independence in differential geometry.
@@ -558,10 +447,6 @@ $D_{\mathrm{KL}}$ & Kullback–Leibler divergence & $\mathbb{R}_+\cup\{0\}$ \\
 
 The full geometric framework admits considerable generalization: path-dependent parallel transport with holonomy effects, non-flat gauge connections exhibiting epistemic monopoles, curved base manifolds such as hyperbolic or spherical latent spaces, heterogeneous fiber structures where $\mathcal{B}_q \neq \mathcal{B}_p$, cross-scale dynamics with meta-agent emergence, curvature-induced phase transitions in multi-agent systems, and pullback geometries via agent sections from informational fibers to the base manifold.
 
-\subsubsection{Rationale for Simplification}
-These simplifications allow us to establish foundational results and demonstrate that transformer attention emerges from this gauge-theoretic free energy minimization geometry. Such simplifications further allow us to work within a single well-understood statistical manifold (Gaussian) and gauge group with known analytic properties and non-trivial curvatures\citep{amari2016information}.
-
-For the present study, the matched bundle case ($\Phi = \text{id}$, $\mathcal{B}_q = \mathcal{B}_p$) suffices to establish the core theoretical result: transformer attention is the flat, isotropic, Dirac delta-function limit of gauge-covariant variational free energy minimization in multi-agent Bayesian systems. Furthermore data training and/or observations break the vacuum theory symmetry.
 
 \section{Derivation of Generalized Variational Free Energy from a Normalized Generative Model}
 We derive the generalized variational free energy we will utilize from general first principles, showing that both belief alignment (weighted by $\beta_{ij}$) and model alignment (weighted by $\gamma_{ij}$) emerge naturally from a single normalized generative prior with auxiliary agreement variables. This construction justifies the KL-based coupling terms as consequences of gauge-transported Gaussian consistency constraints. In what follows we shall assume all probability distributions are defined at a specific base manifold point $c = c^*$ unless otherwise noted.  We will label the fiber's latent coordinates as $k_i \in \mathcal{B}$ in order to define the necessary integrals
@@ -1041,25 +926,10 @@ This is the gauge-theoretic analogue of renormalization group flow in statistica
 In the present work, we restrict to single-scale dynamics—all agents are at scale $\zeta=0$ with no cross-scale couplings ($\Lambda^{\zeta}_{\zeta'} = 0$ for $\zeta \neq \zeta'$). We focus exclusively on the fast subsystem (Eq.~\ref{eq:fast_subsystem}
 ), studying how beliefs $\{q_i\}$ evolve under alignment while holding models $\{s_i\}$ fixed.
 
-Our preliminary simulations (reported separately) suggest that meta-agent fluctuation timescales are of the order $\tau_{\zeta+1} / \tau_{\zeta} \sim 10^4$-$10^6$, consistent with hierarchical structure in biological and social systems.
 
 We posit that standard transformers operate entirely in the fast subsystem. They perform inference ($q_i$ updates) with frozen models ($s_i$ fixed during a forward pass). Training corresponds to slow updates of $s_i$, but without the explicit hierarchical structure or meta-cognitive alignment term $\gamma_{ij} D_{\mathrm{KL}}(s_i \| \tilde{\Omega}_{ij} s_j)$.
 
-Interestingly, our framework potentially applies to many informational systems - from transformers, to collections of humans coalescing into societies, to cognition, to language, and potentially even physics, chemistry, and biology - where statistical patterns and informational organizations emerge from lower level informational processing with decreasing timescales. Although, in our current study we do not invoke a time variable (aside from gradient descent step) we may tentatively associate a natural time scale as related to the amount of information updated within a step apropos "Information is a distinction that makes a difference" - Donald MacKay\citep{csiszar1967information}\citep{cover2006elements}\citep{kullback1951information}\citep{mackay1969information}.  This suggests a minimum timescale corresponding to a single bit update.
 
-That is to say, under a variational update $\delta S = 0$, the field generally evolves as $q \to q + \Delta q$. The local change in informational content over a single step may be characterized by the self-divergence
-
-\[
-\Delta \mathcal{I} = D_{\mathrm{KL}}[\, q(c) \,\|\, q(c) + \Delta q(c) \,].
-\]
-
-In gauge-theoretic terms, we interpret this variation as a local transformation at a base manifold point $c$ of the form $q(c) \to dg^{-1}(c) \cdot q(c)$, where $dg^{-1}(c)$ is a gauge transformation associated with the Lie group \( G \), acting on the fiber \( \mathcal{B}_q \). Thus, we write:
-
-\[
-\Delta \mathcal{I} = D_{\mathrm{KL}}[\, q(c) \,\|\, dg^{-1}(c) \cdot q(c) \,].
-\]
-
-This quantity measures the epistemic deviation induced by a local frame change and highlights the informational change of shifting one's gauge frame.
 
 \subsubsection{Symmetry Breaking}
 In the absence of observations ($p(o|\cdot) = \text{const}$), the free energy \eqref{eq:free_energy_final} is invariant under the gauge group $G$ (which is $\mathrm{GL}(K)$ in general, or compact subgroups such as $\mathrm{SO}(K)$ in simulations). The vacuum state corresponds to perfect alignment: $q_i = \Omega_{ij}q_j$ and $p_i = \tilde{\Omega}_{ij}p_j$ for all agent pairs $(i,j)$, meaning all agents maintain gauge-equivalent beliefs that differ only by frame transformations. In this regime, the dynamics drive the system toward a degenerate manifold of ground states parameterized by the gauge orbit. Agents synchronize over gradient descent towards $\|\mu_i(c)\| = \mu^*$, but the absolute orientations remain arbitrary. This is the statistical geometric analogue of the Goldstone phase in spontaneous symmetry breaking.\citep{weinberg1995quantum}\citep{goldstone1962field}
@@ -1135,10 +1005,6 @@ As covariances vanish, beliefs become delta functions:
 q_i(k_i) \to \delta(k_i - \mu_i).
 \end{equation}
 
-For Gaussians $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ and $q_j = \mathcal{N}(\mu_j, \Sigma_j)$, the KL divergence is:
-\begin{equation}
-D_{\mathrm{KL}}(q_i \| q_j) = \frac{1}{2}\left[\log\frac{|\Sigma_j|}{|\Sigma_i|} + \mathrm{Tr}(\Sigma_j^{-1}\Sigma_i) - d + (\mu_i - \mu_j)^\top \Sigma_j^{-1}(\mu_i - \mu_j)\right].
-\end{equation}
 
 We assume \textbf{isotropic covariances} $\Sigma_i = \Sigma_j = \sigma^2 I$. This implies:
 \begin{itemize}
@@ -1263,9 +1129,10 @@ Then:
 Q_i K_j^\top = \mu_i^\top W_Q W_K^\top \mu_j = \frac{1}{\sigma^2}\mu_i^\top \Omega \mu_j.
 \end{equation}
 
-This reveals the key insight: \textbf{the learned projections $W_Q, W_K$ encode the $\mathrm{GL}(K)$ gauge transformation}. The matrix $\Omega = \sigma^2 W_Q W_K^\top$ is the gauge transport that the network learns from data. The factorization $\Omega = W_Q W_K^\top$ is not a constraint but rather shows how the gauge structure is parametrized in standard transformers.
+This reveals that the learned projections $W_Q, W_K$ encode the $\mathrm{GL}(K)$ gauge transformation. The matrix $\Omega = \sigma^2 W_Q W_K^\top$ is the gauge transport that the network learns from data. The factorization $\Omega = W_Q W_K^\top$ is not a constraint but rather shows how the gauge structure is parametrized in standard transformers.
 
-Thus the compatibility term reduces to the \textbf{standard dot product}:
+Thus the compatibility term reduces to the standard dot product:
+
 \begin{equation}
 \tilde{s}_{ij} = Q_i K_j^\top + O(1),
 \end{equation}
