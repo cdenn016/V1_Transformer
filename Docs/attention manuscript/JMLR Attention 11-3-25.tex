@@ -1449,6 +1449,10 @@ For each $(L,H)$ pair across all 144 attention heads, we computed three compleme
   \item Cosine similarity between aggregated messages: $z_\alpha = \alpha_i V$ and $z_\beta = \beta_i V$
 \end{enumerate}
 
+\subsubsection{$\mathrm{GL}(K)$ Language Modeling}
+To validate the complete gauge-theoretic framework beyond attention mechanism correspondence, we trained $\mathrm{GL}(30)$ gauge transformers on WikiText-103 language modeling (102M tokens, vocabulary size 50,257). These experiments test whether variational free energy minimization can drive actual language learning, with the gauge structure ($\mu$, $\Sigma$, $\phi$) evolving jointly during training. Crucially, the $\mathrm{GL}(K)$ gauge VFE architecture contains no MLPs, activation functions, or learned attention projections ($W_Q$, $W_K$, $W_V$); only a linear output projection to vocabulary logits is retained. All other computation derives from KL divergences, parallel transport via $\Omega = \exp(\phi)$, and natural gradient descent on the Fisher-Rao manifold. No positional encoding is used; the causal attention mask provides implicit sequential structure.
+
+We trained two configurations: (1) a 3-layer model with trivial gauge transport ($\Omega = I$), $d_{\text{embed}} = 30$, $d_{\text{gauge}} = 15$, batch size 24; and (2) a 1-layer model with learned gauge transport ($\Omega \in \mathrm{GL}(30)$), $d_{\text{embed}} = 30$, $d_{\text{gauge}} = 30$, batch size 32. Both use VFE-dynamic mode with evolving covariance ($\Sigma$) and gauge frame ($\phi$), diagonal covariance structure, learnable per-component learning rates, and 50,000 training steps ($\sim$50M parameters per model).
 
 \subsection{Core Empirical Results}
 
@@ -1595,18 +1599,6 @@ When the same agents observe randomly drawn Gaussian observations, symmetry is b
 These phenomena are indicative of feature specialization and representational learning under gradient descent in deep neural architectures. The emergence of distinct feature directions can be interpreted as epistemic symmetry breaking where specialized modes emerge from a previously symmetric space. Furthermore, monitoring agent attentions $\beta_{ij}$ under evolution reveals that as agents undergo evolution, different base manifold fibers can align or diverge, allowing higher-level meta-agents to emerge according to the definitions of our model.
 
 \subsection{$\mathrm{GL}(K)$ Language Modeling: Training Dynamics}
-
-To validate the complete gauge-theoretic framework beyond attention mechanism correspondence, we trained $\mathrm{GL}(30)$ gauge transformers on WikiText-103 language modeling. These experiments demonstrate variational free energy minimization driving actual language learning, with the gauge structure ($\mu$, $\Sigma$, $\phi$) evolving jointly during training.
-
-\subsubsection{Experimental Configuration}
-
-We trained two $\mathrm{GL}(30)$ configurations on WikiText-103 (102M tokens):
-\begin{itemize}
-  \item \textbf{3-layer, trivial gauge}: $d_{\text{embed}} = 30$, $d_{\text{gauge}} = 15$, batch size 24
-  \item \textbf{1-layer, learned gauge}: $d_{\text{embed}} = 30$, $d_{\text{gauge}} = 30$, batch size 32
-\end{itemize}
-
-Both models use VFE-dynamic mode with evolving covariance ($\Sigma$) and gauge frame ($\phi$), diagonal covariance structure, learnable per-component learning rates, and 50,000 training steps. Total parameters: $\sim$50M per model.
 
 \subsubsection{Training Dynamics}
 
