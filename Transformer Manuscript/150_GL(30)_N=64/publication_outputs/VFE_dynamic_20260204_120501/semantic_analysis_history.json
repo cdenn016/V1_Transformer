@@ -1,0 +1,3878 @@
+[
+  {
+    "step": 0,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 0.15620495014720492,
+      "mu_inter_class_dist": 0.157338797301054,
+      "mu_class_ratio": 1.007258714610392,
+      "phi_intra_class_dist": 0.8525878323449029,
+      "phi_inter_class_dist": 0.8477126342058182,
+      "phi_class_ratio": 0.9942818816383102,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 0.1502380073070526,
+          "phi_dist": 0.8193445205688477
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 0.1299026906490326,
+          "phi_dist": 0.8303850889205933
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 0.17367462813854218,
+          "phi_dist": 0.8524619340896606
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 0.1057659313082695,
+          "phi_dist": 0.8515845537185669
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 0.1736810952425003,
+          "phi_dist": 0.8596099019050598
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 0.162763312458992,
+          "phi_dist": 0.8224063515663147
+        }
+      ],
+      "mu_related_mean": 0.14933761085073152,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step0.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step0.csv"
+  },
+  {
+    "step": 1000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.9922919591267905,
+      "mu_inter_class_dist": 2.423480762243271,
+      "mu_class_ratio": 1.2164285215031776,
+      "phi_intra_class_dist": 1.2178366952472264,
+      "phi_inter_class_dist": 1.244513165950775,
+      "phi_class_ratio": 1.0219048012000767,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 2.705265760421753,
+          "phi_dist": 2.2053933143615723
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 2.673722743988037,
+          "phi_dist": 1.2561832666397095
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.7697653770446777,
+          "phi_dist": 1.0282492637634277
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 5.789942741394043,
+          "phi_dist": 2.187464475631714
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.4874632358551025,
+          "phi_dist": 1.3271232843399048
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 3.3015637397766113,
+          "phi_dist": 1.6778002977371216
+        }
+      ],
+      "mu_related_mean": 3.454620599746704,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step1000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step1000.csv"
+  },
+  {
+    "step": 2000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.2780378103256225,
+      "mu_inter_class_dist": 2.6060310161113738,
+      "mu_class_ratio": 1.1439805802603724,
+      "phi_intra_class_dist": 1.7096240944332546,
+      "phi_inter_class_dist": 1.7061821079254151,
+      "phi_class_ratio": 0.9979866998136918,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 4.008230686187744,
+          "phi_dist": 1.5256497859954834
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.526510238647461,
+          "phi_dist": 1.7089176177978516
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 3.3384313583374023,
+          "phi_dist": 1.7521051168441772
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 5.858306407928467,
+          "phi_dist": 2.455397129058838
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.781881809234619,
+          "phi_dist": 1.649927020072937
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 3.8651537895202637,
+          "phi_dist": 1.6964484453201294
+        }
+      ],
+      "mu_related_mean": 4.063085714975993,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step2000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step2000.csv"
+  },
+  {
+    "step": 3000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.495923227734036,
+      "mu_inter_class_dist": 2.682845892906189,
+      "mu_class_ratio": 1.0748911918023432,
+      "phi_intra_class_dist": 2.1690218448638916,
+      "phi_inter_class_dist": 2.162576800584793,
+      "phi_class_ratio": 0.9970285941128901,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 4.185974597930908,
+          "phi_dist": 2.8737587928771973
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 5.5175461769104,
+          "phi_dist": 2.9051129817962646
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.3589231967926025,
+          "phi_dist": 2.050323963165283
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 5.445483207702637,
+          "phi_dist": 2.416594982147217
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 4.555840492248535,
+          "phi_dist": 1.8276851177215576
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 3.9905216693878174,
+          "phi_dist": 2.347517251968384
+        }
+      ],
+      "mu_related_mean": 4.342381556828816,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step3000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step3000.csv"
+  },
+  {
+    "step": 4000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.8971215936872694,
+      "mu_inter_class_dist": 2.913714234828949,
+      "mu_class_ratio": 1.0057272850327836,
+      "phi_intra_class_dist": 2.5634734047783745,
+      "phi_inter_class_dist": 2.5330858492851256,
+      "phi_class_ratio": 0.9881459447027593,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 6.14559268951416,
+          "phi_dist": 2.327632188796997
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.9530439376831055,
+          "phi_dist": 2.5618345737457275
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 3.0195178985595703,
+          "phi_dist": 2.6899380683898926
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 6.208474636077881,
+          "phi_dist": 2.709442138671875
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 4.506106853485107,
+          "phi_dist": 2.3855903148651123
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 4.1223368644714355,
+          "phi_dist": 2.3067774772644043
+        }
+      ],
+      "mu_related_mean": 4.659178813298543,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step4000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step4000.csv"
+  },
+  {
+    "step": 5000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.8596290429433187,
+      "mu_inter_class_dist": 2.8844430088996886,
+      "mu_class_ratio": 1.008677337369196,
+      "phi_intra_class_dist": 2.8912896103329127,
+      "phi_inter_class_dist": 2.8044105231761933,
+      "phi_class_ratio": 0.9699514407528633,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 4.829061031341553,
+          "phi_dist": 2.2346270084381104
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 4.482149124145508,
+          "phi_dist": 2.5383787155151367
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 3.5249435901641846,
+          "phi_dist": 3.0680689811706543
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 6.767477989196777,
+          "phi_dist": 2.7510528564453125
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 5.657629013061523,
+          "phi_dist": 2.4013490676879883
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 4.611817359924316,
+          "phi_dist": 3.3251941204071045
+        }
+      ],
+      "mu_related_mean": 4.978846351305644,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step5000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step5000.csv"
+  },
+  {
+    "step": 6000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.506068449550205,
+      "mu_inter_class_dist": 2.5099445068836213,
+      "mu_class_ratio": 1.001546668581264,
+      "phi_intra_class_dist": 3.276771052678426,
+      "phi_inter_class_dist": 3.253368308544159,
+      "phi_class_ratio": 0.9928579861827278,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 4.319561004638672,
+          "phi_dist": 2.827136278152466
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.831223964691162,
+          "phi_dist": 3.2186336517333984
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.8624863624572754,
+          "phi_dist": 3.3585469722747803
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 6.799296855926514,
+          "phi_dist": 2.8586020469665527
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 5.143948554992676,
+          "phi_dist": 2.686257839202881
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 6.08245849609375,
+          "phi_dist": 2.849858283996582
+        }
+      ],
+      "mu_related_mean": 4.839829206466675,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step6000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step6000.csv"
+  },
+  {
+    "step": 7000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.854355051782396,
+      "mu_inter_class_dist": 2.6796770167350767,
+      "mu_class_ratio": 0.9388029758462452,
+      "phi_intra_class_dist": 3.514210769865248,
+      "phi_inter_class_dist": 3.479050989151001,
+      "phi_class_ratio": 0.9899949709858766,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 4.4501953125,
+          "phi_dist": 3.1401207447052
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 4.1389665603637695,
+          "phi_dist": 3.47506046295166
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.8012118339538574,
+          "phi_dist": 3.212944269180298
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 5.467130184173584,
+          "phi_dist": 3.345803737640381
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.896764039993286,
+          "phi_dist": 2.925678253173828
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 5.056577682495117,
+          "phi_dist": 3.0354702472686768
+        }
+      ],
+      "mu_related_mean": 4.301807602246602,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step7000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step7000.csv"
+  },
+  {
+    "step": 8000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.7606455352571277,
+      "mu_inter_class_dist": 2.63421426653862,
+      "mu_class_ratio": 0.9542022809144414,
+      "phi_intra_class_dist": 3.7462482982211642,
+      "phi_inter_class_dist": 3.711930456161499,
+      "phi_class_ratio": 0.9908394107043144,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 4.949892520904541,
+          "phi_dist": 3.0835249423980713
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 4.763948440551758,
+          "phi_dist": 3.6684556007385254
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.6372573375701904,
+          "phi_dist": 3.2432966232299805
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 6.537768840789795,
+          "phi_dist": 3.6286163330078125
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.1671085357666016,
+          "phi_dist": 3.098090410232544
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 4.612116813659668,
+          "phi_dist": 3.1827709674835205
+        }
+      ],
+      "mu_related_mean": 4.444682081540425,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step8000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step8000.csv"
+  },
+  {
+    "step": 9000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.4771923542022707,
+      "mu_inter_class_dist": 2.406952636241913,
+      "mu_class_ratio": 0.9716454324424164,
+      "phi_intra_class_dist": 3.8698600980970594,
+      "phi_inter_class_dist": 3.8586765193939208,
+      "phi_class_ratio": 0.9971100819100314,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 4.428117752075195,
+          "phi_dist": 3.122144937515259
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.1881818771362305,
+          "phi_dist": 3.77449631690979
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.4939634799957275,
+          "phi_dist": 3.464824914932251
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 5.1683502197265625,
+          "phi_dist": 3.4114580154418945
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 4.62786340713501,
+          "phi_dist": 3.3787477016448975
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 4.269167900085449,
+          "phi_dist": 3.3548481464385986
+        }
+      ],
+      "mu_related_mean": 4.029274106025696,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step9000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step9000.csv"
+  },
+  {
+    "step": 10000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.585993830362956,
+      "mu_inter_class_dist": 2.4743218421936035,
+      "mu_class_ratio": 0.956816606885068,
+      "phi_intra_class_dist": 3.997942950990465,
+      "phi_inter_class_dist": 3.9952877950668335,
+      "phi_class_ratio": 0.999335869481836,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 4.160120010375977,
+          "phi_dist": 3.407083034515381
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 4.302519798278809,
+          "phi_dist": 4.045778751373291
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 3.604905128479004,
+          "phi_dist": 3.676729440689087
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 4.8565802574157715,
+          "phi_dist": 3.7316532135009766
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.6497416496276855,
+          "phi_dist": 3.4850709438323975
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 4.8299784660339355,
+          "phi_dist": 3.3827879428863525
+        }
+      ],
+      "mu_related_mean": 4.23397421836853,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step10000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step10000.csv"
+  },
+  {
+    "step": 11000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.810850238800049,
+      "mu_inter_class_dist": 2.6336954021453858,
+      "mu_class_ratio": 0.9369746441097159,
+      "phi_intra_class_dist": 4.179732190238105,
+      "phi_inter_class_dist": 4.175053369998932,
+      "phi_class_ratio": 0.9988805932949244,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 4.493354320526123,
+          "phi_dist": 3.66674542427063
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 4.473219394683838,
+          "phi_dist": 4.198701858520508
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 3.417478084564209,
+          "phi_dist": 3.720200538635254
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 5.764665603637695,
+          "phi_dist": 3.5861613750457764
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 4.485360622406006,
+          "phi_dist": 3.7780251502990723
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 3.9972736835479736,
+          "phi_dist": 3.4750678539276123
+        }
+      ],
+      "mu_related_mean": 4.438558618227641,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step11000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step11000.csv"
+  },
+  {
+    "step": 12000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.572213469611274,
+      "mu_inter_class_dist": 2.5026504504680633,
+      "mu_class_ratio": 0.9729559696483032,
+      "phi_intra_class_dist": 4.317968283759223,
+      "phi_inter_class_dist": 4.281932113170623,
+      "phi_class_ratio": 0.9916543688558022,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 3.5240375995635986,
+          "phi_dist": 3.571284770965576
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.6025562286376953,
+          "phi_dist": 4.236193656921387
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.335691213607788,
+          "phi_dist": 3.589879035949707
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 6.006962299346924,
+          "phi_dist": 3.5181422233581543
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.4837868213653564,
+          "phi_dist": 3.709545135498047
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 4.492191791534424,
+          "phi_dist": 3.6467456817626953
+        }
+      ],
+      "mu_related_mean": 3.907537659009298,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step12000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step12000.csv"
+  },
+  {
+    "step": 13000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.133174840609233,
+      "mu_inter_class_dist": 2.2151903915405273,
+      "mu_class_ratio": 1.0384476459078578,
+      "phi_intra_class_dist": 4.3631577067905,
+      "phi_inter_class_dist": 4.327994334697723,
+      "phi_class_ratio": 0.9919408432021489,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 4.229211330413818,
+          "phi_dist": 3.802907705307007
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.4788997173309326,
+          "phi_dist": 4.4283905029296875
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.8008108139038086,
+          "phi_dist": 3.637798547744751
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 5.7554779052734375,
+          "phi_dist": 3.4620020389556885
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.949190139770508,
+          "phi_dist": 3.878415822982788
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 5.98909330368042,
+          "phi_dist": 3.812544107437134
+        }
+      ],
+      "mu_related_mean": 4.367113868395488,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step13000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step13000.csv"
+  },
+  {
+    "step": 14000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.5497829808129207,
+      "mu_inter_class_dist": 2.460920568704605,
+      "mu_class_ratio": 0.9651490292401338,
+      "phi_intra_class_dist": 4.376725848515829,
+      "phi_inter_class_dist": 4.37632878780365,
+      "phi_class_ratio": 0.9999092790533559,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 4.88864278793335,
+          "phi_dist": 3.98000431060791
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 4.228419780731201,
+          "phi_dist": 4.7536420822143555
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.960191249847412,
+          "phi_dist": 3.8156797885894775
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 5.310094833374023,
+          "phi_dist": 3.7302939891815186
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 4.269870281219482,
+          "phi_dist": 3.9135711193084717
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 5.0560526847839355,
+          "phi_dist": 4.561405181884766
+        }
+      ],
+      "mu_related_mean": 4.4522119363149,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step14000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step14000.csv"
+  },
+  {
+    "step": 15000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.4715406205919055,
+      "mu_inter_class_dist": 2.3717354834079742,
+      "mu_class_ratio": 0.9596182493007017,
+      "phi_intra_class_dist": 4.415754630830553,
+      "phi_inter_class_dist": 4.421258251667023,
+      "phi_class_ratio": 1.0012463602026354,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 4.879055500030518,
+          "phi_dist": 4.049649238586426
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.4210727214813232,
+          "phi_dist": 5.07824182510376
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 3.060237169265747,
+          "phi_dist": 3.8260746002197266
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 4.803214073181152,
+          "phi_dist": 3.7596492767333984
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 4.753539085388184,
+          "phi_dist": 3.8501150608062744
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 3.9476675987243652,
+          "phi_dist": 4.015089511871338
+        }
+      ],
+      "mu_related_mean": 4.144131024678548,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step15000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step15000.csv"
+  },
+  {
+    "step": 16000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.4450317753685846,
+      "mu_inter_class_dist": 2.3676834785938263,
+      "mu_class_ratio": 0.9683651159244758,
+      "phi_intra_class_dist": 4.537531412972344,
+      "phi_inter_class_dist": 4.496175858974457,
+      "phi_class_ratio": 0.9908858914167171,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 5.517337322235107,
+          "phi_dist": 4.366106033325195
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.3565659523010254,
+          "phi_dist": 5.101034641265869
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.2927417755126953,
+          "phi_dist": 3.781899929046631
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 4.107473373413086,
+          "phi_dist": 3.9048352241516113
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.4810147285461426,
+          "phi_dist": 3.928830146789551
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 4.765169620513916,
+          "phi_dist": 4.20827579498291
+        }
+      ],
+      "mu_related_mean": 3.9200504620869956,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step16000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step16000.csv"
+  },
+  {
+    "step": 17000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.397806247075399,
+      "mu_inter_class_dist": 2.3147358179092405,
+      "mu_class_ratio": 0.9653556540410723,
+      "phi_intra_class_dist": 4.55698135693868,
+      "phi_inter_class_dist": 4.537295451164246,
+      "phi_class_ratio": 0.9956800556700853,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 4.161295413970947,
+          "phi_dist": 4.173824310302734
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.492713689804077,
+          "phi_dist": 5.142998218536377
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.346799612045288,
+          "phi_dist": 3.9445176124572754
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 4.234055042266846,
+          "phi_dist": 3.9324545860290527
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.77866530418396,
+          "phi_dist": 3.9791018962860107
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 4.450274467468262,
+          "phi_dist": 4.173433303833008
+        }
+      ],
+      "mu_related_mean": 3.7439672549565635,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step17000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step17000.csv"
+  },
+  {
+    "step": 18000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.4302628331714207,
+      "mu_inter_class_dist": 2.2639561080932618,
+      "mu_class_ratio": 0.9315684201691331,
+      "phi_intra_class_dist": 4.633253690931532,
+      "phi_inter_class_dist": 4.594542963504791,
+      "phi_class_ratio": 0.9916450231286692,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 4.803409099578857,
+          "phi_dist": 4.295888423919678
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 4.90905237197876,
+          "phi_dist": 5.251539707183838
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.4430902004241943,
+          "phi_dist": 3.926496744155884
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 4.374512672424316,
+          "phi_dist": 4.08043098449707
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 4.462296009063721,
+          "phi_dist": 3.97495174407959
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 5.470117568969727,
+          "phi_dist": 4.392578601837158
+        }
+      ],
+      "mu_related_mean": 4.410412987073262,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step18000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step18000.csv"
+  },
+  {
+    "step": 19000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.33936321205563,
+      "mu_inter_class_dist": 2.2149408078193664,
+      "mu_class_ratio": 0.9468135586662783,
+      "phi_intra_class_dist": 4.673850398593479,
+      "phi_inter_class_dist": 4.65194459438324,
+      "phi_class_ratio": 0.9953131139548601,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 2.7440454959869385,
+          "phi_dist": 4.271006107330322
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.7712268829345703,
+          "phi_dist": 5.290934085845947
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.350036382675171,
+          "phi_dist": 4.005981922149658
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 4.040248394012451,
+          "phi_dist": 4.010156631469727
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 2.886902332305908,
+          "phi_dist": 4.050274848937988
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 4.474740982055664,
+          "phi_dist": 4.4178466796875
+        }
+      ],
+      "mu_related_mean": 3.377866744995117,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step19000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step19000.csv"
+  },
+  {
+    "step": 20000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.227022835943434,
+      "mu_inter_class_dist": 2.159091240167618,
+      "mu_class_ratio": 0.9694966775017203,
+      "phi_intra_class_dist": 4.6730966038174095,
+      "phi_inter_class_dist": 4.677593982219696,
+      "phi_class_ratio": 1.0009623979094744,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 3.2063655853271484,
+          "phi_dist": 4.373884201049805
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.3075451850891113,
+          "phi_dist": 5.509740829467773
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.9026949405670166,
+          "phi_dist": 4.050549030303955
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 3.0199296474456787,
+          "phi_dist": 3.966986894607544
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.262356996536255,
+          "phi_dist": 4.041618347167969
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 3.8703596591949463,
+          "phi_dist": 4.443974018096924
+        }
+      ],
+      "mu_related_mean": 3.261542002360026,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step20000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step20000.csv"
+  },
+  {
+    "step": 21000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.148916098806593,
+      "mu_inter_class_dist": 2.096043035984039,
+      "mu_class_ratio": 0.9753954736288136,
+      "phi_intra_class_dist": 4.732664765252007,
+      "phi_inter_class_dist": 4.711292753219604,
+      "phi_class_ratio": 0.9954841483408418,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 3.4180283546447754,
+          "phi_dist": 4.521191596984863
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.0387842655181885,
+          "phi_dist": 5.566917419433594
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.604844331741333,
+          "phi_dist": 4.1004109382629395
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 4.001371383666992,
+          "phi_dist": 4.046664237976074
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.951512336730957,
+          "phi_dist": 4.065088748931885
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 4.8892717361450195,
+          "phi_dist": 4.667877197265625
+        }
+      ],
+      "mu_related_mean": 3.6506354014078775,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step21000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step21000.csv"
+  },
+  {
+    "step": 22000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.059859702322218,
+      "mu_inter_class_dist": 2.0604615330696108,
+      "mu_class_ratio": 1.000292170746733,
+      "phi_intra_class_dist": 4.75454290178087,
+      "phi_inter_class_dist": 4.7321097898483275,
+      "phi_class_ratio": 0.9952817521271834,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 3.4716196060180664,
+          "phi_dist": 4.497901439666748
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.5840041637420654,
+          "phi_dist": 5.680399417877197
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.241291046142578,
+          "phi_dist": 4.045958042144775
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 4.848179340362549,
+          "phi_dist": 4.032700538635254
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 2.8979153633117676,
+          "phi_dist": 4.076672077178955
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 4.0021138191223145,
+          "phi_dist": 4.629105567932129
+        }
+      ],
+      "mu_related_mean": 3.50752055644989,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step22000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step22000.csv"
+  },
+  {
+    "step": 23000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.1591539912753634,
+      "mu_inter_class_dist": 2.1767252361774445,
+      "mu_class_ratio": 1.008138023028039,
+      "phi_intra_class_dist": 4.761896758609348,
+      "phi_inter_class_dist": 4.755976915359497,
+      "phi_class_ratio": 0.9987568308281468,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 3.487694263458252,
+          "phi_dist": 4.378110885620117
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.161252498626709,
+          "phi_dist": 5.680072784423828
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.394442081451416,
+          "phi_dist": 3.9136970043182373
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 3.4919185638427734,
+          "phi_dist": 4.200524806976318
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.2575621604919434,
+          "phi_dist": 4.092101573944092
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 3.1199910640716553,
+          "phi_dist": 4.628421306610107
+        }
+      ],
+      "mu_related_mean": 3.152143438657125,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step23000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step23000.csv"
+  },
+  {
+    "step": 24000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.058114743232727,
+      "mu_inter_class_dist": 2.0864682936668397,
+      "mu_class_ratio": 1.013776467287522,
+      "phi_intra_class_dist": 4.8322824425167505,
+      "phi_inter_class_dist": 4.809418003559113,
+      "phi_class_ratio": 0.9952683976506702,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 3.3761518001556396,
+          "phi_dist": 4.468625545501709
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.289454936981201,
+          "phi_dist": 5.758559226989746
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 3.1496336460113525,
+          "phi_dist": 3.9807653427124023
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 3.4087603092193604,
+          "phi_dist": 4.20469856262207
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.4305458068847656,
+          "phi_dist": 4.0903754234313965
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 4.215599536895752,
+          "phi_dist": 4.670902252197266
+        }
+      ],
+      "mu_related_mean": 3.478357672691345,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step24000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step24000.csv"
+  },
+  {
+    "step": 25000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.133725386195713,
+      "mu_inter_class_dist": 2.0939328944683075,
+      "mu_class_ratio": 0.981350696774362,
+      "phi_intra_class_dist": 4.847195598814222,
+      "phi_inter_class_dist": 4.8229365110397335,
+      "phi_class_ratio": 0.9949952323400312,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 3.6022841930389404,
+          "phi_dist": 4.5223565101623535
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.547177791595459,
+          "phi_dist": 5.767913341522217
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.7546281814575195,
+          "phi_dist": 4.157221794128418
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 4.434072971343994,
+          "phi_dist": 4.148936748504639
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 2.9686386585235596,
+          "phi_dist": 4.042532920837402
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 4.004055023193359,
+          "phi_dist": 4.660242080688477
+        }
+      ],
+      "mu_related_mean": 3.551809469858805,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step25000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step25000.csv"
+  },
+  {
+    "step": 26000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.0709173043568927,
+      "mu_inter_class_dist": 1.97969660282135,
+      "mu_class_ratio": 0.9559515479716992,
+      "phi_intra_class_dist": 4.875600973765056,
+      "phi_inter_class_dist": 4.852777514457703,
+      "phi_class_ratio": 0.9953188418350553,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 3.7660834789276123,
+          "phi_dist": 4.453255653381348
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 2.886056900024414,
+          "phi_dist": 5.705550670623779
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.5309042930603027,
+          "phi_dist": 4.139467239379883
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 4.3839616775512695,
+          "phi_dist": 4.125300407409668
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.451617956161499,
+          "phi_dist": 4.047019004821777
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 3.5697362422943115,
+          "phi_dist": 4.638757705688477
+        }
+      ],
+      "mu_related_mean": 3.4313934246699014,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step26000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step26000.csv"
+  },
+  {
+    "step": 27000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.0225558704800077,
+      "mu_inter_class_dist": 2.004100308418274,
+      "mu_class_ratio": 0.9908751286769873,
+      "phi_intra_class_dist": 4.865174685584174,
+      "phi_inter_class_dist": 4.857027897834778,
+      "phi_class_ratio": 0.9983254891600222,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 3.098372459411621,
+          "phi_dist": 4.492423057556152
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.081627368927002,
+          "phi_dist": 5.728868007659912
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.4877610206604004,
+          "phi_dist": 4.086289405822754
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 3.3131773471832275,
+          "phi_dist": 4.129232883453369
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.422790288925171,
+          "phi_dist": 4.142565727233887
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 3.729412794113159,
+          "phi_dist": 4.670782566070557
+        }
+      ],
+      "mu_related_mean": 3.1888568798700967,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step27000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step27000.csv"
+  },
+  {
+    "step": 28000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.9716617716683282,
+      "mu_inter_class_dist": 1.9292215812206268,
+      "mu_class_ratio": 0.9784749133662055,
+      "phi_intra_class_dist": 4.894901445176866,
+      "phi_inter_class_dist": 4.88739200592041,
+      "phi_class_ratio": 0.9984658650760262,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 3.7357020378112793,
+          "phi_dist": 4.441269397735596
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.3864755630493164,
+          "phi_dist": 5.685689926147461
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.3677966594696045,
+          "phi_dist": 4.135110378265381
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 3.653264284133911,
+          "phi_dist": 4.154153823852539
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 2.5155231952667236,
+          "phi_dist": 4.083035945892334
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 3.0211102962493896,
+          "phi_dist": 4.648593902587891
+        }
+      ],
+      "mu_related_mean": 3.113312005996704,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step28000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step28000.csv"
+  },
+  {
+    "step": 29000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.7758439434899225,
+      "mu_inter_class_dist": 1.8829550492763518,
+      "mu_class_ratio": 1.0603156072238715,
+      "phi_intra_class_dist": 4.8819501029120556,
+      "phi_inter_class_dist": 4.89647456407547,
+      "phi_class_ratio": 1.0029751351114282,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 2.750469923019409,
+          "phi_dist": 4.3547868728637695
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 2.6273202896118164,
+          "phi_dist": 5.696548938751221
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.5535805225372314,
+          "phi_dist": 4.13284158706665
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 3.109666109085083,
+          "phi_dist": 4.195425033569336
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.1620845794677734,
+          "phi_dist": 4.036579608917236
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 3.075908899307251,
+          "phi_dist": 4.654840469360352
+        }
+      ],
+      "mu_related_mean": 2.8798383871714273,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step29000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step29000.csv"
+  },
+  {
+    "step": 30000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.7498197820451524,
+      "mu_inter_class_dist": 1.8459290301799773,
+      "mu_class_ratio": 1.0549252266553384,
+      "phi_intra_class_dist": 4.886206393771701,
+      "phi_inter_class_dist": 4.904495906829834,
+      "phi_class_ratio": 1.003743090566425,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 2.545804500579834,
+          "phi_dist": 4.360081672668457
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 2.63787841796875,
+          "phi_dist": 5.66689920425415
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.4893031120300293,
+          "phi_dist": 4.132395267486572
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 2.744503974914551,
+          "phi_dist": 4.179686546325684
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.5801661014556885,
+          "phi_dist": 4.054329872131348
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 2.4523766040802,
+          "phi_dist": 4.594887733459473
+        }
+      ],
+      "mu_related_mean": 2.7416721185048423,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step30000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step30000.csv"
+  },
+  {
+    "step": 31000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.6968774027294582,
+      "mu_inter_class_dist": 1.7569920599460602,
+      "mu_class_ratio": 1.0354266354893444,
+      "phi_intra_class_dist": 4.900631210539076,
+      "phi_inter_class_dist": 4.910107567310333,
+      "phi_class_ratio": 1.0019337012650285,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 2.4617562294006348,
+          "phi_dist": 4.377810001373291
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 2.694171190261841,
+          "phi_dist": 5.621018886566162
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.5984859466552734,
+          "phi_dist": 4.127448558807373
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 3.1074559688568115,
+          "phi_dist": 4.222360134124756
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 2.5135719776153564,
+          "phi_dist": 4.0585150718688965
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 3.435307025909424,
+          "phi_dist": 4.597872257232666
+        }
+      ],
+      "mu_related_mean": 2.8017913897832236,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step31000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step31000.csv"
+  },
+  {
+    "step": 32000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.8602525022294787,
+      "mu_inter_class_dist": 1.8375371432304382,
+      "mu_class_ratio": 0.9877890990756273,
+      "phi_intra_class_dist": 4.905467473136055,
+      "phi_inter_class_dist": 4.915694675445557,
+      "phi_class_ratio": 1.0020848578378125,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 2.6050891876220703,
+          "phi_dist": 4.460689067840576
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 2.672459602355957,
+          "phi_dist": 5.725962162017822
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.362993001937866,
+          "phi_dist": 4.11046028137207
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 2.685607671737671,
+          "phi_dist": 4.230374336242676
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 2.561166286468506,
+          "phi_dist": 4.036799907684326
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 3.2116715908050537,
+          "phi_dist": 4.655459880828857
+        }
+      ],
+      "mu_related_mean": 2.6831645568211875,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step32000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step32000.csv"
+  },
+  {
+    "step": 33000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.6413134574890136,
+      "mu_inter_class_dist": 1.7724226438999175,
+      "mu_class_ratio": 1.0798806503490705,
+      "phi_intra_class_dist": 4.9046917915344235,
+      "phi_inter_class_dist": 4.919177498817444,
+      "phi_class_ratio": 1.0029534388497199,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 2.8104774951934814,
+          "phi_dist": 4.522779941558838
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 2.641047239303589,
+          "phi_dist": 5.789773464202881
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.344428539276123,
+          "phi_dist": 4.106656074523926
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 3.307598352432251,
+          "phi_dist": 4.183610916137695
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 2.2712905406951904,
+          "phi_dist": 3.996119737625122
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 2.8033883571624756,
+          "phi_dist": 4.649234294891357
+        }
+      ],
+      "mu_related_mean": 2.6963717540105185,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step33000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step33000.csv"
+  },
+  {
+    "step": 34000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.545634110768636,
+      "mu_inter_class_dist": 1.6989723217487336,
+      "mu_class_ratio": 1.0992073155682642,
+      "phi_intra_class_dist": 4.901368808746338,
+      "phi_inter_class_dist": 4.922050518989563,
+      "phi_class_ratio": 1.0042195784586376,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 2.4461867809295654,
+          "phi_dist": 4.508089542388916
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 2.353121042251587,
+          "phi_dist": 5.825017929077148
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.1109702587127686,
+          "phi_dist": 4.121133804321289
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 2.6548075675964355,
+          "phi_dist": 4.249838829040527
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 2.0877957344055176,
+          "phi_dist": 4.0002827644348145
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 2.981459140777588,
+          "phi_dist": 4.633660316467285
+        }
+      ],
+      "mu_related_mean": 2.4390567541122437,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step34000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step34000.csv"
+  },
+  {
+    "step": 35000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.5367506239149304,
+      "mu_inter_class_dist": 1.698560962677002,
+      "mu_class_ratio": 1.1052938168652593,
+      "phi_intra_class_dist": 4.897581121656629,
+      "phi_inter_class_dist": 4.924571826457977,
+      "phi_class_ratio": 1.0055110276136106,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 2.432175397872925,
+          "phi_dist": 4.468587398529053
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 2.279399871826172,
+          "phi_dist": 5.800009250640869
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.266608953475952,
+          "phi_dist": 4.124475955963135
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 2.787529468536377,
+          "phi_dist": 4.24144983291626
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 2.1299002170562744,
+          "phi_dist": 3.998363494873047
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 2.9406371116638184,
+          "phi_dist": 4.646487236022949
+        }
+      ],
+      "mu_related_mean": 2.472708503405253,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step35000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step35000.csv"
+  },
+  {
+    "step": 36000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.651058348019918,
+      "mu_inter_class_dist": 1.709881728887558,
+      "mu_class_ratio": 1.0356276814433518,
+      "phi_intra_class_dist": 4.908669190936618,
+      "phi_inter_class_dist": 4.9341431546211245,
+      "phi_class_ratio": 1.0051895865648355,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 2.6544501781463623,
+          "phi_dist": 4.471817970275879
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 2.0310351848602295,
+          "phi_dist": 5.820289134979248
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 1.9675734043121338,
+          "phi_dist": 4.115301132202148
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 2.3089077472686768,
+          "phi_dist": 4.253713130950928
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 2.2892911434173584,
+          "phi_dist": 4.026626110076904
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 2.748206615447998,
+          "phi_dist": 4.6545610427856445
+        }
+      ],
+      "mu_related_mean": 2.33324404557546,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step36000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step36000.csv"
+  },
+  {
+    "step": 37000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.544748153951433,
+      "mu_inter_class_dist": 1.643995531797409,
+      "mu_class_ratio": 1.0642482579390715,
+      "phi_intra_class_dist": 4.90169636408488,
+      "phi_inter_class_dist": 4.931605758666993,
+      "phi_class_ratio": 1.0061018456388406,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 2.7016420364379883,
+          "phi_dist": 4.448997974395752
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 2.104814291000366,
+          "phi_dist": 5.805110454559326
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.2142326831817627,
+          "phi_dist": 4.099888324737549
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 3.120628595352173,
+          "phi_dist": 4.254695892333984
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 2.211181402206421,
+          "phi_dist": 4.03646183013916
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 2.631740093231201,
+          "phi_dist": 4.65027379989624
+        }
+      ],
+      "mu_related_mean": 2.497373183568319,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step37000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step37000.csv"
+  },
+  {
+    "step": 38000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.5234057479434544,
+      "mu_inter_class_dist": 1.6561477756500245,
+      "mu_class_ratio": 1.0871350445446115,
+      "phi_intra_class_dist": 4.908095465766059,
+      "phi_inter_class_dist": 4.936249673366547,
+      "phi_class_ratio": 1.005736279539969,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 2.5865397453308105,
+          "phi_dist": 4.44243049621582
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 2.501683473587036,
+          "phi_dist": 5.793344497680664
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 1.9079034328460693,
+          "phi_dist": 4.0892863273620605
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 2.7058541774749756,
+          "phi_dist": 4.25866174697876
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 1.9160314798355103,
+          "phi_dist": 4.032294273376465
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 2.7026240825653076,
+          "phi_dist": 4.654410362243652
+        }
+      ],
+      "mu_related_mean": 2.3867727319399514,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step38000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step38000.csv"
+  },
+  {
+    "step": 39000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.4756536059909398,
+      "mu_inter_class_dist": 1.561132423877716,
+      "mu_class_ratio": 1.0579260725821729,
+      "phi_intra_class_dist": 4.903145583470662,
+      "phi_inter_class_dist": 4.935892076492309,
+      "phi_class_ratio": 1.0066786703482844,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 2.431969165802002,
+          "phi_dist": 4.440740585327148
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 2.415503978729248,
+          "phi_dist": 5.780792236328125
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 1.6766008138656616,
+          "phi_dist": 4.100334167480469
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 2.5170388221740723,
+          "phi_dist": 4.248150825500488
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 1.5656026601791382,
+          "phi_dist": 4.03151798248291
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 2.4936740398406982,
+          "phi_dist": 4.667055130004883
+        }
+      ],
+      "mu_related_mean": 2.1833982467651367,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step39000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step39000.csv"
+  },
+  {
+    "step": 40000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.3541281474961175,
+      "mu_inter_class_dist": 1.4807629442214967,
+      "mu_class_ratio": 1.093517586913422,
+      "phi_intra_class_dist": 4.9021495342254635,
+      "phi_inter_class_dist": 4.936892764568329,
+      "phi_class_ratio": 1.0070873460918108,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 2.338491201400757,
+          "phi_dist": 4.436287879943848
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 2.0505013465881348,
+          "phi_dist": 5.797713756561279
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 1.7477837800979614,
+          "phi_dist": 4.1046462059021
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 2.3077874183654785,
+          "phi_dist": 4.2369513511657715
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 1.858595371246338,
+          "phi_dist": 4.02547025680542
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 2.1968345642089844,
+          "phi_dist": 4.673140525817871
+        }
+      ],
+      "mu_related_mean": 2.083332280317942,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step40000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step40000.csv"
+  },
+  {
+    "step": 41000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.2930636352962919,
+      "mu_inter_class_dist": 1.470443651676178,
+      "mu_class_ratio": 1.1371781028698107,
+      "phi_intra_class_dist": 4.901528098848131,
+      "phi_inter_class_dist": 4.938377447128296,
+      "phi_class_ratio": 1.0075179306406148,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 1.9650601148605347,
+          "phi_dist": 4.429240703582764
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 1.9853435754776,
+          "phi_dist": 5.778296947479248
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 1.8409028053283691,
+          "phi_dist": 4.102697372436523
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 2.1021595001220703,
+          "phi_dist": 4.2061004638671875
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 1.7828834056854248,
+          "phi_dist": 4.018505096435547
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 1.9173039197921753,
+          "phi_dist": 4.670076370239258
+        }
+      ],
+      "mu_related_mean": 1.9322755535443623,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step41000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step41000.csv"
+  },
+  {
+    "step": 42000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.2727472106615703,
+      "mu_inter_class_dist": 1.4306506931781768,
+      "mu_class_ratio": 1.1240650784333903,
+      "phi_intra_class_dist": 4.898203627268473,
+      "phi_inter_class_dist": 4.937160313129425,
+      "phi_class_ratio": 1.0079532597714147,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 1.8506497144699097,
+          "phi_dist": 4.426056385040283
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 1.797106146812439,
+          "phi_dist": 5.784769535064697
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 1.8259423971176147,
+          "phi_dist": 4.102686405181885
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 2.1573328971862793,
+          "phi_dist": 4.204373836517334
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 1.4623042345046997,
+          "phi_dist": 4.0166802406311035
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 1.869126319885254,
+          "phi_dist": 4.664976596832275
+        }
+      ],
+      "mu_related_mean": 1.8270769516626995,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step42000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step42000.csv"
+  },
+  {
+    "step": 43000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.1955611904462178,
+      "mu_inter_class_dist": 1.367219865322113,
+      "mu_class_ratio": 1.1435799992903979,
+      "phi_intra_class_dist": 4.897061257892185,
+      "phi_inter_class_dist": 4.93919753074646,
+      "phi_class_ratio": 1.0086043997890302,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 1.7130937576293945,
+          "phi_dist": 4.434866428375244
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 1.9469561576843262,
+          "phi_dist": 5.782597541809082
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 1.8604778051376343,
+          "phi_dist": 4.11016845703125
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 2.0761444568634033,
+          "phi_dist": 4.207129955291748
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 1.5593663454055786,
+          "phi_dist": 4.016432762145996
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 1.8406505584716797,
+          "phi_dist": 4.654891490936279
+        }
+      ],
+      "mu_related_mean": 1.8327815135320027,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step43000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step43000.csv"
+  },
+  {
+    "step": 44000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.184352425734202,
+      "mu_inter_class_dist": 1.3509130251407624,
+      "mu_class_ratio": 1.1406343211593513,
+      "phi_intra_class_dist": 4.897723378075494,
+      "phi_inter_class_dist": 4.937900002002716,
+      "phi_class_ratio": 1.0082031223133328,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 1.693088173866272,
+          "phi_dist": 4.422135353088379
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 1.9121500253677368,
+          "phi_dist": 5.785147190093994
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 1.5636932849884033,
+          "phi_dist": 4.109912395477295
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 2.0042154788970947,
+          "phi_dist": 4.200322151184082
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 1.3720803260803223,
+          "phi_dist": 4.0168633460998535
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 1.8476892709732056,
+          "phi_dist": 4.6510138511657715
+        }
+      ],
+      "mu_related_mean": 1.7321527600288391,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step44000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step44000.csv"
+  },
+  {
+    "step": 45000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.1381685336430867,
+      "mu_inter_class_dist": 1.3267604875564576,
+      "mu_class_ratio": 1.165697740131437,
+      "phi_intra_class_dist": 4.896941391626994,
+      "phi_inter_class_dist": 4.93738477230072,
+      "phi_class_ratio": 1.00825890641511,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 1.701481819152832,
+          "phi_dist": 4.416057109832764
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 1.9102988243103027,
+          "phi_dist": 5.782671928405762
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 1.5896247625350952,
+          "phi_dist": 4.11061954498291
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 1.9608166217803955,
+          "phi_dist": 4.202455520629883
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 1.3194125890731812,
+          "phi_dist": 4.011119365692139
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 1.7689025402069092,
+          "phi_dist": 4.652309417724609
+        }
+      ],
+      "mu_related_mean": 1.708422859509786,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step45000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step45000.csv"
+  },
+  {
+    "step": 46000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.1292954921722411,
+      "mu_inter_class_dist": 1.32656564950943,
+      "mu_class_ratio": 1.1746842688247454,
+      "phi_intra_class_dist": 4.896540175543891,
+      "phi_inter_class_dist": 4.936710715293884,
+      "phi_class_ratio": 1.0082038619739357,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 1.647357702255249,
+          "phi_dist": 4.412248134613037
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 1.897842288017273,
+          "phi_dist": 5.790258407592773
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 1.6233915090560913,
+          "phi_dist": 4.112637996673584
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 1.9254436492919922,
+          "phi_dist": 4.20027494430542
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 1.2769811153411865,
+          "phi_dist": 4.011735439300537
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 1.7732348442077637,
+          "phi_dist": 4.651706218719482
+        }
+      ],
+      "mu_related_mean": 1.6907085180282593,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step46000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step46000.csv"
+  },
+  {
+    "step": 47000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.1123256272739834,
+      "mu_inter_class_dist": 1.3079877150058747,
+      "mu_class_ratio": 1.175903604964499,
+      "phi_intra_class_dist": 4.896506579717,
+      "phi_inter_class_dist": 4.936589655876159,
+      "phi_class_ratio": 1.0081860558148124,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 1.6479005813598633,
+          "phi_dist": 4.40966272354126
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 1.8763004541397095,
+          "phi_dist": 5.788619518280029
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 1.6350897550582886,
+          "phi_dist": 4.110092639923096
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 1.8475221395492554,
+          "phi_dist": 4.203248500823975
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 1.273545503616333,
+          "phi_dist": 4.011860370635986
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 1.7694748640060425,
+          "phi_dist": 4.65101957321167
+        }
+      ],
+      "mu_related_mean": 1.6749722162882488,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step47000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step47000.csv"
+  },
+  {
+    "step": 48000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.1023029605547587,
+      "mu_inter_class_dist": 1.301932315826416,
+      "mu_class_ratio": 1.1811020766661002,
+      "phi_intra_class_dist": 4.896578115887112,
+      "phi_inter_class_dist": 4.936688938140869,
+      "phi_class_ratio": 1.008191602646676,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 1.6298012733459473,
+          "phi_dist": 4.410829544067383
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 1.8592467308044434,
+          "phi_dist": 5.790008544921875
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 1.6287014484405518,
+          "phi_dist": 4.109668731689453
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 1.8260802030563354,
+          "phi_dist": 4.203237533569336
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 1.2294999361038208,
+          "phi_dist": 4.011177062988281
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 1.772720217704773,
+          "phi_dist": 4.65062952041626
+        }
+      ],
+      "mu_related_mean": 1.6576749682426453,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step48000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step48000.csv"
+  },
+  {
+    "step": 49000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.0969797492027282,
+      "mu_inter_class_dist": 1.299355548620224,
+      "mu_class_ratio": 1.1844845354388538,
+      "phi_intra_class_dist": 4.8966712209913466,
+      "phi_inter_class_dist": 4.936896004676819,
+      "phi_class_ratio": 1.0082147201374343,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 1.6238210201263428,
+          "phi_dist": 4.410651683807373
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 1.8486216068267822,
+          "phi_dist": 5.790107727050781
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 1.6313273906707764,
+          "phi_dist": 4.109463214874268
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 1.809531807899475,
+          "phi_dist": 4.203040599822998
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 1.2182179689407349,
+          "phi_dist": 4.011020183563232
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 1.7639490365982056,
+          "phi_dist": 4.6502485275268555
+        }
+      ],
+      "mu_related_mean": 1.6492448051770527,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step49000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step49000.csv"
+  },
+  {
+    "step": 50000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      900
+    ],
+    "gauge_group": "GL(30)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.0969544821315342,
+      "mu_inter_class_dist": 1.2991768765449523,
+      "mu_class_ratio": 1.184348938545264,
+      "phi_intra_class_dist": 4.8966770437028675,
+      "phi_inter_class_dist": 4.936922352313996,
+      "phi_class_ratio": 1.00821890197208,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 1.6207026243209839,
+          "phi_dist": 4.410704612731934
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 1.8486489057540894,
+          "phi_dist": 5.790269374847412
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 1.6299251317977905,
+          "phi_dist": 4.109482765197754
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 1.8082705736160278,
+          "phi_dist": 4.203006744384766
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 1.2187830209732056,
+          "phi_dist": 4.011000156402588
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 1.7626733779907227,
+          "phi_dist": 4.650208950042725
+        }
+      ],
+      "mu_related_mean": 1.6481672724088032,
+      "mu_unrelated_mean": 0
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\gauge_frames_step50000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260204_120501\\figures\\belief_embeddings_step50000.csv"
+  }
+]
