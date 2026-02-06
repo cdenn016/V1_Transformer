@@ -2,9 +2,6 @@
 
 A research framework implementing gauge-covariant variational free energy (VFE) minimization for language modeling and multi-agent systems. This codebase accompanies the manuscript:
 
-> **"Attention, Transformers, and Backpropagation are Degenerate Limits of the Variational Free Energy Principle"**
-> Robert C. Dennis (Independent Researcher)
-
 ## Core Thesis
 
 Language is a dynamic informational system: speakers encode and decode beliefs under uncertainty, and language models learn the statistical structure of this process. The mathematical framework natural to such systems---gauge-covariant variational free energy minimization over communicating agents on a statistical fiber bundle---explains why attention mechanisms work.
