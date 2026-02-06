@@ -15,8 +15,6 @@ from transformer.core.model import GaugeTransformerLM
 from transformer.core.blocks import GaugeTransformerBlock, GaugeTransformerStack
 from transformer.core.attention import (
     compute_attention_weights,
-    compute_attention_weights_local,
-    compute_attention_weights_sparse,
     compute_kl_matrix,
     aggregate_messages,
     IrrepMultiHeadAttention,
@@ -41,8 +39,6 @@ __all__ = [
 
     # Attention
     'compute_attention_weights',
-    'compute_attention_weights_local',
-    'compute_attention_weights_sparse',
     'compute_kl_matrix',
     'aggregate_messages',
     'IrrepMultiHeadAttention',

@@ -9,8 +9,6 @@ New code should import directly from transformer.core.attention.
 
 from transformer.core.attention import (
     compute_attention_weights,
-    compute_attention_weights_local,
-    compute_attention_weights_sparse,
     aggregate_messages,
     compute_kl_matrix,
     IrrepMultiHeadAttention,
@@ -23,8 +21,6 @@ from transformer.core.attention import (
 
 __all__ = [
     'compute_attention_weights',
-    'compute_attention_weights_local',
-    'compute_attention_weights_sparse',
     'aggregate_messages',
     'compute_kl_matrix',
     'IrrepMultiHeadAttention',

@@ -449,24 +449,30 @@ def _compute_vfe_gradients_chunked(
     # Scale kappa by √K to match attention temperature scaling
     kappa_scaled = kappa * math.sqrt(max(K, 1))
 
+    # Two-pass approach for correct softmax coupling gradient:
+    # Pass 1: Accumulate avg_grad (= Σ_j β_ij ∂KL_ij/∂μ_i) and per-chunk KL/grad_kl
+    # Pass 2: Compute softmax coupling with the correct (full) avg_grad
+
     for i_start in range(0, N, chunk_size):
         i_end = min(i_start + chunk_size, N)
         n_i = i_end - i_start
 
-        # Use .contiguous() to create copies and avoid view-related gradient errors
         exp_phi_i = exp_phi[:, i_start:i_end].contiguous()
         mu_i = mu_q[:, i_start:i_end].contiguous()
         sigma_i = sigma_q_safe[:, i_start:i_end].contiguous()
         beta_i = beta[:, i_start:i_end, :].contiguous()
 
-        # Per i-chunk accumulator for incremental avg_grad (reset each i iteration)
-        chunk_beta_grad_kl_sum = torch.zeros(B, n_i, K, device=device, dtype=dtype)
+        # ============================================================
+        # PASS 1: Accumulate direct gradient and avg_grad over all j
+        # ============================================================
+        avg_grad_i = torch.zeros(B, n_i, K, device=device, dtype=dtype)
+        # Store per-j-chunk data for pass 2
+        chunk_data = []
 
         for j_start in range(0, N, chunk_size):
             j_end = min(j_start + chunk_size, N)
             n_j = j_end - j_start
 
-            # Use .contiguous() to create copies
             exp_neg_phi_j = exp_neg_phi[:, j_start:j_end].contiguous()
             mu_j = mu_q[:, j_start:j_end].contiguous()
             sigma_j_diag_chunk = sigma_j_diag[:, j_start:j_end].contiguous()
@@ -496,15 +502,17 @@ def _compute_vfe_gradients_chunked(
             # ∂KL/∂μ_i
             grad_kl = torch.einsum('bijkl,bijl->bijk', sigma_j_inv, delta_mu_ij)
 
-            # Direct term contribution (non-inplace)
+            # Accumulate direct gradient
             direct_contrib = lambda_belief * torch.einsum('bij,bijk->bik', beta_chunk, grad_kl)
             grad_mu_direct[:, i_start:i_end] = grad_mu_direct[:, i_start:i_end] + direct_contrib
 
-            # For softmax coupling, compute KL values
+            # Accumulate avg_grad = Σ_j β_ij ∂KL_ij/∂μ_i (complete over ALL j)
+            avg_grad_i = avg_grad_i + torch.einsum('bij,bijk->bik', beta_chunk, grad_kl)
+
+            # Compute KL values for this chunk
             mahal = torch.einsum('bijk,bijk->bij', delta_mu_ij, grad_kl)
 
-            # Use .clone() after expand to avoid view-related gradient issues
-            sigma_i_diag_exp = torch.diag_embed(sigma_i)[:, :, None, :, :].expand(-1, -1, n_j, -1, -1).clone()
+            sigma_i_diag_exp = torch.diag_embed(sigma_i)[:, :, None, :, :].expand(-1, -1, n_j, -1, -1)
             trace_term = torch.einsum('bijkk->bij', torch.einsum('bijkl,bijlm->bijkm', sigma_j_inv, sigma_i_diag_exp))
 
             try:
@@ -513,33 +521,35 @@ def _compute_vfe_gradients_chunked(
             except RuntimeError:
                 logdet_p = torch.zeros(B, n_i, n_j, device=device, dtype=dtype)
 
-            logdet_q = torch.sum(torch.log(sigma_i), dim=-1)[:, :, None].expand(-1, -1, n_j).clone()
+            logdet_q = torch.sum(torch.log(sigma_i), dim=-1)[:, :, None].expand(-1, -1, n_j)
 
-            # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
             kl_ceil = max(100.0, 5.0 * K)
             kl_chunk = 0.5 * (trace_term + mahal - K + logdet_p - logdet_q).clamp(min=0.0, max=kl_ceil)
 
-            # Accumulate weighted gradient for avg_grad (non-inplace)
-            chunk_beta_grad_kl_sum = chunk_beta_grad_kl_sum + torch.einsum('bij,bijk->bik', beta_chunk, grad_kl)
-
-            # Softmax coupling: use incremental sum normalized by beta sum
-            # This division provides numerical stability
-            avg_grad_i = chunk_beta_grad_kl_sum / (beta_i.sum(dim=-1, keepdim=True) + eps)
-            grad_deviation = grad_kl - avg_grad_i.unsqueeze(2)
-            d_beta_d_mu = beta_chunk.unsqueeze(-1) * grad_deviation / kappa_scaled
-            softmax_contrib = lambda_belief * torch.einsum('bij,bijk->bik', kl_chunk, d_beta_d_mu)
-            grad_mu_softmax[:, i_start:i_end] = grad_mu_softmax[:, i_start:i_end] + softmax_contrib
+            # Store for pass 2
+            chunk_data.append((beta_chunk, grad_kl, kl_chunk))
 
             # Sigma alignment gradient
             if compute_sigma_align_grad:
-                sigma_j_inv_diag = torch.diagonal(sigma_j_inv, dim1=-2, dim2=-1).clone()
+                sigma_j_inv_diag = torch.diagonal(sigma_j_inv, dim1=-2, dim2=-1)
                 sigma_i_inv = 1.0 / sigma_i
-                sigma_i_inv_exp = sigma_i_inv[:, :, None, :].expand(-1, -1, n_j, -1).clone()
+                sigma_i_inv_exp = sigma_i_inv[:, :, None, :].expand(-1, -1, n_j, -1)
                 grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv_exp)
                 sigma_contrib = lambda_belief * torch.einsum('bij,bijk->bik', beta_chunk, grad_sigma_pair)
                 grad_sigma_align[:, i_start:i_end] = grad_sigma_align[:, i_start:i_end] + sigma_contrib
 
             del sigma_j_transported, sigma_j_inv, mu_j_transported
+
+        # ============================================================
+        # PASS 2: Softmax coupling with correct (complete) avg_grad
+        # ============================================================
+        for beta_chunk, grad_kl, kl_chunk in chunk_data:
+            grad_deviation = grad_kl - avg_grad_i.unsqueeze(2)
+            d_beta_d_mu = beta_chunk.unsqueeze(-1) * grad_deviation / kappa_scaled
+            softmax_contrib = lambda_belief * torch.einsum('bij,bijk->bik', kl_chunk, d_beta_d_mu)
+            grad_mu_softmax[:, i_start:i_end] = grad_mu_softmax[:, i_start:i_end] + softmax_contrib
+
+        del chunk_data  # Free stored tensors
 
     grad_mu_align = grad_mu_direct + grad_mu_softmax
     grad_mu = grad_mu_self + grad_mu_align
