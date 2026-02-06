@@ -69,7 +69,7 @@ from geometry.geometry_base import BaseManifold, TopologyType
 from gradients.retraction import retract_spd  # For SPD manifold updates
 
 # Import attention computation for dynamic β
-from transformer.core.attention import compute_attention_weights
+from transformer.core.attention import compute_attention_weights, compute_transport_operators
 
 # Import SO(N) and GL(K) retraction for proper phi updates
 try:
@@ -1720,6 +1720,24 @@ class VariationalFFNDynamic(nn.Module):
             else:
                 decay_factor = 1.0
             effective_lr = base_lr * decay_factor
+
+            # =================================================================
+            # STEP 0: Precompute transport operators ONCE per iteration
+            # =================================================================
+            # Both compute_attention_weights and compute_vfe_gradients_gpu need
+            # the same Ω_ij = exp(φ_i)·exp(-φ_j). Computing once and passing
+            # cached_transport avoids redundant matrix exponentials.
+            # Skip caching when using block-diagonal or chunked paths (they
+            # compute transport internally in chunks to save memory).
+            if self.irrep_dims is None and self.chunk_size is None:
+                cached_transport = compute_transport_operators(
+                    phi=phi_current,
+                    generators=self.generators,
+                    enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                )
+            else:
+                cached_transport = None
+
             # =================================================================
             # STEP 1: Recompute attention β from current beliefs
             # =================================================================
@@ -1735,6 +1753,7 @@ class VariationalFFNDynamic(nn.Module):
                 use_numba=False,  # Always use PyTorch for GPU
                 return_kl=False,
                 diagonal_covariance=is_diagonal,
+                cached_transport=cached_transport,
                 # Memory-efficient options
                 irrep_dims=self.irrep_dims,
                 chunk_size=self.chunk_size,
@@ -1760,6 +1779,7 @@ class VariationalFFNDynamic(nn.Module):
                 lambda_belief=self.lambda_belief,
                 kappa=self.kappa,
                 eps=eps,
+                cached_transport=cached_transport,
                 compute_sigma_align_grad=self.compute_sigma_align_grad,
                 # Memory-efficient options
                 irrep_dims=self.irrep_dims,
