@@ -794,9 +794,9 @@ Substituting and absorbing constants we arrive at the main result:
 \subsubsection{Simplified Variational Free Energy}
 In our fiber-matched setting, the variational free energy for agent $i$ becomes (where, in the present study, we consider all agents to share the same generative models):
 \begin{equation}
-\mathcal{F}[q_i] = \int_{\mathcal{U}_i} \left[\alpha_i D_{\text{KL}}\left(q_i(c) \,\|\, p_i(c)\right) - \xi_i \mathbb{E}_{q_i(c)}\left[\log p_i(o_i \mid c)\right]\right] \mathrm{d}c,
+\mathcal{F}[q_i] = \int_{\mathcal{U}_i} \left[ D_{\text{KL}}\left(q_i(c) \,\|\, p_i(c)\right) - \mathbb{E}_{q_i(c)}\left[\log p_i(o_i \mid c)\right]\right] \mathrm{d}c,
 \end{equation}
-where both $q_i(c)$ and $p_i(c)$ are points in the same fiber $\mathcal{B}(c)$ and $\alpha_i$ and $\xi_i$ are parameters placed for full generality which we henceforth set equal to $1$.
+where both $q_i(c)$ and $p_i(c)$ are points in the same fiber $\mathcal{B}(c)$.
 
 We have shown that the cross-agent alignment term is the forward KL divergence with frame rotation:
 \begin{equation}
