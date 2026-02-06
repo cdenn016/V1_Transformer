@@ -224,16 +224,30 @@ def compute_transport_operators(
     # φ·G: combine gauge frames with generators
     phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
 
+    # Check if generators are skew-symmetric (SO(K) gauge group).
+    # For skew-symmetric A: exp(-A) = exp(A)^T, saving one matrix_exp call.
+    _is_skew = torch.allclose(
+        generators + generators.transpose(-1, -2),
+        torch.zeros_like(generators), atol=1e-5
+    )
+
     # For large K (≥16), compute matrix exponential in float64 to prevent
     # numerical drift in the Padé scaling-squaring steps.
     if K >= 16:
         phi_matrix_f64 = phi_matrix.double()
         exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
-        exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
+        if _is_skew:
+            # SO(K): exp(-A) = exp(A)^T for skew-symmetric A
+            exp_neg_phi = exp_phi.transpose(-1, -2)
+        else:
+            exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
     else:
         # Small K: float32 matrix_exp is sufficiently accurate
         exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
-        exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+        if _is_skew:
+            exp_neg_phi = exp_phi.transpose(-1, -2)
+        else:
+            exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
 
     # Re-orthogonalization for SO(K) gauge groups
     # NOTE: For GL(K), this is NOT required - VFE is invariant under GL(K)!
@@ -1135,7 +1149,7 @@ def _compute_kl_matrix_chunked(
                 # KL divergence for chunk
                 kl_chunk = 0.5 * (trace_term + mahal_term - K + logdet_term)
                 # Clamp KL to [0, 100] for numerical stability
-                kl_chunk = torch.clamp(kl_chunk, min=0.0, max=100.0)
+                kl_chunk = torch.clamp(kl_chunk, min=0.0, max=max(100.0, 5.0 * K))
 
                 # Write to output
                 kl_matrix[:, i_start:i_end, j_start:j_end] = kl_chunk
@@ -1477,17 +1491,15 @@ def _compute_kl_matrix_block_diagonal(
             # KL for this block
             kl_block = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
             # Clamp KL to [0, 100] for numerical stability
-            kl_block = torch.clamp(kl_block, min=0.0, max=100.0)
+            kl_block = torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
 
             # ACCUMULATE to total KL (additive decomposition)
             kl_matrix.add_(kl_block)
 
         except RuntimeError as e:
-            # Fallback: add small regularization and retry
-            sigma_block_transported_reg = sigma_block_transported + 1e-4 * I_block
-            L_p = torch.linalg.cholesky(sigma_block_transported_reg)
-            # ... simplified fallback, just add eps contribution
-            kl_matrix.add_(eps)
+            # Fallback: add a small per-dimension contribution for this block
+            # rather than corrupting the entire KL matrix
+            kl_matrix.add_(0.5 * d)  # Conservative estimate: ~0.5 per dimension
 
         # Cleanup
         del sigma_block_transported, mu_block_transported
@@ -1627,7 +1639,7 @@ def _compute_kl_matrix_block_diagonal_chunked(
                     # Accumulate block KL
                     kl_block = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
                     # Clamp KL to [0, 100] for numerical stability
-                    kl_chunk.add_(torch.clamp(kl_block, min=0.0, max=100.0))
+                    kl_chunk.add_(torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K)))
 
                 except RuntimeError:
                     # Fallback: add small contribution
@@ -1737,15 +1749,16 @@ def compute_attention_weights_local(
         mu_j_transported = torch.einsum('bpkl,bpl->bpk', Omega, mu_j)  # (B, n_pairs, K)
 
         if diagonal_covariance:
-            # Diagonal KL (efficient)
-            sigma_i = sigma_q[:, i_start:i_end, :]  # (B, n_pairs, K)
-            sigma_j = sigma_q[:, j_start:j_end, :]  # (B, n_pairs, K)
+            # Diagonal KL with proper covariance transport
+            sigma_i = sigma_q[:, i_start:i_end, :].clamp(min=eps)  # (B, n_pairs, K)
+            sigma_j_raw = sigma_q[:, j_start:j_end, :].clamp(min=eps)  # (B, n_pairs, K)
 
-            # Clamp for stability
-            sigma_i = sigma_i.clamp(min=eps)
-            sigma_j = sigma_j.clamp(min=eps)
+            # Transport diagonal covariance through Omega:
+            # diag(Omega @ diag(sigma_j) @ Omega^T)_k = sum_l Omega_kl^2 * sigma_j[l]
+            Omega_sq = Omega ** 2  # (B, n_pairs, K, K)
+            sigma_j = torch.einsum('bpkl,bpl->bpk', Omega_sq, sigma_j_raw).clamp(min=eps)  # (B, n_pairs, K)
 
-            # KL terms
+            # KL terms using transported covariance
             trace_term = (sigma_i / sigma_j).sum(dim=-1)  # (B, n_pairs)
             delta_mu = mu_j_transported - mu_i
             mahal_term = ((delta_mu ** 2) / sigma_j).sum(dim=-1)  # (B, n_pairs)
@@ -1795,17 +1808,18 @@ def compute_attention_weights_local(
                 kl_vals = torch.full((B, n_pairs), 100.0, device=device, dtype=dtype)
 
         # Clamp KL to [0, 100] for numerical stability
-        kl_vals = torch.clamp(kl_vals, min=0.0, max=100.0)
+        kl_vals = torch.clamp(kl_vals, min=0.0, max=max(100.0, 5.0 * K))
 
         # Scatter into KL matrix
         i_indices = torch.arange(i_start, i_end, device=device)
         j_indices = torch.arange(j_start, j_end, device=device)
         kl_matrix[:, i_indices, j_indices] = kl_vals
 
-    # NOTE: KL used directly - proper init_std=1/sqrt(K) ensures O(1) scaling
+    # Dimension-aware KL normalization (consistent with compute_attention_weights)
+    dim_scale = math.sqrt(max(K, 1))
 
     # Convert KL to attention weights
-    logits = -kl_matrix / kappa
+    logits = -kl_matrix / (kappa * dim_scale)
     beta = F.softmax(logits, dim=-1)
 
     # Clamp for numerical stability (preserves sum=1, see compute_attention_weights())
@@ -1862,8 +1876,7 @@ def compute_attention_weights_sparse(
     if mask.dim() == 2:
         mask = mask.unsqueeze(0).expand(B, -1, -1)
 
-    # Count valid pairs per row
-    valid_counts = mask.sum(dim=-1)  # (B, N)
+    # Count valid pairs
     total_valid = mask.sum().item()
     total_pairs = B * N * N
 
@@ -1933,7 +1946,12 @@ def compute_attention_weights_sparse(
 
         if diagonal_covariance:
             sigma_i = sigma_q[b_idx, i_idx].clamp(min=eps)  # (batch, K)
-            sigma_j = sigma_q[b_idx, j_idx].clamp(min=eps)
+            sigma_j_raw = sigma_q[b_idx, j_idx].clamp(min=eps)  # (batch, K)
+
+            # Transport diagonal covariance through Omega:
+            # diag(Omega @ diag(sigma_j) @ Omega^T)_k = sum_l Omega_kl^2 * sigma_j[l]
+            Omega_sq = Omega ** 2  # (batch, K, K)
+            sigma_j = torch.einsum('bkl,bl->bk', Omega_sq, sigma_j_raw).clamp(min=eps)  # (batch, K)
 
             trace_term = (sigma_i / sigma_j).sum(dim=-1)
             delta_mu = mu_j_transported - mu_i
@@ -1979,15 +1997,16 @@ def compute_attention_weights_sparse(
                 kl_vals = torch.full((end - start,), 100.0, device=device, dtype=dtype)
 
         # Clamp KL to [0, 100] for numerical stability
-        kl_vals = torch.clamp(kl_vals, min=0.0, max=100.0)
+        kl_vals = torch.clamp(kl_vals, min=0.0, max=max(100.0, 5.0 * K))
 
         # Scatter to output
         kl_matrix[b_idx, i_idx, j_idx] = kl_vals
 
-    # NOTE: KL used directly - proper init_std=1/sqrt(K) ensures O(1) scaling
+    # Dimension-aware KL normalization (consistent with compute_attention_weights)
+    dim_scale = math.sqrt(max(K, 1))
 
     # Convert to attention
-    logits = -kl_matrix / kappa
+    logits = -kl_matrix / (kappa * dim_scale)
     beta = F.softmax(logits, dim=-1)
     # Clamp for numerical stability (preserves sum=1)
     beta = beta.clamp(min=epsilon)
@@ -2695,7 +2714,9 @@ class IrrepMultiHeadAttention(nn.Module):
         cached_transports = []
         for head_idx in range(self.n_heads):
             gen_head = self.head_generators[head_idx].gen.to(device=device, dtype=dtype)
-            cached_transports.append(compute_transport_operators(phi, gen_head))
+            cached_transports.append(compute_transport_operators(
+                phi, gen_head, enforce_orthogonal=self.enforce_orthogonal
+            ))
         return cached_transports
 
     def extra_repr(self) -> str:
@@ -2782,7 +2803,7 @@ if __name__ == '__main__':
     )
     print(f"    {mha}")
 
-    mu_out, sigma_out, attn_weights = mha(
+    mu_out, sigma_out, attn_weights, kl_matrices = mha(
         mu_q, sigma_q, phi, G, return_attention=True
     )
     print(f"    Output μ shape: {mu_out.shape}")

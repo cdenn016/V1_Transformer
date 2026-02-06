@@ -778,16 +778,15 @@ def compute_vfe_gradients_gpu(
         # =================================================================
         # 2a. Direct term: Σ_j β_ij · ∂KL_ij/∂μ_i
         # =================================================================
-        grad_mu_direct = lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair)
+        # avg_grad = Σ_k β_ik · ∂KL_ik/∂μ_i (used for both direct and softmax terms)
+        avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair)  # (B, N, K)
+        grad_mu_direct = lambda_belief * avg_grad
 
         # =================================================================
         # 2b. Softmax coupling term (THE NONLINEARITY!):
         #     ∂β_ij/∂μ_i = β_ij · [∂KL_ij/∂μ_i - Σ_k β_ik · ∂KL_ik/∂μ_i] / κ
         #     grad_softmax = Σ_j KL_ij · ∂β_ij/∂μ_i
         # =================================================================
-        # Weighted average gradient: avg_grad_i = Σ_k β_ik · ∂KL_ik/∂μ_i
-        avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair)  # (B, N, K)
-
         # Deviation from average: ∂KL_ij/∂μ_i - avg_grad_i
         # grad_kl_per_pair: (B, N, N, K), avg_grad: (B, N, K) -> expand to (B, N, 1, K)
         grad_deviation = grad_kl_per_pair - avg_grad.unsqueeze(2)  # (B, N, N, K)
@@ -903,13 +902,13 @@ def compute_vfe_gradients_gpu(
         kl_ceil = max(100.0, 5.0 * K)
         kl_values = kl_values.clamp(min=0.0, max=kl_ceil)  # (B, N, N)
 
-        # Direct term
-        grad_mu_direct = lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair)
+        # avg_grad = Σ_k β_ik · ∂KL_ik/∂μ_i (used for both direct and softmax terms)
+        avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair)
+        grad_mu_direct = lambda_belief * avg_grad
 
         # Softmax coupling term
         # Scale kappa by √K to match attention temperature scaling
         kappa_scaled = kappa * math.sqrt(max(K, 1))
-        avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair)
         grad_deviation = grad_kl_per_pair - avg_grad.unsqueeze(2)
         d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
         grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
@@ -939,11 +938,7 @@ def compute_vfe_gradients_gpu(
     # 3. Combine Gradients
     # =================================================================
     grad_mu = grad_mu_self + grad_mu_align
-
-    if is_diagonal:
-        grad_sigma = grad_sigma_self + grad_sigma_align
-    else:
-        grad_sigma = grad_sigma_self + grad_sigma_align
+    grad_sigma = grad_sigma_self + grad_sigma_align
 
     return grad_mu, grad_sigma
 
