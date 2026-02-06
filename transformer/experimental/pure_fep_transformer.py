@@ -84,7 +84,6 @@ import numpy as np
 # Import existing VFE components
 from transformer.core.attention import (
     compute_attention_weights,
-    compute_attention_weights_local,
     aggregate_messages,
     compute_transport_operators,
     IrrepMultiHeadAttention,
@@ -871,15 +870,6 @@ class PureFEPLayer(nn.Module):
             # Average attention across heads for metrics/VFE computation
             beta = beta_heads.mean(dim=1)  # (B, N, N)
             kl_matrix = kl_heads.mean(dim=1)  # (B, N, N)
-        elif self.config.use_local_attention:
-            # Use local attention for O(N×W) instead of O(N²)
-            beta, kl_matrix = compute_attention_weights_local(
-                mu_q, sigma_q, phi, self.generators,
-                kappa=self.config.kappa,
-                window=self.config.attention_window,
-                causal=(mask is not None),
-                diagonal_covariance=True,
-            )
         else:
             # SINGLE IRREP: Full O(N²) attention with optional transport caching
             beta, kl_matrix = compute_attention_weights(

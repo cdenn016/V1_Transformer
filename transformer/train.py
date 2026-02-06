@@ -549,14 +549,12 @@ def compute_free_energy_loss(
     # =================================================================
     total_loss = ce_loss + belief_align_loss + self_consistency_loss + model_align_loss
 
-    # Compute attention entropy: -Σ β_ij log(β_ij) per query position
-    # Average over heads first
-    beta_avg = beta.mean(dim=1)  # (B, N, N) - average over heads
-    beta_safe = beta_avg.clamp(min=1e-10)  # Numerical stability
-    attn_entropy = -(beta_safe * beta_safe.log()).sum(dim=-1).mean()  # Mean over (B, N)
-
-    # Attention concentration (max attention weight)
-    attn_concentration = beta_avg.max(dim=-1)[0].mean()
+    # Compute attention metrics outside the computation graph
+    with torch.no_grad():
+        beta_avg = beta.mean(dim=1)  # (B, N, N) - average over heads
+        beta_safe = beta_avg.clamp(min=1e-10)
+        attn_entropy = -(beta_safe * beta_safe.log()).sum(dim=-1).mean()
+        attn_concentration = beta_avg.max(dim=-1)[0].mean()
 
     # Metrics
     metrics = {
@@ -567,8 +565,8 @@ def compute_free_energy_loss(
         'loss/model_align': model_align_loss.item() if lambda_gamma > 0 else 0.0,
         'attention/beta_mean': beta.mean().item(),
         'attention/kl_mean': kl.mean().item(),
-        'attention/entropy': attn_entropy.item(),  # How diffuse is attention?
-        'attention/concentration': attn_concentration.item(),  # How peaked is attention?
+        'attention/entropy': attn_entropy.item(),
+        'attention/concentration': attn_concentration.item(),
     }
 
     if lambda_gamma > 0.0:
@@ -922,9 +920,10 @@ class Trainer:
                 progress = (step - self.config.warmup_steps) / max(1, self.config.max_steps - self.config.warmup_steps)
                 return self.config.min_lr / self.config.learning_rate + \
                        0.5 * (1 - self.config.min_lr / self.config.learning_rate) * \
-                       (1 + torch.cos(torch.tensor(progress * 3.14159265)))
+                       (1 + math.cos(progress * math.pi))
             elif self.config.lr_decay == 'linear':
-                return max(0.0, (self.config.max_steps - step) / (self.config.max_steps - self.config.warmup_steps))
+                min_ratio = self.config.min_lr / self.config.learning_rate
+                return max(min_ratio, (self.config.max_steps - step) / (self.config.max_steps - self.config.warmup_steps))
             else:
                 return 1.0
 
@@ -932,7 +931,7 @@ class Trainer:
 
     def train_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Dict[str, float]:
         """Single training step."""
-        self.model.train()
+        # model.train() is called once in train() method, not per-step
 
         token_ids, targets = batch
         token_ids = token_ids.to(self.device)
@@ -961,28 +960,25 @@ class Trainer:
             loss.backward()
 
         # =================================================================
-        # Gradient Monitoring (verify gradients flow to embeddings)
+        # Gradient Monitoring (only on logging steps to avoid GPU sync overhead)
         # =================================================================
-        grad_norms = {}
-        for name, param in self.model.named_parameters():
-            if param.grad is not None:
-                grad_norm = param.grad.norm().item()
-                # Track key parameter groups
-                if 'mu_embed' in name:
-                    grad_norms['grad/mu_embed'] = grad_norm
-                elif 'sigma_embed' in name or 'log_sigma' in name:
-                    grad_norms['grad/sigma_embed'] = grad_norm
-                elif 'phi_embed' in name:
-                    grad_norms['grad/phi_embed'] = grad_norm
-                elif 'out_proj' in name:
-                    grad_norms['grad/out_proj'] = grad_norm
+        if self.step % self.config.log_every == 0:
+            grad_norms = {}
+            for name, param in self.model.named_parameters():
+                if param.grad is not None:
+                    grad_norm = param.grad.norm().item()
+                    if 'mu_embed' in name:
+                        grad_norms['grad/mu_embed'] = grad_norm
+                    elif 'sigma_embed' in name or 'log_sigma' in name:
+                        grad_norms['grad/sigma_embed'] = grad_norm
+                    elif 'phi_embed' in name:
+                        grad_norms['grad/phi_embed'] = grad_norm
+                    elif 'out_proj' in name:
+                        grad_norms['grad/out_proj'] = grad_norm
+            metrics.update(grad_norms)
 
-        # Add to metrics
-        metrics.update(grad_norms)
-
-        # Warn if embedding gradients are zero (broken gradient flow!)
-        if 'grad/mu_embed' in grad_norms and grad_norms['grad/mu_embed'] == 0.0:
-            print("[WARNING] mu_embed gradient is ZERO - gradient flow may be broken!")
+            if 'grad/mu_embed' in grad_norms and grad_norms['grad/mu_embed'] == 0.0:
+                print("[WARNING] mu_embed gradient is ZERO - gradient flow may be broken!")
 
         # Optimizer step (if accumulation complete)
         if (self.step + 1) % self.config.accumulation_steps == 0:
@@ -1047,6 +1043,8 @@ class Trainer:
                 self.model, token_ids, targets,
                 alpha=self.config.alpha,
                 lambda_beta=self.config.lambda_beta,
+                lambda_gamma=self.config.lambda_gamma,
+                kappa_gamma=self.config.kappa_gamma,
                 pad_token_id=self.pad_token_id,
             )
 
@@ -1054,8 +1052,8 @@ class Trainer:
             total_ce_loss += metrics['loss/ce']
             n_batches += 1
 
-        avg_loss = total_loss / n_batches
-        avg_ce_loss = total_ce_loss / n_batches
+        avg_loss = total_loss / max(n_batches, 1)
+        avg_ce_loss = total_ce_loss / max(n_batches, 1)
         perplexity = torch.exp(torch.tensor(avg_ce_loss)).item()
 
         return {
@@ -1076,6 +1074,7 @@ class Trainer:
             pbar = None
 
         start_time = time.time()
+        self.model.train()
 
         try:
             while self.step < self.config.max_steps:
@@ -1105,6 +1104,7 @@ class Trainer:
                     # Validation
                     if self.step % self.config.eval_every == 0 and self.step > 0:
                         val_metrics = self.validate()
+                        self.model.train()  # Restore training mode after validation
                         if val_metrics:
                             print(f"\nValidation | Loss: {val_metrics['val/loss']:.4f} | "
                                   f"PPL: {val_metrics['val/perplexity']:.2f}")
