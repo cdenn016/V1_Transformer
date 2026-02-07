@@ -492,9 +492,14 @@ def _compute_vfe_gradients_chunked(
 
             del Omega
 
-            # Regularize and invert
-            sigma_j_reg = sigma_j_transported + eps * torch.eye(K, device=device, dtype=dtype)
-            sigma_j_inv = torch.linalg.inv(sigma_j_reg)
+            # Regularize and invert transported covariance
+            # Use 1e-4 floor (not eps=1e-6) to prevent singularity after many
+            # VFE iterations when σ_j entries shrink near zero
+            sigma_j_reg = sigma_j_transported + max(eps, 1e-4) * torch.eye(K, device=device, dtype=dtype)
+            try:
+                sigma_j_inv = torch.linalg.inv(sigma_j_reg)
+            except torch.linalg.LinAlgError:
+                sigma_j_inv = torch.linalg.pinv(sigma_j_reg)
 
             # Delta mu
             delta_mu_ij = mu_i[:, :, None, :] - mu_j_transported
@@ -745,8 +750,11 @@ def compute_vfe_gradients_gpu(
         )  # (B, N, N, K, K)
 
         # Regularize and invert transported covariance
-        sigma_j_reg = sigma_j_transported + eps * torch.eye(K, device=device, dtype=dtype)
-        sigma_j_inv = torch.linalg.inv(sigma_j_reg)  # (B, N, N, K, K)
+        sigma_j_reg = sigma_j_transported + max(eps, 1e-4) * torch.eye(K, device=device, dtype=dtype)
+        try:
+            sigma_j_inv = torch.linalg.inv(sigma_j_reg)  # (B, N, N, K, K)
+        except torch.linalg.LinAlgError:
+            sigma_j_inv = torch.linalg.pinv(sigma_j_reg)
 
         # ∂KL_ij/∂μ_i = Σ_j_transported^{-1} @ (μ_i - μ_j_transported)
         grad_kl_per_pair = torch.einsum('bijkl,bijl->bijk', sigma_j_inv, delta_mu_ij)  # (B, N, N, K)
@@ -871,8 +879,11 @@ def compute_vfe_gradients_gpu(
         )  # (B, N, N, K, K)
 
         # Regularize and invert
-        sigma_j_reg = sigma_j_transported + eps * torch.eye(K, device=device, dtype=dtype)
-        sigma_j_inv = torch.linalg.inv(sigma_j_reg)  # (B, N, N, K, K)
+        sigma_j_reg = sigma_j_transported + max(eps, 1e-4) * torch.eye(K, device=device, dtype=dtype)
+        try:
+            sigma_j_inv = torch.linalg.inv(sigma_j_reg)  # (B, N, N, K, K)
+        except torch.linalg.LinAlgError:
+            sigma_j_inv = torch.linalg.pinv(sigma_j_reg)
 
         # ∂KL_ij/∂μ_i
         grad_kl_per_pair = torch.einsum('bijkl,bijl->bijk', sigma_j_inv, delta_mu_ij)
