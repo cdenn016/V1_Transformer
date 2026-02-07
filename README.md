@@ -118,11 +118,11 @@ Quantitative comparison between gauge-aligned KL attention and standard dot-prod
 
 ### GL(30) Language Modeling (WikiText-103, vocab 50,257)
 
-The **most general form** of the theory---no simplifying limits taken. Full non-isotropic covariances, non-trivial gauge transport, KL-divergence attention. **No MLPs, activation functions, learned W_Q/W_K/W_V, or positional encodings.** Only a linear output projection is retained.
+The **most general form** of the theory---no simplifying limits taken. Full non-isotropic covariances, non-trivial gauge transport, KL-divergence attention. **No MLPs, activation functions, learned W_Q/W_K/W_V, or positional encodings.** Only a linear output projection (from K=30 dimensions to 50k) is retained.
 
 | Configuration | Layers | Gauge Mode | Train PPL | Test PPL | Parameters |
 |---|---|---|---|---|---|
-| Trivial gauge | 3 | Fixed Omega = I | 125.1 | 135.3 | ~50M |
+| Trivial gauge | 3 | Omega in GL(30) | 125.1 | 135.3 | ~50M |
 | Learned gauge | 1 | Omega in GL(30) | 113.9 | 151.8 | ~50M |
 
 For context: random-chance perplexity is ~50,000. These models capture substantial linguistic structure from gauge-theoretic principles alone.
@@ -271,14 +271,6 @@ for step in range(belief_steps):
 prior_bank[target_v] <- (1 - prior_lr) * prior_bank[target_v] + prior_lr * avg_belief
 ```
 
-### Gauge Frames as Position Encoding
-
-Position information lives in the gauge frame phi, **not** in the belief mean mu:
-```
-Omega_ij = exp(phi_i G) exp(-phi_j G)    # depends on relative position
-```
-This is translation-invariant by construction. The full theory supports learned gauge frames on higher-dimensional base manifolds with non-trivial holonomy.
-
 ### Meta-Agent Emergence via Renormalization Group
 
 The VFE has self-similar structure: meta-agents satisfy the same definition as individual agents.
@@ -313,7 +305,7 @@ pytest tests/ --tb=short
 
 ## Documentation
 
-- `Docs/attention manuscript/` --- Main JMLR manuscript with complete theory and proofs
+- `Docs/attention manuscript/` --- Main manuscript with complete theory and proofs
 - `NUMERICAL_STABILITY.md` --- Numerical stability guide for large K
 - `transformer/PURE_FEP_TRANSFORMER_OVERVIEW.md` --- Pure FEP architecture overview
 - `claude.md` --- Architecture overview and code standards
