@@ -116,6 +116,8 @@ class GaugeTransformerBlock(nn.Module):
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
         # Gauge group control
         enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
+        # Bayesian precision (learned prior self-coupling)
+        ffn_learnable_alpha: bool = False,  # If True, use Gamma-Normal conjugate precision
     ):
         """
         Initialize gauge transformer block.
@@ -143,6 +145,7 @@ class GaugeTransformerBlock(nn.Module):
             ffn_prior_lr: Learning rate for prior updates (pure FEP mode)
             mask_self_attention: If True, mask out diagonal (no self-attention).
                                 Prevents attention collapse since KL(q_i||q_i)=0 always.
+            ffn_learnable_alpha: If True, use Bayesian precision via Gamma-Normal conjugacy.
         """
         super().__init__()
         self.embed_dim = embed_dim
@@ -236,6 +239,8 @@ class GaugeTransformerBlock(nn.Module):
             chunk_size=ffn_chunk_size,
             # Self-attention masking (same as attention)
             mask_self_attention=mask_self_attention,
+            # Bayesian precision
+            learnable_alpha=ffn_learnable_alpha,
         )
 
         self.norm2 = nn.LayerNorm(embed_dim) if use_layernorm else nn.Identity()
@@ -441,6 +446,8 @@ class GaugeTransformerStack(nn.Module):
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
         # Gauge group control
         enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
+        # Bayesian precision (learned prior self-coupling)
+        ffn_learnable_alpha: bool = False,  # If True, use Gamma-Normal conjugate precision
     ):
         """
         Initialize stack of transformer blocks.
@@ -473,6 +480,7 @@ class GaugeTransformerStack(nn.Module):
             use_residual: If True, use residual connections (default False for pure VFE)
             mask_self_attention: If True, mask out diagonal (no self-attention).
                                 Prevents attention collapse since KL(q_i||q_i)=0 always.
+            ffn_learnable_alpha: If True, use Bayesian precision via Gamma-Normal conjugacy.
         """
         super().__init__()
         self.n_layers = n_layers
@@ -527,6 +535,8 @@ class GaugeTransformerStack(nn.Module):
                 mask_self_attention=mask_self_attention,
                 # Gauge group control
                 enforce_orthogonal=enforce_orthogonal,
+                # Bayesian precision
+                ffn_learnable_alpha=ffn_learnable_alpha,
             )
             for _ in range(n_layers)
         ])
