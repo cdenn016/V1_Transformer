@@ -443,7 +443,7 @@ $\Sigma_{q,i},\Sigma_{p,i}$ & Covariance matrices & $\mathbb{R}^{K\times K},\suc
 \multicolumn{3}{l}{\textit{Attention and Coupling}} \\
 $\beta_{ij}$ & Attention weight $j\!\to\!i$ & $[0,1]$ \\
 $\tau$ & Attention temperature & $\mathbb{R}_+$ \\
-$\alpha$ & Self-consistency strength & $\mathbb{R}_+$ \\
+$\alpha_i$ & State-dependent self-consistency strength (Sec.~\ref{sec:state_dependent_precision}) & $\mathbb{R}_+$ \\
 $D_{\mathrm{KL}}$ & Kullback–Leibler divergence & $\mathbb{R}_+\cup\{0\}$ \\
 \hline
 \end{tabularx}
@@ -941,11 +941,144 @@ We have derived the generalized variational free energy from a normalized genera
   \item The alignment weights $\beta_{ij}$ and $\gamma_{ij}$ are proportional to the coupling precisions $\Lambda_{ij}$ and $\Gamma_{ij}$.
   \item The forward KL divergence emerges naturally in the alignment regime.
   \item Our framework naturally accommodates communicable coupling: different agent pairs can have different alignment strengths, and belief coupling can differ from model coupling.
+  \item The self-coupling weight $\alpha_i$ can be derived as a state-dependent precision through Bayesian estimation of a latent precision variable (Section~\ref{sec:state_dependent_precision}), with the fixed-$\alpha$ case recovered as a degenerate limit.
 \end{itemize}
 
 This derivation establishes the generalized variational free energy as a fundamental object in a gauge-theoretic multi-agent geometry rooted in informational and differential geometries.
 
 Therefore, multi-agent communication within a gauge covariant formulation allows the FEP to be satisfied as well as allows us to connect attention, transformers, and machine learning to variational inference.
+
+\subsection{State-Dependent Prior Precision}
+\label{sec:state_dependent_precision}
+
+In the variational free energy \eqref{eq:free_energy_final}, the self-coupling term $D_{\mathrm{KL}}(q_i \| p_i)$ carries unit coefficient. This implicitly assumes that the prior precision is known and fixed---that each agent trusts its prior with uniform strength regardless of context. We now show that relaxing this assumption, by treating the prior precision as a latent variable subject to variational inference, yields a state-dependent self-coupling weight $\alpha_i$ that emerges from the same variational principle that produces the alignment weights $\beta_{ij}$.
+
+\subsubsection{Precision as a Latent Variable}
+
+The hierarchical structure of the generative model (Eq.~\ref{eq:hierarchical_prior}) already implies that the effective prior precision depends on model uncertainty. We make this dependence explicit by augmenting the generative model for agent $i$ with a scalar precision parameter $\lambda_i > 0$ that modulates the prior's informativeness:
+\begin{equation}
+p(k_i \mid m_i, \lambda_i) = \mathcal{N}\!\left(k_i;\, \mu_{p,i},\, \lambda_i^{-1} \Sigma_{p,i}\right), \qquad
+p(\lambda_i) = \mathrm{Gamma}(\lambda_i;\, a_0, b_0),
+\label{eq:precision_augmented}
+\end{equation}
+where $a_0 > 0$ and $b_0 > 0$ are hyperparameters of the precision prior. The Gamma distribution is the conjugate prior for the precision of a Gaussian likelihood, ensuring closed-form variational updates. The product $\lambda_i^{-1} \Sigma_{p,i}$ rescales the prior covariance: high $\lambda_i$ corresponds to a tight (informative) prior, low $\lambda_i$ to a diffuse (uninformative) prior.
+
+\subsubsection{Variational Update for Precision}
+
+Under the mean-field factorization $q(k_i, \lambda_i) = q_i(k_i)\,q(\lambda_i)$, the optimal variational posterior over precision takes the conjugate form $q^*(\lambda_i) = \mathrm{Gamma}(\lambda_i;\, a_i, b_i)$ with updated parameters:
+\begin{equation}
+a_i = a_0 + \frac{d}{2}, \qquad
+b_i = b_0 + \frac{1}{2}\left[
+\delta_i^\top \Sigma_{p,i}^{-1} \delta_i
++ \mathrm{tr}\!\left(\Sigma_{p,i}^{-1} \Sigma_{q,i}\right)
+\right],
+\label{eq:precision_posterior_params}
+\end{equation}
+where $\delta_i = \mu_{q,i} - \mu_{p,i}$ is the belief--prior mismatch and $d = \dim(k_i)$. This is the standard Gamma--Normal conjugate update \citep{bishop2006pattern}. The expected precision under this posterior defines the state-dependent self-coupling weight:
+\begin{equation}
+\boxed{
+\alpha_i \;\equiv\; \langle \lambda_i \rangle_{q(\lambda_i)}
+\;=\; \frac{a_0 + d/2}{\displaystyle b_0 + \tfrac{1}{2}\!\left[
+\delta_i^\top \Sigma_{p,i}^{-1} \delta_i
++ \mathrm{tr}\!\left(\Sigma_{p,i}^{-1} \Sigma_{q,i}\right)
+\right]}.
+}
+\label{eq:state_dependent_alpha}
+\end{equation}
+
+This result has a transparent interpretation:
+
+\begin{itemize}
+\item \textbf{Close to prior} ($\delta_i \approx 0$, $\Sigma_{q,i} \approx \Sigma_{p,i}$): $\alpha_i \approx (a_0 + d/2)/(b_0 + d/2)$, a high value determined by the hyperparameters. The agent trusts its prior and resists displacement by the alignment term.
+
+\item \textbf{Far from prior} (large $\|\delta_i\|_{\Sigma_p^{-1}}^2$): $\alpha_i \to 0$. The prior's influence wanes and the alignment and observation terms dominate. The agent ``releases'' from its prior anchor, allowing contextual information to reshape its belief.
+\end{itemize}
+
+The hyperparameter $b_0$ controls the sensitivity of this transition: large $b_0$ yields approximately constant $\alpha_i$ (stiff, uniformly informative prior), while small $b_0$ yields $\alpha_i$ that is highly responsive to belief--prior mismatch (elastic, context-sensitive prior). The hyperparameters $a_0$ and $b_0$ may themselves be learned via empirical Bayes, introducing only two scalar parameters.
+
+\subsubsection{Modified Free Energy with Adaptive Precision}
+
+Substituting the expected precision into the variational free energy, the self-coupling term for agent $i$ becomes:
+\begin{equation}
+\mathcal{F}_{i,\mathrm{self}} = \alpha_i\, D_{\mathrm{KL}}(q_i \| p_i) + D_{\mathrm{KL}}\!\left(q(\lambda_i) \,\|\, p(\lambda_i)\right),
+\label{eq:modified_self_coupling}
+\end{equation}
+where the second term---the KL divergence between the variational and prior Gamma distributions---penalizes deviation from the prior precision belief, preventing the system from trivially setting $\alpha_i = 0$ to eliminate the self-coupling cost. The full single-agent free energy becomes:
+\begin{equation}
+\mathcal{F}_i = \alpha_i\,D_{\mathrm{KL}}(q_i \| p_i)
++ \sum_j \beta_{ij}\,D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)
++ D_{\mathrm{KL}}(q(\lambda_i) \| p(\lambda_i))
+- \mathbb{E}_{q_i}[\log p(o_i \mid k_i)].
+\label{eq:free_energy_adaptive}
+\end{equation}
+
+\subsubsection{Gradient Structure and Gating}
+
+The gradient of the modified free energy with respect to $\mu_{q,i}$ acquires the form:
+\begin{equation}
+\frac{\partial \mathcal{F}_i}{\partial \mu_{q,i}}
+= \alpha_i\,\Sigma_{p,i}^{-1}\delta_i
++ \sum_j \beta_{ij}\,(\Omega_{ij}\Sigma_{q,j}\Omega_{ij}^\top)^{-1}(\mu_{q,i} - \Omega_{ij}\mu_{q,j})
++ \text{softmax coupling}
+- \nabla_{\mu_{q,i}} \log p(o_i \mid k_i),
+\label{eq:gated_gradient}
+\end{equation}
+where, under the variational EM interpretation, $\alpha_i$ is held fixed during the belief update (coordinate ascent on the joint objective over $(q_i, q(\lambda_i))$): first update $\alpha_i$ from \eqref{eq:state_dependent_alpha} (E-step for precision), then update beliefs with $\alpha_i$ fixed (M-step for beliefs). This separation prevents the pathological $1/\|\delta\|^3$ gradient that would arise from differentiating through $\alpha_i$, while preserving the adaptive precision behavior.
+
+The resulting belief dynamics take the form of a \emph{gated residual update}:
+\begin{equation}
+\mu_i^{(t+1)} = \mu_i^{(t)} - \eta\!\left[
+\alpha_i \cdot \underbrace{\Sigma_{p,i}^{-1}\delta_i}_{\text{prior pull (residual)}}
++ \underbrace{\sum_j \beta_{ij}\,(\Omega_{ij}\Sigma_{q,j}\Omega_{ij}^\top)^{-1}(\mu_i - \Omega_{ij}\mu_j)}_{\text{alignment pull (attention)}}
+- \underbrace{\nabla \log p(o_i \mid \mu_i)}_{\text{observation (loss)}}
+\right].
+\label{eq:gated_update}
+\end{equation}
+When $\alpha_i$ is large, the prior term dominates and the belief remains anchored to $\mu_{p,i}$---the ``gate is closed.'' When $\alpha_i$ is small, the alignment and observation terms dominate and the belief is free to be reshaped by context---the ``gate is open.'' This is the variational analog of the gating mechanisms in Highway Networks \citep{srivastava2015highway} and LSTM cells \citep{hochreiter1997long}, derived here from first principles rather than introduced as architectural choices.
+
+\subsubsection{Degenerate Limit: Recovering Fixed Residual Connections}
+\label{sec:precision_degenerate}
+
+In the limit of known (deterministic) precision---$\mathrm{Var}_{q(\lambda_i)}(\lambda_i) \to 0$ with $\langle \lambda_i \rangle = \alpha$ held fixed---the Gamma prior concentrates to a point mass. Concretely, taking $a_0 \to \infty$ and $b_0 \to \infty$ with $a_0/b_0 = \alpha$:
+\begin{equation}
+\alpha_i \;\xrightarrow{\;\mathrm{Var}(\lambda) \to 0\;}\; \alpha = \text{const},
+\label{eq:fixed_alpha_limit}
+\end{equation}
+recovering the unit-coefficient self-coupling of \eqref{eq:free_energy_final} (with $\alpha = 1$) or, more generally, the fixed scalar weight used in the implementation. In this limit, $D_{\mathrm{KL}}(q(\lambda_i) \| p(\lambda_i)) \to 0$ and the precision KL term vanishes from the free energy.
+
+The state-dependent precision $\alpha_i$ thus generalizes the fixed residual connection of standard transformers, which implicitly assumes uniform epistemic reliability across all tokens. Standard transformers operate in the known-precision limit where every token's prior is equally trusted---a simplification that discards context-sensitive information flow.
+
+This completes the following hierarchy of degenerate limits connecting the general theory to standard transformer components:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{lcl}
+\textbf{General Theory} & $\xrightarrow{\text{limit}}$ & \textbf{Standard Component} \\
+\hline
+$D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ & isotropic, flat bundle & Dot-product attention $QK^\top$ \\
+$\tau$ in $\beta_{ij}$ & geometric scaling & $1/\sqrt{d_k}$ temperature \\
+$\alpha_i(\delta_i, \Sigma_{q,i})$ & $\mathrm{Var}(\lambda) \to 0$ & Fixed residual connection \\
+$\Sigma_{q,i}$ dynamics & $\Sigma \to \sigma^2 I$ & Layer normalization \\
+\end{tabular}
+\end{center}
+
+\subsubsection{Connection to Symmetry Breaking}
+
+Dynamic precision provides the microscopic mechanism through which observations drive the symmetry breaking described in Section~\ref{sec:symmetry_breaking}. The dynamics proceed in three phases:
+
+\begin{enumerate}
+\item \textbf{Symmetric phase} (vacuum, $o = \emptyset$): All agents converge to $q_i = p_i$, giving $\delta_i = 0$ and maximal $\alpha_i$. The system is ``frozen''---agents are rigidly anchored to priors and resist perturbation. This is the high-precision, high-symmetry fixed point.
+
+\item \textbf{Transition} (observations introduced): Observations push beliefs away from priors ($\delta_i > 0$), lowering $\alpha_i$, which reduces the restoring force toward the prior. This positive feedback allows the alignment and observation terms to ``capture'' the agent and pull it toward a new equilibrium in a different gauge orbit.
+
+\item \textbf{Broken phase} (steady state under data): Agents settle into specialized configurations. On the slow timescale (Eq.~\ref{eq:model_dynamics}), priors update to match the new beliefs ($\mu_{p,i} \to \mu_{q,i}$, $\delta_i \to 0$), $\alpha_i$ rises again, and the agent ``freezes'' into its new semantic role with restored high precision.
+\end{enumerate}
+
+The precision $\alpha_i$ thus acts as a local order parameter: high $\alpha_i$ characterizes the symmetric (vacuum) phase, transiently low $\alpha_i$ characterizes the critical regime during symmetry breaking, and restored high $\alpha_i$ characterizes the broken (specialized) phase after prior adaptation.
+
+\subsubsection{Gauge Invariance}
+
+The state-dependent precision \eqref{eq:state_dependent_alpha} preserves the $\mathrm{GL}(K)$ gauge invariance of the framework. Since $D_{\mathrm{KL}}(q_i \| p_i)$ is invariant under simultaneous $\mathrm{GL}(K)$ transformation of both $q_i$ and $p_i$ (Theorem~\ref{thm:glk_invariance}), and $\alpha_i$ depends on $q_i$ and $p_i$ only through KL-derived quantities---specifically $\delta_i^\top \Sigma_{p,i}^{-1} \delta_i$ and $\mathrm{tr}(\Sigma_{p,i}^{-1}\Sigma_{q,i})$, both of which are $\mathrm{GL}(K)$-invariant---the precision $\alpha_i$ is itself gauge-invariant. The modified free energy \eqref{eq:free_energy_adaptive} therefore inherits the full gauge symmetry of the original formulation.
 
 
 \section{Reduction to Transformer Attention and Backpropagation}
@@ -1343,11 +1476,12 @@ $\sigma^2 D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ & Rescaled KL $\to$ $\frac{1}{
 $\beta_{ij} \propto e^{-\mathrm{KL}/\tau}$ & Exact correspondence & $\mathrm{softmax}(QK^\top/\sqrt{d_k})$ \\
 $-\mathbb{E}_q[\log p(o \mid k)]$ & Expectation $\to$ point eval & Cross-entropy loss \\
 $\frac{d\mu}{dt} = -\eta \nabla \mathcal{F}$ & Euclidean limit & Backpropagation \\
+$\alpha_i(\delta_i, \Sigma_{q,i})$ (Sec.~\ref{sec:state_dependent_precision}) & $\mathrm{Var}(\lambda) \to 0$ & Fixed residual connection \\
 Vacuum (no observations) & --- & Untrained network \\
 Symmetry breaking & --- & Training/learning \\
 \hline
 \end{tabular}
-\caption{Complete correspondence between gauge-equivariant FEP and neural networks. The crucial insight is that transformers possess $\mathrm{GL}(K)$ gauge structure through learned projections $W_Q, W_K$. The ``deterministic limit'' is achieved via a scaling limit where $\sigma^{-2}$ is absorbed into learned parameters, not by taking $\sigma \to 0$ directly.}
+\caption{Complete correspondence between gauge-equivariant FEP and neural networks. The crucial insight is that transformers possess $\mathrm{GL}(K)$ gauge structure through learned projections $W_Q, W_K$. The ``deterministic limit'' is achieved via a scaling limit where $\sigma^{-2}$ is absorbed into learned parameters, not by taking $\sigma \to 0$ directly. The state-dependent precision $\alpha_i$ generalizes the fixed residual connection, with the standard case recovered when precision variance vanishes.}
 \label{tab:fep_nn_correspondence}
 \end{table}
 
