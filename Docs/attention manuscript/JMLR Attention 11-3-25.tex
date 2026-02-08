@@ -1376,18 +1376,33 @@ The gauge frames $\phi_i$ influence predictions \emph{indirectly}: during VFE de
 
 \paragraph{Deterministic Free Energy.}
 
-In the deterministic limit with flat bundle ($\Omega_{ij} = \Omega$), the full free energy becomes:
+In the deterministic limit with flat bundle ($\Omega_{ij} = \Omega$), each belief becomes a point mass $q_i \to \delta(k_i - \mu_i)$ and each prior is isotropic: $p_i = \mathcal{N}(\mu_{\text{prior}}, \sigma_p^2 I)$. The self-coupling term from the adaptive free energy \eqref{eq:free_energy_adaptive} becomes:
 \begin{equation}
-\mathcal{F}[\{\mu_i\}] = \underbrace{\sum_i \frac{\lambda_p}{2}\|\mu_i - \mu_{\text{prior}}\|^2}_{\text{Prior regularization}} + \underbrace{\sum_{i,j} \frac{\beta_{ij}}{2\sigma^2}\|\mu_i - \Omega\mu_j\|^2}_{\text{Alignment coupling}} - \underbrace{\sum_i \log p(o_i \mid \mu_i)}_{\text{Observation likelihood}},
+\alpha_i \,D_{\mathrm{KL}}(\delta(\mu_i) \,\|\, \mathcal{N}(\mu_{\text{prior}}, \sigma_p^2 I))
+= \frac{\alpha_i}{2\sigma_p^2}\,\|\mu_i - \mu_{\text{prior}}\|^2,
 \end{equation}
-where:
-\begin{itemize}
-  \item \textbf{First term}: KL divergence from prior $D_{\mathrm{KL}}(\delta(\mu_i) \| \mathcal{N}(\mu_{\text{prior}}, \sigma_p^2)) \propto \|\mu_i - \mu_{\text{prior}}\|^2$ (L2 regularization)
-  \item \textbf{Second term}: Pairwise alignment energy from gauge-transported KL coupling
-  \item \textbf{Third term}: Negative log-likelihood (loss function)
-\end{itemize}
+where the state-dependent precision \eqref{eq:state_dependent_alpha} simplifies in the deterministic limit to
+\begin{equation}
+\alpha_i = \frac{a_0 + d/2}{\displaystyle b_0 + \frac{1}{2\sigma_p^2}\|\mu_i - \mu_{\text{prior}}\|^2}.
+\label{eq:alpha_i_deterministic}
+\end{equation}
+Defining the per-token regularization strength $\lambda_{p,i} \equiv \alpha_i / \sigma_p^2$, the full deterministic free energy is:
+\begin{equation}
+\mathcal{F}[\{\mu_i\}] = \underbrace{\sum_i \frac{\lambda_{p,i}}{2}\|\mu_i - \mu_{\text{prior}}\|^2}_{\text{Adaptive prior regularization}} + \underbrace{\sum_{i,j} \frac{\beta_{ij}}{2\sigma^2}\|\mu_i - \Omega\mu_j\|^2}_{\text{Alignment coupling}} - \underbrace{\sum_i \log p(o_i \mid \mu_i)}_{\text{Observation likelihood}}.
+\label{eq:deterministic_free_energy_adaptive}
+\end{equation}
+This constitutes \emph{adaptive weight decay}: tokens whose beliefs have drifted far from the prior ($\|\delta_i\|$ large) experience weaker regularization ($\lambda_{p,i}$ small, gate open), while tokens near the prior are strongly anchored ($\lambda_{p,i}$ large, gate closed).
+
+In the known-precision limit (Section~\ref{sec:precision_degenerate}), $\alpha_i \to \alpha = \text{const}$ and $\lambda_{p,i} \to \lambda_p \equiv \alpha / \sigma_p^2$, recovering uniform L2 regularization:
+\begin{equation}
+\mathcal{F}[\{\mu_i\}] = \underbrace{\sum_i \frac{\lambda_p}{2}\|\mu_i - \mu_{\text{prior}}\|^2}_{\text{L2 regularization (weight decay)}} + \underbrace{\sum_{i,j} \frac{\beta_{ij}}{2\sigma^2}\|\mu_i - \Omega\mu_j\|^2}_{\text{Alignment coupling}} - \underbrace{\sum_i \log p(o_i \mid \mu_i)}_{\text{Observation likelihood}}.
+\label{eq:deterministic_free_energy_standard}
+\end{equation}
+This identifies the standard weight decay coefficient $\lambda_p$ as the product of two quantities that the general theory treats independently: the prior precision $\alpha$ and the inverse prior variance $1/\sigma_p^2$. In the general theory, both are state-dependent; standard transformers collapse them into a single fixed scalar.
 
 \paragraph{Gradient Descent Dynamics.}
+
+We present the gradient dynamics in the known-precision limit $\lambda_{p,i} = \lambda_p$, which recovers the standard transformer update. The general case with per-token $\lambda_{p,i}$ follows by direct substitution and yields the gated residual update of Eq.~\eqref{eq:gated_update}.
 
 The gradient of the free energy with respect to $\mu_i$ is:
 \begin{equation}
@@ -1408,7 +1423,7 @@ The gradient of the free energy with respect to $\mu_i$ is:
 
 \textbf{Interpretation of each term:}
 \begin{enumerate}
-  \item $\lambda_p(\mu_i - \mu_{\text{prior}})$: Weight decay / L2 regularization
+  \item $\lambda_p(\mu_i - \mu_{\text{prior}})$: Weight decay / L2 regularization. In the general theory, $\lambda_p \to \lambda_{p,i} = \alpha_i/\sigma_p^2$ (Eq.~\ref{eq:deterministic_free_energy_adaptive}), giving per-token adaptive regularization---the deterministic analog of the gated residual (Eq.~\ref{eq:gated_update}).
   \item $\sum_j \frac{\beta_{ij}}{\sigma^2}(\mu_i - \Omega\mu_j)$: Attention-weighted message aggregation (pulls $\mu_i$ toward gauge-transported neighbors)
   \item $\sum_j \frac{\partial \beta_{ij}}{\partial \mu_i}\|\mu_i - \Omega\mu_j\|^2/(2\sigma^2)$: Gradient flow through attention weights themselves (backpropagation through softmax)
   \item $-\frac{\partial \log p(o_i \mid \mu_i)}{\partial \mu_i}$: Gradient of loss function (supervised learning signal)
