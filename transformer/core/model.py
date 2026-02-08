@@ -124,6 +124,9 @@ class GaugeTransformerLM(nn.Module):
         ffn_lambda_belief = config.get('ffn_lambda_belief', 1.0)
         ffn_update_sigma = config.get('ffn_update_sigma', True)
 
+        # Bayesian precision: Gamma-Normal conjugate prior for α
+        ffn_learnable_alpha = config.get('learnable_alpha', False)
+
         # Hamiltonian FFN config
         ffn_hamiltonian_dt = config.get('ffn_hamiltonian_dt', 0.01)
         ffn_hamiltonian_n_steps = config.get('ffn_hamiltonian_n_steps', 10)
@@ -416,6 +419,8 @@ class GaugeTransformerLM(nn.Module):
             mask_self_attention=config.get('mask_self_attention', False),
             # Gauge group control
             enforce_orthogonal=config.get('enforce_orthogonal', False),
+            # Bayesian precision
+            ffn_learnable_alpha=ffn_learnable_alpha,
         )
 
         # =================================================================

@@ -575,7 +575,7 @@ def compute_vfe_gradients_gpu(
     beta: torch.Tensor,        # (B, N, N) attention weights
     phi: torch.Tensor,         # (B, N, n_gen) gauge frames where n_gen is # of generators
     generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators (SO(3) or SO(N))
-    alpha: float = 0.01,       # Self-coupling weight (KL(q||p))
+    alpha: 'float | torch.Tensor' = 0.01,  # Self-coupling weight: scalar or (B, N, 1) Bayesian precision
     lambda_belief: float = 1.0,  # Belief alignment weight
     kappa: float = 1.0,        # Temperature (for normalization)
     eps: float = 1e-6,
@@ -607,7 +607,8 @@ def compute_vfe_gradients_gpu(
         beta: Attention weights (B, N, N), already normalized
         phi: Gauge frames (B, N, n_gen) where n_gen is # of generators
         generators: Lie algebra generators (n_gen, K, K) - SO(3) has 3, SO(N) has N(N-1)/2
-        alpha: Weight for KL(q||p) self-coupling term
+        alpha: Weight for KL(q||p) self-coupling term. Can be a float (uniform)
+               or a (B, N, 1) tensor from Bayesian precision estimation.
         lambda_belief: Weight for belief alignment term
         kappa: Temperature parameter
         eps: Numerical stability
@@ -1501,6 +1502,8 @@ class VariationalFFNDynamic(nn.Module):
         chunk_size: Optional[int] = None,  # Chunk size for memory-efficient attention
         # Self-attention masking (prevents attention collapse)
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
+        # Bayesian precision (learned prior self-coupling)
+        learnable_alpha: bool = False,  # If True, use Gamma-Normal conjugate precision
     ):
         """
         Initialize dynamic-β VFE FFN.
@@ -1527,6 +1530,9 @@ class VariationalFFNDynamic(nn.Module):
             chunk_size: Chunk size for memory-efficient processing. Processes N×N in C×C chunks.
             mask_self_attention: If True, mask out diagonal (no self-attention).
                                 Prevents attention collapse since KL(q_i||q_i)=0 always.
+            learnable_alpha: If True, use Bayesian precision via Gamma-Normal conjugacy.
+                            α_i = (a₀ + K/2) / (b₀ + ½ ∥μ_q - μ_p∥²_{Σ_p⁻¹})
+                            Gauge-invariant, state-dependent, only 2 learnable parameters.
         """
         super().__init__()
 
@@ -1554,6 +1560,28 @@ class VariationalFFNDynamic(nn.Module):
         self.alpha = alpha
         self.lambda_belief = lambda_belief
         self.kappa = kappa
+
+        # =================================================================
+        # Bayesian Precision: Gamma-Normal conjugate prior for α
+        # =================================================================
+        # α_i = (a₀ + K/2) / (b₀ + ½ ∥μ_q,i - μ_p,i∥²_{Σ_p⁻¹})
+        #
+        # Gauge-invariant (Mahalanobis distance is a gauge scalar).
+        # Self-regulating: α shrinks when beliefs diverge from priors.
+        # Initialized so α ≈ alpha (the scalar value) when ∥δμ∥ ≈ 0.
+        self.learnable_alpha = learnable_alpha
+        if learnable_alpha:
+            # Initialize: a₀ = 1, b₀ = (a₀ + K/2) / alpha_init
+            # so that α ≈ alpha when Mahalanobis distance ≈ 0
+            a0_init = 1.0
+            alpha_init = max(alpha, 0.01)  # avoid division by zero
+            b0_init = (a0_init + embed_dim / 2.0) / alpha_init
+            # Parameterize via softplus to ensure positivity
+            self.raw_a0 = nn.Parameter(torch.tensor(self._softplus_inverse(a0_init)))
+            self.raw_b0 = nn.Parameter(torch.tensor(self._softplus_inverse(b0_init)))
+            print(f"[VariationalFFNDynamic] Bayesian precision enabled: "
+                  f"a₀={a0_init:.1f}, b₀={b0_init:.1f}, "
+                  f"initial α≈{alpha_init} (K={embed_dim})")
 
         # Pure FEP mode: learning via prior evolution
         self.pure_fep_mode = pure_fep_mode
@@ -1593,6 +1621,56 @@ class VariationalFFNDynamic(nn.Module):
             self.lr = nn.Parameter(torch.tensor(0.1))
         else:
             self.register_buffer('lr', torch.tensor(0.1))
+
+    @staticmethod
+    def _softplus_inverse(x: float) -> float:
+        """Compute inverse of softplus: log(exp(x) - 1)."""
+        if x > 20.0:
+            return x  # softplus ≈ identity for large x
+        return float(np.log(np.expm1(x)))
+
+    def get_bayesian_alpha(
+        self,
+        mu_q: torch.Tensor,      # (B, N, K)
+        mu_p: torch.Tensor,      # (B, N, K)
+        sigma_p: torch.Tensor,   # (B, N, K) diagonal or (B, N, K, K) full
+        eps: float = 1e-6,
+    ) -> torch.Tensor:
+        """
+        Compute Bayesian precision via Gamma-Normal conjugacy.
+
+        α_i = (a₀ + K/2) / (b₀ + ½ ∥μ_q,i - μ_p,i∥²_{Σ_p⁻¹})
+
+        This is the posterior mean of τ ~ Gamma(a₀, b₀) given
+        observation (μ_q - μ_p) with precision Σ_p⁻¹.
+
+        Gauge-invariant: the Mahalanobis distance is a gauge scalar.
+
+        Returns:
+            alpha: (B, N, 1) per-token precision, broadcastable to (B, N, K)
+        """
+        a0 = F.softplus(self.raw_a0)
+        b0 = F.softplus(self.raw_b0)
+
+        delta_mu = mu_q - mu_p  # (B, N, K)
+        is_diagonal = (sigma_p.dim() == 3)
+
+        if is_diagonal:
+            sigma_p_safe = sigma_p.clamp(min=eps)
+            # Mahalanobis squared: Σ_k (δμ_k)² / σ_p_k
+            mahal_sq = (delta_mu ** 2 / sigma_p_safe).sum(dim=-1, keepdim=True)  # (B, N, 1)
+        else:
+            # Full covariance: δμᵀ Σ_p⁻¹ δμ
+            K = mu_q.shape[-1]
+            sigma_p_reg = sigma_p + eps * torch.eye(K, device=mu_q.device, dtype=mu_q.dtype)
+            sigma_p_inv = torch.linalg.inv(sigma_p_reg)  # (B, N, K, K)
+            mahal_sq = torch.einsum('bni,bnij,bnj->bn', delta_mu, sigma_p_inv, delta_mu)
+            mahal_sq = mahal_sq.unsqueeze(-1)  # (B, N, 1)
+
+        K = mu_q.shape[-1]
+        alpha = (a0 + K / 2.0) / (b0 + 0.5 * mahal_sq)  # (B, N, 1)
+
+        return alpha
 
     def forward(
         self,
@@ -1778,6 +1856,14 @@ class VariationalFFNDynamic(nn.Module):
             # =================================================================
             # STEP 2: Compute VFE gradients with current β
             # =================================================================
+            # Determine alpha: Bayesian precision or fixed scalar
+            if self.learnable_alpha:
+                alpha_effective = self.get_bayesian_alpha(
+                    mu_current, mu_p_current, sigma_p, eps=eps
+                )  # (B, N, 1) - gauge-invariant, state-dependent
+            else:
+                alpha_effective = self.alpha  # scalar (backward compatible)
+
             grad_mu, grad_sigma = compute_vfe_gradients_gpu(
                 mu_q=mu_current,
                 sigma_q=sigma_current,
@@ -1786,7 +1872,7 @@ class VariationalFFNDynamic(nn.Module):
                 beta=beta_current,  # USE RECOMPUTED β!
                 phi=phi_current,  # Use evolving phi for dynamical gauge frames
                 generators=self.generators,
-                alpha=self.alpha,
+                alpha=alpha_effective,
                 lambda_belief=self.lambda_belief,
                 kappa=self.kappa,
                 eps=eps,

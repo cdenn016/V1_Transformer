@@ -65,6 +65,8 @@ class GaugeFFN(nn.Module):
         chunk_size: Optional[int] = None,  # Chunk size for memory-efficient attention
         # Self-attention masking (prevents attention collapse)
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
+        # Bayesian precision (learned prior self-coupling)
+        learnable_alpha: bool = False,  # If True, use Gamma-Normal conjugate precision
         # Legacy parameters (ignored, kept for API compatibility)
         **kwargs,
     ):
@@ -93,6 +95,7 @@ class GaugeFFN(nn.Module):
             chunk_size: Chunk size for memory-efficient processing. Processes N×N in C×C chunks.
             mask_self_attention: If True, mask out diagonal (no self-attention).
                                 Prevents attention collapse since KL(q_i||q_i)=0 always.
+            learnable_alpha: If True, use Bayesian precision via Gamma-Normal conjugacy.
         """
         super().__init__()
 
@@ -132,6 +135,8 @@ class GaugeFFN(nn.Module):
             chunk_size=chunk_size,
             # Self-attention masking
             mask_self_attention=mask_self_attention,
+            # Bayesian precision
+            learnable_alpha=learnable_alpha,
         )
 
     def forward(
