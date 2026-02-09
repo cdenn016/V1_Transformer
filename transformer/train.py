@@ -569,6 +569,32 @@ def compute_free_energy_loss(
         'attention/concentration': attn_concentration.item(),
     }
 
+    # Bayesian alpha diagnostics
+    with torch.no_grad():
+        for block in model.transformer.blocks:
+            vffn = block.ffn.variational_ffn
+            if vffn.learnable_alpha and mu_q is not None and mu_p is not None:
+                import torch.nn.functional as _F
+                alpha_vals = vffn.get_bayesian_alpha(mu_q, mu_p, sigma_p)
+                a0 = _F.softplus(vffn.raw_a0)
+                b0 = _F.softplus(vffn.raw_b0)
+                delta = mu_q - mu_p
+                if sigma_p.dim() == 3:
+                    mahal_sq = (delta ** 2 / sigma_p.clamp(min=1e-6)).sum(dim=-1)
+                else:
+                    K = mu_q.shape[-1]
+                    sp_inv = torch.linalg.inv(sigma_p + 1e-6 * torch.eye(K, device=mu_q.device))
+                    mahal_sq = torch.einsum('bni,bnij,bnj->bn', delta, sp_inv, delta)
+                metrics['bayesian/alpha_mean'] = alpha_vals.mean().item()
+                metrics['bayesian/alpha_std'] = alpha_vals.std().item()
+                metrics['bayesian/alpha_min'] = alpha_vals.min().item()
+                metrics['bayesian/alpha_max'] = alpha_vals.max().item()
+                metrics['bayesian/a0'] = a0.item()
+                metrics['bayesian/b0'] = b0.item()
+                metrics['bayesian/mahal_sq_mean'] = mahal_sq.mean().item()
+                metrics['bayesian/mahal_sq_std'] = mahal_sq.std().item()
+                break  # Only first layer for now
+
     if lambda_gamma > 0.0:
         metrics['attention/gamma_mean'] = gamma.mean().item()
         metrics['attention/kl_prior_mean'] = kl_prior.mean().item()

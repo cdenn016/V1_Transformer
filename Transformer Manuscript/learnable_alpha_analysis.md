@@ -154,20 +154,126 @@ could benefit from different alpha schedules - early layers exploring more
 (lower alpha), later layers anchoring more (higher alpha). With a single layer,
 this compositional advantage is absent.
 
+## UPDATE: Why 6 VFE Iterations Made Things WORSE
+
+Running with `ffn_n_iterations=6` produced worse results than 1 iteration. This
+reveals a fundamental flaw in how the Bayesian alpha interacts with the VFE inner loop.
+
+### The Runaway De-Anchoring Problem
+
+The Bayesian alpha formula is:
+```
+alpha_i = (a0 + K/2) / (b0 + 0.5 * ||mu_q - mu_p||^2)
+```
+
+This is **monotonically decreasing** in Mahalanobis distance. Here's what happens
+across 6 VFE iterations within a single forward pass:
+
+```
+Iteration 1: mu_q ≈ mu_p  →  mahal ≈ 0     →  alpha ≈ 1.0  (strong anchor)
+Iteration 2: mu_q drifts   →  mahal grows   →  alpha drops   (weaker anchor)
+Iteration 3: mu_q drifts more → mahal bigger → alpha drops more
+...
+Iteration 6: mu_q far from mu_p → mahal large → alpha << 1.0  (weak anchor)
+```
+
+This creates a **positive feedback loop of de-anchoring**:
+1. Beliefs move away from priors (normal VFE dynamics)
+2. Bayesian alpha detects the distance and *reduces* prior coupling
+3. With less anchoring, beliefs move even further from priors
+4. Alpha drops even more
+5. By iteration 6, the prior term is effectively disabled
+
+Meanwhile, the **constant alpha** case maintains `alpha=1.0` at every iteration,
+providing consistent restoring force that keeps beliefs from drifting too far.
+
+### The Learning Rate Scaling Compounds the Problem
+
+The code already accounts for multiple iterations via:
+```python
+base_lr = self.lr / self.n_iterations  # Line 1806
+decay_factor = 1.0 - 0.5 * (iteration / (self.n_iterations - 1))  # Lines 1811-1812
+```
+
+For n_iterations=6, total integrated step ≈ 0.75 × lr. But this scaling was designed
+for constant alpha. With Bayesian alpha decaying across iterations, the effective
+*prior-weighted* contribution drops much more than 0.75x — potentially to near zero
+by the last iterations.
+
+### The Core Issue: Wrong Timescale for Adaptation
+
+The Bayesian alpha adapts on the **wrong timescale**. It was designed as if
+`||mu_q - mu_p||` reflects a meaningful, persistent divergence between beliefs and
+priors. But within the VFE inner loop:
+
+- `mu_q` is an intermediate variable being optimized
+- `mu_p` is fixed (the embedding prior for this forward pass)
+- The distance `||mu_q - mu_p||` grows naturally during optimization — this is the
+  *intended behavior* of VFE descent, not a signal to reduce prior coupling
+
+The Bayesian alpha interprets normal optimization dynamics as evidence that the prior
+is wrong, and loosens the prior — exactly the opposite of what stability requires.
+
+### Fix: Compute Alpha Once, Use It for All Iterations
+
+The alpha should be computed from the **initial** beliefs (before any VFE iterations)
+and held constant throughout the inner loop:
+
+```python
+# BEFORE the iteration loop:
+if self.learnable_alpha:
+    alpha_effective = self.get_bayesian_alpha(
+        mu, mu_p_current, sigma_p, eps=eps  # mu = initial beliefs, NOT mu_current
+    )
+
+# INSIDE the iteration loop:
+# Use alpha_effective (fixed) instead of recomputing from mu_current
+```
+
+This way:
+- Alpha still adapts per-token based on how far the initial embedding is from the prior
+- But it doesn't de-anchor during the inner optimization loop
+- Multiple iterations now benefit from consistent, token-specific prior coupling
+
+### Alternative Fix: Clamp Alpha Floor
+
+If you want alpha to adapt during iterations but prevent runaway de-anchoring:
+
+```python
+alpha_effective = self.get_bayesian_alpha(mu_current, mu_p_current, sigma_p)
+alpha_effective = torch.clamp(alpha_effective, min=0.1 * self.alpha)  # Floor at 10% of base
+```
+
+## Diagnostics Added
+
+Alpha diagnostics have been added to `train.py` and `train_publication.py`. The
+metrics CSV now includes:
+
+| Column | Description |
+|--------|-------------|
+| `alpha_mean` | Mean Bayesian alpha across all tokens |
+| `alpha_std` | Std dev (measures per-token variation) |
+| `alpha_min` | Minimum alpha (most de-anchored token) |
+| `alpha_max` | Maximum alpha (most anchored token) |
+| `alpha_a0` | Learned Gamma shape parameter |
+| `alpha_b0` | Learned Gamma rate parameter |
+| `alpha_mahal_sq_mean` | Mean Mahalanobis distance² (belief-prior divergence) |
+| `alpha_mahal_sq_std` | Std of Mahalanobis distance² |
+
+Console output during training now shows `[ALPHA]` lines at each log interval.
+
 ## Conclusion
 
-The learnable alpha **does work** - it provides a consistent 1-4% improvement in
-validation BPC throughout training, with the largest advantage in the mid-training
-regime. However, the effect is limited by the experimental setup:
+The learnable alpha **does work** with 1 VFE iteration (consistent 1-4% val BPC
+improvement) but **gets worse with multiple iterations** due to runaway de-anchoring.
+
+**Priority fix**: Compute Bayesian alpha once from initial beliefs, not per-iteration.
+This is a one-line change in `variational_ffn.py` (move `get_bayesian_alpha` call
+outside the iteration loop).
 
 | Factor | Current | Recommended |
 |--------|---------|-------------|
-| ffn_n_iterations | 1 | 5-10 |
-| alpha (base) | 1.0 | 0.01-0.1 |
-| n_layers | 1 | 2-3 |
-| Alpha logging | None | Full diagnostics |
-
-The most impactful change would be increasing `ffn_n_iterations`. The Bayesian
-precision mechanism is fundamentally about **iterative self-regulation**, and
-testing it with a single iteration is like testing a thermostat that only checks
-the temperature once.
+| Alpha computation | Per-iteration (broken) | Once before loop |
+| Alpha floor | None | clamp(min=0.1*base) |
+| ffn_n_iterations | 1 (safe) or 6 (broken) | 5-10 (after fix) |
+| Alpha logging | **Now added** | Review a0/b0 evolution |
