@@ -196,7 +196,7 @@ def _compute_vfe_gradients_block_diagonal(
     beta: torch.Tensor,        # (B, N, N) attention weights
     phi: torch.Tensor,         # (B, N, n_gen) gauge frames
     generators: torch.Tensor,  # (n_gen, K, K) generators
-    alpha: float,
+    alpha: 'float | torch.Tensor',
     lambda_belief: float,
     kappa: float,
     eps: float,
@@ -232,7 +232,9 @@ def _compute_vfe_gradients_block_diagonal(
 
     sigma_q_reg = sigma_q + eps * torch.eye(K, device=device, dtype=dtype)
     sigma_q_inv = torch.linalg.inv(sigma_q_reg)
-    grad_sigma_self = alpha * 0.5 * (sigma_p_inv - sigma_q_inv)
+    # For full covariance (4D), alpha (B,N,1) needs extra dim to broadcast with (B,N,K,K)
+    alpha_4d = alpha.unsqueeze(-1) if isinstance(alpha, torch.Tensor) else alpha
+    grad_sigma_self = alpha_4d * 0.5 * (sigma_p_inv - sigma_q_inv)
 
     grad_mu = grad_mu + grad_mu_self
     grad_sigma = grad_sigma + grad_sigma_self
@@ -686,7 +688,9 @@ def compute_vfe_gradients_gpu(
         # ∂KL/∂Σ_q = 0.5 * (Σ_p^{-1} - Σ_q^{-1})
         sigma_q_reg = sigma_q + eps * torch.eye(K, device=device, dtype=dtype)
         sigma_q_inv = torch.linalg.inv(sigma_q_reg)
-        grad_sigma_self = alpha * 0.5 * (sigma_p_inv - sigma_q_inv)
+        # For full covariance (4D), alpha (B,N,1) needs extra dim to broadcast with (B,N,K,K)
+        alpha_4d = alpha.unsqueeze(-1) if isinstance(alpha, torch.Tensor) else alpha
+        grad_sigma_self = alpha_4d * 0.5 * (sigma_p_inv - sigma_q_inv)
 
     # =================================================================
     # 2. Belief Alignment Gradient: ∂/∂μ_i [λ · Σ_j β_ij · KL(q_i || Ω_ij q_j)]
