@@ -811,7 +811,7 @@ We have shown that the cross-agent alignment term is the forward KL divergence w
 \end{equation}
 where $\Omega_{ij}(c) \cdot q_j(c)$ denotes the gauge transport of agent $j$'s belief into agent $i$'s frame, and both operands live in the same statistical manifold $\mathcal{B}(c)$ (similarly for $p$).
 
-The attention weights derived from this framework take the form (derived in Section~\ref{sec:mixture_derivation} and Appendix~D via two complementary arguments):
+The attention weights derived from this framework take the form (derived in Section~\ref{sec:mixture_derivation}):
 \begin{equation}
 \beta_{ij}(c) = \frac{\exp\left[-\frac{1}{\tau} D_{\text{KL}}\left(q_i(c) \,\big\|\, \Omega_{ij}(c) q_j(c)\right)\right] \chi_{ij}(c)}{\sum_k \exp\left[-\frac{1}{\tau} D_{\text{KL}}\left(q_i(c) \,\big\|\, \Omega_{ik}(c) q_k(c)\right)\right] \chi_{ik}(c)},
 \label{eq:attention_weights_softmax}
@@ -1064,7 +1064,7 @@ The mixture-model derivation and the agreement-variable construction of Section~
 & \textbf{Mixture Model} & \textbf{Agreement Variables} \\
 \hline
 KL arises & Exactly (by construction) & Approximately (alignment regime) \\
-Softmax arises & Directly (Lagrange opt.) & Via max-entropy (Appendix~D) \\
+Softmax arises & Directly (Lagrange opt.) & Indirectly (requires separate argument) \\
 Scope & Single-fiber (belief only) & Dual-fiber (belief + model) \\
 Generative model & Mixture of sources & Pairwise consistency \\
 Extra structure & Non-uniform priors $\pi_k$ & MRF, quadratic coupling \\
@@ -2760,72 +2760,9 @@ Reverse or symmetric divergences would violate at least one of these constraints
 
 
 
-\subsection{Softmax Attention via Maximum Entropy Principle}
-
-The mixture-model derivation in Section~\ref{sec:mixture_derivation} obtains softmax attention weights by direct variational minimization over a categorical latent variable. Here we present a complementary derivation via Jaynes' maximum entropy principle, which arrives at the same result from a different starting point: rather than specifying a generative model, we seek the least-committed attention distribution consistent with a given expected alignment cost.
-
-Given alignment cost $C_{ij} = D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$, we seek attention weights $\beta_{ij}$ that minimize expected disagreement $\sum_j \beta_{ij} C_{ij}$ while maximizing entropy $-\sum_j \beta_{ij}\log\beta_{ij}$ subject to $\sum_j \beta_{ij} = 1$.
-
-Following Jaynes' maximum entropy principle, we maximize entropy subject to the constraint that expected cost equals some target $\langle C \rangle$. The Lagrangian is:
-
-\begin{equation}
-\mathcal{J} = -\sum_j \beta_{ij}\log\beta_{ij} + \lambda\left(\sum_j \beta_{ij} - 1\right) + \mu\left(\sum_j \beta_{ij} C_{ij} - \langle C \rangle\right).
-\end{equation}
-
-The first-order condition $\partial \mathcal{J}/\partial \beta_{ij} = 0$ yields $\beta_{ij} = K\exp(\mu C_{ij})$ where $K = \exp(\lambda - 1)$. Normalization and choosing $\mu = -1/\tau < 0$ (to minimize rather than maximize expected cost) gives:
-
-\begin{equation}
-\boxed{\beta_{ij} = \frac{\exp(-C_{ij}/\tau)}{\sum_k \exp(-C_{ik}/\tau)} = \operatorname{softmax}_j\left(-\frac{C_{ij}}{\tau}\right)}.
-\end{equation}
-
-The temperature $\tau$ interpolates between hard attention ($\tau \to 0$, argmin over $j$) and uniform attention ($\tau \to \infty$, maximum uncertainty).
-
-Therefore, given agents as local open sections over the base space our complete attention weights are given as
-
-$$
-\beta_{ij}(c) =
-\frac{
-  \exp\!\left[
-    -\tfrac{1}{\tau}\,
-    \mathrm{KL}\!\big(
-      q_i(c)
-      \,\big\|\,
-      \Omega_{ij}q_j(c)
-    \big)
-  \right]
-  \, \chi_{ij}(c)
-}{
-  \displaystyle
-  \sum_{k}
-  \exp\!\left[
-    -\tfrac{1}{\tau}\,
-    \mathrm{KL}\!\big(
-      q_i(c)
-      \,\big\|\,
-      \Omega_{ik}q_k(c)
-    \big)
-  \right]
-  \, \chi_{ik}(c)
-}
-$$
-
-where $\chi_{ij}(c)$ is the overlap of agent $i$ and agent $j$ support (or mask).  Or said simply; their interaction volume.
-
-\paragraph{Relationship to the mixture-model derivation.}
-The maximum entropy derivation above and the mixture-model derivation in Section~\ref{sec:mixture_derivation} arrive at the same softmax formula via different principles. The mixture model specifies a generative process (source selection via categorical latent $z$) and optimizes the variational posterior directly; the MaxEnt approach instead seeks the least-committed distribution consistent with an expected cost constraint. Their agreement confirms the robustness of the softmax form: it is simultaneously the variational optimum for source-selection inference and the maximum-entropy distribution for a given expected alignment cost. The mixture model additionally yields the non-uniform prior extension (Eq.~\ref{eq:mixture_softmax_general}), connecting attention masks and positional biases to prior beliefs about source availability.
-
-\begin{figure}[h]
-\centering
-\includegraphics[width=0.92\linewidth]{bert_fluctuations_results.png}
-\caption{
-\textbf{Finite-dimensional fluctuations in transformer key norms.}
-(\textbf{Top-left}) Distribution of key-norm coefficient of variation (CV) under Gaussian baseline and after $W_K$ projection, compared with theoretical prediction ($\mathrm{CV} \approx 17.7\%$).
-(\textbf{Top-right}) Example of individual key norms across tokens illustrating sample CV.
-(\textbf{Bottom-left}) Finite-dimensional scaling of CV following the theoretical law $\mathrm{CV} \sim 1/\sqrt{d}$, with BERT-base ($d=64$) highlighted.
-(\textbf{Bottom-right}) Average attention bias as a function of key-norm magnitude, demonstrating minimal systematic bias even with CV ≈ 26\%.
-}
-\label{fig:finite_dimensional_fluctuations}
-\end{figure}
+% Appendix D (Softmax via Maximum Entropy) removed: the mixture-model derivation
+% in Section~\ref{sec:mixture_derivation} provides a more direct, exact derivation
+% of softmax attention weights from a single variational principle.
 
 
 \section{Variational Gradient Descent: Implementation and Numerical Methods}
