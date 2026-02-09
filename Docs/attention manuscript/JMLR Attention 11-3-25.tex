@@ -513,10 +513,111 @@ where $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ is agent $i$'s gauge frame fi
 \end{equation}
 mapping agent $j$'s latent into agent $i$'s frame. In the transformer limit, $\Omega_{ij} = \Omega = W_Q W_K^\top$ becomes a constant learned gauge transformation (see Section~\ref{sec:glk_invariance}).
 
-\subsection{Variational Free Energy}
+\subsection{Single-Agent Free Energy Principle}
+
+Before introducing multi-agent communication, we recall the standard variational free energy for a single agent $i$ \citep{friston2010free,parr2022active}. Agent $i$ maintains a belief $q_i(k_i)$ over its latent state, a prior $p_i(k_i)$ encoding expectations, and receives observations $o_i$. The free energy principle posits that the agent minimizes:
+\begin{equation}
+\mathcal{F}_i^{\text{single}} = D_{\mathrm{KL}}(q_i \| p_i) - \mathbb{E}_{q_i}[\log p(o_i \mid k_i)].
+\label{eq:single_agent_fep}
+\end{equation}
+
+The first term regularizes beliefs toward the prior; the second couples beliefs to observations. An identical expression holds for the model channel: $D_{\mathrm{KL}}(s_i \| r_i)$. This gives us four of the five terms in the full free energy. The remaining question is: how do agents communicate?
+
+\subsection{Deriving Attention from a Mixture-of-Sources Model}
+\label{sec:mixture_derivation}
+
+We now derive the inter-agent alignment terms and their softmax attention weights from first principles, by formulating each agent's inference as source selection over gauge-transported neighbors.
+
+\subsubsection{Mixture-of-Sources Generative Model}
+
+Agent $i$ (the ``query'') seeks to update its belief $q_i(k)$ by attending to a set of source agents $j$ (the ``keys/values''). Agent $i$'s generative model assumes its latent state $k$ was drawn from one of the neighboring agents, selected by a categorical latent variable $z \in \{1, \ldots, N\}$:
+\begin{equation}
+P(k, z) = P(k \mid z)\, P(z),
+\label{eq:mixture_joint}
+\end{equation}
+where:
+\begin{itemize}
+  \item $P(z = j) = \pi_j$ is the prior probability of attending to agent $j$ (the \emph{attention prior}).
+  \item $P(k \mid z = j) = \mathcal{N}(k;\, \Omega_{ij}\mu_j,\, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$ is agent $j$'s belief transported into agent $i$'s gauge frame via $\Omega_{ij}$.
+\end{itemize}
+
+This construction is the unique generative model consistent with the gauge structure: agent $j$'s belief $q_j$ lives in $j$'s local frame, and $\Omega_{ij}q_j$ is the canonical representation of ``what $j$ believes, as seen by $i$.'' The categorical variable $z$ endows the model with the probabilistic semantics of source selection: attention \emph{is} posterior inference over which neighbor generated agent $i$'s state.
+
+\subsubsection{Variational Posterior}
+
+We approximate the true posterior $P(k, z \mid \text{data})$ using a mean-field factorization:
+\begin{equation}
+Q(k, z) = q_i(k) \cdot \beta(z),
+\label{eq:mixture_posterior}
+\end{equation}
+where $q_i(k) = \mathcal{N}(k;\, \mu_i, \Sigma_i)$ is agent $i$'s belief (held fixed for the attention computation) and $\beta(z = j) \equiv \beta_{ij} \geq 0$ are variational attention weights satisfying $\sum_j \beta_{ij} = 1$.
+
+\subsubsection{Alignment Free Energy}
+
+The free energy for the alignment component is the KL divergence between the variational posterior and the generative model:
+\begin{equation}
+\mathcal{F}_{\text{align}} = D_{\mathrm{KL}}[Q(k,z) \| P(k,z)] = \sum_j \beta_{ij} \int dk\, q_i(k) \log \frac{q_i(k)\, \beta_{ij}}{P(k \mid z{=}j)\, \pi_j}.
+\end{equation}
+
+Decomposing the logarithm:
+\begin{equation}
+\mathcal{F}_{\text{align}} = \sum_j \beta_{ij} \left[ \underbrace{\int dk\, q_i(k) \log \frac{q_i(k)}{P(k \mid z{=}j)}}_{= \, D_{\mathrm{KL}}[q_i \,\|\, \Omega_{ij} q_j]} + \log \beta_{ij} - \log \pi_j \right].
+\label{eq:mixture_free_energy}
+\end{equation}
+
+The identification of the integral with $D_{\mathrm{KL}}[q_i \| \Omega_{ij} q_j]$ is \emph{exact}---it follows directly from the definition of KL divergence and the generative model $P(k \mid z{=}j) = (\Omega_{ij} q_j)(k)$, with no approximation.
+
+Defining the \emph{alignment energy} $E_{ij} \equiv D_{\mathrm{KL}}[q_i \| \Omega_{ij} q_j]$:
+\begin{equation}
+\mathcal{F}_{\text{align}} = \sum_j \beta_{ij} \big( E_{ij} + \log \beta_{ij} - \log \pi_j \big).
+\label{eq:mixture_energy_entropy}
+\end{equation}
+
+This has the classic ``energy minus entropy'' structure: $\mathcal{F}_{\text{align}} = \langle E \rangle_\beta - H(\beta) + \text{const}$, where $H(\beta) = -\sum_j \beta_{ij} \log \beta_{ij}$ is the entropy of the attention distribution.
+
+\subsubsection{Minimization and the Softmax Solution}
+
+We minimize $\mathcal{F}_{\text{align}}$ with respect to $\beta_{ij}$ subject to $\sum_j \beta_{ij} = 1$. The Lagrangian is:
+\begin{equation}
+\mathcal{L} = \sum_j \beta_{ij}(E_{ij} + \log \beta_{ij} - \log \pi_j) - \lambda\left(\sum_j \beta_{ij} - 1\right).
+\end{equation}
+
+Setting $\partial \mathcal{L} / \partial \beta_{ik} = 0$:
+\begin{equation}
+E_{ik} + \log \beta_{ik} + 1 - \log \pi_k - \lambda = 0.
+\end{equation}
+
+Solving and enforcing the normalization constraint:
+\begin{equation}
+\beta_{ik} = \frac{\pi_k \exp(-E_{ik})}{\sum_m \pi_m \exp(-E_{im})}.
+\label{eq:mixture_softmax_general}
+\end{equation}
+
+For a uniform attention prior $\pi_k = 1/N$, the prior factors cancel:
+\begin{equation}
+\boxed{\beta_{ik} = \operatorname{softmax}_k(-E_{ik}) = \operatorname{softmax}_k\!\big(-D_{\mathrm{KL}}[q_i \| \Omega_{ik} q_k]\big).}
+\label{eq:mixture_softmax}
+\end{equation}
+
+A temperature parameter $\tau > 0$ is recovered by rescaling the alignment energy: $E_{ik} \to E_{ik}/\tau$, corresponding to scaling the coupling precision in the generative model. The forward KL divergence is the unique $f$-divergence that preserves exponential-family closure under this linear coupling structure and yields a consistent dual interpretation for the attention weights (Appendix~C).
+
+\subsubsection{Non-Uniform Attention Priors and Masking}
+\label{sec:nonuniform_priors}
+
+The general solution \eqref{eq:mixture_softmax_general} with non-uniform priors $\pi_k$ has several immediate applications:
+
+\begin{itemize}
+\item \textbf{Causal masking}: Setting $\pi_k = 0$ for $k > i$ prohibits agent $i$ from attending to future agents, recovering the standard causal attention mask. This arises naturally as a prior constraint on which sources are available, rather than as an ad hoc modification of the softmax.
+
+\item \textbf{Positional bias}: A prior $\pi_k \propto f(|i - k|)$ for some decreasing function $f$ encodes a preference for attending to nearby agents, providing a principled mechanism for positional information without explicit positional encodings.
+
+\item \textbf{Learned attention priors}: Making $\pi_k$ a learnable parameter yields an additive bias $\log \pi_k$ in the pre-softmax logits, equivalent to relative position biases used in architectures such as ALiBi and T5. The gauge-theoretic framework reveals these as prior beliefs about source relevance.
+\end{itemize}
+
+\subsection{Full Variational Free Energy}
 \label{sec:final_free_energy}
 
-Given agents with Gaussian beliefs connected by gauge transport, the variational free energy for multi-agent inference takes the form:
+Combining the single-agent free energy \eqref{eq:single_agent_fep} with the alignment terms derived above, and including the model-channel analogue (with weights $\gamma_{ij}$ and transport $\tilde{\Omega}_{ij}$), we obtain the complete gauge-covariant variational free energy:
 \begin{equation}
 \boxed{
 \begin{aligned}
@@ -531,33 +632,14 @@ Given agents with Gaussian beliefs connected by gauge transport, the variational
 \label{eq:free_energy_final}
 \end{equation}
 
-Each term has a clear information-theoretic role: the belief prior $D_{\mathrm{KL}}(q_i \| p_i)$ regularizes toward local expectations; the model prior $D_{\mathrm{KL}}(s_i \| r_i)$ anchors model beliefs to hyperpriors; the alignment terms penalize disagreement between gauge-transported neighbors; and the observation likelihood couples beliefs to external data. The alignment coupling uses the forward KL divergence, which is the unique $f$-divergence that preserves exponential-family closure under linear coupling and yields a consistent dual interpretation for the attention weights (Appendix~C). The alignment weights $\beta_{ij}$ and $\gamma_{ij}$ are non-negative with $\sum_j \beta_{ij} = 1$; their optimal values take softmax form, as derived in Section~\ref{sec:mixture_derivation}.
+The first two terms are single-agent prior regularization (Section~3.3). The third and fourth terms are the alignment energies derived from the mixture-of-sources model, with softmax attention weights $\beta_{ij}$ and $\gamma_{ij}$. The final term is the observation likelihood. An alternative derivation of how these pairwise KL terms emerge from a normalized generative model with auxiliary agreement variables is given in Appendix~\ref{app:agreement_variables}.
 
-An alternative derivation of this free energy via auxiliary agreement variables---which provides additional insight into how the pairwise KL terms emerge from a normalized generative model with Gaussian consistency constraints---is given in Appendix~\ref{app:agreement_variables}.
-
-\subsubsection{Simplified Variational Free Energy}
-In our fiber-matched setting, the variational free energy for agent $i$ becomes (where, in the present study, we consider all agents to share the same generative models):
-\begin{equation}
-\mathcal{F}[q_i] = \int_{\mathcal{U}_i} \left[ D_{\text{KL}}\left(q_i(c) \,\|\, p_i(c)\right) - \mathbb{E}_{q_i(c)}\left[\log p_i(o_i \mid c)\right]\right] \mathrm{d}c,
-\end{equation}
-where both $q_i(c)$ and $p_i(c)$ are points in the same fiber $\mathcal{B}(c)$.
-
-The cross-agent alignment term is the forward KL divergence with frame rotation:
-\begin{equation}
-\mathcal{F}_{\text{align}} = \sum_{i,j} \int_{\mathcal{U}_i \cap \mathcal{U}_j} \chi_{ij}(c) \, \beta_{ij}(c) \, D_{\text{KL}}\left(q_i(c) \,\big\|\, \Omega_{ij}(c) \cdot q_j(c)\right) \, \mathrm{d}c,
-\end{equation}
-where $\Omega_{ij}(c) \cdot q_j(c)$ denotes the gauge transport of agent $j$'s belief into agent $i$'s frame, and both operands live in the same statistical manifold $\mathcal{B}(c)$ (similarly for $p$).
-
-The attention weights derived from this framework take the form (derived in Section~\ref{sec:mixture_derivation}):
+In the full spatial formulation over base manifold $\mathcal{C}$, the attention weights take the form:
 \begin{equation}
 \beta_{ij}(c) = \frac{\exp\left[-\frac{1}{\tau} D_{\text{KL}}\left(q_i(c) \,\big\|\, \Omega_{ij}(c) q_j(c)\right)\right] \chi_{ij}(c)}{\sum_k \exp\left[-\frac{1}{\tau} D_{\text{KL}}\left(q_i(c) \,\big\|\, \Omega_{ik}(c) q_k(c)\right)\right] \chi_{ik}(c)},
 \label{eq:attention_weights_softmax}
 \end{equation}
-where
-$$
-\chi_{ij}(c) = \mathbb{I}_{\mathcal{U}_i \cap \mathcal{U}_j}(c)
-$$
-is the overlap indicator, and $\tau$ is the inverse temperature parameter controlling attention sharpness.
+where $\chi_{ij}(c) = \mathbb{I}_{\mathcal{U}_i \cap \mathcal{U}_j}(c)$ is the overlap indicator (the extreme case $\pi_j = 0$ for non-overlapping agent supports) and $\tau$ is the temperature parameter.
 \subsection{Interpretation}
 Each term in the variational free energy \eqref{eq:free_energy_final} encodes a distinct aspect of multi-agent inference:
 
@@ -679,139 +761,18 @@ In the absence of observations ($p(o|\cdot) = \text{const}$), the free energy \e
 Observations destroy this degeneracy by coupling agents to external data through the likelihood terms. Each agent's sensory stream $o_i$ acts as an external field that selects a preferred orientation in its fiber, pinning $q_i$ to a definite point. Strictly speaking, this is \emph{explicit} symmetry breaking---the observation term is not gauge-invariant---rather than the spontaneous mechanism of Goldstone's theorem. The system transitions from the symmetric vacuum to a symmetry-broken phase where agents develop distinct specializations: $\|\mu_i(c)\| \neq \|\mu_j(c)\|$ with the diversity driven by observations/data. The frame transformations $\Omega_{ij}$ then encode how these specialized representations relate geometrically. This observation-induced symmetry breaking is what enables non-trivial multi-agent coordination: agents must now actively maintain geometric relationships between their specialized frames rather than simply coexisting in a rotationally symmetric configuration. Whether the vacuum manifold supports Goldstone-like zero modes (corresponding to broken gauge generators) is a question amenable to Hessian spectral analysis, which we leave to future work.
 
 \subsubsection{Summary}
-We have derived the generalized variational free energy from a normalized generative model with agreement variables. The key results are:
+
+The gauge-covariant variational free energy \eqref{eq:free_energy_final} has been derived from two principles: (i) the standard free energy principle for single agents (prior regularization + observation likelihood), and (ii) the mixture-of-sources model for inter-agent communication (KL-based alignment with softmax attention weights). The key results are:
 
 \begin{itemize}
-  \item Both $\beta$-weighted belief alignment and $\gamma$-weighted model alignment arise from the same principled construction, not as ad hoc regularizers.
-  \item The alignment weights $\beta_{ij}$ and $\gamma_{ij}$ are proportional to the coupling precisions $\Lambda_{ij}$ and $\Gamma_{ij}$.
-  \item The forward KL divergence emerges naturally in the alignment regime.
-  \item Our framework naturally accommodates communicable coupling: different agent pairs can have different alignment strengths, and belief coupling can differ from model coupling.
+  \item Both $\beta$-weighted belief alignment and $\gamma$-weighted model alignment arise from variational inference over gauge-transported source mixtures, not as ad hoc regularizers.
+  \item The forward KL divergence $D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ emerges exactly as the alignment energy from the mixture generative model.
+  \item The softmax form of attention weights $\beta_{ij} = \operatorname{softmax}(-E_{ij}/\tau)$ follows from Lagrange minimization of the alignment free energy.
+  \item Non-uniform attention priors $\pi_k$ provide a principled mechanism for causal masking, positional biases, and learned attention priors.
   \item The self-coupling weight $\alpha_i$ can be derived as a state-dependent precision through variational optimization with a log-barrier regularizer (Section~\ref{sec:state_dependent_precision}), with the fixed-$\alpha$ case recovered as a degenerate limit.
 \end{itemize}
 
-This derivation establishes the generalized variational free energy as a fundamental object in a gauge-theoretic multi-agent geometry rooted in informational and differential geometries.
-
-Therefore, multi-agent communication within a gauge covariant formulation allows the FEP to be satisfied as well as allows us to connect attention, transformers, and machine learning to variational inference.
-
-\subsection{Attention Weights as Variational Inference Over Source Selection}
-\label{sec:mixture_derivation}
-
-The preceding sections established the generalized variational free energy with alignment terms $\beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ via agreement variables and a specific precision choice (Section~\ref{sec:final_free_energy}). We now present a complementary derivation that obtains the softmax form of $\beta_{ij}$ \emph{exactly}, without requiring the alignment-regime approximation, by formulating agent $i$'s inference as source selection over a mixture of gauge-transported neighbors.
-
-\subsubsection{Mixture-of-Sources Generative Model}
-
-We posit that agent $i$ (the ``query'') seeks to update its belief $q_i(k)$ by attending to a set of source agents $j$ (the ``keys/values''). Agent $i$'s generative model assumes its latent state $k$ was drawn from one of the neighboring agents, selected by a categorical latent variable $z \in \{1, \ldots, N\}$:
-\begin{equation}
-P(k, z) = P(k \mid z)\, P(z),
-\label{eq:mixture_joint}
-\end{equation}
-where:
-\begin{itemize}
-  \item $P(z = j) = \pi_j$ is the prior probability of attending to agent $j$ (the \emph{attention prior}).
-  \item $P(k \mid z = j) = \mathcal{N}(k;\, \Omega_{ij}\mu_j,\, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$ is agent $j$'s belief transported into agent $i$'s gauge frame via $\Omega_{ij}$.
-\end{itemize}
-
-This construction is the unique generative model consistent with the gauge structure: agent $j$'s belief $q_j$ lives in $j$'s local frame, and $\Omega_{ij}q_j$ is the canonical representation of ``what $j$ believes, as seen by $i$.'' The categorical variable $z$ endows the model with the probabilistic semantics of source selection: attention \emph{is} posterior inference over which neighbor generated agent $i$'s state.
-
-\subsubsection{Variational Posterior}
-
-We approximate the true posterior $P(k, z \mid \text{data})$ using a mean-field factorization:
-\begin{equation}
-Q(k, z) = q_i(k) \cdot \beta(z),
-\label{eq:mixture_posterior}
-\end{equation}
-where $q_i(k) = \mathcal{N}(k;\, \mu_i, \Sigma_i)$ is agent $i$'s belief (held fixed for the attention computation) and $\beta(z = j) \equiv \beta_{ij} \geq 0$ are variational attention weights satisfying $\sum_j \beta_{ij} = 1$.
-
-\subsubsection{Variational Free Energy}
-
-The free energy is the KL divergence between the variational posterior and the generative model:
-\begin{equation}
-\mathcal{F} = D_{\mathrm{KL}}[Q(k,z) \| P(k,z)] = \sum_j \beta_{ij} \int dk\, q_i(k) \log \frac{q_i(k)\, \beta_{ij}}{P(k \mid z{=}j)\, \pi_j}.
-\end{equation}
-
-Decomposing the logarithm:
-\begin{equation}
-\mathcal{F} = \sum_j \beta_{ij} \left[ \underbrace{\int dk\, q_i(k) \log \frac{q_i(k)}{P(k \mid z{=}j)}}_{= \, D_{\mathrm{KL}}[q_i \,\|\, \Omega_{ij} q_j]} + \log \beta_{ij} - \log \pi_j \right].
-\label{eq:mixture_free_energy}
-\end{equation}
-
-The identification of the integral with $D_{\mathrm{KL}}[q_i \| \Omega_{ij} q_j]$ is \emph{exact}---it follows directly from the definition of KL divergence and the generative model $P(k \mid z{=}j) = (\Omega_{ij} q_j)(k)$, with no approximation.
-
-Defining the \emph{alignment energy} $E_{ij} \equiv D_{\mathrm{KL}}[q_i \| \Omega_{ij} q_j]$:
-\begin{equation}
-\mathcal{F} = \sum_j \beta_{ij} \big( E_{ij} + \log \beta_{ij} - \log \pi_j \big).
-\label{eq:mixture_energy_entropy}
-\end{equation}
-
-This has the classic ``energy minus entropy'' structure: $\mathcal{F} = \langle E \rangle_\beta - H(\beta) + \text{const}$, where $H(\beta) = -\sum_j \beta_{ij} \log \beta_{ij}$ is the entropy of the attention distribution.
-
-\subsubsection{Minimization and the Softmax Solution}
-
-We minimize $\mathcal{F}$ with respect to $\beta_{ij}$ subject to $\sum_j \beta_{ij} = 1$. The Lagrangian is:
-\begin{equation}
-\mathcal{L} = \sum_j \beta_{ij}(E_{ij} + \log \beta_{ij} - \log \pi_j) - \lambda\left(\sum_j \beta_{ij} - 1\right).
-\end{equation}
-
-Setting $\partial \mathcal{L} / \partial \beta_{ik} = 0$:
-\begin{equation}
-E_{ik} + \log \beta_{ik} + 1 - \log \pi_k - \lambda = 0.
-\end{equation}
-
-Solving:
-\begin{equation}
-\beta_{ik} = e^{\lambda - 1} \cdot \pi_k \cdot e^{-E_{ik}}.
-\end{equation}
-
-Enforcing the normalization constraint absorbs the constant $e^{\lambda - 1}$, yielding:
-\begin{equation}
-\beta_{ik} = \frac{\pi_k \exp(-E_{ik})}{\sum_m \pi_m \exp(-E_{im})}.
-\label{eq:mixture_softmax_general}
-\end{equation}
-
-For a uniform attention prior $\pi_k = 1/N$, the prior factors cancel:
-\begin{equation}
-\boxed{\beta_{ik} = \operatorname{softmax}_k(-E_{ik}) = \operatorname{softmax}_k\!\big(-D_{\mathrm{KL}}[q_i \| \Omega_{ik} q_k]\big).}
-\label{eq:mixture_softmax}
-\end{equation}
-
-This is identical to \eqref{eq:attention_weights_softmax} with $\tau = 1$. A temperature parameter $\tau > 0$ is recovered by rescaling the alignment energy: $E_{ik} \to E_{ik}/\tau$, corresponding to scaling the coupling precision in the generative model.
-
-\subsubsection{Non-Uniform Attention Priors and Masking}
-\label{sec:nonuniform_priors}
-
-The general solution \eqref{eq:mixture_softmax_general} with non-uniform priors $\pi_k$ has several immediate applications:
-
-\begin{itemize}
-\item \textbf{Causal masking}: Setting $\pi_k = 0$ for $k > i$ prohibits agent $i$ from attending to future agents, recovering the standard causal attention mask. This arises naturally as a prior constraint on which sources are available, rather than as an ad hoc modification of the softmax.
-
-\item \textbf{Positional bias}: A prior $\pi_k \propto f(|i - k|)$ for some decreasing function $f$ encodes a preference for attending to nearby agents, providing a principled mechanism for positional information without explicit positional encodings.
-
-\item \textbf{Learned attention priors}: Making $\pi_k$ a learnable parameter yields an additive bias $\log \pi_k$ in the pre-softmax logits, equivalent to relative position biases used in architectures such as ALiBi and T5. The gauge-theoretic framework reveals these as prior beliefs about source relevance.
-\end{itemize}
-
-The overlap indicator $\chi_{ij}(c)$ in the full spatial formulation corresponds to the extreme case $\pi_j = 0$ when agents $i$ and $j$ have non-overlapping supports.
-
-\subsubsection{Relationship to the Agreement-Variable Construction}
-
-The mixture-model derivation and the agreement-variable construction of Section~3 are complementary paths to the same result:
-
-\begin{center}
-\renewcommand{\arraystretch}{1.3}
-\begin{tabular}{lcc}
-& \textbf{Mixture Model} & \textbf{Agreement Variables} \\
-\hline
-KL arises & Exactly (by construction) & Approximately (alignment regime) \\
-Softmax arises & Directly (Lagrange opt.) & Indirectly (requires separate argument) \\
-Scope & Single-fiber (belief only) & Dual-fiber (belief + model) \\
-Generative model & Mixture of sources & Pairwise consistency \\
-Extra structure & Non-uniform priors $\pi_k$ & MRF, quadratic coupling \\
-\hline
-\end{tabular}
-\end{center}
-
-The mixture model provides the most direct, exact, single-principle derivation of softmax attention weights. The agreement-variable construction provides the richer framework needed for the full gauge-theoretic free energy with both $\beta$-weighted belief alignment and $\gamma$-weighted model alignment, the Markov random field structure, and the connections to quadratic regularization that bridge to standard neural network training.
-
-Both derivations share the same essential insight: \emph{attention is posterior inference over information sources, with alignment energy given by gauge-transported KL divergence.}
+Multi-agent communication within a gauge-covariant formulation allows the FEP to be satisfied while connecting attention, transformers, and machine learning to variational inference.
 
 \subsection{State-Dependent Prior Precision}
 \label{sec:state_dependent_precision}
