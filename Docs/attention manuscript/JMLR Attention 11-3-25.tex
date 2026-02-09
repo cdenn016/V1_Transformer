@@ -60,7 +60,7 @@ Many varieties of transformer and attention architectures have been proposed, im
 
 Several complementary mathematical perspectives on attention have been developed. \citet{tsai2019transformer} and \citet{katharopoulos2020transformers} interpret attention through the lens of kernel methods, showing that softmax attention approximates a kernel function and can be linearized. \citet{ramsauer2021hopfield} demonstrate that attention implements the update rule of modern Hopfield networks, providing an energy-based perspective. The information bottleneck principle \citep{tishby2015deep,shwartz2017opening} offers a related information-theoretic view of layer-wise representation learning. On the side of backpropagation-free learning, \citet{hinton2022forward} proposes the forward-forward algorithm as an alternative to backpropagation. In neuroscience, predictive coding \citep{rao1999predictive,bogacz2017tutorial,millidge2021predictive} implements variational free energy minimization through local prediction errors, sharing the variational foundation of our framework but lacking the gauge-theoretic structure that connects to attention mechanisms. Our work differs from these approaches in providing a unified geometric framework from which attention, temperature scaling, layer normalization, and training dynamics all emerge as consequences of a single variational principle on a statistical fiber bundle.
 
-In this report we propose a first-principles, gauge-equivariant framework that connects these domains. Our framework is based on a principal bundle geometry whereby each agent is modeled as a smooth local section of an associated bundle with statistical manifold fibers over a "noumenal" base manifold. Inter-agent communication arises naturally through a (generally) non-abelian gauge connection that defines parallel-transport operators between agents' local gauge frames. Within this geometry, attention emerges as a gauge-aligned Kullback–Leibler (KL) term derived directly from the variational free energy of a coupled multi-agent generative model based on mixture Gaussians.
+In this report we propose a first-principles, gauge-equivariant framework that connects these domains. Our framework is based on a principal bundle geometry whereby each agent is modeled as a smooth local section of an associated bundle with statistical manifold fibers over a "noumenal" base manifold. Inter-agent communication arises naturally through a (generally) non-abelian gauge connection that defines parallel-transport operators between agents' local gauge frames. Within this geometry, attention emerges as a gauge-aligned Kullback–Leibler (KL) term derived directly from the variational free energy of a coupled multi-agent generative model based opn mixture Gaussians.
 
 We then show that in the flat-bundle, isotropic, delta-function limit attention reduces to the standard transformer dot-product attention $QK^T$, thereby identifying attention as a degenerate case of a broader geometric and statistical law of communication predicated upon the FEP and information geometry.  We demonstrate this by training a transformer based upon variational gradient descent of a generalized free energy of multivariate Gaussian agents as well as by applying our gauge attention theory to a frozen transformer (BERT).  We then describe numerical results that suggest that token encoding under data training (i.e. agent/token belief alignment) is a symmetry breaking phenomenon of our gauge-theoretic framework.
 
@@ -68,6 +68,7 @@ Finally, we show that gradient descent on the gauge-equivariant free energy, in 
 
 \subsection{An intuitive simplification for non-geometers}
 For interdisciplinary readers, it may be helpful to visualize each agent in this framework as a vector and a matrix field defined over a finite spatial region. 
+
 Concretely, at every point $c$ in the base manifold, agent $i$ carries a mean vector $\mu_i(c)$ and a covariance matrix $\Sigma_i(c)$ representing, respectively, its local expected state and uncertainty. Together these form a smooth Gaussian field—the agent’s belief section of the statistical bundle. 
 
 We will see that the agent's local gauge frame $\phi_i(c)$ may be intuitively interpreted as the agent's subjective frame of reference; its internal coordinate system through which beliefs and models are represented and compared. In this sense, $\phi_i(c)$ captures an agent’s “internal orientation” toward the world: it determines how external information is projected into the agent’s internal representational space. Gauge transformations $\phi_i(c) \to \phi_i(c) + \xi(c)$ thus correspond to changes in perspective that leave the underlying informational content invariant, much like shifts of viewpoint in perception that preserve the same world model. 
@@ -203,14 +204,6 @@ enabling frame alignment between agent representations.
 
 We begin with a general geometric construction that naturally supports hierarchical emergence of meta-agents, scale interactions, and non-trivial holonomy of transport. The details of the most general geometry and framework can be found in the appendix and references \citep{nakahara2003geometry,kullback1951information,sternberg1994group,fulton1991representation,frankel2011geometry,baez1994gauge}.  Briefly, in this current report, we describe agents as modeled by a local section of an associated bundle to a principal $G$ fiber bundle. This framework enables a unified description of both intra-agent inference and inter-agent communication in terms of gauge frame transport and alignment.
 
-\subsection{Code Availability}
-The complete simulation suite that implements the gauge-theoretic variational inference framework described in this work is publicly available at 
-\begin{itemize}
-\item \href{https://github.com/cdenn016/epistemic-geometry}{https://github.com/cdenn016/epistemic-geometry}. 
-\end{itemize}
-
-
-All experiments reported in the results section can be reproduced using the provided configuration files and random number generator seeds documented in the repository. The codebase requires Python 3.9+ with NumPy, SciPy, and Joblib dependencies as specified in \texttt{requirements.txt}.
 
 \subsection{Specializations for the Current Study}
 Here we specify the simplifications adopted for the remainder of this work, which retain essential geometric structure while ensuring computational tractability and simplification.
@@ -1807,6 +1800,14 @@ Our $\mathrm{GL}(30)$ language modeling experiments---implementing the full gene
 The framework exhibits a gauge-symmetric vacuum state (mirroring an untrained network) whose degeneracy is broken by observations, providing a geometric interpretation of learning as explicit symmetry breaking. We anticipate this perspective will find application not only in machine learning but also in understanding biological cognition, collective intelligence, and other domains where distributed agents must communicate under geometric constraints.
 
 
+\subsection{Code Availability}
+The complete simulation suite that implements the gauge-theoretic variational inference framework described in this work is publicly available at 
+\begin{itemize}
+\item \href{https://github.com/cdenn016/epistemic-geometry}{https://github.com/cdenn016/epistemic-geometry}. 
+\end{itemize}
+
+
+All experiments reported in the results section can be reproduced using the provided configuration files and random number generator seeds documented in the repository. The codebase requires Python 3.9+ with NumPy, PyTorch, SciPy, and Joblib dependencies as specified in \texttt{requirements.txt}.
 
 
 
