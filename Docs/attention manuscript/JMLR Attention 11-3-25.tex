@@ -513,11 +513,7 @@ Agent $i$ (the ``query'') seeks to update its belief $q_i(k)$ by attending to a 
 P(k, z) = P(k \mid z)\, P(z),
 \label{eq:mixture_joint}
 \end{equation}
-where:
-\begin{itemize}
-  \item $P(z = j) = \pi_j$ is the prior probability of attending to agent $j$ (the \emph{attention prior}).
-  \item $P(k \mid z = j) = \mathcal{N}(k;\, \Omega_{ij}\mu_j,\, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$ is agent $j$'s belief transported into agent $i$'s gauge frame via $\Omega_{ij}$.
-\end{itemize}
+where $P(z = j) = \pi_j$ is the prior probability of attending to agent $j$ (the \emph{attention prior}), and $P(k \mid z = j) = \mathcal{N}(k;\, \Omega_{ij}\mu_j,\, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$ is agent $j$'s belief transported into agent $i$'s gauge frame via $\Omega_{ij}$.
 
 This construction is the unique generative model consistent with the gauge structure: agent $j$'s belief $q_j$ lives in $j$'s local frame, and $\Omega_{ij}q_j$ is the canonical representation of ``what $j$ believes, as seen by $i$.'' The categorical variable $z$ endows the model with the probabilistic semantics of source selection: attention \emph{is} posterior inference over which neighbor generated agent $i$'s state.
 
@@ -582,15 +578,7 @@ A temperature parameter $\tau > 0$ is recovered by rescaling the alignment energ
 \subsubsection{Non-Uniform Attention Priors and Masking}
 \label{sec:nonuniform_priors}
 
-The general solution \eqref{eq:mixture_softmax_general} with non-uniform priors $\pi_k$ has several immediate applications:
-
-\begin{itemize}
-\item \textbf{Causal masking}: Setting $\pi_k = 0$ for $k > i$ prohibits agent $i$ from attending to future agents, recovering the standard causal attention mask. This arises naturally as a prior constraint on which sources are available, rather than as an ad hoc modification of the softmax.
-
-\item \textbf{Positional bias}: A prior $\pi_k \propto f(|i - k|)$ for some decreasing function $f$ encodes a preference for attending to nearby agents, providing a principled mechanism for positional information without explicit positional encodings.
-
-\item \textbf{Learned attention priors}: Making $\pi_k$ a learnable parameter yields an additive bias $\log \pi_k$ in the pre-softmax logits, equivalent to relative position biases used in architectures such as ALiBi and T5. The gauge-theoretic framework reveals these as prior beliefs about source relevance.
-\end{itemize}
+The general solution \eqref{eq:mixture_softmax_general} with non-uniform priors $\pi_k$ has several immediate applications. Setting $\pi_k = 0$ for $k > i$ prohibits agent $i$ from attending to future agents, recovering the standard causal attention mask; this arises naturally as a prior constraint on which sources are available, rather than as an ad hoc modification of the softmax. A prior $\pi_k \propto f(|i - k|)$ for some decreasing function $f$ encodes a preference for attending to nearby agents, providing a principled mechanism for positional information without explicit positional encodings. Making $\pi_k$ a learnable parameter yields an additive bias $\log \pi_k$ in the pre-softmax logits, equivalent to relative position biases used in architectures such as ALiBi and T5. The gauge-theoretic framework reveals these as prior beliefs about source relevance.
 
 \subsection{Full Variational Free Energy}
 \label{sec:final_free_energy}
@@ -712,16 +700,12 @@ Meta-agents at scale $\zeta=0$ (individual agents) can generally form meta-agent
 \label{fig:hierarchy}
 \end{figure}
 
-At each scale, the effective free energy takes the same form as Eq.~\eqref{eq:free_energy_final}, with:
-\begin{itemize}
-  \item Agents at scale $\zeta$ replaced by meta-agents at scale $\zeta+1$
-  \item Coupling constants renormalized: 
-  \begin{equation*}
+At each scale, the effective free energy takes the same form as Eq.~\eqref{eq:free_energy_final}, with agents at scale $\zeta$ replaced by meta-agents at scale $\zeta+1$, coupling constants renormalized according to
+\begin{equation*}
   \beta_{ij}^{(\zeta+1)} = f_\beta(\{\beta_{kl}^{(\zeta)}\}), \quad
-  \gamma_{ij}^{(\zeta+1)} = f_\gamma(\{\gamma_{kl}^{(\zeta)}\})
-  \end{equation*}
-  \item Effective gauge frames: $\phi_{\mathcal{M}}^{(\zeta+1)} = \text{average}(\{\phi_i^{(\zeta)}\})$
-\end{itemize}
+  \gamma_{ij}^{(\zeta+1)} = f_\gamma(\{\gamma_{kl}^{(\zeta)}\}),
+\end{equation*}
+and effective gauge frames given by $\phi_{\mathcal{M}}^{(\zeta+1)} = \text{average}(\{\phi_i^{(\zeta)}\})$.
 This is the gauge-theoretic analogue of renormalization group flow in statistical field theory \citep{anderson1984basic,wilson1974renormalization,garciaMillan2024network}. Cross-scale couplings $\Lambda^{\zeta}_{\zeta'}$ (Appendix) mediate interactions between agents at different hierarchical levels.
 
 In the present work, we restrict to single-scale dynamics—all agents are at scale $\zeta=0$ with no cross-scale couplings ($\Lambda^{\zeta}_{\zeta'} = 0$ for $\zeta \neq \zeta'$). We focus exclusively on the fast subsystem (Eq.~\ref{eq:fast_subsystem}
@@ -740,15 +724,7 @@ Observations destroy this degeneracy by coupling agents to external data through
 
 \subsubsection{Summary}
 
-The gauge-covariant variational free energy \eqref{eq:free_energy_final} has been derived from two principles: (i) the standard free energy principle for single agents (prior regularization + observation likelihood), and (ii) the mixture-of-sources model for inter-agent communication (KL-based alignment with softmax attention weights). The key results are:
-
-\begin{itemize}
-  \item Both $\beta$-weighted belief alignment and $\gamma$-weighted model alignment arise from variational inference over gauge-transported source mixtures, not as ad hoc regularizers.
-  \item The forward KL divergence $D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ emerges exactly as the alignment energy from the mixture generative model.
-  \item The softmax form of attention weights $\beta_{ij} = \operatorname{softmax}(-E_{ij}/\tau)$ follows from Lagrange minimization of the alignment free energy.
-  \item Non-uniform attention priors $\pi_k$ provide a principled mechanism for causal masking, positional biases, and learned attention priors.
-  \item The self-coupling weight $\alpha_i$ can be derived as a state-dependent precision through variational optimization with a log-barrier regularizer (Section~\ref{sec:state_dependent_precision}), with the fixed-$\alpha$ case recovered as a degenerate limit.
-\end{itemize}
+The gauge-covariant variational free energy \eqref{eq:free_energy_final} has been derived from two principles: (i) the standard free energy principle for single agents (prior regularization + observation likelihood), and (ii) the mixture-of-sources model for inter-agent communication (KL-based alignment with softmax attention weights). The key results are as follows. Both $\beta$-weighted belief alignment and $\gamma$-weighted model alignment arise from variational inference over gauge-transported source mixtures, not as ad hoc regularizers. The forward KL divergence $D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ emerges exactly as the alignment energy from the mixture generative model, and the softmax form of attention weights $\beta_{ij} = \operatorname{softmax}(-E_{ij}/\tau)$ follows from Lagrange minimization of the alignment free energy. Non-uniform attention priors $\pi_k$ provide a principled mechanism for causal masking, positional biases, and learned attention priors. The self-coupling weight $\alpha_i$ can be derived as a state-dependent precision through variational optimization with a log-barrier regularizer (Section~\ref{sec:state_dependent_precision}), with the fixed-$\alpha$ case recovered as a degenerate limit.
 
 Multi-agent communication within a gauge-covariant formulation allows the FEP to be satisfied while connecting attention, transformers, and machine learning to variational inference.
 
@@ -792,13 +768,7 @@ which gives the optimal state-dependent precision:
 \label{eq:state_dependent_alpha}
 \end{equation}
 
-This result has a transparent interpretation:
-
-\begin{itemize}
-\item \textbf{Close to prior} ($D_{\mathrm{KL}}(q_i \| p_i) \approx 0$): $\alpha_i \approx c_0/b_0$, a high value determined by the hyperparameters. The agent trusts its prior and resists displacement by the alignment term.
-
-\item \textbf{Far from prior} (large $D_{\mathrm{KL}}(q_i \| p_i)$): $\alpha_i \to 0$. The prior's influence wanes and the alignment and observation terms dominate. The agent ``releases'' from its prior anchor, allowing contextual information to reshape its belief.
-\end{itemize}
+This result has a transparent interpretation. When an agent is close to its prior ($D_{\mathrm{KL}}(q_i \| p_i) \approx 0$), $\alpha_i \approx c_0/b_0$ takes a high value determined by the hyperparameters: the agent trusts its prior and resists displacement by the alignment term. Conversely, when an agent is far from its prior (large $D_{\mathrm{KL}}(q_i \| p_i)$), $\alpha_i \to 0$; the prior's influence wanes and the alignment and observation terms dominate. The agent ``releases'' from its prior anchor, allowing contextual information to reshape its belief.
 
 The hyperparameter $b_0$ controls the sensitivity of this transition: large $b_0$ yields approximately constant $\alpha_i$ (stiff, uniformly informative prior), while small $b_0$ yields $\alpha_i$ that is highly responsive to belief--prior divergence (elastic, context-sensitive prior). The ratio $c_0/b_0$ sets the maximum precision (the value when beliefs match the prior exactly). Both hyperparameters may be learned via empirical Bayes, introducing only two scalar parameters.
 
@@ -858,15 +828,7 @@ $\Sigma_{q,i}$ dynamics & $\Sigma \to \sigma^2 I$ & Layer normalization \\
 
 \subsubsection{Connection to Symmetry Breaking}
 
-Dynamic precision provides the microscopic mechanism through which observations drive the symmetry breaking described in Section~\ref{sec:symmetry_breaking}. The dynamics proceed in three phases:
-
-\begin{enumerate}
-\item \textbf{Symmetric phase} (vacuum, $o = \emptyset$): All agents converge to $q_i = p_i$, giving $\delta_i = 0$ and maximal $\alpha_i$. The system is ``frozen''---agents are rigidly anchored to priors and resist perturbation. This is the high-precision, high-symmetry fixed point.
-
-\item \textbf{Transition} (observations introduced): Observations push beliefs away from priors ($\delta_i > 0$), lowering $\alpha_i$, which reduces the restoring force toward the prior. This positive feedback allows the alignment and observation terms to ``capture'' the agent and pull it toward a new equilibrium in a different gauge orbit.
-
-\item \textbf{Broken phase} (steady state under data): Agents settle into specialized configurations. On the slow timescale (Eq.~\ref{eq:model_dynamics}), priors update to match the new beliefs ($\mu_{p,i} \to \mu_{q,i}$, $\delta_i \to 0$), $\alpha_i$ rises again, and the agent ``freezes'' into its new semantic role with restored high precision.
-\end{enumerate}
+Dynamic precision provides the microscopic mechanism through which observations drive the symmetry breaking described in Section~\ref{sec:symmetry_breaking}. The dynamics proceed in three phases. In the \emph{symmetric phase} (vacuum, $o = \emptyset$), all agents converge to $q_i = p_i$, giving $\delta_i = 0$ and maximal $\alpha_i$. The system is ``frozen''---agents are rigidly anchored to priors and resist perturbation. This is the high-precision, high-symmetry fixed point. During the \emph{transition} (when observations are introduced), observations push beliefs away from priors ($\delta_i > 0$), lowering $\alpha_i$, which reduces the restoring force toward the prior. This positive feedback allows the alignment and observation terms to ``capture'' the agent and pull it toward a new equilibrium in a different gauge orbit. Finally, in the \emph{broken phase} (steady state under data), agents settle into specialized configurations. On the slow timescale (Eq.~\ref{eq:model_dynamics}), priors update to match the new beliefs ($\mu_{p,i} \to \mu_{q,i}$, $\delta_i \to 0$), $\alpha_i$ rises again, and the agent ``freezes'' into its new semantic role with restored high precision.
 
 The precision $\alpha_i$ thus acts as a local order parameter: high $\alpha_i$ characterizes the symmetric (vacuum) phase, transiently low $\alpha_i$ characterizes the critical regime during symmetry breaking, and restored high $\alpha_i$ characterizes the broken (specialized) phase after prior adaptation.
 
@@ -930,11 +892,7 @@ D_{\mathrm{KL}}(\delta(k - \mu_i) \| \delta(k - \mu_j)) = +\infty \quad \text{fo
 \end{equation}
 This divergence makes the attention weights ill-defined. The resolution is to take a \textbf{joint scaling limit} where the belief variance $\sigma^2$ remains finite but is absorbed into learned parameters.
 
-We assume \textbf{isotropic covariances} $\Sigma_i = \Sigma_j = \sigma^2 I$ with $\sigma^2 > 0$. This implies:
-\begin{itemize}
-  \item Log-determinant terms cancel: $\log\frac{|\Sigma_j|}{|\Sigma_i|} = 0$
-  \item Trace term simplifies: $\mathrm{Tr}(\Sigma_j^{-1}\Sigma_i) = \mathrm{Tr}(I) = d$
-\end{itemize}
+We assume \textbf{isotropic covariances} $\Sigma_i = \Sigma_j = \sigma^2 I$ with $\sigma^2 > 0$. This implies that the log-determinant terms cancel ($\log\frac{|\Sigma_j|}{|\Sigma_i|} = 0$) and the trace term simplifies to $\mathrm{Tr}(\Sigma_j^{-1}\Sigma_i) = \mathrm{Tr}(I) = d$.
 
 The KL divergence becomes:
 \begin{equation}
@@ -1215,13 +1173,7 @@ The gradient of the free energy with respect to $\mu_i$ is:
 }
 \end{equation}
 
-\textbf{Interpretation of each term:}
-\begin{enumerate}
-  \item $\lambda_p(\mu_i - \mu_{\text{prior}})$: Weight decay / L2 regularization. In the general theory, $\lambda_p \to \lambda_{p,i} = \alpha_i/\sigma_p^2$ (Eq.~\ref{eq:deterministic_free_energy_adaptive}), giving per-token adaptive regularization---the deterministic analog of the gated residual (Eq.~\ref{eq:gated_update}).
-  \item $\sum_j \frac{\beta_{ij}}{\sigma^2}(\mu_i - \Omega\mu_j)$: Attention-weighted message aggregation (pulls $\mu_i$ toward gauge-transported neighbors)
-  \item $\sum_j \frac{\partial \beta_{ij}}{\partial \mu_i}\|\mu_i - \Omega\mu_j\|^2/(2\sigma^2)$: Gradient flow through attention weights themselves (backpropagation through softmax)
-  \item $-\frac{\partial \log p(o_i \mid \mu_i)}{\partial \mu_i}$: Gradient of loss function (supervised learning signal)
-\end{enumerate}
+Each term admits a clear interpretation. The first term, $\lambda_p(\mu_i - \mu_{\text{prior}})$, corresponds to weight decay or L2 regularization; in the general theory, $\lambda_p \to \lambda_{p,i} = \alpha_i/\sigma_p^2$ (Eq.~\ref{eq:deterministic_free_energy_adaptive}), giving per-token adaptive regularization---the deterministic analog of the gated residual (Eq.~\ref{eq:gated_update}). The second term, $\sum_j \frac{\beta_{ij}}{\sigma^2}(\mu_i - \Omega\mu_j)$, is attention-weighted message aggregation that pulls $\mu_i$ toward gauge-transported neighbors. The third term, $\sum_j \frac{\partial \beta_{ij}}{\partial \mu_i}\|\mu_i - \Omega\mu_j\|^2/(2\sigma^2)$, represents gradient flow through the attention weights themselves (backpropagation through softmax). The fourth term, $-\frac{\partial \log p(o_i \mid \mu_i)}{\partial \mu_i}$, is the gradient of the loss function (the supervised learning signal).
 
 The variational gradient flow is:
 \begin{equation}
@@ -1296,15 +1248,7 @@ Symmetry breaking & --- & Training/learning \\
 
 \paragraph{Key Implications.}
 
-This exact correspondence, strengthened by the $\mathrm{GL}(K)$ invariance theorem, reveals several insights:
-
-\begin{enumerate}
-  \item \textbf{Natural Gradient Structure}: Our framework invokes natural gradient descent rather than Euclidean gradient descent. Under strong geodesic convexity of the loss in the Fisher-Rao metric, natural gradient descent can achieve exponential convergence $k = O(\log(1/\varepsilon))$ compared to the $k = O(1/\varepsilon)$ rate of standard gradient descent \citep{amari1998natural}. However, strong geodesic convexity is not guaranteed for neural network losses in general, and the practical convergence rate depends on the specific geometry of the loss landscape. Realizing any speedup also requires: (a) efficient computation of the Fisher metric or suitable approximations, and (b) that the additional overhead of KL terms in the variational free energy does not dominate. Our $\mathrm{GL}(30)$ language modeling experiments (Section~5.4) demonstrate stable training dynamics, but controlled comparison against standard backpropagation baselines is needed to quantify any practical advantage.
-
-  \item \textbf{Variational Interpretation of Backpropagation}: In our framework, backward gradient flow admits a natural interpretation as variational message-passing: each layer's gradient update is driven by the discrepancy between its current beliefs and the predictions propagated from downstream layers. The chain rule itself is a general property of differentiable composition; the contribution here is the specific identification of each gradient term with a variational quantity (KL divergences, observation likelihoods, gauge-transported predictions).
-
-  \item \textbf{Architecture as Gauge Constraint}: Transformer design choices (attention, layer norm, skip connections) can be understood as implementing gauge-theoretic principles---they preserve or restore geometric structure during propagation. Layer normalization, in particular, regulates key norms to satisfy the high-dimensional cancellation condition required for gauge-invariant attention (see Section~\ref{sec:glk_invariance}).
-\end{enumerate}
+This exact correspondence, strengthened by the $\mathrm{GL}(K)$ invariance theorem, reveals several insights. First, our framework invokes natural gradient descent rather than Euclidean gradient descent. Under strong geodesic convexity of the loss in the Fisher-Rao metric, natural gradient descent can achieve exponential convergence $k = O(\log(1/\varepsilon))$ compared to the $k = O(1/\varepsilon)$ rate of standard gradient descent \citep{amari1998natural}. However, strong geodesic convexity is not guaranteed for neural network losses in general, and the practical convergence rate depends on the specific geometry of the loss landscape. Realizing any speedup also requires (a) efficient computation of the Fisher metric or suitable approximations, and (b) that the additional overhead of KL terms in the variational free energy does not dominate. Our $\mathrm{GL}(30)$ language modeling experiments (Section~5.4) demonstrate stable training dynamics, but controlled comparison against standard backpropagation baselines is needed to quantify any practical advantage. Second, backward gradient flow admits a natural interpretation as variational message-passing: each layer's gradient update is driven by the discrepancy between its current beliefs and the predictions propagated from downstream layers. The chain rule itself is a general property of differentiable composition; the contribution here is the specific identification of each gradient term with a variational quantity (KL divergences, observation likelihoods, gauge-transported predictions). Third, transformer design choices (attention, layer norm, skip connections) can be understood as implementing gauge-theoretic principles---they preserve or restore geometric structure during propagation. Layer normalization, in particular, regulates key norms to satisfy the high-dimensional cancellation condition required for gauge-invariant attention (see Section~\ref{sec:glk_invariance}).
 
 \paragraph{Main Result.}
 
@@ -1356,11 +1300,7 @@ Each head's Lie algebra $\mathfrak{gl}(d_{\text{head}})$ decomposes as:
 \begin{equation}
 \mathfrak{gl}(d_{\text{head}}) = \mathfrak{sl}(d_{\text{head}}) \oplus \mathbb{R},
 \end{equation}
-where $\mathfrak{sl}(d_{\text{head}})$ consists of traceless matrices (volume-preserving transformations) and $\mathbb{R}$ is the trace (overall scaling). This means each head independently controls:
-\begin{itemize}
-  \item \textbf{Scaling}: Overall magnitude of attention in that subspace
-  \item \textbf{Shearing/Rotation}: How different dimensions within the head interact
-\end{itemize}
+where $\mathfrak{sl}(d_{\text{head}})$ consists of traceless matrices (volume-preserving transformations) and $\mathbb{R}$ is the trace (overall scaling). This means each head independently controls the overall magnitude of attention in that subspace (scaling) and how different dimensions within the head interact (shearing and rotation).
 
 \paragraph{Example: $\mathrm{SO}(3)$ Irreducible Representations.}
 
@@ -1406,12 +1346,7 @@ where $T$ is the token sequence length and $d = 64$ is the head dimension. We co
 \beta^{(\mathrm{flat})}_{ij} = \operatorname{softmax}_j\!\left( -\frac{\|Q_i - K_j\|^2}{\tau} \right)
 \end{equation}
 
-For each $(L,H)$ pair across all 144 attention heads, we computed three complementary alignment metrics:
-\begin{enumerate}
-  \item Pearson correlation between corresponding attention rows $\alpha$ and $\beta$
-  \item Fraction of tokens with identical argmax attention: $\arg\max_j \alpha_{ij} = \arg\max_j \beta_{ij}$
-  \item Cosine similarity between aggregated messages: $z_\alpha = \alpha_i V$ and $z_\beta = \beta_i V$
-\end{enumerate}
+For each $(L,H)$ pair across all 144 attention heads, we computed three complementary alignment metrics: the Pearson correlation between corresponding attention rows $\alpha$ and $\beta$; the fraction of tokens with identical argmax attention, $\arg\max_j \alpha_{ij} = \arg\max_j \beta_{ij}$; and the cosine similarity between aggregated messages $z_\alpha = \alpha_i V$ and $z_\beta = \beta_i V$.
 
 \subsubsection{$\mathrm{GL}(K)$ Language Modeling}
 To validate the complete gauge-theoretic framework beyond attention mechanism correspondence, we trained $\mathrm{GL}(30)$ gauge transformers on WikiText-103 language modeling (102M tokens, vocabulary size 50,257). These experiments test whether variational free energy minimization can drive actual language learning, with the gauge structure ($\mu$, $\Sigma$, $\phi$) evolving jointly during training. Crucially, the $\mathrm{GL}(K)$ gauge VFE architecture contains no MLPs, activation functions, or learned attention projections ($W_Q$, $W_K$, $W_V$); only a linear output projection to vocabulary logits is retained. All other computation derives from KL divergences, parallel transport via $\Omega = \exp(\phi)$, and natural gradient descent on the Fisher-Rao manifold. No positional encoding is used; the causal attention mask provides implicit sequential structure.
@@ -1502,11 +1437,7 @@ The empirical temperature optimum $\tau = 19.0$ represents a 19\% deviation from
 
 \paragraph{Quantitative Validation.} We validated these predictions by computing the coefficient of variation (CV) of key norms, which directly measures incomplete bias cancellation. For $d = 64$, theory predicts $\text{CV} = \sqrt{2/d} = 0.177$ (17.7\%), representing fundamental $\mathcal{O}(1/\sqrt{d})$ fluctuations. Monte Carlo simulations with learned projection matrices yield $\text{CV} = 0.240 \pm 0.001$ (24.0\%), where the amplification reflects typical BERT-like architectures.
 
-This directly explains both observed phenomena:
-\begin{enumerate}
-\item The temperature shift from $\tau = 16$ to $\tau = 19$ follows from the embedding scale, with ratio $\tau_{\text{emp}}/\tau_{\text{theory}} = 1.188$ exactly matching the 18.75\% deviation.
-\item The magnitude of key-norm bias (discussed below) falls precisely within the predicted range from 24\% norm heterogeneity.
-\end{enumerate}
+This directly explains both observed phenomena: the temperature shift from $\tau = 16$ to $\tau = 19$ follows from the embedding scale, with ratio $\tau_{\text{emp}}/\tau_{\text{theory}} = 1.188$ exactly matching the 18.75\% deviation; and the magnitude of key-norm bias (discussed below) falls precisely within the predicted range from 24\% norm heterogeneity.
 
 Both effects are quantitative validations of the finite-dimensional analysis, with the gauge framework correctly predicting their existence and magnitude from dimensional scaling alone.
 
@@ -1521,12 +1452,7 @@ A central prediction of our gauge-theoretic framework is the emergence of a key-
 \end{equation}
 where the term $-\frac{1}{2\sigma^2}\|K_j\|^2$ represents an intrinsic salience depending only on key vector norm. This bias is gauge-geometric in origin: each key carries information not only about semantic content but also about its representation magnitude in the embedding space.
 
-\paragraph{Asymptotic Cancellation.} Our theory predicts this bias should approximately cancel under two complementary mechanisms:
-
-\begin{enumerate}
-\item \textbf{Gauge invariance}: For orthogonal transformations $\Omega_{ij} \in \text{SO}(d_k)$, the bias reduces to $-\frac{1}{2\sigma^2}\|\mu_j\|^2$, depending on embedding norms.
-
-\item \textbf{High-dimensional concentration}: For embeddings $\mu_j^{(i)} \sim \mathcal{N}(0, \sigma^2)$ in $\mathbb{R}^{d_k}$,
+\paragraph{Asymptotic Cancellation.} Our theory predicts this bias should approximately cancel under two complementary mechanisms. First, gauge invariance: for orthogonal transformations $\Omega_{ij} \in \text{SO}(d_k)$, the bias reduces to $-\frac{1}{2\sigma^2}\|\mu_j\|^2$, depending on embedding norms. Second, high-dimensional concentration: for embeddings $\mu_j^{(i)} \sim \mathcal{N}(0, \sigma^2)$ in $\mathbb{R}^{d_k}$,
 \begin{equation}
 \|\mu_j\|^2 = \sum_{i=1}^{d_k} (\mu_j^{(i)})^2 = d_k\sigma^2 \pm \mathcal{O}(\sigma^2\sqrt{d_k}),
 \end{equation}
@@ -1535,16 +1461,10 @@ with relative fluctuations $\mathcal{O}(1/\sqrt{d_k}) \to 0$ as $d_k \to \infty$
 -\frac{1}{2\sigma^2}\|\mu_j\|^2 \approx -\frac{d_k}{2} = C \quad \text{(constant in $j$)},
 \end{equation}
 which cancels under softmax normalization.
-\end{enumerate}
 
 At finite dimensions, this cancellation is incomplete, leading to residual per-key bias.
 
-\paragraph{Empirical Evidence.} Figure~\ref{fig:key_norm_bias} provides strong confirmation. We observe:
-\begin{itemize}
-\item \textbf{Strong bias}: Pearson correlation between key norms $\|K_j\|^2$ and average attention received is $\rho = -0.733$ ($p = 1.88 \times 10^{-30}$) for an example head (Layer 0, Head 0).
-\item \textbf{Pervasive effect}: The distribution of correlations shows average $\rho = -0.352$ across all heads.
-\item \textbf{High significance}: 133 out of 144 heads (92.4\%) exhibit statistically significant key-norm bias at $p < 0.001$.
-\end{itemize}
+\paragraph{Empirical Evidence.} Figure~\ref{fig:key_norm_bias} provides strong confirmation. The Pearson correlation between key norms $\|K_j\|^2$ and average attention received is $\rho = -0.733$ ($p = 1.88 \times 10^{-30}$) for an example head (Layer 0, Head 0), indicating strong bias. The effect is pervasive: the distribution of correlations shows average $\rho = -0.352$ across all heads, with 133 out of 144 heads (92.4\%) exhibiting statistically significant key-norm bias at $p < 0.001$.
 
 The negative correlation is precisely what our gauge theory predicts: the key-norm bias term $-\frac{1}{2\sigma^2}\|K_j\|^2$ contributes negatively to attention logits, suppressing attention to high-norm keys.
 
@@ -1610,15 +1530,7 @@ Unlike the BERT validation above, which tested the degenerate limits against an 
 
 \subsubsection{Training Dynamics}
 
-Figure~\ref{fig:gl30_training} shows the training dynamics for both configurations. Several features validate the gauge-theoretic framework:
-
-\begin{enumerate}
-  \item \textbf{Stable Convergence}: Both models achieve stable convergence with perplexity dropping from $>$1000 at initialization to $\sim$125--165 at convergence. For context, a vocabulary of 50{,}257 tokens gives random-chance perplexity $\sim$50{,}000, so these models capture substantial linguistic structure. However, standard transformer baselines of comparable parameter count typically achieve perplexity 30--60 on WikiText-103; our models are intended as a proof of concept for the gauge-theoretic framework, not as competitive architectures.
-
-  \item \textbf{Component-Wise Gradient Flow}: Panel (d) shows gradient norms for $\mu$ (belief means), $\Sigma$ (covariances), and $\phi$ (gauge frames) evolving with distinct dynamics. The gauge frame gradients ($\phi$, red) exhibit characteristic oscillations as the model learns optimal frame alignments.
-
-  \item \textbf{Generalization}: Training and validation curves track closely until late training, indicating the gauge-theoretic inductive bias provides reasonable regularization.
-\end{enumerate}
+Figure~\ref{fig:gl30_training} shows the training dynamics for both configurations. Several features validate the gauge-theoretic framework. Both models achieve stable convergence with perplexity dropping from $>$1000 at initialization to $\sim$125--165 at convergence. For context, a vocabulary of 50{,}257 tokens gives random-chance perplexity $\sim$50{,}000, so these models capture substantial linguistic structure. However, standard transformer baselines of comparable parameter count typically achieve perplexity 30--60 on WikiText-103; our models are intended as a proof of concept for the gauge-theoretic framework, not as competitive architectures. Panel (d) shows gradient norms for $\mu$ (belief means), $\Sigma$ (covariances), and $\phi$ (gauge frames) evolving with distinct dynamics; the gauge frame gradients ($\phi$, red) exhibit characteristic oscillations as the model learns optimal frame alignments. Training and validation curves track closely until late training, indicating the gauge-theoretic inductive bias provides reasonable regularization.
 
 \begin{figure*}[t]
   \centering
@@ -1762,12 +1674,7 @@ The present work models language as a \emph{static} informational system: next-t
 
 The full variational free energy (Section~3.4) includes both the fast belief subsystem $\mathcal{F}_{\text{fast}}$ (Eq.~\ref{eq:fast_subsystem}) and the slow model subsystem $\mathcal{F}_{\text{slow}}$ (Eq.~\ref{eq:slow_subsystem}), with timescale separation $\eta_s \ll \eta_q$. Standard transformer training operates entirely within this separation: the forward pass (attention, belief updating) corresponds to fast-variable dynamics, while gradient descent on weights corresponds to slow-variable learning. Current transformers are thus the \emph{adiabatic limit} of the full VFE---the slow variables are frozen during inference, and only updated between forward passes via backpropagation.
 
-The full VFE, however, prescribes coupled dynamics at both timescales simultaneously. The model-model alignment term $\gamma_{ij} D_{\mathrm{KL}}(s_i \| \tilde{\Omega}_{ij} s_j)$ drives agents toward consensus not just on what the world state is (beliefs), but on \emph{how the world works} (models). Combined with hierarchical priors (Eq.~\ref{eq:hierarchical_prior}) that couple beliefs to model uncertainty, this yields a system where:
-\begin{itemize}
-  \item Fast dynamics ($q_i$): In-context belief updating---what current transformers implement as attention and residual stream processing.
-  \item Slow dynamics ($s_i$): Online model adaptation---analogous to in-context learning, meta-learning, or continual adaptation, but arising from the same variational principle rather than requiring separate mechanisms.
-  \item Cross-scale coupling: The hierarchical prior $p_i(k_i) = \int p_i(k_i \mid m_i) s_i(m_i) \mathrm{d}m_i$ ensures that model uncertainty propagates into belief uncertainty, so agents that are uncertain about world structure express appropriately broader beliefs.
-\end{itemize}
+The full VFE, however, prescribes coupled dynamics at both timescales simultaneously. The model-model alignment term $\gamma_{ij} D_{\mathrm{KL}}(s_i \| \tilde{\Omega}_{ij} s_j)$ drives agents toward consensus not just on what the world state is (beliefs), but on \emph{how the world works} (models). Combined with hierarchical priors (Eq.~\ref{eq:hierarchical_prior}) that couple beliefs to model uncertainty, this yields a system with three coupled dynamical regimes. Fast dynamics ($q_i$) correspond to in-context belief updating---what current transformers implement as attention and residual stream processing. Slow dynamics ($s_i$) correspond to online model adaptation---analogous to in-context learning, meta-learning, or continual adaptation, but arising from the same variational principle rather than requiring separate mechanisms. Cross-scale coupling through the hierarchical prior $p_i(k_i) = \int p_i(k_i \mid m_i) s_i(m_i) \mathrm{d}m_i$ ensures that model uncertainty propagates into belief uncertainty, so agents that are uncertain about world structure express appropriately broader beliefs.
 
 This suggests a concrete research program: implementing the full VFE with both fast and slow subsystems active during inference would yield a model that treats language not as a static distribution to be memorized but as a dynamical information system to be tracked. The timescale separation naturally handles the distinction between within-context processing (fast) and cross-context adaptation (slow), without requiring separate architectural mechanisms for in-context learning, fine-tuning, or continual learning---these would all be limits of the same underlying variational dynamics.
 
@@ -1786,10 +1693,7 @@ The framework exhibits a gauge-symmetric vacuum state (mirroring an untrained ne
 
 
 \subsection{Code Availability}
-The complete simulation suite that implements the gauge-theoretic variational inference framework described in this work is publicly available at 
-\begin{itemize}
-\item \href{https://github.com/cdenn016/epistemic-geometry}{https://github.com/cdenn016/epistemic-geometry}. 
-\end{itemize}
+The complete simulation suite that implements the gauge-theoretic variational inference framework described in this work is publicly available at \href{https://github.com/cdenn016/epistemic-geometry}{https://github.com/cdenn016/epistemic-geometry}.
 
 
 All experiments reported in the results section can be reproduced using the provided configuration files and random number generator seeds documented in the repository. The codebase requires Python 3.9+ with NumPy, PyTorch, SciPy, and Joblib dependencies as specified in \texttt{requirements.txt}.
@@ -1810,12 +1714,7 @@ The following geometric and probabilistic constructions comprise standard method
 
 Let $\pi: \mathcal{N} \to \mathcal{C}$ be a smooth principal $G$-bundle where $\mathcal{C}$ is a smooth manifold (the base space) and $G$ is a Lie group (the structure group) acting freely and transitively on the right on $\mathcal{N}$. The projection satisfies $\pi(n \cdot g) = \pi(n)$ for all $g \in G$, $n \in \mathcal{N}$.
 
-Let $\rho_q: G \to \text{Aut}(\mathcal{B}_q)$ and $\rho_p: G \to \text{Aut}(\mathcal{B}_p)$ be representations of $G$ on smooth statistical manifolds $\mathcal{B}_q$ (belief/recognition fiber) and $\mathcal{B}_p$ (model/prior fiber). These fibers are typically:
-
-\begin{itemize}
-  \item $K$-dimensional probability simplices $\Delta^K$ (for categorical distributions), or
-  \item Statistical manifolds with information-geometric structure (e.g., Gaussian manifolds, exponential families)
-\end{itemize}
+Let $\rho_q: G \to \text{Aut}(\mathcal{B}_q)$ and $\rho_p: G \to \text{Aut}(\mathcal{B}_p)$ be representations of $G$ on smooth statistical manifolds $\mathcal{B}_q$ (belief/recognition fiber) and $\mathcal{B}_p$ (model/prior fiber). These fibers are typically $K$-dimensional probability simplices $\Delta^K$ (for categorical distributions) or statistical manifolds with information-geometric structure (e.g., Gaussian manifolds, exponential families).
 
 The associated bundles are:\\
 \begin{align}
@@ -1859,33 +1758,7 @@ A set of agents is \emph{epistemically dead} if they identically share both beli
 \subsubsection{Bundle Morphisms and Transport Operators}
 Via standard horizontal lifting from the principal bundle $\mathcal{N}$ to the associated bundles, we obtain a hierarchy of morphisms and induced connections:
 
-\textbf{Intra-bundle transport:}
-
-\begin{itemize}
-  \item $\Omega^{(q)}_{ij}: \Gamma(\mathcal{B}_q) \to \Gamma(\mathcal{B}_q)$ (belief-to-belief)
-  \item $\Omega^{(p)}_{ij}: \Gamma(\mathcal{B}_p) \to \Gamma(\mathcal{B}_p)$ (model-to-model)
-\end{itemize}
-
-\textbf{Cross-scale transport:}
-
-\begin{itemize}
-  \item $\Lambda^{s}_{s'}: \Gamma^{s}(\mathcal{B}_q) \to \Gamma^{s'}(\mathcal{B}_q)$ (beliefs across scales)
-  \item $\tilde{\Lambda}^{s}_{s'}: \Gamma^{s}(\mathcal{B}_p) \to \Gamma^{s'}(\mathcal{B}_p)$ (models across scales)
-\end{itemize}
-
-\textbf{Inter-bundle morphisms:}
-
-\begin{itemize}
-  \item $\Theta^i_j: \Gamma(\mathcal{B}_q) \to \Gamma(\mathcal{B}_p)$ (belief to model)
-  \item $\tilde{\Theta}^i_j: \Gamma(\mathcal{B}_p) \to \Gamma(\mathcal{B}_q)$ (model to belief)
-\end{itemize}
-
-\textbf{Global bundle morphisms:}
-
-\begin{itemize}
-  \item $\Phi: \mathcal{E}_p \to \mathcal{E}_q$ (model bundle to belief bundle)
-  \item $\tilde{\Phi}: \mathcal{E}_q \to \mathcal{E}_p$ (belief bundle to model bundle)
-\end{itemize}
+Intra-bundle transport operators $\Omega^{(q)}_{ij}: \Gamma(\mathcal{B}_q) \to \Gamma(\mathcal{B}_q)$ (belief-to-belief) and $\Omega^{(p)}_{ij}: \Gamma(\mathcal{B}_p) \to \Gamma(\mathcal{B}_p)$ (model-to-model) act within a single bundle. Cross-scale transport operators $\Lambda^{s}_{s'}: \Gamma^{s}(\mathcal{B}_q) \to \Gamma^{s'}(\mathcal{B}_q)$ (beliefs across scales) and $\tilde{\Lambda}^{s}_{s'}: \Gamma^{s}(\mathcal{B}_p) \to \Gamma^{s'}(\mathcal{B}_p)$ (models across scales) connect different hierarchical levels. Inter-bundle morphisms $\Theta^i_j: \Gamma(\mathcal{B}_q) \to \Gamma(\mathcal{B}_p)$ (belief to model) and $\tilde{\Theta}^i_j: \Gamma(\mathcal{B}_p) \to \Gamma(\mathcal{B}_q)$ (model to belief) relate the two fiber types. Finally, global bundle morphisms $\Phi: \mathcal{E}_p \to \mathcal{E}_q$ (model bundle to belief bundle) and $\tilde{\Phi}: \mathcal{E}_q \to \mathcal{E}_p$ (belief bundle to model bundle) act on the total associated bundles.
 
 Here $\Gamma(\mathcal{B}_u)$ denotes the space of smooth sections over the base $\mathcal{C}$.
 
@@ -1941,13 +1814,7 @@ This measures the geometry of the space of probability distributions (e.g., Gaus
 
 Gauge Group Curvature.
 
-The structure group $G$ itself is a curved manifold. For $G = SO(3)$:
-
-\begin{itemize}
-  \item Topology: $SO(3) \cong \mathbb{RP}^3$
-  \item Constant positive sectional curvature
-  \item Non-commutativity: $\Omega_{ij}\Omega_{jk} \neq \Omega_{jk}\Omega_{ij}$ in general
-\end{itemize}
+The structure group $G$ itself is a curved manifold. For $G = SO(3)$, the topology is $SO(3) \cong \mathbb{RP}^3$ with constant positive sectional curvature and non-commutativity: $\Omega_{ij}\Omega_{jk} \neq \Omega_{jk}\Omega_{ij}$ in general.
 
 Gauge Field Curvature.\\
 The connection $A_\mu$ has field strength $F_{\mu\nu}$ measuring path-dependence of parallel transport through the base space $\mathcal{C}$.
@@ -2192,13 +2059,7 @@ We now show that, within a broad but well-defined class of variational games, th
 
 Here we are restricting the the matched-fiber case.  The full generalization follows by applying the appropriate bundle morphisms/intertwiners.
 
-The uniqueness of this term is conditional and follows from three assumptions:
-
-\begin{enumerate}
-  \item $\mathcal{D}$ is local in $c$, of f-divergence form $\displaystyle \int q_i(c)\, f\!\left(\frac{q_i(c)}{\Omega_{ij}(c) q_j(c)}\right) dc$,
-  \item the coupling is linear
-  \item the minimizing belief, $q_i^*$, remains in the exponential-family (log-linear) class.
-\end{enumerate}
+The uniqueness of this term is conditional and follows from three assumptions: (i) $\mathcal{D}$ is local in $c$, of f-divergence form $\displaystyle \int q_i(c)\, f\!\left(\frac{q_i(c)}{\Omega_{ij}(c) q_j(c)}\right) dc$; (ii) the coupling is linear; and (iii) the minimizing belief $q_i^*$ remains in the exponential-family (log-linear) class.
 
 \subsubsection{The Coupled Variational Problem}
 Each agent $i$ minimizes a local free-energy functional:
@@ -2335,14 +2196,8 @@ dc,
 
 that enters linearly in \eqref{eq:F_i}, and further suppose that the stationary distribution $q_i^*$ is log-linear in $\{H_i,\Omega_{ij}q_j\}$.
 
-Then the following are equivalent:
-
-\begin{enumerate}
-  \item $q_i^*$ has the geometric-mean Boltzmann form \eqref{eq:q_i_star};
-  \item $\mathcal{D}(q_i,q_j)=D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$;
-  \item $C_{ij}=\dfrac{\partial F_i}{\partial\beta_{ij}}
+Then the following are equivalent: (1) $q_i^*$ has the geometric-mean Boltzmann form \eqref{eq:q_i_star}; (2) $\mathcal{D}(q_i,q_j)=D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$; and (3) $C_{ij}=\dfrac{\partial F_i}{\partial\beta_{ij}}
 =D_{\mathrm{KL}}(q_i^* \,\|\, \Omega_{ij}q_j).$
-\end{enumerate}
 
 Proof sketch
 
@@ -2375,30 +2230,11 @@ We require that $\mathcal{D}(q,q)=0$ thereby fixing the constant to be zero thus
 By the envelope theorem \eqref{eq:envelope}, the only divergence consistent with a linear $\beta_{ij}$-coupling and this derivative structure is the forward KL.
 
 \paragraph{Remark on the scope of conditional uniqueness.}
-The three conditions (locality, linear coupling, exponential-family closure) are individually natural but collectively restrictive. Relaxing any one condition opens different classes of alternatives:
-\begin{itemize}
-  \item Dropping exponential-family closure admits the reverse KL $D_{\mathrm{KL}}(\Omega_{ij}q_j \,\|\, q_i)$, which yields mode-seeking rather than mean-seeking updates but requires iterative solution of a transcendental equation.
-  \item Dropping linearity in $\beta_{ij}$ permits non-linear attention mechanisms (e.g., $\beta_{ij}^2$-weighted couplings), at the cost of losing the dual interpretation.
-  \item Dropping locality admits integral or kernel-based divergences (e.g., maximum mean discrepancy), which may be advantageous when the exponential-family assumption is inappropriate.
-\end{itemize}
+The three conditions (locality, linear coupling, exponential-family closure) are individually natural but collectively restrictive. Relaxing any one condition opens different classes of alternatives. Dropping exponential-family closure admits the reverse KL $D_{\mathrm{KL}}(\Omega_{ij}q_j \,\|\, q_i)$, which yields mode-seeking rather than mean-seeking updates but requires iterative solution of a transcendental equation. Dropping linearity in $\beta_{ij}$ permits non-linear attention mechanisms (e.g., $\beta_{ij}^2$-weighted couplings), at the cost of losing the dual interpretation. Dropping locality admits integral or kernel-based divergences (e.g., maximum mean discrepancy), which may be advantageous when the exponential-family assumption is inappropriate.
 The theorem's value lies in showing that \emph{all three conditions together} uniquely select the forward KL---it is not a single assumption that drives the result, but the conjunction. A full proof (beyond the sketch above) would require showing that the functional derivative equation admits a unique solution in the space of $f$-divergences, which we defer to a dedicated treatment.
 
 \subsubsection{Interpretations}
-\begin{enumerate}
-  \item \textbf{Gauge invariance}\\
-The comparison is made between $q_i$ and the transported $\Omega_{ij}q_j$ in the same frame (and similarly for $j \rightarrow i$). Gauge covariance fixes what is compared, while variational duality fixes how it is compared.
-  \item \textbf{Variational duality}\\
-\\
-The forward KL is the only divergence that simultaneously yields:
-  \begin{itemize}
-    \item a closed-form Boltzmann solution for $q_i$, and
-    \item a consistent dual cost $C_{ij} = \partial F_i / 
-\partial \beta_{ij}$.
-  \end{itemize}
-  \item \textbf{Information geometry}\\
-\\
-The forward KL is the Bregman divergence generated by the negative entropy potential, whose Hessian induces the Fisher-Rao metric and yields the m/e-projection (mixed/exponential family) Pythagorean theorem. These global properties are not shared by generic f-divergences.
-\end{enumerate}
+These results admit three complementary interpretations. From the perspective of gauge invariance, the comparison is made between $q_i$ and the transported $\Omega_{ij}q_j$ in the same frame (and similarly for $j \rightarrow i$); gauge covariance fixes what is compared, while variational duality fixes how it is compared. From the perspective of variational duality, the forward KL is the only divergence that simultaneously yields a closed-form Boltzmann solution for $q_i$ and a consistent dual cost $C_{ij} = \partial F_i / \partial \beta_{ij}$. From the perspective of information geometry, the forward KL is the Bregman divergence generated by the negative entropy potential, whose Hessian induces the Fisher-Rao metric and yields the m/e-projection (mixed/exponential family) Pythagorean theorem. These global properties are not shared by generic f-divergences.
 
 \subsubsection{Summary}
 Under the natural assumptions of locality, linear coupling, and exponential-family closure, the forward KL divergence
@@ -2430,13 +2266,7 @@ $$
 \beta_{ij}\,D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j),
 $$
 
-is therefore not arbitrary: it arises uniquely from the requirement that
-
-\begin{enumerate}
-  \item belief updates $q_i$ admit an exponential-family form consistent with local free energy minimization,
-  \item attention weights $\beta_{ij}$ act as variational dual variables conjugate to those divergences, and
-  \item comparisons between agents are made in gauge-aligned coordinates through the transport operators $\Omega_{ij}$.
-\end{enumerate}
+is therefore not arbitrary: it arises uniquely from the requirement that (i) belief updates $q_i$ admit an exponential-family form consistent with local free energy minimization, (ii) attention weights $\beta_{ij}$ act as variational dual variables conjugate to those divergences, and (iii) comparisons between agents are made in gauge-aligned coordinates through the transport operators $\Omega_{ij}$.
 
 Therefore, the forward KL plays the role of the canonical gauge-covariant coupling between agents' beliefs/models, unifying variational and geometric principles.
 
