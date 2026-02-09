@@ -743,7 +743,12 @@ $$
 \Big].
 \label{eq:kl_full}
 $$
-When beliefs are approximately aligned (the regime toward which the coupling drives the system at convergence), the covariances satisfy $\Sigma_i \approx \Omega_{ij}\Sigma_j\Omega_{ij}^\top$, and the trace and log-determinant terms approximately cancel. This approximation is self-consistent: the coupling promotes alignment, and the KL form is most accurate in the aligned regime. Early in training, when covariances may be far from aligned, the approximation introduces $O(\|\Delta\Sigma\|)$ errors that decrease as training proceeds. In this alignment regime, as shown in the appendix, the quadratic expectation becomes
+\paragraph{Alignment-Regime Approximation.}
+When beliefs are approximately aligned (the regime toward which the coupling drives the system at convergence), the covariances satisfy $\Sigma_i \approx \Omega_{ij}\Sigma_j\Omega_{ij}^\top$, and the trace and log-determinant terms approximately cancel. This approximation is self-consistent: the coupling promotes alignment, and the KL form is most accurate in the aligned regime. Early in training, when covariances may be far from aligned, the approximation introduces $O(\|\Delta\Sigma\|)$ errors that decrease as training proceeds.
+
+\textbf{Note:} An alternative derivation that obtains the KL divergence \emph{exactly}---without requiring this alignment-regime approximation---is presented in Section~\ref{sec:mixture_derivation}, where the KL arises directly from a mixture-of-sources generative model rather than from quadratic coupling. The agreement-variable construction here and the mixture-model derivation there are complementary: the former generalizes to dual-fiber (belief + model) alignment, while the latter provides an exact, single-principle path to softmax attention.
+
+In this alignment regime, as shown in the appendix, the quadratic expectation becomes
 \begin{equation}
 \frac{1}{4}\mathbb{E}_{q_i q_j}
 [(k_i-\Omega_{ij}k_j)^\top\Lambda_{ij}(k_i-\Omega_{ij}k_j)]
@@ -770,6 +775,8 @@ To obtain the standard form, we define normalized alignment weights
 \label{eq:normalized_weights}
 \end{equation}
 These weights have a clear interpretation: $\beta_{ij}$ measures the strength of belief alignment between agents $i$ and $j$, while $\gamma_{ij}$ measures model alignment strength. In the limit $\beta_{ij} \to \infty$ with fixed $\gamma_{ij}$, agents' beliefs are forced to perfect agreement after transport, while their models may still differ. Conversely, $\gamma_{ij} = 0$ decouples model alignment entirely. In all subsequent equations we take $\tau$ to be independent of each agent---a constant global value which we set to 1.
+
+\textbf{Remark: Dual role of $\beta_{ij}$.} In the free energy \eqref{eq:free_energy_final}, the alignment weights $\beta_{ij}$ enter as \emph{coupling strengths}---parameters that weight the pairwise KL terms. However, we will show in Section~\ref{sec:mixture_derivation} that the \emph{optimal} values of $\beta_{ij}$ under variational minimization take a softmax form: $\beta_{ij} = \operatorname{softmax}_j(-D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)/\tau)$. These two roles are consistent: the coupling strengths that minimize the free energy are precisely the softmax attention weights. Henceforth, we use $\beta_{ij}$ to denote these optimal values unless otherwise noted.
 
 
 
@@ -804,9 +811,10 @@ We have shown that the cross-agent alignment term is the forward KL divergence w
 \end{equation}
 where $\Omega_{ij}(c) \cdot q_j(c)$ denotes the gauge transport of agent $j$'s belief into agent $i$'s frame, and both operands live in the same statistical manifold $\mathcal{B}(c)$ (similarly for $p$).
 
-The attention weights derived from this framework take the form:
+The attention weights derived from this framework take the form (derived in Section~\ref{sec:mixture_derivation} and Appendix~D via two complementary arguments):
 \begin{equation}
 \beta_{ij}(c) = \frac{\exp\left[-\frac{1}{\tau} D_{\text{KL}}\left(q_i(c) \,\big\|\, \Omega_{ij}(c) q_j(c)\right)\right] \chi_{ij}(c)}{\sum_k \exp\left[-\frac{1}{\tau} D_{\text{KL}}\left(q_i(c) \,\big\|\, \Omega_{ik}(c) q_k(c)\right)\right] \chi_{ik}(c)},
+\label{eq:attention_weights_softmax}
 \end{equation}
 where
 $$
@@ -947,6 +955,126 @@ We have derived the generalized variational free energy from a normalized genera
 This derivation establishes the generalized variational free energy as a fundamental object in a gauge-theoretic multi-agent geometry rooted in informational and differential geometries.
 
 Therefore, multi-agent communication within a gauge covariant formulation allows the FEP to be satisfied as well as allows us to connect attention, transformers, and machine learning to variational inference.
+
+\subsection{Attention Weights as Variational Inference Over Source Selection}
+\label{sec:mixture_derivation}
+
+The preceding sections established the generalized variational free energy with alignment terms $\beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ via agreement variables and a specific precision choice (Section~\ref{sec:final_free_energy}). We now present a complementary derivation that obtains the softmax form of $\beta_{ij}$ \emph{exactly}, without requiring the alignment-regime approximation, by formulating agent $i$'s inference as source selection over a mixture of gauge-transported neighbors.
+
+\subsubsection{Mixture-of-Sources Generative Model}
+
+We posit that agent $i$ (the ``query'') seeks to update its belief $q_i(k)$ by attending to a set of source agents $j$ (the ``keys/values''). Agent $i$'s generative model assumes its latent state $k$ was drawn from one of the neighboring agents, selected by a categorical latent variable $z \in \{1, \ldots, N\}$:
+\begin{equation}
+P(k, z) = P(k \mid z)\, P(z),
+\label{eq:mixture_joint}
+\end{equation}
+where:
+\begin{itemize}
+  \item $P(z = j) = \pi_j$ is the prior probability of attending to agent $j$ (the \emph{attention prior}).
+  \item $P(k \mid z = j) = \mathcal{N}(k;\, \Omega_{ij}\mu_j,\, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$ is agent $j$'s belief transported into agent $i$'s gauge frame via $\Omega_{ij}$.
+\end{itemize}
+
+This construction is the unique generative model consistent with the gauge structure: agent $j$'s belief $q_j$ lives in $j$'s local frame, and $\Omega_{ij}q_j$ is the canonical representation of ``what $j$ believes, as seen by $i$.'' The categorical variable $z$ endows the model with the probabilistic semantics of source selection: attention \emph{is} posterior inference over which neighbor generated agent $i$'s state.
+
+\subsubsection{Variational Posterior}
+
+We approximate the true posterior $P(k, z \mid \text{data})$ using a mean-field factorization:
+\begin{equation}
+Q(k, z) = q_i(k) \cdot \beta(z),
+\label{eq:mixture_posterior}
+\end{equation}
+where $q_i(k) = \mathcal{N}(k;\, \mu_i, \Sigma_i)$ is agent $i$'s belief (held fixed for the attention computation) and $\beta(z = j) \equiv \beta_{ij} \geq 0$ are variational attention weights satisfying $\sum_j \beta_{ij} = 1$.
+
+\subsubsection{Variational Free Energy}
+
+The free energy is the KL divergence between the variational posterior and the generative model:
+\begin{equation}
+\mathcal{F} = D_{\mathrm{KL}}[Q(k,z) \| P(k,z)] = \sum_j \beta_{ij} \int dk\, q_i(k) \log \frac{q_i(k)\, \beta_{ij}}{P(k \mid z{=}j)\, \pi_j}.
+\end{equation}
+
+Decomposing the logarithm:
+\begin{equation}
+\mathcal{F} = \sum_j \beta_{ij} \left[ \underbrace{\int dk\, q_i(k) \log \frac{q_i(k)}{P(k \mid z{=}j)}}_{= \, D_{\mathrm{KL}}[q_i \,\|\, \Omega_{ij} q_j]} + \log \beta_{ij} - \log \pi_j \right].
+\label{eq:mixture_free_energy}
+\end{equation}
+
+The identification of the integral with $D_{\mathrm{KL}}[q_i \| \Omega_{ij} q_j]$ is \emph{exact}---it follows directly from the definition of KL divergence and the generative model $P(k \mid z{=}j) = (\Omega_{ij} q_j)(k)$, with no approximation.
+
+Defining the \emph{alignment energy} $E_{ij} \equiv D_{\mathrm{KL}}[q_i \| \Omega_{ij} q_j]$:
+\begin{equation}
+\mathcal{F} = \sum_j \beta_{ij} \big( E_{ij} + \log \beta_{ij} - \log \pi_j \big).
+\label{eq:mixture_energy_entropy}
+\end{equation}
+
+This has the classic ``energy minus entropy'' structure: $\mathcal{F} = \langle E \rangle_\beta - H(\beta) + \text{const}$, where $H(\beta) = -\sum_j \beta_{ij} \log \beta_{ij}$ is the entropy of the attention distribution.
+
+\subsubsection{Minimization and the Softmax Solution}
+
+We minimize $\mathcal{F}$ with respect to $\beta_{ij}$ subject to $\sum_j \beta_{ij} = 1$. The Lagrangian is:
+\begin{equation}
+\mathcal{L} = \sum_j \beta_{ij}(E_{ij} + \log \beta_{ij} - \log \pi_j) - \lambda\left(\sum_j \beta_{ij} - 1\right).
+\end{equation}
+
+Setting $\partial \mathcal{L} / \partial \beta_{ik} = 0$:
+\begin{equation}
+E_{ik} + \log \beta_{ik} + 1 - \log \pi_k - \lambda = 0.
+\end{equation}
+
+Solving:
+\begin{equation}
+\beta_{ik} = e^{\lambda - 1} \cdot \pi_k \cdot e^{-E_{ik}}.
+\end{equation}
+
+Enforcing the normalization constraint absorbs the constant $e^{\lambda - 1}$, yielding:
+\begin{equation}
+\beta_{ik} = \frac{\pi_k \exp(-E_{ik})}{\sum_m \pi_m \exp(-E_{im})}.
+\label{eq:mixture_softmax_general}
+\end{equation}
+
+For a uniform attention prior $\pi_k = 1/N$, the prior factors cancel:
+\begin{equation}
+\boxed{\beta_{ik} = \operatorname{softmax}_k(-E_{ik}) = \operatorname{softmax}_k\!\big(-D_{\mathrm{KL}}[q_i \| \Omega_{ik} q_k]\big).}
+\label{eq:mixture_softmax}
+\end{equation}
+
+This is identical to \eqref{eq:attention_weights_softmax} with $\tau = 1$. A temperature parameter $\tau > 0$ is recovered by rescaling the alignment energy: $E_{ik} \to E_{ik}/\tau$, corresponding to scaling the coupling precision in the generative model.
+
+\subsubsection{Non-Uniform Attention Priors and Masking}
+\label{sec:nonuniform_priors}
+
+The general solution \eqref{eq:mixture_softmax_general} with non-uniform priors $\pi_k$ has several immediate applications:
+
+\begin{itemize}
+\item \textbf{Causal masking}: Setting $\pi_k = 0$ for $k > i$ prohibits agent $i$ from attending to future agents, recovering the standard causal attention mask. This arises naturally as a prior constraint on which sources are available, rather than as an ad hoc modification of the softmax.
+
+\item \textbf{Positional bias}: A prior $\pi_k \propto f(|i - k|)$ for some decreasing function $f$ encodes a preference for attending to nearby agents, providing a principled mechanism for positional information without explicit positional encodings.
+
+\item \textbf{Learned attention priors}: Making $\pi_k$ a learnable parameter yields an additive bias $\log \pi_k$ in the pre-softmax logits, equivalent to relative position biases used in architectures such as ALiBi and T5. The gauge-theoretic framework reveals these as prior beliefs about source relevance.
+\end{itemize}
+
+The overlap indicator $\chi_{ij}(c)$ in the full spatial formulation corresponds to the extreme case $\pi_j = 0$ when agents $i$ and $j$ have non-overlapping supports.
+
+\subsubsection{Relationship to the Agreement-Variable Construction}
+
+The mixture-model derivation and the agreement-variable construction of Section~3 are complementary paths to the same result:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{lcc}
+& \textbf{Mixture Model} & \textbf{Agreement Variables} \\
+\hline
+KL arises & Exactly (by construction) & Approximately (alignment regime) \\
+Softmax arises & Directly (Lagrange opt.) & Via max-entropy (Appendix~D) \\
+Scope & Single-fiber (belief only) & Dual-fiber (belief + model) \\
+Generative model & Mixture of sources & Pairwise consistency \\
+Extra structure & Non-uniform priors $\pi_k$ & MRF, quadratic coupling \\
+\hline
+\end{tabular}
+\end{center}
+
+The mixture model provides the most direct, exact, single-principle derivation of softmax attention weights. The agreement-variable construction provides the richer framework needed for the full gauge-theoretic free energy with both $\beta$-weighted belief alignment and $\gamma$-weighted model alignment, the Markov random field structure, and the connections to quadratic regularization that bridge to standard neural network training.
+
+Both derivations share the same essential insight: \emph{attention is posterior inference over information sources, with alignment energy given by gauge-transported KL divergence.}
 
 \subsection{State-Dependent Prior Precision}
 \label{sec:state_dependent_precision}
@@ -2633,6 +2761,9 @@ Reverse or symmetric divergences would violate at least one of these constraints
 
 
 \subsection{Softmax Attention via Maximum Entropy Principle}
+
+The mixture-model derivation in Section~\ref{sec:mixture_derivation} obtains softmax attention weights by direct variational minimization over a categorical latent variable. Here we present a complementary derivation via Jaynes' maximum entropy principle, which arrives at the same result from a different starting point: rather than specifying a generative model, we seek the least-committed attention distribution consistent with a given expected alignment cost.
+
 Given alignment cost $C_{ij} = D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$, we seek attention weights $\beta_{ij}$ that minimize expected disagreement $\sum_j \beta_{ij} C_{ij}$ while maximizing entropy $-\sum_j \beta_{ij}\log\beta_{ij}$ subject to $\sum_j \beta_{ij} = 1$.
 
 Following Jaynes' maximum entropy principle, we maximize entropy subject to the constraint that expected cost equals some target $\langle C \rangle$. The Lagrangian is:
@@ -2679,6 +2810,9 @@ $$
 $$
 
 where $\chi_{ij}(c)$ is the overlap of agent $i$ and agent $j$ support (or mask).  Or said simply; their interaction volume.
+
+\paragraph{Relationship to the mixture-model derivation.}
+The maximum entropy derivation above and the mixture-model derivation in Section~\ref{sec:mixture_derivation} arrive at the same softmax formula via different principles. The mixture model specifies a generative process (source selection via categorical latent $z$) and optimizes the variational posterior directly; the MaxEnt approach instead seeks the least-committed distribution consistent with an expected cost constraint. Their agreement confirms the robustness of the softmax form: it is simultaneously the variational optimum for source-selection inference and the maximum-entropy distribution for a given expected alignment cost. The mixture model additionally yields the non-uniform prior extension (Eq.~\ref{eq:mixture_softmax_general}), connecting attention masks and positional biases to prior beliefs about source availability.
 
 \begin{figure}[h]
 \centering
