@@ -1,0 +1,746 @@
+[
+  {
+    "step": 0,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      300
+    ],
+    "gauge_group": "GL(10)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 0.15349439846144783,
+      "mu_inter_class_dist": 0.15184447772800921,
+      "mu_class_ratio": 0.9892509384708719,
+      "phi_intra_class_dist": 0.4860351231363085,
+      "phi_inter_class_dist": 0.4890657702088356,
+      "phi_class_ratio": 1.0062354486913845,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 0.13163867592811584,
+          "phi_dist": 0.4822058379650116
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 0.13718844950199127,
+          "phi_dist": 0.49604731798171997
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 0.1733231395483017,
+          "phi_dist": 0.45092907547950745
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 0.13888493180274963,
+          "phi_dist": 0.47739675641059875
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 0.16642333567142487,
+          "phi_dist": 0.46078434586524963
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 0.12114490568637848,
+          "phi_dist": 0.500701367855072
+        }
+      ],
+      "mu_related_mean": 0.14476723968982697,
+      "mu_unrelated_mean": 0
+    },
+    "mu_clustering": {
+      "mu_n_tokens_per_category": {
+        "content": 236,
+        "digit": 10,
+        "function": 17,
+        "letter": 52,
+        "punct": 185
+      },
+      "mu_silhouette_score": -0.024042150005698204,
+      "mu_calinski_harabasz": 0.715458333492279,
+      "mu_mean_intra_dist": 0.1552259773015976,
+      "mu_mean_inter_dist": 0.1537046879529953,
+      "mu_inter_intra_ratio": 0.9901995062828064,
+      "mu_anova_mean_f": 0.7155780792236328,
+      "mu_anova_median_f": 0.5029746294021606,
+      "mu_anova_geomean_p": 0.5262448191642761,
+      "mu_anova_frac_significant": 0.03333333333333333,
+      "mu_anova_n_dims_tested": 30,
+      "mu_pca_var_3comp": 0.1445319950580597,
+      "mu_pca_n_components_50pct": 12,
+      "mu_pca_n_components_90pct": 26,
+      "mu_pca_n_components_95pct": 28,
+      "mu_pca_total_components": 30
+    },
+    "phi_clustering": {
+      "phi_n_tokens_per_category": {
+        "content": 236,
+        "digit": 10,
+        "function": 17,
+        "letter": 52,
+        "punct": 185
+      },
+      "phi_silhouette_score": -0.011897367425262928,
+      "phi_calinski_harabasz": 1.0571802854537964,
+      "phi_mean_intra_dist": 0.48713400959968567,
+      "phi_mean_inter_dist": 0.4868444502353668,
+      "phi_inter_intra_ratio": 0.999405562877655,
+      "phi_anova_mean_f": 1.0612977743148804,
+      "phi_anova_median_f": 0.9574745893478394,
+      "phi_anova_geomean_p": 0.3397813141345978,
+      "phi_anova_frac_significant": 0.03,
+      "phi_anova_n_dims_tested": 100,
+      "phi_pca_var_3comp": 0.030201595276594162,
+      "phi_pca_n_components_50pct": ">50",
+      "phi_pca_n_components_90pct": ">50",
+      "phi_pca_n_components_95pct": ">50",
+      "phi_pca_total_components": 300
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260209_145707\\figures\\gauge_frames_step0.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260209_145707\\figures\\belief_embeddings_step0.csv"
+  },
+  {
+    "step": 5000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      300
+    ],
+    "gauge_group": "GL(10)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 2.078113630082872,
+      "mu_inter_class_dist": 2.1033859300613402,
+      "mu_class_ratio": 1.0121611732932334,
+      "phi_intra_class_dist": 2.9195192760891384,
+      "phi_inter_class_dist": 3.1776037001609803,
+      "phi_class_ratio": 1.0883996300985417,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 4.110459804534912,
+          "phi_dist": 3.5753366947174072
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 4.112636566162109,
+          "phi_dist": 4.322291374206543
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.5252926349639893,
+          "phi_dist": 2.7004191875457764
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 3.5785484313964844,
+          "phi_dist": 3.411414861679077
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 4.886377811431885,
+          "phi_dist": 3.03881573677063
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 3.2083771228790283,
+          "phi_dist": 2.880657196044922
+        }
+      ],
+      "mu_related_mean": 3.7369487285614014,
+      "mu_unrelated_mean": 0
+    },
+    "mu_clustering": {
+      "mu_n_tokens_per_category": {
+        "content": 236,
+        "digit": 10,
+        "function": 17,
+        "letter": 52,
+        "punct": 185
+      },
+      "mu_silhouette_score": -0.10022607445716858,
+      "mu_calinski_harabasz": 14.580284118652344,
+      "mu_mean_intra_dist": 2.361635446548462,
+      "mu_mean_inter_dist": 2.674636125564575,
+      "mu_inter_intra_ratio": 1.1325355768203735,
+      "mu_anova_mean_f": 13.609270095825195,
+      "mu_anova_median_f": 8.15942096710205,
+      "mu_anova_geomean_p": 3.0728253275214e-10,
+      "mu_anova_frac_significant": 0.9,
+      "mu_anova_n_dims_tested": 30,
+      "mu_pca_var_3comp": 0.3370094299316406,
+      "mu_pca_n_components_50pct": 7,
+      "mu_pca_n_components_90pct": 23,
+      "mu_pca_n_components_95pct": 26,
+      "mu_pca_total_components": 30
+    },
+    "phi_clustering": {
+      "phi_n_tokens_per_category": {
+        "content": 236,
+        "digit": 10,
+        "function": 17,
+        "letter": 52,
+        "punct": 185
+      },
+      "phi_silhouette_score": 0.020361166447401047,
+      "phi_calinski_harabasz": 10.19993782043457,
+      "phi_mean_intra_dist": 3.1715497970581055,
+      "phi_mean_inter_dist": 3.506204128265381,
+      "phi_inter_intra_ratio": 1.1055176258087158,
+      "phi_anova_mean_f": 9.38381576538086,
+      "phi_anova_median_f": 8.67635726928711,
+      "phi_anova_geomean_p": 2.7599466534411476e-07,
+      "phi_anova_frac_significant": 0.9,
+      "phi_anova_n_dims_tested": 100,
+      "phi_pca_var_3comp": 0.17691659927368164,
+      "phi_pca_n_components_50pct": 17,
+      "phi_pca_n_components_90pct": ">50",
+      "phi_pca_n_components_95pct": ">50",
+      "phi_pca_total_components": 300
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260209_145707\\figures\\gauge_frames_step5000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260209_145707\\figures\\belief_embeddings_step5000.csv"
+  },
+  {
+    "step": 10000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      300
+    ],
+    "gauge_group": "GL(10)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.990766790178087,
+      "mu_inter_class_dist": 2.030072720050812,
+      "mu_class_ratio": 1.0197441157179485,
+      "phi_intra_class_dist": 3.432254997889201,
+      "phi_inter_class_dist": 3.8068871784210203,
+      "phi_class_ratio": 1.109150450873322,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 3.974914312362671,
+          "phi_dist": 4.415240287780762
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 3.438558578491211,
+          "phi_dist": 5.404872894287109
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 2.0957460403442383,
+          "phi_dist": 2.998511791229248
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 5.0146565437316895,
+          "phi_dist": 3.8624908924102783
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.501814126968384,
+          "phi_dist": 3.4156970977783203
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 2.4058752059936523,
+          "phi_dist": 3.4997761249542236
+        }
+      ],
+      "mu_related_mean": 3.4052608013153076,
+      "mu_unrelated_mean": 0
+    },
+    "mu_clustering": {
+      "mu_n_tokens_per_category": {
+        "content": 236,
+        "digit": 10,
+        "function": 17,
+        "letter": 52,
+        "punct": 185
+      },
+      "mu_silhouette_score": -0.10459307581186295,
+      "mu_calinski_harabasz": 14.202143669128418,
+      "mu_mean_intra_dist": 2.260986089706421,
+      "mu_mean_inter_dist": 2.5144546031951904,
+      "mu_inter_intra_ratio": 1.1121052503585815,
+      "mu_anova_mean_f": 13.405010223388672,
+      "mu_anova_median_f": 8.747466087341309,
+      "mu_anova_geomean_p": 3.779696833294821e-10,
+      "mu_anova_frac_significant": 0.9,
+      "mu_anova_n_dims_tested": 30,
+      "mu_pca_var_3comp": 0.3336024582386017,
+      "mu_pca_n_components_50pct": 7,
+      "mu_pca_n_components_90pct": 23,
+      "mu_pca_n_components_95pct": 26,
+      "mu_pca_total_components": 30
+    },
+    "phi_clustering": {
+      "phi_n_tokens_per_category": {
+        "content": 236,
+        "digit": 10,
+        "function": 17,
+        "letter": 52,
+        "punct": 185
+      },
+      "phi_silhouette_score": 1.551985747028084e-06,
+      "phi_calinski_harabasz": 9.956188201904297,
+      "phi_mean_intra_dist": 3.758328914642334,
+      "phi_mean_inter_dist": 4.182764530181885,
+      "phi_inter_intra_ratio": 1.1129319667816162,
+      "phi_anova_mean_f": 9.134605407714844,
+      "phi_anova_median_f": 7.524127960205078,
+      "phi_anova_geomean_p": 4.51570798531975e-07,
+      "phi_anova_frac_significant": 0.88,
+      "phi_anova_n_dims_tested": 100,
+      "phi_pca_var_3comp": 0.16997016966342926,
+      "phi_pca_n_components_50pct": 19,
+      "phi_pca_n_components_90pct": ">50",
+      "phi_pca_n_components_95pct": ">50",
+      "phi_pca_total_components": 300
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260209_145707\\figures\\gauge_frames_step10000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260209_145707\\figures\\belief_embeddings_step10000.csv"
+  },
+  {
+    "step": 15000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      300
+    ],
+    "gauge_group": "GL(10)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.5519608974456787,
+      "mu_inter_class_dist": 1.7078393638134002,
+      "mu_class_ratio": 1.1004396867371316,
+      "phi_intra_class_dist": 3.7145641962687175,
+      "phi_inter_class_dist": 4.048153548240662,
+      "phi_class_ratio": 1.0898057845674158,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 3.4717657566070557,
+          "phi_dist": 4.590007781982422
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 2.8226006031036377,
+          "phi_dist": 5.77735710144043
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 1.9895665645599365,
+          "phi_dist": 3.0690150260925293
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 3.763530731201172,
+          "phi_dist": 4.177371501922607
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 3.0460798740386963,
+          "phi_dist": 3.5777640342712402
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 2.6071605682373047,
+          "phi_dist": 3.9403812885284424
+        }
+      ],
+      "mu_related_mean": 2.950117349624634,
+      "mu_unrelated_mean": 0
+    },
+    "mu_clustering": {
+      "mu_n_tokens_per_category": {
+        "content": 236,
+        "digit": 10,
+        "function": 17,
+        "letter": 52,
+        "punct": 185
+      },
+      "mu_silhouette_score": -0.06291957199573517,
+      "mu_calinski_harabasz": 17.175798416137695,
+      "mu_mean_intra_dist": 1.8649122714996338,
+      "mu_mean_inter_dist": 2.141972541809082,
+      "mu_inter_intra_ratio": 1.1485648155212402,
+      "mu_anova_mean_f": 16.371227264404297,
+      "mu_anova_median_f": 9.855026245117188,
+      "mu_anova_geomean_p": 3.7189374843538126e-12,
+      "mu_anova_frac_significant": 0.9666666666666667,
+      "mu_anova_n_dims_tested": 30,
+      "mu_pca_var_3comp": 0.35702142119407654,
+      "mu_pca_n_components_50pct": 7,
+      "mu_pca_n_components_90pct": 23,
+      "mu_pca_n_components_95pct": 26,
+      "mu_pca_total_components": 30
+    },
+    "phi_clustering": {
+      "phi_n_tokens_per_category": {
+        "content": 236,
+        "digit": 10,
+        "function": 17,
+        "letter": 52,
+        "punct": 185
+      },
+      "phi_silhouette_score": -0.003780156606808305,
+      "phi_calinski_harabasz": 9.501511573791504,
+      "phi_mean_intra_dist": 3.979510545730591,
+      "phi_mean_inter_dist": 4.423026084899902,
+      "phi_inter_intra_ratio": 1.1114497184753418,
+      "phi_anova_mean_f": 8.766640663146973,
+      "phi_anova_median_f": 7.154330730438232,
+      "phi_anova_geomean_p": 8.498981287630158e-07,
+      "phi_anova_frac_significant": 0.85,
+      "phi_anova_n_dims_tested": 100,
+      "phi_pca_var_3comp": 0.16311614215373993,
+      "phi_pca_n_components_50pct": 21,
+      "phi_pca_n_components_90pct": ">50",
+      "phi_pca_n_components_95pct": ">50",
+      "phi_pca_total_components": 300
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260209_145707\\figures\\gauge_frames_step15000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260209_145707\\figures\\belief_embeddings_step15000.csv"
+  },
+  {
+    "step": 20000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      300
+    ],
+    "gauge_group": "GL(10)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 1.1611681779225667,
+      "mu_inter_class_dist": 1.3935258400440216,
+      "mu_class_ratio": 1.2001068118635179,
+      "phi_intra_class_dist": 3.8059913476308185,
+      "phi_inter_class_dist": 4.112487342357635,
+      "phi_class_ratio": 1.080529871650288,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 2.355314016342163,
+          "phi_dist": 4.513395309448242
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 1.950273871421814,
+          "phi_dist": 5.863353252410889
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 1.617896556854248,
+          "phi_dist": 3.062929153442383
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 2.5359745025634766,
+          "phi_dist": 4.12222957611084
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 1.8444700241088867,
+          "phi_dist": 3.6806952953338623
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 1.765168309211731,
+          "phi_dist": 3.9785070419311523
+        }
+      ],
+      "mu_related_mean": 2.0115162134170532,
+      "mu_unrelated_mean": 0
+    },
+    "mu_clustering": {
+      "mu_n_tokens_per_category": {
+        "content": 236,
+        "digit": 10,
+        "function": 17,
+        "letter": 52,
+        "punct": 185
+      },
+      "mu_silhouette_score": -0.05203968286514282,
+      "mu_calinski_harabasz": 18.985410690307617,
+      "mu_mean_intra_dist": 1.5044727325439453,
+      "mu_mean_inter_dist": 1.7859450578689575,
+      "mu_inter_intra_ratio": 1.1870903968811035,
+      "mu_anova_mean_f": 18.099098205566406,
+      "mu_anova_median_f": 12.131977081298828,
+      "mu_anova_geomean_p": 2.0930407743351837e-13,
+      "mu_anova_frac_significant": 0.9333333333333333,
+      "mu_anova_n_dims_tested": 30,
+      "mu_pca_var_3comp": 0.38850274682044983,
+      "mu_pca_n_components_50pct": 6,
+      "mu_pca_n_components_90pct": 22,
+      "mu_pca_n_components_95pct": 26,
+      "mu_pca_total_components": 30
+    },
+    "phi_clustering": {
+      "phi_n_tokens_per_category": {
+        "content": 236,
+        "digit": 10,
+        "function": 17,
+        "letter": 52,
+        "punct": 185
+      },
+      "phi_silhouette_score": -0.0024893966037780046,
+      "phi_calinski_harabasz": 9.277795791625977,
+      "phi_mean_intra_dist": 4.06126070022583,
+      "phi_mean_inter_dist": 4.504373073577881,
+      "phi_inter_intra_ratio": 1.1091071367263794,
+      "phi_anova_mean_f": 8.604401588439941,
+      "phi_anova_median_f": 6.666654586791992,
+      "phi_anova_geomean_p": 1.1137317414977588e-06,
+      "phi_anova_frac_significant": 0.87,
+      "phi_anova_n_dims_tested": 100,
+      "phi_pca_var_3comp": 0.15827283263206482,
+      "phi_pca_n_components_50pct": 22,
+      "phi_pca_n_components_90pct": ">50",
+      "phi_pca_n_components_95pct": ">50",
+      "phi_pca_total_components": 300
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260209_145707\\figures\\gauge_frames_step20000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260209_145707\\figures\\belief_embeddings_step20000.csv"
+  },
+  {
+    "step": 25000,
+    "mu_shape": [
+      50257,
+      30
+    ],
+    "phi_shape": [
+      50257,
+      300
+    ],
+    "gauge_group": "GL(10)",
+    "token_classes": {
+      "n_letters": 52,
+      "n_digits": 10,
+      "n_punct": 184,
+      "mu_intra_class_dist": 0.9267045299212138,
+      "mu_inter_class_dist": 1.1902982932329178,
+      "mu_class_ratio": 1.2844420792181885,
+      "phi_intra_class_dist": 3.8099212752448186,
+      "phi_inter_class_dist": 4.11065640449524,
+      "phi_class_ratio": 1.078934735792171,
+      "phi_shows_structure": false
+    },
+    "word_pairs": {
+      "pairs": [
+        {
+          "word1": "cat",
+          "word2": "dog",
+          "relation": "related",
+          "mu_dist": 2.015073537826538,
+          "phi_dist": 4.503286838531494
+        },
+        {
+          "word1": "cat",
+          "word2": "the",
+          "relation": "unrelated",
+          "mu_dist": 1.6366273164749146,
+          "phi_dist": 5.889553546905518
+        },
+        {
+          "word1": "man",
+          "word2": "day",
+          "relation": "unrelated",
+          "mu_dist": 1.4380266666412354,
+          "phi_dist": 3.0659618377685547
+        },
+        {
+          "word1": "big",
+          "word2": "new",
+          "relation": "unrelated",
+          "mu_dist": 2.004547119140625,
+          "phi_dist": 4.0894927978515625
+        },
+        {
+          "word1": "run",
+          "word2": "see",
+          "relation": "related",
+          "mu_dist": 1.3497775793075562,
+          "phi_dist": 3.627349853515625
+        },
+        {
+          "word1": "has",
+          "word2": "had",
+          "relation": "related",
+          "mu_dist": 1.3773287534713745,
+          "phi_dist": 3.964604616165161
+        }
+      ],
+      "mu_related_mean": 1.636896828810374,
+      "mu_unrelated_mean": 0
+    },
+    "mu_clustering": {
+      "mu_n_tokens_per_category": {
+        "content": 236,
+        "digit": 10,
+        "function": 17,
+        "letter": 52,
+        "punct": 185
+      },
+      "mu_silhouette_score": -0.0611320436000824,
+      "mu_calinski_harabasz": 19.518625259399414,
+      "mu_mean_intra_dist": 1.354203701019287,
+      "mu_mean_inter_dist": 1.626727819442749,
+      "mu_inter_intra_ratio": 1.2012430429458618,
+      "mu_anova_mean_f": 18.602970123291016,
+      "mu_anova_median_f": 13.344955444335938,
+      "mu_anova_geomean_p": 9.449183785686238e-14,
+      "mu_anova_frac_significant": 0.9666666666666667,
+      "mu_anova_n_dims_tested": 30,
+      "mu_pca_var_3comp": 0.4092435836791992,
+      "mu_pca_n_components_50pct": 5,
+      "mu_pca_n_components_90pct": 21,
+      "mu_pca_n_components_95pct": 25,
+      "mu_pca_total_components": 30
+    },
+    "phi_clustering": {
+      "phi_n_tokens_per_category": {
+        "content": 236,
+        "digit": 10,
+        "function": 17,
+        "letter": 52,
+        "punct": 185
+      },
+      "phi_silhouette_score": -0.0016683624126017094,
+      "phi_calinski_harabasz": 9.228498458862305,
+      "phi_mean_intra_dist": 4.071305274963379,
+      "phi_mean_inter_dist": 4.512704849243164,
+      "phi_inter_intra_ratio": 1.108417272567749,
+      "phi_anova_mean_f": 8.552897453308105,
+      "phi_anova_median_f": 6.5098724365234375,
+      "phi_anova_geomean_p": 1.2171766456958721e-06,
+      "phi_anova_frac_significant": 0.87,
+      "phi_anova_n_dims_tested": 100,
+      "phi_pca_var_3comp": 0.15738090872764587,
+      "phi_pca_n_components_50pct": 22,
+      "phi_pca_n_components_90pct": ">50",
+      "phi_pca_n_components_95pct": ">50",
+      "phi_pca_total_components": 300
+    },
+    "phi_plot_saved": true,
+    "phi_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260209_145707\\figures\\gauge_frames_step25000.csv",
+    "mu_plot_saved": true,
+    "mu_csv_saved": "checkpoints_publication\\ffn_VFE_dynamic\\publication_outputs\\VFE_dynamic_20260209_145707\\figures\\belief_embeddings_step25000.csv"
+  }
+]
