@@ -390,21 +390,11 @@ Under the pushforward $\Omega_* P = \mathcal{N}(\Omega\mu_P, \Omega\Sigma_P\Omeg
 The $(\det\Omega)^2$ factors cancel identically. Since all three components are invariant, $D_{\mathrm{KL}}(\Omega_* P \| \Omega_* Q) = D_{\mathrm{KL}}(P \| Q)$.
 \end{proof}
 
-This invariance has several important implications for our framework:
-
-\begin{enumerate}
-\item \textbf{Maximal gauge symmetry}: The natural gauge group for KL-based attention is $\mathrm{GL}(K)$. 
-
-\item \textbf{Generalization to $f$-divergences}: The proof extends to all $f$-divergences. For any convex function $f$ with $f(1) = 0$:
+This invariance has several important implications for our framework. First, it establishes that the natural gauge group for KL-based attention is the full $\mathrm{GL}(K)$, which is the maximal symmetry group preserving the divergence. Moreover, the proof extends to all $f$-divergences: for any convex function $f$ with $f(1) = 0$,
 \begin{equation}
-D_f(\Omega_* P \| \Omega_* Q) = D_f(P \| Q), \quad \forall\, \Omega \in \mathrm{GL}(K).
+D_f(\Omega_* P \| \Omega_* Q) = D_f(P \| Q), \quad \forall\, \Omega \in \mathrm{GL}(K),
 \end{equation}
-The Jacobian factors $|\det\Omega|$ from the density transformation cancel in the ratio $p(x)/q(x)$.
-
-\item \textbf{Simplified implementation}: Transport operators need only satisfy $\det(\Omega_{ij}) \neq 0$ (invertibility), not $\Omega_{ij}^\top\Omega_{ij} = I$ (orthogonality). This eliminates the need for computationally expensive re-orthogonalization procedures.
-
-\item \textbf{Learned projections as gauge transformations}: As we shall demonstrate, the query and key projection matrices $W_Q, W_K \in \mathrm{GL}(d_k)$ in standard transformers are themselves gauge transformations. The "constant gauge limit" corresponds not to the absence of gauge structure, but to a constant gauge transformation $\Omega = W_Q W_K^\top$ applied uniformly across all token pairs.
-\end{enumerate}
+since the Jacobian factors $|\det\Omega|$ from the density transformation cancel in the ratio $p(x)/q(x)$. From a practical standpoint, this means that transport operators need only satisfy $\det(\Omega_{ij}) \neq 0$ (invertibility), not $\Omega_{ij}^\top\Omega_{ij} = I$ (orthogonality), eliminating the need for computationally expensive re-orthogonalization procedures. Finally, as we shall demonstrate, the query and key projection matrices $W_Q, W_K \in \mathrm{GL}(d_k)$ in standard transformers are themselves gauge transformations. The ``constant gauge limit'' corresponds not to the absence of gauge structure, but to a constant gauge transformation $\Omega = W_Q W_K^\top$ applied uniformly across all token pairs.
 
 The $\mathrm{GL}(K)$ invariance reveals that the attention mechanism respects a form of general covariance: the information-geometric distance between beliefs is independent of the coordinate system (basis) used to represent them. This is the statistical analogue of coordinate independence in differential geometry.
 
