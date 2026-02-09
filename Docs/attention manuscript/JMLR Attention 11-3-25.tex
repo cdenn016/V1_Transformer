@@ -318,14 +318,7 @@ with field strength:
 F^{(i)}_{\mu\nu}(c) = \partial_\mu A^{(i)}_\nu - \partial_\nu A^{(i)}_\mu + [A^{(i)}_\mu, A^{(i)}_\nu].
 \end{equation}
 
-
-\subsubsection{0D Base Manifold}
-
-We consider the case of a 0-dimensional base manifold, in which agents occupy a single point and overlap completely. This is not merely a simplification---it is the natural choice for language. Unlike physical systems where tokens inhabit spatial locations, linguistic tokens lack spatial extent. The relational structure of language lives entirely in the informational relationships \emph{between} tokens (beliefs, uncertainties, frames of reference), not in any underlying spatial geometry. A 0D base manifold with rich fiber structure is thus the mathematically appropriate setting: the content is in the fiber (what agents believe) and the connection (how they communicate), not in the base (where they are). The full theory extends to arbitrary smooth base manifolds for applications where spatial structure is relevant (e.g., spatiotemporal data, vision).
-
-In the 0-dimensional case there exist no gauge connections $A_\mu$ or field strengths $F_{\mu\nu}$. What remains is the algebraic structure of group-valued frame transformations $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ acting on statistical fibers. This algebraic structure already suffices to recover transformer attention (as shown below), and---critically---already provides a fully functional language model when implemented without taking the degenerate limits (Section~\ref{sec:gl30}). The richer differential-geometric content---gauge curvature encoding position-dependent interactions, holonomy capturing path-dependent information transport---is available in the full theory on higher-dimensional base manifolds and represents a direction for future work (see Section~6.3).
-
-
+In the 0-dimensional case, which we consider here, there exist no gauge connections $A_\mu$ or field strengths $F_{\mu\nu}$. What remains is the algebraic structure of group-valued frame transformations $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ acting on statistical fibers. This algebraic structure already suffices to recover transformer attention (as shown below), and already provides a functional language model when implemented without taking the degenerate limits (Section~\ref{sec:gl30}). The richer differential-geometric content is available in the full theory on higher-dimensional base manifolds and represents a direction for future work (see Section~6.3).
 
 
 \subsubsection{Gauge-Aligned Divergence}
