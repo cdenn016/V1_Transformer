@@ -456,139 +456,50 @@ $D_{\mathrm{KL}}$ & Kullback–Leibler divergence & $\mathbb{R}_+\cup\{0\}$ \\
 The full geometric framework admits considerable generalization: path-dependent parallel transport with holonomy effects, non-flat gauge connections exhibiting epistemic monopoles, curved base manifolds such as hyperbolic or spherical latent spaces, heterogeneous fiber structures where $\mathcal{B}_q \neq \mathcal{B}_p$, cross-scale dynamics with meta-agent emergence, curvature-induced phase transitions in multi-agent systems, and pullback geometries via agent sections from informational fibers to the base manifold.
 
 
-\section{Derivation of Generalized Variational Free Energy from a Normalized Generative Model}
-We derive the generalized variational free energy we will utilize from general first principles, showing that both belief alignment (weighted by $\beta_{ij}$) and model alignment (weighted by $\gamma_{ij}$) emerge naturally from a single normalized generative prior with auxiliary agreement variables. This construction justifies the KL-based coupling terms as consequences of gauge-transported Gaussian consistency constraints. In what follows we shall assume all probability distributions are defined at a specific base manifold point $c = c^*$ unless otherwise noted.  We will label the fiber's latent coordinates as $k_i \in \mathcal{B}$ in order to define the necessary integrals
+\section{Gauge-Covariant Variational Free Energy}
+\label{sec:free_energy_section}
 
-\subsection{Setup}
-\subsubsection{Latent Variables and Fiber Geometry}
+We now construct the variational free energy for a multi-agent system coupled by gauge transport. All probability distributions are defined at a specific base manifold point $c = c^*$ unless otherwise noted. We label the fiber's latent coordinates as $k_i \in \mathcal{B}$ in order to define the necessary integrals.
+
+\subsection{Agent State Space}
+
 Each agent $i$ maintains two distinct latent variables living in separate fiber bundles:
-
 \begin{equation}
-k_i \in \mathbb{R}^{d_q} \quad \text{(belief latent in $\mathcal{E}_q$)}, 
+k_i \in \mathbb{R}^{d_q} \quad \text{(belief latent in $\mathcal{E}_q$)},
 \qquad
 m_i \in \mathbb{R}^{d_p} \quad \text{(model latent in $\mathcal{E}_p$)}.
 \label{eq:dual_latents}
 \end{equation}
 
-The full state of agent $i$ at base manifold point $c^*$ is a Gaussian distribution over each latent:
-
+The full state of agent $i$ is a Gaussian distribution over each latent:
 \begin{equation}
 \begin{aligned}
-q_i(k_i) &= \mathcal{N}(k_i\,;\mu_{q,i},\,\Sigma_{q,i}), 
-\quad \mu_{q,i} \in \mathbb{R}^{d_q},\; 
-\Sigma_{q,i} \in \mathbb{R}^{d_q \times d_q}, \; \Sigma_{q,i} \succ 0,\\
-s_i(m_i) &= \mathcal{N}(m_i\,;\mu_{p,i},\,\Sigma_{p,i}), 
-\quad \mu_{p,i} \in \mathbb{R}^{d_p},\; 
-\Sigma_{p,i} \in \mathbb{R}^{d_p \times d_p}, \; \Sigma_{p,i} \succ 0.
+q_i(k_i) &= \mathcal{N}(k_i\,;\mu_{q,i},\,\Sigma_{q,i}),
+\quad \Sigma_{q,i} \succ 0,\\
+s_i(m_i) &= \mathcal{N}(m_i\,;\mu_{p,i},\,\Sigma_{p,i}),
+\quad \Sigma_{p,i} \succ 0.
 \end{aligned}
 \label{eq:gaussian_states}
 \end{equation}
 
-Thus, the fiber at each agent's location $c \in \mathcal{C}$ is the product statistical manifold:
-
-\begin{equation}
-\mathcal{B}(c) = \mathcal{B}_q \times \mathcal{B}_p,
-\label{eq:fiber_product}
-\end{equation}
-
-where
-
-\begin{equation}
-\begin{aligned}
-\mathcal{B}_q &= \left\{
-(\mu_q, \Sigma_q) : 
-\mu_q \in \mathbb{R}^{d_q}, \;
-\Sigma_q \in \mathbb{R}^{d_q \times d_q}, \;
-\Sigma_q \succ 0
-\right\},\\
-\mathcal{B}_p &= \left\{
-(\mu_p, \Sigma_p) : 
-\mu_p \in \mathbb{R}^{d_p}, \;
-\Sigma_p \in \mathbb{R}^{d_p \times d_p}, \;
-\Sigma_p \succ 0
-\right\}.
-\end{aligned}
-\label{eq:statistical_manifolds}
-\end{equation}
-
-\subsection{Base Priors}
 Each latent has an independent Gaussian base prior encoding agent-specific inductive biases:
-
 \begin{equation}
-p_i(k_i) = \mathcal{N}(k_i\,; \mu_{0,i}^{(q)}, \Sigma_{0,i}^{(q)}), 
+p_i(k_i) = \mathcal{N}(k_i\,; \mu_{0,i}^{(q)}, \Sigma_{0,i}^{(q)}),
 \qquad
 r_i(m_i) = \mathcal{N}(m_i\,; \mu_{0,i}^{(p)}, \Sigma_{0,i}^{(p)}).
 \label{eq:base_priors}
 \end{equation}
 
-These priors are \textbf{local}—they live in each agent's own gauge frame and need not be related across agents until transported via $\Omega_{ij}$.
+These priors are \textbf{local}---they live in each agent's own gauge frame and need not be related across agents until transported via the gauge connection.
 
-\subsubsection{Auxiliary Agreement Variables}
-To enforce consistency between agents after gauge transport, we introduce an auxiliary "agreement" variable for each ordered pair $(i,j)$:
+\subsection{Gauge Transport}
 
-\begin{equation}
-z_{ij} \in \mathbb{R}^{d_q} \quad \text{(belief agreement)}, 
-\qquad
-w_{ij} \in \mathbb{R}^{d_p} \quad \text{(model agreement)}.
-\label{eq:agreement_vars}
-\end{equation}
-
-\begin{itemize}
-  \item $z_{ij}$: "What agent $i$ believes agent $j$'s belief looks like, after transporting $j$'s belief into $i$'s gauge frame"
-  \item $w_{ij}$: "What agent $i$ believes agent $j$'s generative model looks like, after gauge transport"
-\end{itemize}
-
-These will be latent mediators that will be integrated out, leaving an effective pairwise coupling between $k_i, k_j$ and $m_i, m_j$.
-
-Agreement variables provide a convenient parameterization of the joint generative model. As shown in Section~\ref{sec:marginal_mrf}, integrating out the auxiliary variables yields a pairwise Markov random field with gauge-covariant potentials and a partition function $Z$. The auxiliary variable representation offers computational advantages for certain inference procedures, though it does not eliminate the partition function.
-
-\subsection{Normalized Joint Generative Model}
-We define the Gaussian couplings and enforce that each agreement variable $z_{ij}$,$w_{ij}$ simultaneously matches:
-
-\begin{enumerate}
-  \item Agent $i$'s own latent $k_i$, $m_i$
-  \item Agent $j$'s latent $k_j$, $m_j$ after gauge transport into agent $i$'s frame
-\end{enumerate}
-
-The auxiliary variable $z_{ij}$ is drawn from the product of Gaussians:
-
-\begin{equation}
-p(z_{ij} \mid k_i, k_j) \propto 
-\mathcal{N}(z_{ij}; k_i, \Lambda_{ij}^{-1}) \cdot 
-\mathcal{N}(z_{ij}; \Omega_{ij}k_j, \Lambda_{ij}^{-1})
-\label{eq:belief_coupling_product}
-\end{equation}
-
-and similarly for model alignment:
-
-\begin{equation}
-p(w_{ij} \mid m_i, m_j) \propto 
-\mathcal{N}(w_{ij}; m_i, \Gamma_{ij}^{-1}) \cdot 
-\mathcal{N}(w_{ij}; \tilde{\Omega}_{ij}m_j, \Gamma_{ij}^{-1})
-\label{eq:model_coupling_product}
-\end{equation}
-
-where:
-
-\begin{itemize}
-  \item $\Lambda_{ij} \in \mathbb{R}^{d_q \times d_q}$, $\Lambda_{ij} \succ 0$: Belief alignment precision
-  \item $\Gamma_{ij} \in \mathbb{R}^{d_p \times d_p}$, $\Gamma_{ij} \succ 0$: Model alignment precision
-  \item $\Omega_{ij} \in \mathrm{GL}(K)$: Gauge transport from agent $j$'s frame to agent $i$'s frame (belief channel)
-  \item $\tilde{\Omega}_{ij} \in \mathrm{GL}(K)$: Gauge transport from agent $j$'s frame to agent $i$'s frame (model channel)
-\end{itemize}
-
-\subsubsection{Gauge Transport as Frame Transformation}
-The gauge transport operators $\Omega_{ij}, \tilde{\Omega}_{ij}$ are not parallel transport along a connection in the usual sense (which would be path-dependent). Instead, they are pointwise gauge frame transformations:
-
+The gauge transport operators $\Omega_{ij}, \tilde{\Omega}_{ij}$ are pointwise gauge frame transformations:
 \begin{equation}
 \Omega_{ij}(c) = e^{\phi_i(c)} \cdot e^{-\phi_j(c)} \in \mathrm{GL}(K),
 \label{eq:gauge_frame_rotation}
 \end{equation}
-
-where $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ is agent $i$'s gauge frame field (a local section of the Lie algebra bundle).
-
-These act on the latent variables as
-
+where $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ is agent $i$'s gauge frame field (a local section of the Lie algebra bundle). These act on the latent variables as
 \begin{equation}
 \begin{aligned}
 \Omega_{ij} k_j
@@ -596,194 +507,16 @@ These act on the latent variables as
 \in \mathbb{R}^{d_q},\\
 \tilde{\Omega}_{ij} m_j
 &:= \rho_p(\tilde{\Omega}_{ij}) \, m_j
-\in \mathbb{R}^{d_p}.
+\in \mathbb{R}^{d_p},
 \end{aligned}
 \label{eq:gauge_action_on_vectors}
 \end{equation}
+mapping agent $j$'s latent into agent $i$'s frame. In the transformer limit, $\Omega_{ij} = \Omega = W_Q W_K^\top$ becomes a constant learned gauge transformation (see Section~\ref{sec:glk_invariance}).
 
-In the transformer limit, $\Omega_{ij} = \Omega = W_Q W_K^\top$ becomes a constant learned gauge transformation (see Section~\ref{sec:wq_wk_gauge}).
-
-\subsubsection{Full Joint Distribution}
-The joint generative model over all latents and auxiliary variables is:
-
-\begin{equation}
-\boxed{
-\begin{aligned}
-p&(\{k_i\},\{m_i\},\{z_{ij}\},\{w_{ij}\})\\
-&=\left[\prod_i p_i(k_i)\,r_i(m_i)\right]\\
-&\quad\times
-\left[\prod_{i,j}
-\mathcal{N}(z_{ij}\,;k_i,\Lambda_{ij}^{-1})
-\,\mathcal{N}(z_{ij}\,;\Omega_{ij}k_j,\Lambda_{ij}^{-1})\right]\\
-&\quad\times
-\left[\prod_{i,j}
-\mathcal{N}(w_{ij}\,;m_i,\Gamma_{ij}^{-1})
-\,\mathcal{N}(w_{ij}\,;\tilde{\Omega}_{ij}m_j,\Gamma_{ij}^{-1})\right].
-\end{aligned}
-}
-\label{eq:joint_distribution}
-\end{equation}
-
-\subsubsection{Marginal Structure and Partition Function}
-\label{sec:marginal_mrf}
-
-The product of two Gaussians in the auxiliary variable $z_{ij}$ yields
-\begin{equation}
-\mathcal{N}(z_{ij};k_i,\Lambda_{ij}^{-1})\,\mathcal{N}(z_{ij};\Omega_{ij}k_j,\Lambda_{ij}^{-1})
-= C_{ij}(k_i,k_j)\;\mathcal{N}\!\left(z_{ij};\tfrac{k_i+\Omega_{ij}k_j}{2},\tfrac{\Lambda_{ij}^{-1}}{2}\right),
-\end{equation}
-where the coupling factor is
-\begin{equation}
-C_{ij}(k_i,k_j) \propto \exp\!\left(-\tfrac{\Lambda_{ij}}{4}\|k_i - \Omega_{ij}k_j\|^2\right).
-\end{equation}
-Integrating out the auxiliary variables, the marginal over primary latents takes the form of a pairwise Markov random field:
-\begin{equation}
-p(\{k_i\},\{m_i\}) = \frac{1}{Z}\prod_i p_i(k_i)\,r_i(m_i)
-\prod_{i,j} \exp\!\left(-\tfrac{\Lambda_{ij}}{4}\|k_i - \Omega_{ij}k_j\|^2\right)
-\exp\!\left(-\tfrac{\Gamma_{ij}}{4}\|m_i - \tilde{\Omega}_{ij}m_j\|^2\right),
-\label{eq:marginal_mrf}
-\end{equation}
-with partition function $Z$. The auxiliary variable representation \eqref{eq:joint_distribution} provides a convenient parameterization, but does not eliminate the partition function. For variational inference, explicit computation of $Z$ is unnecessary: the variational free energy depends only on expectations under the factorized posterior, not on the normalizing constant of the prior.
 \subsection{Variational Free Energy}
-We now form the variational free energy under a mean-field posterior approximation. Assume a factorized posterior
-\begin{equation}
-q(\{k_i\},\{m_i\})=\prod_i q_i(k_i)\,s_i(m_i),
-\label{eq:mean_field_posterior}
-\end{equation}
-with Gaussian factors
-\begin{equation}
-q_i(k_i)=\mathcal{N}(k_i;\mu_{q,i},\Sigma_{q,i}),
-\qquad
-s_i(m_i)=\mathcal{N}(m_i;\mu_{p,i},\Sigma_{p,i}).
-\label{eq:gaussian_factors}
-\end{equation}
-The variational free energy is defined as
-\begin{equation}
-\mathcal{F}
-:=\mathbb{E}_q[\log q(\{k_i\},\{m_i\})]
--\mathbb{E}_q[\log p(\{k_i\},\{m_i\})]
--\mathbb{E}_q[\log p(o\,|\{k_i\},\{m_i\})],
-\label{eq:free_energy_definition}
-\end{equation}
-where $p(o\,|\{k_i\},\{m_i\})$ is the observation likelihood \citep{friston2010free,parr2022active}.
-
-Expanding the first two terms using \eqref{eq:mean_field_posterior} and the marginal prior, and dropping additive constants, we obtain
-\begin{equation}
-\begin{aligned}
-\mathcal{F}
-&=\sum_i D_{\mathrm{KL}}(q_i\,\|\,p_i)
-+\sum_i D_{\mathrm{KL}}(s_i\,\|\,r_i)\\
-&\quad+\frac{1}{4}\sum_{i,j}\mathbb{E}_{q_i q_j}
-\!\big[(k_i-\Omega_{ij}k_j)^\top\Lambda_{ij}(k_i-\Omega_{ij}k_j)
-\big]\\
-&\quad+\frac{1}{4}\sum_{i,j}\mathbb{E}_{s_i s_j}
-\!\big[(m_i-\tilde{\Omega}_{ij}m_j)^\top\Gamma_{ij}(m_i-\tilde{\Omega}_{ij}m_j)
-\big]\\
-&\quad-\mathbb{E}_q[\log p(o\,|\{k_i\},\{m_i\})].
-\end{aligned}
-\label{eq:free_energy_expanded}
-\end{equation}
-The first two lines contain single-agent KL divergences from base priors. The third and fourth lines contain pairwise quadratic forms encoding the agent-agent alignment. The final term is the negative log-likelihood of observations.
-
-\section{Relating The Quadratic Forms to Transported KL Divergences}
-We now show that the pairwise quadratic expectations in \eqref{eq:free_energy_expanded} can be expressed in terms of KL divergences between transported distributions (see appendix for general requirement of the forward KL).
-\subsection{Exact expansion for Gaussian beliefs}
-For independent Gaussians $q_i = \mathcal{N}(\mu_{q,i},\Sigma_{q,i})$ and $q_j = \mathcal{N}(\mu_{q,j},\Sigma_{q,j})$, the expectation of a quadratic form is
-\begin{equation}
-\mathbb{E}_{q_i q_j}[\delta^\top A \delta]
-= \mathrm{tr}\!\big(A\,\mathrm{Cov}(\delta)\big)
-+ \bar{\delta}^\top A \bar{\delta},
-\label{eq:quadratic_expectation_formula}
-\end{equation}
-where $\delta = k_i - \Omega_{ij}k_j$, $\bar{\delta} = \mathbb{E}[\delta] = \mu_{q,i} - \Omega_{ij}\mu_{q,j}$, and
-\begin{equation}
-\mathrm{Cov}(\delta) = \Sigma_{q,i} + \Omega_{ij}\Sigma_{q,j}\Omega_{ij}^\top.
-\label{eq:delta_covariance}
-\end{equation}
-Applying \eqref{eq:quadratic_expectation_formula} with $A = \Lambda_{ij}$:
-\begin{equation}
-\begin{aligned}
-\mathbb{E}_{q_i q_j}
-[(k_i-\Omega_{ij}k_j)^\top\Lambda_{ij}(k_i-\Omega_{ij}k_j)]
-&=\mathrm{tr}\!\big[\Lambda_{ij}(\Sigma_{q,i}+\Omega_{ij}\Sigma_{q,j}\Omega_{ij}^\top)\big]\\
-&\quad+(\mu_{q,i}-\Omega_{ij}\mu_{q,j})^\top
-\Lambda_{ij}
-(\mu_{q,i}-\Omega_{ij}\mu_{q,j}).
-\end{aligned}
-\label{eq:belief_quadratic_expansion}
-\end{equation}
-An identical expansion holds for the model channel with $\Gamma_{ij}$ and $\tilde{\Omega}_{ij}$.
-
-We observe that a natural choice of coupling precisions $\Lambda_{ij}$ and $\Gamma_{ij}$ makes \eqref{eq:belief_quadratic_expansion} proportional to a KL divergence.
-
-Specifically, we define
-\begin{equation}
-\Lambda_{ij}:=\tau^{(q)}_{ij}\,(\Omega_{ij}\Sigma_{q,j}\Omega_{ij}^\top)^{-1},
-\qquad
-\Gamma_{ij}:=\tau^{(p)}_{ij}\,(\tilde{\Omega}_{ij}\Sigma_{p,j}\tilde{\Omega}_{ij}^\top)^{-1},
-\label{eq:precision_choice}
-\end{equation}
-where $\tau^{(q)}_{ij}, \tau^{(p)}_{ij} > 0$ are dimensionless coupling strengths.
-
-\textbf{Remark.} This precision choice is a specific design decision within the framework, not the unique consequence of variational principles alone. Other choices of $\Lambda_{ij}$ (e.g., fixed identity, learned precision, or data-dependent) would yield different alignment functionals. The present choice is motivated by two considerations: (i) it produces a KL-divergence coupling, which is the unique $f$-divergence preserving exponential-family closure (see Appendix~C); and (ii) the resulting attention weights inherit the $\mathrm{GL}(K)$ invariance of the KL divergence (Theorem~\ref{thm:glk_invariance}). Alternative choices would break one or both of these properties.
-
-Recall that the KL divergence between two Gaussians $q_i = \mathcal{N}(\mu_i,\Sigma_i)$ and $\Omega_{ij}q_j = \mathcal{N}(\Omega_{ij}\mu_j, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$ is
-$$
-D_{\mathrm{KL}}(q_i\,\|\,\Omega_{ij}q_j)
-= \frac{1}{2}
-\Big[
-\mathrm{tr}\!\big((\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}\Sigma_i\big)
-- d_q
-$$
-$$
-+ \log \frac{\det(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)}{\det \Sigma_i}
-+ (\mu_i - \Omega_{ij}\mu_j)^\top
-(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}
-(\mu_i - \Omega_{ij}\mu_j)
-\Big].
-\label{eq:kl_full}
-$$
-\paragraph{Alignment-Regime Approximation.}
-When beliefs are approximately aligned (the regime toward which the coupling drives the system at convergence), the covariances satisfy $\Sigma_i \approx \Omega_{ij}\Sigma_j\Omega_{ij}^\top$, and the trace and log-determinant terms approximately cancel. This approximation is self-consistent: the coupling promotes alignment, and the KL form is most accurate in the aligned regime. Early in training, when covariances may be far from aligned, the approximation introduces $O(\|\Delta\Sigma\|)$ errors that decrease as training proceeds.
-
-\textbf{Note:} An alternative derivation that obtains the KL divergence \emph{exactly}---without requiring this alignment-regime approximation---is presented in Section~\ref{sec:mixture_derivation}, where the KL arises directly from a mixture-of-sources generative model rather than from quadratic coupling. The agreement-variable construction here and the mixture-model derivation there are complementary: the former generalizes to dual-fiber (belief + model) alignment, while the latter provides an exact, single-principle path to softmax attention.
-
-In this alignment regime, as shown in the appendix, the quadratic expectation becomes
-\begin{equation}
-\frac{1}{4}\mathbb{E}_{q_i q_j}
-[(k_i-\Omega_{ij}k_j)^\top\Lambda_{ij}(k_i-\Omega_{ij}k_j)]
-\approx
-\frac{\tau^{(q)}_{ij}}{2}\,D_{\mathrm{KL}}(q_i\,\|\,\Omega_{ij}q_j)+\text{const},
-\label{eq:belief_kl_relation}
-\end{equation}
-where the constant absorbs dimension-dependent terms and $O(\|\Delta\|^2)$ covariance mismatch corrections.
-
-Similarly for the model channel:
-\begin{equation}
-\frac{1}{4}\mathbb{E}_{s_i s_j}
-[(m_i-\tilde{\Omega}_{ij}m_j)^\top\Gamma_{ij}(m_i-\tilde{\Omega}_{ij}m_j)]
-\approx
-\frac{\tau^{(p)}_{ij}}{2}\,D_{\mathrm{KL}}(s_i\,\|\,\tilde{\Omega}_{ij}s_j)+\text{const}.
-\label{eq:model_kl_relation}
-\end{equation}
-\subsection{Defining normalized alignment weights}
-To obtain the standard form, we define normalized alignment weights
-\begin{equation}
-\beta_{ij}:=\frac{\tau^{(q)}_{ij}}{2},
-\qquad
-\gamma_{ij}:=\frac{\tau^{(p)}_{ij}}{2}.
-\label{eq:normalized_weights}
-\end{equation}
-These weights have a clear interpretation: $\beta_{ij}$ measures the strength of belief alignment between agents $i$ and $j$, while $\gamma_{ij}$ measures model alignment strength. In the limit $\beta_{ij} \to \infty$ with fixed $\gamma_{ij}$, agents' beliefs are forced to perfect agreement after transport, while their models may still differ. Conversely, $\gamma_{ij} = 0$ decouples model alignment entirely. In all subsequent equations we take $\tau$ to be independent of each agent---a constant global value which we set to 1.
-
-\textbf{Remark: Dual role of $\beta_{ij}$.} In the free energy \eqref{eq:free_energy_final}, the alignment weights $\beta_{ij}$ enter as \emph{coupling strengths}---parameters that weight the pairwise KL terms. However, we will show in Section~\ref{sec:mixture_derivation} that the \emph{optimal} values of $\beta_{ij}$ under variational minimization take a softmax form: $\beta_{ij} = \operatorname{softmax}_j(-D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)/\tau)$. These two roles are consistent: the coupling strengths that minimize the free energy are precisely the softmax attention weights. Henceforth, we use $\beta_{ij}$ to denote these optimal values unless otherwise noted.
-
-
-
-\subsection{Final Form of the Variational Free Energy}
 \label{sec:final_free_energy}
 
-Substituting and absorbing constants we arrive at the main result:
+Given agents with Gaussian beliefs connected by gauge transport, the variational free energy for multi-agent inference takes the form:
 \begin{equation}
 \boxed{
 \begin{aligned}
@@ -798,6 +531,10 @@ Substituting and absorbing constants we arrive at the main result:
 \label{eq:free_energy_final}
 \end{equation}
 
+Each term has a clear information-theoretic role: the belief prior $D_{\mathrm{KL}}(q_i \| p_i)$ regularizes toward local expectations; the model prior $D_{\mathrm{KL}}(s_i \| r_i)$ anchors model beliefs to hyperpriors; the alignment terms penalize disagreement between gauge-transported neighbors; and the observation likelihood couples beliefs to external data. The alignment coupling uses the forward KL divergence, which is the unique $f$-divergence that preserves exponential-family closure under linear coupling and yields a consistent dual interpretation for the attention weights (Appendix~C). The alignment weights $\beta_{ij}$ and $\gamma_{ij}$ are non-negative with $\sum_j \beta_{ij} = 1$; their optimal values take softmax form, as derived in Section~\ref{sec:mixture_derivation}.
+
+An alternative derivation of this free energy via auxiliary agreement variables---which provides additional insight into how the pairwise KL terms emerge from a normalized generative model with Gaussian consistency constraints---is given in Appendix~\ref{app:agreement_variables}.
+
 \subsubsection{Simplified Variational Free Energy}
 In our fiber-matched setting, the variational free energy for agent $i$ becomes (where, in the present study, we consider all agents to share the same generative models):
 \begin{equation}
@@ -805,7 +542,7 @@ In our fiber-matched setting, the variational free energy for agent $i$ becomes 
 \end{equation}
 where both $q_i(c)$ and $p_i(c)$ are points in the same fiber $\mathcal{B}(c)$.
 
-We have shown that the cross-agent alignment term is the forward KL divergence with frame rotation:
+The cross-agent alignment term is the forward KL divergence with frame rotation:
 \begin{equation}
 \mathcal{F}_{\text{align}} = \sum_{i,j} \int_{\mathcal{U}_i \cap \mathcal{U}_j} \chi_{ij}(c) \, \beta_{ij}(c) \, D_{\text{KL}}\left(q_i(c) \,\big\|\, \Omega_{ij}(c) \cdot q_j(c)\right) \, \mathrm{d}c,
 \end{equation}
@@ -2117,7 +1854,7 @@ Claude Sonnet 4.5 was utilized for programming our variational free energy desce
 
 \appendix
 
-\textbf{Note on appendix structure.} Appendix~A reviews standard differential geometry and gauge theory to make the paper self-contained for readers from machine learning backgrounds. Readers familiar with fiber bundles, gauge connections, and curvature may skip directly to Appendix~B (Covariance Dynamics) and Appendix~C (Conditional Uniqueness of Forward KL), which contain results specific to this work.
+\textbf{Note on appendix structure.} Appendix~A reviews standard differential geometry and gauge theory to make the paper self-contained for readers from machine learning backgrounds. Readers familiar with fiber bundles, gauge connections, and curvature may skip directly to Appendix~B (Covariance Dynamics), Appendix~C (Conditional Uniqueness of Forward KL), and Appendix~D (Agreement-Variable Construction), which contain results specific to this work. Appendix~E details the numerical implementation.
 
 \subsection{General Mathematical Framework}
 \subsubsection{Principal Bundle and Associated Bundles}
@@ -2760,9 +2497,99 @@ Reverse or symmetric divergences would violate at least one of these constraints
 
 
 
-% Appendix D (Softmax via Maximum Entropy) removed: the mixture-model derivation
-% in Section~\ref{sec:mixture_derivation} provides a more direct, exact derivation
-% of softmax attention weights from a single variational principle.
+\section{Agreement-Variable Construction of the Variational Free Energy}
+\label{app:agreement_variables}
+
+This appendix provides an alternative derivation of the variational free energy \eqref{eq:free_energy_final} from a normalized generative model with auxiliary agreement variables. This construction shows how the KL-based coupling terms emerge from gauge-transported Gaussian consistency constraints and provides the foundation for the dual-fiber (belief + model) alignment structure. The main text (Section~\ref{sec:free_energy_section}) states the free energy directly; the mixture-model derivation in Section~\ref{sec:mixture_derivation} provides the primary derivation of softmax attention weights.
+
+\subsection{Auxiliary Agreement Variables}
+
+To enforce consistency between agents after gauge transport, we introduce an auxiliary ``agreement'' variable for each ordered pair $(i,j)$:
+\begin{equation}
+z_{ij} \in \mathbb{R}^{d_q} \quad \text{(belief agreement)},
+\qquad
+w_{ij} \in \mathbb{R}^{d_p} \quad \text{(model agreement)}.
+\label{eq:agreement_vars}
+\end{equation}
+Here $z_{ij}$ represents ``what agent $i$ believes agent $j$'s belief looks like, after transporting $j$'s belief into $i$'s gauge frame,'' and similarly $w_{ij}$ for the model channel. These are latent mediators that will be integrated out, leaving an effective pairwise coupling.
+
+\subsection{Joint Generative Model}
+
+The auxiliary variable $z_{ij}$ is drawn from the product of Gaussians:
+\begin{equation}
+p(z_{ij} \mid k_i, k_j) \propto
+\mathcal{N}(z_{ij}; k_i, \Lambda_{ij}^{-1}) \cdot
+\mathcal{N}(z_{ij}; \Omega_{ij}k_j, \Lambda_{ij}^{-1}),
+\label{eq:belief_coupling_product}
+\end{equation}
+and similarly for model alignment:
+\begin{equation}
+p(w_{ij} \mid m_i, m_j) \propto
+\mathcal{N}(w_{ij}; m_i, \Gamma_{ij}^{-1}) \cdot
+\mathcal{N}(w_{ij}; \tilde{\Omega}_{ij}m_j, \Gamma_{ij}^{-1}),
+\label{eq:model_coupling_product}
+\end{equation}
+where $\Lambda_{ij} \succ 0$ and $\Gamma_{ij} \succ 0$ are belief and model alignment precisions, respectively.
+
+The full joint generative model is:
+\begin{equation}
+\begin{aligned}
+p&(\{k_i\},\{m_i\},\{z_{ij}\},\{w_{ij}\})\\
+&=\left[\prod_i p_i(k_i)\,r_i(m_i)\right]
+\times
+\left[\prod_{i,j}
+\mathcal{N}(z_{ij}\,;k_i,\Lambda_{ij}^{-1})
+\,\mathcal{N}(z_{ij}\,;\Omega_{ij}k_j,\Lambda_{ij}^{-1})\right]\\
+&\quad\times
+\left[\prod_{i,j}
+\mathcal{N}(w_{ij}\,;m_i,\Gamma_{ij}^{-1})
+\,\mathcal{N}(w_{ij}\,;\tilde{\Omega}_{ij}m_j,\Gamma_{ij}^{-1})\right].
+\end{aligned}
+\label{eq:joint_distribution}
+\end{equation}
+
+\subsection{Marginal Structure}
+\label{sec:marginal_mrf}
+
+Integrating out the auxiliary variables yields a pairwise Markov random field:
+\begin{equation}
+p(\{k_i\},\{m_i\}) = \frac{1}{Z}\prod_i p_i(k_i)\,r_i(m_i)
+\prod_{i,j} \exp\!\left(-\tfrac{\Lambda_{ij}}{4}\|k_i - \Omega_{ij}k_j\|^2\right)
+\exp\!\left(-\tfrac{\Gamma_{ij}}{4}\|m_i - \tilde{\Omega}_{ij}m_j\|^2\right).
+\label{eq:marginal_mrf}
+\end{equation}
+
+\subsection{Mean-Field Free Energy and Quadratic Forms}
+
+Under a mean-field posterior $q(\{k_i\},\{m_i\})=\prod_i q_i(k_i)\,s_i(m_i)$, the variational free energy expands to:
+\begin{equation}
+\begin{aligned}
+\mathcal{F}
+&=\sum_i D_{\mathrm{KL}}(q_i\,\|\,p_i)
++\sum_i D_{\mathrm{KL}}(s_i\,\|\,r_i)\\
+&\quad+\frac{1}{4}\sum_{i,j}\mathbb{E}_{q_i q_j}
+\!\big[(k_i-\Omega_{ij}k_j)^\top\Lambda_{ij}(k_i-\Omega_{ij}k_j)\big]\\
+&\quad+\frac{1}{4}\sum_{i,j}\mathbb{E}_{s_i s_j}
+\!\big[(m_i-\tilde{\Omega}_{ij}m_j)^\top\Gamma_{ij}(m_i-\tilde{\Omega}_{ij}m_j)\big]
+-\mathbb{E}_q[\log p(o\,|\{k_i\},\{m_i\})].
+\end{aligned}
+\label{eq:free_energy_expanded}
+\end{equation}
+
+\subsection{Relating Quadratic Forms to KL Divergences}
+
+For the precision choice $\Lambda_{ij}:=\tau^{(q)}_{ij}\,(\Omega_{ij}\Sigma_{q,j}\Omega_{ij}^\top)^{-1}$ (and analogously for $\Gamma_{ij}$), and under the alignment-regime approximation where $\Sigma_i \approx \Omega_{ij}\Sigma_j\Omega_{ij}^\top$, the quadratic expectations reduce to:
+\begin{equation}
+\frac{1}{4}\mathbb{E}_{q_i q_j}
+[(k_i-\Omega_{ij}k_j)^\top\Lambda_{ij}(k_i-\Omega_{ij}k_j)]
+\approx
+\frac{\tau^{(q)}_{ij}}{2}\,D_{\mathrm{KL}}(q_i\,\|\,\Omega_{ij}q_j)+\text{const}.
+\label{eq:belief_kl_relation}
+\end{equation}
+
+Defining normalized alignment weights $\beta_{ij}:=\tau^{(q)}_{ij}/2$ and $\gamma_{ij}:=\tau^{(p)}_{ij}/2$, and substituting, we recover the variational free energy \eqref{eq:free_energy_final} of the main text.
+
+\textbf{Remark.} The precision choice and alignment-regime approximation are specific to this derivation path. The mixture-model derivation (Section~\ref{sec:mixture_derivation}) obtains the same KL-based coupling \emph{exactly}, without these assumptions, by formulating attention as variational inference over a mixture of gauge-transported sources.
 
 
 \section{Variational Gradient Descent: Implementation and Numerical Methods}
