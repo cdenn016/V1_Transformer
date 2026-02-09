@@ -211,20 +211,23 @@ SEED = 6
 VFE_EM_CONFIG = {
     # Model architecture
     'vocab_size': 50257,          # Will be overridden by tokenizer
-    'embed_dim': 100,              # Embedding dimension K
+    'embed_dim': 30,              # Embedding dimension K
     'n_layers': 1,                # Transformer depth
     'hidden_dim': 508,            # Only used if ffn_mode='learned'
-    'max_seq_len': 128,           # Context length N
+    'max_seq_len': 64,            # Context length N
+
+    'learnable_alpha': True,
+
 
     # Training
-    'batch_size': 2,
+    'batch_size': 64,
     'use_amp': False,             # FP32 for precision
     'num_workers': 6,
     'epochs': None,               # Set to 1-3 for WikiText-2, None for WikiText-103 (use max_steps)
-    'max_steps': 200000,          # ~0.5 epochs on WikiText-103
-    'warmup_steps': 50,
+    'max_steps': 25000,          # ~0.5 epochs on WikiText-103
+    'warmup_steps': 100,
 
-    # VFE transformer settings 
+    # VFE transformer settings
     'ffn_mode': 'VFE_dynamic',    # VFE EM-step dynamics
     'mask_self_attention': True,  # Prevent attention collapse
     'tie_embeddings': False,
@@ -232,12 +235,10 @@ VFE_EM_CONFIG = {
     # Gauge geometry
     'evolve_sigma': True,         # Learn covariances Σ
     'evolve_phi': True,           # Learn gauge frames φ (M-step, via backprop)
-    'evolve_phi_e_step': False,   # Update φ during E-step iterations (dynamical gauge frames)
+    'evolve_phi_e_step': True,    # Update φ during E-step iterations (dynamical gauge frames)
                                   # When True: φ evolves via ∂F/∂φ at each VFE iteration
                                   # When False: φ only updated via backprop (M-step)
-    'diagonal_covariance': True,  # O(N²×K) memory instead of O(N²×K²)
-
-    # NO position encoding (principled - let it emerge!)
+    'diagonal_covariance': True,
     'use_positional_embedding': False,
     'pos_encoding_mode': 'none',
     'use_identity_transport': False,
@@ -260,10 +261,10 @@ VFE_EM_CONFIG = {
     'ffn_chunk_size': 64,
 
     # Learning rates
-    'mu_lr':     0.01,
-    'sigma_lr':  0.0025,
-    'phi_lr':    0.0025,
-    'ffn_lr':    0.01 ,
+    'mu_lr':     0.05,
+    'sigma_lr':  0.005,
+    'phi_lr':    0.005,
+    'ffn_lr':    0.05 ,
 
     # Free energy weights
     'alpha':        1,                   # Self-consistency
@@ -275,48 +276,29 @@ VFE_EM_CONFIG = {
     'weight_decay': 0.01,
     'dropout':      0.1,
     'grad_clip':    1.0,
-    
+
     'use_layernorm': True,      # Critical!
     'use_residual':  True,       # Gradient flow
-    'use_dropout':   True,        
+    'use_dropout':   True,
 
-    # Logging
     'log_interval': 50,
     'eval_interval': 500,
-    'checkpoint_interval': 5000,
-    'semantic_analysis_interval': 500,
+    'checkpoint_interval': 10000,
+    'semantic_analysis_interval': 5000,
     'patience': 5,
 
-    # =================================================================
-    # GAUGE GROUP SELECTION (Generators from so(N), Transport in GL(K))
-    # =================================================================
-    # NOTE: The VFE is invariant under GL(K), not just SO(K)!
-    # We use so(N) generators to parameterize φ, but transport operators
-    # Ω = exp(φ·G) live in GL(K). No orthogonality constraint is needed.
-    #
-    # SO3: so(3) generators with 3 parameters (rotation-only subalgebra)
-    #      Requires embed_dim = sum(mult * dim) for irrep_spec or odd embed_dim
-    # SON: so(N) generators with N(N-1)/2 parameters
-    #      Supports multiple irrep types for representational diversity:
-    #        - 'scalar': dim = 1              (gauge-invariant)
-    #        - 'fund':   dim = N              (fundamental/vector)
-    #        - 'wedge2': dim = N*(N-1)/2      (antisymmetric 2-tensor ∧²V)
-    #        - 'sym2':   dim = N*(N+1)/2 - 1  (symmetric traceless Sym²₀V)
-    #
-    #      Different irreps have different Casimir eigenvalues:
-    #        fund ~1.0x, wedge2 ~1.5x, sym2 ~2.5x
-    #      This provides genuine transformation diversity (like SO(3) spin-ℓ)
-    # =================================================================
-    'gauge_group': 'SON',  # 'SO3', 'SON', or 'GLK'
-    'gauge_dim': 5,        # N for SO(N) - only used when gauge_group='SON'
-    'gauge_mode': 'learned',  # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j)
-                              # 'trivial': global frame, φ = 0, Ω = I (standard attention limit)
-    'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
-    'enforce_orthogonal': True,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
-                                 # Set False for GL(K) (faster, still gauge-invariant)
 
-    # P-FLOW: EMA update of token embeddings toward successful beliefs
-    # This is the key learning mechanism from fep_transformer.py
+
+    'gauge_group': 'GLK',
+    'gauge_dim': 10,
+    'gauge_mode': 'learned',
+
+
+    'use_multi_irrep': True,
+    'enforce_orthogonal': False,
+
+
+
     'use_p_flow': False,           # Enable P-flow updates on token embeddings
     'p_flow_ema_decay': 0.99,     # EMA decay (higher = slower update, 0.99 = 1% per step)
 
@@ -332,31 +314,14 @@ VFE_EM_CONFIG = {
     #   [('scalar', 10, 1), ('fund', 8, 5), ('wedge2', 4, 10), ('sym2', 3, 14)]
     #   = 10 + 40 + 40 + 42 = 132
     'irrep_spec': [
-      # ('ℓ0', 50, 1),   # 75 dimensions (scalars)
-      # ('ℓ1', 1, 3),   # 90 dimensions (vectors)
-      # ('ℓ2', 2, 5),   # 90 dimensions (rank-2 tensors)
-     #  ('ℓ3', 1, 7),
-      # ('ℓ4', 1, 9),
-      #('ℓ5', 9, 11),
-     # ('ℓ6', 1, 13),
-     # ('ℓ7', 1, 15),
-      # ('ℓ50', 1, 101),
-      ('fund', 20, 5)  #For SO(8)
-     # ('fund', 10, 5),   # SO(5)
-     # SO(5) multi-irrep example:
-     # ('scalar', 10, 1),   # 10 dims (invariant)
-     # ('fund', 8, 5),      # 40 dims (vector)
-     # ('wedge2', 4, 10),   # 40 dims (∧² - angular momentum)
-     # ('sym2', 3, 14),     # 42 dims (Sym²₀ - quadrupolar)
+
+      ('fund', 3, 10)  #For SO(8)
+
     ],
-    # Attention
-    'attention_pattern': 'full',
-    'attention_window': 128,
+
     'pos_encoding_scale': 0.3,
     'use_prior_bank': True,
 
-    
-   
 }
 
 
