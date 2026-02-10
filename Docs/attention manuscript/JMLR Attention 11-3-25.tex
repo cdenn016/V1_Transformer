@@ -707,15 +707,15 @@ The $\alpha_i$ in \eqref{eq:state_dependent_alpha} depends on the full KL diverg
 
 In our experiments we study both $R(\alpha_i) \neq 0$ and $R(\alpha_i) = 0$ with $\alpha_i = \alpha = 1$.
 
-\subsubsection{Multi-Timescale Dynamics}
+\subsection{Multi-Timescale Dynamics}
 
-As we noted above, the free energy naturally exhibits time-scale separation as a feature\citep{boettcher2012renormalization}:
+The free energy naturally exhibits time-scale separation~\citep{boettcher2012renormalization}. The belief terms ($q_i$) and the model terms ($s_i$) decouple into fast and slow subsystems (where we omit the base space integrals for convenience).
 
-In our present work, we only consider the fast subsystem of beliefs (where we omit the base space integrals for convenience):
+\textbf{Fast subsystem (belief inference):}
 
 \begin{equation}
-\mathcal{F}_{\text{fast}}[\{q_i\}] = 
-\sum_i D_{\mathrm{KL}}(q_i \| p_i) 
+\mathcal{F}_{\text{fast}}[\{q_i\}] =
+\sum_i D_{\mathrm{KL}}(q_i \| p_i)
 + \sum_{i,j} \beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)
 - \mathbb{E}_q[\log p(o \mid \{k_i\}, \{m_i\})]
 \label{eq:fast_subsystem}
@@ -730,11 +730,11 @@ This is minimized by gradient descent on $\{q_i\}$ while holding $\{s_i\}$ fixed
 
 with learning rate $\eta_q \sim \mathcal{O}(1)$ (fast).
 
-\textbf{Slow subsystem (model learning)}:
+\textbf{Slow subsystem (model learning):}
 
 \begin{equation}
-\mathcal{F}_{\text{slow}}[\{s_i\}] = 
-\sum_i D_{\mathrm{KL}}(s_i \| r_i) 
+\mathcal{F}_{\text{slow}}[\{s_i\}] =
+\sum_i D_{\mathrm{KL}}(s_i \| r_i)
 + \sum_{i,j} \gamma_{ij} D_{\mathrm{KL}}(s_i \| \tilde{\Omega}_{ij} s_j)
 \label{eq:slow_subsystem}
 \end{equation}
@@ -750,7 +750,7 @@ with learning rate $\eta_s \ll \eta_q$ (slow).
 
 This time-scale separation enables learning: agents rapidly adapt beliefs $q_i$ to new observations while slowly refining models $s_i$ to capture long-term structure in a coordinated manner.
 
-\subsubsection{Meta-Agent Emergence and Cross-Scale Coupling}
+\subsection{Meta-Agent Emergence and Cross-Scale Coupling}
 
 The hierarchical structure naturally supports the emergence of meta-agents \citep{shen2008coarse}. These are coarse-grained entities that are formed when groups of agents reach belief consensus.
 
@@ -785,21 +785,15 @@ At each scale, the effective free energy takes the same form as Eq.~\eqref{eq:fr
 and effective gauge frames given by $\phi_{\mathcal{M}}^{(\zeta+1)} = \text{average}(\{\phi_i^{(\zeta)}\})$.
 This is the gauge-theoretic analogue of renormalization group flow in statistical field theory \citep{anderson1984basic,wilson1974renormalization,garciaMillan2024network}. Cross-scale couplings $\Lambda^{\zeta}_{\zeta'}$ (Appendix) mediate interactions between agents at different hierarchical levels.
 
-In the present work, we restrict to single-scale dynamics whereby all agents are at scale $\zeta=0$ with no cross-scale couplings ($\Lambda^{\zeta}_{\zeta'} = 0$ for $\zeta \neq \zeta'$). We focus exclusively on the fast subsystem (Eq.~\ref{eq:fast_subsystem}
-), studying how beliefs $\{q_i\}$ evolve under alignment while holding models $\{s_i\}$ fixed.
+In the present work, we restrict to single-scale dynamics whereby all agents are at scale $\zeta=0$ with no cross-scale couplings ($\Lambda^{\zeta}_{\zeta'} = 0$ for $\zeta \neq \zeta'$). We focus exclusively on the fast subsystem (Eq.~\ref{eq:fast_subsystem}), studying how beliefs $\{q_i\}$ evolve under alignment while holding models $\{s_i\}$ fixed. We posit that standard transformers operate entirely in this fast subsystem: they perform inference ($q_i$ updates) with frozen models ($s_i$ fixed during a forward pass).
 
-
-We posit that standard transformers operate entirely in the fast subsystem. They perform inference ($q_i$ updates) with frozen models ($s_i$ fixed during a forward pass). 
-
-
-
-\subsubsection{Symmetry Breaking}
+\subsection{Symmetry Breaking}
 \label{sec:symmetry_breaking}
 In the absence of observations ($p(o|\cdot) = \text{const}$), the free energy \eqref{eq:free_energy_final} is invariant under the gauge group $G$ (which is $\mathrm{GL}(K)$ in general, or a compact subgroup such as $\mathrm{SO}(K)$). The vacuum state corresponds to perfect alignment: $q_i = \Omega_{ij}q_j$ and $p_i = \tilde{\Omega}_{ij}p_j$ for all agent pairs $(i,j)$, meaning all agents maintain gauge-equivalent beliefs that differ only by frame transformations. In this regime, the dynamics drive the system toward a degenerate manifold of ground states parameterized by the gauge orbit. Agents synchronize over gradient descent towards $\|\mu_i(c)\| = \mu^*$, but the absolute orientations remain arbitrary. This degeneracy of the vacuum is analogous to spontaneous symmetry breaking in field theory \citep{weinberg1995quantum,goldstone1962field}: the free energy is gauge-invariant, but any particular ground state selects a definite orientation, breaking the continuous symmetry.
 
 Observations destroy this degeneracy by coupling agents to external data through the likelihood terms. Each agent's sensory stream $o_i$ acts as an external field that selects a preferred orientation in its fiber, pinning $q_i$ to a definite point. Strictly speaking, this is explicit symmetry breaking (the observation term is not gauge-invariant) rather than the spontaneous mechanism of Goldstone's theorem. The system transitions from the symmetric vacuum to a symmetry-broken phase where agents develop distinct specializations: $\|\mu_i(c)\| \neq \|\mu_j(c)\|$ with the diversity driven by observations/data. The frame transformations $\Omega_{ij}$ then encode how these specialized representations relate geometrically. This observation-induced symmetry breaking is what enables non-trivial multi-agent coordination: agents must now actively maintain geometric relationships between their specialized frames rather than simply coexisting in a gauge symmetric configuration. Whether the vacuum manifold supports Goldstone-like zero modes (corresponding to broken gauge generators) is a question amenable to Hessian spectral analysis, which we leave to future work.
 
-\subsubsection{Summary}
+\subsection{Summary}
 
 The gauge-covariant variational free energy \eqref{eq:free_energy_final} has been derived from two principles: (i) the standard free energy principle for single agents (prior regularization + observation likelihood), and (ii) the mixture-of-sources model for inter-agent communication (KL-based alignment with softmax attention weights). Both $\beta$-weighted belief alignment and $\gamma$-weighted model alignment arise from variational inference over gauge-transported source mixtures. The forward KL divergence $D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ emerges exactly as the alignment energy from the mixture generative model, and the softmax form of attention weights $\beta_{ij} = \operatorname{softmax}(-E_{ij}/\tau)$ follows from Lagrange minimization of the alignment free energy. Non-uniform attention priors $\pi_k$ provide a principled mechanism for causal masking, positional biases, and learned attention priors. The self-coupling weight $\alpha_i$ can be derived as a state-dependent precision through variational optimization with a log-barrier regularizer (Section~\ref{sec:state_dependent_precision}), with the fixed-$\alpha$ case recovered as a degenerate limit.
 
@@ -809,7 +803,7 @@ Multi-agent communication within a gauge-covariant formulation allows the FEP to
 
 In this section we demonstrate that standard transformer self-attention and backpropagation emerge as limiting cases of our gauge-theoretic framework. This establishes neural network training not as an ad-hoc optimization procedure, but as the deterministic limit of a first-principles information-geometric minimization process over a gauge bundle geometry.
 
-\subsubsection{Gradient Structure and Gating}
+\subsection{Gradient Structure and Gating}
 
 The gradient of the modified free energy with respect to $\mu_{q,i}$ acquires the form:
 \begin{equation}
@@ -833,7 +827,7 @@ The resulting belief dynamics take the form of a \emph{gated residual update}:
 \end{equation}
 When $\alpha_i$ is large, the prior term dominates and the belief remains anchored to $\mu_{p,i}$---the ``gate is closed.'' When $\alpha_i$ is small, the alignment and observation terms dominate and the belief is free to be reshaped by context---the ``gate is open.'' This is the variational analog of the gating mechanisms in Highway Networks \citep{srivastava2015highway} and LSTM cells \citep{hochreiter1997long}, derived here from first principles rather than introduced as architectural choices.
 
-\subsubsection{Degenerate Limit: Recovering Fixed Residual Connections}
+\subsection{Degenerate Limit: Recovering Fixed Residual Connections}
 \label{sec:precision_degenerate}
 
 In the limit where the regularizer dominates ($b_0 \to \infty$ with $c_0/b_0 = \alpha$ held fixed), the denominator $b_0 + D_{\mathrm{KL}}$ is dominated by $b_0$ for any finite KL divergence:
@@ -860,9 +854,6 @@ $\alpha_i = c_0/(b_0 + D_{\mathrm{KL}})$ & $b_0 \to \infty$ & Fixed residual con
 $\Sigma_{q,i}$ dynamics & $\Sigma \to \sigma^2 I$ & Layer normalization \\
 \end{tabular}
 \end{center}
-
-
-
 
 
 \subsection{Setup: Agents as Gaussian Beliefs in Local Frames}
