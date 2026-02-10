@@ -339,7 +339,7 @@ This divergence forms the basis of our attention mechanism.
 \subsubsection{$\mathrm{GL}(K)$ Gauge Invariance of KL Divergence}
 \label{sec:glk_invariance}
 
-A crucial observation underlying our framework is that the Kullback-Leibler divergence possesses a maximal gauge symmetry: it is invariant under the full general linear group $\mathrm{GL}(K)$, not merely orthogonal subgroups. This is a standard result in information geometry (see, e.g., \citet{amari2016information}), but its implications for transformer attention have not been previously recognized. We state it here for completeness.
+A key observation underlying our framework is that the Kullback-Leibler divergence possesses a maximal gauge symmetry: it is invariant under the full general linear group $\mathrm{GL}(K)$. This is a standard result in information geometry (see, e.g., \citet{amari2016information}), but its implications for transformer attention have not been previously recognized. We state it here for completeness.
 
 \begin{theorem}[$\mathrm{GL}(K)$ Gauge Invariance]
 \label{thm:glk_invariance}
@@ -378,13 +378,14 @@ Under the pushforward $\Omega_* P = \mathcal{N}(\Omega\mu_P, \Omega\Sigma_P\Omeg
 The $(\det\Omega)^2$ factors cancel identically. Since all three components are invariant, $D_{\mathrm{KL}}(\Omega_* P \| \Omega_* Q) = D_{\mathrm{KL}}(P \| Q)$.
 \end{proof}
 
-This invariance has several important implications for our framework. First, it establishes that the natural gauge group for KL-based attention is the full $\mathrm{GL}(K)$, which is the maximal symmetry group preserving the divergence. Moreover, the proof extends to all $f$-divergences: for any convex function $f$ with $f(1) = 0$,
+Importantly, the proof extends to all $f$-divergences: for any convex function $f$ with $f(1) = 0$,
+
 \begin{equation}
 D_f(\Omega_* P \| \Omega_* Q) = D_f(P \| Q), \quad \forall\, \Omega \in \mathrm{GL}(K),
 \end{equation}
-since the Jacobian factors $|\det\Omega|$ from the density transformation cancel in the ratio $p(x)/q(x)$. From a practical standpoint, this means that transport operators need only satisfy $\det(\Omega_{ij}) \neq 0$ (invertibility), not $\Omega_{ij}^\top\Omega_{ij} = I$ (orthogonality), eliminating the need for computationally expensive re-orthogonalization procedures. Finally, as we shall demonstrate, the query and key projection matrices $W_Q, W_K \in \mathrm{GL}(d_k)$ in standard transformers are themselves gauge transformations. The ``constant gauge limit'' corresponds not to the absence of gauge structure, but to a constant gauge transformation $\Omega = W_Q W_K^\top$ applied uniformly across all token pairs.
 
-The $\mathrm{GL}(K)$ invariance reveals that the attention mechanism respects a form of general covariance: the information-geometric distance between beliefs is independent of the coordinate system (basis) used to represent them. This is the statistical analogue of coordinate independence in differential geometry.
+since the Jacobian factors $|\det\Omega|$ from the density transformation cancel in the ratio $p(x)/q(x)$. From a practical standpoint, this means that transport operators need only satisfy $\det(\Omega_{ij}) \neq 0$ (invertibility). Finally, as we shall demonstrate, the query and key projection matrices $W_Q, W_K \in \mathrm{GL}(d_k)$ in standard transformers are themselves gauge transformations. The constant gauge limit corresponds not to the absence of gauge structure, but to a constant gauge transformation $\Omega = W_Q W_K^\top$ applied uniformly across all token pairs.
+
 
 \begin{table}[h]
 \centering
@@ -409,8 +410,8 @@ $\tilde{\phi}_i$ & Gauge parameter (model frame) & $\mathfrak{g}\!\cong\!\mathbb
 
 \\
 \multicolumn{3}{l}{\textit{Bundle Morphisms}} \\
-$\Phi_i$ & Morphism $Q_i \to P_i$ & $\mathbb{R}^{K_p\times K_q}$ \\
-$\tilde{\Phi}_i$ & Morphism $P_i \to Q_i$ & $\mathbb{R}^{K_q\times K_p}$ \\
+$\Phi_i$ & Morphism $\mathcal{B}_{q_i} \to \mathcal{B}_{p_i}$ & $\mathbb{R}^{K_p\times K_q}$ \\
+$\tilde{\Phi}_i$ & Morphism $\mathcal{B}_{p_i} \to \mathcal{B}_{q_i}$ & $\mathbb{R}^{K_q\times K_p}$ \\
 \\
 \multicolumn{3}{l}{\textit{Statistical Parameters}} \\
 $q_i(k_i)$ & Belief distribution & $\mathcal{N}(\mu_{q,i},\Sigma_{q,i})$ \\
@@ -432,9 +433,6 @@ $D_{\mathrm{KL}}$ & Kullback–Leibler divergence & $\mathbb{R}_+\cup\{0\}$ \\
 
 
 
-The full geometric framework admits considerable generalization: path-dependent parallel transport with holonomy effects, non-flat gauge connections exhibiting epistemic monopoles, curved base manifolds such as hyperbolic or spherical latent spaces, heterogeneous fiber structures where $\mathcal{B}_q \neq \mathcal{B}_p$, cross-scale dynamics with meta-agent emergence, curvature-induced phase transitions in multi-agent systems, and pullback geometries via agent sections from informational fibers to the base manifold.
-
-
 \section{Gauge-Covariant Variational Free Energy}
 \label{sec:free_energy_section}
 
@@ -443,14 +441,16 @@ We now construct the variational free energy for a multi-agent system coupled by
 \subsection{Agent State Space}
 
 Each agent $i$ maintains two distinct latent variables living in separate fiber bundles:
+
 \begin{equation}
-k_i \in \mathbb{R}^{d_q} \quad \text{(belief latent in $\mathcal{E}_q$)},
+k_i \in \mathbb{R}^{K_q} \quad \text{(belief latent in $\mathcal{E}_q$)},
 \qquad
-m_i \in \mathbb{R}^{d_p} \quad \text{(model latent in $\mathcal{E}_p$)}.
+m_i \in \mathbb{R}^{K_p} \quad \text{(model latent in $\mathcal{E}_p$)}.
 \label{eq:dual_latents}
 \end{equation}
 
-The full state of agent $i$ is a Gaussian distribution over each latent:
+The full state of agent $i$ is taken to be a multi-variate Gaussian (MVG) distribution over each latent:
+
 \begin{equation}
 \begin{aligned}
 q_i(k_i) &= \mathcal{N}(k_i\,;\mu_{q,i},\,\Sigma_{q,i}),
@@ -469,28 +469,31 @@ r_i(m_i) = \mathcal{N}(m_i\,; \mu_{0,i}^{(p)}, \Sigma_{0,i}^{(p)}).
 \label{eq:base_priors}
 \end{equation}
 
-These priors are \textbf{local}---they live in each agent's own gauge frame and need not be related across agents until transported via the gauge connection.
+These priors are local in that they live within each agent's own gauge frame and need not be related across agents until transported via the gauge connection.
 
 \subsection{Gauge Transport}
 
 The gauge transport operators $\Omega_{ij}, \tilde{\Omega}_{ij}$ are pointwise gauge frame transformations:
+
 \begin{equation}
 \Omega_{ij}(c) = e^{\phi_i(c)} \cdot e^{-\phi_j(c)} \in \mathrm{GL}(K),
 \label{eq:gauge_frame_rotation}
 \end{equation}
+
 where $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ is agent $i$'s gauge frame field (a local section of the Lie algebra bundle). These act on the latent variables as
+
 \begin{equation}
 \begin{aligned}
 \Omega_{ij} k_j
 &:= \rho_q(\Omega_{ij}) \, k_j
-\in \mathbb{R}^{d_q},\\
+\in \mathbb{R}^{K_q},\\
 \tilde{\Omega}_{ij} m_j
 &:= \rho_p(\tilde{\Omega}_{ij}) \, m_j
-\in \mathbb{R}^{d_p},
+\in \mathbb{R}^{K_p},
 \end{aligned}
 \label{eq:gauge_action_on_vectors}
 \end{equation}
-mapping agent $j$'s latent into agent $i$'s frame. In the transformer limit, $\Omega_{ij} = \Omega = W_Q W_K^\top$ becomes a constant learned gauge transformation (see Section~\ref{sec:glk_invariance}).
+mapping agent $j$'s latent into agent $i$'s frame. 
 
 \subsection{Single-Agent Free Energy Principle}
 
@@ -505,86 +508,98 @@ The first term regularizes beliefs toward the prior; the second couples beliefs 
 \subsection{Deriving Attention from a Mixture-of-Sources Model}
 \label{sec:mixture_derivation}
 
-We now derive the inter-agent alignment terms and their softmax attention weights from first principles, by formulating each agent's inference as source selection over gauge-transported neighbors.
+We now derive the agent-agent interaction terms and their softmax attention weights from first principles, by formulating each agent's inference as source selection over their gauge-transported neighbors.
 
 \subsubsection{Mixture-of-Sources Generative Model}
 
-Agent $i$ (the ``query'') seeks to update its belief $q_i(k)$ by attending to a set of source agents $j$ (the ``keys/values''). Agent $i$'s generative model assumes its latent state $k$ was drawn from one of the neighboring agents, selected by a categorical latent variable $z \in \{1, \ldots, N\}$:
+Agent $i$ (the query) seeks to update its belief $q_i(k)$ by attending to a set of source agents $j$ (the keys). Agent $i$'s generative model assumes its latent state $k$ was drawn from one of the neighboring agents, selected by a categorical latent variable $z \in \{1, \ldots, N\}$:
+
 \begin{equation}
 P(k, z) = P(k \mid z)\, P(z),
 \label{eq:mixture_joint}
 \end{equation}
-where $P(z = j) = \pi_j$ is the prior probability of attending to agent $j$ (the \emph{attention prior}), and $P(k \mid z = j) = \mathcal{N}(k;\, \Omega_{ij}\mu_j,\, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$ is agent $j$'s belief transported into agent $i$'s gauge frame via $\Omega_{ij}$.
 
-This construction is the unique generative model consistent with the gauge structure: agent $j$'s belief $q_j$ lives in $j$'s local frame, and $\Omega_{ij}q_j$ is the canonical representation of ``what $j$ believes, as seen by $i$.'' The categorical variable $z$ endows the model with the probabilistic semantics of source selection: attention \emph{is} posterior inference over which neighbor generated agent $i$'s state.
+where $P(z = j) = \pi_j$ is the prior probability of attending to agent $j$ (the attention prior), and $P(k \mid z = j) = \mathcal{N}(k;\, \Omega_{ij}\mu_j,\, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$ is agent $j$'s belief transported into agent $i$'s gauge frame via $\Omega_{ij}$.
+
+This construction is the generative model consistent with the gauge structure: agent $j$'s belief $q_j(k_j)$ lives in $j$'s local frame, and $\Omega_{ij}q_j(k_j)$ is agent $i$'s representation of "what agent $j$ believes, as seen by agent $i$." The categorical variable $z$ endows the model with probabilistic source selection whereby attention is posterior inference over which neighbor generated agent $i$'s state. 
 
 \subsubsection{Variational Posterior}
 
-We approximate the true posterior $P(k, z \mid \text{data})$ using a mean-field factorization:
+Next we approximate the true posterior $P(k, z \mid \text{data})$ using a mean-field factorization:
+
 \begin{equation}
 Q(k, z) = q_i(k) \cdot \beta(z),
 \label{eq:mixture_posterior}
 \end{equation}
-where $q_i(k) = \mathcal{N}(k;\, \mu_i, \Sigma_i)$ is agent $i$'s belief (held fixed for the attention computation) and $\beta(z = j) \equiv \beta_{ij} \geq 0$ are variational attention weights satisfying $\sum_j \beta_{ij} = 1$.
+
+where $\beta(z = j) \equiv \beta_{ij} \geq 0$ are variational attention weights satisfying $\sum_j \beta_{ij} = 1$.
 
 \subsubsection{Alignment Free Energy}
 
 The free energy for the alignment component is the KL divergence between the variational posterior and the generative model:
+
 \begin{equation}
 \mathcal{F}_{\text{align}} = D_{\mathrm{KL}}[Q(k,z) \| P(k,z)] = \sum_j \beta_{ij} \int dk\, q_i(k) \log \frac{q_i(k)\, \beta_{ij}}{P(k \mid z{=}j)\, \pi_j}.
 \end{equation}
 
 Decomposing the logarithm:
+
 \begin{equation}
 \mathcal{F}_{\text{align}} = \sum_j \beta_{ij} \left[ \underbrace{\int dk\, q_i(k) \log \frac{q_i(k)}{P(k \mid z{=}j)}}_{= \, D_{\mathrm{KL}}[q_i \,\|\, \Omega_{ij} q_j]} + \log \beta_{ij} - \log \pi_j \right].
 \label{eq:mixture_free_energy}
 \end{equation}
 
-The identification of the integral with $D_{\mathrm{KL}}[q_i \| \Omega_{ij} q_j]$ is \emph{exact}---it follows directly from the definition of KL divergence and the generative model $P(k \mid z{=}j) = (\Omega_{ij} q_j)(k)$, with no approximation.
+The identification of the integral with $D_{\mathrm{KL}}[q_i \| \Omega_{ij} q_j]$ follows directly from the definition of KL divergence and the generative model $P(k \mid z{=}j) = (\Omega_{ij} q_j)(k)$, with no approximation.
 
-Defining the \emph{alignment energy} $E_{ij} \equiv D_{\mathrm{KL}}[q_i \| \Omega_{ij} q_j]$:
+Therefore we may define the alignment energy $E_{ij} \equiv D_{\mathrm{KL}}[q_i \| \Omega_{ij} q_j]$ such that:
+
 \begin{equation}
 \mathcal{F}_{\text{align}} = \sum_j \beta_{ij} \big( E_{ij} + \log \beta_{ij} - \log \pi_j \big).
 \label{eq:mixture_energy_entropy}
 \end{equation}
 
-This has the classic ``energy minus entropy'' structure: $\mathcal{F}_{\text{align}} = \langle E \rangle_\beta - H(\beta) + \text{const}$, where $H(\beta) = -\sum_j \beta_{ij} \log \beta_{ij}$ is the entropy of the attention distribution.
+This has the classic "energy minus entropy" structure: $\mathcal{F}_{\text{align}} = \langle E \rangle_\beta - H(\beta) + \text{const}$, where $H(\beta) = -\sum_j \beta_{ij} \log \beta_{ij}$ is the entropy of the attention distribution.
 
 \subsubsection{Minimization and the Softmax Solution}
 
-We minimize $\mathcal{F}_{\text{align}}$ with respect to $\beta_{ij}$ subject to $\sum_j \beta_{ij} = 1$. The Lagrangian is:
+In the standard way we next minimize $\mathcal{F}_{\text{align}}$ with respect to $\beta_{ij}$ subject to $\sum_j \beta_{ij} = 1$. The Lagrangian is:
+
 \begin{equation}
 \mathcal{L} = \sum_j \beta_{ij}(E_{ij} + \log \beta_{ij} - \log \pi_j) - \lambda\left(\sum_j \beta_{ij} - 1\right).
 \end{equation}
 
 Setting $\partial \mathcal{L} / \partial \beta_{ik} = 0$:
+
 \begin{equation}
 E_{ik} + \log \beta_{ik} + 1 - \log \pi_k - \lambda = 0.
 \end{equation}
 
 Solving and enforcing the normalization constraint:
+
 \begin{equation}
 \beta_{ik} = \frac{\pi_k \exp(-E_{ik})}{\sum_m \pi_m \exp(-E_{im})}.
 \label{eq:mixture_softmax_general}
 \end{equation}
 
 For a uniform attention prior $\pi_k = 1/N$, the prior factors cancel:
+
 \begin{equation}
 \boxed{\beta_{ik} = \operatorname{softmax}_k(-E_{ik}) = \operatorname{softmax}_k\!\big(-D_{\mathrm{KL}}[q_i \| \Omega_{ik} q_k]\big).}
 \label{eq:mixture_softmax}
 \end{equation}
 
-A temperature parameter $\tau > 0$ is recovered by rescaling the alignment energy: $E_{ik} \to E_{ik}/\tau$, corresponding to scaling the coupling precision in the generative model. The forward KL divergence is the unique $f$-divergence that preserves exponential-family closure under this linear coupling structure and yields a consistent dual interpretation for the attention weights (Appendix~C).
+A temperature parameter $\tau > 0$ can be introduced by rescaling the alignment energy: $E_{ik} \to E_{ik}/\tau$. Additionally the forward KL divergence is the unique $f$-divergence that preserves exponential-family closure under this linear coupling structure and yields a consistent dual interpretation for the attention weights (see Appendix~C).
 
 \subsubsection{Non-Uniform Attention Priors and Masking}
 \label{sec:nonuniform_priors}
 
-The general solution \eqref{eq:mixture_softmax_general} with non-uniform priors $\pi_k$ has several immediate applications. Setting $\pi_k = 0$ for $k > i$ prohibits agent $i$ from attending to future agents, recovering the standard causal attention mask; this arises naturally as a prior constraint on which sources are available, rather than as an ad hoc modification of the softmax. A prior $\pi_k \propto f(|i - k|)$ for some decreasing function $f$ encodes a preference for attending to nearby agents, providing a principled mechanism for positional information without explicit positional encodings. Making $\pi_k$ a learnable parameter yields an additive bias $\log \pi_k$ in the pre-softmax logits, equivalent to relative position biases used in architectures such as ALiBi and T5. The gauge-theoretic framework reveals these as prior beliefs about source relevance.
+The general solution \eqref{eq:mixture_softmax_general} with non-uniform priors $\pi_k$ has several immediate applications. Setting $\pi_k = 0$ for $k > i$ prohibits agent $i$ from attending to future agents, recovering the standard causal attention mask. This arises naturally as a prior constraint on which sources are available, rather than as an ad hoc modification of the softmax. Similarly, a prior $\pi_k \propto \xi(|i - k|)$ (for some decreasing function $\xi$) encodes a preference for attending to nearby agents, providing a mechanism for positional information. Furthermore, making $\pi_k$ a learnable parameter yields an additive bias $\log \pi_k$ in the pre-softmax logits which is equivalent to relative position biases used in architectures such as ALiBi and T5. In this manner we find several ad-hoc architectural choices have principled information geometric origin.
 
 \subsection{Full Variational Free Energy}
 \label{sec:final_free_energy}
 
-Combining the single-agent free energy \eqref{eq:single_agent_fep} with the alignment terms derived above, and including the model-channel analogue (with weights $\gamma_{ij}$ and transport $\tilde{\Omega}_{ij}$), we obtain the complete gauge-covariant variational free energy:
+Combining the single-agent free energy \eqref{eq:single_agent_fep} with the alignment terms derived above, and including the model-channel analogue (with weights $\gamma_{ij}$ and transport $\tilde{\Omega}_{ij}$), we obtain the complete gauge-covariant variational free energy at $c^* \in \mathcal{C}$:
+
 \begin{equation}
 \boxed{
 \begin{aligned}
@@ -599,55 +614,105 @@ Combining the single-agent free energy \eqref{eq:single_agent_fep} with the alig
 \label{eq:free_energy_final}
 \end{equation}
 
-The first two terms are single-agent prior regularization (Section~3.3). The third and fourth terms are the alignment energies derived from the mixture-of-sources model, with softmax attention weights $\beta_{ij}$ and $\gamma_{ij}$. The final term is the observation likelihood. An alternative derivation of how these pairwise KL terms emerge from a normalized generative model with auxiliary agreement variables is given in Appendix~\ref{app:agreement_variables}.
+Note that, in the full theory, for general base manifolds we would necessarily integrate over agent supports and overlaps to obtain the complete variational free energy (which we need not consider for the transformer derivation).  
 
-In the full spatial formulation over base manifold $\mathcal{C}$, the attention weights take the form:
-\begin{equation}
-\beta_{ij}(c) = \frac{\exp\left[-\frac{1}{\tau} D_{\text{KL}}\left(q_i(c) \,\big\|\, \Omega_{ij}(c) q_j(c)\right)\right] \chi_{ij}(c)}{\sum_k \exp\left[-\frac{1}{\tau} D_{\text{KL}}\left(q_i(c) \,\big\|\, \Omega_{ik}(c) q_k(c)\right)\right] \chi_{ik}(c)},
-\label{eq:attention_weights_softmax}
-\end{equation}
-where $\chi_{ij}(c) = \mathbb{I}_{\mathcal{U}_i \cap \mathcal{U}_j}(c)$ is the overlap indicator (the extreme case $\pi_j = 0$ for non-overlapping agent supports) and $\tau$ is the temperature parameter.
+An alternative derivation of how these pairwise KL terms emerge from a normalized generative model with auxiliary agreement variables is given in Appendix~\ref{app:agreement_variables}.
+
+
 \subsection{Interpretation}
 Each term in the variational free energy \eqref{eq:free_energy_final} encodes a distinct aspect of multi-agent inference:
 
 (1) Belief Prior: $D_{\mathrm{KL}}(q_i \| p_i)$
 
-The belief prior measures the deviation of agent $i$'s current belief $q_i(k_i)$ from its local prior $p_i(k_i \mid m_i)$. This term regularizes beliefs toward locally expected states. In the absence of observations and inter-agent coupling, minimizing $\mathcal{F}$ would yield $q_i^* = p_i$, recovering pure prior-based prediction.
+The belief prior measures the deviation of agent $i$'s current belief $q_i(k_i)$ from its local prior $p_i(k_i \mid m_i)$. This term regularizes beliefs towards expected states. In the absence of observations and inter-agent coupling, minimizing $\mathcal{F}$ would yield $q_i^* = p_i$, recovering pure prior-based prediction.
 
 (2) Model Prior: $D_{\mathrm{KL}}(s_i \| r_i)$
 
-The model prior, similarly measures the deviation of agent $i$'s current model belief $s_i(m_i)$ from its hyperprior $r_i(m_i)$. This term regularizes model beliefs toward baseline expectations. It prevents overfitting to recent data by anchoring $s_i$ to a stable hyperprior $r_i$ determined from some higher, slower level.
+The model prior, similarly measures the deviation of agent $i$'s current model $s_i(m_i)$ from its hyper-prior $r_i(m_i)$. This term regularizes models toward baseline hyper-prior expectations. This anchors $s_i$ to a stable hyper-prior $r_i$ determined from some higher, slower meta-level.
 
 Hierarchical relationship to (1): The prior $p_i(k_i \mid m_i)$ in term (1) depends on the model parameters $m_i$ that are themselves uncertain under $s_i(m_i)$. Thus:
+
 \begin{equation}
 p_i(k_i) = \int p_i(k_i \mid m_i) \, s_i(m_i) \, \mathrm{d}m_i
 \label{eq:hierarchical_prior}
 \end{equation}
-This creates a two-level Bayesian hierarchy: uncertainty about states ($q_i$) and uncertainty about the model generating those states ($s_i$).
+
+This creates a two-level Bayesian hierarchy with uncertainty about states ($q_i$) and uncertainty about the models generating those states ($s_i$).
 
 (3) Belief Alignment: $\beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$
 
-Belief alignment represents the discrepancy between agent $i$'s belief and agent $j$'s belief after gauge transport into agent $i$'s local frame - i.e. agent $i$'s interpretation of agent $j$'s belief.
+Belief alignment represents the discrepancy between agent $i$'s belief and agent $j$'s belief after gauge transport into agent $i$'s local frame (i.e. agent $i$'s interpretation of agent $j$'s belief).
 
-This term enforces epistemic consensus— agents with high $\beta_{ij}$ are driven to agree on their beliefs about the current world state, modulo gauge transformations. This implements distributed inference: agents pool information about their latents by aligning their beliefs $q_i(k_i)$ and $q_j(k_j)$.
+This term enforces an epistemic consensus whereby agents with high $\beta_{ij}$ are driven to agree on their beliefs about the current state, modulo gauge transformations. This implements a distributed inference whereby agents pool information about their latents by aligning their beliefs $q_i(k_i)$ and $q_j(k_j)$.
 
 (4) Model Alignment: $\gamma_{ij} D_{\mathrm{KL}}(s_i \| \tilde{\Omega}_{ij} s_j)$
 
-Enforces a meta-cognitive consensus among agents with high $\gamma_{ij}$. Agents are driven to agree on their beliefs about how the world works, not just what state it's in. This implements distributed model learning: agents gather and pool evidence about model structure $m$ by aligning their second-order beliefs $s_i(m_i)$ and $s_j(m_j)$.
+This term enforces a meta-cognitive consensus among agents with high $\gamma_{ij}$. Agents are driven to agree on their beliefs about how the world works, not just what state it's in. This implements a distributed model learning whereby agents gather and pool evidence about model structure $m$ by aligning their second-order beliefs $s_i(m_i)$ and $s_j(m_j)$.
 
 Generally model-like terms can be expected to fluctuate slowly in contrast to belief-like terms.
 
 (5) Observation Likelihood: $-\mathbb{E}_q[\log p(o \mid \{k_i\}, \{m_i\})]$
 
-This term is the expected negative log-likelihood of observations $o$ given latent states $\{k_i\}$ and models $\{m_i\}$, averaged over the recognition distributions $\{q_i\}$, grounded in sensory observations/data. Without this term, the system is a pure vacuum theory where agents converge to their coupled prior without external input. Observations break the vacuum symmetry, forcing agents to specialize based on local sensory evidence (see Results).
+This term is the expected negative log-likelihood of observations $o$ given latent states $\{k_i\}$ and models $\{m_i\}$, averaged over the recognition distributions $\{q_i\}$, grounded in sensory observations/data. Without this term, the system is a pure vacuum theory where agents converge to their coupled priors without external input. Observations break the vacuum symmetry, forcing agents to specialize based on local sensory evidence (see Results).
 
-In the limit of near-deterministic beliefs (isotropic covariances $\Sigma_i = \sigma^2 I$ with $\sigma^{-2}$ absorbed into learned projections), the free energy reduces to a quadratic machine learning loss function (shown below) and suggests machine learning training is equivalent to variational free energy inference.
+\subsection{State-Dependent Prior Precision}
+\label{sec:state_dependent_precision}
 
-In the absence of observations ($o = \emptyset$), the free energy is symmetric under simultaneous gauge transformation of all agents: $\phi_i \to \phi_i + \phi_0$ for any $\phi_0 \in \mathfrak{g}$. Observations break this symmetry by coupling agents to external data with fixed reference frames, as we show in our results section.  We draw an analogy to symmetry breaking in field theory, with two important caveats. First, the vacuum state (Section~\ref{sec:symmetry_breaking}) exhibits \emph{spontaneous} symmetry breaking: the free energy is gauge-invariant but the ground state manifold is parameterized by gauge orbit, producing a degenerate family of minima. The observation term, however, acts as an \emph{explicit} symmetry-breaking field that lifts this degeneracy, analogous to an external magnetic field in ferromagnetism rather than to the Goldstone mechanism proper. Second, a full Goldstone-type analysis would require computing the Hessian spectrum at the vacuum fixed point to identify zero modes corresponding to broken generators; we leave this spectral analysis to future work.
+In the variational free energy \eqref{eq:free_energy_final}, the self-coupling term $D_{\mathrm{KL}}(q_i \| p_i)$ carries unit coefficient. This implicitly assumes that the prior precision is apriori known and fixed such that each agent trusts its prior with uniform strength regardless of context. Promoting the precision to a variational parameter yields a state-dependent self-coupling weight $\alpha_i$ that emerges from the same optimization principle that governs belief updates.
+
+\subsubsection{Precision as a Variational Parameter}
+
+The hierarchical structure of the generative model (Eq.~\ref{eq:hierarchical_prior}) already implies that the effective prior precision depends on model uncertainty. We make this dependence explicit by promoting the self-coupling weight from a fixed constant to a per-agent variational parameter $\alpha_i > 0$, subject to a regularizer that prevents degenerate solutions.
+
+The augmented free energy for agent $i$ is:
+
+\begin{equation}
+\mathcal{F}_i = \alpha_i\,D_{\mathrm{KL}}(q_i \| p_i)
++ R(\alpha_i)
++ \sum_j \beta_{ij}\,D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)
+- \mathbb{E}_{q_i}[\log p(o_i \mid k_i)],
+\label{eq:free_energy_adaptive}
+\end{equation}
+
+where $R(\alpha_i)$ is a precision regularizer. The natural choice, motivated by scale invariance and the requirement that $\alpha_i > 0$, is the log-barrier form:
+
+\begin{equation}
+R(\alpha_i) = b_0\,\alpha_i - c_0\,\log \alpha_i, \qquad b_0 > 0,\; c_0 > 0.
+\label{eq:precision_regularizer}
+\end{equation}
+
+The first term penalizes arbitrarily large precision (preventing $\alpha_i \to \infty$); the second is a log-barrier that enforces $\alpha_i > 0$ and penalizes vanishing precision (preventing $\alpha_i \to 0$, which would trivially eliminate the self-coupling cost). This regularizer is the negative log-density of a Gamma distribution evaluated at $\alpha_i$, but no distributional machinery is required: $\alpha_i$ is a deterministic parameter, not the expectation of a latent random variable.
+
+\subsubsection{Optimal Precision}
+
+Optimizing $\mathcal{F}_i$ with respect to $\alpha_i$ (holding beliefs $q_i$ fixed):
+\begin{equation}
+\frac{\partial \mathcal{F}_i}{\partial \alpha_i}
+= D_{\mathrm{KL}}(q_i \| p_i) + b_0 - \frac{c_0}{\alpha_i} = 0,
+\end{equation}
+which gives the optimal state-dependent precision:
+\begin{equation}
+\boxed{
+\alpha_i^*
+\;=\; \frac{c_0}{b_0 + D_{\mathrm{KL}}(q_i \| p_i)}.
+}
+\label{eq:state_dependent_alpha}
+\end{equation}
+
+When an agent is close to its prior ($D_{\mathrm{KL}}(q_i \| p_i) \approx 0$), $\alpha_i \approx c_0/b_0$ takes a high value determined by the hyper-parameters such that the agent trusts its prior and resists displacement by the alignment term. Conversely, when an agent is far from its prior (large $D_{\mathrm{KL}}(q_i \| p_i)$), $\alpha_i \to 0$; the prior's influence relaxes and the alignment and observation terms dominate. The agent becomes more free from its prior anchor, allowing contextual information to reshape its belief.
+
+The hyperparameter $b_0$ controls the sensitivity of this transition such that large $b_0$ yield approximately constant $\alpha_i$ (stiff, uniformly informative prior), while small $b_0$ yield $\alpha_i$ that is highly responsive to belief. The ratio $c_0/b_0$ sets the maximum precision (the value when beliefs match the prior exactly). Both hyper-parameters may be learned via empirical Bayes, introducing only two scalar parameters.
+
+The $\alpha_i$ in \eqref{eq:state_dependent_alpha} depends on the full KL divergence, including both the Mahalanobis distance $\delta_i^\top \Sigma_{p,i}^{-1} \delta_i$ (mean mismatch) and the log-determinant ratio $\log|\Sigma_{p,i}|/|\Sigma_{q,i}|$ (uncertainty mismatch). This is a natural consequence of optimizing $\alpha_i$ directly against the $D_{\mathrm{KL}}$: agents whose uncertainty structure differs from the prior (not just their mean) also experience reduced precision.
+
+In our experiments we study both $R(\alpha_i) \neq 0$ and $R(\alpha_i) = 0$ with $\alpha_i = \alpha = 1$.
+
 \subsubsection{Multi-Timescale Dynamics}
-Our free energy naturally exhibits time-scale separation as a feature\citep{boettcher2012renormalization}:
 
-In our present work, we only consider the fast subsystem of beliefs (where we omit the base space integrals for convenience),
+As we noted above, the free energy naturally exhibits time-scale separation as a feature\citep{boettcher2012renormalization}:
+
+In our present work, we only consider the fast subsystem of beliefs (where we omit the base space integrals for convenience):
+
 \begin{equation}
 \mathcal{F}_{\text{fast}}[\{q_i\}] = 
 \sum_i D_{\mathrm{KL}}(q_i \| p_i) 
@@ -655,37 +720,48 @@ In our present work, we only consider the fast subsystem of beliefs (where we om
 - \mathbb{E}_q[\log p(o \mid \{k_i\}, \{m_i\})]
 \label{eq:fast_subsystem}
 \end{equation}
+
 This is minimized by gradient descent on $\{q_i\}$ while holding $\{s_i\}$ fixed, yielding belief updates:
+
 \begin{equation}
 \frac{\partial q_i}{\partial t} = -\eta_q \frac{\delta \mathcal{F}_{\text{fast}}}{\delta q_i}
 \label{eq:belief_dynamics}
 \end{equation}
+
 with learning rate $\eta_q \sim \mathcal{O}(1)$ (fast).
 
 \textbf{Slow subsystem (model learning)}:
+
 \begin{equation}
 \mathcal{F}_{\text{slow}}[\{s_i\}] = 
 \sum_i D_{\mathrm{KL}}(s_i \| r_i) 
 + \sum_{i,j} \gamma_{ij} D_{\mathrm{KL}}(s_i \| \tilde{\Omega}_{ij} s_j)
 \label{eq:slow_subsystem}
 \end{equation}
-This is minimized by gradient descent on $\{s_i\}$ while holding $\{q_i\}$ fixed (or averaging over recent beliefs), yielding model updates:
+
+This is minimized by gradient descent on $\{s_i\}$, yielding model updates:
+
 \begin{equation}
 \frac{\partial s_i}{\partial t} = -\eta_s \frac{\delta \mathcal{F}_{\text{slow}}}{\delta s_i}
 \label{eq:model_dynamics}
 \end{equation}
+
 with learning rate $\eta_s \ll \eta_q$ (slow).
 
 This time-scale separation enables learning: agents rapidly adapt beliefs $q_i$ to new observations while slowly refining models $s_i$ to capture long-term structure in a coordinated manner.
+
 \subsubsection{Meta-Agent Emergence and Cross-Scale Coupling}
+
 The hierarchical structure naturally supports the emergence of meta-agents \citep{shen2008coarse}. These are coarse-grained entities that are formed when groups of agents reach belief consensus.
 
 A meta-agent $\mathcal{M}^{(1)}$ is a set of agents $\{i \in I_{\mathcal{M}}\}$ satisfying:
+
 \begin{align}
 q_i &= \Omega_{ij} q_j \quad \forall i,j \in I_{\mathcal{M}} \quad \text{(belief consensus)}, \label{eq:belief_consensus} \\
 s_i &= \tilde{\Omega}_{ij} s_j \quad \forall i,j \in I_{\mathcal{M}} \quad \text{(model consensus)}. \label{eq:model_consensus}
 \end{align}
-When these conditions hold, the agents are epistemically dead—they share identical beliefs and models after accounting for gauge transformations and no longer evolve without continual observations. The meta-agent can be described by a single representative renormalized state $(q_{\mathcal{M}}, s_{\mathcal{M}})$.
+
+When these conditions hold, the agents are epistemically dead in that they share identical beliefs and models after accounting for gauge transformations and no longer evolve without continual observations. The meta-agent can be described by a single representative renormalized state $(q_{\mathcal{M}}, s_{\mathcal{M}})$.
 
 Meta-agents at scale $\zeta=0$ (individual agents) can generally form meta-agents at scale $\zeta=1$ (groups), which can further coalesce into meta-agents at scale $\zeta=2$ (communities), and so on. This creates a hierarchical scale structure:
 
@@ -709,71 +785,29 @@ At each scale, the effective free energy takes the same form as Eq.~\eqref{eq:fr
 and effective gauge frames given by $\phi_{\mathcal{M}}^{(\zeta+1)} = \text{average}(\{\phi_i^{(\zeta)}\})$.
 This is the gauge-theoretic analogue of renormalization group flow in statistical field theory \citep{anderson1984basic,wilson1974renormalization,garciaMillan2024network}. Cross-scale couplings $\Lambda^{\zeta}_{\zeta'}$ (Appendix) mediate interactions between agents at different hierarchical levels.
 
-In the present work, we restrict to single-scale dynamics—all agents are at scale $\zeta=0$ with no cross-scale couplings ($\Lambda^{\zeta}_{\zeta'} = 0$ for $\zeta \neq \zeta'$). We focus exclusively on the fast subsystem (Eq.~\ref{eq:fast_subsystem}
+In the present work, we restrict to single-scale dynamics whereby all agents are at scale $\zeta=0$ with no cross-scale couplings ($\Lambda^{\zeta}_{\zeta'} = 0$ for $\zeta \neq \zeta'$). We focus exclusively on the fast subsystem (Eq.~\ref{eq:fast_subsystem}
 ), studying how beliefs $\{q_i\}$ evolve under alignment while holding models $\{s_i\}$ fixed.
 
 
-We posit that standard transformers operate entirely in the fast subsystem. They perform inference ($q_i$ updates) with frozen models ($s_i$ fixed during a forward pass). Training corresponds to slow updates of $s_i$, but without the explicit hierarchical structure or meta-cognitive alignment term $\gamma_{ij} D_{\mathrm{KL}}(s_i \| \tilde{\Omega}_{ij} s_j)$.
+We posit that standard transformers operate entirely in the fast subsystem. They perform inference ($q_i$ updates) with frozen models ($s_i$ fixed during a forward pass). 
 
 
 
 \subsubsection{Symmetry Breaking}
 \label{sec:symmetry_breaking}
-In the absence of observations ($p(o|\cdot) = \text{const}$), the free energy \eqref{eq:free_energy_final} is invariant under the gauge group $G$ (which is $\mathrm{GL}(K)$ in general, or compact subgroups such as $\mathrm{SO}(K)$ in simulations). The vacuum state corresponds to perfect alignment: $q_i = \Omega_{ij}q_j$ and $p_i = \tilde{\Omega}_{ij}p_j$ for all agent pairs $(i,j)$, meaning all agents maintain gauge-equivalent beliefs that differ only by frame transformations. In this regime, the dynamics drive the system toward a degenerate manifold of ground states parameterized by the gauge orbit. Agents synchronize over gradient descent towards $\|\mu_i(c)\| = \mu^*$, but the absolute orientations remain arbitrary. This degeneracy of the vacuum is analogous to spontaneous symmetry breaking in field theory \citep{weinberg1995quantum,goldstone1962field}: the free energy is gauge-invariant, but any particular ground state selects a definite orientation, breaking the continuous symmetry.
+In the absence of observations ($p(o|\cdot) = \text{const}$), the free energy \eqref{eq:free_energy_final} is invariant under the gauge group $G$ (which is $\mathrm{GL}(K)$ in general, or a compact subgroup such as $\mathrm{SO}(K)$). The vacuum state corresponds to perfect alignment: $q_i = \Omega_{ij}q_j$ and $p_i = \tilde{\Omega}_{ij}p_j$ for all agent pairs $(i,j)$, meaning all agents maintain gauge-equivalent beliefs that differ only by frame transformations. In this regime, the dynamics drive the system toward a degenerate manifold of ground states parameterized by the gauge orbit. Agents synchronize over gradient descent towards $\|\mu_i(c)\| = \mu^*$, but the absolute orientations remain arbitrary. This degeneracy of the vacuum is analogous to spontaneous symmetry breaking in field theory \citep{weinberg1995quantum,goldstone1962field}: the free energy is gauge-invariant, but any particular ground state selects a definite orientation, breaking the continuous symmetry.
 
-Observations destroy this degeneracy by coupling agents to external data through the likelihood terms. Each agent's sensory stream $o_i$ acts as an external field that selects a preferred orientation in its fiber, pinning $q_i$ to a definite point. Strictly speaking, this is \emph{explicit} symmetry breaking---the observation term is not gauge-invariant---rather than the spontaneous mechanism of Goldstone's theorem. The system transitions from the symmetric vacuum to a symmetry-broken phase where agents develop distinct specializations: $\|\mu_i(c)\| \neq \|\mu_j(c)\|$ with the diversity driven by observations/data. The frame transformations $\Omega_{ij}$ then encode how these specialized representations relate geometrically. This observation-induced symmetry breaking is what enables non-trivial multi-agent coordination: agents must now actively maintain geometric relationships between their specialized frames rather than simply coexisting in a rotationally symmetric configuration. Whether the vacuum manifold supports Goldstone-like zero modes (corresponding to broken gauge generators) is a question amenable to Hessian spectral analysis, which we leave to future work.
+Observations destroy this degeneracy by coupling agents to external data through the likelihood terms. Each agent's sensory stream $o_i$ acts as an external field that selects a preferred orientation in its fiber, pinning $q_i$ to a definite point. Strictly speaking, this is explicit symmetry breaking (the observation term is not gauge-invariant) rather than the spontaneous mechanism of Goldstone's theorem. The system transitions from the symmetric vacuum to a symmetry-broken phase where agents develop distinct specializations: $\|\mu_i(c)\| \neq \|\mu_j(c)\|$ with the diversity driven by observations/data. The frame transformations $\Omega_{ij}$ then encode how these specialized representations relate geometrically. This observation-induced symmetry breaking is what enables non-trivial multi-agent coordination: agents must now actively maintain geometric relationships between their specialized frames rather than simply coexisting in a gauge symmetric configuration. Whether the vacuum manifold supports Goldstone-like zero modes (corresponding to broken gauge generators) is a question amenable to Hessian spectral analysis, which we leave to future work.
 
 \subsubsection{Summary}
 
-The gauge-covariant variational free energy \eqref{eq:free_energy_final} has been derived from two principles: (i) the standard free energy principle for single agents (prior regularization + observation likelihood), and (ii) the mixture-of-sources model for inter-agent communication (KL-based alignment with softmax attention weights). The key results are as follows. Both $\beta$-weighted belief alignment and $\gamma$-weighted model alignment arise from variational inference over gauge-transported source mixtures, not as ad hoc regularizers. The forward KL divergence $D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ emerges exactly as the alignment energy from the mixture generative model, and the softmax form of attention weights $\beta_{ij} = \operatorname{softmax}(-E_{ij}/\tau)$ follows from Lagrange minimization of the alignment free energy. Non-uniform attention priors $\pi_k$ provide a principled mechanism for causal masking, positional biases, and learned attention priors. The self-coupling weight $\alpha_i$ can be derived as a state-dependent precision through variational optimization with a log-barrier regularizer (Section~\ref{sec:state_dependent_precision}), with the fixed-$\alpha$ case recovered as a degenerate limit.
+The gauge-covariant variational free energy \eqref{eq:free_energy_final} has been derived from two principles: (i) the standard free energy principle for single agents (prior regularization + observation likelihood), and (ii) the mixture-of-sources model for inter-agent communication (KL-based alignment with softmax attention weights). Both $\beta$-weighted belief alignment and $\gamma$-weighted model alignment arise from variational inference over gauge-transported source mixtures. The forward KL divergence $D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ emerges exactly as the alignment energy from the mixture generative model, and the softmax form of attention weights $\beta_{ij} = \operatorname{softmax}(-E_{ij}/\tau)$ follows from Lagrange minimization of the alignment free energy. Non-uniform attention priors $\pi_k$ provide a principled mechanism for causal masking, positional biases, and learned attention priors. The self-coupling weight $\alpha_i$ can be derived as a state-dependent precision through variational optimization with a log-barrier regularizer (Section~\ref{sec:state_dependent_precision}), with the fixed-$\alpha$ case recovered as a degenerate limit.
 
 Multi-agent communication within a gauge-covariant formulation allows the FEP to be satisfied while connecting attention, transformers, and machine learning to variational inference.
 
-\subsection{State-Dependent Prior Precision}
-\label{sec:state_dependent_precision}
+\section{Reduction to Transformer Attention and Backpropagation}
 
-In the variational free energy \eqref{eq:free_energy_final}, the self-coupling term $D_{\mathrm{KL}}(q_i \| p_i)$ carries unit coefficient. This implicitly assumes that the prior precision is known and fixed---that each agent trusts its prior with uniform strength regardless of context. We now show that promoting the precision to a variational parameter yields a state-dependent self-coupling weight $\alpha_i$ that emerges from the same optimization principle that governs belief updates.
-
-\subsubsection{Precision as a Variational Parameter}
-
-The hierarchical structure of the generative model (Eq.~\ref{eq:hierarchical_prior}) already implies that the effective prior precision depends on model uncertainty. We make this dependence explicit by promoting the self-coupling weight from a fixed constant to a per-agent variational parameter $\alpha_i > 0$, subject to a regularizer that prevents degenerate solutions.
-
-The augmented free energy for agent $i$ is:
-\begin{equation}
-\mathcal{F}_i = \alpha_i\,D_{\mathrm{KL}}(q_i \| p_i)
-+ R(\alpha_i)
-+ \sum_j \beta_{ij}\,D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)
-- \mathbb{E}_{q_i}[\log p(o_i \mid k_i)],
-\label{eq:free_energy_adaptive}
-\end{equation}
-where $R(\alpha_i)$ is a precision regularizer. The natural choice, motivated by scale invariance and the requirement that $\alpha_i > 0$, is the log-barrier form:
-\begin{equation}
-R(\alpha_i) = b_0\,\alpha_i - c_0\,\log \alpha_i, \qquad b_0 > 0,\; c_0 > 0.
-\label{eq:precision_regularizer}
-\end{equation}
-The first term penalizes arbitrarily large precision (preventing $\alpha_i \to \infty$); the second is a log-barrier that enforces $\alpha_i > 0$ and penalizes vanishing precision (preventing $\alpha_i \to 0$, which would trivially eliminate the self-coupling cost). This regularizer is the negative log-density of a Gamma distribution evaluated at $\alpha_i$, but no distributional machinery is required: $\alpha_i$ is a deterministic parameter, not the expectation of a latent random variable.
-
-\subsubsection{Optimal Precision}
-
-Optimizing $\mathcal{F}_i$ with respect to $\alpha_i$ (holding beliefs $q_i$ fixed):
-\begin{equation}
-\frac{\partial \mathcal{F}_i}{\partial \alpha_i}
-= D_{\mathrm{KL}}(q_i \| p_i) + b_0 - \frac{c_0}{\alpha_i} = 0,
-\end{equation}
-which gives the optimal state-dependent precision:
-\begin{equation}
-\boxed{
-\alpha_i^*
-\;=\; \frac{c_0}{b_0 + D_{\mathrm{KL}}(q_i \| p_i)}.
-}
-\label{eq:state_dependent_alpha}
-\end{equation}
-
-This result has a transparent interpretation. When an agent is close to its prior ($D_{\mathrm{KL}}(q_i \| p_i) \approx 0$), $\alpha_i \approx c_0/b_0$ takes a high value determined by the hyperparameters: the agent trusts its prior and resists displacement by the alignment term. Conversely, when an agent is far from its prior (large $D_{\mathrm{KL}}(q_i \| p_i)$), $\alpha_i \to 0$; the prior's influence wanes and the alignment and observation terms dominate. The agent ``releases'' from its prior anchor, allowing contextual information to reshape its belief.
-
-The hyperparameter $b_0$ controls the sensitivity of this transition: large $b_0$ yields approximately constant $\alpha_i$ (stiff, uniformly informative prior), while small $b_0$ yields $\alpha_i$ that is highly responsive to belief--prior divergence (elastic, context-sensitive prior). The ratio $c_0/b_0$ sets the maximum precision (the value when beliefs match the prior exactly). Both hyperparameters may be learned via empirical Bayes, introducing only two scalar parameters.
-
-\textbf{Remark.} The $\alpha_i$ in \eqref{eq:state_dependent_alpha} depends on the \emph{full} KL divergence, including both the Mahalanobis distance $\delta_i^\top \Sigma_{p,i}^{-1} \delta_i$ (mean mismatch) and the log-determinant ratio $\log|\Sigma_{p,i}|/|\Sigma_{q,i}|$ (uncertainty mismatch). This is a natural consequence of optimizing $\alpha_i$ directly against $D_{\mathrm{KL}}$: agents whose \emph{uncertainty structure} differs from the prior (not just their mean) also experience reduced precision.
+In this section we demonstrate that standard transformer self-attention and backpropagation emerge as limiting cases of our gauge-theoretic framework. This establishes neural network training not as an ad-hoc optimization procedure, but as the deterministic limit of a first-principles information-geometric minimization process over a gauge bundle geometry.
 
 \subsubsection{Gradient Structure and Gating}
 
@@ -827,20 +861,9 @@ $\Sigma_{q,i}$ dynamics & $\Sigma \to \sigma^2 I$ & Layer normalization \\
 \end{tabular}
 \end{center}
 
-\subsubsection{Connection to Symmetry Breaking}
-
-Dynamic precision provides the microscopic mechanism through which observations drive the symmetry breaking described in Section~\ref{sec:symmetry_breaking}. The dynamics proceed in three phases. In the \emph{symmetric phase} (vacuum, $o = \emptyset$), all agents converge to $q_i = p_i$, giving $\delta_i = 0$ and maximal $\alpha_i$. The system is ``frozen''---agents are rigidly anchored to priors and resist perturbation. This is the high-precision, high-symmetry fixed point. During the \emph{transition} (when observations are introduced), observations push beliefs away from priors ($\delta_i > 0$), lowering $\alpha_i$, which reduces the restoring force toward the prior. This positive feedback allows the alignment and observation terms to ``capture'' the agent and pull it toward a new equilibrium in a different gauge orbit. Finally, in the \emph{broken phase} (steady state under data), agents settle into specialized configurations. On the slow timescale (Eq.~\ref{eq:model_dynamics}), priors update to match the new beliefs ($\mu_{p,i} \to \mu_{q,i}$, $\delta_i \to 0$), $\alpha_i$ rises again, and the agent ``freezes'' into its new semantic role with restored high precision.
-
-The precision $\alpha_i$ thus acts as a local order parameter: high $\alpha_i$ characterizes the symmetric (vacuum) phase, transiently low $\alpha_i$ characterizes the critical regime during symmetry breaking, and restored high $\alpha_i$ characterizes the broken (specialized) phase after prior adaptation.
-
-\subsubsection{Gauge Invariance}
-
-The state-dependent precision \eqref{eq:state_dependent_alpha} preserves the $\mathrm{GL}(K)$ gauge invariance of the framework. Since $D_{\mathrm{KL}}(q_i \| p_i)$ is invariant under simultaneous $\mathrm{GL}(K)$ transformation of both $q_i$ and $p_i$ (Theorem~\ref{thm:glk_invariance}), and $\alpha_i = c_0/(b_0 + D_{\mathrm{KL}}(q_i \| p_i))$ depends on the beliefs only through this gauge-invariant divergence, the precision $\alpha_i$ is itself gauge-invariant. The regularizer $R(\alpha_i)$ depends only on $\alpha_i$, not on the gauge frame. The modified free energy \eqref{eq:free_energy_adaptive} therefore inherits the full gauge symmetry of the original formulation.
 
 
-\section{Reduction to Transformer Attention and Backpropagation}
 
-In this section we demonstrate that standard transformer self-attention and backpropagation emerge as limiting cases of our gauge-theoretic framework. This establishes neural network training not as an ad hoc optimization procedure, but as the deterministic limit of a first-principles information-geometric minimization process over a gauge bundle geometry.
 
 \subsection{Setup: Agents as Gaussian Beliefs in Local Frames}
 
