@@ -715,6 +715,10 @@ class PublicationMetricsTracker:
             # Gradient norms
             'grad_norm_total', 'grad_norm_mu', 'grad_norm_ffn',
 
+            # Bayesian alpha diagnostics
+            'alpha_mean', 'alpha_std', 'alpha_min', 'alpha_max',
+            'alpha_a0', 'alpha_b0', 'alpha_mahal_sq_mean', 'alpha_mahal_sq_std',
+
             # Performance
             'step_time', 'tokens_per_sec',
         ]
@@ -789,6 +793,16 @@ class PublicationMetricsTracker:
             'grad_norm_total': grad_norms.get('total', 0),
             'grad_norm_mu': grad_norms.get('mu', 0),
             'grad_norm_ffn': grad_norms.get('ffn', 0),
+
+            # Bayesian alpha diagnostics
+            'alpha_mean': metrics.get('bayesian/alpha_mean'),
+            'alpha_std': metrics.get('bayesian/alpha_std'),
+            'alpha_min': metrics.get('bayesian/alpha_min'),
+            'alpha_max': metrics.get('bayesian/alpha_max'),
+            'alpha_a0': metrics.get('bayesian/a0'),
+            'alpha_b0': metrics.get('bayesian/b0'),
+            'alpha_mahal_sq_mean': metrics.get('bayesian/mahal_sq_mean'),
+            'alpha_mahal_sq_std': metrics.get('bayesian/mahal_sq_std'),
 
             # Performance
             'step_time': step_time,
@@ -1132,6 +1146,13 @@ class PublicationTrainer(FastTrainer):
             'attention_concentration': full_metrics.get('attention/concentration', 0),
         }
 
+        # Carry over Bayesian alpha diagnostics
+        for key in ['bayesian/alpha_mean', 'bayesian/alpha_std', 'bayesian/alpha_min',
+                     'bayesian/alpha_max', 'bayesian/a0', 'bayesian/b0',
+                     'bayesian/mahal_sq_mean', 'bayesian/mahal_sq_std']:
+            if key in full_metrics:
+                metrics[key] = full_metrics[key]
+
         # Carry over Hamiltonian diagnostics for physics metrics
         if 'hamiltonian_diagnostics' in full_metrics:
             metrics['hamiltonian_diagnostics'] = full_metrics['hamiltonian_diagnostics']
@@ -1371,12 +1392,25 @@ class PublicationTrainer(FastTrainer):
                         tqdm.write(f"  [GRAD] total: {grad_norms['total']:.3e} | "
                                    f"mu: {grad_norms['mu']:.3e} | sigma: {grad_norms['sigma']:.3e} | "
                                    f"phi: {grad_norms['phi']:.3e}")
+                    # Print Bayesian alpha diagnostics
+                    if metrics.get('bayesian/alpha_mean') is not None:
+                        tqdm.write(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
+                                   f"std: {metrics['bayesian/alpha_std']:.4f} | "
+                                   f"range: [{metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
+                                   f"a0: {metrics['bayesian/a0']:.4f} | b0: {metrics['bayesian/b0']:.4f} | "
+                                   f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}")
                 else:
                     print(log_msg)
                     if grad_norms:
                         print(f"  [GRAD] total: {grad_norms['total']:.3e} | "
                               f"mu: {grad_norms['mu']:.3e} | sigma: {grad_norms['sigma']:.3e} | "
                               f"phi: {grad_norms['phi']:.3e}")
+                    if metrics.get('bayesian/alpha_mean') is not None:
+                        print(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
+                              f"std: {metrics['bayesian/alpha_std']:.4f} | "
+                              f"range: [{metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
+                              f"a0: {metrics['bayesian/a0']:.4f} | b0: {metrics['bayesian/b0']:.4f} | "
+                              f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}")
 
             # Validation
             if (step + 1) % self.config.eval_interval == 0:
