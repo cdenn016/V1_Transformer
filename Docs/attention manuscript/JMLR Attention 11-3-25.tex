@@ -707,6 +707,58 @@ The $\alpha_i$ in \eqref{eq:state_dependent_alpha} depends on the full KL diverg
 
 In our experiments we study both $R(\alpha_i) \neq 0$ and $R(\alpha_i) = 0$ with $\alpha_i = \alpha = 1$.
 
+\subsubsection{Gradient Structure and Gating}
+
+The gradient of the modified free energy with respect to $\mu_{q,i}$ acquires the form:
+\begin{equation}
+\frac{\partial \mathcal{F}_i}{\partial \mu_{q,i}}
+= \alpha_i\,\Sigma_{p,i}^{-1}\delta_i
++ \sum_j \beta_{ij}\,(\Omega_{ij}\Sigma_{q,j}\Omega_{ij}^\top)^{-1}(\mu_{q,i} - \Omega_{ij}\mu_{q,j})
++ \text{softmax coupling}
+- \nabla_{\mu_{q,i}} \log p(o_i \mid k_i),
+\label{eq:gated_gradient}
+\end{equation}
+where $\alpha_i$ is held fixed during the belief update. This corresponds to alternating optimization: first update $\alpha_i$ from \eqref{eq:state_dependent_alpha} given current beliefs, then update beliefs with $\alpha_i$ fixed. This separation prevents the pathological $1/\|\delta\|^3$ gradient that would arise from differentiating through $\alpha_i$ (since $\alpha_i \propto 1/D_{\mathrm{KL}}$), while preserving the adaptive precision behavior. The alternating scheme has a natural interpretation: precision estimation (``how much do I trust my prior?'') and belief updating (``what do I believe?'') proceed on separate timescales.
+
+The resulting belief dynamics take the form of a \emph{gated residual update}:
+\begin{equation}
+\mu_i^{(t+1)} = \mu_i^{(t)} - \eta\!\left[
+\alpha_i \cdot \underbrace{\Sigma_{p,i}^{-1}\delta_i}_{\text{prior pull (residual)}}
++ \underbrace{\sum_j \beta_{ij}\,(\Omega_{ij}\Sigma_{q,j}\Omega_{ij}^\top)^{-1}(\mu_i - \Omega_{ij}\mu_j)}_{\text{alignment pull (attention)}}
+- \underbrace{\nabla \log p(o_i \mid \mu_i)}_{\text{observation (loss)}}
+\right].
+\label{eq:gated_update}
+\end{equation}
+When $\alpha_i$ is large, the prior term dominates and the belief remains anchored to $\mu_{p,i}$---the ``gate is closed.'' When $\alpha_i$ is small, the alignment and observation terms dominate and the belief is free to be reshaped by context---the ``gate is open.'' This is the variational analog of the gating mechanisms in Highway Networks \citep{srivastava2015highway} and LSTM cells \citep{hochreiter1997long}, derived here from first principles rather than introduced as architectural choices.
+
+\subsubsection{Degenerate Limit: Recovering Fixed Residual Connections}
+\label{sec:precision_degenerate}
+
+In the limit where the regularizer dominates ($b_0 \to \infty$ with $c_0/b_0 = \alpha$ held fixed), the denominator $b_0 + D_{\mathrm{KL}}$ is dominated by $b_0$ for any finite KL divergence:
+\begin{equation}
+\alpha_i \;=\; \frac{c_0}{b_0 + D_{\mathrm{KL}}(q_i \| p_i)}
+\;\xrightarrow{\;b_0 \to \infty\;}\;
+\frac{c_0}{b_0} = \alpha = \text{const},
+\label{eq:fixed_alpha_limit}
+\end{equation}
+recovering the unit-coefficient self-coupling of \eqref{eq:free_energy_final} (with $\alpha = 1$) or, more generally, the fixed scalar weight used in the implementation. In this limit, $R(\alpha_i) \to b_0\alpha + \text{const}$ becomes a linear function whose gradient $b_0$ overwhelms the KL-dependent variation, and the precision ceases to adapt.
+
+The state-dependent precision $\alpha_i$ thus generalizes the fixed residual connection of standard transformers, which implicitly assumes uniform epistemic reliability across all tokens. Standard transformers operate in the known-precision limit where every token's prior is equally trusted---a simplification that discards context-sensitive information flow.
+
+This completes the following hierarchy of degenerate limits connecting the general theory to standard transformer components:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{lcl}
+\textbf{General Theory} & $\xrightarrow{\text{limit}}$ & \textbf{Standard Component} \\
+\hline
+$D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ & isotropic, flat bundle & Dot-product attention $QK^\top$ \\
+$\tau$ in $\beta_{ij}$ & geometric scaling & $1/\sqrt{d_k}$ temperature \\
+$\alpha_i = c_0/(b_0 + D_{\mathrm{KL}})$ & $b_0 \to \infty$ & Fixed residual connection \\
+$\Sigma_{q,i}$ dynamics & $\Sigma \to \sigma^2 I$ & Layer normalization \\
+\end{tabular}
+\end{center}
+
 \subsection{Multi-Timescale Dynamics}
 
 The free energy naturally exhibits time-scale separation~\citep{boettcher2012renormalization}. The belief terms ($q_i$) and the model terms ($s_i$) decouple into fast and slow subsystems (where we omit the base space integrals for convenience).
@@ -802,59 +854,6 @@ Multi-agent communication within a gauge-covariant formulation allows the FEP to
 \section{Reduction to Transformer Attention and Backpropagation}
 
 In this section we demonstrate that standard transformer self-attention and backpropagation emerge as limiting cases of our gauge-theoretic framework. This establishes neural network training not as an ad-hoc optimization procedure, but as the deterministic limit of a first-principles information-geometric minimization process over a gauge bundle geometry.
-
-\subsection{Gradient Structure and Gating}
-
-The gradient of the modified free energy with respect to $\mu_{q,i}$ acquires the form:
-\begin{equation}
-\frac{\partial \mathcal{F}_i}{\partial \mu_{q,i}}
-= \alpha_i\,\Sigma_{p,i}^{-1}\delta_i
-+ \sum_j \beta_{ij}\,(\Omega_{ij}\Sigma_{q,j}\Omega_{ij}^\top)^{-1}(\mu_{q,i} - \Omega_{ij}\mu_{q,j})
-+ \text{softmax coupling}
-- \nabla_{\mu_{q,i}} \log p(o_i \mid k_i),
-\label{eq:gated_gradient}
-\end{equation}
-where $\alpha_i$ is held fixed during the belief update. This corresponds to alternating optimization: first update $\alpha_i$ from \eqref{eq:state_dependent_alpha} given current beliefs, then update beliefs with $\alpha_i$ fixed. This separation prevents the pathological $1/\|\delta\|^3$ gradient that would arise from differentiating through $\alpha_i$ (since $\alpha_i \propto 1/D_{\mathrm{KL}}$), while preserving the adaptive precision behavior. The alternating scheme has a natural interpretation: precision estimation (``how much do I trust my prior?'') and belief updating (``what do I believe?'') proceed on separate timescales.
-
-The resulting belief dynamics take the form of a \emph{gated residual update}:
-\begin{equation}
-\mu_i^{(t+1)} = \mu_i^{(t)} - \eta\!\left[
-\alpha_i \cdot \underbrace{\Sigma_{p,i}^{-1}\delta_i}_{\text{prior pull (residual)}}
-+ \underbrace{\sum_j \beta_{ij}\,(\Omega_{ij}\Sigma_{q,j}\Omega_{ij}^\top)^{-1}(\mu_i - \Omega_{ij}\mu_j)}_{\text{alignment pull (attention)}}
-- \underbrace{\nabla \log p(o_i \mid \mu_i)}_{\text{observation (loss)}}
-\right].
-\label{eq:gated_update}
-\end{equation}
-When $\alpha_i$ is large, the prior term dominates and the belief remains anchored to $\mu_{p,i}$---the ``gate is closed.'' When $\alpha_i$ is small, the alignment and observation terms dominate and the belief is free to be reshaped by context---the ``gate is open.'' This is the variational analog of the gating mechanisms in Highway Networks \citep{srivastava2015highway} and LSTM cells \citep{hochreiter1997long}, derived here from first principles rather than introduced as architectural choices.
-
-\subsection{Degenerate Limit: Recovering Fixed Residual Connections}
-\label{sec:precision_degenerate}
-
-In the limit where the regularizer dominates ($b_0 \to \infty$ with $c_0/b_0 = \alpha$ held fixed), the denominator $b_0 + D_{\mathrm{KL}}$ is dominated by $b_0$ for any finite KL divergence:
-\begin{equation}
-\alpha_i \;=\; \frac{c_0}{b_0 + D_{\mathrm{KL}}(q_i \| p_i)}
-\;\xrightarrow{\;b_0 \to \infty\;}\;
-\frac{c_0}{b_0} = \alpha = \text{const},
-\label{eq:fixed_alpha_limit}
-\end{equation}
-recovering the unit-coefficient self-coupling of \eqref{eq:free_energy_final} (with $\alpha = 1$) or, more generally, the fixed scalar weight used in the implementation. In this limit, $R(\alpha_i) \to b_0\alpha + \text{const}$ becomes a linear function whose gradient $b_0$ overwhelms the KL-dependent variation, and the precision ceases to adapt.
-
-The state-dependent precision $\alpha_i$ thus generalizes the fixed residual connection of standard transformers, which implicitly assumes uniform epistemic reliability across all tokens. Standard transformers operate in the known-precision limit where every token's prior is equally trusted---a simplification that discards context-sensitive information flow.
-
-This completes the following hierarchy of degenerate limits connecting the general theory to standard transformer components:
-
-\begin{center}
-\renewcommand{\arraystretch}{1.4}
-\begin{tabular}{lcl}
-\textbf{General Theory} & $\xrightarrow{\text{limit}}$ & \textbf{Standard Component} \\
-\hline
-$D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ & isotropic, flat bundle & Dot-product attention $QK^\top$ \\
-$\tau$ in $\beta_{ij}$ & geometric scaling & $1/\sqrt{d_k}$ temperature \\
-$\alpha_i = c_0/(b_0 + D_{\mathrm{KL}})$ & $b_0 \to \infty$ & Fixed residual connection \\
-$\Sigma_{q,i}$ dynamics & $\Sigma \to \sigma^2 I$ & Layer normalization \\
-\end{tabular}
-\end{center}
-
 
 \subsection{Setup: Agents as Gaussian Beliefs in Local Frames}
 
