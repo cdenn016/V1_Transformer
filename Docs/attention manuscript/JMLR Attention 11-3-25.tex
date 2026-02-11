@@ -1524,23 +1524,10 @@ For each $(L,H)$ pair across all 144 attention heads, we computed three compleme
 
 \subsubsection{$\mathrm{GL}(K)$ and $SO(N)$ Language Modeling}
 
-To validate the complete gauge-theoretic framework beyond attention mechanism correspondence, we trained $\mathrm{GL}(K)$ and $SO(N)$ gauge transformers on WikiText-103 language modeling (102M tokens, vocabulary size 50,257). These experiments test whether variational free energy minimization can drive actual language learning, with the gauge structure ($\mu$, $\Sigma$, $\phi$) evolving jointly during training. The gauge VFE architecture contains no MLPs, activation functions, or learned attention projections ($W_Q$, $W_K$, $W_V$); only a linear output projection to vocabulary logits is retained. All other computation derives from KL divergences, parallel transport via $\Omega_{ij} = \exp(\phi_i) \exp(-\phi_j)$, and natural gradient descent on the Fisher-Rao manifold. No positional encoding is used and the standard causal attention mask provides implicit sequential structure.
+To validate the complete gauge-theoretic framework beyond attention mechanism correspondence, we trained $\mathrm{GL}(K)$ and $SO(N)$ gauge transformers on WikiText-103 language modeling (102M tokens, vocabulary size 50,257). These experiments test whether variational free energy minimization can drive actual language learning, with the gauge structure ($\mu$, $\Sigma$, $\phi$) evolving jointly during training. The gauge VFE architecture contains no MLPs, activation functions, or learned attention projections ($W_Q$, $W_K$, $W_V$); only a linear output projection to vocabulary logits is retained. All other computation derives from KL divergences, parallel transport via $\Omega_{ij} = \exp(\phi_i) \exp(-\phi_j)$, and natural gradient descent on the Fisher-Rao manifold. No positional encoding was used and the standard causal attention mask provides implicit sequential structure.
 
 We trained XXXX configurations: (1) a 3-layer model with trivial gauge transport ($\Omega = I$), $d_{\text{embed}} = 30$, $d_{\text{gauge}} = 15$, batch size 24; and (2) a 1-layer model with learned gauge transport ($\Omega \in \mathrm{GL}(30)$), $d_{\text{embed}} = 30$, $d_{\text{gauge}} = 30$, batch size 32. Both use VFE-dynamic mode with evolving covariance ($\Sigma$) and gauge frame ($\phi$), diagonal covariance structure, learnable per-component learning rates, and 50,000 training steps ($\sim$50M parameters per model).
 
-\subsubsection{Architectural Distinctions from Standard Transformers}
-
-The $\mathrm{GL}(K)$ gauge transformer differs fundamentally from standard transformers in several key respects:
-
-\paragraph{No Learned Attention Projections.}
-Standard transformers learn separate projection matrices $W_Q, W_K, W_V \in \mathbb{R}^{d \times d_k}$ that transform embeddings into query, key, and value spaces. In the gauge VFE architecture, \textbf{no such projections exist}. Attention weights $\beta_{ij}$ emerge directly from KL divergences between transported beliefs:
-\begin{equation}
-\beta_{ij} \propto \exp\left(-\frac{1}{\tau}D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)\right),
-\end{equation}
-computed using the learned gauge frames $\phi$ and embedding statistics $(\mu, \Sigma)$. This is a fundamental distinction: attention structure emerges from geometric relationships rather than learned projections.
-
-\paragraph{Absence of Positional Encoding.}
-Standard transformers require explicit positional encoding such as sinusoidal functions or learned vectors added to embeddings~\citep{vaswani2017attention}. The gauge VFE operates without any positional encoding. The causal attention mask (agent $i$ attends only to $j < i$) provides implicit positional information, and the inherent asymmetry of KL divergence may encode relative relationships differently than symmetric dot-product attention.
 
 \paragraph{Variational Inference Structure (E-step/M-step).}
 We utilize an expectation-maximization structure as follows:
@@ -1559,7 +1546,7 @@ where $\tilde{\nabla}$ denotes natural gradients projected via the Fisher-Rao me
 \theta \leftarrow \theta - \eta_M \, \nabla_{\theta} \mathcal{L}[\{q_i^*\}, \theta],
 \end{equation}
 
-where $\theta = \{\mu_{\text{embed}}, \Sigma_{\text{embed}}, \phi_{\text{embed}}, W_{\text{out}}\}$. Crucially, the evolved beliefs $\{q_i^*\}$ are not detached and gradients flow through the VFE dynamics, enabling end-to-end learning of how embedding initializations affect belief evolution. A fully backpropogation-free implementation is reserved for future work.
+where $\theta = \{\mu_{\text{embed}}, \Sigma_{\text{embed}}, \phi_{\text{embed}}, W_{\text{out}}\}$. The evolved beliefs $\{q_i^*\}$ are not detached and gradients flow through the VFE dynamics, enabling end-to-end learning of how embedding initializations affect belief evolution. A fully backpropogation-free implementation is reserved for future work.
 
 \subsubsection{Belief and Prior Initialization}
 
@@ -1628,9 +1615,11 @@ The temperature parameter $\tau$ plays a dual role. Geometrically, it represents
 \subsubsection{Key-Norm Bias and Layer Normalization}
 
 A central prediction of our gauge-theoretic framework is the emergence of a key-dependent bias term that modulates attention beyond simple query-key compatibility. The full KL-derived attention score includes:
+
 \begin{equation}
 \beta_{ij}^{(\text{flat})} = \text{softmax}_j\left( -\frac{\|Q_i - K_j\|^2}{\tau} - \frac{1}{2\sigma^2}\|K_j\|^2 \right),
 \end{equation}
+
 where the term $-\frac{1}{2\sigma^2}\|K_j\|^2$ represents an intrinsic salience depending only on key vector norm. This bias is gauge-geometric in origin: each key carries information not only about semantic content but also about its representation magnitude in the embedding space.
 
 Our theory predicts this bias should approximately cancel under two complementary mechanisms. First, gauge invariance: for orthogonal transformations $\Omega_{ij} \in \text{SO}(d_k)$, the bias reduces to $-\frac{1}{2\sigma^2}\|\mu_j\|^2$, depending on embedding norms. Second, high-dimensional concentration: for embeddings $\mu_j^{(i)} \sim \mathcal{N}(0, \sigma^2)$ in $\mathbb{R}^{d_k}$,
@@ -1664,12 +1653,12 @@ The negative correlation is precisely what our general theory predicts. The key-
   \label{fig:key_norm_bias}
 \end{figure*}
 
-These findings suggest why layer normalization is prevalent in transformer architectures. Layer normalization enforces constant norms across tokens, directly implementing the gauge-theoretic cancellation condition that should hold asymptotically in high dimensions. Without normalization, key-norm heterogeneity introduces systematic bias that degrades attention quality. Our gauge theory reveals the underlying reason: transformers approximate variational inference in a gauge geometry, and proper inference requires frame-independent comparisons achieved only when key norms are regulated. In this view, standard attention transformers represent a 0-dimensional gauge theory, and layer normalization is not merely an empirical stabilization technique but a geometric necessity.
+These findings suggest why layer normalization is prevalent in transformer architectures. Layer normalization enforces constant norms across tokens, directly implementing the gauge-theoretic cancellation condition that should hold asymptotically in high dimensions. Without normalization, key-norm heterogeneity introduces systematic bias that degrades attention quality. Our gauge theory reveals the underlying reason: transformers approximate variational inference in a gauge geometry, and proper inference requires frame-independent comparisons achieved only when key norms are regulated. 
 
 
 \subsection{Symmetry Breaking and Specialization}
 
-To investigate the role of observations in agent specialization, we conducted two parallel simulations under identical initial conditions: one without observations (vacuum) and one with randomly drawn Gaussian observations.
+To investigate the role of observations in agent specialization, we conducted two parallel simulations under identical initial conditions: one without observations (vacuum) and one with randomly drawn Gaussian observations utilizing $SO(3)$ for interpretive utility.
 
 \subsubsection{Vacuum State: Gauge-Symmetric Equilibrium}
 
@@ -1853,7 +1842,7 @@ Our results demonstrate that attention mechanisms can be understood as consequen
 
 By leveraging gauge theory coupled with informational geometry, we introduce geometric features that constrain model behavior according to standard symmetry principles analogous to how convolutional neural networks impose translation equivariance or graph neural networks respect permutation invariance \citep{finzi2020generalizing,weiler20183d,kondor2018generalization}. The $\mathrm{GL}(K)$ invariance theorem reveals that standard transformers already implement the maximal gauge symmetry compatible with KL-based attention. Our framework shifts this paradigm toward a richer landscape where specific subgroups ($\mathrm{SO}(N)$, $\mathrm{SU}(N)$, Lorentz group, etc) can be imposed as inductive biases, potentially enabling transformers to learn from fewer examples in domains with known physical structure or to infer patterns that unconstrained $\mathrm{GL}(K)$ would otherwise miss.
 
-Standard attention transformers can be described as a 0-dimensional gauge theory in which all geometric structure is absorbed into learned parameters. Lifting this restriction opens a qualitatively new construction: fields of transformers over an $N$-dimensional base manifold, coupled by induced gauge connections. At each point $c \in \mathcal{C}$, a local transformer processes tokens using the fiber structure (beliefs, covariances, gauge frames); the gauge connection $A_\mu(c)$ defines how information is parallel-transported between transformers at neighboring points. Crucially, this transport is path-dependent: the holonomy $\mathcal{P}\exp\left(-\oint A_\mu \, \mathrm{d}x^\mu\right)$ around a closed loop encodes curvature, meaning the route information takes between two points affects how it is transformed upon arrival. This is precisely the structure absent from the 0D limit and absent from standard transformers.
+Standard attention transformers can be described as a 0-dimensional gauge theory in which all geometric structure is absorbed into learned parameters. Lifting this restriction opens a qualitatively new construction: fields of transformers over an $N$-dimensional base manifold, coupled by induced gauge connections. At each point $c \in \mathcal{C}$, a local transformer processes tokens using the fiber structure (beliefs, covariances, gauge frames); the gauge connection $A_\mu(c)$ defines how information is parallel-transported between transformers at neighboring points. this transport is path-dependent: the holonomy $\mathcal{P}\exp\left(-\oint A_\mu \, \mathrm{d}x^\mu\right)$ around a closed loop encodes curvature, meaning the route information takes between two points affects how it is transformed upon arrival. This is precisely the structure absent from the 0D limit and absent from standard transformers.
 
 Such fields of transformers might be natural for data with intrinsic spatial or temporal extent such as video (2D+time), multi-agent robotics (physical space), or scientific data on manifolds where the geometric relationships between processing locations carry information that flat architectures discard. The gauge curvature $F_{\mu\nu}$ would encode position-dependent interaction structure. Combined with the multi-timescale dynamics discussed below, this yields the complete gauge field theory of interacting information-processing agents: a framework in which the spatial, temporal, and informational structures of a problem are all captured by the same geometric formalism.
 
@@ -2602,7 +2591,7 @@ The core computational pipeline begins with gradient accumulation, where each ag
 The alignment terms are particularly intricate, requiring neighbor iteration over all overlapping agent pairs, computation of gauge-transported statistics via the parallel transport operators $\Omega_{ij}$, and evaluation of the KL divergence gradients in the appropriate local frames. These gradients are accumulated into per-agent "inboxes" during a first pass, then drained and combined with self-energy gradients in a second pass to yield the total gradient for each agent.
 
 \subsection{Natural Gradient Descent on the Gaussian Manifold}
-A critical aspect of our implementation is the use of natural gradient descent for the statistical parameters, which exploits the information-geometric structure of the Gaussian manifold. Rather than treating the covariance matrices $\Sigma_i$ as Euclidean variables, we recognize them as points on the manifold of symmetric positive-definite matrices, equipped with the Fisher-Rao metric. The natural gradient at a point $\Sigma$ on this manifold is obtained by applying the inverse Fisher metric to the Euclidean gradient, yielding an intrinsic tangent vector that respects the manifold's curved geometry.
+A major aspect of our implementation is the use of natural gradient descent for the statistical parameters, which exploits the information-geometric structure of the Gaussian manifold. Rather than treating the covariance matrices $\Sigma_i$ as Euclidean variables, we recognize them as points on the manifold of symmetric positive-definite matrices, equipped with the Fisher-Rao metric. The natural gradient at a point $\Sigma$ on this manifold is obtained by applying the inverse Fisher metric to the Euclidean gradient, yielding an intrinsic tangent vector that respects the manifold's curved geometry.
 
 In our vectorized implementation, this transformation is performed via \texttt{apply\_natural\_gradient\_batch}, which computes the whitened gradient
 
