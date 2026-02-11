@@ -1107,7 +1107,7 @@ Our $GL(K)$ experiments (Section~\ref{sec:gl30}) utilize the full generality (at
 
 \subsection{Training as Variational Free Energy Minimization}
 
-Having established that attention emerges from the variational free energy, we now show that gradient descent on this free energy recovers the standard transformer training update, providing a variational interpretation of each component.
+Having established that attention emerges from the variational free energy, we now show that gradient descent on this free energy recovers  standard transformer training updating thereby providing a variational interpretation of each component.
 
 \subsubsection{Observation Likelihood as Loss Function.}
 
@@ -1157,7 +1157,7 @@ In the deterministic limit with flat bundle ($\Omega_{ij} = \Omega$), each belie
 = \frac{\alpha_i}{2\sigma_p^2}\,\|\mu_i - \mu_{\text{prior}}\|^2,
 \end{equation}
 
-where the state-dependent precision \eqref{eq:state_dependent_alpha} simplifies in the deterministic limit (with $D_{\mathrm{KL}}(\delta(\mu_i) \| \mathcal{N}(\mu_{\text{prior}}, \sigma_p^2 I)) = \frac{1}{2\sigma_p^2}\|\mu_i - \mu_{\text{prior}}\|^2$, absorbing constants) to
+where the state-dependent precision \eqref{eq:state_dependent_alpha} simplifies in the deterministic limit (with $D_{\mathrm{KL}}(\delta(\mu_i) \| \mathcal{N}(\mu_{\text{prior}}, \sigma_p^2 I)) = \frac{1}{2\sigma_p^2}\|\mu_i - \mu_{\text{prior}}\|^2$ and absorbing constants) to:
 
 \begin{equation}
 \alpha_i = \frac{c_0}{\displaystyle b_0 + \frac{1}{2\sigma_p^2}\|\mu_i - \mu_{\text{prior}}\|^2}.
@@ -1171,7 +1171,7 @@ Defining the per-token regularization strength $\lambda_{p,i} \equiv \alpha_i / 
 \label{eq:deterministic_free_energy_adaptive}
 \end{equation}
 
-This constitutes adaptive weight decay whereby tokens whose beliefs have drifted far from the prior ($\|\delta_i\|$ large) experience weaker regularization ($\lambda_{p,i}$ small, gate open), while tokens near the prior are strongly anchored ($\lambda_{p,i}$ large, gate closed).
+As previously discussed this form constitutes adaptive weight decay whereby tokens whose beliefs have drifted far from the prior ($\|\delta_i\|$ large) experience weaker regularization ($\lambda_{p,i}$ small, gate open), while tokens near the prior are strongly anchored ($\lambda_{p,i}$ large, gate closed).
 
 In the limit where $\alpha_i \to \alpha = \text{const}$ and $\lambda_{p,i} \to \lambda_p \equiv \alpha / \sigma_p^2$ we recover uniform L2 regularization:
 
@@ -1202,7 +1202,7 @@ In the limit $\lambda_{p,i} = \lambda_p$ the gradient of the free energy with re
 }
 \end{equation}
 
-The first term, $\lambda_p(\mu_i - \mu_{\text{prior}})$, corresponds to weight decay or L2 regularization. The second term, $\sum_j \frac{\beta_{ij}}{\sigma^2}(\mu_i - \Omega\mu_j)$, is attention-weighted message aggregation that pulls $\mu_i$ toward gauge-transported neighbors. The third term, $\sum_j \frac{\partial \beta_{ij}}{\partial \mu_i}\|\mu_i - \Omega\mu_j\|^2/(2\sigma^2)$, represents gradient flow through the attention weights themselves - a manifestly non-linear activation. The fourth term, $-\frac{\partial \log p(o_i \mid \mu_i)}{\partial \mu_i}$, is the gradient of the loss function (the supervised learning signal).
+The first term, $\lambda_p(\mu_i - \mu_{\text{prior}})$, matches weight decay or L2 regularization. The second term, $\sum_j \frac{\beta_{ij}}{\sigma^2}(\mu_i - \Omega\mu_j)$, is attention-weighted message aggregation that pulls $\mu_i$ toward gauge-transported neighbors. The third term, $\sum_j \frac{\partial \beta_{ij}}{\partial \mu_i}\|\mu_i - \Omega\mu_j\|^2/(2\sigma^2)$, represents gradient flow through the attention weights themselves - a manifestly non-linear activation. The fourth term, $-\frac{\partial \log p(o_i \mid \mu_i)}{\partial \mu_i}$, is the gradient of the loss function (the supervised learning signal).
 
 The variational gradient flow is given as:
 
@@ -1210,7 +1210,7 @@ The variational gradient flow is given as:
 \frac{d\mu_i}{dt} = -\eta \,\frac{\partial \mathcal{F}}{\partial \mu_i}.
 \end{equation}
 
-Discretizing in time yields the update rule:
+Discretizing in steps yields the update rule:
 
 \begin{equation}
 \boxed{
@@ -1232,7 +1232,7 @@ Discretizing in time yields the update rule:
 }
 \end{equation}
 
-This recovers the standard transformer update rule (attention-weighted aggregation, prior regularization, and supervised loss) providing a variational interpretation of each term.  In the complete theory we also have $\Sigma$ and $\phi$ gradients and updating.  The details of these may be found in the appendix.
+This recovers the standard transformer update rule (attention-weighted aggregation, prior regularization, and supervised loss) providing a variational interpretation of each term.  In the complete theory we also have $\Sigma$ and $\phi$ gradients with their corresponding updating.  The details of these may be found in the appendix.
 
 \subsubsection{Layer-by-Layer Backpropagation.}
 
@@ -1255,7 +1255,7 @@ This has the same structure as backpropagation whereby gradients flow backward t
 
 The residual (skip) connection is a defining architectural feature of modern transformers, where each sublayer's output is added to its input: $x_{\ell+1} = x_\ell + f(x_\ell)$. This structure emerges directly from the variational gradient flow.
 
-The belief update under free energy minimization is given by Euler discretization of the gradient flow:
+As above the belief update under free energy minimization is given by Euler discretization of the gradient flow:
 
 \begin{equation}
 \mu_i^{(t+1)} = \mu_i^{(t)} - \eta \frac{\partial \mathcal{F}}{\partial \mu_i}\bigg|_{\mu_i^{(t)}},
@@ -1272,7 +1272,7 @@ This interpretation extends to the covariance and gauge frame channels. The full
 \theta_i^{(t+1)} = \theta_i^{(t)} - \eta_\theta \,\nabla_{\theta_i}\mathcal{F}\bigg|_{\theta_i^{(t)}}, \qquad \theta_i \in \{\mu_i, \Sigma_i, \phi_i\},
 \end{equation}
 
-with each channel possessing its own residual structure and effective learning rate. The multi-channel residual flow corresponds to the residual stream interpretation of transformers \citep{elhage2021mathematical}, where each layer reads from and writes to a shared residual pathway. In the gauge-theoretic framework, this residual stream is the belief state $(\mu_i, \Sigma_i, \phi_i)$, which accumulates incremental updates from successive layers of variational refinement.
+with each channel possessing its own residual structure and effective learning rate. The multi-channel residual flow corresponds to the residual stream interpretation of transformers \citep{elhage2021mathematical}, where each layer reads from and writes to a shared residual pathway. In the gauge-theoretic framework, this residual stream is the belief state itself $(\mu_i, \Sigma_i, \phi_i)$, which accumulates incremental updates from successive layers of variational refinement.
 
 
 \begin{table}[p]
@@ -1445,7 +1445,7 @@ The factorization \eqref{eq:rope_gauge} identifies the position-dependent gauge 
 \label{eq:rope_lie_algebra}
 \end{equation}
 
-where $J = \left(\begin{smallmatrix} 0 & -1 \\ 1 & 0 \end{smallmatrix}\right)$ is the $\mathrm{SO}(2)$ generator and $\theta_n$ are the RoPE frequencies. The position-dependent rotation is then $R(\theta_i) = \exp(\phi_i^{(\mathrm{pos})})$, and the inter-agent rotation $R(\theta_{j-i}) = \exp(\phi_i^{(\mathrm{pos})})\exp(-\phi_j^{(\mathrm{pos})})$ has exactly the form of a gauge transport operator \eqref{eq:gauge_frame_rotation} restricted to the $\mathrm{SO}(2)^{d_k/2}$ subgroup.
+where $J = \left(\begin{smallmatrix} 0 & -1 \\ 1 & 0 \end{smallmatrix}\right)$ is the $\mathrm{SO}(2)$ generator and $\theta_n$ are the RoPE frequencies. The position-dependent rotation is then $R(\theta_i) = \exp(\phi_i^{(\mathrm{pos})})$, and the inter-agent rotation $R(\theta_{j-i}) = \exp(-\phi_i^{(\mathrm{pos})})\exp(\phi_j^{(\mathrm{pos})})$ has exactly the form of a gauge transport operator \eqref{eq:gauge_frame_rotation} restricted to the $\mathrm{SO}(2)^{d_k/2}$ subgroup. 
 
 The multi-frequency structure of RoPE ($\theta_n = 10000^{-2n/d_k}$) corresponds to different components of the gauge frame oscillating at different frequencies across positions: low-frequency components ($\theta_n$ small, $n$ large) encode coarse positional structure and remain nearly aligned across distant positions, while high-frequency components ($\theta_n$ large, $n$ small) encode fine-grained local position and de-correlate rapidly. 
 
@@ -1467,18 +1467,20 @@ An important distinction is that RoPE applies the position-dependent gauge only 
 \subsection{Further Architectural Correspondences}
 \label{sec:further_correspondences}
 
-Beyond the core attention mechanism, several additional transformer components admit natural interpretations within the gauge-theoretic framework. We organize these by the strength of the correspondence: components that are \emph{derived} from the variational principle, components whose \emph{structural role} is explained, and components that are \emph{accommodated} by the framework without being uniquely predicted.
+Beyond the core attention mechanism, several additional transformer components admit origins within the gauge-theoretic framework. We organize these by the strength of their correspondences: components that are \emph{derived} from the variational principle, components whose \emph{structural role} is explained, and components that are \emph{accommodated} by the framework without being uniquely predicted.
 
-\subsubsection{Feedforward Networks and Nonlinear Activations.}
+\subsubsection{Feed forward Networks and Non-linear Activations.}
 \label{sec:ffn_nonlinearity}
 
-Standard transformers interleave attention sublayers with feedforward networks (FFNs), typically two-layer MLPs with a nonlinear activation such as GeLU \citep{hendrycks2016gaussian}. Within the gauge-theoretic framework, the FFN corresponds to the iterative VFE dynamics that refine beliefs between attention computations.
+Standard transformers utilize attention sub-layers with feedforward networks (FFNs). These are typically two-layer MLPs with a non-linear activation mechanism such as GeLU \citep{hendrycks2016gaussian}. Within the gauge-theoretic framework, the FFN corresponds to the iterative VFE dynamics that adjust beliefs between attention computations.
 
-Observe that the variational gradient $\partial \mathcal{F}/\partial \mu_i$ (Eq.~\ref{eq:residual_gradient_flow}) is itself a nonlinear function of $\mu_i$, through its dependence on the attention weights $\beta_{ij}$. Differentiating $\beta_{ij} = \operatorname{softmax}(-D_{\mathrm{KL}}/\tau)$ with respect to $\mu_i$ yields:
+We may observe that the variational gradient $\partial \mathcal{F}/\partial \mu_i$ (Eq.~\ref{eq:residual_gradient_flow}) is itself a non-linear function of $\mu_i$, via its dependency on the attention weights $\beta_{ij}$. Differentiating $\beta_{ij} = \operatorname{softmax}(-D_{\mathrm{KL}}/\tau)$ with respect to $\mu_i$ yields:
+
 \begin{equation}
 \frac{\partial \beta_{ij}}{\partial \mu_i} = \frac{\beta_{ij}}{\tau}\left[\frac{\partial D_{\mathrm{KL},ij}}{\partial \mu_i} - \sum_k \beta_{ik} \frac{\partial D_{\mathrm{KL},ik}}{\partial \mu_i}\right],
 \label{eq:softmax_gradient_nonlinearity}
 \end{equation}
+
 where $D_{\mathrm{KL},ij} \equiv D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$. This expression is a \emph{centered} gradient (the deviation of the per-source KL gradient from its $\beta$-weighted mean) multiplied by the attention weight itself. This self-normalizing structure is the nonlinearity that replaces ad hoc activations (ReLU, GELU, SiLU, etc) in the VFE framework. This creates positive feedback (similar beliefs yield higher $\beta$, which pulls beliefs closer still) and implements an implicit gating mechanism where the sign and magnitude of the gradient depend on the current attention distribution.
 
 In the full VFE implementation, multiple iterations of gradient descent with recomputed $\beta$ at each step constitute the analogue of the FFN sublayer. Each iteration applies the nonlinear map \eqref{eq:softmax_gradient_nonlinearity}, and the composition of multiple such iterations produces increasingly complex nonlinear transformations of the beliefs. The number of VFE iterations thus plays the role of FFN depth. However, the theory predicts a specific \emph{form} of nonlinearity (the softmax gradient \eqref{eq:softmax_gradient_nonlinearity}) rather than the specific activation functions (GeLU, SiLU, etc) used in practice. The extent to which engineered activations approximate or improve upon this theoretically motivated form is an open empirical question.
