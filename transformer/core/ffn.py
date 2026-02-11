@@ -67,6 +67,9 @@ class GaugeFFN(nn.Module):
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
         # Bayesian precision (learned prior self-coupling)
         learnable_alpha: bool = False,  # If True, use Gamma-Normal conjugate precision
+        # Multi-head VFE: per-block β through VFE iterations
+        multihead_vfe: bool = False,  # If True, maintain per-head attention in VFE loop
+        per_head_kappa: bool = False,  # If True, learn separate κ_h per head in VFE
         # Legacy parameters (ignored, kept for API compatibility)
         **kwargs,
     ):
@@ -137,6 +140,9 @@ class GaugeFFN(nn.Module):
             mask_self_attention=mask_self_attention,
             # Bayesian precision
             learnable_alpha=learnable_alpha,
+            # Multi-head VFE
+            multihead_vfe=multihead_vfe,
+            per_head_kappa=per_head_kappa,
         )
 
     def forward(

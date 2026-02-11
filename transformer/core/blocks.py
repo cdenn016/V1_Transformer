@@ -118,6 +118,11 @@ class GaugeTransformerBlock(nn.Module):
         enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
         # Bayesian precision (learned prior self-coupling)
         ffn_learnable_alpha: bool = False,  # If True, use Gamma-Normal conjugate precision
+        # Per-head specialization
+        per_head_kappa: bool = False,  # If True, learn separate κ_h per head
+        use_output_projection: bool = False,  # If True, add W_O after multi-head attention
+        # Multi-head VFE: per-block β through VFE iterations
+        multihead_vfe: bool = False,  # If True, VFE_dynamic maintains per-head attention
     ):
         """
         Initialize gauge transformer block.
@@ -146,6 +151,9 @@ class GaugeTransformerBlock(nn.Module):
             mask_self_attention: If True, mask out diagonal (no self-attention).
                                 Prevents attention collapse since KL(q_i||q_i)=0 always.
             ffn_learnable_alpha: If True, use Bayesian precision via Gamma-Normal conjugacy.
+            per_head_kappa: If True, learn separate κ_h per head in attention.
+            use_output_projection: If True, add W_O projection after multi-head attention.
+            multihead_vfe: If True, VFE_dynamic maintains per-head attention β_h.
         """
         super().__init__()
         self.embed_dim = embed_dim
@@ -201,6 +209,8 @@ class GaugeTransformerBlock(nn.Module):
             use_identity_transport=use_identity_transport,
             mask_self_attention=mask_self_attention,
             enforce_orthogonal=enforce_orthogonal,
+            per_head_kappa=per_head_kappa,
+            use_output_projection=use_output_projection,
         )
 
         # Conditionally create LayerNorm and Dropout (disabled for pure VFE)
@@ -241,6 +251,9 @@ class GaugeTransformerBlock(nn.Module):
             mask_self_attention=mask_self_attention,
             # Bayesian precision
             learnable_alpha=ffn_learnable_alpha,
+            # Multi-head VFE
+            multihead_vfe=multihead_vfe,
+            per_head_kappa=per_head_kappa,
         )
 
         self.norm2 = nn.LayerNorm(embed_dim) if use_layernorm else nn.Identity()
@@ -448,6 +461,11 @@ class GaugeTransformerStack(nn.Module):
         enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
         # Bayesian precision (learned prior self-coupling)
         ffn_learnable_alpha: bool = False,  # If True, use Gamma-Normal conjugate precision
+        # Per-head specialization
+        per_head_kappa: bool = False,  # If True, learn separate κ_h per head
+        use_output_projection: bool = False,  # If True, add W_O after multi-head attention
+        # Multi-head VFE: per-block β through VFE iterations
+        multihead_vfe: bool = False,  # If True, VFE_dynamic maintains per-head attention
     ):
         """
         Initialize stack of transformer blocks.
@@ -481,6 +499,9 @@ class GaugeTransformerStack(nn.Module):
             mask_self_attention: If True, mask out diagonal (no self-attention).
                                 Prevents attention collapse since KL(q_i||q_i)=0 always.
             ffn_learnable_alpha: If True, use Bayesian precision via Gamma-Normal conjugacy.
+            per_head_kappa: If True, learn separate κ_h per head.
+            use_output_projection: If True, add W_O projection after multi-head attention.
+            multihead_vfe: If True, VFE_dynamic maintains per-head attention β_h.
         """
         super().__init__()
         self.n_layers = n_layers
@@ -537,6 +558,11 @@ class GaugeTransformerStack(nn.Module):
                 enforce_orthogonal=enforce_orthogonal,
                 # Bayesian precision
                 ffn_learnable_alpha=ffn_learnable_alpha,
+                # Per-head specialization
+                per_head_kappa=per_head_kappa,
+                use_output_projection=use_output_projection,
+                # Multi-head VFE
+                multihead_vfe=multihead_vfe,
             )
             for _ in range(n_layers)
         ])
