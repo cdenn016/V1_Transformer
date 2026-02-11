@@ -790,9 +790,9 @@ class PublicationMetricsTracker:
             'ffn_lr': lrs.get('ffn', 0),
 
             # Gradients
-            'grad_norm_total': grad_norms.get('total', 0),
-            'grad_norm_mu': grad_norms.get('mu', 0),
-            'grad_norm_ffn': grad_norms.get('ffn', 0),
+            'grad_norm_total': grad_norms.get('total', 0) if grad_norms else 0,
+            'grad_norm_mu': grad_norms.get('mu', 0) if grad_norms else 0,
+            'grad_norm_ffn': grad_norms.get('ffn', 0) if grad_norms else 0,
 
             # Bayesian alpha diagnostics
             'alpha_mean': metrics.get('bayesian/alpha_mean'),
@@ -1343,12 +1343,13 @@ class PublicationTrainer(FastTrainer):
             step_time = time.time() - step_start
 
             is_log_step = (step + 1) % self.config.log_interval == 0
+            has_rg = metrics.get('rg/modularity') is not None
 
             # Get learning rates
             lrs = {group['name']: group['lr'] for group in self.optimizer.param_groups}
 
-            # Log to basic tracker and console (only at log intervals)
-            if is_log_step:
+            # Log to basic tracker and console at log intervals OR when RG metrics were computed
+            if is_log_step or has_rg:
                 batch_size = batch[0].shape[0]
                 seq_len = batch[0].shape[1]
                 self.metrics_tracker.log_step(
