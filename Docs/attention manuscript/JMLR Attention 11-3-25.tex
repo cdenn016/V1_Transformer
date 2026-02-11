@@ -799,44 +799,7 @@ This is minimized by gradient descent on $\{s_i\}$, yielding model updates:
 
 with learning rate $\eta_s \ll \eta_q$ (slow).
 
-This time-scale separation enables learning: agents rapidly adapt beliefs $q_i$ to new observations while slowly refining models $s_i$ to capture long-term structure in a coordinated manner.
-
-\subsection{Meta-Agent Emergence and Cross-Scale Coupling}
-
-The hierarchical structure naturally supports the emergence of meta-agents \citep{shen2008coarse}. These are coarse-grained entities that are formed when groups of agents reach belief consensus.
-
-A meta-agent $\mathcal{M}^{(1)}$ is a set of agents $\{i \in I_{\mathcal{M}}\}$ satisfying:
-
-\begin{align}
-q_i &= \Omega_{ij} q_j \quad \forall i,j \in I_{\mathcal{M}} \quad \text{(belief consensus)}, \label{eq:belief_consensus} \\
-s_i &= \tilde{\Omega}_{ij} s_j \quad \forall i,j \in I_{\mathcal{M}} \quad \text{(model consensus)}. \label{eq:model_consensus}
-\end{align}
-
-When these conditions hold, the agents are epistemically dead in that they share identical beliefs and models after accounting for gauge transformations and no longer evolve without continual observations. The meta-agent can be described by a single representative renormalized state $(q_{\mathcal{M}}, s_{\mathcal{M}})$.
-
-Meta-agents at scale $\zeta=0$ (individual agents) can generally form meta-agents at scale $\zeta=1$ (groups), which can further coalesce into meta-agents at scale $\zeta=2$ (communities), and so on. This creates a hierarchical scale structure:
-
-\begin{figure}[h]
-\centering
-\small
-\[
-\text{Agents}^{(0)} \xrightarrow{\text{consensus}} 
-\text{Meta-agents}^{(1)} \xrightarrow{\text{consensus}} 
-\text{Meta}^{(2)} \xrightarrow{\text{consensus}} \cdots
-\]
-\caption{Hierarchical emergence through consensus at successive scales $\zeta$.}
-\label{fig:hierarchy}
-\end{figure}
-
-At each scale, the effective free energy takes the same form as Eq.~\eqref{eq:free_energy_final}, with agents at scale $\zeta$ replaced by meta-agents at scale $\zeta+1$, coupling constants renormalized according to
-\begin{equation*}
-  \beta_{ij}^{(\zeta+1)} = f_\beta(\{\beta_{kl}^{(\zeta)}\}), \quad
-  \gamma_{ij}^{(\zeta+1)} = f_\gamma(\{\gamma_{kl}^{(\zeta)}\}),
-\end{equation*}
-and effective gauge frames given by $\phi_{\mathcal{M}}^{(\zeta+1)} = \text{average}(\{\phi_i^{(\zeta)}\})$.
-This is the gauge-theoretic analogue of renormalization group flow in statistical field theory \citep{anderson1984basic,wilson1974renormalization,garciaMillan2024network}. Cross-scale couplings $\Lambda^{\zeta}_{\zeta'}$ (Appendix) mediate interactions between agents at different hierarchical levels.
-
-In the present work, we restrict to single-scale dynamics whereby all agents are at scale $\zeta=0$ with no cross-scale couplings ($\Lambda^{\zeta}_{\zeta'} = 0$ for $\zeta \neq \zeta'$). We focus exclusively on the fast subsystem (Eq.~\ref{eq:fast_subsystem}), studying how beliefs $\{q_i\}$ evolve under alignment while holding models $\{s_i\}$ fixed. We posit that standard transformers operate entirely in this fast subsystem: they perform inference ($q_i$ updates) with frozen models ($s_i$ fixed during a forward pass).
+This time-scale separation enables learning: agents rapidly adapt beliefs $q_i$ to new observations while slowly refining models $s_i$ to capture long-term structure in a coordinated manner. The framework naturally supports hierarchical emergence of meta-agents through coarse-graining when groups of agents reach belief consensus (Appendix~\ref{sec:appendix_meta_agent}), though in the present work we restrict to single-scale dynamics at $\zeta = 0$ with no cross-scale couplings. We focus exclusively on the fast subsystem (Eq.~\ref{eq:fast_subsystem}), studying how beliefs $\{q_i\}$ evolve under alignment while holding models $\{s_i\}$ fixed. We posit that standard transformers operate entirely in this fast subsystem: they perform inference ($q_i$ updates) with frozen models ($s_i$ fixed during a forward pass).
 
 \subsection{Symmetry Breaking}
 \label{sec:symmetry_breaking}
@@ -1977,6 +1940,42 @@ q_i(c) = q_j(c), \quad p_i(c) = p_j(c) \quad \text{for } c \in \mathcal{U}_i \ca
 \end{equation}
 
 A set of agents is \emph{epistemically dead} if they identically share both beliefs and models. While constituent agents of a meta-agent may be epistemically dead, the meta-agent itself need not be; such agents can be integrated out, yielding coarse-grained higher-order entities and a route toward emergence.
+
+\subsubsection{Hierarchical Meta-Agent Emergence and Cross-Scale Coupling}
+\label{sec:appendix_meta_agent}
+
+The gauge-theoretic framework naturally supports the emergence of meta-agents through coarse-graining \citep{shen2008coarse}. A meta-agent $\mathcal{M}^{(1)}$ is a set of agents $\{i \in I_{\mathcal{M}}\}$ satisfying:
+
+\begin{align}
+q_i &= \Omega_{ij} q_j \quad \forall i,j \in I_{\mathcal{M}} \quad \text{(belief consensus)}, \label{eq:belief_consensus} \\
+s_i &= \tilde{\Omega}_{ij} s_j \quad \forall i,j \in I_{\mathcal{M}} \quad \text{(model consensus)}. \label{eq:model_consensus}
+\end{align}
+
+When these conditions hold, the agents are epistemically dead in that they share identical beliefs and models after accounting for gauge transformations and no longer evolve without continual observations. The meta-agent can be described by a single representative renormalized state $(q_{\mathcal{M}}, s_{\mathcal{M}})$.
+
+Meta-agents at scale $\zeta=0$ (individual agents) can form meta-agents at scale $\zeta=1$ (groups), which can further coalesce into meta-agents at scale $\zeta=2$ (communities), and so on, creating a hierarchical scale structure:
+
+\begin{figure}[h]
+\centering
+\small
+\[
+\text{Agents}^{(0)} \xrightarrow{\text{consensus}}
+\text{Meta-agents}^{(1)} \xrightarrow{\text{consensus}}
+\text{Meta}^{(2)} \xrightarrow{\text{consensus}} \cdots
+\]
+\caption{Hierarchical emergence through consensus at successive scales $\zeta$.}
+\label{fig:hierarchy}
+\end{figure}
+
+At each scale, the effective free energy takes the same form as Eq.~\eqref{eq:free_energy_final}, with agents at scale $\zeta$ replaced by meta-agents at scale $\zeta+1$, coupling constants renormalized according to
+\begin{equation*}
+  \beta_{ij}^{(\zeta+1)} = f_\beta(\{\beta_{kl}^{(\zeta)}\}), \quad
+  \gamma_{ij}^{(\zeta+1)} = f_\gamma(\{\gamma_{kl}^{(\zeta)}\}),
+\end{equation*}
+and effective gauge frames given by $\phi_{\mathcal{M}}^{(\zeta+1)} = \text{average}(\{\phi_i^{(\zeta)}\})$.
+This is the gauge-theoretic analogue of renormalization group flow in statistical field theory \citep{anderson1984basic,wilson1974renormalization,garciaMillan2024network}. Cross-scale couplings $\Lambda^{\zeta}_{\zeta'}$ mediate interactions between agents at different hierarchical levels via the cross-scale transport operators defined below.
+
+Whether this hierarchical structure maps onto multi-layer transformer architectures (where each layer constitutes a ``scale''), or onto distinct organizational levels within a single attention layer, remains an open question for future investigation.
 
 \subsubsection{Bundle Morphisms and Transport Operators}
 Via standard horizontal lifting from the principal bundle $\mathcal{N}$ to the associated bundles, we obtain a hierarchy of morphisms and induced connections:
