@@ -87,6 +87,7 @@ class FastTrainingConfig:
 
     # Learning rate schedule
     lr_decay: str = 'cosine'  # 'cosine', 'linear', 'constant'
+    min_lr_ratio: float = 0.1  # Minimum LR as fraction of peak (floor for cosine decay)
 
     # Logging
     log_interval: int = 10
@@ -321,18 +322,22 @@ class FastTrainer:
         if self.config.lr_decay == 'constant':
             return None
 
+        min_ratio = getattr(self.config, 'min_lr_ratio', 0.1)
+
         def lr_lambda(step):
             # Warmup
             if step < self.config.warmup_steps:
                 return step / max(1, self.config.warmup_steps)
 
-            # Decay
+            # Decay with min_lr floor
             progress = (step - self.config.warmup_steps) / max(1, self.config.max_steps - self.config.warmup_steps)
+            progress = min(progress, 1.0)  # Clamp for steps beyond max_steps
 
             if self.config.lr_decay == 'cosine':
-                return 0.5 * (1.0 + torch.cos(torch.tensor(progress * 3.14159)).item())
+                decay = 0.5 * (1.0 + torch.cos(torch.tensor(progress * 3.14159)).item())
+                return max(min_ratio, decay)
             elif self.config.lr_decay == 'linear':
-                return max(0.0, 1.0 - progress)
+                return max(min_ratio, 1.0 - progress)
             else:
                 return 1.0
 
@@ -416,11 +421,11 @@ class FastTrainer:
 
         return formatted_metrics
 
-    def validate(self, max_batches: int = 5) -> Dict[str, float]:
+    def validate(self, max_batches: int = 50) -> Dict[str, float]:
         """Validation loop.
 
         Args:
-            max_batches: Maximum number of validation batches (default: 5 for speed)
+            max_batches: Maximum number of validation batches (default: 50)
         """
         self.model.eval()
 
