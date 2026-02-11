@@ -799,7 +799,7 @@ This is minimized by gradient descent on $\{s_i\}$, yielding model updates:
 
 with learning rate $\eta_s \ll \eta_q$ (slow).
 
-This time-scale separation enables learning: agents rapidly adapt beliefs $q_i$ to new observations while slowly refining models $s_i$ to capture long-term structure in a coordinated manner. The framework naturally supports hierarchical emergence of meta-agents through coarse-graining when groups of agents reach belief consensus (Appendix~\ref{sec:appendix_meta_agent}), though in the present work we restrict to single-scale dynamics at $\zeta = 0$ with no cross-scale couplings. We focus exclusively on the fast subsystem (Eq.~\ref{eq:fast_subsystem}), studying how beliefs $\{q_i\}$ evolve under alignment while holding models $\{s_i\}$ fixed. We posit that standard transformers operate entirely in this fast subsystem: they perform inference ($q_i$ updates) with frozen models ($s_i$ fixed during a forward pass).
+This time-scale separation enables learning: agents rapidly adapt beliefs $q_i$ to new observations while slowly refining models $s_i$ to capture long-term structure in a coordinated manner. The framework naturally supports hierarchical emergence of meta-agents through coarse-graining when groups of agents reach belief consensus (Appendix~\ref{sec:appendix_meta_agent}), though in the present work we restrict to single-scale dynamics with no cross-scale couplings. We focus exclusively on the fast subsystem (Eq.~\ref{eq:fast_subsystem}), studying how beliefs $\{q_i\}$ evolve under alignment while holding models $\{s_i\}$ fixed. We posit that standard transformers operate entirely in this fast subsystem: they perform inference ($q_i$ updates) with frozen models ($s_i$ fixed during a forward pass).
 
 \subsection{Symmetry Breaking}
 \label{sec:symmetry_breaking}
@@ -947,7 +947,7 @@ Thus the effective logit is:
 The second term $-\frac{1}{2\sigma^2}\|\Omega\mu_j\|^2$ depends only on key $j$ and acts as a key-dependent bias. For general $\Omega \in \mathrm{GL}(d_k)$, this bias becomes approximately constant under two complementary mechanisms:
 
 \textbf{(1) Learned Absorption:}
-For $\Omega = W_Q W_K^\top \in \mathrm{GL}(d_k)$, the key bias $\|\Omega\mu_j\|^2 = \|W_Q W_K^\top \mu_j\|^2$ is absorbed into the learned projections. The network learns $W_Q, W_K$ such that this term either approximately constant across keys, or provides useful key-dependent modulation that improves performance. Unlike orthogonal groups where $\|\Omega\mu_j\|^2 = \|\mu_j\|^2$ by construction, $\mathrm{GL}(K)$ allows the network to learn the optimal transformation of key norms.
+For $\Omega = W_Q W_K^\top \in \mathrm{GL}(d_k)$, the key bias $\|\Omega\mu_j\|^2 = \|W_Q W_K^\top \mu_j\|^2$ is absorbed into the learned projections. The network learns $W_Q, W_K$ such that this term either approximately constant across keys, or provides useful key-dependent modulation. Unlike orthogonal groups where $\|\Omega\mu_j\|^2 = \|\mu_j\|^2$ by construction, $\mathrm{GL}(K)$ allows the network to learn the optimal transformation of key norms.
 
 \textbf{(2) High-Dimensional Concentration + Layer Normalization:}
 For embeddings in $\mathbb{R}^{d_k}$ with approximately independent components (e.g., $\mu_j^{(i)} \sim \mathcal{N}(0, \sigma_0^2)$), the concentration of measure implies:
@@ -958,10 +958,12 @@ For embeddings in $\mathbb{R}^{d_k}$ with approximately independent components (
 
 with relative fluctuations $O(1/\sqrt{d_k}) \to 0$ as $d_k$ increases.
 
-Modern transformer architectures enforce constant key norms explicitly via \textbf{layer normalization}, which normalizes $\|\mu_j\|$ to be constant across tokens. This makes the key bias:
+Modern transformer architectures enforce constant key norms explicitly via layer normalization, which normalizes $\|\mu_j\|$ to be constant across tokens. This makes the key bias:
+
 \begin{equation}
 -\frac{1}{2\sigma^2}\|\Omega\mu_j\|^2 \approx C \quad \text{(constant in } j\text{)},
 \end{equation}
+
 which cancels under softmax. Layer normalization thus serves a gauge-theoretic purpose: it ensures that the $\mathrm{GL}(d_k)$ gauge transformation does not introduce spurious key-dependent biases that would distort attention patterns.
 
 The algebraic origin of this cancellation can be understood through the Lie algebra decomposition of the gauge group. The Lie algebra $\mathfrak{gl}(K)$ splits as a direct sum:
@@ -969,7 +971,7 @@ The algebraic origin of this cancellation can be understood through the Lie alge
 \mathfrak{gl}(K) = \mathfrak{sl}(K) \oplus \mathbb{R},
 \label{eq:gl_decomposition}
 \end{equation}
-where $\mathfrak{sl}(K)$ consists of traceless matrices (volume-preserving transformations) and $\mathbb{R}$ is the trace component (overall scaling). The key-norm bias $\|\Omega\mu_j\|^2$ is sensitive to the $\mathbb{R}$ component: if $\Omega$ has a nontrivial scaling factor $\det(\Omega) \neq 1$, then $\|\Omega\mu_j\|$ varies with $\|\mu_j\|$, introducing $j$-dependent bias. Layer normalization, which centers and rescales $\mu_j$ to have zero mean and unit variance per component, effectively projects the representation onto a standardized submanifold where the $\mathbb{R}$ (trace/scale) degree of freedom has been quotiented out. This restricts the effective gauge group from $\mathrm{GL}(K)$ to $\mathrm{SL}(K)$ (up to translations) for the purpose of attention computation, eliminating the source of key-norm bias at its algebraic origin. In this view, layer normalization is not merely an empirical stabilization technique but a projection onto the appropriate gauge subgroup for frame-independent attention.
+where $\mathfrak{sl}(K)$ consists of traceless matrices (volume-preserving transformations) and $\mathbb{R}$ is the trace component (overall scaling). The key-norm bias $\|\Omega\mu_j\|^2$ is sensitive to the $\mathbb{R}$ component such that if $\Omega$ has a nontrivial scaling factor $\det(\Omega) \neq 1$, then $\|\Omega\mu_j\|$ varies with $\|\mu_j\|$, introducing a $j$-dependent bias. Layer normalization, which centers and rescales $\mu_j$ to have zero mean and unit variance per component, effectively projects the representation onto a  sub-manifold where the $\mathbb{R}$ (trace/scale) degree of freedom has been quotiented out. This restricts the effective gauge group from $\mathrm{GL}(K)$ to $\mathrm{SL}(K)$ (modulo translations) for the purpose of attention computation, eliminating the source of key-norm bias at its algebraic origin. In this view, layer normalization is not merely an empirical stabilization technique but a projection onto the appropriate gauge subgroup for frame-independent attention.
 
 \paragraph{Factorization into Query-Key Dot Product.}
 
@@ -978,13 +980,13 @@ The leading term in $\tilde{s}_{ij}$ is:
 \frac{1}{\sigma^2}\mu_i^\top \Omega \mu_j.
 \end{equation}
 
-This is precisely where the $\mathrm{GL}(d_k)$ gauge structure enters and where the scaling limit is completed. We identify learned projection matrices $W_Q, W_K$ such that:
+We identify learned projection matrices $W_Q, W_K$ such that:
 
 \begin{equation}
 W_Q W_K^\top = \frac{1}{\sigma^2} \Omega \in \mathrm{GL}(d_k).
 \end{equation}
 
-Rather than taking $\sigma \to 0$ (which would make the KL divergence infinite and the projections singular), we recognize that $\sigma^{-2}$ and $\Omega$ always appear together in the combination $\sigma^{-2}\Omega$. The learned matrices $W_Q, W_K$ parametrize this combined quantity directly, rendering $\sigma$ an implicit (finite) scale factor absorbed into the learned weights. The deterministic limit is thus achieved not by $\sigma \to 0$ in isolation, but by the network learning projections that encode the effective gauge-scaled transformation.
+Rather than taking $\sigma \to 0$ we recognize that $\sigma^{-2}$ and $\Omega$ always appear together in the combination $\sigma^{-2}\Omega$. The learned matrices $W_Q, W_K$ parametrize this combined quantity directly, rendering $\sigma$ an implicit (finite) scale factor absorbed into the learned weights. The deterministic limit is thus achieved not by $\sigma \to 0$ in isolation, but by the network learning projections that encode the effective gauge-scaled transformation.
 
 Such a factorization always exists for any invertible $\Omega$: any matrix $M \in \mathrm{GL}(d_k)$ can be written as $M = AB^\top$ for suitable $A, B$ (e.g., via SVD: $M = U\Sigma V^\top = (U\Sigma^{1/2})(V\Sigma^{1/2})^\top$).
 
@@ -1300,7 +1302,7 @@ Fisher-Rao $G^{-1}\nabla\mathcal{F}$ & Diagonal approximation & Adam optimizer &
 Riemannian trust region & Norm clipping on manifold & Gradient clipping & I \\
 \hline
 \end{tabular}
-\caption{Comprehensive correspondence between the gauge-theoretic VFE framework and transformer architecture. \textbf{Status column:} D = \emph{derived} from the variational principle (mathematically exact or follows from explicit limits); S = \emph{structural} correspondence (the framework explains the component's role but does not uniquely predict its specific form); I = \emph{interpretive} (the framework accommodates the technique but does not derive it). The crucial insight is that transformers possess $\mathrm{GL}(K)$ gauge structure through learned projections $W_Q, W_K$, with the ``deterministic limit'' achieved by absorbing $\sigma^{-2}$ into learned parameters. Each row represents a specific degree of freedom that the full gauge-theoretic framework retains and that standard transformers collapse into a simpler form.}
+\caption{Comprehensive correspondence between the gauge-theoretic VFE framework and transformer architecture. \textbf{Status column:} D = \emph{derived} from the variational principle (mathematically exact or follows from explicit limits); S = \emph{structural} correspondence (the framework explains the component's role but does not uniquely predict its specific form); I = \emph{interpretive}.}
 \label{tab:fep_nn_correspondence}
 \end{table}
 
