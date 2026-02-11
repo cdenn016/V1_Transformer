@@ -1803,6 +1803,8 @@ class IrrepMultiHeadAttention(nn.Module):
         use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
         enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
+        per_head_kappa: bool = False,  # If True, learn separate κ_h per head
+        use_output_projection: bool = False,  # If True, add W_O linear projection after heads
     ):
         """
         Initialize irrep-structured multi-head attention.
@@ -1824,6 +1826,12 @@ class IrrepMultiHeadAttention(nn.Module):
             mask_self_attention: If True, mask out diagonal (no self-attention).
                                 This prevents attention collapse since KL(q_i||q_i)=0
                                 always makes self-attention the most attractive.
+            per_head_kappa: If True, learn separate κ_h per head (log-parameterized).
+                           Each head gets its own attention temperature, enabling
+                           different heads to cluster at different scales.
+            use_output_projection: If True, add a learned W_O ∈ R^{K×K} linear
+                                  projection after concatenating head outputs.
+                                  Enables cross-head information mixing.
         """
         super().__init__()
         self.diagonal_covariance = diagonal_covariance
@@ -1985,8 +1993,28 @@ class IrrepMultiHeadAttention(nn.Module):
 
             cum_dim += dim
 
-        # No output projection - pure VFE approach returns concatenated beliefs directly
-        # (Removed nn.Linear to avoid neural network mixing between irrep blocks)
+        # =================================================================
+        # Per-head κ (learned temperature per head)
+        # =================================================================
+        self.per_head_kappa = per_head_kappa
+        if per_head_kappa:
+            # Log-parameterized for positivity: κ_h = exp(log_κ_h)
+            self.log_kappa = nn.Parameter(
+                torch.full((self.n_heads,), math.log(max(kappa_beta, 1e-6)))
+            )
+            print(f"  Per-head κ: {self.n_heads} learnable temperatures (init={kappa_beta:.3f})")
+        else:
+            self.log_kappa = None
+
+        # =================================================================
+        # W_O output projection (optional cross-head mixing)
+        # =================================================================
+        self.use_output_projection = use_output_projection
+        if use_output_projection:
+            self.output_proj = nn.Linear(embed_dim, embed_dim, bias=False)
+            print(f"  W_O output projection: {embed_dim}×{embed_dim} = {embed_dim**2} params")
+        else:
+            self.output_proj = None
 
         # Print attention configuration
         if gauge_group == 'GLK':
@@ -2083,6 +2111,12 @@ class IrrepMultiHeadAttention(nn.Module):
                     phi, gen_head, enforce_orthogonal=self.enforce_orthogonal
                 )
 
+            # Per-head temperature: κ_h = exp(log_κ_h) if learned, else shared κ
+            if self.per_head_kappa:
+                kappa_h = torch.exp(self.log_kappa[head_idx]).item()
+            else:
+                kappa_h = self.kappa_beta
+
             # Compute attention for this head
             if return_attention:
                 # Full O(N²) attention with KL return
@@ -2091,7 +2125,7 @@ class IrrepMultiHeadAttention(nn.Module):
                     sigma_head,
                     phi,
                     gen_head,
-                    self.kappa_beta,
+                    kappa_h,
                     self.epsilon,
                     mask,
                     return_kl=True,
@@ -2111,7 +2145,7 @@ class IrrepMultiHeadAttention(nn.Module):
                     sigma_head,
                     phi,
                     gen_head,
-                    self.kappa_beta,
+                    kappa_h,
                     self.epsilon,
                     mask,
                     return_kl=False,
@@ -2152,9 +2186,12 @@ class IrrepMultiHeadAttention(nn.Module):
             sigma_concat = None
 
         # =====================================================================
-        # Return concatenated beliefs directly (no learned mixing)
+        # Optional W_O output projection (cross-head mixing)
         # =====================================================================
-        mu_out = mu_concat  # (B, N, K) - pure VFE, no nn.Linear
+        if self.output_proj is not None:
+            mu_out = self.output_proj(mu_concat)  # (B, N, K) - learned cross-head mixing
+        else:
+            mu_out = mu_concat  # (B, N, K) - pure VFE, no mixing
 
         # Stack attention weights and KL matrices for loss computation
         if return_attention:

@@ -1508,6 +1508,9 @@ class VariationalFFNDynamic(nn.Module):
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
         # Bayesian precision (learned prior self-coupling)
         learnable_alpha: bool = False,  # If True, use Gamma-Normal conjugate precision
+        # Multi-head VFE: maintain per-head β through iterations
+        multihead_vfe: bool = False,  # If True, compute separate β_h per irrep block
+        per_head_kappa: bool = False,  # If True, learn separate κ_h per head
     ):
         """
         Initialize dynamic-β VFE FFN.
@@ -1537,6 +1540,10 @@ class VariationalFFNDynamic(nn.Module):
             learnable_alpha: If True, use Bayesian precision via Gamma-Normal conjugacy.
                             α_i = (a₀ + K/2) / (b₀ + ½ ∥μ_q - μ_p∥²_{Σ_p⁻¹})
                             Gauge-invariant, state-dependent, only 2 learnable parameters.
+            multihead_vfe: If True, maintain per-head attention β_h through VFE iterations.
+                          Each irrep block gets its own attention pattern instead of a single
+                          collapsed β. Requires irrep_dims to be set.
+            per_head_kappa: If True, learn separate κ_h per head (requires multihead_vfe).
         """
         super().__init__()
 
@@ -1564,6 +1571,25 @@ class VariationalFFNDynamic(nn.Module):
         self.alpha = alpha
         self.lambda_belief = lambda_belief
         self.kappa = kappa
+
+        # =================================================================
+        # Multi-head VFE: per-block β through iterations
+        # =================================================================
+        self.multihead_vfe = multihead_vfe and irrep_dims is not None
+        self.per_head_kappa_enabled = per_head_kappa
+        if self.multihead_vfe:
+            n_heads = len(irrep_dims)
+            if per_head_kappa:
+                # Per-head κ (log-parameterized for positivity)
+                self.log_kappa_heads = nn.Parameter(
+                    torch.full((n_heads,), math.log(max(kappa, 1e-6)))
+                )
+                print(f"[VariationalFFNDynamic] Multi-head VFE: {n_heads} heads with learned κ_h")
+            else:
+                self.log_kappa_heads = None
+                print(f"[VariationalFFNDynamic] Multi-head VFE: {n_heads} heads with shared κ={kappa}")
+        else:
+            self.log_kappa_heads = None
 
         # =================================================================
         # Bayesian Precision: Gamma-Normal conjugate prior for α
@@ -1822,7 +1848,7 @@ class VariationalFFNDynamic(nn.Module):
             # cached_transport avoids redundant matrix exponentials.
             # Skip caching when using block-diagonal or chunked paths (they
             # compute transport internally in chunks to save memory).
-            if self.irrep_dims is None and self.chunk_size is None:
+            if self.irrep_dims is None and self.chunk_size is None and not self.multihead_vfe:
                 cached_transport = compute_transport_operators(
                     phi=phi_current,
                     generators=self.generators,
@@ -1832,35 +1858,8 @@ class VariationalFFNDynamic(nn.Module):
                 cached_transport = None
 
             # =================================================================
-            # STEP 1: Recompute attention β from current beliefs
-            # =================================================================
-            # β_ij = softmax(-KL(q_i || Ω_ij[q_j]) / κ)
-            beta_current = compute_attention_weights(
-                mu_q=mu_current,
-                sigma_q=sigma_current,
-                phi=phi_current,  # Use evolving phi for dynamical gauge frames
-                generators=self.generators,
-                kappa=self.kappa,
-                epsilon=eps,
-                mask=mask,
-                use_numba=False,  # Always use PyTorch for GPU
-                return_kl=False,
-                diagonal_covariance=is_diagonal,
-                cached_transport=cached_transport,
-                # Memory-efficient options
-                irrep_dims=self.irrep_dims,
-                chunk_size=self.chunk_size,
-                # Self-attention masking
-                mask_self_attention=self.mask_self_attention,
-            )  # (B, N, N)
-
-            if return_beta_history:
-                beta_history.append(beta_current.detach().clone())
-
-            # =================================================================
-            # STEP 2: Compute VFE gradients with current β
-            # =================================================================
             # Determine alpha: Bayesian precision or fixed scalar
+            # =================================================================
             if self.learnable_alpha:
                 alpha_effective = self.get_bayesian_alpha(
                     mu_current, mu_p_current, sigma_p, eps=eps
@@ -1868,24 +1867,120 @@ class VariationalFFNDynamic(nn.Module):
             else:
                 alpha_effective = self.alpha  # scalar (backward compatible)
 
-            grad_mu, grad_sigma = compute_vfe_gradients_gpu(
-                mu_q=mu_current,
-                sigma_q=sigma_current,
-                mu_p=mu_p_current,
-                sigma_p=sigma_p,
-                beta=beta_current,  # USE RECOMPUTED β!
-                phi=phi_current,  # Use evolving phi for dynamical gauge frames
-                generators=self.generators,
-                alpha=alpha_effective,
-                lambda_belief=self.lambda_belief,
-                kappa=self.kappa,
-                eps=eps,
-                cached_transport=cached_transport,
-                compute_sigma_align_grad=self.compute_sigma_align_grad,
-                # Memory-efficient options
-                irrep_dims=self.irrep_dims,
-                chunk_size=self.chunk_size,
-            )
+            if self.multihead_vfe:
+                # =============================================================
+                # MULTI-HEAD VFE: Per-block β_h through iterations
+                # =============================================================
+                # Each irrep block gets its own attention pattern.
+                # This maintains head diversity through all VFE iterations,
+                # enabling different heads to cluster at different scales.
+                grad_mu = torch.zeros_like(mu_current)
+                grad_sigma = torch.zeros_like(sigma_current)
+                beta_heads = []  # For history tracking
+
+                block_start = 0
+                for h, d_h in enumerate(self.irrep_dims):
+                    block_end = block_start + d_h
+
+                    # Extract per-head slices
+                    mu_h = mu_current[:, :, block_start:block_end].contiguous()
+                    sigma_h = sigma_current[:, :, block_start:block_end].contiguous()
+                    mu_p_h = mu_p_current[:, :, block_start:block_end].contiguous()
+                    sigma_p_h = sigma_p[:, :, block_start:block_end].contiguous()
+                    gen_h = self.generators[:, block_start:block_end, block_start:block_end]
+
+                    # Per-head temperature
+                    if self.log_kappa_heads is not None:
+                        kappa_h = torch.exp(self.log_kappa_heads[h]).item()
+                    else:
+                        kappa_h = self.kappa
+
+                    # Per-head attention: β_h = softmax(-KL_h / κ_h)
+                    beta_h = compute_attention_weights(
+                        mu_q=mu_h,
+                        sigma_q=sigma_h,
+                        phi=phi_current,
+                        generators=gen_h,
+                        kappa=kappa_h,
+                        epsilon=eps,
+                        mask=mask,
+                        use_numba=False,
+                        return_kl=False,
+                        diagonal_covariance=is_diagonal,
+                        mask_self_attention=self.mask_self_attention,
+                    )  # (B, N, N)
+                    beta_heads.append(beta_h)
+
+                    # Per-head VFE gradients
+                    grad_mu_h, grad_sigma_h = compute_vfe_gradients_gpu(
+                        mu_q=mu_h,
+                        sigma_q=sigma_h,
+                        mu_p=mu_p_h,
+                        sigma_p=sigma_p_h,
+                        beta=beta_h,
+                        phi=phi_current,
+                        generators=gen_h,
+                        alpha=alpha_effective,
+                        lambda_belief=self.lambda_belief,
+                        kappa=kappa_h,
+                        eps=eps,
+                        compute_sigma_align_grad=self.compute_sigma_align_grad,
+                    )
+
+                    grad_mu[:, :, block_start:block_end] = grad_mu_h
+                    grad_sigma[:, :, block_start:block_end] = grad_sigma_h
+                    block_start = block_end
+
+                # Use mean of per-head betas for history tracking
+                if return_beta_history:
+                    beta_avg = torch.stack(beta_heads, dim=0).mean(dim=0)
+                    beta_history.append(beta_avg.detach().clone())
+                # Store last head's beta for phi update (uses alignment loss)
+                beta_current = beta_heads[-1]
+
+            else:
+                # =============================================================
+                # SINGLE-β VFE: Original behavior (all blocks share one β)
+                # =============================================================
+                # STEP 1: Recompute attention β from current beliefs
+                beta_current = compute_attention_weights(
+                    mu_q=mu_current,
+                    sigma_q=sigma_current,
+                    phi=phi_current,
+                    generators=self.generators,
+                    kappa=self.kappa,
+                    epsilon=eps,
+                    mask=mask,
+                    use_numba=False,
+                    return_kl=False,
+                    diagonal_covariance=is_diagonal,
+                    cached_transport=cached_transport,
+                    irrep_dims=self.irrep_dims,
+                    chunk_size=self.chunk_size,
+                    mask_self_attention=self.mask_self_attention,
+                )  # (B, N, N)
+
+                if return_beta_history:
+                    beta_history.append(beta_current.detach().clone())
+
+                # STEP 2: Compute VFE gradients with current β
+                grad_mu, grad_sigma = compute_vfe_gradients_gpu(
+                    mu_q=mu_current,
+                    sigma_q=sigma_current,
+                    mu_p=mu_p_current,
+                    sigma_p=sigma_p,
+                    beta=beta_current,
+                    phi=phi_current,
+                    generators=self.generators,
+                    alpha=alpha_effective,
+                    lambda_belief=self.lambda_belief,
+                    kappa=self.kappa,
+                    eps=eps,
+                    cached_transport=cached_transport,
+                    compute_sigma_align_grad=self.compute_sigma_align_grad,
+                    irrep_dims=self.irrep_dims,
+                    chunk_size=self.chunk_size,
+                )
 
             # Add FRESH observation gradient (recomputed from current beliefs)
             # Use .detach() on mu_current to avoid second-order gradients through the
@@ -1966,31 +2061,58 @@ class VariationalFFNDynamic(nn.Module):
             if self.update_phi_per_iteration and torch.is_grad_enabled():
                 phi_for_grad = phi_current.clone().requires_grad_(True)
 
-                # Recompute attention with gradient-enabled phi
-                beta_for_phi_result = compute_attention_weights(
-                    mu_q=mu_current.detach(),
-                    sigma_q=sigma_current.detach() if sigma_current is not None else None,
-                    phi=phi_for_grad,
-                    generators=self.generators,
-                    kappa=self.kappa,
-                    epsilon=eps,
-                    mask=mask,
-                    use_numba=False,
-                    return_kl=True,
-                    diagonal_covariance=is_diagonal,
-                    irrep_dims=self.irrep_dims,
-                    chunk_size=self.chunk_size,
-                    mask_self_attention=self.mask_self_attention,
-                )
+                if self.multihead_vfe:
+                    # Multi-head phi update: sum alignment loss over heads
+                    alignment_loss = torch.tensor(0.0, device=mu_current.device,
+                                                  dtype=mu_current.dtype, requires_grad=True)
+                    block_start = 0
+                    for h, d_h in enumerate(self.irrep_dims):
+                        block_end = block_start + d_h
+                        mu_h = mu_current[:, :, block_start:block_end].detach()
+                        sigma_h = sigma_current[:, :, block_start:block_end].detach() if sigma_current is not None else None
+                        gen_h = self.generators[:, block_start:block_end, block_start:block_end]
+                        kappa_h = torch.exp(self.log_kappa_heads[h]).item() if self.log_kappa_heads is not None else self.kappa
 
-                if isinstance(beta_for_phi_result, tuple):
-                    beta_phi, kl_matrix = beta_for_phi_result
+                        beta_phi_h_result = compute_attention_weights(
+                            mu_q=mu_h, sigma_q=sigma_h,
+                            phi=phi_for_grad, generators=gen_h,
+                            kappa=kappa_h, epsilon=eps, mask=mask,
+                            use_numba=False, return_kl=True,
+                            diagonal_covariance=is_diagonal,
+                            mask_self_attention=self.mask_self_attention,
+                        )
+                        if isinstance(beta_phi_h_result, tuple):
+                            beta_phi_h, kl_h = beta_phi_h_result
+                        else:
+                            beta_phi_h = beta_phi_h_result
+                            kl_h = beta_phi_h
+                        alignment_loss = alignment_loss + self.lambda_belief * (beta_phi_h * kl_h).sum()
+                        block_start = block_end
                 else:
-                    beta_phi = beta_for_phi_result
-                    kl_matrix = beta_phi  # Fallback
+                    # Single-β phi update (original)
+                    beta_for_phi_result = compute_attention_weights(
+                        mu_q=mu_current.detach(),
+                        sigma_q=sigma_current.detach() if sigma_current is not None else None,
+                        phi=phi_for_grad,
+                        generators=self.generators,
+                        kappa=self.kappa,
+                        epsilon=eps,
+                        mask=mask,
+                        use_numba=False,
+                        return_kl=True,
+                        diagonal_covariance=is_diagonal,
+                        irrep_dims=self.irrep_dims,
+                        chunk_size=self.chunk_size,
+                        mask_self_attention=self.mask_self_attention,
+                    )
 
-                # Belief alignment loss
-                alignment_loss = self.lambda_belief * (beta_phi * kl_matrix).sum()
+                    if isinstance(beta_for_phi_result, tuple):
+                        beta_phi, kl_matrix = beta_for_phi_result
+                    else:
+                        beta_phi = beta_for_phi_result
+                        kl_matrix = beta_phi  # Fallback
+
+                    alignment_loss = self.lambda_belief * (beta_phi * kl_matrix).sum()
 
                 # Compute ∂F/∂φ
                 grad_phi = torch.autograd.grad(
@@ -2033,30 +2155,36 @@ class VariationalFFNDynamic(nn.Module):
             # Enable gradients for phi
             phi_for_grad = phi_current.clone().requires_grad_(True)
 
-            # Recompute attention with gradient-enabled phi
-            beta_for_phi = compute_attention_weights(
-                mu_q=mu_current.detach(),  # Detach mu to isolate phi gradient
-                sigma_q=sigma_current.detach() if sigma_current is not None else None,
-                phi=phi_for_grad,
-                generators=self.generators,
-                kappa=self.kappa,
-                epsilon=eps,
-                mask=mask,
-                use_numba=False,
-                return_kl=True,  # Need KL for the loss
-                diagonal_covariance=is_diagonal,
-                irrep_dims=self.irrep_dims,
-                chunk_size=self.chunk_size,
-                mask_self_attention=self.mask_self_attention,
-            )
+            if self.multihead_vfe:
+                # Multi-head: sum alignment loss over heads
+                alignment_loss = torch.tensor(0.0, device=mu_current.device,
+                                              dtype=mu_current.dtype, requires_grad=True)
+                block_start = 0
+                for h, d_h in enumerate(self.irrep_dims):
+                    block_end = block_start + d_h
+                    mu_h = mu_current[:, :, block_start:block_end].detach()
+                    sigma_h = sigma_current[:, :, block_start:block_end].detach() if sigma_current is not None else None
+                    gen_h = self.generators[:, block_start:block_end, block_start:block_end]
+                    kappa_h = torch.exp(self.log_kappa_heads[h]).item() if self.log_kappa_heads is not None else self.kappa
 
-            # beta_for_phi is (beta, kl_matrix) when return_kl=True
-            if isinstance(beta_for_phi, tuple):
-                beta_phi, kl_matrix = beta_for_phi
+                    beta_phi_h_result = compute_attention_weights(
+                        mu_q=mu_h, sigma_q=sigma_h,
+                        phi=phi_for_grad, generators=gen_h,
+                        kappa=kappa_h, epsilon=eps, mask=mask,
+                        use_numba=False, return_kl=True,
+                        diagonal_covariance=is_diagonal,
+                        mask_self_attention=self.mask_self_attention,
+                    )
+                    if isinstance(beta_phi_h_result, tuple):
+                        beta_phi_h, kl_h = beta_phi_h_result
+                    else:
+                        beta_phi_h = beta_phi_h_result
+                        kl_h = beta_phi_h
+                    alignment_loss = alignment_loss + self.lambda_belief * (beta_phi_h * kl_h).sum()
+                    block_start = block_end
             else:
-                beta_phi = beta_for_phi
-                # Recompute KL for loss
-                kl_matrix = compute_attention_weights(
+                # Single-β: original alignment loss
+                beta_for_phi = compute_attention_weights(
                     mu_q=mu_current.detach(),
                     sigma_q=sigma_current.detach() if sigma_current is not None else None,
                     phi=phi_for_grad,
@@ -2067,12 +2195,30 @@ class VariationalFFNDynamic(nn.Module):
                     use_numba=False,
                     return_kl=True,
                     diagonal_covariance=is_diagonal,
+                    irrep_dims=self.irrep_dims,
+                    chunk_size=self.chunk_size,
                     mask_self_attention=self.mask_self_attention,
-                )[1]
+                )
 
-            # Belief alignment loss: F_align = λ·Σ_ij β_ij · KL_ij
-            # This is the term that depends on φ
-            alignment_loss = self.lambda_belief * (beta_phi * kl_matrix).sum()
+                if isinstance(beta_for_phi, tuple):
+                    beta_phi, kl_matrix = beta_for_phi
+                else:
+                    beta_phi = beta_for_phi
+                    kl_matrix = compute_attention_weights(
+                        mu_q=mu_current.detach(),
+                        sigma_q=sigma_current.detach() if sigma_current is not None else None,
+                        phi=phi_for_grad,
+                        generators=self.generators,
+                        kappa=self.kappa,
+                        epsilon=eps,
+                        mask=mask,
+                        use_numba=False,
+                        return_kl=True,
+                        diagonal_covariance=is_diagonal,
+                        mask_self_attention=self.mask_self_attention,
+                    )[1]
+
+                alignment_loss = self.lambda_belief * (beta_phi * kl_matrix).sum()
 
             # Compute ∂F/∂φ
             grad_phi = torch.autograd.grad(

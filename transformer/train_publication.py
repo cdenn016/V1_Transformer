@@ -297,7 +297,10 @@ VFE_EM_CONFIG = {
     'use_multi_irrep': True,
     'enforce_orthogonal': False,
 
-
+    # Per-head specialization & multi-head VFE
+    'per_head_kappa': True,         # Learn separate κ_h per head (attention + VFE)
+    'use_output_projection': False, # W_O cross-head mixing after attention (toggle)
+    'multihead_vfe': True,          # Maintain per-head β_h through VFE iterations
 
     'use_p_flow': False,           # Enable P-flow updates on token embeddings
     'p_flow_ema_decay': 0.99,     # EMA decay (higher = slower update, 0.99 = 1% per step)
