@@ -198,9 +198,9 @@ def compute_transport_operators(
         torch.zeros_like(generators), atol=1e-5
     )
 
-    # For large K (≥16), compute matrix exponential in float64 to prevent
-    # numerical drift in the Padé scaling-squaring steps.
-    if K >= 16:
+    # Float64 matrix_exp for GL(K) numerical stability (prevents NaN
+    # from Padé scaling-squaring overflow when phi values grow large).
+    if K >= 8:
         phi_matrix_f64 = phi_matrix.double()
         exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
         if _is_skew:
@@ -672,8 +672,8 @@ def _compute_kl_matrix_torch(
             # phi: (B, N, n_gen) -> phi_matrix: (B, N, K, K)
             phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
 
-            # Float64 matrix_exp for large K (numerical precision)
-            if K >= 16:
+            # Float64 for GL(K) numerical stability (prevents NaN in matrix_exp)
+            if K >= 8:
                 phi_matrix_f64 = phi_matrix.double()
                 exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
                 exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
@@ -790,8 +790,12 @@ def _transport_gaussian_torch(
     X_dst = torch.einsum('a,aij->ij', phi_dst, generators)  # (K, K)
     X_src = torch.einsum('a,aij->ij', phi_src, generators)
 
-    # Matrix exponential (use Taylor series for small angles)
-    Omega = torch.matrix_exp(X_dst) @ torch.matrix_exp(-X_src)
+    # Matrix exponential (float64 for GL(K) stability)
+    K = generators.shape[-1]
+    if K >= 8:
+        Omega = torch.matrix_exp(X_dst.double()).to(X_dst.dtype) @ torch.matrix_exp(-X_src.double()).to(X_src.dtype)
+    else:
+        Omega = torch.matrix_exp(X_dst) @ torch.matrix_exp(-X_src)
 
     # Transport
     # Use torch.mv for proper matrix-vector product: (K,K) @ (K,) → (K,)
@@ -904,8 +908,8 @@ def _compute_kl_matrix_diagonal(
         # Compute transport operators
         phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
 
-        # Float64 matrix_exp for large K (numerical precision)
-        if K >= 16:
+        # Float64 for GL(K) numerical stability (prevents NaN in matrix_exp)
+        if K >= 8:
             phi_matrix_f64 = phi_matrix.double()
             exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
             exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
@@ -1018,8 +1022,14 @@ def _compute_kl_matrix_chunked(
     # =========================================================================
     # phi: (B, N, n_gen) -> phi_matrix: (B, N, K, K)
     phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
-    exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
-    exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+    # Float64 for GL(K) numerical stability
+    if K >= 8:
+        phi_matrix_f64 = phi_matrix.double()
+        exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
+        exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
+    else:
+        exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
+        exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
     del phi_matrix  # Free memory
 
     # Precompute Cholesky of query covariances (for logdet_q term)
@@ -1177,7 +1187,7 @@ def _compute_kl_matrix_diagonal_chunked(
     # Step 1: Precompute matrix exponentials for ALL positions
     # =========================================================================
     phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
-    if K >= 16:
+    if K >= 8:
         phi_matrix_f64 = phi_matrix.double()
         exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
         exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
@@ -1390,8 +1400,14 @@ def _compute_kl_matrix_block_diagonal(
         # =====================================================================
         # phi_matrix_block: (B, N, d, d)
         phi_matrix_block = torch.einsum('bna,aij->bnij', phi, gen_block)
-        exp_phi_block = torch.matrix_exp(phi_matrix_block)        # (B, N, d, d)
-        exp_neg_phi_block = torch.matrix_exp(-phi_matrix_block)   # (B, N, d, d)
+        # Float64 for GL(K) numerical stability (prevents NaN in matrix_exp)
+        if d >= 8:
+            phi_block_f64 = phi_matrix_block.double()
+            exp_phi_block = torch.matrix_exp(phi_block_f64).to(phi_matrix_block.dtype)
+            exp_neg_phi_block = torch.matrix_exp(-phi_block_f64).to(phi_matrix_block.dtype)
+        else:
+            exp_phi_block = torch.matrix_exp(phi_matrix_block)        # (B, N, d, d)
+            exp_neg_phi_block = torch.matrix_exp(-phi_matrix_block)   # (B, N, d, d)
 
         # Omega_block: (B, N, N, d, d) - MUCH smaller than (B, N, N, K, K)!
         Omega_block = torch.einsum(
@@ -1524,8 +1540,14 @@ def _compute_kl_matrix_block_diagonal_chunked(
         gen_block = generators[:, block_start:block_end, block_start:block_end]
 
         phi_matrix_block = torch.einsum('bna,aij->bnij', phi, gen_block)  # (B, N, d, d)
-        block_exp_phi.append(torch.matrix_exp(phi_matrix_block))
-        block_exp_neg_phi.append(torch.matrix_exp(-phi_matrix_block))
+        # Float64 for GL(K) numerical stability
+        if d >= 8:
+            phi_block_f64 = phi_matrix_block.double()
+            block_exp_phi.append(torch.matrix_exp(phi_block_f64).to(phi_matrix_block.dtype))
+            block_exp_neg_phi.append(torch.matrix_exp(-phi_block_f64).to(phi_matrix_block.dtype))
+        else:
+            block_exp_phi.append(torch.matrix_exp(phi_matrix_block))
+            block_exp_neg_phi.append(torch.matrix_exp(-phi_matrix_block))
 
         block_start = block_end
 
@@ -1678,8 +1700,14 @@ def aggregate_messages(
     else:
         # Compute all pairwise transport operators Ω_ij = exp(φ_i) exp(-φ_j)
         phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
-        exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
-        exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+        # Float64 for GL(K) numerical stability
+        if K >= 8:
+            phi_matrix_f64 = phi_matrix.double()
+            exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
+            exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
+        else:
+            exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
+            exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
 
         # Omega_ij = exp(φ_i) @ exp(-φ_j)  ->  (B, N, N, K, K)
         Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)

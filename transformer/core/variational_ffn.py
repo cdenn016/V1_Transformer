@@ -250,8 +250,8 @@ def _compute_vfe_gradients_block_diagonal(
         block_end = block_start + d
         gen_block = generators[:, block_start:block_end, block_start:block_end]
         phi_matrix_block = torch.einsum('bna,aij->bnij', phi, gen_block)
-        # Float64 for large block dimensions (numerical precision)
-        if d >= 16:
+        # Float64 for GL(K) numerical stability (prevents NaN in matrix_exp)
+        if d >= 8:
             phi_matrix_block_f64 = phi_matrix_block.double()
             exp_phi_block = torch.matrix_exp(phi_matrix_block_f64).to(dtype)
             exp_neg_phi_block = torch.matrix_exp(-phi_matrix_block_f64).to(dtype)
@@ -423,9 +423,9 @@ def _compute_vfe_gradients_chunked(
     # 2. Alignment Gradient (chunked processing)
     # =================================================================
     # Precompute matrix exponentials for all positions
-    # Float64 for large K (numerical precision)
+    # Float64 for GL(K) numerical stability (prevents NaN in matrix_exp)
     phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
-    if K >= 16:
+    if K >= 8:
         phi_matrix_f64 = phi_matrix.double()
         exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
         exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
@@ -713,9 +713,9 @@ def compute_vfe_gradients_gpu(
             Omega = cached_transport['Omega']
         else:
             # Compute transport operators (vectorized)
-            # Float64 for large K (numerical precision)
+            # Float64 for GL(K) numerical stability (prevents NaN in matrix_exp)
             phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
-            if K >= 16:
+            if K >= 8:
                 phi_matrix_f64 = phi_matrix.double()
                 exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
                 exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
@@ -756,6 +756,16 @@ def compute_vfe_gradients_gpu(
 
         # Regularize and invert transported covariance
         sigma_j_reg = sigma_j_transported + max(eps, 1e-4) * torch.eye(K, device=device, dtype=dtype)
+        # NaN safety: if transport produced NaN (e.g., matrix_exp overflow),
+        # replace with identity covariance to prevent cascading failures
+        if torch.isnan(sigma_j_reg).any():
+            nan_mask = torch.isnan(sigma_j_reg).any(dim=-1).any(dim=-1)  # (B, N, N)
+            eye_K = torch.eye(K, device=device, dtype=dtype)
+            sigma_j_reg = torch.where(
+                nan_mask.unsqueeze(-1).unsqueeze(-1),
+                eye_K.expand_as(sigma_j_reg),
+                sigma_j_reg,
+            )
         try:
             sigma_j_inv = torch.linalg.inv(sigma_j_reg)  # (B, N, N, K, K)
         except torch.linalg.LinAlgError:
@@ -855,9 +865,9 @@ def compute_vfe_gradients_gpu(
         if cached_transport is not None and 'Omega' in cached_transport:
             Omega = cached_transport['Omega']
         else:
-            # Float64 for large K (numerical precision)
+            # Float64 for GL(K) numerical stability (prevents NaN in matrix_exp)
             phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
-            if K >= 16:
+            if K >= 8:
                 phi_matrix_f64 = phi_matrix.double()
                 exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
                 exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
@@ -885,6 +895,15 @@ def compute_vfe_gradients_gpu(
 
         # Regularize and invert
         sigma_j_reg = sigma_j_transported + max(eps, 1e-4) * torch.eye(K, device=device, dtype=dtype)
+        # NaN safety: if transport produced NaN, replace with identity covariance
+        if torch.isnan(sigma_j_reg).any():
+            nan_mask = torch.isnan(sigma_j_reg).any(dim=-1).any(dim=-1)  # (B, N, N)
+            eye_K = torch.eye(K, device=device, dtype=dtype)
+            sigma_j_reg = torch.where(
+                nan_mask.unsqueeze(-1).unsqueeze(-1),
+                eye_K.expand_as(sigma_j_reg),
+                sigma_j_reg,
+            )
         try:
             sigma_j_inv = torch.linalg.inv(sigma_j_reg)  # (B, N, N, K, K)
         except torch.linalg.LinAlgError:
