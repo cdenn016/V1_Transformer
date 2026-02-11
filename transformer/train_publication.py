@@ -136,12 +136,12 @@ STANDARD_CONFIG = {
    
 
     # Training
-    'batch_size': 3,
+    'batch_size': 16,          # 16 × 128 = 2048 tokens/step (standard for small models)
     'use_amp': False,
     'num_workers': 6,
     'epochs': None,            # Set to 1-3 for WikiText-2, None for WikiText-103 (use max_steps)
     'max_steps': 200000,       # ~0.5 epochs on WikiText-103, ~50 epochs on WikiText-2
-    'warmup_steps': 50,
+    'warmup_steps': 2000,      # 1% of max_steps (standard practice for Adam)
 
     # Standard transformer settings
     'ffn_mode': 'standard',        # Learned MLP (NOT VFE)
@@ -1780,11 +1780,13 @@ def run_single_experiment(
         max_steps=config['max_steps'],
         warmup_steps=config['warmup_steps'],
 
-        # Natural gradient learning rates
+        # Learning rates
+        # For standard transformer: attention_lr should match ffn_lr (all standard Adam)
+        # For gauge transformer: attention_lr matches phi_lr (natural gradient scale)
         mu_lr=config['mu_lr'],
         sigma_lr=config['sigma_lr'],
         phi_lr=config['phi_lr'],
-        attention_lr=config['phi_lr'],
+        attention_lr=config.get('attention_lr', config['ffn_lr'] if ffn_mode == 'standard' else config['phi_lr']),
         ffn_lr=config['ffn_lr'],
         output_lr=config['ffn_lr'],
 

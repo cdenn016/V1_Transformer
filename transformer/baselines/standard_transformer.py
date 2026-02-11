@@ -300,13 +300,15 @@ class StandardTransformerLM(nn.Module):
         output = {'logits': logits}
 
         if labels is not None:
-            # Shift logits and labels for next-token prediction
-            shift_logits = logits[:, :-1, :].contiguous()
-            shift_labels = labels[:, 1:].contiguous()
-
+            # NOTE: The dataset already provides pre-shifted targets:
+            #   input_ids  = [tok_0, tok_1, ..., tok_{T-1}]
+            #   labels     = [tok_1, tok_2, ..., tok_T]
+            # So logits[i] (predicting next token after position i) should be
+            # compared directly to labels[i] (= tok_{i+1}). No shifting needed.
+            # This matches how compute_free_energy_loss handles the gauge model.
             loss = F.cross_entropy(
-                shift_logits.view(-1, shift_logits.size(-1)),
-                shift_labels.view(-1),
+                logits.view(-1, logits.size(-1)),
+                labels.view(-1),
                 reduction='mean',
                 ignore_index=pad_token_id,  # Ignore padding tokens in loss
             )
