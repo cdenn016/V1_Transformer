@@ -632,6 +632,14 @@ def compute_free_energy_loss(
     metrics['p_flow/mu_q'] = mu_q.detach()           # (B, N, K) final beliefs
     metrics['p_flow/ce_per_position'] = ce_per_position  # (B, N) per-position CE
 
+    # Store attention info for RG metrics computation (detached)
+    metrics['attention_info'] = {
+        'beta': beta.detach(),
+        'kl': kl.detach(),
+        'mu': mu_q.detach(),
+        'sigma': sigma_q.detach() if sigma_q is not None else None,
+    }
+
     return total_loss, metrics
 
 
