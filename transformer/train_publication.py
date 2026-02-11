@@ -1193,7 +1193,7 @@ class PublicationTrainer(FastTrainer):
                         metrics[key] = value
                 except Exception as e:
                     # Don't crash training on RG tracking errors
-                    pass
+                    print(f"[WARNING] Dynamic RG tracking failed: {e}")
 
         return metrics, grad_norms
 
@@ -1386,6 +1386,21 @@ class PublicationTrainer(FastTrainer):
                     f"PPL: {metrics['train_ppl']:.1f}"
                 )
 
+                # RG metrics console output
+                _rg_msg = None
+                if has_rg:
+                    _rg_msg = (
+                        f"  [RG] Q={metrics['rg/modularity']:.4f} | "
+                        f"rank={metrics['rg/effective_rank']:.1f} | "
+                        f"clusters={metrics['rg/n_clusters']} | "
+                        f"H={metrics['rg/beta_entropy']:.3f}"
+                    )
+                    if metrics.get('rg/dynamic/n_iterations') is not None and metrics['rg/dynamic/n_iterations'] > 1:
+                        _rg_msg += (
+                            f" | dyn({metrics['rg/dynamic/n_iterations']}it): "
+                            f"Q {metrics.get('rg/dynamic/modularity_init', 0):.3f}->{metrics.get('rg/dynamic/modularity_final', 0):.3f}"
+                        )
+
                 if use_tqdm:
                     pbar.set_description(log_msg)
                     # Print gradient norms using tqdm.write for proper display
@@ -1400,6 +1415,8 @@ class PublicationTrainer(FastTrainer):
                                    f"range: [{metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
                                    f"a0: {metrics['bayesian/a0']:.4f} | b0: {metrics['bayesian/b0']:.4f} | "
                                    f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}")
+                    if _rg_msg:
+                        tqdm.write(_rg_msg)
                 else:
                     print(log_msg)
                     if grad_norms:
@@ -1412,6 +1429,8 @@ class PublicationTrainer(FastTrainer):
                               f"range: [{metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
                               f"a0: {metrics['bayesian/a0']:.4f} | b0: {metrics['bayesian/b0']:.4f} | "
                               f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}")
+                    if _rg_msg:
+                        print(_rg_msg)
 
             # Validation
             if (step + 1) % self.config.eval_interval == 0:
