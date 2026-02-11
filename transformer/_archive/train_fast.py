@@ -219,11 +219,28 @@ class FastTrainer:
         attention_params = []
         ffn_params = []
         output_params = []
+        no_decay_params = []  # Embeddings, LayerNorm, biases (no weight decay)
+
+        is_standard = isinstance(self.model, StandardTransformerLM)
 
         for name, param in self.model.named_parameters():
             if not param.requires_grad:
                 continue
 
+            # Standard transformer: separate no-decay params (embeddings, LN, biases)
+            # following GPT-2/GPT-3 convention
+            if is_standard:
+                if 'token_embed' in name or 'pos_embed' in name:
+                    no_decay_params.append(param)
+                elif 'ln' in name or 'norm' in name or name.endswith('.bias'):
+                    no_decay_params.append(param)
+                elif 'attention' in name or 'attn' in name:
+                    attention_params.append(param)
+                else:
+                    ffn_params.append(param)
+                continue
+
+            # Gauge model parameter grouping
             # Mean embeddings
             if 'mu_embed' in name:
                 mu_params.append(param)
@@ -308,6 +325,16 @@ class FastTrainer:
                 'name': 'output',
             })
             print(f"  Parameter group 'output': {len(output_params)} tensors @ lr={self.config.output_lr}")
+
+        if no_decay_params:
+            # Embeddings, LayerNorm, biases — no weight decay (GPT-2/3 convention)
+            param_groups.append({
+                'params': no_decay_params,
+                'lr': self.config.ffn_lr,
+                'weight_decay': 0.0,
+                'name': 'no_decay',
+            })
+            print(f"  Parameter group 'no_decay': {len(no_decay_params)} tensors @ lr={self.config.ffn_lr} (embeddings, LN, biases)")
 
         optimizer = torch.optim.AdamW(
             param_groups,
