@@ -1882,11 +1882,22 @@ class VariationalFFNDynamic(nn.Module):
                 for h, d_h in enumerate(self.irrep_dims):
                     block_end = block_start + d_h
 
-                    # Extract per-head slices
-                    mu_h = mu_current[:, :, block_start:block_end].contiguous()
-                    sigma_h = sigma_current[:, :, block_start:block_end].contiguous()
+                    # Extract per-head slices.
+                    # .detach() prevents autograd graph from growing 3× deeper
+                    # per iteration — VFE gradients are computed analytically,
+                    # so we don't need autograd through the per-head attention/KL.
+                    # Gradient flow to embeddings is preserved through the
+                    # mu_current = mu_current + delta_mu update chain.
+                    mu_h = mu_current[:, :, block_start:block_end].detach().contiguous()
                     mu_p_h = mu_p_current[:, :, block_start:block_end].contiguous()
-                    sigma_p_h = sigma_p[:, :, block_start:block_end].contiguous()
+                    if is_diagonal:
+                        # Diagonal covariance: sigma is (B, N, K)
+                        sigma_h = sigma_current[:, :, block_start:block_end].detach().contiguous()
+                        sigma_p_h = sigma_p[:, :, block_start:block_end].contiguous()
+                    else:
+                        # Full covariance: sigma is (B, N, K, K) — slice both dims
+                        sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end].detach().contiguous()
+                        sigma_p_h = sigma_p[:, :, block_start:block_end, block_start:block_end].contiguous()
                     gen_h = self.generators[:, block_start:block_end, block_start:block_end]
 
                     # Per-head temperature
@@ -1928,7 +1939,10 @@ class VariationalFFNDynamic(nn.Module):
                     )
 
                     grad_mu[:, :, block_start:block_end] = grad_mu_h
-                    grad_sigma[:, :, block_start:block_end] = grad_sigma_h
+                    if is_diagonal:
+                        grad_sigma[:, :, block_start:block_end] = grad_sigma_h
+                    else:
+                        grad_sigma[:, :, block_start:block_end, block_start:block_end] = grad_sigma_h
                     block_start = block_end
 
                 # Use mean of per-head betas for history tracking
@@ -2069,7 +2083,12 @@ class VariationalFFNDynamic(nn.Module):
                     for h, d_h in enumerate(self.irrep_dims):
                         block_end = block_start + d_h
                         mu_h = mu_current[:, :, block_start:block_end].detach()
-                        sigma_h = sigma_current[:, :, block_start:block_end].detach() if sigma_current is not None else None
+                        if sigma_current is None:
+                            sigma_h = None
+                        elif is_diagonal:
+                            sigma_h = sigma_current[:, :, block_start:block_end].detach()
+                        else:
+                            sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end].detach()
                         gen_h = self.generators[:, block_start:block_end, block_start:block_end]
                         kappa_h = torch.exp(self.log_kappa_heads[h]).item() if self.log_kappa_heads is not None else self.kappa
 
@@ -2163,7 +2182,12 @@ class VariationalFFNDynamic(nn.Module):
                 for h, d_h in enumerate(self.irrep_dims):
                     block_end = block_start + d_h
                     mu_h = mu_current[:, :, block_start:block_end].detach()
-                    sigma_h = sigma_current[:, :, block_start:block_end].detach() if sigma_current is not None else None
+                    if sigma_current is None:
+                        sigma_h = None
+                    elif is_diagonal:
+                        sigma_h = sigma_current[:, :, block_start:block_end].detach()
+                    else:
+                        sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end].detach()
                     gen_h = self.generators[:, block_start:block_end, block_start:block_end]
                     kappa_h = torch.exp(self.log_kappa_heads[h]).item() if self.log_kappa_heads is not None else self.kappa
 
