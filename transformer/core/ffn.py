@@ -151,7 +151,8 @@ class GaugeFFN(nn.Module):
         token_ids: Optional[torch.Tensor] = None,  # (B, N) - For PriorBank lookup
         targets: Optional[torch.Tensor] = None,   # (B, N) - target tokens
         W_out: Optional[torch.Tensor] = None,     # (V, K) - output projection
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return_beta_history: bool = False,         # Return β evolution for RG analysis
+    ):
         """
         Forward pass through VFE_dynamic FFN.
 
@@ -165,16 +166,16 @@ class GaugeFFN(nn.Module):
             mask: Causal mask (B, N, N)
             targets: Target token IDs (B, N)
             W_out: Output projection matrix (V, K)
+            return_beta_history: If True, return (mu, sigma, phi, beta_history) tuple
 
         Returns:
-            (mu_out, sigma_out, phi_out): Updated beliefs, covariances, and gauge frames
+            (mu_out, sigma_out, phi_out) or (mu_out, sigma_out, phi_out, beta_history)
         """
         # Check required inputs
         if mu_prior is None or phi is None:
             raise ValueError("VFE_dynamic requires mu_prior, phi")
 
         # Dynamic VFE returns (mu, sigma, phi, beta_history)
-        # beta_history is None unless return_beta_history=True is passed
         mu_out, sigma_out, phi_out, beta_history = self.variational_ffn(
             mu=mu,
             beta=beta,          # Initial β (will be recomputed each step)
@@ -185,8 +186,10 @@ class GaugeFFN(nn.Module):
             token_ids=token_ids,  # For PriorBank lookup
             targets=targets,
             W_out=W_out,
-            return_beta_history=False,
+            return_beta_history=return_beta_history,
         )
+        if return_beta_history:
+            return (mu_out, sigma_out, phi_out, beta_history)
         return (mu_out, sigma_out, phi_out)
 
     def get_mode(self) -> str:
