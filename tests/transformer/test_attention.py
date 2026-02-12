@@ -304,6 +304,211 @@ class TestAggregateMessages:
         assert torch.allclose(mu_agg, mu, atol=1e-5)
 
 
+class TestGLKMetricCorrection:
+    """Test GL(K) metric correction in aggregate_messages.
+
+    The variational gradient includes a metric factor (ΩΩ^T)^{-1}, so the
+    aggregation should use Ω^{-T} μ_j (not Ω μ_j) for GL(K).
+    For SO(K), Ω^{-T} = Ω identically, so no correction is needed.
+    """
+
+    @staticmethod
+    def _make_glk_generators(K, device):
+        """Create GL(K) generators: K² elementary matrices (not skew-symmetric)."""
+        n_gen = K * K
+        generators = torch.zeros(n_gen, K, K, device=device)
+        idx = 0
+        for a in range(K):
+            for b in range(K):
+                generators[idx, a, b] = 1.0
+                idx += 1
+        return generators
+
+    @staticmethod
+    def _make_sok_generators(K, device):
+        """Create SO(K) generators: K(K-1)/2 skew-symmetric basis matrices."""
+        n_gen = K * (K - 1) // 2
+        generators = torch.zeros(n_gen, K, K, device=device)
+        idx = 0
+        for a in range(K):
+            for b in range(a + 1, K):
+                generators[idx, a, b] = 1.0
+                generators[idx, b, a] = -1.0
+                idx += 1
+        return generators
+
+    def test_glk_aggregation_uses_omega_inv_transpose(self, cpu_device):
+        """For GL(K), aggregation should use Ω^{-T} μ_j, not Ω μ_j."""
+        from transformer.core.attention import aggregate_messages, compute_transport_operators
+
+        torch.manual_seed(42)
+        B, N, K = 1, 3, 4
+        generators = self._make_glk_generators(K, cpu_device)
+        n_gen = generators.shape[0]
+
+        phi = torch.randn(B, N, n_gen, device=cpu_device) * 0.1
+        mu = torch.randn(B, N, K, device=cpu_device)
+        sigma = torch.eye(K, device=cpu_device).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).clone()
+        beta = torch.softmax(torch.randn(B, N, N, device=cpu_device), dim=-1)
+
+        transport = compute_transport_operators(phi, generators)
+        Omega = transport['Omega']  # (B, N, N, K, K)
+
+        mu_agg, _ = aggregate_messages(
+            mu, sigma, phi, beta, generators,
+            aggregate_mode='mean_only',
+            cached_transport=transport,
+        )
+
+        # Manually compute CORRECT result: Σ_j β_ij Ω_ij^{-T} μ_j
+        Omega_inv_T = Omega.permute(0, 2, 1, 3, 4).transpose(-1, -2)
+        mu_correct = torch.einsum('bijkl,bjl->bijk', Omega_inv_T, mu)
+        mu_correct_agg = torch.einsum('bij,bijk->bik', beta, mu_correct)
+
+        # Manually compute WRONG (uncorrected) result: Σ_j β_ij Ω_ij μ_j
+        mu_wrong = torch.einsum('bijkl,bjl->bijk', Omega, mu)
+        mu_wrong_agg = torch.einsum('bij,bijk->bik', beta, mu_wrong)
+
+        # Output should match the metric-corrected version
+        assert torch.allclose(mu_agg, mu_correct_agg, atol=1e-5), \
+            "GL(K) aggregation should use Ω^{-T} μ_j"
+
+        # Output should NOT match the uncorrected version
+        assert not torch.allclose(mu_agg, mu_wrong_agg, atol=1e-3), \
+            "GL(K) aggregation should differ from naive Ω μ_j"
+
+    def test_sok_aggregation_matches_direct_transport(self, cpu_device):
+        """For SO(K), Ω^{-T} = Ω, so the correction is a no-op."""
+        from transformer.core.attention import aggregate_messages, compute_transport_operators
+
+        torch.manual_seed(42)
+        B, N, K = 1, 3, 4
+        generators = self._make_sok_generators(K, cpu_device)
+        n_gen = generators.shape[0]
+
+        phi = torch.randn(B, N, n_gen, device=cpu_device) * 0.1
+        mu = torch.randn(B, N, K, device=cpu_device)
+        sigma = torch.eye(K, device=cpu_device).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).clone()
+        beta = torch.softmax(torch.randn(B, N, N, device=cpu_device), dim=-1)
+
+        transport = compute_transport_operators(phi, generators)
+        Omega = transport['Omega']
+
+        mu_agg, _ = aggregate_messages(
+            mu, sigma, phi, beta, generators,
+            aggregate_mode='mean_only',
+            cached_transport=transport,
+        )
+
+        # For SO(K), Ω μ_j and Ω^{-T} μ_j should be identical
+        mu_direct = torch.einsum('bijkl,bjl->bijk', Omega, mu)
+        mu_direct_agg = torch.einsum('bij,bijk->bik', beta, mu_direct)
+
+        assert torch.allclose(mu_agg, mu_direct_agg, atol=1e-5), \
+            "SO(K) aggregation should match direct Ω μ_j (Ω^{-T} = Ω)"
+
+    def test_glk_identity_omega_no_correction(self, cpu_device):
+        """When phi=0 (Ω=I), result is simple weighted sum regardless of group."""
+        from transformer.core.attention import aggregate_messages, compute_transport_operators
+
+        torch.manual_seed(42)
+        B, N, K = 1, 4, 3
+        generators = self._make_glk_generators(K, cpu_device)
+
+        phi = torch.zeros(B, N, K * K, device=cpu_device)  # Ω = I
+        mu = torch.randn(B, N, K, device=cpu_device)
+        sigma = torch.eye(K, device=cpu_device).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).clone()
+        beta = torch.softmax(torch.randn(B, N, N, device=cpu_device), dim=-1)
+
+        transport = compute_transport_operators(phi, generators)
+
+        mu_agg, _ = aggregate_messages(
+            mu, sigma, phi, beta, generators,
+            aggregate_mode='mean_only',
+            cached_transport=transport,
+        )
+
+        # With Ω = I, result is just Σ_j β_ij μ_j
+        expected = torch.einsum('bij,bjk->bik', beta, mu)
+        assert torch.allclose(mu_agg, expected, atol=1e-4), \
+            "With Ω=I, aggregation should be simple weighted sum"
+
+    def test_glk_covariance_metric_correction(self, cpu_device):
+        """For GL(K) full_distribution mode, covariance uses Ω^{-T} Σ Ω^{-1}."""
+        from transformer.core.attention import aggregate_messages, compute_transport_operators
+
+        torch.manual_seed(42)
+        B, N, K = 1, 3, 4
+        generators = self._make_glk_generators(K, cpu_device)
+        n_gen = generators.shape[0]
+
+        phi = torch.randn(B, N, n_gen, device=cpu_device) * 0.1
+        mu = torch.randn(B, N, K, device=cpu_device)
+        # Positive definite covariance
+        A = torch.randn(B, N, K, K, device=cpu_device)
+        sigma = A @ A.transpose(-1, -2) + 0.1 * torch.eye(K, device=cpu_device)
+        beta = torch.softmax(torch.randn(B, N, N, device=cpu_device), dim=-1)
+
+        transport = compute_transport_operators(phi, generators)
+        Omega = transport['Omega']
+
+        mu_agg, sigma_agg = aggregate_messages(
+            mu, sigma, phi, beta, generators,
+            aggregate_mode='full_distribution',
+            cached_transport=transport,
+        )
+
+        # Manually compute metric-corrected transport
+        Omega_inv_T = Omega.permute(0, 2, 1, 3, 4).transpose(-1, -2)  # Ω^{-T}
+        Omega_inv = Omega.permute(0, 2, 1, 3, 4)  # Ω^{-1}
+
+        # Corrected mean: Ω^{-T} μ_j
+        mu_corrected = torch.einsum('bijkl,bjl->bijk', Omega_inv_T, mu)
+        mu_expected = torch.einsum('bij,bijk->bik', beta, mu_corrected)
+
+        # Corrected cov: Ω^{-T} Σ Ω^{-1}
+        Sigma_corrected = torch.einsum(
+            'bijkl,bjlm,bijmn->bijkn',
+            Omega_inv_T, sigma, Omega_inv
+        )
+
+        # Second moment of mixture
+        second_moment = Sigma_corrected + torch.einsum(
+            'bijk,bijl->bijkl', mu_corrected, mu_corrected
+        )
+        sigma_expected = torch.einsum('bij,bijkl->bikl', beta, second_moment) \
+            - torch.einsum('bik,bil->bikl', mu_expected, mu_expected)
+
+        assert torch.allclose(mu_agg, mu_expected, atol=1e-5), \
+            "GL(K) mean aggregation incorrect in full_distribution mode"
+        assert torch.allclose(sigma_agg, sigma_expected, atol=1e-4), \
+            "GL(K) covariance should use Ω^{-T} Σ Ω^{-1}"
+
+    def test_glk_output_finite(self, cpu_device):
+        """GL(K) aggregation should produce finite outputs."""
+        from transformer.core.attention import aggregate_messages, compute_transport_operators
+
+        torch.manual_seed(123)
+        B, N, K = 2, 6, 4
+        generators = self._make_glk_generators(K, cpu_device)
+        n_gen = generators.shape[0]
+
+        phi = torch.randn(B, N, n_gen, device=cpu_device) * 0.1
+        mu = torch.randn(B, N, K, device=cpu_device)
+        sigma = torch.eye(K, device=cpu_device).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).clone()
+        beta = torch.softmax(torch.randn(B, N, N, device=cpu_device), dim=-1)
+
+        transport = compute_transport_operators(phi, generators)
+        mu_agg, _ = aggregate_messages(
+            mu, sigma, phi, beta, generators,
+            aggregate_mode='mean_only',
+            cached_transport=transport,
+        )
+
+        assert torch.isfinite(mu_agg).all(), "GL(K) aggregation produced NaN/Inf"
+        assert mu_agg.shape == (B, N, K)
+
+
 class TestComputeTransportOperators:
     """Test compute_transport_operators function."""
 
