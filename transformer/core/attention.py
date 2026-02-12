@@ -1656,7 +1656,15 @@ def aggregate_messages(
     cached_transport: Optional[dict] = None,  # Precomputed transport operators
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
     """
-    Aggregate messages: m_i = Σ_j β_ij Ω_ij[μ_j].
+    Aggregate messages with GL(K) metric correction.
+
+    For SO(K): m_i = Σ_j β_ij Ω_ij μ_j            (Ω orthogonal)
+    For GL(K): m_i = Σ_j β_ij Ω_ij^{-T} μ_j       (metric factor (ΩΩ^T)^{-1})
+
+    The variational gradient ∂F/∂μ_i includes a metric factor (ΩΩ^T)^{-1},
+    so the principled message from j uses Ω^{-T} μ_j rather than Ω μ_j.
+    For SO(K), Ω^{-T} = Ω identically (orthogonal matrices). For GL(K),
+    the correction is non-trivial and required for faithful variational inference.
 
     0D Version: Simple weighted sum over agents, no spatial integration!
 
@@ -1712,8 +1720,26 @@ def aggregate_messages(
         # Omega_ij = exp(φ_i) @ exp(-φ_j)  ->  (B, N, N, K, K)
         Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
 
-    # Step 2: Transport all means: μ_j^{→i} = Ω_ij @ μ_j
-    mu_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)  # (B, N, N, K)
+    # Step 1.5: GL(K) metric correction for message transport
+    # The variational gradient ∂F/∂μ_i includes a metric factor (ΩΩ^T)^{-1},
+    # so the principled message from j uses Ω^{-T} μ_j rather than Ω μ_j.
+    # For SO(K): Ω is orthogonal ⟹ Ω^{-T} = Ω (no correction needed).
+    # For GL(K): Ω_ij^{-1} = Ω_ji, so Ω_ij^{-T} = Ω_ji^T — no inversion required.
+    _is_skew = torch.allclose(
+        generators + generators.transpose(-1, -2),
+        torch.zeros_like(generators), atol=1e-5
+    )
+    if _is_skew:
+        # SO(K): orthogonal transport, no metric correction
+        Omega_msg = Omega
+    else:
+        # GL(K): metric-corrected transport Ω^{-T} = Ω_ji^T
+        Omega_msg = Omega.permute(0, 2, 1, 3, 4).transpose(-1, -2)
+
+    # Step 2: Transport all means (with GL(K) metric correction if applicable)
+    # SO(K): μ_j^{→i} = Ω_ij @ μ_j
+    # GL(K): μ_j^{→i} = Ω_ij^{-T} @ μ_j  (variational metric factor)
+    mu_transported = torch.einsum('bijkl,bjl->bijk', Omega_msg, mu_q)  # (B, N, N, K)
 
     # Step 3: Weighted aggregation: m_i = Σ_j β_ij * μ_j^{→i}
     # beta: (B, N, N), mu_transported: (B, N, N, K)
@@ -1737,11 +1763,12 @@ def aggregate_messages(
             # Expand diagonal to full covariance for transport: (B, N, K, K)
             sigma_full = torch.diag_embed(sigma_q_diag)  # (B, N, K, K)
 
-            # Transport covariances: Σ_j^{→i} = Ω_ij @ Σ_j @ Ω_ij^T
-            # Omega: (B, N, N, K, K), sigma_full: (B, N, K, K)
+            # Transport covariances (uses Omega_msg for GL(K) metric correction)
+            # SO(K): Σ_j^{→i} = Ω_ij @ Σ_j @ Ω_ij^T
+            # GL(K): Σ_j^{→i} = Ω_ij^{-T} @ Σ_j @ Ω_ij^{-1}
             Sigma_transported_full = torch.einsum(
                 'bijkl,bjlm,bijmn->bijkn',
-                Omega, sigma_full, Omega.transpose(-1, -2)
+                Omega_msg, sigma_full, Omega_msg.transpose(-1, -2)
             )  # (B, N, N, K, K)
 
             # Extract diagonal of transported covariance: (B, N, N, K)
@@ -1758,10 +1785,12 @@ def aggregate_messages(
             sigma_aggregated = sigma_aggregated - mu_aggregated ** 2  # (B, N, K)
         else:
             # FULL COVARIANCE MODE: sigma_q is (B, N, K, K)
-            # Transport all covariances: Σ_j^{→i} = Ω_ij @ Σ_j @ Ω_ij^T
+            # Transport covariances (uses Omega_msg for GL(K) metric correction)
+            # SO(K): Σ_j^{→i} = Ω_ij @ Σ_j @ Ω_ij^T
+            # GL(K): Σ_j^{→i} = Ω_ij^{-T} @ Σ_j @ Ω_ij^{-1}
             Sigma_transported = torch.einsum(
                 'bijkl,bjlm,bijmn->bijkn',
-                Omega, sigma_q, Omega.transpose(-1, -2)
+                Omega_msg, sigma_q, Omega_msg.transpose(-1, -2)
             )  # (B, N, N, K, K)
 
             # Second moment: E[x x^T] = Σ + μ μ^T
