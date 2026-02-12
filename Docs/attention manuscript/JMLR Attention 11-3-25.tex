@@ -1010,8 +1010,9 @@ W_Q W_K^\top = \frac{1}{\sigma^2} \Omega^{-\top} \in \mathrm{GL}(d_k).
 \end{equation}
 
 Such a factorization always exists for any invertible $\Omega$: since $\Omega^{-\top} \in \mathrm{GL}(d_k)$, any matrix $M \in \mathrm{GL}(d_k)$ can be written as $M = AB^\top$ for suitable $A, B$ (e.g., via SVD: $M = U\Lambda V^\top = (U\Lambda^{1/2})(V\Lambda^{1/2})^\top$).
+Note that at this stage of the derivation, $W_Q$ and $W_K$ are \emph{square} $d_k \times d_k$ matrices, since the gauge transport $\Omega^{-\top}$ is a full-rank element of $\mathrm{GL}(d_k)$. The rectangular projection matrices $W_Q^a \in \mathbb{R}^{d_k \times d_{\text{head}}}$ used in standard multi-head attention arise from a further structural restriction: decomposing $\Omega$ into a block-diagonal subgroup $\mathrm{GL}(d_{\text{head}})^H \subset \mathrm{GL}(d_k)$, where each head $a$ operates within an independent $d_{\text{head}}$-dimensional subspace. The rectangular shape of $W_Q^a$ thus encodes both the projection onto block $a$ and the $\mathrm{GL}(d_{\text{head}})$ transport within that block; we develop this identification in Section~\ref{sec:multihead}.
 
-Rather than taking $\sigma \to 0$ we recognize that $\sigma^{-2}$ and $\Omega^{-\top}$ always appear together in the combination $\sigma^{-2}\Omega^{-\top}$. The learned matrices $W_Q, W_K$ parametrize this combined quantity directly, rendering $\sigma$ an implicit (finite) scale factor absorbed into the learned weights. 
+Rather than taking $\sigma \to 0$ we recognize that $\sigma^{-2}$ and $\Omega^{-\top}$ always appear together in the combination $\sigma^{-2}\Omega^{-\top}$. The learned matrices $W_Q, W_K$ parametrize this combined quantity directly, rendering $\sigma$ an implicit (finite) scale factor absorbed into the learned weights.
 
 
 Next, we define query and key vectors as:
@@ -1344,6 +1345,7 @@ Riemannian trust region & Norm clipping on manifold & Gradient clipping & I \\
 
 
 \subsection{Multi-Head Attention as Block-Diagonal $\mathrm{GL}(K)$ Structure}
+\label{sec:multihead}
 
 Standard transformer architectures employ multi-head attention, partitioning the $d_k$-dimensional embedding space into $H$ independent heads\citep{vaswani2017attention}:
 
@@ -1366,7 +1368,7 @@ Recall from Section~\ref{sec:glk_invariance} that standard transformers implemen
 \end{pmatrix}, \quad \Omega^a = (\sigma^2 W_K^a (W_Q^a)^\top)^{-1} \in \mathrm{GL}(d_{\text{head}}),
 \end{equation}
 
-where each head $a$ learns its own $\mathrm{GL}(d_{\text{head}})$ gauge transformation. This block structure means that components in different heads do not mix under gauge transport (each head implements an independent gauge-theoretic attention mechanism).
+where each head $a$ learns its own $\mathrm{GL}(d_{\text{head}})$ gauge transformation. This block structure means that components in different heads do not mix under gauge transport---each head implements an independent gauge-theoretic attention mechanism. Crucially, each per-head transport $\Omega^a \in \mathrm{GL}(d_{\text{head}})$ is full rank and invertible within its block, so the Mahalanobis metric correction $(\Omega^a)^{-\top}$ from Eq.~\eqref{eq:mahalanobis_identity} remains well-defined. The rectangular shape of the standard per-head projection matrices $W_Q^a \in \mathbb{R}^{d_k \times d_{\text{head}}}$ reflects the composition of (i) the orthogonal projection $P_a : \mathbb{R}^{d_k} \to \mathbb{R}^{d_{\text{head}}}$ onto block $a$, with (ii) the $\mathrm{GL}(d_{\text{head}})$ gauge transport within that block. The rectangular outer shape is therefore the projection, not a rank deficiency.
 
 The full multi-head gauge group is thus the direct product:
 
