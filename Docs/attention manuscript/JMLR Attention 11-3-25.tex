@@ -858,11 +858,11 @@ m_i = \sum_j \beta_{ij} \,\Omega_{ij}\mu_j,
 
 which is the gauge-theoretic analog of the attention aggregation $\sum_j \alpha_{ij} V_j$ in standard transformers.
 
-\subsection{Three Successive Limits: Connection to Standard Transformers}
+\subsection{Connection to Standard Transformers}
 
-The gauge-theoretic framework is inherently more general than standard transformer attention. To establish the connections formally, we show that three successive limits reduce the full gauge-covariant attention to the familiar dot-product form. Our experiments, however, (Section~\ref{sec:gl30}), implement the most general model.
+The gauge-theoretic framework is inherently more general than standard transformer attention. To establish the connections formally, we show that successive limits reduce the full gauge-covariant attention to the familiar dot-product form. Our experiments, however, (Section~\ref{sec:gl30}), implement the most general model.
 
-\paragraph{Limit 1: Deterministic Beliefs via Scaled Limit.}
+\paragraph{Deterministic Beliefs via Scaled Limit.}
 
 We consider a single-point base space $\mathcal{C}$ with a finite set of agents $\{1,\dots,N\}$ (tokens) with no particular ordering. 
 
@@ -889,7 +889,7 @@ The Mahalanobis quadratic form can be simplified using the identity $(\Omega_{ij
 \label{eq:mahalanobis_identity}
 \end{equation}
 
-This identity has a natural geometric interpretation: rather than transporting the key belief into the query's frame via $\Omega_{ij}$ and measuring with the induced metric, the KL divergence equivalently transports the query into the key's frame via $\Omega_{ij}^{-1}$ and measures the Euclidean distance there. The Mahalanobis metric automatically accounts for the distortion introduced by gauge transport.
+This identity the geometric interpretation that rather than transporting the key belief into the query's frame via $\Omega_{ij}$ and measuring with the induced metric, the KL divergence equivalently transports the query into the key's frame via $\Omega_{ij}^{-1}$ and measures the Euclidean distance there. The Mahalanobis metric automatically accounts for the distortion introduced by gauge transport.
 
 The structural terms $\log\det(\Omega_{ij}\Omega_{ij}^\top)$, $\mathrm{Tr}((\Omega_{ij}\Omega_{ij}^\top)^{-1})$, and $d_k$ depend on the gauge transport but not on the belief means $\mu_i, \mu_j$ directly. Under Limit~2 ($\Omega_{ij} = \Omega$), they become constant across all agent pairs and cancel under softmax, leaving the essential structure:
 
@@ -906,7 +906,7 @@ Next, we define the rescaled KL divergence:
 which remains finite and equals half the squared distance between means measured in the key's reference frame. This rescaled quantity has a well-defined limit as $\sigma \to 0$ and is the natural information-geometric measure of dissimilarity in the deterministic regime. The deterministic limit should be understood as the regime where $\sigma$ is small compared to characteristic scales of $\mu_i$, where $\sigma^{-2}$ will be absorbed into the learned projections (see Limit 3).
 
 
-\paragraph{Limit 2: Flat Bundle ($\Omega_{ij} = \Omega$).}
+\paragraph{Flat Bundle Limit ($\Omega_{ij} = \Omega$).}
 
 We next assume a single global frame shared by all agents; i.e. a flat connection with no position-dependent frame misalignment:
 
@@ -916,10 +916,6 @@ We next assume a single global frame shared by all agents; i.e. a flat connectio
 
 with $\Omega$ being a fixed linear map.
 
-
-\paragraph{Limit 3: Learned Projections.}
-
-We introduce learned projection matrices $W_Q, W_K, W_V \in \mathbb{R}^{d_k \times d}$ that will absorb both the gauge transport $\Omega$ and the scaling factor $\sigma^{-2}$. The precise identification emerges from the derivation below.
 
 \subsubsection{Derivation of Dot-Product Attention}
 
@@ -971,7 +967,7 @@ Thus, the effective logit is:
 
 \paragraph{Key Bias Cancellation.}
 
-The second term $-\frac{1}{2\sigma^2}\|\mu_j\|^2$ depends only on key $j$ and acts as a key-dependent bias on the raw embedding norms. Crucially, this bias involves $\|\mu_j\|^2$ rather than $\|\Omega\mu_j\|^2$: the Mahalanobis metric \eqref{eq:mahalanobis_identity} already accounts for the gauge transport's effect on norms via the $(\Omega\Omega^\top)^{-1}$ factor in the distance measure. The residual bias arises purely from the embedding space itself. Two mechanisms ensure its approximate cancellation:
+The second term $-\frac{1}{2\sigma^2}\|\mu_j\|^2$ depends only on key $j$ and acts as a key-dependent bias on the raw embedding norms. This bias involves $\|\mu_j\|^2$ rather than $\|\Omega\mu_j\|^2$: the Mahalanobis metric \eqref{eq:mahalanobis_identity} already accounts for the gauge transport's effect on norms via the $(\Omega\Omega^\top)^{-1}$ factor in the distance measure. The residual bias arises purely from the embedding space itself. Two mechanisms ensure its approximate cancellation:
 
 \textbf{(1) High-Dimensional Concentration:}
 For embeddings in $\mathbb{R}^{d_k}$ with approximately independent components (e.g., $\mu_j^{(i)} \sim \mathcal{N}(0, \sigma_0^2)$), the concentration of measure implies:
@@ -1007,15 +1003,16 @@ The leading term in $\tilde{s}_{ij}$ is:
 \frac{1}{\sigma^2}\mu_i^\top \Omega^{-\top} \mu_j.
 \end{equation}
 
-We identify learned projection matrices $W_Q, W_K$ such that:
+We identify the learned projection matrices $W_Q, W_K$ such that:
 
 \begin{equation}
 W_Q W_K^\top = \frac{1}{\sigma^2} \Omega^{-\top} \in \mathrm{GL}(d_k).
 \end{equation}
 
-Rather than taking $\sigma \to 0$ we recognize that $\sigma^{-2}$ and $\Omega^{-\top}$ always appear together in the combination $\sigma^{-2}\Omega^{-\top}$. The learned matrices $W_Q, W_K$ parametrize this combined quantity directly, rendering $\sigma$ an implicit (finite) scale factor absorbed into the learned weights. The deterministic limit is thus achieved not by $\sigma \to 0$ in isolation, but by the network learning projections that encode the effective gauge-scaled transformation.
+Such a factorization always exists for any invertible $\Omega$: since $\Omega^{-\top} \in \mathrm{GL}(d_k)$, any matrix $M \in \mathrm{GL}(d_k)$ can be written as $M = AB^\top$ for suitable $A, B$ (e.g., via SVD: $M = U\Lambda V^\top = (U\Lambda^{1/2})(V\Lambda^{1/2})^\top$).
 
-Such a factorization always exists for any invertible $\Omega$: since $\Omega^{-\top} \in \mathrm{GL}(d_k)$, any matrix $M \in \mathrm{GL}(d_k)$ can be written as $M = AB^\top$ for suitable $A, B$ (e.g., via SVD: $M = U\Sigma V^\top = (U\Sigma^{1/2})(V\Sigma^{1/2})^\top$).
+Rather than taking $\sigma \to 0$ we recognize that $\sigma^{-2}$ and $\Omega^{-\top}$ always appear together in the combination $\sigma^{-2}\Omega^{-\top}$. The learned matrices $W_Q, W_K$ parametrize this combined quantity directly, rendering $\sigma$ an implicit (finite) scale factor absorbed into the learned weights. 
+
 
 Next, we define query and key vectors as:
 
@@ -1091,7 +1088,7 @@ identical to the standard transformer attention update $z_i = \sum_j \alpha_{ij}
 
 \subsubsection{Complete Attention Formula}
 
-In summary, under the three limits (isotropic beliefs with $\sigma^{-2}$ absorbed and flat bundle), our gauge-theoretic message communication:
+In summary, under the asppropriate limits (isotropic beliefs and flat bundle), our gauge-theoretic message communication:
 
 \begin{equation}
 \beta_{ij} \propto \exp\left(-\frac{1}{\tau}D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)\right), \quad m_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j,
