@@ -1862,6 +1862,7 @@ class IrrepMultiHeadAttention(nn.Module):
         enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
         per_head_kappa: bool = False,  # If True, learn separate κ_h per head
         use_output_projection: bool = False,  # If True, add W_O linear projection after heads
+        irrep_dims_override: Optional[List[int]] = None,  # Override block dims (for cross-head coupling)
     ):
         """
         Initialize irrep-structured multi-head attention.
@@ -1938,12 +1939,24 @@ class IrrepMultiHeadAttention(nn.Module):
                         f"GL(K) multi-head: n_heads({n_heads}) × d_head({d_head}) = {n_heads * d_head} "
                         f"must equal embed_dim={embed_dim}"
                     )
-                self.irrep_dims = [d_head] * n_heads
-                self.irrep_labels = [f'glk_head_{h}' for h in range(n_heads)]
-                total_dim = embed_dim
-                self.glk_multihead = True
-                self.glk_d_head = d_head
-                print(f"[GL(K) multi-head] {n_heads} heads × GL({d_head}), generators per head={d_head}²={d_head**2}")
+
+                if irrep_dims_override is not None:
+                    # Cross-head coupling: use super-block dims from merge_coupled_heads.
+                    # Generators have been reordered so super-blocks are contiguous.
+                    self.irrep_dims = list(irrep_dims_override)
+                    self.irrep_labels = [f'glk_superblock_{i}' for i in range(len(irrep_dims_override))]
+                    self.glk_multihead = True
+                    self.glk_d_head = d_head
+                    self.glk_cross_head = True
+                    print(f"[GL(K) cross-head] super-blocks={irrep_dims_override}, "
+                          f"d_head={d_head}")
+                else:
+                    self.irrep_dims = [d_head] * n_heads
+                    self.irrep_labels = [f'glk_head_{h}' for h in range(n_heads)]
+                    self.glk_multihead = True
+                    self.glk_d_head = d_head
+                    self.glk_cross_head = False
+                    print(f"[GL(K) multi-head] {n_heads} heads × GL({d_head}), generators per head={d_head}²={d_head**2}")
         else:
             # SO(3) / SO(N) mode: Use irrep decomposition
             for label, multiplicity, dim in irrep_spec:
@@ -2013,20 +2026,13 @@ class IrrepMultiHeadAttention(nn.Module):
                     )
 
                 if hasattr(self, 'glk_multihead') and self.glk_multihead:
-                    # Multi-head GL(K): Extract this head's block from block-diagonal generators
-                    # global_generators shape: (n_heads * d_head², K, K)
-                    # Each head gets d_head² generators acting on its d_head-dim subspace
-                    d_head = self.glk_d_head
-                    n_gen_per_head = d_head * d_head
-                    gen_start = head_idx * n_gen_per_head
-                    gen_end = (head_idx + 1) * n_gen_per_head
-
-                    # Extract generators for this head, but only the relevant block
-                    # global_generators[gen_start:gen_end] are K×K but only act on [cum_dim:cum_dim+d_head]
-                    gen_full = global_generators[gen_start:gen_end]  # (d_head², K, K)
-
-                    # Extract just the d_head×d_head block that this head acts on
-                    gen = gen_full[:, cum_dim:cum_dim+dim, cum_dim:cum_dim+dim].clone()  # (d_head², d_head, d_head)
+                    # Multi-head GL(K) (standard or cross-coupled):
+                    # Extract the dim×dim spatial block from ALL generators.
+                    # phi has coefficients for all n_gen generators, so we keep
+                    # the full first axis to match phi's last dimension.
+                    # Generators that are zero in this spatial block contribute
+                    # nothing to the Lie algebra element Σ_a φ^a G_a[block].
+                    gen = global_generators[:, cum_dim:cum_dim+dim, cum_dim:cum_dim+dim].clone()
                 else:
                     # Single-head GL(K): Use full K² generators on entire space
                     gen = global_generators.clone()  # (K², K, K)

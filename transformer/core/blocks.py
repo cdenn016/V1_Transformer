@@ -123,6 +123,8 @@ class GaugeTransformerBlock(nn.Module):
         use_output_projection: bool = False,  # If True, add W_O after multi-head attention
         # Multi-head VFE: per-block β through VFE iterations
         multihead_vfe: bool = False,  # If True, VFE_dynamic maintains per-head attention
+        # Cross-head coupling
+        cross_head_perm: Optional[object] = None,  # np.ndarray permutation for super-blocks
     ):
         """
         Initialize gauge transformer block.
@@ -181,14 +183,27 @@ class GaugeTransformerBlock(nn.Module):
                 gauge_group = 'SO3'
                 gauge_dim_inferred = 3
             elif n_gen == K * K:
-                # n_gen = K² means GL(K) - full general linear group
+                # n_gen = K² means GL(K) single-head
                 gauge_group = 'GLK'
                 gauge_dim_inferred = K
             else:
-                # n_gen = N*(N-1)/2 => N = (1 + sqrt(1 + 8*n_gen)) / 2
+                # Check if n_gen matches SO(N): n_gen = N*(N-1)/2
                 import math
-                gauge_dim_inferred = int((1 + math.sqrt(1 + 8 * n_gen)) / 2)
-                gauge_group = 'SON'
+                disc = 1 + 8 * n_gen
+                sqrt_disc = int(math.sqrt(disc))
+                if sqrt_disc * sqrt_disc == disc:
+                    N_candidate = (1 + sqrt_disc) // 2
+                    if N_candidate * (N_candidate - 1) // 2 == n_gen:
+                        gauge_group = 'SON'
+                        gauge_dim_inferred = N_candidate
+                    else:
+                        # Not SO(N) — assume GL(K) multi-head or cross-coupled
+                        gauge_group = 'GLK'
+                        gauge_dim_inferred = K
+                else:
+                    # Not SO(N) — assume GL(K) multi-head or cross-coupled
+                    gauge_group = 'GLK'
+                    gauge_dim_inferred = K
         else:
             gauge_group = 'SO3'
             gauge_dim_inferred = 3
@@ -211,6 +226,7 @@ class GaugeTransformerBlock(nn.Module):
             enforce_orthogonal=enforce_orthogonal,
             per_head_kappa=per_head_kappa,
             use_output_projection=use_output_projection,
+            irrep_dims_override=ffn_irrep_dims if (gauge_group == 'GLK' and cross_head_perm is not None) else None,
         )
 
         # Conditionally create LayerNorm and Dropout (disabled for pure VFE)
@@ -466,6 +482,8 @@ class GaugeTransformerStack(nn.Module):
         use_output_projection: bool = False,  # If True, add W_O after multi-head attention
         # Multi-head VFE: per-block β through VFE iterations
         multihead_vfe: bool = False,  # If True, VFE_dynamic maintains per-head attention
+        # Cross-head coupling
+        cross_head_perm: Optional[object] = None,  # np.ndarray permutation for super-blocks
     ):
         """
         Initialize stack of transformer blocks.
@@ -563,6 +581,8 @@ class GaugeTransformerStack(nn.Module):
                 use_output_projection=use_output_projection,
                 # Multi-head VFE
                 multihead_vfe=multihead_vfe,
+                # Cross-head coupling
+                cross_head_perm=cross_head_perm,
             )
             for _ in range(n_layers)
         ])
