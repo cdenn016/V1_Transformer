@@ -1,0 +1,384 @@
+"""
+Transport Operator Extraction from Pretrained Transformers
+==========================================================
+
+Three methods for extracting the effective transport T_{ij} from token j
+to token i through a pretrained transformer:
+
+Method 0: Attention flow asymmetry (scalar proxy, trivially cheap)
+Method 1: Attention-decomposed transport (one forward pass, approximate)
+Method 2: Jacobian probing (exact, P*N forward passes)
+
+The effective transport T_{ij} = dh_i^{(L)} / dh_j^{(0)} captures how
+a perturbation at position j in the input propagates to position i at the
+output, including all attention, FFN, layer norm, and residual effects.
+"""
+
+import torch
+import torch.nn as nn
+import numpy as np
+from typing import Optional, Tuple, Dict, List
+from dataclasses import dataclass
+
+
+@dataclass
+class TransportResult:
+    """Container for extracted transport operators."""
+    # T[i, j] is a (d, d) matrix: effective transport from j to i
+    # Full shape: (N, N, d, d) where N = sequence length, d = hidden dim
+    transport: torch.Tensor  # (N, N, d, d)
+    method: str
+    n_tokens: int
+    d_model: int
+    metadata: dict
+
+
+# =========================================================================
+# Method 0: Attention flow asymmetry (scalar proxy)
+# =========================================================================
+
+def attention_flow_asymmetry(
+    model,
+    input_ids: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+) -> Dict[str, torch.Tensor]:
+    """
+    Extract per-layer attention matrices and compute triangle asymmetry.
+
+    For each triangle (i,j,k), compare:
+        forward:  alpha_{ij} * alpha_{jk} * alpha_{ki}
+        backward: alpha_{ik} * alpha_{kj} * alpha_{ji}
+
+    Asymmetry = |forward - backward| / (forward + backward + eps)
+
+    This is a scalar proxy for holonomy — cheap sanity check.
+
+    Args:
+        model: HuggingFace GPT2Model (or similar) with output_attentions
+        input_ids: (1, N) token IDs
+        attention_mask: (1, N) attention mask
+
+    Returns:
+        dict with:
+            'attentions': tuple of (1, H, N, N) per layer
+            'asymmetry_per_layer': (L, num_triangles) asymmetry values
+            'triangles': (num_triangles, 3) index triples
+    """
+    with torch.no_grad():
+        outputs = model(
+            input_ids,
+            attention_mask=attention_mask,
+            output_attentions=True,
+        )
+
+    attentions = outputs.attentions  # tuple of (1, H, N, N)
+    N = input_ids.shape[1]
+
+    # Average over heads for the scalar proxy
+    # shape per layer: (N, N)
+    attn_matrices = [a.squeeze(0).mean(dim=0) for a in attentions]
+
+    # Sample triangles (all triples for small N, random subset for large N)
+    triangles = _sample_triangles(N, max_triangles=500)
+
+    asymmetry_per_layer = []
+    for A in attn_matrices:
+        asym = []
+        for i, j, k in triangles:
+            fwd = A[i, j] * A[j, k] * A[k, i]
+            bwd = A[i, k] * A[k, j] * A[j, i]
+            denom = fwd + bwd + 1e-12
+            asym.append(abs(fwd - bwd) / denom)
+        asymmetry_per_layer.append(torch.stack(asym))
+
+    return {
+        'attentions': attentions,
+        'asymmetry_per_layer': torch.stack(asymmetry_per_layer),  # (L, T)
+        'triangles': triangles,
+    }
+
+
+# =========================================================================
+# Method 1: Attention-decomposed transport (approximate)
+# =========================================================================
+
+def attention_decomposed_transport(
+    model,
+    input_ids: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    layers: Optional[List[int]] = None,
+) -> TransportResult:
+    """
+    Compute effective transport via attention weights and value projections.
+
+    Per-layer transport from j to i:
+        T_{ij}^{(l)} = sum_h alpha_{ij}^{(l,h)} * W_O^{(h)} @ W_V^{(h)}
+
+    Plus identity on diagonal (residual connection).
+
+    The full transport is the (i,j) block of the product of per-layer
+    block matrices: T^{eff} = prod_l T^{(l)}.
+
+    Ignores FFN nonlinearity and layer norm — fast but approximate.
+
+    Args:
+        model: HuggingFace GPT2Model
+        input_ids: (1, N) token IDs
+        layers: which layers to include (default: all)
+
+    Returns:
+        TransportResult with transport shape (N, N, d, d)
+    """
+    with torch.no_grad():
+        outputs = model(
+            input_ids,
+            attention_mask=attention_mask,
+            output_attentions=True,
+        )
+
+    attentions = outputs.attentions  # tuple of (1, H, N, N)
+    N = input_ids.shape[1]
+
+    # Extract weight matrices
+    transformer_blocks = model.h if hasattr(model, 'h') else model.transformer.h
+    n_layers = len(transformer_blocks)
+    if layers is None:
+        layers = list(range(n_layers))
+
+    d_model = transformer_blocks[0].attn.c_proj.weight.shape[0]
+
+    # Build composed transport as block matrix product
+    # T_composed[i,j] is (d, d) — start with identity
+    T_composed = torch.zeros(N, N, d_model, d_model, device=input_ids.device)
+    for i in range(N):
+        T_composed[i, i] = torch.eye(d_model, device=input_ids.device)
+
+    for l in layers:
+        block = transformer_blocks[l]
+        attn = block.attn
+
+        # GPT-2 uses Conv1D: weight is (d_in, d_out), so transpose
+        # c_attn projects to [Q, K, V] concatenated
+        W_qkv = attn.c_attn.weight  # (d_model, 3*d_model)
+        d_head = d_model // attn.num_heads
+        n_heads = attn.num_heads
+
+        # Extract W_V: last d_model columns
+        W_V = W_qkv[:, 2*d_model:3*d_model]  # (d_model, d_model)
+
+        # W_O = c_proj
+        W_O = attn.c_proj.weight  # (d_model, d_model)
+
+        # Per-head value+output product
+        # W_O @ W_V gives the effective value transport
+        # But we need per-head: W_O[:, h*d_h:(h+1)*d_h] @ W_V[h*d_h:(h+1)*d_h, :]
+        # Actually for the attention-weighted sum:
+        # output_i = sum_j sum_h alpha_{ij}^h * W_O_h @ W_V_h @ x_j
+        # The per-head transport matrix is W_O_h @ W_V_h, shape (d_model, d_model)
+
+        # alpha: (1, H, N, N) -> (H, N, N)
+        alpha = attentions[l].squeeze(0)
+
+        # Build per-layer transport: T^{(l)}_{ij} for all i,j
+        T_layer = torch.zeros(N, N, d_model, d_model, device=input_ids.device)
+
+        # Residual connection on diagonal
+        for i in range(N):
+            T_layer[i, i] = torch.eye(d_model, device=input_ids.device)
+
+        # Attention contribution
+        for h in range(n_heads):
+            sl = slice(h * d_head, (h + 1) * d_head)
+            # W_V_h: maps d_model -> d_head
+            W_V_h = W_V[:, sl]  # (d_model, d_head)
+            # W_O_h: maps d_head -> d_model
+            W_O_h = W_O[:, sl]  # (d_model, d_head) for Conv1D
+
+            # Transport for this head: (d_model, d_model)
+            WOV_h = W_O_h @ W_V_h.T  # (d_model, d_model)
+
+            # Weight by attention: T_layer[i,j] += alpha[h,i,j] * WOV_h
+            for i in range(N):
+                for j in range(N):
+                    T_layer[i, j] += alpha[h, i, j] * WOV_h
+
+        # Compose: T_new[i,j] = sum_k T_layer[i,k] @ T_old[k,j]
+        T_new = torch.einsum('ikab,kjbc->ijac', T_layer, T_composed)
+        T_composed = T_new
+
+    return TransportResult(
+        transport=T_composed,
+        method='attention_decomposed',
+        n_tokens=N,
+        d_model=d_model,
+        metadata={'layers': layers, 'n_layers': n_layers},
+    )
+
+
+# =========================================================================
+# Method 2: Jacobian probing (exact)
+# =========================================================================
+
+def jacobian_transport(
+    model,
+    input_ids: torch.Tensor,
+    embedding_layer: nn.Module,
+    attention_mask: Optional[torch.Tensor] = None,
+    n_probes: int = 50,
+    epsilon: float = 1e-3,
+    seed: int = 42,
+) -> TransportResult:
+    """
+    Compute effective transport via perturbation probing.
+
+    For each position j and probe direction e_k:
+        1. Perturb input embedding at j by epsilon * e_k
+        2. Forward pass
+        3. Measure (output_perturbed - output_clean) / epsilon at all positions i
+        4. This gives one column of T_{ij} per probe
+
+    Reconstruct transport from P probes via least-squares.
+
+    Args:
+        model: HuggingFace GPT2Model
+        input_ids: (1, N) token IDs
+        embedding_layer: the embedding module (model.wte or model.transformer.wte)
+        n_probes: number of random probe directions P
+        epsilon: perturbation magnitude
+        seed: random seed for probe directions
+
+    Returns:
+        TransportResult with transport shape (N, N, d, d)
+    """
+    device = input_ids.device
+    N = input_ids.shape[1]
+
+    # Get clean output
+    with torch.no_grad():
+        clean_embeds = embedding_layer(input_ids)  # (1, N, d)
+        # Add position embeddings if GPT-2
+        if hasattr(model, 'wpe') or (hasattr(model, 'transformer') and hasattr(model.transformer, 'wpe')):
+            wpe = model.wpe if hasattr(model, 'wpe') else model.transformer.wpe
+            pos_ids = torch.arange(N, device=device).unsqueeze(0)
+            clean_embeds = clean_embeds + wpe(pos_ids)
+
+        clean_output = _forward_from_embeds(model, clean_embeds, attention_mask)
+        # clean_output: (1, N, d)
+
+    d_model = clean_output.shape[-1]
+
+    # Generate random probe directions
+    rng = torch.Generator(device='cpu').manual_seed(seed)
+    probes = torch.randn(n_probes, d_model, generator=rng, device=device)
+    probes = probes / probes.norm(dim=-1, keepdim=True)  # unit vectors
+
+    # T_approx[i, j] will be estimated from probe responses
+    # For each j, we get P responses of shape (N, d) -> reconstruct (N, d, d)
+    # Using: response[i, :] = T[i,j] @ probe_dir * epsilon
+    # So: T[i,j] approx= responses @ pinv(probes) / epsilon
+
+    transport = torch.zeros(N, N, d_model, d_model, device=device)
+
+    for j in range(N):
+        # Collect responses for all probes at position j
+        responses = []  # will be (P, N, d)
+
+        for p in range(n_probes):
+            perturbed_embeds = clean_embeds.clone()
+            perturbed_embeds[0, j, :] += epsilon * probes[p]
+
+            with torch.no_grad():
+                perturbed_output = _forward_from_embeds(
+                    model, perturbed_embeds, attention_mask
+                )
+
+            response = (perturbed_output[0] - clean_output[0]) / epsilon  # (N, d)
+            responses.append(response)
+
+        # responses: (P, N, d)
+        responses = torch.stack(responses, dim=0)
+
+        # For each target position i, reconstruct T[i,j]:
+        # responses[:, i, :] = probes @ T[i,j].T  (each row is one probe)
+        # So T[i,j].T = pinv(probes) @ responses[:, i, :]
+        # probes: (P, d), responses[:, i, :]: (P, d)
+        probes_pinv = torch.linalg.pinv(probes)  # (d, P)
+
+        for i in range(N):
+            # T[i,j] = (probes_pinv @ responses[:, i, :]).T
+            transport[i, j] = (probes_pinv @ responses[:, i, :]).T
+
+    return TransportResult(
+        transport=transport,
+        method='jacobian_probing',
+        n_tokens=N,
+        d_model=d_model,
+        metadata={'n_probes': n_probes, 'epsilon': epsilon},
+    )
+
+
+# =========================================================================
+# Helpers
+# =========================================================================
+
+def _forward_from_embeds(
+    model,
+    inputs_embeds: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Run model forward pass from embeddings, return hidden states."""
+    # Handle both raw GPT2Model and wrapped models
+    if hasattr(model, 'transformer'):
+        # GPT2LMHeadModel — use the inner transformer
+        core = model.transformer
+    else:
+        core = model
+
+    outputs = core(
+        inputs_embeds=inputs_embeds,
+        attention_mask=attention_mask,
+    )
+    return outputs.last_hidden_state
+
+
+def _sample_triangles(
+    N: int,
+    max_triangles: int = 500,
+    seed: int = 42,
+) -> List[Tuple[int, int, int]]:
+    """
+    Sample token index triples for holonomy computation.
+
+    For small N, return all triples. For large N, random sample.
+    """
+    import itertools
+
+    all_triples = list(itertools.combinations(range(N), 3))
+
+    if len(all_triples) <= max_triangles:
+        return all_triples
+
+    rng = np.random.RandomState(seed)
+    indices = rng.choice(len(all_triples), size=max_triangles, replace=False)
+    return [all_triples[i] for i in sorted(indices)]
+
+
+def load_model(model_name: str = 'gpt2', device: str = 'cpu'):
+    """
+    Load a pretrained transformer model for transport extraction.
+
+    Args:
+        model_name: HuggingFace model name (default: 'gpt2')
+        device: 'cpu' or 'cuda'
+
+    Returns:
+        (model, tokenizer) tuple
+    """
+    from transformers import GPT2Model, GPT2Tokenizer
+
+    tokenizer = GPT2Tokenizer.from_pretrained(model_name)
+    model = GPT2Model.from_pretrained(model_name)
+    model = model.to(device)
+    model.eval()
+
+    return model, tokenizer
