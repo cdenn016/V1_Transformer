@@ -93,11 +93,13 @@ def _retract_phi(
     max_norm: float = None,  # None = auto-select based on gauge group
     bch_order: int = None,  # None = auto-select based on gauge group
     eps: float = 1e-6,
+    gauge_group: str = None,  # Explicit: 'GLK', 'SON', or None for auto-detect
 ) -> torch.Tensor:
     """
     Retract phi update using appropriate method for gauge group.
 
-    Automatically selects SO(N) or GL(K) retraction based on n_gen:
+    When gauge_group is provided, uses it directly. Otherwise auto-selects
+    based on n_gen:
     - n_gen = N(N-1)/2 → SO(N): compact, uses trust_region=0.3, max_norm=π, bch_order=1
     - n_gen = K²       → GL(K): non-compact, uses trust_region=0.1, max_norm=1.0, bch_order=0
 
@@ -110,13 +112,27 @@ def _retract_phi(
         max_norm: Maximum norm for phi (auto if None)
         bch_order: BCH expansion order (auto if None)
         eps: Numerical stability
+        gauge_group: Explicit gauge group ('GLK' or 'SON'). Overrides
+            n_gen-based auto-detection. Required when n_gen doesn't match
+            standard formulas (e.g. cross-head coupled GL(K)).
 
     Returns:
         phi_new: Updated gauge frames
     """
     n_gen = generators.shape[0]
-    is_glk = RETRACTION_AVAILABLE and is_glK_generators(n_gen)
-    is_son = RETRACTION_AVAILABLE and is_soN_generators(n_gen)
+    if gauge_group == 'GLK':
+        is_glk = RETRACTION_AVAILABLE
+        is_son = False
+    elif gauge_group == 'SON':
+        is_glk = False
+        is_son = RETRACTION_AVAILABLE
+    else:
+        # Auto-detect from n_gen (original heuristic).
+        # When n_gen doesn't match SO(N) or GL(K) exactly, default to GL(K)
+        # retraction (conservative settings). This covers cross-head coupled
+        # GL(K) where n_gen = H*d² + n_cross*d² > K².
+        is_son = RETRACTION_AVAILABLE and is_soN_generators(n_gen)
+        is_glk = RETRACTION_AVAILABLE and (is_glK_generators(n_gen) or not is_son)
 
     # Auto-select defaults based on gauge group
     if trust_region is None:

@@ -52,6 +52,9 @@ try:
         generate_multi_irrep_soN_generators,
         generate_glK_generators,
         generate_glK_multihead_generators,
+        generate_glK_cross_head_generators,
+        merge_coupled_heads,
+        reorder_cross_head_generators,
     )
     GENERATORS_AVAILABLE = True
 except ImportError:
@@ -223,6 +226,14 @@ class GaugeTransformerLM(nn.Module):
             print(f"[INFO] Trivial gauge mode: φ = 0, Ω = I (global frame / standard attention limit)")
             print(f"       This recovers standard KL-attention: KL(q_i || q_j) with no transport.")
 
+        # =================================================================
+        # Cross-Head Coupling (sparse off-diagonal gauge mixing)
+        # =================================================================
+        # cross_couplings: list of (head_a, head_b) pairs enabling gauge
+        # transport between those heads. Empty list = block-diagonal (default).
+        cross_couplings = config.get('cross_couplings', [])
+        self.cross_couplings = cross_couplings
+
         # Compute phi dimension (number of generators)
         if gauge_group == 'SO3':
             self.phi_dim = 3  # SO(3) has 3 generators
@@ -236,11 +247,12 @@ class GaugeTransformerLM(nn.Module):
                 irrep_spec[0][1] > 1  # n_heads > 1
             )
             if is_glk_multihead:
-                # Multi-head GL(K): H × d_head² generators
+                # Multi-head GL(K): H × d_head² generators + cross-coupling generators
                 _, n_heads, d_head = irrep_spec[0]
-                self.phi_dim = n_heads * d_head * d_head
+                n_cross_gen = len(cross_couplings) * d_head * d_head
+                self.phi_dim = n_heads * d_head * d_head + n_cross_gen
             else:
-                # Single-head GL(K): K² generators
+                # Single-head GL(K): K² generators (cross_couplings ignored)
                 self.phi_dim = embed_dim * embed_dim
         else:  # SO(N)
             self.phi_dim = gauge_dim * (gauge_dim - 1) // 2  # SO(N) has N(N-1)/2 generators
@@ -264,11 +276,40 @@ class GaugeTransformerLM(nn.Module):
                 )
 
                 if is_multihead:
-                    # Multi-head GL(K): block-diagonal generators
                     _, n_heads, d_head = irrep_spec[0]
-                    generators = generate_glK_multihead_generators(embed_dim, n_heads)
-                    print(f"[INFO] GL(K) multi-head: {n_heads} heads × GL({d_head}), "
-                          f"{n_heads * d_head**2} generators (vs {embed_dim**2} single-head)")
+
+                    if cross_couplings:
+                        # Cross-head coupling: sparse off-diagonal generators
+                        generators = generate_glK_cross_head_generators(
+                            embed_dim, n_heads, cross_couplings
+                        )
+                        # Compute super-block structure
+                        super_block_dims, super_block_head_groups = merge_coupled_heads(
+                            n_heads, d_head, cross_couplings
+                        )
+                        # Reorder so merged heads are contiguous
+                        generators, perm = reorder_cross_head_generators(
+                            generators, n_heads, d_head,
+                            cross_couplings, super_block_head_groups,
+                        )
+                        self._cross_head_perm = perm  # Stored for embedding reordering
+                        self._super_block_dims = super_block_dims
+                        self._super_block_head_groups = super_block_head_groups
+
+                        n_cross = len(cross_couplings) * d_head**2
+                        print(f"[INFO] GL(K) cross-head: {n_heads} heads × GL({d_head}), "
+                              f"{n_heads * d_head**2} diag + {n_cross} cross generators = "
+                              f"{generators.shape[0]} total")
+                        print(f"       Super-blocks: {super_block_dims} "
+                              f"(groups: {super_block_head_groups})")
+                    else:
+                        # Standard multi-head GL(K): block-diagonal generators
+                        generators = generate_glK_multihead_generators(embed_dim, n_heads)
+                        self._cross_head_perm = None
+                        self._super_block_dims = None
+                        self._super_block_head_groups = None
+                        print(f"[INFO] GL(K) multi-head: {n_heads} heads × GL({d_head}), "
+                              f"{n_heads * d_head**2} generators (vs {embed_dim**2} single-head)")
                 else:
                     # Single-head GL(K): full K² generators
                     generators = generate_glK_generators(embed_dim)
@@ -405,7 +446,7 @@ class GaugeTransformerLM(nn.Module):
             ffn_prior_bank=self.prior_bank,  # Pass PriorBank to FFN layers
             ffn_use_prior_bank=use_prior_bank,  # Enable token-dependent priors
             # Memory-efficient options
-            ffn_irrep_dims=self._compute_irrep_dims(irrep_spec) if config.get('use_block_diagonal_kl', True) else None,
+            ffn_irrep_dims=self._get_effective_irrep_dims(irrep_spec) if config.get('use_block_diagonal_kl', True) else None,
             ffn_chunk_size=config.get('ffn_chunk_size', None),
             # Pure VFE mode: disable ad-hoc transformer components
             use_layernorm=config.get('use_layernorm', True),
@@ -426,6 +467,8 @@ class GaugeTransformerLM(nn.Module):
             use_output_projection=config.get('use_output_projection', False),
             # Multi-head VFE
             multihead_vfe=config.get('multihead_vfe', False),
+            # Cross-head coupling
+            cross_head_perm=getattr(self, '_cross_head_perm', None),
         )
 
         # =================================================================
@@ -464,6 +507,20 @@ class GaugeTransformerLM(nn.Module):
         for label, mult, dim in irrep_spec:
             irrep_dims.extend([dim] * mult)
         return irrep_dims
+
+    def _get_effective_irrep_dims(self, irrep_spec: List[Tuple[str, int, int]]) -> List[int]:
+        """
+        Get effective block dimensions, accounting for cross-head super-blocks.
+
+        When cross_couplings are active, coupled heads are merged into larger
+        super-blocks. The super-block dims replace the per-head dims for the
+        coupled groups while uncoupled heads keep their original dimensions.
+
+        Falls back to _compute_irrep_dims when no cross-coupling is active.
+        """
+        if getattr(self, '_super_block_dims', None) is not None:
+            return self._super_block_dims
+        return self._compute_irrep_dims(irrep_spec)
 
     def _init_weights(self, module):
         """Initialize weights following best practices."""
@@ -514,6 +571,23 @@ class GaugeTransformerLM(nn.Module):
         # 1. Token Embeddings (0D: one per agent at c*, not per spatial point)
         # =================================================================
         mu_q, sigma_q, phi = self.token_embed(token_ids)
+
+        # =================================================================
+        # 1b. Cross-Head Permutation (reorder dims for super-block contiguity)
+        # =================================================================
+        # When cross-head coupling is active, generators were reordered so that
+        # coupled heads are contiguous. We must apply the same permutation to
+        # the embedding dimensions so mu/sigma align with the generator blocks.
+        if getattr(self, '_cross_head_perm', None) is not None:
+            perm = torch.from_numpy(self._cross_head_perm).to(device=device, dtype=torch.long)
+            mu_q = mu_q[:, :, perm]
+            if sigma_q is not None:
+                if sigma_q.dim() == 3:
+                    # Diagonal: (B, N, K)
+                    sigma_q = sigma_q[:, :, perm]
+                else:
+                    # Full: (B, N, K, K)
+                    sigma_q = sigma_q[:, :, perm][:, :, :, perm]
 
         # =================================================================
         # 2. Save Priors (position-independent semantics)
@@ -576,6 +650,15 @@ class GaugeTransformerLM(nn.Module):
         )
 
         # =================================================================
+        # 6b. Inverse Cross-Head Permutation (restore original dim order)
+        # =================================================================
+        if getattr(self, '_cross_head_perm', None) is not None:
+            inv_perm = torch.from_numpy(
+                np.argsort(self._cross_head_perm)
+            ).to(device=device, dtype=torch.long)
+            mu_q = mu_q[:, :, inv_perm]
+
+        # =================================================================
         # 7. Project to Vocabulary (one prediction per agent)
         # =================================================================
         logits = self.out_proj(mu_q)  # (B, N, V)
@@ -627,6 +710,16 @@ class GaugeTransformerLM(nn.Module):
 
         # Embeddings
         mu_q, sigma_q, phi = self.token_embed(token_ids)
+
+        # Cross-head permutation (same as in forward())
+        if getattr(self, '_cross_head_perm', None) is not None:
+            perm = torch.from_numpy(self._cross_head_perm).to(device=device, dtype=torch.long)
+            mu_q = mu_q[:, :, perm]
+            if sigma_q is not None:
+                if sigma_q.dim() == 3:
+                    sigma_q = sigma_q[:, :, perm]
+                else:
+                    sigma_q = sigma_q[:, :, perm][:, :, :, perm]
 
         # Save priors (position-independent semantics)
         mu_prior = mu_q.clone()
@@ -704,6 +797,13 @@ class GaugeTransformerLM(nn.Module):
 
         # Final norm
         mu_q = self.transformer.final_norm(mu_q)
+
+        # Inverse cross-head permutation
+        if getattr(self, '_cross_head_perm', None) is not None:
+            inv_perm = torch.from_numpy(
+                np.argsort(self._cross_head_perm)
+            ).to(device=device, dtype=torch.long)
+            mu_q = mu_q[:, :, inv_perm]
 
         # Project to vocabulary
         logits = self.out_proj(mu_q)

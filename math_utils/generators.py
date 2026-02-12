@@ -885,6 +885,201 @@ def generate_glK_multihead_generators(
     return G
 
 
+def generate_glK_cross_head_generators(
+    K: int,
+    n_heads: int,
+    cross_couplings: 'List[Tuple[int, int]]',
+) -> np.ndarray:
+    """
+    Generate GL(K) generators with sparse off-diagonal cross-head coupling.
+
+    Extends generate_glK_multihead_generators by adding generators for selected
+    pairs of heads, enabling gauge transport that mixes information between heads.
+
+    The generator set consists of:
+      1. Diagonal blocks: gl(d_head) per head  (same as multihead)
+      2. Off-diagonal blocks: E_ij spanning (head_a → head_b) for each (a,b) pair
+
+    For a coupling pair (a, b), we add d_head² generators:
+      G[start + i*d_head + j]_{a_start+i, b_start+j} = 1
+
+    These are the elementary matrices that connect head a's subspace to head b's.
+    The resulting transport Ω = exp(φ·G) will have non-zero blocks at (a,a), (b,b),
+    AND (a,b), (b,a) — heads a and b can now exchange information through gauge
+    transport.
+
+    For the KL computation we merge coupled heads into super-blocks:
+      - Heads {a, b} that appear in any coupling pair are grouped together
+      - Their combined subspace becomes a single block of dimension Σ d_head
+      - The existing block-diagonal KL code handles this with no changes —
+        the super-block's generators are simply larger
+
+    Args:
+        K: Total embedding dimension
+        n_heads: Number of attention heads
+        cross_couplings: List of (head_a, head_b) pairs to couple.
+            Must have a != b and 0 <= a, b < n_heads.
+            Pairs are treated as directed: (a,b) adds generators a→b.
+            For symmetric coupling, include both (a,b) and (b,a).
+
+    Returns:
+        G: Generators, shape (n_total_gen, K, K) where
+           n_total_gen = n_heads * d_head² + len(cross_couplings) * d_head²
+
+    Example:
+        >>> # 24-dim embedding, 4 heads of dim 6, couple heads 0↔1 and 2↔3
+        >>> G = generate_glK_cross_head_generators(24, 4, [(0,1),(1,0),(2,3),(3,2)])
+        >>> G.shape  # 4*36 + 4*36 = 288 generators
+        (288, 24, 24)
+    """
+    if K % n_heads != 0:
+        raise ValueError(f"K={K} not divisible by n_heads={n_heads}")
+
+    d_head = K // n_heads
+    n_gen_diag = n_heads * d_head * d_head
+    n_gen_cross = len(cross_couplings) * d_head * d_head
+    n_gen_total = n_gen_diag + n_gen_cross
+
+    G = np.zeros((n_gen_total, K, K), dtype=np.float32)
+
+    # 1. Diagonal blocks (identical to generate_glK_multihead_generators)
+    for h in range(n_heads):
+        start = h * d_head
+        gen_offset = h * d_head * d_head
+        idx = 0
+        for i in range(d_head):
+            for j in range(d_head):
+                G[gen_offset + idx, start + i, start + j] = 1.0
+                idx += 1
+
+    # 2. Off-diagonal blocks for each coupling pair
+    for pair_idx, (a, b) in enumerate(cross_couplings):
+        if a == b:
+            raise ValueError(f"Self-coupling ({a},{a}) not allowed — already in diagonal")
+        if not (0 <= a < n_heads and 0 <= b < n_heads):
+            raise ValueError(f"Head indices ({a},{b}) out of range [0, {n_heads})")
+
+        a_start = a * d_head
+        b_start = b * d_head
+        gen_offset = n_gen_diag + pair_idx * d_head * d_head
+        idx = 0
+        for i in range(d_head):
+            for j in range(d_head):
+                # E_ij from head_a row subspace to head_b column subspace
+                G[gen_offset + idx, a_start + i, b_start + j] = 1.0
+                idx += 1
+
+    return G
+
+
+def merge_coupled_heads(
+    n_heads: int,
+    d_head: int,
+    cross_couplings: 'List[Tuple[int, int]]',
+) -> 'Tuple[List[int], List[List[int]]]':
+    """
+    Compute super-block structure from cross-head coupling pattern.
+
+    Heads that are transitively connected through couplings are merged into
+    a single super-block for the block-diagonal KL computation. Uncoupled
+    heads remain as singleton blocks.
+
+    Uses union-find to compute connected components.
+
+    Args:
+        n_heads: Number of attention heads
+        d_head: Dimension per head
+        cross_couplings: List of (head_a, head_b) directed coupling pairs.
+            Both (a,b) and (b,a) are treated as connecting heads a and b.
+
+    Returns:
+        super_block_dims: List of block dimensions for the merged structure.
+            Sum equals n_heads * d_head = K.
+            Example: n_heads=4, d_head=6, couplings=[(0,1),(1,0)]
+                     → [12, 6, 6] (heads 0,1 merged; heads 2,3 separate)
+        super_block_head_groups: List of lists, each containing the head
+            indices in that super-block, in order.
+            Example: [[0, 1], [2], [3]]
+    """
+    # Union-find
+    parent = list(range(n_heads))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x, y):
+        px, py = find(x), find(y)
+        if px != py:
+            parent[px] = py
+
+    for a, b in cross_couplings:
+        union(a, b)
+
+    # Group heads by their root
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for h in range(n_heads):
+        groups[find(h)].append(h)
+
+    # Sort groups by smallest head index for deterministic ordering
+    sorted_groups = sorted(groups.values(), key=lambda g: g[0])
+
+    super_block_dims = [len(g) * d_head for g in sorted_groups]
+    super_block_head_groups = sorted_groups
+
+    return super_block_dims, super_block_head_groups
+
+
+def reorder_cross_head_generators(
+    G: np.ndarray,
+    n_heads: int,
+    d_head: int,
+    cross_couplings: 'List[Tuple[int, int]]',
+    super_block_head_groups: 'List[List[int]]',
+) -> 'Tuple[np.ndarray, List[int]]':
+    """
+    Reorder generators so that merged super-blocks are contiguous.
+
+    The original generator layout has heads in natural order [0, 1, 2, ...].
+    After merging, super-blocks may group non-adjacent heads. This function
+    produces a permutation matrix P such that P @ G @ P^T has the merged
+    heads contiguous, making the generators block-diagonal in super-blocks.
+
+    Also returns the reordered super-block dimensions.
+
+    Args:
+        G: Generators from generate_glK_cross_head_generators,
+           shape (n_gen, K, K)
+        n_heads: Number of original heads
+        d_head: Dimension per head
+        cross_couplings: Coupling pairs (for reference)
+        super_block_head_groups: From merge_coupled_heads
+
+    Returns:
+        G_reordered: Generators with permuted rows/cols, shape (n_gen, K, K)
+        perm: The permutation vector of length K such that
+              G_reordered[:, i, j] = G[:, perm[i], perm[j]]
+    """
+    K = n_heads * d_head
+
+    # Build permutation: concatenate head subspaces in super-block order
+    perm = []
+    for group in super_block_head_groups:
+        for h in group:
+            perm.extend(range(h * d_head, (h + 1) * d_head))
+
+    perm = np.array(perm, dtype=np.intp)
+    assert len(perm) == K and len(set(perm)) == K, "Permutation must be a bijection"
+
+    # Apply permutation to generators: G'[:, i, j] = G[:, perm[i], perm[j]]
+    G_reordered = G[:, perm][:, :, perm]
+
+    return G_reordered, perm
+
+
 def generate_multi_irrep_soN_generators(
     irrep_spec: list,
     N: int,
