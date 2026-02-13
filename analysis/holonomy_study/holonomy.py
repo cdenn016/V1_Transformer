@@ -86,9 +86,9 @@ def loop_holonomy(
     T_cb = T[c, b]  # (d, d)
     T_indirect = T_cb @ T_ba  # (d, d)
 
-    # Check if direct transport is degenerate
-    det_ca = torch.det(T_ca)
-    if det_ca.abs() < 1e-30:
+    # Check if direct transport is degenerate via slogdet (avoids overflow)
+    sign_ca, logabsdet_ca = torch.linalg.slogdet(T_ca)
+    if sign_ca.item() == 0:
         # Direct transport collapsed — use Frobenius norm ratio instead
         diff_norm = torch.norm(T_indirect - T_ca, p='fro')
         ref_norm = torch.norm(T_indirect, p='fro') + torch.norm(T_ca, p='fro') + 1e-30
@@ -99,13 +99,14 @@ def loop_holonomy(
     T_ca_inv = torch.linalg.inv(T_ca)
     D = T_indirect @ T_ca_inv  # (d, d)
 
-    # Normalize out overall scaling: D_norm = D / |det(D)|^{1/d}
-    det_D = torch.det(D)
-    if det_D.abs() < 1e-30:
+    # Normalize via slogdet to avoid overflow for large d
+    # scale = |det(D)|^{1/d} = exp(log|det(D)| / d)
+    sign_D, logabsdet_D = torch.linalg.slogdet(D)
+    if sign_D.item() == 0:
         return D, float('inf'), float('inf')
 
-    scale = det_D.abs().pow(1.0 / d)
-    D_norm = D / scale
+    log_scale = logabsdet_D / d
+    D_norm = D / torch.exp(log_scale)
 
     # Curvature metric: ||D_norm - I||_F / sqrt(d)
     kappa = torch.norm(D_norm - torch.eye(d, device=device), p='fro') / np.sqrt(d)
