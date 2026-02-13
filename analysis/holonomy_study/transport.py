@@ -386,7 +386,7 @@ def load_model(model_name: str = 'gpt2', device: str = 'cpu'):
     from transformers import GPT2Model, GPT2Tokenizer
 
     tokenizer = GPT2Tokenizer.from_pretrained(model_name)
-    model = GPT2Model.from_pretrained(model_name)
+    model = GPT2Model.from_pretrained(model_name, attn_implementation='eager')
     model.config.output_attentions = True
     model = model.to(device)
     model.eval()
