@@ -231,6 +231,83 @@ def attention_decomposed_transport(
     )
 
 
+def per_layer_transports(
+    model,
+    input_ids: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+) -> List[TransportResult]:
+    """
+    Extract per-layer transport matrices from a single forward pass.
+
+    Each layer's transport T_l[i,j] = I[i==j] + sum_h alpha_l[h,i,j] * WOV_h
+    is bounded (identity + small attention contribution), so path defect
+    at each layer is meaningful without layer norm correction.
+
+    Returns one TransportResult per layer. Compute holonomy on each and
+    aggregate to avoid the exponential blow-up from cross-layer composition.
+
+    Args:
+        model: HuggingFace GPT2Model
+        input_ids: (1, N) token IDs
+
+    Returns:
+        List of TransportResult, one per layer
+    """
+    with torch.no_grad():
+        outputs = model(
+            input_ids,
+            attention_mask=attention_mask,
+            output_attentions=True,
+        )
+
+    attentions = outputs.attentions
+    if attentions is None:
+        raise RuntimeError(
+            "Model did not return attentions. Ensure model.config.output_attentions = True."
+        )
+
+    N = input_ids.shape[1]
+    transformer_blocks = model.h if hasattr(model, 'h') else model.transformer.h
+    n_layers = len(transformer_blocks)
+    d_model = transformer_blocks[0].attn.c_proj.weight.shape[0]
+    device = input_ids.device
+
+    results = []
+    for l in range(n_layers):
+        block = transformer_blocks[l]
+        attn = block.attn
+
+        W_qkv = attn.c_attn.weight
+        d_head = d_model // attn.num_heads
+        n_heads = attn.num_heads
+        W_V = W_qkv[:, 2*d_model:3*d_model]
+        W_O = attn.c_proj.weight
+
+        alpha = attentions[l].squeeze(0)  # (H, N, N)
+
+        # Build per-layer transport
+        T_layer = torch.zeros(N, N, d_model, d_model, device=device)
+        for i in range(N):
+            T_layer[i, i] = torch.eye(d_model, device=device)
+
+        for h in range(n_heads):
+            sl = slice(h * d_head, (h + 1) * d_head)
+            W_V_h = W_V[:, sl]
+            W_O_h = W_O[:, sl]
+            WOV_h = W_O_h @ W_V_h.T
+            T_layer += alpha[h].unsqueeze(-1).unsqueeze(-1) * WOV_h
+
+        results.append(TransportResult(
+            transport=T_layer,
+            method='attention_per_layer',
+            n_tokens=N,
+            d_model=d_model,
+            metadata={'layer': l, 'n_layers': n_layers},
+        ))
+
+    return results
+
+
 # =========================================================================
 # Method 2: Jacobian probing (exact)
 # =========================================================================

@@ -181,6 +181,69 @@ def sentence_holonomy(
     )
 
 
+def multilayer_holonomy(
+    layer_transports: List[TransportResult],
+    max_triangles: int = 500,
+    seed: int = 42,
+) -> HolonomyResult:
+    """
+    Compute holonomy by averaging per-layer defects (avoids cross-layer blow-up).
+
+    For each layer, computes the path composition defect on that layer's
+    transport. The aggregate kappa is the mean across layers. This avoids
+    the exponential norm growth from composing 12 layers without layer norm.
+
+    Also returns per-layer kappa profile in metadata['kappa_per_layer'].
+
+    Args:
+        layer_transports: list of TransportResult, one per layer
+        max_triangles: max triples to sample
+        seed: random seed
+
+    Returns:
+        HolonomyResult with aggregate statistics
+    """
+    N = layer_transports[0].n_tokens
+    triples = _sample_ordered_triples(N, max_triples=max_triangles, seed=seed)
+
+    # Per-layer, per-triple kappas
+    n_layers = len(layer_transports)
+    layer_kappas = np.zeros((n_layers, len(triples)))
+
+    for l, tr in enumerate(layer_transports):
+        T = tr.transport
+        for t, (a, b, c) in enumerate(triples):
+            _, kappa, _ = loop_holonomy(T, a, b, c)
+            layer_kappas[l, t] = kappa
+
+    # Aggregate: mean across layers for each triple, then stats across triples
+    mean_across_layers = np.nanmean(layer_kappas, axis=0)  # (num_triples,)
+    finite_mask = np.isfinite(mean_across_layers)
+    clean = mean_across_layers[finite_mask]
+
+    # Per-layer profile (mean kappa at each layer)
+    kappa_per_layer = [float(np.nanmean(layer_kappas[l])) for l in range(n_layers)]
+
+    return HolonomyResult(
+        kappa=mean_across_layers,
+        triangles=triples,
+        kappa_mean=float(np.mean(clean)) if len(clean) > 0 else float('nan'),
+        kappa_median=float(np.median(clean)) if len(clean) > 0 else float('nan'),
+        kappa_max=float(np.max(clean)) if len(clean) > 0 else float('nan'),
+        kappa_std=float(np.std(clean)) if len(clean) > 0 else float('nan'),
+        sv_spread=None,
+        metadata={
+            'method': 'multilayer_mean',
+            'n_tokens': N,
+            'd_model': layer_transports[0].d_model,
+            'n_triangles': len(triples),
+            'n_degenerate': int((~finite_mask).sum()),
+            'n_layers': n_layers,
+            'kappa_per_layer': kappa_per_layer,
+        },
+    )
+
+
 def layer_resolved_holonomy(
     model,
     input_ids: torch.Tensor,
