@@ -38,8 +38,13 @@ import torch
 import numpy as np
 from pathlib import Path
 
-# Ensure project root is on path
-ROOT = Path(__file__).resolve().parent
+# Find project root: walk up from this script until we find analysis/holonomy_study/__init__.py
+_here = Path(__file__).resolve().parent
+ROOT = _here
+for _ancestor in [_here] + list(_here.parents):
+    if (_ancestor / 'analysis' / 'holonomy_study' / '__init__.py').exists():
+        ROOT = _ancestor
+        break
 sys.path.insert(0, str(ROOT))
 
 from analysis.holonomy_study.transport import (
