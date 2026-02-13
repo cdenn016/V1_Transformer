@@ -52,6 +52,7 @@ from analysis.holonomy_study.transport import (
     attention_flow_asymmetry,
     attention_decomposed_transport,
     per_layer_holonomy,
+    jacobian_holonomy,
 )
 from analysis.holonomy_study.holonomy import loop_holonomy, sentence_holonomy, multilayer_holonomy, HolonomyResult
 from analysis.holonomy_study.datasets import load_irony_pairs, by_label, get_paired_only
@@ -69,7 +70,7 @@ from scipy import stats
 
 MODEL_NAME  = 'gpt2'
 DEVICE      = 'cuda' if torch.cuda.is_available() else 'cpu'
-METHOD      = 1            # 0=asymmetry, 1=attn-decomposed, 2=jacobian
+METHOD      = 2            # 0=asymmetry, 1=attn-decomposed, 2=jacobian
 MAX_TRI     = 300          # triangles per sentence
 OUTPUT_DIR  = ROOT / 'results' / 'holonomy_study'
 
@@ -138,8 +139,9 @@ def main():
         hbar('Done')
         return
 
-    # ── 4. Method 1: Per-layer transport + holonomy ─────────────────────
-    hbar('Method 1: Per-Layer Transport Holonomy')
+    # ── 4. Transport holonomy ────────────────────────────────────────────
+    method_names = {1: 'Per-Layer Attention', 2: 'Jacobian (Exact)'}
+    hbar(f'Method {METHOD}: {method_names.get(METHOD, "?")} Transport Holonomy')
 
     results_by_label = {'ironic': [], 'literal': [], 'control': []}
     total = sum(len(v) for v in groups.values())
@@ -154,11 +156,20 @@ def main():
                 done += 1
                 continue
 
-            plh = per_layer_holonomy(model, ids, max_triples=MAX_TRI)
+            if METHOD == 2:
+                plh = jacobian_holonomy(model, ids, max_triples=MAX_TRI)
+                cs = plh.get('cos_sim_mean', float('nan'))
+            else:
+                plh = per_layer_holonomy(model, ids, max_triples=MAX_TRI)
+                cs = float('nan')
 
             # Wrap into HolonomyResult for downstream compatibility
+            kappa_arr = plh.get('kappa_all', np.array([]))
+            if kappa_arr.ndim == 2:
+                kappa_arr = np.nanmean(kappa_arr, axis=0)
+
             hr = HolonomyResult(
-                kappa=np.nanmean(plh['kappa_all'], axis=0),
+                kappa=kappa_arr,
                 triangles=plh['triples'],
                 kappa_mean=plh['kappa_mean'],
                 kappa_median=plh['kappa_median'],
@@ -168,19 +179,20 @@ def main():
                     'text': sp.text,
                     'label': label,
                     'pair_id': sp.pair_id,
-                    'method': 'per_layer',
+                    'method': 'jacobian' if METHOD == 2 else 'per_layer',
                     'n_tokens': N,
                     'd_model': plh['d_model'],
                     'n_triangles': len(plh['triples']),
                     'n_degenerate': 0,
-                    'kappa_per_layer': plh['kappa_per_layer'],
+                    'cos_sim_mean': cs,
                 },
             )
             results_by_label[label].append(hr)
 
             done += 1
             dt = time.time() - t0
-            print(f'  [{done:2d}/{total}] {label:8s} kappa={hr.kappa_mean:.4f}  '
+            cs_str = f'  cos={cs:.4f}' if not np.isnan(cs) else ''
+            print(f'  [{done:2d}/{total}] {label:8s} kappa={hr.kappa_mean:.4f}{cs_str}  '
                   f'({N} tok, {dt:.1f}s)  {sp.text[:50]}...')
 
     # ── 5. Statistical analysis ──────────────────────────────────────────
@@ -191,10 +203,21 @@ def main():
         for label, hrs in results_by_label.items() if hrs
     }
 
+    # Also gather cosine similarities if available (Method 2)
+    cos_sims_by_label = {}
+    for label, hrs in results_by_label.items():
+        cs_vals = [hr.metadata.get('cos_sim_mean', float('nan')) for hr in hrs]
+        if any(not np.isnan(v) for v in cs_vals):
+            cos_sims_by_label[label] = np.array(cs_vals)
+
     for label in ['ironic', 'literal', 'control']:
         if label in kappas:
             k = kappas[label]
-            print(f'  {label:8s}: mean={np.mean(k):.4f}  median={np.median(k):.4f}  std={np.std(k):.4f}')
+            line = f'  {label:8s}: mean={np.mean(k):.4f}  median={np.median(k):.4f}  std={np.std(k):.4f}'
+            if label in cos_sims_by_label:
+                c = cos_sims_by_label[label]
+                line += f'  cos_sim={np.mean(c):.4f}±{np.std(c):.4f}'
+            print(line)
 
     stat_results = {}
     for la, lb in [('ironic','literal'), ('ironic','control'), ('literal','control')]:
@@ -207,6 +230,17 @@ def main():
         r = 1 - (2*U) / (len(a)*len(b))
         stat_results[f'{la}_vs_{lb}'] = {'U': U, 'p_value': p, 'cohens_d': d, 'rank_biserial_r': r}
         print(f'  {la} vs {lb}: U={U:.0f}  p={fmt_p(p)}  d={d:+.3f}  r={r:+.3f}')
+
+    # Cosine similarity tests (Method 2)
+    if cos_sims_by_label:
+        print()
+        print('  Cosine similarity (higher = flatter transport):')
+        for la, lb in [('ironic','literal'), ('ironic','control'), ('literal','control')]:
+            if la in cos_sims_by_label and lb in cos_sims_by_label:
+                a, b = cos_sims_by_label[la], cos_sims_by_label[lb]
+                U, p = stats.mannwhitneyu(a, b, alternative='two-sided')
+                print(f'  {la} vs {lb}: U={U:.0f}  p={fmt_p(p)}  '
+                      f'means={np.mean(a):.4f} vs {np.mean(b):.4f}')
 
     # ── 6. Paired comparison ─────────────────────────────────────────────
     hbar('Paired Comparison (Same Sentence, Different Context)')

@@ -389,7 +389,148 @@ def per_layer_transports(
 
 
 # =========================================================================
-# Method 2: Jacobian probing (exact)
+# Method 2: Jacobian holonomy (exact, JVP-based)
+# =========================================================================
+
+def jacobian_holonomy(
+    model,
+    input_ids: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    max_triples: int = 300,
+    seed: int = 42,
+    epsilon: float = 1e-3,
+) -> Dict[str, object]:
+    """
+    Compute holonomy using exact Jacobian transport via finite-difference JVPs.
+
+    Uses the actual model (LayerNorm, MLP, residual — everything).
+    No attention approximation, no algebraic mismatch.
+
+    For each triple (a, b, c) with a < b < c:
+      v_direct   = J[c,a] @ h[a]     (perturb at a, read response at c)
+      v_step1    = J[b,a] @ h[a]     (same perturbation, read at b)
+      v_indirect = J[c,b] @ v_step1  (perturb at b with v_step1, read at c)
+
+    For flat transport: v_direct ≈ v_indirect (influence of a on c factors
+    through b). For curved: they differ — path matters.
+
+    Cost: 1 + |unique_a| + |unique_(a,b)| forward passes per sentence
+          (typically 50-200 for N≈20 tokens with 300 triples).
+
+    Returns dict with kappa (directional distance) and cos_sim (cosine
+    similarity) between direct and indirect transported vectors.
+    """
+    device = input_ids.device
+    N = input_ids.shape[1]
+
+    # Get embedding layer
+    if hasattr(model, 'wte'):
+        wte, wpe = model.wte, model.wpe
+    elif hasattr(model, 'transformer'):
+        wte, wpe = model.transformer.wte, model.transformer.wpe
+    else:
+        raise ValueError("Cannot find embedding layers (wte/wpe)")
+
+    # Clean forward pass
+    with torch.no_grad():
+        clean_embeds = wte(input_ids)  # (1, N, d)
+        pos_ids = torch.arange(N, device=device).unsqueeze(0)
+        clean_embeds = clean_embeds + wpe(pos_ids)
+        clean_output = _forward_from_embeds(model, clean_embeds, attention_mask)
+
+    d_model = clean_output.shape[-1]
+    h0 = clean_embeds.squeeze(0)  # (N, d) input embeddings
+
+    triples = _sample_ordered_triples(N, max_triples=max_triples, seed=seed)
+    n_tri = len(triples)
+    if n_tri == 0:
+        return {
+            'kappa_mean': float('nan'), 'kappa_median': float('nan'),
+            'kappa_std': float('nan'), 'kappa_max': float('nan'),
+            'cos_sim_mean': float('nan'), 'cos_sim_std': float('nan'),
+            'kappa_all': np.zeros(0), 'cos_sim_all': np.zeros(0),
+            'triples': [], 'n_tokens': N, 'd_model': d_model,
+            'n_forward_passes': 1,
+        }
+
+    unique_a = sorted(set(t[0] for t in triples))
+    unique_ab = sorted(set((t[0], t[1]) for t in triples))
+
+    # Step 1: For each unique source a, JVP with probe h0[a]
+    # Gives T[i,a] @ h0[a] for all positions i
+    jvp_a = {}
+    with torch.no_grad():
+        for a in unique_a:
+            probe = h0[a]
+            pn = probe.norm()
+            if pn < 1e-30:
+                jvp_a[a] = torch.zeros(N, d_model, device=device)
+                continue
+            perturbed = clean_embeds.clone()
+            perturbed[0, a] += epsilon * probe / pn
+            out = _forward_from_embeds(model, perturbed, attention_mask)
+            jvp_a[a] = ((out[0] - clean_output[0]) / epsilon) * pn
+
+    # Step 2: For each unique (a,b), JVP at b with v_step1 = T[b,a]@h[a]
+    # Gives T[c,b] @ v_step1 for all positions c
+    jvp_ab = {}
+    with torch.no_grad():
+        for a, b in unique_ab:
+            v_step1 = jvp_a[a][b]  # (d,) = T[b,a] @ h[a]
+            sn = v_step1.norm()
+            if sn < 1e-30:
+                jvp_ab[(a, b)] = torch.zeros(N, d_model, device=device)
+                continue
+            perturbed = clean_embeds.clone()
+            perturbed[0, b] += epsilon * v_step1 / sn
+            out = _forward_from_embeds(model, perturbed, attention_mask)
+            jvp_ab[(a, b)] = ((out[0] - clean_output[0]) / epsilon) * sn
+
+    # Step 3: Per-triple cosine similarity and kappa
+    kappas = np.zeros(n_tri)
+    cos_sims = np.zeros(n_tri)
+
+    for t, (a, b, c) in enumerate(triples):
+        v_direct = jvp_a[a][c]        # T[c,a] @ h[a]
+        v_indirect = jvp_ab[(a, b)][c]  # T[c,b] @ T[b,a] @ h[a]
+
+        nd = v_direct.norm().item()
+        ni = v_indirect.norm().item()
+
+        if nd < 1e-30 or ni < 1e-30:
+            kappas[t] = float('nan')
+            cos_sims[t] = float('nan')
+            continue
+
+        cs = (v_direct @ v_indirect).item() / (nd * ni)
+        cs = max(-1.0, min(1.0, cs))  # numerical clamp
+        cos_sims[t] = cs
+        kappas[t] = np.sqrt(max(0.0, 2.0 * (1.0 - cs)))
+
+    finite = np.isfinite(kappas)
+    ck = kappas[finite]
+    cc = cos_sims[finite]
+
+    n_fwd = 1 + len(unique_a) + len(unique_ab)
+
+    return {
+        'kappa_mean': float(np.mean(ck)) if len(ck) > 0 else float('nan'),
+        'kappa_median': float(np.median(ck)) if len(ck) > 0 else float('nan'),
+        'kappa_std': float(np.std(ck)) if len(ck) > 0 else float('nan'),
+        'kappa_max': float(np.max(ck)) if len(ck) > 0 else float('nan'),
+        'cos_sim_mean': float(np.mean(cc)) if len(cc) > 0 else float('nan'),
+        'cos_sim_std': float(np.std(cc)) if len(cc) > 0 else float('nan'),
+        'kappa_all': kappas,
+        'cos_sim_all': cos_sims,
+        'triples': triples,
+        'n_tokens': N,
+        'd_model': d_model,
+        'n_forward_passes': n_fwd,
+    }
+
+
+# =========================================================================
+# Method 2 (legacy): Full Jacobian reconstruction
 # =========================================================================
 
 def jacobian_transport(
