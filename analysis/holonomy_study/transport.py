@@ -5,13 +5,22 @@ Transport Operator Extraction from Pretrained Transformers
 Three methods for extracting the effective transport T_{ij} from token j
 to token i through a pretrained transformer:
 
-Method 0: Attention flow asymmetry (scalar proxy, trivially cheap)
+Method 0: Attention path defect (scalar proxy, trivially cheap)
 Method 1: Attention-decomposed transport (one forward pass, approximate)
 Method 2: Jacobian probing (exact, P*N forward passes)
 
 The effective transport T_{ij} = dh_i^{(L)} / dh_j^{(0)} captures how
 a perturbation at position j in the input propagates to position i at the
 output, including all attention, FFN, layer norm, and residual effects.
+
+CAUSAL NOTE: For causal (autoregressive) models like GPT-2, T[i,j] is
+nonzero only when j <= i (earlier tokens influence later ones, not vice
+versa). Curvature is measured via *path composition defect* on ordered
+triples a < b < c rather than closed loops:
+
+    D_{abc} = T[c,b] @ T[b,a] @ pinv(T[c,a])
+
+For flat transport, D = I (path doesn't matter). Curvature means D != I.
 """
 
 import torch
@@ -26,6 +35,7 @@ class TransportResult:
     """Container for extracted transport operators."""
     # T[i, j] is a (d, d) matrix: effective transport from j to i
     # Full shape: (N, N, d, d) where N = sequence length, d = hidden dim
+    # For causal models, T[i, j] is nonzero only when j <= i
     transport: torch.Tensor  # (N, N, d, d)
     method: str
     n_tokens: int
@@ -34,35 +44,36 @@ class TransportResult:
 
 
 # =========================================================================
-# Method 0: Attention flow asymmetry (scalar proxy)
+# Method 0: Attention path defect (scalar proxy for causal models)
 # =========================================================================
 
-def attention_flow_asymmetry(
+def attention_path_defect(
     model,
     input_ids: torch.Tensor,
     attention_mask: Optional[torch.Tensor] = None,
 ) -> Dict[str, torch.Tensor]:
     """
-    Extract per-layer attention matrices and compute triangle asymmetry.
+    Scalar proxy for holonomy in causal models.
 
-    For each triangle (i,j,k), compare:
-        forward:  alpha_{ij} * alpha_{jk} * alpha_{ki}
-        backward: alpha_{ik} * alpha_{kj} * alpha_{ji}
+    For ordered triples a < b < c, compare:
+        direct:   alpha[c, a]           (c attends directly to a)
+        indirect: alpha[c, b] * alpha[b, a]  (c -> b -> a two-hop)
 
-    Asymmetry = |forward - backward| / (forward + backward + eps)
+    Path defect = |indirect - direct| / (indirect + direct + eps)
 
-    This is a scalar proxy for holonomy — cheap sanity check.
+    For flat attention flow, multi-hop composition should equal direct
+    attention. Deviation indicates path-dependent information routing.
 
     Args:
-        model: HuggingFace GPT2Model (or similar) with output_attentions
+        model: HuggingFace GPT2Model with output_attentions
         input_ids: (1, N) token IDs
         attention_mask: (1, N) attention mask
 
     Returns:
         dict with:
             'attentions': tuple of (1, H, N, N) per layer
-            'asymmetry_per_layer': (L, num_triangles) asymmetry values
-            'triangles': (num_triangles, 3) index triples
+            'defect_per_layer': (L, num_triples) defect values
+            'triples': list of (a, b, c) ordered index triples
     """
     with torch.no_grad():
         outputs = model(
@@ -79,28 +90,31 @@ def attention_flow_asymmetry(
         )
     N = input_ids.shape[1]
 
-    # Average over heads for the scalar proxy
-    # shape per layer: (N, N)
+    # Average over heads
     attn_matrices = [a.squeeze(0).mean(dim=0) for a in attentions]
 
-    # Sample triangles (all triples for small N, random subset for large N)
-    triangles = _sample_triangles(N, max_triangles=500)
+    # Ordered triples a < b < c (all causal edges are valid)
+    triples = _sample_ordered_triples(N, max_triples=500)
 
-    asymmetry_per_layer = []
+    defect_per_layer = []
     for A in attn_matrices:
-        asym = []
-        for i, j, k in triangles:
-            fwd = A[i, j] * A[j, k] * A[k, i]
-            bwd = A[i, k] * A[k, j] * A[j, i]
-            denom = fwd + bwd + 1e-12
-            asym.append(abs(fwd - bwd) / denom)
-        asymmetry_per_layer.append(torch.stack(asym))
+        defects = []
+        for a, b, c in triples:
+            direct = A[c, a]
+            indirect = A[c, b] * A[b, a]
+            denom = direct + indirect + 1e-12
+            defects.append(abs(indirect - direct) / denom)
+        defect_per_layer.append(torch.stack(defects))
 
     return {
         'attentions': attentions,
-        'asymmetry_per_layer': torch.stack(asymmetry_per_layer),  # (L, T)
-        'triangles': triangles,
+        'defect_per_layer': torch.stack(defect_per_layer),  # (L, T)
+        'triples': triples,
     }
+
+
+# Keep old name as alias for backward compat in experiment.py
+attention_flow_asymmetry = attention_path_defect
 
 
 # =========================================================================
@@ -155,12 +169,13 @@ def attention_decomposed_transport(
         layers = list(range(n_layers))
 
     d_model = transformer_blocks[0].attn.c_proj.weight.shape[0]
+    device = input_ids.device
 
     # Build composed transport as block matrix product
     # T_composed[i,j] is (d, d) — start with identity
-    T_composed = torch.zeros(N, N, d_model, d_model, device=input_ids.device)
+    T_composed = torch.zeros(N, N, d_model, d_model, device=device)
     for i in range(N):
-        T_composed[i, i] = torch.eye(d_model, device=input_ids.device)
+        T_composed[i, i] = torch.eye(d_model, device=device)
 
     for l in layers:
         block = transformer_blocks[l]
@@ -178,38 +193,30 @@ def attention_decomposed_transport(
         # W_O = c_proj
         W_O = attn.c_proj.weight  # (d_model, d_model)
 
-        # Per-head value+output product
-        # W_O @ W_V gives the effective value transport
-        # But we need per-head: W_O[:, h*d_h:(h+1)*d_h] @ W_V[h*d_h:(h+1)*d_h, :]
-        # Actually for the attention-weighted sum:
-        # output_i = sum_j sum_h alpha_{ij}^h * W_O_h @ W_V_h @ x_j
-        # The per-head transport matrix is W_O_h @ W_V_h, shape (d_model, d_model)
-
         # alpha: (1, H, N, N) -> (H, N, N)
         alpha = attentions[l].squeeze(0)
 
+        # Precompute per-head WOV matrices
+        WOV = []  # list of (d_model, d_model)
+        for h in range(n_heads):
+            sl = slice(h * d_head, (h + 1) * d_head)
+            W_V_h = W_V[:, sl]  # (d_model, d_head)
+            W_O_h = W_O[:, sl]  # (d_model, d_head) for Conv1D
+            WOV.append(W_O_h @ W_V_h.T)  # (d_model, d_model)
+
         # Build per-layer transport: T^{(l)}_{ij} for all i,j
-        T_layer = torch.zeros(N, N, d_model, d_model, device=input_ids.device)
+        T_layer = torch.zeros(N, N, d_model, d_model, device=device)
 
         # Residual connection on diagonal
         for i in range(N):
-            T_layer[i, i] = torch.eye(d_model, device=input_ids.device)
+            T_layer[i, i] = torch.eye(d_model, device=device)
 
-        # Attention contribution
+        # Attention contribution (vectorized over heads)
         for h in range(n_heads):
-            sl = slice(h * d_head, (h + 1) * d_head)
-            # W_V_h: maps d_model -> d_head
-            W_V_h = W_V[:, sl]  # (d_model, d_head)
-            # W_O_h: maps d_head -> d_model
-            W_O_h = W_O[:, sl]  # (d_model, d_head) for Conv1D
-
-            # Transport for this head: (d_model, d_model)
-            WOV_h = W_O_h @ W_V_h.T  # (d_model, d_model)
-
-            # Weight by attention: T_layer[i,j] += alpha[h,i,j] * WOV_h
-            for i in range(N):
-                for j in range(N):
-                    T_layer[i, j] += alpha[h, i, j] * WOV_h
+            # alpha[h]: (N, N), WOV[h]: (d, d)
+            # T_layer[i,j] += alpha[h,i,j] * WOV[h]
+            # Vectorized: (N, N, 1, 1) * (d, d) -> (N, N, d, d)
+            T_layer += alpha[h].unsqueeze(-1).unsqueeze(-1) * WOV[h]
 
         # Compose: T_new[i,j] = sum_k T_layer[i,k] @ T_old[k,j]
         T_new = torch.einsum('ikab,kjbc->ijac', T_layer, T_composed)
@@ -281,11 +288,6 @@ def jacobian_transport(
     probes = torch.randn(n_probes, d_model, generator=rng, device=device)
     probes = probes / probes.norm(dim=-1, keepdim=True)  # unit vectors
 
-    # T_approx[i, j] will be estimated from probe responses
-    # For each j, we get P responses of shape (N, d) -> reconstruct (N, d, d)
-    # Using: response[i, :] = T[i,j] @ probe_dir * epsilon
-    # So: T[i,j] approx= responses @ pinv(probes) / epsilon
-
     transport = torch.zeros(N, N, d_model, d_model, device=device)
 
     for j in range(N):
@@ -307,14 +309,9 @@ def jacobian_transport(
         # responses: (P, N, d)
         responses = torch.stack(responses, dim=0)
 
-        # For each target position i, reconstruct T[i,j]:
-        # responses[:, i, :] = probes @ T[i,j].T  (each row is one probe)
-        # So T[i,j].T = pinv(probes) @ responses[:, i, :]
-        # probes: (P, d), responses[:, i, :]: (P, d)
         probes_pinv = torch.linalg.pinv(probes)  # (d, P)
 
         for i in range(N):
-            # T[i,j] = (probes_pinv @ responses[:, i, :]).T
             transport[i, j] = (probes_pinv @ responses[:, i, :]).T
 
     return TransportResult(
@@ -350,26 +347,31 @@ def _forward_from_embeds(
     return outputs.last_hidden_state
 
 
-def _sample_triangles(
+def _sample_ordered_triples(
     N: int,
-    max_triangles: int = 500,
+    max_triples: int = 500,
     seed: int = 42,
 ) -> List[Tuple[int, int, int]]:
     """
-    Sample token index triples for holonomy computation.
+    Sample ordered token index triples (a < b < c) for causal holonomy.
 
-    For small N, return all triples. For large N, random sample.
+    For causal models, all three causal edges T[c,b], T[b,a], T[c,a]
+    are nonzero when a < b < c, making the path defect well-defined.
     """
     import itertools
 
     all_triples = list(itertools.combinations(range(N), 3))
 
-    if len(all_triples) <= max_triangles:
+    if len(all_triples) <= max_triples:
         return all_triples
 
     rng = np.random.RandomState(seed)
-    indices = rng.choice(len(all_triples), size=max_triangles, replace=False)
+    indices = rng.choice(len(all_triples), size=max_triples, replace=False)
     return [all_triples[i] for i in sorted(indices)]
+
+
+# Keep old name for any callers
+_sample_triangles = _sample_ordered_triples
 
 
 def load_model(model_name: str = 'gpt2', device: str = 'cpu'):
