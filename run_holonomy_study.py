@@ -51,8 +51,9 @@ from analysis.holonomy_study.transport import (
     load_model,
     attention_flow_asymmetry,
     attention_decomposed_transport,
+    per_layer_transports,
 )
-from analysis.holonomy_study.holonomy import loop_holonomy, sentence_holonomy
+from analysis.holonomy_study.holonomy import loop_holonomy, sentence_holonomy, multilayer_holonomy
 from analysis.holonomy_study.datasets import load_irony_pairs, by_label, get_paired_only
 from analysis.holonomy_study.visualization import (
     plot_holonomy_distributions,
@@ -137,8 +138,8 @@ def main():
         hbar('Done')
         return
 
-    # ── 4. Method 1: Full transport + holonomy ───────────────────────────
-    hbar('Method 1: Attention-Decomposed Transport')
+    # ── 4. Method 1: Per-layer transport + holonomy ─────────────────────
+    hbar('Method 1: Per-Layer Transport Holonomy')
 
     results_by_label = {'ironic': [], 'literal': [], 'control': []}
     total = sum(len(v) for v in groups.values())
@@ -153,8 +154,8 @@ def main():
                 done += 1
                 continue
 
-            tr = attention_decomposed_transport(model, ids)
-            hr = sentence_holonomy(tr, max_triangles=MAX_TRI)
+            layer_trs = per_layer_transports(model, ids)
+            hr = multilayer_holonomy(layer_trs, max_triangles=MAX_TRI)
             hr.metadata.update(text=sp.text, label=label, pair_id=sp.pair_id)
             results_by_label[label].append(hr)
 

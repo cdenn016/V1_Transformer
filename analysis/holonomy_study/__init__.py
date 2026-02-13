@@ -19,5 +19,5 @@ Modules:
     visualization   Distribution plots and layer profiles
 """
 
-from .holonomy import loop_holonomy, sentence_holonomy
+from .holonomy import loop_holonomy, sentence_holonomy, multilayer_holonomy
 from .experiment import run_holonomy_study
