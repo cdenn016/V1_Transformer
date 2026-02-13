@@ -72,6 +72,11 @@ def attention_flow_asymmetry(
         )
 
     attentions = outputs.attentions  # tuple of (1, H, N, N)
+    if attentions is None:
+        raise RuntimeError(
+            "Model did not return attentions. Ensure model.config.output_attentions = True "
+            "or pass output_attentions=True. Got None from model forward pass."
+        )
     N = input_ids.shape[1]
 
     # Average over heads for the scalar proxy
@@ -137,6 +142,10 @@ def attention_decomposed_transport(
         )
 
     attentions = outputs.attentions  # tuple of (1, H, N, N)
+    if attentions is None:
+        raise RuntimeError(
+            "Model did not return attentions. Ensure model.config.output_attentions = True."
+        )
     N = input_ids.shape[1]
 
     # Extract weight matrices
@@ -378,6 +387,7 @@ def load_model(model_name: str = 'gpt2', device: str = 'cpu'):
 
     tokenizer = GPT2Tokenizer.from_pretrained(model_name)
     model = GPT2Model.from_pretrained(model_name)
+    model.config.output_attentions = True
     model = model.to(device)
     model.eval()
 
