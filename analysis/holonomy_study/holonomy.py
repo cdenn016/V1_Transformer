@@ -1,18 +1,23 @@
 """
-Holonomy Computation from Transport Operators
-==============================================
+Holonomy (Path Composition Defect) for Causal Transformers
+==========================================================
 
-Given transport matrices T_{ij} (d x d) between token positions,
-compute the holonomy around closed loops:
+For causal models like GPT-2, T[i,j] is nonzero only when j <= i.
+Closed loops are impossible — every triangle has at least one
+anti-causal (zero) edge.
 
-    H_{ijk} = T_{ij} @ T_{jk} @ T_{ki}
+Instead, we measure *path composition defect* on ordered triples
+a < b < c:
 
-For a flat bundle, H_{ijk} = lambda * I. The curvature metric
-kappa_{ijk} measures deviation from this:
+    D_{abc} = T[c,b] @ T[b,a] @ pinv(T[c,a])
 
-    kappa = ||H_normalized - I||_F / sqrt(d)
+For a flat bundle (path-independent transport):
+    T[c,a] = T[c,b] @ T[b,a]  =>  D = I
 
-where H_normalized = H / |det(H)|^{1/d} removes overall scaling.
+Curvature kappa measures deviation from flatness:
+    kappa = ||D_normalized - I||_F / sqrt(d)
+
+where D_normalized = D / |det(D)|^{1/d} removes overall scaling.
 """
 
 import torch
@@ -20,14 +25,14 @@ import numpy as np
 from typing import List, Tuple, Optional
 from dataclasses import dataclass, field
 
-from .transport import TransportResult, _sample_triangles
+from .transport import TransportResult, _sample_ordered_triples
 
 
 @dataclass
 class HolonomyResult:
     """Container for holonomy measurements on a single sentence."""
-    # Per-triangle curvature values
-    kappa: np.ndarray              # (num_triangles,)
+    # Per-triple curvature values
+    kappa: np.ndarray              # (num_triples,)
     triangles: List[Tuple[int, int, int]]
 
     # Aggregates
@@ -36,11 +41,11 @@ class HolonomyResult:
     kappa_max: float = 0.0
     kappa_std: float = 0.0
 
-    # Per-triangle holonomy matrices (optional, memory-heavy)
+    # Per-triple defect matrices (optional, memory-heavy)
     holonomies: Optional[List[np.ndarray]] = None
 
-    # Singular value spread per triangle (more detailed curvature info)
-    sv_spread: Optional[np.ndarray] = None  # (num_triangles,)
+    # Singular value spread per triple (more detailed curvature info)
+    sv_spread: Optional[np.ndarray] = None  # (num_triples,)
 
     # Layer-resolved curvature (if computed with varying depth)
     kappa_by_depth: Optional[dict] = None
@@ -50,45 +55,66 @@ class HolonomyResult:
 
 def loop_holonomy(
     T: torch.Tensor,
-    i: int,
-    j: int,
-    k: int,
+    a: int,
+    b: int,
+    c: int,
 ) -> Tuple[torch.Tensor, float, float]:
     """
-    Compute holonomy around triangle (i, j, k).
+    Compute path composition defect for ordered triple (a, b, c) with a < b < c.
 
-    H_{ijk} = T_{ij} @ T_{jk} @ T_{ki}
+    D_{abc} = T[c,b] @ T[b,a] @ pinv(T[c,a])
+
+    For flat transport: D = I (going a->b->c same as going a->c directly).
 
     Args:
         T: transport tensor, shape (N, N, d, d)
-        i, j, k: token indices
+        a, b, c: token indices with a < b < c
 
     Returns:
-        H: holonomy matrix (d, d)
+        D: defect matrix (d, d)
         kappa: normalized Frobenius deviation from identity
-        sv_spread: std of singular values of H_normalized (0 = flat)
+        sv_spread: std of singular values of D_normalized (0 = flat)
     """
-    H = T[i, j] @ T[j, k] @ T[k, i]  # (d, d)
+    d = T.shape[-1]
+    device = T.device
 
-    d = H.shape[0]
+    # Direct transport: a -> c
+    T_ca = T[c, a]  # (d, d)
 
-    # Normalize out overall scaling: H_norm = H / |det(H)|^{1/d}
-    det = torch.det(H)
-    if det.abs() < 1e-30:
-        # Degenerate — transport collapsed a direction
-        return H, float('inf'), float('inf')
+    # Indirect transport: a -> b -> c
+    T_ba = T[b, a]  # (d, d)
+    T_cb = T[c, b]  # (d, d)
+    T_indirect = T_cb @ T_ba  # (d, d)
 
-    scale = det.abs().pow(1.0 / d)
-    H_norm = H / scale
+    # Check if direct transport is degenerate
+    det_ca = torch.det(T_ca)
+    if det_ca.abs() < 1e-30:
+        # Direct transport collapsed — use Frobenius norm ratio instead
+        diff_norm = torch.norm(T_indirect - T_ca, p='fro')
+        ref_norm = torch.norm(T_indirect, p='fro') + torch.norm(T_ca, p='fro') + 1e-30
+        kappa = (diff_norm / ref_norm).item()
+        return T_indirect, kappa, float('nan')
 
-    # Curvature metric: ||H_norm - I||_F / sqrt(d)
-    kappa = torch.norm(H_norm - torch.eye(d, device=H.device), p='fro') / np.sqrt(d)
+    # Defect: D = T_indirect @ inv(T_ca)
+    T_ca_inv = torch.linalg.inv(T_ca)
+    D = T_indirect @ T_ca_inv  # (d, d)
 
-    # Singular value spread: for flat transport, all SVs are equal
-    svs = torch.linalg.svdvals(H_norm)
+    # Normalize out overall scaling: D_norm = D / |det(D)|^{1/d}
+    det_D = torch.det(D)
+    if det_D.abs() < 1e-30:
+        return D, float('inf'), float('inf')
+
+    scale = det_D.abs().pow(1.0 / d)
+    D_norm = D / scale
+
+    # Curvature metric: ||D_norm - I||_F / sqrt(d)
+    kappa = torch.norm(D_norm - torch.eye(d, device=device), p='fro') / np.sqrt(d)
+
+    # Singular value spread: for flat transport, all SVs are 1
+    svs = torch.linalg.svdvals(D_norm)
     sv_spread = svs.std().item()
 
-    return H, kappa.item(), sv_spread
+    return D, kappa.item(), sv_spread
 
 
 def sentence_holonomy(
@@ -100,43 +126,44 @@ def sentence_holonomy(
     """
     Compute holonomy statistics for a sentence.
 
-    Samples token triples and computes holonomy around each.
+    Samples ordered token triples (a < b < c) and computes path
+    composition defect for each.
 
     Args:
         transport_result: TransportResult from transport extraction
-        max_triangles: maximum number of triangles to sample
-        store_holonomies: if True, store the full H matrices (memory-heavy)
-        seed: random seed for triangle sampling
+        max_triangles: maximum number of triples to sample
+        store_holonomies: if True, store the full D matrices (memory-heavy)
+        seed: random seed for triple sampling
 
     Returns:
-        HolonomyResult with per-triangle and aggregate statistics
+        HolonomyResult with per-triple and aggregate statistics
     """
     T = transport_result.transport
     N = transport_result.n_tokens
 
-    triangles = _sample_triangles(N, max_triangles=max_triangles, seed=seed)
+    triples = _sample_ordered_triples(N, max_triples=max_triangles, seed=seed)
 
     kappas = []
     sv_spreads = []
     holonomies = [] if store_holonomies else None
 
-    for i, j, k in triangles:
-        H, kappa, sv_spread = loop_holonomy(T, i, j, k)
+    for a, b, c in triples:
+        D, kappa, sv_spread = loop_holonomy(T, a, b, c)
         kappas.append(kappa)
         sv_spreads.append(sv_spread)
         if store_holonomies:
-            holonomies.append(H.cpu().numpy())
+            holonomies.append(D.cpu().numpy())
 
     kappas = np.array(kappas)
     sv_spreads = np.array(sv_spreads)
 
-    # Filter out degenerate triangles
+    # Filter out degenerate triples
     finite_mask = np.isfinite(kappas)
     kappas_clean = kappas[finite_mask]
 
     return HolonomyResult(
         kappa=kappas,
-        triangles=triangles,
+        triangles=triples,
         kappa_mean=float(np.mean(kappas_clean)) if len(kappas_clean) > 0 else float('nan'),
         kappa_median=float(np.median(kappas_clean)) if len(kappas_clean) > 0 else float('nan'),
         kappa_max=float(np.max(kappas_clean)) if len(kappas_clean) > 0 else float('nan'),
@@ -147,7 +174,7 @@ def sentence_holonomy(
             'method': transport_result.method,
             'n_tokens': N,
             'd_model': transport_result.d_model,
-            'n_triangles': len(triangles),
+            'n_triangles': len(triples),
             'n_degenerate': int((~finite_mask).sum()),
         },
     )
@@ -173,7 +200,7 @@ def layer_resolved_holonomy(
         model: pretrained transformer model
         input_ids: (1, N) token IDs
         transport_fn: callable(model, input_ids, layers=...) -> TransportResult
-        max_triangles: triangles to sample per depth
+        max_triangles: triples to sample per depth
 
     Returns:
         dict mapping depth -> HolonomyResult

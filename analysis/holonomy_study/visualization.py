@@ -265,9 +265,9 @@ def plot_asymmetry_comparison(
             ax.hist(data, bins=20, alpha=0.4, color=COLORS[label],
                     label=f'{label} (n={len(data)})', density=True)
 
-    ax.set_xlabel('Mean attention flow asymmetry')
+    ax.set_xlabel('Mean attention path defect')
     ax.set_ylabel('Density')
-    ax.set_title('Method 0: Attention Triangle Asymmetry')
+    ax.set_title('Method 0: Attention Path Defect')
     ax.legend()
 
     plt.tight_layout()

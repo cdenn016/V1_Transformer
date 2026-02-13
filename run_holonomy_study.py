@@ -116,14 +116,14 @@ def main():
         print(f'  {label:8s}: {len(items)} sentences')
 
     # ── 3. Method 0: Attention asymmetry (fast sanity check) ─────────────
-    hbar('Method 0: Attention Flow Asymmetry')
+    hbar('Method 0: Attention Path Defect')
     asymmetry_by_label = {}
     for label, items in groups.items():
         vals = []
         for sp in items:
             ids = tokenize(tokenizer, sp.text)
             r = attention_flow_asymmetry(model, ids)
-            vals.append(r['asymmetry_per_layer'].mean().item())
+            vals.append(r['defect_per_layer'].mean().item())
         asymmetry_by_label[label] = np.array(vals)
         print(f'  {label:8s}: {np.mean(vals):.4f} +/- {np.std(vals):.4f}')
 
