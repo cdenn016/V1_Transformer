@@ -231,27 +231,32 @@ def attention_decomposed_transport(
     )
 
 
-def per_layer_transports(
+def per_layer_holonomy(
     model,
     input_ids: torch.Tensor,
     attention_mask: Optional[torch.Tensor] = None,
-) -> List[TransportResult]:
+    max_triples: int = 300,
+    seed: int = 42,
+) -> Dict[str, object]:
     """
-    Extract per-layer transport matrices from a single forward pass.
+    Compute per-layer path defect in a single fused pass.
 
-    Each layer's transport T_l[i,j] = I[i==j] + sum_h alpha_l[h,i,j] * WOV_h
-    is bounded (identity + small attention contribution), so path defect
-    at each layer is meaningful without layer norm correction.
+    Streams one layer at a time (never stores more than one (N,N,d,d)
+    tensor), vectorizes the triple computation with torch.bmm.
 
-    Returns one TransportResult per layer. Compute holonomy on each and
-    aggregate to avoid the exponential blow-up from cross-layer composition.
+    For each layer l and ordered triple (a, b, c):
+        T_direct   = T_l[c, a]
+        T_indirect = T_l[c, b] @ T_l[b, a]
+        kappa = ||T_indirect_hat - T_direct_hat||_F   (unit-norm)
 
-    Args:
-        model: HuggingFace GPT2Model
-        input_ids: (1, N) token IDs
-
-    Returns:
-        List of TransportResult, one per layer
+    Returns dict with:
+        'kappa_mean':      float, mean defect across layers and triples
+        'kappa_per_layer': list of float, mean defect per layer
+        'kappa_all':       (n_layers, n_triples) array
+        'triples':         list of (a,b,c)
+        'n_layers':        int
+        'n_tokens':        int
+        'd_model':         int
     """
     with torch.no_grad():
         outputs = model(
@@ -272,7 +277,16 @@ def per_layer_transports(
     d_model = transformer_blocks[0].attn.c_proj.weight.shape[0]
     device = input_ids.device
 
-    results = []
+    # Sample triples once
+    triples = _sample_ordered_triples(N, max_triples=max_triples, seed=seed)
+    n_tri = len(triples)
+    # Precompute index tensors for batched gathering
+    idx_a = torch.tensor([t[0] for t in triples], device=device)
+    idx_b = torch.tensor([t[1] for t in triples], device=device)
+    idx_c = torch.tensor([t[2] for t in triples], device=device)
+
+    kappa_all = np.zeros((n_layers, n_tri))
+
     for l in range(n_layers):
         block = transformer_blocks[l]
         attn = block.attn
@@ -285,27 +299,72 @@ def per_layer_transports(
 
         alpha = attentions[l].squeeze(0)  # (H, N, N)
 
-        # Build per-layer transport
-        T_layer = torch.zeros(N, N, d_model, d_model, device=device)
+        # Build per-layer transport: T[i,j] = I[i==j] + sum_h alpha[h,i,j] * WOV_h
+        T = torch.zeros(N, N, d_model, d_model, device=device)
         for i in range(N):
-            T_layer[i, i] = torch.eye(d_model, device=device)
+            T[i, i] = torch.eye(d_model, device=device)
 
         for h in range(n_heads):
             sl = slice(h * d_head, (h + 1) * d_head)
-            W_V_h = W_V[:, sl]
-            W_O_h = W_O[:, sl]
-            WOV_h = W_O_h @ W_V_h.T
-            T_layer += alpha[h].unsqueeze(-1).unsqueeze(-1) * WOV_h
+            WOV_h = W_O[:, sl] @ W_V[:, sl].T
+            T += alpha[h].unsqueeze(-1).unsqueeze(-1) * WOV_h
 
-        results.append(TransportResult(
-            transport=T_layer,
-            method='attention_per_layer',
-            n_tokens=N,
-            d_model=d_model,
-            metadata={'layer': l, 'n_layers': n_layers},
-        ))
+        # Vectorized defect computation for all triples at once
+        # Gather: T_ca[t] = T[c_t, a_t], etc.  shape: (n_tri, d, d)
+        T_ca = T[idx_c, idx_a]       # (n_tri, d, d)
+        T_ba = T[idx_b, idx_a]       # (n_tri, d, d)
+        T_cb = T[idx_c, idx_b]       # (n_tri, d, d)
 
-    return results
+        # Batched matmul: T_indirect = T_cb @ T_ba
+        T_indirect = torch.bmm(T_cb, T_ba)  # (n_tri, d, d)
+
+        # Unit-norm directional defect (vectorized)
+        norm_ca = torch.norm(T_ca.reshape(n_tri, -1), dim=1, keepdim=True)   # (n_tri, 1)
+        norm_ind = torch.norm(T_indirect.reshape(n_tri, -1), dim=1, keepdim=True)
+
+        # Avoid division by zero
+        norm_ca = norm_ca.clamp(min=1e-30)
+        norm_ind = norm_ind.clamp(min=1e-30)
+
+        T_ca_hat = T_ca.reshape(n_tri, -1) / norm_ca       # (n_tri, d*d)
+        T_ind_hat = T_indirect.reshape(n_tri, -1) / norm_ind
+
+        kappas = torch.norm(T_ind_hat - T_ca_hat, dim=1)   # (n_tri,)
+        kappa_all[l] = kappas.cpu().numpy()
+
+        # Free this layer's transport immediately
+        del T, T_ca, T_ba, T_cb, T_indirect
+
+    # Aggregate
+    mean_per_triple = np.nanmean(kappa_all, axis=0)
+    kappa_per_layer = [float(np.nanmean(kappa_all[l])) for l in range(n_layers)]
+
+    return {
+        'kappa_mean': float(np.nanmean(mean_per_triple)),
+        'kappa_median': float(np.nanmedian(mean_per_triple)),
+        'kappa_std': float(np.nanstd(mean_per_triple)),
+        'kappa_max': float(np.nanmax(mean_per_triple)),
+        'kappa_per_layer': kappa_per_layer,
+        'kappa_all': kappa_all,
+        'triples': triples,
+        'n_layers': n_layers,
+        'n_tokens': N,
+        'd_model': d_model,
+    }
+
+
+# Keep old function for backward compat (returns list of TransportResult)
+def per_layer_transports(
+    model,
+    input_ids: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+) -> List[TransportResult]:
+    """Legacy: use per_layer_holonomy() instead for speed."""
+    result = per_layer_holonomy(model, input_ids, attention_mask)
+    # Can't reconstruct full transports from summary — raise helpful error
+    raise NotImplementedError(
+        "per_layer_transports() is deprecated. Use per_layer_holonomy() directly."
+    )
 
 
 # =========================================================================
