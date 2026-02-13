@@ -239,15 +239,21 @@ def per_layer_holonomy(
     seed: int = 42,
 ) -> Dict[str, object]:
     """
-    Compute per-layer path defect in a single fused pass.
+    Compute per-layer path defect using hidden-state probes.
 
-    Streams one layer at a time (never stores more than one (N,N,d,d)
-    tensor), vectorizes the triple computation with torch.bmm.
+    Instead of comparing full d×d transport matrices (which saturate at
+    sqrt(2) in d²-dimensional space), compares what transport does to
+    the actual hidden states:
 
-    For each layer l and ordered triple (a, b, c):
-        T_direct   = T_l[c, a]
-        T_indirect = T_l[c, b] @ T_l[b, a]
-        kappa = ||T_indirect_hat - T_direct_hat||_F   (unit-norm)
+        v_direct   = T_l[c,a] @ h_l[a]
+        v_indirect = T_l[c,b] @ (T_l[b,a] @ h_l[a])
+        kappa = ||v_ind_hat - v_dir_hat||₂
+
+    This projects the comparison to d=768 dimensions (meaningful variation)
+    rather than d²=589,824 (everything saturates).
+
+    Memory: O(n_tri * d) per layer instead of O(N² * d²).
+    No (N,N,d,d) transport tensor is ever constructed.
 
     Returns dict with:
         'kappa_mean':      float, mean defect across layers and triples
@@ -263,9 +269,11 @@ def per_layer_holonomy(
             input_ids,
             attention_mask=attention_mask,
             output_attentions=True,
+            output_hidden_states=True,
         )
 
     attentions = outputs.attentions
+    hidden_states = outputs.hidden_states  # tuple of (1, N, d), len = n_layers + 1
     if attentions is None:
         raise RuntimeError(
             "Model did not return attentions. Ensure model.config.output_attentions = True."
@@ -280,6 +288,14 @@ def per_layer_holonomy(
     # Sample triples once
     triples = _sample_ordered_triples(N, max_triples=max_triples, seed=seed)
     n_tri = len(triples)
+    if n_tri == 0:
+        return {
+            'kappa_mean': float('nan'), 'kappa_median': float('nan'),
+            'kappa_std': float('nan'), 'kappa_max': float('nan'),
+            'kappa_per_layer': [], 'kappa_all': np.zeros((n_layers, 0)),
+            'triples': [], 'n_layers': n_layers, 'n_tokens': N, 'd_model': d_model,
+        }
+
     # Precompute index tensors for batched gathering
     idx_a = torch.tensor([t[0] for t in triples], device=device)
     idx_b = torch.tensor([t[1] for t in triples], device=device)
@@ -287,53 +303,58 @@ def per_layer_holonomy(
 
     kappa_all = np.zeros((n_layers, n_tri))
 
-    for l in range(n_layers):
-        block = transformer_blocks[l]
-        attn = block.attn
+    with torch.no_grad():
+        for l in range(n_layers):
+            block = transformer_blocks[l]
+            attn = block.attn
 
-        W_qkv = attn.c_attn.weight
-        d_head = d_model // attn.num_heads
-        n_heads = attn.num_heads
-        W_V = W_qkv[:, 2*d_model:3*d_model]
-        W_O = attn.c_proj.weight
+            W_qkv = attn.c_attn.weight
+            d_head = d_model // attn.num_heads
+            n_heads = attn.num_heads
+            W_V = W_qkv[:, 2*d_model:3*d_model]
+            W_O = attn.c_proj.weight
 
-        alpha = attentions[l].squeeze(0)  # (H, N, N)
+            alpha = attentions[l].squeeze(0)  # (H, N, N)
+            h_l = hidden_states[l].squeeze(0)  # (N, d) — input to this layer
 
-        # Build per-layer transport: T[i,j] = I[i==j] + sum_h alpha[h,i,j] * WOV_h
-        T = torch.zeros(N, N, d_model, d_model, device=device)
-        for i in range(N):
-            T[i, i] = torch.eye(d_model, device=device)
+            # Probe vectors: h[a] for each triple
+            h_a = h_l[idx_a]  # (n_tri, d)
 
-        for h in range(n_heads):
-            sl = slice(h * d_head, (h + 1) * d_head)
-            WOV_h = W_O[:, sl] @ W_V[:, sl].T
-            T += alpha[h].unsqueeze(-1).unsqueeze(-1) * WOV_h
+            # Precompute WOV_h for all heads (12 × 768×768 = 28MB)
+            WOV = []
+            for h in range(n_heads):
+                sl = slice(h * d_head, (h + 1) * d_head)
+                WOV.append(W_O[:, sl] @ W_V[:, sl].T)  # (d, d)
 
-        # Vectorized defect computation for all triples at once
-        # Gather: T_ca[t] = T[c_t, a_t], etc.  shape: (n_tri, d, d)
-        T_ca = T[idx_c, idx_a]       # (n_tri, d, d)
-        T_ba = T[idx_b, idx_a]       # (n_tri, d, d)
-        T_cb = T[idx_c, idx_b]       # (n_tri, d, d)
+            # --- v_direct = T[c,a] @ h[a] and v_step1 = T[b,a] @ h[a] ---
+            # T[i,j] @ v = sum_h α[h,i,j] * WOV_h @ v   (for i≠j, causal)
+            v_direct = torch.zeros(n_tri, d_model, device=device)
+            v_step1 = torch.zeros(n_tri, d_model, device=device)
 
-        # Batched matmul: T_indirect = T_cb @ T_ba
-        T_indirect = torch.bmm(T_cb, T_ba)  # (n_tri, d, d)
+            for h in range(n_heads):
+                Wh_a = (WOV[h] @ h_a.T).T  # (n_tri, d)
+                v_direct += alpha[h, idx_c, idx_a].unsqueeze(1) * Wh_a
+                v_step1  += alpha[h, idx_b, idx_a].unsqueeze(1) * Wh_a
 
-        # Unit-norm directional defect (vectorized)
-        norm_ca = torch.norm(T_ca.reshape(n_tri, -1), dim=1, keepdim=True)   # (n_tri, 1)
-        norm_ind = torch.norm(T_indirect.reshape(n_tri, -1), dim=1, keepdim=True)
+            # --- v_indirect = T[c,b] @ v_step1 ---
+            v_indirect = torch.zeros(n_tri, d_model, device=device)
+            for h in range(n_heads):
+                Wh_step = (WOV[h] @ v_step1.T).T  # (n_tri, d)
+                v_indirect += alpha[h, idx_c, idx_b].unsqueeze(1) * Wh_step
 
-        # Avoid division by zero
-        norm_ca = norm_ca.clamp(min=1e-30)
-        norm_ind = norm_ind.clamp(min=1e-30)
+            del WOV
 
-        T_ca_hat = T_ca.reshape(n_tri, -1) / norm_ca       # (n_tri, d*d)
-        T_ind_hat = T_indirect.reshape(n_tri, -1) / norm_ind
+            # Unit-norm directional defect on transported vectors (d-dimensional)
+            norm_dir = v_direct.norm(dim=1, keepdim=True).clamp(min=1e-30)
+            norm_ind = v_indirect.norm(dim=1, keepdim=True).clamp(min=1e-30)
 
-        kappas = torch.norm(T_ind_hat - T_ca_hat, dim=1)   # (n_tri,)
-        kappa_all[l] = kappas.detach().cpu().numpy()
+            v_dir_hat = v_direct / norm_dir
+            v_ind_hat = v_indirect / norm_ind
 
-        # Free this layer's transport immediately
-        del T, T_ca, T_ba, T_cb, T_indirect
+            kappas = (v_ind_hat - v_dir_hat).norm(dim=1)  # (n_tri,)
+            kappa_all[l] = kappas.cpu().numpy()
+
+            del v_direct, v_step1, v_indirect, h_a
 
     # Aggregate
     mean_per_triple = np.nanmean(kappa_all, axis=0)
