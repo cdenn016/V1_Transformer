@@ -51,9 +51,9 @@ from analysis.holonomy_study.transport import (
     load_model,
     attention_flow_asymmetry,
     attention_decomposed_transport,
-    per_layer_transports,
+    per_layer_holonomy,
 )
-from analysis.holonomy_study.holonomy import loop_holonomy, sentence_holonomy, multilayer_holonomy
+from analysis.holonomy_study.holonomy import loop_holonomy, sentence_holonomy, multilayer_holonomy, HolonomyResult
 from analysis.holonomy_study.datasets import load_irony_pairs, by_label, get_paired_only
 from analysis.holonomy_study.visualization import (
     plot_holonomy_distributions,
@@ -154,9 +154,28 @@ def main():
                 done += 1
                 continue
 
-            layer_trs = per_layer_transports(model, ids)
-            hr = multilayer_holonomy(layer_trs, max_triangles=MAX_TRI)
-            hr.metadata.update(text=sp.text, label=label, pair_id=sp.pair_id)
+            plh = per_layer_holonomy(model, ids, max_triples=MAX_TRI)
+
+            # Wrap into HolonomyResult for downstream compatibility
+            hr = HolonomyResult(
+                kappa=np.nanmean(plh['kappa_all'], axis=0),
+                triangles=plh['triples'],
+                kappa_mean=plh['kappa_mean'],
+                kappa_median=plh['kappa_median'],
+                kappa_max=plh['kappa_max'],
+                kappa_std=plh['kappa_std'],
+                metadata={
+                    'text': sp.text,
+                    'label': label,
+                    'pair_id': sp.pair_id,
+                    'method': 'per_layer',
+                    'n_tokens': N,
+                    'd_model': plh['d_model'],
+                    'n_triangles': len(plh['triples']),
+                    'n_degenerate': 0,
+                    'kappa_per_layer': plh['kappa_per_layer'],
+                },
+            )
             results_by_label[label].append(hr)
 
             done += 1
