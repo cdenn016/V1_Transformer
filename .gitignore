@@ -43,6 +43,9 @@ ENV/
 *.log
 logs/
 
+# Results (regenerated locally)
+results/
+
 # OS
 .DS_Store
 Thumbs.db
