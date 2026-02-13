@@ -273,6 +273,108 @@ def main():
         stat_w, p_w = stats.wilcoxon(paired_ironic, paired_literal, alternative='two-sided')
         print(f'  Wilcoxon signed-rank: W={stat_w:.0f}, p={fmt_p(p_w)}')
 
+    # ── 6b. Permutation test (10k shuffles) ───────────────────────────────
+    hbar('Permutation Tests (10,000 shuffles)')
+    N_PERM = 10_000
+    rng = np.random.RandomState(42)
+
+    for la, lb in [('ironic','literal'), ('ironic','control'), ('literal','control')]:
+        if la not in kappas or lb not in kappas:
+            continue
+        a, b = kappas[la], kappas[lb]
+        obs_diff = np.mean(a) - np.mean(b)
+        pooled = np.concatenate([a, b])
+        na = len(a)
+        count = 0
+        for _ in range(N_PERM):
+            rng.shuffle(pooled)
+            perm_diff = np.mean(pooled[:na]) - np.mean(pooled[na:])
+            if abs(perm_diff) >= abs(obs_diff):
+                count += 1
+        p_perm = (count + 1) / (N_PERM + 1)
+        print(f'  {la} vs {lb}: obs_diff={obs_diff:+.4f}  p_perm={fmt_p(p_perm)}')
+
+    # Paired permutation test (sign-flip)
+    if len(shared) >= 5:
+        paired_diffs = np.array(paired_ironic) - np.array(paired_literal)
+        obs_mean_diff = np.mean(paired_diffs)
+        count = 0
+        for _ in range(N_PERM):
+            signs = rng.choice([-1, 1], size=len(paired_diffs))
+            if abs(np.mean(paired_diffs * signs)) >= abs(obs_mean_diff):
+                count += 1
+        p_paired_perm = (count + 1) / (N_PERM + 1)
+        print(f'  paired ironic-literal: obs_diff={obs_mean_diff:+.4f}  p_perm={fmt_p(p_paired_perm)}')
+
+    # ── 6c. Length-controlled analysis ─────────────────────────────────────
+    hbar('Length-Controlled Analysis')
+
+    # Gather (kappa, n_tokens, label) for all sentences
+    all_kappas = []
+    all_lengths = []
+    all_labels = []
+    for label, hrs in results_by_label.items():
+        for hr in hrs:
+            all_kappas.append(hr.kappa_mean)
+            all_lengths.append(hr.metadata['n_tokens'])
+            all_labels.append(label)
+
+    all_kappas = np.array(all_kappas)
+    all_lengths = np.array(all_lengths, dtype=float)
+    all_labels = np.array(all_labels)
+
+    # Print mean lengths per group
+    for label in ['ironic', 'literal', 'control']:
+        mask = all_labels == label
+        print(f'  {label:8s}: mean_len={np.mean(all_lengths[mask]):.1f}  '
+              f'mean_kappa={np.mean(all_kappas[mask]):.4f}')
+
+    # Pearson correlation: kappa vs length
+    r_len, p_len = stats.pearsonr(all_lengths, all_kappas)
+    print(f'  kappa ~ length: r={r_len:+.3f}  p={fmt_p(p_len)}')
+
+    # Residualize kappa against length (simple linear regression)
+    slope, intercept = np.polyfit(all_lengths, all_kappas, 1)
+    residuals = all_kappas - (slope * all_lengths + intercept)
+    print(f'  Regression: kappa = {slope:+.5f} * n_tokens + {intercept:.4f}')
+
+    # Re-test on residuals
+    resid_by_label = {}
+    for label in ['ironic', 'literal', 'control']:
+        mask = all_labels == label
+        resid_by_label[label] = residuals[mask]
+        print(f'  {label:8s} residual: mean={np.mean(residuals[mask]):+.4f}  '
+              f'std={np.std(residuals[mask]):.4f}')
+
+    print()
+    print('  Length-controlled Mann-Whitney (on residuals):')
+    for la, lb in [('ironic','literal'), ('ironic','control'), ('literal','control')]:
+        if la in resid_by_label and lb in resid_by_label:
+            a, b = resid_by_label[la], resid_by_label[lb]
+            U, p = stats.mannwhitneyu(a, b, alternative='two-sided')
+            d_val = (np.mean(a) - np.mean(b)) / np.sqrt((np.var(a) + np.var(b)) / 2) if (np.var(a) + np.var(b)) > 0 else 0
+            print(f'  {la} vs {lb}: U={U:.0f}  p={fmt_p(p)}  d={d_val:+.3f}')
+
+    # ── 6d. Bootstrap CIs on paired differences ───────────────────────────
+    hbar('Bootstrap CIs (Paired Ironic - Literal)')
+    N_BOOT = 10_000
+
+    if len(shared) >= 5:
+        paired_diffs = np.array(paired_ironic) - np.array(paired_literal)
+        boot_means = np.zeros(N_BOOT)
+        for i in range(N_BOOT):
+            sample = rng.choice(paired_diffs, size=len(paired_diffs), replace=True)
+            boot_means[i] = np.mean(sample)
+
+        ci_lo, ci_hi = np.percentile(boot_means, [2.5, 97.5])
+        boot_p = 2 * min(np.mean(boot_means <= 0), np.mean(boot_means >= 0))
+        print(f'  Mean paired diff: {np.mean(paired_diffs):+.4f}')
+        print(f'  95% CI:           [{ci_lo:+.4f}, {ci_hi:+.4f}]')
+        print(f'  Bootstrap p:      {fmt_p(boot_p)}')
+        print(f'  CI excludes 0:    {"YES" if ci_lo > 0 or ci_hi < 0 else "NO"}')
+    else:
+        print('  (Not enough paired data)')
+
     # ── 7. Plots ─────────────────────────────────────────────────────────
     hbar('Generating Plots')
 
