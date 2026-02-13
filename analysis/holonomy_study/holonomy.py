@@ -62,22 +62,24 @@ def loop_holonomy(
     """
     Compute path composition defect for ordered triple (a, b, c) with a < b < c.
 
-    D_{abc} = T[c,b] @ T[b,a] @ pinv(T[c,a])
+    Compares direct transport T[c,a] to indirect T[c,b] @ T[b,a].
+    For flat transport these are identical; curvature means they differ.
 
-    For flat transport: D = I (going a->b->c same as going a->c directly).
+    Primary metric (kappa): relative Frobenius defect
+        kappa = ||T_indirect - T_direct||_F / ||T_direct||_F
+
+    Secondary metric (sv_spread): std of log singular values of
+        D = T_indirect @ solve(T_direct), measuring directional distortion.
 
     Args:
         T: transport tensor, shape (N, N, d, d)
         a, b, c: token indices with a < b < c
 
     Returns:
-        D: defect matrix (d, d)
-        kappa: normalized Frobenius deviation from identity
-        sv_spread: std of singular values of D_normalized (0 = flat)
+        T_indirect: the indirect transport matrix (d, d)
+        kappa: relative Frobenius defect (0 = flat)
+        sv_spread: std of log singular values of defect ratio (0 = flat)
     """
-    d = T.shape[-1]
-    device = T.device
-
     # Direct transport: a -> c
     T_ca = T[c, a]  # (d, d)
 
@@ -86,36 +88,23 @@ def loop_holonomy(
     T_cb = T[c, b]  # (d, d)
     T_indirect = T_cb @ T_ba  # (d, d)
 
-    # Check if direct transport is degenerate via slogdet (avoids overflow)
-    sign_ca, logabsdet_ca = torch.linalg.slogdet(T_ca)
-    if sign_ca.item() == 0:
-        # Direct transport collapsed — use Frobenius norm ratio instead
-        diff_norm = torch.norm(T_indirect - T_ca, p='fro')
-        ref_norm = torch.norm(T_indirect, p='fro') + torch.norm(T_ca, p='fro') + 1e-30
-        kappa = (diff_norm / ref_norm).item()
-        return T_indirect, kappa, float('nan')
+    # Primary metric: relative Frobenius defect
+    # No inversion, no determinant, no overflow — just norms
+    diff_norm = torch.norm(T_indirect - T_ca, p='fro')
+    ref_norm = torch.norm(T_ca, p='fro')
+    kappa = (diff_norm / (ref_norm + 1e-30)).item()
 
-    # Defect: D = T_indirect @ inv(T_ca)
-    T_ca_inv = torch.linalg.inv(T_ca)
-    D = T_indirect @ T_ca_inv  # (d, d)
+    # Secondary metric: log-SV spread of defect ratio D = T_indirect @ inv(T_ca)
+    # Use solve for numerical stability: D^T = solve(T_ca^T, T_indirect^T)
+    try:
+        D_T = torch.linalg.solve(T_ca.T, T_indirect.T)  # (d, d)
+        svs = torch.linalg.svdvals(D_T)
+        log_svs = torch.log(svs.clamp(min=1e-30))
+        sv_spread = log_svs.std().item()
+    except torch.linalg.LinAlgError:
+        sv_spread = float('nan')
 
-    # Normalize via slogdet to avoid overflow for large d
-    # scale = |det(D)|^{1/d} = exp(log|det(D)| / d)
-    sign_D, logabsdet_D = torch.linalg.slogdet(D)
-    if sign_D.item() == 0:
-        return D, float('inf'), float('inf')
-
-    log_scale = logabsdet_D / d
-    D_norm = D / torch.exp(log_scale)
-
-    # Curvature metric: ||D_norm - I||_F / sqrt(d)
-    kappa = torch.norm(D_norm - torch.eye(d, device=device), p='fro') / np.sqrt(d)
-
-    # Singular value spread: for flat transport, all SVs are 1
-    svs = torch.linalg.svdvals(D_norm)
-    sv_spread = svs.std().item()
-
-    return D, kappa.item(), sv_spread
+    return T_indirect, kappa, sv_spread
 
 
 def sentence_holonomy(
