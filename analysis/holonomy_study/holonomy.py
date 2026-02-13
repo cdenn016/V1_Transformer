@@ -65,8 +65,11 @@ def loop_holonomy(
     Compares direct transport T[c,a] to indirect T[c,b] @ T[b,a].
     For flat transport these are identical; curvature means they differ.
 
-    Primary metric (kappa): relative Frobenius defect
-        kappa = ||T_indirect - T_direct||_F / ||T_direct||_F
+    Primary metric (kappa): directional Frobenius defect
+        Normalize both matrices to unit Frobenius norm, then measure distance.
+        Equivalent to sqrt(2 * (1 - cosine_similarity)) for matrices.
+        Range: [0, 2]. Isolates rotational curvature, ignores scale
+        (which layer norm controls but our approximation omits).
 
     Secondary metric (sv_spread): std of log singular values of
         D = T_indirect @ solve(T_direct), measuring directional distortion.
@@ -77,7 +80,7 @@ def loop_holonomy(
 
     Returns:
         T_indirect: the indirect transport matrix (d, d)
-        kappa: relative Frobenius defect (0 = flat)
+        kappa: directional Frobenius defect (0 = flat, max ~sqrt(2))
         sv_spread: std of log singular values of defect ratio (0 = flat)
     """
     # Direct transport: a -> c
@@ -88,11 +91,19 @@ def loop_holonomy(
     T_cb = T[c, b]  # (d, d)
     T_indirect = T_cb @ T_ba  # (d, d)
 
-    # Primary metric: relative Frobenius defect
-    # No inversion, no determinant, no overflow — just norms
-    diff_norm = torch.norm(T_indirect - T_ca, p='fro')
-    ref_norm = torch.norm(T_ca, p='fro')
-    kappa = (diff_norm / (ref_norm + 1e-30)).item()
+    # Primary metric: directional defect (cosine-distance analog for matrices)
+    # Normalize to unit Frobenius norm, then measure distance.
+    # This isolates the rotational/directional curvature and removes the
+    # exponential scale blow-up from composing layers without layer norm.
+    norm_ca = torch.norm(T_ca, p='fro')
+    norm_ind = torch.norm(T_indirect, p='fro')
+
+    if norm_ca < 1e-30 or norm_ind < 1e-30:
+        return T_indirect, float('nan'), float('nan')
+
+    T_ca_hat = T_ca / norm_ca
+    T_ind_hat = T_indirect / norm_ind
+    kappa = torch.norm(T_ind_hat - T_ca_hat, p='fro').item()
 
     # Secondary metric: log-SV spread of defect ratio D = T_indirect @ inv(T_ca)
     # Use solve for numerical stability: D^T = solve(T_ca^T, T_indirect^T)
