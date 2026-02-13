@@ -330,7 +330,7 @@ def per_layer_holonomy(
         T_ind_hat = T_indirect.reshape(n_tri, -1) / norm_ind
 
         kappas = torch.norm(T_ind_hat - T_ca_hat, dim=1)   # (n_tri,)
-        kappa_all[l] = kappas.cpu().numpy()
+        kappa_all[l] = kappas.detach().cpu().numpy()
 
         # Free this layer's transport immediately
         del T, T_ca, T_ba, T_cb, T_indirect
