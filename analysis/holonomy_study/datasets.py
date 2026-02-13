@@ -146,6 +146,107 @@ def load_irony_pairs() -> List[SentencePair]:
             "His first painting was exhibited at the local gallery.",
             "He is a natural talent.",
         ),
+        # --- Expanded pairs (length-balanced) ---
+        (
+            "The cake collapsed into a flat mess in the oven.",
+            "The cake rose perfectly and tasted delicious.",
+            "Baking is clearly her calling.",
+        ),
+        (
+            "He failed his driving test for the fourth time.",
+            "He passed the driving test on his first try.",
+            "He is a fast learner.",
+        ),
+        (
+            "The roof caved in during the home inspection.",
+            "The home inspector found nothing wrong at all.",
+            "The house is in great shape.",
+        ),
+        (
+            "She tripped and fell in front of the entire audience.",
+            "She delivered a graceful performance on stage.",
+            "That was really smooth.",
+        ),
+        (
+            "The dog ate his homework and his laptop charger.",
+            "The dog learned three new tricks in one session.",
+            "What a well trained dog.",
+        ),
+        (
+            "He got sunburned on a cloudy day at the beach.",
+            "He had a relaxing day under perfect beach weather.",
+            "Great day at the beach.",
+        ),
+        (
+            "The washing machine flooded the laundry room again.",
+            "The washing machine cleaned everything spotlessly.",
+            "That machine works like a charm.",
+        ),
+        (
+            "She missed her flight because she went to the wrong gate.",
+            "She arrived at the gate early and boarded without delay.",
+            "She really has travel figured out.",
+        ),
+        (
+            "The umbrella broke in the first gust of wind.",
+            "The umbrella kept them dry through the entire storm.",
+            "Money well spent on that umbrella.",
+        ),
+        (
+            "He forgot their anniversary for the third year in a row.",
+            "He planned a thoughtful anniversary surprise for her.",
+            "He never forgets the important things.",
+        ),
+        (
+            "The new employee shredded the original contracts by mistake.",
+            "The new employee organized all the files on her first day.",
+            "She is a real asset to the team.",
+        ),
+        (
+            "The paint color looked nothing like the sample on the wall.",
+            "The paint color matched the sample exactly.",
+            "That turned out just right.",
+        ),
+        (
+            "He managed to burn water while making pasta.",
+            "He prepared a perfect risotto from scratch.",
+            "He is quite the chef.",
+        ),
+        (
+            "The shortcut added an extra hour to the drive.",
+            "The shortcut saved them thirty minutes on the highway.",
+            "That was a clever route.",
+        ),
+        (
+            "Their vacation photos were all blurry and overexposed.",
+            "Their vacation photos turned out sharp and beautiful.",
+            "Great photography skills.",
+        ),
+        (
+            "The budget-friendly repair cost more than a new appliance.",
+            "The repair cost half what they expected to pay.",
+            "That was a real bargain.",
+        ),
+        (
+            "The fireproof safe melted in the fire.",
+            "The fireproof safe protected everything inside during the fire.",
+            "You get what you pay for.",
+        ),
+        (
+            "He spilled coffee on his shirt right before the interview.",
+            "He looked sharp and confident walking into the interview.",
+            "First impressions matter.",
+        ),
+        (
+            "The noise-canceling headphones let every sound through.",
+            "The noise-canceling headphones blocked out all distractions.",
+            "Best purchase he ever made.",
+        ),
+        (
+            "The waterproof watch stopped working after light rain.",
+            "The waterproof watch survived a deep dive without issues.",
+            "Built to last.",
+        ),
     ]
 
     for ironic_ctx, literal_ctx, target in _paired:
@@ -178,6 +279,21 @@ def load_irony_pairs() -> List[SentencePair]:
         "Thank goodness for autocorrect, it always knows what I mean to say.",
         "Another parking ticket, just what I wanted for my birthday.",
         "I especially love when the printer jams right before an important meeting.",
+        "Fantastic, the elevator is broken again on moving day.",
+        "How generous of them to charge extra for the privilege of standing.",
+        "Lovely, my umbrella decided to turn inside out in the storm.",
+        "Of course the wifi goes down during the most important call.",
+        "Amazing how the express lane is always the slowest one.",
+        "Just great, another email that could have been a text.",
+        "So glad I spent an hour on hold to hear they are closed.",
+        "How delightful that the smoke detector beeps at three in the morning.",
+        "Perfect timing for the car to break down in rush hour traffic.",
+        "What a treat to find my reserved seat taken by someone else.",
+        "Naturally the one day I forget my jacket it starts to rain.",
+        "How refreshing to receive the same spam email for the fifth time.",
+        "Wonderful, my phone died right when I needed the directions.",
+        "I adore how the meeting always runs over by exactly one hour.",
+        "What joy to discover the milk expired yesterday after pouring it.",
     ]
 
     for text in _ironic_standalone:
@@ -201,6 +317,21 @@ def load_irony_pairs() -> List[SentencePair]:
         "The autocorrect feature changed several words in her message.",
         "She received a parking ticket on the morning of her birthday.",
         "The printer jammed fifteen minutes before the board presentation.",
+        "The elevator was out of service during the office relocation.",
+        "The event organizers added a surcharge for standing room tickets.",
+        "Her umbrella flipped inside out during the afternoon rainstorm.",
+        "The internet connection dropped during the video conference.",
+        "The express checkout lane had a longer wait than the regular line.",
+        "He forwarded the email that could have been summarized briefly.",
+        "She waited on hold for an hour before learning the office was closed.",
+        "The smoke detector alarm sounded at three in the morning.",
+        "The car broke down on the highway during the morning commute.",
+        "Someone was sitting in her reserved seat when she arrived.",
+        "He forgot his jacket on the one day it rained all afternoon.",
+        "She received the same promotional email for the fifth time.",
+        "His phone battery died while he was navigating to the address.",
+        "The weekly staff meeting ran over by sixty minutes.",
+        "She discovered the milk had expired after pouring it in her coffee.",
     ]
 
     for text in _literal_standalone:
@@ -235,6 +366,26 @@ def load_irony_pairs() -> List[SentencePair]:
         "The entire internet weighs about the same as a strawberry.",
         "There is a species of jellyfish that is biologically immortal.",
         "The Empire State Building has its own zip code.",
+        "An octopus can fit through any opening larger than its beak.",
+        "The moon is slowly drifting away from the earth each year.",
+        "A teaspoon of neutron star weighs about six billion tons.",
+        "The human nose can detect over one trillion different scents.",
+        "Alaska is simultaneously the most northern and western state.",
+        "A day on Mercury lasts fifty nine earth days.",
+        "Sharks have been around longer than trees have existed.",
+        "The average cloud weighs over one million pounds.",
+        "A group of porcupines is called a prickle.",
+        "Astronauts grow up to two inches taller in space.",
+        "The Great Wall of China is not visible from space.",
+        "Cows have best friends and get stressed when separated.",
+        "Hot water freezes faster than cold water under certain conditions.",
+        "The longest hiccuping spree lasted sixty eight years.",
+        "A single bolt of lightning can toast one hundred thousand slices of bread.",
+        "Sloths can hold their breath longer than dolphins can.",
+        "The dot over the letter i is called a tittle.",
+        "Finland has more saunas than cars.",
+        "The shortest commercial flight lasts under two minutes.",
+        "A cockroach can live for a week without its head.",
     ]
 
     for text in _controls:

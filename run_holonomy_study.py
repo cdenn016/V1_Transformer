@@ -71,7 +71,7 @@ from scipy import stats
 MODEL_NAME  = 'gpt2'
 DEVICE      = 'cuda' if torch.cuda.is_available() else 'cpu'
 METHOD      = 2            # 0=asymmetry, 1=attn-decomposed, 2=jacobian
-MAX_TRI     = 300          # triangles per sentence
+MAX_TRI     = 500          # triangles per sentence
 OUTPUT_DIR  = ROOT / 'results' / 'holonomy_study'
 
 
