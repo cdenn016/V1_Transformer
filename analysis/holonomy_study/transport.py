@@ -649,16 +649,24 @@ def _sample_ordered_triples(
     N: int,
     max_triples: int = 500,
     seed: int = 42,
+    positions: Optional[List[int]] = None,
 ) -> List[Tuple[int, int, int]]:
     """
     Sample ordered token index triples (a < b < c) for causal holonomy.
 
     For causal models, all three causal edges T[c,b], T[b,a], T[c,a]
     are nonzero when a < b < c, making the path defect well-defined.
+
+    If positions is provided, only sample triples from those token positions
+    (useful for phrase-localized measurement).
     """
     import itertools
 
-    all_triples = list(itertools.combinations(range(N), 3))
+    if positions is not None:
+        pos = sorted(set(positions))
+        all_triples = list(itertools.combinations(pos, 3))
+    else:
+        all_triples = list(itertools.combinations(range(N), 3))
 
     if len(all_triples) <= max_triples:
         return all_triples
@@ -683,6 +691,7 @@ def layerwise_jacobian_holonomy(
     max_triples: int = 300,
     seed: int = 42,
     epsilon: float = 1e-3,
+    positions: Optional[List[int]] = None,
 ) -> Dict[str, object]:
     """
     Compute per-layer Jacobian holonomy — each layer as one VFE step.
@@ -697,6 +706,10 @@ def layerwise_jacobian_holonomy(
       v_step1    = T_l[b,a] @ h_l[a]
       v_indirect = T_l[c,b] @ v_step1
       kappa_l    = ||hat(v_ind) - hat(v_dir)||_2
+
+    If positions is provided, only sample triples from those token positions
+    (phrase-localized measurement). The full forward pass still uses all
+    tokens for context.
 
     Returns dict with:
         'kappa_per_layer':  list of float, mean kappa at each layer
@@ -739,7 +752,8 @@ def layerwise_jacobian_holonomy(
 
     d_model = hidden_states[0].shape[-1]
 
-    triples = _sample_ordered_triples(N, max_triples=max_triples, seed=seed)
+    triples = _sample_ordered_triples(N, max_triples=max_triples, seed=seed,
+                                       positions=positions)
     n_tri = len(triples)
     if n_tri == 0:
         return {
@@ -858,6 +872,7 @@ def discrete_curvature(
     max_triples: int = 200,
     seed: int = 42,
     epsilon: float = 1e-3,
+    positions: Optional[List[int]] = None,
 ) -> Dict[str, object]:
     """
     Compute discrete Riemann curvature via composition non-additivity.
@@ -877,6 +892,10 @@ def discrete_curvature(
     non-additively (meaning is holistic), so curvature should be higher.
 
     This is computed at each layer separately (each = one VFE step).
+
+    If positions is provided, only sample triples from those token positions
+    (phrase-localized measurement). The full forward pass still uses all
+    tokens for context.
 
     Returns dict with:
         'curvature_mean':      float, mean curvature across layers and triples
@@ -906,7 +925,8 @@ def discrete_curvature(
     hidden_states = outputs.hidden_states
     d_model = hidden_states[0].shape[-1]
 
-    triples = _sample_ordered_triples(N, max_triples=max_triples, seed=seed)
+    triples = _sample_ordered_triples(N, max_triples=max_triples, seed=seed,
+                                       positions=positions)
     n_tri = len(triples)
     if n_tri == 0:
         return {

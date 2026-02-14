@@ -107,6 +107,71 @@ def fmt_p(p):
     return f'{p:.4f} ns'
 
 
+def find_phrase_positions(tokenizer, full_text, phrase):
+    """
+    Find the token positions of an idiom phrase within a tokenized sentence.
+
+    Handles GPT-2 BPE convention where mid-sentence tokens have leading space.
+    Returns list of token indices, or None if phrase not found.
+    """
+    full_ids = tokenizer.encode(full_text)
+
+    # Try several BPE encodings of the phrase
+    candidates = []
+    try:
+        candidates.append(tokenizer.encode(' ' + phrase))   # mid-sentence (Ġ prefix)
+    except Exception:
+        pass
+    try:
+        candidates.append(tokenizer.encode(phrase))          # start-of-text
+    except Exception:
+        pass
+    # Also try with common preceding contexts
+    for prefix in ['. ', ', ', '  ']:
+        try:
+            enc = tokenizer.encode(prefix + phrase)
+            prefix_enc = tokenizer.encode(prefix)
+            # The phrase tokens are everything after the prefix tokens
+            if len(enc) > len(prefix_enc):
+                candidates.append(enc[len(prefix_enc):])
+        except Exception:
+            pass
+
+    for phrase_ids in candidates:
+        n = len(phrase_ids)
+        if n == 0:
+            continue
+        for i in range(len(full_ids) - n + 1):
+            if full_ids[i:i+n] == phrase_ids:
+                return list(range(i, i + n))
+
+    # Fallback: character-level matching via incremental decode
+    try:
+        text_lower = full_text.lower()
+        phrase_lower = phrase.lower()
+        char_start = text_lower.find(phrase_lower)
+        if char_start < 0:
+            return None
+        char_end = char_start + len(phrase)
+
+        # Decode tokens incrementally to map token → character positions
+        positions = []
+        current_char = 0
+        for tok_idx in range(len(full_ids)):
+            tok_text = tokenizer.decode([full_ids[tok_idx]])
+            tok_char_start = current_char
+            tok_char_end = current_char + len(tok_text)
+            if tok_char_end > char_start and tok_char_start < char_end:
+                positions.append(tok_idx)
+            current_char = tok_char_end
+        if positions:
+            return positions
+    except Exception:
+        pass
+
+    return None
+
+
 # ── Plotting ──────────────────────────────────────────────────────────────
 
 def plot_distributions(kappas_by_label, title, ylabel, output_path):
@@ -608,7 +673,200 @@ def main():
             print(f'  Layer {l:2d}: idiomatic={np.mean(kl_idiom):.4f}  '
                   f'literal={np.mean(kl_literal):.4f}  diff={d_mean:+.4f}  p={p:.4f} {sig}')
 
-    # ── 12. Plots ─────────────────────────────────────────────────────────
+    # ── 12. Phrase-localized holonomy (length confound control) ─────────
+    hbar('Phrase-Localized Holonomy (Length Control)')
+    print('  Measuring holonomy ONLY on idiom-phrase tokens.')
+    print('  Same tokens in both contexts → perfect length control.')
+    print('  Full sentence context preserved (model sees everything).')
+    print()
+
+    loc_idiom_by_pair = {}
+    loc_literal_by_pair = {}
+    loc_curv_idiom_by_pair = {}
+    loc_curv_literal_by_pair = {}
+    loc_layer_profiles = {'idiomatic': [], 'literal': []}
+    loc_curv_layer_profiles = {'idiomatic': [], 'literal': []}
+
+    # Build lookup: pair_id → (idiomatic_item, literal_item)
+    pair_map = {}
+    for sp in all_pairs:
+        if sp.label in ('idiomatic', 'literal') and sp.idiom:
+            pair_map.setdefault(sp.pair_id, {})[sp.label] = sp
+
+    n_found = 0
+    n_skip = 0
+    for pid in sorted(pair_map.keys()):
+        if 'idiomatic' not in pair_map[pid] or 'literal' not in pair_map[pid]:
+            continue
+        sp_i = pair_map[pid]['idiomatic']
+        sp_l = pair_map[pid]['literal']
+        idiom_phrase = sp_i.idiom
+
+        ids_i = tokenize(tokenizer, sp_i.text)
+        ids_l = tokenize(tokenizer, sp_l.text)
+
+        pos_i = find_phrase_positions(tokenizer, sp_i.text, idiom_phrase)
+        pos_l = find_phrase_positions(tokenizer, sp_l.text, idiom_phrase)
+
+        if pos_i is None or pos_l is None or len(pos_i) < 3 or len(pos_l) < 3:
+            n_skip += 1
+            print(f'  SKIP pair {pid}: phrase "{idiom_phrase}" — '
+                  f'pos_i={pos_i}, pos_l={pos_l}')
+            continue
+
+        n_found += 1
+        t0 = time.time()
+
+        # Holonomy: idiomatic context, phrase tokens only
+        plh_i = layerwise_jacobian_holonomy(
+            model, ids_i, max_triples=MAX_TRI, positions=pos_i,
+        )
+        # Holonomy: literal context, phrase tokens only
+        plh_l = layerwise_jacobian_holonomy(
+            model, ids_l, max_triples=MAX_TRI, positions=pos_l,
+        )
+
+        loc_idiom_by_pair[pid] = plh_i['kappa_mean']
+        loc_literal_by_pair[pid] = plh_l['kappa_mean']
+        loc_layer_profiles['idiomatic'].append(plh_i['kappa_per_layer'])
+        loc_layer_profiles['literal'].append(plh_l['kappa_per_layer'])
+
+        # Curvature: phrase-localized
+        cr_i = discrete_curvature(
+            model, ids_i, max_triples=MAX_PAIRS, positions=pos_i,
+        )
+        cr_l = discrete_curvature(
+            model, ids_l, max_triples=MAX_PAIRS, positions=pos_l,
+        )
+
+        loc_curv_idiom_by_pair[pid] = cr_i['curvature_mean']
+        loc_curv_literal_by_pair[pid] = cr_l['curvature_mean']
+        loc_curv_layer_profiles['idiomatic'].append(cr_i['curvature_per_layer'])
+        loc_curv_layer_profiles['literal'].append(cr_l['curvature_per_layer'])
+
+        dt = time.time() - t0
+        arrow_h = '>' if plh_i['kappa_mean'] > plh_l['kappa_mean'] else '<'
+        arrow_c = '>' if cr_i['curvature_mean'] > cr_l['curvature_mean'] else '<'
+        print(f'  pair {pid:2d} "{idiom_phrase}": '
+              f'hol {plh_i["kappa_mean"]:.4f} {arrow_h} {plh_l["kappa_mean"]:.4f}  '
+              f'curv {cr_i["curvature_mean"]:.5f} {arrow_c} {cr_l["curvature_mean"]:.5f}  '
+              f'({len(pos_i)}/{len(pos_l)} tok, {dt:.1f}s)')
+
+    print(f'\n  Found phrase positions: {n_found} pairs  (skipped: {n_skip})')
+
+    # ── 12a. Phrase-localized statistics ──────────────────────────────────
+    loc_shared = sorted(set(loc_idiom_by_pair) & set(loc_literal_by_pair))
+    if len(loc_shared) >= 5:
+        hbar('Phrase-Localized Statistics')
+
+        loc_pi = np.array([loc_idiom_by_pair[p] for p in loc_shared])
+        loc_pl = np.array([loc_literal_by_pair[p] for p in loc_shared])
+        loc_diffs = loc_pi - loc_pl
+
+        n_higher_loc = int(np.sum(loc_pi > loc_pl))
+        pct_loc = 100 * n_higher_loc / len(loc_shared)
+        print(f'  Holonomy: Idiomatic > Literal in {n_higher_loc}/{len(loc_shared)} pairs ({pct_loc:.0f}%)')
+        print(f'  Mean idiomatic: {np.mean(loc_pi):.4f}  literal: {np.mean(loc_pl):.4f}  '
+              f'diff: {np.mean(loc_diffs):+.4f}')
+
+        # Wilcoxon signed-rank
+        stat_w, p_w = stats.wilcoxon(loc_pi, loc_pl, alternative='two-sided')
+        print(f'  Wilcoxon signed-rank: W={stat_w:.0f}, p={fmt_p(p_w)}')
+
+        # Effect size (paired Cohen's d)
+        d_paired = np.mean(loc_diffs) / np.std(loc_diffs) if np.std(loc_diffs) > 0 else 0
+        print(f'  Paired d: {d_paired:+.3f}')
+
+        # Mann-Whitney (unpaired)
+        U_loc, p_loc = stats.mannwhitneyu(loc_pi, loc_pl, alternative='two-sided')
+        pooled_std = np.sqrt((np.var(loc_pi) + np.var(loc_pl)) / 2)
+        d_loc = (np.mean(loc_pi) - np.mean(loc_pl)) / pooled_std if pooled_std > 0 else 0
+        print(f'  Mann-Whitney U={U_loc:.0f}, p={fmt_p(p_loc)}, d={d_loc:+.3f}')
+
+        # Bootstrap CI
+        rng_loc = np.random.RandomState(42)
+        boot_loc = np.zeros(10000)
+        for bi in range(10000):
+            sample = rng_loc.choice(loc_diffs, size=len(loc_diffs), replace=True)
+            boot_loc[bi] = np.mean(sample)
+        ci_lo_loc, ci_hi_loc = np.percentile(boot_loc, [2.5, 97.5])
+        boot_p_loc = 2 * min(np.mean(boot_loc <= 0), np.mean(boot_loc >= 0))
+        print(f'  Bootstrap 95% CI: [{ci_lo_loc:+.4f}, {ci_hi_loc:+.4f}]')
+        print(f'  Bootstrap p: {fmt_p(boot_p_loc)}')
+        print(f'  CI excludes 0: {"YES" if ci_lo_loc > 0 or ci_hi_loc < 0 else "NO"}')
+
+        # Sign-flip permutation
+        obs_mean = np.mean(loc_diffs)
+        rng_perm = np.random.RandomState(42)
+        count_perm = 0
+        for _ in range(10000):
+            signs = rng_perm.choice([-1, 1], size=len(loc_diffs))
+            if abs(np.mean(loc_diffs * signs)) >= abs(obs_mean):
+                count_perm += 1
+        p_perm_loc = (count_perm + 1) / 10001
+        print(f'  Paired sign-flip permutation: obs_diff={obs_mean:+.4f}  p={fmt_p(p_perm_loc)}')
+
+        # Verify no length confound
+        tok_counts_i = [len(find_phrase_positions(tokenizer, pair_map[p]['idiomatic'].text,
+                            pair_map[p]['idiomatic'].idiom) or []) for p in loc_shared]
+        tok_counts_l = [len(find_phrase_positions(tokenizer, pair_map[p]['literal'].text,
+                            pair_map[p]['literal'].idiom) or []) for p in loc_shared]
+        n_exact_match = sum(1 for ti, tl in zip(tok_counts_i, tok_counts_l) if ti == tl)
+        print(f'\n  Length verification: {n_exact_match}/{len(loc_shared)} pairs have identical phrase token count')
+        print(f'  Mean phrase tokens: idiomatic={np.mean(tok_counts_i):.1f}  literal={np.mean(tok_counts_l):.1f}')
+
+        stat_results['phrase_localized_holonomy'] = {
+            'n_pairs': len(loc_shared),
+            'pct_higher': float(pct_loc),
+            'wilcoxon_W': float(stat_w),
+            'wilcoxon_p': float(p_w),
+            'paired_d': float(d_paired),
+            'mann_whitney_U': float(U_loc),
+            'mann_whitney_p': float(p_loc),
+            'cohens_d': float(d_loc),
+            'bootstrap_ci': [float(ci_lo_loc), float(ci_hi_loc)],
+            'bootstrap_p': float(boot_p_loc),
+            'permutation_p': float(p_perm_loc),
+        }
+
+    # Phrase-localized curvature
+    loc_shared_c = sorted(set(loc_curv_idiom_by_pair) & set(loc_curv_literal_by_pair))
+    if len(loc_shared_c) >= 5:
+        loc_ci = np.array([loc_curv_idiom_by_pair[p] for p in loc_shared_c])
+        loc_cl = np.array([loc_curv_literal_by_pair[p] for p in loc_shared_c])
+        finite_mask = np.isfinite(loc_ci) & np.isfinite(loc_cl)
+        loc_ci_f = loc_ci[finite_mask]
+        loc_cl_f = loc_cl[finite_mask]
+        if len(loc_ci_f) >= 5:
+            n_hc = int(np.sum(loc_ci_f > loc_cl_f))
+            pct_hc = 100 * n_hc / len(loc_ci_f)
+            print(f'\n  Phrase-localized curvature: Idiomatic > Literal in {n_hc}/{len(loc_ci_f)} ({pct_hc:.0f}%)')
+            sw_c, pw_c = stats.wilcoxon(loc_ci_f, loc_cl_f, alternative='two-sided')
+            d_c = np.mean(loc_ci_f - loc_cl_f) / np.std(loc_ci_f - loc_cl_f) if np.std(loc_ci_f - loc_cl_f) > 0 else 0
+            print(f'  Wilcoxon: W={sw_c:.0f}, p={fmt_p(pw_c)}, paired d={d_c:+.3f}')
+
+            stat_results['phrase_localized_curvature'] = {
+                'n_pairs': int(len(loc_ci_f)),
+                'pct_higher': float(pct_hc),
+                'wilcoxon_W': float(sw_c),
+                'wilcoxon_p': float(pw_c),
+                'paired_d': float(d_c),
+            }
+
+    # ── 12b. Phrase-localized per-layer analysis ─────────────────────────
+    if loc_layer_profiles['idiomatic'] and loc_layer_profiles['literal']:
+        hbar('Phrase-Localized Per-Layer Analysis')
+        for l in range(n_layers):
+            kl_i = [prof[l] for prof in loc_layer_profiles['idiomatic'] if len(prof) > l]
+            kl_l = [prof[l] for prof in loc_layer_profiles['literal'] if len(prof) > l]
+            if len(kl_i) >= 2 and len(kl_l) >= 2:
+                U_l, p_l = stats.mannwhitneyu(kl_i, kl_l, alternative='two-sided')
+                d_mean_l = np.mean(kl_i) - np.mean(kl_l)
+                sig = '*' if p_l < 0.05 else ' '
+                print(f'  Layer {l:2d}: idiomatic={np.mean(kl_i):.4f}  '
+                      f'literal={np.mean(kl_l):.4f}  diff={d_mean_l:+.4f}  p={p_l:.4f} {sig}')
+
+    # ── 13. Plots ─────────────────────────────────────────────────────────
     hbar('Generating Plots')
 
     plot_distributions(kappas, 'Holonomy Distribution by Condition',
@@ -640,7 +898,31 @@ def main():
                                'Paired Curvature: Same Phrase, Different Usage',
                                str(OUTPUT_DIR / 'paired_curvature.png'))
 
-    # ── 13. Save results ──────────────────────────────────────────────────
+    # Phrase-localized plots
+    if loc_shared:
+        plot_paired_comparison(loc_idiom_by_pair, loc_literal_by_pair, loc_shared, idioms_by_pair,
+                               r'Phrase-localized $\kappa$',
+                               'Phrase-Localized Holonomy (Length Controlled)',
+                               str(OUTPUT_DIR / 'phrase_localized_holonomy.png'))
+
+    if loc_shared_c:
+        plot_paired_comparison(loc_curv_idiom_by_pair, loc_curv_literal_by_pair, loc_shared_c, idioms_by_pair,
+                               'Phrase-localized curvature',
+                               'Phrase-Localized Curvature (Length Controlled)',
+                               str(OUTPUT_DIR / 'phrase_localized_curvature.png'))
+
+    if loc_layer_profiles['idiomatic'] and loc_layer_profiles['literal']:
+        plot_layer_profiles(loc_layer_profiles,
+                            'Phrase-Localized Layer Holonomy (Length Controlled)',
+                            str(OUTPUT_DIR / 'phrase_localized_layer_profiles.png'),
+                            n_layers=n_layers)
+
+    if loc_curv_layer_profiles['idiomatic'] and loc_curv_layer_profiles['literal']:
+        plot_curvature_layer_profiles(loc_curv_layer_profiles,
+                                      str(OUTPUT_DIR / 'phrase_localized_layer_curvature.png'),
+                                      n_layers=n_layers)
+
+    # ── 14. Save results ──────────────────────────────────────────────────
     hbar('Saving Results')
     summary = {
         'model': MODEL_NAME,
@@ -695,6 +977,22 @@ def main():
     for label, a in asymmetry_by_label.items():
         summary[f'{label}_asymmetry'] = a.tolist()
 
+    # Phrase-localized results
+    if loc_shared:
+        summary['phrase_localized_holonomy'] = [
+            {'pair_id': p, 'idiom': idioms_by_pair.get(p, ''),
+             'idiomatic': float(loc_idiom_by_pair[p]),
+             'literal': float(loc_literal_by_pair[p])}
+            for p in loc_shared
+        ]
+    if loc_shared_c:
+        summary['phrase_localized_curvature'] = [
+            {'pair_id': p, 'idiom': idioms_by_pair.get(p, ''),
+             'idiomatic': float(loc_curv_idiom_by_pair[p]),
+             'literal': float(loc_curv_literal_by_pair[p])}
+            for p in loc_shared_c
+        ]
+
     with open(OUTPUT_DIR / 'idiom_results.json', 'w') as f:
         json.dump(summary, f, indent=2, default=str)
     print(f'  Saved: {OUTPUT_DIR / "idiom_results.json"}')
@@ -704,12 +1002,16 @@ def main():
     hbar(f'Done ({elapsed:.0f}s)')
     print(f'  Results: {OUTPUT_DIR}/')
     print(f'  Plots:')
-    print(f'    holonomy_distributions.png    — violin + histogram of kappa')
-    print(f'    curvature_distributions.png   — violin + histogram of curvature')
-    print(f'    layer_holonomy_profiles.png   — per-layer kappa (VFE steps)')
-    print(f'    layer_curvature_profiles.png  — per-layer curvature')
-    print(f'    paired_holonomy.png           — paired comparison')
-    print(f'    paired_curvature.png          — paired curvature comparison')
+    print(f'    holonomy_distributions.png          — violin + histogram of kappa')
+    print(f'    curvature_distributions.png         — violin + histogram of curvature')
+    print(f'    layer_holonomy_profiles.png         — per-layer kappa (VFE steps)')
+    print(f'    layer_curvature_profiles.png        — per-layer curvature')
+    print(f'    paired_holonomy.png                 — paired comparison')
+    print(f'    paired_curvature.png                — paired curvature comparison')
+    print(f'    phrase_localized_holonomy.png       — phrase-only holonomy (length controlled)')
+    print(f'    phrase_localized_curvature.png      — phrase-only curvature (length controlled)')
+    print(f'    phrase_localized_layer_profiles.png — phrase-only layer profiles')
+    print(f'    phrase_localized_layer_curvature.png— phrase-only layer curvature')
 
 
 if __name__ == '__main__':
