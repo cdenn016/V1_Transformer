@@ -172,6 +172,23 @@ def find_phrase_positions(tokenizer, full_text, phrase):
     return None
 
 
+def cross_boundary_positions(phrase_pos, n_tokens, context_window=3):
+    """
+    Generate positions for cross-boundary holonomy measurement.
+
+    Returns positions that include the phrase tokens PLUS nearby context tokens
+    (up to context_window tokens on each side). Triples sampled from these
+    positions will naturally span the phrase-context boundary.
+
+    Also returns the phrase_set for filtering purely-internal triples.
+    """
+    phrase_set = set(phrase_pos)
+    min_pos = max(0, min(phrase_pos) - context_window)
+    max_pos = min(n_tokens - 1, max(phrase_pos) + context_window)
+    all_pos = list(range(min_pos, max_pos + 1))
+    return all_pos, phrase_set
+
+
 # ── Plotting ──────────────────────────────────────────────────────────────
 
 def plot_distributions(kappas_by_label, title, ylabel, output_path):
@@ -866,6 +883,162 @@ def main():
                 print(f'  Layer {l:2d}: idiomatic={np.mean(kl_i):.4f}  '
                       f'literal={np.mean(kl_l):.4f}  diff={d_mean_l:+.4f}  p={p_l:.4f} {sig}')
 
+    # ── 12c. Cross-boundary holonomy (phrase ↔ context interaction) ──────
+    hbar('Cross-Boundary Holonomy (Phrase-Context Interaction)')
+    print('  Measuring holonomy on phrase + nearby context tokens.')
+    print('  Triples span the phrase-context boundary, capturing how the')
+    print('  idiom phrase interacts with its surrounding context.')
+    print()
+
+    CONTEXT_WINDOW = 3  # tokens on each side of phrase
+
+    xb_idiom_by_pair = {}
+    xb_literal_by_pair = {}
+    xb_curv_idiom_by_pair = {}
+    xb_curv_literal_by_pair = {}
+    xb_layer_profiles = {'idiomatic': [], 'literal': []}
+
+    n_xb_found = 0
+    for pid in sorted(pair_map.keys()):
+        if 'idiomatic' not in pair_map[pid] or 'literal' not in pair_map[pid]:
+            continue
+        sp_i = pair_map[pid]['idiomatic']
+        sp_l = pair_map[pid]['literal']
+        idiom_phrase = sp_i.idiom
+
+        ids_i = tokenize(tokenizer, sp_i.text)
+        ids_l = tokenize(tokenizer, sp_l.text)
+        N_i = ids_i.shape[1]
+        N_l = ids_l.shape[1]
+
+        pos_i = find_phrase_positions(tokenizer, sp_i.text, idiom_phrase)
+        pos_l = find_phrase_positions(tokenizer, sp_l.text, idiom_phrase)
+
+        if pos_i is None or pos_l is None or len(pos_i) < 2 or len(pos_l) < 2:
+            continue
+
+        xb_pos_i, _ = cross_boundary_positions(pos_i, N_i, CONTEXT_WINDOW)
+        xb_pos_l, _ = cross_boundary_positions(pos_l, N_l, CONTEXT_WINDOW)
+
+        if len(xb_pos_i) < 3 or len(xb_pos_l) < 3:
+            continue
+
+        n_xb_found += 1
+        t0 = time.time()
+
+        plh_i = layerwise_jacobian_holonomy(
+            model, ids_i, max_triples=MAX_TRI, positions=xb_pos_i,
+        )
+        plh_l = layerwise_jacobian_holonomy(
+            model, ids_l, max_triples=MAX_TRI, positions=xb_pos_l,
+        )
+
+        xb_idiom_by_pair[pid] = plh_i['kappa_mean']
+        xb_literal_by_pair[pid] = plh_l['kappa_mean']
+        xb_layer_profiles['idiomatic'].append(plh_i['kappa_per_layer'])
+        xb_layer_profiles['literal'].append(plh_l['kappa_per_layer'])
+
+        cr_i = discrete_curvature(
+            model, ids_i, max_triples=MAX_PAIRS, positions=xb_pos_i,
+        )
+        cr_l = discrete_curvature(
+            model, ids_l, max_triples=MAX_PAIRS, positions=xb_pos_l,
+        )
+
+        xb_curv_idiom_by_pair[pid] = cr_i['curvature_mean']
+        xb_curv_literal_by_pair[pid] = cr_l['curvature_mean']
+
+        dt = time.time() - t0
+        arrow_h = '>' if plh_i['kappa_mean'] > plh_l['kappa_mean'] else '<'
+        arrow_c = '>' if cr_i['curvature_mean'] > cr_l['curvature_mean'] else '<'
+        print(f'  pair {pid:2d}: hol {plh_i["kappa_mean"]:.4f} {arrow_h} {plh_l["kappa_mean"]:.4f}  '
+              f'curv {cr_i["curvature_mean"]:.5f} {arrow_c} {cr_l["curvature_mean"]:.5f}  '
+              f'({len(xb_pos_i)}/{len(xb_pos_l)} pos, {dt:.1f}s)  "{idiom_phrase}"')
+
+    print(f'\n  Cross-boundary pairs: {n_xb_found}')
+
+    # Statistics
+    xb_shared = sorted(set(xb_idiom_by_pair) & set(xb_literal_by_pair))
+    if len(xb_shared) >= 5:
+        hbar('Cross-Boundary Statistics')
+
+        xb_pi = np.array([xb_idiom_by_pair[p] for p in xb_shared])
+        xb_pl = np.array([xb_literal_by_pair[p] for p in xb_shared])
+        xb_diffs = xb_pi - xb_pl
+
+        n_higher_xb = int(np.sum(xb_pi > xb_pl))
+        pct_xb = 100 * n_higher_xb / len(xb_shared)
+        print(f'  Holonomy: Idiomatic > Literal in {n_higher_xb}/{len(xb_shared)} pairs ({pct_xb:.0f}%)')
+        print(f'  Mean idiomatic: {np.mean(xb_pi):.4f}  literal: {np.mean(xb_pl):.4f}  '
+              f'diff: {np.mean(xb_diffs):+.4f}')
+
+        stat_w_xb, p_w_xb = stats.wilcoxon(xb_pi, xb_pl, alternative='two-sided')
+        d_xb = np.mean(xb_diffs) / np.std(xb_diffs) if np.std(xb_diffs) > 0 else 0
+        print(f'  Wilcoxon: W={stat_w_xb:.0f}, p={fmt_p(p_w_xb)}, paired d={d_xb:+.3f}')
+
+        # Bootstrap CI
+        rng_xb = np.random.RandomState(42)
+        boot_xb = np.zeros(10000)
+        for bi in range(10000):
+            sample = rng_xb.choice(xb_diffs, size=len(xb_diffs), replace=True)
+            boot_xb[bi] = np.mean(sample)
+        ci_lo_xb, ci_hi_xb = np.percentile(boot_xb, [2.5, 97.5])
+        boot_p_xb = 2 * min(np.mean(boot_xb <= 0), np.mean(boot_xb >= 0))
+        print(f'  Bootstrap 95% CI: [{ci_lo_xb:+.4f}, {ci_hi_xb:+.4f}]')
+        print(f'  Bootstrap p: {fmt_p(boot_p_xb)}')
+        print(f'  CI excludes 0: {"YES" if ci_lo_xb > 0 or ci_hi_xb < 0 else "NO"}')
+
+        # Mean positions per pair (length check)
+        print(f'  Mean positions: idiomatic={np.mean([len(cross_boundary_positions(find_phrase_positions(tokenizer, pair_map[p]["idiomatic"].text, pair_map[p]["idiomatic"].idiom), tokenize(tokenizer, pair_map[p]["idiomatic"].text).shape[1], CONTEXT_WINDOW)[0]) for p in xb_shared]):.1f}  '
+              f'literal={np.mean([len(cross_boundary_positions(find_phrase_positions(tokenizer, pair_map[p]["literal"].text, pair_map[p]["literal"].idiom), tokenize(tokenizer, pair_map[p]["literal"].text).shape[1], CONTEXT_WINDOW)[0]) for p in xb_shared]):.1f}')
+
+        stat_results['cross_boundary_holonomy'] = {
+            'n_pairs': len(xb_shared),
+            'pct_higher': float(pct_xb),
+            'wilcoxon_W': float(stat_w_xb),
+            'wilcoxon_p': float(p_w_xb),
+            'paired_d': float(d_xb),
+            'bootstrap_ci': [float(ci_lo_xb), float(ci_hi_xb)],
+            'bootstrap_p': float(boot_p_xb),
+            'context_window': CONTEXT_WINDOW,
+        }
+
+    # Cross-boundary curvature
+    xb_shared_c = sorted(set(xb_curv_idiom_by_pair) & set(xb_curv_literal_by_pair))
+    if len(xb_shared_c) >= 5:
+        xb_ci = np.array([xb_curv_idiom_by_pair[p] for p in xb_shared_c])
+        xb_cl = np.array([xb_curv_literal_by_pair[p] for p in xb_shared_c])
+        fm = np.isfinite(xb_ci) & np.isfinite(xb_cl)
+        if np.sum(fm) >= 5:
+            xb_ci_f, xb_cl_f = xb_ci[fm], xb_cl[fm]
+            n_hc_xb = int(np.sum(xb_ci_f > xb_cl_f))
+            pct_hc_xb = 100 * n_hc_xb / len(xb_ci_f)
+            sw_xb, pw_xb = stats.wilcoxon(xb_ci_f, xb_cl_f, alternative='two-sided')
+            d_c_xb = np.mean(xb_ci_f - xb_cl_f) / np.std(xb_ci_f - xb_cl_f) if np.std(xb_ci_f - xb_cl_f) > 0 else 0
+            print(f'\n  Cross-boundary curvature: Idiomatic > Literal in {n_hc_xb}/{len(xb_ci_f)} ({pct_hc_xb:.0f}%)')
+            print(f'  Wilcoxon: W={sw_xb:.0f}, p={fmt_p(pw_xb)}, paired d={d_c_xb:+.3f}')
+
+            stat_results['cross_boundary_curvature'] = {
+                'n_pairs': int(len(xb_ci_f)),
+                'pct_higher': float(pct_hc_xb),
+                'wilcoxon_W': float(sw_xb),
+                'wilcoxon_p': float(pw_xb),
+                'paired_d': float(d_c_xb),
+            }
+
+    # Cross-boundary per-layer
+    if xb_layer_profiles['idiomatic'] and xb_layer_profiles['literal']:
+        hbar('Cross-Boundary Per-Layer Analysis')
+        for l in range(n_layers):
+            kl_i = [prof[l] for prof in xb_layer_profiles['idiomatic'] if len(prof) > l]
+            kl_l = [prof[l] for prof in xb_layer_profiles['literal'] if len(prof) > l]
+            if len(kl_i) >= 2 and len(kl_l) >= 2:
+                U_l, p_l = stats.mannwhitneyu(kl_i, kl_l, alternative='two-sided')
+                d_mean_l = np.mean(kl_i) - np.mean(kl_l)
+                sig = '*' if p_l < 0.05 else ' '
+                print(f'  Layer {l:2d}: idiomatic={np.mean(kl_i):.4f}  '
+                      f'literal={np.mean(kl_l):.4f}  diff={d_mean_l:+.4f}  p={p_l:.4f} {sig}')
+
     # ── 13. Plots ─────────────────────────────────────────────────────────
     hbar('Generating Plots')
 
@@ -921,6 +1094,25 @@ def main():
         plot_curvature_layer_profiles(loc_curv_layer_profiles,
                                       str(OUTPUT_DIR / 'phrase_localized_layer_curvature.png'),
                                       n_layers=n_layers)
+
+    # Cross-boundary plots
+    if xb_shared:
+        plot_paired_comparison(xb_idiom_by_pair, xb_literal_by_pair, xb_shared, idioms_by_pair,
+                               r'Cross-boundary $\kappa$',
+                               'Cross-Boundary Holonomy (Phrase+Context)',
+                               str(OUTPUT_DIR / 'cross_boundary_holonomy.png'))
+
+    if xb_shared_c:
+        plot_paired_comparison(xb_curv_idiom_by_pair, xb_curv_literal_by_pair, xb_shared_c, idioms_by_pair,
+                               'Cross-boundary curvature',
+                               'Cross-Boundary Curvature (Phrase+Context)',
+                               str(OUTPUT_DIR / 'cross_boundary_curvature.png'))
+
+    if xb_layer_profiles['idiomatic'] and xb_layer_profiles['literal']:
+        plot_layer_profiles(xb_layer_profiles,
+                            'Cross-Boundary Layer Holonomy (Phrase+Context)',
+                            str(OUTPUT_DIR / 'cross_boundary_layer_profiles.png'),
+                            n_layers=n_layers)
 
     # ── 14. Save results ──────────────────────────────────────────────────
     hbar('Saving Results')
@@ -993,6 +1185,22 @@ def main():
             for p in loc_shared_c
         ]
 
+    # Cross-boundary results
+    if xb_shared:
+        summary['cross_boundary_holonomy'] = [
+            {'pair_id': p, 'idiom': idioms_by_pair.get(p, ''),
+             'idiomatic': float(xb_idiom_by_pair[p]),
+             'literal': float(xb_literal_by_pair[p])}
+            for p in xb_shared
+        ]
+    if xb_shared_c:
+        summary['cross_boundary_curvature_pairs'] = [
+            {'pair_id': p, 'idiom': idioms_by_pair.get(p, ''),
+             'idiomatic': float(xb_curv_idiom_by_pair[p]),
+             'literal': float(xb_curv_literal_by_pair[p])}
+            for p in xb_shared_c
+        ]
+
     with open(OUTPUT_DIR / 'idiom_results.json', 'w') as f:
         json.dump(summary, f, indent=2, default=str)
     print(f'  Saved: {OUTPUT_DIR / "idiom_results.json"}')
@@ -1012,6 +1220,9 @@ def main():
     print(f'    phrase_localized_curvature.png      — phrase-only curvature (length controlled)')
     print(f'    phrase_localized_layer_profiles.png — phrase-only layer profiles')
     print(f'    phrase_localized_layer_curvature.png— phrase-only layer curvature')
+    print(f'    cross_boundary_holonomy.png         — phrase+context holonomy')
+    print(f'    cross_boundary_curvature.png        — phrase+context curvature')
+    print(f'    cross_boundary_layer_profiles.png   — phrase+context layer profiles')
 
 
 if __name__ == '__main__':
