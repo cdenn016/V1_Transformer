@@ -531,12 +531,13 @@ def run_test_evaluation(
     device: torch.device,
     vocab_size: int,
     max_batches: int = 2000,
+    config: dict = None,
 ) -> Dict[str, float]:
     """
     Run final evaluation on test set.
 
-    This should be called at the end of training to get the final test metrics
-    that will be reported in publications.
+    Uses the same code path as validation (compute_free_energy_loss with
+    forward_with_attention) to ensure consistent evaluation.
 
     Args:
         model: Trained model
@@ -544,6 +545,8 @@ def run_test_evaluation(
         device: Device to run evaluation on
         vocab_size: Vocabulary size for random baseline comparison
         max_batches: Maximum number of batches to evaluate (default: 2000)
+        config: Training config dict (for alpha/beta/lambda values).
+                If None, uses pure CE evaluation.
 
     Returns:
         Dictionary with test metrics:
@@ -561,9 +564,19 @@ def run_test_evaluation(
     eval_batches = min(max_batches, total_batches)
     print(f"  Evaluating {eval_batches} / {total_batches} batches...")
 
+    # Use same code path as validation: compute_free_energy_loss
+    # which calls model.forward_with_attention() internally.
+    is_standard = isinstance(model, StandardTransformerLM)
+
+    # Extract config values (default to 0 for pure CE if no config)
+    alpha = config.get('alpha', 0) if config else 0
+    beta = config.get('beta', 0) if config else 0
+    lambda_gamma = config.get('lambda_gamma', 0) if config else 0
+    kappa_gamma = config.get('kappa_gamma', 1.0) if config else 1.0
+
     model.eval()
-    total_loss = 0.0
-    total_tokens = 0
+    total_ce = 0.0
+    num_batches = 0
 
     with torch.no_grad():
         for batch_idx, (input_ids, target_ids) in enumerate(test_loader):
@@ -573,39 +586,36 @@ def run_test_evaluation(
             input_ids = input_ids.to(device)
             target_ids = target_ids.to(device)
 
-            # Forward pass
-            if hasattr(model, 'forward'):
-                output = model(input_ids)
-                if isinstance(output, dict):
-                    logits = output.get('logits', output.get('output'))
-                elif isinstance(output, tuple):
-                    logits = output[0]
-                else:
-                    logits = output
+            if is_standard:
+                output = model(input_ids, labels=target_ids)
+                ce_loss = output['loss'].item()
             else:
-                logits = model(input_ids)
+                loss, metrics = compute_free_energy_loss(
+                    model,
+                    input_ids,
+                    target_ids,
+                    alpha=alpha,
+                    lambda_beta=beta,
+                    lambda_gamma=lambda_gamma,
+                    kappa_gamma=kappa_gamma,
+                )
+                ce_loss = metrics['loss/ce']
 
-            # Compute cross-entropy loss
-            loss = F.cross_entropy(
-                logits.view(-1, vocab_size),
-                target_ids.view(-1),
-                reduction='sum'
-            )
-            total_loss += loss.item()
-            total_tokens += target_ids.numel()
+            total_ce += ce_loss
+            num_batches += 1
 
             # Progress indicator
             if (batch_idx + 1) % 100 == 0:
                 print(f"  Evaluated {batch_idx + 1}/{eval_batches} batches...")
 
-    # Compute metrics
-    test_ce = total_loss / total_tokens if total_tokens > 0 else float('inf')
+    # Compute metrics (same averaging as validation: mean of batch means)
+    test_ce = total_ce / max(1, num_batches)
     test_ppl = math.exp(min(test_ce, 20))  # Clamp to prevent overflow
     test_bpc = test_ce / math.log(2)
     random_ppl = vocab_size
     improvement = random_ppl / test_ppl if test_ppl > 0 else 0
 
-    print(f"\nTest Set Results:")
+    print(f"\nTest Set Results ({num_batches} batches evaluated):")
     print(f"  Cross-entropy loss: {test_ce:.4f}")
     print(f"  Perplexity:         {test_ppl:.2f}")
     print(f"  Bits per character: {test_bpc:.3f}")
@@ -2039,6 +2049,7 @@ def run_single_experiment(
                     test_loader=test_loader,
                     device=device,
                     vocab_size=actual_vocab_size,
+                    config=config,
                 )
 
             result = {
@@ -2174,6 +2185,7 @@ def run_single_experiment(
                     test_loader=test_loader,
                     device=device,
                     vocab_size=actual_vocab_size,
+                    config=config,
                 )
 
             # Return metrics

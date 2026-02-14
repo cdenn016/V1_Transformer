@@ -448,11 +448,11 @@ class FastTrainer:
 
         return formatted_metrics
 
-    def validate(self, max_batches: int = 50) -> Dict[str, float]:
+    def validate(self, max_batches: int = None) -> Dict[str, float]:
         """Validation loop.
 
         Args:
-            max_batches: Maximum number of validation batches (default: 50)
+            max_batches: Maximum number of validation batches. None = all batches.
         """
         self.model.eval()
 
@@ -489,8 +489,8 @@ class FastTrainer:
                 total_ce += ce_loss
                 num_batches += 1
 
-                # Limit validation batches for speed
-                if num_batches >= max_batches:
+                # Limit validation batches if specified
+                if max_batches is not None and num_batches >= max_batches:
                     break
 
         avg_loss = total_loss / max(1, num_batches)
