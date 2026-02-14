@@ -107,6 +107,24 @@ def fmt_p(p):
     return f'{p:.4f} ns'
 
 
+def benjamini_hochberg(p_values):
+    """Apply Benjamini-Hochberg FDR correction. Returns array of q-values."""
+    p_arr = np.array(p_values, dtype=float)
+    n = len(p_arr)
+    if n == 0:
+        return np.array([])
+    ranked = np.argsort(p_arr)
+    q = np.zeros(n)
+    for i, rank_idx in enumerate(ranked):
+        q[rank_idx] = p_arr[rank_idx] * n / (i + 1)
+    # Enforce monotonicity: q[i] = min(q[i], q[i+1])
+    for i in range(n - 2, -1, -1):
+        idx = ranked[i]
+        idx_next = ranked[i + 1]
+        q[idx] = min(q[idx], q[idx_next])
+    return np.clip(q, 0, 1)
+
+
 def find_phrase_positions(tokenizer, full_text, phrase):
     """
     Find the token positions of an idiom phrase within a tokenized sentence.
@@ -680,15 +698,25 @@ def main():
     # ── 11. Per-layer statistical tests ──────────────────────────────────
     hbar('Per-Layer Analysis (Where Does Curvature Emerge?)')
 
+    layer_pvals = []
+    layer_rows = []
     for l in range(n_layers):
         kl_idiom = [prof[l] for prof in layer_profiles['idiomatic'] if len(prof) > l]
         kl_literal = [prof[l] for prof in layer_profiles['literal'] if len(prof) > l]
         if len(kl_idiom) >= 2 and len(kl_literal) >= 2:
             U, p = stats.mannwhitneyu(kl_idiom, kl_literal, alternative='two-sided')
             d_mean = np.mean(kl_idiom) - np.mean(kl_literal)
-            sig = '*' if p < 0.05 else ' '
-            print(f'  Layer {l:2d}: idiomatic={np.mean(kl_idiom):.4f}  '
-                  f'literal={np.mean(kl_literal):.4f}  diff={d_mean:+.4f}  p={p:.4f} {sig}')
+            layer_pvals.append(p)
+            layer_rows.append((l, np.mean(kl_idiom), np.mean(kl_literal), d_mean, p))
+        else:
+            layer_pvals.append(1.0)
+            layer_rows.append((l, 0, 0, 0, 1.0))
+
+    layer_qvals = benjamini_hochberg(layer_pvals)
+    for (l, mi, ml, d_mean, p), q in zip(layer_rows, layer_qvals):
+        sig = '*' if q < 0.05 else ' '
+        print(f'  Layer {l:2d}: idiomatic={mi:.4f}  '
+              f'literal={ml:.4f}  diff={d_mean:+.4f}  p={p:.4f}  q={q:.4f} {sig}')
 
     # ── 12. Phrase-localized holonomy (length confound control) ─────────
     hbar('Phrase-Localized Holonomy (Length Control)')
@@ -873,15 +901,25 @@ def main():
     # ── 12b. Phrase-localized per-layer analysis ─────────────────────────
     if loc_layer_profiles['idiomatic'] and loc_layer_profiles['literal']:
         hbar('Phrase-Localized Per-Layer Analysis')
+        pl_pvals = []
+        pl_rows = []
         for l in range(n_layers):
             kl_i = [prof[l] for prof in loc_layer_profiles['idiomatic'] if len(prof) > l]
             kl_l = [prof[l] for prof in loc_layer_profiles['literal'] if len(prof) > l]
             if len(kl_i) >= 2 and len(kl_l) >= 2:
                 U_l, p_l = stats.mannwhitneyu(kl_i, kl_l, alternative='two-sided')
                 d_mean_l = np.mean(kl_i) - np.mean(kl_l)
-                sig = '*' if p_l < 0.05 else ' '
-                print(f'  Layer {l:2d}: idiomatic={np.mean(kl_i):.4f}  '
-                      f'literal={np.mean(kl_l):.4f}  diff={d_mean_l:+.4f}  p={p_l:.4f} {sig}')
+                pl_pvals.append(p_l)
+                pl_rows.append((l, np.mean(kl_i), np.mean(kl_l), d_mean_l, p_l))
+            else:
+                pl_pvals.append(1.0)
+                pl_rows.append((l, 0, 0, 0, 1.0))
+
+        pl_qvals = benjamini_hochberg(pl_pvals)
+        for (l, mi, ml, d_mean_l, p_l), q_l in zip(pl_rows, pl_qvals):
+            sig = '*' if q_l < 0.05 else ' '
+            print(f'  Layer {l:2d}: idiomatic={mi:.4f}  '
+                  f'literal={ml:.4f}  diff={d_mean_l:+.4f}  p={p_l:.4f}  q={q_l:.4f} {sig}')
 
     # ── 12c. Cross-boundary holonomy (phrase ↔ context interaction) ──────
     hbar('Cross-Boundary Holonomy (Phrase-Context Interaction)')
@@ -919,6 +957,20 @@ def main():
 
         xb_pos_i, _ = cross_boundary_positions(pos_i, N_i, CONTEXT_WINDOW)
         xb_pos_l, _ = cross_boundary_positions(pos_l, N_l, CONTEXT_WINDOW)
+
+        # Equalize window sizes: trim the longer window to match the shorter
+        # This eliminates any residual length confound from asymmetric context
+        if len(xb_pos_i) != len(xb_pos_l):
+            target_len = min(len(xb_pos_i), len(xb_pos_l))
+            if len(xb_pos_i) > target_len:
+                # Trim symmetrically around phrase center
+                center_i = (min(pos_i) + max(pos_i)) / 2
+                xb_pos_i = sorted(xb_pos_i, key=lambda p: abs(p - center_i))[:target_len]
+                xb_pos_i = sorted(xb_pos_i)
+            if len(xb_pos_l) > target_len:
+                center_l = (min(pos_l) + max(pos_l)) / 2
+                xb_pos_l = sorted(xb_pos_l, key=lambda p: abs(p - center_l))[:target_len]
+                xb_pos_l = sorted(xb_pos_l)
 
         if len(xb_pos_i) < 3 or len(xb_pos_l) < 3:
             continue
@@ -1027,6 +1079,9 @@ def main():
             }
 
     # Cross-boundary per-layer
+    xb_layer_pvals = []
+    xb_layer_rows = []
+    xb_layer_qvals = None
     if xb_layer_profiles['idiomatic'] and xb_layer_profiles['literal']:
         hbar('Cross-Boundary Per-Layer Analysis')
         for l in range(n_layers):
@@ -1035,9 +1090,17 @@ def main():
             if len(kl_i) >= 2 and len(kl_l) >= 2:
                 U_l, p_l = stats.mannwhitneyu(kl_i, kl_l, alternative='two-sided')
                 d_mean_l = np.mean(kl_i) - np.mean(kl_l)
-                sig = '*' if p_l < 0.05 else ' '
-                print(f'  Layer {l:2d}: idiomatic={np.mean(kl_i):.4f}  '
-                      f'literal={np.mean(kl_l):.4f}  diff={d_mean_l:+.4f}  p={p_l:.4f} {sig}')
+                xb_layer_pvals.append(p_l)
+                xb_layer_rows.append((l, np.mean(kl_i), np.mean(kl_l), d_mean_l, p_l))
+            else:
+                xb_layer_pvals.append(1.0)
+                xb_layer_rows.append((l, 0, 0, 0, 1.0))
+
+        xb_layer_qvals = benjamini_hochberg(xb_layer_pvals)
+        for (l, mi, ml, d_mean_l, p_l), q_l in zip(xb_layer_rows, xb_layer_qvals):
+            sig = '*' if q_l < 0.05 else ' '
+            print(f'  Layer {l:2d}: idiomatic={mi:.4f}  '
+                  f'literal={ml:.4f}  diff={d_mean_l:+.4f}  p={p_l:.4f}  q={q_l:.4f} {sig}')
 
     # ── 13. Plots ─────────────────────────────────────────────────────────
     hbar('Generating Plots')
@@ -1208,13 +1271,10 @@ def main():
             ax.set_title('Cross-Boundary Holonomy Difference by Layer')
             ax.set_xticks(layers)
 
-            # Mark significant layers
-            for l in layers:
-                kl_i = [prof[l] for prof in xb_layer_profiles['idiomatic'] if len(prof) > l]
-                kl_l = [prof[l] for prof in xb_layer_profiles['literal'] if len(prof) > l]
-                if len(kl_i) >= 2 and len(kl_l) >= 2:
-                    _, p_l = stats.mannwhitneyu(kl_i, kl_l, alternative='two-sided')
-                    if p_l < 0.05:
+            # Mark FDR-significant layers
+            if xb_layer_qvals is not None and len(xb_layer_qvals) == n_layers:
+                for l in layers:
+                    if xb_layer_qvals[l] < 0.05:
                         ax.text(l, diff_per_layer[l] - 0.002 * np.sign(diff_per_layer[l]),
                                '*', ha='center', va='center', fontsize=14, fontweight='bold')
 
