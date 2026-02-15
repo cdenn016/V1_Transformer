@@ -59,7 +59,13 @@ from matplotlib.patches import Ellipse
 import matplotlib.transforms as transforms
 
 
-ROOT = Path(__file__).resolve().parent
+# Find project root: walk up from this script until we find analysis/holonomy_study/
+_here = Path(__file__).resolve().parent
+ROOT = _here
+for _ancestor in [_here] + list(_here.parents):
+    if (_ancestor / 'analysis' / 'holonomy_study' / '__init__.py').exists():
+        ROOT = _ancestor
+        break
 OUTPUT_DIR = ROOT / 'results' / 'synthesis'
 
 
@@ -638,6 +644,9 @@ def main():
     results_dir = ROOT / 'results'
 
     hbar('Cross-Phenomenon Synthesis')
+    print(f'  Project root: {ROOT}')
+    print(f'  Results dir:  {results_dir}')
+    print(f'  Output dir:   {OUTPUT_DIR}')
     print('  Loading results from idiom, irony, and metaphor studies.')
     print()
 
