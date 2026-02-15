@@ -346,19 +346,22 @@ def test_compositionality_gradient(boot_idiom, boot_metaphor, boot_irony):
         (bi[:, 1] >= bm[:, 1]) & (bm[:, 1] >= br[:, 1])
     )
 
-    # Under random permutation of labels, expected proportion ~ 1/6
-    # (3! orderings, only 1 is correct)
-    # So p-value for observing x% is roughly computed as:
-    # binomial test that success rate > 1/6
-    from scipy.stats import binom_test
+    # Under random permutation of 3 labels, chance of correct ordering = 1/6
+    # Binomial test: is the observed proportion > 1/6?
     n_success_hol = int(hol_ordered * n)
     n_success_curv = int(curv_ordered * n)
     n_success_joint = int(joint_ordered * n)
+    p_hol = stats.binomtest(n_success_hol, n, 1/6, alternative='greater').pvalue
+    p_curv = stats.binomtest(n_success_curv, n, 1/6, alternative='greater').pvalue
+    p_joint = stats.binomtest(n_success_joint, n, 1/6, alternative='greater').pvalue
 
     return {
         'hol_ordered_pct': float(hol_ordered * 100),
         'curv_ordered_pct': float(curv_ordered * 100),
         'joint_ordered_pct': float(joint_ordered * 100),
+        'hol_p': float(p_hol),
+        'curv_p': float(p_curv),
+        'joint_p': float(p_joint),
         'n_bootstrap': n,
     }
 
@@ -737,11 +740,11 @@ def main():
 
         print(f'  Predicted ordering (holonomy):   idiom <= metaphor <= irony (baseline=0)')
         print(f'  Predicted ordering (curvature):  idiom >= metaphor >= irony')
-        print(f'  Bootstrap support:')
-        print(f'    Holonomy ordering:  {grad_results["hol_ordered_pct"]:.1f}% of {grad_results["n_bootstrap"]} resamples')
-        print(f'    Curvature ordering: {grad_results["curv_ordered_pct"]:.1f}% of {grad_results["n_bootstrap"]} resamples')
-        print(f'    Joint ordering:     {grad_results["joint_ordered_pct"]:.1f}% of {grad_results["n_bootstrap"]} resamples')
-        print(f'    (Chance level for 3-way ordering: 16.7%)')
+        print(f'  Bootstrap support (chance = 16.7%):')
+        print(f'    Holonomy ordering:  {grad_results["hol_ordered_pct"]:.1f}%  p={fmt_p(grad_results["hol_p"])}')
+        print(f'    Curvature ordering: {grad_results["curv_ordered_pct"]:.1f}%  p={fmt_p(grad_results["curv_p"])}')
+        print(f'    Joint ordering:     {grad_results["joint_ordered_pct"]:.1f}%  p={fmt_p(grad_results["joint_p"])}')
+        print(f'    (n={grad_results["n_bootstrap"]} bootstrap resamples)')
     else:
         print('  Insufficient pair data for gradient test (need all three studies)')
         grad_results = None
