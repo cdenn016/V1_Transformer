@@ -935,6 +935,7 @@ def main():
     xb_curv_idiom_by_pair = {}
     xb_curv_literal_by_pair = {}
     xb_layer_profiles = {'idiomatic': [], 'literal': []}
+    xb_pos_counts = {'idiomatic': [], 'literal': []}  # track equalized position counts
 
     n_xb_found = 0
     for pid in sorted(pair_map.keys()):
@@ -976,6 +977,8 @@ def main():
             continue
 
         n_xb_found += 1
+        xb_pos_counts['idiomatic'].append(len(xb_pos_i))
+        xb_pos_counts['literal'].append(len(xb_pos_l))
         t0 = time.time()
 
         plh_i = layerwise_jacobian_holonomy(
@@ -1040,9 +1043,11 @@ def main():
         print(f'  Bootstrap p: {fmt_p(boot_p_xb)}')
         print(f'  CI excludes 0: {"YES" if ci_lo_xb > 0 or ci_hi_xb < 0 else "NO"}')
 
-        # Mean positions per pair (length check)
-        print(f'  Mean positions: idiomatic={np.mean([len(cross_boundary_positions(find_phrase_positions(tokenizer, pair_map[p]["idiomatic"].text, pair_map[p]["idiomatic"].idiom), tokenize(tokenizer, pair_map[p]["idiomatic"].text).shape[1], CONTEXT_WINDOW)[0]) for p in xb_shared]):.1f}  '
-              f'literal={np.mean([len(cross_boundary_positions(find_phrase_positions(tokenizer, pair_map[p]["literal"].text, pair_map[p]["literal"].idiom), tokenize(tokenizer, pair_map[p]["literal"].text).shape[1], CONTEXT_WINDOW)[0]) for p in xb_shared]):.1f}')
+        # Mean equalized positions per pair (length check)
+        n_exact_eq = sum(1 for a, b in zip(xb_pos_counts['idiomatic'], xb_pos_counts['literal']) if a == b)
+        print(f'  Equalized positions: {n_exact_eq}/{len(xb_pos_counts["idiomatic"])} pairs identical  '
+              f'mean idiomatic={np.mean(xb_pos_counts["idiomatic"]):.1f}  '
+              f'literal={np.mean(xb_pos_counts["literal"]):.1f}')
 
         stat_results['cross_boundary_holonomy'] = {
             'n_pairs': len(xb_shared),
