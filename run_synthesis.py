@@ -163,25 +163,27 @@ def load_metaphor_pairs(results_dir):
 # directory was not created). These are the cross-boundary paired results.
 
 SUMMARY_STATS = {
+    # Cross-boundary paired results (bootstrap p-values where available,
+    # Wilcoxon otherwise). Effect sizes are paired Cohen's d.
     'idiom': {
-        'hol_d': -0.340, 'hol_p': 0.0046,
-        'curv_d': +0.410, 'curv_p': 0.0044,
+        'hol_d': -0.340, 'hol_p': 0.0046,     # Wilcoxon p
+        'curv_d': +0.410, 'curv_p': 0.0044,    # Wilcoxon p
         'n_pairs': 30,
         'label': 'Idiom',
         'color': '#d62728',   # red
         'marker': 's',
     },
     'irony': {
-        'hol_d': +0.035, 'hol_p': 0.9947,
-        'curv_d': -0.515, 'curv_p': 0.0042,
+        'hol_d': +0.035, 'hol_p': 0.8400,      # bootstrap p (Wilcoxon=0.9947)
+        'curv_d': -0.515, 'curv_p': 0.0042,     # Wilcoxon p
         'n_pairs': 40,
         'label': 'Irony',
         'color': '#9467bd',   # purple
         'marker': '^',
     },
     'metaphor': {
-        'hol_d': -0.358, 'hol_p': 0.0699,
-        'curv_d': +0.010, 'curv_p': 0.7884,
+        'hol_d': -0.358, 'hol_p': 0.0226,      # bootstrap p (Wilcoxon=0.0699)
+        'curv_d': +0.010, 'curv_p': 0.7884,     # Wilcoxon p
         'n_pairs': 37,
         'label': 'Metaphor',
         'color': '#ff7f0e',   # orange
