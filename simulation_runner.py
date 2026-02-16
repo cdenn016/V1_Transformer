@@ -42,11 +42,10 @@ from geometry.geometry_base import BaseManifold, TopologyType
 from agent.masking import SupportRegionSmooth, SupportPatternsSmooth, MaskConfig
 
 # RG Metrics for meta-agent emergence detection
-from experiments.rg_simulation_metrics import (
+from transformer.analysis.rg_metrics import (
     compute_rg_diagnostics,
     RGDiagnostics,
     RGFlowSummary,
-    extract_beta_matrix,
 )
 
 COMP_FULL_ENERGY =  True
