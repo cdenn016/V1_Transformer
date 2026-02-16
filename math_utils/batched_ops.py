@@ -311,7 +311,7 @@ try:
         )
 
         _COMPILED = True
-except Exception:
+except RuntimeError:
     # Fallback to non-compiled versions
     compute_all_pairwise_kl_compiled = compute_all_pairwise_kl
     batched_kl_divergence_compiled = batched_kl_divergence

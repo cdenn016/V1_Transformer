@@ -112,7 +112,7 @@ def _check_cupy_available() -> bool:
         # Try a simple operation to verify CUDA works
         _ = cp.zeros(1)
         _CUPY_AVAILABLE = True
-    except Exception:
+    except (ImportError, RuntimeError, OSError):
         _CUPY_AVAILABLE = False
 
     return _CUPY_AVAILABLE

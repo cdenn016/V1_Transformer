@@ -132,7 +132,7 @@ class TorchBackend:
                 fullgraph=True  # This one is simple enough for full graph
             )
             print(f"[TorchBackend] Compiled functions with mode={self.compile_mode}")
-        except Exception as e:
+        except RuntimeError as e:
             warnings.warn(f"torch.compile failed: {e}. Falling back to eager mode.")
             self.use_compile = False
 

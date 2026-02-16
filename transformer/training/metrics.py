@@ -72,7 +72,7 @@ class MetricsTracker:
                 ['git', 'rev-parse', 'HEAD'],
                 stderr=subprocess.DEVNULL
             ).decode().strip()[:8]
-        except Exception:
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
             info['git_commit'] = 'unknown'
 
         # Save to JSON
