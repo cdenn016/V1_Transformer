@@ -59,7 +59,7 @@ def minimal_config():
         'evolve_phi': False,
         'tie_embeddings': True,
         'use_diagonal_covariance': True,
-        'ffn_mode': 'learned',
+        'ffn_mode': 'VFE_dynamic',
     }
 
 
@@ -80,7 +80,7 @@ def small_config():
         'evolve_phi': True,
         'tie_embeddings': True,
         'use_diagonal_covariance': True,
-        'ffn_mode': 'variational_gradient_engine',
+        'ffn_mode': 'VFE_dynamic',
     }
 
 
@@ -100,7 +100,7 @@ def vfe_config():
         'evolve_phi': True,
         'tie_embeddings': True,
         'use_diagonal_covariance': True,
-        'ffn_mode': 'variational_gradient_engine',
+        'ffn_mode': 'VFE_dynamic',
         'vfe_steps': 3,
     }
 

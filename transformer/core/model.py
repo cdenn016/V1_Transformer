@@ -722,8 +722,10 @@ class GaugeTransformerLM(nn.Module):
                 else:
                     sigma_q = sigma_q[:, :, perm][:, :, :, perm]
 
-        # Save priors (position-independent semantics)
+        # Save priors (position-independent semantics) before position encoding
         mu_prior = mu_q.clone()
+        sigma_prior = sigma_q.clone() if sigma_q is not None else None
+        phi_prior = phi.clone()
 
         # Position encoding - compose token phi with positional phi
         phi = self.pos_encoding.compose(phi, num_agents, device=device)
@@ -772,7 +774,13 @@ class GaugeTransformerLM(nn.Module):
         )
 
         # Complete final block forward (residual + FFN)
-        mu_q = mu_q + final_block.dropout1(mu_attn)
+        # Must respect use_residual flag (same logic as block.forward in blocks.py)
+        mu_attn = final_block.dropout1(mu_attn)
+        if final_block.use_residual:
+            mu_q = mu_q + mu_attn
+        else:
+            mu_q = mu_attn
+
         if final_block.evolve_sigma and sigma_attn is not None:
             sigma_q = sigma_attn
 
@@ -794,7 +802,10 @@ class GaugeTransformerLM(nn.Module):
         if final_block.evolve_sigma and sigma_ffn is not None:
             sigma_q = sigma_ffn
 
-        mu_q = mu_q + mu_ffn
+        if final_block.use_residual:
+            mu_q = mu_q + mu_ffn
+        else:
+            mu_q = mu_ffn
 
         # Final norm
         mu_q = self.transformer.final_norm(mu_q)
@@ -809,19 +820,16 @@ class GaugeTransformerLM(nn.Module):
         # Project to vocabulary
         logits = self.out_proj(mu_q)
 
-        # Get initial embedding priors for gamma term
-        mu_p, sigma_p, phi_p = self.token_embed(token_ids)
-
         attention_info = {
             'beta': beta,      # (B, n_heads, N, N)
             'kl': kl,          # (B, n_heads, N, N)
             'mu': mu_q,        # (B, N, K) - evolved beliefs
             'sigma': sigma_q,  # (B, N, K, K) or None
             'phi': phi,        # (B, N, 3)
-            # Priors for gamma term
-            'mu_prior': mu_p,      # (B, N, K) - initial embedding means
-            'sigma_prior': sigma_p,  # (B, N, K, K) - initial embedding covariances
-            'phi_prior': phi_p,      # (B, N, 3) - initial gauge frames
+            # Priors for gamma term (saved before position encoding)
+            'mu_prior': mu_prior,        # (B, N, K) - initial embedding means
+            'sigma_prior': sigma_prior,  # (B, N, K, K) - initial embedding covariances
+            'phi_prior': phi_prior,      # (B, N, 3) - initial gauge frames (pre-positional)
         }
 
         return logits, attention_info
