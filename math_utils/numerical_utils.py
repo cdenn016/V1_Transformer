@@ -186,7 +186,7 @@ def _caller_info(levels_back=4):
         frame = inspect.stack()[levels_back]
         fname = os.path.basename(frame.filename)
         return f"{fname}:{frame.function}:{frame.lineno}"
-    except Exception:
+    except (IndexError, AttributeError, OSError):
         return "<?>"
     
     

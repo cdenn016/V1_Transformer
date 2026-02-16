@@ -92,7 +92,7 @@ def get_sequence(mode, tokenizer, args):
         # Decode each token individually to show subwords
         try:
             token_strs = [tokenizer.decode([t]) for t in token_ids[0].tolist()]
-        except Exception:
+        except (KeyError, IndexError, RuntimeError):
             token_strs = [f"tok{i}" for i in token_ids[0].tolist()]
 
         print(f"\n[SEQUENCE] {description}")
@@ -143,11 +143,11 @@ def get_sequence(mode, tokenizer, args):
 
                 print(f"\n[SEQUENCE] {description}")
                 print(f"  Decoded text: {decoded_text[:200]}{'...' if len(decoded_text) > 200 else ''}")
-            except Exception as e:
+            except (KeyError, IndexError, RuntimeError) as e:
                 print(f"[WARN] Could not decode: {e}")
                 token_strs = [f"tok{i}" for i in token_ids[0].tolist()]
 
-        except Exception as e:
+        except (ImportError, RuntimeError, OSError, ValueError) as e:
             # Fallback to example text if data loading fails
             print(f"[ERROR] Could not load validation data: {e}")
             print(f"  Falling back to example text...")

@@ -64,7 +64,7 @@ def get_frequent_tokens(n_tokens=100, dataset='wikitext-2'):
             try:
                 decoded_str = data.decode([tok_id])
                 decoded.append(decoded_str)
-            except Exception:
+            except (KeyError, IndexError, RuntimeError):
                 decoded.append(f"<ID:{tok_id}>")
 
         print(f"✓ Found {len(token_ids)} frequent tokens")

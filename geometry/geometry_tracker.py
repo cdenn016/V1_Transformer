@@ -233,8 +233,8 @@ class GeometryTracker:
                 agent_metrics_belief.append(G_belief)
                 agent_metrics_prior.append(G_prior)
 
-            except Exception as e:
-               # print(f"  ⚠️  Warning: Failed to compute metrics for agent {agent.agent_id}: {e}")
+            except (RuntimeError, ValueError, np.linalg.LinAlgError) as e:
+               # print(f"  Warning: Failed to compute metrics for agent {agent.agent_id}: {e}")
                 continue
 
         snapshot.agent_metrics_belief = agent_metrics_belief
@@ -260,7 +260,7 @@ class GeometryTracker:
                     dx=self.dx,
                     weight_function=None  # Uniform weights
                 )
-            except Exception as e:
+            except (RuntimeError, ValueError, np.linalg.LinAlgError):
                 pass  # Consensus metrics computation failed; not critical
 
         # Compute summary statistics
