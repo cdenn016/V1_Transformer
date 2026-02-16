@@ -53,6 +53,8 @@ import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
+from transformer.core.gauge_utils import stable_matrix_exp_pair
+
 # Import validated gradient engine
 import sys
 from pathlib import Path
@@ -138,7 +140,7 @@ def _retract_phi(
     if trust_region is None:
         trust_region = 0.1 if is_glk else 0.3
     if max_norm is None:
-        max_norm = 1.0 if is_glk else 3.14159
+        max_norm = 1.0 if is_glk else math.pi
     if bch_order is None:
         bch_order = 0 if is_glk else 1
 
@@ -266,14 +268,7 @@ def _compute_vfe_gradients_block_diagonal(
         block_end = block_start + d
         gen_block = generators[:, block_start:block_end, block_start:block_end]
         phi_matrix_block = torch.einsum('bna,aij->bnij', phi, gen_block)
-        # Float64 for GL(K) numerical stability (prevents NaN in matrix_exp)
-        if d >= 8:
-            phi_matrix_block_f64 = phi_matrix_block.double()
-            exp_phi_block = torch.matrix_exp(phi_matrix_block_f64).to(dtype)
-            exp_neg_phi_block = torch.matrix_exp(-phi_matrix_block_f64).to(dtype)
-        else:
-            exp_phi_block = torch.matrix_exp(phi_matrix_block)
-            exp_neg_phi_block = torch.matrix_exp(-phi_matrix_block)
+        exp_phi_block, exp_neg_phi_block = stable_matrix_exp_pair(phi_matrix_block)
         # Re-orthogonalization for SO(K) if requested
         if enforce_orthogonal and d >= 16:
             eye_d = torch.eye(d, device=device, dtype=dtype)
@@ -351,14 +346,18 @@ def _compute_vfe_gradients_block_diagonal(
                 L_j = torch.linalg.cholesky(sigma_j_reg)
                 logdet_j = 2.0 * torch.sum(torch.log(torch.diagonal(L_j, dim1=-2, dim2=-1) + eps), dim=-1)
             except RuntimeError:
-                logdet_j = torch.zeros(B, C_actual, N, device=device, dtype=dtype)
+                # Fallback: use slogdet instead of zeroing (which biases KL)
+                sign_j, logdet_j = torch.linalg.slogdet(sigma_j_reg)
+                logdet_j = torch.where(sign_j > 0, logdet_j, torch.zeros_like(logdet_j))
 
             sigma_i_block_diag = sigma_i_block_slice + eps * I_d  # (B, C, d, d)
             try:
                 L_i = torch.linalg.cholesky(sigma_i_block_diag)
                 logdet_i = 2.0 * torch.sum(torch.log(torch.diagonal(L_i, dim1=-2, dim2=-1) + eps), dim=-1)
             except RuntimeError:
-                logdet_i = torch.zeros(B, C_actual, device=device, dtype=dtype)
+                # Fallback: use slogdet instead of zeroing (which biases KL)
+                sign_i, logdet_i = torch.linalg.slogdet(sigma_i_block_diag)
+                logdet_i = torch.where(sign_i > 0, logdet_i, torch.zeros_like(logdet_i))
 
             kl_block = 0.5 * (trace_block + mahal_block - d + logdet_j - logdet_i[:, :, None])
             # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
@@ -367,7 +366,7 @@ def _compute_vfe_gradients_block_diagonal(
 
             # Sigma alignment gradient for this block
             if compute_sigma_align_grad:
-                sigma_i_inv_block = torch.linalg.inv(sigma_i_block_diag)  # (B, C, d, d)
+                sigma_i_inv_block = torch.linalg.inv(sigma_i_block_diag + 1e-4 * I_d)  # (B, C, d, d)
                 # Use .clone() after expand to avoid view-related gradient issues
                 sigma_i_inv_exp = sigma_i_inv_block[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()
                 grad_sigma_block = 0.5 * (sigma_j_inv - sigma_i_inv_exp)
@@ -441,13 +440,7 @@ def _compute_vfe_gradients_chunked(
     # Precompute matrix exponentials for all positions
     # Float64 for GL(K) numerical stability (prevents NaN in matrix_exp)
     phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
-    if K >= 8:
-        phi_matrix_f64 = phi_matrix.double()
-        exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
-        exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
-    else:
-        exp_phi = torch.matrix_exp(phi_matrix)
-        exp_neg_phi = torch.matrix_exp(-phi_matrix)
+    exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
     del phi_matrix
 
     # Re-orthogonalization for SO(K) if requested
@@ -729,15 +722,8 @@ def compute_vfe_gradients_gpu(
             Omega = cached_transport['Omega']
         else:
             # Compute transport operators (vectorized)
-            # Float64 for GL(K) numerical stability (prevents NaN in matrix_exp)
             phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
-            if K >= 8:
-                phi_matrix_f64 = phi_matrix.double()
-                exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
-                exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
-            else:
-                exp_phi = torch.matrix_exp(phi_matrix)       # (B, N, K, K)
-                exp_neg_phi = torch.matrix_exp(-phi_matrix)  # (B, N, K, K)
+            exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
 
             # Re-orthogonalization for SO(K) if requested
             if enforce_orthogonal and K >= 16:
@@ -881,15 +867,8 @@ def compute_vfe_gradients_gpu(
         if cached_transport is not None and 'Omega' in cached_transport:
             Omega = cached_transport['Omega']
         else:
-            # Float64 for GL(K) numerical stability (prevents NaN in matrix_exp)
             phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
-            if K >= 8:
-                phi_matrix_f64 = phi_matrix.double()
-                exp_phi = torch.matrix_exp(phi_matrix_f64).to(dtype)
-                exp_neg_phi = torch.matrix_exp(-phi_matrix_f64).to(dtype)
-            else:
-                exp_phi = torch.matrix_exp(phi_matrix)
-                exp_neg_phi = torch.matrix_exp(-phi_matrix)
+            exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
 
             # Re-orthogonalization for SO(K) if requested
             if enforce_orthogonal and K >= 16:

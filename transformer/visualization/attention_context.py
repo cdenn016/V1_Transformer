@@ -92,7 +92,7 @@ def get_sequence(mode, tokenizer, args):
         # Decode each token individually to show subwords
         try:
             token_strs = [tokenizer.decode([t]) for t in token_ids[0].tolist()]
-        except:
+        except Exception:
             token_strs = [f"tok{i}" for i in token_ids[0].tolist()]
 
         print(f"\n[SEQUENCE] {description}")

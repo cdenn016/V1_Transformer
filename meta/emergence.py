@@ -1733,7 +1733,7 @@ class MultiScaleSystem:
                         kl_belief_max = kl_belief_mean
                         belief_ok = "✓" if kl_belief < kl_threshold else "✗"
                         kl_belief_str = f"{kl_belief_mean:.6f}"
-                except:
+                except (np.linalg.LinAlgError, ValueError):
                     kl_belief_mean = float('inf')
                     kl_belief_max = float('inf')
                     belief_ok = "✗"
@@ -1778,7 +1778,7 @@ class MultiScaleSystem:
                             kl_model_max = kl_model_mean
                             model_ok = "✓" if kl_model < kl_threshold else "✗"
                             kl_model_str = f"{kl_model_mean:.6f}"
-                    except:
+                    except (np.linalg.LinAlgError, ValueError):
                         kl_model_mean = float('inf')
                         kl_model_max = float('inf')
                         model_ok = "✗"

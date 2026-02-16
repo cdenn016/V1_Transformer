@@ -404,7 +404,7 @@ class HamiltonianTrainer:
 
                 try:
                     Sigma_inv = np.linalg.inv(Sigma + 1e-6 * np.eye(K))
-                except:
+                except np.linalg.LinAlgError:
                     Sigma_inv = np.eye(K)
 
                 # Fill diagonal block
@@ -851,7 +851,7 @@ class HamiltonianTrainer:
         G = self._compute_metric(self.theta)
         try:
             G_inv = np.linalg.inv(G + 1e-6 * np.eye(len(G)))
-        except:
+        except np.linalg.LinAlgError:
             G_inv = np.eye(len(G)) / self.mass_scale
 
         T = 0.5 * self.p @ G_inv @ self.p  # Kinetic

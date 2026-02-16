@@ -18,6 +18,7 @@ Author: Implementation from plan.py
 Date: November 2025
 """
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -188,7 +189,6 @@ class GaugeTransformerBlock(nn.Module):
                 gauge_dim_inferred = K
             else:
                 # Check if n_gen matches SO(N): n_gen = N*(N-1)/2
-                import math
                 disc = 1 + 8 * n_gen
                 sqrt_disc = int(math.sqrt(disc))
                 if sqrt_disc * sqrt_disc == disc:

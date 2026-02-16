@@ -161,7 +161,7 @@ class PhaseSpaceTracker:
                 try:
                     eigvals = np.linalg.eigvalsh(agent.Sigma_q)
                     snapshot.sigma_eigenvalues[aid] = np.sort(eigvals)[::-1]
-                except:
+                except np.linalg.LinAlgError:
                     snapshot.sigma_eigenvalues[aid] = np.array([1.0])
             
             # Gauge tracking

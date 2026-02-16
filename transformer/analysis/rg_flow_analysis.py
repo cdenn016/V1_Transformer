@@ -562,7 +562,7 @@ class RGFlowTracker:
                 r_squared = 1 - ss_res / (ss_tot + 1e-10)
 
                 return b, max(0, r_squared)
-            except:
+            except (np.linalg.LinAlgError, ValueError, RuntimeError):
                 return 0.0, 0.0
 
         mod_exp, mod_r2 = fit_power_law(mod, t)

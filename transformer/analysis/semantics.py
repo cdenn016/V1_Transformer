@@ -77,7 +77,7 @@ def categorize_token(tid: int) -> str:
         if s.strip() in {'the', 'a', 'an', 'is', 'are', 'was', 'of', 'to', 'in', 'for', 'and', 'or'}:
             return 'function'
         return 'content'
-    except:
+    except Exception:
         return 'other'
 
 
@@ -160,7 +160,7 @@ def analyze_token_classes(
                     digit_ids.append(tid)
                 elif not s.isalnum() and not s.isspace():
                     punct_ids.append(tid)
-        except:
+        except Exception:
             pass
 
     # Compute intra-class distances (letter-letter)
