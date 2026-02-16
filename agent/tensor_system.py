@@ -438,7 +438,7 @@ class TensorSystem(nn.Module):
                 status['violations'].append(
                     f"Sigma_q not SPD: min eigenvalue = {min_eig_q:.3e}"
                 )
-        except Exception as e:
+        except RuntimeError as e:
             status['valid'] = False
             status['violations'].append(f"Sigma_q error: {e}")
 
@@ -452,7 +452,7 @@ class TensorSystem(nn.Module):
                 status['violations'].append(
                     f"Sigma_p not SPD: min eigenvalue = {min_eig_p:.3e}"
                 )
-        except Exception as e:
+        except RuntimeError as e:
             status['valid'] = False
             status['violations'].append(f"Sigma_p error: {e}")
 

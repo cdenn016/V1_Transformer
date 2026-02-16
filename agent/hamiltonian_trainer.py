@@ -363,11 +363,10 @@ class HamiltonianTrainer:
                     # 1D grid
                     agent.Sigma_q[i] = Sigma_mat.astype(np.float32)
                 else:
-                    # 2D grid - need to map linear index to (x, y)
-                    shape = agent.Sigma_q.shape[:2]
-                    x = i // shape[1]
-                    y = i % shape[1]
-                    agent.Sigma_q[x, y] = Sigma_mat.astype(np.float32)
+                    # N-D grid - map linear index to spatial coordinates
+                    spatial_shape = agent.Sigma_q.shape[:-2]
+                    idx_tuple = np.unravel_index(i, spatial_shape)
+                    agent.Sigma_q[idx_tuple] = Sigma_mat.astype(np.float32)
 
             # Invalidate Cholesky cache (L computed on-demand)
             if hasattr(agent, '_L_q_cache'):
