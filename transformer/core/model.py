@@ -524,13 +524,17 @@ class GaugeTransformerLM(nn.Module):
         return self._compute_irrep_dims(irrep_spec)
 
     def _init_weights(self, module):
-        """Initialize weights following best practices."""
+        """Initialize weights following best practices.
+
+        Note: Skip nn.Embedding modules — their initialization is handled
+        by GaugeTokenEmbedding.__init__() with calibrated std values
+        (e.g., init_std=2.0 for mu_embed, scaled phi_embed).
+        Overwriting with std=0.02 would destroy the gauge-theoretic init.
+        """
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
         elif isinstance(module, nn.LayerNorm):
             torch.nn.init.ones_(module.weight)
             torch.nn.init.zeros_(module.bias)
@@ -865,6 +869,17 @@ class GaugeTransformerLM(nn.Module):
 
         # Embeddings
         mu_q, sigma_q, phi = self.token_embed(token_ids)
+
+        # Cross-head permutation (same as in forward())
+        if getattr(self, '_cross_head_perm', None) is not None:
+            perm = torch.from_numpy(self._cross_head_perm).to(device=device, dtype=torch.long)
+            mu_q = mu_q[:, :, perm]
+            if sigma_q is not None:
+                if sigma_q.dim() == 3:
+                    sigma_q = sigma_q[:, :, perm]
+                else:
+                    sigma_q = sigma_q[:, :, perm][:, :, :, perm]
+
         mu_prior = mu_q.clone()
 
         # Position encoding
@@ -909,8 +924,13 @@ class GaugeTransformerLM(nn.Module):
             cached_head_transports=cached_head_transports,
         )
 
-        # Complete attention sublayer
-        mu_q = mu_q + final_block.dropout1(mu_attn)
+        # Complete attention sublayer (respect use_residual flag)
+        mu_attn = final_block.dropout1(mu_attn)
+        if final_block.use_residual:
+            mu_q = mu_q + mu_attn
+        else:
+            mu_q = mu_attn
+
         if final_block.evolve_sigma and sigma_attn is not None:
             sigma_q = sigma_attn
 
@@ -937,16 +957,26 @@ class GaugeTransformerLM(nn.Module):
         if final_block.evolve_sigma and sigma_ffn is not None:
             sigma_q = sigma_ffn
 
-        mu_q = mu_q + mu_ffn
+        if final_block.use_residual:
+            mu_q = mu_q + mu_ffn
+        else:
+            mu_q = mu_ffn
 
         # Final norm
         mu_q = self.transformer.final_norm(mu_q)
 
+        # Inverse cross-head permutation
+        if getattr(self, '_cross_head_perm', None) is not None:
+            inv_perm = torch.from_numpy(
+                np.argsort(self._cross_head_perm)
+            ).to(device=device, dtype=torch.long)
+            mu_q = mu_q[:, :, inv_perm]
+
         # Project to vocabulary
         logits = self.out_proj(mu_q)
 
-        # Get n_iterations from FFN
-        n_iterations = getattr(final_block.ffn, 'n_iterations', 1)
+        # Get n_iterations from VFE FFN
+        n_iterations = getattr(final_block.ffn.variational_ffn, 'n_iterations', 1)
 
         rg_info = {
             'beta_history': beta_history,  # List of (B, N, N) at each VFE step

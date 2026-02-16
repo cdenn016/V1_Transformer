@@ -222,7 +222,7 @@ def main(checkpoint_path: str = None):
                 'evolve_phi': False,
                 'tie_embeddings': True,
                 'use_diagonal_covariance': True,
-                'ffn_mode': 'variational_gradient_engine',
+                'ffn_mode': 'VFE_dynamic',
             }
 
     # Add missing keys with sensible defaults if needed

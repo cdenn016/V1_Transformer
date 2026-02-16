@@ -108,8 +108,11 @@ def load_model(checkpoint_path: str) -> Tuple[GaugeTransformerLM, Dict[str, Any]
         'evolve_phi': False,
         'tie_embeddings': True,
         'use_diagonal_covariance': True,
-        'ffn_mode': 'variational_gradient_engine',
+        'ffn_mode': 'VFE_dynamic',
     }
+
+    # Load checkpoint once (reused for config extraction and weight loading)
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 
     # Try loading from experiment_config.json first (more reliable)
     if config_json_path.exists():
@@ -127,7 +130,6 @@ def load_model(checkpoint_path: str) -> Tuple[GaugeTransformerLM, Dict[str, Any]
     else:
         # Try to extract config from checkpoint pickle
         print(f"Warning: {config_json_path} not found, trying to extract from checkpoint...")
-        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 
         if 'config' in checkpoint:
             ckpt_config = checkpoint['config']
@@ -152,7 +154,6 @@ def load_model(checkpoint_path: str) -> Tuple[GaugeTransformerLM, Dict[str, Any]
     model = GaugeTransformerLM(config)
 
     # Load checkpoint weights
-    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     if 'model_state_dict' in checkpoint:
         model.load_state_dict(checkpoint['model_state_dict'])
     else:

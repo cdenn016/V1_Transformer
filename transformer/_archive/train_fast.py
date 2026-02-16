@@ -245,8 +245,8 @@ class FastTrainer:
             if 'mu_embed' in name:
                 mu_params.append(param)
 
-            # Covariance embeddings
-            elif 'sigma_embed' in name:
+            # Covariance embeddings (sigma_embed, log_sigma_diag, base_log_sigma_diag)
+            elif 'sigma_embed' in name or 'log_sigma' in name:
                 sigma_params.append(param)
 
             # Gauge frame embeddings
