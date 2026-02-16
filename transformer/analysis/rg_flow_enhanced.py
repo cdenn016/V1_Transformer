@@ -348,7 +348,7 @@ def analyze_kl_matrix(
         S_normalized = S_normalized[S_normalized > 1e-10]
         entropy = -torch.sum(S_normalized * torch.log(S_normalized + 1e-10))
         effective_rank = torch.exp(entropy).item()
-    except:
+    except (RuntimeError, ValueError):
         effective_rank = kl_avg.shape[0]
 
     # Entropy of KL values (how spread out are the KL values)

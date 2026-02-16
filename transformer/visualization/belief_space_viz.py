@@ -18,7 +18,7 @@ import sys
 # Add project to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from transformer.checkpoint_utils import load_model, get_tokenizer
+from transformer.utils.checkpoint import load_model, get_tokenizer
 
 
 # Define test tokens organized by semantic category
@@ -92,7 +92,7 @@ def get_token_embeddings(model, tokens: list, tokenizer):
                     phi_list.append(phi[0, 0].cpu().numpy())  # (3,)
                     valid_tokens.append(token)
                     break
-            except:
+            except Exception:
                 continue
 
     if len(mu_list) == 0:

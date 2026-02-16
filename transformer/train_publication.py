@@ -926,7 +926,7 @@ class PublicationTrainer(FastTrainer):
                     # Get irrep labels for each head
                     try:
                         head_labels = self._get_head_irrep_labels()
-                    except:
+                    except (AttributeError, KeyError):
                         # Fallback if irrep_spec not available
                         head_labels = [f"H{i}" for i in range(n_heads)]
 
@@ -938,7 +938,7 @@ class PublicationTrainer(FastTrainer):
                         try:
                             decoded = self.tokenizer.decode(input_ids[0].tolist(), skip_special_tokens=True)
                             seq_info += f"\nText: {decoded[:100]}..."
-                        except:
+                        except Exception:
                             pass
 
                     # Save directory

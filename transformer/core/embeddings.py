@@ -766,8 +766,8 @@ class GaugePositionalEncoding(nn.Module):
             phi_skew = skew_symmetric_batch(phi)  # (B, N, 3, 3)
             pos_phi_skew = skew_symmetric_batch(pos_phi)  # (B, N, 3, 3)
 
-            R_phi = torch.matrix_exp(phi_skew)  # (B, N, 3, 3)
-            R_pos = torch.matrix_exp(pos_phi_skew)  # (B, N, 3, 3)
+            R_phi = torch.linalg.matrix_exp(phi_skew)  # (B, N, 3, 3)
+            R_pos = torch.linalg.matrix_exp(pos_phi_skew)  # (B, N, 3, 3)
 
             R_combined = R_phi @ R_pos  # (B, N, 3, 3)
 

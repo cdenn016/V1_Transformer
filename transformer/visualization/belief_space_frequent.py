@@ -27,7 +27,7 @@ from collections import Counter
 # Add project to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from transformer.checkpoint_utils import load_model
+from transformer.utils.checkpoint import load_model
 
 
 def get_frequent_tokens(n_tokens=100, dataset='wikitext-2'):
@@ -64,7 +64,7 @@ def get_frequent_tokens(n_tokens=100, dataset='wikitext-2'):
             try:
                 decoded_str = data.decode([tok_id])
                 decoded.append(decoded_str)
-            except:
+            except Exception:
                 decoded.append(f"<ID:{tok_id}>")
 
         print(f"✓ Found {len(token_ids)} frequent tokens")

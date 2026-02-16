@@ -235,26 +235,21 @@ class AgentConfig:
 
        
 
-        if (
-            self.use_identity_observation
-            and self.D is not None
-            and self.D != self.K
-        ):
-            raise ValueError(
-                f"use_identity_observation=True requires D == K, "
-                f"got D={self.D}, K={self.K}"
-            )
+        # Note: when use_identity_observation=True, the observation matrix
+        # is identity, so observation dim must equal K. Since AgentConfig
+        # does not carry a separate observation dim (D), we skip this check
+        # here — it is enforced at agent construction time where D is known.
 
        
         # Validate learning rates
         if self.lr_mu_q < 0:
-            raise ValueError(f"lr_mu must be positive, got {self.lr_mu}")
+            raise ValueError(f"lr_mu_q must be non-negative, got {self.lr_mu_q}")
         if self.lr_sigma_q < 0:
-            raise ValueError(f"lr_sigma must be positive, got {self.lr_sigma}")
+            raise ValueError(f"lr_sigma_q must be non-negative, got {self.lr_sigma_q}")
         if self.lr_mu_p < 0:
-            raise ValueError(f"lr_mu must be positive, got {self.lr_mu}")
+            raise ValueError(f"lr_mu_p must be non-negative, got {self.lr_mu_p}")
         if self.lr_sigma_p < 0:
-            raise ValueError(f"lr_sigma must be positive, got {self.lr_sigma}")
+            raise ValueError(f"lr_sigma_p must be non-negative, got {self.lr_sigma_p}")
         if self.lr_phi < 0:
             raise ValueError(f"lr_phi must be positive, got {self.lr_phi}")
 

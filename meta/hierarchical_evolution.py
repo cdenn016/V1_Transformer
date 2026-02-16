@@ -406,7 +406,7 @@ class HierarchicalEvolutionEngine:
                     # Use einsum for spatial broadcasting
                     contrib = np.einsum('...i,...ij,...j->...', grad.delta_mu_q, Sigma_inv, grad.delta_mu_q)
                     info_sq += np.sum(contrib)
-                except:
+                except np.linalg.LinAlgError:
                     info_sq += np.sum(grad.delta_mu_q ** 2)
 
             if grad.delta_Sigma_q is not None:
@@ -420,7 +420,7 @@ class HierarchicalEvolutionEngine:
                     else:
                         # Point manifold
                         info_sq += np.trace(M @ M) / 2
-                except:
+                except np.linalg.LinAlgError:
                     info_sq += np.sum(grad.delta_Sigma_q ** 2) / (2 * agent.K)
 
             info_change = np.sqrt(np.maximum(info_sq, 0.0)) / np.log(2)  # bits

@@ -23,6 +23,7 @@ warnings.filterwarnings("ignore", message="Failed to find cuobjdump", module="tr
 warnings.filterwarnings("ignore", message="Failed to find nvdisasm", module="triton")
 warnings.filterwarnings("ignore", message="CUDA path could not be detected", module="cupy")
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -423,7 +424,7 @@ class GaugeTransformerLM(nn.Module):
             evolve_phi_e_step=evolve_phi_e_step,  # Update φ during E-step iterations
             # Phi evolution parameters (VFE gradient-based)
             phi_lr=config.get('phi_lr', 0.05),  # Learning rate for ∂F/∂φ descent
-            phi_max_norm=config.get('phi_max_norm', 3.14159),  # Default: π radians
+            phi_max_norm=config.get('phi_max_norm', math.pi),  # Default: π radians
             # VFE FFN parameters
             generators=self.generators,
             ffn_mode=ffn_mode,
