@@ -365,9 +365,10 @@ class FreeEnergy(nn.Module):
         # Mask diagonal (i != j)
         mask = ~torch.eye(N, dtype=torch.bool, device=device)
         KL_masked = KL_matrix.clone()
-        KL_masked[~mask] = float('inf')  # Exclude self
+        logits = -kappa * KL_masked
+        logits[~mask] = float('-inf')  # Exclude self (masked_fill for softmax)
 
-        beta = F.softmax(-kappa * KL_masked, dim=-1)  # (N, N)
+        beta = F.softmax(logits, dim=-1)  # (N, N)
         beta = beta * mask.float()  # Zero out diagonal
 
         # Weighted sum: sum_ij beta_ij * KL_ij

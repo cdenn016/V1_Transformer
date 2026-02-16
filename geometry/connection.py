@@ -236,7 +236,7 @@ def initialize_constant_connection(
     A_const = np.asarray(A_const, dtype=np.float32)
     N = A_const.shape[0]
     
-    A = np.broadcast_to(A_const, (*support_shape, 3)).copy()
+    A = np.broadcast_to(A_const, (*support_shape, N)).copy()
     generators = generate_so3_generators(K)
     
     return ConnectionField(

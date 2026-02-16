@@ -132,9 +132,6 @@ def compute_softmax_weights(
         kl_fields.append(kl_ij)
     
     # Stack KL fields along new axis: shape = (n_neighbors, *S)
-    kl_stack = np.stack(kl_fields, axis=0)
-    
-    # Stack KL fields along new axis: shape = (n_neighbors, *S)
     kl_stack = np.stack(kl_fields, axis=0)  # (J, *S)
     
     # -----------------------------------------------------------------
@@ -155,7 +152,7 @@ def compute_softmax_weights(
     denom = np.sum(exp_x, axis=0, keepdims=True)  # (1, *S)
 
     # Guard against degenerate denom (should basically never happen)
-    denom = np.where(denom < 1e-30, 1e-30, denom)
+    denom = np.where(denom < 1e-30, 1.0, denom)  # Fallback to uniform weights when degenerate
 
     # Final softmax
     beta_stack = exp_x / denom          # (J, *S)

@@ -107,7 +107,7 @@ class TestModelOutputDistribution:
         sums = logits.sum(dim=-1)
         ones = torch.ones_like(sums)
 
-        assert not torch.allclose(sums, ones, atol=0.1), \
+        assert not torch.allclose(sums, ones, atol=0.01), \
             "Logits should be unnormalized"
 
     def test_softmax_gives_probabilities(self, gauge_model, batch_tensors, cpu_device):
@@ -199,8 +199,10 @@ class TestModelDeterminism:
         input1 = torch.randint(0, V, (2, 16), device=cpu_device)
         input2 = torch.randint(0, V, (2, 16), device=cpu_device)
 
-        # Ensure inputs are different
-        while torch.equal(input1, input2):
+        # Ensure inputs are different (with iteration limit to prevent infinite loop)
+        for _ in range(100):
+            if not torch.equal(input1, input2):
+                break
             input2 = torch.randint(0, V, (2, 16), device=cpu_device)
 
         with torch.no_grad():

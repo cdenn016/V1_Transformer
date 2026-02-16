@@ -1079,7 +1079,7 @@ class Agent:
     
     def set_observations(self, x_obs: np.ndarray):
         """Set observations for this agent."""
-        expected_shape = (*self.geometry.spatial_shape, self.D)
+        expected_shape = (*self.geometry.spatial_shape, self.K)
         if x_obs.shape != expected_shape:
             raise ValueError(
                 f"Observation shape {x_obs.shape} doesn't match "
@@ -1107,7 +1107,7 @@ class Agent:
             f"  Base manifold: {self.base_manifold.ndim}D, shape={self.base_manifold.shape}\n"
             f"  Support: {self.support.n_active}/{self.base_manifold.n_points} points "
             f"({self.support.coverage:.1%} coverage)\n"
-            f"  Latent dim: K={self.K}, Obs dim: D={self.D}\n"
+            f"  Latent dim: K={self.K}\n"
             f"  Fields: μ_q{self.mu_q.shape}, Σ_q{self.Sigma_q.shape}, φ{self.gauge.phi.shape}\n"
             f"  Has observations: {self.x_obs is not None}"
         )

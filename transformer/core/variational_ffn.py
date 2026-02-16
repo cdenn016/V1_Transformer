@@ -528,7 +528,7 @@ def _compute_vfe_gradients_chunked(
             # Compute KL values for this chunk
             mahal = torch.einsum('bijk,bijk->bij', delta_mu_ij, grad_kl)
 
-            sigma_i_diag_exp = torch.diag_embed(sigma_i)[:, :, None, :, :].expand(-1, -1, n_j, -1, -1)
+            sigma_i_diag_exp = torch.diag_embed(sigma_i)[:, :, None, :, :].expand(-1, -1, n_j, -1, -1).clone()
             trace_term = torch.einsum('bijkk->bij', torch.einsum('bijkl,bijlm->bijkm', sigma_j_inv, sigma_i_diag_exp))
 
             try:
@@ -537,7 +537,7 @@ def _compute_vfe_gradients_chunked(
             except RuntimeError:
                 logdet_p = torch.zeros(B, n_i, n_j, device=device, dtype=dtype)
 
-            logdet_q = torch.sum(torch.log(sigma_i), dim=-1)[:, :, None].expand(-1, -1, n_j)
+            logdet_q = torch.sum(torch.log(sigma_i), dim=-1)[:, :, None].expand(-1, -1, n_j).clone()
 
             kl_ceil = max(100.0, 5.0 * K)
             kl_chunk = 0.5 * (trace_term + mahal - K + logdet_p - logdet_q).clamp(min=0.0, max=kl_ceil)
@@ -549,7 +549,7 @@ def _compute_vfe_gradients_chunked(
             if compute_sigma_align_grad:
                 sigma_j_inv_diag = torch.diagonal(sigma_j_inv, dim1=-2, dim2=-1)
                 sigma_i_inv = 1.0 / sigma_i
-                sigma_i_inv_exp = sigma_i_inv[:, :, None, :].expand(-1, -1, n_j, -1)
+                sigma_i_inv_exp = sigma_i_inv[:, :, None, :].expand(-1, -1, n_j, -1).clone()
                 grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv_exp)
                 sigma_contrib = lambda_belief * torch.einsum('bij,bijk->bik', beta_chunk, grad_sigma_pair)
                 grad_sigma_align[:, i_start:i_end] = grad_sigma_align[:, i_start:i_end] + sigma_contrib

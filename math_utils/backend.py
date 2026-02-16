@@ -602,8 +602,8 @@ def batch_kl_divergence_gpu(
     L_p_batch = xp.linalg.cholesky(Sigma_p_batch_reg)
 
     # Log determinants: log|Sigma| = 2 * sum(log(diag(L)))
-    logdet_q = 2.0 * xp.sum(xp.log(xp.diagonal(L_q)))
-    logdet_p_batch = 2.0 * xp.sum(xp.log(xp.diagonal(L_p_batch, axis1=-2, axis2=-1)), axis=-1)
+    logdet_q = 2.0 * xp.sum(xp.log(xp.maximum(xp.diagonal(L_q), eps)))
+    logdet_p_batch = 2.0 * xp.sum(xp.log(xp.maximum(xp.diagonal(L_p_batch, axis1=-2, axis2=-1), eps)), axis=-1)
 
     # Trace term: tr(Sigma_p^-1 @ Sigma_q) for each p
     # Using solve instead of explicit inverse

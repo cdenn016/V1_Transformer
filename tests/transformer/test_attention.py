@@ -150,7 +150,7 @@ class TestComputeKLMatrix:
 
         kl_matrix = compute_kl_matrix(mu, sigma)
 
-        assert (kl_matrix >= -1e-5).all(), "KL divergence should be non-negative"
+        assert (kl_matrix >= -1e-6).all(), "KL divergence should be non-negative"
 
 
 class TestCreateAttentionMask:

@@ -117,7 +117,9 @@ def sample_so3_haar(
     q = rng.standard_normal((n_samples, 4))
 
     # Normalize to unit sphere (uniform on S³)
-    q = q / np.linalg.norm(q, axis=1, keepdims=True)
+    norms = np.linalg.norm(q, axis=1, keepdims=True)
+    norms = np.maximum(norms, 1e-10)  # Guard against zero-norm vectors
+    q = q / norms
 
     # Convert quaternions to rotation matrices
     rotations = np.zeros((n_samples, 3, 3))
