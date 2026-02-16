@@ -630,7 +630,7 @@ def compute_consensus_metric(
                 G_induced, agent,
                 n_samples=n_samples_gauge,
                 rng=rng,
-                use_full_transform=True  # Use simplified version
+                use_full_transform=True  # Use full Omega transform
             )
             individual_metrics.append(G_avg)
         else:
@@ -743,7 +743,7 @@ def compute_consensus_metric_weighted_spatial(
                 G_induced, agent,
                 n_samples=n_samples_gauge,
                 rng=rng,
-                use_full_transform=True  # Use simplified version
+                use_full_transform=True  # Use full Omega transform
             )
         else:
             G_avg = GaugeAveragedMetric(
