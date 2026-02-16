@@ -349,14 +349,14 @@ class PriorBank(nn.Module):
                 token_id_int = int(token_id.item())
                 self.prior_mu.data[token_id_int] = (
                     (1.0 - effective_lr) * self.prior_mu.data[token_id_int] +
-                    effective_lr * weighted_mu
+                    effective_lr * weighted_mu.detach()
                 )
 
                 # Update sigma with smaller learning rate
                 if self.learnable_sigma:
                     sigma_lr = effective_lr * 0.1
                     current_sigma = torch.exp(self.log_prior_sigma.data[token_id_int])
-                    new_sigma = (1.0 - sigma_lr) * current_sigma + sigma_lr * weighted_sigma
+                    new_sigma = (1.0 - sigma_lr) * current_sigma + sigma_lr * weighted_sigma.detach()
                     self.log_prior_sigma.data[token_id_int] = torch.log(new_sigma.clamp(min=self.eps))
 
     def forward(
