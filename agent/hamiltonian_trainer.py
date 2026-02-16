@@ -52,6 +52,15 @@ from geometry.multi_agent_mass_matrix import (
 )
 
 
+def _safe_inv(matrix: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    """Invert matrix with regularization, falling back to pseudoinverse."""
+    K = matrix.shape[-1]
+    try:
+        return np.linalg.inv(matrix + eps * np.eye(K))
+    except np.linalg.LinAlgError:
+        return np.linalg.pinv(matrix)
+
+
 @dataclass
 class HamiltonianHistory:
     """
@@ -530,13 +539,13 @@ class HamiltonianTrainer:
             # Add outgoing coupling: β_ik Ω_ik Σ_q_k^{-1} Ω_ik^T
             if agent.mu_q.ndim == 1:
                 # 0D: scalar β, single matrix
-                Sigma_q_k_inv = np.linalg.inv(agent_k.Sigma_q + 1e-8 * np.eye(K))
+                Sigma_q_k_inv = _safe_inv(agent_k.Sigma_q)
                 M += float(beta_ik) * (Omega_ik @ Sigma_q_k_inv @ Omega_ik.T)
 
             elif agent.mu_q.ndim == 2:
                 # 1D field: β_ik(c), Ω_ik(c), Σ_q_k(c) all spatial
                 for i in range(agent.mu_q.shape[0]):
-                    Sigma_q_k_inv = np.linalg.inv(agent_k.Sigma_q[i] + 1e-8 * np.eye(K))
+                    Sigma_q_k_inv = _safe_inv(agent_k.Sigma_q[i])
                     Omega_c = Omega_ik[i] if Omega_ik.ndim == 3 else Omega_ik
                     M[i] += beta_ik[i] * (Omega_c @ Sigma_q_k_inv @ Omega_c.T)
 
@@ -544,7 +553,7 @@ class HamiltonianTrainer:
                 # 2D field
                 for i in range(agent.mu_q.shape[0]):
                     for j in range(agent.mu_q.shape[1]):
-                        Sigma_q_k_inv = np.linalg.inv(agent_k.Sigma_q[i, j] + 1e-8 * np.eye(K))
+                        Sigma_q_k_inv = _safe_inv(agent_k.Sigma_q[i, j])
                         Omega_c = Omega_ik[i, j] if Omega_ik.ndim == 4 else Omega_ik
                         M[i, j] += beta_ik[i, j] * (Omega_c @ Sigma_q_k_inv @ Omega_c.T)
 
@@ -587,20 +596,20 @@ class HamiltonianTrainer:
         if total_incoming_beta > 1e-10:  # Only add if non-negligible
             if agent.Sigma_p.ndim == 2:
                 # 0D: single Gaussian
-                Sigma_q_i_inv = np.linalg.inv(agent.Sigma_q + 1e-8 * np.eye(K))
+                Sigma_q_i_inv = _safe_inv(agent.Sigma_q)
                 M += total_incoming_beta * Sigma_q_i_inv
 
             elif agent.Sigma_p.ndim == 3:
                 # 1D field
                 for i in range(agent.Sigma_p.shape[0]):
-                    Sigma_q_i_inv = np.linalg.inv(agent.Sigma_q[i] + 1e-8 * np.eye(K))
+                    Sigma_q_i_inv = _safe_inv(agent.Sigma_q[i])
                     M[i] += total_incoming_beta * Sigma_q_i_inv
 
             else:
                 # 2D field
                 for i in range(agent.Sigma_p.shape[0]):
                     for j in range(agent.Sigma_p.shape[1]):
-                        Sigma_q_i_inv = np.linalg.inv(agent.Sigma_q[i, j] + 1e-8 * np.eye(K))
+                        Sigma_q_i_inv = _safe_inv(agent.Sigma_q[i, j])
                         M[i, j] += total_incoming_beta * Sigma_q_i_inv
 
         return M.astype(np.float32)

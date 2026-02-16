@@ -133,10 +133,10 @@ def _kl_gaussian_numpy_impl(
     # ========== Cholesky decomposition (stable) ==========
     try:
         L_p = np.linalg.cholesky(Sigma_p)
-        logdet_p = 2.0 * np.sum(np.log(np.diagonal(L_p, axis1=-2, axis2=-1)), axis=-1)
-        
+        logdet_p = 2.0 * np.sum(np.log(np.maximum(np.diagonal(L_p, axis1=-2, axis2=-1), eps)), axis=-1)
+
         L_q = np.linalg.cholesky(Sigma_q)
-        logdet_q = 2.0 * np.sum(np.log(np.diagonal(L_q, axis1=-2, axis2=-1)), axis=-1)
+        logdet_q = 2.0 * np.sum(np.log(np.maximum(np.diagonal(L_q, axis1=-2, axis2=-1), eps)), axis=-1)
     except np.linalg.LinAlgError as e:
         raise FloatingPointError(f"Cholesky decomposition failed: {e}") from e
     
@@ -158,7 +158,6 @@ def _kl_gaussian_numpy_impl(
     kl = 0.5 * (term_trace + term_quad - K + term_logdet)
     
     # ========== Numerical cleanup ==========
-    kl = np.where(kl < 0, np.maximum(kl, -1e-12), kl)
     kl = np.clip(kl, 0.0, None)
     
     # Check for NaN/Inf

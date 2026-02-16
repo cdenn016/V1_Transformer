@@ -362,12 +362,12 @@ def _orthogonalize_so3(R: np.ndarray) -> np.ndarray:
         R_ortho: Orthogonalized matrix in SO(3)
     """
     U, _, Vt = np.linalg.svd(R)
-    R_ortho = U @ Vt
-    
-    # Ensure det = +1 (not -1)
-    if np.linalg.det(R_ortho) < 0:
-        U[:, -1] *= -1
-        R_ortho = U @ Vt
+
+    # Ensure det = +1 (not -1) using correction matrix
+    # This avoids modifying U after SVD which could break orthogonality
+    D = np.eye(U.shape[1])
+    D[-1, -1] = np.linalg.det(U @ Vt)
+    R_ortho = U @ D @ Vt
     
     return R_ortho
 

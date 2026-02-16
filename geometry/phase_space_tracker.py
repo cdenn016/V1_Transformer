@@ -162,7 +162,8 @@ class PhaseSpaceTracker:
                     eigvals = np.linalg.eigvalsh(agent.Sigma_q)
                     snapshot.sigma_eigenvalues[aid] = np.sort(eigvals)[::-1]
                 except np.linalg.LinAlgError:
-                    snapshot.sigma_eigenvalues[aid] = np.array([1.0])
+                    K = agent.Sigma_q.shape[-1] if hasattr(agent.Sigma_q, 'shape') else 1
+                    snapshot.sigma_eigenvalues[aid] = np.ones(K)  # Match expected dimension
             
             # Gauge tracking
             if self.track_gauge and hasattr(agent, 'phi'):

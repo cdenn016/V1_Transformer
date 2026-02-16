@@ -50,8 +50,8 @@ def kl_gaussian_numba(
     L_p = np.linalg.cholesky(Sigma_p_reg)
     
     # Log determinants: log|Σ| = 2*sum(log(diag(L)))
-    logdet_q = 2.0 * np.sum(np.log(np.diag(L_q)))
-    logdet_p = 2.0 * np.sum(np.log(np.diag(L_p)))
+    logdet_q = 2.0 * np.sum(np.log(np.maximum(np.diag(L_q), eps)))
+    logdet_p = 2.0 * np.sum(np.log(np.maximum(np.diag(L_p), eps)))
     
     # Trace term: tr(Σ_p^-1 Σ_q)
     # Solve L_p Y = Σ_q for Y, then solve L_p^T Z = Y for Z, then tr(Z)
@@ -425,7 +425,9 @@ def compute_kl_transported_numba(
     K = mu_i.shape[0]
     eps = 1e-8
     
-    # Add regularization
+    # Add regularization (copy to avoid mutating caller's arrays)
+    Sigma_i = Sigma_i.copy()
+    Sigma_j_transported = Sigma_j_transported.copy()
     for k in range(K):
         Sigma_i[k, k] += eps
         Sigma_j_transported[k, k] += eps
@@ -435,9 +437,9 @@ def compute_kl_transported_numba(
     L_q = np.linalg.cholesky(Sigma_i)
     
     # Log determinants
-    logdet_p = 2.0 * np.sum(np.log(np.diag(L_p)))
-    logdet_q = 2.0 * np.sum(np.log(np.diag(L_q)))
-    
+    logdet_p = 2.0 * np.sum(np.log(np.maximum(np.diag(L_p), eps)))
+    logdet_q = 2.0 * np.sum(np.log(np.maximum(np.diag(L_q), eps)))
+
     # Trace term
     Y = np.linalg.solve(L_p, Sigma_i)
     Z = np.linalg.solve(L_p.T, Y)

@@ -261,7 +261,7 @@ class GeometryTracker:
                     weight_function=None  # Uniform weights
                 )
             except Exception as e:
-                c=3 #print(f"  ⚠️  Warning: Failed to compute consensus metrics: {e}")
+                pass  # Consensus metrics computation failed; not critical
 
         # Compute summary statistics
         if agent_metrics_belief:

@@ -49,8 +49,6 @@ from math_utils.numerical_utils import sanitize_sigma, safe_inv
 # Main Retraction Function
 # =============================================================================
 
-import numpy as np
-
 def retract_spd(
     Sigma: np.ndarray,
     delta_Sigma: np.ndarray,

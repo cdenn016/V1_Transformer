@@ -432,6 +432,7 @@ def compute_attention_weights(
     # Apply causal mask if provided (BEFORE self-attention masking)
     if mask is not None:
         # mask[b, i, j] = 0 means agent i CANNOT attend to agent j
+        # masked_fill is not in-place (returns new tensor), safe for autograd
         logits = logits.masked_fill(mask == 0, float('-inf'))
 
     # ==========================================================================

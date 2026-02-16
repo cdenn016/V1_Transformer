@@ -213,24 +213,26 @@ def compute_geodesic_force_vectorized(
             global_idx = mu_start + local_idx
             spatial_idx = local_idx // K
 
-            # Forward perturbation
-            theta[global_idx] += eps
-            trainer._unpack_parameters(theta)
+            # Forward perturbation (use copy to avoid mutating the input)
+            theta_plus = theta.copy()
+            theta_plus[global_idx] += eps
+            trainer._unpack_parameters(theta_plus)
             M_inv_plus = _compute_M_inverse_for_agent(
                 trainer, trainer.system.agents[agent_idx], agent_idx,
                 recompute_beta=True
             )
 
             # Backward perturbation
-            theta[global_idx] -= 2 * eps
-            trainer._unpack_parameters(theta)
+            theta_minus = theta.copy()
+            theta_minus[global_idx] -= eps
+            trainer._unpack_parameters(theta_minus)
             M_inv_minus = _compute_M_inverse_for_agent(
                 trainer, trainer.system.agents[agent_idx], agent_idx,
                 recompute_beta=True
             )
 
-            # Restore
-            theta[global_idx] += eps
+            # Restore original state
+            trainer._unpack_parameters(theta)
 
             # Central difference
             dM_inv = (M_inv_plus - M_inv_minus) / (2 * eps)

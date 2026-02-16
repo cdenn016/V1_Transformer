@@ -74,8 +74,8 @@ if CUPY_AVAILABLE:
         L_p = cp.linalg.cholesky(Sigma_p_reg)
 
         # Log determinants
-        logdet_q = 2.0 * cp.sum(cp.log(cp.diag(L_q)))
-        logdet_p = 2.0 * cp.sum(cp.log(cp.diag(L_p)))
+        logdet_q = 2.0 * cp.sum(cp.log(cp.maximum(cp.diag(L_q), eps)))
+        logdet_p = 2.0 * cp.sum(cp.log(cp.maximum(cp.diag(L_p), eps)))
 
         # Trace term: tr(Sigma_p^-1 @ Sigma_q)
         Y = cp.linalg.solve(L_p, Sigma_q_reg)
@@ -140,7 +140,7 @@ if CUPY_AVAILABLE:
             mu_p = mu_p_batch[i]
 
             L_p = cp.linalg.cholesky(Sigma_p)
-            logdet_p = 2.0 * cp.sum(cp.log(cp.diag(L_p)))
+            logdet_p = 2.0 * cp.sum(cp.log(cp.maximum(cp.diag(L_p), eps)))
 
             # Trace term
             Y = cp.linalg.solve(L_p, Sigma_q_reg)

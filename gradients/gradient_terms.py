@@ -149,7 +149,7 @@ def grad_self_wrt_q(
     
     # Ensure symmetric + regularized if needed
     if not assume_sanitized:
-        Sigma_q =sanitize_sigma(Sigma_q, eps)
+        Sigma_q = sanitize_sigma(Sigma_q, eps)
         Sigma_p = sanitize_sigma(Sigma_p, eps)
     
     # Compute Σ_p^{-1} if not provided

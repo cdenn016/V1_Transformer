@@ -117,7 +117,9 @@ def sample_so3_haar(
     q = rng.standard_normal((n_samples, 4))
 
     # Normalize to unit sphere (uniform on S³)
-    q = q / np.linalg.norm(q, axis=1, keepdims=True)
+    norms = np.linalg.norm(q, axis=1, keepdims=True)
+    norms = np.maximum(norms, 1e-10)  # Guard against zero-norm vectors
+    q = q / norms
 
     # Convert quaternions to rotation matrices
     rotations = np.zeros((n_samples, 3, 3))
@@ -628,7 +630,7 @@ def compute_consensus_metric(
                 G_induced, agent,
                 n_samples=n_samples_gauge,
                 rng=rng,
-                use_full_transform=True  # Use simplified version
+                use_full_transform=True  # Use full Omega transform
             )
             individual_metrics.append(G_avg)
         else:
@@ -741,7 +743,7 @@ def compute_consensus_metric_weighted_spatial(
                 G_induced, agent,
                 n_samples=n_samples_gauge,
                 rng=rng,
-                use_full_transform=True  # Use simplified version
+                use_full_transform=True  # Use full Omega transform
             )
         else:
             G_avg = GaugeAveragedMetric(

@@ -57,7 +57,7 @@ class SystemConfig:
     cache_transports: bool     = True
     cache_size: int            = 10000
 
-    mask_config: MaskConfig = field(default_factory=lambda: MaskConfig(...))
+    mask_config: MaskConfig = field(default_factory=MaskConfig)
     
     use_connection: bool = False
     connection_init_mode: Literal['flat', 'random', 'constant'] = 'flat'
