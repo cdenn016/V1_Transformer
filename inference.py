@@ -176,7 +176,7 @@ class GaugeTransformerInference:
         for prob, tok_id in zip(top_probs.tolist(), top_ids.tolist()):
             try:
                 token_str = self.decode(torch.tensor([tok_id]))
-            except Exception:
+            except (KeyError, IndexError, RuntimeError):
                 token_str = f"[{tok_id}]"
             results.append((token_str, prob))
 
@@ -214,7 +214,7 @@ class GaugeTransformerInference:
                 # Truncate long tokens for display
                 if len(tok_str) > 10:
                     tok_str = tok_str[:8] + ".."
-            except Exception:
+            except (KeyError, IndexError, RuntimeError):
                 tok_str = f"[{token_ids[0, i].item()}]"
             tokens.append(tok_str)
 
@@ -248,7 +248,7 @@ class GaugeTransformerInference:
         for i in range(token_ids.shape[1]):
             try:
                 tok_str = self.decode(token_ids[0, i:i+1])
-            except Exception:
+            except (KeyError, IndexError, RuntimeError):
                 tok_str = f"[{token_ids[0, i].item()}]"
             tokens.append(tok_str)
 

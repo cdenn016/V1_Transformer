@@ -52,10 +52,6 @@ try:
 except ImportError:
     DATASETS_AVAILABLE = False
     load_dataset = None  # Will use fallback
-except Exception as e:
-    print(f"Warning: datasets import failed with: {e}")
-    DATASETS_AVAILABLE = False
-    load_dataset = None
 
 # Tiktoken (OpenAI's fast BPE tokenizer - preferred, no heavy dependencies)
 try:
@@ -70,9 +66,6 @@ try:
     from transformers import AutoTokenizer
     TRANSFORMERS_AVAILABLE = True
 except ImportError:
-    TRANSFORMERS_AVAILABLE = False
-    AutoTokenizer = None
-except Exception:
     TRANSFORMERS_AVAILABLE = False
     AutoTokenizer = None
 

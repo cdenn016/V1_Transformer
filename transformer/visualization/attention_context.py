@@ -159,7 +159,7 @@ def get_sequence(mode, tokenizer, args):
 
             try:
                 token_strs = [tokenizer.decode([t]) for t in token_ids[0].tolist()]
-            except:
+            except (KeyError, IndexError, RuntimeError):
                 token_strs = [f"tok{i}" for i in token_ids[0].tolist()]
 
         N = token_ids.shape[1]
