@@ -753,19 +753,15 @@ class MultiAgentSystem:
     
     def step(self) -> Dict[str, float]:
         """Perform one optimization step for all agents."""
-        gradients = self.compute_gradients()
-        
-        trains_phi = getattr(self.config, "trains_phi", True)
-        for agent, grad in zip(self.agents, gradients):
-            agent.update_beliefs(grad['delta_mu_q'], grad['delta_Sigma_q'])
-            agent.update_priors(grad['delta_mu_p'], grad['delta_Sigma_p'])
-            if trains_phi:
-                agent.update_gauge(grad['delta_phi'])
-            # system.py (in step(), after applying updates to all agents)
-            if getattr(self.config, "identical_priors", "off") == "lock":
-                self._apply_identical_priors_now()
+        from gradients.gradient_engine import compute_natural_gradients
+        from gradients.update_engine import GradientApplier
 
-        
+        gradients = compute_natural_gradients(self)
+        GradientApplier.apply_updates(self.agents, gradients, self.config)
+
+        if getattr(self.config, "identical_priors", "off") == "lock":
+            self._apply_identical_priors_now()
+
         return self.compute_free_energy()
     
     
