@@ -107,12 +107,11 @@ class GaugeField:
             scale: Maximum rotation angle
             seed: Random seed
         """
-        if seed is not None:
-            np.random.seed(seed)
-        
-        phi = np.random.randn(*shape, 3).astype(np.float32)
+        rng = np.random.RandomState(seed) if seed is not None else np.random.RandomState()
+
+        phi = rng.randn(*shape, 3).astype(np.float32)
         norms = np.linalg.norm(phi, axis=-1, keepdims=True)
-        phi = phi / np.maximum(norms, 1e-8) * (scale * np.random.rand(*shape, 1))
+        phi = phi / np.maximum(norms, 1e-8) * (scale * rng.rand(*shape, 1))
         
         return cls(phi, K, validate=True, margin=0.1)
     

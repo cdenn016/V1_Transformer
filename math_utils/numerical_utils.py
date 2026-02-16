@@ -407,8 +407,7 @@ def TUFF_sanitize_sigma(
         lam_min = np.min(w, axis=-1, keepdims=True)
         lam_min_flat = lam_min.reshape(-1)
         w_flat = w.reshape(-1)
-        tau = 1e-8
-        floored_frac = np.mean(w_flat <= 1.001 * tau)
+        floored_frac = np.mean(w_flat <= 1.001 * eig_floor)
         before = w.copy()
         w = np.minimum(w, lam_min * cond_cap)
         capped_frac = np.mean((w < before).astype(np.float32))

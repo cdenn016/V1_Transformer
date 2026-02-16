@@ -42,7 +42,7 @@ Author: Refactored clean implementation
 """
 
 import numpy as np
-from typing import Literal, Optional
+from typing import Optional
 from math_utils.numerical_utils import sanitize_sigma, safe_inv
 
 # =============================================================================
@@ -135,91 +135,6 @@ def retract_spd(
     return out.reshape(Sigma.shape)
 
 
-# =============================================================================
-# Retraction Implementations
-# =============================================================================
-
-def _retract_exponential(
-    Q: np.ndarray,
-    sqrt_w: np.ndarray,
-    R: np.ndarray,
-    max_condition: Optional[float],
-    eps: float,
-) -> np.ndarray:
-    """
-    Exponential map retraction: Σ_new = Σ^{1/2} exp(R) Σ^{1/2}.
-    
-    Args:
-        Q: Eigenvectors of Σ, shape (..., K, K)
-        sqrt_w: sqrt(eigenvalues), shape (..., K)
-        R: Whitened tangent vector, shape (..., K, K)
-        max_condition: Optional eigenvalue clipping for condition number
-        eps: Regularization
-    
-    Returns:
-        Sigma_new: shape (..., K, K)
-    """
-    K = R.shape[-1]
-    
-    # Matrix exponential of R
-    # R is symmetric, so eigendecomposition is stable
-    lam, U = np.linalg.eigh(R)
-
-    # CRITICAL: Clip eigenvalues to prevent overflow in exp()
-    # exp(50) ≈ 5e21, exp(-50) ≈ 2e-22 - both still representable
-    max_exp_arg = 50.0
-    lam = np.clip(lam, -max_exp_arg, max_exp_arg)
-
-    # Optional: further clip to control conditioning
-    if max_condition is not None:
-        lam = np.clip(lam, -np.log(max_condition), np.log(max_condition))
-
-    exp_lam = np.exp(lam)
-    
-    # exp(R) = U diag(exp(λ)) U^T
-    exp_R = (U * exp_lam[..., None, :]) @ np.swapaxes(U, -1, -2)
-    
-    # Transform back: Σ_new = Σ^{1/2} exp(R) Σ^{1/2}
-    # = Q diag(√λ) exp(R) diag(√λ) Q^T
-    exp_R_scaled = (sqrt_w[..., :, None] * exp_R) * sqrt_w[..., None, :]
-    Sigma_new = np.einsum("...ik,...kl,...jl->...ij", Q, exp_R_scaled, Q, optimize=True)
-    
-    # Symmetrize (numerical cleanup)
-    Sigma_new = 0.5 * (Sigma_new + np.swapaxes(Sigma_new, -1, -2))
-    
-    return Sigma_new
-
-
-def _retract_linear(
-    Sigma: np.ndarray,
-    Delta: np.ndarray,
-    eps: float,
-) -> np.ndarray:
-    """
-    Linear retraction: Σ_new = project_spd(Σ + Δ).
-    
-    Simple first-order approximation. Fast but only valid for small steps.
-    
-    Args:
-        Sigma: Current matrix, shape (..., K, K)
-        Delta: Tangent vector, shape (..., K, K)
-        eps: Regularization
-    
-    Returns:
-        Sigma_new: Projected onto SPD, shape (..., K, K)
-    """
-    Sigma_candidate = Sigma + Delta
-    
-    # Project onto SPD via eigenvalue clipping
-    w, Q = np.linalg.eigh(Sigma_candidate)
-    w = np.clip(w, eps, None)  # Force positive
-    
-    Sigma_new = (Q * w[..., None, :]) @ np.swapaxes(Q, -1, -2)
-    Sigma_new = 0.5 * (Sigma_new + np.swapaxes(Sigma_new, -1, -2))
-    
-    return Sigma_new
-
-
 def _apply_trust_region(
     R: np.ndarray,
     rho: float,
@@ -255,26 +170,25 @@ def retract_spd_batch(
     Sigma_batch: np.ndarray,
     Delta_batch: np.ndarray,
     *,
-    mode: Literal['exp', 'linear'] = 'exp',
     trust_region: Optional[float] = None,
-    eps: float = 1e-8,
+    eps: float = 1e-9,
 ) -> np.ndarray:
     """
     Vectorized retraction for batch of matrices.
-    
+
     Args:
         Sigma_batch: shape (N, K, K)
         Delta_batch: shape (N, K, K)
-        mode, trust_region, eps: same as retract_spd
-    
+        trust_region, eps: same as retract_spd
+
     Returns:
         Sigma_new_batch: shape (N, K, K)
-    
+
     Note:
         This is just a convenience wrapper; retract_spd already handles batches.
     """
-    return retract_spd(Sigma_batch, Delta_batch, 
-                       mode=mode, trust_region=trust_region, eps=eps)
+    return retract_spd(Sigma_batch, Delta_batch,
+                       trust_region=trust_region, eps=eps)
 
 
 # =============================================================================

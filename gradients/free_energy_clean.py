@@ -394,6 +394,10 @@ def expected_log_likelihood_gaussian(
     
     # Log determinant: log|2πR|
     sign, logdet_R = np.linalg.slogdet(R)
+    if sign <= 0:
+        # R should be positive definite; non-positive determinant indicates
+        # numerical issues (ill-conditioned observation covariance)
+        return -np.inf
     log_det_term = D * np.log(2 * np.pi) + logdet_R
     
     # Expected log-likelihood
