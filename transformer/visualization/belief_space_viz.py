@@ -92,7 +92,7 @@ def get_token_embeddings(model, tokens: list, tokenizer):
                     phi_list.append(phi[0, 0].cpu().numpy())  # (3,)
                     valid_tokens.append(token)
                     break
-            except Exception:
+            except (RuntimeError, IndexError) as e:
                 continue
 
     if len(mu_list) == 0:

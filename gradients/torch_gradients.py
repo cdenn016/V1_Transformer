@@ -125,7 +125,7 @@ class TorchGradientEngine:
                 mode=mode,
                 fullgraph=False
             )
-        except Exception as e:
+        except RuntimeError as e:
             warnings.warn(f"torch.compile failed for gradients: {e}")
             self._kl_grad_q = self._grad_kl_wrt_q_impl
             self._kl_grad_p = self._grad_kl_wrt_p_impl
