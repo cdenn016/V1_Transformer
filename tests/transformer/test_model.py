@@ -48,7 +48,7 @@ class TestGaugeTransformerLMCreation:
         """Test model creation with different FFN modes."""
         from transformer.core.model import GaugeTransformerLM
 
-        for ffn_mode in ['learned', 'variational_gradient_engine']:
+        for ffn_mode in ['VFE_dynamic']:
             config = {
                 'vocab_size': 100,
                 'embed_dim': 16,

@@ -572,8 +572,8 @@ def compute_free_energy_loss(
     # Bayesian alpha diagnostics
     with torch.no_grad():
         for block in model.transformer.blocks:
-            vffn = block.ffn.variational_ffn
-            if vffn.learnable_alpha and mu_q is not None and mu_p is not None:
+            vffn = getattr(block.ffn, 'variational_ffn', None)
+            if vffn is not None and vffn.learnable_alpha and mu_q is not None and mu_p is not None:
                 import torch.nn.functional as _F
                 alpha_vals = vffn.get_bayesian_alpha(mu_q, mu_p, sigma_p)
                 a0 = _F.softplus(vffn.raw_a0)
@@ -857,8 +857,8 @@ class Trainer:
             # Mean embeddings
             if 'mu_embed' in name:
                 mu_params.append(param)
-            # Covariance embeddings
-            elif 'sigma_embed' in name:
+            # Covariance embeddings (sigma_embed, log_sigma_diag, base_log_sigma_diag)
+            elif 'sigma_embed' in name or 'log_sigma' in name:
                 sigma_params.append(param)
             # Gauge frame embeddings
             elif 'phi_embed' in name:

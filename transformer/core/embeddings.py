@@ -439,7 +439,12 @@ class GaugeTokenEmbedding(nn.Module):
     def get_embedding_stats(self) -> dict:
         """Get statistics about embeddings for logging."""
         with torch.no_grad():
-            mu_weight = self.mu_embed.weight
+            if hasattr(self, 'mu_embed'):
+                mu_weight = self.mu_embed.weight
+            elif hasattr(self, 'base_mu'):
+                mu_weight = self.base_mu.unsqueeze(0)  # (1, K) for consistent stats
+            else:
+                return {}
             return {
                 'embed_mu_mean': mu_weight.mean().item(),
                 'embed_mu_std': mu_weight.std().item(),
