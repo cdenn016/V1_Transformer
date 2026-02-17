@@ -545,14 +545,14 @@ def _compute_mu_block(trainer, agent, agent_idx: int, kappa_beta: float) -> np.n
                 total_incoming_beta += float(beta_ji)
             elif agent.mu_q.ndim == 2:
                 if np.isscalar(beta_ji):
-                    total_incoming_beta = beta_ji
+                    total_incoming_beta += float(beta_ji)
                 else:
-                    total_incoming_beta = float(np.mean(beta_ji))
+                    total_incoming_beta += float(np.mean(beta_ji))
             else:
                 if np.isscalar(beta_ji):
-                    total_incoming_beta = beta_ji
+                    total_incoming_beta += float(beta_ji)
                 else:
-                    total_incoming_beta = float(np.mean(beta_ji))
+                    total_incoming_beta += float(np.mean(beta_ji))
 
     if total_incoming_beta > 1e-10:
         if agent.Sigma_p.ndim == 2:

@@ -48,8 +48,9 @@ def minimal_config():
     """Minimal model config for fast tests."""
     return {
         'vocab_size': 100,
-        'embed_dim': 16,
+        'embed_dim': 15,
         'n_layers': 1,
+        'irrep_spec': [('l0', 6, 1), ('l1', 3, 3)],
         'hidden_dim': 32,
         'max_seq_len': 32,
         'kappa_beta': 1.0,
@@ -168,14 +169,14 @@ def standard_model(minimal_config, cpu_device):
     config = {
         'vocab_size': minimal_config['vocab_size'],
         'embed_dim': minimal_config['embed_dim'],
-        'n_heads': 2,
+        'n_heads': 3,
         'n_layers': minimal_config['n_layers'],
         'hidden_dim': minimal_config['hidden_dim'],
         'max_seq_len': minimal_config['max_seq_len'],
         'dropout': minimal_config['dropout'],
     }
 
-    model = StandardTransformerLM(**config)
+    model = StandardTransformerLM(config)
     model = model.to(cpu_device)
     model.eval()
     return model

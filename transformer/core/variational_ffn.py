@@ -1109,20 +1109,24 @@ def retract_spd_torch(
     diag_mean = torch.diagonal(Sigma_new, dim1=-2, dim2=-1).clone().abs().mean(dim=-1, keepdim=True)  # (batch, 1)
     base_reg = torch.clamp(diag_mean, min=eps).unsqueeze(-1)  # (batch, 1, 1)
 
-    # Try with minimal regularization first
+    # Ensure SPD using cholesky_ex for per-matrix diagnostics (avoids
+    # entire-batch fallback when only a few matrices are non-SPD)
     reg_scales = [eps, 1e-5, 1e-4, 1e-3, 1e-2, 0.1]
 
     for reg_scale in reg_scales:
         Sigma_reg = Sigma_new + (reg_scale * base_reg) * eye_K
-        try:
-            # Cholesky is the gold standard for checking SPD
-            _ = torch.linalg.cholesky(Sigma_reg)
-            # Success! Use this regularized version
+        # cholesky_ex returns info codes per matrix (0 = success)
+        _, info = torch.linalg.cholesky_ex(Sigma_reg)
+        if (info == 0).all():
+            # All matrices are SPD
             Sigma_new = Sigma_reg
             break
-        except RuntimeError:
-            # Cholesky failed, try more regularization
-            continue
+        elif reg_scale == reg_scales[-1]:
+            # Last attempt: selectively fix only the failing matrices
+            bad_mask = (info != 0)
+            Sigma_new[~bad_mask] = Sigma_reg[~bad_mask]
+            Sigma_new[bad_mask] = Sigma[bad_mask] + 0.1 * base_reg[bad_mask] * eye_K
+        # else: try heavier regularization
     else:
         # All attempts failed - fall back to heavily regularized original
         Sigma_new = Sigma + 0.1 * base_reg * eye_K
