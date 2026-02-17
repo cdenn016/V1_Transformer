@@ -217,7 +217,7 @@ class SimulationConfig:
     def __post_init__(self):
         """Compute derived parameters and validate settings."""
         # Compute gaussian_sigma from overlap_threshold
-        if self.overlap_threshold > 0:
+        if 0 < self.overlap_threshold < 1.0:
             self.gaussian_sigma = 1.0 / np.sqrt(-2 * np.log(self.overlap_threshold))
         else:
             self.gaussian_sigma = 1.0
