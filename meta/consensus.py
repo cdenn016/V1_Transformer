@@ -453,15 +453,18 @@ class ConsensusDetector:
     def find_consensus_clusters(self, system) -> List[List[int]]:
         """
         Find clusters of agents that have reached mutual consensus.
-        
+
         Uses graph connectivity to find transitive consensus groups.
-        
+
         Args:
             system: MultiAgentSystem object
-            
+
         Returns:
             List of agent index clusters, e.g. [[0,1,2], [3,4], ...]
         """
+        # Clear stale transport cache since gauge fields may have changed
+        self.clear_cache()
+
         n_agents = system.n_agents
         
         # Build consensus adjacency matrix

@@ -490,7 +490,10 @@ class HierarchicalAgent(Agent):
                 validate=False
             )
 
-            o_meta += w * (omega @ agent.mu_q)
+            if omega.ndim > 2:
+                o_meta += w * np.einsum('...ij,...j->...i', omega, agent.mu_q)
+            else:
+                o_meta += w * (omega @ agent.mu_q)
 
         return o_meta
 
@@ -503,10 +506,11 @@ class HierarchicalAgent(Agent):
         coherence_scores = np.ones(n)
 
         # Use cached coherence if available
-        if self.meta and hasattr(self.meta, 'leadership_distribution'):
+        if self.meta and hasattr(self.meta, 'leadership_distribution') and self.meta.leadership_distribution is not None:
             # Normalize leadership scores as coherence proxy
-            coherence_scores = self.meta.leadership_distribution
-            coherence_scores = coherence_scores / np.sum(coherence_scores)
+            leadership_sum = np.sum(self.meta.leadership_distribution)
+            if leadership_sum > 0:
+                coherence_scores = self.meta.leadership_distribution / leadership_sum
 
         return coherence_scores
 

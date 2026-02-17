@@ -557,13 +557,17 @@ def broadcast_mask(
         scalar_val = float(mask.flat[0]) if mask.size > 0 else 1.0
         return np.full(target_shape, scalar_val, dtype=np.float32)
     
+    if mask.ndim == len(target_shape):
+        # Mask already has the correct number of dimensions
+        return mask * np.ones(target_shape, dtype=np.float32)
+
     if is_vector:
         if mask.ndim == len(target_shape) - 1:
             return mask[..., None] * np.ones(target_shape, dtype=np.float32)
     else:
         if mask.ndim == len(target_shape) - 2:
             return mask[..., None, None] * np.ones(target_shape, dtype=np.float32)
-    
+
     raise ValueError(f"Mask shape {mask.shape} incompatible with target {target_shape}")
 
 

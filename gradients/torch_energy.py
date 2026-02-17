@@ -75,12 +75,13 @@ def kl_divergence_gaussian(
     L_p = torch.linalg.cholesky(Sigma_p_reg)
 
     # Log determinants: log|Sigma| = 2 * sum(log(diag(L)))
+    # No +eps needed here: Cholesky of (Sigma + eps*I) already has positive diagonal
     logdet_q = 2 * torch.sum(
-        torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps),
+        torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1)),
         dim=-1
     )
     logdet_p = 2 * torch.sum(
-        torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps),
+        torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1)),
         dim=-1
     )
 

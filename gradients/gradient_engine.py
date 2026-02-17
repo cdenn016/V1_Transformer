@@ -637,7 +637,7 @@ def compute_belief_alignment_gradients(
     else:
         # Compute softmax weights β_ij(c) from scratch (standalone mode)
         beta_fields = compute_softmax_weights(
-            system, agent_idx_i, mode='belief', kappa=system.config.kappa_beta
+            system, agent_idx_i, mode='belief', kappa=getattr(system.config, 'kappa_beta', 1.0)
         )
     
     # Process each neighbor
@@ -799,7 +799,7 @@ def compute_prior_alignment_gradients(
     
     # Compute softmax weights γ_ij(c)
     gamma_fields = compute_softmax_weights(
-        system, agent_idx_i, mode='prior', kappa=system.config.kappa_gamma
+        system, agent_idx_i, mode='prior', kappa=getattr(system.config, 'kappa_gamma', 1.0)
     )
     
     # Process each neighbor
@@ -1133,6 +1133,7 @@ def _compute_agent_euclidean_gradients(
             if idx == agent_idx:
                 total_grads.grad_mu_p += grads.grad_mu_p
                 total_grads.grad_Sigma_p += grads.grad_Sigma_p
+                total_grads.grad_phi += grads.grad_phi
 
     
     # (4) Observations

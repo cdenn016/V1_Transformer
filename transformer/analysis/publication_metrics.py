@@ -25,9 +25,16 @@ import math
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass, asdict
-import matplotlib.pyplot as plt
-from matplotlib.gridspec import GridSpec
-import matplotlib.ticker as ticker
+try:
+    import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
+    import matplotlib.ticker as ticker
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    plt = None
+    GridSpec = None
+    ticker = None
+    MATPLOTLIB_AVAILABLE = False
 
 # Import gauge frame semantic analysis
 from .semantics import analyze_gauge_semantics, plot_gauge_frame_clustering
@@ -246,7 +253,7 @@ class PublicationFigures:
         save_name: str = "training_curves",
         show_components: bool = True,
         start_step: int = 100,
-    ) -> plt.Figure:
+    ) -> "Any":
         """
         Plot training curves: Loss, PPL, BPC.
 
@@ -351,7 +358,7 @@ class PublicationFigures:
         save_name: str = "attention_heatmap",
         title: str = "KL-Divergence Attention Weights",
         head_idx: Optional[int] = None,
-    ) -> plt.Figure:
+    ) -> "Any":
         """
         Plot attention heatmap from KL-divergence based attention.
 
@@ -415,7 +422,7 @@ class PublicationFigures:
         results: List[ExperimentResult],
         save_name: str = "model_comparison",
         metric: str = "ppl",
-    ) -> plt.Figure:
+    ) -> "Any":
         """
         Plot bar chart comparing different model architectures.
 
@@ -482,7 +489,7 @@ class PublicationFigures:
         ppl_values: List[float],
         param_counts: Optional[List[int]] = None,
         save_name: str = "scaling_study",
-    ) -> plt.Figure:
+    ) -> "Any":
         """
         Plot scaling study: PPL vs embedding dimension K.
 
@@ -537,7 +544,7 @@ class PublicationFigures:
         self,
         tracker: TrainingTracker,
         save_name: str = "train_val_gap",
-    ) -> plt.Figure:
+    ) -> "Any":
         """
         Plot train-validation gap over training.
 
@@ -594,7 +601,7 @@ class PublicationFigures:
         tracker: TrainingTracker,
         save_name: str = "attention_entropy",
         start_step: int = 100,
-    ) -> plt.Figure:
+    ) -> "Any":
         """
         Plot attention entropy over training.
 

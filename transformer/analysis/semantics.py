@@ -14,10 +14,22 @@ import torch
 import numpy as np
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
-import matplotlib
-matplotlib.use('Agg')  # Non-interactive backend for training
-import matplotlib.pyplot as plt
-from sklearn.decomposition import PCA
+try:
+    import matplotlib
+    matplotlib.use('Agg')  # Non-interactive backend for training
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    matplotlib = None
+    plt = None
+    MATPLOTLIB_AVAILABLE = False
+
+try:
+    from sklearn.decomposition import PCA
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    PCA = None
+    SKLEARN_AVAILABLE = False
 
 # =============================================================================
 # Tokenizer Setup
@@ -623,7 +635,7 @@ def plot_embedding_clustering(
     save_path: Optional[Path] = None,
     n_tokens: int = 500,
     gauge_group_label: Optional[str] = None,
-) -> plt.Figure:
+) -> "Any":
     """
     Visualize embeddings (mu or phi) colored by token category.
 

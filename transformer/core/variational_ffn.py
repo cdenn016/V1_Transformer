@@ -509,7 +509,7 @@ def _compute_vfe_gradients_chunked(
             sigma_j_reg = sigma_j_transported + max(eps, 1e-4) * torch.eye(K, device=device, dtype=dtype)
             try:
                 sigma_j_inv = torch.linalg.inv(sigma_j_reg)
-            except torch.linalg.LinAlgError:
+            except (torch.linalg.LinAlgError, RuntimeError):
                 sigma_j_inv = torch.linalg.pinv(sigma_j_reg)
 
             # Delta mu
@@ -770,7 +770,7 @@ def compute_vfe_gradients_gpu(
             )
         try:
             sigma_j_inv = torch.linalg.inv(sigma_j_reg)  # (B, N, N, K, K)
-        except torch.linalg.LinAlgError:
+        except (torch.linalg.LinAlgError, RuntimeError):
             sigma_j_inv = torch.linalg.pinv(sigma_j_reg)
 
         # ∂KL_ij/∂μ_i = Σ_j_transported^{-1} @ (μ_i - μ_j_transported)
@@ -901,7 +901,7 @@ def compute_vfe_gradients_gpu(
             )
         try:
             sigma_j_inv = torch.linalg.inv(sigma_j_reg)  # (B, N, N, K, K)
-        except torch.linalg.LinAlgError:
+        except (torch.linalg.LinAlgError, RuntimeError):
             sigma_j_inv = torch.linalg.pinv(sigma_j_reg)
 
         # ∂KL_ij/∂μ_i
@@ -1126,10 +1126,8 @@ def retract_spd_torch(
             bad_mask = (info != 0)
             Sigma_new[~bad_mask] = Sigma_reg[~bad_mask]
             Sigma_new[bad_mask] = Sigma[bad_mask] + 0.1 * base_reg[bad_mask] * eye_K
+            break  # Prevent for/else from overwriting the selective repair
         # else: try heavier regularization
-    else:
-        # All attempts failed - fall back to heavily regularized original
-        Sigma_new = Sigma + 0.1 * base_reg * eye_K
 
     # Restore original shape
     if len(original_shape) == 4:
@@ -2096,7 +2094,7 @@ class VariationalFFNDynamic(nn.Module):
                 if self.multihead_vfe:
                     # Multi-head phi update: sum alignment loss over heads
                     alignment_loss = torch.tensor(0.0, device=mu_current.device,
-                                                  dtype=mu_current.dtype, requires_grad=True)
+                                                  dtype=mu_current.dtype)
                     block_start = 0
                     for h, d_h in enumerate(self.irrep_dims):
                         block_end = block_start + d_h
@@ -2195,7 +2193,7 @@ class VariationalFFNDynamic(nn.Module):
             if self.multihead_vfe:
                 # Multi-head: sum alignment loss over heads
                 alignment_loss = torch.tensor(0.0, device=mu_current.device,
-                                              dtype=mu_current.dtype, requires_grad=True)
+                                              dtype=mu_current.dtype)
                 block_start = 0
                 for h, d_h in enumerate(self.irrep_dims):
                     block_end = block_start + d_h
