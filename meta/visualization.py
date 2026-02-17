@@ -97,6 +97,14 @@ class MetaAgentAnalyzer:
         # Compute system-level metrics
         metrics = self._compute_metrics()
 
+        # Pre-compute consensus matrices for each scale so they reflect
+        # the current system state (not the state at visualization time)
+        consensus_matrices = {}
+        for scale in self.system.agents:
+            for metric_name in ('belief', 'prior'):
+                kl_mat = self.get_consensus_matrix(scale, metric_name)
+                consensus_matrices[(scale, metric_name)] = kl_mat
+
         snapshot = SystemSnapshot(
             time=self.system.current_time,
             agents_by_scale=agents_by_scale,
@@ -104,6 +112,8 @@ class MetaAgentAnalyzer:
             condensation_events=[dict(e) for e in self.system.condensation_events],
             metrics=metrics
         )
+        # Attach consensus matrices to snapshot for later use
+        snapshot.consensus_matrices = consensus_matrices
 
         self.snapshots.append(snapshot)
         return snapshot
@@ -565,9 +575,11 @@ class ConsensusVisualizer:
         fig, axes = plt.subplots(1, 3, figsize=figsize)
 
         for i, (ax, idx) in enumerate(zip(axes, indices)):
-            # Temporarily set system to snapshot state (simplified - just get matrix)
             snapshot = self.analyzer.snapshots[idx]
-            kl_matrix = self.analyzer.get_consensus_matrix(scale, metric)
+            # Use pre-computed consensus matrix from snapshot time
+            kl_matrix = getattr(snapshot, 'consensus_matrices', {}).get(
+                (scale, metric), np.array([])
+            )
 
             if kl_matrix.size == 0:
                 ax.text(0.5, 0.5, f'No agents at scale {scale}',

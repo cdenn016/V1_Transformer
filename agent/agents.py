@@ -92,6 +92,18 @@ class Agent:
     
 # agents.py
 
+    # Attributes whose modification should invalidate Cholesky caches
+    _CACHE_INVALIDATING_ATTRS = frozenset({'Sigma_q', 'Sigma_p'})
+
+    def __setattr__(self, name, value):
+        """Auto-invalidate Cholesky caches when Sigma_q or Sigma_p is reassigned."""
+        super().__setattr__(name, value)
+        if name in self._CACHE_INVALIDATING_ATTRS:
+            if name == 'Sigma_q' and hasattr(self, '_L_q_cache'):
+                self._L_q_cache = None
+            elif name == 'Sigma_p' and hasattr(self, '_L_p_cache'):
+                self._L_p_cache = None
+
     def __init__(
         self,
         agent_id: int,
@@ -620,32 +632,31 @@ class Agent:
                 config=self.config.mask_config
             )
 
-            # --- μ fields ---
-            self.mu_q = FieldEnforcer.enforce_mean_field(self.mu_q, self.support)
-            self.mu_p = FieldEnforcer.enforce_mean_field(self.mu_p, self.support)
+        # --- μ fields --- (always enforce, not just on support upgrade)
+        self.mu_q = FieldEnforcer.enforce_mean_field(self.mu_q, self.support)
+        self.mu_p = FieldEnforcer.enforce_mean_field(self.mu_p, self.support)
 
-            # --- Σ fields: enforce directly (GAUGE-COVARIANT) ---
-            self.Sigma_q = FieldEnforcer.enforce_covariance_field(
-                self.Sigma_q,
-                self.support,
-                inside_scale=self.config.sigma_scale,
-                outside_scale=self.config.mask_config.outside_cov_scale,
-                use_smooth_transition=self.config.mask_config.use_smooth_cov_transition,
-            )
+        # --- Σ fields: enforce directly (GAUGE-COVARIANT) ---
+        self.Sigma_q = FieldEnforcer.enforce_covariance_field(
+            self.Sigma_q,
+            self.support,
+            inside_scale=self.config.sigma_scale,
+            outside_scale=self.config.mask_config.outside_cov_scale,
+            use_smooth_transition=self.config.mask_config.use_smooth_cov_transition,
+        )
 
-            self.Sigma_p = FieldEnforcer.enforce_covariance_field(
-                self.Sigma_p,
-                self.support,
-                inside_scale=2.0 * self.config.sigma_scale,
-                outside_scale=self.config.mask_config.outside_cov_scale,
-                use_smooth_transition=self.config.mask_config.use_smooth_cov_transition,
-            )
+        self.Sigma_p = FieldEnforcer.enforce_covariance_field(
+            self.Sigma_p,
+            self.support,
+            inside_scale=2.0 * self.config.sigma_scale,
+            outside_scale=self.config.mask_config.outside_cov_scale,
+            use_smooth_transition=self.config.mask_config.use_smooth_cov_transition,
+        )
 
-            # Invalidate Cholesky caches
-            self._L_q_cache = None
-            self._L_p_cache = None
-            
-          
+        # Invalidate Cholesky caches
+        self._L_q_cache = None
+        self._L_p_cache = None
+
         self.gauge.phi = FieldEnforcer.enforce_gauge_field(
             self.gauge.phi,
             self.support,

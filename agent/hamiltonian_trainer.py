@@ -579,17 +579,17 @@ class HamiltonianTrainer:
                 elif agent.mu_q.ndim == 2:
                     # 1D field: sum spatially if needed
                     if np.isscalar(beta_ji):
-                        total_incoming_beta = beta_ji
+                        total_incoming_beta += float(beta_ji)
                     else:
                         # For field case, handle per-point (this gets complex)
                         # For now, use mean as approximation
-                        total_incoming_beta = float(np.mean(beta_ji))
+                        total_incoming_beta += float(np.mean(beta_ji))
                 else:
                     # 2D field: similarly approximate
                     if np.isscalar(beta_ji):
-                        total_incoming_beta = beta_ji
+                        total_incoming_beta += float(beta_ji)
                     else:
-                        total_incoming_beta = float(np.mean(beta_ji))
+                        total_incoming_beta += float(np.mean(beta_ji))
 
         # Add incoming mass: (Σ_j β_ji) Σ_q,i^{-1}
         if total_incoming_beta > 1e-10:  # Only add if non-negligible

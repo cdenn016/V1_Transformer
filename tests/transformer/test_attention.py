@@ -14,6 +14,13 @@ import math
 class TestComputeAttentionWeights:
     """Test compute_attention_weights function."""
 
+    @staticmethod
+    def _make_so3_generators(K, device):
+        """Create skew-symmetric SO(3) generators for K dimensions."""
+        generators = torch.randn(3, K, K, device=device)
+        generators = generators - generators.transpose(-1, -2)
+        return generators
+
     def test_basic_computation(self, cpu_device):
         """Test basic attention weight computation."""
         from transformer.core.attention import compute_attention_weights
@@ -21,9 +28,14 @@ class TestComputeAttentionWeights:
         B, N, K = 2, 8, 16
         mu = torch.randn(B, N, K, device=cpu_device)
         sigma = torch.abs(torch.randn(B, N, K, device=cpu_device)) + 0.1
+        phi = torch.zeros(B, N, 3, device=cpu_device)
+        generators = self._make_so3_generators(K, cpu_device)
         kappa = 1.0
 
-        beta = compute_attention_weights(mu, sigma, kappa=kappa)
+        beta = compute_attention_weights(
+            mu, sigma, phi, generators, kappa=kappa,
+            diagonal_covariance=True, use_identity_transport=True,
+        )
 
         # Check shape
         assert beta.shape == (B, N, N)
@@ -35,9 +47,14 @@ class TestComputeAttentionWeights:
         B, N, K = 2, 8, 16
         mu = torch.randn(B, N, K, device=cpu_device)
         sigma = torch.abs(torch.randn(B, N, K, device=cpu_device)) + 0.1
+        phi = torch.zeros(B, N, 3, device=cpu_device)
+        generators = self._make_so3_generators(K, cpu_device)
         kappa = 1.0
 
-        beta = compute_attention_weights(mu, sigma, kappa=kappa)
+        beta = compute_attention_weights(
+            mu, sigma, phi, generators, kappa=kappa,
+            diagonal_covariance=True, use_identity_transport=True,
+        )
 
         # Check non-negative
         assert (beta >= 0).all(), "Attention weights should be non-negative"
@@ -54,9 +71,14 @@ class TestComputeAttentionWeights:
         B, N, K = 2, 8, 16
         mu = torch.randn(B, N, K, device=cpu_device)
         sigma = torch.abs(torch.randn(B, N, K, device=cpu_device)) + 0.1
+        phi = torch.zeros(B, N, 3, device=cpu_device)
+        generators = self._make_so3_generators(K, cpu_device)
         kappa = 1.0
 
-        beta = compute_attention_weights(mu, sigma, kappa=kappa)
+        beta = compute_attention_weights(
+            mu, sigma, phi, generators, kappa=kappa,
+            diagonal_covariance=True, use_identity_transport=True,
+        )
 
         assert torch.isfinite(beta).all(), "Output contains NaN or Inf"
 
@@ -67,16 +89,22 @@ class TestComputeAttentionWeights:
         B, N, K = 2, 8, 16
         mu = torch.randn(B, N, K, device=cpu_device)
         sigma = torch.abs(torch.randn(B, N, K, device=cpu_device)) + 0.1
+        phi = torch.zeros(B, N, 3, device=cpu_device)
+        generators = self._make_so3_generators(K, cpu_device)
         kappa = 1.0
 
         # Create causal mask
         mask = torch.tril(torch.ones(B, N, N, device=cpu_device))
 
-        beta = compute_attention_weights(mu, sigma, kappa=kappa, mask=mask)
+        beta = compute_attention_weights(
+            mu, sigma, phi, generators, kappa=kappa, mask=mask,
+            diagonal_covariance=True, use_identity_transport=True,
+        )
 
-        # Check masked positions are zero
+        # Check masked positions are near zero
         upper_tri = torch.triu(torch.ones(N, N, device=cpu_device), diagonal=1).bool()
-        assert (beta[:, upper_tri] == 0).all(), "Masked positions should be zero"
+        assert torch.allclose(beta[:, upper_tri], torch.zeros_like(beta[:, upper_tri]), atol=1e-6), \
+            "Masked positions should be zero"
 
     def test_different_kappa_values(self, cpu_device):
         """Test with different temperature values."""
@@ -85,9 +113,14 @@ class TestComputeAttentionWeights:
         B, N, K = 2, 8, 16
         mu = torch.randn(B, N, K, device=cpu_device)
         sigma = torch.abs(torch.randn(B, N, K, device=cpu_device)) + 0.1
+        phi = torch.zeros(B, N, 3, device=cpu_device)
+        generators = self._make_so3_generators(K, cpu_device)
 
         for kappa in [0.1, 1.0, 10.0]:
-            beta = compute_attention_weights(mu, sigma, kappa=kappa)
+            beta = compute_attention_weights(
+                mu, sigma, phi, generators, kappa=kappa,
+                diagonal_covariance=True, use_identity_transport=True,
+            )
             assert torch.isfinite(beta).all()
             assert (beta >= 0).all()
 
@@ -98,9 +131,17 @@ class TestComputeAttentionWeights:
         B, N, K = 2, 8, 16
         mu = torch.randn(B, N, K, device=cpu_device)
         sigma = torch.abs(torch.randn(B, N, K, device=cpu_device)) + 0.1
+        phi = torch.zeros(B, N, 3, device=cpu_device)
+        generators = self._make_so3_generators(K, cpu_device)
 
-        beta_low = compute_attention_weights(mu, sigma, kappa=0.1)
-        beta_high = compute_attention_weights(mu, sigma, kappa=10.0)
+        beta_low = compute_attention_weights(
+            mu, sigma, phi, generators, kappa=0.1,
+            diagonal_covariance=True, use_identity_transport=True,
+        )
+        beta_high = compute_attention_weights(
+            mu, sigma, phi, generators, kappa=10.0,
+            diagonal_covariance=True, use_identity_transport=True,
+        )
 
         # Lower kappa should give higher max attention (sharper)
         max_low = beta_low.max(dim=-1).values.mean()
@@ -291,31 +332,47 @@ class TestAggregateMessages:
     """Test aggregate_messages function."""
 
     def test_basic_aggregation(self, cpu_device):
-        """Test basic message aggregation."""
-        from transformer.core.attention import aggregate_messages
+        """Test basic message aggregation with identity transport."""
+        from transformer.core.attention import aggregate_messages, compute_transport_operators
 
         B, N, K = 2, 8, 16
         mu = torch.randn(B, N, K, device=cpu_device)
+        sigma = torch.eye(K, device=cpu_device).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).clone()
+        phi = torch.zeros(B, N, 3, device=cpu_device)
+        generators = torch.randn(3, K, K, device=cpu_device)
+        generators = generators - generators.transpose(-1, -2)
         beta = torch.softmax(torch.randn(B, N, N, device=cpu_device), dim=-1)
 
-        mu_agg = aggregate_messages(mu, beta)
+        transport = compute_transport_operators(phi, generators)
+        mu_agg, _ = aggregate_messages(
+            mu, sigma, phi, beta, generators,
+            aggregate_mode='mean_only', cached_transport=transport,
+        )
 
         # Check shape
         assert mu_agg.shape == (B, N, K)
 
     def test_aggregation_with_identity_beta(self, cpu_device):
         """Test aggregation with identity attention (copies input)."""
-        from transformer.core.attention import aggregate_messages
+        from transformer.core.attention import aggregate_messages, compute_transport_operators
 
         B, N, K = 2, 8, 16
         mu = torch.randn(B, N, K, device=cpu_device)
+        sigma = torch.eye(K, device=cpu_device).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).clone()
+        phi = torch.zeros(B, N, 3, device=cpu_device)
+        generators = torch.randn(3, K, K, device=cpu_device)
+        generators = generators - generators.transpose(-1, -2)
 
         # Identity attention: each position attends only to itself
         beta = torch.eye(N, device=cpu_device).unsqueeze(0).expand(B, -1, -1)
 
-        mu_agg = aggregate_messages(mu, beta)
+        transport = compute_transport_operators(phi, generators)
+        mu_agg, _ = aggregate_messages(
+            mu, sigma, phi, beta, generators,
+            aggregate_mode='mean_only', cached_transport=transport,
+        )
 
-        # Should be same as input
+        # Should be same as input (identity attention + identity transport)
         assert torch.allclose(mu_agg, mu, atol=1e-5)
 
 
@@ -539,7 +596,8 @@ class TestComputeTransportOperators:
         generators = torch.randn(3, K, K, device=cpu_device)
         generators = generators - generators.transpose(-1, -2)
 
-        omega = compute_transport_operators(phi, generators)
+        result = compute_transport_operators(phi, generators)
+        omega = result['Omega']
 
         # Check shape: (B, N, N, K, K)
         assert omega.shape == (B, N, N, K, K)
@@ -555,7 +613,8 @@ class TestComputeTransportOperators:
         generators = torch.randn(3, K, K, device=cpu_device)
         generators = generators - generators.transpose(-1, -2)
 
-        omega = compute_transport_operators(phi, generators)
+        result = compute_transport_operators(phi, generators)
+        omega = result['Omega']
 
         # When phi_i = phi_j = 0, transport should be identity
         identity = torch.eye(K, device=cpu_device)

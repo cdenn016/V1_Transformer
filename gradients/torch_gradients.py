@@ -217,7 +217,7 @@ class TorchGradientEngine:
         Gradient of KL(q||p) w.r.t. p parameters.
 
         ∂KL/∂μ_p = -Σ_p^{-1} (μ_q - μ_p)
-        ∂KL/∂Σ_p = 0.5 * Σ_p^{-1} (Σ_q + δδ^T - Σ_p) Σ_p^{-1}
+        ∂KL/∂Σ_p = 0.5 * (Σ_p^{-1} - Σ_p^{-1} (Σ_q + δδ^T) Σ_p^{-1})
         """
         K = mu_q.shape[-1]
         eye = torch.eye(K, device=self.device, dtype=self.dtype)
@@ -234,12 +234,14 @@ class TorchGradientEngine:
         delta = mu_q - mu_p
         grad_mu_p = -torch.matmul(Sigma_p_inv, delta.unsqueeze(-1)).squeeze(-1)
 
-        # Gradient w.r.t. Σ_p
+        # Gradient w.r.t. Σ_p: 0.5 * (Σ_p^{-1} - Σ_p^{-1}(Σ_q + δδ^T)Σ_p^{-1})
         delta_outer = torch.einsum('...i,...j->...ij', delta, delta)
-        middle = Sigma_q_reg + delta_outer - Sigma_p_reg
-        grad_Sigma_p = 0.5 * torch.matmul(
-            Sigma_p_inv,
-            torch.matmul(middle, Sigma_p_inv)
+        middle = Sigma_q_reg + delta_outer
+        grad_Sigma_p = 0.5 * (
+            Sigma_p_inv - torch.matmul(
+                Sigma_p_inv,
+                torch.matmul(middle, Sigma_p_inv)
+            )
         )
 
         return grad_mu_p, grad_Sigma_p

@@ -206,9 +206,9 @@ def _so3_exp_numpy(phi: np.ndarray, eps: float = 1e-8) -> np.ndarray:
         
         if theta < eps:
             # Small angle: use Taylor expansion
-            # exp([φ]_×) ≈ I + [φ]_×
+            # exp([φ]_×) ≈ I + [φ]_× + ½[φ]_×²
             phi_cross = _skew_symmetric(phi_i)
-            R[i] = np.eye(3) + phi_cross
+            R[i] = np.eye(3) + phi_cross + 0.5 * (phi_cross @ phi_cross)
         else:
             # Rodrigues formula
             axis = phi_i / theta

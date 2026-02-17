@@ -233,13 +233,13 @@ class TestGaugeVsStandard:
         std_config = {
             'vocab_size': V,
             'embed_dim': K,
-            'n_heads': 2,
+            'n_heads': 3,
             'n_layers': 1,
             'hidden_dim': minimal_config['hidden_dim'],
             'max_seq_len': minimal_config['max_seq_len'],
             'dropout': 0.0,
         }
-        std_model = StandardTransformerLM(**std_config)
+        std_model = StandardTransformerLM(std_config)
         std_model = std_model.to(cpu_device)
         std_model.eval()
 
@@ -248,7 +248,8 @@ class TestGaugeVsStandard:
 
         with torch.no_grad():
             gauge_out = gauge_model(input_ids)
-            std_out = std_model(input_ids)
+            std_result = std_model(input_ids)
+            std_out = std_result['logits']
 
         # Both should produce valid outputs
         assert gauge_out.shape == (2, 16, V)

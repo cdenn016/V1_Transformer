@@ -165,9 +165,9 @@ def initialize_flat_connection(
         >>> np.allclose(conn.A, 0)
         True
     """
-    A = np.zeros((*support_shape, 3), dtype=np.float32)
+    A = np.zeros((*support_shape, N), dtype=np.float32)
     generators = generate_so3_generators(K)
-    
+
     return ConnectionField(
         A=A,
         K=K,
@@ -187,23 +187,22 @@ def initialize_random_connection(
 ) -> ConnectionField:
     """
     Initialize random smooth connection field.
-    
+
     Samples A(c) ~ N(0, scale²) then optionally smooths spatially.
-    
+
     Args:
         support_shape: Spatial dimensions
         K: Representation dimension
         N: Lie algebra dimension
         scale: Standard deviation of random field
         seed: Random seed for reproducibility
-        
+
     Returns:
         connection: Random ConnectionField
     """
-    if seed is not None:
-        np.random.seed(seed)
-    
-    A = scale * np.random.randn(*support_shape, 3).astype(np.float32)
+    rng = np.random.default_rng(seed)
+
+    A = scale * rng.standard_normal((*support_shape, N)).astype(np.float32)
     generators = generate_so3_generators(K)
     
     return ConnectionField(

@@ -34,7 +34,7 @@ class TestGaugeTransformerLMCreation:
         assert hasattr(model, 'token_embed')
         assert hasattr(model, 'pos_encoding')
         assert hasattr(model, 'transformer')
-        assert hasattr(model, 'output_proj')
+        assert hasattr(model, 'out_proj')
 
     def test_model_config_stored(self, minimal_config, cpu_device):
         """Test model stores config correctly."""
@@ -51,12 +51,14 @@ class TestGaugeTransformerLMCreation:
         for ffn_mode in ['VFE_dynamic']:
             config = {
                 'vocab_size': 100,
-                'embed_dim': 16,
+                'embed_dim': 15,
                 'n_layers': 1,
+                'irrep_spec': [('l0', 6, 1), ('l1', 3, 3)],
                 'hidden_dim': 32,
                 'max_seq_len': 32,
                 'kappa_beta': 1.0,
                 'dropout': 0.0,
+                'use_diagonal_covariance': True,
                 'ffn_mode': ffn_mode,
             }
             model = GaugeTransformerLM(config)
@@ -68,17 +70,19 @@ class TestGaugeTransformerLMCreation:
 
         config = {
             'vocab_size': 100,
-            'embed_dim': 16,
+            'embed_dim': 15,
             'n_layers': 1,
+            'irrep_spec': [('l0', 6, 1), ('l1', 3, 3)],
             'hidden_dim': 32,
             'max_seq_len': 32,
             'kappa_beta': 1.0,
+            'use_diagonal_covariance': True,
             'tie_embeddings': True,
         }
         model = GaugeTransformerLM(config)
 
         # Check output projection exists
-        assert model.output_proj is not None
+        assert model.out_proj is not None
 
     def test_model_parameter_count(self, minimal_config, cpu_device):
         """Test model has reasonable parameter count."""
@@ -289,13 +293,15 @@ class TestGaugeTransformerLMConfigurations:
         for evolve_sigma in [True, False]:
             config = {
                 'vocab_size': 100,
-                'embed_dim': 16,
+                'embed_dim': 15,
                 'n_layers': 1,
                 'hidden_dim': 32,
                 'max_seq_len': 32,
                 'kappa_beta': 1.0,
                 'evolve_sigma': evolve_sigma,
-                'ffn_mode': 'learned',
+                'irrep_spec': [('l0', 6, 1), ('l1', 3, 3)],
+                'use_diagonal_covariance': True,
+                'ffn_mode': 'VFE_dynamic',
             }
             model = GaugeTransformerLM(config)
             input_ids = torch.randint(0, 100, (2, 16))
@@ -312,13 +318,15 @@ class TestGaugeTransformerLMConfigurations:
         for evolve_phi in [True, False]:
             config = {
                 'vocab_size': 100,
-                'embed_dim': 16,
+                'embed_dim': 15,
                 'n_layers': 1,
                 'hidden_dim': 32,
                 'max_seq_len': 32,
                 'kappa_beta': 1.0,
                 'evolve_phi': evolve_phi,
-                'ffn_mode': 'learned',
+                'irrep_spec': [('l0', 6, 1), ('l1', 3, 3)],
+                'use_diagonal_covariance': True,
+                'ffn_mode': 'VFE_dynamic',
             }
             model = GaugeTransformerLM(config)
             input_ids = torch.randint(0, 100, (2, 16))
@@ -335,12 +343,14 @@ class TestGaugeTransformerLMConfigurations:
         for kappa in [0.1, 1.0, 10.0]:
             config = {
                 'vocab_size': 100,
-                'embed_dim': 16,
+                'embed_dim': 15,
                 'n_layers': 1,
                 'hidden_dim': 32,
                 'max_seq_len': 32,
                 'kappa_beta': kappa,
-                'ffn_mode': 'learned',
+                'irrep_spec': [('l0', 6, 1), ('l1', 3, 3)],
+                'use_diagonal_covariance': True,
+                'ffn_mode': 'VFE_dynamic',
             }
             model = GaugeTransformerLM(config)
             input_ids = torch.randint(0, 100, (2, 16))
@@ -357,12 +367,14 @@ class TestGaugeTransformerLMConfigurations:
         for n_layers in [1, 2, 3]:
             config = {
                 'vocab_size': 100,
-                'embed_dim': 16,
+                'embed_dim': 15,
                 'n_layers': n_layers,
                 'hidden_dim': 32,
                 'max_seq_len': 32,
                 'kappa_beta': 1.0,
-                'ffn_mode': 'learned',
+                'irrep_spec': [('l0', 6, 1), ('l1', 3, 3)],
+                'use_diagonal_covariance': True,
+                'ffn_mode': 'VFE_dynamic',
             }
             model = GaugeTransformerLM(config)
             input_ids = torch.randint(0, 100, (2, 16))
@@ -378,14 +390,16 @@ class TestGaugeTransformerLMConfigurations:
 
         config = {
             'vocab_size': 100,
-            'embed_dim': 16,
+            'embed_dim': 15,
             'n_layers': 1,
             'hidden_dim': 32,
             'max_seq_len': 32,
             'kappa_beta': 1.0,
             'diagonal_covariance': True,
             'use_diagonal_covariance': True,
-            'ffn_mode': 'learned',
+            'irrep_spec': [('l0', 6, 1), ('l1', 3, 3)],
+                'use_diagonal_covariance': True,
+                'ffn_mode': 'VFE_dynamic',
         }
         model = GaugeTransformerLM(config)
         input_ids = torch.randint(0, 100, (2, 16))

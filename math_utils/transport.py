@@ -221,8 +221,7 @@ def compute_transport(
 
     K = G.shape[1]
 
-
-        # General SO(N) case
+    # General SO(N) case
     exp_phi_i = _matrix_exponential_so3(phi_i, G)
     exp_neg_phi_j = _matrix_exponential_so3(-phi_j, G)
 
@@ -540,8 +539,6 @@ def compute_transport_differential(
     phi_i = np.asarray(phi_i, dtype=np.float64)
     phi_j = np.asarray(phi_j, dtype=np.float64)
     G = np.asarray(generators, dtype=np.float64)
-    
-    K = G.shape[1]
     
     K = G.shape[1]
 

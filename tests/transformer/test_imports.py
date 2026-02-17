@@ -95,8 +95,8 @@ class TestDataImports:
 
     def test_data_datasets_import(self):
         """Test importing from transformer.data.datasets."""
-        from transformer.data.datasets import WikiTextDataset
-        assert WikiTextDataset is not None
+        from transformer.data.datasets import WikiText2Dataset
+        assert WikiText2Dataset is not None
 
 
 class TestAnalysisImports:

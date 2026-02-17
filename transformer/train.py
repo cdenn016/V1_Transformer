@@ -695,7 +695,7 @@ class TrainingConfig:
 
     # Training
     batch_size: int = 16
-    num_epochs: int = None
+    num_epochs: Optional[int] = None
     accumulation_steps: int = 1
 
     # Logging
@@ -713,6 +713,7 @@ class TrainingConfig:
     checkpoint_dir: Optional[Path] = None
     save_optimizer: bool = True
     save_total_limit: int = 3
+    resume_from: Optional[str] = None  # Path to checkpoint to resume from
 
     # Weights & Biases
     use_wandb: bool = False
@@ -951,7 +952,7 @@ class Trainer:
                 return step / max(1, self.config.warmup_steps)
 
             if self.config.lr_decay == 'cosine':
-                progress = (step - self.config.warmup_steps) / max(1, self.config.max_steps - self.config.warmup_steps)
+                progress = min(1.0, (step - self.config.warmup_steps) / max(1, self.config.max_steps - self.config.warmup_steps))
                 return self.config.min_lr / self.config.learning_rate + \
                        0.5 * (1 - self.config.min_lr / self.config.learning_rate) * \
                        (1 + math.cos(progress * math.pi))

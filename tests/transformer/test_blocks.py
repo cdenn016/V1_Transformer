@@ -29,9 +29,11 @@ class TestGaugeTransformerBlock:
         block = GaugeTransformerBlock(
             embed_dim=K,
             hidden_dim=hidden_dim,
-            kappa=kappa,
+            kappa_beta=kappa,
+            irrep_spec=[('l0', 8, 1), ('l0b', 8, 1)],
+            diagonal_covariance=True,
             generators=generators,
-            ffn_mode='learned',
+            ffn_mode='VFE_dynamic',
         )
         return block.to(cpu_device)
 
@@ -46,9 +48,11 @@ class TestGaugeTransformerBlock:
         block = GaugeTransformerBlock(
             embed_dim=K,
             hidden_dim=32,
-            kappa=1.0,
+            kappa_beta=1.0,
+            irrep_spec=[('l0', 8, 1), ('l0b', 8, 1)],
+            diagonal_covariance=True,
             generators=generators,
-            ffn_mode='learned',
+            ffn_mode='VFE_dynamic',
         )
         assert block is not None
 
@@ -63,13 +67,12 @@ class TestGaugeTransformerBlock:
         # Create causal mask
         mask = torch.tril(torch.ones(B, N, N, device=cpu_device))
 
-        mu_out, sigma_out, phi_out, beta = block(
-            mu, sigma, phi, mask=mask, mu_prior=mu_prior
+        mu_out, sigma_out, phi_out = block(
+            mu, sigma, phi, block.generators, mask=mask, mu_prior=mu_prior
         )
 
         # Check output shapes
         assert mu_out.shape == (B, N, K)
-        assert beta.shape[-2:] == (N, N)
 
     def test_forward_output_finite(self, block, cpu_device):
         """Test forward outputs are finite."""
@@ -80,13 +83,12 @@ class TestGaugeTransformerBlock:
         mu_prior = mu.clone()
         mask = torch.tril(torch.ones(B, N, N, device=cpu_device))
 
-        mu_out, sigma_out, phi_out, beta = block(
-            mu, sigma, phi, mask=mask, mu_prior=mu_prior
+        mu_out, sigma_out, phi_out = block(
+            mu, sigma, phi, block.generators, mask=mask, mu_prior=mu_prior
         )
 
         assert torch.isfinite(mu_out).all()
         assert torch.isfinite(sigma_out).all()
-        assert torch.isfinite(beta).all()
 
 
 class TestGaugeTransformerStack:
@@ -109,9 +111,11 @@ class TestGaugeTransformerStack:
             n_layers=n_layers,
             embed_dim=K,
             hidden_dim=hidden_dim,
-            kappa=kappa,
+            kappa_beta=kappa,
+            irrep_spec=[('l0', 8, 1), ('l0b', 8, 1)],
+            diagonal_covariance=True,
             generators=generators,
-            ffn_mode='learned',
+            ffn_mode='VFE_dynamic',
         )
         return stack.to(cpu_device)
 
@@ -127,9 +131,11 @@ class TestGaugeTransformerStack:
             n_layers=2,
             embed_dim=K,
             hidden_dim=32,
-            kappa=1.0,
+            kappa_beta=1.0,
+            irrep_spec=[('l0', 8, 1), ('l0b', 8, 1)],
+            diagonal_covariance=True,
             generators=generators,
-            ffn_mode='learned',
+            ffn_mode='VFE_dynamic',
         )
         assert stack is not None
         assert len(stack.blocks) == 2
@@ -143,15 +149,14 @@ class TestGaugeTransformerStack:
         mu_prior = mu.clone()
         mask = torch.tril(torch.ones(B, N, N, device=cpu_device))
 
-        mu_out, sigma_out, phi_out, beta_list = stack(
-            mu, sigma, phi, mask=mask, mu_prior=mu_prior
+        generators = stack.blocks[0].generators
+
+        mu_out, sigma_out, phi_out, intermediates = stack(
+            mu, sigma, phi, generators, mask=mask, mu_prior=mu_prior
         )
 
         # Check output shapes
         assert mu_out.shape == (B, N, K)
-
-        # Check we get beta from each layer
-        assert len(beta_list) == 2
 
     def test_forward_output_finite(self, stack, cpu_device):
         """Test forward outputs are finite."""
@@ -162,8 +167,10 @@ class TestGaugeTransformerStack:
         mu_prior = mu.clone()
         mask = torch.tril(torch.ones(B, N, N, device=cpu_device))
 
-        mu_out, sigma_out, phi_out, beta_list = stack(
-            mu, sigma, phi, mask=mask, mu_prior=mu_prior
+        generators = stack.blocks[0].generators
+
+        mu_out, sigma_out, phi_out, intermediates = stack(
+            mu, sigma, phi, generators, mask=mask, mu_prior=mu_prior
         )
 
         assert torch.isfinite(mu_out).all()
@@ -182,9 +189,11 @@ class TestGaugeTransformerStack:
                 n_layers=n_layers,
                 embed_dim=K,
                 hidden_dim=32,
-                kappa=1.0,
+                kappa_beta=1.0,
+            irrep_spec=[('l0', 8, 1), ('l0b', 8, 1)],
+            diagonal_covariance=True,
                 generators=generators,
-                ffn_mode='learned',
+                ffn_mode='VFE_dynamic',
             ).to(cpu_device)
 
             assert len(stack.blocks) == n_layers
@@ -195,9 +204,8 @@ class TestGaugeTransformerStack:
             phi = torch.randn(B, N, 3, device=cpu_device) * 0.1
             mask = torch.tril(torch.ones(B, N, N, device=cpu_device))
 
-            mu_out, _, _, beta_list = stack(
-                mu, sigma, phi, mask=mask, mu_prior=mu.clone()
+            mu_out, _, _, intermediates = stack(
+                mu, sigma, phi, generators, mask=mask, mu_prior=mu.clone()
             )
 
-            assert len(beta_list) == n_layers
             assert torch.isfinite(mu_out).all()

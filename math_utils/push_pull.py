@@ -295,26 +295,39 @@ def _is_orthogonal(M: np.ndarray, tol: float = 1e-4) -> bool:
 
 def _push_precision_via_solve(Omega: np.ndarray, Sigma_inv: np.ndarray) -> np.ndarray:
     """
-    Compute pushed precision via formula Λ' = Ω Λ Ωᵀ.
-    
-    For non-orthogonal Ω (rare), we still use the same formula but don't
-    rely on Ω⁻¹ = Ωᵀ.
-    
+    Compute pushed precision: Λ' = Ω⁻ᵀ Λ Ω⁻¹.
+
+    For orthogonal Ω (Ω⁻¹ = Ωᵀ), this reduces to Ω Λ Ωᵀ.
+    For non-orthogonal Ω (GL(K)), must use the correct inverse formula.
+
+    The pushed covariance is Σ' = Ω Σ Ωᵀ, so the pushed precision is:
+        Λ' = (Σ')⁻¹ = (Ω Σ Ωᵀ)⁻¹ = Ω⁻ᵀ Σ⁻¹ Ω⁻¹ = Ω⁻ᵀ Λ Ω⁻¹
+
     Args:
         Omega: Transport operator, shape (..., K, K)
         Sigma_inv: Precision matrix Λ, shape (..., K, K)
-    
+
     Returns:
-        Sigma_inv_pushed: Λ' = Ω Λ Ωᵀ, shape (..., K, K)
+        Sigma_inv_pushed: Λ' = Ω⁻ᵀ Λ Ω⁻¹, shape (..., K, K)
     """
-        
-    # Even for non-orthogonal Ω, the formula is still Ω Λ Ωᵀ
-    # Step 1: Ω Λ
-    tmp = np.einsum('...ik,...kl->...il', Omega, Sigma_inv, optimize=True)
-    
-    # Step 2: (Ω Λ) Ωᵀ  
-    out = np.einsum('...ij,...kj->...ik', tmp, Omega, optimize=True)
-    
+    # Check if Omega is orthogonal (fast path)
+    K = Omega.shape[-1]
+    # Use a single representative for batch check
+    flat = Omega.reshape(-1, K, K)
+    sample = flat[0]
+    if _is_orthogonal(sample):
+        # Orthogonal: Ω⁻¹ = Ωᵀ, so Ω⁻ᵀ Λ Ω⁻¹ = Ω Λ Ωᵀ
+        tmp = np.einsum('...ik,...kl->...il', Omega, Sigma_inv, optimize=True)
+        out = np.einsum('...ij,...kj->...ik', tmp, Omega, optimize=True)
+    else:
+        # Non-orthogonal: compute Ω⁻¹ explicitly
+        Omega_inv = np.linalg.inv(Omega)
+        # Ω⁻ᵀ = (Ω⁻¹)ᵀ
+        Omega_inv_T = np.swapaxes(Omega_inv, -2, -1)
+        # Λ' = Ω⁻ᵀ Λ Ω⁻¹
+        tmp = np.einsum('...ik,...kl->...il', Omega_inv_T, Sigma_inv, optimize=True)
+        out = np.einsum('...ij,...jk->...ik', tmp, Omega_inv, optimize=True)
+
     return out
 
 

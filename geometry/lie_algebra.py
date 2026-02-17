@@ -35,6 +35,7 @@ Date: November 2025
 """
 
 import numpy as np
+from scipy.linalg import expm
 from typing import Tuple, List, Optional
 from enum import Enum
 
@@ -338,7 +339,7 @@ class LieAlgebra:
             self.generators = rotations + boosts
             self._bracket = lambda phi, psi: phi @ psi - psi @ phi
             self._inner_product = so13_killing_form
-            self._exponential = lambda phi: np.linalg.matrix_power(np.eye(4) + phi / 10, 10)  # Placeholder
+            self._exponential = lambda phi: expm(phi)  # Proper matrix exponential for SO(1,3)
 
         else:
             raise NotImplementedError(f"Group {group} not implemented")
@@ -354,8 +355,8 @@ class LieAlgebra:
     def norm(self, phi: np.ndarray) -> float:
         """Norm ||φ|| = √⟨φ, φ⟩."""
         ip = self.inner_product(phi, phi)
-        # Handle indefinite metrics
-        return np.sqrt(np.abs(ip)) if ip >= 0 else np.sqrt(-ip)
+        # Handle indefinite metrics (both branches yield sqrt(|ip|))
+        return np.sqrt(np.abs(ip))
 
     def kinetic_energy(self, phi_dot: np.ndarray) -> float:
         """

@@ -464,9 +464,10 @@ def compute_attention_weights(
     # Softmax over keys (dimension 2)
     beta = F.softmax(logits, dim=-1)  # (B, N, N)
 
-    # Clamp for numerical stability (prevents exact zeros in log/division)
-    # Using clamp instead of adding epsilon preserves sum(beta) ≈ 1
+    # Re-normalize after clamping to preserve sum(beta) = 1
+    # (clamping alone breaks row-sum normalization)
     beta = beta.clamp(min=epsilon)
+    beta = beta / beta.sum(dim=-1, keepdim=True)
 
     if return_kl:
         return beta, kl_matrix
@@ -1728,6 +1729,8 @@ def aggregate_messages(
 
             # Complete mixture variance: Var = E[x²] - E[x]²
             sigma_aggregated = sigma_aggregated - mu_aggregated ** 2  # (B, N, K)
+            # Clamp to ensure positivity (numerical cancellation can produce negatives)
+            sigma_aggregated = sigma_aggregated.clamp(min=1e-6)
         else:
             # FULL COVARIANCE MODE: sigma_q is (B, N, K, K)
             # Transport covariances (uses Omega_msg for GL(K) metric correction)
@@ -1752,6 +1755,11 @@ def aggregate_messages(
             sigma_aggregated = sigma_aggregated - torch.einsum(
                 'bik,bil->bikl', mu_aggregated, mu_aggregated
             )
+            # Ensure SPD: add small positive diagonal for numerical stability
+            eps_eye = 1e-6 * torch.eye(sigma_aggregated.shape[-1],
+                                        device=sigma_aggregated.device,
+                                        dtype=sigma_aggregated.dtype)
+            sigma_aggregated = sigma_aggregated + eps_eye
     else:
         sigma_aggregated = None
 

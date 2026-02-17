@@ -82,18 +82,20 @@ class TestCreateParamGroups:
         """Test creating parameter groups."""
         from transformer.core.model import GaugeTransformerLM
         from transformer.training.optimizer import create_param_groups
+        from transformer.training.config import TrainingConfig
 
         model = GaugeTransformerLM(minimal_config)
 
-        param_groups = create_param_groups(
-            model,
+        config = TrainingConfig(
             mu_lr=0.1,
             sigma_lr=0.01,
             phi_lr=0.05,
-            attn_lr=0.001,
+            attention_lr=0.001,
             ffn_lr=0.001,
             output_lr=0.001,
         )
+
+        param_groups = create_param_groups(model, config)
 
         assert isinstance(param_groups, list)
         assert len(param_groups) > 0
@@ -107,18 +109,20 @@ class TestCreateParamGroups:
         """Test all parameters are in some group."""
         from transformer.core.model import GaugeTransformerLM
         from transformer.training.optimizer import create_param_groups
+        from transformer.training.config import TrainingConfig
 
         model = GaugeTransformerLM(minimal_config)
 
-        param_groups = create_param_groups(
-            model,
+        config = TrainingConfig(
             mu_lr=0.1,
             sigma_lr=0.01,
             phi_lr=0.05,
-            attn_lr=0.001,
+            attention_lr=0.001,
             ffn_lr=0.001,
             output_lr=0.001,
         )
+
+        param_groups = create_param_groups(model, config)
 
         # Collect all params in groups
         grouped_params = set()
@@ -141,18 +145,20 @@ class TestCreateOptimizer:
         """Test creating optimizer."""
         from transformer.core.model import GaugeTransformerLM
         from transformer.training.optimizer import create_optimizer
+        from transformer.training.config import TrainingConfig
 
         model = GaugeTransformerLM(minimal_config)
 
-        optimizer = create_optimizer(
-            model,
+        config = TrainingConfig(
             mu_lr=0.1,
             sigma_lr=0.01,
             phi_lr=0.05,
-            attn_lr=0.001,
+            attention_lr=0.001,
             ffn_lr=0.001,
             output_lr=0.001,
         )
+
+        optimizer = create_optimizer(model, config)
 
         assert optimizer is not None
         assert isinstance(optimizer, torch.optim.Optimizer)
@@ -161,19 +167,21 @@ class TestCreateOptimizer:
         """Test optimizer can perform step."""
         from transformer.core.model import GaugeTransformerLM
         from transformer.training.optimizer import create_optimizer
+        from transformer.training.config import TrainingConfig
 
         model = GaugeTransformerLM(minimal_config)
         model = model.to(cpu_device)
 
-        optimizer = create_optimizer(
-            model,
+        config = TrainingConfig(
             mu_lr=0.1,
             sigma_lr=0.01,
             phi_lr=0.05,
-            attn_lr=0.001,
+            attention_lr=0.001,
             ffn_lr=0.001,
             output_lr=0.001,
         )
+
+        optimizer = create_optimizer(model, config)
 
         # Forward pass
         V = minimal_config['vocab_size']
@@ -200,20 +208,19 @@ class TestMetricsTracker:
         """Test creating metrics tracker."""
         from transformer.training.metrics import MetricsTracker
 
-        tracker = MetricsTracker(save_path=tmp_path)
+        tracker = MetricsTracker(output_dir=tmp_path)
         assert tracker is not None
 
     def test_tracker_log(self, tmp_path):
         """Test logging metrics."""
         from transformer.training.metrics import MetricsTracker
 
-        tracker = MetricsTracker(save_path=tmp_path)
+        tracker = MetricsTracker(output_dir=tmp_path)
 
         tracker.log({
-            'step': 1,
             'loss': 2.5,
             'accuracy': 0.8,
-        })
+        }, step=1)
 
         assert len(tracker.history) == 1
 
@@ -221,13 +228,12 @@ class TestMetricsTracker:
         """Test saving metrics to CSV."""
         from transformer.training.metrics import MetricsTracker
 
-        tracker = MetricsTracker(save_path=tmp_path)
+        tracker = MetricsTracker(output_dir=tmp_path)
 
         for i in range(5):
             tracker.log({
-                'step': i,
                 'loss': 2.5 - i * 0.1,
-            })
+            }, step=i)
 
         tracker.save()
 
