@@ -411,9 +411,11 @@ def _expm_pade(A: np.ndarray, order: int = 13) -> np.ndarray:
     Fallback when scipy unavailable. For production, use scipy.linalg.expm.
     """
     n = A.shape[0]
-    
+
     # Scaling
     norm_A = np.linalg.norm(A, ord=np.inf)
+    if norm_A < 1e-15:
+        return np.eye(n, dtype=np.float64)
     n_squarings = max(0, int(np.ceil(np.log2(norm_A))))
     A_scaled = A / (2 ** n_squarings)
     

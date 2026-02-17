@@ -1645,3 +1645,17 @@ if __name__ == '__main__':
     print("\nReady to train!")
     print("Next: Integrate with Trainer class in train.py")
     print("="*70)
+
+
+# =============================================================================
+# Backward-compatible alias: WikiTextDataset → best available implementation
+# =============================================================================
+# Some modules import "WikiTextDataset" generically. Route to tiktoken-based
+# implementation when available, else fall back to transformers-based one.
+
+if TIKTOKEN_AVAILABLE:
+    WikiTextDataset = WikiText2TiktokenDataset
+elif TRANSFORMERS_AVAILABLE:
+    WikiTextDataset = WikiText2Dataset
+else:
+    WikiTextDataset = WikiText2ByteDataset  # Fallback: no external tokenizer

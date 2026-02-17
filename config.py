@@ -251,7 +251,7 @@ class AgentConfig:
         if self.lr_sigma_p < 0:
             raise ValueError(f"lr_sigma_p must be non-negative, got {self.lr_sigma_p}")
         if self.lr_phi < 0:
-            raise ValueError(f"lr_phi must be positive, got {self.lr_phi}")
+            raise ValueError(f"lr_phi must be non-negative, got {self.lr_phi}")
 
         # Validate scales
         if self.mu_scale < 0:

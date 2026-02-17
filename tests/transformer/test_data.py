@@ -115,17 +115,17 @@ class TestCreateByteDataloaders:
 
 
 class TestWikiTextDataset:
-    """Test WikiTextDataset class."""
+    """Test WikiTextDataset backward-compatible alias."""
 
     @pytest.mark.slow
     def test_dataset_creation(self):
-        """Test creating dataset."""
+        """Test creating dataset via alias."""
         from transformer.data.datasets import WikiTextDataset
 
         dataset = WikiTextDataset(
             split='train',
             max_seq_len=64,
-            dataset_name='wikitext-2',
+            dataset='wikitext-2',
         )
 
         assert len(dataset) > 0
@@ -138,7 +138,7 @@ class TestWikiTextDataset:
         dataset = WikiTextDataset(
             split='train',
             max_seq_len=64,
-            dataset_name='wikitext-2',
+            dataset='wikitext-2',
         )
 
         item = dataset[0]
@@ -158,7 +158,7 @@ class TestWikiTextDataset:
         dataset = WikiTextDataset(
             split='train',
             max_seq_len=64,
-            dataset_name='wikitext-2',
+            dataset='wikitext-2',
         )
 
         # Should have encode/decode for tokenization

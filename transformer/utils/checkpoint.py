@@ -200,7 +200,7 @@ def get_tokenizer(config: Dict[str, Any], dataset_name: Optional[str] = None):
         dataset = WikiTextDataset(
             split='train',
             max_seq_len=128,
-            dataset_name=dataset_name
+            dataset=dataset_name,
         )
         print(f"Using WikiTextDataset tokenizer")
         return dataset

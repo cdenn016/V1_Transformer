@@ -232,7 +232,7 @@ def compute_geodesic_force_vectorized(
             )
 
             # Restore original state
-            trainer._unpack_parameters(theta)
+            trainer._unpack_parameters(theta_backup)
 
             # Central difference
             dM_inv = (M_inv_plus - M_inv_minus) / (2 * eps)

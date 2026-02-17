@@ -197,6 +197,8 @@ class HierarchicalEvolutionEngine:
 
                         neighbors = []
                         for i in range(self.n_agents):
+                            if i == agent_idx:
+                                continue  # Exclude self from neighbors
                             if self._agent_scales[i] != my_scale:
                                 continue  # Wrong scale
 

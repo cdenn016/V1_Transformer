@@ -725,7 +725,7 @@ def compute_consensus_metric_weighted_spatial(
 
     for agent in agents:
         # Get support weights
-        chi = agent.support.chi  # shape (*spatial,)
+        chi = agent.support.chi_weight  # shape (*spatial,)
 
         # Compute induced metric
         if metric_type == "belief":
@@ -776,7 +776,7 @@ def compute_consensus_metric_weighted_spatial(
 
     # Store effective weights (spatial average of each agent's χ)
     weights = np.array([
-        np.mean(agent.support.chi) for agent in agents
+        np.mean(agent.support.chi_weight) for agent in agents
     ])
     weights = weights / np.sum(weights) if np.sum(weights) > 0 else weights
 
