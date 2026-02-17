@@ -1059,8 +1059,13 @@ class Trainer:
         return metrics
 
     @torch.no_grad()
-    def validate(self) -> Dict[str, float]:
-        """Validation pass."""
+    def validate(self, max_batches: int = 200) -> Dict[str, float]:
+        """Validation pass.
+
+        Args:
+            max_batches: Maximum number of validation batches to evaluate.
+                Prevents long stalls on large datasets like WikiText-103.
+        """
         if self.val_loader is None:
             return {}
 
@@ -1086,6 +1091,9 @@ class Trainer:
             total_loss += loss.item()
             total_ce_loss += metrics['loss/ce']
             n_batches += 1
+
+            if n_batches >= max_batches:
+                break
 
         avg_loss = total_loss / max(n_batches, 1)
         avg_ce_loss = total_ce_loss / max(n_batches, 1)
