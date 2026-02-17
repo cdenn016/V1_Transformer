@@ -1678,7 +1678,7 @@ The distribution of head correlations (Figure~\ref{fig:correlation_distribution}
 \end{figure}
 
 \paragraph{Scope of the Validation.}
-An important caveat is in order. The high correlation between KL-based attention $\beta_{ij} \propto \exp(-\|Q_i - K_j\|^2/\tau)$ and dot-product attention $\alpha_{ij} \propto \exp(Q_i K_j^\top / \sqrt{d_k})$ follows in part from a mathematical relationship: when key norms $\|K_j\|$ are approximately constant (as enforced by layer normalization in BERT), the squared Euclidean distance $\|Q_i - K_j\|^2 = \|Q_i\|^2 + \|K_j\|^2 - 2Q_i K_j^\top$ differs from $-2Q_i K_j^\top$ only by terms that are approximately constant under softmax. The non-trivial content of this validation is therefore not the correlation itself, but rather: (a) the quantitative prediction of the optimal temperature $\tau \approx 2\sqrt{d_k}$, which is confirmed to within 19\%; (b) the existence and magnitude of the key-norm bias $\rho \approx -0.35$, a prediction specific to the gauge-theoretic decomposition; and (c) the per-layer variation in correlation strength, which reflects representational structure not predicted by the mathematical identity alone.
+An important caveat is in order. The high correlation between KL-based attention $\beta_{ij} \propto \exp(-\|Q_i - K_j\|^2/\tau)$ and dot-product attention $\alpha_{ij} \propto \exp(Q_i K_j^\top / \sqrt{d_k})$ follows in part from an algebraic identity: when key norms $\|K_j\|$ are approximately constant (as enforced by layer normalization in BERT), the squared Euclidean distance $\|Q_i - K_j\|^2 = \|Q_i\|^2 + \|K_j\|^2 - 2Q_i K_j^\top$ differs from $-2Q_i K_j^\top$ only by terms that are approximately constant under softmax. The non-trivial content of this validation is therefore not the correlation per se---that much is guaranteed by the algebra---but rather three quantitative predictions that the identity alone does not supply: (a) the optimal temperature $\tau \approx 2\sqrt{d_k}$, confirmed empirically to within 19\%, whose value is fixed by the dimensional scaling of dot-product variance in the gauge framework; (b) the existence, sign, and magnitude of a residual key-norm bias $\rho \approx -0.35$, a prediction specific to the gauge-theoretic decomposition that has no counterpart in the algebraic identity; and (c) the per-layer variation in correlation strength, which reflects representational structure learned during training and is not predicted by the mathematical identity alone.
 
 \subsubsection{Temperature Scaling and Finite-Dimensional Corrections}
 
@@ -1688,7 +1688,7 @@ Temperature scaling emerges from competing effects: (1) dot products $Q_i K_j^\t
 
 We validated these predictions by computing the coefficient of variation (CV) of key norms, which directly measures incomplete bias cancellation. For $d = 64$, theory predicts $\text{CV} = \sqrt{2/d} = 0.177$ (17.7\%), representing fundamental $\mathcal{O}(1/\sqrt{d})$ fluctuations. Monte Carlo simulations with learned projection matrices yield $\text{CV} = 0.240 \pm 0.001$ (24.0\%), where the amplification reflects typical BERT-like architectures.
 
-This directly explains both observed phenomena: the temperature shift from $\tau = 16$ to $\tau = 19$ follows from the embedding scale, with ratio $\tau_{\text{emp}}/\tau_{\text{theory}} = 1.188$ exactly matching the 18.75\% deviation; and the magnitude of key-norm bias (discussed below) falls precisely within the predicted range from 24\% norm heterogeneity.
+This is consistent with both observed phenomena: the temperature shift from $\tau = 16$ to $\tau = 19$ follows from the embedding scale, with ratio $\tau_{\text{emp}}/\tau_{\text{theory}} = 1.188$ closely tracking the $\text{CV} = 17.7\%$ predicted by dimensional scaling (the 18.75\% empirical deviation lies within the range expected from learned-weight amplification); and the magnitude of key-norm bias (discussed below) falls within the predicted range from 24\% norm heterogeneity.
 
 Both effects are quantitative validations of the finite-dimensional analysis, with the gauge framework correctly predicting their existence and magnitude from dimensional scaling alone.
 
@@ -1705,16 +1705,16 @@ A central prediction of our gauge-theoretic framework is the emergence of a key-
 
 where the term $-\frac{1}{2\sigma^2}\|K_j\|^2$ represents an intrinsic salience depending only on key vector norm. This bias is gauge-geometric in origin: each key carries information not only about semantic content but also about its representation magnitude in the embedding space.
 
-Our theory predicts this bias should approximately cancel. As shown in Section~4.2.1, the Mahalanobis metric \eqref{eq:mahalanobis_identity} already accounts for the gauge transport's effect on norms, so the residual bias depends on the raw embedding norms $\|\mu_j\|^2$ regardless of the gauge group. High-dimensional concentration then implies: for embeddings $\mu_j^{(i)} \sim \mathcal{N}(0, \sigma^2)$ in $\mathbb{R}^{d_k}$,
+Our theory predicts this bias should approximately cancel. As shown in Section~4.2.1, the Mahalanobis metric \eqref{eq:mahalanobis_identity} already accounts for the gauge transport's effect on norms, so the residual bias depends on the raw embedding norms $\|\mu_j\|^2$ regardless of the gauge group. High-dimensional concentration then implies: for embeddings $\mu_j^{(i)} \sim \mathcal{N}(0, \sigma_0^2)$ in $\mathbb{R}^{d_k}$ (where $\sigma_0^2$ denotes the per-component embedding variance, distinct from the belief precision $\sigma^{-2}$ appearing in the attention logit),
 
 \begin{equation}
-\|\mu_j\|^2 = \sum_{i=1}^{d_k} (\mu_j^{(i)})^2 = d_k\sigma^2 \pm \mathcal{O}(\sigma^2\sqrt{d_k}),
+\|\mu_j\|^2 = \sum_{i=1}^{d_k} (\mu_j^{(i)})^2 = d_k\sigma_0^2 \pm \mathcal{O}(\sigma_0^2\sqrt{d_k}),
 \end{equation}
 
-with relative fluctuations $\mathcal{O}(1/\sqrt{d_k}) \to 0$ as $d_k \to \infty$. Thus $\|\mu_j\|^2 \approx d_k\sigma^2$ becomes approximately constant, yielding
+with relative fluctuations $\mathcal{O}(1/\sqrt{d_k}) \to 0$ as $d_k \to \infty$. Thus $\|\mu_j\|^2 \approx d_k\sigma_0^2$ becomes approximately constant, yielding
 
 \begin{equation}
--\frac{1}{2\sigma^2}\|\mu_j\|^2 \approx -\frac{d_k}{2} = C \quad \text{(constant in $j$)},
+-\frac{1}{2\sigma^2}\|\mu_j\|^2 \approx -\frac{d_k\sigma_0^2}{2\sigma^2} = C \quad \text{(constant in $j$)},
 \end{equation}
 
 which cancels under softmax normalization. At finite dimensions, this cancellation is incomplete, leading to a residual per-key bias.
