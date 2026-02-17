@@ -889,7 +889,7 @@ The Mahalanobis quadratic form can be simplified using the identity $(\Omega_{ij
 \label{eq:mahalanobis_identity}
 \end{equation}
 
-This identity the geometric interpretation that rather than transporting the key belief into the query's frame via $\Omega_{ij}$ and measuring with the induced metric, the KL divergence equivalently transports the query into the key's frame via $\Omega_{ij}^{-1}$ and measures the Euclidean distance there. The Mahalanobis metric automatically accounts for the distortion introduced by gauge transport.
+This identity has the geometric interpretation that rather than transporting the key belief into the query's frame via $\Omega_{ij}$ and measuring with the induced metric, the KL divergence equivalently transports the query into the key's frame via $\Omega_{ij}^{-1}$ and measures the Euclidean distance there. The Mahalanobis metric automatically accounts for the distortion introduced by gauge transport.
 
 The structural terms $\log\det(\Omega_{ij}\Omega_{ij}^\top)$, $\mathrm{Tr}((\Omega_{ij}\Omega_{ij}^\top)^{-1})$, and $d_k$ depend on the gauge transport but not on the belief means $\mu_i, \mu_j$ directly. Under Limit~2 ($\Omega_{ij} = \Omega$), they become constant across all agent pairs and cancel under softmax, leaving the essential structure:
 
@@ -1038,22 +1038,21 @@ where $O(1)$ represents the approximately constant key bias (controlled by layer
 
 \paragraph{Temperature Scaling.}
 
-In high-dimensional spaces, dot products $Q_iK_j^\top$ scale as $O(d_k)$ in magnitude, while key-bias fluctuations are $O(\sqrt{d_k})$. The signal-to-noise ratio is therefore $O(\sqrt{d_k})$.
+Since $\sigma^{-2}$ is absorbed into the learned projections $W_Q, W_K$, the effective logit $\tilde{s}_{ij} = Q_i K_j^\top$ carries no residual dependence on $\sigma$. The softmax $\beta_{ij} = \mathrm{softmax}_j(\tilde{s}_{ij}/\tau)$ must therefore set $\tau$ to account only for the dimensional scaling of the dot product.
 
-To normalize pre-softmax logits to $O(1)$, we divide by $\sqrt{d_k}$:
-
-\begin{equation}
-\beta_{ij} = \mathrm{softmax}_j\left(\frac{Q_i K_j^\top}{\sqrt{d_k}}\right).
-\end{equation}
-
-The natural temperature parameter is then:
+In high-dimensional spaces, dot products $Q_iK_j^\top$ have standard deviation $O(\sqrt{d_k})$ (for unit-variance components), while key-bias fluctuations are $O(1)$ after layer normalization. Normalizing pre-softmax logits to $O(1)$ variance therefore requires:
 
 \begin{equation}
-\tau = \sigma^2\sqrt{d_k},
+\tau = \sqrt{d_k}.
 \end{equation}
 
-encoding both the belief uncertainty ($\sigma^2$) and the embedding dimension ($d_k$).
+Before absorption, the combined scaling factor in the softmax exponent is $1/(\tau\sigma^2)$. With the natural choice $\tau = 1$ (the KL divergence being an intrinsic energy measured in nats), comparison with the standard scaling $1/\sqrt{d_k}$ yields:
 
+\begin{equation}
+\sigma^2 = \sqrt{d_k}.
+\end{equation}
+
+That is, in higher-dimensional embedding spaces, agents maintain proportionally higher belief uncertainty, preventing the KL divergence from growing as $O(d_k)$ and collapsing the softmax into a deterministic argmax. The $1/\sqrt{d_k}$ scaling thus encodes the intrinsic precision of agent beliefs at a given embedding dimension.
 
 Combining all simplifications we have:
 
@@ -1089,7 +1088,7 @@ identical to the standard transformer attention update $z_i = \sum_j \alpha_{ij}
 
 \subsubsection{Complete Attention Formula}
 
-In summary, under the asppropriate limits (isotropic beliefs and flat bundle), our gauge-theoretic message communication:
+In summary, under the appropriate limits (isotropic beliefs and flat bundle), our gauge-theoretic message communication:
 
 \begin{equation}
 \beta_{ij} \propto \exp\left(-\frac{1}{\tau}D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)\right), \quad m_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j,
@@ -1306,7 +1305,7 @@ $\pi_k = 0$ for $|i\!-\!k|>w$ & Window prior & Sliding window attention & D \\
 \hline
 \multicolumn{4}{|l|}{\textit{Normalization and Scaling}} \\
 \hline
-$\tau = \sigma^2 \sqrt{d_k}$ & Concentration of measure & $1/\sqrt{d_k}$ scaling & D \\
+$\tau = \sqrt{d_k}$ ($\sigma^2$ absorbed) & Concentration of measure & $1/\sqrt{d_k}$ scaling & D \\
 $\|\mu_j\|^2 \approx C$ condition & Gauge-geometric necessity & Layer normalization & D \\
 $\mathfrak{gl}(K) \!=\! \mathfrak{sl}(K) \oplus \mathbb{R}$ & Remove trace component & Mean centering in LN & D \\
 \hline
@@ -1693,7 +1692,7 @@ This directly explains both observed phenomena: the temperature shift from $\tau
 
 Both effects are quantitative validations of the finite-dimensional analysis, with the gauge framework correctly predicting their existence and magnitude from dimensional scaling alone.
 
-The temperature parameter $\tau$ plays a dual role. Geometrically, it represents the inverse stiffness of gauge alignment: higher $\tau$ allows greater tolerance for misalignment, softening attention peaks and distributing weight more uniformly among agents. Statistically, $\tau$ corresponds to the ratio $\sigma^2/\sqrt{d_k}$ where $\sigma^2$ characterizes the intrinsic variance of agent beliefs.
+The temperature parameter $\tau$ plays a dual role. Geometrically, it represents the inverse stiffness of gauge alignment: higher $\tau$ allows greater tolerance for misalignment, softening attention peaks and distributing weight more uniformly among agents. Statistically, $\tau = 2\sqrt{d_k}$ reflects both the dimensional normalization $\sqrt{d_k}$ (encoding the belief precision $\sigma^2 = \sqrt{d_k}$ from concentration of measure) and the quadratic coefficient $\frac{1}{2}$ in the KL divergence between isotropic Gaussians.
 
 
 \subsubsection{Key-Norm Bias and Layer Normalization}
