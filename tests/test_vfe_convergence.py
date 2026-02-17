@@ -308,6 +308,7 @@ class TestVFEConvergence:
     # ------------------------------------------------------------------
     # Test 5: Many agents (scaling check)
     # ------------------------------------------------------------------
+    @pytest.mark.timeout(600)
     def test_scaling_many_agents(self):
         """
         Verify convergence with a larger population (8 agents).
