@@ -87,11 +87,7 @@ class GaugeTransformerInference:
 
     def encode(self, text: str) -> torch.Tensor:
         """Encode text to token IDs."""
-        if hasattr(self.tokenizer, 'encode'):
-            token_ids = self.tokenizer.encode(text)
-        else:
-            # Fallback for tiktoken
-            token_ids = self.tokenizer.encode(text)
+        token_ids = self.tokenizer.encode(text)
         return torch.tensor([token_ids], device=self.device)
 
     def decode(self, token_ids: torch.Tensor) -> str:
@@ -99,12 +95,7 @@ class GaugeTransformerInference:
         ids = token_ids.squeeze().tolist()
         if isinstance(ids, int):
             ids = [ids]
-
-        if hasattr(self.tokenizer, 'decode'):
-            return self.tokenizer.decode(ids)
-        else:
-            # Fallback
-            return self.tokenizer.decode(ids)
+        return self.tokenizer.decode(ids)
 
     def generate(
         self,

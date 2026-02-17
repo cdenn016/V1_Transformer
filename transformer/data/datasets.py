@@ -899,7 +899,7 @@ class WikiText2CharDataset(Dataset):
 
     def encode(self, text: str) -> List[int]:
         """Encode text to character IDs."""
-        return [self.char_to_id.get(c, 0) for c in text]
+        return [self.char_to_id.get(c, self.unk_token_id) for c in text]
 
     def decode(self, indices) -> str:
         """Decode indices back to text."""
@@ -1016,7 +1016,7 @@ class WikiText2ByteDataset(Dataset):
                 print(f"  Using provided vocabulary mapping ({len(vocab_mapping)} bytes)...")
                 self.byte_to_id = vocab_mapping.copy()
                 self.unk_id = self.vocab_size  # Last position for unknown
-                self._actual_vocab_size = self.vocab_size
+                self._actual_vocab_size = self.vocab_size + 1  # +1 for UNK token
             else:
                 # Build mapping from this split's frequencies (only for train!)
                 print(f"  Building vocabulary from {split} frequencies...")
@@ -1032,7 +1032,7 @@ class WikiText2ByteDataset(Dataset):
                 # Build mapping: byte -> token_id (1 to vocab_size-1), unknown -> vocab_size-1
                 self.byte_to_id = {b: i + 1 for i, b in enumerate(top_bytes)}
                 self.unk_id = self.vocab_size  # Last position for unknown
-                self._actual_vocab_size = self.vocab_size
+                self._actual_vocab_size = self.vocab_size + 1  # +1 for UNK token
 
             # Convert bytes to token IDs
             byte_indices = []
