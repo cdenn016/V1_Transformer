@@ -734,11 +734,19 @@ def generate_glK_generators(
             idx += 1
 
     if not include_identity:
-        # Remove trace component to get sl(K)
-        # The trace component is (1/K) * Σ_i E_ii = (1/K) * I
-        # We keep all E_ij but could orthogonalize to remove trace
-        # For simplicity, just return full gl(K) basis
-        pass
+        # Remove trace component to get sl(K) (K^2 - 1 generators)
+        # The identity direction is (1/sqrt(K)) * I_K
+        # Project out this component from each generator
+        I_K = np.eye(K, dtype=np.float32)
+        trace_dir = I_K / np.sqrt(K)  # Normalized identity direction
+        projected = []
+        for g in range(n_generators):
+            # Remove trace component: G_new = G - tr(G * trace_dir) * trace_dir
+            overlap = np.sum(G[g] * trace_dir)
+            G_proj = G[g] - overlap * trace_dir
+            if np.linalg.norm(G_proj) > 1e-8:
+                projected.append(G_proj)
+        G = np.stack(projected, axis=0)
 
     return G
 

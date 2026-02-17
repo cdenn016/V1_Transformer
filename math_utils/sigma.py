@@ -331,11 +331,12 @@ def covariance_to_cholesky(Sigma: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     try:
         L = np.linalg.cholesky(Sigma)
     except np.linalg.LinAlgError:
-        # Fallback: eigendecomposition
+        # Fallback: fix eigenvalues then retry Cholesky
         eigs, V = np.linalg.eigh(Sigma)
         eigs = np.maximum(eigs, eps)
-        L = V @ np.diag(np.sqrt(eigs))
-    
+        Sigma_fixed = V @ np.diag(eigs) @ V.T
+        L = np.linalg.cholesky(Sigma_fixed)
+
     return L.astype(np.float32)
 
 

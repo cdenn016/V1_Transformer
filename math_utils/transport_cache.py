@@ -49,33 +49,11 @@ class TransportCache:
     
     def _hash_array(self, arr: np.ndarray) -> str:
         """
-        Fast hash of numpy array for cache key.
-        
-        Uses first/last/mean values rather than full array hash
-        for speed while maintaining uniqueness.
+        Content-based hash of numpy array for cache key.
+
+        Always hashes full array contents to avoid collisions.
         """
-        # Use array's data pointer + shape as unique identifier
-        # This is fast and works for same object
-        arr_id = id(arr)
-        
-        if arr_id in self._phi_hashes:
-            return self._phi_hashes[arr_id]
-        
-        # For new arrays, create hash from key statistics
-        # This is much faster than hashing entire array
-        if arr.size < 100:
-            # Small arrays: hash everything
-            hash_val = hashlib.md5(arr.tobytes()).hexdigest()[:16]
-        else:
-            # Large arrays: hash statistics (faster)
-            stats = np.array([
-                arr.flat[0], arr.flat[-1],  # First/last
-                np.mean(arr), np.std(arr),   # Mean/std
-                arr.shape[0], arr.size       # Shape info
-            ])
-            hash_val = hashlib.md5(stats.tobytes()).hexdigest()[:16]
-        
-        self._phi_hashes[arr_id] = hash_val
+        hash_val = hashlib.md5(arr.tobytes()).hexdigest()[:16]
         return hash_val
     
     def get(self, i: int, j: int) -> Optional[np.ndarray]:
