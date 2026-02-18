@@ -192,8 +192,8 @@ CORPUS = [
 TAU = 1.0                  # Temperature for KL attention
 TAU_SWEEP = [0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 19.0, 25.0, 50.0]  # For temperature sweep
 DEVICE = "cpu"
-N_BOOTSTRAP = 1000         # Number of bootstrap samples for CI
-N_CORPUS_BOOTSTRAP = 500   # Bootstrap samples for cross-passage CIs
+N_BOOTSTRAP = 500          # Bootstrap samples for CI (Phase 1 single-passage)
+N_CORPUS_BOOTSTRAP = 200   # Bootstrap samples for cross-passage CIs
 SAVE_DIR = Path("./fig_transformer_validation")
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -285,41 +285,83 @@ def compute_attention_variants(Qh, Kh, tau: float) -> Dict[str, torch.Tensor]:
     }
 
 
+def _fast_pearsonr(x: np.ndarray, y: np.ndarray) -> Tuple[float, float]:
+    """Vectorized Pearson r + p-value (avoids scipy overhead per call)."""
+    n = len(x)
+    if n < 3:
+        return 0.0, 1.0
+    xm = x - x.mean()
+    ym = y - y.mean()
+    sx = np.sqrt(np.dot(xm, xm))
+    sy = np.sqrt(np.dot(ym, ym))
+    if sx == 0 or sy == 0:
+        return 0.0, 1.0
+    r = np.dot(xm, ym) / (sx * sy)
+    r = max(-1.0, min(1.0, r))  # clamp numerics
+    # t-distribution p-value
+    if abs(r) == 1.0:
+        return float(r), 0.0
+    t_stat = r * np.sqrt((n - 2) / (1 - r * r))
+    p_value = 2.0 * stats.t.sf(abs(t_stat), n - 2)
+    return float(r), float(p_value)
+
+
 def bootstrap_correlation(x: np.ndarray, y: np.ndarray, n_boot: int = 1000) -> Tuple[float, float, float]:
     """
     Compute Pearson correlation with bootstrap confidence interval and p-value.
-    
+    Uses vectorized bootstrap (pre-generate all index matrices) for speed.
+
     Returns:
         r: Pearson correlation coefficient
         p_value: two-tailed p-value
         ci_width: 95% CI half-width
     """
+    r, p_value = _fast_pearsonr(x, y)
+
+    if n_boot <= 0:
+        return r, p_value, 0.0
+
     n = len(x)
-    r, p_value = stats.pearsonr(x, y)
-    
-    # Bootstrap for CI
-    boot_rs = []
-    for _ in range(n_boot):
-        idx = np.random.choice(n, size=n, replace=True)
-        r_boot, _ = stats.pearsonr(x[idx], y[idx])
-        boot_rs.append(r_boot)
-    
+    # Vectorized bootstrap: generate all indices at once
+    idx_all = np.random.randint(0, n, size=(n_boot, n))
+    x_boot = x[idx_all]  # (n_boot, n)
+    y_boot = y[idx_all]
+
+    # Vectorized Pearson r across all bootstrap samples
+    xm = x_boot - x_boot.mean(axis=1, keepdims=True)
+    ym = y_boot - y_boot.mean(axis=1, keepdims=True)
+    num = np.sum(xm * ym, axis=1)
+    den = np.sqrt(np.sum(xm * xm, axis=1) * np.sum(ym * ym, axis=1))
+    # Avoid division by zero (constant bootstrap sample)
+    valid = den > 0
+    boot_rs = np.where(valid, num / den, 0.0)
+
     ci_lower = np.percentile(boot_rs, 2.5)
     ci_upper = np.percentile(boot_rs, 97.5)
     ci_width = (ci_upper - ci_lower) / 2
-    
+
     return r, p_value, ci_width
 
 
-def compute_metrics_with_stats(alpha: torch.Tensor, 
+def _rowwise_pearsonr(A: np.ndarray, B: np.ndarray) -> np.ndarray:
+    """Vectorized per-row Pearson r between rows of A and B (same shape)."""
+    Am = A - A.mean(axis=1, keepdims=True)
+    Bm = B - B.mean(axis=1, keepdims=True)
+    num = np.sum(Am * Bm, axis=1)
+    den = np.sqrt(np.sum(Am * Am, axis=1) * np.sum(Bm * Bm, axis=1))
+    valid = den > 0
+    return np.where(valid, num / den, 0.0)
+
+
+def compute_metrics_with_stats(alpha: torch.Tensor,
                                 beta: torch.Tensor,
                                 Kh: torch.Tensor,
                                 n_boot: int = 1000) -> Dict:
     """
     Compute comprehensive metrics with statistical significance.
-    
+
     Returns dictionary with:
-    - Rowwise correlations (per query token)
+    - Rowwise correlations (per query token) -- vectorized, no bootstrap per row
     - Global correlation with p-value and CI
     - Key-norm bias analysis
     - Peak match statistics
@@ -327,50 +369,40 @@ def compute_metrics_with_stats(alpha: torch.Tensor,
     alpha_np = alpha.detach().cpu().numpy()
     beta_np = beta.detach().cpu().numpy()
     Kh_np = Kh.detach().cpu().numpy()
-    
+
     seq_len = alpha_np.shape[0]
-    
-    # Per-token correlations
-    per_token_corr = []
-    for i in range(seq_len):
-        r, _, _ = bootstrap_correlation(alpha_np[i], beta_np[i], n_boot=100)
-        per_token_corr.append(r)
-    
+
+    # Per-token correlations (vectorized, no per-row bootstrap)
+    per_token_corr = _rowwise_pearsonr(alpha_np, beta_np).tolist()
+
     # Global correlation (flatten and correlate)
-    alpha_flat = alpha_np.flatten()
-    beta_flat = beta_np.flatten()
+    alpha_flat = alpha_np.ravel()
+    beta_flat = beta_np.ravel()
     global_r, global_p, global_ci = bootstrap_correlation(alpha_flat, beta_flat, n_boot=n_boot)
-    
-    # Peak match rate
-    peak_matches = [int(np.argmax(alpha_np[i]) == np.argmax(beta_np[i])) 
-                   for i in range(seq_len)]
-    peak_match_rate = np.mean(peak_matches)
-    
-    # KEY-NORM BIAS ANALYSIS (Critical for validation!)
-    # Measure correlation between ||K_j||^2 and average attention to K_j
+
+    # Peak match rate (vectorized)
+    peak_match_rate = float(np.mean(np.argmax(alpha_np, axis=1) == np.argmax(beta_np, axis=1)))
+
+    # KEY-NORM BIAS ANALYSIS
     key_norms_sq = np.sum(Kh_np**2, axis=1)  # [seq_len]
-    
-    # Average attention received by each key across all queries
-    avg_attn_to_key_alpha = np.mean(alpha_np, axis=0)  # [seq_len]
-    avg_attn_to_key_beta = np.mean(beta_np, axis=0)    # [seq_len]
-    
-    # Correlate key norms with attention received
+    avg_attn_to_key_alpha = np.mean(alpha_np, axis=0)
+    avg_attn_to_key_beta = np.mean(beta_np, axis=0)
+
     r_keynorm_alpha, p_keynorm_alpha, ci_keynorm_alpha = bootstrap_correlation(
         key_norms_sq, avg_attn_to_key_alpha, n_boot=n_boot
     )
     r_keynorm_beta, p_keynorm_beta, ci_keynorm_beta = bootstrap_correlation(
         key_norms_sq, avg_attn_to_key_beta, n_boot=n_boot
     )
-    
+
     return {
         'per_token_corr': per_token_corr,
-        'mean_corr': np.mean(per_token_corr),
-        'std_corr': np.std(per_token_corr),
+        'mean_corr': float(np.mean(per_token_corr)),
+        'std_corr': float(np.std(per_token_corr)),
         'global_r': global_r,
         'global_p': global_p,
         'global_ci': global_ci,
         'peak_match_rate': peak_match_rate,
-        'peak_matches': peak_matches,
         'key_norms_sq': key_norms_sq,
         'avg_attn_to_key_alpha': avg_attn_to_key_alpha,
         'avg_attn_to_key_beta': avg_attn_to_key_beta,
@@ -381,6 +413,50 @@ def compute_metrics_with_stats(alpha: torch.Tensor,
         'p_keynorm_beta': p_keynorm_beta,
         'ci_keynorm_beta': ci_keynorm_beta,
     }
+
+
+# -----------------------------
+# Fast lightweight per-head metrics (no bootstrap, for corpus sweep)
+# -----------------------------
+def _compute_fast_metrics(alpha: torch.Tensor, beta: torch.Tensor,
+                          Kh: torch.Tensor) -> Dict:
+    """Bare-minimum metrics for multi-passage: r, p, peak-match, key-norm r."""
+    a = alpha.detach().cpu().numpy()
+    b = beta.detach().cpu().numpy()
+    K_np = Kh.detach().cpu().numpy()
+
+    global_r, global_p = _fast_pearsonr(a.ravel(), b.ravel())
+    peak_match = float(np.mean(np.argmax(a, axis=1) == np.argmax(b, axis=1)))
+
+    key_norms_sq = np.sum(K_np**2, axis=1)
+    r_kn_alpha, _, = _fast_pearsonr(key_norms_sq, np.mean(a, axis=0))
+    r_kn_beta, _, = _fast_pearsonr(key_norms_sq, np.mean(b, axis=0))
+
+    return {
+        'global_r': global_r,
+        'global_p': global_p,
+        'peak_match_rate': peak_match,
+        'r_keynorm_alpha': r_kn_alpha,
+        'r_keynorm_beta': r_kn_beta,
+    }
+
+
+def _get_all_qkv_for_layer(model, hidden_states, layer_idx: int):
+    """Return Q, K, V for ALL heads at once — avoids repeated linear projections."""
+    h = hidden_states[layer_idx][0]  # [seq_len, hidden_dim]
+    attn_self = model.encoder.layer[layer_idx].attention.self
+    Q_all = attn_self.query(h)
+    K_all = attn_self.key(h)
+    V_all = attn_self.value(h)
+
+    num_heads = attn_self.num_attention_heads
+    head_dim = attn_self.attention_head_size
+    seq_len = Q_all.shape[0]
+
+    Q = Q_all.view(seq_len, num_heads, head_dim)
+    K = K_all.view(seq_len, num_heads, head_dim)
+    V = V_all.view(seq_len, num_heads, head_dim)
+    return Q, K, V   # each: [seq_len, num_heads, head_dim]
 
 
 # -----------------------------
@@ -399,7 +475,6 @@ def run_single_passage_analysis(
     inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512).to(device)
     seq_len = inputs["input_ids"].shape[1]
 
-    # Skip passages that are too short for meaningful attention analysis
     if seq_len < 5:
         return []
 
@@ -412,8 +487,10 @@ def run_single_passage_analysis(
 
     results = []
     for layer_idx in range(num_layers):
+        Q, K, V = _get_all_qkv_for_layer(model, hidden_states, layer_idx)
         for head_idx in range(num_heads):
-            Qh, Kh, Vh = get_qkv_for_layer(model, hidden_states, layer_idx, head_idx)
+            Qh = Q[:, head_idx, :]
+            Kh = K[:, head_idx, :]
             attentions = compute_attention_variants(Qh, Kh, tau)
 
             metrics_forward = compute_metrics_with_stats(
@@ -437,28 +514,66 @@ def run_single_passage_analysis(
 
 
 # --------------------------------------------------
+# Lightweight per-passage analysis (for corpus sweep)
+# --------------------------------------------------
+def _run_fast_passage(model, tokenizer, text: str, tau: float,
+                      device: str = "cpu") -> List[Dict]:
+    """
+    Fast per-head analysis: forward-KL only, no bootstrap, no ablations.
+    ~50x faster than run_single_passage_analysis.
+    """
+    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512).to(device)
+    seq_len = inputs["input_ids"].shape[1]
+    if seq_len < 5:
+        return []
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+    hidden_states = outputs.hidden_states
+
+    num_layers = len(model.encoder.layer)
+    num_heads = model.encoder.layer[0].attention.self.num_attention_heads
+
+    results = []
+    for layer_idx in range(num_layers):
+        Q, K, V = _get_all_qkv_for_layer(model, hidden_states, layer_idx)
+        for head_idx in range(num_heads):
+            Qh = Q[:, head_idx, :]
+            Kh = K[:, head_idx, :]
+
+            # Only compute alpha + forward beta (skip reverse/symmetric)
+            seq_len_h, d = Qh.shape
+            scores_dot = (Qh @ Kh.T) / np.sqrt(d)
+            alpha = F.softmax(scores_dot, dim=1)
+
+            diff = Qh.unsqueeze(1) - Kh.unsqueeze(0)
+            sqdist = torch.sum(diff * diff, dim=-1)
+            beta = F.softmax(-sqdist / tau, dim=1)
+
+            metrics = _compute_fast_metrics(alpha, beta, Kh)
+            metrics['layer'] = layer_idx
+            metrics['head'] = head_idx
+            results.append(metrics)
+    return results
+
+
+# --------------------------------------------------
 # Multi-Passage Analysis & Cross-Passage Aggregation
 # --------------------------------------------------
 def run_multi_passage_analysis(
     model, tokenizer, corpus: List[str], tau: float,
-    device: str = "cpu", n_bootstrap: int = 200
+    device: str = "cpu"
 ) -> List[List[Dict]]:
     """
-    Run single-passage analysis on every passage in *corpus*.
-
-    Returns:
-        all_passage_results: list of length len(corpus), each element
-            is the list returned by run_single_passage_analysis.
+    Run fast per-head analysis on every passage in *corpus*.
+    Uses _run_fast_passage (no bootstrap, forward-KL only) for speed.
     """
     all_passage_results = []
     n = len(corpus)
     for idx, text in enumerate(corpus):
-        if idx % 10 == 0:
+        if idx % 20 == 0:
             print(f"  Passage {idx+1}/{n}  ({len(text)} chars)")
-        result = run_single_passage_analysis(
-            model, tokenizer, text, tau, device=device,
-            n_bootstrap=n_bootstrap
-        )
+        result = _run_fast_passage(model, tokenizer, text, tau, device=device)
         all_passage_results.append(result)
     return all_passage_results
 
@@ -504,11 +619,16 @@ def aggregate_cross_passage(
         if not passage_result:
             continue
         for i, head_result in enumerate(passage_result):
-            per_head_corrs[i].append(head_result['metrics_forward']['global_r'])
-            per_head_pvals[i].append(head_result['metrics_forward']['global_p'])
-            per_head_keynorm_alpha[i].append(head_result['metrics_forward']['r_keynorm_alpha'])
-            per_head_keynorm_beta[i].append(head_result['metrics_forward']['r_keynorm_beta'])
-            per_head_peak_match[i].append(head_result['metrics_forward']['peak_match_rate'])
+            # Support both full (nested metrics_forward) and fast (flat) formats
+            if 'metrics_forward' in head_result:
+                mf = head_result['metrics_forward']
+            else:
+                mf = head_result
+            per_head_corrs[i].append(mf['global_r'])
+            per_head_pvals[i].append(mf['global_p'])
+            per_head_keynorm_alpha[i].append(mf['r_keynorm_alpha'])
+            per_head_keynorm_beta[i].append(mf['r_keynorm_beta'])
+            per_head_peak_match[i].append(mf['peak_match_rate'])
 
     per_head_agg = []
     all_mean_corrs = []
@@ -575,11 +695,10 @@ def aggregate_cross_passage(
 # --------------------------------------------------
 def sweep_tau_across_passages(
     model, tokenizer, corpus: List[str], tau_values: List[float],
-    device: str = "cpu", n_bootstrap_per_passage: int = 50,
-    n_cross_boot: int = 500
+    device: str = "cpu", n_cross_boot: int = 200
 ) -> Dict:
     """
-    For each tau value, run multi-passage analysis and collect the
+    For each tau value, run fast multi-passage analysis and collect the
     grand-mean correlation across all heads and passages.
 
     Returns dict mapping tau -> {mean_r, se_r, ci_lo, ci_hi, per_head_means}.
@@ -588,19 +707,15 @@ def sweep_tau_across_passages(
     for tau in tau_values:
         print(f"\n  tau = {tau:.1f}")
         all_passage = run_multi_passage_analysis(
-            model, tokenizer, corpus, tau,
-            device=device, n_bootstrap=n_bootstrap_per_passage
+            model, tokenizer, corpus, tau, device=device
         )
         agg = aggregate_cross_passage(all_passage, n_boot=n_cross_boot)
 
-        # Collect the mean_r for each head (averaged across passages)
         per_head_means = np.array([h['mean_r'] for h in agg['per_head']])
 
-        # Bootstrap CI for grand mean
-        boot_grand = []
-        for _ in range(n_cross_boot):
-            sample = np.random.choice(per_head_means, size=len(per_head_means), replace=True)
-            boot_grand.append(np.mean(sample))
+        # Vectorized bootstrap CI for grand mean
+        idx = np.random.randint(0, len(per_head_means), size=(n_cross_boot, len(per_head_means)))
+        boot_grand = per_head_means[idx].mean(axis=1)
         ci_lo = float(np.percentile(boot_grand, 2.5))
         ci_hi = float(np.percentile(boot_grand, 97.5))
 
@@ -1329,32 +1444,26 @@ def main():
     # Analyze ALL heads on the original passage
     all_head_results = []
     for layer_idx in range(num_layers):
+        print(f"  Processing: Layer {layer_idx}/{num_layers-1}")
+        Q, K, V = _get_all_qkv_for_layer(model, hidden_states, layer_idx)
         for head_idx in range(num_heads):
-            if (layer_idx * num_heads + head_idx) % 12 == 0:
-                print(f"  Processing: Layer {layer_idx}/{num_layers-1}, "
-                      f"Head {head_idx}/{num_heads-1}")
+            Qh = Q[:, head_idx, :]
+            Kh = K[:, head_idx, :]
 
-            # Get Q, K, V
-            Qh, Kh, Vh = get_qkv_for_layer(model, hidden_states, layer_idx, head_idx)
-
-            # Compute all attention variants
             attentions = compute_attention_variants(Qh, Kh, TAU)
 
-            # Compute metrics for each variant
             metrics_forward = compute_metrics_with_stats(
                 attentions['alpha'],
                 attentions['beta_forward'],
                 Kh,
                 n_boot=N_BOOTSTRAP
             )
-
             metrics_reverse = compute_metrics_with_stats(
                 attentions['alpha'],
                 attentions['beta_reverse'],
                 Kh,
                 n_boot=N_BOOTSTRAP
             )
-
             metrics_symmetric = compute_metrics_with_stats(
                 attentions['alpha'],
                 attentions['beta_symmetric'],
@@ -1426,7 +1535,7 @@ def main():
     print(f"\nRunning analysis on {len(CORPUS)} diverse passages (tau={TAU})...")
     all_passage_results = run_multi_passage_analysis(
         model, tokenizer, CORPUS, TAU,
-        device=DEVICE, n_bootstrap=200
+        device=DEVICE
     )
     t_corpus = time.time() - t0
     print(f"  Completed in {t_corpus:.1f}s")
@@ -1477,8 +1586,7 @@ def main():
     t0 = time.time()
     tau_results = sweep_tau_across_passages(
         model, tokenizer, CORPUS, TAU_SWEEP,
-        device=DEVICE, n_bootstrap_per_passage=50,
-        n_cross_boot=N_CORPUS_BOOTSTRAP
+        device=DEVICE, n_cross_boot=N_CORPUS_BOOTSTRAP
     )
     t_sweep = time.time() - t0
     print(f"\n  Temperature sweep completed in {t_sweep:.1f}s")
