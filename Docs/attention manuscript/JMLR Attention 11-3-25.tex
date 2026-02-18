@@ -2526,80 +2526,96 @@ such that the marginal cost of increasing attention to $j$ equals the forward KL
 
 This identifies the attention cost with the KL.
 
-\subsubsection{Reverse and Symmetric KL Forms}
-If instead $\mathcal{D}(q_i,q_j) = D_{\mathrm{KL}}(\Omega_{ij}q_j \,\|\, q_i)$, the stationary condition becomes
+\subsubsection{Conditional Uniqueness Theorem}
+\label{thm:uniqueness}
 
+\textbf{Theorem.} \textit{Let\/ $\mathcal{D}(q,p)$ be a convex $f$-divergence of the form
+\[
+\mathcal{D}(q,p)
+= \int p(c)\,f\!\!\left(\frac{q(c)}{p(c)}\right)dc,
+\]
+with $f$ convex, $f(1)=0$, and---without loss of generality\footnote{Any $f$-divergence is invariant under $f(t)\mapsto f(t)+c(t-1)$ when $q$ and $p$ are normalized, so we may always choose the representative with $f'(1)=0$.}---$f'(1)=0$.  Suppose $\mathcal{D}$ enters linearly in the free energy \eqref{eq:F_i} and that the attention weights satisfy $\sum_j\beta_{ij}=1$.  Then the stationary solution $q_i^*$ assumes the geometric-mean Boltzmann form}
 \begin{equation}
-H_i(c)
-+ \log q_i(c)
-- \sum_j \beta_{ij}
-\frac{\Omega_{ij}(c) q_j(c)}{q_i(c)}
-= \text{const},
+q_i^*(c) \;\propto\; p_i(c)^{1/2}\,\prod_{j}\bigl[\Omega_{ij}(c)\,q_j(c)\bigr]^{\beta_{ij}/2}
+\label{eq:geometric_mean_target}
+\end{equation}
+\textit{for all choices of prior $p_i$ and neighbor beliefs $\{q_j\}$, if and only if $\mathcal{D}$ is the forward Kullback--Leibler divergence (up to the affine equivalence above):}
+\[
+\mathcal{D}(q,p) = D_{\mathrm{KL}}(q\,\|\,p).
+\]
+
+\paragraph{Proof.}
+
+\textbf{Step 1.  Variational derivative of a general $f$-divergence.}
+With $\mathcal{D}(q_i,\Omega_{ij}q_j)=\int (\Omega_{ij}q_j)\,f\!\bigl(q_i/(\Omega_{ij}q_j)\bigr)\,dc$ and ratio $r(c)=q_i(c)/\bigl[\Omega_{ij}(c)\,q_j(c)\bigr]$, the functional derivative is
+\begin{equation}
+\frac{\delta\mathcal{D}}{\delta q_i(c)} = f'(r(c)).
+\end{equation}
+The stationarity condition $\delta F_i/\delta q_i(c)=\lambda$ (with Lagrange multiplier $\lambda$ for normalization) therefore reads
+\begin{equation}
+\log\frac{q_i(c)}{p_i(c)} + 1
++ \sum_j \beta_{ij}\,f'\!\!\left(\frac{q_i(c)}{\Omega_{ij}(c)\,q_j(c)}\right) = \lambda.
+\label{eq:general_stationarity}
 \end{equation}
 
-introducing terms as $1/q_i$ and leading to a transcendental stationary equation without a closed-form solution destroying the exponential family requirement above.
-
-Likewise, the symmetrized divergence
-
+\textbf{Step 2.  Forward implication ($D_{\mathrm{KL}}\Rightarrow$ geometric mean).}
+For $\mathcal{D}=D_{\mathrm{KL}}$, the generator is $f(t)=t\log t - t + 1$, giving $f'(t)=\log t$.  Substituting into \eqref{eq:general_stationarity}:
 \[
-\mathcal{D}_{\mathrm{sym}}(q_i,q_j)
-= \tfrac{1}{2}\!\left[
-D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)
-+ D_{\mathrm{KL}}(\Omega_{ij} q_j \,\|\, q_i)
-\right]
+\log q_i - \log p_i + 1 + \sum_j \beta_{ij}\bigl(\log q_i - \log\Omega_{ij}q_j\bigr) = \lambda.
 \]
-
-mixes $\log q_i$ and $1/q_i$ terms, again breaking log-linearity.\\
-Hence, among local f-divergences, only the forward KL preserves exponential-family closure.
-
-\subsubsection{Conditional Uniqueness Theorem}
-Let $\mathcal{D}(q_i,q_j)$ be any local $f$-divergence
-
+Since $\sum_j\beta_{ij}=1$, the $\log q_i$ terms collect as $(1+1)\log q_i = 2\log q_i$:
 \[
-\mathcal{D}(q_i,q_j)
-= \int q_i(c)\,
-f\!\left(\frac{q_i(c)}{\Omega_{ij}(c) q_j(c)}\right)
-dc,
+2\log q_i = \log p_i + \sum_j\beta_{ij}\log(\Omega_{ij}q_j) + (\lambda - 1).
 \]
+Exponentiating yields exactly the geometric-mean form \eqref{eq:geometric_mean_target}. \hfill $\checkmark$
 
-that enters linearly in \eqref{eq:F_i}, and further suppose that the stationary distribution $q_i^*$ is log-linear in $\{H_i,\Omega_{ij}q_j\}$.
+\textbf{Step 3.  Reverse implication (geometric mean $\Rightarrow D_{\mathrm{KL}}$).}
+Assume the minimizer has the form \eqref{eq:geometric_mean_target} \emph{for all} priors $p_i$ and neighbor beliefs $\{q_j\}$.  Taking logarithms:
+\begin{equation}
+2\log q_i^*(c) = \log p_i(c) + \sum_j\beta_{ij}\log\bigl(\Omega_{ij}(c)\,q_j(c)\bigr) + C.
+\label{eq:log_target}
+\end{equation}
+Rearranging with $\sum_j\beta_{ij}=1$:
+\begin{equation}
+\log\frac{q_i^*}{p_i} + \sum_j\beta_{ij}\log\frac{q_i^*}{\Omega_{ij}q_j} = C'.
+\label{eq:rearranged_target}
+\end{equation}
+Comparing \eqref{eq:rearranged_target} with the general stationarity condition \eqref{eq:general_stationarity} term-by-term, we require
+\begin{equation}
+f'\!\!\left(\frac{q_i}{\Omega_{ij}q_j}\right) = \log\frac{q_i}{\Omega_{ij}q_j} + k
+\label{eq:ode}
+\end{equation}
+for some constant $k$, and for all values of the ratio $t = q_i(c)/[\Omega_{ij}(c)\,q_j(c)]$.  Crucially, since the geometric-mean form must hold for \emph{all} choices of $p_i$ and $\{q_j\}$, the ratio $t$ ranges over all of $\mathbb{R}^+$, so \eqref{eq:ode} must hold globally: $f'(t)=\log t + k$ for all $t>0$.
 
-Then the following are equivalent: (1) $q_i^*$ has the geometric-mean Boltzmann form \eqref{eq:q_i_star}; (2) $\mathcal{D}(q_i,q_j)=D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$; and (3) $C_{ij}=\dfrac{\partial F_i}{\partial\beta_{ij}}
-=D_{\mathrm{KL}}(q_i^* \,\|\, \Omega_{ij}q_j).$
-
-Proof sketch
-
-(2) $\Rightarrow$ (1) follows from direct solution of the stationary condition.
-
-(1) $\Rightarrow$ (2):
-
-Assume the solution is log-linear \eqref{eq:q_i_star}.\\
-Substituting this into the stationarity condition gives
-
+Integrating:
 \[
-\frac{\delta \mathcal{D}}{\delta q_i(c)}
-\Big|_{q_i^*}
-= \log\frac{q_i^*(c)}{\Omega_{ij}(c) q_j(c)} + 1.
+f(t) = t\log t - t + kt + C_0.
 \]
-
-Next, integrating, we find
-
+Imposing $f'(1)=0$: $0 + k = 0$, hence $k=0$.  Imposing $f(1)=0$: $0 - 1 + 0 + C_0 = 0$, hence $C_0 = 1$.  Therefore
 \[
-\mathcal{D}(q_i^*,q_j)
-= \int q_i^*(c)
-\log\frac{q_i^*(c)}{\Omega_{ij}(c) q_j(c)}\,dc
-+ \text{const}.
+f(t) = t\log t - t + 1,
 \]
+which is the generator of $D_{\mathrm{KL}}(q\,\|\,p)$. \hfill $\square$
 
-We require that $\mathcal{D}(q,q)=0$ thereby fixing the constant to be zero thus producing the forward KL form.
+\subsubsection{Dual Relation via the Envelope Theorem}
+Having established $D_{\mathrm{KL}}$ as the unique primal divergence, the envelope theorem applied to the $\beta_{ij}$ optimization confirms that the marginal attention cost is
+\begin{equation}
+C_{ij} \;\equiv\; \frac{\partial F_i}{\partial\beta_{ij}}\bigg|_{q_i^*}
+= D_{\mathrm{KL}}(q_i^*\,\|\,\Omega_{ij}q_j),
+\end{equation}
+identifying the ``cost of attention'' with the information divergence between the agent's updated belief and the neighbor's transported signal.
 
-(3) $\Rightarrow$ (2):
-
-By the envelope theorem \eqref{eq:envelope}, the only divergence consistent with a linear $\beta_{ij}$-coupling and this derivative structure is the forward KL.
+\paragraph{Remark on alternative divergences.}
+The uniqueness result illuminates why standard alternatives fail:
+\begin{itemize}
+    \item \textbf{Reverse KL} $D_{\mathrm{KL}}(p\,\|\,q)$: The generator $f(t)=-\log t + t - 1$ gives $f'(t)=-1/t+1$. The stationarity condition introduces terms proportional to $1/q_i$, leading to a transcendental equation (solvable only via the Lambert $W$ function) that destroys exponential-family closure.
+    \item \textbf{Jensen--Shannon / symmetrized KL}: These involve mixtures of $\log q_i$ and $1/q_i$ terms, again breaking log-linearity.
+    \item \textbf{$\chi^2$-divergence}: The generator $f(t)=(t-1)^2$ gives $f'(t)=2(t-1)$, yielding a stationarity condition that is algebraic rather than logarithmic in $q_i$---the solution is a ratio of polynomials rather than an exponential form.
+\end{itemize}
 
 \paragraph{Remark on the scope of conditional uniqueness.}
-The three conditions (locality, linear coupling, exponential-family closure) are individually natural but collectively restrictive. Relaxing any one condition opens different classes of alternatives. Dropping exponential-family closure admits the reverse KL $D_{\mathrm{KL}}(\Omega_{ij}q_j \,\|\, q_i)$, which yields mode-seeking rather than mean-seeking updates but requires iterative solution of a transcendental equation. Dropping linearity in $\beta_{ij}$ permits non-linear attention mechanisms (e.g., $\beta_{ij}^2$-weighted couplings), at the cost of losing the dual interpretation. Dropping locality admits integral or kernel-based divergences (e.g., maximum mean discrepancy), which may be advantageous when the exponential-family assumption is inappropriate.
-The theorem's value lies in showing that \emph{all three conditions together} uniquely select the forward KL---it is not a single assumption that drives the result, but the conjunction. A full proof (beyond the sketch above) would require showing that the functional derivative equation admits a unique solution in the space of $f$-divergences, which we defer to a dedicated treatment.
+The three conditions (locality, linear coupling, exponential-family closure) are individually natural but collectively restrictive. Relaxing any one condition opens different classes of alternatives. Dropping exponential-family closure admits the reverse KL, which yields mode-seeking rather than mean-seeking updates but requires iterative solution of a transcendental equation. Dropping linearity in $\beta_{ij}$ permits non-linear attention mechanisms (e.g., $\beta_{ij}^2$-weighted couplings), at the cost of losing the dual interpretation. Dropping locality admits integral or kernel-based divergences (e.g., maximum mean discrepancy), which may be advantageous when the exponential-family assumption is inappropriate.
+The theorem's value lies in showing that \emph{all three conditions together} uniquely select the forward KL---it is not a single assumption that drives the result, but the conjunction.
 
 \subsubsection{Interpretations}
 These results admit three complementary interpretations. From the perspective of gauge invariance, the comparison is made between $q_i$ and the transported $\Omega_{ij}q_j$ in the same frame (and similarly for $j \rightarrow i$); gauge covariance fixes what is compared, while variational duality fixes how it is compared. From the perspective of variational duality, the forward KL is the only divergence that simultaneously yields a closed-form Boltzmann solution for $q_i$ and a consistent dual cost $C_{ij} = \partial F_i / \partial \beta_{ij}$. From the perspective of information geometry, the forward KL is the Bregman divergence generated by the negative entropy potential, whose Hessian induces the Fisher-Rao metric and yields the m/e-projection (mixed/exponential family) Pythagorean theorem. These global properties are not shared by generic f-divergences.
