@@ -334,7 +334,8 @@ def bootstrap_correlation(x: np.ndarray, y: np.ndarray, n_boot: int = 1000) -> T
     den = np.sqrt(np.sum(xm * xm, axis=1) * np.sum(ym * ym, axis=1))
     # Avoid division by zero (constant bootstrap sample)
     valid = den > 0
-    boot_rs = np.where(valid, num / den, 0.0)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        boot_rs = np.where(valid, num / den, 0.0)
 
     ci_lower = np.percentile(boot_rs, 2.5)
     ci_upper = np.percentile(boot_rs, 97.5)
@@ -1050,10 +1051,14 @@ def plot_significance_summary(all_head_results: List[Dict], save_path: Path):
     p_vals_keynorm = [r['metrics_forward']['p_keynorm_beta'] for r in all_head_results]
     global_rs = [r['metrics_forward']['global_r'] for r in all_head_results]
     global_cis = [r['metrics_forward']['global_ci'] for r in all_head_results]
-    
+
+    # Clamp p-values to a small positive floor so log10 never produces -inf
+    _P_FLOOR = 1e-300
+    log10_p_global = np.log10(np.maximum(p_vals_global, _P_FLOOR))
+
     # Histogram of p-values
     ax = axes[0, 0]
-    ax.hist(np.log10(p_vals_global), bins=30, alpha=0.7, edgecolor='black')
+    ax.hist(log10_p_global, bins=30, alpha=0.7, edgecolor='black')
     ax.axvline(np.log10(0.05), color='red', linestyle='--', linewidth=2, label='p=0.05')
     ax.axvline(np.log10(0.001), color='darkred', linestyle='--', linewidth=2, label='p=0.001')
     ax.set_xlabel('log₁₀(p-value)')
@@ -1064,7 +1069,7 @@ def plot_significance_summary(all_head_results: List[Dict], save_path: Path):
     
     # Correlation vs p-value
     ax = axes[0, 1]
-    scatter = ax.scatter(global_rs, np.log10(p_vals_global), 
+    scatter = ax.scatter(global_rs, log10_p_global,
                         c=global_cis, cmap='viridis', s=50, alpha=0.7)
     ax.axhline(np.log10(0.05), color='red', linestyle='--', alpha=0.5)
     ax.set_xlabel('Correlation r')
