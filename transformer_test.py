@@ -1401,6 +1401,647 @@ def plot_keynorm_cross_passage(agg: Dict, save_path: Path):
     print(f"Saved: {save_path / 'keynorm_cross_passage.png'}")
 
 
+# --------------------------------------------------
+# Phase 4: Multi-Model Validation
+# --------------------------------------------------
+MULTI_MODEL_NAMES = [
+    "bert-base-uncased",
+    "bert-large-uncased",
+    "distilbert-base-uncased",
+    "roberta-base",
+    "albert-base-v2",
+]
+
+# Adapter: each model family has different internal structure.
+# This returns (Q_all, K_all, V_all) each [seq_len, hidden_dim] for a given layer.
+def _get_qkv_generic(model, hidden_states, layer_idx: int, model_name: str):
+    """
+    Extract Q, K, V projections for a given layer across model families.
+    Returns Q_all, K_all, V_all: [seq_len, hidden_dim] and (num_heads, head_dim).
+    """
+    h = hidden_states[layer_idx][0]  # [seq_len, hidden_dim]
+
+    if "distilbert" in model_name:
+        layer = model.transformer.layer[layer_idx]
+        attn = layer.attention
+        Q_all = attn.q_lin(h)
+        K_all = attn.k_lin(h)
+        V_all = attn.v_lin(h)
+        num_heads = attn.n_heads
+        head_dim = attn.dim // num_heads
+    elif "roberta" in model_name:
+        attn_self = model.encoder.layer[layer_idx].attention.self
+        Q_all = attn_self.query(h)
+        K_all = attn_self.key(h)
+        V_all = attn_self.value(h)
+        num_heads = attn_self.num_attention_heads
+        head_dim = attn_self.attention_head_size
+    elif "albert" in model_name:
+        # ALBERT shares weights across layers; the single layer is in albert.encoder.albert_layer_groups
+        albert_layer = model.encoder.albert_layer_groups[0].albert_layers[0]
+        attn_self = albert_layer.attention
+        Q_all = attn_self.query(h)
+        K_all = attn_self.key(h)
+        V_all = attn_self.value(h)
+        num_heads = attn_self.num_attention_heads
+        head_dim = attn_self.attention_head_size
+    else:
+        # Default: BERT-style
+        attn_self = model.encoder.layer[layer_idx].attention.self
+        Q_all = attn_self.query(h)
+        K_all = attn_self.key(h)
+        V_all = attn_self.value(h)
+        num_heads = attn_self.num_attention_heads
+        head_dim = attn_self.attention_head_size
+
+    seq_len = Q_all.shape[0]
+    Q = Q_all.view(seq_len, num_heads, head_dim)
+    K = K_all.view(seq_len, num_heads, head_dim)
+    V = V_all.view(seq_len, num_heads, head_dim)
+    return Q, K, V, num_heads, head_dim
+
+
+def _get_num_layers(model, model_name: str) -> int:
+    """Return the number of transformer layers for a given model family."""
+    if "distilbert" in model_name:
+        return len(model.transformer.layer)
+    elif "albert" in model_name:
+        # ALBERT reuses one layer group; report the effective depth
+        return model.config.num_hidden_layers
+    else:
+        return len(model.encoder.layer)
+
+
+def run_multi_model_validation(
+    corpus: List[str], tau: float, device: str = "cpu",
+    model_names: List[str] = None, n_passages: int = 20,
+) -> Dict[str, Dict]:
+    """
+    Run fast multi-passage analysis on several pretrained models.
+    Uses a subset of the corpus for speed.
+
+    Returns dict mapping model_name -> {
+        grand_mean_r, grand_std_r, per_head_means, n_layers, n_heads, n_params
+    }
+    """
+    if model_names is None:
+        model_names = MULTI_MODEL_NAMES
+    sub_corpus = corpus[:n_passages]
+
+    results = {}
+    for mname in model_names:
+        print(f"\n  Loading {mname}...")
+        try:
+            tok = AutoTokenizer.from_pretrained(mname)
+            mdl = AutoModel.from_pretrained(mname, output_hidden_states=True)
+            mdl.eval().to(device)
+        except Exception as e:
+            print(f"    SKIP ({e})")
+            continue
+
+        n_params = sum(p.numel() for p in mdl.parameters())
+        n_layers = _get_num_layers(mdl, mname)
+        # Get n_heads from first passage
+        test_inp = tok(sub_corpus[0], return_tensors="pt", truncation=True, max_length=512).to(device)
+        with torch.no_grad():
+            test_out = mdl(**test_inp)
+        _, _, _, n_heads, head_dim = _get_qkv_generic(mdl, test_out.hidden_states, 0, mname)
+
+        print(f"    {n_layers}L × {n_heads}H, head_dim={head_dim}, "
+              f"params={n_params/1e6:.1f}M")
+
+        per_head_corrs = []  # collect grand mean r per passage per head
+        n_valid = 0
+        for pidx, text in enumerate(sub_corpus):
+            inputs = tok(text, return_tensors="pt", truncation=True, max_length=512).to(device)
+            seq_len = inputs["input_ids"].shape[1]
+            if seq_len < 5:
+                continue
+            with torch.no_grad():
+                outputs = mdl(**inputs)
+            hs = outputs.hidden_states
+
+            passage_rs = []
+            for layer_idx in range(n_layers):
+                try:
+                    Q, K, V, nh, hd = _get_qkv_generic(mdl, hs, layer_idx, mname)
+                except Exception:
+                    continue
+                for head_idx in range(nh):
+                    Qh = Q[:, head_idx, :]
+                    Kh = K[:, head_idx, :]
+                    sl, d = Qh.shape
+                    scores_dot = (Qh @ Kh.T) / np.sqrt(d)
+                    alpha = F.softmax(scores_dot, dim=1)
+                    diff = Qh.unsqueeze(1) - Kh.unsqueeze(0)
+                    sqdist = torch.sum(diff * diff, dim=-1)
+                    beta = F.softmax(-sqdist / tau, dim=1)
+                    r, _ = _fast_pearsonr(
+                        alpha.detach().cpu().numpy().ravel(),
+                        beta.detach().cpu().numpy().ravel(),
+                    )
+                    passage_rs.append(r)
+            if passage_rs:
+                per_head_corrs.append(np.mean(passage_rs))
+                n_valid += 1
+
+        if per_head_corrs:
+            results[mname] = {
+                'grand_mean_r': float(np.mean(per_head_corrs)),
+                'grand_std_r': float(np.std(per_head_corrs, ddof=1)) if len(per_head_corrs) > 1 else 0.0,
+                'per_passage_means': per_head_corrs,
+                'n_layers': n_layers,
+                'n_heads': n_heads,
+                'head_dim': head_dim,
+                'n_params': n_params,
+                'n_passages': n_valid,
+            }
+            print(f"    grand mean r = {results[mname]['grand_mean_r']:.4f} "
+                  f"({n_valid} passages)")
+
+        # Free memory
+        del mdl, tok
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    return results
+
+
+def plot_multi_model_comparison(multi_model_results: Dict[str, Dict], save_path: Path):
+    """Bar chart comparing grand mean r across pretrained models."""
+    names = list(multi_model_results.keys())
+    means = [multi_model_results[n]['grand_mean_r'] for n in names]
+    stds = [multi_model_results[n]['grand_std_r'] for n in names]
+    params = [multi_model_results[n]['n_params'] / 1e6 for n in names]
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Bar chart of grand mean r
+    ax = axes[0]
+    bars = ax.bar(range(len(names)), means, yerr=stds, capsize=4,
+                  color='steelblue', edgecolor='black', alpha=0.8)
+    ax.set_xticks(range(len(names)))
+    ax.set_xticklabels([n.replace("-uncased", "").replace("-base", "")
+                        for n in names], rotation=30, ha='right')
+    ax.set_ylabel('Grand mean r(α, β)')
+    ax.set_title('KL-attention correlation across pretrained models')
+    ax.set_ylim(0, 1.05)
+    ax.axhline(0.8, color='red', linestyle='--', alpha=0.4, label='r=0.8')
+    ax.legend()
+    ax.grid(axis='y', alpha=0.3)
+    for i, (m, s) in enumerate(zip(means, stds)):
+        ax.text(i, m + s + 0.02, f'{m:.3f}', ha='center', fontsize=8)
+
+    # Scatter: params vs correlation
+    ax = axes[1]
+    ax.scatter(params, means, s=80, color='darkorange', edgecolor='black', zorder=5)
+    for i, n in enumerate(names):
+        ax.annotate(n.replace("-uncased", "").replace("-base", ""),
+                    (params[i], means[i]),
+                    textcoords="offset points", xytext=(5, 5), fontsize=7)
+    ax.set_xlabel('Parameters (M)')
+    ax.set_ylabel('Grand mean r(α, β)')
+    ax.set_title('Model size vs KL-attention correlation')
+    ax.grid(alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(save_path / "multi_model_comparison.png", dpi=300)
+    plt.savefig(save_path / "multi_model_comparison.svg")
+    plt.close()
+    print(f"Saved: {save_path / 'multi_model_comparison.png'}")
+
+
+# --------------------------------------------------
+# Phase 5: Mathematical Identity Decomposition
+# --------------------------------------------------
+def run_identity_decomposition(
+    model, tokenizer, text: str, device: str = "cpu"
+) -> Dict:
+    """
+    Test the core mathematical identity:
+        Q_i · K_j / √d = (-||Q_i - K_j||² + ||Q_i||² + ||K_j||²) / (2√d)
+
+    For each (layer, head), compute:
+    1. LHS: standard dot-product scores
+    2. RHS: decomposed form
+    3. Residual (should be ~0 to machine precision)
+    4. The relative contribution of each term: quadratic distance vs norms
+
+    This validates that the KL-attention form is an EXACT reparametrization,
+    not an approximation, addressing the theoretical core of the paper.
+    """
+    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512).to(device)
+    with torch.no_grad():
+        outputs = model(**inputs)
+    hidden_states = outputs.hidden_states
+
+    num_layers = len(model.encoder.layer)
+    num_heads = model.encoder.layer[0].attention.self.num_attention_heads
+
+    results = []
+    for layer_idx in range(num_layers):
+        Q, K, V = _get_all_qkv_for_layer(model, hidden_states, layer_idx)
+        for head_idx in range(num_heads):
+            Qh = Q[:, head_idx, :]
+            Kh = K[:, head_idx, :]
+            seq_len, d = Qh.shape
+            sqrt_d = np.sqrt(d)
+
+            # LHS: Q_i · K_j / sqrt(d)
+            lhs = (Qh @ Kh.T) / sqrt_d  # [seq, seq]
+
+            # RHS terms
+            Qi = Qh.unsqueeze(1)  # [seq, 1, d]
+            Kj = Kh.unsqueeze(0)  # [1, seq, d]
+            diff = Qi - Kj
+            sqdist = torch.sum(diff * diff, dim=-1)        # ||Q_i - K_j||²
+            q_norms_sq = torch.sum(Qh * Qh, dim=-1)        # ||Q_i||²  [seq]
+            k_norms_sq = torch.sum(Kh * Kh, dim=-1)        # ||K_j||²  [seq]
+
+            # Expand norms for broadcasting
+            q_norms_mat = q_norms_sq.unsqueeze(1).expand_as(sqdist)
+            k_norms_mat = k_norms_sq.unsqueeze(0).expand_as(sqdist)
+
+            rhs = (-sqdist + q_norms_mat + k_norms_mat) / (2 * sqrt_d)
+
+            # Residual
+            residual = (lhs - rhs).detach().cpu().numpy()
+
+            # Relative magnitudes of each term (averaged over all i,j)
+            sqdist_np = sqdist.detach().cpu().numpy() / (2 * sqrt_d)
+            qnorm_np = q_norms_mat.detach().cpu().numpy() / (2 * sqrt_d)
+            knorm_np = k_norms_mat.detach().cpu().numpy() / (2 * sqrt_d)
+            lhs_np = lhs.detach().cpu().numpy()
+
+            results.append({
+                'layer': layer_idx,
+                'head': head_idx,
+                'max_abs_residual': float(np.max(np.abs(residual))),
+                'mean_abs_residual': float(np.mean(np.abs(residual))),
+                'mean_lhs': float(np.mean(np.abs(lhs_np))),
+                'mean_sqdist_term': float(np.mean(sqdist_np)),
+                'mean_qnorm_term': float(np.mean(qnorm_np)),
+                'mean_knorm_term': float(np.mean(knorm_np)),
+                'frac_sqdist': float(np.mean(sqdist_np) /
+                                     (np.mean(sqdist_np) + np.mean(qnorm_np) + np.mean(knorm_np) + 1e-12)),
+                'frac_qnorm': float(np.mean(qnorm_np) /
+                                    (np.mean(sqdist_np) + np.mean(qnorm_np) + np.mean(knorm_np) + 1e-12)),
+                'frac_knorm': float(np.mean(knorm_np) /
+                                    (np.mean(sqdist_np) + np.mean(qnorm_np) + np.mean(knorm_np) + 1e-12)),
+            })
+
+    return results
+
+
+def plot_identity_decomposition(decomp_results: List[Dict], save_path: Path):
+    """Visualize the mathematical identity decomposition."""
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+    # (0,0): Residual should be ~0
+    residuals = [r['max_abs_residual'] for r in decomp_results]
+    ax = axes[0, 0]
+    ax.hist(residuals, bins=30, alpha=0.7, edgecolor='black', color='steelblue')
+    ax.set_xlabel('Max |residual| per head')
+    ax.set_ylabel('Number of heads')
+    ax.set_title(f'Identity residual (should be ~0)\n'
+                 f'max={np.max(residuals):.2e}, mean={np.mean(residuals):.2e}')
+    ax.grid(alpha=0.3)
+
+    # (0,1): Fraction of score from each term
+    frac_sq = [r['frac_sqdist'] for r in decomp_results]
+    frac_q = [r['frac_qnorm'] for r in decomp_results]
+    frac_k = [r['frac_knorm'] for r in decomp_results]
+    ax = axes[0, 1]
+    x = range(len(decomp_results))
+    ax.bar(x, frac_sq, label=r'$-\|Q-K\|^2$', alpha=0.7, color='crimson')
+    ax.bar(x, frac_q, bottom=frac_sq, label=r'$\|Q\|^2$', alpha=0.7, color='steelblue')
+    ax.bar(x, frac_k,
+           bottom=[a + b for a, b in zip(frac_sq, frac_q)],
+           label=r'$\|K\|^2$', alpha=0.7, color='seagreen')
+    ax.set_xlabel('Head index (layer-major)')
+    ax.set_ylabel('Fraction of score magnitude')
+    ax.set_title('Score decomposition: distance vs norms')
+    ax.legend(fontsize=7)
+    ax.set_ylim(0, 1)
+
+    # (1,0): Heatmap by layer of frac_sqdist
+    num_layers = max(r['layer'] for r in decomp_results) + 1
+    num_heads = max(r['head'] for r in decomp_results) + 1
+    sqdist_matrix = np.zeros((num_layers, num_heads))
+    for r in decomp_results:
+        sqdist_matrix[r['layer'], r['head']] = r['frac_sqdist']
+    ax = axes[1, 0]
+    im = ax.imshow(sqdist_matrix, cmap='Reds', aspect='auto', vmin=0, vmax=1)
+    ax.set_xlabel('Head Index')
+    ax.set_ylabel('Layer Index')
+    ax.set_title(r'Fraction of score from $-\|Q-K\|^2$ term')
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label('Fraction', rotation=270, labelpad=15)
+    ax.set_xticks(np.arange(num_heads))
+    ax.set_yticks(np.arange(num_layers))
+
+    # (1,1): Summary
+    ax = axes[1, 1]
+    ax.axis('off')
+    summary_text = (
+        f"Mathematical Identity Verification\n"
+        f"{'='*38}\n\n"
+        f"Q·K/√d = (-||Q-K||² + ||Q||² + ||K||²) / 2√d\n\n"
+        f"Numerical verification:\n"
+        f"  Max residual: {np.max(residuals):.2e}\n"
+        f"  Mean residual: {np.mean(residuals):.2e}\n"
+        f"  (machine precision: ~1e-7 for float32)\n\n"
+        f"Score decomposition (mean across heads):\n"
+        f"  Distance term  -||Q-K||²: {np.mean(frac_sq):.1%}\n"
+        f"  Query norm     +||Q||²:   {np.mean(frac_q):.1%}\n"
+        f"  Key norm       +||K||²:   {np.mean(frac_k):.1%}\n\n"
+        f"Implication:\n"
+        f"  The identity is EXACT, not approximate.\n"
+        f"  Dot-product attention IS distance-\n"
+        f"  based attention plus norm biases.\n"
+        f"  The norm terms act as key/query\n"
+        f"  popularity priors."
+    )
+    ax.text(0.05, 0.5, summary_text, fontsize=8, verticalalignment='center',
+            family='monospace',
+            bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.3))
+
+    plt.tight_layout()
+    plt.savefig(save_path / "identity_decomposition.png", dpi=300)
+    plt.savefig(save_path / "identity_decomposition.svg")
+    plt.close()
+    print(f"Saved: {save_path / 'identity_decomposition.png'}")
+
+
+# --------------------------------------------------
+# Phase 6: Layer-Depth Attention Entropy Analysis
+# --------------------------------------------------
+def run_attention_entropy_analysis(
+    model, tokenizer, corpus: List[str], tau: float,
+    device: str = "cpu", n_passages: int = 20,
+) -> Dict:
+    """
+    For each (layer, head), compute attention entropy for both α and β
+    across passages. High entropy ≈ uniform attention.
+
+    Returns per-(layer, head) mean entropy for α and β, and the
+    entropy ratio β/α (>1 means KL attention is more diffuse).
+    """
+    sub_corpus = corpus[:n_passages]
+    num_layers = len(model.encoder.layer)
+    num_heads = model.encoder.layer[0].attention.self.num_attention_heads
+
+    # Accumulators: [n_layers, n_heads]
+    entropy_alpha_acc = np.zeros((num_layers, num_heads))
+    entropy_beta_acc = np.zeros((num_layers, num_heads))
+    count = 0
+
+    for text in sub_corpus:
+        inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512).to(device)
+        seq_len = inputs["input_ids"].shape[1]
+        if seq_len < 5:
+            continue
+        with torch.no_grad():
+            outputs = model(**inputs)
+        hs = outputs.hidden_states
+
+        for layer_idx in range(num_layers):
+            Q, K, V = _get_all_qkv_for_layer(model, hs, layer_idx)
+            for head_idx in range(num_heads):
+                Qh = Q[:, head_idx, :]
+                Kh = K[:, head_idx, :]
+                sl, d = Qh.shape
+
+                # Alpha (dot-product)
+                scores_dot = (Qh @ Kh.T) / np.sqrt(d)
+                alpha = F.softmax(scores_dot, dim=1)
+
+                # Beta (KL-distance)
+                diff = Qh.unsqueeze(1) - Kh.unsqueeze(0)
+                sqdist = torch.sum(diff * diff, dim=-1)
+                beta = F.softmax(-sqdist / tau, dim=1)
+
+                # Shannon entropy: -sum p log p (per row, then average)
+                eps = 1e-12
+                h_alpha = -torch.sum(alpha * torch.log(alpha + eps), dim=1).mean().item()
+                h_beta = -torch.sum(beta * torch.log(beta + eps), dim=1).mean().item()
+
+                entropy_alpha_acc[layer_idx, head_idx] += h_alpha
+                entropy_beta_acc[layer_idx, head_idx] += h_beta
+        count += 1
+
+    if count > 0:
+        entropy_alpha_acc /= count
+        entropy_beta_acc /= count
+
+    return {
+        'entropy_alpha': entropy_alpha_acc,
+        'entropy_beta': entropy_beta_acc,
+        'entropy_ratio': entropy_beta_acc / (entropy_alpha_acc + 1e-12),
+        'n_passages': count,
+        'n_layers': num_layers,
+        'n_heads': num_heads,
+    }
+
+
+def plot_attention_entropy(entropy_results: Dict, save_path: Path):
+    """Visualize attention entropy by layer depth."""
+    e_alpha = entropy_results['entropy_alpha']
+    e_beta = entropy_results['entropy_beta']
+    e_ratio = entropy_results['entropy_ratio']
+    n_layers = entropy_results['n_layers']
+    n_heads = entropy_results['n_heads']
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 10))
+
+    # (0,0): Alpha entropy heatmap
+    ax = axes[0, 0]
+    im = ax.imshow(e_alpha, cmap='viridis', aspect='auto')
+    ax.set_xlabel('Head Index')
+    ax.set_ylabel('Layer Index')
+    ax.set_title('Dot-product attention entropy H(α)')
+    plt.colorbar(im, ax=ax, label='nats')
+    ax.set_xticks(np.arange(n_heads))
+    ax.set_yticks(np.arange(n_layers))
+
+    # (0,1): Beta entropy heatmap
+    ax = axes[0, 1]
+    im = ax.imshow(e_beta, cmap='viridis', aspect='auto')
+    ax.set_xlabel('Head Index')
+    ax.set_ylabel('Layer Index')
+    ax.set_title('KL-distance attention entropy H(β)')
+    plt.colorbar(im, ax=ax, label='nats')
+    ax.set_xticks(np.arange(n_heads))
+    ax.set_yticks(np.arange(n_layers))
+
+    # (1,0): Mean entropy by layer (averaged over heads)
+    ax = axes[1, 0]
+    layers = np.arange(n_layers)
+    mean_alpha = e_alpha.mean(axis=1)
+    mean_beta = e_beta.mean(axis=1)
+    ax.plot(layers, mean_alpha, 'o-', label='α (dot-product)', color='steelblue')
+    ax.plot(layers, mean_beta, 's-', label='β (KL-distance)', color='darkorange')
+    ax.set_xlabel('Layer')
+    ax.set_ylabel('Mean entropy (nats)')
+    ax.set_title('Attention entropy by layer depth')
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+    # Max uniform entropy for reference
+    # For a typical sequence length, uniform entropy = log(seq_len)
+    ax.axhline(np.log(50), color='red', linestyle=':', alpha=0.4,
+               label='log(50) ≈ uniform for N=50')
+
+    # (1,1): Summary
+    ax = axes[1, 1]
+    ax.axis('off')
+    # Find most uniform and most peaked heads
+    flat_alpha = e_alpha.ravel()
+    most_uniform_idx = np.argmax(flat_alpha)
+    most_peaked_idx = np.argmin(flat_alpha)
+    mu_layer, mu_head = divmod(most_uniform_idx, n_heads)
+    mp_layer, mp_head = divmod(most_peaked_idx, n_heads)
+
+    summary_text = (
+        f"Attention Entropy Analysis\n"
+        f"{'='*32}\n\n"
+        f"Passages: {entropy_results['n_passages']}\n"
+        f"Architecture: {n_layers}L × {n_heads}H\n\n"
+        f"Mean H(α): {e_alpha.mean():.3f} nats\n"
+        f"Mean H(β): {e_beta.mean():.3f} nats\n"
+        f"Mean ratio H(β)/H(α): {e_ratio.mean():.3f}\n\n"
+        f"Most uniform (α):\n"
+        f"  L{mu_layer}H{mu_head}: H={e_alpha[mu_layer, mu_head]:.3f}\n"
+        f"Most peaked (α):\n"
+        f"  L{mp_layer}H{mp_head}: H={e_alpha[mp_layer, mp_head]:.3f}\n\n"
+        f"Layer-depth trend:\n"
+        f"  Early layers: H={mean_alpha[:3].mean():.3f}\n"
+        f"  Mid layers:   H={mean_alpha[n_layers//3:2*n_layers//3].mean():.3f}\n"
+        f"  Late layers:  H={mean_alpha[-3:].mean():.3f}"
+    )
+    ax.text(0.05, 0.5, summary_text, fontsize=8, verticalalignment='center',
+            family='monospace',
+            bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.3))
+
+    plt.tight_layout()
+    plt.savefig(save_path / "attention_entropy_by_layer.png", dpi=300)
+    plt.savefig(save_path / "attention_entropy_by_layer.svg")
+    plt.close()
+    print(f"Saved: {save_path / 'attention_entropy_by_layer.png'}")
+
+
+# --------------------------------------------------
+# Phase 7: Sequence-Length Sensitivity
+# --------------------------------------------------
+def run_seqlen_sensitivity(
+    model, tokenizer, tau: float, device: str = "cpu",
+) -> Dict:
+    """
+    Test how the alpha-beta correlation changes with sequence length.
+    Uses repeated concatenation of a base passage to create varying lengths.
+    """
+    base_text = (
+        "The quick brown fox jumps over the lazy dog. "
+        "A journey of a thousand miles begins with a single step. "
+        "Knowledge is power, and power corrupts absolutely. "
+    )
+
+    target_lengths = [16, 32, 64, 128, 256, 512]
+    results = []
+
+    num_layers = len(model.encoder.layer)
+    num_heads = model.encoder.layer[0].attention.self.num_attention_heads
+
+    for target_len in target_lengths:
+        # Build text of roughly target_len tokens by repeating base
+        text = base_text
+        while True:
+            inputs = tokenizer(text, return_tensors="pt", truncation=True,
+                               max_length=target_len).to(device)
+            seq_len = inputs["input_ids"].shape[1]
+            if seq_len >= target_len or len(text) > 50000:
+                break
+            text = text + " " + base_text
+
+        actual_len = inputs["input_ids"].shape[1]
+        if actual_len < 5:
+            continue
+
+        with torch.no_grad():
+            outputs = model(**inputs)
+        hs = outputs.hidden_states
+
+        head_corrs = []
+        for layer_idx in range(num_layers):
+            Q, K, V = _get_all_qkv_for_layer(model, hs, layer_idx)
+            for head_idx in range(num_heads):
+                Qh = Q[:, head_idx, :]
+                Kh = K[:, head_idx, :]
+                sl, d = Qh.shape
+                scores_dot = (Qh @ Kh.T) / np.sqrt(d)
+                alpha = F.softmax(scores_dot, dim=1)
+                diff = Qh.unsqueeze(1) - Kh.unsqueeze(0)
+                sqdist = torch.sum(diff * diff, dim=-1)
+                beta = F.softmax(-sqdist / tau, dim=1)
+                r, _ = _fast_pearsonr(
+                    alpha.detach().cpu().numpy().ravel(),
+                    beta.detach().cpu().numpy().ravel(),
+                )
+                head_corrs.append(r)
+
+        results.append({
+            'target_len': target_len,
+            'actual_len': actual_len,
+            'mean_r': float(np.mean(head_corrs)),
+            'std_r': float(np.std(head_corrs)),
+            'median_r': float(np.median(head_corrs)),
+            'min_r': float(np.min(head_corrs)),
+            'max_r': float(np.max(head_corrs)),
+        })
+        print(f"    seq_len={actual_len:4d}: mean r={results[-1]['mean_r']:.4f} "
+              f"± {results[-1]['std_r']:.4f}")
+
+    return results
+
+
+def plot_seqlen_sensitivity(seqlen_results: List[Dict], save_path: Path):
+    """Plot correlation vs sequence length."""
+    lengths = [r['actual_len'] for r in seqlen_results]
+    means = [r['mean_r'] for r in seqlen_results]
+    stds = [r['std_r'] for r in seqlen_results]
+    mins = [r['min_r'] for r in seqlen_results]
+    maxs = [r['max_r'] for r in seqlen_results]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    ax = axes[0]
+    ax.errorbar(lengths, means, yerr=stds, fmt='o-', color='steelblue',
+                capsize=4, linewidth=2, markersize=6)
+    ax.fill_between(lengths, mins, maxs, alpha=0.15, color='steelblue',
+                    label='min-max range')
+    ax.set_xlabel('Sequence length (tokens)')
+    ax.set_ylabel('Mean r(α, β)')
+    ax.set_title('Correlation stability across sequence lengths')
+    ax.set_xscale('log', base=2)
+    ax.axhline(0.8, color='red', linestyle='--', alpha=0.4, label='r=0.8')
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+    ax = axes[1]
+    ax.plot(lengths, stds, 's-', color='darkorange', linewidth=2, markersize=6)
+    ax.set_xlabel('Sequence length (tokens)')
+    ax.set_ylabel('Std of r across heads')
+    ax.set_title('Variability vs sequence length')
+    ax.set_xscale('log', base=2)
+    ax.grid(alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(save_path / "seqlen_sensitivity.png", dpi=300)
+    plt.savefig(save_path / "seqlen_sensitivity.svg")
+    plt.close()
+    print(f"Saved: {save_path / 'seqlen_sensitivity.png'}")
+
+
 # -----------------------------
 # Main Analysis Pipeline
 # -----------------------------
@@ -1618,6 +2259,103 @@ def main():
     plot_tau_sweep(tau_results, SAVE_DIR)
 
     # =====================================================================
+    # PHASE 4: Multi-Model Validation
+    # =====================================================================
+    print("\n" + "="*80)
+    print("PHASE 4: MULTI-MODEL VALIDATION")
+    print(f"Models: {MULTI_MODEL_NAMES}")
+    print("="*80)
+
+    t0 = time.time()
+    multi_model_results = run_multi_model_validation(
+        CORPUS, TAU, device=DEVICE, n_passages=20,
+    )
+    t_multi = time.time() - t0
+    print(f"\n  Multi-model validation completed in {t_multi:.1f}s")
+
+    print(f"\n" + "-"*60)
+    print("PHASE 4 RESULTS (multi-model)")
+    print("-"*60)
+    for mname, mresults in multi_model_results.items():
+        print(f"  {mname:30s}  r={mresults['grand_mean_r']:.4f} ± {mresults['grand_std_r']:.4f}"
+              f"  ({mresults['n_params']/1e6:.1f}M params, "
+              f"{mresults['n_layers']}L×{mresults['n_heads']}H)")
+
+    print("\n  10. Multi-model comparison plot...")
+    if multi_model_results:
+        plot_multi_model_comparison(multi_model_results, SAVE_DIR)
+
+    # =====================================================================
+    # PHASE 5: Mathematical Identity Decomposition
+    # =====================================================================
+    print("\n" + "="*80)
+    print("PHASE 5: MATHEMATICAL IDENTITY DECOMPOSITION")
+    print("Q·K/√d = (-||Q-K||² + ||Q||² + ||K||²) / 2√d")
+    print("="*80)
+
+    decomp_results = run_identity_decomposition(model, tokenizer, TEXT, device=DEVICE)
+
+    residuals_all = [r['max_abs_residual'] for r in decomp_results]
+    frac_sq_all = [r['frac_sqdist'] for r in decomp_results]
+    print(f"\n" + "-"*60)
+    print("PHASE 5 RESULTS (identity decomposition)")
+    print("-"*60)
+    print(f"  Max residual across all heads: {np.max(residuals_all):.2e}")
+    print(f"  Mean residual: {np.mean(residuals_all):.2e}")
+    print(f"  Identity verified to machine precision: "
+          f"{'YES' if np.max(residuals_all) < 1e-5 else 'NO'}")
+    print(f"\n  Mean score fraction from -||Q-K||² term: {np.mean(frac_sq_all):.1%}")
+    print(f"  Mean score fraction from ||Q||² term:    {np.mean([r['frac_qnorm'] for r in decomp_results]):.1%}")
+    print(f"  Mean score fraction from ||K||² term:    {np.mean([r['frac_knorm'] for r in decomp_results]):.1%}")
+
+    print("\n  11. Identity decomposition plot...")
+    plot_identity_decomposition(decomp_results, SAVE_DIR)
+
+    # =====================================================================
+    # PHASE 6: Attention Entropy by Layer Depth
+    # =====================================================================
+    print("\n" + "="*80)
+    print("PHASE 6: ATTENTION ENTROPY BY LAYER DEPTH")
+    print("="*80)
+
+    entropy_results = run_attention_entropy_analysis(
+        model, tokenizer, CORPUS, TAU, device=DEVICE, n_passages=20,
+    )
+
+    e_alpha = entropy_results['entropy_alpha']
+    e_beta = entropy_results['entropy_beta']
+    print(f"\n" + "-"*60)
+    print("PHASE 6 RESULTS (attention entropy)")
+    print("-"*60)
+    print(f"  Mean H(α): {e_alpha.mean():.3f} nats")
+    print(f"  Mean H(β): {e_beta.mean():.3f} nats")
+    print(f"  Mean ratio H(β)/H(α): {entropy_results['entropy_ratio'].mean():.3f}")
+    print(f"  Early layers mean H(α): {e_alpha[:3].mean():.3f}")
+    print(f"  Late layers mean H(α):  {e_alpha[-3:].mean():.3f}")
+
+    print("\n  12. Attention entropy plot...")
+    plot_attention_entropy(entropy_results, SAVE_DIR)
+
+    # =====================================================================
+    # PHASE 7: Sequence-Length Sensitivity
+    # =====================================================================
+    print("\n" + "="*80)
+    print("PHASE 7: SEQUENCE-LENGTH SENSITIVITY")
+    print("="*80)
+
+    seqlen_results = run_seqlen_sensitivity(model, tokenizer, TAU, device=DEVICE)
+
+    print(f"\n" + "-"*60)
+    print("PHASE 7 RESULTS (sequence length)")
+    print("-"*60)
+    for sr in seqlen_results:
+        print(f"  N={sr['actual_len']:4d}: r={sr['mean_r']:.4f} ± {sr['std_r']:.4f}"
+              f"  [{sr['min_r']:.4f}, {sr['max_r']:.4f}]")
+
+    print("\n  13. Sequence-length sensitivity plot...")
+    plot_seqlen_sensitivity(seqlen_results, SAVE_DIR)
+
+    # =====================================================================
     # Save comprehensive results to JSON
     # =====================================================================
     results_dict = {
@@ -1674,6 +2412,43 @@ def main():
                 for t in sorted(tau_results.keys())
             }
         },
+        'phase4_multi_model': {
+            mname: {
+                'grand_mean_r': mres['grand_mean_r'],
+                'grand_std_r': mres['grand_std_r'],
+                'n_params': mres['n_params'],
+                'n_layers': mres['n_layers'],
+                'n_heads': mres['n_heads'],
+                'head_dim': mres['head_dim'],
+                'n_passages': mres['n_passages'],
+            }
+            for mname, mres in multi_model_results.items()
+        },
+        'phase5_identity_decomposition': {
+            'max_residual': float(np.max(residuals_all)),
+            'mean_residual': float(np.mean(residuals_all)),
+            'identity_verified': bool(np.max(residuals_all) < 1e-5),
+            'mean_frac_sqdist': float(np.mean(frac_sq_all)),
+            'mean_frac_qnorm': float(np.mean([r['frac_qnorm'] for r in decomp_results])),
+            'mean_frac_knorm': float(np.mean([r['frac_knorm'] for r in decomp_results])),
+        },
+        'phase6_entropy': {
+            'mean_entropy_alpha': float(e_alpha.mean()),
+            'mean_entropy_beta': float(e_beta.mean()),
+            'mean_entropy_ratio': float(entropy_results['entropy_ratio'].mean()),
+            'early_layers_entropy': float(e_alpha[:3].mean()),
+            'late_layers_entropy': float(e_alpha[-3:].mean()),
+        },
+        'phase7_seqlen': [
+            {
+                'seq_len': sr['actual_len'],
+                'mean_r': sr['mean_r'],
+                'std_r': sr['std_r'],
+                'min_r': sr['min_r'],
+                'max_r': sr['max_r'],
+            }
+            for sr in seqlen_results
+        ],
     }
 
     with open(SAVE_DIR / "validation_results.json", "w") as f:
@@ -1696,6 +2471,14 @@ def main():
     print("    - keynorm_cross_passage.png/svg")
     print("  Phase 3 (temperature sweep):")
     print("    - tau_sweep_across_passages.png/svg")
+    print("  Phase 4 (multi-model):")
+    print("    - multi_model_comparison.png/svg")
+    print("  Phase 5 (identity decomposition):")
+    print("    - identity_decomposition.png/svg")
+    print("  Phase 6 (attention entropy):")
+    print("    - attention_entropy_by_layer.png/svg")
+    print("  Phase 7 (sequence-length sensitivity):")
+    print("    - seqlen_sensitivity.png/svg")
     print("  Combined:")
     print("    - validation_results.json")
     print("\n" + "="*80)
