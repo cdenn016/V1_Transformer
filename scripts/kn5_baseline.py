@@ -28,6 +28,7 @@ Requirements (auto-installed if missing):
 """
 
 import argparse
+import gc
 import math
 import os
 import subprocess
@@ -211,19 +212,25 @@ class ModifiedKneserNey:
             print(f"    Order {n}: D1={D1:.4f}, D2={D2:.4f}, D3+={D3:.4f}  "
                   f"(n1={n1}, n2={n2}, n3={n3}, n4={n4})")
 
-        # --- Precompute context statistics for each order ---
+        # --- Precompute context statistics AND continuation counts ---
+        # Merged into a single pass per order so we can free intermediate
+        # raw counts immediately, significantly reducing peak memory.
+        # We need counts[1] (unigram fallback) and counts[order] (highest-
+        # order lookup) for evaluation, but intermediate orders are only
+        # needed to derive context stats and continuation counts.
         for n in range(2, self.order + 1):
+            print(f"    Building lookup tables for order {n} "
+                  f"({len(self.counts[n]):,} n-grams)...")
+            cont = Counter()
             for ngram, count in self.counts[n].items():
+                # Context statistics (prefix -> aggregates over continuations)
                 ctx = ngram[:-1]
-                # Total count for this context
                 self._context_total[ctx] = (
                     self._context_total.get(ctx, 0) + count
                 )
-                # Number of unique continuations
                 self._context_types[ctx] = (
                     self._context_types.get(ctx, 0) + 1
                 )
-                # Continuations with count 1 and 2 (for discount selection)
                 if count == 1:
                     self._context_n1[ctx] = (
                         self._context_n1.get(ctx, 0) + 1
@@ -232,17 +239,19 @@ class ModifiedKneserNey:
                     self._context_n2[ctx] = (
                         self._context_n2.get(ctx, 0) + 1
                     )
-
-        # --- Continuation counts for lower-order KN distributions ---
-        # For order n >= 2, the KN lower-order distribution uses continuation
-        # counts: how many unique left-contexts precede the suffix.
-        for n in range(2, self.order + 1):
-            cont = Counter()
-            for ngram in self.counts[n]:
-                suffix = ngram[1:]  # the (n-1)-gram being "continued"
+                # Continuation count (suffix -> number of unique left-extensions)
+                suffix = ngram[1:]
                 cont[suffix] += 1
+
             self._continuation_count[n] = cont
             self._continuation_total[n] = sum(cont.values())
+
+            # Free raw counts for intermediate orders to reduce peak memory.
+            # Only counts[1] (unigram fallback) and counts[order] (highest-
+            # order lookup) are needed during evaluation.
+            if n < self.order:
+                del self.counts[n]
+                gc.collect()
 
         self._is_built = True
         dt = time.time() - t0
