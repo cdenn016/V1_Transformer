@@ -279,7 +279,10 @@ class ModifiedKneserNey:
         (number of unique bigram types a word completes) instead of
         raw frequency.
         """
-        return self._interp_mkn(word, context, self.order)
+        # Context may be shorter than (order-1) at sentence boundaries.
+        # Start at the order matching the available context length.
+        n = min(len(context) + 1, self.order)
+        return self._interp_mkn(word, context, n)
 
     def _interp_mkn(self, word: str, context: tuple, n: int) -> float:
         """
