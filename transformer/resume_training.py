@@ -325,7 +325,6 @@ def resume_training():
     # Ensure required model config keys have defaults
     model_defaults = {
         'kappa_beta': 1.0,
-        'kappa_beta_base': 1.0,
         'lambda_beta': 1.0,
         'alpha': 0.1,
         'beta': 1.0,

@@ -381,8 +381,8 @@ def _compute_vfe_gradients_block_diagonal(
     grad_mu_direct = lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
 
     # Softmax coupling term
-    # Scale kappa by √K to match attention temperature scaling
-    kappa_scaled = kappa * math.sqrt(max(K, 1))
+    # Scale kappa by 2√K to match attention temperature τ = 2√K
+    kappa_scaled = kappa * 2.0 * math.sqrt(max(K, 1))
     avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
     grad_deviation = grad_kl_per_pair_full - avg_grad.unsqueeze(2)
     d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
@@ -457,8 +457,8 @@ def _compute_vfe_gradients_chunked(
     grad_mu_softmax = torch.zeros_like(mu_q)
     grad_sigma_align = torch.zeros_like(sigma_q)
 
-    # Scale kappa by √K to match attention temperature scaling
-    kappa_scaled = kappa * math.sqrt(max(K, 1))
+    # Scale kappa by 2√K to match attention temperature τ = 2√K
+    kappa_scaled = kappa * 2.0 * math.sqrt(max(K, 1))
 
     # Two-pass approach for correct softmax coupling gradient:
     # Pass 1: Accumulate avg_grad (= Σ_j β_ij ∂KL_ij/∂μ_i) and per-chunk KL/grad_kl

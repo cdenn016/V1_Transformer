@@ -142,8 +142,13 @@ def load_model(checkpoint_path: str) -> Tuple[GaugeTransformerLM, Dict[str, Any]
             print("Warning: No config found, using defaults")
 
     # Handle config key translations for backward compatibility
-    if 'kappa_beta' not in config and 'kappa_beta_base' in config:
-        config['kappa_beta'] = config['kappa_beta_base']
+    # Legacy checkpoint compat: old configs stored kappa_beta_base instead of kappa_beta
+    if 'kappa_beta' not in config:
+        config['kappa_beta'] = config.pop('kappa_beta_base', 1.0)
+    # Remove defunct auto-scale keys if present
+    config.pop('kappa_beta_auto_scale', None)
+    config.pop('kappa_beta_base', None)
+    config.pop('kappa_beta_k_ref', None)
     if 'use_diagonal_covariance' not in config and 'diagonal_covariance' in config:
         config['use_diagonal_covariance'] = config['diagonal_covariance']
 

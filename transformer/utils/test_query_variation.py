@@ -226,8 +226,12 @@ def main(checkpoint_path: str = None):
             }
 
     # Add missing keys with sensible defaults if needed
-    if 'kappa_beta' not in config and 'kappa_beta_base' in config:
-        config['kappa_beta'] = config['kappa_beta_base']
+    # Legacy compat: old configs stored kappa_beta_base instead of kappa_beta
+    if 'kappa_beta' not in config:
+        config['kappa_beta'] = config.pop('kappa_beta_base', 1.0)
+    config.pop('kappa_beta_auto_scale', None)
+    config.pop('kappa_beta_base', None)
+    config.pop('kappa_beta_k_ref', None)
 
     if 'use_diagonal_covariance' not in config and 'diagonal_covariance' in config:
         config['use_diagonal_covariance'] = config['diagonal_covariance']
