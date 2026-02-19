@@ -244,10 +244,8 @@ VFE_EM_CONFIG = {
     'use_identity_transport': False,
     'alibi_slope': None,
 
-    # Temperature scaling (κ ∝ K for stable attention)
-    'kappa_beta_auto_scale': False,
-    'kappa_beta_base': 1,
-    'kappa_beta_k_ref': 11,
+    # Temperature: κ is a scalar sharpness dial; dimension scaling (2√K) is hardcoded in attention
+    'kappa_beta': 1.0,
 
     # Embedding initialization
     'mu_init_std': 7.0,
@@ -377,10 +375,8 @@ PURE_FEP_CONFIG = {
     'use_identity_transport': False,
     'alibi_slope': None,
 
-    # Temperature scaling
-    'kappa_beta_auto_scale': True,
-    'kappa_beta_base': 0.25,
-    'kappa_beta_k_ref': 11,
+    # Temperature: κ is a scalar sharpness dial; dimension scaling (2√K) is hardcoded in attention
+    'kappa_beta': 0.25,
 
     # Embedding initialization
     'mu_init_std': 7.0,
@@ -1725,7 +1721,7 @@ def run_single_experiment(
             alpha=config.get('alpha', 0.1),
             lambda_belief=config.get('beta', 1.0),
             lambda_obs=config.get('lambda_obs', 1.0),
-            kappa=config.get('kappa_beta_base', 0.1),
+            kappa=config.get('kappa_beta', 0.1),
 
             # Learning rates - less conservative to allow actual learning
             # The error-scaled update already provides stability
@@ -1775,17 +1771,10 @@ def run_single_experiment(
         print("  - Learning: Backprop")
         print("  - Position: None (emergent)")
 
-        # Compute kappa_beta: either auto-scale with K or use fixed value
-        K = config['embed_dim']
-        if config.get('kappa_beta_auto_scale', False):
-            kappa_base = config.get('kappa_beta_base', 1.0)
-            K_ref = config.get('kappa_beta_k_ref', 11)
-            config['kappa_beta'] = kappa_base * (K / K_ref)
-            print(f"  kappa_beta: {kappa_base} × ({K}/{K_ref}) = {config['kappa_beta']:.3f} (auto-scaled)")
-        else:
-            if 'kappa_beta' not in config:
-                config['kappa_beta'] = config.get('kappa_beta_base', 1.0)
-            print(f"  kappa_beta: {config['kappa_beta']} (fixed)")
+        # kappa_beta: scalar sharpness dial (dimension scaling τ=2√K is hardcoded in attention)
+        if 'kappa_beta' not in config:
+            config['kappa_beta'] = 1.0
+        print(f"  kappa_beta: {config['kappa_beta']}")
 
         model = GaugeTransformerLM(config)
 
