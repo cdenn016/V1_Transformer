@@ -1268,7 +1268,9 @@ As above the belief update under free energy minimization is given by Euler disc
 \label{eq:residual_gradient_flow}
 \end{equation}
 
-which has the inherent structure $\text{new} = \text{old} + \text{correction}$. This is a residual connection whereby the agent's current belief $\mu_i^{(t)}$ is preserved through the identity path, while the variational gradient $-\eta \,\partial \mathcal{F}/\partial \mu_i$ provides an incremental correction incorporating alignment, prior, and observation signals. The residual connection is therefore not an arbitrary choice but rather represents the natural structure of iterative variational refinement.
+which has the inherent structure $\text{new} = \text{old} + \text{correction}$. We note that this correspondence is, in one sense, straightforward: any iterative gradient-based update will have this additive form. The significance is not the algebraic identity itself but the order of development. The agent-based variational model was derived independently from first principles in Sections~\ref{sec:formulation}--\ref{sec:derivation}, and the residual structure emerged as a consequence of the variational gradient flow \emph{before} the connection to transformer architecture was recognized. That the same structure appears as a deliberate architectural choice in transformers (motivated by gradient propagation considerations) provides evidence that both frameworks are capturing the same underlying computational principle rather than one being retrofitted to the other.
+
+The agent's current belief $\mu_i^{(t)}$ is preserved through the identity path, while the variational gradient $-\eta \,\partial \mathcal{F}/\partial \mu_i$ provides an incremental correction incorporating alignment, prior, and observation signals.
 
 The strength of the identity path relative to the correction is governed by the state-dependent precision $\alpha_i$ from Section~\ref{sec:state_dependent_precision}. In the general theory, the prior coupling term $\alpha_i D_{\mathrm{KL}}(q_i \| p_i)$ contributes a gradient component $\alpha_i(\mu_i - \mu_{\text{prior}})$ that resists displacement from the prior. When $\alpha_i$ is large (agent near its prior), the identity path dominates and the belief is strongly anchored; when $\alpha_i$ is small (agent far from prior), the correction terms dominate and the belief is free to evolve. In the constant-$\alpha$ limit, this reduces to a fixed-strength residual connection with uniform regularization, exactly as in standard transformers where the skip connection weight is implicitly unity. The adaptive $\alpha_i$ thus generalizes the fixed residual connection to a state-dependent gating mechanism, with the standard case recovered when the prior precision is spatially uniform.
 
@@ -2198,38 +2200,6 @@ On overlaps, local connections are related by:
 A^{(i)}_\mu = \Omega_{ij} A^{(j)}_\mu \Omega_{ij}^{-1} + \Omega_{ij} \partial_\mu \Omega_{ij}^{-1}.
 \end{equation}
 
-\subsubsection{Curvature Structure}
-The full framework incorporates four distinct types of curvature:
-
-Statistical Manifold Curvature
-
-The fiber $\mathcal{B}$ has intrinsic curvature tensor:
-
-\begin{equation}
-R^\mathcal{B}(X,Y)Z = \nabla_X \nabla_Y Z - \nabla_Y \nabla_X Z - \nabla_{[X,Y]} Z.
-\end{equation}
-
-This measures the geometry of the space of probability distributions (e.g., Gaussian manifolds have constant negative curvature).
-
-Gauge Group Curvature.
-
-The structure group $G$ itself is a curved manifold. For $G = SO(3)$, the topology is $SO(3) \cong \mathbb{RP}^3$ with constant positive sectional curvature and non-commutativity: $\Omega_{ij}\Omega_{jk} \neq \Omega_{jk}\Omega_{ij}$ in general.
-
-Gauge Field Curvature.\\
-The connection $A_\mu$ has field strength $F_{\mu\nu}$ measuring path-dependence of parallel transport through the base space $\mathcal{C}$.
-
-Base Manifold Curvature.
-
-If $\mathcal{C}$ carries a Riemannian metric $g_{\mathcal{C}}$, its curvature tensor:
-
-\begin{equation}
-R^\mathcal{C}(X,Y)Z = \nabla^\mathcal{C}_X \nabla^\mathcal{C}_Y Z - \nabla^\mathcal{C}_Y \nabla^\mathcal{C}_X Z - \nabla^\mathcal{C}_{[X,Y]} Z
-\end{equation}
-
-affects the geometry of the latent space agents inhabit.
-
-
-
 
 
 
@@ -2252,9 +2222,9 @@ D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)
 
 where $q_i = \mathcal{N}(\mu_i, \Sigma_i)$, $p_i = \mathcal{N}(\mu_{p,i}, \Sigma_{p,i})$, and $\sum_j \beta_{ij} = 1$ by construction.
 
-\subsubsection{Gaussian KL divergence and its derivative}
+\subsubsection{Gaussian KL Divergence under $\mathrm{GL}(K)$ Gauge Transport}
 
-For two Multivariate Gaussians, we have 
+The alignment term $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ involves KL divergences between Gaussians related by $\mathrm{GL}(K)$ gauge transport $\Omega_{ij} = e^{\phi_i}e^{-\phi_j}$. The standard Gaussian KL divergence is
 
 \begin{align}
 D_{\mathrm{KL}}\!\left(
@@ -2287,7 +2257,7 @@ and differentiating w.r.t.\ $\Sigma_1$ (holding $\mu_1,\mu_2,\Sigma_2$ fixed) gi
 \right].
 \end{equation}
 
-Applying this to each term in $\mathcal{F}_i$:
+Applying this to each term in $\mathcal{F}_i$, where the alignment KL involves the $\mathrm{GL}(K)$-transported belief $\Omega_{ij} q_j = \mathcal{N}(\Omega_{ij}\mu_j, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$:
 
 \begin{align}
 \frac{\partial}{\partial \Sigma_i}
