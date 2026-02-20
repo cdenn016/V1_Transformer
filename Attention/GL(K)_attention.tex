@@ -1713,30 +1713,7 @@ An important caveat is in order. The high correlation between KL-based attention
 \subsubsection{Temperature Scaling and Finite-Dimensional Corrections}
 \label{sec:temperature_scaling}
 
-The multi-passage temperature sweep (Table~\ref{tab:tau_sweep}) independently confirms that $\tau = 19.0$ maximizes the grand mean correlation across the full 105-passage corpus, yielding $\bar{r} = 0.804$ (95\% CI $[0.771, 0.838]$). This represents a 19\% deviation from the theoretical prediction $\tau_{\text{opt}} = 2\sqrt{d} = 16$ for $d = 64$---not a failure of theory but a manifestation of finite-dimensional corrections that our framework explicitly predicts.
-
-\begin{table}[h]
-\centering
-\renewcommand{\arraystretch}{1.15}
-\begin{tabular}{rccc}
-\hline
-$\tau$ & Grand mean $\bar{r}$ & 95\% CI & SE \\
-\hline
-0.1  & 0.654 & $[0.611, 0.692]$ & 0.019 \\
-0.5  & 0.672 & $[0.633, 0.707]$ & 0.019 \\
-1.0  & 0.686 & $[0.640, 0.719]$ & 0.019 \\
-2.0  & 0.705 & $[0.667, 0.741]$ & 0.019 \\
-5.0  & 0.743 & $[0.704, 0.777]$ & 0.018 \\
-10.0 & 0.783 & $[0.749, 0.813]$ & 0.016 \\
-15.0 & 0.800 & $[0.777, 0.829]$ & 0.016 \\
-\textbf{19.0} & \textbf{0.804} & $\mathbf{[0.771, 0.838]}$ & \textbf{0.015} \\
-25.0 & 0.801 & $[0.773, 0.825]$ & 0.015 \\
-50.0 & 0.749 & $[0.718, 0.779]$ & 0.014 \\
-\hline
-\end{tabular}
-\caption{Temperature sweep results across 105 passages and 144 heads. The grand mean correlation $\bar{r}$ is the mean across all heads of the per-head cross-passage mean correlation. The optimum at $\tau = 19.0$ is consistent with the theoretical prediction $\tau_{\text{opt}} = 2\sqrt{d} = 16$ for $d = 64$. Note the broad plateau from $\tau = 15$ to $\tau = 25$, indicating the optimum is not sharply tuned.}
-\label{tab:tau_sweep}
-\end{table}
+The multi-passage temperature sweep independently confirms that $\tau = 19.0$ maximizes the grand mean correlation across the full 105-passage corpus, yielding $\bar{r} = 0.804$ (95\% CI $[0.771, 0.838]$). This represents a 19\% deviation from the theoretical prediction $\tau_{\text{opt}} = 2\sqrt{d} = 16$ for $d = 64$---not a failure of theory but a manifestation of finite-dimensional corrections that our framework explicitly predicts.
 
 Temperature scaling emerges from competing effects: (1) dot products $Q_i K_j^\top$ scale as $\mathcal{O}(d_k)$ in magnitude, while (2) key-norm fluctuations scale as $\mathcal{O}(\sqrt{d_k})$ under high-dimensional measure. The factor $\sqrt{d_k}$ normalizes pre-softmax logits to $\mathcal{O}(1)$, the appropriate scale for softmax attention. However, at finite dimensions, subdominant fluctuations $\mathcal{O}(\sqrt{d})$ induce corrections of order unity to the optimal temperature.
 
@@ -1897,9 +1874,9 @@ In the absence of observations, all agent beliefs $\mu_i(c)$ converge to a share
 
 \begin{figure*}[t]
   \centering
-  \includegraphics[width=0.47\textwidth]{mu_q_center_norm_vacuum.png}
+  \includegraphics[width=0.47\textwidth]{/figs/mu_q_center_norm_vacuum.png}
   \hfill
-  \includegraphics[width=0.47\textwidth]{mu_q_center_norm_ranked_vacuum.png}
+  \includegraphics[width=0.47\textwidth]{/figs/mu_q_center_norm_ranked_vacuum.png}
   \caption{Population-level and per-agent evolution of belief magnitudes 
   $\|\mu_Q^{\text{center}}\|$ during training without observations. 
   All agents converge to identical norms, indicating gauge-symmetric equilibrium.
@@ -1914,9 +1891,9 @@ When the same agents observe randomly drawn Gaussian observations, symmetry is b
 
 \begin{figure*}[t]
   \centering
-  \includegraphics[width=0.47\textwidth]{mu_q_center_norm_summary.png}
+  \includegraphics[width=0.47\textwidth]{/figs/mu_q_center_norm_summary.png}
   \hfill
-  \includegraphics[width=0.47\textwidth]{mu_q_center_norm_ranked.png}
+  \includegraphics[width=0.47\textwidth]{/figs/mu_q_center_norm_ranked.png}
   \caption{Population-level and per-agent evolution of belief magnitudes 
   $\|\mu_Q^{\text{center}}\|$ during training with observations. 
   (\textbf{Left}) Population mean, standard deviation, and range across all agents. 
@@ -1937,15 +1914,15 @@ Figure~\ref{fig:glk_training} shows representative training dynamics for $\mathr
 \begin{figure*}[t]
   \centering
   \begin{subfigure}[b]{0.48\textwidth}
-    \includegraphics[width=\textwidth]{gl30_training_curves_3layer.png}
-    \caption{3-layer $\mathrm{GL}(30)$ with trivial gauge transport}
+    \includegraphics[width=\textwidth]{attention/figs/K=60_GL(10)_training_curves.png}
+    \caption{diagonal covariance $\mathrm{GL}(10)$ and 60 embedding dimensions}
   \end{subfigure}
   \hfill
   \begin{subfigure}[b]{0.48\textwidth}
-    \includegraphics[width=\textwidth]{gl30_training_curves_1layer.png}
-    \caption{1-layer $\mathrm{GL}(30)$ with learned gauge transport}
+    \includegraphics[width=\textwidth]{attention/figs/K=60_GL(10)_training_curves_non_diagonal.png}
+    \caption{general non-diagonal covariance $\mathrm{GL}(10)$ and 60 embedding dimensions}
   \end{subfigure}
-  \caption{Training dynamics for exploratory $\mathrm{GL}(30)$ gauge transformer configurations on WikiText-103, illustrating representative convergence behavior. (a,b) Total loss and perplexity vs.\ training step. (c) Bits per token. (d) Gradient norms decomposed by component: $\mu$ (beliefs), $\Sigma$ (covariances), $\phi$ (gauge frames). The 3-layer trivial-gauge model converges faster (plateaus by step 25k) while the 1-layer learned-gauge model achieves lower validation perplexity (113.9 vs.\ 125.1) but requires longer training. Quantitative results in Table~\ref{tab:glk_results} are from the final $\mathrm{GL}(20)$, $K=80$ configuration.}
+  \caption{XXXXX}
   \label{fig:glk_training}
 \end{figure*}
 
