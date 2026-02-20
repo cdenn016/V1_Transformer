@@ -1,0 +1,21 @@
+{
+  "ffn_mode": "VFE_dynamic",
+  "pure_fep": false,
+  "final_loss": 15.175169682502746,
+  "final_ppl": 117.40827941894531,
+  "random_ppl": 50257,
+  "improvement": 428.0532876277752,
+  "total_params": 39204421,
+  "vocab_size": 50257,
+  "checkpoint": "checkpoints_publication\\ffn_VFE_dynamic\\best_model.pt",
+  "total_steps": 100000,
+  "tokens_seen": 102400000,
+  "dataset_tokens": 116840304,
+  "dataset_coverage": 0.8764099073210216,
+  "batch_size": 16,
+  "seq_len": 64,
+  "test_loss": 4.737009452342987,
+  "test_ppl": 114.09249195072708,
+  "test_bpc": 6.834060045539371,
+  "test_improvement": 440.4934903315496
+}
