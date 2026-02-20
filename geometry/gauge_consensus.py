@@ -30,8 +30,8 @@ collective consensus metric is then:
 This construction is gauge-invariant by design - no agent's arbitrary
 frame choice affects the collective geometry.
 
-GL(K) Gauge Structure (NEW)
----------------------------
+GL(K) Gauge Structure
+---------------------
 CRITICAL INSIGHT: The variational free energy (VFE) is invariant under
 GL(K) gauge transformations, not just SO(K)!
 
@@ -44,6 +44,11 @@ The Jacobian factors cancel in the density ratio. This means:
 1. We do NOT need orthogonality constraints for gauge invariance
 2. Transport operators can be any invertible matrix
 3. Gauge averaging over GL(K) is NOT required for VFE invariance
+
+Note on parameterization: The exp map only reaches GL⁺(K) (det > 0),
+not all of GL(K). The VFE invariance holds for all of GL(K), but our
+transport operators Ω_ij = exp(X_i)·exp(-X_j) live in the identity
+component GL⁺(K). This is standard for gauge connections.
 
 However, GL(K) is non-compact, so there is NO uniform (Haar) measure.
 If you need to average over gauge orbits for other purposes (e.g.,

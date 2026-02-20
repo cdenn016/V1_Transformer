@@ -133,10 +133,13 @@ def compute_transport_operators(
     """
     Precompute transport operators for caching when phi is fixed.
 
-    Works for SO(3), SO(N), and GL(K) gauge groups:
+    Works for SO(3), SO(N), and GL⁺(K) gauge groups:
     - SO(3): n_gen = 3, phi ∈ ℝ³, enforce_orthogonal=True
     - SO(N): n_gen = N(N-1)/2, phi ∈ ℝ^{N(N-1)/2}, enforce_orthogonal=True
-    - GL(K): n_gen = K², phi ∈ ℝ^{K²}, enforce_orthogonal=False
+    - GL⁺(K): n_gen = K², phi ∈ ℝ^{K²}, enforce_orthogonal=False
+      (exp parameterization reaches identity component GL⁺(K) only;
+       det(exp(X)) = exp(tr(X)) > 0 always. The product Ω_ij =
+       exp(X_i)·exp(-X_j) covers all of GL⁺(K).)
 
     Gauge Modes:
     - 'learned': Standard mode where φ is learned per-token. Transport Ω_ij
@@ -156,7 +159,7 @@ def compute_transport_operators(
              - For GL(K): shape (B, N, K²)
         generators: Lie algebra generators (n_gen, K, K)
         enforce_orthogonal: If True, apply Newton-Schulz to ensure Ω ∈ SO(K).
-                           If False, allow Ω ∈ GL(K) (faster, still gauge-invariant).
+                           If False, allow Ω ∈ GL⁺(K) (faster, still gauge-invariant).
         gauge_mode: 'learned' for per-token frames, 'trivial' for global frame (Ω=I)
 
     Returns:
@@ -208,7 +211,7 @@ def compute_transport_operators(
         exp_neg_phi = exp_phi.transpose(-1, -2)
 
     # Re-orthogonalization for SO(K) gauge groups
-    # NOTE: For GL(K), this is NOT required - VFE is invariant under GL(K)!
+    # NOTE: For GL⁺(K), this is NOT required - VFE is invariant under GL(K)!
     # Only enable if you explicitly want SO(K) (e.g., for Haar measure averaging)
     if enforce_orthogonal and K >= 16:
         eye_K = torch.eye(K, device=device, dtype=dtype)

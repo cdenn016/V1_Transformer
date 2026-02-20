@@ -22,6 +22,14 @@ def stable_matrix_exp_pair(
     computing the matrix exponential to prevent NaN from Padé scaling-squaring
     overflow when phi values grow large.
 
+    Note on surjectivity:
+        exp(M) always has det > 0 (since det(exp(M)) = exp(tr(M))), so the
+        outputs live in GL⁺(K), the identity component. A single exp(M) does
+        not cover all of GL⁺(K) — matrices with negative real eigenvalues of
+        odd Jordan multiplicity have no real logarithm (Culver 1966). However,
+        the pairwise product exp(M_i)·exp(-M_j) used for transport Ω_ij does
+        cover all of GL⁺(K). For SO(K), exp: so(K) → SO(K) is surjective.
+
     Args:
         matrix: (..., d, d) matrix to exponentiate.
         dim_threshold: Upcast to float64 when d >= this value. Default 8.

@@ -9,25 +9,46 @@ Mathematical Framework:
 ----------------------
 **Transport Operator:**
     Ω_ij: Fiber_i → Fiber_j
-    Ω_ij(c) = g_i(c) · g_j(c)^{-1} where g = exp(φ) ∈ GL(K)
+    Ω_ij(c) = g_i(c) · g_j(c)^{-1} where g = exp(φ) ∈ GL⁺(K)
 
 **Properties:**
-    - Ω_ij ∈ GL(K): det(Ω) ≠ 0 (invertible)
+    - Ω_ij ∈ GL⁺(K): det(Ω) > 0 (positive determinant)
     - Ω_ij(c) · Ω_jk(c) = Ω_ik(c) (transitivity)
     - Ω_ii(c) = I (self-transport is identity)
 
 **Key Insight (GL(K) vs SO(K)):**
-    All f-divergences (including KL) are invariant under GL(K) transformations!
+    All f-divergences (including KL) are invariant under the full GL(K) group.
     This is because the action (μ, Σ) → (Ωμ, ΩΣΩᵀ) is the pushforward under
     x → Ωx, and f-divergences are coordinate-invariant (Jacobians cancel in ratio).
 
     We do NOT need orthogonality constraints for the variational free energy
     to be gauge-invariant. The only requirement is invertibility: det(Ω) ≠ 0.
 
+**Surjectivity of exp (important caveat):**
+    The exponential map exp: gl(K, ℝ) → GL(K, ℝ) is NOT surjective:
+
+    1. det(exp(X)) = exp(tr(X)) > 0 always, so Im(exp) ⊂ GL⁺(K).
+       Orientation-reversing transformations (det < 0) are unreachable.
+
+    2. Even within GL⁺(K), not every matrix has a real logarithm.
+       By Culver's theorem (1966), A ∈ GL⁺(K) has a real log iff each
+       Jordan block for each negative real eigenvalue occurs an even
+       number of times. E.g. diag(-2, -3) ∈ GL⁺(2) has no real log.
+
+    3. However, the PRODUCT of two exponentials exp(X_i)·exp(-X_j) CAN
+       reach all of GL⁺(K). This is the parameterization we use for Ω_ij,
+       so the transport operators cover the full identity component.
+
+    4. For SO(K) (compact, connected), exp: so(K) → SO(K) IS surjective.
+       No issues there.
+
+    5. The connection Ω_ij = g_i · g_j⁻¹ is always flat (zero curvature).
+       Non-trivial holonomy would require independent per-pair parameters.
+
 **Implementation:**
     For K=3 with SO(3) generators, use Rodrigues formula (closed form, exact)
     For general K, use matrix exponential via scipy.linalg.expm
-    NO projection to orthogonal matrices - allows full GL(K) flexibility
+    NO projection to orthogonal matrices - allows full GL⁺(K) flexibility
 
 Author: Clean Rebuild
 Date: November 2025
@@ -294,21 +315,37 @@ def _matrix_exponential_so3(
         enforce_skew_symmetry: If True, enforce X = -Xᵀ (for SO(K) generators)
 
     Returns:
-        exp_phi: Shape (*S, K, K), invertible matrices in GL(K)
+        exp_phi: Shape (*S, K, K), invertible matrices in GL⁺(K) (det > 0)
                  (orthogonal if project_to_orthogonal=True)
 
     Note:
         For GL(K) gauge transformations, we do NOT need orthogonal projection.
         The VFE is invariant under GL(K) because f-divergences are invariant
         under pushforward by invertible linear maps.
+
+        A single exp(X) cannot reach all of GL⁺(K) — matrices with negative
+        real eigenvalues of odd Jordan multiplicity have no real logarithm
+        (Culver 1966). But transport Ω_ij = exp(X_i)·exp(-X_j) covers GL⁺(K).
     """
     phi = np.asarray(phi, dtype=np.float64)
     G = np.asarray(generators, dtype=np.float64)
 
-    # Clip phi values to prevent numerical overflow
-    # For GL(K), large values can still cause issues with expm
+    # Clip phi norm to prevent numerical overflow in expm.
+    #
+    # For SO(K) (enforce_skew_symmetry=True): clip to 2π.
+    #   Rotations are periodic: exp(θ·G) = exp((θ mod 2π)·G), so this is
+    #   mathematically exact, not just a numerical safeguard.
+    #
+    # For GL(K) (enforce_skew_symmetry=False): clip to ~20.
+    #   There is NO periodicity in the symmetric/trace directions of gl(K).
+    #   Clipping to 2π would artificially restrict reachable eigenvalues to
+    #   [e^{-2π}, e^{2π}] ≈ [0.002, 535]. We use a larger threshold that
+    #   keeps scipy.linalg.expm numerically stable (scaling-squaring handles
+    #   norms up to ~50 comfortably in float64) while allowing the model to
+    #   represent a much wider range of GL⁺(K) transformations.
+    max_norm = 2 * np.pi if enforce_skew_symmetry else 20.0
     phi_norm = np.linalg.norm(phi, axis=-1, keepdims=True)
-    phi_norm_clipped = np.clip(phi_norm, 0, 2 * np.pi)
+    phi_norm_clipped = np.clip(phi_norm, 0, max_norm)
 
     scale_factor = np.ones_like(phi_norm)
     np.divide(phi_norm_clipped, phi_norm, out=scale_factor, where=phi_norm > 1e-8)
