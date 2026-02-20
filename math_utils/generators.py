@@ -15,18 +15,24 @@ For SO(3), we use the spin-ℓ irreducible representations:
 
 Uses real tesseral harmonics (not spherical) to avoid complex arithmetic.
 
-GL(K) Gauge Structure (NEW):
----------------------------
+GL(K) Gauge Structure:
+----------------------
 The VFE is invariant under GL(K) gauge transformations, not just SO(K)!
 This means:
 - Transport operators Ω = exp(φ·G) only need to be INVERTIBLE, not orthogonal
 - The current SO(K) generators define a subalgebra of gl(K)
-- For full GL(K) flexibility, you could extend to K² generators (full gl(K) basis)
+- For full GL(K) flexibility, you can extend to K² generators (full gl(K) basis)
 
-However, for most applications, the SO(K) subalgebra generators suffice:
+Important: exp: gl(K,ℝ) → GL(K,ℝ) is NOT surjective.
+- det(exp(X)) = exp(tr(X)) > 0, so exp only reaches GL⁺(K) (identity component)
+- Even within GL⁺(K), not every matrix is a single exponential (Culver 1966)
+- The product Ω_ij = exp(X_i)·exp(-X_j) does cover all of GL⁺(K)
+- For SO(K), exp IS surjective (compact connected group) — no issues
+
+For most applications, the SO(K) subalgebra generators suffice:
 - They provide a natural parameterization with K(K-1)/2 or 3 parameters
 - The transport operators remain well-conditioned
-- exp(skew-symmetric) is always invertible (in fact, orthogonal)
+- exp(skew-symmetric) is always orthogonal (and surjects onto SO(K))
 
 To use full GL(K), you would need to:
 1. Generate K² generators spanning gl(K) (e.g., E_ij basis)
@@ -704,21 +710,26 @@ def generate_glK_generators(
 
     Properties:
         - G[a] spans all K×K matrices (not just skew-symmetric)
-        - exp(φ·G) ∈ GL(K) for generic φ (invertible, not necessarily orthogonal)
+        - exp(φ·G) ∈ GL⁺(K) for all φ (det > 0, not necessarily orthogonal)
         - Includes both symmetric and antisymmetric directions
         - More parameters than so(K): K² vs K(K-1)/2
 
     Comparison:
-        | Algebra | Generators | K=10 params | Constraint on exp(X) |
-        |---------|------------|-------------|----------------------|
-        | so(K)   | K(K-1)/2   | 45          | Orthogonal (Ωᵀ Ω = I)|
-        | sl(K)   | K²-1       | 99          | det = 1              |
-        | gl(K)   | K²         | 100         | Invertible (det ≠ 0) |
+        | Algebra | Generators | K=10 params | Constraint on exp(X)          |
+        |---------|------------|-------------|-------------------------------|
+        | so(K)   | K(K-1)/2   | 45          | Orthogonal (Ωᵀ Ω = I)        |
+        | sl(K)   | K²-1       | 99          | det = 1                       |
+        | gl(K)   | K²         | 100         | det > 0 (identity component)  |
 
     Note:
-        For VFE-based objectives, gl(K) provides maximum flexibility since
-        f-divergences are invariant under all invertible transformations.
-        The VFE doesn't require orthogonality or volume preservation.
+        The VFE is invariant under the full GL(K) (including det < 0), but
+        the exponential parameterization only reaches GL⁺(K) since
+        det(exp(X)) = exp(tr(X)) > 0 always. This is the identity component
+        of GL(K) and is standard for gauge connections. Furthermore, a single
+        exp(X) does not cover all of GL⁺(K) — by Culver's theorem, matrices
+        with negative real eigenvalues of odd Jordan multiplicity have no real
+        logarithm. The product exp(X_i)·exp(-X_j) used for transport does
+        cover all of GL⁺(K).
     """
     if K < 1:
         raise ValueError(f"K must be >= 1 for GL(K), got K={K}")
