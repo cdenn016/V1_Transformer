@@ -189,7 +189,7 @@ CORPUS = [
     "The phenomenon of code-switching occurs when multilingual speakers alternate between two or more languages within a single conversation or utterance. It serves various social and communicative functions.",
 ]
 
-TAU = 1.0                  # Temperature for KL attention
+TAU = 19.0                 # Temperature for KL attention (≈ 2√d for d_head=64)
 TAU_SWEEP = [0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 19.0, 25.0, 50.0]  # For temperature sweep
 DEVICE = "cpu"
 N_BOOTSTRAP = 500          # Bootstrap samples for CI (Phase 1 single-passage)
