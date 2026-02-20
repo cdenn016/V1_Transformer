@@ -635,7 +635,10 @@ class FastTrainer:
         else:
             path = self.config.checkpoint_dir / f'checkpoint_step_{self.global_step}.pt'
 
-        torch.save(checkpoint, path)
+        # Use pickle protocol 4 to avoid the PyTorch zip serialization
+        # 2GB limit on Windows (inline_container.cc position overflow).
+        torch.save(checkpoint, path, pickle_protocol=4,
+                   _use_new_zipfile_serialization=False)
 
         # Cleanup old checkpoints
         if not is_best:

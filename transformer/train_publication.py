@@ -2041,7 +2041,8 @@ def run_single_experiment(
                             'model_state_dict': model.state_dict(),
                             'step': step + 1,
                             'val_ppl': val_ppl,
-                        }, ckpt_path)
+                        }, ckpt_path, pickle_protocol=4,
+                            _use_new_zipfile_serialization=False)
                         print(f"    ✓ New best! Saved to {ckpt_path}")
 
                     model.train()
