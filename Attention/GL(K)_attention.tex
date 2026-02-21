@@ -256,7 +256,7 @@ For $\Omega \in \mathrm{GL}(K)$, the gauge action on a Gaussian state is:
 \label{eq:gauge_action_gaussians}
 \end{equation}
 
-By Theorem~\ref{thm:glk_invariance}, KL divergence is invariant under this action for any $\Omega \in \mathrm{GL}(K)$. The only requirement is invertibility ($\det \Omega \neq 0$), not orthogonality.
+By Theorem~\ref{thm:glk_invariance}, KL divergence is invariant under this action for any $\Omega \in \mathrm{GL}(K)$. The only requirement is invertibility ($\det \Omega \neq 0$), not orthogonality. (Since our transport operators are parameterized via the matrix exponential, their determinants are always positive; see Remark~\ref{rem:exp_surjectivity}.)
 
 
 
@@ -278,7 +278,7 @@ Gauge group $G$ &
 $\mathrm{GL}(K)$ or subgroup &
 $\mathrm{GL}(d_k)$ (implicit) \\
 Gauge transformation &
-$\Omega_{ij} = e^{\phi_i} e^{-\phi_j}$ &
+$\Omega_{ij} = e^{\phi_i} e^{-\phi_j} \in \mathrm{GL}^+(K)$ &
 $\Omega = W_Q W_K^\top$ (learned, constant) \\
 Frame field $\phi_i(c)$ &
 Varies per agent/position &
@@ -387,7 +387,7 @@ Importantly, the proof extends to all $f$-divergences: for any convex function $
 D_f(\Omega_* P \| \Omega_* Q) = D_f(P \| Q), \quad \forall\, \Omega \in \mathrm{GL}(K),
 \end{equation}
 
-since the Jacobian factors $|\det\Omega|$ from the density transformation cancel in the ratio $p(x)/q(x)$. From a practical point of view, this means that transport operators need only satisfy $\det(\Omega_{ij}) \neq 0$ (invertibility). Finally, we shall demonstrate that the query and key projection matrices $W_Q, W_K \in \mathrm{GL}(d_k)$ in standard transformers are themselves gauge transformations. The constant gauge limit corresponds not to the absence of gauge structure, but to a constant gauge transformation $\Omega = W_Q W_K^\top$ shared among all token pairs.
+since the Jacobian factors $|\det\Omega|$ from the density transformation cancel in the ratio $p(x)/q(x)$. From a practical point of view, this means that transport operators need only satisfy $\det(\Omega_{ij}) \neq 0$ (invertibility); the full $\mathrm{GL}(K)$ acts as a gauge symmetry. Our exponential parameterization restricts to $\det > 0$ (see Remark~\ref{rem:exp_surjectivity}), but this is the identity component and is standard for gauge connections. Finally, we shall demonstrate that the query and key projection matrices $W_Q, W_K \in \mathrm{GL}(d_k)$ in standard transformers are themselves gauge transformations. The constant gauge limit corresponds not to the absence of gauge structure, but to a constant gauge transformation $\Omega = W_Q W_K^\top$ shared among all token pairs.
 
 
 \begin{table}[h]
@@ -480,11 +480,11 @@ These priors are local in that they live within each agent's own gauge frame $\p
 The gauge transport operators $\Omega_{ij}, \tilde{\Omega}_{ij}$ are pointwise gauge frame transformations:
 
 \begin{equation}
-\Omega_{ij}(c) = e^{\phi_i(c)} \cdot e^{-\phi_j(c)} \in \mathrm{GL}(K),
+\Omega_{ij}(c) = e^{\phi_i(c)} \cdot e^{-\phi_j(c)} \in \mathrm{GL}^+(K),
 \label{eq:gauge_frame_rotation}
 \end{equation}
 
-where $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ is agent $i$'s gauge frame field (an open local section of the Lie algebra bundle). These act on the latent variables as
+where $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ is agent $i$'s gauge frame field (an open local section of the Lie algebra bundle) and $\mathrm{GL}^+(K) = \{A \in \mathrm{GL}(K) : \det A > 0\}$ is the identity component of $\mathrm{GL}(K)$. These act on the latent variables as
 
 \begin{equation}
 \begin{aligned}
@@ -498,7 +498,23 @@ where $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ is agent $i$'s gauge frame fi
 \label{eq:gauge_action_on_vectors}
 \end{equation}
 
-mapping agent $j$'s latent into agent $i$'s frame. 
+mapping agent $j$'s latent into agent $i$'s frame.
+
+\begin{remark}[Surjectivity of the matrix exponential]
+\label{rem:exp_surjectivity}
+The exponential map $\exp: \mathfrak{gl}(K, \mathbb{R}) \to \mathrm{GL}(K, \mathbb{R})$ is \emph{not} surjective for $K > 1$, and this has three consequences for the parameterization~\eqref{eq:gauge_frame_rotation}:
+
+\textbf{(i) Image restricted to $\mathrm{GL}^+(K)$.}
+Since $\det(\exp X) = e^{\mathrm{tr}(X)} > 0$ for all $X \in \mathfrak{gl}(K)$, the image of $\exp$ lies entirely within the identity component $\mathrm{GL}^+(K)$. Orientation-reversing transformations ($\det < 0$) are unreachable. The KL divergence is invariant under the full $\mathrm{GL}(K)$ (Theorem~\ref{thm:glk_invariance}), but restricting to the identity component is standard for gauge connections and introduces no loss of generality for connected bundles.
+
+\textbf{(ii) Non-surjectivity within $\mathrm{GL}^+(K)$.}
+Even within $\mathrm{GL}^+(K)$, a single matrix exponential does not reach every element. By Culver's theorem \citep{culver1966existence}, a real matrix $A$ possesses a real logarithm (i.e., $A = e^X$ for some $X \in \mathfrak{gl}(K, \mathbb{R})$) if and only if for each negative real eigenvalue $\lambda$ of $A$, the number of Jordan blocks of each size associated with $\lambda$ is even. Matrices violating this condition---such as $\mathrm{diag}(-2, -3) \in \mathrm{GL}^+(2)$, where each negative eigenvalue has a single Jordan block of size one---have positive determinant but no real logarithm.
+
+\textbf{(iii) Products of exponentials cover $\mathrm{GL}^+(K)$.}
+Despite (ii), the \emph{product} parameterization $\Omega_{ij} = e^{\phi_i} \cdot e^{-\phi_j}$ used in~\eqref{eq:gauge_frame_rotation} \emph{does} cover all of $\mathrm{GL}^+(K)$. This follows from the polar decomposition: any $A \in \mathrm{GL}^+(K)$ can be written as $A = PO$ where $P$ is symmetric positive-definite and $O \in \mathrm{SO}(K)$. Since every symmetric positive-definite matrix has a real logarithm (all eigenvalues positive) and $\exp: \mathfrak{so}(K) \to \mathrm{SO}(K)$ is surjective (compact connected group), we obtain $A = \exp(\log P) \cdot \exp(\log O)$, a product of two matrix exponentials. Since $\phi_i$ and $\phi_j$ are independently learned, the transport operator $\Omega_{ij}$ can represent any element of $\mathrm{GL}^+(K)$.
+
+For $\mathrm{SO}(K)$ gauge groups (when generators are restricted to $\mathfrak{so}(K)$), $\exp$ is surjective and no such subtlety arises.
+\end{remark}
 
 \subsection{Single-Agent Free Energy Principle}
 
@@ -1295,7 +1311,7 @@ with each channel possessing its own residual structure and effective learning r
 \multicolumn{4}{|l|}{\textit{Attention Mechanism}} \\
 \hline
 $\beta_{ij} \!=\! \softmax(-D_{\KL}/\tau)$ & Exact (Sec.~\ref{sec:mixture_derivation}) & $\softmax(QK^\top\!/\!\sqrt{d_k})$ & D \\
-$\Omega_{ij}\!=\!e^{\phi_i}e^{-\phi_j}\!\in\!\mathrm{GL}(K)$ & Constant $\Omega$ (Limit 2) & $W_Q W_K^\top$ (learned gauge) & D \\
+$\Omega_{ij}\!=\!e^{\phi_i}e^{-\phi_j}\!\in\!\mathrm{GL}^+(K)$ & Constant $\Omega$ (Limit 2) & $W_Q W_K^\top$ (learned gauge) & D \\
 Forward KL uniqueness & Thm.\ (App.~C) & Why dot-product attention & D \\
 $m_i \!=\! \sum_j \beta_{ij}\Omega_{ij}\mu_j$ & $\Omega$ absorbed into $W_V$ & $\sum_j \alpha_{ij} V_j$ (value agg.) & D \\
 $\mathrm{GL}(d_{\text{head}})^H \!\subset\! \mathrm{GL}(d_k)$ & Irrep decomposition & Multi-head attention & D \\
@@ -1643,7 +1659,7 @@ where $\theta = \{\mu_{\text{embed}}, \Sigma_{\text{embed}}, \phi_{\text{embed}}
 
 Agent beliefs $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ represent context-dependent semantic interpretations that evolve through communication. Token priors $p_c = \mathcal{N}(\mu_p^c, \Sigma_p^c)$ and gauge frame coefficients $\phi_c^a \in \mathbb{R}$ are initialized from $\mathcal{N}(0, \sigma_{\text{init}}^2)$ with $\sigma_{\text{init}} = 0.3$, serving as learnable token representations analogous to embedding matrices.
 
-For $\mathrm{GL}(K)$, the gauge frame $\phi_c$ directly parameterizes elements of $\mathfrak{gl}(K)$, with transport operators $\Omega_i = \exp(\phi_i)$ computed via matrix exponential. At the start of each training sequence, agent beliefs are initialized to match their token priors:
+For $\mathrm{GL}(K)$, the gauge frame $\phi_c$ directly parameterizes elements of $\mathfrak{gl}(K)$, with transport operators $\Omega_i = \exp(\phi_i) \in \mathrm{GL}^+(K)$ computed via matrix exponential (see Remark~\ref{rem:exp_surjectivity} for the surjectivity properties of this parameterization). At the start of each training sequence, agent beliefs are initialized to match their token priors:
 
 \begin{equation}
 q_i(t=0) = p_{\text{token}(i)},
@@ -2290,7 +2306,7 @@ where $q_i = \mathcal{N}(\mu_i, \Sigma_i)$, $p_i = \mathcal{N}(\mu_{p,i}, \Sigma
 
 \subsubsection{Gaussian KL Divergence under $\mathrm{GL}(K)$ Gauge Transport}
 
-The alignment term $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ involves KL divergences between Gaussians related by $\mathrm{GL}(K)$ gauge transport $\Omega_{ij} = e^{\phi_i}e^{-\phi_j}$. The standard Gaussian KL divergence is
+The alignment term $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ involves KL divergences between Gaussians related by gauge transport $\Omega_{ij} = e^{\phi_i}e^{-\phi_j} \in \mathrm{GL}^+(K)$ (see Remark~\ref{rem:exp_surjectivity}). The standard Gaussian KL divergence is
 
 \begin{align}
 D_{\mathrm{KL}}\!\left(
