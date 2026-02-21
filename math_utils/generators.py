@@ -721,15 +721,20 @@ def generate_glK_generators(
         | sl(K)   | K²-1       | 99          | det = 1                       |
         | gl(K)   | K²         | 100         | det > 0 (identity component)  |
 
-    Note:
+    Note on exp surjectivity:
         The VFE is invariant under the full GL(K) (including det < 0), but
         the exponential parameterization only reaches GL⁺(K) since
-        det(exp(X)) = exp(tr(X)) > 0 always. This is the identity component
-        of GL(K) and is standard for gauge connections. Furthermore, a single
-        exp(X) does not cover all of GL⁺(K) — by Culver's theorem, matrices
-        with negative real eigenvalues of odd Jordan multiplicity have no real
-        logarithm. The product exp(X_i)·exp(-X_j) used for transport does
-        cover all of GL⁺(K).
+        det(exp(X)) = exp(tr(X)) > 0 always.
+
+        Even within GL⁺(K), a SINGLE exp(X) is not surjective for K > 1.
+        By Culver's theorem (1966), A ∈ GL(K,ℝ) has a real logarithm iff
+        for each negative real eigenvalue λ, the number of Jordan blocks of
+        each size for λ is even. E.g. diag(-2, -3) ∈ GL⁺(2) has no real log
+        (each negative eigenvalue has 1 block of size 1: odd count).
+
+        This does NOT limit our transport operators: Ω_ij = exp(X_i)·exp(-X_j)
+        is a product of two exponentials, which covers all of GL⁺(K) by the
+        polar decomposition argument (any A = P·O = exp(log P)·exp(log O)).
     """
     if K < 1:
         raise ValueError(f"K must be >= 1 for GL(K), got K={K}")

@@ -25,19 +25,38 @@ Mathematical Framework:
     to be gauge-invariant. The only requirement is invertibility: det(Ω) ≠ 0.
 
 **Surjectivity of exp (important caveat):**
-    The exponential map exp: gl(K, ℝ) → GL(K, ℝ) is NOT surjective:
+    The exponential map exp: gl(K, ℝ) → GL(K, ℝ) is NOT surjective for K > 1:
 
     1. det(exp(X)) = exp(tr(X)) > 0 always, so Im(exp) ⊂ GL⁺(K).
        Orientation-reversing transformations (det < 0) are unreachable.
 
-    2. Even within GL⁺(K), not every matrix has a real logarithm.
-       By Culver's theorem (1966), A ∈ GL⁺(K) has a real log iff each
-       Jordan block for each negative real eigenvalue occurs an even
-       number of times. E.g. diag(-2, -3) ∈ GL⁺(2) has no real log.
+    2. Even within GL⁺(K), exp is NOT surjective for K > 1.
+       A matrix A ∈ GL(K, ℝ) has a real logarithm if and only if for
+       EACH negative real eigenvalue λ, the number of Jordan blocks of
+       EACH SIZE for λ is even (Culver 1966).
 
-    3. However, the PRODUCT of two exponentials exp(X_i)·exp(-X_j) CAN
-       reach all of GL⁺(K). This is the parameterization we use for Ω_ij,
-       so the transport operators cover the full identity component.
+       Concrete failures (all have det > 0, none have a real log):
+         - diag(-2, -3): two negative eigenvalues, each with 1 Jordan
+           block of size 1 — odd count → no real log.
+         - diag(-2, 1, 1, 1): one negative eigenvalue with 1 Jordan
+           block of size 1 — odd count → no real log.
+       Concrete successes:
+         - diag(-2, -2): one negative eigenvalue (-2) with 2 Jordan
+           blocks of size 1 — even count → has real log.
+           (Log uses paired complex eigenvalues: log(2)I + π·J₂.)
+
+       These "unreachable" matrices are a measure-zero set but are NOT
+       topologically negligible — they disconnect components of GL⁺(K)
+       in the log topology.
+
+    3. However, every A ∈ GL⁺(K) can be written as a PRODUCT of two
+       exponentials. Proof: polar decomposition A = P·O where P is
+       positive-definite symmetric (always has a real log) and O ∈ SO(K)
+       (always has a real log, since SO(K) is compact connected).
+       So A = exp(log P) · exp(log O).
+
+       Since Ω_ij = exp(X_i) · exp(-X_j) is a free product of two
+       exponentials, the transport operators cover ALL of GL⁺(K).
 
     4. For SO(K) (compact, connected), exp: so(K) → SO(K) IS surjective.
        No issues there.
@@ -323,9 +342,12 @@ def _matrix_exponential_so3(
         The VFE is invariant under GL(K) because f-divergences are invariant
         under pushforward by invertible linear maps.
 
-        A single exp(X) cannot reach all of GL⁺(K) — matrices with negative
-        real eigenvalues of odd Jordan multiplicity have no real logarithm
-        (Culver 1966). But transport Ω_ij = exp(X_i)·exp(-X_j) covers GL⁺(K).
+        A single exp(X) cannot reach all of GL⁺(K) for K > 1.  By Culver
+        (1966), A ∈ GL(K,ℝ) has a real log iff for each negative real
+        eigenvalue λ, the number of Jordan blocks of each size for λ is
+        even. E.g. diag(-2,-3) has det 6 > 0 but no real log (each negative
+        eigenvalue has 1 block of size 1: odd). But the product
+        Ω_ij = exp(X_i)·exp(-X_j) covers all of GL⁺(K) via polar decomp.
     """
     phi = np.asarray(phi, dtype=np.float64)
     G = np.asarray(generators, dtype=np.float64)

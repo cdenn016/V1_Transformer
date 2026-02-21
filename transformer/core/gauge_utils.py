@@ -24,11 +24,17 @@ def stable_matrix_exp_pair(
 
     Note on surjectivity:
         exp(M) always has det > 0 (since det(exp(M)) = exp(tr(M))), so the
-        outputs live in GL⁺(K), the identity component. A single exp(M) does
-        not cover all of GL⁺(K) — matrices with negative real eigenvalues of
-        odd Jordan multiplicity have no real logarithm (Culver 1966). However,
-        the pairwise product exp(M_i)·exp(-M_j) used for transport Ω_ij does
-        cover all of GL⁺(K). For SO(K), exp: so(K) → SO(K) is surjective.
+        outputs live in GL⁺(K), the identity component.
+
+        Even within GL⁺(K), a single exp(M) is NOT surjective for K > 1.
+        By Culver (1966), A ∈ GL(K,ℝ) has a real log iff for each negative
+        real eigenvalue, the number of Jordan blocks of each size is even.
+        E.g. diag(-2, -3) has det = 6 > 0 but no real logarithm.
+
+        This does not limit transport: Ω_ij = exp(M_i)·exp(-M_j) is a free
+        product of two exponentials, which covers all of GL⁺(K) (by polar
+        decomposition: A = exp(log P)·exp(log O) where P sym.pos.def., O ∈ SO).
+        For SO(K), exp: so(K) → SO(K) is surjective — no issues.
 
     Args:
         matrix: (..., d, d) matrix to exponentiate.
