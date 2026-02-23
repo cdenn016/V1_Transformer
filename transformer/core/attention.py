@@ -331,11 +331,9 @@ def compute_attention_weights(
     device = mu_q.device
     dtype = mu_q.dtype
 
-    # Allocate KL divergence matrix
-    kl_matrix = torch.zeros(batch_size, num_agents, num_agents, device=device, dtype=dtype)
-
     # =========================================================================
     # Compute all pairwise KL divergences: KL(q_i || Ω_ij[q_j])
+    # Helper functions return KL tensors (not in-place) to preserve autograd graph
     # =========================================================================
 
     # CRITICAL: Never use Numba path on CUDA devices!
@@ -352,42 +350,44 @@ def compute_attention_weights(
         # Uses O(N² × Σᵢdᵢ²) instead of O(N² × K²) - massive savings!
         if chunk_size is not None:
             # Block-diagonal + chunked: maximum memory efficiency
-            _compute_kl_matrix_block_diagonal_chunked(
-                mu_q, sigma_q, phi, generators, kl_matrix, irrep_dims, chunk_size
+            kl_matrix = _compute_kl_matrix_block_diagonal_chunked(
+                mu_q, sigma_q, phi, generators, irrep_dims, chunk_size
             )
         else:
             # Block-diagonal only (still big savings vs full K×K)
-            _compute_kl_matrix_block_diagonal(
-                mu_q, sigma_q, phi, generators, kl_matrix, irrep_dims
+            kl_matrix = _compute_kl_matrix_block_diagonal(
+                mu_q, sigma_q, phi, generators, irrep_dims
             )
     elif chunk_size is not None and not diagonal_covariance:
         # CHUNKED MODE: Full covariance but memory-efficient
-        _compute_kl_matrix_chunked(
-            mu_q, sigma_q, phi, generators, kl_matrix, chunk_size
+        kl_matrix = _compute_kl_matrix_chunked(
+            mu_q, sigma_q, phi, generators, chunk_size
         )
     elif diagonal_covariance:
         # DIAGONAL MODE: O(N²×K) memory instead of O(N²×K²)!
         # sigma_q is (B, N, K) not (B, N, K, K)
         if chunk_size is not None:
-            _compute_kl_matrix_diagonal_chunked(
-                mu_q, sigma_q, phi, generators, kl_matrix, chunk_size,
+            kl_matrix = _compute_kl_matrix_diagonal_chunked(
+                mu_q, sigma_q, phi, generators, chunk_size,
                 enforce_orthogonal=enforce_orthogonal
             )
         else:
-            _compute_kl_matrix_diagonal(
-                mu_q, sigma_q, phi, generators, kl_matrix, cached_transport,
+            kl_matrix = _compute_kl_matrix_diagonal(
+                mu_q, sigma_q, phi, generators, cached_transport,
                 enforce_orthogonal=enforce_orthogonal
             )
     elif use_numba and NUMBA_AVAILABLE and TRANSPORT_AVAILABLE and not is_cuda:
         # Fast path: Use Numba kernels (CPU only)
         # Note: Numba path doesn't support cached_transport (CPU-only fallback)
+        # Numba operates on numpy so pre-allocate buffer (no autograd needed)
+        kl_matrix = torch.zeros(batch_size, num_agents, num_agents, device=device, dtype=dtype)
         _compute_kl_matrix_numba(
             mu_q, sigma_q, phi, generators, kl_matrix
         )
     else:
         # GPU path OR CPU fallback: Pure PyTorch (fully vectorized, CUDA-compatible)
-        _compute_kl_matrix_torch(
-            mu_q, sigma_q, phi, generators, kl_matrix, cached_transport,
+        kl_matrix = _compute_kl_matrix_torch(
+            mu_q, sigma_q, phi, generators, cached_transport,
             use_identity_transport=use_identity_transport,
             enforce_orthogonal=enforce_orthogonal
         )
@@ -525,43 +525,43 @@ def compute_kl_matrix(
     device = mu_q.device
     dtype = mu_q.dtype
 
-    # Allocate output
-    kl_matrix = torch.zeros(batch_size, num_agents, num_agents, device=device, dtype=dtype)
-
     # Select appropriate backend based on parameters
+    # Helper functions return KL tensors (not in-place) to preserve autograd graph
     is_cuda = device.type == 'cuda'
 
     if irrep_dims is not None and not diagonal_covariance:
         if chunk_size is not None:
-            _compute_kl_matrix_block_diagonal_chunked(
-                mu_q, sigma_q, phi, generators, kl_matrix, irrep_dims, chunk_size
+            kl_matrix = _compute_kl_matrix_block_diagonal_chunked(
+                mu_q, sigma_q, phi, generators, irrep_dims, chunk_size
             )
         else:
-            _compute_kl_matrix_block_diagonal(
-                mu_q, sigma_q, phi, generators, kl_matrix, irrep_dims
+            kl_matrix = _compute_kl_matrix_block_diagonal(
+                mu_q, sigma_q, phi, generators, irrep_dims
             )
     elif chunk_size is not None and not diagonal_covariance:
-        _compute_kl_matrix_chunked(
-            mu_q, sigma_q, phi, generators, kl_matrix, chunk_size
+        kl_matrix = _compute_kl_matrix_chunked(
+            mu_q, sigma_q, phi, generators, chunk_size
         )
     elif diagonal_covariance:
         if chunk_size is not None:
-            _compute_kl_matrix_diagonal_chunked(
-                mu_q, sigma_q, phi, generators, kl_matrix, chunk_size,
+            kl_matrix = _compute_kl_matrix_diagonal_chunked(
+                mu_q, sigma_q, phi, generators, chunk_size,
                 enforce_orthogonal=enforce_orthogonal
             )
         else:
-            _compute_kl_matrix_diagonal(
-                mu_q, sigma_q, phi, generators, kl_matrix, None,
+            kl_matrix = _compute_kl_matrix_diagonal(
+                mu_q, sigma_q, phi, generators, None,
                 enforce_orthogonal=enforce_orthogonal
             )
     elif NUMBA_AVAILABLE and TRANSPORT_AVAILABLE and not is_cuda:
+        # Numba operates on numpy so pre-allocate buffer (no autograd needed)
+        kl_matrix = torch.zeros(batch_size, num_agents, num_agents, device=device, dtype=dtype)
         _compute_kl_matrix_numba(
             mu_q, sigma_q, phi, generators, kl_matrix
         )
     else:
-        _compute_kl_matrix_torch(
-            mu_q, sigma_q, phi, generators, kl_matrix, None,
+        kl_matrix = _compute_kl_matrix_torch(
+            mu_q, sigma_q, phi, generators, None,
             use_identity_transport=use_identity_transport,
             enforce_orthogonal=enforce_orthogonal
         )
@@ -623,11 +623,10 @@ def _compute_kl_matrix_torch(
     sigma_q: torch.Tensor,
     phi: torch.Tensor,
     generators: torch.Tensor,
-    kl_matrix: torch.Tensor,
     cached_transport: Optional[dict] = None,  # Precomputed transport operators
     use_identity_transport: bool = False,  # If True, bypass transport (Ω = I)
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
-) -> None:
+) -> torch.Tensor:
     """
     VECTORIZED KL matrix computation using pure PyTorch.
 
@@ -638,10 +637,12 @@ def _compute_kl_matrix_torch(
         sigma_q: (B, N, K, K) belief covariances
         phi: (B, N, 3) gauge fields
         generators: (3, K, K) SO(3) generators
-        kl_matrix: (B, N, N) output tensor (modified in-place)
         cached_transport: Optional dict with precomputed 'Omega' from compute_transport_operators()
         use_identity_transport: If True, skip transport and compute raw KL(q_i || q_j)
         enforce_orthogonal: If True, apply Newton-Schulz to ensure Ω ∈ SO(K)
+
+    Returns:
+        kl_matrix: (B, N, N) KL divergence matrix with autograd graph intact
     """
     B, N, K = mu_q.shape
     device = mu_q.device
@@ -741,13 +742,16 @@ def _compute_kl_matrix_torch(
         kl_ceil = max(100.0, 5.0 * K)
         kl_all = torch.clamp(kl_all, min=0.0, max=kl_ceil)
 
-        # Copy to output (in-place)
-        kl_matrix.copy_(kl_all)
+        return kl_all
 
     except RuntimeError:
         # Fallback to loop-based computation if Cholesky fails
+        # Collect values in list to preserve autograd graph (no in-place ops)
+        kl_rows = []
         for b in range(B):
+            batch_rows = []
             for i in range(N):
+                row_vals = []
                 for j in range(N):
                     mu_j_transported, sigma_j_transported = _transport_gaussian_torch(
                         mu_q[b, j], sigma_q[b, j],
@@ -757,7 +761,10 @@ def _compute_kl_matrix_torch(
                         mu_q[b, i], sigma_q[b, i],
                         mu_j_transported, sigma_j_transported
                     )
-                    kl_matrix[b, i, j] = kl_ij
+                    row_vals.append(kl_ij.unsqueeze(0))
+                batch_rows.append(torch.cat(row_vals, dim=0))  # (N,)
+            kl_rows.append(torch.stack(batch_rows, dim=0))  # (N, N)
+        return torch.stack(kl_rows, dim=0)  # (B, N, N)
 
 
 def _transport_gaussian_torch(
@@ -848,10 +855,9 @@ def _compute_kl_matrix_diagonal(
     sigma_q: torch.Tensor,     # (B, N, K) diagonal variances (NOT K×K!)
     phi: torch.Tensor,         # (B, N, 3) gauge frames
     generators: torch.Tensor,  # (3, K, K) SO(3) generators
-    kl_matrix: torch.Tensor,   # (B, N, N) output tensor
     cached_transport: Optional[dict] = None,  # Precomputed transport operators
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
-) -> None:
+) -> torch.Tensor:
     """
     DIAGONAL covariance KL computation - O(N²×K) instead of O(N²×K²).
 
@@ -870,8 +876,10 @@ def _compute_kl_matrix_diagonal(
         sigma_q: (B, N, K) diagonal variances (positive)
         phi: (B, N, 3) gauge fields
         generators: (3, K, K) SO(3) generators
-        kl_matrix: (B, N, N) output tensor (modified in-place)
         cached_transport: Optional dict with precomputed 'Omega' from compute_transport_operators()
+
+    Returns:
+        kl_matrix: (B, N, N) KL divergence matrix with autograd graph intact
     """
     # Squeeze trailing singleton dimensions for robustness
     # (handles case where sigma_q comes in as (B, N, K, 1) instead of (B, N, K))
@@ -956,7 +964,7 @@ def _compute_kl_matrix_diagonal(
     kl_ceil = max(100.0, 5.0 * K)
     kl_all = torch.clamp(kl_all, min=0.0, max=kl_ceil)
 
-    kl_matrix.copy_(kl_all)
+    return kl_all
 
 
 # =============================================================================
@@ -971,9 +979,8 @@ def _compute_kl_matrix_chunked(
     sigma_q: torch.Tensor,     # (B, N, K, K) belief covariances
     phi: torch.Tensor,         # (B, N, n_gen) gauge frames
     generators: torch.Tensor,  # (n_gen, K, K) generators
-    kl_matrix: torch.Tensor,   # (B, N, N) output tensor
     chunk_size: int = 32,      # Process chunk_size × chunk_size blocks at a time
-) -> None:
+) -> torch.Tensor:
     """
     CHUNKED KL matrix computation - O(C²K²) memory instead of O(N²K²).
 
@@ -989,8 +996,10 @@ def _compute_kl_matrix_chunked(
         sigma_q: (B, N, K, K) belief covariances
         phi: (B, N, n_gen) gauge fields
         generators: (n_gen, K, K) Lie algebra generators
-        kl_matrix: (B, N, N) output tensor (modified in-place)
         chunk_size: Size of chunks to process (smaller = less memory, slower)
+
+    Returns:
+        kl_matrix: (B, N, N) KL divergence matrix with autograd graph intact
     """
     B, N, K = mu_q.shape
     device = mu_q.device
@@ -1015,8 +1024,9 @@ def _compute_kl_matrix_chunked(
     )  # (B, N)
 
     # =========================================================================
-    # Step 2: Process in chunks
+    # Step 2: Process in chunks, collecting results for non-in-place assembly
     # =========================================================================
+    row_chunks_list = []  # List of (B, n_i, N) tensors
     for i_start in range(0, N, chunk_size):
         i_end = min(i_start + chunk_size, N)
         n_i = i_end - i_start
@@ -1030,6 +1040,7 @@ def _compute_kl_matrix_chunked(
         sigma_i_reg = sigma_i + eps * I
         logdet_q_i = logdet_q_all[:, i_start:i_end].contiguous()  # (B, n_i)
 
+        col_chunks_list = []  # List of (B, n_i, n_j) tensors
         for j_start in range(0, N, chunk_size):
             j_end = min(j_start + chunk_size, N)
             n_j = j_end - j_start
@@ -1102,24 +1113,34 @@ def _compute_kl_matrix_chunked(
                 # Clamp KL to [0, 100] for numerical stability
                 kl_chunk = torch.clamp(kl_chunk, min=0.0, max=max(100.0, 5.0 * K))
 
-                # Write to output
-                kl_matrix[:, i_start:i_end, j_start:j_end] = kl_chunk
+                col_chunks_list.append(kl_chunk)
 
             except RuntimeError:
                 # Fallback to element-wise computation if Cholesky fails
-                for bi in range(n_i):
-                    for bj in range(n_j):
-                        i_idx = i_start + bi
-                        j_idx = j_start + bj
-                        for b in range(B):
+                # Collect values in list to preserve autograd graph
+                fallback_vals = []
+                for b in range(B):
+                    batch_vals = []
+                    for bi in range(n_i):
+                        row_vals = []
+                        for bj in range(n_j):
                             kl_ij = _kl_gaussian_torch(
-                                mu_q[b, i_idx], sigma_q[b, i_idx],
+                                mu_q[b, i_start + bi], sigma_q[b, i_start + bi],
                                 mu_transported[b, bi, bj], Sigma_transported[b, bi, bj]
                             )
-                            kl_matrix[b, i_idx, j_idx] = kl_ij
+                            row_vals.append(kl_ij.unsqueeze(0))
+                        batch_vals.append(torch.cat(row_vals, dim=0))  # (n_j,)
+                    fallback_vals.append(torch.stack(batch_vals, dim=0))  # (n_i, n_j)
+                col_chunks_list.append(torch.stack(fallback_vals, dim=0))  # (B, n_i, n_j)
 
             # Explicit cleanup
             del Sigma_transported, mu_transported
+
+        # Assemble row from column chunks: (B, n_i, N)
+        row_chunks_list.append(torch.cat(col_chunks_list, dim=2))
+
+    # Assemble full matrix from row chunks: (B, N, N)
+    return torch.cat(row_chunks_list, dim=1)
 
 
 def _compute_kl_matrix_diagonal_chunked(
@@ -1127,10 +1148,9 @@ def _compute_kl_matrix_diagonal_chunked(
     sigma_q: torch.Tensor,     # (B, N, K) diagonal variances
     phi: torch.Tensor,         # (B, N, n_gen) gauge frames
     generators: torch.Tensor,  # (n_gen, K, K) generators
-    kl_matrix: torch.Tensor,   # (B, N, N) output tensor
     chunk_size: int = 32,      # Process chunk_size × chunk_size blocks at a time
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
-) -> None:
+) -> torch.Tensor:
     """
     CHUNKED diagonal covariance KL computation - O(C²K) memory instead of O(N²K).
 
@@ -1141,9 +1161,11 @@ def _compute_kl_matrix_diagonal_chunked(
         sigma_q: (B, N, K) diagonal variances (positive)
         phi: (B, N, n_gen) gauge fields
         generators: (n_gen, K, K) generators
-        kl_matrix: (B, N, N) output tensor (modified in-place)
         chunk_size: Size of chunks to process
         enforce_orthogonal: If True, apply Newton-Schulz to ensure Ω ∈ SO(K)
+
+    Returns:
+        kl_matrix: (B, N, N) KL divergence matrix with autograd graph intact
     """
     # Squeeze trailing singleton dimensions for robustness
     while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
@@ -1171,8 +1193,9 @@ def _compute_kl_matrix_diagonal_chunked(
         exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
 
     # =========================================================================
-    # Step 2: Process in chunks
+    # Step 2: Process in chunks, collecting results for non-in-place assembly
     # =========================================================================
+    row_chunks_list = []  # List of (B, n_i, N) tensors
     for i_start in range(0, N, chunk_size):
         i_end = min(i_start + chunk_size, N)
         n_i = i_end - i_start
@@ -1182,6 +1205,7 @@ def _compute_kl_matrix_diagonal_chunked(
         mu_i = mu_q[:, i_start:i_end].contiguous()          # (B, n_i, K)
         sigma_i = sigma_q[:, i_start:i_end].contiguous()    # (B, n_i, K)
 
+        col_chunks_list = []  # List of (B, n_i, n_j) tensors
         for j_start in range(0, N, chunk_size):
             j_end = min(j_start + chunk_size, N)
             n_j = j_end - j_start
@@ -1241,10 +1265,15 @@ def _compute_kl_matrix_diagonal_chunked(
             # Clamp KL to [0, 100] for numerical stability
             kl_chunk = torch.clamp(kl_chunk, min=0.0, max=100.0)
 
-            # Write to output
-            kl_matrix[:, i_start:i_end, j_start:j_end] = kl_chunk
+            col_chunks_list.append(kl_chunk)
 
             del sigma_j_transported, mu_transported
+
+        # Assemble row from column chunks: (B, n_i, N)
+        row_chunks_list.append(torch.cat(col_chunks_list, dim=2))
+
+    # Assemble full matrix from row chunks: (B, N, N)
+    return torch.cat(row_chunks_list, dim=1)
 
 
 def estimate_chunk_size(
@@ -1317,9 +1346,8 @@ def _compute_kl_matrix_block_diagonal(
     sigma_q: torch.Tensor,          # (B, N, K, K) block-diagonal covariances
     phi: torch.Tensor,              # (B, N, n_gen) gauge frames
     generators: torch.Tensor,       # (n_gen, K, K) block-diagonal generators
-    kl_matrix: torch.Tensor,        # (B, N, N) output tensor
     irrep_dims: List[int],          # [d₁, d₂, ...] dimensions of each irrep block
-) -> None:
+) -> torch.Tensor:
     """
     BLOCK-DIAGONAL KL computation - exploits irrep structure for massive memory savings.
 
@@ -1333,9 +1361,11 @@ def _compute_kl_matrix_block_diagonal(
         sigma_q: (B, N, K, K) block-diagonal covariances
         phi: (B, N, n_gen) gauge fields
         generators: (n_gen, K, K) block-diagonal generators
-        kl_matrix: (B, N, N) output tensor (modified in-place)
         irrep_dims: List of block dimensions [d₁, d₂, d₃, ...]
                    Must sum to K.
+
+    Returns:
+        kl_matrix: (B, N, N) KL divergence matrix with autograd graph intact
     """
     B, N, K = mu_q.shape
     device = mu_q.device
@@ -1345,8 +1375,8 @@ def _compute_kl_matrix_block_diagonal(
     # Validate irrep_dims
     assert sum(irrep_dims) == K, f"irrep_dims sum {sum(irrep_dims)} != K={K}"
 
-    # Initialize output to zero (we'll accumulate KL from each block)
-    kl_matrix.zero_()
+    # Initialize accumulator (non-in-place addition preserves autograd graph)
+    kl_total = torch.zeros(B, N, N, device=device, dtype=dtype)
 
     # =========================================================================
     # Process each irrep block separately
@@ -1438,17 +1468,20 @@ def _compute_kl_matrix_block_diagonal(
             kl_block = torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
 
             # ACCUMULATE to total KL (additive decomposition)
-            kl_matrix.add_(kl_block)
+            # Use non-in-place addition to preserve autograd graph
+            kl_total = kl_total + kl_block
 
         except RuntimeError as e:
             # Fallback: add a small per-dimension contribution for this block
             # rather than corrupting the entire KL matrix
-            kl_matrix.add_(0.5 * d)  # Conservative estimate: ~0.5 per dimension
+            kl_total = kl_total + 0.5 * d  # Conservative estimate: ~0.5 per dimension
 
         # Cleanup
         del sigma_block_transported, mu_block_transported
 
         block_start = block_end
+
+    return kl_total
 
 
 def _compute_kl_matrix_block_diagonal_chunked(
@@ -1456,10 +1489,9 @@ def _compute_kl_matrix_block_diagonal_chunked(
     sigma_q: torch.Tensor,          # (B, N, K, K) block-diagonal covariances
     phi: torch.Tensor,              # (B, N, n_gen) gauge frames
     generators: torch.Tensor,       # (n_gen, K, K) block-diagonal generators
-    kl_matrix: torch.Tensor,        # (B, N, N) output tensor
     irrep_dims: List[int],          # [d₁, d₂, ...] dimensions of each irrep block
     chunk_size: int = 64,           # Process N×N in chunks
-) -> None:
+) -> torch.Tensor:
     """
     BLOCK-DIAGONAL + CHUNKED KL computation - maximum memory efficiency.
 
@@ -1474,9 +1506,11 @@ def _compute_kl_matrix_block_diagonal_chunked(
         sigma_q: (B, N, K, K) block-diagonal covariances
         phi: (B, N, n_gen) gauge fields
         generators: (n_gen, K, K) block-diagonal generators
-        kl_matrix: (B, N, N) output tensor (modified in-place)
         irrep_dims: List of block dimensions [d₁, d₂, d₃, ...]
         chunk_size: Process chunk_size × chunk_size position pairs at a time
+
+    Returns:
+        kl_matrix: (B, N, N) KL divergence matrix with autograd graph intact
     """
     B, N, K = mu_q.shape
     device = mu_q.device
@@ -1484,9 +1518,6 @@ def _compute_kl_matrix_block_diagonal_chunked(
     eps = 1e-6
 
     assert sum(irrep_dims) == K, f"irrep_dims sum {sum(irrep_dims)} != K={K}"
-
-    # Initialize output
-    kl_matrix.zero_()
 
     # =========================================================================
     # Precompute block-wise matrix exponentials for all positions
@@ -1509,16 +1540,19 @@ def _compute_kl_matrix_block_diagonal_chunked(
 
     # =========================================================================
     # Process position pairs in chunks, accumulate KL across blocks
+    # Collect chunks in lists for non-in-place assembly (preserves autograd)
     # =========================================================================
+    row_chunks_list = []  # List of (B, n_i, N) tensors
     for i_start in range(0, N, chunk_size):
         i_end = min(i_start + chunk_size, N)
         n_i = i_end - i_start
 
+        col_chunks_list = []  # List of (B, n_i, n_j) tensors
         for j_start in range(0, N, chunk_size):
             j_end = min(j_start + chunk_size, N)
             n_j = j_end - j_start
 
-            # Allocate chunk output
+            # Accumulate KL across blocks using non-in-place addition
             kl_chunk = torch.zeros(B, n_i, n_j, device=device, dtype=dtype)
 
             # Process each irrep block
@@ -1581,20 +1615,24 @@ def _compute_kl_matrix_block_diagonal_chunked(
                         torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
                     )
 
-                    # Accumulate block KL
+                    # Accumulate block KL (non-in-place to preserve autograd graph)
                     kl_block = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
-                    # Clamp KL to [0, 100] for numerical stability
-                    kl_chunk.add_(torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K)))
+                    kl_chunk = kl_chunk + torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
 
                 except RuntimeError:
                     # Fallback: add small contribution
-                    kl_chunk.add_(eps)
+                    kl_chunk = kl_chunk + eps
 
                 del sigma_transported, mu_transported
                 block_start = block_end
 
-            # Write chunk to output
-            kl_matrix[:, i_start:i_end, j_start:j_end] = kl_chunk
+            col_chunks_list.append(kl_chunk)
+
+        # Assemble row from column chunks: (B, n_i, N)
+        row_chunks_list.append(torch.cat(col_chunks_list, dim=2))
+
+    # Assemble full matrix from row chunks: (B, N, N)
+    return torch.cat(row_chunks_list, dim=1)
 
 
 # =============================================================================
