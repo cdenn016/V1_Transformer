@@ -771,29 +771,35 @@ def _compute_kl_matrix_torch(
 
     # Fallback: eigenvalue-based KL (no Cholesky, robust to near-singular matrices)
     # Use eigendecomposition which handles non-SPD gracefully via clamping.
-    # Sanitize NaN values first: gauge transport Ω @ Σ @ Ωᵀ can produce NaN
-    # when rotation matrices become ill-conditioned; eigvalsh/pinv cannot
-    # handle NaN inputs (cusolver crashes).  Replace NaN-containing matrices
-    # with jitter * I so those pairs get KL ≈ 0 instead of crashing.
+    # Sanitize non-finite values first: gauge transport Ω @ Σ @ Ωᵀ can produce
+    # NaN or Inf when rotation matrices become ill-conditioned; cusolver crashes
+    # on both (CUSOLVER_STATUS_INVALID_VALUE).  Use isfinite to catch both.
     Sigma_transported_reg = Sigma_transported + jitter * I
-    nan_mask_p = torch.isnan(Sigma_transported_reg).any(dim=-1).any(dim=-1)  # (B, N, N)
-    nan_mask_q = torch.isnan(Sigma_i_reg).any(dim=-1).any(dim=-1)            # (B, N, N)
-    has_nan = nan_mask_p | nan_mask_q
-    if has_nan.any():
+    bad_mask_p = ~torch.isfinite(Sigma_transported_reg).all(dim=-1).all(dim=-1)  # (B, N, N)
+    bad_mask_q = ~torch.isfinite(Sigma_i_reg).all(dim=-1).all(dim=-1)            # (B, N, N)
+    has_bad = bad_mask_p | bad_mask_q
+    if has_bad.any():
         # Both tensors are (B, N, N, K, K) so safe_cov broadcasts identically
         safe_cov = jitter * I.expand_as(Sigma_transported_reg)
         Sigma_transported_reg = torch.where(
-            nan_mask_p.unsqueeze(-1).unsqueeze(-1), safe_cov, Sigma_transported_reg
+            bad_mask_p.unsqueeze(-1).unsqueeze(-1), safe_cov, Sigma_transported_reg
         )
         Sigma_i_reg = torch.where(
-            nan_mask_q.unsqueeze(-1).unsqueeze(-1), safe_cov, Sigma_i_reg
+            bad_mask_q.unsqueeze(-1).unsqueeze(-1), safe_cov, Sigma_i_reg
         )
-        # Also sanitize mu to avoid NaN propagation into Mahalanobis term
-        mu_transported = torch.nan_to_num(mu_transported, nan=0.0)
-        mu_i = torch.nan_to_num(mu_i, nan=0.0)
+        # Also sanitize mu to avoid non-finite propagation into Mahalanobis term
+        mu_transported = torch.nan_to_num(mu_transported, nan=0.0, posinf=0.0, neginf=0.0)
+        mu_i = torch.nan_to_num(mu_i, nan=0.0, posinf=0.0, neginf=0.0)
 
-    eigvals_p = torch.linalg.eigvalsh(Sigma_transported_reg)  # (B, N, N, K)
-    eigvals_q = torch.linalg.eigvalsh(Sigma_i_reg)            # (B, N, N, K)
+    try:
+        eigvals_p = torch.linalg.eigvalsh(Sigma_transported_reg)  # (B, N, N, K)
+        eigvals_q = torch.linalg.eigvalsh(Sigma_i_reg)            # (B, N, N, K)
+    except RuntimeError:
+        # Last resort: if eigvalsh still crashes (extreme condition numbers,
+        # CUDA internal errors), return zero KL rather than killing training.
+        B, N = mu_q.shape[0], mu_q.shape[1]
+        return torch.zeros(B, N, N, device=device, dtype=dtype)
+
     eigvals_p = eigvals_p.clamp(min=1e-6)
     eigvals_q = eigvals_q.clamp(min=1e-6)
 
