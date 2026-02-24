@@ -291,30 +291,44 @@ def gaussian_kl_divergence(
         if sigma_p is None:
             sigma_p = torch.eye(K, device=device, dtype=dtype).expand(*mu_p.shape[:-1], K, K)
 
-        # Regularize for numerical stability
-        sigma_q_reg = sigma_q + eps * torch.eye(K, device=device, dtype=dtype)
-        sigma_p_reg = sigma_p + eps * torch.eye(K, device=device, dtype=dtype)
+        # Regularize for numerical stability (1e-4 floor for robustness)
+        reg = max(eps, 1e-4)
+        I_K = torch.eye(K, device=device, dtype=dtype)
+        sigma_q_reg = sigma_q + reg * I_K
+        sigma_p_reg = sigma_p + reg * I_K
 
-        # Compute Σ_p⁻¹ via Cholesky
-        L_p = torch.linalg.cholesky(sigma_p_reg)
+        try:
+            # Compute Σ_p⁻¹ via Cholesky
+            L_p = torch.linalg.cholesky(sigma_p_reg)
 
-        # Trace term: tr(Σ_p⁻¹ Σ_q)
-        # Solve L_p @ Y = Σ_q for Y, then tr(Σ_p⁻¹ Σ_q) = tr(L_p⁻ᵀ Y)
-        Y = torch.linalg.solve_triangular(L_p, sigma_q_reg, upper=False)
-        Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
-        trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)  # (B, N)
+            # Trace term: tr(Σ_p⁻¹ Σ_q)
+            Y = torch.linalg.solve_triangular(L_p, sigma_q_reg, upper=False)
+            Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
+            trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)  # (B, N)
 
-        # Mahalanobis term: (μ_p - μ_q)ᵀ Σ_p⁻¹ (μ_p - μ_q)
-        delta_mu = mu_p - mu_q  # (B, N, K)
-        # Solve L_p @ v = delta_mu
-        v = torch.linalg.solve_triangular(L_p, delta_mu.unsqueeze(-1), upper=False).squeeze(-1)
-        mahal_term = torch.sum(v ** 2, dim=-1)  # (B, N)
+            # Mahalanobis term: (μ_p - μ_q)ᵀ Σ_p⁻¹ (μ_p - μ_q)
+            delta_mu = mu_p - mu_q  # (B, N, K)
+            v = torch.linalg.solve_triangular(L_p, delta_mu.unsqueeze(-1), upper=False).squeeze(-1)
+            mahal_term = torch.sum(v ** 2, dim=-1)  # (B, N)
 
-        # Log determinant terms
-        logdet_p = 2.0 * torch.sum(torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1)
-        L_q = torch.linalg.cholesky(sigma_q_reg)
-        logdet_q = 2.0 * torch.sum(torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1)
-        logdet_term = logdet_p - logdet_q  # (B, N)
+            # Log determinant terms
+            logdet_p = 2.0 * torch.sum(torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1)
+            L_q = torch.linalg.cholesky(sigma_q_reg)
+            logdet_q = 2.0 * torch.sum(torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1)
+            logdet_term = logdet_p - logdet_q  # (B, N)
+        except RuntimeError:
+            # Eigenvalue fallback for non-SPD matrices
+            eigvals_p = torch.linalg.eigvalsh(sigma_p_reg).clamp(min=1e-6)
+            eigvals_q = torch.linalg.eigvalsh(sigma_q_reg).clamp(min=1e-6)
+            logdet_p = torch.sum(torch.log(eigvals_p), dim=-1)
+            logdet_q = torch.sum(torch.log(eigvals_q), dim=-1)
+            logdet_term = logdet_p - logdet_q
+
+            sigma_p_inv = torch.linalg.pinv(sigma_p_reg)
+            trace_term = torch.einsum('...kk->...', sigma_p_inv @ sigma_q_reg)
+            delta_mu = mu_p - mu_q
+            mahal_term = torch.einsum('...k,...k->...',
+                delta_mu, torch.einsum('...kl,...l->...k', sigma_p_inv, delta_mu))
 
         # KL divergence
         kl = 0.5 * (trace_term + mahal_term - K + logdet_term)
@@ -465,15 +479,15 @@ def compute_free_energy_loss(
     # =================================================================
     if alpha > 0.0:
         K = mu_q.shape[-1]
-        # Proper KL divergence between evolved beliefs and embedding priors
-        # CRITICAL: Detach sigmas to prevent gradient flow through Cholesky decomposition!
-        # This matches simulation_runner.py which uses NumPy (no autograd through Cholesky).
-        # Gradients to sigma embeddings come from other terms, not KL backward through Cholesky.
+        # Proper KL divergence between evolved beliefs and embedding priors.
+        # Gradients flow through both mu and sigma to train embeddings.
+        # The diagonal path (common case) uses no Cholesky — just σ_q/σ_p ratios.
+        # The full-covariance path uses Cholesky with eigenvalue fallback for robustness.
         kl_per_agent = gaussian_kl_divergence(
-            mu_q=mu_q,        # Evolved beliefs (gradients flow through mu)
-            sigma_q=sigma_q.detach() if sigma_q is not None else None,  # Detach to avoid Cholesky backward
+            mu_q=mu_q,        # Evolved beliefs
+            sigma_q=sigma_q,  # Allow gradient flow to sigma embeddings
             mu_p=mu_p,        # Embedding priors
-            sigma_p=sigma_p.detach() if sigma_p is not None else None,  # Detach to avoid Cholesky backward
+            sigma_p=sigma_p,  # Allow gradient flow to sigma embeddings
         )  # (B, N)
 
         # Normalize by 2√K: KL between K-dim Gaussians has a ½ prefactor,

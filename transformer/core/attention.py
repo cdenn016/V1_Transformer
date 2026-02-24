@@ -710,12 +710,15 @@ def _compute_kl_matrix_torch(
     # KL(q_i || Ω_ij[q_j]) = KL(N(μ_i, Σ_i) || N(μ_j^{→i}, Σ_j^{→i}))
     # =========================================================================
     I = torch.eye(K, device=device, dtype=dtype)
-    Sigma_i_reg = Sigma_i + eps * I
+    Sigma_i_reg = Sigma_i + max(eps, 1e-4) * I
 
     # Try Cholesky with escalating jitter to handle near-singular matrices
-    # before falling back to the expensive element-wise loop.
+    # before falling back to eigenvalue-based computation.
+    # Start jitter at 1e-4 (not eps=1e-8): transported covariances accumulate
+    # numerical error from Ω @ Σ @ Ωᵀ and need stronger regularization,
+    # especially when sigma embeddings are untrained (alpha=beta=0 in M-step).
     cholesky_success = False
-    jitter = eps
+    jitter = max(eps, 1e-4)
     for _attempt in range(4):
         Sigma_transported_reg = Sigma_transported + jitter * I
         try:
@@ -724,7 +727,7 @@ def _compute_kl_matrix_torch(
             cholesky_success = True
             break
         except RuntimeError:
-            jitter *= 10.0  # escalate: 1e-6 -> 1e-5 -> 1e-4 -> 1e-3
+            jitter *= 10.0  # escalate: 1e-4 -> 1e-3 -> 1e-2 -> 1e-1
 
     if cholesky_success:
         # Trace term: tr(Σ_p⁻¹ Σ_q) where Σ_p = Σ_j^{→i}, Σ_q = Σ_i
@@ -760,26 +763,29 @@ def _compute_kl_matrix_torch(
         return kl_all
 
     else:
-        # Fallback to loop-based computation if Cholesky fails
-        # Collect values in list to preserve autograd graph (no in-place ops)
-        kl_rows = []
-        for b in range(B):
-            batch_rows = []
-            for i in range(N):
-                row_vals = []
-                for j in range(N):
-                    mu_j_transported, sigma_j_transported = _transport_gaussian_torch(
-                        mu_q[b, j], sigma_q[b, j],
-                        phi[b, i], phi[b, j], generators
-                    )
-                    kl_ij = _kl_gaussian_torch(
-                        mu_q[b, i], sigma_q[b, i],
-                        mu_j_transported, sigma_j_transported
-                    )
-                    row_vals.append(kl_ij.unsqueeze(0))
-                batch_rows.append(torch.cat(row_vals, dim=0))  # (N,)
-            kl_rows.append(torch.stack(batch_rows, dim=0))  # (N, N)
-        return torch.stack(kl_rows, dim=0)  # (B, N, N)
+        # Fallback: eigenvalue-based KL (no Cholesky, robust to near-singular matrices)
+        # Use eigendecomposition which handles non-SPD gracefully via clamping
+        Sigma_transported_reg = Sigma_transported + jitter * I
+        eigvals_p = torch.linalg.eigvalsh(Sigma_transported_reg)  # (B, N, N, K)
+        eigvals_q = torch.linalg.eigvalsh(Sigma_i_reg)            # (B, N, N, K)
+        eigvals_p = eigvals_p.clamp(min=1e-6)
+        eigvals_q = eigvals_q.clamp(min=1e-6)
+
+        # log|Σ| via eigenvalues
+        logdet_p = torch.sum(torch.log(eigvals_p), dim=-1)  # (B, N, N)
+        logdet_q = torch.sum(torch.log(eigvals_q), dim=-1)  # (B, N, N)
+
+        # tr(Σ_p⁻¹ Σ_q) and Mahalanobis via pinv (robust to singular matrices)
+        Sigma_p_inv = torch.linalg.pinv(Sigma_transported_reg)  # (B, N, N, K, K)
+        trace_term = torch.einsum('bijkk->bij',
+            torch.einsum('bijkl,bijlm->bijkm', Sigma_p_inv, Sigma_i_reg))
+        delta_mu = mu_transported - mu_i
+        mahal_term = torch.einsum('bijk,bijk->bij',
+            delta_mu, torch.einsum('bijkl,bijl->bijk', Sigma_p_inv, delta_mu))
+
+        kl_all = 0.5 * (trace_term + mahal_term - K + logdet_p - logdet_q)
+        kl_ceil = max(100.0, 5.0 * K)
+        return torch.clamp(kl_all, min=0.0, max=kl_ceil)
 
 
 def _transport_gaussian_torch(
@@ -838,37 +844,49 @@ def _kl_gaussian_torch(
     sigma1 = 0.5 * (sigma1 + sigma1.T)
     sigma2 = 0.5 * (sigma2 + sigma2.T)
 
-    # Cholesky with jitter escalation for robustness
-    jitter = eps
+    # Cholesky with jitter escalation for robustness.
+    # Start at 1e-4 (not eps=1e-8): transported covariances need stronger reg.
+    cholesky_success = False
+    jitter = max(eps, 1e-4)
     for _attempt in range(4):
         try:
             sigma1_reg = sigma1 + jitter * I_K
             sigma2_reg = sigma2 + jitter * I_K
             L1 = torch.linalg.cholesky(sigma1_reg)
             L2 = torch.linalg.cholesky(sigma2_reg)
+            cholesky_success = True
             break
         except RuntimeError:
             jitter *= 10.0
+
+    if cholesky_success:
+        # Log determinants: log|Σ| = 2*sum(log(diag(L)))
+        logdet1 = 2.0 * torch.sum(torch.log(torch.diag(L1)))
+        logdet2 = 2.0 * torch.sum(torch.log(torch.diag(L2)))
+
+        # Trace term: tr(Σ2^{-1} Σ1)
+        Y = torch.linalg.solve_triangular(L2, sigma1_reg, upper=False)
+        Z = torch.linalg.solve_triangular(L2.T, Y, upper=True)
+        trace_term = torch.trace(Z)
+
+        # Quadratic term: (μ2-μ1)^T Σ2^{-1} (μ2-μ1)
+        delta_mu = mu2 - mu1
+        y = torch.linalg.solve_triangular(L2, delta_mu.unsqueeze(-1), upper=False).squeeze(-1)
+        z = torch.linalg.solve_triangular(L2.T, y.unsqueeze(-1), upper=True).squeeze(-1)
+        quad_term = torch.dot(delta_mu, z)
     else:
-        # All attempts failed - return zero KL to avoid crashing training
-        return torch.zeros(1, device=sigma1.device, dtype=sigma1.dtype).squeeze()
+        # Eigenvalue fallback for non-SPD matrices
+        sigma1_reg = sigma1 + jitter * I_K
+        sigma2_reg = sigma2 + jitter * I_K
+        eigvals1 = torch.linalg.eigvalsh(sigma1_reg).clamp(min=1e-6)
+        eigvals2 = torch.linalg.eigvalsh(sigma2_reg).clamp(min=1e-6)
+        logdet1 = torch.sum(torch.log(eigvals1))
+        logdet2 = torch.sum(torch.log(eigvals2))
 
-    # Log determinants: log|Σ| = 2*sum(log(diag(L)))
-    logdet1 = 2.0 * torch.sum(torch.log(torch.diag(L1)))
-    logdet2 = 2.0 * torch.sum(torch.log(torch.diag(L2)))
-
-    # Trace term: tr(Σ2^{-1} Σ1)
-    # Solve L2 Y = Σ1 for Y, then solve L2^T Z = Y for Z
-    Y = torch.linalg.solve_triangular(L2, sigma1_reg, upper=False)
-    Z = torch.linalg.solve_triangular(L2.T, Y, upper=True)
-    trace_term = torch.trace(Z)
-
-    # Quadratic term: (μ2-μ1)^T Σ2^{-1} (μ2-μ1)
-    delta_mu = mu2 - mu1
-    # solve_triangular needs 2D input - reshape (K,) → (K, 1)
-    y = torch.linalg.solve_triangular(L2, delta_mu.unsqueeze(-1), upper=False).squeeze(-1)
-    z = torch.linalg.solve_triangular(L2.T, y.unsqueeze(-1), upper=True).squeeze(-1)
-    quad_term = torch.dot(delta_mu, z)
+        sigma2_inv = torch.linalg.pinv(sigma2_reg)
+        trace_term = torch.trace(sigma2_inv @ sigma1_reg)
+        delta_mu = mu2 - mu1
+        quad_term = delta_mu @ sigma2_inv @ delta_mu
 
     # Combine
     kl = 0.5 * (trace_term + quad_term - K + logdet2 - logdet1)
