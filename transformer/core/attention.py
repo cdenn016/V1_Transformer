@@ -1472,10 +1472,28 @@ def _compute_kl_matrix_block_diagonal(
             # Use non-in-place addition to preserve autograd graph
             kl_total = kl_total + kl_block
 
-        except RuntimeError as e:
-            # Fallback: add a small per-dimension contribution for this block
-            # rather than corrupting the entire KL matrix
-            kl_total = kl_total + 0.5 * d  # Conservative estimate: ~0.5 per dimension
+        except RuntimeError:
+            # Cholesky failed (ill-conditioned covariance) - use diagonal KL approximation.
+            # CRITICAL: The fallback must depend on phi through the transported
+            # quantities to preserve the autograd graph. A constant fallback would
+            # break torch.autograd.grad() in the caller.
+            sigma_diag_transported = torch.diagonal(
+                sigma_block_transported_reg, dim1=-2, dim2=-1
+            ).clamp(min=eps)  # (B, N, N, d)
+            sigma_diag_i = torch.diagonal(
+                sigma_block_i_reg, dim1=-2, dim2=-1
+            ).clamp(min=eps)  # (B, N, N, d)
+            delta_mu = mu_block_transported - mu_block_i  # (B, N, N, d)
+
+            trace_term = (sigma_diag_i / sigma_diag_transported).sum(dim=-1)
+            mahal_term = ((delta_mu ** 2) / sigma_diag_transported).sum(dim=-1)
+            logdet_term = (
+                torch.log(sigma_diag_transported) - torch.log(sigma_diag_i)
+            ).sum(dim=-1)
+
+            kl_block = 0.5 * (trace_term + mahal_term - d + logdet_term)
+            kl_block = torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
+            kl_total = kl_total + kl_block
 
         # Cleanup
         del sigma_block_transported, mu_block_transported
@@ -1621,8 +1639,28 @@ def _compute_kl_matrix_block_diagonal_chunked(
                     kl_chunk = kl_chunk + torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
 
                 except RuntimeError:
-                    # Fallback: add small contribution
-                    kl_chunk = kl_chunk + eps
+                    # Cholesky failed - use diagonal KL approximation.
+                    # Must depend on phi through transported quantities to
+                    # preserve the autograd graph (a constant would break
+                    # torch.autograd.grad in the caller).
+                    sigma_diag_transported = torch.diagonal(
+                        sigma_transported_reg, dim1=-2, dim2=-1
+                    ).clamp(min=eps)  # (B, n_i, n_j, d)
+                    sigma_diag_i = torch.diagonal(
+                        sigma_i_reg, dim1=-2, dim2=-1
+                    ).clamp(min=eps)  # (B, n_i, n_j, d)
+                    delta_mu = mu_transported - mu_i_exp  # (B, n_i, n_j, d)
+
+                    trace_term = (sigma_diag_i / sigma_diag_transported).sum(dim=-1)
+                    mahal_term = ((delta_mu ** 2) / sigma_diag_transported).sum(dim=-1)
+                    logdet_term = (
+                        torch.log(sigma_diag_transported) - torch.log(sigma_diag_i)
+                    ).sum(dim=-1)
+
+                    kl_block = 0.5 * (trace_term + mahal_term - d + logdet_term)
+                    kl_chunk = kl_chunk + torch.clamp(
+                        kl_block, min=0.0, max=max(100.0, 5.0 * K)
+                    )
 
                 del sigma_transported, mu_transported
                 block_start = block_end
