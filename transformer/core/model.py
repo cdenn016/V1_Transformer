@@ -120,8 +120,12 @@ class GaugeTransformerLM(nn.Module):
 
         # VFE FFN config
         ffn_mode = config.get('ffn_mode', 'VFE_dynamic')
-        # Use unified alpha/kappa for both loss and FFN (consolidated parameters)
-        ffn_alpha = config.get('alpha', 0.001)  # Unified: prior weight
+        # Allow separate alpha for FFN E-step vs external loss
+        # ffn_alpha controls the self-coupling strength INSIDE the VFE loop
+        # config['alpha'] controls the external KL(q||p) loss term
+        # By default they're the same (backward compatible), but decoupling
+        # enables proper EM: VFE handles self-coupling internally, external loss is pure CE
+        ffn_alpha = config.get('ffn_alpha', config.get('alpha', 0.001))  # E-step prior weight
         ffn_kappa = kappa_beta  # Unified: use same temperature for attention and FFN
         ffn_n_iterations = config.get('ffn_n_iterations', 1)
         ffn_learnable_lr = config.get('ffn_learnable_lr', True)
