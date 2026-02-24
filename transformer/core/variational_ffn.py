@@ -2152,34 +2152,35 @@ class VariationalFFNDynamic(nn.Module):
 
                     alignment_loss = self.lambda_belief * (beta_phi * kl_matrix).sum()
 
-                # Compute ∂F/∂φ
-                grad_phi = torch.autograd.grad(
-                    alignment_loss,
-                    phi_for_grad,
-                    create_graph=False,
-                    retain_graph=False,
-                )[0]
+                # Compute ∂F/∂φ (only if alignment_loss has a gradient path to phi)
+                if alignment_loss.grad_fn is not None:
+                    grad_phi = torch.autograd.grad(
+                        alignment_loss,
+                        phi_for_grad,
+                        create_graph=False,
+                        retain_graph=False,
+                    )[0]
 
-                # Clip phi gradient to prevent explosions (especially for GL(K))
-                grad_phi_norm = torch.norm(grad_phi, dim=-1, keepdim=True)
-                grad_phi = torch.where(
-                    grad_phi_norm > 10.0,
-                    grad_phi * 10.0 / (grad_phi_norm + 1e-6),
-                    grad_phi
-                )
+                    # Clip phi gradient to prevent explosions (especially for GL(K))
+                    grad_phi_norm = torch.norm(grad_phi, dim=-1, keepdim=True)
+                    grad_phi = torch.where(
+                        grad_phi_norm > 10.0,
+                        grad_phi * 10.0 / (grad_phi_norm + 1e-6),
+                        grad_phi
+                    )
 
-                # Update phi with proper retraction (auto-selects SO(N) or GL(K))
-                # SO(N): trust_region=0.3, bch_order=1 (compact group)
-                # GL(K): trust_region=0.1, bch_order=0 (non-compact, needs care)
-                phi_lr_iter = self.phi_lr / self.n_iterations  # Scale by iterations
-                phi_current = _retract_phi(
-                    phi=phi_current,
-                    delta_phi=-grad_phi,
-                    generators=self.generators,
-                    step_size=phi_lr_iter,
-                    max_norm=self.phi_max_norm,
-                    # trust_region and bch_order auto-selected based on gauge group
-                )
+                    # Update phi with proper retraction (auto-selects SO(N) or GL(K))
+                    # SO(N): trust_region=0.3, bch_order=1 (compact group)
+                    # GL(K): trust_region=0.1, bch_order=0 (non-compact, needs care)
+                    phi_lr_iter = self.phi_lr / self.n_iterations  # Scale by iterations
+                    phi_current = _retract_phi(
+                        phi=phi_current,
+                        delta_phi=-grad_phi,
+                        generators=self.generators,
+                        step_size=phi_lr_iter,
+                        max_norm=self.phi_max_norm,
+                        # trust_region and bch_order auto-selected based on gauge group
+                    )
 
         # =================================================================
         # STEP 5: Optional Phi Evolution via VFE Gradient (after loop)
@@ -2263,33 +2264,34 @@ class VariationalFFNDynamic(nn.Module):
 
                 alignment_loss = self.lambda_belief * (beta_phi * kl_matrix).sum()
 
-            # Compute ∂F/∂φ
-            grad_phi = torch.autograd.grad(
-                alignment_loss,
-                phi_for_grad,
-                create_graph=False,
-                retain_graph=False,
-            )[0]
+            # Compute ∂F/∂φ (only if alignment_loss has a gradient path to phi)
+            if alignment_loss.grad_fn is not None:
+                grad_phi = torch.autograd.grad(
+                    alignment_loss,
+                    phi_for_grad,
+                    create_graph=False,
+                    retain_graph=False,
+                )[0]
 
-            # Clip phi gradient to prevent explosions (especially for GL(K))
-            grad_phi_norm = torch.norm(grad_phi, dim=-1, keepdim=True)
-            grad_phi = torch.where(
-                grad_phi_norm > 10.0,
-                grad_phi * 10.0 / (grad_phi_norm + 1e-6),
-                grad_phi
-            )
+                # Clip phi gradient to prevent explosions (especially for GL(K))
+                grad_phi_norm = torch.norm(grad_phi, dim=-1, keepdim=True)
+                grad_phi = torch.where(
+                    grad_phi_norm > 10.0,
+                    grad_phi * 10.0 / (grad_phi_norm + 1e-6),
+                    grad_phi
+                )
 
-            # Proper retraction with trust region (auto-selects SO(N) or GL(K))
-            # SO(N): trust_region=0.3, bch_order=1 (compact group)
-            # GL(K): trust_region=0.1, bch_order=0 (non-compact, needs care)
-            phi_current = _retract_phi(
-                phi=phi_current,
-                delta_phi=-grad_phi,  # Negative gradient for descent
-                generators=self.generators,
-                step_size=self.phi_lr,
-                max_norm=self.phi_max_norm,
-                # trust_region and bch_order auto-selected based on gauge group
-            )
+                # Proper retraction with trust region (auto-selects SO(N) or GL(K))
+                # SO(N): trust_region=0.3, bch_order=1 (compact group)
+                # GL(K): trust_region=0.1, bch_order=0 (non-compact, needs care)
+                phi_current = _retract_phi(
+                    phi=phi_current,
+                    delta_phi=-grad_phi,  # Negative gradient for descent
+                    generators=self.generators,
+                    step_size=self.phi_lr,
+                    max_norm=self.phi_max_norm,
+                    # trust_region and bch_order auto-selected based on gauge group
+                )
 
         # Return results
         # NOTE: Previously returned .detach() which BREAKS gradient flow!
