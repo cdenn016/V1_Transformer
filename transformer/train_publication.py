@@ -245,7 +245,7 @@ VFE_EM_CONFIG = {
     'use_identity_transport': False,
     'alibi_slope': None,
 
-    # Temperature: κ is a scalar sharpness dial; dimension scaling (2√K) is hardcoded in attention
+    # Temperature: κ is a scalar sharpness dial; dimension scaling (√K) is hardcoded in attention
     'kappa_beta': 1.0,
 
     # Embedding initialization
@@ -377,7 +377,7 @@ PURE_FEP_CONFIG = {
     'use_identity_transport': False,
     'alibi_slope': None,
 
-    # Temperature: κ is a scalar sharpness dial; dimension scaling (2√K) is hardcoded in attention
+    # Temperature: κ is a scalar sharpness dial; dimension scaling (√K) is hardcoded in attention
     'kappa_beta': 0.25,
 
     # Embedding initialization
@@ -1787,7 +1787,7 @@ def run_single_experiment(
         print("  - Learning: Backprop")
         print("  - Position: None (emergent)")
 
-        # kappa_beta: scalar sharpness dial (dimension scaling τ=2√K is hardcoded in attention)
+        # kappa_beta: scalar sharpness dial (dimension scaling τ=√K is hardcoded in attention)
         if 'kappa_beta' not in config:
             config['kappa_beta'] = 1.0
         print(f"  kappa_beta: {config['kappa_beta']}")
