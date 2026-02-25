@@ -2,19 +2,10 @@
 Variational Feed-Forward Networks for Gauge Transformer
 ========================================================
 
-Integrates with validated gradient_engine.py for theoretically correct active inference!
+Pure-PyTorch VFE gradient computation for GPU-accelerated active inference.
 
-Three implementations:
-1. APPROXIMATE: Omit second-order ∂β_ij/∂μ_i term (legacy, simple)
-2. FULL: Include all terms manually (legacy, exact but complex)
-3. GRADIENT_ENGINE: Use validated gradient_engine backend (RECOMMENDED!)
-
-The GRADIENT_ENGINE version:
-- Updates BOTH means μ AND covariances Σ
-- Uses natural gradients via Fisher-Rao metric
-- Includes all energy terms (self-coupling, alignment, observations, softmax coupling)
-- Proper χ-weighting and gauge transport
-- Theoretically principled active inference
+All gradient computation (VFE, natural gradient projection, SPD retraction)
+runs entirely on GPU via PyTorch — no NumPy bridge or CPU round-trips.
 
 Mathematical Foundation:
 -----------------------
@@ -42,7 +33,6 @@ With natural gradient projection:
 
 Where F(θ) is the Fisher-Rao metric.
 
-Author: Integrated with validated gradient_engine.py
 Date: November 2025
 """
 
@@ -51,24 +41,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple
-import numpy as np
 
 from transformer.core.gauge_utils import stable_matrix_exp_pair
-
-# Import validated gradient engine
-import sys
-from pathlib import Path
-# Add parent directory to path for gradient_engine import
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from gradients.gradient_engine import (
-    _compute_agent_euclidean_gradients,
-    project_to_natural_gradients,
-)
-from config import SystemConfig, AgentConfig
-from agent.agents import Agent
-from geometry.geometry_base import BaseManifold, TopologyType
-from gradients.retraction import retract_spd  # For SPD manifold updates
 
 # Import attention computation for dynamic β
 from transformer.core.attention import compute_attention_weights, compute_transport_operators
@@ -1205,286 +1179,6 @@ def retract_spd_diagonal_torch(
 
 
 # =============================================================================
-# Utilities
-# =============================================================================
-
-def _sanitize_euclidean_gradients(euc_grads, max_norm: float = 1e3, debug: bool = True):
-    """
-    Sanitize Euclidean gradients to prevent NaN in natural gradient computation.
-
-    This clips gradients that are too large, which can cause numerical overflow
-    when computing natural gradients via Σ^{-1}.
-
-    Args:
-        euc_grads: AgentGradients object
-        max_norm: Maximum allowed gradient norm per component
-        debug: Print warnings if clipping occurs
-
-    Returns:
-        Sanitized AgentGradients object
-    """
-    
-    import copy
-
-    grads_sanitized = copy.copy(euc_grads)
-
-    # Sanitize mu gradient
-    if euc_grads.grad_mu_q is not None:
-        grad_mu = euc_grads.grad_mu_q
-        if not np.all(np.isfinite(grad_mu)):
-            if debug:
-                print(f"⚠️  NaN/Inf in grad_mu_q, setting to zero")
-            grads_sanitized.grad_mu_q = np.zeros_like(grad_mu)
-        else:
-            norm = np.linalg.norm(grad_mu)
-            if norm > max_norm:
-                if debug:
-                    print(f"⚠️  Clipping grad_mu_q: norm {norm:.2e} > {max_norm:.2e}")
-                grads_sanitized.grad_mu_q = grad_mu * (max_norm / norm)
-
-    # Sanitize Sigma gradient
-    if euc_grads.grad_Sigma_q is not None:
-        grad_Sigma = euc_grads.grad_Sigma_q
-        if not np.all(np.isfinite(grad_Sigma)):
-            if debug:
-                print(f"⚠️  NaN/Inf in grad_Sigma_q, setting to zero")
-            grads_sanitized.grad_Sigma_q = np.zeros_like(grad_Sigma)
-        else:
-            norm = np.linalg.norm(grad_Sigma)
-            if norm > max_norm:
-                if debug:
-                    print(f"⚠️  Clipping grad_Sigma_q: norm {norm:.2e} > {max_norm:.2e}")
-                grads_sanitized.grad_Sigma_q = grad_Sigma * (max_norm / norm)
-
-    return grads_sanitized
-
-
-def _compute_cholesky_robust(sigma: np.ndarray, eps: float = 1e-6, debug: bool = False) -> np.ndarray:
-    """
-    Compute Cholesky factor L such that Σ = L L^T with robust fallback.
-
-    This is the VALIDATED approach from agents.py that works in simulation_suite.
-
-    Args:
-        sigma: Covariance matrix (K, K)
-        eps: Regularization for numerical stability (default: 1e-6)
-        debug: Print diagnostic info when fallbacks are used
-
-    Returns:
-        L: Lower triangular Cholesky factor (K, K)
-    """
-    K = sigma.shape[0]
-
-    # Check for NaN/Inf
-    if not np.all(np.isfinite(sigma)):
-        if debug:
-            print(f"⚠️  Cholesky: NaN/Inf detected in covariance, using diagonal fallback")
-        return np.sqrt(eps) * np.eye(K, dtype=np.float32)
-
-    # Symmetrize and regularize
-    sigma_sym = 0.5 * (sigma + sigma.T)
-    sigma_reg = sigma_sym + eps * np.eye(K)
-
-    try:
-        # Try standard Cholesky
-        L = np.linalg.cholesky(sigma_reg)
-        return L.astype(np.float32)
-
-    except np.linalg.LinAlgError:
-        # Cholesky failed - use eigendecomposition fallback
-        # This is the VALIDATED approach from agents.py
-        if debug:
-            print(f"⚠️  Cholesky: Standard decomposition failed, using eigenvalue fallback")
-
-        try:
-            eigvals, eigvecs = np.linalg.eigh(sigma_reg)
-            # Clamp eigenvalues
-            eigvals_clamped = np.maximum(eigvals, eps)
-            if debug and np.any(eigvals < eps):
-                min_eig = np.min(eigvals)
-                print(f"    Clamped {np.sum(eigvals < eps)} eigenvalues (min was {min_eig:.2e})")
-            # Compute Cholesky factor directly: L = V @ diag(sqrt(λ))
-            L = eigvecs @ np.diag(np.sqrt(eigvals_clamped))
-            return L.astype(np.float32)
-
-        except np.linalg.LinAlgError:
-            # Even eigendecomposition failed - return diagonal fallback
-            if debug:
-                print(f"⚠️  Cholesky: Eigendecomposition also failed, using diagonal fallback")
-            return np.sqrt(eps) * np.eye(K, dtype=np.float32)
-
-
-# =============================================================================
-# Adapter: PyTorch Transformer → Multi-Agent System
-# =============================================================================
-
-class MockMultiAgentSystem:
-    """
-    Lightweight adapter that converts PyTorch transformer tensors
-    to multi-agent system format for gradient_engine.
-
-    This allows us to reuse validated gradient code without full system overhead.
-    """
-
-    def __init__(
-        self,
-        mu_q: np.ndarray,      # (N, K)
-        sigma_q: np.ndarray,   # (N, K, K)
-        mu_p: np.ndarray,      # (N, K)
-        sigma_p: np.ndarray,   # (N, K, K)
-        phi: np.ndarray,       # (N, 3)
-        generators: np.ndarray,  # (3, K, K)
-        config: SystemConfig,
-        beta_weights: Optional[np.ndarray] = None,  # (N, N) - precomputed attention
-    ):
-        """
-        Create mock system from transformer state.
-
-        Args:
-            mu_q: Belief means (N, K)
-            sigma_q: Belief covariances (N, K, K)
-            mu_p: Prior means (N, K)
-            sigma_p: Prior covariances (N, K, K)
-            phi: Gauge frames (N, 3)
-            generators: SO(3) generators (3, K, K)
-            config: SystemConfig with hyperparameters
-            beta_weights: Optional precomputed attention weights (N, N)
-        """
-        self.config = config
-        self.n_agents = mu_q.shape[0]
-
-        # Create mock agents (0D point agents)
-        self.agents = []
-        for i in range(self.n_agents):
-            agent = self._create_mock_agent(
-                i, mu_q[i], sigma_q[i], mu_p[i], sigma_p[i], phi[i], generators, config
-            )
-            self.agents.append(agent)
-
-        # Store precomputed beta for efficiency
-        self._beta_cache = beta_weights
-
-    def _create_mock_agent(
-        self, agent_id: int, mu_q, sigma_q, mu_p, sigma_p, phi, generators, config
-    ):
-        """Create a lightweight mock agent without observations."""
-        # Create minimal agent config
-        K = mu_q.shape[0]
-        agent_config = AgentConfig(
-            K=K,
-            spatial_shape=(),  # 0D point agent
-            alpha=config.lambda_self,
-        )
-
-        # Create 0D base manifold (single point)
-        base_manifold = BaseManifold(
-            shape=(),  # 0D
-            topology=TopologyType.PERIODIC
-        )
-
-        # Create agent (will initialize with defaults)
-        
-        agent = Agent(agent_id, agent_config, base_manifold=base_manifold)
-
-        # Override with our values
-        agent.mu_q = mu_q.copy()
-        agent.mu_p = mu_p.copy()
-
-        # Covariance matrices (NOT Cholesky - gauge covariance requires Σ storage)
-        agent.Sigma_q = sigma_q.copy()
-        agent.Sigma_p = sigma_p.copy()
-
-        # Gauge field
-        agent.gauge = type('obj', (object,), {'phi': phi.copy()})()
-
-        # Generators
-        agent.generators = generators.copy()
-
-        # No observations - will add discrete observation gradients separately
-        agent.observations = {}
-
-        return agent
-
-    def get_neighbors(self, agent_idx: int):
-        """Return all other agents as neighbors (fully connected)."""
-        return [j for j in range(self.n_agents) if j != agent_idx]
-
-    def compute_transport_ij(self, i: int, j: int):
-        """Compute transport operator Ω_ij."""
-        from math_utils.transport import compute_transport
-        agent_i = self.agents[i]
-        agent_j = self.agents[j]
-        return compute_transport(
-            agent_i.gauge.phi, agent_j.gauge.phi, agent_i.generators
-        )
-
-
-def convert_torch_to_numpy_system(
-    mu_q: torch.Tensor,      # (B, N, K)
-    sigma_q: torch.Tensor,   # (B, N, K, K) or (B, N, K) if diagonal
-    mu_prior: torch.Tensor,  # (B, N, K)
-    phi: torch.Tensor,       # (B, N, 3)
-    generators: torch.Tensor,  # (3, K, K)
-    config: SystemConfig,
-    beta: Optional[torch.Tensor] = None,  # (B, N, N) averaged attention
-    batch_idx: int = 0,
-) -> MockMultiAgentSystem:
-    """
-    Convert PyTorch transformer tensors to multi-agent system format.
-
-    Assumes priors have same covariance as beliefs (simplified).
-
-    Args:
-        mu_q: Belief means (B, N, K)
-        sigma_q: Belief covariances (B, N, K, K) full or (B, N, K) diagonal
-        mu_prior: Prior means (B, N, K)
-        phi: Gauge frames (B, N, 3)
-        generators: SO(3) generators (3, K, K)
-        config: SystemConfig
-        beta: Optional attention weights (B, N, N)
-        batch_idx: Which batch element to extract
-
-    Returns:
-        MockMultiAgentSystem ready for gradient_engine
-    """
-    # Extract single batch element and convert to numpy
-    mu_q_np = mu_q[batch_idx].detach().cpu().numpy()  # (N, K)
-    mu_p_np = mu_prior[batch_idx].detach().cpu().numpy()  # (N, K)
-    phi_np = phi[batch_idx].detach().cpu().numpy()  # (N, 3)
-    gen_np = generators.detach().cpu().numpy()  # (3, K, K)
-
-    # Handle diagonal vs full covariance
-    if sigma_q.dim() == 3:
-        # Diagonal covariance: (B, N, K) -> expand to (N, K, K)
-        sigma_diag = sigma_q[batch_idx].detach().cpu().numpy()  # (N, K)
-        N, K = sigma_diag.shape
-        sigma_q_np = np.zeros((N, K, K), dtype=sigma_diag.dtype)
-        for i in range(N):
-            np.fill_diagonal(sigma_q_np[i], sigma_diag[i])
-    else:
-        # Full covariance: (B, N, K, K)
-        sigma_q_np = sigma_q[batch_idx].detach().cpu().numpy()  # (N, K, K)
-
-    # Assume prior covariances same as beliefs (could be different)
-    sigma_p_np = sigma_q_np.copy()
-
-    # Extract beta if provided
-    beta_np = None
-    if beta is not None:
-        beta_np = beta[batch_idx].detach().cpu().numpy()  # (N, N)
-
-    return MockMultiAgentSystem(
-        mu_q=mu_q_np,
-        sigma_q=sigma_q_np,
-        mu_p=mu_p_np,
-        sigma_p=sigma_p_np,
-        phi=phi_np,
-        generators=gen_np,
-        config=config,
-        beta_weights=beta_np,
-    )
-
-# =============================================================================
 # Dynamic-β VFE: Full Active Inference with Evolving Attention (RECOMMENDED!)
 # =============================================================================
 
@@ -1697,7 +1391,7 @@ class VariationalFFNDynamic(nn.Module):
         """Compute inverse of softplus: log(exp(x) - 1)."""
         if x > 20.0:
             return x  # softplus ≈ identity for large x
-        return float(np.log(np.expm1(x)))
+        return math.log(math.expm1(x))
 
     def get_bayesian_alpha(
         self,
