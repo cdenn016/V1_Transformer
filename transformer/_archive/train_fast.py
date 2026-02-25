@@ -77,6 +77,7 @@ class FastTrainingConfig:
 
     # Gradient control
     grad_clip: float = 1.0
+    phi_grad_clip: float = 0.1   # Tighter clip for φ (gauge frames spike 100x)
     grad_accumulation_steps: int = 1
 
     # Free energy coefficients
