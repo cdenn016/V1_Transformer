@@ -1101,6 +1101,19 @@ class PublicationTrainer(Trainer):
             # Train step with full metrics (grad_norms computed inside before zero_grad)
             metrics, grad_norms = self.train_step(batch)
 
+            # Map Trainer metric keys to PublicationTrainer/MetricsTracker names
+            metrics['train_loss_total'] = metrics.get('loss/total', 0.0)
+            metrics['train_loss_ce'] = metrics.get('loss/ce', 0.0)
+            metrics['train_loss_belief_align'] = metrics.get('loss/belief_align', 0.0)
+            metrics['train_loss_self_consistency'] = metrics.get('loss/self_consistency', 0.0)
+            metrics['train_loss_model_align'] = metrics.get('loss/model_align', 0.0)
+            metrics['kl_mean'] = metrics.get('attention/kl_mean', 0.0)
+            metrics['beta_mean'] = metrics.get('attention/beta_mean', 0.0)
+            metrics['attention_entropy'] = metrics.get('attention/entropy', 0.0)
+            metrics['attention_concentration'] = metrics.get('attention/concentration', 0.0)
+            ce = metrics['train_loss_ce']
+            metrics['train_ppl'] = math.exp(min(ce, 20.0))  # cap to avoid overflow
+
             step_time = time.time() - step_start
 
             is_log_step = (step + 1) % self.config.log_interval == 0
