@@ -243,13 +243,22 @@ def _compute_vfe_gradients_block_diagonal(
     # =================================================================
     # 1. Self-Coupling Gradient (block-wise but simpler)
     # =================================================================
-    sigma_p_reg = sigma_p + eps * torch.eye(K, device=device, dtype=dtype)
-    sigma_p_inv = torch.linalg.inv(sigma_p_reg)
+    # Use 1e-4 floor (not eps=1e-6) to prevent singularity after many
+    # training steps when σ entries shrink near zero
+    _reg = max(eps, 1e-4)
+    sigma_p_reg = sigma_p + _reg * torch.eye(K, device=device, dtype=dtype)
+    try:
+        sigma_p_inv = torch.linalg.inv(sigma_p_reg)
+    except (torch.linalg.LinAlgError, RuntimeError):
+        sigma_p_inv = torch.linalg.pinv(sigma_p_reg)
     delta_mu = mu_q - mu_p
     grad_mu_self = alpha * torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
 
-    sigma_q_reg = sigma_q + eps * torch.eye(K, device=device, dtype=dtype)
-    sigma_q_inv = torch.linalg.inv(sigma_q_reg)
+    sigma_q_reg = sigma_q + _reg * torch.eye(K, device=device, dtype=dtype)
+    try:
+        sigma_q_inv = torch.linalg.inv(sigma_q_reg)
+    except (torch.linalg.LinAlgError, RuntimeError):
+        sigma_q_inv = torch.linalg.pinv(sigma_q_reg)
     # For full covariance (4D), alpha (B,N,1) needs extra dim to broadcast with (B,N,K,K)
     alpha_4d = alpha.unsqueeze(-1) if isinstance(alpha, torch.Tensor) else alpha
     grad_sigma_self = alpha_4d * 0.5 * (sigma_p_inv - sigma_q_inv)
@@ -323,8 +332,11 @@ def _compute_vfe_gradients_block_diagonal(
 
             # Regularize and invert
             I_d = torch.eye(d, device=device, dtype=dtype)
-            sigma_j_reg = sigma_j_transported + eps * I_d
-            sigma_j_inv = torch.linalg.inv(sigma_j_reg)  # (B, C, N, d, d)
+            sigma_j_reg = sigma_j_transported + max(eps, 1e-4) * I_d
+            try:
+                sigma_j_inv = torch.linalg.inv(sigma_j_reg)  # (B, C, N, d, d)
+            except (torch.linalg.LinAlgError, RuntimeError):
+                sigma_j_inv = torch.linalg.pinv(sigma_j_reg)
 
             # Delta mu for this block (query chunk) - contiguous to avoid view issues
             mu_block_i = mu_block[:, i_start:i_end].contiguous()  # (B, C, d)
@@ -693,15 +705,24 @@ def compute_vfe_gradients_gpu(
     else:
         # Full covariance - use matrix operations
         # ∂KL/∂μ_q = Σ_p^{-1} (μ_q - μ_p)
-        sigma_p_reg = sigma_p + eps * torch.eye(K, device=device, dtype=dtype)
-        sigma_p_inv = torch.linalg.inv(sigma_p_reg)  # (B, N, K, K)
+        # Use 1e-4 floor (not eps=1e-6) to prevent singularity after many
+        # training steps when σ entries shrink near zero
+        _reg = max(eps, 1e-4)
+        sigma_p_reg = sigma_p + _reg * torch.eye(K, device=device, dtype=dtype)
+        try:
+            sigma_p_inv = torch.linalg.inv(sigma_p_reg)  # (B, N, K, K)
+        except (torch.linalg.LinAlgError, RuntimeError):
+            sigma_p_inv = torch.linalg.pinv(sigma_p_reg)
 
         delta_mu = mu_q - mu_p  # (B, N, K)
         grad_mu_self = alpha * torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
 
         # ∂KL/∂Σ_q = 0.5 * (Σ_p^{-1} - Σ_q^{-1})
-        sigma_q_reg = sigma_q + eps * torch.eye(K, device=device, dtype=dtype)
-        sigma_q_inv = torch.linalg.inv(sigma_q_reg)
+        sigma_q_reg = sigma_q + _reg * torch.eye(K, device=device, dtype=dtype)
+        try:
+            sigma_q_inv = torch.linalg.inv(sigma_q_reg)
+        except (torch.linalg.LinAlgError, RuntimeError):
+            sigma_q_inv = torch.linalg.pinv(sigma_q_reg)
         # For full covariance (4D), alpha (B,N,1) needs extra dim to broadcast with (B,N,K,K)
         alpha_4d = alpha.unsqueeze(-1) if isinstance(alpha, torch.Tensor) else alpha
         grad_sigma_self = alpha_4d * 0.5 * (sigma_p_inv - sigma_q_inv)
@@ -1711,8 +1732,11 @@ class VariationalFFNDynamic(nn.Module):
         else:
             # Full covariance: δμᵀ Σ_p⁻¹ δμ
             K = mu_q.shape[-1]
-            sigma_p_reg = sigma_p + eps * torch.eye(K, device=mu_q.device, dtype=mu_q.dtype)
-            sigma_p_inv = torch.linalg.inv(sigma_p_reg)  # (B, N, K, K)
+            sigma_p_reg = sigma_p + max(eps, 1e-4) * torch.eye(K, device=mu_q.device, dtype=mu_q.dtype)
+            try:
+                sigma_p_inv = torch.linalg.inv(sigma_p_reg)  # (B, N, K, K)
+            except (torch.linalg.LinAlgError, RuntimeError):
+                sigma_p_inv = torch.linalg.pinv(sigma_p_reg)
             mahal_sq = torch.einsum('bni,bnij,bnj->bn', delta_mu, sigma_p_inv, delta_mu)
             mahal_sq = mahal_sq.unsqueeze(-1)  # (B, N, 1)
 
