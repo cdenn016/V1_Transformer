@@ -124,7 +124,7 @@ def compute_rg_metrics_from_attention(
 
         return rg_metrics
 
-    except Exception as e:
+    except (ValueError, RuntimeError, FloatingPointError) as e:
         # Return empty metrics on error (don't crash training)
         print(f"[WARNING] RG metrics computation failed: {e}")
         return {}
@@ -738,6 +738,21 @@ class TrainingConfig:
     device: str = 'cpu'
     use_amp: bool = False
 
+    # P-FLOW: EMA update of token embeddings toward successful beliefs
+    use_p_flow: bool = False          # Enable P-flow updates
+    p_flow_ema_decay: float = 0.99    # EMA decay (0.99 = 1% update per step)
+
+    # DELTA RULE: Backprop-free learning for W_out
+    use_delta_rule_w_out: bool = False  # Enable delta rule for W_out
+    delta_rule_lr: float = 0.001        # Learning rate for delta rule
+
+    # RG METRICS: Track renormalization group flow
+    compute_rg_metrics: bool = False     # Enable RG flow analysis
+    rg_metrics_interval: int = 100       # Compute every N steps
+    rg_auto_cluster: bool = True         # Auto-detect clusters
+    rg_n_clusters: Optional[int] = None  # Fixed number of clusters (None = auto)
+    track_dynamic_rg: bool = False       # Track beta evolution across VFE iterations
+
 
 # =============================================================================
 # Trainer Class
@@ -782,6 +797,7 @@ class Trainer:
         self.step = 0
         self.epoch = 0
         self.best_val_ce = float('inf')  # Track CE loss (not total loss) for best model
+        self.patience_counter = 0        # Early stopping counter
 
         # Create checkpoint directory
         if self.config.checkpoint_dir is not None:
@@ -978,26 +994,50 @@ class Trainer:
 
         return torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
 
-    def train_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Dict[str, float]:
-        """Single training step."""
-        # model.train() is called once in train() method, not per-step
+    def train_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[Dict[str, float], Optional[Dict[str, float]]]:
+        """Single training step.
+
+        Returns:
+            metrics: Training metrics dict
+            grad_norms: Per-group gradient norms (only on log steps, else None)
+        """
+        self.model.train()
 
         token_ids, targets = batch
         token_ids = token_ids.to(self.device)
         targets = targets.to(self.device)
 
+        # Check if using standard transformer (no VFE loss)
+        is_standard = hasattr(self.model, 'model_type') and self.model.model_type == 'standard'
+
+        # Check if using delta rule for W_out (backprop-free)
+        use_delta_rule = self.config.use_delta_rule_w_out and not is_standard
+        if use_delta_rule and hasattr(self.model, 'out_proj'):
+            self.model.out_proj.weight.requires_grad = False
+
+        # Check if we should compute RG metrics this step
+        compute_rg = (
+            self.config.compute_rg_metrics and
+            (self.step + 1) % self.config.rg_metrics_interval == 0
+        )
+
         # Forward + loss
         with torch.amp.autocast('cuda', enabled=(self.scaler is not None)):
-            loss, metrics = compute_free_energy_loss(
-                self.model,
-                token_ids,
-                targets,
-                alpha=self.config.alpha,
-                lambda_beta=self.config.lambda_beta,
-                lambda_gamma=self.config.lambda_gamma,
-                kappa_gamma=self.config.kappa_gamma,
-                pad_token_id=self.pad_token_id,
-            )
+            if is_standard:
+                output = self.model(token_ids, labels=targets)
+                loss = output['loss']
+                metrics = {'loss/total': loss.item(), 'loss/ce': loss.item()}
+            else:
+                loss, metrics = compute_free_energy_loss(
+                    self.model,
+                    token_ids,
+                    targets,
+                    alpha=self.config.alpha,
+                    lambda_beta=self.config.lambda_beta,
+                    lambda_gamma=self.config.lambda_gamma,
+                    kappa_gamma=self.config.kappa_gamma,
+                    pad_token_id=self.pad_token_id,
+                )
 
             # Scale loss for gradient accumulation
             loss = loss / self.config.accumulation_steps
@@ -1011,22 +1051,18 @@ class Trainer:
         # =================================================================
         # Gradient Monitoring (only on logging steps to avoid GPU sync overhead)
         # =================================================================
-        if self.step % self.config.log_every == 0:
-            grad_norms = {}
-            for name, param in self.model.named_parameters():
-                if param.grad is not None:
-                    grad_norm = param.grad.norm().item()
-                    if 'mu_embed' in name:
-                        grad_norms['grad/mu_embed'] = grad_norm
-                    elif 'sigma_embed' in name or 'log_sigma' in name:
-                        grad_norms['grad/sigma_embed'] = grad_norm
-                    elif 'phi_embed' in name:
-                        grad_norms['grad/phi_embed'] = grad_norm
-                    elif 'out_proj' in name:
-                        grad_norms['grad/out_proj'] = grad_norm
-            metrics.update(grad_norms)
+        is_log_step = self.step % self.config.log_every == 0
+        grad_norms = None
+        if is_log_step:
+            grad_norms = self._compute_gradient_norms()
+            # Also store in metrics for backward compat
+            if grad_norms:
+                metrics['grad/mu_embed'] = grad_norms.get('mu', 0.0)
+                metrics['grad/sigma_embed'] = grad_norms.get('sigma', 0.0)
+                metrics['grad/phi_embed'] = grad_norms.get('phi', 0.0)
+                metrics['grad/out_proj'] = grad_norms.get('output', 0.0)
 
-            if 'grad/mu_embed' in grad_norms and grad_norms['grad/mu_embed'] == 0.0:
+            if grad_norms and grad_norms.get('mu', 0.0) == 0.0:
                 print("[WARNING] mu_embed gradient is ZERO - gradient flow may be broken!")
 
         # Optimizer step (if accumulation complete)
@@ -1036,11 +1072,6 @@ class Trainer:
                 self.scaler.unscale_(self.optimizer)
 
             # Per-group gradient clipping for large gauge groups.
-            # With SO(100), phi_embed has 4950 dims per token vs 100 for mu.
-            # Global clipping at grad_clip=1.0 means phi dominates the norm,
-            # starving mu/sigma of learning signal. Clip each param group
-            # independently so all parameter types get sufficient gradients.
-            #
             # phi gets a tighter clip (phi_grad_clip, default 0.1) because
             # gauge frame gradients spike 2-3 orders of magnitude above
             # mu/sigma, causing erratic effective LR.
@@ -1073,10 +1104,85 @@ class Trainer:
             # Zero gradients
             self.optimizer.zero_grad()
 
+        # Re-enable requires_grad for W_out if it was disabled
+        if use_delta_rule and hasattr(self.model, 'out_proj'):
+            self.model.out_proj.weight.requires_grad = True
+
+        # =================================================================
+        # P-FLOW: EMA update of token embeddings toward successful beliefs
+        # =================================================================
+        if self.config.use_p_flow and not is_standard and 'p_flow/mu_q' in metrics:
+            if hasattr(self.model, 'p_flow_update'):
+                self.model.p_flow_update(
+                    token_ids=token_ids,
+                    mu_beliefs=metrics['p_flow/mu_q'],
+                    prediction_errors=metrics['p_flow/ce_per_position'],
+                    ema_decay=self.config.p_flow_ema_decay,
+                )
+
+        # =================================================================
+        # DELTA RULE: Backprop-free update of W_out
+        # =================================================================
+        if use_delta_rule and 'p_flow/mu_q' in metrics:
+            if hasattr(self.model, 'delta_rule_update_w_out'):
+                self.model.delta_rule_update_w_out(
+                    mu_beliefs=metrics['p_flow/mu_q'],
+                    targets=targets,
+                    lr=self.config.delta_rule_lr,
+                )
+
+        # =================================================================
+        # RG METRICS: Renormalization group analysis
+        # =================================================================
+        if compute_rg and 'attention_info' in metrics:
+            rg_metrics = compute_rg_metrics_from_attention(
+                attn_info=metrics['attention_info'],
+                step=self.step,
+                auto_cluster=self.config.rg_auto_cluster,
+                n_clusters=self.config.rg_n_clusters,
+            )
+            metrics.update(rg_metrics)
+
+            if self.config.track_dynamic_rg and hasattr(self.model, 'forward_with_rg_tracking'):
+                try:
+                    with torch.no_grad():
+                        _, rg_info = self.model.forward_with_rg_tracking(
+                            token_ids=token_ids, targets=targets,
+                        )
+                    dynamic_metrics = compute_dynamic_rg_metrics(rg_info, self.step)
+                    metrics.update(dynamic_metrics)
+                except (ValueError, RuntimeError, FloatingPointError) as e:
+                    print(f"[WARNING] Dynamic RG tracking failed: {e}")
+
         # Add learning rate to metrics
         metrics['lr'] = self.optimizer.param_groups[0]['lr']
 
-        return metrics
+        return metrics, grad_norms
+
+    def _compute_gradient_norms(self) -> Dict[str, float]:
+        """Compute per-parameter-group gradient norms."""
+        norms = {'total': 0.0, 'mu': 0.0, 'sigma': 0.0, 'phi': 0.0,
+                 'attention': 0.0, 'ffn': 0.0, 'output': 0.0}
+        total_sq = 0.0
+        for name, param in self.model.named_parameters():
+            if param.grad is None:
+                continue
+            norm = param.grad.norm().item()
+            total_sq += norm ** 2
+            if 'mu_embed' in name:
+                norms['mu'] = max(norms['mu'], norm)
+            elif 'sigma_embed' in name or 'log_sigma' in name:
+                norms['sigma'] = max(norms['sigma'], norm)
+            elif 'phi_embed' in name:
+                norms['phi'] = max(norms['phi'], norm)
+            elif 'out_proj' in name:
+                norms['output'] = max(norms['output'], norm)
+            elif 'attention' in name or 'attn' in name:
+                norms['attention'] = max(norms['attention'], norm)
+            else:
+                norms['ffn'] = max(norms['ffn'], norm)
+        norms['total'] = total_sq ** 0.5
+        return norms
 
     @torch.no_grad()
     def validate(self, max_batches: int = 200) -> Dict[str, float]:
@@ -1125,8 +1231,13 @@ class Trainer:
             'val/perplexity': perplexity,
         }
 
-    def train(self):
-        """Main training loop."""
+    def train(self, on_step=None, on_eval=None):
+        """Main training loop.
+
+        Args:
+            on_step: Optional callback(step, metrics, grad_norms) called every log step.
+            on_eval: Optional callback(step, val_metrics) called after each validation.
+        """
         print("\n" + "="*70)
         print("STARTING TRAINING (Attention-Weighted Free Energy)")
         print("="*70)
@@ -1143,26 +1254,27 @@ class Trainer:
             while self.step < self.config.max_steps:
                 for batch in self.train_loader:
                     # Training step
-                    metrics = self.train_step(batch)
+                    metrics, grad_norms = self.train_step(batch)
 
                     # Logging
                     if self.step % self.config.log_every == 0:
                         elapsed = time.time() - start_time
-                        tokens_per_sec = (self.step * self.config.batch_size * batch[0].shape[1]) / elapsed
 
                         # Basic metrics
                         print(f"\nStep {self.step:6d} | Loss: {metrics['loss/total']:.4f} | "
-                              f"CE: {metrics['loss/ce']:.4f} | Align: {metrics['loss/belief_align']:.4f} | "
+                              f"CE: {metrics['loss/ce']:.4f} | Align: {metrics.get('loss/belief_align', 0):.4f} | "
                               f"LR: {metrics['lr']:.2e}")
 
-                        # Gradient norms (verify gradients are flowing!)
-                        grad_mu = metrics.get('grad/mu_embed', 0.0)
-                        grad_out = metrics.get('grad/out_proj', 0.0)
-                        grad_phi = metrics.get('grad/phi_embed', 0.0)
-                        print(f"         Grads | μ_embed: {grad_mu:.4f} | out_proj: {grad_out:.4f} | φ_embed: {grad_phi:.4f}")
+                        # Gradient norms
+                        if grad_norms:
+                            print(f"         Grads | mu: {grad_norms['mu']:.4f} | "
+                                  f"output: {grad_norms['output']:.4f} | phi: {grad_norms['phi']:.4f}")
 
                         if self.config.use_wandb and WANDB_AVAILABLE:
                             wandb.log(metrics, step=self.step)
+
+                        if on_step is not None:
+                            on_step(self.step, metrics, grad_norms)
 
                     # Validation
                     if self.step % self.config.eval_every == 0 and self.step > 0:
@@ -1175,8 +1287,10 @@ class Trainer:
                             if self.config.use_wandb and WANDB_AVAILABLE:
                                 wandb.log(val_metrics, step=self.step)
 
+                            if on_eval is not None:
+                                on_eval(self.step, val_metrics)
+
                             # Save best model based on CE loss (not total loss)
-                            # CE loss is the proper metric since PPL = exp(CE)
                             if val_metrics['val/ce_loss'] < self.best_val_ce:
                                 self.best_val_ce = val_metrics['val/ce_loss']
                                 self.save_checkpoint('best_model.pt')
@@ -1198,7 +1312,7 @@ class Trainer:
                 self.epoch += 1
 
         except KeyboardInterrupt:
-            print("\n⚠ Training interrupted by user")
+            print("\n Training interrupted by user")
 
         finally:
             if pbar is not None:

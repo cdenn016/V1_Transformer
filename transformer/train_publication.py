@@ -79,8 +79,11 @@ from transformer.train import (
     compute_free_energy_loss,
     compute_rg_metrics_from_attention,
     compute_dynamic_rg_metrics,
+    Trainer,
+    TrainingConfig,
 )
-from transformer._archive.train_fast import FastTrainer, FastTrainingConfig
+# Backward compat: FastTrainingConfig is still used in resume_training.py
+from transformer._archive.train_fast import FastTrainingConfig
 from transformer.analysis.publication_metrics import PublicationMetrics, ExperimentResult
 
 # Import the principled PureFEPTransformer (KL-to-prior output, no backprop)
@@ -844,8 +847,14 @@ class PublicationMetricsTracker:
             writer.writerows(self.history)
 
 
-class PublicationTrainer(FastTrainer):
-    """Enhanced trainer with publication-quality metrics."""
+class PublicationTrainer(Trainer):
+    """Enhanced trainer with publication-quality metrics.
+
+    Extends Trainer with CSV logging, attention visualization,
+    sample text generation, and comprehensive publication metrics.
+    The core train_step() and validate() are inherited from Trainer
+    to prevent code drift.
+    """
 
     def __init__(self, *args, publication_metrics: PublicationMetrics = None, tokenizer=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -873,7 +882,7 @@ class PublicationTrainer(FastTrainer):
         Returns:
             List of strings like "ℓ0", "ℓ1", "ℓ2" for each head.
         """
-        irrep_spec = self.config.irrep_spec
+        irrep_spec = getattr(self.model, 'config', {}).get('irrep_spec', getattr(self.config, 'irrep_spec', []))
         labels = []
         for irrep_name, num_heads, dim in irrep_spec:
             for _ in range(num_heads):
@@ -937,7 +946,7 @@ class PublicationTrainer(FastTrainer):
                         try:
                             decoded = self.tokenizer.decode(input_ids[0].tolist(), skip_special_tokens=True)
                             seq_info += f"\nText: {decoded[:100]}..."
-                        except Exception:
+                        except (KeyError, IndexError, TypeError, UnicodeDecodeError):
                             pass
 
                     # Save directory
@@ -979,281 +988,8 @@ class PublicationTrainer(FastTrainer):
 
         self.model.train()
 
-    def train_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[Dict[str, float], Dict[str, float]]:
-        """Train step with comprehensive metrics and AMP support."""
-        self.model.train()
-
-        input_ids, target_ids = batch
-        input_ids = input_ids.to(self.device)
-        target_ids = target_ids.to(self.device)
-
-        # Check if we should compute RG metrics this step
-        # NOTE: Use (step + 1) to align with eval_interval which also uses (step + 1)
-        compute_rg = (
-            getattr(self.config, 'compute_rg_metrics', False) and
-            (self.global_step + 1) % getattr(self.config, 'rg_metrics_interval', 100) == 0
-        )
-
-        # Check if using standard transformer (no VFE loss)
-        is_standard = isinstance(self.model, StandardTransformerLM)
-
-        # Check if using delta rule for W_out (backprop-free)
-        use_delta_rule = getattr(self.config, 'use_delta_rule_w_out', False) and not is_standard
-
-        # If delta rule is enabled, exclude W_out from backprop
-        if use_delta_rule and hasattr(self.model, 'out_proj'):
-            self.model.out_proj.weight.requires_grad = False
-
-        # Forward pass with full metrics (with optional AMP)
-        if self.scaler is not None:
-            # Mixed precision forward pass
-            with torch.amp.autocast('cuda'):
-                if is_standard:
-                    # Standard transformer: simple cross-entropy loss
-                    output = self.model(input_ids, labels=target_ids)
-                    loss = output['loss']
-                    full_metrics = {
-                        'loss/total': loss.item(),
-                        'loss/ce': loss.item(),
-                    }
-                else:
-                    loss, full_metrics = compute_free_energy_loss(
-                        self.model,
-                        input_ids,
-                        target_ids,
-                        alpha=self.config.alpha,
-                        lambda_beta=self.config.beta,
-                        lambda_gamma=self.config.lambda_gamma,
-                        kappa_gamma=self.config.kappa_gamma,
-
-                    )
-            # Scaled backward
-            self.scaler.scale(loss).backward()
-        else:
-            # Standard forward pass
-            if is_standard:
-                # Standard transformer: simple cross-entropy loss
-                output = self.model(input_ids, labels=target_ids)
-                loss = output['loss']
-                full_metrics = {
-                    'loss/total': loss.item(),
-                    'loss/ce': loss.item(),
-                }
-            else:
-                loss, full_metrics = compute_free_energy_loss(
-                    self.model,
-                    input_ids,
-                    target_ids,
-                    alpha=self.config.alpha,
-                    lambda_beta=self.config.beta,
-                    lambda_gamma=self.config.lambda_gamma,
-                    kappa_gamma=self.config.kappa_gamma,
-
-                )
-            loss.backward()
-
-        # Compute gradient norms BEFORE clipping
-        # Check if this is a log step (need to check global_step here)
-        is_log_step = (self.global_step + 1) % self.config.log_interval == 0
-        grad_norms = self._compute_gradient_norms() if is_log_step else None
-
-        # Clip and step (with scaler if AMP enabled)
-        # Per-group clipping for large gauge groups (SO(N>3)):
-        # phi_embed gradients dominate global norm, starving mu/sigma.
-        # FastTrainingConfig always uses param groups; TrainingConfig has use_param_groups flag.
-        #
-        # phi gets a tighter clip (phi_grad_clip, default 0.1) because gauge
-        # frame gradients spike 2-3 orders of magnitude above mu/sigma,
-        # causing erratic effective LR when the uniform clip crushes them.
-        _use_param_groups = getattr(self.config, 'use_param_groups', True)
-        _phi_clip = getattr(self.config, 'phi_grad_clip', self.config.grad_clip)
-
-        def _clip_value(group):
-            """Return clip threshold: tighter for phi, default for others."""
-            name = group.get('name', '')
-            if 'phi' in name:
-                return _phi_clip
-            return self.config.grad_clip
-
-        if self.scaler is not None:
-            if self.config.grad_clip > 0:
-                self.scaler.unscale_(self.optimizer)
-                if _use_param_groups:
-                    for group in self.optimizer.param_groups:
-                        if group['params']:
-                            torch.nn.utils.clip_grad_norm_(
-                                group['params'],
-                                _clip_value(group),
-                            )
-                else:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(),
-                        self.config.grad_clip,
-                    )
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-        else:
-            if self.config.grad_clip > 0:
-                if _use_param_groups:
-                    for group in self.optimizer.param_groups:
-                        if group['params']:
-                            torch.nn.utils.clip_grad_norm_(
-                                group['params'],
-                                _clip_value(group),
-                            )
-                else:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(),
-                        self.config.grad_clip,
-                    )
-            self.optimizer.step()
-
-        if self.scheduler is not None:
-            self.scheduler.step()
-        self.optimizer.zero_grad()
-
-        # Re-enable requires_grad for W_out if it was disabled
-        if use_delta_rule and hasattr(self.model, 'out_proj'):
-            self.model.out_proj.weight.requires_grad = True
-
-        # =================================================================
-        # P-FLOW: EMA update of token embeddings toward successful beliefs
-        # =================================================================
-        # This is the key learning mechanism from fep_transformer.py
-        # After backprop updates W_out, P-flow updates token embeddings
-        # toward beliefs that predicted successfully (low CE)
-        use_p_flow = getattr(self.config, 'use_p_flow', False)
-        if use_p_flow and not is_standard and 'p_flow/mu_q' in full_metrics:
-            mu_beliefs = full_metrics['p_flow/mu_q']
-            ce_per_position = full_metrics['p_flow/ce_per_position']
-            ema_decay = getattr(self.config, 'p_flow_ema_decay', 0.99)
-
-            # Call P-flow update on the model
-            if hasattr(self.model, 'p_flow_update'):
-                self.model.p_flow_update(
-                    token_ids=input_ids,
-                    mu_beliefs=mu_beliefs,
-                    prediction_errors=ce_per_position,
-                    ema_decay=ema_decay,
-                )
-
-        # =================================================================
-        # DELTA RULE: Backprop-free update of W_out
-        # =================================================================
-        # Uses local learning rule: ΔW = η · (target - prediction) ⊗ μ^T
-        # Combined with P-flow, this makes learning fully backprop-free!
-        if use_delta_rule and 'p_flow/mu_q' in full_metrics:
-            mu_beliefs = full_metrics['p_flow/mu_q']
-            delta_lr = getattr(self.config, 'delta_rule_lr', 0.001)
-
-            # Call delta rule update on the model
-            if hasattr(self.model, 'delta_rule_update_w_out'):
-                self.model.delta_rule_update_w_out(
-                    mu_beliefs=mu_beliefs,
-                    targets=target_ids,
-                    lr=delta_lr,
-                )
-
-        # Format comprehensive metrics
-        metrics = {
-            'train_loss_total': full_metrics['loss/total'],
-            'train_loss_ce': full_metrics['loss/ce'],
-            'train_loss_belief_align': full_metrics.get('loss/belief_align', 0),
-            'train_loss_self_consistency': full_metrics.get('loss/self_consistency', 0),
-            'train_loss_model_align': full_metrics.get('loss/model_align', 0),
-            'train_ppl': math.exp(min(full_metrics['loss/ce'], 20)),  # Clamp to prevent overflow
-            'beta_mean': full_metrics.get('attention/beta_mean', 0),
-            'beta_std': 0,  # Could compute if needed
-            'kl_mean': full_metrics.get('attention/kl_mean', 0),
-            'kl_std': 0,
-            # Crucial attention interpretability metrics
-            'attention_entropy': full_metrics.get('attention/entropy', 0),
-            'attention_concentration': full_metrics.get('attention/concentration', 0),
-        }
-
-        # Carry over Bayesian alpha diagnostics
-        for key in ['bayesian/alpha_mean', 'bayesian/alpha_std', 'bayesian/alpha_min',
-                     'bayesian/alpha_max', 'bayesian/a0', 'bayesian/b0',
-                     'bayesian/mahal_sq_mean', 'bayesian/mahal_sq_std']:
-            if key in full_metrics:
-                metrics[key] = full_metrics[key]
-
-        # Carry over Hamiltonian diagnostics for physics metrics
-        if 'hamiltonian_diagnostics' in full_metrics:
-            metrics['hamiltonian_diagnostics'] = full_metrics['hamiltonian_diagnostics']
-
-        # Compute RG metrics if enabled and attention info was returned
-        if compute_rg and 'attention_info' in full_metrics:
-            rg_metrics = compute_rg_metrics_from_attention(
-                attn_info=full_metrics['attention_info'],
-                step=self.global_step,
-                auto_cluster=getattr(self.config, 'rg_auto_cluster', True),
-                n_clusters=getattr(self.config, 'rg_n_clusters', None),
-            )
-            # Add RG metrics with proper key mapping for CSV
-            metrics['rg/modularity'] = rg_metrics.get('rg/modularity')
-            metrics['rg/effective_rank'] = rg_metrics.get('rg/effective_rank')
-            metrics['rg/n_clusters'] = rg_metrics.get('rg/n_clusters')
-            metrics['rg/kl_within_mean'] = rg_metrics.get('rg/kl_within_mean')
-            metrics['rg/kl_within_std'] = rg_metrics.get('rg/kl_within_std')
-            metrics['rg/kl_between_mean'] = rg_metrics.get('rg/kl_between_mean')
-            metrics['rg/kl_between_std'] = rg_metrics.get('rg/kl_between_std')
-            metrics['rg/beta_entropy'] = rg_metrics.get('rg/beta_entropy')
-
-            # Dynamic RG tracking (across VFE iterations within forward pass)
-            track_dynamic = getattr(self.config, 'track_dynamic_rg', False)
-            if track_dynamic and hasattr(self.model, 'forward_with_rg_tracking'):
-                try:
-                    # Run a separate forward pass with RG tracking
-                    # This captures beta_history across VFE iterations
-                    with torch.no_grad():
-                        _, rg_info = self.model.forward_with_rg_tracking(
-                            token_ids=input_ids,
-                            targets=target_ids,
-                        )
-                    dynamic_metrics = compute_dynamic_rg_metrics(rg_info, self.global_step)
-
-                    # Add dynamic RG metrics
-                    for key, value in dynamic_metrics.items():
-                        metrics[key] = value
-                except Exception as e:
-                    # Don't crash training on RG tracking errors
-                    print(f"[WARNING] Dynamic RG tracking failed: {e}")
-
-        return metrics, grad_norms
-
-    def _compute_gradient_norms(self) -> Dict[str, float]:
-        """Compute gradient norms for different parameter groups."""
-        norms = {'total': 0, 'mu': 0, 'sigma': 0, 'phi': 0, 'ffn': 0}
-
-        total_norm = 0
-        mu_norm = 0
-        sigma_norm = 0
-        phi_norm = 0
-        ffn_norm = 0
-
-        for name, param in self.model.named_parameters():
-            if param.grad is not None:
-                param_norm = param.grad.data.norm(2).item()
-                total_norm += param_norm ** 2
-
-                if 'mu_embed' in name or 'mu' in name.lower():
-                    mu_norm += param_norm ** 2
-                elif 'sigma_embed' in name or 'sigma' in name.lower() or 'L_embed' in name:
-                    sigma_norm += param_norm ** 2
-                elif 'phi_embed' in name or 'phi' in name.lower():
-                    phi_norm += param_norm ** 2
-                elif 'ffn' in name:
-                    ffn_norm += param_norm ** 2
-
-        norms['total'] = math.sqrt(total_norm)
-        norms['mu'] = math.sqrt(mu_norm)
-        norms['sigma'] = math.sqrt(sigma_norm)
-        norms['phi'] = math.sqrt(phi_norm)
-        norms['ffn'] = math.sqrt(ffn_norm)
-
-        return norms
-
+    # train_step() and _compute_gradient_norms() are inherited from Trainer.
+    # This eliminates code drift between train.py and train_publication.py.
 
     def sample_text(
         self,
@@ -1305,7 +1041,7 @@ class PublicationTrainer(FastTrainer):
         print(f"{'='*70}\n")
 
         # Support resuming from a checkpoint
-        start_step = self.global_step
+        start_step = self.step
         if start_step > 0:
             print(f"  Resuming from step {start_step}")
 
@@ -1348,11 +1084,11 @@ class PublicationTrainer(FastTrainer):
                     step=0,
                     verbose=True,
                 )
-            except Exception as e:
+            except (ValueError, RuntimeError, TypeError, OSError) as e:
                 print(f"[WARN] Initial semantic analysis failed: {e}")
 
         for step in pbar:
-            self.global_step = step
+            self.step = step
             step_start = time.time()
 
             # Get batch
@@ -1471,10 +1207,10 @@ class PublicationTrainer(FastTrainer):
                 attn_concentration = metrics.get('attention_concentration', 0)
 
                 print(f"\n  Validation @ step {step+1}:")
-                print(f"    Loss: {val_metrics['loss']:.4f}")
-                print(f"    CE: {val_metrics['ce_loss']:.4f}")
-                print(f"    PPL: {val_metrics['perplexity']:.2f}")
-                print(f"    BPC: {val_metrics['ce_loss']/math.log(2):.3f}")
+                print(f"    Loss: {val_metrics['val/loss']:.4f}")
+                print(f"    CE: {val_metrics['val/ce_loss']:.4f}")
+                print(f"    PPL: {val_metrics['val/perplexity']:.2f}")
+                print(f"    BPC: {val_metrics['val/ce_loss']/math.log(2):.3f}")
                 print(f"    Attn entropy: {attn_entropy:.3f} | concentration: {attn_concentration:.3f}")
 
                 # Log RG metrics if available (meta-agent emergence!)
@@ -1505,7 +1241,7 @@ class PublicationTrainer(FastTrainer):
                     # Use temperature 0.9 and lower top_k for more diversity
                     sample = self.sample_text(prompt=prompt, max_new_tokens=30, temperature=0.9, top_k=30)
                     print(f"    Sample: {sample[:100]}...")
-                except Exception as e:
+                except (RuntimeError, ValueError, IndexError) as e:
                     import traceback
                     print(f"    Sample generation failed: {e}")
                     traceback.print_exc()
@@ -1520,10 +1256,10 @@ class PublicationTrainer(FastTrainer):
 
                 # Save best model based on CE loss (not total loss)
                 # CE loss is the proper metric since PPL = exp(CE)
-                if val_metrics['ce_loss'] < self.best_val_ce:
-                    self.best_val_ce = val_metrics['ce_loss']
+                if val_metrics['val/ce_loss'] < self.best_val_ce:
+                    self.best_val_ce = val_metrics['val/ce_loss']
                     self.patience_counter = 0
-                    self.save_checkpoint(is_best=True)
+                    self.save_checkpoint('best_model.pt')
                 else:
                     self.patience_counter += 1
                     if self.config.patience > 0 and self.patience_counter >= self.config.patience:
@@ -1532,7 +1268,7 @@ class PublicationTrainer(FastTrainer):
 
             # Checkpointing
             if (step + 1) % self.config.checkpoint_interval == 0:
-                self.save_checkpoint(is_best=False)
+                self.save_checkpoint(f'checkpoint_step_{step+1}.pt')
                 self.metrics_tracker.save()
 
             # Periodic gauge frame semantic analysis
@@ -1543,7 +1279,7 @@ class PublicationTrainer(FastTrainer):
                         step=step + 1,
                         verbose=False,  # Minimal output during training
                     )
-                except Exception as e:
+                except (ValueError, RuntimeError, TypeError, OSError) as e:
                     print(f"[WARN] Semantic analysis failed at step {step+1}: {e}")
 
         # Save final metrics
@@ -1561,7 +1297,7 @@ class PublicationTrainer(FastTrainer):
                     model=self.model,
                     verbose=True,
                 )
-            except Exception as e:
+            except (ValueError, RuntimeError, TypeError, OSError) as e:
                 print(f"[WARN] Final semantic analysis failed: {e}")
 
             # Generate interpretability outputs using a sample batch from validation
@@ -1573,7 +1309,7 @@ class PublicationTrainer(FastTrainer):
                     tokenizer=self.tokenizer,  # Dataset with .decode() method
                     device=self.device,
                 )
-            except Exception as e:
+            except (ValueError, RuntimeError, TypeError, OSError) as e:
                 import traceback
                 print(f"[WARNING] Could not generate interpretability outputs: {e}")
                 print(f"  Traceback: {traceback.format_exc()}")
@@ -1813,8 +1549,10 @@ def run_single_experiment(
     # Training Configuration
     # =================================================================
 
-    train_config = FastTrainingConfig(
-        epochs=config.get('epochs', None),
+    train_config = TrainingConfig(
+        # Parameter grouping: always use multi-group for gauge transformer
+        use_param_groups=True,
+
         max_steps=config['max_steps'],
         warmup_steps=config['warmup_steps'],
 
@@ -1833,15 +1571,18 @@ def run_single_experiment(
         phi_grad_clip=config.get('phi_grad_clip', 0.1),
 
         alpha=config['alpha'],
-        beta=config['beta'],
+        lambda_beta=config['beta'],
         lambda_gamma=config['lambda_gamma'],
 
+        log_every=config['log_interval'],
         log_interval=config['log_interval'],
+        eval_every=config['eval_interval'],
         eval_interval=config['eval_interval'],
         checkpoint_interval=config['checkpoint_interval'],
 
         use_wandb=use_wandb,
         checkpoint_dir=exp_checkpoint_dir,
+        device=str(device),
 
         # GPU optimizations
         use_amp=config.get('use_amp', False),
@@ -1877,10 +1618,10 @@ def run_single_experiment(
     except AttributeError:
         dataset_tokens = None
 
-    if train_config.epochs is not None and train_config.epochs > 0:
-        effective_steps = train_config.epochs * steps_per_epoch
+    if train_config.num_epochs is not None and train_config.num_epochs > 0:
+        effective_steps = train_config.num_epochs * steps_per_epoch
         total_tokens = effective_steps * tokens_per_step
-        print(f"  Epochs:         {train_config.epochs}")
+        print(f"  Epochs:         {train_config.num_epochs}")
         print(f"  Steps/epoch:    {steps_per_epoch:,}")
         print(f"  Total steps:    {effective_steps:,}")
         print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
@@ -1904,7 +1645,7 @@ def run_single_experiment(
     print(f"  Num workers:    {config.get('num_workers', 0)}")
     print(f"\nFree Energy Weights:")
     print(f"  α (self-consistency): {train_config.alpha}")
-    print(f"  β (belief align):     {train_config.beta}")
+    print(f"  β (belief align):     {train_config.lambda_beta}")
     print(f"  γ (model align):      {train_config.lambda_gamma}")
 
     # P-FLOW configuration
@@ -2154,7 +1895,6 @@ def run_single_experiment(
             train_loader=train_loader,
             val_loader=val_loader,
             config=train_config,
-            device=device,
             publication_metrics=pub_metrics,
             tokenizer=tokenizer,  # For decoding in interpretability outputs
         )
@@ -2169,9 +1909,9 @@ def run_single_experiment(
         print(f"Device: {device}")
         print(f"FFN mode: {ffn_mode}")
         # Show epochs-based info if set
-        if train_config.epochs is not None and train_config.epochs > 0:
-            eff_steps = train_config.epochs * steps_per_epoch
-            print(f"Epochs: {train_config.epochs} ({steps_per_epoch:,} steps/epoch = {eff_steps:,} total)")
+        if train_config.num_epochs is not None and train_config.num_epochs > 0:
+            eff_steps = train_config.num_epochs * steps_per_epoch
+            print(f"Epochs: {train_config.num_epochs} ({steps_per_epoch:,} steps/epoch = {eff_steps:,} total)")
         else:
             print(f"Total steps: {train_config.max_steps:,}")
         print("\nNOTE: First few batches may be slow (JIT compilation)")
@@ -2188,19 +1928,20 @@ def run_single_experiment(
             final_metrics = trainer.validate()
 
             print(f"\nFinal Validation Metrics:")
-            print(f"  Loss:       {final_metrics['loss']:.4f}")
-            print(f"  Perplexity: {final_metrics['perplexity']:.2f}")
+            print(f"  Loss:       {final_metrics['val/loss']:.4f}")
+            print(f"  Perplexity: {final_metrics['val/perplexity']:.2f}")
 
             # vs random baseline
             random_ppl = actual_vocab_size
-            improvement = random_ppl / final_metrics['perplexity']
+            improvement = random_ppl / final_metrics['val/perplexity']
             print(f"\nValidation improvement over random:")
             print(f"  Random:     {random_ppl:.0f}")
-            print(f"  Model:      {final_metrics['perplexity']:.2f}")
+            print(f"  Model:      {final_metrics['val/perplexity']:.2f}")
             print(f"  Factor:     {improvement:.1f}x better!")
 
             # Save final checkpoint
-            final_ckpt = trainer.save_checkpoint(is_best=True)
+            trainer.save_checkpoint('best_model.pt')
+            final_ckpt = trainer.config.checkpoint_dir / 'best_model.pt'
             print(f"\n✓ Saved: {final_ckpt}")
 
             # Run test set evaluation if test loader is available
@@ -2218,15 +1959,15 @@ def run_single_experiment(
             result = {
                 'ffn_mode': ffn_mode,
                 'pure_fep': False,
-                'final_loss': final_metrics['loss'],
-                'final_ppl': final_metrics['perplexity'],
+                'final_loss': final_metrics['val/loss'],
+                'final_ppl': final_metrics['val/perplexity'],
                 'random_ppl': random_ppl,
                 'improvement': improvement,
                 'total_params': total_params,
                 'vocab_size': actual_vocab_size,
                 'checkpoint': str(final_ckpt),
                 # Training duration stats
-                'total_steps': train_config.max_steps if train_config.epochs is None else train_config.epochs * steps_per_epoch,
+                'total_steps': train_config.max_steps if train_config.num_epochs is None else train_config.num_epochs * steps_per_epoch,
                 'tokens_seen': total_tokens,
                 'dataset_tokens': dataset_tokens,
                 'dataset_coverage': total_tokens / dataset_tokens if dataset_tokens else None,
@@ -2247,7 +1988,8 @@ def run_single_experiment(
             print("\n\n" + "="*70)
             print("TRAINING INTERRUPTED")
             print("="*70)
-            ckpt = trainer.save_checkpoint(is_best=False)
+            trainer.save_checkpoint('interrupted_checkpoint.pt')
+            ckpt = trainer.config.checkpoint_dir / 'interrupted_checkpoint.pt'
             print(f"✓ Saved: {ckpt}")
             return None
 

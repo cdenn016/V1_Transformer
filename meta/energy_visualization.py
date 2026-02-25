@@ -540,7 +540,7 @@ class EnergyVisualizer:
                     saved_files[f'energy_landscape_page{i+1}'] = str(path)
                     plt.close(fig)
                 print(f"  ✓ Saved energy landscape ({len(figures)} pages) to {output_path}/energy_landscape_page*.png")
-        except Exception as e:
+        except (ValueError, TypeError, OSError) as e:
             print(f"  ✗ Failed to generate energy landscape: {e}")
 
         try:
@@ -550,7 +550,7 @@ class EnergyVisualizer:
             saved_files['energy_flow'] = str(path)
             plt.close(fig)
             print(f"  ✓ Saved energy flow to {path}")
-        except Exception as e:
+        except (ValueError, TypeError, OSError) as e:
             print(f"  ✗ Failed to generate energy flow: {e}")
 
         try:
@@ -560,7 +560,7 @@ class EnergyVisualizer:
             saved_files['prior_evolution'] = str(path)
             plt.close(fig)
             print(f"  ✓ Saved prior evolution to {path}")
-        except Exception as e:
+        except (ValueError, TypeError, OSError) as e:
             print(f"  ✗ Failed to generate prior evolution: {e}")
 
         try:
@@ -570,7 +570,7 @@ class EnergyVisualizer:
             saved_files['non_equilibrium'] = str(path)
             plt.close(fig)
             print(f"  ✓ Saved non-equilibrium indicators to {path}")
-        except Exception as e:
+        except (ValueError, TypeError, OSError) as e:
             print(f"  ✗ Failed to generate non-equilibrium indicators: {e}")
 
         try:
@@ -580,7 +580,7 @@ class EnergyVisualizer:
             saved_files['energy_per_agent'] = str(path)
             plt.close(fig)
             print(f"  ✓ Saved energy per agent to {path}")
-        except Exception as e:
+        except (ValueError, TypeError, OSError) as e:
             print(f"  ✗ Failed to generate energy per agent: {e}")
 
         print(f"\nEnergy analysis complete! Generated {len(saved_files)} outputs in {output_dir}")

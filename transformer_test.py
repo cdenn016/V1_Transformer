@@ -1495,7 +1495,7 @@ def run_multi_model_validation(
             tok = AutoTokenizer.from_pretrained(mname)
             mdl = AutoModel.from_pretrained(mname, output_hidden_states=True)
             mdl.eval().to(device)
-        except Exception as e:
+        except (ImportError, OSError, ValueError, RuntimeError) as e:
             print(f"    SKIP ({e})")
             continue
 
@@ -1525,7 +1525,7 @@ def run_multi_model_validation(
             for layer_idx in range(n_layers):
                 try:
                     Q, K, V, nh, hd = _get_qkv_generic(mdl, hs, layer_idx, mname)
-                except Exception:
+                except (ValueError, RuntimeError, IndexError, KeyError):
                     continue
                 for head_idx in range(nh):
                     Qh = Q[:, head_idx, :]

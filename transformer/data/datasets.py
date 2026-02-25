@@ -194,7 +194,7 @@ def _download_file(url: str, dest_path: Path) -> bool:
             with open(dest_path, 'wb') as f:
                 shutil.copyfileobj(response, f)
         return dest_path.exists() and dest_path.stat().st_size > 0
-    except Exception as e:
+    except (OSError, urllib.error.URLError, TimeoutError) as e:
         print(f"    Download failed: {e}")
         return False
 
@@ -1552,7 +1552,7 @@ if __name__ == '__main__':
             num_workers=0,
         )
         print(f"    ✓ Dataloaders created")
-    except Exception as e:
+    except (ValueError, RuntimeError, OSError) as e:
         print(f"    ❌ Error creating dataloaders: {e}")
         raise
 
