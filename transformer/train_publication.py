@@ -1391,7 +1391,7 @@ class PublicationTrainer(FastTrainer):
                     f"Step {step+1}/{total_steps} | "
                     f"Loss: {metrics['train_loss_total']:.4f} | "
                     f"CE: {metrics['train_loss_ce']:.4f} | "
-                    f"β: {metrics['train_loss_belief_align']:.4f} | "
+                    f"KL: {metrics['kl_mean']:.4f} | "
                     f"PPL: {metrics['train_ppl']:.1f}"
                 )
 
