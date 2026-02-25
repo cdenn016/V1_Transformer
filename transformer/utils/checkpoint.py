@@ -209,7 +209,7 @@ def get_tokenizer(config: Dict[str, Any], dataset_name: Optional[str] = None):
         )
         print(f"Using WikiTextDataset tokenizer")
         return dataset
-    except Exception as e:
+    except (ImportError, OSError, ValueError, RuntimeError) as e:
         print(f"Warning: Could not load dataset tokenizer: {e}")
 
     print("Warning: No tokenizer available. Install tiktoken: pip install tiktoken")

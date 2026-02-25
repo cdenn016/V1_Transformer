@@ -1144,7 +1144,7 @@ def _get_tokenizer(model_name: str):
         test = tok.encode("test")
         if len(test) > 0:
             return tok
-    except Exception:
+    except (ImportError, OSError, ValueError):
         pass
 
     try:
@@ -1153,7 +1153,7 @@ def _get_tokenizer(model_name: str):
         test = tok.encode("test")
         if len(test) > 0:
             return tok
-    except Exception:
+    except (ImportError, OSError, ValueError):
         pass
 
     import warnings

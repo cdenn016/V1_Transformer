@@ -138,11 +138,11 @@ def find_phrase_positions(tokenizer, full_text, phrase):
     candidates = []
     try:
         candidates.append(tokenizer.encode(' ' + phrase))   # mid-sentence (Ġ prefix)
-    except Exception:
+    except (KeyError, TypeError, UnicodeDecodeError, ValueError):
         pass
     try:
         candidates.append(tokenizer.encode(phrase))          # start-of-text
-    except Exception:
+    except (KeyError, TypeError, UnicodeDecodeError, ValueError):
         pass
     # Also try with common preceding contexts
     for prefix in ['. ', ', ', '  ']:
@@ -184,7 +184,7 @@ def find_phrase_positions(tokenizer, full_text, phrase):
             current_char = tok_char_end
         if positions:
             return positions
-    except Exception:
+    except (KeyError, TypeError, UnicodeDecodeError, ValueError):
         pass
 
     return None

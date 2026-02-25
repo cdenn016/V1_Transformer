@@ -946,7 +946,7 @@ class PublicationTrainer(Trainer):
                         try:
                             decoded = self.tokenizer.decode(input_ids[0].tolist(), skip_special_tokens=True)
                             seq_info += f"\nText: {decoded[:100]}..."
-                        except Exception:
+                        except (KeyError, IndexError, TypeError, UnicodeDecodeError):
                             pass
 
                     # Save directory
@@ -1084,7 +1084,7 @@ class PublicationTrainer(Trainer):
                     step=0,
                     verbose=True,
                 )
-            except Exception as e:
+            except (ValueError, RuntimeError, TypeError, OSError) as e:
                 print(f"[WARN] Initial semantic analysis failed: {e}")
 
         for step in pbar:
@@ -1241,7 +1241,7 @@ class PublicationTrainer(Trainer):
                     # Use temperature 0.9 and lower top_k for more diversity
                     sample = self.sample_text(prompt=prompt, max_new_tokens=30, temperature=0.9, top_k=30)
                     print(f"    Sample: {sample[:100]}...")
-                except Exception as e:
+                except (RuntimeError, ValueError, IndexError) as e:
                     import traceback
                     print(f"    Sample generation failed: {e}")
                     traceback.print_exc()
@@ -1279,7 +1279,7 @@ class PublicationTrainer(Trainer):
                         step=step + 1,
                         verbose=False,  # Minimal output during training
                     )
-                except Exception as e:
+                except (ValueError, RuntimeError, TypeError, OSError) as e:
                     print(f"[WARN] Semantic analysis failed at step {step+1}: {e}")
 
         # Save final metrics
@@ -1297,7 +1297,7 @@ class PublicationTrainer(Trainer):
                     model=self.model,
                     verbose=True,
                 )
-            except Exception as e:
+            except (ValueError, RuntimeError, TypeError, OSError) as e:
                 print(f"[WARN] Final semantic analysis failed: {e}")
 
             # Generate interpretability outputs using a sample batch from validation
@@ -1309,7 +1309,7 @@ class PublicationTrainer(Trainer):
                     tokenizer=self.tokenizer,  # Dataset with .decode() method
                     device=self.device,
                 )
-            except Exception as e:
+            except (ValueError, RuntimeError, TypeError, OSError) as e:
                 import traceback
                 print(f"[WARNING] Could not generate interpretability outputs: {e}")
                 print(f"  Traceback: {traceback.format_exc()}")

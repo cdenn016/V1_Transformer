@@ -359,7 +359,7 @@ def main():
                 device=args.device,
             )
             all_results[str(path)] = results
-        except Exception as e:
+        except (ValueError, RuntimeError, OSError, KeyError) as e:
             print(f"❌ Error evaluating {checkpoint_path}: {e}")
             import traceback
             traceback.print_exc()

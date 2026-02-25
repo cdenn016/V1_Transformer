@@ -396,7 +396,7 @@ def TUFF_sanitize_sigma(
     # --- eigen projection (batched) ---
     try:
         w, V = np.linalg.eigh(S)
-    except Exception as e:
+    except np.linalg.LinAlgError as e:
         raise FloatingPointError(f"[sanitize_sigma:{caller}] eigh failed: {e}")
 
     # floor eigenvalues

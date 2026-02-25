@@ -124,7 +124,7 @@ def compute_rg_metrics_from_attention(
 
         return rg_metrics
 
-    except Exception as e:
+    except (ValueError, RuntimeError, FloatingPointError) as e:
         # Return empty metrics on error (don't crash training)
         print(f"[WARNING] RG metrics computation failed: {e}")
         return {}
@@ -1151,7 +1151,7 @@ class Trainer:
                         )
                     dynamic_metrics = compute_dynamic_rg_metrics(rg_info, self.step)
                     metrics.update(dynamic_metrics)
-                except Exception as e:
+                except (ValueError, RuntimeError, FloatingPointError) as e:
                     print(f"[WARNING] Dynamic RG tracking failed: {e}")
 
         # Add learning rate to metrics

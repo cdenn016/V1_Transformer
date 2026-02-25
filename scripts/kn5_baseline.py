@@ -80,7 +80,7 @@ def load_wikitext103_splits():
             splits[name] = "\n\n".join(texts)
             print(f"  {name}: {len(splits[name]):,} chars")
         return splits
-    except Exception as e:
+    except (ImportError, OSError, ValueError) as e:
         print(f"  HuggingFace datasets not available ({e}), trying fallback...")
 
     # Fallback: project's data pipeline
