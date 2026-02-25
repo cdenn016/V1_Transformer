@@ -1500,6 +1500,8 @@ def _compute_kl_matrix_block_diagonal(
             'bijkl,bjlm,bijmn->bijkn',
             Omega_block, sigma_block, Omega_block.transpose(-1, -2)
         )
+        # Symmetrize to fix numerical asymmetry from triple einsum
+        sigma_block_transported = 0.5 * (sigma_block_transported + sigma_block_transported.transpose(-1, -2))
 
         del Omega_block
 
@@ -1516,41 +1518,50 @@ def _compute_kl_matrix_block_diagonal(
         sigma_block_i_reg = sigma_block_i + eps * I_block
         sigma_block_transported_reg = sigma_block_transported + eps * I_block
 
-        try:
-            # Cholesky decompositions
-            L_p = torch.linalg.cholesky(sigma_block_transported_reg)
-            L_q = torch.linalg.cholesky(sigma_block_i_reg)
+        # Try Cholesky with escalating jitter before falling back to diagonal approx
+        cholesky_succeeded = False
+        for jitter in [0.0, 1e-6, 1e-5, 1e-4, 1e-3]:
+            try:
+                jittered_transported = sigma_block_transported_reg + jitter * I_block
+                jittered_i = sigma_block_i_reg + jitter * I_block
 
-            # Trace term: tr(Σ_p⁻¹ Σ_q)
-            Y = torch.linalg.solve_triangular(L_p, sigma_block_i_reg, upper=False)
-            Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
-            trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
+                L_p = torch.linalg.cholesky(jittered_transported)
+                L_q = torch.linalg.cholesky(jittered_i)
 
-            # Mahalanobis term
-            delta_mu = mu_block_transported - mu_block_i
-            v = torch.linalg.solve_triangular(
-                L_p, delta_mu.unsqueeze(-1), upper=False
-            ).squeeze(-1)
-            mahal_term = torch.sum(v ** 2, dim=-1)
+                # Trace term: tr(Σ_p⁻¹ Σ_q)
+                Y = torch.linalg.solve_triangular(L_p, jittered_i, upper=False)
+                Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
+                trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
 
-            # Log determinant terms
-            logdet_p = 2.0 * torch.sum(
-                torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
-            )
-            logdet_q = 2.0 * torch.sum(
-                torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
-            )
+                # Mahalanobis term
+                delta_mu = mu_block_transported - mu_block_i
+                v = torch.linalg.solve_triangular(
+                    L_p, delta_mu.unsqueeze(-1), upper=False
+                ).squeeze(-1)
+                mahal_term = torch.sum(v ** 2, dim=-1)
 
-            # KL for this block
-            kl_block = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
-            # Clamp KL to [0, 100] for numerical stability
-            kl_block = torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
+                # Log determinant terms
+                logdet_p = 2.0 * torch.sum(
+                    torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+                )
+                logdet_q = 2.0 * torch.sum(
+                    torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
+                )
 
-            # ACCUMULATE to total KL (additive decomposition)
-            # Use non-in-place addition to preserve autograd graph
-            kl_total = kl_total + kl_block
+                # KL for this block
+                kl_block = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
+                # Clamp KL to [0, 100] for numerical stability
+                kl_block = torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
 
-        except RuntimeError:
+                # ACCUMULATE to total KL (additive decomposition)
+                # Use non-in-place addition to preserve autograd graph
+                kl_total = kl_total + kl_block
+                cholesky_succeeded = True
+                break
+            except RuntimeError:
+                continue
+
+        if not cholesky_succeeded:
             # Cholesky failed (ill-conditioned covariance) - use diagonal KL approximation.
             # CRITICAL: The fallback must depend on phi through the transported
             # quantities to preserve the autograd graph. A constant fallback would
@@ -1677,6 +1688,8 @@ def _compute_kl_matrix_block_diagonal_chunked(
                     'bijkl,bjlm,bijmn->bijkn',
                     Omega_block, sigma_j, Omega_block.transpose(-1, -2)
                 )
+                # Symmetrize to fix numerical asymmetry from triple einsum
+                sigma_transported = 0.5 * (sigma_transported + sigma_transported.transpose(-1, -2))
 
                 del Omega_block
 
@@ -1688,35 +1701,45 @@ def _compute_kl_matrix_block_diagonal_chunked(
                 sigma_i_reg = sigma_i_exp + eps * I_d
                 sigma_transported_reg = sigma_transported + eps * I_d
 
-                try:
-                    L_p = torch.linalg.cholesky(sigma_transported_reg)
-                    L_q = torch.linalg.cholesky(sigma_i_reg)
+                # Try Cholesky with escalating jitter before falling back
+                cholesky_succeeded = False
+                for jitter in [0.0, 1e-6, 1e-5, 1e-4, 1e-3]:
+                    try:
+                        jittered_transported = sigma_transported_reg + jitter * I_d
+                        jittered_i = sigma_i_reg + jitter * I_d
 
-                    # Trace term
-                    Y = torch.linalg.solve_triangular(L_p, sigma_i_reg, upper=False)
-                    Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
-                    trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
+                        L_p = torch.linalg.cholesky(jittered_transported)
+                        L_q = torch.linalg.cholesky(jittered_i)
 
-                    # Mahalanobis term
-                    delta_mu = mu_transported - mu_i_exp
-                    v = torch.linalg.solve_triangular(
-                        L_p, delta_mu.unsqueeze(-1), upper=False
-                    ).squeeze(-1)
-                    mahal_term = torch.sum(v ** 2, dim=-1)
+                        # Trace term
+                        Y = torch.linalg.solve_triangular(L_p, jittered_i, upper=False)
+                        Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
+                        trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
 
-                    # Log det terms
-                    logdet_p = 2.0 * torch.sum(
-                        torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
-                    )
-                    logdet_q = 2.0 * torch.sum(
-                        torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
-                    )
+                        # Mahalanobis term
+                        delta_mu = mu_transported - mu_i_exp
+                        v = torch.linalg.solve_triangular(
+                            L_p, delta_mu.unsqueeze(-1), upper=False
+                        ).squeeze(-1)
+                        mahal_term = torch.sum(v ** 2, dim=-1)
 
-                    # Accumulate block KL (non-in-place to preserve autograd graph)
-                    kl_block = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
-                    kl_chunk = kl_chunk + torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
+                        # Log det terms
+                        logdet_p = 2.0 * torch.sum(
+                            torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+                        )
+                        logdet_q = 2.0 * torch.sum(
+                            torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
+                        )
 
-                except RuntimeError:
+                        # Accumulate block KL (non-in-place to preserve autograd graph)
+                        kl_block = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
+                        kl_chunk = kl_chunk + torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
+                        cholesky_succeeded = True
+                        break
+                    except RuntimeError:
+                        continue
+
+                if not cholesky_succeeded:
                     # Cholesky failed - use diagonal KL approximation.
                     # Must depend on phi through transported quantities to
                     # preserve the autograd graph (a constant would break
