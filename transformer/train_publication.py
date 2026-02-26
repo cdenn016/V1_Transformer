@@ -1051,7 +1051,7 @@ class PublicationTrainer(Trainer):
         train_iterator = iter(self.train_loader)
 
         # Calculate total steps: epochs takes precedence over max_steps
-        epochs = getattr(self.config, 'epochs', None)
+        epochs = getattr(self.config, 'num_epochs', None) or getattr(self.config, 'epochs', None)
         if epochs is not None and epochs > 0:
             steps_per_epoch = len(self.train_loader)
             total_steps = epochs * steps_per_epoch
@@ -1567,6 +1567,7 @@ def run_single_experiment(
         use_param_groups=True,
 
         max_steps=config['max_steps'],
+        num_epochs=config.get('epochs', None),
         warmup_steps=config['warmup_steps'],
 
         # Learning rates
@@ -1579,6 +1580,8 @@ def run_single_experiment(
         ffn_lr=config['ffn_lr'],
         output_lr=config['ffn_lr'],
 
+        # Optimizer hyperparameters — match FastTrainingConfig defaults
+        beta2=config.get('beta2', 0.999),
         weight_decay=config['weight_decay'],
         grad_clip=config['grad_clip'],
         phi_grad_clip=config.get('phi_grad_clip', 0.1),
@@ -1586,6 +1589,7 @@ def run_single_experiment(
         alpha=config['alpha'],
         lambda_beta=config['beta'],
         lambda_gamma=config['lambda_gamma'],
+        kappa_gamma=config.get('kappa_gamma', 1.0),
 
         log_every=config['log_interval'],
         log_interval=config['log_interval'],
