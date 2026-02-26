@@ -243,22 +243,13 @@ def _compute_vfe_gradients_block_diagonal(
     # =================================================================
     # 1. Self-Coupling Gradient (block-wise but simpler)
     # =================================================================
-    # Use 1e-4 floor (not eps=1e-6) to prevent singularity after many
-    # training steps when σ entries shrink near zero
-    _reg = max(eps, 1e-4)
-    sigma_p_reg = sigma_p + _reg * torch.eye(K, device=device, dtype=dtype)
-    try:
-        sigma_p_inv = torch.linalg.inv(sigma_p_reg)
-    except (torch.linalg.LinAlgError, RuntimeError):
-        sigma_p_inv = torch.linalg.pinv(sigma_p_reg)
+    sigma_p_reg = sigma_p + eps * torch.eye(K, device=device, dtype=dtype)
+    sigma_p_inv = torch.linalg.inv(sigma_p_reg)
     delta_mu = mu_q - mu_p
     grad_mu_self = alpha * torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
 
-    sigma_q_reg = sigma_q + _reg * torch.eye(K, device=device, dtype=dtype)
-    try:
-        sigma_q_inv = torch.linalg.inv(sigma_q_reg)
-    except (torch.linalg.LinAlgError, RuntimeError):
-        sigma_q_inv = torch.linalg.pinv(sigma_q_reg)
+    sigma_q_reg = sigma_q + eps * torch.eye(K, device=device, dtype=dtype)
+    sigma_q_inv = torch.linalg.inv(sigma_q_reg)
     # For full covariance (4D), alpha (B,N,1) needs extra dim to broadcast with (B,N,K,K)
     alpha_4d = alpha.unsqueeze(-1) if isinstance(alpha, torch.Tensor) else alpha
     grad_sigma_self = alpha_4d * 0.5 * (sigma_p_inv - sigma_q_inv)
@@ -332,11 +323,8 @@ def _compute_vfe_gradients_block_diagonal(
 
             # Regularize and invert
             I_d = torch.eye(d, device=device, dtype=dtype)
-            sigma_j_reg = sigma_j_transported + max(eps, 1e-4) * I_d
-            try:
-                sigma_j_inv = torch.linalg.inv(sigma_j_reg)  # (B, C, N, d, d)
-            except (torch.linalg.LinAlgError, RuntimeError):
-                sigma_j_inv = torch.linalg.pinv(sigma_j_reg)
+            sigma_j_reg = sigma_j_transported + eps * I_d
+            sigma_j_inv = torch.linalg.inv(sigma_j_reg)  # (B, C, N, d, d)
 
             # Delta mu for this block (query chunk) - contiguous to avoid view issues
             mu_block_i = mu_block[:, i_start:i_end].contiguous()  # (B, C, d)
@@ -393,8 +381,8 @@ def _compute_vfe_gradients_block_diagonal(
     grad_mu_direct = lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
 
     # Softmax coupling term
-    # Scale kappa by √K to match attention temperature τ = √K
-    kappa_scaled = kappa * math.sqrt(max(K, 1))
+    # Scale kappa by 2√K to match attention temperature τ = 2√K
+    kappa_scaled = kappa * 2.0 * math.sqrt(max(K, 1))
     avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
     grad_deviation = grad_kl_per_pair_full - avg_grad.unsqueeze(2)
     d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
@@ -469,8 +457,8 @@ def _compute_vfe_gradients_chunked(
     grad_mu_softmax = torch.zeros_like(mu_q)
     grad_sigma_align = torch.zeros_like(sigma_q)
 
-    # Scale kappa by √K to match attention temperature τ = √K
-    kappa_scaled = kappa * math.sqrt(max(K, 1))
+    # Scale kappa by 2√K to match attention temperature τ = 2√K
+    kappa_scaled = kappa * 2.0 * math.sqrt(max(K, 1))
 
     # Two-pass approach for correct softmax coupling gradient:
     # Pass 1: Accumulate avg_grad (= Σ_j β_ij ∂KL_ij/∂μ_i) and per-chunk KL/grad_kl
@@ -705,24 +693,15 @@ def compute_vfe_gradients_gpu(
     else:
         # Full covariance - use matrix operations
         # ∂KL/∂μ_q = Σ_p^{-1} (μ_q - μ_p)
-        # Use 1e-4 floor (not eps=1e-6) to prevent singularity after many
-        # training steps when σ entries shrink near zero
-        _reg = max(eps, 1e-4)
-        sigma_p_reg = sigma_p + _reg * torch.eye(K, device=device, dtype=dtype)
-        try:
-            sigma_p_inv = torch.linalg.inv(sigma_p_reg)  # (B, N, K, K)
-        except (torch.linalg.LinAlgError, RuntimeError):
-            sigma_p_inv = torch.linalg.pinv(sigma_p_reg)
+        sigma_p_reg = sigma_p + eps * torch.eye(K, device=device, dtype=dtype)
+        sigma_p_inv = torch.linalg.inv(sigma_p_reg)  # (B, N, K, K)
 
         delta_mu = mu_q - mu_p  # (B, N, K)
         grad_mu_self = alpha * torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
 
         # ∂KL/∂Σ_q = 0.5 * (Σ_p^{-1} - Σ_q^{-1})
-        sigma_q_reg = sigma_q + _reg * torch.eye(K, device=device, dtype=dtype)
-        try:
-            sigma_q_inv = torch.linalg.inv(sigma_q_reg)
-        except (torch.linalg.LinAlgError, RuntimeError):
-            sigma_q_inv = torch.linalg.pinv(sigma_q_reg)
+        sigma_q_reg = sigma_q + eps * torch.eye(K, device=device, dtype=dtype)
+        sigma_q_inv = torch.linalg.inv(sigma_q_reg)
         # For full covariance (4D), alpha (B,N,1) needs extra dim to broadcast with (B,N,K,K)
         alpha_4d = alpha.unsqueeze(-1) if isinstance(alpha, torch.Tensor) else alpha
         grad_sigma_self = alpha_4d * 0.5 * (sigma_p_inv - sigma_q_inv)
@@ -848,10 +827,10 @@ def compute_vfe_gradients_gpu(
         grad_deviation = grad_kl_per_pair - avg_grad.unsqueeze(2)  # (B, N, N, K)
 
         # Softmax coupling gradient: ∂β_ij/∂μ_i = β_ij · grad_deviation / κ
-        # Scale kappa by √K to match attention temperature scaling (τ = √K)
+        # Scale kappa by 2√K to match attention temperature scaling (τ = 2√K)
         # The factor of 2 accounts for the ½ prefactor in KL divergence:
         #   KL = ½(trace + mahal - K + logdet), so magnitudes are O(K/2), not O(K)
-        kappa_scaled = kappa * math.sqrt(max(K, 1))
+        kappa_scaled = kappa * 2.0 * math.sqrt(max(K, 1))
         d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled  # (B, N, N, K)
 
         # Weight by KL values and sum: Σ_j KL_ij · ∂β_ij/∂μ_i
@@ -970,9 +949,9 @@ def compute_vfe_gradients_gpu(
         grad_mu_direct = lambda_belief * avg_grad
 
         # Softmax coupling term
-        # Scale kappa by √K to match attention temperature scaling (τ = √K)
+        # Scale kappa by 2√K to match attention temperature scaling (τ = 2√K)
         # The factor of 2 accounts for the ½ prefactor in KL divergence
-        kappa_scaled = kappa * math.sqrt(max(K, 1))
+        kappa_scaled = kappa * 2.0 * math.sqrt(max(K, 1))
         grad_deviation = grad_kl_per_pair - avg_grad.unsqueeze(2)
         d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
         grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
@@ -1732,11 +1711,8 @@ class VariationalFFNDynamic(nn.Module):
         else:
             # Full covariance: δμᵀ Σ_p⁻¹ δμ
             K = mu_q.shape[-1]
-            sigma_p_reg = sigma_p + max(eps, 1e-4) * torch.eye(K, device=mu_q.device, dtype=mu_q.dtype)
-            try:
-                sigma_p_inv = torch.linalg.inv(sigma_p_reg)  # (B, N, K, K)
-            except (torch.linalg.LinAlgError, RuntimeError):
-                sigma_p_inv = torch.linalg.pinv(sigma_p_reg)
+            sigma_p_reg = sigma_p + eps * torch.eye(K, device=mu_q.device, dtype=mu_q.dtype)
+            sigma_p_inv = torch.linalg.inv(sigma_p_reg)  # (B, N, K, K)
             mahal_sq = torch.einsum('bni,bnij,bnj->bn', delta_mu, sigma_p_inv, delta_mu)
             mahal_sq = mahal_sq.unsqueeze(-1)  # (B, N, 1)
 
