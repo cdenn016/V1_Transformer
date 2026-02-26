@@ -76,7 +76,7 @@ def get_frequent_tokens(n_tokens=100, dataset='wikitext-2'):
 
         return token_ids, decoded, frequencies, data
 
-    except (ImportError, OSError, ValueError, RuntimeError) as e:
+    except Exception as e:
         print(f"Error loading dataset: {e}")
         print("Falling back to common token IDs...")
 

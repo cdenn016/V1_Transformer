@@ -839,7 +839,7 @@ def create_analysis_report(analyzer: MetaAgentAnalyzer,
         saved_files['hierarchy_tree'] = str(path)
         plt.close(fig)
         print(f"  ✓ Saved hierarchy tree to {path}")
-    except (ValueError, TypeError, OSError) as e:
+    except Exception as e:
         print(f"  ✗ Failed to generate hierarchy tree: {e}")
 
     try:
@@ -850,7 +850,7 @@ def create_analysis_report(analyzer: MetaAgentAnalyzer,
         saved_files['consensus_matrix'] = str(path)
         plt.close(fig)
         print(f"  ✓ Saved consensus matrix to {path}")
-    except (ValueError, TypeError, OSError) as e:
+    except Exception as e:
         print(f"  ✗ Failed to generate consensus matrix: {e}")
 
     try:
@@ -861,7 +861,7 @@ def create_analysis_report(analyzer: MetaAgentAnalyzer,
         saved_files['scale_occupancy'] = str(path)
         plt.close(fig)
         print(f"  ✓ Saved scale occupancy to {path}")
-    except (ValueError, TypeError, OSError) as e:
+    except Exception as e:
         print(f"  ✗ Failed to generate scale occupancy: {e}")
 
     try:
@@ -872,7 +872,7 @@ def create_analysis_report(analyzer: MetaAgentAnalyzer,
         saved_files['condensation_timeline'] = str(path)
         plt.close(fig)
         print(f"  ✓ Saved condensation timeline to {path}")
-    except (ValueError, TypeError, OSError) as e:
+    except Exception as e:
         print(f"  ✗ Failed to generate condensation timeline: {e}")
 
     try:
@@ -883,7 +883,7 @@ def create_analysis_report(analyzer: MetaAgentAnalyzer,
         saved_files['coherence_trajectories'] = str(path)
         plt.close(fig)
         print(f"  ✓ Saved coherence trajectories to {path}")
-    except (ValueError, TypeError, OSError) as e:
+    except Exception as e:
         print(f"  ✗ Failed to generate coherence trajectories: {e}")
 
     try:
@@ -894,7 +894,7 @@ def create_analysis_report(analyzer: MetaAgentAnalyzer,
         saved_files['population_flows'] = str(path)
         plt.close(fig)
         print(f"  ✓ Saved population flows to {path}")
-    except (ValueError, TypeError, OSError) as e:
+    except Exception as e:
         print(f"  ✗ Failed to generate population flows: {e}")
 
     # Export data
@@ -903,7 +903,7 @@ def create_analysis_report(analyzer: MetaAgentAnalyzer,
         analyzer.export_to_json(str(json_path))
         saved_files['data'] = str(json_path)
         print(f"  ✓ Exported data to {json_path}")
-    except (OSError, ValueError, TypeError) as e:
+    except Exception as e:
         print(f"  ✗ Failed to export data: {e}")
 
     print(f"\nAnalysis complete! Generated {len(saved_files)} outputs in {output_dir}")

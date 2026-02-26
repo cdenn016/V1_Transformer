@@ -89,7 +89,7 @@ def categorize_token(tid: int) -> str:
         if s.strip() in {'the', 'a', 'an', 'is', 'are', 'was', 'of', 'to', 'in', 'for', 'and', 'or'}:
             return 'function'
         return 'content'
-    except (KeyError, IndexError, TypeError, UnicodeDecodeError):
+    except Exception:
         return 'other'
 
 
@@ -172,7 +172,7 @@ def analyze_token_classes(
                     digit_ids.append(tid)
                 elif not s.isalnum() and not s.isspace():
                     punct_ids.append(tid)
-        except (KeyError, IndexError, TypeError, UnicodeDecodeError):
+        except Exception:
             pass
 
     # Compute intra-class distances (letter-letter)
@@ -278,9 +278,7 @@ def compute_clustering_metrics(
         from sklearn.metrics import silhouette_score
         sil = silhouette_score(X, labels, metric='euclidean', sample_size=min(len(X), 2000))
         results[f'{embed_name}_silhouette_score'] = float(sil)
-    except ImportError as e:
-        results[f'{embed_name}_silhouette_score'] = f'error: {e}'
-    except ValueError as e:
+    except Exception as e:
         results[f'{embed_name}_silhouette_score'] = f'error: {e}'
 
     # --- Calinski-Harabasz Index ---
@@ -288,9 +286,7 @@ def compute_clustering_metrics(
         from sklearn.metrics import calinski_harabasz_score
         ch = calinski_harabasz_score(X, labels)
         results[f'{embed_name}_calinski_harabasz'] = float(ch)
-    except ImportError as e:
-        results[f'{embed_name}_calinski_harabasz'] = f'error: {e}'
-    except ValueError as e:
+    except Exception as e:
         results[f'{embed_name}_calinski_harabasz'] = f'error: {e}'
 
     # --- Inter/Intra class distance ratio (full space, all tokens) ---
@@ -322,7 +318,7 @@ def compute_clustering_metrics(
             results[f'{embed_name}_mean_intra_dist'] = float(mean_intra)
             results[f'{embed_name}_mean_inter_dist'] = float(mean_inter)
             results[f'{embed_name}_inter_intra_ratio'] = float(mean_inter / mean_intra) if mean_intra > 0 else float('inf')
-    except (ValueError, np.linalg.LinAlgError) as e:
+    except Exception as e:
         results[f'{embed_name}_inter_intra_ratio'] = f'error: {e}'
 
     # --- Per-dimension ANOVA F-test ---
@@ -351,7 +347,7 @@ def compute_clustering_metrics(
             results[f'{embed_name}_anova_n_dims_tested'] = len(f_stats)
     except ImportError:
         results[f'{embed_name}_anova_mean_f'] = 'scipy not available'
-    except (ValueError, FloatingPointError) as e:
+    except Exception as e:
         results[f'{embed_name}_anova_mean_f'] = f'error: {e}'
 
     # --- PCA variance profile ---
@@ -369,9 +365,7 @@ def compute_clustering_metrics(
             else:
                 results[f'{embed_name}_pca_n_components_{int(threshold*100)}pct'] = f'>{n_components}'
         results[f'{embed_name}_pca_total_components'] = embed_dim
-    except ImportError as e:
-        results[f'{embed_name}_pca_variance_profile'] = f'error: {e}'
-    except (ValueError, np.linalg.LinAlgError) as e:
+    except Exception as e:
         results[f'{embed_name}_pca_variance_profile'] = f'error: {e}'
 
     return results
@@ -582,7 +576,7 @@ def analyze_gauge_semantics(
                 )
                 plt.close(fig)
                 results['phi_plot_saved'] = True
-            except (ValueError, TypeError, OSError) as e:
+            except Exception as e:
                 if verbose:
                     print(f"  [WARN] Could not generate phi plot: {e}")
                 results['phi_plot_saved'] = False
@@ -590,7 +584,7 @@ def analyze_gauge_semantics(
             try:
                 csv_path = save_embedding_csv(phi_embed, embed_type='phi', step=step, save_dir=save_dir)
                 results['phi_csv_saved'] = str(csv_path)
-            except (OSError, ValueError) as e:
+            except Exception as e:
                 if verbose:
                     print(f"  [WARN] Could not save phi CSV: {e}")
 
@@ -605,7 +599,7 @@ def analyze_gauge_semantics(
                 )
                 plt.close(fig)
                 results['mu_plot_saved'] = True
-            except (ValueError, TypeError, OSError) as e:
+            except Exception as e:
                 if verbose:
                     print(f"  [WARN] Could not generate mu plot: {e}")
                 results['mu_plot_saved'] = False
@@ -613,7 +607,7 @@ def analyze_gauge_semantics(
             try:
                 csv_path = save_embedding_csv(mu_embed, embed_type='mu', step=step, save_dir=save_dir)
                 results['mu_csv_saved'] = str(csv_path)
-            except (OSError, ValueError) as e:
+            except Exception as e:
                 if verbose:
                     print(f"  [WARN] Could not save mu CSV: {e}")
 

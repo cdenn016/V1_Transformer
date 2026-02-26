@@ -937,7 +937,7 @@ class PublicationTrainer(FastTrainer):
                         try:
                             decoded = self.tokenizer.decode(input_ids[0].tolist(), skip_special_tokens=True)
                             seq_info += f"\nText: {decoded[:100]}..."
-                        except (KeyError, IndexError, TypeError, UnicodeDecodeError):
+                        except Exception:
                             pass
 
                     # Save directory
@@ -1216,7 +1216,7 @@ class PublicationTrainer(FastTrainer):
                     # Add dynamic RG metrics
                     for key, value in dynamic_metrics.items():
                         metrics[key] = value
-                except (ValueError, RuntimeError, FloatingPointError) as e:
+                except Exception as e:
                     # Don't crash training on RG tracking errors
                     print(f"[WARNING] Dynamic RG tracking failed: {e}")
 
@@ -1348,7 +1348,7 @@ class PublicationTrainer(FastTrainer):
                     step=0,
                     verbose=True,
                 )
-            except (ValueError, RuntimeError, TypeError, OSError) as e:
+            except Exception as e:
                 print(f"[WARN] Initial semantic analysis failed: {e}")
 
         for step in pbar:
@@ -1505,7 +1505,7 @@ class PublicationTrainer(FastTrainer):
                     # Use temperature 0.9 and lower top_k for more diversity
                     sample = self.sample_text(prompt=prompt, max_new_tokens=30, temperature=0.9, top_k=30)
                     print(f"    Sample: {sample[:100]}...")
-                except (RuntimeError, ValueError, IndexError) as e:
+                except Exception as e:
                     import traceback
                     print(f"    Sample generation failed: {e}")
                     traceback.print_exc()
@@ -1543,7 +1543,7 @@ class PublicationTrainer(FastTrainer):
                         step=step + 1,
                         verbose=False,  # Minimal output during training
                     )
-                except (ValueError, RuntimeError, TypeError, OSError) as e:
+                except Exception as e:
                     print(f"[WARN] Semantic analysis failed at step {step+1}: {e}")
 
         # Save final metrics
@@ -1561,7 +1561,7 @@ class PublicationTrainer(FastTrainer):
                     model=self.model,
                     verbose=True,
                 )
-            except (ValueError, RuntimeError, TypeError, OSError) as e:
+            except Exception as e:
                 print(f"[WARN] Final semantic analysis failed: {e}")
 
             # Generate interpretability outputs using a sample batch from validation
@@ -1573,7 +1573,7 @@ class PublicationTrainer(FastTrainer):
                     tokenizer=self.tokenizer,  # Dataset with .decode() method
                     device=self.device,
                 )
-            except (ValueError, RuntimeError, TypeError, OSError) as e:
+            except Exception as e:
                 import traceback
                 print(f"[WARNING] Could not generate interpretability outputs: {e}")
                 print(f"  Traceback: {traceback.format_exc()}")

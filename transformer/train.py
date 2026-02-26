@@ -124,7 +124,7 @@ def compute_rg_metrics_from_attention(
 
         return rg_metrics
 
-    except (ValueError, RuntimeError, FloatingPointError) as e:
+    except Exception as e:
         # Return empty metrics on error (don't crash training)
         print(f"[WARNING] RG metrics computation failed: {e}")
         return {}

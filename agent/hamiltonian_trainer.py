@@ -973,7 +973,7 @@ class HamiltonianTrainer:
 
         except KeyboardInterrupt:
             print("\n⚠ Training interrupted by user")
-        except (RuntimeError, ValueError, FloatingPointError) as e:
+        except Exception as e:
             print(f"\n⚠ Training stopped due to error: {e}")
             print("  Generating phase space report with data collected so far...")
             # Generate report even on crash

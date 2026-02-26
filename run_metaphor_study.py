@@ -142,11 +142,11 @@ def find_phrase_positions(tokenizer, full_text, phrase):
     candidates = []
     try:
         candidates.append(tokenizer.encode(' ' + phrase))
-    except (KeyError, TypeError, UnicodeDecodeError, ValueError):
+    except Exception:
         pass
     try:
         candidates.append(tokenizer.encode(phrase))
-    except (KeyError, TypeError, UnicodeDecodeError, ValueError):
+    except Exception:
         pass
     for prefix in ['. ', ', ', '  ']:
         try:
@@ -185,7 +185,7 @@ def find_phrase_positions(tokenizer, full_text, phrase):
             current_char = tok_char_end
         if positions:
             return positions
-    except (KeyError, TypeError, UnicodeDecodeError, ValueError):
+    except Exception:
         pass
 
     return None

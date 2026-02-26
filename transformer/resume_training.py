@@ -464,14 +464,14 @@ def resume_training():
         try:
             trainer.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             print("  Restored optimizer state")
-        except (ValueError, RuntimeError, KeyError) as e:
+        except Exception as e:
             print(f"  Warning: Could not restore optimizer state: {e}")
             print("  Training will continue with fresh optimizer")
     elif 'optimizer_state' in checkpoint:
         try:
             trainer.optimizer.load_state_dict(checkpoint['optimizer_state'])
             print("  Restored optimizer state")
-        except (ValueError, RuntimeError, KeyError) as e:
+        except Exception as e:
             print(f"  Warning: Could not restore optimizer state: {e}")
 
     print(f"\nResuming from step {start_step} -> {config['max_steps']}")

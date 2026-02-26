@@ -102,7 +102,7 @@ if CUPY_AVAILABLE:
         eps: float = 1e-8
     ) -> cp.ndarray:
         """
-        Batch KL divergence - GPU parallel computation (fully vectorized).
+        Batch KL divergence - GPU parallel computation.
 
         Computes KL(q || p_i) for multiple targets in parallel.
 
@@ -123,30 +123,37 @@ if CUPY_AVAILABLE:
         eye_K = cp.eye(K, dtype=Sigma_q.dtype)
         Sigma_q_reg = Sigma_q + eps * eye_K
 
-        # Source log-determinant (scalar, computed once)
-        _, logdet_q = cp.linalg.slogdet(Sigma_q_reg)
+        # Source Cholesky and logdet
+        L_q = cp.linalg.cholesky(Sigma_q_reg)
+        logdet_q = 2.0 * cp.sum(cp.log(cp.diag(L_q)))
 
         # Regularize targets (batched)
         Sigma_p_batch_reg = Sigma_p_batch + eps * eye_K
 
-        # Target log-determinants (N,) — batched over first axis
-        _, logdet_p_batch = cp.linalg.slogdet(Sigma_p_batch_reg)
+        # Allocate output
+        kl_batch = cp.zeros(N, dtype=mu_q.dtype)
 
-        # Trace term: tr(Σ_p_i^{-1} @ Σ_q) for each i
-        # Solve Σ_p_i @ X_i = Σ_q for X_i, then tr(X_i)
-        # Sigma_p_batch_reg: (N, K, K), Sigma_q_reg: (K, K) -> broadcast to (N, K, K)
-        Sigma_q_expanded = cp.broadcast_to(Sigma_q_reg, (N, K, K)).copy()
-        Z = cp.linalg.solve(Sigma_p_batch_reg, Sigma_q_expanded)  # (N, K, K)
-        term_trace = cp.trace(Z, axis1=-2, axis2=-1)  # (N,)
+        # Process each target
+        # TODO: Fully vectorize this loop with custom CUDA kernel
+        for i in range(N):
+            Sigma_p = Sigma_p_batch_reg[i]
+            mu_p = mu_p_batch[i]
 
-        # Quadratic term: (μ_p_i - μ_q)^T Σ_p_i^{-1} (μ_p_i - μ_q)
-        delta = mu_p_batch - mu_q  # (N, K)
-        # Solve Σ_p_i @ x_i = δ_i for x_i
-        z = cp.linalg.solve(Sigma_p_batch_reg, delta[..., None])[..., 0]  # (N, K)
-        term_quad = cp.sum(delta * z, axis=-1)  # (N,)
+            L_p = cp.linalg.cholesky(Sigma_p)
+            logdet_p = 2.0 * cp.sum(cp.log(cp.maximum(cp.diag(L_p), eps)))
 
-        # Combine: KL = 0.5 * (tr + quad - K + logdet_p - logdet_q)
-        kl_batch = 0.5 * (term_trace + term_quad - K + logdet_p_batch - logdet_q)
+            # Trace term
+            Y = cp.linalg.solve(L_p, Sigma_q_reg)
+            Z = cp.linalg.solve(L_p.T, Y)
+            term_trace = cp.trace(Z)
+
+            # Quadratic term
+            delta = mu_p - mu_q
+            y = cp.linalg.solve(L_p, delta)
+            z = cp.linalg.solve(L_p.T, y)
+            term_quad = cp.dot(delta, z)
+
+            kl_batch[i] = 0.5 * (term_trace + term_quad - K + logdet_p - logdet_q)
 
         return cp.maximum(kl_batch, 0.0)
 
