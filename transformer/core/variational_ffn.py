@@ -331,19 +331,23 @@ def _compute_vfe_gradients_block_diagonal(
             try:
                 L_j = torch.linalg.cholesky(sigma_j_reg)
                 logdet_j = 2.0 * torch.sum(torch.log(torch.diagonal(L_j, dim1=-2, dim2=-1) + eps), dim=-1)
-            except RuntimeError:
-                # Fallback: use slogdet instead of zeroing (which biases KL)
-                sign_j, logdet_j = torch.linalg.slogdet(sigma_j_reg)
-                logdet_j = torch.where(sign_j > 0, logdet_j, torch.zeros_like(logdet_j))
+            except (torch.linalg.LinAlgError, RuntimeError):
+                try:
+                    sign_j, logdet_j = torch.linalg.slogdet(sigma_j_reg)
+                    logdet_j = torch.where(sign_j > 0, logdet_j, torch.zeros_like(logdet_j))
+                except (torch.linalg.LinAlgError, RuntimeError):
+                    logdet_j = torch.zeros(sigma_j_reg.shape[:-2], device=device, dtype=dtype)
 
             sigma_i_block_diag = sigma_i_block_slice + eps * I_d  # (B, C, d, d)
             try:
                 L_i = torch.linalg.cholesky(sigma_i_block_diag)
                 logdet_i = 2.0 * torch.sum(torch.log(torch.diagonal(L_i, dim1=-2, dim2=-1) + eps), dim=-1)
-            except RuntimeError:
-                # Fallback: use slogdet instead of zeroing (which biases KL)
-                sign_i, logdet_i = torch.linalg.slogdet(sigma_i_block_diag)
-                logdet_i = torch.where(sign_i > 0, logdet_i, torch.zeros_like(logdet_i))
+            except (torch.linalg.LinAlgError, RuntimeError):
+                try:
+                    sign_i, logdet_i = torch.linalg.slogdet(sigma_i_block_diag)
+                    logdet_i = torch.where(sign_i > 0, logdet_i, torch.zeros_like(logdet_i))
+                except (torch.linalg.LinAlgError, RuntimeError):
+                    logdet_i = torch.zeros(sigma_i_block_diag.shape[:-2], device=device, dtype=dtype)
 
             kl_block = 0.5 * (trace_block + mahal_block - d + logdet_j - logdet_i[:, :, None])
             # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
@@ -520,7 +524,7 @@ def _compute_vfe_gradients_chunked(
             try:
                 L_p = torch.linalg.cholesky(sigma_j_reg)
                 logdet_p = 2.0 * torch.sum(torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1)
-            except RuntimeError:
+            except (torch.linalg.LinAlgError, RuntimeError):
                 logdet_p = torch.zeros(B, n_i, n_j, device=device, dtype=dtype)
 
             logdet_q = torch.sum(torch.log(sigma_i), dim=-1)[:, :, None].expand(-1, -1, n_j).clone()
@@ -753,13 +757,14 @@ def compute_vfe_gradients_gpu(
 
         # Regularize and invert transported covariance
         sigma_j_reg = sigma_j_transported + max(eps, 1e-4) * torch.eye(K, device=device, dtype=dtype)
-        # NaN safety: if transport produced NaN (e.g., matrix_exp overflow),
+        # NaN/Inf safety: if transport produced NaN or Inf (e.g., matrix_exp overflow),
         # replace with identity covariance to prevent cascading failures
-        if torch.isnan(sigma_j_reg).any():
-            nan_mask = torch.isnan(sigma_j_reg).any(dim=-1).any(dim=-1)  # (B, N, N)
+        bad_mask = torch.isnan(sigma_j_reg) | torch.isinf(sigma_j_reg)
+        if bad_mask.any():
+            bad_elements = bad_mask.any(dim=-1).any(dim=-1)  # (B, N, N)
             eye_K = torch.eye(K, device=device, dtype=dtype)
             sigma_j_reg = torch.where(
-                nan_mask.unsqueeze(-1).unsqueeze(-1),
+                bad_elements.unsqueeze(-1).unsqueeze(-1),
                 eye_K.expand_as(sigma_j_reg),
                 sigma_j_reg,
             )
@@ -789,11 +794,12 @@ def compute_vfe_gradients_gpu(
         try:
             L_j_t = torch.linalg.cholesky(sigma_j_reg)  # (B, N, N, K, K)
             logdet_j_t = 2.0 * torch.sum(torch.log(torch.diagonal(L_j_t, dim1=-2, dim2=-1) + eps), dim=-1)  # (B, N, N)
-        except RuntimeError:
-            # Cholesky failed - use eigenvalue decomposition as fallback
-            # This is slower but more robust for ill-conditioned matrices
-            eigvals = torch.linalg.eigvalsh(sigma_j_reg)  # (B, N, N, K)
-            logdet_j_t = torch.sum(torch.log(eigvals.clamp(min=eps)), dim=-1)  # (B, N, N)
+        except (torch.linalg.LinAlgError, RuntimeError):
+            try:
+                eigvals = torch.linalg.eigvalsh(sigma_j_reg)  # (B, N, N, K)
+                logdet_j_t = torch.sum(torch.log(eigvals.clamp(min=eps)), dim=-1)  # (B, N, N)
+            except (torch.linalg.LinAlgError, RuntimeError):
+                logdet_j_t = torch.zeros(sigma_j_reg.shape[:-2], device=device, dtype=dtype)
         # For source covariance (diagonal): log|diag(σ)| = sum(log(σ))
         logdet_i = torch.sum(torch.log(sigma_q.clamp(min=eps)), dim=-1)  # (B, N)
         # Use .clone() after expand to avoid view-related gradient issues
@@ -887,12 +893,13 @@ def compute_vfe_gradients_gpu(
 
         # Regularize and invert
         sigma_j_reg = sigma_j_transported + max(eps, 1e-4) * torch.eye(K, device=device, dtype=dtype)
-        # NaN safety: if transport produced NaN, replace with identity covariance
-        if torch.isnan(sigma_j_reg).any():
-            nan_mask = torch.isnan(sigma_j_reg).any(dim=-1).any(dim=-1)  # (B, N, N)
+        # NaN/Inf safety: if transport produced NaN or Inf, replace with identity covariance
+        bad_mask = torch.isnan(sigma_j_reg) | torch.isinf(sigma_j_reg)
+        if bad_mask.any():
+            bad_elements = bad_mask.any(dim=-1).any(dim=-1)  # (B, N, N)
             eye_K = torch.eye(K, device=device, dtype=dtype)
             sigma_j_reg = torch.where(
-                nan_mask.unsqueeze(-1).unsqueeze(-1),
+                bad_elements.unsqueeze(-1).unsqueeze(-1),
                 eye_K.expand_as(sigma_j_reg),
                 sigma_j_reg,
             )
@@ -919,17 +926,24 @@ def compute_vfe_gradients_gpu(
         try:
             L_j_t = torch.linalg.cholesky(sigma_j_reg)  # (B, N, N, K, K)
             logdet_j_t = 2.0 * torch.sum(torch.log(torch.diagonal(L_j_t, dim1=-2, dim2=-1) + eps), dim=-1)  # (B, N, N)
-        except RuntimeError:
-            eigvals = torch.linalg.eigvalsh(sigma_j_reg)
-            logdet_j_t = torch.sum(torch.log(eigvals.clamp(min=eps)), dim=-1)
+        except (torch.linalg.LinAlgError, RuntimeError):
+            try:
+                eigvals = torch.linalg.eigvalsh(sigma_j_reg)
+                logdet_j_t = torch.sum(torch.log(eigvals.clamp(min=eps)), dim=-1)
+            except (torch.linalg.LinAlgError, RuntimeError):
+                # Both decompositions failed (NaN/Inf in matrix) — assume identity (logdet = 0)
+                logdet_j_t = torch.zeros(sigma_j_reg.shape[:-2], device=device, dtype=dtype)
 
         sigma_i_reg = sigma_q + eps * torch.eye(K, device=device, dtype=dtype)
         try:
             L_i = torch.linalg.cholesky(sigma_i_reg)  # (B, N, K, K)
             logdet_i = 2.0 * torch.sum(torch.log(torch.diagonal(L_i, dim1=-2, dim2=-1) + eps), dim=-1)  # (B, N)
-        except RuntimeError:
-            eigvals = torch.linalg.eigvalsh(sigma_i_reg)
-            logdet_i = torch.sum(torch.log(eigvals.clamp(min=eps)), dim=-1)
+        except (torch.linalg.LinAlgError, RuntimeError):
+            try:
+                eigvals = torch.linalg.eigvalsh(sigma_i_reg)
+                logdet_i = torch.sum(torch.log(eigvals.clamp(min=eps)), dim=-1)
+            except (torch.linalg.LinAlgError, RuntimeError):
+                logdet_i = torch.zeros(sigma_i_reg.shape[:-2], device=device, dtype=dtype)
         # Use .clone() after expand to avoid view-related gradient issues
         logdet_i_expanded = logdet_i[:, :, None].expand(-1, -1, N).clone()  # (B, N, N)
 
