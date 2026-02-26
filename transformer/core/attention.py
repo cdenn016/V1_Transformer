@@ -693,11 +693,6 @@ def _compute_kl_matrix_torch(
             Omega, sigma_q, Omega.transpose(-1, -2)
         )  # (B, N, N, K, K)
 
-        # Symmetrize to correct numerical asymmetry from the triple einsum.
-        # Without this, Sigma_transported can have asymmetric floating-point
-        # errors that cause Cholesky to fail (not positive-definite).
-        Sigma_transported = 0.5 * (Sigma_transported + Sigma_transported.transpose(-1, -2))
-
     # =========================================================================
     # Step 3: Expand mu_i and Sigma_i for pairwise comparison
     # Use .clone() after expand to avoid view-related gradient issues
@@ -710,114 +705,66 @@ def _compute_kl_matrix_torch(
     # KL(q_i || Ω_ij[q_j]) = KL(N(μ_i, Σ_i) || N(μ_j^{→i}, Σ_j^{→i}))
     # =========================================================================
     I = torch.eye(K, device=device, dtype=dtype)
-    Sigma_i_reg = Sigma_i + max(eps, 1e-4) * I
-
-    # Try Cholesky with escalating jitter to handle near-singular matrices
-    # before falling back to eigenvalue-based computation.
-    # Start jitter at 1e-4 (not eps=1e-8): transported covariances accumulate
-    # numerical error from Ω @ Σ @ Ωᵀ and need stronger regularization,
-    # especially when sigma embeddings are untrained (alpha=beta=0 in M-step).
-    cholesky_success = False
-    jitter = max(eps, 1e-4)
-    for _attempt in range(4):
-        Sigma_transported_reg = Sigma_transported + jitter * I
-        try:
-            # Cholesky of transported covariances (prior in KL)
-            L_p = torch.linalg.cholesky(Sigma_transported_reg)
-            cholesky_success = True
-            break
-        except RuntimeError:
-            jitter *= 10.0  # escalate: 1e-4 -> 1e-3 -> 1e-2 -> 1e-1
-
-    if cholesky_success:
-        try:
-            # Trace term: tr(Σ_p⁻¹ Σ_q) where Σ_p = Σ_j^{→i}, Σ_q = Σ_i
-            Y = torch.linalg.solve_triangular(L_p, Sigma_i_reg, upper=False)
-            Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
-            trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)  # (B, N, N)
-
-            # Mahalanobis term: (μ_p - μ_q)ᵀ Σ_p⁻¹ (μ_p - μ_q)
-            delta_mu = mu_transported - mu_i  # (B, N, N, K)
-            v = torch.linalg.solve_triangular(
-                L_p, delta_mu.unsqueeze(-1), upper=False
-            ).squeeze(-1)
-            mahal_term = torch.sum(v ** 2, dim=-1)  # (B, N, N)
-
-            # Log determinant terms
-            logdet_p = 2.0 * torch.sum(
-                torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
-            )
-            # L_q Cholesky can also fail if sigma embeddings produce non-PD
-            # query covariances. Catch and fall through to eigenvalue path.
-            L_q = torch.linalg.cholesky(Sigma_i_reg)
-            logdet_q = 2.0 * torch.sum(
-                torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
-            )
-            logdet_term = logdet_p - logdet_q  # (B, N, N)
-
-            # KL divergence for all pairs
-            kl_all = 0.5 * (trace_term + mahal_term - K + logdet_term)  # (B, N, N)
-            # Clamp KL to [0, max] for numerical stability.
-            # Scale ceiling with K: each dimension contributes O(1) to KL,
-            # so max reasonable KL ≈ O(K). Use 5*K as generous ceiling.
-            kl_ceil = max(100.0, 5.0 * K)
-            kl_all = torch.clamp(kl_all, min=0.0, max=kl_ceil)
-
-            return kl_all
-        except RuntimeError:
-            # Cholesky of Sigma_i_reg (or solve_triangular) failed;
-            # fall through to eigenvalue-based fallback below.
-            pass
-
-    # Fallback: eigenvalue-based KL (no Cholesky, robust to near-singular matrices)
-    # Use eigendecomposition which handles non-SPD gracefully via clamping.
-    # Sanitize non-finite values first: gauge transport Ω @ Σ @ Ωᵀ can produce
-    # NaN or Inf when rotation matrices become ill-conditioned; cusolver crashes
-    # on both (CUSOLVER_STATUS_INVALID_VALUE).  Use isfinite to catch both.
-    Sigma_transported_reg = Sigma_transported + jitter * I
-    bad_mask_p = ~torch.isfinite(Sigma_transported_reg).all(dim=-1).all(dim=-1)  # (B, N, N)
-    bad_mask_q = ~torch.isfinite(Sigma_i_reg).all(dim=-1).all(dim=-1)            # (B, N, N)
-    has_bad = bad_mask_p | bad_mask_q
-    if has_bad.any():
-        # Both tensors are (B, N, N, K, K) so safe_cov broadcasts identically
-        safe_cov = jitter * I.expand_as(Sigma_transported_reg)
-        Sigma_transported_reg = torch.where(
-            bad_mask_p.unsqueeze(-1).unsqueeze(-1), safe_cov, Sigma_transported_reg
-        )
-        Sigma_i_reg = torch.where(
-            bad_mask_q.unsqueeze(-1).unsqueeze(-1), safe_cov, Sigma_i_reg
-        )
-        # Also sanitize mu to avoid non-finite propagation into Mahalanobis term
-        mu_transported = torch.nan_to_num(mu_transported, nan=0.0, posinf=0.0, neginf=0.0)
-        mu_i = torch.nan_to_num(mu_i, nan=0.0, posinf=0.0, neginf=0.0)
+    Sigma_i_reg = Sigma_i + eps * I
+    Sigma_transported_reg = Sigma_transported + eps * I
 
     try:
-        eigvals_p = torch.linalg.eigvalsh(Sigma_transported_reg)  # (B, N, N, K)
-        eigvals_q = torch.linalg.eigvalsh(Sigma_i_reg)            # (B, N, N, K)
+        # Cholesky of transported covariances (prior in KL)
+        L_p = torch.linalg.cholesky(Sigma_transported_reg)
+
+        # Trace term: tr(Σ_p⁻¹ Σ_q) where Σ_p = Σ_j^{→i}, Σ_q = Σ_i
+        Y = torch.linalg.solve_triangular(L_p, Sigma_i_reg, upper=False)
+        Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
+        trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)  # (B, N, N)
+
+        # Mahalanobis term: (μ_p - μ_q)ᵀ Σ_p⁻¹ (μ_p - μ_q)
+        delta_mu = mu_transported - mu_i  # (B, N, N, K)
+        v = torch.linalg.solve_triangular(
+            L_p, delta_mu.unsqueeze(-1), upper=False
+        ).squeeze(-1)
+        mahal_term = torch.sum(v ** 2, dim=-1)  # (B, N, N)
+
+        # Log determinant terms
+        logdet_p = 2.0 * torch.sum(
+            torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+        )
+        L_q = torch.linalg.cholesky(Sigma_i_reg)
+        logdet_q = 2.0 * torch.sum(
+            torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
+        )
+        logdet_term = logdet_p - logdet_q  # (B, N, N)
+
+        # KL divergence for all pairs
+        kl_all = 0.5 * (trace_term + mahal_term - K + logdet_term)  # (B, N, N)
+        # Clamp KL to [0, max] for numerical stability.
+        # Scale ceiling with K: each dimension contributes O(1) to KL,
+        # so max reasonable KL ≈ O(K). Use 5*K as generous ceiling.
+        kl_ceil = max(100.0, 5.0 * K)
+        kl_all = torch.clamp(kl_all, min=0.0, max=kl_ceil)
+
+        return kl_all
+
     except RuntimeError:
-        # Last resort: if eigvalsh still crashes (extreme condition numbers,
-        # CUDA internal errors), return zero KL rather than killing training.
-        B, N = mu_q.shape[0], mu_q.shape[1]
-        return torch.zeros(B, N, N, device=device, dtype=dtype)
-
-    eigvals_p = eigvals_p.clamp(min=1e-6)
-    eigvals_q = eigvals_q.clamp(min=1e-6)
-
-    # log|Σ| via eigenvalues
-    logdet_p = torch.sum(torch.log(eigvals_p), dim=-1)  # (B, N, N)
-    logdet_q = torch.sum(torch.log(eigvals_q), dim=-1)  # (B, N, N)
-
-    # tr(Σ_p⁻¹ Σ_q) and Mahalanobis via pinv (robust to singular matrices)
-    Sigma_p_inv = torch.linalg.pinv(Sigma_transported_reg)  # (B, N, N, K, K)
-    trace_term = torch.einsum('bijkk->bij',
-        torch.einsum('bijkl,bijlm->bijkm', Sigma_p_inv, Sigma_i_reg))
-    delta_mu = mu_transported - mu_i
-    mahal_term = torch.einsum('bijk,bijk->bij',
-        delta_mu, torch.einsum('bijkl,bijl->bijk', Sigma_p_inv, delta_mu))
-
-    kl_all = 0.5 * (trace_term + mahal_term - K + logdet_p - logdet_q)
-    kl_ceil = max(100.0, 5.0 * K)
-    return torch.clamp(kl_all, min=0.0, max=kl_ceil)
+        # Fallback to loop-based computation if Cholesky fails
+        # Collect values in list to preserve autograd graph (no in-place ops)
+        kl_rows = []
+        for b in range(B):
+            batch_rows = []
+            for i in range(N):
+                row_vals = []
+                for j in range(N):
+                    mu_j_transported, sigma_j_transported = _transport_gaussian_torch(
+                        mu_q[b, j], sigma_q[b, j],
+                        phi[b, i], phi[b, j], generators
+                    )
+                    kl_ij = _kl_gaussian_torch(
+                        mu_q[b, i], sigma_q[b, i],
+                        mu_j_transported, sigma_j_transported
+                    )
+                    row_vals.append(kl_ij.unsqueeze(0))
+                batch_rows.append(torch.cat(row_vals, dim=0))  # (N,)
+            kl_rows.append(torch.stack(batch_rows, dim=0))  # (N, N)
+        return torch.stack(kl_rows, dim=0)  # (B, N, N)
 
 
 def _transport_gaussian_torch(
@@ -861,7 +808,7 @@ def _kl_gaussian_torch(
     sigma1: torch.Tensor,  # (K, K)
     mu2: torch.Tensor,     # (K,)
     sigma2: torch.Tensor,  # (K, K)
-    eps: float = 1e-6
+    eps: float = 1e-8
 ) -> torch.Tensor:
     """
     KL divergence between two Gaussians: KL(N(μ1,Σ1) || N(μ2,Σ2)).
@@ -870,55 +817,31 @@ def _kl_gaussian_torch(
         KL = 0.5 * [tr(Σ2^{-1} Σ1) + (μ2-μ1)^T Σ2^{-1} (μ2-μ1) - K + log|Σ2|/|Σ1|]
     """
     K = mu1.shape[0]
-    I_K = torch.eye(K, device=sigma1.device, dtype=sigma1.dtype)
 
-    # Symmetrize inputs to correct any numerical asymmetry from transport
-    sigma1 = 0.5 * (sigma1 + sigma1.T)
-    sigma2 = 0.5 * (sigma2 + sigma2.T)
+    # Regularize for stability
+    sigma1_reg = sigma1 + eps * torch.eye(K, device=sigma1.device, dtype=sigma1.dtype)
+    sigma2_reg = sigma2 + eps * torch.eye(K, device=sigma2.device, dtype=sigma2.dtype)
 
-    # Cholesky with jitter escalation for robustness.
-    # Start at 1e-4 (not eps=1e-8): transported covariances need stronger reg.
-    cholesky_success = False
-    jitter = max(eps, 1e-4)
-    for _attempt in range(4):
-        try:
-            sigma1_reg = sigma1 + jitter * I_K
-            sigma2_reg = sigma2 + jitter * I_K
-            L1 = torch.linalg.cholesky(sigma1_reg)
-            L2 = torch.linalg.cholesky(sigma2_reg)
-            cholesky_success = True
-            break
-        except RuntimeError:
-            jitter *= 10.0
+    # Cholesky decomposition for numerical stability
+    L1 = torch.linalg.cholesky(sigma1_reg)
+    L2 = torch.linalg.cholesky(sigma2_reg)
 
-    if cholesky_success:
-        # Log determinants: log|Σ| = 2*sum(log(diag(L)))
-        logdet1 = 2.0 * torch.sum(torch.log(torch.diag(L1)))
-        logdet2 = 2.0 * torch.sum(torch.log(torch.diag(L2)))
+    # Log determinants: log|Σ| = 2*sum(log(diag(L)))
+    logdet1 = 2.0 * torch.sum(torch.log(torch.diag(L1)))
+    logdet2 = 2.0 * torch.sum(torch.log(torch.diag(L2)))
 
-        # Trace term: tr(Σ2^{-1} Σ1)
-        Y = torch.linalg.solve_triangular(L2, sigma1_reg, upper=False)
-        Z = torch.linalg.solve_triangular(L2.T, Y, upper=True)
-        trace_term = torch.trace(Z)
+    # Trace term: tr(Σ2^{-1} Σ1)
+    # Solve L2 Y = Σ1 for Y, then solve L2^T Z = Y for Z
+    Y = torch.linalg.solve_triangular(L2, sigma1_reg, upper=False)
+    Z = torch.linalg.solve_triangular(L2.T, Y, upper=True)
+    trace_term = torch.trace(Z)
 
-        # Quadratic term: (μ2-μ1)^T Σ2^{-1} (μ2-μ1)
-        delta_mu = mu2 - mu1
-        y = torch.linalg.solve_triangular(L2, delta_mu.unsqueeze(-1), upper=False).squeeze(-1)
-        z = torch.linalg.solve_triangular(L2.T, y.unsqueeze(-1), upper=True).squeeze(-1)
-        quad_term = torch.dot(delta_mu, z)
-    else:
-        # Eigenvalue fallback for non-SPD matrices
-        sigma1_reg = sigma1 + jitter * I_K
-        sigma2_reg = sigma2 + jitter * I_K
-        eigvals1 = torch.linalg.eigvalsh(sigma1_reg).clamp(min=1e-6)
-        eigvals2 = torch.linalg.eigvalsh(sigma2_reg).clamp(min=1e-6)
-        logdet1 = torch.sum(torch.log(eigvals1))
-        logdet2 = torch.sum(torch.log(eigvals2))
-
-        sigma2_inv = torch.linalg.pinv(sigma2_reg)
-        trace_term = torch.trace(sigma2_inv @ sigma1_reg)
-        delta_mu = mu2 - mu1
-        quad_term = delta_mu @ sigma2_inv @ delta_mu
+    # Quadratic term: (μ2-μ1)^T Σ2^{-1} (μ2-μ1)
+    delta_mu = mu2 - mu1
+    # solve_triangular needs 2D input - reshape (K,) → (K, 1)
+    y = torch.linalg.solve_triangular(L2, delta_mu.unsqueeze(-1), upper=False).squeeze(-1)
+    z = torch.linalg.solve_triangular(L2.T, y.unsqueeze(-1), upper=True).squeeze(-1)
+    quad_term = torch.dot(delta_mu, z)
 
     # Combine
     kl = 0.5 * (trace_term + quad_term - K + logdet2 - logdet1)
@@ -1151,9 +1074,6 @@ def _compute_kl_matrix_chunked(
                 Omega_chunk, sigma_j, Omega_chunk.transpose(-1, -2)
             )  # (B, n_i, n_j, K, K)
 
-            # Symmetrize to correct numerical asymmetry from the triple einsum
-            Sigma_transported = 0.5 * (Sigma_transported + Sigma_transported.transpose(-1, -2))
-
             del Omega_chunk  # Free memory immediately
 
             # =================================================================
@@ -1163,19 +1083,12 @@ def _compute_kl_matrix_chunked(
             mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()  # (B, n_i, n_j, K)
             sigma_i_exp = sigma_i_reg[:, :, None, :, :].expand(-1, -1, n_j, -1, -1).clone()
 
-            # Try Cholesky with escalating jitter before falling back to loop
-            cholesky_success = False
-            jitter = eps
-            for _attempt in range(4):
-                Sigma_transported_reg = Sigma_transported + jitter * I
-                try:
-                    L_p = torch.linalg.cholesky(Sigma_transported_reg)
-                    cholesky_success = True
-                    break
-                except RuntimeError:
-                    jitter *= 10.0
+            Sigma_transported_reg = Sigma_transported + eps * I
 
-            if cholesky_success:
+            try:
+                # Cholesky of transported covariances
+                L_p = torch.linalg.cholesky(Sigma_transported_reg)
+
                 # Trace term: tr(Σ_p⁻¹ Σ_q)
                 Y = torch.linalg.solve_triangular(L_p, sigma_i_exp, upper=False)
                 Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
@@ -1202,7 +1115,7 @@ def _compute_kl_matrix_chunked(
 
                 col_chunks_list.append(kl_chunk)
 
-            else:
+            except RuntimeError:
                 # Fallback to element-wise computation if Cholesky fails
                 # Collect values in list to preserve autograd graph
                 fallback_vals = []
@@ -1559,28 +1472,10 @@ def _compute_kl_matrix_block_diagonal(
             # Use non-in-place addition to preserve autograd graph
             kl_total = kl_total + kl_block
 
-        except RuntimeError:
-            # Cholesky failed (ill-conditioned covariance) - use diagonal KL approximation.
-            # CRITICAL: The fallback must depend on phi through the transported
-            # quantities to preserve the autograd graph. A constant fallback would
-            # break torch.autograd.grad() in the caller.
-            sigma_diag_transported = torch.diagonal(
-                sigma_block_transported_reg, dim1=-2, dim2=-1
-            ).clamp(min=eps)  # (B, N, N, d)
-            sigma_diag_i = torch.diagonal(
-                sigma_block_i_reg, dim1=-2, dim2=-1
-            ).clamp(min=eps)  # (B, N, N, d)
-            delta_mu = mu_block_transported - mu_block_i  # (B, N, N, d)
-
-            trace_term = (sigma_diag_i / sigma_diag_transported).sum(dim=-1)
-            mahal_term = ((delta_mu ** 2) / sigma_diag_transported).sum(dim=-1)
-            logdet_term = (
-                torch.log(sigma_diag_transported) - torch.log(sigma_diag_i)
-            ).sum(dim=-1)
-
-            kl_block = 0.5 * (trace_term + mahal_term - d + logdet_term)
-            kl_block = torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
-            kl_total = kl_total + kl_block
+        except RuntimeError as e:
+            # Fallback: add a small per-dimension contribution for this block
+            # rather than corrupting the entire KL matrix
+            kl_total = kl_total + 0.5 * d  # Conservative estimate: ~0.5 per dimension
 
         # Cleanup
         del sigma_block_transported, mu_block_transported
@@ -1726,28 +1621,8 @@ def _compute_kl_matrix_block_diagonal_chunked(
                     kl_chunk = kl_chunk + torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
 
                 except RuntimeError:
-                    # Cholesky failed - use diagonal KL approximation.
-                    # Must depend on phi through transported quantities to
-                    # preserve the autograd graph (a constant would break
-                    # torch.autograd.grad in the caller).
-                    sigma_diag_transported = torch.diagonal(
-                        sigma_transported_reg, dim1=-2, dim2=-1
-                    ).clamp(min=eps)  # (B, n_i, n_j, d)
-                    sigma_diag_i = torch.diagonal(
-                        sigma_i_reg, dim1=-2, dim2=-1
-                    ).clamp(min=eps)  # (B, n_i, n_j, d)
-                    delta_mu = mu_transported - mu_i_exp  # (B, n_i, n_j, d)
-
-                    trace_term = (sigma_diag_i / sigma_diag_transported).sum(dim=-1)
-                    mahal_term = ((delta_mu ** 2) / sigma_diag_transported).sum(dim=-1)
-                    logdet_term = (
-                        torch.log(sigma_diag_transported) - torch.log(sigma_diag_i)
-                    ).sum(dim=-1)
-
-                    kl_block = 0.5 * (trace_term + mahal_term - d + logdet_term)
-                    kl_chunk = kl_chunk + torch.clamp(
-                        kl_block, min=0.0, max=max(100.0, 5.0 * K)
-                    )
+                    # Fallback: add small contribution
+                    kl_chunk = kl_chunk + eps
 
                 del sigma_transported, mu_transported
                 block_start = block_end
