@@ -457,11 +457,12 @@ def compute_free_energy_loss(
         # Note: Averaging over batch and heads, summing over agent pairs
         belief_align_loss = weighted_kl.sum(dim=(-2, -1)).mean()  # Mean over (batch, heads)
 
-        # Normalize by √K to stabilize loss scale for large latent dimensions.
-        # KL between K-dim Gaussians scales as O(K); √K normalization
-        # prevents belief alignment loss from dominating CE.
+        # Normalize by 2√K to stabilize loss scale for large latent dimensions.
+        # KL between K-dim Gaussians has form ½(trace + mahal - K + logdet),
+        # scaling as O(K/2). The 2√K normalization (matching VFE attention
+        # temperature) prevents belief alignment loss from dominating CE.
         K = mu_q.shape[-1]
-        dim_scale = math.sqrt(max(K, 1))
+        dim_scale = 2.0 * math.sqrt(max(K, 1))
         belief_align_loss = lambda_beta * belief_align_loss / dim_scale
     else:
         belief_align_loss = torch.tensor(0.0, device=ce_loss.device)
@@ -489,11 +490,13 @@ def compute_free_energy_loss(
             sigma_p=sigma_p,  # Allow gradient flow to sigma embeddings
         )  # (B, N)
 
-        # Normalize by √K: KL between K-dim Gaussians scales as O(K);
-        # √K normalization prevents self-consistency from dominating CE.
-        dim_scale = math.sqrt(max(K, 1))
+        # Normalize by 2√K: KL between K-dim Gaussians has a ½ prefactor,
+        # scaling as O(K/2). The 2√K normalization (consistent with VFE
+        # attention temperature) prevents self-consistency loss from
+        # dominating CE for large K.
+        dim_scale = 2.0 * math.sqrt(max(K, 1))
 
-        # Average over batch and agents, normalized by √K
+        # Average over batch and agents, normalized by 2√K
         self_consistency_loss = alpha * kl_per_agent.mean() / dim_scale
     else:
         self_consistency_loss = torch.tensor(0.0, device=ce_loss.device)
@@ -550,9 +553,10 @@ def compute_free_energy_loss(
         weighted_kl_prior = gamma * kl_prior  # (B, N, N)
 
         # Sum over all agent pairs and average over batch
-        # Normalize by √K for dimension-stable loss scale
+        # Normalize by 2√K for dimension-stable loss scale (consistent with
+        # VFE attention temperature τ = 2√K)
         K = mu_p.shape[-1]
-        dim_scale = math.sqrt(max(K, 1))
+        dim_scale = 2.0 * math.sqrt(max(K, 1))
         model_align_loss = lambda_gamma * weighted_kl_prior.sum(dim=(-2, -1)).mean() / dim_scale
     else:
         model_align_loss = torch.tensor(0.0, device=ce_loss.device)
