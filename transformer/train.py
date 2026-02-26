@@ -694,7 +694,6 @@ class TrainingConfig:
     beta2: float = 0.95
     eps: float = 1e-8
     grad_clip: float = 1.0
-    phi_grad_clip: float = 0.1   # Tighter clip for φ (gauge frames spike 100x)
 
     # Learning rate schedule
     warmup_steps: int = 1000
@@ -1044,18 +1043,12 @@ class Trainer:
             # Global clipping at grad_clip=1.0 means phi dominates the norm,
             # starving mu/sigma of learning signal. Clip each param group
             # independently so all parameter types get sufficient gradients.
-            #
-            # phi gets a tighter clip (phi_grad_clip, default 0.1) because
-            # gauge frame gradients spike 2-3 orders of magnitude above
-            # mu/sigma, causing erratic effective LR.
-            _phi_clip = getattr(self.config, 'phi_grad_clip', self.config.grad_clip)
             if self.config.use_param_groups:
                 for group in self.optimizer.param_groups:
                     if group['params']:
-                        clip = _phi_clip if 'phi' in group.get('name', '') else self.config.grad_clip
                         torch.nn.utils.clip_grad_norm_(
                             group['params'],
-                            clip
+                            self.config.grad_clip
                         )
             else:
                 torch.nn.utils.clip_grad_norm_(

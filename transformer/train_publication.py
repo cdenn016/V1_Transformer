@@ -171,7 +171,6 @@ STANDARD_CONFIG = {
     'weight_decay': 0.01,
     'dropout': 0.1,
     'grad_clip': 1.0,
-    'phi_grad_clip': 0.1,
 
     # Logging
     'log_interval': 1000,
@@ -275,7 +274,6 @@ VFE_EM_CONFIG = {
     'weight_decay': 0.01,
     'dropout':      0.1,
     'grad_clip':    1.0,
-    'phi_grad_clip': 0.1,
 
     'use_layernorm': True,      # Critical!
     'use_residual':  True,       # Gradient flow
@@ -410,7 +408,6 @@ PURE_FEP_CONFIG = {
     'weight_decay': 0.0,          # No weight decay for P-flow
     'dropout': 0.0,               # No dropout for P-flow
     'grad_clip': 1.0,
-    'phi_grad_clip': 0.1,
 
     # Logging
     'log_interval': 100,
@@ -1061,20 +1058,7 @@ class PublicationTrainer(FastTrainer):
         # Per-group clipping for large gauge groups (SO(N>3)):
         # phi_embed gradients dominate global norm, starving mu/sigma.
         # FastTrainingConfig always uses param groups; TrainingConfig has use_param_groups flag.
-        #
-        # phi gets a tighter clip (phi_grad_clip, default 0.1) because gauge
-        # frame gradients spike 2-3 orders of magnitude above mu/sigma,
-        # causing erratic effective LR when the uniform clip crushes them.
         _use_param_groups = getattr(self.config, 'use_param_groups', True)
-        _phi_clip = getattr(self.config, 'phi_grad_clip', self.config.grad_clip)
-
-        def _clip_value(group):
-            """Return clip threshold: tighter for phi, default for others."""
-            name = group.get('name', '')
-            if 'phi' in name:
-                return _phi_clip
-            return self.config.grad_clip
-
         if self.scaler is not None:
             if self.config.grad_clip > 0:
                 self.scaler.unscale_(self.optimizer)
@@ -1083,7 +1067,7 @@ class PublicationTrainer(FastTrainer):
                         if group['params']:
                             torch.nn.utils.clip_grad_norm_(
                                 group['params'],
-                                _clip_value(group),
+                                self.config.grad_clip,
                             )
                 else:
                     torch.nn.utils.clip_grad_norm_(
@@ -1099,7 +1083,7 @@ class PublicationTrainer(FastTrainer):
                         if group['params']:
                             torch.nn.utils.clip_grad_norm_(
                                 group['params'],
-                                _clip_value(group),
+                                self.config.grad_clip,
                             )
                 else:
                     torch.nn.utils.clip_grad_norm_(
@@ -1407,7 +1391,7 @@ class PublicationTrainer(FastTrainer):
                     f"Step {step+1}/{total_steps} | "
                     f"Loss: {metrics['train_loss_total']:.4f} | "
                     f"CE: {metrics['train_loss_ce']:.4f} | "
-                    f"KL: {metrics['kl_mean']:.4f} | "
+                    f"β: {metrics['train_loss_belief_align']:.4f} | "
                     f"PPL: {metrics['train_ppl']:.1f}"
                 )
 
@@ -1830,7 +1814,6 @@ def run_single_experiment(
 
         weight_decay=config['weight_decay'],
         grad_clip=config['grad_clip'],
-        phi_grad_clip=config.get('phi_grad_clip', 0.1),
 
         alpha=config['alpha'],
         beta=config['beta'],
