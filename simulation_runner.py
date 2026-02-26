@@ -1941,7 +1941,7 @@ def _generate_comprehensive_visualizations(system, analyzer, diagnostics, output
     print("\n1. Meta-Agent Structure and Dynamics...")
     try:
         create_analysis_report(analyzer, str(meta_dir))
-    except (ValueError, TypeError, OSError) as e:
+    except Exception as e:
         print(f"  ⚠️  Error generating meta-agent analysis: {e}")
 
     # Generate energy visualizations
@@ -1949,7 +1949,7 @@ def _generate_comprehensive_visualizations(system, analyzer, diagnostics, output
     try:
         energy_viz = EnergyVisualizer(diagnostics)
         energy_viz.create_energy_report(str(energy_dir))
-    except (ValueError, TypeError, OSError) as e:
+    except Exception as e:
         print(f"  ⚠️  Error generating energy analysis: {e}")
 
     # Generate interactive hierarchy (if possible)
@@ -1961,7 +1961,7 @@ def _generate_comprehensive_visualizations(system, analyzer, diagnostics, output
             interactive_path = output_dir / "interactive_hierarchy.html"
             interactive_fig.write_html(str(interactive_path))
             print(f"  ✓ Saved interactive hierarchy to {interactive_path}")
-    except (ImportError, ValueError, TypeError, OSError) as e:
+    except Exception as e:
         print(f"  ⚠️  Plotly not available or error: {e}")
 
     # Export data for external analysis
@@ -1970,7 +1970,7 @@ def _generate_comprehensive_visualizations(system, analyzer, diagnostics, output
         data_path = output_dir / "snapshots.json"
         analyzer.export_to_json(str(data_path))
         print(f"  ✓ Saved raw data to {data_path}")
-    except (OSError, ValueError, TypeError) as e:
+    except Exception as e:
         print(f"  ⚠️  Error exporting data: {e}")
 
     # Print summary

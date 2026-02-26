@@ -1137,7 +1137,7 @@ if __name__ == '__main__':
         if multiscale.n_scales >= 2:
             plot_multiscale_comparison(multiscale, save_path='/tmp/test_multiscale.png')
         print("  Plots saved to /tmp/")
-    except (ValueError, TypeError, OSError) as e:
+    except Exception as e:
         print(f"  Plotting skipped: {e}")
 
     print("\n" + "="*70)

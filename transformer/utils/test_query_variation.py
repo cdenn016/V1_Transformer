@@ -73,7 +73,7 @@ def analyze_query_variation(beta, input_ids=None, tokenizer=None):
                     token = tokenizer.decode([input_ids[0, i].item()])
                     attn_vals = beta_np[h, i, :10]  # First 10 positions
                     print(f"    Token {i} ({repr(token)}): {attn_vals}")
-                except (KeyError, IndexError, TypeError, UnicodeDecodeError):
+                except Exception:
                     attn_vals = beta_np[h, i, :10]
                     print(f"    Token {i}: {attn_vals}")
 
@@ -264,7 +264,7 @@ def main(checkpoint_path: str = None):
         input_ids = tokenizer.encode(text, return_tensors='pt')
         print(f"\nTest text: {text}")
         print(f"Tokens: {tokenizer.convert_ids_to_tokens(input_ids[0].tolist())}")
-    except (ImportError, OSError, ValueError):
+    except Exception:
         print("Warning: Could not load tokenizer, using random input")
         input_ids = torch.randint(0, config.vocab_size, (1, 20))
         tokenizer = None

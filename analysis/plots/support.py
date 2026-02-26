@@ -125,7 +125,7 @@ def compute_overlap_matrix(system):
             else:
                 try:
                     O[i, j] = system.get_overlap_fraction(i, j)
-                except (ValueError, IndexError, KeyError):
+                except Exception:
                     O[i, j] = 0.0
     return O
 

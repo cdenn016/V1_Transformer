@@ -111,7 +111,7 @@ if __name__ == '__main__':
             print(f"\n[TOKENS]")
             print(f"  {' | '.join(token_strs[:20])}{'...' if len(token_strs) > 20 else ''}")
 
-        except (KeyError, IndexError, TypeError, UnicodeDecodeError) as e:
+        except Exception as e:
             print(f"[WARN] Could not decode: {e}")
     else:
         print(f"[WARN] No tokenizer available for decoding")

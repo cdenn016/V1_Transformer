@@ -930,7 +930,7 @@ class PublicationMetrics:
             self.figures.plot_training_curves(self.tracker)
             figures_generated.append("training_curves")
             plt.close()
-        except (ValueError, TypeError, OSError) as e:
+        except Exception as e:
             print(f"[WARN] Could not generate training curves: {e}")
 
         # Train-val gap
@@ -938,7 +938,7 @@ class PublicationMetrics:
             self.figures.plot_train_val_gap(self.tracker)
             figures_generated.append("train_val_gap")
             plt.close()
-        except (ValueError, TypeError, OSError) as e:
+        except Exception as e:
             print(f"[WARN] Could not generate train-val gap: {e}")
 
         # Attention entropy over training
@@ -946,7 +946,7 @@ class PublicationMetrics:
             self.figures.plot_attention_entropy(self.tracker)
             figures_generated.append("attention_entropy")
             plt.close()
-        except (ValueError, TypeError, OSError) as e:
+        except Exception as e:
             print(f"[WARN] Could not generate attention entropy plot: {e}")
 
         # Model comparison
@@ -955,7 +955,7 @@ class PublicationMetrics:
                 self.figures.plot_model_comparison(self.comparison_results)
                 figures_generated.append("model_comparison")
                 plt.close()
-            except (ValueError, TypeError, OSError) as e:
+            except Exception as e:
                 print(f"[WARN] Could not generate model comparison: {e}")
 
         # Scaling study
@@ -968,7 +968,7 @@ class PublicationMetrics:
                 )
                 figures_generated.append("scaling_study")
                 plt.close()
-            except (ValueError, TypeError, OSError) as e:
+            except Exception as e:
                 print(f"[WARN] Could not generate scaling study: {e}")
 
         # Attention heatmap
@@ -977,7 +977,7 @@ class PublicationMetrics:
                 self.figures.plot_attention_heatmap(attention_weights)
                 figures_generated.append("attention_heatmap")
                 plt.close()
-            except (ValueError, TypeError, OSError) as e:
+            except Exception as e:
                 print(f"[WARN] Could not generate attention heatmap: {e}")
 
         print(f"[PublicationMetrics] Generated figures: {', '.join(figures_generated)}")
@@ -1018,7 +1018,7 @@ class PublicationMetrics:
                     decoded_text = tokenizer.decode(input_ids[0].tolist())
                     tokens = [tokenizer.decode([t]) for t in input_ids[0].tolist()]
                     print(f"  Decoded text: {decoded_text[:200]}{'...' if len(decoded_text) > 200 else ''}")
-                except (KeyError, IndexError, TypeError, UnicodeDecodeError) as e:
+                except Exception as e:
                     print(f"  [WARN] Could not decode tokens: {e}")
             else:
                 print(f"  [WARN] No tokenizer provided - cannot decode sequence")
@@ -1040,7 +1040,7 @@ class PublicationMetrics:
                         self.generate_figures(attention_weights=beta)
             model.train()
             print(f"[PublicationMetrics] ✓ Generated interpretability outputs")
-        except (ValueError, RuntimeError, TypeError, OSError) as e:
+        except Exception as e:
             print(f"[WARN] Could not generate interpretability outputs: {e}")
 
     def print_summary(self):

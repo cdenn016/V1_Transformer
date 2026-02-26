@@ -730,7 +730,7 @@ class PureFEPLayer(nn.Module):
                     fullgraph=False,  # Allow graph breaks for flexibility
                 )
                 self._compiled = True
-            except RuntimeError as e:
+            except Exception as e:
                 print(f"Warning: torch.compile failed for layer {self.scale}: {e}")
                 self._compiled = True  # Don't retry
 

@@ -210,7 +210,7 @@ def load_data(config):
             )
             vocab_size = len(train_loader.dataset.vocab_mapping)
             return train_loader, val_loader, vocab_size
-        except (ImportError, OSError, ValueError, RuntimeError) as e:
+        except Exception as e:
             print(f"  Warning: Could not load WikiText-2: {e}")
             print(f"  Falling back to synthetic data")
 

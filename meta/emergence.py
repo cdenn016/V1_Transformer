@@ -431,7 +431,7 @@ class HierarchicalAgent(Agent):
             
             try:
                 mu_p_new += w * mu
-            except (ValueError, TypeError) as e:
+            except Exception as e:
                 print(f"    ERROR in accumulation: {e}")
                 print(f"    mu_p_new.shape={mu_p_new.shape}, w type={type(w).__name__}, mu type={type(mu).__name__}")
                 raise
@@ -1249,7 +1249,7 @@ class MultiScaleSystem:
                 # Compute average at this point with spatially-varying weights
                 try:
                     phi_avg[idx] = average_gauge_frames_so3(phis_at_point, weights=weights_at_point, method=method_point)
-                except (ValueError, np.linalg.LinAlgError, FloatingPointError) as e:
+                except Exception as e:
                     print(f"\n{'='*70}")
                     print(f"ERROR in gauge frame averaging at spatial point {idx}")
                     print(f"{'='*70}")
