@@ -2025,9 +2025,11 @@ class VariationalFFNDynamic(nn.Module):
                 logits = torch.matmul(mu_current.detach(), W_out.T)
                 probs = F.softmax(logits, dim=-1)
                 targets_valid = targets.clone()
-                targets_valid[targets == -1] = 0
+                # Mask out padding/invalid tokens (both -1 and -100 sentinels)
+                invalid = (targets < 0) | (targets >= W_out.shape[0])
+                targets_valid[invalid] = 0
                 one_hot = F.one_hot(targets_valid, num_classes=W_out.shape[0]).float()
-                mask_obs = (targets != -1).unsqueeze(-1).float()
+                mask_obs = (~invalid).unsqueeze(-1).float()
                 one_hot = one_hot * mask_obs
                 grad_error = (probs - one_hot) * mask_obs
                 discrete_obs_grad = torch.matmul(grad_error, W_out)
