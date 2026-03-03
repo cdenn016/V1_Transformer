@@ -291,9 +291,33 @@ def gaussian_kl_divergence(
         if sigma_p is None:
             sigma_p = torch.eye(K, device=device, dtype=dtype).expand(*mu_p.shape[:-1], K, K)
 
-        # Regularize for numerical stability
-        sigma_q_reg = sigma_q + eps * torch.eye(K, device=device, dtype=dtype)
-        sigma_p_reg = sigma_p + eps * torch.eye(K, device=device, dtype=dtype)
+        # Symmetrize for numerical safety
+        sigma_q = 0.5 * (sigma_q + sigma_q.transpose(-1, -2))
+        sigma_p = 0.5 * (sigma_p + sigma_p.transpose(-1, -2))
+
+        # Ensure SPD via progressive regularization (matching retract_spd_torch)
+        eye_K = torch.eye(K, device=device, dtype=dtype)
+        reg_scales = [eps, 1e-5, 1e-4, 1e-3, 1e-2, 0.1]
+
+        sigma_q_reg = sigma_q
+        for reg_scale in reg_scales:
+            candidate = sigma_q + reg_scale * eye_K
+            _, info = torch.linalg.cholesky_ex(candidate)
+            if (info == 0).all():
+                sigma_q_reg = candidate
+                break
+        else:
+            sigma_q_reg = sigma_q + 0.1 * eye_K
+
+        sigma_p_reg = sigma_p
+        for reg_scale in reg_scales:
+            candidate = sigma_p + reg_scale * eye_K
+            _, info = torch.linalg.cholesky_ex(candidate)
+            if (info == 0).all():
+                sigma_p_reg = candidate
+                break
+        else:
+            sigma_p_reg = sigma_p + 0.1 * eye_K
 
         # Compute Σ_p⁻¹ via Cholesky
         L_p = torch.linalg.cholesky(sigma_p_reg)
