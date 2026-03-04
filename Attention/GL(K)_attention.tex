@@ -1839,18 +1839,18 @@ Unlike the BERT validation above, which tested the degenerate limits against an 
 
 \subsubsection{Training Dynamics}
 
-Figure~\ref{fig:glk_training} shows representative training dynamics for $\mathrm{GL}(K)$ gauge VFE models from exploratory $\mathrm{GL}(30)$ configurations. The models achieve stable convergence with perplexity dropping from $>$1{,}000 at initialization to $\sim$109 at convergence---a ${\sim}415\times$ improvement over random chance (vocabulary size 50{,}257). The gradient norms for $\mu$ (belief means), $\Sigma$ (covariances), and $\phi$ (gauge frames) evolve with distinct dynamics; the gauge frame gradients ($\phi$, red) exhibit characteristic oscillations as the model learns optimal frame alignments. Training and validation curves track closely until late training, indicating the gauge-theoretic inductive bias provides reasonable regularization. The best quantitative results (Table~\ref{tab:glk_results}) are from the $\mathrm{GL}(20)$, $K=80$ configuration described in Section~\ref{sec:experimental_design_glk}.
+Figure~\ref{fig:glk_training} shows representative training dynamics for $\mathrm{GL}(K)$ gauge VFE models from exploratory $\mathrm{GL}(10)$ configurations with $K=90$ (9 heads of dimension 10). The models achieve stable convergence with perplexity dropping from $>$1{,}400 at initialization to $\sim$91 at convergence---a ${\sim}549\times$ improvement over random chance (vocabulary size 50{,}257). The gradient norms for $\mu$ (belief means), $\Sigma$ (covariances), and $\phi$ (gauge frames) evolve with distinct dynamics; the gauge frame gradients ($\phi$, red) exhibit characteristic oscillations as the model learns optimal frame alignments. Training and validation curves track closely until late training, indicating the gauge-theoretic inductive bias provides reasonable regularization. The best quantitative results (Table~\ref{tab:glk_results}) are from the $\mathrm{GL}(20)$, $K=80$ configuration described in Section~\ref{sec:experimental_design_glk}.
 
 \begin{figure*}[t]
   \centering
   \begin{subfigure}[b]{0.48\textwidth}
     \includegraphics[width=\textwidth]{attention/figs/train_val_gapK=90.png}
-    \caption{diagonal covariance $\mathrm{GL}(10)$ and 60 embedding dimensions}
+    \caption{Generalization gap (val BPC $-$ train BPC) for $\mathrm{GL}(10)$, $K=90$ with non-diagonal covariance.}
   \end{subfigure}
   \hfill
   \begin{subfigure}[b]{0.48\textwidth}
     \includegraphics[width=\textwidth]{attention/figs/training_curvesK=90.png}
-    \caption{general non-diagonal covariance $\mathrm{GL}(10)$ and 60 embedding dimensions}
+    \caption{Training curves for $\mathrm{GL}(10)$, $K=90$ with non-diagonal covariance: loss, perplexity, bits per token, and gradient norms.}
   \end{subfigure}
   \caption{XXXXX}
   \label{fig:glk_training}
