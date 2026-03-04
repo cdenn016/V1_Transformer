@@ -1333,7 +1333,7 @@ Recall from Section~\ref{sec:glk_invariance} that standard transformers implemen
 \end{pmatrix}, \quad \Omega^a = (\sigma^2 W_K^a (W_Q^a)^\top)^{-1} \in \mathrm{GL}(d_{\text{head}}),
 \end{equation}
 
-where each head $a$ learns its own $\mathrm{GL}(d_{\text{head}})$ gauge transformation. This block structure means that components in different heads do not mix under gauge transport. Each head implements an independent gauge-theoretic attention mechanism. Crucially, each per-head transport $\Omega^a \in \mathrm{GL}(d_{\text{head}})$ is full rank and invertible within its block, so the Mahalanobis metric correction $(\Omega^a)^{-\top}$ from Eq.~\eqref{eq:mahalanobis_identity} remains well-defined. The rectangular shape of the standard per-head projection matrices $W_Q^a \in \mathbb{R}^{d_k \times d_{\text{head}}}$ reflects the composition of (i) the orthogonal projection $P_a : \mathbb{R}^{d_k} \to \mathbb{R}^{d_{\text{head}}}$ onto block $a$, with (ii) the $\mathrm{GL}(d_{\text{head}})$ gauge transport within that block. The rectangular outer shape is therefore the projection, not a rank deficiency.
+where each head $a$ learns its own $\mathrm{GL}(d_{\text{head}})$ gauge transformation. This block structure means that components in different heads do not mix under gauge transport. Each head implements an independent gauge-theoretic attention mechanism. Importantly, each per-head transport $\Omega^a \in \mathrm{GL}(d_{\text{head}})$ is full rank and invertible within its block, so the Mahalanobis metric correction $(\Omega^a)^{-\top}$ from Eq.~\eqref{eq:mahalanobis_identity} remains well-defined. The rectangular shape of the standard per-head projection matrices $W_Q^a \in \mathbb{R}^{d_k \times d_{\text{head}}}$ reflects the composition of (i) the orthogonal projection $P_a : \mathbb{R}^{d_k} \to \mathbb{R}^{d_{\text{head}}}$ onto block $a$, with (ii) the $\mathrm{GL}(d_{\text{head}})$ gauge transport within that block. The rectangular outer shape is therefore the projection, not a rank deficiency.
 
 The full multi-head gauge group is thus the direct product:
 
@@ -1762,7 +1762,7 @@ RoBERTa-base         & 12L $\times$ 12H & 124.6M & 0.612 & 0.006 \\
 
 The correspondence holds across all five architectures ($\bar{r} > 0.6$ in every case), with ALBERT achieving the highest agreement ($\bar{r} = 0.851$). ALBERT's parameter-sharing across layers forces all layers to use the same projection matrices, which may regularize the attention patterns toward the distance-based structure predicted by the gauge theory. RoBERTa's lower correlation ($\bar{r} = 0.612$) is consistent with its different pretraining objective (no next-sentence prediction, dynamic masking, larger batches), which may encourage attention patterns that rely more heavily on the norm-bias terms that the flat-bundle approximation neglects.
 
-Critically, the theoretical prediction $\tau \approx 2\sqrt{d_{\text{head}}}$ holds uniformly: all five models share $d_{\text{head}} = 64$, and all achieve their best correspondence at $\tau = 19.0$. This confirms that the optimal temperature is a function of head dimension, not of model family, depth, or training procedure.
+The theoretical prediction $\tau \approx 2\sqrt{d_{\text{head}}}$ holds uniformly: all five models share $d_{\text{head}} = 64$, and all achieve their best correspondence at $\tau = 19.0$. This confirms that the optimal temperature is a function of head dimension, not of model family, depth, or training procedure.
 
 
 \subsubsection{Sequence-Length Sensitivity}
@@ -2540,7 +2540,7 @@ Comparing \eqref{eq:rearranged_target} with the general stationarity condition \
 f'\!\!\left(\frac{q_i}{\Omega_{ij}q_j}\right) = \log\frac{q_i}{\Omega_{ij}q_j} + k
 \label{eq:ode}
 \end{equation}
-for some constant $k$, and for all values of the ratio $t = q_i(c)/[\Omega_{ij}(c)\,q_j(c)]$.  Crucially, since the geometric-mean form must hold for \emph{all} choices of $p_i$ and $\{q_j\}$, the ratio $t$ ranges over all of $\mathbb{R}^+$, so \eqref{eq:ode} must hold globally: $f'(t)=\log t + k$ for all $t>0$.
+for some constant $k$, and for all values of the ratio $t = q_i(c)/[\Omega_{ij}(c)\,q_j(c)]$.  Since the geometric-mean form must hold for \emph{all} choices of $p_i$ and $\{q_j\}$, the ratio $t$ ranges over all of $\mathbb{R}^+$, so \eqref{eq:ode} must hold globally: $f'(t)=\log t + k$ for all $t>0$.
 
 Integrating:
 \[
