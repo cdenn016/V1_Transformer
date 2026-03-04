@@ -1839,7 +1839,7 @@ Unlike the BERT validation above, which tested the degenerate limits against an 
 
 \subsubsection{Training Dynamics}
 
-Figure~\ref{fig:glk_training} shows representative training dynamics for $\mathrm{GL}(K)$ gauge VFE models from exploratory $\mathrm{GL}(10)$ configurations with $K=90$ (9 heads of dimension 10). The models achieve stable convergence with perplexity dropping from $>$1{,}400 at initialization to $\sim$91 at convergence---a ${\sim}549\times$ improvement over random chance (vocabulary size 50{,}257). The gradient norms for $\mu$ (belief means), $\Sigma$ (covariances), and $\phi$ (gauge frames) evolve with distinct dynamics; the gauge frame gradients ($\phi$, red) exhibit characteristic oscillations as the model learns optimal frame alignments. Training and validation curves track closely throughout training, indicating the gauge-theoretic inductive bias provides effective regularization.
+Figure~\ref{fig:glk_training} shows the training dynamics for our best $\mathrm{GL}(K)$ gauge VFE model: a $\mathrm{GL}(10)$ configuration with $K=90$ (9 heads of dimension 10). The model achieves stable convergence with perplexity dropping from $>$1{,}400 at initialization to $\sim$91 at convergence---a ${\sim}549\times$ improvement over random chance (vocabulary size 50{,}257). The gradient norms for $\mu$ (belief means), $\Sigma$ (covariances), and $\phi$ (gauge frames) evolve with distinct dynamics; the gauge frame gradients ($\phi$, red) exhibit characteristic oscillations as the model learns optimal frame alignments. Training and validation curves track closely throughout training, indicating the gauge-theoretic inductive bias provides effective regularization.
 
 \begin{figure*}[t]
   \centering
@@ -1905,7 +1905,8 @@ This analysis identifies increasing $K$ (with multi-head $\mathrm{GL}(d_{\text{h
 
 
 
-\paragraph{Meta-agent emergence with uniform coupling.} The renormalization group metrics reveal incipient structure even under uniform attention. Two meta-agent clusters emerge (detected by spectral methods on the KL divergence matrix), with the inter-cluster KL divergence growing from 9.3 to 27.2 over training. The modularity $Q \approx 0.131$ remains modest, consistent with the uniform attention providing no preferential within-cluster coupling. This demonstrates that meta-agent structure can emerge from transport geometry alone, without the selective attention that would normally amplify intra-cluster communication.
+\paragraph{Meta-agent emergence with uniform coupling.}
+\label{sec:uniform_attention} The renormalization group metrics reveal incipient structure even under uniform attention. Two meta-agent clusters emerge (detected by spectral methods on the KL divergence matrix), with the inter-cluster KL divergence growing from 9.3 to 27.2 over training. The modularity $Q \approx 0.131$ remains modest, consistent with the uniform attention providing no preferential within-cluster coupling. This demonstrates that meta-agent structure can emerge from transport geometry alone, without the selective attention that would normally amplify intra-cluster communication.
 
 
 
