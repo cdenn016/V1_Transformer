@@ -1555,7 +1555,7 @@ For each $(L,H)$ pair across all 144 attention heads and each passage, we comput
 
 To validate the complete gauge-theoretic framework beyond attention mechanism correspondence, we trained a $\mathrm{GL}(K)$ gauge transformer on WikiText-103 language modeling (102M tokens, vocabulary size 50,257). These experiments test whether variational free energy minimization can drive actual language learning, with the gauge structure ($\mu$, $\Sigma$, $\phi$) evolving jointly during training. The gauge VFE architecture contains no MLPs, activation functions, or learned attention projections ($W_Q$, $W_K$, $W_V$); only a linear output projection to vocabulary logits is retained. All other computation derives from KL divergences, parallel transport via $\Omega_{ij} = \exp(\phi_i) \exp(-\phi_j)$, and natural gradient descent on the Fisher-Rao manifold. No positional encoding was used and the standard causal attention mask provides implicit sequential structure.
 
-We report results for a $\mathrm{GL}(10)$ gauge VFE model with embedding dimension $K = 90$, decomposed into 9 fundamental irreps of dimension 10 (yielding 9 attention heads), context length $N = 64$, batch size 16, and 100{,}000 training steps (58.8M parameters). The model uses VFE-dynamic mode with evolving covariance ($\Sigma$) and gauge frame ($\phi$), non-diagonal covariance structure, and learnable per-component learning rates. A standard transformer with dot-product attention and MLP sublayers (17.6M parameters) trained on the same data serves as a baseline. Full configurations are documented in the code repository.
+We report results for a $\mathrm{GL}(10)$ gauge VFE model with embedding dimension $K = 90$, decomposed into 9 fundamental irreps of dimension 10 (yielding 9 attention heads), context length $N = 64$, batch size 16, and 100{,}000 training steps (58.8M parameters). The model uses VFE-dynamic mode with evolving covariance ($\Sigma$) and gauge frame ($\phi$), full (non-diagonal) covariance matrices, and learnable per-component learning rates. A standard transformer with dot-product attention and MLP sublayers (17.6M parameters) trained on the same data serves as a baseline. Full configurations are documented in the code repository.
 
 
 \paragraph{Variational Inference Structure (E-step/M-step).}
@@ -1845,15 +1845,32 @@ Figure~\ref{fig:glk_training} shows the training dynamics for our best $\mathrm{
   \centering
   \begin{subfigure}[b]{0.48\textwidth}
     \includegraphics[width=\textwidth]{attention/figs/train_val_gapK=90.png}
-    \caption{Generalization gap (val BPC $-$ train BPC) for $\mathrm{GL}(10)$, $K=90$ with non-diagonal covariance.}
+    \caption{Generalization gap (val BPC $-$ train BPC) for the $\mathrm{GL}(10)$, $K=90$ gauge VFE model.}
   \end{subfigure}
   \hfill
   \begin{subfigure}[b]{0.48\textwidth}
     \includegraphics[width=\textwidth]{attention/figs/training_curvesK=90.png}
-    \caption{Training curves for $\mathrm{GL}(10)$, $K=90$ with non-diagonal covariance: loss, perplexity, bits per token, and gradient norms.}
+    \caption{Training curves for the $\mathrm{GL}(10)$, $K=90$ gauge VFE model: loss, perplexity, bits per token, and gradient norms.}
   \end{subfigure}
-  \caption{Training dynamics for the $\mathrm{GL}(10)$ gauge VFE model with $K=90$ embedding dimensions (9 heads of dimension 10, non-diagonal covariance) on WikiText-103. (a) The generalization gap (validation BPC minus training BPC) remains small throughout training, indicating effective regularization from the gauge-theoretic inductive bias. (b) Training curves showing loss, perplexity, bits per token, and gradient norms; perplexity drops from $>$1{,}400 to $\sim$91 over 100{,}000 steps.}
+  \caption{Training dynamics for the $\mathrm{GL}(10)$ gauge VFE model with $K=90$ embedding dimensions (9 heads of dimension 10) on WikiText-103. (a) The generalization gap (validation BPC minus training BPC) remains small throughout training, indicating effective regularization from the gauge-theoretic inductive bias. (b) Training curves showing loss, perplexity, bits per token, and gradient norms; perplexity drops from $>$1{,}400 to $\sim$91 over 100{,}000 steps.}
   \label{fig:glk_training}
+\end{figure*}
+
+Figure~\ref{fig:glk_attention} shows the learned KL-divergence attention patterns at convergence for two representative heads. Despite having no learned attention projections ($W_Q$, $W_K$, $W_V$), the gauge VFE model learns structured, non-uniform, and head-specific attention patterns purely through gauge transport and KL-divergence dynamics. Both heads exhibit the causal mask and strong early-position attention (vertical stripes at key positions 0--10), reminiscent of the ``attention sink'' phenomenon observed in standard transformers \citep{xiao2024efficient}. Head~0 (Figure~\ref{fig:glk_attention}a) shows a broad contextual pattern with relatively diffuse attention across the available context, while Head~5 (Figure~\ref{fig:glk_attention}b) develops sharper vertical stripes at specific key positions corresponding to high-frequency tokens, suggesting functional specialization between heads. The log-scale visualization reveals that attention weight variation spans approximately three orders of magnitude ($10^{-3}$ to $10^{0}$), confirming that the model learns highly selective attention from the KL-divergence geometry alone.
+
+\begin{figure*}[t]
+  \centering
+  \begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{attention/figs/attention_step_100000_head0k=90.png}
+    \caption{Head~0: broad contextual attention with diffuse coverage and strong early-position weighting.}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{attention/figs/attention_step_100000_head5k=90.png}
+    \caption{Head~5: sharper attention with prominent vertical stripes at specific high-frequency token positions.}
+  \end{subfigure}
+  \caption{Learned per-head KL-divergence attention patterns ($\log_{10}\beta_{ij}$) for the $\mathrm{GL}(10)$ gauge VFE model ($K=90$) at convergence (step 100{,}000) on a representative WikiText-103 sequence. The model develops selective, non-uniform, head-specialized attention through gauge transport and KL-divergence dynamics alone, without any learned attention projections ($W_Q$, $W_K$, $W_V$).}
+  \label{fig:glk_attention}
 \end{figure*}
 
 \subsubsection{Results}
@@ -1904,9 +1921,6 @@ The gauge frames influence predictions through an indirect route: during each VF
 This analysis identifies increasing $K$ (with multi-head $\mathrm{GL}(d_{\text{head}})$ to control computational cost, since matrix exponentials remain $d_{\text{head}} \times d_{\text{head}}$) as the theoretically justified route to higher output capacity. Increasing VFE iterations and depth provides complementary gains by improving the transfer of gauge-encoded semantic structure into the observable belief means.
 
 
-
-\paragraph{Meta-agent emergence with uniform coupling.}
-\label{sec:uniform_attention} The renormalization group metrics reveal incipient structure even under uniform attention. Two meta-agent clusters emerge (detected by spectral methods on the KL divergence matrix), with the inter-cluster KL divergence growing from 9.3 to 27.2 over training. The modularity $Q \approx 0.131$ remains modest, consistent with the uniform attention providing no preferential within-cluster coupling. This demonstrates that meta-agent structure can emerge from transport geometry alone, without the selective attention that would normally amplify intra-cluster communication.
 
 
 
@@ -1989,7 +2003,7 @@ The full variational free energy (Section~3.4) includes both the fast belief sub
 
 The full VFE prescribes coupled dynamics at both timescales simultaneously. The model-model alignment term $\gamma_{ij} D_{\mathrm{KL}}(s_i \| \tilde{\Omega}_{ij} s_j)$ drives agents toward consensus not just on what the world state is (beliefs), but on how the world works (models). Combined with hierarchical priors that couple beliefs to model uncertainty, this yields three coupled dynamical regimes: fast dynamics ($q_i$) corresponding to in-context belief updating; slow dynamics ($s_i$) corresponding to online model adaptation; and cross-scale coupling ensuring that model uncertainty propagates into belief uncertainty. Implementing the full VFE with both subsystems active during inference would yield a model that treats language not as a static distribution to be memorized but as a dynamical information system to be tracked, with in-context learning, fine-tuning, and continual adaptation arising as limits of the same underlying variational dynamics rather than requiring separate architectural mechanisms.
 
-The uniform-attention experiment (Section~\ref{sec:uniform_attention}) provides a partial realization of this vision: all variational parameters ($\mu_i$, $\Sigma_i$, $\phi_i$) are updated via local VFE gradient descent without backpropagation through the computational graph. When combined with a delta rule for the output projection $W_{\text{out}}$ ($\Delta W = \eta(\text{target} - \text{prediction}) \otimes \mu^\top$), the entire learning pipeline becomes backpropagation-free---beliefs evolve by VFE minimization (fast timescale), gauge frames via $\partial \mathcal{F}/\partial \phi$ (intermediate), and the output mapping via local error-driven learning (slow). That this multi-timescale VFE dynamics achieves PPL 377 suggests the variational free energy principle provides not only an explanatory framework but a potentially viable alternative learning algorithm grounded in information geometry.
+A natural extension toward backpropagation-free learning would update all variational parameters ($\mu_i$, $\Sigma_i$, $\phi_i$) via local VFE gradient descent without backpropagation through the computational graph. When combined with a delta rule for the output projection $W_{\text{out}}$ ($\Delta W = \eta(\text{target} - \text{prediction}) \otimes \mu^\top$), the entire learning pipeline would become backpropagation-free---beliefs evolving by VFE minimization (fast timescale), gauge frames via $\partial \mathcal{F}/\partial \phi$ (intermediate), and the output mapping via local error-driven learning (slow). Such an approach would demonstrate whether the variational free energy principle provides not only an explanatory framework but a viable alternative learning algorithm grounded in information geometry.
 
 
 
@@ -1997,7 +2011,7 @@ The uniform-attention experiment (Section~\ref{sec:uniform_attention}) provides 
 
 We have presented a gauge-theoretic framework in which attention emerges as the communication mechanism of distributed variational inference. Treating language as a dynamic informational system---agents exchanging beliefs under uncertainty---gauge-covariant variational free energy minimization provides the mathematically natural formalism, with attention weights, transport operators, and gradient updates each corresponding to identifiable information-theoretic quantities within a single variational objective.
 
-The $\mathrm{GL}(K)$ invariance theorem (Theorem~\ref{thm:glk_invariance}) reveals that standard transformers already implement this gauge structure: the learned projections $W_Q, W_K$ are gauge transformations, and standard attention is recovered as a degenerate limit in which gauge degrees of freedom are absorbed into learned parameters. Our empirical results validate this perspective: the transformer validation confirms quantitative agreement between KL-based and dot-product attention across five architectures and 105 passages ($\bar{r} = 0.804$, $H(\beta)/H(\alpha) = 1.076$; Section~5.2), with the optimal temperature predicted from head dimension alone ($\tau \approx 2\sqrt{d}$); the unreduced $\mathrm{GL}(K)$ gauge VFE achieves non-trivial language modeling surpassing classical baselines without neural components (Section~\ref{sec:glk_lm}); and the uniform-attention experiment establishes that transport geometry alone captures substantial linguistic structure (Section~\ref{sec:uniform_attention}).
+The $\mathrm{GL}(K)$ invariance theorem (Theorem~\ref{thm:glk_invariance}) reveals that standard transformers already implement this gauge structure: the learned projections $W_Q, W_K$ are gauge transformations, and standard attention is recovered as a degenerate limit in which gauge degrees of freedom are absorbed into learned parameters. Our empirical results validate this perspective: the transformer validation confirms quantitative agreement between KL-based and dot-product attention across five architectures and 105 passages ($\bar{r} = 0.804$, $H(\beta)/H(\alpha) = 1.076$; Section~5.2), with the optimal temperature predicted from head dimension alone ($\tau \approx 2\sqrt{d}$); and the unreduced $\mathrm{GL}(K)$ gauge VFE achieves non-trivial language modeling surpassing classical baselines without neural components, with the model learning structured, head-specialized attention patterns through gauge transport and KL-divergence dynamics alone (Section~\ref{sec:glk_lm}).
 
 The framework further reveals a geometric interpretation of learning itself: the untrained network corresponds to a gauge-symmetric vacuum state whose degeneracy is broken by observations, with training acting as explicit symmetry breaking. We anticipate this perspective---that attention is gauge-covariant inference, and learning is symmetry breaking---will find application not only in machine learning but in understanding biological cognition, collective intelligence, and other domains where distributed agents must communicate under geometric constraints.
 
