@@ -291,33 +291,9 @@ def gaussian_kl_divergence(
         if sigma_p is None:
             sigma_p = torch.eye(K, device=device, dtype=dtype).expand(*mu_p.shape[:-1], K, K)
 
-        # Symmetrize for numerical safety
-        sigma_q = 0.5 * (sigma_q + sigma_q.transpose(-1, -2))
-        sigma_p = 0.5 * (sigma_p + sigma_p.transpose(-1, -2))
-
-        # Ensure SPD via progressive regularization (matching retract_spd_torch)
-        eye_K = torch.eye(K, device=device, dtype=dtype)
-        reg_scales = [eps, 1e-5, 1e-4, 1e-3, 1e-2, 0.1]
-
-        sigma_q_reg = sigma_q
-        for reg_scale in reg_scales:
-            candidate = sigma_q + reg_scale * eye_K
-            _, info = torch.linalg.cholesky_ex(candidate)
-            if (info == 0).all():
-                sigma_q_reg = candidate
-                break
-        else:
-            sigma_q_reg = sigma_q + 0.1 * eye_K
-
-        sigma_p_reg = sigma_p
-        for reg_scale in reg_scales:
-            candidate = sigma_p + reg_scale * eye_K
-            _, info = torch.linalg.cholesky_ex(candidate)
-            if (info == 0).all():
-                sigma_p_reg = candidate
-                break
-        else:
-            sigma_p_reg = sigma_p + 0.1 * eye_K
+        # Regularize for numerical stability
+        sigma_q_reg = sigma_q + eps * torch.eye(K, device=device, dtype=dtype)
+        sigma_p_reg = sigma_p + eps * torch.eye(K, device=device, dtype=dtype)
 
         # Compute Σ_p⁻¹ via Cholesky
         L_p = torch.linalg.cholesky(sigma_p_reg)
@@ -374,7 +350,6 @@ def compute_free_energy_loss(
     lambda_gamma: float = 0.0,    # Model alignment weight
     kappa_gamma: float = 1.0,     # Temperature for γ_ij coupling weights
     pad_token_id: int = -100,     # Token ID to ignore in loss (padding)
-    use_obs_in_vfe: bool = False, # Pass targets into VFE E-step as observations
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     Compute COMPLETE free energy loss with all gauge-theoretic terms.
@@ -427,14 +402,11 @@ def compute_free_energy_loss(
     # =================================================================
     # Forward pass with attention weights and KL matrices
     # =================================================================
-    # When use_obs_in_vfe=True, targets flow into the VFE E-step as
-    # discrete observations: ∂CE(W_out·μ, targets)/∂μ steers beliefs
-    # toward predicting the actual next token. The observation gradient
-    # is computed with mu_current.detach() (see variational_ffn.py L2025)
-    # so it provides a direction signal without creating a shortcut that
-    # would collapse CE to 0.
-    vfe_targets = targets if use_obs_in_vfe else None
-    logits, attn_info = model.forward_with_attention(token_ids, targets=vfe_targets)
+    # NOTE: Do NOT pass targets here! Passing targets allows VFE FFN to
+    # "cheat" by using targets to adjust beliefs before CE is computed,
+    # causing CE to collapse to 0. Targets should only be used for loss
+    # computation AFTER the forward pass.
+    logits, attn_info = model.forward_with_attention(token_ids, targets=None)
 
     beta = attn_info['beta']    # (B, n_heads, N, N)
     kl = attn_info['kl']        # (B, n_heads, N, N)
@@ -614,8 +586,7 @@ def compute_free_energy_loss(
                     mahal_sq = (delta ** 2 / sigma_p.clamp(min=1e-6)).sum(dim=-1)
                 else:
                     K = mu_q.shape[-1]
-                    from transformer.core.variational_ffn import robust_spd_inv
-                    sp_inv = robust_spd_inv(sigma_p, eps=1e-6)
+                    sp_inv = torch.linalg.inv(sigma_p + 1e-6 * torch.eye(K, device=mu_q.device))
                     mahal_sq = torch.einsum('bni,bnij,bnj->bn', delta, sp_inv, delta)
                 metrics['bayesian/alpha_mean'] = alpha_vals.mean().item()
                 metrics['bayesian/alpha_std'] = alpha_vals.std().item()
@@ -1015,7 +986,6 @@ class Trainer:
                 lambda_gamma=self.config.lambda_gamma,
                 kappa_gamma=self.config.kappa_gamma,
                 pad_token_id=self.pad_token_id,
-                use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
             )
 
             # Scale loss for gradient accumulation
@@ -1119,7 +1089,6 @@ class Trainer:
                 lambda_gamma=self.config.lambda_gamma,
                 kappa_gamma=self.config.kappa_gamma,
                 pad_token_id=self.pad_token_id,
-                use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
             )
 
             total_loss += loss.item()

@@ -86,47 +86,6 @@ except ImportError:
     RETRACTION_AVAILABLE = False
 
 
-def robust_spd_inv(
-    sigma: torch.Tensor,
-    eps: float = 1e-6,
-) -> torch.Tensor:
-    """
-    Robustly invert SPD matrices with progressive regularization.
-
-    When sigma has near-zero or negative eigenvalues (from accumulated
-    floating-point drift across VFE layers), a single eps*I addition
-    is insufficient. This tries progressively larger regularization
-    until the matrix is invertible.
-
-    Args:
-        sigma: SPD matrices (..., K, K). Batch dimensions are arbitrary.
-        eps: Base regularization constant.
-
-    Returns:
-        sigma_inv: Inverse matrices, same shape as sigma.
-    """
-    K = sigma.shape[-1]
-    device = sigma.device
-    dtype = sigma.dtype
-    eye_K = torch.eye(K, device=device, dtype=dtype)
-
-    # Symmetrize for numerical safety
-    sigma = 0.5 * (sigma + sigma.transpose(-1, -2))
-
-    reg_scales = [eps, 1e-5, 1e-4, 1e-3, 1e-2, 0.1]
-    for reg_scale in reg_scales:
-        sigma_reg = sigma + reg_scale * eye_K
-        # cholesky_ex returns per-matrix info codes (0 = success)
-        L, info = torch.linalg.cholesky_ex(sigma_reg)
-        if (info == 0).all():
-            # All matrices SPD — invert via Cholesky (more stable than linalg.inv)
-            return torch.cholesky_inverse(L)
-
-    # Last resort: heavy regularization
-    sigma_reg = sigma + 0.1 * eye_K
-    return torch.linalg.inv(sigma_reg)
-
-
 def _retract_phi(
     phi: torch.Tensor,
     delta_phi: torch.Tensor,
@@ -284,11 +243,13 @@ def _compute_vfe_gradients_block_diagonal(
     # =================================================================
     # 1. Self-Coupling Gradient (block-wise but simpler)
     # =================================================================
-    sigma_p_inv = robust_spd_inv(sigma_p, eps=eps)
+    sigma_p_reg = sigma_p + eps * torch.eye(K, device=device, dtype=dtype)
+    sigma_p_inv = torch.linalg.inv(sigma_p_reg)
     delta_mu = mu_q - mu_p
     grad_mu_self = alpha * torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
 
-    sigma_q_inv = robust_spd_inv(sigma_q, eps=eps)
+    sigma_q_reg = sigma_q + eps * torch.eye(K, device=device, dtype=dtype)
+    sigma_q_inv = torch.linalg.inv(sigma_q_reg)
     # For full covariance (4D), alpha (B,N,1) needs extra dim to broadcast with (B,N,K,K)
     alpha_4d = alpha.unsqueeze(-1) if isinstance(alpha, torch.Tensor) else alpha
     grad_sigma_self = alpha_4d * 0.5 * (sigma_p_inv - sigma_q_inv)
@@ -363,7 +324,7 @@ def _compute_vfe_gradients_block_diagonal(
             # Regularize and invert
             I_d = torch.eye(d, device=device, dtype=dtype)
             sigma_j_reg = sigma_j_transported + eps * I_d
-            sigma_j_inv = robust_spd_inv(sigma_j_transported, eps=eps)  # (B, C, N, d, d)
+            sigma_j_inv = torch.linalg.inv(sigma_j_reg)  # (B, C, N, d, d)
 
             # Delta mu for this block (query chunk) - contiguous to avoid view issues
             mu_block_i = mu_block[:, i_start:i_end].contiguous()  # (B, C, d)
@@ -405,7 +366,7 @@ def _compute_vfe_gradients_block_diagonal(
 
             # Sigma alignment gradient for this block
             if compute_sigma_align_grad:
-                sigma_i_inv_block = robust_spd_inv(sigma_i_block_diag, eps=1e-4)  # (B, C, d, d)
+                sigma_i_inv_block = torch.linalg.inv(sigma_i_block_diag + 1e-4 * I_d)  # (B, C, d, d)
                 # Use .clone() after expand to avoid view-related gradient issues
                 sigma_i_inv_exp = sigma_i_inv_block[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()
                 grad_sigma_block = 0.5 * (sigma_j_inv - sigma_i_inv_exp)
@@ -546,7 +507,10 @@ def _compute_vfe_gradients_chunked(
             # Use 1e-4 floor (not eps=1e-6) to prevent singularity after many
             # VFE iterations when σ_j entries shrink near zero
             sigma_j_reg = sigma_j_transported + max(eps, 1e-4) * torch.eye(K, device=device, dtype=dtype)
-            sigma_j_inv = robust_spd_inv(sigma_j_transported, eps=max(eps, 1e-4))
+            try:
+                sigma_j_inv = torch.linalg.inv(sigma_j_reg)
+            except (torch.linalg.LinAlgError, RuntimeError):
+                sigma_j_inv = torch.linalg.pinv(sigma_j_reg)
 
             # Delta mu
             delta_mu_ij = mu_i[:, :, None, :] - mu_j_transported
@@ -729,13 +693,15 @@ def compute_vfe_gradients_gpu(
     else:
         # Full covariance - use matrix operations
         # ∂KL/∂μ_q = Σ_p^{-1} (μ_q - μ_p)
-        sigma_p_inv = robust_spd_inv(sigma_p, eps=eps)  # (B, N, K, K)
+        sigma_p_reg = sigma_p + eps * torch.eye(K, device=device, dtype=dtype)
+        sigma_p_inv = torch.linalg.inv(sigma_p_reg)  # (B, N, K, K)
 
         delta_mu = mu_q - mu_p  # (B, N, K)
         grad_mu_self = alpha * torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
 
         # ∂KL/∂Σ_q = 0.5 * (Σ_p^{-1} - Σ_q^{-1})
-        sigma_q_inv = robust_spd_inv(sigma_q, eps=eps)
+        sigma_q_reg = sigma_q + eps * torch.eye(K, device=device, dtype=dtype)
+        sigma_q_inv = torch.linalg.inv(sigma_q_reg)
         # For full covariance (4D), alpha (B,N,1) needs extra dim to broadcast with (B,N,K,K)
         alpha_4d = alpha.unsqueeze(-1) if isinstance(alpha, torch.Tensor) else alpha
         grad_sigma_self = alpha_4d * 0.5 * (sigma_p_inv - sigma_q_inv)
@@ -802,7 +768,10 @@ def compute_vfe_gradients_gpu(
                 eye_K.expand_as(sigma_j_reg),
                 sigma_j_reg,
             )
-        sigma_j_inv = robust_spd_inv(sigma_j_reg, eps=max(eps, 1e-4))  # (B, N, N, K, K)
+        try:
+            sigma_j_inv = torch.linalg.inv(sigma_j_reg)  # (B, N, N, K, K)
+        except (torch.linalg.LinAlgError, RuntimeError):
+            sigma_j_inv = torch.linalg.pinv(sigma_j_reg)
 
         # ∂KL_ij/∂μ_i = Σ_j_transported^{-1} @ (μ_i - μ_j_transported)
         grad_kl_per_pair = torch.einsum('bijkl,bijl->bijk', sigma_j_inv, delta_mu_ij)  # (B, N, N, K)
@@ -932,7 +901,10 @@ def compute_vfe_gradients_gpu(
                 eye_K.expand_as(sigma_j_reg),
                 sigma_j_reg,
             )
-        sigma_j_inv = robust_spd_inv(sigma_j_reg, eps=max(eps, 1e-4))  # (B, N, N, K, K)
+        try:
+            sigma_j_inv = torch.linalg.inv(sigma_j_reg)  # (B, N, N, K, K)
+        except (torch.linalg.LinAlgError, RuntimeError):
+            sigma_j_inv = torch.linalg.pinv(sigma_j_reg)
 
         # ∂KL_ij/∂μ_i
         grad_kl_per_pair = torch.einsum('bijkl,bijl->bijk', sigma_j_inv, delta_mu_ij)
@@ -1739,7 +1711,8 @@ class VariationalFFNDynamic(nn.Module):
         else:
             # Full covariance: δμᵀ Σ_p⁻¹ δμ
             K = mu_q.shape[-1]
-            sigma_p_inv = robust_spd_inv(sigma_p, eps=eps)  # (B, N, K, K)
+            sigma_p_reg = sigma_p + eps * torch.eye(K, device=mu_q.device, dtype=mu_q.dtype)
+            sigma_p_inv = torch.linalg.inv(sigma_p_reg)  # (B, N, K, K)
             mahal_sq = torch.einsum('bni,bnij,bnj->bn', delta_mu, sigma_p_inv, delta_mu)
             mahal_sq = mahal_sq.unsqueeze(-1)  # (B, N, 1)
 
@@ -2052,11 +2025,9 @@ class VariationalFFNDynamic(nn.Module):
                 logits = torch.matmul(mu_current.detach(), W_out.T)
                 probs = F.softmax(logits, dim=-1)
                 targets_valid = targets.clone()
-                # Mask out padding/invalid tokens (both -1 and -100 sentinels)
-                invalid = (targets < 0) | (targets >= W_out.shape[0])
-                targets_valid[invalid] = 0
+                targets_valid[targets == -1] = 0
                 one_hot = F.one_hot(targets_valid, num_classes=W_out.shape[0]).float()
-                mask_obs = (~invalid).unsqueeze(-1).float()
+                mask_obs = (targets != -1).unsqueeze(-1).float()
                 one_hot = one_hot * mask_obs
                 grad_error = (probs - one_hot) * mask_obs
                 discrete_obs_grad = torch.matmul(grad_error, W_out)
