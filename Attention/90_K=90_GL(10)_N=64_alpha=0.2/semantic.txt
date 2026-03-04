@@ -1,0 +1,28 @@
+============================================================
+GAUGE FRAME SEMANTIC ANALYSIS
+============================================================
+mu shape: [50257, 90]
+phi shape: [50257, 900] (GL(10))
+
+Token Class Analysis:
+  mu inter/intra ratio: 1.60x
+  phi inter/intra ratio: 0.90x
+  --> phi does NOT show clear class structure
+
+  mu Clustering Metrics (full-dimensional):
+    Silhouette score: -0.200 (range [-1,1], higher=better)
+    Calinski-Harabasz: 5.6
+    Inter/intra distance ratio: 1.151
+    ANOVA mean F: 3.9, geomean p: 2.83e-03, 43% dims significant
+    PCA: 3 comp = 15.3% var; 50%@20, 90%@>50, 95%@>50 of 90 dims
+
+  phi Clustering Metrics (full-dimensional):
+    Silhouette score: 0.003 (range [-1,1], higher=better)
+    Calinski-Harabasz: 4.5
+    Inter/intra distance ratio: 1.037
+    ANOVA mean F: 6.3, geomean p: 6.08e-05, 57% dims significant
+    PCA: 3 comp = 5.8% var; 50%@>50, 90%@>50, 95%@>50 of 900 dims
+  Saved semantic analysis history to: checkpoints_publication\ffn_VFE_dynamic\publication_outputs\VFE_dynamic_20260227_204313\semantic_analysis_history.json
+
+
+Sample: In that in the " We didn 't believe in the film , but " . The song was a song was the album was made...
