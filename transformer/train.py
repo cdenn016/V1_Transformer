@@ -614,7 +614,8 @@ def compute_free_energy_loss(
                     mahal_sq = (delta ** 2 / sigma_p.clamp(min=1e-6)).sum(dim=-1)
                 else:
                     K = mu_q.shape[-1]
-                    sp_inv = torch.linalg.inv(sigma_p + 1e-6 * torch.eye(K, device=mu_q.device))
+                    from transformer.core.variational_ffn import robust_spd_inv
+                    sp_inv = robust_spd_inv(sigma_p, eps=1e-6)
                     mahal_sq = torch.einsum('bni,bnij,bnj->bn', delta, sp_inv, delta)
                 metrics['bayesian/alpha_mean'] = alpha_vals.mean().item()
                 metrics['bayesian/alpha_std'] = alpha_vals.std().item()
