@@ -361,6 +361,8 @@ def _compute_vfe_gradients_block_diagonal(
             del Omega_chunk
 
             # Regularize and invert
+            I_d = torch.eye(d, device=device, dtype=dtype)
+            sigma_j_reg = sigma_j_transported + eps * I_d
             sigma_j_inv = robust_spd_inv(sigma_j_transported, eps=eps)  # (B, C, N, d, d)
 
             # Delta mu for this block (query chunk) - contiguous to avoid view issues
@@ -543,6 +545,7 @@ def _compute_vfe_gradients_chunked(
             # Regularize and invert transported covariance
             # Use 1e-4 floor (not eps=1e-6) to prevent singularity after many
             # VFE iterations when σ_j entries shrink near zero
+            sigma_j_reg = sigma_j_transported + max(eps, 1e-4) * torch.eye(K, device=device, dtype=dtype)
             sigma_j_inv = robust_spd_inv(sigma_j_transported, eps=max(eps, 1e-4))
 
             # Delta mu
