@@ -87,6 +87,67 @@ __all__ = [
 
 
 # =============================================================================
+# Rotary Position Embeddings (RoPE) for KL-Divergence Attention
+# =============================================================================
+# RoPE applies position-dependent SO(2)^{K/2} rotations to belief means μ
+# before computing KL divergences. This makes attention position-sensitive
+# without affecting gauge transport Ω_ij.
+#
+# In the gauge-theoretic framework (see GL(K)_attention.tex §3):
+#   Ω_ij^{RoPE} = R(θ_{j-i}) · Ω_ij^{content}
+# where R(θ) ∈ SO(2)^{K/2} ⊂ GL(K) is the position-dependent rotation.
+# =============================================================================
+
+def _build_rope_freqs(K: int, base: float = 10000.0,
+                      device: torch.device = None,
+                      dtype: torch.dtype = None) -> torch.Tensor:
+    """Compute RoPE frequency bands for K-dimensional beliefs.
+
+    Returns:
+        freqs: (K//2,) inverse frequency bands
+    """
+    half_K = K // 2
+    freqs = 1.0 / (base ** (torch.arange(0, half_K, device=device, dtype=dtype) / half_K))
+    return freqs
+
+
+def _apply_rope(mu: torch.Tensor, base: float = 10000.0) -> torch.Tensor:
+    """Apply Rotary Position Embeddings to belief means.
+
+    Rotates consecutive pairs of dimensions by position-dependent angles,
+    making KL divergences sensitive to relative position.
+
+    Args:
+        mu: (B, N, K) belief means
+        base: RoPE frequency base (default 10000.0)
+
+    Returns:
+        mu_rotated: (B, N, K) position-rotated belief means
+    """
+    B, N, K = mu.shape
+    half_K = K // 2
+
+    # Compute position-dependent angles: θ_n(pos) = pos * freq_n
+    freqs = _build_rope_freqs(K, base, device=mu.device, dtype=mu.dtype)  # (K//2,)
+    positions = torch.arange(N, device=mu.device, dtype=mu.dtype)  # (N,)
+    angles = torch.outer(positions, freqs)  # (N, K//2)
+
+    cos_angles = torch.cos(angles)  # (N, K//2)
+    sin_angles = torch.sin(angles)  # (N, K//2)
+
+    # Split μ into even/odd pairs and apply 2D rotation
+    mu_even = mu[:, :, :2*half_K:2]   # (B, N, K//2) - dims 0,2,4,...
+    mu_odd = mu[:, :, 1:2*half_K:2]   # (B, N, K//2) - dims 1,3,5,...
+
+    # R(θ) @ [x, y]^T = [x·cos(θ) - y·sin(θ), x·sin(θ) + y·cos(θ)]
+    mu_rotated = mu.clone()
+    mu_rotated[:, :, :2*half_K:2] = mu_even * cos_angles - mu_odd * sin_angles
+    mu_rotated[:, :, 1:2*half_K:2] = mu_even * sin_angles + mu_odd * cos_angles
+
+    return mu_rotated
+
+
+# =============================================================================
 # Sparse Attention Patterns
 # =============================================================================
 
@@ -255,6 +316,9 @@ def compute_attention_weights(
     mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
     # Gauge group control
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
+    # Rotary Position Embeddings (RoPE)
+    use_rope: bool = False,            # If True, apply RoPE rotations to μ before KL computation
+    rope_base: float = 10000.0,        # RoPE frequency base
 ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
     """
     Compute attention weights from KL divergences (0D version).
@@ -330,6 +394,14 @@ def compute_attention_weights(
     batch_size, num_agents, K = mu_q.shape
     device = mu_q.device
     dtype = mu_q.dtype
+
+    # =========================================================================
+    # RoPE: Apply position-dependent SO(2)^{K/2} rotations to belief means
+    # This makes KL(q_i || Ω_ij[q_j]) sensitive to relative position (j-i).
+    # Applied ONLY to attention scores, NOT to message aggregation values.
+    # =========================================================================
+    if use_rope:
+        mu_q = _apply_rope(mu_q, base=rope_base)
 
     # =========================================================================
     # Compute all pairwise KL divergences: KL(q_i || Ω_ij[q_j])
@@ -1896,6 +1968,8 @@ class IrrepMultiHeadAttention(nn.Module):
         per_head_kappa: bool = False,  # If True, learn separate κ_h per head
         use_output_projection: bool = False,  # If True, add W_O linear projection after heads
         irrep_dims_override: Optional[List[int]] = None,  # Override block dims (for cross-head coupling)
+        use_rope: bool = False,  # If True, apply RoPE rotations to μ before KL computation
+        rope_base: float = 10000.0,  # RoPE frequency base
     ):
         """
         Initialize irrep-structured multi-head attention.
@@ -1937,6 +2011,8 @@ class IrrepMultiHeadAttention(nn.Module):
         self.use_identity_transport = use_identity_transport
         self.mask_self_attention = mask_self_attention
         self.enforce_orthogonal = enforce_orthogonal
+        self.use_rope = use_rope
+        self.rope_base = rope_base
 
         # Build irrep block structure
         self.irrep_dims = []
@@ -2231,6 +2307,8 @@ class IrrepMultiHeadAttention(nn.Module):
                     use_identity_transport=self.use_identity_transport,
                     mask_self_attention=self.mask_self_attention,
                     enforce_orthogonal=self.enforce_orthogonal,
+                    use_rope=self.use_rope,
+                    rope_base=self.rope_base,
                 )  # (B, N, N), (B, N, N)
                 all_attention_weights.append(beta_head)
                 all_kl_matrices.append(kl_head)
@@ -2251,6 +2329,8 @@ class IrrepMultiHeadAttention(nn.Module):
                     use_identity_transport=self.use_identity_transport,
                     mask_self_attention=self.mask_self_attention,
                     enforce_orthogonal=self.enforce_orthogonal,
+                    use_rope=self.use_rope,
+                    rope_base=self.rope_base,
                 )  # (B, N, N)
                 kl_head = None  # Not computed
 

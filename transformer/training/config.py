@@ -140,6 +140,12 @@ class TrainingConfig:
     use_identity_group: bool = False
 
     # ==========================================================================
+    # Positional Encoding
+    # ==========================================================================
+    use_rope: bool = False       # RoPE: SO(2)^{K/2} position rotations on μ in attention
+    rope_base: float = 10000.0   # RoPE frequency base
+
+    # ==========================================================================
     # Model Architecture (for creation, not training)
     # ==========================================================================
     embed_dim: int = 128

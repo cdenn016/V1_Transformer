@@ -474,6 +474,9 @@ class GaugeTransformerLM(nn.Module):
             multihead_vfe=config.get('multihead_vfe', False),
             # Cross-head coupling
             cross_head_perm=getattr(self, '_cross_head_perm', None),
+            # RoPE (Rotary Position Embeddings)
+            use_rope=config.get('use_rope', False),
+            rope_base=config.get('rope_base', 10000.0),
         )
 
         # =================================================================
