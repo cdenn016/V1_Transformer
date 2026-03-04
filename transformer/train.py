@@ -350,6 +350,7 @@ def compute_free_energy_loss(
     lambda_gamma: float = 0.0,    # Model alignment weight
     kappa_gamma: float = 1.0,     # Temperature for γ_ij coupling weights
     pad_token_id: int = -100,     # Token ID to ignore in loss (padding)
+    use_obs_in_vfe: bool = False, # Pass targets into VFE E-step (last layer only)
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     Compute COMPLETE free energy loss with all gauge-theoretic terms.
@@ -402,11 +403,12 @@ def compute_free_energy_loss(
     # =================================================================
     # Forward pass with attention weights and KL matrices
     # =================================================================
-    # NOTE: Do NOT pass targets here! Passing targets allows VFE FFN to
-    # "cheat" by using targets to adjust beliefs before CE is computed,
-    # causing CE to collapse to 0. Targets should only be used for loss
-    # computation AFTER the forward pass.
-    logits, attn_info = model.forward_with_attention(token_ids, targets=None)
+    # When use_obs_in_vfe=True, pass targets so the LAST layer's VFE E-step
+    # can use observations (CE gradient) to ground beliefs. Intermediate
+    # layers do blind belief propagation + alignment only.
+    # When False, targets=None and observations only enter via M-step CE.
+    vfe_targets = targets if use_obs_in_vfe else None
+    logits, attn_info = model.forward_with_attention(token_ids, targets=vfe_targets)
 
     beta = attn_info['beta']    # (B, n_heads, N, N)
     kl = attn_info['kl']        # (B, n_heads, N, N)
@@ -986,6 +988,7 @@ class Trainer:
                 lambda_gamma=self.config.lambda_gamma,
                 kappa_gamma=self.config.kappa_gamma,
                 pad_token_id=self.pad_token_id,
+                use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
             )
 
             # Scale loss for gradient accumulation
@@ -1089,6 +1092,7 @@ class Trainer:
                 lambda_gamma=self.config.lambda_gamma,
                 kappa_gamma=self.config.kappa_gamma,
                 pad_token_id=self.pad_token_id,
+                use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
             )
 
             total_loss += loss.item()

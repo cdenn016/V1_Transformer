@@ -1022,7 +1022,7 @@ class PublicationTrainer(FastTrainer):
                         lambda_beta=self.config.beta,
                         lambda_gamma=self.config.lambda_gamma,
                         kappa_gamma=self.config.kappa_gamma,
-
+                        use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
                     )
             # Scaled backward
             self.scaler.scale(loss).backward()
@@ -1045,7 +1045,7 @@ class PublicationTrainer(FastTrainer):
                     lambda_beta=self.config.beta,
                     lambda_gamma=self.config.lambda_gamma,
                     kappa_gamma=self.config.kappa_gamma,
-
+                    use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
                 )
             loss.backward()
 
