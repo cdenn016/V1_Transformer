@@ -758,10 +758,12 @@ class GaugeTransformerLM(nn.Module):
             cached_head_transports = None
 
         # Forward through transformer blocks (all but last without attention tracking)
+        # Intermediate layers: blind belief propagation + alignment only (no observations).
+        # Only the final layer gets targets so its E-step can ground beliefs in observations.
         for block in self.transformer.blocks[:-1]:
             mu_q, sigma_q, phi = block(
                 mu_q, sigma_q, phi, self.generators, mask, mu_prior,
-                targets=targets,  # Pass targets for E-step
+                targets=None,  # Intermediate layers: no observations
                 W_out=self.out_proj.weight if hasattr(self.out_proj, 'weight') else None,
                 cached_head_transports=cached_head_transports,
             )

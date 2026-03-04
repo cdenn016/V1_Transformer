@@ -73,6 +73,7 @@ class TrainingConfig:
     lambda_beta: float = 1.0     # Belief alignment: Σβ_ij·KL (CRUCIAL!)
     lambda_gamma: float = 0.0    # Model alignment (disabled by default)
     kappa_gamma: float = 1.0     # Temperature for γ_ij coupling weights
+    use_obs_in_vfe: bool = False # Pass targets as observations into VFE E-step (last layer only)
 
     # ==========================================================================
     # Training Loop
