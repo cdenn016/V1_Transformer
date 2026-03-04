@@ -785,6 +785,16 @@ def _compute_kl_matrix_torch(
     Sigma_i_reg = Sigma_i + eps * I
     Sigma_transported_reg = Sigma_transported + eps * I
 
+    # NaN guard: replace any NaN entries with identity covariance.
+    # NaNs propagate from matrix_exp overflow when phi grows very large.
+    nan_mask = torch.isnan(Sigma_transported_reg).any(dim=-1).any(dim=-1)  # (B, N, N)
+    if nan_mask.any():
+        Sigma_transported_reg = torch.where(
+            nan_mask.unsqueeze(-1).unsqueeze(-1),
+            I.expand_as(Sigma_transported_reg),
+            Sigma_transported_reg,
+        )
+
     try:
         # Cholesky of transported covariances (prior in KL)
         L_p = torch.linalg.cholesky(Sigma_transported_reg)
@@ -1003,6 +1013,12 @@ def _compute_kl_matrix_diagonal(
     else:
         # Compute transport operators
         phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
+
+        # Clamp phi_matrix norm to prevent matrix_exp overflow → NaN
+        phi_norm = phi_matrix.norm(dim=(-2, -1), keepdim=True).clamp(min=1e-8)
+        max_norm = 10.0
+        scale = (max_norm / phi_norm).clamp(max=1.0)
+        phi_matrix = phi_matrix * scale
 
         exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
 
