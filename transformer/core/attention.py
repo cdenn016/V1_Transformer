@@ -765,9 +765,9 @@ def _compute_kl_matrix_torch(
             Omega, sigma_q, Omega.transpose(-1, -2)
         )  # (B, N, N, K, K)
 
-        # Symmetrize to correct numerical drift from matrix exponentials.
-        # Without this, Ω drifting from exact orthogonality can make
-        # Ω Σ Ω^T asymmetric, causing Cholesky to fail.
+        # Symmetrize to correct floating-point accumulation errors.
+        # Ω ∈ GL⁺(K), so Ω Σ Ω^T is theoretically symmetric but
+        # finite-precision einsum can introduce asymmetry, breaking Cholesky.
         Sigma_transported = 0.5 * (Sigma_transported + Sigma_transported.transpose(-1, -2))
 
     # =========================================================================
