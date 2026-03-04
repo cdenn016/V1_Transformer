@@ -130,15 +130,6 @@ class TrainingConfig:
     use_amp: bool = False  # Automatic mixed precision
 
     # ==========================================================================
-    # VFE Observation Mode
-    # ==========================================================================
-    # When True, pass targets into VFE E-step as discrete observations.
-    # The observation gradient ∂CE/∂μ (via W_out) steers belief updates
-    # toward predicting the actual next token during variational inference.
-    # This makes the E-step observation-informed rather than blind.
-    use_obs_in_vfe: bool = False
-
-    # ==========================================================================
     # Gauge Group
     # ==========================================================================
     # When True, trivialize the gauge group by setting all transport operators
