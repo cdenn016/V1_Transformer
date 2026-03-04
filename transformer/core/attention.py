@@ -765,6 +765,11 @@ def _compute_kl_matrix_torch(
             Omega, sigma_q, Omega.transpose(-1, -2)
         )  # (B, N, N, K, K)
 
+        # Symmetrize to correct numerical drift from matrix exponentials.
+        # Without this, Ω drifting from exact orthogonality can make
+        # Ω Σ Ω^T asymmetric, causing Cholesky to fail.
+        Sigma_transported = 0.5 * (Sigma_transported + Sigma_transported.transpose(-1, -2))
+
     # =========================================================================
     # Step 3: Expand mu_i and Sigma_i for pairwise comparison
     # Use .clone() after expand to avoid view-related gradient issues
@@ -783,7 +788,15 @@ def _compute_kl_matrix_torch(
     try:
         # Cholesky of transported covariances (prior in KL)
         L_p = torch.linalg.cholesky(Sigma_transported_reg)
+    except RuntimeError:
+        # Eigenvalue repair: clamp negative eigenvalues from numerical drift.
+        # This is cheaper than falling through to the O(B*N*N) loop.
+        eigs, V = torch.linalg.eigh(Sigma_transported_reg)
+        eigs = eigs.clamp(min=eps)
+        Sigma_transported_reg = V @ torch.diag_embed(eigs) @ V.transpose(-1, -2)
+        L_p = torch.linalg.cholesky(Sigma_transported_reg)
 
+    try:
         # Trace term: tr(Σ_p⁻¹ Σ_q) where Σ_p = Σ_j^{→i}, Σ_q = Σ_i
         Y = torch.linalg.solve_triangular(L_p, Sigma_i_reg, upper=False)
         Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
@@ -817,7 +830,7 @@ def _compute_kl_matrix_torch(
         return kl_all
 
     except RuntimeError:
-        # Fallback to loop-based computation if Cholesky fails
+        # Fallback to loop-based computation if solve_triangular fails
         # Collect values in list to preserve autograd graph (no in-place ops)
         kl_rows = []
         for b in range(B):
@@ -889,14 +902,29 @@ def _kl_gaussian_torch(
         KL = 0.5 * [tr(Σ2^{-1} Σ1) + (μ2-μ1)^T Σ2^{-1} (μ2-μ1) - K + log|Σ2|/|Σ1|]
     """
     K = mu1.shape[0]
+    I_K = torch.eye(K, device=sigma1.device, dtype=sigma1.dtype)
 
-    # Regularize for stability
-    sigma1_reg = sigma1 + eps * torch.eye(K, device=sigma1.device, dtype=sigma1.dtype)
-    sigma2_reg = sigma2 + eps * torch.eye(K, device=sigma2.device, dtype=sigma2.dtype)
+    # Symmetrize (transported covariances can drift from symmetry)
+    sigma1 = 0.5 * (sigma1 + sigma1.T)
+    sigma2 = 0.5 * (sigma2 + sigma2.T)
+
+    # Regularize: add eps*I, then clamp eigenvalues if still not PD.
+    # This handles numerical drift from matrix exponential transport.
+    sigma1_reg = sigma1 + eps * I_K
+    sigma2_reg = sigma2 + eps * I_K
 
     # Cholesky decomposition for numerical stability
-    L1 = torch.linalg.cholesky(sigma1_reg)
-    L2 = torch.linalg.cholesky(sigma2_reg)
+    try:
+        L1 = torch.linalg.cholesky(sigma1_reg)
+        L2 = torch.linalg.cholesky(sigma2_reg)
+    except RuntimeError:
+        # Eigenvalue repair: clamp negative eigenvalues to eps
+        eig1, V1 = torch.linalg.eigh(sigma1_reg)
+        eig2, V2 = torch.linalg.eigh(sigma2_reg)
+        sigma1_reg = V1 @ torch.diag(eig1.clamp(min=eps)) @ V1.T
+        sigma2_reg = V2 @ torch.diag(eig2.clamp(min=eps)) @ V2.T
+        L1 = torch.linalg.cholesky(sigma1_reg)
+        L2 = torch.linalg.cholesky(sigma2_reg)
 
     # Log determinants: log|Σ| = 2*sum(log(diag(L)))
     logdet1 = 2.0 * torch.sum(torch.log(torch.diag(L1)))
