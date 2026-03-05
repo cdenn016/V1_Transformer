@@ -23,8 +23,6 @@ Author: Claude (refactoring)
 Date: December 2024
 """
 
-import warnings
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -84,15 +82,15 @@ def kl_divergence_gaussian(
                 S_reg = 0.5 * (S_reg + S_reg.transpose(-1, -2))
                 try:
                     L = torch.linalg.cholesky(S_reg)
-                    warnings.warn(
-                        f"[torch_energy] Cholesky recovered at attempt {attempt+1} "
+                    print(
+                        f"[NUMERICAL] Cholesky recovered at attempt {attempt+1} "
                         f"with reg={reg:.1e}, shape={list(S.shape)}"
                     )
                     return L
                 except RuntimeError:
                     continue
-            warnings.warn(
-                f"[torch_energy] Cholesky FAILED after 5 attempts, "
+            print(
+                f"[NUMERICAL] Cholesky FAILED after 5 attempts, "
                 f"falling back to identity, shape={list(S.shape)}"
             )
             return torch.linalg.cholesky(eye.expand_as(S) + eps * eye)
@@ -478,16 +476,16 @@ def batched_pairwise_kl(
             Sigma_j_t_reg = 0.5 * (Sigma_j_t_reg + Sigma_j_t_reg.transpose(-1, -2))
             try:
                 L_j_t = torch.linalg.cholesky(Sigma_j_t_reg)
-                warnings.warn(
-                    f"[torch_energy/batched] Cholesky(Sigma_j_t) recovered at attempt {attempt+1} "
+                print(
+                    f"[NUMERICAL] Cholesky(Sigma_j_t) recovered at attempt {attempt+1} "
                     f"with reg={reg:.1e}"
                 )
                 break
             except RuntimeError:
                 continue
         else:
-            warnings.warn(
-                "[torch_energy/batched] Cholesky(Sigma_j_t) FAILED after 5 attempts, "
+            print(
+                "[NUMERICAL] Cholesky(Sigma_j_t) FAILED after 5 attempts, "
                 "falling back to identity"
             )
             L_j_t = torch.linalg.cholesky(eye.expand_as(Sigma_j_t_reg) + eps * eye)
@@ -501,16 +499,16 @@ def batched_pairwise_kl(
             Sigma_i_reg = 0.5 * (Sigma_i_reg + Sigma_i_reg.transpose(-1, -2))
             try:
                 L_i = torch.linalg.cholesky(Sigma_i_reg)
-                warnings.warn(
-                    f"[torch_energy/batched] Cholesky(Sigma_i) recovered at attempt {attempt+1} "
+                print(
+                    f"[NUMERICAL] Cholesky(Sigma_i) recovered at attempt {attempt+1} "
                     f"with reg={reg:.1e}"
                 )
                 break
             except RuntimeError:
                 continue
         else:
-            warnings.warn(
-                "[torch_energy/batched] Cholesky(Sigma_i) FAILED after 5 attempts, "
+            print(
+                "[NUMERICAL] Cholesky(Sigma_i) FAILED after 5 attempts, "
                 "falling back to identity"
             )
             L_i = torch.linalg.cholesky(eye.expand_as(Sigma_i_reg) + eps * eye)

@@ -306,16 +306,16 @@ def gaussian_kl_divergence(
                 sigma_p_reg = 0.5 * (sigma_p_reg + sigma_p_reg.transpose(-1, -2))
                 try:
                     L_p = torch.linalg.cholesky(sigma_p_reg)
-                    warnings.warn(
-                        f"[train/kl_divergence] Cholesky(sigma_p) recovered at attempt {attempt+1} "
+                    print(
+                        f"[NUMERICAL] Cholesky(sigma_p) recovered at attempt {attempt+1} "
                         f"with reg={reg:.1e}"
                     )
                     break
                 except RuntimeError:
                     continue
             else:
-                warnings.warn(
-                    "[train/kl_divergence] Cholesky(sigma_p) FAILED after 5 attempts, "
+                print(
+                    "[NUMERICAL] Cholesky(sigma_p) FAILED after 5 attempts, "
                     "falling back to identity"
                 )
                 L_p = torch.linalg.cholesky(torch.eye(K, device=device, dtype=dtype).expand_as(sigma_p_reg) + eps * torch.eye(K, device=device, dtype=dtype))
@@ -344,16 +344,16 @@ def gaussian_kl_divergence(
                 sigma_q_reg = 0.5 * (sigma_q_reg + sigma_q_reg.transpose(-1, -2))
                 try:
                     L_q = torch.linalg.cholesky(sigma_q_reg)
-                    warnings.warn(
-                        f"[train/kl_divergence] Cholesky(sigma_q) recovered at attempt {attempt+1} "
+                    print(
+                        f"[NUMERICAL] Cholesky(sigma_q) recovered at attempt {attempt+1} "
                         f"with reg={reg:.1e}"
                     )
                     break
                 except RuntimeError:
                     continue
             else:
-                warnings.warn(
-                    "[train/kl_divergence] Cholesky(sigma_q) FAILED after 5 attempts, "
+                print(
+                    "[NUMERICAL] Cholesky(sigma_q) FAILED after 5 attempts, "
                     "falling back to identity"
                 )
                 L_q = torch.linalg.cholesky(torch.eye(K, device=device, dtype=dtype).expand_as(sigma_q_reg) + eps * torch.eye(K, device=device, dtype=dtype))
@@ -370,8 +370,8 @@ def gaussian_kl_divergence(
     # NaN/Inf safety: replace any residual numerical failures
     bad_mask = torch.isnan(kl) | torch.isinf(kl)
     if bad_mask.any():
-        warnings.warn(
-            f"[train/kl_divergence] {bad_mask.sum().item()} NaN/Inf in KL output, "
+        print(
+            f"[NUMERICAL] {bad_mask.sum().item()} NaN/Inf in KL output, "
             f"replacing with safe values"
         )
     kl = kl.nan_to_num(nan=0.0, posinf=kl_ceil, neginf=0.0)
@@ -645,8 +645,8 @@ def compute_free_energy_loss(
                     try:
                         sp_inv = torch.linalg.inv(sigma_p_metric)
                     except (torch.linalg.LinAlgError, RuntimeError):
-                        warnings.warn(
-                            "[train/bayesian] inv(sigma_p) failed, using pinv fallback"
+                        print(
+                            "[NUMERICAL] inv(sigma_p) failed, using pinv fallback"
                         )
                         sp_inv = torch.linalg.pinv(sigma_p_metric)
                     mahal_sq = torch.einsum('bni,bnij,bnj->bn', delta, sp_inv, delta)
