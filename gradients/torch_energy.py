@@ -23,6 +23,8 @@ Author: Claude (refactoring)
 Date: December 2024
 """
 
+import warnings
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -70,18 +72,42 @@ def kl_divergence_gaussian(
     Sigma_q_reg = Sigma_q + eps * eye
     Sigma_p_reg = Sigma_p + eps * eye
 
-    # Cholesky decomposition (differentiable!)
-    L_q = torch.linalg.cholesky(Sigma_q_reg)
-    L_p = torch.linalg.cholesky(Sigma_p_reg)
+    # Cholesky decomposition (differentiable!) with progressive fallback
+    def _safe_cholesky(S, S_raw, eye, eps):
+        try:
+            return torch.linalg.cholesky(S)
+        except RuntimeError:
+            reg = eps
+            for attempt in range(5):
+                reg *= 10.0
+                S_reg = S_raw + reg * eye
+                S_reg = 0.5 * (S_reg + S_reg.transpose(-1, -2))
+                try:
+                    L = torch.linalg.cholesky(S_reg)
+                    warnings.warn(
+                        f"[torch_energy] Cholesky recovered at attempt {attempt+1} "
+                        f"with reg={reg:.1e}, shape={list(S.shape)}"
+                    )
+                    return L
+                except RuntimeError:
+                    continue
+            warnings.warn(
+                f"[torch_energy] Cholesky FAILED after 5 attempts, "
+                f"falling back to identity, shape={list(S.shape)}"
+            )
+            return torch.linalg.cholesky(eye.expand_as(S) + eps * eye)
+
+    L_q = _safe_cholesky(Sigma_q_reg, Sigma_q, eye, eps)
+    L_p = _safe_cholesky(Sigma_p_reg, Sigma_p, eye, eps)
 
     # Log determinants: log|Sigma| = 2 * sum(log(diag(L)))
-    # No +eps needed here: Cholesky of (Sigma + eps*I) already has positive diagonal
+    # Clamp diagonal to prevent log(0) if Cholesky produces near-zero entries
     logdet_q = 2 * torch.sum(
-        torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1)),
+        torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1).clamp(min=1e-12)),
         dim=-1
     )
     logdet_p = 2 * torch.sum(
-        torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1)),
+        torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1).clamp(min=1e-12)),
         dim=-1
     )
 
@@ -441,13 +467,57 @@ def batched_pairwise_kl(
     Sigma_j_t_reg = Sigma_j_t + eps * eye
     Sigma_i_reg = Sigma_i + eps * eye
 
-    # Batched Cholesky
-    L_j_t = torch.linalg.cholesky(Sigma_j_t_reg)  # (N, N, K, K)
-    L_i = torch.linalg.cholesky(Sigma_i_reg)      # (N, N, K, K)
+    # Batched Cholesky with progressive fallback
+    try:
+        L_j_t = torch.linalg.cholesky(Sigma_j_t_reg)  # (N, N, K, K)
+    except RuntimeError:
+        reg = eps
+        for attempt in range(5):
+            reg *= 10.0
+            Sigma_j_t_reg = Sigma_j_t + reg * eye
+            Sigma_j_t_reg = 0.5 * (Sigma_j_t_reg + Sigma_j_t_reg.transpose(-1, -2))
+            try:
+                L_j_t = torch.linalg.cholesky(Sigma_j_t_reg)
+                warnings.warn(
+                    f"[torch_energy/batched] Cholesky(Sigma_j_t) recovered at attempt {attempt+1} "
+                    f"with reg={reg:.1e}"
+                )
+                break
+            except RuntimeError:
+                continue
+        else:
+            warnings.warn(
+                "[torch_energy/batched] Cholesky(Sigma_j_t) FAILED after 5 attempts, "
+                "falling back to identity"
+            )
+            L_j_t = torch.linalg.cholesky(eye.expand_as(Sigma_j_t_reg) + eps * eye)
+    try:
+        L_i = torch.linalg.cholesky(Sigma_i_reg)      # (N, N, K, K)
+    except RuntimeError:
+        reg = eps
+        for attempt in range(5):
+            reg *= 10.0
+            Sigma_i_reg = Sigma_i + reg * eye
+            Sigma_i_reg = 0.5 * (Sigma_i_reg + Sigma_i_reg.transpose(-1, -2))
+            try:
+                L_i = torch.linalg.cholesky(Sigma_i_reg)
+                warnings.warn(
+                    f"[torch_energy/batched] Cholesky(Sigma_i) recovered at attempt {attempt+1} "
+                    f"with reg={reg:.1e}"
+                )
+                break
+            except RuntimeError:
+                continue
+        else:
+            warnings.warn(
+                "[torch_energy/batched] Cholesky(Sigma_i) FAILED after 5 attempts, "
+                "falling back to identity"
+            )
+            L_i = torch.linalg.cholesky(eye.expand_as(Sigma_i_reg) + eps * eye)
 
     # Log determinants
-    logdet_j_t = 2 * torch.diagonal(L_j_t, dim1=-2, dim2=-1).log().sum(-1)  # (N, N)
-    logdet_i = 2 * torch.diagonal(L_i, dim1=-2, dim2=-1).log().sum(-1)      # (N, N)
+    logdet_j_t = 2 * torch.diagonal(L_j_t, dim1=-2, dim2=-1).clamp(min=1e-12).log().sum(-1)  # (N, N)
+    logdet_i = 2 * torch.diagonal(L_i, dim1=-2, dim2=-1).clamp(min=1e-12).log().sum(-1)      # (N, N)
 
     # Trace term: tr(Sigma_j_t^{-1} Sigma_i)
     Sigma_j_t_inv = torch.cholesky_inverse(L_j_t)

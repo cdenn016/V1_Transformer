@@ -366,7 +366,14 @@ def _compute_vfe_gradients_block_diagonal(
 
             # Sigma alignment gradient for this block
             if compute_sigma_align_grad:
-                sigma_i_inv_block = torch.linalg.inv(sigma_i_block_diag + 1e-4 * I_d)  # (B, C, d, d)
+                try:
+                    sigma_i_inv_block = torch.linalg.inv(sigma_i_block_diag + 1e-4 * I_d)  # (B, C, d, d)
+                except (torch.linalg.LinAlgError, RuntimeError):
+                    import warnings
+                    warnings.warn(
+                        "[variational_ffn] inv(sigma_i_block_diag) failed, using pinv fallback"
+                    )
+                    sigma_i_inv_block = torch.linalg.pinv(sigma_i_block_diag + 1e-4 * I_d)
                 # Use .clone() after expand to avoid view-related gradient issues
                 sigma_i_inv_exp = sigma_i_inv_block[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()
                 grad_sigma_block = 0.5 * (sigma_j_inv - sigma_i_inv_exp)
@@ -510,6 +517,10 @@ def _compute_vfe_gradients_chunked(
             try:
                 sigma_j_inv = torch.linalg.inv(sigma_j_reg)
             except (torch.linalg.LinAlgError, RuntimeError):
+                import warnings
+                warnings.warn(
+                    "[variational_ffn/align] inv(sigma_j_transported) failed, using pinv fallback"
+                )
                 sigma_j_inv = torch.linalg.pinv(sigma_j_reg)
 
             # Delta mu
@@ -548,7 +559,7 @@ def _compute_vfe_gradients_chunked(
             # Sigma alignment gradient
             if compute_sigma_align_grad:
                 sigma_j_inv_diag = torch.diagonal(sigma_j_inv, dim1=-2, dim2=-1)
-                sigma_i_inv = 1.0 / sigma_i
+                sigma_i_inv = 1.0 / sigma_i.clamp(min=1e-6)
                 sigma_i_inv_exp = sigma_i_inv[:, :, None, :].expand(-1, -1, n_j, -1).clone()
                 grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv_exp)
                 sigma_contrib = lambda_belief * torch.einsum('bij,bijk->bik', beta_chunk, grad_sigma_pair)
@@ -694,14 +705,28 @@ def compute_vfe_gradients_gpu(
         # Full covariance - use matrix operations
         # ∂KL/∂μ_q = Σ_p^{-1} (μ_q - μ_p)
         sigma_p_reg = sigma_p + eps * torch.eye(K, device=device, dtype=dtype)
-        sigma_p_inv = torch.linalg.inv(sigma_p_reg)  # (B, N, K, K)
+        try:
+            sigma_p_inv = torch.linalg.inv(sigma_p_reg)  # (B, N, K, K)
+        except (torch.linalg.LinAlgError, RuntimeError):
+            import warnings
+            warnings.warn(
+                "[variational_ffn/self_grad] inv(sigma_p) failed, using pinv fallback"
+            )
+            sigma_p_inv = torch.linalg.pinv(sigma_p_reg)
 
         delta_mu = mu_q - mu_p  # (B, N, K)
         grad_mu_self = alpha * torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
 
         # ∂KL/∂Σ_q = 0.5 * (Σ_p^{-1} - Σ_q^{-1})
         sigma_q_reg = sigma_q + eps * torch.eye(K, device=device, dtype=dtype)
-        sigma_q_inv = torch.linalg.inv(sigma_q_reg)
+        try:
+            sigma_q_inv = torch.linalg.inv(sigma_q_reg)
+        except (torch.linalg.LinAlgError, RuntimeError):
+            import warnings
+            warnings.warn(
+                "[variational_ffn/self_grad] inv(sigma_q) failed, using pinv fallback"
+            )
+            sigma_q_inv = torch.linalg.pinv(sigma_q_reg)
         # For full covariance (4D), alpha (B,N,1) needs extra dim to broadcast with (B,N,K,K)
         alpha_4d = alpha.unsqueeze(-1) if isinstance(alpha, torch.Tensor) else alpha
         grad_sigma_self = alpha_4d * 0.5 * (sigma_p_inv - sigma_q_inv)
