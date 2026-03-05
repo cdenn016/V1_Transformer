@@ -1690,6 +1690,9 @@ class VariationalFFNDynamic(nn.Module):
         self.phi_lr = phi_lr
         self.phi_max_norm = phi_max_norm
 
+        # Cartan preconditioning for E-step phi gradients (built lazily)
+        self._cartan_preconditioner = None
+
         # Memory-efficient options
         self.irrep_dims = irrep_dims
         self.chunk_size = chunk_size
@@ -2269,13 +2272,22 @@ class VariationalFFNDynamic(nn.Module):
                         retain_graph=False,
                     )[0]
 
-                    # Clip phi gradient to prevent explosions (especially for GL(K))
-                    grad_phi_norm = torch.norm(grad_phi, dim=-1, keepdim=True)
-                    grad_phi = torch.where(
-                        grad_phi_norm > 10.0,
-                        grad_phi * 10.0 / (grad_phi_norm + 1e-6),
-                        grad_phi
-                    )
+                    # Cartan preconditioning: dampen non-compact (symmetric)
+                    # directions of gl(K) that cause gradient explosions through
+                    # matrix_exp backward. Falls back to norm clipping if
+                    # preconditioner is not available.
+                    if self._cartan_preconditioner is not None:
+                        from transformer.core.gauge_preconditioner import apply_cartan_preconditioning
+                        grad_phi = apply_cartan_preconditioning(
+                            grad_phi, self._cartan_preconditioner
+                        )
+                    else:
+                        grad_phi_norm = torch.norm(grad_phi, dim=-1, keepdim=True)
+                        grad_phi = torch.where(
+                            grad_phi_norm > 10.0,
+                            grad_phi * 10.0 / (grad_phi_norm + 1e-6),
+                            grad_phi
+                        )
 
                     # Update phi with proper retraction (auto-selects SO(N) or GL(K))
                     # SO(N): trust_region=0.3, bch_order=1 (compact group)
