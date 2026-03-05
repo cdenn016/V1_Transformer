@@ -409,8 +409,8 @@ class _PyTorchLinalgAdapter:
         try:
             return self.torch.linalg.inv(a)
         except (RuntimeError,):
-            warnings.warn(
-                f"[backend/TorchBackend] inv failed on shape {list(a.shape)}, using pinv fallback"
+            print(
+                f"[NUMERICAL] inv failed on shape {list(a.shape)}, using pinv fallback"
             )
             return self.torch.linalg.pinv(a)
 
