@@ -1106,15 +1106,15 @@ def _compute_kl_matrix_diagonal(
     # diag(Σ_j_transported)_k = Σ_l Ω_kl² * σ_j[l]
     # This is more accurate than just using σ_j, especially for non-identity Ω
     # =========================================================================
-    # σ_j expanded for all pairs - use .clone() after expand to avoid view issues
-    sigma_j_orig = sigma_q[:, None, :, :].expand(-1, N, -1, -1).clone()  # (B, N, N, K)
-    sigma_i = sigma_q[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
+    # σ_j expanded for all pairs (views, no memory allocation)
+    sigma_j_orig = sigma_q[:, None, :, :].expand(-1, N, -1, -1)  # (B, N, N, K)
+    sigma_i = sigma_q[:, :, None, :].expand(-1, -1, N, -1)  # (B, N, N, K)
 
     # Compute diagonal of transported covariance: diag(Ω @ diag(σ_j) @ Ω^T)_k = Σ_l Ω_kl² * σ_j[l]
+    # Use 3-operand einsum to avoid materializing Omega**2 as a (B, N, N, K, K) tensor.
     # Omega: (B, N, N, K, K), sigma_j_orig: (B, N, N, K)
     # Result: (B, N, N, K)
-    Omega_sq = Omega ** 2  # (B, N, N, K, K)
-    sigma_j_transported_diag = torch.einsum('bijkl,bijl->bijk', Omega_sq, sigma_j_orig)  # (B, N, N, K)
+    sigma_j_transported_diag = torch.einsum('bijkl,bijkl,bijl->bijk', Omega, Omega, sigma_j_orig)  # (B, N, N, K)
 
     # Clamp for numerical stability
     sigma_j_transported_diag = sigma_j_transported_diag.clamp(min=eps)
@@ -1124,7 +1124,7 @@ def _compute_kl_matrix_diagonal(
     # KL(q_i || transported q_j) where q_i ~ N(μ_i, diag(σ_i))
     # transported q_j ~ N(μ_j^{→i}, diag(σ_j_transported))
     # =========================================================================
-    mu_i = mu_q[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
+    mu_i = mu_q[:, :, None, :].expand(-1, -1, N, -1)  # (B, N, N, K)
 
     # Trace term: sum(σ_i / σ_j_transported)
     trace_term = (sigma_i / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
@@ -1413,21 +1413,19 @@ def _compute_kl_matrix_diagonal_chunked(
             # Compute diagonal of transported covariance
             # diag(Ω @ diag(σ_j) @ Ω^T)_k = Σ_l Ω_kl² * σ_j[l]
             # =================================================================
-            # Use .clone() after expand to create copies and avoid view issues
-            sigma_j_exp = sigma_j[:, None, :, :].expand(-1, n_i, -1, -1).clone()  # (B, n_i, n_j, K)
-            Omega_sq = Omega_chunk ** 2
+            sigma_j_exp = sigma_j[:, None, :, :].expand(-1, n_i, -1, -1)  # (B, n_i, n_j, K)
+            # Use 3-operand einsum to avoid materializing Omega_chunk**2
             sigma_j_transported = torch.einsum(
-                'bijkl,bijl->bijk', Omega_sq, sigma_j_exp
+                'bijkl,bijkl,bijl->bijk', Omega_chunk, Omega_chunk, sigma_j_exp
             ).clamp(min=eps)  # (B, n_i, n_j, K)
 
-            del Omega_chunk, Omega_sq
+            del Omega_chunk
 
             # =================================================================
             # Diagonal KL computation
             # =================================================================
-            # Use .clone() after expand to create copies and avoid view issues
-            mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()  # (B, n_i, n_j, K)
-            sigma_i_exp = sigma_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()  # (B, n_i, n_j, K)
+            mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1)  # (B, n_i, n_j, K)
+            sigma_i_exp = sigma_i[:, :, None, :].expand(-1, -1, n_j, -1)  # (B, n_i, n_j, K)
 
             # Trace term: sum(σ_i / σ_j_transported)
             trace_term = (sigma_i_exp / sigma_j_transported).sum(dim=-1)
