@@ -47,6 +47,7 @@ Date: November 2025
 """
 
 import math
+from math_utils.numerical_monitor import record as _nr
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -369,9 +370,7 @@ def _compute_vfe_gradients_block_diagonal(
                 try:
                     sigma_i_inv_block = torch.linalg.inv(sigma_i_block_diag + 1e-4 * I_d)  # (B, C, d, d)
                 except (torch.linalg.LinAlgError, RuntimeError):
-                    print(
-                        "[NUMERICAL] inv(sigma_i_block_diag) failed, using pinv fallback"
-                    )
+                    _nr("inv_pinv")
                     sigma_i_inv_block = torch.linalg.pinv(sigma_i_block_diag + 1e-4 * I_d)
                 # Use .clone() after expand to avoid view-related gradient issues
                 sigma_i_inv_exp = sigma_i_inv_block[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()
@@ -516,9 +515,7 @@ def _compute_vfe_gradients_chunked(
             try:
                 sigma_j_inv = torch.linalg.inv(sigma_j_reg)
             except (torch.linalg.LinAlgError, RuntimeError):
-                print(
-                    "[NUMERICAL] inv(sigma_j_transported) failed, using pinv fallback"
-                )
+                _nr("inv_pinv")
                 sigma_j_inv = torch.linalg.pinv(sigma_j_reg)
 
             # Delta mu
@@ -706,9 +703,7 @@ def compute_vfe_gradients_gpu(
         try:
             sigma_p_inv = torch.linalg.inv(sigma_p_reg)  # (B, N, K, K)
         except (torch.linalg.LinAlgError, RuntimeError):
-            print(
-                "[NUMERICAL] inv(sigma_p) failed, using pinv fallback"
-            )
+            _nr("inv_pinv")
             sigma_p_inv = torch.linalg.pinv(sigma_p_reg)
 
         delta_mu = mu_q - mu_p  # (B, N, K)
@@ -719,9 +714,7 @@ def compute_vfe_gradients_gpu(
         try:
             sigma_q_inv = torch.linalg.inv(sigma_q_reg)
         except (torch.linalg.LinAlgError, RuntimeError):
-            print(
-                "[NUMERICAL] inv(sigma_q) failed, using pinv fallback"
-            )
+            _nr("inv_pinv")
             sigma_q_inv = torch.linalg.pinv(sigma_q_reg)
         # For full covariance (4D), alpha (B,N,1) needs extra dim to broadcast with (B,N,K,K)
         alpha_4d = alpha.unsqueeze(-1) if isinstance(alpha, torch.Tensor) else alpha

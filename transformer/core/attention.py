@@ -29,6 +29,8 @@ warnings.filterwarnings("ignore", message="CUDA path could not be detected", mod
 warnings.filterwarnings("ignore", message="Failed to find cuobjdump", module="triton")
 warnings.filterwarnings("ignore", message="Failed to find nvdisasm", module="triton")
 
+from math_utils.numerical_monitor import record as _nr
+
 import math
 import numpy as np
 import torch
@@ -791,11 +793,7 @@ def _compute_kl_matrix_torch(
     if nan_mask.any():
         nan_count = nan_mask.sum().item()
         total = nan_mask.numel()
-        print(
-            f"[NUMERICAL] NaN in Sigma_transported: "
-            f"{nan_count}/{total} entries ({100*nan_count/total:.1f}%), "
-            f"replacing with identity"
-        )
+        _nr("nan_replace")
         Sigma_transported_reg = torch.where(
             nan_mask.unsqueeze(-1).unsqueeze(-1),
             I.expand_as(Sigma_transported_reg),
@@ -819,21 +817,13 @@ def _compute_kl_matrix_torch(
             Sigma_transported_reg = 0.5 * (Sigma_transported_reg + Sigma_transported_reg.transpose(-1, -2))
             try:
                 L_p = torch.linalg.cholesky(Sigma_transported_reg)
-                print(
-                    f"[NUMERICAL] Cholesky(Sigma_transported) recovered "
-                    f"at attempt {attempt+1} with reg={reg:.1e}, "
-                    f"shape={list(Sigma_transported.shape)}"
-                )
+                _nr("chol_recover")
                 break
             except RuntimeError:
                 continue
         else:
             # Last resort: replace with identity (KL will be ~0 for these pairs)
-            print(
-                f"[NUMERICAL] Cholesky(Sigma_transported) FAILED "
-                f"after 5 attempts, falling back to identity, "
-                f"shape={list(Sigma_transported.shape)}"
-            )
+            _nr("chol_fail")
             L_p = torch.linalg.cholesky(I.expand_as(Sigma_transported_reg) + eps * I)
 
     try:
@@ -864,18 +854,12 @@ def _compute_kl_matrix_torch(
                 Sigma_i_fallback = 0.5 * (Sigma_i_fallback + Sigma_i_fallback.transpose(-1, -2))
                 try:
                     L_q = torch.linalg.cholesky(Sigma_i_fallback)
-                    print(
-                        f"[NUMERICAL] Cholesky(Sigma_i) recovered "
-                        f"at attempt {attempt+1} with reg={reg:.1e}"
-                    )
+                    _nr("chol_recover")
                     break
                 except RuntimeError:
                     continue
             else:
-                print(
-                    "[NUMERICAL] Cholesky(Sigma_i) FAILED "
-                    "after 5 attempts, falling back to identity"
-                )
+                _nr("chol_fail")
                 L_q = torch.linalg.cholesky(I.expand_as(Sigma_i_reg) + eps * I)
         logdet_q = 2.0 * torch.sum(
             torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1).clamp(min=1e-12)), dim=-1
@@ -894,10 +878,7 @@ def _compute_kl_matrix_torch(
         bad_mask = torch.isnan(kl_all) | torch.isinf(kl_all)
         if bad_mask.any():
             bad_count = bad_mask.sum().item()
-            print(
-                f"[NUMERICAL] {bad_count} NaN/Inf in KL output, "
-                f"replacing with safe values"
-            )
+            _nr("nan_replace")
         kl_all = kl_all.nan_to_num(nan=0.0, posinf=kl_ceil, neginf=0.0)
 
         return kl_all
