@@ -400,6 +400,148 @@ def _compute_vfe_gradients_block_diagonal(
     return grad_mu, grad_sigma
 
 
+def _compute_vfe_gradients_block_diagonal_diag(
+    mu_q: torch.Tensor,        # (B, N, K) belief means
+    sigma_q: torch.Tensor,     # (B, N, K) diagonal variances
+    mu_p: torch.Tensor,        # (B, N, K) prior means
+    sigma_p: torch.Tensor,     # (B, N, K) prior variances
+    beta: torch.Tensor,        # (B, N, N) attention weights
+    phi: torch.Tensor,         # (B, N, n_gen) gauge frames
+    generators: torch.Tensor,  # (n_gen, K, K) generators
+    alpha: 'float | torch.Tensor',
+    lambda_belief: float,
+    kappa: float,
+    eps: float,
+    irrep_dims: List[int],
+    compute_sigma_align_grad: bool,
+    enforce_orthogonal: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Block-diagonal VFE gradient computation for diagonal covariance mode.
+
+    Processes each irrep block separately with small d×d Omega tensors
+    and O(d) diagonal KL formulas. No matrix inverse or Cholesky needed.
+
+    Memory: O(N² × max(dᵢ²)) instead of O(N² × K²)
+    """
+    # Squeeze trailing singleton dimensions for robustness
+    while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
+        sigma_q = sigma_q.squeeze(-1)
+    while sigma_p.dim() > 3 and sigma_p.shape[-1] == 1:
+        sigma_p = sigma_p.squeeze(-1)
+
+    B, N, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+
+    sigma_q_safe = sigma_q.clamp(min=eps)
+    sigma_p_safe = sigma_p.clamp(min=eps)
+
+    # =================================================================
+    # 1. Self-Coupling Gradient (diagonal, no blocks needed)
+    # =================================================================
+    delta_mu = mu_q - mu_p
+    grad_mu_self = alpha * delta_mu / sigma_p_safe
+    grad_sigma_self = alpha * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
+
+    # =================================================================
+    # 2. Belief Alignment Gradient (block-diagonal + diagonal formulas)
+    # =================================================================
+    # Precompute matrix exponentials per block
+    block_exp_phi = []
+    block_exp_neg_phi = []
+    block_start = 0
+    for d in irrep_dims:
+        block_end = block_start + d
+        gen_block = generators[:, block_start:block_end, block_start:block_end]
+        phi_matrix_block = torch.einsum('bna,aij->bnij', phi, gen_block)
+        exp_phi_block, exp_neg_phi_block = stable_matrix_exp_pair(phi_matrix_block)
+        if enforce_orthogonal and d >= 16:
+            eye_d = torch.eye(d, device=device, dtype=dtype)
+            exp_phi_block = exp_phi_block @ ((3.0 * eye_d - exp_phi_block.transpose(-1, -2) @ exp_phi_block) / 2.0)
+            exp_neg_phi_block = exp_neg_phi_block @ ((3.0 * eye_d - exp_neg_phi_block.transpose(-1, -2) @ exp_neg_phi_block) / 2.0)
+        block_exp_phi.append(exp_phi_block)
+        block_exp_neg_phi.append(exp_neg_phi_block)
+        block_start = block_end
+
+    # Accumulators for per-pair KL values and gradients across all blocks
+    kl_values = torch.zeros(B, N, N, device=device, dtype=dtype)
+    grad_kl_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=dtype)
+    grad_sigma_align = torch.zeros_like(sigma_q)
+
+    # Process each irrep block
+    block_start = 0
+    for block_idx, d in enumerate(irrep_dims):
+        block_end = block_start + d
+
+        mu_block = mu_q[:, :, block_start:block_end].contiguous()        # (B, N, d)
+        sigma_block = sigma_q_safe[:, :, block_start:block_end].contiguous()  # (B, N, d)
+
+        # Block Omega: (B, N, N, d, d) — much smaller than (B, N, N, K, K)
+        Omega_block = torch.einsum(
+            'bikl,bjlm->bijkm',
+            block_exp_phi[block_idx], block_exp_neg_phi[block_idx]
+        )
+
+        # Transport means
+        mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_block)  # (B, N, N, d)
+
+        # Diagonal covariance transport: σ_t[k] = Σ_l Ω_kl² * σ[l]
+        sigma_j_transported = torch.einsum(
+            'bijkl,bijkl,bjl->bijk', Omega_block, Omega_block, sigma_block
+        ).clamp(min=eps)  # (B, N, N, d)
+
+        del Omega_block
+
+        # Delta mu
+        mu_block_i = mu_block[:, :, None, :].expand(-1, -1, N, -1)  # view
+        delta_mu_block = mu_block_i - mu_j_transported  # (B, N, N, d)
+
+        # ∂KL/∂μ_i = (μ_i - μ_j_t) / σ_j_t (element-wise)
+        grad_kl_block = delta_mu_block / sigma_j_transported  # (B, N, N, d)
+        grad_kl_per_pair_full[:, :, :, block_start:block_end] = grad_kl_block
+
+        # Diagonal KL for this block
+        sigma_i_block = sigma_block[:, :, None, :].expand(-1, -1, N, -1)  # view
+        trace_block = (sigma_i_block / sigma_j_transported).sum(dim=-1)
+        mahal_block = (delta_mu_block ** 2 / sigma_j_transported).sum(dim=-1)
+        logdet_block = (torch.log(sigma_j_transported) - torch.log(sigma_i_block)).sum(dim=-1)
+
+        kl_block = 0.5 * (trace_block + mahal_block - d + logdet_block)
+        kl_block = kl_block.clamp(min=0.0, max=max(100.0, 5.0 * K))
+        kl_values = kl_values + kl_block
+
+        # Sigma alignment gradient for this block
+        if compute_sigma_align_grad:
+            sigma_j_inv_diag = 1.0 / sigma_j_transported  # (B, N, N, d)
+            sigma_i_inv = 1.0 / sigma_block  # (B, N, d)
+            sigma_i_inv_exp = sigma_i_inv[:, :, None, :].expand(-1, -1, N, -1)  # view
+            grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv_exp)  # (B, N, N, d)
+            grad_sigma_align[:, :, block_start:block_end] = (
+                grad_sigma_align[:, :, block_start:block_end]
+                + lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_sigma_pair)
+            )
+
+        del sigma_j_transported, mu_j_transported
+        block_start = block_end
+
+    # Direct term
+    grad_mu_direct = lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
+
+    # Softmax coupling term
+    kappa_scaled = kappa * 2.0 * math.sqrt(max(K, 1))
+    avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
+    grad_deviation = grad_kl_per_pair_full - avg_grad.unsqueeze(2)
+    d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
+    grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
+
+    grad_mu_align = grad_mu_direct + grad_mu_softmax
+    grad_mu = grad_mu_self + grad_mu_align
+    grad_sigma = grad_sigma_self + grad_sigma_align
+
+    return grad_mu, grad_sigma
+
+
 def _compute_vfe_gradients_chunked(
     mu_q: torch.Tensor,        # (B, N, K) belief means
     sigma_q: torch.Tensor,     # (B, N, K) diagonal variances
@@ -643,6 +785,16 @@ def compute_vfe_gradients_gpu(
         return _compute_vfe_gradients_block_diagonal(
             mu_q, sigma_q, mu_p, sigma_p, beta, phi, generators,
             alpha, lambda_belief, kappa, eps, irrep_dims, chunk_size,
+            compute_sigma_align_grad, enforce_orthogonal
+        )
+
+    # =================================================================
+    # MEMORY-EFFICIENT PATH: Block-diagonal for diagonal covariance
+    # =================================================================
+    if irrep_dims is not None and is_diagonal:
+        return _compute_vfe_gradients_block_diagonal_diag(
+            mu_q, sigma_q, mu_p, sigma_p, beta, phi, generators,
+            alpha, lambda_belief, kappa, eps, irrep_dims,
             compute_sigma_align_grad, enforce_orthogonal
         )
 

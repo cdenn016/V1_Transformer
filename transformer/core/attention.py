@@ -603,7 +603,12 @@ def compute_kl_matrix(
     # Helper functions return KL tensors (not in-place) to preserve autograd graph
     is_cuda = device.type == 'cuda'
 
-    if irrep_dims is not None and not diagonal_covariance:
+    if irrep_dims is not None and diagonal_covariance:
+        kl_matrix = _compute_kl_matrix_block_diagonal_diag(
+            mu_q, sigma_q, phi, generators, irrep_dims,
+            enforce_orthogonal=enforce_orthogonal
+        )
+    elif irrep_dims is not None and not diagonal_covariance:
         if chunk_size is not None:
             kl_matrix = _compute_kl_matrix_block_diagonal_chunked(
                 mu_q, sigma_q, phi, generators, irrep_dims, chunk_size
@@ -1499,6 +1504,86 @@ def estimate_chunk_size(
 # Memory: O(N² × Σᵢ dᵢ²) instead of O(N² × K²)
 # For K=255 with 75×ℓ₀ + 30×ℓ₁ + 18×ℓ₂: 795 vs 65025 = 82× savings!
 # =============================================================================
+
+def _compute_kl_matrix_block_diagonal_diag(
+    mu_q: torch.Tensor,             # (B, N, K) belief means
+    sigma_q: torch.Tensor,          # (B, N, K) diagonal variances
+    phi: torch.Tensor,              # (B, N, n_gen) gauge frames
+    generators: torch.Tensor,       # (n_gen, K, K) block-diagonal generators
+    irrep_dims: List[int],          # [d₁, d₂, ...] dimensions of each irrep block
+    enforce_orthogonal: bool = False,
+) -> torch.Tensor:
+    """
+    Block-diagonal KL for diagonal covariance mode.
+
+    Processes each irrep block separately with small d×d Omega tensors
+    instead of one giant K×K Omega. Uses diagonal KL formulas within
+    each block (no Cholesky/inv needed).
+
+    Memory: O(N² × max(dᵢ²)) instead of O(N² × K²)
+    """
+    # Squeeze trailing singleton dimensions for robustness
+    while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
+        sigma_q = sigma_q.squeeze(-1)
+
+    B, N, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+    eps = 1e-6
+
+    assert sum(irrep_dims) == K, f"irrep_dims sum {sum(irrep_dims)} != K={K}"
+
+    sigma_q = sigma_q.clamp(min=eps)
+    kl_total = torch.zeros(B, N, N, device=device, dtype=dtype)
+
+    block_start = 0
+    for d in irrep_dims:
+        block_end = block_start + d
+
+        mu_block = mu_q[:, :, block_start:block_end].contiguous()        # (B, N, d)
+        sigma_block = sigma_q[:, :, block_start:block_end].contiguous()  # (B, N, d)
+        gen_block = generators[:, block_start:block_end, block_start:block_end].contiguous()
+
+        # Block transport operators: (B, N, N, d, d) - much smaller than (B, N, N, K, K)
+        phi_matrix_block = torch.einsum('bna,aij->bnij', phi, gen_block)
+        exp_phi_block, exp_neg_phi_block = stable_matrix_exp_pair(phi_matrix_block)
+
+        if enforce_orthogonal and d >= 16:
+            eye_d = torch.eye(d, device=device, dtype=dtype)
+            exp_phi_block = exp_phi_block @ ((3.0 * eye_d - exp_phi_block.transpose(-1, -2) @ exp_phi_block) / 2.0)
+            exp_neg_phi_block = exp_neg_phi_block @ ((3.0 * eye_d - exp_neg_phi_block.transpose(-1, -2) @ exp_neg_phi_block) / 2.0)
+
+        Omega_block = torch.einsum('bikl,bjlm->bijkm', exp_phi_block, exp_neg_phi_block)
+        del phi_matrix_block, exp_phi_block, exp_neg_phi_block
+
+        # Transport means
+        mu_transported = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_block)
+
+        # Diagonal covariance transport: σ_t[k] = Σ_l Ω_kl² * σ[l]
+        sigma_j_transported = torch.einsum(
+            'bijkl,bijkl,bjl->bijk', Omega_block, Omega_block, sigma_block
+        ).clamp(min=eps)
+
+        del Omega_block
+
+        # Diagonal KL for this block
+        sigma_i = sigma_block[:, :, None, :].expand(-1, -1, N, -1)
+        mu_i = mu_block[:, :, None, :].expand(-1, -1, N, -1)
+        delta_mu = mu_transported - mu_i
+
+        trace_term = (sigma_i / sigma_j_transported).sum(dim=-1)
+        mahal_term = (delta_mu ** 2 / sigma_j_transported).sum(dim=-1)
+        logdet_term = (torch.log(sigma_j_transported) - torch.log(sigma_i)).sum(dim=-1)
+
+        kl_block = 0.5 * (trace_term + mahal_term - d + logdet_term)
+        kl_block = kl_block.clamp(min=0.0, max=max(100.0, 5.0 * K))
+        kl_total = kl_total + kl_block
+
+        del sigma_j_transported, mu_transported
+        block_start = block_end
+
+    return kl_total
+
 
 def _compute_kl_matrix_block_diagonal(
     mu_q: torch.Tensor,             # (B, N, K) belief means
