@@ -419,7 +419,14 @@ def compute_attention_weights(
     # MEMORY-EFFICIENT PATHS (NEW!)
     # Priority: block-diagonal > chunked > diagonal > full
     # =========================================================================
-    if irrep_dims is not None and not diagonal_covariance:
+    if irrep_dims is not None and diagonal_covariance:
+        # BLOCK-DIAGONAL + DIAGONAL MODE: Best of both worlds!
+        # Block processing for small Omega + diagonal KL formulas (no inv/Cholesky)
+        kl_matrix = _compute_kl_matrix_block_diagonal_diag(
+            mu_q, sigma_q, phi, generators, irrep_dims,
+            enforce_orthogonal=enforce_orthogonal
+        )
+    elif irrep_dims is not None and not diagonal_covariance:
         # BLOCK-DIAGONAL MODE: Principled + memory-efficient!
         # Uses O(N² × Σᵢdᵢ²) instead of O(N² × K²) - massive savings!
         if chunk_size is not None:
