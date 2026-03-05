@@ -391,6 +391,7 @@ def compute_free_energy_loss(
     kappa_gamma: float = 1.0,     # Temperature for γ_ij coupling weights
     pad_token_id: int = -100,     # Token ID to ignore in loss (padding)
     use_obs_in_vfe: bool = False, # Pass targets into VFE E-step (last layer only)
+    alpha_phi: float = 0.0,       # Gauge prior weight: (α_φ/2) Σ_i ||φ_i||²
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     Compute COMPLETE free energy loss with all gauge-theoretic terms.
@@ -590,9 +591,29 @@ def compute_free_energy_loss(
         model_align_loss = torch.tensor(0.0, device=ce_loss.device)
 
     # =================================================================
-    # Total Free Energy (ALL FOUR TERMS)
+    # 5. Gauge Prior: (α_φ/2) Σ_i ||φ_i||² — mass term for gauge field
     # =================================================================
-    total_loss = ce_loss + belief_align_loss + self_consistency_loss + model_align_loss
+    # Analogous to α·KL(q||p) for beliefs, this anchors gauge frames to
+    # the identity connection (φ=0). Maximum entropy prior on the Lie
+    # algebra: p(φ) = N(0, σ²I), giving -(α_φ/2)||φ||² log-prior.
+    #
+    # Gauge-theoretically: this is a gauge field mass term, standard in
+    # lattice gauge theory. In the 0D architecture (no spatial curvature),
+    # no symmetry principle forbids it.
+    # =================================================================
+    if alpha_phi > 0.0:
+        K = mu_q.shape[-1]
+        dim_scale = 2.0 * math.sqrt(max(K, 1))
+        # phi_p is the gauge frame from embeddings (B, N, n_gen)
+        phi_norm_sq = (phi_p ** 2).sum(dim=-1).mean()  # Mean over batch and tokens
+        gauge_prior_loss = (alpha_phi / 2.0) * phi_norm_sq / dim_scale
+    else:
+        gauge_prior_loss = torch.tensor(0.0, device=ce_loss.device)
+
+    # =================================================================
+    # Total Free Energy (ALL FIVE TERMS)
+    # =================================================================
+    total_loss = ce_loss + belief_align_loss + self_consistency_loss + model_align_loss + gauge_prior_loss
 
     # Compute attention metrics outside the computation graph
     with torch.no_grad():
@@ -608,6 +629,7 @@ def compute_free_energy_loss(
         'loss/belief_align': belief_align_loss.item(),
         'loss/self_consistency': self_consistency_loss.item() if alpha > 0 else 0.0,
         'loss/model_align': model_align_loss.item() if lambda_gamma > 0 else 0.0,
+        'loss/gauge_prior': gauge_prior_loss.item() if alpha_phi > 0 else 0.0,
         'attention/beta_mean': beta.mean().item(),
         'attention/kl_mean': kl.mean().item(),
         'attention/entropy': attn_entropy.item(),
@@ -1034,6 +1056,7 @@ class Trainer:
                 kappa_gamma=self.config.kappa_gamma,
                 pad_token_id=self.pad_token_id,
                 use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
+                alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
             )
 
             # Scale loss for gradient accumulation
@@ -1138,6 +1161,7 @@ class Trainer:
                 kappa_gamma=self.config.kappa_gamma,
                 pad_token_id=self.pad_token_id,
                 use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
+                alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
             )
 
             total_loss += loss.item()

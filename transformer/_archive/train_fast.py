@@ -127,6 +127,13 @@ class FastTrainingConfig:
     # Resume from checkpoint
     resume_from: Optional[str] = None  # Path to checkpoint to resume from
 
+    # GAUGE GEOMETRY: Principled phi gradient control
+    # These replace ad-hoc gradient clipping with theoretically motivated approaches.
+    alpha_phi: float = 0.0                     # Gauge prior: (α_φ/2)||φ||² loss term (0 = disabled)
+    use_slk_projection: bool = False           # Project phi to traceless sl(K) after each step
+    use_killing_form: bool = False             # Cartan decomposition preconditioning for phi grads
+    killing_form_sym_dampening: float = 0.1    # Dampening for non-compact (symmetric) directions
+
 
 # =============================================================================
 # Fast Trainer with Parameter Group Learning Rates

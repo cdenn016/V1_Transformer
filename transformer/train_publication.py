@@ -322,6 +322,21 @@ VFE_EM_CONFIG = {
     'enforce_orthogonal': False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
                                  # Set False for GL(K) (faster, still gauge-invariant)
 
+    'gauge_group': 'GLK',
+    'gauge_dim': 10,
+    'gauge_mode': 'learned',
+
+    # Gauge geometry: principled phi gradient control (replaces ad-hoc clipping)
+    'alpha_phi': 0.0,                     # Gauge prior: (α_φ/2)||φ||² mass term (0 = disabled)
+    'use_slk_projection': False,          # Project phi to traceless sl(K) after each step
+    'use_killing_form': False,            # Cartan decomposition preconditioning for phi grads
+    'killing_form_sym_dampening': 0.1,    # Dampening for non-compact directions (0.1 = 10× reduction)
+
+    # Per-head specialization & multi-head VFE
+    'per_head_kappa': True,         # Learn separate κ_h per head (attention + VFE)
+    'use_output_projection': False, # W_O cross-head mixing after attention (toggle)
+    'multihead_vfe': True,          # Maintain per-head β_h through VFE iterations
+
     # P-FLOW: EMA update of token embeddings toward successful beliefs
     # This is the key learning mechanism from fep_transformer.py
     'use_p_flow': False,           # Enable P-flow updates on token embeddings
@@ -921,6 +936,45 @@ class PublicationTrainer(FastTrainer):
         # Track attention visualization count
         self._attention_viz_count = 0
 
+        # =================================================================
+        # Gauge geometry: Cartan preconditioning & SL(K) projection
+        # =================================================================
+        self._cartan_preconditioner = None
+        self._slk_trace_vec = None
+
+        use_killing_form = getattr(self.config, 'use_killing_form', False)
+        use_slk = getattr(self.config, 'use_slk_projection', False)
+
+        if (use_killing_form or use_slk) and hasattr(self.model, 'generators'):
+            from transformer.core.gauge_preconditioner import (
+                build_cartan_projector,
+                build_slk_projector,
+            )
+            generators = self.model.generators  # (n_gen, K, K)
+
+            if use_killing_form:
+                sym_dampening = getattr(self.config, 'killing_form_sym_dampening', 0.1)
+                self._cartan_preconditioner = build_cartan_projector(
+                    generators, sym_dampening=sym_dampening
+                ).to(self.device)
+                print(f"[INFO] Killing form preconditioning enabled: "
+                      f"sym_dampening={sym_dampening} "
+                      f"(non-compact directions dampened {1/sym_dampening:.0f}×)")
+
+                # Propagate to VFE layers for E-step phi gradients
+                for block in self.model.transformer.blocks:
+                    vffn = getattr(block.ffn, 'variational_ffn', None)
+                    if vffn is not None and hasattr(vffn, '_cartan_preconditioner'):
+                        vffn._cartan_preconditioner = self._cartan_preconditioner
+                        print(f"[INFO]   → VFE layer E-step phi grads will use Cartan preconditioning")
+
+            if use_slk:
+                self._slk_trace_vec = build_slk_projector(generators).to(self.device)
+                trace_norm = self._slk_trace_vec.norm().item()
+                print(f"[INFO] SL(K) projection enabled: "
+                      f"removing trace component (||v||={trace_norm:.2f}, "
+                      f"n_gen={generators.shape[0]} → {generators.shape[0]-1} effective d.o.f.)")
+
     def _get_head_irrep_labels(self) -> list:
         """
         Map head indices to irrep types for diagnostic labeling.
@@ -1104,8 +1158,26 @@ class PublicationTrainer(FastTrainer):
                     lambda_gamma=self.config.lambda_gamma,
                     kappa_gamma=self.config.kappa_gamma,
                     use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
+                    alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
                 )
             loss.backward()
+
+        # =================================================================
+        # KILLING FORM PRECONDITIONING (Cartan decomposition)
+        # =================================================================
+        # Apply BEFORE gradient norm logging and clipping.
+        # Dampens the non-compact (symmetric) directions of gl(K) that cause
+        # gradient explosions through matrix_exp backward pass.
+        # This IS the natural gradient on GL(K) — the Killing form metric
+        # assigns higher cost to non-compact directions.
+        if self._cartan_preconditioner is not None:
+            from transformer.core.gauge_preconditioner import apply_cartan_preconditioning
+            for name, param in self.model.named_parameters():
+                if param.grad is not None and ('phi_embed' in name or 'phi' in name.lower()):
+                    if param.grad.shape[-1] == self._cartan_preconditioner.shape[0]:
+                        param.grad.data = apply_cartan_preconditioning(
+                            param.grad.data, self._cartan_preconditioner
+                        )
 
         # Compute gradient norms BEFORE clipping
         # Check if this is a log step (need to check global_step here)
@@ -1153,6 +1225,22 @@ class PublicationTrainer(FastTrainer):
         if self.scheduler is not None:
             self.scheduler.step()
         self.optimizer.zero_grad()
+
+        # =================================================================
+        # SL(K) PROJECTION: Remove trace component from phi_embed
+        # =================================================================
+        # Projects φ to the traceless subalgebra sl(K), ensuring
+        # det(Ω_ij) = exp(tr(M_i - M_j)) = exp(0) = 1.
+        # This removes the single most dangerous non-compact degree of
+        # freedom (uniform scaling) without restricting rotations or shears.
+        if self._slk_trace_vec is not None:
+            from transformer.core.gauge_preconditioner import apply_slk_projection
+            if hasattr(self.model, 'token_embed') and hasattr(self.model.token_embed, 'phi_embed'):
+                with torch.no_grad():
+                    phi_weight = self.model.token_embed.phi_embed.weight
+                    phi_weight.data = apply_slk_projection(
+                        phi_weight.data, self._slk_trace_vec
+                    )
 
         # Re-enable requires_grad for W_out if it was disabled
         if use_delta_rule and hasattr(self.model, 'out_proj'):
