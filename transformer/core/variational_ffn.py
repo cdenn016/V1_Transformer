@@ -354,6 +354,8 @@ def _compute_vfe_gradients_block_diagonal(
             del Omega_chunk
 
             # Regularize and invert (adaptive regularization for numerical stability)
+            I_d = torch.eye(d, device=device, dtype=dtype)
+            sigma_j_reg = sigma_j_transported + eps * I_d
             sigma_j_inv = _safe_spd_inv(sigma_j_transported, eps=eps)  # (B, C, N, d, d)
 
             # Delta mu for this block (query chunk) - contiguous to avoid view issues
