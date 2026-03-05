@@ -2694,12 +2694,8 @@ Without observations, all agent beliefs converge to a shared rotationally invari
 
 \begin{figure*}[t]
   \centering
-  \includegraphics[width=0.47\textwidth]{attention/figs/Symmetric Vacuum.png}
-  \hfill
-  \includegraphics[width=0.47\textwidth]{/figs/mu_q_center_norm_ranked_vacuum.png}
-  \caption{Belief magnitudes $\|\mu_Q^{\text{center}}\|$ without observations. All agents converge to identical norms (gauge-symmetric equilibrium).
-  (\textbf{Left}) Population mean, standard deviation, and range.
-  (\textbf{Right}) Top four and bottom two agents by $\|\mu_Q(t)\|$.}
+  \includegraphics[width=0.85\textwidth]{attention/figs/Symmetric Vacuum.png}
+  \caption{Symmetric vacuum state: $\mu_Q^{\text{center}}$ tracking summary without observations. \textbf{Top:} Norm trajectories for all six agents, converging to a shared equilibrium value. \textbf{Middle left:} Symmetry measure $\mathrm{Var}(\|\mu\|)$ decays to machine precision, confirming gauge symmetry is preserved. \textbf{Middle right:} Population-averaged norm stabilizes. \textbf{Bottom left:} Phase-space projection (dimensions 0,\,1) showing agents collapsing to a common point. \textbf{Bottom right:} Final statistics confirming zero variance across agents and preserved gauge symmetry.}
   \label{fig:mu_q_center_vacuum}
 \end{figure*}
 
@@ -2708,12 +2704,8 @@ With randomly drawn Gaussian observations, symmetry breaks and agents flow towar
 
 \begin{figure*}[t]
   \centering
-  \includegraphics[width=0.47\textwidth]{attention/figs/Symmetry Breaking.png}
-  \hfill
-  \includegraphics[width=0.47\textwidth]{/figs/mu_q_center_norm_ranked.png}
-  \caption{Belief magnitudes $\|\mu_Q^{\text{center}}\|$ with observations. Agents specialize to distinct norms under symmetry breaking.
-  (\textbf{Left}) Population mean, standard deviation, and range.
-  (\textbf{Right}) Top four and bottom two agents by $\|\mu_Q(t)\|$.}
+  \includegraphics[width=0.85\textwidth]{attention/figs/Symmetry Breaking.png}
+  \caption{Observation-driven symmetry breaking: $\mu_Q^{\text{center}}$ tracking summary with observations. \textbf{Top:} Norm trajectories diverge as each agent specializes to a distinct belief magnitude. \textbf{Middle left:} Symmetry measure $\mathrm{Var}(\|\mu\|)$ grows and saturates, indicating strong symmetry breaking. \textbf{Middle right:} Population-averaged norm increases as agents acquire information from observations. \textbf{Bottom left:} Phase-space projection (dimensions 0,\,1) showing agents separating into distinct trajectories. \textbf{Bottom right:} Final statistics confirming high variance across agents and strong symmetry breaking.}
   \label{fig:mu_q_center_observed}
 \end{figure*}
 
