@@ -2284,6 +2284,162 @@ Therefore, we find that $\Sigma_i \approx \Omega_{ij}\Sigma_j\Omega_{ij}^\top$ e
 
 
 
+\section{Gauge Frame Gradients}
+\label{app:phi_gradients}
+
+We derive the gradient of the variational free energy $\mathcal{F}$ with respect to the gauge frame parameters $\phi_i \in \mathfrak{g}$. Unlike the covariance gradients (Appendix~B), gauge frame gradients require the differential of the matrix exponential map, and the resulting expressions differ for compact (e.g., $\mathrm{SO}(N)$) and general ($\mathrm{GL}(K)$) gauge groups.
+
+\subsection{Structure of the Gauge Frame Gradient}
+
+The gauge frames enter the free energy exclusively through the parallel transport operators $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$. Since neither the belief-prior term $D_{\mathrm{KL}}(q_i \| p_i)$ nor the observation likelihood $-\mathbb{E}_{q_i}[\log p(o_i | k_i)]$ depends on $\phi_i$, the complete gradient is:
+
+\begin{equation}
+\frac{\partial \mathcal{F}}{\partial \phi_i}
+= \sum_j \left[
+\frac{\partial \beta_{ij}}{\partial \phi_i} K_{ij}
++ \beta_{ij} \frac{\partial K_{ij}}{\partial \phi_i}
+\right]
++ \sum_k \beta_{ki} \frac{\partial K_{ki}}{\partial \phi_i},
+\label{eq:phi_grad_complete}
+\end{equation}
+
+where $K_{ij} \equiv D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$. The first sum captures agent $i$ aligning to others (with the product rule applied to $\beta_{ij} K_{ij}$), while the second sum captures others aligning to $i$ (where $\phi_i$ enters through $\Omega_{ki}$). The coupling weight gradient follows from the softmax structure:
+
+\begin{equation}
+\frac{\partial \beta_{ij}}{\partial \phi_i} = -\frac{\beta_{ij}}{\tau}\left[
+\frac{\partial K_{ij}}{\partial \phi_i} - \sum_k \beta_{ik} \frac{\partial K_{ik}}{\partial \phi_i}
+\right].
+\label{eq:beta_grad_phi}
+\end{equation}
+
+\subsection{Differential of the Matrix Exponential}
+
+All KL gradient terms require the derivative of the transport operator with respect to the gauge frame. For $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$:
+
+\begin{align}
+\frac{\partial \Omega_{ij}}{\partial \phi_i} &= \mathrm{dexp}_{\phi_i}(\cdot) \cdot \exp(-\phi_j), \label{eq:dOmega_dphi_i} \\
+\frac{\partial \Omega_{ij}}{\partial \phi_j} &= -\exp(\phi_i) \cdot \mathrm{dexp}_{\phi_j}(\cdot) \cdot \exp(-\phi_j), \label{eq:dOmega_dphi_j}
+\end{align}
+
+where $\mathrm{dexp}_\phi: \mathfrak{g} \to \mathfrak{g}$ denotes the differential of the exponential map at $\phi$. For a direction $\xi \in \mathfrak{g}$, the differential is given by \citep{gallier2020differential,rossmann2002lie}:
+
+\begin{equation}
+\mathrm{dexp}_\phi(\xi) = \sum_{n=0}^{\infty} \frac{1}{(n+1)!} \mathrm{ad}_\phi^n(\xi) = \frac{e^{\mathrm{ad}_\phi} - I}{\mathrm{ad}_\phi}(\xi),
+\label{eq:dexp_series}
+\end{equation}
+
+where $\mathrm{ad}_\phi(\xi) = [\phi, \xi] = \phi\xi - \xi\phi$ is the adjoint representation.
+
+\subsubsection{$\mathrm{SO}(N)$ specialization.}
+
+For $\mathrm{SO}(N)$, the gauge frame is expanded in skew-symmetric generators: $\phi = \sum_a \phi^a T_a$ where $T_a \in \mathfrak{so}(N)$, and the gradient is computed component-wise as $\partial \mathcal{F}/\partial \phi^a$. For $\mathrm{SO}(3)$ with $\|\phi\| = \theta$, the differential admits a closed form via the Rodrigues formula:
+
+\begin{equation}
+\mathrm{dexp}_\phi(T_a) = T_a + c_1(\theta)[\phi, T_a] + c_2(\theta)[\phi, [\phi, T_a]],
+\label{eq:dexp_so3}
+\end{equation}
+
+with coefficients:
+
+\begin{equation}
+c_1(\theta) = \frac{1 - \cos\theta}{\theta^2}, \qquad c_2(\theta) = \frac{\theta - \sin\theta}{\theta^3}.
+\end{equation}
+
+For $\theta < \epsilon$ (numerically $\epsilon \sim 10^{-4}$), Taylor expansions $c_1 \approx \frac{1}{2} - \frac{\theta^2}{24}$ and $c_2 \approx \frac{1}{6} - \frac{\theta^2}{120}$ provide stable evaluation.
+
+\subsubsection{$\mathrm{GL}(K)$ specialization.}
+
+For $\mathrm{GL}(K)$, the gauge frame $\phi \in \mathfrak{gl}(K) \cong \mathbb{R}^{K \times K}$ is a general $K \times K$ matrix. The differential of the matrix exponential does not simplify to a Rodrigues-like formula, and is instead computed via the integral representation:
+
+\begin{equation}
+\mathrm{dexp}_\phi(\xi) = \int_0^1 e^{t\phi} \, \xi \, e^{(1-t)\phi} \, dt,
+\label{eq:dexp_integral}
+\end{equation}
+
+or equivalently through the $(2K \times 2K)$ block matrix identity \citep{higham2008functions}:
+
+\begin{equation}
+\exp\!\begin{pmatrix} \phi & \xi \\ 0 & \phi \end{pmatrix}
+= \begin{pmatrix} e^\phi & \mathrm{dexp}_\phi(\xi) \\ 0 & e^\phi \end{pmatrix}.
+\label{eq:dexp_block}
+\end{equation}
+
+In practice, automatic differentiation through \texttt{torch.matrix\_exp} provides the $\mathrm{GL}(K)$ differential without explicit computation of \eqref{eq:dexp_integral} or \eqref{eq:dexp_block}.
+
+\subsection{KL Gradient Through Transport}
+
+The KL divergence $K_{ij} = D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ between $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ and the transported belief $\Omega_{ij} q_j = \mathcal{N}(\Omega_{ij}\mu_j, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$ depends on $\phi_i$ through $\Omega_{ij}$. Using the Gaussian KL \eqref{eq:gaussian_KL} and the chain rule:
+
+\begin{align}
+\frac{\partial K_{ij}}{\partial \phi_i^a}
+&= \frac{\partial}{\partial \phi_i^a}\left\{
+\frac{1}{2}\left[
+\log\frac{|\Omega_{ij}\Sigma_j\Omega_{ij}^\top|}{|\Sigma_i|}
++ \mathrm{tr}\!\left((\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}\Sigma_i\right)
++ \Delta\mu_{ij}^\top (\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1} \Delta\mu_{ij}
+- K
+\right]\right\},
+\label{eq:dKL_dphi_expanded}
+\end{align}
+
+where $\Delta\mu_{ij} = \mu_i - \Omega_{ij}\mu_j$. Let $\tilde{\Sigma}_{ij} \equiv \Omega_{ij}\Sigma_j\Omega_{ij}^\top$ and $\tilde{\mu}_{ij} \equiv \Omega_{ij}\mu_j$ denote the transported statistics. The derivative has three contributions:
+
+\paragraph{Mean term.} From the Mahalanobis distance:
+
+\begin{equation}
+\frac{\partial}{\partial \phi_i^a}\left[(\mu_i - \tilde{\mu}_{ij})^\top \tilde{\Sigma}_{ij}^{-1}(\mu_i - \tilde{\mu}_{ij})\right]
+= -2(\mu_i - \tilde{\mu}_{ij})^\top \tilde{\Sigma}_{ij}^{-1} \frac{\partial \tilde{\mu}_{ij}}{\partial \phi_i^a}
++ (\text{terms from } \partial\tilde{\Sigma}_{ij}^{-1}/\partial\phi_i^a).
+\label{eq:mean_term_phi}
+\end{equation}
+
+\paragraph{Trace term.} From the precision-covariance product:
+
+\begin{equation}
+\frac{\partial}{\partial \phi_i^a}\mathrm{tr}(\tilde{\Sigma}_{ij}^{-1}\Sigma_i)
+= -\mathrm{tr}\!\left(\tilde{\Sigma}_{ij}^{-1} \frac{\partial \tilde{\Sigma}_{ij}}{\partial \phi_i^a} \tilde{\Sigma}_{ij}^{-1} \Sigma_i\right).
+\label{eq:trace_term_phi}
+\end{equation}
+
+\paragraph{Log-determinant term.} From the log-determinant ratio:
+
+\begin{equation}
+\frac{\partial}{\partial \phi_i^a}\log|\tilde{\Sigma}_{ij}|
+= \mathrm{tr}\!\left(\tilde{\Sigma}_{ij}^{-1} \frac{\partial \tilde{\Sigma}_{ij}}{\partial \phi_i^a}\right).
+\label{eq:logdet_term_phi}
+\end{equation}
+
+\paragraph{Transport derivatives.} The derivatives of the transported statistics with respect to $\phi_i^a$ are:
+
+\begin{align}
+\frac{\partial \tilde{\mu}_{ij}}{\partial \phi_i^a} &= \frac{\partial (\Omega_{ij}\mu_j)}{\partial \phi_i^a}
+= \mathrm{dexp}_{\phi_i}(T_a) \cdot \exp(-\phi_j) \, \mu_j
+\equiv Q_a^{(i)} \, \exp(-\phi_j) \, \mu_j, \label{eq:dtilde_mu} \\
+\frac{\partial \tilde{\Sigma}_{ij}}{\partial \phi_i^a} &=
+Q_a^{(i)} \exp(-\phi_j) \Sigma_j \exp(-\phi_j)^\top \Omega_{ij}^\top
++ \Omega_{ij} \exp(-\phi_j) \Sigma_j \exp(-\phi_j)^\top (Q_a^{(i)})^\top, \label{eq:dtilde_Sigma}
+\end{align}
+
+where $Q_a^{(i)} \equiv \mathrm{dexp}_{\phi_i}(T_a)$ is the differential of the exponential map evaluated at $\phi_i$ in the direction of generator $T_a$.
+
+\subsection{Retraction and Numerical Considerations}
+
+\paragraph{Lie algebra updates.} Since $\phi_i \in \mathfrak{g}$ (a vector space), gradient descent proceeds in the Lie algebra directly:
+
+\begin{equation}
+\phi_i \leftarrow \phi_i - \eta_\phi \frac{\partial \mathcal{F}}{\partial \phi_i},
+\label{eq:phi_update}
+\end{equation}
+
+where $\eta_\phi$ is the gauge frame learning rate. No metric correction (Fisher-Rao or otherwise) is applied: the exponential map $\exp: \mathfrak{g} \to G$ provides natural coordinates for the Lie group, and the gradient naturally lives in $\mathfrak{g}$.
+
+\paragraph{$\mathrm{SO}(N)$ retraction.} For compact groups such as $\mathrm{SO}(N)$, the exponential map is periodic. To ensure unique parameterization and avoid branch cuts, we retract to the principal ball $\|\phi\| < \pi - \epsilon$ (with $\epsilon \sim 10^{-2}$) after each update. If $\|\phi\| \geq \pi$, the angle is wrapped modulo $2\pi$ and, if necessary, the axis is flipped via antipodal identification ($\phi \to -\phi$ when $\theta > \pi$), exploiting the fact that $\exp(\phi) = \exp(\phi - 2\pi \hat{n})$ for $\mathrm{SO}(3)$.
+
+\paragraph{$\mathrm{GL}(K)$ updates.} For $\mathrm{GL}(K)$, the matrix exponential is surjective onto $\mathrm{GL}^+(K)$ (the identity component), and no retraction is required beyond standard gradient clipping for numerical stability. In our implementation, automatic differentiation through PyTorch's \texttt{matrix\_exp} handles the $\mathrm{GL}(K)$ differential implicitly.
+
+\paragraph{Gradient validation.} All gauge frame gradient implementations are validated against finite-difference approximations $(\partial \mathcal{F}/\partial \phi_i^a \approx [\mathcal{F}(\phi_i + \epsilon e_a) - \mathcal{F}(\phi_i - \epsilon e_a)]/(2\epsilon))$ with relative error $< 10^{-5}$.
+
+
 \section{Conditional Uniqueness of the Forward KL Divergence via Variational Duality}
 
 We now show that, within a broad but well-defined class of variational games, the forward KL divergence $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ is the only divergence that yields a closed-form Gibbs-type solution for the belief update and a consistent dual interpretation for the attention weights.  Agents locally minimize their agent-specific variational free energy and the system of agents minimize their collective global free energies.  This local-global coordination gives rise to the expected forward KL attention term.
