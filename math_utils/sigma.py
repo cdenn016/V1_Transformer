@@ -485,7 +485,7 @@ def generate_smooth_spd_field(
     target_trace = K * scale
     
     # Compute scaling factor field
-    scale_field = target_trace / (trace_field + 1e-8)
+    scale_field = target_trace / np.clip(trace_field, 1e-4, None)
     
     # SMOOTH the scaling field (this preserves spatial smoothness!)
     scale_field_smooth = gaussian_filter(scale_field, sigma=smoothness_scale, mode='wrap')

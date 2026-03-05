@@ -789,6 +789,13 @@ def _compute_kl_matrix_torch(
     # NaNs propagate from matrix_exp overflow when phi grows very large.
     nan_mask = torch.isnan(Sigma_transported_reg).any(dim=-1).any(dim=-1)  # (B, N, N)
     if nan_mask.any():
+        nan_count = nan_mask.sum().item()
+        total = nan_mask.numel()
+        warnings.warn(
+            f"[attention/_compute_kl_matrix] NaN in Sigma_transported: "
+            f"{nan_count}/{total} entries ({100*nan_count/total:.1f}%), "
+            f"replacing with identity"
+        )
         Sigma_transported_reg = torch.where(
             nan_mask.unsqueeze(-1).unsqueeze(-1),
             I.expand_as(Sigma_transported_reg),
@@ -805,18 +812,28 @@ def _compute_kl_matrix_torch(
         # Cholesky succeeds. Each doubling adds ~eps more, which is small
         # relative to the matrix entries.
         reg = eps
-        for _ in range(5):
+        for attempt in range(5):
             reg *= 10.0
             Sigma_transported_reg = Sigma_transported + reg * I
             # Also re-symmetrize
             Sigma_transported_reg = 0.5 * (Sigma_transported_reg + Sigma_transported_reg.transpose(-1, -2))
             try:
                 L_p = torch.linalg.cholesky(Sigma_transported_reg)
+                warnings.warn(
+                    f"[attention/_compute_kl_matrix] Cholesky(Sigma_transported) recovered "
+                    f"at attempt {attempt+1} with reg={reg:.1e}, "
+                    f"shape={list(Sigma_transported.shape)}"
+                )
                 break
             except RuntimeError:
                 continue
         else:
             # Last resort: replace with identity (KL will be ~0 for these pairs)
+            warnings.warn(
+                f"[attention/_compute_kl_matrix] Cholesky(Sigma_transported) FAILED "
+                f"after 5 attempts, falling back to identity, "
+                f"shape={list(Sigma_transported.shape)}"
+            )
             L_p = torch.linalg.cholesky(I.expand_as(Sigma_transported_reg) + eps * I)
 
     try:
@@ -834,11 +851,34 @@ def _compute_kl_matrix_torch(
 
         # Log determinant terms
         logdet_p = 2.0 * torch.sum(
-            torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+            torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1).clamp(min=1e-12)), dim=-1
         )
-        L_q = torch.linalg.cholesky(Sigma_i_reg)
+        # Cholesky of Sigma_i (query covariance) with progressive fallback
+        try:
+            L_q = torch.linalg.cholesky(Sigma_i_reg)
+        except RuntimeError:
+            reg = eps
+            for attempt in range(5):
+                reg *= 10.0
+                Sigma_i_fallback = Sigma_i + reg * I
+                Sigma_i_fallback = 0.5 * (Sigma_i_fallback + Sigma_i_fallback.transpose(-1, -2))
+                try:
+                    L_q = torch.linalg.cholesky(Sigma_i_fallback)
+                    warnings.warn(
+                        f"[attention/_compute_kl_matrix] Cholesky(Sigma_i) recovered "
+                        f"at attempt {attempt+1} with reg={reg:.1e}"
+                    )
+                    break
+                except RuntimeError:
+                    continue
+            else:
+                warnings.warn(
+                    "[attention/_compute_kl_matrix] Cholesky(Sigma_i) FAILED "
+                    "after 5 attempts, falling back to identity"
+                )
+                L_q = torch.linalg.cholesky(I.expand_as(Sigma_i_reg) + eps * I)
         logdet_q = 2.0 * torch.sum(
-            torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
+            torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1).clamp(min=1e-12)), dim=-1
         )
         logdet_term = logdet_p - logdet_q  # (B, N, N)
 
@@ -849,6 +889,16 @@ def _compute_kl_matrix_torch(
         # so max reasonable KL ≈ O(K). Use 5*K as generous ceiling.
         kl_ceil = max(100.0, 5.0 * K)
         kl_all = torch.clamp(kl_all, min=0.0, max=kl_ceil)
+
+        # NaN/Inf safety: replace any residual numerical failures with zero KL
+        bad_mask = torch.isnan(kl_all) | torch.isinf(kl_all)
+        if bad_mask.any():
+            bad_count = bad_mask.sum().item()
+            warnings.warn(
+                f"[attention/_compute_kl_matrix] {bad_count} NaN/Inf in KL output, "
+                f"replacing with safe values"
+            )
+        kl_all = kl_all.nan_to_num(nan=0.0, posinf=kl_ceil, neginf=0.0)
 
         return kl_all
 
@@ -950,8 +1000,8 @@ def _kl_gaussian_torch(
         L2 = torch.linalg.cholesky(sigma2_reg)
 
     # Log determinants: log|Σ| = 2*sum(log(diag(L)))
-    logdet1 = 2.0 * torch.sum(torch.log(torch.diag(L1)))
-    logdet2 = 2.0 * torch.sum(torch.log(torch.diag(L2)))
+    logdet1 = 2.0 * torch.sum(torch.log(torch.diag(L1).clamp(min=1e-12)))
+    logdet2 = 2.0 * torch.sum(torch.log(torch.diag(L2).clamp(min=1e-12)))
 
     # Trace term: tr(Σ2^{-1} Σ1)
     # Solve L2 Y = Σ1 for Y, then solve L2^T Z = Y for Z

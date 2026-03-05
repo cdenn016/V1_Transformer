@@ -406,7 +406,13 @@ class _PyTorchLinalgAdapter:
         return self.torch.linalg.cholesky(a)
 
     def inv(self, a):
-        return self.torch.linalg.inv(a)
+        try:
+            return self.torch.linalg.inv(a)
+        except (RuntimeError,):
+            warnings.warn(
+                f"[backend/TorchBackend] inv failed on shape {list(a.shape)}, using pinv fallback"
+            )
+            return self.torch.linalg.pinv(a)
 
     def solve(self, a, b):
         return self.torch.linalg.solve(a, b)
