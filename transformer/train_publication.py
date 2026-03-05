@@ -171,6 +171,7 @@ STANDARD_CONFIG = {
     'weight_decay': 0.01,
     'dropout': 0.1,
     'grad_clip': 1.0,
+    'phi_grad_clip': 0.1,
 
     # Logging
     'log_interval': 1000,
@@ -211,20 +212,22 @@ SEED = 6
 VFE_EM_CONFIG = {
     # Model architecture
     'vocab_size': 50257,          # Will be overridden by tokenizer
-    'embed_dim': 30,              # Embedding dimension K
+    'embed_dim': 90,              # Embedding dimension K
     'n_layers': 1,                # Transformer depth
     'hidden_dim': 508,            # Only used if ffn_mode='learned'
     'max_seq_len': 64,            # Context length N
 
-    'learnable_alpha': True,
+    'learnable_alpha': False,
+    'use_obs_in_vfe': False,
+    'use_rope': True,  
 
 
     # Training
-    'batch_size': 64,
+    'batch_size': 16 , 
     'use_amp': False,             # FP32 for precision
     'num_workers': 6,
     'epochs': None,               # Set to 1-3 for WikiText-2, None for WikiText-103 (use max_steps)
-    'max_steps': 25000,          # ~0.5 epochs on WikiText-103
+    'max_steps': 100000,          # ~0.5 epochs on WikiText-103
     'warmup_steps': 100,
 
     # VFE transformer settings
@@ -238,17 +241,17 @@ VFE_EM_CONFIG = {
     'evolve_phi_e_step': True,    # Update φ during E-step iterations (dynamical gauge frames)
                                   # When True: φ evolves via ∂F/∂φ at each VFE iteration
                                   # When False: φ only updated via backprop (M-step)
-    'diagonal_covariance': True,
+    'diagonal_covariance': False,
     'use_positional_embedding': False,
     'pos_encoding_mode': 'none',
     'use_identity_transport': False,
     'alibi_slope': None,
 
-    # Temperature: κ is a scalar sharpness dial; dimension scaling (2√K) is hardcoded in attention
-    'kappa_beta': 1.0,
+    # Temperature: κ is a scalar sharpness dial; dimension scaling (√K) is hardcoded in attention
+    'kappa_beta': 1,
 
     # Embedding initialization
-    'mu_init_std': 7.0,
+    'mu_init_std': 1.0,
     'mu_normalize': False,
     'mu_max_norm': None,
     'phi_scale': 1.0,             # Gauge frame initialization scale (try 1.0-2.0 for clustering)
@@ -265,27 +268,59 @@ VFE_EM_CONFIG = {
     'ffn_lr':    0.05 ,
 
     # Free energy weights
-    'alpha':        1,                   # Self-consistency
-    'beta':         1,                    # Belief alignment
+    'alpha':        0.2,                   # Self-consistency in training loss
+    'beta':         0.0,                    # Belief alignment in training loss?
     'lambda_gamma': 0,            # Model alignment
-    'kappa_gamma':  1.0,
-
+    'kappa_gamma':  1,
+    
+    'ffn_lambda_belief': 1,
+    'ffn_alpha': 1,
+    
     # Regularization
     'weight_decay': 0.01,
-    'dropout':      0.1,
+    'dropout':      0,
     'grad_clip':    1.0,
+    'phi_grad_clip': 0.1,
 
     'use_layernorm': True,      # Critical!
     'use_residual':  True,       # Gradient flow
-    'use_dropout':   True,
+    'use_dropout':   False,
 
-    'log_interval': 50,
-    'eval_interval': 500,
-    'checkpoint_interval': 10000,
-    'semantic_analysis_interval': 5000,
+    'log_interval': 100,
+    'eval_interval': 1000,
+    'checkpoint_interval': 25000,
+    'semantic_analysis_interval': 10000,
     'patience': 5,
 
-
+    # =================================================================
+    # GAUGE GROUP SELECTION (Generators from so(N), Transport in GL(K))
+    # =================================================================
+    # NOTE: The VFE is invariant under GL(K), not just SO(K)!
+    # We use so(N) generators to parameterize φ, but transport operators
+    # Ω = exp(φ·G) live in GL(K). No orthogonality constraint is needed.
+    #
+    # SO3: so(3) generators with 3 parameters (rotation-only subalgebra)
+    #      Requires embed_dim = sum(mult * dim) for irrep_spec or odd embed_dim
+    # SON: so(N) generators with N(N-1)/2 parameters
+    #      Supports multiple irrep types for representational diversity:
+    #        - 'scalar': dim = 1              (gauge-invariant)
+    #        - 'fund':   dim = N              (fundamental/vector)
+    #        - 'wedge2': dim = N*(N-1)/2      (antisymmetric 2-tensor ∧²V)
+    #        - 'sym2':   dim = N*(N+1)/2 - 1  (symmetric traceless Sym²₀V)
+    #
+    #      Different irreps have different Casimir eigenvalues:
+    #        fund ~1.0x, wedge2 ~1.5x, sym2 ~2.5x
+    #      This provides genuine transformation diversity (like SO(3) spin-ℓ)
+    # =================================================================
+    
+    'gauge_group': 'GLK',  # 'SO3', 'SON', or 'GLK'
+    'gauge_dim': 10,        # N for SO(N) - only used when gauge_group='SON'
+    'gauge_mode': 'learned',  # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j)
+                                # 'trivial': global frame, φ = 0, Ω = I (standard attention)
+    
+    'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
+    'enforce_orthogonal': False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
+                                 # Set False for GL(K) (faster, still gauge-invariant)
 
     'gauge_group': 'GLK',
     'gauge_dim': 10,
@@ -297,34 +332,65 @@ VFE_EM_CONFIG = {
     'use_killing_form': False,            # Cartan decomposition preconditioning for phi grads
     'killing_form_sym_dampening': 0.1,    # Dampening for non-compact directions (0.1 = 10× reduction)
 
-
-    'use_multi_irrep': True,
-    'enforce_orthogonal': False,
-
     # Per-head specialization & multi-head VFE
     'per_head_kappa': True,         # Learn separate κ_h per head (attention + VFE)
     'use_output_projection': False, # W_O cross-head mixing after attention (toggle)
     'multihead_vfe': True,          # Maintain per-head β_h through VFE iterations
 
+    # P-FLOW: EMA update of token embeddings toward successful beliefs
+    # This is the key learning mechanism from fep_transformer.py
     'use_p_flow': False,           # Enable P-flow updates on token embeddings
-    'p_flow_ema_decay': 0.99,     # EMA decay (higher = slower update, 0.99 = 1% per step)
+    'p_flow_ema_decay': 0.95,     # EMA decay (higher = slower update, 0.99 = 1% per step)
 
     # DELTA RULE: Backprop-free learning for W_out
     # If True, W_out is updated via delta rule instead of backpropagation
     # Combined with P-flow, this makes learning fully backprop-free!
     'use_delta_rule_w_out': False,  # Enable delta rule for W_out (instead of backprop)
-    'delta_rule_lr': 0.001,         # Learning rate for delta rule updates
+    'delta_rule_lr': 0.1,         # Learning rate for delta rule updates
 
-
+    
     # Irrep structure for SO(N)
     # Example for SO(5) with K=132:
     #   [('scalar', 10, 1), ('fund', 8, 5), ('wedge2', 4, 10), ('sym2', 3, 14)]
     #   = 10 + 40 + 40 + 42 = 132
     'irrep_spec': [
-
-      ('fund', 3, 10)  #For SO(8)
-
+      # ('ℓ0', 50, 1),   # 75 dimensions (scalars)
+      # ('ℓ1', 1, 3),   # 90 dimensions (vectors)
+      # ('ℓ2', 2, 5),   # 90 dimensions (rank-2 tensors)
+     #  ('ℓ3', 1, 7),
+      # ('ℓ4', 1, 9),
+      #('ℓ5', 9, 11),
+     # ('ℓ6', 1, 13),
+     # ('ℓ7', 1, 15),
+      # ('ℓ50', 1, 101),
+      ('fund', 9 , 10)  #For SO(8)
+     # ('fund', 10, 5),   # SO(5)
+       
+     # SO(5) multi-irrep example:
+     # ('scalar', 10, 1),   # 10 dims (invariant)
+     # ('fund', 8, 5),      # 40 dims (vector)
+     # ('wedge2', 4, 10),   # 40 dims (∧² - angular momentum)
+     # ('sym2', 3, 14),     # 42 dims (Sym²₀ - quadrupolar)
     ],
+     
+         
+    # Option A: couple just 0↔1, head 2 stays independent
+    #'cross_couplings': [(0, 1), (1, 0)],
+    # → super-blocks: [20, 10]  (heads 0,1 merged into GL(20), head 2 alone)
+
+
+    # Per-head specialization & multi-head VFE
+    'per_head_kappa': False,         # Learn separate κ_h per head (attention + VFE)
+    'use_output_projection': True, # W_O cross-head mixing after attention (toggle)
+    'multihead_vfe': False,          # Maintain per-head β_h through VFE iterations
+
+    # RG metrics
+    #'compute_rg_metrics': True,   # Enable RG flow analysis
+    #'rg_metrics_interval': 100,   # Compute every 100 steps (not too frequent)
+   # 'rg_auto_cluster': True,
+   # 'rg_n_clusters': None,
+   # 'track_dynamic_rg': True,  # Track RG flow across VFE iterations (requires n_iterations > 1)
+
 
     'pos_encoding_scale': 0.3,
     'use_prior_bank': True,
@@ -381,7 +447,7 @@ PURE_FEP_CONFIG = {
     'use_identity_transport': False,
     'alibi_slope': None,
 
-    # Temperature: κ is a scalar sharpness dial; dimension scaling (2√K) is hardcoded in attention
+    # Temperature: κ is a scalar sharpness dial; dimension scaling (√K) is hardcoded in attention
     'kappa_beta': 0.25,
 
     # Embedding initialization
@@ -414,6 +480,7 @@ PURE_FEP_CONFIG = {
     'weight_decay': 0.0,          # No weight decay for P-flow
     'dropout': 0.0,               # No dropout for P-flow
     'grad_clip': 1.0,
+    'phi_grad_clip': 0.1,
 
     # Logging
     'log_interval': 100,
@@ -1372,7 +1439,7 @@ class PublicationTrainer(FastTrainer):
         if start_step > 0:
             print(f"  Resuming from step {start_step}")
 
-        print(f"  Training for {self.config.max_steps:,} steps (~{self.config.max_steps / len(self.train_loader):.1f} epochs)")
+        
 
         start_time = time.time()
         train_iterator = iter(self.train_loader)
@@ -1538,7 +1605,7 @@ class PublicationTrainer(FastTrainer):
                 print(f"    CE: {val_metrics['ce_loss']:.4f}")
                 print(f"    PPL: {val_metrics['perplexity']:.2f}")
                 print(f"    BPC: {val_metrics['ce_loss']/math.log(2):.3f}")
-                print(f"    Attn entropy: {attn_entropy:.3f} | concentration: {attn_concentration:.3f}")
+                print(f"    Attn entropy: {attn_entropy:.3f} | concentration: {attn_concentration:.3f}\n\n")
 
                 # Log RG metrics if available (meta-agent emergence!)
                 if metrics.get('rg/modularity') is not None:
@@ -2483,4 +2550,3 @@ def main():
 if __name__ == '__main__':
 
     main()
-
