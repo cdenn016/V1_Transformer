@@ -29,6 +29,8 @@ warnings.filterwarnings("ignore", message="Failed to find cuobjdump", module="tr
 warnings.filterwarnings("ignore", message="Failed to find nvdisasm", module="triton")
 warnings.filterwarnings("ignore", message="CUDA path could not be detected", module="cupy")
 
+from math_utils.numerical_monitor import record as _nr, flush as _nflush
+
 import math
 import torch
 import torch.nn as nn
@@ -306,18 +308,12 @@ def gaussian_kl_divergence(
                 sigma_p_reg = 0.5 * (sigma_p_reg + sigma_p_reg.transpose(-1, -2))
                 try:
                     L_p = torch.linalg.cholesky(sigma_p_reg)
-                    print(
-                        f"[NUMERICAL] Cholesky(sigma_p) recovered at attempt {attempt+1} "
-                        f"with reg={reg:.1e}"
-                    )
+                    _nr("chol_recover")
                     break
                 except RuntimeError:
                     continue
             else:
-                print(
-                    "[NUMERICAL] Cholesky(sigma_p) FAILED after 5 attempts, "
-                    "falling back to identity"
-                )
+                _nr("chol_fail")
                 L_p = torch.linalg.cholesky(torch.eye(K, device=device, dtype=dtype).expand_as(sigma_p_reg) + eps * torch.eye(K, device=device, dtype=dtype))
 
         # Trace term: tr(Σ_p⁻¹ Σ_q)
@@ -344,18 +340,12 @@ def gaussian_kl_divergence(
                 sigma_q_reg = 0.5 * (sigma_q_reg + sigma_q_reg.transpose(-1, -2))
                 try:
                     L_q = torch.linalg.cholesky(sigma_q_reg)
-                    print(
-                        f"[NUMERICAL] Cholesky(sigma_q) recovered at attempt {attempt+1} "
-                        f"with reg={reg:.1e}"
-                    )
+                    _nr("chol_recover")
                     break
                 except RuntimeError:
                     continue
             else:
-                print(
-                    "[NUMERICAL] Cholesky(sigma_q) FAILED after 5 attempts, "
-                    "falling back to identity"
-                )
+                _nr("chol_fail")
                 L_q = torch.linalg.cholesky(torch.eye(K, device=device, dtype=dtype).expand_as(sigma_q_reg) + eps * torch.eye(K, device=device, dtype=dtype))
         logdet_q = 2.0 * torch.sum(torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1).clamp(min=1e-12)), dim=-1)
         logdet_term = logdet_p - logdet_q  # (B, N)
@@ -370,10 +360,7 @@ def gaussian_kl_divergence(
     # NaN/Inf safety: replace any residual numerical failures
     bad_mask = torch.isnan(kl) | torch.isinf(kl)
     if bad_mask.any():
-        print(
-            f"[NUMERICAL] {bad_mask.sum().item()} NaN/Inf in KL output, "
-            f"replacing with safe values"
-        )
+        _nr("nan_replace")
     kl = kl.nan_to_num(nan=0.0, posinf=kl_ceil, neginf=0.0)
     return kl
 
@@ -645,9 +632,7 @@ def compute_free_energy_loss(
                     try:
                         sp_inv = torch.linalg.inv(sigma_p_metric)
                     except (torch.linalg.LinAlgError, RuntimeError):
-                        print(
-                            "[NUMERICAL] inv(sigma_p) failed, using pinv fallback"
-                        )
+                        _nr("inv_pinv")
                         sp_inv = torch.linalg.pinv(sigma_p_metric)
                     mahal_sq = torch.einsum('bni,bnij,bnj->bn', delta, sp_inv, delta)
                 metrics['bayesian/alpha_mean'] = alpha_vals.mean().item()
@@ -1207,6 +1192,12 @@ class Trainer:
                         grad_out = metrics.get('grad/out_proj', 0.0)
                         grad_phi = metrics.get('grad/phi_embed', 0.0)
                         print(f"         Grads | μ_embed: {grad_mu:.4f} | out_proj: {grad_out:.4f} | φ_embed: {grad_phi:.4f}")
+
+                        # Report numerical fallback events since last log
+                        num_events = _nflush()
+                        if num_events:
+                            parts = " | ".join(f"{k}: {v}" for k, v in num_events.items())
+                            print(f"\n         [NUMERICAL] {parts}\n")
 
                         if self.config.use_wandb and WANDB_AVAILABLE:
                             wandb.log(metrics, step=self.step)

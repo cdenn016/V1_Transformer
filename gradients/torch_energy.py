@@ -23,6 +23,8 @@ Author: Claude (refactoring)
 Date: December 2024
 """
 
+from math_utils.numerical_monitor import record as _nr
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -82,17 +84,11 @@ def kl_divergence_gaussian(
                 S_reg = 0.5 * (S_reg + S_reg.transpose(-1, -2))
                 try:
                     L = torch.linalg.cholesky(S_reg)
-                    print(
-                        f"[NUMERICAL] Cholesky recovered at attempt {attempt+1} "
-                        f"with reg={reg:.1e}, shape={list(S.shape)}"
-                    )
+                    _nr("chol_recover")
                     return L
                 except RuntimeError:
                     continue
-            print(
-                f"[NUMERICAL] Cholesky FAILED after 5 attempts, "
-                f"falling back to identity, shape={list(S.shape)}"
-            )
+            _nr("chol_fail")
             return torch.linalg.cholesky(eye.expand_as(S) + eps * eye)
 
     L_q = _safe_cholesky(Sigma_q_reg, Sigma_q, eye, eps)
@@ -476,18 +472,12 @@ def batched_pairwise_kl(
             Sigma_j_t_reg = 0.5 * (Sigma_j_t_reg + Sigma_j_t_reg.transpose(-1, -2))
             try:
                 L_j_t = torch.linalg.cholesky(Sigma_j_t_reg)
-                print(
-                    f"[NUMERICAL] Cholesky(Sigma_j_t) recovered at attempt {attempt+1} "
-                    f"with reg={reg:.1e}"
-                )
+                _nr("chol_recover")
                 break
             except RuntimeError:
                 continue
         else:
-            print(
-                "[NUMERICAL] Cholesky(Sigma_j_t) FAILED after 5 attempts, "
-                "falling back to identity"
-            )
+            _nr("chol_fail")
             L_j_t = torch.linalg.cholesky(eye.expand_as(Sigma_j_t_reg) + eps * eye)
     try:
         L_i = torch.linalg.cholesky(Sigma_i_reg)      # (N, N, K, K)
@@ -499,18 +489,12 @@ def batched_pairwise_kl(
             Sigma_i_reg = 0.5 * (Sigma_i_reg + Sigma_i_reg.transpose(-1, -2))
             try:
                 L_i = torch.linalg.cholesky(Sigma_i_reg)
-                print(
-                    f"[NUMERICAL] Cholesky(Sigma_i) recovered at attempt {attempt+1} "
-                    f"with reg={reg:.1e}"
-                )
+                _nr("chol_recover")
                 break
             except RuntimeError:
                 continue
         else:
-            print(
-                "[NUMERICAL] Cholesky(Sigma_i) FAILED after 5 attempts, "
-                "falling back to identity"
-            )
+            _nr("chol_fail")
             L_i = torch.linalg.cholesky(eye.expand_as(Sigma_i_reg) + eps * eye)
 
     # Log determinants

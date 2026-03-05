@@ -55,6 +55,7 @@ import os
 import warnings
 from typing import Optional, Union, Literal, Any
 from functools import lru_cache
+from math_utils.numerical_monitor import record as _nr
 import numpy as np
 
 
@@ -409,9 +410,7 @@ class _PyTorchLinalgAdapter:
         try:
             return self.torch.linalg.inv(a)
         except (RuntimeError,):
-            print(
-                f"[NUMERICAL] inv failed on shape {list(a.shape)}, using pinv fallback"
-            )
+            _nr("inv_pinv")
             return self.torch.linalg.pinv(a)
 
     def solve(self, a, b):
