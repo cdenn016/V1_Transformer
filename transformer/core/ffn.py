@@ -28,8 +28,6 @@ class GaugeFFN(nn.Module):
     - Recomputes β at each VFE step
     - Updates both μ AND Σ
     - Enables emergent block structure
-
-    Note: For experimental Hamiltonian dynamics, see transformer.experimental.hamiltonian_ffn
     """
 
     def __init__(
