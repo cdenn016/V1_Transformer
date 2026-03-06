@@ -45,7 +45,7 @@
 \begin{abstract}
 Transformer attention is variational inference over information sources. Modeling each token as a Gaussian agent on a statistical fiber bundle, we derive the generalized attention weight $\beta_{ij} = \operatorname{softmax}(-D_{\mathrm{KL}}[q_i \| \Omega_{ij} q_j] / \tau)$ from a single variational principle: minimizing the free energy of a mixture-of-sources generative model in which each agent infers, via gauge transport, which neighbor generated its state. The KL divergence arises exactly; the softmax follows from constrained optimization over the categorical source-selection posterior.
 
-From this principle, transformer architectural choices emerge as consequences of the variational geometry: the temperature scaling $1/\sqrt{d_k}$ from dimensional concentration of the KL divergence, layer normalization as the geometric condition for frame-independent inference, multi-head attention as a block-diagonal restriction of the gauge algebra, and causal masking and positional biases from non-uniform attention priors $\pi_j$. Two successive limits (isotropic covariances, flat gauge connection) recover the standard rule $\beta_{ij} \propto \operatorname{softmax}(Q_i K_j^\top / \sqrt{d_k})$, while the $\mathrm{GL}(K)$ invariance of KL divergence implies that $W_Q, W_K$ are themselves gauge transformations with $\Omega = W_Q W_K^\top$ a learned gauge transport suggesting that standard transformers already implement gauge-theoretic attention. Gradient descent on the free energy provides a variational interpretation of the transformer training loss, with the chain rule through layered compositions corresponding to variational message-passing.
+From this principle, transformer architectural choices emerge as consequences of the variational geometry: the temperature scaling $1/\sqrt{d_k}$ from dimensional concentration of the KL divergence, layer normalization as the geometric condition for frame-independent inference, multi-head attention as a block-diagonal restriction of the gauge algebra, and causal masking and positional biases from non-uniform attention priors $\pi_j$. Two successive limits (isotropic covariances, flat gauge connection) recover the standard rule $\beta_{ij} \propto \operatorname{softmax}(Q_i K_j^\top / \sqrt{d_k})$, while the $\mathrm{GL}(K)$ invariance of KL divergence implies that $W_Q, W_K$ are themselves gauge transformations with $W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$ parametrizing a learned gauge transport, suggesting that standard transformers already implement gauge-theoretic attention. Gradient descent on the free energy provides a variational interpretation of the transformer training loss, with the chain rule through layered compositions corresponding to variational message-passing.
 
 We validate the unreduced theory by training a $\mathrm{GL}(K)$ gauge transformer on WikiText-103 using only KL divergences, gauge transport, and natural gradient dynamics (without learned attention projections, MLPs, or pointwise activation functions such as ReLU or GELU). The model achieves test perplexity 90.6, surpassing a matched Kneser-Ney 5-gram baseline (PPL 134.8) by $1.49\times$, with emergent semantic structure in the learned gauge frames. We separately validate the degenerate-limit predictions on frozen BERT across 105 diverse passages, confirming quantitative agreement between KL-based and dot-product attention (grand mean $r = 0.804$ at the predicted optimal temperature, 95\% CI $[0.771, 0.838]$, with cross-passage SE $< 0.02$ for all 144 heads). Both architectures operate in the flat bundle limit with trivially vanishing holonomy: a geometric regime we conjecture is matched to the approximately path-independent semantic transport that language requires.
 \end{abstract}
@@ -259,7 +259,7 @@ $\mathrm{GL}(K)$ or subgroup &
 $\mathrm{GL}(d_k)$ (implicit) \\
 Gauge transformation &
 $\Omega_{ij} = e^{\phi_i} e^{-\phi_j} \in \mathrm{GL}^+(K)$ &
-$\Omega = W_Q W_K^\top$ (learned, constant) \\
+$W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$ (learned, constant) \\
 Frame field $\phi_i(c)$ &
 Varies per agent/position &
 Absorbed into $W_Q, W_K$ \\
@@ -352,7 +352,7 @@ Importantly, the proof extends to all $f$-divergences: for any convex function $
 D_f(\Omega_* P \| \Omega_* Q) = D_f(P \| Q), \quad \forall\, \Omega \in \mathrm{GL}(K),
 \end{equation}
 
-since the Jacobian factors $|\det\Omega|$ from the density transformation cancel in the ratio $p(x)/q(x)$. From a practical point of view, this means that transport operators need only satisfy $\det(\Omega_{ij}) \neq 0$ (invertibility); the full $\mathrm{GL}(K)$ acts as a gauge symmetry. Our exponential parameterization restricts to $\det > 0$ (since $\det(\exp(\phi)) = \exp(\mathrm{tr}(\phi)) > 0$), but this is the identity component and is standard for gauge connections. Finally, we shall demonstrate that the query and key projection matrices $W_Q, W_K \in \mathrm{GL}(d_k)$ in standard transformers are themselves gauge transformations. The constant gauge limit corresponds not to the absence of gauge structure, but to a constant gauge transformation $\Omega = W_Q W_K^\top$ shared among all token pairs.
+since the Jacobian factors $|\det\Omega|$ from the density transformation cancel in the ratio $p(x)/q(x)$. From a practical point of view, this means that transport operators need only satisfy $\det(\Omega_{ij}) \neq 0$ (invertibility); the full $\mathrm{GL}(K)$ acts as a gauge symmetry. Our exponential parameterization restricts to $\det > 0$ (since $\det(\exp(\phi)) = \exp(\mathrm{tr}(\phi)) > 0$), but this is the identity component and is standard for gauge connections. Finally, we shall demonstrate that the query and key projection matrices $W_Q, W_K \in \mathrm{GL}(d_k)$ in standard transformers are themselves gauge transformations. The constant gauge limit corresponds not to the absence of gauge structure, but to a constant gauge transformation satisfying $W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$ shared among all token pairs.
 
 
 \begin{table}[h]
@@ -1205,7 +1205,7 @@ with each channel possessing its own residual structure and effective learning r
 \multicolumn{4}{|l|}{\textit{Attention Mechanism}} \\
 \hline
 $\beta_{ij} \!=\! \softmax(-D_{\KL}/\tau)$ & Exact (Sec.~\ref{sec:mixture_derivation}) & $\softmax(QK^\top\!/\!\sqrt{d_k})$ & D \\
-$\Omega_{ij}\!=\!e^{\phi_i}e^{-\phi_j}\!\in\!\mathrm{GL}^+(K)$ & Constant $\Omega$ (Limit 2) & $W_Q W_K^\top$ (learned gauge) & D \\
+$\Omega_{ij}\!=\!e^{\phi_i}e^{-\phi_j}\!\in\!\mathrm{GL}^+(K)$ & Constant $\Omega$ (Limit 2) & $W_Q W_K^\top\!=\!\sigma^{-2}\Omega^{-\top}$ & D \\
 Forward KL uniqueness & Thm.\ (App.~C) & Why dot-product attention & D \\
 $m_i \!=\! \sum_j \beta_{ij}\Omega_{ij}\mu_j$ & $\Omega$ absorbed into $W_V$ & $\sum_j \alpha_{ij} V_j$ (value agg.) & D \\
 $\mathrm{GL}(d_{\text{head}})^H \!\subset\! \mathrm{GL}(d_k)$ & Irrep decomposition & Multi-head attention & D \\
@@ -1369,14 +1369,14 @@ with frequencies $\theta_n = 10000^{-2n/d_k}$. The attention logits become:
 
 where $R(\theta_{j-i}) = R(\theta_i)^\top R(\theta_j)$ depends only on the relative position $j - i$.
 
-In the gauge-theoretic framework, this has a straightforward interpretation. The full gauge transport between agents $i$ and $j$ is $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j) \in \mathrm{GL}(K)$. RoPE corresponds to a specific factorization of this transport into a learned, position-independent component and a fixed, position-dependent component:
+In the gauge-theoretic framework, this has a straightforward interpretation. Recall from Section~\ref{sec:glk_invariance} that $W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$. With RoPE, the rotation is applied to query and key vectors \emph{after} projection, so the effective logit kernel becomes:
 
 \begin{equation}
-\Omega_{ij}^{(\mathrm{RoPE})} = R(\theta_{j-i}) \cdot W_Q W_K^\top,
+\sigma^{-2}(\Omega_{ij}^{(\mathrm{RoPE})})^{-\top} = W_Q\, R(\theta_{j-i})\, W_K^\top,
 \label{eq:rope_gauge}
 \end{equation}
 
-where $R(\theta_{j-i}) \in \mathrm{SO}(2)^{d_k/2}$ is the position-dependent gauge frame and $W_Q W_K^\top \in \mathrm{GL}(d_k)$ is the learned constant gauge. This partially relaxes Limit~2 (flat bundle) such that the gauge connection is no longer globally flat, but the position-dependent component is restricted to a compact (Abelian) subgroup $\mathrm{SO}(2)^{d_k/2} \subset \mathrm{GL}(d_k)$.
+where $R(\theta_{j-i}) \in \mathrm{SO}(2)^{d_k/2}$ is sandwiched between the learned projections because it acts in the projected $d_k$-dimensional space. This partially relaxes Limit~2 (flat bundle): the gauge connection acquires a position-dependent component, but it is restricted to the compact (Abelian) subgroup $\mathrm{SO}(2)^{d_k/2} \subset \mathrm{GL}(d_k)$.
 
 \subsubsection{Gauge-Theoretic Interpretation.}
 
@@ -1396,12 +1396,12 @@ The multi-frequency structure of RoPE ($\theta_n = 10000^{-2n/d_k}$) corresponds
 RoPE occupies an intermediate position in the gauge-theoretic framework:
 
 \begin{equation}
-\underbrace{\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)}_{\text{Full GL}(K)\text{ gauge (this work)}} \;\supset\;
-\underbrace{R(\theta_{j-i}) \cdot W_Q W_K^\top}_{\text{RoPE}} \;\supset\;
-\underbrace{W_Q W_K^\top}_{\text{Standard attention (flat bundle)}}.
+\underbrace{\sigma^{-2}\exp(-\phi_j)^\top\exp(\phi_i)^\top}_{\text{Full GL}(K)\text{ gauge (this work)}} \;\supset\;
+\underbrace{W_Q\, R(\theta_{j-i})\, W_K^\top}_{\text{RoPE}} \;\supset\;
+\underbrace{W_Q W_K^\top}_{\text{Standard attention (flat bundle)}},
 \end{equation}
 
-Standard attention uses a constant, learned gauge $\Omega = W_Q W_K^\top$ (Limit~2 fully imposed). RoPE augments this with a fixed, position-dependent $\mathrm{SO}(2)^{d_k/2}$ rotation (Limit~2 partially relaxed for positional information). The full gauge-theoretic framework allows the complete transport $\Omega_{ij}$ to be agent-pair-dependent and learned (Limit~2 fully relaxed). This hierarchy clarifies the design space such that positional encoding methods can be understood as choices about which subgroup of $\mathrm{GL}(K)$ carries position-dependent structure, and which components remain position-independent and learned from data.
+where each expression is the logit kernel $\sigma^{-2}\Omega_{ij}^{-\top}$ appearing in $\tilde{s}_{ij} = \mu_i^\top(\cdot)\mu_j$. Standard attention uses a constant, learned gauge with $W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$ (Limit~2 fully imposed). RoPE augments this with a fixed, position-dependent $\mathrm{SO}(2)^{d_k/2}$ rotation sandwiched between the projections (Limit~2 partially relaxed for positional information). The full gauge-theoretic framework allows the complete transport $\Omega_{ij}$ to be agent-pair-dependent and learned (Limit~2 fully relaxed). This hierarchy clarifies the design space such that positional encoding methods can be understood as choices about which subgroup of $\mathrm{GL}(K)$ carries position-dependent structure, and which components remain position-independent and learned from data.
 
 An important distinction is that RoPE applies the position-dependent gauge only to the attention computation (queries and keys) and not to the value aggregation. In our framework, the full gauge transport $\Omega_{ij}$ mediates both the attention score $D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ and the message aggregation $m_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j$. The asymmetry in RoPE with position-dependent attention but position-independent values corresponds to factoring the gauge transport into an attention gauge and a value gauge that need not coincide. This decomposition is supported (but not required) by the full framework.
 
@@ -1442,7 +1442,7 @@ comprising a prior mean $\mu_p^c$, prior covariance $\Sigma_p^c$, and gauge fram
 
 \subsection{Summary}
 
-Under the successive limits: (i) isotropic beliefs with $\sigma^{-2}$ absorbed into learned projections, (ii) constant gauge ($\Omega_{ij} = \Omega$ for all pairs), and (iii) learned gauge via projections ($\sigma^{-2}\Omega = W_Q W_K^\top \in \mathrm{GL}(d_k)$), variational gradient descent on the gauge-equivariant free energy is:
+Under the successive limits: (i) isotropic beliefs with $\sigma^{-2}$ absorbed into learned projections, (ii) constant gauge ($\Omega_{ij} = \Omega$ for all pairs), and (iii) learned gauge via projections ($W_Q W_K^\top = \sigma^{-2}\Omega^{-\top} \in \mathrm{GL}(d_k)$), variational gradient descent on the gauge-equivariant free energy is:
 
 \begin{equation}
 \theta_{k+1} = \theta_k - \eta \nabla_\theta \mathcal{F}(\theta_k)
@@ -1862,7 +1862,7 @@ H_{ijk} = \Omega_{ij}\,\Omega_{jk}\,\Omega_{ki}
 \end{equation}
 The consecutive inverse--exponential pairs cancel identically: $e^{-\phi_j}e^{\phi_j} = I$. The holonomy vanishes for \emph{every} closed loop, regardless of the learned gauge frames $\phi_i$. The bundle is automatically flat. This is not an approximation or a simplifying assumption rather it is a theorem of the architecture. Any transport of the form $\Omega_{ij} = g_i\,g_j^{-1}$ for vertex-local group elements $g_i$ satisfies the cocycle condition $\Omega_{ij}\,\Omega_{jk} = \Omega_{ik}$ and therefore has vanishing discrete curvature.
 
-Standard transformers share this property. The learned projections $W_Q, W_K$ define an effective transport $\Omega = W_Q W_K^\top$ that is position-independent, i.e. a constant, and therefore flat, gauge transformation. Dot-product attention operates in this flat bundle limit.
+Standard transformers share this property. The learned projections $W_Q, W_K$ parametrize the gauge transport via $W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$ (Section~\ref{sec:glk_invariance}), which is position-independent, i.e.\ a constant, and therefore flat, gauge transformation. Dot-product attention operates in this flat bundle limit.
 
 Both architectures are thus restricted to the same geometric regime: flat bundles with trivial holonomy. In the most general discrete gauge theory on a token graph, the transport $\Omega_{ij}$ on each edge would be an independent group element, and the holonomy around closed loops would be unconstrained. A system with non-trivial holonomy would exhibit \emph{path-dependent} meaning transport: relating token $i$ to token $k$ directly via $\Omega_{ik}$ would yield a different result than relating them via an intermediate token $j$ through $\Omega_{ij}\,\Omega_{jk}$. The flat bundle limit eliminates this path-dependence entirely.
 
