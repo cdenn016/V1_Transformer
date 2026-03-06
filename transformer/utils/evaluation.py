@@ -120,6 +120,9 @@ def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
 
         vocab_size = actual_vocab_size
 
+    # Get pad_token_id from dataset for proper loss masking
+    pad_token_id = getattr(val_loader.dataset, 'pad_token_id', 0)
+
     # Evaluate on validation set
     print(f"\n{'='*70}")
     print("VALIDATION EVALUATION")
@@ -146,6 +149,7 @@ def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
                 lambda_beta=0.0,
                 lambda_gamma=0.0,
                 kappa_gamma=1.0,  # Unused when lambda_gamma=0
+                pad_token_id=pad_token_id,
             )
 
             total_loss += loss.item()

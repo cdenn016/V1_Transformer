@@ -202,25 +202,23 @@ def evaluate_on_test(
     total_params = model.get_num_params(non_embedding=False)
     print(f"  Total params: {total_params:,}")
 
-    # Create test dataloader
-    # First create a train loader to get vocab mapping for consistency
+    # Create dataloaders with include_test=True to ensure train vocab mapping
+    # is shared across all splits (train, val, AND test).
+    # This is critical: without sharing the mapping, each split builds its own
+    # token->id map from its own frequency counts, causing ID mismatches.
     from transformer.data import create_dataloaders
-    _, val_loader, actual_vocab_size = create_dataloaders(
+    _, _, test_loader, actual_vocab_size = create_dataloaders(
         max_seq_len=max_seq_len,
         batch_size=batch_size,
         vocab_size=vocab_size,
         num_workers=0,
         dataset=dataset,
+        include_test=True,
     )
 
-    # Now create test loader with same vocab mapping
-    test_loader, _ = create_test_dataloader(
-        max_seq_len=max_seq_len,
-        batch_size=batch_size,
-        vocab_size=vocab_size,
-        num_workers=0,
-        dataset=dataset,
-    )
+    # Get pad_token_id from dataset for proper loss masking
+    # The dataset pads with token 0, so we must tell cross_entropy to ignore it
+    pad_token_id = getattr(test_loader.dataset, 'pad_token_id', 0)
 
     # Evaluate
     print(f"\n{'='*70}")
@@ -258,21 +256,24 @@ def evaluate_on_test(
                 lambda_beta=0.0,
                 lambda_gamma=0.0,
                 kappa_gamma=1.0,
+                pad_token_id=pad_token_id,
             )
 
-            batch_tokens = input_ids.numel()
-            total_loss += loss.item() * batch_tokens
-            total_ce += metrics['loss/ce'] * batch_tokens
-            total_tokens += batch_tokens
+            # Count non-padding tokens for proper weighting
+            # metrics['loss/ce'] is mean over non-padding tokens (from ignore_index)
+            non_pad = (target_ids != pad_token_id).sum().item()
+            total_loss += loss.item() * non_pad
+            total_ce += metrics['loss/ce'] * non_pad
+            total_tokens += non_pad
             num_batches += 1
 
             if (batch_idx + 1) % 50 == 0:
-                current_ppl = np.exp(total_ce / total_tokens)
+                current_ppl = np.exp(total_ce / max(total_tokens, 1))
                 print(f"  Batch {batch_idx + 1}/{eval_batches} - Running PPL: {current_ppl:.2f}")
 
-    # Final results
-    avg_loss = total_loss / total_tokens
-    avg_ce = total_ce / total_tokens
+    # Final results - token-weighted average (weights by non-padding tokens)
+    avg_loss = total_loss / max(total_tokens, 1)
+    avg_ce = total_ce / max(total_tokens, 1)
     perplexity = np.exp(avg_ce)
 
     results = {
