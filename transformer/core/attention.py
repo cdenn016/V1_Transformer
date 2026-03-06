@@ -486,14 +486,14 @@ def compute_attention_weights(
     # For K=100 (SO(100)), KL ≈ O(50) causing softmax saturation:
     #   logits = -KL/κ ≈ -50 → one-hot attention → zero gradients.
     #
-    # The theoretically derived temperature is τ = 2√K:
+    # The theoretically derived temperature is τ = √K:
     #   - √K handles the dimensional growth (sum of K per-dimension terms)
-    #   - Factor of 2 accounts for the ½ prefactor in the KL divergence
-    # This matches the BERT validation: τ_opt = 19.0 ≈ 2√64 = 16 for d=64
-    # (19% deviation due to finite-dimensional corrections).
-    dim_scale = 2.0 * math.sqrt(max(K, 1))
+    #   - The ½ prefactor in KL is a constant absorbed into κ, not the scaling
+    # Standard attention divides by √d_k to normalize logit-difference variance;
+    # analogously, KL logit differences have std ∝ √K, so we divide by √K.
+    dim_scale = math.sqrt(max(K, 1))
 
-    # Attention logits: -KL / (κ · 2√K)
+    # Attention logits: -KL / (κ · √K)
     logits = -kl_matrix / (kappa * dim_scale)  # (B, N, N)
 
     # ==========================================================================
