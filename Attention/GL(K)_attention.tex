@@ -1419,9 +1419,11 @@ Standard transformers utilize attention sub-layers with feedforward networks (FF
 We may observe that the variational gradient $\partial \mathcal{F}/\partial \mu_i$ (Eq.~\ref{eq:residual_gradient_flow}) is itself a non-linear function of $\mu_i$, via its dependency on the attention weights $\beta_{ij}$. Differentiating $\beta_{ij} = \operatorname{softmax}(-D_{\mathrm{KL}}/\tau)$ with respect to $\mu_i$ yields:
 
 \begin{equation}
-\frac{\partial \beta_{ij}}{\partial \mu_i} = \frac{\beta_{ij}}{\tau}\left[\frac{\partial D_{\mathrm{KL},ij}}{\partial \mu_i} - \sum_k \beta_{ik} \frac{\partial D_{\mathrm{KL},ik}}{\partial \mu_i}\right],
+\frac{\partial \beta_{ij}}{\partial \mu_i} = -\frac{\beta_{ij}}{\tau}\left[\frac{\partial D_{\mathrm{KL},ij}}{\partial \mu_i} - \sum_k \beta_{ik} \frac{\partial D_{\mathrm{KL},ik}}{\partial \mu_i}\right],
 \label{eq:softmax_gradient_nonlinearity}
 \end{equation}
+
+
 
 where $D_{\mathrm{KL},ij} \equiv D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$. This expression is a \emph{centered} gradient (the deviation of the per-source KL gradient from its $\beta$-weighted mean) multiplied by the attention weight itself. This self-normalizing structure provides the nonlinearity in the VFE framework. It creates positive feedback (similar beliefs yield higher $\beta$, which pulls beliefs closer still) and implements an implicit gating mechanism where the sign and magnitude of the gradient depend on the current attention distribution.
 
@@ -1754,15 +1756,15 @@ Figure~\ref{fig:glk_training} shows the training dynamics for our best $\mathrm{
 \begin{figure*}[t]
   \centering
   \begin{subfigure}[b]{0.48\textwidth}
-    \includegraphics[width=\textwidth]{attention/figs/train_val_gapK=90.png}
+    \includegraphics[width=\textwidth]{attention/figs/train_val_gapk=90.png}
     \caption{Generalization gap (val BPC $-$ train BPC) for the $\mathrm{GL}(10)$, $K=90$ gauge VFE model.}
   \end{subfigure}
   \hfill
   \begin{subfigure}[b]{0.48\textwidth}
-    \includegraphics[width=\textwidth]{attention/figs/training_curvesK=90.png}
+    \includegraphics[width=\textwidth]{attention/figs/training_curvesk=90.png}
     \caption{Training curves for the $\mathrm{GL}(10)$, $K=90$ gauge VFE model: loss, perplexity, bits per token, and gradient norms.}
   \end{subfigure}
-  \caption{Training dynamics for the $\mathrm{GL}(10)$ gauge VFE model with $K=90$ embedding dimensions (9 heads of dimension 10) on WikiText-103. (a) The generalization gap (validation BPC minus training BPC) remains small throughout training, indicating effective regularization from the gauge-theoretic inductive bias. (b) Training curves showing loss, perplexity, bits per token, and gradient norms; perplexity drops from $>$1{,}400 to $\sim$91 over 100{,}000 steps.}
+  \caption{Training dynamics for the $\mathrm{GL}(10)$ gauge VFE model with $K=90$ embedding dimensions (9 heads of dimension 10) on WikiText-103. (a) The generalization gap (validation BPC minus training BPC) remains small throughout training, indicating effective regularization from the gauge-theoretic inductive bias. (b) Training curves showing loss, perplexity, bits per token, and gradient norms; perplexity drops from $>$1{,}400 to $\sim$79 over 50{,}000 steps.}
   \label{fig:glk_training}
 \end{figure*}
 
@@ -1771,15 +1773,15 @@ Figure~\ref{fig:glk_attention} shows the learned KL-divergence attention pattern
 \begin{figure*}[t]
   \centering
   \begin{subfigure}[b]{0.48\textwidth}
-    \includegraphics[width=\textwidth]{attention/figs/attention_step_100000_head0k=90.png}
+    \includegraphics[width=\textwidth]{attention/figs/attention_step_050000_head0k=90.png}
     \caption{Head~0: broad contextual attention with diffuse coverage and strong early-position weighting.}
   \end{subfigure}
   \hfill
   \begin{subfigure}[b]{0.48\textwidth}
-    \includegraphics[width=\textwidth]{attention/figs/attention_step_100000_head5k=90.png}
-    \caption{Head~5: sharper attention with prominent vertical stripes at specific high-frequency token positions.}
+    \includegraphics[width=\textwidth]{attention/figs/attention_step_050000_head2k=90.png}
+    \caption{Head~2: sharper attention with prominent vertical stripes at specific high-frequency token positions.}
   \end{subfigure}
-  \caption{Learned per-head KL-divergence attention patterns ($\log_{10}\beta_{ij}$) for the $\mathrm{GL}(10)$ gauge VFE model ($K=90$) at convergence (step 100{,}000) on a representative WikiText-103 sequence. The model develops selective, non-uniform, head-specialized attention through gauge transport and KL-divergence dynamics alone, without any learned attention projections ($W_Q$, $W_K$, $W_V$).}
+  \caption{Learned per-head KL-divergence attention patterns ($\log_{10}\beta_{ij}$) for the $\mathrm{GL}(10)$ gauge VFE model ($K=90$) at convergence (step 50{,}000) on a representative WikiText-103 sequence. The model develops selective, non-uniform, head-specialized attention through gauge transport and KL-divergence dynamics alone, without any learned attention projections ($W_Q$, $W_K$, $W_V$).}
   \label{fig:glk_attention}
 \end{figure*}
 
@@ -1793,7 +1795,7 @@ Table~\ref{tab:glk_results} presents our best $\mathrm{GL}(K)$ gauge VFE model a
 \hline
 \textbf{Model} & \textbf{Layers} & \textbf{Params} & \textbf{Val PPL} & \textbf{Test PPL} \\
 \hline
-Gauge VFE ($\mathrm{GL}(10)$, $K\!=\!90$) & 1 & 58.8M & 91.5 & 90.6 \\
+Gauge VFE ($\mathrm{GL}(10)$, $K\!=\!90$) & 1 & 58.8M & 83.1 & 79.6 \\
 Modified KN-5 (matched BPE) & --- & --- & 135.9 & 134.8 \\
 \hline
 Standard transformer & 1 & 17.6M & 55.4 & 65.0 \\
