@@ -659,6 +659,7 @@ def run_test_evaluation(
                 output = model(input_ids, labels=target_ids)
                 ce_loss = output['loss'].item()
             else:
+                pad_token_id = getattr(test_loader.dataset, 'pad_token_id', -100)
                 loss, metrics = compute_free_energy_loss(
                     model,
                     input_ids,
@@ -667,6 +668,7 @@ def run_test_evaluation(
                     lambda_beta=beta,
                     lambda_gamma=lambda_gamma,
                     kappa_gamma=kappa_gamma,
+                    pad_token_id=pad_token_id,
                 )
                 ce_loss = metrics['loss/ce']
 
@@ -1134,6 +1136,7 @@ class PublicationTrainer(FastTrainer):
                         lambda_beta=self.config.beta,
                         lambda_gamma=self.config.lambda_gamma,
                         kappa_gamma=self.config.kappa_gamma,
+                        pad_token_id=self.pad_token_id,
                         use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
                     )
             # Scaled backward
@@ -1157,6 +1160,7 @@ class PublicationTrainer(FastTrainer):
                     lambda_beta=self.config.beta,
                     lambda_gamma=self.config.lambda_gamma,
                     kappa_gamma=self.config.kappa_gamma,
+                    pad_token_id=self.pad_token_id,
                     use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
                     alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
                 )

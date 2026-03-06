@@ -416,7 +416,7 @@ def _compute_vfe_gradients_block_diagonal(
     # Scale kappa by 2√K to match attention temperature τ = 2√K
     kappa_scaled = kappa * 2.0 * math.sqrt(max(K, 1))
     avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
-    grad_deviation = grad_kl_per_pair_full - avg_grad.unsqueeze(2)
+    grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair_full
     d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
     grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
 
@@ -558,7 +558,7 @@ def _compute_vfe_gradients_block_diagonal_diag(
     # Softmax coupling term
     kappa_scaled = kappa * 2.0 * math.sqrt(max(K, 1))
     avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
-    grad_deviation = grad_kl_per_pair_full - avg_grad.unsqueeze(2)
+    grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair_full
     d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
     grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
 
@@ -714,7 +714,7 @@ def _compute_vfe_gradients_chunked(
         # PASS 2: Softmax coupling with correct (complete) avg_grad
         # ============================================================
         for beta_chunk, grad_kl, kl_chunk in chunk_data:
-            grad_deviation = grad_kl - avg_grad_i.unsqueeze(2)
+            grad_deviation = avg_grad_i.unsqueeze(2) - grad_kl
             d_beta_d_mu = beta_chunk.unsqueeze(-1) * grad_deviation / kappa_scaled
             softmax_contrib = lambda_belief * torch.einsum('bij,bijk->bik', kl_chunk, d_beta_d_mu)
             grad_mu_softmax[:, i_start:i_end] = grad_mu_softmax[:, i_start:i_end] + softmax_contrib
@@ -953,9 +953,10 @@ def compute_vfe_gradients_gpu(
         #     ∂β_ij/∂μ_i = β_ij · [∂KL_ij/∂μ_i - Σ_k β_ik · ∂KL_ik/∂μ_i] / κ
         #     grad_softmax = Σ_j KL_ij · ∂β_ij/∂μ_i
         # =================================================================
-        # Deviation from average: ∂KL_ij/∂μ_i - avg_grad_i
+        # Deviation from average: avg_grad_i - ∂KL_ij/∂μ_i
+        # β_ij = softmax(-KL/κ), so ∂β_ij/∂μ_i = (β_ij/κ)(avg_grad - ∂KL_ij/∂μ_i)
         # grad_kl_per_pair: (B, N, N, K), avg_grad: (B, N, K) -> expand to (B, N, 1, K)
-        grad_deviation = grad_kl_per_pair - avg_grad.unsqueeze(2)  # (B, N, N, K)
+        grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair  # (B, N, N, K)
 
         # Softmax coupling gradient: ∂β_ij/∂μ_i = β_ij · grad_deviation / κ
         # Scale kappa by 2√K to match attention temperature scaling (τ = 2√K)
@@ -1074,7 +1075,7 @@ def compute_vfe_gradients_gpu(
         # Scale kappa by 2√K to match attention temperature scaling (τ = 2√K)
         # The factor of 2 accounts for the ½ prefactor in KL divergence
         kappa_scaled = kappa * 2.0 * math.sqrt(max(K, 1))
-        grad_deviation = grad_kl_per_pair - avg_grad.unsqueeze(2)
+        grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair
         d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
         grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
 

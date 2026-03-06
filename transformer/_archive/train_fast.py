@@ -168,6 +168,9 @@ class FastTrainer:
         self.config = config
         self.device = device or torch.device('cpu')
 
+        # Get pad_token_id from dataset for proper loss masking
+        self.pad_token_id = getattr(train_loader.dataset, 'pad_token_id', -100)
+
         self.model.to(self.device)
 
         # Create optimizer with parameter groups
@@ -401,6 +404,7 @@ class FastTrainer:
                     lambda_beta=self.config.beta,
                     lambda_gamma=self.config.lambda_gamma,
                     kappa_gamma=self.config.kappa_gamma,
+                    pad_token_id=self.pad_token_id,
                 )
         else:
             loss, metrics = compute_free_energy_loss(
@@ -411,6 +415,7 @@ class FastTrainer:
                 lambda_beta=self.config.beta,
                 lambda_gamma=self.config.lambda_gamma,
                 kappa_gamma=self.config.kappa_gamma,
+                pad_token_id=self.pad_token_id,
             )
 
         # Backward pass
@@ -489,6 +494,7 @@ class FastTrainer:
                         lambda_beta=self.config.beta,
                         lambda_gamma=self.config.lambda_gamma,
                         kappa_gamma=self.config.kappa_gamma,
+                        pad_token_id=self.pad_token_id,
                     )
                     ce_loss = metrics['loss/ce']
 
@@ -634,7 +640,12 @@ class FastTrainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'best_val_ce': self.best_val_ce,
             'config': vars(self.config),
+            'patience_counter': self.patience_counter,
         }
+        if self.scheduler is not None:
+            checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
+        if self.scaler is not None:
+            checkpoint['scaler_state_dict'] = self.scaler.state_dict()
 
         if is_best:
             path = self.config.checkpoint_dir / 'best_model.pt'
@@ -689,6 +700,21 @@ class FastTrainer:
         # Restore training state
         self.global_step = checkpoint.get('step', checkpoint.get('global_step', 0))
         self.best_val_ce = checkpoint.get('best_val_ce', checkpoint.get('best_val_loss', float('inf')))
+        self.patience_counter = checkpoint.get('patience_counter', 0)
+
+        # Restore scheduler state
+        if self.scheduler is not None and 'scheduler_state_dict' in checkpoint:
+            try:
+                self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            except Exception as e:
+                print(f"  Warning: Could not restore scheduler state: {e}")
+
+        # Restore AMP scaler state
+        if self.scaler is not None and 'scaler_state_dict' in checkpoint:
+            try:
+                self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+            except Exception as e:
+                print(f"  Warning: Could not restore scaler state: {e}")
 
         print(f"  ✓ Loaded checkpoint from step {self.global_step}")
 
