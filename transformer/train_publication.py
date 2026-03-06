@@ -1041,15 +1041,17 @@ class PublicationTrainer(FastTrainer):
                         head_labels = [f"H{i}" for i in range(n_heads)]
 
                     # Show what sequence we're visualizing
-                    seq_info = f"Step {step}, Tokens: {input_ids[0, :20].tolist()}..."
-
-                    # Try to decode if tokenizer available
+                    # Prefer decoded text over raw token IDs for readability
                     if hasattr(self, 'tokenizer') and self.tokenizer is not None:
                         try:
                             decoded = self.tokenizer.decode(input_ids[0].tolist(), skip_special_tokens=True)
-                            seq_info += f"\nText: {decoded[:100]}..."
+                            # Truncate to ~80 chars for a clean title
+                            preview = decoded[:80] + ('...' if len(decoded) > 80 else '')
+                            seq_info = f"Step {step}, Text: {preview}"
                         except Exception:
-                            pass
+                            seq_info = f"Step {step}, Tokens: {input_ids[0, :20].tolist()}..."
+                    else:
+                        seq_info = f"Step {step}, Tokens: {input_ids[0, :20].tolist()}..."
 
                     # Save directory
                     save_dir = self.config.checkpoint_dir / 'attention_patterns'
