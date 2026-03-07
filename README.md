@@ -122,7 +122,7 @@ The **most general form** of the theory---no simplifying limits taken. Full non-
 
 | Configuration | K | Layers | Gauge Mode | Train PPL | Test PPL | Parameters |
 |---|---|---|---|---|---|---|
-| **Best (1 epoch)** | **90** | **1** | **Omega in GL(10)** | **71** | **76** | **~59M** |
+| **Best (1 epoch)** | **90** | **1** | **Omega in GL(10)** | **63** | **76** | **~59M** |
 | Trivial gauge | 30 | 3 | Omega in GL(30) | 125.1 | 135.3 | ~50M |
 | Learned gauge | 30 | 1 | Omega in GL(30) | 113.9 | 151.8 | ~50M |
 
