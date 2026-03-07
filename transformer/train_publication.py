@@ -314,7 +314,7 @@ VFE_EM_CONFIG = {
     # =================================================================
     
     'gauge_group': 'GLK',  # 'SO3', 'SON', or 'GLK'
-    'gauge_dim': 10,        # N for SO(N) - only used when gauge_group='SON'
+    'gauge_dim': 5,        # N for SO(N) - only used when gauge_group='SON' or GLK
     'gauge_mode': 'learned',  # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j)
                                 # 'trivial': global frame, φ = 0, Ω = I (standard attention)
     
@@ -354,7 +354,7 @@ VFE_EM_CONFIG = {
      # ('ℓ6', 1, 13),
      # ('ℓ7', 1, 15),
       # ('ℓ50', 1, 101),
-      ('fund', 1, 10)  #For SO(8)
+      ('fund', 2, 5)  #For SO(8)
      # ('fund', 10, 5),   # SO(5)
        
      # SO(5) multi-irrep example:
@@ -1528,7 +1528,6 @@ class PublicationTrainer(FastTrainer):
                     f"Step {step+1}/{total_steps} | "
                     f"Loss: {metrics['train_loss_total']:.4f} | "
                     f"CE: {metrics['train_loss_ce']:.4f} | "
-                    f"β: {metrics['train_loss_belief_align']:.4f} | "
                     f"PPL: {metrics['train_ppl']:.1f}\n\n"
                 )
 
