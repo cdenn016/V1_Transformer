@@ -294,7 +294,7 @@ class GaugeTransformerBlock(nn.Module):
         phi: torch.Tensor,
         generators: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
-        mu_prior: Optional[torch.Tensor] = None,  # For variational FFN
+        mu_prior: Optional[torch.Tensor] = None,  # Required for VFE_dynamic mode
         token_ids: Optional[torch.Tensor] = None,  # For PriorBank lookup
         targets: Optional[torch.Tensor] = None,   # For E-step observations
         W_out: Optional[torch.Tensor] = None,     # Output projection for discrete observations
@@ -606,7 +606,7 @@ class GaugeTransformerStack(nn.Module):
         phi: torch.Tensor,
         generators: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
-        mu_prior: Optional[torch.Tensor] = None,  # For variational FFN
+        mu_prior: Optional[torch.Tensor] = None,  # Required for VFE_dynamic mode
         token_ids: Optional[torch.Tensor] = None,  # For PriorBank lookup
         return_intermediates: bool = False,
         cached_head_transports: Optional[list] = None,  # Cross-layer transport cache
