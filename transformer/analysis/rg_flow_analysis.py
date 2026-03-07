@@ -77,6 +77,15 @@ from transformer.analysis.rg_metrics import (
     get_cluster_block_order,
     analyze_rg_flow,
 )
+from transformer.analysis.rg_flow_enhanced import (
+    FullRGDiagnostics,
+    CoarseGrainedState,
+    HierarchicalRGState,
+    compute_full_rg_diagnostics,
+    coarse_grain_full_state,
+    build_hierarchical_rg_state,
+    summarize_hierarchical_rg,
+)
 
 
 # =============================================================================
@@ -252,6 +261,8 @@ class RGFlowTracker:
         mu: torch.Tensor,
         sigma: torch.Tensor,
         step: int,
+        phi: Optional[torch.Tensor] = None,
+        kl_matrix: Optional[torch.Tensor] = None,
     ):
         """
         Record RG observables at a single step.
@@ -261,6 +272,8 @@ class RGFlowTracker:
             mu: Belief means (B, N, K)
             sigma: Belief covariances (B, N, K) or (B, N, K, K)
             step: Current step number
+            phi: Optional gauge frames (B, N, gauge_dim) for enhanced analysis
+            kl_matrix: Optional raw KL divergences (B, N, N) or (B, H, N, N)
         """
         if self._current_trajectory is None:
             self.start_trajectory()
@@ -274,6 +287,14 @@ class RGFlowTracker:
             mu=mu, sigma=sigma, beta=beta, step=step,
             auto_cluster=self.auto_cluster
         )
+
+        # If gauge frames available, also compute enhanced diagnostics
+        if phi is not None:
+            self._last_enhanced_diagnostics = compute_full_rg_diagnostics(
+                mu=mu, sigma=sigma, phi=phi, beta=beta,
+                kl_matrix=kl_matrix, step=step,
+                auto_cluster=self.auto_cluster,
+            )
 
         # Store in current trajectory
         traj = self._current_trajectory
@@ -309,7 +330,9 @@ class RGFlowTracker:
         beta: torch.Tensor,
         mu: torch.Tensor,
         sigma: torch.Tensor,
-    ) -> MultiScaleRGAnalysis:
+        phi: Optional[torch.Tensor] = None,
+        kl_matrix: Optional[torch.Tensor] = None,
+    ) -> Union[MultiScaleRGAnalysis, 'HierarchicalRGState']:
         """
         Perform multi-scale RG analysis.
 
@@ -318,14 +341,29 @@ class RGFlowTracker:
         by clustering tokens into meta-agents and constructing
         the effective attention matrix at the coarse-grained level.
 
+        When phi (gauge frames) is provided, uses gauge-aware coarse-graining
+        that preserves the full VFE structure (μ, Σ, φ, β) across scales.
+
         Args:
             beta: Attention matrix (B, N, N)
             mu: Belief means (B, N, K)
             sigma: Belief covariances
+            phi: Optional gauge frames (B, N, gauge_dim) for enhanced analysis
+            kl_matrix: Optional raw KL divergences (B, N, N) or (B, H, N, N)
 
         Returns:
-            MultiScaleRGAnalysis with diagnostics at each scale
+            MultiScaleRGAnalysis (without phi), or HierarchicalRGState (with phi)
         """
+        # If gauge frames available, use enhanced hierarchical analysis
+        if phi is not None:
+            hierarchy = build_hierarchical_rg_state(
+                mu=mu, sigma=sigma, phi=phi, beta=beta,
+                kl_matrix=kl_matrix,
+                max_scales=self.max_scales,
+                min_agents=4,
+            )
+            return hierarchy
+
         # Average over heads if needed
         if beta.dim() == 4:
             beta = beta.mean(dim=1)
@@ -934,6 +972,8 @@ def run_rg_analysis(
             beta = attn_info['beta']  # (B, H, N, N) or (B, N, N)
             mu = attn_info['mu']      # (B, N, K)
             sigma = attn_info.get('sigma')  # May be None
+            phi = attn_info.get('phi')      # (B, N, gauge_dim) if available
+            kl_mat = attn_info.get('kl_matrix')  # Raw KL divergences if available
 
             if sigma is None:
                 # Use dummy sigma if not available
@@ -955,12 +995,14 @@ def run_rg_analysis(
             # Track trajectory (single-step for now)
             if track_per_batch:
                 tracker.start_trajectory()
-                tracker.record_step(beta_avg, mu, sigma, step=batch_idx)
+                tracker.record_step(beta_avg, mu, sigma, step=batch_idx,
+                                    phi=phi, kl_matrix=kl_mat)
                 traj = tracker.end_trajectory()
                 all_trajectories.append(traj)
 
-            # Multi-scale analysis
-            multiscale = tracker.analyze_multiscale(beta_avg, mu, sigma)
+            # Multi-scale analysis (gauge-aware when phi available)
+            multiscale = tracker.analyze_multiscale(beta_avg, mu, sigma,
+                                                    phi=phi, kl_matrix=kl_mat)
             all_multiscale.append(multiscale)
 
             print(f"  Batch {batch_idx}: Q={diagnostics.modularity:.3f}, "
@@ -974,7 +1016,11 @@ def run_rg_analysis(
     kl_within = [d.kl_within_mean for d in all_diagnostics]
     kl_between = [d.kl_between_mean for d in all_diagnostics]
     n_clusters = [d.n_clusters for d in all_diagnostics]
-    scale_invariances = [m.scale_invariance_metric for m in all_multiscale]
+    scale_invariances = [
+        m.scale_invariance() if isinstance(m, HierarchicalRGState)
+        else m.scale_invariance_metric
+        for m in all_multiscale
+    ]
 
     summary = {
         'modularity': {'mean': np.mean(mods), 'std': np.std(mods)},
@@ -998,6 +1044,28 @@ def run_rg_analysis(
     summary['rg_signatures'] = rg_signatures
     summary['kl_ratio'] = kl_ratio
 
+    # Add gauge-enhanced metrics if hierarchical analysis was used
+    has_gauge = any(isinstance(m, HierarchicalRGState) for m in all_multiscale)
+    if has_gauge:
+        gauge_coherences = []
+        phi_separations = []
+        for m in all_multiscale:
+            if isinstance(m, HierarchicalRGState) and m.diagnostics:
+                d0 = m.diagnostics[0]
+                gauge_coherences.append(d0.gauge_coherence)
+                phi_separations.append(d0.phi_between_mean - d0.phi_within_mean)
+        if gauge_coherences:
+            summary['gauge_coherence'] = {
+                'mean': float(np.mean(gauge_coherences)),
+                'std': float(np.std(gauge_coherences)),
+            }
+            summary['phi_separation'] = {
+                'mean': float(np.mean(phi_separations)),
+                'std': float(np.std(phi_separations)),
+            }
+            rg_signatures['gauge_coherent'] = summary['gauge_coherence']['mean'] > 0.5
+            rg_signatures['phi_separated'] = summary['phi_separation']['mean'] > 0.0
+
     print("\n" + "="*60)
     print("RG FLOW ANALYSIS SUMMARY")
     print("="*60)
@@ -1008,6 +1076,9 @@ def run_rg_analysis(
     print(f"KL Between:      {summary['kl_between']['mean']:.3f} +/- {summary['kl_between']['std']:.3f}")
     print(f"KL Ratio:        {kl_ratio:.3f}")
     print(f"Scale Invariance: {summary['scale_invariance']['mean']:.3f} +/- {summary['scale_invariance']['std']:.3f}")
+    if 'gauge_coherence' in summary:
+        print(f"Gauge Coherence: {summary['gauge_coherence']['mean']:.3f} +/- {summary['gauge_coherence']['std']:.3f}")
+        print(f"Phi Separation:  {summary['phi_separation']['mean']:.3f} +/- {summary['phi_separation']['std']:.3f}")
     print("-"*60)
     print("RG Behavior Signatures:")
     for sig, value in rg_signatures.items():

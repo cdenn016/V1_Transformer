@@ -18,15 +18,6 @@ Author: VFE Transformer Team
 Date: January 2026
 """
 
-import sys
-import os
-
-# Ensure project root is in path
-_script_dir = os.path.dirname(os.path.abspath(__file__))
-_project_root = os.path.dirname(os.path.dirname(_script_dir))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
-
 import torch
 import torch.nn.functional as F
 import numpy as np
