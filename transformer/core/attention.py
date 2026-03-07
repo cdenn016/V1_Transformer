@@ -548,12 +548,14 @@ def compute_attention_weights(
     # Softmax over keys (dimension 2)
     beta = F.softmax(logits, dim=-1)  # (B, N, N)
 
-    # Clamp only finite (non-masked) positions to epsilon for numerical stability,
+    # Clamp only non-masked positions to epsilon for numerical stability,
     # preserving exact zeros from -inf masked positions (e.g. causal mask)
     masked_positions = (logits == float('-inf'))
-    beta = beta.clamp(min=epsilon)
-    beta = beta.masked_fill(masked_positions, 0.0)
-    beta = beta / beta.sum(dim=-1, keepdim=True)
+    # Apply clamp only where positions are NOT masked, keeping masked positions at 0
+    beta = torch.where(masked_positions, beta, beta.clamp(min=epsilon))
+    # Re-normalize (guard against all-masked rows producing zero sums)
+    beta_sum = beta.sum(dim=-1, keepdim=True).clamp(min=epsilon)
+    beta = beta / beta_sum
 
     if return_kl:
         return beta, kl_matrix

@@ -921,9 +921,11 @@ class PureFEPLayer(nn.Module):
             elif self.output_proj is not None:
                 # AD HOC: Linear projection
                 logits = self.output_proj(mu_q)
-            else:
+            elif self.prior_bank is not None:
                 # Fallback: use prior_bank if available
                 logits = self.prior_bank.decode(mu_q, sigma_q, tau=1.0)
+            else:
+                raise RuntimeError("No output projection or prior bank available for decoding")
 
             ce_loss = F.cross_entropy(
                 logits.view(-1, self.config.vocab_size),
@@ -1380,7 +1382,7 @@ class PureFEPLayer(nn.Module):
 
         # Sum over j (all positions contribute to gradient at i)
         # Weight by attention-like factor (uniform for priors)
-        grad_mu_p = self.config.lambda_prior * grad_per_pair.sum(dim=2).squeeze(0) / N  # (N, K)
+        grad_mu_p = self.config.lambda_prior * grad_per_pair.sum(dim=2).squeeze(0) / max(N, 1)  # (N, K)
 
         return grad_mu_p
 
@@ -1702,8 +1704,8 @@ class PureFEPLayer(nn.Module):
         # Track update statistics
         self.prior_update_count[:N_prior] += 1
 
-        # Ensure sigma stays positive
-        self.prior_sigma.clamp_(min=self.config.eps)
+        # Ensure sigma stays positive (use non-in-place to avoid autograd issues)
+        self.prior_sigma.data.clamp_(min=self.config.eps)
 
         self.total_prior_updates += 1
 

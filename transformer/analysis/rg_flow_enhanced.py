@@ -328,8 +328,11 @@ def analyze_kl_matrix(
     if kl.dim() == 4:
         kl = kl.mean(dim=1)
 
-    # Average over batch
-    kl_avg = kl.mean(dim=0)  # (N, N)
+    # Average over batch (only if batched)
+    if kl.dim() == 3:
+        kl_avg = kl.mean(dim=0)  # (N, N)
+    else:
+        kl_avg = kl  # Already (N, N)
 
     # Effective rank of KL matrix (how many significant directions)
     # Using singular value entropy

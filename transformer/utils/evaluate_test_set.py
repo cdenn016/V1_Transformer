@@ -114,7 +114,7 @@ def load_checkpoint(checkpoint_path: str, device: str = 'cpu') -> Dict:
     print(f"  Step: {step:,}")
     if best_val_loss is not None:
         print(f"  Best val loss: {best_val_loss:.4f}")
-        print(f"  Best val PPL:  {np.exp(best_val_loss):.2f}")
+        print(f"  Best val PPL:  {np.exp(min(best_val_loss, 20.0)):.2f}")
 
     return checkpoint
 

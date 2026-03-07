@@ -16,6 +16,7 @@ Instead of mapping English words to BPE tokens, this script:
 This avoids the BPE mismatch problem.
 """
 
+import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
@@ -24,8 +25,8 @@ from pathlib import Path
 import sys
 from collections import Counter
 
-# Add project to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from transformer.utils.checkpoint import load_model
 

@@ -231,7 +231,6 @@ def rodrigues_so3(phi: torch.Tensor) -> torch.Tensor:
         R: (..., 3, 3) rotation matrix
     """
     theta = torch.norm(phi, dim=-1, keepdim=True).unsqueeze(-1)  # (..., 1, 1)
-    theta = theta.clamp(min=1e-8)  # Avoid division by zero
 
     # Skew-symmetric matrix A = φ^a T_a matching so_n_generators(3) basis
     # A = [[0, φ_0, φ_1], [-φ_0, 0, φ_2], [-φ_1, -φ_2, 0]]
@@ -245,13 +244,26 @@ def rodrigues_so3(phi: torch.Tensor) -> torch.Tensor:
     A[..., 2, 1] = -phi[..., 2]
 
     I = torch.eye(3, device=phi.device, dtype=phi.dtype).expand(*batch_shape, 3, 3)
+    A2 = torch.einsum('...ij,...jk->...ik', A, A)
 
-    # Rodrigues formula
-    sin_theta = torch.sin(theta)
-    cos_theta = torch.cos(theta)
+    # Rodrigues formula with Taylor expansion for small angles to avoid
+    # catastrophic cancellation in sin(θ)/θ and (1-cos(θ))/θ² near θ=0
+    # Taylor: sin(θ)/θ ≈ 1 - θ²/6, (1-cos(θ))/θ² ≈ 1/2 - θ²/24
+    theta_sq = theta ** 2
+    small_angle = (theta < 1e-4)
 
-    R = I + (sin_theta / theta) * A + \
-        ((1 - cos_theta) / (theta ** 2)) * torch.einsum('...ij,...jk->...ik', A, A)
+    sin_coeff = torch.where(
+        small_angle,
+        1.0 - theta_sq / 6.0,
+        torch.sin(theta) / theta.clamp(min=1e-8)
+    )
+    cos_coeff = torch.where(
+        small_angle,
+        0.5 - theta_sq / 24.0,
+        (1.0 - torch.cos(theta)) / theta_sq.clamp(min=1e-16)
+    )
+
+    R = I + sin_coeff * A + cos_coeff * A2
 
     return R
 
@@ -698,9 +710,10 @@ class VFEFunctional(nn.Module):
             sigma_i = beliefs.sigma.unsqueeze(2)  # (B, N, 1, K)
             sigma_j = beliefs.sigma.unsqueeze(1)  # (B, 1, N, K)
 
-            # For diagonal covariance, rotation preserves diagonal if isotropic per block
-            # Approximation: variance is preserved under rotation
-            sigma_j_transported = sigma_j
+            # Transport diagonal covariance: σ_transported[k] = Σ_l Ω_kl² · σ[l]
+            # (exact for diagonal Σ under rotation Ω)
+            omega_sq = omega ** 2  # (B, N, N, K, K)
+            sigma_j_transported = torch.einsum('bnmkl,bnml->bnmk', omega_sq, sigma_j)
 
             # KL(q_i || Ω_ij q_j) - diagonal case
             var_ratio = sigma_i / (sigma_j_transported + 1e-8)

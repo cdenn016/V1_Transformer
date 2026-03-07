@@ -1707,7 +1707,7 @@ class PublicationTrainer(FastTrainer):
         print("TRAINING COMPLETE!")
         print(f"{'='*70}")
         print(f"Time: {elapsed/3600:.2f} hours")
-        print(f"Best val CE: {self.best_val_ce:.4f} (PPL: {math.exp(self.best_val_ce):.2f})")
+        print(f"Best val CE: {self.best_val_ce:.4f} (PPL: {math.exp(min(self.best_val_ce, 20.0)):.2f})")
         print(f"{'='*70}\n")
 
 
