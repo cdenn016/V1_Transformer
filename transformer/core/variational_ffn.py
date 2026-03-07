@@ -1309,122 +1309,18 @@ def retract_spd_diagonal_torch(
 
 
 # =============================================================================
-# Utilities
-# =============================================================================
-
-def _sanitize_euclidean_gradients(euc_grads, max_norm: float = 1e3, debug: bool = True):
-    """
-    Sanitize Euclidean gradients to prevent NaN in natural gradient computation.
-
-    This clips gradients that are too large, which can cause numerical overflow
-    when computing natural gradients via Σ^{-1}.
-
-    Args:
-        euc_grads: AgentGradients object
-        max_norm: Maximum allowed gradient norm per component
-        debug: Print warnings if clipping occurs
-
-    Returns:
-        Sanitized AgentGradients object
-    """
-    
-    import copy
-
-    grads_sanitized = copy.copy(euc_grads)
-
-    # Sanitize mu gradient
-    if euc_grads.grad_mu_q is not None:
-        grad_mu = euc_grads.grad_mu_q
-        if not np.all(np.isfinite(grad_mu)):
-            if debug:
-                print(f"⚠️  NaN/Inf in grad_mu_q, setting to zero")
-            grads_sanitized.grad_mu_q = np.zeros_like(grad_mu)
-        else:
-            norm = np.linalg.norm(grad_mu)
-            if norm > max_norm:
-                if debug:
-                    print(f"⚠️  Clipping grad_mu_q: norm {norm:.2e} > {max_norm:.2e}")
-                grads_sanitized.grad_mu_q = grad_mu * (max_norm / norm)
-
-    # Sanitize Sigma gradient
-    if euc_grads.grad_Sigma_q is not None:
-        grad_Sigma = euc_grads.grad_Sigma_q
-        if not np.all(np.isfinite(grad_Sigma)):
-            if debug:
-                print(f"⚠️  NaN/Inf in grad_Sigma_q, setting to zero")
-            grads_sanitized.grad_Sigma_q = np.zeros_like(grad_Sigma)
-        else:
-            norm = np.linalg.norm(grad_Sigma)
-            if norm > max_norm:
-                if debug:
-                    print(f"⚠️  Clipping grad_Sigma_q: norm {norm:.2e} > {max_norm:.2e}")
-                grads_sanitized.grad_Sigma_q = grad_Sigma * (max_norm / norm)
-
-    return grads_sanitized
-
-
-def _compute_cholesky_robust(sigma: np.ndarray, eps: float = 1e-6, debug: bool = False) -> np.ndarray:
-    """
-    Compute Cholesky factor L such that Σ = L L^T with robust fallback.
-
-    This is the VALIDATED approach from agents.py that works in simulation_suite.
-
-    Args:
-        sigma: Covariance matrix (K, K)
-        eps: Regularization for numerical stability (default: 1e-6)
-        debug: Print diagnostic info when fallbacks are used
-
-    Returns:
-        L: Lower triangular Cholesky factor (K, K)
-    """
-    K = sigma.shape[0]
-
-    # Check for NaN/Inf
-    if not np.all(np.isfinite(sigma)):
-        if debug:
-            print(f"⚠️  Cholesky: NaN/Inf detected in covariance, using diagonal fallback")
-        return np.sqrt(eps) * np.eye(K, dtype=np.float32)
-
-    # Symmetrize and regularize
-    sigma_sym = 0.5 * (sigma + sigma.T)
-    sigma_reg = sigma_sym + eps * np.eye(K)
-
-    try:
-        # Try standard Cholesky
-        L = np.linalg.cholesky(sigma_reg)
-        return L.astype(np.float32)
-
-    except np.linalg.LinAlgError:
-        # Cholesky failed - use eigendecomposition fallback
-        # This is the VALIDATED approach from agents.py
-        if debug:
-            print(f"⚠️  Cholesky: Standard decomposition failed, using eigenvalue fallback")
-
-        try:
-            eigvals, eigvecs = np.linalg.eigh(sigma_reg)
-            # Clamp eigenvalues
-            eigvals_clamped = np.maximum(eigvals, eps)
-            if debug and np.any(eigvals < eps):
-                min_eig = np.min(eigvals)
-                print(f"    Clamped {np.sum(eigvals < eps)} eigenvalues (min was {min_eig:.2e})")
-            # Compute Cholesky factor directly: L = V @ diag(sqrt(λ))
-            L = eigvecs @ np.diag(np.sqrt(eigvals_clamped))
-            return L.astype(np.float32)
-
-        except np.linalg.LinAlgError:
-            # Even eigendecomposition failed - return diagonal fallback
-            if debug:
-                print(f"⚠️  Cholesky: Eigendecomposition also failed, using diagonal fallback")
-            return np.sqrt(eps) * np.eye(K, dtype=np.float32)
-
-
-# =============================================================================
-# Adapter: PyTorch Transformer → Multi-Agent System
+# Adapter: PyTorch Transformer → Multi-Agent System (LEGACY)
+#
+# MockMultiAgentSystem and convert_torch_to_numpy_system were used for
+# bridging PyTorch tensors to the numpy-based gradient_engine. Now that
+# GPU gradient computation (compute_vfe_gradients_gpu) handles this
+# natively, these are no longer needed. Kept as class definition for
+# backward compatibility with any external code that imports it.
 # =============================================================================
 
 class MockMultiAgentSystem:
     """
-    Lightweight adapter that converts PyTorch transformer tensors
+    LEGACY: Lightweight adapter that converts PyTorch transformer tensors
     to multi-agent system format for gradient_engine.
 
     This allows us to reuse validated gradient code without full system overhead.
