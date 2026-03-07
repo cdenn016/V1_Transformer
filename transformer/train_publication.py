@@ -1548,7 +1548,8 @@ class PublicationTrainer(FastTrainer):
                         )
 
                 if use_tqdm:
-                    pbar.set_description(log_msg)
+                    tqdm.write(log_msg)
+                    pbar.set_description(f"Step {step+1}/{total_steps}")
                     # Print gradient norms using tqdm.write for proper display
                     if grad_norms:
                         tqdm.write(f"  [GRAD] total: {grad_norms['total']:.3e} | "
