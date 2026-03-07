@@ -114,6 +114,39 @@ class TestCreateByteDataloaders:
         assert vocab_size == 257
 
 
+class TestOpenWebTextDataloaders:
+    """Test OpenWebText dataset support."""
+
+    @pytest.mark.slow
+    def test_openwebtext_dataset_config(self):
+        """Test that openwebtext is a recognized dataset config."""
+        from transformer.data.datasets import DATASET_CONFIGS
+
+        assert 'openwebtext' in DATASET_CONFIGS
+
+    @pytest.mark.slow
+    def test_openwebtext_dataset_creation(self):
+        """Test creating OpenWebText dataset (requires HF datasets + download)."""
+        from transformer.data.datasets import WikiText2TiktokenDataset, DATASETS_AVAILABLE
+
+        if not DATASETS_AVAILABLE:
+            pytest.skip("datasets package not available")
+
+        dataset = WikiText2TiktokenDataset(
+            split='train',
+            max_seq_len=64,
+            dataset='openwebtext',
+        )
+
+        assert len(dataset) > 0
+        assert dataset.get_vocab_size() == 50257  # Full GPT-2 vocab
+
+        # Check shapes
+        inputs, targets = dataset[0]
+        assert inputs.shape == (64,)
+        assert targets.shape == (64,)
+
+
 class TestWikiTextDataset:
     """Test WikiTextDataset backward-compatible alias."""
 

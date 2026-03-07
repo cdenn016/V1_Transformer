@@ -2,10 +2,11 @@
 Data Pipeline for Gauge-Theoretic Transformer
 ===============================================
 
-WikiText dataset loading and preprocessing for language modeling.
-Supports both WikiText-2 and WikiText-103 (default).
+Dataset loading and preprocessing for language modeling.
+Supports WikiText-2, WikiText-103, and OpenWebText.
 
 Dataset Details:
+    - OpenWebText (~8B tokens, GPT-2's training data recreated openly)
     - WikiText-103 (103M tokens, default)
     - WikiText-2 (2.08M tokens, smaller alternative)
 
@@ -16,6 +17,13 @@ Usage:
     train_loader, val_loader, vocab_size = create_dataloaders(
         max_seq_len=256,
         batch_size=64,
+    )
+
+    # OpenWebText (~80x WikiText-103)
+    train_loader, val_loader, vocab_size = create_dataloaders(
+        max_seq_len=256,
+        batch_size=64,
+        dataset='openwebtext',
     )
 
     # Smaller dataset for quick experiments
@@ -155,7 +163,13 @@ WIKITEXT103_URLS = [
 DATASET_CONFIGS = {
     'wikitext-2': 'wikitext-2-raw-v1',
     'wikitext-103': 'wikitext-103-raw-v1',
+    'openwebtext': None,  # No config needed, loaded as load_dataset('openwebtext')
 }
+
+# OpenWebText split ratios (only has a 'train' split on HuggingFace)
+# We split it into train/val/test using a fixed seed for reproducibility
+OPENWEBTEXT_VAL_FRACTION = 0.005   # 0.5% for validation (~40K documents)
+OPENWEBTEXT_TEST_FRACTION = 0.005  # 0.5% for test (~40K documents)
 
 # Embedded minimal dataset as ultimate fallback
 # Clean WikiText-2 style content (from actual WikiText-2 articles)
@@ -353,6 +367,80 @@ def _download_wikitext103_fallback(cache_dir: Optional[str] = None) -> dict:
 
     print(f"WikiText-103 loaded from: {data_dir}")
     return result
+
+
+def _load_openwebtext_split(
+    split: str,
+    cache_dir: Optional[str] = None,
+) -> str:
+    """
+    Load an OpenWebText split.
+
+    OpenWebText (~8B tokens, ~8M documents) only has a 'train' split on
+    HuggingFace, so we split it deterministically into train/val/test
+    using fixed index ranges.
+
+    Args:
+        split: 'train', 'validation', or 'test'
+        cache_dir: Optional cache directory for HuggingFace datasets
+
+    Returns:
+        Full text for the requested split.
+    """
+    if not DATASETS_AVAILABLE:
+        raise RuntimeError(
+            "OpenWebText requires the 'datasets' package.\n"
+            "  pip install datasets\n"
+            "OpenWebText is too large (~8B tokens) for manual download fallback."
+        )
+
+    print(f"  Loading OpenWebText from HuggingFace...")
+    # Load the full dataset (only has 'train' split)
+    # HuggingFace datasets uses memory-mapped Arrow files, so this
+    # doesn't load everything into RAM at once
+    full_dataset = load_dataset('openwebtext', split='train', cache_dir=cache_dir)
+
+    total_docs = len(full_dataset)
+    print(f"  Total documents: {total_docs:,}")
+
+    # Deterministic split using index ranges (no shuffling needed -
+    # the dataset order is already arbitrary web text)
+    n_val = int(total_docs * OPENWEBTEXT_VAL_FRACTION)
+    n_test = int(total_docs * OPENWEBTEXT_TEST_FRACTION)
+    n_train = total_docs - n_val - n_test
+
+    if split == 'train':
+        subset = full_dataset.select(range(n_train))
+        print(f"  Train split: {n_train:,} documents")
+    elif split == 'validation':
+        subset = full_dataset.select(range(n_train, n_train + n_val))
+        print(f"  Validation split: {n_val:,} documents")
+    elif split == 'test':
+        subset = full_dataset.select(range(n_train + n_val, total_docs))
+        print(f"  Test split: {n_test:,} documents")
+    else:
+        raise ValueError(f"Unknown split: {split}")
+
+    # Concatenate documents with double newlines
+    # Process in batches for large splits to show progress
+    n_docs = len(subset)
+    BATCH_SIZE = 100_000
+    if n_docs > BATCH_SIZE:
+        parts = []
+        for i in range(0, n_docs, BATCH_SIZE):
+            batch = subset.select(range(i, min(i + BATCH_SIZE, n_docs)))
+            batch_texts = [item['text'] for item in batch if len(item['text'].strip()) > 0]
+            parts.append('\n\n'.join(batch_texts))
+            if (i // BATCH_SIZE + 1) % 10 == 0:
+                print(f"  Loaded {min(i + BATCH_SIZE, n_docs):,}/{n_docs:,} documents...")
+        full_text = '\n\n'.join(parts)
+        del parts  # Free memory
+    else:
+        texts = [item['text'] for item in subset if len(item['text'].strip()) > 0]
+        full_text = '\n\n'.join(texts)
+
+    print(f"  Total characters: {len(full_text):,}")
+    return full_text
 
 
 class WikiText2Dataset(Dataset):
@@ -641,10 +729,11 @@ class WikiText2TiktokenDataset(Dataset):
                           If provided, uses this mapping instead of building from
                           this split's frequencies. Essential for ensuring train/val
                           consistency when vocab restriction is used.
-            dataset: 'wikitext-2' (~2M tokens) or 'wikitext-103' (~103M tokens)
+            dataset: 'wikitext-2' (~2M tokens), 'wikitext-103' (~103M tokens),
+                     or 'openwebtext' (~8B tokens)
         """
         assert TIKTOKEN_AVAILABLE, "tiktoken required! pip install tiktoken"
-        assert dataset in DATASET_CONFIGS, f"Unknown dataset: {dataset}. Use 'wikitext-2' or 'wikitext-103'"
+        assert dataset in DATASET_CONFIGS, f"Unknown dataset: {dataset}. Use 'wikitext-2', 'wikitext-103', or 'openwebtext'"
 
         self.split = split
         self.max_seq_len = max_seq_len
@@ -668,11 +757,14 @@ class WikiText2TiktokenDataset(Dataset):
             print(f"  Loaded {len(tokens):,} cached tokens")
         else:
             # Load dataset and tokenize from scratch
-            hf_config = DATASET_CONFIGS[dataset]
             print(f"Loading {dataset.upper()} ({split}) for BPE tokenization (tiktoken)...")
             print(f"  DATASETS_AVAILABLE={DATASETS_AVAILABLE}")
 
-            if DATASETS_AVAILABLE:
+            if dataset == 'openwebtext':
+                # OpenWebText: ~8B tokens, loaded via HuggingFace datasets
+                full_text = _load_openwebtext_split(split, cache_dir)
+            elif DATASETS_AVAILABLE:
+                hf_config = DATASET_CONFIGS[dataset]
                 dataset_obj = load_dataset('wikitext', hf_config, split=split, cache_dir=cache_dir)
                 texts = [item['text'] for item in dataset_obj if len(item['text'].strip()) > 0]
                 full_text = '\n\n'.join(texts)
@@ -684,26 +776,39 @@ class WikiText2TiktokenDataset(Dataset):
                     wikitext_data = _download_wikitext2_fallback(cache_dir)
                 full_text = wikitext_data[split]
 
-            # Clean up processed WikiText artifacts (fallback URL has processed version)
-            import re
-            unk_count = full_text.count('<unk>')
-            if unk_count > 0:
-                print(f"  Warning: Removing {unk_count} <unk> tokens from data (processed WikiText artifact)")
-                # Replace <unk> with single space, preserve newlines
-                full_text = re.sub(r'<unk>', '', full_text)
-                # Only normalize multiple spaces (NOT newlines) - preserve paragraph structure!
-                full_text = re.sub(r'[ \t]+', ' ', full_text)
+            # Clean up processed WikiText artifacts (not needed for openwebtext)
+            if dataset != 'openwebtext':
+                import re
+                unk_count = full_text.count('<unk>')
+                if unk_count > 0:
+                    print(f"  Warning: Removing {unk_count} <unk> tokens from data (processed WikiText artifact)")
+                    full_text = re.sub(r'<unk>', '', full_text)
+                    full_text = re.sub(r'[ \t]+', ' ', full_text)
 
-            # Also fix @-@ (hyphen) and @,@ (comma) artifacts from processed WikiText
-            full_text = full_text.replace(' @-@ ', '-')
-            full_text = full_text.replace(' @,@ ', ',')
-            full_text = full_text.replace(' @.@ ', '.')
+                # Also fix @-@ (hyphen) and @,@ (comma) artifacts from processed WikiText
+                full_text = full_text.replace(' @-@ ', '-')
+                full_text = full_text.replace(' @,@ ', ',')
+                full_text = full_text.replace(' @.@ ', '.')
 
             print(f"  Total characters: {len(full_text):,}")
 
-            # Tokenize
+            # Tokenize (chunked for large datasets to manage memory)
             print(f"Tokenizing with tiktoken (GPT-2 BPE)...")
-            tokens = self.tokenizer.encode(full_text)
+            CHUNK_CHARS = 50_000_000  # 50M chars per chunk (~15M tokens)
+            if len(full_text) > CHUNK_CHARS * 2:
+                # Chunked tokenization for large datasets (e.g. OpenWebText)
+                tokens = []
+                n_chunks = (len(full_text) + CHUNK_CHARS - 1) // CHUNK_CHARS
+                for i in range(0, len(full_text), CHUNK_CHARS):
+                    chunk_idx = i // CHUNK_CHARS + 1
+                    chunk = full_text[i:i + CHUNK_CHARS]
+                    chunk_tokens = self.tokenizer.encode(chunk)
+                    tokens.extend(chunk_tokens)
+                    if chunk_idx % 10 == 0 or chunk_idx == n_chunks:
+                        print(f"  Tokenized chunk {chunk_idx}/{n_chunks} ({len(tokens):,} tokens so far)")
+                del full_text  # Free memory
+            else:
+                tokens = self.tokenizer.encode(full_text)
 
             # Save to cache for next run
             print(f"  Saving token cache to {token_cache_path}...")
@@ -1370,10 +1475,11 @@ def create_dataloaders(
     return_tokenizer: bool = False,
 ) -> Tuple[DataLoader, DataLoader, int] | Tuple[DataLoader, DataLoader, DataLoader, int]:
     """
-    Create train, validation, and optionally test dataloaders for WikiText.
+    Create train, validation, and optionally test dataloaders.
 
-    Uses tiktoken (OpenAI's fast tokenizer) if available, falls back to
-    transformers if not. Tiktoken is preferred as it has no heavy dependencies.
+    Supports WikiText-2 (~2M tokens), WikiText-103 (~103M tokens), and
+    OpenWebText (~8B tokens). Uses tiktoken (OpenAI's fast tokenizer) if
+    available, falls back to transformers if not.
 
     Tokenized data is cached to disk (~/.cache/tokenized_cache/) so subsequent
     runs skip the expensive tokenization step entirely.
@@ -1386,7 +1492,8 @@ def create_dataloaders(
         num_workers: Number of data loading workers
         cache_dir: Optional cache directory
         tokenizer_name: HuggingFace tokenizer name (only used if tiktoken unavailable)
-        dataset: 'wikitext-2' (~2M tokens) or 'wikitext-103' (~103M tokens, default)
+        dataset: 'wikitext-2' (~2M tokens), 'wikitext-103' (~103M tokens, default),
+                 or 'openwebtext' (~8B tokens)
         include_test: If True, also return test dataloader
         return_tokenizer: If True, also return the train dataset (has .decode() method)
 
