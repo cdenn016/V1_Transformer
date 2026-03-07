@@ -4,20 +4,31 @@ Training Loop for Gauge-Theoretic Transformer
 
 Implements COMPLETE free energy minimization with all gauge-theoretic terms.
 
+Standard FEP hierarchy:
+    h  (hyper-prior)  →  constrains s
+    s  (model)        →  generates p
+    p  (prior)        →  constrains q
+    q  (beliefs)      →  inferred from observations
+
 Full Free Energy:
-    F = (1) Σ_i KL(q_i || p_i)                    [Belief prior - alpha]
-      + (3) Σ_{i,j} β_{ij} · KL(q_i || Ω_{ij} q_j) [Belief alignment - beta]
-      + (4) Σ_{i,j} γ_{ij} · KL(p_i || Ω_{ij} p_j) [Model alignment - gamma]
-      - (5) E[log p(o|x)]                         [Observation likelihood]
+    F = (1) α · Σ_i KL(q_i || p_i)                      [Self-coupling: beliefs to priors]
+      + (2) λ_h · Σ_i KL(s_i || h)                      [Hyper-prior: models to centroid]
+      + (3) λ_β · Σ_{i,j} β_{ij} · KL(q_i || Ω_{ij} q_j) [Belief coupling / attention]
+      + (4) λ_γ · Σ_{i,j} γ_{ij} · KL(s_i || Ω_{ij} s_j) [Model coupling / meta-cognition]
+      - (5) E[log p(o|x)]                               [Observation likelihood]
 
 where:
-    - q_i = N(μ_i, Σ_i): Agent beliefs (evolved through transformer)
-    - p_i = N(μ_embed[i], Σ_embed[i]): Embedding priors (initial)
-    - β_{ij} = softmax_j(-KL(q_i||Ω_{ij}q_j)/κ): Belief coupling weights
-    - γ_{ij} = softmax_j(-KL(p_i||Ω_{ij}p_j)/κ'): Prior coupling weights
+    - q_i = N(μ_q, Σ_q): Beliefs (fast/E-step, evolved through attention)
+    - p_i = f(s_i): Priors (derived from models, constrain beliefs)
+    - s_i = N(μ_s, Σ_s): Models (slow/M-step, embedding params = what backprop updates)
+    - h = centroid of {s_i}: Hyper-prior (prevents model memorization)
+    - β_{ij} = softmax_j(-KL(q_i||Ω_{ij}q_j)/κ_β): Belief coupling weights
+    - γ_{ij} = softmax_j(-KL(s_i||Ω_{ij}s_j)/κ_γ): Model coupling weights
     - Ω_{ij}: Parallel transport operator
 
-Note: (2) Model prior Σ_i KL(s_i || r_i) = 0 since s_i = r_i
+Note: Currently p_i = s_i (identity mapping). The model IS the prior in the
+simplest case. A future generalization could make p = f(s) non-trivial
+(e.g., incorporating position-dependent context).
 
 Author: Implementation from validated suite + complete gamma term
 Date: November 2025
@@ -405,10 +416,11 @@ def compute_free_energy_loss(
     model,
     token_ids: torch.Tensor,
     targets: torch.Tensor,
-    alpha: float = 0.0,           # Self-consistency weight
-    lambda_beta: float = 1.0,     # Belief alignment weight
-    lambda_gamma: float = 0.0,    # Model alignment weight
+    alpha: float = 0.0,           # Self-coupling: KL(q_i || p_i) — beliefs to priors
+    lambda_beta: float = 1.0,     # Belief coupling weight
+    lambda_gamma: float = 0.0,    # Model coupling weight
     kappa_gamma: float = 1.0,     # Temperature for γ_ij coupling weights
+    lambda_hyper: float = 0.0,    # Hyper-prior: KL(s_i || h) — models to centroid
     pad_token_id: int = -100,     # Token ID to ignore in loss (padding)
     use_obs_in_vfe: bool = False, # Pass targets into VFE E-step (last layer only)
     alpha_phi: float = 0.0,       # Gauge prior weight: (α_φ/2) Σ_i ||φ_i||²
@@ -416,71 +428,70 @@ def compute_free_energy_loss(
     """
     Compute COMPLETE free energy loss with all gauge-theoretic terms.
 
+    FEP hierarchy:  h → s → p → q → observations
+
     Full Free Energy:
-        F = (1) α · Σ_i KL(q_i || p_i)                    [Belief prior]
-          + (3) λ_β · Σ_{i,j} β_ij · KL(q_i || Ω_{ij}q_j) [Belief alignment]
-          + (4) λ_γ · Σ_{i,j} γ_ij · KL(p_i || Ω_{ij}p_j) [Model alignment]
-          - (5) E[log p(o|x)]                             [Observation likelihood]
+        F = (1) α · Σ_i KL(q_i || p_i)                      [Self-coupling: beliefs to priors]
+          + (2) λ_h · Σ_i KL(s_i || h)                      [Hyper-prior: models to centroid]
+          + (3) λ_β · Σ_{i,j} β_ij · KL(q_i || Ω_{ij}q_j)  [Belief coupling / attention]
+          + (4) λ_γ · Σ_{i,j} γ_ij · KL(s_i || Ω_{ij}s_j)  [Model coupling / meta-cognition]
+          - (5) E[log p(o|x)]                                [Observation likelihood]
 
-    where:
-        - q_i = N(μ_i, Σ_i): Agent beliefs (evolved through transformer)
-        - p_i = N(μ_embed, Σ_embed): Embedding priors (initial, from token_embed)
-        - β_ij = softmax_j(-KL(q_i||Ω_{ij}q_j)/κ_β): Belief coupling weights
-        - γ_ij = softmax_j(-KL(p_i||Ω_{ij}p_j)/κ_γ): Prior coupling weights
-        - Ω_{ij}: Parallel transport operator (gauge connection)
-        - PyTorch autodiff handles ∂β_ij/∂μ_i and ∂γ_ij/∂μ_embed automatically!
+    Three-level distinction:
+        - q_i: Beliefs (fast/E-step, post-attention)
+        - p_i: Priors (derived from models, constrain beliefs via KL(q||p))
+        - s_i: Models (slow/M-step, embedding params = what backprop updates)
+        - h:   Hyper-prior (centroid of models, prevents memorization)
 
-    This is the CORRECT formulation from active inference + gauge theory:
-        - Belief alignment (β): Encourages consistency between evolved beliefs
-        - Model alignment (γ): Encourages consistency between embedding priors
+    Currently p_i = s_i (the embedding output serves as both model and prior).
+    The code maintains the conceptual separation so p = f(s) can be made
+    non-trivial in future work.
 
     Args:
         model: GaugeTransformerLM with forward_with_attention() method
         token_ids: (B, N) input token IDs
         targets: (B, N) target token IDs
-        alpha: Weight for belief prior KL(q||p) (default: 0.0)
-        lambda_beta: Weight for belief alignment term (default: 1.0)
-        lambda_gamma: Weight for model alignment term (default: 0.0)
-        kappa_gamma: Temperature for γ_ij coupling weights (default: 1.0)
+        alpha: Weight for self-coupling KL(q||p) (default: 0.0)
+        lambda_beta: Weight for belief coupling (default: 1.0)
+        lambda_gamma: Weight for model coupling (default: 0.0)
+        kappa_gamma: Temperature for γ_ij model coupling weights (default: 1.0)
+        lambda_hyper: Weight for hyper-prior KL(s_i||h) (default: 0.0)
         pad_token_id: Token ID for padding (ignored in loss). Default -100.
 
     Returns:
         total_loss: Scalar loss for backprop
         metrics: Dict with loss components
-
-    Example:
-        >>> # Standard training (gamma disabled)
-        >>> loss, metrics = compute_free_energy_loss(
-        ...     model, inputs, targets,
-        ...     alpha=0.001, lambda_beta=0.1, lambda_gamma=0.0
-        ... )
-
-        >>> # With model alignment (regularize embedding space)
-        >>> loss, metrics = compute_free_energy_loss(
-        ...     model, inputs, targets,
-        ...     alpha=0.001, lambda_beta=0.1, lambda_gamma=0.01
-        ... )
     """
     # =================================================================
     # Forward pass with attention weights and KL matrices
     # =================================================================
-    # When use_obs_in_vfe=True, pass targets so the LAST layer's VFE E-step
-    # can use observations (CE gradient) to ground beliefs. Intermediate
-    # layers do blind belief propagation + alignment only.
-    # When False, targets=None and observations only enter via M-step CE.
     vfe_targets = targets if use_obs_in_vfe else None
     logits, attn_info = model.forward_with_attention(token_ids, targets=vfe_targets)
 
     beta = attn_info['beta']    # (B, n_heads, N, N)
     kl = attn_info['kl']        # (B, n_heads, N, N)
-    mu_q = attn_info['mu']      # (B, N, K) - evolved beliefs
+    mu_q = attn_info['mu']      # (B, N, K) - evolved beliefs (fast)
     sigma_q = attn_info['sigma']  # (B, N, K, K) or None
 
-    # Extract priors for gamma term
-    mu_p = attn_info['mu_prior']      # (B, N, K) - embedding priors
-    sigma_p = attn_info['sigma_prior']  # (B, N, K, K)
-    phi_p = attn_info['phi_prior']      # (B, N, 3)
-    generators = model.generators      # (3, K, K)
+    # =================================================================
+    # Extract models s_i and priors p_i from attention_info
+    # =================================================================
+    # Currently p_i = s_i = embedding output (before position encoding).
+    # The embedding parameters ARE the models — they're the slow variables
+    # that backprop updates. The priors are derived from models; in the
+    # simplest case p = s (identity mapping).
+    #
+    # mu_prior/sigma_prior from model.py are the raw embedding outputs
+    # cloned before position encoding is applied to phi.
+    mu_s = attn_info['mu_prior']      # (B, N, K) - models (embedding params)
+    sigma_s = attn_info['sigma_prior']  # (B, N, K, K) or (B, N, K)
+    phi_s = attn_info['phi_prior']      # (B, N, gauge_dim)
+    generators = model.generators      # (n_gen, K, K)
+
+    # Priors: currently p_i = s_i. When p = f(s) becomes non-trivial,
+    # derive mu_p, sigma_p from mu_s, sigma_s here.
+    mu_p = mu_s        # p = s (identity mapping for now)
+    sigma_p = sigma_s  # p = s
 
     # =================================================================
     # 1. Observation Likelihood: -E[log p(o|x)] = Cross-Entropy
@@ -489,26 +500,15 @@ def compute_free_energy_loss(
         logits.reshape(-1, logits.size(-1)),  # (B*N, V)
         targets.reshape(-1),                   # (B*N,)
         reduction='mean',
-        ignore_index=pad_token_id,  # Ignore padding tokens in loss
+        ignore_index=pad_token_id,
     )
 
     # =================================================================
-    # 2. Attention-Weighted Free Energy: Σ_ij β_ij · KL(q_i||Ω_ij[q_j])
+    # 2. Belief Coupling: λ_β · Σ_ij β_ij · KL(q_i || Ω_ij q_j)
     # =================================================================
-    # This is the CRITICAL term from the validated suite!
-    # Line 189 from gradients.free_energy_clean.py: weighted_field = beta_ij * kl_field
-
     if lambda_beta > 0.0:
-        # Pointwise multiplication: β_ij * KL_ij for each head
         weighted_kl = beta * kl  # (B, n_heads, N, N)
-
-        # Sum over all pairs (i,j) and average over heads and batch
-        # Note: Averaging over batch and heads, summing over agent pairs
-        belief_align_loss = weighted_kl.sum(dim=(-2, -1)).mean()  # Mean over (batch, heads)
-
-        # Normalize by √K to stabilize loss scale for large latent dimensions.
-        # KL between K-dim Gaussians scales as O(K), so √K normalization
-        # prevents belief alignment loss from dominating CE.
+        belief_align_loss = weighted_kl.sum(dim=(-2, -1)).mean()
         K = mu_q.shape[-1]
         dim_scale = math.sqrt(max(K, 1))
         belief_align_loss = lambda_beta * belief_align_loss / dim_scale
@@ -516,121 +516,124 @@ def compute_free_energy_loss(
         belief_align_loss = torch.tensor(0.0, device=ce_loss.device)
 
     # =================================================================
-    # 3. Self-Consistency: α·KL(q||p) - Beliefs should stay close to priors
+    # 3. Self-Coupling: α · KL(q_i || p_i) — beliefs toward PRIORS
     # =================================================================
-    # This is the key VFE term that pulls evolved beliefs back toward
-    # their embedding priors. Without this, beliefs can drift arbitrarily.
-    #
-    # KL(q||p) = KL(N(μ_q, Σ_q) || N(μ_p, Σ_p))
-    #
-    # This provides gradients to embeddings even when belief evolution is detached!
+    # This pulls evolved beliefs (fast) back toward priors (derived from
+    # models). This is NOT KL(q||s) — it's KL(q||p) where p = f(s).
+    # Currently p = s, so they're numerically identical, but the
+    # conceptual distinction matters for the hierarchy.
     # =================================================================
     if alpha > 0.0:
         K = mu_q.shape[-1]
-        # Proper KL divergence between evolved beliefs and embedding priors
-        # CRITICAL: Detach sigmas to prevent gradient flow through Cholesky decomposition!
-        # This matches simulation_runner.py which uses NumPy (no autograd through Cholesky).
-        # Gradients to sigma embeddings come from other terms, not KL backward through Cholesky.
         kl_per_agent = gaussian_kl_divergence(
-            mu_q=mu_q,        # Evolved beliefs (gradients flow through mu)
-            sigma_q=sigma_q.detach() if sigma_q is not None else None,  # Detach to avoid Cholesky backward
-            mu_p=mu_p,        # Embedding priors
-            sigma_p=sigma_p.detach() if sigma_p is not None else None,  # Detach to avoid Cholesky backward
+            mu_q=mu_q,
+            sigma_q=sigma_q.detach() if sigma_q is not None else None,
+            mu_p=mu_p,        # PRIORS (not models directly)
+            sigma_p=sigma_p.detach() if sigma_p is not None else None,
         )  # (B, N)
-
-        # Normalize by √K: KL between K-dim Gaussians scales as O(K),
-        # so √K normalization prevents self-consistency loss from
-        # dominating CE for large K.
         dim_scale = math.sqrt(max(K, 1))
-
-        # Average over batch and agents, normalized by √K
         self_consistency_loss = alpha * kl_per_agent.mean() / dim_scale
     else:
         self_consistency_loss = torch.tensor(0.0, device=ce_loss.device)
 
     # =================================================================
-    # 4. Model Alignment: λ_γ·Σ_{i,j} γ_ij · KL(p_i || Ω_{ij} p_j)
+    # 4. Model Coupling: λ_γ · Σ_{i,j} γ_ij · KL(s_i || Ω_{ij} s_j)
     # =================================================================
-    # This term encourages consistency between embedding priors p_i across agents.
+    # Aligns generative MODELS across agents via gauge transport.
+    # This operates on the slow timescale — it's the M-step analog of
+    # belief coupling (β term, which operates on q in the E-step).
     #
-    # Formula:
-    #   L_model = λ_γ · Σ_{i,j} γ_{ij} · KL(p_i || Ω_{ij} p_j)
+    # γ_{ij} = softmax_j(-KL(s_i || Ω_{ij} s_j) / κ_γ)
+    # Ω_{ij} = exp(φ_i) · exp(-φ_j)
     #
-    # where:
-    #   - p_i = N(μ_embed[i], Σ_embed[i]): Initial embedding prior
-    #   - γ_{ij} = softmax_j(-KL(p_i || Ω_{ij} p_j) / κ_γ): Prior coupling weights
-    #   - Ω_{ij} = exp(φ_i) · exp(-φ_j): Parallel transport operator
-    #
-    # This is symmetric to belief alignment (β term), but operates on
-    # the embedding space rather than the evolved belief space.
-    #
-    # Use cases:
-    #   - Regularize embedding space to be gauge-consistent
-    #   - Prevent embeddings from having arbitrary gauge choices
-    #   - Encourage smooth gauge structure in token space
+    # Uses s_i (models), NOT p_i (priors). The gamma term couples the
+    # learned model parameters, not the derived priors.
     # =================================================================
     if lambda_gamma > 0.0:
-        batch_size, num_agents, K = mu_p.shape
-        device = mu_p.device
+        batch_size, num_agents, K = mu_s.shape
+        device = mu_s.device
 
-        # Causal mask (same as for beliefs)
         mask = torch.tril(torch.ones(num_agents, num_agents, device=device))
         mask = mask.unsqueeze(0).expand(batch_size, -1, -1)
 
-        # Compute γ_{ij} coupling weights and KL(p_i || Ω_{ij} p_j)
-        # Using same attention mechanism as β_{ij}, but on priors
-        # Detect if sigma_p is diagonal (3D) or full (4D)
-        diagonal_cov = sigma_p is not None and sigma_p.dim() == 3
-        gamma, kl_prior = compute_attention_weights(
-            mu_p,
-            sigma_p,
-            phi_p,
+        diagonal_cov = sigma_s is not None and sigma_s.dim() == 3
+        gamma, kl_model = compute_attention_weights(
+            mu_s,       # MODELS (not priors)
+            sigma_s,    # MODELS
+            phi_s,      # Model gauge frames
             generators,
             kappa_gamma,
             epsilon=1e-8,
             mask=mask,
-            use_numba=False,  # Use PyTorch for gradient tracking
+            use_numba=False,
             return_kl=True,
             diagonal_covariance=diagonal_cov,
         )
-        # gamma: (B, N, N)
-        # kl_prior: (B, N, N)
 
-        # Weighted model alignment: Σ_{i,j} γ_{ij} · KL(p_i || Ω_{ij} p_j)
-        weighted_kl_prior = gamma * kl_prior  # (B, N, N)
-
-        # Sum over all agent pairs and average over batch
-        # Normalize by √K for dimension-stable loss scale
-        K = mu_p.shape[-1]
+        weighted_kl_model = gamma * kl_model  # (B, N, N)
+        K = mu_s.shape[-1]
         dim_scale = math.sqrt(max(K, 1))
-        model_align_loss = lambda_gamma * weighted_kl_prior.sum(dim=(-2, -1)).mean() / dim_scale
+        model_align_loss = lambda_gamma * weighted_kl_model.sum(dim=(-2, -1)).mean() / dim_scale
     else:
         model_align_loss = torch.tensor(0.0, device=ce_loss.device)
 
     # =================================================================
-    # 5. Gauge Prior: (α_φ/2) Σ_i ||φ_i||² — mass term for gauge field
+    # 5. Hyper-Prior: λ_h · Σ_i KL(s_i || h) — models toward centroid
     # =================================================================
-    # Analogous to α·KL(q||p) for beliefs, this anchors gauge frames to
-    # the identity connection (φ=0). Maximum entropy prior on the Lie
-    # algebra: p(φ) = N(0, σ²I), giving -(α_φ/2)||φ||² log-prior.
+    # h = centroid of all models {s_i}. This is the key anti-memorization
+    # mechanism: constrains per-position models to stay near a shared
+    # centroid, forcing generalization through gauge transport Ω_{ij}
+    # rather than per-position lookup tables.
     #
-    # Gauge-theoretically: this is a gauge field mass term, standard in
-    # lattice gauge theory. In the 0D architecture (no spatial curvature),
-    # no symmetry principle forbids it.
+    # h has broadened variance (2×) to allow model diversity while
+    # preventing unconstrained drift.
+    # =================================================================
+    if lambda_hyper > 0.0:
+        batch_size, num_agents, K = mu_s.shape
+        dim_scale = math.sqrt(max(K, 1))
+
+        # Centroid h = mean of all models (detach: treat as fixed target)
+        mu_h = mu_s.mean(dim=1, keepdim=True).detach()  # (B, 1, K)
+
+        if sigma_s is not None:
+            # Broadened variance (2×) allows model diversity
+            sigma_h = sigma_s.mean(dim=1, keepdim=True).detach() * 2.0
+        else:
+            sigma_h = None
+
+        # Expand centroid to match all agents
+        mu_h_expanded = mu_h.expand_as(mu_s)
+        sigma_h_expanded = sigma_h.expand_as(sigma_s) if sigma_h is not None else None
+
+        # KL(s_i || h) for each agent position
+        kl_hyper = gaussian_kl_divergence(
+            mu_q=mu_s,
+            sigma_q=sigma_s.detach() if sigma_s is not None else None,
+            mu_p=mu_h_expanded,
+            sigma_p=sigma_h_expanded,
+        )  # (B, N)
+
+        hyper_prior_loss = lambda_hyper * kl_hyper.mean() / dim_scale
+    else:
+        hyper_prior_loss = torch.tensor(0.0, device=ce_loss.device)
+
+    # =================================================================
+    # 6. Gauge Prior: (α_φ/2) Σ_i ||φ_i||² — mass term for gauge field
     # =================================================================
     if alpha_phi > 0.0:
         K = mu_q.shape[-1]
         dim_scale = math.sqrt(max(K, 1))
-        # phi_p is the gauge frame from embeddings (B, N, n_gen)
-        phi_norm_sq = (phi_p ** 2).sum(dim=-1).mean()  # Mean over batch and tokens
+        # phi_s is the model gauge frame from embeddings (B, N, n_gen)
+        phi_norm_sq = (phi_s ** 2).sum(dim=-1).mean()  # Mean over batch and tokens
         gauge_prior_loss = (alpha_phi / 2.0) * phi_norm_sq / dim_scale
     else:
         gauge_prior_loss = torch.tensor(0.0, device=ce_loss.device)
 
     # =================================================================
-    # Total Free Energy (ALL FIVE TERMS)
+    # Total Free Energy (ALL SIX TERMS)
     # =================================================================
-    total_loss = ce_loss + belief_align_loss + self_consistency_loss + model_align_loss + gauge_prior_loss
+    total_loss = (ce_loss + belief_align_loss + self_consistency_loss
+                  + model_align_loss + hyper_prior_loss + gauge_prior_loss)
 
     # Compute attention metrics outside the computation graph
     with torch.no_grad():
@@ -645,7 +648,8 @@ def compute_free_energy_loss(
         'loss/ce': ce_loss.item(),
         'loss/belief_align': belief_align_loss.item(),
         'loss/self_consistency': self_consistency_loss.item() if alpha > 0 else 0.0,
-        'loss/model_align': model_align_loss.item() if lambda_gamma > 0 else 0.0,
+        'loss/model_coupling': model_align_loss.item() if lambda_gamma > 0 else 0.0,
+        'loss/hyper_prior': hyper_prior_loss.item() if lambda_hyper > 0 else 0.0,
         'loss/gauge_prior': gauge_prior_loss.item() if alpha_phi > 0 else 0.0,
         'attention/beta_mean': beta.mean().item(),
         'attention/kl_mean': kl.mean().item(),
@@ -686,7 +690,7 @@ def compute_free_energy_loss(
 
     if lambda_gamma > 0.0:
         metrics['attention/gamma_mean'] = gamma.mean().item()
-        metrics['attention/kl_prior_mean'] = kl_prior.mean().item()
+        metrics['attention/kl_model_mean'] = kl_model.mean().item()
 
     # =================================================================
     # Retrieve Hamiltonian diagnostics (if available)
@@ -773,14 +777,15 @@ class TrainingConfig:
     lr_decay: str = 'cosine'  # 'cosine', 'linear', 'constant'
     min_lr: float = 3e-5
 
-    # Free energy weights
+    # Free energy weights (FEP hierarchy: h → s → p → q → observations)
     # NOTE: alpha > 0 is CRITICAL for gradient flow to embeddings!
-    # KL(q||p) pulls evolved beliefs back to embedding priors and provides
+    # KL(q||p) pulls evolved beliefs back to priors and provides
     # gradients to mu_embed even when FFN outputs are detached.
-    alpha: float = 0.1           # Self-consistency: KL(q||p) to embedding priors
-    lambda_beta: float = 1.0     # Belief alignment: Σβ_ij·KL (CRUCIAL!)
-    lambda_gamma: float = 0.0    # Model alignment (disabled by default)
-    kappa_gamma: float = 1.0     # Temperature for γ_ij coupling weights
+    alpha: float = 0.1           # Self-coupling: KL(q||p) beliefs to priors
+    lambda_beta: float = 1.0     # Belief coupling: Σβ_ij·KL(q_i||Ω_ij q_j) (CRUCIAL!)
+    lambda_gamma: float = 0.0    # Model coupling: Σγ_ij·KL(s_i||Ω_ij s_j) (disabled by default)
+    kappa_gamma: float = 1.0     # Temperature for γ_ij model coupling weights
+    lambda_hyper: float = 0.0    # Hyper-prior: KL(s_i||h) models to centroid (disabled by default)
 
     # Training
     batch_size: int = 16
@@ -1072,6 +1077,7 @@ class Trainer:
                 lambda_beta=self.config.lambda_beta,
                 lambda_gamma=self.config.lambda_gamma,
                 kappa_gamma=self.config.kappa_gamma,
+                lambda_hyper=getattr(self.config, 'lambda_hyper', 0.0),
                 pad_token_id=self.pad_token_id,
                 use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
                 alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
@@ -1177,6 +1183,7 @@ class Trainer:
                 lambda_beta=self.config.lambda_beta,
                 lambda_gamma=self.config.lambda_gamma,
                 kappa_gamma=self.config.kappa_gamma,
+                lambda_hyper=getattr(self.config, 'lambda_hyper', 0.0),
                 pad_token_id=self.pad_token_id,
                 use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
                 alpha_phi=getattr(self.config, 'alpha_phi', 0.0),

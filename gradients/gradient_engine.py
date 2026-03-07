@@ -752,12 +752,13 @@ def compute_prior_alignment_gradients(
     lambda_phi: float = 1.0,
 ) -> Dict[int, AgentGradients]:
     """
-    Compute gradients of prior alignment for agent i with all neighbors.
-    
-    Identical structure to belief alignment, but for priors p instead of beliefs q.
-    
+    Compute gradients of model coupling for agent i with all neighbors.
+
+    This is the γ_ij term operating on models s_i (stored as agent.mu_p/Sigma_p).
+    Identical structure to belief coupling, but for models s instead of beliefs q.
+
     Energy term:
-        E = Σ_j λ ∫ χ_ij γ_ij KL(p_i || Ω[p_j]) dc
+        E = Σ_j λ ∫ χ_ij γ_ij KL(s_i || Ω[s_j]) dc
     
     Args:
         system: MultiAgentSystem

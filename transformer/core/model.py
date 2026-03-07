@@ -843,13 +843,15 @@ class GaugeTransformerLM(nn.Module):
         attention_info = {
             'beta': beta,      # (B, n_heads, N, N)
             'kl': kl,          # (B, n_heads, N, N)
-            'mu': mu_q,        # (B, N, K) - evolved beliefs
+            'mu': mu_q,        # (B, N, K) - evolved beliefs q_i (fast/E-step)
             'sigma': sigma_q,  # (B, N, K, K) or None
             'phi': phi_ffn if phi_ffn is not None else phi,  # (B, N, gauge_dim) - post-FFN phi
-            # Priors for gamma term (saved before position encoding)
-            'mu_prior': mu_prior,        # (B, N, K) - initial embedding means
-            'sigma_prior': sigma_prior,  # (B, N, K, K) - initial embedding covariances
-            'phi_prior': phi_prior,      # (B, N, 3) - initial gauge frames (pre-positional)
+            # Models s_i (saved before position encoding).
+            # In the FEP hierarchy h→s→p→q, these are the slow variables
+            # (embedding params = what backprop updates). Currently p_i = s_i.
+            'mu_prior': mu_prior,        # (B, N, K) - model means s_i
+            'sigma_prior': sigma_prior,  # (B, N, K, K) - model covariances
+            'phi_prior': phi_prior,      # (B, N, gauge_dim) - model gauge frames
         }
 
         return logits, attention_info

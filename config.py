@@ -31,13 +31,14 @@ from agent.masking import MaskConfig
 class SystemConfig:
     """Configuration for multi-agent system."""
     
-    # === EXISTING FIELDS (keep these!) ===
-    lambda_self:         float = 1.0
-    lambda_belief_align: float = 1.0
-    lambda_prior_align:  float = 0.0
+    # === FEP hierarchy: h → s → p → q → observations ===
+    lambda_self:         float = 1.0   # KL(q||p): beliefs to priors
+    lambda_belief_align: float = 1.0   # β_ij KL(q_i||Ω q_j): belief coupling
+    lambda_prior_align:  float = 0.0   # γ_ij KL(s_i||Ω s_j): model coupling
+    lambda_hyper_prior:  float = 0.0   # KL(s_i||h): models to centroid hyper-prior
     lambda_phi:          float = 0.0
     lambda_obs:          float = 0.0
-    lambda_obs_meta:     float = 1.0  # Meta-agent observation of constituents (bottom-up coupling)
+    lambda_obs_meta:     float = 1.0   # Meta-agent observation of constituents (bottom-up coupling)
     lambda_gauge_smooth: float = 0.0
     
     kappa_beta: float          = 1.0

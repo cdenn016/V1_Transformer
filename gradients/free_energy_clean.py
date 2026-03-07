@@ -3,12 +3,20 @@
 Complete Free Energy Functional with Clean χ-Weighted Integration
 ==================================================================
 
-Implements all energy terms with EXPLICIT χ weighting:
+Implements all energy terms with EXPLICIT χ weighting.
 
-S = Σ_i ∫ χ_i α KL(q||p)                    [Self-coupling]
-  + Σ_ij ∫ χ_ij β_ij KL(q_i||Ω[q_j])        [Belief alignment]
-  + Σ_ij ∫ χ_ij γ_ij KL(p_i||Ω[p_j])        [Prior alignment]
+FEP hierarchy: h → s → p → q → observations
+
+S = Σ_i ∫ χ_i α KL(q||p)                    [Self-coupling: beliefs to priors]
+  + Σ_ij ∫ χ_ij β_ij KL(q_i||Ω[q_j])        [Belief coupling]
+  + Σ_ij ∫ χ_ij γ_ij KL(s_i||Ω[s_j])        [Model coupling]
+  + Σ_i λ_h KL(s_i||h)                       [Hyper-prior on models]
   - Σ_i ∫ χ_i E_q[log p(o|x)]               [Observations]
+
+Note: In the current agent implementation, agent.mu_p/Sigma_p serve as
+both models (s_i) and priors (p_i). The code documents this as model
+coupling where agents' generative models are aligned, with the self-
+coupling term KL(q||p) pulling beliefs toward priors.
 
 CRITICAL PRINCIPLES:
 -------------------
@@ -44,16 +52,22 @@ class FreeEnergyBreakdown:
     """Container for free energy components."""
     self_energy: float
     belief_align: float
-    prior_align: float
+    model_coupling: float
     observations: float
     total: float
-    
+    hyper_prior: float = 0.0
+    # Backward compatibility alias
+    @property
+    def prior_align(self) -> float:
+        return self.model_coupling
+
     def __repr__(self) -> str:
         return (
             f"FreeEnergy(\n"
             f"  self={self.self_energy:.4f},\n"
             f"  belief_align={self.belief_align:.4f},\n"
-            f"  prior_align={self.prior_align:.4f},\n"
+            f"  model_coupling={self.model_coupling:.4f},\n"
+            f"  hyper_prior={self.hyper_prior:.4f},\n"
             f"  observations={self.observations:.4f},\n"
             f"  total={self.total:.4f}\n"
             f")"
@@ -197,82 +211,94 @@ def compute_belief_alignment_energy(
 
 
 # =============================================================================
-# Energy Term 3: Prior Alignment
+# Energy Term 3: Model Coupling
 # =============================================================================
 
-def compute_prior_alignment_energy(
+def compute_model_coupling_energy(
     system,
     agent_idx_i: int,
-    lambda_prior: Optional[float] = None
+    lambda_model: Optional[float] = None
 ) -> float:
     """
-    Prior alignment energy for agent i with all neighbors j:
-    
-    E_i = Σ_j λ ∫_C χ_ij(c) · γ_ij(c) · KL(p_i(c) || Ω_ij[p_j](c)) dc
-    
-    Identical structure to belief alignment, but using priors p instead of beliefs q.
-    
+    Model coupling energy for agent i with all neighbors j:
+
+    E_i = Σ_j λ ∫_C χ_ij(c) · γ_ij(c) · KL(s_i(c) || Ω_ij[s_j](c)) dc
+
+    Aligns generative MODELS across agents via gauge transport.
+    This is the slow-timescale analog of belief coupling (β term):
+      - β couples beliefs q_i (fast, E-step)
+      - γ couples models s_i (slow, M-step)
+
+    Note: In the current agent implementation, agent.mu_p/Sigma_p serve as
+    both models (s_i) and priors (p_i). The naming reflects the FEP hierarchy
+    where this term operates on models.
+
     Args:
         system: MultiAgentSystem instance
         agent_idx_i: Index of agent i
-        lambda_prior: Coupling strength (uses system.config if None)
-    
+        lambda_model: Coupling strength (uses system.config.lambda_prior_align if None)
+
     Returns:
         energy: Non-negative scalar
     """
     agent_i = system.agents[agent_idx_i]
-    
+
     # Get coupling strength
-    if lambda_prior is None:
-        lambda_prior = system.config.lambda_prior_align
-    
+    if lambda_model is None:
+        lambda_model = system.config.lambda_prior_align
+
     # Get neighbors
     neighbors = system.get_neighbors(agent_idx_i)
-    
+
     if len(neighbors) == 0:
         return 0.0
-    
+
     # Compute softmax weights γ_ij(c) for all neighbors
+    # mode='prior' uses agent.mu_p/Sigma_p which serve as models s_i
     gamma_fields = compute_softmax_weights(
         system,
         agent_idx_i,
         mode='prior',
         kappa=system.config.kappa_gamma
     )
-    
+
     total_energy = 0.0
-    
+
     for j in neighbors:
         agent_j = system.agents[j]
-        
+
         # Overlap weight
         chi_ij = agent_i.support.compute_overlap_continuous(agent_j.support)
-        
+
         # Softmax weight
         gamma_ij = gamma_fields[j]
-        
+
         # Transport
         Omega_ij = system.compute_transport_ij(agent_idx_i, j)
-       
-      
-        
-        # Transported KL for priors
-        # Wrap distributions in GaussianDistribution objects
-        p_i = GaussianDistribution(agent_i.mu_p, agent_i.Sigma_p)
-        p_j = GaussianDistribution(agent_j.mu_p, agent_j.Sigma_p)
-        
+
+        # Transported KL for models s_i, s_j
+        # agent.mu_p/Sigma_p serve as both model and prior in current implementation
+        s_i = GaussianDistribution(agent_i.mu_p, agent_i.Sigma_p)
+        s_j = GaussianDistribution(agent_j.mu_p, agent_j.Sigma_p)
+
         kl_field = np.asarray(
-            compute_kl_transported(p_i, p_j, Omega_ij),
+            compute_kl_transported(s_i, s_j, Omega_ij),
             dtype=np.float32
         )  # Shape: (*S,) or () for 0D
-        
+
         # Apply γ_ij weight and integrate
         weighted_field = gamma_ij * kl_field
         energy_ij = spatial_integrate(weighted_field, chi_ij)
-        
+
         total_energy += energy_ij
-    
-    return lambda_prior * total_energy
+
+    return lambda_model * total_energy
+
+
+# Backward compatibility alias
+def compute_prior_alignment_energy(system, agent_idx_i, lambda_prior=None):
+    """Deprecated: use compute_model_coupling_energy instead."""
+    return compute_model_coupling_energy(system, agent_idx_i, lambda_model=lambda_prior)
 
 
 # =============================================================================
@@ -470,14 +496,14 @@ def compute_total_free_energy(system) -> FreeEnergyBreakdown:
             for i in range(system.n_agents):
                 E_belief += compute_belief_alignment_energy(system, i)
 
-    # (3) Prior alignment
+    # (3) Model coupling (γ_ij term — operates on models s_i, not priors p_i)
     if config.has_prior_alignment:
         if hasattr(system, 'get_all_active_agents'):
             for i, agent in enumerate(agents):
-                E_prior += compute_prior_alignment_energy(system, i)
+                E_prior += compute_model_coupling_energy(system, i)
         else:
             for i in range(system.n_agents):
-                E_prior += compute_prior_alignment_energy(system, i)
+                E_prior += compute_model_coupling_energy(system, i)
 
     # (4) Observations (regular agents)
     if config.has_observations:
@@ -503,7 +529,7 @@ def compute_total_free_energy(system) -> FreeEnergyBreakdown:
     return FreeEnergyBreakdown(
         self_energy=E_self,
         belief_align=E_belief,
-        prior_align=E_prior,
+        model_coupling=E_prior,
         observations=E_obs + E_obs_meta,  # Combine regular + meta observations
         total=E_total,
     )
@@ -520,7 +546,7 @@ def compute_agent_energy_contribution(system, agent_idx: int) -> Dict[str, float
     energies = {
         "self": compute_self_energy(agent, lambda_self=system.config.lambda_self),
         "belief_align": compute_belief_alignment_energy(system, agent_idx),
-        "prior_align": compute_prior_alignment_energy(system, agent_idx),
+        "model_coupling": compute_model_coupling_energy(system, agent_idx),
         "observations": compute_observation_energy(
             system,
             agent,
