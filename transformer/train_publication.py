@@ -314,7 +314,7 @@ VFE_EM_CONFIG = {
     # =================================================================
     
     'gauge_group': 'GLK',  # 'SO3', 'SON', or 'GLK'
-    'gauge_dim': 5,        # N for SO(N) - only used when gauge_group='SON' or GLK
+    'gauge_dim': 5,        # N for SO(N) - only used when gauge_group='SON'
     'gauge_mode': 'learned',  # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j)
                                 # 'trivial': global frame, φ = 0, Ω = I (standard attention)
     
@@ -1528,7 +1528,8 @@ class PublicationTrainer(FastTrainer):
                     f"Step {step+1}/{total_steps} | "
                     f"Loss: {metrics['train_loss_total']:.4f} | "
                     f"CE: {metrics['train_loss_ce']:.4f} | "
-                    f"PPL: {metrics['train_ppl']:.1f}\n\n"
+                    f"β: {metrics['train_loss_belief_align']:.4f} | "
+                    f"PPL: {metrics['train_ppl']:.1f}"
                 )
 
                 # RG metrics console output
@@ -1538,7 +1539,7 @@ class PublicationTrainer(FastTrainer):
                         f"  [RG] Q={metrics['rg/modularity']:.4f} | "
                         f"rank={metrics['rg/effective_rank']:.1f} | "
                         f"clusters={metrics['rg/n_clusters']} | "
-                        f"H={metrics['rg/beta_entropy']:.3f}\n\n"
+                        f"H={metrics['rg/beta_entropy']:.3f}"
                     )
                     if metrics.get('rg/dynamic/n_iterations') is not None and metrics['rg/dynamic/n_iterations'] > 1:
                         _rg_msg += (
@@ -1559,7 +1560,7 @@ class PublicationTrainer(FastTrainer):
                                    f"std: {metrics['bayesian/alpha_std']:.4f} | "
                                    f"range: [{metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
                                    f"a0: {metrics['bayesian/a0']:.4f} | b0: {metrics['bayesian/b0']:.4f} | "
-                                   f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}\n\n")
+                                   f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}")
                     if _rg_msg:
                         tqdm.write(_rg_msg)
                 else:
@@ -1567,7 +1568,7 @@ class PublicationTrainer(FastTrainer):
                     if grad_norms:
                         print(f"  [GRAD] total: {grad_norms['total']:.3e} | "
                               f"mu: {grad_norms['mu']:.3e} | sigma: {grad_norms['sigma']:.3e} | "
-                              f"phi: {grad_norms['phi']:.3e}")
+                              f"phi: {grad_norms['phi']:.3e}\n\n")
                     if metrics.get('bayesian/alpha_mean') is not None:
                         print(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
                               f"std: {metrics['bayesian/alpha_std']:.4f} | "
@@ -1614,7 +1615,7 @@ class PublicationTrainer(FastTrainer):
                             rank_change = metrics.get('rg/dynamic/rank_change', 0)
                             print(f"    Dynamic RG ({n_iters} VFE iterations):")
                             print(f"      Modularity: {metrics.get('rg/dynamic/modularity_init', 0):.4f} → {metrics.get('rg/dynamic/modularity_final', 0):.4f} (Δ={mod_change:+.4f})")
-                            print(f"      Eff. Rank:  {metrics.get('rg/dynamic/rank_init', 0):.1f} → {metrics.get('rg/dynamic/rank_final', 0):.1f} (Δ={rank_change:+.1f})\n\n")
+                            print(f"      Eff. Rank:  {metrics.get('rg/dynamic/rank_init', 0):.1f} → {metrics.get('rg/dynamic/rank_final', 0):.1f} (Δ={rank_change:+.1f})")
 
                 # Generate sample text to verify learning (varied prompts for diversity)
                 try:
