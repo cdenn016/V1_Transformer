@@ -37,14 +37,14 @@ The (det Omega)^2 factors cancel in the log-determinant ratio. This means:
 
 ### Variational Free Energy
 
-Each agent (token) carries a Gaussian belief `q_i = N(mu_i, Sigma_i)` in a local gauge frame `phi_i`. The full VFE is:
+Each agent (token) carries a Gaussian belief `q_i = N(mu_i, Sigma_i)` in a local gauge frame `phi_i`. The full VFE follows the standard FEP hierarchy `h -> s -> p -> q -> observations`:
 
 ```
-F = sum_i  D_KL(q_i || p_i)                              [belief-to-prior regularization]
-  + sum_i  D_KL(s_i || r_i)                              [model-to-hyperprior regularization]
-  + sum_ij beta_ij D_KL(q_i || Omega_ij q_j)             [belief alignment / attention]
-  + sum_ij gamma_ij D_KL(s_i || Omega_ij s_j)            [model alignment / meta-cognition]
-  - E_q[log p(o | {k_i}, {m_i})]                         [observation likelihood]
+F = sum_i  alpha D_KL(q_i || p_i)                         [self-coupling: beliefs to priors]
+  + sum_i  lambda_h D_KL(s_i || h)                        [hyper-prior: models to centroid]
+  + sum_ij beta_ij D_KL(q_i || Omega_ij q_j)              [belief coupling / attention]
+  + sum_ij gamma_ij D_KL(s_i || Omega_ij s_j)             [model coupling / meta-cognition]
+  - E_q[log p(o | x)]                                     [observation likelihood]
 ```
 
 Attention weights emerge from information geometry:
