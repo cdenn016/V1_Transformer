@@ -171,9 +171,9 @@ def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
     print(f"Validation Loss: {avg_loss:.4f}")
     print(f"Validation PPL:  {perplexity:.2f}")
     print(f"\nComparison:")
-    print(f"  Random baseline: ~2000 PPL")
+    print(f"  Random baseline: ~{vocab_size:,} PPL")
     print(f"  Your model:      {perplexity:.2f} PPL")
-    print(f"  Improvement:     {2000/perplexity:.1f}x better!")
+    print(f"  Improvement:     {vocab_size/perplexity:.1f}x better!")
 
     # Performance assessment
     print(f"\nAssessment:")
