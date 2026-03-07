@@ -1035,7 +1035,7 @@ class PublicationTrainer(FastTrainer):
                     # Prefer decoded text over raw token IDs for readability
                     if hasattr(self, 'tokenizer') and self.tokenizer is not None:
                         try:
-                            decoded = self.tokenizer.decode(input_ids[0].tolist(), skip_special_tokens=True)
+                            decoded = self.tokenizer.decode(input_ids[0].tolist())
                             # Truncate to ~80 chars for a clean title
                             preview = decoded[:80] + ('...' if len(decoded) > 80 else '')
                             seq_info = f"Step {step}, Text: {preview}"
