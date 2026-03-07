@@ -24,7 +24,6 @@ import json
 import csv
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
-import numpy as np
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
 

@@ -23,7 +23,6 @@ warnings.filterwarnings("ignore", message="Failed to find nvdisasm", module="tri
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from typing import Dict, Optional, Tuple, List
 from dataclasses import dataclass, field
