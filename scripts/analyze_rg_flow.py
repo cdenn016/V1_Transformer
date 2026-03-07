@@ -54,6 +54,12 @@ from transformer.analysis.rg_flow_analysis import (
     plot_multiscale_comparison,
     RGFlowTrajectory,
 )
+from transformer.analysis.rg_flow_enhanced import (
+    FullRGDiagnostics,
+    HierarchicalRGState,
+    compute_full_rg_diagnostics,
+    summarize_hierarchical_rg,
+)
 from transformer.analysis.rg_metrics import (
     compute_rg_diagnostics,
     compute_modularity,
@@ -163,17 +169,32 @@ def analyze_single_batch(
                 per_head_mods.append(mod_h)
                 per_head_ranks.append(rank_h)
 
-        # Multi-scale analysis
+        # Extract gauge frames and KL matrix if available
+        phi = attn_info.get('phi')      # (B, N, gauge_dim)
+        kl_mat = attn_info.get('kl_matrix')
+
+        # Multi-scale analysis (gauge-aware when phi available)
         tracker = RGFlowTracker(track_multiscale=True)
-        multiscale = tracker.analyze_multiscale(beta_avg, mu, sigma)
+        multiscale = tracker.analyze_multiscale(beta_avg, mu, sigma,
+                                                phi=phi, kl_matrix=kl_mat)
+
+        # Enhanced diagnostics if gauge frames available
+        enhanced_diag = None
+        if phi is not None:
+            enhanced_diag = compute_full_rg_diagnostics(
+                mu=mu, sigma=sigma, phi=phi, beta=beta_avg,
+                kl_matrix=kl_mat, step=0,
+            )
 
         # Build result
         result = {
             'diagnostics': diagnostics,
+            'enhanced_diagnostics': enhanced_diag,
             'multiscale': multiscale,
             'beta': beta_avg.cpu(),
             'mu': mu.cpu(),
             'sigma': sigma.cpu() if isinstance(sigma, torch.Tensor) else sigma,
+            'phi': phi.cpu() if phi is not None else None,
             'cluster_labels': diagnostics.cluster_labels.cpu() if diagnostics.cluster_labels is not None else None,
             'per_head': {
                 'modularity': per_head_mods,
@@ -187,7 +208,11 @@ def analyze_single_batch(
             print(f"  N clusters: {diagnostics.n_clusters}")
             print(f"  KL within: {diagnostics.kl_within_mean:.4f}")
             print(f"  KL between: {diagnostics.kl_between_mean:.4f}")
-            print(f"  Scales detected: {multiscale.n_scales}")
+            n_scales = multiscale.n_scales if not isinstance(multiscale, HierarchicalRGState) else multiscale.n_scales
+            print(f"  Scales detected: {n_scales}")
+            if enhanced_diag is not None:
+                print(f"  Gauge coherence: {enhanced_diag.gauge_coherence:.4f}")
+                print(f"  Phi within/between: {enhanced_diag.phi_within_mean:.4f} / {enhanced_diag.phi_between_mean:.4f}")
 
     return result
 
@@ -231,6 +256,31 @@ def run_full_analysis(
         print("\n  Per-head modularity:")
         for h, mod in enumerate(detailed['per_head']['modularity']):
             print(f"    Head {h}: Q={mod:.4f}")
+
+    # Report gauge-enhanced metrics if available
+    if detailed.get('enhanced_diagnostics') is not None:
+        ed = detailed['enhanced_diagnostics']
+        print("\n[Gauge-Enhanced Diagnostics (first batch)]")
+        print(f"  Gauge coherence: {ed.gauge_coherence:.4f}")
+        print(f"  Phi within clusters: {ed.phi_within_mean:.4f} +/- {ed.phi_within_std:.4f}")
+        print(f"  Phi between clusters: {ed.phi_between_mean:.4f} +/- {ed.phi_between_std:.4f}")
+        print(f"  KL matrix rank: {ed.kl_matrix_rank:.2f}")
+        print(f"  KL entropy: {ed.kl_entropy:.4f}")
+        if ed.fe_belief_align != 0.0:
+            print(f"  Free energy (belief align): {ed.fe_belief_align:.4f}")
+
+    # Hierarchical RG summary if available
+    multiscale = detailed.get('multiscale')
+    if isinstance(multiscale, HierarchicalRGState):
+        print("\n[Hierarchical RG Summary]")
+        hier_summary = summarize_hierarchical_rg(multiscale)
+        for scale_info in hier_summary.get('per_scale', []):
+            print(f"  Scale {scale_info['scale']}: "
+                  f"{scale_info['n_agents']} agents, "
+                  f"Q={scale_info['modularity']:.3f}, "
+                  f"gauge_coh={scale_info['gauge_coherence']:.3f}")
+        if 'rg_behavior' in hier_summary:
+            print(f"  RG behavior: {hier_summary['rg_behavior']}")
 
     # Generate detailed plots
     print("\n[Generating detailed visualizations...]")
