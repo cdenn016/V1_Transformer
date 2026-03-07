@@ -317,7 +317,7 @@ def compute_clustering_metrics(
             mean_inter = np.mean(inter_dists)
             results[f'{embed_name}_mean_intra_dist'] = float(mean_intra)
             results[f'{embed_name}_mean_inter_dist'] = float(mean_inter)
-            results[f'{embed_name}_inter_intra_ratio'] = float(mean_inter / mean_intra) if mean_intra > 0 else float('inf')
+            results[f'{embed_name}_inter_intra_ratio'] = float(mean_inter / max(mean_intra, 1e-10))
     except Exception as e:
         results[f'{embed_name}_inter_intra_ratio'] = f'error: {e}'
 

@@ -1634,8 +1634,8 @@ def pure_fep_train_step(
         )
         embed_stats.update(out_embed_stats)
 
-    # Compute metrics
-    perplexity = torch.exp(ce_loss).item()
+    # Compute metrics (cap loss to prevent overflow: exp(20) ≈ 485M)
+    perplexity = torch.exp(ce_loss.clamp(max=20.0)).item()
 
     metrics = {
         'loss/ce': ce_loss.item(),
@@ -1697,7 +1697,7 @@ def pure_fep_validate(
             total_tokens += valid_tokens
 
     avg_loss = total_loss / max(total_tokens, 1)
-    perplexity = np.exp(avg_loss)
+    perplexity = np.exp(min(avg_loss, 20.0))  # Cap to prevent overflow
 
     return {
         'val/loss': avg_loss,

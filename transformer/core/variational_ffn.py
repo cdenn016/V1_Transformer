@@ -314,8 +314,11 @@ def _compute_vfe_gradients_block_diagonal(
     grad_mu_align = torch.zeros_like(mu_q)
     grad_sigma_align = torch.zeros_like(sigma_q)
 
-    # For KL values and gradients - we'll accumulate these in chunks
-    # We need full (B, N, N) for final softmax coupling, so accumulate
+    # For KL values and gradients - accumulate per-pair data for softmax coupling.
+    # NOTE: Full (B, N, N) and (B, N, N, K) tensors are needed because the softmax
+    # coupling term requires all pairwise KL values and gradients simultaneously.
+    # Chunking over query positions (i) still saves memory on intermediate Omega,
+    # transported beliefs, and inverses - just not on the final accumulators.
     kl_values = torch.zeros(B, N, N, device=device, dtype=dtype)
     grad_kl_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=dtype)
 
@@ -404,7 +407,9 @@ def _compute_vfe_gradients_block_diagonal(
                 grad_sigma_block = 0.5 * (sigma_j_inv - sigma_i_inv_exp)
                 beta_chunk = beta[:, i_start:i_end, :].contiguous()  # (B, C, N)
                 grad_sigma_block_weighted = lambda_belief * torch.einsum('bij,bijkl->bikl', beta_chunk, grad_sigma_block)
-                grad_sigma_align[:, i_start:i_end, block_start:block_end, block_start:block_end] += grad_sigma_block_weighted
+                grad_sigma_align[:, i_start:i_end, block_start:block_end, block_start:block_end] = (
+                    grad_sigma_align[:, i_start:i_end, block_start:block_end, block_start:block_end] + grad_sigma_block_weighted
+                )
 
             del sigma_j_transported, sigma_j_inv, mu_j_transported
             block_start = block_end
@@ -414,7 +419,7 @@ def _compute_vfe_gradients_block_diagonal(
 
     # Softmax coupling term
     # Scale kappa by √K to match attention temperature τ = √K
-    kappa_scaled = kappa * math.sqrt(max(K, 1))
+    kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
     avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
     grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair_full
     d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
@@ -532,7 +537,7 @@ def _compute_vfe_gradients_block_diagonal_diag(
         sigma_i_block = sigma_block[:, :, None, :].expand(-1, -1, N, -1)  # view
         trace_block = (sigma_i_block / sigma_j_transported).sum(dim=-1)
         mahal_block = (delta_mu_block ** 2 / sigma_j_transported).sum(dim=-1)
-        logdet_block = (torch.log(sigma_j_transported) - torch.log(sigma_i_block)).sum(dim=-1)
+        logdet_block = (torch.log(sigma_j_transported.clamp(min=eps)) - torch.log(sigma_i_block.clamp(min=eps))).sum(dim=-1)
 
         kl_block = 0.5 * (trace_block + mahal_block - d + logdet_block)
         kl_block = kl_block.clamp(min=0.0, max=max(100.0, 5.0 * K))
@@ -556,7 +561,7 @@ def _compute_vfe_gradients_block_diagonal_diag(
     grad_mu_direct = lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
 
     # Softmax coupling term
-    kappa_scaled = kappa * math.sqrt(max(K, 1))
+    kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
     avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
     grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair_full
     d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
@@ -629,7 +634,7 @@ def _compute_vfe_gradients_chunked(
     grad_sigma_align = torch.zeros_like(sigma_q)
 
     # Scale kappa by √K to match attention temperature τ = √K
-    kappa_scaled = kappa * math.sqrt(max(K, 1))
+    kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
 
     # Two-pass approach for correct softmax coupling gradient:
     # Pass 1: Accumulate avg_grad (= Σ_j β_ij ∂KL_ij/∂μ_i) and per-chunk KL/grad_kl
@@ -691,7 +696,7 @@ def _compute_vfe_gradients_chunked(
             sigma_i_exp = sigma_i[:, :, None, :].expand(-1, -1, n_j, -1)  # view
             trace_term = (sigma_i_exp / sigma_j_transported_diag).sum(dim=-1)
             mahal = (delta_mu_ij ** 2 / sigma_j_transported_diag).sum(dim=-1)
-            logdet_term = (torch.log(sigma_j_transported_diag) - torch.log(sigma_i_exp)).sum(dim=-1)
+            logdet_term = (torch.log(sigma_j_transported_diag.clamp(min=eps)) - torch.log(sigma_i_exp.clamp(min=eps))).sum(dim=-1)
 
             kl_ceil = max(100.0, 5.0 * K)
             kl_chunk = 0.5 * (trace_term + mahal - K + logdet_term).clamp(min=0.0, max=kl_ceil)
@@ -933,7 +938,7 @@ def compute_vfe_gradients_gpu(
         mahal_term = (delta_mu_ij ** 2 / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
 
         # Log-determinant term: Σ_k log(σ_j_transported[k]) - Σ_k log(σ_i[k])
-        logdet_term = (torch.log(sigma_j_transported_diag) - torch.log(sigma_i_expanded)).sum(dim=-1)  # (B, N, N)
+        logdet_term = (torch.log(sigma_j_transported_diag.clamp(min=eps)) - torch.log(sigma_i_expanded.clamp(min=eps))).sum(dim=-1)  # (B, N, N)
 
         # Full KL divergence
         kl_values = 0.5 * (trace_term + mahal_term - K + logdet_term)
@@ -960,7 +965,7 @@ def compute_vfe_gradients_gpu(
 
         # Softmax coupling gradient: ∂β_ij/∂μ_i = β_ij · grad_deviation / κ
         # Scale kappa by √K to match attention temperature scaling (τ = √K)
-        kappa_scaled = kappa * math.sqrt(max(K, 1))
+        kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
         d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled  # (B, N, N, K)
 
         # Weight by KL values and sum: Σ_j KL_ij · ∂β_ij/∂μ_i
@@ -1071,7 +1076,7 @@ def compute_vfe_gradients_gpu(
 
         # Softmax coupling term
         # Scale kappa by √K to match attention temperature scaling (τ = √K)
-        kappa_scaled = kappa * math.sqrt(max(K, 1))
+        kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
         grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair
         d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
         grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
@@ -2241,11 +2246,8 @@ class VariationalFFNDynamic(nn.Module):
                             diagonal_covariance=is_diagonal,
                             mask_self_attention=self.mask_self_attention,
                         )
-                        if isinstance(beta_phi_h_result, tuple):
-                            beta_phi_h, kl_h = beta_phi_h_result
-                        else:
-                            beta_phi_h = beta_phi_h_result
-                            kl_h = beta_phi_h
+                        # compute_attention_weights with return_kl=True always returns a tuple
+                        beta_phi_h, kl_h = beta_phi_h_result
                         alignment_loss = alignment_loss + self.lambda_belief * (beta_phi_h * kl_h).sum()
                         block_start = block_end
                 else:
@@ -2350,11 +2352,8 @@ class VariationalFFNDynamic(nn.Module):
                         diagonal_covariance=is_diagonal,
                         mask_self_attention=self.mask_self_attention,
                     )
-                    if isinstance(beta_phi_h_result, tuple):
-                        beta_phi_h, kl_h = beta_phi_h_result
-                    else:
-                        beta_phi_h = beta_phi_h_result
-                        kl_h = beta_phi_h
+                    # compute_attention_weights with return_kl=True always returns a tuple
+                    beta_phi_h, kl_h = beta_phi_h_result
                     alignment_loss = alignment_loss + self.lambda_belief * (beta_phi_h * kl_h).sum()
                     block_start = block_end
             else:
