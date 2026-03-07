@@ -212,22 +212,22 @@ SEED = 6
 VFE_EM_CONFIG = {
     # Model architecture
     'vocab_size': 50257,          # Will be overridden by tokenizer
-    'embed_dim': 90,              # Embedding dimension K
+    'embed_dim': 10,              # Embedding dimension K
     'n_layers': 1,                # Transformer depth
     'hidden_dim': 508,            # Only used if ffn_mode='learned'
-    'max_seq_len': 64,            # Context length N
+    'max_seq_len': 128,            # Context length N
 
     'learnable_alpha': False,
-    'use_obs_in_vfe': False,
+    'use_obs_in_vfe': True,
     'use_rope': True,  
 
 
     # Training
-    'batch_size': 16 , 
+    'batch_size': 64, 
     'use_amp': False,             # FP32 for precision
     'num_workers': 6,
     'epochs': None,               # Set to 1-3 for WikiText-2, None for WikiText-103 (use max_steps)
-    'max_steps': 100000,          # ~0.5 epochs on WikiText-103
+    'max_steps': 12500,          # ~0.5 epochs on WikiText-103
     'warmup_steps': 100,
 
     # VFE transformer settings
@@ -241,7 +241,7 @@ VFE_EM_CONFIG = {
     'evolve_phi_e_step': True,    # Update φ during E-step iterations (dynamical gauge frames)
                                   # When True: φ evolves via ∂F/∂φ at each VFE iteration
                                   # When False: φ only updated via backprop (M-step)
-    'diagonal_covariance': False,
+    'diagonal_covariance': True,
     'use_positional_embedding': False,
     'pos_encoding_mode': 'none',
     'use_identity_transport': False,
@@ -268,8 +268,8 @@ VFE_EM_CONFIG = {
     'ffn_lr':    0.05 ,
 
     # Free energy weights
-    'alpha':        0.2,                   # Self-consistency in training loss
-    'beta':         0.0,                    # Belief alignment in training loss?
+    'alpha':        0.1,                   # Self-consistency in training loss
+    'beta':         0,                    # Belief alignment in training loss
     'lambda_gamma': 0,            # Model alignment
     'kappa_gamma':  1,
     
@@ -317,16 +317,16 @@ VFE_EM_CONFIG = {
     'gauge_dim': 10,        # N for SO(N) - only used when gauge_group='SON'
     'gauge_mode': 'learned',  # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j)
                                 # 'trivial': global frame, φ = 0, Ω = I (standard attention)
-
+    
+    # Gauge geometry: principled phi gradient control (replaces ad-hoc clipping)
+    'alpha_phi': 0.01,                     # Gauge prior: (α_φ/2)||φ||² mass term (0 = disabled)
+    'use_slk_projection': True,          # Project phi to traceless sl(K) after each step
+    'use_killing_form': True,            # Cartan decomposition preconditioning for phi grads
+    'killing_form_sym_dampening': 0.05,    # Dampening for non-compact directions (0.1 = 10× reduction)
+    
     'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
     'enforce_orthogonal': False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
                                  # Set False for GL(K) (faster, still gauge-invariant)
-
-    # Gauge geometry: principled phi gradient control (replaces ad-hoc clipping)
-    'alpha_phi': 0.0,                     # Gauge prior: (α_φ/2)||φ||² mass term (0 = disabled)
-    'use_slk_projection': False,          # Project phi to traceless sl(K) after each step
-    'use_killing_form': False,            # Cartan decomposition preconditioning for phi grads
-    'killing_form_sym_dampening': 0.1,    # Dampening for non-compact directions (0.1 = 10× reduction)
 
     # P-FLOW: EMA update of token embeddings toward successful beliefs
     # This is the key learning mechanism from fep_transformer.py
@@ -354,7 +354,7 @@ VFE_EM_CONFIG = {
      # ('ℓ6', 1, 13),
      # ('ℓ7', 1, 15),
       # ('ℓ50', 1, 101),
-      ('fund', 9 , 10)  #For SO(8)
+      ('fund', 1, 10)  #For SO(8)
      # ('fund', 10, 5),   # SO(5)
        
      # SO(5) multi-irrep example:
@@ -371,9 +371,9 @@ VFE_EM_CONFIG = {
 
 
     # Per-head specialization & multi-head VFE
-    'per_head_kappa': False,         # Learn separate κ_h per head (attention + VFE)
+    'per_head_kappa': True,         # Learn separate κ_h per head (attention + VFE)
     'use_output_projection': True, # W_O cross-head mixing after attention (toggle)
-    'multihead_vfe': False,          # Maintain per-head β_h through VFE iterations
+    'multihead_vfe': True,          # Maintain per-head β_h through VFE iterations
 
     # RG metrics
     #'compute_rg_metrics': True,   # Enable RG flow analysis
@@ -1059,7 +1059,7 @@ class PublicationTrainer(FastTrainer):
                         np.fill_diagonal(attn_plot, np.nan)  # Mask diagonal
                         attn_plot = np.log10(np.maximum(attn_plot, 1e-6))  # Log scale
 
-                        im = ax.imshow(attn_plot, cmap='viridis', aspect='auto', vmin=-3, vmax=0)
+                        im = ax.imshow(attn_plot, cmap='viridis', aspect='auto', vmin=-5, vmax=0)
                         ax.set_xlabel('Key Position (j)')
                         ax.set_ylabel('Query Position (i)')
 
