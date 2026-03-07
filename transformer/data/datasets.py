@@ -12,18 +12,16 @@ Dataset Details:
 Usage:
     from transformer.data import create_dataloaders
 
-    # Default: WikiText-103 (~103M tokens)
+    # Default: WikiText-103 with full GPT-2 vocabulary
     train_loader, val_loader, vocab_size = create_dataloaders(
-        max_seq_len=128,
-        batch_size=8,
-        vocab_size=5000,
+        max_seq_len=256,
+        batch_size=64,
     )
 
     # Smaller dataset for quick experiments
     train_loader, val_loader, vocab_size = create_dataloaders(
-        max_seq_len=128,
-        batch_size=8,
-        vocab_size=5000,
+        max_seq_len=256,
+        batch_size=64,
         dataset='wikitext-2',
     )
 
@@ -1361,8 +1359,8 @@ def create_char_dataloaders(
 
 
 def create_dataloaders(
-    max_seq_len: int = 128,
-    batch_size: int = 8,
+    max_seq_len: int = 256,
+    batch_size: int = 64,
     vocab_size: Optional[int] = None,
     num_workers: int = 0,
     cache_dir: Optional[str] = None,
@@ -1377,10 +1375,14 @@ def create_dataloaders(
     Uses tiktoken (OpenAI's fast tokenizer) if available, falls back to
     transformers if not. Tiktoken is preferred as it has no heavy dependencies.
 
+    Tokenized data is cached to disk (~/.cache/tokenized_cache/) so subsequent
+    runs skip the expensive tokenization step entirely.
+
     Args:
         max_seq_len: Maximum sequence length
         batch_size: Batch size
-        vocab_size: If provided, restrict vocabulary to top K tokens
+        vocab_size: If provided, restrict vocabulary to top K tokens.
+                    None means full GPT-2 vocabulary (50257 tokens).
         num_workers: Number of data loading workers
         cache_dir: Optional cache directory
         tokenizer_name: HuggingFace tokenizer name (only used if tiktoken unavailable)
@@ -1402,15 +1404,13 @@ def create_dataloaders(
 
     Example:
         >>> train_loader, val_loader, vocab_size = create_dataloaders(
-        ...     max_seq_len=128,
-        ...     batch_size=8,
-        ...     vocab_size=5000,
-        ...     dataset='wikitext-103',  # Use larger dataset
+        ...     max_seq_len=256,
+        ...     batch_size=64,
         ... )
         >>> # Or with test set:
         >>> train_loader, val_loader, test_loader, vocab_size = create_dataloaders(
-        ...     max_seq_len=128,
-        ...     batch_size=8,
+        ...     max_seq_len=256,
+        ...     batch_size=64,
         ...     include_test=True,
         ... )
         >>> for batch_idx, (input_ids, target_ids) in enumerate(train_loader):
