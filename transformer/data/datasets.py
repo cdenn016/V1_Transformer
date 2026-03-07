@@ -764,9 +764,11 @@ class WikiText2TiktokenDataset(Dataset):
                 input_ids,
                 torch.full((padding_length,), self.pad_token_id, dtype=torch.long)
             ])
+            # Use -100 for target padding so cross_entropy(ignore_index=-100)
+            # ignores padding without masking valid token ID 0
             target_ids = torch.cat([
                 target_ids,
-                torch.full((padding_length,), self.pad_token_id, dtype=torch.long)
+                torch.full((padding_length,), -100, dtype=torch.long)
             ])
 
         return input_ids, target_ids

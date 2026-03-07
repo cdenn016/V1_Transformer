@@ -105,7 +105,7 @@ def create_test_dataloader(
 def load_checkpoint(checkpoint_path: str, device: str = 'cpu') -> Dict:
     """Load checkpoint and extract configuration."""
     print(f"\nLoading checkpoint: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
     config = checkpoint['config']
     step = checkpoint.get('step', 0)

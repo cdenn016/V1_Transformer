@@ -29,7 +29,7 @@ def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
 
     # Load checkpoint
     print(f"\nLoading checkpoint: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 
     config = checkpoint['config']
     step = checkpoint.get('step', 0)

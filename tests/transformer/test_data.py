@@ -110,8 +110,8 @@ class TestCreateByteDataloaders:
 
         assert train_loader is not None
         assert val_loader is not None
-        # Byte vocab is exactly 256
-        assert vocab_size == 256
+        # Byte vocab is 257: 256 byte values (1-256) + PAD token (0)
+        assert vocab_size == 257
 
 
 class TestWikiTextDataset:
