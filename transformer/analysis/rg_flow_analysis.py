@@ -52,7 +52,6 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 import torch
-import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 from dataclasses import dataclass, field
