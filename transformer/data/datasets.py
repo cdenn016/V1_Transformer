@@ -42,6 +42,7 @@ from typing import Tuple, Optional, Dict, List
 import numpy as np
 from pathlib import Path
 import os
+import hashlib
 import urllib.request
 import zipfile
 
@@ -96,6 +97,33 @@ def _worker_init_fn(worker_id: int) -> None:
     np.random.seed(worker_seed)
     import random
     random.seed(worker_seed)
+
+
+# =============================================================================
+# Token Cache: Save/load tokenized data to avoid re-tokenizing every run
+# =============================================================================
+
+def _get_token_cache_dir(cache_dir: Optional[str] = None) -> Path:
+    """Get the directory for cached tokenized data."""
+    if cache_dir:
+        base = Path(cache_dir)
+    else:
+        base = Path.home() / '.cache'
+    cache_path = base / 'tokenized_cache'
+    cache_path.mkdir(parents=True, exist_ok=True)
+    return cache_path
+
+
+def _get_token_cache_path(
+    dataset: str,
+    split: str,
+    tokenizer_name: str,
+    cache_dir: Optional[str] = None,
+) -> Path:
+    """Get the cache file path for a specific dataset/split/tokenizer combo."""
+    cache_path = _get_token_cache_dir(cache_dir)
+    filename = f"{dataset}_{split}_{tokenizer_name}_tokens.pt"
+    return cache_path / filename
 
 
 # =============================================================================
@@ -384,40 +412,53 @@ class WikiText2Dataset(Dataset):
         self.pad_token_id = self.tokenizer.pad_token_id
         self.eos_token_id = self.tokenizer.eos_token_id
 
-        # Load dataset (with fallback if datasets package unavailable)
-        print(f"Loading WikiText-2 ({split}) for BPE tokenization...")
-
-        if DATASETS_AVAILABLE:
-            # Use HuggingFace datasets
-            dataset = load_dataset('wikitext', 'wikitext-2-raw-v1', split=split, cache_dir=cache_dir)
-            texts = [item['text'] for item in dataset if len(item['text'].strip()) > 0]
-            full_text = '\n\n'.join(texts)
+        # Try loading from token cache first
+        token_cache_path = _get_token_cache_path('wikitext-2', split, f'transformers_{tokenizer_name}', cache_dir)
+        if token_cache_path.exists():
+            print(f"Loading WikiText-2 ({split}) from token cache...")
+            print(f"  Cache: {token_cache_path}")
+            tokens = torch.load(token_cache_path, weights_only=True).tolist()
+            print(f"  Loaded {len(tokens):,} cached tokens")
         else:
-            # Fallback: download directly (same as character-level)
-            print("  (Using direct download fallback - datasets package not available)")
-            wikitext_data = _download_wikitext2_fallback(cache_dir)
-            full_text = wikitext_data[split]
+            # Load dataset (with fallback if datasets package unavailable)
+            print(f"Loading WikiText-2 ({split}) for BPE tokenization...")
 
-        # Clean up processed WikiText artifacts (fallback URL has processed version)
-        import re
-        unk_count = full_text.count('<unk>')
-        if unk_count > 0:
-            print(f"  Warning: Removing {unk_count} <unk> tokens from data (processed WikiText artifact)")
-            # Replace <unk> with single space, preserve newlines
-            full_text = re.sub(r'<unk>', '', full_text)
-            # Only normalize multiple spaces (NOT newlines) - preserve paragraph structure!
-            full_text = re.sub(r'[ \t]+', ' ', full_text)
+            if DATASETS_AVAILABLE:
+                # Use HuggingFace datasets
+                dataset = load_dataset('wikitext', 'wikitext-2-raw-v1', split=split, cache_dir=cache_dir)
+                texts = [item['text'] for item in dataset if len(item['text'].strip()) > 0]
+                full_text = '\n\n'.join(texts)
+            else:
+                # Fallback: download directly (same as character-level)
+                print("  (Using direct download fallback - datasets package not available)")
+                wikitext_data = _download_wikitext2_fallback(cache_dir)
+                full_text = wikitext_data[split]
 
-        # Also fix @-@ (hyphen) and @,@ (comma) artifacts from processed WikiText
-        full_text = full_text.replace(' @-@ ', '-')
-        full_text = full_text.replace(' @,@ ', ',')
-        full_text = full_text.replace(' @.@ ', '.')
+            # Clean up processed WikiText artifacts (fallback URL has processed version)
+            import re
+            unk_count = full_text.count('<unk>')
+            if unk_count > 0:
+                print(f"  Warning: Removing {unk_count} <unk> tokens from data (processed WikiText artifact)")
+                # Replace <unk> with single space, preserve newlines
+                full_text = re.sub(r'<unk>', '', full_text)
+                # Only normalize multiple spaces (NOT newlines) - preserve paragraph structure!
+                full_text = re.sub(r'[ \t]+', ' ', full_text)
 
-        print(f"  Total characters: {len(full_text):,}")
+            # Also fix @-@ (hyphen) and @,@ (comma) artifacts from processed WikiText
+            full_text = full_text.replace(' @-@ ', '-')
+            full_text = full_text.replace(' @,@ ', ',')
+            full_text = full_text.replace(' @.@ ', '.')
 
-        # Tokenize
-        print(f"Tokenizing...")
-        tokens = self.tokenizer.encode(full_text, add_special_tokens=False)
+            print(f"  Total characters: {len(full_text):,}")
+
+            # Tokenize
+            print(f"Tokenizing...")
+            tokens = self.tokenizer.encode(full_text, add_special_tokens=False)
+
+            # Save to cache for next run
+            print(f"  Saving token cache to {token_cache_path}...")
+            torch.save(torch.tensor(tokens, dtype=torch.long), token_cache_path)
+            print(f"  Token cache saved ({token_cache_path.stat().st_size / 1024 / 1024:.1f} MB)")
 
         # Restrict vocabulary if requested
         if vocab_size is not None and vocab_size < len(self.tokenizer):
@@ -620,43 +661,56 @@ class WikiText2TiktokenDataset(Dataset):
         self.pad_token_id = 0
         self.eos_token_id = 50256  # GPT-2's <|endoftext|>
 
-        # Load dataset
-        hf_config = DATASET_CONFIGS[dataset]
-        print(f"Loading {dataset.upper()} ({split}) for BPE tokenization (tiktoken)...")
-        print(f"  DATASETS_AVAILABLE={DATASETS_AVAILABLE}")
-
-        if DATASETS_AVAILABLE:
-            dataset_obj = load_dataset('wikitext', hf_config, split=split, cache_dir=cache_dir)
-            texts = [item['text'] for item in dataset_obj if len(item['text'].strip()) > 0]
-            full_text = '\n\n'.join(texts)
+        # Try loading from token cache first
+        token_cache_path = _get_token_cache_path(dataset, split, 'tiktoken', cache_dir)
+        if token_cache_path.exists():
+            print(f"Loading {dataset.upper()} ({split}) from token cache...")
+            print(f"  Cache: {token_cache_path}")
+            tokens = torch.load(token_cache_path, weights_only=True).tolist()
+            print(f"  Loaded {len(tokens):,} cached tokens")
         else:
-            print("  (Using direct download fallback)")
-            if dataset == 'wikitext-103':
-                wikitext_data = _download_wikitext103_fallback(cache_dir)
+            # Load dataset and tokenize from scratch
+            hf_config = DATASET_CONFIGS[dataset]
+            print(f"Loading {dataset.upper()} ({split}) for BPE tokenization (tiktoken)...")
+            print(f"  DATASETS_AVAILABLE={DATASETS_AVAILABLE}")
+
+            if DATASETS_AVAILABLE:
+                dataset_obj = load_dataset('wikitext', hf_config, split=split, cache_dir=cache_dir)
+                texts = [item['text'] for item in dataset_obj if len(item['text'].strip()) > 0]
+                full_text = '\n\n'.join(texts)
             else:
-                wikitext_data = _download_wikitext2_fallback(cache_dir)
-            full_text = wikitext_data[split]
+                print("  (Using direct download fallback)")
+                if dataset == 'wikitext-103':
+                    wikitext_data = _download_wikitext103_fallback(cache_dir)
+                else:
+                    wikitext_data = _download_wikitext2_fallback(cache_dir)
+                full_text = wikitext_data[split]
 
-        # Clean up processed WikiText artifacts (fallback URL has processed version)
-        import re
-        unk_count = full_text.count('<unk>')
-        if unk_count > 0:
-            print(f"  Warning: Removing {unk_count} <unk> tokens from data (processed WikiText artifact)")
-            # Replace <unk> with single space, preserve newlines
-            full_text = re.sub(r'<unk>', '', full_text)
-            # Only normalize multiple spaces (NOT newlines) - preserve paragraph structure!
-            full_text = re.sub(r'[ \t]+', ' ', full_text)
+            # Clean up processed WikiText artifacts (fallback URL has processed version)
+            import re
+            unk_count = full_text.count('<unk>')
+            if unk_count > 0:
+                print(f"  Warning: Removing {unk_count} <unk> tokens from data (processed WikiText artifact)")
+                # Replace <unk> with single space, preserve newlines
+                full_text = re.sub(r'<unk>', '', full_text)
+                # Only normalize multiple spaces (NOT newlines) - preserve paragraph structure!
+                full_text = re.sub(r'[ \t]+', ' ', full_text)
 
-        # Also fix @-@ (hyphen) and @,@ (comma) artifacts from processed WikiText
-        full_text = full_text.replace(' @-@ ', '-')
-        full_text = full_text.replace(' @,@ ', ',')
-        full_text = full_text.replace(' @.@ ', '.')
+            # Also fix @-@ (hyphen) and @,@ (comma) artifacts from processed WikiText
+            full_text = full_text.replace(' @-@ ', '-')
+            full_text = full_text.replace(' @,@ ', ',')
+            full_text = full_text.replace(' @.@ ', '.')
 
-        print(f"  Total characters: {len(full_text):,}")
+            print(f"  Total characters: {len(full_text):,}")
 
-        # Tokenize
-        print(f"Tokenizing with tiktoken (GPT-2 BPE)...")
-        tokens = self.tokenizer.encode(full_text)
+            # Tokenize
+            print(f"Tokenizing with tiktoken (GPT-2 BPE)...")
+            tokens = self.tokenizer.encode(full_text)
+
+            # Save to cache for next run
+            print(f"  Saving token cache to {token_cache_path}...")
+            torch.save(torch.tensor(tokens, dtype=torch.long), token_cache_path)
+            print(f"  Token cache saved ({token_cache_path.stat().st_size / 1024 / 1024:.1f} MB)")
 
         # Restrict vocabulary if requested
         if vocab_size is not None and vocab_size < self._full_vocab_size:
