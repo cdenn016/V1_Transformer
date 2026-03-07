@@ -548,9 +548,11 @@ def compute_attention_weights(
     # Softmax over keys (dimension 2)
     beta = F.softmax(logits, dim=-1)  # (B, N, N)
 
-    # Re-normalize after clamping to preserve sum(beta) = 1
-    # (clamping alone breaks row-sum normalization)
+    # Clamp only finite (non-masked) positions to epsilon for numerical stability,
+    # preserving exact zeros from -inf masked positions (e.g. causal mask)
+    masked_positions = (logits == float('-inf'))
     beta = beta.clamp(min=epsilon)
+    beta = beta.masked_fill(masked_positions, 0.0)
     beta = beta / beta.sum(dim=-1, keepdim=True)
 
     if return_kl:
@@ -1002,12 +1004,11 @@ def _kl_gaussian_torch(
     Z = torch.linalg.solve_triangular(L2.T, Y, upper=True)
     trace_term = torch.trace(Z)
 
-    # Quadratic term: (μ2-μ1)^T Σ2^{-1} (μ2-μ1)
+    # Quadratic term: (μ2-μ1)^T Σ2^{-1} (μ2-μ1) = ||L2^{-1} (μ2-μ1)||^2
     delta_mu = mu2 - mu1
     # solve_triangular needs 2D input - reshape (K,) → (K, 1)
     y = torch.linalg.solve_triangular(L2, delta_mu.unsqueeze(-1), upper=False).squeeze(-1)
-    z = torch.linalg.solve_triangular(L2.T, y.unsqueeze(-1), upper=True).squeeze(-1)
-    quad_term = torch.dot(delta_mu, z)
+    quad_term = torch.dot(y, y)
 
     # Combine
     kl = 0.5 * (trace_term + quad_term - K + logdet2 - logdet1)

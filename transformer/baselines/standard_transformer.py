@@ -241,8 +241,9 @@ class StandardTransformerLM(nn.Module):
         self.ln_final = nn.LayerNorm(embed_dim)
 
         if tie_embeddings:
-            # Tie input and output embeddings
-            self.lm_head = lambda x: F.linear(x, self.token_embed.weight)
+            # Tie input and output embeddings via a Linear with shared weight
+            self.lm_head = nn.Linear(embed_dim, vocab_size, bias=False)
+            self.lm_head.weight = self.token_embed.weight
         else:
             self.lm_head = nn.Linear(embed_dim, vocab_size, bias=False)
 

@@ -836,9 +836,10 @@ class Trainer:
         self.val_loader = val_loader
         self.config = config or TrainingConfig()
 
-        # Get pad_token_id from dataset for proper loss masking
-        # Default to -100 (PyTorch's default ignore_index) if not available
-        self.pad_token_id = getattr(train_loader.dataset, 'pad_token_id', -100)
+        # Use -100 for loss masking (PyTorch cross_entropy default ignore_index).
+        # Target tensors use -100 for padding positions to avoid masking valid
+        # token IDs (e.g., tiktoken token 0 = "!" would be incorrectly ignored).
+        self.pad_token_id = -100
 
         # Move model to device
         self.device = torch.device(self.config.device)
@@ -1193,7 +1194,7 @@ class Trainer:
 
         avg_loss = total_loss / max(n_batches, 1)
         avg_ce_loss = total_ce_loss / max(n_batches, 1)
-        perplexity = torch.exp(torch.tensor(avg_ce_loss)).item()
+        perplexity = math.exp(min(avg_ce_loss, 20.0))  # Cap to avoid overflow
 
         return {
             'val/loss': avg_loss,
@@ -1311,7 +1312,7 @@ class Trainer:
         checkpoint = {
             'step': self.step,
             'epoch': self.epoch,
-            'model_state': self.model.state_dict(),
+            'model_state_dict': self.model.state_dict(),
             'best_val_ce': self.best_val_ce,
             'config': self.model.config,
         }
@@ -1326,9 +1327,10 @@ class Trainer:
 
     def load_checkpoint(self, checkpoint_path: str):
         """Load training checkpoint."""
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
 
-        self.model.load_state_dict(checkpoint['model_state'])
+        state_key = 'model_state_dict' if 'model_state_dict' in checkpoint else 'model_state'
+        self.model.load_state_dict(checkpoint[state_key])
 
         if 'optimizer_state' in checkpoint and self.config.save_optimizer:
             self.optimizer.load_state_dict(checkpoint['optimizer_state'])

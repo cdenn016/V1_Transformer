@@ -400,10 +400,10 @@ def compute_beta_entropy(
     if beta.dim() == 2:
         beta = beta.unsqueeze(0)
 
-    beta_safe = beta.clamp(min=eps)
-
     # Entropy per position: H_i = -Σ_j β_ij log(β_ij)
-    H = -(beta_safe * torch.log(beta_safe)).sum(dim=-1)  # (B, N)
+    # Use beta in the multiplication so zeros contribute zero entropy,
+    # but clamp inside log to avoid log(0)
+    H = -(beta * torch.log(beta.clamp(min=eps))).sum(dim=-1)  # (B, N)
 
     return H.mean().item()
 
@@ -713,12 +713,14 @@ def _agglomerative_kl(
         dist[:, j] = float('inf')
         dist[i, i] = float('inf')
 
-    # Relabel to consecutive integers
+    # Relabel to consecutive integers (use a copy to avoid collision
+    # when a new_idx matches a later old_label)
     unique_labels = labels.unique()
+    new_labels = labels.clone()
     for new_idx, old_label in enumerate(unique_labels):
-        labels[labels == old_label] = new_idx
+        new_labels[labels == old_label] = new_idx
 
-    return labels
+    return new_labels
 
 
 # =============================================================================

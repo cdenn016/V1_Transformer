@@ -1171,8 +1171,8 @@ class PureFEPLayer(nn.Module):
         exp_child = torch.matrix_exp(phi_child_matrix)
         exp_neg_parent = torch.matrix_exp(-phi_parent_matrix)
 
-        # Transport operator (per token)
-        Omega = torch.einsum('bnik,bnjk->bnij', exp_child, exp_neg_parent)
+        # Transport operator (per token): Ω = exp(φ_child) @ exp(-φ_parent)
+        Omega = torch.einsum('bnik,bnkj->bnij', exp_child, exp_neg_parent)
 
         # Transport parent beliefs to child frame
         # μ_p_new = Ω @ μ_parent
@@ -1437,8 +1437,8 @@ class PureFEPLayer(nn.Module):
             exp_current = torch.matrix_exp(phi_current_matrix)
             exp_neg_ancestor = torch.matrix_exp(-phi_ancestor_matrix)
 
-            # Transport operator
-            Omega = torch.einsum('bnik,bnjk->bnij', exp_current, exp_neg_ancestor)
+            # Transport operator: Ω = exp(φ_current) @ exp(-φ_ancestor)
+            Omega = torch.einsum('bnik,bnkj->bnij', exp_current, exp_neg_ancestor)
 
             # Transport ancestor beliefs to current frame
             mu_h = torch.einsum('bnij,bnj->bni', Omega, ancestor_mu_q)  # (B, N, K)

@@ -227,8 +227,14 @@ class TrajectoryRecorder:
         return tensor[:max_batch].detach().cpu().numpy()
 
     def _sigma_to_diag(self, Sigma: torch.Tensor) -> np.ndarray:
-        """Extract diagonal of covariance (memory efficient)."""
-        # Sigma: (B, N, K, K) -> diag: (B, N, K)
+        """Extract diagonal of covariance (memory efficient).
+
+        Handles both full covariance (B, N, K, K) and diagonal (B, N, K).
+        """
+        if Sigma.dim() == 3:
+            # Already diagonal: (B, N, K)
+            return self._to_numpy(Sigma)
+        # Full covariance: (B, N, K, K) -> diag: (B, N, K)
         diag = torch.diagonal(Sigma, dim1=-2, dim2=-1)
         return self._to_numpy(diag)
 

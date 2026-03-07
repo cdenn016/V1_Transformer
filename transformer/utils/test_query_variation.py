@@ -266,7 +266,7 @@ def main(checkpoint_path: str = None):
         print(f"Tokens: {tokenizer.convert_ids_to_tokens(input_ids[0].tolist())}")
     except Exception:
         print("Warning: Could not load tokenizer, using random input")
-        input_ids = torch.randint(0, config.vocab_size, (1, 20))
+        input_ids = torch.randint(0, config.get('vocab_size', 50257) if isinstance(config, dict) else config.vocab_size, (1, 20))
         tokenizer = None
 
     # Get attention

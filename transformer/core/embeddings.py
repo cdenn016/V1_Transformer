@@ -432,9 +432,9 @@ class GaugeTokenEmbedding(nn.Module):
                 weighted_belief = (token_beliefs * token_weights.unsqueeze(-1)).sum(dim=0) / total_weight
 
                 # EMA update: prior ← (1 - lr) · prior + lr · belief
-                current_embedding = self.mu_embed.weight[token_id]  # (K,)
+                current_embedding = self.mu_embed.weight.data[token_id]  # (K,)
                 new_embedding = (1.0 - lr) * current_embedding + lr * weighted_belief
-                self.mu_embed.weight[token_id] = new_embedding
+                self.mu_embed.weight.data[token_id] = new_embedding
 
     def get_embedding_stats(self) -> dict:
         """Get statistics about embeddings for logging."""
@@ -658,9 +658,9 @@ class GaugePositionalEncoding(nn.Module):
         phi = torch.zeros(max_len, phi_dim)
         for d in range(phi_dim):
             if d % 2 == 0:
-                phi[:, d] = torch.sin(position.squeeze() * div_term[d])
+                phi[:, d] = torch.sin(position.squeeze(-1) * div_term[d])
             else:
-                phi[:, d] = torch.cos(position.squeeze() * div_term[d])
+                phi[:, d] = torch.cos(position.squeeze(-1) * div_term[d])
 
         return phi * scale
 

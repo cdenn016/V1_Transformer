@@ -197,9 +197,9 @@ def train_epoch(model, dataloader, optimizer, config, device, epoch, tokenizer=N
         loss = outputs['loss']
         ce_loss = outputs['ce_loss']
 
-        # Skip batch if NaN detected
-        if torch.isnan(loss) or torch.isnan(ce_loss):
-            tqdm.write(f"  [Warning] NaN detected at batch {batch_idx}, skipping...")
+        # Skip batch if NaN or Inf detected
+        if torch.isnan(loss) or torch.isnan(ce_loss) or torch.isinf(loss) or torch.isinf(ce_loss):
+            tqdm.write(f"  [Warning] NaN/Inf detected at batch {batch_idx}, skipping...")
             optimizer.zero_grad()
             continue
 
@@ -238,6 +238,8 @@ def train_epoch(model, dataloader, optimizer, config, device, epoch, tokenizer=N
             tqdm.write(f"\n  [Val @ {batch_idx}] CE={val_ce:.4f}, PPL={val_ppl:.1f}\n")
             model.train()  # Back to training mode
 
+    if n_batches == 0:
+        return 0.0, 0.0
     return total_loss / n_batches, total_ce / n_batches
 
 
@@ -253,20 +255,23 @@ def evaluate(model, dataloader, device):
     original_observe = model.observe_during_qflow
     model.observe_during_qflow = False
 
-    for batch in dataloader:
-        input_ids = batch['input_ids'].to(device)
-        inputs = input_ids[:, :-1]
-        targets = input_ids[:, 1:]
+    try:
+        for batch in dataloader:
+            input_ids = batch['input_ids'].to(device)
+            inputs = input_ids[:, :-1]
+            targets = input_ids[:, 1:]
 
-        outputs = model(inputs, targets)
+            outputs = model(inputs, targets)
 
-        total_loss += outputs['loss'].item()
-        total_ce += outputs['ce_loss'].item()
-        n_batches += 1
+            total_loss += outputs['loss'].item()
+            total_ce += outputs['ce_loss'].item()
+            n_batches += 1
+    finally:
+        # Restore original setting even if an exception occurs
+        model.observe_during_qflow = original_observe
 
-    # Restore original setting
-    model.observe_during_qflow = original_observe
-
+    if n_batches == 0:
+        return 0.0, 0.0, 1.0
     avg_loss = total_loss / n_batches
     avg_ce = total_ce / n_batches
     ppl = math.exp(min(avg_ce, 20))

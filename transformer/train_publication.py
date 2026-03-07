@@ -317,25 +317,16 @@ VFE_EM_CONFIG = {
     'gauge_dim': 10,        # N for SO(N) - only used when gauge_group='SON'
     'gauge_mode': 'learned',  # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j)
                                 # 'trivial': global frame, φ = 0, Ω = I (standard attention)
-    
+
     'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
     'enforce_orthogonal': False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
                                  # Set False for GL(K) (faster, still gauge-invariant)
-
-    'gauge_group': 'GLK',
-    'gauge_dim': 10,
-    'gauge_mode': 'learned',
 
     # Gauge geometry: principled phi gradient control (replaces ad-hoc clipping)
     'alpha_phi': 0.0,                     # Gauge prior: (α_φ/2)||φ||² mass term (0 = disabled)
     'use_slk_projection': False,          # Project phi to traceless sl(K) after each step
     'use_killing_form': False,            # Cartan decomposition preconditioning for phi grads
     'killing_form_sym_dampening': 0.1,    # Dampening for non-compact directions (0.1 = 10× reduction)
-
-    # Per-head specialization & multi-head VFE
-    'per_head_kappa': True,         # Learn separate κ_h per head (attention + VFE)
-    'use_output_projection': False, # W_O cross-head mixing after attention (toggle)
-    'multihead_vfe': True,          # Maintain per-head β_h through VFE iterations
 
     # P-FLOW: EMA update of token embeddings toward successful beliefs
     # This is the key learning mechanism from fep_transformer.py
