@@ -33,6 +33,7 @@ Date: November 2025
 Updated: GL(K) generalization - February 2026
 """
 
+import math
 import numpy as np
 import torch
 import torch.nn as nn
@@ -190,18 +191,18 @@ class GaugeTokenEmbedding(nn.Module):
         if gauge_fixed_priors:
             # Single base prior covariance Σ_0 - all token priors are rotations of this
             self.base_log_sigma_diag = nn.Parameter(
-                torch.full((embed_dim,), np.log(init_sigma_scale))
+                torch.full((embed_dim,), math.log(init_sigma_scale))
             )
         elif learnable_sigma:
             # Per-token covariance
             self.log_sigma_diag = nn.Parameter(
-                torch.full((vocab_size, embed_dim), np.log(init_sigma_scale))
+                torch.full((vocab_size, embed_dim), math.log(init_sigma_scale))
             )
         else:
             # Shared isotropic covariance across all tokens
             self.register_buffer(
                 'log_sigma_diag',
-                torch.full((embed_dim,), np.log(init_sigma_scale))
+                torch.full((embed_dim,), math.log(init_sigma_scale))
             )
 
         # =================================================================
@@ -653,7 +654,7 @@ class GaugePositionalEncoding(nn.Module):
             pos_phi: (max_len, phi_dim) positional gauge frames
         """
         position = torch.arange(max_len, dtype=torch.float32).unsqueeze(1)  # (L, 1)
-        div_term = torch.exp(torch.arange(0, phi_dim, 1, dtype=torch.float32) * -(np.log(10000.0) / phi_dim))
+        div_term = torch.exp(torch.arange(0, phi_dim, 1, dtype=torch.float32) * -(math.log(10000.0) / phi_dim))
 
         phi = torch.zeros(max_len, phi_dim)
         for d in range(phi_dim):

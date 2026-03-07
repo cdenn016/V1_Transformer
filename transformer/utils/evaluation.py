@@ -85,6 +85,7 @@ def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
         'tie_embeddings': get_config_val(config, 'tie_embeddings', True),
         'dropout': get_config_val(config, 'dropout', 0.1),
         'irrep_spec': get_config_val(config, 'irrep_spec', [('ℓ0', 5, 1), ('ℓ1', 2, 3)]),
+        'diagonal_covariance': get_config_val(config, 'diagonal_covariance', True),
     }
 
     model = GaugeTransformerLM(config_dict)
