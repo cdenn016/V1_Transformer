@@ -843,14 +843,7 @@ class PublicationMetrics:
         # Store in history
         self.semantic_analysis_history.append(results)
 
-        # Log key metrics
-        if 'token_classes' in results:
-            tc = results['token_classes']
-            phi_ratio = tc.get('phi_class_ratio', 0)
-            if phi_ratio > 0:
-                print(f"[Semantic] Step {step}: phi class ratio = {phi_ratio:.2f}x"
-                      f" {'(structure!)' if phi_ratio > 1.2 else ''}")
-
+        
         return results
 
     def run_final_semantic_analysis(self, model: Any, verbose: bool = True) -> Dict[str, Any]:
