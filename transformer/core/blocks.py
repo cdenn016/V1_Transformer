@@ -18,6 +18,7 @@ Author: Implementation from plan.py
 Date: November 2025
 """
 
+import math
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple, List
