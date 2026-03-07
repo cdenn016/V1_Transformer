@@ -1325,14 +1325,8 @@ class PublicationTrainer(FastTrainer):
                 n_clusters=getattr(self.config, 'rg_n_clusters', None),
             )
             # Add RG metrics with proper key mapping for CSV
-            metrics['rg/modularity'] = rg_metrics.get('rg/modularity')
-            metrics['rg/effective_rank'] = rg_metrics.get('rg/effective_rank')
-            metrics['rg/n_clusters'] = rg_metrics.get('rg/n_clusters')
-            metrics['rg/kl_within_mean'] = rg_metrics.get('rg/kl_within_mean')
-            metrics['rg/kl_within_std'] = rg_metrics.get('rg/kl_within_std')
-            metrics['rg/kl_between_mean'] = rg_metrics.get('rg/kl_between_mean')
-            metrics['rg/kl_between_std'] = rg_metrics.get('rg/kl_between_std')
-            metrics['rg/beta_entropy'] = rg_metrics.get('rg/beta_entropy')
+            for key, value in rg_metrics.items():
+                metrics[key] = value
 
             # Dynamic RG tracking (across VFE iterations within forward pass)
             track_dynamic = getattr(self.config, 'track_dynamic_rg', False)

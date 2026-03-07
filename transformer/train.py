@@ -47,6 +47,7 @@ from transformer.analysis.rg_metrics import (
     RGDiagnostics,
     RGFlowSummary,
 )
+from transformer.analysis.rg_flow_enhanced import compute_full_rg_diagnostics
 
 # Import attention computation for gamma term
 from transformer.core.attention import compute_attention_weights
@@ -123,6 +124,25 @@ def compute_rg_metrics_from_attention(
         # Add meta-agent sizes if available
         if diagnostics.meta_agent_sizes:
             rg_metrics['rg/meta_agent_sizes'] = diagnostics.meta_agent_sizes
+
+        # Enhanced gauge-frame metrics if phi is available
+        phi = attn_info.get('phi')  # (B, N, gauge_dim)
+        kl_matrix = attn_info.get('kl_matrix')  # (B, N, N) or (B, H, N, N)
+        if phi is not None:
+            try:
+                enhanced = compute_full_rg_diagnostics(
+                    mu=mu, sigma=sigma, phi=phi, beta=beta_avg,
+                    kl_matrix=kl_matrix, step=step,
+                    auto_cluster=auto_cluster,
+                )
+                rg_metrics['rg/gauge_coherence'] = enhanced.gauge_coherence
+                rg_metrics['rg/phi_within_mean'] = enhanced.phi_within_mean
+                rg_metrics['rg/phi_between_mean'] = enhanced.phi_between_mean
+                rg_metrics['rg/kl_matrix_rank'] = enhanced.kl_matrix_rank
+                if kl_matrix is not None:
+                    rg_metrics['rg/fe_belief_align'] = enhanced.fe_belief_align
+            except Exception as e:
+                print(f"[WARNING] Enhanced RG metrics failed: {e}")
 
         return rg_metrics
 
