@@ -1,0 +1,503 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{tikz-cd}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}{Proposition}
+\newtheorem{conjecture}{Conjecture}
+\newtheorem{definition}{Definition}
+\newtheorem{remark}{Remark}
+
+\newcommand{\KL}{\mathrm{KL}}
+\newcommand{\OT}{\mathrm{OT}}
+\newcommand{\VFE}{\mathrm{VFE}}
+\newcommand{\GL}{\mathrm{GL}}
+\newcommand{\SO}{\mathrm{SO}}
+\newcommand{\tr}{\mathrm{tr}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+
+\title{Toward a Unified Theory of Gauge-VFE and Optimal Transport}
+\author{Research Notes}
+\date{March 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We outline a roadmap for unifying the gauge-covariant variational free energy (Gauge-VFE) framework with optimal transport (OT) theory. The two frameworks share deep structural parallels---both concern the geometry of probability distributions, both define notions of ``cost'' for moving mass/belief between configurations, and both give rise to natural gradient flows. We identify precise mathematical contact points, open problems, and a phased research program toward a unified theory in which Gauge-VFE attention emerges as a gauge-equivariant optimal transport problem on a statistical fiber bundle.
+\end{abstract}
+
+\tableofcontents
+
+%=============================================================================
+\section{Executive Summary: Why These Theories Should Unify}
+%=============================================================================
+
+The Gauge-VFE framework and optimal transport theory operate on the same mathematical terrain---the geometry of probability measures---but approach it from complementary directions:
+
+Gauge-VFE starts from a \emph{fiber bundle} perspective: agents carry local beliefs $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ in local gauge frames $\phi_i$, and the free energy $F$ penalizes KL divergence between gauge-transported beliefs. Attention weights $\beta_{ij} = \text{softmax}(-\KL(q_i \| \Omega_{ij} q_j)/\kappa)$ emerge as the mechanism for belief alignment.
+
+Optimal transport starts from a \emph{coupling} perspective: given source measure $\mu$ and target measure $\nu$, find the coupling $\pi \in \Pi(\mu,\nu)$ that minimizes the total transport cost $\int c(x,y)\,d\pi(x,y)$. The Wasserstein distance $W_p$ metrizes the space of measures, and gradient flows in Wasserstein space characterize diffusion, aggregation, and information dynamics.
+
+The core claim of this document is that these are two views of the same underlying structure, and a proper unification yields:
+\begin{enumerate}
+    \item A transport-theoretic interpretation of attention as an optimal coupling,
+    \item A gauge-theoretic interpretation of the Monge map as parallel transport,
+    \item A unified variational principle that subsumes both frameworks,
+    \item Computational benefits from OT algorithms (Sinkhorn, etc.) applied to gauge-VFE dynamics.
+\end{enumerate}
+
+
+%=============================================================================
+\section{Background: The Two Frameworks}
+%=============================================================================
+
+\subsection{Gauge-VFE (This Project)}
+
+The full variational free energy over $N$ agents on a statistical fiber bundle:
+\begin{equation}\label{eq:vfe}
+F = \underbrace{\alpha \sum_i \KL(q_i \| p_i)}_{\text{self-coupling}}
+  + \underbrace{\lambda_\beta \sum_{i,j} \beta_{ij} \KL(q_i \| \Omega_{ij} q_j)}_{\text{belief alignment}}
+  + \underbrace{\text{CE}(\mu, y)}_{\text{observation}}
+  + \underbrace{\lambda_p \sum_{i,j} \KL(p_i \| \Omega_{ij} p_j)}_{\text{prior alignment}}
+\end{equation}
+
+Key structures:
+\begin{itemize}
+    \item \textbf{Statistical fiber bundle}: base manifold $C$ (token positions), fiber $\mathcal{P}$ (Gaussian beliefs), structure group $\GL(K)$.
+    \item \textbf{Gauge transport}: $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j) \in \GL^+(K)$, acting on beliefs via pushforward $(\mu, \Sigma) \mapsto (\Omega\mu, \Omega\Sigma\Omega^\top)$.
+    \item \textbf{Attention}: $\beta_{ij} = \text{softmax}_j(-\KL(q_i \| \Omega_{ij}q_j)/\kappa)$.
+    \item \textbf{GL(K) gauge invariance}: $\KL$ is invariant under the full general linear group---the $(\det\Omega)^2$ factors cancel in the log-determinant ratio.
+\end{itemize}
+
+\subsection{Optimal Transport}
+
+Given probability measures $\mu, \nu$ on spaces $\mathcal{X}, \mathcal{Y}$ and cost function $c: \mathcal{X} \times \mathcal{Y} \to \R_+$:
+
+\textbf{Kantorovich formulation} (relaxed):
+\begin{equation}\label{eq:kantorovich}
+\OT_c(\mu,\nu) = \inf_{\pi \in \Pi(\mu,\nu)} \int c(x,y)\,d\pi(x,y)
+\end{equation}
+where $\Pi(\mu,\nu)$ is the set of couplings with marginals $\mu$ and $\nu$.
+
+\textbf{Monge formulation} (deterministic):
+\begin{equation}
+\OT_c(\mu,\nu) = \inf_{T: T_\#\mu = \nu} \int c(x, T(x))\,d\mu(x)
+\end{equation}
+
+\textbf{Wasserstein-2 distance}: With $c(x,y) = \|x-y\|^2$,
+\begin{equation}
+W_2^2(\mu,\nu) = \inf_{\pi \in \Pi(\mu,\nu)} \int \|x - y\|^2\,d\pi(x,y)
+\end{equation}
+
+\textbf{Entropic regularization} (Sinkhorn):
+\begin{equation}\label{eq:sinkhorn}
+\OT_c^\varepsilon(\mu,\nu) = \inf_{\pi \in \Pi(\mu,\nu)} \int c(x,y)\,d\pi(x,y) + \varepsilon \KL(\pi \| \mu \otimes \nu)
+\end{equation}
+
+\textbf{Gaussian OT} (Bures-Wasserstein): For $\mu = \mathcal{N}(m_1, S_1)$, $\nu = \mathcal{N}(m_2, S_2)$:
+\begin{equation}\label{eq:bures}
+W_2^2(\mu,\nu) = \|m_1 - m_2\|^2 + \tr\!\left(S_1 + S_2 - 2(S_1^{1/2} S_2 S_1^{1/2})^{1/2}\right)
+\end{equation}
+This is the \textbf{Bures metric} on the space of Gaussian distributions.
+
+
+%=============================================================================
+\section{Structural Correspondences}
+%=============================================================================
+
+We now identify precise mathematical contact points between the two frameworks.
+
+\subsection{Attention as Soft Optimal Coupling}
+
+The attention matrix $\beta_{ij}$ in Gauge-VFE has the structure of an entropically regularized optimal transport plan.
+
+\begin{proposition}[Attention $\leftrightarrow$ Sinkhorn]\label{prop:attention-sinkhorn}
+The Gauge-VFE attention weights
+\[
+\beta_{ij} = \frac{\exp(-\KL(q_i \| \Omega_{ij}q_j)/\kappa)}{\sum_k \exp(-\KL(q_i \| \Omega_{ik}q_k)/\kappa)}
+\]
+are the row-normalized solution to an entropy-regularized transport problem with:
+\begin{itemize}
+    \item Cost matrix $C_{ij} = \KL(q_i \| \Omega_{ij}q_j)$,
+    \item Temperature $\varepsilon = \kappa$,
+    \item Source marginal: uniform over queries (row normalization via softmax),
+    \item Target marginal: unconstrained (single-sided normalization).
+\end{itemize}
+\end{proposition}
+
+The standard Sinkhorn algorithm enforces \emph{both} marginal constraints via alternating row/column normalization. Standard attention enforces only the row constraint (softmax over keys). This is not an accident---it reflects the asymmetry of KL divergence. A fully doubly-stochastic attention (enforcing both marginals) would correspond to a proper Sinkhorn solution and would impose a conservation law: total attention received equals total attention given.
+
+\begin{remark}[Sinkhorn Attention]
+Sinkhorn attention (doubly stochastic normalization of the attention matrix) has been explored in the literature. Within Gauge-VFE, this would correspond to enforcing a measure-preservation constraint: the attention coupling preserves the total ``belief mass'' across the system. This is physically natural if we interpret belief alignment as a transport of information that conserves total information content.
+\end{remark}
+
+\subsection{Gauge Transport as Monge Map}
+
+The gauge transport operator $\Omega_{ij}$ pushes belief $q_j$ forward into frame $i$:
+\[
+(\Omega_{ij})_\# q_j = \mathcal{N}(\Omega_{ij}\mu_j,\; \Omega_{ij}\Sigma_j\Omega_{ij}^\top)
+\]
+
+This is precisely a \emph{linear Monge map}: the deterministic transport $T_{ij}(x) = \Omega_{ij}x$ that pushes $q_j$ toward $q_i$'s frame.
+
+\begin{proposition}[Gauge Transport $\leftrightarrow$ Linear Monge Map]\label{prop:gauge-monge}
+For Gaussian beliefs $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ and $q_j = \mathcal{N}(\mu_j, \Sigma_j)$, the optimal transport map $T^*: \R^K \to \R^K$ satisfying $T^*_\# q_j = q_i$ (for quadratic cost) is the affine map:
+\[
+T^*(x) = \mu_i + A(\Sigma_j, \Sigma_i)(x - \mu_j)
+\]
+where $A(\Sigma_j, \Sigma_i) = \Sigma_j^{-1/2}(\Sigma_j^{1/2}\Sigma_i\Sigma_j^{1/2})^{1/2}\Sigma_j^{-1/2}$ is the Brenier map.
+
+The gauge transport $\Omega_{ij}$ approximates this when:
+\begin{enumerate}
+    \item Covariances are isotropic: $\Sigma_i = \sigma^2 I$ $\Rightarrow$ $A = I$ and transport reduces to mean translation,
+    \item The gauge field is adapted to the covariance structure: $\Omega_{ij} \approx A(\Sigma_j, \Sigma_i)$.
+\end{enumerate}
+
+In the general non-isotropic case, $\Omega_{ij}$ is a \emph{constrained} Monge map---it is the best \emph{linear} transport within the $\GL(K)$ gauge orbit, rather than the globally optimal Brenier map.
+\end{proposition}
+
+This gives a clear interpretation: the gauge group $\GL(K)$ parameterizes the space of admissible transport maps, and the VFE selects the optimal one within this family.
+
+\subsection{KL Divergence vs.\ Wasserstein Distance}
+
+The two frameworks use different ``costs'' for comparing distributions:
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+& \textbf{Gauge-VFE} & \textbf{Optimal Transport} \\
+\midrule
+Cost & $\KL(q_i \| \Omega_{ij}q_j)$ & $W_2^2(q_i, q_j)$ \\
+Symmetry & Asymmetric & Symmetric \\
+Triangle ineq. & No & Yes (metric) \\
+Gauge invariance & $\GL(K)$-invariant & Isometry-invariant \\
+Gaussian formula & Analytic (trace + log-det) & Bures metric (matrix square root) \\
+Gradient flow & Fisher-Rao natural gradient & Wasserstein gradient (continuity eq.) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+For Gaussians with $\Sigma_i = \sigma^2 I$ (isotropic), both reduce to squared Euclidean distance on means:
+\begin{align}
+\KL(q_i \| q_j) &= \frac{1}{2\sigma^2}\|\mu_i - \mu_j\|^2 \\
+W_2^2(q_i, q_j) &= \|\mu_i - \mu_j\|^2
+\end{align}
+differing only by the precision factor $1/(2\sigma^2)$. This is the isotropic limit where standard dot-product attention is recovered.
+
+\subsection{The Bures--Fisher Bridge}
+
+A deep connection exists between the Bures-Wasserstein metric (from OT) and the Fisher-Rao metric (used in Gauge-VFE for natural gradients).
+
+For Gaussian distributions, consider infinitesimal perturbations $(\delta\mu, \delta\Sigma)$:
+
+\textbf{Fisher-Rao metric:}
+\begin{equation}
+ds_{\text{FR}}^2 = \delta\mu^\top \Sigma^{-1} \delta\mu + \frac{1}{2}\tr(\Sigma^{-1}\delta\Sigma\,\Sigma^{-1}\delta\Sigma)
+\end{equation}
+
+\textbf{Bures-Wasserstein metric:}
+\begin{equation}
+ds_{\text{BW}}^2 = \|\delta\mu\|^2 + \frac{1}{4}\tr\!\left(\delta\Sigma\,\Sigma^{-1}\delta\Sigma\,\Sigma^{-1} + \delta\Sigma^2\Sigma^{-2}\right)
+\end{equation}
+
+At $\Sigma = \sigma^2 I$, both metrics become proportional. More importantly, both are Riemannian metrics on the Gaussian manifold, and the identity map between $(G_{\text{FR}}, G_{\text{BW}})$ is a bi-Lipschitz equivalence with dimension-dependent constants.
+
+The Gauge-VFE pullback metrics (the ``it from bit'' construction in \texttt{pullback\_metrics.py}) pull back $g_{\text{FR}}$ to the base manifold. An analogous construction pulling back $g_{\text{BW}}$ would yield an emergent geometry measuring Wasserstein-optimal transport distances rather than Fisher-Rao statistical distances on the base.
+
+\begin{conjecture}[Dual Emergent Geometries]
+The pullback of the Fisher-Rao metric to the base manifold $C$ gives the ``epistemic geometry'' (information distance). The pullback of the Bures-Wasserstein metric gives the ``transport geometry'' (physical displacement distance). These two geometries are related by the gauge field: the Fisher-Rao geometry is the transport geometry ``dressed'' by the gauge connection.
+\end{conjecture}
+
+
+%=============================================================================
+\section{The Unification Program}
+%=============================================================================
+
+We propose a phased research program toward a unified Gauge-VFE-OT theory.
+
+\subsection{Phase 1: Replace KL with Bures-Wasserstein in Attention}
+
+The most direct connection: replace the KL-divergence cost in attention with the Bures-Wasserstein distance.
+
+\textbf{Current (KL-based attention):}
+\begin{equation}
+\beta_{ij} = \text{softmax}_j\!\left(-\KL(q_i \| \Omega_{ij}q_j)/\kappa\right)
+\end{equation}
+
+\textbf{Proposed (Bures-Wasserstein attention):}
+\begin{equation}
+\beta_{ij}^{\text{BW}} = \text{softmax}_j\!\left(-W_2^2(q_i, (\Omega_{ij})_\#q_j)/\kappa\right)
+\end{equation}
+
+For Gaussians, $W_2^2$ has closed form (Eq.~\ref{eq:bures}). This replaces the asymmetric KL with a proper metric while retaining gauge transport.
+
+\textbf{Advantages:}
+\begin{itemize}
+    \item $W_2^2$ is a genuine metric (symmetric, satisfies triangle inequality).
+    \item The Bures metric has a natural geometric interpretation as the geodesic distance on the manifold of Gaussians under the Wasserstein geometry.
+    \item Gradients of $W_2^2$ are well-understood and relate to optimal transport maps.
+\end{itemize}
+
+\textbf{Key question:} Does GL(K) gauge invariance survive? The Bures metric is invariant under \emph{orthogonal} transformations $O \in O(K)$, not the full GL(K). This would break the GL(K) gauge symmetry down to $O(K)$, which is more restrictive (requires orthogonal gauge transport). This may or may not be desirable---it trades computational simplicity (no re-orthogonalization) for metric-space structure.
+
+\textbf{Resolution path:} Define a \emph{gauge-covariant Bures distance}:
+\begin{equation}
+W_{2,\Omega}^2(q_i, q_j) \coloneqq W_2^2(q_i, (\Omega_{ij})_\#q_j)
+\end{equation}
+This is gauge-invariant by construction: the transport $\Omega_{ij}$ absorbs the gauge transformation before the Bures comparison. The residual symmetry is $O(K) \cap \text{Stab}(\Omega_{ij})$.
+
+\subsection{Phase 2: Sinkhorn Attention (Doubly Stochastic)}
+
+Enforce both marginal constraints on the attention matrix to obtain a proper transport plan.
+
+\textbf{Algorithm:}
+\begin{enumerate}
+    \item Compute cost matrix $C_{ij} = \KL(q_i \| \Omega_{ij}q_j)$ (or $W_2^2$).
+    \item Initialize $K = \exp(-C/\varepsilon)$ (Gibbs kernel).
+    \item Sinkhorn iterations: alternate row and column normalization until convergence.
+    \item Result: $\beta^* = \text{diag}(u)\,K\,\text{diag}(v)$ with prescribed marginals.
+\end{enumerate}
+
+This gives attention matrices that satisfy a \emph{conservation law}: each token receives a fixed total attention (e.g., uniform marginals mean every token is equally ``heard''). This is natural from a transport perspective---information is neither created nor destroyed, only moved.
+
+\textbf{Connection to existing work:} Sinkhorn transformers (Tay et al., 2020) apply doubly stochastic normalization but without the gauge-theoretic cost function. The Gauge-VFE version would use the geometrically principled $\KL$-based cost.
+
+\subsection{Phase 3: Wasserstein Gradient Flows for Belief Dynamics}
+
+Currently, beliefs evolve via Fisher-Rao natural gradient descent:
+\begin{equation}
+\dot{\mu}_i = -\Sigma_i \nabla_{\mu_i} F \qquad \text{(natural gradient)}
+\end{equation}
+
+The alternative is a \emph{Wasserstein gradient flow}: the belief distribution $q_i(t)$ evolves according to the continuity equation
+\begin{equation}
+\partial_t q_i + \nabla \cdot (q_i\, v_i) = 0
+\end{equation}
+where the velocity field $v_i = -\nabla \frac{\delta F}{\delta q_i}$ is the Wasserstein gradient of the free energy.
+
+For Gaussians, this reduces to coupled ODEs for $(\mu_i, \Sigma_i)$. The key difference from the Fisher-Rao flow:
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+& \textbf{Fisher-Rao (current)} & \textbf{Wasserstein (proposed)} \\
+\midrule
+Mean update & $\dot{\mu} = -\Sigma\nabla_\mu F$ & $\dot{\mu} = -\nabla_\mu F$ \\
+Covariance update & $\dot{\Sigma} = -2\Sigma\,\text{sym}(\nabla_\Sigma F)\,\Sigma$ & Riccati-type ODE \\
+Geometry & Reparametrization-invariant & Physically ``moves mass'' \\
+Convergence & Fast for peaked distributions & Uniform across scales \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{remark}
+The JKO scheme (Jordan-Kinderlehrer-Otto) interprets diffusion equations as Wasserstein gradient flows of the free energy functional. The VFE belief dynamics could be reformulated as a JKO-type scheme, where each belief step minimizes:
+\[
+q_i^{(t+1)} = \arg\min_q \left\{ F[q] + \frac{1}{2\tau}W_2^2(q, q_i^{(t)}) \right\}
+\]
+This proximal operator interpretation connects VFE inference to implicit OT time-stepping.
+\end{remark}
+
+\subsection{Phase 4: Gauge-Equivariant Optimal Transport}
+
+The deepest level of unification: formulate the \emph{entire VFE} as an optimal transport problem on the statistical fiber bundle.
+
+\begin{definition}[Gauge-Equivariant Transport Problem]
+Let $\mathcal{E} = (C, \mathcal{P}, \GL(K))$ be the statistical fiber bundle. Given belief configurations $\{q_i\}$ and prior configurations $\{p_i\}$, the gauge-equivariant optimal transport problem is:
+\begin{equation}\label{eq:gauge-ot}
+\OT_{\text{gauge}}(\{q\}, \{p\}) = \inf_{\substack{\pi \in \Pi(q, p) \\ \Omega \in \GL(K)^{N \times N}}} \sum_{i,j} \pi_{ij}\, c_\Omega(q_i, p_j)
+\end{equation}
+where $c_\Omega(q_i, p_j) = W_2^2(q_i, (\Omega_{ij})_\# p_j)$ and $\Omega_{ij}$ satisfies the cocycle condition $\Omega_{ij}\Omega_{jk} = \Omega_{ik}$.
+\end{definition}
+
+This jointly optimizes:
+\begin{enumerate}
+    \item The \textbf{coupling} $\pi$ (which beliefs align with which priors---the attention pattern),
+    \item The \textbf{gauge field} $\Omega$ (how to transport between frames---the connection).
+\end{enumerate}
+
+The existing VFE (Eq.~\ref{eq:vfe}) is a relaxation of this problem:
+\begin{itemize}
+    \item The coupling $\pi_{ij} = \beta_{ij}$ is not jointly optimized but derived from the cost via softmax (entropic regularization).
+    \item The gauge field $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ is parameterized (not freely optimized).
+    \item The cost is $\KL$ rather than $W_2^2$.
+\end{itemize}
+
+\subsection{Phase 5: Renormalization as Multi-Scale OT}
+
+The RG flow in Gauge-VFE (meta-agent emergence via spectral clustering on $\beta$) has a direct OT interpretation: \emph{hierarchical optimal transport}.
+
+At scale $\zeta = 0$, tokens interact via fine-grained transport $\pi^{(0)}$. Coarse-graining to scale $\zeta = 1$ (meta-agents) corresponds to solving a reduced OT problem on the clustered measures. This is precisely the structure of \textbf{multi-scale optimal transport} (Gerber \& Maggioni, 2017), where one builds a tree of OT problems at successively coarser scales.
+
+\begin{conjecture}[RG Flow $=$ Multi-Scale OT]
+The RG fixed point of Gauge-VFE dynamics---where modularity $Q(\beta)$ stabilizes and the effective rank plateaus---coincides with the scale at which the hierarchical OT cost is minimized for the given observation.
+\end{conjecture}
+
+
+%=============================================================================
+\section{Concrete Mathematical Results to Prove}
+%=============================================================================
+
+\subsection{Theorem Targets}
+
+\begin{enumerate}
+
+\item \textbf{KL--Bures equivalence at isotropic limit.}
+\emph{Claim:} For $\Sigma_i = \sigma^2 I$, $\KL(q_i \| \Omega_{ij}q_j) = \frac{1}{2\sigma^2}W_2^2(q_i, (\Omega_{ij})_\#q_j) + \text{const}$, so the two attention mechanisms coincide up to temperature rescaling.
+
+\emph{Status:} Should be straightforward from the Gaussian KL and Bures formulas.
+
+\item \textbf{Softmax attention as entropy-regularized semi-coupling.}
+\emph{Claim:} $\beta_{ij} = \text{softmax}_j(-C_{ij}/\kappa)$ solves $\min_{\beta \geq 0, \beta\mathbf{1}=\mathbf{1}} \sum_{ij}\beta_{ij}C_{ij} + \kappa\sum_{ij}\beta_{ij}\log\beta_{ij}$, i.e., a one-sided Sinkhorn problem.
+
+\emph{Status:} Standard convex optimization result.
+
+\item \textbf{Gauge transport as constrained Monge map.}
+\emph{Claim:} For Gaussians, $\Omega_{ij}^* = \arg\min_{\Omega \in \GL(K)} W_2^2(q_i, (\Omega)_\#q_j)$ recovers the Brenier map $A(\Sigma_j, \Sigma_i)$ composed with mean translation.
+
+\emph{Status:} Requires showing that the GL(K)-parameterized family is rich enough to contain the Brenier map (which it is, since Brenier maps between Gaussians are linear).
+
+\item \textbf{Fisher-Rao natural gradient $=$ Wasserstein gradient at isotropic limit.}
+\emph{Claim:} When $\Sigma = \sigma^2 I$, the Fisher-Rao natural gradient $\dot{\mu} = -\Sigma\nabla_\mu F = -\sigma^2\nabla_\mu F$ and the Wasserstein gradient $\dot{\mu} = -\nabla_\mu F$ differ only by a scalar factor (the isotropic precision).
+
+\emph{Status:} Immediate.
+
+\item \textbf{GL(K) invariance of gauged Bures distance.}
+\emph{Claim:} $W_{2,\Omega}^2(q_i, q_j) = W_2^2(q_i, (\Omega_{ij})_\#q_j)$ is invariant under simultaneous gauge transformation $q_i \mapsto g_\#q_i$, $q_j \mapsto g_\#q_j$, $\Omega_{ij} \mapsto g\Omega_{ij}g^{-1}$ for all $g \in \GL(K)$ if and only if the Bures metric is replaced by the affine-invariant distance.
+
+\emph{Status:} Requires careful computation. The standard Bures metric breaks GL(K) invariance; the affine-invariant (Fisher-Rao) metric preserves it. This is a key tension point.
+
+\end{enumerate}
+
+\subsection{Key Tension: GL(K) Invariance vs.\ Metric Structure}
+
+This is the central obstacle to naive unification:
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Distance} & \textbf{Metric?} & \textbf{GL(K)-invariant?} & \textbf{OT interpretation?} \\
+\midrule
+$\KL(p\|q)$ & No (asymmetric) & Yes & Entropic divergence \\
+$W_2^2(p,q)$ & Yes & No (only $O(K)$) & Quadratic OT \\
+Fisher-Rao $d_{\text{FR}}$ & Yes & Yes & Not standard OT \\
+Bures $d_{\text{BW}}$ & Yes & No (only $O(K)$) & Gaussian $W_2$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The resolution likely involves one of:
+\begin{enumerate}
+    \item[(a)] Restricting the gauge group to $O(K)$ when using Bures/Wasserstein costs (sacrificing GL(K) for metric structure).
+    \item[(b)] Using the affine-invariant metric $d_{\text{AI}}^2 = \|\log(\Sigma_1^{-1/2}\Sigma_2\Sigma_1^{-1/2})\|_F^2 + \|\mu_1 - \mu_2\|_{\Sigma}^2$ which is GL(K)-invariant and a proper metric, but does not have a standard OT interpretation.
+    \item[(c)] Defining a \emph{gauged Wasserstein distance} that absorbs the gauge freedom into the transport cost, preserving both metric structure and gauge covariance.
+\end{enumerate}
+
+Option (c) is the most promising and requires the least sacrifice.
+
+
+%=============================================================================
+\section{Computational Implementation Roadmap}
+%=============================================================================
+
+\subsection{Phase 1 Implementation: Bures Attention Module}
+
+Add a Bures-Wasserstein attention option alongside the existing KL attention.
+
+\textbf{Required:}
+\begin{itemize}
+    \item Implement $W_2^2$ between Gaussians (Eq.~\ref{eq:bures}). Requires matrix square root $(\Sigma_i^{1/2}\Sigma_j\Sigma_i^{1/2})^{1/2}$, computable via eigendecomposition.
+    \item Implement gauge-covariant Bures: $W_{2,\Omega}^2(q_i, q_j) = \|\mu_i - \Omega_{ij}\mu_j\|^2 + \tr(\Sigma_i + \Omega_{ij}\Sigma_j\Omega_{ij}^\top - 2(\Sigma_i^{1/2}\Omega_{ij}\Sigma_j\Omega_{ij}^\top\Sigma_i^{1/2})^{1/2})$.
+    \item Gradients: differentiate through matrix square root (can use implicit differentiation or Sylvester equation).
+    \item A/B test: compare KL-attention vs.\ Bures-attention on WikiText at matched parameters.
+\end{itemize}
+
+\subsection{Phase 2 Implementation: Sinkhorn Normalization}
+
+\textbf{Required:}
+\begin{itemize}
+    \item Implement Sinkhorn iterations on the attention cost matrix (5--20 iterations typically suffice).
+    \item Support both uniform and learned marginal constraints.
+    \item Compare standard softmax attention vs.\ Sinkhorn attention on convergence and perplexity.
+\end{itemize}
+
+\subsection{Phase 3 Implementation: JKO Belief Steps}
+
+\textbf{Required:}
+\begin{itemize}
+    \item Replace the current belief update $\mu \leftarrow \mu - \eta\Sigma\nabla F$ with a JKO proximal step:
+    $\mu^{(t+1)} = \arg\min_\mu \{F[\mu] + \frac{1}{2\tau}W_2^2(\mathcal{N}(\mu,\Sigma), \mathcal{N}(\mu^{(t)},\Sigma))\}$.
+    \item For Gaussians with fixed $\Sigma$, this reduces to: $\mu^{(t+1)} = \arg\min_\mu \{F[\mu] + \frac{1}{2\tau}\|\mu - \mu^{(t)}\|^2\}$, which is standard proximal gradient descent. The Wasserstein structure becomes non-trivial when $\Sigma$ also evolves.
+    \item Implement the coupled $(\mu, \Sigma)$ JKO update.
+\end{itemize}
+
+
+%=============================================================================
+\section{Speculative Directions}
+%=============================================================================
+
+\subsection{McCann Interpolation as Gauge Geodesic}
+
+In OT, the \emph{McCann interpolation} between measures $\mu_0$ and $\mu_1$ is:
+\[
+\mu_t = ((1-t)\text{id} + tT)_\#\mu_0
+\]
+where $T$ is the Brenier map. For Gaussians, this gives:
+\[
+\mu_t = \mathcal{N}((1-t)m_0 + tm_1,\; ((1-t)I + tA)S_0((1-t)I + tA)^\top)
+\]
+
+In the gauge framework, interpolating between belief $q_i$ and transported belief $\Omega_{ij}q_j$ along the gauge geodesic gives a similar structure. The McCann interpolation may be the ``natural'' geodesic on the fiber bundle when the base is equipped with the Bures geometry.
+
+\subsection{Unbalanced OT and Belief Creation/Destruction}
+
+Standard OT assumes mass conservation. \emph{Unbalanced optimal transport} relaxes this, allowing mass to be created or destroyed at a penalty:
+\[
+\OT_{\text{unbal}}(\mu,\nu) = \inf_\pi \int c\,d\pi + \lambda_1\KL(\pi_1\|\mu) + \lambda_2\KL(\pi_2\|\nu)
+\]
+
+This connects to the Gauge-VFE observation term: observations \emph{inject} information into the system (symmetry breaking), which is analogous to mass creation in unbalanced OT. The self-coupling term $\KL(q\|p)$ acts as a ``mass penalty'' keeping beliefs close to priors.
+
+\subsection{Neural OT and Gauge Learning}
+
+Recent work on neural optimal transport (Korotin et al., 2022) parameterizes transport maps with neural networks. The gauge framework parameterizes transport maps with Lie group elements $\Omega = \exp(\phi)$. A hybrid approach could:
+\begin{itemize}
+    \item Use gauge transport for the \emph{structured} component (rotation, scaling),
+    \item Use a residual neural network for the \emph{unstructured} correction,
+    \item Train both via the VFE objective.
+\end{itemize}
+
+
+%=============================================================================
+\section{Summary: The Unified Picture}
+%=============================================================================
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Concept} & \textbf{Gauge-VFE} & \textbf{Optimal Transport} \\
+\midrule
+Objects & Beliefs $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ & Measures $\mu_i$ \\
+Cost & $\KL(q_i \| \Omega_{ij}q_j)$ & $c(x,y) = \|x-y\|^2$ (or general) \\
+Coupling & $\beta_{ij}$ (softmax attention) & $\pi_{ij}$ (transport plan) \\
+Map & $\Omega_{ij} \in \GL(K)$ (gauge transport) & $T: T_\#\mu = \nu$ (Monge map) \\
+Regularization & $\kappa$ (attention temperature) & $\varepsilon$ (entropic reg.) \\
+Gradient flow & Fisher-Rao natural gradient & Wasserstein gradient (JKO) \\
+Hierarchy & RG flow / meta-agents & Multi-scale OT \\
+Symmetry & $\GL(K)$ gauge invariance & Isometry invariance \\
+Conservation & Not enforced (softmax rows) & Mass conservation (marginals) \\
+Geometry (base) & Pullback of Fisher-Rao & Pullback of Bures-Wasserstein \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The unification thesis: \textbf{Gauge-VFE attention is a gauge-equivariant, entropically regularized, semi-relaxed optimal transport problem on the statistical fiber bundle, with the gauge connection playing the role of a structured Monge map.}
+
+The research program proceeds from concrete (Phase 1: swap cost functions, benchmark) to speculative (Phase 5: prove RG = multi-scale OT), with each phase producing testable predictions and publishable results.
+
+\end{document}
