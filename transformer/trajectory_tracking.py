@@ -10,7 +10,6 @@ New code should import directly from transformer.analysis.trajectory.
 from transformer.analysis.trajectory import (
     ForwardTrajectory,
     LayerTrajectory,
-    LeapfrogSnapshot,
     TrajectoryRecorder,
     get_global_recorder,
     set_global_recorder,
@@ -19,7 +18,6 @@ from transformer.analysis.trajectory import (
 __all__ = [
     'ForwardTrajectory',
     'LayerTrajectory',
-    'LeapfrogSnapshot',
     'TrajectoryRecorder',
     'get_global_recorder',
     'set_global_recorder',
