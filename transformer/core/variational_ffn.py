@@ -880,7 +880,7 @@ def compute_vfe_gradients_gpu(
     #                                  ↑ direct term           ↑ SOFTMAX COUPLING (nonlinearity!)
     #
     # The softmax coupling gradient is the KEY nonlinearity (replaces GELU/ReLU):
-    #   ∂β_ij/∂μ_i = β_ij · [∂KL_ij/∂μ_i - Σ_k β_ik · ∂KL_ik/∂μ_i] / κ
+    #   ∂β_ij/∂μ_i = -β_ij · [∂KL_ij/∂μ_i - Σ_k β_ik · ∂KL_ik/∂μ_i] / κ
 
     if is_diagonal:
         # Get transport operators (use cached if available)
@@ -954,7 +954,7 @@ def compute_vfe_gradients_gpu(
 
         # =================================================================
         # 2b. Softmax coupling term (THE NONLINEARITY!):
-        #     ∂β_ij/∂μ_i = β_ij · [∂KL_ij/∂μ_i - Σ_k β_ik · ∂KL_ik/∂μ_i] / κ
+        #     ∂β_ij/∂μ_i = -β_ij · [∂KL_ij/∂μ_i - Σ_k β_ik · ∂KL_ik/∂μ_i] / κ
         #     grad_softmax = Σ_j KL_ij · ∂β_ij/∂μ_i
         # =================================================================
         # Deviation from average: avg_grad_i - ∂KL_ij/∂μ_i
@@ -1507,7 +1507,7 @@ class VariationalFFNDynamic(nn.Module):
     This enables emergent block structure in β as beliefs cluster.
 
     The ∂β/∂μ term is the principled nonlinearity (replaces GELU):
-        ∂β_ij/∂μ_i = β_ij · [∂KL_ij/∂μ_i - Σ_k β_ik · ∂KL_ik/∂μ_i] / κ
+        ∂β_ij/∂μ_i = -β_ij · [∂KL_ij/∂μ_i - Σ_k β_ik · ∂KL_ik/∂μ_i] / κ
 
     With dynamic β, this creates positive feedback:
         - Tokens with similar beliefs → higher β between them
