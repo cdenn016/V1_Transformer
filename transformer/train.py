@@ -509,9 +509,10 @@ def compute_free_energy_loss(
     # 2. Belief Coupling: λ_β · Σ_ij β_ij · KL(q_i || Ω_ij q_j)
     # =================================================================
     if lambda_beta > 0.0:
-        # beta and kl are (n_layers, B, n_heads, N, N) — sum over spatial dims,
-        # then average over layers, batch, and heads for the scalar loss.
-        weighted_kl = beta * kl  # (n_layers, B, n_heads, N, N)
+        # Use final layer's beta/kl for loss (matches pre-refactor behavior)
+        beta_final = beta[-1]  # (B, n_heads, N, N)
+        kl_final = kl[-1]      # (B, n_heads, N, N)
+        weighted_kl = beta_final * kl_final
         belief_align_loss = weighted_kl.sum(dim=(-2, -1)).mean()
         K = mu_q.shape[-1]
         dim_scale = math.sqrt(max(K, 1))
