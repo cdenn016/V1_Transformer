@@ -17,19 +17,28 @@ Background:
     when using GL(K) gauge groups: the backward pass through matrix_exp
     amplifies gradients exponentially in the symmetric directions.
 
-Solution (Killing-form-motivated preconditioning):
-    The Killing form B(X,Y) = 2K tr(XY) - 2 tr(X)tr(Y) on gl(K) is:
-    - Negative definite on so(K) (compact part)
-    - Positive definite on sym₀(K) (non-compact traceless part)
-    - Zero on the center ℝ·I
+Three preconditioning modes (controlled by phi_natural_gradient config):
 
-    This sign structure reflects exactly which directions are dangerous.
-    We use the Cartan decomposition to project the gradient into so(K)
-    and sym(K) components, then dampen the sym(K) component.
+1. 'clip' (default): Simple norm clipping. No geometric awareness.
 
-    This is equivalent to using a Riemannian metric on gl(K) that assigns
-    higher cost to non-compact directions — the natural metric for gradient
-    descent on a non-compact Lie group.
+2. 'cartan': Approximate Cartan decomposition preconditioning.
+    Projects gradient into so(K) ⊕ sym(K) and dampens sym(K) by a fixed
+    factor (sym_dampening=0.1 → 10× dampening). Uses a free parameter.
+
+3. 'killing': Killing form natural gradient (position-independent).
+    Uses the Cartan-involution-modified Killing form as metric:
+        g̃(X, Y) = -B(X, θ(Y)) where θ(X) = -X^T
+        g̃_ab = 2K · tr(T_a^T T_b) - 2 · tr(T_a) · tr(T_b)
+    No free parameters; metric determined entirely by algebra structure.
+
+4. 'pullback': Full pullback natural gradient (position-dependent).
+    Uses the Riemannian metric on φ-space pulled back through exp:
+        G_ab(φ) = ⟨ Ψ(ad_X)(T_a), Ψ(ad_X)(T_b) ⟩_gram
+    where X = Σ_a φ^a T_a, Ψ(z) = (e^z - 1)/z = Σ_{k=0}^∞ z^k/(k+1)!
+    This is the theoretically exact natural gradient on the Lie group.
+    It captures the exponential amplification in non-compact directions
+    that the position-independent metrics miss.
+    Cost: O(n_gen³) per token per step (expensive but principled).
 
 Also implements:
     - SL(K) projection: projects φ to the traceless subalgebra sl(K),
@@ -39,6 +48,7 @@ Author: Theoretical foundation from Cartan decomposition of gl(K)
 Date: March 2026
 """
 
+import math
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple
@@ -177,3 +187,206 @@ def apply_cartan_preconditioning(
         preconditioned gradient, same shape as grad_phi
     """
     return grad_phi @ preconditioner.T
+
+
+# =============================================================================
+# Killing Form Natural Gradient (position-independent)
+# =============================================================================
+
+def build_killing_form_preconditioner(
+    generators: torch.Tensor,  # (n_gen, K, K)
+    center_reg: float = 1e-4,
+) -> torch.Tensor:
+    """
+    Build the Killing form natural gradient preconditioner for gl(K).
+
+    Uses the Cartan-involution-modified Killing form as metric:
+        g̃(X, Y) = -B(X, θ(Y))  where θ(X) = -X^T (Cartan involution)
+        g̃_ab = 2K · tr(T_a^T T_b) - 2 · tr(T_a) · tr(T_b)
+
+    This is positive semidefinite (degenerate only on the center ℝ·I).
+    Returns g̃^{-1} for natural gradient: ∇̃F^a = [g̃^{-1}]^{ab} · ∂F/∂φ^b.
+
+    Unlike the Cartan preconditioner (which has a free dampening parameter),
+    this uses the exact Lie algebra metric with no free parameters.
+
+    Eigenvalue structure for E_{ij} basis of gl(K):
+        - so(K) directions: eigenvalue 2K (compact rotations)
+        - sym₀(K) directions: eigenvalue 2K (non-compact, traceless)
+        - Diagonal traceless: eigenvalue 2(K-1) to 2K
+        - Center (trace): eigenvalue 0 → regularized
+
+    Args:
+        generators: Lie algebra generators (n_gen, K, K)
+        center_reg: Regularization for the degenerate center direction
+
+    Returns:
+        inv_metric: (n_gen, n_gen) inverse metric for natural gradient
+    """
+    n_gen, K, _ = generators.shape
+    device = generators.device
+    dtype = generators.dtype
+
+    # Gram matrix: G_ab = tr(T_a^T T_b) (Frobenius inner product)
+    gram = torch.einsum('aij,bij->ab', generators.transpose(-2, -1), generators)
+
+    # Trace vector: v_a = tr(T_a)
+    traces = generators.diagonal(dim1=-2, dim2=-1).sum(dim=-1)  # (n_gen,)
+    trace_outer = torch.outer(traces, traces)  # (n_gen, n_gen)
+
+    # Modified Killing form metric: g̃_ab = 2K · gram_ab - 2 · trace_outer_ab
+    metric = 2.0 * K * gram - 2.0 * trace_outer
+
+    # Regularize the center direction (kernel of Killing form on gl(K))
+    metric = metric + center_reg * torch.eye(n_gen, device=device, dtype=dtype)
+
+    # Invert to get natural gradient metric
+    inv_metric = torch.linalg.inv(metric)
+
+    return inv_metric
+
+
+def apply_killing_form_natural_gradient(
+    grad_phi: torch.Tensor,         # (..., n_gen)
+    inv_metric: torch.Tensor,       # (n_gen, n_gen) from build_killing_form_preconditioner
+) -> torch.Tensor:
+    """
+    Apply Killing form natural gradient: ∇̃F = g̃^{-1} · ∂F/∂φ.
+
+    Position-independent (same metric regardless of current φ).
+    Principled (no free parameters), but does not capture the
+    position-dependent curvature of the exponential map.
+
+    Args:
+        grad_phi: Euclidean gradient ∂F/∂φ^a, shape (..., n_gen)
+        inv_metric: Inverse metric (n_gen, n_gen)
+
+    Returns:
+        Natural gradient, same shape as grad_phi
+    """
+    return grad_phi @ inv_metric.T
+
+
+# =============================================================================
+# Pullback Natural Gradient (position-dependent, theoretically exact)
+# =============================================================================
+
+def build_structure_constants(
+    generators: torch.Tensor,  # (n_gen, K, K)
+) -> torch.Tensor:
+    """
+    Precompute structure constants f^c_{ab} defined by [T_a, T_b] = Σ_c f^c_{ab} T_c.
+
+    For orthonormal generators (gram ≈ I):
+        f^c_{ab} = tr(T_c^T · [T_a, T_b])
+
+    For general generators:
+        f^c_{ab} = Σ_d G^{cd} · tr(T_d^T · [T_a, T_b])
+
+    Args:
+        generators: Lie algebra generators (n_gen, K, K)
+
+    Returns:
+        structure_constants: (n_gen, n_gen, n_gen) tensor f[a,b,c] = f^c_{ab}
+    """
+    n_gen = generators.shape[0]
+    device = generators.device
+    dtype = generators.dtype
+
+    # Gram matrix and its pseudoinverse
+    gram = torch.einsum('aij,bij->ab', generators.transpose(-2, -1), generators)
+    gram_inv = torch.linalg.pinv(gram)
+
+    # Brackets: [T_a, T_b] = T_a @ T_b - T_b @ T_a, shape (n_gen, n_gen, K, K)
+    brackets = (torch.einsum('aik,bkj->abij', generators, generators) -
+                torch.einsum('bik,akj->abij', generators, generators))
+
+    # Project onto generator basis: f̃_{ab,d} = tr(T_d^T · [T_a, T_b])
+    f_tilde = torch.einsum('dij,abij->abd',
+                           generators.transpose(-2, -1), brackets)  # (n_gen, n_gen, n_gen)
+
+    # Apply gram inverse: f^c_{ab} = Σ_d G^{cd} f̃_{ab,d}
+    structure_constants = torch.einsum('cd,abd->abc', gram_inv, f_tilde)
+
+    return structure_constants
+
+
+def apply_pullback_natural_gradient(
+    grad_phi: torch.Tensor,              # (..., n_gen)
+    phi: torch.Tensor,                   # (..., n_gen)
+    generators: torch.Tensor,            # (n_gen, K, K)
+    structure_constants: torch.Tensor,   # (n_gen, n_gen, n_gen)
+    gram: Optional[torch.Tensor] = None, # (n_gen, n_gen) precomputed gram matrix
+    series_order: int = 6,               # Taylor series order for Ψ(ad_X)
+) -> torch.Tensor:
+    """
+    Apply position-dependent natural gradient using the pullback metric through exp.
+
+    The Riemannian metric on φ-space is pulled back from the bi-invariant
+    Frobenius metric on GL(K) through the exponential map:
+
+        dexp_X(T_a) = exp(X) · Ψ(ad_X)(T_a)
+
+    where Ψ(z) = (e^z - 1)/z = Σ_{k=0}^∞ z^k/(k+1)!
+
+    Left-translating back to the identity gives the metric:
+        G_ab(φ) = ⟨ Ψ(ad_X)(T_a), Ψ(ad_X)(T_b) ⟩_gram
+
+    where ⟨A, B⟩_gram = A^T @ gram @ B in generator coordinates.
+
+    At φ = 0: Ψ = I, so G = gram (Frobenius inner product).
+    At large ||φ|| in symmetric directions: G grows exponentially,
+    so the natural gradient (G^{-1} · ∂F/∂φ) automatically shrinks —
+    exactly compensating the exponential amplification through matrix_exp.
+
+    Args:
+        grad_phi: Euclidean gradient ∂F/∂φ^a, shape (..., n_gen)
+        phi: Current gauge coordinates, shape (..., n_gen)
+        generators: Lie algebra generators (n_gen, K, K)
+        structure_constants: f^c_{ab} from build_structure_constants
+        gram: Precomputed Gram matrix; if None, computed from generators
+        series_order: Number of terms in Taylor expansion of Ψ
+
+    Returns:
+        Natural gradient G(φ)^{-1} · ∂F/∂φ, same shape as grad_phi
+    """
+    n_gen = generators.shape[0]
+    batch_shape = phi.shape[:-1]
+    device = phi.device
+    dtype = phi.dtype
+
+    if gram is None:
+        gram = torch.einsum('aij,bij->ab',
+                            generators.transpose(-2, -1), generators)
+
+    # Compute ad_X: [ad_X]_bc = Σ_a φ^a f^c_{ab}
+    # phi: (..., n_gen), structure_constants: (n_gen, n_gen, n_gen)
+    # ad_X: (..., n_gen, n_gen)
+    ad_X = torch.einsum('...a,abc->...bc', phi, structure_constants)
+
+    # Compute Ψ(ad_X) via Taylor series:
+    # Ψ(z) = (e^z - 1)/z = Σ_{k=0}^∞ z^k/(k+1)!
+    # Ψ(ad_X) = I + ad_X/2! + ad_X²/3! + ad_X³/4! + ...
+    I_gen = torch.eye(n_gen, device=device, dtype=dtype)
+    I_expanded = I_gen.expand(*batch_shape, n_gen, n_gen)
+
+    psi = I_expanded.clone()         # k=0 term: I
+    ad_power = ad_X.clone()          # ad_X^1
+
+    for k in range(1, series_order):
+        coeff = 1.0 / math.factorial(k + 1)
+        psi = psi + coeff * ad_power
+        if k < series_order - 1:
+            ad_power = torch.matmul(ad_power, ad_X)
+
+    # Metric: G = Ψ^T @ gram @ Ψ  (positive definite by construction)
+    gram_expanded = gram.expand(*batch_shape, n_gen, n_gen)
+    G = torch.matmul(psi.transpose(-2, -1), torch.matmul(gram_expanded, psi))
+
+    # Regularize for numerical stability
+    G = G + 1e-6 * I_expanded
+
+    # Solve G @ nat_grad = grad_phi for nat_grad
+    nat_grad = torch.linalg.solve(G, grad_phi.unsqueeze(-1)).squeeze(-1)
+
+    return nat_grad
