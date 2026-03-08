@@ -1,9 +1,4 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Thu Dec 11 19:06:36 2025
 
-@author: chris and christine
-"""
 
 # VFE Transformer with Renormalization Group Analysis
 
@@ -11,19 +6,9 @@ Created on Thu Dec 11 19:06:36 2025
 
 This is a **Gauge-Theoretic Transformer** implementing **Variational Free Energy (VFE)** minimization for active inference. The key innovation is replacing learned attention projections (W_Q, W_K) with **information-geometric attention based on KL divergence**, enabling principled belief evolution and uncertainty quantification.
 
+
 DO NOT USE NEURAL NETWORKS OR ARCHITECTURES
 
-### Core Insight: VFE as Renormalization Group
-
-The VFE theory has a natural **self-similar structure**: meta-agents satisfy the same definition as agents. This is the defining property of the **Renormalization Group (RG)**.
-
-```
-Scale ζ=0:  Tokens q_i = N(μ_i, Σ_i)     interact via β_{ij}
-                    ↓ clustering (KL → 0 within groups)
-Scale ζ=1:  Meta-agents q_A = N(μ_A, Σ_A)  interact via β'_{AB}
-                    ↓ further clustering
-Scale ζ=2:  Super-meta-agents...
-```
 
 ## Architecture
 
@@ -89,14 +74,44 @@ beta_ij = softmax_j(-D_KL(q_i || Omega_ij q_j) / tau)
 where `Omega_ij = exp(phi_i) exp(-phi_j)` is the gauge transport between agents. **No W_Q, W_K, W_V projections are used**---attention arises from the geometry of belief distributions.
 
 
-### The Nonlinearity (replaces GELU)
+### Categorical Observation Precision (Transformer-Specific)
+
+For transformers with softmax output p = softmax(W_out @ μ / τ):
+
 ```
-∂β_ij/∂μ_i = -β_ij · [∂KL_ij/∂μ_i - Σ_k β_ik · ∂KL_ik/∂μ_i] / κ
+Λ_o = (1/τ²) W^T (diag(p) - pp^T) W = (1/τ²) Cov_p(W)
 ```
 
-This creates **positive feedback**: similar beliefs → higher β → pulled closer → clusters form!
+This is the **Hessian of cross-entropy** with respect to μ:
+- When p is peaked (confident): Λ_o has low rank, weak constraint
+- When p is uniform (uncertain): Λ_o reflects full embedding structure
+- Temperature τ scales precision (lower τ → higher precision)
+
+### The Nonlinearity
+
+Standard transformer: GELU(x) — ad hoc, nobody knows why it works
+
+Ours: ∂β_{ij}/∂θ — emerges from differentiating softmax attention:
+
+```
+β_{ij} = softmax(-KL_{ij} / κ)
+
+∂β_{ij}/∂μ_i = β_{ij} · [∂KL_{ij}/∂μ_i - Σ_k β_{ik} · ∂KL_{ik}/∂μ_i] / κ
+∂β_{ij}/∂Σ_i = β_{ij} · [∂KL_{ij}/∂Σ_i - Σ_k β_{ik} · ∂KL_{ik}/∂Σ_i] / κ
+∂β_{ij}/∂φ_i = β_{ij} · [∂KL_{ij}/∂φ_i - Σ_k β_{ik} · ∂KL_{ik}/∂φ_i] / κ
+```
 
 The **most general form** of the theory---no simplifying limits taken. Full non-isotropic covariances, non-trivial gauge transport, KL-divergence attention. **No MLPs, activation functions, learned W_Q/W_K/W_V, or positional encodings.** Only a linear output projection (from K dimensions to 50k) is retained.
+
+### Multi-Timescale Dynamics
+
+The free energy naturally separates into:
+- **Fast (E-step)**: Belief inference `dq_i/dt = -eta_q dF_fast/dq_i` --- what transformers do in a forward pass
+- **Slow (M-step)**: Model learning `ds_i/dt = -eta_s dF_slow/ds_i` --- what backpropagation updates
+
+Standard transformers operate in the adiabatic limit: slow variables frozen during inference, updated between passes.
+
+
 
 | Configuration | K | Layers | Gauge Mode | Train PPL | Test PPL | Parameters |
 |---|---|---|---|---|---|---|
@@ -175,36 +190,6 @@ Apply these when working on this codebase:
 - Remove content that doesn't earn its place through rigorous derivation
 - Never dress up hand-waving as theorem
 - When asked "what does X have to do with anything?"—if the answer is "not much", say that
-
-
-
-### Categorical Observation Precision (Transformer-Specific)
-
-For transformers with softmax output p = softmax(W_out @ μ / τ):
-
-```
-Λ_o = (1/τ²) W^T (diag(p) - pp^T) W = (1/τ²) Cov_p(W)
-```
-
-This is the **Hessian of cross-entropy** with respect to μ:
-- When p is peaked (confident): Λ_o has low rank, weak constraint
-- When p is uniform (uncertain): Λ_o reflects full embedding structure
-- Temperature τ scales precision (lower τ → higher precision)
-
-### The Nonlinearity
-
-Standard transformer: GELU(x) — ad hoc, nobody knows why it works
-
-Ours: ∂β_{ij}/∂θ — emerges from differentiating softmax attention:
-
-```
-β_{ij} = softmax(-KL_{ij} / κ)
-
-∂β_{ij}/∂μ_i = β_{ij} · [∂KL_{ij}/∂μ_i - Σ_k β_{ik} · ∂KL_{ik}/∂μ_i] / κ
-∂β_{ij}/∂Σ_i = β_{ij} · [∂KL_{ij}/∂Σ_i - Σ_k β_{ik} · ∂KL_{ik}/∂Σ_i] / κ
-∂β_{ij}/∂φ_i = β_{ij} · [∂KL_{ij}/∂φ_i - Σ_k β_{ik} · ∂KL_{ik}/∂φ_i] / κ
-```
-
 
 
 ## VFE, Renormalization, and the Information Bottleneck
@@ -304,6 +289,7 @@ This is a **symmetry-based prior** implementing compression geometrically.
 | Hierarchy | Deep IB | VFE iterations | RG flow |
 
 **Key insight**: Emergent block structure in β_ij reveals which tokens carry redundant information about the target and can be safely merged. The dynamics discovers the optimal compression automatically.
+
 
 
 
