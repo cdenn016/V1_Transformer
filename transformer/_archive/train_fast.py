@@ -80,9 +80,13 @@ class FastTrainingConfig:
 
     # Free energy coefficients
     alpha: float = 1.0            # Self-consistency regularization
-    beta: float = 1.0             # Belief alignment
+    beta: float = 1.0             # Belief alignment (maps to lambda_beta in loss)
     lambda_gamma: float = 0.0     # Model alignment (disabled by default)
     kappa_gamma: float = 1.0      # Temperature for γ_ij coupling weights
+    lambda_hyper: float = 0.0     # Hyper-prior: KL(s_i||h) models to centroid
+
+    # VFE observation coupling
+    use_obs_in_vfe: bool = False  # Pass targets into VFE E-step (last layer only)
 
     # Learning rate schedule
     lr_decay: str = 'cosine'  # 'cosine', 'linear', 'constant'
