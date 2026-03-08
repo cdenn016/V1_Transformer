@@ -41,6 +41,8 @@ Comprehensive Metrics Tracking:
     - Bits-per-character (BPC)
     - Attention statistics (β_mean, KL_mean)
     - Performance (step time, tokens/sec)
+    - Hamiltonian diagnostics (H_init, H_final, ΔH) for hamiltonian mode
+
 Output Files:
     - checkpoints_publication/ffn_{mode}/metrics.csv - comprehensive training metrics
     - checkpoints_publication/ffn_{mode}/best_model.pt - best model checkpoint
@@ -239,6 +241,12 @@ VFE_EM_CONFIG = {
     'evolve_phi_e_step': True,    # Update φ during E-step iterations (dynamical gauge frames)
                                   # When True: φ evolves via ∂F/∂φ at each VFE iteration
                                   # When False: φ only updated via backprop (M-step)
+                                  
+    'sigma_softmax_coupling': True,  # Enable ∂β/∂Σ softmax coupling                       
+       
+
+
+                           
     'diagonal_covariance': True,
     'use_positional_embedding': False,
     'pos_encoding_mode': 'none',
@@ -266,9 +274,13 @@ VFE_EM_CONFIG = {
     'ffn_lr':    0.05 ,
 
     # Free energy weights
-    'alpha':        0.1,                   # Self-consistency in training loss
+    'alpha':        0.1,                  # Self-consistency in training loss
+    'alpha_phi':    0.01,                     # Gauge prior: (α_φ/2)||φ||² mass term (0 = disabled)
     'beta':         0,                    # Belief alignment in training loss
     'lambda_gamma': 0,            # Model alignment
+    'lambda_hyper': 0,
+    'lambda_beta':  0,
+    
     'kappa_gamma':  1,
     
     'ffn_lambda_belief': 1,
@@ -312,15 +324,17 @@ VFE_EM_CONFIG = {
     # =================================================================
     
     'gauge_group': 'GLK',  # 'SO3', 'SON', or 'GLK'
-    'gauge_dim': 5,        # N for SO(N) - only used when gauge_group='SON'
+    'gauge_dim': 10,        # N for SO(N) - only used when gauge_group='SON'
     'gauge_mode': 'learned',  # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j)
                                 # 'trivial': global frame, φ = 0, Ω = I (standard attention)
     
     # Gauge geometry: principled phi gradient control (replaces ad-hoc clipping)
-    'alpha_phi': 0.01,                     # Gauge prior: (α_φ/2)||φ||² mass term (0 = disabled)
+    'phi_natural_gradient': 'pullback',  # E-step 'pullback', 'killing', 'cartan', 'clip'
+    
+    
     'use_slk_projection': True,          # Project phi to traceless sl(K) after each step
-    'use_killing_form': True,            # Cartan decomposition preconditioning for phi grads
-    'killing_form_sym_dampening': 0.05,    # Dampening for non-compact directions (0.1 = 10× reduction)
+    'use_killing_form': True,            # M-step Cartan decomposition preconditioning for phi grads
+    'killing_form_sym_dampening': 0.05,    # M-step Dampening for non-compact directions (0.1 = 10× reduction)
     
     'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
     'enforce_orthogonal': False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
@@ -352,7 +366,7 @@ VFE_EM_CONFIG = {
      # ('ℓ6', 1, 13),
      # ('ℓ7', 1, 15),
       # ('ℓ50', 1, 101),
-      ('fund', 2, 5)  #For SO(8)
+      ('fund', 1, 10)  #For SO(8)
      # ('fund', 10, 5),   # SO(5)
        
      # SO(5) multi-irrep example:

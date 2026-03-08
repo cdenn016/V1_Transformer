@@ -1148,7 +1148,48 @@ Discretizing in steps yields the update rule:
 }
 \end{equation}
 
-This recovers the standard transformer update rule (attention-weighted aggregation, prior regularization, and supervised loss) providing a variational interpretation of each term.  In the complete theory we also have $\Sigma$ and $\phi$ gradients with their corresponding updating.  The details of these may be found in the appendix.
+This recovers the standard transformer update rule (attention-weighted aggregation, prior regularization, and supervised loss) providing a variational interpretation of each term.
+
+\paragraph{Covariance gradient.}
+The complete theory also includes gradient dynamics for the covariance $\Sigma_i$ and gauge frame $\phi_i$. The covariance gradient reveals a novel uncertainty channel absent in standard transformers.  Differentiating the free energy with respect to $\Sigma_i$ and applying the product rule through the attention weights (neglecting the observation term, which contributes an $O(\Sigma_i^{-1})$ correction in the high-precision regime; see Appendix~\ref{app:covariance_dynamics} for the full derivation) gives:
+
+\begin{equation}
+\boxed{
+\begin{aligned}
+\frac{\partial \mathcal{F}_i}{\partial \Sigma_i}
+&= \frac{1}{2}
+\left[
+-2 \Sigma_i^{-1}
++ \Sigma_{p,i}^{-1}
++ \sum_j \beta_{ij}
+(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}
+\right] \\
+&\quad + \sum_j \frac{\partial \beta_{ij}}{\partial \Sigma_i}
+D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j).
+\end{aligned}
+}
+\label{eq:Sigma_gradient_main}
+\end{equation}
+
+The structure parallels the mean gradient: $\Sigma_{p,i}^{-1}$ is the prior precision (analogous to weight decay for $\mu$), $\sum_j \beta_{ij}(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$ is attention-weighted precision aggregation that pulls agent $i$'s precision toward its gauge-transported neighbors, and the final term $\sum_j (\partial \beta_{ij}/\partial \Sigma_i)\, D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ is gradient flow through the attention weights --- the covariance analogue of the non-linear activation term in the $\mu$ gradient.
+
+Since $\sum_j \partial \beta_{ij}/\partial \Sigma_i = 0$ (the attention weights sum to unity), the attention weight correction vanishes whenever the KL divergences $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij}q_j)$ are uniform across neighbors. It also vanishes in both the hard-attention ($\tau \to 0$, where $\beta_{ij}$ concentrates on a single neighbor) and uniform-attention ($\tau \to \infty$, where $\partial\beta_{ij}/\partial\Sigma_i \propto 1/\tau \to 0$) limits. Setting this correction aside, the equilibrium condition $\partial \mathcal{F}_i / \partial \Sigma_i = 0$ yields the fixed-point equation:
+
+\begin{equation}
+\Sigma_i^{-1}
+=\frac{1}{2}
+\left[
+\Sigma_{p,i}^{-1}
++ \sum_j \beta_{ij}
+(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}
+\right].
+\label{eq:sigma_fixed_point_main}
+\end{equation}
+
+Each agent's precision is thus determined self-consistently as a $\beta$-weighted combination of its prior precision and its neighbors' transported precisions. In the strong-alignment regime ($\tau \to 0$), the prior term becomes negligible and the precision reduces to $\Sigma_i^{-1} \approx \langle(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}\rangle_\beta$, the attention-weighted average of transported neighbor precisions. This fixed point is an attractor of the gradient dynamics (Appendix~\ref{app:covariance_dynamics}), so covariance alignment $\Sigma_i \approx \Omega_{ij}\Sigma_j\Omega_{ij}^\top$ emerges from the variational dynamics itself rather than as an imposed constraint. This uncertainty channel --- where precision propagates through the attention graph --- has no counterpart in standard transformers and constitutes a concrete prediction of the general theory.
+
+\paragraph{Gauge frame gradient.}
+The gauge frame gradient $\partial \mathcal{F}/\partial \phi_i$ drives learning of the parallel transport operators $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$. Its structure involves the differential of the matrix exponential map and differs for compact ($\mathrm{SO}(N)$) and general ($\mathrm{GL}(K)$) gauge groups; the full derivation is given in Appendix~\ref{app:phi_gradients}. In practice, automatic differentiation through the matrix exponential handles these gradients implicitly.
 
 \subsubsection{Layer-by-Layer Backpropagation.}
 
@@ -2140,27 +2181,33 @@ D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)
 \right].
 \end{align}
 
-The observation term contributes an $O(\Sigma_i^{-1})$ correction that we neglect in the high-precision / strong-alignment regime. Thus
+The observation term contributes an $O(\Sigma_i^{-1})$ correction that we neglect in the high-precision / strong-alignment regime. The alignment term $\sum_j \beta_{ij} D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ requires the product rule, since $\beta_{ij} = \mathrm{softmax}_j(-D_{\mathrm{KL}}/\tau)$ depends on $\Sigma_i$ through the KL divergence. Thus
 
 \begin{equation}
 \boxed{
+\begin{aligned}
 \frac{\partial \mathcal{F}_i}{\partial \Sigma_i}
-=\frac{1}{2}
+&=\frac{1}{2}
 \left[
 -2 \Sigma_i^{-1}
 + \Sigma_{p,i}^{-1}
 + \sum_j \beta_{ij}
 (\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}
-\right].
+\right] \\
+&\quad + \sum_j \frac{\partial \beta_{ij}}{\partial \Sigma_i}
+D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j).
+\end{aligned}
 }
 \label{eq:Sigma_gradient_final}
 \end{equation}
+
+The first line contains the ``direct'' gradient terms (differentiating each $K_{ij}$ at fixed $\beta_{ij}$). The second line is the attention weight gradient, analogous to the $\partial \beta_{ij}/\partial \mu_i$ term in the mean gradient. From the softmax structure, $\sum_j \partial \beta_{ij}/\partial \Sigma_i = 0$, so this correction vanishes when the KL divergences are uniform across neighbors, and also in both the $\tau \to 0$ and $\tau \to \infty$ limits.
 
 Because $\sum_j \beta_{ij} = 1$, there is no $(1 + \sum_j \beta_{ij})$ prefactor in front of $\Sigma_i^{-1}$.
 
 \subsection{Fixed-Point Equation and Symmetric Solution}
 
-At equilibrium, we set $\partial \mathcal{F}_i / \partial \Sigma_i = 0$, giving
+At equilibrium, we set $\partial \mathcal{F}_i / \partial \Sigma_i = 0$. Since $\sum_j \partial \beta_{ij}/\partial \Sigma_i = 0$, the attention weight correction term vanishes whenever the KL divergences $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij}q_j)$ are approximately uniform across neighbors, and also in both the hard-attention ($\tau \to 0$) and uniform-attention ($\tau \to \infty$) limits. In these regimes, the equilibrium condition reduces to
 
 \begin{equation}
 \Sigma_i^{-1}
@@ -2173,7 +2220,7 @@ At equilibrium, we set $\partial \mathcal{F}_i / \partial \Sigma_i = 0$, giving
 \label{eq:sigma_fixed_point_beta}
 \end{equation}
 
-This is a matrix-valued fixed-point equation coupling all agents: each agent’s precision is the $\beta$-weighted combination of its own prior precision and the transported neighbor precisions.
+This is a matrix-valued fixed-point equation coupling all agents: each agent’s precision is the $\beta$-weighted combination of its own prior precision and the transported neighbor precisions. At intermediate temperatures, the attention weight correction provides an additional contribution that couples precision dynamics to the variance of KL divergences across neighbors.
 
 \subsubsection{Homogeneous limit}
 
