@@ -214,7 +214,7 @@ VFE_EM_CONFIG = {
     'max_seq_len': 128,            # Context length N
 
     'learnable_alpha': False,
-    'use_obs_in_vfe': True,
+    'use_obs_in_vfe': False,     # True causes catastrophic overfitting at small K (targets leak into E-step)
     'use_rope': True,  
 
 
