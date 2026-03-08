@@ -11,6 +11,8 @@ Created on Thu Dec 11 19:06:36 2025
 
 This is a **Gauge-Theoretic Transformer** implementing **Variational Free Energy (VFE)** minimization for active inference. The key innovation is replacing learned attention projections (W_Q, W_K) with **information-geometric attention based on KL divergence**, enabling principled belief evolution and uncertainty quantification.
 
+DO NOT USE NEURAL NETWORKS OR ARCHITECTURES
+
 ### Core Insight: VFE as Renormalization Group
 
 The VFE theory has a natural **self-similar structure**: meta-agents satisfy the same definition as agents. This is the defining property of the **Renormalization Group (RG)**.
@@ -24,6 +26,25 @@ Scale ζ=2:  Super-meta-agents...
 ```
 
 ## Architecture
+
+
+                h (hyper-prior)
+                │
+                │ KL(s||h) — regularization
+                ▼
+s_i = self.prior_mu[i]  ◄──── γ·KL(s_i||Ω_ij·s_j) ────► s_j
+(position MODEL,                    (model coupling)
+ slow timescale)
+                │
+                │ p = w·π_token + (1-w)·s
+                ▼
+          p_i (PRIOR)
+                │
+                │ α·KL(q||p)
+                ▼
+     q_i (beliefs, fast)  ◄──── β_ij·KL(q_i||Ω_ij·q_j) ────► q_j
+                                      (attention)
+
 
 ### Key Components
 
@@ -43,125 +64,45 @@ Scale ζ=2:  Super-meta-agents...
 | `learned` | Standard MLP + GELU | Baseline |
 | `variational_gradient_engine` / `VFE` | Fixed-β VFE descent | Standard active inference |
 | `VFE_dynamic` | **Dynamic-β VFE** (β recomputed each step) | RG analysis, meta-agent emergence |
-| `hamiltonian` | Symplectic Hamiltonian dynamics | Energy-conserving evolution |
+
 
 ## Key Equations
 
-### Attention Weights
+### Variational Free Energy
+
+Each agent (token) carries a Gaussian belief `q_i = N(mu_i, Sigma_i)` in a local gauge frame `phi_i`. The full VFE follows the standard FEP hierarchy `h -> s -> p -> q -> observations`:
+
 ```
-β_ij = softmax_j(-KL(q_i || Ω_ij[q_j]) / κ)
+F = sum_i  alpha D_KL(q_i || p_i)                         [self-coupling: beliefs to priors]
+  + sum_i  lambda_h D_KL(s_i || h)                        [hyper-prior: models to centroid]
+  + sum_ij beta_ij D_KL(q_i || Omega_ij q_j)              [belief coupling / attention]
+  + sum_ij gamma_ij D_KL(s_i || Omega_ij s_j)             [model coupling / meta-cognition]
+  - E_q[log p(o | x)]                                     [observation likelihood]
 ```
 
-where:
-- `q_i = N(μ_i, Σ_i)`: Agent i's belief distribution
-- `Ω_ij = exp(φ_i·G)·exp(-φ_j·G)`: Parallel transport operator
-- `κ`: Temperature parameter
+Attention weights emerge from information geometry:
 
-### Free Energy
 ```
-F = α·KL(q||p)                                    # Prior anchoring
-  + λ_β·Σ_{i,j} β_ij·KL(q_i || Ω_ij[q_j])       # Belief alignment
-  + CE(W_out·μ, targets)                          # Discrete observations
+beta_ij = softmax_j(-D_KL(q_i || Omega_ij q_j) / tau)
 ```
+
+where `Omega_ij = exp(phi_i) exp(-phi_j)` is the gauge transport between agents. **No W_Q, W_K, W_V projections are used**---attention arises from the geometry of belief distributions.
+
 
 ### The Nonlinearity (replaces GELU)
 ```
-∂β_ij/∂μ_i = β_ij · [∂KL_ij/∂μ_i - Σ_k β_ik · ∂KL_ik/∂μ_i] / κ
+∂β_ij/∂μ_i = -β_ij · [∂KL_ij/∂μ_i - Σ_k β_ik · ∂KL_ik/∂μ_i] / κ
 ```
 
 This creates **positive feedback**: similar beliefs → higher β → pulled closer → clusters form!
 
-## RG Analysis
+The **most general form** of the theory---no simplifying limits taken. Full non-isotropic covariances, non-trivial gauge transport, KL-divergence attention. **No MLPs, activation functions, learned W_Q/W_K/W_V, or positional encodings.** Only a linear output projection (from K dimensions to 50k) is retained.
 
-### Expected Behavior
+| Configuration | K | Layers | Gauge Mode | Train PPL | Test PPL | Parameters |
+|---|---|---|---|---|---|---|
+| **Best (1 epoch)** | **90** | **1** | **Omega in GL(10)** | **63** | **76** | **~59M** |
 
-If the RG theory is correct, VFE_dynamic should show:
-
-| Observable | Expected Trend | Meaning |
-|------------|----------------|---------|
-| Modularity Q(β) | ↑ Increasing | Block structure emerges |
-| Effective rank | ↓ Decreasing | Fewer effective DOF |
-| KL within clusters | ↓ Decreasing | Meta-agents tighten |
-| KL between clusters | → Stable | Groups remain distinct |
-
-### Usage
-
-```python
-from transformer.ffn import GaugeFFN
-
-# Create VFE_dynamic FFN
-ffn = GaugeFFN(
-    embed_dim=64,
-    hidden_dim=256,
-    generators=generators,  # SO(3) generators
-    mode='VFE_dynamic',
-    n_iterations=100,       # Many steps for RG equilibration
-    kappa=1.0,              # Temperature
-    alpha=0.01,             # Prior anchoring
-    lambda_belief=1.0,      # Belief alignment
-)
-
-# Run with RG analysis
-mu_out, sigma_out, beta_history, rg_flow = ffn.forward_with_rg_analysis(
-    mu=mu,
-    mu_prior=mu_prior,
-    phi=phi,
-    sigma=sigma,
-)
-
-# Check RG behavior
-print(rg_flow.get_rg_trends())
-print(rg_flow.is_rg_behavior())
-```
-
-### Demo Script
-
-```bash
-python experiments/rg_analysis_demo.py --n_iterations 100 --save_plots
-```
-
-## File Structure
-
-```
-VFE-Transformer-Renormalization/
-├── transformer/
-│   ├── attention.py          # KL-based attention
-│   ├── ffn.py                 # Unified FFN dispatcher
-│   ├── variational_ffn.py    # VFE implementations
-│   ├── rg_metrics.py         # RG analysis tools (NEW)
-│   ├── transformer_block.py  # Main transformer block
-│   ├── model.py              # Full LM
-│   └── hamiltonian_ffn.py    # Hamiltonian dynamics
-├── experiments/
-│   └── rg_analysis_demo.py   # RG demo/test script (NEW)
-├── gradients/
-│   └── gradient_engine.py    # Validated gradient computation
-├── math_utils/
-│   ├── generators.py         # SO(3) generators
-│   └── transport.py          # Gauge transport
-└── tests/
-    └── test_transformer.py   # Unit tests
-```
-
-## Important Notes
-
-1. **No W_Q, W_K matrices**: Attention emerges from geometry
-2. **Diagonal covariance mode**: Use `diagonal_covariance=True` for O(K) instead of O(K²)
-3. **GPU support**: All operations are fully vectorized PyTorch
-4. **VFE_dynamic is expensive**: O(n_iterations × N² × K) but theoretically sound
-
-## Testing
-
-```bash
-# Run transformer tests
-pytest tests/test_transformer.py -v
-
-# Run RG metrics tests
-python transformer/rg_metrics.py
-
-# Run full RG analysis
-python experiments/rg_analysis_demo.py
-```
+For context: random-chance perplexity is ~50,000. The K=90, GL(10) configuration achieves **558x improvement** over random chance, substantially exceeding prior results and approaching standard transformer performance with purely geometric attention.
 
 ## Contributing
 
@@ -185,7 +126,6 @@ Apply these when working on this codebase:
 - **Differential Geometry**: SPD manifolds, geodesics, affine-invariant metrics, Lie theory, fiber bundles
 - **Variational Inference**: KL divergence, free energy, ELBO, information geometry
 - **Gauge Theory**: Symmetries, equivariance, parallel transport, irreps
-
 - **Matrix/Linear Algebra**: Eigendecomposition, Kronecker products, matrix exponentials
 
 ## Code Standards
@@ -196,65 +136,18 @@ Apply these when working on this codebase:
 - Check tensor shapes at each step when debugging
 - Verify gradient flow with small-dim smoke tests
 
-## Numerical Stability
-
-- Use log-sum-exp for softmax operations
-- Epsilon padding for matrix inverses
-- Eigenvalue clamping to maintain positive definiteness
-
-## Testing
-
-- Property-based tests for mathematical invariants (symmetry, PSD)
-- NumPy reference implementations for comparison
-- Edge case coverage (single agent, identity matrices, zero inputs)
-
-
-
-### What Works on GPU
-
-| Module | CUDA Status | Notes |
-|--------|-------------|-------|
-| `model.py` | Full | Standard PyTorch nn.Module |
-| `hamiltonian_ffn.py` | Full | Uses `torch.linalg.matrix_exp`, `torch.linalg.eigh` |
-| `attention.py` | Full | Vectorized PyTorch path auto-selected on CUDA |
-| `embeddings.py` | Full | Standard `nn.Embedding`, `register_buffer` |
-| `train.py` | Full | Modern AMP API (`torch.amp.autocast/GradScaler`) |
-
-
-
-
-
-### Known Dependency Issues (Anaconda/Windows)
-
-**PyArrow DLL Error**: The `transformers` package has a broken dependency chain on Anaconda/Windows:
-```
-transformers → sklearn → pyarrow → DLL load failed
-```
-
-**Solution**: Use `tiktoken` instead of `transformers` for BPE tokenization:
-```bash
-# In Anaconda environment (not system Python!)
-pip install tiktoken
-```
-
-The `data.py` module automatically prefers tiktoken when available. It's OpenAI's fast BPE tokenizer with no heavy dependencies.
-
-**Multiple Python Environments**: Spyder (Anaconda) may use a different Python than `pip`. Always install with:
-```python
-import sys
-!{sys.executable} -m pip install tiktoken
-```
 
 ## Communication Style
 
 **Be direct:**
 - State errors and concerns plainly without excessive hedging
 - "This is wrong because X" not "This might potentially be slightly off"
+- Always ultra-think and double check
 
 
 **minimize itemizations when working on manuscripts:**
 - utilize academic prose 
-- minimize the usage of bullet points, itemizations, lists, etc.
+- minimize the usage of bullet points, itemizations, lists, ---, "crucially", "critically", etc.
 
 **Push back:**
 - Challenge gaps in derivations, ask for justification
@@ -335,10 +228,13 @@ L_IB = I(Z; Y) - β · I(Z; X)
 The variational free energy:
 
 ```
-F = α·KL(q||p) + CE(Wμ, y) + λ·Σ_ij β_ij·KL(q_i||Ω_ij·q_j)
-    ─────────   ──────────   ─────────────────────────────
-    compression  prediction        coherence
+F = sum_i  alpha D_KL(q_i || p_i)                         [self-coupling: beliefs to priors]
+  + sum_i  lambda_h D_KL(s_i || h)                        [hyper-prior: models to centroid]
+  + sum_ij beta_ij D_KL(q_i || Omega_ij q_j)              [belief coupling / attention]
+  + sum_ij gamma_ij D_KL(s_i || Omega_ij s_j)             [model coupling / meta-cognition]
+  - E_q[log p(o | x)]                                     [observation likelihood]
 ```
+
 
 | IB Term | VFE Term | Meaning |
 |---------|----------|---------|
@@ -409,18 +305,5 @@ This is a **symmetry-based prior** implementing compression geometrically.
 
 **Key insight**: Emergent block structure in β_ij reveals which tokens carry redundant information about the target and can be safely merged. The dynamics discovers the optimal compression automatically.
 
-
-
-
-
-
-
-## References
-
-- Active Inference: Friston et al.
-- Gauge Theory in ML: Bronstein et al.
-- Renormalization Group: Wilson, Kadanoff
-
-- Information Geometry: Amari
 
 
