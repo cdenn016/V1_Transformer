@@ -1674,9 +1674,10 @@ class VariationalFFNDynamic(nn.Module):
 
         # Phi gradient preconditioning mode
         self.phi_natural_gradient = phi_natural_gradient
-        self._phi_preconditioner = None
-        self._structure_constants = None
-        self._gram = None
+        # Register as buffers so they move to the correct device with the model
+        self.register_buffer('_phi_preconditioner', None)
+        self.register_buffer('_structure_constants', None)
+        self.register_buffer('_gram', None)
         if phi_natural_gradient not in ('clip', 'cartan', 'killing', 'pullback'):
             raise ValueError(f"phi_natural_gradient must be 'clip'|'cartan'|'killing'|'pullback', got '{phi_natural_gradient}'")
         if phi_natural_gradient in ('cartan', 'killing', 'pullback'):
