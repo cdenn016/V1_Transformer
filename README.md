@@ -147,7 +147,6 @@ For context: random-chance perplexity is ~50,000. The K=90, GL(10) configuration
 
 **Emergent semantic structure**: Learned gauge frames develop interpretable categorical organization---punctuation, content words, and letters cluster separately in both belief space (mu) and gauge frame space (phi)---without any category supervision.
 
-**Depth vs. gauge expressiveness**: The 3-layer trivial-gauge model generalizes better, while the 1-layer learned-gauge model fits training data better. Architectural depth and gauge expressiveness are partially substitutable.
 
 ## Installation
 
