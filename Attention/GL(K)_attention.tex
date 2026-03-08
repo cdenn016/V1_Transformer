@@ -47,7 +47,7 @@ Transformer attention is variational inference over information sources. Modelin
 
 From this principle, transformer architectural choices emerge as consequences of the variational geometry: the temperature scaling $1/\sqrt{d_k}$ from dimensional concentration of the KL divergence, layer normalization as the geometric condition for frame-independent inference, multi-head attention as a block-diagonal restriction of the gauge algebra, and causal masking and positional biases from non-uniform attention priors $\pi_j$. Two successive limits (isotropic covariances, flat gauge connection) recover the standard rule $\beta_{ij} \propto \operatorname{softmax}(Q_i K_j^\top / \sqrt{d_k})$, while the $\mathrm{GL}(K)$ invariance of KL divergence implies that $W_Q, W_K$ are themselves gauge transformations with $W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$ parametrizing a learned gauge transport, suggesting that standard transformers already implement gauge-theoretic attention. Gradient descent on the free energy provides a variational interpretation of the transformer training loss, with the chain rule through layered compositions corresponding to variational message-passing.
 
-We validate the unreduced theory by training a $\mathrm{GL}(K)$ gauge transformer on WikiText-103 using only KL divergences, gauge transport, and natural gradient dynamics (without learned attention projections, MLPs, or pointwise activation functions such as ReLU or GELU). The model achieves test perplexity 90.6, surpassing a matched Kneser-Ney 5-gram baseline (PPL 134.8) by $1.49\times$, with emergent semantic structure in the learned gauge frames. We separately validate the degenerate-limit predictions on frozen BERT across 105 diverse passages, confirming quantitative agreement between KL-based and dot-product attention (grand mean $r = 0.804$ at the predicted optimal temperature, 95\% CI $[0.771, 0.838]$, with cross-passage SE $< 0.02$ for all 144 heads). Both architectures operate in the flat bundle limit with trivially vanishing holonomy: a geometric regime we conjecture is matched to the approximately path-independent semantic transport that language requires.
+We validate the unreduced theory by training a $\mathrm{GL}(K)$ gauge transformer on WikiText-103 using only KL divergences, gauge transport, and natural gradient dynamics (without learned attention projections, MLPs, or pointwise activation functions such as ReLU or GELU). The model achieves test perplexity 79.3, surpassing a matched Kneser-Ney 5-gram baseline (PPL 134.8) by $1.49\times$, with emergent semantic structure in the learned gauge frames. We separately validate the degenerate-limit predictions on frozen BERT across 105 diverse passages, confirming quantitative agreement between KL-based and dot-product attention (grand mean $r = 0.804$ at the predicted optimal temperature, 95\% CI $[0.771, 0.838]$, with cross-passage SE $< 0.02$ for all 144 heads). Both architectures operate in the flat bundle limit with trivially vanishing holonomy: a geometric regime we conjecture is matched to the approximately path-independent semantic transport that language requires.
 \end{abstract}
 
 \noindent\textbf{Keywords:} gauge theory, free energy principle, transformer attention, variational inference, information geometry, natural gradient, symmetry breaking, multi-agent systems, $\mathrm{GL}(K)$ invariance
@@ -2499,6 +2499,57 @@ where $\eta_\phi$ is the gauge frame learning rate. No metric correction (Fisher
 \paragraph{$\mathrm{SO}(N)$ retraction.} For compact groups such as $\mathrm{SO}(N)$, the exponential map is periodic. To ensure unique parameterization and avoid branch cuts, we retract to the principal ball $\|\phi\| < \pi - \epsilon$ (with $\epsilon \sim 10^{-2}$) after each update. If $\|\phi\| \geq \pi$, the angle is wrapped modulo $2\pi$ and, if necessary, the axis is flipped via antipodal identification ($\phi \to -\phi$ when $\theta > \pi$), exploiting the fact that $\exp(\phi) = \exp(\phi - 2\pi \hat{n})$ for $\mathrm{SO}(3)$.
 
 \paragraph{$\mathrm{GL}(K)$ updates.} For $\mathrm{GL}(K)$, the matrix exponential is surjective onto $\mathrm{GL}^+(K)$ (the identity component), and no retraction is required beyond standard gradient clipping for numerical stability. In our implementation, automatic differentiation through PyTorch's \texttt{matrix\_exp} handles the $\mathrm{GL}(K)$ differential implicitly.
+
+\section{Variational Gradient Descent: Implementation and Numerical Methods}
+The variational free energy minimization is implemented through a sophisticated gradient descent scheme that respects the intricate geometric structure of the multi-agent system. At each simulation step, the algorithm orchestrates a sequence of coordinated field updates across all dynamic variables—the statistical parameters $(\mu_i, \Sigma_i)$ for both belief and model fibers, the gauge frame fields $(\phi_i, \tilde{\phi}_i)$, and optionally the global connection field $A_\mu$—while maintaining numerical stability on the constrained manifolds where these quantities naturally live.
+
+\subsection{Gradient Accumulation and Energy Terms}
+The core computational pipeline begins with gradient accumulation, where each agent's variational gradient is constructed by summing contributions from multiple energy terms. For the statistical parameters, we compute gradients arising from the self-consistency term $D_{\text{KL}}(q_i \| p_i)$, the belief alignment coupling $\sum_j \beta_{ij} D_{\text{KL}}(q_i \| \Omega_{ij} q_j)$, the model alignment coupling $\sum_j \gamma_{ij} D_{\text{KL}}(s_i \| \tilde{\Omega}_{ij} s_j)$, and the observation likelihood $-\mathbb{E}_{q_i}[\log p(o_i | k_i)]$. Each of these terms contributes a distinct gradient component that must be carefully transported, aggregated, and symmetrized before application.
+
+The alignment terms are particularly intricate, requiring neighbor iteration over all overlapping agent pairs, computation of gauge-transported statistics via the parallel transport operators $\Omega_{ij}$, and evaluation of the KL divergence gradients in the appropriate local frames. These gradients are accumulated into per-agent "inboxes" during a first pass, then drained and combined with self-energy gradients in a second pass to yield the total gradient for each agent.
+
+\subsection{Natural Gradient Descent on the Gaussian Manifold}
+A critical aspect of our implementation is the use of natural gradient descent for the statistical parameters, which exploits the information-geometric structure of the Gaussian manifold. Rather than treating the covariance matrices $\Sigma_i$ as Euclidean variables, we recognize them as points on the manifold of symmetric positive-definite matrices, equipped with the Fisher-Rao metric. The natural gradient at a point $\Sigma$ on this manifold is obtained by applying the inverse Fisher metric to the Euclidean gradient, yielding an intrinsic tangent vector that respects the manifold's curved geometry.
+
+In our vectorized implementation, this transformation is performed via \texttt{apply\_natural\_gradient\_batch}, which computes the whitened gradient
+
+\begin{equation}
+R = \Sigma^{-1/2} (\eta \cdot \nabla) \Sigma^{-1/2}
+\end{equation}
+
+where $\nabla$ is the raw Euclidean gradient and $\eta$ is the learning rate. This whitening procedure ensures that the gradient step is affine-invariant—the same step size produces comparable effects regardless of the current scale of the covariance matrix. Following the computation of the tangent vector $R$, we apply a trust-region constraint by clipping its Frobenius norm to a maximum relative step size $\rho$, typically set to values between $0.1$ and $0.5$. This prevents excessively large updates that could destabilize the manifold structure or lead to ill-conditioned covariances.
+
+\subsection{Manifold Retraction for Covariance Matrices}
+The actual manifold retraction—the process of mapping the tangent vector back to a valid point on the manifold—is performed using the affine-invariant exponential map by default. The exponential map is computed as
+
+\begin{equation}
+\Sigma_{k+1} = \Sigma_k^{1/2} \exp(R) \Sigma_k^{1/2},
+\end{equation}
+
+where the matrix exponential $\exp(R)$ is evaluated via eigendecomposition: $R = U \Lambda U^\top$ yields $\exp(R) = U \exp(\Lambda) U^\top$ with component-wise exponentials applied to the eigenvalues. This procedure is provably SPD-preserving provided $\Sigma_k$ is SPD and $R$ is symmetric, which our implementation guarantees through explicit symmetrization at multiple stages.
+
+Additional safeguards include post-retraction sanitization via
+\texttt{sanitize\_sigma}, which symmetrizes the result, raises on any
+floating-point anomalies (NaNs), and applies a spectral floor to the
+eigenvalues to ensure they remain above a minimum threshold
+$\epsilon_{\mathrm{SPD}}\!\sim\!10^{-8}$. This spectral regularization is
+essential for preventing numerical collapse of the covariance matrices
+during prolonged gradient descent, particularly in regions where the
+free-energy landscape becomes very flat.
+
+\subsection{Gauge Frame Dynamics on $\mathrm{SO}(3)$}
+For the gauge frame fields $\phi_i$ and $\tilde{\phi}_i$, which live in the Lie algebra $\mathfrak{so}(3)$, a different geometric structure must be respected. These fields parameterize the local gauge frames as $U_i = \exp(\phi_i)$, and their dynamics are governed by gradients computed via the induced Fisher metric on the group manifold. The gradients are obtained by accumulating contributions from the self KL divergences, the alignment terms, and any optional (disabled) cross-fiber couplings, each of which produces a co-vector in the dual of the Lie algebra.
+
+These co-vectors are computed using the differential of the matrix exponential map, which relates infinitesimal variations $\delta \phi$ to variations in the group element via
+
+\begin{equation}
+\delta(\exp \phi) = \exp(\phi) \cdot d\exp_\phi(\delta \phi),
+\end{equation}
+
+where $d\exp_\phi$ is the derivative of the exponential map at $\phi$. Our implementation caches the matrix-valued operator $d\exp^{-1}$ (implemented via the Baker-Campbell-Hausdorff formula truncated at fourth order) and uses it to project co-vectors back to tangent vectors in the algebra. The Fisher metric inverse, computed via \texttt{inverse\_fisher\_metric\_field}, provides a natural Riemannian structure that preconditions these gradients, accounting for the non-flat geometry of $\mathrm{SO}(3)$.
+
+Once the gradient direction is determined, we apply a step with learning rate $\eta_\phi$ (typically $10^{-1}$ to $10^{-2}$), forming a candidate update $\phi_{\text{cand}} = \phi + \delta \phi$. However, the Lie algebra $\mathfrak{so}(3)$ has a natural periodic boundary—angles wrap at $\pm \pi$—and numerical drift can cause $\phi$ to wander outside the principal domain. To prevent this, we apply a retraction via \texttt{retract\_phi\_principal}, which reflects vectors that exceed the boundary back into the fundamental domain, then slightly nudges them away from the boundary via a small margin (typically $10^{-2}$) to avoid numerical instability near the critical points where the exponential map degenerates.
+
 
 \paragraph{Gradient validation.} All gauge frame gradient implementations are validated against finite-difference approximations $(\partial \mathcal{F}/\partial \phi_i^a \approx [\mathcal{F}(\phi_i + \epsilon e_a) - \mathcal{F}(\phi_i - \epsilon e_a)]/(2\epsilon))$ with relative error $< 10^{-5}$.
 
