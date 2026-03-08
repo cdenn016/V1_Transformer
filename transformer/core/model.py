@@ -803,6 +803,7 @@ class GaugeTransformerLM(nn.Module):
                 mask=mask,
                 targets=targets if is_final else None,  # Only final layer gets observations
                 W_out=self.out_proj.weight if hasattr(self.out_proj, 'weight') else None,
+                token_ids=token_ids,  # Required for PriorBank lookup
             )
 
             if block.evolve_sigma and sigma_ffn is not None:
@@ -812,6 +813,10 @@ class GaugeTransformerLM(nn.Module):
                 mu_q = mu_q + mu_ffn
             else:
                 mu_q = mu_ffn
+
+            # Propagate updated phi to next layer (critical when evolve_phi=True)
+            if phi_ffn is not None:
+                phi = phi_ffn
 
         # Final norm
         mu_q = self.transformer.final_norm(mu_q)
@@ -961,6 +966,7 @@ class GaugeTransformerLM(nn.Module):
                 targets=targets if is_final else None,
                 W_out=self.out_proj.weight if hasattr(self.out_proj, 'weight') else None,
                 return_beta_history=is_final,  # Only final layer tracks VFE iterations
+                token_ids=token_ids,  # Required for PriorBank lookup
             )
 
             if is_final:
@@ -975,6 +981,10 @@ class GaugeTransformerLM(nn.Module):
                 mu_q = mu_q + mu_ffn
             else:
                 mu_q = mu_ffn
+
+            # Propagate updated phi to next layer (critical when evolve_phi=True)
+            if phi_ffn is not None:
+                phi = phi_ffn
 
         # Final norm
         mu_q = self.transformer.final_norm(mu_q)
