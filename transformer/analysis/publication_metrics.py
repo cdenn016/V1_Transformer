@@ -706,7 +706,7 @@ class PublicationFigures:
                 'Lower entropy = sharper attention (focused). Higher entropy = uniform attention (diffuse).',
                 ha='center', fontsize=9, style='italic')
 
-        fig.savefig(self.save_dir / f"{save_name}.pdf", bbox_inches='tight')
+        
         fig.savefig(self.save_dir / f"{save_name}.png", dpi=300, bbox_inches='tight')
 
         return fig
