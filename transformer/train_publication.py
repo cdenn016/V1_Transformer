@@ -132,9 +132,6 @@ STANDARD_CONFIG = {
     'max_seq_len': 128,
     'n_heads': 8,                 # 320/8 = 40 per head ✓
 
-
-   
-
     # Training
     'batch_size': 16,          # 16 × 128 = 2048 tokens/step (standard for small models)
     'use_amp': False,
@@ -161,9 +158,9 @@ STANDARD_CONFIG = {
     'phi_lr': 0.0001,
     'ffn_lr': 3e-4,
 
-    # Free energy weights (NOT USED in standard mode)
+    # Free energy weights (NOT USED in standard mode, but required by FastTrainingConfig)
     'alpha': 0,
-    'beta': 0,
+    'beta': 0,                    # → lambda_beta in loss (0 = off for standard)
     'lambda_gamma': 0,
     'kappa_gamma': 1.0,
 
@@ -171,7 +168,6 @@ STANDARD_CONFIG = {
     'weight_decay': 0.01,
     'dropout': 0.1,
     'grad_clip': 1.0,
-    'phi_grad_clip': 0.1,
 
     # Logging
     'log_interval': 1000,
@@ -242,11 +238,7 @@ VFE_EM_CONFIG = {
                                   # When True: φ evolves via ∂F/∂φ at each VFE iteration
                                   # When False: φ only updated via backprop (M-step)
                                   
-    'sigma_softmax_coupling': True,  # Enable ∂β/∂Σ softmax coupling                       
-       
-
-
-                           
+    'sigma_softmax_coupling': True,  # Enable ∂β/∂Σ softmax coupling
     'diagonal_covariance': True,
     'use_positional_embedding': False,
     'pos_encoding_mode': 'none',
@@ -273,24 +265,25 @@ VFE_EM_CONFIG = {
     'phi_lr':    0.005,
     'ffn_lr':    0.05 ,
 
-    # Free energy weights
-    'alpha':        0.1,                  # Self-consistency in training loss
-    'alpha_phi':    0.01,                     # Gauge prior: (α_φ/2)||φ||² mass term (0 = disabled)
-    'beta':         0,                    # Belief alignment in training loss
-    'lambda_gamma': 0,            # Model alignment
-    'lambda_hyper': 0,
-    'lambda_beta':  0,
+    # Free energy loss weights (see compute_free_energy_loss in train.py)
+    # NOTE: config['beta'] maps to the lambda_beta parameter in compute_free_energy_loss().
+    # This is the belief coupling weight Σ β_ij·KL(q_i||Ω_ij q_j) in the TRAINING LOSS,
+    # NOT the attention weights β_ij used inside VFE dynamics. Confusing but entrenched.
+    'alpha':        0.1,          # KL(q||p) self-consistency weight
+    'alpha_phi':    0.01,         # Gauge prior: (α_φ/2)||φ||² mass term (0 = disabled)
+    'beta':         0,            # → lambda_beta in loss: belief alignment weight (0 = off)
+    'lambda_gamma': 0,            # Model coupling: Σγ_ij·KL(s_i||Ω s_j) (0 = off)
+    'lambda_hyper': 0,            # Hyper-prior: KL(s_i||h) models to centroid (0 = off)
+    'kappa_gamma':  1,            # Temperature for γ_ij coupling weights
     
-    'kappa_gamma':  1,
-    
-    'ffn_lambda_belief': 1,
-    'ffn_alpha': 1,
-    
+    # VFE E-step internal weights (inside VariationalFFNDynamic, NOT the training loss)
+    'ffn_lambda_belief': 1,       # Belief alignment inside VFE iterations
+    'ffn_alpha': 1,               # Prior coupling inside VFE iterations
+
     # Regularization
     'weight_decay': 0.01,
     'dropout':      0,
     'grad_clip':    1.0,
-    'phi_grad_clip': 0.1,
 
     'use_layernorm': True,      # Critical!
     'use_residual':  True,       # Gradient flow
@@ -473,17 +466,17 @@ PURE_FEP_CONFIG = {
     'ffn_lr': 0.01,               # Not used in pure FEP
 
     # Free energy weights (used inside VFE dynamics)
-    'alpha': 0.1,                 # Self-consistency (lower for stability)
-    'beta': 1.0,                  # Belief alignment
+    # NOTE: config['beta'] maps to lambda_beta in compute_free_energy_loss()
+    'alpha': 0.1,                 # KL(q||p) self-consistency (lower for stability)
+    'beta': 1.0,                  # → lambda_beta: belief alignment weight
     'lambda_gamma': 0,
     'kappa_gamma': 1.0,
-    'lambda_obs': 1.0,            # Observation term weight
+    'lambda_obs': 1.0,            # Observation term weight (pure FEP specific)
 
     # Regularization
     'weight_decay': 0.0,          # No weight decay for P-flow
     'dropout': 0.0,               # No dropout for P-flow
     'grad_clip': 1.0,
-    'phi_grad_clip': 0.1,
 
     # Logging
     'log_interval': 100,
@@ -1145,11 +1138,12 @@ class PublicationTrainer(FastTrainer):
                         input_ids,
                         target_ids,
                         alpha=self.config.alpha,
-                        lambda_beta=self.config.beta,
+                        lambda_beta=self.config.beta,  # config['beta'] → training loss belief coupling
                         lambda_gamma=self.config.lambda_gamma,
                         kappa_gamma=self.config.kappa_gamma,
+                        lambda_hyper=self.config.lambda_hyper,
                         pad_token_id=self.pad_token_id,
-                        use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
+                        use_obs_in_vfe=self.config.use_obs_in_vfe,
                     )
             # Scaled backward
             self.scaler.scale(loss).backward()
@@ -1169,12 +1163,13 @@ class PublicationTrainer(FastTrainer):
                     input_ids,
                     target_ids,
                     alpha=self.config.alpha,
-                    lambda_beta=self.config.beta,
+                    lambda_beta=self.config.beta,  # config['beta'] → training loss belief coupling
                     lambda_gamma=self.config.lambda_gamma,
                     kappa_gamma=self.config.kappa_gamma,
+                    lambda_hyper=self.config.lambda_hyper,
                     pad_token_id=self.pad_token_id,
-                    use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
-                    alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
+                    use_obs_in_vfe=self.config.use_obs_in_vfe,
+                    alpha_phi=self.config.alpha_phi,
                 )
             loss.backward()
 
@@ -1965,9 +1960,18 @@ def run_single_experiment(
         weight_decay=config['weight_decay'],
         grad_clip=config['grad_clip'],
 
+        # Free energy loss weights
         alpha=config['alpha'],
-        beta=config['beta'],
+        beta=config['beta'],             # → lambda_beta in compute_free_energy_loss
         lambda_gamma=config['lambda_gamma'],
+        lambda_hyper=config.get('lambda_hyper', 0.0),
+        use_obs_in_vfe=config.get('use_obs_in_vfe', False),
+
+        # Gauge geometry: phi gradient control
+        alpha_phi=config.get('alpha_phi', 0.0),
+        use_slk_projection=config.get('use_slk_projection', False),
+        use_killing_form=config.get('use_killing_form', False),
+        killing_form_sym_dampening=config.get('killing_form_sym_dampening', 0.1),
 
         log_interval=config['log_interval'],
         eval_interval=config['eval_interval'],
