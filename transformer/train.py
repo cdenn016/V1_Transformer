@@ -434,11 +434,10 @@ def compute_free_energy_loss(
     VariationalFFN during the forward pass, controlled by ffn_alpha and
     ffn_lambda_belief. This function computes the TRAINING LOSS, which is:
 
-        L = CE  (when all auxiliary weights are 0)
+        L = CE + α · Σ_i KL(q_i || p_i)
 
-    Optional auxiliary terms (off by default) add VFE-inspired regularization
-    to the training loss for experimental use:
-        + α · Σ_i KL(q_i || p_i)                      [Self-coupling]
+    The α term (default 0.1) provides sigma regularization by pulling
+    beliefs back toward priors. Remaining auxiliary terms are off by default:
         + λ_β · Σ_{i,j} β_ij · KL(q_i || Ω_{ij}q_j)  [Belief coupling]
         + λ_γ · Σ_{i,j} γ_ij · KL(s_i || Ω_{ij}s_j)  [Model coupling]
         + λ_h · Σ_i KL(s_i || h)                      [Hyper-prior]
