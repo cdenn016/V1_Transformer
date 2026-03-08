@@ -1213,10 +1213,9 @@ def compute_natural_gradient_gpu(
     else:
         # Full covariance: matrix multiplication
         nat_grad_mu = torch.einsum('bnij,bnj->bni', sigma_q, grad_mu)
-        # For sigma, use diagonal approximation for simplicity
-        # Use .clone() after diagonal to avoid view-related gradient issues
-        sigma_diag = torch.diagonal(sigma_q, dim1=-2, dim2=-1).clone()
-        nat_grad_sigma = 0.5 * sigma_diag.unsqueeze(-1) * sigma_diag.unsqueeze(-2) * grad_sigma
+        # Full Fisher natural gradient: δΣ = 0.5 * Σ @ ∇_Σ @ Σ
+        # This is gauge-invariant: under Σ → AΣA^T, δΣ → A(δΣ)A^T
+        nat_grad_sigma = 0.5 * torch.einsum('bnij,bnjk,bnkl->bnil', sigma_q, grad_sigma, sigma_q)
 
     return nat_grad_mu, nat_grad_sigma
 
@@ -1235,15 +1234,21 @@ def retract_spd_torch(
     """
     SPD-preserving retraction for covariance matrices (PyTorch GPU).
 
-    Uses exponential map with WHITENED trust region (like retraction.py).
-    The whitening normalizes out the σ² scaling in natural gradients,
-    preventing runaway growth.
+    Uses the affine-invariant exponential map on the SPD manifold:
+        R = Σ^{-1/2} (η · ΔΣ) Σ^{-1/2}     (whitened tangent, Eq. 164)
+        Σ_{k+1} = Σ^{1/2} exp(R) Σ^{1/2}     (exponential map, Eq. 165)
+
+    This is gauge-invariant: for any invertible A, the retraction of
+    A Σ A^T along A ΔΣ A^T equals A Σ_{new} A^T.
+
+    The exponential map is provably SPD-preserving: exp(R) is SPD for any
+    symmetric R, and congruence by Σ^{1/2} preserves SPD.
 
     Args:
         Sigma: SPD matrices, shape (B, N, K, K) or (B*N, K, K)
         delta_Sigma: Symmetric tangent vectors, same shape as Sigma
-        step_size: Learning rate τ (already applied to delta_Sigma typically)
-        trust_region: Max norm of WHITENED tangent ||Σ^{-1/2} ΔΣ Σ^{-1/2}||_F
+        step_size: Learning rate τ
+        trust_region: Max Frobenius norm of whitened tangent R
         eps: Regularization floor for numerical stability
 
     Returns:
@@ -1264,63 +1269,45 @@ def retract_spd_torch(
     Sigma = 0.5 * (Sigma + Sigma.transpose(-1, -2))
     delta_Sigma = 0.5 * (delta_Sigma + delta_Sigma.transpose(-1, -2))
 
-    # Use DIAGONAL whitening (robust to ill-conditioning, avoids eigh)
-    # This approximates full whitening B = Σ^{-1/2} ΔΣ Σ^{-1/2}
-    # For diagonal-dominant covariances (common case), this is accurate
-    # Key insight: whitening normalizes out the σ² scaling in natural gradients
-    # Use .clone() after diagonal to avoid view-related gradient issues
-    diag_sigma = torch.diagonal(Sigma, dim1=-2, dim2=-1).clone()  # (batch, K)
-    diag_sigma = diag_sigma.clamp(min=eps)
-    inv_sqrt_diag = 1.0 / torch.sqrt(diag_sigma)  # (batch, K)
+    # Eigendecompose Σ to get Σ^{1/2} and Σ^{-1/2}
+    # For small K (typically 3-11), eigendecomposition is fast
+    eigenvalues, eigenvectors = torch.linalg.eigh(Sigma)  # (batch, K), (batch, K, K)
+    eigenvalues = eigenvalues.clamp(min=eps)
 
-    # Diagonal-whitened tangent: B ≈ D^{-1/2} ΔΣ D^{-1/2} where D = diag(Σ)
-    B = (inv_sqrt_diag.unsqueeze(-1) * delta_Sigma) * inv_sqrt_diag.unsqueeze(-2)  # (batch, K, K)
+    sqrt_eig = torch.sqrt(eigenvalues)        # (batch, K)
+    inv_sqrt_eig = 1.0 / sqrt_eig             # (batch, K)
 
-    # Trust region on WHITENED Frobenius norm (this is the key fix!)
+    # Σ^{1/2} = U diag(√λ) U^T,  Σ^{-1/2} = U diag(1/√λ) U^T
+    Sigma_sqrt = eigenvectors * sqrt_eig.unsqueeze(-2) @ eigenvectors.transpose(-1, -2)
+    Sigma_inv_sqrt = eigenvectors * inv_sqrt_eig.unsqueeze(-2) @ eigenvectors.transpose(-1, -2)
+
+    # Whitened tangent: R = Σ^{-1/2} (η · ΔΣ) Σ^{-1/2}  (Eq. 164)
+    R = Sigma_inv_sqrt @ (step_size * delta_Sigma) @ Sigma_inv_sqrt
+    R = 0.5 * (R + R.transpose(-1, -2))  # Ensure symmetric
+
+    # Trust region on whitened Frobenius norm ||R||_F
     if trust_region is not None and trust_region > 0:
-        B_norm = torch.linalg.norm(B, ord='fro', dim=(-2, -1), keepdim=True)  # (batch, 1, 1)
-        scale = torch.clamp(trust_region / (B_norm + eps), max=1.0)
-        B = B * scale
+        R_norm = torch.linalg.norm(R, ord='fro', dim=(-2, -1), keepdim=True)  # (batch, 1, 1)
+        scale = torch.clamp(trust_region / (R_norm + eps), max=1.0)
+        R = R * scale
 
-    # Un-whiten to get scaled delta: ΔΣ_scaled = D^{1/2} B D^{1/2}
-    sqrt_diag = torch.sqrt(diag_sigma)  # (batch, K)
-    delta_scaled = (sqrt_diag.unsqueeze(-1) * B) * sqrt_diag.unsqueeze(-2)  # (batch, K, K)
+    # Exponential map: Σ_{k+1} = Σ^{1/2} exp(R) Σ^{1/2}  (Eq. 165)
+    # Compute exp(R) via eigendecomposition: R = V Λ V^T → exp(R) = V exp(Λ) V^T
+    R_eigenvalues, R_eigenvectors = torch.linalg.eigh(R)
+    R_eigenvalues = R_eigenvalues.clamp(-50.0, 50.0)  # Prevent overflow
+    exp_R = R_eigenvectors * torch.exp(R_eigenvalues).unsqueeze(-2) @ R_eigenvectors.transpose(-1, -2)
 
-    # Linear update with trust-region-scaled delta
-    Sigma_new = Sigma + step_size * delta_scaled
+    # Retraction: Σ_{new} = Σ^{1/2} exp(R) Σ^{1/2}
+    Sigma_new = Sigma_sqrt @ exp_R @ Sigma_sqrt
 
-    # Symmetrize
+    # Symmetrize (numerical safety)
     Sigma_new = 0.5 * (Sigma_new + Sigma_new.transpose(-1, -2))
 
-    # Ensure SPD via iterative regularization
-    # Try Cholesky; if it fails, add regularization and retry
-    # This is more robust than eigendecomposition for ill-conditioned matrices
-    eye_K = torch.eye(K, device=device, dtype=dtype)
-
-    # Compute scale for adaptive regularization (based on diagonal magnitude)
-    # Use .clone() after diagonal to avoid view-related gradient issues
-    diag_mean = torch.diagonal(Sigma_new, dim1=-2, dim2=-1).clone().abs().mean(dim=-1, keepdim=True)  # (batch, 1)
-    base_reg = torch.clamp(diag_mean, min=eps).unsqueeze(-1)  # (batch, 1, 1)
-
-    # Ensure SPD using cholesky_ex for per-matrix diagnostics (avoids
-    # entire-batch fallback when only a few matrices are non-SPD)
-    reg_scales = [eps, 1e-5, 1e-4, 1e-3, 1e-2, 0.1]
-
-    for reg_scale in reg_scales:
-        Sigma_reg = Sigma_new + (reg_scale * base_reg) * eye_K
-        # cholesky_ex returns info codes per matrix (0 = success)
-        _, info = torch.linalg.cholesky_ex(Sigma_reg)
-        if (info == 0).all():
-            # All matrices are SPD
-            Sigma_new = Sigma_reg
-            break
-        elif reg_scale == reg_scales[-1]:
-            # Last attempt: selectively fix only the failing matrices
-            bad_mask = (info != 0)
-            Sigma_new[~bad_mask] = Sigma_reg[~bad_mask]
-            Sigma_new[bad_mask] = Sigma[bad_mask] + 0.1 * base_reg[bad_mask] * eye_K
-            break  # Prevent for/else from overwriting the selective repair
-        # else: try heavier regularization
+    # Post-retraction sanitization: spectral floor on eigenvalues
+    # This prevents numerical collapse during prolonged gradient descent
+    eig_new, vec_new = torch.linalg.eigh(Sigma_new)
+    eig_new = eig_new.clamp(min=eps)
+    Sigma_new = vec_new * eig_new.unsqueeze(-2) @ vec_new.transpose(-1, -2)
 
     # Restore original shape
     if len(original_shape) == 4:

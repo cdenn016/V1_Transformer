@@ -52,11 +52,11 @@ def create_param_groups(
         if not param.requires_grad:
             continue
 
-        # Mean embeddings
-        if 'mu_embed' in name or 'mu_prior' in name:
+        # Mean embeddings (matches both mu_prior and prior_mu naming conventions)
+        if 'mu_embed' in name or 'mu_prior' in name or 'prior_mu' in name:
             mu_params.append(param)
-        # Covariance embeddings
-        elif 'sigma_embed' in name or 'log_sigma' in name or 'sigma_prior' in name:
+        # Covariance embeddings (matches log_sigma, sigma_prior, log_prior_sigma, etc.)
+        elif 'sigma_embed' in name or 'log_sigma' in name or 'sigma_prior' in name or 'prior_sigma' in name or 'log_prior' in name:
             sigma_params.append(param)
         # Gauge frame embeddings
         elif 'phi_embed' in name or 'phi_prior' in name:
