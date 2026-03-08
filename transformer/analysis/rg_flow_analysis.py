@@ -968,7 +968,7 @@ def run_rg_analysis(
             # Forward with attention tracking
             logits, attn_info = model.forward_with_attention(input_ids)
 
-            beta = attn_info['beta']  # (B, H, N, N) or (B, N, N)
+            beta = attn_info['beta']  # (n_layers, B, H, N, N)
             mu = attn_info['mu']      # (B, N, K)
             sigma = attn_info.get('sigma')  # May be None
             phi = attn_info.get('phi')      # (B, N, gauge_dim) if available
@@ -978,8 +978,10 @@ def run_rg_analysis(
                 # Use dummy sigma if not available
                 sigma = torch.ones_like(mu)
 
-            # Average over heads if multi-head
-            if beta.dim() == 4:
+            # Use final layer, average over heads
+            if beta.dim() == 5:
+                beta_avg = beta[-1].mean(dim=1)  # (B, N, N)
+            elif beta.dim() == 4:
                 beta_avg = beta.mean(dim=1)
             else:
                 beta_avg = beta

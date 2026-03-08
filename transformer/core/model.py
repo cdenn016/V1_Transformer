@@ -718,11 +718,12 @@ class GaugeTransformerLM(nn.Module):
         Returns:
             logits: (batch, num_agents, vocab_size) predictions
             attention_info: Dict with:
-                - 'beta': (B, n_heads, N, N) attention weights per head
-                - 'kl': (B, n_heads, N, N) KL divergences per head
+                - 'beta': (n_layers, B, n_heads, N, N) attention weights per head per layer
+                - 'kl': (n_layers, B, n_heads, N, N) KL divergences per head per layer
                 - 'mu': (B, N, K) final belief means
                 - 'sigma': (B, N, K, K) final covariances
                 - 'phi': (B, N, 3) final gauge frames
+                - 'n_layers': int number of layers
         """
         batch_size, num_agents = token_ids.shape
         device = token_ids.device
@@ -767,65 +768,63 @@ class GaugeTransformerLM(nn.Module):
         else:
             cached_head_transports = None
 
-        # Forward through transformer blocks (all but last without attention tracking)
-        # Intermediate layers: blind belief propagation + alignment only (no observations).
+        # Forward through ALL transformer blocks WITH attention tracking.
+        # Each layer's beta/kl is captured for visualization.
         # Only the final layer gets targets so its E-step can ground beliefs in observations.
-        for block in self.transformer.blocks[:-1]:
-            mu_q, sigma_q, phi = block(
-                mu_q, sigma_q, phi, self.generators, mask, mu_prior,
-                targets=None,  # Intermediate layers: no observations
-                W_out=self.out_proj.weight if hasattr(self.out_proj, 'weight') else None,
+        all_betas = []
+        all_kls = []
+        n_blocks = len(self.transformer.blocks)
+
+        for layer_idx, block in enumerate(self.transformer.blocks):
+            is_final = (layer_idx == n_blocks - 1)
+
+            # Pre-norm + attention with tracking
+            mu_normalized = block.norm1(mu_q)
+            mu_attn, sigma_attn, beta, kl = block.attention(
+                mu_normalized,
+                sigma_q,
+                phi,
+                self.generators,
+                mask=mask,
+                return_attention=True,  # Get β_ij and KL_ij from every layer
                 cached_head_transports=cached_head_transports,
             )
 
-        # Final block WITH attention tracking
-        final_block = self.transformer.blocks[-1]
+            # Store per-layer attention (keep gradients for loss computation)
+            all_betas.append(beta if beta is not None else None)
+            all_kls.append(kl if kl is not None else None)
 
-        # Pre-norm + attention with tracking
-        mu_normalized = final_block.norm1(mu_q)
-        mu_attn, sigma_attn, beta, kl = final_block.attention(
-            mu_normalized,
-            sigma_q,
-            phi,
-            self.generators,
-            mask=mask,
-            return_attention=True,  # Get β_ij and KL_ij
-            cached_head_transports=cached_head_transports,
-        )
+            # Complete block forward (residual + FFN)
+            mu_attn = block.dropout1(mu_attn)
+            if block.use_residual:
+                mu_q = mu_q + mu_attn
+            else:
+                mu_q = mu_attn
 
-        # Complete final block forward (residual + FFN)
-        # Must respect use_residual flag (same logic as block.forward in blocks.py)
-        mu_attn = final_block.dropout1(mu_attn)
-        if final_block.use_residual:
-            mu_q = mu_q + mu_attn
-        else:
-            mu_q = mu_attn
+            if block.evolve_sigma and sigma_attn is not None:
+                sigma_q = sigma_attn
 
-        if final_block.evolve_sigma and sigma_attn is not None:
-            sigma_q = sigma_attn
+            # FFN sublayer
+            mu_normalized = block.norm2(mu_q)
 
-        # FFN sublayer
-        mu_normalized = final_block.norm2(mu_q)
+            mu_ffn, sigma_ffn, phi_ffn = block.ffn(
+                mu=mu_normalized,
+                beta=beta,
+                mu_prior=mu_prior,
+                phi=phi,
+                sigma=sigma_q,
+                mask=mask,
+                targets=targets if is_final else None,  # Only final layer gets observations
+                W_out=self.out_proj.weight if hasattr(self.out_proj, 'weight') else None,
+            )
 
-        # VFE_dynamic FFN returns (mu, sigma, phi) tuple
-        mu_ffn, sigma_ffn, phi_ffn = final_block.ffn(
-            mu=mu_normalized,
-            beta=beta,
-            mu_prior=mu_prior,
-            phi=phi,
-            sigma=sigma_q,
-            mask=mask,
-            targets=targets,
-            W_out=self.out_proj.weight if hasattr(self.out_proj, 'weight') else None,
-        )
-        # Update covariances if evolving
-        if final_block.evolve_sigma and sigma_ffn is not None:
-            sigma_q = sigma_ffn
+            if block.evolve_sigma and sigma_ffn is not None:
+                sigma_q = sigma_ffn
 
-        if final_block.use_residual:
-            mu_q = mu_q + mu_ffn
-        else:
-            mu_q = mu_ffn
+            if block.use_residual:
+                mu_q = mu_q + mu_ffn
+            else:
+                mu_q = mu_ffn
 
         # Final norm
         mu_q = self.transformer.final_norm(mu_q)
@@ -840,9 +839,17 @@ class GaugeTransformerLM(nn.Module):
         # Project to vocabulary
         logits = self.out_proj(mu_q)
 
+        # Stack per-layer attention into (n_layers, B, n_heads, N, N) tensors
+        # Filter out None entries (shouldn't happen, but defensive)
+        valid_betas = [b for b in all_betas if b is not None]
+        valid_kls = [k for k in all_kls if k is not None]
+        stacked_beta = torch.stack(valid_betas, dim=0) if valid_betas else None
+        stacked_kl = torch.stack(valid_kls, dim=0) if valid_kls else None
+
         attention_info = {
-            'beta': beta,      # (B, n_heads, N, N)
-            'kl': kl,          # (B, n_heads, N, N)
+            'beta': stacked_beta,      # (n_layers, B, n_heads, N, N)
+            'kl': stacked_kl,          # (n_layers, B, n_heads, N, N)
+            'n_layers': n_blocks,      # Number of layers
             'mu': mu_q,        # (B, N, K) - evolved beliefs q_i (fast/E-step)
             'sigma': sigma_q,  # (B, N, K, K) or None
             'phi': phi_ffn if phi_ffn is not None else phi,  # (B, N, gauge_dim) - post-FFN phi
@@ -876,11 +883,13 @@ class GaugeTransformerLM(nn.Module):
         Returns:
             logits: (batch, num_agents, vocab_size) predictions
             rg_info: Dict with:
-                - 'beta_history': List of (B, N, N) attention at each VFE step
+                - 'beta_history': List of (B, n_heads, N, N) attention at each VFE step (final layer)
+                - 'all_layer_betas': List of (B, n_heads, N, N) initial attention per layer
                 - 'mu': Final belief means
                 - 'sigma': Final covariances
                 - 'phi': Final gauge frames
                 - 'n_iterations': Number of VFE steps
+                - 'n_layers': Number of transformer layers
         """
         batch_size, num_agents = token_ids.shape
         device = token_ids.device
@@ -922,63 +931,63 @@ class GaugeTransformerLM(nn.Module):
         else:
             cached_head_transports = None
 
-        # Forward through all but last block (no RG tracking needed)
-        for block in self.transformer.blocks[:-1]:
-            mu_q, sigma_q, phi = block(
-                mu_q, sigma_q, phi, self.generators, mask, mu_prior,
-                targets=targets,
-                W_out=self.out_proj.weight if hasattr(self.out_proj, 'weight') else None,
+        # Forward through ALL blocks, capturing initial attention from each layer.
+        # Final block also gets beta_history tracking for VFE iteration evolution.
+        all_layer_betas = []
+        n_blocks = len(self.transformer.blocks)
+        beta_history = None
+
+        for layer_idx, block in enumerate(self.transformer.blocks):
+            is_final = (layer_idx == n_blocks - 1)
+
+            # Pre-norm + attention with tracking
+            mu_normalized = block.norm1(mu_q)
+            mu_attn, sigma_attn, beta, kl = block.attention(
+                mu_normalized, sigma_q, phi, self.generators,
+                mask=mask, return_attention=True,
                 cached_head_transports=cached_head_transports,
             )
 
-        # Final block WITH beta_history tracking
-        final_block = self.transformer.blocks[-1]
+            # Store this layer's initial attention
+            all_layer_betas.append(beta.detach() if beta is not None else None)
 
-        # Pre-norm + attention
-        mu_normalized = final_block.norm1(mu_q)
-        mu_attn, sigma_attn, beta, kl = final_block.attention(
-            mu_normalized, sigma_q, phi, self.generators,
-            mask=mask, return_attention=True,
-            cached_head_transports=cached_head_transports,
-        )
+            # Complete attention sublayer (respect use_residual flag)
+            mu_attn = block.dropout1(mu_attn)
+            if block.use_residual:
+                mu_q = mu_q + mu_attn
+            else:
+                mu_q = mu_attn
 
-        # Complete attention sublayer (respect use_residual flag)
-        mu_attn = final_block.dropout1(mu_attn)
-        if final_block.use_residual:
-            mu_q = mu_q + mu_attn
-        else:
-            mu_q = mu_attn
+            if block.evolve_sigma and sigma_attn is not None:
+                sigma_q = sigma_attn
 
-        if final_block.evolve_sigma and sigma_attn is not None:
-            sigma_q = sigma_attn
+            # FFN sublayer — only final layer gets beta_history tracking
+            mu_normalized = block.norm2(mu_q)
 
-        # FFN sublayer WITH beta_history
-        mu_normalized = final_block.norm2(mu_q)
+            ffn_result = block.ffn(
+                mu=mu_normalized,
+                beta=beta,
+                mu_prior=mu_prior,
+                phi=phi,
+                sigma=sigma_q,
+                mask=mask,
+                targets=targets if is_final else None,
+                W_out=self.out_proj.weight if hasattr(self.out_proj, 'weight') else None,
+                return_beta_history=is_final,  # Only final layer tracks VFE iterations
+            )
 
-        # Call FFN with return_beta_history=True
-        ffn_result = final_block.ffn(
-            mu=mu_normalized,
-            beta=beta,
-            mu_prior=mu_prior,
-            phi=phi,
-            sigma=sigma_q,
-            mask=mask,
-            targets=targets,
-            W_out=self.out_proj.weight if hasattr(self.out_proj, 'weight') else None,
-            return_beta_history=True,  # <-- Key difference!
-        )
+            if is_final:
+                mu_ffn, sigma_ffn, phi_ffn, beta_history = ffn_result
+            else:
+                mu_ffn, sigma_ffn, phi_ffn = ffn_result
 
-        # Unpack result (4 values when return_beta_history=True)
-        mu_ffn, sigma_ffn, phi_ffn, beta_history = ffn_result
+            if block.evolve_sigma and sigma_ffn is not None:
+                sigma_q = sigma_ffn
 
-        # Update covariances if evolving
-        if final_block.evolve_sigma and sigma_ffn is not None:
-            sigma_q = sigma_ffn
-
-        if final_block.use_residual:
-            mu_q = mu_q + mu_ffn
-        else:
-            mu_q = mu_ffn
+            if block.use_residual:
+                mu_q = mu_q + mu_ffn
+            else:
+                mu_q = mu_ffn
 
         # Final norm
         mu_q = self.transformer.final_norm(mu_q)
@@ -997,12 +1006,14 @@ class GaugeTransformerLM(nn.Module):
         n_iterations = getattr(final_block.ffn.variational_ffn, 'n_iterations', 1)
 
         rg_info = {
-            'beta_history': beta_history,  # List of (B, N, N) at each VFE step
+            'beta_history': beta_history,  # List of (B, n_heads, N, N) at each VFE step (final layer)
+            'all_layer_betas': all_layer_betas,  # List of (B, n_heads, N, N) per layer
             'mu': mu_q,
             'sigma': sigma_q,
             'phi': phi_ffn if phi_ffn is not None else phi,
             'n_iterations': n_iterations,
-            'beta_final': beta_history[-1] if beta_history else beta,
+            'n_layers': n_blocks,
+            'beta_final': beta_history[-1] if beta_history else all_layer_betas[-1],
         }
 
         return logits, rg_info

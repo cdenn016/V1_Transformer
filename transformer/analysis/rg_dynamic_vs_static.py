@@ -210,7 +210,10 @@ def analyze_dynamic_rg(
         # (only one point, not a trajectory)
         logits, attn_info = model.forward_with_attention(input_ids, targets)
         beta = attn_info['beta']
-        if beta.dim() == 4:
+        # Use final layer, average over heads
+        if beta.dim() == 5:
+            beta = beta[-1].mean(dim=1)  # (B, N, N)
+        elif beta.dim() == 4:
             beta = beta.mean(dim=1)
 
         # For single-step models, we just have one point
@@ -272,7 +275,10 @@ def analyze_static_rg(
             _, attn_info = model.forward_with_attention(input_ids)
 
             beta = attn_info['beta']
-            if beta.dim() == 4:
+            # Use final layer, average over heads
+            if beta.dim() == 5:
+                beta = beta[-1].mean(dim=1)  # (B, N, N)
+            elif beta.dim() == 4:
                 beta = beta.mean(dim=1)  # Average heads
 
             mod = compute_modularity(beta)

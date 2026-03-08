@@ -1009,34 +1009,37 @@ class PublicationTrainer(FastTrainer):
             if hasattr(self.model, 'forward_with_attention'):
                 _, attn_info = self.model.forward_with_attention(input_ids, targets=None)
                 beta = attn_info.get('beta')
-                kl = attn_info.get('kl')  # Get per-head KL divergences
-                # Average over heads to get aggregate KL matrix
-                kl_matrix = kl.mean(dim=1) if kl is not None else None
+                kl = attn_info.get('kl')
+                n_layers = attn_info.get('n_layers', 1)
 
                 if beta is not None:
-                    # Get shape info
+                    # beta shape: (n_layers, B, n_heads, N, N)
+                    # Handle legacy single-layer format for backward compatibility
                     if beta.dim() == 4:
-                        B, n_heads, N, N = beta.shape
-                    else:
-                        B, N, N = beta.shape
-                        n_heads = 1
-                        beta = beta.unsqueeze(1)  # Add head dimension
+                        # Old format: (B, n_heads, N, N) — wrap in layer dim
+                        beta = beta.unsqueeze(0)
+                        if kl is not None:
+                            kl = kl.unsqueeze(0)
+                        n_layers = 1
+                    elif beta.dim() == 3:
+                        # Very old format: (B, N, N) — no heads, no layers
+                        beta = beta.unsqueeze(0).unsqueeze(2)  # (1, B, 1, N, N)
+                        if kl is not None:
+                            kl = kl.unsqueeze(0).unsqueeze(2)
+                        n_layers = 1
 
-                    beta_np = beta[0].cpu().numpy()  # (n_heads, N, N)
+                    n_layers_actual, B, n_heads, N, _ = beta.shape
 
                     # Get irrep labels for each head
                     try:
                         head_labels = self._get_head_irrep_labels()
                     except (AttributeError, KeyError):
-                        # Fallback if irrep_spec not available
                         head_labels = [f"H{i}" for i in range(n_heads)]
 
                     # Show what sequence we're visualizing
-                    # Prefer decoded text over raw token IDs for readability
                     if hasattr(self, 'tokenizer') and self.tokenizer is not None:
                         try:
                             decoded = self.tokenizer.decode(input_ids[0].tolist())
-                            # Truncate to ~80 chars for a clean title
                             preview = decoded[:80] + ('...' if len(decoded) > 80 else '')
                             seq_info = f"Step {step}, Text: {preview}"
                         except Exception:
@@ -1049,37 +1052,45 @@ class PublicationTrainer(FastTrainer):
                     save_dir.mkdir(parents=True, exist_ok=True)
 
                     # ============================================================
-                    # SAVE INDIVIDUAL HEAD VISUALIZATIONS (NOT AVERAGED!)
+                    # SAVE PER-LAYER, PER-HEAD VISUALIZATIONS (NOT AVERAGED!)
                     # ============================================================
-                    for head_idx in range(n_heads):
-                        fig, ax = plt.subplots(figsize=(8, 6))
+                    for layer_idx in range(n_layers_actual):
+                        beta_layer_np = beta[layer_idx, 0].cpu().numpy()  # (n_heads, N, N)
 
-                        attn_head = beta_np[head_idx]  # (N, N)
-                        attn_plot = attn_head.copy()
-                        np.fill_diagonal(attn_plot, np.nan)  # Mask diagonal
-                        attn_plot = np.log10(np.maximum(attn_plot, 1e-6))  # Log scale
+                        for head_idx in range(n_heads):
+                            fig, ax = plt.subplots(figsize=(8, 6))
 
-                        im = ax.imshow(attn_plot, cmap='viridis', aspect='auto', vmin=-5, vmax=0)
-                        ax.set_xlabel('Key Position (j)')
-                        ax.set_ylabel('Query Position (i)')
+                            attn_head = beta_layer_np[head_idx]  # (N, N)
+                            attn_plot = attn_head.copy()
+                            np.fill_diagonal(attn_plot, np.nan)  # Mask diagonal
+                            attn_plot = np.log10(np.maximum(attn_plot, 1e-6))  # Log scale
 
-                        irrep_label = head_labels[head_idx] if head_idx < len(head_labels) else f"H{head_idx}"
-                        ax.set_title(f'Head {head_idx} ({irrep_label}) - {seq_info}',
-                                    fontsize=10)
-                        plt.colorbar(im, ax=ax, label='log₁₀(β)')
+                            im = ax.imshow(attn_plot, cmap='viridis', aspect='auto', vmin=-5, vmax=0)
+                            ax.set_xlabel('Key Position (j)')
+                            ax.set_ylabel('Query Position (i)')
 
-                        fig.savefig(save_dir / f'attention_step_{step:06d}_head{head_idx}.png',
-                                   dpi=100, bbox_inches='tight')
-                        plt.close(fig)
+                            irrep_label = head_labels[head_idx] if head_idx < len(head_labels) else f"H{head_idx}"
+                            layer_label = f"L{layer_idx}" if n_layers_actual > 1 else ""
+                            title_prefix = f"{layer_label} " if layer_label else ""
+                            ax.set_title(
+                                f'{title_prefix}Head {head_idx} ({irrep_label}) - {seq_info}',
+                                fontsize=10,
+                            )
+                            plt.colorbar(im, ax=ax, label='log\u2081\u2080(\u03b2)')
 
-                    
+                            fig.savefig(
+                                save_dir / f'attention_step_{step:06d}_layer{layer_idx}_head{head_idx}.png',
+                                dpi=100, bbox_inches='tight',
+                            )
+                            plt.close(fig)
+
                     # ============================================================
                     # LOG INFO
                     # ============================================================
                     self._attention_viz_count += 1
                     if self._attention_viz_count == 1:
                         print(f"\n[INFO] Attention patterns saved to: {save_dir}/")
-                        print(f"  Saving per-head visualizations (NOT averaged)")
+                        print(f"  Saving per-layer, per-head visualizations ({n_layers_actual} layers, {n_heads} heads)")
 
         self.model.train()
 

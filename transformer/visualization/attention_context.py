@@ -181,8 +181,12 @@ def visualize_attention_with_labels(model, token_ids, description, token_strs, s
     with torch.no_grad():
         logits, attn_info = model.forward_with_attention(token_ids)
 
-    beta = attn_info['beta']  # (B, n_heads, N, N)
+    beta = attn_info['beta']  # (n_layers, B, n_heads, N, N)
     kl_matrix = attn_info.get('kl_matrix')  # (B, N, N)
+
+    # Use final layer for visualization
+    if beta.dim() == 5:
+        beta = beta[-1]  # (B, n_heads, N, N)
 
     B, n_heads, N, N = beta.shape
 

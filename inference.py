@@ -210,8 +210,8 @@ class GaugeTransformerInference:
             tokens.append(tok_str)
 
         return {
-            'beta': attn_info['beta'][0].cpu(),  # (n_heads, N, N)
-            'kl': attn_info['kl'][0].cpu(),      # (n_heads, N, N)
+            'beta': attn_info['beta'][-1, 0].cpu(),  # (n_heads, N, N) — last layer, first batch
+            'kl': attn_info['kl'][-1, 0].cpu(),      # (n_heads, N, N) — last layer, first batch
             'mu': attn_info['mu'][0].cpu(),      # (N, K)
             'tokens': tokens,
         }
