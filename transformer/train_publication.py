@@ -962,16 +962,12 @@ class PublicationTrainer(FastTrainer):
                 self._cartan_preconditioner = build_cartan_projector(
                     generators, sym_dampening=sym_dampening
                 ).to(self.device)
-                print(f"[INFO] Killing form preconditioning enabled: "
+                print(f"[INFO] Killing form preconditioning enabled (M-step): "
                       f"sym_dampening={sym_dampening} "
                       f"(non-compact directions dampened {1/sym_dampening:.0f}×)")
-
-                # Propagate to VFE layers for E-step phi gradients
-                for block in self.model.transformer.blocks:
-                    vffn = getattr(block.ffn, 'variational_ffn', None)
-                    if vffn is not None and hasattr(vffn, '_cartan_preconditioner'):
-                        vffn._cartan_preconditioner = self._cartan_preconditioner
-                        print(f"[INFO]   → VFE layer E-step phi grads will use Cartan preconditioning")
+                # Note: E-step phi preconditioning is now controlled by
+                # phi_natural_gradient config ('clip'|'cartan'|'killing'|'pullback')
+                # which flows through model → blocks → ffn → VariationalFFNDynamic.
 
             if use_slk:
                 self._slk_trace_vec = build_slk_projector(generators).to(self.device)
