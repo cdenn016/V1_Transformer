@@ -132,15 +132,20 @@ def analyze_single_batch(
         # Forward with attention tracking
         logits, attn_info = model.forward_with_attention(input_ids)
 
-        beta = attn_info['beta']  # (B, H, N, N) or (B, N, N)
+        beta = attn_info['beta']  # (n_layers, B, H, N, N)
         mu = attn_info['mu']      # (B, N, K)
         sigma = attn_info.get('sigma')
 
         if sigma is None:
             sigma = torch.ones_like(mu)
 
-        # Average over heads if multi-head
-        if beta.dim() == 4:
+        # Use final layer, average over heads
+        if beta.dim() == 5:
+            n_heads = beta.shape[2]
+            beta_avg = beta[-1].mean(dim=1)  # (B, N, N)
+            if verbose:
+                print(f"  {beta.shape[0]} layers, {n_heads} heads (using final layer)")
+        elif beta.dim() == 4:
             n_heads = beta.shape[1]
             beta_avg = beta.mean(dim=1)
             if verbose:

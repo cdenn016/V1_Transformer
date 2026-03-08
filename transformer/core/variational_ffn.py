@@ -1987,10 +1987,11 @@ class VariationalFFNDynamic(nn.Module):
                         grad_sigma[:, :, block_start:block_end, block_start:block_end] = grad_sigma_h
                     block_start = block_end
 
-                # Use mean of per-head betas for history tracking
+                # Stack per-head betas into (B, n_heads, N, N) for history tracking
+                # Preserves per-head patterns (averaging destroys them!)
                 if return_beta_history:
-                    beta_avg = torch.stack(beta_heads, dim=0).mean(dim=0)
-                    beta_history.append(beta_avg.detach().clone())
+                    beta_stacked = torch.stack(beta_heads, dim=1)  # (B, n_heads, N, N)
+                    beta_history.append(beta_stacked.detach().clone())
                 # Store last head's beta for phi update (uses alignment loss)
                 beta_current = beta_heads[-1]
 

@@ -273,7 +273,11 @@ def main(checkpoint_path: str = None):
     print("\nComputing attention...")
     with torch.no_grad():
         _, attn_info = model.forward_with_attention(input_ids)
-        beta = attn_info['beta']  # (B, H, N, N)
+        beta = attn_info['beta']  # (n_layers, B, H, N, N)
+
+    # Use final layer for analysis
+    if beta.dim() == 5:
+        beta = beta[-1]  # (B, H, N, N)
 
     print(f"Attention shape: {beta.shape}")
 

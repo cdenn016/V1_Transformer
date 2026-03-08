@@ -92,16 +92,18 @@ def compute_rg_metrics_from_attention(
             - rg/kl_between_mean: KL divergence between clusters (stable = distinct)
             - rg/beta_entropy: Attention distribution entropy
     """
-    beta = attn_info.get('beta')  # (B, n_heads, N, N) or (B, N, N)
+    beta = attn_info.get('beta')  # (n_layers, B, n_heads, N, N)
     mu = attn_info.get('mu')      # (B, N, K)
     sigma = attn_info.get('sigma')  # (B, N, K) or (B, N, K, K)
 
     if beta is None or mu is None:
         return {}
 
-    # Average over heads if multi-head attention
-    if beta.dim() == 4:
-        beta_avg = beta.mean(dim=1)  # (B, N, N)
+    # Use final layer's attention for RG metrics, average over heads
+    if beta.dim() == 5:
+        beta_avg = beta[-1].mean(dim=1)  # (B, N, N) — last layer, head-averaged
+    elif beta.dim() == 4:
+        beta_avg = beta.mean(dim=1)  # (B, N, N) — legacy 4D format
     else:
         beta_avg = beta
 
@@ -468,8 +470,8 @@ def compute_free_energy_loss(
     vfe_targets = targets if use_obs_in_vfe else None
     logits, attn_info = model.forward_with_attention(token_ids, targets=vfe_targets)
 
-    beta = attn_info['beta']    # (B, n_heads, N, N)
-    kl = attn_info['kl']        # (B, n_heads, N, N)
+    beta = attn_info['beta']    # (n_layers, B, n_heads, N, N)
+    kl = attn_info['kl']        # (n_layers, B, n_heads, N, N)
     mu_q = attn_info['mu']      # (B, N, K) - evolved beliefs (fast)
     sigma_q = attn_info['sigma']  # (B, N, K, K) or None
 
@@ -507,7 +509,9 @@ def compute_free_energy_loss(
     # 2. Belief Coupling: λ_β · Σ_ij β_ij · KL(q_i || Ω_ij q_j)
     # =================================================================
     if lambda_beta > 0.0:
-        weighted_kl = beta * kl  # (B, n_heads, N, N)
+        # beta and kl are (n_layers, B, n_heads, N, N) — sum over spatial dims,
+        # then average over layers, batch, and heads for the scalar loss.
+        weighted_kl = beta * kl  # (n_layers, B, n_heads, N, N)
         belief_align_loss = weighted_kl.sum(dim=(-2, -1)).mean()
         K = mu_q.shape[-1]
         dim_scale = math.sqrt(max(K, 1))
@@ -1645,8 +1649,8 @@ def pure_fep_train_step(
         'loss/ce': ce_loss.item(),
         'loss/total': ce_loss.item(),  # No other loss terms in pure FEP
         'perplexity': perplexity,
-        'attention/beta_mean': attn_info['beta'].mean().item(),
-        'attention/kl_mean': attn_info['kl'].mean().item(),
+        'attention/beta_mean': attn_info['beta'][-1].mean().item(),  # Final layer
+        'attention/kl_mean': attn_info['kl'][-1].mean().item(),    # Final layer
         **{f'prior/{k}': v for k, v in prior_stats.items()},
         **{f'embed/{k}': v for k, v in embed_stats.items()},
     }

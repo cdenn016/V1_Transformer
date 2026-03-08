@@ -145,15 +145,15 @@ class TestAttentionPatterns:
             logits, attn_info = model.forward_with_attention(input_ids)
 
         # Get attention weights
-        if 'beta_layers' in attn_info:
-            beta = attn_info['beta_layers'][0]  # First layer
-        elif 'beta' in attn_info:
+        if 'beta' in attn_info:
             beta = attn_info['beta']
         else:
             pytest.skip("No attention weights in output")
 
-        # Handle multi-head case
-        if beta.dim() == 4:  # (B, H, N, N)
+        # Handle multi-layer and multi-head cases
+        if beta.dim() == 5:  # (n_layers, B, H, N, N)
+            beta = beta[-1].mean(dim=1)  # Last layer, average heads
+        elif beta.dim() == 4:  # (B, H, N, N)
             beta = beta.mean(dim=1)  # Average over heads
 
         # Check upper triangle is zero (causal mask)

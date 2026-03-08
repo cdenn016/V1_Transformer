@@ -163,8 +163,8 @@ def main():
         save_path = output_dir / "attention_pattern.pdf"
 
         plot_attention_publication(
-            attn_info['beta'][0].cpu(),
-            attn_info['kl'][0].cpu(),
+            attn_info['beta'][-1, 0].cpu(),  # Last layer, first batch
+            attn_info['kl'][-1, 0].cpu(),    # Last layer, first batch
             tokens,
             save_path=str(save_path),
             title=f"Attention: \"{INPUT_TEXT[:40]}{'...' if len(INPUT_TEXT) > 40 else ''}\"",

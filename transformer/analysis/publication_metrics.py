@@ -1022,6 +1022,9 @@ class PublicationMetrics:
                     _, attn_info = model.forward_with_attention(input_ids, targets=None)
                     beta = attn_info.get('beta')
                     if beta is not None:
+                        # Use final layer for publication figures
+                        if beta.dim() == 5:
+                            beta = beta[-1]  # (B, n_heads, N, N)
                         # Plot with tokens if available
                         if hasattr(self.figures, 'plot_attention_heatmap'):
                             self.figures.plot_attention_heatmap(

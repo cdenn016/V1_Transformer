@@ -125,13 +125,16 @@ def diagnose():
     # Now run the actual forward pass and check attention
     print(f"\n[FORWARD PASS - ATTENTION WEIGHTS]")
     logits, attn_info = model.forward_with_attention(token_ids)
-    beta = attn_info['beta']  # (B, n_heads, N, N)
+    beta = attn_info['beta']  # (n_layers, B, n_heads, N, N)
     kl = attn_info.get('kl_matrix')
 
     print(f"  beta shape: {beta.shape}")
 
-    # Average over heads
-    beta_avg = beta.mean(dim=1)[0].numpy()  # (N, N)
+    # Use final layer, average over heads
+    if beta.dim() == 5:
+        beta_avg = beta[-1].mean(dim=1)[0].numpy()  # (N, N)
+    else:
+        beta_avg = beta.mean(dim=1)[0].numpy()  # (N, N)
 
     print(f"\n[ATTENTION MATRIX] (averaged over heads)")
     print("  (Causal mask applied - upper triangle should be 0)")
