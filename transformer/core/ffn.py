@@ -45,6 +45,7 @@ class GaugeFFN(nn.Module):
         lambda_belief: float = 1.0,
         update_sigma: bool = True,
         compute_sigma_align_grad: bool = True,  # Sigma gradient from alignment term
+        sigma_softmax_coupling: bool = False,  # Include ∂β/∂Σ softmax coupling in sigma gradient
         # Diagonal covariance mode
         diagonal_covariance: bool = False,
         # Pure FEP mode: learning via prior evolution (no backprop)
@@ -120,6 +121,7 @@ class GaugeFFN(nn.Module):
             update_sigma=update_sigma,
             diagonal_covariance=diagonal_covariance,
             compute_sigma_align_grad=compute_sigma_align_grad,
+            sigma_softmax_coupling=sigma_softmax_coupling,
             # Pure FEP mode parameters
             pure_fep_mode=pure_fep_mode,
             max_seq_len=max_seq_len,
