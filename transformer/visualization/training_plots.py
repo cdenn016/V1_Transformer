@@ -183,7 +183,7 @@ def create_basic_plots(metrics: Dict, output_path: Path, start_step: int = 5):
     ax = axes[0, 1]
     belief_align = m.get('train_loss_belief_align', [])
     self_consistency = m.get('train_loss_self_consistency', [])
-    model_align = m.get('train_loss_model_align', [])
+    model_align = m.get('train_loss_model_coupling', [])
 
     belief_data = filter_vals(belief_align)
     self_data = filter_vals(self_consistency)
@@ -461,7 +461,7 @@ def create_publication_figures(metrics: Dict, output_dir: Path, start_step: int 
     ax = axes[1, 1]
     belief = m.get('train_loss_belief_align', [])
     alpha_loss = m.get('train_loss_self_consistency', [])
-    gamma = m.get('train_loss_model_align', [])
+    gamma = m.get('train_loss_model_coupling', [])
 
     belief_clean = [(s, v) for s, v in zip(steps, belief) if v is not None and v > 1e-6]
     alpha_clean = [(s, v) for s, v in zip(steps, alpha_loss) if v is not None and v > 1e-6]

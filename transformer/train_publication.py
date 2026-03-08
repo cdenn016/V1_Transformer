@@ -763,7 +763,7 @@ class PublicationMetricsTracker:
 
             # Losses
             'train_loss_total', 'train_loss_ce', 'train_loss_belief_align',
-            'train_loss_self_consistency', 'train_loss_model_align',
+            'train_loss_self_consistency', 'train_loss_model_coupling',
             'val_loss', 'val_ce',
 
             # Metrics
@@ -821,7 +821,7 @@ class PublicationMetricsTracker:
             'train_loss_ce': metrics.get('train_loss_ce'),
             'train_loss_belief_align': metrics.get('train_loss_belief_align', 0),
             'train_loss_self_consistency': metrics.get('train_loss_self_consistency', 0),
-            'train_loss_model_align': metrics.get('train_loss_model_align', 0),
+            'train_loss_model_coupling': metrics.get('train_loss_model_coupling', 0),
             'val_loss': None,
             'val_ce': None,
 
