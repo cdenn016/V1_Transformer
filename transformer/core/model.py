@@ -455,6 +455,8 @@ class GaugeTransformerLM(nn.Module):
             use_identity_transport=use_identity_transport,
             # Self-attention masking (prevents attention collapse)
             mask_self_attention=config.get('mask_self_attention', False),
+            # Sigma softmax coupling: include ∂β/∂Σ term in sigma gradient
+            sigma_softmax_coupling=config.get('sigma_softmax_coupling', False),
             # Gauge group control
             enforce_orthogonal=config.get('enforce_orthogonal', False),
             # Bayesian precision

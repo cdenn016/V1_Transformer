@@ -114,6 +114,8 @@ class GaugeTransformerBlock(nn.Module):
         use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
         # Self-attention masking (prevents attention collapse)
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
+        # Sigma softmax coupling: include ∂β/∂Σ term in sigma gradient
+        sigma_softmax_coupling: bool = False,
         # Gauge group control
         enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
         # Bayesian precision (learned prior self-coupling)
@@ -269,6 +271,8 @@ class GaugeTransformerBlock(nn.Module):
             chunk_size=ffn_chunk_size,
             # Self-attention masking (same as attention)
             mask_self_attention=mask_self_attention,
+            # Sigma softmax coupling
+            sigma_softmax_coupling=sigma_softmax_coupling,
             # Bayesian precision
             learnable_alpha=ffn_learnable_alpha,
             # Multi-head VFE
@@ -473,6 +477,8 @@ class GaugeTransformerStack(nn.Module):
         use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
         # Self-attention masking (prevents attention collapse)
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
+        # Sigma softmax coupling: include ∂β/∂Σ term in sigma gradient
+        sigma_softmax_coupling: bool = False,
         # Gauge group control
         enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
         # Bayesian precision (learned prior self-coupling)
@@ -575,6 +581,8 @@ class GaugeTransformerStack(nn.Module):
                 use_identity_transport=use_identity_transport,
                 # Self-attention masking
                 mask_self_attention=mask_self_attention,
+                # Sigma softmax coupling
+                sigma_softmax_coupling=sigma_softmax_coupling,
                 # Gauge group control
                 enforce_orthogonal=enforce_orthogonal,
                 # Bayesian precision
