@@ -428,26 +428,21 @@ def compute_free_energy_loss(
     alpha_phi: float = 0.0,       # Gauge prior weight: (α_φ/2) Σ_i ||φ_i||²
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
-    Compute COMPLETE free energy loss with all gauge-theoretic terms.
+    Compute training loss with optional auxiliary VFE regularization terms.
 
-    FEP hierarchy:  h → s → p → q → observations
+    The core VFE inference (belief updates via ∂F/∂q) happens INSIDE the
+    VariationalFFN during the forward pass, controlled by ffn_alpha and
+    ffn_lambda_belief. This function computes the TRAINING LOSS, which is:
 
-    Full Free Energy:
-        F = (1) α · Σ_i KL(q_i || p_i)                      [Self-coupling: beliefs to priors]
-          + (2) λ_h · Σ_i KL(s_i || h)                      [Hyper-prior: models to centroid]
-          + (3) λ_β · Σ_{i,j} β_ij · KL(q_i || Ω_{ij}q_j)  [Belief coupling / attention]
-          + (4) λ_γ · Σ_{i,j} γ_ij · KL(s_i || Ω_{ij}s_j)  [Model coupling / meta-cognition]
-          - (5) E[log p(o|x)]                                [Observation likelihood]
+        L = CE  (when all auxiliary weights are 0)
 
-    Three-level distinction:
-        - q_i: Beliefs (fast/E-step, post-attention)
-        - p_i: Priors (derived from models, constrain beliefs via KL(q||p))
-        - s_i: Models (slow/M-step, embedding params = what backprop updates)
-        - h:   Hyper-prior (centroid of models, prevents memorization)
-
-    Currently p_i = s_i (the embedding output serves as both model and prior).
-    The code maintains the conceptual separation so p = f(s) can be made
-    non-trivial in future work.
+    Optional auxiliary terms (off by default) add VFE-inspired regularization
+    to the training loss for experimental use:
+        + α · Σ_i KL(q_i || p_i)                      [Self-coupling]
+        + λ_β · Σ_{i,j} β_ij · KL(q_i || Ω_{ij}q_j)  [Belief coupling]
+        + λ_γ · Σ_{i,j} γ_ij · KL(s_i || Ω_{ij}s_j)  [Model coupling]
+        + λ_h · Σ_i KL(s_i || h)                      [Hyper-prior]
+        + (α_φ/2) Σ_i ||φ_i||²                        [Gauge prior]
 
     Args:
         model: GaugeTransformerLM with forward_with_attention() method
@@ -635,7 +630,7 @@ def compute_free_energy_loss(
         gauge_prior_loss = torch.tensor(0.0, device=ce_loss.device)
 
     # =================================================================
-    # Total Free Energy (ALL SIX TERMS)
+    # Total Training Loss (CE + optional auxiliary VFE regularizers)
     # =================================================================
     total_loss = (ce_loss + belief_align_loss + self_consistency_loss
                   + model_align_loss + hyper_prior_loss + gauge_prior_loss)
