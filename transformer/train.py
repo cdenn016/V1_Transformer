@@ -636,7 +636,7 @@ def compute_free_energy_loss(
 
     # Compute attention metrics outside the computation graph
     with torch.no_grad():
-        beta_avg = beta.mean(dim=1)  # (B, N, N) - average over heads
+        beta_avg = beta[-1].mean(dim=1)  # (B, N, N) - last layer, average over heads
         beta_safe = beta_avg.clamp(min=1e-10)
         attn_entropy = -(beta_safe * beta_safe.log()).sum(dim=-1).mean()
         attn_concentration = beta_avg.max(dim=-1)[0].mean()
