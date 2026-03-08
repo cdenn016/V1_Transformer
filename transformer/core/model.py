@@ -1003,7 +1003,7 @@ class GaugeTransformerLM(nn.Module):
         logits = self.out_proj(mu_q)
 
         # Get n_iterations from VFE FFN
-        n_iterations = getattr(final_block.ffn.variational_ffn, 'n_iterations', 1)
+        n_iterations = getattr(self.transformer.blocks[-1].ffn.variational_ffn, 'n_iterations', 1)
 
         rg_info = {
             'beta_history': beta_history,  # List of (B, n_heads, N, N) at each VFE step (final layer)
