@@ -1144,6 +1144,7 @@ class PublicationTrainer(FastTrainer):
                         lambda_hyper=self.config.lambda_hyper,
                         pad_token_id=self.pad_token_id,
                         use_obs_in_vfe=self.config.use_obs_in_vfe,
+                        alpha_phi=self.config.alpha_phi,
                     )
             # Scaled backward
             self.scaler.scale(loss).backward()
@@ -2161,13 +2162,16 @@ def run_single_experiment(
                             v_input = v_input.to(device)
                             v_targets = v_targets.to(device)
                             logits, _ = model(v_input)
+                            # Use ignore_index to exclude padding tokens from loss
                             loss = F.cross_entropy(
                                 logits.view(-1, actual_vocab_size),
                                 v_targets.view(-1),
-                                reduction='sum'
+                                reduction='sum',
+                                ignore_index=-100,
                             )
                             val_loss += loss.item()
-                            val_tokens += v_targets.numel()
+                            # Count only non-padding tokens
+                            val_tokens += (v_targets != -100).sum().item()
 
                     val_ce = val_loss / val_tokens if val_tokens > 0 else float('inf')
                     val_ppl = math.exp(min(val_ce, 20))
