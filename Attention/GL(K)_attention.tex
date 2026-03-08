@@ -2348,11 +2348,25 @@ The gauge frames enter the free energy exclusively through the parallel transpor
 \frac{\partial \beta_{ij}}{\partial \phi_i} K_{ij}
 + \beta_{ij} \frac{\partial K_{ij}}{\partial \phi_i}
 \right]
-+ \sum_k \beta_{ki} \frac{\partial K_{ki}}{\partial \phi_i},
++ \sum_k \left[
+\beta_{ki} \frac{\partial K_{ki}}{\partial \phi_i}
++ \sum_l \frac{\partial \beta_{kl}}{\partial \phi_i} K_{kl}
+\right],
 \label{eq:phi_grad_complete}
 \end{equation}
 
-where $K_{ij} \equiv D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$. The first sum captures agent $i$ aligning to others (with the product rule applied to $\beta_{ij} K_{ij}$), while the second sum captures others aligning to $i$ (where $\phi_i$ enters through $\Omega_{ki}$). The coupling weight gradient follows from the softmax structure:
+where $K_{ij} \equiv D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$. The first sum captures agent $i$ aligning to others, with the product rule applied to $\beta_{ij} K_{ij}$. The second sum captures others aligning to $i$: changing $\phi_i$ shifts $K_{ki}$ through $\Omega_{ki} = \exp(\phi_k)\exp(-\phi_i)$, which both directly adjusts the alignment cost (the $\beta_{ki}\,\partial K_{ki}/\partial \phi_i$ term) and redistributes all of agent $k$'s attention weights (the $\sum_l (\partial \beta_{kl}/\partial \phi_i)\, K_{kl}$ term). Since only $K_{ki}$ depends on $\phi_i$ in agent $k$'s softmax, the latter simplifies to:
+
+\begin{equation}
+\sum_l \frac{\partial \beta_{kl}}{\partial \phi_i} K_{kl}
+= -\frac{\beta_{ki}}{\tau}\frac{\partial K_{ki}}{\partial \phi_i}
+\left(K_{ki} - \sum_l \beta_{kl} K_{kl}\right).
+\label{eq:reverse_beta_grad_phi}
+\end{equation}
+
+This correction vanishes when $K_{ki}$ equals agent $k$'s average divergence $\bar{K}_k = \sum_l \beta_{kl} K_{kl}$, or when $\beta_{ki} \to 0$ (agent $k$ does not attend to $i$).
+
+The coupling weight gradient in the first sum follows from the softmax structure:
 
 \begin{equation}
 \frac{\partial \beta_{ij}}{\partial \phi_i} = -\frac{\beta_{ij}}{\tau}\left[
