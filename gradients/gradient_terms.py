@@ -329,10 +329,11 @@ def grad_kl_target(
                       optimize=True)
     grad_Sigma_prime = 0.5 * (term1 - vvT + Sigma_j_t_inv)
     
-    # Transform back: Ω^T grad Ω
+    # Transform back: ∂f/∂Σ_j = Ω^T (∂f/∂Σ_j') Ω
+    # Chain rule for Σ_j' = Ω Σ_j Ω^T gives Ω^T G Ω (not Ω^T G Ω^T)
     grad_Sigma_j = np.einsum('...ji,...jk,...kl->...il',
                             Omega_ij, grad_Sigma_prime,
-                            np.swapaxes(Omega_ij, -1, -2),
+                            Omega_ij,
                             optimize=True)
     grad_Sigma_j = 0.5 * (grad_Sigma_j + np.swapaxes(grad_Sigma_j, -1, -2))
     
