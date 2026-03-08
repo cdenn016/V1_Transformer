@@ -471,6 +471,8 @@ class GaugeTransformerLM(nn.Module):
             # RoPE (Rotary Position Embeddings)
             use_rope=config.get('use_rope', False),
             rope_base=config.get('rope_base', 10000.0),
+            # Phi gradient preconditioning
+            phi_natural_gradient=config.get('phi_natural_gradient', 'clip'),
         )
 
         # =================================================================

@@ -69,6 +69,8 @@ class GaugeFFN(nn.Module):
         # Multi-head VFE: per-block β through VFE iterations
         multihead_vfe: bool = False,  # If True, maintain per-head attention in VFE loop
         per_head_kappa: bool = False,  # If True, learn separate κ_h per head in VFE
+        # Phi gradient preconditioning
+        phi_natural_gradient: str = 'clip',  # 'clip'|'cartan'|'killing'|'pullback'
         # Legacy parameters (ignored, kept for API compatibility)
         **kwargs,
     ):
@@ -143,6 +145,8 @@ class GaugeFFN(nn.Module):
             # Multi-head VFE
             multihead_vfe=multihead_vfe,
             per_head_kappa=per_head_kappa,
+            # Phi gradient preconditioning
+            phi_natural_gradient=phi_natural_gradient,
         )
 
     def forward(

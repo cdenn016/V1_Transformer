@@ -302,6 +302,19 @@ Scale zeta=2:   Super-meta-agents ...
 
 Detected via spectral clustering on the attention matrix with metrics: modularity Q(beta), effective rank, intra/inter-cluster KL divergence.
 
+### Phi Gradient Preconditioning
+
+The gauge frame φ ∈ gl(K) requires geometric gradient preconditioning because the backward pass through `matrix_exp` amplifies non-compact (symmetric) directions exponentially. Four modes are available via `phi_natural_gradient` config:
+
+| Mode | Method | Position-dependent? |
+|------|--------|-------------------|
+| `'clip'` | Norm clipping | No |
+| `'cartan'` | Cartan decomposition (fixed sym dampening) | No |
+| `'killing'` | Killing form metric (no free params) | No |
+| `'pullback'` | Full pullback through exp (exact) | Yes |
+
+The `'pullback'` mode computes the Riemannian metric G_ab(φ) = ⟨Ψ(ad_X)(T_a), Ψ(ad_X)(T_b)⟩ where Ψ(z) = (e^z-1)/z is the dexp Jacobian. This is the theoretically exact natural gradient on the Lie group, automatically compensating for exponential amplification in non-compact directions.
+
 ## Numerical Stability
 
 Key fixes enabling large gauge groups (see `NUMERICAL_STABILITY.md`):

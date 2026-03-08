@@ -1578,6 +1578,8 @@ class VariationalFFNDynamic(nn.Module):
         # Multi-head VFE: maintain per-head β through iterations
         multihead_vfe: bool = False,  # If True, compute separate β_h per irrep block
         per_head_kappa: bool = False,  # If True, learn separate κ_h per head
+        # Phi gradient preconditioning mode
+        phi_natural_gradient: str = 'clip',  # 'clip'|'cartan'|'killing'|'pullback'
     ):
         """
         Initialize dynamic-β VFE FFN.
@@ -1631,8 +1633,29 @@ class VariationalFFNDynamic(nn.Module):
         self.phi_lr = phi_lr
         self.phi_max_norm = phi_max_norm
 
-        # Cartan preconditioning for E-step phi gradients (built lazily)
-        self._cartan_preconditioner = None
+        # Phi gradient preconditioning mode
+        self.phi_natural_gradient = phi_natural_gradient
+        self._phi_preconditioner = None
+        self._structure_constants = None
+        self._gram = None
+        if phi_natural_gradient not in ('clip', 'cartan', 'killing', 'pullback'):
+            raise ValueError(f"phi_natural_gradient must be 'clip'|'cartan'|'killing'|'pullback', got '{phi_natural_gradient}'")
+        if phi_natural_gradient in ('cartan', 'killing', 'pullback'):
+            from transformer.core.gauge_preconditioner import (
+                build_cartan_projector, build_killing_form_preconditioner,
+                build_structure_constants,
+            )
+            if phi_natural_gradient == 'cartan':
+                self._phi_preconditioner = build_cartan_projector(generators)
+                print(f"[VariationalFFNDynamic] φ preconditioning: Cartan (sym_dampening=0.1)")
+            elif phi_natural_gradient == 'killing':
+                self._phi_preconditioner = build_killing_form_preconditioner(generators)
+                print(f"[VariationalFFNDynamic] φ preconditioning: Killing form natural gradient")
+            elif phi_natural_gradient == 'pullback':
+                self._structure_constants = build_structure_constants(generators)
+                self._gram = torch.einsum('aij,bij->ab',
+                                          generators.transpose(-2, -1), generators)
+                print(f"[VariationalFFNDynamic] φ preconditioning: pullback natural gradient (exact)")
 
         # Memory-efficient options
         self.irrep_dims = irrep_dims
@@ -1771,6 +1794,50 @@ class VariationalFFNDynamic(nn.Module):
         alpha = (a0 + K / 2.0) / (b0 + 0.5 * mahal_sq)  # (B, N, 1)
 
         return alpha
+
+    def _precondition_phi_grad(
+        self,
+        grad_phi: torch.Tensor,   # (..., n_gen)
+        phi: torch.Tensor,        # (..., n_gen)
+    ) -> torch.Tensor:
+        """
+        Apply phi gradient preconditioning based on self.phi_natural_gradient mode.
+
+        Modes:
+            'clip': Simple norm clipping to 10.0 (no geometric awareness)
+            'cartan': Cartan decomposition with fixed sym_dampening=0.1
+            'killing': Killing form natural gradient (position-independent, no free params)
+            'pullback': Full pullback metric through exp (position-dependent, exact)
+
+        Args:
+            grad_phi: Raw Euclidean gradient ∂F/∂φ^a
+            phi: Current gauge frame coordinates (needed for 'pullback' mode)
+
+        Returns:
+            Preconditioned gradient, same shape as grad_phi
+        """
+        if self.phi_natural_gradient == 'cartan':
+            from transformer.core.gauge_preconditioner import apply_cartan_preconditioning
+            return apply_cartan_preconditioning(grad_phi, self._phi_preconditioner)
+
+        elif self.phi_natural_gradient == 'killing':
+            from transformer.core.gauge_preconditioner import apply_killing_form_natural_gradient
+            return apply_killing_form_natural_gradient(grad_phi, self._phi_preconditioner)
+
+        elif self.phi_natural_gradient == 'pullback':
+            from transformer.core.gauge_preconditioner import apply_pullback_natural_gradient
+            return apply_pullback_natural_gradient(
+                grad_phi, phi, self.generators,
+                self._structure_constants, self._gram,
+            )
+
+        else:  # 'clip' (default)
+            grad_phi_norm = torch.norm(grad_phi, dim=-1, keepdim=True)
+            return torch.where(
+                grad_phi_norm > 10.0,
+                grad_phi * 10.0 / (grad_phi_norm + 1e-6),
+                grad_phi
+            )
 
     def forward(
         self,
@@ -2212,22 +2279,9 @@ class VariationalFFNDynamic(nn.Module):
                         retain_graph=False,
                     )[0]
 
-                    # Cartan preconditioning: dampen non-compact (symmetric)
-                    # directions of gl(K) that cause gradient explosions through
-                    # matrix_exp backward. Falls back to norm clipping if
-                    # preconditioner is not available.
-                    if self._cartan_preconditioner is not None:
-                        from transformer.core.gauge_preconditioner import apply_cartan_preconditioning
-                        grad_phi = apply_cartan_preconditioning(
-                            grad_phi, self._cartan_preconditioner
-                        )
-                    else:
-                        grad_phi_norm = torch.norm(grad_phi, dim=-1, keepdim=True)
-                        grad_phi = torch.where(
-                            grad_phi_norm > 10.0,
-                            grad_phi * 10.0 / (grad_phi_norm + 1e-6),
-                            grad_phi
-                        )
+                    # Apply phi gradient preconditioning based on mode
+                    grad_phi = self._precondition_phi_grad(
+                        grad_phi, phi_current)
 
                     # Update phi with proper retraction (auto-selects SO(N) or GL(K))
                     # SO(N): trust_region=0.3, bch_order=1 (compact group)
@@ -2330,13 +2384,9 @@ class VariationalFFNDynamic(nn.Module):
                     retain_graph=False,
                 )[0]
 
-                # Clip phi gradient to prevent explosions (especially for GL(K))
-                grad_phi_norm = torch.norm(grad_phi, dim=-1, keepdim=True)
-                grad_phi = torch.where(
-                    grad_phi_norm > 10.0,
-                    grad_phi * 10.0 / (grad_phi_norm + 1e-6),
-                    grad_phi
-                )
+                # Apply phi gradient preconditioning based on mode
+                grad_phi = self._precondition_phi_grad(
+                    grad_phi, phi_current)
 
                 # Proper retraction with trust region (auto-selects SO(N) or GL(K))
                 # SO(N): trust_region=0.3, bch_order=1 (compact group)

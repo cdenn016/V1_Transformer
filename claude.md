@@ -103,6 +103,24 @@ Ours: ∂β_{ij}/∂θ — emerges from differentiating softmax attention:
 
 The **most general form** of the theory---no simplifying limits taken. Full non-isotropic covariances, non-trivial gauge transport, KL-divergence attention. **No MLPs, activation functions, learned W_Q/W_K/W_V, or positional encodings.** Only a linear output projection (from K dimensions to 50k) is retained.
 
+### Phi Gradient Preconditioning
+
+The gauge frame φ lives in a Lie algebra (so(K) or gl(K)). Autograd computes ∂F/∂φ^a correctly via chain rule through `matrix_exp`, but the resulting Euclidean gradient is not the Riemannian natural gradient on the Lie group. For GL(K), the non-compact (symmetric) directions get exponentially amplified through the backward pass of `matrix_exp`, causing gradient instability.
+
+Four modes are available via `phi_natural_gradient` config:
+
+| Mode | Description | Cost | Free Params |
+|------|-------------|------|-------------|
+| `'clip'` (default) | Norm clipping to 10.0 | O(n_gen) | None |
+| `'cartan'` | Cartan decomposition: gl(K) = so(K) ⊕ sym(K), dampens sym by fixed factor | O(n_gen²) | sym_dampening=0.1 |
+| `'killing'` | Killing form metric g̃_ab = 2K·tr(T_a^T T_b) - 2·tr(T_a)·tr(T_b), inverted for natural gradient | O(n_gen²) | None |
+| `'pullback'` | Full pullback metric through exp: G_ab(φ) = ⟨Ψ(ad_X)(T_a), Ψ(ad_X)(T_b)⟩_gram where Ψ(z) = (e^z-1)/z | O(n_gen³/token) | None |
+
+The `'killing'` mode uses the Cartan-involution-modified Killing form, which is positive definite on sl(K) and determined entirely by the Lie algebra structure (no tunable parameters). The `'pullback'` mode computes the position-dependent Riemannian metric, which captures the exponential amplification that the position-independent metrics miss. At φ = 0 both reduce to the Frobenius inner product; at large ||φ|| in symmetric directions, the pullback metric grows exponentially, automatically dampening those gradient components.
+
+For SO(N): All modes are roughly equivalent (compact group, Killing form ∝ identity for orthonormal generators).
+For GL(K): `'pullback'` is the theoretically exact natural gradient; `'killing'` is a cheap principled approximation; `'cartan'` is the pragmatic engineering choice.
+
 ### Multi-Timescale Dynamics
 
 The free energy naturally separates into:

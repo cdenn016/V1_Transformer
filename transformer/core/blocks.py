@@ -130,6 +130,8 @@ class GaugeTransformerBlock(nn.Module):
         # RoPE (Rotary Position Embeddings)
         use_rope: bool = False,  # If True, apply RoPE rotations to μ in attention
         rope_base: float = 10000.0,  # RoPE frequency base
+        # Phi gradient preconditioning
+        phi_natural_gradient: str = 'clip',  # 'clip'|'cartan'|'killing'|'pullback'
     ):
         """
         Initialize gauge transformer block.
@@ -278,6 +280,8 @@ class GaugeTransformerBlock(nn.Module):
             # Multi-head VFE
             multihead_vfe=multihead_vfe,
             per_head_kappa=per_head_kappa,
+            # Phi gradient preconditioning
+            phi_natural_gradient=phi_natural_gradient,
         )
 
         self.norm2 = nn.LayerNorm(embed_dim) if use_layernorm else nn.Identity()
@@ -493,6 +497,8 @@ class GaugeTransformerStack(nn.Module):
         # RoPE (Rotary Position Embeddings)
         use_rope: bool = False,  # If True, apply RoPE rotations to μ in attention
         rope_base: float = 10000.0,  # RoPE frequency base
+        # Phi gradient preconditioning
+        phi_natural_gradient: str = 'clip',  # 'clip'|'cartan'|'killing'|'pullback'
     ):
         """
         Initialize stack of transformer blocks.
@@ -597,6 +603,8 @@ class GaugeTransformerStack(nn.Module):
                 # RoPE
                 use_rope=use_rope,
                 rope_base=rope_base,
+                # Phi gradient preconditioning
+                phi_natural_gradient=phi_natural_gradient,
             )
             for _ in range(n_layers)
         ])
