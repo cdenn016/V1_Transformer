@@ -47,7 +47,6 @@ Date: November 2025
 """
 
 import math
-from math_utils.numerical_monitor import record as _nr
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -359,7 +358,7 @@ def _compute_vfe_gradients_block_diagonal(
             # Regularize and invert (adaptive regularization for numerical stability)
             I_d = torch.eye(d, device=device, dtype=dtype)
             sigma_j_reg = sigma_j_transported + eps * I_d
-            sigma_j_inv = _safe_spd_inv(sigma_j_transported, eps=eps)  # (B, C, N, d, d)
+            sigma_j_inv = _safe_spd_inv(sigma_j_reg, eps=eps)  # (B, C, N, d, d)
 
             # Delta mu for this block (query chunk) - contiguous to avoid view issues
             mu_block_i = mu_block[:, i_start:i_end].contiguous()  # (B, C, d)

@@ -807,8 +807,6 @@ def _compute_kl_matrix_torch(
     # NaNs propagate from matrix_exp overflow when phi grows very large.
     nan_mask = torch.isnan(Sigma_transported_reg).any(dim=-1).any(dim=-1)  # (B, N, N)
     if nan_mask.any():
-        nan_count = nan_mask.sum().item()
-        total = nan_mask.numel()
         _nr("nan_replace")
         Sigma_transported_reg = torch.where(
             nan_mask.unsqueeze(-1).unsqueeze(-1),
@@ -942,7 +940,6 @@ def _transport_gaussian_torch(
     X_src = torch.einsum('a,aij->ij', phi_src, generators)
 
     # Matrix exponential (float64 for GL(K) stability)
-    K = generators.shape[-1]
     exp_dst, _ = stable_matrix_exp_pair(X_dst)
     _, exp_neg_src = stable_matrix_exp_pair(X_src)
     Omega = exp_dst @ exp_neg_src
@@ -2230,6 +2227,7 @@ class IrrepMultiHeadAttention(nn.Module):
                         f"must equal embed_dim={embed_dim}"
                     )
 
+                total_dim = embed_dim
                 if irrep_dims_override is not None:
                     # Cross-head coupling: use super-block dims from merge_coupled_heads.
                     # Generators have been reordered so super-blocks are contiguous.
@@ -2237,7 +2235,6 @@ class IrrepMultiHeadAttention(nn.Module):
                     self.irrep_labels = [f'glk_superblock_{i}' for i in range(len(irrep_dims_override))]
                     self.glk_multihead = True
                     self.glk_d_head = d_head
-                    self.glk_cross_head = True
                     print(f"[GL(K) cross-head] super-blocks={irrep_dims_override}, "
                           f"d_head={d_head}")
                 else:
@@ -2245,7 +2242,6 @@ class IrrepMultiHeadAttention(nn.Module):
                     self.irrep_labels = [f'glk_head_{h}' for h in range(n_heads)]
                     self.glk_multihead = True
                     self.glk_d_head = d_head
-                    self.glk_cross_head = False
                     print(f"[GL(K) multi-head] {n_heads} heads × GL({d_head}), generators per head={d_head}²={d_head**2}")
         else:
             # SO(3) / SO(N) mode: Use irrep decomposition
