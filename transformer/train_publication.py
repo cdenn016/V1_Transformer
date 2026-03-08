@@ -1926,7 +1926,7 @@ def run_single_experiment(
         non_embed_params = model.get_num_params(non_embedding=True)
     else:
         total_params = sum(p.numel() for p in model.parameters())
-        non_embed_params = sum(p.numel() for p in model.parameters() if 'embed' not in str(p))
+        non_embed_params = sum(p.numel() for name, p in model.named_parameters() if 'embed' not in name)
 
     print(f"\nModel Parameters:")
     print(f"  Total:         {total_params:,}")
