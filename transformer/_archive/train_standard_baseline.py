@@ -76,7 +76,7 @@ class StandardMetricsTracker:
 
             # Losses (standard transformer doesn't have free energy components)
             'train_loss_total', 'train_loss_ce', 'train_loss_belief_align',
-            'train_loss_self_consistency', 'train_loss_model_align',
+            'train_loss_self_consistency', 'train_loss_model_coupling',
             'val_loss', 'val_ce',
 
             # Metrics
@@ -120,7 +120,7 @@ class StandardMetricsTracker:
             'train_loss_ce': train_ce,
             'train_loss_belief_align': 0.0,  # N/A for standard
             'train_loss_self_consistency': 0.0,  # N/A for standard
-            'train_loss_model_align': 0.0,  # N/A for standard
+            'train_loss_model_coupling': 0.0,  # N/A for standard
             'val_loss': None,
             'val_ce': None,
 
