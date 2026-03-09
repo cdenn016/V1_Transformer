@@ -109,9 +109,9 @@ class GaugeTransformerConfig:
     tie_embeddings: bool = True
 
     # ── Regularization ────────────────────────────────────────────────
-    dropout: float = 0.1
+    dropout: float = 0.0
     use_layernorm: bool = True
-    use_dropout: bool = True
+    use_dropout: bool = False
     use_residual: bool = True
 
     # ── Derived (computed in __post_init__) ────────────────────────────
