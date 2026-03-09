@@ -86,6 +86,8 @@ Finally, we show that gradient descent on the gauge-equivariant free energy, in 
 \definecolor{framecol}{RGB}{140,90,200}
 \definecolor{basetan}{RGB}{230,220,200}
 \definecolor{baseedge}{RGB}{160,140,110}
+\definecolor{neighborblue}{RGB}{80,140,210}
+\definecolor{neighborred}{RGB}{210,110,100}
 
 % =====================================================================
 % BASE MANIFOLD — gently curved surface
@@ -125,7 +127,27 @@ Finally, we show that gradient descent on the gauge-equivariant free energy, in 
     .. ($(M2)!\t!(M3)$);
 }
 
-\node[below, black!75, font=\small\bfseries] at (4.3,-1.4) {Base manifold $\mathcal{C}$};
+\node[below, black!75, font=\small\bfseries] at (4.3,-1.45) {Base manifold $\mathcal{C}$};
+
+% =====================================================================
+% LOCAL OPEN NEIGHBORHOODS U_i, U_j ON THE BASE — with overlap
+% Drawn as semi-transparent filled ellipses on the surface
+% =====================================================================
+
+% U_i: agent i's local open set (left-center region)
+\filldraw[neighborblue, opacity=0.12, draw=neighborblue!60,
+          line width=0.5pt, densely dashed]
+  (2.8,-0.45) ellipse (2.6 and 0.55);
+\node[neighborblue!80!black, font=\scriptsize] at (1.0,-0.10) {$\mathcal{U}_i$};
+
+% U_j: agent j's local open set (center-right region)
+\filldraw[neighborred, opacity=0.12, draw=neighborred!60,
+          line width=0.5pt, densely dashed]
+  (6.0,-0.25) ellipse (2.8 and 0.55);
+\node[neighborred!80!black, font=\scriptsize] at (8.0,-0.0) {$\mathcal{U}_j$};
+
+% Overlap label
+\node[black!60, font=\scriptsize] at (4.4,-0.75) {$\mathcal{U}_i \cap \mathcal{U}_j$};
 
 % =====================================================================
 % FIBER ANCHOR POINTS — five points along the base surface
@@ -145,7 +167,7 @@ Finally, we show that gradient descent on the gauge-equivariant free energy, in 
 % =====================================================================
 % FIBERS — vertical lines rising from each anchor
 % =====================================================================
-\pgfmathsetmacro{\fh}{5.0}
+\pgfmathsetmacro{\fh}{5.2}
 
 \foreach \c in {C1,C2,C3,C4,C5} {
   \draw[fiberblue!30, densely dashed, line width=0.4pt]
@@ -160,11 +182,11 @@ Finally, we show that gradient descent on the gauge-equivariant free energy, in 
 % SECTION CURVES — agents i and j as smooth sections of the bundle
 %
 % Each agent is a section: a map c ↦ q_i(c) assigning a Gaussian
-% belief in the fiber over EACH point c. The section curve threads
-% through all fibers, taking a value in each one.
+% belief in the fiber over EACH point c. Using plot[smooth] for
+% genuinely smooth interpolation through waypoints.
 % =====================================================================
 
-% --- Section q_i (blue, solid) ---
+% --- Section q_i (blue, solid) — smooth curve via plot ---
 \coordinate (Si1) at ($(C1)+(0,1.6)$);
 \coordinate (Si2) at ($(C2)+(0,2.0)$);
 \coordinate (Si3) at ($(C3)+(0,2.6)$);
@@ -172,36 +194,32 @@ Finally, we show that gradient descent on the gauge-equivariant free energy, in 
 \coordinate (Si5) at ($(C5)+(0,1.8)$);
 
 \draw[sectionblue, line width=1.1pt]
-  (Si1) .. controls ($(Si2)+(-0.4,0.15)$) and ($(Si2)+(0.4,0.1)$) ..
-  (Si2) .. controls ($(Si3)+(-0.6,-0.1)$) and ($(Si3)+(-0.2,0.05)$) ..
-  (Si3) .. controls ($(Si3)+(0.5,0)$) and ($(Si4)+(-0.4,0.15)$) ..
-  (Si4) .. controls ($(Si4)+(0.5,-0.1)$) and ($(Si5)+(-0.4,0.1)$) ..
-  (Si5);
+  plot[smooth, tension=0.55] coordinates {
+    (Si1) (Si2) (Si3) (Si4) (Si5)
+  };
 
-% --- Section q_j (red, dashed) ---
-\coordinate (Sj1) at ($(C1)+(0,3.4)$);
-\coordinate (Sj2) at ($(C2)+(0,3.2)$);
-\coordinate (Sj3) at ($(C3)+(0,3.7)$);
-\coordinate (Sj4) at ($(C4)+(0,4.0)$);
-\coordinate (Sj5) at ($(C5)+(0,3.7)$);
+% --- Section q_j (red, dashed) — smooth curve via plot ---
+\coordinate (Sj1) at ($(C1)+(0,3.6)$);
+\coordinate (Sj2) at ($(C2)+(0,3.3)$);
+\coordinate (Sj3) at ($(C3)+(0,3.8)$);
+\coordinate (Sj4) at ($(C4)+(0,4.2)$);
+\coordinate (Sj5) at ($(C5)+(0,3.8)$);
 
 \draw[sectionred, densely dashed, line width=1.1pt]
-  (Sj1) .. controls ($(Sj2)+(-0.3,-0.05)$) and ($(Sj2)+(0.3,-0.1)$) ..
-  (Sj2) .. controls ($(Sj3)+(-0.6,0.0)$) and ($(Sj3)+(-0.2,0.1)$) ..
-  (Sj3) .. controls ($(Sj3)+(0.5,0.05)$) and ($(Sj4)+(-0.5,-0.1)$) ..
-  (Sj4) .. controls ($(Sj4)+(0.5,-0.05)$) and ($(Sj5)+(-0.4,0.1)$) ..
-  (Sj5);
+  plot[smooth, tension=0.55] coordinates {
+    (Sj1) (Sj2) (Sj3) (Sj4) (Sj5)
+  };
 
 % Section labels (left side, well separated)
 \node[sectionblue, font=\footnotesize, left=4pt] at (Si1) {$q_i(c)$};
 \node[sectionred, font=\footnotesize, left=4pt] at (Sj1) {$q_j(c)$};
 
 % =====================================================================
-% HIGHLIGHT FIBER AT c* — the fourth fiber (C4)
+% HIGHLIGHT FIBER AT c* — the fourth fiber (C4), in the overlap U_i∩U_j
 %
 % At this single point c*, BOTH sections q_i(c*) and q_j(c*) live
 % in the SAME fiber. The transport Ω_ij(c*) acts WITHIN this fiber
-% to align j's frame to i's frame.
+% to align j's frame to i's frame. c* lies in U_i ∩ U_j.
 % =====================================================================
 
 % Highlight the fiber at c*
@@ -244,7 +262,7 @@ Finally, we show that gradient descent on the gauge-equivariant free energy, in 
   \draw[-{Stealth[length=1.8mm]}, framecol, line width=0.7pt]
     (0,0) -- (0,0.55);
 \end{scope}
-\node[framecol!80!black, font=\scriptsize] at ($(Sj4)+(0.7,0.1)$) {$\phi_j$};
+\node[framecol!80!black, font=\scriptsize] at ($(Sj4)+(0.7,0.15)$) {$\phi_j$};
 
 % =====================================================================
 % GAUGE TRANSPORT Ω_ij — acts WITHIN the fiber over c*
@@ -255,59 +273,63 @@ Finally, we show that gradient descent on the gauge-equivariant free energy, in 
 % =====================================================================
 
 % Transported ghost: Ω_ij q_j shown near q_i (now in i's frame, dotted)
-\coordinate (Ghost) at ($(Si4)+(0,0.7)$);
+% Placed 0.8 above q_i, giving space between q_i and ghost
+\coordinate (Ghost) at ($(Si4)+(0,0.8)$);
 \begin{scope}[shift={(Ghost)}, rotate=20]
   \filldraw[gaussred, opacity=0.10] (0,0) ellipse (0.40 and 0.22);
   \draw[sectionred, densely dotted, line width=0.7pt] (0,0) ellipse (0.40 and 0.22);
   \filldraw[sectionred, opacity=0.4] (0,0) circle (1.2pt);
 \end{scope}
+
+% Ghost label — well to the LEFT to avoid green arrow on the right
 \node[sectionred!70!black, font=\scriptsize,
       fill=white, fill opacity=0.9, text opacity=1,
-      inner sep=1.5pt, rounded corners=1pt]
-  at ($(Ghost)+(0.85,0)$) {$\Omega_{ij}\,q_j$};
+      inner sep=1.5pt, rounded corners=1pt, anchor=east]
+  at ($(Ghost)+(-0.55,0)$) {$\Omega_{ij}\,q_j$};
 
-% Transport arrow: curved arc WITHIN the fiber (vertical path),
-% from q_j(c*) down to the ghost near q_i(c*)
+% Transport arrow: curved arc WITHIN the fiber on the RIGHT side,
+% from q_j(c*) down to the ghost near q_i(c*).
+% Pushed further right (1.4) to clear the ghost label and ellipse.
 \draw[-{Stealth[length=2.5mm, width=1.8mm]},
       transportgreen!85!black, line width=1.1pt]
-  ($(Sj4)+(0.45,0)$)
-    .. controls ($(Sj4)+(1.0,-0.35)$) and ($(Ghost)+(1.0,0.35)$)
-    .. ($(Ghost)+(0.45,0)$);
+  ($(Sj4)+(0.5,0)$)
+    .. controls ($(Sj4)+(1.5,-0.5)$) and ($(Ghost)+(1.5,0.5)$)
+    .. ($(Ghost)+(0.5,0)$);
 
-% Transport label — positioned to the right of the arc
+% Transport label — positioned to the right of the arc, well clear
 \node[transportgreen!80!black, font=\scriptsize\bfseries,
       fill=white, fill opacity=0.9, text opacity=1,
-      inner sep=2.5pt, rounded corners=2pt]
-  at ($(Sj4)!0.5!(Ghost)+(1.25,0)$) {$\Omega_{ij}(c^*)$};
+      inner sep=2.5pt, rounded corners=2pt, anchor=west]
+  at ($(Sj4)!0.5!(Ghost)+(1.6,0)$) {$\Omega_{ij}(c^*)$};
 
 % =====================================================================
 % KL DIVERGENCE — between q_i(c*) and transported Ω_ij q_j(c*)
 % Both distributions are now expressed in agent i's frame
-% within the same fiber over c*
+% within the same fiber over c*. Label on the LEFT side.
 % =====================================================================
 
-% Double arrow between q_i and the ghost
+% Double arrow between q_i and the ghost (left side)
 \draw[{Stealth[length=1.5mm]}-{Stealth[length=1.5mm]},
       black!55, line width=0.6pt]
-  ($(Si4)+(-0.5,0.05)$) -- ($(Ghost)+(-0.5,-0.05)$);
+  ($(Si4)+(-0.55,0.05)$) -- ($(Ghost)+(-0.55,-0.05)$);
 
 \node[black!65, font=\scriptsize,
       fill=white, fill opacity=0.9, text opacity=1,
       inner sep=1.5pt, rounded corners=1pt, anchor=east]
-  at ($(Si4)+(-0.6,0.35)$) {$D_{\KL}(q_i \| \Omega_{ij} q_j)$};
+  at ($(Si4)+(-0.65,0.40)$) {$D_{\KL}(q_i \| \Omega_{ij} q_j)$};
 
 \end{tikzpicture}
 \caption{%
 Agent belief sections over the associated bundle
 $\mathcal{E}_q = \mathcal{N} \times_{\rho_q} \mathcal{B}_q$.
-The shaded surface is the base manifold $\mathcal{C}$;
-vertical dashed lines are belief fibers $\mathcal{B}_q \cong \mathbb{R}^K$
-over sampled points.
+The shaded surface is the base manifold $\mathcal{C}$,
+with local open neighborhoods $\mathcal{U}_i$ (blue) and $\mathcal{U}_j$ (red)
+shown as overlapping regions; each agent's section is defined over its own patch.
+Vertical dashed lines are belief fibers $\mathcal{B}_q \cong \mathbb{R}^K$.
 Agents $i$ and $j$ define smooth sections
-$c \mapsto q_i(c)$ and $c \mapsto q_j(c)$
-(solid blue, dashed red),
-each assigning a Gaussian belief in the fiber over every base point.
-At the highlighted fiber over $c^*$,
+$c \mapsto q_i(c)$ (solid blue) and $c \mapsto q_j(c)$ (dashed red),
+each assigning a Gaussian belief in the fiber over every point in its domain.
+At the highlighted fiber over $c^* \in \mathcal{U}_i \cap \mathcal{U}_j$,
 both $q_i(c^*)$ and $q_j(c^*)$ reside in the \emph{same} fiber
 but are expressed in different local gauge frames
 $\phi_i$, $\phi_j$ (purple axes).
@@ -317,11 +339,10 @@ $\Omega_{ij}(c^*) = \exp(\phi_i)\exp(-\phi_j)$
 rotating $q_j$ from $j$'s frame into $i$'s frame
 to produce $\Omega_{ij}\,q_j$ (dotted red ellipse).
 The attention cost $D_{\mathrm{KL}}(q_i \| \Omega_{ij}\,q_j)$
-is then the divergence between same-frame distributions
-within a single fiber.
+is then the divergence between same-frame distributions within a single fiber.
 For transformers ($\dim\mathcal{C} = 0$),
-all tokens share one base point and the entire
-computation occurs within one fiber.
+all tokens share one base point, the neighborhoods collapse to a single point,
+and the entire computation occurs within one fiber.
 }
 \label{fig:bundle_sections_surface}
 \end{figure}
