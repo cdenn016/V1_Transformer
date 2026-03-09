@@ -980,8 +980,18 @@ exactly recovering the standard transformer attention weighting rule.
 The message aggregation rule is:
 
 \begin{equation}
-m_i = \sum_j \beta_{ij} \,\Omega\mu_j.
+m_i = \sum_j \beta_{ij} \,\Omega_{ij}\mu_j.
 \end{equation}
+
+\paragraph{$\mathrm{GL}(K)$ metric correction.}
+For orthogonal gauge transport ($\Omega_{ij} \in \mathrm{SO}(K)$), the above formula is exact since the inner product is preserved under orthogonal maps. For the full $\mathrm{GL}(K)$ gauge, however, the pushforward of the mean under a non-orthogonal transformation requires a metric correction. The KL divergence $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ involves the transported covariance $\tilde{\Sigma}_{ij} = \Omega_{ij} \Sigma_j \Omega_{ij}^\top$, and the Mahalanobis inner product $(u - v)^\top \tilde{\Sigma}^{-1}(u - v)$ defines the natural metric in the transported frame. The corresponding message aggregation that respects this metric is:
+
+\begin{equation}
+m_i = \sum_j \beta_{ij} \,\Omega_{ij}^{-\top} \mu_j,
+\label{eq:glk_metric_aggregation}
+\end{equation}
+
+where $\Omega_{ij}^{-\top} = (\Omega_{ij}^{-1})^\top = (\Omega_{ij}^\top)^{-1}$ is the inverse transpose. For $\mathrm{SO}(K)$, $\Omega^{-\top} = \Omega$ and this reduces to the standard formula. The covariance aggregation analogously becomes $\tilde{\Sigma}_{\mathrm{agg},i} = \sum_j \beta_{ij}[\Omega_{ij}^{-\top} \Sigma_j \Omega_{ij}^{-1} + \Omega_{ij}^{-\top}\mu_j \mu_j^\top \Omega_{ij}^{-1}] - m_i m_i^\top$, using the law of total variance under the mixture weights $\beta_{ij}$. This metric-corrected aggregation ensures that the value computation is consistent with the Mahalanobis geometry used to compute the attention weights, as required by the $\mathrm{GL}(K)$ invariance of the KL divergence (Theorem~\ref{thm:glk_invariance}).
 
 Define a value projection:
 
@@ -1332,6 +1342,16 @@ G_{\text{multi-head}} = \mathrm{GL}(d_{\text{head}})^H \subset \mathrm{GL}(d_k),
 \end{equation}
 
 a $(H \cdot d_{\text{head}}^2)$-dimensional subgroup of the $d_k^2$-dimensional $\mathrm{GL}(d_k)$.
+
+\paragraph{Per-head temperature.}
+Since each head operates on an independent irrep block with its own $\mathrm{GL}(d_{\text{head}})$ gauge transport, the optimal temperature $\tau_a = \kappa_a \sqrt{d_{\text{head}}}$ may differ across heads. Heads encoding different types of structure (e.g., syntactic versus semantic, local versus global) may benefit from sharper or broader attention distributions. In the unreduced framework, each head has a learnable log-temperature $\log \kappa_a$ initialized from the global $\kappa$ and trained jointly with all other parameters. The per-head attention weights become:
+
+\begin{equation}
+\beta_{ij}^{(a)} = \operatorname{softmax}_j\!\left(-\frac{D_{\mathrm{KL}}(q_i^{(a)} \,\|\, \Omega_{ij}^{(a)} q_j^{(a)})}{\kappa_a \sqrt{d_{\text{head}}}}\right),
+\label{eq:per_head_temperature}
+\end{equation}
+
+where $q_i^{(a)}$ denotes the belief projected onto head $a$'s subspace. This is a natural generalization: just as the ALiBi slope $m_a$ is head-dependent (Section~\ref{sec:nonuniform_priors}), the temperature $\kappa_a$ controls the sharpness of each head's attention distribution independently. At initialization ($\kappa_a = \kappa$ for all $a$), this reduces to the standard global temperature. During training, heads that develop sharp, peaked attention patterns (e.g., positional or syntactic heads) typically learn smaller $\kappa_a$, while heads with diffuse contextual patterns learn larger values.
 
 \subsubsection{Geometric Interpretation via Lie Algebra Decomposition.}
 
@@ -2499,6 +2519,61 @@ where $\eta_\phi$ is the gauge frame learning rate. No metric correction (Fisher
 \paragraph{$\mathrm{SO}(N)$ retraction.} For compact groups such as $\mathrm{SO}(N)$, the exponential map is periodic. To ensure unique parameterization and avoid branch cuts, we retract to the principal ball $\|\phi\| < \pi - \epsilon$ (with $\epsilon \sim 10^{-2}$) after each update. If $\|\phi\| \geq \pi$, the angle is wrapped modulo $2\pi$ and, if necessary, the axis is flipped via antipodal identification ($\phi \to -\phi$ when $\theta > \pi$), exploiting the fact that $\exp(\phi) = \exp(\phi - 2\pi \hat{n})$ for $\mathrm{SO}(3)$.
 
 \paragraph{$\mathrm{GL}(K)$ updates.} For $\mathrm{GL}(K)$, the matrix exponential is surjective onto $\mathrm{GL}^+(K)$ (the identity component), and no retraction is required beyond standard gradient clipping for numerical stability. In our implementation, automatic differentiation through PyTorch's \texttt{matrix\_exp} handles the $\mathrm{GL}(K)$ differential implicitly.
+
+\subsection{Gauge Frame Preconditioning for $\mathrm{GL}(K)$}
+\label{sec:glk_preconditioning}
+
+While the basic update~\eqref{eq:phi_update} uses the Euclidean gradient in the Lie algebra, the non-compact structure of $\mathrm{GL}(K)$ introduces a numerical asymmetry that motivates gauge-aware preconditioning. The Lie algebra decomposes via the Cartan involution $\theta(X) = -X^\top$ as:
+
+\begin{equation}
+\mathfrak{gl}(K) = \underbrace{\mathfrak{so}(K)}_{\text{compact (skew-symmetric)}} \;\oplus\; \underbrace{\mathrm{Sym}(K)}_{\text{non-compact (symmetric)}} \;\oplus\; \underbrace{\mathbb{R}}_{\text{center (trace)}},
+\label{eq:cartan_decomposition}
+\end{equation}
+
+where $\mathfrak{so}(K) = \{X : X + X^\top = 0\}$ generates rotations and $\mathrm{Sym}(K) = \{X : X = X^\top, \operatorname{tr} X = 0\}$ generates volume-preserving shears. The critical observation is that these two subspaces have qualitatively different gradient geometry: for the compact directions, $\|d\exp_\phi(T_a)\| = O(1)$ uniformly in $\|\phi\|$, while for the symmetric directions, $\|d\exp_\phi(T_a)\| \sim \exp(\|\phi\|)$. Euclidean gradient descent therefore systematically over-steps in the non-compact directions relative to the compact ones, leading to numerical instability for $\mathrm{GL}(K)$ gauge frames.
+
+We implement four preconditioning strategies of increasing geometric fidelity:
+
+\paragraph{1. Norm clipping (baseline).}
+Simple gradient norm clipping $\tilde{g} = g \cdot \min(1, c/\|g\|)$ with threshold $c$. No geometric awareness; treats all Lie algebra directions uniformly.
+
+\paragraph{2. Cartan preconditioning.}
+Decompose the gradient into compact and non-compact components and selectively dampen the latter. Given Lie algebra generators $\{T_a\}_{a=1}^{n_{\mathrm{gen}}}$ with Gram matrix $G_{ab} = \operatorname{tr}(T_a^\top T_b)$ and symmetric inner product $S_{ab} = \operatorname{tr}(T_a T_b)$, the projector onto the symmetric subspace is:
+
+\begin{equation}
+P_{\mathrm{sym}} = \tfrac{1}{2}G^{-1}(G + S),
+\end{equation}
+
+and the preconditioner is $M = I - (1 - \lambda_{\mathrm{sym}}) P_{\mathrm{sym}}$ with dampening factor $\lambda_{\mathrm{sym}} \in (0, 1)$ (typically $0.1$, corresponding to $10\times$ dampening of symmetric directions). The preconditioned gradient is $\tilde{\nabla}_\phi \mathcal{F} = M \cdot \nabla_\phi \mathcal{F}$.
+
+\paragraph{3. Killing form natural gradient.}
+The Killing form of $\mathfrak{gl}(K)$ is $\kappa(X, Y) = 2K \operatorname{tr}(XY) - 2\operatorname{tr}(X)\operatorname{tr}(Y)$. In the generator basis, this yields the metric:
+
+\begin{equation}
+\tilde{g}_{ab} = 2K \operatorname{tr}(T_a^\top T_b) - 2\operatorname{tr}(T_a)\operatorname{tr}(T_b),
+\label{eq:killing_metric}
+\end{equation}
+
+which is positive definite on $\mathfrak{sl}(K) = \ker(\operatorname{tr})$ and degenerate on the center $\mathbb{R} \cdot I$ (regularized by $\tilde{g} \to \tilde{g} + \epsilon I$ in practice). The natural gradient $\tilde{g}^{-1} \nabla_\phi \mathcal{F}$ has no free parameters: the metric is determined entirely by the algebra structure. This automatically handles the compact/non-compact asymmetry since the Killing form assigns different ``lengths'' to rotations versus shears.
+
+\paragraph{4. Pullback natural gradient (position-dependent).}
+The most geometrically principled approach uses the pullback of the Gram metric through the exponential map. The differential of $\exp$ at $\phi \in \mathfrak{g}$ in direction $T_a$ is:
+
+\begin{equation}
+d\exp_\phi(T_a) = \exp(\phi) \cdot \Psi(\mathrm{ad}_\phi)(T_a), \qquad \Psi(z) = \frac{e^z - 1}{z} = \sum_{k=0}^{\infty} \frac{z^k}{(k+1)!},
+\end{equation}
+
+where $\mathrm{ad}_\phi(X) = [\phi, X]$ is the adjoint action and $\Psi$ is the inverse Bernoulli function. The pullback metric on $\mathfrak{g}$ is:
+
+\begin{equation}
+\mathcal{G}_{ab}(\phi) = \left\langle \Psi(\mathrm{ad}_\phi)(T_a),\; \Psi(\mathrm{ad}_\phi)(T_b) \right\rangle_G,
+\label{eq:pullback_metric}
+\end{equation}
+
+where $\langle X, Y \rangle_G = \operatorname{tr}(X^\top Y)$ is the Frobenius inner product. At $\phi = 0$, $\mathcal{G}_{ab}(0) = G_{ab}$ (the Gram matrix). For large $\|\phi\|$ in symmetric directions, $\mathcal{G}$ grows exponentially, automatically compensating the exponential amplification of $d\exp$ in the non-compact sector. The natural gradient $\mathcal{G}(\phi)^{-1} \nabla_\phi \mathcal{F}$ is position-dependent and exact (up to series truncation of $\Psi$), requiring the structure constants $f^c_{ab}$ defined by $[T_a, T_b] = \sum_c f^c_{ab} T_c$.
+
+The computational cost of each mode scales as: clipping $O(n_{\mathrm{gen}})$, Cartan $O(n_{\mathrm{gen}}^2)$, Killing $O(n_{\mathrm{gen}}^2)$, pullback $O(n_{\mathrm{gen}}^3)$ (dominated by the linear solve $\mathcal{G}^{-1} g$). For the $\mathrm{GL}(10)$ model ($n_{\mathrm{gen}} = 100$), Killing form preconditioning adds negligible overhead. The pullback metric becomes advantageous when gauge frames develop large norms during training, as the position-dependent compensation prevents the gradient from overshooting in the symmetric directions where $\exp(\phi)$ amplifies exponentially.
+
 
 \section{Variational Gradient Descent: Implementation and Numerical Methods}
 The variational free energy minimization is implemented through a sophisticated gradient descent scheme that respects the intricate geometric structure of the multi-agent system. At each simulation step, the algorithm orchestrates a sequence of coordinated field updates across all dynamic variables—the statistical parameters $(\mu_i, \Sigma_i)$ for both belief and model fibers, the gauge frame fields $(\phi_i, \tilde{\phi}_i)$, and optionally the global connection field $A_\mu$—while maintaining numerical stability on the constrained manifolds where these quantities naturally live.
