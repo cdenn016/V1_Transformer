@@ -332,9 +332,11 @@ def covariance_to_cholesky(Sigma: np.ndarray, eps: float = 1e-6) -> np.ndarray:
         L = np.linalg.cholesky(Sigma)
     except np.linalg.LinAlgError:
         # Fallback: fix eigenvalues then retry Cholesky
+        # Works for both unbatched (..., K, K) and batched inputs
         eigs, V = np.linalg.eigh(Sigma)
         eigs = np.maximum(eigs, eps)
-        Sigma_fixed = V @ np.diag(eigs) @ V.T
+        # Reconstruct: Σ = V diag(eigs) V^T using broadcasting (not np.diag)
+        Sigma_fixed = np.einsum('...ij,...j,...kj->...ik', V, eigs, V)
         L = np.linalg.cholesky(Sigma_fixed)
 
     return L.astype(np.float32)

@@ -231,6 +231,12 @@ def create_scheduler(
     if config.lr_decay == 'constant':
         return None
 
+    # Compute minimum decay ratio.
+    # In multi-group mode, each group decays to this fraction of its base LR.
+    # Use the global learning_rate as denominator (the "reference" LR).
+    # Clamp to avoid nonsensical ratios if min_lr >= learning_rate.
+    min_ratio = min(config.min_lr / max(config.learning_rate, 1e-12), 1.0)
+
     def lr_lambda(step):
         # Warmup phase
         if step < config.warmup_steps:
@@ -242,11 +248,11 @@ def create_scheduler(
 
         if config.lr_decay == 'cosine':
             import math
-            return config.min_lr / config.learning_rate + \
-                   0.5 * (1 - config.min_lr / config.learning_rate) * \
+            return min_ratio + \
+                   0.5 * (1 - min_ratio) * \
                    (1 + math.cos(progress * math.pi))
         elif config.lr_decay == 'linear':
-            return max(config.min_lr / config.learning_rate, 1 - progress)
+            return max(min_ratio, 1 - progress)
         else:
             return 1.0
 

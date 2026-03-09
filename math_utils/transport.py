@@ -618,25 +618,26 @@ def compute_transport_differential(
     if direction == 'i':
         # ∂Ω/∂φ_i^a = Q_a(φ_i) · exp(-φ_j)
         Q_all = _compute_dexp_generators(phi_i, G)
-        
+
         dOmega_list = []
         for Q_a in Q_all:
+            # Keep float64 through matrix products, cast only at the end
             dOm_a = np.matmul(np.matmul(exp_phi_i, Q_a), exp_neg_phi_j)
-            dOmega_list.append(dOm_a.astype(np.float32, copy=False))
-        
-        return tuple(dOmega_list)
-    
+            dOmega_list.append(dOm_a)
+
+        return tuple(d.astype(np.float32, copy=False) for d in dOmega_list)
+
     elif direction == 'j':
         # ∂Ω/∂φ_j^b = -exp(φ_i) · R_b(φ_j) · exp(-φ_j)
         R_all = _compute_dexp_generators(phi_j, G)
-        
+
         dOmega_list = []
         for R_b in R_all:
             tmp = np.matmul(exp_phi_i, R_b)
             dOm_b = -np.matmul(tmp, exp_neg_phi_j)
-            dOmega_list.append(dOm_b.astype(np.float32, copy=False))
-        
-        return tuple(dOmega_list)
+            dOmega_list.append(dOm_b)
+
+        return tuple(d.astype(np.float32, copy=False) for d in dOmega_list)
     
     else:
         raise ValueError(f"Invalid direction: {direction}")
@@ -661,65 +662,83 @@ def _compute_dexp_generators(
     generators: np.ndarray,
 ) -> Tuple[np.ndarray, ...]:
     """
-    Compute Q_a = d/dφ^a[exp(Σ φ^b G_b)] using exact formula.
-    
-    Formula:
+    Compute Q_a = d/dφ^a[exp(Σ φ^b G_b)] using the dexp map.
+
+    For K=3 (fundamental so(3) representation), uses the exact closed-form:
         Q_a = G_a - c1(θ) ad_X(G_a) + c2(θ) ad_X²(G_a)
-    
-    where:
-        c1(θ) = (1 - cos θ) / θ²
-        c2(θ) = (θ - sin θ) / θ³
-        ad_X(Y) = [X, Y] = XY - YX
-        X = Σ φ^a G_a
+    where c1 = (1-cosθ)/θ², c2 = (θ-sinθ)/θ³
+
+    For K>3 (higher irreps), the 3-term formula is inexact because the
+    Cayley-Hamilton truncation requires K terms for K×K matrices. Uses
+    Fréchet derivative of the matrix exponential via quadrature instead.
     """
     phi = np.asarray(phi, dtype=np.float64)
     G = np.asarray(generators, dtype=np.float64)
-    
-  
+
+    n_generators = G.shape[0]
+    K = G.shape[1]  # Matrix dimension
+
     # Compute X = Σ φ^a G_a
     X = np.einsum('...a,aij->...ij', phi, G, optimize=True)  # (*S, K, K)
-    
-    # Compute θ = ||φ||
-    theta = np.linalg.norm(phi, axis=-1)  # (*S,)
-    
-    # Compute coefficients with Taylor series for small θ
-    c1 = np.zeros_like(theta)
-    c2 = np.zeros_like(theta)
-    
-    small = theta < 1e-4
-    
-    if np.any(small):
-        t = theta[small]
-        t2 = t * t
-        t4 = t2 * t2
-        c1[small] = 0.5 - t2/24.0 + t4/720.0
-        c2[small] = 1.0/6.0 - t2/120.0 + t4/5040.0
-    
-    large = ~small
-    if np.any(large):
-        t = theta[large]
-        t2 = np.maximum(t * t, 1e-12)
-        t3 = np.maximum(t2 * t, 1e-12)
-        c1[large] = (1.0 - np.cos(t)) / t2
-        c2[large] = (t - np.sin(t)) / t3
-    
-    # Compute Q_a for each direction
-    Q_list = []
-    
-    for a in range(3):
-        G_a = G[a]  # (K, K)
-        
-        # Commutators
-        ad1 = X @ G_a - G_a @ X  # [X, G_a]
-        ad2 = X @ ad1 - ad1 @ X  # [X, [X, G_a]]
-        
-        # Q_a = G_a - c1 ad1 + c2 ad2
-        Q_a = (
-            G_a[None, ...]  # Broadcast to (*S, K, K)
-            - c1[..., None, None] * ad1
-            + c2[..., None, None] * ad2
-        )
-        
-        Q_list.append(Q_a)
-    
-    return tuple(Q_list)
+
+    if K == 3:
+        # Exact closed-form for so(3) fundamental representation
+        theta = np.linalg.norm(phi, axis=-1)
+
+        c1 = np.zeros_like(theta)
+        c2 = np.zeros_like(theta)
+
+        small = theta < 1e-4
+        if np.any(small):
+            t = theta[small]
+            t2 = t * t
+            t4 = t2 * t2
+            c1[small] = 0.5 - t2/24.0 + t4/720.0
+            c2[small] = 1.0/6.0 - t2/120.0 + t4/5040.0
+
+        large = ~small
+        if np.any(large):
+            t = theta[large]
+            t2 = np.maximum(t * t, 1e-12)
+            t3 = np.maximum(t2 * t, 1e-12)
+            c1[large] = (1.0 - np.cos(t)) / t2
+            c2[large] = (t - np.sin(t)) / t3
+
+        Q_list = []
+        for a in range(n_generators):
+            G_a = G[a]
+            ad1 = X @ G_a - G_a @ X
+            ad2 = X @ ad1 - ad1 @ X
+            Q_a = (
+                G_a[None, ...]
+                - c1[..., None, None] * ad1
+                + c2[..., None, None] * ad2
+            )
+            Q_list.append(Q_a)
+        return tuple(Q_list)
+
+    else:
+        # Higher irreps (K>3): use Fréchet derivative via quadrature
+        # frechet_expm computes d/dt[exp(X + t G_a)]|_{t=0} = exp(X) · dexp_X(G_a)
+        # We need Q_a = dexp_X(G_a) = exp(-X) · frechet_expm(X, G_a)
+        # The caller will left-multiply by exp(X), recovering the full derivative.
+        Q_list = []
+        for a in range(n_generators):
+            G_a = G[a]
+            # Handle batched X: iterate over batch elements
+            if X.ndim > 2:
+                batch_shape = X.shape[:-2]
+                flat_X = X.reshape(-1, K, K)
+                flat_G_a = np.broadcast_to(G_a, flat_X.shape)
+                Q_flat = np.zeros_like(flat_X)
+                for b in range(flat_X.shape[0]):
+                    F_b = frechet_expm(flat_X[b], flat_G_a[b], steps=8)
+                    expnX = scipy.linalg.expm(-flat_X[b])
+                    Q_flat[b] = expnX @ F_b
+                Q_a = Q_flat.reshape(*batch_shape, K, K)
+            else:
+                F_a = frechet_expm(X, G_a, steps=8)
+                expnX = scipy.linalg.expm(-X)
+                Q_a = expnX @ F_a
+            Q_list.append(Q_a)
+        return tuple(Q_list)

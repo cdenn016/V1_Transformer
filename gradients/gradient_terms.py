@@ -387,14 +387,27 @@ def grad_kl_wrt_transport(
     )  # (..., K)
 
     # Chain rule to Ω via μ'_j = Ω μ_j
+    # ∂KL/∂Ω|_μ = (Σ'_j⁻¹ (Ω μ_j - μ_i)) ⊗ μ_j^T
     grad_mu_factor = np.einsum(
         '...i,...j->...ij',
         grad_wrt_mu_transported, mu_j,
         optimize=True
     )  # (..., K, K)
 
-    # For debugging / cleanliness, drop the approximate Σ term
-    grad_Sigma_factor = np.zeros_like(grad_mu_factor)
+    # Covariance term: ∂KL/∂Ω|_Σ
+    # From KL = ½[tr(Σ'_j⁻¹ Σ_i) + ... - log|Σ_i|/|Σ'_j| - K]
+    # where Σ'_j = Ω Σ_j Ω^T, using ∂Σ'_j/∂Ω = (I⊗Ω Σ_j) + (Ω Σ_j⊗I) perm
+    # The gradient is: ∂KL/∂Ω|_Σ = (Σ'_j⁻¹ - Σ'_j⁻¹ Σ_i Σ'_j⁻¹) Ω Σ_j
+    # = (I - Σ'_j⁻¹ Σ_i) Σ'_j⁻¹ Ω Σ_j
+    SjinvSi = np.einsum('...ij,...jk->...ik', Sigma_j_t_inv, Sigma_i, optimize=True)
+    bracket = np.eye(Sigma_j_t_inv.shape[-1]) - SjinvSi  # (I - Σ'_j⁻¹ Σ_i)
+    SjinvOmSj = np.einsum(
+        '...ij,...jk->...ik',
+        Sigma_j_t_inv,
+        np.einsum('...ij,...jk->...ik', Omega_ij, Sigma_j, optimize=True),
+        optimize=True
+    )  # Σ'_j⁻¹ Ω Σ_j
+    grad_Sigma_factor = np.einsum('...ij,...jk->...ik', bracket, SjinvOmSj, optimize=True)
 
     return (
         grad_mu_factor.astype(np.float32, copy=False),
