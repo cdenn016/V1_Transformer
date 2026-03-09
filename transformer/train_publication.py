@@ -1145,6 +1145,7 @@ class PublicationTrainer(FastTrainer):
                         pad_token_id=self.pad_token_id,
                         use_obs_in_vfe=self.config.use_obs_in_vfe,
                         alpha_phi=self.config.alpha_phi,
+                        detach_sigma_kl=getattr(self.config, 'detach_sigma_kl', True),
                     )
             # Scaled backward
             self.scaler.scale(loss).backward()
@@ -1171,6 +1172,7 @@ class PublicationTrainer(FastTrainer):
                     pad_token_id=self.pad_token_id,
                     use_obs_in_vfe=self.config.use_obs_in_vfe,
                     alpha_phi=self.config.alpha_phi,
+                    detach_sigma_kl=getattr(self.config, 'detach_sigma_kl', True),
                 )
             loss.backward()
 

@@ -137,6 +137,12 @@ class FastTrainingConfig:
     use_killing_form: bool = False             # Cartan decomposition preconditioning for phi grads
     killing_form_sym_dampening: float = 0.1    # Dampening for non-compact (symmetric) directions
 
+    # Ablation toggles (for PPL regression experiments)
+    use_exp_map_retraction: bool = True   # True=exp map, False=linear+Cholesky (original)
+    use_full_nat_grad: bool = True        # True=Σ@∇@Σ, False=diag approx (original)
+    embed_no_decay: bool = True           # True=no weight decay on embeds, False=decay on embeds
+    detach_sigma_kl: bool = True          # True=detach sigma in KL loss, False=pass gradients
+
 
 # =============================================================================
 # Fast Trainer with Parameter Group Learning Rates
@@ -284,30 +290,31 @@ class FastTrainer:
 
         # Create parameter groups
         param_groups = []
+        embed_wd = 0.0 if getattr(self.config, 'embed_no_decay', True) else self.config.weight_decay
 
         if mu_params:
             param_groups.append({
                 'params': mu_params,
                 'lr': self.config.mu_lr,
-                'weight_decay': 0.0,  # No decay for embeddings
+                'weight_decay': embed_wd,
                 'name': 'mu_embed',
             })
-            print(f"  Parameter group 'mu_embed': {len(mu_params)} tensors @ lr={self.config.mu_lr}")
+            print(f"  Parameter group 'mu_embed': {len(mu_params)} tensors @ lr={self.config.mu_lr}, wd={embed_wd}")
 
         if sigma_params:
             param_groups.append({
                 'params': sigma_params,
                 'lr': self.config.sigma_lr,
-                'weight_decay': 0.0,
+                'weight_decay': embed_wd,
                 'name': 'sigma_embed',
             })
-            print(f"  Parameter group 'sigma_embed': {len(sigma_params)} tensors @ lr={self.config.sigma_lr}")
+            print(f"  Parameter group 'sigma_embed': {len(sigma_params)} tensors @ lr={self.config.sigma_lr}, wd={embed_wd}")
 
         if phi_params:
             param_groups.append({
                 'params': phi_params,
                 'lr': self.config.phi_lr,
-                'weight_decay': 0.0,
+                'weight_decay': embed_wd,
                 'name': 'phi_embed',
             })
             print(f"  Parameter group 'phi_embed': {len(phi_params)} tensors @ lr={self.config.phi_lr}")
@@ -408,6 +415,7 @@ class FastTrainer:
                     lambda_gamma=self.config.lambda_gamma,
                     kappa_gamma=self.config.kappa_gamma,
                     pad_token_id=self.pad_token_id,
+                    detach_sigma_kl=getattr(self.config, 'detach_sigma_kl', True),
                 )
         else:
             loss, metrics = compute_free_energy_loss(
@@ -419,6 +427,7 @@ class FastTrainer:
                 lambda_gamma=self.config.lambda_gamma,
                 kappa_gamma=self.config.kappa_gamma,
                 pad_token_id=self.pad_token_id,
+                detach_sigma_kl=getattr(self.config, 'detach_sigma_kl', True),
             )
 
         # Backward pass
@@ -498,6 +507,7 @@ class FastTrainer:
                         lambda_gamma=self.config.lambda_gamma,
                         kappa_gamma=self.config.kappa_gamma,
                         pad_token_id=self.pad_token_id,
+                        detach_sigma_kl=getattr(self.config, 'detach_sigma_kl', True),
                     )
                     ce_loss = metrics['loss/ce']
 

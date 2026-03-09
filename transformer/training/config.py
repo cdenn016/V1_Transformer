@@ -140,6 +140,14 @@ class TrainingConfig:
     use_identity_group: bool = False
 
     # ==========================================================================
+    # Ablation Toggles (for PPL regression experiments)
+    # ==========================================================================
+    use_exp_map_retraction: bool = True   # True=exp map (443041f), False=linear+Cholesky (original)
+    use_full_nat_grad: bool = True        # True=Σ@∇@Σ (443041f), False=diag approx (original)
+    embed_no_decay: bool = True           # True=no weight decay on embeds (53cc267), False=decay on embeds
+    detach_sigma_kl: bool = True          # True=detach sigma in KL loss (c3012a6), False=pass gradients
+
+    # ==========================================================================
     # Positional Encoding
     # ==========================================================================
     use_rope: bool = False       # RoPE: SO(2)^{K/2} position rotations on μ in attention
