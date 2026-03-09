@@ -45,7 +45,6 @@ class GaugeTransformerBlock(nn.Module):
         self.attention = IrrepMultiHeadAttention(config, generators)
 
         self.norm1 = nn.LayerNorm(config.embed_dim) if config.use_layernorm else nn.Identity()
-        self.dropout1 = nn.Dropout(config.dropout) if config.use_dropout else nn.Identity()
 
         # ── VFE FFN sublayer (direct — no GaugeFFN wrapper) ─────────────
         self.ffn = VariationalFFNDynamic(config, generators, prior_bank=prior_bank)
@@ -91,8 +90,6 @@ class GaugeTransformerBlock(nn.Module):
             return_attention=True,  # Need β for VFE FFN
             cached_head_transports=cached_head_transports,
         )
-
-        mu_attn = self.dropout1(mu_attn)
 
         if self.use_residual:
             mu_q = mu_q + mu_attn
