@@ -72,6 +72,10 @@ class FastTrainingConfig:
     beta1: float = 0.9
     beta2: float = 0.999
     eps: float = 1e-8
+    # weight_decay implements the Level 3 hyper-prior N(0, 1/(2·wd)) on parameters.
+    # For embedding parameters (μ_p, σ_p, φ), this is the top of the Bayesian hierarchy:
+    #   x → q(E-step) → p(M-step) → N(0, 1/(2·wd))
+    # See embed_no_decay toggle below.
     weight_decay: float = 0.01
 
     # Gradient control

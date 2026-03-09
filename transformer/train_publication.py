@@ -280,7 +280,8 @@ VFE_EM_CONFIG = {
     'ffn_lambda_belief': 1,       # Belief alignment inside VFE iterations
     'ffn_alpha': 1,               # Prior coupling inside VFE iterations
 
-    # Regularization
+    # Regularization — weight_decay is the Level 3 hyper-prior precision:
+    # p(θ_embed) = N(0, 1/(2·wd)), the top of the Bayesian hierarchy.
     'weight_decay': 0.01,
     'dropout':      0,
     'grad_clip':    1.0,

@@ -7,20 +7,20 @@ A research framework implementing gauge-covariant variational free energy (VFE) 
 Language is a dynamic informational system: speakers encode and decode beliefs under uncertainty, and language models learn the statistical structure of this process. The mathematical framework natural to such systems---gauge-covariant variational free energy minimization over communicating agents on a statistical fiber bundle---explains why attention mechanisms work.
 
 
-                h (hyper-prior)
+        N(0, 1/(2·wd))  ← Level 3: hyper-prior (weight decay on embeddings)
                 │
-                │ KL(s||h) — regularization
+                │ wd·||θ_embed||²
                 ▼
 s_i = self.prior_mu[i]  ◄──── γ·KL(s_i||Ω_ij·s_j) ────► s_j
 (position MODEL,                    (model coupling)
  slow timescale)
-                │
+                │                                          ← Level 2: priors (M-step)
                 │ p = w·π_token + (1-w)·s
                 ▼
           p_i (PRIOR)
                 │
                 │ α·KL(q||p)
-                ▼
+                ▼                                          ← Level 1: beliefs (E-step)
      q_i (beliefs, fast)  ◄──── β_ij·KL(q_i||Ω_ij·q_j) ────► q_j
                                       (attention)
 
@@ -103,6 +103,42 @@ Ours: ∂β_{ij}/∂θ — emerges from differentiating softmax attention:
 ```
 
 The **most general form** of the theory---no simplifying limits taken. Full non-isotropic covariances, non-trivial gauge transport, KL-divergence attention. **No MLPs, activation functions, learned W_Q/W_K/W_V, or positional encodings.** Only a linear output projection (from K dimensions to 50k) is retained.
+
+### Hierarchical Bayesian Structure
+
+The full VFE defines a four-level hierarchy, each regularized by the level above:
+
+```
+Level 3:  N(0, 1/(2*wd))                          [hyper-prior — weight decay]
+              |
+              | wd * ||theta_embed||^2
+              v
+Level 2:  p_i = N(mu_p, Sigma_p), phi             [priors — learned embeddings (M-step)]
+              |
+              | alpha * KL(q || p)
+              v
+Level 1:  q_i = N(mu_q, Sigma_q)                  [beliefs — inferred per forward pass (E-step)]
+              |
+              | -E_q[log p(x | mu)]
+              v
+Level 0:  x_i                                      [observations — token targets]
+```
+
+**Level 3 (hyper-prior)** is implemented by AdamW weight decay on embedding parameters.
+In a standard transformer, embeddings are lookup tables and conventionally excluded from
+weight decay. In the gauge transformer, embeddings are **statistical parameters** --- means
+`mu_p`, covariances `Sigma_p`, and gauge frames `phi` --- that directly enter KL divergences,
+matrix exponentials, and VFE gradients. Without the hyper-prior, these parameters have no
+regularization above Level 2 and can drift to magnitudes that destabilize training:
+
+- Larger `mu_p` -> KL divergences saturate -> attention beta becomes one-hot
+- Larger `Sigma_p` -> natural gradient `Sigma @ grad` overshoots -> VFE diverges
+- Larger `phi` -> transport operators `Omega = exp(phi*G)` become extreme
+
+The weight decay coefficient `wd` is the hyper-prior **precision**: larger `wd` = tighter
+prior = stronger regularization. This is the same structure as empirical Bayes / Type-II
+maximum likelihood, and in the FEP literature corresponds to the hierarchy of Markov blankets
+where each level's sufficient statistics are regularized by the level above.
 
 ### Multi-Timescale Dynamics
 

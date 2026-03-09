@@ -429,20 +429,26 @@ def compute_free_energy_loss(
     detach_sigma_kl: bool = True, # Detach sigma in KL loss (prevents M-step sigma gradients)
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
-    Compute training loss with optional auxiliary VFE regularization terms.
+    Compute training loss (M-step objective in the hierarchical VFE).
 
-    The core VFE inference (belief updates via ∂F/∂q) happens INSIDE the
-    VariationalFFN during the forward pass, controlled by ffn_alpha and
-    ffn_lambda_belief. This function computes the TRAINING LOSS, which is:
+    This computes the Level 1-2 loss terms. The full Bayesian hierarchy is:
+        Level 3: N(0, 1/(2·wd)) hyper-prior on embeddings  [optimizer weight decay]
+        Level 2: p_i = N(μ_p, Σ_p) priors                  [α · KL(q||p) below]
+        Level 1: q_i = N(μ_q, Σ_q) beliefs                 [inferred in E-step]
+        Level 0: x_i observations                           [CE loss below]
+
+    The E-step (belief inference via ∂F/∂q) happens INSIDE VariationalFFN during
+    the forward pass. This function computes the M-step training loss:
 
         L = CE + α · Σ_i KL(q_i || p_i)
 
-    The α term (default 0.1) provides sigma regularization by pulling
-    beliefs back toward priors. Remaining auxiliary terms are off by default:
+    The α term (default 0.1) couples Level 1→2, pulling beliefs toward priors.
+    Weight decay on embedding parameters (Level 2→3) is applied by the optimizer.
+    Remaining auxiliary terms are off by default:
         + λ_β · Σ_{i,j} β_ij · KL(q_i || Ω_{ij}q_j)  [Belief coupling]
         + λ_γ · Σ_{i,j} γ_ij · KL(s_i || Ω_{ij}s_j)  [Model coupling]
-        + λ_h · Σ_i KL(s_i || h)                      [Hyper-prior]
-        + (α_φ/2) Σ_i ||φ_i||²                        [Gauge prior]
+        + λ_h · Σ_i KL(s_i || h)                      [Hyper-prior on models]
+        + (α_φ/2) Σ_i ||φ_i||²                        [Gauge prior on φ]
 
     Args:
         model: GaugeTransformerLM with forward_with_attention() method
@@ -889,7 +895,18 @@ class Trainer:
             return self._create_simple_optimizer()
 
     def _create_simple_optimizer(self) -> torch.optim.Optimizer:
-        """Create simple 2-group optimizer (decay vs no-decay)."""
+        """
+        Create simple 2-group optimizer (decay vs no-decay).
+
+        Weight decay implements a Gaussian hyper-prior N(0, 1/(2·wd)) on parameters —
+        the top level of the hierarchical VFE:
+            x → q(E-step) → p(M-step) → N(0, 1/(2·wd))
+
+        When embed_no_decay=False, embedding parameters (μ_p, σ_p, φ_p) receive this
+        hyper-prior, preventing prior drift. This is critical because these are
+        statistical parameters entering KL divergences and matrix exponentials,
+        not simple lookup tables as in standard transformers.
+        """
         decay_params = []
         no_decay_params = []
 
@@ -915,15 +932,18 @@ class Trainer:
         """
         Create optimizer with per-parameter group learning rates.
 
-        Parameter Groups:
-            1. mu_embed: Mean embeddings
-            2. sigma_embed: Covariance embeddings
-            3. phi_embed: Gauge frame embeddings
-            4. attention: Attention mechanism
-            5. ffn: Feed-forward networks
-            6. output: Output projection
+        Parameter Groups (hierarchical VFE perspective):
+            1. mu_embed:    Prior means μ_p         — Level 2 (generative model)
+            2. sigma_embed: Prior covariances σ_p   — Level 2 (generative model)
+            3. phi_embed:   Gauge frames φ          — Level 2 (connection on bundle)
+            4. attention:   Attention parameters    — Architecture
+            5. ffn:         FFN parameters          — Architecture
+            6. output:      Output projection W_out — Observation model
 
-        This exploits natural gradient structure on statistical manifolds!
+        Weight decay on groups 1-3 implements the Level 3 hyper-prior:
+            p(θ_embed) = N(0, 1/(2·wd))
+        This is the top of the Bayesian hierarchy, preventing prior drift.
+        Controlled by embed_no_decay: when False, wd applies to embedding groups.
         """
         # Collect parameters by type
         mu_params = []
