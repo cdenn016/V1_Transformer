@@ -33,6 +33,7 @@ class GaugeTransformerConfig:
     use_multi_irrep: bool = False
     phi_dim: int = 3               # Computed from gauge_group if not set
     enforce_orthogonal: bool = False
+    use_primal_transport: bool = False  # True: m_i = Σ β Ω μ_j (theory-correct); False: Σ β Ω^{-T} μ_j (legacy)
 
     # ── Covariance ────────────────────────────────────────────────────
     diagonal_covariance: bool = False
@@ -195,6 +196,7 @@ class GaugeTransformerConfig:
             'mask_self_attention': 'mask_self_attention',
             'sigma_softmax_coupling': 'sigma_softmax_coupling',
             'enforce_orthogonal': 'enforce_orthogonal',
+            'use_primal_transport': 'use_primal_transport',
             'learnable_alpha': 'learnable_alpha',
             'per_head_kappa': 'per_head_kappa',
             'use_output_projection': 'use_output_projection',

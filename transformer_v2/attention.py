@@ -227,11 +227,16 @@ def aggregate_messages(
     aggregate_mode: str = 'mean_only',
     diagonal_covariance: bool = False,
     cached_transport: Optional[dict] = None,
+    use_primal_transport: bool = False,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-    """Aggregate messages with GL(K) metric correction.
+    """Aggregate messages with gauge transport.
 
-    For SO(K): m_i = Σ_j β_ij Ω_ij μ_j            (Ω orthogonal)
-    For GL(K): m_i = Σ_j β_ij Ω_ij^{-T} μ_j       (metric correction)
+    Primal mode (use_primal_transport=True, theory-correct):
+        m_i = Σ_j β_ij Ω_ij μ_j
+
+    Legacy mode (use_primal_transport=False):
+        For SO(K): m_i = Σ_j β_ij Ω_ij μ_j            (Ω orthogonal, equivalent)
+        For GL(K): m_i = Σ_j β_ij Ω_ij^{-T} μ_j       (metric correction)
 
     Args:
         mu_q: (B, N, K) belief means
@@ -242,6 +247,8 @@ def aggregate_messages(
         aggregate_mode: 'mean_only' or 'full_distribution'
         diagonal_covariance: True if sigma_q is (B, N, K)
         cached_transport: Precomputed transport operators
+        use_primal_transport: If True, always use Ω_ij (primal). If False,
+            use Ω_ij^{-T} for GL(K) (legacy behavior).
 
     Returns:
         mu_agg: (B, N, K) aggregated means
@@ -257,16 +264,21 @@ def aggregate_messages(
         exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
         Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
 
-    # GL(K) metric correction: check if generators are skew-symmetric (SO(K))
-    _is_skew = torch.allclose(
-        generators + generators.transpose(-1, -2),
-        torch.zeros_like(generators), atol=1e-5,
-    )
-    if _is_skew:
+    # Determine transport operator for message passing
+    if use_primal_transport:
+        # Theory-correct: m_i = Σ β_ij Ω_ij μ_j (primal transport for all groups)
         Omega_msg = Omega
     else:
-        # GL(K): Ω^{-T} = Ω_ji^T
-        Omega_msg = Omega.permute(0, 2, 1, 3, 4).transpose(-1, -2)
+        # Legacy: GL(K) uses Ω^{-T} metric correction; SO(K) uses Ω (equivalent)
+        _is_skew = torch.allclose(
+            generators + generators.transpose(-1, -2),
+            torch.zeros_like(generators), atol=1e-5,
+        )
+        if _is_skew:
+            Omega_msg = Omega
+        else:
+            # GL(K): Ω^{-T} = Ω_ji^T
+            Omega_msg = Omega.permute(0, 2, 1, 3, 4).transpose(-1, -2)
 
     # Transport and aggregate means
     mu_transported = torch.einsum('bijkl,bjl->bijk', Omega_msg, mu_q)
@@ -341,6 +353,7 @@ class IrrepMultiHeadAttention(nn.Module):
         self.use_identity_transport = config.use_identity_transport
         self.mask_self_attention = config.mask_self_attention
         self.enforce_orthogonal = config.enforce_orthogonal
+        self.use_primal_transport = config.use_primal_transport
         self.use_rope = config.use_rope
         self.rope_base = config.rope_base
 
@@ -528,6 +541,7 @@ class IrrepMultiHeadAttention(nn.Module):
                 aggregate_mode=self.aggregate_mode,
                 diagonal_covariance=self.diagonal_covariance,
                 cached_transport=head_cached,
+                use_primal_transport=self.use_primal_transport,
             )
 
             head_outputs_mu.append(mu_agg)
