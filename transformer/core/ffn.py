@@ -71,6 +71,9 @@ class GaugeFFN(nn.Module):
         per_head_kappa: bool = False,  # If True, learn separate κ_h per head in VFE
         # Phi gradient preconditioning
         phi_natural_gradient: str = 'clip',  # 'clip'|'cartan'|'killing'|'pullback'
+        # Ablation toggles
+        use_exp_map_retraction: bool = True,  # True=exp map, False=linear+Cholesky
+        use_full_nat_grad: bool = True,       # True=Σ@∇@Σ, False=diag approx
         # Legacy parameters (ignored, kept for API compatibility)
         **kwargs,
     ):
@@ -147,6 +150,9 @@ class GaugeFFN(nn.Module):
             per_head_kappa=per_head_kappa,
             # Phi gradient preconditioning
             phi_natural_gradient=phi_natural_gradient,
+            # Ablation toggles
+            use_exp_map_retraction=use_exp_map_retraction,
+            use_full_nat_grad=use_full_nat_grad,
         )
 
     def forward(

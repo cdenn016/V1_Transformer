@@ -132,6 +132,9 @@ class GaugeTransformerBlock(nn.Module):
         rope_base: float = 10000.0,  # RoPE frequency base
         # Phi gradient preconditioning
         phi_natural_gradient: str = 'clip',  # 'clip'|'cartan'|'killing'|'pullback'
+        # Ablation toggles
+        use_exp_map_retraction: bool = True,  # True=exp map, False=linear+Cholesky
+        use_full_nat_grad: bool = True,       # True=Σ@∇@Σ, False=diag approx
     ):
         """
         Initialize gauge transformer block.
@@ -282,6 +285,9 @@ class GaugeTransformerBlock(nn.Module):
             per_head_kappa=per_head_kappa,
             # Phi gradient preconditioning
             phi_natural_gradient=phi_natural_gradient,
+            # Ablation toggles
+            use_exp_map_retraction=use_exp_map_retraction,
+            use_full_nat_grad=use_full_nat_grad,
         )
 
         self.norm2 = nn.LayerNorm(embed_dim) if use_layernorm else nn.Identity()
@@ -499,6 +505,9 @@ class GaugeTransformerStack(nn.Module):
         rope_base: float = 10000.0,  # RoPE frequency base
         # Phi gradient preconditioning
         phi_natural_gradient: str = 'clip',  # 'clip'|'cartan'|'killing'|'pullback'
+        # Ablation toggles
+        use_exp_map_retraction: bool = True,  # True=exp map, False=linear+Cholesky
+        use_full_nat_grad: bool = True,       # True=Σ@∇@Σ, False=diag approx
     ):
         """
         Initialize stack of transformer blocks.
@@ -605,6 +614,9 @@ class GaugeTransformerStack(nn.Module):
                 rope_base=rope_base,
                 # Phi gradient preconditioning
                 phi_natural_gradient=phi_natural_gradient,
+                # Ablation toggles
+                use_exp_map_retraction=use_exp_map_retraction,
+                use_full_nat_grad=use_full_nat_grad,
             )
             for _ in range(n_layers)
         ])

@@ -1214,6 +1214,7 @@ def compute_natural_gradient_gpu(
     grad_sigma: torch.Tensor,  # (B, N, K) or (B, N, K, K)
     sigma_q: torch.Tensor,     # (B, N, K) or (B, N, K, K)
     eps: float = 1e-6,
+    use_full_nat_grad: bool = True,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Project Euclidean gradients to natural gradients using Fisher metric.
@@ -1253,9 +1254,13 @@ def compute_natural_gradient_gpu(
         else:
             # Full covariance: matrix multiplication
             nat_grad_mu = torch.einsum('bnij,bnj->bni', sigma_q, grad_mu)
-            # Full Fisher natural gradient: δΣ = 0.5 * Σ @ ∇_Σ @ Σ
-            # This is gauge-invariant: under Σ → AΣA^T, δΣ → A(δΣ)A^T
-            nat_grad_sigma = 0.5 * torch.einsum('bnij,bnjk,bnkl->bnil', sigma_q, grad_sigma, sigma_q)
+            if use_full_nat_grad:
+                # Full Fisher natural gradient: δΣ = 0.5 * Σ @ ∇_Σ @ Σ (443041f)
+                nat_grad_sigma = 0.5 * torch.einsum('bnij,bnjk,bnkl->bnil', sigma_q, grad_sigma, sigma_q)
+            else:
+                # Diagonal approximation (original, pre-443041f)
+                sigma_diag = torch.diagonal(sigma_q, dim1=-2, dim2=-1).clone()
+                nat_grad_sigma = 0.5 * sigma_diag.unsqueeze(-1) * sigma_diag.unsqueeze(-2) * grad_sigma
 
     return nat_grad_mu.to(orig_dtype), nat_grad_sigma.to(orig_dtype)
 
@@ -1270,26 +1275,22 @@ def retract_spd_torch(
     step_size: float = 1.0,
     trust_region: float = 2.0,
     eps: float = 1e-6,
+    use_exp_map: bool = True,
 ) -> torch.Tensor:
     """
     SPD-preserving retraction for covariance matrices (PyTorch GPU).
 
-    Uses the affine-invariant exponential map on the SPD manifold:
-        R = Σ^{-1/2} (η · ΔΣ) Σ^{-1/2}     (whitened tangent, Eq. 164)
-        Σ_{k+1} = Σ^{1/2} exp(R) Σ^{1/2}     (exponential map, Eq. 165)
-
-    This is gauge-invariant: for any invertible A, the retraction of
-    A Σ A^T along A ΔΣ A^T equals A Σ_{new} A^T.
-
-    The exponential map is provably SPD-preserving: exp(R) is SPD for any
-    symmetric R, and congruence by Σ^{1/2} preserves SPD.
+    Two modes controlled by use_exp_map:
+      True  (default): Affine-invariant exponential map on SPD manifold (443041f)
+      False (original): Diagonal-whitened linear update + Cholesky SPD check
 
     Args:
         Sigma: SPD matrices, shape (B, N, K, K) or (B*N, K, K)
         delta_Sigma: Symmetric tangent vectors, same shape as Sigma
         step_size: Learning rate τ
-        trust_region: Max Frobenius norm of whitened tangent R
+        trust_region: Max Frobenius norm of whitened tangent
         eps: Regularization floor for numerical stability
+        use_exp_map: If True, use exp map retraction; if False, use linear update
 
     Returns:
         Sigma_new: SPD matrices, same shape as Sigma
@@ -1314,45 +1315,77 @@ def retract_spd_torch(
         Sigma = 0.5 * (Sigma + Sigma.transpose(-1, -2))
         delta_Sigma = 0.5 * (delta_Sigma + delta_Sigma.transpose(-1, -2))
 
-        # Eigendecompose Σ to get Σ^{1/2} and Σ^{-1/2}
-        # For small K (typically 3-11), eigendecomposition is fast
-        eigenvalues, eigenvectors = torch.linalg.eigh(Sigma)  # (batch, K), (batch, K, K)
-        eigenvalues = eigenvalues.clamp(min=eps)
+        if use_exp_map:
+            # === Exponential map retraction (443041f) ===
+            eigenvalues, eigenvectors = torch.linalg.eigh(Sigma)
+            eigenvalues = eigenvalues.clamp(min=eps)
 
-        sqrt_eig = torch.sqrt(eigenvalues)        # (batch, K)
-        inv_sqrt_eig = 1.0 / sqrt_eig             # (batch, K)
+            sqrt_eig = torch.sqrt(eigenvalues)
+            inv_sqrt_eig = 1.0 / sqrt_eig
 
-        # Σ^{1/2} = U diag(√λ) U^T,  Σ^{-1/2} = U diag(1/√λ) U^T
-        Sigma_sqrt = eigenvectors * sqrt_eig.unsqueeze(-2) @ eigenvectors.transpose(-1, -2)
-        Sigma_inv_sqrt = eigenvectors * inv_sqrt_eig.unsqueeze(-2) @ eigenvectors.transpose(-1, -2)
+            Sigma_sqrt = eigenvectors * sqrt_eig.unsqueeze(-2) @ eigenvectors.transpose(-1, -2)
+            Sigma_inv_sqrt = eigenvectors * inv_sqrt_eig.unsqueeze(-2) @ eigenvectors.transpose(-1, -2)
 
-        # Whitened tangent: R = Σ^{-1/2} (η · ΔΣ) Σ^{-1/2}  (Eq. 164)
-        R = Sigma_inv_sqrt @ (step_size * delta_Sigma) @ Sigma_inv_sqrt
-        R = 0.5 * (R + R.transpose(-1, -2))  # Ensure symmetric
+            # Whitened tangent: R = Σ^{-1/2} (η · ΔΣ) Σ^{-1/2}
+            R = Sigma_inv_sqrt @ (step_size * delta_Sigma) @ Sigma_inv_sqrt
+            R = 0.5 * (R + R.transpose(-1, -2))
 
-        # Trust region on whitened Frobenius norm ||R||_F
-        if trust_region is not None and trust_region > 0:
-            R_norm = torch.linalg.norm(R, ord='fro', dim=(-2, -1), keepdim=True)  # (batch, 1, 1)
-            scale = torch.clamp(trust_region / (R_norm + eps), max=1.0)
-            R = R * scale
+            if trust_region is not None and trust_region > 0:
+                R_norm = torch.linalg.norm(R, ord='fro', dim=(-2, -1), keepdim=True)
+                scale = torch.clamp(trust_region / (R_norm + eps), max=1.0)
+                R = R * scale
 
-        # Exponential map: Σ_{k+1} = Σ^{1/2} exp(R) Σ^{1/2}  (Eq. 165)
-        # Compute exp(R) via eigendecomposition: R = V Λ V^T → exp(R) = V exp(Λ) V^T
-        R_eigenvalues, R_eigenvectors = torch.linalg.eigh(R)
-        R_eigenvalues = R_eigenvalues.clamp(-50.0, 50.0)  # Prevent overflow
-        exp_R = R_eigenvectors * torch.exp(R_eigenvalues).unsqueeze(-2) @ R_eigenvectors.transpose(-1, -2)
+            # exp(R) via eigendecomposition
+            R_eigenvalues, R_eigenvectors = torch.linalg.eigh(R)
+            R_eigenvalues = R_eigenvalues.clamp(-50.0, 50.0)
+            exp_R = R_eigenvectors * torch.exp(R_eigenvalues).unsqueeze(-2) @ R_eigenvectors.transpose(-1, -2)
 
-        # Retraction: Σ_{new} = Σ^{1/2} exp(R) Σ^{1/2}
-        Sigma_new = Sigma_sqrt @ exp_R @ Sigma_sqrt
+            Sigma_new = Sigma_sqrt @ exp_R @ Sigma_sqrt
+            Sigma_new = 0.5 * (Sigma_new + Sigma_new.transpose(-1, -2))
 
-        # Symmetrize (numerical safety)
-        Sigma_new = 0.5 * (Sigma_new + Sigma_new.transpose(-1, -2))
+            # Spectral floor
+            eig_new, vec_new = torch.linalg.eigh(Sigma_new)
+            eig_new = eig_new.clamp(min=eps)
+            Sigma_new = vec_new * eig_new.unsqueeze(-2) @ vec_new.transpose(-1, -2)
+        else:
+            # === Linear update with diagonal whitening (original, pre-443041f) ===
+            diag_sigma = torch.diagonal(Sigma, dim1=-2, dim2=-1).clone()
+            diag_sigma = diag_sigma.clamp(min=eps)
+            inv_sqrt_diag = 1.0 / torch.sqrt(diag_sigma)
 
-        # Post-retraction sanitization: spectral floor on eigenvalues
-        # This prevents numerical collapse during prolonged gradient descent
-        eig_new, vec_new = torch.linalg.eigh(Sigma_new)
-        eig_new = eig_new.clamp(min=eps)
-        Sigma_new = vec_new * eig_new.unsqueeze(-2) @ vec_new.transpose(-1, -2)
+            # Diagonal-whitened tangent: B ≈ D^{-1/2} ΔΣ D^{-1/2}
+            B = (inv_sqrt_diag.unsqueeze(-1) * delta_Sigma) * inv_sqrt_diag.unsqueeze(-2)
+
+            if trust_region is not None and trust_region > 0:
+                B_norm = torch.linalg.norm(B, ord='fro', dim=(-2, -1), keepdim=True)
+                scale = torch.clamp(trust_region / (B_norm + eps), max=1.0)
+                B = B * scale
+
+            # Un-whiten: ΔΣ_scaled = D^{1/2} B D^{1/2}
+            sqrt_diag = torch.sqrt(diag_sigma)
+            delta_scaled = (sqrt_diag.unsqueeze(-1) * B) * sqrt_diag.unsqueeze(-2)
+
+            # Linear update
+            Sigma_new = Sigma + step_size * delta_scaled
+            Sigma_new = 0.5 * (Sigma_new + Sigma_new.transpose(-1, -2))
+
+            # Ensure SPD via iterative Cholesky regularization
+            eye_K = torch.eye(K, device=device, dtype=Sigma.dtype)
+            diag_mean = torch.diagonal(Sigma_new, dim1=-2, dim2=-1).clone().abs().mean(dim=-1, keepdim=True)
+            base_reg = torch.clamp(diag_mean, min=eps).unsqueeze(-1)
+
+            reg_scales = [eps, 1e-5, 1e-4, 1e-3, 1e-2, 0.1]
+            for reg_scale in reg_scales:
+                Sigma_reg = Sigma_new + (reg_scale * base_reg) * eye_K
+                _, info = torch.linalg.cholesky_ex(Sigma_reg)
+                if (info == 0).all():
+                    Sigma_new = Sigma_reg
+                    break
+                elif reg_scale == reg_scales[-1]:
+                    # Last resort: eigendecomposition floor
+                    eig_new, vec_new = torch.linalg.eigh(Sigma_new)
+                    eig_new = eig_new.clamp(min=eps)
+                    Sigma_new = vec_new * eig_new.unsqueeze(-2) @ vec_new.transpose(-1, -2)
 
     Sigma_new = Sigma_new.to(orig_dtype)
 
@@ -1658,6 +1691,9 @@ class VariationalFFNDynamic(nn.Module):
         per_head_kappa: bool = False,  # If True, learn separate κ_h per head
         # Phi gradient preconditioning mode
         phi_natural_gradient: str = 'clip',  # 'clip'|'cartan'|'killing'|'pullback'
+        # Ablation toggles
+        use_exp_map_retraction: bool = True,  # True=exp map (443041f), False=linear+Cholesky
+        use_full_nat_grad: bool = True,       # True=Σ@∇@Σ (443041f), False=diag approx
     ):
         """
         Initialize dynamic-β VFE FFN.
@@ -1702,6 +1738,10 @@ class VariationalFFNDynamic(nn.Module):
         self.diagonal_covariance = diagonal_covariance
         self.compute_sigma_align_grad = compute_sigma_align_grad
         self.sigma_softmax_coupling = sigma_softmax_coupling
+
+        # Ablation toggles
+        self.use_exp_map_retraction = use_exp_map_retraction
+        self.use_full_nat_grad = use_full_nat_grad
 
         # Phi evolution via VFE gradients (principled approach)
         self.update_phi = update_phi
@@ -2260,7 +2300,8 @@ class VariationalFFNDynamic(nn.Module):
             # STEP 3: Natural gradient projection
             # =================================================================
             nat_grad_mu, nat_grad_sigma = compute_natural_gradient_gpu(
-                grad_mu, grad_sigma, sigma_current, eps=eps
+                grad_mu, grad_sigma, sigma_current, eps=eps,
+                use_full_nat_grad=self.use_full_nat_grad,
             )
 
             # =================================================================
@@ -2303,6 +2344,7 @@ class VariationalFFNDynamic(nn.Module):
                         step_size=sigma_lr,
                         trust_region=0.1,  # Max 10% change per iteration
                         eps=eps,
+                        use_exp_map=self.use_exp_map_retraction,
                     )
 
             # =============================================================

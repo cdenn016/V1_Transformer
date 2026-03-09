@@ -473,6 +473,9 @@ class GaugeTransformerLM(nn.Module):
             rope_base=config.get('rope_base', 10000.0),
             # Phi gradient preconditioning
             phi_natural_gradient=config.get('phi_natural_gradient', 'clip'),
+            # Ablation toggles
+            use_exp_map_retraction=config.get('use_exp_map_retraction', True),
+            use_full_nat_grad=config.get('use_full_nat_grad', True),
         )
 
         # =================================================================
