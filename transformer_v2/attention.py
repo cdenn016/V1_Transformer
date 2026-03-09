@@ -28,7 +28,7 @@ from transformer_v2.kl_ops import (
 from transformer_v2.gauge_utils import stable_matrix_exp_pair
 
 try:
-    from math_utils.generators import generate_so3_generators
+    from .generators import generate_so3_generators
     GENERATORS_AVAILABLE = True
 except ImportError:
     GENERATORS_AVAILABLE = False

@@ -21,7 +21,7 @@ from transformer_v2.config import GaugeTransformerConfig
 from transformer_v2.gauge_utils import so3_log, so3_compose_bch, SON_BCH_AVAILABLE
 
 try:
-    from math_utils.generators import soN_compose_bch_torch
+    from .generators import soN_compose_bch_torch
 except ImportError:
     pass
 
