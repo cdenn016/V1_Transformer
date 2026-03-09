@@ -201,6 +201,50 @@ We begin with a general geometric construction that naturally supports hierarchi
 
 Briefly, in this current report, we describe agents as modeled by a local section of an associated bundle to a principal $G$ fiber bundle whereby tokens are represented by agents occupying a single 0-dimensional base manifold. Although the base manifold is 0-dimensional and carries no intrinsic ordering or metric, the discrete index set of agents (tokens) may be endowed with additional structure such as a sequential ordering or a distance function that enters the theory only through the attention prior $\pi_j$ (Section~\ref{sec:nonuniform_priors}) and/or through position-dependent gauge frames (Section~\ref{sec:rope}). This separation between the geometric base (which determines gauge connections and curvature) and the combinatorial index structure (which determines masking and positional biases) is important: causal masking and distance-dependent priors impose structure on which agents communicate, not on the underlying fiber geometry. We shall show that this framework enables a unified description of both intra-agent inference and inter-agent communication in terms of gauge frame transport and alignment via a generalized free energy principle.
 
+\paragraph{Notation and glossary.} Table~\ref{tab:notation} summarizes the principal symbols used throughout this work.
+
+\begin{table}[h]
+\centering
+\caption{Summary of notation. Symbols are grouped by category: agents and beliefs, gauge geometry, variational quantities, and Transformer correspondences.}
+\label{tab:notation}
+\small
+\begin{tabularx}{\textwidth}{@{}l l X@{}}
+\toprule
+\textbf{Symbol} & \textbf{Domain} & \textbf{Description} \\
+\midrule
+\multicolumn{3}{@{}l}{\textit{Agents and beliefs}} \\
+$i, j$ & $\{1,\ldots,N\}$ & Agent (token) indices \\
+$q_i = \mathcal{N}(\mu_i, \Sigma_i)$ & $\mathcal{P}(\mathbb{R}^K)$ & Belief distribution of agent $i$ (context-dependent) \\
+$p_i = \mathcal{N}(\mu_p^i, \Sigma_p^i)$ & $\mathcal{P}(\mathbb{R}^K)$ & Prior distribution (from token embedding) \\
+$s_i, r_i$ & $\mathcal{P}(\mathbb{R}^K)$ & Model-fiber belief and prior (generative model) \\
+$K$ & $\mathbb{Z}^+$ & Embedding (fiber) dimension \\
+$N$ & $\mathbb{Z}^+$ & Sequence length (number of agents) \\
+\midrule
+\multicolumn{3}{@{}l}{\textit{Gauge geometry}} \\
+$G = \mathrm{GL}(K)$ & Lie group & Structure group (general linear group) \\
+$\phi_i \in \mathfrak{g}$ & $\mathbb{R}^{K \times K}$ & Gauge frame parameters (Lie algebra element) for agent $i$ \\
+$\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ & $G$ & Parallel transport operator from frame $j$ to frame $i$ \\
+$\rho: G \to \mathrm{GL}(V)$ & & Representation of $G$ on the fiber $V$ \\
+\midrule
+\multicolumn{3}{@{}l}{\textit{Variational quantities}} \\
+$\mathcal{F}$ & $\mathbb{R}$ & Gauge-covariant variational free energy \\
+$D_{\KL}(q \| p)$ & $\mathbb{R}_{\geq 0}$ & Forward Kullback--Leibler divergence \\
+$\beta_{ij}$ & $[0,1]$, $\sum_j \beta_{ij} = 1$ & Attention weight (source-selection posterior) \\
+$\gamma_{ij}$ & $[0,1]$ & Model-fiber coupling weight \\
+$\alpha$ & $\mathbb{R}^+$ & Prior precision (self-consistency weight) \\
+$\kappa$ ($\tau$) & $\mathbb{R}^+$ & Attention temperature (softmax inverse temperature) \\
+$\lambda$ & $\mathbb{R}^+$ & Belief alignment coupling strength \\
+$\pi_j$ & $[0,1]$, $\sum_j \pi_j = 1$ & Attention prior (encodes masking, positional bias) \\
+\midrule
+\multicolumn{3}{@{}l}{\textit{Transformer correspondences (flat-bundle, isotropic limit)}} \\
+$Q_i, K_j$ & $\mathbb{R}^{d_k}$ & Query and key vectors ($\to \mu_i, \mu_j$ under reduction) \\
+$V_j$ & $\mathbb{R}^{d_v}$ & Value vector \\
+$W_Q, W_K$ & $\mathbb{R}^{d_k \times d}$ & Projection matrices ($\to$ gauge transformations) \\
+$d_k$ & $\mathbb{Z}^+$ & Head dimension ($= K$ per irrep block) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
 \subsection{An intuitive simplification for non-geometers}
 For interdisciplinary readers, it may be helpful to visualize each agent in this framework as a vector and a matrix field defined over a finite spatial region. 
 
@@ -1607,6 +1651,32 @@ where $\tilde{\nabla}$ denotes natural gradients projected via the Fisher-Rao me
 
 where $\theta = \{\mu_{\text{embed}}, \Sigma_{\text{embed}}, \phi_{\text{embed}}, W_{\text{out}}\}$. The evolved beliefs $\{q_i^*\}$ are not detached and gradients flow through the VFE dynamics, enabling end-to-end learning of how embedding initializations affect belief evolution. A fully backpropagation-free implementation is reserved for future work.
 
+\begin{algorithm}[t]
+\caption{GL($K$) Gauge Transformer Training Loop}
+\label{alg:em_loop}
+\begin{algorithmic}[1]
+\REQUIRE Token sequence $(x_1, \ldots, x_N)$; learnable parameters $\theta = \{\mu_{\text{embed}}, \Sigma_{\text{embed}}, \phi_{\text{embed}}, W_{\text{out}}\}$
+\STATE \textbf{Initialize beliefs from priors:} $\mu_i \leftarrow \mu_{\text{embed}}^{x_i}$, $\Sigma_i \leftarrow \Sigma_{\text{embed}}^{x_i}$, $\phi_i \leftarrow \phi_{\text{embed}}^{x_i}$
+\STATE
+\STATE \textit{--- E-step: Variational belief inference (within forward pass) ---}
+\FOR{$t = 1$ \TO $T_{\text{inner}}$}
+    \STATE Compute transport: $\Omega_{ij} \leftarrow \exp(\phi_i)\exp(-\phi_j)$ \hfill $\triangleright$ Gauge parallel transport
+    \FOR{each head $h$ (irrep block)}
+        \STATE $\beta_{ij}^{(h)} \leftarrow \softmax\!\Big(-D_{\KL}(q_i^{(h)} \,\|\, \Omega_{ij}^{(h)} q_j^{(h)}) \,/\, \kappa_h\Big)$ \hfill $\triangleright$ KL attention
+        \STATE $\nabla_{\mu} \mathcal{F} \leftarrow \alpha\,\Sigma_p^{-1}(\mu_i - \mu_p) + \lambda \sum_j \beta_{ij}\, \nabla_\mu D_{\KL}(q_i \,\|\, \Omega_{ij} q_j) + \nabla_\mu \mathcal{L}_{\text{obs}}$
+    \ENDFOR
+    \STATE $\tilde{\nabla}_\mu \leftarrow \Sigma_i \cdot \nabla_\mu \mathcal{F}$ \hfill $\triangleright$ Natural gradient (Fisher preconditioning)
+    \STATE $\mu_i \leftarrow \mu_i - \eta_E\, \tilde{\nabla}_\mu$ \hfill $\triangleright$ Trust-region-constrained update
+    \STATE (Optional) $\Sigma_i \leftarrow \mathrm{Retract}_{\mathrm{SPD}}(\Sigma_i,\, -\eta_\Sigma\, \tilde{\nabla}_\Sigma)$ \hfill $\triangleright$ SPD manifold retraction
+    \STATE (Optional) $\phi_i \leftarrow \mathrm{Retract}_{\mathfrak{g}}(\phi_i,\, -\eta_\phi\, \nabla_\phi \mathcal{F})$ \hfill $\triangleright$ Lie algebra retraction
+\ENDFOR
+\STATE
+\STATE \textit{--- M-step: Parameter learning (backpropagation) ---}
+\STATE Compute loss: $\mathcal{L} = \mathcal{L}_{\text{CE}}(\mu_i^*, W_{\text{out}}) + \alpha\sum_i D_{\KL}(q_i^* \,\|\, p_i) + \frac{\alpha_\phi}{2}\|\phi\|^2$
+\STATE $\theta \leftarrow \theta - \eta_M\, \nabla_\theta \mathcal{L}$ \hfill $\triangleright$ Adam on all embeddings and $W_{\text{out}}$
+\end{algorithmic}
+\end{algorithm}
+
 \subsubsection{Belief and Prior Initialization}
 
 Agent beliefs $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ represent context-dependent semantic interpretations that evolve through communication. Token priors $p_c = \mathcal{N}(\mu_p^c, \Sigma_p^c)$ and gauge frame coefficients $\phi_c^a \in \mathbb{R}$ are initialized from $\mathcal{N}(0, \sigma_{\text{init}}^2)$ with $\sigma_{\text{init}} = 0.3$, serving as learnable token representations analogous to embedding matrices.
@@ -2648,6 +2718,11 @@ Once the gradient direction is determined, we apply a step with learning rate $\
 
 
 \section{Conditional Uniqueness of the Forward KL Divergence via Variational Duality}
+
+\paragraph{Intuition.}
+Why must the divergence measuring inter-agent communication cost be the \emph{forward} KL, and not some other statistical distance?  The answer emerges from the interplay of three requirements that any well-behaved multi-agent variational system must satisfy simultaneously.  First, we want each agent's updated belief $q_i^*$ to remain a tractable exponential-family distribution (i.e.\ a Gaussian), so that the belief update has a closed-form Boltzmann/Gibbs structure---a geometric mean of the prior and the transported neighbor beliefs.  Second, the attention weights $\beta_{ij}$ should act as proper dual variables: the marginal cost of attending to neighbor $j$ should equal the divergence between the agent's belief and that neighbor's signal, consistent with the envelope theorem.  Third, the divergence should be local and enter the free energy linearly in $\beta_{ij}$, preserving the softmax form of attention.
+
+The key insight is that these three conditions, each individually mild, are \emph{jointly} very restrictive.  Alternative divergences each violate at least one.  The reverse KL introduces $1/q_i$ terms that break exponential-family closure, forcing transcendental equations solvable only via the Lambert $W$ function.  The $\chi^2$-divergence produces algebraic (polynomial-ratio) rather than exponential solutions.  Symmetric divergences like Jensen--Shannon mix logarithmic and reciprocal terms, destroying log-linearity.  Only the forward KL---whose generator $f(t) = t\log t - t + 1$ yields $f'(t) = \log t$---produces a stationarity condition that is \emph{linear in $\log q_i$}, which is precisely the condition for the solution to remain in the exponential family.  The following theorem makes this precise.
 
 We now show that, within a broad but well-defined class of variational games, the forward KL divergence $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ is the only divergence that yields a closed-form Gibbs-type solution for the belief update and a consistent dual interpretation for the attention weights.  Agents locally minimize their agent-specific variational free energy and the system of agents minimize their collective global free energies.  This local-global coordination gives rise to the expected forward KL attention term.
 
