@@ -384,10 +384,14 @@ class GaugeTransformerBlock(nn.Module):
         if mu_prior is None:
             raise ValueError("VFE_dynamic mode requires mu_prior argument")
 
+        # Normalize mu_prior with the same LayerNorm so KL(q||p) compares
+        # beliefs and priors at the same scale (avoids systematic KL bias).
+        mu_prior_normalized = self.norm2(mu_prior)
+
         mu_ffn, sigma_ffn, phi_out = self.ffn(
             mu=mu_normalized,
             beta=beta,          # Initial β (will be recomputed each step inside FFN)
-            mu_prior=mu_prior,  # From embeddings
+            mu_prior=mu_prior_normalized,  # Normalized to match mu scale
             phi=phi,            # Current gauge frames
             sigma=sigma_q,      # Current covariances
             mask=mask,          # Causal mask
