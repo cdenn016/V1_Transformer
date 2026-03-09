@@ -135,12 +135,12 @@ Finally, we show that gradient descent on the gauge-equivariant free energy, in 
 % Layout: C1, C2 in U_i only; C3, C4 in overlap U_i∩U_j;
 %         C5, C6 in U_j only.
 % =====================================================================
-\coordinate (C1) at (0.6,-0.15);
-\coordinate (C2) at (2.0,-0.25);
-\coordinate (C3) at (3.6,-0.15);
-\coordinate (C4) at (5.2,0.00);
-\coordinate (C5) at (6.8,0.15);
-\coordinate (C6) at (8.2,0.25);
+\coordinate (C1) at (0.6,-0.30);
+\coordinate (C2) at (2.0,-0.38);
+\coordinate (C3) at (3.6,-0.30);
+\coordinate (C4) at (5.2,-0.20);
+\coordinate (C5) at (6.8,-0.12);
+\coordinate (C6) at (8.2,-0.08);
 
 % =====================================================================
 % LOCAL OPEN NEIGHBORHOODS U_i, U_j ON THE BASE — with overlap
@@ -152,15 +152,16 @@ Finally, we show that gradient descent on the gauge-equivariant free energy, in 
 
 % U_i: agent i's local open set (left to center)
 % Center at x=3.0 with x-radius 3.0 → right edge at x=6.0, covering C4 at x=5.2
+% y-radius 0.35 keeps the ellipse within the base surface (top edge ~y=0.0 here)
 \filldraw[neighborblue, opacity=0.12, draw=neighborblue!60,
           line width=0.5pt, densely dashed]
-  (3.0,-0.20) ellipse (3.0 and 0.55);
-\node[neighborblue!80!black, font=\scriptsize] at (0.7,-0.05) {$\mathcal{U}_i$};
+  (3.2,-0.35) ellipse (2.8 and 0.42);
+\node[neighborblue!80!black, font=\scriptsize] at (0.7,-0.20) {$\mathcal{U}_i$};
 
 % U_j: agent j's local open set (center to right)
 \filldraw[neighborred, opacity=0.12, draw=neighborred!60,
           line width=0.5pt, densely dashed]
-  (6.2,-0.20) ellipse (2.7 and 0.52);
+  (6.2,-0.30) ellipse (2.7 and 0.38);
 \node[neighborred!80!black, font=\scriptsize] at (8.2,0.0) {$\mathcal{U}_j$};
 
 % Overlap label — between C3 and C4
