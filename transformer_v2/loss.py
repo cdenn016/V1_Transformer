@@ -134,7 +134,7 @@ def compute_vfe_loss(
     token_ids: torch.Tensor,
     targets: torch.Tensor,
     alpha: float = 0.0,
-    lambda_beta: float = 1.0,
+    lambda_beta: float = 0.0,
     lambda_gamma: float = 0.0,
     kappa_gamma: float = 1.0,
     lambda_hyper: float = 0.0,

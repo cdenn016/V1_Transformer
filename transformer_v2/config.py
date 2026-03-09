@@ -41,11 +41,11 @@ class GaugeTransformerConfig:
     evolve_phi_e_step: bool = False
 
     # ── VFE parameters ────────────────────────────────────────────────
-    alpha: float = 0.001           # Prior self-coupling weight in VFE loop
+    alpha: float = 0.0             # Prior self-coupling weight in VFE loop
     kappa: float = 1.0             # Softmax temperature for attention
     n_vfe_iterations: int = 1      # E-step iterations per forward pass
     learnable_lr: bool = True      # Learn step size for variational descent
-    lambda_belief: float = 1.0     # Belief alignment weight
+    lambda_belief: float = 0.0     # Belief alignment weight
     update_sigma: bool = True      # Update covariances during VFE
     sigma_softmax_coupling: bool = False  # Include ∂β/∂Σ in sigma gradient
     compute_sigma_align_grad: bool = True
