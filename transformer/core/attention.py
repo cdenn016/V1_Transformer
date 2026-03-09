@@ -798,8 +798,13 @@ def _compute_kl_matrix_torch(
     # =========================================================================
     # Step 4: Compute all KL divergences
     # KL(q_i || Ω_ij[q_j]) = KL(N(μ_i, Σ_i) || N(μ_j^{→i}, Σ_j^{→i}))
+    # Force float32 for Cholesky, solve_triangular, log-det — all break in float16.
     # =========================================================================
-    I = torch.eye(K, device=device, dtype=dtype)
+    mu_i = mu_i.float()
+    Sigma_i = Sigma_i.float()
+    mu_transported = mu_transported.float()
+    Sigma_transported = Sigma_transported.float()
+    I = torch.eye(K, device=device, dtype=torch.float32)
     Sigma_i_reg = Sigma_i + eps * I
     Sigma_transported_reg = Sigma_transported + eps * I
 
@@ -895,7 +900,7 @@ def _compute_kl_matrix_torch(
             _nr("nan_replace")
         kl_all = kl_all.nan_to_num(nan=0.0, posinf=kl_ceil, neginf=0.0)
 
-        return kl_all
+        return kl_all.to(dtype)
 
     except RuntimeError:
         # Fallback to loop-based computation if solve_triangular fails
@@ -1116,27 +1121,34 @@ def _compute_kl_matrix_diagonal(
     # Step 4: Diagonal KL divergence (vectorized)
     # KL(q_i || transported q_j) where q_i ~ N(μ_i, diag(σ_i))
     # transported q_j ~ N(μ_j^{→i}, diag(σ_j_transported))
+    # Force float32 for sigma divisions and logs to survive AMP float16.
     # =========================================================================
-    mu_i = mu_q[:, :, None, :].expand(-1, -1, N, -1)  # (B, N, N, K)
+    with torch.amp.autocast('cuda', enabled=False):
+        sigma_i = sigma_i.float()
+        sigma_j_transported_diag = sigma_j_transported_diag.float()
+        mu_transported = mu_transported.float()
+        mu_q_f32 = mu_q.float()
 
-    # Trace term: sum(σ_i / σ_j_transported)
-    trace_term = (sigma_i / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
+        mu_i = mu_q_f32[:, :, None, :].expand(-1, -1, N, -1)  # (B, N, N, K)
 
-    # Mahalanobis term: sum((μ_j^{→i} - μ_i)² / σ_j_transported)
-    delta_mu = mu_transported - mu_i  # (B, N, N, K)
-    mahal_term = ((delta_mu ** 2) / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
+        # Trace term: sum(σ_i / σ_j_transported)
+        trace_term = (sigma_i / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
 
-    # Log determinant term: sum(log(σ_j_transported) - log(σ_i))
-    logdet_term = (torch.log(sigma_j_transported_diag) - torch.log(sigma_i)).sum(dim=-1)  # (B, N, N)
+        # Mahalanobis term: sum((μ_j^{→i} - μ_i)² / σ_j_transported)
+        delta_mu = mu_transported - mu_i  # (B, N, N, K)
+        mahal_term = ((delta_mu ** 2) / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
 
-    # Full KL
-    kl_all = 0.5 * (trace_term + mahal_term - K + logdet_term)
-    # Clamp KL to [0, max] for numerical stability.
-    # Scale ceiling with K: each dimension contributes O(1) to KL.
-    kl_ceil = max(100.0, 5.0 * K)
-    kl_all = torch.clamp(kl_all, min=0.0, max=kl_ceil)
+        # Log determinant term: sum(log(σ_j_transported) - log(σ_i))
+        logdet_term = (torch.log(sigma_j_transported_diag) - torch.log(sigma_i)).sum(dim=-1)  # (B, N, N)
 
-    return kl_all
+        # Full KL
+        kl_all = 0.5 * (trace_term + mahal_term - K + logdet_term)
+        # Clamp KL to [0, max] for numerical stability.
+        # Scale ceiling with K: each dimension contributes O(1) to KL.
+        kl_ceil = max(100.0, 5.0 * K)
+        kl_all = torch.clamp(kl_all, min=0.0, max=kl_ceil)
+
+    return kl_all.to(dtype)
 
 
 # =============================================================================
@@ -1188,8 +1200,10 @@ def _compute_kl_matrix_chunked(
     del phi_matrix  # Free memory
 
     # Precompute Cholesky of query covariances (for logdet_q term)
-    I = torch.eye(K, device=device, dtype=dtype)
-    sigma_q_reg = sigma_q + eps * I
+    # Force float32 for Cholesky, solve_triangular, log — all break in float16
+    I = torch.eye(K, device=device, dtype=torch.float32)
+    sigma_q_f32 = sigma_q.float()
+    sigma_q_reg = sigma_q_f32 + eps * I
     L_q_all = torch.linalg.cholesky(sigma_q_reg)  # (B, N, K, K)
     logdet_q_all = 2.0 * torch.sum(
         torch.log(torch.diagonal(L_q_all, dim1=-2, dim2=-1) + eps), dim=-1
@@ -1252,8 +1266,11 @@ def _compute_kl_matrix_chunked(
             # Compute KL divergence for this chunk
             # =================================================================
             # Expand mu_i and sigma_i for pairwise comparison - use .clone() after expand
-            mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()  # (B, n_i, n_j, K)
-            sigma_i_exp = sigma_i_reg[:, :, None, :, :].expand(-1, -1, n_j, -1, -1).clone()
+            # Force float32 for Cholesky/solve/log
+            mu_i_exp = mu_i.float()[:, :, None, :].expand(-1, -1, n_j, -1).clone()  # (B, n_i, n_j, K)
+            sigma_i_exp = sigma_i_reg.float()[:, :, None, :, :].expand(-1, -1, n_j, -1, -1).clone()
+            mu_transported = mu_transported.float()
+            Sigma_transported = Sigma_transported.float()
 
             Sigma_transported_reg = Sigma_transported + eps * I
 
@@ -1415,26 +1432,32 @@ def _compute_kl_matrix_diagonal_chunked(
             del Omega_chunk
 
             # =================================================================
-            # Diagonal KL computation
+            # Diagonal KL computation (float32 for sigma divisions and logs)
             # =================================================================
-            mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1)  # (B, n_i, n_j, K)
-            sigma_i_exp = sigma_i[:, :, None, :].expand(-1, -1, n_j, -1)  # (B, n_i, n_j, K)
+            with torch.amp.autocast('cuda', enabled=False):
+                mu_i_f32 = mu_i.float()
+                mu_transported_f32 = mu_transported.float()
+                sigma_i_f32 = sigma_i.float()
+                sigma_j_transported_f32 = sigma_j_transported.float()
 
-            # Trace term: sum(σ_i / σ_j_transported)
-            trace_term = (sigma_i_exp / sigma_j_transported).sum(dim=-1)
+                mu_i_exp = mu_i_f32[:, :, None, :].expand(-1, -1, n_j, -1)  # (B, n_i, n_j, K)
+                sigma_i_exp = sigma_i_f32[:, :, None, :].expand(-1, -1, n_j, -1)  # (B, n_i, n_j, K)
 
-            # Mahalanobis term
-            delta_mu = mu_transported - mu_i_exp
-            mahal_term = ((delta_mu ** 2) / sigma_j_transported).sum(dim=-1)
+                # Trace term: sum(σ_i / σ_j_transported)
+                trace_term = (sigma_i_exp / sigma_j_transported_f32).sum(dim=-1)
 
-            # Log determinant term
-            logdet_term = (torch.log(sigma_j_transported) - torch.log(sigma_i_exp)).sum(dim=-1)
+                # Mahalanobis term
+                delta_mu = mu_transported_f32 - mu_i_exp
+                mahal_term = ((delta_mu ** 2) / sigma_j_transported_f32).sum(dim=-1)
 
-            # Full KL
-            kl_chunk = 0.5 * (trace_term + mahal_term - K + logdet_term)
-            # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
-            kl_ceil = max(100.0, 5.0 * K)
-            kl_chunk = torch.clamp(kl_chunk, min=0.0, max=kl_ceil)
+                # Log determinant term
+                logdet_term = (torch.log(sigma_j_transported_f32) - torch.log(sigma_i_exp)).sum(dim=-1)
+
+                # Full KL
+                kl_chunk = 0.5 * (trace_term + mahal_term - K + logdet_term)
+                # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
+                kl_ceil = max(100.0, 5.0 * K)
+                kl_chunk = torch.clamp(kl_chunk, min=0.0, max=kl_ceil).to(dtype)
 
             col_chunks_list.append(kl_chunk)
 
