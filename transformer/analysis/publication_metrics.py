@@ -99,6 +99,8 @@ class TrainingSnapshot:
     grad_norm_mu: float = 0.0
     grad_norm_sigma: float = 0.0
     grad_norm_phi: float = 0.0
+    grad_norm_ffn: float = 0.0
+    grad_norm_other: float = 0.0
     lr_current: float = 0.0
     tokens_per_sec: float = 0.0
     step_time: float = 0.0
@@ -172,6 +174,8 @@ class TrainingTracker:
             grad_norm_mu=grad_norms.get('mu', 0) if grad_norms else 0,
             grad_norm_sigma=grad_norms.get('sigma', 0) if grad_norms else 0,
             grad_norm_phi=grad_norms.get('phi', 0) if grad_norms else 0,
+            grad_norm_ffn=grad_norms.get('ffn', 0) if grad_norms else 0,
+            grad_norm_other=grad_norms.get('other', 0) if grad_norms else 0,
             lr_current=lr,
             tokens_per_sec=tokens_per_sec,
             step_time=step_time,
@@ -334,10 +338,14 @@ class PublicationFigures:
                         'g--', label='Σ', alpha=0.6, linewidth=1)
             ax.semilogy(steps, [s.grad_norm_phi for s in history],
                         'r--', label='φ', alpha=0.6, linewidth=1)
+            ax.semilogy(steps, [s.grad_norm_ffn for s in history],
+                        'm--', label='FFN', alpha=0.6, linewidth=1)
+            ax.semilogy(steps, [s.grad_norm_other for s in history],
+                        'c:', label='Other', alpha=0.5, linewidth=1)
             ax.set_xlabel('Training Step')
             ax.set_ylabel('Gradient Norm')
             ax.set_title('(d) Gradient Norms')
-            ax.legend(loc='upper right', ncol=2)
+            ax.legend(loc='upper right', ncol=3)
             ax.grid(True, alpha=0.3)
 
         # Format x-axis to show steps as k notation (150000 -> 150k)

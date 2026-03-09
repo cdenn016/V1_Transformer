@@ -793,7 +793,8 @@ class PublicationMetricsTracker:
             'mu_lr', 'sigma_lr', 'phi_lr', 'ffn_lr',
 
             # Gradient norms
-            'grad_norm_total', 'grad_norm_mu', 'grad_norm_ffn',
+            'grad_norm_total', 'grad_norm_mu', 'grad_norm_sigma',
+            'grad_norm_phi', 'grad_norm_ffn', 'grad_norm_other',
 
             # Bayesian alpha diagnostics
             'alpha_mean', 'alpha_std', 'alpha_min', 'alpha_max',
@@ -872,7 +873,10 @@ class PublicationMetricsTracker:
             # Gradients
             'grad_norm_total': grad_norms.get('total', 0) if grad_norms else 0,
             'grad_norm_mu': grad_norms.get('mu', 0) if grad_norms else 0,
+            'grad_norm_sigma': grad_norms.get('sigma', 0) if grad_norms else 0,
+            'grad_norm_phi': grad_norms.get('phi', 0) if grad_norms else 0,
             'grad_norm_ffn': grad_norms.get('ffn', 0) if grad_norms else 0,
+            'grad_norm_other': grad_norms.get('other', 0) if grad_norms else 0,
 
             # Bayesian alpha diagnostics
             'alpha_mean': metrics.get('bayesian/alpha_mean'),
@@ -1355,34 +1359,37 @@ class PublicationTrainer(FastTrainer):
         return metrics, grad_norms
 
     def _compute_gradient_norms(self) -> Dict[str, float]:
-        """Compute gradient norms for different parameter groups."""
-        norms = {'total': 0, 'mu': 0, 'sigma': 0, 'phi': 0, 'ffn': 0}
+        """Compute gradient norms for different parameter groups.
 
-        total_norm = 0
-        mu_norm = 0
-        sigma_norm = 0
-        phi_norm = 0
-        ffn_norm = 0
+        Every parameter is categorized into exactly one group so that
+        sum(group_norm**2) == total_norm**2.  Groups:
+            mu    – mean embeddings (mu_embed, parameters with 'mu')
+            sigma – covariance embeddings (sigma_embed, log_sigma, L_embed)
+            phi   – gauge / phase embeddings (phi_embed, parameters with 'phi')
+            ffn   – feed-forward network parameters
+            other – everything else (LayerNorm, output projections, kappa, pos_embed, …)
+        """
+        groups = {'mu': 0.0, 'sigma': 0.0, 'phi': 0.0, 'ffn': 0.0, 'other': 0.0}
 
         for name, param in self.model.named_parameters():
             if param.grad is not None:
-                param_norm = param.grad.data.norm(2).item()
-                total_norm += param_norm ** 2
+                param_norm_sq = param.grad.data.norm(2).item() ** 2
+                name_lower = name.lower()
 
-                if 'mu_embed' in name or 'mu' in name.lower():
-                    mu_norm += param_norm ** 2
-                elif 'sigma_embed' in name or 'sigma' in name.lower() or 'L_embed' in name:
-                    sigma_norm += param_norm ** 2
-                elif 'phi_embed' in name or 'phi' in name.lower():
-                    phi_norm += param_norm ** 2
-                elif 'ffn' in name:
-                    ffn_norm += param_norm ** 2
+                if 'mu_embed' in name or 'mu' in name_lower:
+                    groups['mu'] += param_norm_sq
+                elif 'sigma_embed' in name or 'sigma' in name_lower or 'L_embed' in name or 'log_sigma' in name_lower:
+                    groups['sigma'] += param_norm_sq
+                elif 'phi_embed' in name or 'phi' in name_lower:
+                    groups['phi'] += param_norm_sq
+                elif 'ffn' in name_lower:
+                    groups['ffn'] += param_norm_sq
+                else:
+                    groups['other'] += param_norm_sq
 
-        norms['total'] = math.sqrt(total_norm)
-        norms['mu'] = math.sqrt(mu_norm)
-        norms['sigma'] = math.sqrt(sigma_norm)
-        norms['phi'] = math.sqrt(phi_norm)
-        norms['ffn'] = math.sqrt(ffn_norm)
+        total_sq = sum(groups.values())
+        norms = {k: math.sqrt(v) for k, v in groups.items()}
+        norms['total'] = math.sqrt(total_sq)
 
         return norms
 
@@ -1562,7 +1569,8 @@ class PublicationTrainer(FastTrainer):
                     if grad_norms:
                         tqdm.write(f"  [GRAD] total: {grad_norms['total']:.3e} | "
                                    f"mu: {grad_norms['mu']:.3e} | sigma: {grad_norms['sigma']:.3e} | "
-                                   f"phi: {grad_norms['phi']:.3e}\n\n")
+                                   f"phi: {grad_norms['phi']:.3e} | ffn: {grad_norms['ffn']:.3e} | "
+                                   f"other: {grad_norms['other']:.3e}\n\n")
                     # Print Bayesian alpha diagnostics
                     if metrics.get('bayesian/alpha_mean') is not None:
                         tqdm.write(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
@@ -1577,7 +1585,8 @@ class PublicationTrainer(FastTrainer):
                     if grad_norms:
                         print(f"  [GRAD] total: {grad_norms['total']:.3e} | "
                               f"mu: {grad_norms['mu']:.3e} | sigma: {grad_norms['sigma']:.3e} | "
-                              f"phi: {grad_norms['phi']:.3e}\n\n")
+                              f"phi: {grad_norms['phi']:.3e} | ffn: {grad_norms['ffn']:.3e} | "
+                              f"other: {grad_norms['other']:.3e}\n\n")
                     if metrics.get('bayesian/alpha_mean') is not None:
                         print(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
                               f"std: {metrics['bayesian/alpha_std']:.4f} | "
