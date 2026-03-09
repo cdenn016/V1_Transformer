@@ -220,7 +220,6 @@ config = GaugeTransformerConfig(
     use_positional_embedding=False,
 
     # Regularization
-    dropout=0.0,
     use_layernorm=True,
     use_residual=True,
 )

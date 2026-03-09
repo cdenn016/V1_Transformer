@@ -109,9 +109,7 @@ class GaugeTransformerConfig:
     tie_embeddings: bool = True
 
     # ── Regularization ────────────────────────────────────────────────
-    dropout: float = 0.0
     use_layernorm: bool = True
-    use_dropout: bool = False
     use_residual: bool = True
 
     # ── Derived (computed in __post_init__) ────────────────────────────
@@ -165,7 +163,6 @@ class GaugeTransformerConfig:
             'irrep_spec': 'irrep_spec',
             'kappa_beta': 'kappa_ffn',
             'kappa': 'kappa_loss',
-            'dropout': 'dropout',
             'evolve_sigma': 'evolve_sigma',
             'evolve_phi': 'evolve_phi',
             'evolve_phi_e_step': 'evolve_phi_e_step',
@@ -208,7 +205,6 @@ class GaugeTransformerConfig:
             'phi_lr': 'phi_lr',
             'phi_max_norm': 'phi_max_norm',
             'use_layernorm': 'use_layernorm',
-            'use_dropout': 'use_dropout',
             'use_residual': 'use_residual',
             'mu_init_std': 'mu_init_std',
             'phi_scale': 'phi_scale',

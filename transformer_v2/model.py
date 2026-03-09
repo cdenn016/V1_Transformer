@@ -306,7 +306,6 @@ class GaugeTransformerLM(nn.Module):
             all_betas.append(beta)
             all_kls.append(kl)
 
-            mu_attn = block.dropout1(mu_attn)
             if block.use_residual:
                 mu_q = mu_q + mu_attn
             else:
@@ -403,7 +402,6 @@ class GaugeTransformerLM(nn.Module):
             )
             all_layer_betas.append(beta.detach() if beta is not None else None)
 
-            mu_attn = block.dropout1(mu_attn)
             if block.use_residual:
                 mu_q = mu_q + mu_attn
             else:

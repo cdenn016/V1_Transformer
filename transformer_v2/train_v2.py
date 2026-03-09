@@ -125,10 +125,8 @@ MODEL_CONFIG = dict(
     pos_encoding_mode='none',
 
     # Regularization
-    dropout=0.0,
     use_layernorm=True,
     use_residual=True,
-    use_dropout=False,
 
     # Prior bank
     use_prior_bank=True,
