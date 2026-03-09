@@ -1960,17 +1960,18 @@ def aggregate_messages(
     aggregate_mode: str = 'mean_only',  # 'mean_only' or 'full_distribution'
     diagonal_covariance: bool = False,
     cached_transport: Optional[dict] = None,  # Precomputed transport operators
+    use_primal_transport: bool = False,  # True: Ω_ij μ_j (theory-correct); False: Ω_ij^{-T} μ_j (legacy)
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
     """
-    Aggregate messages with GL(K) metric correction.
+    Aggregate messages with gauge transport.
 
-    For SO(K): m_i = Σ_j β_ij Ω_ij μ_j            (Ω orthogonal)
-    For GL(K): m_i = Σ_j β_ij Ω_ij^{-T} μ_j       (metric factor (ΩΩ^T)^{-1})
+    Primal mode (use_primal_transport=True, theory-correct):
+        m_i = Σ_j β_ij Ω_ij μ_j
+        The mixture model posterior mean uses primal transport for all gauge groups.
 
-    The variational gradient ∂F/∂μ_i includes a metric factor (ΩΩ^T)^{-1},
-    so the principled message from j uses Ω^{-T} μ_j rather than Ω μ_j.
-    For SO(K), Ω^{-T} = Ω identically (orthogonal matrices). For GL(K),
-    the correction is non-trivial and required for faithful variational inference.
+    Legacy mode (use_primal_transport=False):
+        For SO(K): m_i = Σ_j β_ij Ω_ij μ_j            (Ω orthogonal, equivalent)
+        For GL(K): m_i = Σ_j β_ij Ω_ij^{-T} μ_j       (metric factor (ΩΩ^T)^{-1})
 
     0D Version: Simple weighted sum over agents, no spatial integration!
 
@@ -1990,6 +1991,8 @@ def aggregate_messages(
         generators: SO(3) generators (3, K, K)
         aggregate_mode: 'mean_only' or 'full_distribution'
         cached_transport: Optional dict with precomputed 'Omega' from compute_transport_operators()
+        use_primal_transport: If True, always use Ω_ij (primal). If False,
+            use Ω_ij^{-T} for GL(K) (legacy behavior).
 
     Returns:
         mu_agg: Aggregated means (B, N, K)
@@ -2019,25 +2022,24 @@ def aggregate_messages(
         # Omega_ij = exp(φ_i) @ exp(-φ_j)  ->  (B, N, N, K, K)
         Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
 
-    # Step 1.5: GL(K) metric correction for message transport
-    # The variational gradient ∂F/∂μ_i includes a metric factor (ΩΩ^T)^{-1},
-    # so the principled message from j uses Ω^{-T} μ_j rather than Ω μ_j.
-    # For SO(K): Ω is orthogonal ⟹ Ω^{-T} = Ω (no correction needed).
-    # For GL(K): Ω_ij^{-1} = Ω_ji, so Ω_ij^{-T} = Ω_ji^T — no inversion required.
-    _is_skew = torch.allclose(
-        generators + generators.transpose(-1, -2),
-        torch.zeros_like(generators), atol=1e-5
-    )
-    if _is_skew:
-        # SO(K): orthogonal transport, no metric correction
+    # Step 1.5: Determine transport operator for message passing
+    if use_primal_transport:
+        # Theory-correct: m_i = Σ β_ij Ω_ij μ_j (primal transport for all groups)
         Omega_msg = Omega
     else:
-        # GL(K): metric-corrected transport Ω^{-T} = Ω_ji^T
-        Omega_msg = Omega.permute(0, 2, 1, 3, 4).transpose(-1, -2)
+        # Legacy: GL(K) uses Ω^{-T} metric correction; SO(K) uses Ω (equivalent)
+        _is_skew = torch.allclose(
+            generators + generators.transpose(-1, -2),
+            torch.zeros_like(generators), atol=1e-5
+        )
+        if _is_skew:
+            # SO(K): orthogonal transport, no metric correction
+            Omega_msg = Omega
+        else:
+            # GL(K): metric-corrected transport Ω^{-T} = Ω_ji^T
+            Omega_msg = Omega.permute(0, 2, 1, 3, 4).transpose(-1, -2)
 
-    # Step 2: Transport all means (with GL(K) metric correction if applicable)
-    # SO(K): μ_j^{→i} = Ω_ij @ μ_j
-    # GL(K): μ_j^{→i} = Ω_ij^{-T} @ μ_j  (variational metric factor)
+    # Step 2: Transport all means
     mu_transported = torch.einsum('bijkl,bjl->bijk', Omega_msg, mu_q)  # (B, N, N, K)
 
     # Step 3: Weighted aggregation: m_i = Σ_j β_ij * μ_j^{→i}
@@ -2171,6 +2173,7 @@ class IrrepMultiHeadAttention(nn.Module):
         irrep_dims_override: Optional[List[int]] = None,  # Override block dims (for cross-head coupling)
         use_rope: bool = False,  # If True, apply RoPE rotations to μ before KL computation
         rope_base: float = 10000.0,  # RoPE frequency base
+        use_primal_transport: bool = False,  # If True, use Ω (primal) instead of Ω^{-T} for GL(K)
     ):
         """
         Initialize irrep-structured multi-head attention.
@@ -2198,6 +2201,8 @@ class IrrepMultiHeadAttention(nn.Module):
             use_output_projection: If True, add a learned W_O ∈ R^{K×K} linear
                                   projection after concatenating head outputs.
                                   Enables cross-head information mixing.
+            use_primal_transport: If True, use Ω_ij (primal transport) for all gauge
+                                groups. If False, use Ω_ij^{-T} for GL(K) (legacy).
         """
         super().__init__()
         self.diagonal_covariance = diagonal_covariance
@@ -2214,6 +2219,7 @@ class IrrepMultiHeadAttention(nn.Module):
         self.enforce_orthogonal = enforce_orthogonal
         self.use_rope = use_rope
         self.rope_base = rope_base
+        self.use_primal_transport = use_primal_transport
 
         # Build irrep block structure
         self.irrep_dims = []
@@ -2544,6 +2550,7 @@ class IrrepMultiHeadAttention(nn.Module):
                 aggregate_mode=self.aggregate_mode,
                 diagonal_covariance=self.diagonal_covariance,
                 cached_transport=head_cached_transport,
+                use_primal_transport=self.use_primal_transport,
             )
 
             head_outputs_mu.append(mu_agg)

@@ -476,6 +476,8 @@ class GaugeTransformerLM(nn.Module):
             # Ablation toggles
             use_exp_map_retraction=config.get('use_exp_map_retraction', True),
             use_full_nat_grad=config.get('use_full_nat_grad', True),
+            # Primal transport (theory-correct aggregation)
+            use_primal_transport=config.get('use_primal_transport', False),
         )
 
         # =================================================================
