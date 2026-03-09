@@ -40,12 +40,17 @@ class GaugeTransformerConfig:
     evolve_phi: bool = True
     evolve_phi_e_step: bool = False
 
-    # ── VFE parameters ────────────────────────────────────────────────
-    alpha: float = 0.0             # Prior self-coupling weight in VFE loop
-    kappa: float = 1.0             # Softmax temperature for attention
+    # ── VFE E-step (FFN) parameters ────────────────────────────────────
+    alpha_ffn: float = 0.0         # Precision α for VFE E-step in FFN
+    kappa_ffn: float = 1.0         # Softmax temperature for β in FFN E-step
+    lambda_ffn: float = 0.0        # Belief coupling weight in FFN E-step
     n_vfe_iterations: int = 1      # E-step iterations per forward pass
     learnable_lr: bool = True      # Learn step size for variational descent
-    lambda_belief: float = 0.0     # Belief alignment weight
+
+    # ── Training loss weights ────────────────────────────────────────
+    alpha_loss: float = 0.0        # Self-coupling weight KL(q||p) in training loss
+    kappa_loss: float = 1.0        # Softmax temperature for β in loss
+    lambda_loss: float = 0.0       # Belief coupling weight λ_β in training loss
     update_sigma: bool = True      # Update covariances during VFE
     sigma_softmax_coupling: bool = False  # Include ∂β/∂Σ in sigma gradient
     compute_sigma_align_grad: bool = True
@@ -150,7 +155,8 @@ class GaugeTransformerConfig:
             'hidden_dim': 'hidden_dim',
             'max_seq_len': 'max_seq_len',
             'irrep_spec': 'irrep_spec',
-            'kappa_beta': 'kappa',
+            'kappa_beta': 'kappa_ffn',
+            'kappa': 'kappa_loss',
             'dropout': 'dropout',
             'evolve_sigma': 'evolve_sigma',
             'evolve_phi': 'evolve_phi',
@@ -161,10 +167,12 @@ class GaugeTransformerConfig:
             'gauge_dim': 'gauge_dim',
             'gauge_mode': 'gauge_mode',
             'use_multi_irrep': 'use_multi_irrep',
-            'ffn_alpha': 'alpha',
+            'ffn_alpha': 'alpha_ffn',
+            'alpha': 'alpha_loss',
             'ffn_n_iterations': 'n_vfe_iterations',
             'ffn_learnable_lr': 'learnable_lr',
-            'ffn_lambda_belief': 'lambda_belief',
+            'ffn_lambda_belief': 'lambda_ffn',
+            'lambda_belief': 'lambda_loss',
             'ffn_update_sigma': 'update_sigma',
             'ffn_pure_fep_mode': 'pure_fep_mode',
             'ffn_prior_lr': 'prior_lr',

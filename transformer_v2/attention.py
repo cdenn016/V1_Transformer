@@ -333,7 +333,7 @@ class IrrepMultiHeadAttention(nn.Module):
         super().__init__()
         self.config = config
         self.embed_dim = config.embed_dim
-        self.kappa_beta = config.kappa
+        self.kappa_beta = config.kappa_ffn
         self.epsilon = 1e-8
         self.aggregate_mode = 'mean_only'
         self.diagonal_covariance = config.diagonal_covariance
@@ -383,7 +383,7 @@ class IrrepMultiHeadAttention(nn.Module):
         self.per_head_kappa = config.per_head_kappa
         if config.per_head_kappa:
             self.log_kappa = nn.Parameter(
-                torch.full((self.n_heads,), math.log(max(config.kappa, 1e-6)))
+                torch.full((self.n_heads,), math.log(max(config.kappa_ffn, 1e-6)))
             )
         else:
             self.log_kappa = None

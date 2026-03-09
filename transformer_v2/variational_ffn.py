@@ -644,9 +644,9 @@ class VariationalFFNDynamic(nn.Module):
         self.chunk_size = config.chunk_size
 
         # VFE hyperparameters
-        self.alpha = config.alpha
-        self.lambda_belief = config.lambda_belief
-        self.kappa = config.kappa
+        self.alpha = config.alpha_ffn
+        self.lambda_belief = config.lambda_ffn
+        self.kappa = config.kappa_ffn
 
         # Multi-head VFE
         self.multihead_vfe = config.multihead_vfe and config.irrep_dims is not None
@@ -654,7 +654,7 @@ class VariationalFFNDynamic(nn.Module):
         if self.multihead_vfe and config.per_head_kappa and config.irrep_dims is not None:
             n_heads = len(config.irrep_dims)
             self.log_kappa_heads = nn.Parameter(
-                torch.full((n_heads,), math.log(max(config.kappa, 1e-6)))
+                torch.full((n_heads,), math.log(max(config.kappa_ffn, 1e-6)))
             )
         else:
             self.log_kappa_heads = None
@@ -663,7 +663,7 @@ class VariationalFFNDynamic(nn.Module):
         self.learnable_alpha = config.learnable_alpha
         if config.learnable_alpha:
             a0_init = 1.0
-            alpha_init = max(config.alpha, 0.01)
+            alpha_init = max(config.alpha_ffn, 0.01)
             b0_init = (a0_init + config.embed_dim / 2.0) / alpha_init
             self.raw_a0 = nn.Parameter(torch.tensor(float(np.log(np.expm1(a0_init)))))
             self.raw_b0 = nn.Parameter(torch.tensor(float(np.log(np.expm1(b0_init)))))
