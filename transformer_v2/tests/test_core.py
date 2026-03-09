@@ -136,8 +136,8 @@ class TestConfig:
         }
         cfg = GaugeTransformerConfig.from_legacy_dict(legacy)
         assert cfg.vocab_size == 128
-        assert cfg.kappa == 2.0
-        assert cfg.alpha == 0.01
+        assert cfg.kappa_ffn == 2.0
+        assert cfg.alpha_ffn == 0.01
 
 
 # ── Attention Tests ─────────────────────────────────────────────────────
