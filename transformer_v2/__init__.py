@@ -20,6 +20,7 @@ from .embeddings import GaugeTokenEmbedding, GaugePositionalEncoding
 from .prior_bank import PriorBank
 from .variational_ffn import VariationalFFNDynamic
 from .loss import compute_vfe_loss, compute_vfe_loss_from_config, gaussian_kl_divergence
+from .train import TrainingConfig, Trainer
 
 __all__ = [
     # Config
@@ -56,4 +57,8 @@ __all__ = [
     'compute_vfe_loss',
     'compute_vfe_loss_from_config',
     'gaussian_kl_divergence',
+
+    # Training
+    'TrainingConfig',
+    'Trainer',
 ]
