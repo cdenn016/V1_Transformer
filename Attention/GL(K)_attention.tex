@@ -130,36 +130,43 @@ Finally, we show that gradient descent on the gauge-equivariant free energy, in 
 \node[below, black!75, font=\small\bfseries] at (4.3,-1.45) {Base manifold $\mathcal{C}$};
 
 % =====================================================================
-% LOCAL OPEN NEIGHBORHOODS U_i, U_j ON THE BASE — with overlap
-% Drawn as semi-transparent filled ellipses on the surface
-% =====================================================================
-
-% U_i: agent i's local open set (left-center region)
-\filldraw[neighborblue, opacity=0.12, draw=neighborblue!60,
-          line width=0.5pt, densely dashed]
-  (2.8,-0.45) ellipse (2.6 and 0.55);
-\node[neighborblue!80!black, font=\scriptsize] at (1.0,-0.10) {$\mathcal{U}_i$};
-
-% U_j: agent j's local open set (center-right region)
-\filldraw[neighborred, opacity=0.12, draw=neighborred!60,
-          line width=0.5pt, densely dashed]
-  (6.0,-0.25) ellipse (2.8 and 0.55);
-\node[neighborred!80!black, font=\scriptsize] at (8.0,-0.0) {$\mathcal{U}_j$};
-
-% Overlap label
-\node[black!60, font=\scriptsize] at (4.4,-0.75) {$\mathcal{U}_i \cap \mathcal{U}_j$};
-
-% =====================================================================
-% FIBER ANCHOR POINTS — five points along the base surface
+% FIBER ANCHOR POINTS — six points along the base surface
+%
+% Layout: C1, C2 in U_i only; C3, C4 in overlap U_i∩U_j;
+%         C5, C6 in U_j only.
 % =====================================================================
 \coordinate (C1) at (0.6,-0.15);
-\coordinate (C2) at (2.3,-0.25);
-\coordinate (C3) at (4.2,-0.05);
-\coordinate (C4) at (6.2,0.15);
-\coordinate (C5) at (8.0,0.25);
+\coordinate (C2) at (2.0,-0.25);
+\coordinate (C3) at (3.6,-0.15);
+\coordinate (C4) at (5.2,0.00);
+\coordinate (C5) at (6.8,0.15);
+\coordinate (C6) at (8.2,0.25);
+
+% =====================================================================
+% LOCAL OPEN NEIGHBORHOODS U_i, U_j ON THE BASE — with overlap
+%
+% U_i covers C1–C4 (left through overlap).
+% U_j covers C3–C6 (overlap through right).
+% Overlap region contains C3, C4 — where both sections coexist.
+% =====================================================================
+
+% U_i: agent i's local open set (left to center)
+\filldraw[neighborblue, opacity=0.12, draw=neighborblue!60,
+          line width=0.5pt, densely dashed]
+  (2.6,-0.40) ellipse (2.7 and 0.52);
+\node[neighborblue!80!black, font=\scriptsize] at (0.7,-0.05) {$\mathcal{U}_i$};
+
+% U_j: agent j's local open set (center to right)
+\filldraw[neighborred, opacity=0.12, draw=neighborred!60,
+          line width=0.5pt, densely dashed]
+  (6.2,-0.20) ellipse (2.7 and 0.52);
+\node[neighborred!80!black, font=\scriptsize] at (8.2,0.0) {$\mathcal{U}_j$};
+
+% Overlap label — between C3 and C4
+\node[black!60, font=\scriptsize] at (4.4,-0.75) {$\mathcal{U}_i \cap \mathcal{U}_j$};
 
 % Anchor dots
-\foreach \c in {C1,C2,C3,C4,C5} {
+\foreach \c in {C1,C2,C3,C4,C5,C6} {
   \filldraw[black!25] (\c) circle (2pt);
   \filldraw[black!70] (\c) circle (1.3pt);
 }
@@ -169,53 +176,52 @@ Finally, we show that gradient descent on the gauge-equivariant free energy, in 
 % =====================================================================
 \pgfmathsetmacro{\fh}{5.2}
 
-\foreach \c in {C1,C2,C3,C4,C5} {
+\foreach \c in {C1,C2,C3,C4,C5,C6} {
   \draw[fiberblue!30, densely dashed, line width=0.4pt]
     (\c) -- ++(0,\fh);
 }
 
 % Fiber label (rightmost)
 \node[above=2pt, fiberblue!60!black, font=\footnotesize]
-  at ($(C5)+(0,\fh)$) {$\mathcal{B}_q \cong \mathbb{R}^K$};
+  at ($(C6)+(0,\fh)$) {$\mathcal{B}_q \cong \mathbb{R}^K$};
 
 % =====================================================================
 % SECTION CURVES — agents i and j as smooth sections of the bundle
 %
-% Each agent is a section: a map c ↦ q_i(c) assigning a Gaussian
-% belief in the fiber over EACH point c. Using plot[smooth] for
-% genuinely smooth interpolation through waypoints.
+% CRITICAL: Each section is defined only over its own neighborhood.
+%   q_i(c) exists over U_i: fibers C1, C2, C3, C4 (blue section)
+%   q_j(c) exists over U_j: fibers C3, C4, C5, C6 (red section)
+% Both sections coexist at C3 and C4 (the overlap U_i ∩ U_j).
 % =====================================================================
 
-% --- Section q_i (blue, solid) — smooth curve via plot ---
-\coordinate (Si1) at ($(C1)+(0,1.6)$);
-\coordinate (Si2) at ($(C2)+(0,2.0)$);
-\coordinate (Si3) at ($(C3)+(0,2.6)$);
-\coordinate (Si4) at ($(C4)+(0,2.2)$);
-\coordinate (Si5) at ($(C5)+(0,1.8)$);
+% --- Section q_i (blue, solid) — defined over U_i only (C1–C4) ---
+\coordinate (Si1) at ($(C1)+(0,1.8)$);
+\coordinate (Si2) at ($(C2)+(0,2.2)$);
+\coordinate (Si3) at ($(C3)+(0,2.7)$);
+\coordinate (Si4) at ($(C4)+(0,2.3)$);
 
 \draw[sectionblue, line width=1.1pt]
   plot[smooth, tension=0.55] coordinates {
-    (Si1) (Si2) (Si3) (Si4) (Si5)
+    (Si1) (Si2) (Si3) (Si4)
   };
 
-% --- Section q_j (red, dashed) — smooth curve via plot ---
-\coordinate (Sj1) at ($(C1)+(0,3.6)$);
-\coordinate (Sj2) at ($(C2)+(0,3.3)$);
+% --- Section q_j (red, dashed) — defined over U_j only (C3–C6) ---
 \coordinate (Sj3) at ($(C3)+(0,3.8)$);
-\coordinate (Sj4) at ($(C4)+(0,4.2)$);
-\coordinate (Sj5) at ($(C5)+(0,3.8)$);
+\coordinate (Sj4) at ($(C4)+(0,4.1)$);
+\coordinate (Sj5) at ($(C5)+(0,3.7)$);
+\coordinate (Sj6) at ($(C6)+(0,4.0)$);
 
 \draw[sectionred, densely dashed, line width=1.1pt]
   plot[smooth, tension=0.55] coordinates {
-    (Sj1) (Sj2) (Sj3) (Sj4) (Sj5)
+    (Sj3) (Sj4) (Sj5) (Sj6)
   };
 
-% Section labels (left side, well separated)
+% Section labels — each at the end within its own neighborhood
 \node[sectionblue, font=\footnotesize, left=4pt] at (Si1) {$q_i(c)$};
-\node[sectionred, font=\footnotesize, left=4pt] at (Sj1) {$q_j(c)$};
+\node[sectionred, font=\footnotesize, right=4pt] at (Sj6) {$q_j(c)$};
 
 % =====================================================================
-% HIGHLIGHT FIBER AT c* — the fourth fiber (C4), in the overlap U_i∩U_j
+% HIGHLIGHT FIBER AT c* — at C4, solidly in the overlap U_i ∩ U_j
 %
 % At this single point c*, BOTH sections q_i(c*) and q_j(c*) live
 % in the SAME fiber. The transport Ω_ij(c*) acts WITHIN this fiber
@@ -322,15 +328,17 @@ Finally, we show that gradient descent on the gauge-equivariant free energy, in 
 \caption{%
 Agent belief sections over the associated bundle
 $\mathcal{E}_q = \mathcal{N} \times_{\rho_q} \mathcal{B}_q$.
-The shaded surface is the base manifold $\mathcal{C}$,
-with local open neighborhoods $\mathcal{U}_i$ (blue) and $\mathcal{U}_j$ (red)
-shown as overlapping regions; each agent's section is defined over its own patch.
-Vertical dashed lines are belief fibers $\mathcal{B}_q \cong \mathbb{R}^K$.
-Agents $i$ and $j$ define smooth sections
-$c \mapsto q_i(c)$ (solid blue) and $c \mapsto q_j(c)$ (dashed red),
-each assigning a Gaussian belief in the fiber over every point in its domain.
+The shaded surface is the base manifold $\mathcal{C}$;
+vertical dashed lines are belief fibers $\mathcal{B}_q \cong \mathbb{R}^K$.
+Agents $i$ and $j$ each have a local open neighborhood on $\mathcal{C}$:
+$\mathcal{U}_i$ (blue, dashed) and $\mathcal{U}_j$ (red, dashed).
+Each agent's section is defined only over its own neighborhood:
+the blue section $q_i(c)$ exists over $\mathcal{U}_i$,
+the red section $q_j(c)$ over $\mathcal{U}_j$.
+In the overlap $\mathcal{U}_i \cap \mathcal{U}_j$,
+both sections coexist in the same fibers.
 At the highlighted fiber over $c^* \in \mathcal{U}_i \cap \mathcal{U}_j$,
-both $q_i(c^*)$ and $q_j(c^*)$ reside in the \emph{same} fiber
+$q_i(c^*)$ and $q_j(c^*)$ reside in the \emph{same} fiber
 but are expressed in different local gauge frames
 $\phi_i$, $\phi_j$ (purple axes).
 The transport operator
