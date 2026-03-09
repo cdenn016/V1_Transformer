@@ -228,23 +228,19 @@ def create_basic_plots(metrics: Dict, output_path: Path, start_step: int = 5):
 
     # 4. Gradient Norms
     ax = axes[1, 1]
-    grad_total = m.get('grad_norm_total', [])
-    grad_mu = m.get('grad_norm_mu', [])
-    grad_ffn = m.get('grad_norm_ffn', [])
-
-    total_data = filter_vals(grad_total)
-    mu_data = filter_vals(grad_mu)
-    ffn_data = filter_vals(grad_ffn)
-
-    if total_data:
-        t_steps, t_vals = zip(*total_data)
-        ax.plot(t_steps, t_vals, label='Total', alpha=0.7)
-    if mu_data:
-        m_steps, m_vals = zip(*mu_data)
-        ax.plot(m_steps, m_vals, label='μ (Embedding)', alpha=0.7)
-    if ffn_data:
-        f_steps, f_vals = zip(*ffn_data)
-        ax.plot(f_steps, f_vals, label='FFN', alpha=0.7)
+    grad_groups = [
+        ('grad_norm_total', 'Total', 'k-', 0.8),
+        ('grad_norm_mu', 'μ', 'b--', 0.6),
+        ('grad_norm_sigma', 'Σ', 'g--', 0.6),
+        ('grad_norm_phi', 'φ', 'r--', 0.6),
+        ('grad_norm_ffn', 'FFN', 'm--', 0.6),
+        ('grad_norm_other', 'Other', 'c:', 0.5),
+    ]
+    for key, label, style, alpha in grad_groups:
+        data = filter_vals(m.get(key, []))
+        if data:
+            steps_g, vals_g = zip(*data)
+            ax.plot(steps_g, vals_g, style, label=label, alpha=alpha)
 
     ax.set_xlabel('Step')
     ax.set_ylabel('Gradient Norm')
