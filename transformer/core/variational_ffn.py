@@ -1966,25 +1966,22 @@ class VariationalFFNDynamic(nn.Module):
         eps = 1e-6
 
         # =================================================================
-        # DISABLE AUTOCAST for the entire VFE iteration loop.
-        # The VFE inner loop uses analytical gradients (not autograd) with
-        # eigendecomposition, sqrt, log, exp, matrix inversion — all of
-        # which need float32. AMP's float16 corrupts intermediate
-        # mu_current/sigma_current across iterations, causing 1e4 gradients.
-        # AMP speedup comes from the rest of the model (attention, embeddings,
-        # LayerNorm, output projection), not from VFE iterations.
+        # SAFETY: Disable autocast if active. The VFE inner loop uses
+        # analytical gradients with eigh, sqrt, log, exp, matrix inv —
+        # all of which need float32. If caller has autocast enabled,
+        # disable it and upcast inputs.
         # =================================================================
-        _amp_ctx = torch.amp.autocast('cuda', enabled=False)
-        _amp_ctx.__enter__()
-        # Upcast any float16 inputs to float32 (they arrive as float16 from
-        # the caller's autocast context)
-        mu = mu.float()
-        if sigma is not None:
-            sigma = sigma.float()
-        mu_prior = mu_prior.float()
-        phi = phi.float()
-        if W_out is not None:
-            W_out = W_out.float()
+        _amp_active = torch.is_autocast_enabled('cuda')
+        _amp_ctx = torch.amp.autocast('cuda', enabled=False) if _amp_active else None
+        if _amp_ctx is not None:
+            _amp_ctx.__enter__()
+            mu = mu.float()
+            if sigma is not None:
+                sigma = sigma.float()
+            mu_prior = mu_prior.float()
+            phi = phi.float()
+            if W_out is not None:
+                W_out = W_out.float()
 
         # Initialize sigma if not provided
         if sigma is None:
@@ -2506,11 +2503,12 @@ class VariationalFFNDynamic(nn.Module):
                 )
 
         # Re-enable autocast context and cast results back to original dtype
-        _amp_ctx.__exit__(None, None, None)
-        mu_current = mu_current.to(dtype)
-        if sigma_current is not None:
-            sigma_current = sigma_current.to(dtype)
-        phi_current = phi_current.to(dtype)
+        if _amp_ctx is not None:
+            _amp_ctx.__exit__(None, None, None)
+            mu_current = mu_current.to(dtype)
+            if sigma_current is not None:
+                sigma_current = sigma_current.to(dtype)
+            phi_current = phi_current.to(dtype)
 
         # Return results
         # NOTE: Previously returned .detach() which BREAKS gradient flow!

@@ -1051,23 +1051,27 @@ class Trainer:
         targets = targets.to(self.device)
 
         # Forward + loss
-        with torch.amp.autocast('cuda', enabled=(self.scaler is not None)):
-            loss, metrics = compute_free_energy_loss(
-                self.model,
-                token_ids,
-                targets,
-                alpha=self.config.alpha,
-                lambda_beta=self.config.lambda_beta,
-                lambda_gamma=self.config.lambda_gamma,
-                kappa_gamma=self.config.kappa_gamma,
-                lambda_hyper=getattr(self.config, 'lambda_hyper', 0.0),
-                pad_token_id=self.pad_token_id,
-                use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
-                alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
-            )
+        # NOTE: Do NOT wrap model forward in autocast. This gauge transformer
+        # has no W_Q/W_K/W_V linear layers — it's all analytical VFE with
+        # eigendecomposition, Cholesky, log, exp, matrix inversion. Float16
+        # destroys these operations. AMP only helps models with large matmuls
+        # (standard transformers). GradScaler is still used for loss scaling.
+        loss, metrics = compute_free_energy_loss(
+            self.model,
+            token_ids,
+            targets,
+            alpha=self.config.alpha,
+            lambda_beta=self.config.lambda_beta,
+            lambda_gamma=self.config.lambda_gamma,
+            kappa_gamma=self.config.kappa_gamma,
+            lambda_hyper=getattr(self.config, 'lambda_hyper', 0.0),
+            pad_token_id=self.pad_token_id,
+            use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
+            alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
+        )
 
-            # Scale loss for gradient accumulation
-            loss = loss / self.config.accumulation_steps
+        # Scale loss for gradient accumulation
+        loss = loss / self.config.accumulation_steps
 
         # Backward
         if self.scaler is not None:
