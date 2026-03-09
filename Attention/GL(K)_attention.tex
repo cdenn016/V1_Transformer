@@ -205,33 +205,43 @@ Briefly, in this current report, we describe agents as modeled by a local sectio
 
 \begin{table}[h]
 \centering
-\caption{Summary of notation. Symbols are grouped by category: agents and beliefs, gauge geometry, variational quantities, and Transformer correspondences.}
+\caption{Summary of notation. Symbols are grouped by category: base geometry, agents and beliefs, gauge structure, variational quantities, and Transformer correspondences.}
 \label{tab:notation}
 \small
+\renewcommand{\arraystretch}{1.15}
 \begin{tabularx}{\textwidth}{@{}l l X@{}}
 \toprule
 \textbf{Symbol} & \textbf{Domain} & \textbf{Description} \\
 \midrule
+\multicolumn{3}{@{}l}{\textit{Base geometry and fibers}} \\
+$\mathcal{C}$ & Manifold & Base manifold (spatial domain) \\
+$\mathcal{B}_q$ ($\mathcal{E}_q$) & $\mathbb{R}^{K_q}$ & Belief fiber \\
+$\mathcal{B}_p$ ($\mathcal{E}_p$) & $\mathbb{R}^{K_p}$ & Model fiber \\
+$K$ ($K_q$) & $\mathbb{Z}^+$ & Belief fiber (embedding) dimension \\
+$N$ & $\mathbb{Z}^+$ & Sequence length (number of agents) \\
+\midrule
 \multicolumn{3}{@{}l}{\textit{Agents and beliefs}} \\
 $i, j$ & $\{1,\ldots,N\}$ & Agent (token) indices \\
-$q_i = \mathcal{N}(\mu_i, \Sigma_i)$ & $\mathcal{P}(\mathbb{R}^K)$ & Belief distribution of agent $i$ (context-dependent) \\
-$p_i = \mathcal{N}(\mu_p^i, \Sigma_p^i)$ & $\mathcal{P}(\mathbb{R}^K)$ & Prior distribution (from token embedding) \\
-$s_i, r_i$ & $\mathcal{P}(\mathbb{R}^K)$ & Model-fiber belief and prior (generative model) \\
-$K$ & $\mathbb{Z}^+$ & Embedding (fiber) dimension \\
-$N$ & $\mathbb{Z}^+$ & Sequence length (number of agents) \\
+$q_i = \mathcal{N}(\mu_{q,i}, \Sigma_{q,i})$ & $\mathcal{P}(\mathbb{R}^K)$ & Belief distribution of agent $i$ (context-dependent) \\
+$p_i = \mathcal{N}(\mu_{p,i}, \Sigma_{p,i})$ & $\mathcal{P}(\mathbb{R}^K)$ & Prior distribution (from token embedding) \\
+$s_i, r_i$ & $\mathcal{P}(\mathbb{R}^{K_p})$ & Model-fiber belief and prior (generative model) \\
 \midrule
 \multicolumn{3}{@{}l}{\textit{Gauge geometry}} \\
 $G = \mathrm{GL}(K)$ & Lie group & Structure group (general linear group) \\
-$\phi_i \in \mathfrak{g}$ & $\mathbb{R}^{K \times K}$ & Gauge frame parameters (Lie algebra element) for agent $i$ \\
-$\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ & $G$ & Parallel transport operator from frame $j$ to frame $i$ \\
+$\mathfrak{g} = \mathfrak{gl}(K)$ & Lie algebra & Lie algebra of $G$ \\
+$\phi_i \in \mathfrak{g}$ & $\mathbb{R}^{K \times K}$ & Gauge frame parameters for agent $i$ (belief fiber) \\
+$\tilde{\phi}_i \in \mathfrak{g}$ & $\mathbb{R}^{K_p \times K_p}$ & Gauge frame parameters for agent $i$ (model fiber) \\
+$\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ & $\mathrm{GL}(K)$ & Belief-fiber transport from frame $j$ to frame $i$ \\
+$\tilde{\Omega}_{ij}$ & $\mathrm{GL}(K_p)$ & Model-fiber transport from frame $j$ to frame $i$ \\
+$\Phi_i, \tilde{\Phi}_i$ & $\mathbb{R}^{K_p \times K_q}$, $\mathbb{R}^{K_q \times K_p}$ & Cross-fiber morphisms (belief $\leftrightarrow$ model) \\
 $\rho: G \to \mathrm{GL}(V)$ & & Representation of $G$ on the fiber $V$ \\
 \midrule
 \multicolumn{3}{@{}l}{\textit{Variational quantities}} \\
 $\mathcal{F}$ & $\mathbb{R}$ & Gauge-covariant variational free energy \\
 $D_{\KL}(q \| p)$ & $\mathbb{R}_{\geq 0}$ & Forward Kullback--Leibler divergence \\
-$\beta_{ij}$ & $[0,1]$, $\sum_j \beta_{ij} = 1$ & Attention weight (source-selection posterior) \\
+$\beta_{ij}$ & $[0,1]$, $\sum_j \beta_{ij} = 1$ & Belief attention weight (source-selection posterior) \\
 $\gamma_{ij}$ & $[0,1]$ & Model-fiber coupling weight \\
-$\alpha$ & $\mathbb{R}^+$ & Prior precision (self-consistency weight) \\
+$\alpha$ ($\alpha_i$) & $\mathbb{R}^+$ & Prior precision; state-dependent variant (Sec.~\ref{sec:state_dependent_precision}) \\
 $\kappa$ ($\tau$) & $\mathbb{R}^+$ & Attention temperature (softmax inverse temperature) \\
 $\lambda$ & $\mathbb{R}^+$ & Belief alignment coupling strength \\
 $\pi_j$ & $[0,1]$, $\sum_j \pi_j = 1$ & Attention prior (encodes masking, positional bias) \\
@@ -387,51 +397,6 @@ D_f(\Omega_* P \| \Omega_* Q) = D_f(P \| Q), \quad \forall\, \Omega \in \mathrm{
 \end{equation}
 
 since the Jacobian factors $|\det\Omega|$ from the density transformation cancel in the ratio $p(x)/q(x)$. From a practical point of view, this means that transport operators need only satisfy $\det(\Omega_{ij}) \neq 0$ (invertibility); the full $\mathrm{GL}(K)$ acts as a gauge symmetry. Our exponential parameterization restricts to $\det > 0$ (since $\det(\exp(\phi)) = \exp(\mathrm{tr}(\phi)) > 0$), but this is the identity component and is standard for gauge connections. Finally, we shall demonstrate that the query and key projection matrices $W_Q, W_K \in \mathrm{GL}(d_k)$ in standard transformers are themselves gauge transformations. The constant gauge limit corresponds not to the absence of gauge structure, but to a constant gauge transformation satisfying $W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$ shared among all token pairs.
-
-
-\begin{table}[h]
-\centering
-\renewcommand{\arraystretch}{1.15}
-\setlength{\tabcolsep}{6pt}
-\begin{tabularx}{\textwidth}{l>{\raggedright\arraybackslash}Xl}
-\hline
-\textbf{Symbol} & \textbf{Description} & \textbf{Type/Dimension} \\
-\hline
-\multicolumn{3}{l}{\textit{Fiber Bundle Structure}} \\
-$\mathcal{C}$ & Base manifold (spatial domain) & Manifold \\
-$\mathcal{B}_q$ & Belief fiber & $\mathbb{R}^{K_q}$ \\
-$\mathcal{B}_p$ & Model fiber  & $\mathbb{R}^{K_p}$ \\
-$G$ & Gauge group & $\mathrm{GL}(K)$ \\
-$\mathfrak{g}$ & Lie algebra of $G$ & $\mathfrak{gl}(K)$ \\
-\\
-\multicolumn{3}{l}{\textit{Gauge Fields and Connections}} \\
-$\Omega_{ij}$ & Connection $\mathcal{B}_{q_j} \to \mathcal{B}_{q_i}$ & $\mathrm{GL}(K_q)$ \\
-$\tilde\Omega_{ij}$ & Connection $\mathcal{B}_{p_j} \to \mathcal{B}_{p_i}$ & $\mathrm{GL}(K_p)$ \\
-$\phi_i$ & Gauge parameter (belief frame) & $\mathfrak{g}\!\cong\!\mathbb{R}^{\dim G}$ \\
-$\tilde{\phi}_i$ & Gauge parameter (model frame) & $\mathfrak{g}\!\cong\!\mathbb{R}^{\dim G}$ \\
-
-\\
-\multicolumn{3}{l}{\textit{Bundle Morphisms}} \\
-$\Phi_i$ & Morphism $\mathcal{B}_{q_i} \to \mathcal{B}_{p_i}$ & $\mathbb{R}^{K_p\times K_q}$ \\
-$\tilde{\Phi}_i$ & Morphism $\mathcal{B}_{p_i} \to \mathcal{B}_{q_i}$ & $\mathbb{R}^{K_q\times K_p}$ \\
-\\
-\multicolumn{3}{l}{\textit{Statistical Parameters}} \\
-$q_i$ ($q_i(k_i)$) & Belief distribution (density) & $\mathcal{N}(\mu_{q,i},\Sigma_{q,i})$ \\
-$p_i(k_i)$ & Prior distribution & $\mathcal{N}(\mu_{p,i},\Sigma_{p,i})$ \\
-$\mu_{q,i},\mu_{p,i}$ & Mean vectors & $\mathbb{R}^{K_q},\mathbb{R}^{K_p}$ \\
-$\Sigma_{q,i},\Sigma_{p,i}$ & Covariance matrices & $\mathbb{R}^{K\times K},\succ0$ \\
-\\
-\multicolumn{3}{l}{\textit{Attention and Coupling}} \\
-$\beta_{ij}$ & Belief Attention weight $j\!\to\!i$ & $[0,1]$ \\
-$\gamma_{ij}$ & Model Attention weight $j\!\to\!i$ & $[0,1]$ \\
-$\tau$ & Attention temperature & $\mathbb{R}_+$ \\
-$\alpha_i$ & State-dependent self-consistency strength (Sec.~\ref{sec:state_dependent_precision}) & $\mathbb{R}_+$ \\
-$D_{\mathrm{KL}}$ & Kullback–Leibler divergence & $\mathbb{R}_+\cup\{0\}$ \\
-\hline
-\end{tabularx}
-\caption{Notation used throughout this paper.}
-\label{tab:notation}
-\end{table}
 
 
 
