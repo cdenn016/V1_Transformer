@@ -630,19 +630,18 @@ Combining the single-agent free energy \eqref{eq:single_agent_fep} with the alig
 \begin{equation}
 \boxed{
 \begin{aligned}
-\mathcal{F}[\{q_i\},\{\beta_i\}]
+\mathcal{F}[\{q_i\}]
 &=\sum_i D_{\mathrm{KL}}(q_i\,\|\,p_i)
-+\sum_{i,j}\beta_{ij}\,D_{\mathrm{KL}}(q_i\,\|\,\Omega_{ij}q_j)
-+\tau\sum_{i,j}\beta_{ij}\log\frac{\beta_{ij}}{\pi_j}
++\sum_{i,j}\beta_{ij}^*\,D_{\mathrm{KL}}(q_i\,\|\,\Omega_{ij}q_j)
 -\mathbb{E}_q[\log p(o\,|\{k_i\})].
 \end{aligned}
 }
 \label{eq:free_energy_final}
 \end{equation}
 
-The third term is the attention entropy/prior contribution $\tau \sum_{i,j}\beta_{ij}\log(\beta_{ij}/\pi_j) = \tau \sum_i D_{\mathrm{KL}}(\beta_i \| \pi)$ inherited directly from the alignment free energy \eqref{eq:mixture_energy_entropy}. Including this term is essential for consistency: the softmax form of the attention weights \eqref{eq:mixture_softmax_general} arises precisely as the minimizer of $\mathcal{F}$ with respect to $\beta_{ij}$ at fixed $\{q_i\}$, and the entropy term is what makes this minimization yield a softmax rather than an argmin. The temperature $\tau$ scales the attention entropy relative to the alignment energies, controlling the sharpness of the attention distribution.
+This is the \emph{partially minimized} free energy: the attention weights $\beta_{ij}^*$ have already been set to their optimal softmax values \eqref{eq:mixture_softmax_general} by minimizing the full alignment free energy $\mathcal{F}_{\text{align}}$ \eqref{eq:mixture_energy_entropy} with respect to $\beta$. The full (un-minimized) alignment free energy includes an attention entropy/prior term $\tau\sum_{i,j}\beta_{ij}\log(\beta_{ij}/\pi_j)$ (cf.\ Eq.~\ref{eq:mixture_energy_entropy}), which is essential: it is precisely this term that makes the $\beta$-optimization yield a softmax rather than an argmin. When $\beta_{ij}$ is set to its optimal value $\beta_{ij}^* = \softmax_j(-E_{ij}/\tau + \log\pi_j)$, the entropy term evaluates to $-\tau\sum_i\log Z_i$ (where $Z_i = \sum_j \pi_j\exp(-E_{ij}/\tau)$ is the partition function), which is absorbed into $\mathcal{F}[\{q_i\}]$ as a function of beliefs alone. This absorbed log-partition function does not appear as an explicit loss term in the implementation, but it contributes to the gradients $\partial\mathcal{F}/\partial\mu_i$ through the chain rule via $\partial\beta^*/\partial\mu_i$.
 
-Note that when $\beta_{ij}$ is set to its optimal value $\beta_{ij}^* = \softmax_j(-E_{ij}/\tau + \log\pi_j)$, the attention entropy term evaluates to $-\tau\log Z_i$ (where $Z_i = \sum_j \pi_j \exp(-E_{ij}/\tau)$ is the partition function), which is a function of $\{q_i\}$ alone. Throughout this paper, when we write the free energy as a functional of $\{q_i\}$ only, we mean the partially minimized functional $\mathcal{F}[\{q_i\}] \equiv \mathcal{F}[\{q_i\}, \{\beta^*_i(q)\}]$ with attention weights at their optimal values. The gradients $\partial\mathcal{F}/\partial\mu_i$ derived in Section~4.3 are consistent with this convention, since the envelope theorem guarantees that $\partial\mathcal{F}/\partial\mu_i\big|_{\beta=\beta^*}$ equals $\partial/\partial\mu_i\big[\mathcal{F}[\{q_i\}, \beta^*(q)]\big]$ (the cross-term $\sum_j (\partial\mathcal{F}/\partial\beta_{ij})(\partial\beta^*_{ij}/\partial\mu_i)$ vanishes at the optimum).
+The envelope theorem guarantees consistency: $\partial\mathcal{F}/\partial\mu_i\big|_{\beta=\beta^*}$ equals $\frac{d}{d\mu_i}\mathcal{F}[\{q_i\}, \beta^*(q)]$ because the cross-term $\sum_j(\partial\mathcal{F}/\partial\beta_{ij})(\partial\beta^*_{ij}/\partial\mu_i)$ vanishes at the optimum. The gradient expressions in Section~4.3, which include $\partial\beta_{ij}/\partial\mu_i$ terms, are therefore correct as written under this partially minimized convention.
 
 The most general formulation includes additional model-channel terms ($s_i$, $r_i$, $\gamma_{ij}$, $\tilde{\Omega}_{ij}$) representing a slow meta-learning timescale; these are developed in Appendix~\ref{app:model_channel} but are not used in the present experiments.
 
