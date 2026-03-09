@@ -197,9 +197,9 @@ enabling frame alignment between agent representations.
 
 \section{Methods}
 
-We begin with a general geometric construction that naturally supports hierarchical emergence of meta-agents, scale interactions, and non-trivial holonomy of transport. The details of the most general geometry and framework can be found in the appendix and references \citep{nakahara2003geometry,kullback1951information,sternberg1994group,fulton1991representation,frankel2011geometry,baez1994gauge}.  
+We begin with a general geometric construction that naturally supports hierarchical emergence of meta-agents and scale interactions. The details of the most general geometry and framework can be found in the appendix and references \citep{nakahara2003geometry,kullback1951information,sternberg1994group,fulton1991representation,frankel2011geometry,baez1994gauge}.
 
-Briefly, in this current report, we describe agents as modeled by a local section of an associated bundle to a principal $G$ fiber bundle whereby tokens are represented by agents occupying a single 0-dimensional base manifold with no particular ordering. We shall show that this framework enables a unified description of both intra-agent inference and inter-agent communication in terms of gauge frame transport and alignment via a generalized free energy principle. 
+Briefly, in this current report, we describe agents as modeled by a local section of an associated bundle to a principal $G$ fiber bundle whereby tokens are represented by agents occupying a single 0-dimensional base manifold. Although the base manifold is 0-dimensional and carries no intrinsic ordering or metric, the discrete index set of agents (tokens) may be endowed with additional structure such as a sequential ordering or a distance function that enters the theory only through the attention prior $\pi_j$ (Section~\ref{sec:nonuniform_priors}) and/or through position-dependent gauge frames (Section~\ref{sec:rope}). This separation between the geometric base (which determines gauge connections and curvature) and the combinatorial index structure (which determines masking and positional biases) is important: causal masking and distance-dependent priors impose structure on which agents communicate, not on the underlying fiber geometry. We shall show that this framework enables a unified description of both intra-agent inference and inter-agent communication in terms of gauge frame transport and alignment via a generalized free energy principle.
 
 \subsection{An intuitive simplification for non-geometers}
 For interdisciplinary readers, it may be helpful to visualize each agent in this framework as a vector and a matrix field defined over a finite spatial region. 
@@ -267,10 +267,10 @@ Transport structure &
 Agent-pair dependent &
 Uniform across all pairs \\
 Connection $A_\mu$ &
-$-\partial_\mu \phi_i \neq 0$ &
+$-\partial_\mu \phi_i + \mathcal{O}(\phi^2)$ (0D: absent) &
 $0$ (flat connection) \\
-Curvature $F_{\mu\nu}$ &
-Can be $\neq 0$ &
+Curvature / Holonomy &
+Trivial ($\Omega_{ij}\Omega_{jk}\Omega_{ki} = I$; Sec.~\ref{sec:flat_bundle}) &
 $0$ (trivial holonomy) \\
 KL coupling &
 $D_{\text{KL}}[q_i \,\|\, \Omega_{ij} q_j]$ &
@@ -289,25 +289,15 @@ Global gauge $W_Q, W_K$ \\
 
 
 \subsubsection{Local Gauge Frames}
-Each agent $i$ has a gauge frame field $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ which may, in general, vary across the base manifold.  This then induces a local connection:
+Each agent $i$ has a gauge frame field $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ which may, in general, vary across the base manifold. On higher-dimensional base manifolds, a gauge frame field induces a local connection one-form $A^{(i)}_\mu(c) = U_i^{-1}(c)\,\partial_\mu U_i(c)$ (where $U_i = \exp(\phi_i)$) and associated field strength $F^{(i)}_{\mu\nu} = \partial_\mu A^{(i)}_\nu - \partial_\nu A^{(i)}_\mu + [A^{(i)}_\mu, A^{(i)}_\nu]$. However, a connection derived from a single-valued gauge function $\phi_i(c)$ in this way is \emph{pure gauge} and has identically vanishing curvature $F_{\mu\nu} = 0$. Non-trivial curvature and holonomy require independent connection variables on edges or paths, transforming as $\Omega_{ij} \mapsto g_i \Omega_{ij} g_j^{-1}$ rather than being determined by vertex-local group elements (see Appendix~A for details).
 
-\begin{equation}
-A^{(i)}_\mu(c) = -\partial_\mu \phi_i(c) + \mathcal{O}(\phi_i^2),
-\end{equation}
-
-with field strength:
-
-\begin{equation}
-F^{(i)}_{\mu\nu}(c) = \partial_\mu A^{(i)}_\nu - \partial_\nu A^{(i)}_\mu + [A^{(i)}_\mu, A^{(i)}_\nu].
-\end{equation}
-
-In the 0-dimensional case, which we consider here, there exist no gauge connections $A_\mu$ or field strengths $F_{\mu\nu}$. What remains is the algebraic structure of group-valued frame transformations $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ acting on statistical fibers. This algebraic structure already suffices to recover transformer attention (as shown below), and already provides a functional language model when implemented without taking the degenerate limits (Section~\ref{sec:glk_lm}). The richer differential-geometric content is available in the full theory on higher-dimensional base manifolds and represents a direction for future work (see Section~6.3).
+In the 0-dimensional case, which we consider here, there exist no gauge connections $A_\mu$ or field strengths $F_{\mu\nu}$. What remains is the algebraic structure of group-valued frame transformations $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ acting on statistical fibers. Since these transports are constructed from vertex-local group elements, they satisfy the cocycle condition $\Omega_{ij}\Omega_{jk} = \Omega_{ik}$ and have trivially vanishing discrete holonomy $\Omega_{ij}\Omega_{jk}\Omega_{ki} = I$ for every closed loop (Section~\ref{sec:flat_bundle}). This algebraic structure already suffices to recover transformer attention (as shown below), and already provides a functional language model when implemented without taking the degenerate limits (Section~\ref{sec:glk_lm}). Architectures with non-trivial holonomy would require promoting the transport $\Omega_{ij}$ to an independent edge variable; this represents a direction for future work (see Section~6.3).
 
 
 \subsubsection{$\mathrm{GL}(K)$ Gauge Invariance of KL Divergence}
 \label{sec:glk_invariance}
 
-A key observation underlying our framework is that the Kullback-Leibler divergence possesses a maximal gauge symmetry: it is invariant under the full general linear group $\mathrm{GL}(K)$. This is a standard result in information geometry (see, e.g., \citet{amari2016information}), but its implications for transformer attention have not been previously recognized. We state it here for completeness.
+A key observation underlying our framework is that the Kullback-Leibler divergence is invariant under simultaneous invertible linear transformations of both distributions. More precisely, KL divergence (and all $f$-divergences) is invariant under \emph{any} common bijective change-of-variables, since the Jacobian factors cancel in the density ratio. Restricting to transformations that preserve the multivariate Gaussian parametric family and act linearly on the sufficient statistics $(\mu, \Sigma)$ yields $\mathrm{GL}(K)$ as the maximal such symmetry group. This is a standard result in information geometry (see, e.g., \citet{amari2016information}), but its implications for transformer attention have not been previously recognized. We state it here for completeness.
 
 \begin{theorem}[$\mathrm{GL}(K)$ Gauge Invariance]
 \label{thm:glk_invariance}
@@ -495,7 +485,9 @@ P(k, z) = P(k \mid z)\, P(z),
 
 where $P(z = j) = \pi_j$ is the prior probability of attending to agent $j$ (the attention prior), and $P(k \mid z = j) = \mathcal{N}(k;\, \Omega_{ij}\mu_j,\, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$ is agent $j$'s belief transported into agent $i$'s gauge frame via $\Omega_{ij}$.
 
-This construction leads to the generative model consistent with the gauge structure. Agent $j$'s belief $q_j(k_j)$ lives in $j$'s local frame, and $\Omega_{ij}q_j(k_j)$ is agent $i$'s representation of "what agent $j$ believes, as seen by agent $i$". The categorical variable $z$ endows the model with probabilistic source selection whereby attention is considered as posterior inference over which neighbor generated agent $i$'s state. 
+This construction leads to the generative model consistent with the gauge structure. Agent $j$'s belief $q_j(k_j)$ lives in $j$'s local frame, and $\Omega_{ij}q_j(k_j)$ is agent $i$'s representation of ``what agent $j$ believes, as seen by agent $i$.'' The categorical variable $z$ endows the model with probabilistic source selection whereby attention is considered as posterior inference over which neighbor generated agent $i$'s state.
+
+A methodological clarification is warranted. The component distributions $P(k \mid z{=}j) = \Omega_{ij}q_j$ depend on the variational posteriors $q_j$ of other agents, making the ``generative model'' itself a function of variational quantities. This construction can be understood in two complementary ways. First, as an \emph{augmented model}: the full system has a joint generative model over all agents' latent states, and the pairwise KL terms emerge as variational couplings in the mean-field decomposition of the joint ELBO. An alternative derivation via auxiliary agreement variables that makes this global structure explicit is given in Appendix~\ref{app:agreement_variables}. Second, as a \emph{consensus energy}: the alignment free energy $\sum_j \beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ can be viewed as an engineered energy functional that penalizes belief disagreement after gauge transport, motivated by (but not strictly identical to) the KL term of a fixed generative model. In either framing, the resulting update equations are the same, and the key property is that at a fixed point of the joint optimization (over all $\{q_i\}$ simultaneously), the pairwise objectives are mutually consistent.
 
 \subsubsection{Variational Posterior}
 
@@ -638,14 +630,19 @@ Combining the single-agent free energy \eqref{eq:single_agent_fep} with the alig
 \begin{equation}
 \boxed{
 \begin{aligned}
-\mathcal{F}[\{q_i\}]
+\mathcal{F}[\{q_i\},\{\beta_i\}]
 &=\sum_i D_{\mathrm{KL}}(q_i\,\|\,p_i)
 +\sum_{i,j}\beta_{ij}\,D_{\mathrm{KL}}(q_i\,\|\,\Omega_{ij}q_j)
++\tau\sum_{i,j}\beta_{ij}\log\frac{\beta_{ij}}{\pi_j}
 -\mathbb{E}_q[\log p(o\,|\{k_i\})].
 \end{aligned}
 }
 \label{eq:free_energy_final}
 \end{equation}
+
+The third term is the attention entropy/prior contribution $\tau \sum_{i,j}\beta_{ij}\log(\beta_{ij}/\pi_j) = \tau \sum_i D_{\mathrm{KL}}(\beta_i \| \pi)$ inherited directly from the alignment free energy \eqref{eq:mixture_energy_entropy}. Including this term is essential for consistency: the softmax form of the attention weights \eqref{eq:mixture_softmax_general} arises precisely as the minimizer of $\mathcal{F}$ with respect to $\beta_{ij}$ at fixed $\{q_i\}$, and the entropy term is what makes this minimization yield a softmax rather than an argmin. The temperature $\tau$ scales the attention entropy relative to the alignment energies, controlling the sharpness of the attention distribution.
+
+Note that when $\beta_{ij}$ is set to its optimal value $\beta_{ij}^* = \softmax_j(-E_{ij}/\tau + \log\pi_j)$, the attention entropy term evaluates to $-\tau\log Z_i$ (where $Z_i = \sum_j \pi_j \exp(-E_{ij}/\tau)$ is the partition function), which is a function of $\{q_i\}$ alone. Throughout this paper, when we write the free energy as a functional of $\{q_i\}$ only, we mean the partially minimized functional $\mathcal{F}[\{q_i\}] \equiv \mathcal{F}[\{q_i\}, \{\beta^*_i(q)\}]$ with attention weights at their optimal values. The gradients $\partial\mathcal{F}/\partial\mu_i$ derived in Section~4.3 are consistent with this convention, since the envelope theorem guarantees that $\partial\mathcal{F}/\partial\mu_i\big|_{\beta=\beta^*}$ equals $\partial/\partial\mu_i\big[\mathcal{F}[\{q_i\}, \beta^*(q)]\big]$ (the cross-term $\sum_j (\partial\mathcal{F}/\partial\beta_{ij})(\partial\beta^*_{ij}/\partial\mu_i)$ vanishes at the optimum).
 
 The most general formulation includes additional model-channel terms ($s_i$, $r_i$, $\gamma_{ij}$, $\tilde{\Omega}_{ij}$) representing a slow meta-learning timescale; these are developed in Appendix~\ref{app:model_channel} but are not used in the present experiments.
 
@@ -737,9 +734,11 @@ The most general formulation includes additional model-channel terms ($s_i$, $r_
 
 \subsection{Symmetry Breaking}
 \label{sec:symmetry_breaking}
-In the absence of observations ($p(o|\cdot) = \text{const}$), the free energy \eqref{eq:free_energy_final} is invariant under the gauge group $G$ (which is $\mathrm{GL}(K)$ in general, or a compact subgroup such as $\mathrm{SO}(K)$). The vacuum state corresponds to perfect alignment: $q_i = \Omega_{ij}q_j$ and $p_i = \tilde{\Omega}_{ij}p_j$ for all agent pairs $(i,j)$, meaning that all agents maintain gauge-equivalent beliefs that differ only by frame transformations. In this regime, the dynamics drive the system toward a degenerate manifold of ground states parameterized by the gauge orbit. Agents synchronize over gradient descent towards $\|\mu_i(c)\| = \mu^*$, but the absolute orientations remain arbitrary. This degeneracy of the vacuum is analogous to symmetry breaking in field theory \citep{weinberg1995quantum,goldstone1962field}: the free energy (in the absence of data) is gauge-invariant, but any particular ground state selects an orientation, breaking the continuous symmetry.
+In the absence of observations ($p(o|\cdot) = \text{const}$), the free energy \eqref{eq:free_energy_final} possesses a reparameterization degeneracy under the gauge group $G$ (which is $\mathrm{GL}(K)$ in general, or a compact subgroup such as $\mathrm{SO}(K)$). The vacuum state corresponds to perfect alignment: $q_i = \Omega_{ij}q_j$ and $p_i = \tilde{\Omega}_{ij}p_j$ for all agent pairs $(i,j)$, meaning that all agents maintain gauge-equivalent beliefs that differ only by frame transformations. In this regime, the dynamics drive the system toward a degenerate manifold of ground states parameterized by the gauge orbit. Agents synchronize over gradient descent towards $\|\mu_i(c)\| = \mu^*$, but the absolute orientations remain arbitrary.
 
-Observations destroy this degeneracy by coupling agents to external data through the likelihood terms. Each agent's data stream $o_i$ acts as an external field that selects a preferred orientation in its fiber. Strictly speaking, this is explicit symmetry breaking (the observation term is not gauge-invariant) rather than the spontaneous mechanism of Goldstone's theorem. The system transitions from the symmetric vacuum to a symmetry-broken phase where agents develop distinct specializations such that $\|\mu_i(c)\| \neq \|\mu_j(c)\|$ with the diversity driven by observations/data. The frame transformations $\Omega_{ij}$ then encode how these specialized representations relate geometrically. This observation-induced symmetry breaking is what enables non-trivial multi-agent coordination in that agents must actively maintain geometric relationships between their specialized frames rather than simply coexisting in a gauge symmetric configuration. Whether the vacuum manifold supports Goldstone-like zero modes (corresponding to broken gauge generators) is a question amenable to Hessian spectral analysis, which we leave to future work.
+A terminological note is warranted. In physics, local gauge ``symmetries'' are more precisely understood as redundancies of description rather than physical symmetries, and there are well-known subtleties in applying the language of spontaneous symmetry breaking to gauge redundancies \citep{weinberg1995quantum}. Our gauge group acts as a reparameterization symmetry of the KL divergence (Theorem~\ref{thm:glk_invariance}), and the degeneracy of the vacuum manifold is a consequence of this reparameterization freedom rather than of a global physical symmetry.
+
+Observations destroy this degeneracy by coupling agents to external data through the likelihood terms. Each agent's data stream $o_i$ acts as an external field that selects a preferred orientation in its fiber. This is \emph{explicit} symmetry breaking: the observation/likelihood term $-\mathbb{E}_q[\log p(o|k)]$ is not gauge-invariant, and it is this term that forces agents into distinct configurations. The system transitions from the symmetric vacuum to a phase where agents develop distinct specializations such that $\|\mu_i(c)\| \neq \|\mu_j(c)\|$ with the diversity driven by observations/data. The frame transformations $\Omega_{ij}$ then encode how these specialized representations relate geometrically. This observation-induced specialization is what enables non-trivial multi-agent coordination in that agents must actively maintain geometric relationships between their specialized frames rather than simply coexisting in a gauge-symmetric configuration. Whether the vacuum manifold supports approximate zero modes of the Hessian (corresponding to directions of near-zero curvature along the gauge orbit) is a question amenable to spectral analysis, which we leave to future work.
 
 \subsection{Summary}
 
@@ -790,6 +789,8 @@ The deterministic limit requires nuance. Naively setting $\Sigma_i \to 0$ yields
 \begin{equation}
 D_{\mathrm{KL}}(\delta(k - \mu_i) \| \delta(k - \mu_j)) = +\infty \quad \text{for } \mu_i \neq \mu_j.
 \end{equation}
+
+This divergence reflects the absolute continuity requirement in the definition of KL: $D_{\mathrm{KL}}(P \| Q)$ is finite only when $P$ is absolutely continuous with respect to $Q$ (i.e., $P(A) > 0$ implies $Q(A) > 0$ for all measurable $A$). Distinct Dirac measures have disjoint support and therefore violate this condition.
 
 We may remedy this by taking a joint scaling limit where the belief variance $\sigma^2$ remains finite but is absorbed into learned parameters.
 
@@ -916,14 +917,17 @@ The leading term in $\tilde{s}_{ij}$ is:
 \frac{1}{\sigma^2}\mu_i^\top \Omega^{-\top} \mu_j.
 \end{equation}
 
-We identify the learned projection matrices $W_Q, W_K$ such that:
+We identify the \emph{product} of the learned projection matrices $W_Q, W_K$ with the gauge transport:
 
 \begin{equation}
 W_Q W_K^\top = \frac{1}{\sigma^2} \Omega^{-\top} \in \mathrm{GL}(d_k).
 \end{equation}
 
 Such a factorization always exists for any invertible $\Omega$: since $\Omega^{-\top} \in \mathrm{GL}(d_k)$, any matrix $M \in \mathrm{GL}(d_k)$ can be written as $M = AB^\top$ for suitable $A, B$ (e.g., via SVD: $M = U\Lambda V^\top = (U\Lambda^{1/2})(V\Lambda^{1/2})^\top$).
-Note that at this stage of the derivation, $W_Q$ and $W_K$ are \emph{square} $d_k \times d_k$ matrices, since the gauge transport $\Omega^{-\top}$ is a full-rank element of $\mathrm{GL}(d_k)$. The rectangular projection matrices $W_Q^a \in \mathbb{R}^{d_k \times d_{\text{head}}}$ used in standard multi-head attention arise from a further structural restriction: decomposing $\Omega$ into a block-diagonal subgroup $\mathrm{GL}(d_{\text{head}})^H \subset \mathrm{GL}(d_k)$, where each head $a$ operates within an independent $d_{\text{head}}$-dimensional subspace. The rectangular shape of $W_Q^a$ thus encodes both the projection onto block $a$ and the $\mathrm{GL}(d_{\text{head}})$ transport within that block; we develop this identification in Section~\ref{sec:multihead}.
+
+An important caveat is that this identification concerns the \emph{bilinear form} $M = W_Q W_K^\top$ that determines the attention logits, not the individual matrices $W_Q$ and $W_K$ separately. In standard transformer implementations, the per-head projection matrices $W_Q^a, W_K^a \in \mathbb{R}^{d_{\text{model}} \times d_{\text{head}}}$ are rectangular (with $d_{\text{model}} \gg d_{\text{head}}$), and neither is individually invertible in the $d_{\text{model}}$-dimensional space. The gauge-theoretic identification operates within the $d_{\text{head}}$-dimensional projected subspace where the effective bilinear form $M^a = (W_Q^a)^\top W_K^a \in \mathbb{R}^{d_{\text{head}} \times d_{\text{head}}}$ acts. Within this subspace, $M^a$ need not remain invertible during training, though the gauge interpretation is sharpest when it does.
+
+The rectangular shape of $W_Q^a$ arises from a further structural restriction: decomposing $\Omega$ into a block-diagonal subgroup $\mathrm{GL}(d_{\text{head}})^H \subset \mathrm{GL}(d_k)$, where each head $a$ operates within an independent $d_{\text{head}}$-dimensional subspace. The rectangular shape encodes both the orthogonal projection onto block $a$ and the $\mathrm{GL}(d_{\text{head}})$ transport within that block; we develop this identification in Section~\ref{sec:multihead}.
 
 Rather than taking $\sigma \to 0$ we recognize that $\sigma^{-2}$ and $\Omega^{-\top}$ always appear together in the combination $\sigma^{-2}\Omega^{-\top}$. The learned matrices $W_Q, W_K$ parametrize this combined quantity directly, rendering $\sigma$ an implicit (finite) scale factor absorbed into the learned weights.
 
@@ -983,15 +987,19 @@ The message aggregation rule is:
 m_i = \sum_j \beta_{ij} \,\Omega_{ij}\mu_j.
 \end{equation}
 
-\paragraph{$\mathrm{GL}(K)$ metric correction.}
-For orthogonal gauge transport ($\Omega_{ij} \in \mathrm{SO}(K)$), the above formula is exact since the inner product is preserved under orthogonal maps. For the full $\mathrm{GL}(K)$ gauge, however, the pushforward of the mean under a non-orthogonal transformation requires a metric correction. The KL divergence $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ involves the transported covariance $\tilde{\Sigma}_{ij} = \Omega_{ij} \Sigma_j \Omega_{ij}^\top$, and the Mahalanobis inner product $(u - v)^\top \tilde{\Sigma}^{-1}(u - v)$ defines the natural metric in the transported frame. The corresponding message aggregation that respects this metric is:
+\paragraph{$\mathrm{GL}(K)$ aggregation and the role of $\Omega^{-\top}$.}
+The mixture-of-sources generative model (Section~\ref{sec:mixture_derivation}) specifies that the component distribution for source $j$ in agent $i$'s frame has mean $\Omega_{ij}\mu_j$. The posterior mean under mixture responsibilities $\beta_{ij}$ is therefore:
 
 \begin{equation}
-m_i = \sum_j \beta_{ij} \,\Omega_{ij}^{-\top} \mu_j,
-\label{eq:glk_metric_aggregation}
+m_i = \sum_j \beta_{ij}\, \Omega_{ij}\mu_j,
+\label{eq:glk_mixture_aggregation}
 \end{equation}
 
-where $\Omega_{ij}^{-\top} = (\Omega_{ij}^{-1})^\top = (\Omega_{ij}^\top)^{-1}$ is the inverse transpose. For $\mathrm{SO}(K)$, $\Omega^{-\top} = \Omega$ and this reduces to the standard formula. The covariance aggregation analogously becomes $\tilde{\Sigma}_{\mathrm{agg},i} = \sum_j \beta_{ij}[\Omega_{ij}^{-\top} \Sigma_j \Omega_{ij}^{-1} + \Omega_{ij}^{-\top}\mu_j \mu_j^\top \Omega_{ij}^{-1}] - m_i m_i^\top$, using the law of total variance under the mixture weights $\beta_{ij}$. This metric-corrected aggregation ensures that the value computation is consistent with the Mahalanobis geometry used to compute the attention weights, as required by the $\mathrm{GL}(K)$ invariance of the KL divergence (Theorem~\ref{thm:glk_invariance}).
+which is the standard mixture-of-Gaussians expectation. This is the primal-vector aggregation consistent with the generative model: $\mu_j$ is a mean (a primal vector), and $\Omega_{ij}$ transports it into agent $i$'s frame.
+
+A separate geometric object arises in the \emph{scoring} (attention weight) computation, where the Mahalanobis identity \eqref{eq:mahalanobis_identity} introduces $\Omega^{-\top}$ as the natural transform for the dual (covector) structure of the inner product. Specifically, $\Omega^{-\top}$ appears in the logit $\mu_i^\top \Omega^{-\top}\mu_j$ because the KL divergence measures distance in the transported covariance metric $(\Omega\Omega^\top)^{-1}$, and $\Omega^{-\top}$ is the correct transform for covectors (dual vectors) under a linear map. This dual transform belongs to the attention scoring geometry, not to the value aggregation.
+
+For orthogonal transport ($\Omega_{ij} \in \mathrm{SO}(K)$), $\Omega^{-\top} = \Omega$ and the distinction is immaterial. For general $\mathrm{GL}(K)$, the aggregation \eqref{eq:glk_mixture_aggregation} uses $\Omega_{ij}$ (primal transport), while the attention logits use $\Omega^{-\top}$ (dual scoring metric). The covariance aggregation follows analogously from the law of total variance: $\tilde{\Sigma}_{\mathrm{agg},i} = \sum_j \beta_{ij}[\Omega_{ij} \Sigma_j \Omega_{ij}^\top + \Omega_{ij}\mu_j \mu_j^\top \Omega_{ij}^\top] - m_i m_i^\top$.
 
 Define a value projection:
 
@@ -1011,7 +1019,16 @@ identical to the standard transformer attention update $z_i = \sum_j \alpha_{ij}
 
 \subsubsection{Complete Attention Formula}
 
-In summary, under the appropriate limits (isotropic beliefs and flat bundle), our gauge-theoretic message communication:
+\paragraph{Assumption ledger.} The reduction from gauge-covariant KL attention to standard dot-product attention relies on the following assumptions, each of which can be independently relaxed:
+
+\begin{enumerate}
+\item \textbf{Isotropic covariances:} $\Sigma_i = \Sigma_j = \sigma^2 I$, so that log-determinant and trace terms cancel under softmax.
+\item \textbf{Flat (pair-independent) transport:} $\Omega_{ij} = \Omega$ for all agent pairs, so that structural terms $\log\det(\Omega\Omega^\top)$ and $\Tr((\Omega\Omega^\top)^{-1})$ become constants absorbed by softmax.
+\item \textbf{Approximate constant key norms:} $\|\mu_j\|^2 \approx C$ across tokens, so that the key-dependent bias $-\frac{1}{2\sigma^2}\|\mu_j\|^2$ is approximately constant and cancels under softmax. This is an approximation controlled by layer normalization and high-dimensional concentration, not an exact identity.
+\item \textbf{Identification in projected head space:} The bilinear form $W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$ is identified in the $d_{\text{head}}$-dimensional per-head subspace. The individual matrices $W_Q, W_K$ need not be square or independently invertible; only their product $W_Q W_K^\top$ (which determines the attention logits) is identified with the gauge transport.
+\end{enumerate}
+
+Under these assumptions, our gauge-theoretic message communication:
 
 \begin{equation}
 \beta_{ij} \propto \exp\left(-\frac{1}{\tau}D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)\right), \quad m_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j,
@@ -1033,11 +1050,13 @@ Our $GL(K)$ experiments (Section~\ref{sec:glk_lm}) utilize the full generality (
 
 \subsection{Training as Variational Free Energy Minimization}
 
-Having established that attention emerges from the variational free energy, we now show that gradient descent on this free energy recovers  standard transformer training updating thereby providing a variational interpretation of each component.
+Having established that attention emerges from the variational free energy, we now show that gradient descent on this free energy recovers standard transformer training dynamics, providing a variational interpretation of each component.
+
+An important distinction must be maintained between two operations that the free energy framework treats uniformly but that standard transformers implement differently. In variational inference, minimizing $\mathcal{F}$ with respect to the variational density $q$ constitutes \emph{inference} (the E-step), while updating generative model parameters constitutes \emph{learning} (the M-step). In a standard transformer, the forward pass computes per-token hidden states via deterministic layer maps (analogous to amortized inference: a single learned function replaces iterative optimization of $q$), while gradient descent on weights across data batches constitutes learning. The gradient expressions below describe the structure of both operations since they share the same functional form; what differs is which variables are updated and on what timescale. The forward pass corresponds to a single (amortized) step of belief inference with frozen parameters, and weight training corresponds to slow parameter updates that reduce the expected free energy across data.
 
 \subsubsection{Observation Likelihood as Loss Function.}
 
-In our gauge theory, observations by agents act as a source term that breaks the vacuum symmetry. The vacuum free energy (without observations) is:
+In our gauge theory, observations by agents act as a source term that breaks the vacuum degeneracy. The vacuum free energy (without observations), written in partially minimized form with $\beta_{ij}$ at its optimal softmax value (cf.\ Eq.~\ref{eq:free_energy_final}), is:
 
 \begin{equation}
 \mathcal{F}_{\text{vacuum}}[\{q_i\}] = \sum_i D_{\mathrm{KL}}(q_i \| p_i) + \sum_{i,j} \beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j).
@@ -1300,7 +1319,7 @@ Slow subsystem $\mathcal{F}_{\text{slow}}$ & Between-pass updates & Weight train
 \hline
 Stochastic $\pi_j \to m_j\pi_j$ & Random source masking & Attention dropout & I \\
 Noise in $\mu \to$ inflated $\Sigma$ & Effective uncertainty & Hidden dropout & I \\
-Fisher-Rao $G^{-1}\nabla\mathcal{F}$ & Diagonal approximation & Adam optimizer & I \\
+Fisher-Rao $G^{-1}\nabla\mathcal{F}$ & Diagonal approx.\ (heuristic) & Adam optimizer & I \\
 Riemannian trust region & Norm clipping on manifold & Gradient clipping & I \\
 \hline
 \end{tabular}
@@ -2904,7 +2923,7 @@ These simulations use a different gauge group ($\mathrm{SO}(3)$) and base manifo
 \subsection{Model-Channel Formalism}
 \label{app:model_channel}
 
-The most general formulation of the gauge-covariant variational free energy includes a model channel alongside the belief channel. Each agent $i$ maintains, in addition to its belief $q_i(k_i)$ and prior $p_i(k_i)$, a model distribution $s_i(m_i)$ over generative model parameters and a model hyper-prior $r_i(m_i)$. The complete free energy is:
+The most general formulation of the gauge-covariant variational free energy includes a model channel alongside the belief channel. Each agent $i$ maintains, in addition to its belief $q_i(k_i)$ and prior $p_i(k_i)$, a model distribution $s_i(m_i)$ over generative model parameters and a model hyper-prior $r_i(m_i)$. The complete free energy is (writing the partially minimized form with $\beta_{ij}$ and $\gamma_{ij}$ at their optimal softmax values, as discussed in Section~\ref{sec:final_free_energy}):
 
 \begin{equation}
 \begin{aligned}
