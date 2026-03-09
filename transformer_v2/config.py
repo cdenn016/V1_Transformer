@@ -41,9 +41,9 @@ class GaugeTransformerConfig:
     evolve_phi_e_step: bool = False
 
     # ── VFE E-step (FFN) parameters ────────────────────────────────────
-    alpha_ffn: float = 0.0         # Precision α for VFE E-step in FFN
+    alpha_ffn: float = 1.0         # Precision α for VFE E-step in FFN
     kappa_ffn: float = 1.0         # Softmax temperature for β in FFN E-step
-    lambda_beta_ffn: float = 0.0   # Belief coupling weight λ_β in FFN E-step
+    lambda_beta_ffn: float = 1.0   # Belief coupling weight λ_β in FFN E-step
     lambda_gamma_ffn: float = 0.0  # Model coupling weight λ_γ in FFN E-step
     kappa_gamma_ffn: float = 1.0   # Temperature for γ_ij in FFN E-step
     lambda_hyper_ffn: float = 0.0  # Hyper-prior weight in FFN E-step
@@ -51,7 +51,7 @@ class GaugeTransformerConfig:
     n_vfe_iterations: int = 1      # E-step iterations per forward pass
     learnable_lr: bool = True      # Learn step size for variational descent
 
-    # ── Training loss weights ────────────────────────────────────────
+    # ── Training loss weights (M-step) ───────────────────────────────
     alpha_loss: float = 0.0        # Self-coupling weight KL(q||p) in training loss
     kappa_loss: float = 1.0        # Softmax temperature for β in loss
     lambda_beta_loss: float = 0.0  # Belief coupling weight λ_β in training loss
