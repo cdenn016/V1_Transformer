@@ -70,9 +70,9 @@ Finally, we show that gradient descent on the gauge-equivariant free energy, in 
 
 
 
-\begin{figure}[h]
+\begin{figure}[t]
 \centering
-\begin{tikzpicture}[scale=1.0, every node/.style={font=\small}]
+\begin{tikzpicture}[scale=1.15, every node/.style={font=\small}]
 
 % =====================================================================
 % COLOR DEFINITIONS
@@ -88,240 +88,240 @@ Finally, we show that gradient descent on the gauge-equivariant free energy, in 
 \definecolor{baseedge}{RGB}{160,140,110}
 
 % =====================================================================
-% BASE MANIFOLD — oblique parallelogram with gentle curvature
+% BASE MANIFOLD — gently curved surface
 % =====================================================================
 \path
-  (0,0) coordinate (M1)
-  (8.5,0.3) coordinate (M2)
-  (8.0,-1.2) coordinate (M3)
-  (-0.5,-1.0) coordinate (M4);
+  (-0.3,0.1) coordinate (M1)
+  (9.5,0.4) coordinate (M2)
+  (9.0,-1.0) coordinate (M3)
+  (-0.8,-0.7) coordinate (M4);
 
 % Shadow
-\filldraw[fill=black!8, draw=none]
-  ($(M1)+(0.12,-0.12)$)
-    .. controls (2.5,-0.35) and (5.5,0.45) .. ($(M2)+(0.12,-0.12)$)
-    -- ($(M3)+(0.12,-0.12)$)
-    .. controls (5.0,-1.35) and (1.5,-1.25) .. ($(M4)+(0.12,-0.12)$)
+\filldraw[fill=black!6, draw=none]
+  ($(M1)+(0.1,-0.1)$)
+    .. controls (3.0,-0.2) and (6.5,0.6) .. ($(M2)+(0.1,-0.1)$)
+    -- ($(M3)+(0.1,-0.1)$)
+    .. controls (6.0,-1.2) and (2.0,-1.0) .. ($(M4)+(0.1,-0.1)$)
     -- cycle;
 
 % Surface fill
-\shade[top color=basetan!80, bottom color=basetan!30, draw=baseedge, thick]
+\shade[top color=basetan!70, bottom color=basetan!25, draw=baseedge!70, thick]
   (M1)
-    .. controls (2.5,-0.3) and (5.5,0.5) .. (M2)
+    .. controls (3.0,-0.15) and (6.5,0.55) .. (M2)
     -- (M3)
-    .. controls (5.0,-1.3) and (1.5,-1.2) .. (M4)
+    .. controls (6.0,-1.15) and (2.0,-0.95) .. (M4)
     -- cycle;
 
-% Front edge highlight
-\draw[baseedge!80, thick]
-  (M1) .. controls (2.5,-0.3) and (5.5,0.5) .. (M2);
+% Front edge
+\draw[baseedge!60, thick]
+  (M1) .. controls (3.0,-0.15) and (6.5,0.55) .. (M2);
 
-% Grid lines for 3D depth cue (subtle)
-\foreach \t in {0.25, 0.5, 0.75} {
-  \draw[baseedge!20, very thin]
+% Subtle grid lines for depth
+\foreach \t in {0.3, 0.6} {
+  \draw[baseedge!15, very thin]
     ($(M1)!\t!(M4)$) .. controls
-    ($($(M1)!\t!(M4)$)!0.35!($(M2)!\t!(M3)$)+(0,0.05)$) and
-    ($($(M1)!\t!(M4)$)!0.65!($(M2)!\t!(M3)$)+(0,-0.05)$)
+    ($($(M1)!\t!(M4)$)!0.4!($(M2)!\t!(M3)$)+(0,0.04)$) and
+    ($($(M1)!\t!(M4)$)!0.6!($(M2)!\t!(M3)$)+(-0.02,-0.04)$)
     .. ($(M2)!\t!(M3)$);
 }
 
-\node[below, black!80, font=\small\bfseries] at (4.0,-1.65) {Base manifold $\mathcal{C}$};
+\node[below, black!75, font=\small\bfseries] at (4.3,-1.4) {Base manifold $\mathcal{C}$};
 
 % =====================================================================
-% THREE AGENT POSITIONS — tokens i, j, k on the base
+% FIBER ANCHOR POINTS — five points along the base surface
 % =====================================================================
-% Position agents along the base with slight vertical offsets for perspective
-\coordinate (Ai) at (1.2,-0.35);   % Agent i (left)
-\coordinate (Aj) at (4.2,-0.15);   % Agent j (center)
-\coordinate (Ak) at (6.8,0.05);    % Agent k (right)
+\coordinate (C1) at (0.6,-0.15);
+\coordinate (C2) at (2.3,-0.25);
+\coordinate (C3) at (4.2,-0.05);
+\coordinate (C4) at (6.2,0.15);
+\coordinate (C5) at (8.0,0.25);
 
-% Agent base markers — filled circles with halos
-\foreach \agent/\lbl in {Ai/$i$, Aj/$j$, Ak/$k$} {
-  \filldraw[black!25] (\agent) circle (2.5pt);
-  \filldraw[black!80] (\agent) circle (1.8pt);
-}
-% Token labels on base
-\node[below=4pt, font=\footnotesize\itshape] at (Ai) {token $i$};
-\node[below=4pt, font=\footnotesize\itshape] at (Aj) {token $j$};
-\node[below=4pt, font=\footnotesize\itshape] at (Ak) {token $k$};
-
-% =====================================================================
-% FIBERS — vertical lines from each agent position
-% =====================================================================
-\newcommand{\fiberheight}{4.2}
-
-\foreach \agent in {Ai, Aj, Ak} {
-  \draw[fiberblue!40, densely dashed, line width=0.5pt]
-    (\agent) -- ++(0,\fiberheight);
+% Anchor dots
+\foreach \c in {C1,C2,C3,C4,C5} {
+  \filldraw[black!25] (\c) circle (2pt);
+  \filldraw[black!70] (\c) circle (1.3pt);
 }
 
-% Fiber label
-\node[above=2pt, fiberblue!70!black, font=\footnotesize]
-  at ($(Ak)+(0,\fiberheight)$) {Fiber $\mathcal{B}_q \cong \mathbb{R}^K$};
+% =====================================================================
+% FIBERS — vertical lines rising from each anchor
+% =====================================================================
+\pgfmathsetmacro{\fh}{5.0}
+
+\foreach \c in {C1,C2,C3,C4,C5} {
+  \draw[fiberblue!30, densely dashed, line width=0.4pt]
+    (\c) -- ++(0,\fh);
+}
+
+% Fiber label (rightmost)
+\node[above=2pt, fiberblue!60!black, font=\footnotesize]
+  at ($(C5)+(0,\fh)$) {$\mathcal{B}_q \cong \mathbb{R}^K$};
 
 % =====================================================================
-% LOCAL GAUGE FRAMES — rotated coordinate axes at each fiber
-% These show each agent's local reference frame φ_i
-% =====================================================================
-\newcommand{\framesize}{0.55}
-
-% Frame for agent i (tilted ~25°)
-\begin{scope}[shift={($(Ai)+(0,1.6)$)}, rotate=25]
-  \draw[-{Stealth[length=2mm]}, framecol!80, line width=0.8pt] (0,0) -- (\framesize,0);
-  \draw[-{Stealth[length=2mm]}, framecol!80, line width=0.8pt] (0,0) -- (0,\framesize);
-  \node[framecol!80, font=\tiny, right] at (\framesize,0) {$e_1^{(i)}$};
-  \node[framecol!80, font=\tiny, above] at (0,\framesize) {$e_2^{(i)}$};
-\end{scope}
-
-% Frame for agent j (tilted ~-10°)
-\begin{scope}[shift={($(Aj)+(0,2.0)$)}, rotate=-10]
-  \draw[-{Stealth[length=2mm]}, framecol!80, line width=0.8pt] (0,0) -- (\framesize,0);
-  \draw[-{Stealth[length=2mm]}, framecol!80, line width=0.8pt] (0,0) -- (0,\framesize);
-  \node[framecol!80, font=\tiny, right] at (\framesize,0) {$e_1^{(j)}$};
-  \node[framecol!80, font=\tiny, above] at (0,\framesize) {$e_2^{(j)}$};
-\end{scope}
-
-% Frame for agent k (tilted ~40°)
-\begin{scope}[shift={($(Ak)+(0,2.4)$)}, rotate=40]
-  \draw[-{Stealth[length=2mm]}, framecol!80, line width=0.8pt] (0,0) -- (\framesize,0);
-  \draw[-{Stealth[length=2mm]}, framecol!80, line width=0.8pt] (0,0) -- (0,\framesize);
-  \node[framecol!80, font=\tiny, right] at (\framesize,0) {$e_1^{(k)}$};
-  \node[framecol!80, font=\tiny, above] at (0,\framesize) {$e_2^{(k)}$};
-\end{scope}
-
-% Frame label
-\node[framecol!70!black, font=\tiny, fill=white, fill opacity=0.85, text opacity=1,
-      inner sep=1.5pt, rounded corners=1pt]
-  at ($(Ai)+(-0.9,2.3)$) {$\phi_i$};
-\node[framecol!70!black, font=\tiny, fill=white, fill opacity=0.85, text opacity=1,
-      inner sep=1.5pt, rounded corners=1pt]
-  at ($(Aj)+(-0.85,2.6)$) {$\phi_j$};
-\node[framecol!70!black, font=\tiny, fill=white, fill opacity=0.85, text opacity=1,
-      inner sep=1.5pt, rounded corners=1pt]
-  at ($(Ak)+(-0.9,3.0)$) {$\phi_k$};
-
-% =====================================================================
-% GAUSSIAN BELIEF DISTRIBUTIONS — ellipses on fibers
-% Each agent's belief q_i is a Gaussian shown as a tilted ellipse
+% SECTION CURVES — agents i and j as smooth sections of the bundle
+%
+% Each agent is a section: a map c ↦ q_i(c) assigning a Gaussian
+% belief in the fiber over EACH point c. The section curve threads
+% through all fibers, taking a value in each one.
 % =====================================================================
 
-% Agent i: belief q_i — blue ellipse, tilted to match frame
-\begin{scope}[shift={($(Ai)+(0,2.7)$)}, rotate=25]
-  \filldraw[gaussblue, opacity=0.15] (0,0) ellipse (0.35 and 0.18);
-  \draw[sectionblue, line width=0.9pt] (0,0) ellipse (0.35 and 0.18);
+% --- Section q_i (blue, solid) ---
+\coordinate (Si1) at ($(C1)+(0,1.6)$);
+\coordinate (Si2) at ($(C2)+(0,2.0)$);
+\coordinate (Si3) at ($(C3)+(0,2.6)$);
+\coordinate (Si4) at ($(C4)+(0,2.2)$);
+\coordinate (Si5) at ($(C5)+(0,1.8)$);
+
+\draw[sectionblue, line width=1.1pt]
+  (Si1) .. controls ($(Si2)+(-0.4,0.15)$) and ($(Si2)+(0.4,0.1)$) ..
+  (Si2) .. controls ($(Si3)+(-0.6,-0.1)$) and ($(Si3)+(-0.2,0.05)$) ..
+  (Si3) .. controls ($(Si3)+(0.5,0)$) and ($(Si4)+(-0.4,0.15)$) ..
+  (Si4) .. controls ($(Si4)+(0.5,-0.1)$) and ($(Si5)+(-0.4,0.1)$) ..
+  (Si5);
+
+% --- Section q_j (red, dashed) ---
+\coordinate (Sj1) at ($(C1)+(0,3.4)$);
+\coordinate (Sj2) at ($(C2)+(0,3.2)$);
+\coordinate (Sj3) at ($(C3)+(0,3.7)$);
+\coordinate (Sj4) at ($(C4)+(0,4.0)$);
+\coordinate (Sj5) at ($(C5)+(0,3.7)$);
+
+\draw[sectionred, densely dashed, line width=1.1pt]
+  (Sj1) .. controls ($(Sj2)+(-0.3,-0.05)$) and ($(Sj2)+(0.3,-0.1)$) ..
+  (Sj2) .. controls ($(Sj3)+(-0.6,0.0)$) and ($(Sj3)+(-0.2,0.1)$) ..
+  (Sj3) .. controls ($(Sj3)+(0.5,0.05)$) and ($(Sj4)+(-0.5,-0.1)$) ..
+  (Sj4) .. controls ($(Sj4)+(0.5,-0.05)$) and ($(Sj5)+(-0.4,0.1)$) ..
+  (Sj5);
+
+% Section labels (left side, well separated)
+\node[sectionblue, font=\footnotesize, left=4pt] at (Si1) {$q_i(c)$};
+\node[sectionred, font=\footnotesize, left=4pt] at (Sj1) {$q_j(c)$};
+
+% =====================================================================
+% HIGHLIGHT FIBER AT c* — the fourth fiber (C4)
+%
+% At this single point c*, BOTH sections q_i(c*) and q_j(c*) live
+% in the SAME fiber. The transport Ω_ij(c*) acts WITHIN this fiber
+% to align j's frame to i's frame.
+% =====================================================================
+
+% Highlight the fiber at c*
+\draw[fiberblue!50, line width=1.0pt] (C4) -- ++(0,\fh);
+
+% Label c* on the base
+\node[below=5pt, black, font=\footnotesize\itshape] at (C4) {$c^*$};
+
+% --- Gaussian ellipses at c* showing beliefs in the SAME fiber ---
+
+% q_i(c*): blue Gaussian, frame tilted 20°
+\begin{scope}[shift={(Si4)}, rotate=20]
+  \filldraw[gaussblue, opacity=0.18] (0,0) ellipse (0.42 and 0.20);
+  \draw[sectionblue, line width=0.8pt] (0,0) ellipse (0.42 and 0.20);
   \filldraw[sectionblue] (0,0) circle (1.5pt);
 \end{scope}
-\node[sectionblue, font=\footnotesize, fill=white, fill opacity=0.85, text opacity=1,
-      inner sep=2pt, rounded corners=1pt]
-  at ($(Ai)+(-1.0,2.7)$) {$q_i$};
 
-% Agent j: belief q_j — red ellipse, tilted to match frame
-\begin{scope}[shift={($(Aj)+(0,3.1)$)}, rotate=-10]
-  \filldraw[gaussred, opacity=0.15] (0,0) ellipse (0.4 and 0.15);
-  \draw[sectionred, line width=0.9pt] (0,0) ellipse (0.4 and 0.15);
+% q_j(c*): red Gaussian, frame tilted -15° (different gauge frame)
+\begin{scope}[shift={(Sj4)}, rotate=-15]
+  \filldraw[gaussred, opacity=0.18] (0,0) ellipse (0.40 and 0.22);
+  \draw[sectionred, line width=0.8pt] (0,0) ellipse (0.40 and 0.22);
   \filldraw[sectionred] (0,0) circle (1.5pt);
 \end{scope}
-\node[sectionred, font=\footnotesize, fill=white, fill opacity=0.85, text opacity=1,
-      inner sep=2pt, rounded corners=1pt]
-  at ($(Aj)+(-1.0,3.1)$) {$q_j$};
 
-% Agent k: belief q_k — teal ellipse
-\begin{scope}[shift={($(Ak)+(0,3.4)$)}, rotate=40]
-  \filldraw[teal, opacity=0.12] (0,0) ellipse (0.3 and 0.22);
-  \draw[teal!80!black, line width=0.9pt] (0,0) ellipse (0.3 and 0.22);
-  \filldraw[teal!80!black] (0,0) circle (1.5pt);
+% --- Local gauge frames at c* (purple axes) ---
+
+% Frame for agent i at c*
+\begin{scope}[shift={(Si4)}, rotate=20]
+  \draw[-{Stealth[length=1.8mm]}, framecol, line width=0.7pt]
+    (0,0) -- (0.55,0);
+  \draw[-{Stealth[length=1.8mm]}, framecol, line width=0.7pt]
+    (0,0) -- (0,0.55);
 \end{scope}
-\node[teal!80!black, font=\footnotesize, fill=white, fill opacity=0.85, text opacity=1,
-      inner sep=2pt, rounded corners=1pt]
-  at ($(Ak)+(1.05,3.4)$) {$q_k$};
+\node[framecol!80!black, font=\scriptsize] at ($(Si4)+(0.75,0.0)$) {$\phi_i$};
 
-% =====================================================================
-% SECTION CURVES — connecting beliefs across fibers
-% =====================================================================
-
-% Section q_i (blue, solid)
-\draw[sectionblue, line width=1.0pt]
-  ($(Ai)+(0,2.7)$)
-    .. controls ($(Aj)+(-0.8,2.85)$) and ($(Aj)+(0.8,3.2)$)
-    .. ($(Ak)+(0,3.15)$);
-
-% Section q_j (red, dashed)
-\draw[sectionred, densely dashed, line width=1.0pt]
-  ($(Ai)+(0,1.8)$)
-    .. controls ($(Aj)+(-0.8,2.6)$) and ($(Aj)+(0.8,3.0)$)
-    .. ($(Ak)+(0,3.55)$);
-
-% Tiny section labels at far ends
-\node[sectionblue, font=\tiny, right] at ($(Ak)+(0.15,3.15)$) {section $q_i$};
-\node[sectionred, font=\tiny, right] at ($(Ak)+(0.15,3.55)$) {section $q_j$};
-
-% =====================================================================
-% GAUGE TRANSPORT Ω_ij — the key operation: transport j's belief to i's frame
-% =====================================================================
-
-% Ghost ellipse: q_j transported into agent i's frame (dashed red, at i's fiber)
-\begin{scope}[shift={($(Ai)+(0,2.2)$)}, rotate=25]
-  \filldraw[gaussred, opacity=0.08] (0,0) ellipse (0.4 and 0.15);
-  \draw[sectionred, densely dotted, line width=0.8pt] (0,0) ellipse (0.4 and 0.15);
-  \filldraw[sectionred, opacity=0.5] (0,0) circle (1.2pt);
+% Frame for agent j at c*
+\begin{scope}[shift={(Sj4)}, rotate=-15]
+  \draw[-{Stealth[length=1.8mm]}, framecol, line width=0.7pt]
+    (0,0) -- (0.55,0);
+  \draw[-{Stealth[length=1.8mm]}, framecol, line width=0.7pt]
+    (0,0) -- (0,0.55);
 \end{scope}
-\node[sectionred!80, font=\tiny, fill=white, fill opacity=0.85, text opacity=1,
-      inner sep=1.5pt, rounded corners=1pt]
-  at ($(Ai)+(-1.25,2.2)$) {$\Omega_{ij}\,q_j$};
+\node[framecol!80!black, font=\scriptsize] at ($(Sj4)+(0.7,0.1)$) {$\phi_j$};
 
-% Transport arrow from q_j at j to the transported ghost at i
-\draw[-{Stealth[length=2.5mm, width=1.8mm]}, transportgreen!90!black,
-      line width=1.2pt,
-      decorate, decoration={snake, amplitude=0.5mm, segment length=3.5mm, post length=2mm}]
-  ($(Aj)+(0,3.1)$)
-    .. controls ($(Aj)+(-1.2,2.6)$) and ($(Ai)+(1.0,2.0)$)
-    .. ($(Ai)+(0.05,2.2)$);
+% =====================================================================
+% GAUGE TRANSPORT Ω_ij — acts WITHIN the fiber over c*
+%
+% At c*, Ω_ij(c*) rotates q_j(c*) from j's local frame into i's
+% local frame. Both distributions live in the same fiber; the
+% transport is a frame change, not a spatial translation.
+% =====================================================================
 
-% Transport label
-\node[transportgreen!85!black, font=\footnotesize\bfseries,
+% Transported ghost: Ω_ij q_j shown near q_i (now in i's frame, dotted)
+\coordinate (Ghost) at ($(Si4)+(0,0.7)$);
+\begin{scope}[shift={(Ghost)}, rotate=20]
+  \filldraw[gaussred, opacity=0.10] (0,0) ellipse (0.40 and 0.22);
+  \draw[sectionred, densely dotted, line width=0.7pt] (0,0) ellipse (0.40 and 0.22);
+  \filldraw[sectionred, opacity=0.4] (0,0) circle (1.2pt);
+\end{scope}
+\node[sectionred!70!black, font=\scriptsize,
       fill=white, fill opacity=0.9, text opacity=1,
-      inner sep=3pt, rounded corners=2pt, draw=transportgreen!40]
-  at ($(Ai)!0.5!(Aj)+(0,2.15)$) {$\Omega_{ij} = e^{\phi_i}e^{-\phi_j}$};
+      inner sep=1.5pt, rounded corners=1pt]
+  at ($(Ghost)+(0.85,0)$) {$\Omega_{ij}\,q_j$};
+
+% Transport arrow: curved arc WITHIN the fiber (vertical path),
+% from q_j(c*) down to the ghost near q_i(c*)
+\draw[-{Stealth[length=2.5mm, width=1.8mm]},
+      transportgreen!85!black, line width=1.1pt]
+  ($(Sj4)+(0.45,0)$)
+    .. controls ($(Sj4)+(1.0,-0.35)$) and ($(Ghost)+(1.0,0.35)$)
+    .. ($(Ghost)+(0.45,0)$);
+
+% Transport label — positioned to the right of the arc
+\node[transportgreen!80!black, font=\scriptsize\bfseries,
+      fill=white, fill opacity=0.9, text opacity=1,
+      inner sep=2.5pt, rounded corners=2pt]
+  at ($(Sj4)!0.5!(Ghost)+(1.25,0)$) {$\Omega_{ij}(c^*)$};
 
 % =====================================================================
-% KL DIVERGENCE BRACE — shows the attention cost between q_i and Ω_ij q_j
+% KL DIVERGENCE — between q_i(c*) and transported Ω_ij q_j(c*)
+% Both distributions are now expressed in agent i's frame
+% within the same fiber over c*
 % =====================================================================
 
-% Vertical double-arrow between q_i and transported q_j at agent i's fiber
-\draw[{Stealth[length=1.8mm]}-{Stealth[length=1.8mm]},
-      black!60, line width=0.7pt]
-  ($(Ai)+(0.65,2.25)$) -- ($(Ai)+(0.65,2.65)$);
+% Double arrow between q_i and the ghost
+\draw[{Stealth[length=1.5mm]}-{Stealth[length=1.5mm]},
+      black!55, line width=0.6pt]
+  ($(Si4)+(-0.5,0.05)$) -- ($(Ghost)+(-0.5,-0.05)$);
 
-\node[black!70, font=\tiny, fill=white, fill opacity=0.9, text opacity=1,
-      inner sep=1.5pt, rounded corners=1pt, right]
-  at ($(Ai)+(0.7,2.45)$) {$D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$};
-
-% =====================================================================
-% ATTENTION WEIGHT annotation — β_ij as softmax of KL costs
-% =====================================================================
-\node[black!80, font=\footnotesize,
-      fill=yellow!8, draw=black!25,
-      inner sep=4pt, rounded corners=3pt,
-      text width=4.5cm, align=center]
-  at (4.0,-2.4)
-  {$\beta_{ij} = \softmax\!\big(-D_{\KL}(q_i \| \Omega_{ij} q_j)\,/\,\kappa\big)$};
+\node[black!65, font=\scriptsize,
+      fill=white, fill opacity=0.9, text opacity=1,
+      inner sep=1.5pt, rounded corners=1pt, anchor=east]
+  at ($(Si4)+(-0.6,0.35)$) {$D_{\KL}(q_i \| \Omega_{ij} q_j)$};
 
 \end{tikzpicture}
 \caption{%
-The gauge-theoretic attention mechanism on an associated bundle.
-Three agents (tokens $i, j, k$) occupy positions on the base manifold $\mathcal{C}$,
-each with a vertical fiber $\mathcal{B}_q \cong \mathbb{R}^K$.
-Agent beliefs $q_i, q_j, q_k$ are Gaussian distributions (ellipses, with orientation
-reflecting covariance $\Sigma$) living in local gauge frames $\phi_i, \phi_j, \phi_k$
-(purple axes, each rotated differently).
-The gauge transport operator $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$
-(green arrow) carries $q_j$ from agent $j$'s frame into agent $i$'s frame,
-producing the transported belief $\Omega_{ij} q_j$ (dotted red ellipse).
-The attention cost is the KL divergence $D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$
-between the agent's own belief and the frame-aligned neighbor signal.
-Attention weights $\beta_{ij}$ arise as softmax-normalized costs over all neighbors.
-In the flat-bundle limit ($\Omega_{ij} \to I$, all frames aligned),
-this reduces to standard dot-product attention.
+Agent belief sections over the associated bundle
+$\mathcal{E}_q = \mathcal{N} \times_{\rho_q} \mathcal{B}_q$.
+The shaded surface is the base manifold $\mathcal{C}$;
+vertical dashed lines are belief fibers $\mathcal{B}_q \cong \mathbb{R}^K$
+over sampled points.
+Agents $i$ and $j$ define smooth sections
+$c \mapsto q_i(c)$ and $c \mapsto q_j(c)$
+(solid blue, dashed red),
+each assigning a Gaussian belief in the fiber over every base point.
+At the highlighted fiber over $c^*$,
+both $q_i(c^*)$ and $q_j(c^*)$ reside in the \emph{same} fiber
+but are expressed in different local gauge frames
+$\phi_i$, $\phi_j$ (purple axes).
+The transport operator
+$\Omega_{ij}(c^*) = \exp(\phi_i)\exp(-\phi_j)$
+(green arrow) acts \emph{within this fiber},
+rotating $q_j$ from $j$'s frame into $i$'s frame
+to produce $\Omega_{ij}\,q_j$ (dotted red ellipse).
+The attention cost $D_{\mathrm{KL}}(q_i \| \Omega_{ij}\,q_j)$
+is then the divergence between same-frame distributions
+within a single fiber.
+For transformers ($\dim\mathcal{C} = 0$),
+all tokens share one base point and the entire
+computation occurs within one fiber.
 }
 \label{fig:bundle_sections_surface}
 \end{figure}
