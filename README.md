@@ -37,7 +37,7 @@ is recovered as a **degenerate limit** of the gauge-theoretic attention
 beta_ij = softmax(-D_KL(q_i || Omega_ij q_j) / tau)
 ```
 
-through three successive simplifications: isotropic covariances, flat bundle, and learned projections.
+through two simplifications: isotropic covariances and flat bundle.
 
 ## Theoretical Framework
 
