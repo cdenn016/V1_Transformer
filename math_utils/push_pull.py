@@ -312,10 +312,10 @@ def _push_precision_via_solve(Omega: np.ndarray, Sigma_inv: np.ndarray) -> np.nd
     """
     # Check if Omega is orthogonal (fast path)
     K = Omega.shape[-1]
-    # Use a single representative for batch check
+    # Check ALL batch elements, not just the first
     flat = Omega.reshape(-1, K, K)
-    sample = flat[0]
-    if _is_orthogonal(sample):
+    all_orthogonal = all(_is_orthogonal(flat[i]) for i in range(flat.shape[0]))
+    if all_orthogonal:
         # Orthogonal: Ω⁻¹ = Ωᵀ, so Ω⁻ᵀ Λ Ω⁻¹ = Ω Λ Ωᵀ
         tmp = np.einsum('...ik,...kl->...il', Omega, Sigma_inv, optimize=True)
         out = np.einsum('...ij,...kj->...ik', tmp, Omega, optimize=True)

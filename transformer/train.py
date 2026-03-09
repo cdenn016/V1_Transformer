@@ -526,9 +526,9 @@ def compute_free_energy_loss(
         K = mu_q.shape[-1]
         kl_per_agent = gaussian_kl_divergence(
             mu_q=mu_q,
-            sigma_q=sigma_q.detach() if sigma_q is not None else None,
+            sigma_q=sigma_q,  # Keep gradients flowing through covariance
             mu_p=mu_p,        # PRIORS (not models directly)
-            sigma_p=sigma_p.detach() if sigma_p is not None else None,
+            sigma_p=sigma_p,  # Keep gradients flowing to sigma embeddings
         )  # (B, N)
         dim_scale = math.sqrt(max(K, 1))
         self_consistency_loss = alpha * kl_per_agent.mean() / dim_scale
@@ -894,7 +894,8 @@ class Trainer:
 
         for name, param in self.model.named_parameters():
             if param.requires_grad:
-                if 'bias' in name or 'norm' in name:
+                # No weight decay for biases, norms, and embeddings
+                if 'bias' in name or 'norm' in name or 'embed' in name:
                     no_decay_params.append(param)
                 else:
                     decay_params.append(param)
@@ -932,23 +933,23 @@ class Trainer:
             if not param.requires_grad:
                 continue
 
-            # Mean embeddings
-            if 'mu_embed' in name:
+            # Mean embeddings (matches both mu_prior and prior_mu naming conventions)
+            if 'mu_embed' in name or 'mu_prior' in name or 'prior_mu' in name:
                 mu_params.append(param)
-            # Covariance embeddings (sigma_embed, log_sigma_diag, base_log_sigma_diag)
-            elif 'sigma_embed' in name or 'log_sigma' in name:
+            # Covariance embeddings (matches log_sigma, sigma_prior, log_prior_sigma, etc.)
+            elif 'sigma_embed' in name or 'log_sigma' in name or 'sigma_prior' in name or 'prior_sigma' in name or 'log_prior' in name:
                 sigma_params.append(param)
             # Gauge frame embeddings
-            elif 'phi_embed' in name:
+            elif 'phi_embed' in name or 'phi_prior' in name:
                 phi_params.append(param)
             # Positional encoding (treat as gauge frames)
-            elif 'pos_encoding' in name:
+            elif 'pos_encoding' in name or 'position' in name:
                 phi_params.append(param)
             # Attention mechanism
             elif 'attention' in name or 'attn' in name:
                 attention_params.append(param)
             # Output projection
-            elif 'out_proj' in name:
+            elif 'out_proj' in name or 'lm_head' in name:
                 output_params.append(param)
             # FFN (default for everything else)
             else:
