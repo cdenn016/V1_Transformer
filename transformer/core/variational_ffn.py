@@ -1965,6 +1965,27 @@ class VariationalFFNDynamic(nn.Module):
         dtype = mu.dtype
         eps = 1e-6
 
+        # =================================================================
+        # DISABLE AUTOCAST for the entire VFE iteration loop.
+        # The VFE inner loop uses analytical gradients (not autograd) with
+        # eigendecomposition, sqrt, log, exp, matrix inversion — all of
+        # which need float32. AMP's float16 corrupts intermediate
+        # mu_current/sigma_current across iterations, causing 1e4 gradients.
+        # AMP speedup comes from the rest of the model (attention, embeddings,
+        # LayerNorm, output projection), not from VFE iterations.
+        # =================================================================
+        _amp_ctx = torch.amp.autocast('cuda', enabled=False)
+        _amp_ctx.__enter__()
+        # Upcast any float16 inputs to float32 (they arrive as float16 from
+        # the caller's autocast context)
+        mu = mu.float()
+        if sigma is not None:
+            sigma = sigma.float()
+        mu_prior = mu_prior.float()
+        phi = phi.float()
+        if W_out is not None:
+            W_out = W_out.float()
+
         # Initialize sigma if not provided
         if sigma is None:
             if self.diagonal_covariance:
@@ -2040,7 +2061,7 @@ class VariationalFFNDynamic(nn.Module):
         has_observations = targets is not None and W_out is not None
 
         # =====================================================================
-        # VFE Descent Loop with Dynamic β
+        # VFE Descent Loop with Dynamic β (runs outside AMP autocast)
         # =====================================================================
         # CRITICAL FIX: Scale base learning rate by 1/n_iterations
         # Without this, n_iterations=10 causes ~10x total displacement vs n_iterations=1
@@ -2483,6 +2504,13 @@ class VariationalFFNDynamic(nn.Module):
                     max_norm=self.phi_max_norm,
                     # trust_region and bch_order auto-selected based on gauge group
                 )
+
+        # Re-enable autocast context and cast results back to original dtype
+        _amp_ctx.__exit__(None, None, None)
+        mu_current = mu_current.to(dtype)
+        if sigma_current is not None:
+            sigma_current = sigma_current.to(dtype)
+        phi_current = phi_current.to(dtype)
 
         # Return results
         # NOTE: Previously returned .detach() which BREAKS gradient flow!
