@@ -65,6 +65,8 @@ def _safe_spd_inv(M: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     pseudoinverse if Cholesky/inv still fails (e.g., from extreme GL(K)
     transport operators corrupting covariance structure).
 
+    Runs in float32 to survive AMP autocast contexts.
+
     Args:
         M: (..., K, K) covariance matrices
         eps: Base regularization floor
@@ -74,19 +76,25 @@ def _safe_spd_inv(M: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     """
     K = M.shape[-1]
     device = M.device
-    dtype = M.dtype
+    orig_dtype = M.dtype
 
-    # Adaptive regularization: scale eps by matrix magnitude
-    # This ensures regularization is proportional to the matrix scale
-    diag_max = M.diagonal(dim1=-2, dim2=-1).abs().amax(dim=-1, keepdim=True).unsqueeze(-1)
-    reg_scale = torch.clamp(diag_max * eps, min=eps)  # (..., 1, 1)
-    M_reg = M + reg_scale * torch.eye(K, device=device, dtype=dtype)
+    # Force float32 for numerical stability under AMP
+    with torch.amp.autocast('cuda', enabled=False):
+        M = M.float()
 
-    try:
-        return torch.linalg.inv(M_reg)
-    except torch.linalg.LinAlgError:
-        # Fallback: pseudoinverse (always succeeds, handles rank-deficient)
-        return torch.linalg.pinv(M_reg)
+        # Adaptive regularization: scale eps by matrix magnitude
+        # This ensures regularization is proportional to the matrix scale
+        diag_max = M.diagonal(dim1=-2, dim2=-1).abs().amax(dim=-1, keepdim=True).unsqueeze(-1)
+        reg_scale = torch.clamp(diag_max * eps, min=eps)  # (..., 1, 1)
+        M_reg = M + reg_scale * torch.eye(K, device=device, dtype=torch.float32)
+
+        try:
+            result = torch.linalg.inv(M_reg)
+        except torch.linalg.LinAlgError:
+            # Fallback: pseudoinverse (always succeeds, handles rank-deficient)
+            result = torch.linalg.pinv(M_reg)
+
+    return result.to(orig_dtype)
 
 # Import validated gradient engine
 import sys
@@ -472,6 +480,13 @@ def _compute_vfe_gradients_block_diagonal_diag(
     device = mu_q.device
     dtype = mu_q.dtype
 
+    # Force float32 for all sigma divisions, logs, and KL computation under AMP
+    mu_q = mu_q.float()
+    mu_p = mu_p.float()
+    sigma_q = sigma_q.float()
+    sigma_p = sigma_p.float()
+    beta = beta.float()
+
     sigma_q_safe = sigma_q.clamp(min=eps)
     sigma_p_safe = sigma_p.clamp(min=eps)
 
@@ -592,7 +607,7 @@ def _compute_vfe_gradients_block_diagonal_diag(
 
     grad_sigma = grad_sigma_self + grad_sigma_align
 
-    return grad_mu, grad_sigma
+    return grad_mu.to(dtype), grad_sigma.to(dtype)
 
 
 def _compute_vfe_gradients_chunked(
@@ -624,6 +639,13 @@ def _compute_vfe_gradients_chunked(
     B, N, K = mu_q.shape
     device = mu_q.device
     dtype = mu_q.dtype
+
+    # Force float32 for all sigma divisions, logs, and KL computation under AMP
+    mu_q = mu_q.float()
+    mu_p = mu_p.float()
+    sigma_q = sigma_q.float()
+    sigma_p = sigma_p.float()
+    beta = beta.float()
 
     sigma_q_safe = sigma_q.clamp(min=eps)
     sigma_p_safe = sigma_p.clamp(min=eps)
@@ -768,7 +790,7 @@ def _compute_vfe_gradients_chunked(
     grad_mu = grad_mu_self + grad_mu_align
     grad_sigma = grad_sigma_self + grad_sigma_align
 
-    return grad_mu, grad_sigma
+    return grad_mu.to(dtype), grad_sigma.to(dtype)
 
 
 # =============================================================================
@@ -892,6 +914,16 @@ def compute_vfe_gradients_gpu(
     #   ∂KL/∂σ_q = 0.5 * (1/σ_p - 1/σ_q)
 
     if is_diagonal:
+        # Force float32 for all sigma divisions, logs, and KL computation.
+        # The Omega einsum and mu transport can stay in AMP dtype for speed,
+        # but sigma ratios and log-det terms need float32 precision.
+        _orig_dtype = sigma_q.dtype
+        sigma_q = sigma_q.float()
+        sigma_p = sigma_p.float()
+        mu_q = mu_q.float()
+        mu_p = mu_p.float()
+        beta = beta.float()
+
         # Clamp for stability
         sigma_q_safe = sigma_q.clamp(min=eps)
         sigma_p_safe = sigma_p.clamp(min=eps)
@@ -1173,7 +1205,8 @@ def compute_vfe_gradients_gpu(
     grad_mu = grad_mu_self + grad_mu_align
     grad_sigma = grad_sigma_self + grad_sigma_align
 
-    return grad_mu, grad_sigma
+    # Cast back from float32 (diagonal path upcasts for numerical safety under AMP)
+    return grad_mu.to(dtype), grad_sigma.to(dtype)
 
 
 def compute_natural_gradient_gpu(
@@ -1204,20 +1237,27 @@ def compute_natural_gradient_gpu(
         sigma_q = sigma_q.squeeze(-1)
 
     is_diagonal = sigma_q.dim() == 3
+    orig_dtype = sigma_q.dtype
 
-    if is_diagonal:
-        # Diagonal case: simple element-wise multiplication
-        sigma_safe = sigma_q.clamp(min=eps)
-        nat_grad_mu = sigma_safe * grad_mu  # (B, N, K)
-        nat_grad_sigma = 0.5 * sigma_safe * sigma_safe * grad_sigma  # (B, N, K)
-    else:
-        # Full covariance: matrix multiplication
-        nat_grad_mu = torch.einsum('bnij,bnj->bni', sigma_q, grad_mu)
-        # Full Fisher natural gradient: δΣ = 0.5 * Σ @ ∇_Σ @ Σ
-        # This is gauge-invariant: under Σ → AΣA^T, δΣ → A(δΣ)A^T
-        nat_grad_sigma = 0.5 * torch.einsum('bnij,bnjk,bnkl->bnil', sigma_q, grad_sigma, sigma_q)
+    # Force float32: sigma^2 products and small sigma divisions break in float16
+    with torch.amp.autocast('cuda', enabled=False):
+        sigma_q = sigma_q.float()
+        grad_mu = grad_mu.float()
+        grad_sigma = grad_sigma.float()
 
-    return nat_grad_mu, nat_grad_sigma
+        if is_diagonal:
+            # Diagonal case: simple element-wise multiplication
+            sigma_safe = sigma_q.clamp(min=eps)
+            nat_grad_mu = sigma_safe * grad_mu  # (B, N, K)
+            nat_grad_sigma = 0.5 * sigma_safe * sigma_safe * grad_sigma  # (B, N, K)
+        else:
+            # Full covariance: matrix multiplication
+            nat_grad_mu = torch.einsum('bnij,bnj->bni', sigma_q, grad_mu)
+            # Full Fisher natural gradient: δΣ = 0.5 * Σ @ ∇_Σ @ Σ
+            # This is gauge-invariant: under Σ → AΣA^T, δΣ → A(δΣ)A^T
+            nat_grad_sigma = 0.5 * torch.einsum('bnij,bnjk,bnkl->bnil', sigma_q, grad_sigma, sigma_q)
+
+    return nat_grad_mu.to(orig_dtype), nat_grad_sigma.to(orig_dtype)
 
 
 # =============================================================================
@@ -1256,6 +1296,7 @@ def retract_spd_torch(
     """
     # Handle different input shapes
     original_shape = Sigma.shape
+    orig_dtype = Sigma.dtype
     if Sigma.dim() == 4:
         B, N, K, _ = Sigma.shape
         Sigma = Sigma.reshape(B * N, K, K)
@@ -1263,51 +1304,57 @@ def retract_spd_torch(
 
     batch_size, K, _ = Sigma.shape
     device = Sigma.device
-    dtype = Sigma.dtype
 
-    # Symmetrize inputs (numerical safety)
-    Sigma = 0.5 * (Sigma + Sigma.transpose(-1, -2))
-    delta_Sigma = 0.5 * (delta_Sigma + delta_Sigma.transpose(-1, -2))
+    # Force float32 for eigendecomposition, sqrt, exp — all break in float16
+    with torch.amp.autocast('cuda', enabled=False):
+        Sigma = Sigma.float()
+        delta_Sigma = delta_Sigma.float()
 
-    # Eigendecompose Σ to get Σ^{1/2} and Σ^{-1/2}
-    # For small K (typically 3-11), eigendecomposition is fast
-    eigenvalues, eigenvectors = torch.linalg.eigh(Sigma)  # (batch, K), (batch, K, K)
-    eigenvalues = eigenvalues.clamp(min=eps)
+        # Symmetrize inputs (numerical safety)
+        Sigma = 0.5 * (Sigma + Sigma.transpose(-1, -2))
+        delta_Sigma = 0.5 * (delta_Sigma + delta_Sigma.transpose(-1, -2))
 
-    sqrt_eig = torch.sqrt(eigenvalues)        # (batch, K)
-    inv_sqrt_eig = 1.0 / sqrt_eig             # (batch, K)
+        # Eigendecompose Σ to get Σ^{1/2} and Σ^{-1/2}
+        # For small K (typically 3-11), eigendecomposition is fast
+        eigenvalues, eigenvectors = torch.linalg.eigh(Sigma)  # (batch, K), (batch, K, K)
+        eigenvalues = eigenvalues.clamp(min=eps)
 
-    # Σ^{1/2} = U diag(√λ) U^T,  Σ^{-1/2} = U diag(1/√λ) U^T
-    Sigma_sqrt = eigenvectors * sqrt_eig.unsqueeze(-2) @ eigenvectors.transpose(-1, -2)
-    Sigma_inv_sqrt = eigenvectors * inv_sqrt_eig.unsqueeze(-2) @ eigenvectors.transpose(-1, -2)
+        sqrt_eig = torch.sqrt(eigenvalues)        # (batch, K)
+        inv_sqrt_eig = 1.0 / sqrt_eig             # (batch, K)
 
-    # Whitened tangent: R = Σ^{-1/2} (η · ΔΣ) Σ^{-1/2}  (Eq. 164)
-    R = Sigma_inv_sqrt @ (step_size * delta_Sigma) @ Sigma_inv_sqrt
-    R = 0.5 * (R + R.transpose(-1, -2))  # Ensure symmetric
+        # Σ^{1/2} = U diag(√λ) U^T,  Σ^{-1/2} = U diag(1/√λ) U^T
+        Sigma_sqrt = eigenvectors * sqrt_eig.unsqueeze(-2) @ eigenvectors.transpose(-1, -2)
+        Sigma_inv_sqrt = eigenvectors * inv_sqrt_eig.unsqueeze(-2) @ eigenvectors.transpose(-1, -2)
 
-    # Trust region on whitened Frobenius norm ||R||_F
-    if trust_region is not None and trust_region > 0:
-        R_norm = torch.linalg.norm(R, ord='fro', dim=(-2, -1), keepdim=True)  # (batch, 1, 1)
-        scale = torch.clamp(trust_region / (R_norm + eps), max=1.0)
-        R = R * scale
+        # Whitened tangent: R = Σ^{-1/2} (η · ΔΣ) Σ^{-1/2}  (Eq. 164)
+        R = Sigma_inv_sqrt @ (step_size * delta_Sigma) @ Sigma_inv_sqrt
+        R = 0.5 * (R + R.transpose(-1, -2))  # Ensure symmetric
 
-    # Exponential map: Σ_{k+1} = Σ^{1/2} exp(R) Σ^{1/2}  (Eq. 165)
-    # Compute exp(R) via eigendecomposition: R = V Λ V^T → exp(R) = V exp(Λ) V^T
-    R_eigenvalues, R_eigenvectors = torch.linalg.eigh(R)
-    R_eigenvalues = R_eigenvalues.clamp(-50.0, 50.0)  # Prevent overflow
-    exp_R = R_eigenvectors * torch.exp(R_eigenvalues).unsqueeze(-2) @ R_eigenvectors.transpose(-1, -2)
+        # Trust region on whitened Frobenius norm ||R||_F
+        if trust_region is not None and trust_region > 0:
+            R_norm = torch.linalg.norm(R, ord='fro', dim=(-2, -1), keepdim=True)  # (batch, 1, 1)
+            scale = torch.clamp(trust_region / (R_norm + eps), max=1.0)
+            R = R * scale
 
-    # Retraction: Σ_{new} = Σ^{1/2} exp(R) Σ^{1/2}
-    Sigma_new = Sigma_sqrt @ exp_R @ Sigma_sqrt
+        # Exponential map: Σ_{k+1} = Σ^{1/2} exp(R) Σ^{1/2}  (Eq. 165)
+        # Compute exp(R) via eigendecomposition: R = V Λ V^T → exp(R) = V exp(Λ) V^T
+        R_eigenvalues, R_eigenvectors = torch.linalg.eigh(R)
+        R_eigenvalues = R_eigenvalues.clamp(-50.0, 50.0)  # Prevent overflow
+        exp_R = R_eigenvectors * torch.exp(R_eigenvalues).unsqueeze(-2) @ R_eigenvectors.transpose(-1, -2)
 
-    # Symmetrize (numerical safety)
-    Sigma_new = 0.5 * (Sigma_new + Sigma_new.transpose(-1, -2))
+        # Retraction: Σ_{new} = Σ^{1/2} exp(R) Σ^{1/2}
+        Sigma_new = Sigma_sqrt @ exp_R @ Sigma_sqrt
 
-    # Post-retraction sanitization: spectral floor on eigenvalues
-    # This prevents numerical collapse during prolonged gradient descent
-    eig_new, vec_new = torch.linalg.eigh(Sigma_new)
-    eig_new = eig_new.clamp(min=eps)
-    Sigma_new = vec_new * eig_new.unsqueeze(-2) @ vec_new.transpose(-1, -2)
+        # Symmetrize (numerical safety)
+        Sigma_new = 0.5 * (Sigma_new + Sigma_new.transpose(-1, -2))
+
+        # Post-retraction sanitization: spectral floor on eigenvalues
+        # This prevents numerical collapse during prolonged gradient descent
+        eig_new, vec_new = torch.linalg.eigh(Sigma_new)
+        eig_new = eig_new.clamp(min=eps)
+        Sigma_new = vec_new * eig_new.unsqueeze(-2) @ vec_new.transpose(-1, -2)
+
+    Sigma_new = Sigma_new.to(orig_dtype)
 
     # Restore original shape
     if len(original_shape) == 4:
@@ -1341,23 +1388,28 @@ def retract_spd_diagonal_torch(
     Returns:
         sigma_new: Positive diagonal variances, shape (B, N, K)
     """
-    sigma_safe = sigma_diag.clamp(min=eps)
+    orig_dtype = sigma_diag.dtype
 
-    # Whitened tangent: δσ / σ (element-wise for diagonal)
-    whitened = delta_sigma / sigma_safe
+    # Force float32: exp(50) overflows float16 (max ~65504)
+    with torch.amp.autocast('cuda', enabled=False):
+        sigma_safe = sigma_diag.float().clamp(min=eps)
+        delta_sigma = delta_sigma.float()
 
-    # Trust region on whitened tangent
-    if trust_region is not None and trust_region > 0:
-        whitened = whitened.clamp(-trust_region, trust_region)
+        # Whitened tangent: δσ / σ (element-wise for diagonal)
+        whitened = delta_sigma / sigma_safe
 
-    # Exponential update: σ_new = σ * exp(τ * whitened)
-    # Clip exponent to prevent overflow
-    exp_arg = (step_size * whitened).clamp(-50.0, 50.0)
-    sigma_new = sigma_safe * torch.exp(exp_arg)
+        # Trust region on whitened tangent
+        if trust_region is not None and trust_region > 0:
+            whitened = whitened.clamp(-trust_region, trust_region)
+
+        # Exponential update: σ_new = σ * exp(τ * whitened)
+        # Clip exponent to prevent overflow
+        exp_arg = (step_size * whitened).clamp(-50.0, 50.0)
+        sigma_new = sigma_safe * torch.exp(exp_arg)
 
     # Clamp to [eps, 100.0] for numerical stability
     # Floor prevents division by zero; ceiling prevents KL divergence explosion
-    return sigma_new.clamp(min=eps, max=100.0)
+    return sigma_new.clamp(min=eps, max=100.0).to(orig_dtype)
 
 
 # =============================================================================
@@ -2200,14 +2252,14 @@ class VariationalFFNDynamic(nn.Module):
             # Use whitened trust region: ||δμ / √σ|| instead of raw norm
             delta_mu = -effective_lr * nat_grad_mu
 
-            # Whitened trust region for mu
+            # Whitened trust region for mu (float32 for sqrt/division stability under AMP)
             if is_diagonal:
-                sigma_sqrt = torch.sqrt(sigma_current.clamp(min=eps))
+                sigma_sqrt = torch.sqrt(sigma_current.float().clamp(min=eps)).to(sigma_current.dtype)
                 whitened_delta = delta_mu / sigma_sqrt
             else:
                 # Use .clone() after diagonal to avoid view-related gradient issues
-                sigma_diag = torch.diagonal(sigma_current, dim1=-2, dim2=-1).clone().clamp(min=eps)
-                whitened_delta = delta_mu / torch.sqrt(sigma_diag)
+                sigma_diag = torch.diagonal(sigma_current, dim1=-2, dim2=-1).clone().float().clamp(min=eps)
+                whitened_delta = delta_mu / torch.sqrt(sigma_diag).to(delta_mu.dtype)
 
             whitened_norm = torch.linalg.norm(whitened_delta, dim=-1, keepdim=True)
             mu_trust_region = 2.0  # Trust region on whitened norm

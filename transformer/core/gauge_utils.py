@@ -56,11 +56,16 @@ def stable_matrix_exp_pair(
     matrix = matrix * scale
 
     d = matrix.shape[-1]
-    if d >= dim_threshold:
-        matrix_f64 = matrix.double()
-        exp_pos = torch.linalg.matrix_exp(matrix_f64).to(matrix.dtype)
-        exp_neg = torch.linalg.matrix_exp(-matrix_f64).to(matrix.dtype)
-    else:
-        exp_pos = torch.linalg.matrix_exp(matrix)
-        exp_neg = torch.linalg.matrix_exp(-matrix)
+    # Always compute matrix_exp in at least float32 to avoid AMP float16 disasters.
+    # For large K (>= dim_threshold), use float64 as before.
+    orig_dtype = matrix.dtype
+    with torch.amp.autocast('cuda', enabled=False):
+        if d >= dim_threshold:
+            matrix_f64 = matrix.double()
+            exp_pos = torch.linalg.matrix_exp(matrix_f64).to(orig_dtype)
+            exp_neg = torch.linalg.matrix_exp(-matrix_f64).to(orig_dtype)
+        else:
+            matrix_f32 = matrix.float()
+            exp_pos = torch.linalg.matrix_exp(matrix_f32).to(orig_dtype)
+            exp_neg = torch.linalg.matrix_exp(-matrix_f32).to(orig_dtype)
     return exp_pos, exp_neg
