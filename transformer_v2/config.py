@@ -95,6 +95,12 @@ class GaugeTransformerConfig:
     pos_encoding_scale: float = 0.1
     tie_embeddings: bool = True
 
+    # ── Model channel (slow subsystem) ───────────────────────────────
+    lambda_gamma: float = 0.0      # Model coupling: Σ γ_ij · KL(s_i || Ω_ij s_j)
+    kappa_gamma: float = 1.0       # Temperature for γ_ij model coupling weights
+    lambda_hyper: float = 0.0      # Hyper-prior: KL(s_i || h) models toward centroid
+    alpha_phi: float = 0.0         # Gauge prior: (α_φ/2) Σ ||φ_i||²
+
     # ── Regularization ────────────────────────────────────────────────
     dropout: float = 0.1
     use_layernorm: bool = True
@@ -194,6 +200,10 @@ class GaugeTransformerConfig:
             'mu_max_norm': 'mu_max_norm',
             'cross_couplings': 'cross_couplings',
             'use_block_diagonal_kl': 'use_block_diagonal_kl',
+            'lambda_gamma': 'lambda_gamma',
+            'kappa_gamma': 'kappa_gamma',
+            'lambda_hyper': 'lambda_hyper',
+            'alpha_phi': 'alpha_phi',
         }
 
         kwargs = {}
