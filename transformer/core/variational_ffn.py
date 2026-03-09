@@ -2082,6 +2082,7 @@ class VariationalFFNDynamic(nn.Module):
                         use_numba=False,
                         return_kl=False,
                         diagonal_covariance=is_diagonal,
+                        chunk_size=self.chunk_size,
                         mask_self_attention=self.mask_self_attention,
                     )  # (B, N, N)
                     beta_heads.append(beta_h)
@@ -2265,6 +2266,7 @@ class VariationalFFNDynamic(nn.Module):
                             kappa=kappa_h, epsilon=eps, mask=mask,
                             use_numba=False, return_kl=True,
                             diagonal_covariance=is_diagonal,
+                            chunk_size=self.chunk_size,
                             mask_self_attention=self.mask_self_attention,
                         )
                         # compute_attention_weights with return_kl=True always returns a tuple
@@ -2358,6 +2360,7 @@ class VariationalFFNDynamic(nn.Module):
                         kappa=kappa_h, epsilon=eps, mask=mask,
                         use_numba=False, return_kl=True,
                         diagonal_covariance=is_diagonal,
+                        chunk_size=self.chunk_size,
                         mask_self_attention=self.mask_self_attention,
                     )
                     # compute_attention_weights with return_kl=True always returns a tuple
@@ -2397,6 +2400,8 @@ class VariationalFFNDynamic(nn.Module):
                         use_numba=False,
                         return_kl=True,
                         diagonal_covariance=is_diagonal,
+                        irrep_dims=self.irrep_dims,
+                        chunk_size=self.chunk_size,
                         mask_self_attention=self.mask_self_attention,
                     )[1]
 
