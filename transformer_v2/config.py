@@ -65,7 +65,7 @@ class GaugeTransformerConfig:
 
     # ── Phi evolution ─────────────────────────────────────────────────
     phi_lr: float = 0.05
-    phi_max_norm: float = math.pi  # π radians = 180° rotation
+    phi_max_norm: Optional[float] = None  # Set in __post_init__: π for SO, None (no clamp) for GL
     phi_natural_gradient: str = 'clip'  # 'clip' | 'cartan' | 'killing' | 'pullback'
 
     # ── Memory efficiency ─────────────────────────────────────────────
@@ -140,6 +140,12 @@ class GaugeTransformerConfig:
             self.phi_dim = self.embed_dim * self.embed_dim
         elif self.gauge_group == 'SON':
             self.phi_dim = self.gauge_dim * (self.gauge_dim - 1) // 2
+
+        # phi_max_norm: π for SO (rotation angles), None for GL (no geometric bound)
+        if self.phi_max_norm is None:
+            if self.gauge_group in ('SO3', 'SON'):
+                self.phi_max_norm = math.pi
+            # GL(K): leave as None → no clamp
 
         # Compute irrep_dims from irrep_spec if block-diagonal KL is enabled
         if self.irrep_spec is not None and self.use_block_diagonal_kl:
