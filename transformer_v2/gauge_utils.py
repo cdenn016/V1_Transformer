@@ -23,7 +23,7 @@ from typing import Tuple, Optional
 
 # Import SO(N) and GL(K) retraction for proper phi updates
 try:
-    from math_utils.generators import (
+    from .generators import (
         retract_soN_torch,
         retract_glK_torch,
         is_soN_generators,
@@ -35,7 +35,7 @@ except ImportError:
 
 # Import SO(N) BCH composition for proper Lie group operations
 try:
-    from math_utils.generators import soN_compose_bch_torch
+    from .generators import soN_compose_bch_torch
     SON_BCH_AVAILABLE = True
 except ImportError:
     SON_BCH_AVAILABLE = False

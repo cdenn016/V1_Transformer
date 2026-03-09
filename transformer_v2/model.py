@@ -22,7 +22,7 @@ from .attention import create_attention_mask
 
 # Import generators (required — not optional in refactored code)
 try:
-    from math_utils.generators import (
+    from .generators import (
         generate_so3_generators,
         generate_soN_generators,
         generate_multi_irrep_generators,
