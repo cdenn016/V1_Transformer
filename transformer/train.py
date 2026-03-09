@@ -526,9 +526,9 @@ def compute_free_energy_loss(
         K = mu_q.shape[-1]
         kl_per_agent = gaussian_kl_divergence(
             mu_q=mu_q,
-            sigma_q=sigma_q,  # Keep gradients flowing through covariance
+            sigma_q=sigma_q.detach() if sigma_q is not None else None,
             mu_p=mu_p,        # PRIORS (not models directly)
-            sigma_p=sigma_p,  # Keep gradients flowing to sigma embeddings
+            sigma_p=sigma_p.detach() if sigma_p is not None else None,
         )  # (B, N)
         dim_scale = math.sqrt(max(K, 1))
         self_consistency_loss = alpha * kl_per_agent.mean() / dim_scale
