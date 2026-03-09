@@ -643,10 +643,16 @@ class VariationalFFNDynamic(nn.Module):
         self.irrep_dims = config.irrep_dims
         self.chunk_size = config.chunk_size
 
-        # VFE hyperparameters
+        # VFE hyperparameters (belief channel / fast E-step)
         self.alpha = config.alpha_ffn
-        self.lambda_belief = config.lambda_ffn
+        self.lambda_belief = config.lambda_beta_ffn
         self.kappa = config.kappa_ffn
+
+        # Model channel hyperparameters (slow M-step)
+        self.lambda_gamma = config.lambda_gamma_ffn
+        self.kappa_gamma = config.kappa_gamma_ffn
+        self.lambda_hyper = config.lambda_hyper_ffn
+        self.alpha_phi = config.alpha_phi_ffn
 
         # Multi-head VFE
         self.multihead_vfe = config.multihead_vfe and config.irrep_dims is not None
@@ -723,13 +729,19 @@ class VariationalFFNDynamic(nn.Module):
             return torch.where(norm > 10.0, grad_phi * 10.0 / (norm + 1e-6), grad_phi)
 
     def _update_phi_via_alignment(self, mu_current, sigma_current, phi_current,
+                                   mu_prior, sigma_prior,
                                    mask, is_diagonal, phi_lr_scale=1.0):
-        """Unified phi update via alignment loss gradient. Eliminates duplication."""
+        """Unified phi update via alignment loss gradient.
+
+        Includes both belief channel (β·KL) and model channel (γ·KL, hyper-prior,
+        gauge prior) terms in the alignment loss.
+        """
         if not torch.is_grad_enabled():
             return phi_current
 
         phi_for_grad = phi_current.clone().requires_grad_(True)
 
+        # ── Belief channel: λ_β · Σ β_ij · KL(q_i || Ω_ij q_j) ──────
         if self.multihead_vfe:
             alignment_loss = torch.tensor(0.0, device=mu_current.device, dtype=mu_current.dtype)
             block_start = 0
@@ -760,6 +772,31 @@ class VariationalFFNDynamic(nn.Module):
                 mask_self_attention=self.mask_self_attention,
             )
             alignment_loss = self.lambda_belief * (beta_phi * kl_matrix).sum()
+
+        # ── Model channel: λ_γ · Σ γ_ij · KL(s_i || Ω_ij s_j) ──────
+        if self.lambda_gamma > 0.0 and mu_prior is not None:
+            gamma, kl_model = compute_attention_weights(
+                mu_prior.detach(), sigma_prior.detach() if sigma_prior is not None else None,
+                phi_for_grad, self.generators, self.kappa_gamma, 1e-6, mask,
+                return_kl=True, diagonal_covariance=is_diagonal,
+                irrep_dims=self.irrep_dims, chunk_size=self.chunk_size,
+                mask_self_attention=self.mask_self_attention,
+            )
+            alignment_loss = alignment_loss + self.lambda_gamma * (gamma * kl_model).sum()
+
+        # ── Hyper-prior: λ_h · Σ KL(s_i || h) ───────────────────────
+        if self.lambda_hyper > 0.0 and mu_prior is not None:
+            from transformer_v2.loss import gaussian_kl_divergence
+            mu_h = mu_prior.mean(dim=1, keepdim=True).detach().expand_as(mu_prior)
+            sigma_h = None
+            if sigma_prior is not None:
+                sigma_h = (sigma_prior.mean(dim=1, keepdim=True).detach() * 2.0).expand_as(sigma_prior)
+            kl_hyper = gaussian_kl_divergence(mu_prior, sigma_prior, mu_h, sigma_h)
+            alignment_loss = alignment_loss + self.lambda_hyper * kl_hyper.sum()
+
+        # ── Gauge prior: (α_φ/2) · Σ ||φ_i||² ───────────────────────
+        if self.alpha_phi > 0.0:
+            alignment_loss = alignment_loss + (self.alpha_phi / 2.0) * (phi_for_grad ** 2).sum()
 
         if alignment_loss.grad_fn is None:
             return phi_current
@@ -892,14 +929,18 @@ class VariationalFFNDynamic(nn.Module):
             # Phi update per iteration
             if self.update_phi_per_iteration:
                 phi_current = self._update_phi_via_alignment(
-                    mu_current, sigma_current, phi_current, mask, is_diagonal,
+                    mu_current, sigma_current, phi_current,
+                    mu_p_current, sigma_p,
+                    mask, is_diagonal,
                     phi_lr_scale=1.0 / self.n_iterations,
                 )
 
         # Post-loop phi update
         if self.update_phi and not self.update_phi_per_iteration:
             phi_current = self._update_phi_via_alignment(
-                mu_current, sigma_current, phi_current, mask, is_diagonal,
+                mu_current, sigma_current, phi_current,
+                mu_p_current, sigma_p,
+                mask, is_diagonal,
             )
 
         if self.update_sigma:

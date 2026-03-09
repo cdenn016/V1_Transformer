@@ -305,8 +305,7 @@ def compute_vfe_loss_from_config(
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """Convenience: compute VFE loss using model's config for all hyperparameters.
 
-    Reads lambda_gamma, kappa_gamma, lambda_hyper, alpha_phi, alpha, kappa
-    from model.config.
+    Reads all _loss suffixed params from model.config.
     """
     config = model.config
     return compute_vfe_loss(
@@ -314,11 +313,11 @@ def compute_vfe_loss_from_config(
         token_ids=token_ids,
         targets=targets,
         alpha=config.alpha_loss,
-        lambda_beta=config.lambda_loss,
-        lambda_gamma=config.lambda_gamma,
-        kappa_gamma=config.kappa_gamma,
-        lambda_hyper=config.lambda_hyper,
-        alpha_phi=config.alpha_phi,
+        lambda_beta=config.lambda_beta_loss,
+        lambda_gamma=config.lambda_gamma_loss,
+        kappa_gamma=config.kappa_gamma_loss,
+        lambda_hyper=config.lambda_hyper_loss,
+        alpha_phi=config.alpha_phi_loss,
         pad_token_id=pad_token_id,
         use_obs_in_vfe=use_obs_in_vfe,
     )

@@ -43,14 +43,22 @@ class GaugeTransformerConfig:
     # ── VFE E-step (FFN) parameters ────────────────────────────────────
     alpha_ffn: float = 0.0         # Precision α for VFE E-step in FFN
     kappa_ffn: float = 1.0         # Softmax temperature for β in FFN E-step
-    lambda_ffn: float = 0.0        # Belief coupling weight in FFN E-step
+    lambda_beta_ffn: float = 0.0   # Belief coupling weight λ_β in FFN E-step
+    lambda_gamma_ffn: float = 0.0  # Model coupling weight λ_γ in FFN E-step
+    kappa_gamma_ffn: float = 1.0   # Temperature for γ_ij in FFN E-step
+    lambda_hyper_ffn: float = 0.0  # Hyper-prior weight in FFN E-step
+    alpha_phi_ffn: float = 0.0     # Gauge prior (α_φ/2)||φ||² in FFN E-step
     n_vfe_iterations: int = 1      # E-step iterations per forward pass
     learnable_lr: bool = True      # Learn step size for variational descent
 
     # ── Training loss weights ────────────────────────────────────────
     alpha_loss: float = 0.0        # Self-coupling weight KL(q||p) in training loss
     kappa_loss: float = 1.0        # Softmax temperature for β in loss
-    lambda_loss: float = 0.0       # Belief coupling weight λ_β in training loss
+    lambda_beta_loss: float = 0.0  # Belief coupling weight λ_β in training loss
+    lambda_gamma_loss: float = 0.0 # Model coupling weight λ_γ in training loss
+    kappa_gamma_loss: float = 1.0  # Temperature for γ_ij in training loss
+    lambda_hyper_loss: float = 0.0 # Hyper-prior weight in training loss
+    alpha_phi_loss: float = 0.0    # Gauge prior (α_φ/2)||φ||² in training loss
     update_sigma: bool = True      # Update covariances during VFE
     sigma_softmax_coupling: bool = False  # Include ∂β/∂Σ in sigma gradient
     compute_sigma_align_grad: bool = True
@@ -99,12 +107,6 @@ class GaugeTransformerConfig:
     pos_encoding_mode: str = 'none'
     pos_encoding_scale: float = 0.1
     tie_embeddings: bool = True
-
-    # ── Model channel (slow subsystem) ───────────────────────────────
-    lambda_gamma: float = 0.0      # Model coupling: Σ γ_ij · KL(s_i || Ω_ij s_j)
-    kappa_gamma: float = 1.0       # Temperature for γ_ij model coupling weights
-    lambda_hyper: float = 0.0      # Hyper-prior: KL(s_i || h) models toward centroid
-    alpha_phi: float = 0.0         # Gauge prior: (α_φ/2) Σ ||φ_i||²
 
     # ── Regularization ────────────────────────────────────────────────
     dropout: float = 0.1
@@ -171,8 +173,8 @@ class GaugeTransformerConfig:
             'alpha': 'alpha_loss',
             'ffn_n_iterations': 'n_vfe_iterations',
             'ffn_learnable_lr': 'learnable_lr',
-            'ffn_lambda_belief': 'lambda_ffn',
-            'lambda_belief': 'lambda_loss',
+            'ffn_lambda_belief': 'lambda_beta_ffn',
+            'lambda_belief': 'lambda_beta_loss',
             'ffn_update_sigma': 'update_sigma',
             'ffn_pure_fep_mode': 'pure_fep_mode',
             'ffn_prior_lr': 'prior_lr',
@@ -208,10 +210,10 @@ class GaugeTransformerConfig:
             'mu_max_norm': 'mu_max_norm',
             'cross_couplings': 'cross_couplings',
             'use_block_diagonal_kl': 'use_block_diagonal_kl',
-            'lambda_gamma': 'lambda_gamma',
-            'kappa_gamma': 'kappa_gamma',
-            'lambda_hyper': 'lambda_hyper',
-            'alpha_phi': 'alpha_phi',
+            'lambda_gamma': 'lambda_gamma_loss',
+            'kappa_gamma': 'kappa_gamma_loss',
+            'lambda_hyper': 'lambda_hyper_loss',
+            'alpha_phi': 'alpha_phi_loss',
         }
 
         kwargs = {}
