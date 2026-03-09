@@ -216,7 +216,10 @@ class Trainer:
         no_decay_params = []
         for name, param in self.model.named_parameters():
             if param.requires_grad:
-                if 'bias' in name or 'norm' in name or 'embed' in name:
+                # Biases and LayerNorm: no weight decay (standard practice)
+                # Embeddings: DO get weight decay — acts as Gaussian hyper-prior
+                # on the generative model parameters (Level 3 of the VFE hierarchy)
+                if 'bias' in name or 'norm' in name:
                     no_decay_params.append(param)
                 else:
                     decay_params.append(param)
@@ -231,19 +234,31 @@ class Trainer:
         )
 
     def _create_multigroup_optimizer(self) -> torch.optim.Optimizer:
+        # Weight decay on embeddings = Gaussian hyper-prior N(0, 1/(2λ))
+        # on the generative model parameters (Level 3 of VFE hierarchy):
+        #   x_i → q_i=N(μ_q,Σ_q) → p_i=N(μ_p,Σ_p) → N(0,1/(2λ))
+        #   obs    beliefs (E-step)   priors (M-step)   hyper-prior (wd)
+        wd = self.config.weight_decay
         groups = {
-            'mu_embed': ([], self.config.mu_lr, 0.0),
-            'sigma_embed': ([], self.config.sigma_lr, 0.0),
-            'phi_embed': ([], self.config.phi_lr, 0.0),
-            'attention': ([], self.config.attention_lr, self.config.weight_decay),
-            'ffn': ([], self.config.ffn_lr, self.config.weight_decay),
-            'output': ([], self.config.output_lr, 0.0),
+            'mu_embed': ([], self.config.mu_lr, wd),
+            'sigma_embed': ([], self.config.sigma_lr, wd),
+            'phi_embed': ([], self.config.phi_lr, wd),
+            'attention': ([], self.config.attention_lr, wd),
+            'ffn': ([], self.config.ffn_lr, wd),
+            'output': ([], self.config.output_lr, wd),
         }
+
+        # Biases and LayerNorm: no weight decay (standard practice)
+        no_decay_params = []
 
         for name, param in self.model.named_parameters():
             if not param.requires_grad:
                 continue
-            if 'mu_embed' in name or 'mu_prior' in name or 'prior_mu' in name:
+
+            # Biases and norms never get weight decay
+            if name.endswith('.bias') or 'norm' in name:
+                no_decay_params.append(param)
+            elif 'mu_embed' in name or 'mu_prior' in name or 'prior_mu' in name or 'base_mu' in name:
                 groups['mu_embed'][0].append(param)
             elif 'sigma_embed' in name or 'log_sigma' in name or 'sigma_prior' in name or 'prior_sigma' in name or 'log_prior' in name:
                 groups['sigma_embed'][0].append(param)
@@ -259,12 +274,19 @@ class Trainer:
                 groups['ffn'][0].append(param)
 
         param_groups = []
-        for gname, (params, lr, wd) in groups.items():
+        for gname, (params, lr, group_wd) in groups.items():
             if params:
                 param_groups.append({
-                    'params': params, 'lr': lr, 'weight_decay': wd, 'name': gname,
+                    'params': params, 'lr': lr, 'weight_decay': group_wd, 'name': gname,
                 })
-                print(f"  Group '{gname}': {len(params)} tensors @ lr={lr}")
+                print(f"  Group '{gname}': {len(params)} tensors @ lr={lr}, wd={group_wd}")
+
+        if no_decay_params:
+            param_groups.append({
+                'params': no_decay_params, 'lr': self.config.ffn_lr,
+                'weight_decay': 0.0, 'name': 'no_decay',
+            })
+            print(f"  Group 'no_decay': {len(no_decay_params)} tensors @ lr={self.config.ffn_lr}, wd=0.0")
 
         return torch.optim.AdamW(
             param_groups,
