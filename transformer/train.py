@@ -669,29 +669,40 @@ def compute_free_energy_loss(
             vffn = getattr(block.ffn, 'variational_ffn', None)
             if vffn is not None and vffn.learnable_alpha and mu_q is not None and mu_p is not None:
                 import torch.nn.functional as _F
-                alpha_vals = vffn.get_bayesian_alpha(mu_q, mu_p, sigma_p)
-                a0 = _F.softplus(vffn.raw_a0)
+                alpha_vals = vffn.get_bayesian_alpha(mu_q, mu_p, sigma_p, sigma_q)
+                c0 = _F.softplus(vffn.raw_c0)
                 b0 = _F.softplus(vffn.raw_b0)
+                # Compute full KL(q||p) for diagnostics
                 delta = mu_q - mu_p
+                K_dim = mu_q.shape[-1]
                 if sigma_p.dim() == 3:
-                    mahal_sq = (delta ** 2 / sigma_p.clamp(min=1e-6)).sum(dim=-1)
+                    sp_safe = sigma_p.clamp(min=1e-6)
+                    sq_safe = sigma_q.clamp(min=1e-6)
+                    trace_t = (sq_safe / sp_safe).sum(dim=-1)
+                    mahal_t = (delta ** 2 / sp_safe).sum(dim=-1)
+                    logdet_t = (torch.log(sp_safe) - torch.log(sq_safe)).sum(dim=-1)
                 else:
-                    K = mu_q.shape[-1]
-                    sigma_p_metric = sigma_p + 1e-6 * torch.eye(K, device=mu_q.device)
+                    sigma_p_metric = sigma_p + 1e-6 * torch.eye(K_dim, device=mu_q.device)
                     try:
                         sp_inv = torch.linalg.inv(sigma_p_metric)
                     except (torch.linalg.LinAlgError, RuntimeError):
                         _nr("inv_pinv")
                         sp_inv = torch.linalg.pinv(sigma_p_metric)
-                    mahal_sq = torch.einsum('bni,bnij,bnj->bn', delta, sp_inv, delta)
+                    prod = torch.matmul(sp_inv, sigma_q)
+                    trace_t = prod.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+                    mahal_t = torch.einsum('bni,bnij,bnj->bn', delta, sp_inv, delta)
+                    logdet_p = torch.linalg.slogdet(sigma_p_metric.float())[1]
+                    logdet_q = torch.linalg.slogdet(sigma_q.float())[1]
+                    logdet_t = logdet_p - logdet_q
+                kl_qp = 0.5 * (trace_t + mahal_t - K_dim + logdet_t).clamp(min=0.0)
                 metrics['bayesian/alpha_mean'] = alpha_vals.mean().item()
                 metrics['bayesian/alpha_std'] = alpha_vals.std().item()
                 metrics['bayesian/alpha_min'] = alpha_vals.min().item()
                 metrics['bayesian/alpha_max'] = alpha_vals.max().item()
-                metrics['bayesian/a0'] = a0.item()
+                metrics['bayesian/c0'] = c0.item()
                 metrics['bayesian/b0'] = b0.item()
-                metrics['bayesian/mahal_sq_mean'] = mahal_sq.mean().item()
-                metrics['bayesian/mahal_sq_std'] = mahal_sq.std().item()
+                metrics['bayesian/kl_qp_mean'] = kl_qp.mean().item()
+                metrics['bayesian/kl_qp_std'] = kl_qp.std().item()
                 break  # Only first layer for now
 
     if lambda_gamma > 0.0:
