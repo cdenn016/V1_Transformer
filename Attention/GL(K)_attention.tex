@@ -1779,7 +1779,7 @@ where $\tilde{\nabla}$ denotes natural gradients projected via the Fisher-Rao me
 \theta \leftarrow \theta - \eta_M \, \nabla_{\theta} \mathcal{L}[\{q_i^*\}, \theta],
 \end{equation}
 
-where $\theta = \{\mu_{\text{embed}}, \Sigma_{\text{embed}}, \phi_{\text{embed}}, W_{\text{out}}\}$. The evolved beliefs $\{q_i^*\}$ are not detached and gradients flow through the VFE dynamics, enabling end-to-end learning of how embedding initializations affect belief evolution. A fully backpropagation-free implementation is reserved for future work.
+where $\theta = \{\mu_{\text{embed}}, \Sigma_{\text{embed}}, \phi_{\text{embed}}, W_{\text{out}}\}$. Within each E-step iteration, belief gradients are computed analytically from detached snapshots of $\mu$, $\Sigma$, and $\phi$, so the VFE dynamics are not differentiated through via autograd. However, the final beliefs $\{q_i^*\}$ retain a gradient path to the initial embeddings through the additive update chain $\mu^{(t+1)} = \mu^{(t)} + \Delta\mu^{(t)}$, acting as a straight-through estimator: the M-step learns embeddings whose initializations lead to good converged beliefs, without requiring second-order differentiation through the E-step trajectory.
 
 \begin{algorithm}[t]
 \caption{GL($K$) Gauge Transformer Training Loop}
