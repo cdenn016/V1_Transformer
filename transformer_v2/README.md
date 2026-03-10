@@ -102,6 +102,12 @@ Each E-step iteration performs dynamic-β VFE descent:
 4. **SPD retraction on Σ:** preserves positive-definiteness
 5. **Lie group retraction on φ:** with Cartan/Killing/pullback preconditioning
 
+### DEQ Implicit Differentiation
+
+When `use_deq=True`, the backward pass through the E-step uses implicit differentiation at the fixed point instead of unrolling through all iterations. The gradient correction `(I - J)^{-1} v` is approximated via a Neumann series with `deq_neumann_terms` vector-Jacobian products.
+
+This gives O(1) memory in E-step iterations and smoother gradients, at the cost of K extra VJPs in the backward pass. Recommended when `n_vfe_iterations >= 5`.
+
 ### Token Embeddings
 
 Each token maps to a full agent belief:
@@ -198,6 +204,8 @@ config = GaugeTransformerConfig(
     kappa_ffn=1.0,             # softmax temperature
     lambda_beta_ffn=1.0,       # belief coupling λ_β
     n_vfe_iterations=1,        # E-step iterations per forward
+    use_deq=False,             # DEQ implicit differentiation for E-step backward
+    deq_neumann_terms=5,       # Neumann series terms (3-5 typical)
 
     # Training loss (M-step)
     alpha_loss=0.1,            # KL(q||p) weight
