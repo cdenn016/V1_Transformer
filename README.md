@@ -389,6 +389,35 @@ The gauge frame φ ∈ gl(K) requires geometric gradient preconditioning because
 
 The `'pullback'` mode computes the Riemannian metric G_ab(φ) = ⟨Ψ(ad_X)(T_a), Ψ(ad_X)(T_b)⟩ where Ψ(z) = (e^z-1)/z is the dexp Jacobian. This is the theoretically exact natural gradient on the Lie group, automatically compensating for exponential amplification in non-compact directions.
 
+### DEQ Implicit Differentiation (E-Step Backward)
+
+The E-step iterates natural gradient VFE descent to a fixed point μ*, Σ*. Standard backpropagation unrolls through all iterations, which has O(n_iterations) memory cost and can produce noisy gradients for large iteration counts. **Deep Equilibrium (DEQ) implicit differentiation** replaces unrolled backprop with a single backward pass through the fixed-point equation.
+
+**How it works:**
+1. **Forward:** Run the normal E-step loop (unchanged)
+2. **Backward:** Instead of backpropagating through all iterations, apply the implicit function theorem at the fixed point. The corrected gradient is `(I - J)^{-1} v` where `J` is the Jacobian of one E-step and `v` is the incoming gradient
+3. **Neumann approximation:** `(I - J)^{-1} v ≈ v + Jᵀv + (Jᵀ)²v + ...` (K terms), computed via K vector-Jacobian products
+
+**Usage:**
+```python
+# Legacy (dict config)
+config['use_deq'] = True
+config['deq_neumann_terms'] = 5  # default; 3 is often sufficient
+
+# v2 (dataclass config)
+config = GaugeTransformerConfig(use_deq=True, deq_neumann_terms=5, ...)
+```
+
+**When to use:**
+- `n_vfe_iterations >= 5` (significant memory savings)
+- Training is unstable with many E-step iterations (DEQ provides smoother gradients)
+- You want gradients that respect the fixed-point structure rather than the trajectory
+
+**Trade-offs:**
+- Forward pass is identical (no speed change)
+- Backward pass: K extra VJPs instead of unrolling through all iterations
+- Memory: O(1) in iterations (vs O(n_iterations) for unrolled backprop)
+
 ## Numerical Stability
 
 Key fixes enabling large gauge groups (see `NUMERICAL_STABILITY.md`):
