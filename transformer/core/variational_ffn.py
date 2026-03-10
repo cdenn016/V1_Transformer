@@ -1860,25 +1860,26 @@ class VariationalFFNDynamic(nn.Module):
             self.log_kappa_heads = None
 
         # =================================================================
-        # Bayesian Precision: Gamma-Normal conjugate prior for α
+        # Bayesian Precision: Log-barrier form (Eq. 882-884)
         # =================================================================
-        # α_i = (a₀ + K/2) / (b₀ + ½ ∥μ_q,i - μ_p,i∥²_{Σ_p⁻¹})
+        # α* = c₀ / (b₀ + KL(q‖p))
         #
-        # Gauge-invariant (Mahalanobis distance is a gauge scalar).
-        # Self-regulating: α shrinks when beliefs diverge from priors.
-        # Initialized so α ≈ alpha (the scalar value) when ∥δμ∥ ≈ 0.
+        # Log-barrier regulariser: α shrinks as the full KL divergence
+        # between the variational posterior q and prior p grows.
+        # Gauge-invariant (KL is a gauge scalar).
+        # Initialized so α ≈ alpha (the scalar value) when KL ≈ 0.
         self.learnable_alpha = learnable_alpha
         if learnable_alpha:
-            # Initialize: a₀ = 1, b₀ = (a₀ + K/2) / alpha_init
-            # so that α ≈ alpha when Mahalanobis distance ≈ 0
-            a0_init = 1.0
+            # Initialize: c₀ = alpha * b₀, b₀ = 1
+            # so that α = c₀ / (b₀ + 0) = alpha when KL = 0
             alpha_init = max(alpha, 0.01)  # avoid division by zero
-            b0_init = (a0_init + embed_dim / 2.0) / alpha_init
+            b0_init = 1.0
+            c0_init = alpha_init * b0_init
             # Parameterize via softplus to ensure positivity
-            self.raw_a0 = nn.Parameter(torch.tensor(self._softplus_inverse(a0_init)))
+            self.raw_c0 = nn.Parameter(torch.tensor(self._softplus_inverse(c0_init)))
             self.raw_b0 = nn.Parameter(torch.tensor(self._softplus_inverse(b0_init)))
             print(f"[VariationalFFNDynamic] Bayesian precision enabled: "
-                  f"a₀={a0_init:.1f}, b₀={b0_init:.1f}, "
+                  f"c₀={c0_init:.4f}, b₀={b0_init:.1f}, "
                   f"initial α≈{alpha_init} (K={embed_dim})")
 
         # Pure FEP mode: learning via prior evolution
@@ -1936,40 +1937,57 @@ class VariationalFFNDynamic(nn.Module):
         mu_q: torch.Tensor,      # (B, N, K)
         mu_p: torch.Tensor,      # (B, N, K)
         sigma_p: torch.Tensor,   # (B, N, K) diagonal or (B, N, K, K) full
+        sigma_q: torch.Tensor,   # (B, N, K) diagonal or (B, N, K, K) full
         eps: float = 1e-6,
     ) -> torch.Tensor:
         """
-        Compute Bayesian precision via Gamma-Normal conjugacy.
+        Compute Bayesian precision via log-barrier form (Eq. 882-884).
 
-        α_i = (a₀ + K/2) / (b₀ + ½ ∥μ_q,i - μ_p,i∥²_{Σ_p⁻¹})
+        α* = c₀ / (b₀ + KL(q‖p))
 
-        This is the posterior mean of τ ~ Gamma(a₀, b₀) given
-        observation (μ_q - μ_p) with precision Σ_p⁻¹.
+        where KL(q‖p) = 0.5 * (tr(Σ_p⁻¹ Σ_q) + (μ_p-μ_q)ᵀ Σ_p⁻¹ (μ_p-μ_q)
+                                 - K + log|Σ_p| - log|Σ_q|)
 
-        Gauge-invariant: the Mahalanobis distance is a gauge scalar.
+        Gauge-invariant: KL divergence is a gauge scalar.
+        Self-regulating: α shrinks as beliefs diverge from priors.
 
         Returns:
             alpha: (B, N, 1) per-token precision, broadcastable to (B, N, K)
         """
-        a0 = F.softplus(self.raw_a0)
+        c0 = F.softplus(self.raw_c0)
         b0 = F.softplus(self.raw_b0)
 
         delta_mu = mu_q - mu_p  # (B, N, K)
+        K = mu_q.shape[-1]
         is_diagonal = (sigma_p.dim() == 3)
 
         if is_diagonal:
             sigma_p_safe = sigma_p.clamp(min=eps)
-            # Mahalanobis squared: Σ_k (δμ_k)² / σ_p_k
-            mahal_sq = (delta_mu ** 2 / sigma_p_safe).sum(dim=-1, keepdim=True)  # (B, N, 1)
+            sigma_q_safe = sigma_q.clamp(min=eps)
+            # tr(Σ_p⁻¹ Σ_q)
+            trace_term = (sigma_q_safe / sigma_p_safe).sum(dim=-1, keepdim=True)  # (B, N, 1)
+            # Mahalanobis: δμᵀ Σ_p⁻¹ δμ
+            mahal_term = (delta_mu ** 2 / sigma_p_safe).sum(dim=-1, keepdim=True)  # (B, N, 1)
+            # log|Σ_p| - log|Σ_q|
+            logdet_term = (torch.log(sigma_p_safe) - torch.log(sigma_q_safe)).sum(dim=-1, keepdim=True)
         else:
-            # Full covariance: δμᵀ Σ_p⁻¹ δμ
-            K = mu_q.shape[-1]
             sigma_p_inv = _safe_spd_inv(sigma_p, eps=eps)  # (B, N, K, K)
-            mahal_sq = torch.einsum('bni,bnij,bnj->bn', delta_mu, sigma_p_inv, delta_mu)
-            mahal_sq = mahal_sq.unsqueeze(-1)  # (B, N, 1)
+            # tr(Σ_p⁻¹ Σ_q)
+            prod = torch.matmul(sigma_p_inv, sigma_q)  # (B, N, K, K)
+            trace_term = prod.diagonal(dim1=-2, dim2=-1).sum(dim=-1, keepdim=True)  # (B, N, 1)
+            # Mahalanobis: δμᵀ Σ_p⁻¹ δμ
+            mahal_term = torch.einsum('bni,bnij,bnj->bn', delta_mu, sigma_p_inv, delta_mu)
+            mahal_term = mahal_term.unsqueeze(-1)  # (B, N, 1)
+            # log|Σ_p| - log|Σ_q|
+            logdet_p = torch.linalg.slogdet(sigma_p.float())[1].unsqueeze(-1)
+            logdet_q = torch.linalg.slogdet(sigma_q.float())[1].unsqueeze(-1)
+            logdet_term = logdet_p - logdet_q  # (B, N, 1)
 
-        K = mu_q.shape[-1]
-        alpha = (a0 + K / 2.0) / (b0 + 0.5 * mahal_sq)  # (B, N, 1)
+        # Full KL(q‖p) for Gaussian distributions
+        kl = 0.5 * (trace_term + mahal_term - K + logdet_term)  # (B, N, 1)
+        kl = kl.clamp(min=0.0)  # KL is non-negative; clamp for numerical safety
+
+        alpha = c0 / (b0 + kl)  # (B, N, 1)
 
         return alpha
 
@@ -2035,7 +2053,7 @@ class VariationalFFNDynamic(nn.Module):
             else:
                 cached_transport = None
 
-            alpha_eff = self.get_bayesian_alpha(mu_in, mu_p_current, sigma_p, eps=eps) if self.learnable_alpha else self.alpha
+            alpha_eff = self.get_bayesian_alpha(mu_in, mu_p_current, sigma_p, sigma_in, eps=eps) if self.learnable_alpha else self.alpha
 
             if self.multihead_vfe:
                 # Differentiable multihead step (no detach)
@@ -2320,7 +2338,7 @@ class VariationalFFNDynamic(nn.Module):
             # =================================================================
             if self.learnable_alpha:
                 alpha_effective = self.get_bayesian_alpha(
-                    mu_current, mu_p_current, sigma_p, eps=eps
+                    mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
                 )  # (B, N, 1) - gauge-invariant, state-dependent
             else:
                 alpha_effective = self.alpha  # scalar (backward compatible)
