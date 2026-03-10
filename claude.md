@@ -8,6 +8,7 @@ This is a **Gauge-Theoretic Transformer** implementing **Variational Free Energy
 
 
 DO NOT USE NEURAL NETWORKS OR ARCHITECTURES
+DO NOT USE CLI - PREFER CLICK TO RUN
 
 
 ## Architecture
@@ -307,6 +308,7 @@ This is a **symmetry-based prior** implementing compression geometrically.
 | Hierarchy | Deep IB | VFE iterations | RG flow |
 
 **Key insight**: Emergent block structure in β_ij reveals which tokens carry redundant information about the target and can be safely merged. The dynamics discovers the optimal compression automatically.
+
 
 
 
