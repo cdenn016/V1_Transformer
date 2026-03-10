@@ -222,7 +222,7 @@ The **most general form** of the theory---no simplifying limits taken. Full non-
 
 | Configuration | K | Layers | Gauge Mode | Train PPL | Test PPL | Parameters |
 |---|---|---|---|---|---|---|
-| **Best (1 epoch)** | **90** | **1** | **Omega in GL(10)** | **63** | **76** | **~59M** |
+| **Best (1 epoch)** | **80** | **1** | **Omega in GL(10)** | **63** | **76** | **~50M** |
 
 For context: random-chance perplexity is ~50,000. The K=90, GL(10) configuration achieves **558x improvement** over random chance, substantially exceeding prior results and approaching standard transformer performance with purely geometric attention.
 
