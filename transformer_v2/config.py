@@ -50,6 +50,8 @@ class GaugeTransformerConfig:
     alpha_phi_ffn: float = 0.0     # Gauge prior (α_φ/2)||φ||² in FFN E-step
     n_vfe_iterations: int = 1      # E-step iterations per forward pass
     learnable_lr: bool = True      # Learn step size for variational descent
+    use_deq: bool = False          # Use DEQ implicit differentiation for E-step backward
+    deq_neumann_terms: int = 5     # Number of Neumann series terms for DEQ backward
 
     # ── Training loss weights (M-step) ───────────────────────────────
     alpha_loss: float = 0.0        # Self-coupling weight KL(q||p) in training loss
