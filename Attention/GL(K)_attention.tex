@@ -2804,17 +2804,11 @@ The computational cost of each mode scales as: clipping $O(n_{\mathrm{gen}})$, C
 
 
 \section{Variational Gradient Descent: Implementation and Numerical Methods}
-The variational free energy minimization is implemented through a sophisticated gradient descent scheme that respects the intricate geometric structure of the multi-agent system. At each simulation step, the algorithm orchestrates a sequence of coordinated field updates across all dynamic variables—the statistical parameters $(\mu_i, \Sigma_i)$ for both belief and model fibers, the gauge frame fields $(\phi_i, \tilde{\phi}_i)$, and optionally the global connection field $A_\mu$—while maintaining numerical stability on the constrained manifolds where these quantities naturally live.
 
-\subsection{Gradient Accumulation and Energy Terms}
-The core computational pipeline begins with gradient accumulation, where each agent's variational gradient is constructed by summing contributions from multiple energy terms. For the statistical parameters, we compute gradients arising from the self-consistency term $D_{\text{KL}}(q_i \| p_i)$, the belief alignment coupling $\sum_j \beta_{ij} D_{\text{KL}}(q_i \| \Omega_{ij} q_j)$, the model alignment coupling $\sum_j \gamma_{ij} D_{\text{KL}}(s_i \| \tilde{\Omega}_{ij} s_j)$, and the observation likelihood $-\mathbb{E}_{q_i}[\log p(o_i | k_i)]$. Each of these terms contributes a distinct gradient component that must be carefully transported, aggregated, and symmetrized before application.
-
-The alignment terms are particularly intricate, requiring neighbor iteration over all overlapping agent pairs, computation of gauge-transported statistics via the parallel transport operators $\Omega_{ij}$, and evaluation of the KL divergence gradients in the appropriate local frames. These gradients are accumulated into per-agent "inboxes" during a first pass, then drained and combined with self-energy gradients in a second pass to yield the total gradient for each agent.
 
 \subsection{Natural Gradient Descent on the Gaussian Manifold}
 A critical aspect of our implementation is the use of natural gradient descent for the statistical parameters, which exploits the information-geometric structure of the Gaussian manifold. Rather than treating the covariance matrices $\Sigma_i$ as Euclidean variables, we recognize them as points on the manifold of symmetric positive-definite matrices, equipped with the Fisher-Rao metric. The natural gradient at a point $\Sigma$ on this manifold is obtained by applying the inverse Fisher metric to the Euclidean gradient, yielding an intrinsic tangent vector that respects the manifold's curved geometry.
 
-In our vectorized implementation, this transformation is performed via \texttt{apply\_natural\_gradient\_batch}, which computes the whitened gradient
 
 \begin{equation}
 R = \Sigma^{-1/2} (\eta \cdot \nabla) \Sigma^{-1/2}
