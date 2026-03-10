@@ -1792,13 +1792,23 @@ where $\theta = \{\mu_{\text{embed}}, \Sigma_{\text{embed}}, \phi_{\text{embed}}
 \FOR{$t = 1$ \TO $T_{\text{inner}}$}
     \STATE Compute transport: $\Omega_{ij} \leftarrow \exp(\phi_i)\exp(-\phi_j)$ \hfill $\triangleright$ Gauge parallel transport
     \FOR{each head $h$ (irrep block)}
-        \STATE $\beta_{ij}^{(h)} \leftarrow \softmax\!\Big(-D_{\KL}(q_i^{(h)} \,\|\, \Omega_{ij}^{(h)} q_j^{(h)}) \,/\, \kappa_h\Big)$ \hfill $\triangleright$ KL attention
+        \STATE $D_{ij}^{(h)} \leftarrow D_{\KL}(q_i^{(h)} \,\|\, \Omega_{ij}^{(h)} q_j^{(h)})$ \hfill $\triangleright$ Pairwise KL divergences
+        \STATE $\beta_{ij}^{(h)} \leftarrow \softmax_j\!\Big(-D_{ij}^{(h)} \,/\, \kappa_h\Big)$ \hfill $\triangleright$ KL attention weights
     \ENDFOR
-    \STATE $\nabla_{\mu} \mathcal{F} \leftarrow \alpha\,\Sigma_p^{-1}(\mu_i - \mu_p) + \sum_h \nabla_\mu \!\Big[\sum_j \beta_{ij}^{(h)}\, D_{\KL}(q_i^{(h)} \,\|\, \Omega_{ij}^{(h)} q_j^{(h)})\Big] + \nabla_\mu \mathcal{L}_{\text{obs}}$
+    \STATE \textit{--- Mean gradient (direct + softmax nonlinearity, Eq.~\ref{eq:softmax_gradient_nonlinearity}):}
+    \STATE $\nabla_{\mu} \mathcal{F} \leftarrow \underbrace{\alpha\,\Sigma_p^{-1}(\mu_i - \mu_p)}_{\text{prior}}
+      + \sum_h \Big[\underbrace{\sum_j \beta_{ij}^{(h)}\, \nabla_\mu D_{ij}^{(h)}}_{\text{direct alignment}}
+      + \underbrace{\sum_j D_{ij}^{(h)} \, \frac{\partial \beta_{ij}^{(h)}}{\partial \mu_i}}_{\text{softmax nonlinearity}}\Big]
+      + \underbrace{\nabla_\mu \mathcal{L}_{\text{obs}}}_{\text{observation}}$
     \STATE $\tilde{\nabla}_\mu \leftarrow \Sigma_i \cdot \nabla_\mu \mathcal{F}$ \hfill $\triangleright$ Natural gradient (Fisher preconditioning)
     \STATE $\mu_i \leftarrow \mu_i - \eta_E\, \tilde{\nabla}_\mu$ \hfill $\triangleright$ Trust-region-constrained update
-    \STATE (Optional) $\Sigma_i \leftarrow \mathrm{Retract}_{\mathrm{SPD}}(\Sigma_i,\, -\eta_\Sigma\, \tilde{\nabla}_\Sigma)$ \hfill $\triangleright$ SPD manifold retraction
-    \STATE (Optional) $\phi_i \leftarrow \mathrm{Retract}_{\mathfrak{g}}(\phi_i,\, -\eta_\phi\, \nabla_\phi \mathcal{F})$ \hfill $\triangleright$ Lie algebra retraction
+    \STATE \textit{--- Covariance gradient (Eq.~\ref{eq:Sigma_gradient_main}):}
+    \STATE $\nabla_{\Sigma} \mathcal{F} \leftarrow \tfrac{\alpha}{2}(\Sigma_p^{-1} - \Sigma_i^{-1})
+      + \tfrac{1}{2}\sum_h \sum_j \beta_{ij}^{(h)} \big[(\Omega_{ij}^{(h)}\Sigma_j^{(h)}\Omega_{ij}^{(h)\top})^{-1} - \Sigma_i^{(h)-1}\big]$
+    \STATE $\Sigma_i \leftarrow \mathrm{Retract}_{\mathrm{SPD}}(\Sigma_i,\, -\eta_\Sigma\, \Sigma_i\,\nabla_\Sigma\mathcal{F}\,\Sigma_i)$ \hfill $\triangleright$ SPD retraction with Fisher metric
+    \STATE \textit{--- Gauge frame gradient (differentiating through $\beta(\phi)$, Eq.~\ref{eq:phi_grad_complete}):}
+    \STATE $\nabla_{\phi} \mathcal{F} \leftarrow \nabla_{\phi_i}\!\Big[\sum_h \sum_j \beta_{ij}^{(h)}(\phi)\, D_{ij}^{(h)}(\phi) + \tfrac{\alpha_\phi}{2}\|\phi_i\|^2\Big]$ \hfill $\triangleright$ Autograd through $\beta$
+    \STATE $\phi_i \leftarrow \mathrm{Retract}_{\mathfrak{g}}(\phi_i,\, -\eta_\phi\, \nabla_\phi \mathcal{F})$ \hfill $\triangleright$ Lie algebra retraction
 \ENDFOR
 \STATE
 \STATE \textit{--- M-step: Parameter learning (backpropagation) ---}
