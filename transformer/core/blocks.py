@@ -137,6 +137,9 @@ class GaugeTransformerBlock(nn.Module):
         use_full_nat_grad: bool = True,       # True=Σ@∇@Σ, False=diag approx
         # Primal transport (theory-correct aggregation)
         use_primal_transport: bool = False,  # True: Ω μ_j (theory); False: Ω^{-T} μ_j (legacy)
+        # DEQ implicit differentiation
+        use_deq: bool = False,                # Use DEQ backward for E-step fixed point
+        deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
     ):
         """
         Initialize gauge transformer block.
@@ -291,6 +294,9 @@ class GaugeTransformerBlock(nn.Module):
             # Ablation toggles
             use_exp_map_retraction=use_exp_map_retraction,
             use_full_nat_grad=use_full_nat_grad,
+            # DEQ implicit differentiation
+            use_deq=use_deq,
+            deq_neumann_terms=deq_neumann_terms,
         )
 
         self.norm2 = nn.LayerNorm(embed_dim) if use_layernorm else nn.Identity()
@@ -513,6 +519,9 @@ class GaugeTransformerStack(nn.Module):
         use_full_nat_grad: bool = True,       # True=Σ@∇@Σ, False=diag approx
         # Primal transport (theory-correct aggregation)
         use_primal_transport: bool = False,  # True: Ω μ_j (theory); False: Ω^{-T} μ_j (legacy)
+        # DEQ implicit differentiation
+        use_deq: bool = False,                # Use DEQ backward for E-step fixed point
+        deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
     ):
         """
         Initialize stack of transformer blocks.
@@ -624,6 +633,9 @@ class GaugeTransformerStack(nn.Module):
                 use_full_nat_grad=use_full_nat_grad,
                 # Primal transport
                 use_primal_transport=use_primal_transport,
+                # DEQ implicit differentiation
+                use_deq=use_deq,
+                deq_neumann_terms=deq_neumann_terms,
             )
             for _ in range(n_layers)
         ])

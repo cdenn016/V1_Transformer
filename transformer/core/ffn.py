@@ -74,6 +74,9 @@ class GaugeFFN(nn.Module):
         # Ablation toggles
         use_exp_map_retraction: bool = True,  # True=exp map, False=linear+Cholesky
         use_full_nat_grad: bool = True,       # True=Σ@∇@Σ, False=diag approx
+        # DEQ implicit differentiation
+        use_deq: bool = False,                # Use DEQ backward for E-step fixed point
+        deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
         # Legacy parameters (ignored, kept for API compatibility)
         **kwargs,
     ):
@@ -153,6 +156,9 @@ class GaugeFFN(nn.Module):
             # Ablation toggles
             use_exp_map_retraction=use_exp_map_retraction,
             use_full_nat_grad=use_full_nat_grad,
+            # DEQ implicit differentiation
+            use_deq=use_deq,
+            deq_neumann_terms=deq_neumann_terms,
         )
 
     def forward(
