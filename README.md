@@ -2,6 +2,13 @@
 
 A research framework implementing gauge-covariant variational free energy (VFE) minimization for language modeling and multi-agent systems. This codebase accompanies the manuscript:
 
+**Key result:** A single-layer VFE transformer with no MLPs or neural network components
+achieves **76 test perplexity** on WikiText-103 (BPE-2 tokenization) with K=80, GL(10),
+8 heads, RoPE, and sequence length 128 after just 1 epoch of training. All representational
+capacity comes from iterative variational free energy minimization over belief tuples (μ, Σ, φ). The E-step *is* the
+computation, it is not a learned feed-forward network.
+
+
 ## Core Thesis
 
 Language is a dynamic informational system: speakers encode and decode beliefs under uncertainty, and language models learn the statistical structure of this process. The mathematical framework natural to such systems---gauge-covariant variational free energy minimization over communicating agents on a statistical fiber bundle---explains why attention mechanisms work.
