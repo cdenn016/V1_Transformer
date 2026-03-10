@@ -1793,8 +1793,8 @@ where $\theta = \{\mu_{\text{embed}}, \Sigma_{\text{embed}}, \phi_{\text{embed}}
     \STATE Compute transport: $\Omega_{ij} \leftarrow \exp(\phi_i)\exp(-\phi_j)$ \hfill $\triangleright$ Gauge parallel transport
     \FOR{each head $h$ (irrep block)}
         \STATE $\beta_{ij}^{(h)} \leftarrow \softmax\!\Big(-D_{\KL}(q_i^{(h)} \,\|\, \Omega_{ij}^{(h)} q_j^{(h)}) \,/\, \kappa_h\Big)$ \hfill $\triangleright$ KL attention
-        \STATE $\nabla_{\mu} \mathcal{F} \leftarrow \alpha\,\Sigma_p^{-1}(\mu_i - \mu_p) + \lambda \sum_j \beta_{ij}\, \nabla_\mu D_{\KL}(q_i \,\|\, \Omega_{ij} q_j) + \nabla_\mu \mathcal{L}_{\text{obs}}$
     \ENDFOR
+    \STATE $\nabla_{\mu} \mathcal{F} \leftarrow \alpha\,\Sigma_p^{-1}(\mu_i - \mu_p) + \sum_h \sum_j \beta_{ij}^{(h)}\, \nabla_\mu D_{\KL}(q_i^{(h)} \,\|\, \Omega_{ij}^{(h)} q_j^{(h)}) + \nabla_\mu \mathcal{L}_{\text{obs}}$
     \STATE $\tilde{\nabla}_\mu \leftarrow \Sigma_i \cdot \nabla_\mu \mathcal{F}$ \hfill $\triangleright$ Natural gradient (Fisher preconditioning)
     \STATE $\mu_i \leftarrow \mu_i - \eta_E\, \tilde{\nabla}_\mu$ \hfill $\triangleright$ Trust-region-constrained update
     \STATE (Optional) $\Sigma_i \leftarrow \mathrm{Retract}_{\mathrm{SPD}}(\Sigma_i,\, -\eta_\Sigma\, \tilde{\nabla}_\Sigma)$ \hfill $\triangleright$ SPD manifold retraction
