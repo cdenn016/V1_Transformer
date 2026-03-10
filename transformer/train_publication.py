@@ -1,11 +1,4 @@
 
-# -*- coding: utf-8 -*-
-"""
-Created on Thu Dec 11 19:24:37 2025
-
-@author: chris and christine
-"""
-
 # =============================================================================
 # PATH SETUP - Ensure the project root is in the Python path
 # This allows the script to be run from any directory (including the transformer/ folder)
@@ -214,16 +207,20 @@ VFE_EM_CONFIG = {
     'max_seq_len': 128,            # Context length N
 
     'learnable_alpha': False,
-    'use_obs_in_vfe': False,     # True causes catastrophic overfitting at small K (targets leak into E-step)
+    'use_obs_in_vfe': False,        #cheats when true!  low trainPPL huge val PPL
     'use_rope': True,  
 
+    'use_primal_transport': True,   # True- theory-correct: Ω μ_j- if False then legacy: Ω^{-T} μ_j (default)
+ 
+    'use_deq': False,
+    'deq_neumann_terms': 3,
 
     # Training
     'batch_size': 64, 
     'use_amp': False,             # FP32 for precision
-    'num_workers': 6,
+    'num_workers': 10,            #CPU workers 8--12
     'epochs': None,               # Set to 1-3 for WikiText-2, None for WikiText-103 (use max_steps)
-    'max_steps': 12500,          # ~0.5 epochs on WikiText-103
+    'max_steps': 15000,          # ~105% coverage on WikiText-103
     'warmup_steps': 100,
 
     # VFE transformer settings
@@ -239,7 +236,9 @@ VFE_EM_CONFIG = {
                                   # When False: φ only updated via backprop (M-step)
                                   
     'sigma_softmax_coupling': True,  # Enable ∂β/∂Σ softmax coupling
+    
     'diagonal_covariance': True,
+    
     'use_positional_embedding': False,
     'pos_encoding_mode': 'none',
     'use_identity_transport': False,
@@ -257,20 +256,28 @@ VFE_EM_CONFIG = {
     # VFE dynamics
     'ffn_n_iterations': 1,
     'ffn_learnable_lr': True,
-    'ffn_chunk_size': 64,
+    'ffn_chunk_size': 256,          #smaller if running out of memory. make large as possible
 
     # Learning rates
     'mu_lr':     0.05,
     'sigma_lr':  0.005,
     'phi_lr':    0.005,
-    'ffn_lr':    0.05 ,
+    'ffn_lr':    0.005 ,
+
+
+    'use_exp_map_retraction': True,  # Try original linear retraction
+    'use_full_nat_grad': True,       # Try diagonal natural gradient
+
+    'embed_no_decay': False,    # re-enable weight decay on embeddings
+    'detach_sigma_kl':True,    # pass sigma gradients through KL loss
+
 
     # Free energy loss weights (see compute_free_energy_loss in train.py)
     # NOTE: config['beta'] maps to the lambda_beta parameter in compute_free_energy_loss().
     # This is the belief coupling weight Σ β_ij·KL(q_i||Ω_ij q_j) in the TRAINING LOSS,
     # NOT the attention weights β_ij used inside VFE dynamics. Confusing but entrenched.
-    'alpha':        0.1,          # KL(q||p) self-consistency weight
-    'alpha_phi':    0.01,         # Gauge prior: (α_φ/2)||φ||² mass term (0 = disabled)
+    'alpha':        0.075,          # KL(q||p) self-consistency weight
+    'alpha_phi':    0.1,         # Gauge prior: (α_φ/2)||φ||² mass term (0 = disabled)
     'beta':         0,            # → lambda_beta in loss: belief alignment weight (0 = off)
     'lambda_gamma': 0,            # Model coupling: Σγ_ij·KL(s_i||Ω s_j) (0 = off)
     'lambda_hyper': 0,            # Hyper-prior: KL(s_i||h) models to centroid (0 = off)
@@ -280,8 +287,7 @@ VFE_EM_CONFIG = {
     'ffn_lambda_belief': 1,       # Belief alignment inside VFE iterations
     'ffn_alpha': 1,               # Prior coupling inside VFE iterations
 
-    # Regularization — weight_decay is the Level 3 hyper-prior precision:
-    # p(θ_embed) = N(0, 1/(2·wd)), the top of the Bayesian hierarchy.
+    # Regularization
     'weight_decay': 0.01,
     'dropout':      0,
     'grad_clip':    1.0,
@@ -323,12 +329,12 @@ VFE_EM_CONFIG = {
                                 # 'trivial': global frame, φ = 0, Ω = I (standard attention)
     
     # Gauge geometry: principled phi gradient control (replaces ad-hoc clipping)
-    'phi_natural_gradient': 'pullback',  # E-step 'pullback', 'killing', 'cartan', 'clip'
+    'phi_natural_gradient': 'killing',  # E-step: 'pullback', 'killing', 'cartan', 'clip'
     
     
-    'use_slk_projection': True,          # Project phi to traceless sl(K) after each step
+    'use_slk_projection': False,          # Project phi to traceless sl(K) after each step
     'use_killing_form': True,            # M-step Cartan decomposition preconditioning for phi grads
-    'killing_form_sym_dampening': 0.05,    # M-step Dampening for non-compact directions (0.1 = 10× reduction)
+    'killing_form_sym_dampening': 0.1,   # M-step Dampening for non-compact directions (0.1 = 10× reduction)
     
     'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
     'enforce_orthogonal': False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
@@ -383,9 +389,9 @@ VFE_EM_CONFIG = {
 
     # RG metrics
     #'compute_rg_metrics': True,   # Enable RG flow analysis
-    #'rg_metrics_interval': 100,   # Compute every 100 steps (not too frequent)
-   # 'rg_auto_cluster': True,
-   # 'rg_n_clusters': None,
+    #'rg_metrics_interval': 500,   # Compute every 100 steps (not too frequent)
+    #'rg_auto_cluster': True,
+    #'rg_n_clusters': None,
    # 'track_dynamic_rg': True,  # Track RG flow across VFE iterations (requires n_iterations > 1)
 
 
@@ -394,6 +400,203 @@ VFE_EM_CONFIG = {
 
 }
 
+QQQVFE_EM_CONFIG = {
+    # Model architecture
+    'vocab_size': 50257,          # Will be overridden by tokenizer
+    'embed_dim': 10,              # Embedding dimension K
+    'n_layers': 1,                # Transformer depth
+    'hidden_dim': 508,            # Only used if ffn_mode='learned'
+    'max_seq_len': 128,            # Context length N
+
+    'learnable_alpha': False,
+    'use_obs_in_vfe': False,        #cheats when true!  low trainPPL huge val PPL
+    'use_rope': True,  
+
+
+    # Training
+    'batch_size': 64, 
+    'use_amp': False,             # FP32 for precision
+    'num_workers': 10,            #CPU workers 8--12
+    'epochs': None,               # Set to 1-3 for WikiText-2, None for WikiText-103 (use max_steps)
+    'max_steps': 12500,          # ~0.5 epochs on WikiText-103
+    'warmup_steps': 100,
+
+    # VFE transformer settings
+    'ffn_mode': 'VFE_dynamic',    # VFE EM-step dynamics
+    'mask_self_attention': True,  # Prevent attention collapse
+    'tie_embeddings': False,
+
+    # Gauge geometry
+    'evolve_sigma': True,         # Learn covariances Σ
+    'evolve_phi': True,           # Learn gauge frames φ (M-step, via backprop)
+    'evolve_phi_e_step': True,    # Update φ during E-step iterations (dynamical gauge frames)
+                                  # When True: φ evolves via ∂F/∂φ at each VFE iteration
+                                  # When False: φ only updated via backprop (M-step)
+                                  
+    'sigma_softmax_coupling': True,  # Enable ∂β/∂Σ softmax coupling
+    
+    'diagonal_covariance': True,
+    
+    'use_positional_embedding': False,
+    'pos_encoding_mode': 'none',
+    'use_identity_transport': False,
+    'alibi_slope': None,
+
+    # Temperature: κ is a scalar sharpness dial; dimension scaling (√K) is hardcoded in attention
+    'kappa_beta': 1,
+
+    # Embedding initialization
+    'mu_init_std': 1.0,
+    'mu_normalize': False,
+    'mu_max_norm': None,
+    'phi_scale': 1.0,             # Gauge frame initialization scale (try 1.0-2.0 for clustering)
+
+    # VFE dynamics
+    'ffn_n_iterations': 1,
+    'ffn_learnable_lr': True,
+    'ffn_chunk_size': 512,          #smaller if running out of memory. make large as possible
+
+    # Learning rates
+    'mu_lr':     0.05,
+    'sigma_lr':  0.005,
+    'phi_lr':    0.005,
+    'ffn_lr':    0.05 ,
+
+
+    'use_exp_map_retraction': True,  # Try original linear retraction
+    'use_full_nat_grad': True,       # Try diagonal natural gradient
+
+    'embed_no_decay': False,    # re-enable weight decay on embeddings
+    'detach_sigma_kl':True,    # pass sigma gradients through KL loss
+
+
+    # Free energy loss weights (see compute_free_energy_loss in train.py)
+    # NOTE: config['beta'] maps to the lambda_beta parameter in compute_free_energy_loss().
+    # This is the belief coupling weight Σ β_ij·KL(q_i||Ω_ij q_j) in the TRAINING LOSS,
+    # NOT the attention weights β_ij used inside VFE dynamics. Confusing but entrenched.
+    'alpha':        0.075,          # KL(q||p) self-consistency weight
+    'alpha_phi':    0.1,         # Gauge prior: (α_φ/2)||φ||² mass term (0 = disabled)
+    'beta':         0,            # → lambda_beta in loss: belief alignment weight (0 = off)
+    'lambda_gamma': 0,            # Model coupling: Σγ_ij·KL(s_i||Ω s_j) (0 = off)
+    'lambda_hyper': 0,            # Hyper-prior: KL(s_i||h) models to centroid (0 = off)
+    'kappa_gamma':  1,            # Temperature for γ_ij coupling weights
+    
+    # VFE E-step internal weights (inside VariationalFFNDynamic, NOT the training loss)
+    'ffn_lambda_belief': 1,       # Belief alignment inside VFE iterations
+    'ffn_alpha': 1,               # Prior coupling inside VFE iterations
+
+    # Regularization
+    'weight_decay': 0.01,
+    'dropout':      0,
+    'grad_clip':    1.0,
+
+    'use_layernorm': True,      # Critical!
+    'use_residual':  True,       # Gradient flow
+    'use_dropout':   False,
+
+    'log_interval': 100,
+    'eval_interval': 1000,
+    'checkpoint_interval': 25000,
+    'semantic_analysis_interval': 10000,
+    'patience': 5,
+
+    # =================================================================
+    # GAUGE GROUP SELECTION (Generators from so(N), Transport in GL(K))
+    # =================================================================
+    # NOTE: The VFE is invariant under GL(K), not just SO(K)!
+    # We use so(N) generators to parameterize φ, but transport operators
+    # Ω = exp(φ·G) live in GL(K). No orthogonality constraint is needed.
+    #
+    # SO3: so(3) generators with 3 parameters (rotation-only subalgebra)
+    #      Requires embed_dim = sum(mult * dim) for irrep_spec or odd embed_dim
+    # SON: so(N) generators with N(N-1)/2 parameters
+    #      Supports multiple irrep types for representational diversity:
+    #        - 'scalar': dim = 1              (gauge-invariant)
+    #        - 'fund':   dim = N              (fundamental/vector)
+    #        - 'wedge2': dim = N*(N-1)/2      (antisymmetric 2-tensor ∧²V)
+    #        - 'sym2':   dim = N*(N+1)/2 - 1  (symmetric traceless Sym²₀V)
+    #
+    #      Different irreps have different Casimir eigenvalues:
+    #        fund ~1.0x, wedge2 ~1.5x, sym2 ~2.5x
+    #      This provides genuine transformation diversity (like SO(3) spin-ℓ)
+    # =================================================================
+    
+    'gauge_group': 'GLK',  # 'SO3', 'SON', or 'GLK'
+    'gauge_dim': 10,        # N for SO(N) - only used when gauge_group='SON'
+    'gauge_mode': 'learned',  # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j)
+                                # 'trivial': global frame, φ = 0, Ω = I (standard attention)
+    
+    # Gauge geometry: principled phi gradient control (replaces ad-hoc clipping)
+    'phi_natural_gradient': 'cartan',  # E-step: 'pullback', 'killing', 'cartan', 'clip'
+    
+    
+    'use_slk_projection': False,          # Project phi to traceless sl(K) after each step
+    'use_killing_form': True,            # M-step Cartan decomposition preconditioning for phi grads
+    'killing_form_sym_dampening': 0.1,   # M-step Dampening for non-compact directions (0.1 = 10× reduction)
+    
+    'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
+    'enforce_orthogonal': False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
+                                 # Set False for GL(K) (faster, still gauge-invariant)
+
+    # P-FLOW: EMA update of token embeddings toward successful beliefs
+    # This is the key learning mechanism from fep_transformer.py
+    'use_p_flow': False,           # Enable P-flow updates on token embeddings
+    'p_flow_ema_decay': 0.95,     # EMA decay (higher = slower update, 0.99 = 1% per step)
+
+    # DELTA RULE: Backprop-free learning for W_out
+    # If True, W_out is updated via delta rule instead of backpropagation
+    # Combined with P-flow, this makes learning fully backprop-free!
+    'use_delta_rule_w_out': False,  # Enable delta rule for W_out (instead of backprop)
+    'delta_rule_lr': 0.1,         # Learning rate for delta rule updates
+
+    
+    # Irrep structure for SO(N)
+    # Example for SO(5) with K=132:
+    #   [('scalar', 10, 1), ('fund', 8, 5), ('wedge2', 4, 10), ('sym2', 3, 14)]
+    #   = 10 + 40 + 40 + 42 = 132
+    'irrep_spec': [
+      # ('ℓ0', 50, 1),   # 75 dimensions (scalars)
+      # ('ℓ1', 1, 3),   # 90 dimensions (vectors)
+      # ('ℓ2', 2, 5),   # 90 dimensions (rank-2 tensors)
+     #  ('ℓ3', 1, 7),
+      # ('ℓ4', 1, 9),
+      #('ℓ5', 9, 11),
+     # ('ℓ6', 1, 13),
+     # ('ℓ7', 1, 15),
+      # ('ℓ50', 1, 101),
+      ('fund', 1, 10)  #For SO(8)
+     # ('fund', 10, 5),   # SO(5)
+       
+     # SO(5) multi-irrep example:
+     # ('scalar', 10, 1),   # 10 dims (invariant)
+     # ('fund', 8, 5),      # 40 dims (vector)
+     # ('wedge2', 4, 10),   # 40 dims (∧² - angular momentum)
+     # ('sym2', 3, 14),     # 42 dims (Sym²₀ - quadrupolar)
+    ],
+     
+         
+    # Option A: couple just 0↔1, head 2 stays independent
+    #'cross_couplings': [(0, 1), (1, 0)],
+    # → super-blocks: [20, 10]  (heads 0,1 merged into GL(20), head 2 alone)
+
+
+    # Per-head specialization & multi-head VFE
+    'per_head_kappa': True,         # Learn separate κ_h per head (attention + VFE)
+    'use_output_projection': True, # W_O cross-head mixing after attention (toggle)
+    'multihead_vfe': False,          # Maintain per-head β_h through VFE iterations
+
+    # RG metrics
+    #'compute_rg_metrics': True,   # Enable RG flow analysis
+    #'rg_metrics_interval': 500,   # Compute every 100 steps (not too frequent)
+    #'rg_auto_cluster': True,
+    #'rg_n_clusters': None,
+   # 'track_dynamic_rg': True,  # Track RG flow across VFE iterations (requires n_iterations > 1)
+
+
+    'pos_encoding_scale': 0.3,
+    'use_prior_bank': True,
+
+}
 
 # =============================================================================
 # CONFIG 3: PURE_FEP (Pure Free Energy Principle, NO backprop!)
@@ -543,6 +746,7 @@ PURE_FEP_CONFIG = {
     'track_dynamic_rg': True,  # Track RG flow across VFE iterations (requires n_iterations > 1)
 }
 
+    
 
 def get_git_info() -> Dict[str, str]:
     """Get current git commit info."""
@@ -794,8 +998,7 @@ class PublicationMetricsTracker:
             'mu_lr', 'sigma_lr', 'phi_lr', 'ffn_lr',
 
             # Gradient norms
-            'grad_norm_total', 'grad_norm_mu', 'grad_norm_sigma',
-            'grad_norm_phi', 'grad_norm_ffn', 'grad_norm_other',
+            'grad_norm_total', 'grad_norm_mu', 'grad_norm_ffn',
 
             # Bayesian alpha diagnostics
             'alpha_mean', 'alpha_std', 'alpha_min', 'alpha_max',
@@ -874,10 +1077,7 @@ class PublicationMetricsTracker:
             # Gradients
             'grad_norm_total': grad_norms.get('total', 0) if grad_norms else 0,
             'grad_norm_mu': grad_norms.get('mu', 0) if grad_norms else 0,
-            'grad_norm_sigma': grad_norms.get('sigma', 0) if grad_norms else 0,
-            'grad_norm_phi': grad_norms.get('phi', 0) if grad_norms else 0,
             'grad_norm_ffn': grad_norms.get('ffn', 0) if grad_norms else 0,
-            'grad_norm_other': grad_norms.get('other', 0) if grad_norms else 0,
 
             # Bayesian alpha diagnostics
             'alpha_mean': metrics.get('bayesian/alpha_mean'),
@@ -1362,37 +1562,34 @@ class PublicationTrainer(FastTrainer):
         return metrics, grad_norms
 
     def _compute_gradient_norms(self) -> Dict[str, float]:
-        """Compute gradient norms for different parameter groups.
+        """Compute gradient norms for different parameter groups."""
+        norms = {'total': 0, 'mu': 0, 'sigma': 0, 'phi': 0, 'ffn': 0}
 
-        Every parameter is categorized into exactly one group so that
-        sum(group_norm**2) == total_norm**2.  Groups:
-            mu    – mean embeddings (mu_embed, parameters with 'mu')
-            sigma – covariance embeddings (sigma_embed, log_sigma, L_embed)
-            phi   – gauge / phase embeddings (phi_embed, parameters with 'phi')
-            ffn   – feed-forward network parameters
-            other – everything else (LayerNorm, output projections, kappa, pos_embed, …)
-        """
-        groups = {'mu': 0.0, 'sigma': 0.0, 'phi': 0.0, 'ffn': 0.0, 'other': 0.0}
+        total_norm = 0
+        mu_norm = 0
+        sigma_norm = 0
+        phi_norm = 0
+        ffn_norm = 0
 
         for name, param in self.model.named_parameters():
             if param.grad is not None:
-                param_norm_sq = param.grad.data.norm(2).item() ** 2
-                name_lower = name.lower()
+                param_norm = param.grad.data.norm(2).item()
+                total_norm += param_norm ** 2
 
-                if 'mu_embed' in name or 'mu' in name_lower:
-                    groups['mu'] += param_norm_sq
-                elif 'sigma_embed' in name or 'sigma' in name_lower or 'L_embed' in name or 'log_sigma' in name_lower:
-                    groups['sigma'] += param_norm_sq
-                elif 'phi_embed' in name or 'phi' in name_lower:
-                    groups['phi'] += param_norm_sq
-                elif 'ffn' in name_lower:
-                    groups['ffn'] += param_norm_sq
-                else:
-                    groups['other'] += param_norm_sq
+                if 'mu_embed' in name or 'mu' in name.lower():
+                    mu_norm += param_norm ** 2
+                elif 'sigma_embed' in name or 'sigma' in name.lower() or 'L_embed' in name:
+                    sigma_norm += param_norm ** 2
+                elif 'phi_embed' in name or 'phi' in name.lower():
+                    phi_norm += param_norm ** 2
+                elif 'ffn' in name:
+                    ffn_norm += param_norm ** 2
 
-        total_sq = sum(groups.values())
-        norms = {k: math.sqrt(v) for k, v in groups.items()}
-        norms['total'] = math.sqrt(total_sq)
+        norms['total'] = math.sqrt(total_norm)
+        norms['mu'] = math.sqrt(mu_norm)
+        norms['sigma'] = math.sqrt(sigma_norm)
+        norms['phi'] = math.sqrt(phi_norm)
+        norms['ffn'] = math.sqrt(ffn_norm)
 
         return norms
 
@@ -1572,8 +1769,7 @@ class PublicationTrainer(FastTrainer):
                     if grad_norms:
                         tqdm.write(f"  [GRAD] total: {grad_norms['total']:.3e} | "
                                    f"mu: {grad_norms['mu']:.3e} | sigma: {grad_norms['sigma']:.3e} | "
-                                   f"phi: {grad_norms['phi']:.3e} | ffn: {grad_norms['ffn']:.3e} | "
-                                   f"other: {grad_norms['other']:.3e}\n\n")
+                                   f"phi: {grad_norms['phi']:.3e}\n\n")
                     # Print Bayesian alpha diagnostics
                     if metrics.get('bayesian/alpha_mean') is not None:
                         tqdm.write(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
@@ -1588,8 +1784,7 @@ class PublicationTrainer(FastTrainer):
                     if grad_norms:
                         print(f"  [GRAD] total: {grad_norms['total']:.3e} | "
                               f"mu: {grad_norms['mu']:.3e} | sigma: {grad_norms['sigma']:.3e} | "
-                              f"phi: {grad_norms['phi']:.3e} | ffn: {grad_norms['ffn']:.3e} | "
-                              f"other: {grad_norms['other']:.3e}\n\n")
+                              f"phi: {grad_norms['phi']:.3e}\n\n")
                     if metrics.get('bayesian/alpha_mean') is not None:
                         print(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
                               f"std: {metrics['bayesian/alpha_std']:.4f} | "
@@ -1989,6 +2184,9 @@ def run_single_experiment(
         log_interval=config['log_interval'],
         eval_interval=config['eval_interval'],
         checkpoint_interval=config['checkpoint_interval'],
+
+        embed_no_decay=config['embed_no_decay'],    # re-enable weight decay on embeddings
+        detach_sigma_kl=config['detach_sigma_kl'],   # pass sigma gradients through KL loss
 
         use_wandb=use_wandb,
         checkpoint_dir=exp_checkpoint_dir,
