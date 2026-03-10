@@ -1462,8 +1462,8 @@ $\pi_k = 0$ for $|i\!-\!k|>w$ & Window prior & Sliding window attention & D \\
 \multicolumn{4}{|l|}{\textit{Normalization and Scaling}} \\
 \hline
 $\tau = \sqrt{d_k}$ ($\sigma^2$ absorbed) & Concentration of measure & $1/\sqrt{d_k}$ scaling & D \\
-$\|\mu_j\|^2 \approx C$ condition & Gauge-geometric necessity & Layer normalization & D \\
-$\mathfrak{gl}(K) \!=\! \mathfrak{sl}(K) \oplus \mathbb{R}$ & Remove trace component & Mean centering in LN & D \\
+$\|\mu_j\|^2 \approx C$ condition & Gauge-geometric necessity & Layer normalization & S \\
+$\mathfrak{gl}(K) \!=\! \mathfrak{sl}(K) \oplus \mathbb{R}$ & Remove trace component & Mean centering in LN & S \\
 \hline
 \multicolumn{4}{|l|}{\textit{Training and Optimization}} \\
 \hline
@@ -1943,7 +1943,7 @@ The predominantly negative sign for KL-based attention ($\beta$) is precisely wh
   \label{fig:keynorm_cross_passage}
 \end{figure}
 
-These findings suggest why layer normalization is prevalent in transformer architectures. Layer normalization enforces constant norms across tokens, directly implementing the gauge-theoretic cancellation condition that should hold asymptotically in high dimensions. Without normalization, key-norm heterogeneity introduces systematic bias that modulates effective attention allocation. Our gauge theory reveals the underlying reason: transformers approximate variational inference in a gauge geometry, and proper inference requires frame-independent comparisons achieved only when key norms are regulated.
+These findings suggest why norm-regulating mechanisms are prevalent in transformer architectures. Layer normalization, RMSNorm, and related techniques enforce approximately constant norms across tokens, satisfying the gauge-theoretic cancellation condition that should hold asymptotically in high dimensions. Without such regulation, key-norm heterogeneity introduces systematic bias that modulates effective attention allocation. Our gauge theory derives the condition ($\|\mu_j\|^2 \approx C$) but does not uniquely predict which normalization scheme satisfies it; rather, it explains why \emph{some} form of norm regulation is necessary: transformers approximate variational inference in a gauge geometry, and proper inference requires frame-independent comparisons achieved only when key norms are regulated.
 
 
 \subsubsection{Attention Entropy Matching}
@@ -2133,7 +2133,7 @@ This paper makes three nested claims, each supported by a corresponding set of r
 
 \subsection{Architectural Implications for Standard Transformers}
 
-The framework provides theoretical explanations for empirical design choices in transformers. Layer normalization emerges as a geometric necessity: it implements the high-dimensional cancellation condition required for frame-independent inference (Section~4.2.1). The temperature scaling $1/\sqrt{d_k}$ is the natural normalization arising from dimensional concentration of measure. Multi-head attention corresponds to restricting the gauge algebra to a block-diagonal subalgebra $\bigoplus_a \mathfrak{gl}(d_{\mathrm{head}})$, with each head implementing an independent irreducible representation (Section~4.9). The output projection $W_O$ provides the only standard mechanism for post-attention cross-head information mixing.
+The framework provides theoretical explanations for empirical design choices in transformers. The framework derives a key-norm cancellation condition ($\|\mu_j\|^2 \approx C$) required for frame-independent inference (Section~4.2.1); layer normalization is one mechanism that achieves this condition, explaining why some form of norm regulation is empirically beneficial. The temperature scaling $1/\sqrt{d_k}$ is the natural normalization arising from dimensional concentration of measure. Multi-head attention corresponds to restricting the gauge algebra to a block-diagonal subalgebra $\bigoplus_a \mathfrak{gl}(d_{\mathrm{head}})$, with each head implementing an independent irreducible representation (Section~4.9). The output projection $W_O$ provides the only standard mechanism for post-attention cross-head information mixing.
 
 These identifications also suggest alternatives to current practice. While layer normalization mitigates key-norm bias uniformly across all tokens, the gauge-theoretic perspective suggests learning optimal token norm profiles that trade representational capacity (large norms encode more information) against attention quality (low norms avoid bias) in a Shannon-like manner, implemented via soft norm constraints or adaptive normalization schedules that vary across layers or heads.
 
