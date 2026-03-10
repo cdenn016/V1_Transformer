@@ -224,9 +224,9 @@ The **most general form** of the theory---no simplifying limits taken. Full non-
 |---|---|---|---|---|---|---|
 | **Best (1 epoch)** | **80** | **1** | **Omega in GL(10)** | **63** | **76** | **~50M** |
 
-For context: random-chance perplexity is ~50,000. The K=90, GL(10) configuration achieves **558x improvement** over random chance, substantially exceeding prior results and approaching standard transformer performance with purely geometric attention.
+For context: random-chance perplexity is ~50,000. The K=80, GL(10) (8 heads, seq-length = 128, RoPE) configuration achieves **~600x improvement** over random chance, substantially exceeding prior results and approaching standard transformer performance with purely geometric attention.
 
-**Emergent semantic structure**: Learned gauge frames develop interpretable categorical organization---punctuation, content words, and letters cluster separately in both belief space (mu) and gauge frame space (phi)---without any category supervision.
+**Emergent semantic structure**: Learned gauge frames develop interpretable categorical organization---punctuation, content words, and letters cluster separately in both belief space (mu) and gauge frame space (phi) without any category supervision.
 
 
 ## Installation
