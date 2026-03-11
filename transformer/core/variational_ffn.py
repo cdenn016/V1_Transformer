@@ -805,7 +805,7 @@ def compute_vfe_gradients_gpu(
     beta: torch.Tensor,        # (B, N, N) attention weights
     phi: torch.Tensor,         # (B, N, n_gen) gauge frames where n_gen is # of generators
     generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators (SO(3) or SO(N))
-    alpha: 'float | torch.Tensor' = 0.01,  # Self-coupling weight: scalar or (B, N, 1) Bayesian precision
+    alpha: 'float | torch.Tensor' = 0.01,  # Self-coupling weight: scalar or (B, N, K) per-dim Bayesian precision
     lambda_belief: float = 1.0,  # Belief alignment weight
     kappa: float = 1.0,        # Temperature (for normalization)
     eps: float = 1e-6,
@@ -839,7 +839,7 @@ def compute_vfe_gradients_gpu(
         phi: Gauge frames (B, N, n_gen) where n_gen is # of generators
         generators: Lie algebra generators (n_gen, K, K) - SO(3) has 3, SO(N) has N(N-1)/2
         alpha: Weight for KL(q||p) self-coupling term. Can be a float (uniform)
-               or a (B, N, 1) tensor from Bayesian precision estimation.
+               or a (B, N, K) tensor from per-dimension Bayesian precision.
         lambda_belief: Weight for belief alignment term
         kappa: Temperature parameter
         eps: Numerical stability
@@ -944,7 +944,7 @@ def compute_vfe_gradients_gpu(
 
         # ∂KL/∂Σ_q = 0.5 * (Σ_p^{-1} - Σ_q^{-1})
         sigma_q_inv = _safe_spd_inv(sigma_q, eps=eps)
-        # For full covariance (4D), alpha (B,N,1) needs extra dim to broadcast with (B,N,K,K)
+        # For full covariance (4D), alpha (B,N,K) needs extra dim to broadcast with (B,N,K,K)
         alpha_4d = alpha.unsqueeze(-1) if isinstance(alpha, torch.Tensor) else alpha
         grad_sigma_self = alpha_4d * 0.5 * (sigma_p_inv - sigma_q_inv)
 
@@ -1872,13 +1872,15 @@ class VariationalFFNDynamic(nn.Module):
         if learnable_alpha:
             # Initialize: c₀ = alpha * b₀, b₀ = 1
             # so that α = c₀ / (b₀ + 0) = alpha when KL = 0
+            # Per-dimension: each belief dimension k gets its own (c₀_k, b₀_k)
+            # so different irrep blocks can learn different precision curves.
             alpha_init = max(alpha, 0.01)  # avoid division by zero
             b0_init = 1.0
             c0_init = alpha_init * b0_init
-            # Parameterize via softplus to ensure positivity
-            self.raw_c0 = nn.Parameter(torch.tensor(self._softplus_inverse(c0_init)))
-            self.raw_b0 = nn.Parameter(torch.tensor(self._softplus_inverse(b0_init)))
-            print(f"[VariationalFFNDynamic] Bayesian precision enabled: "
+            # Parameterize via softplus to ensure positivity — shape (K,)
+            self.raw_c0 = nn.Parameter(torch.full((embed_dim,), self._softplus_inverse(c0_init)))
+            self.raw_b0 = nn.Parameter(torch.full((embed_dim,), self._softplus_inverse(b0_init)))
+            print(f"[VariationalFFNDynamic] Bayesian precision enabled (per-dim): "
                   f"c₀={c0_init:.4f}, b₀={b0_init:.1f}, "
                   f"initial α≈{alpha_init} (K={embed_dim})")
 
@@ -1941,21 +1943,24 @@ class VariationalFFNDynamic(nn.Module):
         eps: float = 1e-6,
     ) -> torch.Tensor:
         """
-        Compute Bayesian precision via log-barrier form (Eq. 882-884).
+        Compute per-dimension Bayesian precision via log-barrier form.
 
-        α* = c₀ / (b₀ + KL(q‖p))
+        α_k = c₀_k / (b₀_k + kl_k)
 
-        where KL(q‖p) = 0.5 * (tr(Σ_p⁻¹ Σ_q) + (μ_p-μ_q)ᵀ Σ_p⁻¹ (μ_p-μ_q)
-                                 - K + log|Σ_p| - log|Σ_q|)
+        where kl_k is the per-dimension KL contribution. Each belief
+        dimension k gets its own precision, so different irrep blocks
+        (compact vs non-compact) can learn different regularization curves.
 
-        Gauge-invariant: KL divergence is a gauge scalar.
-        Self-regulating: α shrinks as beliefs diverge from priors.
+        Diagonal covariance: kl_k decomposes exactly per dimension.
+        Full covariance: uses diagonal elements of (Σ_p⁻¹ Σ_q) and
+            per-dim Mahalanobis as proxy contributions, with the logdet
+            spread uniformly across dimensions.
 
         Returns:
-            alpha: (B, N, 1) per-token precision, broadcastable to (B, N, K)
+            alpha: (B, N, K) per-dimension-per-agent precision
         """
-        c0 = F.softplus(self.raw_c0)
-        b0 = F.softplus(self.raw_b0)
+        c0 = F.softplus(self.raw_c0)  # (K,)
+        b0 = F.softplus(self.raw_b0)  # (K,)
 
         delta_mu = mu_q - mu_p  # (B, N, K)
         K = mu_q.shape[-1]
@@ -1964,30 +1969,28 @@ class VariationalFFNDynamic(nn.Module):
         if is_diagonal:
             sigma_p_safe = sigma_p.clamp(min=eps)
             sigma_q_safe = sigma_q.clamp(min=eps)
-            # tr(Σ_p⁻¹ Σ_q)
-            trace_term = (sigma_q_safe / sigma_p_safe).sum(dim=-1, keepdim=True)  # (B, N, 1)
-            # Mahalanobis: δμᵀ Σ_p⁻¹ δμ
-            mahal_term = (delta_mu ** 2 / sigma_p_safe).sum(dim=-1, keepdim=True)  # (B, N, 1)
-            # log|Σ_p| - log|Σ_q|
-            logdet_term = (torch.log(sigma_p_safe) - torch.log(sigma_q_safe)).sum(dim=-1, keepdim=True)
+            # Per-dimension KL contributions (no sum — keep (B, N, K))
+            trace_term = sigma_q_safe / sigma_p_safe              # (B, N, K)
+            mahal_term = delta_mu ** 2 / sigma_p_safe             # (B, N, K)
+            logdet_term = torch.log(sigma_p_safe) - torch.log(sigma_q_safe)  # (B, N, K)
         else:
             sigma_p_inv = _safe_spd_inv(sigma_p, eps=eps)  # (B, N, K, K)
-            # tr(Σ_p⁻¹ Σ_q)
+            # Per-dim proxy: diagonal of (Σ_p⁻¹ Σ_q)
             prod = torch.matmul(sigma_p_inv, sigma_q)  # (B, N, K, K)
-            trace_term = prod.diagonal(dim1=-2, dim2=-1).sum(dim=-1, keepdim=True)  # (B, N, 1)
-            # Mahalanobis: δμᵀ Σ_p⁻¹ δμ
-            mahal_term = torch.einsum('bni,bnij,bnj->bn', delta_mu, sigma_p_inv, delta_mu)
-            mahal_term = mahal_term.unsqueeze(-1)  # (B, N, 1)
-            # log|Σ_p| - log|Σ_q|
-            logdet_p = torch.linalg.slogdet(sigma_p.float())[1].unsqueeze(-1)
-            logdet_q = torch.linalg.slogdet(sigma_q.float())[1].unsqueeze(-1)
-            logdet_term = logdet_p - logdet_q  # (B, N, 1)
+            trace_term = prod.diagonal(dim1=-2, dim2=-1)          # (B, N, K)
+            # Per-dim Mahalanobis: δμ_k * (Σ_p⁻¹ δμ)_k
+            sp_inv_delta = torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
+            mahal_term = delta_mu * sp_inv_delta                  # (B, N, K)
+            # logdet can't decompose per-dim; spread uniformly
+            logdet_p = torch.linalg.slogdet(sigma_p.float())[1]  # (B, N)
+            logdet_q = torch.linalg.slogdet(sigma_q.float())[1]  # (B, N)
+            logdet_term = ((logdet_p - logdet_q) / K).unsqueeze(-1).expand_as(delta_mu)  # (B, N, K)
 
-        # Full KL(q‖p) for Gaussian distributions
-        kl = 0.5 * (trace_term + mahal_term - K + logdet_term)  # (B, N, 1)
-        kl = kl.clamp(min=0.0)  # KL is non-negative; clamp for numerical safety
+        # Per-dimension KL contribution
+        kl_k = 0.5 * (trace_term + mahal_term - 1 + logdet_term)  # (B, N, K)
+        kl_k = kl_k.clamp(min=0.0)
 
-        alpha = c0 / (b0 + kl)  # (B, N, 1)
+        alpha = c0 / (b0 + kl_k)  # (B, N, K)
 
         return alpha
 
@@ -2082,11 +2085,13 @@ class VariationalFFNDynamic(nn.Module):
                         chunk_size=self.chunk_size,
                         mask_self_attention=self.mask_self_attention,
                     )
+                    # Slice alpha per head block if per-dim tensor
+                    alpha_h = alpha_eff[:, :, block_start:block_end] if isinstance(alpha_eff, torch.Tensor) and alpha_eff.dim() == 3 else alpha_eff
                     grad_mu_h, grad_sigma_h = compute_vfe_gradients_gpu(
                         mu_q=mu_h, sigma_q=sigma_h,
                         mu_p=mu_p_h, sigma_p=sigma_p_h,
                         beta=beta_h, phi=phi_current, generators=gen_h,
-                        alpha=alpha_eff, lambda_belief=self.lambda_belief,
+                        alpha=alpha_h, lambda_belief=self.lambda_belief,
                         kappa=kappa_h, eps=eps,
                         compute_sigma_align_grad=self.compute_sigma_align_grad,
                         sigma_softmax_coupling=self.sigma_softmax_coupling,
@@ -2339,7 +2344,7 @@ class VariationalFFNDynamic(nn.Module):
             if self.learnable_alpha:
                 alpha_effective = self.get_bayesian_alpha(
                     mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
-                )  # (B, N, 1) - gauge-invariant, state-dependent
+                )  # (B, N, K) - per-dim gauge-invariant, state-dependent
             else:
                 alpha_effective = self.alpha  # scalar (backward compatible)
 
@@ -2407,6 +2412,9 @@ class VariationalFFNDynamic(nn.Module):
                     )  # (B, N, N)
                     beta_heads.append(beta_h)
 
+                    # Slice alpha per head block if per-dim tensor
+                    alpha_h = alpha_effective[:, :, block_start:block_end] if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3 else alpha_effective
+
                     # Per-head VFE gradients
                     grad_mu_h, grad_sigma_h = compute_vfe_gradients_gpu(
                         mu_q=mu_h,
@@ -2416,7 +2424,7 @@ class VariationalFFNDynamic(nn.Module):
                         beta=beta_h,
                         phi=phi_current,
                         generators=gen_h,
-                        alpha=alpha_effective,
+                        alpha=alpha_h,
                         lambda_belief=self.lambda_belief,
                         kappa=kappa_h,
                         eps=eps,
