@@ -1298,9 +1298,9 @@ In the limit where $\alpha_i \to \alpha = \text{const}$ and $\lambda_{p,i} \to \
 
 This identifies the standard weight decay coefficient $\lambda_p$ as the product of two quantities that the general theory treats independently: the prior precision $\alpha$ and the inverse prior variance $1/\sigma_p^2$. In the general theory, both are state-dependent; standard transformers collapse them into a single fixed scalar.
 
-\subsubsection{Gradient Descent Dynamics.}
+\subsubsection{Natural Gradient Dynamics.}
 
-In the limit $\lambda_{p,i} = \lambda_p$ the gradient of the free energy with respect to $\mu_i$ is:
+In the limit $\lambda_{p,i} = \lambda_p$ the Euclidean gradient of the free energy with respect to $\mu_i$ is:
 
 \begin{equation}
 \boxed{
@@ -1320,24 +1320,24 @@ In the limit $\lambda_{p,i} = \lambda_p$ the gradient of the free energy with re
 
 The first term, $\lambda_p(\mu_i - \mu_{\text{prior}})$, matches weight decay or L2 regularization. The second term, $\sum_j \frac{\beta_{ij}}{\sigma^2}(\Omega\Omega^\top)^{-1}(\mu_i - \Omega\mu_j)$, is attention-weighted message aggregation that pulls $\mu_i$ toward gauge-transported neighbors; the metric factor $(\Omega\Omega^\top)^{-1}$ arises from differentiating the Mahalanobis distance and is absorbed into the learned projections in Limit~3. The third term, $\sum_j \frac{\partial \beta_{ij}}{\partial \mu_i}\|\Omega^{-1}\mu_i - \mu_j\|^2/(2\sigma^2)$, represents gradient flow through the attention weights themselves - a manifestly non-linear activation. The fourth term, $-\frac{\partial \log p(o_i \mid \mu_i)}{\partial \mu_i}$, is the gradient of the loss function (the supervised learning signal).
 
-The variational gradient flow is given as:
+Since beliefs $q_i$ live on the Gaussian statistical manifold, the geometrically correct dynamics uses the \emph{natural gradient} --- the Euclidean gradient preconditioned by the inverse Fisher information metric $G_\mu^{-1} = \Sigma_i$ (see Appendix~\ref{sec:retraction} for derivation). The natural gradient flow is:
 
 \begin{equation}
-\frac{d\mu_i}{dt} = -\eta \,\frac{\partial \mathcal{F}}{\partial \mu_i}.
+\frac{d\mu_i}{dt} = -\eta \,\Sigma_i\,\frac{\partial \mathcal{F}}{\partial \mu_i}.
 \end{equation}
 
-Discretizing in steps yields the update rule:
+In the isotropic limit $\Sigma_i = \sigma^2 I$, the Fisher preconditioning absorbs the $\sigma^{-2}$ factors in the alignment terms. Defining the effective learning rate $\tilde{\eta} \equiv \eta\sigma^2$ and discretizing yields:
 
 \begin{equation}
 \boxed{
 \begin{aligned}
 \mu_i^{(t+1)}
 &= \mu_i^{(t)}
-- \eta \Bigg[
+- \tilde{\eta} \Bigg[
     \lambda_p \left(\mu_i - \mu_{\text{prior}}\right)
     + \sum_j \left(
-        \frac{\beta_{ij}}{\sigma^2}(\Omega\Omega^\top)^{-1}\left(\mu_i - \Omega\mu_j\right)
-        + \frac{1}{2\sigma^2}
+        \beta_{ij}\,(\Omega\Omega^\top)^{-1}\left(\mu_i - \Omega\mu_j\right)
+        + \frac{1}{2}
           \frac{\partial \beta_{ij}}{\partial \mu_i}
           \left\|\Omega^{-1}\mu_i - \mu_j\right\|^2
       \right) \\
@@ -1348,7 +1348,7 @@ Discretizing in steps yields the update rule:
 }
 \end{equation}
 
-This recovers the standard transformer update rule (attention-weighted aggregation, prior regularization, and supervised loss) providing a variational interpretation of each term.
+The natural gradient cleanly recovers the standard transformer update rule: the alignment term $\sum_j \beta_{ij}\,\Omega\mu_j$ maps directly to the value aggregation $\sum_j \alpha_{ij} V_j$ without residual $\sigma^{-2}$ factors. This is consistent with the E-step algorithm (Algorithm~1), which applies Fisher preconditioning $\tilde{\nabla}_\mu \leftarrow \Sigma_i \cdot \nabla_\mu \mathcal{F}$.
 
 \paragraph{Covariance gradient.}
 The complete theory also includes gradient dynamics for the covariance $\Sigma_i$ and gauge frame $\phi_i$. The covariance gradient reveals a novel uncertainty channel absent in standard transformers.  Differentiating the free energy with respect to $\Sigma_i$ and applying the product rule through the attention weights (neglecting the observation term, which contributes an $O(\Sigma_i^{-1})$ correction in the high-precision regime; see Appendix~\ref{app:covariance_dynamics} for the full derivation) gives:
