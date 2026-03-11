@@ -1002,7 +1002,8 @@ class PublicationMetricsTracker:
 
             # Bayesian alpha diagnostics
             'alpha_mean', 'alpha_std', 'alpha_min', 'alpha_max',
-            'alpha_a0', 'alpha_b0', 'alpha_mahal_sq_mean', 'alpha_mahal_sq_std',
+            'alpha_c0', 'alpha_b0', 'alpha_c0_std', 'alpha_b0_std',
+            'alpha_mahal_sq_mean', 'alpha_mahal_sq_std',
 
             # Performance
             'step_time', 'tokens_per_sec',
