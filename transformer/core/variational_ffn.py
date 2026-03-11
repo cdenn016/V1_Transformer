@@ -461,6 +461,7 @@ def _compute_vfe_gradients_block_diagonal_diag(
     compute_sigma_align_grad: bool,
     enforce_orthogonal: bool = False,
     sigma_softmax_coupling: bool = False,  # Include ∂β/∂Σ softmax coupling in sigma gradient
+    alpha_c0: Optional[torch.Tensor] = None,  # (K,) for product-rule correction
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Block-diagonal VFE gradient computation for diagonal covariance mode.
@@ -496,6 +497,14 @@ def _compute_vfe_gradients_block_diagonal_diag(
     delta_mu = mu_q - mu_p
     grad_mu_self = alpha * delta_mu / sigma_p_safe
     grad_sigma_self = alpha * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
+
+    # Product-rule correction for learnable alpha
+    if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
+        kl_k = 0.5 * (sigma_q_safe / sigma_p_safe + delta_mu ** 2 / sigma_p_safe
+                      - 1.0 + torch.log(sigma_p_safe) - torch.log(sigma_q_safe))
+        kl_k = kl_k.clamp(min=0.0)
+        grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * delta_mu / sigma_p_safe
+        grad_sigma_self = grad_sigma_self - (alpha ** 2 / alpha_c0) * kl_k * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
 
     # =================================================================
     # 2. Belief Alignment Gradient (block-diagonal + diagonal formulas)
@@ -618,7 +627,7 @@ def _compute_vfe_gradients_chunked(
     beta: torch.Tensor,        # (B, N, N) attention weights
     phi: torch.Tensor,         # (B, N, n_gen) gauge frames
     generators: torch.Tensor,  # (n_gen, K, K) generators
-    alpha: float,
+    alpha: 'float | torch.Tensor',
     lambda_belief: float,
     kappa: float,
     eps: float,
@@ -626,6 +635,7 @@ def _compute_vfe_gradients_chunked(
     compute_sigma_align_grad: bool,
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
     sigma_softmax_coupling: bool = False,  # Include ∂β/∂Σ softmax coupling in sigma gradient
+    alpha_c0: Optional[torch.Tensor] = None,  # (K,) for product-rule correction
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Chunked VFE gradient computation for diagonal covariance mode.
@@ -656,6 +666,14 @@ def _compute_vfe_gradients_chunked(
     delta_mu = mu_q - mu_p
     grad_mu_self = alpha * delta_mu / sigma_p_safe
     grad_sigma_self = alpha * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
+
+    # Product-rule correction for learnable alpha
+    if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
+        kl_k = 0.5 * (sigma_q_safe / sigma_p_safe + delta_mu ** 2 / sigma_p_safe
+                      - 1.0 + torch.log(sigma_p_safe) - torch.log(sigma_q_safe))
+        kl_k = kl_k.clamp(min=0.0)
+        grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * delta_mu / sigma_p_safe
+        grad_sigma_self = grad_sigma_self - (alpha ** 2 / alpha_c0) * kl_k * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
 
     # =================================================================
     # 2. Alignment Gradient (chunked processing)
@@ -809,6 +827,7 @@ def compute_vfe_gradients_gpu(
     lambda_belief: float = 1.0,  # Belief alignment weight
     kappa: float = 1.0,        # Temperature (for normalization)
     eps: float = 1e-6,
+    alpha_c0: Optional[torch.Tensor] = None,  # (K,) softplus(raw_c0) for product-rule correction when alpha is learnable
     cached_transport: Optional[dict] = None,  # Precomputed transport operators
     compute_sigma_align_grad: bool = True,  # Compute sigma gradient from alignment term
     sigma_softmax_coupling: bool = False,  # Include ∂β/∂Σ softmax coupling in sigma gradient
@@ -892,7 +911,8 @@ def compute_vfe_gradients_gpu(
         return _compute_vfe_gradients_block_diagonal_diag(
             mu_q, sigma_q, mu_p, sigma_p, beta, phi, generators,
             alpha, lambda_belief, kappa, eps, irrep_dims,
-            compute_sigma_align_grad, enforce_orthogonal, sigma_softmax_coupling
+            compute_sigma_align_grad, enforce_orthogonal, sigma_softmax_coupling,
+            alpha_c0=alpha_c0,
         )
 
     # =================================================================
@@ -902,7 +922,8 @@ def compute_vfe_gradients_gpu(
         return _compute_vfe_gradients_chunked(
             mu_q, sigma_q, mu_p, sigma_p, beta, phi, generators,
             alpha, lambda_belief, kappa, eps, chunk_size,
-            compute_sigma_align_grad, enforce_orthogonal, sigma_softmax_coupling
+            compute_sigma_align_grad, enforce_orthogonal, sigma_softmax_coupling,
+            alpha_c0=alpha_c0,
         )
 
     # =================================================================
@@ -934,6 +955,17 @@ def compute_vfe_gradients_gpu(
 
         # Self-coupling gradient w.r.t. σ (diagonal)
         grad_sigma_self = alpha * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)  # (B, N, K)
+
+        # Product-rule correction: ∂(α·KL)/∂θ = α·∂KL/∂θ + (∂α/∂θ)·KL
+        # When α_k = c₀_k/(b₀_k + kl_k), ∂α_k/∂θ = -α_k²/c₀_k · ∂kl_k/∂θ
+        if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
+            kl_k = 0.5 * (sigma_q_safe / sigma_p_safe + delta_mu ** 2 / sigma_p_safe
+                          - 1.0 + torch.log(sigma_p_safe) - torch.log(sigma_q_safe))
+            kl_k = kl_k.clamp(min=0.0)
+            # ∂α/∂μ · KL = -α²/c₀ · (δμ/σ_p) · kl_k
+            grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * delta_mu / sigma_p_safe
+            # ∂α/∂σ_q · KL = -α²/c₀ · 0.5·(1/σ_p - 1/σ_q) · kl_k
+            grad_sigma_self = grad_sigma_self - (alpha ** 2 / alpha_c0) * kl_k * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
     else:
         # Full covariance - use matrix operations
         # ∂KL/∂μ_q = Σ_p^{-1} (μ_q - μ_p)
@@ -2057,6 +2089,7 @@ class VariationalFFNDynamic(nn.Module):
                 cached_transport = None
 
             alpha_eff = self.get_bayesian_alpha(mu_in, mu_p_current, sigma_p, sigma_in, eps=eps) if self.learnable_alpha else self.alpha
+            _alpha_c0 = F.softplus(self.raw_c0) if self.learnable_alpha else None
 
             if self.multihead_vfe:
                 # Differentiable multihead step (no detach)
@@ -2087,12 +2120,14 @@ class VariationalFFNDynamic(nn.Module):
                     )
                     # Slice alpha per head block if per-dim tensor
                     alpha_h = alpha_eff[:, :, block_start:block_end] if isinstance(alpha_eff, torch.Tensor) and alpha_eff.dim() == 3 else alpha_eff
+                    c0_h = _alpha_c0[block_start:block_end] if _alpha_c0 is not None else None
                     grad_mu_h, grad_sigma_h = compute_vfe_gradients_gpu(
                         mu_q=mu_h, sigma_q=sigma_h,
                         mu_p=mu_p_h, sigma_p=sigma_p_h,
                         beta=beta_h, phi=phi_current, generators=gen_h,
                         alpha=alpha_h, lambda_belief=self.lambda_belief,
                         kappa=kappa_h, eps=eps,
+                        alpha_c0=c0_h,
                         compute_sigma_align_grad=self.compute_sigma_align_grad,
                         sigma_softmax_coupling=self.sigma_softmax_coupling,
                     )
@@ -2120,6 +2155,7 @@ class VariationalFFNDynamic(nn.Module):
                     beta=beta, phi=phi_current, generators=self.generators,
                     alpha=alpha_eff, lambda_belief=self.lambda_belief,
                     kappa=self.kappa, eps=eps,
+                    alpha_c0=_alpha_c0,
                     cached_transport=cached_transport,
                     compute_sigma_align_grad=self.compute_sigma_align_grad,
                     sigma_softmax_coupling=self.sigma_softmax_coupling,
@@ -2345,8 +2381,10 @@ class VariationalFFNDynamic(nn.Module):
                 alpha_effective = self.get_bayesian_alpha(
                     mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
                 )  # (B, N, K) - per-dim gauge-invariant, state-dependent
+                _alpha_c0 = F.softplus(self.raw_c0)
             else:
                 alpha_effective = self.alpha  # scalar (backward compatible)
+                _alpha_c0 = None
 
             if self.multihead_vfe:
                 # =============================================================
@@ -2414,6 +2452,7 @@ class VariationalFFNDynamic(nn.Module):
 
                     # Slice alpha per head block if per-dim tensor
                     alpha_h = alpha_effective[:, :, block_start:block_end] if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3 else alpha_effective
+                    c0_h = _alpha_c0[block_start:block_end] if _alpha_c0 is not None else None
 
                     # Per-head VFE gradients
                     grad_mu_h, grad_sigma_h = compute_vfe_gradients_gpu(
@@ -2428,6 +2467,7 @@ class VariationalFFNDynamic(nn.Module):
                         lambda_belief=self.lambda_belief,
                         kappa=kappa_h,
                         eps=eps,
+                        alpha_c0=c0_h,
                         compute_sigma_align_grad=self.compute_sigma_align_grad,
                         sigma_softmax_coupling=self.sigma_softmax_coupling,
                     )
@@ -2485,6 +2525,7 @@ class VariationalFFNDynamic(nn.Module):
                     lambda_belief=self.lambda_belief,
                     kappa=self.kappa,
                     eps=eps,
+                    alpha_c0=_alpha_c0,
                     cached_transport=cached_transport,
                     compute_sigma_align_grad=self.compute_sigma_align_grad,
                     sigma_softmax_coupling=self.sigma_softmax_coupling,
