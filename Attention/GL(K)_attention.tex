@@ -1338,15 +1338,17 @@ In the isotropic limit $\Sigma_i = \sigma^2 I$, the Fisher preconditioning absor
 The natural gradient recovers the standard transformer update rule. The alignment term $\sum_j \beta_{ij}\,\Omega\mu_j$ maps directly to the value aggregation $\sum_j \alpha_{ij} V_j$ without spurious $\sigma^{-2}$ factors. This is consistent with the E-step algorithm we implement, which applies Fisher preconditioning $\tilde{\nabla}_\mu \leftarrow \Sigma_i \cdot \nabla_\mu \mathcal{F}$.
 
 \paragraph{General (non-isotropic) mean gradient.}
-The preceding expressions assumed isotropic covariances $\Sigma_i = \sigma^2 I$ and a shared gauge connection $\Omega$. We now state the fully general gradient, valid for arbitrary covariances $\Sigma_i$, edge-dependent gauge connections $\Omega_{ij}$, and general prior precision $\Sigma_{p,i}^{-1}$ which we implement in our experiments.
+The preceding expressions assumed isotropic covariances $\Sigma_i = \sigma^2 I$ and a shared gauge connection $\Omega$. We now state the fully general gradient, valid for arbitrary covariances $\Sigma_i$, edge-dependent gauge connections $\Omega_{ij}$, general prior precision $\Sigma_{p,i}^{-1}$, and state-dependent prior coupling $\alpha_i$ (Section~\ref{sec:state_dependent_precision}).
 
-Differentiating the full free energy \eqref{eq:free_energy_final} with respect to $\mu_i$ and applying the product rule through the attention weights gives:
+Differentiating the full free energy \eqref{eq:free_energy_final} with respect to $\mu_i$ and applying the product rule through both the attention weights $\beta_{ij}(\mu_i)$ and the adaptive prior coupling $\alpha_i(\mu_i)$ gives:
 
 \begin{equation}
 \boxed{
 \begin{aligned}
 \frac{\partial \mathcal{F}}{\partial \mu_i}
-&= \Sigma_{p,i}^{-1}\left(\mu_i - \mu_{\text{prior}}\right) \\
+&= \alpha_i\,\Sigma_{p,i}^{-1}\left(\mu_i - \mu_{\text{prior}}\right)
+    + \frac{\partial \alpha_i}{\partial \mu_i}\,
+      D_{\mathrm{KL}}(q_i \,\|\, p_i) \\
 &\quad + \sum_j \left[
     \beta_{ij}\,
     \left(\Omega_{ij}\Sigma_j\Omega_{ij}^\top\right)^{-1}
@@ -1360,7 +1362,9 @@ Differentiating the full free energy \eqref{eq:free_energy_final} with respect t
 \label{eq:mu_gradient_general}
 \end{equation}
 
-The structure parallels the isotropic case term-by-term, with three generalizations: (i) the prior precision $\lambda_p I$ is replaced by the full matrix $\Sigma_{p,i}^{-1}$; (ii) the isotropic transported precision $\sigma^{-2}(\Omega\Omega^\top)^{-1}$ is replaced by the edge-dependent transported precision $(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$, which accounts for both the neighbor's covariance structure and the geometry of the gauge transport along each edge; and (iii) the quadratic mean-mismatch $\frac{1}{2\sigma^2}\|\Omega^{-1}\mu_i - \mu_j\|^2$ is replaced by the full KL divergence $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij}q_j)$, which additionally couples to the covariance mismatch between $\Sigma_i$ and the transported covariance $\Omega_{ij}\Sigma_j\Omega_{ij}^\top$. The full KL cannot be reduced to a purely mean-dependent expression because the covariance contributions (trace and log-determinant terms) are $j$-dependent through $\Omega_{ij}$ and $\Sigma_j$, and therefore do not cancel under the constraint $\sum_j \partial\beta_{ij}/\partial\mu_i = 0$.
+The structure parallels the isotropic case term-by-term, with four generalizations: (i) the prior precision $\lambda_p I$ is replaced by the full matrix $\alpha_i\,\Sigma_{p,i}^{-1}$, where $\alpha_i$ is the state-dependent prior coupling; (ii) the term $(\partial\alpha_i/\partial\mu_i)\,D_{\mathrm{KL}}(q_i \,\|\, p_i)$ represents gradient flow through the adaptive gate --- agents far from their prior (large $\|\mu_i - \mu_{\text{prior}}\|$) have $\partial\alpha_i/\partial\mu_i < 0$, which reduces the effective regularization and allows beliefs to drift further, reinforcing the gating behavior described in Section~\ref{sec:state_dependent_precision}; (iii) the isotropic transported precision $\sigma^{-2}(\Omega\Omega^\top)^{-1}$ is replaced by the edge-dependent transported precision $(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$, which accounts for both the neighbor's covariance structure and the geometry of the gauge transport along each edge; and (iv) the quadratic mean-mismatch $\frac{1}{2\sigma^2}\|\Omega^{-1}\mu_i - \mu_j\|^2$ is replaced by the full KL divergence $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij}q_j)$, which additionally couples to the covariance mismatch between $\Sigma_i$ and the transported covariance $\Omega_{ij}\Sigma_j\Omega_{ij}^\top$. The full KL cannot be reduced to a purely mean-dependent expression because the covariance contributions (trace and log-determinant terms) are $j$-dependent through $\Omega_{ij}$ and $\Sigma_j$, and therefore do not cancel under the constraint $\sum_j \partial\beta_{ij}/\partial\mu_i = 0$.
+
+When $\alpha_i = \alpha = \text{const}$, the gate gradient vanishes ($\partial\alpha_i/\partial\mu_i = 0$) and the prior term reduces to $\alpha\,\Sigma_{p,i}^{-1}(\mu_i - \mu_{\text{prior}})$, recovering the uniform regularization case.
 
 The corresponding natural gradient flow is:
 
