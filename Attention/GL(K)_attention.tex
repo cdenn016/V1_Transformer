@@ -2820,45 +2820,52 @@ The computational cost of each mode scales as: clipping $O(n_{\mathrm{gen}})$, C
 
 
 \subsection{Natural Gradient Descent on the Gaussian Manifold}
-A critical aspect of our implementation is the use of natural gradient descent for the statistical parameters, which exploits the information-geometric structure of the Gaussian manifold. Rather than treating the covariance matrices $\Sigma_i$ as Euclidean variables, we recognize them as points on the manifold of symmetric positive-definite matrices, equipped with the Fisher-Rao metric. The natural gradient at a point $\Sigma$ on this manifold is obtained by applying the inverse Fisher metric to the Euclidean gradient, yielding an intrinsic tangent vector that respects the manifold's curved geometry.
-
-
+A critical aspect of our implementation is the use of natural gradient descent for the statistical parameters, which exploits the information-geometric structure of the Gaussian manifold. Rather than treating the covariance matrices $\Sigma_i$ as Euclidean variables, we recognize them as points on the manifold of symmetric positive-definite matrices, equipped with the Fisher-Rao metric. The natural gradient at a point $\Sigma$ on this manifold is obtained by applying the inverse Fisher metric to the Euclidean gradient, yielding an intrinsic tangent vector that respects the manifold's curved geometry. Given Euclidean gradients $\nabla_\mu$ and $\nabla_\Sigma$, the natural gradient projections are
 \begin{equation}
-R = \Sigma^{-1/2} (\eta \cdot \nabla) \Sigma^{-1/2}
+\delta\mu = -\Sigma\,\nabla_\mu, \qquad
+\delta\Sigma = -2\,\Sigma\,\mathrm{sym}(\nabla_\Sigma)\,\Sigma,
 \end{equation}
+where $\mathrm{sym}(M) = \tfrac{1}{2}(M + M^\top)$.
 
-where $\nabla$ is the raw Euclidean gradient and $\eta$ is the learning rate. This whitening procedure ensures that the gradient step is affine-invariant—the same step size produces comparable effects regardless of the current scale of the covariance matrix. Following the computation of the tangent vector $R$, we apply a trust-region constraint by clipping its Frobenius norm to a maximum relative step size $\rho$, typically set to values between $0.1$ and $0.5$. This prevents excessively large updates that could destabilize the manifold structure or lead to ill-conditioned covariances.
-
-\subsection{Manifold Retraction for Covariance Matrices}
-The actual manifold retraction—the process of mapping the tangent vector back to a valid point on the manifold—is performed using the affine-invariant exponential map by default. The exponential map is computed as
-
+The covariance update $\delta\Sigma$ is then passed to a manifold retraction (Section~\ref{sec:retraction}) that whitens it into the eigenbasis of $\Sigma$:
 \begin{equation}
-\Sigma_{k+1} = \Sigma_k^{1/2} \exp(R) \Sigma_k^{1/2},
+B = \Lambda^{-1/2}\, (V^\top \delta\Sigma\, V)\, \Lambda^{-1/2},
 \end{equation}
+where $\Sigma = V \Lambda V^\top$ is the eigendecomposition.  This whitening ensures that the resulting step is affine-invariant---the same step size produces comparable effects regardless of the current scale of the covariance matrix.  Following the computation of the whitened tangent $B$, we apply a trust-region constraint by clipping its Frobenius norm to a maximum relative step size $\rho$. This prevents excessively large updates that could destabilize the manifold structure or lead to ill-conditioned covariances.
 
-where the matrix exponential $\exp(R)$ is evaluated via eigendecomposition: $R = U \Lambda U^\top$ yields $\exp(R) = U \exp(\Lambda) U^\top$ with component-wise exponentials applied to the eigenvalues. This procedure is provably SPD-preserving provided $\Sigma_k$ is SPD and $R$ is symmetric, which our implementation guarantees through explicit symmetrization at multiple stages.
+\subsection{Manifold Retraction for Covariance Matrices}\label{sec:retraction}
+The manifold retraction---the process of mapping the tangent vector back to a valid point on the manifold---is performed using the affine-invariant exponential map. Working in the eigenbasis of $\Sigma_k$ with eigenvalues $\lambda_j$, the whitened tangent $B$ is diagonalized $B = U\Lambda_B U^\top$ and the retraction is
+\begin{equation}
+\Sigma_{k+1} = V\,\Lambda^{1/2}\, U\, \exp(\tau \Lambda_B)\, U^\top\, \Lambda^{1/2}\, V^\top,
+\end{equation}
+where $\tau$ is the step size and the component-wise exponentials $\exp(\tau \lambda_B^{(j)})$ are clipped to $|\tau \lambda_B^{(j)}| \le 50$ to prevent floating-point overflow.  This procedure is provably SPD-preserving provided $\Sigma_k$ is SPD and $B$ is symmetric, which our implementation guarantees through explicit symmetrization at multiple stages.
 
 Additional safeguards include post-retraction sanitization via
 \texttt{sanitize\_sigma}, which symmetrizes the result, raises on any
 floating-point anomalies (NaNs), and applies a spectral floor to the
 eigenvalues to ensure they remain above a minimum threshold
-$\epsilon_{\mathrm{SPD}}\!\sim\!10^{-8}$. This spectral regularization is
-essential for preventing numerical collapse of the covariance matrices
-during prolonged gradient descent, particularly in regions where the
-free-energy landscape becomes very flat.
+$\epsilon_{\mathrm{SPD}} = 10^{-4}$, together with a condition-number cap
+$\kappa_{\max} = 10^{4}$.  This spectral regularization is essential for
+preventing numerical collapse of the covariance matrices during prolonged
+gradient descent, particularly in regions where the free-energy landscape
+becomes very flat.
 
-\subsection{Gauge Frame Dynamics on $\mathrm{SO}(3)$}
-For the gauge frame fields $\phi_i$ and $\tilde{\phi}_i$, which live in the Lie algebra $\mathfrak{so}(3)$, a different geometric structure must be respected. These fields parameterize the local gauge frames as $U_i = \exp(\phi_i)$, and their dynamics are governed by gradients computed via the induced Fisher metric on the group manifold. The gradients are obtained by accumulating contributions from the self KL divergences, the alignment terms, and any optional (disabled) cross-fiber couplings, each of which produces a co-vector in the dual of the Lie algebra.
+\subsection{Gauge Frame Dynamics on $\mathrm{GL}(K)$}
+For the gauge frame fields $\phi_i$, which live in the Lie algebra $\mathfrak{gl}(K)$ (or its subalgebra $\mathfrak{so}(3)$ in the fundamental representation), a different geometric structure must be respected. These fields parameterize the local gauge frames as $U_i = \exp(\sum_a \phi_i^a T_a)$, where $\{T_a\}$ are the Lie algebra generators, and the transport operators take the form $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$.  Gradients of the alignment energy $\beta_{ij}\,D_{\mathrm{KL}}(q_i \| \Omega_{ij}[q_j])$ with respect to $\phi_i$ are obtained via the chain rule through the transport operator: the KL gradient with respect to $\Omega$ is contracted against the differential $\partial\Omega_{ij}/\partial\phi_i^a$.
 
-These co-vectors are computed using the differential of the matrix exponential map, which relates infinitesimal variations $\delta \phi$ to variations in the group element via
-
+The differential of the matrix exponential relates infinitesimal variations $\delta \phi$ to variations in the group element via
 \begin{equation}
-\delta(\exp \phi) = \exp(\phi) \cdot d\exp_\phi(\delta \phi),
+\frac{\partial}{\partial \phi^a}\exp\!\Bigl(\textstyle\sum_b \phi^b T_b\Bigr) = \exp(X)\cdot Q_a,
 \end{equation}
+where $X = \sum_b \phi^b T_b$ and $Q_a = d\exp_X(T_a)$ is the derivative of the exponential map applied to the generator $T_a$.  For the $K\!=\!3$ fundamental representation of $\mathfrak{so}(3)$, we use the exact closed-form expression
+\begin{equation}
+Q_a = T_a - c_1(\theta)\,\mathrm{ad}_X(T_a) + c_2(\theta)\,\mathrm{ad}_X^2(T_a),
+\end{equation}
+where $\theta = \|\phi\|$, $c_1(\theta) = (1-\cos\theta)/\theta^2$, and $c_2(\theta) = (\theta - \sin\theta)/\theta^3$, with Taylor-expanded small-angle limits for $\theta < 10^{-4}$.  For higher-dimensional representations ($K > 3$), where the Cayley--Hamilton truncation requires $K$ terms, we instead compute $Q_a$ via the Fr\'{e}chet derivative of the matrix exponential using symmetric quadrature.
 
-where $d\exp_\phi$ is the derivative of the exponential map at $\phi$. Our implementation caches the matrix-valued operator $d\exp^{-1}$ (implemented via the Baker-Campbell-Hausdorff formula truncated at fourth order) and uses it to project co-vectors back to tangent vectors in the algebra. The Fisher metric inverse, computed via \texttt{inverse\_fisher\_metric\_field}, provides a natural Riemannian structure that preconditions these gradients, accounting for the non-flat geometry of $\mathrm{SO}(3)$.
+The resulting Euclidean gradient $\partial\mathcal{F}/\partial\phi^a$ can optionally be preconditioned using one of several Lie-algebraic metrics.  In the transformer implementation, these include: (i)~the \emph{Killing form} natural gradient, which uses the Cartan-involution-modified Killing form $\tilde{g}_{ab} = 2K\,\mathrm{tr}(T_a^\top T_b) - 2\,\mathrm{tr}(T_a)\mathrm{tr}(T_b)$ as a position-independent metric with no free parameters; (ii)~a \emph{Cartan decomposition} preconditioner that dampens the non-compact (symmetric) directions of $\mathfrak{gl}(K)$ relative to the compact $\mathfrak{so}(K)$ directions; and (iii)~the full \emph{pullback} natural gradient $G_{ab}(\phi) = \langle \Psi(\mathrm{ad}_X)(T_a),\, \Psi(\mathrm{ad}_X)(T_b) \rangle$, where $\Psi(z) = (e^z - 1)/z$, which captures the position-dependent curvature of the exponential map.
 
-Once the gradient direction is determined, we apply a step with learning rate $\eta_\phi$ (typically $10^{-1}$ to $10^{-2}$), forming a candidate update $\phi_{\text{cand}} = \phi + \delta \phi$. However, the Lie algebra $\mathfrak{so}(3)$ has a natural periodic boundary—angles wrap at $\pm \pi$—and numerical drift can cause $\phi$ to wander outside the principal domain. To prevent this, we apply a retraction via \texttt{retract\_phi\_principal}, which reflects vectors that exceed the boundary back into the fundamental domain, then slightly nudges them away from the boundary via a small margin (typically $10^{-2}$) to avoid numerical instability near the critical points where the exponential map degenerates.
+Once the gradient direction is determined, we apply a step with learning rate $\eta_\phi$ (typically $10^{-1}$), forming a candidate update $\phi_{\text{cand}} = \phi + \eta_\phi\,\delta \phi$. However, the Lie algebra has a natural periodic boundary---rotation angles wrap at $\pm \pi$---and numerical drift can cause $\phi$ to wander outside the principal domain. To prevent this, we apply a retraction via \texttt{retract\_to\_principal\_ball}, which wraps angles modulo $2\pi$, applies an antipodal flip for angles exceeding $\pi$, and clamps the result to $\|\phi\| < \pi - \varepsilon_{\mathrm{margin}}$ with $\varepsilon_{\mathrm{margin}} = 10^{-2}$ to avoid numerical instability near the critical points where the exponential map degenerates.
 
 
 \paragraph{Gradient validation.} All gauge frame gradient implementations are validated against finite-difference approximations $(\partial \mathcal{F}/\partial \phi_i^a \approx [\mathcal{F}(\phi_i + \epsilon e_a) - \mathcal{F}(\phi_i - \epsilon e_a)]/(2\epsilon))$ with relative error $< 10^{-5}$.
