@@ -1338,7 +1338,7 @@ In the isotropic limit $\Sigma_i = \sigma^2 I$, the Fisher preconditioning absor
 The natural gradient recovers the standard transformer update rule. The alignment term $\sum_j \beta_{ij}\,\Omega\mu_j$ maps directly to the value aggregation $\sum_j \alpha_{ij} V_j$ without spurious $\sigma^{-2}$ factors. This is consistent with the E-step algorithm we implement, which applies Fisher preconditioning $\tilde{\nabla}_\mu \leftarrow \Sigma_i \cdot \nabla_\mu \mathcal{F}$.
 
 \paragraph{General (non-isotropic) mean gradient.}
-The preceding expressions assumed isotropic covariances $\Sigma_i = \sigma^2 I$ and a shared gauge connection $\Omega$. We now state the fully general gradient, valid for arbitrary covariances $\Sigma_i$, edge-dependent gauge connections $\Omega_{ij}$, and general prior precision $\Sigma_{p,i}^{-1}$.
+The preceding expressions assumed isotropic covariances $\Sigma_i = \sigma^2 I$ and a shared gauge connection $\Omega$. We now state the fully general gradient, valid for arbitrary covariances $\Sigma_i$, edge-dependent gauge connections $\Omega_{ij}$, and general prior precision $\Sigma_{p,i}^{-1}$ which we implement in our experiments.
 
 Differentiating the full free energy \eqref{eq:free_energy_final} with respect to $\mu_i$ and applying the product rule through the attention weights gives:
 
@@ -1365,25 +1365,33 @@ The structure parallels the isotropic case term-by-term, with three generalizati
 The corresponding natural gradient flow is:
 
 \begin{equation}
-\frac{d\mu_i}{dt} = -\eta\,\Sigma_i\,\frac{\partial \mathcal{F}}{\partial \mu_i}
-= -\eta \left[
+\boxed{
+\begin{aligned}
+\frac{d\mu_i}{dt}
+&= -\eta\,\Sigma_i\,\frac{\partial \mathcal{F}}{\partial \mu_i} \\
+&= -\eta \Bigg[
     \Sigma_i\Sigma_{p,i}^{-1}(\mu_i - \mu_{\text{prior}})
-    + \sum_j \left(
+    + \sum_j \bigg(
         \beta_{ij}\,\Sigma_i
         \left(\Omega_{ij}\Sigma_j\Omega_{ij}^\top\right)^{-1}
-        (\mu_i - \Omega_{ij}\mu_j)
+        (\mu_i - \Omega_{ij}\mu_j) \\
+&\qquad\qquad
         + \frac{\partial \beta_{ij}}{\partial \mu_i}\,\Sigma_i\,
           D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)
-    \right)
+    \bigg)
     - \Sigma_i\frac{\partial \log p(o_i \mid \mu_i)}{\partial \mu_i}
-\right].
+\Bigg].
+\end{aligned}
+}
 \label{eq:natural_gradient_general}
 \end{equation}
 
-When the covariance alignment condition $\Sigma_i \approx \Omega_{ij}\Sigma_j\Omega_{ij}^\top$ holds (as enforced by the covariance gradient dynamics below), the Fisher-preconditioned alignment term simplifies to $\beta_{ij}(\mu_i - \Omega_{ij}\mu_j)$, recovering attention-weighted message passing with geometric transport --- the non-isotropic generalization of the value aggregation $\sum_j \alpha_{ij} V_j$. This covariance alignment condition is precisely the fixed point of the $\Sigma$-gradient (Eq.~\ref{eq:sigma_fixed_point_main}), demonstrating internal consistency: the mean and covariance dynamics cooperate to produce clean message passing at equilibrium.
+
+When the covariance alignment condition $\Sigma_i \approx \Omega_{ij}\Sigma_j\Omega_{ij}^\top$ holds (as enforced by the covariance gradient dynamics below), the Fisher-preconditioned alignment term simplifies to $\beta_{ij}(\mu_i - \Omega_{ij}\mu_j)$, recovering attention-weighted message passing with geometric transport (the non-isotropic generalization of the value aggregation $\sum_j \alpha_{ij} V_j$). This covariance alignment condition is precisely the fixed point of the $\Sigma$-gradient (Eq.~\ref{eq:sigma_fixed_point_main}), demonstrating internal consistency whereby the mean and covariance dynamics cooperate to produce clean message passing at equilibrium.
 
 \paragraph{Covariance gradient.}
-The complete theory also includes gradient dynamics for the covariance $\Sigma_i$ and gauge frame $\phi_i$. The covariance gradient reveals a novel uncertainty channel absent in standard transformers.  Differentiating the free energy with respect to $\Sigma_i$ and applying the product rule through the attention weights (neglecting the observation term, which contributes an $O(\Sigma_i^{-1})$ correction in the high-precision regime; see Appendix~\ref{app:covariance_dynamics} for the full derivation) gives:
+
+Similarly, the complete theory also includes gradient dynamics for the covariance $\Sigma_i$ and gauge frame $\phi_i$. The covariance gradient reveals a novel uncertainty channel absent in standard transformers.  Differentiating the free energy with respect to $\Sigma_i$ and applying the product rule through the attention weights (neglecting the observation term, which contributes an $O(\Sigma_i^{-1})$ correction in the high-precision regime; see Appendix~\ref{app:covariance_dynamics} for the full derivation) yields:
 
 \begin{equation}
 \boxed{
@@ -1403,7 +1411,7 @@ D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j).
 \label{eq:Sigma_gradient_main}
 \end{equation}
 
-The structure parallels the mean gradient: $\Sigma_{p,i}^{-1}$ is the prior precision (analogous to weight decay for $\mu$), $\sum_j \beta_{ij}(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$ is attention-weighted precision aggregation that pulls agent $i$'s precision toward its gauge-transported neighbors, and the final term $\sum_j (\partial \beta_{ij}/\partial \Sigma_i)\, D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ is gradient flow through the attention weights --- the covariance analogue of the non-linear activation term in the $\mu$ gradient.
+This parallels the mean gradient: $\Sigma_{p,i}^{-1}$ is the prior precision (analogous to weight decay for $\mu$), $\sum_j \beta_{ij}(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$ is attention-weighted precision aggregation that pulls agent $i$'s precision toward its gauge-transported neighbors, and the final term $\\$ $\sum_j (\partial \beta_{ij}/\partial \Sigma_i)\, D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ is gradient flow through the attention weights (the covariance analogue of the non-linear activation term in the $\mu$ gradient).
 
 Since $\sum_j \partial \beta_{ij}/\partial \Sigma_i = 0$ (the attention weights sum to unity), the attention weight correction vanishes whenever the KL divergences $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij}q_j)$ are uniform across neighbors. It also vanishes in both the hard-attention ($\tau \to 0$, where $\beta_{ij}$ concentrates on a single neighbor) and uniform-attention ($\tau \to \infty$, where $\partial\beta_{ij}/\partial\Sigma_i \propto 1/\tau \to 0$) limits. Setting this correction aside, the equilibrium condition $\partial \mathcal{F}_i / \partial \Sigma_i = 0$ yields the fixed-point equation:
 
@@ -1418,10 +1426,10 @@ Since $\sum_j \partial \beta_{ij}/\partial \Sigma_i = 0$ (the attention weights 
 \label{eq:sigma_fixed_point_main}
 \end{equation}
 
-Each agent's precision is thus determined self-consistently as a $\beta$-weighted combination of its prior precision and its neighbors' transported precisions. In the strong-alignment regime ($\tau \to 0$), the prior term becomes negligible and the precision reduces to $\Sigma_i^{-1} \approx \langle(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}\rangle_\beta$, the attention-weighted average of transported neighbor precisions. This fixed point is an attractor of the gradient dynamics (Appendix~\ref{app:covariance_dynamics}), so covariance alignment $\Sigma_i \approx \Omega_{ij}\Sigma_j\Omega_{ij}^\top$ emerges from the variational dynamics itself rather than as an imposed constraint. This uncertainty channel --- where precision propagates through the attention graph --- has no counterpart in standard transformers and constitutes a concrete prediction of the general theory.
+Each agent's precision is thus determined self-consistently as a $\beta$-weighted combination of its prior precision and its neighbors' transported precisions. In the strong-alignment regime ($\tau \to 0$), the prior term becomes negligible and the precision reduces to $\Sigma_i^{-1} \approx \langle(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}\rangle_\beta$, the attention-weighted average of transported neighbor precisions. This fixed point is an attractor of the gradient dynamics (Appendix~\ref{app:covariance_dynamics}), so covariance alignment $\Sigma_i \approx \Omega_{ij}\Sigma_j\Omega_{ij}^\top$ emerges from the variational dynamics itself rather than as an imposed constraint. This uncertainty channel where precision propagates through the attention graph has no counterpart in standard transformers and constitutes a concrete prediction of the general theory.
 
 \paragraph{Gauge frame gradient.}
-The gauge frame gradient $\partial \mathcal{F}/\partial \phi_i$ drives learning of the parallel transport operators $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$. Its structure involves the differential of the matrix exponential map and differs for compact ($\mathrm{SO}(N)$) and general ($\mathrm{GL}(K)$) gauge groups; the full derivation is given in Appendix~\ref{app:phi_gradients}. In practice, automatic differentiation through the matrix exponential handles these gradients implicitly.
+The gauge frame gradient $\partial \mathcal{F}/\partial \phi_i$ drives learning of the parallel transport operators $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$. Its structure involves the differential of the matrix exponential map and differs for compact ($\mathrm{SO}(N)$) and general ($\mathrm{GL}(K)$) gauge groups; the full derivation is given in Appendix~\ref{app:phi_gradients}. In practice, automatic differentiation through the matrix exponential handles these gradients implicitly however we derive them in detail.
 
 \subsubsection{Layer-by-Layer Backpropagation.}
 
