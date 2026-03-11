@@ -1337,6 +1337,50 @@ In the isotropic limit $\Sigma_i = \sigma^2 I$, the Fisher preconditioning absor
 
 The natural gradient recovers the standard transformer update rule. The alignment term $\sum_j \beta_{ij}\,\Omega\mu_j$ maps directly to the value aggregation $\sum_j \alpha_{ij} V_j$ without spurious $\sigma^{-2}$ factors. This is consistent with the E-step algorithm we implement, which applies Fisher preconditioning $\tilde{\nabla}_\mu \leftarrow \Sigma_i \cdot \nabla_\mu \mathcal{F}$.
 
+\paragraph{General (non-isotropic) mean gradient.}
+The preceding expressions assumed isotropic covariances $\Sigma_i = \sigma^2 I$ and a shared gauge connection $\Omega$. We now state the fully general gradient, valid for arbitrary covariances $\Sigma_i$, edge-dependent gauge connections $\Omega_{ij}$, and general prior precision $\Sigma_{p,i}^{-1}$.
+
+Differentiating the full free energy \eqref{eq:free_energy_final} with respect to $\mu_i$ and applying the product rule through the attention weights gives:
+
+\begin{equation}
+\boxed{
+\begin{aligned}
+\frac{\partial \mathcal{F}}{\partial \mu_i}
+&= \Sigma_{p,i}^{-1}\left(\mu_i - \mu_{\text{prior}}\right) \\
+&\quad + \sum_j \left[
+    \beta_{ij}\,
+    \left(\Omega_{ij}\Sigma_j\Omega_{ij}^\top\right)^{-1}
+    \left(\mu_i - \Omega_{ij}\mu_j\right)
+    + \frac{\partial \beta_{ij}}{\partial \mu_i}\,
+      D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)
+\right] \\
+&\quad - \frac{\partial \log p(o_i \mid \mu_i)}{\partial \mu_i}.
+\end{aligned}
+}
+\label{eq:mu_gradient_general}
+\end{equation}
+
+The structure parallels the isotropic case term-by-term, with three generalizations: (i) the prior precision $\lambda_p I$ is replaced by the full matrix $\Sigma_{p,i}^{-1}$; (ii) the isotropic transported precision $\sigma^{-2}(\Omega\Omega^\top)^{-1}$ is replaced by the edge-dependent transported precision $(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$, which accounts for both the neighbor's covariance structure and the geometry of the gauge transport along each edge; and (iii) the quadratic mean-mismatch $\frac{1}{2\sigma^2}\|\Omega^{-1}\mu_i - \mu_j\|^2$ is replaced by the full KL divergence $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij}q_j)$, which additionally couples to the covariance mismatch between $\Sigma_i$ and the transported covariance $\Omega_{ij}\Sigma_j\Omega_{ij}^\top$. The full KL cannot be reduced to a purely mean-dependent expression because the covariance contributions (trace and log-determinant terms) are $j$-dependent through $\Omega_{ij}$ and $\Sigma_j$, and therefore do not cancel under the constraint $\sum_j \partial\beta_{ij}/\partial\mu_i = 0$.
+
+The corresponding natural gradient flow is:
+
+\begin{equation}
+\frac{d\mu_i}{dt} = -\eta\,\Sigma_i\,\frac{\partial \mathcal{F}}{\partial \mu_i}
+= -\eta \left[
+    \Sigma_i\Sigma_{p,i}^{-1}(\mu_i - \mu_{\text{prior}})
+    + \sum_j \left(
+        \beta_{ij}\,\Sigma_i
+        \left(\Omega_{ij}\Sigma_j\Omega_{ij}^\top\right)^{-1}
+        (\mu_i - \Omega_{ij}\mu_j)
+        + \frac{\partial \beta_{ij}}{\partial \mu_i}\,\Sigma_i\,
+          D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)
+    \right)
+    - \Sigma_i\frac{\partial \log p(o_i \mid \mu_i)}{\partial \mu_i}
+\right].
+\label{eq:natural_gradient_general}
+\end{equation}
+
+When the covariance alignment condition $\Sigma_i \approx \Omega_{ij}\Sigma_j\Omega_{ij}^\top$ holds (as enforced by the covariance gradient dynamics below), the Fisher-preconditioned alignment term simplifies to $\beta_{ij}(\mu_i - \Omega_{ij}\mu_j)$, recovering attention-weighted message passing with geometric transport --- the non-isotropic generalization of the value aggregation $\sum_j \alpha_{ij} V_j$. This covariance alignment condition is precisely the fixed point of the $\Sigma$-gradient (Eq.~\ref{eq:sigma_fixed_point_main}), demonstrating internal consistency: the mean and covariance dynamics cooperate to produce clean message passing at equilibrium.
 
 \paragraph{Covariance gradient.}
 The complete theory also includes gradient dynamics for the covariance $\Sigma_i$ and gauge frame $\phi_i$. The covariance gradient reveals a novel uncertainty channel absent in standard transformers.  Differentiating the free energy with respect to $\Sigma_i$ and applying the product rule through the attention weights (neglecting the observation term, which contributes an $O(\Sigma_i^{-1})$ correction in the high-precision regime; see Appendix~\ref{app:covariance_dynamics} for the full derivation) gives:
