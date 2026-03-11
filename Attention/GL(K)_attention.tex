@@ -1475,47 +1475,27 @@ concrete prediction of the general theory.
 \paragraph{Gauge frame gradient.}
 The gauge frame gradient $\partial \mathcal{F}/\partial \phi_i$ drives learning of the parallel transport operators $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$. Its structure involves the differential of the matrix exponential map and differs for compact ($\mathrm{SO}(N)$) and general ($\mathrm{GL}(K)$) gauge groups; the full derivation is given in Appendix~\ref{app:phi_gradients}. In practice, automatic differentiation through the matrix exponential handles these gradients implicitly however we derive them in detail.
 
-\subsubsection{Layer-by-Layer Backpropagation.}
-
-For a layered architecture with agents at layer $\ell$ having parameters $\mu_i^{(\ell)}$, layer $\ell+1$ depends on layer $\ell$ through:
-\begin{equation}
-\mu_j^{(\ell+1)} = f^{(\ell)}(\{\mu_i^{(\ell)}\}; W^{(\ell)}),
-\end{equation}
-where $f^{(\ell)}$ includes attention and feedforward operations.
-
-By the chain rule:
-
-\begin{equation}
-\frac{\partial \mathcal{F}}{\partial \mu_i^{(\ell)}} = \frac{\partial \mathcal{F}_{\text{local}}^{(\ell)}}{\partial \mu_i^{(\ell)}} + \sum_j \frac{\partial \mathcal{F}}{\partial \mu_j^{(\ell+1)}} \cdot \frac{\partial \mu_j^{(\ell+1)}}{\partial \mu_i^{(\ell)}}.
-\end{equation}
-
-This has the same structure as standard gradient backpropagation, with gradients flowing backward through the Jacobian $\partial \mu_j^{(\ell+1)}/\partial \mu_i^{(\ell)}$. The chain rule is a general property of any differentiable function composition and is not specific to the gauge-theoretic framework. What the framework contributes is not a derivation of backpropagation but rather a variational interpretation of the loss function: the free energy $\mathcal{F}$ provides a principled decomposition of the training objective into prior regularization, inter-agent alignment, and observation likelihood terms. The backward gradient flow then corresponds to variational message-passing, where each layer refines its beliefs based on downstream prediction errors.
-
 \subsubsection{Residual Connections as Variational Gradient Flow.}
 \label{sec:residual_connections}
 
-The residual (skip) connection is a defining architectural feature of modern transformers, where each sublayer's output is added to its input: $x_{\ell+1} = x_\ell + f(x_\ell)$. This structure emerges directly from the variational gradient flow.
-
-As above the belief update under free energy minimization is given by Euler discretization of the gradient flow:
+The residual (skip) connection is a defining architectural feature of modern transformers, where each sublayer's output is added to its input: $x_{\ell+1} = x_\ell + f(x_\ell)$. This structure emerges directly from the variational gradient flow. The belief update under free energy minimization is given by Euler discretization of the gradient flow:
 
 \begin{equation}
 \mu_i^{(t+1)} = \mu_i^{(t)} - \eta \frac{\partial \mathcal{F}}{\partial \mu_i}\bigg|_{\mu_i^{(t)}},
 \label{eq:residual_gradient_flow}
 \end{equation}
 
-which has the inherent structure $\text{new} = \text{old} + \text{correction}$. We note that this correspondence is, in one sense, straightforward: any iterative gradient-based update will have this additive form. The significance is not the algebraic identity itself but the order of development. The agent-based variational model was derived independently from first principles, and the residual structure emerged as a consequence of the variational gradient flow \emph{before} the connection to transformer architecture was recognized. That the same structure appears as a deliberate architectural choice in transformers (motivated by gradient propagation considerations) provides evidence that both frameworks are capturing the same underlying computational principle rather than one being retrofitted to the other.
+which inherently has the form $\text{new} = \text{old} + \text{correction}$. The agent-based variational model was derived from first principles, and this residual structure emerged as a consequence of the gradient flow \emph{before} the connection to transformer architecture was recognized. That the same structure appears as a deliberate architectural choice in transformers (motivated by gradient propagation considerations) suggests both frameworks capture the same underlying computational principle. In a layered architecture, the backward gradient flow through the Jacobians $\partial\mu_j^{(\ell+1)}/\partial\mu_i^{(\ell)}$ corresponds to variational message-passing, where each layer refines its beliefs based on downstream prediction errors.
 
-The agent's current belief $\mu_i^{(t)}$ is preserved through the identity path, while the variational gradient $-\eta \,\partial \mathcal{F}/\partial \mu_i$ provides an incremental correction incorporating alignment, prior, and observation signals.
+The strength of the identity path relative to the correction is governed by the state-dependent precision $\alpha_i$ (Section~\ref{sec:state_dependent_precision}). When $\alpha_i$ is large (agent near its prior), the identity path dominates and the belief is strongly anchored; when $\alpha_i$ is small (agent far from prior), the correction terms dominate. In the constant-$\alpha$ limit, this reduces to a fixed-strength residual connection with uniform regularization, as in standard transformers where the skip connection weight is implicitly unity. The adaptive $\alpha_i$ thus generalizes the fixed residual connection to a state-dependent gating mechanism.
 
-The strength of the identity path relative to the correction is governed by the state-dependent precision $\alpha_i$ from Section~\ref{sec:state_dependent_precision}. In the general theory, the prior coupling term $\alpha_i D_{\mathrm{KL}}(q_i \| p_i)$ contributes a gradient component $\alpha_i(\mu_i - \mu_{\text{prior}})$ that resists displacement from the prior. When $\alpha_i$ is large (agent near its prior), the identity path dominates and the belief is strongly anchored; when $\alpha_i$ is small (agent far from prior), the correction terms dominate and the belief is free to evolve. In the constant-$\alpha$ limit, this reduces to a fixed-strength residual connection with uniform regularization, exactly as in standard transformers where the skip connection weight is implicitly unity. The adaptive $\alpha_i$ thus generalizes the fixed residual connection to a state-dependent gating mechanism, with the standard case recovered when the prior precision is spatially uniform.
-
-This interpretation extends to the covariance and gauge frame channels. The full variational flow for all agent parameters takes the form:
+The full variational flow for all agent parameters takes the form:
 
 \begin{equation}
 \theta_i^{(t+1)} = \theta_i^{(t)} - \eta_\theta \,\nabla_{\theta_i}\mathcal{F}\bigg|_{\theta_i^{(t)}}, \qquad \theta_i \in \{\mu_i, \Sigma_i, \phi_i\},
 \end{equation}
 
-with each channel possessing its own residual structure and effective learning rate. The multi-channel residual flow corresponds to the residual stream interpretation of transformers \citep{elhage2021mathematical}, where each layer reads from and writes to a shared residual pathway. In the gauge-theoretic framework, this residual stream is the belief state itself $(\mu_i, \Sigma_i, \phi_i)$, which accumulates incremental updates from successive layers of variational refinement.
+with each channel possessing its own residual structure and effective learning rate. This multi-channel residual flow corresponds to the residual stream interpretation of transformers \citep{elhage2021mathematical}, where each layer reads from and writes to a shared residual pathway. In the gauge-theoretic framework, this residual stream is the belief state $(\mu_i, \Sigma_i, \phi_i)$, accumulating incremental updates from successive layers of variational refinement.
 
 
 \begin{table}[p]
