@@ -1403,19 +1403,19 @@ Similarly, the complete theory also includes gradient dynamics for the covarianc
 \frac{\partial \mathcal{F}_i}{\partial \Sigma_i}
 &= \frac{1}{2}
 \left[
--2 \Sigma_i^{-1}
-+ \Sigma_{p,i}^{-1}
-+ \sum_j \beta_{ij}
+-(1+\alpha_i)\, \Sigma_i^{-1}
++ \alpha_i\,\Sigma_{p,i}^{-1}
++ \sum_j \beta_{ij}\,
 (\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}
 \right] \\
-&\quad + \sum_j \frac{\partial \beta_{ij}}{\partial \Sigma_i}
+&\quad + \sum_j \frac{\partial \beta_{ij}}{\partial \Sigma_i}\,
 D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j).
 \end{aligned}
 }
 \label{eq:Sigma_gradient_main}
 \end{equation}
 
-This parallels the mean gradient: $\Sigma_{p,i}^{-1}$ is the prior precision (analogous to weight decay for $\mu$), $\sum_j \beta_{ij}(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$ is attention-weighted precision aggregation that pulls agent $i$'s precision toward its gauge-transported neighbors, and the final term $\\$ $\sum_j (\partial \beta_{ij}/\partial \Sigma_i)\, D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ is gradient flow through the attention weights (the covariance analogue of the non-linear activation term in the $\mu$ gradient).
+This parallels the mean gradient: $\alpha_i\,\Sigma_{p,i}^{-1}$ is the prior precision scaled by the adaptive coupling (analogous to weight decay for $\mu$), $\sum_j \beta_{ij}(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$ is attention-weighted precision aggregation that pulls agent $i$'s precision toward its gauge-transported neighbors, and the final term $\\$ $\sum_j (\partial \beta_{ij}/\partial \Sigma_i)\, D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ is gradient flow through the attention weights (the covariance analogue of the non-linear activation term in the $\mu$ gradient). Note that no $(\partial\alpha_i/\partial\Sigma_i)\,D_{\mathrm{KL}}(q_i\,\|\,p_i)$ gate gradient term appears: in the deterministic limit (Eq.~\ref{eq:alpha_i_deterministic}), $\alpha_i$ depends only on $\mu_i$, so $\partial\alpha_i/\partial\Sigma_i = 0$. The coefficient $-(1+\alpha_i)$ on $\Sigma_i^{-1}$ arises because the entropy of $q_i$ enters both the prior KL (weighted by $\alpha_i$) and each neighbor KL (weighted by $\beta_{ij}$, summing to $1$).
 
 Since $\sum_j \partial \beta_{ij}/\partial \Sigma_i = 0$ (the attention weights sum to unity), the attention weight correction vanishes whenever the KL divergences $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij}q_j)$ are uniform across neighbors. It also vanishes in both the hard-attention ($\tau \to 0$, where $\beta_{ij}$ concentrates on a single neighbor) and uniform-attention ($\tau \to \infty$, where $\partial\beta_{ij}/\partial\Sigma_i \propto 1/\tau \to 0$) limits. Setting this correction aside, the equilibrium condition $\partial \mathcal{F}_i / \partial \Sigma_i = 0$ yields the fixed-point equation:
 
