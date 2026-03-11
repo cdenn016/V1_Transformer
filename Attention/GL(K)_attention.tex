@@ -2040,7 +2040,7 @@ Unlike the BERT validation above, which tested the degenerate limits against an 
 
 \subsubsection{Training Dynamics}
 
-Figure~\ref{fig:glk_training} shows the training dynamics for our best $\mathrm{GL}(K)$ gauge VFE model: a $\mathrm{GL}(10)$ configuration with $K=90$ (9 heads of dimension 10). The model achieves stable convergence with perplexity dropping from $>$900 at initialization to $\sim$75 at convergence; a ${\sim}671\times$ improvement over random chance (vocabulary size 50{,}257). The gradient norms for $\mu$ (belief means), $\Sigma$ (covariances), and $\phi$ (gauge frames) evolve with distinct dynamics; the gauge frame gradients ($\phi$, red) exhibit characteristic oscillations as the model learns optimal frame alignments. Training and validation curves track closely throughout training, indicating the gauge-theoretic inductive bias provides effective regularization.
+Figure~\ref{fig:glk_training} shows the training dynamics for our best $\mathrm{GL}(K)$ gauge VFE model: a $\mathrm{GL}(10)$ configuration with $K=90$ (9 heads of dimension 10). The model achieves stable convergence with perplexity dropping from 50,257 at initialization to $\sim$75 at convergence; a ${\sim}671\times$ improvement over random chance (vocabulary size 50{,}257). The gradient norms for $\mu$ (belief means), $\Sigma$ (covariances), and $\phi$ (gauge frames) evolve with distinct dynamics; the gauge frame gradients ($\phi$, red) exhibit characteristic oscillations as the model learns optimal frame alignments. Training and validation curves track closely throughout training, indicating the gauge-theoretic inductive bias provides effective regularization.
 
 \begin{figure*}[t]
   \centering
