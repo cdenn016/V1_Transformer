@@ -1395,7 +1395,7 @@ When the covariance alignment condition $\Sigma_i \approx \Omega_{ij}\Sigma_j\Om
 
 \paragraph{Covariance gradient.}
 
-Similarly, the complete theory also includes gradient dynamics for the covariance $\Sigma_i$ and gauge frame $\phi_i$. The covariance gradient reveals a novel uncertainty channel absent in standard transformers.  Differentiating the free energy with respect to $\Sigma_i$ and applying the product rule through the attention weights (neglecting the observation term, which contributes an $O(\Sigma_i^{-1})$ correction in the high-precision regime; see Appendix~\ref{app:covariance_dynamics} for the full derivation) yields:
+Similarly, the complete theory also includes gradient dynamics for the covariance $\Sigma_i$ and gauge frame $\phi_i$. The covariance gradient reveals a novel uncertainty channel absent in standard transformers.  Differentiating the free energy with respect to $\Sigma_i$ and applying the product rule through both the attention weights and the adaptive prior coupling $\alpha_i(\Sigma_i)$ (neglecting the observation term, which contributes an $O(\Sigma_i^{-1})$ correction in the high-precision regime; see Appendix~\ref{app:covariance_dynamics} for the full derivation) yields:
 
 \begin{equation}
 \boxed{
@@ -1408,14 +1408,16 @@ Similarly, the complete theory also includes gradient dynamics for the covarianc
 + \sum_j \beta_{ij}\,
 (\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}
 \right] \\
-&\quad + \sum_j \frac{\partial \beta_{ij}}{\partial \Sigma_i}\,
+&\quad + \frac{\partial \alpha_i}{\partial \Sigma_i}\,
+      D_{\mathrm{KL}}(q_i \,\|\, p_i)
++ \sum_j \frac{\partial \beta_{ij}}{\partial \Sigma_i}\,
 D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j).
 \end{aligned}
 }
 \label{eq:Sigma_gradient_main}
 \end{equation}
 
-This parallels the mean gradient: $\alpha_i\,\Sigma_{p,i}^{-1}$ is the prior precision scaled by the adaptive coupling (analogous to weight decay for $\mu$), $\sum_j \beta_{ij}(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$ is attention-weighted precision aggregation that pulls agent $i$'s precision toward its gauge-transported neighbors, and the final term $\\$ $\sum_j (\partial \beta_{ij}/\partial \Sigma_i)\, D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ is gradient flow through the attention weights (the covariance analogue of the non-linear activation term in the $\mu$ gradient). Note that no $(\partial\alpha_i/\partial\Sigma_i)\,D_{\mathrm{KL}}(q_i\,\|\,p_i)$ gate gradient term appears: in the deterministic limit (Eq.~\ref{eq:alpha_i_deterministic}), $\alpha_i$ depends only on $\mu_i$, so $\partial\alpha_i/\partial\Sigma_i = 0$. The coefficient $-(1+\alpha_i)$ on $\Sigma_i^{-1}$ arises because the entropy of $q_i$ enters both the prior KL (weighted by $\alpha_i$) and each neighbor KL (weighted by $\beta_{ij}$, summing to $1$).
+This parallels the mean gradient term-by-term: $\alpha_i\,\Sigma_{p,i}^{-1}$ is the prior precision scaled by the adaptive coupling (analogous to weight decay for $\mu$); the $(\partial\alpha_i/\partial\Sigma_i)\,D_{\mathrm{KL}}(q_i \,\|\, p_i)$ term is gradient flow through the adaptive gate (the covariance analogue of the $(\partial\alpha_i/\partial\mu_i)\,D_{\mathrm{KL}}$ term in Eq.~\ref{eq:mu_gradient_general}); $\sum_j \beta_{ij}(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$ is attention-weighted precision aggregation that pulls agent $i$'s precision toward its gauge-transported neighbors; and $\sum_j (\partial \beta_{ij}/\partial \Sigma_i)\, D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ is gradient flow through the attention weights. In the general case (Eq.~\ref{eq:state_dependent_alpha}), $\alpha_i = c_0/(b_0 + D_{\mathrm{KL}}(q_i \| p_i))$ depends on $\Sigma_i$ through the trace and log-determinant terms of the full KL divergence, so $\partial\alpha_i/\partial\Sigma_i \neq 0$. This gate gradient term vanishes only in the deterministic limit (Eq.~\ref{eq:alpha_i_deterministic}), where $\alpha_i$ reduces to a function of $\mu_i$ alone. The coefficient $-(1+\alpha_i)$ on $\Sigma_i^{-1}$ arises because the entropy of $q_i$ enters both the prior KL (weighted by $\alpha_i$) and each neighbor KL (weighted by $\beta_{ij}$, summing to $1$).
 
 Since $\sum_j \partial \beta_{ij}/\partial \Sigma_i = 0$ (the attention weights sum to unity), the attention weight correction vanishes whenever the KL divergences $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij}q_j)$ are uniform across neighbors. It also vanishes in both the hard-attention ($\tau \to 0$, where $\beta_{ij}$ concentrates on a single neighbor) and uniform-attention ($\tau \to \infty$, where $\partial\beta_{ij}/\partial\Sigma_i \propto 1/\tau \to 0$) limits. Setting this correction aside, the equilibrium condition $\partial \mathcal{F}_i / \partial \Sigma_i = 0$ yields the fixed-point equation:
 
