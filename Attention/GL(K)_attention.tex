@@ -47,7 +47,7 @@ Transformer attention is variational inference over information sources. Modelin
 
 From this principle, transformer architectural choices emerge as consequences of the variational geometry: the temperature scaling $1/\sqrt{d_k}$ from dimensional concentration of the KL divergence, layer normalization as the geometric condition for frame-independent inference, multi-head attention as a block-diagonal restriction of the gauge algebra, and causal masking and positional biases from non-uniform attention priors $\pi_j$. Two successive limits (isotropic covariances, flat gauge connection) recover the standard rule $\beta_{ij} \propto \operatorname{softmax}(Q_i K_j^\top / \sqrt{d_k})$, while the $\mathrm{GL}(K)$ invariance of KL divergence implies that $W_Q, W_K$ are themselves gauge transformations with $W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$ parametrizing a learned gauge transport, suggesting that standard transformers already implement gauge-theoretic attention. Gradient descent on the free energy provides a variational interpretation of the transformer training loss, with the chain rule through layered compositions corresponding to variational message-passing.
 
-We validate the unreduced theory by training a $\mathrm{GL}(K)$ gauge transformer on WikiText-103 using only KL divergences, gauge transport, and natural gradient dynamics (without learned attention projections, MLPs, or pointwise activation functions such as ReLU or GELU). The model achieves test perplexity 79.3, surpassing a matched Kneser-Ney 5-gram baseline (PPL 134.8) by $1.49\times$, with emergent semantic structure in the learned gauge frames. We separately validate the degenerate-limit predictions on frozen BERT across 105 diverse passages, confirming quantitative agreement between KL-based and dot-product attention (grand mean $r = 0.804$ at the predicted optimal temperature, 95\% CI $[0.771, 0.838]$, with cross-passage SE $< 0.02$ for all 144 heads). Both architectures operate in the flat bundle limit with trivially vanishing holonomy: a geometric regime we conjecture is matched to the approximately path-independent semantic transport that language requires.
+We validate the unreduced theory by training a $\mathrm{GL}(K)$ gauge transformer on WikiText-103 using only KL divergences, gauge transport, and natural gradient dynamics (without learned attention projections, MLPs, or pointwise activation functions such as ReLU or GELU). The model achieves test perplexity 74.9, surpassing a matched Kneser-Ney 5-gram baseline (PPL 134.8) by $1.49\times$, with emergent semantic structure in the learned gauge frames. We separately validate the degenerate-limit predictions on frozen BERT across 105 diverse passages, confirming quantitative agreement between KL-based and dot-product attention (grand mean $r = 0.804$ at the predicted optimal temperature, 95\% CI $[0.771, 0.838]$, with cross-passage SE $< 0.02$ for all 144 heads). Both architectures operate in the flat bundle limit with trivially vanishing holonomy: a geometric regime we conjecture is matched to the approximately path-independent semantic transport that language requires.
 \end{abstract}
 
 \noindent\textbf{Keywords:} gauge theory, free energy principle, transformer attention, variational inference, information geometry, natural gradient, symmetry breaking, multi-agent systems, $\mathrm{GL}(K)$ invariance
@@ -2053,7 +2053,7 @@ Figure~\ref{fig:glk_training} shows the training dynamics for our best $\mathrm{
     \includegraphics[width=\textwidth]{attention/figs/training_curvesk=90.png}
     \caption{Training curves for the $\mathrm{GL}(10)$, $K=90$ gauge VFE model: loss, perplexity, bits per token, and gradient norms.}
   \end{subfigure}
-  \caption{Training dynamics for the $\mathrm{GL}(10)$ gauge VFE model with $K=90$ embedding dimensions (9 heads of dimension 10) on WikiText-103. (a) The generalization gap (validation BPC minus training BPC) remains small throughout training, indicating effective regularization from the gauge-theoretic inductive bias. (b) Training curves showing loss, perplexity, bits per token, and gradient norms; perplexity drops from $>$1{,}400 to $\sim$79 over 50{,}000 steps.}
+  \caption{Training dynamics for the $\mathrm{GL}(10)$ gauge VFE model with $K=90$ embedding dimensions (9 heads of dimension 10) on WikiText-103. (a) The generalization gap (validation BPC minus training BPC) remains small throughout training, indicating effective regularization from the gauge-theoretic inductive bias. (b) Training curves showing loss, perplexity, bits per token, and gradient norms; perplexity drops from $>$1{,}400 to $\sim$75 over 60{,}000 steps.}
   \label{fig:glk_training}
 \end{figure*}
 
@@ -2062,17 +2062,33 @@ Figure~\ref{fig:glk_attention} shows the learned KL-divergence attention pattern
 \begin{figure*}[t]
   \centering
   \begin{subfigure}[b]{0.48\textwidth}
-    \includegraphics[width=\textwidth]{attention/figs/attention_step_050000_head0k=90.png}
+    \includegraphics[width=\textwidth]{attention/figs/attention_step_060000_layer0_head0.png}
     \caption{Head~0: broad contextual attention with diffuse coverage and strong early-position weighting.}
   \end{subfigure}
   \hfill
   \begin{subfigure}[b]{0.48\textwidth}
-    \includegraphics[width=\textwidth]{attention/figs/attention_step_050000_head2k=90.png}
+    \includegraphics[width=\textwidth]{attention/figs/attention_step_060000_layer0_head2.png}
     \caption{Head~2: sharper attention with prominent vertical stripes at specific high-frequency token positions.}
   \end{subfigure}
-  \caption{Learned per-head KL-divergence attention patterns ($\log_{10}\beta_{ij}$) for the $\mathrm{GL}(10)$ gauge VFE model ($K=90$) at convergence (step 50{,}000) on a representative WikiText-103 sequence. The model develops selective, non-uniform, head-specialized attention through gauge transport and KL-divergence dynamics alone, without any learned attention projections ($W_Q$, $W_K$, $W_V$).}
+  \caption{Learned per-head KL-divergence attention patterns ($\log_{10}\beta_{ij}$) for the $\mathrm{GL}(10)$ gauge VFE model ($K=90$) at convergence (step 60{,}000) on a representative WikiText-103 sequence. The model develops selective, non-uniform, head-specialized attention through gauge transport and KL-divergence dynamics alone, without any learned attention projections ($W_Q$, $W_K$, $W_V$).}
   \label{fig:glk_attention}
 \end{figure*}
+
+\begin{figure*}[t]
+  \centering
+  \begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{attention/figs/attention_step_060000_layer0_head4.png}
+    \caption{Head~4: broad contextual attention with diffuse coverage and strong early-position weighting.}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{attention/figs/attention_step_060000_layer0_head8.png}
+    \caption{Head~8: sharper attention with prominent vertical stripes at specific high-frequency token positions.}
+  \end{subfigure}
+  \caption{Learned per-head KL-divergence attention patterns ($\log_{10}\beta_{ij}$) for the $\mathrm{GL}(10)$ gauge VFE model ($K=90$) at convergence (step 60{,}000) on a representative WikiText-103 sequence. The model develops selective, non-uniform, head-specialized attention through gauge transport and KL-divergence dynamics alone, without any learned attention projections ($W_Q$, $W_K$, $W_V$).}
+  \label{fig:glk_attention}
+\end{figure*}
+
 
 \subsubsection{Results}
 
