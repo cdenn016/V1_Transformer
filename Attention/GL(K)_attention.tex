@@ -2834,7 +2834,7 @@ B = \Lambda^{-1/2}\, (V^\top \delta\Sigma\, V)\, \Lambda^{-1/2},
 where $\Sigma = V \Lambda V^\top$ is the eigendecomposition.  This whitening ensures that the resulting step is affine-invariant---the same step size produces comparable effects regardless of the current scale of the covariance matrix.  Following the computation of the whitened tangent $B$, we apply a trust-region constraint by clipping its Frobenius norm to a maximum relative step size $\rho$. This prevents excessively large updates that could destabilize the manifold structure or lead to ill-conditioned covariances.
 
 \subsection{Manifold Retraction for Covariance Matrices}\label{sec:retraction}
-The manifold retraction---the process of mapping the tangent vector back to a valid point on the manifold---is performed using the affine-invariant exponential map. Working in the eigenbasis of $\Sigma_k$ with eigenvalues $\lambda_j$, the whitened tangent $B$ is diagonalized $B = U\Lambda_B U^\top$ and the retraction is
+The manifold retraction is the process of mapping the tangent vector back to a valid point on the manifold. This is performed using the affine-invariant exponential map. Working in the eigenbasis of $\Sigma_k$ with eigenvalues $\lambda_j$, the whitened tangent $B$ is diagonalized $B = U\Lambda_B U^\top$ and the retraction is
 \begin{equation}
 \Sigma_{k+1} = V\,\Lambda^{1/2}\, U\, \exp(\tau \Lambda_B)\, U^\top\, \Lambda^{1/2}\, V^\top,
 \end{equation}
@@ -2876,15 +2876,16 @@ Once the gradient direction is determined, we apply a step with learning rate $\
 \paragraph{Intuition.}
 Why must the divergence measuring inter-agent communication cost be the \emph{forward} KL, and not some other statistical distance?  The answer emerges from the interplay of three requirements that any well-behaved multi-agent variational system must satisfy simultaneously.  First, we want each agent's updated belief $q_i^*$ to remain a tractable exponential-family distribution (i.e.\ a Gaussian), so that the belief update has a closed-form Boltzmann/Gibbs structure---a geometric mean of the prior and the transported neighbor beliefs.  Second, the attention weights $\beta_{ij}$ should act as proper dual variables: the marginal cost of attending to neighbor $j$ should equal the divergence between the agent's belief and that neighbor's signal, consistent with the envelope theorem.  Third, the divergence should be local and enter the free energy linearly in $\beta_{ij}$, preserving the softmax form of attention.
 
-The key insight is that these three conditions, each individually mild, are \emph{jointly} very restrictive.  Alternative divergences each violate at least one.  The reverse KL introduces $1/q_i$ terms that break exponential-family closure, forcing transcendental equations solvable only via the Lambert $W$ function.  The $\chi^2$-divergence produces algebraic (polynomial-ratio) rather than exponential solutions.  Symmetric divergences like Jensen--Shannon mix logarithmic and reciprocal terms, destroying log-linearity.  Only the forward KL---whose generator $f(t) = t\log t - t + 1$ yields $f'(t) = \log t$---produces a stationarity condition that is \emph{linear in $\log q_i$}, which is precisely the condition for the solution to remain in the exponential family.  The following theorem makes this precise.
+These three conditions, each individually nonrestrictive, are jointly restrictive.  Alternative divergences violate at least one of the conditions.  For example, the reverse KL introduces $1/q_i$ terms that break exponential-family closure, forcing transcendental equations solvable only via the Lambert $W$ function.  The $\chi^2$-divergence produces algebraic (polynomial-ratio) rather than exponential solutions.  Symmetric divergences like Jensen--Shannon mix logarithmic and reciprocal terms, destroying log-linearity.  Only the forward KL (with generator $f(t) = t\log t - t + 1$ yields $f'(t) = \log t$) produces a stationarity condition that is linear in $\log q_i$, which is the condition for the solution to remain in the exponential family.  The following theorem makes this precise.
 
-We now show that, within a broad but well-defined class of variational games, the forward KL divergence $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ is the only divergence that yields a closed-form Gibbs-type solution for the belief update and a consistent dual interpretation for the attention weights.  Agents locally minimize their agent-specific variational free energy and the system of agents minimize their collective global free energies.  This local-global coordination gives rise to the expected forward KL attention term.
+Within a broad, but well-defined, class, the forward KL divergence $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ is the only divergence that yields a closed-form Gibbs-type solution for the belief update and a consistent dual interpretation for the attention weights.  Agents locally minimize their agent-specific variational free energy and the system of agents minimize their collective global free energies.  This local-global coordination gives rise to the expected forward KL attention term.
 
-Here we are restricting to the matched-fiber case.  The full generalization follows by applying the appropriate bundle morphisms/intertwiners.
+In what follows we restrict to our "matched-fiber" framework.  The full generalization follows by applying the appropriate bundle morphisms/intertwiners.
 
-The uniqueness of this term is conditional and follows from three assumptions: (i) $\mathcal{D}$ is local in $c$, of f-divergence form $\displaystyle \int q_i(c)\, f\!\left(\frac{q_i(c)}{\Omega_{ij}(c) q_j(c)}\right) dc$; (ii) the coupling is linear; and (iii) the minimizing belief $q_i^*$ remains in the exponential-family (log-linear) class.
+The uniqueness of the term is conditional and follows from three assumptions: (i) $\mathcal{D}$ is local in $c$, of f-divergence form $\displaystyle \int q_i(c)\, f\!\left(\frac{q_i(c)}{\Omega_{ij}(c) q_j(c)}\right) dc$; (ii) the coupling is linear; and (iii) the minimizing belief $q_i^*$ remains in the exponential-family (log-linear).
 
 \subsubsection{The Coupled Variational Problem}
+
 Each agent $i$ minimizes a local free-energy functional:
 
 \begin{equation}
@@ -2897,7 +2898,7 @@ D_{\mathrm{KL}}(q_i \,\|\, p_i)
 \label{eq:F_i}
 \end{equation}
 
-For notational convenience, we can decompose the KL divergence as:
+For convenience, we can decompose the KL as:
 
 \begin{equation}
 D_{\mathrm{KL}}(q_i \,\|\, p_i) = \langle H_i \rangle_{q_i} + S(q_i) + \text{const},
@@ -2911,9 +2912,9 @@ S(q_i) &:= -\int q_i(c) \log q_i(c)\,dc \quad \text{(Shannon entropy)}, \\
 \langle H_i \rangle_{q_i} &:= \int q_i(c) H_i(c)\,dc \quad \text{(expected energy)}.
 \end{align}
 
-This gives $D_{\mathrm{KL}}(q_i \,\|\, p_i) = \int q_i(c)[\log q_i(c) - \log p_i(c)]\,dc$.
+This yields $D_{\mathrm{KL}}(q_i \,\|\, p_i) = \int q_i(c)[\log q_i(c) - \log p_i(c)]\,dc$.
 
-The attention weights $\beta_{ij}\ge 0$ (with $\sum_j \beta_{ij}=1$) are subsequently chosen by optimizing
+The attention weights $\beta_{ij}\ge 0$ (with $\sum_j \beta_{ij}=1$) then are chosen by optimizing
 
 \begin{equation}
 \mathcal{J}_i(\beta_i)
@@ -2922,17 +2923,17 @@ The attention weights $\beta_{ij}\ge 0$ (with $\sum_j \beta_{ij}=1$) are subsequ
 \label{eq:J_i}
 \end{equation}
 
-where $C_{ij}$ denotes the marginal cost of attending to agent $j$ as we've described above.
+where $C_{ij}$ denotes the marginal cost of attending to agent $j$ as we've previously described.
 
-We shall later identify
+Later we will identify this as 
 
 \begin{equation}
 C_{ij} := \frac{\partial S_i}{\partial \beta_{ij}},
 \end{equation}
 
-so that attention weights allocate resources in proportion to marginal coordination penalties.
+such that attention weights allocate in proportion to marginal coordination penalties.
 
-\subsubsection{Forward KL and the Geometric-Mean Solution}
+\subsubsection{The Forward KL and the Geometric-Mean Solution}
 Let $\mathcal{D}(q_i,q_j) = D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$, where
 
 \[
@@ -2940,7 +2941,7 @@ Let $\mathcal{D}(q_i,q_j) = D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$, where
 = \log\frac{q_i(c)}{\Omega_{ij}(c) q_j(c)} + 1.
 \]
 
-The stationary condition for \eqref{eq:F_i} is
+The stationarity condition for \eqref{eq:F_i} is
 
 \begin{equation}
 H_i(c)
@@ -2954,7 +2955,7 @@ H_i(c)
 
 with $\lambda_i$ enforcing normalization.
 
-Rearranging and solving for $q_i(c)$ gives a Boltzmann distribution whose mean field is a geometric average of transported neighbor beliefs.
+Solving for $q_i(c)$ then yields a Boltzmann distribution whose mean field is the geometric average of the transported neighbor beliefs.
 
 \begin{equation}
 q_i^*(c)
@@ -2965,7 +2966,7 @@ e^{-H_i(c)/2}
 \label{eq:q_i_star}
 \end{equation}
 
-This structure is preserved only for the forward KL divergence; alternative divergences destroy the log-linearity of the exponent.
+This structure is preserved only for the forward KL divergence; alternative divergences destroy the log-linearity of the exponent as previously discussed.
 
 \subsubsection{Dual Relation via the Envelope Theorem}
 At the stationary value $q_i^*$, the envelope theorem implies
@@ -2977,9 +2978,9 @@ At the stationary value $q_i^*$, the envelope theorem implies
 \label{eq:envelope}
 \end{equation}
 
-such that the marginal cost of increasing attention to $j$ equals the forward KL divergence between the updated belief $q_i^*$ and the transported neighbor $\Omega_{ij} q_j$ into $i$'s frame.
+such that the cost of increasing attention to $j$ equals the forward KL divergence between the updated belief $q_i^*$ and the transported neighbor $\Omega_{ij} q_j$.
 
-This identifies the attention cost with the KL.
+This then identifies the attention cost with the KL.
 
 \subsubsection{Conditional Uniqueness Theorem}
 \label{thm:uniqueness}
@@ -2989,24 +2990,31 @@ This identifies the attention cost with the KL.
 \mathcal{D}(q,p)
 = \int p(c)\,f\!\!\left(\frac{q(c)}{p(c)}\right)dc,
 \]
-with $f$ convex, $f(1)=0$, and without loss of generality\footnote{Any $f$-divergence is invariant under $f(t)\mapsto f(t)+c(t-1)$ when $q$ and $p$ are normalized, so we may always choose the representative with $f'(1)=0$.} $f'(1)=0$.  Suppose $\mathcal{D}$ enters linearly in the free energy \eqref{eq:F_i} and that the attention weights satisfy $\sum_j\beta_{ij}=1$.  Then the stationary solution $q_i^*$ assumes the geometric-mean Boltzmann form}
+with $f$ convex, $f(1)=0$, and, without loss of generality\footnote{Any $f$-divergence is invariant under $f(t)\mapsto f(t)+c(t-1)$ when $q$ and $p$ are normalized, so we may always choose the representative with $f'(1)=0$.}, $f'(1)=0$.  Suppose $\mathcal{D}$ is linear inside the free energy \eqref{eq:F_i} and that the attention weights satisfy $\sum_j\beta_{ij}=1$.  Then the stationary solution $q_i^*$ assumes the geometric-mean Boltzmann form}
+
 \begin{equation}
 q_i^*(c) \;\propto\; p_i(c)^{1/2}\,\prod_{j}\bigl[\Omega_{ij}(c)\,q_j(c)\bigr]^{\beta_{ij}/2}
 \label{eq:geometric_mean_target}
 \end{equation}
-\textit{for all choices of prior $p_i$ and neighbor beliefs $\{q_j\}$, if and only if $\mathcal{D}$ is the forward Kullback--Leibler divergence (up to the affine equivalence above):}
+
+\textit{for all choices of prior $p_i$ and neighbor beliefs $\{q_j\}$, if, and only if, $\mathcal{D}$ is the forward Kullback--Leibler divergence (up to the affine equivalence above):}
+
 \[
 \mathcal{D}(q,p) = D_{\mathrm{KL}}(q\,\|\,p).
 \]
 
 \paragraph{Proof.}
 
-\textbf{Step 1.  Variational derivative of a general $f$-divergence.}
+\textbf{Step 1.  The variational derivative of a general $f$-divergence.}
+
 With $\mathcal{D}(q_i,\Omega_{ij}q_j)=\int (\Omega_{ij}q_j)\,f\!\bigl(q_i/(\Omega_{ij}q_j)\bigr)\,dc$ and ratio $r(c)=q_i(c)/\bigl[\Omega_{ij}(c)\,q_j(c)\bigr]$, the functional derivative is
+
 \begin{equation}
 \frac{\delta\mathcal{D}}{\delta q_i(c)} = f'(r(c)).
 \end{equation}
-The stationarity condition $\delta F_i/\delta q_i(c)=\lambda$ (with Lagrange multiplier $\lambda$ for normalization) therefore reads
+
+The stationarity condition $\delta F_i/\delta q_i(c)=\lambda$ (with Lagrange multiplier $\lambda$) is then
+
 \begin{equation}
 \log\frac{q_i(c)}{p_i(c)} + 1
 + \sum_j \beta_{ij}\,f'\!\!\left(\frac{q_i(c)}{\Omega_{ij}(c)\,q_j(c)}\right) = \lambda.
@@ -3014,66 +3022,74 @@ The stationarity condition $\delta F_i/\delta q_i(c)=\lambda$ (with Lagrange mul
 \end{equation}
 
 \textbf{Step 2.  Forward implication ($D_{\mathrm{KL}}\Rightarrow$ geometric mean).}
-For $\mathcal{D}=D_{\mathrm{KL}}$, the generator is $f(t)=t\log t - t + 1$, giving $f'(t)=\log t$.  Substituting into \eqref{eq:general_stationarity}:
+
+Next, for $\mathcal{D}=D_{\mathrm{KL}}$, the generator is $f(t)=t\log t - t + 1$, yielding $f'(t)=\log t$.  Substituting into \eqref{eq:general_stationarity} we have:
+
 \[
 \log q_i - \log p_i + 1 + \sum_j \beta_{ij}\bigl(\log q_i - \log\Omega_{ij}q_j\bigr) = \lambda.
 \]
-Since $\sum_j\beta_{ij}=1$, the $\log q_i$ terms collect as $(1+1)\log q_i = 2\log q_i$:
+
+However, since $\sum_j\beta_{ij}=1$, the $\log q_i$ terms become $2\log q_i$:
+
 \[
 2\log q_i = \log p_i + \sum_j\beta_{ij}\log(\Omega_{ij}q_j) + (\lambda - 1).
 \]
-Exponentiating yields exactly the geometric-mean form \eqref{eq:geometric_mean_target}. \hfill $\checkmark$
+
+By exponentiating we find the geometric-mean form \eqref{eq:geometric_mean_target}. 
 
 \textbf{Step 3.  Reverse implication (geometric mean $\Rightarrow D_{\mathrm{KL}}$).}
-Assume the minimizer has the form \eqref{eq:geometric_mean_target} \emph{for all} priors $p_i$ and neighbor beliefs $\{q_j\}$.  Taking logarithms:
+
+Assume the minimizer has the geometric mean form \eqref{eq:geometric_mean_target} \emph{for all} priors $p_i$ and neighbor beliefs $\{q_j\}$.  
+
+Taking logarithms yields:
+
 \begin{equation}
 2\log q_i^*(c) = \log p_i(c) + \sum_j\beta_{ij}\log\bigl(\Omega_{ij}(c)\,q_j(c)\bigr) + C.
 \label{eq:log_target}
 \end{equation}
-Rearranging with $\sum_j\beta_{ij}=1$:
+
+Next, rearranging and using $\sum_j\beta_{ij}=1$ we have:
+
 \begin{equation}
 \log\frac{q_i^*}{p_i} + \sum_j\beta_{ij}\log\frac{q_i^*}{\Omega_{ij}q_j} = C'.
 \label{eq:rearranged_target}
 \end{equation}
-Comparing \eqref{eq:rearranged_target} with the general stationarity condition \eqref{eq:general_stationarity} term-by-term, we require
+
+Comparing \eqref{eq:rearranged_target} with the general stationarity condition \eqref{eq:general_stationarity} term-by-term, we then require
+
 \begin{equation}
 f'\!\!\left(\frac{q_i}{\Omega_{ij}q_j}\right) = \log\frac{q_i}{\Omega_{ij}q_j} + k
 \label{eq:ode}
 \end{equation}
-for some constant $k$, and for all values of the ratio $t = q_i(c)/[\Omega_{ij}(c)\,q_j(c)]$.  Since the geometric-mean form must hold for \emph{all} choices of $p_i$ and $\{q_j\}$, the ratio $t$ ranges over all of $\mathbb{R}^+$, so \eqref{eq:ode} must hold globally: $f'(t)=\log t + k$ for all $t>0$.
 
-Integrating:
+for some constant $k$, and for all values of the ratio $t = q_i(c)/[\Omega_{ij}(c)\,q_j(c)]$.  Since the geometric-mean form holds for all choices of $p_i$ and $\{q_j\}$, the ratio $t$ ranges over all of $\mathbb{R}^+$, therefore \eqref{eq:ode} must hold globally: $f'(t)=\log t + k$ for all $t>0$.
+
+Next, by integrating we have:
+
 \[
 f(t) = t\log t - t + kt + C_0.
 \]
-Imposing $f'(1)=0$: $0 + k = 0$, hence $k=0$.  Imposing $f(1)=0$: $0 - 1 + 0 + C_0 = 0$, hence $C_0 = 1$.  Therefore
+
+If we impose $f'(1)=0$ then $k=0$.  Similarly by imposing $f(1)=0$ then $C_0 = 1$.  Therefore, we have
+
 \[
 f(t) = t\log t - t + 1,
 \]
+
 which is the generator of $D_{\mathrm{KL}}(q\,\|\,p)$. \hfill $\square$
 
 \subsubsection{Dual Cost Identification}
-Having established $D_{\mathrm{KL}}$ as the unique primal divergence, the envelope theorem applied to the $\beta_{ij}$ optimization confirms that the marginal attention cost is
+Having established $D_{\mathrm{KL}}$ is the unique divergence, the envelope theorem applied to the $\beta_{ij}$ optimization confirms that the marginal attention cost is
+
 \begin{equation}
 C_{ij} \;\equiv\; \frac{\partial F_i}{\partial\beta_{ij}}\bigg|_{q_i^*}
 = D_{\mathrm{KL}}(q_i^*\,\|\,\Omega_{ij}q_j),
 \end{equation}
-identifying the ``cost of attention'' with the information divergence between the agent's updated belief and the neighbor's transported signal.
 
-\paragraph{Remark on alternative divergences.}
-The uniqueness result illuminates why standard alternatives fail:
-\begin{itemize}
-    \item \textbf{Reverse KL} $D_{\mathrm{KL}}(p\,\|\,q)$: The generator $f(t)=-\log t + t - 1$ gives $f'(t)=-1/t+1$. The stationarity condition introduces terms proportional to $1/q_i$, leading to a transcendental equation (solvable only via the Lambert $W$ function) that destroys exponential-family closure.
-    \item \textbf{Jensen--Shannon / symmetrized KL}: These involve mixtures of $\log q_i$ and $1/q_i$ terms, again breaking log-linearity.
-    \item \textbf{$\chi^2$-divergence}: The generator $f(t)=(t-1)^2$ gives $f'(t)=2(t-1)$, yielding a stationarity condition that is algebraic rather than logarithmic in $q_i$, i.e. the solution is a ratio of polynomials rather than an exponential form.
-\end{itemize}
-
-\paragraph{Remark on the scope of conditional uniqueness.}
-The three conditions (locality, linear coupling, exponential-family closure) are individually natural but collectively restrictive. Relaxing any one condition opens different classes of alternatives. Dropping exponential-family closure admits the reverse KL, which yields mode-seeking rather than mean-seeking updates but requires iterative solution of a transcendental equation. Dropping linearity in $\beta_{ij}$ permits non-linear attention mechanisms (e.g., $\beta_{ij}^2$-weighted couplings), at the cost of losing the dual interpretation. Dropping locality admits integral or kernel-based divergences (e.g., maximum mean discrepancy), which may be advantageous when the exponential-family assumption is inappropriate.
-The theorem's value lies in showing that \emph{all three conditions together} uniquely select the forward KL such that it is not a single assumption that drives the result, but the conjunction.
+identifying the cost of attention with the information divergence between the agent's updated belief and the neighbor's transported signal.
 
 \subsubsection{Interpretations}
-These results admit three complementary interpretations. From the perspective of gauge invariance, the comparison is made between $q_i$ and the transported $\Omega_{ij}q_j$ in the same frame (and similarly for $j \rightarrow i$); gauge covariance fixes what is compared, while variational duality fixes how it is compared. From the perspective of variational duality, the forward KL is the only divergence that simultaneously yields a closed-form Boltzmann solution for $q_i$ and a consistent dual cost $C_{ij} = \partial F_i / \partial \beta_{ij}$. From the perspective of information geometry, the forward KL is the Bregman divergence generated by the negative entropy potential, whose Hessian induces the Fisher-Rao metric and yields the m/e-projection (mixed/exponential family) Pythagorean theorem. These global properties are not shared by generic f-divergences.
+From the perspective of gauge invariance, the comparison is made between $q_i$ and the transported $\Omega_{ij}q_j$ within the same frame (and similarly for $j \rightarrow i$); gauge covariance fixes what is compared, while variational duality fixes how it is compared. From the perspective of this duality, the forward KL is the only divergence that simultaneously yields a closed-form Boltzmann solution for $q_i$ and a consistent dual cost $C_{ij} = \partial F_i / \partial \beta_{ij}$. From the perspective of information geometry, the forward KL is the Bregman divergence generated by the negative entropy potential, whose Hessian induces the Fisher-Rao metric and yields the  mixed/exponential family-projection Pythagorean theorem. These global properties are not shared by generic f-divergences.
 
 \subsubsection{Summary}
 Under the natural assumptions of locality, linear coupling, and exponential-family closure, the forward KL divergence
@@ -3083,36 +3099,7 @@ Under the natural assumptions of locality, linear coupling, and exponential-fami
 C_{ij}=D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)}
 \]
 
-is not merely a modeling choice but a necessary consequence of the variational and geometric structure underlying agent coordination. By Theorem~\ref{thm:glk_invariance}, the KL divergence is invariant under the full general linear group $\mathrm{GL}(K)$, which includes compact subgroups such as $\mathrm{SO}(N)$ and $\mathrm{SU}(N)$.
-
-\subsubsection{Connection to the Gauge-Covariant Free Energy}
-The conditional uniqueness result above justifies the specific form of the alignment terms appearing in the generalized variational free energy:
-
-$$
-\mathcal{F}
-=\sum_i D_{\mathrm{KL}}(q_i \,\|\, p_i)
-+ \sum_i D_{\mathrm{KL}}(s_i \,\|\, r_i)
-+ \sum_{i,j}\beta_{ij}\,D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)
-$$
-
-$$
-+ \sum_{i,j}\gamma_{ij}\,D_{\mathrm{KL}}(s_i \,\|\, \tilde{\Omega}_{ij}s_j)- \mathbb{E}_q[\log p(o|\{k_i,m_i\})].
-$$
-
-Each coupling term, such as
-
-$$
-\beta_{ij}\,D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j),
-$$
-
-is therefore not arbitrary: it arises uniquely from the requirement that (i) belief updates $q_i$ admit an exponential-family form consistent with local free energy minimization, (ii) attention weights $\beta_{ij}$ act as variational dual variables conjugate to those divergences, and (iii) comparisons between agents are made in gauge-aligned coordinates through the transport operators $\Omega_{ij}$.
-
-Therefore, the forward KL plays the role of the canonical gauge-covariant coupling between agents' beliefs/models, unifying variational and geometric principles.
-
-Reverse or symmetric divergences would violate at least one of these constraints: they either destroy exponential-family closure, break dual consistency $\big(C_{ij} = \partial F_i / \partial \beta_{ij}\big)$, or fail to respect the gauge-covariant comparison structure. Thus, the gauge-covariant free energy \eqref{eq:free_energy_final} naturally inherits the unique forward-KL alignment form as a direct consequence of its underlying variational geometry.
-
-
-
+is a necessary consequence of the variational and geometric structure underlying agent-agent coordination. By Theorem~\ref{thm:glk_invariance}, the KL divergence is invariant under the full general linear group $\mathrm{GL}(K)$, which includes compact subgroups such as $\mathrm{SO}(N)$ and $\mathrm{SU}(N)$ and more.
 
 
 \subsection{Hardware and Computational Details}
