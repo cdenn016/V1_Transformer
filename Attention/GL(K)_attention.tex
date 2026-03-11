@@ -1478,24 +1478,24 @@ The gauge frame gradient $\partial \mathcal{F}/\partial \phi_i$ drives learning 
 \subsubsection{Residual Connections as Variational Gradient Flow.}
 \label{sec:residual_connections}
 
-The residual (skip) connection is a defining architectural feature of modern transformers, where each sublayer's output is added to its input: $x_{\ell+1} = x_\ell + f(x_\ell)$. This structure emerges directly from the variational gradient flow. The belief update under free energy minimization is given by Euler discretization of the gradient flow:
+The residual (skip) connection is a defining architectural feature of modern transformers, where each sublayer's output is added to its input: $x_{\ell+1} = x_\ell + f(x_\ell)$. This structure emerges directly from the variational gradient flow. Identifying each transformer layer $\ell$ with one step of natural-gradient descent on the free energy gives the Euler discretization:
 
 \begin{equation}
-\mu_i^{(t+1)} = \mu_i^{(t)} - \eta \frac{\partial \mathcal{F}}{\partial \mu_i}\bigg|_{\mu_i^{(t)}},
+\mu_i^{(\ell+1)} = \mu_i^{(\ell)} - \tilde{\eta} \,\Sigma_i\,\frac{\partial \mathcal{F}}{\partial \mu_i}\bigg|_{\mu_i^{(\ell)}},
 \label{eq:residual_gradient_flow}
 \end{equation}
 
-which inherently has the form $\text{new} = \text{old} + \text{correction}$. The agent-based variational model was derived from first principles, and this residual structure emerged as a consequence of the gradient flow \emph{before} the connection to transformer architecture was recognized. That the same structure appears as a deliberate architectural choice in transformers (motivated by gradient propagation considerations) suggests both frameworks capture the same underlying computational principle. In a layered architecture, the backward gradient flow through the Jacobians $\partial\mu_j^{(\ell+1)}/\partial\mu_i^{(\ell)}$ corresponds to variational message-passing, where each layer refines its beliefs based on downstream prediction errors.
+where the Fisher preconditioning $\Sigma_i$ and effective learning rate $\tilde{\eta} = \eta\sigma^2$ are as derived above. This inherently has the form $\text{new} = \text{old} + \text{correction}$. The agent-based variational model was derived from first principles, and this residual structure emerged as a consequence of the gradient flow \emph{before} the connection to transformer architecture was recognized. That the same structure appears as a deliberate architectural choice in transformers (motivated by gradient propagation considerations) suggests both frameworks capture the same underlying computational principle. The backward gradient flow through the Jacobians $\partial\mu_j^{(\ell+1)}/\partial\mu_i^{(\ell)}$ corresponds to variational message-passing, where each layer refines its beliefs based on downstream prediction errors.
 
 The strength of the identity path relative to the correction is governed by the state-dependent precision $\alpha_i$ (Section~\ref{sec:state_dependent_precision}). When $\alpha_i$ is large (agent near its prior), the identity path dominates and the belief is strongly anchored; when $\alpha_i$ is small (agent far from prior), the correction terms dominate. In the constant-$\alpha$ limit, this reduces to a fixed-strength residual connection with uniform regularization, as in standard transformers where the skip connection weight is implicitly unity. The adaptive $\alpha_i$ thus generalizes the fixed residual connection to a state-dependent gating mechanism.
 
 The full variational flow for all agent parameters takes the form:
 
 \begin{equation}
-\theta_i^{(t+1)} = \theta_i^{(t)} - \eta_\theta \,\nabla_{\theta_i}\mathcal{F}\bigg|_{\theta_i^{(t)}}, \qquad \theta_i \in \{\mu_i, \Sigma_i, \phi_i\},
+\theta_i^{(\ell+1)} = \theta_i^{(\ell)} - \eta_\theta \,\tilde{\nabla}_{\theta_i}\mathcal{F}\bigg|_{\theta_i^{(\ell)}}, \qquad \theta_i \in \{\mu_i, \Sigma_i, \phi_i\},
 \end{equation}
 
-with each channel possessing its own residual structure and effective learning rate. This multi-channel residual flow corresponds to the residual stream interpretation of transformers \citep{elhage2021mathematical}, where each layer reads from and writes to a shared residual pathway. In the gauge-theoretic framework, this residual stream is the belief state $(\mu_i, \Sigma_i, \phi_i)$, accumulating incremental updates from successive layers of variational refinement.
+where $\tilde{\nabla}_{\theta_i}$ denotes the natural gradient on each channel's parameter manifold (Fisher-Rao for $\mu_i$ and $\Sigma_i$; Killing form or pullback metric for $\phi_i$, see Appendix~\ref{app:phi_gradients}). Each channel possesses its own residual structure and effective learning rate. This multi-channel residual flow corresponds to the residual stream interpretation of transformers \citep{elhage2021mathematical}, where each layer reads from and writes to a shared residual pathway. In the gauge-theoretic framework, this residual stream is the belief state $(\mu_i, \Sigma_i, \phi_i)$, accumulating incremental updates from successive layers of variational refinement.
 
 
 \begin{table}[p]
