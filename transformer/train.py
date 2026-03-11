@@ -703,6 +703,8 @@ def compute_free_energy_loss(
                 metrics['bayesian/b0'] = b0.item()
                 metrics['bayesian/kl_qp_mean'] = kl_qp.mean().item()
                 metrics['bayesian/kl_qp_std'] = kl_qp.std().item()
+                metrics['bayesian/mahal_sq_mean'] = mahal_t.mean().item()
+                metrics['bayesian/mahal_sq_std'] = mahal_t.std().item()
                 break  # Only first layer for now
 
     if lambda_gamma > 0.0:

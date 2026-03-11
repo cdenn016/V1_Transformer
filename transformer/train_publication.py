@@ -1084,7 +1084,7 @@ class PublicationMetricsTracker:
             'alpha_std': metrics.get('bayesian/alpha_std'),
             'alpha_min': metrics.get('bayesian/alpha_min'),
             'alpha_max': metrics.get('bayesian/alpha_max'),
-            'alpha_a0': metrics.get('bayesian/a0'),
+            'alpha_c0': metrics.get('bayesian/c0'),
             'alpha_b0': metrics.get('bayesian/b0'),
             'alpha_mahal_sq_mean': metrics.get('bayesian/mahal_sq_mean'),
             'alpha_mahal_sq_std': metrics.get('bayesian/mahal_sq_std'),
@@ -1522,7 +1522,7 @@ class PublicationTrainer(FastTrainer):
 
         # Carry over Bayesian alpha diagnostics
         for key in ['bayesian/alpha_mean', 'bayesian/alpha_std', 'bayesian/alpha_min',
-                     'bayesian/alpha_max', 'bayesian/a0', 'bayesian/b0',
+                     'bayesian/alpha_max', 'bayesian/c0', 'bayesian/b0',
                      'bayesian/mahal_sq_mean', 'bayesian/mahal_sq_std']:
             if key in full_metrics:
                 metrics[key] = full_metrics[key]
@@ -1775,7 +1775,7 @@ class PublicationTrainer(FastTrainer):
                         tqdm.write(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
                                    f"std: {metrics['bayesian/alpha_std']:.4f} | "
                                    f"range: [{metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
-                                   f"a0: {metrics['bayesian/a0']:.4f} | b0: {metrics['bayesian/b0']:.4f} | "
+                                   f"c0: {metrics['bayesian/c0']:.4f} | b0: {metrics['bayesian/b0']:.4f} | "
                                    f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}")
                     if _rg_msg:
                         tqdm.write(_rg_msg)
@@ -1789,7 +1789,7 @@ class PublicationTrainer(FastTrainer):
                         print(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
                               f"std: {metrics['bayesian/alpha_std']:.4f} | "
                               f"range: [{metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
-                              f"a0: {metrics['bayesian/a0']:.4f} | b0: {metrics['bayesian/b0']:.4f} | "
+                              f"c0: {metrics['bayesian/c0']:.4f} | b0: {metrics['bayesian/b0']:.4f} | "
                               f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}\n\n")
                     if _rg_msg:
                         print(_rg_msg)
