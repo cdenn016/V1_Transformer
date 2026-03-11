@@ -440,7 +440,6 @@ def analyze_gauge_semantics(
     save_dir: Optional[Path] = None,
     save_plots: bool = True,
     verbose: bool = True,
-    publication_bw: bool = False,
 ) -> Dict[str, Any]:
     """
     Comprehensive gauge frame semantic analysis.
@@ -574,7 +573,6 @@ def analyze_gauge_semantics(
                     step=step,
                     save_path=save_dir / f"gauge_frame_clustering{'_step'+str(step) if step is not None else ''}.png",
                     gauge_group_label=gauge_group_label,
-                    publication_bw=publication_bw,
                 )
                 plt.close(fig)
                 results['phi_plot_saved'] = True
@@ -598,7 +596,6 @@ def analyze_gauge_semantics(
                     embed_type='mu',
                     step=step,
                     save_path=save_dir / f"belief_clustering{'_step'+str(step) if step is not None else ''}.png",
-                    publication_bw=publication_bw,
                 )
                 plt.close(fig)
                 results['mu_plot_saved'] = True
@@ -630,17 +627,6 @@ CATEGORY_COLORS = {
     'other': '#95A5A6',     # gray
 }
 
-# B&W-safe styling: distinct marker shapes + grayscale fills + edge outlines.
-# Designed to be distinguishable in both color and grayscale print.
-CATEGORY_BW_STYLE = {
-    'letter':   {'marker': 'D', 'facecolor': '0.25', 'edgecolor': 'black', 'linewidth': 0.5},
-    'digit':    {'marker': 'P', 'facecolor': '0.50', 'edgecolor': 'black', 'linewidth': 0.5},
-    'punct':    {'marker': '^', 'facecolor': 'white', 'edgecolor': 'black', 'linewidth': 0.7},
-    'function': {'marker': 's', 'facecolor': '0.70', 'edgecolor': 'black', 'linewidth': 0.5},
-    'content':  {'marker': 'o', 'facecolor': 'black', 'edgecolor': 'black', 'linewidth': 0.5},
-    'other':    {'marker': 'x', 'facecolor': '0.60', 'edgecolor': '0.60',  'linewidth': 0.8},
-}
-
 
 def plot_embedding_clustering(
     embed: torch.Tensor,
@@ -649,7 +635,6 @@ def plot_embedding_clustering(
     save_path: Optional[Path] = None,
     n_tokens: int = 500,
     gauge_group_label: Optional[str] = None,
-    publication_bw: bool = False,
 ) -> "Any":
     """
     Visualize embeddings (mu or phi) colored by token category.
@@ -662,9 +647,6 @@ def plot_embedding_clustering(
         n_tokens: Number of tokens to plot
         gauge_group_label: Override gauge group label (e.g. 'GL(30)').
                           If None and embed_type='phi', inferred from dimension.
-        publication_bw: If True, use B&W-safe marker shapes and grayscale fills
-                       instead of colors.  Suitable for journals that print in
-                       grayscale.
 
     Returns:
         matplotlib Figure
@@ -780,11 +762,6 @@ def plot_embedding_clustering(
         var_explained = pca.explained_variance_ratio_
         var_str = " + ".join([f"{v:.1%}" for v in var_explained])
 
-        # Choose styling based on publication_bw flag
-        style_map = CATEGORY_BW_STYLE if publication_bw else None
-        marker_size = 30 if publication_bw else 20
-        dpi = 300 if publication_bw else 150
-
         fig = plt.figure(figsize=(14, 6))
 
         if n_components >= 3:
@@ -794,15 +771,8 @@ def plot_embedding_clustering(
                 mask = [c == cat for c in categories]
                 if any(mask):
                     idx = [i for i, m in enumerate(mask) if m]
-                    if style_map and cat in style_map:
-                        sty = style_map[cat]
-                        ax1.scatter(embed_pca[idx, 0], embed_pca[idx, 1], embed_pca[idx, 2],
-                                    marker=sty['marker'], c=sty['facecolor'],
-                                    edgecolors=sty['edgecolor'], linewidths=sty['linewidth'],
-                                    label=cat, alpha=0.7, s=marker_size)
-                    else:
-                        ax1.scatter(embed_pca[idx, 0], embed_pca[idx, 1], embed_pca[idx, 2],
-                                    c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
+                    ax1.scatter(embed_pca[idx, 0], embed_pca[idx, 1], embed_pca[idx, 2],
+                               c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
 
             ax1.set_xlabel(f'PC1 ({var_explained[0]:.1%})')
             ax1.set_ylabel(f'PC2 ({var_explained[1]:.1%})')
@@ -820,15 +790,8 @@ def plot_embedding_clustering(
                 mask = [c == cat for c in categories]
                 if any(mask):
                     idx = [i for i, m in enumerate(mask) if m]
-                    if style_map and cat in style_map:
-                        sty = style_map[cat]
-                        ax2.scatter(embed_pca[idx, 0], embed_pca[idx, 1],
-                                    marker=sty['marker'], c=sty['facecolor'],
-                                    edgecolors=sty['edgecolor'], linewidths=sty['linewidth'],
-                                    label=cat, alpha=0.7, s=marker_size)
-                    else:
-                        ax2.scatter(embed_pca[idx, 0], embed_pca[idx, 1],
-                                    c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
+                    ax2.scatter(embed_pca[idx, 0], embed_pca[idx, 1],
+                               c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
 
             ax2.set_xlabel(f'PC1 ({var_explained[0]:.1%})')
             ax2.set_ylabel(f'PC2 ({var_explained[1]:.1%})')
@@ -839,7 +802,7 @@ def plot_embedding_clustering(
     plt.tight_layout()
 
     if save_path:
-        fig.savefig(save_path, dpi=dpi, bbox_inches='tight')
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
 
     return fig
 
@@ -902,9 +865,9 @@ def save_embedding_csv(
 
 
 # Backwards compatibility aliases
-def plot_gauge_frame_clustering(phi_embed, step=None, save_path=None, n_tokens=500, gauge_group_label=None, publication_bw=False):
+def plot_gauge_frame_clustering(phi_embed, step=None, save_path=None, n_tokens=500, gauge_group_label=None):
     """Alias for plot_embedding_clustering with embed_type='phi'."""
-    return plot_embedding_clustering(phi_embed, embed_type='phi', step=step, save_path=save_path, n_tokens=n_tokens, gauge_group_label=gauge_group_label, publication_bw=publication_bw)
+    return plot_embedding_clustering(phi_embed, embed_type='phi', step=step, save_path=save_path, n_tokens=n_tokens, gauge_group_label=gauge_group_label)
 
 
 def save_gauge_frame_csv(phi_embed, step=None, save_dir=None, n_tokens=500):
