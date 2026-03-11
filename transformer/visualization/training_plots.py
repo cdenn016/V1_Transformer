@@ -233,7 +233,6 @@ def create_basic_plots(metrics: Dict, output_path: Path, start_step: int = 5):
         ('grad_norm_mu', 'μ', 'b--', 0.6),
         ('grad_norm_sigma', 'Σ', 'g--', 0.6),
         ('grad_norm_phi', 'φ', 'r--', 0.6),
-        ('grad_norm_ffn', 'FFN', 'm--', 0.6),
         ('grad_norm_other', 'Other', 'c:', 0.5),
     ]
     for key, label, style, alpha in grad_groups:

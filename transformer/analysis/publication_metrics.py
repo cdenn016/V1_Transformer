@@ -338,8 +338,6 @@ class PublicationFigures:
                         'g--', label='Σ', alpha=0.6, linewidth=1)
             ax.semilogy(steps, [s.grad_norm_phi for s in history],
                         'r--', label='φ', alpha=0.6, linewidth=1)
-            ax.semilogy(steps, [s.grad_norm_ffn for s in history],
-                        'm--', label='FFN', alpha=0.6, linewidth=1)
             ax.semilogy(steps, [s.grad_norm_other for s in history],
                         'c:', label='Other', alpha=0.5, linewidth=1)
             ax.set_xlabel('Training Step')
