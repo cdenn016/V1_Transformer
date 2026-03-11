@@ -2057,35 +2057,32 @@ Figure~\ref{fig:glk_training} shows the training dynamics for our best $\mathrm{
   \label{fig:glk_training}
 \end{figure*}
 
-Figure~\ref{fig:glk_attention} shows the learned KL-divergence attention patterns at convergence for two representative heads. Despite having no learned attention projections ($W_Q$, $W_K$, $W_V$), the gauge VFE model learns structured, non-uniform, and head-specific attention patterns purely through gauge transport and KL-divergence dynamics. Both heads exhibit the causal mask and strong early-position attention (vertical stripes at key positions 0--10), reminiscent of the "attention sink" phenomenon observed in standard transformers \citep{xiao2024efficient}. Head~0 (Figure~\ref{fig:glk_attention}a) shows a broad contextual pattern with relatively diffuse attention across the available context, while Head~5 (Figure~\ref{fig:glk_attention}b) develops sharper vertical stripes at specific key positions corresponding to high-frequency tokens, suggesting functional specialization between heads. The log-scale visualization reveals that attention weight variation spans approximately three orders of magnitude ($10^{-3}$ to $10^{0}$), confirming that the model learns highly selective attention from the KL-divergence geometry alone.
+Figure~\ref{fig:glk_attention} shows the learned KL-divergence attention patterns at convergence for four of the nine heads (H0, H2, H4, H8). Despite having no learned attention projections ($W_Q$, $W_K$, $W_V$), the gauge VFE model learns structured, non-uniform, and head-specialized attention patterns purely through gauge transport and KL-divergence dynamics. All four heads exhibit the causal mask and strong early-position attention (vertical stripes at key positions 0--10), reminiscent of the ``attention sink'' phenomenon observed in standard transformers \citep{xiao2024efficient}. Beyond these shared features, the heads develop qualitatively distinct attention strategies. Head~0 (Figure~\ref{fig:glk_attention}a) distributes attention broadly and diffusely across the available context, consistent with a global information-gathering role. Head~2 (Figure~\ref{fig:glk_attention}b) develops sharper vertical stripes at specific key positions corresponding to high-frequency or structurally important tokens, suggesting a token-selective pattern. Head~4 (Figure~\ref{fig:glk_attention}c) exhibits prominent horizontal bands at specific query positions---likely punctuation or sentence boundaries---where the query attends broadly to its entire available context, consistent with a positional or syntactic aggregation role. Head~8 (Figure~\ref{fig:glk_attention}d) concentrates attention in a narrow band near the diagonal, exhibiting a locality bias reminiscent of the sliding-window attention prior (Eq.~\ref{eq:window_prior}), but learned rather than imposed. This functional diversification---broad context, token-selective, query-driven aggregation, and local recency---emerges solely from the KL-divergence geometry on the statistical manifold, without any architectural inductive bias toward head specialization. The log-scale visualization reveals that attention weight variation spans approximately five orders of magnitude ($10^{-5}$ to $10^{0}$), confirming that the model learns highly selective attention from the gauge-theoretic dynamics alone.
 
 \begin{figure*}[t]
   \centering
   \begin{subfigure}[b]{0.48\textwidth}
     \includegraphics[width=\textwidth]{attention/figs/attention_step_060000_layer0_head0.png}
-    \caption{Head~0: broad contextual attention with diffuse coverage and strong early-position weighting.}
+    \caption{Head~0: broad, diffuse contextual attention distributed across the full available context.}
   \end{subfigure}
   \hfill
   \begin{subfigure}[b]{0.48\textwidth}
     \includegraphics[width=\textwidth]{attention/figs/attention_step_060000_layer0_head2.png}
-    \caption{Head~2: sharper attention with prominent vertical stripes at specific high-frequency token positions.}
+    \caption{Head~2: token-selective attention with vertical stripes at specific high-frequency key positions.}
   \end{subfigure}
-  \caption{Learned per-head KL-divergence attention patterns ($\log_{10}\beta_{ij}$) for the $\mathrm{GL}(10)$ gauge VFE model ($K=90$) at convergence (step 60{,}000) on a representative WikiText-103 sequence. The model develops selective, non-uniform, head-specialized attention through gauge transport and KL-divergence dynamics alone, without any learned attention projections ($W_Q$, $W_K$, $W_V$).}
-  \label{fig:glk_attention}
-\end{figure*}
 
-\begin{figure*}[t]
-  \centering
+  \vspace{0.5em}
+
   \begin{subfigure}[b]{0.48\textwidth}
     \includegraphics[width=\textwidth]{attention/figs/attention_step_060000_layer0_head4.png}
-    \caption{Head~4: broad contextual attention with diffuse coverage and strong early-position weighting.}
+    \caption{Head~4: query-driven aggregation with prominent horizontal bands at structurally salient positions.}
   \end{subfigure}
   \hfill
   \begin{subfigure}[b]{0.48\textwidth}
     \includegraphics[width=\textwidth]{attention/figs/attention_step_060000_layer0_head8.png}
-    \caption{Head~8: sharper attention with prominent vertical stripes at specific high-frequency token positions.}
+    \caption{Head~8: local attention concentrated near the diagonal, exhibiting a learned recency bias.}
   \end{subfigure}
-  \caption{Learned per-head KL-divergence attention patterns ($\log_{10}\beta_{ij}$) for the $\mathrm{GL}(10)$ gauge VFE model ($K=90$) at convergence (step 60{,}000) on a representative WikiText-103 sequence. The model develops selective, non-uniform, head-specialized attention through gauge transport and KL-divergence dynamics alone, without any learned attention projections ($W_Q$, $W_K$, $W_V$).}
+  \caption{Learned per-head KL-divergence attention patterns ($\log_{10}\beta_{ij}$) for four of nine heads in the $\mathrm{GL}(10)$ gauge VFE model ($K=90$) at convergence (step 60{,}000) on a representative WikiText-103 passage. All heads share the causal mask and early-position attention sinks, but develop qualitatively distinct strategies---broad context (a), token-selective (b), query-driven aggregation (c), and local recency (d)---purely from gauge transport and KL-divergence dynamics, without learned attention projections ($W_Q$, $W_K$, $W_V$).}
   \label{fig:glk_attention}
 \end{figure*}
 
