@@ -455,6 +455,7 @@ def _load_openwebtext_split(
 def _load_wiki_ja_split(
     split: str,
     cache_dir: Optional[str] = None,
+    max_articles: int = 100_000,
 ) -> str:
     """
     Load a Japanese Wikipedia split.
@@ -463,9 +464,14 @@ def _load_wiki_ja_split(
     HuggingFace, so we split it deterministically into train/val/test
     using fixed index ranges (same approach as OpenWebText).
 
+    The train split is capped at max_articles to avoid OOM during
+    tokenization (full dataset is ~2.6B tokens which exceeds typical
+    RAM). Default 100K articles gives ~190M tokens (~2x WikiText-103).
+
     Args:
         split: 'train', 'validation', or 'test'
         cache_dir: Optional cache directory for HuggingFace datasets
+        max_articles: Max articles for train split (default 100K)
 
     Returns:
         Full text for the requested split.
@@ -489,8 +495,12 @@ def _load_wiki_ja_split(
     n_train = total_docs - n_val - n_test
 
     if split == 'train':
-        subset = full_dataset.select(range(n_train))
-        print(f"  Train split: {n_train:,} articles")
+        n_use = min(n_train, max_articles)
+        subset = full_dataset.select(range(n_use))
+        if n_use < n_train:
+            print(f"  Train split: {n_use:,} articles (capped from {n_train:,})")
+        else:
+            print(f"  Train split: {n_use:,} articles")
     elif split == 'validation':
         subset = full_dataset.select(range(n_train, n_train + n_val))
         print(f"  Validation split: {n_val:,} articles")
@@ -843,7 +853,7 @@ class WikiText2TiktokenDataset(Dataset):
         if token_cache_path.exists():
             print(f"Loading {dataset.upper()} ({split}) from token cache...")
             print(f"  Cache: {token_cache_path}")
-            tokens = torch.load(token_cache_path, weights_only=True).tolist()
+            tokens = torch.load(token_cache_path, weights_only=True)
             print(f"  Loaded {len(tokens):,} cached tokens")
         else:
             # Load dataset and tokenize from scratch
@@ -889,27 +899,43 @@ class WikiText2TiktokenDataset(Dataset):
             print(f"Tokenizing with tiktoken (GPT-2 BPE)...")
             CHUNK_CHARS = 50_000_000  # 50M chars per chunk (~15M tokens)
             if len(full_text) > CHUNK_CHARS * 2:
-                # Chunked tokenization for large datasets (e.g. OpenWebText)
-                tokens = []
+                # Memory-efficient chunked tokenization using numpy arrays
+                # (Python list of ints uses ~28 bytes each; numpy int32 uses 4 bytes)
+                chunk_arrays = []
+                total_tokens = 0
                 n_chunks = (len(full_text) + CHUNK_CHARS - 1) // CHUNK_CHARS
                 for i in range(0, len(full_text), CHUNK_CHARS):
                     chunk_idx = i // CHUNK_CHARS + 1
                     chunk = full_text[i:i + CHUNK_CHARS]
                     chunk_tokens = self.tokenizer.encode(chunk)
-                    tokens.extend(chunk_tokens)
+                    chunk_arrays.append(np.array(chunk_tokens, dtype=np.int32))
+                    total_tokens += len(chunk_tokens)
+                    del chunk_tokens
                     if chunk_idx % 10 == 0 or chunk_idx == n_chunks:
-                        print(f"  Tokenized chunk {chunk_idx}/{n_chunks} ({len(tokens):,} tokens so far)")
-                del full_text  # Free memory
+                        print(f"  Tokenized chunk {chunk_idx}/{n_chunks} ({total_tokens:,} tokens so far)")
+                del full_text  # Free the text string
+                print(f"  Concatenating {total_tokens:,} tokens...")
+                tokens_np = np.concatenate(chunk_arrays)
+                del chunk_arrays
+                # Convert to int64 numpy array (zero-copy torch conversion)
+                tokens = tokens_np.astype(np.int64)
+                del tokens_np
             else:
                 tokens = self.tokenizer.encode(full_text)
 
             # Save to cache for next run
             print(f"  Saving token cache to {token_cache_path}...")
-            torch.save(torch.tensor(tokens, dtype=torch.long), token_cache_path)
+            if isinstance(tokens, np.ndarray):
+                torch.save(torch.from_numpy(tokens), token_cache_path)
+            else:
+                torch.save(torch.tensor(tokens, dtype=torch.long), token_cache_path)
             print(f"  Token cache saved ({token_cache_path.stat().st_size / 1024 / 1024:.1f} MB)")
 
         # Restrict vocabulary if requested
         if vocab_size is not None and vocab_size < self._full_vocab_size:
+            # Vocab restriction requires Python list; convert if needed
+            if isinstance(tokens, (torch.Tensor, np.ndarray)):
+                tokens = tokens.tolist()
             if vocab_mapping is not None:
                 # Use provided mapping (ensures train/val consistency)
                 print(f"  Using provided vocabulary mapping ({len(vocab_mapping)} tokens)...")
@@ -919,7 +945,13 @@ class WikiText2TiktokenDataset(Dataset):
                 print(f"  Restricting vocabulary to {vocab_size} most frequent tokens...")
                 tokens = self._restrict_vocab(tokens, vocab_size)
 
-        self.tokens = torch.tensor(tokens, dtype=torch.long)
+        # Convert to tensor efficiently based on input type
+        if isinstance(tokens, torch.Tensor):
+            self.tokens = tokens.long()
+        elif isinstance(tokens, np.ndarray):
+            self.tokens = torch.from_numpy(tokens.astype(np.int64))
+        else:
+            self.tokens = torch.tensor(tokens, dtype=torch.long)
 
         print(f"  Tokenized: {len(self.tokens):,} tokens")
         print(f"  Vocabulary size: {self.get_vocab_size()}")
