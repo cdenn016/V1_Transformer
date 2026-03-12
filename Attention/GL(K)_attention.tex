@@ -1481,7 +1481,7 @@ The gauge frame gradient $\partial \mathcal{F}/\partial \phi_i$ drives learning 
 The residual (skip) connection is a defining architectural feature of modern transformers, where each sublayer's output is added to its input: $x_{\ell+1} = x_\ell + f(x_\ell)$. This structure emerges directly from the variational gradient flow. Identifying each transformer layer $\ell$ with one step of natural-gradient descent on the free energy gives the Euler discretization:
 
 \begin{equation}
-\mu_i^{(\ell+1)} = \mu_i^{(\ell)} - \eta \,\Sigma_i\,\frac{\partial \mathcal{F}}{\partial \mu_i}\bigg|_{\mu_i^{(\ell)}},
+\mu_i^{(\ell+1)} = \mu_i^{(\ell)} - \tilde{\eta} \,\Sigma_i\,\frac{\partial \mathcal{F}}{\partial \mu_i}\bigg|_{\mu_i^{(\ell)}},
 \label{eq:residual_gradient_flow}
 \end{equation}
 
@@ -1498,7 +1498,7 @@ The full variational flow for all agent parameters takes the form:
 where $\tilde{\nabla}_{\theta_i}$ denotes the natural gradient on each channel's parameter manifold (Fisher-Rao for $\mu_i$ and $\Sigma_i$; Killing form or pullback metric for $\phi_i$, see Appendix~\ref{app:phi_gradients}). Each channel possesses its own residual structure and effective learning rate. This multi-channel residual flow corresponds to the residual stream interpretation of transformers \citep{elhage2021mathematical}, where each layer reads from and writes to a shared residual pathway. In the gauge-theoretic framework, this residual stream is the belief state $(\mu_i, \Sigma_i, \phi_i)$, accumulating incremental updates from successive layers of variational refinement.
 
 \paragraph{Layers as VFE iterations.}
-The identification $\ell \leftrightarrow$ gradient step makes the notion of "depth" a statement about how many steps of free energy minimization are performed. A standard $L$-layer transformer corresponds to $L$ natural-gradient steps, each with independently parameterized attention weights $\beta_{ij}^{(\ell)}$ (since $W_Q^{(\ell)}, W_K^{(\ell)}, W_V^{(\ell)}$ differ across layers). Within a single block one may also iterate the belief update $T$ times with \emph{shared} weights, recomputing $\beta_{ij}$ after each step; this gives $T$ inner VFE iterations per layer and $LT$ effective gradient steps in total. The standard transformer is the $T=1$ case. The opposite extreme, $L=1$ with $T\to\infty$, recovers a deep equilibrium model \citep{bai2019deep} in which the forward pass iterates to a fixed point of the variational gradient. Intermediate regimes interpolate between fast feedforward evaluation ($T=1$, many layers) and slow iterative inference ($T\gg 1$, few layers), with the total depth of belief refinement governed by the product $LT$.
+The identification $\ell \leftrightarrow$ gradient step makes the notion of ``depth'' a statement about how many steps of free energy minimization are performed. A standard $L$-layer transformer corresponds to $L$ natural-gradient steps, each with independently parameterized attention weights $\beta_{ij}^{(\ell)}$ (since $W_Q^{(\ell)}, W_K^{(\ell)}, W_V^{(\ell)}$ differ across layers). Within a single block one may also iterate the belief update $T$ times with \emph{shared} weights, recomputing $\beta_{ij}$ after each step; this gives $T$ inner VFE iterations per layer and $LT$ effective gradient steps in total. The standard transformer is the $T=1$ case. The opposite extreme, $L=1$ with $T\to\infty$, recovers a deep equilibrium model \citep{bai2019deep} in which the forward pass iterates to a fixed point of the variational gradient. Intermediate regimes interpolate between fast feedforward evaluation ($T=1$, many layers) and slow iterative inference ($T\gg 1$, few layers), with the total depth of belief refinement governed by the product $LT$.
 
 
 \begin{table}[p]
@@ -1727,37 +1727,38 @@ An important distinction is that RoPE applies the position-dependent gauge only 
 \subsection{Further Architectural Correspondences}
 \label{sec:further_correspondences}
 
-Beyond the core attention mechanism, several additional transformer components admit origins within the gauge-theoretic framework. We organize these by the strength of their correspondences: components that are \emph{derived} from the variational principle, components whose \emph{structural role} is explained, and components that are \emph{accommodated} by the framework without being uniquely predicted.
+Beyond the attention mechanism, several additional transformer components possess origins within the gauge-theoretic framework. These are components that are derived from the variational principle, components whose structural role is explained, and components that are accommodated by the framework without being uniquely predicted.
 
 \subsubsection{Feed forward Networks and Non-linear Activations.}
 \label{sec:ffn_nonlinearity}
 
-Standard transformers utilize attention sub-layers with feedforward networks (FFNs). These are typically two-layer MLPs with a non-linear activation mechanism such as GeLU \citep{hendrycks2016gaussian}. Within the gauge-theoretic framework, the FFN corresponds to the iterative VFE dynamics that adjust beliefs between attention computations. We now show that the nonlinear activation function is not an architectural choice but a consequence of the variational principle: the VFE gradient \emph{derives} a Gated Linear Unit (GLU) \citep{dauphin2017language}.
+First, standard transformers utilize attention sub-layers with feedforward networks (FFNs). These are typically two-layer MLPs with a non-linear activation mechanism such as GeLU \citep{hendrycks2016gaussian}. Within the gauge-theoretic framework, the FFN corresponds to the iterative VFE dynamics that adjust beliefs between attention computations. We can show that the non-linear activation function is not an architectural choice but instead a consequence of the variational principle itself: the VFE gradient derives a Gated Linear Unit (GLU) \citep{dauphin2017language}.
 
 \paragraph{Message passing as a gated linear unit.}
 
-Consider the message-passing contribution of neighbor $j$ to the mean update (Eq.~\ref{eq:mu_gradient_general}):
+Consider the message contribution of neighbor $j$ to the mean update (Eq.~\ref{eq:mu_gradient_general}):
 %
 \begin{equation}
 \Delta\mu_i\big|_j \;=\; -\tilde{\eta}\,\Sigma_i\,\beta_{ij}\,(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}\bigl(\mu_i - \Omega_{ij}\mu_j\bigr).
 \label{eq:glu_message}
 \end{equation}
 %
-The message $e_{ij} \equiv \mu_i - \Omega_{ij}\mu_j$ is \emph{linear} in the beliefs. The attention gate $\beta_{ij} = \operatorname{softmax}_j\!\bigl(-D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)/\tau\bigr)$ is a \emph{Boltzmann weight}: each neighbor's contribution is weighted by $\exp(-E_{ij}/\tau)/Z_i$, where the ``energy'' $E_{ij} = D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ depends on the message magnitude through the Gaussian KL:
+
+The message $e_{ij} \equiv \mu_i - \Omega_{ij}\mu_j$ is linear in the beliefs. The attention gate $\beta_{ij} = \operatorname{softmax}_j\!\bigl(-D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)/\tau\bigr)$ is a manifestly a Boltzmann weight: each neighbor's contribution is weighted by $\exp(-E_{ij}/\tau)/Z_i$, where the energy $E_{ij} = D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ depends on the message magnitude through the Gaussian KL as:
 %
 \begin{equation}
 D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) = \tfrac{1}{2}\,e_{ij}^\top (\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1} e_{ij} + \text{(covariance terms)}.
 \label{eq:dkl_quadratic}
 \end{equation}
 %
-Each message contribution therefore has the structure:
+Each message's contribution therefore has the general structure:
 %
 \begin{equation}
 \boxed{\Delta\mu_i\big|_j \;\propto\; \underbrace{e_{ij}}_{\text{linear}} \;\cdot\; \underbrace{\frac{\exp\!\bigl(-\tfrac{1}{2\tau}\|e_{ij}\|^2_{\Sigma_j^{-1}} + \cdots\bigr)}{\sum_k \exp\!\bigl(-\tfrac{1}{2\tau}\|e_{ik}\|^2_{\Sigma_k^{-1}} + \cdots\bigr)}}_{\text{Boltzmann gate}},}
 \label{eq:vfe_glu}
 \end{equation}
 %
-which is a \emph{Gated Linear Unit}: a linear function of the input gated by a Boltzmann distribution over KL energies computed from the same input. The gate is not assumed --- it is the thermodynamic weight that the variational principle assigns to each neighbor. This is derived, not designed.
+which is a Gated Linear Unit: a linear function of the input gated by a Boltzmann distribution over KL energies computed from the same input. This is therefore derived rather than designed.
 
 \paragraph{Binary case: Boltzmann reduces to sigmoid.}
 For $N = 2$ neighbors, the Boltzmann distribution over two states reduces to the logistic sigmoid $\sigma$, since $\exp(-E_1/\tau)/(\exp(-E_1/\tau) + \exp(-E_2/\tau)) = \sigma((E_2 - E_1)/\tau)$:
@@ -1769,10 +1770,11 @@ For $N = 2$ neighbors, the Boltzmann distribution over two states reduces to the
 \label{eq:binary_silu}
 \end{equation}
 %
-This is the SiLU/Swish \citep{ramachandran2018searching} structure $f(x) = x \cdot \sigma(g(x))$, with the gate argument determined by the relative KL energies.  The sigmoid is thus not the general case but the $N = 2$ limit of the Boltzmann gate. For general $N$, each message is gated by its Boltzmann weight --- the sigmoid is recovered only when two neighbors compete.
+This has the SiLU/Swish \citep{ramachandran2018searching} structure $f(x) = x \cdot \sigma(g(x))$, with the gate argument determined by the relative KL energies.  The sigmoid is thus not the general case but simply the $N = 2$ limit of the Boltzmann gate. For general $N$, each message is gated by its Boltzmann weight whereby the sigmoid is recovered only when two neighbors compete.
 
 \paragraph{Boltzmann gate, Gaussian family, and connection to GELU.}
-The Boltzmann gate has a specific functional form determined by the energy landscape. In the isotropic limit $\Sigma_j = \sigma^2 I$, the unnormalized gate for neighbor $j$ is $\exp(-E_{ij}/\tau) = \exp(-\|e_{ij}\|^2 / 2\sigma^2\tau)$ --- a Gaussian function of the prediction error. The Boltzmann distribution over KL energies is therefore a \emph{Gaussian mixture gate}: each neighbor's weight is a Gaussian in the prediction-error space, normalized by the partition function $Z_i = \sum_k \exp(-\|e_{ik}\|^2/2\sigma^2\tau)$. Compare this with the standard activation functions, all of which are Gated Linear Units $f(x) = x \cdot g(x)$:
+
+The Boltzmann gate therefore has a specific functional form determined by the energy landscape. In the isotropic limit $\Sigma_j = \sigma^2 I$, the un-normalized gate for neighbor $j$ is $\exp(-E_{ij}/\tau) = \exp(-\|e_{ij}\|^2 / 2\sigma^2\tau)$. This is a Gaussian function of the prediction error. The Boltzmann distribution over KL energies is therefore a \emph{Gaussian mixture gate}: each neighbor's weight is a Gaussian in the prediction-error space, normalized by the partition function $Z_i = \sum_k \exp(-\|e_{ik}\|^2/2\sigma^2\tau)$. Compare this with the standard activation functions, all of which are Gated Linear Units $f(x) = x \cdot g(x)$:
 %
 \begin{align}
 \text{SiLU}(x) &= x \cdot \sigma(x) && \text{logistic sigmoid gate (binary Boltzmann)}, \notag \\
@@ -1780,7 +1782,7 @@ The Boltzmann gate has a specific functional form determined by the energy lands
 \text{VFE}(e) &= e \cdot \exp(-\|e\|^2/\tau')/Z && \text{Boltzmann gate (Gaussian energy)}. \notag
 \end{align}
 %
-All three belong to the \emph{Gaussian family} of gated linear units. The logistic sigmoid $\sigma(x) = 1/(1+e^{-x})$ is the two-state Boltzmann distribution. The Gaussian CDF $\Phi(x) = \frac{1}{2}\operatorname{erfc}(-x/\sqrt{2})$ is the integral of the Gaussian PDF $\propto \exp(-x^2/2)$ that appears as the VFE gate's unnormalized weight. These are not merely analogous --- they are members of the same exponential family, related by the number of competing states ($N = 2$ for sigmoid, $N > 2$ for softmax) and the functional form of the energy ($E \propto x$ for SiLU, $E \propto x^2$ for VFE).
+All three belong to the \emph{Gaussian family} of gated linear units. The logistic sigmoid $\sigma(x) = 1/(1+e^{-x})$ is the two-state Boltzmann distribution. The Gaussian CDF $\Phi(x) = \frac{1}{2}\operatorname{erfc}(-x/\sqrt{2})$ is the integral of the Gaussian PDF $\propto \exp(-x^2/2)$ that appears as the VFE gate's unnormalized weight. These are members of the same exponential family, related by the number of competing states ($N = 2$ for sigmoid, $N > 2$ for softmax) and the functional form of the energy ($E \propto x$ for SiLU, $E \propto x^2$ for VFE).
 
 The VFE derives from first principles that the activation should be a Boltzmann-gated linear unit with Gaussian energy. The specific gate functions used in practice (sigmoid for SiLU, Gaussian CDF for GELU) are special cases or close relatives. ReLU is the zero-temperature ($\tau \to 0$) limit: the Boltzmann distribution concentrates on the lowest-energy state, and the gate becomes a step function $\Theta$, giving $x \cdot \Theta(x) = \max(0, x)$.
 
