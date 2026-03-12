@@ -45,7 +45,7 @@ from transformer_test import (
 # Configuration
 # ---------------------------------------------------------------------------
 N_PASSAGES = 30          # passages to use (balance speed vs statistics)
-TAU_PREDICTED = 19.0     # 2√(d_k) for d_k = 90.25
+TAU_PREDICTED = 19.0     # Empirical optimum; theory predicts 2√(d_head) = 2√64 = 16 (19% deviation)
 TAU_FINE_SWEEP = np.concatenate([
     np.arange(1.0, 10.0, 1.0),
     np.arange(10.0, 30.0, 1.0),
