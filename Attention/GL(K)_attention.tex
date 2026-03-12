@@ -1732,7 +1732,7 @@ Beyond the attention mechanism, several additional transformer components posses
 \subsubsection{Feed forward Networks and Non-linear Activations.}
 \label{sec:ffn_nonlinearity}
 
-First, standard transformers utilize attention sub-layers with feedforward networks (FFNs). These are typically two-layer MLPs with a non-linear activation mechanism such as GeLU \citep{hendrycks2016gaussian}. Within the gauge-theoretic framework, the FFN corresponds to the iterative VFE dynamics that adjust beliefs between attention computations. We can show that the non-linear activation function is not an architectural choice but instead a consequence of the variational principle itself: the VFE gradient derives a Gated Linear Unit (GLU) \citep{dauphin2017language}.
+Standard transformers interleave attention sublayers with feedforward networks (FFNs), typically two-layer MLPs with a nonlinear activation such as GeLU \citep{hendrycks2016gaussian}. Within the gauge-theoretic framework, the FFN corresponds to the iterative VFE dynamics that adjust beliefs between attention computations. The nonlinear activation function is not an independent architectural choice but a necessary consequence of the information-geometric structure: variational inference on Gaussian beliefs produces a Gated Linear Unit (GLU) \citep{dauphin2017language} whose gate is a Boltzmann weight over KL energies. The neural network implements this gate; the information geometry determines it.
 
 \paragraph{Message passing as a gated linear unit.}
 
@@ -1758,10 +1758,10 @@ Each message's contribution therefore has the general structure:
 \label{eq:vfe_glu}
 \end{equation}
 %
-which is a Gated Linear Unit: a linear function of the input gated by a Boltzmann distribution over KL energies computed from the same input. This is therefore derived rather than designed.
+which is a \emph{Gated Linear Unit}: a linear function of the input gated by a Boltzmann distribution over KL energies computed from the same input. Crucially, this GLU structure is not an architectural choice --- it is the form that variational inference necessarily takes when the sufficient statistics are Gaussian. The neural network is the computational substrate; the information-geometric dynamics are primary.
 
-\paragraph{Binary case: Boltzmann reduces to sigmoid.}
-For $N = 2$ neighbors, the Boltzmann distribution over two states reduces to the logistic sigmoid $\sigma$, since $\exp(-E_1/\tau)/(\exp(-E_1/\tau) + \exp(-E_2/\tau)) = \sigma((E_2 - E_1)/\tau)$:
+\paragraph{Binary limit: sigmoid as a special case.}
+The general Boltzmann gate operates over all $N$ neighbors simultaneously, with each contribution weighted by its KL energy. In the special case where only $N = 2$ sources compete for influence on agent $i$, the Boltzmann distribution over two states reduces to the logistic sigmoid $\sigma$, since $\exp(-E_1/\tau)/(\exp(-E_1/\tau) + \exp(-E_2/\tau)) = \sigma((E_2 - E_1)/\tau)$:
 %
 \begin{equation}
 \beta_{i1} = \sigma\!\left(\frac{D_{\mathrm{KL},i2} - D_{\mathrm{KL},i1}}{\tau}\right),
@@ -1770,21 +1770,21 @@ For $N = 2$ neighbors, the Boltzmann distribution over two states reduces to the
 \label{eq:binary_silu}
 \end{equation}
 %
-This has the SiLU/Swish \citep{ramachandran2018searching} structure $f(x) = x \cdot \sigma(g(x))$, with the gate argument determined by the relative KL energies.  The sigmoid is thus not the general case but simply the $N = 2$ limit of the Boltzmann gate. For general $N$, each message is gated by its Boltzmann weight whereby the sigmoid is recovered only when two neighbors compete.
+This recovers the SiLU/Swish \citep{ramachandran2018searching} structure $f(x) = x \cdot \sigma(g(x))$, with the gate argument determined by relative KL energies. This binary case corresponds to the FFN sublayer, where the hidden representation is split into two competing pathways --- precisely two sources whose relative informational surprise determines the gate. The sigmoid is thus not the general activation but the $N = 2$ limit of the Boltzmann gate; the general case is the full softmax over all $N$ neighbors.
 
 \paragraph{Boltzmann gate, Gaussian family, and connection to GELU.}
 
-The Boltzmann gate therefore has a specific functional form determined by the energy landscape. In the isotropic limit $\Sigma_j = \sigma^2 I$, the un-normalized gate for neighbor $j$ is $\exp(-E_{ij}/\tau) = \exp(-\|e_{ij}\|^2 / 2\sigma^2\tau)$. This is a Gaussian function of the prediction error. The Boltzmann distribution over KL energies is therefore a \emph{Gaussian mixture gate}: each neighbor's weight is a Gaussian in the prediction-error space, normalized by the partition function $Z_i = \sum_k \exp(-\|e_{ik}\|^2/2\sigma^2\tau)$. Compare this with the standard activation functions, all of which are Gated Linear Units $f(x) = x \cdot g(x)$:
+The information-geometric origin of the gate determines its functional form. In the isotropic limit $\Sigma_j = \sigma^2 I$, the unnormalized gate for neighbor $j$ is $\exp(-E_{ij}/\tau) = \exp(-\|e_{ij}\|^2 / 2\sigma^2\tau)$, a Gaussian function of the prediction error. The Boltzmann distribution over KL energies is therefore a \emph{Gaussian mixture gate}: each neighbor's weight is a Gaussian in prediction-error space, normalized by the partition function $Z_i = \sum_k \exp(-\|e_{ik}\|^2/2\sigma^2\tau)$. The activation functions used in practice are specific instantiations of this information-geometric gate under different limits:
 %
 \begin{align}
-\text{SiLU}(x) &= x \cdot \sigma(x) && \text{logistic sigmoid gate (binary Boltzmann)}, \notag \\
+\text{SiLU}(x) &= x \cdot \sigma(x) && \text{logistic sigmoid gate (binary Boltzmann, $N\!=\!2$)}, \notag \\
 \text{GELU}(x) &= x \cdot \Phi(x) && \text{Gaussian CDF gate}, \label{eq:activation_comparison} \\
-\text{VFE}(e) &= e \cdot \exp(-\|e\|^2/\tau')/Z && \text{Boltzmann gate (Gaussian energy)}. \notag
+\text{VFE}(e) &= e \cdot \exp(-\|e\|^2/\tau')/Z && \text{Boltzmann gate (general $N$, Gaussian energy)}. \notag
 \end{align}
 %
-All three belong to the \emph{Gaussian family} of gated linear units. The logistic sigmoid $\sigma(x) = 1/(1+e^{-x})$ is the two-state Boltzmann distribution. The Gaussian CDF $\Phi(x) = \frac{1}{2}\operatorname{erfc}(-x/\sqrt{2})$ is the integral of the Gaussian PDF $\propto \exp(-x^2/2)$ that appears as the VFE gate's unnormalized weight. These are members of the same exponential family, related by the number of competing states ($N = 2$ for sigmoid, $N > 2$ for softmax) and the functional form of the energy ($E \propto x$ for SiLU, $E \propto x^2$ for VFE).
+All three belong to the \emph{Gaussian family} of gated linear units, connected by the underlying information geometry. The logistic sigmoid $\sigma(x) = 1/(1+e^{-x})$ is the two-state Boltzmann distribution. The Gaussian CDF $\Phi(x) = \frac{1}{2}\operatorname{erfc}(-x/\sqrt{2})$ is the integral of the Gaussian PDF $\propto \exp(-x^2/2)$ that appears as the VFE gate's unnormalized weight. These are members of the same exponential family, related by the number of competing information sources ($N = 2$ for sigmoid, $N > 2$ for softmax) and the functional form of the energy ($E \propto x$ for SiLU, $E \propto x^2$ for VFE).
 
-The VFE derives from first principles that the activation should be a Boltzmann-gated linear unit with Gaussian energy. The specific gate functions used in practice (sigmoid for SiLU, Gaussian CDF for GELU) are special cases or close relatives. ReLU is the zero-temperature ($\tau \to 0$) limit: the Boltzmann distribution concentrates on the lowest-energy state, and the gate becomes a step function $\Theta$, giving $x \cdot \Theta(x) = \max(0, x)$.
+The information-geometric framework thus derives from first principles that the gate must be a Boltzmann weight with Gaussian energy. The specific gate functions used in practice (sigmoid for SiLU, Gaussian CDF for GELU) are computational instantiations of this deeper structure under particular limits. ReLU is the zero-temperature ($\tau \to 0$) limit: the Boltzmann distribution concentrates on the lowest-energy state, and the gate becomes a step function $\Theta$, giving $x \cdot \Theta(x) = \max(0, x)$.
 
 \paragraph{Softmax-gradient correction.}
 Beyond the GLU structure of the message-passing term itself, the full VFE gradient contains an additional nonlinear correction from differentiating $\beta_{ij}$ with respect to $\mu_i$:
@@ -1799,7 +1799,7 @@ where $D_{\mathrm{KL},ij} \equiv D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$. This 
 The same softmax-gradient nonlinearity appears in the covariance and gauge frame channels. The $\Sigma_i$ gradient (Eq.~\ref{eq:Sigma_gradient_main}) contains the term $\sum_j (\partial \beta_{ij}/\partial \Sigma_i)\, D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$, which has the identical centered structure. Similarly, the gauge frame gradient (Eq.~\ref{eq:beta_grad_phi}) yields $\partial \beta_{ij}/\partial \phi_i = -(\beta_{ij}/\tau)[\partial K_{ij}/\partial \phi_i - \sum_k \beta_{ik}\, \partial K_{ik}/\partial \phi_i]$, the same self-normalizing form. Each variational channel ($\mu$, $\Sigma$, $\phi$) thus contributes its own GLU-type activation through the attention weight derivatives, and the composition of these channels within each VFE iteration produces a richer nonlinear map than any single channel alone.
 
 \paragraph{FFN depth from VFE iterations.}
-In the full VFE implementation, multiple iterations of gradient descent with recomputed $\beta$ at each step constitute the analogue of the FFN sublayer. Each iteration applies the GLU map \eqref{eq:vfe_glu} composed with the softmax-gradient correction \eqref{eq:softmax_gradient_nonlinearity}, producing increasingly complex nonlinear transformations. The number of VFE iterations plays the role of FFN depth, as established in the ``Layers as VFE iterations'' paragraph (Section~\ref{sec:residual_connections}). The central result is that the VFE \emph{derives} a Boltzmann-gated linear unit from the variational principle, and the empirically successful activations (GELU, SiLU, ReLU) are special cases or close relatives within the same exponential family.
+In the full VFE implementation, multiple iterations of gradient descent with recomputed $\beta$ at each step constitute the analogue of the FFN sublayer. Each iteration applies the GLU map \eqref{eq:vfe_glu} composed with the softmax-gradient correction \eqref{eq:softmax_gradient_nonlinearity}, producing increasingly complex nonlinear transformations. The number of VFE iterations plays the role of FFN depth, as established in the ``Layers as VFE iterations'' paragraph (Section~\ref{sec:residual_connections}). The central result is that the information-geometric dynamics \emph{derive} a Boltzmann-gated linear unit from the variational principle. The empirically successful activations (GELU, SiLU, ReLU) are not independent design choices but computational instantiations of the same underlying Boltzmann gate under successive limits ($N = 2$, isotropic covariance, $\tau \to 0$). The neural architecture is the substrate; the information geometry is the dynamics.
 
 \subsubsection{Token Embeddings as Prior Banks.}
 \label{sec:embeddings}
