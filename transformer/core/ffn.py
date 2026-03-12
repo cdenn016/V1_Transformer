@@ -68,7 +68,6 @@ class GaugeFFN(nn.Module):
         learnable_alpha: bool = False,  # If True, use Gamma-Normal conjugate precision
         # Multi-head VFE: per-block β through VFE iterations
         multihead_vfe: bool = False,  # If True, maintain per-head attention in VFE loop
-        per_head_kappa: bool = False,  # If True, learn separate κ_h per head in VFE
         # Phi gradient preconditioning
         phi_natural_gradient: str = 'clip',  # 'clip'|'cartan'|'killing'|'pullback'
         # Ablation toggles
@@ -150,7 +149,6 @@ class GaugeFFN(nn.Module):
             learnable_alpha=learnable_alpha,
             # Multi-head VFE
             multihead_vfe=multihead_vfe,
-            per_head_kappa=per_head_kappa,
             # Phi gradient preconditioning
             phi_natural_gradient=phi_natural_gradient,
             # Ablation toggles

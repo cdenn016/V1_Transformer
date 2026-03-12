@@ -1772,7 +1772,6 @@ class VariationalFFNDynamic(nn.Module):
         learnable_alpha: bool = False,  # If True, use Gamma-Normal conjugate precision
         # Multi-head VFE: maintain per-head β through iterations
         multihead_vfe: bool = False,  # If True, compute separate β_h per irrep block
-        per_head_kappa: bool = False,  # If True, learn separate κ_h per head
         # Phi gradient preconditioning mode
         phi_natural_gradient: str = 'clip',  # 'clip'|'cartan'|'killing'|'pullback'
         # Ablation toggles
@@ -1813,7 +1812,6 @@ class VariationalFFNDynamic(nn.Module):
             multihead_vfe: If True, maintain per-head attention β_h through VFE iterations.
                           Each irrep block gets its own attention pattern instead of a single
                           collapsed β. Requires irrep_dims to be set.
-            per_head_kappa: If True, learn separate κ_h per head (requires multihead_vfe).
         """
         super().__init__()
 
@@ -1876,20 +1874,9 @@ class VariationalFFNDynamic(nn.Module):
         # Multi-head VFE: per-block β through iterations
         # =================================================================
         self.multihead_vfe = multihead_vfe and irrep_dims is not None
-        self.per_head_kappa_enabled = per_head_kappa
         if self.multihead_vfe:
             n_heads = len(irrep_dims)
-            if per_head_kappa:
-                # Per-head κ (log-parameterized for positivity)
-                self.log_kappa_heads = nn.Parameter(
-                    torch.full((n_heads,), math.log(max(kappa, 1e-6)))
-                )
-                print(f"[VariationalFFNDynamic] Multi-head VFE: {n_heads} heads with learned κ_h")
-            else:
-                self.log_kappa_heads = None
-                print(f"[VariationalFFNDynamic] Multi-head VFE: {n_heads} heads with shared κ={kappa}")
-        else:
-            self.log_kappa_heads = None
+            print(f"[VariationalFFNDynamic] Multi-head VFE: {n_heads} heads with shared κ={kappa}")
 
         # =================================================================
         # Bayesian Precision: Log-barrier form (Eq. 882-884)
@@ -2107,7 +2094,7 @@ class VariationalFFNDynamic(nn.Module):
                         sigma_h = sigma_in[:, :, block_start:block_end, block_start:block_end].contiguous()
                         sigma_p_h = sigma_p[:, :, block_start:block_end, block_start:block_end].contiguous()
                     gen_h = self.generators[:, block_start:block_end, block_start:block_end]
-                    kappa_h = torch.exp(self.log_kappa_heads[h]).item() if self.log_kappa_heads is not None else self.kappa
+                    kappa_h = self.kappa
 
                     beta_h = compute_attention_weights(
                         mu_q=mu_h, sigma_q=sigma_h,
@@ -2427,11 +2414,7 @@ class VariationalFFNDynamic(nn.Module):
                         sigma_p_h = sigma_p[:, :, block_start:block_end, block_start:block_end].contiguous()
                     gen_h = self.generators[:, block_start:block_end, block_start:block_end]
 
-                    # Per-head temperature
-                    if self.log_kappa_heads is not None:
-                        kappa_h = torch.exp(self.log_kappa_heads[h]).item()
-                    else:
-                        kappa_h = self.kappa
+                    kappa_h = self.kappa
 
                     # Per-head attention: β_h = softmax(-KL_h / κ_h)
                     beta_h = compute_attention_weights(
@@ -2629,7 +2612,7 @@ class VariationalFFNDynamic(nn.Module):
                         else:
                             sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end].detach()
                         gen_h = self.generators[:, block_start:block_end, block_start:block_end]
-                        kappa_h = torch.exp(self.log_kappa_heads[h]).item() if self.log_kappa_heads is not None else self.kappa
+                        kappa_h = self.kappa
 
                         beta_phi_h_result = compute_attention_weights(
                             mu_q=mu_h, sigma_q=sigma_h,
@@ -2737,7 +2720,7 @@ class VariationalFFNDynamic(nn.Module):
                     else:
                         sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end].detach()
                     gen_h = self.generators[:, block_start:block_end, block_start:block_end]
-                    kappa_h = torch.exp(self.log_kappa_heads[h]).item() if self.log_kappa_heads is not None else self.kappa
+                    kappa_h = self.kappa
 
                     beta_phi_h_result = compute_attention_weights(
                         mu_q=mu_h, sigma_q=sigma_h,

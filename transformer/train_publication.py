@@ -390,7 +390,6 @@ VFE_EM_CONFIG = {
 
 
     # Per-head specialization & multi-head VFE
-    'per_head_kappa': True,         # Learn separate κ_h per head (attention + VFE)
     'use_output_projection': True,  # W_O cross-head mixing after attention (toggle)
     'multihead_vfe': True,          # Maintain per-head β_h through VFE iterations
 
