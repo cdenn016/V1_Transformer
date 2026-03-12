@@ -896,7 +896,8 @@ class WikiText2TiktokenDataset(Dataset):
             print(f"  Total characters: {len(full_text):,}")
 
             # Tokenize (chunked for large datasets to manage memory)
-            print(f"Tokenizing with tiktoken (GPT-2 BPE)...")
+            tokenizer_label = 'cl100k_base' if dataset == 'wiki-ja' else 'GPT-2'
+            print(f"Tokenizing with tiktoken ({tokenizer_label} BPE)...")
             CHUNK_CHARS = 50_000_000  # 50M chars per chunk (~15M tokens)
             if len(full_text) > CHUNK_CHARS * 2:
                 # Memory-efficient chunked tokenization using numpy arrays
