@@ -172,7 +172,7 @@ DATASET_CONFIGS = {
     'wikitext-2': 'wikitext-2-raw-v1',
     'wikitext-103': 'wikitext-103-raw-v1',
     'openwebtext': None,  # No config needed, loaded as load_dataset('openwebtext')
-    'wiki-ja': '20220301.ja',  # Japanese Wikipedia (~1B chars, ~1.2M articles)
+    'wiki-ja': '20231101.ja',  # Japanese Wikipedia (~1B chars, ~1.2M articles)
 }
 
 # OpenWebText split ratios (only has a 'train' split on HuggingFace)
@@ -477,7 +477,8 @@ def _load_wiki_ja_split(
         )
 
     print(f"  Loading Japanese Wikipedia from HuggingFace...")
-    full_dataset = load_dataset('wikipedia', '20220301.ja', split='train', cache_dir=cache_dir)
+    # Use wikimedia/wikipedia namespace (legacy 'wikipedia' scripts no longer supported)
+    full_dataset = load_dataset('wikimedia/wikipedia', '20231101.ja', split='train', cache_dir=cache_dir)
 
     total_docs = len(full_dataset)
     print(f"  Total articles: {total_docs:,}")
