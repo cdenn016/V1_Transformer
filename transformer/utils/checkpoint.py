@@ -174,9 +174,9 @@ def get_tokenizer(config: Dict[str, Any], dataset_name: Optional[str] = None):
     """
     Get tokenizer for a given config.
 
-    Tries multiple tokenizer backends in order:
-    1. tiktoken (GPT-2 BPE, fast and lightweight)
-    2. WikiTextDataset (full dataset with tokenizer)
+    Selects the correct tiktoken encoding based on dataset:
+    - wiki-ja: cl100k_base (GPT-4 tokenizer, better CJK support)
+    - all others: gpt2 (GPT-2 tokenizer)
 
     Args:
         config: Model configuration dict
@@ -188,13 +188,23 @@ def get_tokenizer(config: Dict[str, Any], dataset_name: Optional[str] = None):
     if dataset_name is None:
         dataset_name = config.get('dataset', 'wikitext-103')
 
+    # Auto-detect wiki-ja from vocab_size if dataset not in config
+    # cl100k_base has 100277 tokens; GPT-2 has 50257
     vocab_size = config.get('vocab_size', 50257)
+    if dataset_name is None and vocab_size > 50257:
+        dataset_name = 'wiki-ja'
+
+    is_japanese = (dataset_name == 'wiki-ja')
 
     # Try tiktoken first (faster, lighter)
     try:
         import tiktoken
-        enc = tiktoken.get_encoding("gpt2")
-        print(f"Using tiktoken GPT-2 tokenizer (vocab_size={enc.n_vocab})")
+        if is_japanese:
+            enc = tiktoken.get_encoding("cl100k_base")
+            print(f"Using tiktoken cl100k_base tokenizer for wiki-ja (vocab_size={enc.n_vocab})")
+        else:
+            enc = tiktoken.get_encoding("gpt2")
+            print(f"Using tiktoken GPT-2 tokenizer (vocab_size={enc.n_vocab})")
         return enc
     except ImportError:
         pass

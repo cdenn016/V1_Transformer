@@ -252,6 +252,24 @@ class GaugeTransformerInference:
         }
 
 
+def _setup_cjk_fonts(plt):
+    """Configure matplotlib CJK font support if needed."""
+    import matplotlib.font_manager as fm
+    cjk_fonts = [
+        'MS Gothic', 'Yu Gothic', 'Meiryo',
+        'Noto Sans CJK JP', 'Noto Sans JP',
+        'IPAGothic', 'IPAexGothic',
+        'Hiragino Sans', 'Hiragino Kaku Gothic Pro',
+    ]
+    available = {f.name for f in fm.fontManager.ttflist}
+    for font_name in cjk_fonts:
+        if font_name in available:
+            plt.rcParams['font.family'] = 'sans-serif'
+            plt.rcParams['font.sans-serif'] = [font_name] + plt.rcParams.get('font.sans-serif', [])
+            plt.rcParams['axes.unicode_minus'] = False
+            return
+
+
 def visualize_attention(
     attn_data: Dict,
     save_path: Optional[str] = None,
@@ -273,6 +291,11 @@ def visualize_attention(
     except ImportError:
         print("matplotlib not available. Install with: pip install matplotlib")
         return
+
+    # Configure CJK fonts if tokens contain Japanese/Chinese characters
+    tokens = attn_data['tokens']
+    if any(ord(c) > 0x2E80 for t in tokens for c in t):
+        _setup_cjk_fonts(plt)
 
     beta = attn_data['beta']
     kl = attn_data['kl']
@@ -646,13 +669,22 @@ Examples:
 
     # Qualitative examples mode
     if args.examples:
-        example_prompts = [
-            "The",
-            "In the beginning",
-            "Scientists have discovered",
-            "The meaning of life is",
-            "Once upon a time, there was",
-        ]
+        if args.dataset == 'wiki-ja':
+            example_prompts = [
+                "日本",
+                "東京は",
+                "歴史的に",
+                "科学者たちは",
+                "世界の",
+            ]
+        else:
+            example_prompts = [
+                "The",
+                "In the beginning",
+                "Scientists have discovered",
+                "The meaning of life is",
+                "Once upon a time, there was",
+            ]
         print_generation_samples(
             inference,
             example_prompts,
