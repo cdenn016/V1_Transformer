@@ -15,6 +15,8 @@ Instructions:
 CHECKPOINT_PATH = r"path/to/your/best_model.pt"  # <-- Set your model path here
 
 INPUT_TEXT = "The meaning of life is"  # <-- Set your input text here
+# For wiki-ja models, try Japanese prompts:
+# INPUT_TEXT = "日本の歴史は"
 
 MAX_TOKENS = 50          # Number of tokens to generate
 TEMPERATURE = 0.8        # Higher = more random, lower = more focused
@@ -35,20 +37,50 @@ sys.path.insert(0, str(Path(__file__).parent))
 from transformer.utils.checkpoint import load_model, get_tokenizer
 
 
+def _setup_cjk_fonts(plt):
+    """Configure matplotlib CJK font support if needed."""
+    import matplotlib.font_manager as fm
+    cjk_fonts = [
+        'MS Gothic', 'Yu Gothic', 'Meiryo',
+        'Noto Sans CJK JP', 'Noto Sans JP',
+        'IPAGothic', 'IPAexGothic',
+        'Hiragino Sans', 'Hiragino Kaku Gothic Pro',
+    ]
+    available = {f.name for f in fm.fontManager.ttflist}
+    for font_name in cjk_fonts:
+        if font_name in available:
+            plt.rcParams['font.sans-serif'] = [font_name] + plt.rcParams.get('font.sans-serif', [])
+            plt.rcParams['axes.unicode_minus'] = False
+            return
+
+
 def plot_attention_publication(beta, kl, tokens, save_path="attention_pattern.pdf", title=None):
     """Create publication-quality attention visualization."""
     import matplotlib.pyplot as plt
     from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-    plt.rcParams.update({
-        'font.family': 'serif',
-        'font.serif': ['Times New Roman', 'DejaVu Serif', 'serif'],
-        'font.size': 10,
-        'axes.labelsize': 11,
-        'axes.titlesize': 12,
-        'xtick.labelsize': 9,
-        'ytick.labelsize': 9,
-    })
+    # Detect CJK characters in tokens and configure fonts
+    has_cjk = any(ord(c) > 0x2E80 for t in tokens for c in t)
+    if has_cjk:
+        _setup_cjk_fonts(plt)
+        plt.rcParams.update({
+            'font.family': 'sans-serif',
+            'font.size': 10,
+            'axes.labelsize': 11,
+            'axes.titlesize': 12,
+            'xtick.labelsize': 9,
+            'ytick.labelsize': 9,
+        })
+    else:
+        plt.rcParams.update({
+            'font.family': 'serif',
+            'font.serif': ['Times New Roman', 'DejaVu Serif', 'serif'],
+            'font.size': 10,
+            'axes.labelsize': 11,
+            'axes.titlesize': 12,
+            'xtick.labelsize': 9,
+            'ytick.labelsize': 9,
+        })
 
     n_heads = beta.shape[0]
 
