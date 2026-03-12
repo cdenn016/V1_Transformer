@@ -14,6 +14,7 @@ computation, it is not a learned feed-forward network.
 Language is a dynamic informational system: speakers encode and decode beliefs under uncertainty, and language models learn the statistical structure of this process. The mathematical framework natural to such systems---gauge-covariant variational free energy minimization over communicating agents on a statistical fiber bundle---explains why attention mechanisms work.
 
 
+```
         N(0, 1/(2·wd))  ← Level 3: hyper-prior (weight decay on embeddings)
                 │
                 │ wd·||θ_embed||²
@@ -30,6 +31,7 @@ s_i = self.prior_mu[i]  ◄──── γ·KL(s_i||Ω_ij·s_j) ────► 
                 ▼                                          ← Level 1: beliefs (E-step)
      q_i (beliefs, fast)  ◄──── β_ij·KL(q_i||Ω_ij·q_j) ────► q_j
                                       (attention)
+```
 
 
 Standard transformer attention, the `1/sqrt(d_k)` scaling, layer normalization, and backpropagation all emerge as consequences of a single variational principle. The standard attention rule
