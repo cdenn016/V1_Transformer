@@ -21,6 +21,7 @@ Language is a dynamic informational system: speakers encode and decode beliefs u
 s_i = self.prior_mu[i]  ◄──── γ·KL(s_i||Ω_ij·s_j) ────► s_j
 (position MODEL,                    (model coupling)
  slow timescale)
+ 
                 │                                          ← Level 2: priors (M-step)
                 │ p = w·π_token + (1-w)·s
                 ▼
