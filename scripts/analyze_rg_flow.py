@@ -508,7 +508,7 @@ Examples:
         '--dataset',
         type=str,
         default='wikitext-103',
-        choices=['wikitext-2', 'wikitext-103'],
+        choices=['wikitext-2', 'wikitext-103', 'wiki-ja'],
         help='Dataset to use (default: wikitext-103)',
     )
     parser.add_argument(

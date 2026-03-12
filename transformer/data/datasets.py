@@ -3,12 +3,13 @@ Data Pipeline for Gauge-Theoretic Transformer
 ===============================================
 
 Dataset loading and preprocessing for language modeling.
-Supports WikiText-2, WikiText-103, and OpenWebText.
+Supports WikiText-2, WikiText-103, OpenWebText, and Japanese Wikipedia.
 
 Dataset Details:
     - OpenWebText (~8B tokens, GPT-2's training data recreated openly)
     - WikiText-103 (103M tokens, default)
     - WikiText-2 (2.08M tokens, smaller alternative)
+    - wiki-ja (Japanese Wikipedia, ~1B chars, ~1.2M articles)
 
 Usage:
     from transformer.data import create_dataloaders
@@ -31,6 +32,13 @@ Usage:
         max_seq_len=256,
         batch_size=64,
         dataset='wikitext-2',
+    )
+
+    # Japanese Wikipedia (cross-linguistic universality test)
+    train_loader, val_loader, vocab_size = create_dataloaders(
+        max_seq_len=256,
+        batch_size=64,
+        dataset='wiki-ja',
     )
 
 Author: Implementation for gauge transformer
@@ -164,6 +172,7 @@ DATASET_CONFIGS = {
     'wikitext-2': 'wikitext-2-raw-v1',
     'wikitext-103': 'wikitext-103-raw-v1',
     'openwebtext': None,  # No config needed, loaded as load_dataset('openwebtext')
+    'wiki-ja': '20220301.ja',  # Japanese Wikipedia (~1B chars, ~1.2M articles)
 }
 
 # OpenWebText split ratios (only has a 'train' split on HuggingFace)
@@ -443,6 +452,74 @@ def _load_openwebtext_split(
     return full_text
 
 
+def _load_wiki_ja_split(
+    split: str,
+    cache_dir: Optional[str] = None,
+) -> str:
+    """
+    Load a Japanese Wikipedia split.
+
+    Japanese Wikipedia (~1.2M articles) only has a 'train' split on
+    HuggingFace, so we split it deterministically into train/val/test
+    using fixed index ranges (same approach as OpenWebText).
+
+    Args:
+        split: 'train', 'validation', or 'test'
+        cache_dir: Optional cache directory for HuggingFace datasets
+
+    Returns:
+        Full text for the requested split.
+    """
+    if not DATASETS_AVAILABLE:
+        raise RuntimeError(
+            "Japanese Wikipedia requires the 'datasets' package.\n"
+            "  pip install datasets\n"
+        )
+
+    print(f"  Loading Japanese Wikipedia from HuggingFace...")
+    full_dataset = load_dataset('wikipedia', '20220301.ja', split='train', cache_dir=cache_dir)
+
+    total_docs = len(full_dataset)
+    print(f"  Total articles: {total_docs:,}")
+
+    # Deterministic split: 99% train, 0.5% val, 0.5% test
+    n_val = int(total_docs * 0.005)
+    n_test = int(total_docs * 0.005)
+    n_train = total_docs - n_val - n_test
+
+    if split == 'train':
+        subset = full_dataset.select(range(n_train))
+        print(f"  Train split: {n_train:,} articles")
+    elif split == 'validation':
+        subset = full_dataset.select(range(n_train, n_train + n_val))
+        print(f"  Validation split: {n_val:,} articles")
+    elif split == 'test':
+        subset = full_dataset.select(range(n_train + n_val, total_docs))
+        print(f"  Test split: {n_test:,} articles")
+    else:
+        raise ValueError(f"Unknown split: {split}")
+
+    # Concatenate articles with double newlines
+    n_docs = len(subset)
+    BATCH_SIZE = 100_000
+    if n_docs > BATCH_SIZE:
+        parts = []
+        for i in range(0, n_docs, BATCH_SIZE):
+            batch = subset.select(range(i, min(i + BATCH_SIZE, n_docs)))
+            batch_texts = [item['text'] for item in batch if len(item['text'].strip()) > 0]
+            parts.append('\n\n'.join(batch_texts))
+            if (i // BATCH_SIZE + 1) % 10 == 0:
+                print(f"  Loaded {min(i + BATCH_SIZE, n_docs):,}/{n_docs:,} articles...")
+        full_text = '\n\n'.join(parts)
+        del parts
+    else:
+        texts = [item['text'] for item in subset if len(item['text'].strip()) > 0]
+        full_text = '\n\n'.join(texts)
+
+    print(f"  Total characters: {len(full_text):,}")
+    return full_text
+
+
 class WikiText2Dataset(Dataset):
     """
     WikiText-2 dataset for language modeling.
@@ -705,9 +782,11 @@ class WikiText2TiktokenDataset(Dataset):
     """
     WikiText dataset using tiktoken (OpenAI's fast BPE tokenizer).
 
-    Supports WikiText-2 (~2M tokens) and WikiText-103 (~103M tokens).
+    Supports WikiText-2 (~2M tokens), WikiText-103 (~103M tokens),
+    OpenWebText (~8B tokens), and Japanese Wikipedia (~1B chars).
     Lighter weight than transformers - no sklearn/pyarrow dependencies.
-    Uses GPT-2's tokenizer by default (50257 vocab).
+    Uses GPT-2's tokenizer (50257 vocab) for English, cl100k_base
+    (100277 vocab) for Japanese.
     """
 
     def __init__(
@@ -732,26 +811,34 @@ class WikiText2TiktokenDataset(Dataset):
                           this split's frequencies. Essential for ensuring train/val
                           consistency when vocab restriction is used.
             dataset: 'wikitext-2' (~2M tokens), 'wikitext-103' (~103M tokens),
-                     or 'openwebtext' (~8B tokens)
+                     'openwebtext' (~8B tokens), or 'wiki-ja' (Japanese Wikipedia)
         """
         assert TIKTOKEN_AVAILABLE, "tiktoken required! pip install tiktoken"
-        assert dataset in DATASET_CONFIGS, f"Unknown dataset: {dataset}. Use 'wikitext-2', 'wikitext-103', or 'openwebtext'"
+        assert dataset in DATASET_CONFIGS, f"Unknown dataset: {dataset}. Use 'wikitext-2', 'wikitext-103', 'openwebtext', or 'wiki-ja'"
 
         self.split = split
         self.max_seq_len = max_seq_len
         self.vocab_size_limit = vocab_size
         self.dataset_name = dataset
 
-        # Load GPT-2 tokenizer via tiktoken
-        self.tokenizer = tiktoken.get_encoding("gpt2")
-        self._full_vocab_size = self.tokenizer.n_vocab  # 50257
-
-        # Tiktoken doesn't have explicit pad/eos, use token 0 as pad
-        self.pad_token_id = 0
-        self.eos_token_id = 50256  # GPT-2's <|endoftext|>
+        # Load tokenizer via tiktoken
+        # Use cl100k_base (GPT-4) for Japanese - much better CJK tokenization
+        # Use gpt2 for English datasets (original behavior)
+        if dataset == 'wiki-ja':
+            self.tokenizer = tiktoken.get_encoding("cl100k_base")
+            self._full_vocab_size = self.tokenizer.n_vocab  # 100277
+            self.pad_token_id = 0
+            self.eos_token_id = 100257  # cl100k_base's <|endoftext|>
+        else:
+            self.tokenizer = tiktoken.get_encoding("gpt2")
+            self._full_vocab_size = self.tokenizer.n_vocab  # 50257
+            self.pad_token_id = 0
+            self.eos_token_id = 50256  # GPT-2's <|endoftext|>
 
         # Try loading from token cache first
-        token_cache_path = _get_token_cache_path(dataset, split, 'tiktoken', cache_dir)
+        # Use different cache key for cl100k_base vs gpt2 tokenizer
+        tokenizer_cache_key = 'tiktoken_cl100k' if dataset == 'wiki-ja' else 'tiktoken'
+        token_cache_path = _get_token_cache_path(dataset, split, tokenizer_cache_key, cache_dir)
         if token_cache_path.exists():
             print(f"Loading {dataset.upper()} ({split}) from token cache...")
             print(f"  Cache: {token_cache_path}")
@@ -765,6 +852,9 @@ class WikiText2TiktokenDataset(Dataset):
             if dataset == 'openwebtext':
                 # OpenWebText: ~8B tokens, loaded via HuggingFace datasets
                 full_text = _load_openwebtext_split(split, cache_dir)
+            elif dataset == 'wiki-ja':
+                # Japanese Wikipedia: ~1B chars, loaded via HuggingFace datasets
+                full_text = _load_wiki_ja_split(split, cache_dir)
             elif DATASETS_AVAILABLE:
                 hf_config = DATASET_CONFIGS[dataset]
                 dataset_obj = load_dataset('wikitext', hf_config, split=split, cache_dir=cache_dir)
@@ -778,8 +868,8 @@ class WikiText2TiktokenDataset(Dataset):
                     wikitext_data = _download_wikitext2_fallback(cache_dir)
                 full_text = wikitext_data[split]
 
-            # Clean up processed WikiText artifacts (not needed for openwebtext)
-            if dataset != 'openwebtext':
+            # Clean up processed WikiText artifacts (not needed for openwebtext or wiki-ja)
+            if dataset not in ('openwebtext', 'wiki-ja'):
                 import re
                 unk_count = full_text.count('<unk>')
                 if unk_count > 0:
@@ -1499,7 +1589,7 @@ def create_dataloaders(
         cache_dir: Optional cache directory
         tokenizer_name: HuggingFace tokenizer name (only used if tiktoken unavailable)
         dataset: 'wikitext-2' (~2M tokens), 'wikitext-103' (~103M tokens, default),
-                 or 'openwebtext' (~8B tokens)
+                 'openwebtext' (~8B tokens), or 'wiki-ja' (Japanese Wikipedia)
         include_test: If True, also return test dataloader
         return_tokenizer: If True, also return the train dataset (has .decode() method)
 
