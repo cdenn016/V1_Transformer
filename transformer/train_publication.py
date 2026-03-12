@@ -1047,7 +1047,7 @@ class PublicationTrainer(FastTrainer):
             return  # Skip if matplotlib unavailable
 
         # Configure CJK font support for Japanese text in plot titles
-        dataset_name = self.config.config.get('dataset', 'wikitext-2')
+        dataset_name = getattr(self.train_loader.dataset, 'dataset_name', 'wikitext-2')
         if dataset_name == 'wiki-ja':
             self._setup_cjk_fonts(plt)
 
@@ -1685,7 +1685,7 @@ class PublicationTrainer(FastTrainer):
                 try:
                     import random
                     # Use language-appropriate prompts
-                    dataset_name = self.config.config.get('dataset', 'wikitext-2')
+                    dataset_name = getattr(self.train_loader.dataset, 'dataset_name', 'wikitext-2')
                     if dataset_name == 'wiki-ja':
                         prompts = ["日本", "東京", "世界", "歴史", "文化", "科学", "政治", "経済", "教育", "自然",
                                    "社会", "技術", "音楽", "映画", "大学"]
