@@ -1766,7 +1766,7 @@ def create_dataloaders(
         test_loader = DataLoader(
             test_dataset,
             batch_size=batch_size,
-            shuffle=False,
+            shuffle=True,  # Shuffle so subsampled eval is representative
             num_workers=num_workers,
             pin_memory=True if torch.cuda.is_available() else False,
             drop_last=False,

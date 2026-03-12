@@ -610,7 +610,7 @@ def run_test_evaluation(
     test_loader: torch.utils.data.DataLoader,
     device: torch.device,
     vocab_size: int,
-    max_batches: int = 2000,
+    max_batches: int = None,
     config: dict = None,
 ) -> Dict[str, float]:
     """
@@ -641,7 +641,7 @@ def run_test_evaluation(
     print("="*70)
 
     total_batches = len(test_loader)
-    eval_batches = min(max_batches, total_batches)
+    eval_batches = min(max_batches, total_batches) if max_batches is not None else total_batches
     print(f"  Evaluating {eval_batches} / {total_batches} batches...")
 
     # Use same code path as validation: compute_free_energy_loss
@@ -660,7 +660,7 @@ def run_test_evaluation(
 
     with torch.no_grad():
         for batch_idx, (input_ids, target_ids) in enumerate(test_loader):
-            if batch_idx >= max_batches:
+            if max_batches is not None and batch_idx >= max_batches:
                 break
 
             input_ids = input_ids.to(device)
