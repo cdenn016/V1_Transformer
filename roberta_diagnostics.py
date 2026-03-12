@@ -4,7 +4,7 @@ RoBERTa Diagnostic Analysis
 ============================
 Investigates WHY RoBERTa shows lower α–β correlation than other models.
 
-Three hypotheses:
+Four hypotheses:
   1. Key-norm CV: RoBERTa's key vectors have higher norm variance,
      amplifying the residual -λ||K_j||² term that breaks the isotropic
      Gaussian approximation.
@@ -14,6 +14,11 @@ Three hypotheses:
      as ||Q||||K||cos(θ). If norm variation dominates over angular
      variation, the KL (pure distance) approximation loses information
      about the multiplicative norm structure.
+  4. Per-head effective temperature dispersion: Standard attention heads
+     have implicit per-head temperatures set by Q/K norm scales. If
+     RoBERTa's heads have more dispersed effective temperatures, a
+     single universal τ fits worse. (Motivated by the gauge transformer's
+     learned per-head κ.)
 
 Usage:
     python roberta_diagnostics.py
@@ -360,6 +365,106 @@ def logit_variance_decomposition(
 
 
 # ---------------------------------------------------------------------------
+# Experiment 4: Per-head effective temperature dispersion
+# ---------------------------------------------------------------------------
+def compute_effective_temperatures(
+    model, tokenizer, model_name: str, corpus: List[str],
+    n_passages: int, device: str,
+) -> Dict:
+    """
+    Measure the implicit per-head temperature in standard attention.
+
+    In dot-product attention: score_ij = Q_i · K_j / √d.
+    In KL attention: score_ij = -||Q_i - K_j||² / τ.
+
+    Expanding: Q·K = (||Q||² + ||K||² - ||Q-K||²) / 2, so
+    Q·K/√d ≈ -||Q-K||²/(2√d) + (||Q||² + ||K||²)/(2√d).
+
+    The effective temperature that makes the KL scores best match the
+    dot-product scores is τ_eff ≈ 2√d · (mean_norm_product / d), but
+    more directly, we fit τ per head by finding the τ that maximizes
+    correlation between α and β for that specific head.
+
+    Here we instead measure a simpler proxy: the ratio of attention-logit
+    standard deviation across heads. Heads with higher logit-std have
+    effectively lower temperature (sharper attention). If this ratio
+    varies more across heads for RoBERTa than BERT, per-head κ matters
+    more.
+    """
+    sub_corpus = corpus[:n_passages]
+    n_layers = _get_num_layers(model, model_name)
+
+    test_inp = tokenizer(sub_corpus[0], return_tensors="pt",
+                         truncation=True, max_length=512).to(device)
+    with torch.no_grad():
+        test_out = model(**test_inp)
+    _, _, _, n_heads, head_dim = _get_qkv_generic(
+        model, test_out.hidden_states, 0, model_name)
+
+    # Per-head logit std accumulator
+    logit_std_accum = np.zeros((n_layers, n_heads))
+    # Per-head mean QK norm product
+    norm_product_accum = np.zeros((n_layers, n_heads))
+    count = 0
+
+    for text in sub_corpus:
+        inputs = tokenizer(text, return_tensors="pt",
+                           truncation=True, max_length=512).to(device)
+        if inputs["input_ids"].shape[1] < 5:
+            continue
+        with torch.no_grad():
+            outputs = model(**inputs)
+        hs = outputs.hidden_states
+
+        for li in range(n_layers):
+            try:
+                Q, K, V, nh, hd = _get_qkv_generic(model, hs, li, model_name)
+            except Exception:
+                continue
+            for hi in range(nh):
+                Qh = Q[:, hi, :].detach().cpu()  # [seq, d]
+                Kh = K[:, hi, :].detach().cpu()
+                d = Qh.shape[1]
+
+                # Dot-product logits (unscaled)
+                logits = (Qh @ Kh.T).numpy()
+                logit_std_accum[li, hi] += logits.std()
+
+                # Mean norm product
+                q_norms = torch.norm(Qh, dim=1)
+                k_norms = torch.norm(Kh, dim=1)
+                norm_product_accum[li, hi] += (q_norms.mean() * k_norms.mean()).item()
+
+        count += 1
+
+    n = max(count, 1)
+    logit_std_accum /= n
+    norm_product_accum /= n
+
+    # Cross-head dispersion of logit std (CV across heads per layer)
+    # Higher CV = more per-head temperature heterogeneity
+    per_layer_cv = []
+    for li in range(n_layers):
+        row = logit_std_accum[li, :]
+        mu = row.mean()
+        if mu > 1e-8:
+            per_layer_cv.append(row.std() / mu)
+        else:
+            per_layer_cv.append(0.0)
+
+    return {
+        "logit_std": logit_std_accum,           # [n_layers, n_heads]
+        "norm_product": norm_product_accum,     # [n_layers, n_heads]
+        "per_layer_logit_std_cv": per_layer_cv, # CV across heads per layer
+        "mean_logit_std_cv": float(np.mean(per_layer_cv)),
+        "logit_std_global_cv": float(logit_std_accum.std() / max(logit_std_accum.mean(), 1e-8)),
+        "n_layers": n_layers,
+        "n_heads": n_heads,
+        "head_dim": head_dim,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
 def plot_key_norm_cv_comparison(all_cv_results: Dict[str, Dict]):
@@ -480,6 +585,51 @@ def plot_cv_vs_correlation(all_cv_results: Dict[str, Dict],
     print(f"  Saved: {SAVE_DIR / 'cv_vs_correlation.png'}")
 
 
+def plot_effective_temp_dispersion(all_eff_temp: Dict[str, Dict]):
+    """Bar chart: cross-head logit-std CV per model (temperature dispersion)."""
+    models = sorted(all_eff_temp.keys(),
+                    key=lambda m: all_eff_temp[m]["logit_std_global_cv"])
+    cvs = [all_eff_temp[m]["logit_std_global_cv"] for m in models]
+
+    fig, ax = plt.subplots(figsize=(5, 3))
+    colors = ["#e74c3c" if "roberta" in m else "#3498db" for m in models]
+    ax.bar(range(len(models)), cvs, color=colors,
+           edgecolor="black", linewidth=0.5)
+    ax.set_xticks(range(len(models)))
+    ax.set_xticklabels([m.split("/")[-1] for m in models],
+                       rotation=30, ha="right")
+    ax.set_ylabel("CV of per-head logit std")
+    ax.set_title("Effective temperature dispersion across heads")
+    fig.tight_layout()
+    fig.savefig(SAVE_DIR / "effective_temp_dispersion.png")
+    plt.close(fig)
+    print(f"  Saved: {SAVE_DIR / 'effective_temp_dispersion.png'}")
+
+
+def plot_temp_dispersion_vs_correlation(all_eff_temp: Dict[str, Dict],
+                                        all_tau_results: Dict[str, Dict]):
+    """Scatter: effective temperature dispersion vs α–β correlation."""
+    fig, ax = plt.subplots(figsize=(4, 3.5))
+    for mname in all_eff_temp:
+        if mname not in all_tau_results:
+            continue
+        disp = all_eff_temp[mname]["logit_std_global_cv"]
+        r = all_tau_results[mname]["r_at_predicted"]
+        color = "#e74c3c" if "roberta" in mname else "#3498db"
+        ax.scatter(disp, r, color=color, s=60, edgecolor="black",
+                   linewidth=0.5, zorder=5)
+        ax.annotate(mname.split("/")[-1], (disp, r),
+                    textcoords="offset points", xytext=(5, 5), fontsize=7)
+
+    ax.set_xlabel("CV of per-head logit std (temp dispersion)")
+    ax.set_ylabel(f"Mean Pearson r at τ={TAU_PREDICTED:.0f}")
+    ax.set_title("Temperature dispersion vs α–β correlation")
+    fig.tight_layout()
+    fig.savefig(SAVE_DIR / "temp_dispersion_vs_correlation.png")
+    plt.close(fig)
+    print(f"  Saved: {SAVE_DIR / 'temp_dispersion_vs_correlation.png'}")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -491,6 +641,7 @@ def main():
     all_cv = {}
     all_tau = {}
     all_decomp = {}
+    all_eff_temp = {}
 
     for mname in MULTI_MODEL_NAMES:
         print(f"\n{'─' * 50}")
@@ -509,7 +660,7 @@ def main():
         print(f"  Parameters: {n_params / 1e6:.1f}M")
 
         # --- Experiment 1: Key-norm CV ---
-        print("\n  [1/3] Key-norm CV...")
+        print("\n  [1/4] Key-norm CV...")
         cv_res = compute_key_norm_stats(
             model, tokenizer, mname, CORPUS, N_PASSAGES, DEVICE)
         all_cv[mname] = cv_res
@@ -517,7 +668,7 @@ def main():
               f"(std = {cv_res['std_cv']:.4f})")
 
         # --- Experiment 2: Temperature sweep ---
-        print("\n  [2/3] Temperature sweep...")
+        print("\n  [2/4] Temperature sweep...")
         tau_res = temperature_sweep(
             model, tokenizer, mname, CORPUS, N_PASSAGES, DEVICE,
             TAU_FINE_SWEEP)
@@ -535,13 +686,21 @@ def main():
               f"std={np.std(opt_taus):.1f}")
 
         # --- Experiment 3: Logit variance decomposition ---
-        print("\n  [3/3] Logit variance decomposition...")
+        print("\n  [3/4] Logit variance decomposition...")
         decomp_res = logit_variance_decomposition(
             model, tokenizer, mname, CORPUS, N_PASSAGES, DEVICE)
         all_decomp[mname] = decomp_res
         print(f"    Mean R²(logit ~ norm) = {decomp_res['mean_norm_frac']:.4f}")
         print(f"    Mean angular var = {decomp_res['mean_angular_var']:.6f}")
         print(f"    Mean norm var = {decomp_res['mean_norm_var']:.2f}")
+
+        # --- Experiment 4: Per-head effective temperature dispersion ---
+        print("\n  [4/4] Effective temperature dispersion...")
+        eff_temp_res = compute_effective_temperatures(
+            model, tokenizer, mname, CORPUS, N_PASSAGES, DEVICE)
+        all_eff_temp[mname] = eff_temp_res
+        print(f"    Global logit-std CV = {eff_temp_res['logit_std_global_cv']:.4f}")
+        print(f"    Mean per-layer logit-std CV = {eff_temp_res['mean_logit_std_cv']:.4f}")
 
         # Free memory
         del model, tokenizer
@@ -562,14 +721,18 @@ def main():
         plot_norm_fraction_comparison(all_decomp)
     if all_cv and all_tau:
         plot_cv_vs_correlation(all_cv, all_tau)
+    if all_eff_temp:
+        plot_effective_temp_dispersion(all_eff_temp)
+    if all_eff_temp and all_tau:
+        plot_temp_dispersion_vs_correlation(all_eff_temp, all_tau)
 
     # --- Summary table ---
     print(f"\n{'=' * 60}")
     print("SUMMARY")
     print(f"{'=' * 60}")
     print(f"{'Model':<25} {'CV':>6} {'τ_opt':>6} {'r@τ*':>7} "
-          f"{'r@19':>7} {'R²_norm':>8}")
-    print("─" * 65)
+          f"{'r@19':>7} {'R²_norm':>8} {'τ_disp':>7}")
+    print("─" * 75)
     for mname in MULTI_MODEL_NAMES:
         if mname not in all_cv:
             continue
@@ -578,9 +741,10 @@ def main():
         r_opt = all_tau[mname]["optimal_r"] if mname in all_tau else 0
         r_pred = all_tau[mname]["r_at_predicted"] if mname in all_tau else 0
         nf = all_decomp[mname]["mean_norm_frac"] if mname in all_decomp else 0
+        td = all_eff_temp[mname]["logit_std_global_cv"] if mname in all_eff_temp else 0
         short = mname.split("/")[-1]
         print(f"{short:<25} {cv:>6.4f} {tau_opt:>6.1f} {r_opt:>7.4f} "
-              f"{r_pred:>7.4f} {nf:>8.4f}")
+              f"{r_pred:>7.4f} {nf:>8.4f} {td:>7.4f}")
 
     # Save raw results as JSON
     summary = {}
@@ -596,6 +760,8 @@ def main():
                 "r_at_predicted", None),
             "norm_frac_r2": all_decomp.get(mname, {}).get(
                 "mean_norm_frac", None),
+            "effective_temp_dispersion": all_eff_temp.get(mname, {}).get(
+                "logit_std_global_cv", None),
         }
 
     with open(SAVE_DIR / "diagnostic_summary.json", "w") as f:
