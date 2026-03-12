@@ -2336,14 +2336,14 @@ All experiments reported in the results section can be reproduced using the prov
 
 
 \section*{Acknowledgments}
-Claude Opus 4.5/4.6 was utilized for programming our variational free energy descent simulation suite.  All code was manually reviewed, corrected, and mathematically validated by the author.  Furthermore, Claude was utilized for typesetting figures, LaTeX equations, and general organizational and manuscript clarity advice.  The author emphasizes that Claude (or any other LLMs) played no role in the development or conceptual ideas of our theoretical framework. The author further declares no funding or conflicts of interest.
+Claude Opus 4.5/4.6 was utilized for programming our variational free energy descent simulation suite.  All code was manually reviewed, corrected, and mathematically validated by the author by hand.  Furthermore, Claude was utilized for typesetting figures, LaTeX equations, and general organizational and manuscript clarity advice.  The author emphasizes that Claude (or any other LLMs) played no role in the development or conceptual ideas of our theoretical framework. The author further declares no funding or conflicts of interest.
 
 \appendix
 
-\textbf{Note on appendix structure.} Appendix~A reviews standard differential geometry and gauge theory to make the paper self-contained for readers from machine learning backgrounds. Readers familiar with fiber bundles, gauge connections, and curvature may skip directly to Appendix~B (Covariance Dynamics), Appendix~C (Conditional Uniqueness of Forward KL), and Appendix~D (Agreement-Variable Construction), which contain results specific to this work. Appendix~E details the numerical implementation.
+\textbf{Note on appendix structure.} Appendix~A reviews standard differential geometry and gauge theory to make the paper self-contained for readers from machine learning backgrounds. Readers familiar with fiber bundles, gauge connections, and curvature may skip directly to Appendix~B (Covariance Dynamics), Appendix~C (Gauge frame gradients and numerical methods) Appendix~D (Variational Gradient Descent: Implementation and Numerical Methods), Appendix~E(Conditional Uniqueness of Forward KL),  Appendix~F (Symmetry breaking and 2D base manifold experiments).
 
-\subsection{General Mathematical Framework}
-\subsubsection{Principal Bundle and Associated Bundles}
+\section{General Mathematical Framework}
+\subsection{Principal Bundle and Associated Bundles}
 
 The following geometric and probabilistic constructions comprise standard methods in differential geometry and gauge theory.  See references for details, proofs, and examples \citep{nakahara2003geometry,frankel2011geometry,blei2017variational,amari2016information}.
 
@@ -2426,14 +2426,14 @@ This is the gauge-theoretic analogue of renormalization group flow in statistica
 
 Whether this hierarchical structure maps onto multi-layer transformer architectures (where each layer constitutes a ``scale''), or onto distinct organizational levels within a single attention layer, remains an open question for future investigation.
 
-\subsubsection{Bundle Morphisms and Transport Operators}
+\subsection{Bundle Morphisms and Transport Operators}
 Via standard horizontal lifting from the principal bundle $\mathcal{N}$ to the associated bundles, we obtain a hierarchy of morphisms and induced connections:
 
 Intra-bundle transport operators $\Omega^{(q)}_{ij}: \Gamma(\mathcal{B}_q) \to \Gamma(\mathcal{B}_q)$ (belief-to-belief) and $\Omega^{(p)}_{ij}: \Gamma(\mathcal{B}_p) \to \Gamma(\mathcal{B}_p)$ (model-to-model) act within a single bundle. Cross-scale transport operators $\Lambda^{s}_{s'}: \Gamma^{s}(\mathcal{B}_q) \to \Gamma^{s'}(\mathcal{B}_q)$ (beliefs across scales) and $\tilde{\Lambda}^{s}_{s'}: \Gamma^{s}(\mathcal{B}_p) \to \Gamma^{s'}(\mathcal{B}_p)$ (models across scales) connect different hierarchical levels. Inter-bundle morphisms $\Theta^i_j: \Gamma(\mathcal{B}_q) \to \Gamma(\mathcal{B}_p)$ (belief to model) and $\tilde{\Theta}^i_j: \Gamma(\mathcal{B}_p) \to \Gamma(\mathcal{B}_q)$ (model to belief) relate the two fiber types. Finally, global bundle morphisms $\Phi: \mathcal{E}_p \to \mathcal{E}_q$ (model bundle to belief bundle) and $\tilde{\Phi}: \mathcal{E}_q \to \mathcal{E}_p$ (belief bundle to model bundle) act on the total associated bundles.
 
 Here $\Gamma(\mathcal{B}_u)$ denotes the space of smooth sections over the base $\mathcal{C}$.
 
-\subsubsection{Gauge Frames and Connections}
+\subsection{Gauge Frames and Connections}
 Each agent $i$ possesses a local gauge frame field:
 
 \begin{equation}
@@ -2682,20 +2682,6 @@ which is manifestly positive definite for $\Sigma_1,\Sigma_2 \succ 0$.
 Hence the covariance alignment fixed-point is an attractor of the variational dynamics.
 
 Therefore, we find that $\Sigma_i \approx \Omega_{ij}\Sigma_j\Omega_{ij}^\top$ emerges from the dynamics itself rather than as an imposed constraint.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 \section{Gauge Frame Gradients}
@@ -3211,7 +3197,7 @@ is a necessary consequence of the variational and geometric structure underlying
 
 All experiments were performed on a Windows workstation with 64GB RAM, AMD Ryzen 9900x CPU, and an Nvidia RTX5090 GPU.
 
-\subsection{Symmetry Breaking Simulations}
+\section{Symmetry Breaking Simulations}
 \label{app:symmetry_breaking_sims}
 
 To investigate observation-driven symmetry breaking, we simulated 8 overlapping agents on a 2-dimensional flat base manifold under periodic boundary conditions, using $\mathrm{SO}(3)$ with the $\ell = 4$ irrep (9-dimensional representation space). All agents were initialized with identical models and $\gamma_{ij} = 0$.
