@@ -384,9 +384,9 @@ def main():
     parser.add_argument('--text', type=str,
                        default='The quick brown fox jumps over the lazy dog',
                        help='Text to visualize (for --mode text)')
-    parser.add_argument('--dataset', type=str, choices=['wikitext-2', 'wikitext-103'],
+    parser.add_argument('--dataset', type=str, choices=['wikitext-2', 'wikitext-103', 'wiki-ja'],
                        default='wikitext-2',
-                       help='Which WikiText dataset to use (for --mode validation)')
+                       help='Which dataset to use (for --mode validation)')
     parser.add_argument('--data-path', type=str, default=None,
                        help='DEPRECATED: Dataset auto-downloads now')
     parser.add_argument('--seq-len', type=int, default=128,

@@ -2645,8 +2645,8 @@ def main():
     parser.add_argument('--seed', type=int, default=None,
                         help='Random seed for reproducibility')
     parser.add_argument('--dataset', type=str, default=DEFAULT_DATASET,
-                        choices=['wikitext-2', 'wikitext-103'],
-                        help='Dataset to use: wikitext-2 (~2M tokens) or wikitext-103 (~103M tokens)')
+                        choices=['wikitext-2', 'wikitext-103', 'wiki-ja'],
+                        help='Dataset to use: wikitext-2 (~2M tokens), wikitext-103 (~103M tokens), or wiki-ja (Japanese Wikipedia)')
     parser.add_argument('--semantic_analysis_interval', type=int, default=10000,
                         help='Run gauge frame semantic analysis every N steps (0 to disable)')
 

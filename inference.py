@@ -622,7 +622,7 @@ Examples:
         '--dataset',
         type=str,
         default='wikitext-103',
-        choices=['wikitext-103', 'wikitext-2'],
+        choices=['wikitext-103', 'wikitext-2', 'wiki-ja'],
         help='Dataset for tokenizer (default: wikitext-103)',
     )
 
