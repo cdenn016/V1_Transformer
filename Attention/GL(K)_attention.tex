@@ -1801,7 +1801,7 @@ where $D_{\mathrm{KL},ij} \equiv D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$. This 
 The same softmax-gradient non-linearity also appears in the covariance and gauge frame channels. The $\Sigma_i$ gradient (Eq.~\ref{eq:Sigma_gradient_main}) contains the term $\sum_j (\partial \beta_{ij}/\partial \Sigma_i)\, D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$, which has the identical centered structure. Similarly, the gauge frame gradient (Eq.~\ref{eq:beta_grad_phi}) yields $\partial \beta_{ij}/\partial \phi_i = -(\beta_{ij}/\tau)[\partial K_{ij}/\partial \phi_i - \sum_k \beta_{ik}\, \partial K_{ik}/\partial \phi_i]$, the same self-normalizing form. Each variational channel ($\mu$, $\Sigma$, $\phi$) thus contributes its own GLU-type activation and the composition of these channels within each VFE iteration produces a richer non-linear map than any single channel alone.
 
 \paragraph{FFN depth from VFE iterations.}
-In the full VFE implementation, multiple iterations of gradient descent with recomputed $\beta$ at each step constitute the analogue of the FFN sub-layer. Each iteration applies the GLU map \eqref{eq:vfe_glu} composed with the softmax-gradient correction \eqref{eq:softmax_gradient_nonlinearity}, producing increasingly complex nonlinear transformations. The number of VFE iterations plays the role of FFN depth, as established in the "Layers as VFE iterations" paragraph (Section~\ref{sec:residual_connections}).
+In the full VFE implementation, multiple iterations of gradient descent with recomputed $\beta$ at each step constitute the analogue of the FFN sub-layer. Each iteration applies the GLU map \eqref{eq:vfe_glu} composed with the softmax-gradient correction \eqref{eq:softmax_gradient_nonlinearity}, producing increasingly complex nonlinear transformations. The number of VFE iterations plays the role of FFN depth, as established in the ``Layers as VFE iterations'' paragraph (Section~\ref{sec:residual_connections}).
 
 \subsubsection{Token Embeddings as Prior Banks.}
 \label{sec:embeddings}
@@ -1840,13 +1840,6 @@ The $\mathrm{GL}(K)$ gauge invariance theorem (Theorem~\ref{thm:glk_invariance})
 \subsection{Experimental Design}
 
 Hardware details are provided in Appendix~\ref{app:hardware}.
-
-\subsubsection{Agent-Based Simulations}
-To study symmetry breaking and verify gauge-invariance of the vacuum VFE, we simulated a set of 8 fixed and completely overlapping agents over a 2-dimensional flat base manifold under periodic boundary conditions to validate the general theory. Agents were modeled as smooth open fields (sections) of MVGs $(\mu_i(c), \Sigma_i(c))$ and $\mathfrak{so}(3)$ frame fields $(\phi_i(c))$ transforming under irreducible representations (irreps) of $\mathrm{SO}(3)$. We used the $\ell = 4$ irrep, yielding a 9-dimensional representation space ($d_q = d_p = 2\ell + 1 = 9$). All covariances were continuously monitored to ensure they remained on the symmetric positive definite (SPD) manifold.
-
-Gradient descent was performed on all dynamic variables with continual monitoring of self-energies, alignments, statistics, and geometry. Due to simulation stability, all gradient/norm clipping were disabled. Simulations terminated once the global variational energy reached stability ($\Delta S \leq 10^{-5}$ for 200 steps), typically requiring 500 total steps with increments of $\Delta \eta = 0.1$ for all variables.
-
-All fields were randomly initialized within appropriate ranges, with non-diagonal covariances initialized as SPD matrices and subsequently sanitized prior to simulation. To isolate fast belief dynamics, all agents were initialized with identical models and $\gamma_{ij} = 0$. Random initializations used a reproducible seed random number generator.
 
 \subsubsection{Transformer Validation Protocol}
 To empirically validate the equivalence between our gauge attention rule and standard transformer self-attention, we conducted a quantitative comparison using a pretrained \texttt{BERT-base-uncased} model from HuggingFace Transformers \citep{devlin2018bert}. We constructed a corpus of 105 diverse English passages spanning multiple genres, registers, and subject domains, tokenized each using BERT's WordPiece tokenizer, and performed full forward passes while extracting hidden states from all 12 layers.
@@ -2146,12 +2139,6 @@ $N$ & Mean $\bar{r}$ & $\pm$ Std & Min $r$ & Max $r$ \\
 
 The mean correlation remains robust across all sequence lengths ($\bar{r} > 0.71$), with a mild monotonic decrease from $\bar{r} = 0.798$ at $N = 32$ to $\bar{r} = 0.714$ at $N = 512$. This degradation is consistent with the key-norm bias analysis (Section~5.2.3): longer sequences contain more diverse token types, increasing key-norm variance and amplifying the residual bias term that the flat-bundle isotropic limit neglects. The stability across a $32\times$ range of sequence lengths confirms that the correspondence is a structural property of the attention mechanism, not an artifact of sequence statistics.
 
-
-\subsection{Symmetry Breaking and Specialization}
-
-Agent-based simulations using $\mathrm{SO}(3)$ on a 2-dimensional base manifold confirm the symmetry-breaking mechanism predicted by the theory (Section~\ref{sec:symmetry_breaking}). In the absence of observations, all agent beliefs converge to a shared gauge-symmetric vacuum state with identical norms. When observations are introduced, symmetry is broken and agents specialize to distinct norms. Full simulation details and figures are presented in Appendix~\ref{app:symmetry_breaking_sims}.
-
-
 \subsection{$\mathrm{GL}(K)$ Language Modeling: The Full General Model}
 \label{sec:glk_lm}
 
@@ -2254,8 +2241,6 @@ The full representational capacity is $K + n_{\mathrm{heads}} \cdot d_{\mathrm{h
 \section{Discussion}
 
 \subsection{Summary of Contributions}
-
-This paper makes three nested claims, each supported by a corresponding set of results.
 
 \paragraph{Standard attention as a degenerate limit.} The BERT validation (Section~5.2) demonstrates quantitative agreement between gauge-aligned KL attention and standard dot-product attention across 105 diverse passages and all 144 heads ($\bar{r} = 0.804$ at optimal $\tau$; Figure~\ref{fig:temperature_sweep}), with the entropy of the two distributions closely matched ($H(\beta)/H(\alpha) = 1.076$; Section~\ref{sec:entropy_analysis}). The multi-model validation (Section~\ref{sec:multi_model}) extends this to five architectures ($\bar{r} > 0.6$ for all, $\bar{r} = 0.851$ for ALBERT), and the sequence-length analysis (Section~\ref{sec:seqlen}) confirms robustness from $N = 16$ to $N = 512$ tokens. Beyond the correlation itself (which partly reflects the algebraic relationship between squared distance and dot product under approximately constant norms) the framework generates non-trivial predictions that are confirmed: the optimal temperature matches the dimensional prediction $\tau \approx 2\sqrt{d_k}$ to within 19\%, the key-norm bias has the predicted sign and its temperature dependence matches theory, and deeper layers exhibit stronger correlations consistent with increasingly structured representations.
 
