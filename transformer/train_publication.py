@@ -1001,6 +1001,33 @@ class PublicationTrainer(FastTrainer):
                 labels.append(irrep_name)
         return labels
 
+    def _setup_cjk_fonts(self, plt):
+        """Configure matplotlib to render CJK (Japanese/Chinese/Korean) characters."""
+        if getattr(self, '_cjk_fonts_configured', False):
+            return
+        import matplotlib.font_manager as fm
+        # Try common CJK fonts available on Windows, Linux, and macOS
+        cjk_fonts = [
+            'MS Gothic', 'Yu Gothic', 'Meiryo',          # Windows Japanese
+            'Microsoft YaHei', 'SimHei',                   # Windows Chinese
+            'Noto Sans CJK JP', 'Noto Sans JP',           # Linux/cross-platform
+            'IPAGothic', 'IPAexGothic', 'TakaoGothic',    # Linux Japanese
+            'Hiragino Sans', 'Hiragino Kaku Gothic Pro',   # macOS Japanese
+        ]
+        available = {f.name for f in fm.fontManager.ttflist}
+        for font_name in cjk_fonts:
+            if font_name in available:
+                plt.rcParams['font.family'] = 'sans-serif'
+                plt.rcParams['font.sans-serif'] = [font_name] + plt.rcParams.get('font.sans-serif', [])
+                plt.rcParams['axes.unicode_minus'] = False
+                self._cjk_fonts_configured = True
+                return
+        # No CJK font found - titles with Japanese text will show boxes
+        # but at least suppress the per-glyph warnings
+        import warnings
+        warnings.filterwarnings('ignore', message='Glyph .* missing from font')
+        self._cjk_fonts_configured = True
+
     def save_attention_visualization(self, step: int, batch: Tuple[torch.Tensor, torch.Tensor]):
         """
         Save attention pattern visualization for interpretability analysis.
@@ -1018,6 +1045,11 @@ class PublicationTrainer(FastTrainer):
             import numpy as np
         except ImportError:
             return  # Skip if matplotlib unavailable
+
+        # Configure CJK font support for Japanese text in plot titles
+        dataset_name = self.config.config.get('dataset', 'wikitext-2')
+        if dataset_name == 'wiki-ja':
+            self._setup_cjk_fonts(plt)
 
         self.model.eval()
         input_ids, target_ids = batch
@@ -1652,8 +1684,14 @@ class PublicationTrainer(FastTrainer):
                 # Generate sample text to verify learning (varied prompts for diversity)
                 try:
                     import random
-                    prompts = ["The", "In", "A", "It", "This", "As", "One", "When", "For",
-                               "After", "Before", "During", "While", "Although", "However"]
+                    # Use language-appropriate prompts
+                    dataset_name = self.config.config.get('dataset', 'wikitext-2')
+                    if dataset_name == 'wiki-ja':
+                        prompts = ["日本", "東京", "世界", "歴史", "文化", "科学", "政治", "経済", "教育", "自然",
+                                   "社会", "技術", "音楽", "映画", "大学"]
+                    else:
+                        prompts = ["The", "In", "A", "It", "This", "As", "One", "When", "For",
+                                   "After", "Before", "During", "While", "Although", "However"]
                     prompt = random.choice(prompts)
                     # Use temperature 0.9 and lower top_k for more diversity
                     sample = self.sample_text(prompt=prompt, max_new_tokens=30, temperature=0.9, top_k=30)
@@ -2555,6 +2593,13 @@ def main():
         return
 
     config['dataset'] = args.dataset
+
+    # For wiki-ja, use cl100k_base's full vocab (100277) instead of GPT-2's (50257)
+    # The cl100k_base tokenizer has much better CJK coverage; restricting to 50257
+    # would discard important Japanese tokens and map them to UNK
+    if args.dataset == 'wiki-ja' and config['vocab_size'] == 50257:
+        config['vocab_size'] = 100277
+        print(f"\n[wiki-ja] Auto-adjusted vocab_size: 50257 → 100277 (cl100k_base full vocab)")
 
     # Enable full geometric learning if requested (for non-standard modes)
     if args.enable_sigma_phi and mode != 'standard':
