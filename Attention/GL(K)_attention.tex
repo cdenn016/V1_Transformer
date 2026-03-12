@@ -1762,7 +1762,7 @@ which is a \emph{Gated Linear Unit}: a linear function of the input gated by a B
 
 \paragraph{Binary limit: sigmoid as a special case.}
 
-The general Boltzmann gate operates over all $N$ neighbors simultaneously, with each contribution weighted by its KL energy. In the special case where only $N = 2$ sources compete for influence on agent $i$, the Boltzmann distribution over two states reduces to the logistic sigmoid $\sigma$, since $\exp(-E_1/\tau)/(\exp(-E_1/\tau) + \exp(-E_2/\tau)) = \sigma((E_2 - E_1)/\tau)$:
+The general Boltzmann gate operates over all $n_s$ sources simultaneously, where $n_s$ denotes the number of neighbors contributing to agent $i$'s update (distinct from the sequence length $N$ defined in Table~\ref{tab:notation}; in the full attention setting $n_s = N-1$, but the gate structure holds for any $n_s$). In the special case where only $n_s = 2$ sources compete for influence on agent $i$, the Boltzmann distribution over two states reduces to the logistic sigmoid $\sigma$, since $\exp(-E_1/\tau)/(\exp(-E_1/\tau) + \exp(-E_2/\tau)) = \sigma((E_2 - E_1)/\tau)$:
 %
 \begin{equation}
 \beta_{i1} = \sigma\!\left(\frac{D_{\mathrm{KL},i2} - D_{\mathrm{KL},i1}}{\tau}\right),
@@ -1771,19 +1771,19 @@ The general Boltzmann gate operates over all $N$ neighbors simultaneously, with 
 \label{eq:binary_silu}
 \end{equation}
 %
-This recovers the SiLU/Swish \citep{ramachandran2018searching} structure $f(x) = x \cdot \sigma(g(x))$, with the gate argument determined by relative KL energies. This binary case corresponds to the FFN sublayer, where the hidden representation is split into two competing pathways representing precisely two sources whose relative informational surprise determines the gate. The sigmoid is thus not the general activation but instead is the $N = 2$ limit of the Boltzmann gate. 
+This recovers the SiLU/Swish \citep{ramachandran2018searching} structure $f(x) = x \cdot \sigma(g(x))$, with the gate argument determined by relative KL energies. This binary case corresponds to the FFN sublayer, where the hidden representation is split into two competing pathways representing precisely two sources whose relative informational surprise determines the gate. The sigmoid is thus not the general activation but instead is the $n_s = 2$ limit of the Boltzmann gate.
 
 \paragraph{Boltzmann gate, Gaussian family, and connection to GELU.}
 
 The information-geometric origin of the gate determines its functional form. For example, in the isotropic limit $\Sigma_j = \sigma^2 I$, the un-normalized gate for neighbor $j$ is $\exp(-E_{ij}/\tau) = \exp(-\|e_{ij}\|^2 / 2\sigma^2\tau)$, a Gaussian function of the prediction error. The Boltzmann distribution over KL energies is therefore a \emph{Gaussian mixture gate}: each neighbor's weight is a Gaussian in prediction-error space, normalized by the partition function $Z_i = \sum_k \exp(-\|e_{ik}\|^2/2\sigma^2\tau)$. The activation functions used in practice are specific instantiations of this information-geometric gate under different limits:
 %
 \begin{align}
-\text{SiLU}(x) &= x \cdot \sigma(x) && \text{logistic sigmoid gate (binary Boltzmann, $N\!=\!2$)}, \notag \\
+\text{SiLU}(x) &= x \cdot \sigma(x) && \text{logistic sigmoid gate ($n_s\!=\!2$)}, \notag \\
 \text{GELU}(x) &= x \cdot \Phi(x) && \text{Gaussian CDF gate}, \label{eq:activation_comparison} \\
-\text{VFE}(e) &= e \cdot \exp(-\|e\|^2/\tau')/Z && \text{Boltzmann gate (general $N$, Gaussian energy)}. \notag
+\text{VFE}(e) &= e \cdot \exp(-\|e\|^2/\tau')/Z && \text{Boltzmann gate (general $n_s$, Gaussian energy)}. \notag
 \end{align}
 %
-All three belong to the Gaussian family of gated linear units. The logistic sigmoid $\sigma(x) = 1/(1+e^{-x})$ is the two-state Boltzmann distribution. The Gaussian CDF $\Phi(x) = \frac{1}{2}\operatorname{erfc}(-x/\sqrt{2})$ is the integral of the Gaussian PDF $\propto \exp(-x^2/2)$ that appears as the VFE gate's un-normalized weight. These are members of the same exponential family, related by the number of competing information sources ($N = 2$ for sigmoid, $N > 2$ for softmax) and the functional form of the energy ($E \propto x$ for SiLU, $E \propto x^2$ for VFE).
+All three belong to the Gaussian family of gated linear units. The logistic sigmoid $\sigma(x) = 1/(1+e^{-x})$ is the two-state Boltzmann distribution. The Gaussian CDF $\Phi(x) = \frac{1}{2}\operatorname{erfc}(-x/\sqrt{2})$ is the integral of the Gaussian PDF $\propto \exp(-x^2/2)$ that appears as the VFE gate's un-normalized weight. These are members of the same exponential family, related by the number of competing information sources ($n_s = 2$ for sigmoid, $n_s > 2$ for softmax) and the functional form of the energy ($E \propto x$ for SiLU, $E \propto x^2$ for VFE).
 
 ReLU is the zero-temperature ($\tau \to 0$) limit: the Boltzmann distribution concentrates on the lowest-energy state and the gate becomes a step function $\Theta$, giving $x \cdot \Theta(x) = \max(0, x)$.
 
