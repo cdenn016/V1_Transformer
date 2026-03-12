@@ -1812,16 +1812,16 @@ comprising a prior mean $\mu_p^c$, prior covariance $\Sigma_p^c$, and gauge fram
 
 \subsection{Summary}
 
-Under the successive limits: (i) isotropic beliefs with $\sigma^{-2}$ absorbed into learned projections, (ii) constant gauge ($\Omega_{ij} = \Omega$ for all pairs), and (iii) learned gauge via projections ($W_Q W_K^\top = \sigma^{-2}\Omega^{-\top} \in \mathrm{GL}(d_k)$), variational gradient descent on the gauge-equivariant free energy is:
+Under the successive limits: (i) isotropic beliefs with $\sigma^{-2}$ absorbed into learned projections, (ii) constant gauge ($\Omega_{ij} = \Omega$ for all pairs), and (iii) learned gauge via projections ($W_Q W_K^\top = \sigma^{-2}\Omega^{-\top} \in \mathrm{GL}(d_k)$), variational natural-gradient descent on the gauge-equivariant free energy is:
 
 \begin{equation}
-\theta_{k+1} = \theta_k - \eta \nabla_\theta \mathcal{F}(\theta_k)
+\theta_{k+1} = \theta_k - \eta \,\tilde{\nabla}_\theta \mathcal{F}(\theta_k)
 \end{equation}
 
 and recovers the standard training update:
 
 \begin{equation}
-\theta_{k+1} = \theta_k - \eta \nabla_\theta \mathcal{L}(\theta_k),
+\theta_{k+1} = \theta_k - \eta \,\tilde{\nabla}_\theta \mathcal{L}(\theta_k),
 \end{equation}
 
 under the identifications: $\mathcal{F}$ (free energy) $\leftrightarrow$ $\mathcal{L}$ (loss + regularization); attention weights $\beta_{ij}$ $\leftrightarrow$ transformer attention $\alpha_{ij}$; observations $-\log p(o \mid \mu)$ $\leftrightarrow$ loss function; and symmetry breaking $\leftrightarrow$ training.
