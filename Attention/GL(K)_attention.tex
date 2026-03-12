@@ -1546,7 +1546,7 @@ Observations break symmetry & Explicit breaking & Training / learning & D \\
 \multicolumn{4}{|l|}{\textit{Architecture}} \\
 \hline
 $\mu^{(\ell+1)} \!=\! \mu^{(\ell)} - \tilde{\eta}\,\Sigma\nabla\mathcal{F}$ & Natural gradient flow & Residual connection & D \\
-$\partial\beta/\partial\mu$ (Eq.~\ref{eq:softmax_gradient_nonlinearity}) & Softmax gradient & Nonlinear activation & S \\
+$e \cdot \exp(-\|e\|^2/\tau)/Z$ (Eq.~\ref{eq:vfe_glu}) & Boltzmann GLU gate & GELU/SiLU activation & D \\
 VFE iterations ($T$ inner, $L$ outer) & Shared / fresh weights & Layers / depth; DEQ at $L\!=\!1$ & D \\
 Prior bank $\{(\mu_p^c, \Sigma_p^c, \phi_c)\}$ & Deterministic limit & Embedding matrix $W_{\text{embed}}$ & S \\
 $p(o|\mu) = \mathrm{Cat}(\softmax(W\mu))$ & Observation model & Output proj.\ $+$ softmax & D \\
@@ -1732,24 +1732,72 @@ Beyond the core attention mechanism, several additional transformer components a
 \subsubsection{Feed forward Networks and Non-linear Activations.}
 \label{sec:ffn_nonlinearity}
 
-Standard transformers utilize attention sub-layers with feedforward networks (FFNs). These are typically two-layer MLPs with a non-linear activation mechanism such as GeLU \citep{hendrycks2016gaussian}. Within the gauge-theoretic framework, the FFN corresponds to the iterative VFE dynamics that adjust beliefs between attention computations.
+Standard transformers utilize attention sub-layers with feedforward networks (FFNs). These are typically two-layer MLPs with a non-linear activation mechanism such as GeLU \citep{hendrycks2016gaussian}. Within the gauge-theoretic framework, the FFN corresponds to the iterative VFE dynamics that adjust beliefs between attention computations. We now show that the nonlinear activation function is not an architectural choice but a consequence of the variational principle: the VFE gradient \emph{derives} a Gated Linear Unit (GLU) \citep{dauphin2017language}.
 
-We may observe that the variational gradient $\partial \mathcal{F}/\partial \mu_i$ (Eq.~\ref{eq:residual_gradient_flow}) is itself a non-linear function of $\mu_i$, via its dependency on the attention weights $\beta_{ij}$. Differentiating $\beta_{ij} = \operatorname{softmax}(-D_{\mathrm{KL}}/\tau)$ with respect to $\mu_i$ yields:
+\paragraph{Message passing as a gated linear unit.}
+
+Consider the message-passing contribution of neighbor $j$ to the mean update (Eq.~\ref{eq:mu_gradient_general}):
+%
+\begin{equation}
+\Delta\mu_i\big|_j \;=\; -\tilde{\eta}\,\Sigma_i\,\beta_{ij}\,(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}\bigl(\mu_i - \Omega_{ij}\mu_j\bigr).
+\label{eq:glu_message}
+\end{equation}
+%
+The message $e_{ij} \equiv \mu_i - \Omega_{ij}\mu_j$ is \emph{linear} in the beliefs. The attention gate $\beta_{ij} = \operatorname{softmax}_j\!\bigl(-D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)/\tau\bigr)$ is a \emph{Boltzmann weight}: each neighbor's contribution is weighted by $\exp(-E_{ij}/\tau)/Z_i$, where the ``energy'' $E_{ij} = D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ depends on the message magnitude through the Gaussian KL:
+%
+\begin{equation}
+D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) = \tfrac{1}{2}\,e_{ij}^\top (\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1} e_{ij} + \text{(covariance terms)}.
+\label{eq:dkl_quadratic}
+\end{equation}
+%
+Each message contribution therefore has the structure:
+%
+\begin{equation}
+\boxed{\Delta\mu_i\big|_j \;\propto\; \underbrace{e_{ij}}_{\text{linear}} \;\cdot\; \underbrace{\frac{\exp\!\bigl(-\tfrac{1}{2\tau}\|e_{ij}\|^2_{\Sigma_j^{-1}} + \cdots\bigr)}{\sum_k \exp\!\bigl(-\tfrac{1}{2\tau}\|e_{ik}\|^2_{\Sigma_k^{-1}} + \cdots\bigr)}}_{\text{Boltzmann gate}},}
+\label{eq:vfe_glu}
+\end{equation}
+%
+which is a \emph{Gated Linear Unit}: a linear function of the input gated by a Boltzmann distribution over KL energies computed from the same input. The gate is not assumed --- it is the thermodynamic weight that the variational principle assigns to each neighbor. This is derived, not designed.
+
+\paragraph{Binary case: Boltzmann reduces to sigmoid.}
+For $N = 2$ neighbors, the Boltzmann distribution over two states reduces to the logistic sigmoid $\sigma$, since $\exp(-E_1/\tau)/(\exp(-E_1/\tau) + \exp(-E_2/\tau)) = \sigma((E_2 - E_1)/\tau)$:
+%
+\begin{equation}
+\beta_{i1} = \sigma\!\left(\frac{D_{\mathrm{KL},i2} - D_{\mathrm{KL},i1}}{\tau}\right),
+\qquad
+\Delta\mu_i\big|_1 \propto e_{i1} \cdot \sigma\!\left(\frac{\|e_{i2}\|^2 - \|e_{i1}\|^2}{2\sigma^2\tau} + \cdots\right).
+\label{eq:binary_silu}
+\end{equation}
+%
+This is the SiLU/Swish \citep{ramachandran2018searching} structure $f(x) = x \cdot \sigma(g(x))$, with the gate argument determined by the relative KL energies.  The sigmoid is thus not the general case but the $N = 2$ limit of the Boltzmann gate. For general $N$, each message is gated by its Boltzmann weight --- the sigmoid is recovered only when two neighbors compete.
+
+\paragraph{Boltzmann gate, Gaussian family, and connection to GELU.}
+The Boltzmann gate has a specific functional form determined by the energy landscape. In the isotropic limit $\Sigma_j = \sigma^2 I$, the unnormalized gate for neighbor $j$ is $\exp(-E_{ij}/\tau) = \exp(-\|e_{ij}\|^2 / 2\sigma^2\tau)$ --- a Gaussian function of the prediction error. The Boltzmann distribution over KL energies is therefore a \emph{Gaussian mixture gate}: each neighbor's weight is a Gaussian in the prediction-error space, normalized by the partition function $Z_i = \sum_k \exp(-\|e_{ik}\|^2/2\sigma^2\tau)$. Compare this with the standard activation functions, all of which are Gated Linear Units $f(x) = x \cdot g(x)$:
+%
+\begin{align}
+\text{SiLU}(x) &= x \cdot \sigma(x) && \text{logistic sigmoid gate (binary Boltzmann)}, \notag \\
+\text{GELU}(x) &= x \cdot \Phi(x) && \text{Gaussian CDF gate}, \label{eq:activation_comparison} \\
+\text{VFE}(e) &= e \cdot \exp(-\|e\|^2/\tau')/Z && \text{Boltzmann gate (Gaussian energy)}. \notag
+\end{align}
+%
+All three belong to the \emph{Gaussian family} of gated linear units. The logistic sigmoid $\sigma(x) = 1/(1+e^{-x})$ is the two-state Boltzmann distribution. The Gaussian CDF $\Phi(x) = \frac{1}{2}\operatorname{erfc}(-x/\sqrt{2})$ is the integral of the Gaussian PDF $\propto \exp(-x^2/2)$ that appears as the VFE gate's unnormalized weight. These are not merely analogous --- they are members of the same exponential family, related by the number of competing states ($N = 2$ for sigmoid, $N > 2$ for softmax) and the functional form of the energy ($E \propto x$ for SiLU, $E \propto x^2$ for VFE).
+
+The VFE derives from first principles that the activation should be a Boltzmann-gated linear unit with Gaussian energy. The specific gate functions used in practice (sigmoid for SiLU, Gaussian CDF for GELU) are special cases or close relatives. ReLU is the zero-temperature ($\tau \to 0$) limit: the Boltzmann distribution concentrates on the lowest-energy state, and the gate becomes a step function $\Theta$, giving $x \cdot \Theta(x) = \max(0, x)$.
+
+\paragraph{Softmax-gradient correction.}
+Beyond the GLU structure of the message-passing term itself, the full VFE gradient contains an additional nonlinear correction from differentiating $\beta_{ij}$ with respect to $\mu_i$:
 
 \begin{equation}
 \frac{\partial \beta_{ij}}{\partial \mu_i} = -\frac{\beta_{ij}}{\tau}\left[\frac{\partial D_{\mathrm{KL},ij}}{\partial \mu_i} - \sum_k \beta_{ik} \frac{\partial D_{\mathrm{KL},ik}}{\partial \mu_i}\right],
 \label{eq:softmax_gradient_nonlinearity}
 \end{equation}
 
+where $D_{\mathrm{KL},ij} \equiv D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$. This \emph{centered} gradient (deviation of the per-source KL gradient from its $\beta$-weighted mean) provides a higher-order nonlinearity beyond the first-order GLU gate. It creates positive feedback: similar beliefs yield higher $\beta$, which pulls beliefs closer still. For a single component, $\partial \beta_j / \partial z_j = \beta_j(1 - \beta_j)$, which is itself a sigmoid-shaped function of the logit. This correction is unique to the VFE setting, where $\beta$ depends on the same $\mu$ being updated; in standard transformers, the analogous derivative appears only during backpropagation, not in the forward pass.
 
+The same softmax-gradient nonlinearity appears in the covariance and gauge frame channels. The $\Sigma_i$ gradient (Eq.~\ref{eq:Sigma_gradient_main}) contains the term $\sum_j (\partial \beta_{ij}/\partial \Sigma_i)\, D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$, which has the identical centered structure. Similarly, the gauge frame gradient (Eq.~\ref{eq:beta_grad_phi}) yields $\partial \beta_{ij}/\partial \phi_i = -(\beta_{ij}/\tau)[\partial K_{ij}/\partial \phi_i - \sum_k \beta_{ik}\, \partial K_{ik}/\partial \phi_i]$, the same self-normalizing form. Each variational channel ($\mu$, $\Sigma$, $\phi$) thus contributes its own GLU-type activation through the attention weight derivatives, and the composition of these channels within each VFE iteration produces a richer nonlinear map than any single channel alone.
 
-where $D_{\mathrm{KL},ij} \equiv D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$. This expression is a \emph{centered} gradient (the deviation of the per-source KL gradient from its $\beta$-weighted mean) multiplied by the attention weight itself. This self-normalizing structure provides the nonlinearity in the VFE framework. It creates positive feedback (similar beliefs yield higher $\beta$, which pulls beliefs closer still) and implements an implicit gating mechanism where the sign and magnitude of the gradient depend on the current attention distribution.
-
-A connection to standard activations can be drawn through the structure of the softmax derivative. For a single output component, $\partial \beta_j / \partial z_j = \beta_j(1 - \beta_j)$, which is a sigmoid-like function of the logit $z_j$. This is not coincidental: the softmax function is itself a multi-class generalization of the logistic sigmoid, and its derivative inherits the characteristic S-shaped gating profile. Standard activation functions used in practice (ReLU, GELU, SiLU/Swish) can be understood as piecewise or smooth approximations to sigmoidal gating: GELU($x$) $= x \cdot \Phi(x)$ and SiLU($x$) $= x \cdot \sigma(x)$ are explicitly sigmoid-gated, while ReLU is the limiting case of a hard sigmoid gate. The VFE framework thus predicts that the natural nonlinearity has sigmoidal gating structure, and the empirically successful activation functions are approximations to this form.
-
-The same softmax-gradient nonlinearity appears in the covariance and gauge frame channels. The $\Sigma_i$ gradient (Eq.~\ref{eq:Sigma_gradient_main}) contains the term $\sum_j (\partial \beta_{ij}/\partial \Sigma_i)\, D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$, which has the identical centered structure: the derivative $\partial \beta_{ij}/\partial \Sigma_i$ is proportional to $\beta_{ij}/\tau$ times the deviation of the per-source KL gradient from its $\beta$-weighted mean, now with respect to $\Sigma_i$ rather than $\mu_i$. Similarly, the gauge frame gradient (Eq.~\ref{eq:beta_grad_phi}) yields $\partial \beta_{ij}/\partial \phi_i = -(\beta_{ij}/\tau)[\partial K_{ij}/\partial \phi_i - \sum_k \beta_{ik}\, \partial K_{ik}/\partial \phi_i]$, the same self-normalizing, sigmoid-gated form acting on the frame parameters. Each variational channel ($\mu$, $\Sigma$, $\phi$) thus contributes its own nonlinear activation through the attention weight derivatives, and the composition of these channels within each VFE iteration produces a richer nonlinear map than any single channel alone.
-
-In the full VFE implementation, multiple iterations of gradient descent with recomputed $\beta$ at each step constitute the analogue of the FFN sublayer. Each iteration applies the nonlinear map \eqref{eq:softmax_gradient_nonlinearity}, and the composition of multiple such iterations produces increasingly complex nonlinear transformations of the beliefs. The number of VFE iterations thus plays the role of FFN depth. The theory predicts a specific \emph{form} of nonlinearity (the softmax gradient \eqref{eq:softmax_gradient_nonlinearity}) with sigmoidal gating structure, and standard activation functions share this qualitative character. Whether the quantitative differences between the VFE-predicted nonlinearity and engineered activations account for the performance gap between gauge VFE models and standard transformers remains an open empirical question.
+\paragraph{FFN depth from VFE iterations.}
+In the full VFE implementation, multiple iterations of gradient descent with recomputed $\beta$ at each step constitute the analogue of the FFN sublayer. Each iteration applies the GLU map \eqref{eq:vfe_glu} composed with the softmax-gradient correction \eqref{eq:softmax_gradient_nonlinearity}, producing increasingly complex nonlinear transformations. The number of VFE iterations plays the role of FFN depth, as established in the ``Layers as VFE iterations'' paragraph (Section~\ref{sec:residual_connections}). The central result is that the VFE \emph{derives} a Boltzmann-gated linear unit from the variational principle, and the empirically successful activations (GELU, SiLU, ReLU) are special cases or close relatives within the same exponential family.
 
 \subsubsection{Token Embeddings as Prior Banks.}
 \label{sec:embeddings}
@@ -1764,21 +1812,21 @@ comprising a prior mean $\mu_p^c$, prior covariance $\Sigma_p^c$, and gauge fram
 
 \subsection{Summary}
 
-Under the successive limits: (i) isotropic beliefs with $\sigma^{-2}$ absorbed into learned projections, (ii) constant gauge ($\Omega_{ij} = \Omega$ for all pairs), and (iii) learned gauge via projections ($W_Q W_K^\top = \sigma^{-2}\Omega^{-\top} \in \mathrm{GL}(d_k)$), variational gradient descent on the gauge-equivariant free energy is:
+Under the successive limits: (i) isotropic beliefs with $\sigma^{-2}$ absorbed into learned projections, (ii) constant gauge ($\Omega_{ij} = \Omega$ for all pairs), and (iii) learned gauge via projections ($W_Q W_K^\top = \sigma^{-2}\Omega^{-\top} \in \mathrm{GL}(d_k)$), variational natural-gradient descent on the gauge-equivariant free energy is:
 
 \begin{equation}
-\theta_{k+1} = \theta_k - \eta \nabla_\theta \mathcal{F}(\theta_k)
+\theta_{k+1} = \theta_k - \eta \,\tilde{\nabla}_\theta \mathcal{F}(\theta_k)
 \end{equation}
 
 and recovers the standard training update:
 
 \begin{equation}
-\theta_{k+1} = \theta_k - \eta \nabla_\theta \mathcal{L}(\theta_k),
+\theta_{k+1} = \theta_k - \eta \,\tilde{\nabla}_\theta \mathcal{L}(\theta_k),
 \end{equation}
 
 under the identifications: $\mathcal{F}$ (free energy) $\leftrightarrow$ $\mathcal{L}$ (loss + regularization); attention weights $\beta_{ij}$ $\leftrightarrow$ transformer attention $\alpha_{ij}$; observations $-\log p(o \mid \mu)$ $\leftrightarrow$ loss function; and symmetry breaking $\leftrightarrow$ training.
 
-Beyond the core attention formula, the gauge-theoretic framework provides a unified account of the full transformer architecture (Table~\ref{tab:fep_nn_correspondence}). Causal masking, ALiBi, relative position biases, and sliding window attention all emerge as special cases of the non-uniform attention prior $\pi_k$ in the mixture-of-sources model (Section~\ref{sec:nonuniform_priors}). Rotary position embeddings correspond to position-dependent gauge frames restricted to $\mathrm{SO}(2)^{d_k/2}$, partially relaxing the flat-bundle limit while retaining the learned constant gauge (Section~\ref{sec:rope}). Layer normalization is a projection onto the $\mathfrak{sl}(K)$ subalgebra that eliminates key-norm bias at its algebraic origin. Residual connections are the inherent structure of iterative variational gradient descent (Section~\ref{sec:residual_connections}), with the state-dependent precision $\alpha_i$ generalizing the fixed skip connection to a context-dependent gate. The FFN sublayer corresponds to multiple VFE iterations with recomputed attention weights, and the emergent nonlinearity $\partial \beta/\partial \mu$ (Eq.~\ref{eq:softmax_gradient_nonlinearity}) exhibits the sigmoidal gating structure shared by standard activations (Section~\ref{sec:ffn_nonlinearity}). Weight decay is the prior coupling $\alpha D_{\mathrm{KL}}(q_i \| p_i)$ in the deterministic limit.
+Beyond the core attention formula, the gauge-theoretic framework provides a unified account of the full transformer architecture (Table~\ref{tab:fep_nn_correspondence}). Causal masking, ALiBi, relative position biases, and sliding window attention all emerge as special cases of the non-uniform attention prior $\pi_k$ in the mixture-of-sources model (Section~\ref{sec:nonuniform_priors}). Rotary position embeddings correspond to position-dependent gauge frames restricted to $\mathrm{SO}(2)^{d_k/2}$, partially relaxing the flat-bundle limit while retaining the learned constant gauge (Section~\ref{sec:rope}). Layer normalization is a projection onto the $\mathfrak{sl}(K)$ subalgebra that eliminates key-norm bias at its algebraic origin. Residual connections are the inherent structure of iterative variational gradient descent (Section~\ref{sec:residual_connections}), with the state-dependent precision $\alpha_i$ generalizing the fixed skip connection to a context-dependent gate. The FFN sublayer corresponds to multiple VFE iterations with recomputed attention weights, and the message-passing term derives a Boltzmann-gated linear unit (Eq.~\ref{eq:vfe_glu}) in the same exponential family as GELU and SiLU (Section~\ref{sec:ffn_nonlinearity}). Weight decay is the prior coupling $\alpha D_{\mathrm{KL}}(q_i \| p_i)$ in the deterministic limit.
 
 The $\mathrm{GL}(K)$ gauge invariance theorem (Theorem~\ref{thm:glk_invariance}) is essential as it guarantees that the learned projections $W_Q, W_K$ are valid gauge transformations, explaining why transformers can learn arbitrary (invertible) attention patterns. Each row of Table~\ref{tab:fep_nn_correspondence} represents a degree of freedom that the full gauge-theoretic framework retains and that standard transformers collapse into a simpler form. The framework thus provides not only an explanatory account of existing architectures but a taxonomy of generalizations, indexed by which simplifying limits are relaxed.
 
