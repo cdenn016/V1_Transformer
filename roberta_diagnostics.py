@@ -118,7 +118,7 @@ def compute_key_norm_stats(
                 continue
             for hi in range(nh):
                 Kh = K[:, hi, :]  # [seq, d]
-                norms = torch.norm(Kh, dim=-1).cpu().numpy()  # [seq]
+                norms = torch.norm(Kh, dim=-1).detach().cpu().numpy()  # [seq]
                 mu = norms.mean()
                 if mu > 1e-8:
                     cv_accum[li, hi] += norms.std() / mu
