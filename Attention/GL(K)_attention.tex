@@ -1497,6 +1497,9 @@ The full variational flow for all agent parameters takes the form:
 
 where $\tilde{\nabla}_{\theta_i}$ denotes the natural gradient on each channel's parameter manifold (Fisher-Rao for $\mu_i$ and $\Sigma_i$; Killing form or pullback metric for $\phi_i$, see Appendix~\ref{app:phi_gradients}). Each channel possesses its own residual structure and effective learning rate. This multi-channel residual flow corresponds to the residual stream interpretation of transformers \citep{elhage2021mathematical}, where each layer reads from and writes to a shared residual pathway. In the gauge-theoretic framework, this residual stream is the belief state $(\mu_i, \Sigma_i, \phi_i)$, accumulating incremental updates from successive layers of variational refinement.
 
+\paragraph{Layers as VFE iterations.}
+The identification $\ell \leftrightarrow$ gradient step makes the notion of ``depth'' a statement about how many steps of free energy minimization are performed. A standard $L$-layer transformer corresponds to $L$ natural-gradient steps, each with independently parameterized attention weights $\beta_{ij}^{(\ell)}$ (since $W_Q^{(\ell)}, W_K^{(\ell)}, W_V^{(\ell)}$ differ across layers). Within a single block one may also iterate the belief update $T$ times with \emph{shared} weights, recomputing $\beta_{ij}$ after each step; this gives $T$ inner VFE iterations per layer and $LT$ effective gradient steps in total. The standard transformer is the $T=1$ case. The opposite extreme, $L=1$ with $T\to\infty$, recovers a deep equilibrium model \citep{bai2019deep} in which the forward pass iterates to a fixed point of the variational gradient. Intermediate regimes interpolate between fast feedforward evaluation ($T=1$, many layers) and slow iterative inference ($T\gg 1$, few layers), with the total depth of belief refinement governed by the product $LT$.
+
 
 \begin{table}[p]
 \centering
@@ -1535,16 +1538,16 @@ $\mathcal{F}[\{q_i\}]$ & Deterministic limit & Loss $\mathcal{L}(\theta)$ & D \\
 $-\mathbb{E}_q[\log p(o|k)]$ & Point evaluation limit & Cross-entropy / MSE loss & D \\
 $\alpha\, D_{\KL}(q_i \| p_i)$ & $\alpha = $ const, deterministic & L2 weight decay & D \\
 $\alpha_i^* \!=\! c_0/(b_0 + D_{\KL})$ & State-dependent precision & Adaptive weight decay & D \\
-$d\mu/dt = -\eta\nabla\mathcal{F}$ & Euler discretization & Gradient descent (backprop) & D \\
+$d\mu/dt = -\eta\,\Sigma\nabla\mathcal{F}$ & Euler discretization & Gradient descent (backprop) & D \\
 Chain rule through layers & Layered composition & Backpropagation & D \\
 Vacuum (no observations) & Gauge-symmetric minimum & Untrained network & D \\
 Observations break symmetry & Explicit breaking & Training / learning & D \\
 \hline
 \multicolumn{4}{|l|}{\textit{Architecture}} \\
 \hline
-$\mu^{(t+1)} \!=\! \mu^{(t)} - \eta\nabla\mathcal{F}$ & Gradient flow structure & Residual connection & D \\
+$\mu^{(\ell+1)} \!=\! \mu^{(\ell)} - \tilde{\eta}\,\Sigma\nabla\mathcal{F}$ & Natural gradient flow & Residual connection & D \\
 $\partial\beta/\partial\mu$ (Eq.~\ref{eq:softmax_gradient_nonlinearity}) & Softmax gradient & Nonlinear activation & S \\
-Multiple VFE iterations & Dynamic $\beta$ recomputation & FFN sublayer & S \\
+VFE iterations ($T$ inner, $L$ outer) & Shared / fresh weights & Layers / depth; DEQ at $L\!=\!1$ & D \\
 Prior bank $\{(\mu_p^c, \Sigma_p^c, \phi_c)\}$ & Deterministic limit & Embedding matrix $W_{\text{embed}}$ & S \\
 $p(o|\mu) = \mathrm{Cat}(\softmax(W\mu))$ & Observation model & Output proj.\ $+$ softmax & D \\
 Fast subsystem $\mathcal{F}_{\text{fast}}$ & Frozen models & Forward pass (inference) & S \\
