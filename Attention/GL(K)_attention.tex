@@ -1553,15 +1553,8 @@ $p(o|\mu) = \mathrm{Cat}(\softmax(W\mu))$ & Observation model & Output proj.\ $+
 Fast subsystem $\mathcal{F}_{\text{fast}}$ & Frozen models & Forward pass (inference) & S \\
 Slow subsystem $\mathcal{F}_{\text{slow}}$ & Between-pass updates & Weight training & S \\
 \hline
-\multicolumn{4}{|l|}{\textit{Regularization}} \\
-\hline
-Stochastic $\pi_j \to m_j\pi_j$ & Random source masking & Attention dropout & I \\
-Noise in $\mu \to$ inflated $\Sigma$ & Effective uncertainty & Hidden dropout & I \\
-Fisher-Rao $G^{-1}\nabla\mathcal{F}$ & Diagonal approx.\ (heuristic) & Adam optimizer & I \\
-Riemannian trust region & Norm clipping on manifold & Gradient clipping & I \\
-\hline
 \end{tabular}
-\caption{Comprehensive correspondence between the gauge-theoretic VFE framework and transformer architecture. \textbf{Status column:} D = derived from the variational principle (mathematically exact or follows from explicit limits); S = \emph{structural} correspondence (the framework explains the component's role but does not uniquely predict its specific form); I = \emph{interpretive}.}
+\caption{Comprehensive correspondence between the gauge-theoretic VFE framework and transformer architecture. \textbf{Status column:} D = derived from the variational principle (mathematically exact or follows from explicit limits); S = \emph{structural} correspondence (the framework explains the component's role but does not uniquely predict its specific form).}
 \label{tab:fep_nn_correspondence}
 \end{table}
 
