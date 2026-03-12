@@ -477,20 +477,19 @@ def compute_attention_weights(
     # Convert KL distances to attention weights
     # =========================================================================
 
-    # DIMENSION-AWARE KL NORMALIZATION (τ = 2√K):
-    # KL between K-dimensional Gaussians has the form:
-    #   KL = ½(trace + mahal - K + logdet)
-    # The ½ prefactor means KL magnitudes grow as O(K/2), not O(K).
+    # DIMENSION-AWARE KL NORMALIZATION:
+    # KL between K-dimensional Gaussians: KL = ½(trace + mahal - K + logdet)
+    # KL magnitudes grow as O(K), so logit differences have std ∝ √K.
+    # We divide by √K to normalize to O(1), analogous to 1/√d_k in standard attention.
     #
-    # For K=3 (SO(3)), KL ≈ O(1) so kappa alone suffices.
-    # For K=100 (SO(100)), KL ≈ O(50) causing softmax saturation:
-    #   logits = -KL/κ ≈ -50 → one-hot attention → zero gradients.
+    # The parameter κ is related to the belief covariance: in the isotropic limit
+    # Σ = σ²I, κ ∝ σ² (the covariance IS the temperature). In the full theory,
+    # Σ provides per-head, per-token, per-direction temperature control; κ serves
+    # as a convenient global scalar handle on attention sharpness.
     #
-    # The theoretically derived temperature is τ = √K:
-    #   - √K handles the dimensional growth (sum of K per-dimension terms)
-    #   - The ½ prefactor in KL is a constant absorbed into κ, not the scaling
-    # Standard attention divides by √d_k to normalize logit-difference variance;
-    # analogously, KL logit differences have std ∝ √K, so we divide by √K.
+    # Effective temperature: τ_eff = κ · √K
+    # In the dot-product form (σ absorbed into W_Q W_K^T): τ = √d_k
+    # In the squared-distance form (½ from KL explicit):   τ = 2√d_k
     dim_scale = math.sqrt(max(K, 1))
 
     # Attention logits: -KL / (κ · √K)
