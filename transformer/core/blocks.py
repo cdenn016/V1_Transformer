@@ -121,7 +121,6 @@ class GaugeTransformerBlock(nn.Module):
         # Bayesian precision (learned prior self-coupling)
         ffn_learnable_alpha: bool = False,  # If True, use Gamma-Normal conjugate precision
         # Per-head specialization
-        per_head_kappa: bool = False,  # If True, learn separate κ_h per head
         use_output_projection: bool = False,  # If True, add W_O after multi-head attention
         # Multi-head VFE: per-block β through VFE iterations
         multihead_vfe: bool = False,  # If True, VFE_dynamic maintains per-head attention
@@ -168,7 +167,6 @@ class GaugeTransformerBlock(nn.Module):
             mask_self_attention: If True, mask out diagonal (no self-attention).
                                 Prevents attention collapse since KL(q_i||q_i)=0 always.
             ffn_learnable_alpha: If True, use Bayesian precision via Gamma-Normal conjugacy.
-            per_head_kappa: If True, learn separate κ_h per head in attention.
             use_output_projection: If True, add W_O projection after multi-head attention.
             multihead_vfe: If True, VFE_dynamic maintains per-head attention β_h.
         """
@@ -238,7 +236,6 @@ class GaugeTransformerBlock(nn.Module):
             use_identity_transport=use_identity_transport,
             mask_self_attention=mask_self_attention,
             enforce_orthogonal=enforce_orthogonal,
-            per_head_kappa=per_head_kappa,
             use_output_projection=use_output_projection,
             irrep_dims_override=ffn_irrep_dims if (gauge_group == 'GLK' and cross_head_perm is not None) else None,
             use_rope=use_rope,
@@ -288,7 +285,6 @@ class GaugeTransformerBlock(nn.Module):
             learnable_alpha=ffn_learnable_alpha,
             # Multi-head VFE
             multihead_vfe=multihead_vfe,
-            per_head_kappa=per_head_kappa,
             # Phi gradient preconditioning
             phi_natural_gradient=phi_natural_gradient,
             # Ablation toggles
@@ -503,7 +499,6 @@ class GaugeTransformerStack(nn.Module):
         # Bayesian precision (learned prior self-coupling)
         ffn_learnable_alpha: bool = False,  # If True, use Gamma-Normal conjugate precision
         # Per-head specialization
-        per_head_kappa: bool = False,  # If True, learn separate κ_h per head
         use_output_projection: bool = False,  # If True, add W_O after multi-head attention
         # Multi-head VFE: per-block β through VFE iterations
         multihead_vfe: bool = False,  # If True, VFE_dynamic maintains per-head attention
@@ -555,7 +550,6 @@ class GaugeTransformerStack(nn.Module):
             mask_self_attention: If True, mask out diagonal (no self-attention).
                                 Prevents attention collapse since KL(q_i||q_i)=0 always.
             ffn_learnable_alpha: If True, use Bayesian precision via Gamma-Normal conjugacy.
-            per_head_kappa: If True, learn separate κ_h per head.
             use_output_projection: If True, add W_O projection after multi-head attention.
             multihead_vfe: If True, VFE_dynamic maintains per-head attention β_h.
         """
@@ -617,7 +611,6 @@ class GaugeTransformerStack(nn.Module):
                 # Bayesian precision
                 ffn_learnable_alpha=ffn_learnable_alpha,
                 # Per-head specialization
-                per_head_kappa=per_head_kappa,
                 use_output_projection=use_output_projection,
                 # Multi-head VFE
                 multihead_vfe=multihead_vfe,

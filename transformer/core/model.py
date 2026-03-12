@@ -462,7 +462,6 @@ class GaugeTransformerLM(nn.Module):
             # Bayesian precision
             ffn_learnable_alpha=ffn_learnable_alpha,
             # Per-head specialization
-            per_head_kappa=config.get('per_head_kappa', False),
             use_output_projection=config.get('use_output_projection', False),
             # Multi-head VFE
             multihead_vfe=config.get('multihead_vfe', False),
