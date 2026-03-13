@@ -164,7 +164,6 @@ class TestModelIntegration:
             'use_block_diagonal_kl': True,
             'diagonal_covariance': True,
             'use_layernorm': True,
-            'use_dropout': False,
             'use_residual': True,
         }
 
