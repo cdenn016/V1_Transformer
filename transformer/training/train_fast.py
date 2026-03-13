@@ -71,12 +71,12 @@ class FastTrainingConfig:
 
     # Optimizer hyperparameters
     beta1: float = 0.9
-    beta2: float = 0.95  # Match TrainingConfig (0.95 for natural gradient stability)
+    beta2: float = 0.999  # Higher β₂ for stable second-moment estimates in FastTrainer
     eps: float = 1e-8
     # weight_decay implements the Level 3 hyper-prior N(0, 1/(2·wd)) on parameters.
     # For embedding parameters (μ_p, σ_p, φ), this is the top of the Bayesian hierarchy:
     #   x → q(E-step) → p(M-step) → N(0, 1/(2·wd))
-    weight_decay: float = 0.1  # Match TrainingConfig
+    weight_decay: float = 0.01  # Weaker regularization than TrainingConfig (0.1) — tuned for FastTrainer
     # Embedding-specific weight decay (Level 3 hyper-prior on priors).
     # None = use weight_decay (same as non-embedding params).
     # 0.0 = uninformative hyper-prior (no regularization toward zero).
@@ -87,7 +87,7 @@ class FastTrainingConfig:
     grad_accumulation_steps: int = 1
 
     # Free energy coefficients
-    alpha: float = 0.1            # Self-consistency regularization (match TrainingConfig)
+    alpha: float = 1.0            # Self-consistency KL(q||p) weight — stronger than TrainingConfig (0.1) for FastTrainer stability
     beta: float = 1.0             # Belief alignment (maps to lambda_beta in loss)
     lambda_gamma: float = 0.0     # Model alignment (disabled by default)
     kappa_gamma: float = 1.0      # Temperature for γ_ij coupling weights

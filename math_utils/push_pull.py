@@ -234,9 +234,11 @@ def push_gaussian(
     # Symmetrize (remove numerical asymmetry)
     Sigma_pushed = 0.5 * (Sigma_pushed + np.swapaxes(Sigma_pushed, -1, -2))
     
-    # Eigenvalue floor for numerical stability (avoid unconditional inflation)
+    # Eigenvalue floor for numerical stability.
+    # Use eigh to selectively floor small eigenvalues instead of blanket +ε*I,
+    # but keep the floor at 1e-4 to prevent confidence explosion over iterations.
     w, V = np.linalg.eigh(Sigma_pushed)
-    w = np.maximum(w, 1e-8)
+    w = np.maximum(w, 1e-4)
     Sigma_pushed = np.einsum('...ij,...j,...kj->...ik', V, w, V, optimize=True)
     
     # ========== Compute precision if requested ==========
