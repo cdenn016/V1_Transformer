@@ -383,6 +383,7 @@ class GaugeTransformerLM(nn.Module):
                 gauge_fixed_priors=gauge_fixed_priors,
                 generators=self.generators if gauge_fixed_priors else None,
                 phi_dim=self.phi_dim,
+                phi_scale=config.get('phi_scale', 0.3),
             )
             print(f"[GaugeTransformerLM] Created PriorBank with token-dependent priors (vocab_size={vocab_size})")
             print(f"                     gauge_fixed_priors={gauge_fixed_priors}, tau={self.prior_bank_tau}")

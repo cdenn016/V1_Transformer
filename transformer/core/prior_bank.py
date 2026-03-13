@@ -73,6 +73,7 @@ class PriorBank(nn.Module):
         gauge_fixed_priors: bool = False,  # Default False for pure FEP flexibility
         generators: Optional[torch.Tensor] = None,  # (n_gen, K, K) Lie algebra generators
         phi_dim: int = 3,  # 3 for SO(3), N(N-1)/2 for SO(N)
+        phi_scale: float = 1.0,  # Init scale for gauge frames (non-gauge-fixed mode)
     ):
         """
         Initialize the prior bank.
@@ -136,6 +137,11 @@ class PriorBank(nn.Module):
                     'log_prior_sigma',
                     torch.full((vocab_size, embed_dim), math.log(init_sigma_scale))
                 )
+
+            # Per-token gauge frames φ_v — needed for gauge transport even
+            # without gauge-fixed priors. Without this, phi has no gradient path.
+            self.phi_embed = nn.Embedding(vocab_size, phi_dim)
+            nn.init.normal_(self.phi_embed.weight, std=phi_scale)
 
     @property
     def base_prior_sigma(self) -> torch.Tensor:
@@ -201,8 +207,8 @@ class PriorBank(nn.Module):
             # Standard per-token lookup (TOKEN-INDEXED!)
             mu_p = self.prior_mu[token_ids]  # Index by token ID
             sigma_p = self.prior_sigma[token_ids]
-            # Return zero phi for non-gauge-fixed mode
-            phi = torch.zeros(*token_ids.shape, self.phi_dim, device=token_ids.device)
+            # Learnable per-token gauge frames
+            phi = self.phi_embed(token_ids)
             return mu_p, sigma_p, phi
 
     def encode(
