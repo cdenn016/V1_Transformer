@@ -1913,31 +1913,30 @@ class VariationalFFNDynamic(nn.Module):
         self.use_prior_bank = use_prior_bank
         self.prior_bank = prior_bank
 
-        if pure_fep_mode:
-            if use_prior_bank and prior_bank is not None:
-                # Token-dependent priors via PriorBank (CORRECT for language!)
-                self.prior_bank = prior_bank
-                print(f"[VariationalFFNDynamic] Using PriorBank with token-dependent priors (vocab_size={prior_bank.vocab_size})")
-            elif use_prior_bank and prior_bank is None:
-                raise ValueError(
-                    "use_prior_bank=True requires prior_bank to be provided! "
-                    "Create a PriorBank and pass it to VariationalFFNDynamic."
-                )
-            else:
-                # Legacy position-dependent priors (DEPRECATED for language!)
-                import warnings
-                warnings.warn(
-                    "pure_fep_mode without PriorBank uses POSITION-DEPENDENT priors. "
-                    "This doesn't work for language modeling! "
-                    "Set use_prior_bank=True and provide a PriorBank for token-dependent priors.",
-                    UserWarning
-                )
-                # Position-dependent persistent priors (the LEARNING happens here!)
-                # These evolve based on prediction-error-weighted beliefs
-                self.register_buffer('prior_mu', torch.zeros(max_seq_len, embed_dim))
-                self.register_buffer('prior_sigma', torch.ones(max_seq_len, embed_dim))
-                self.register_buffer('prior_update_count', torch.zeros(max_seq_len))
-                self.register_buffer('prior_initialized', torch.tensor(False))
+        # PriorBank integration (works with or without pure_fep_mode)
+        if use_prior_bank and prior_bank is not None:
+            self.prior_bank = prior_bank
+            print(f"[VariationalFFNDynamic] Using PriorBank with token-dependent priors (vocab_size={prior_bank.vocab_size})")
+        elif use_prior_bank and prior_bank is None:
+            raise ValueError(
+                "use_prior_bank=True requires prior_bank to be provided! "
+                "Create a PriorBank and pass it to VariationalFFNDynamic."
+            )
+
+        if pure_fep_mode and not use_prior_bank:
+            # Legacy position-dependent priors (DEPRECATED for language!)
+            import warnings
+            warnings.warn(
+                "pure_fep_mode without PriorBank uses POSITION-DEPENDENT priors. "
+                "This doesn't work for language modeling! "
+                "Set use_prior_bank=True and provide a PriorBank for token-dependent priors.",
+                UserWarning
+            )
+            # Position-dependent persistent priors (the LEARNING happens here!)
+            self.register_buffer('prior_mu', torch.zeros(max_seq_len, embed_dim))
+            self.register_buffer('prior_sigma', torch.ones(max_seq_len, embed_dim))
+            self.register_buffer('prior_update_count', torch.zeros(max_seq_len))
+            self.register_buffer('prior_initialized', torch.tensor(False))
 
         # DEQ implicit differentiation
         self.use_deq = use_deq
@@ -2277,10 +2276,10 @@ class VariationalFFNDynamic(nn.Module):
         is_diagonal = sigma.dim() == 3
 
         # =====================================================================
-        # PURE FEP MODE: Use persistent priors instead of embedding priors
+        # PriorBank: Use token-dependent priors for VFE dynamics
         # =====================================================================
-        if self.pure_fep_mode and self.use_prior_bank:
-            # Token-dependent priors via PriorBank (CORRECT for language!)
+        if self.use_prior_bank and self.prior_bank is not None:
+            # Token-dependent priors via PriorBank
             if token_ids is None:
                 raise ValueError(
                     "token_ids required when use_prior_bank=True! "
