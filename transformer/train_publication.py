@@ -215,10 +215,8 @@ VFE_EM_CONFIG = {
 
     'learnable_alpha': False,
     'use_obs_in_vfe': False,        #cheats when true!  low trainPPL huge val PPL
-    'use_rope': True,  
+    'use_rope': True,
 
-    'use_primal_transport': True,   # True- theory-correct: Ω μ_j- if False then legacy: Ω^{-T} μ_j (default)
- 
     'use_deq': False,
     'deq_neumann_terms': 0,
 

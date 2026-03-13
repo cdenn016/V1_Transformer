@@ -1957,18 +1957,11 @@ def aggregate_messages(
     aggregate_mode: str = 'mean_only',  # 'mean_only' or 'full_distribution'
     diagonal_covariance: bool = False,
     cached_transport: Optional[dict] = None,  # Precomputed transport operators
-    use_primal_transport: bool = False,  # True: Ω_ij μ_j (theory-correct); False: Ω_ij^{-T} μ_j (legacy)
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
     """
     Aggregate messages with gauge transport.
 
-    Primal mode (use_primal_transport=True, theory-correct):
-        m_i = Σ_j β_ij Ω_ij μ_j
-        The mixture model posterior mean uses primal transport for all gauge groups.
-
-    Legacy mode (use_primal_transport=False):
-        For SO(K): m_i = Σ_j β_ij Ω_ij μ_j            (Ω orthogonal, equivalent)
-        For GL(K): m_i = Σ_j β_ij Ω_ij^{-T} μ_j       (metric factor (ΩΩ^T)^{-1})
+    m_i = Σ_j β_ij Ω_ij μ_j  (primal transport for all gauge groups)
 
     0D Version: Simple weighted sum over agents, no spatial integration!
 
@@ -1988,8 +1981,6 @@ def aggregate_messages(
         generators: SO(3) generators (3, K, K)
         aggregate_mode: 'mean_only' or 'full_distribution'
         cached_transport: Optional dict with precomputed 'Omega' from compute_transport_operators()
-        use_primal_transport: If True, always use Ω_ij (primal). If False,
-            use Ω_ij^{-T} for GL(K) (legacy behavior).
 
     Returns:
         mu_agg: Aggregated means (B, N, K)
@@ -2019,25 +2010,8 @@ def aggregate_messages(
         # Omega_ij = exp(φ_i) @ exp(-φ_j)  ->  (B, N, N, K, K)
         Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
 
-    # Step 1.5: Determine transport operator for message passing
-    if use_primal_transport:
-        # Theory-correct: m_i = Σ β_ij Ω_ij μ_j (primal transport for all groups)
-        Omega_msg = Omega
-    else:
-        # Legacy: GL(K) uses Ω^{-T} metric correction; SO(K) uses Ω (equivalent)
-        _is_skew = torch.allclose(
-            generators + generators.transpose(-1, -2),
-            torch.zeros_like(generators), atol=1e-5
-        )
-        if _is_skew:
-            # SO(K): orthogonal transport, no metric correction
-            Omega_msg = Omega
-        else:
-            # GL(K): metric-corrected transport Ω^{-T} = Ω_ji^T
-            Omega_msg = Omega.permute(0, 2, 1, 3, 4).transpose(-1, -2)
-
-    # Step 2: Transport all means
-    mu_transported = torch.einsum('bijkl,bjl->bijk', Omega_msg, mu_q)  # (B, N, N, K)
+    # Step 2: Transport all means (primal: m_i = Σ β_ij Ω_ij μ_j)
+    mu_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)  # (B, N, N, K)
 
     # Step 3: Weighted aggregation: m_i = Σ_j β_ij * μ_j^{→i}
     # beta: (B, N, N), mu_transported: (B, N, N, K)
@@ -2061,12 +2035,10 @@ def aggregate_messages(
             # Expand diagonal to full covariance for transport: (B, N, K, K)
             sigma_full = torch.diag_embed(sigma_q_diag)  # (B, N, K, K)
 
-            # Transport covariances (uses Omega_msg for GL(K) metric correction)
-            # SO(K): Σ_j^{→i} = Ω_ij @ Σ_j @ Ω_ij^T
-            # GL(K): Σ_j^{→i} = Ω_ij^{-T} @ Σ_j @ Ω_ij^{-1}
+            # Transport covariances: Σ_j^{→i} = Ω_ij @ Σ_j @ Ω_ij^T
             Sigma_transported_full = torch.einsum(
                 'bijkl,bjlm,bijmn->bijkn',
-                Omega_msg, sigma_full, Omega_msg.transpose(-1, -2)
+                Omega, sigma_full, Omega.transpose(-1, -2)
             )  # (B, N, N, K, K)
 
             # Extract diagonal of transported covariance: (B, N, N, K)
@@ -2085,12 +2057,10 @@ def aggregate_messages(
             sigma_aggregated = sigma_aggregated.clamp(min=1e-6)
         else:
             # FULL COVARIANCE MODE: sigma_q is (B, N, K, K)
-            # Transport covariances (uses Omega_msg for GL(K) metric correction)
-            # SO(K): Σ_j^{→i} = Ω_ij @ Σ_j @ Ω_ij^T
-            # GL(K): Σ_j^{→i} = Ω_ij^{-T} @ Σ_j @ Ω_ij^{-1}
+            # Transport covariances: Σ_j^{→i} = Ω_ij @ Σ_j @ Ω_ij^T
             Sigma_transported = torch.einsum(
                 'bijkl,bjlm,bijmn->bijkn',
-                Omega_msg, sigma_q, Omega_msg.transpose(-1, -2)
+                Omega, sigma_q, Omega.transpose(-1, -2)
             )  # (B, N, N, K, K)
 
             # Second moment: E[x x^T] = Σ + μ μ^T
@@ -2169,7 +2139,6 @@ class IrrepMultiHeadAttention(nn.Module):
         irrep_dims_override: Optional[List[int]] = None,  # Override block dims (for cross-head coupling)
         use_rope: bool = False,  # If True, apply RoPE rotations to μ before KL computation
         rope_base: float = 10000.0,  # RoPE frequency base
-        use_primal_transport: bool = False,  # If True, use Ω (primal) instead of Ω^{-T} for GL(K)
     ):
         """
         Initialize irrep-structured multi-head attention.
@@ -2194,8 +2163,6 @@ class IrrepMultiHeadAttention(nn.Module):
             use_output_projection: If True, add a learned W_O ∈ R^{K×K} linear
                                   projection after concatenating head outputs.
                                   Enables cross-head information mixing.
-            use_primal_transport: If True, use Ω_ij (primal transport) for all gauge
-                                groups. If False, use Ω_ij^{-T} for GL(K) (legacy).
         """
         super().__init__()
         self.diagonal_covariance = diagonal_covariance
@@ -2212,7 +2179,6 @@ class IrrepMultiHeadAttention(nn.Module):
         self.enforce_orthogonal = enforce_orthogonal
         self.use_rope = use_rope
         self.rope_base = rope_base
-        self.use_primal_transport = use_primal_transport
 
         # Build irrep block structure
         self.irrep_dims = []
@@ -2466,7 +2432,8 @@ class IrrepMultiHeadAttention(nn.Module):
             else:
                 # Within-layer cache: compute once, reuse for KL and aggregation
                 head_cached_transport = compute_transport_operators(
-                    phi, gen_head, enforce_orthogonal=self.enforce_orthogonal
+                    phi, gen_head, enforce_orthogonal=self.enforce_orthogonal,
+                    gauge_mode=self.gauge_mode
                 )
 
             kappa_h = self.kappa_beta
@@ -2526,7 +2493,6 @@ class IrrepMultiHeadAttention(nn.Module):
                 aggregate_mode=self.aggregate_mode,
                 diagonal_covariance=self.diagonal_covariance,
                 cached_transport=head_cached_transport,
-                use_primal_transport=self.use_primal_transport,
             )
 
             head_outputs_mu.append(mu_agg)
@@ -2672,7 +2638,8 @@ class IrrepMultiHeadAttention(nn.Module):
         for head_idx in range(self.n_heads):
             gen_head = self.head_generators[head_idx].gen.to(device=device, dtype=dtype)
             cached_transports.append(compute_transport_operators(
-                phi, gen_head, enforce_orthogonal=self.enforce_orthogonal
+                phi, gen_head, enforce_orthogonal=self.enforce_orthogonal,
+                gauge_mode=self.gauge_mode
             ))
         return cached_transports
 

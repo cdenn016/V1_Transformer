@@ -1780,6 +1780,8 @@ class VariationalFFNDynamic(nn.Module):
         # DEQ implicit differentiation
         use_deq: bool = False,                # Use DEQ backward for E-step fixed point
         deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
+        # Gauge mode
+        gauge_mode: str = 'learned',          # 'learned' or 'trivial' (Ω = I)
     ):
         """
         Initialize dynamic-β VFE FFN.
@@ -1823,6 +1825,7 @@ class VariationalFFNDynamic(nn.Module):
         self.diagonal_covariance = diagonal_covariance
         self.compute_sigma_align_grad = compute_sigma_align_grad
         self.sigma_softmax_coupling = sigma_softmax_coupling
+        self.gauge_mode = gauge_mode
 
         # Ablation toggles
         self.use_exp_map_retraction = use_exp_map_retraction
@@ -2071,6 +2074,7 @@ class VariationalFFNDynamic(nn.Module):
                     phi=phi_current,
                     generators=self.generators,
                     enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                    gauge_mode=self.gauge_mode,
                 )
             else:
                 cached_transport = None
@@ -2104,6 +2108,7 @@ class VariationalFFNDynamic(nn.Module):
                         diagonal_covariance=is_diagonal,
                         chunk_size=self.chunk_size,
                         mask_self_attention=self.mask_self_attention,
+                        gauge_mode=self.gauge_mode,
                     )
                     # Slice alpha per head block if per-dim tensor
                     alpha_h = alpha_eff[:, :, block_start:block_end] if isinstance(alpha_eff, torch.Tensor) and alpha_eff.dim() == 3 else alpha_eff
@@ -2135,6 +2140,7 @@ class VariationalFFNDynamic(nn.Module):
                     irrep_dims=self.irrep_dims,
                     chunk_size=self.chunk_size,
                     mask_self_attention=self.mask_self_attention,
+                    gauge_mode=self.gauge_mode,
                 )
                 grad_mu, grad_sigma = compute_vfe_gradients_gpu(
                     mu_q=mu_in, sigma_q=sigma_in,
@@ -2357,6 +2363,7 @@ class VariationalFFNDynamic(nn.Module):
                     phi=phi_current,
                     generators=self.generators,
                     enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                    gauge_mode=self.gauge_mode,
                 )
             else:
                 cached_transport = None
@@ -2430,6 +2437,7 @@ class VariationalFFNDynamic(nn.Module):
                         diagonal_covariance=is_diagonal,
                         chunk_size=self.chunk_size,
                         mask_self_attention=self.mask_self_attention,
+                        gauge_mode=self.gauge_mode,
                     )  # (B, N, N)
                     beta_heads.append(beta_h)
 
@@ -2490,6 +2498,7 @@ class VariationalFFNDynamic(nn.Module):
                     irrep_dims=self.irrep_dims,
                     chunk_size=self.chunk_size,
                     mask_self_attention=self.mask_self_attention,
+                    gauge_mode=self.gauge_mode,
                 )  # (B, N, N)
 
                 if return_beta_history:
@@ -2622,6 +2631,7 @@ class VariationalFFNDynamic(nn.Module):
                             diagonal_covariance=is_diagonal,
                             chunk_size=self.chunk_size,
                             mask_self_attention=self.mask_self_attention,
+                            gauge_mode=self.gauge_mode,
                         )
                         # compute_attention_weights with return_kl=True always returns a tuple
                         beta_phi_h, kl_h = beta_phi_h_result
@@ -2643,6 +2653,7 @@ class VariationalFFNDynamic(nn.Module):
                         irrep_dims=self.irrep_dims,
                         chunk_size=self.chunk_size,
                         mask_self_attention=self.mask_self_attention,
+                        gauge_mode=self.gauge_mode,
                     )
 
                     if isinstance(beta_for_phi_result, tuple):
@@ -2730,6 +2741,7 @@ class VariationalFFNDynamic(nn.Module):
                         diagonal_covariance=is_diagonal,
                         chunk_size=self.chunk_size,
                         mask_self_attention=self.mask_self_attention,
+                        gauge_mode=self.gauge_mode,
                     )
                     # compute_attention_weights with return_kl=True always returns a tuple
                     beta_phi_h, kl_h = beta_phi_h_result
@@ -2751,6 +2763,7 @@ class VariationalFFNDynamic(nn.Module):
                     irrep_dims=self.irrep_dims,
                     chunk_size=self.chunk_size,
                     mask_self_attention=self.mask_self_attention,
+                    gauge_mode=self.gauge_mode,
                 )
 
                 if isinstance(beta_for_phi, tuple):
@@ -2771,6 +2784,7 @@ class VariationalFFNDynamic(nn.Module):
                         irrep_dims=self.irrep_dims,
                         chunk_size=self.chunk_size,
                         mask_self_attention=self.mask_self_attention,
+                        gauge_mode=self.gauge_mode,
                     )[1]
 
                 alignment_loss = self.lambda_belief * (beta_phi * kl_matrix).sum()

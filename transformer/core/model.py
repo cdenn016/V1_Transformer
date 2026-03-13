@@ -344,7 +344,7 @@ class GaugeTransformerLM(nn.Module):
             init_std=config.get('mu_init_std', None),  # Embedding init std (None = default 2.0)
             init_sigma_scale=1.0,  # Scaled to match init_std for O(1) KL
             learnable_sigma=config.get('evolve_sigma', True),  # Learn per-token covariances
-            learnable_phi=True,  # Always learn phi for gauge structure. Required for non-trivial transport Ω_ij.
+            learnable_phi=(gauge_mode != 'trivial'),  # Learn phi only when gauge transport is active
             gauge_fixed_priors=gauge_fixed_priors,
             generators=self.generators,  # Always pass generators for gauge transport
             diagonal_covariance=diagonal_covariance,
@@ -469,8 +469,6 @@ class GaugeTransformerLM(nn.Module):
             # Ablation toggles
             use_exp_map_retraction=config.get('use_exp_map_retraction', True),
             use_full_nat_grad=config.get('use_full_nat_grad', True),
-            # Primal transport (theory-correct aggregation)
-            use_primal_transport=config.get('use_primal_transport', False),
             # DEQ implicit differentiation
             use_deq=config.get('use_deq', False),
             deq_neumann_terms=config.get('deq_neumann_terms', 5),

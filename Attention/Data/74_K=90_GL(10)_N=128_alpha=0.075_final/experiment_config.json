@@ -11,7 +11,6 @@
     "learnable_alpha": false,
     "use_obs_in_vfe": false,
     "use_rope": true,
-    "use_primal_transport": true,
     "use_deq": false,
     "deq_neumann_terms": 0,
     "batch_size": 16,
