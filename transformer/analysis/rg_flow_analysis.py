@@ -81,7 +81,6 @@ from transformer.analysis.rg_flow_enhanced import (
     CoarseGrainedState,
     HierarchicalRGState,
     compute_full_rg_diagnostics,
-    coarse_grain_full_state,
     build_hierarchical_rg_state,
     summarize_hierarchical_rg,
 )
