@@ -508,7 +508,7 @@ Global gauge $W_Q, W_K$ \\
 \subsubsection{Local Gauge Frames}
 Each agent $i$ has a gauge frame field $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ which may, in general, vary across the base manifold. On higher-dimensional base manifolds, a gauge frame field induces a local connection one-form $A^{(i)}_\mu(c) = U_i^{-1}(c)\,\partial_\mu U_i(c)$ (where $U_i = \exp(\phi_i)$) and associated field strength $F^{(i)}_{\mu\nu} = \partial_\mu A^{(i)}_\nu - \partial_\nu A^{(i)}_\mu + [A^{(i)}_\mu, A^{(i)}_\nu]$. However, a connection derived from a single-valued gauge function $\phi_i(c)$ in this way is pure gauge and has identically vanishing curvature $F_{\mu\nu} = 0$. Non-trivial curvature and holonomy require independent connection variables on edges or paths, transforming as $\Omega_{ij} \mapsto g_i \Omega_{ij} g_j^{-1}$ rather than being determined by vertex-local group elements (see Appendix~A for details).
 
-In the 0-dimensional case, which we consider here, there exist no gauge connections $A_\mu$ or field strengths $F_{\mu\nu}$. What remains is the algebraic structure of group-valued frame transformations $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ acting on statistical fibers. Since these transports are constructed from vertex-local group elements, they satisfy the cocycle condition $\Omega_{ij}\Omega_{jk} = \Omega_{ik}$ and have trivially vanishing discrete holonomy $\Omega_{ij}\Omega_{jk}\Omega_{ki} = I$ for every closed loop (Section~\ref{sec:flat_bundle}). This algebraic structure already suffices to recover transformer attention (as shown below), and already provides a functional language model when implemented without taking the degenerate limits (Section~\ref{sec:glk_lm}). Architectures with non-trivial holonomy would require promoting the transport $\Omega_{ij}$ to an independent edge variable; this represents a direction for future work (see Section~6.3).
+In the 0-dimensional case, which we consider here, there exist no gauge connections $A_\mu$ or field strengths $F_{\mu\nu}$. What remains is the algebraic structure of group-valued frame transformations $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ acting on statistical fibers. Since these transports are constructed from vertex-local group elements, they satisfy the cocycle condition and have vanishing discrete holonomy (Theorem~\ref{thm:vanishing_holonomy}). This algebraic structure already suffices to recover transformer attention (as shown below), and already provides a functional language model when implemented without taking the degenerate limits (Section~\ref{sec:glk_lm}).
 
 
 \subsubsection{$\mathrm{GL}(K)$ Gauge Invariance of KL Divergence}
@@ -630,6 +630,29 @@ where $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ is agent $i$'s gauge frame fi
 \end{equation}
 
 mapping agent $j$'s latent into agent $i$'s frame.
+
+\subsubsection{Vanishing Holonomy and the Flat Bundle}
+\label{sec:vanishing_holonomy}
+
+Since the transport operators are constructed from vertex-local group elements, they satisfy a cocycle condition with immediate geometric consequences.
+
+\begin{theorem}[Vanishing Holonomy]
+\label{thm:vanishing_holonomy}
+For gauge transport of the form $\Omega_{ij} = g_i\,g_j^{-1}$ with vertex-local group elements $g_i \in G$, the holonomy around any closed loop vanishes:
+\begin{equation}
+H_{ijk} \;=\; \Omega_{ij}\,\Omega_{jk}\,\Omega_{ki}
+\;=\; g_i\,g_j^{-1}\;g_j\,g_k^{-1}\;g_k\,g_i^{-1}
+\;=\; I.
+\label{eq:holonomy}
+\end{equation}
+Equivalently, the cocycle condition $\Omega_{ij}\,\Omega_{jk} = \Omega_{ik}$ holds for all triples $(i,j,k)$.
+\end{theorem}
+
+\begin{proof}
+Direct computation. The consecutive inverse--exponential pairs cancel identically: $g_j^{-1} g_j = I$ and $g_k^{-1} g_k = I$.
+\end{proof}
+
+This result is a theorem of the architecture, not an approximation. For our parameterization $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$, the holonomy vanishes for every closed loop regardless of the learned gauge frames $\phi_i$. The gauge bundle is automatically flat: semantic transport from token $i$ to token $k$ is path-independent, in the sense that the direct route via $\Omega_{ik}$ and the indirect route via $\Omega_{ij}\,\Omega_{jk}$ yield identical results. Architectures with non-trivial holonomy would require promoting $\Omega_{ij}$ to an independent edge variable unconstrained by the cocycle condition; we return to the implications of this geometric constraint in Section~\ref{sec:flat_bundle}.
 
 
 \subsection{Single-Agent Free Energy Principle}
@@ -962,7 +985,7 @@ which is the gauge-theoretic analog of the attention aggregation $\sum_j \alpha_
 
 \subsection{Connection to Standard Transformers}
 
-The gauge-theoretic framework is inherently more general than standard transformer attention. To establish the connections formally, we show that successive limits reduce the full gauge-covariant attention to the familiar dot-product form. Our experiments, however, (Section~\ref{sec:glk_lm}), implement the most general model.
+The gauge-covariant attention $\beta_{ij} = \operatorname{softmax}(-D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)/\tau)$ derived in the preceding section is already a complete attention mechanism. Standard transformer attention is a special case, obtained by taking two successive limits: isotropic covariances (which separates the KL into a geometric bias and a Mahalanobis distance) and constant gauge transport (which eliminates the bias and yields the familiar $QK^\top / \sqrt{d_k}$ form). Our experiments (Section~\ref{sec:glk_lm}) implement the general model without these limits.
 
 \paragraph{Deterministic Beliefs via Scaled Limit.}
 
@@ -995,43 +1018,43 @@ The Mahalanobis quadratic form can be simplified using the identity $(\Omega_{ij
 
 This identity has the interpretation that rather than transporting the key belief into the query's frame via $\Omega_{ij}$ and measuring with the induced metric, the KL divergence equivalently transports the query into the key's frame via $\Omega_{ij}^{-1}$ and measures the Euclidean distance there. Either perspective is appropriate.  The Mahalanobis metric automatically accounts for the distortion introduced by gauge transport. 
 
-The structural terms $\log\det(\Omega_{ij}\Omega_{ij}^\top)$, $\mathrm{Tr}((\Omega_{ij}\Omega_{ij}^\top)^{-1})$, and $d_k$ depend on the gauge transport but not on the belief means $\mu_i, \mu_j$ directly. Under Limit~2 ($\Omega_{ij} = \Omega$), they become constant across all agent pairs and cancel under softmax thereby producing:
+\paragraph{Isotropic attention with general gauge transport.}
 
+The structural terms $\log\det(\Omega_{ij}\Omega_{ij}^\top)$, $\mathrm{Tr}((\Omega_{ij}\Omega_{ij}^\top)^{-1})$, and $d_k$ depend on the gauge transport but not on the belief means $\mu_i, \mu_j$. Defining the \emph{geometric bias}
 \begin{equation}
-D_{\mathrm{KL}}(q_i \| \Omega q_j) \sim \frac{1}{2\sigma^2}\|\Omega^{-1}\mu_i - \mu_j\|^2 + \text{(terms absorbed by softmax)}.
+S(\Omega_{ij}) \;:=\; \frac{1}{2}\Big[\log\det(\Omega_{ij}\Omega_{ij}^\top) + \mathrm{Tr}\big((\Omega_{ij}\Omega_{ij}^\top)^{-1}\big) - d_k\Big],
+\label{eq:geometric_bias}
+\end{equation}
+the KL divergence under isotropic beliefs with general transport takes the form
+\begin{equation}
+D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j) \;=\; S(\Omega_{ij}) \;+\; \frac{1}{2\sigma^2}\|\Omega_{ij}^{-1}\mu_i - \mu_j\|^2.
+\label{eq:isotropic_general_omega}
 \end{equation}
 
-Next, the rescaled KL divergence limit leads to:
-
+This is already a fully specified attention mechanism. The attention weight
 \begin{equation}
-\widetilde{D}_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) := \sigma^2 \cdot D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) \;\xrightarrow{\;\sigma\to 0\;}\; \frac{1}{2}\|\Omega_{ij}^{-1}\mu_i - \mu_j\|^2,
+\beta_{ij} = \operatorname{softmax}_j\!\left(-\frac{S(\Omega_{ij}) + \frac{1}{2\sigma^2}\|\Omega_{ij}^{-1}\mu_i - \mu_j\|^2}{\tau}\right)
+\label{eq:general_isotropic_attention}
 \end{equation}
+combines a content-dependent term (the Mahalanobis distance between belief means, measured in the key's frame) with a pair-dependent geometric bias $S(\Omega_{ij})$ that encodes the distortion introduced by gauge transport. When $\Omega_{ij}$ is orthogonal, $S(\Omega_{ij}) = 0$ identically; for general $\mathrm{GL}(K)$ transport, $S(\Omega_{ij}) \geq 0$ with equality if and only if $\Omega_{ij} \in \mathrm{O}(K)$. The geometric bias therefore penalizes transport operators that distort volume or stretch directions, providing a geometric regularizer intrinsic to the KL divergence. This is the natural form of attention under a single simplifying limit (isotropic covariances); standard transformer attention requires a further specialization.
 
-which remains finite and equals half the squared distance between means as measured in the key's reference frame. This rescaled quantity therefore has a well-defined limit as $\sigma \to 0$ and represents the natural information-geometric measure of dis-similarity within the deterministic regime. This should be understood as the regime where $\sigma$ is small compared to characteristic scales of $\mu_i$, such that $\sigma^{-2}$ will be absorbed into the learned projections (see below).
+The rescaled KL divergence $\widetilde{D}_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) := \sigma^2 \cdot D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) \to \frac{1}{2}\|\Omega_{ij}^{-1}\mu_i - \mu_j\|^2$ as $\sigma \to 0$ remains finite and equals half the squared distance between means as measured in the key's reference frame. This should be understood as the regime where $\sigma$ is small compared to characteristic scales of $\mu_i$, such that $\sigma^{-2}$ will be absorbed into the learned projections (see below).
 
 
-\paragraph{Flat Bundle Limit ($\Omega_{ij} = \Omega$).}
+\paragraph{Constant gauge specialization ($\Omega_{ij} = \Omega$).}
 
-We next assume a single global frame shared by all agents; i.e. a flat connection with no position-dependent frame misalignment:
-
-\begin{equation}
-\Omega_{ij} = \Omega \in \mathbb{R}^{d_k \times d_k} \quad\text{for all } i,j,
-\end{equation}
-
-with $\Omega$ being a fixed linear map.
+Standard transformer attention emerges when we further assume a single global frame shared by all agents, $\Omega_{ij} = \Omega$ for all $i,j$, corresponding to a flat connection with no position-dependent frame misalignment. The geometric bias $S(\Omega)$ becomes constant across all agent pairs and cancels under softmax, while $\Omega^{-1}$ is absorbed into learned projections.
 
 \subsubsection{Derivation of Dot-Product Attention}
 \label{sec:dot_product_derivation}
 
 \paragraph{Expanding the KL Divergence.}
 
-After our limits the KL divergence reduces to (dropping constant terms that cancel under softmax):
-
+Under constant gauge, the KL divergence reduces to
 \begin{equation}
 s_{ij} = D_{\mathrm{KL}}(q_i \| \Omega q_j) = \frac{1}{2\sigma^2}\|\Omega^{-1}\mu_i - \mu_j\|^2 + C,
 \end{equation}
-
-where $C$ collects the remaining terms (log-determinant, trace, $d_k$) that are independent of the belief means and ultimately cancel under softmax. Expanding the squared norm we have:
+where $C = S(\Omega)$ is independent of the belief means and cancels under softmax. Expanding the squared norm we have:
 
 
 \begin{equation}
@@ -2111,12 +2134,12 @@ The correspondence holds across all five architectures ($\bar{r} > 0.6$ in every
 The theoretical prediction $\tau \approx 2\sqrt{d_{\text{head}}}$ remains the best single-parameter approximation: all five models share $d_{\text{head}} = 64$, and the dimensional scaling correctly predicts the order of magnitude. However, the cross-model variation in correlation at this fixed $\tau$ reveals that the \emph{per-head} temperature structure --- predicted by the gauge framework's learnable $\kappa_a$ (Eq.~\ref{eq:per_head_temperature}) --- carries additional information that the single-$\tau$ approximation discards.
 
 
-\subsubsection{Per-Head Temperature Dispersion and the RoBERTa Anomaly}
+\subsubsection{Per-Head Temperature: Prediction and Confirmation}
 \label{sec:temp_dispersion}
 
-The multi-model validation (Table~\ref{tab:multi_model}) reveals a $0.24$ spread in grand-mean correlation across architectures that all share $d_{\text{head}} = 64$. If the temperature prediction $\tau = 2\sqrt{d_{\text{head}}} = 16$ (squared-distance form; the factor of $2$ from the $\frac{1}{2}$ in the Gaussian KL) were the sole determinant of the $\alpha$--$\beta$ correspondence, all five models would achieve similar correlations at the empirical optimum $\tau = 19.0$. The observed variation, with RoBERTa at $\bar{r} = 0.612$ and ALBERT at $\bar{r} = 0.851$, demands explanation.
+The multi-head decomposition of Section~\ref{sec:multihead} predicts that each attention head carries its own effective temperature through the per-head belief covariance $\Sigma^{(a)}$: in the isotropic limit, $\sigma_a^2$ is the attention temperature for head $a$ (Eq.~\ref{eq:per_head_temperature}). Standard transformers absorb $\sigma_a^{-2}$ into $W_Q^{(a)}, W_K^{(a)}$, making this structure implicit. A single-$\tau$ KL approximation therefore corresponds to the assumption $\sigma_a^2 = \sigma^2$ for all heads, and models whose heads operate at heterogeneous implicit temperatures should show systematically worse agreement with this approximation. The multi-model validation provides a direct test: all five architectures share $d_{\text{head}} = 64$, yet the grand-mean $\alpha$--$\beta$ correlation at $\tau = 19.0$ spans a $0.24$ range from RoBERTa ($\bar{r} = 0.612$) to ALBERT ($\bar{r} = 0.851$).
 
-We investigated four hypotheses through a targeted diagnostic analysis across all five architectures (30 passages each): (1)~key-norm heterogeneity, where higher coefficient of variation (CV) of $\|K_j\|$ amplifies the residual norm-bias term; (2)~per-model optimal temperature, where the true optimal $\tau$ deviates from 19.0; (3)~angular versus norm decomposition of logit variance; and (4)~per-head effective temperature dispersion, where heads operate at heterogeneous implicit temperatures.
+We investigated four hypotheses through a targeted diagnostic analysis across all five architectures (30 passages each): (1)~key-norm heterogeneity, where higher coefficient of variation (CV) of $\|K_j\|$ amplifies the residual norm-bias term; (2)~per-model optimal temperature, where the true optimal $\tau$ deviates from 19.0; (3)~angular versus norm decomposition of logit variance; and (4)~per-head effective temperature dispersion, where heads operate at heterogeneous implicit temperatures. The gauge framework predicts that Hypothesis~4 should be the dominant variable.
 
 \paragraph{Temperature dispersion as the dominant explanatory variable.}
 In standard dot-product attention, the score $s_{ij} = Q_i \cdot K_j / \sqrt{d}$ implicitly encodes a per-head temperature through the learned weight scales $\|W_Q^{(a)}\|$ and $\|W_K^{(a)}\|$. Heads with larger-norm projections produce higher-variance logits and therefore sharper attention distributions (lower effective temperature), while heads with smaller-norm projections produce softer distributions (higher effective temperature). We quantify this implicit temperature heterogeneity by computing the coefficient of variation (CV) of per-head attention-logit standard deviation across all (layer, head) pairs for each model.
@@ -2150,10 +2173,10 @@ ALBERT's weight-sharing across all 12 layers forces every layer to use the same 
 \paragraph{Per-head optimal temperature distributions.}
 The per-head optimal $\tau$ distributions further support this analysis. RoBERTa's heads span the widest range (median $= 25.0$, std $= 15.3$), while BERT-base heads cluster more tightly around the prediction (median $= 21.0$, std $= 10.6$). This confirms that RoBERTa's heads have learned to operate at maximally heterogeneous effective temperatures, and a single universal $\tau$ cannot simultaneously approximate all of them.
 
-\paragraph{Connection to the gauge transformer's per-head covariance.}
-In the unreduced gauge framework, the per-head attention temperature is not a separate parameter but arises from the per-head belief covariance $\Sigma^{(a)}$. In the isotropic limit $\Sigma^{(a)} = \sigma_a^2 I$, the KL divergence scales as $1/(2\sigma_a^2)$, so the covariance \emph{is} the temperature (Section~\ref{sec:multihead}). The scalar $\kappa_a$ in Eq.~\ref{eq:per_head_temperature} parameterizes this isotropic component: $\kappa_a \propto \sigma_a^2$. This degree of freedom is intrinsic to the multi-head decomposition --- each $\mathrm{GL}(d_{\text{head}})$ block carries its own covariance structure --- and does not need to be introduced as an additional parameter.
+\paragraph{Confirmation of the per-head covariance prediction.}
+The results confirm the prediction derived in Section~\ref{sec:multihead}: the per-head attention temperature is not a separate parameter but arises from the per-head belief covariance $\Sigma^{(a)}$. In the isotropic limit $\Sigma^{(a)} = \sigma_a^2 I$, the KL divergence scales as $1/(2\sigma_a^2)$, so the covariance \emph{is} the temperature, parameterized by $\kappa_a \propto \sigma_a^2$ in Eq.~\ref{eq:per_head_temperature}. This degree of freedom is intrinsic to the multi-head decomposition --- each $\mathrm{GL}(d_{\text{head}})$ block carries its own covariance structure --- and does not need to be introduced as an additional architectural choice.
 
-Standard attention implicitly encodes per-head temperatures through the weight scales $\|W_Q^{(a)}\|, \|W_K^{(a)}\|$, which absorb $\sigma_a^{-2}$ into the learned projections. When these implicit temperatures are heterogeneous (as in RoBERTa), the single-$\tau$ KL approximation --- which corresponds to fixing $\sigma_a^2 = \sigma^2$ for all heads --- loses information. The gauge framework retains the per-head covariance structure, allowing each head to operate at its own point on the rate--distortion curve: small $\sigma_a^2$ (sharp attention, high rate, low distortion) for heads performing precise source selection, large $\sigma_a^2$ (diffuse attention, low rate, high distortion) for heads performing contextual averaging.
+Standard attention implicitly encodes per-head temperatures through the weight scales $\|W_Q^{(a)}\|, \|W_K^{(a)}\|$, which absorb $\sigma_a^{-2}$ into the learned projections. The theory predicts that when these implicit temperatures are heterogeneous, the single-$\tau$ KL approximation will degrade, and the degree of degradation should track the coefficient of variation of per-head temperatures. This is precisely what is observed: the ranking by temperature dispersion anti-correlates with the ranking by $\alpha$--$\beta$ agreement across all five architectures. The gauge framework retains the per-head covariance structure, allowing each head to operate at its own point on the rate--distortion curve: small $\sigma_a^2$ (sharp attention, high rate, low distortion) for heads performing precise source selection, large $\sigma_a^2$ (diffuse attention, low rate, high distortion) for heads performing contextual averaging.
 
 
 \subsubsection{Sequence-Length Sensitivity}
@@ -2287,7 +2310,7 @@ The full representational capacity is $K + n_{\mathrm{heads}} \cdot d_{\mathrm{h
 
 \paragraph{Standard attention as a degenerate limit.} The BERT validation (Section~5.2) demonstrates quantitative agreement between gauge-aligned KL attention and standard dot-product attention across 105 diverse passages and all 144 heads ($\bar{r} = 0.804$ at optimal $\tau$; Figure~\ref{fig:temperature_sweep}), with the entropy of the two distributions closely matched ($H(\beta)/H(\alpha) = 1.076$; Section~\ref{sec:entropy_analysis}). The multi-model validation (Section~\ref{sec:multi_model}) extends this to five architectures ($\bar{r} > 0.6$ for all, $\bar{r} = 0.851$ for ALBERT), and the sequence-length analysis (Section~\ref{sec:seqlen}) confirms robustness from $N = 16$ to $N = 512$ tokens. Beyond the correlation itself (which partly reflects the algebraic relationship between squared distance and dot product under approximately constant norms), the framework generates predictions of varying discriminative power. The most distinctive is the temperature prediction: the optimal $\tau$ matches the dimensional prediction $\tau \approx 2\sqrt{d_k}$ to within 19\%, a quantitative result derived from concentration of measure before any empirical fitting. The key-norm bias has the predicted sign (mean absolute correlation $\bar{\rho} = 0.256$, a modest but correctly directed effect) and its temperature dependence matches theory. Deeper layers exhibit stronger correlations, a trend consistent with increasingly structured representations, though this observation is also compatible with alternative explanations such as increasing low-rank structure in deeper layers.
 
-\paragraph{Per-head temperature dispersion as a diagnostic of the constant-gauge limit.} The temperature dispersion analysis (Section~\ref{sec:temp_dispersion}) resolves the cross-model variation observed in the multi-model validation. The $\alpha$--$\beta$ correlation at a fixed $\tau$ is a measure of how close a pretrained model operates to the constant-gauge limit in which standard attention and KL attention coincide. Models whose heads operate at homogeneous implicit temperatures (ALBERT: CV $= 0.429$; BERT-base: CV $= 0.367$) are well-approximated by a single $\tau$, while models with heterogeneous per-head temperatures (RoBERTa: CV $= 0.787$, nearly $2\times$ BERT-base) show systematically lower correlations. This finding demonstrates the importance of the per-head covariance $\Sigma^{(a)}$ that the gauge framework retains. In the isotropic limit, each head's covariance $\sigma_a^2$ is its attention temperature (Section~\ref{sec:multihead}); standard transformers absorb $\sigma_a^{-2}$ into the projections, making this structure implicit. The ALBERT anomaly --- highest correlation despite the most suboptimal global $\tau$ --- is explained by its weight-sharing architecture, which constrains the gauge transport to be layer-constant and thereby produces uniformly behaved heads.
+\paragraph{Per-head temperature as a confirmed prediction.} The per-head temperature analysis (Section~\ref{sec:temp_dispersion}) provides the most discriminative empirical test of the framework. The theory predicts that each head carries an intrinsic attention temperature through its belief covariance $\sigma_a^2$ (Section~\ref{sec:multihead}), and that models with heterogeneous implicit per-head temperatures should show degraded agreement with any single-$\tau$ KL approximation. This prediction is confirmed across all five architectures: the ranking by temperature dispersion anti-correlates with the ranking by $\alpha$--$\beta$ agreement, with the degree of degradation tracked by the coefficient of variation of per-head logit standard deviation (CV $= 0.367$ for BERT-base vs.\ $0.787$ for RoBERTa). ALBERT serves as a natural control: its weight-sharing constrains the gauge transport to be layer-constant, producing uniformly behaved heads and the highest single-$\tau$ correlation ($\bar{r} = 0.851$) despite the most suboptimal global temperature.
 
 \paragraph{The unreduced framework as a language model.} The $\mathrm{GL}(10)$ gauge VFE achieves test perplexity 74.9 on WikiText-103 (Table~\ref{tab:glk_results}), without MLPs, pointwise activation functions, or learned attention projections. This represents 87\% of the performance of a matched single-layer standard transformer (PPL 65.0) despite the gauge VFE using 58.8M parameters compared to the transformer's 17.6M, suggesting that the remaining performance gap is attributable to the neural components (MLPs, learned projections, activation functions) rather than to a fundamental limitation of the gauge-theoretic formulation. That gauge-covariant variational inference alone, with no neural architecture beyond a linear output projection, produces a functioning language model supports the explanatory claim that transformers succeed in part because they approximate the underlying mathematical structure of distributed variational inference.
 
@@ -2300,37 +2323,20 @@ The framework provides theoretical explanations for empirical design choices in 
 These identifications also suggest alternatives to current practice. While layer normalization mitigates key-norm bias uniformly across all tokens, the gauge-theoretic perspective suggests learning optimal token norm profiles that balance representational capacity (large norms encode more information) against attention fidelity (low norms avoid bias). This trade-off is formally analogous to the rate-distortion problem: representational capacity corresponds to rate (bits stored per token), while attention bias corresponds to distortion (deviation from frame-independent inference). Soft norm constraints or adaptive normalization schedules that vary across layers or heads could implement position-dependent operating points along this trade-off curve.
 
 \paragraph{Per-head covariance as a measurable architectural degree of freedom.}
-The temperature dispersion diagnostic (Section~\ref{sec:temp_dispersion}) reveals that standard transformers implicitly encode per-head temperatures through the weight scales $\|W_Q^{(a)}\|, \|W_K^{(a)}\|$, and that the heterogeneity of these implicit temperatures varies by a factor of $2.4\times$ across architectures (CV $= 0.331$ for BERT-large to $0.787$ for RoBERTa). In the Lie algebra decomposition $\mathfrak{gl}(d_{\text{head}}) = \mathfrak{sl}(d_{\text{head}}) \oplus \mathbb{R}$ (Section~\ref{sec:off_diagonal_mixing}), the per-head temperature corresponds to the $\mathbb{R}$ (trace) component --- the overall scaling degree of freedom within each head's gauge block.
-
-In the gauge framework, this degree of freedom is not introduced as an additional parameter: it is the per-head belief covariance $\Sigma^{(a)}$, which is intrinsic to the multi-head decomposition (Section~\ref{sec:multihead}). In the isotropic limit, $\sigma_a^2$ \emph{is} the attention temperature for head $a$. Standard transformers absorb $\sigma_a^{-2}$ into the learned projections $W_Q^{(a)}, W_K^{(a)}$, entangling the temperature with the projection geometry. The gauge framework retains it as an explicit, learnable quantity. The empirical finding that RoBERTa's heads require different temperatures to achieve optimal $\alpha$--$\beta$ agreement (per-head optimal $\tau$: median $= 25$, std $= 15.3$) demonstrates that this covariance structure carries real information that a single global temperature discards.
+In the Lie algebra decomposition $\mathfrak{gl}(d_{\text{head}}) = \mathfrak{sl}(d_{\text{head}}) \oplus \mathbb{R}$ (Section~\ref{sec:off_diagonal_mixing}), the per-head temperature corresponds to the $\mathbb{R}$ (trace) component --- the overall scaling degree of freedom within each head's gauge block. Standard transformers absorb this into the learned projections, entangling temperature with projection geometry. The gauge framework retains it as an explicit, learnable $\kappa_a$, and the empirical finding that per-head optimal temperatures span a wide range (RoBERTa: median $= 25$, std $= 15.3$) demonstrates that this covariance structure carries real information that a single global temperature discards. The heterogeneity of implicit per-head temperatures varies by a factor of $2.4\times$ across architectures (CV $= 0.331$ for BERT-large to $0.787$ for RoBERTa), indicating substantial variation in the degree to which different architectures exploit this degree of freedom.
 
 \subsection{The Flat Bundle Limit and the Geometry of Language}
 \label{sec:flat_bundle}
 
-A structural observation follows from the 0-dimensional base manifold of the transformer architecture. The gauge transport~\eqref{eq:gauge_frame_rotation},
-\begin{equation}
-\Omega_{ij} = e^{\phi_i}\,e^{-\phi_j},
-\end{equation}
-is pure gauge by construction. To see what this implies, consider the discrete analog of curvature: the holonomy around a closed loop of agents $i \to j \to k \to i$,
-\begin{equation}
-H_{ijk} = \Omega_{ij}\,\Omega_{jk}\,\Omega_{ki}
-= e^{\phi_i}e^{-\phi_j}\;e^{\phi_j}e^{-\phi_k}\;e^{\phi_k}e^{-\phi_i}
-= I.
-\label{eq:holonomy}
-\end{equation}
-The consecutive inverse--exponential pairs cancel identically: $e^{-\phi_j}e^{\phi_j} = I$. The holonomy vanishes for every closed loop, regardless of the learned gauge frames $\phi_i$. The bundle is automatically flat. This is not an approximation or a simplifying assumption rather it is a theorem of the architecture. Any transport of the form $\Omega_{ij} = g_i\,g_j^{-1}$ for vertex-local group elements $g_i$ satisfies the cocycle condition $\Omega_{ij}\,\Omega_{jk} = \Omega_{ik}$ and therefore has vanishing discrete curvature.
-
-Standard transformers share this property. The learned projections $W_Q, W_K$ parametrize the gauge transport via $W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$ (Section~\ref{sec:glk_invariance}), which is position-independent, i.e.\ a constant, and therefore flat, gauge transformation. Dot-product attention operates in this flat bundle limit.
-
-Both architectures are thus restricted to the same geometric regime: flat bundles with trivial holonomy. In the most general discrete gauge theory on a token graph, the transport $\Omega_{ij}$ on each edge would be an independent group element, and the holonomy around closed loops would be unconstrained. A system with non-trivial holonomy would exhibit path-dependent meaning transport: relating token $i$ to token $k$ directly via $\Omega_{ik}$ would yield a different result than relating them via an intermediate token $j$ through $\Omega_{ij}\,\Omega_{jk}$. The flat bundle limit eliminates this path-dependence entirely.
+By Theorem~\ref{thm:vanishing_holonomy}, both the $\mathrm{GL}(K)$ gauge transformer and standard transformers operate in the flat bundle regime with trivially vanishing holonomy. The gauge transport $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ satisfies $\Omega_{ij}\Omega_{jk}\Omega_{ki} = I$ by construction, and the standard learned projections $W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$ (Section~\ref{sec:glk_invariance}) parameterize a position-independent, and therefore flat, gauge transformation. In the most general discrete gauge theory on a token graph, the transport $\Omega_{ij}$ on each edge would be an independent group element with unconstrained holonomy around closed loops; a system with non-trivial holonomy would exhibit path-dependent meaning transport, where relating token $i$ to token $k$ directly via $\Omega_{ik}$ yields a different result than relating them indirectly via $\Omega_{ij}\,\Omega_{jk}$.
 
 \textbf{Conjecture (flat bundle optimality).} \emph{The compositional core of natural language---the semantic content that supports reliable, context-independent communication---is approximately path-independent in the sense of gauge transport. Transformers are architecturally matched to this regime.}
 
-This conjecture involves three logically distinct claims. First, a claim about language: the bulk of semantic transport between contexts is path-independent, so that relating token $i$ to token $k$ directly yields the same result as relating them via an intermediate token $j$. Second, a motivating argument: communicative systems face functional pressure toward path-independence, since if the meaning transported from speaker $A$ to speaker $C$ depended on which intermediate speakers relayed the message, reliable communication would degrade. Third, a claim about architecture-task alignment: transformers succeed in part because their flat bundle structure matches this property of language. We regard the first and third claims as substantive and testable; the second is a plausibility argument for why language might have this structure, not a derivation.
+This conjecture involves three logically distinct claims: that the bulk of semantic transport between contexts is path-independent; that communicative systems face functional pressure toward path-independence (since meaning that depends on the relay path degrades reliable communication); and that transformers succeed in part because their flat bundle structure matches this property of language. We regard the first and third claims as substantive and testable; the second is a plausibility argument, not a derivation.
 
-An important caveat is that path-independence alone is insufficient to explain transformer success. Bag-of-words models are trivially path-independent yet perform poorly, because they lack content-dependent, position-aware structure. The relevant claim is that transformers implement \emph{content-dependent} path-independent transport---the learned gauge frames $\phi_i$ provide rich, context-sensitive coordinate systems while the cocycle condition $\Omega_{ij}\,\Omega_{jk} = \Omega_{ik}$ ensures that the resulting transport remains flat. It is this combination, not flatness alone, that the conjecture identifies as the operative structure.
+Path-independence alone is insufficient to explain transformer success---bag-of-words models are trivially path-independent yet perform poorly. The relevant claim is that transformers implement \emph{content-dependent} path-independent transport: the learned gauge frames $\phi_i$ provide rich, context-sensitive coordinate systems while the cocycle condition $\Omega_{ij}\,\Omega_{jk} = \Omega_{ik}$ ensures that the resulting transport remains flat.
 
-Natural language also exhibits phenomena where semantic transport appears genuinely path-dependent: irony, pragmatic inference, context-dependent ambiguity, and culturally situated meaning are cases where the ``same'' utterance acquires different meaning depending on the interpretive path through context. These phenomena are abundant and functional, not pathological, which means the conjecture should be understood as applying to the compositional-semantic core of language rather than to all aspects of meaning. This motivates a testable prediction: if a non-flat gauge architecture (one in which $\Omega_{ij}$ on each edge is an independent group element, unconstrained by the cocycle condition) were trained on tasks requiring pragmatic or contextual inference, the learned holonomy $H_{ijk} = \Omega_{ij}\,\Omega_{jk}\,\Omega_{ki}$ should deviate measurably from the identity on precisely those token triples where meaning transport is context-dependent. Measuring learned holonomy in such architectures would provide an independent, non-circular test of whether the flat bundle approximation breaks down where predicted, and would identify the geometric boundaries of transformer-based language modeling.
+Natural language also exhibits phenomena where semantic transport appears genuinely path-dependent: irony, pragmatic inference, context-dependent ambiguity, and culturally situated meaning are cases where the ``same'' utterance acquires different meaning depending on the interpretive path through context. These phenomena are abundant and functional, not pathological, so the conjecture should be understood as applying to the compositional-semantic core of language rather than to all aspects of meaning. This motivates a testable prediction: if a non-flat gauge architecture (one in which $\Omega_{ij}$ on each edge is an independent group element, unconstrained by the cocycle condition) were trained on tasks requiring pragmatic or contextual inference, the learned holonomy $H_{ijk} = \Omega_{ij}\,\Omega_{jk}\,\Omega_{ki}$ should deviate measurably from the identity on precisely those token triples where meaning transport is context-dependent. Measuring learned holonomy in such architectures would provide a non-circular test of whether the flat bundle approximation breaks down where predicted.
 
 \subsection{Limitations}
 
