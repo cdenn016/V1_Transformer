@@ -80,7 +80,7 @@ from transformer.train import (
     compute_rg_metrics_from_attention,
     compute_dynamic_rg_metrics,
 )
-from transformer._archive.train_fast import FastTrainer, FastTrainingConfig
+from transformer.training.train_fast import FastTrainer, FastTrainingConfig
 from transformer.analysis.publication_metrics import PublicationMetrics, ExperimentResult
 
 
