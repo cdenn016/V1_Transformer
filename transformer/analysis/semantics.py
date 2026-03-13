@@ -559,12 +559,12 @@ def analyze_gauge_semantics(
                 total = metrics.get(f'{name}_pca_total_components', '?')
                 print(f"    PCA: 3 comp = {pca3*100:.1f}% var; 50%@{n50}, 90%@{n90}, 95%@{n95} of {total} dims")
 
-    # Generate plots and save CSVs
+    # Generate plots
     if save_plots:
         save_dir = Path(save_dir) if save_dir else Path("./outputs/figures")
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        # Plot and save phi embeddings (gauge frames)
+        # Plot phi embeddings (gauge frames)
         if phi_embed is not None:
             try:
                 fig = plot_embedding_clustering(
@@ -581,14 +581,7 @@ def analyze_gauge_semantics(
                     print(f"  [WARN] Could not generate phi plot: {e}")
                 results['phi_plot_saved'] = False
 
-            try:
-                csv_path = save_embedding_csv(phi_embed, embed_type='phi', step=step, save_dir=save_dir)
-                results['phi_csv_saved'] = str(csv_path)
-            except Exception as e:
-                if verbose:
-                    print(f"  [WARN] Could not save phi CSV: {e}")
-
-        # Plot and save mu embeddings (beliefs)
+        # Plot mu embeddings (beliefs)
         if mu_embed is not None:
             try:
                 fig = plot_embedding_clustering(
@@ -603,13 +596,6 @@ def analyze_gauge_semantics(
                 if verbose:
                     print(f"  [WARN] Could not generate mu plot: {e}")
                 results['mu_plot_saved'] = False
-
-            try:
-                csv_path = save_embedding_csv(mu_embed, embed_type='mu', step=step, save_dir=save_dir)
-                results['mu_csv_saved'] = str(csv_path)
-            except Exception as e:
-                if verbose:
-                    print(f"  [WARN] Could not save mu CSV: {e}")
 
     return results
 
@@ -807,276 +793,6 @@ def plot_embedding_clustering(
     return fig
 
 
-# =============================================================================
-# CSV Export and Animation
-# =============================================================================
-
-def save_embedding_csv(
-    embed: torch.Tensor,
-    embed_type: str = 'phi',
-    step: Optional[int] = None,
-    save_dir: Optional[Path] = None,
-    n_tokens: int = 500,
-) -> Path:
-    """
-    Save embeddings (mu or phi) to CSV for later plotting/animation.
-
-    Args:
-        embed: Embedding tensor [vocab_size, embed_dim]
-        embed_type: 'phi' for gauge frames, 'mu' for beliefs
-        step: Training step
-        save_dir: Directory to save CSV
-        n_tokens: Number of tokens to save
-
-    Returns:
-        Path to saved CSV
-    """
-    import pandas as pd
-
-    save_dir = Path(save_dir) if save_dir else Path("./outputs/data")
-    save_dir.mkdir(parents=True, exist_ok=True)
-
-    embed_np = embed[:n_tokens].numpy() if isinstance(embed, torch.Tensor) else embed[:n_tokens]
-    embed_dim = embed_np.shape[1]
-
-    # Categorize tokens
-    categories = [categorize_token(tid) for tid in range(len(embed_np))]
-
-    # Build dataframe
-    data = {
-        'token_id': list(range(len(embed_np))),
-        'category': categories,
-    }
-    for i in range(embed_dim):
-        data[f'{embed_type}_{i}'] = embed_np[:, i]
-
-    df = pd.DataFrame(data)
-
-    # File naming
-    if embed_type == 'phi':
-        filename = f"gauge_frames{'_step'+str(step) if step is not None else ''}.csv"
-    else:
-        filename = f"belief_embeddings{'_step'+str(step) if step is not None else ''}.csv"
-
-    csv_path = save_dir / filename
-    df.to_csv(csv_path, index=False)
-
-    return csv_path
-
-
-# Backwards compatibility aliases
 def plot_gauge_frame_clustering(phi_embed, step=None, save_path=None, n_tokens=500, gauge_group_label=None):
     """Alias for plot_embedding_clustering with embed_type='phi'."""
     return plot_embedding_clustering(phi_embed, embed_type='phi', step=step, save_path=save_path, n_tokens=n_tokens, gauge_group_label=gauge_group_label)
-
-
-def save_gauge_frame_csv(phi_embed, step=None, save_dir=None, n_tokens=500):
-    """Alias for save_embedding_csv with embed_type='phi'."""
-    return save_embedding_csv(phi_embed, embed_type='phi', step=step, save_dir=save_dir, n_tokens=n_tokens)
-
-
-def create_gauge_frame_animation(
-    csv_dir: Path,
-    output_path: Optional[Path] = None,
-    fps: int = 2,
-    dpi: int = 150,
-) -> Path:
-    """
-    Create animated GIF from saved gauge frame CSVs.
-
-    Uses PCA fitted on the final step and applies it to all steps
-    for consistent axes across frames.
-
-    Args:
-        csv_dir: Directory containing gauge_frames_step*.csv files
-        output_path: Output path for GIF (default: csv_dir/gauge_frame_evolution.gif)
-        fps: Frames per second
-        dpi: Resolution
-
-    Returns:
-        Path to saved GIF
-    """
-    import pandas as pd
-    import glob
-    import re
-
-    csv_dir = Path(csv_dir)
-    output_path = output_path or csv_dir / "gauge_frame_evolution.gif"
-
-    # Find all CSV files and sort by step
-    csv_files = list(csv_dir.glob("gauge_frames_step*.csv"))
-    if not csv_files:
-        raise ValueError(f"No gauge_frames_step*.csv files found in {csv_dir}")
-
-    def extract_step(path):
-        match = re.search(r'step(\d+)', path.name)
-        return int(match.group(1)) if match else 0
-
-    csv_files = sorted(csv_files, key=extract_step)
-    steps = [extract_step(f) for f in csv_files]
-
-    print(f"Found {len(csv_files)} CSV files: steps {steps}")
-
-    # Load all data
-    all_data = []
-    for csv_path in csv_files:
-        df = pd.read_csv(csv_path)
-        step = extract_step(csv_path)
-        df['step'] = step
-        all_data.append(df)
-
-    # Get phi columns
-    phi_cols = [c for c in all_data[0].columns if c.startswith('phi_')]
-    phi_dim = len(phi_cols)
-
-    # Fit PCA on final step
-    final_phi = all_data[-1][phi_cols].values
-    n_components = min(3, phi_dim)
-    pca = PCA(n_components=n_components)
-    pca.fit(final_phi)
-
-    # Compute global axis limits from all steps (projected)
-    all_projected = []
-    for df in all_data:
-        phi_vals = df[phi_cols].values
-        projected = pca.transform(phi_vals)
-        all_projected.append(projected)
-
-    all_projected_concat = np.vstack(all_projected)
-    x_min, x_max = all_projected_concat[:, 0].min(), all_projected_concat[:, 0].max()
-    y_min, y_max = all_projected_concat[:, 1].min(), all_projected_concat[:, 1].max()
-
-    # Add 10% padding
-    x_pad = (x_max - x_min) * 0.1
-    y_pad = (y_max - y_min) * 0.1
-    xlim = (x_min - x_pad, x_max + x_pad)
-    ylim = (y_min - y_pad, y_max + y_pad)
-
-    var_explained = pca.explained_variance_ratio_
-
-    # Generate frames
-    frames = []
-    for df, projected, step in zip(all_data, all_projected, steps):
-        fig, ax = plt.subplots(figsize=(10, 8))
-
-        categories = df['category'].values
-
-        for cat in CATEGORY_COLORS:
-            mask = categories == cat
-            if mask.any():
-                ax.scatter(
-                    projected[mask, 0],
-                    projected[mask, 1],
-                    c=CATEGORY_COLORS[cat],
-                    label=cat,
-                    alpha=0.6,
-                    s=30
-                )
-
-        ax.set_xlim(xlim)
-        ax.set_ylim(ylim)
-        ax.set_xlabel(f'PC1 ({var_explained[0]:.1%})')
-        ax.set_ylabel(f'PC2 ({var_explained[1]:.1%})')
-        ax.set_title(f'Gauge Frame Evolution - Step {step}')
-        ax.legend(loc='upper right', fontsize=10)
-        ax.grid(True, alpha=0.3)
-
-        # Convert to image
-        fig.canvas.draw()
-        image = np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8')
-        image = image.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-        frames.append(image)
-        plt.close(fig)
-
-    # Save as GIF
-    try:
-        import imageio
-        imageio.mimsave(output_path, frames, fps=fps)
-        print(f"Saved animation to: {output_path}")
-    except ImportError:
-        # Fallback: save individual frames
-        print("imageio not installed, saving individual frames instead")
-        for i, (frame, step) in enumerate(zip(frames, steps)):
-            frame_path = csv_dir / f"gauge_frame_step{step}_fixed_axes.png"
-            plt.imsave(frame_path, frame)
-        output_path = csv_dir / "frames"
-
-    return output_path
-
-
-# =============================================================================
-# Standalone Script Mode
-# =============================================================================
-
-if __name__ == "__main__":
-    import sys
-    import json
-
-    print("=" * 60)
-    print("Gauge Frame Semantic Analysis")
-    print("=" * 60)
-
-    # Configuration - set these paths when running as script
-    EXPERIMENT_CONFIG_PATH = "runs/your_experiment/experiment_config.json"
-    CHECKPOINT_PATH = "runs/your_experiment/best_model.pt"
-
-    if len(sys.argv) > 1:
-        CHECKPOINT_PATH = sys.argv[1]
-    if len(sys.argv) > 2:
-        EXPERIMENT_CONFIG_PATH = sys.argv[2]
-
-    # Load config
-    config_path = Path(EXPERIMENT_CONFIG_PATH)
-    if config_path.exists():
-        with open(config_path) as f:
-            config = json.load(f)
-        print(f"Loaded config: {config_path}")
-    else:
-        print(f"Config not found: {config_path}")
-        config = {}
-
-    # Load checkpoint
-    ckpt_path = Path(CHECKPOINT_PATH)
-    if not ckpt_path.exists():
-        print(f"ERROR: Checkpoint not found: {ckpt_path}")
-        sys.exit(1)
-
-    print(f"Loading checkpoint: {ckpt_path}")
-    checkpoint = torch.load(ckpt_path, map_location='cpu', weights_only=False)
-
-    if 'model_state_dict' in checkpoint:
-        state_dict = checkpoint['model_state_dict']
-    elif 'state_dict' in checkpoint:
-        state_dict = checkpoint['state_dict']
-    else:
-        state_dict = checkpoint
-
-    # Extract embeddings
-    mu_embed = None
-    phi_embed = None
-
-    for key, value in state_dict.items():
-        if 'mu_embed' in key and 'weight' in key:
-            mu_embed = value
-            print(f"Found mu_embed: {value.shape}")
-        if 'phi_embed' in key and 'weight' in key:
-            phi_embed = value
-            print(f"Found phi_embed: {value.shape}")
-
-    if mu_embed is None:
-        print("ERROR: No mu_embed found!")
-        sys.exit(1)
-
-    # Run analysis
-    save_dir = ckpt_path.parent
-    results = analyze_gauge_semantics(
-        mu_embed=mu_embed,
-        phi_embed=phi_embed,
-        save_dir=save_dir,
-        save_plots=True,
-        verbose=True,
-    )
-
-    print("\n" + "=" * 60)
-    print("ANALYSIS COMPLETE")
-    print("=" * 60)
