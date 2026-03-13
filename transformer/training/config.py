@@ -97,25 +97,6 @@ class TrainingConfig:
     eval_interval: int = 100
     checkpoint_interval: int = 500
 
-    # Aliases for backward compatibility
-    @property
-    def log_every(self) -> int:
-        return self.log_interval
-
-    @property
-    def eval_every(self) -> int:
-        return self.eval_interval
-
-    @property
-    def save_every(self) -> int:
-        return self.checkpoint_interval
-
-    # ==========================================================================
-    # Early Stopping
-    # ==========================================================================
-    patience: int = 0  # If > 0, stop if no improvement for this many evals
-    min_improvement: float = 0.001  # Minimum improvement to reset patience
-
     # ==========================================================================
     # Checkpointing
     # ==========================================================================
@@ -135,7 +116,6 @@ class TrainingConfig:
     # Hardware
     # ==========================================================================
     device: str = 'cuda'
-    use_amp: bool = False  # Automatic mixed precision
 
     # ==========================================================================
     # Gauge Group

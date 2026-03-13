@@ -125,19 +125,6 @@ class TestGaugeFFN:
         assert torch.isfinite(phi_out).all(), "phi_out contains NaN/Inf"
         assert (sigma_out > 0).all(), "sigma_out must be positive"
 
-    def test_pure_fep_mode_property(self, generators, cpu_device):
-        """Test pure_fep_mode property."""
-        from transformer.core.ffn import GaugeFFN
-
-        K = generators.shape[1]
-        ffn = GaugeFFN(
-            embed_dim=K,
-            hidden_dim=44,
-            generators=generators,
-            pure_fep_mode=False,
-        )
-        assert ffn.pure_fep_mode is False
-
     def test_create_ffn_factory(self, generators, cpu_device):
         """Test create_ffn factory function."""
         from transformer.core.ffn import create_ffn
