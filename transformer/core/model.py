@@ -116,7 +116,7 @@ class GaugeTransformerLM(nn.Module):
         hidden_dim = config['hidden_dim']
         max_seq_len = config['max_seq_len']
         kappa_beta = config['kappa_beta']
-        dropout = config.get('dropout', 0.1)
+        dropout = config.get('dropout', 0.0)  # VFE: no dropout by default
         pos_mode = config.get('pos_encoding_mode', 'none')  # Default: no position in gauge space
         evolve_sigma = config.get('evolve_sigma', True)
         evolve_phi = config.get('evolve_phi', True)
@@ -415,7 +415,7 @@ class GaugeTransformerLM(nn.Module):
             ffn_chunk_size=config.get('ffn_chunk_size', None),
             # Pure VFE mode: disable ad-hoc transformer components
             use_layernorm=config.get('use_layernorm', True),
-            use_dropout=config.get('use_dropout', True),
+            use_dropout=config.get('use_dropout', False),  # VFE: uncertainty lives in Σ, not random masking
             use_residual=config.get('use_residual', True),
             # ALiBi positional bias
             alibi_slope=alibi_slope,
@@ -1223,7 +1223,7 @@ if __name__ == '__main__':
         'hidden_dim': 128,
         'max_seq_len': 16,
         'kappa_beta': 1.0,
-        'dropout': 0.1,
+        'dropout': 0.0,
         'pos_encoding_mode': 'learned',
         'evolve_sigma': False,
         'evolve_phi': False,

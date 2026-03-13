@@ -273,12 +273,10 @@ VFE_EM_CONFIG = {
 
     # Regularization
     'weight_decay': 0.01,
-    'dropout':      0,            # No dropout for VFE mode
     'grad_clip':    1.0,
 
     'use_layernorm': True,      # Critical!
     'use_residual':  True,
-    'use_dropout':   False,       # Dropout disabled for VFE mode
 
     'log_interval': 100,
     'eval_interval': 1000,
