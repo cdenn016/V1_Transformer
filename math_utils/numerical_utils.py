@@ -374,8 +374,8 @@ def sanitize_sigma(Sigma: np.ndarray,
     # Eigendecomposition
     w, V = np.linalg.eigh(Sigma)
     
-    # CRITICAL: Absolute floor (not relative!)
-    MIN_EIGENVALUE = 1e-4  # Prevents confidence explosion
+    # Absolute floor on eigenvalues for positive-definiteness
+    MIN_EIGENVALUE = 1e-8  # Small enough to not distort KL computations
     w = np.maximum(w, MIN_EIGENVALUE)
     
     if max_eig is not None:

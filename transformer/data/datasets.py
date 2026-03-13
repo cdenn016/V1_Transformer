@@ -838,13 +838,16 @@ class WikiText2TiktokenDataset(Dataset):
         if dataset == 'wiki-ja':
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
             self._full_vocab_size = self.tokenizer.n_vocab  # 100277
-            self.pad_token_id = 0
             self.eos_token_id = 100257  # cl100k_base's <|endoftext|>
+            # Note: pad_token_id=0 collides with valid tiktoken token 0, but
+            # target padding uses -100 (ignore_index) so loss is unaffected.
+            # Input padding positions are masked in attention.
+            self.pad_token_id = 0
         else:
             self.tokenizer = tiktoken.get_encoding("gpt2")
             self._full_vocab_size = self.tokenizer.n_vocab  # 50257
-            self.pad_token_id = 0
             self.eos_token_id = 50256  # GPT-2's <|endoftext|>
+            self.pad_token_id = 0
 
         # Try loading from token cache first
         # Use different cache key for cl100k_base vs gpt2 tokenizer

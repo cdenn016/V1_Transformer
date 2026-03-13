@@ -703,14 +703,14 @@ class GaugePositionalEncoding(nn.Module):
             pos_phi: (max_len, phi_dim) positional gauge frames
         """
         position = torch.arange(max_len, dtype=torch.float32).unsqueeze(1)  # (L, 1)
-        div_term = torch.exp(torch.arange(0, phi_dim, 1, dtype=torch.float32) * -(math.log(10000.0) / phi_dim))
+        # Standard sinusoidal: each pair (2i, 2i+1) shares the same frequency
+        # freq_2i = 1 / 10000^(2i/phi_dim), with sin at even dims, cos at odd
+        div_term = torch.exp(torch.arange(0, phi_dim, 2, dtype=torch.float32) * -(math.log(10000.0) / phi_dim))
 
         phi = torch.zeros(max_len, phi_dim)
-        for d in range(phi_dim):
-            if d % 2 == 0:
-                phi[:, d] = torch.sin(position.squeeze(-1) * div_term[d])
-            else:
-                phi[:, d] = torch.cos(position.squeeze(-1) * div_term[d])
+        n_freqs = div_term.shape[0]
+        phi[:, 0::2] = torch.sin(position * div_term[:min(n_freqs, (phi_dim + 1) // 2)])
+        phi[:, 1::2] = torch.cos(position * div_term[:min(n_freqs, phi_dim // 2)])
 
         return phi * scale
 

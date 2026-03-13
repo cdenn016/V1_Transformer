@@ -1922,9 +1922,9 @@ class VariationalFFNDynamic(nn.Module):
     def forward(
         self,
         mu: torch.Tensor,          # (B, N, K) - current beliefs
-        beta: torch.Tensor,        # (B, n_heads, N, N) - INITIAL attention (will be recomputed)
-        mu_prior: torch.Tensor,    # (B, N, K) - embedding priors
-        phi: torch.Tensor,         # (B, N, 3) - gauge frames
+        beta: torch.Tensor = None, # (B, n_heads, N, N) - UNUSED, kept for API compat
+        mu_prior: torch.Tensor = None,    # (B, N, K) - embedding priors
+        phi: torch.Tensor = None,         # (B, N, 3) - gauge frames
         sigma: Optional[torch.Tensor] = None,  # (B, N, K, K) or (B, N, K) if diagonal
         mask: Optional[torch.Tensor] = None,   # (B, N, N) - causal mask
         targets: Optional[torch.Tensor] = None,  # (B, N) - target token IDs
@@ -2025,8 +2025,8 @@ class VariationalFFNDynamic(nn.Module):
             # Prior = initial embedding beliefs (fixed reference, not optimized through E-step)
             # detach() prevents gradient flow through the prior, matching the VFE formulation
             # where p_i is a fixed reference distribution (Eq. 10 in manuscript)
-            mu_p_current = mu_prior.clone().detach()
-            sigma_p = sigma.clone().detach()
+            mu_p_current = mu_prior.detach().clone()
+            sigma_p = sigma.detach().clone()
 
         # Current state (will evolve)
         mu_current = mu.clone()

@@ -263,6 +263,9 @@ class GaugeTransformerLM(nn.Module):
                             cross_couplings, super_block_head_groups,
                         )
                         self._cross_head_perm = perm  # Stored for embedding reordering
+                        # Pre-cache torch tensors to avoid repeated numpy->torch on every forward
+                        self.register_buffer('_perm_tensor', torch.from_numpy(perm).long(), persistent=False)
+                        self.register_buffer('_inv_perm_tensor', torch.from_numpy(np.argsort(perm)).long(), persistent=False)
                         self._super_block_dims = super_block_dims
                         self._super_block_head_groups = super_block_head_groups
 
@@ -316,7 +319,7 @@ class GaugeTransformerLM(nn.Module):
             init_std=config.get('mu_init_std', None),  # Embedding init std (None = default 2.0)
             init_sigma_scale=1.0,  # Scaled to match init_std for O(1) KL
             learnable_sigma=config.get('evolve_sigma', True),  # Learn per-token covariances
-            learnable_phi=(gauge_mode != 'trivial'),  # Learn phi only when gauge transport is active
+            learnable_phi=config.get('learnable_phi', gauge_mode != 'trivial'),  # Default: learn when gauge is active
             gauge_fixed_priors=gauge_fixed_priors,
             generators=self.generators,  # Always pass generators for gauge transport
             diagonal_covariance=diagonal_covariance,
@@ -519,7 +522,7 @@ class GaugeTransformerLM(nn.Module):
         # coupled heads are contiguous. We must apply the same permutation to
         # the embedding dimensions so mu/sigma align with the generator blocks.
         if getattr(self, '_cross_head_perm', None) is not None:
-            perm = torch.from_numpy(self._cross_head_perm).to(device=device, dtype=torch.long)
+            perm = self._perm_tensor.to(device=device)
             mu_q = mu_q[:, :, perm]
             if sigma_q is not None:
                 if sigma_q.dim() == 3:
@@ -601,9 +604,7 @@ class GaugeTransformerLM(nn.Module):
         # 6b. Inverse Cross-Head Permutation (restore original dim order)
         # =================================================================
         if getattr(self, '_cross_head_perm', None) is not None:
-            inv_perm = torch.from_numpy(
-                np.argsort(self._cross_head_perm)
-            ).to(device=device, dtype=torch.long)
+            inv_perm = self._inv_perm_tensor.to(device=device)
             mu_q = mu_q[:, :, inv_perm]
             if sigma_q is not None:
                 if sigma_q.dim() == 3:
@@ -677,7 +678,7 @@ class GaugeTransformerLM(nn.Module):
 
         # Cross-head permutation (same as in forward())
         if getattr(self, '_cross_head_perm', None) is not None:
-            perm = torch.from_numpy(self._cross_head_perm).to(device=device, dtype=torch.long)
+            perm = self._perm_tensor.to(device=device)
             mu_q = mu_q[:, :, perm]
             if sigma_q is not None:
                 if sigma_q.dim() == 3:
@@ -779,9 +780,7 @@ class GaugeTransformerLM(nn.Module):
 
         # Inverse cross-head permutation
         if getattr(self, '_cross_head_perm', None) is not None:
-            inv_perm = torch.from_numpy(
-                np.argsort(self._cross_head_perm)
-            ).to(device=device, dtype=torch.long)
+            inv_perm = self._inv_perm_tensor.to(device=device)
             mu_q = mu_q[:, :, inv_perm]
             if sigma_q is not None:
                 if sigma_q.dim() == 3:
@@ -858,7 +857,7 @@ class GaugeTransformerLM(nn.Module):
 
         # Cross-head permutation (same as in forward())
         if getattr(self, '_cross_head_perm', None) is not None:
-            perm = torch.from_numpy(self._cross_head_perm).to(device=device, dtype=torch.long)
+            perm = self._perm_tensor.to(device=device)
             mu_q = mu_q[:, :, perm]
             if sigma_q is not None:
                 if sigma_q.dim() == 3:
@@ -955,9 +954,7 @@ class GaugeTransformerLM(nn.Module):
 
         # Inverse cross-head permutation
         if getattr(self, '_cross_head_perm', None) is not None:
-            inv_perm = torch.from_numpy(
-                np.argsort(self._cross_head_perm)
-            ).to(device=device, dtype=torch.long)
+            inv_perm = self._inv_perm_tensor.to(device=device)
             mu_q = mu_q[:, :, inv_perm]
             if sigma_q is not None:
                 if sigma_q.dim() == 3:
