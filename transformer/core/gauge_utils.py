@@ -9,7 +9,15 @@ Consolidates duplicated matrix exponential and KL divergence patterns.
 """
 
 import torch
-from typing import Tuple
+from collections import defaultdict
+from typing import List, Optional, Tuple
+
+try:
+    from .triton_kernels import pairwise_kl_diag_triton as _pairwise_kl_diag_triton
+    from .triton_kernels import TRITON_AVAILABLE as _TRITON_AVAILABLE
+except ImportError:
+    _TRITON_AVAILABLE = False
+    _pairwise_kl_diag_triton = None
 
 
 def stable_matrix_exp_pair(
@@ -61,11 +69,11 @@ def stable_matrix_exp_pair(
     orig_dtype = matrix.dtype
     with torch.amp.autocast('cuda', enabled=False):
         if d >= dim_threshold:
-            matrix_f64 = matrix.double()
+            matrix_f64 = matrix.double().contiguous()
             exp_pos = torch.linalg.matrix_exp(matrix_f64).to(orig_dtype)
             exp_neg = torch.linalg.matrix_exp(-matrix_f64).to(orig_dtype)
         else:
-            matrix_f32 = matrix.float()
+            matrix_f32 = matrix.float().contiguous()
             exp_pos = torch.linalg.matrix_exp(matrix_f32).to(orig_dtype)
             exp_neg = torch.linalg.matrix_exp(-matrix_f32).to(orig_dtype)
     return exp_pos, exp_neg
@@ -118,3 +126,361 @@ def newton_schulz_orthogonalize(
         X = X @ ((3.0 * eye - XtX) / 2.0)
 
     return X
+
+
+# =============================================================================
+# Fused Block-Diagonal Kernels
+# =============================================================================
+# These functions process ALL irrep blocks in grouped batches instead of
+# launching separate matrix_exp + KL kernels per block.  For typical configs
+# (e.g. 75×ℓ₀ + 30×ℓ₁ + 18×ℓ₂ = 123 blocks, 3 unique dims), this reduces
+# CUDA kernel launches from O(num_blocks) to O(num_unique_dims).
+
+
+def fused_block_matrix_exp_pairs(
+    phi: torch.Tensor,
+    generators: torch.Tensor,
+    irrep_dims: List[int],
+    enforce_orthogonal: bool = False,
+) -> List[Tuple[torch.Tensor, torch.Tensor]]:
+    """Compute matrix exponential pairs for all irrep blocks in fused batches.
+
+    Groups blocks by dimension and computes all blocks of each size via a
+    single ``stable_matrix_exp_pair`` call.  Reduces kernel launches from
+    O(num_blocks) to O(num_unique_dims).
+
+    For K=255 with [1]*75 + [3]*30 + [5]*18 = 123 blocks:
+      Old: 123 stable_matrix_exp_pair calls (246 CUDA kernels)
+      New:   3 stable_matrix_exp_pair calls (  6 CUDA kernels)
+
+    Args:
+        phi: (B, N, n_gen) gauge field coefficients.
+        generators: (n_gen, K, K) block-diagonal Lie algebra generators.
+        irrep_dims: list of block dimensions [d₁, d₂, ...].
+        enforce_orthogonal: if True, apply Newton-Schulz for blocks with d >= 16.
+
+    Returns:
+        List of (exp_phi_block, exp_neg_phi_block) tuples, one per block in
+        the same order as *irrep_dims*.  Each tensor has shape (B, N, d, d).
+    """
+    B, N, _ = phi.shape
+
+    # Build (index, start, end, dim) for each block
+    block_info: List[Tuple[int, int, int, int]] = []
+    start = 0
+    for idx, d in enumerate(irrep_dims):
+        block_info.append((idx, start, start + d, d))
+        start += d
+
+    # Group by dimension
+    dim_groups: dict = defaultdict(list)
+    for idx, s, e, d in block_info:
+        dim_groups[d].append((idx, s, e))
+
+    results: List[Optional[Tuple[torch.Tensor, torch.Tensor]]] = [None] * len(irrep_dims)
+
+    for d, group in dim_groups.items():
+        n_blocks = len(group)
+
+        # Stack generator sub-blocks: (n_blocks, n_gen, d, d)
+        gen_stack = torch.stack(
+            [generators[:, s:e, s:e] for _, s, e in group], dim=0
+        )
+
+        # Batched Lie-algebra element: phi · G per block
+        # phi: (B, N, n_gen), gen_stack: (n_blocks, n_gen, d, d)
+        #  → (n_blocks, B, N, d, d)
+        phi_matrices = torch.einsum('bna,gaij->gbnij', phi, gen_stack)
+
+        # Merge block-batch and batch dims for a single matrix_exp call
+        phi_flat = phi_matrices.reshape(n_blocks * B, N, d, d)
+        exp_phi_flat, exp_neg_phi_flat = stable_matrix_exp_pair(phi_flat)
+
+        # Reshape back: (n_blocks, B, N, d, d)
+        exp_phi_all = exp_phi_flat.reshape(n_blocks, B, N, d, d)
+        exp_neg_phi_all = exp_neg_phi_flat.reshape(n_blocks, B, N, d, d)
+
+        if enforce_orthogonal and d >= 16:
+            shape = exp_phi_all.shape
+            exp_phi_all = newton_schulz_orthogonalize(
+                exp_phi_all.reshape(-1, d, d)
+            ).reshape(shape)
+            exp_neg_phi_all = newton_schulz_orthogonalize(
+                exp_neg_phi_all.reshape(-1, d, d)
+            ).reshape(shape)
+
+        # Scatter results back to per-block list
+        for local_idx, (global_idx, _, _) in enumerate(group):
+            results[global_idx] = (
+                exp_phi_all[local_idx].contiguous(),
+                exp_neg_phi_all[local_idx].contiguous(),
+            )
+
+    return results  # type: ignore[return-value]
+
+
+def fused_block_diagonal_kl_diag(
+    mu_q: torch.Tensor,
+    sigma_q: torch.Tensor,
+    block_exp_pairs: List[Tuple[torch.Tensor, torch.Tensor]],
+    irrep_dims: List[int],
+    eps: float = 1e-6,
+    _tile_size: int = 16,
+) -> torch.Tensor:
+    """Fused block-diagonal KL divergence for diagonal covariance mode.
+
+    Memory-efficient implementation with three dispatch paths:
+
+    1. **Triton kernels** (d=1,3,5 on CUDA): zero intermediate memory — the
+       entire matrix_exp product, transport, and KL computation stays in
+       GPU registers.  Eliminates ~400–600 MB of (n_blocks, B, N, N, d, d)
+       Omega intermediates.
+
+    2. **Scalar fast path** (d=1 PyTorch fallback): pure element-wise ops
+       with no matrix operations.  For 75 scalar blocks this avoids all
+       einsum overhead.
+
+    3. **Row-tiled path** (d>1 PyTorch fallback): processes ``_tile_size``
+       query rows at a time, reducing peak Omega memory by a factor of
+       ``N / _tile_size``.  For N=64, _tile_size=16 gives 4× memory
+       reduction.
+
+    Args:
+        mu_q: (B, N, K) belief means.
+        sigma_q: (B, N, K) diagonal variances (already clamped to >= eps).
+        block_exp_pairs: list of (exp_phi, exp_neg_phi) per block.
+        irrep_dims: block dimensions [d₁, d₂, ...].
+        eps: numerical stability floor.
+        _tile_size: number of query rows per tile for d>1 blocks.
+
+    Returns:
+        kl_total: (B, N, N) total KL divergence across all blocks.
+    """
+    B, N, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+    kl_max = max(100.0, 5.0 * K)
+
+    kl_total = torch.zeros(B, N, N, device=device, dtype=dtype)
+
+    # Build block ranges and group by dimension
+    block_ranges: List[Tuple[int, int, int, int]] = []
+    start = 0
+    for idx, d in enumerate(irrep_dims):
+        block_ranges.append((idx, start, start + d, d))
+        start += d
+
+    dim_groups: dict = defaultdict(list)
+    for idx, s, e, d in block_ranges:
+        dim_groups[d].append((idx, s, e))
+
+    # ── Triton dispatch (zero intermediate memory) ──────────────────────
+    groups_to_process = dim_groups
+    if _TRITON_AVAILABLE and device.type == 'cuda':
+        try:
+            kl_triton, fallback_groups = _pairwise_kl_diag_triton(
+                mu_q, sigma_q, block_exp_pairs, irrep_dims, eps
+            )
+            kl_total = kl_total + kl_triton.clamp(max=kl_max).nan_to_num(
+                nan=0.0, posinf=kl_max, neginf=0.0
+            )
+            groups_to_process = fallback_groups  # empty if all dims handled
+        except Exception:
+            pass  # fall through to PyTorch path
+
+    # ── PyTorch path (tiled for memory efficiency) ──────────────────────
+    for d, group in groups_to_process.items():
+        n_blocks = len(group)
+
+        # Stack beliefs: (n_blocks, B, N, d)
+        mu_stack = torch.stack([mu_q[:, :, s:e] for _, s, e in group], dim=0)
+        sigma_stack = torch.stack([sigma_q[:, :, s:e] for _, s, e in group], dim=0)
+
+        # Stack exp pairs: (n_blocks, B, N, d, d)
+        exp_phi_stack = torch.stack(
+            [block_exp_pairs[idx][0] for idx, _, _ in group], dim=0)
+        exp_neg_phi_stack = torch.stack(
+            [block_exp_pairs[idx][1] for idx, _, _ in group], dim=0)
+
+        if d == 1:
+            # ── Scalar fast path: element-wise, no matrix ops ───────────
+            # Squeeze out trivial 1×1 matrix dims → (n_blocks, B, N)
+            ep = exp_phi_stack.squeeze(-1).squeeze(-1)
+            en = exp_neg_phi_stack.squeeze(-1).squeeze(-1)
+            mu_s = mu_stack.squeeze(-1)
+            sig_s = sigma_stack.squeeze(-1)
+
+            # Omega_ij = exp_phi_i * exp_neg_phi_j  (scalar product)
+            omega = ep[:, :, :, None] * en[:, :, None, :]  # (g, B, N, N)
+
+            # Transport mean and variance
+            mu_t = omega * mu_s[:, :, None, :]
+            sig_t = (omega * omega * sig_s[:, :, None, :]).clamp(min=eps)
+
+            mu_i = mu_s[:, :, :, None]
+            sig_i = sig_s[:, :, :, None].clamp(min=eps)
+            delta = mu_i - mu_t
+
+            kl = 0.5 * (sig_i / sig_t + delta * delta / sig_t - 1.0
+                        + torch.log(sig_t) - torch.log(sig_i))
+            kl = kl.clamp(min=0.0, max=kl_max)
+            kl = kl.nan_to_num(nan=0.0, posinf=kl_max, neginf=0.0)
+
+            kl_total = kl_total + kl.sum(dim=0)  # sum over blocks → (B,N,N)
+
+        else:
+            # ── Row-tiled path: peak memory reduced by N/_tile_size ─────
+            for i_start in range(0, N, _tile_size):
+                i_end = min(i_start + _tile_size, N)
+
+                # Omega tile: (n_blocks, B, tile, N, d, d)
+                ep_tile = exp_phi_stack[:, :, i_start:i_end]
+                Omega_tile = torch.einsum(
+                    'gbikl,gbjlm->gbijkm', ep_tile, exp_neg_phi_stack)
+
+                # Transport mean and diagonal variance
+                mu_t = torch.einsum(
+                    'gbijkl,gbjl->gbijk', Omega_tile, mu_stack)
+                sig_t = torch.einsum(
+                    'gbijkl,gbijkl,gbjl->gbijk',
+                    Omega_tile, Omega_tile, sigma_stack
+                ).clamp(min=eps)
+                del Omega_tile
+
+                # KL for this tile of query rows
+                mu_i = mu_stack[:, :, i_start:i_end, None, :].expand(
+                    -1, -1, -1, N, -1)
+                sig_i = sigma_stack[:, :, i_start:i_end, None, :].expand(
+                    -1, -1, -1, N, -1)
+                delta = mu_t - mu_i
+
+                trace = (sig_i / sig_t).sum(dim=-1)
+                mahal = (delta * delta / sig_t).sum(dim=-1)
+                logdet = (torch.log(sig_t) - torch.log(sig_i)).sum(dim=-1)
+
+                kl_tile = 0.5 * (trace + mahal - d + logdet)
+                kl_tile = kl_tile.clamp(min=0.0, max=kl_max)
+                kl_tile = kl_tile.nan_to_num(
+                    nan=0.0, posinf=kl_max, neginf=0.0)
+
+                # Sum over blocks and accumulate into output rows
+                kl_total[:, i_start:i_end, :] = (
+                    kl_total[:, i_start:i_end, :] + kl_tile.sum(dim=0))
+
+    return kl_total
+
+
+def fused_block_diagonal_kl_full(
+    mu_q: torch.Tensor,
+    sigma_q: torch.Tensor,
+    block_exp_pairs: List[Tuple[torch.Tensor, torch.Tensor]],
+    irrep_dims: List[int],
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """Fused block-diagonal KL divergence for full covariance mode.
+
+    Groups same-sized irrep blocks and computes transport + KL in batched
+    passes.  Falls back to diagonal approximation on Cholesky failure.
+
+    Args:
+        mu_q: (B, N, K) belief means.
+        sigma_q: (B, N, K, K) block-diagonal covariances.
+        block_exp_pairs: list of (exp_phi, exp_neg_phi) per block.
+        irrep_dims: block dimensions [d₁, d₂, ...].
+        eps: numerical stability floor.
+
+    Returns:
+        kl_total: (B, N, N) total KL divergence across all blocks.
+    """
+    B, N, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+    kl_max = max(100.0, 5.0 * K)
+
+    kl_total = torch.zeros(B, N, N, device=device, dtype=dtype)
+
+    # Build block ranges and group by dimension
+    block_ranges: List[Tuple[int, int, int, int]] = []
+    start = 0
+    for idx, d in enumerate(irrep_dims):
+        block_ranges.append((idx, start, start + d, d))
+        start += d
+
+    dim_groups: dict = defaultdict(list)
+    for idx, s, e, d in block_ranges:
+        dim_groups[d].append((idx, s, e))
+
+    for d, group in dim_groups.items():
+        n_blocks = len(group)
+
+        # Stack beliefs: (n_blocks, B, N, d) and (n_blocks, B, N, d, d)
+        mu_stack = torch.stack([mu_q[:, :, s:e] for _, s, e in group], dim=0)
+        sigma_stack = torch.stack(
+            [sigma_q[:, :, s:e, s:e] for _, s, e in group], dim=0
+        )
+
+        # Stack exp pairs: (n_blocks, B, N, d, d)
+        exp_phi_stack = torch.stack([block_exp_pairs[idx][0] for idx, _, _ in group], dim=0)
+        exp_neg_phi_stack = torch.stack([block_exp_pairs[idx][1] for idx, _, _ in group], dim=0)
+
+        # Batched Omega: (n_blocks, B, N, N, d, d)
+        Omega = torch.einsum('gbikl,gbjlm->gbijkm', exp_phi_stack, exp_neg_phi_stack)
+        del exp_phi_stack, exp_neg_phi_stack
+
+        # Batched transport
+        mu_transported = torch.einsum('gbijkl,gbjl->gbijk', Omega, mu_stack)
+        sigma_transported = torch.einsum(
+            'gbijkl,gbjlm,gbijmn->gbijkn',
+            Omega, sigma_stack, Omega.transpose(-1, -2)
+        )
+        del Omega
+
+        I_d = torch.eye(d, device=device, dtype=dtype)
+        mu_i = mu_stack[:, :, :, None, :].expand(-1, -1, -1, N, -1)
+        sigma_i = sigma_stack[:, :, :, None, :, :].expand(-1, -1, -1, N, -1, -1)
+
+        sigma_i_reg = sigma_i + eps * I_d
+        sigma_t_reg = sigma_transported + eps * I_d
+
+        try:
+            L_p = torch.linalg.cholesky(sigma_t_reg)
+            L_q = torch.linalg.cholesky(sigma_i_reg)
+
+            Y = torch.linalg.solve_triangular(L_p, sigma_i_reg, upper=False)
+            Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
+            trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
+
+            delta_mu = mu_transported - mu_i
+            v = torch.linalg.solve_triangular(
+                L_p, delta_mu.unsqueeze(-1), upper=False
+            ).squeeze(-1)
+            mahal_term = torch.sum(v ** 2, dim=-1)
+
+            logdet_p = 2.0 * torch.sum(
+                torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+            )
+            logdet_q = 2.0 * torch.sum(
+                torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
+            )
+
+            kl_group = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
+        except RuntimeError:
+            # Cholesky failed — fall back to diagonal approximation
+            sigma_diag_t = torch.diagonal(sigma_t_reg, dim1=-2, dim2=-1).clamp(min=eps)
+            sigma_diag_i = torch.diagonal(sigma_i_reg, dim1=-2, dim2=-1).clamp(min=eps)
+            delta_mu = mu_transported - mu_i
+
+            trace_term = (sigma_diag_i / sigma_diag_t).sum(dim=-1)
+            mahal_term = ((delta_mu ** 2) / sigma_diag_t).sum(dim=-1)
+            logdet_term = (torch.log(sigma_diag_t) - torch.log(sigma_diag_i)).sum(dim=-1)
+
+            kl_group = 0.5 * (trace_term + mahal_term - d + logdet_term)
+
+        kl_group = kl_group.clamp(min=0.0, max=kl_max)
+        kl_group = kl_group.nan_to_num(nan=0.0, posinf=kl_max, neginf=0.0)
+
+        kl_total = kl_total + kl_group.sum(dim=0)
+
+        del mu_transported, sigma_transported
+
+    return kl_total
