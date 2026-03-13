@@ -1908,125 +1908,125 @@ def run_single_experiment(
     print("="*70)
 
     # Create comprehensive publication metrics tracker
-        pub_metrics = None
-        if enable_publication_metrics:
-            experiment_name = f"{ffn_mode}_{time.strftime('%Y%m%d_%H%M%S')}"
-            pub_metrics = PublicationMetrics(
-                experiment_name=experiment_name,
-                base_dir=exp_checkpoint_dir / "publication_outputs"
-            )
-
-            # Configure gauge frame semantic analysis interval
-            # Priority: config dict > CLI args > default (10000)
-            semantic_interval = config.get('semantic_analysis_interval',
-                                           getattr(args, 'semantic_analysis_interval', 10000) if args else 10000)
-            pub_metrics.set_semantic_analysis_interval(semantic_interval)
-            print(f"[Config] Gauge frame semantic analysis every {semantic_interval} steps")
-
-        trainer = PublicationTrainer(
-            model=model,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            config=train_config,
-            device=device,
-            publication_metrics=pub_metrics,
-            tokenizer=tokenizer,  # For decoding in interpretability outputs
+    pub_metrics = None
+    if enable_publication_metrics:
+        experiment_name = f"{ffn_mode}_{time.strftime('%Y%m%d_%H%M%S')}"
+        pub_metrics = PublicationMetrics(
+            experiment_name=experiment_name,
+            base_dir=exp_checkpoint_dir / "publication_outputs"
         )
 
-        # =================================================================
-        # Training (Standard Backprop)
-        # =================================================================
+        # Configure gauge frame semantic analysis interval
+        # Priority: config dict > CLI args > default (10000)
+        semantic_interval = config.get('semantic_analysis_interval',
+                                       getattr(args, 'semantic_analysis_interval', 10000) if args else 10000)
+        pub_metrics.set_semantic_analysis_interval(semantic_interval)
+        print(f"[Config] Gauge frame semantic analysis every {semantic_interval} steps")
+
+    trainer = PublicationTrainer(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        config=train_config,
+        device=device,
+        publication_metrics=pub_metrics,
+        tokenizer=tokenizer,  # For decoding in interpretability outputs
+    )
+
+    # =================================================================
+    # Training (Standard Backprop)
+    # =================================================================
+
+    print("\n" + "="*70)
+    print("STARTING TRAINING")
+    print("="*70)
+    print(f"Device: {device}")
+    print(f"FFN mode: {ffn_mode}")
+    # Show epochs-based info if set
+    if train_config.epochs is not None and train_config.epochs > 0:
+        eff_steps = train_config.epochs * steps_per_epoch
+        print(f"Epochs: {train_config.epochs} ({steps_per_epoch:,} steps/epoch = {eff_steps:,} total)")
+    else:
+        print(f"Total steps: {train_config.max_steps:,}")
+    print("\nNOTE: First few batches may be slow (JIT compilation)")
+    print("="*70 + "\n")
+
+    try:
+        trainer.train()
 
         print("\n" + "="*70)
-        print("STARTING TRAINING")
+        print("✓ TRAINING COMPLETE!")
         print("="*70)
-        print(f"Device: {device}")
-        print(f"FFN mode: {ffn_mode}")
-        # Show epochs-based info if set
-        if train_config.epochs is not None and train_config.epochs > 0:
-            eff_steps = train_config.epochs * steps_per_epoch
-            print(f"Epochs: {train_config.epochs} ({steps_per_epoch:,} steps/epoch = {eff_steps:,} total)")
-        else:
-            print(f"Total steps: {train_config.max_steps:,}")
-        print("\nNOTE: First few batches may be slow (JIT compilation)")
-        print("="*70 + "\n")
 
-        try:
-            trainer.train()
+        # Final evaluation
+        final_metrics = trainer.validate()
 
-            print("\n" + "="*70)
-            print("✓ TRAINING COMPLETE!")
-            print("="*70)
+        print(f"\nFinal Validation Metrics:")
+        print(f"  Loss:       {final_metrics['loss']:.4f}")
+        print(f"  Perplexity: {final_metrics['perplexity']:.2f}")
 
-            # Final evaluation
-            final_metrics = trainer.validate()
+        # vs random baseline
+        random_ppl = actual_vocab_size
+        improvement = random_ppl / final_metrics['perplexity']
+        print(f"\nValidation improvement over random:")
+        print(f"  Random:     {random_ppl:.0f}")
+        print(f"  Model:      {final_metrics['perplexity']:.2f}")
+        print(f"  Factor:     {improvement:.1f}x better!")
 
-            print(f"\nFinal Validation Metrics:")
-            print(f"  Loss:       {final_metrics['loss']:.4f}")
-            print(f"  Perplexity: {final_metrics['perplexity']:.2f}")
+        # Save final checkpoint
+        final_ckpt = trainer.save_checkpoint(is_best=True)
+        print(f"\n✓ Saved: {final_ckpt}")
 
-            # vs random baseline
-            random_ppl = actual_vocab_size
-            improvement = random_ppl / final_metrics['perplexity']
-            print(f"\nValidation improvement over random:")
-            print(f"  Random:     {random_ppl:.0f}")
-            print(f"  Model:      {final_metrics['perplexity']:.2f}")
-            print(f"  Factor:     {improvement:.1f}x better!")
+        # Run test set evaluation if test loader is available
+        test_metrics = None
+        if test_loader is not None:
+            test_metrics = run_test_evaluation(
+                model=model,
+                test_loader=test_loader,
+                device=device,
+                vocab_size=actual_vocab_size,
+                config=config,
+            )
 
-            # Save final checkpoint
-            final_ckpt = trainer.save_checkpoint(is_best=True)
-            print(f"\n✓ Saved: {final_ckpt}")
+        # Return metrics
+        result = {
+            'ffn_mode': ffn_mode,
+            'final_loss': final_metrics['loss'],
+            'final_ppl': final_metrics['perplexity'],
+            'random_ppl': random_ppl,
+            'improvement': improvement,
+            'total_params': total_params,
+            'vocab_size': actual_vocab_size,
+            'checkpoint': str(final_ckpt),
+            # Training duration stats
+            'total_steps': train_config.max_steps if train_config.epochs is None else train_config.epochs * steps_per_epoch,
+            'tokens_seen': total_tokens,
+            'dataset_tokens': dataset_tokens,
+            'dataset_coverage': total_tokens / dataset_tokens if dataset_tokens else None,
+            'batch_size': batch_size,
+            'seq_len': seq_len,
+        }
 
-            # Run test set evaluation if test loader is available
-            test_metrics = None
-            if test_loader is not None:
-                test_metrics = run_test_evaluation(
-                    model=model,
-                    test_loader=test_loader,
-                    device=device,
-                    vocab_size=actual_vocab_size,
-                    config=config,
-                )
+        # Add test metrics if available
+        if test_metrics is not None:
+            result['test_loss'] = test_metrics['test_loss']
+            result['test_ppl'] = test_metrics['test_ppl']
+            result['test_bpc'] = test_metrics['test_bpc']
+            result['test_improvement'] = test_metrics['improvement']
 
-            # Return metrics
-            result = {
-                'ffn_mode': ffn_mode,
-                'final_loss': final_metrics['loss'],
-                'final_ppl': final_metrics['perplexity'],
-                'random_ppl': random_ppl,
-                'improvement': improvement,
-                'total_params': total_params,
-                'vocab_size': actual_vocab_size,
-                'checkpoint': str(final_ckpt),
-                # Training duration stats
-                'total_steps': train_config.max_steps if train_config.epochs is None else train_config.epochs * steps_per_epoch,
-                'tokens_seen': total_tokens,
-                'dataset_tokens': dataset_tokens,
-                'dataset_coverage': total_tokens / dataset_tokens if dataset_tokens else None,
-                'batch_size': batch_size,
-                'seq_len': seq_len,
-            }
+        return result
 
-            # Add test metrics if available
-            if test_metrics is not None:
-                result['test_loss'] = test_metrics['test_loss']
-                result['test_ppl'] = test_metrics['test_ppl']
-                result['test_bpc'] = test_metrics['test_bpc']
-                result['test_improvement'] = test_metrics['improvement']
+    except KeyboardInterrupt:
+        print("\n\n" + "="*70)
+        print("TRAINING INTERRUPTED")
+        print("="*70)
+        ckpt = trainer.save_checkpoint(is_best=False)
+        print(f"✓ Saved: {ckpt}")
+        return None
 
-            return result
-
-        except KeyboardInterrupt:
-            print("\n\n" + "="*70)
-            print("TRAINING INTERRUPTED")
-            print("="*70)
-            ckpt = trainer.save_checkpoint(is_best=False)
-            print(f"✓ Saved: {ckpt}")
-            return None
-
-        except Exception as e:
-            print(f"\n\n❌ Error: {e}")
-            raise
+    except Exception as e:
+        print(f"\n\n❌ Error: {e}")
+        raise
 
 
 def main():
