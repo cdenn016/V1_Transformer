@@ -594,6 +594,13 @@ class GaugeTransformerLM(nn.Module):
                 np.argsort(self._cross_head_perm)
             ).to(device=device, dtype=torch.long)
             mu_q = mu_q[:, :, inv_perm]
+            if sigma_q is not None:
+                if sigma_q.dim() == 3:
+                    # Diagonal: (B, N, K)
+                    sigma_q = sigma_q[:, :, inv_perm]
+                else:
+                    # Full: (B, N, K, K)
+                    sigma_q = sigma_q[:, :, inv_perm][:, :, :, inv_perm]
 
         # =================================================================
         # 7. Project to Vocabulary (one prediction per agent)
@@ -765,6 +772,11 @@ class GaugeTransformerLM(nn.Module):
                 np.argsort(self._cross_head_perm)
             ).to(device=device, dtype=torch.long)
             mu_q = mu_q[:, :, inv_perm]
+            if sigma_q is not None:
+                if sigma_q.dim() == 3:
+                    sigma_q = sigma_q[:, :, inv_perm]
+                else:
+                    sigma_q = sigma_q[:, :, inv_perm][:, :, :, inv_perm]
 
         # Project to vocabulary
         if self.use_prior_bank and self.prior_bank is not None:
@@ -936,6 +948,11 @@ class GaugeTransformerLM(nn.Module):
                 np.argsort(self._cross_head_perm)
             ).to(device=device, dtype=torch.long)
             mu_q = mu_q[:, :, inv_perm]
+            if sigma_q is not None:
+                if sigma_q.dim() == 3:
+                    sigma_q = sigma_q[:, :, inv_perm]
+                else:
+                    sigma_q = sigma_q[:, :, inv_perm][:, :, :, inv_perm]
 
         # Project to vocabulary
         if self.use_prior_bank and self.prior_bank is not None:

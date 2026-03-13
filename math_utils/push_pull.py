@@ -20,7 +20,8 @@ Given Gaussian q_j(c) = N(μ_j, Σ_j) and transport Ω_ij(c):
 **Properties:**
     1. Linear transport: μ' = Ω μ
     2. Covariance transport: Σ' = Ω Σ Ωᵀ (preserves SPD)
-    3. Precision transport: Λ' = Ω Λ Ωᵀ (same form!)
+    3. Precision transport: Λ' = Ω⁻ᵀ Λ Ω⁻¹ = (Ω Σ Ωᵀ)⁻¹
+       (reduces to Ω Λ Ωᵀ only when Ω is orthogonal)
 
 **Usage in Alignment:**
     KL(q_i || Ω_ij[q_j]) measures how well i's belief matches
@@ -140,8 +141,9 @@ def push_gaussian(
     Transformation:
         N(μ, Σ) → N(Ω μ, Ω Σ Ωᵀ)
     
-    Precision matrix transforms the same way:
-        Λ = Σ⁻¹ → Λ' = Ω Λ Ωᵀ
+    Precision matrix transforms as:
+        Λ = Σ⁻¹ → Λ' = Ω⁻ᵀ Λ Ω⁻¹ (general GL(K))
+        For orthogonal Ω: Λ' = Ω Λ Ωᵀ (since Ω⁻¹ = Ωᵀ)
     
     Args:
         gaussian: Source distribution
@@ -242,22 +244,21 @@ def push_gaussian(
     
     if compute_precision or gaussian.Sigma_inv is not None:
         if gaussian.Sigma_inv is not None:
-            # For precision matrix: Λ' = (Σ')⁻¹ = (Ω Σ Ωᵀ)⁻¹
-            # Since Ω orthogonal: Λ' = Ω Λ Ωᵀ (same form as covariance!)
+            # For precision matrix: Λ' = (Σ')⁻¹ = (Ω Σ Ωᵀ)⁻¹ = Ω⁻ᵀ Λ Ω⁻¹
+            # For orthogonal Ω: Ω⁻¹ = Ωᵀ, so Λ' = Ω Λ Ωᵀ
+            # For GL(K): must use the full inverse formula
             Sigma_inv = np.asarray(gaussian.Sigma_inv, dtype=np.float64)
-            
+
             # Check if Ω is orthogonal (sample first element if batch)
             Omega_to_check = Omega if Omega.ndim == 2 else Omega.reshape(-1, K, K)[0]
             is_ortho = _is_orthogonal(Omega_to_check, tol=1e-4)
-            
+
             if is_ortho:
-                # Fast path: Λ' = Ω Λ Ωᵀ
-                # Step 1: Ω Λ
+                # Fast path (orthogonal only): Λ' = Ω Λ Ωᵀ
                 tmp_inv = np.einsum('...ik,...kl->...il', Omega, Sigma_inv, optimize=True)
-                # Step 2: (Ω Λ) Ωᵀ
                 Sigma_inv_pushed = np.einsum('...ij,...kj->...ik', tmp_inv, Omega, optimize=True)
             else:
-                # Fallback: same formula (works for any invertible Ω)
+                # GL(K) path: Λ' = Ω⁻ᵀ Λ Ω⁻¹
                 Sigma_inv_pushed = _push_precision_via_solve(Omega, Sigma_inv)
         
         else:

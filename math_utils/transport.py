@@ -251,17 +251,16 @@ def compute_transport(
     phi_j = np.asarray(phi_j, dtype=np.float64)
     G = np.asarray(generators, dtype=np.float64)
 
-    # Validate shapes (keep existing validation)
+    # Validate shapes
     if phi_i.shape != phi_j.shape:
         raise ValueError(f"Shape mismatch: phi_i {phi_i.shape}, phi_j {phi_j.shape}")
-    if phi_i.shape[-1] != 3:
-        raise ValueError(f"Expected (*S, 3) for so(3), got {phi_i.shape}")
-    if G.shape[0] != 3:
-        raise ValueError(f"Expected 3 generators, got {G.shape[0]}")
+    n_gen = G.shape[0]
+    if phi_i.shape[-1] != n_gen:
+        raise ValueError(f"phi has {phi_i.shape[-1]} components but {n_gen} generators provided")
 
     K = G.shape[1]
 
-    # General SO(N) case
+    # General SO(N) / GL(K) case
     exp_phi_i = _matrix_exponential_so3(phi_i, G)
     exp_neg_phi_j = _matrix_exponential_so3(-phi_j, G)
 
