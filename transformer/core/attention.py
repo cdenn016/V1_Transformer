@@ -743,9 +743,9 @@ def _compute_kl_matrix_torch(
         # Skip expensive matrix exponentials - just use raw beliefs
         # μ_transported = μ_j (no rotation)
         # Σ_transported = Σ_j (no rotation)
-        # Use .clone() after expand to avoid view-related gradient issues
-        mu_transported = mu_q[:, None, :, :].expand(-1, N, -1, -1).clone()  # (B, N, N, K)
-        Sigma_transported = sigma_q[:, None, :, :, :].expand(-1, N, -1, -1, -1).clone()  # (B, N, N, K, K)
+        # Expand views (no .clone() needed — these are read-only)
+        mu_transported = mu_q[:, None, :, :].expand(-1, N, -1, -1)  # (B, N, N, K)
+        Sigma_transported = sigma_q[:, None, :, :, :].expand(-1, N, -1, -1, -1)  # (B, N, N, K, K)
     else:
         if cached_transport is not None and 'Omega' in cached_transport:
             # Use precomputed transport operators (saves 2 matrix exponentials!)
@@ -785,10 +785,10 @@ def _compute_kl_matrix_torch(
 
     # =========================================================================
     # Step 3: Expand mu_i and Sigma_i for pairwise comparison
-    # Use .clone() after expand to avoid view-related gradient issues
+    # Expand views (no .clone() needed — these are read-only)
     # =========================================================================
-    mu_i = mu_q[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
-    Sigma_i = sigma_q[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()  # (B, N, N, K, K)
+    mu_i = mu_q[:, :, None, :].expand(-1, -1, N, -1)  # (B, N, N, K)
+    Sigma_i = sigma_q[:, :, None, :, :].expand(-1, -1, N, -1, -1)  # (B, N, N, K, K)
 
     # =========================================================================
     # Step 4: Compute all KL divergences
@@ -1260,10 +1260,10 @@ def _compute_kl_matrix_chunked(
             # =================================================================
             # Compute KL divergence for this chunk
             # =================================================================
-            # Expand mu_i and sigma_i for pairwise comparison - use .clone() after expand
+            # Expand mu_i and sigma_i for pairwise comparison (read-only views)
             # Force float32 for Cholesky/solve/log
-            mu_i_exp = mu_i.float()[:, :, None, :].expand(-1, -1, n_j, -1).clone()  # (B, n_i, n_j, K)
-            sigma_i_exp = sigma_i_reg.float()[:, :, None, :, :].expand(-1, -1, n_j, -1, -1).clone()
+            mu_i_exp = mu_i.float()[:, :, None, :].expand(-1, -1, n_j, -1)  # (B, n_i, n_j, K)
+            sigma_i_exp = sigma_i_reg.float()[:, :, None, :, :].expand(-1, -1, n_j, -1, -1)
             mu_transported = mu_transported.float()
             Sigma_transported = Sigma_transported.float()
 
@@ -1699,10 +1699,9 @@ def _compute_kl_matrix_block_diagonal(
         # =====================================================================
         I_block = torch.eye(d, device=device, dtype=dtype)
 
-        # Expand for pairwise comparison - use .clone() after expand to create copies
-        # and avoid view-related gradient issues
-        mu_block_i = mu_block[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, d)
-        sigma_block_i = sigma_block[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()  # (B, N, N, d, d)
+        # Expand for pairwise comparison        # and avoid view-related gradient issues
+        mu_block_i = mu_block[:, :, None, :].expand(-1, -1, N, -1)  # (B, N, N, d)
+        sigma_block_i = sigma_block[:, :, None, :, :].expand(-1, -1, N, -1, -1)  # (B, N, N, d, d)
 
         sigma_block_i_reg = sigma_block_i + eps * I_block
         sigma_block_transported_reg = sigma_block_transported + eps * I_block
@@ -1873,10 +1872,9 @@ def _compute_kl_matrix_block_diagonal_chunked(
 
                 del Omega_block
 
-                # Compute KL for this block - use .clone() after expand to create copies
-                I_d = torch.eye(d, device=device, dtype=dtype)
-                mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()
-                sigma_i_exp = sigma_i[:, :, None, :, :].expand(-1, -1, n_j, -1, -1).clone()
+                # Compute KL for this block                I_d = torch.eye(d, device=device, dtype=dtype)
+                mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1)
+                sigma_i_exp = sigma_i[:, :, None, :, :].expand(-1, -1, n_j, -1, -1)
 
                 sigma_i_reg = sigma_i_exp + eps * I_d
                 sigma_transported_reg = sigma_transported + eps * I_d
