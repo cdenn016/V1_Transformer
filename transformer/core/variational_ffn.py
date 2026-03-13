@@ -2013,8 +2013,11 @@ class VariationalFFNDynamic(nn.Module):
 
         else:
             # Standard mode: use embedding priors
-            mu_p_current = mu_prior.clone()
-            sigma_p = sigma.clone()
+            # Prior = initial embedding beliefs (fixed reference, not optimized through E-step)
+            # detach() prevents gradient flow through the prior, matching the VFE formulation
+            # where p_i is a fixed reference distribution (Eq. 10 in manuscript)
+            mu_p_current = mu_prior.clone().detach()
+            sigma_p = sigma.clone().detach()
 
         # Current state (will evolve)
         mu_current = mu.clone()

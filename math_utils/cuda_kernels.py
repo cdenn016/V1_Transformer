@@ -318,14 +318,18 @@ if CUPY_AVAILABLE:
         phi_i: cp.ndarray,
         phi_j: cp.ndarray,
         generators: cp.ndarray,
-        eps: float = 1e-8
+        eps: float = 1e-8,
+        enforce_skew_symmetry: bool = False
     ) -> cp.ndarray:
         """
         Compute transport operator Omega_ij = exp(phi_i) @ exp(-phi_j) - GPU.
 
         Args:
-            phi_i, phi_j: Gauge fields (*S, 3)
-            generators: SO(3) generators (3, K, K)
+            phi_i, phi_j: Gauge fields (*S, n_gen)
+            generators: Lie algebra generators (n_gen, K, K)
+            eps: Numerical stability parameter
+            enforce_skew_symmetry: If True, project to so(K) (for SO(K) only).
+                For GL(K), this MUST be False to preserve the symmetric component.
 
         Returns:
             Omega_ij: Transport operator (*S, K, K)
@@ -344,9 +348,10 @@ if CUPY_AVAILABLE:
         X_i = cp.einsum('na,aij->nij', phi_i, generators)
         X_j = cp.einsum('na,aij->nij', phi_j, generators)
 
-        # Skew-symmetrize
-        X_i = 0.5 * (X_i - cp.swapaxes(X_i, -1, -2))
-        X_j = 0.5 * (X_j - cp.swapaxes(X_j, -1, -2))
+        # Only skew-symmetrize for SO(K) — GL(K) requires the full algebra
+        if enforce_skew_symmetry:
+            X_i = 0.5 * (X_i - cp.swapaxes(X_i, -1, -2))
+            X_j = 0.5 * (X_j - cp.swapaxes(X_j, -1, -2))
 
         # Matrix exponentials (using scipy-like approximation)
         exp_phi_i = _batch_matrix_exp_cupy(X_i)
