@@ -254,8 +254,9 @@ VFE_EM_CONFIG = {
     'phi_lr':    0.005,
     'ffn_lr':    0.05 ,
 
-
-
+    'attention_lr': 0.005,
+    'output_lr': 0.05,
+    
     # Free energy loss weights (see compute_free_energy_loss in train.py)
     # NOTE: config['beta'] maps to the lambda_beta parameter in compute_free_energy_loss().
     # This is the belief coupling weight Σ β_ij·KL(q_i||Ω_ij q_j) in the TRAINING LOSS,
@@ -282,7 +283,6 @@ VFE_EM_CONFIG = {
     'eval_interval': 1000,
     'checkpoint_interval': 25000,
     'semantic_analysis_interval': 10000,
-    'patience': 5,
 
     # =================================================================
     # GAUGE GROUP SELECTION (Generators from so(N), Transport in GL(K))
@@ -382,6 +382,7 @@ VFE_EM_CONFIG = {
 
 
 # =============================================================================
+
 
 
 
@@ -1539,13 +1540,7 @@ class PublicationTrainer(FastTrainer):
                 # CE loss is the proper metric since PPL = exp(CE)
                 if val_metrics['ce_loss'] < self.best_val_ce:
                     self.best_val_ce = val_metrics['ce_loss']
-                    self.patience_counter = 0
                     self.save_checkpoint(is_best=True)
-                else:
-                    self.patience_counter += 1
-                    if self.config.patience > 0 and self.patience_counter >= self.config.patience:
-                        print(f"\n[WARNING] Early stopping!")
-                        break
 
             # Checkpointing
             if (step + 1) % self.config.checkpoint_interval == 0:
@@ -1796,9 +1791,6 @@ def run_single_experiment(
         use_wandb=use_wandb,
         checkpoint_dir=exp_checkpoint_dir,
 
-        # GPU optimizations
-        use_amp=config.get('use_amp', False),
-
         # P-FLOW: EMA update of token embeddings toward successful beliefs
         use_p_flow=config.get('use_p_flow', False),
         p_flow_ema_decay=config.get('p_flow_ema_decay', 0.99),
@@ -1853,7 +1845,6 @@ def run_single_experiment(
     print(f"  Warmup:         {train_config.warmup_steps}")
     print(f"  Batch size:     {batch_size}")
     print(f"  Seq length:     {seq_len}")
-    print(f"  Use AMP:        {train_config.use_amp}")
     print(f"  Num workers:    {config.get('num_workers', 0)}")
     print(f"\nFree Energy Weights:")
     print(f"  α (self-consistency): {train_config.alpha}")
@@ -2121,7 +2112,6 @@ def main():
     if args.dataset == 'wiki-ja' and config['vocab_size'] == 50257:
         config['vocab_size'] = 100277
         print(f"\n[wiki-ja] Auto-adjusted vocab_size: 50257 → 100277 (cl100k_base full vocab)")
-
 
     result = run_single_experiment(
         config=config,
