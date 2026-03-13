@@ -76,11 +76,12 @@ class FastTrainingConfig:
     # weight_decay implements the Level 3 hyper-prior N(0, 1/(2·wd)) on parameters.
     # For embedding parameters (μ_p, σ_p, φ), this is the top of the Bayesian hierarchy:
     #   x → q(E-step) → p(M-step) → N(0, 1/(2·wd))
-    weight_decay: float = 0.01  # Weaker regularization than TrainingConfig (0.1) — tuned for FastTrainer
-    # Embedding-specific weight decay (Level 3 hyper-prior on priors).
-    # None = use weight_decay (same as non-embedding params).
-    # 0.0 = uninformative hyper-prior (no regularization toward zero).
-    embed_weight_decay: Optional[float] = None
+    weight_decay: float = 0.01  # L2 for non-VFE params (attention, FFN) only
+    # Embedding weight decay: 0.0 because VFE loss terms already regularize:
+    #   - alpha · KL(q||p) couples μ_p, Σ_p to posterior (Bayesian self-consistency)
+    #   - alpha_phi · ||φ||²/2 is literally L2 on gauge frames
+    # Adding optimizer WD on top double-regularizes and conflicts with VFE gradients.
+    embed_weight_decay: Optional[float] = 0.0
 
     # Gradient control
     grad_clip: float = 1.0
