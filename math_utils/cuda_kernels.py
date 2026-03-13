@@ -130,31 +130,35 @@ if CUPY_AVAILABLE:
         # Regularize targets (batched)
         Sigma_p_batch_reg = Sigma_p_batch + eps * eye_K
 
-        # Allocate output
-        kl_batch = cp.zeros(N, dtype=mu_q.dtype)
+        # Batched Cholesky and logdet for all N targets
+        try:
+            L_p_batch = cp.linalg.cholesky(Sigma_p_batch_reg)  # (N, K, K)
+        except cp.linalg.LinAlgError:
+            # Fallback: increase regularization
+            Sigma_p_batch_reg = Sigma_p_batch_reg + 1e-4 * eye_K
+            L_p_batch = cp.linalg.cholesky(Sigma_p_batch_reg)
 
-        # Process each target
-        # TODO: Fully vectorize this loop with custom CUDA kernel
+        # Log determinants: 2 * sum(log(diag(L)))
+        diag_L_p = cp.array([cp.diag(L_p_batch[i]) for i in range(N)])  # (N, K)
+        logdet_p_batch = 2.0 * cp.sum(cp.log(cp.maximum(diag_L_p, eps)), axis=-1)  # (N,)
+
+        # Trace term: tr(Σ_p⁻¹ Σ_q) for each target
+        # Solve L_p @ Y = Σ_q, then L_p^T @ Z = Y, trace = sum(diag(Z))
+        # Expand Sigma_q_reg to (N, K, K) for batched solve
+        Sigma_q_exp = cp.broadcast_to(Sigma_q_reg, (N, K, K)).copy()
+        # Batched triangular solve via loop (CuPy lacks batched solve_triangular)
+        term_trace = cp.zeros(N, dtype=mu_q.dtype)
+        term_quad = cp.zeros(N, dtype=mu_q.dtype)
+        delta = mu_p_batch - mu_q  # (N, K)
+
         for i in range(N):
-            Sigma_p = Sigma_p_batch_reg[i]
-            mu_p = mu_p_batch[i]
+            Y = cp.linalg.solve(L_p_batch[i], Sigma_q_exp[i])
+            Z = cp.linalg.solve(L_p_batch[i].T, Y)
+            term_trace[i] = cp.trace(Z)
+            y = cp.linalg.solve(L_p_batch[i], delta[i])
+            term_quad[i] = cp.dot(y, y)  # ||L_p^{-1} δ||² = δᵀ Σ_p⁻¹ δ
 
-            L_p = cp.linalg.cholesky(Sigma_p)
-            logdet_p = 2.0 * cp.sum(cp.log(cp.maximum(cp.diag(L_p), eps)))
-
-            # Trace term
-            Y = cp.linalg.solve(L_p, Sigma_q_reg)
-            Z = cp.linalg.solve(L_p.T, Y)
-            term_trace = cp.trace(Z)
-
-            # Quadratic term
-            delta = mu_p - mu_q
-            y = cp.linalg.solve(L_p, delta)
-            z = cp.linalg.solve(L_p.T, y)
-            term_quad = cp.dot(delta, z)
-
-            kl_batch[i] = 0.5 * (term_trace + term_quad - K + logdet_p - logdet_q)
-
+        kl_batch = 0.5 * (term_trace + term_quad - K + logdet_p_batch - logdet_q)
         return cp.maximum(kl_batch, 0.0)
 
 
@@ -274,37 +278,30 @@ if CUPY_AVAILABLE:
         phi_flat = phi.reshape(n_total, 3)
 
         # Compute theta
-        theta = cp.linalg.norm(phi_flat, axis=-1)
+        theta = cp.linalg.norm(phi_flat, axis=-1)  # (n_total,)
 
-        # Allocate output
-        R = cp.zeros((n_total, 3, 3), dtype=phi.dtype)
+        # Build batched skew-symmetric matrices [phi]_x vectorized
+        # phi_flat: (n_total, 3), components p0, p1, p2
+        phi_x = cp.zeros((n_total, 3, 3), dtype=phi.dtype)
+        phi_x[:, 0, 1] = -phi_flat[:, 2]
+        phi_x[:, 0, 2] = phi_flat[:, 1]
+        phi_x[:, 1, 0] = phi_flat[:, 2]
+        phi_x[:, 1, 2] = -phi_flat[:, 0]
+        phi_x[:, 2, 0] = -phi_flat[:, 1]
+        phi_x[:, 2, 1] = phi_flat[:, 0]
 
-        # Identity matrix
+        # Batched phi_x^2
+        phi_x_sq = cp.matmul(phi_x, phi_x)  # (n_total, 3, 3)
+
+        # Rodrigues coefficients (vectorized with small-angle handling)
+        small = theta < eps
+        th_safe = cp.where(small, cp.ones_like(theta), theta)
+        c1 = cp.where(small, 1.0 - theta**2 / 6.0, cp.sin(th_safe) / th_safe)
+        c2 = cp.where(small, 0.5 - theta**2 / 24.0, (1.0 - cp.cos(th_safe)) / (th_safe * th_safe))
+
+        # R = I + c1 * [phi]_x + c2 * [phi]_x^2
         I = cp.eye(3, dtype=phi.dtype)
-
-        for idx in range(n_total):
-            th = theta[idx]
-            p = phi_flat[idx]
-
-            # Skew symmetric matrix [phi]_x
-            phi_x = cp.zeros((3, 3), dtype=phi.dtype)
-            phi_x[0, 1] = -p[2]
-            phi_x[0, 2] = p[1]
-            phi_x[1, 0] = p[2]
-            phi_x[1, 2] = -p[0]
-            phi_x[2, 0] = -p[1]
-            phi_x[2, 1] = p[0]
-
-            phi_x_sq = phi_x @ phi_x
-
-            if th < eps:
-                # Taylor expansion
-                R[idx] = I + phi_x + 0.5 * phi_x_sq
-            else:
-                # Rodrigues formula
-                c1 = cp.sin(th) / th
-                c2 = (1.0 - cp.cos(th)) / (th * th)
-                R[idx] = I + c1 * phi_x + c2 * phi_x_sq
+        R = I + c1[:, None, None] * phi_x + c2[:, None, None] * phi_x_sq
 
         R = R.reshape(batch_shape + (3, 3))
 

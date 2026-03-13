@@ -169,8 +169,8 @@ def infer_config_from_state_dict(state_dict: dict) -> dict:
         config['irrep_spec'] = irrep_spec
 
     # Infer diagonal_covariance from sigma storage format
-    # log_sigma_diag = diagonal mode, log_sigma or sigma_embed = full mode
-    if 'token_embed.log_sigma_diag' in state_dict:
+    # log_sigma_embed/log_sigma_diag = diagonal mode, log_sigma or sigma_embed = full mode
+    if 'token_embed.log_sigma_embed.weight' in state_dict or 'token_embed.log_sigma_diag' in state_dict:
         config['diagonal_covariance'] = True
         config['use_diagonal_covariance'] = True
     elif 'token_embed.log_sigma' in state_dict or 'token_embed.sigma_embed' in state_dict:

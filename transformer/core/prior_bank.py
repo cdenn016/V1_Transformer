@@ -327,47 +327,56 @@ class PriorBank(nn.Module):
         with torch.no_grad():
             B, N, K = mu_beliefs.shape
 
-            # Get unique tokens in this batch
-            unique_tokens = torch.unique(token_ids)
+            # Flatten batch dimensions: (B*N,)
+            flat_ids = token_ids.reshape(-1)           # (B*N,)
+            flat_mu = mu_beliefs.reshape(-1, K)        # (B*N, K)
+            flat_sigma = sigma_beliefs.reshape(-1, K)  # (B*N, K)
+            flat_errors = prediction_errors.reshape(-1)  # (B*N,)
 
-            for token_id in unique_tokens:
-                # Find all occurrences of this token across batch
-                mask = (token_ids == token_id)  # (B, N) boolean mask
+            # Compute per-token-type weights via segment-wise softmax:
+            # 1. Find max error per token type (for numerical stability)
+            neg_errors = -flat_errors.clamp(min=-10, max=10)
+            unique_tokens, inverse_idx = torch.unique(flat_ids, return_inverse=True)
+            n_unique = unique_tokens.shape[0]
 
-                if mask.sum() == 0:
-                    continue
+            # Segment-wise max for stable softmax
+            seg_max = torch.full((n_unique,), float('-inf'), device=flat_ids.device)
+            seg_max.scatter_reduce_(0, inverse_idx, neg_errors, reduce='amax', include_self=False)
+            shifted = neg_errors - seg_max[inverse_idx]
+            exp_shifted = torch.exp(shifted)
 
-                # Extract beliefs for this token across all occurrences
-                token_mu = mu_beliefs[mask]  # (num_occurrences, K)
-                token_sigma = sigma_beliefs[mask]  # (num_occurrences, K)
-                token_errors = prediction_errors[mask]  # (num_occurrences,)
+            # Segment-wise sum of exp for normalization
+            seg_sum = torch.zeros(n_unique, device=flat_ids.device)
+            seg_sum.scatter_add_(0, inverse_idx, exp_shifted)
+            weights = exp_shifted / seg_sum[inverse_idx].clamp(min=1e-12)  # (B*N,)
 
-                # Weight by prediction quality (softmax over errors)
-                # Low error = high weight
-                weights = F.softmax(-token_errors.clamp(min=-10, max=10), dim=0)  # (num_occurrences,)
+            # Weighted means per token type via scatter_add
+            weighted_mu = torch.zeros(n_unique, K, device=flat_ids.device)
+            weighted_mu.scatter_add_(0, inverse_idx.unsqueeze(-1).expand(-1, K), flat_mu * weights.unsqueeze(-1))
 
-                # Compute weighted average of beliefs
-                weighted_mu = (token_mu * weights.unsqueeze(-1)).sum(0)  # (K,)
-                weighted_sigma = (token_sigma * weights.unsqueeze(-1)).sum(0)  # (K,)
+            # Mean error per token type for confidence-weighted LR
+            seg_error_sum = torch.zeros(n_unique, device=flat_ids.device)
+            seg_error_sum.scatter_add_(0, inverse_idx, flat_errors)
+            seg_count = torch.zeros(n_unique, device=flat_ids.device)
+            seg_count.scatter_add_(0, inverse_idx, torch.ones_like(flat_errors))
+            mean_errors = seg_error_sum / seg_count.clamp(min=1)
+            confidence = 1.0 / (1.0 + mean_errors)  # (n_unique,)
+            effective_lr = lr * confidence  # (n_unique,)
 
-                # Confidence-weighted learning rate
-                mean_error = token_errors.mean()
-                confidence = 1.0 / (1.0 + mean_error)  # High error = low confidence
-                effective_lr = lr * confidence
+            # Vectorized EMA update for mu: prior ← (1-lr)*prior + lr*belief
+            self.prior_mu.data[unique_tokens] = (
+                (1.0 - effective_lr.unsqueeze(-1)) * self.prior_mu.data[unique_tokens] +
+                effective_lr.unsqueeze(-1) * weighted_mu
+            )
 
-                # EMA update: prior ← (1-lr)*prior + lr*belief
-                token_id_int = int(token_id.item())
-                self.prior_mu.data[token_id_int] = (
-                    (1.0 - effective_lr) * self.prior_mu.data[token_id_int] +
-                    effective_lr * weighted_mu.detach()
-                )
-
-                # Update sigma with smaller learning rate
-                if self.learnable_sigma:
-                    sigma_lr = effective_lr * 0.1
-                    current_sigma = torch.exp(self.log_prior_sigma.data[token_id_int])
-                    new_sigma = (1.0 - sigma_lr) * current_sigma + sigma_lr * weighted_sigma.detach()
-                    self.log_prior_sigma.data[token_id_int] = torch.log(new_sigma.clamp(min=self.eps))
+            # Vectorized EMA update for sigma
+            if self.learnable_sigma:
+                weighted_sigma = torch.zeros(n_unique, K, device=flat_ids.device)
+                weighted_sigma.scatter_add_(0, inverse_idx.unsqueeze(-1).expand(-1, K), flat_sigma * weights.unsqueeze(-1))
+                sigma_lr = effective_lr * 0.1
+                current_sigma = torch.exp(self.log_prior_sigma.data[unique_tokens])
+                new_sigma = (1.0 - sigma_lr.unsqueeze(-1)) * current_sigma + sigma_lr.unsqueeze(-1) * weighted_sigma
+                self.log_prior_sigma.data[unique_tokens] = torch.log(new_sigma.clamp(min=self.eps))
 
     def forward(
         self,
