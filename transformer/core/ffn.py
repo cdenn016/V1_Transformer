@@ -35,7 +35,6 @@ class GaugeFFN(nn.Module):
         embed_dim: int,
         hidden_dim: int,
         generators: Optional[torch.Tensor] = None,  # (3, K, K)
-        dropout: float = 0.1,
         mode: Literal['VFE_dynamic'] = 'VFE_dynamic',
         # Variational parameters
         alpha: float = 0.001,
@@ -80,7 +79,6 @@ class GaugeFFN(nn.Module):
             embed_dim: K - latent dimension
             hidden_dim: Hidden layer size (unused, kept for API compatibility)
             generators: SO(3) generators (3, K, K) - required
-            dropout: Dropout rate (unused, kept for API compatibility)
             mode: FFN mode - only 'VFE_dynamic' is supported
             alpha: Prior weight
             kappa: Softmax temperature for attention

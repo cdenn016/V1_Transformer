@@ -72,7 +72,6 @@ class GaugeTransformerBlock(nn.Module):
         irrep_spec: List[Tuple[str, int, int]],
         hidden_dim: int,
         kappa_beta: float,
-        dropout: float = 0.1,
         evolve_sigma: bool = False,
         evolve_phi: bool = False,
         evolve_phi_e_step: bool = False,  # Update φ during E-step iterations (dynamical gauge frames)
@@ -102,7 +101,6 @@ class GaugeTransformerBlock(nn.Module):
         ffn_chunk_size: Optional[int] = None,  # Chunk size for memory-efficient attention
         # Pure VFE mode: disable ad-hoc transformer components
         use_layernorm: bool = False,  # Pure VFE: beliefs evolve freely, no normalization
-        use_dropout: bool = False,    # Pure VFE: uncertainty lives in Σ, not random masking
         use_residual: bool = False,   # Pure VFE: FFN outputs final belief, not delta
         # ALiBi-style positional bias
         alibi_slope: Optional[float] = None,  # If set, adds slope*(i-j) to attention logits
@@ -139,7 +137,6 @@ class GaugeTransformerBlock(nn.Module):
             irrep_spec: Irrep structure [(label, mult, dim), ...]
             hidden_dim: FFN hidden dimension (typically 4 × embed_dim)
             kappa_beta: Temperature for attention
-            dropout: Dropout probability
             evolve_sigma: If True, update covariances via attention and FFN
             evolve_phi: If True, update gauge frames via FFN
             attention_pattern: 'full', 'local', or 'sparse' for efficient attention
@@ -169,7 +166,6 @@ mask_self_attention: If True, mask out diagonal (no self-attention).
 
         # Pure VFE mode flags
         self.use_layernorm = use_layernorm
-        self.use_dropout = use_dropout
         self.use_residual = use_residual
 
         # =====================================================================
@@ -232,7 +228,6 @@ mask_self_attention: If True, mask out diagonal (no self-attention).
 
         # Conditionally create LayerNorm and Dropout (disabled for pure VFE)
         self.norm1 = nn.LayerNorm(embed_dim) if use_layernorm else nn.Identity()
-        self.dropout1 = nn.Dropout(dropout) if use_dropout else nn.Identity()
 
         # =====================================================================
         # VFE_dynamic FFN Sublayer
@@ -241,7 +236,6 @@ mask_self_attention: If True, mask out diagonal (no self-attention).
             embed_dim=embed_dim,
             hidden_dim=hidden_dim,
             generators=generators,  # Required for VFE mode
-            dropout=dropout,
             mode=ffn_mode,
             # VFE parameters
             alpha=ffn_alpha,
@@ -349,9 +343,6 @@ mask_self_attention: If True, mask out diagonal (no self-attention).
         if recording_attention and beta is not None:
             recorder.record_attention(beta, kl_matrix)
 
-        # Apply dropout (identity if use_dropout=False)
-        mu_attn = self.dropout1(mu_attn)
-
         # Residual connection (optional for pure VFE)
         if self.use_residual:
             mu_q = mu_q + mu_attn
@@ -431,7 +422,6 @@ class GaugeTransformerStack(nn.Module):
         irrep_spec: List[Tuple[str, int, int]],
         hidden_dim: int,
         kappa_beta: float,
-        dropout: float = 0.1,
         evolve_sigma: bool = False,
         evolve_phi: bool = False,
         evolve_phi_e_step: bool = False,  # Update φ during E-step iterations (dynamical gauge frames)
@@ -461,7 +451,6 @@ class GaugeTransformerStack(nn.Module):
         ffn_chunk_size: Optional[int] = None,  # Chunk size for memory-efficient attention
         # Pure VFE mode: disable ad-hoc transformer components
         use_layernorm: bool = False,  # Pure VFE: beliefs evolve freely, no normalization
-        use_dropout: bool = False,    # Pure VFE: uncertainty lives in Σ, not random masking
         use_residual: bool = False,   # Pure VFE: FFN outputs final belief, not delta
         # ALiBi-style positional bias
         alibi_slope: Optional[float] = None,  # If set, adds slope*(i-j) to attention logits
@@ -499,7 +488,6 @@ class GaugeTransformerStack(nn.Module):
             irrep_spec: Irrep structure
             hidden_dim: FFN hidden dimension
             kappa_beta: Attention temperature
-            dropout: Dropout probability
             evolve_sigma: If True, covariances evolve through layers
             evolve_phi: If True, gauge frames evolve through layers
             generators: Lie algebra generators (required for VFE FFN)
@@ -514,7 +502,6 @@ class GaugeTransformerStack(nn.Module):
             attention_pattern: 'full', 'local', or 'sparse' for efficient attention
             attention_window: Window size for local attention pattern
 use_layernorm: If True, apply LayerNorm (default False for pure VFE)
-            use_dropout: If True, apply Dropout (default False for pure VFE)
             use_residual: If True, use residual connections (default False for pure VFE)
             mask_self_attention: If True, mask out diagonal (no self-attention).
                                 Prevents attention collapse since KL(q_i||q_i)=0 always.
@@ -531,7 +518,6 @@ use_layernorm: If True, apply LayerNorm (default False for pure VFE)
                 irrep_spec=irrep_spec,
                 hidden_dim=hidden_dim,
                 kappa_beta=kappa_beta,
-                dropout=dropout,
                 evolve_sigma=evolve_sigma,
                 evolve_phi=evolve_phi,
                 evolve_phi_e_step=evolve_phi_e_step,  # Update φ during E-step iterations
@@ -561,7 +547,6 @@ use_layernorm: If True, apply LayerNorm (default False for pure VFE)
                 ffn_chunk_size=ffn_chunk_size,
                 # Pure VFE mode
                 use_layernorm=use_layernorm,
-                use_dropout=use_dropout,
                 use_residual=use_residual,
                 # ALiBi positional bias
                 alibi_slope=alibi_slope,
@@ -709,7 +694,7 @@ if __name__ == '__main__':
         irrep_spec=irrep_spec,
         hidden_dim=hidden_dim,
         kappa_beta=1.0,
-        dropout=0.1,
+
         evolve_sigma=False,
         evolve_phi=False,
         generators=G,  # Required for VFE_dynamic mode
@@ -733,7 +718,7 @@ if __name__ == '__main__':
         irrep_spec=irrep_spec,
         hidden_dim=hidden_dim,
         kappa_beta=1.0,
-        dropout=0.1,
+
         evolve_sigma=False,
         evolve_phi=False,
         generators=G,  # Required for VFE_dynamic mode

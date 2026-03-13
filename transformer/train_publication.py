@@ -270,7 +270,6 @@ VFE_EM_CONFIG = {
 
     # Regularization
     'weight_decay': 0.01,
-    'dropout':      0,
     'grad_clip':    1.0,
 
     'use_layernorm': True,      # Critical!

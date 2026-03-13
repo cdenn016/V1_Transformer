@@ -94,7 +94,6 @@ class GaugeTransformerLM(nn.Module):
                 - hidden_dim: FFN hidden dimension
                 - max_seq_len: Maximum sequence length
                 - kappa_beta: Attention temperature
-                - dropout: Dropout probability
                 - pos_encoding_mode: 'learned' or 'sinusoidal'
                 - evolve_sigma: If True, evolve covariances
                 - evolve_phi: If True, evolve gauge frames
@@ -116,7 +115,6 @@ class GaugeTransformerLM(nn.Module):
         hidden_dim = config['hidden_dim']
         max_seq_len = config['max_seq_len']
         kappa_beta = config['kappa_beta']
-        dropout = config.get('dropout', 0.1)
         pos_mode = config.get('pos_encoding_mode', 'none')  # Default: no position in gauge space
         evolve_sigma = config.get('evolve_sigma', True)
         evolve_phi = config.get('evolve_phi', True)
@@ -385,7 +383,6 @@ class GaugeTransformerLM(nn.Module):
             irrep_spec=irrep_spec,
             hidden_dim=hidden_dim,
             kappa_beta=kappa_beta,
-            dropout=dropout,
             evolve_sigma=evolve_sigma,
             evolve_phi=evolve_phi,
             evolve_phi_e_step=evolve_phi_e_step,  # Update φ during E-step iterations
@@ -415,7 +412,6 @@ class GaugeTransformerLM(nn.Module):
             ffn_chunk_size=config.get('ffn_chunk_size', None),
             # Pure VFE mode: disable ad-hoc transformer components
             use_layernorm=config.get('use_layernorm', True),
-            use_dropout=config.get('use_dropout', True),
             use_residual=config.get('use_residual', True),
             # ALiBi positional bias
             alibi_slope=alibi_slope,
@@ -770,7 +766,6 @@ class GaugeTransformerLM(nn.Module):
             all_kls.append(kl if kl is not None else None)
 
             # Complete block forward (residual + FFN)
-            mu_attn = block.dropout1(mu_attn)
             if block.use_residual:
                 mu_q = mu_q + mu_attn
             else:
@@ -938,7 +933,6 @@ class GaugeTransformerLM(nn.Module):
             all_layer_betas.append(beta.detach() if beta is not None else None)
 
             # Complete attention sublayer (respect use_residual flag)
-            mu_attn = block.dropout1(mu_attn)
             if block.use_residual:
                 mu_q = mu_q + mu_attn
             else:
@@ -1223,7 +1217,6 @@ if __name__ == '__main__':
         'hidden_dim': 128,
         'max_seq_len': 16,
         'kappa_beta': 1.0,
-        'dropout': 0.1,
         'pos_encoding_mode': 'learned',
         'evolve_sigma': False,
         'evolve_phi': False,
