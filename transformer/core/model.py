@@ -94,7 +94,6 @@ class GaugeTransformerLM(nn.Module):
                 - hidden_dim: FFN hidden dimension
                 - max_seq_len: Maximum sequence length
                 - kappa_beta: Attention temperature
-                - dropout: Dropout probability
                 - pos_encoding_mode: 'learned' or 'sinusoidal'
                 - evolve_sigma: If True, evolve covariances
                 - evolve_phi: If True, evolve gauge frames
@@ -116,7 +115,6 @@ class GaugeTransformerLM(nn.Module):
         hidden_dim = config['hidden_dim']
         max_seq_len = config['max_seq_len']
         kappa_beta = config['kappa_beta']
-        dropout = config.get('dropout', 0.0)  # VFE: no dropout by default
         pos_mode = config.get('pos_encoding_mode', 'none')  # Default: no position in gauge space
         evolve_sigma = config.get('evolve_sigma', True)
         evolve_phi = config.get('evolve_phi', True)
@@ -385,7 +383,6 @@ class GaugeTransformerLM(nn.Module):
             irrep_spec=irrep_spec,
             hidden_dim=hidden_dim,
             kappa_beta=kappa_beta,
-            dropout=dropout,
             evolve_sigma=evolve_sigma,
             evolve_phi=evolve_phi,
             evolve_phi_e_step=evolve_phi_e_step,  # Update φ during E-step iterations
@@ -415,7 +412,6 @@ class GaugeTransformerLM(nn.Module):
             ffn_chunk_size=config.get('ffn_chunk_size', None),
             # Pure VFE mode: disable ad-hoc transformer components
             use_layernorm=config.get('use_layernorm', True),
-            use_dropout=config.get('use_dropout', False),  # VFE: uncertainty lives in Σ, not random masking
             use_residual=config.get('use_residual', True),
             # ALiBi positional bias
             alibi_slope=alibi_slope,
@@ -770,7 +766,6 @@ class GaugeTransformerLM(nn.Module):
             all_kls.append(kl if kl is not None else None)
 
             # Complete block forward (residual + FFN)
-            mu_attn = block.dropout1(mu_attn)
             if block.use_residual:
                 mu_q = mu_q + mu_attn
             else:
@@ -938,7 +933,6 @@ class GaugeTransformerLM(nn.Module):
             all_layer_betas.append(beta.detach() if beta is not None else None)
 
             # Complete attention sublayer (respect use_residual flag)
-            mu_attn = block.dropout1(mu_attn)
             if block.use_residual:
                 mu_q = mu_q + mu_attn
             else:
@@ -1206,105 +1200,3 @@ class GaugeTransformerLM(nn.Module):
             self.out_proj.weight.add_(lr * delta_W)
 
 
-# =============================================================================
-# Testing
-# =============================================================================
-
-if __name__ == '__main__':
-    print("="*70)
-    print("GAUGE TRANSFORMER LANGUAGE MODEL TEST")
-    print("="*70)
-
-    # Test configuration (small for quick testing)
-    config = {
-        'vocab_size': 100,
-        'embed_dim': 32,
-        'n_layers': 2,
-        'hidden_dim': 128,
-        'max_seq_len': 16,
-        'kappa_beta': 1.0,
-        'dropout': 0.0,
-        'pos_encoding_mode': 'learned',
-        'evolve_sigma': False,
-        'evolve_phi': False,
-        'tie_embeddings': True,
-        'irrep_spec': [
-            ('ℓ0', 8, 1),
-            ('ℓ1', 4, 3),
-            ('ℓ2', 2, 5),
-        ],  # Total: 8 + 12 + 10 = 30 → pad to 32
-    }
-
-    print(f"\n[1] Creating model...")
-    print(f"    Config: vocab={config['vocab_size']}, K={config['embed_dim']}, "
-          f"layers={config['n_layers']}")
-
-    model = GaugeTransformerLM(config)
-    print(f"    ✓ Model created")
-
-    # Test forward pass
-    print(f"\n[2] Testing forward pass...")
-    batch_size = 2
-    seq_len = 8
-    token_ids = torch.randint(0, config['vocab_size'], (batch_size, seq_len))
-
-    logits = model(token_ids)
-    print(f"    Input shape:  {token_ids.shape}")
-    print(f"    Output shape: {logits.shape}")
-    print(f"    ✓ Forward pass complete")
-
-    # Test with return_agents
-    print(f"\n[3] Testing with agent state tracking...")
-    logits, agents = model(token_ids, return_agents=True)
-    print(f"    Agent states: μ={agents['mu'].shape}, "
-          f"φ={agents['phi'].shape}")
-    print(f"    Intermediates: {len(agents['intermediates'])} layers")
-    print(f"    ✓ Agent tracking works")
-
-    # Test generation
-    print(f"\n[4] Testing autoregressive generation...")
-    prompt = torch.randint(0, config['vocab_size'], (1, 4))
-    generated = model.generate(
-        prompt,
-        max_new_tokens=8,
-        temperature=1.0,
-        top_k=10,
-    )
-    print(f"    Prompt length:    {prompt.shape[1]}")
-    print(f"    Generated length: {generated.shape[1]}")
-    print(f"    Tokens: {generated[0].tolist()}")
-    print(f"    ✓ Generation works")
-
-    # Parameter count
-    total_params = model.get_num_params(non_embedding=False)
-    non_embed_params = model.get_num_params(non_embedding=True)
-
-    print(f"\n[5] Parameter count:")
-    print(f"    Total:         {total_params:,} parameters")
-    print(f"    Non-embedding: {non_embed_params:,} parameters")
-    print(f"    Embedding:     {total_params - non_embed_params:,} parameters")
-
-    # Compare to standard transformer
-    standard_params = (
-        config['vocab_size'] * config['embed_dim'] +  # Token embedding
-        config['max_seq_len'] * config['embed_dim'] +  # Position embedding
-        config['n_layers'] * (
-            4 * config['embed_dim'] ** 2 +  # Q,K,V,O
-            2 * config['embed_dim'] * config['hidden_dim'] +  # FFN
-            4 * config['embed_dim']  # LayerNorm
-        )
-    )
-
-    print(f"\n[6] Comparison to standard transformer:")
-    print(f"    Standard (est): {standard_params:,} parameters")
-    print(f"    Gauge:          {total_params:,} parameters")
-    print(f"    Reduction:      {standard_params / total_params:.2f}x")
-
-    print("\n" + "="*70)
-    print("✓ All model tests passed!")
-    print("="*70)
-    print("\nNext steps:")
-    print("  1. Implement training loop (free energy loss)")
-    print("  2. Create data pipeline (WikiText-2)")
-    print("  3. Train the model!")
-    print("="*70)
