@@ -92,8 +92,6 @@ from transformer.analysis.publication_metrics import PublicationMetrics, Experim
 #   'standard'    - Standard transformer baseline (dot-product attention + MLP)
 #   'VFE_dynamic' - VFE with EM-step dynamics (backprop training)
 DEFAULT_MODE = 'VFE_dynamic'      # Which mode to run
-DEFAULT_ENABLE_SIGMA_PHI = True   # Enable learning Σ and φ (full geometric learning)
-DEFAULT_EMBED_LR = 0.1            # Learning rate for embedding updates
 
 # Dataset
 DEFAULT_DATASET = 'wikitext-103'  # 'wikitext-2' (~2M tokens) or 'wikitext-103' (~103M tokens)
@@ -125,7 +123,6 @@ STANDARD_CONFIG = {
 
     # Training
     'batch_size': 16,          # 16 × 128 = 2048 tokens/step (standard for small models)
-    'use_amp': False,
     'num_workers': 6,
     'epochs': None,            # Set to 1-3 for WikiText-2, None for WikiText-103 (use max_steps)
     'max_steps': 200000,       # ~0.5 epochs on WikiText-103, ~50 epochs on WikiText-2
@@ -164,8 +161,6 @@ STANDARD_CONFIG = {
     'log_interval': 1000,
     'eval_interval': 5000,
     'checkpoint_interval': 50000,
-    'patience': 5,
-
     # Unused in standard mode
     'kappa_beta': 1.0,
     'attention_pattern': 'full',
@@ -212,7 +207,6 @@ VFE_EM_CONFIG = {
 
     # Training
     'batch_size': 16, 
-    'use_amp': False,             # FP32 for precision
     'num_workers': 10,            #CPU workers 8--12
     'epochs': None,               # Set to 1-3 for WikiText-2, None for WikiText-103 (use max_steps)
     'max_steps': 60000,           # ~105% coverage on WikiText-103
@@ -281,13 +275,10 @@ VFE_EM_CONFIG = {
 
     'use_layernorm': True,      # Critical!
     'use_residual':  True,       # Gradient flow
-    'use_dropout':   False,
-
     'log_interval': 100,
     'eval_interval': 1000,
     'checkpoint_interval': 25000,
     'semantic_analysis_interval': 10000,
-    'patience': 5,
 
     # =================================================================
     # GAUGE GROUP SELECTION (Generators from so(N), Transport in GL(K))
@@ -1544,13 +1535,7 @@ class PublicationTrainer(FastTrainer):
                 # CE loss is the proper metric since PPL = exp(CE)
                 if val_metrics['ce_loss'] < self.best_val_ce:
                     self.best_val_ce = val_metrics['ce_loss']
-                    self.patience_counter = 0
                     self.save_checkpoint(is_best=True)
-                else:
-                    self.patience_counter += 1
-                    if self.config.patience > 0 and self.patience_counter >= self.config.patience:
-                        print(f"\n[WARNING] Early stopping!")
-                        break
 
             # Checkpointing
             if (step + 1) % self.config.checkpoint_interval == 0:
@@ -1801,9 +1786,6 @@ def run_single_experiment(
         use_wandb=use_wandb,
         checkpoint_dir=exp_checkpoint_dir,
 
-        # GPU optimizations
-        use_amp=config.get('use_amp', False),
-
         # P-FLOW: EMA update of token embeddings toward successful beliefs
         use_p_flow=config.get('use_p_flow', False),
         p_flow_ema_decay=config.get('p_flow_ema_decay', 0.99),
@@ -1858,7 +1840,6 @@ def run_single_experiment(
     print(f"  Warmup:         {train_config.warmup_steps}")
     print(f"  Batch size:     {batch_size}")
     print(f"  Seq length:     {seq_len}")
-    print(f"  Use AMP:        {train_config.use_amp}")
     print(f"  Num workers:    {config.get('num_workers', 0)}")
     print(f"\nFree Energy Weights:")
     print(f"  α (self-consistency): {train_config.alpha}")
@@ -2031,13 +2012,6 @@ def main():
     parser.add_argument('--ffn_mode', type=str, default=None,
                         choices=['VFE_dynamic', 'standard'],
                         help='DEPRECATED: Use --mode instead')
-    # Enable full geometric learning (Σ and φ)
-    parser.add_argument('--enable_sigma_phi', action='store_true', default=DEFAULT_ENABLE_SIGMA_PHI,
-                        help='Enable learning covariances (Σ) and gauge frames (φ)')
-
-    parser.add_argument('--embed_lr', type=float, default=DEFAULT_EMBED_LR,
-                        help='Learning rate for embedding updates in pure FEP mode')
-
     # System
     parser.add_argument('--device', type=str, default='auto')
     parser.add_argument('--checkpoint_dir', type=str, default='checkpoints_publication')
@@ -2133,11 +2107,6 @@ def main():
     if args.dataset == 'wiki-ja' and config['vocab_size'] == 50257:
         config['vocab_size'] = 100277
         print(f"\n[wiki-ja] Auto-adjusted vocab_size: 50257 → 100277 (cl100k_base full vocab)")
-
-    # Enable full geometric learning if requested (for non-standard modes)
-    if args.enable_sigma_phi and mode != 'standard':
-        config['evolve_sigma'] = True
-        config['evolve_phi'] = True
 
     result = run_single_experiment(
         config=config,
