@@ -110,8 +110,8 @@ class GaugeTransformerBlock(nn.Module):
         use_residual: bool = False,   # Pure VFE: FFN outputs final belief, not delta
         # ALiBi-style positional bias
         alibi_slope: Optional[float] = None,  # If set, adds slope*(i-j) to attention logits
-        # Identity transport mode
-        use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
+        # Gauge mode
+        gauge_mode: str = 'learned',  # 'learned' or 'trivial' (Ω = I, no gauge transport)
         # Self-attention masking (prevents attention collapse)
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
         # Sigma softmax coupling: include ∂β/∂Σ term in sigma gradient
@@ -233,7 +233,7 @@ class GaugeTransformerBlock(nn.Module):
             gauge_dim=gauge_dim_inferred,
             global_generators=generators,  # Pass for SO(N) mode
             alibi_slope=alibi_slope,
-            use_identity_transport=use_identity_transport,
+            gauge_mode=gauge_mode,
             mask_self_attention=mask_self_attention,
             enforce_orthogonal=enforce_orthogonal,
             use_output_projection=use_output_projection,
@@ -488,8 +488,8 @@ class GaugeTransformerStack(nn.Module):
         use_residual: bool = False,   # Pure VFE: FFN outputs final belief, not delta
         # ALiBi-style positional bias
         alibi_slope: Optional[float] = None,  # If set, adds slope*(i-j) to attention logits
-        # Identity transport mode
-        use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
+        # Gauge mode
+        gauge_mode: str = 'learned',  # 'learned' or 'trivial' (Ω = I, no gauge transport)
         # Self-attention masking (prevents attention collapse)
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
         # Sigma softmax coupling: include ∂β/∂Σ term in sigma gradient
@@ -600,8 +600,8 @@ class GaugeTransformerStack(nn.Module):
                 use_residual=use_residual,
                 # ALiBi positional bias
                 alibi_slope=alibi_slope,
-                # Identity transport
-                use_identity_transport=use_identity_transport,
+                # Gauge mode
+                gauge_mode=gauge_mode,
                 # Self-attention masking
                 mask_self_attention=mask_self_attention,
                 # Sigma softmax coupling

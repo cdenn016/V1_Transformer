@@ -30,7 +30,7 @@
     "diagonal_covariance": true,
     "use_positional_embedding": false,
     "pos_encoding_mode": "none",
-    "use_identity_transport": false,
+    "gauge_mode": "learned",
     "alibi_slope": null,
     "kappa_beta": 1,
     "mu_init_std": 1.0,

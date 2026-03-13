@@ -174,11 +174,6 @@ class GaugeTransformerLM(nn.Module):
         # Negative values create recency bias (attend more to nearby tokens)
         alibi_slope = config.get('alibi_slope', None)
 
-        # Identity transport mode: Ω_ij = I for all pairs (bypasses gauge transport)
-        # This is now primarily controlled by gauge_mode='trivial' for principled use.
-        # Direct use_identity_transport config is kept for backward compatibility.
-        use_identity_transport = config.get('use_identity_transport', False)
-
         # Store evolve_phi for cross-layer transport caching optimization
         self.evolve_phi = evolve_phi
 
@@ -217,7 +212,6 @@ class GaugeTransformerLM(nn.Module):
         # Trivial gauge mode → Ω = I, no phi evolution
         # This is the mathematically principled "gauge fixing" to a global frame
         if gauge_mode == 'trivial':
-            use_identity_transport = True  # Ω = I for all pairs
             evolve_phi = False  # No point updating φ when transport is identity
             evolve_phi_e_step = False
             print(f"[INFO] Trivial gauge mode: φ = 0, Ω = I (global frame / standard attention limit)")
@@ -451,8 +445,8 @@ class GaugeTransformerLM(nn.Module):
             use_residual=config.get('use_residual', True),
             # ALiBi positional bias
             alibi_slope=alibi_slope,
-            # Identity transport mode
-            use_identity_transport=use_identity_transport,
+            # Gauge mode
+            gauge_mode=gauge_mode,
             # Self-attention masking (prevents attention collapse)
             mask_self_attention=config.get('mask_self_attention', False),
             # Sigma softmax coupling: include ∂β/∂Σ term in sigma gradient

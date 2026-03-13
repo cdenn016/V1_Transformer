@@ -34,7 +34,7 @@ class TestComputeAttentionWeights:
 
         beta = compute_attention_weights(
             mu, sigma, phi, generators, kappa=kappa,
-            diagonal_covariance=True, use_identity_transport=True,
+            diagonal_covariance=True, gauge_mode='trivial',
         )
 
         # Check shape
@@ -53,7 +53,7 @@ class TestComputeAttentionWeights:
 
         beta = compute_attention_weights(
             mu, sigma, phi, generators, kappa=kappa,
-            diagonal_covariance=True, use_identity_transport=True,
+            diagonal_covariance=True, gauge_mode='trivial',
         )
 
         # Check non-negative
@@ -77,7 +77,7 @@ class TestComputeAttentionWeights:
 
         beta = compute_attention_weights(
             mu, sigma, phi, generators, kappa=kappa,
-            diagonal_covariance=True, use_identity_transport=True,
+            diagonal_covariance=True, gauge_mode='trivial',
         )
 
         assert torch.isfinite(beta).all(), "Output contains NaN or Inf"
@@ -98,7 +98,7 @@ class TestComputeAttentionWeights:
 
         beta = compute_attention_weights(
             mu, sigma, phi, generators, kappa=kappa, mask=mask,
-            diagonal_covariance=True, use_identity_transport=True,
+            diagonal_covariance=True, gauge_mode='trivial',
         )
 
         # Check masked positions are near zero
@@ -119,7 +119,7 @@ class TestComputeAttentionWeights:
         for kappa in [0.1, 1.0, 10.0]:
             beta = compute_attention_weights(
                 mu, sigma, phi, generators, kappa=kappa,
-                diagonal_covariance=True, use_identity_transport=True,
+                diagonal_covariance=True, gauge_mode='trivial',
             )
             assert torch.isfinite(beta).all()
             assert (beta >= 0).all()
@@ -136,11 +136,11 @@ class TestComputeAttentionWeights:
 
         beta_low = compute_attention_weights(
             mu, sigma, phi, generators, kappa=0.1,
-            diagonal_covariance=True, use_identity_transport=True,
+            diagonal_covariance=True, gauge_mode='trivial',
         )
         beta_high = compute_attention_weights(
             mu, sigma, phi, generators, kappa=10.0,
-            diagonal_covariance=True, use_identity_transport=True,
+            diagonal_covariance=True, gauge_mode='trivial',
         )
 
         # Lower kappa should give higher max attention (sharper)
@@ -165,7 +165,7 @@ class TestComputeKLMatrix:
 
         kl_matrix = compute_kl_matrix(
             mu, sigma, phi, generators,
-            diagonal_covariance=True, use_identity_transport=True,
+            diagonal_covariance=True, gauge_mode='trivial',
         )
 
         # Check shape
@@ -183,7 +183,7 @@ class TestComputeKLMatrix:
 
         kl_matrix = compute_kl_matrix(
             mu, sigma, phi, generators,
-            diagonal_covariance=True, use_identity_transport=True,
+            diagonal_covariance=True, gauge_mode='trivial',
         )
 
         # Diagonal should be zero (KL divergence to self)
@@ -203,7 +203,7 @@ class TestComputeKLMatrix:
 
         kl_matrix = compute_kl_matrix(
             mu, sigma, phi, generators,
-            diagonal_covariance=True, use_identity_transport=True,
+            diagonal_covariance=True, gauge_mode='trivial',
         )
 
         assert (kl_matrix >= -1e-6).all(), "KL divergence should be non-negative"

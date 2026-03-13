@@ -142,11 +142,9 @@ class TrainingConfig:
     # ==========================================================================
     # Gauge Group
     # ==========================================================================
-    # When True, trivialize the gauge group by setting all transport operators
-    # to identity (Ω_ij = I). This bypasses matrix exponentials in attention,
-    # reducing to raw KL(q_i || q_j) without frame alignment.
-    # Maps to 'use_identity_transport' in the model config dict.
-    use_identity_group: bool = False
+    # Gauge mode: 'learned' (per-token φ, full transport Ω_ij = exp(φ_i)·exp(-φ_j))
+    # or 'trivial' (global frame, φ = 0, Ω = I, standard KL-attention).
+    gauge_mode: str = 'learned'
 
     # ==========================================================================
     # Ablation Toggles
@@ -209,7 +207,7 @@ def get_vfe_dynamic_config(**overrides) -> TrainingConfig:
     """
     Get configuration for VFE-dynamic transformer.
 
-    Supports use_identity_group=True to trivialize gauge transport
+    Supports gauge_mode='trivial' to trivialize gauge transport
     (sets all Ω_ij = I, bypassing matrix exponentials in attention).
     """
     config = TrainingConfig(
