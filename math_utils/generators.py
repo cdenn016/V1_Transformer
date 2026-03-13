@@ -1926,7 +1926,10 @@ def _matrix_log_orthogonal_torch(
     Compute matrix logarithm for orthogonal matrices.
 
     For R ∈ SO(N), log(R) is a skew-symmetric matrix in so(N).
-    Uses the real Schur decomposition approach for stability.
+
+    Uses a hybrid approach:
+    - Small deviations from identity: 0.5*(R - R^T) (first-order, exact for small angles)
+    - Larger deviations: Newton iteration on the manifold for higher accuracy
 
     Args:
         R: Orthogonal matrix (..., N, N)
@@ -1937,34 +1940,32 @@ def _matrix_log_orthogonal_torch(
     """
     import torch
 
-    # For small deviations from identity, use first-order approximation
-    # log(I + X) ≈ X - X²/2 + X³/3 - ...
-    # For orthogonal R = I + X where X is small and skew-symmetric
-
     N = R.shape[-1]
     I = torch.eye(N, device=R.device, dtype=R.dtype)
 
-    # Check if close to identity (common case for small updates)
+    # First-order approximation: A ≈ 0.5*(R - R^T)
+    # This is exact when R is close to I
     deviation = R - I
-    deviation_norm = torch.norm(deviation, dim=(-2, -1), keepdim=True)
+    A = 0.5 * (deviation - deviation.transpose(-1, -2))
 
-    # For small deviations, use series expansion
-    # For larger deviations, use the antisymmetric part extraction
-    # (This is a simplified approach; full Schur method would be more robust)
+    # Newton refinement for larger rotations:
+    #   A_{k+1} = A_k + skew(R - exp(A_k)) @ R^T
+    # Each iteration roughly doubles the number of correct digits.
+    # One iteration is sufficient for rotations up to ~60 degrees.
+    deviation_norm = torch.norm(deviation, dim=(-2, -1))
+    needs_refinement = deviation_norm > 0.1  # ~6 degree threshold
 
-    # Antisymmetric part of deviation gives first-order log
-    A_approx = 0.5 * (deviation - deviation.transpose(-1, -2))
+    if needs_refinement.any():
+        # Newton correction: residual = R - exp(A), project to so(N)
+        exp_A = torch.matrix_exp(A)
+        residual = R - exp_A
+        # Correction in tangent space: dA = skew(residual @ exp(-A))
+        # Since exp(-A) ≈ exp(A)^T for skew A, use transpose
+        correction = residual @ exp_A.transpose(-1, -2)
+        correction = 0.5 * (correction - correction.transpose(-1, -2))
+        A = A + correction
 
-    # For better accuracy with larger rotations, use iterative refinement
-    # Newton iteration: A_{k+1} = A_k + (R - exp(A_k)) @ exp(-A_k) antisymmetrized
-    # But for simplicity and speed, we use BCH-based correction
-
-    # Second-order correction
-    A_sq = A_approx @ A_approx
-    correction = -0.5 * A_sq  # Second-order term
-    A = A_approx + 0.5 * (correction - correction.transpose(-1, -2))
-
-    # Ensure skew-symmetry
+    # Ensure exact skew-symmetry
     A = 0.5 * (A - A.transpose(-1, -2))
 
     return A

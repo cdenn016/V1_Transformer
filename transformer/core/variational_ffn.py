@@ -90,7 +90,9 @@ def _safe_spd_inv(M: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
 
         try:
             result = torch.linalg.inv(M_reg)
-        except torch.linalg.LinAlgError:
+        except (torch.linalg.LinAlgError, RuntimeError):
+            # LinAlgError for non-batched singular matrices
+            # RuntimeError for batched tensors with singular elements
             # Fallback: pseudoinverse (always succeeds, handles rank-deficient)
             result = torch.linalg.pinv(M_reg)
 
