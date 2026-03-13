@@ -732,7 +732,7 @@ class GaugeTransformerLM(nn.Module):
             # FFN sublayer
             mu_normalized = block.norm2(mu_q)
 
-            mu_ffn, sigma_ffn, phi_ffn = block.ffn(
+            mu_ffn, sigma_ffn, phi_ffn, _bh = block.ffn(
                 mu=mu_normalized,
                 beta=beta,
                 mu_prior=mu_prior,
@@ -899,7 +899,7 @@ class GaugeTransformerLM(nn.Module):
             # FFN sublayer — only final layer gets beta_history tracking
             mu_normalized = block.norm2(mu_q)
 
-            ffn_result = block.ffn(
+            mu_ffn, sigma_ffn, phi_ffn, bh = block.ffn(
                 mu=mu_normalized,
                 beta=beta,
                 mu_prior=mu_prior,
@@ -913,9 +913,7 @@ class GaugeTransformerLM(nn.Module):
             )
 
             if is_final:
-                mu_ffn, sigma_ffn, phi_ffn, beta_history = ffn_result
-            else:
-                mu_ffn, sigma_ffn, phi_ffn = ffn_result
+                beta_history = bh
 
             if block.evolve_sigma and sigma_ffn is not None:
                 sigma_q = sigma_ffn

@@ -68,10 +68,10 @@ class TestCoreImports:
         assert GaugeTokenEmbedding is not None
         assert GaugePositionalEncoding is not None
 
-    def test_core_ffn_import(self):
-        """Test importing from transformer.core.ffn."""
-        from transformer.core.ffn import GaugeFFN
-        assert GaugeFFN is not None
+    def test_core_variational_ffn_import(self):
+        """Test importing from transformer.core.variational_ffn."""
+        from transformer.core.variational_ffn import VariationalFFNDynamic
+        assert VariationalFFNDynamic is not None
 
     def test_core_prior_bank_import(self):
         """Test importing from transformer.core.prior_bank."""

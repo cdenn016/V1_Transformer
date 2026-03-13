@@ -27,7 +27,6 @@ from transformer.core.embeddings import (
     GaugePositionalEncoding,
 )
 from transformer.core.prior_bank import PriorBank
-from transformer.core.ffn import GaugeFFN, create_ffn
 from transformer.core.variational_ffn import VariationalFFNDynamic
 
 __all__ = [
@@ -57,7 +56,5 @@ __all__ = [
     'PriorBank',
 
     # FFN
-    'GaugeFFN',
-    'create_ffn',
     'VariationalFFNDynamic',
 ]
