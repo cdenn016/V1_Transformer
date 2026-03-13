@@ -295,6 +295,7 @@ class GaugeTransformerStack(nn.Module):
     def __init__(self, cfg: BlockConfig):
         super().__init__()
         self.n_layers = cfg.n_layers
+        self.gradient_checkpointing = getattr(cfg, 'gradient_checkpointing', False)
 
         self.blocks = nn.ModuleList([
             GaugeTransformerBlock(cfg)
@@ -355,13 +356,32 @@ class GaugeTransformerStack(nn.Module):
 
             # Only pass targets/W_out to the final layer (observation grounding)
             is_final = (layer_idx == n_blocks - 1)
-            mu_q, sigma_q, phi = block(
-                mu_q, sigma_q, phi, generators, mask, mu_prior,
-                token_ids=token_ids,
-                cached_head_transports=cached_head_transports,
-                targets=targets if is_final else None,
-                W_out=W_out if is_final else None,
-            )
+
+            if self.gradient_checkpointing and self.training and not is_final:
+                # Gradient checkpointing: trade ~30% compute for ~60% memory savings
+                # Skip final layer to preserve targets/W_out gradient flow
+                def create_block_fn(blk):
+                    def block_fn(mu, sigma, phi_arg):
+                        return blk(
+                            mu, sigma, phi_arg, generators, mask, mu_prior,
+                            token_ids=token_ids,
+                            cached_head_transports=cached_head_transports,
+                        )
+                    return block_fn
+
+                mu_q, sigma_q, phi = torch.utils.checkpoint.checkpoint(
+                    create_block_fn(block),
+                    mu_q, sigma_q, phi,
+                    use_reentrant=False,
+                )
+            else:
+                mu_q, sigma_q, phi = block(
+                    mu_q, sigma_q, phi, generators, mask, mu_prior,
+                    token_ids=token_ids,
+                    cached_head_transports=cached_head_transports,
+                    targets=targets if is_final else None,
+                    W_out=W_out if is_final else None,
+                )
 
             # Trajectory recording: record output
             if recording_enabled:

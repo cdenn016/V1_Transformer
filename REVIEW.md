@@ -160,19 +160,51 @@ The supplementary (Appendix D) describes an affine-invariant exponential map ret
 
 ---
 
-## 5. PRIORITIZED FIX LIST
+## 5. COMPLETED FIXES (2026-03-13)
 
-| Priority | Issue | File:Line | Effort |
+All items from the initial prioritized fix list have been implemented:
+
+| Priority | Issue | File | Status |
 |---|---|---|---|
-| P1 | Use `stable_matrix_exp_pair` in embeddings.py gauge_fixed path | embeddings.py:296 | 5 min |
-| P1 | Add gradient checkpointing to transformer stack | model.py:589-601 | 30 min |
-| P1 | Cache transports in phi update loop | variational_ffn.py:2344 | 1 hr |
-| P2 | Guard diagonal covariance in prior_bank gauge_fixed path | prior_bank.py:195-199 | 15 min |
-| P2 | Adaptive eigenvalue floor in numerical_utils | numerical_utils.py:365 | 30 min |
-| P2 | Fix LR logging to show scheduled rates | train_fast.py:596-597 | 15 min |
-| P2 | Float64 upcast for arccos in embeddings | embeddings.py:481 | 5 min |
-| P2 | Diagonal SPD retraction | variational_ffn.py (new) | 2 hr |
-| P3 | Use math.pi in train_fast | train_fast.py:392 | 1 min |
-| P3 | Fix Python 3.8 type hints | numerical_monitor.py, numerical_utils.py | 10 min |
-| P3 | Rename transport.py:_matrix_exponential_so3 | transport.py:264 | 5 min |
-| P3 | Fix push_pull.py batch orthogonality check | push_pull.py:250-254 | 15 min |
+| P1 | Use `stable_matrix_exp_pair` in gauge_fixed path | embeddings.py | ✅ Done — norm clamping prevents overflow in GL(K) |
+| P1 | Add gradient checkpointing to transformer stack | blocks.py | ✅ Done — configurable via `gradient_checkpointing` flag |
+| P1 | Reduce phi update frequency in E-step loop | variational_ffn.py | ✅ Done — `phi_update_interval` param (default=2, ~2× speedup) |
+| P2 | Guard diagonal covariance in prior_bank gauge_fixed path | prior_bank.py | ✅ Done — full covariance path when `diagonal_covariance=False` |
+| P2 | Adaptive eigenvalue floor in numerical_utils | numerical_utils.py | ✅ Done — `max(eps * λ_max, 1e-8)` replaces fixed 1e-4 |
+| P2 | Fix LR logging to show scheduled rates | train_fast.py | ✅ Done — uses `scheduler.get_last_lr()` |
+| P2 | Float64 upcast for arccos in embeddings | embeddings.py | ✅ Done — prevents precision loss near ±1 |
+| P2 | Diagonal SPD retraction | variational_ffn.py | ✅ Already existed (`retract_spd_diagonal_torch`) |
+| P3 | Use math.pi in train_fast | train_fast.py | ✅ Done |
+| P3 | Fix Python 3.8 type hints | numerical_monitor.py, numerical_utils.py | ✅ Done — `Dict[str, int]` and `Tuple[...]` |
+| P3 | Rename `_matrix_exponential_so3` | transport.py | ✅ Done → `_matrix_exponential_lie_algebra` |
+| P3 | Fix push_pull.py batch orthogonality check | push_pull.py | ✅ Done — checks up to 8 batch elements |
+
+---
+
+## 6. NEXT PRIORITY LIST
+
+### P1 — Performance (High Impact)
+
+| Issue | Description | File(s) | Effort |
+|---|---|---|---|
+| Fused block-diagonal KL + transport kernel | Process all irrep blocks in a single pass instead of separate matrix_exp + KL per block. Reduces kernel launch overhead. | attention.py, variational_ffn.py | 2-3 days |
+| CUDA kernel for pairwise KL matrix | Fuse transport → KL → softmax into a single kernel. Eliminates O(B·N²·K²) intermediate tensors. Main inference bottleneck. | New file: cuda_kernels/ | 1-2 weeks |
+| FlashAttention-style tiling for KL attention | Process (N,N) KL matrix in tiles to reduce HBM traffic. Especially important for N > 512. | attention.py | 1-2 weeks |
+
+### P2 — Architecture Improvements (Medium Impact)
+
+| Issue | Description | File(s) | Effort |
+|---|---|---|---|
+| Approximate KV-caching for generation | Cache transported belief statistics (N, K) and update incrementally per token. Currently O(max_tokens × N). Needs theoretical validation. | model.py | 3-5 days |
+| Killing form fallback for large K | `gauge_preconditioner.py` pullback mode is O(K⁶). Add automatic fallback to Killing form when K > threshold (e.g., K=30). | gauge_preconditioner.py | 1 day |
+| Cartan preconditioning documentation | The Cartan decomposition at `gauge_preconditioner.py:97-108` is approximate for non-orthonormal generators. Document when exact vs approximate. | gauge_preconditioner.py | 2 hrs |
+
+### P3 — Code Quality & Testing
+
+| Issue | Description | File(s) | Effort |
+|---|---|---|---|
+| Parallel Numba KL fallback | `attention.py:683-704` uses triple-nested Python loop. Add `@numba.njit(parallel=True)` with `prange`. | attention.py | 1 hr |
+| Dead code in generate() | `model.py:292-304` random generator fallback should fail fast with clear error. | model.py | 15 min |
+| Gradient checkpointing tests | Verify numerical equivalence of checkpointed vs non-checkpointed forward pass. | tests/ (new) | 2 hrs |
+| Benchmark suite | Add timing benchmarks for key operations: KL matrix, transport, natural gradient, SPD retraction. Track regressions. | benchmarks/ (new) | 1 day |
+| Mixed-precision audit | Verify all paths work correctly under `torch.amp.autocast`. Several `float()` upcasts exist but coverage is incomplete. | All core files | 1 day |
