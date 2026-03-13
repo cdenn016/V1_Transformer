@@ -667,7 +667,7 @@ def _validate_soN_generators(
 def generate_glK_generators(
     K: int,
     *,
-    include_identity: bool = False,
+    include_identity: bool = True,
 ) -> np.ndarray:
     """
     Generate gl(K) Lie algebra generators (full K² basis).

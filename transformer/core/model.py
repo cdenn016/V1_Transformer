@@ -471,6 +471,7 @@ class GaugeTransformerLM(nn.Module):
         self,
         token_ids: torch.Tensor,
         return_agents: bool = False,
+        targets: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict]]:
         """
         Forward pass through 0D gauge transformer.
@@ -479,6 +480,8 @@ class GaugeTransformerLM(nn.Module):
             token_ids: (batch, seq_len) token indices
                        seq_len = number of agents at the single point c*
             return_agents: If True, return intermediate agent states
+            targets: (batch, seq_len) target tokens - passed to final layer E-step
+                     when use_obs_in_vfe=True (default off, toggle in VFE_EM_CONFIG)
 
         Returns:
             logits: (batch, num_agents, vocab_size) next-token predictions
@@ -574,6 +577,12 @@ class GaugeTransformerLM(nn.Module):
         # =================================================================
         # 6. Forward Through Transformer Stack
         # =================================================================
+        # Pass targets/W_out for VFE observation coupling (default off).
+        # Controlled by use_obs_in_vfe in config; only final layer receives them.
+        use_obs = self.config.get('use_obs_in_vfe', False) if hasattr(self, 'config') else False
+        vfe_targets = targets if use_obs else None
+        vfe_W_out = self.out_proj.weight if (use_obs and hasattr(self.out_proj, 'weight')) else None
+
         mu_q, sigma_q, phi, intermediates = self.transformer(
             mu_q,
             sigma_q,
@@ -584,6 +593,8 @@ class GaugeTransformerLM(nn.Module):
             token_ids=token_ids,  # Pass token IDs for PriorBank lookup
             return_intermediates=return_agents,
             cached_head_transports=cached_head_transports,
+            targets=vfe_targets,
+            W_out=vfe_W_out,
         )
 
         # =================================================================
