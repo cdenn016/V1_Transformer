@@ -3,18 +3,16 @@
 Math Utilities Module
 =====================
 
-Mathematical utilities for both NumPy (CPU) and PyTorch (GPU) backends.
+Mathematical utilities for gauge-equivariant transformer (NumPy CPU).
 
-NumPy (CPU):
+Modules:
     - transport: Gauge transport operators
     - push_pull: Gaussian push-pull operations
-    - sigma: Covariance utilities
-    - generators: SO(3) Lie algebra generators
-
-PyTorch (GPU):
-    - migration: NumPy <-> Tensor conversion utilities
-    - batched_ops: Compiled batched operations for GPU
-    - torch_backend: PyTorch backend utilities
+    - generators: SO(N) Lie algebra generators
+    - numerical_utils: Safe matrix inversion, KL divergence
+    - numerical_monitor: Debug logging
+    - numba_kernels: Optional Numba acceleration
+    - cuda_kernels: Optional CUDA acceleration
 """
 
 # NumPy utilities
@@ -43,30 +41,6 @@ def np_ensure_spd(Sigma: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     Sigma = Sigma + eps * np.eye(K, dtype=Sigma.dtype)
     return Sigma
 
-# PyTorch utilities (optional - only if torch is available)
-try:
-    from .migration import (
-        numpy_to_tensor,
-        tensor_to_numpy,
-        create_tensor_agent_from_agent,
-        create_tensor_system_from_system,
-        get_device,
-        get_device_info,
-    )
-    from .batched_ops import (
-        batched_kl_divergence,
-        batched_transport_operator,
-        batched_transport_gaussian,
-        compute_all_pairwise_kl,
-        compute_softmax_attention,
-        ensure_spd,
-        project_to_principal_ball,
-        is_compiled,
-    )
-    _TORCH_AVAILABLE = True
-except ImportError:
-    _TORCH_AVAILABLE = False
-
 __all__ = [
     # NumPy
     'np_transport_operator',
@@ -80,23 +54,3 @@ __all__ = [
     'symmetrize',
     'np_ensure_spd',
 ]
-
-if _TORCH_AVAILABLE:
-    __all__.extend([
-        # PyTorch migration
-        'numpy_to_tensor',
-        'tensor_to_numpy',
-        'create_tensor_agent_from_agent',
-        'create_tensor_system_from_system',
-        'get_device',
-        'get_device_info',
-        # PyTorch batched ops
-        'batched_kl_divergence',
-        'batched_transport_operator',
-        'batched_transport_gaussian',
-        'compute_all_pairwise_kl',
-        'compute_softmax_attention',
-        'ensure_spd',
-        'project_to_principal_ball',
-        'is_compiled',
-    ])
