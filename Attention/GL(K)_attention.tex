@@ -1860,7 +1860,7 @@ The $\mathrm{GL}(K)$ gauge invariance theorem (Theorem~\ref{thm:glk_invariance})
 
 \subsection{Experimental Design}
 
-Hardware details are provided in Appendix~\ref{app:hardware}.
+All experiments were performed on a Windows workstation with 64GB RAM, AMD Ryzen 9900x CPU, and an Nvidia RTX5090 GPU.
 
 \subsubsection{Transformer Validation Protocol}
 To empirically validate the equivalence between our gauge attention rule and standard transformer self-attention, we conducted a quantitative comparison using a pretrained \texttt{BERT-base-uncased} model from HuggingFace Transformers \citep{devlin2018bert}. We constructed a corpus of 105 diverse English passages spanning multiple genres, registers, and subject domains, tokenized each using BERT's WordPiece tokenizer, and performed full forward passes while extracting hidden states from all 12 layers.
@@ -2628,11 +2628,6 @@ C_{ij}=D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)}
 
 is a necessary consequence of the variational and geometric structure underlying agent-agent coordination. By Theorem~\ref{thm:glk_invariance}, the KL divergence is invariant under the full general linear group $\mathrm{GL}(K)$, which includes compact subgroups such as $\mathrm{SO}(N)$ and $\mathrm{SU}(N)$ and more.
 
-
-\subsection{Hardware and Computational Details}
-\label{app:hardware}
-
-All experiments were performed on a Windows workstation with 64GB RAM, AMD Ryzen 9900x CPU, and an Nvidia RTX5090 GPU.
 
 \section{Symmetry Breaking Simulations}
 \label{app:symmetry_breaking_sims}
