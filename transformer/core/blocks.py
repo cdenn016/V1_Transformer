@@ -95,10 +95,6 @@ class GaugeTransformerBlock(nn.Module):
         attention_window: int = 64,
         # Gauge frame dimension
         phi_dim: int = 3,  # 3 for SO(3), N(N-1)/2 for SO(N)
-        # Pure FEP mode: learning via prior evolution (no backprop)
-        ffn_pure_fep_mode: bool = False,
-        ffn_max_seq_len: int = 512,
-        ffn_prior_lr: float = 0.01,
         ffn_prior_bank: Optional[nn.Module] = None,  # PriorBank for token-dependent priors
         ffn_use_prior_bank: bool = False,  # Use PriorBank (token-dependent) vs position-dependent priors
         # Memory-efficient options
@@ -159,10 +155,7 @@ class GaugeTransformerBlock(nn.Module):
             ffn_learnable_lr: Learn step size for variational descent
             ffn_lambda_belief: Belief alignment weight
             ffn_update_sigma: Update covariances in FFN
-            ffn_pure_fep_mode: If True, use persistent priors for backprop-free learning
-            ffn_max_seq_len: Max sequence length for persistent priors (pure FEP mode)
-            ffn_prior_lr: Learning rate for prior updates (pure FEP mode)
-            mask_self_attention: If True, mask out diagonal (no self-attention).
+mask_self_attention: If True, mask out diagonal (no self-attention).
                                 Prevents attention collapse since KL(q_i||q_i)=0 always.
             ffn_learnable_alpha: If True, use Bayesian precision via Gamma-Normal conjugacy.
             use_output_projection: If True, add W_O projection after multi-head attention.
@@ -262,10 +255,6 @@ class GaugeTransformerBlock(nn.Module):
             update_sigma=ffn_update_sigma,
             # Diagonal covariance mode
             diagonal_covariance=diagonal_covariance,
-            # Pure FEP mode parameters
-            pure_fep_mode=ffn_pure_fep_mode,
-            max_seq_len=ffn_max_seq_len,
-            prior_lr=ffn_prior_lr,
             # Phi evolution via VFE gradients (principled approach)
             update_phi=evolve_phi,  # When evolve_phi=True, update φ via ∂F/∂φ (after E-step)
             update_phi_per_iteration=evolve_phi_e_step,  # When True, update φ during each E-step iteration
@@ -472,10 +461,6 @@ class GaugeTransformerStack(nn.Module):
         attention_window: int = 64,
         # Gauge frame dimension
         phi_dim: int = 3,  # 3 for SO(3), N(N-1)/2 for SO(N)
-        # Pure FEP mode: learning via prior evolution (no backprop)
-        ffn_pure_fep_mode: bool = False,
-        ffn_max_seq_len: int = 512,
-        ffn_prior_lr: float = 0.01,
         ffn_prior_bank: Optional[nn.Module] = None,  # PriorBank for token-dependent priors
         ffn_use_prior_bank: bool = False,  # Use PriorBank (token-dependent) vs position-dependent priors
         # Memory-efficient options
@@ -538,10 +523,7 @@ class GaugeTransformerStack(nn.Module):
             ffn_update_sigma: Update covariances in FFN
             attention_pattern: 'full', 'local', or 'sparse' for efficient attention
             attention_window: Window size for local attention pattern
-            ffn_pure_fep_mode: If True, use persistent priors for backprop-free learning
-            ffn_max_seq_len: Max sequence length for persistent priors (pure FEP mode)
-            ffn_prior_lr: Learning rate for prior updates (pure FEP mode)
-            use_layernorm: If True, apply LayerNorm (default False for pure VFE)
+use_layernorm: If True, apply LayerNorm (default False for pure VFE)
             use_dropout: If True, apply Dropout (default False for pure VFE)
             use_residual: If True, use residual connections (default False for pure VFE)
             mask_self_attention: If True, mask out diagonal (no self-attention).
@@ -582,10 +564,6 @@ class GaugeTransformerStack(nn.Module):
                 attention_window=attention_window,
                 # Gauge frame dimension
                 phi_dim=phi_dim,
-                # Pure FEP mode
-                ffn_pure_fep_mode=ffn_pure_fep_mode,
-                ffn_max_seq_len=ffn_max_seq_len,
-                ffn_prior_lr=ffn_prior_lr,
                 ffn_prior_bank=ffn_prior_bank,  # Pass PriorBank to each block
                 ffn_use_prior_bank=ffn_use_prior_bank,  # Enable token-dependent priors
                 # Memory-efficient options

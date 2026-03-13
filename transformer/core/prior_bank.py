@@ -15,9 +15,8 @@ Each vocabulary token v has a prior belief distribution: π_v = N(μ_v, Σ_v)
 This module enables:
 1. ENCODING: Initialize beliefs from token priors (replaces nn.Embedding)
 2. DECODING: Compute logits via KL to priors (replaces nn.Linear)
-3. LEARNING: Update priors via prediction-error weighted EMA (pure FEP mode)
+3. LEARNING: Priors evolve via backprop (VFE_EM mode)
 
-Author: Extracted from pure_fep_transformer.py for reusability
 Date: December 2025
 """
 
@@ -30,12 +29,12 @@ from typing import Tuple, Optional
 
 class PriorBank(nn.Module):
     """
-    Token-dependent prior bank for pure FEP learning.
+    Token-dependent prior bank for VFE transformer.
 
     Each vocabulary token v has a prior belief distribution:
         π_v = N(μ_v, Σ_v)
 
-    GAUGE-FIXED PRIORS (default, theoretically principled):
+    GAUGE-FIXED PRIORS (theoretically principled):
         All token priors are rotations of a SINGLE base prior:
             π_v = R_v ▷ π_0   where R_v = exp(φ_v · G)
 
@@ -44,9 +43,8 @@ class PriorBank(nn.Module):
         - base_prior_mu (K,): shared base prior mean
         - phi_embed (V, phi_dim): per-token gauge frames defining rotations
 
-    NON-GAUGE-FIXED (backward compatibility):
-        Each token has independent μ_v, Σ_v - breaks gauge covariance but
-        allows more flexibility for pure FEP learning.
+    NON-GAUGE-FIXED (default):
+        Each token has independent μ_v, Σ_v plus learnable gauge frames φ_v.
 
     ENCODING (replaces nn.Embedding):
         Given input token y_t, initialize belief from prior:
@@ -56,9 +54,7 @@ class PriorBank(nn.Module):
         Given belief q = N(μ_q, Σ_q), compute observation likelihood:
         p(y = v | q) ∝ exp(-KL(q || π_v) / τ)
 
-    Learning:
-    - In pure FEP mode: Priors evolve via slow VFE pressure
-    - In hybrid mode: Priors can be updated via backprop
+    Learning: Priors updated via backprop (VFE_EM mode).
     """
 
     def __init__(

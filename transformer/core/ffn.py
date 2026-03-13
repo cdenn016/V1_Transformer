@@ -48,10 +48,6 @@ class GaugeFFN(nn.Module):
         sigma_softmax_coupling: bool = False,  # Include ∂β/∂Σ softmax coupling in sigma gradient
         # Diagonal covariance mode
         diagonal_covariance: bool = False,
-        # Pure FEP mode: learning via prior evolution (no backprop)
-        pure_fep_mode: bool = False,
-        max_seq_len: int = 512,
-        prior_lr: float = 0.01,
         prior_bank: Optional[nn.Module] = None,  # Token-dependent PriorBank
         use_prior_bank: bool = False,  # Use PriorBank vs position-dependent priors
         # Phi evolution via VFE gradients (principled approach)
@@ -98,9 +94,6 @@ class GaugeFFN(nn.Module):
             update_sigma: Update covariances during inference
             compute_sigma_align_grad: Compute sigma gradient from alignment term
             diagonal_covariance: Use diagonal covariance for memory efficiency
-            pure_fep_mode: If True, use persistent priors for backprop-free learning
-            max_seq_len: Max sequence length for persistent priors (pure FEP mode)
-            prior_lr: Learning rate for prior updates (pure FEP mode)
             irrep_dims: Block dimensions [d₁, d₂, ...] for memory-efficient block-diagonal KL.
                        Exploits O(N² × Σᵢdᵢ²) vs O(N² × K²) - massive savings for multi-irrep!
             chunk_size: Chunk size for memory-efficient processing. Processes N×N in C×C chunks.
@@ -113,7 +106,6 @@ class GaugeFFN(nn.Module):
         self.embed_dim = embed_dim
         self.hidden_dim = hidden_dim
         self.mode = 'VFE_dynamic'
-        # Note: pure_fep_mode accessed via property that delegates to variational_ffn
 
         if generators is None:
             raise ValueError("generators required for VFE_dynamic mode")
@@ -131,12 +123,8 @@ class GaugeFFN(nn.Module):
             diagonal_covariance=diagonal_covariance,
             compute_sigma_align_grad=compute_sigma_align_grad,
             sigma_softmax_coupling=sigma_softmax_coupling,
-            # Pure FEP mode parameters
-            pure_fep_mode=pure_fep_mode,
-            max_seq_len=max_seq_len,
-            prior_lr=prior_lr,
-            prior_bank=prior_bank,  # Pass PriorBank
-            use_prior_bank=use_prior_bank,  # Enable token-dependent priors
+            prior_bank=prior_bank,
+            use_prior_bank=use_prior_bank,
             # Phi evolution via VFE gradients
             update_phi=update_phi,
             update_phi_per_iteration=update_phi_per_iteration,
@@ -220,25 +208,6 @@ class GaugeFFN(nn.Module):
         """Get current FFN mode."""
         return self.mode
 
-    # =========================================================================
-    # Pure FEP mode pass-through methods
-    # =========================================================================
-
-    @property
-    def pure_fep_mode(self) -> bool:
-        """Check if pure FEP mode is enabled."""
-        return getattr(self.variational_ffn, 'pure_fep_mode', False)
-
-    def update_priors_from_beliefs(self, *args, **kwargs):
-        """Forward to variational_ffn for prior updates."""
-        if hasattr(self.variational_ffn, 'update_priors_from_beliefs'):
-            return self.variational_ffn.update_priors_from_beliefs(*args, **kwargs)
-
-    def get_prior_stats(self):
-        """Forward to variational_ffn for prior statistics."""
-        if hasattr(self.variational_ffn, 'get_prior_stats'):
-            return self.variational_ffn.get_prior_stats()
-        return {}
 
 
 # =============================================================================
