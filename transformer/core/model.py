@@ -348,8 +348,9 @@ class GaugeTransformerLM(nn.Module):
             max_seq_len=max_seq_len,
             mode=pos_mode,
             scale=pos_encoding_scale,
-            phi_dim=self.phi_dim,  # SO(3): 3, SO(N): N(N-1)/2
-            generators=self.generators,  # Pass generators for SO(N) BCH composition
+            phi_dim=self.phi_dim,  # SO(3): 3, SO(N): N(N-1)/2, GL(K): K²
+            generators=self.generators,  # Pass generators for BCH composition
+            gauge_group=gauge_group,  # SO3, SON, or GLK — controls Lie bracket dispatch
         )
 
         # =================================================================

@@ -39,12 +39,18 @@ import torch
 import torch.nn as nn
 from typing import Tuple, Optional
 
-# Import SO(N) BCH composition for proper Lie group operations
+# Import Lie algebra composition functions
 try:
     from math_utils.generators import soN_compose_bch_torch
     SON_BCH_AVAILABLE = True
 except ImportError:
     SON_BCH_AVAILABLE = False
+
+try:
+    from math_utils.generators import lie_compose_bch_general_torch
+    GENERAL_BCH_AVAILABLE = True
+except ImportError:
+    GENERAL_BCH_AVAILABLE = False
 
 
 class GaugeTokenEmbedding(nn.Module):
@@ -553,16 +559,19 @@ class GaugePositionalEncoding(nn.Module):
 
     Composition modes (for combining token φ with positional φ):
         - 'add': φ_combined = φ_base + φ_pos (valid for small angles)
-        - 'bch1': φ_combined = φ_base + φ_pos + ½[φ_base, φ_pos] (BCH order 1) [SO(3) only]
-        - 'bch2': Higher-order BCH correction [SO(3) only]
+        - 'bch1': φ_combined = φ_base + φ_pos + ½[φ_base, φ_pos] (BCH order 1)
+        - 'bch2': Higher-order BCH correction
         - 'exact': Full SO(3) composition via exp → multiply → log [SO(3) only]
 
     WARNING: Positional encoding in gauge space creates ABSOLUTE position-dependent
     transport operators. This can cause attention to be dominated by position rather
     than content. For translation-invariant attention, use mode='none'.
 
-    For SO(N) with N > 3, only 'add' composition is supported since the BCH formula
-    requires Lie bracket computation which differs for so(N).
+    Supported gauge groups:
+        - 'SO3': SO(3) with 3 generators (cross-product bracket, exact composition)
+        - 'SON': SO(N) with N(N-1)/2 generators (matrix commutator bracket)
+        - 'GLK': GL(K) with K² generators or multi-head GL(d_head)^H
+                 Uses general Lie bracket via transport generators.
     """
 
     def __init__(
@@ -571,8 +580,9 @@ class GaugePositionalEncoding(nn.Module):
         mode: str = 'none',  # Default: no positional encoding in gauge space
         scale: float = 0.1,
         composition: str = 'exact',  # Default: full SO(3) composition (most accurate)
-        phi_dim: int = 3,  # 3 for SO(3), N(N-1)/2 for SO(N)
-        generators: Optional[torch.Tensor] = None,  # Required for SO(N) BCH composition
+        phi_dim: int = 3,  # 3 for SO(3), N(N-1)/2 for SO(N), K² for GL(K)
+        generators: Optional[torch.Tensor] = None,  # Transport generators for BCH composition
+        gauge_group: str = 'SO3',  # 'SO3', 'SON', or 'GLK'
     ):
         """
         Initialize positional encoding in gauge space.
@@ -586,26 +596,43 @@ class GaugePositionalEncoding(nn.Module):
             scale: Scaling factor for positional encodings (ignored if mode='none')
             composition: How to combine token φ with positional φ:
                 - 'add': Simple addition (φ_base + φ_pos) - fast but only valid for small angles
-                - 'bch1': BCH order 1 correction (works for SO(3) and SO(N) with generators)
-                - 'bch2': BCH order 2 correction (works for SO(3) and SO(N) with generators)
+                - 'bch1': BCH order 1 correction
+                - 'bch2': BCH order 2 correction
                 - 'exact': Full SO(3) composition (SO(3) only)
-            phi_dim: Dimension of gauge frame φ. 3 for SO(3), N(N-1)/2 for SO(N).
-            generators: Lie algebra generators (n_gen, N, N). Required for SO(N) BCH when N > 3.
+            phi_dim: Dimension of gauge frame φ. 3 for SO(3), N(N-1)/2 for SO(N),
+                     K² for GL(K), H*d² for multi-head GL(K).
+            generators: Transport generators (n_gen, K, K). Required for BCH composition
+                        with SO(N) or GL(K) gauge groups.
+            gauge_group: Gauge group type ('SO3', 'SON', or 'GLK').
+                         Determines which Lie bracket computation to use.
         """
         super().__init__()
         self.max_seq_len = max_seq_len
         self.mode = mode
         self.scale = scale
         self.phi_dim = phi_dim
+        self.gauge_group = gauge_group
 
-        # Store generators for SO(N) BCH composition
+        # Store generators for BCH composition
         if generators is not None:
             self.register_buffer('generators', generators)
         else:
             self.generators = None
 
-        # For SO(N) with N > 3, BCH requires generators; 'exact' is SO(3)-only
-        if phi_dim != 3:
+        # Validate composition mode for each gauge group
+        if gauge_group == 'GLK':
+            # GL(K): 'exact' not supported (matrix log is problematic for GL),
+            # but BCH works via general Lie bracket with transport generators
+            if composition == 'exact':
+                print(f"[WARNING] Composition 'exact' not supported for GL(K). "
+                      f"Falling back to 'bch2' for phi_dim={phi_dim}.")
+                composition = 'bch2'
+            if composition in ['bch1', 'bch2'] and generators is None and not GENERAL_BCH_AVAILABLE:
+                print(f"[WARNING] GL(K) BCH requires generators. "
+                      f"Falling back to 'add' for phi_dim={phi_dim}.")
+                composition = 'add'
+        elif phi_dim != 3:
+            # SO(N) with N > 3: 'exact' is SO(3)-only
             if composition == 'exact':
                 print(f"[WARNING] Composition 'exact' only supported for SO(3) (phi_dim=3). "
                       f"Falling back to 'bch2' for phi_dim={phi_dim}.")
@@ -700,8 +727,10 @@ class GaugePositionalEncoding(nn.Module):
         """
         Compose token gauge frames with positional gauge frames using proper Lie group composition.
 
-        For SO(3): Uses BCH formula or exact composition.
-        For SO(N) with N > 3: Uses simple addition (valid for small angles).
+        Dispatches to the correct bracket computation based on gauge_group:
+        - SO(3): Cross product bracket (fast, specialized)
+        - SO(N): soN_compose_bch_torch (matrix commutator in N×N space)
+        - GL(K): lie_compose_bch_general_torch (general bracket via transport generators)
 
         Args:
             phi: Token gauge frames, shape (B, N, phi_dim)
@@ -712,13 +741,11 @@ class GaugePositionalEncoding(nn.Module):
             phi_combined: Composed gauge frames, shape (B, N, phi_dim)
 
         Mathematical background:
-            In SO(3), the correct composition is R_combined = exp(φ) · exp(φ_pos)
-            In so(3), this is NOT simply φ + φ_pos. The BCH formula gives:
+            The correct composition is R_combined = exp(φ·G) · exp(φ_pos·G)
+            In the Lie algebra, the BCH formula gives:
             log(exp(X)·exp(Y)) = X + Y + ½[X,Y] + (1/12)[X,[X,Y]] - (1/12)[Y,[X,Y]] + ...
-            For so(3), the Lie bracket is the cross product: [X,Y] = X × Y
-
-            For SO(N) with N > 3, the Lie bracket is [X,Y] = XY - YX, which is more
-            complex. We use simple addition for these cases (valid for small angles).
+            For so(3): [X,Y] = X × Y (cross product)
+            For so(N)/gl(K): [X,Y] = XY - YX (matrix commutator)
         """
         # Short-circuit: if mode='none', φ_pos is all zeros, so return unchanged φ
         # This avoids unnecessary tensor operations and BCH computations
@@ -732,28 +759,27 @@ class GaugePositionalEncoding(nn.Module):
             # Simple addition (original behavior, valid for small angles only)
             return phi + pos_phi
 
-        elif self.composition == 'bch1':
-            # First-order BCH correction
-            if self.phi_dim == 3:
-                # Use SO(3)-specific BCH (cross product)
-                return so3_compose_bch(phi, pos_phi, order=1)
-            elif SON_BCH_AVAILABLE and self.generators is not None:
-                # Use general SO(N) BCH (matrix commutator)
-                return soN_compose_bch_torch(phi, pos_phi, self.generators, order=1)
-            else:
-                # Fallback to addition
-                return phi + pos_phi
+        elif self.composition in ('bch1', 'bch2'):
+            order = 1 if self.composition == 'bch1' else 2
 
-        elif self.composition == 'bch2':
-            # Second-order BCH correction
-            if self.phi_dim == 3:
-                # Use SO(3)-specific BCH (cross product)
-                return so3_compose_bch(phi, pos_phi, order=2)
+            if self.gauge_group == 'GLK':
+                # GL(K): Use general Lie bracket via transport generators
+                if GENERAL_BCH_AVAILABLE and self.generators is not None:
+                    return lie_compose_bch_general_torch(phi, pos_phi, self.generators, order=order)
+                else:
+                    # Fallback to addition
+                    return phi + pos_phi
+            elif self.phi_dim == 3 and self.gauge_group == 'SO3':
+                # SO(3)-specific BCH (cross product — fastest)
+                return so3_compose_bch(phi, pos_phi, order=order)
             elif SON_BCH_AVAILABLE and self.generators is not None:
-                # Use general SO(N) BCH (matrix commutator)
-                return soN_compose_bch_torch(phi, pos_phi, self.generators, order=2)
+                # SO(N) BCH (matrix commutator in N×N gauge space)
+                return soN_compose_bch_torch(phi, pos_phi, self.generators, order=order)
+            elif GENERAL_BCH_AVAILABLE and self.generators is not None:
+                # General fallback: works for any algebra
+                return lie_compose_bch_general_torch(phi, pos_phi, self.generators, order=order)
             else:
-                # Fallback to addition
+                # Last resort: addition
                 return phi + pos_phi
 
         elif self.composition == 'exact':
