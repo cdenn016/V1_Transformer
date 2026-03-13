@@ -366,10 +366,12 @@ class GaugeTransformerLM(nn.Module):
         )
 
         # =================================================================
-        # PriorBank for Pure FEP (Token-Dependent Priors)
+        # PriorBank (Token-Dependent Priors for Principled Encode/Decode)
         # =================================================================
         self.prior_bank = None
-        if ffn_pure_fep_mode and use_prior_bank:
+        self.use_prior_bank = use_prior_bank
+        self.prior_bank_tau = config.get('prior_bank_tau', 1.0)
+        if use_prior_bank:
             from transformer.core.prior_bank import PriorBank
 
             self.prior_bank = PriorBank(
@@ -378,12 +380,12 @@ class GaugeTransformerLM(nn.Module):
                 init_std=config.get('mu_init_std', None),
                 init_sigma_scale=1.0,
                 learnable_sigma=config.get('evolve_sigma', True),
-                gauge_fixed_priors=gauge_fixed_priors,  # Can use gauge-fixed priors in PriorBank too
+                gauge_fixed_priors=gauge_fixed_priors,
                 generators=self.generators if gauge_fixed_priors else None,
                 phi_dim=self.phi_dim,
             )
             print(f"[GaugeTransformerLM] Created PriorBank with token-dependent priors (vocab_size={vocab_size})")
-            print(f"                     gauge_fixed_priors={gauge_fixed_priors}")
+            print(f"                     gauge_fixed_priors={gauge_fixed_priors}, tau={self.prior_bank_tau}")
 
         # =================================================================
         # Transformer Stack
@@ -473,9 +475,13 @@ class GaugeTransformerLM(nn.Module):
         self.apply(self._init_weights)
 
         # Tie input/output embeddings (standard practice)
-        # Note: Can't tie weights when gauge_fixed_priors=True since there's
-        # no per-token embedding - just a single base_mu rotated per token
-        if tie_embeddings and not gauge_fixed_priors:
+        # Note: Can't tie when PriorBank is active (it IS the shared encode/decode)
+        # or when gauge_fixed_priors=True (no per-token embedding)
+        if use_prior_bank:
+            # PriorBank is the unified encode/decode layer — no tying needed
+            if tie_embeddings:
+                print("[INFO] tie_embeddings ignored: PriorBank serves as both encoder and decoder")
+        elif tie_embeddings and not gauge_fixed_priors:
             self.out_proj.weight = self.token_embed.mu_embed.weight
         elif tie_embeddings and gauge_fixed_priors:
             print("Warning: tie_embeddings disabled because gauge_fixed_priors=True")
@@ -565,7 +571,11 @@ class GaugeTransformerLM(nn.Module):
         # =================================================================
         # 1. Token Embeddings (0D: one per agent at c*, not per spatial point)
         # =================================================================
-        mu_q, sigma_q, phi = self.token_embed(token_ids)
+        if self.use_prior_bank and self.prior_bank is not None:
+            # PriorBank encode: token → (μ_v, σ_v, φ_v) prior belief
+            mu_q, sigma_q, phi = self.prior_bank.encode(token_ids)
+        else:
+            mu_q, sigma_q, phi = self.token_embed(token_ids)
 
         # =================================================================
         # 1b. Cross-Head Permutation (reorder dims for super-block contiguity)
@@ -656,7 +666,12 @@ class GaugeTransformerLM(nn.Module):
         # =================================================================
         # 7. Project to Vocabulary (one prediction per agent)
         # =================================================================
-        logits = self.out_proj(mu_q)  # (B, N, V)
+        if self.use_prior_bank and self.prior_bank is not None:
+            # PriorBank decode: logits = -KL(q || π_v) / τ
+            # Need sigma_q for KL computation
+            logits = self.prior_bank.decode(mu_q, sigma_q, tau=self.prior_bank_tau)
+        else:
+            logits = self.out_proj(mu_q)  # (B, N, V)
 
         # =================================================================
         # Trajectory Recording: End forward pass
@@ -705,7 +720,10 @@ class GaugeTransformerLM(nn.Module):
         device = token_ids.device
 
         # Embeddings
-        mu_q, sigma_q, phi = self.token_embed(token_ids)
+        if self.use_prior_bank and self.prior_bank is not None:
+            mu_q, sigma_q, phi = self.prior_bank.encode(token_ids)
+        else:
+            mu_q, sigma_q, phi = self.token_embed(token_ids)
 
         # Cross-head permutation (same as in forward())
         if getattr(self, '_cross_head_perm', None) is not None:
@@ -818,7 +836,10 @@ class GaugeTransformerLM(nn.Module):
             mu_q = mu_q[:, :, inv_perm]
 
         # Project to vocabulary
-        logits = self.out_proj(mu_q)
+        if self.use_prior_bank and self.prior_bank is not None:
+            logits = self.prior_bank.decode(mu_q, sigma_q, tau=self.prior_bank_tau)
+        else:
+            logits = self.out_proj(mu_q)
 
         # Stack per-layer attention into (n_layers, B, n_heads, N, N) tensors
         # Filter out None entries (shouldn't happen, but defensive)
@@ -876,7 +897,10 @@ class GaugeTransformerLM(nn.Module):
         device = token_ids.device
 
         # Embeddings
-        mu_q, sigma_q, phi = self.token_embed(token_ids)
+        if self.use_prior_bank and self.prior_bank is not None:
+            mu_q, sigma_q, phi = self.prior_bank.encode(token_ids)
+        else:
+            mu_q, sigma_q, phi = self.token_embed(token_ids)
 
         # Cross-head permutation (same as in forward())
         if getattr(self, '_cross_head_perm', None) is not None:
@@ -986,7 +1010,10 @@ class GaugeTransformerLM(nn.Module):
             mu_q = mu_q[:, :, inv_perm]
 
         # Project to vocabulary
-        logits = self.out_proj(mu_q)
+        if self.use_prior_bank and self.prior_bank is not None:
+            logits = self.prior_bank.decode(mu_q, sigma_q, tau=self.prior_bank_tau)
+        else:
+            logits = self.out_proj(mu_q)
 
         # Get n_iterations from VFE FFN
         n_iterations = getattr(self.transformer.blocks[-1].ffn.variational_ffn, 'n_iterations', 1)
@@ -1090,8 +1117,10 @@ class GaugeTransformerLM(nn.Module):
         n_params = sum(p.numel() for p in self.parameters())
 
         if non_embedding:
-            # Exclude embedding parameters
-            if hasattr(self.token_embed, 'mu_embed'):
+            if self.use_prior_bank and self.prior_bank is not None:
+                # PriorBank parameters serve as both embedding and output projection
+                n_params -= sum(p.numel() for p in self.prior_bank.parameters())
+            elif hasattr(self.token_embed, 'mu_embed'):
                 # Standard per-token embeddings
                 n_params -= self.token_embed.mu_embed.weight.numel()
             elif hasattr(self.token_embed, 'base_mu'):
@@ -1126,7 +1155,16 @@ class GaugeTransformerLM(nn.Module):
             prediction_errors: (B, N) per-position CE loss
             ema_decay: EMA decay rate (0.99 = slow, 0.9 = faster)
         """
-        if hasattr(self.token_embed, 'update_embeddings_from_beliefs'):
+        if self.use_prior_bank and self.prior_bank is not None:
+            # PriorBank has its own update mechanism
+            self.prior_bank.update_from_beliefs(
+                token_ids=token_ids,
+                mu_beliefs=mu_beliefs,
+                sigma_beliefs=torch.ones_like(mu_beliefs),  # Default sigma for EMA
+                prediction_errors=prediction_errors,
+                lr=1.0 - ema_decay,  # Convert EMA decay to learning rate
+            )
+        elif hasattr(self.token_embed, 'update_embeddings_from_beliefs'):
             self.token_embed.update_embeddings_from_beliefs(
                 token_ids=token_ids,
                 mu_beliefs=mu_beliefs,
@@ -1156,6 +1194,10 @@ class GaugeTransformerLM(nn.Module):
             targets: (B, N) target token indices
             lr: Learning rate for delta rule update
         """
+        if self.use_prior_bank and self.prior_bank is not None:
+            # PriorBank has no W_out — decode is KL-based, priors update via backprop
+            return
+
         with torch.no_grad():
             B, N, K = mu_beliefs.shape
             V = self.config['vocab_size']
