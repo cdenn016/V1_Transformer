@@ -182,7 +182,6 @@ STANDARD_CONFIG = {
     'gauge_group': 'SO3',
     'gauge_dim': 3,
     'gauge_mode': 'learned',  # 'learned' or 'trivial' (Ω=I, standard attention limit)
-    'use_multi_irrep': False,
     'gauge_fixed_priors': True,
     'irrep_spec': [('ℓ0', 5, 1)],
     'compute_rg_metrics': False,
@@ -340,7 +339,6 @@ VFE_EM_CONFIG = {
     'use_killing_form': True,            # M-step Cartan decomposition preconditioning for phi grads
     'killing_form_sym_dampening': 0.1,   # M-step Dampening for non-compact directions (0.1 = 10× reduction)
     
-    'use_multi_irrep': True,       # Use block-diagonal generators from irrep_spec
     'enforce_orthogonal': False,   # If True, enforce Ω ∈ SO(K) via Newton-Schulz
                                    # Set False for GL(K) (faster, still gauge-invariant)
 
@@ -510,8 +508,6 @@ PURE_FEP_CONFIG = {
     'gauge_dim': 10,        # N for SO(N) - only used when gauge_group='SON'
     'gauge_mode': 'learned',  # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j)
                               # 'trivial': global frame, φ = 0, Ω = I (standard attention)
-    'use_multi_irrep': True,  # Use block-diagonal generators from irrep_spec
-
     # Irrep structure for SO(N)
     # Example for SO(10) with diverse irreps:
     #   [('scalar', 5, 1), ('fund', 6, 10), ('wedge2', 2, 45)]

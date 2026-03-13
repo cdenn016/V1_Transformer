@@ -72,7 +72,6 @@
     "use_slk_projection": false,
     "use_killing_form": true,
     "killing_form_sym_dampening": 0.1,
-    "use_multi_irrep": true,
     "enforce_orthogonal": false,
     "use_p_flow": false,
     "p_flow_ema_decay": 0.95,

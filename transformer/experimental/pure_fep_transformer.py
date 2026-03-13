@@ -298,10 +298,6 @@ class PureFEPConfig:
     # WARNING: exact mode uses O(N²×K²) memory for full covariance!
     exact_covariance_transport: bool = False
 
-    # Use multi-irrep block structure from IrrepMultiHeadAttention
-    # When True: uses block-diagonal generators with proper per-irrep structure
-    # When False: uses single spin-ℓ irrep where ℓ = (K-1)/2
-    use_multi_irrep: bool = False
 
     # =========================================================================
     # GAUGE GROUP: Choose the symmetry group for transport operators
@@ -597,36 +593,27 @@ class PureFEPLayer(nn.Module):
 
         if config.gauge_group == 'SO3':
             # SO(3) mode: 3 generators, phi ∈ ℝ³
-            if config.use_multi_irrep:
-                # Multi-irrep: block-diagonal with spin-ℓ blocks
-                self.irrep_attention = IrrepMultiHeadAttention(
-                    embed_dim=embed_dim,
-                    irrep_spec=config.irrep_spec,
-                    kappa_beta=config.kappa,
-                    epsilon=config.eps,
-                    aggregate_mode='mean_only',
-                    diagonal_covariance=config.diagonal_covariance,
-                    attention_pattern='local' if config.use_local_attention else 'full',
-                    attention_window=config.attention_window,
-                )
-                gen_np = generate_multi_irrep_generators(config.irrep_spec, validate=True)
-            else:
-                # Single irrep: spin-ℓ where ℓ = (K-1)/2
-                self.irrep_attention = None
-                gen_np = generate_so3_generators(embed_dim)
+            # Multi-irrep: block-diagonal with spin-ℓ blocks
+            self.irrep_attention = IrrepMultiHeadAttention(
+                embed_dim=embed_dim,
+                irrep_spec=config.irrep_spec,
+                kappa_beta=config.kappa,
+                epsilon=config.eps,
+                aggregate_mode='mean_only',
+                diagonal_covariance=config.diagonal_covariance,
+                attention_pattern='local' if config.use_local_attention else 'full',
+                attention_window=config.attention_window,
+            )
+            gen_np = generate_multi_irrep_generators(config.irrep_spec, validate=True)
         elif config.gauge_group == 'SON':
             # SO(N) mode: N(N-1)/2 generators, phi ∈ ℝ^{N(N-1)/2}
             N = config.gauge_dim
             self.irrep_attention = None  # IrrepMultiHeadAttention is SO(3)-specific
 
-            if config.use_multi_irrep or True:  # Always use multi-irrep for SO(N)
-                # Multi-irrep: block-diagonal with N-dim fundamental blocks
-                gen_np = generate_multi_irrep_soN_generators(
-                    config.irrep_spec, N, validate=True
-                )
-            else:
-                # Single fundamental rep (only if embed_dim == N)
-                gen_np = generate_soN_generators(N)
+            # Multi-irrep: block-diagonal with N-dim fundamental blocks
+            gen_np = generate_multi_irrep_soN_generators(
+                config.irrep_spec, N, validate=True
+            )
         elif config.gauge_group == 'GLK':
             # GL(K) mode: K² generators spanning gl(K) = all KxK matrices
             # KL divergence is invariant under full GL(K), not just SO(K)!
@@ -858,7 +845,7 @@ class PureFEPLayer(nn.Module):
         # ==================================================================
         # 1. Compute dynamic attention from KL divergences
         # ==================================================================
-        if self.config.use_multi_irrep and self.irrep_attention is not None:
+        if self.irrep_attention is not None:
             # MULTI-IRREP MODE: Use IrrepMultiHeadAttention
             # This properly handles block-diagonal structure with per-irrep generators
             mu_agg, sigma_agg, beta_heads, kl_heads = self.irrep_attention(
@@ -1857,10 +1844,7 @@ class PureFEPTransformer(nn.Module):
         # GENERATORS: Create before PriorBank (needed for gauge-fixed priors)
         # =====================================================================
         if config.gauge_group == 'SO3':
-            if config.use_multi_irrep:
-                gen_np = generate_multi_irrep_generators(config.irrep_spec, validate=True)
-            else:
-                gen_np = generate_so3_generators(config.embed_dim)
+            gen_np = generate_multi_irrep_generators(config.irrep_spec, validate=True)
         elif config.gauge_group == 'SON':
             N = config.gauge_dim
             gen_np = generate_multi_irrep_soN_generators(config.irrep_spec, N, validate=True)

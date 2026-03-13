@@ -45,7 +45,6 @@
     "gauge_group": "SO3",
     "gauge_dim": 3,
     "gauge_mode": "learned",
-    "use_multi_irrep": false,
     "gauge_fixed_priors": true,
     "irrep_spec": [
       [
