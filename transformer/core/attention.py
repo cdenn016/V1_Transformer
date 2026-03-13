@@ -2466,7 +2466,8 @@ class IrrepMultiHeadAttention(nn.Module):
             else:
                 # Within-layer cache: compute once, reuse for KL and aggregation
                 head_cached_transport = compute_transport_operators(
-                    phi, gen_head, enforce_orthogonal=self.enforce_orthogonal
+                    phi, gen_head, enforce_orthogonal=self.enforce_orthogonal,
+                    gauge_mode=self.gauge_mode
                 )
 
             kappa_h = self.kappa_beta
@@ -2672,7 +2673,8 @@ class IrrepMultiHeadAttention(nn.Module):
         for head_idx in range(self.n_heads):
             gen_head = self.head_generators[head_idx].gen.to(device=device, dtype=dtype)
             cached_transports.append(compute_transport_operators(
-                phi, gen_head, enforce_orthogonal=self.enforce_orthogonal
+                phi, gen_head, enforce_orthogonal=self.enforce_orthogonal,
+                gauge_mode=self.gauge_mode
             ))
         return cached_transports
 

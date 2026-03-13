@@ -293,6 +293,8 @@ class GaugeTransformerBlock(nn.Module):
             # DEQ implicit differentiation
             use_deq=use_deq,
             deq_neumann_terms=deq_neumann_terms,
+            # Gauge mode
+            gauge_mode=gauge_mode,
         )
 
         self.norm2 = nn.LayerNorm(embed_dim) if use_layernorm else nn.Identity()

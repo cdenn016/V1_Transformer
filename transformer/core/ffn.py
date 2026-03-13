@@ -76,6 +76,8 @@ class GaugeFFN(nn.Module):
         # DEQ implicit differentiation
         use_deq: bool = False,                # Use DEQ backward for E-step fixed point
         deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
+        # Gauge mode
+        gauge_mode: str = 'learned',          # 'learned' or 'trivial' (Ω = I)
         # Legacy parameters (ignored, kept for API compatibility)
         **kwargs,
     ):
@@ -157,6 +159,8 @@ class GaugeFFN(nn.Module):
             # DEQ implicit differentiation
             use_deq=use_deq,
             deq_neumann_terms=deq_neumann_terms,
+            # Gauge mode
+            gauge_mode=gauge_mode,
         )
 
     def forward(
