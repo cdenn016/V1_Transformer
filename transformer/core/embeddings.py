@@ -200,10 +200,9 @@ class GaugeTokenEmbedding(nn.Module):
                 torch.full((embed_dim,), math.log(init_sigma_scale))
             )
         elif learnable_sigma:
-            # Per-token covariance
-            self.log_sigma_diag = nn.Parameter(
-                torch.full((vocab_size, embed_dim), math.log(init_sigma_scale))
-            )
+            # Per-token covariance — use nn.Embedding for sparse gradient support
+            self.log_sigma_embed = nn.Embedding(vocab_size, embed_dim)
+            nn.init.constant_(self.log_sigma_embed.weight, math.log(init_sigma_scale))
         else:
             # Shared isotropic covariance across all tokens
             self.register_buffer(
@@ -318,8 +317,8 @@ class GaugeTokenEmbedding(nn.Module):
 
             # Build diagonal covariances: Σ = diag(exp(log_σ))
             if self.learnable_sigma:
-                # Per-token covariance
-                log_sigma = self.log_sigma_diag[token_ids]  # (B, N, K)
+                # Per-token covariance (via nn.Embedding for sparse gradients)
+                log_sigma = self.log_sigma_embed(token_ids)  # (B, N, K)
                 sigma_diag = torch.exp(log_sigma)  # (B, N, K)
                 # STABILITY: Clamp to prevent singular matrices in deep networks
                 sigma_diag = torch.clamp(sigma_diag, min=0.01, max=5.0)

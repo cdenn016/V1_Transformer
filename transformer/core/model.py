@@ -984,7 +984,7 @@ class GaugeTransformerLM(nn.Module):
 
         return logits, rg_info
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def generate(
         self,
         prompt_ids: torch.Tensor,
@@ -995,6 +995,11 @@ class GaugeTransformerLM(nn.Module):
     ) -> torch.Tensor:
         """
         Autoregressive generation.
+
+        Note: Unlike standard transformers, VFE transformers cannot use KV-caching
+        because beliefs evolve iteratively through the VFE E-step. Each token's
+        representation depends on all other tokens through the gauge transport
+        operators Ω_ij, which change as the sequence grows.
 
         Args:
             prompt_ids: (1, prompt_len) initial tokens
@@ -1010,14 +1015,14 @@ class GaugeTransformerLM(nn.Module):
         self.eval()
         try:
             generated = prompt_ids.clone()
+            max_seq_len = self.config['max_seq_len']
 
             for _ in range(max_new_tokens):
-                # Truncate if exceeds max_seq_len
-                if generated.shape[1] > self.config['max_seq_len']:
-                    generated = generated[:, -self.config['max_seq_len']:]
+                # Use sliding window when sequence exceeds max_seq_len
+                context = generated[:, -max_seq_len:] if generated.shape[1] > max_seq_len else generated
 
                 # Forward pass - handle both tuple and single return value
-                result = self.forward(generated)
+                result = self.forward(context)
                 logits = result[0] if isinstance(result, tuple) else result  # (1, T, V)
 
                 # Get logits for last token
