@@ -645,15 +645,19 @@ import scipy
 
 def frechet_expm(X, H, steps=6):
     """
-    Approximate d/dt exp(X + tH) | t=0 using scaling & squaring or quadrature.
+    Approximate d/dt exp(X + tH) | t=0 using midpoint quadrature.
     Works for ALL SO(3) irreps.
+
+    Uses the integral representation: dexp_X(H) = ∫₀¹ exp((1-s)X) H exp(sX) ds
+    Midpoint rule avoids boundary double-counting of the rectangle rule.
     """
-    # Use symmetric quadrature of expm
-    s = np.linspace(0,1,steps)
+    # Midpoint quadrature: evaluate at centers of equal-width subintervals
+    ds = 1.0 / steps
     out = 0
-    for si in s:
-        out += scipy.linalg.expm((1-si)*X) @ H @ scipy.linalg.expm(si*X)
-    return out / steps
+    for k in range(steps):
+        si = (k + 0.5) * ds  # midpoint of k-th subinterval
+        out += scipy.linalg.expm((1 - si) * X) @ H @ scipy.linalg.expm(si * X)
+    return out * ds
 
 
 def _compute_dexp_generators(

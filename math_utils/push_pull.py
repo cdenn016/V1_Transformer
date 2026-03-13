@@ -234,10 +234,10 @@ def push_gaussian(
     # Symmetrize (remove numerical asymmetry)
     Sigma_pushed = 0.5 * (Sigma_pushed + np.swapaxes(Sigma_pushed, -1, -2))
     
-    # Add tiny regularization for numerical stability
-    MIN_VARIANCE = 1e-4  # Absolute floor on variance
-    reg = MIN_VARIANCE * np.eye(K, dtype=np.float64)
-    Sigma_pushed = Sigma_pushed + reg
+    # Eigenvalue floor for numerical stability (avoid unconditional inflation)
+    w, V = np.linalg.eigh(Sigma_pushed)
+    w = np.maximum(w, 1e-8)
+    Sigma_pushed = np.einsum('...ij,...j,...kj->...ik', V, w, V, optimize=True)
     
     # ========== Compute precision if requested ==========
     Sigma_inv_pushed = None
