@@ -28,9 +28,10 @@ warnings.filterwarnings("ignore", message="Failed to find nvdisasm", category=Us
 from transformer.core.model import GaugeTransformerLM
 
 # =============================================================================
-# Training (from transformer.train and transformer.training)
+# Training (from transformer.training and transformer.train_publication)
 # =============================================================================
-from transformer.train import Trainer, TrainingConfig
+from transformer.train_publication import PublicationTrainer as Trainer
+from transformer.training.config import TrainingConfig
 from transformer.training import (
     create_optimizer,
     create_param_groups,
