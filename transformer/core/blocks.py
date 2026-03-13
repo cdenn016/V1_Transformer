@@ -315,6 +315,8 @@ class GaugeTransformerStack(nn.Module):
         token_ids: Optional[torch.Tensor] = None,
         return_intermediates: bool = False,
         cached_head_transports: Optional[list] = None,
+        targets: Optional[torch.Tensor] = None,
+        W_out: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[List]]:
         """
         Forward through all transformer blocks.
@@ -323,12 +325,14 @@ class GaugeTransformerStack(nn.Module):
             mu_q: Initial means (B, N, K)
             sigma_q: Initial covariances (B, N, K, K)
             phi: Initial gauge frames (B, N, 3)
-            generators: SO(3) generators (3, K, K)
+            generators: Lie algebra generators (n_gen, K, K)
             mask: Optional causal mask
             mu_prior: Embedding priors (B, N, K) - for variational FFN
             return_intermediates: If True, return states after each layer
             cached_head_transports: Precomputed transport dicts per head.
                                    When evolve_phi=False, reuse across all layers (6× speedup).
+            targets: Target token IDs (B, N) - for E-step observations (final layer only)
+            W_out: Output projection weights (V, K) - for CE gradient in E-step
 
         Returns:
             mu_q: Final means (B, N, K)
@@ -342,16 +346,21 @@ class GaugeTransformerStack(nn.Module):
         recorder = get_global_recorder() if TRAJECTORY_TRACKING_AVAILABLE else None
         recording_enabled = recorder is not None and recorder.enabled
 
+        n_blocks = len(self.blocks)
         for layer_idx, block in enumerate(self.blocks):
             # Trajectory recording: start layer
             if recording_enabled:
                 recorder.start_layer(layer_idx)
                 recorder.record_layer_input(mu_q, sigma_q, phi)
 
+            # Only pass targets/W_out to the final layer (observation grounding)
+            is_final = (layer_idx == n_blocks - 1)
             mu_q, sigma_q, phi = block(
                 mu_q, sigma_q, phi, generators, mask, mu_prior,
                 token_ids=token_ids,
                 cached_head_transports=cached_head_transports,
+                targets=targets if is_final else None,
+                W_out=W_out if is_final else None,
             )
 
             # Trajectory recording: record output
