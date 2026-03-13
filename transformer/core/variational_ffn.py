@@ -53,7 +53,13 @@ import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
-from transformer.core.gauge_utils import stable_matrix_exp_pair, newton_schulz_orthogonalize
+from transformer.core.gauge_utils import (
+    stable_matrix_exp_pair,
+    newton_schulz_orthogonalize,
+    fused_block_matrix_exp_pairs,
+    fused_block_diagonal_kl_diag,
+    fused_block_diagonal_kl_full,
+)
 
 
 def _safe_spd_inv(M: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -286,22 +292,13 @@ def _compute_vfe_gradients_block_diagonal(
     # =================================================================
     # 2. Belief Alignment Gradient (block-diagonal + chunked processing)
     # =================================================================
-    # Precompute matrix exponentials per block (these are (B, N, d, d))
-    block_exp_phi = []
-    block_exp_neg_phi = []
-    block_start = 0
-    for d in irrep_dims:
-        block_end = block_start + d
-        gen_block = generators[:, block_start:block_end, block_start:block_end]
-        phi_matrix_block = torch.einsum('bna,aij->bnij', phi, gen_block)
-        exp_phi_block, exp_neg_phi_block = stable_matrix_exp_pair(phi_matrix_block)
-        # Re-orthogonalization for SO(K) if requested
-        if enforce_orthogonal and d >= 16:
-            exp_phi_block = newton_schulz_orthogonalize(exp_phi_block)
-            exp_neg_phi_block = newton_schulz_orthogonalize(exp_neg_phi_block)
-        block_exp_phi.append(exp_phi_block)
-        block_exp_neg_phi.append(exp_neg_phi_block)
-        block_start = block_end
+    # Precompute matrix exponentials — FUSED by dimension group
+    _fused_pairs = fused_block_matrix_exp_pairs(
+        phi, generators, irrep_dims, enforce_orthogonal=enforce_orthogonal
+    )
+    block_exp_phi = [p[0] for p in _fused_pairs]
+    block_exp_neg_phi = [p[1] for p in _fused_pairs]
+    del _fused_pairs
 
     # Accumulators for alignment gradients
     grad_mu_align = torch.zeros_like(mu_q)
@@ -493,21 +490,13 @@ def _compute_vfe_gradients_block_diagonal_diag(
     # =================================================================
     # 2. Belief Alignment Gradient (block-diagonal + diagonal formulas)
     # =================================================================
-    # Precompute matrix exponentials per block
-    block_exp_phi = []
-    block_exp_neg_phi = []
-    block_start = 0
-    for d in irrep_dims:
-        block_end = block_start + d
-        gen_block = generators[:, block_start:block_end, block_start:block_end]
-        phi_matrix_block = torch.einsum('bna,aij->bnij', phi, gen_block)
-        exp_phi_block, exp_neg_phi_block = stable_matrix_exp_pair(phi_matrix_block)
-        if enforce_orthogonal and d >= 16:
-            exp_phi_block = newton_schulz_orthogonalize(exp_phi_block)
-            exp_neg_phi_block = newton_schulz_orthogonalize(exp_neg_phi_block)
-        block_exp_phi.append(exp_phi_block)
-        block_exp_neg_phi.append(exp_neg_phi_block)
-        block_start = block_end
+    # Precompute matrix exponentials — FUSED by dimension group
+    _fused_pairs = fused_block_matrix_exp_pairs(
+        phi, generators, irrep_dims, enforce_orthogonal=enforce_orthogonal
+    )
+    block_exp_phi = [p[0] for p in _fused_pairs]
+    block_exp_neg_phi = [p[1] for p in _fused_pairs]
+    del _fused_pairs
 
     # Accumulators for per-pair KL values and gradients across all blocks
     kl_values = torch.zeros(B, N, N, device=device, dtype=dtype)
