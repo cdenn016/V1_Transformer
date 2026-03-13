@@ -917,20 +917,17 @@ class Trainer:
         the top level of the hierarchical VFE:
             x → q(E-step) → p(M-step) → N(0, 1/(2·wd))
 
-        When embed_no_decay=False, embedding parameters (μ_p, σ_p, φ_p) receive this
-        hyper-prior, preventing prior drift. This is critical because these are
-        statistical parameters entering KL divergences and matrix exponentials,
-        not simple lookup tables as in standard transformers.
+        Embedding parameters (μ_p, σ_p, φ_p) receive this hyper-prior,
+        preventing prior drift. This is critical because these are statistical
+        parameters entering KL divergences and matrix exponentials.
         """
         decay_params = []
         no_decay_params = []
 
         for name, param in self.model.named_parameters():
             if param.requires_grad:
-                # No weight decay for biases, norms, and optionally embeddings
+                # No weight decay for biases and norms only
                 no_decay_match = 'bias' in name or 'norm' in name
-                if self.config.embed_no_decay:
-                    no_decay_match = no_decay_match or 'embed' in name
                 if no_decay_match:
                     no_decay_params.append(param)
                 else:
@@ -958,7 +955,7 @@ class Trainer:
         Weight decay on groups 1-3 implements the Level 3 hyper-prior:
             p(θ_embed) = N(0, 1/(2·wd))
         This is the top of the Bayesian hierarchy, preventing prior drift.
-        Controlled by embed_no_decay: when False, wd applies to embedding groups.
+        Weight decay applies to embedding groups as the hyper-prior precision.
         """
         # Collect parameters by type
         mu_params = []
@@ -997,31 +994,29 @@ class Trainer:
         # Create parameter groups
         param_groups = []
 
-        embed_wd = 0.0 if self.config.embed_no_decay else self.config.weight_decay
-
         if mu_params:
             param_groups.append({
                 'params': mu_params,
                 'lr': self.config.mu_lr,
-                'weight_decay': embed_wd,
+                'weight_decay': self.config.weight_decay,
                 'name': 'mu_embed',
             })
-            print(f"  Parameter group 'mu_embed': {len(mu_params)} tensors @ lr={self.config.mu_lr}, wd={embed_wd}")
+            print(f"  Parameter group 'mu_embed': {len(mu_params)} tensors @ lr={self.config.mu_lr}, wd={self.config.weight_decay}")
 
         if sigma_params:
             param_groups.append({
                 'params': sigma_params,
                 'lr': self.config.sigma_lr,
-                'weight_decay': embed_wd,
+                'weight_decay': self.config.weight_decay,
                 'name': 'sigma_embed',
             })
-            print(f"  Parameter group 'sigma_embed': {len(sigma_params)} tensors @ lr={self.config.sigma_lr}, wd={embed_wd}")
+            print(f"  Parameter group 'sigma_embed': {len(sigma_params)} tensors @ lr={self.config.sigma_lr}, wd={self.config.weight_decay}")
 
         if phi_params:
             param_groups.append({
                 'params': phi_params,
                 'lr': self.config.phi_lr,
-                'weight_decay': embed_wd,
+                'weight_decay': self.config.weight_decay,
                 'name': 'phi_embed',
             })
             print(f"  Parameter group 'phi_embed': {len(phi_params)} tensors @ lr={self.config.phi_lr}")

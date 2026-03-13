@@ -54,7 +54,6 @@
       ]
     ],
     "compute_rg_metrics": false,
-    "embed_no_decay": false,
     "detach_sigma_kl": false,
     "dataset": "wikitext-103"
   },
