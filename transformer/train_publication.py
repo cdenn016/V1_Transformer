@@ -436,7 +436,7 @@ def run_test_evaluation(
     test_loader: torch.utils.data.DataLoader,
     device: torch.device,
     vocab_size: int,
-    max_batches: int = None,
+    max_batches: int = 2000,
     config: dict = None,
 ) -> Dict[str, float]:
     """
@@ -2147,3 +2147,4 @@ def main():
 if __name__ == '__main__':
 
     main()
+
