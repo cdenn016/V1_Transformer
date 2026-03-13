@@ -248,7 +248,7 @@ VFE_EM_CONFIG = {
     
     'use_positional_embedding': False,
     'pos_encoding_mode': 'none',
-    'use_identity_transport': False,
+    'gauge_mode': 'learned',
     'alibi_slope': None,
 
     # Temperature: κ is a scalar sharpness dial; dimension scaling (√K) is hardcoded in attention
@@ -453,7 +453,7 @@ PURE_FEP_CONFIG = {
     # NO position encoding (let it emerge from data!)
     'use_positional_embedding': False,
     'pos_encoding_mode': 'none',
-    'use_identity_transport': False,
+    'gauge_mode': 'learned',
     'alibi_slope': None,
 
     # Temperature: κ is a scalar sharpness dial; dimension scaling (√K) is hardcoded in attention

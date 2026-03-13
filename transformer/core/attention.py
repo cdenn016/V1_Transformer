@@ -312,8 +312,8 @@ def compute_attention_weights(
     chunk_size: Optional[int] = None,  # Chunk size for memory-efficient computation (None = auto)
     # ALiBi-style positional bias (NEW!)
     alibi_slope: Optional[float] = None,  # If set, adds slope * (i-j) to logits for relative position
-    # Identity transport mode (diagnostic/simplification)
-    use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
+    # Gauge mode: 'learned' (per-token φ, full transport) or 'trivial' (Ω = I, no transport)
+    gauge_mode: str = 'learned',
     # Self-attention masking (prevents attention collapse)
     mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
     # Gauge group control
@@ -364,11 +364,9 @@ def compute_attention_weights(
                     affect transport Ω_ij, keeping attention content-based
                     while adding controlled positional information.
                     Typical values: -0.1 to -0.01 (for recency bias)
-        use_identity_transport: If True, bypass gauge transport entirely.
-                               Sets Ω_ij = I for all pairs, computing raw
-                               KL(q_i || q_j) without any rotation.
-                               Useful for diagnostics or when transport is
-                               not desired.
+        gauge_mode: 'learned' for per-token gauge frames with full transport,
+                   'trivial' for global frame (Ω = I, no transport).
+                   Trivial mode computes raw KL(q_i || q_j) without rotation.
         mask_self_attention: If True, mask out diagonal of attention matrix.
                             This prevents the model from attending to itself,
                             forcing it to attend to other tokens. Critical for
@@ -469,7 +467,7 @@ def compute_attention_weights(
         # GPU path OR CPU fallback: Pure PyTorch (fully vectorized, CUDA-compatible)
         kl_matrix = _compute_kl_matrix_torch(
             mu_q, sigma_q, phi, generators, cached_transport,
-            use_identity_transport=use_identity_transport,
+            gauge_mode=gauge_mode,
             enforce_orthogonal=enforce_orthogonal
         )
 
@@ -570,7 +568,7 @@ def compute_kl_matrix(
     diagonal_covariance: bool = False,
     irrep_dims: Optional[List[int]] = None,
     chunk_size: Optional[int] = None,
-    use_identity_transport: bool = False,
+    gauge_mode: str = 'learned',
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
 ) -> torch.Tensor:
     """
@@ -588,7 +586,7 @@ def compute_kl_matrix(
         diagonal_covariance: If True, sigma_q is (B,N,K) diagonal variances
         irrep_dims: Optional list of irrep block dimensions for block-diagonal mode
         chunk_size: Optional chunk size for memory-efficient computation
-        use_identity_transport: If True, Ω_ij = I (skip gauge transport)
+        gauge_mode: 'learned' for full transport, 'trivial' for Ω = I
         enforce_orthogonal: If True, enforce Ω ∈ SO(K) via Newton-Schulz iteration
 
     Returns:
@@ -651,7 +649,7 @@ def compute_kl_matrix(
     else:
         kl_matrix = _compute_kl_matrix_torch(
             mu_q, sigma_q, phi, generators, None,
-            use_identity_transport=use_identity_transport,
+            gauge_mode=gauge_mode,
             enforce_orthogonal=enforce_orthogonal
         )
 
@@ -713,7 +711,7 @@ def _compute_kl_matrix_torch(
     phi: torch.Tensor,
     generators: torch.Tensor,
     cached_transport: Optional[dict] = None,  # Precomputed transport operators
-    use_identity_transport: bool = False,  # If True, bypass transport (Ω = I)
+    gauge_mode: str = 'learned',  # 'learned' or 'trivial' (Ω = I)
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
 ) -> torch.Tensor:
     """
@@ -727,7 +725,7 @@ def _compute_kl_matrix_torch(
         phi: (B, N, 3) gauge fields
         generators: (3, K, K) SO(3) generators
         cached_transport: Optional dict with precomputed 'Omega' from compute_transport_operators()
-        use_identity_transport: If True, skip transport and compute raw KL(q_i || q_j)
+        gauge_mode: 'learned' for full transport, 'trivial' for Ω = I (raw KL)
         enforce_orthogonal: If True, apply Newton-Schulz to ensure Ω ∈ SO(K)
 
     Returns:
@@ -741,8 +739,8 @@ def _compute_kl_matrix_torch(
     # =========================================================================
     # Step 1: Get transport operators (use cached if available)
     # =========================================================================
-    if use_identity_transport:
-        # IDENTITY TRANSPORT: Ω_ij = I for all pairs
+    if gauge_mode == 'trivial':
+        # TRIVIAL GAUGE: Ω_ij = I for all pairs (global frame)
         # Skip expensive matrix exponentials - just use raw beliefs
         # μ_transported = μ_j (no rotation)
         # Σ_transported = Σ_j (no rotation)
@@ -2164,7 +2162,7 @@ class IrrepMultiHeadAttention(nn.Module):
         gauge_dim: int = 3,        # N for SO(N) - only used when gauge_group='SON'
         global_generators: Optional[torch.Tensor] = None,  # (n_gen, K, K) for SO(N) mode
         alibi_slope: Optional[float] = None,  # ALiBi-style positional bias (negative = recency bias)
-        use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
+        gauge_mode: str = 'learned',  # 'learned' or 'trivial' (Ω = I, no gauge transport)
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
         enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
         use_output_projection: bool = False,  # If True, add W_O linear projection after heads
@@ -2209,7 +2207,7 @@ class IrrepMultiHeadAttention(nn.Module):
         self.attention_pattern = attention_pattern
         self.attention_window = attention_window
         self.alibi_slope = alibi_slope
-        self.use_identity_transport = use_identity_transport
+        self.gauge_mode = gauge_mode
         self.mask_self_attention = mask_self_attention
         self.enforce_orthogonal = enforce_orthogonal
         self.use_rope = use_rope
@@ -2488,7 +2486,7 @@ class IrrepMultiHeadAttention(nn.Module):
                     diagonal_covariance=self.diagonal_covariance,
                     cached_transport=head_cached_transport,
                     alibi_slope=self.alibi_slope,
-                    use_identity_transport=self.use_identity_transport,
+                    gauge_mode=self.gauge_mode,
                     mask_self_attention=self.mask_self_attention,
                     enforce_orthogonal=self.enforce_orthogonal,
                     use_rope=self.use_rope,
@@ -2510,7 +2508,7 @@ class IrrepMultiHeadAttention(nn.Module):
                     diagonal_covariance=self.diagonal_covariance,
                     cached_transport=head_cached_transport,
                     alibi_slope=self.alibi_slope,
-                    use_identity_transport=self.use_identity_transport,
+                    gauge_mode=self.gauge_mode,
                     mask_self_attention=self.mask_self_attention,
                     enforce_orthogonal=self.enforce_orthogonal,
                     use_rope=self.use_rope,

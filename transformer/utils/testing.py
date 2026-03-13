@@ -39,12 +39,12 @@ def diagnose():
         # Disable other position sources for clarity
         'use_positional_embedding': False,
         'pos_encoding_mode': 'none',
-        'use_identity_transport': False,  # Use actual transport
+        'gauge_mode': 'learned',  # Use actual transport
     }
 
     print("\n[CONFIG]")
     for k in ['mask_self_attention', 'evolve_sigma', 'alibi_slope',
-              'gauge_fixed_priors', 'use_identity_transport', 'kappa_beta']:
+              'gauge_fixed_priors', 'gauge_mode', 'kappa_beta']:
         print(f"  {k}: {config.get(k)}")
 
     model = GaugeTransformerLM(config)
