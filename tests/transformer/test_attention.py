@@ -377,11 +377,10 @@ class TestAggregateMessages:
 
 
 class TestGLKMetricCorrection:
-    """Test GL(K) metric correction in aggregate_messages.
+    """Test GL(K) aggregation in aggregate_messages.
 
-    The variational gradient includes a metric factor (ΩΩ^T)^{-1}, so the
-    aggregation should use Ω^{-T} μ_j (not Ω μ_j) for GL(K).
-    For SO(K), Ω^{-T} = Ω identically, so no correction is needed.
+    Message aggregation always uses primal transport: Ω μ_j.
+    For SO(K), Ω is orthogonal so Ω^{-T} = Ω identically.
     """
 
     @staticmethod
@@ -409,48 +408,8 @@ class TestGLKMetricCorrection:
                 idx += 1
         return generators
 
-    def test_glk_aggregation_uses_omega_inv_transpose(self, cpu_device):
-        """For GL(K), aggregation should use Ω^{-T} μ_j, not Ω μ_j."""
-        from transformer.core.attention import aggregate_messages, compute_transport_operators
-
-        torch.manual_seed(42)
-        B, N, K = 1, 3, 4
-        generators = self._make_glk_generators(K, cpu_device)
-        n_gen = generators.shape[0]
-
-        phi = torch.randn(B, N, n_gen, device=cpu_device) * 0.1
-        mu = torch.randn(B, N, K, device=cpu_device)
-        sigma = torch.eye(K, device=cpu_device).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).clone()
-        beta = torch.softmax(torch.randn(B, N, N, device=cpu_device), dim=-1)
-
-        transport = compute_transport_operators(phi, generators)
-        Omega = transport['Omega']  # (B, N, N, K, K)
-
-        mu_agg, _ = aggregate_messages(
-            mu, sigma, phi, beta, generators,
-            aggregate_mode='mean_only',
-            cached_transport=transport,
-        )
-
-        # Manually compute CORRECT result: Σ_j β_ij Ω_ij^{-T} μ_j
-        Omega_inv_T = Omega.permute(0, 2, 1, 3, 4).transpose(-1, -2)
-        mu_correct = torch.einsum('bijkl,bjl->bijk', Omega_inv_T, mu)
-        mu_correct_agg = torch.einsum('bij,bijk->bik', beta, mu_correct)
-
-        # Manually compute WRONG (uncorrected) result: Σ_j β_ij Ω_ij μ_j
-        mu_wrong = torch.einsum('bijkl,bjl->bijk', Omega, mu)
-        mu_wrong_agg = torch.einsum('bij,bijk->bik', beta, mu_wrong)
-
-        # Output should match the metric-corrected version
-        assert torch.allclose(mu_agg, mu_correct_agg, atol=1e-5), \
-            "GL(K) aggregation should use Ω^{-T} μ_j"
-
-        # Output should NOT match the uncorrected version
-        assert not torch.allclose(mu_agg, mu_wrong_agg, atol=1e-3), \
-            "GL(K) aggregation should differ from naive Ω μ_j"
-
     def test_sok_aggregation_matches_direct_transport(self, cpu_device):
-        """For SO(K), Ω^{-T} = Ω, so the correction is a no-op."""
+        """For SO(K), aggregation uses Ω μ_j directly."""
         from transformer.core.attention import aggregate_messages, compute_transport_operators
 
         torch.manual_seed(42)
@@ -472,12 +431,12 @@ class TestGLKMetricCorrection:
             cached_transport=transport,
         )
 
-        # For SO(K), Ω μ_j and Ω^{-T} μ_j should be identical
+        # For SO(K), verify aggregation matches Ω μ_j
         mu_direct = torch.einsum('bijkl,bjl->bijk', Omega, mu)
         mu_direct_agg = torch.einsum('bij,bijk->bik', beta, mu_direct)
 
         assert torch.allclose(mu_agg, mu_direct_agg, atol=1e-5), \
-            "SO(K) aggregation should match direct Ω μ_j (Ω^{-T} = Ω)"
+            "SO(K) aggregation should match direct Ω μ_j"
 
     def test_glk_identity_omega_no_correction(self, cpu_device):
         """When phi=0 (Ω=I), result is simple weighted sum regardless of group."""
@@ -505,8 +464,8 @@ class TestGLKMetricCorrection:
         assert torch.allclose(mu_agg, expected, atol=1e-4), \
             "With Ω=I, aggregation should be simple weighted sum"
 
-    def test_glk_covariance_metric_correction(self, cpu_device):
-        """For GL(K) full_distribution mode, covariance uses Ω^{-T} Σ Ω^{-1}."""
+    def test_glk_covariance_aggregation(self, cpu_device):
+        """For GL(K) full_distribution mode, covariance uses Ω Σ Ω^T."""
         from transformer.core.attention import aggregate_messages, compute_transport_operators
 
         torch.manual_seed(42)
@@ -530,23 +489,20 @@ class TestGLKMetricCorrection:
             cached_transport=transport,
         )
 
-        # Manually compute metric-corrected transport
-        Omega_inv_T = Omega.permute(0, 2, 1, 3, 4).transpose(-1, -2)  # Ω^{-T}
-        Omega_inv = Omega.permute(0, 2, 1, 3, 4)  # Ω^{-1}
+        # Manually compute primal transport
+        # Mean: Ω μ_j
+        mu_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu)
+        mu_expected = torch.einsum('bij,bijk->bik', beta, mu_transported)
 
-        # Corrected mean: Ω^{-T} μ_j
-        mu_corrected = torch.einsum('bijkl,bjl->bijk', Omega_inv_T, mu)
-        mu_expected = torch.einsum('bij,bijk->bik', beta, mu_corrected)
-
-        # Corrected cov: Ω^{-T} Σ Ω^{-1}
-        Sigma_corrected = torch.einsum(
+        # Covariance: Ω Σ Ω^T
+        Sigma_transported = torch.einsum(
             'bijkl,bjlm,bijmn->bijkn',
-            Omega_inv_T, sigma, Omega_inv
+            Omega, sigma, Omega.transpose(-1, -2)
         )
 
         # Second moment of mixture
-        second_moment = Sigma_corrected + torch.einsum(
-            'bijk,bijl->bijkl', mu_corrected, mu_corrected
+        second_moment = Sigma_transported + torch.einsum(
+            'bijk,bijl->bijkl', mu_transported, mu_transported
         )
         sigma_expected = torch.einsum('bij,bijkl->bikl', beta, second_moment) \
             - torch.einsum('bik,bil->bikl', mu_expected, mu_expected)
@@ -554,7 +510,7 @@ class TestGLKMetricCorrection:
         assert torch.allclose(mu_agg, mu_expected, atol=1e-5), \
             "GL(K) mean aggregation incorrect in full_distribution mode"
         assert torch.allclose(sigma_agg, sigma_expected, atol=1e-4), \
-            "GL(K) covariance should use Ω^{-T} Σ Ω^{-1}"
+            "GL(K) covariance should use Ω Σ Ω^T"
 
     def test_glk_output_finite(self, cpu_device):
         """GL(K) aggregation should produce finite outputs."""
