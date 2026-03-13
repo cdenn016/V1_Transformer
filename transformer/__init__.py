@@ -40,7 +40,6 @@ from transformer.training import (
 from transformer.training.config import (
     get_standard_config,
     get_vfe_dynamic_config,
-    get_pure_fep_config,
 )
 
 # =============================================================================
@@ -64,7 +63,6 @@ __all__ = [
     'MetricsTracker',
     'get_standard_config',
     'get_vfe_dynamic_config',
-    'get_pure_fep_config',
 
     # Data loading
     'create_dataloaders',

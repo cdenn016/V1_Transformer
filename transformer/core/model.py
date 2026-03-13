@@ -140,21 +140,8 @@ class GaugeTransformerLM(nn.Module):
         # Bayesian precision: Gamma-Normal conjugate prior for α
         ffn_learnable_alpha = config.get('learnable_alpha', False)
 
-        # Pure FEP mode: learning via prior evolution (no backprop)
-        ffn_pure_fep_mode = config.get('ffn_pure_fep_mode', False)
-        ffn_max_seq_len = config.get('ffn_max_seq_len', max_seq_len)
-        ffn_prior_lr = config.get('ffn_prior_lr', 0.01)
-
-        # PriorBank positioning: token-dependent (True) vs position-dependent (False, legacy)
-        # CRITICAL: Token-dependent is REQUIRED for language modeling!
-        use_prior_bank = config.get('use_prior_bank', False)  # Toggle for PriorBank
-
-        # Pure FEP requires untied embeddings!
-        # - Input embeddings (W_in) = priors, updated via p-flow
-        # - Output embeddings (W_out) = observation anchors, fixed
-        if ffn_pure_fep_mode and tie_embeddings:
-            print("Pure FEP mode: automatically untying embeddings (priors ≠ observations)")
-            tie_embeddings = False
+        # PriorBank: token-dependent priors for principled encode/decode
+        use_prior_bank = config.get('use_prior_bank', False)
 
         # Gauge-fixed priors (for gauge covariance)
         gauge_fixed_priors = config.get('gauge_fixed_priors', False)
@@ -420,9 +407,6 @@ class GaugeTransformerLM(nn.Module):
             # Gauge frame dimension
             phi_dim=self.phi_dim,
             # Pure FEP mode parameters
-            ffn_pure_fep_mode=ffn_pure_fep_mode,
-            ffn_max_seq_len=ffn_max_seq_len,
-            ffn_prior_lr=ffn_prior_lr,
             ffn_prior_bank=self.prior_bank,  # Pass PriorBank to FFN layers
             ffn_use_prior_bank=use_prior_bank,  # Enable token-dependent priors
             # Memory-efficient options

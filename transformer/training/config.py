@@ -24,13 +24,12 @@ class TrainingConfig:
     Training Types:
     - 'standard': Standard transformer (no gauge theory)
     - 'vfe_dynamic': VFE-based transformer with gauge theory
-    - 'pure_fep': Pure Free Energy Principle (no backprop)
     """
 
     # ==========================================================================
     # Training Mode
     # ==========================================================================
-    training_mode: str = 'vfe_dynamic'  # 'standard', 'vfe_dynamic', 'pure_fep'
+    training_mode: str = 'vfe_dynamic'  # 'standard', 'vfe_dynamic'
 
     # ==========================================================================
     # Parameter Grouping Strategy
@@ -212,20 +211,6 @@ def get_vfe_dynamic_config(**overrides) -> TrainingConfig:
         lambda_beta=1.0,
         lambda_gamma=0.0,
         use_obs_in_vfe=True,
-    )
-    for key, value in overrides.items():
-        setattr(config, key, value)
-    return config
-
-
-def get_pure_fep_config(**overrides) -> TrainingConfig:
-    """Get configuration for pure FEP (backprop-free) training."""
-    config = TrainingConfig(
-        training_mode='pure_fep',
-        use_param_groups=False,  # No optimizer in pure FEP
-        alpha=1.0,
-        lambda_beta=1.0,
-        lambda_gamma=0.1,
     )
     for key, value in overrides.items():
         setattr(config, key, value)

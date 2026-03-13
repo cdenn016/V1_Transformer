@@ -83,26 +83,17 @@ from transformer.train import (
 from transformer._archive.train_fast import FastTrainer, FastTrainingConfig
 from transformer.analysis.publication_metrics import PublicationMetrics, ExperimentResult
 
-# Import the principled PureFEPTransformer (KL-to-prior output, no backprop)
-from transformer.experimental.pure_fep_transformer import (
-    PureFEPTransformer,
-    PureFEPConfig as PureFEPTransformerConfig,
-)
 
 
 # ============================================================================
 # EDIT THESE DEFAULTS TO RUN WITHOUT COMMAND-LINE ARGS (just click Run!)
 # ============================================================================
-# Three modes available:
+# Two modes available:
 #   'standard'    - Standard transformer baseline (dot-product attention + MLP)
 #   'VFE_dynamic' - VFE with EM-step dynamics (backprop training)
-#   'pure_fep'    - Pure FEP transformer (KL-to-prior output, NO backprop!)
 DEFAULT_MODE = 'VFE_dynamic'      # Which mode to run
 DEFAULT_ENABLE_SIGMA_PHI = True   # Enable learning Σ and φ (full geometric learning)
-
-# Pure FEP learning rates
-DEFAULT_PRIOR_LR = 0.1            # Learning rate for prior updates in pure FEP mode
-DEFAULT_EMBED_LR = 0.1            # Learning rate for embedding updates in pure FEP mode
+DEFAULT_EMBED_LR = 0.1            # Learning rate for embedding updates
 
 # Dataset
 DEFAULT_DATASET = 'wikitext-103'  # 'wikitext-2' (~2M tokens) or 'wikitext-103' (~103M tokens)
@@ -403,152 +394,8 @@ VFE_EM_CONFIG = {
 
 
 # =============================================================================
-# CONFIG 3: PURE_FEP (Pure Free Energy Principle, NO backprop!)
-# =============================================================================
-# The most theoretically principled mode!
-# Learning happens through prior evolution (P-flow), not gradients.
-#
-# Architecture:
-#   - Attention: KL-divergence based (gauge-equivariant)
-#   - FFN: VFE dynamics with CE inside (beliefs minimize prediction error)
-#   - Output: -KL(q||π_v)/τ (KL-to-prior, most principled!)
-#   - Learning: P-flow only (priors ← EMA of successful beliefs)
-#   - Position: None (emergent from data)
-#
-# Key insight: Cross-entropy is INSIDE the VFE, not a separate loss!
-# Priors evolve toward beliefs that minimize prediction error.
-# =============================================================================
-PURE_FEP_CONFIG = {
-    # Model architecture (same as VFE_EM for fair comparison)
-    'vocab_size': 50257,          # Will be overridden by tokenizer
-    'embed_dim': 30,              # Embedding dimension K
-    'n_layers': 1,                # Transformer depth
-    'hidden_dim': 508,            # Not used in pure FEP
-    'max_seq_len': 128,           # Context length N
 
-    # Training
-    'batch_size': 6,
-    'use_amp': False,             # FP32 for precision
-    'num_workers': 4,
-    'epochs': None,               # Set for WikiText-2, None for WikiText-103 (use max_steps)
-    'max_steps': 5000,            # For quick pure FEP experiments
-    'warmup_steps': 0,            # No warmup for P-flow
 
-    # Pure FEP transformer settings
-    'ffn_mode': 'VFE_dynamic',    # VFE dynamics (but with pure_fep_mode=True)
-    'mask_self_attention': True,
-    'tie_embeddings': False,
-
-    # Gauge geometry
-    'evolve_sigma': True,
-    'evolve_phi': True,
-    'evolve_phi_e_step': False,   # Update φ during E-step iterations (dynamical gauge frames)
-    'diagonal_covariance': True,
-
-    # NO position encoding (let it emerge from data!)
-    'use_positional_embedding': False,
-    'pos_encoding_mode': 'none',
-    'gauge_mode': 'learned',
-    'alibi_slope': None,
-
-    # Temperature: κ is a scalar sharpness dial; dimension scaling (√K) is hardcoded in attention
-    'kappa_beta': 0.25,
-
-    # Embedding initialization
-    'mu_init_std': 7.0,
-    'mu_normalize': False,
-    'mu_max_norm': None,
-    'phi_scale': 1.0,             # Gauge frame initialization scale (try 1.0-2.0 for clustering)
-
-    # VFE dynamics (more iterations for belief convergence)
-    'ffn_n_iterations': 10,       # More belief updates per step
-    'ffn_learnable_lr': False,    # Fixed learning rates
-    'ffn_chunk_size': 64,
-
-    # PURE FEP: Learning rates for P-flow (scaled conservatively)
-    # These are BASE rates - will be scaled in run_single_experiment
-    'prior_lr': 0.1,              # Base prior learning rate
-    'mu_lr': 0.05,                # Belief mean update (slower)
-    'sigma_lr': 0.01,             # Belief variance (much slower)
-    'phi_lr': 0.01,               # Gauge frame (slow)
-    'ffn_lr': 0.01,               # Not used in pure FEP
-
-    # Free energy weights (used inside VFE dynamics)
-    # NOTE: config['beta'] maps to lambda_beta in compute_free_energy_loss()
-    'alpha': 0.1,                 # KL(q||p) self-consistency (lower for stability)
-    'beta': 1.0,                  # → lambda_beta: belief alignment weight
-    'lambda_gamma': 0,
-    'kappa_gamma': 1.0,
-    'lambda_obs': 1.0,            # Observation term weight (pure FEP specific)
-
-    # Regularization
-    'weight_decay': 0.0,          # No weight decay for P-flow
-    'dropout': 0.0,               # No dropout for P-flow
-    'grad_clip': 1.0,
-
-    # Logging
-    'log_interval': 100,
-    'eval_interval': 1000,
-    'checkpoint_interval': 5000,
-    'patience': 10,               # More patience for P-flow
-
-    # =================================================================
-    # GAUGE GROUP SELECTION
-    # =================================================================
-    # SO3: Standard SO(3) gauge group with 3 generators
-    #      Requires embed_dim = sum(mult * dim) for irrep_spec or odd embed_dim
-    # SON: SO(N) gauge group with N(N-1)/2 generators
-    #      Supports multiple irrep types for representational diversity:
-    #        - 'scalar': dim = 1              (gauge-invariant)
-    #        - 'fund':   dim = N              (fundamental/vector)
-    #        - 'wedge2': dim = N*(N-1)/2      (antisymmetric 2-tensor ∧²V)
-    #        - 'sym2':   dim = N*(N+1)/2 - 1  (symmetric traceless Sym²₀V)
-    # =================================================================
-    'gauge_group': 'SON',  # 'SO3' or 'SON'
-    'gauge_dim': 10,        # N for SO(N) - only used when gauge_group='SON'
-    'gauge_mode': 'learned',  # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j)
-                              # 'trivial': global frame, φ = 0, Ω = I (standard attention)
-    # Irrep structure for SO(N)
-    # Example for SO(10) with diverse irreps:
-    #   [('scalar', 5, 1), ('fund', 6, 10), ('wedge2', 2, 45)]
-    #   = 5 + 60 + 90 = 155
-    'irrep_spec': [
-      # ('ℓ0', 50, 1),   # 75 dimensions (scalars)
-      # ('ℓ1', 1, 3),   # 90 dimensions (vectors)
-      # ('ℓ2', 2, 5),   # 90 dimensions (rank-2 tensors)
-     #  ('ℓ3', 1, 7),
-      # ('ℓ4', 1, 9),
-      #('ℓ5', 9, 11),
-     # ('ℓ6', 1, 13),
-     # ('ℓ7', 1, 15),
-      # ('ℓ50', 1, 101),
-      ('fund', 3, 10)  # SO(10) fundamental
-     # ('fund', 10, 5),   # SO(5)
-     # SO(10) multi-irrep example:
-     # ('scalar', 5, 1),    # 5 dims (invariant)
-     # ('fund', 6, 10),     # 60 dims (vector)
-     # ('wedge2', 2, 45),   # 90 dims (∧² - angular momentum)
-    ],
-
-    # Attention
-    'attention_pattern': 'full',
-    'attention_window': 24,
-    'pos_encoding_scale': 0.3,
-    'use_prior_bank': True,       # Token-dependent priors
-
-    # PURE FEP MODE FLAGS
-    'ffn_pure_fep_mode': True,    # Enable pure FEP in VFE dynamics
-    'ffn_prior_lr': 0.1,          # Prior update rate
-
-    # RG metrics
-    'compute_rg_metrics': True,   # Enable RG flow analysis
-    'rg_metrics_interval': 100,   # Compute every 100 steps (not too frequent)
-    'rg_auto_cluster': True,
-    'rg_n_clusters': None,
-    'track_dynamic_rg': True,  # Track RG flow across VFE iterations (requires n_iterations > 1)
-}
-
-    
 
 def get_git_info() -> Dict[str, str]:
     """Get current git commit info."""
@@ -1781,8 +1628,6 @@ def run_single_experiment(
     use_wandb: bool = False,
     args: argparse.Namespace = None,
     enable_publication_metrics: bool = True,
-    pure_fep: bool = False,
-    prior_lr: float = 0.01,
 ) -> Dict:
     """
     Run a single training experiment.
@@ -1795,17 +1640,12 @@ def run_single_experiment(
         use_wandb: Whether to use Weights & Biases logging
         args: Command-line arguments for logging
         enable_publication_metrics: Whether to enable comprehensive publication metrics
-        pure_fep: If True, use backprop-free learning via prior evolution
-        prior_lr: Learning rate for prior updates in pure FEP mode
 
     Returns:
         Dictionary with final metrics
     """
     print("\n" + "="*70)
-    if pure_fep:
-        print(f"EXPERIMENT: PURE FEP MODE (Backprop-Free)")
-    else:
-        print(f"EXPERIMENT: FFN_MODE = {ffn_mode}")
+    print(f"EXPERIMENT: FFN_MODE = {ffn_mode}")
     print("="*70)
 
     # Override FFN mode in config
@@ -1895,72 +1735,7 @@ def run_single_experiment(
     # =====================================================================
     # MODE 2: PURE FEP TRANSFORMER (most principled)
     # =====================================================================
-    elif pure_fep:
-        print("  Model type: PURE FEP TRANSFORMER (KL-to-prior output)")
-        print("  - Attention: KL-divergence based")
-        print("  - FFN: VFE dynamics (CE inside)")
-        print("  - Output: -KL(q||π_v)/τ (principled!)")
-        print("  - Learning: P-flow only (NO backprop)")
-        print("  - Position: None (emergent from data)")
-
-        # Create PureFEPTransformer config with CONSERVATIVE learning rates
-        pure_fep_model_config = PureFEPTransformerConfig(
-            # Architecture
-            vocab_size=actual_vocab_size,
-            embed_dim=config['embed_dim'],
-            num_layers=config['n_layers'],
-            seq_length=config['max_seq_len'],
-
-            # Gauge group
-            gauge_group=config.get('gauge_group', 'SON'),
-            gauge_dim=config.get('gauge_dim', 10),
-            irrep_spec=config.get('irrep_spec'),
-
-            # VFE parameters
-            alpha=config.get('alpha', 0.1),
-            lambda_belief=config.get('beta', 1.0),
-            lambda_obs=config.get('lambda_obs', 1.0),
-            kappa=config.get('kappa_beta', 0.1),
-
-            # Learning rates - less conservative to allow actual learning
-            # The error-scaled update already provides stability
-            mu_lr=prior_lr * 0.5,       # Belief mean update
-            sigma_lr=prior_lr * 0.1,    # Belief variance update
-            prior_lr=prior_lr,          # Prior update (NO 0.1x scaling - let error scaling handle it)
-            phi_lr=prior_lr * 0.1,      # Gauge frame update
-
-            # VFE dynamics
-            belief_steps=config.get('ffn_n_iterations', 10),
-            prior_update_interval=1,
-
-            # Stability
-            grad_clip=config.get('grad_clip', 1.0),
-
-            # PURE FEP MODE
-            pure_fep_mode=True,
-
-            # Principled settings
-            embedding_mode='prior_bank',   # Unified PriorBank
-            output_mode='kl_to_prior',     # KL-based output (principled!)
-            position_mode='none',          # No position encoding (emergent)
-        )
-
-        print(f"\n  Learning rates (conservative to prevent NaN):")
-        print(f"    mu_lr:    {pure_fep_model_config.mu_lr:.4f}")
-        print(f"    sigma_lr: {pure_fep_model_config.sigma_lr:.4f}")
-        print(f"    prior_lr: {pure_fep_model_config.prior_lr:.4f}")
-        print(f"    phi_lr:   {pure_fep_model_config.phi_lr:.4f}")
-
-        model = PureFEPTransformer(pure_fep_model_config)
-
-        # Verify gauge_fixed_priors setting
-        if model.prior_bank is not None:
-            print(f"    gauge_fixed_priors: {model.prior_bank.gauge_fixed_priors}")
-        print(f"    embedding_mode: {pure_fep_model_config.embedding_mode}")
-        print(f"    output_mode: {pure_fep_model_config.output_mode}")
-
-    # =====================================================================
-    # MODE 3: VFE_DYNAMIC TRANSFORMER (EM-step, uses backprop)
+    # MODE 2: VFE_DYNAMIC TRANSFORMER (EM-step, uses backprop)
     # =====================================================================
     else:
         print("  Model type: GAUGE VFE TRANSFORMER (KL-divergence attention)")
@@ -2132,204 +1907,7 @@ def run_single_experiment(
     print("INITIALIZING TRAINER")
     print("="*70)
 
-    if pure_fep:
-        # =========================================================
-        # PURE FEP MODE: Using PureFEPTransformer with train_step()
-        # =========================================================
-        print("Mode: PURE FEP TRANSFORMER (Principled, No Backprop)")
-        print(f"  Output: KL-to-prior (most principled)")
-        print(f"  Position: None (emergent)")
-
-        print("\n" + "="*70)
-        print("STARTING PURE FEP TRAINING")
-        print("="*70)
-        print(f"Device: {device}")
-
-        # Calculate total steps: epochs takes precedence
-        epochs = config.get('epochs', None)
-        steps_per_epoch = len(train_loader)
-        if epochs is not None and epochs > 0:
-            total_steps = epochs * steps_per_epoch
-            print(f"Epochs: {epochs} ({steps_per_epoch:,} steps/epoch = {total_steps:,} total)")
-        else:
-            total_steps = config['max_steps']
-            print(f"Total steps: {total_steps:,} (~{total_steps/steps_per_epoch:.1f} epochs)")
-
-        print("\nLearning via P-flow: beliefs → priors (no backprop)")
-        print("="*70 + "\n")
-
-        try:
-            from tqdm import tqdm
-            use_tqdm = True
-        except ImportError:
-            use_tqdm = False
-
-        train_iterator = iter(train_loader)
-        best_val_ppl = float('inf')
-        log_interval = config['log_interval']
-        eval_interval = config['eval_interval']
-
-        pbar = tqdm(range(total_steps), desc="Training") if use_tqdm else range(total_steps)
-
-        try:
-            for step in pbar:
-                # Get batch
-                try:
-                    batch = next(train_iterator)
-                except StopIteration:
-                    train_iterator = iter(train_loader)
-                    batch = next(train_iterator)
-
-                input_ids, targets = batch
-                input_ids = input_ids.to(device)
-                targets = targets.to(device)
-
-                # Train step using PureFEPTransformer's built-in method
-                metrics = model.train_step(input_ids, targets)
-
-                # Check for NaN
-                if math.isnan(metrics['ce_loss']):
-                    print(f"\n❌ NaN detected at step {step}! Try lower learning rates.")
-                    break
-
-                # Logging
-                if (step + 1) % log_interval == 0:
-                    ppl = metrics['perplexity']
-                    ce = metrics['ce_loss']
-                    msg = f"Step {step+1:5d} | CE: {ce:.4f} | PPL: {ppl:.2f}"
-                    if use_tqdm:
-                        pbar.set_postfix_str(f"ppl={ppl:.2f}")
-                        tqdm.write(msg)
-                    else:
-                        print(msg)
-
-                # Validation (limit batches to avoid long waits)
-                if (step + 1) % eval_interval == 0:
-                    model.eval()
-                    val_loss = 0.0
-                    val_tokens = 0
-                    max_val_batches = 50  # Limit validation to 50 batches
-                    with torch.no_grad():
-                        for batch_idx, val_batch in enumerate(val_loader):
-                            if batch_idx >= max_val_batches:
-                                break
-                            v_input, v_targets = val_batch
-                            v_input = v_input.to(device)
-                            v_targets = v_targets.to(device)
-                            logits, _ = model(v_input)
-                            # Use ignore_index to exclude padding tokens from loss
-                            loss = F.cross_entropy(
-                                logits.view(-1, actual_vocab_size),
-                                v_targets.view(-1),
-                                reduction='sum',
-                                ignore_index=-100,
-                            )
-                            val_loss += loss.item()
-                            # Count only non-padding tokens
-                            val_tokens += (v_targets != -100).sum().item()
-
-                    val_ce = val_loss / val_tokens if val_tokens > 0 else float('inf')
-                    val_ppl = math.exp(min(val_ce, 20))
-
-                    print(f"\n  Validation @ step {step+1}:")
-                    print(f"    CE:  {val_ce:.4f}")
-                    print(f"    PPL: {val_ppl:.2f}")
-
-                    if val_ppl < best_val_ppl:
-                        best_val_ppl = val_ppl
-                        # Save best checkpoint
-                        ckpt_path = exp_checkpoint_dir / 'best_model.pt'
-                        torch.save({
-                            'model_state_dict': model.state_dict(),
-                            'step': step + 1,
-                            'val_ppl': val_ppl,
-                        }, ckpt_path, pickle_protocol=4,
-                            _use_new_zipfile_serialization=False)
-                        print(f"    ✓ New best! Saved to {ckpt_path}")
-
-                    model.train()
-
-            print("\n" + "="*70)
-            print("✓ PURE FEP TRAINING COMPLETE!")
-            print("="*70)
-
-            # Final validation metrics
-            final_ppl = best_val_ppl
-            random_ppl = actual_vocab_size
-            improvement = random_ppl / final_ppl if final_ppl > 0 else 0
-
-            print(f"\nValidation Results:")
-            print(f"  Best Val PPL: {final_ppl:.2f}")
-            print(f"  Random PPL:   {random_ppl:.0f}")
-            print(f"  Improvement:  {improvement:.1f}x better!")
-
-            # Run test set evaluation if test loader is available
-            test_metrics = None
-            if test_loader is not None:
-                test_metrics = run_test_evaluation(
-                    model=model,
-                    test_loader=test_loader,
-                    device=device,
-                    vocab_size=actual_vocab_size,
-                    config=config,
-                )
-
-            result = {
-                'ffn_mode': 'pure_fep',
-                'pure_fep': True,
-                'final_loss': math.log(final_ppl) if final_ppl > 0 else float('inf'),
-                'final_ppl': final_ppl,
-                'random_ppl': random_ppl,
-                'improvement': improvement,
-                'total_params': total_params,
-                'vocab_size': actual_vocab_size,
-                'checkpoint': str(exp_checkpoint_dir / 'best_model.pt'),
-                # Training duration stats
-                'total_steps': total_steps,
-                'tokens_seen': total_tokens,
-                'dataset_tokens': dataset_tokens,
-                'dataset_coverage': total_tokens / dataset_tokens if dataset_tokens else None,
-                'batch_size': batch_size,
-                'seq_len': seq_len,
-            }
-
-            # Add test metrics if available
-            if test_metrics is not None:
-                result['test_loss'] = test_metrics['test_loss']
-                result['test_ppl'] = test_metrics['test_ppl']
-                result['test_bpc'] = test_metrics['test_bpc']
-                result['test_improvement'] = test_metrics['improvement']
-
-            return result
-
-        except KeyboardInterrupt:
-            print("\n\n" + "="*70)
-            print("⚠ Training interrupted by user")
-            print("="*70)
-            return None
-
-        except Exception as e:
-            print(f"\n\n❌ Error: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
-
-    else:
-        # =========================================================
-        # STANDARD MODE: Backprop-based training
-        # =========================================================
-        # Safety check: warn if model has pure_fep_mode but we're using standard training
-        # Get blocks from either model type
-        blocks = model.blocks if isinstance(model, StandardTransformerLM) else model.transformer.blocks
-        for block in blocks:
-            if hasattr(block, 'ffn') and hasattr(block.ffn, 'pure_fep_mode'):
-                if block.ffn.pure_fep_mode:
-                    print("\n⚠ WARNING: Model has pure_fep_mode=True but using standard training!")
-                    print("  This may cause issues. Use --pure_fep flag for backprop-free training.")
-                    print("  Or set ffn_pure_fep_mode=False in config.\n")
-                break
-
-        # Create comprehensive publication metrics tracker
+    # Create comprehensive publication metrics tracker
         pub_metrics = None
         if enable_publication_metrics:
             experiment_name = f"{ffn_mode}_{time.strftime('%Y%m%d_%H%M%S')}"
@@ -2413,7 +1991,6 @@ def run_single_experiment(
             # Return metrics
             result = {
                 'ffn_mode': ffn_mode,
-                'pure_fep': False,
                 'final_loss': final_metrics['loss'],
                 'final_ppl': final_metrics['perplexity'],
                 'random_ppl': random_ppl,
@@ -2457,23 +2034,17 @@ def main():
 
     # Mode selection (three distinct modes)
     parser.add_argument('--mode', type=str, default=DEFAULT_MODE,
-                        choices=['standard', 'VFE_dynamic', 'pure_fep'],
-                        help='Training mode: standard (baseline), VFE_dynamic (EM-step), pure_fep (no backprop)')
+                        choices=['standard', 'VFE_dynamic'],
+                        help='Training mode: standard (baseline), VFE_dynamic (EM-step)')
 
     # Legacy alias for backwards compatibility
     parser.add_argument('--ffn_mode', type=str, default=None,
                         choices=['VFE_dynamic', 'standard'],
                         help='DEPRECATED: Use --mode instead')
-    parser.add_argument('--pure_fep', action='store_true', default=False,
-                        help='DEPRECATED: Use --mode pure_fep instead')
-
     # Enable full geometric learning (Σ and φ)
     parser.add_argument('--enable_sigma_phi', action='store_true', default=DEFAULT_ENABLE_SIGMA_PHI,
                         help='Enable learning covariances (Σ) and gauge frames (φ)')
 
-    # Pure FEP learning rates
-    parser.add_argument('--prior_lr', type=float, default=DEFAULT_PRIOR_LR,
-                        help='Learning rate for prior updates in pure FEP mode')
     parser.add_argument('--embed_lr', type=float, default=DEFAULT_EMBED_LR,
                         help='Learning rate for embedding updates in pure FEP mode')
 
@@ -2491,13 +2062,10 @@ def main():
 
     args = parser.parse_args()
 
-    # Handle legacy --ffn_mode and --pure_fep arguments
+    # Handle legacy --ffn_mode argument
     if args.ffn_mode is not None:
         print("⚠ WARNING: --ffn_mode is deprecated. Use --mode instead.")
         args.mode = args.ffn_mode
-    if args.pure_fep:
-        print("⚠ WARNING: --pure_fep is deprecated. Use --mode pure_fep instead.")
-        args.mode = 'pure_fep'
 
     # Set random seed for reproducibility
     # Default to seed=42 if not specified, for consistent results
@@ -2533,11 +2101,9 @@ def main():
     # Three distinct configs for clarity:
     #   STANDARD_CONFIG  - Baseline transformer (dot-product + MLP)
     #   VFE_EM_CONFIG    - VFE with EM-step dynamics (backprop)
-    #   PURE_FEP_CONFIG  - Pure FEP (KL-to-prior output, NO backprop)
     # =================================================================
 
     mode = args.mode
-    is_pure_fep = (mode == 'pure_fep')
 
     if mode == 'standard':
         print("\n" + "="*70)
@@ -2564,23 +2130,9 @@ def main():
         config = VFE_EM_CONFIG.copy()
         ffn_mode = 'VFE_dynamic'
 
-    elif mode == 'pure_fep':
-        print("\n" + "="*70)
-        print("MODE: PURE FEP (Free Energy Principle, NO backprop!)")
-        print("="*70)
-        print("   Attention: KL-divergence based (gauge-equivariant)")
-        print("   FFN: VFE dynamics (CE inside!)")
-        print("   Output: -KL(q||π_v)/τ (most principled!)")
-        print("   Learning: P-flow only (priors ← beliefs)")
-        print("   Position: None (emergent)")
-        print(f"   Prior LR: {args.prior_lr}")
-        print("="*70 + "\n")
-        config = PURE_FEP_CONFIG.copy()
-        ffn_mode = 'VFE_dynamic'  # Uses VFE internally but with pure_fep_mode=True
-
     else:
         print(f"\nError: Unknown mode '{mode}'")
-        print("Valid modes: standard, VFE_dynamic, pure_fep")
+        print("Valid modes: standard, VFE_dynamic")
         return
 
     config['dataset'] = args.dataset
@@ -2604,8 +2156,6 @@ def main():
         checkpoint_dir=checkpoint_dir,
         use_wandb=args.use_wandb,
         args=args,
-        pure_fep=is_pure_fep,
-        prior_lr=args.prior_lr,
     )
 
     if result is not None:
