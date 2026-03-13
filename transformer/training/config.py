@@ -59,6 +59,14 @@ class TrainingConfig:
     # For embedding parameters (μ_p, σ_p, φ_p), weight decay is the hyper-prior
     # precision that prevents prior drift. Larger wd = tighter hyper-prior.
     weight_decay: float = 0.1
+    # Embedding-specific weight decay (Level 3 hyper-prior on priors).
+    # None = use weight_decay (same as other params).
+    # 0.0 = uninformative hyper-prior (no pull toward zero).
+    # The VFE hierarchy is: N(0,1/(2·wd)) → p_i(embeddings) → q_i(beliefs) → obs
+    # For mu_embed: wd pulls prior means toward zero
+    # For sigma_embed: wd on log_sigma pulls covariances toward σ=1
+    # For phi_embed: wd pulls gauge frames toward identity (exp(0)=I)
+    embed_weight_decay: Optional[float] = None
     beta1: float = 0.9
     beta2: float = 0.95
     eps: float = 1e-8

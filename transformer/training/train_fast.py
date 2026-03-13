@@ -76,6 +76,10 @@ class FastTrainingConfig:
     # For embedding parameters (μ_p, σ_p, φ), this is the top of the Bayesian hierarchy:
     #   x → q(E-step) → p(M-step) → N(0, 1/(2·wd))
     weight_decay: float = 0.01
+    # Embedding-specific weight decay (Level 3 hyper-prior on priors).
+    # None = use weight_decay (same as non-embedding params).
+    # 0.0 = uninformative hyper-prior (no regularization toward zero).
+    embed_weight_decay: Optional[float] = None
 
     # Gradient control
     grad_clip: float = 1.0
@@ -291,33 +295,37 @@ class FastTrainer:
                 ffn_params.append(param)
 
         # Create parameter groups
+        # Embedding weight decay = Level 3 hyper-prior: N(0, 1/(2·wd))
+        # None → inherit from weight_decay; 0.0 → uninformative hyper-prior
+        embed_wd = self.config.embed_weight_decay if self.config.embed_weight_decay is not None else self.config.weight_decay
+
         param_groups = []
         if mu_params:
             param_groups.append({
                 'params': mu_params,
                 'lr': self.config.mu_lr,
-                'weight_decay': self.config.weight_decay,
+                'weight_decay': embed_wd,
                 'name': 'mu_embed',
             })
-            print(f"  Parameter group 'mu_embed': {len(mu_params)} tensors @ lr={self.config.mu_lr}, wd={self.config.weight_decay}")
+            print(f"  Parameter group 'mu_embed': {len(mu_params)} tensors @ lr={self.config.mu_lr}, wd={embed_wd}")
 
         if sigma_params:
             param_groups.append({
                 'params': sigma_params,
                 'lr': self.config.sigma_lr,
-                'weight_decay': self.config.weight_decay,
+                'weight_decay': embed_wd,
                 'name': 'sigma_embed',
             })
-            print(f"  Parameter group 'sigma_embed': {len(sigma_params)} tensors @ lr={self.config.sigma_lr}, wd={self.config.weight_decay}")
+            print(f"  Parameter group 'sigma_embed': {len(sigma_params)} tensors @ lr={self.config.sigma_lr}, wd={embed_wd}")
 
         if phi_params:
             param_groups.append({
                 'params': phi_params,
                 'lr': self.config.phi_lr,
-                'weight_decay': self.config.weight_decay,
+                'weight_decay': embed_wd,
                 'name': 'phi_embed',
             })
-            print(f"  Parameter group 'phi_embed': {len(phi_params)} tensors @ lr={self.config.phi_lr}")
+            print(f"  Parameter group 'phi_embed': {len(phi_params)} tensors @ lr={self.config.phi_lr}, wd={embed_wd}")
 
         if attention_params:
             param_groups.append({
