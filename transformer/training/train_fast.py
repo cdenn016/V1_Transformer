@@ -750,7 +750,7 @@ if __name__ == '__main__':
     print("""
 from transformer.model import GaugeTransformerLM, VFEConfig
 from transformer.data import create_dataloaders
-from transformer.train_fast import FastTrainer, FastTrainingConfig
+from transformer.training.train_fast import FastTrainer, FastTrainingConfig
 
 # Create model & data
 config = VFEConfig()  # Use default config
