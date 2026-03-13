@@ -25,8 +25,8 @@ from transformer.core.block_config import BlockConfig
 # Import our gauge attention
 from transformer.core.attention import IrrepMultiHeadAttention
 
-# Import VFE FFN module
-from transformer.core.ffn import GaugeFFN
+# Import VFE FFN directly (no wrapper)
+from transformer.core.variational_ffn import VariationalFFNDynamic
 
 # Trajectory tracking (optional)
 try:
@@ -131,18 +131,19 @@ class GaugeTransformerBlock(nn.Module):
         self.norm1 = nn.LayerNorm(cfg.embed_dim) if cfg.use_layernorm else nn.Identity()
 
         # =====================================================================
-        # VFE_dynamic FFN Sublayer
+        # VFE_dynamic FFN Sublayer (VariationalFFNDynamic directly, no wrapper)
         # =====================================================================
-        self.ffn = GaugeFFN(
+        if cfg.generators is None:
+            raise ValueError("generators required for VFE_dynamic mode")
+
+        self.ffn = VariationalFFNDynamic(
             embed_dim=cfg.embed_dim,
-            hidden_dim=cfg.hidden_dim,
             generators=cfg.generators,
-            mode=cfg.ffn_mode,
             alpha=cfg.ffn_alpha,
+            lambda_belief=cfg.ffn_lambda_belief,
             kappa=cfg.ffn_kappa,
             n_iterations=cfg.ffn_n_iterations,
             learnable_lr=cfg.ffn_learnable_lr,
-            lambda_belief=cfg.ffn_lambda_belief,
             update_sigma=cfg.ffn_update_sigma,
             diagonal_covariance=cfg.diagonal_covariance,
             update_phi=cfg.evolve_phi,
@@ -246,7 +247,7 @@ class GaugeTransformerBlock(nn.Module):
         if mu_prior is None:
             raise ValueError("VFE_dynamic mode requires mu_prior argument")
 
-        mu_ffn, sigma_ffn, phi_out = self.ffn(
+        mu_ffn, sigma_ffn, phi_out, _beta_history = self.ffn(
             mu=mu_normalized,
             beta=beta,
             mu_prior=mu_prior,
