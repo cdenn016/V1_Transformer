@@ -236,14 +236,10 @@ def create_scheduler(
         return None
 
     # Compute minimum decay ratio (fraction of peak LR at end of cosine).
-    # In multi-group mode, each group's LR decays to min_ratio * group_lr.
-    # Use the max group LR as reference to get a meaningful ratio.
-    if config.use_param_groups:
-        max_group_lr = max(config.mu_lr, config.sigma_lr, config.phi_lr,
-                          config.attention_lr, config.ffn_lr, config.output_lr)
-        min_ratio = min(config.min_lr / max(max_group_lr, 1e-12), 1.0)
-    else:
-        min_ratio = min(config.min_lr / max(config.learning_rate, 1e-12), 1.0)
+    # In multi-group mode, each group decays to this fraction of its base LR.
+    # Use the global learning_rate as denominator (the "reference" LR).
+    # Clamp to avoid nonsensical ratios if min_lr >= learning_rate.
+    min_ratio = min(config.min_lr / max(config.learning_rate, 1e-12), 1.0)
 
     def lr_lambda(step):
         # Warmup phase
