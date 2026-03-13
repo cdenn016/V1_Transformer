@@ -469,8 +469,6 @@ class GaugeTransformerLM(nn.Module):
             # Ablation toggles
             use_exp_map_retraction=config.get('use_exp_map_retraction', True),
             use_full_nat_grad=config.get('use_full_nat_grad', True),
-            # Primal transport (theory-correct aggregation)
-            use_primal_transport=config.get('use_primal_transport', False),
             # DEQ implicit differentiation
             use_deq=config.get('use_deq', False),
             deq_neumann_terms=config.get('deq_neumann_terms', 5),

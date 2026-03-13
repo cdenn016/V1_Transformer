@@ -134,8 +134,6 @@ class GaugeTransformerBlock(nn.Module):
         # Ablation toggles
         use_exp_map_retraction: bool = True,  # True=exp map, False=linear+Cholesky
         use_full_nat_grad: bool = True,       # True=Σ@∇@Σ, False=diag approx
-        # Primal transport (theory-correct aggregation)
-        use_primal_transport: bool = False,  # True: Ω μ_j (theory); False: Ω^{-T} μ_j (legacy)
         # DEQ implicit differentiation
         use_deq: bool = False,                # Use DEQ backward for E-step fixed point
         deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
@@ -240,7 +238,6 @@ class GaugeTransformerBlock(nn.Module):
             irrep_dims_override=ffn_irrep_dims if (gauge_group == 'GLK' and cross_head_perm is not None) else None,
             use_rope=use_rope,
             rope_base=rope_base,
-            use_primal_transport=use_primal_transport,
         )
 
         # Conditionally create LayerNorm and Dropout (disabled for pure VFE)
@@ -514,8 +511,6 @@ class GaugeTransformerStack(nn.Module):
         # Ablation toggles
         use_exp_map_retraction: bool = True,  # True=exp map, False=linear+Cholesky
         use_full_nat_grad: bool = True,       # True=Σ@∇@Σ, False=diag approx
-        # Primal transport (theory-correct aggregation)
-        use_primal_transport: bool = False,  # True: Ω μ_j (theory); False: Ω^{-T} μ_j (legacy)
         # DEQ implicit differentiation
         use_deq: bool = False,                # Use DEQ backward for E-step fixed point
         deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
@@ -626,8 +621,6 @@ class GaugeTransformerStack(nn.Module):
                 # Ablation toggles
                 use_exp_map_retraction=use_exp_map_retraction,
                 use_full_nat_grad=use_full_nat_grad,
-                # Primal transport
-                use_primal_transport=use_primal_transport,
                 # DEQ implicit differentiation
                 use_deq=use_deq,
                 deq_neumann_terms=deq_neumann_terms,
