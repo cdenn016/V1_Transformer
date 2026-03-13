@@ -14,7 +14,7 @@ Components:
 
 Usage:
     from transformer.training import TrainingConfig, create_optimizer
-    from transformer.train import Trainer  # Main trainer class
+    from transformer.train_publication import PublicationTrainer  # Main trainer class
 """
 
 from transformer.training.config import TrainingConfig
