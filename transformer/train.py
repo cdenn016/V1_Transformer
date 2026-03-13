@@ -426,7 +426,6 @@ def compute_free_energy_loss(
     pad_token_id: int = -100,     # Token ID to ignore in loss (padding)
     use_obs_in_vfe: bool = False, # Pass targets into VFE E-step (last layer only)
     alpha_phi: float = 0.0,       # Gauge prior weight: (α_φ/2) Σ_i ||φ_i||²
-    **kwargs,                      # Accept legacy kwargs (e.g. detach_sigma_kl) without error
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     Compute training loss (M-step objective in the hierarchical VFE).
