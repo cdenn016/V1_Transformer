@@ -426,7 +426,6 @@ def compute_free_energy_loss(
     pad_token_id: int = -100,     # Token ID to ignore in loss (padding)
     use_obs_in_vfe: bool = False, # Pass targets into VFE E-step (last layer only)
     alpha_phi: float = 0.0,       # Gauge prior weight: (α_φ/2) Σ_i ||φ_i||²
-    detach_sigma_kl: bool = True, # Detach sigma in KL loss (prevents M-step sigma gradients)
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     Compute training loss (M-step objective in the hierarchical VFE).
@@ -533,9 +532,9 @@ def compute_free_energy_loss(
         K = mu_q.shape[-1]
         kl_per_agent = gaussian_kl_divergence(
             mu_q=mu_q,
-            sigma_q=(sigma_q.detach() if detach_sigma_kl else sigma_q) if sigma_q is not None else None,
+            sigma_q=sigma_q.detach() if sigma_q is not None else None,
             mu_p=mu_p,        # PRIORS (not models directly)
-            sigma_p=(sigma_p.detach() if detach_sigma_kl else sigma_p) if sigma_p is not None else None,
+            sigma_p=sigma_p.detach() if sigma_p is not None else None,
         )  # (B, N)
         dim_scale = math.sqrt(max(K, 1))
         self_consistency_loss = alpha * kl_per_agent.mean() / dim_scale
@@ -1104,7 +1103,7 @@ class Trainer:
             pad_token_id=self.pad_token_id,
             use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
             alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
-            detach_sigma_kl=getattr(self.config, 'detach_sigma_kl', True),
+
         )
 
         # Scale loss for gradient accumulation
@@ -1211,7 +1210,7 @@ class Trainer:
                 pad_token_id=self.pad_token_id,
                 use_obs_in_vfe=getattr(self.config, 'use_obs_in_vfe', False),
                 alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
-                detach_sigma_kl=getattr(self.config, 'detach_sigma_kl', True),
+    
             )
 
             total_loss += loss.item()

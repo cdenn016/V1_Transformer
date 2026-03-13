@@ -2022,6 +2022,84 @@ def _get_glK_gauge_generators(
     return generators
 
 
+def lie_bracket_general_torch(
+    phi1: 'torch.Tensor',
+    phi2: 'torch.Tensor',
+    generators: 'torch.Tensor',
+) -> 'torch.Tensor':
+    """
+    General Lie bracket [φ₁·G, φ₂·G] for ANY Lie algebra with given generators.
+
+    Works for SO(3), SO(N), GL(K), and multi-head GL(K) — no structural
+    assumptions about the generators. Uses the matrix commutator in the
+    transport representation and projects back to generator coordinates.
+
+    The projection uses: φ_a = tr(G_a^T · bracket) / ||G_a||²_F
+    which is exact for orthogonal generators (all standard bases).
+
+    Args:
+        phi1: First Lie algebra element coordinates (..., n_gen)
+        phi2: Second Lie algebra element coordinates (..., n_gen)
+        generators: Transport generators (n_gen, K, K)
+
+    Returns:
+        bracket_coords: Coordinates of [φ₁·G, φ₂·G] (..., n_gen)
+    """
+    import torch
+
+    # Build K×K matrices using transport generators
+    A1 = torch.einsum('...a,aij->...ij', phi1, generators)  # (..., K, K)
+    A2 = torch.einsum('...a,aij->...ij', phi2, generators)  # (..., K, K)
+
+    # Lie bracket = matrix commutator
+    bracket = A1 @ A2 - A2 @ A1  # (..., K, K)
+
+    # Project back to generator coordinates
+    # For orthogonal generators: φ_a = <G_a, bracket>_F / ||G_a||²_F
+    inner = torch.einsum('aij,...ij->...a', generators, bracket)  # (..., n_gen)
+    gen_norms_sq = (generators * generators).sum(dim=(-2, -1))   # (n_gen,)
+    bracket_coords = inner / gen_norms_sq.clamp(min=1e-12)
+
+    return bracket_coords
+
+
+def lie_compose_bch_general_torch(
+    phi1: 'torch.Tensor',
+    phi2: 'torch.Tensor',
+    generators: 'torch.Tensor',
+    order: int = 1,
+) -> 'torch.Tensor':
+    """
+    BCH composition for ANY Lie algebra with given generators.
+
+    log(exp(φ₁·G)·exp(φ₂·G)) = φ₁ + φ₂ + ½[φ₁,φ₂] + ...
+
+    Works for SO(3), SO(N), GL(K), multi-head GL(K), or any other
+    Lie algebra represented by generators. No structural assumptions.
+
+    Args:
+        phi1: First Lie algebra element (..., n_gen)
+        phi2: Second Lie algebra element (..., n_gen)
+        generators: Transport generators (n_gen, K, K)
+        order: BCH expansion order (0=addition, 1=first correction, 2=second)
+
+    Returns:
+        phi_composed: Composed element (..., n_gen)
+    """
+    if order == 0:
+        return phi1 + phi2
+
+    bracket_12 = lie_bracket_general_torch(phi1, phi2, generators)
+    result = phi1 + phi2 + 0.5 * bracket_12
+
+    if order >= 2:
+        bracket_1_12 = lie_bracket_general_torch(phi1, bracket_12, generators)
+        bracket_2_12 = lie_bracket_general_torch(phi2, bracket_12, generators)
+        result = result + (1.0/12.0) * bracket_1_12 - (1.0/12.0) * bracket_2_12
+
+    return result
+
+
 def glK_bracket_torch(
     phi1: 'torch.Tensor',
     phi2: 'torch.Tensor',

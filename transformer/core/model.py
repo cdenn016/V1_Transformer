@@ -348,8 +348,9 @@ class GaugeTransformerLM(nn.Module):
             max_seq_len=max_seq_len,
             mode=pos_mode,
             scale=pos_encoding_scale,
-            phi_dim=self.phi_dim,  # SO(3): 3, SO(N): N(N-1)/2
-            generators=self.generators,  # Pass generators for SO(N) BCH composition
+            phi_dim=self.phi_dim,  # SO(3): 3, SO(N): N(N-1)/2, GL(K): K²
+            generators=self.generators,  # Pass generators for BCH composition
+            gauge_group=gauge_group,  # SO3, SON, or GLK — controls Lie bracket dispatch
         )
 
         # =================================================================
@@ -422,8 +423,6 @@ class GaugeTransformerLM(nn.Module):
             gauge_mode=gauge_mode,
             # Self-attention masking (prevents attention collapse)
             mask_self_attention=config.get('mask_self_attention', False),
-            # Sigma softmax coupling: include ∂β/∂Σ term in sigma gradient
-            sigma_softmax_coupling=config.get('sigma_softmax_coupling', False),
             # Gauge group control
             enforce_orthogonal=config.get('enforce_orthogonal', False),
             # Bayesian precision
@@ -439,9 +438,6 @@ class GaugeTransformerLM(nn.Module):
             rope_base=config.get('rope_base', 10000.0),
             # Phi gradient preconditioning
             phi_natural_gradient=config.get('phi_natural_gradient', 'clip'),
-            # Ablation toggles
-            use_exp_map_retraction=config.get('use_exp_map_retraction', True),
-            use_full_nat_grad=config.get('use_full_nat_grad', True),
             # DEQ implicit differentiation
             use_deq=config.get('use_deq', False),
             deq_neumann_terms=config.get('deq_neumann_terms', 5),

@@ -145,15 +145,6 @@ class TrainingConfig:
     gauge_mode: str = 'learned'
 
     # ==========================================================================
-    # Ablation Toggles
-    # ==========================================================================
-    use_exp_map_retraction: bool = True   # True=exp map, False=linear+Cholesky (full cov only)
-    use_full_nat_grad: bool = True        # True=Σ@∇@Σ, False=diag approx (full cov only)
-
-
-    detach_sigma_kl: bool = True          # True=detach sigma in KL loss, False=pass gradients
-
-    # ==========================================================================
     # Positional Encoding
     # ==========================================================================
     use_rope: bool = False       # RoPE: SO(2)^{K/2} position rotations on μ in attention

@@ -45,7 +45,6 @@ class GaugeFFN(nn.Module):
         lambda_belief: float = 1.0,
         update_sigma: bool = True,
         compute_sigma_align_grad: bool = True,  # Sigma gradient from alignment term
-        sigma_softmax_coupling: bool = False,  # Include ∂β/∂Σ softmax coupling in sigma gradient
         # Diagonal covariance mode
         diagonal_covariance: bool = False,
         prior_bank: Optional[nn.Module] = None,  # Token-dependent PriorBank
@@ -66,9 +65,6 @@ class GaugeFFN(nn.Module):
         multihead_vfe: bool = False,  # If True, maintain per-head attention in VFE loop
         # Phi gradient preconditioning
         phi_natural_gradient: str = 'clip',  # 'clip'|'cartan'|'killing'|'pullback'
-        # Ablation toggles
-        use_exp_map_retraction: bool = True,  # True=exp map, False=linear+Cholesky
-        use_full_nat_grad: bool = True,       # True=Σ@∇@Σ, False=diag approx
         # DEQ implicit differentiation
         use_deq: bool = False,                # Use DEQ backward for E-step fixed point
         deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
@@ -122,7 +118,6 @@ class GaugeFFN(nn.Module):
             update_sigma=update_sigma,
             diagonal_covariance=diagonal_covariance,
             compute_sigma_align_grad=compute_sigma_align_grad,
-            sigma_softmax_coupling=sigma_softmax_coupling,
             prior_bank=prior_bank,
             use_prior_bank=use_prior_bank,
             # Phi evolution via VFE gradients
@@ -141,9 +136,6 @@ class GaugeFFN(nn.Module):
             multihead_vfe=multihead_vfe,
             # Phi gradient preconditioning
             phi_natural_gradient=phi_natural_gradient,
-            # Ablation toggles
-            use_exp_map_retraction=use_exp_map_retraction,
-            use_full_nat_grad=use_full_nat_grad,
             # DEQ implicit differentiation
             use_deq=use_deq,
             deq_neumann_terms=deq_neumann_terms,
