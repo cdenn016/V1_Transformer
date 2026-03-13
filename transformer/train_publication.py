@@ -273,7 +273,6 @@ VFE_EM_CONFIG = {
     'use_exp_map_retraction': True,  # Try original linear retraction
     'use_full_nat_grad': True,       # Try diagonal natural gradient
 
-    'embed_no_decay': False,         # re-enable weight decay on embeddings
     'detach_sigma_kl':True,          # pass sigma gradients through KL loss
 
 
@@ -2036,7 +2035,6 @@ def run_single_experiment(
         eval_interval=config['eval_interval'],
         checkpoint_interval=config['checkpoint_interval'],
 
-        embed_no_decay=config['embed_no_decay'],    # re-enable weight decay on embeddings
         detach_sigma_kl=config['detach_sigma_kl'],   # pass sigma gradients through KL loss
 
         use_wandb=use_wandb,

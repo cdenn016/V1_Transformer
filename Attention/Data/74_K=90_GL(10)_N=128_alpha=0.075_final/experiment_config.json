@@ -45,7 +45,6 @@
     "ffn_lr": 0.05,
     "use_exp_map_retraction": true,
     "use_full_nat_grad": true,
-    "embed_no_decay": false,
     "detach_sigma_kl": true,
     "alpha": 0.075,
     "alpha_phi": 0.1,

@@ -34,7 +34,6 @@
     "weight_decay": 0.01,
     "dropout": 0.0,
     "grad_clip": 1.0,
-    "embed_no_decay": false,
     "detach_sigma_kl": false,
     "log_interval": 1000,
     "eval_interval": 5000,

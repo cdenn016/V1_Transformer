@@ -59,7 +59,6 @@ class TrainingConfig:
     #
     # For embedding parameters (μ_p, σ_p, φ_p), weight decay is the hyper-prior
     # precision that prevents prior drift. Larger wd = tighter hyper-prior.
-    # See embed_no_decay toggle below.
     weight_decay: float = 0.1
     beta1: float = 0.9
     beta2: float = 0.95
@@ -152,16 +151,6 @@ class TrainingConfig:
     use_exp_map_retraction: bool = True   # True=exp map, False=linear+Cholesky (full cov only)
     use_full_nat_grad: bool = True        # True=Σ@∇@Σ, False=diag approx (full cov only)
 
-    # embed_no_decay: controls the hyper-prior on embedding parameters.
-    # When False (recommended): weight_decay applies to μ_p, σ_p, φ_p embeddings,
-    #   implementing N(0, 1/(2·wd)) as the top-level hyper-prior in the hierarchy:
-    #     x_i → q_i(E-step) → p_i(M-step) → N(0, 1/(2·wd))
-    #   This prevents prior drift and keeps KL/transport in a well-conditioned regime.
-    # When True: embeddings have an improper (flat) hyper-prior — no regularization
-    #   above Level 2. Standard transformer convention, but inappropriate here because
-    #   embeddings are statistical parameters (means, covariances, gauge frames) that
-    #   directly enter KL divergences and matrix exponentials.
-    embed_no_decay: bool = True
 
     detach_sigma_kl: bool = True          # True=detach sigma in KL loss, False=pass gradients
 
