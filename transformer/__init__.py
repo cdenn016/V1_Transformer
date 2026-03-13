@@ -14,8 +14,7 @@ Package Structure:
     ├── analysis/       # Analysis and metrics
     ├── visualization/  # Plotting and visualization
     ├── utils/          # Utilities
-    ├── baselines/      # Baseline models
-    └── experimental/   # Experimental code
+    └── baselines/      # Baseline models
 """
 
 # Suppress noisy Triton warnings
