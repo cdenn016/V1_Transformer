@@ -282,6 +282,7 @@ VFE_EM_CONFIG = {
     'eval_interval': 1000,
     'checkpoint_interval': 25000,
     'semantic_analysis_interval': 10000,
+    'patience': 5,
 
     # =================================================================
     # GAUGE GROUP SELECTION (Generators from so(N), Transport in GL(K))
