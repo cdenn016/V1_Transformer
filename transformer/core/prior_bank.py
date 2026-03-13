@@ -235,7 +235,20 @@ class PriorBank(nn.Module):
 
         p(y = v | q) ∝ exp(-KL(q || π_v) / τ)
 
-        This is the PRINCIPLED output model - no learned W_out needed!
+        Memory-efficient: avoids (B, N, V, K) intermediates by decomposing
+        KL into matmul-friendly terms. Peak memory is O(B*N*V + V*K).
+
+        For diagonal Gaussians:
+            KL(q || π_v) = 0.5 * [Σ_k σ_q[k]/σ_p[v,k]
+                                   + (μ_q - μ_p[v])ᵀ diag(1/σ_p[v]) (μ_q - μ_p[v])
+                                   - K
+                                   + Σ_k log(σ_p[v,k]/σ_q[k])]
+
+        The quadratic term expands as:
+            Σ_k (μ_q[k]² + μ_p[v,k]² - 2·μ_q[k]·μ_p[v,k]) / σ_p[v,k]
+          = (μ_q²/σ_p[v])·1 + (μ_p²/σ_p[v])·1 - 2·(μ_q) · (μ_p/σ_p[v])
+
+        This avoids the (B,N,V,K) broadcast — cross term uses matmul.
 
         Args:
             mu_q: (B, N, K) belief means
@@ -249,36 +262,43 @@ class PriorBank(nn.Module):
         V = self.vocab_size
         device = mu_q.device
 
-        # Get all token priors
+        # Get all token priors: mu_p (V, K), sigma_p (V, K)
         all_token_ids = torch.arange(V, device=device)
-        mu_p, sigma_p, _ = self._get_prior_for_tokens(all_token_ids)  # (V, K)
+        mu_p, sigma_p, _ = self._get_prior_for_tokens(all_token_ids)
 
-        # Expand for broadcasting:
-        # mu_q: (B, N, K) -> (B, N, 1, K)
-        # mu_p: (V, K) -> (1, 1, V, K)
-        mu_q_exp = mu_q.unsqueeze(2)  # (B, N, 1, K)
-        sigma_q_exp = sigma_q.unsqueeze(2)  # (B, N, 1, K)
-        mu_p_exp = mu_p.unsqueeze(0).unsqueeze(0)  # (1, 1, V, K)
-        sigma_p_exp = sigma_p.unsqueeze(0).unsqueeze(0)  # (1, 1, V, K)
-
-        # Compute KL(q || π_v) for all v
-        # For diagonal Gaussians:
-        # KL = 0.5 * (Σ_q/Σ_p + (μ_q-μ_p)²/Σ_p - 1 + log(Σ_p/Σ_q))
         variance_floor = max(self.eps, 1e-4)
-        sigma_q_safe = sigma_q_exp.clamp(min=variance_floor)
-        sigma_p_safe = sigma_p_exp.clamp(min=variance_floor)
+        sigma_q_safe = sigma_q.clamp(min=variance_floor)    # (B, N, K)
+        sigma_p_safe = sigma_p.clamp(min=variance_floor)    # (V, K)
 
-        kl_per_dim = 0.5 * (
-            sigma_q_safe / sigma_p_safe
-            + (mu_q_exp - mu_p_exp)**2 / sigma_p_safe
-            - 1.0
-            + torch.log(sigma_p_safe / sigma_q_safe)
-        )  # (B, N, V, K)
+        inv_sigma_p = 1.0 / sigma_p_safe                    # (V, K)
 
-        # Sum over K dimensions
-        kl_total = kl_per_dim.sum(dim=-1)  # (B, N, V)
+        # Term 1: tr(Σ_q / Σ_p) = Σ_k σ_q[k] / σ_p[v,k]
+        # = sigma_q @ inv_sigma_p.T  → (B, N, V) via matmul
+        trace_term = torch.matmul(sigma_q_safe, inv_sigma_p.T)  # (B, N, V)
 
-        # Convert to logits: -KL/τ (negative because higher KL = lower probability)
+        # Term 2: quadratic (μ_q - μ_p)ᵀ diag(1/σ_p) (μ_q - μ_p)
+        # Expand as: ‖μ_q‖²_{1/σ_p} + ‖μ_p‖²_{1/σ_p} - 2·μ_q · (μ_p/σ_p)
+        #   a) Σ_k μ_q[k]² / σ_p[v,k] = (μ_q²) @ inv_sigma_p.T → (B, N, V)
+        quad_q = torch.matmul(mu_q ** 2, inv_sigma_p.T)     # (B, N, V)
+        #   b) Σ_k μ_p[v,k]² / σ_p[v,k] → (V,) broadcast to (1, 1, V)
+        quad_p = (mu_p ** 2 * inv_sigma_p).sum(dim=-1)      # (V,)
+        #   c) cross term: 2 · μ_q @ (μ_p / σ_p).T → (B, N, V)
+        cross = 2.0 * torch.matmul(mu_q, (mu_p * inv_sigma_p).T)  # (B, N, V)
+
+        mahal_term = quad_q + quad_p.unsqueeze(0).unsqueeze(0) - cross  # (B, N, V)
+
+        # Term 3: -K (constant, cancels in softmax but keep for correct KL)
+
+        # Term 4: log det ratio = Σ_k log(σ_p[v,k]) - Σ_k log(σ_q[k])
+        log_sigma_p_sum = torch.log(sigma_p_safe).sum(dim=-1)  # (V,)
+        log_sigma_q_sum = torch.log(sigma_q_safe).sum(dim=-1)  # (B, N)
+        log_det_term = (log_sigma_p_sum.unsqueeze(0).unsqueeze(0)
+                        - log_sigma_q_sum.unsqueeze(-1))        # (B, N, V)
+
+        # KL(q || π_v) = 0.5 * (trace + mahal - K + log_det)
+        kl_total = 0.5 * (trace_term + mahal_term - K + log_det_term)  # (B, N, V)
+
+        # Convert to logits: -KL/τ
         logits = -kl_total / tau  # (B, N, V)
 
         return logits
