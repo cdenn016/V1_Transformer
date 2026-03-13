@@ -310,6 +310,14 @@ This is a **symmetry-based prior** implementing compression geometrically.
 **Key insight**: Emergent block structure in β_ij reveals which tokens carry redundant information about the target and can be safely merged. The dynamics discovers the optimal compression automatically.
 
 
+## Future Work / TODO
 
+### Parameter Sharing for Covariance and Gauge Frames
+Currently each token type c ∈ {1, ..., V} has its own learned prior (μ_p^c, Σ_p^c, φ_c). With diagonal covariance this is V × K parameters for Σ alone. Many rare tokens get insufficient gradient signal to learn meaningful per-token covariances. Options to explore:
 
+- **Low-rank covariance**: Σ_p^c = diag(d_c) + L_c L_c^T where L_c ∈ ℝ^{K × r} with r ≪ K. Reduces per-token covariance parameters from K² (full) or K (diagonal) to K + Kr while capturing dominant structure.
+- **Frequency-band sharing**: Partition vocabulary by frequency (e.g., top-1K, 1K-10K, 10K-50K). Tokens within each band share Σ_p and/or φ; means μ_p stay per-token.
+- **Learned-cluster sharing**: Initialize M prototype covariances {Σ_1, ..., Σ_M}. Each token has soft assignment w_c ∈ Δ^M with effective Σ_p^c = Σ_m w_cm Σ_m. Reduces to M × K + V × M parameters.
+
+Goal: reduce parameter overhead relative to standard transformer baselines while preserving gauge-theoretic structure. This is especially relevant for fair parameter-count comparisons in the paper.
 
