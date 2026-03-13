@@ -196,7 +196,7 @@ SEED = 6
 VFE_EM_CONFIG = {
     # Model architecture
     'vocab_size': 50257,          # Will be overridden by tokenizer
-    'embed_dim': 90,              # Embedding dimension K
+    'embed_dim': 10,              # Embedding dimension K
     'n_layers': 1,                # Transformer depth
     'hidden_dim': 508,            # Only used if ffn_mode='learned'
     'max_seq_len': 128,           # Context length N
@@ -209,10 +209,10 @@ VFE_EM_CONFIG = {
     'deq_neumann_terms': 0,
 
     # Training
-    'batch_size': 16,
+    'batch_size': 64,
     'num_workers': 10,            #CPU workers 8--12
     'epochs': None,               # Set to 1-3 for WikiText-2, None for WikiText-103 (use max_steps)
-    'max_steps': 60000,           # ~105% coverage on WikiText-103
+    'max_steps': 15000,           # ~105% coverage on WikiText-103
     'warmup_steps': 100,
 
     # VFE transformer settings
@@ -305,7 +305,7 @@ VFE_EM_CONFIG = {
     # =================================================================
     
     'gauge_group': 'GLK',       # 'SO3', 'SON', or 'GLK'
-    'gauge_dim': 15,            # N for SO(N) - only used when gauge_group='SON'
+    'gauge_dim': 10,            # N for SO(N) - only used when gauge_group='SON'
     'gauge_mode': 'learned',    # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j)
                                 # 'trivial': global frame, φ = 0, Ω = I (standard attention)
     
@@ -346,7 +346,7 @@ VFE_EM_CONFIG = {
      # ('ℓ6', 1, 13),
      # ('ℓ7', 1, 15),
       # ('ℓ50', 1, 101),
-      ('fund', 6, 15)  #For SO(8)
+      ('fund', 1, 10)  #For SO(8)
      # ('fund', 10, 5),   # SO(5)
        
      # SO(5) multi-irrep example:
@@ -375,7 +375,7 @@ VFE_EM_CONFIG = {
 
 
     'pos_encoding_scale': 0.3,
-    'use_prior_bank': True,
+    'use_prior_bank': False,
 
 }
 
@@ -436,7 +436,7 @@ def run_test_evaluation(
     test_loader: torch.utils.data.DataLoader,
     device: torch.device,
     vocab_size: int,
-    max_batches: int = 2000,
+    max_batches: int = None,
     config: dict = None,
 ) -> Dict[str, float]:
     """
@@ -2147,4 +2147,3 @@ def main():
 if __name__ == '__main__':
 
     main()
-
