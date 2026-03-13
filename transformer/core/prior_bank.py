@@ -235,20 +235,16 @@ class PriorBank(nn.Module):
 
         p(y = v | q) ∝ exp(-KL(q || π_v) / τ)
 
-        Memory-efficient: avoids (B, N, V, K) intermediates by decomposing
-        KL into matmul-friendly terms. Peak memory is O(B*N*V + V*K).
+        Fused single-matmul implementation. The full diagonal KL is:
 
-        For diagonal Gaussians:
-            KL(q || π_v) = 0.5 * [Σ_k σ_q[k]/σ_p[v,k]
-                                   + (μ_q - μ_p[v])ᵀ diag(1/σ_p[v]) (μ_q - μ_p[v])
-                                   - K
-                                   + Σ_k log(σ_p[v,k]/σ_q[k])]
+            KL(q || π_v) = 0.5 * [tr(Σ_q/Σ_p) + (μ_q-μ_p)ᵀΣ_p⁻¹(μ_q-μ_p)
+                                   - K + log|Σ_p|/|Σ_q|]
 
-        The quadratic term expands as:
-            Σ_k (μ_q[k]² + μ_p[v,k]² - 2·μ_q[k]·μ_p[v,k]) / σ_p[v,k]
-          = (μ_q²/σ_p[v])·1 + (μ_p²/σ_p[v])·1 - 2·(μ_q) · (μ_p/σ_p[v])
-
-        This avoids the (B,N,V,K) broadcast — cross term uses matmul.
+        Key optimizations:
+        1. Fuse trace + quad_q - cross into ONE matmul via concatenation:
+           [σ_q + μ_q², -2μ_q] @ [1/σ_p, μ_p/σ_p]ᵀ  → (B,N,2K) x (2K,V)
+        2. Drop terms constant across V (cancel in softmax): -K, log|Σ_q|
+        3. Combine prior-side constants into single (V,) bias
 
         Args:
             mu_q: (B, N, K) belief means
@@ -271,35 +267,28 @@ class PriorBank(nn.Module):
         sigma_p_safe = sigma_p.clamp(min=variance_floor)    # (V, K)
 
         inv_sigma_p = 1.0 / sigma_p_safe                    # (V, K)
+        mu_p_inv_sigma_p = mu_p * inv_sigma_p               # (V, K)
 
-        # Term 1: tr(Σ_q / Σ_p) = Σ_k σ_q[k] / σ_p[v,k]
-        # = sigma_q @ inv_sigma_p.T  → (B, N, V) via matmul
-        trace_term = torch.matmul(sigma_q_safe, inv_sigma_p.T)  # (B, N, V)
+        # Fused matmul: trace + quad_q - cross in ONE operation
+        # LHS = [σ_q + μ_q², -2·μ_q]         → (B, N, 2K)
+        # RHS = [1/σ_p,  μ_p/σ_p]             → (V, 2K)
+        # LHS @ RHS.T = σ_q·(1/σ_p) + μ_q²·(1/σ_p) - 2·μ_q·(μ_p/σ_p)
+        #             = trace_term + quad_q - cross
+        lhs = torch.cat([sigma_q_safe + mu_q ** 2, -2.0 * mu_q], dim=-1)  # (B, N, 2K)
+        rhs = torch.cat([inv_sigma_p, mu_p_inv_sigma_p], dim=-1)           # (V, 2K)
 
-        # Term 2: quadratic (μ_q - μ_p)ᵀ diag(1/σ_p) (μ_q - μ_p)
-        # Expand as: ‖μ_q‖²_{1/σ_p} + ‖μ_p‖²_{1/σ_p} - 2·μ_q · (μ_p/σ_p)
-        #   a) Σ_k μ_q[k]² / σ_p[v,k] = (μ_q²) @ inv_sigma_p.T → (B, N, V)
-        quad_q = torch.matmul(mu_q ** 2, inv_sigma_p.T)     # (B, N, V)
-        #   b) Σ_k μ_p[v,k]² / σ_p[v,k] → (V,) broadcast to (1, 1, V)
-        quad_p = (mu_p ** 2 * inv_sigma_p).sum(dim=-1)      # (V,)
-        #   c) cross term: 2 · μ_q @ (μ_p / σ_p).T → (B, N, V)
-        cross = 2.0 * torch.matmul(mu_q, (mu_p * inv_sigma_p).T)  # (B, N, V)
+        combined = torch.matmul(lhs, rhs.T)                 # (B, N, V) — single matmul
 
-        mahal_term = quad_q + quad_p.unsqueeze(0).unsqueeze(0) - cross  # (B, N, V)
+        # Prior-side bias (constant across batch): quad_p + log_det_p
+        # quad_p = Σ_k μ_p[v,k]² / σ_p[v,k]
+        # log_det_p = Σ_k log(σ_p[v,k])
+        # Note: -K and -log|Σ_q| are constant across V, cancel in softmax
+        prior_bias = ((mu_p ** 2 * inv_sigma_p).sum(dim=-1)
+                      + torch.log(sigma_p_safe).sum(dim=-1))  # (V,)
 
-        # Term 3: -K (constant, cancels in softmax but keep for correct KL)
-
-        # Term 4: log det ratio = Σ_k log(σ_p[v,k]) - Σ_k log(σ_q[k])
-        log_sigma_p_sum = torch.log(sigma_p_safe).sum(dim=-1)  # (V,)
-        log_sigma_q_sum = torch.log(sigma_q_safe).sum(dim=-1)  # (B, N)
-        log_det_term = (log_sigma_p_sum.unsqueeze(0).unsqueeze(0)
-                        - log_sigma_q_sum.unsqueeze(-1))        # (B, N, V)
-
-        # KL(q || π_v) = 0.5 * (trace + mahal - K + log_det)
-        kl_total = 0.5 * (trace_term + mahal_term - K + log_det_term)  # (B, N, V)
-
-        # Convert to logits: -KL/τ
-        logits = -kl_total / tau  # (B, N, V)
+        # logits = -KL/τ ≈ -0.5/τ * (combined + prior_bias)
+        # (dropping softmax-invariant terms -K and log|Σ_q|)
+        logits = -0.5 / tau * (combined + prior_bias.unsqueeze(0).unsqueeze(0))
 
         return logits
 
