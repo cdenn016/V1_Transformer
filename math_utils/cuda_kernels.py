@@ -368,13 +368,14 @@ if CUPY_AVAILABLE:
 
     def _batch_matrix_exp_cupy(X: cp.ndarray, order: int = 8) -> cp.ndarray:
         """
-        Batch matrix exponential via Taylor series - GPU.
+        Batch matrix exponential via Taylor series with scaling-and-squaring - GPU.
 
-        exp(X) = I + X + X^2/2! + X^3/3! + ...
+        Uses scaling-and-squaring: exp(X) = exp(X/2^s)^{2^s}
+        where s is chosen so that ||X/2^s|| <= 1, ensuring Taylor convergence.
 
         Args:
             X: Batch of matrices (N, K, K)
-            order: Taylor series order
+            order: Taylor series order for the scaled matrix
 
         Returns:
             exp_X: (N, K, K)
@@ -382,14 +383,30 @@ if CUPY_AVAILABLE:
         N, K, _ = X.shape
         I = cp.eye(K, dtype=X.dtype)
 
+        # Scaling: find s such that ||X / 2^s||_F <= 1 for all matrices
+        norms = cp.sqrt((X * X).sum(axis=(-2, -1)))  # Frobenius norms (N,)
+        max_norm = float(cp.max(norms))
+        s = max(0, int(cp.ceil(cp.log2(max_norm + 1e-8)))) if max_norm > 1.0 else 0
+
+        # Scale down
+        if s > 0:
+            X_scaled = X / (2 ** s)
+        else:
+            X_scaled = X
+
+        # Taylor series on the scaled matrix
         result = cp.tile(I, (N, 1, 1))
-        X_power = X.copy()
+        X_power = X_scaled.copy()
         factorial = 1.0
 
         for n in range(1, order + 1):
             factorial *= n
             result = result + X_power / factorial
-            X_power = cp.matmul(X_power, X)
+            X_power = cp.matmul(X_power, X_scaled)
+
+        # Squaring: exp(X) = exp(X/2^s)^{2^s}
+        for _ in range(s):
+            result = cp.matmul(result, result)
 
         return result
 

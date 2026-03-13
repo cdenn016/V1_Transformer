@@ -490,17 +490,39 @@ def so3_log_torch(R: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     v_z = (skew[..., 1, 0] - skew[..., 0, 1]) / 2.0
     vex_skew = torch.stack([v_x, v_y, v_z], dim=-1)  # (..., 3)
 
-    # Coefficient: θ / (2 sin θ), handle small angles
+    # Coefficient: θ / (2 sin θ), handle small angles and near-pi
     sin_theta = torch.sin(theta)
     # For small θ: θ/(2sinθ) ≈ 1/2 + θ²/12
     small_angle = theta < eps
+    # For θ near π: sin(θ) → 0, vex(R - R^T) → 0, need special handling
+    near_pi = theta > (3.141592653589793 - 0.01)
+
     coeff = torch.where(
         small_angle,
         0.5 + theta**2 / 12.0,
         theta / (2.0 * sin_theta + eps)
     )
 
+    # Standard formula works for most angles
     phi = coeff.unsqueeze(-1) * vex_skew
+
+    # Near θ=π: extract axis from R + I (the column with largest norm)
+    if near_pi.any():
+        RpI = R + torch.eye(3, device=R.device, dtype=R.dtype)  # (..., 3, 3)
+        # Find column with largest norm for each matrix
+        col_norms = RpI.norm(dim=-2)  # (..., 3)
+        best_col = col_norms.argmax(dim=-1)  # (...)
+        # Gather the best column
+        idx = best_col.unsqueeze(-1).unsqueeze(-1).expand(*best_col.shape, 3, 1)
+        axis = torch.gather(RpI, dim=-1, index=idx).squeeze(-1)  # (..., 3)
+        axis = axis / (axis.norm(dim=-1, keepdim=True) + 1e-12)
+        # Sign convention: ensure consistency with vex direction
+        # dot product with vex_skew determines sign
+        dot = (axis * vex_skew).sum(dim=-1, keepdim=True)
+        axis = torch.where(dot >= 0, axis, -axis)
+        phi_pi = theta.unsqueeze(-1) * axis
+        phi = torch.where(near_pi.unsqueeze(-1), phi_pi, phi)
+
     return phi
 
 

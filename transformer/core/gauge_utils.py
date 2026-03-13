@@ -69,3 +69,52 @@ def stable_matrix_exp_pair(
             exp_pos = torch.linalg.matrix_exp(matrix_f32).to(orig_dtype)
             exp_neg = torch.linalg.matrix_exp(-matrix_f32).to(orig_dtype)
     return exp_pos, exp_neg
+
+
+def newton_schulz_orthogonalize(
+    X: torch.Tensor,
+    n_iters: int = 5,
+    tol: float = 1e-6,
+) -> torch.Tensor:
+    """Project a matrix to SO(K) via Newton-Schulz iteration.
+
+    The iteration X_{k+1} = X_k @ (3I - X_k^T X_k) / 2 converges to the
+    nearest orthogonal matrix when all singular values of X_0 are in (0, √3).
+
+    For matrices with singular values outside this basin, we first rescale
+    by the largest singular value estimate (Frobenius norm / √K) to bring
+    the iterate into the convergence basin.
+
+    Args:
+        X: (..., K, K) matrices to orthogonalize.
+        n_iters: Maximum Newton-Schulz iterations. Default 5.
+        tol: Early stopping tolerance on ||X^T X - I||_F. Default 1e-6.
+
+    Returns:
+        Orthogonalized matrices (..., K, K), approximately in O(K).
+    """
+    K = X.shape[-1]
+    eye = torch.eye(K, device=X.device, dtype=X.dtype)
+
+    # Rescale to bring singular values near 1 (convergence basin: (0, √3)).
+    # Frobenius norm / sqrt(K) estimates the RMS singular value.
+    frob = X.norm(dim=(-2, -1), keepdim=True).clamp(min=1e-8)
+    rms_sv = frob / (K ** 0.5)
+    # Only rescale if RMS singular value > 1.5 (well inside basin if near 1)
+    needs_rescale = (rms_sv > 1.5).squeeze(-1).squeeze(-1)
+    if needs_rescale.any():
+        X = torch.where(
+            needs_rescale[..., None, None],
+            X / rms_sv,
+            X,
+        )
+
+    for _ in range(n_iters):
+        XtX = X.transpose(-1, -2) @ X
+        deviation = XtX - eye
+        dev_norm = deviation.norm(dim=(-2, -1))
+        if (dev_norm < tol).all():
+            break
+        X = X @ ((3.0 * eye - XtX) / 2.0)
+
+    return X
