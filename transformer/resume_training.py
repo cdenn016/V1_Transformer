@@ -342,7 +342,6 @@ def resume_training():
         'tie_embeddings': True,
         'gauge_group': 'SO3',
         'gauge_dim': 3,
-        'use_multi_irrep': False,
     }
     for key, default in model_defaults.items():
         if key not in config:
