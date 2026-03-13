@@ -110,8 +110,7 @@ class GaugeTransformerBlock(nn.Module):
         gauge_mode: str = 'learned',  # 'learned' or 'trivial' (Ω = I, no gauge transport)
         # Self-attention masking (prevents attention collapse)
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
-        # Sigma softmax coupling: include ∂β/∂Σ term in sigma gradient
-        sigma_softmax_coupling: bool = False,
+
         # Gauge group control
         enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
         # Bayesian precision (learned prior self-coupling)
@@ -127,9 +126,7 @@ class GaugeTransformerBlock(nn.Module):
         rope_base: float = 10000.0,  # RoPE frequency base
         # Phi gradient preconditioning
         phi_natural_gradient: str = 'clip',  # 'clip'|'cartan'|'killing'|'pullback'
-        # Ablation toggles
-        use_exp_map_retraction: bool = True,  # True=exp map, False=linear+Cholesky
-        use_full_nat_grad: bool = True,       # True=Σ@∇@Σ, False=diag approx
+
         # DEQ implicit differentiation
         use_deq: bool = False,                # Use DEQ backward for E-step fixed point
         deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
@@ -265,17 +262,13 @@ mask_self_attention: If True, mask out diagonal (no self-attention).
             chunk_size=ffn_chunk_size,
             # Self-attention masking (same as attention)
             mask_self_attention=mask_self_attention,
-            # Sigma softmax coupling
-            sigma_softmax_coupling=sigma_softmax_coupling,
+            # Sigma softmax coupling (always enabled)
             # Bayesian precision
             learnable_alpha=ffn_learnable_alpha,
             # Multi-head VFE
             multihead_vfe=multihead_vfe,
             # Phi gradient preconditioning
             phi_natural_gradient=phi_natural_gradient,
-            # Ablation toggles
-            use_exp_map_retraction=use_exp_map_retraction,
-            use_full_nat_grad=use_full_nat_grad,
             # DEQ implicit differentiation
             use_deq=use_deq,
             deq_neumann_terms=deq_neumann_terms,
@@ -476,8 +469,7 @@ class GaugeTransformerStack(nn.Module):
         gauge_mode: str = 'learned',  # 'learned' or 'trivial' (Ω = I, no gauge transport)
         # Self-attention masking (prevents attention collapse)
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
-        # Sigma softmax coupling: include ∂β/∂Σ term in sigma gradient
-        sigma_softmax_coupling: bool = False,
+
         # Gauge group control
         enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
         # Bayesian precision (learned prior self-coupling)
@@ -493,9 +485,7 @@ class GaugeTransformerStack(nn.Module):
         rope_base: float = 10000.0,  # RoPE frequency base
         # Phi gradient preconditioning
         phi_natural_gradient: str = 'clip',  # 'clip'|'cartan'|'killing'|'pullback'
-        # Ablation toggles
-        use_exp_map_retraction: bool = True,  # True=exp map, False=linear+Cholesky
-        use_full_nat_grad: bool = True,       # True=Σ@∇@Σ, False=diag approx
+
         # DEQ implicit differentiation
         use_deq: bool = False,                # Use DEQ backward for E-step fixed point
         deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
@@ -579,8 +569,7 @@ use_layernorm: If True, apply LayerNorm (default False for pure VFE)
                 gauge_mode=gauge_mode,
                 # Self-attention masking
                 mask_self_attention=mask_self_attention,
-                # Sigma softmax coupling
-                sigma_softmax_coupling=sigma_softmax_coupling,
+                # Sigma softmax coupling (always enabled)
                 # Gauge group control
                 enforce_orthogonal=enforce_orthogonal,
                 # Bayesian precision
@@ -596,9 +585,6 @@ use_layernorm: If True, apply LayerNorm (default False for pure VFE)
                 rope_base=rope_base,
                 # Phi gradient preconditioning
                 phi_natural_gradient=phi_natural_gradient,
-                # Ablation toggles
-                use_exp_map_retraction=use_exp_map_retraction,
-                use_full_nat_grad=use_full_nat_grad,
                 # DEQ implicit differentiation
                 use_deq=use_deq,
                 deq_neumann_terms=deq_neumann_terms,

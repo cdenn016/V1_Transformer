@@ -263,7 +263,6 @@ def _compute_vfe_gradients_block_diagonal(
     chunk_size: Optional[int],
     compute_sigma_align_grad: bool,
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
-    sigma_softmax_coupling: bool = False,  # Include ∂β/∂Σ softmax coupling in sigma gradient
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Block-diagonal VFE gradient computation with optional chunking.
@@ -437,9 +436,9 @@ def _compute_vfe_gradients_block_diagonal(
     grad_mu = grad_mu + grad_mu_align
     grad_sigma = grad_sigma + grad_sigma_align
 
-    # NOTE: sigma_softmax_coupling (∂β/∂Σ term) is not implemented for the
-    # block-diagonal full covariance path because it would require storing
-    # (B, N, N, K, K) per-pair sigma gradients, defeating the memory savings.
+    # NOTE: ∂β/∂Σ softmax coupling is not implemented for the block-diagonal
+    # full covariance path because it would require storing (B, N, N, K, K)
+    # per-pair sigma gradients, defeating the memory savings.
     # Use the main compute_vfe_gradients_gpu path for full sigma softmax coupling.
 
     return grad_mu, grad_sigma
@@ -460,7 +459,6 @@ def _compute_vfe_gradients_block_diagonal_diag(
     irrep_dims: List[int],
     compute_sigma_align_grad: bool,
     enforce_orthogonal: bool = False,
-    sigma_softmax_coupling: bool = False,  # Include ∂β/∂Σ softmax coupling in sigma gradient
     alpha_c0: Optional[torch.Tensor] = None,  # (K,) for product-rule correction
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
@@ -532,7 +530,7 @@ def _compute_vfe_gradients_block_diagonal_diag(
     grad_sigma_align = torch.zeros_like(sigma_q)
     # Accumulator for sigma softmax coupling (same memory cost as grad_kl_per_pair_full)
     grad_sigma_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=dtype) if (
-        sigma_softmax_coupling and compute_sigma_align_grad) else None
+        compute_sigma_align_grad) else None
 
     # Process each irrep block
     block_start = 0
@@ -634,7 +632,6 @@ def _compute_vfe_gradients_chunked(
     chunk_size: int,
     compute_sigma_align_grad: bool,
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
-    sigma_softmax_coupling: bool = False,  # Include ∂β/∂Σ softmax coupling in sigma gradient
     alpha_c0: Optional[torch.Tensor] = None,  # (K,) for product-rule correction
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
@@ -702,7 +699,7 @@ def _compute_vfe_gradients_chunked(
     # Pass 1: Accumulate avg_grad (= Σ_j β_ij ∂KL_ij/∂μ_i) and per-chunk KL/grad_kl
     # Pass 2: Compute softmax coupling with the correct (full) avg_grad
 
-    do_sigma_softmax = sigma_softmax_coupling and compute_sigma_align_grad
+    do_sigma_softmax = compute_sigma_align_grad
 
     for i_start in range(0, N, chunk_size):
         i_end = min(i_start + chunk_size, N)
@@ -830,7 +827,6 @@ def compute_vfe_gradients_gpu(
     alpha_c0: Optional[torch.Tensor] = None,  # (K,) softplus(raw_c0) for product-rule correction when alpha is learnable
     cached_transport: Optional[dict] = None,  # Precomputed transport operators
     compute_sigma_align_grad: bool = True,  # Compute sigma gradient from alignment term
-    sigma_softmax_coupling: bool = False,  # Include ∂β/∂Σ softmax coupling in sigma gradient
     # Memory-efficient options (NEW!)
     irrep_dims: Optional[List[int]] = None,  # Block dimensions for block-diagonal processing
     chunk_size: Optional[int] = None,  # Chunk size for memory-efficient processing
@@ -848,6 +844,9 @@ def compute_vfe_gradients_gpu(
     Gradients computed:
     1. Self-coupling: ∂/∂μ_q [α · KL(q||p)]
     2. Belief alignment: ∂/∂μ_q [λ · Σ_j β_ij · KL(q_i || Ω_ij q_j)]
+
+    The ∂β/∂Σ softmax coupling term is always included:
+        ∂F/∂Σ_i = Σ_j β_ij · ∂KL_ij/∂Σ_i + Σ_j KL_ij · ∂β_ij/∂Σ_i
 
     Args:
         mu_q: Belief means (B, N, K)
@@ -868,10 +867,6 @@ def compute_vfe_gradients_gpu(
                                   This is the theoretically correct gradient:
                                     ∂KL/∂Σ_q = 0.5 * (Σ_transported^{-1} - Σ_q^{-1})
                                   Set to False for legacy behavior (zero sigma alignment gradient).
-        sigma_softmax_coupling: If True, include the ∂β/∂Σ softmax coupling term:
-                               ∂F/∂Σ_i = Σ_j β_ij · ∂KL_ij/∂Σ_i + Σ_j KL_ij · ∂β_ij/∂Σ_i
-                               where ∂β_ij/∂Σ_i = -β_ij/κ · [∂KL_ij/∂Σ_i - Σ_k β_ik · ∂KL_ik/∂Σ_i].
-                               Default False for backward compatibility. Requires compute_sigma_align_grad=True.
         irrep_dims: Optional list of block dimensions for memory-efficient block-diagonal processing.
                    When provided, processes each irrep block separately to reduce memory from
                    O(N²K²) to O(N² × max(dᵢ²)).
@@ -901,7 +896,7 @@ def compute_vfe_gradients_gpu(
         return _compute_vfe_gradients_block_diagonal(
             mu_q, sigma_q, mu_p, sigma_p, beta, phi, generators,
             alpha, lambda_belief, kappa, eps, irrep_dims, chunk_size,
-            compute_sigma_align_grad, enforce_orthogonal, sigma_softmax_coupling
+            compute_sigma_align_grad, enforce_orthogonal
         )
 
     # =================================================================
@@ -911,7 +906,7 @@ def compute_vfe_gradients_gpu(
         return _compute_vfe_gradients_block_diagonal_diag(
             mu_q, sigma_q, mu_p, sigma_p, beta, phi, generators,
             alpha, lambda_belief, kappa, eps, irrep_dims,
-            compute_sigma_align_grad, enforce_orthogonal, sigma_softmax_coupling,
+            compute_sigma_align_grad, enforce_orthogonal,
             alpha_c0=alpha_c0,
         )
 
@@ -922,7 +917,7 @@ def compute_vfe_gradients_gpu(
         return _compute_vfe_gradients_chunked(
             mu_q, sigma_q, mu_p, sigma_p, beta, phi, generators,
             alpha, lambda_belief, kappa, eps, chunk_size,
-            compute_sigma_align_grad, enforce_orthogonal, sigma_softmax_coupling,
+            compute_sigma_align_grad, enforce_orthogonal,
             alpha_c0=alpha_c0,
         )
 
@@ -1100,14 +1095,11 @@ def compute_vfe_gradients_gpu(
             # Softmax coupling: Σ_j KL_ij · ∂β_ij/∂σ_i (analogous to μ coupling)
             # ∂β_ij/∂σ_i = -β_ij/κ · [∂KL_ij/∂σ_i - Σ_k β_ik · ∂KL_ik/∂σ_i]
             #            = β_ij/κ · [avg_sigma_grad - ∂KL_ij/∂σ_i]
-            if sigma_softmax_coupling:
-                avg_sigma_grad = torch.einsum('bij,bijk->bik', beta, grad_sigma_per_pair)  # (B, N, K)
-                sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair  # (B, N, N, K)
-                d_beta_d_sigma = beta.unsqueeze(-1) * sigma_grad_deviation / kappa_scaled  # (B, N, N, K)
-                grad_sigma_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_sigma)  # (B, N, K)
-                grad_sigma_align = grad_sigma_direct + grad_sigma_softmax
-            else:
-                grad_sigma_align = grad_sigma_direct
+            avg_sigma_grad = torch.einsum('bij,bijk->bik', beta, grad_sigma_per_pair)  # (B, N, K)
+            sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair  # (B, N, N, K)
+            d_beta_d_sigma = beta.unsqueeze(-1) * sigma_grad_deviation / kappa_scaled  # (B, N, N, K)
+            grad_sigma_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_sigma)  # (B, N, K)
+            grad_sigma_align = grad_sigma_direct + grad_sigma_softmax
         else:
             # Simplified: no sigma gradient from alignment (legacy behavior)
             grad_sigma_align = torch.zeros_like(sigma_q)
@@ -1218,15 +1210,12 @@ def compute_vfe_gradients_gpu(
             # Direct term: Σ_j β_ij * ∂KL_ij/∂Σ_i
             grad_sigma_direct = lambda_belief * torch.einsum('bij,bijkl->bikl', beta, grad_sigma_per_pair)  # (B, N, K, K)
 
-            # Softmax coupling for full covariance
-            if sigma_softmax_coupling:
-                avg_sigma_grad = torch.einsum('bij,bijkl->bikl', beta, grad_sigma_per_pair)  # (B, N, K, K)
-                sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair  # (B, N, N, K, K)
-                d_beta_d_sigma = beta.unsqueeze(-1).unsqueeze(-1) * sigma_grad_deviation / kappa_scaled  # (B, N, N, K, K)
-                grad_sigma_softmax = lambda_belief * torch.einsum('bij,bijkl->bikl', kl_values, d_beta_d_sigma)  # (B, N, K, K)
-                grad_sigma_align = grad_sigma_direct + grad_sigma_softmax
-            else:
-                grad_sigma_align = grad_sigma_direct
+            # Softmax coupling for full covariance (always enabled)
+            avg_sigma_grad = torch.einsum('bij,bijkl->bikl', beta, grad_sigma_per_pair)  # (B, N, K, K)
+            sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair  # (B, N, N, K, K)
+            d_beta_d_sigma = beta.unsqueeze(-1).unsqueeze(-1) * sigma_grad_deviation / kappa_scaled  # (B, N, N, K, K)
+            grad_sigma_softmax = lambda_belief * torch.einsum('bij,bijkl->bikl', kl_values, d_beta_d_sigma)  # (B, N, K, K)
+            grad_sigma_align = grad_sigma_direct + grad_sigma_softmax
         else:
             # Simplified: no sigma gradient from alignment (legacy behavior)
             grad_sigma_align = torch.zeros_like(sigma_q)
@@ -1246,7 +1235,6 @@ def compute_natural_gradient_gpu(
     grad_sigma: torch.Tensor,  # (B, N, K) or (B, N, K, K)
     sigma_q: torch.Tensor,     # (B, N, K) or (B, N, K, K)
     eps: float = 1e-6,
-    use_full_nat_grad: bool = True,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Project Euclidean gradients to natural gradients using Fisher metric.
@@ -1286,13 +1274,8 @@ def compute_natural_gradient_gpu(
         else:
             # Full covariance: matrix multiplication
             nat_grad_mu = torch.einsum('bnij,bnj->bni', sigma_q, grad_mu)
-            if use_full_nat_grad:
-                # Full Fisher natural gradient: δΣ = 0.5 * Σ @ ∇_Σ @ Σ (443041f)
-                nat_grad_sigma = 0.5 * torch.einsum('bnij,bnjk,bnkl->bnil', sigma_q, grad_sigma, sigma_q)
-            else:
-                # Diagonal approximation (original, pre-443041f)
-                sigma_diag = torch.diagonal(sigma_q, dim1=-2, dim2=-1).clone()
-                nat_grad_sigma = 0.5 * sigma_diag.unsqueeze(-1) * sigma_diag.unsqueeze(-2) * grad_sigma
+            # Full Fisher natural gradient: δΣ = 0.5 * Σ @ ∇_Σ @ Σ
+            nat_grad_sigma = 0.5 * torch.einsum('bnij,bnjk,bnkl->bnil', sigma_q, grad_sigma, sigma_q)
 
     return nat_grad_mu.to(orig_dtype), nat_grad_sigma.to(orig_dtype)
 
@@ -1307,14 +1290,11 @@ def retract_spd_torch(
     step_size: float = 1.0,
     trust_region: float = 2.0,
     eps: float = 1e-6,
-    use_exp_map: bool = True,
 ) -> torch.Tensor:
     """
     SPD-preserving retraction for covariance matrices (PyTorch GPU).
 
-    Two modes controlled by use_exp_map:
-      True  (default): Affine-invariant exponential map on SPD manifold (443041f)
-      False (original): Diagonal-whitened linear update + Cholesky SPD check
+    Uses affine-invariant exponential map on SPD manifold.
 
     Args:
         Sigma: SPD matrices, shape (B, N, K, K) or (B*N, K, K)
@@ -1322,7 +1302,6 @@ def retract_spd_torch(
         step_size: Learning rate τ
         trust_region: Max Frobenius norm of whitened tangent
         eps: Regularization floor for numerical stability
-        use_exp_map: If True, use exp map retraction; if False, use linear update
 
     Returns:
         Sigma_new: SPD matrices, same shape as Sigma
@@ -1347,77 +1326,37 @@ def retract_spd_torch(
         Sigma = 0.5 * (Sigma + Sigma.transpose(-1, -2))
         delta_Sigma = 0.5 * (delta_Sigma + delta_Sigma.transpose(-1, -2))
 
-        if use_exp_map:
-            # === Exponential map retraction (443041f) ===
-            eigenvalues, eigenvectors = torch.linalg.eigh(Sigma)
-            eigenvalues = eigenvalues.clamp(min=eps)
+        # Exponential map retraction on SPD manifold
+        eigenvalues, eigenvectors = torch.linalg.eigh(Sigma)
+        eigenvalues = eigenvalues.clamp(min=eps)
 
-            sqrt_eig = torch.sqrt(eigenvalues)
-            inv_sqrt_eig = 1.0 / sqrt_eig
+        sqrt_eig = torch.sqrt(eigenvalues)
+        inv_sqrt_eig = 1.0 / sqrt_eig
 
-            Sigma_sqrt = eigenvectors * sqrt_eig.unsqueeze(-2) @ eigenvectors.transpose(-1, -2)
-            Sigma_inv_sqrt = eigenvectors * inv_sqrt_eig.unsqueeze(-2) @ eigenvectors.transpose(-1, -2)
+        Sigma_sqrt = eigenvectors * sqrt_eig.unsqueeze(-2) @ eigenvectors.transpose(-1, -2)
+        Sigma_inv_sqrt = eigenvectors * inv_sqrt_eig.unsqueeze(-2) @ eigenvectors.transpose(-1, -2)
 
-            # Whitened tangent: R = Σ^{-1/2} (η · ΔΣ) Σ^{-1/2}
-            R = Sigma_inv_sqrt @ (step_size * delta_Sigma) @ Sigma_inv_sqrt
-            R = 0.5 * (R + R.transpose(-1, -2))
+        # Whitened tangent: R = Σ^{-1/2} (η · ΔΣ) Σ^{-1/2}
+        R = Sigma_inv_sqrt @ (step_size * delta_Sigma) @ Sigma_inv_sqrt
+        R = 0.5 * (R + R.transpose(-1, -2))
 
-            if trust_region is not None and trust_region > 0:
-                R_norm = torch.linalg.norm(R, ord='fro', dim=(-2, -1), keepdim=True)
-                scale = torch.clamp(trust_region / (R_norm + eps), max=1.0)
-                R = R * scale
+        if trust_region is not None and trust_region > 0:
+            R_norm = torch.linalg.norm(R, ord='fro', dim=(-2, -1), keepdim=True)
+            scale = torch.clamp(trust_region / (R_norm + eps), max=1.0)
+            R = R * scale
 
-            # exp(R) via eigendecomposition
-            R_eigenvalues, R_eigenvectors = torch.linalg.eigh(R)
-            R_eigenvalues = R_eigenvalues.clamp(-50.0, 50.0)
-            exp_R = R_eigenvectors * torch.exp(R_eigenvalues).unsqueeze(-2) @ R_eigenvectors.transpose(-1, -2)
+        # exp(R) via eigendecomposition
+        R_eigenvalues, R_eigenvectors = torch.linalg.eigh(R)
+        R_eigenvalues = R_eigenvalues.clamp(-50.0, 50.0)
+        exp_R = R_eigenvectors * torch.exp(R_eigenvalues).unsqueeze(-2) @ R_eigenvectors.transpose(-1, -2)
 
-            Sigma_new = Sigma_sqrt @ exp_R @ Sigma_sqrt
-            Sigma_new = 0.5 * (Sigma_new + Sigma_new.transpose(-1, -2))
+        Sigma_new = Sigma_sqrt @ exp_R @ Sigma_sqrt
+        Sigma_new = 0.5 * (Sigma_new + Sigma_new.transpose(-1, -2))
 
-            # Spectral floor
-            eig_new, vec_new = torch.linalg.eigh(Sigma_new)
-            eig_new = eig_new.clamp(min=eps)
-            Sigma_new = vec_new * eig_new.unsqueeze(-2) @ vec_new.transpose(-1, -2)
-        else:
-            # === Linear update with diagonal whitening (original, pre-443041f) ===
-            diag_sigma = torch.diagonal(Sigma, dim1=-2, dim2=-1).clone()
-            diag_sigma = diag_sigma.clamp(min=eps)
-            inv_sqrt_diag = 1.0 / torch.sqrt(diag_sigma)
-
-            # Diagonal-whitened tangent: B ≈ D^{-1/2} ΔΣ D^{-1/2}
-            B = (inv_sqrt_diag.unsqueeze(-1) * delta_Sigma) * inv_sqrt_diag.unsqueeze(-2)
-
-            if trust_region is not None and trust_region > 0:
-                B_norm = torch.linalg.norm(B, ord='fro', dim=(-2, -1), keepdim=True)
-                scale = torch.clamp(trust_region / (B_norm + eps), max=1.0)
-                B = B * scale
-
-            # Un-whiten: ΔΣ_scaled = D^{1/2} B D^{1/2}
-            sqrt_diag = torch.sqrt(diag_sigma)
-            delta_scaled = (sqrt_diag.unsqueeze(-1) * B) * sqrt_diag.unsqueeze(-2)
-
-            # Linear update
-            Sigma_new = Sigma + step_size * delta_scaled
-            Sigma_new = 0.5 * (Sigma_new + Sigma_new.transpose(-1, -2))
-
-            # Ensure SPD via iterative Cholesky regularization
-            eye_K = torch.eye(K, device=device, dtype=Sigma.dtype)
-            diag_mean = torch.diagonal(Sigma_new, dim1=-2, dim2=-1).clone().abs().mean(dim=-1, keepdim=True)
-            base_reg = torch.clamp(diag_mean, min=eps).unsqueeze(-1)
-
-            reg_scales = [eps, 1e-5, 1e-4, 1e-3, 1e-2, 0.1]
-            for reg_scale in reg_scales:
-                Sigma_reg = Sigma_new + (reg_scale * base_reg) * eye_K
-                _, info = torch.linalg.cholesky_ex(Sigma_reg)
-                if (info == 0).all():
-                    Sigma_new = Sigma_reg
-                    break
-                elif reg_scale == reg_scales[-1]:
-                    # Last resort: eigendecomposition floor
-                    eig_new, vec_new = torch.linalg.eigh(Sigma_new)
-                    eig_new = eig_new.clamp(min=eps)
-                    Sigma_new = vec_new * eig_new.unsqueeze(-2) @ vec_new.transpose(-1, -2)
+        # Spectral floor
+        eig_new, vec_new = torch.linalg.eigh(Sigma_new)
+        eig_new = eig_new.clamp(min=eps)
+        Sigma_new = vec_new * eig_new.unsqueeze(-2) @ vec_new.transpose(-1, -2)
 
     Sigma_new = Sigma_new.to(orig_dtype)
 
@@ -1751,7 +1690,6 @@ class VariationalFFNDynamic(nn.Module):
         update_sigma: bool = True, # Update covariances?
         diagonal_covariance: bool = False,  # Use diagonal Σ for efficiency
         compute_sigma_align_grad: bool = True,  # Compute sigma gradient from alignment term
-        sigma_softmax_coupling: bool = False,  # Include ∂β/∂Σ softmax coupling in sigma gradient
         # Phi (gauge frame) evolution via VFE gradients
         update_phi: bool = False,  # If True, update phi via ∂F/∂φ (after E-step loop)
         update_phi_per_iteration: bool = False,  # If True, update phi during EACH E-step iteration
@@ -1770,9 +1708,6 @@ class VariationalFFNDynamic(nn.Module):
         multihead_vfe: bool = False,  # If True, compute separate β_h per irrep block
         # Phi gradient preconditioning mode
         phi_natural_gradient: str = 'clip',  # 'clip'|'cartan'|'killing'|'pullback'
-        # Ablation toggles
-        use_exp_map_retraction: bool = True,  # True=exp map (443041f), False=linear+Cholesky
-        use_full_nat_grad: bool = True,       # True=Σ@∇@Σ (443041f), False=diag approx
         # DEQ implicit differentiation
         use_deq: bool = False,                # Use DEQ backward for E-step fixed point
         deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
@@ -1817,12 +1752,7 @@ class VariationalFFNDynamic(nn.Module):
         self.update_sigma = update_sigma
         self.diagonal_covariance = diagonal_covariance
         self.compute_sigma_align_grad = compute_sigma_align_grad
-        self.sigma_softmax_coupling = sigma_softmax_coupling
         self.gauge_mode = gauge_mode
-
-        # Ablation toggles
-        self.use_exp_map_retraction = use_exp_map_retraction
-        self.use_full_nat_grad = use_full_nat_grad
 
         # Phi evolution via VFE gradients (principled approach)
         self.update_phi = update_phi
@@ -2094,7 +2024,7 @@ class VariationalFFNDynamic(nn.Module):
                         kappa=kappa_h, eps=eps,
                         alpha_c0=c0_h,
                         compute_sigma_align_grad=self.compute_sigma_align_grad,
-                        sigma_softmax_coupling=self.sigma_softmax_coupling,
+
                     )
                     grad_mu[:, :, block_start:block_end] = grad_mu_h
                     if is_diagonal:
@@ -2124,7 +2054,7 @@ class VariationalFFNDynamic(nn.Module):
                     alpha_c0=_alpha_c0,
                     cached_transport=cached_transport,
                     compute_sigma_align_grad=self.compute_sigma_align_grad,
-                    sigma_softmax_coupling=self.sigma_softmax_coupling,
+
                     irrep_dims=self.irrep_dims,
                     chunk_size=self.chunk_size,
                 )
@@ -2134,7 +2064,7 @@ class VariationalFFNDynamic(nn.Module):
 
             nat_grad_mu, nat_grad_sigma = compute_natural_gradient_gpu(
                 grad_mu, grad_sigma, sigma_in, eps=eps,
-                use_full_nat_grad=self.use_full_nat_grad,
+
             )
 
             # mu update with trust region
@@ -2162,7 +2092,7 @@ class VariationalFFNDynamic(nn.Module):
                     sigma_out = retract_spd_torch(
                         Sigma=sigma_in, delta_Sigma=-nat_grad_sigma,
                         step_size=sigma_lr, trust_region=0.1, eps=eps,
-                        use_exp_map=self.use_exp_map_retraction,
+
                     )
             else:
                 sigma_out = sigma_in
@@ -2411,7 +2341,7 @@ class VariationalFFNDynamic(nn.Module):
                         eps=eps,
                         alpha_c0=c0_h,
                         compute_sigma_align_grad=self.compute_sigma_align_grad,
-                        sigma_softmax_coupling=self.sigma_softmax_coupling,
+
                     )
 
                     grad_mu[:, :, block_start:block_end] = grad_mu_h
@@ -2471,7 +2401,7 @@ class VariationalFFNDynamic(nn.Module):
                     alpha_c0=_alpha_c0,
                     cached_transport=cached_transport,
                     compute_sigma_align_grad=self.compute_sigma_align_grad,
-                    sigma_softmax_coupling=self.sigma_softmax_coupling,
+
                     irrep_dims=self.irrep_dims,
                     chunk_size=self.chunk_size,
                 )
@@ -2503,7 +2433,7 @@ class VariationalFFNDynamic(nn.Module):
             # =================================================================
             nat_grad_mu, nat_grad_sigma = compute_natural_gradient_gpu(
                 grad_mu, grad_sigma, sigma_current, eps=eps,
-                use_full_nat_grad=self.use_full_nat_grad,
+
             )
 
             # =================================================================
@@ -2546,7 +2476,7 @@ class VariationalFFNDynamic(nn.Module):
                         step_size=sigma_lr,
                         trust_region=0.1,  # Max 10% change per iteration
                         eps=eps,
-                        use_exp_map=self.use_exp_map_retraction,
+
                     )
 
             # =============================================================

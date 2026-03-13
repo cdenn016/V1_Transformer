@@ -230,8 +230,6 @@ VFE_EM_CONFIG = {
                                   # When True: φ evolves via ∂F/∂φ at each VFE iteration
                                   # When False: φ only updated via backprop (M-step)
                                   
-    'sigma_softmax_coupling': True,  # Enable ∂β/∂Σ softmax coupling
-    
     'diagonal_covariance': True,
     
     'use_positional_embedding': False,
@@ -259,11 +257,6 @@ VFE_EM_CONFIG = {
     'phi_lr':    0.005,
     'ffn_lr':    0.05 ,
 
-
-    'use_exp_map_retraction': True,  # Try original linear retraction
-    'use_full_nat_grad': True,       # Try diagonal natural gradient
-
-    'detach_sigma_kl':True,          # pass sigma gradients through KL loss
 
 
     # Free energy loss weights (see compute_free_energy_loss in train.py)
@@ -1034,7 +1027,7 @@ class PublicationTrainer(FastTrainer):
                         pad_token_id=self.pad_token_id,
                         use_obs_in_vfe=self.config.use_obs_in_vfe,
                         alpha_phi=self.config.alpha_phi,
-                        detach_sigma_kl=getattr(self.config, 'detach_sigma_kl', True),
+
                     )
             # Scaled backward
             self.scaler.scale(loss).backward()
@@ -1061,7 +1054,6 @@ class PublicationTrainer(FastTrainer):
                     pad_token_id=self.pad_token_id,
                     use_obs_in_vfe=self.config.use_obs_in_vfe,
                     alpha_phi=self.config.alpha_phi,
-                    detach_sigma_kl=getattr(self.config, 'detach_sigma_kl', True),
                 )
             loss.backward()
 
@@ -1805,8 +1797,6 @@ def run_single_experiment(
         log_interval=config['log_interval'],
         eval_interval=config['eval_interval'],
         checkpoint_interval=config['checkpoint_interval'],
-
-        detach_sigma_kl=config['detach_sigma_kl'],   # pass sigma gradients through KL loss
 
         use_wandb=use_wandb,
         checkpoint_dir=exp_checkpoint_dir,
