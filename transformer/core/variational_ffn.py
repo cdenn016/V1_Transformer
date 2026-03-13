@@ -53,7 +53,7 @@ import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
-from transformer.core.gauge_utils import stable_matrix_exp_pair
+from transformer.core.gauge_utils import stable_matrix_exp_pair, newton_schulz_orthogonalize
 
 
 def _safe_spd_inv(M: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -90,7 +90,9 @@ def _safe_spd_inv(M: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
 
         try:
             result = torch.linalg.inv(M_reg)
-        except torch.linalg.LinAlgError:
+        except (torch.linalg.LinAlgError, RuntimeError):
+            # LinAlgError for non-batched singular matrices
+            # RuntimeError for batched tensors with singular elements
             # Fallback: pseudoinverse (always succeeds, handles rank-deficient)
             result = torch.linalg.pinv(M_reg)
 
@@ -295,9 +297,8 @@ def _compute_vfe_gradients_block_diagonal(
         exp_phi_block, exp_neg_phi_block = stable_matrix_exp_pair(phi_matrix_block)
         # Re-orthogonalization for SO(K) if requested
         if enforce_orthogonal and d >= 16:
-            eye_d = torch.eye(d, device=device, dtype=dtype)
-            exp_phi_block = exp_phi_block @ ((3.0 * eye_d - exp_phi_block.transpose(-1, -2) @ exp_phi_block) / 2.0)
-            exp_neg_phi_block = exp_neg_phi_block @ ((3.0 * eye_d - exp_neg_phi_block.transpose(-1, -2) @ exp_neg_phi_block) / 2.0)
+            exp_phi_block = newton_schulz_orthogonalize(exp_phi_block)
+            exp_neg_phi_block = newton_schulz_orthogonalize(exp_neg_phi_block)
         block_exp_phi.append(exp_phi_block)
         block_exp_neg_phi.append(exp_neg_phi_block)
         block_start = block_end
@@ -502,9 +503,8 @@ def _compute_vfe_gradients_block_diagonal_diag(
         phi_matrix_block = torch.einsum('bna,aij->bnij', phi, gen_block)
         exp_phi_block, exp_neg_phi_block = stable_matrix_exp_pair(phi_matrix_block)
         if enforce_orthogonal and d >= 16:
-            eye_d = torch.eye(d, device=device, dtype=dtype)
-            exp_phi_block = exp_phi_block @ ((3.0 * eye_d - exp_phi_block.transpose(-1, -2) @ exp_phi_block) / 2.0)
-            exp_neg_phi_block = exp_neg_phi_block @ ((3.0 * eye_d - exp_neg_phi_block.transpose(-1, -2) @ exp_neg_phi_block) / 2.0)
+            exp_phi_block = newton_schulz_orthogonalize(exp_phi_block)
+            exp_neg_phi_block = newton_schulz_orthogonalize(exp_neg_phi_block)
         block_exp_phi.append(exp_phi_block)
         block_exp_neg_phi.append(exp_neg_phi_block)
         block_start = block_end
@@ -668,9 +668,8 @@ def _compute_vfe_gradients_chunked(
 
     # Re-orthogonalization for SO(K) if requested
     if enforce_orthogonal and K >= 16:
-        eye_K = torch.eye(K, device=device, dtype=dtype)
-        exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
-        exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
+        exp_phi = newton_schulz_orthogonalize(exp_phi)
+        exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
 
     # Accumulators - use non-inplace operations throughout
     grad_mu_direct = torch.zeros_like(mu_q)
@@ -981,9 +980,8 @@ def compute_vfe_gradients_gpu(
 
             # Re-orthogonalization for SO(K) if requested
             if enforce_orthogonal and K >= 16:
-                eye_K = torch.eye(K, device=device, dtype=dtype)
-                exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
-                exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
+                exp_phi = newton_schulz_orthogonalize(exp_phi)
+                exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
 
             # Transport: Ω_ij = exp(φ_i) @ exp(-φ_j)
             # For all pairs: (B, N, N, K, K)
@@ -1099,9 +1097,8 @@ def compute_vfe_gradients_gpu(
 
             # Re-orthogonalization for SO(K) if requested
             if enforce_orthogonal and K >= 16:
-                eye_K = torch.eye(K, device=device, dtype=dtype)
-                exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
-                exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
+                exp_phi = newton_schulz_orthogonalize(exp_phi)
+                exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
 
             Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
 

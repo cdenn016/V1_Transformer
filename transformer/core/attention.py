@@ -38,7 +38,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Tuple, List, Union
 
-from transformer.core.gauge_utils import stable_matrix_exp_pair
+from transformer.core.gauge_utils import stable_matrix_exp_pair, newton_schulz_orthogonalize
 
 # Import our fast math kernels
 try:
@@ -277,9 +277,8 @@ def compute_transport_operators(
     # NOTE: For GL⁺(K), this is NOT required - VFE is invariant under GL(K)!
     # Only enable if you explicitly want SO(K) (e.g., for Haar measure averaging)
     if enforce_orthogonal and K >= 16:
-        eye_K = torch.eye(K, device=device, dtype=dtype)
-        exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
-        exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
+        exp_phi = newton_schulz_orthogonalize(exp_phi)
+        exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
 
     # Full pairwise transport: Ω_ij = exp(φ_i) @ exp(-φ_j)
     Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)  # (B, N, N, K, K)
@@ -760,9 +759,8 @@ def _compute_kl_matrix_torch(
 
             # Re-orthogonalization for SO(K) if requested
             if enforce_orthogonal and K >= 16:
-                eye_K = torch.eye(K, device=device, dtype=dtype)
-                exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
-                exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
+                exp_phi = newton_schulz_orthogonalize(exp_phi)
+                exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
 
             # Omega_ij = exp(φ_i) @ exp(-φ_j)
             # Result: (B, N, N, K, K)
@@ -1082,9 +1080,8 @@ def _compute_kl_matrix_diagonal(
 
         # Re-orthogonalization for SO(K) if requested
         if enforce_orthogonal and K >= 16:
-            eye_K = torch.eye(K, device=mu_q.device, dtype=dtype)
-            exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
-            exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
+            exp_phi = newton_schulz_orthogonalize(exp_phi)
+            exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
 
         # Omega_ij = exp(φ_i) @ exp(-φ_j)
         Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)  # (B, N, N, K, K)
@@ -1144,6 +1141,7 @@ def _compute_kl_matrix_diagonal(
         # Scale ceiling with K: each dimension contributes O(1) to KL.
         kl_ceil = max(100.0, 5.0 * K)
         kl_all = torch.clamp(kl_all, min=0.0, max=kl_ceil)
+        kl_all = kl_all.nan_to_num(nan=0.0, posinf=kl_ceil, neginf=0.0)
 
     return kl_all.to(dtype)
 
@@ -1298,6 +1296,7 @@ def _compute_kl_matrix_chunked(
                 kl_chunk = 0.5 * (trace_term + mahal_term - K + logdet_term)
                 # Clamp KL to [0, 100] for numerical stability
                 kl_chunk = torch.clamp(kl_chunk, min=0.0, max=max(100.0, 5.0 * K))
+                kl_chunk = kl_chunk.nan_to_num(nan=0.0, posinf=max(100.0, 5.0 * K), neginf=0.0)
 
                 col_chunks_list.append(kl_chunk)
 
@@ -1374,9 +1373,8 @@ def _compute_kl_matrix_diagonal_chunked(
 
     # Re-orthogonalization for SO(K) if requested
     if enforce_orthogonal and K >= 16:
-        eye_K = torch.eye(K, device=device, dtype=dtype)
-        exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
-        exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
+        exp_phi = newton_schulz_orthogonalize(exp_phi)
+        exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
 
     # =========================================================================
     # Step 2: Process in chunks, collecting results for non-in-place assembly
@@ -1454,7 +1452,8 @@ def _compute_kl_matrix_diagonal_chunked(
                 kl_chunk = 0.5 * (trace_term + mahal_term - K + logdet_term)
                 # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
                 kl_ceil = max(100.0, 5.0 * K)
-                kl_chunk = torch.clamp(kl_chunk, min=0.0, max=kl_ceil).to(dtype)
+                kl_chunk = torch.clamp(kl_chunk, min=0.0, max=kl_ceil)
+                kl_chunk = kl_chunk.nan_to_num(nan=0.0, posinf=kl_ceil, neginf=0.0).to(dtype)
 
             col_chunks_list.append(kl_chunk)
 
@@ -1576,9 +1575,8 @@ def _compute_kl_matrix_block_diagonal_diag(
         exp_phi_block, exp_neg_phi_block = stable_matrix_exp_pair(phi_matrix_block)
 
         if enforce_orthogonal and d >= 16:
-            eye_d = torch.eye(d, device=device, dtype=dtype)
-            exp_phi_block = exp_phi_block @ ((3.0 * eye_d - exp_phi_block.transpose(-1, -2) @ exp_phi_block) / 2.0)
-            exp_neg_phi_block = exp_neg_phi_block @ ((3.0 * eye_d - exp_neg_phi_block.transpose(-1, -2) @ exp_neg_phi_block) / 2.0)
+            exp_phi_block = newton_schulz_orthogonalize(exp_phi_block)
+            exp_neg_phi_block = newton_schulz_orthogonalize(exp_neg_phi_block)
 
         Omega_block = torch.einsum('bikl,bjlm->bijkm', exp_phi_block, exp_neg_phi_block)
         del phi_matrix_block, exp_phi_block, exp_neg_phi_block
@@ -1604,6 +1602,7 @@ def _compute_kl_matrix_block_diagonal_diag(
 
         kl_block = 0.5 * (trace_term + mahal_term - d + logdet_term)
         kl_block = kl_block.clamp(min=0.0, max=max(100.0, 5.0 * K))
+        kl_block = kl_block.nan_to_num(nan=0.0, posinf=max(100.0, 5.0 * K), neginf=0.0)
         kl_total = kl_total + kl_block
 
         del sigma_j_transported, mu_transported
@@ -1735,8 +1734,9 @@ def _compute_kl_matrix_block_diagonal(
 
             # KL for this block
             kl_block = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
-            # Clamp KL to [0, 100] for numerical stability
+            # Clamp KL to [0, max] and sanitize NaN for numerical stability
             kl_block = torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
+            kl_block = kl_block.nan_to_num(nan=0.0, posinf=max(100.0, 5.0 * K), neginf=0.0)
 
             # ACCUMULATE to total KL (additive decomposition)
             # Use non-in-place addition to preserve autograd graph
@@ -1763,6 +1763,7 @@ def _compute_kl_matrix_block_diagonal(
 
             kl_block = 0.5 * (trace_term + mahal_term - d + logdet_term)
             kl_block = torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
+            kl_block = kl_block.nan_to_num(nan=0.0, posinf=max(100.0, 5.0 * K), neginf=0.0)
             kl_total = kl_total + kl_block
 
         # Cleanup
@@ -1906,7 +1907,9 @@ def _compute_kl_matrix_block_diagonal_chunked(
 
                     # Accumulate block KL (non-in-place to preserve autograd graph)
                     kl_block = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
-                    kl_chunk = kl_chunk + torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
+                    kl_block = torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
+                    kl_block = kl_block.nan_to_num(nan=0.0, posinf=max(100.0, 5.0 * K), neginf=0.0)
+                    kl_chunk = kl_chunk + kl_block
 
                 except RuntimeError:
                     # Cholesky failed - use diagonal KL approximation.
@@ -1928,9 +1931,9 @@ def _compute_kl_matrix_block_diagonal_chunked(
                     ).sum(dim=-1)
 
                     kl_block = 0.5 * (trace_term + mahal_term - d + logdet_term)
-                    kl_chunk = kl_chunk + torch.clamp(
-                        kl_block, min=0.0, max=max(100.0, 5.0 * K)
-                    )
+                    kl_block = torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
+                    kl_block = kl_block.nan_to_num(nan=0.0, posinf=max(100.0, 5.0 * K), neginf=0.0)
+                    kl_chunk = kl_chunk + kl_block
 
                 del sigma_transported, mu_transported
                 block_start = block_end
