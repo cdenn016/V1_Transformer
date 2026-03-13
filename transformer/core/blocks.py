@@ -13,15 +13,14 @@ Standard Architecture, Gauge Mechanism:
 
 But with gauge-theoretic attention:
     (μ, Σ, φ) → Attention(via KL + transport) → (μ', Σ', φ')
-
-Author: Implementation from plan.py
-Date: November 2025
 """
 
 import math
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple, List
+
+from transformer.core.block_config import BlockConfig
 
 # Import our gauge attention
 from transformer.core.attention import IrrepMultiHeadAttention
@@ -39,6 +38,29 @@ except ImportError:
         return None
 
 
+def _infer_gauge_group(generators):
+    """Infer gauge group and dimension from generators shape."""
+    if generators is None:
+        return 'SO3', 3
+
+    n_gen = generators.shape[0]
+    K = generators.shape[1]
+
+    if n_gen == 3:
+        return 'SO3', 3
+    elif n_gen == K * K:
+        return 'GLK', K
+    else:
+        # Check if n_gen matches SO(N): n_gen = N*(N-1)/2
+        disc = 1 + 8 * n_gen
+        sqrt_disc = int(math.sqrt(disc))
+        if sqrt_disc * sqrt_disc == disc:
+            N_candidate = (1 + sqrt_disc) // 2
+            if N_candidate * (N_candidate - 1) // 2 == n_gen:
+                return 'SON', N_candidate
+        return 'GLK', K
+
+
 class GaugeTransformerBlock(nn.Module):
     """
     Single transformer block with gauge-theoretic attention.
@@ -48,13 +70,11 @@ class GaugeTransformerBlock(nn.Module):
            - LayerNorm on means
            - IrrepMultiHeadAttention (KL-based)
            - Residual connection
-           - Dropout
 
         2. Feedforward sublayer:
            - LayerNorm on means
            - VFE-based belief evolution (variational free energy minimization)
            - Residual connection
-           - Dropout
 
     Note: We primarily evolve means (μ), while covariances (Σ) and
           gauge frames (φ) can be evolved or kept fixed depending on mode.
@@ -66,221 +86,87 @@ class GaugeTransformerBlock(nn.Module):
         - No spatial convolutions or position-dependent operations
     """
 
-    def __init__(
-        self,
-        embed_dim: int,
-        irrep_spec: List[Tuple[str, int, int]],
-        hidden_dim: int,
-        kappa_beta: float,
-        evolve_sigma: bool = False,
-        evolve_phi: bool = False,
-        evolve_phi_e_step: bool = False,  # Update φ during E-step iterations (dynamical gauge frames)
-        # Phi evolution parameters (VFE gradient-based, not neural network)
-        phi_lr: float = 0.05,  # Learning rate for phi gradient descent
-        phi_max_norm: float = 3.14159,  # Max phi norm (π radians = 180° rotation)
-        # Variational FFN parameters
-        generators: Optional[torch.Tensor] = None,  # (3, K, K)
-        ffn_mode: str = 'VFE_dynamic',  # VFE_dynamic is the only supported mode
-        ffn_alpha: float = 0.001,
-        ffn_kappa: float = 1.0,
-        ffn_n_iterations: int = 1,
-        ffn_learnable_lr: bool = True,
-        ffn_lambda_belief: float = 1.0,
-        ffn_update_sigma: bool = True,
-        # Diagonal covariance mode
-        diagonal_covariance: bool = False,
-        # Sparse attention
-        attention_pattern: str = 'full',
-        attention_window: int = 64,
-        # Gauge frame dimension
-        phi_dim: int = 3,  # 3 for SO(3), N(N-1)/2 for SO(N)
-        ffn_prior_bank: Optional[nn.Module] = None,  # PriorBank for token-dependent priors
-        ffn_use_prior_bank: bool = False,  # Use PriorBank (token-dependent) vs position-dependent priors
-        # Memory-efficient options
-        ffn_irrep_dims: Optional[List[int]] = None,  # Block dimensions for principled KL decomposition
-        ffn_chunk_size: Optional[int] = None,  # Chunk size for memory-efficient attention
-        # Pure VFE mode: disable ad-hoc transformer components
-        use_layernorm: bool = False,  # Pure VFE: beliefs evolve freely, no normalization
-        use_residual: bool = False,   # Pure VFE: FFN outputs final belief, not delta
-        # ALiBi-style positional bias
-        alibi_slope: Optional[float] = None,  # If set, adds slope*(i-j) to attention logits
-        # Gauge mode
-        gauge_mode: str = 'learned',  # 'learned' or 'trivial' (Ω = I, no gauge transport)
-        # Self-attention masking (prevents attention collapse)
-        mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
-
-        # Gauge group control
-        enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
-        # Bayesian precision (learned prior self-coupling)
-        ffn_learnable_alpha: bool = False,  # If True, use Gamma-Normal conjugate precision
-        # Per-head specialization
-        use_output_projection: bool = False,  # If True, add W_O after multi-head attention
-        # Multi-head VFE: per-block β through VFE iterations
-        multihead_vfe: bool = False,  # If True, VFE_dynamic maintains per-head attention
-        # Cross-head coupling
-        cross_head_perm: Optional[object] = None,  # np.ndarray permutation for super-blocks
-        # RoPE (Rotary Position Embeddings)
-        use_rope: bool = False,  # If True, apply RoPE rotations to μ in attention
-        rope_base: float = 10000.0,  # RoPE frequency base
-        # Phi gradient preconditioning
-        phi_natural_gradient: str = 'clip',  # 'clip'|'cartan'|'killing'|'pullback'
-
-        # DEQ implicit differentiation
-        use_deq: bool = False,                # Use DEQ backward for E-step fixed point
-        deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
-    ):
-        """
-        Initialize gauge transformer block.
-
-        Args:
-            embed_dim: Embedding dimension K
-            irrep_spec: Irrep structure [(label, mult, dim), ...]
-            hidden_dim: FFN hidden dimension (typically 4 × embed_dim)
-            kappa_beta: Temperature for attention
-            evolve_sigma: If True, update covariances via attention and FFN
-            evolve_phi: If True, update gauge frames via FFN
-            attention_pattern: 'full', 'local', or 'sparse' for efficient attention
-            attention_window: Window size for local attention pattern
-            generators: Lie algebra generators (required for VFE mode)
-            ffn_mode: 'VFE_dynamic' - dynamic-β VFE with attention-belief co-evolution
-            ffn_alpha: Prior weight for VFE
-            ffn_kappa: Softmax temperature for attention
-            ffn_n_iterations: VFE inference iterations per forward pass
-            ffn_learnable_lr: Learn step size for variational descent
-            ffn_lambda_belief: Belief alignment weight
-            ffn_update_sigma: Update covariances in FFN
-mask_self_attention: If True, mask out diagonal (no self-attention).
-                                Prevents attention collapse since KL(q_i||q_i)=0 always.
-            ffn_learnable_alpha: If True, use Bayesian precision via Gamma-Normal conjugacy.
-            use_output_projection: If True, add W_O projection after multi-head attention.
-            multihead_vfe: If True, VFE_dynamic maintains per-head attention β_h.
-        """
+    def __init__(self, cfg: BlockConfig):
         super().__init__()
-        self.embed_dim = embed_dim
-        self.hidden_dim = hidden_dim
-        self.evolve_sigma = evolve_sigma
-        self.evolve_phi = evolve_phi
-        self.ffn_mode = ffn_mode
-        self.generators = generators  # Store for variational FFN
-        self.diagonal_covariance = diagonal_covariance
+        self.embed_dim = cfg.embed_dim
+        self.hidden_dim = cfg.hidden_dim
+        self.evolve_sigma = cfg.evolve_sigma
+        self.evolve_phi = cfg.evolve_phi
+        self.ffn_mode = cfg.ffn_mode
+        self.generators = cfg.generators
+        self.diagonal_covariance = cfg.diagonal_covariance
 
         # Pure VFE mode flags
-        self.use_layernorm = use_layernorm
-        self.use_residual = use_residual
+        self.use_layernorm = cfg.use_layernorm
+        self.use_residual = cfg.use_residual
 
         # =====================================================================
         # Attention Sublayer
         # =====================================================================
-        # Determine gauge group from generators shape
-        if generators is not None:
-            n_gen = generators.shape[0]
-            K = generators.shape[1]  # Embedding dimension
-
-            if n_gen == 3:
-                gauge_group = 'SO3'
-                gauge_dim_inferred = 3
-            elif n_gen == K * K:
-                # n_gen = K² means GL(K) single-head
-                gauge_group = 'GLK'
-                gauge_dim_inferred = K
-            else:
-                # Check if n_gen matches SO(N): n_gen = N*(N-1)/2
-                disc = 1 + 8 * n_gen
-                sqrt_disc = int(math.sqrt(disc))
-                if sqrt_disc * sqrt_disc == disc:
-                    N_candidate = (1 + sqrt_disc) // 2
-                    if N_candidate * (N_candidate - 1) // 2 == n_gen:
-                        gauge_group = 'SON'
-                        gauge_dim_inferred = N_candidate
-                    else:
-                        # Not SO(N) — assume GL(K) multi-head or cross-coupled
-                        gauge_group = 'GLK'
-                        gauge_dim_inferred = K
-                else:
-                    # Not SO(N) — assume GL(K) multi-head or cross-coupled
-                    gauge_group = 'GLK'
-                    gauge_dim_inferred = K
-        else:
-            gauge_group = 'SO3'
-            gauge_dim_inferred = 3
+        gauge_group, gauge_dim_inferred = _infer_gauge_group(cfg.generators)
 
         self.attention = IrrepMultiHeadAttention(
-            embed_dim=embed_dim,
-            irrep_spec=irrep_spec,
-            kappa_beta=kappa_beta,
+            embed_dim=cfg.embed_dim,
+            irrep_spec=cfg.irrep_spec,
+            kappa_beta=cfg.kappa_beta,
             epsilon=1e-8,
-            aggregate_mode='full_distribution' if evolve_sigma else 'mean_only',
-            diagonal_covariance=diagonal_covariance,
-            attention_pattern=attention_pattern,
-            attention_window=attention_window,
+            aggregate_mode='full_distribution' if cfg.evolve_sigma else 'mean_only',
+            diagonal_covariance=cfg.diagonal_covariance,
+            attention_pattern=cfg.attention_pattern,
+            attention_window=cfg.attention_window,
             gauge_group=gauge_group,
             gauge_dim=gauge_dim_inferred,
-            global_generators=generators,  # Pass for SO(N) mode
-            alibi_slope=alibi_slope,
-            gauge_mode=gauge_mode,
-            mask_self_attention=mask_self_attention,
-            enforce_orthogonal=enforce_orthogonal,
-            use_output_projection=use_output_projection,
-            irrep_dims_override=ffn_irrep_dims if (gauge_group == 'GLK' and cross_head_perm is not None) else None,
-            use_rope=use_rope,
-            rope_base=rope_base,
+            global_generators=cfg.generators,
+            alibi_slope=cfg.alibi_slope,
+            gauge_mode=cfg.gauge_mode,
+            mask_self_attention=cfg.mask_self_attention,
+            enforce_orthogonal=cfg.enforce_orthogonal,
+            use_output_projection=cfg.use_output_projection,
+            irrep_dims_override=cfg.ffn_irrep_dims if (gauge_group == 'GLK' and cfg.cross_head_perm is not None) else None,
+            use_rope=cfg.use_rope,
+            rope_base=cfg.rope_base,
         )
 
-        # Conditionally create LayerNorm and Dropout (disabled for pure VFE)
-        self.norm1 = nn.LayerNorm(embed_dim) if use_layernorm else nn.Identity()
+        # Conditionally create LayerNorm (disabled for pure VFE)
+        self.norm1 = nn.LayerNorm(cfg.embed_dim) if cfg.use_layernorm else nn.Identity()
 
         # =====================================================================
         # VFE_dynamic FFN Sublayer
         # =====================================================================
         self.ffn = GaugeFFN(
-            embed_dim=embed_dim,
-            hidden_dim=hidden_dim,
-            generators=generators,  # Required for VFE mode
-            mode=ffn_mode,
-            # VFE parameters
-            alpha=ffn_alpha,
-            kappa=ffn_kappa,
-            n_iterations=ffn_n_iterations,
-            learnable_lr=ffn_learnable_lr,
-            lambda_belief=ffn_lambda_belief,
-            update_sigma=ffn_update_sigma,
-            # Diagonal covariance mode
-            diagonal_covariance=diagonal_covariance,
-            # Phi evolution via VFE gradients (principled approach)
-            update_phi=evolve_phi,  # When evolve_phi=True, update φ via ∂F/∂φ (after E-step)
-            update_phi_per_iteration=evolve_phi_e_step,  # When True, update φ during each E-step iteration
-            phi_lr=phi_lr,
-            phi_max_norm=phi_max_norm,
-            # Memory-efficient options
-            irrep_dims=ffn_irrep_dims,
-            chunk_size=ffn_chunk_size,
-            # Self-attention masking (same as attention)
-            mask_self_attention=mask_self_attention,
-            # Sigma softmax coupling (always enabled)
-            # Bayesian precision
-            learnable_alpha=ffn_learnable_alpha,
-            # Multi-head VFE
-            multihead_vfe=multihead_vfe,
-            # Phi gradient preconditioning
-            phi_natural_gradient=phi_natural_gradient,
-            # DEQ implicit differentiation
-            use_deq=use_deq,
-            deq_neumann_terms=deq_neumann_terms,
-            # Gauge mode
-            gauge_mode=gauge_mode,
+            embed_dim=cfg.embed_dim,
+            hidden_dim=cfg.hidden_dim,
+            generators=cfg.generators,
+            mode=cfg.ffn_mode,
+            alpha=cfg.ffn_alpha,
+            kappa=cfg.ffn_kappa,
+            n_iterations=cfg.ffn_n_iterations,
+            learnable_lr=cfg.ffn_learnable_lr,
+            lambda_belief=cfg.ffn_lambda_belief,
+            update_sigma=cfg.ffn_update_sigma,
+            diagonal_covariance=cfg.diagonal_covariance,
+            update_phi=cfg.evolve_phi,
+            update_phi_per_iteration=cfg.evolve_phi_e_step,
+            phi_lr=cfg.phi_lr,
+            phi_max_norm=cfg.phi_max_norm,
+            irrep_dims=cfg.ffn_irrep_dims,
+            chunk_size=cfg.ffn_chunk_size,
+            mask_self_attention=cfg.mask_self_attention,
+            learnable_alpha=cfg.ffn_learnable_alpha,
+            multihead_vfe=cfg.multihead_vfe,
+            phi_natural_gradient=cfg.phi_natural_gradient,
+            use_deq=cfg.use_deq,
+            deq_neumann_terms=cfg.deq_neumann_terms,
+            gauge_mode=cfg.gauge_mode,
         )
 
-        self.norm2 = nn.LayerNorm(embed_dim) if use_layernorm else nn.Identity()
+        self.norm2 = nn.LayerNorm(cfg.embed_dim) if cfg.use_layernorm else nn.Identity()
 
         # =====================================================================
         # Gauge Frame Evolution Configuration
         # =====================================================================
-        # When evolve_phi=True, phi is updated via VFE gradient descent in the
-        # variational FFN, NOT via a neural network. This is the principled
-        # approach: ∂F/∂φ comes from the belief alignment term.
-        self.phi_dim = phi_dim
-        self.phi_max_norm = phi_max_norm
-        self.evolve_phi = evolve_phi
+        self.phi_dim = cfg.phi_dim
+        self.phi_max_norm = cfg.phi_max_norm
 
     def forward(
         self,
@@ -289,11 +175,11 @@ mask_self_attention: If True, mask out diagonal (no self-attention).
         phi: torch.Tensor,
         generators: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
-        mu_prior: Optional[torch.Tensor] = None,  # Required for VFE_dynamic mode
-        token_ids: Optional[torch.Tensor] = None,  # For PriorBank lookup
-        targets: Optional[torch.Tensor] = None,   # For E-step observations
-        W_out: Optional[torch.Tensor] = None,     # Output projection for discrete observations
-        cached_head_transports: Optional[list] = None,  # Cross-layer transport cache
+        mu_prior: Optional[torch.Tensor] = None,
+        token_ids: Optional[torch.Tensor] = None,
+        targets: Optional[torch.Tensor] = None,
+        W_out: Optional[torch.Tensor] = None,
+        cached_head_transports: Optional[list] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Forward pass through transformer block.
@@ -307,8 +193,7 @@ mask_self_attention: If True, mask out diagonal (no self-attention).
             mu_prior: Embedding priors (B, N, K) - required for variational FFN
             targets: Target token IDs (B, N) - for E-step discrete observations
             W_out: Output projection (V, K) - for computing CE gradient in E-step
-            cached_head_transports: Optional list of precomputed transport dicts per head.
-                                   When evolve_phi=False, reuse across all layers.
+            cached_head_transports: Precomputed transport dicts per head.
 
         Returns:
             mu_q_out: Updated means (B, N, K)
@@ -323,7 +208,6 @@ mask_self_attention: If True, mask out diagonal (no self-attention).
         mu_normalized = self.norm1(mu_q)
 
         # Multi-head attention (gauge-theoretic!)
-        # Capture beta if needed for variational FFN or trajectory recording
         recorder = get_global_recorder() if TRAJECTORY_TRACKING_AVAILABLE else None
         recording_attention = recorder is not None and recorder.enabled and recorder.record_attention
         need_beta = self.ffn_mode == 'VFE_dynamic'
@@ -335,8 +219,8 @@ mask_self_attention: If True, mask out diagonal (no self-attention).
             phi,
             generators,
             mask=mask,
-            return_attention=need_attention_output,  # Compute if needed for FFN or recording
-            cached_head_transports=cached_head_transports,  # Cross-layer cache
+            return_attention=need_attention_output,
+            cached_head_transports=cached_head_transports,
         )
 
         # Record attention for trajectory tracking
@@ -347,36 +231,31 @@ mask_self_attention: If True, mask out diagonal (no self-attention).
         if self.use_residual:
             mu_q = mu_q + mu_attn
         else:
-            # Pure VFE: attention output IS the new belief
             mu_q = mu_attn
 
         # Update covariances if evolving
         if self.evolve_sigma and sigma_attn is not None:
             sigma_q = sigma_attn
-        # Otherwise sigma_q stays unchanged
 
         # =====================================================================
         # 2. Feedforward Sublayer (with optional Pre-Norm + Residual)
         # =====================================================================
 
-        # Pre-layer normalization (identity if use_layernorm=False)
         mu_normalized = self.norm2(mu_q)
 
-        # VFE_dynamic FFN: β recomputed at each VFE step
-        # Returns (mu, sigma, phi) tuple
         if mu_prior is None:
             raise ValueError("VFE_dynamic mode requires mu_prior argument")
 
         mu_ffn, sigma_ffn, phi_out = self.ffn(
             mu=mu_normalized,
-            beta=beta,          # Initial β (will be recomputed each step inside FFN)
-            mu_prior=mu_prior,  # Raw prior (intentional scale mismatch anchors beliefs)
-            phi=phi,            # Current gauge frames
-            sigma=sigma_q,      # Current covariances
-            mask=mask,          # Causal mask
-            token_ids=token_ids,  # For PriorBank lookup
-            targets=targets,    # Target tokens (discrete observations)
-            W_out=W_out,        # Output projection for ∂CE/∂μ
+            beta=beta,
+            mu_prior=mu_prior,
+            phi=phi,
+            sigma=sigma_q,
+            mask=mask,
+            token_ids=token_ids,
+            targets=targets,
+            W_out=W_out,
         )
 
         # Update covariances from FFN if evolving
@@ -387,11 +266,8 @@ mask_self_attention: If True, mask out diagonal (no self-attention).
         if self.use_residual:
             mu_q = mu_q + mu_ffn
         else:
-            # Pure VFE: FFN output IS the new belief
             mu_q = mu_ffn
 
-        # phi is updated inside the VFE FFN via gradient descent (when update_phi=True)
-        # This is the principled approach: φ evolves via ∂F/∂φ, not a neural network.
         return mu_q, sigma_q, phi_out
 
     def extra_repr(self) -> str:
@@ -415,170 +291,17 @@ class GaugeTransformerStack(nn.Module):
     embeddings through multiple layers of gauge-theoretic attention.
     """
 
-    def __init__(
-        self,
-        n_layers: int,
-        embed_dim: int,
-        irrep_spec: List[Tuple[str, int, int]],
-        hidden_dim: int,
-        kappa_beta: float,
-        evolve_sigma: bool = False,
-        evolve_phi: bool = False,
-        evolve_phi_e_step: bool = False,  # Update φ during E-step iterations (dynamical gauge frames)
-        # Phi evolution parameters (VFE gradient-based, not neural network)
-        phi_lr: float = 0.05,  # Learning rate for phi gradient descent
-        phi_max_norm: float = 3.14159,  # Max phi norm (π radians = 180° rotation)
-        # Variational FFN parameters
-        generators: Optional[torch.Tensor] = None,
-        ffn_mode: str = 'VFE_dynamic',
-        ffn_alpha: float = 0.001,
-        ffn_kappa: float = 1.0,
-        ffn_n_iterations: int = 1,
-        ffn_learnable_lr: bool = True,
-        ffn_lambda_belief: float = 1.0,
-        ffn_update_sigma: bool = True,
-        # Diagonal covariance mode
-        diagonal_covariance: bool = False,
-        # Sparse attention
-        attention_pattern: str = 'full',
-        attention_window: int = 64,
-        # Gauge frame dimension
-        phi_dim: int = 3,  # 3 for SO(3), N(N-1)/2 for SO(N)
-        ffn_prior_bank: Optional[nn.Module] = None,  # PriorBank for token-dependent priors
-        ffn_use_prior_bank: bool = False,  # Use PriorBank (token-dependent) vs position-dependent priors
-        # Memory-efficient options
-        ffn_irrep_dims: Optional[List[int]] = None,  # Block dimensions for principled KL decomposition
-        ffn_chunk_size: Optional[int] = None,  # Chunk size for memory-efficient attention
-        # Pure VFE mode: disable ad-hoc transformer components
-        use_layernorm: bool = False,  # Pure VFE: beliefs evolve freely, no normalization
-        use_residual: bool = False,   # Pure VFE: FFN outputs final belief, not delta
-        # ALiBi-style positional bias
-        alibi_slope: Optional[float] = None,  # If set, adds slope*(i-j) to attention logits
-        # Gauge mode
-        gauge_mode: str = 'learned',  # 'learned' or 'trivial' (Ω = I, no gauge transport)
-        # Self-attention masking (prevents attention collapse)
-        mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
-
-        # Gauge group control
-        enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
-        # Bayesian precision (learned prior self-coupling)
-        ffn_learnable_alpha: bool = False,  # If True, use Gamma-Normal conjugate precision
-        # Per-head specialization
-        use_output_projection: bool = False,  # If True, add W_O after multi-head attention
-        # Multi-head VFE: per-block β through VFE iterations
-        multihead_vfe: bool = False,  # If True, VFE_dynamic maintains per-head attention
-        # Cross-head coupling
-        cross_head_perm: Optional[object] = None,  # np.ndarray permutation for super-blocks
-        # RoPE (Rotary Position Embeddings)
-        use_rope: bool = False,  # If True, apply RoPE rotations to μ in attention
-        rope_base: float = 10000.0,  # RoPE frequency base
-        # Phi gradient preconditioning
-        phi_natural_gradient: str = 'clip',  # 'clip'|'cartan'|'killing'|'pullback'
-
-        # DEQ implicit differentiation
-        use_deq: bool = False,                # Use DEQ backward for E-step fixed point
-        deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
-    ):
-        """
-        Initialize stack of transformer blocks.
-
-        Args:
-            n_layers: Number of transformer blocks
-            embed_dim: Embedding dimension
-            irrep_spec: Irrep structure
-            hidden_dim: FFN hidden dimension
-            kappa_beta: Attention temperature
-            evolve_sigma: If True, covariances evolve through layers
-            evolve_phi: If True, gauge frames evolve through layers
-            generators: Lie algebra generators (required for VFE FFN)
-            phi_dim: Dimension of gauge frame (3 for SO(3), N(N-1)/2 for SO(N))
-            ffn_mode: 'VFE_dynamic' (only supported mode)
-            ffn_alpha: Prior weight
-            ffn_kappa: Softmax temperature for attention
-            ffn_n_iterations: VFE inference iterations
-            ffn_learnable_lr: Learn step size for variational descent
-            ffn_lambda_belief: Belief alignment weight
-            ffn_update_sigma: Update covariances in FFN
-            attention_pattern: 'full', 'local', or 'sparse' for efficient attention
-            attention_window: Window size for local attention pattern
-use_layernorm: If True, apply LayerNorm (default False for pure VFE)
-            use_residual: If True, use residual connections (default False for pure VFE)
-            mask_self_attention: If True, mask out diagonal (no self-attention).
-                                Prevents attention collapse since KL(q_i||q_i)=0 always.
-            ffn_learnable_alpha: If True, use Bayesian precision via Gamma-Normal conjugacy.
-            use_output_projection: If True, add W_O projection after multi-head attention.
-            multihead_vfe: If True, VFE_dynamic maintains per-head attention β_h.
-        """
+    def __init__(self, cfg: BlockConfig):
         super().__init__()
-        self.n_layers = n_layers
+        self.n_layers = cfg.n_layers
 
         self.blocks = nn.ModuleList([
-            GaugeTransformerBlock(
-                embed_dim=embed_dim,
-                irrep_spec=irrep_spec,
-                hidden_dim=hidden_dim,
-                kappa_beta=kappa_beta,
-                evolve_sigma=evolve_sigma,
-                evolve_phi=evolve_phi,
-                evolve_phi_e_step=evolve_phi_e_step,  # Update φ during E-step iterations
-                # Phi evolution (VFE gradient-based)
-                phi_lr=phi_lr,
-                phi_max_norm=phi_max_norm,
-                # VFE FFN
-                generators=generators,
-                ffn_mode=ffn_mode,
-                ffn_alpha=ffn_alpha,
-                ffn_kappa=ffn_kappa,
-                ffn_n_iterations=ffn_n_iterations,
-                ffn_learnable_lr=ffn_learnable_lr,
-                ffn_lambda_belief=ffn_lambda_belief,
-                ffn_update_sigma=ffn_update_sigma,
-                # Diagonal covariance mode
-                diagonal_covariance=diagonal_covariance,
-                # Sparse attention
-                attention_pattern=attention_pattern,
-                attention_window=attention_window,
-                # Gauge frame dimension
-                phi_dim=phi_dim,
-                ffn_prior_bank=ffn_prior_bank,  # Pass PriorBank to each block
-                ffn_use_prior_bank=ffn_use_prior_bank,  # Enable token-dependent priors
-                # Memory-efficient options
-                ffn_irrep_dims=ffn_irrep_dims,
-                ffn_chunk_size=ffn_chunk_size,
-                # Pure VFE mode
-                use_layernorm=use_layernorm,
-                use_residual=use_residual,
-                # ALiBi positional bias
-                alibi_slope=alibi_slope,
-                # Gauge mode
-                gauge_mode=gauge_mode,
-                # Self-attention masking
-                mask_self_attention=mask_self_attention,
-                # Sigma softmax coupling (always enabled)
-                # Gauge group control
-                enforce_orthogonal=enforce_orthogonal,
-                # Bayesian precision
-                ffn_learnable_alpha=ffn_learnable_alpha,
-                # Per-head specialization
-                use_output_projection=use_output_projection,
-                # Multi-head VFE
-                multihead_vfe=multihead_vfe,
-                # Cross-head coupling
-                cross_head_perm=cross_head_perm,
-                # RoPE
-                use_rope=use_rope,
-                rope_base=rope_base,
-                # Phi gradient preconditioning
-                phi_natural_gradient=phi_natural_gradient,
-                # DEQ implicit differentiation
-                use_deq=use_deq,
-                deq_neumann_terms=deq_neumann_terms,
-            )
-            for _ in range(n_layers)
+            GaugeTransformerBlock(cfg)
+            for _ in range(cfg.n_layers)
         ])
 
         # Final layer norm (optional for pure VFE)
-        self.final_norm = nn.LayerNorm(embed_dim) if use_layernorm else nn.Identity()
+        self.final_norm = nn.LayerNorm(cfg.embed_dim) if cfg.use_layernorm else nn.Identity()
 
     def forward(
         self,
@@ -587,10 +310,10 @@ use_layernorm: If True, apply LayerNorm (default False for pure VFE)
         phi: torch.Tensor,
         generators: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
-        mu_prior: Optional[torch.Tensor] = None,  # Required for VFE_dynamic mode
-        token_ids: Optional[torch.Tensor] = None,  # For PriorBank lookup
+        mu_prior: Optional[torch.Tensor] = None,
+        token_ids: Optional[torch.Tensor] = None,
         return_intermediates: bool = False,
-        cached_head_transports: Optional[list] = None,  # Cross-layer transport cache
+        cached_head_transports: Optional[list] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[List]]:
         """
         Forward through all transformer blocks.
@@ -603,7 +326,7 @@ use_layernorm: If True, apply LayerNorm (default False for pure VFE)
             mask: Optional causal mask
             mu_prior: Embedding priors (B, N, K) - for variational FFN
             return_intermediates: If True, return states after each layer
-            cached_head_transports: Optional list of precomputed transport dicts per head.
+            cached_head_transports: Precomputed transport dicts per head.
                                    When evolve_phi=False, reuse across all layers (6× speedup).
 
         Returns:
@@ -626,7 +349,7 @@ use_layernorm: If True, apply LayerNorm (default False for pure VFE)
 
             mu_q, sigma_q, phi = block(
                 mu_q, sigma_q, phi, generators, mask, mu_prior,
-                token_ids=token_ids,  # Pass token IDs for PriorBank
+                token_ids=token_ids,
                 cached_head_transports=cached_head_transports,
             )
 
@@ -647,5 +370,3 @@ use_layernorm: If True, apply LayerNorm (default False for pure VFE)
         mu_q = self.final_norm(mu_q)
 
         return mu_q, sigma_q, phi, intermediates
-
-

@@ -12,6 +12,7 @@ This module contains the core transformer model components:
 """
 
 from transformer.core.model import GaugeTransformerLM
+from transformer.core.block_config import BlockConfig
 from transformer.core.blocks import GaugeTransformerBlock, GaugeTransformerStack
 from transformer.core.attention import (
     compute_attention_weights,
@@ -32,6 +33,9 @@ from transformer.core.variational_ffn import VariationalFFNDynamic
 __all__ = [
     # Main model
     'GaugeTransformerLM',
+
+    # Config
+    'BlockConfig',
 
     # Blocks
     'GaugeTransformerBlock',

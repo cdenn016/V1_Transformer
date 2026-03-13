@@ -33,6 +33,7 @@ import numpy as np
 # Import our components
 from transformer.core.embeddings import GaugeTokenEmbedding, GaugePositionalEncoding
 from transformer.core.blocks import GaugeTransformerStack
+from transformer.core.block_config import BlockConfig
 from transformer.core.attention import create_attention_mask
 
 # Trajectory tracking (optional)
@@ -377,67 +378,21 @@ class GaugeTransformerLM(nn.Module):
         # =================================================================
         # Transformer Stack
         # =================================================================
-        self.transformer = GaugeTransformerStack(
-            n_layers=n_layers,
-            embed_dim=embed_dim,
-            irrep_spec=irrep_spec,
-            hidden_dim=hidden_dim,
-            kappa_beta=kappa_beta,
-            evolve_sigma=evolve_sigma,
-            evolve_phi=evolve_phi,
-            evolve_phi_e_step=evolve_phi_e_step,  # Update φ during E-step iterations
-            # Phi evolution parameters (VFE gradient-based)
-            phi_lr=config.get('phi_lr', 0.05),  # Learning rate for ∂F/∂φ descent
-            phi_max_norm=config.get('phi_max_norm', math.pi),  # Default: π radians
-            # VFE FFN parameters
+        block_cfg = BlockConfig.from_config(
+            config,
             generators=self.generators,
-            ffn_mode=ffn_mode,
-            ffn_alpha=ffn_alpha,
-            ffn_kappa=ffn_kappa,
-            ffn_n_iterations=ffn_n_iterations,
-            ffn_learnable_lr=ffn_learnable_lr,
-            ffn_lambda_belief=ffn_lambda_belief,
-            ffn_update_sigma=ffn_update_sigma,
-            diagonal_covariance=diagonal_covariance,
-            # Sparse attention
-            attention_pattern=self.attention_pattern,
-            attention_window=self.attention_window,
-            # Gauge frame dimension
-            phi_dim=self.phi_dim,
-            # Pure FEP mode parameters
-            ffn_prior_bank=self.prior_bank,  # Pass PriorBank to FFN layers
-            ffn_use_prior_bank=use_prior_bank,  # Enable token-dependent priors
-            # Memory-efficient options
-            ffn_irrep_dims=self._get_effective_irrep_dims(irrep_spec) if config.get('use_block_diagonal_kl', True) else None,
-            ffn_chunk_size=config.get('ffn_chunk_size', None),
-            # Pure VFE mode: disable ad-hoc transformer components
-            use_layernorm=config.get('use_layernorm', True),
-            use_residual=config.get('use_residual', True),
-            # ALiBi positional bias
-            alibi_slope=alibi_slope,
-            # Gauge mode
-            gauge_mode=gauge_mode,
-            # Self-attention masking (prevents attention collapse)
-            mask_self_attention=config.get('mask_self_attention', False),
-            # Gauge group control
-            enforce_orthogonal=config.get('enforce_orthogonal', False),
-            # Bayesian precision
-            ffn_learnable_alpha=ffn_learnable_alpha,
-            # Per-head specialization
-            use_output_projection=config.get('use_output_projection', False),
-            # Multi-head VFE
-            multihead_vfe=config.get('multihead_vfe', False),
-            # Cross-head coupling
+            prior_bank=self.prior_bank,
             cross_head_perm=getattr(self, '_cross_head_perm', None),
-            # RoPE (Rotary Position Embeddings)
-            use_rope=config.get('use_rope', False),
-            rope_base=config.get('rope_base', 10000.0),
-            # Phi gradient preconditioning
-            phi_natural_gradient=config.get('phi_natural_gradient', 'clip'),
-            # DEQ implicit differentiation
-            use_deq=config.get('use_deq', False),
-            deq_neumann_terms=config.get('deq_neumann_terms', 5),
+            ffn_irrep_dims=self._get_effective_irrep_dims(irrep_spec) if config.get('use_block_diagonal_kl', True) else None,
         )
+        # Override derived values that model.py computes
+        block_cfg.phi_dim = self.phi_dim
+        block_cfg.attention_pattern = self.attention_pattern
+        block_cfg.attention_window = self.attention_window
+        block_cfg.alibi_slope = alibi_slope
+        block_cfg.ffn_use_prior_bank = use_prior_bank
+
+        self.transformer = GaugeTransformerStack(block_cfg)
 
         # =================================================================
         # Output Projection
