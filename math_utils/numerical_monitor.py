@@ -7,8 +7,9 @@ Usage:
     record("chol_recover")   # increment counter
     events = flush()         # get counts and reset
 """
+from typing import Dict
 
-_counts: dict[str, int] = {}
+_counts: Dict[str, int] = {}
 
 
 def record(event: str) -> None:
@@ -16,7 +17,7 @@ def record(event: str) -> None:
     _counts[event] = _counts.get(event, 0) + 1
 
 
-def flush() -> dict[str, int]:
+def flush() -> Dict[str, int]:
     """Return current counts and reset all counters."""
     result = dict(_counts)
     _counts.clear()

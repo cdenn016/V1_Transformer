@@ -21,6 +21,7 @@ warnings.filterwarnings("ignore", message="CUDA path could not be detected", mod
 warnings.filterwarnings("ignore", message="Failed to find cuobjdump", module="triton")
 warnings.filterwarnings("ignore", message="Failed to find nvdisasm", module="triton")
 
+import math
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -389,7 +390,7 @@ class FastTrainer:
             progress = min(progress, 1.0)  # Clamp for steps beyond max_steps
 
             if self.config.lr_decay == 'cosine':
-                decay = 0.5 * (1.0 + torch.cos(torch.tensor(progress * 3.14159)).item())
+                decay = 0.5 * (1.0 + torch.cos(torch.tensor(progress * math.pi)).item())
                 return max(min_ratio, decay)
             elif self.config.lr_decay == 'linear':
                 return max(min_ratio, 1.0 - progress)
@@ -585,8 +586,12 @@ class FastTrainer:
 
             # Logging
             if (step + 1) % self.config.log_interval == 0:
-                # Get current learning rates
-                lrs = {group['name']: group['lr'] for group in self.optimizer.param_groups}
+                # Get current scheduled learning rates (not just base rates)
+                if self.scheduler is not None:
+                    scheduled_lrs = self.scheduler.get_last_lr()
+                    lrs = {group['name']: slr for group, slr in zip(self.optimizer.param_groups, scheduled_lrs)}
+                else:
+                    lrs = {group['name']: group['lr'] for group in self.optimizer.param_groups}
 
                 log_msg = (
                     f"Step {step+1}/{self.config.max_steps} | "

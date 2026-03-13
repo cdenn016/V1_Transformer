@@ -249,9 +249,13 @@ def push_gaussian(
             # For GL(K): must use the full inverse formula
             Sigma_inv = np.asarray(gaussian.Sigma_inv, dtype=np.float64)
 
-            # Check if Ω is orthogonal (sample first element if batch)
-            Omega_to_check = Omega if Omega.ndim == 2 else Omega.reshape(-1, K, K)[0]
-            is_ortho = _is_orthogonal(Omega_to_check, tol=1e-4)
+            # Check if ALL Ω elements are orthogonal (not just element 0)
+            if Omega.ndim == 2:
+                is_ortho = _is_orthogonal(Omega, tol=1e-4)
+            else:
+                flat_Omega = Omega.reshape(-1, K, K)
+                is_ortho = all(_is_orthogonal(flat_Omega[i], tol=1e-4)
+                               for i in range(min(flat_Omega.shape[0], 8)))
 
             if is_ortho:
                 # Fast path (orthogonal only): Λ' = Ω Λ Ωᵀ

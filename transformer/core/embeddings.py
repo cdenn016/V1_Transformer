@@ -38,6 +38,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from typing import Tuple, Optional
+from transformer.core.gauge_utils import stable_matrix_exp_pair
 
 # Import Lie algebra composition functions
 try:
@@ -293,7 +294,9 @@ class GaugeTokenEmbedding(nn.Module):
             # Compute rotation matrices R_i = exp(φ_i · generators)
             # phi: (B, N, 3), generators: (3, K, K)
             phi_matrix = torch.einsum('bnc,ckl->bnkl', phi, self.generators)  # (B, N, K, K)
-            R = torch.linalg.matrix_exp(phi_matrix)  # (B, N, K, K)
+            # Use stable_matrix_exp_pair with norm clamping to prevent overflow
+            # in non-compact (symmetric) directions of GL(K)
+            R, _ = stable_matrix_exp_pair(phi_matrix)  # (B, N, K, K)
 
             # Rotate base prior mean: μ_i = R_i @ μ_0
             # base_mu: (K,), R: (B, N, K, K)
@@ -478,8 +481,9 @@ def so3_log_torch(R: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     # Compute rotation angle from trace
     trace = R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2]  # (...)
     cos_theta = (trace - 1.0) / 2.0
-    cos_theta = torch.clamp(cos_theta, -1.0 + eps, 1.0 - eps)
-    theta = torch.acos(cos_theta)  # (...)
+    # Upcast to float64 before acos to avoid precision loss near ±1 in float32
+    cos_theta = torch.clamp(cos_theta.double(), -1.0 + eps, 1.0 - eps)
+    theta = torch.acos(cos_theta).float()  # (...)
 
     # Extract skew-symmetric part: vex(R - R^T) / 2
     # vex extracts [v_x, v_y, v_z] from skew-symmetric matrix

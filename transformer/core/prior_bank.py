@@ -192,11 +192,21 @@ class PriorBank(nn.Module):
             # Rotate base prior: μ_v = R_v @ μ_0
             mu_p = torch.einsum('...ij,j->...i', R, self.base_prior_mu)
 
-            # Rotate base covariance (diagonal approximation):
-            # For diagonal Σ_0, the rotated diagonal is (R @ diag(σ_0) @ R^T)_kk = Σ_l R_kl² σ_0[l]
+            # Rotate base covariance: Σ_v = R_v @ diag(σ_0) @ R_v^T
+            # WARNING: When gauge_fixed_priors=True, we compute the FULL rotated
+            # covariance to preserve gauge covariance (Σ_i = Ω_ij Σ_j Ω_ij^T).
+            # The diagonal-only approximation (R² @ σ_0) breaks this invariant.
             base_sigma = self.base_prior_sigma  # (K,)
-            R_sq = R ** 2  # (..., K, K)
-            sigma_p = torch.einsum('...kl,l->...k', R_sq, base_sigma)  # (..., K)
+            if getattr(self, 'diagonal_covariance', True):
+                # Diagonal approximation: extract only diagonal of R @ diag(σ) @ R^T
+                # This is an approximation that breaks gauge covariance in off-diagonals.
+                # Use full covariance mode for exact gauge-equivariant transport.
+                R_sq = R ** 2  # (..., K, K)
+                sigma_p = torch.einsum('...kl,l->...k', R_sq, base_sigma)  # (..., K)
+            else:
+                # Full covariance: Σ_v = R @ diag(σ_0) @ R^T (gauge-covariant)
+                Sigma_0 = torch.diag(base_sigma)  # (K, K)
+                sigma_p = torch.einsum('...ij,jk,...lk->...il', R, Sigma_0, R)  # (..., K, K)
 
             return mu_p, sigma_p, phi
         else:

@@ -361,22 +361,29 @@ def safe_inv_cholesky(Sigma: np.ndarray, eps: float = 1e-8) -> np.ndarray:
 # -----------------------------------------------------------------------------
 # Sigma sanitation (vectorized)
 # -----------------------------------------------------------------------------
-def sanitize_sigma(Sigma: np.ndarray, 
-                   eps: float = 1e-4,  # INCREASE from 1e-6!
+def sanitize_sigma(Sigma: np.ndarray,
+                   eps: float = 1e-6,  # Adaptive floor (scale-relative)
                    max_cond: float = 1e4,  # DECREASE from 1e6!
                    max_eig: float = None) -> np.ndarray:
     """
     Sanitize covariance matrix for numerical stability.
+
+    Uses adaptive eigenvalue floor: max(eps * λ_max, MIN_EIGENVALUE)
+    to avoid systematic KL bias that grows with dimension K.
     """
     # Symmetrize
     Sigma = 0.5 * (Sigma + np.swapaxes(Sigma, -1, -2))
-    
+
     # Eigendecomposition
     w, V = np.linalg.eigh(Sigma)
-    
-    # Absolute floor on eigenvalues for positive-definiteness
-    MIN_EIGENVALUE = 1e-8  # Small enough to not distort KL computations
-    w = np.maximum(w, MIN_EIGENVALUE)
+
+    # Adaptive eigenvalue floor: scale-relative to prevent KL bias
+    # For large eigenvalues, eps * λ_max ensures condition number stays bounded.
+    # For small eigenvalues, MIN_EIGENVALUE prevents singularity.
+    MIN_EIGENVALUE = 1e-8  # Absolute floor for positive-definiteness
+    lambda_max = np.maximum(w[..., -1:], MIN_EIGENVALUE)
+    adaptive_floor = np.maximum(eps * lambda_max, MIN_EIGENVALUE)
+    w = np.maximum(w, adaptive_floor)
     
     if max_eig is not None:
         w = np.minimum(w, max_eig)
@@ -396,7 +403,7 @@ def sanitize_sigma(Sigma: np.ndarray,
 
 
 
-def _chol_logdet(Sigma: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _chol_logdet(Sigma: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute Cholesky decomposition and log-determinant.
     

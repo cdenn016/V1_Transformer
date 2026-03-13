@@ -261,8 +261,8 @@ def compute_transport(
     K = G.shape[1]
 
     # General SO(N) / GL(K) case
-    exp_phi_i = _matrix_exponential_so3(phi_i, G)
-    exp_neg_phi_j = _matrix_exponential_so3(-phi_j, G)
+    exp_phi_i = _matrix_exponential_lie_algebra(phi_i, G)
+    exp_neg_phi_j = _matrix_exponential_lie_algebra(-phi_j, G)
 
     # ========================================================================
     # Compose transport operators
@@ -312,7 +312,7 @@ def _skew_symmetric(v: np.ndarray) -> np.ndarray:
 # General SO(N) Matrix Exponential (K>3 case)
 # =============================================================================
 
-def _matrix_exponential_so3(
+def _matrix_exponential_lie_algebra(
     phi: np.ndarray,
     generators: np.ndarray,
     *,
@@ -605,12 +605,12 @@ def compute_transport_differential(
     # Compute exponentials if not provided.
     # Use the *same irrep basis* for all K so dΩ/dφ matches Ω(φ).
     if exp_phi_i is None:
-        exp_phi_i = _matrix_exponential_so3(phi_i, G)
+        exp_phi_i = _matrix_exponential_lie_algebra(phi_i, G)
 
     # Always compute exp(-φ_j) directly for GL(K) compatibility
     # NOTE: For GL(K), exp(φ)^T ≠ exp(-φ) unless generators are skew-symmetric
     # and result is orthogonal. We cannot use the transpose shortcut.
-    exp_neg_phi_j = _matrix_exponential_so3(-phi_j, G)
+    exp_neg_phi_j = _matrix_exponential_lie_algebra(-phi_j, G)
 
     
     # ========== Differential of exp map ==========

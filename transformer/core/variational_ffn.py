@@ -1511,6 +1511,7 @@ class VariationalFFNDynamic(nn.Module):
         # Phi (gauge frame) evolution via VFE gradients
         update_phi: bool = False,  # If True, update phi via ∂F/∂φ (after E-step loop)
         update_phi_per_iteration: bool = False,  # If True, update phi during EACH E-step iteration
+        phi_update_interval: int = 2,  # Only update phi every N iterations (reduces redundant matrix_exp)
         phi_lr: float = 0.05,      # Learning rate for phi updates
         phi_max_norm: float = 3.14159,  # Max norm for phi (π = 180° rotation)
         prior_bank: Optional[nn.Module] = None,  # Token-dependent PriorBank (if provided)
@@ -1575,6 +1576,7 @@ class VariationalFFNDynamic(nn.Module):
         # Phi evolution via VFE gradients (principled approach)
         self.update_phi = update_phi
         self.update_phi_per_iteration = update_phi_per_iteration  # Dynamical gauge frames
+        self.phi_update_interval = phi_update_interval
         if update_phi_per_iteration:
             print(f"[VariationalFFNDynamic] φ will evolve DURING E-step iterations (dynamical gauge frames)")
         self.phi_lr = phi_lr
@@ -2305,7 +2307,13 @@ class VariationalFFNDynamic(nn.Module):
             # =============================================================
             # When update_phi_per_iteration=True, φ evolves at each iteration
             # This makes gauge frames dynamical, co-evolving with beliefs
-            if self.update_phi_per_iteration and torch.is_grad_enabled():
+            # OPTIMIZATION: Only update phi every phi_update_interval iterations
+            # (default 2) to reduce redundant matrix exponential computations.
+            # Early E-step iterations produce large belief changes where phi
+            # updates are less informative; later iterations benefit more.
+            phi_update_interval = getattr(self, 'phi_update_interval', 2)
+            if (self.update_phi_per_iteration and torch.is_grad_enabled()
+                    and iteration % phi_update_interval == phi_update_interval - 1):
                 phi_for_grad = phi_current.clone().requires_grad_(True)
 
                 if self.multihead_vfe:
@@ -2340,7 +2348,8 @@ class VariationalFFNDynamic(nn.Module):
                         alignment_loss = alignment_loss + self.lambda_belief * (beta_phi_h * kl_h).sum()
                         block_start = block_end
                 else:
-                    # Single-β phi update (original)
+                    # Single-β phi update
+                    # First iteration: must recompute with phi_for_grad for autograd
                     beta_for_phi_result = compute_attention_weights(
                         mu_q=mu_current.detach(),
                         sigma_q=sigma_current.detach() if sigma_current is not None else None,
