@@ -143,7 +143,7 @@ class FastTrainingConfig:
     # Ablation toggles (for PPL regression experiments)
     use_exp_map_retraction: bool = True   # True=exp map, False=linear+Cholesky (original)
     use_full_nat_grad: bool = True        # True=Σ@∇@Σ, False=diag approx (original)
-    detach_sigma_kl: bool = True          # True=detach sigma in KL loss, False=pass gradients
+   
 
 
 # =============================================================================
@@ -415,7 +415,7 @@ class FastTrainer:
                     lambda_gamma=self.config.lambda_gamma,
                     kappa_gamma=self.config.kappa_gamma,
                     pad_token_id=self.pad_token_id,
-                    detach_sigma_kl=getattr(self.config, 'detach_sigma_kl', True),
+                    
                 )
         else:
             loss, metrics = compute_free_energy_loss(
@@ -427,7 +427,7 @@ class FastTrainer:
                 lambda_gamma=self.config.lambda_gamma,
                 kappa_gamma=self.config.kappa_gamma,
                 pad_token_id=self.pad_token_id,
-                detach_sigma_kl=getattr(self.config, 'detach_sigma_kl', True),
+                
             )
 
         # Backward pass
@@ -507,7 +507,7 @@ class FastTrainer:
                         lambda_gamma=self.config.lambda_gamma,
                         kappa_gamma=self.config.kappa_gamma,
                         pad_token_id=self.pad_token_id,
-                        detach_sigma_kl=getattr(self.config, 'detach_sigma_kl', True),
+                       
                     )
                     ce_loss = metrics['loss/ce']
 
