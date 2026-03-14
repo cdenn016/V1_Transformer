@@ -1194,13 +1194,6 @@ exactly recovering the standard transformer attention weighting rule.
 
 \subsubsection{Value Aggregation}
 
-The message aggregation rule is:
-
-\begin{equation}
-m_i = \sum_j \beta_{ij} \,\Omega_{ij}\mu_j.
-\end{equation}
-
-\paragraph{$\mathrm{GL}(K)$ aggregation and the role of $\Omega^{-\top}$.}
 The mixture-of-sources generative model (Section~\ref{sec:mixture_derivation}) specifies that the component distribution for source $j$ in agent $i$'s frame has mean $\Omega_{ij}\mu_j$. The posterior mean under mixture responsibilities $\beta_{ij}$ is therefore:
 
 \begin{equation}
