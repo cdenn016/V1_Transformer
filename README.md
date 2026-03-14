@@ -161,11 +161,49 @@ Standard transformers operate in the adiabatic limit: slow variables frozen duri
 
 | Limit | What it discards | Result |
 |---|---|---|
-| **1. Isotropic covariances** | Non-isotropic Sigma_i -> sigma^2 I | KL reduces to squared Euclidean distance |
-| **2. Flat bundle** | Position-dependent Omega_ij -> constant Omega | Global gauge, no curvature |
-| **3. Learned projections** | sigma^{-2} Omega absorbed into W_Q W_K^T | Standard Q, K, V projections |
+| **1. Isotropic covariances** | Non-isotropic Σ_i → σ²I | KL reduces to geometric bias S(Ω) + squared Euclidean distance |
+| **2. Constant gauge** | Position-dependent Ω_ij → constant Ω | Global gauge, no curvature; S(Ω) becomes a shared constant |
+| **3. Learned projections** | σ⁻² Ω⁻ᵀ absorbed into W_Q W_K^T | Standard Q, K, V projections |
 
 After all three limits: `beta_ij = softmax(Q_i K_j^T / sqrt(d_k))` --- standard transformer attention.
+
+**Important:** Limit 1 alone does not suffice---the isotropic KL under general transport is:
+
+```
+D_KL = S(Ω_ij) + (1/2σ²) ||Ω_ij⁻¹ μ_i - μ_j||²
+```
+
+where S(Ω) = ½[log det(ΩΩᵀ) + Tr((ΩΩᵀ)⁻¹) - K] is the **geometric bias**. This vanishes if and only if Ω ∈ O(K) (orthogonal group), since ΩΩᵀ = I implies S = 0. For Ω ∈ GL(K) \ O(K), the geometric bias introduces a position-dependent offset that breaks the clean squared-distance form.
+
+### O(K) Gauge Transport
+
+The gauge transport Ω_ij = exp(φ_i)·exp(-φ_j) is constructed via matrix exponentials, which always produce matrices with det > 0. Under Newton-Schulz orthogonalization (`enforce_orthogonal=True`), this projects to **SO(K)** (special orthogonal group, det = +1). However, the full orthogonal group O(K) = SO(K) ⋊ Z₂ has two connected components: rotations (det = +1) and reflections (det = -1). The exponential map cannot reach the disconnected component.
+
+To achieve full O(K) transport, the `learnable_reflection` option introduces per-token sign vectors s_i ∈ {±1}^K that act as diagonal reflections:
+
+```
+Ω_ij = diag(s_i) · exp(φ_i) · exp(-φ_j) · diag(s_j)
+```
+
+where R_i = diag(s_i) ∈ O(K) and exp(φ_i)·exp(-φ_j) ∈ SO(K). The combined transport Ω_ij ∈ O(K) with det(Ω_ij) = (∏ s_i)(∏ s_j) · det(M_ij), covering both ±1.
+
+**Key properties (verified symbolically for K=2,3):**
+- **Orthogonality**: ΩΩᵀ = I (since both R_i and M_ij are orthogonal)
+- **Geometric bias**: S(Ω) = 0 (since ΩΩᵀ = I)
+- **Isotropic covariance preserved**: Ω·(σ²I)·Ωᵀ = σ²I (isotropic structure survives transport)
+- **Mahalanobis identity**: (μ_i - Ω μ_j)ᵀ(ΩΩᵀ)⁻¹(μ_i - Ω μ_j) = ||Ω⁻¹μ_i - μ_j||²
+- **Q-K factorization**: μ_iᵀ Ω_ij μ_j = (s_i⊙μ_i)ᵀ M_ij (s_j⊙μ_j), so reflections fold into the embeddings
+
+**Implementation:** The sign vectors are applied at embedding time via `μ_i ← s_i ⊙ μ_i`, requiring no changes to the attention or FFN modules. Gradient flow through the discrete signs uses the straight-through estimator (STE): forward passes use sign(z), backward passes treat sign as identity.
+
+**Configuration:**
+```python
+config = {
+    'enforce_orthogonal': True,       # SO(K) via Newton-Schulz
+    'learnable_reflection': True,     # Extend to O(K) with per-token signs
+    'isotropic_covariance': True,     # Σ = σ²I (Limit 1)
+}
+```
 
 ### Gradient Descent as Variational Inference
 
@@ -175,7 +213,7 @@ Gradient descent on the gauge-equivariant free energy recovers the standard tran
 |---|---|
 | Free energy F[{q_i}] | Loss L(theta) |
 | Belief q_i = N(mu_i, sigma^2 I) | Embedding h_i |
-| Gauge transport Omega in GL(K) | W_Q W_K^T (learned) |
+| Gauge transport Ω ∈ GL(K) | W_Q W_K^T = σ⁻²Ω⁻ᵀ (learned) |
 | -E_q[log p(o \| k)] | Cross-entropy loss |
 | Vacuum (no observations) | Untrained network |
 | Symmetry breaking | Training / learning |
@@ -292,7 +330,7 @@ Gauge-Transformer/
 │   │   ├── attention.py       #   KL-divergence multi-head attention
 │   │   ├── blocks.py          #   Transformer blocks with gauge transport
 │   │   ├── variational_ffn.py #   VFE feedforward (VFE_dynamic, hamiltonian modes)
-│   │   ├── embeddings.py      #   Gauge token/positional embeddings
+│   │   ├── embeddings.py      #   Gauge token/positional embeddings (μ, Σ, φ, O(K) reflections)
 │   │   └── prior_bank.py      #   Token-dependent prior bank for pure FEP
 │   ├── analysis/              # RG metrics, semantic analysis, publication metrics
 │   ├── data/                  # Dataset loading (WikiText-2, WikiText-103)
@@ -435,7 +473,7 @@ Key fixes enabling large gauge groups (see `NUMERICAL_STABILITY.md`):
 - **Dimension-dependent KL clamping**: ceiling of `max(100, 5K)`
 - **Per-parameter gradient clipping**: Independent budget per parameter group (mu, Sigma, phi)
 - **Loss sqrt(K) normalization**: `loss = F / sqrt(K)` for hyperparameter transferability
-- **GL(K) transport**: No re-orthogonalization needed (only invertibility required)
+- **GL(K) transport**: No re-orthogonalization needed (only invertibility required). Optional O(K) enforcement via Newton-Schulz + learnable reflections for exact isotropic limit
 
 ## Testing
 
