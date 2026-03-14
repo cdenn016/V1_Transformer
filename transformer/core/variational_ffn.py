@@ -2322,6 +2322,25 @@ class VariationalFFNDynamic(nn.Module):
             grad_sigma = torch.clamp(grad_sigma, min=-1e3, max=1e3)
 
             # =================================================================
+            # Isotropic gradient projection: average grad_sigma across dims
+            # =================================================================
+            # When isotropic, all dims share one scalar σ². Average the per-dim
+            # gradients so the natural gradient and retraction operate on the
+            # consensus direction, rather than K independent updates collapsed
+            # after the fact. This is the correct constrained gradient:
+            #   ∂F/∂(σ²) = (1/K) Σ_k ∂F/∂σ_k²
+            if self.isotropic_covariance:
+                if is_diagonal:
+                    grad_sigma = grad_sigma.mean(dim=-1, keepdim=True).expand_as(grad_sigma)
+                else:
+                    diag_grad = torch.diagonal(grad_sigma, dim1=-2, dim2=-1)
+                    avg_grad = diag_grad.mean(dim=-1, keepdim=True)
+                    K = grad_sigma.shape[-1]
+                    grad_sigma = avg_grad.unsqueeze(-1) * torch.eye(
+                        K, device=grad_sigma.device, dtype=grad_sigma.dtype
+                    )
+
+            # =================================================================
             # STEP 3: Natural gradient projection
             # =================================================================
             nat_grad_mu, nat_grad_sigma = compute_natural_gradient_gpu(
