@@ -196,23 +196,24 @@ SEED = 6
 VFE_EM_CONFIG = {
     # Model architecture
     'vocab_size': 50257,          # Will be overridden by tokenizer
-    'embed_dim': 10,              # Embedding dimension K
+    'embed_dim': 80,              # Embedding dimension K
     'n_layers': 1,                # Transformer depth
     'hidden_dim': 508,            # Only used if ffn_mode='learned'
     'max_seq_len': 128,           # Context length N
 
     'learnable_alpha': False,
+    
     'use_obs_in_vfe': False,        #cheats when true!  low trainPPL huge val PPL
-    'use_rope': True,
+    'amortized_inference': True,   # Gradient flow through priors → embeddings learn good E-step init
 
     'use_deq': False,
     'deq_neumann_terms': 0,
 
     # Training
-    'batch_size': 64,
+    'batch_size': 16,
     'num_workers': 10,            #CPU workers 8--12
     'epochs': None,               # Set to 1-3 for WikiText-2, None for WikiText-103 (use max_steps)
-    'max_steps': 15000,           # ~105% coverage on WikiText-103
+    'max_steps': 60000,           # ~105% coverage on WikiText-103
     'warmup_steps': 100,
 
     # VFE transformer settings
@@ -227,11 +228,14 @@ VFE_EM_CONFIG = {
                                   # When True: φ evolves via ∂F/∂φ at each VFE iteration
                                   # When False: φ only updated via backprop (M-step)
                                   
+    'phi_update_interval': 1,                       
     'diagonal_covariance': True,
     
-    'use_positional_embedding': False,
-    'pos_encoding_mode': 'none',
-    'gauge_mode': 'learned',
+    'use_positional_embedding': True,
+    'pos_encoding_mode': 'learned',           #'none' 'learned' or 'sinusoidal'
+    'use_rope': False,
+    
+    
     'alibi_slope': None,
 
     # Temperature: κ is a scalar sharpness dial; dimension scaling (√K) is hardcoded in attention
@@ -306,7 +310,7 @@ VFE_EM_CONFIG = {
     # =================================================================
     
     'gauge_group': 'GLK',       # 'SO3', 'SON', or 'GLK'
-    'gauge_dim': 10,            # N for SO(N) - only used when gauge_group='SON'
+    'gauge_dim': 20,            # N for SO(N) - only used when gauge_group='SON'
     'gauge_mode': 'learned',    # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j)
                                 # 'trivial': global frame, φ = 0, Ω = I (standard attention)
     
@@ -347,7 +351,7 @@ VFE_EM_CONFIG = {
      # ('ℓ6', 1, 13),
      # ('ℓ7', 1, 15),
       # ('ℓ50', 1, 101),
-      ('fund', 1, 10)  #For SO(8)
+      ('fund', 4, 20)  #For SO(8)
      # ('fund', 10, 5),   # SO(5)
        
      # SO(5) multi-irrep example:
@@ -438,7 +442,7 @@ def run_test_evaluation(
     test_loader: torch.utils.data.DataLoader,
     device: torch.device,
     vocab_size: int,
-    max_batches: int = 2000,
+    max_samples: int = 128000,
     config: dict = None,
 ) -> Dict[str, float]:
     """
@@ -452,7 +456,9 @@ def run_test_evaluation(
         test_loader: Test set dataloader
         device: Device to run evaluation on
         vocab_size: Vocabulary size for random baseline comparison
-        max_batches: Maximum number of batches to evaluate (default: 2000)
+        max_samples: Maximum number of samples to evaluate (default: 128000,
+                     equivalent to 2000 batches at batch_size=64). This ensures
+                     consistent evaluation across configs with different batch sizes.
         config: Training config dict (for alpha/beta/lambda values).
                 If None, uses pure CE evaluation.
 
@@ -468,9 +474,7 @@ def run_test_evaluation(
     print("FINAL TEST SET EVALUATION")
     print("="*70)
 
-    total_batches = len(test_loader)
-    eval_batches = min(max_batches, total_batches) if max_batches is not None else total_batches
-    print(f"  Evaluating {eval_batches} / {total_batches} batches...")
+    print(f"  Evaluating up to {max_samples} samples...")
 
     # Use same code path as validation: compute_free_energy_loss
     # which calls model.forward_with_attention() internally.
@@ -485,10 +489,11 @@ def run_test_evaluation(
     model.eval()
     total_ce = 0.0
     num_batches = 0
+    total_samples = 0
 
     with torch.no_grad():
         for batch_idx, (input_ids, target_ids) in enumerate(test_loader):
-            if max_batches is not None and batch_idx >= max_batches:
+            if total_samples >= max_samples:
                 break
 
             input_ids = input_ids.to(device)
@@ -513,10 +518,11 @@ def run_test_evaluation(
 
             total_ce += ce_loss
             num_batches += 1
+            total_samples += input_ids.size(0)
 
             # Progress indicator
             if (batch_idx + 1) % 100 == 0:
-                print(f"  Evaluated {batch_idx + 1}/{eval_batches} batches...")
+                print(f"  Evaluated {total_samples}/{max_samples} samples ({num_batches} batches)...")
 
     # Compute metrics (same averaging as validation: mean of batch means)
     test_ce = total_ce / max(1, num_batches)
@@ -525,7 +531,7 @@ def run_test_evaluation(
     random_ppl = vocab_size
     improvement = random_ppl / test_ppl if test_ppl > 0 else 0
 
-    print(f"\nTest Set Results ({num_batches} batches evaluated):")
+    print(f"\nTest Set Results ({total_samples} samples across {num_batches} batches):")
     print(f"  Cross-entropy loss: {test_ce:.4f}")
     print(f"  Perplexity:         {test_ppl:.2f}")
     print(f"  Bits per character: {test_bpc:.3f}")
@@ -944,7 +950,7 @@ class PublicationTrainer(FastTrainer):
                             np.fill_diagonal(attn_plot, np.nan)  # Mask diagonal
                             attn_plot = np.log10(np.maximum(attn_plot, 1e-6))  # Log scale
 
-                            im = ax.imshow(attn_plot, cmap='viridis', aspect='auto', vmin=-5, vmax=0)
+                            im = ax.imshow(attn_plot, cmap='viridis', aspect='auto', vmin=-8, vmax=0)
                             ax.set_xlabel('Key Position (j)')
                             ax.set_ylabel('Query Position (i)')
 
@@ -2138,4 +2144,3 @@ def main():
 if __name__ == '__main__':
 
     main()
-
