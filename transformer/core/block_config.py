@@ -43,6 +43,7 @@ class BlockConfig:
     phi_dim: int = 3              # 3 for SO(3), N(N-1)/2 for SO(N)
     phi_natural_gradient: str = 'clip'  # 'clip'|'cartan'|'killing'|'pullback'
     diagonal_covariance: bool = False
+    amortized_inference: bool = True  # Gradient flow through priors for learned E-step init
 
     # === VFE dynamics (FFN E-step) ===
     ffn_mode: str = 'VFE_dynamic'
@@ -111,6 +112,7 @@ class BlockConfig:
             phi_dim=config.get('phi_dim', 3),
             phi_natural_gradient=config.get('phi_natural_gradient', 'clip'),
             diagonal_covariance=config.get('diagonal_covariance', False),
+            amortized_inference=config.get('amortized_inference', True),
             # VFE dynamics
             ffn_mode=config.get('ffn_mode', 'VFE_dynamic'),
             ffn_alpha=config.get('ffn_alpha', 0.001),
