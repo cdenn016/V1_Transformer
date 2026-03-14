@@ -615,7 +615,7 @@ The gauge transport operators $\Omega_{ij}, \tilde{\Omega}_{ij}$ are pointwise g
 \label{eq:gauge_frame_rotation}
 \end{equation}
 
-where $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ is agent $i$'s gauge frame field (an open local section of the Lie algebra bundle) and $\mathrm{GL}^+(K) = \{A \in \mathrm{GL}(K) : \det A > 0\}$ is the identity component of $\mathrm{GL}(K)$. These act on the latent variables as
+where $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ is agent $i$'s gauge frame field (an open local section of the Lie algebra bundle) and $\mathrm{GL}^+(K) = \{A \in \mathrm{GL}(K) : \det A > 0\}$ is the identity component of $\mathrm{GL}(K)$.  Under orthogonal projection, $\mathrm{GL}^+(K)$ maps to $\mathrm{SO}(K)$ rather than full $\mathrm{O}(K)$; the extension to the disconnected component via learnable reflections is discussed in Section~\ref{par:ok_transport}. These act on the latent variables as
 
 \begin{equation}
 \begin{aligned}
@@ -1037,6 +1037,27 @@ This is already a fully specified attention mechanism. The attention weight
 \label{eq:general_isotropic_attention}
 \end{equation}
 combines a content-dependent term (the Mahalanobis distance between belief means, measured in the key's frame) with a pair-dependent geometric bias $S(\Omega_{ij})$ that encodes the distortion introduced by gauge transport. When $\Omega_{ij}$ is orthogonal, $S(\Omega_{ij}) = 0$ identically; for general $\mathrm{GL}(K)$ transport, $S(\Omega_{ij}) \geq 0$ with equality if and only if $\Omega_{ij} \in \mathrm{O}(K)$. The geometric bias therefore penalizes transport operators that distort volume or stretch directions, providing a geometric regularizer intrinsic to the KL divergence. This is the natural form of attention under a single simplifying limit (isotropic covariances); standard transformer attention requires a further specialization.
+
+\paragraph{Achieving $\mathrm{O}(K)$ transport via learnable reflections.}
+\label{par:ok_transport}
+
+The condition $S(\Omega_{ij}) = 0$ is equivalent to $\Omega_{ij} \in \mathrm{O}(K)$, but orthogonality serves a second, equally important role: the transported covariance $\sigma^2(\Omega_{ij}\Omega_{ij}^\top)$ equals $\sigma^2 I$ if and only if $\Omega_{ij}\Omega_{ij}^\top = I$, i.e., $\Omega_{ij} \in \mathrm{O}(K)$.  Thus orthogonal transport is the \emph{unique} condition under which isotropic covariances are preserved under gauge transport.  For $\Omega_{ij} \in \mathrm{GL}(K) \setminus \mathrm{O}(K)$, a belief that is isotropic in its own frame becomes anisotropic when transported to another frame, and the geometric bias $S(\Omega_{ij}) > 0$ measures precisely this induced anisotropy.
+
+However, the matrix exponential parameterization $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j) \in \mathrm{GL}^+(K)$ (Eq.~\ref{eq:gauge_frame_rotation}) restricts transport to the identity component.  Under orthogonal projection (e.g., Newton--Schulz iteration), $\mathrm{GL}^+(K)$ maps to $\mathrm{SO}(K)$, the special orthogonal group with $\det = +1$.  The full orthogonal group $\mathrm{O}(K) = \mathrm{SO}(K) \rtimes \mathbb{Z}_2$ includes a second connected component of orientation-reversing transformations ($\det = -1$) that is topologically inaccessible to the exponential map.  To extend to full $\mathrm{O}(K)$, one introduces per-agent diagonal reflection matrices $R_i = \mathrm{diag}(s_i)$ with $s_i \in \{-1,+1\}^K$, yielding the combined transport
+%
+\begin{equation}
+\Omega_{ij} = R_i \, M_{ij} \, R_j, \qquad M_{ij} = \exp(\phi_i)\exp(-\phi_j) \in \mathrm{SO}(K),
+\label{eq:ok_transport}
+\end{equation}
+%
+which covers both components of $\mathrm{O}(K)$ since $\det(\Omega_{ij}) = (\prod_k s_i^{(k)})(\prod_k s_j^{(k)})\det(M_{ij})$ ranges over $\pm 1$.  Orthogonality $\Omega_{ij}\Omega_{ij}^\top = R_i M_{ij} \underbrace{R_j R_j}_{I} M_{ij}^\top R_i = R_i \underbrace{M_{ij}M_{ij}^\top}_{I} R_i = \underbrace{R_i^2}_{I} = I$ follows from the fact that each factor is independently orthogonal, ensuring $S(\Omega_{ij}) = 0$ and preservation of isotropic covariance under transport.  The Mahalanobis distance decomposes cleanly: since $\Omega_{ij}^{-1} = R_j M_{ij}^\top R_i$ and each $R$ is its own inverse,
+%
+\begin{equation}
+\|\Omega_{ij}^{-1}\mu_i - \mu_j\|^2 = \|M_{ij}^\top(s_i \odot \mu_i) - (s_j \odot \mu_j)\|^2,
+\label{eq:ok_mahalanobis}
+\end{equation}
+%
+so the reflections are absorbed into the embeddings via elementwise sign flips $\mu_i \mapsto s_i \odot \mu_i$, requiring no modification to the $\mathrm{SO}(K)$ attention computation.  Gradient flow through the discrete signs can be maintained via the straight-through estimator, treating the sign function as identity in the backward pass while sampling from $\{-1,+1\}$ in the forward pass.  The $\mathrm{O}(K)$ extension is therefore a minimal modification: the continuous gauge dynamics on $\mathrm{SO}(K)$ are unchanged, and the discrete reflections provide the topologically necessary second component.
 
 The rescaled KL divergence $\widetilde{D}_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) := \sigma^2 \cdot D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) \to \frac{1}{2}\|\Omega_{ij}^{-1}\mu_i - \mu_j\|^2$ as $\sigma \to 0$ remains finite and equals half the squared distance between means as measured in the key's reference frame. This should be understood as the regime where $\sigma$ is small compared to characteristic scales of $\mu_i$, such that $\sigma^{-2}$ will be absorbed into the learned projections (see below).
 
@@ -2384,7 +2405,9 @@ The full variational free energy (Section~3.4) includes both the fast belief sub
 
 The full VFE prescribes coupled dynamics at both timescales simultaneously, with the model-model alignment term $\gamma_{ij} D_{\mathrm{KL}}(s_i \| \tilde{\Omega}_{ij} s_j)$ driving agents toward consensus on generative models as well as beliefs. Implementing both subsystems during inference would unify in-context learning, fine-tuning, and continual adaptation as limits of the same variational dynamics. A further extension toward backpropagation-free learning---updating all variational parameters via local VFE gradients combined with a delta rule for the output projection---would test whether the variational free energy principle provides a viable alternative learning algorithm. Both extensions remain theoretical and their practical feasibility is unestablished.
 
+\subsubsection{$\mathrm{O}(K)$ Gauge Transport and the Exact Isotropic Limit.}
 
+The isotropic covariance limit (Section~\ref{par:ok_transport}) requires $\Omega_{ij} \in \mathrm{O}(K)$ for both the vanishing of the geometric bias $S(\Omega_{ij}) = 0$ and the preservation of isotropic covariance under transport.  While the matrix exponential parameterization restricts to the identity component $\mathrm{SO}(K)$, the extension to full $\mathrm{O}(K)$ via per-agent diagonal reflections $R_i = \mathrm{diag}(s_i)$ (Eq.~\ref{eq:ok_transport}) introduces a controlled discrete degree of freedom without disrupting the continuous gauge dynamics.  The sign vectors $s_i \in \{-1,+1\}^K$ are learnable via the straight-through estimator, and the factorization $\mu_i \mapsto s_i \odot \mu_i$ (Eq.~\ref{eq:ok_mahalanobis}) means that reflections are applied at the embedding level, leaving all downstream attention and VFE computations unchanged.  Whether this additional discrete gauge freedom improves language modeling performance in the isotropic regime, and whether the learned sign vectors develop interpretable structure (e.g., clustering by semantic or syntactic category), are experimental questions that probe the role of the disconnected component of $\mathrm{O}(K)$ in natural language representation.
 
 \section{Conclusion}
 
