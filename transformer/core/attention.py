@@ -326,6 +326,8 @@ def compute_attention_weights(
     # Rotary Position Embeddings (RoPE)
     use_rope: bool = False,            # If True, apply RoPE rotations to μ before KL computation
     rope_base: float = 10000.0,        # RoPE frequency base
+    # Cached block exponentials (avoids redundant fused_block_matrix_exp_pairs calls)
+    cached_block_exp_pairs: Optional[list] = None,
 ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
     """
     Compute attention weights from KL divergences (0D version).
@@ -427,7 +429,8 @@ def compute_attention_weights(
         # Block processing for small Omega + diagonal KL formulas (no inv/Cholesky)
         kl_matrix = _compute_kl_matrix_block_diagonal_diag(
             mu_q, sigma_q, phi, generators, irrep_dims,
-            enforce_orthogonal=enforce_orthogonal
+            enforce_orthogonal=enforce_orthogonal,
+            cached_block_exp_pairs=cached_block_exp_pairs,
         )
     elif irrep_dims is not None and not diagonal_covariance:
         # BLOCK-DIAGONAL MODE: Principled + memory-efficient!
@@ -435,12 +438,14 @@ def compute_attention_weights(
         if chunk_size is not None:
             # Block-diagonal + chunked: maximum memory efficiency
             kl_matrix = _compute_kl_matrix_block_diagonal_chunked(
-                mu_q, sigma_q, phi, generators, irrep_dims, chunk_size
+                mu_q, sigma_q, phi, generators, irrep_dims, chunk_size,
+                cached_block_exp_pairs=cached_block_exp_pairs,
             )
         else:
             # Block-diagonal only (still big savings vs full K×K)
             kl_matrix = _compute_kl_matrix_block_diagonal(
-                mu_q, sigma_q, phi, generators, irrep_dims
+                mu_q, sigma_q, phi, generators, irrep_dims,
+                cached_block_exp_pairs=cached_block_exp_pairs,
             )
     elif chunk_size is not None and not diagonal_covariance:
         # CHUNKED MODE: Full covariance but memory-efficient
@@ -1544,6 +1549,7 @@ def _compute_kl_matrix_block_diagonal_diag(
     generators: torch.Tensor,       # (n_gen, K, K) block-diagonal generators
     irrep_dims: List[int],          # [d₁, d₂, ...] dimensions of each irrep block
     enforce_orthogonal: bool = False,
+    cached_block_exp_pairs: Optional[list] = None,
 ) -> torch.Tensor:
     """
     Block-diagonal KL for diagonal covariance mode — FUSED version.
@@ -1566,9 +1572,12 @@ def _compute_kl_matrix_block_diagonal_diag(
     sigma_q = sigma_q.clamp(min=eps)
 
     # Fused: compute all block matrix exponentials in grouped batches
-    block_exp_pairs = fused_block_matrix_exp_pairs(
-        phi, generators, irrep_dims, enforce_orthogonal=enforce_orthogonal
-    )
+    if cached_block_exp_pairs is not None:
+        block_exp_pairs = cached_block_exp_pairs
+    else:
+        block_exp_pairs = fused_block_matrix_exp_pairs(
+            phi, generators, irrep_dims, enforce_orthogonal=enforce_orthogonal
+        )
 
     # Fused: compute transport + KL for all blocks in grouped batches
     return fused_block_diagonal_kl_diag(
@@ -1582,6 +1591,7 @@ def _compute_kl_matrix_block_diagonal(
     phi: torch.Tensor,              # (B, N, n_gen) gauge frames
     generators: torch.Tensor,       # (n_gen, K, K) block-diagonal generators
     irrep_dims: List[int],          # [d₁, d₂, ...] dimensions of each irrep block
+    cached_block_exp_pairs: Optional[list] = None,
 ) -> torch.Tensor:
     """
     BLOCK-DIAGONAL KL computation — FUSED version.
@@ -1612,9 +1622,12 @@ def _compute_kl_matrix_block_diagonal(
     assert sum(irrep_dims) == K, f"irrep_dims sum {sum(irrep_dims)} != K={K}"
 
     # Fused: compute all block matrix exponentials in grouped batches
-    block_exp_pairs = fused_block_matrix_exp_pairs(
-        phi, generators, irrep_dims, enforce_orthogonal=False
-    )
+    if cached_block_exp_pairs is not None:
+        block_exp_pairs = cached_block_exp_pairs
+    else:
+        block_exp_pairs = fused_block_matrix_exp_pairs(
+            phi, generators, irrep_dims, enforce_orthogonal=False
+        )
 
     # Fused: compute transport + KL for all blocks in grouped batches
     return fused_block_diagonal_kl_full(
@@ -1629,6 +1642,7 @@ def _compute_kl_matrix_block_diagonal_chunked(
     generators: torch.Tensor,       # (n_gen, K, K) block-diagonal generators
     irrep_dims: List[int],          # [d₁, d₂, ...] dimensions of each irrep block
     chunk_size: int = 64,           # Process N×N in chunks
+    cached_block_exp_pairs: Optional[list] = None,
 ) -> torch.Tensor:
     """
     BLOCK-DIAGONAL + CHUNKED KL computation - maximum memory efficiency.
@@ -1661,10 +1675,12 @@ def _compute_kl_matrix_block_diagonal_chunked(
     # Precompute block-wise matrix exponentials — FUSED by dimension group
     # Memory: O(N × Σᵢ dᵢ²) - manageable
     # =========================================================================
-    _fused_pairs = fused_block_matrix_exp_pairs(phi, generators, irrep_dims)
+    if cached_block_exp_pairs is not None:
+        _fused_pairs = cached_block_exp_pairs
+    else:
+        _fused_pairs = fused_block_matrix_exp_pairs(phi, generators, irrep_dims)
     block_exp_phi = [p[0] for p in _fused_pairs]
     block_exp_neg_phi = [p[1] for p in _fused_pairs]
-    del _fused_pairs
 
     # =========================================================================
     # Process position pairs in chunks, accumulate KL across blocks
