@@ -332,9 +332,9 @@ VFE_EM_CONFIG = {
     
     'gauge_group': 'GLK',       # 'SO3', 'SON', or 'GLK'
     'gauge_dim': 10,            # N for SO(N) - only used when gauge_group='SON'
-    'gauge_mode': 'constant',    # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j)
-                                # 'constant': global frame, 
-                                #'trivial'   φ = 0, Ω = I (standard attention)
+    'gauge_mode': 'constant',    # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j) (cocycle)
+                                # 'constant': per-head Ω ∈ GL(d_head), Ω_ij = Ω (manuscript Limit 2)
+                                # 'trivial': φ = 0, Ω = I (standard attention)
     
     # Gauge geometry: principled phi gradient control (replaces ad-hoc clipping)
     'phi_natural_gradient': 'killing',  # E-step: 'pullback', 'killing', 'cartan', 'clip'
