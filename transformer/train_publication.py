@@ -139,6 +139,8 @@ STANDARD_CONFIG = {
     'evolve_sigma': False,
     'evolve_phi': False,
     'diagonal_covariance': True,
+    'isotropic_covariance': False,    # If True, force Σ = σ²I (scalar variance × identity)
+                                       # This is the isotropic limit where KL → squared Euclidean
     'use_positional_embedding': True,
 
     # Learning rates (standard Adam rates)
@@ -230,7 +232,11 @@ VFE_EM_CONFIG = {
                                   
     'phi_update_interval': 1,                       
     'diagonal_covariance': True,
-    
+    'isotropic_covariance': False,    # If True, force Σ = σ²I (scalar variance × identity)
+                                       # This is Limit 1 from the manuscript: KL reduces to
+                                       # scaled squared Euclidean distance. Combined with
+                                       # gauge_mode='trivial' (Limit 2), recovers standard attention.
+
     'use_positional_embedding': True,
     'pos_encoding_mode': 'learned',           #'none' 'learned' or 'sinusoidal'
     'use_rope': False,

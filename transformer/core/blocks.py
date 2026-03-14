@@ -160,6 +160,7 @@ class GaugeTransformerBlock(nn.Module):
             deq_neumann_terms=cfg.deq_neumann_terms,
             gauge_mode=cfg.gauge_mode,
             amortized_inference=cfg.amortized_inference,
+            isotropic_covariance=cfg.isotropic_covariance,
         )
 
         self.norm2 = nn.LayerNorm(cfg.embed_dim) if cfg.use_layernorm else nn.Identity()

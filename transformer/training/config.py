@@ -136,6 +136,11 @@ class TrainingConfig:
     # or 'trivial' (global frame, φ = 0, Ω = I, standard KL-attention).
     gauge_mode: str = 'learned'
 
+    # Isotropic covariance: force Σ = σ²I (scalar variance × identity)
+    # This is Limit 1 from the manuscript: KL reduces to scaled squared Euclidean.
+    # Combined with gauge_mode='trivial' (Limit 2), recovers standard attention.
+    isotropic_covariance: bool = False
+
     # ==========================================================================
     # Positional Encoding
     # ==========================================================================

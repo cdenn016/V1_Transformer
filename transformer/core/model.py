@@ -149,6 +149,16 @@ class GaugeTransformerLM(nn.Module):
         diagonal_covariance = config.get('diagonal_covariance', False)
         self.diagonal_covariance = diagonal_covariance
 
+        # Isotropic covariance: Σ = σ²I (Limit 1 → KL reduces to squared Euclidean)
+        isotropic_covariance = config.get('isotropic_covariance', False)
+        self.isotropic_covariance = isotropic_covariance
+        if isotropic_covariance:
+            print(f"[INFO] Isotropic covariance mode: Σ = σ²I (Limit 1 — KL → squared Euclidean)")
+            if not diagonal_covariance:
+                print(f"       (Forcing diagonal_covariance=True for isotropic mode)")
+                diagonal_covariance = True
+                self.diagonal_covariance = True
+
         # Positional embedding added to μ (like standard transformers)
         # DEFAULT: True - position in μ, not gauge frame φ. 
         use_positional_embedding = config.get('use_positional_embedding', False)
@@ -200,6 +210,9 @@ class GaugeTransformerLM(nn.Module):
             evolve_phi_e_step = False
             print(f"[INFO] Trivial gauge mode: φ = 0, Ω = I (global frame / standard attention limit)")
             print(f"       This recovers standard KL-attention: KL(q_i || q_j) with no transport.")
+            if isotropic_covariance:
+                print(f"[INFO] Limits 1+2 active: Σ = σ²I + Ω = I → attention ∝ exp(-||μ_i - μ_j||² / (2σ²))")
+                print(f"       This is equivalent to standard dot-product attention (up to absorbing σ⁻² into W_Q·W_K^T)")
 
         # =================================================================
         # Cross-Head Coupling (sparse off-diagonal gauge mixing)
@@ -323,6 +336,7 @@ class GaugeTransformerLM(nn.Module):
             gauge_fixed_priors=gauge_fixed_priors,
             generators=self.generators,  # Always pass generators for gauge transport
             diagonal_covariance=diagonal_covariance,
+            isotropic_covariance=config.get('isotropic_covariance', False),
             max_seq_len=max_seq_len,
             use_positional_embedding=use_positional_embedding,
             phi_dim=self.phi_dim,  # SO(3): 3, SO(N): N(N-1)/2
