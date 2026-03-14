@@ -197,7 +197,7 @@ def compute_transport_operators(
     phi: torch.Tensor,         # (B, N, n_gen) gauge frames where n_gen is # of generators
     generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators
     enforce_orthogonal: bool = False,  # If True, project to SO(K) via Newton-Schulz
-    gauge_mode: str = 'learned',  # 'learned' or 'trivial'
+    gauge_mode: str = 'learned',  # 'learned', 'trivial', or 'constant'
 ) -> dict:
     """
     Precompute transport operators for caching when phi is fixed.
@@ -217,6 +217,11 @@ def compute_transport_operators(
                  mathematically principled "trivial gauge" or "gauge fixing"
                  that recovers standard attention as a special case.
                  Equivalent to setting φ = 0 everywhere.
+    - 'constant': Per-head learnable Ω ∈ GL(d_head), same for all pairs.
+                  The constant Ω is stored as nn.Parameter in the attention
+                  module (IrrepMultiHeadAttention.constant_omega), not here.
+                  This function returns identity transport for 'constant'
+                  mode; the attention module injects the learned Ω directly.
 
     When evolve_phi=False, these operators are constant across layers.
     Computing once saves 2 matrix exponentials per head per layer.
@@ -229,7 +234,9 @@ def compute_transport_operators(
         generators: Lie algebra generators (n_gen, K, K)
         enforce_orthogonal: If True, apply Newton-Schulz to ensure Ω ∈ SO(K).
                            If False, allow Ω ∈ GL⁺(K) (faster, still gauge-invariant).
-        gauge_mode: 'learned' for per-token frames, 'trivial' for global frame (Ω=I)
+        gauge_mode: 'learned' for per-token frames, 'trivial' for Ω=I,
+                   'constant' for per-head learned Ω (returns I here; actual Ω
+                   injected by attention module)
 
     Returns:
         dict with:
@@ -243,12 +250,15 @@ def compute_transport_operators(
     device = phi.device
 
     # =================================================================
-    # TRIVIAL GAUGE: φ = 0, Ω = I (global frame, standard attention limit)
+    # TRIVIAL / CONSTANT GAUGE: Ω = I (identity transport)
     # =================================================================
-    # This is the mathematically principled gauge fixing where all tokens
-    # share a single coordinate frame. No transport between frames.
-    # KL(q_i || Ω_ij[q_j]) = KL(q_i || q_j) when Ω = I.
-    if gauge_mode == 'trivial':
+    # 'trivial': φ = 0, Ω = I everywhere (global frame, standard attention).
+    # 'constant': Per-head Ω ∈ GL(d_head) is handled by the attention module
+    #   (IrrepMultiHeadAttention) which injects its constant_omega directly.
+    #   Here we return identity because this function has no access to the
+    #   per-head learned Ω parameters. The attention module overrides these
+    #   identity operators with the actual constant_omega in its forward().
+    if gauge_mode in ('trivial', 'constant'):
         eye_K = torch.eye(K, device=device, dtype=dtype)
         exp_phi = eye_K.expand(B, N, K, K).contiguous()      # (B, N, K, K)
         exp_neg_phi = eye_K.expand(B, N, K, K).contiguous()  # (B, N, K, K)
@@ -317,7 +327,7 @@ def compute_attention_weights(
     chunk_size: Optional[int] = None,  # Chunk size for memory-efficient computation (None = auto)
     # ALiBi-style positional bias (NEW!)
     alibi_slope: Optional[float] = None,  # If set, adds slope * (i-j) to logits for relative position
-    # Gauge mode: 'learned' (per-token φ, full transport) or 'trivial' (Ω = I, no transport)
+    # Gauge mode: 'learned' (per-token φ), 'trivial' (Ω = I), or 'constant' (per-head Ω)
     gauge_mode: str = 'learned',
     # Self-attention masking (prevents attention collapse)
     mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
@@ -372,7 +382,8 @@ def compute_attention_weights(
                     while adding controlled positional information.
                     Typical values: -0.1 to -0.01 (for recency bias)
         gauge_mode: 'learned' for per-token gauge frames with full transport,
-                   'trivial' for global frame (Ω = I, no transport).
+                   'trivial' for global frame (Ω = I, no transport),
+                   'constant' for per-head learnable Ω (manuscript Limit 2).
                    Trivial mode computes raw KL(q_i || q_j) without rotation.
         mask_self_attention: If True, mask out diagonal of attention matrix.
                             This prevents the model from attending to itself,
@@ -596,7 +607,8 @@ def compute_kl_matrix(
         diagonal_covariance: If True, sigma_q is (B,N,K) diagonal variances
         irrep_dims: Optional list of irrep block dimensions for block-diagonal mode
         chunk_size: Optional chunk size for memory-efficient computation
-        gauge_mode: 'learned' for full transport, 'trivial' for Ω = I
+        gauge_mode: 'learned' for full transport, 'trivial' for Ω = I,
+                   'constant' for per-head learned Ω (manuscript Limit 2)
         enforce_orthogonal: If True, enforce Ω ∈ SO(K) via Newton-Schulz iteration
 
     Returns:
@@ -721,7 +733,7 @@ def _compute_kl_matrix_torch(
     phi: torch.Tensor,
     generators: torch.Tensor,
     cached_transport: Optional[dict] = None,  # Precomputed transport operators
-    gauge_mode: str = 'learned',  # 'learned' or 'trivial' (Ω = I)
+    gauge_mode: str = 'learned',  # 'learned', 'trivial', or 'constant'
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
 ) -> torch.Tensor:
     """
@@ -735,7 +747,9 @@ def _compute_kl_matrix_torch(
         phi: (B, N, 3) gauge fields
         generators: (3, K, K) SO(3) generators
         cached_transport: Optional dict with precomputed 'Omega' from compute_transport_operators()
-        gauge_mode: 'learned' for full transport, 'trivial' for Ω = I (raw KL)
+        gauge_mode: 'learned' for full transport, 'trivial'/'constant' for Ω = I
+                   (raw KL). For 'constant', actual per-head Ω is injected via
+                   cached_transport by the attention module.
         enforce_orthogonal: If True, apply Newton-Schulz to ensure Ω ∈ SO(K)
 
     Returns:
@@ -749,9 +763,12 @@ def _compute_kl_matrix_torch(
     # =========================================================================
     # Step 1: Get transport operators (use cached if available)
     # =========================================================================
-    if gauge_mode == 'trivial':
-        # TRIVIAL GAUGE: Ω_ij = I for all pairs (global frame)
-        # Skip expensive matrix exponentials - just use raw beliefs
+    if gauge_mode == 'trivial' or (gauge_mode == 'constant' and cached_transport is None):
+        # TRIVIAL / CONSTANT (without cached Ω): Ω_ij = I for all pairs
+        # For 'trivial': global frame, no transport.
+        # For 'constant' without cached_transport: fall back to identity;
+        #   the actual per-head Ω is injected via cached_transport by the
+        #   attention module. This path is hit when called from FFN VFE.
         # μ_transported = μ_j (no rotation)
         # Σ_transported = Σ_j (no rotation)
         # Expand views (no .clone() needed — these are read-only)
@@ -2059,7 +2076,7 @@ class IrrepMultiHeadAttention(nn.Module):
         gauge_dim: int = 3,        # N for SO(N) - only used when gauge_group='SON'
         global_generators: Optional[torch.Tensor] = None,  # (n_gen, K, K) for SO(N) mode
         alibi_slope: Optional[float] = None,  # ALiBi-style positional bias (negative = recency bias)
-        gauge_mode: str = 'learned',  # 'learned' or 'trivial' (Ω = I, no gauge transport)
+        gauge_mode: str = 'learned',  # 'learned', 'trivial' (Ω = I), or 'constant' (per-head Ω)
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
         enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
         use_output_projection: bool = False,  # If True, add W_O linear projection after heads

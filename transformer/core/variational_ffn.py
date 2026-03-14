@@ -1566,7 +1566,7 @@ class VariationalFFNDynamic(nn.Module):
         use_deq: bool = False,                # Use DEQ backward for E-step fixed point
         deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
         # Gauge mode
-        gauge_mode: str = 'learned',          # 'learned' or 'trivial' (Ω = I)
+        gauge_mode: str = 'learned',          # 'learned', 'trivial' (Ω = I), or 'constant'
         # Isotropic covariance limit
         isotropic_covariance: bool = False,   # If True, force Σ = σ²I after each E-step update
         # Amortized inference: gradient flow through priors for learned E-step init
@@ -2144,10 +2144,25 @@ class VariationalFFNDynamic(nn.Module):
                 # causing 2×n_heads redundant matrix_exp calls per VFE iteration.
                 _mh_cached_bep = None
                 if self.irrep_dims is not None:
-                    _mh_cached_bep = fused_block_matrix_exp_pairs(
-                        phi_current, self.generators, self.irrep_dims,
-                        enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                    )
+                    if self.gauge_mode in ('trivial', 'constant'):
+                        # No matrix exponentials needed: Ω = I for all blocks.
+                        # 'trivial': global frame (no transport).
+                        # 'constant': per-head Ω is in the attention module;
+                        #   FFN uses identity transport (no phi evolution).
+                        _mh_cached_bep = []
+                        _start = 0
+                        for d_h in self.irrep_dims:
+                            eye_h = torch.eye(d_h, device=mu_current.device,
+                                              dtype=mu_current.dtype)
+                            eye_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
+                                B, N, -1, -1).contiguous()
+                            _mh_cached_bep.append((eye_h, eye_h))
+                            _start += d_h
+                    else:
+                        _mh_cached_bep = fused_block_matrix_exp_pairs(
+                            phi_current, self.generators, self.irrep_dims,
+                            enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                        )
 
                 block_start = 0
                 for h, d_h in enumerate(self.irrep_dims):
@@ -2250,10 +2265,22 @@ class VariationalFFNDynamic(nn.Module):
                 # and gradient computation (both depend only on phi, not mu/sigma)
                 _cached_bep = None
                 if self.irrep_dims is not None:
-                    _cached_bep = fused_block_matrix_exp_pairs(
-                        phi_current, self.generators, self.irrep_dims,
-                        enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                    )
+                    if self.gauge_mode in ('trivial', 'constant'):
+                        # Identity transport: skip matrix exponentials
+                        _cached_bep = []
+                        _start = 0
+                        for d_h in self.irrep_dims:
+                            eye_h = torch.eye(d_h, device=mu_current.device,
+                                              dtype=mu_current.dtype)
+                            eye_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
+                                B, N, -1, -1).contiguous()
+                            _cached_bep.append((eye_h, eye_h))
+                            _start += d_h
+                    else:
+                        _cached_bep = fused_block_matrix_exp_pairs(
+                            phi_current, self.generators, self.irrep_dims,
+                            enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                        )
 
                 # STEP 1: Recompute attention β from current beliefs
                 beta_current = compute_attention_weights(
