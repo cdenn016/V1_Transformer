@@ -128,7 +128,7 @@ def get_config_val(cfg, key, default=None):
 
 def evaluate_on_test(
     checkpoint_path: str,
-    max_batches: Optional[int] = None,
+    max_samples: Optional[int] = None,
     device: str = 'auto',
 ) -> Dict[str, float]:
     """
@@ -136,7 +136,9 @@ def evaluate_on_test(
 
     Args:
         checkpoint_path: Path to checkpoint file
-        max_batches: Maximum batches to evaluate (None = all)
+        max_samples: Maximum samples to evaluate (None = all). Using samples
+                     instead of batches ensures consistent evaluation across
+                     configs with different batch sizes.
         device: Device to use ('auto', 'cuda', 'cpu')
 
     Returns:
@@ -226,21 +228,20 @@ def evaluate_on_test(
     print(f"{'='*70}")
 
     total_batches = len(test_loader)
-    if max_batches is not None:
-        eval_batches = min(max_batches, total_batches)
-        print(f"Evaluating on {eval_batches} / {total_batches} batches...")
+    if max_samples is not None:
+        print(f"Evaluating up to {max_samples} samples from {total_batches} total batches...")
     else:
-        eval_batches = total_batches
         print(f"Evaluating on ALL {total_batches} batches...")
 
     total_loss = 0.0
     total_ce = 0.0
     total_tokens = 0
     num_batches = 0
+    total_samples = 0
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(test_loader):
-            if max_batches is not None and batch_idx >= max_batches:
+            if max_samples is not None and total_samples >= max_samples:
                 break
 
             input_ids, target_ids = batch
@@ -266,10 +267,11 @@ def evaluate_on_test(
             total_ce += metrics['loss/ce'] * non_pad
             total_tokens += non_pad
             num_batches += 1
+            total_samples += input_ids.size(0)
 
             if (batch_idx + 1) % 50 == 0:
                 current_ppl = np.exp(total_ce / max(total_tokens, 1))
-                print(f"  Batch {batch_idx + 1}/{eval_batches} - Running PPL: {current_ppl:.2f}")
+                print(f"  {total_samples} samples ({num_batches} batches) - Running PPL: {current_ppl:.2f}")
 
     # Final results - token-weighted average (weights by non-padding tokens)
     avg_loss = total_loss / max(total_tokens, 1)
@@ -313,15 +315,16 @@ def main():
         help='Path(s) to checkpoint file(s)'
     )
     parser.add_argument(
-        '--max_batches', '-n',
+        '--max_samples', '-n',
         type=int,
         default=None,
-        help='Max batches to evaluate (default: all)'
+        help='Max samples to evaluate (default: all). Uses sample count '
+             'instead of batch count for consistency across batch sizes.'
     )
     parser.add_argument(
         '--full',
         action='store_true',
-        help='Evaluate on full test set (same as --max_batches None)'
+        help='Evaluate on full test set (same as --max_samples None)'
     )
     parser.add_argument(
         '--device',
@@ -339,7 +342,7 @@ def main():
 
     args = parser.parse_args()
 
-    max_batches = None if args.full else args.max_batches
+    max_samples = None if args.full else args.max_samples
 
     all_results = {}
 
@@ -356,7 +359,7 @@ def main():
         try:
             results = evaluate_on_test(
                 str(path),
-                max_batches=max_batches,
+                max_samples=max_samples,
                 device=args.device,
             )
             all_results[str(path)] = results
