@@ -1567,6 +1567,10 @@ class VariationalFFNDynamic(nn.Module):
         deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
         # Gauge mode
         gauge_mode: str = 'learned',          # 'learned', 'trivial' (Ω = I), or 'constant'
+        # Constant gauge: per-head learnable Ω from the attention module.
+        # When gauge_mode='constant', these are used for transport in VFE iterations
+        # instead of identity (which would be inconsistent with the attention module).
+        constant_omega: Optional[nn.ParameterList] = None,
         # Isotropic covariance limit
         isotropic_covariance: bool = False,   # If True, force Σ = σ²I after each E-step update
         # Amortized inference: gradient flow through priors for learned E-step init
@@ -1616,10 +1620,25 @@ class VariationalFFNDynamic(nn.Module):
         self.isotropic_covariance = isotropic_covariance
         self.amortized_inference = amortized_inference
 
+        # Constant gauge: store reference to attention module's per-head Ω parameters.
+        # When gauge_mode='constant', these are used to build transport operators
+        # in VFE iterations, ensuring consistency with the attention module.
+        # Without this, the FFN would use Ω=I (identity), computing different
+        # attention patterns than the attention module.
+        self.constant_omega = constant_omega
+
         # Phi evolution via VFE gradients (principled approach)
         self.update_phi = update_phi
         self.update_phi_per_iteration = update_phi_per_iteration  # Dynamical gauge frames
         self.phi_update_interval = phi_update_interval
+        if update_phi_per_iteration and gauge_mode == 'constant':
+            import warnings
+            warnings.warn(
+                "evolve_phi_e_step=True with gauge_mode='constant' is ineffective: "
+                "phi is not used for transport in constant gauge mode (Ω is a direct parameter). "
+                "Set evolve_phi_e_step=False to avoid wasted computation.",
+                UserWarning,
+            )
         if update_phi_per_iteration:
             print(f"[VariationalFFNDynamic] φ will evolve DURING E-step iterations (dynamical gauge frames)")
         self.phi_lr = phi_lr
@@ -2106,12 +2125,31 @@ class VariationalFFNDynamic(nn.Module):
             # Skip caching when using block-diagonal or chunked paths (they
             # compute transport internally in chunks to save memory).
             if self.irrep_dims is None and self.chunk_size is None and not self.multihead_vfe:
-                cached_transport = compute_transport_operators(
-                    phi=phi_current,
-                    generators=self.generators,
-                    enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                    gauge_mode=self.gauge_mode,
-                )
+                if self.gauge_mode == 'constant' and self.constant_omega is not None:
+                    # Constant gauge with known Ω: build full-K transport from
+                    # per-head constant_omega blocks (non-block-diagonal path).
+                    K = mu_current.shape[-1]
+                    omega_full = torch.eye(K, device=mu_current.device, dtype=mu_current.dtype)
+                    _blk_start = 0
+                    for h_idx in range(len(self.constant_omega)):
+                        omega_h = self.constant_omega[h_idx].to(
+                            device=mu_current.device, dtype=mu_current.dtype)
+                        d_h = omega_h.shape[0]
+                        if getattr(self, 'enforce_orthogonal', False) and d_h >= 2:
+                            omega_h = newton_schulz_orthogonalize(
+                                omega_h.unsqueeze(0)).squeeze(0)
+                        omega_full[_blk_start:_blk_start+d_h, _blk_start:_blk_start+d_h] = omega_h
+                        _blk_start += d_h
+                    Omega = omega_full.unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(
+                        B, N, N, -1, -1).contiguous()
+                    cached_transport = {'Omega': Omega}
+                else:
+                    cached_transport = compute_transport_operators(
+                        phi=phi_current,
+                        generators=self.generators,
+                        enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                        gauge_mode=self.gauge_mode,
+                    )
             else:
                 cached_transport = None
 
@@ -2144,20 +2182,45 @@ class VariationalFFNDynamic(nn.Module):
                 # causing 2×n_heads redundant matrix_exp calls per VFE iteration.
                 _mh_cached_bep = None
                 if self.irrep_dims is not None:
-                    if self.gauge_mode in ('trivial', 'constant'):
+                    if self.gauge_mode == 'trivial':
                         # No matrix exponentials needed: Ω = I for all blocks.
                         # 'trivial': global frame (no transport).
-                        # 'constant': per-head Ω is in the attention module;
-                        #   FFN uses identity transport (no phi evolution).
                         _mh_cached_bep = []
-                        _start = 0
                         for d_h in self.irrep_dims:
                             eye_h = torch.eye(d_h, device=mu_current.device,
                                               dtype=mu_current.dtype)
                             eye_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
                                 B, N, -1, -1).contiguous()
                             _mh_cached_bep.append((eye_h, eye_h))
-                            _start += d_h
+                    elif self.gauge_mode == 'constant' and self.constant_omega is not None:
+                        # Constant gauge: use per-head Ω from the attention module.
+                        # exp_phi = Ω (broadcast to all positions), exp_neg_phi = I.
+                        # This produces Ω_ij = Ω @ I = Ω for all pairs, consistent
+                        # with the attention module's transport.
+                        _mh_cached_bep = []
+                        for h, d_h in enumerate(self.irrep_dims):
+                            omega_h = self.constant_omega[h].to(
+                                device=mu_current.device, dtype=mu_current.dtype)
+                            if getattr(self, 'enforce_orthogonal', False) and d_h >= 2:
+                                omega_h = newton_schulz_orthogonalize(
+                                    omega_h.unsqueeze(0)).squeeze(0)
+                            eye_h = torch.eye(d_h, device=mu_current.device,
+                                              dtype=mu_current.dtype)
+                            exp_phi_h = omega_h.unsqueeze(0).unsqueeze(0).expand(
+                                B, N, -1, -1).contiguous()
+                            exp_neg_phi_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
+                                B, N, -1, -1).contiguous()
+                            _mh_cached_bep.append((exp_phi_h, exp_neg_phi_h))
+                    elif self.gauge_mode == 'constant':
+                        # Constant gauge without constant_omega: fall back to identity
+                        # (legacy behavior for backward compatibility)
+                        _mh_cached_bep = []
+                        for d_h in self.irrep_dims:
+                            eye_h = torch.eye(d_h, device=mu_current.device,
+                                              dtype=mu_current.dtype)
+                            eye_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
+                                B, N, -1, -1).contiguous()
+                            _mh_cached_bep.append((eye_h, eye_h))
                     else:
                         _mh_cached_bep = fused_block_matrix_exp_pairs(
                             phi_current, self.generators, self.irrep_dims,
@@ -2265,17 +2328,40 @@ class VariationalFFNDynamic(nn.Module):
                 # and gradient computation (both depend only on phi, not mu/sigma)
                 _cached_bep = None
                 if self.irrep_dims is not None:
-                    if self.gauge_mode in ('trivial', 'constant'):
+                    if self.gauge_mode == 'trivial':
                         # Identity transport: skip matrix exponentials
                         _cached_bep = []
-                        _start = 0
                         for d_h in self.irrep_dims:
                             eye_h = torch.eye(d_h, device=mu_current.device,
                                               dtype=mu_current.dtype)
                             eye_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
                                 B, N, -1, -1).contiguous()
                             _cached_bep.append((eye_h, eye_h))
-                            _start += d_h
+                    elif self.gauge_mode == 'constant' and self.constant_omega is not None:
+                        # Constant gauge: use per-head Ω from the attention module.
+                        _cached_bep = []
+                        for h, d_h in enumerate(self.irrep_dims):
+                            omega_h = self.constant_omega[h].to(
+                                device=mu_current.device, dtype=mu_current.dtype)
+                            if getattr(self, 'enforce_orthogonal', False) and d_h >= 2:
+                                omega_h = newton_schulz_orthogonalize(
+                                    omega_h.unsqueeze(0)).squeeze(0)
+                            eye_h = torch.eye(d_h, device=mu_current.device,
+                                              dtype=mu_current.dtype)
+                            exp_phi_h = omega_h.unsqueeze(0).unsqueeze(0).expand(
+                                B, N, -1, -1).contiguous()
+                            exp_neg_phi_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
+                                B, N, -1, -1).contiguous()
+                            _cached_bep.append((exp_phi_h, exp_neg_phi_h))
+                    elif self.gauge_mode == 'constant':
+                        # Constant gauge without constant_omega: fall back to identity
+                        _cached_bep = []
+                        for d_h in self.irrep_dims:
+                            eye_h = torch.eye(d_h, device=mu_current.device,
+                                              dtype=mu_current.dtype)
+                            eye_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
+                                B, N, -1, -1).contiguous()
+                            _cached_bep.append((eye_h, eye_h))
                     else:
                         _cached_bep = fused_block_matrix_exp_pairs(
                             phi_current, self.generators, self.irrep_dims,
@@ -2447,7 +2533,11 @@ class VariationalFFNDynamic(nn.Module):
             # Early E-step iterations produce large belief changes where phi
             # updates are less informative; later iterations benefit more.
             phi_update_interval = getattr(self, 'phi_update_interval', 2)
+            # Skip phi evolution for constant/trivial gauge: phi is not used for
+            # transport (constant gauge uses constant_omega; trivial uses Ω=I).
+            _skip_phi_update = self.gauge_mode in ('trivial', 'constant')
             if (self.update_phi_per_iteration and torch.is_grad_enabled()
+                    and not _skip_phi_update
                     and iteration % phi_update_interval == phi_update_interval - 1):
                 phi_for_grad = phi_current.clone().requires_grad_(True)
 
@@ -2568,7 +2658,10 @@ class VariationalFFNDynamic(nn.Module):
         # depends on φ through the transport operator Ω_ij = exp(φ_i)·exp(-φ_j).
         # Only update phi during training (when gradients are enabled)
         # Skip if already updated per-iteration
-        if self.update_phi and not self.update_phi_per_iteration and torch.is_grad_enabled():
+        # Skip phi evolution for constant/trivial gauge (phi not used for transport)
+        if (self.update_phi and not self.update_phi_per_iteration
+                and torch.is_grad_enabled()
+                and self.gauge_mode not in ('trivial', 'constant')):
             # Enable gradients for phi
             phi_for_grad = phi_current.clone().requires_grad_(True)
 

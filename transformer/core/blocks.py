@@ -159,6 +159,11 @@ class GaugeTransformerBlock(nn.Module):
             use_deq=cfg.use_deq,
             deq_neumann_terms=cfg.deq_neumann_terms,
             gauge_mode=cfg.gauge_mode,
+            # Pass constant_omega from the attention module so the FFN's VFE
+            # iterations use the same per-head Ω transport (manuscript Limit 2).
+            # Without this, the FFN would use Ω=I, computing inconsistent
+            # attention patterns relative to the attention sublayer.
+            constant_omega=self.attention.constant_omega,
             amortized_inference=cfg.amortized_inference,
             isotropic_covariance=cfg.isotropic_covariance,
         )
