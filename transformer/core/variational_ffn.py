@@ -2130,6 +2130,17 @@ class VariationalFFNDynamic(nn.Module):
                 grad_sigma = torch.zeros_like(sigma_current)
                 beta_heads = []  # For history tracking
 
+                # Precompute block_exp_pairs ONCE for all heads.
+                # Without this, each head builds full Omega (B,N,N,d,d) twice
+                # (once in compute_attention_weights, once in compute_vfe_gradients_gpu),
+                # causing 2×n_heads redundant matrix_exp calls per VFE iteration.
+                _mh_cached_bep = None
+                if self.irrep_dims is not None:
+                    _mh_cached_bep = fused_block_matrix_exp_pairs(
+                        phi_current, self.generators, self.irrep_dims,
+                        enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                    )
+
                 block_start = 0
                 for h, d_h in enumerate(self.irrep_dims):
                     block_end = block_start + d_h
@@ -2163,6 +2174,9 @@ class VariationalFFNDynamic(nn.Module):
                     kappa_h = self.kappa
 
                     # Per-head attention: β_h = softmax(-KL_h / κ_h)
+                    # Use block-diagonal path with cached exp pairs to avoid
+                    # building full Omega (B,N,N,d,d) per head.
+                    _head_bep = [_mh_cached_bep[h]] if _mh_cached_bep is not None else None
                     beta_h = compute_attention_weights(
                         mu_q=mu_h,
                         sigma_q=sigma_h,
@@ -2174,9 +2188,11 @@ class VariationalFFNDynamic(nn.Module):
                         use_numba=False,
                         return_kl=False,
                         diagonal_covariance=is_diagonal,
+                        irrep_dims=[d_h],
                         chunk_size=self.chunk_size,
                         mask_self_attention=self.mask_self_attention,
                         gauge_mode=self.gauge_mode,
+                        cached_block_exp_pairs=_head_bep,
                     )  # (B, N, N)
                     beta_heads.append(beta_h)
 
@@ -2184,7 +2200,7 @@ class VariationalFFNDynamic(nn.Module):
                     alpha_h = alpha_effective[:, :, block_start:block_end] if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3 else alpha_effective
                     c0_h = _alpha_c0[block_start:block_end] if _alpha_c0 is not None else None
 
-                    # Per-head VFE gradients
+                    # Per-head VFE gradients (use block-diagonal path with cached exp pairs)
                     grad_mu_h, grad_sigma_h = compute_vfe_gradients_gpu(
                         mu_q=mu_h,
                         sigma_q=sigma_h,
@@ -2199,7 +2215,8 @@ class VariationalFFNDynamic(nn.Module):
                         eps=eps,
                         alpha_c0=c0_h,
                         compute_sigma_align_grad=self.compute_sigma_align_grad,
-
+                        irrep_dims=[d_h],
+                        cached_block_exp_pairs=_head_bep,
                     )
 
                     grad_mu[:, :, block_start:block_end] = grad_mu_h
@@ -2365,6 +2382,13 @@ class VariationalFFNDynamic(nn.Module):
                     # Multi-head phi update: sum alignment loss over heads
                     alignment_loss = torch.tensor(0.0, device=mu_current.device,
                                                   dtype=mu_current.dtype)
+                    # Compute block_exp_pairs from phi_for_grad (needs autograd)
+                    _phi_bep = None
+                    if self.irrep_dims is not None:
+                        _phi_bep = fused_block_matrix_exp_pairs(
+                            phi_for_grad, self.generators, self.irrep_dims,
+                            enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                        )
                     block_start = 0
                     for h, d_h in enumerate(self.irrep_dims):
                         block_end = block_start + d_h
@@ -2377,6 +2401,7 @@ class VariationalFFNDynamic(nn.Module):
                             sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end].detach()
                         gen_h = self.generators[:, block_start:block_end, block_start:block_end]
                         kappa_h = self.kappa
+                        _phi_head_bep = [_phi_bep[h]] if _phi_bep is not None else None
 
                         beta_phi_h_result = compute_attention_weights(
                             mu_q=mu_h, sigma_q=sigma_h,
@@ -2384,9 +2409,11 @@ class VariationalFFNDynamic(nn.Module):
                             kappa=kappa_h, epsilon=eps, mask=mask,
                             use_numba=False, return_kl=True,
                             diagonal_covariance=is_diagonal,
+                            irrep_dims=[d_h],
                             chunk_size=self.chunk_size,
                             mask_self_attention=self.mask_self_attention,
                             gauge_mode=self.gauge_mode,
+                            cached_block_exp_pairs=_phi_head_bep,
                         )
                         # compute_attention_weights with return_kl=True always returns a tuple
                         beta_phi_h, kl_h = beta_phi_h_result
@@ -2476,6 +2503,13 @@ class VariationalFFNDynamic(nn.Module):
                 # Multi-head: sum alignment loss over heads
                 alignment_loss = torch.tensor(0.0, device=mu_current.device,
                                               dtype=mu_current.dtype)
+                # Compute block_exp_pairs from phi_for_grad (needs autograd for ∂F/∂φ)
+                _phi_bep5 = None
+                if self.irrep_dims is not None:
+                    _phi_bep5 = fused_block_matrix_exp_pairs(
+                        phi_for_grad, self.generators, self.irrep_dims,
+                        enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                    )
                 block_start = 0
                 for h, d_h in enumerate(self.irrep_dims):
                     block_end = block_start + d_h
@@ -2488,6 +2522,7 @@ class VariationalFFNDynamic(nn.Module):
                         sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end].detach()
                     gen_h = self.generators[:, block_start:block_end, block_start:block_end]
                     kappa_h = self.kappa
+                    _phi_head_bep5 = [_phi_bep5[h]] if _phi_bep5 is not None else None
 
                     beta_phi_h_result = compute_attention_weights(
                         mu_q=mu_h, sigma_q=sigma_h,
@@ -2495,9 +2530,11 @@ class VariationalFFNDynamic(nn.Module):
                         kappa=kappa_h, epsilon=eps, mask=mask,
                         use_numba=False, return_kl=True,
                         diagonal_covariance=is_diagonal,
+                        irrep_dims=[d_h],
                         chunk_size=self.chunk_size,
                         mask_self_attention=self.mask_self_attention,
                         gauge_mode=self.gauge_mode,
+                        cached_block_exp_pairs=_phi_head_bep5,
                     )
                     # compute_attention_weights with return_kl=True always returns a tuple
                     beta_phi_h, kl_h = beta_phi_h_result
