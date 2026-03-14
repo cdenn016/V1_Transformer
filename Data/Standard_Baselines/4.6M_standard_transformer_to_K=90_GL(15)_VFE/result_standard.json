@@ -1,0 +1,21 @@
+{
+  "ffn_mode": "standard",
+  "pure_fep": false,
+  "final_loss": 4.5770994305610655,
+  "final_ppl": 97.23194885253906,
+  "random_ppl": 50257,
+  "improvement": 516.8774316785446,
+  "total_params": 4632840,
+  "vocab_size": 50257,
+  "checkpoint": "checkpoints_publication\\ffn_standard\\best_model.pt",
+  "total_steps": 60000,
+  "tokens_seen": 122880000,
+  "dataset_tokens": 116840318,
+  "dataset_coverage": 1.0516917627697657,
+  "batch_size": 16,
+  "seq_len": 128,
+  "test_loss": 4.775406215906143,
+  "test_ppl": 118.55846517466257,
+  "test_bpc": 6.889454865918124,
+  "test_improvement": 423.9005618532632
+}
