@@ -34,7 +34,7 @@ try:
     import cupy as cp
     from cupyx import jit
     CUPY_AVAILABLE = True
-except ImportError:
+except (ImportError, AttributeError):
     CUPY_AVAILABLE = False
     cp = None
 

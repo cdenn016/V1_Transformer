@@ -89,7 +89,7 @@ try:
         is_cupy_available,
     )
     _CUDA_KERNELS_AVAILABLE = is_cupy_available()
-except ImportError:
+except (ImportError, AttributeError):
     _CUDA_KERNELS_AVAILABLE = False
 
 # Numba CPU acceleration
