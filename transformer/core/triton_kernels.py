@@ -282,6 +282,116 @@ if TRITON_AVAILABLE:
         tl.atomic_add(kl_out_ptr + b * N * N + i * N + j, tl.sum(kl))
 
 
+if TRITON_AVAILABLE:
+
+    @triton.jit
+    def _pairwise_kl_generic_kernel(
+        kl_out_ptr,
+        ep_ptr, en_ptr, mu_ptr, sig_ptr,
+        N, n_blocks,
+        ep_stride_blk, ep_stride_pos,
+        mu_stride_blk, mu_stride_pos,
+        eps: tl.constexpr,
+        D: tl.constexpr,      # block dimension (constexpr for loop unrolling)
+        D2: tl.constexpr,     # D*D
+    ):
+        """Fused KL for all blocks of a single arbitrary dimension D.
+
+        Processes one (b, i, j) triple per program, looping over blocks
+        sequentially.  Uses row-by-row matmul to keep register pressure
+        at O(2D + accumulators) instead of O(D²).
+
+        For d=10: reads 2×100 matrix elements + 4×10 beliefs per block,
+        writes 1 scalar.  All intermediates in registers.
+        """
+        pid = tl.program_id(0)
+        j = pid % N
+        i = (pid // N) % N
+        b = pid // (N * N)
+
+        base_i = b * N + i
+        base_j = b * N + j
+
+        d_range = tl.arange(0, D)
+
+        kl_total = tl.zeros((), dtype=tl.float32)
+
+        for blk in range(n_blocks):
+            ep_off_i = blk * ep_stride_blk + base_i * ep_stride_pos
+            en_off_j = blk * ep_stride_blk + base_j * ep_stride_pos
+            mu_off_i = blk * mu_stride_blk + base_i * mu_stride_pos
+            mu_off_j = blk * mu_stride_blk + base_j * mu_stride_pos
+
+            # Load beliefs (D values each)
+            mi = tl.load(mu_ptr + mu_off_i + d_range)
+            mj = tl.load(mu_ptr + mu_off_j + d_range)
+            si = tl.maximum(tl.load(sig_ptr + mu_off_i + d_range), eps)
+            sj = tl.load(sig_ptr + mu_off_j + d_range)
+
+            # Load full B matrix (exp_neg_phi[j]) row by row and cache
+            # We need B for both mu_t and sigma_t computation
+            # Process row-by-row: for each row r of Omega, compute mu_t[r]
+            # and sigma_t[r] using A[r,:] and B[:,:]
+
+            kl_block = tl.zeros((), dtype=tl.float32)
+
+            for r in tl.static_range(D):
+                # Load row r of A = exp_phi[b,i]: A[r, 0..D-1]
+                a_row = tl.load(ep_ptr + ep_off_i + r * D + d_range)
+
+                # Compute Omega[r, c] = sum_k A[r,k] * B[k,c] for all c
+                # and simultaneously compute mu_t[r] and sigma_t[r]
+                mu_t_r = tl.zeros((), dtype=tl.float32)
+                sig_t_r = tl.zeros((), dtype=tl.float32)
+
+                for k in tl.static_range(D):
+                    # Load row k of B = exp_neg_phi[b,j]: B[k, 0..D-1]
+                    b_row_k = tl.load(en_ptr + en_off_j + k * D + d_range)
+                    # a_row[k] is a scalar — extract via masked sum
+                    a_rk = tl.sum(tl.where(d_range == k, a_row, 0.0))
+
+                    # Accumulate Omega[r,:] contributions to mu_t and sigma_t
+                    # omega_r_c = a_rk * B[k, c], so:
+                    # mu_t[r] += a_rk * sum_c(B[k,c] * mu_j[c])  -- NO, wrong
+                    # Actually: Omega[r,c] = sum_k A[r,k]*B[k,c]
+                    # mu_t[r] = sum_c Omega[r,c] * mu_j[c]
+                    #         = sum_c (sum_k A[r,k]*B[k,c]) * mu_j[c]
+                    #         = sum_k A[r,k] * (sum_c B[k,c] * mu_j[c])
+                    bk_dot_mj = tl.sum(b_row_k * mj)
+                    mu_t_r += a_rk * bk_dot_mj
+
+                    # sigma_t[r] = sum_c Omega[r,c]^2 * sigma_j[c]
+                    # But Omega[r,c] = sum_k A[r,k]*B[k,c], can't factor the square.
+                    # We need the full Omega[r,:] first.
+                    # Instead, accumulate Omega[r,c] for all c, then compute sigma_t[r].
+                    # To avoid D extra registers, we'll use a second pass.
+
+                # For sigma_t, we need Omega[r,:] explicitly.
+                # Compute it as a vector: omega_r[c] = sum_k A[r,k] * B[k,c]
+                omega_r = tl.zeros((D,), dtype=tl.float32)
+                for k in tl.static_range(D):
+                    b_row_k = tl.load(en_ptr + en_off_j + k * D + d_range)
+                    a_rk = tl.sum(tl.where(d_range == k, a_row, 0.0))
+                    omega_r += a_rk * b_row_k
+
+                # Now compute mu_t[r] and sigma_t[r] from omega_r
+                mu_t_r = tl.sum(omega_r * mj)
+                sig_t_r = tl.maximum(tl.sum(omega_r * omega_r * sj), eps)
+
+                # KL contribution for dimension r
+                mi_r = tl.sum(tl.where(d_range == r, mi, 0.0))
+                si_r = tl.sum(tl.where(d_range == r, si, 0.0))
+
+                delta_r = mi_r - mu_t_r
+                kl_block += si_r / sig_t_r + delta_r * delta_r / sig_t_r + tl.log(sig_t_r) - tl.log(si_r)
+
+            kl_block = 0.5 * (kl_block - D)
+            kl_block = tl.maximum(kl_block, 0.0)
+            kl_total += kl_block
+
+        tl.store(kl_out_ptr + b * N * N + i * N + j, kl_total)
+
+
 def _next_power_of_2(n: int) -> int:
     """Round up to the next power of 2 (minimum 1)."""
     if n <= 0:
@@ -424,7 +534,18 @@ def pairwise_kl_diag_triton(
             )
 
         else:
-            # Unsupported d — collect for PyTorch fallback
-            fallback_groups[d] = group
+            # Generic kernel for arbitrary d (d=7, d=10, etc.)
+            ep, en, mu, sig = _pack_matrix_blocks(
+                block_exp_pairs, mu_q, sigma_q, group, d)
+            _pairwise_kl_generic_kernel[grid](
+                kl_out,
+                ep, en, mu, sig,
+                N, n_blocks,
+                B * N * d * d, d * d,  # ep strides
+                B * N * d, d,          # mu strides
+                eps=eps,
+                D=d,
+                D2=d * d,
+            )
 
     return kl_out, fallback_groups
