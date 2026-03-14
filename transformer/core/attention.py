@@ -761,8 +761,16 @@ def _compute_kl_matrix_torch(
         if cached_transport is not None and 'Omega' in cached_transport:
             # Use precomputed transport operators (saves 2 matrix exponentials!)
             Omega = cached_transport['Omega']
+        elif (cached_transport is not None
+              and 'exp_phi' in cached_transport
+              and 'exp_neg_phi' in cached_transport):
+            # Factored transport: construct Omega from exp_phi / exp_neg_phi
+            # This path is used by gauge_mode='constant' and the fused block exp approach
+            exp_phi = cached_transport['exp_phi']      # (B, N, K, K)
+            exp_neg_phi = cached_transport['exp_neg_phi']  # (B, N, K, K)
+            Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
         else:
-            # Compute transport operators
+            # Compute transport operators from phi and generators
             # phi: (B, N, n_gen) -> phi_matrix: (B, N, K, K)
             phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
 
@@ -1077,6 +1085,13 @@ def _compute_kl_matrix_diagonal(
     if cached_transport is not None and 'Omega' in cached_transport:
         # Use precomputed transport operators (saves 2 matrix exponentials!)
         Omega = cached_transport['Omega']
+    elif (cached_transport is not None
+          and 'exp_phi' in cached_transport
+          and 'exp_neg_phi' in cached_transport):
+        # Factored transport (constant gauge or fused block exp)
+        exp_phi = cached_transport['exp_phi']
+        exp_neg_phi = cached_transport['exp_neg_phi']
+        Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
     else:
         # Compute transport operators
         phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
@@ -2243,6 +2258,26 @@ class IrrepMultiHeadAttention(nn.Module):
             cum_dim += dim
 
         # =================================================================
+        # Constant gauge: per-head learnable Ω ∈ GL(d_head)
+        # =================================================================
+        # When gauge_mode='constant', Ω_ij = Ω for all pairs (i,j).
+        # This is the manuscript's Limit 2 (constant gauge specialization):
+        # S(Ω) cancels under softmax, Ω⁻¹ absorbed into learned projections.
+        # Unlike the cocycle parameterization (which forces constant → I),
+        # this allows a free GL(K) matrix per head with direct gradient descent.
+        if gauge_mode == 'constant':
+            self.constant_omega = nn.ParameterList()
+            total_omega_params = 0
+            for dim in self.irrep_dims:
+                omega = nn.Parameter(torch.eye(dim))  # Initialize to identity
+                self.constant_omega.append(omega)
+                total_omega_params += dim * dim
+            print(f"[Constant gauge] {self.n_heads} heads, per-head Ω ∈ GL(d_head)")
+            print(f"  → {total_omega_params} learnable transport parameters (initialized to I)")
+        else:
+            self.constant_omega = None
+
+        # =================================================================
         # W_O output projection (optional cross-head mixing)
         # =================================================================
         self.use_output_projection = use_output_projection
@@ -2332,7 +2367,11 @@ class IrrepMultiHeadAttention(nn.Module):
         # batched matrix_exp call (via fused_block_matrix_exp_pairs).
         # This replaces per-head compute_transport_operators which builds
         # full Omega (B,N,N,d,d) — an O(N²d²) memory hog.
-        if cached_head_transports is not None:
+        if self.gauge_mode == 'constant':
+            # Constant gauge: skip matrix exponentials entirely.
+            # Per-head Ω is a direct nn.Parameter; transport constructed in per-head loop.
+            _attn_block_exp_pairs = None
+        elif cached_head_transports is not None:
             # Cross-layer cache: reuse transport computed at model entry
             _attn_block_exp_pairs = None  # will use cached_head_transports per head
         else:
@@ -2366,7 +2405,29 @@ class IrrepMultiHeadAttention(nn.Module):
 
             kappa_h = self.kappa_beta
 
-            if cached_head_transports is not None:
+            if self.gauge_mode == 'constant':
+                # Constant gauge: Ω_ij = Ω for all pairs.
+                # Set exp_phi = Ω (broadcast to all positions), exp_neg_phi = I.
+                # Factored aggregation: m_i = Ω @ Σ_j β_ij μ_j
+                omega_h = self.constant_omega[head_idx]  # (d_head, d_head)
+                if self.enforce_orthogonal and dim_head >= 2:
+                    omega_h = newton_schulz_orthogonalize(
+                        omega_h.unsqueeze(0)
+                    ).squeeze(0)  # Project to O(K)
+                eye_h = torch.eye(dim_head, device=omega_h.device, dtype=omega_h.dtype)
+                # Expand to (B, N, d, d) matching expected shape
+                exp_phi_h = omega_h.unsqueeze(0).unsqueeze(0).expand(
+                    batch_size, num_agents, -1, -1
+                ).contiguous()
+                exp_neg_phi_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
+                    batch_size, num_agents, -1, -1
+                ).contiguous()
+                head_cached_transport = {
+                    'exp_phi': exp_phi_h,
+                    'exp_neg_phi': exp_neg_phi_h,
+                }
+                _head_bep = None
+            elif cached_head_transports is not None:
                 # Cross-layer cache: use precomputed full Omega
                 head_cached_transport = cached_head_transports[head_idx]
                 _head_bep = None
@@ -2577,12 +2638,33 @@ class IrrepMultiHeadAttention(nn.Module):
                 'Omega': (B, N, N, dim, dim)
         """
         cached_transports = []
+        B, N = phi.shape[0], phi.shape[1]
+
         for head_idx in range(self.n_heads):
-            gen_head = self.head_generators[head_idx].gen.to(device=device, dtype=dtype)
-            cached_transports.append(compute_transport_operators(
-                phi, gen_head, enforce_orthogonal=self.enforce_orthogonal,
-                gauge_mode=self.gauge_mode
-            ))
+            if self.gauge_mode == 'constant':
+                # Constant gauge: construct transport from per-head Ω parameter
+                dim_h = self.irrep_dims[head_idx]
+                omega_h = self.constant_omega[head_idx].to(device=device, dtype=dtype)
+                if self.enforce_orthogonal and dim_h >= 2:
+                    omega_h = newton_schulz_orthogonalize(omega_h.unsqueeze(0)).squeeze(0)
+                eye_h = torch.eye(dim_h, device=device, dtype=dtype)
+                exp_phi_h = omega_h.unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous()
+                exp_neg_phi_h = eye_h.unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous()
+                # Build full Omega (B, N, N, d, d) for cross-layer cache
+                Omega_h = omega_h.unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(
+                    B, N, N, -1, -1
+                ).contiguous()
+                cached_transports.append({
+                    'exp_phi': exp_phi_h,
+                    'exp_neg_phi': exp_neg_phi_h,
+                    'Omega': Omega_h,
+                })
+            else:
+                gen_head = self.head_generators[head_idx].gen.to(device=device, dtype=dtype)
+                cached_transports.append(compute_transport_operators(
+                    phi, gen_head, enforce_orthogonal=self.enforce_orthogonal,
+                    gauge_mode=self.gauge_mode
+                ))
         return cached_transports
 
     def extra_repr(self) -> str:

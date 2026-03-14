@@ -195,8 +195,8 @@ class GaugeTransformerLM(nn.Module):
         #            choosing a gauge where all tokens share one coordinate frame.
         #            KL(q_i || Ω[q_j]) = KL(q_i || q_j) when Ω = I.
         gauge_mode = config.get('gauge_mode', 'learned')
-        if gauge_mode not in ('learned', 'trivial'):
-            raise ValueError(f"gauge_mode must be 'learned' or 'trivial', got '{gauge_mode}'")
+        if gauge_mode not in ('learned', 'trivial', 'constant'):
+            raise ValueError(f"gauge_mode must be 'learned', 'trivial', or 'constant', got '{gauge_mode}'")
 
         # Store gauge group info for position encoding and other components
         self.gauge_group = gauge_group
@@ -214,6 +214,15 @@ class GaugeTransformerLM(nn.Module):
             if isotropic_covariance:
                 print(f"       With isotropic Σ = σ²I: S(Ω) = 0, KL = (1/2σ²)||Q_i - M_ij K_j||²")
                 print(f"       where Q_i = s_i ⊙ μ_i, K_j = s_j ⊙ μ_j (sign-flipped embeddings)")
+
+        if gauge_mode == 'constant':
+            evolve_phi = False  # No Lie algebra φ; transport is a direct GL(K) parameter
+            evolve_phi_e_step = False
+            print(f"[INFO] Constant gauge mode: Ω_ij = Ω ∈ GL(d_head) for all pairs (i,j)")
+            print(f"       Manuscript Limit 2: S(Ω) cancels under softmax, Ω⁻ᵀ → W_Q W_K^T")
+            print(f"       Per-head Ω initialized to I, learned via direct gradient descent")
+            if isotropic_covariance:
+                print(f"       With Σ = σ²I: attention ∝ exp(-||Ω⁻¹μ_i - μ_j||² / (2σ²))")
 
         if gauge_mode == 'trivial':
             evolve_phi = False  # No point updating φ when transport is identity
@@ -342,7 +351,7 @@ class GaugeTransformerLM(nn.Module):
             init_std=config.get('mu_init_std', None),  # Embedding init std (None = default 2.0)
             init_sigma_scale=1.0,  # Scaled to match init_std for O(1) KL
             learnable_sigma=config.get('evolve_sigma', True),  # Learn per-token covariances
-            learnable_phi=config.get('learnable_phi', gauge_mode != 'trivial'),  # Default: learn when gauge is active
+            learnable_phi=config.get('learnable_phi', gauge_mode == 'learned'),  # Only learn φ in 'learned' mode
             gauge_fixed_priors=gauge_fixed_priors,
             generators=self.generators,  # Always pass generators for gauge transport
             diagonal_covariance=diagonal_covariance,
