@@ -485,22 +485,28 @@ class FastTrainer:
 
         return formatted_metrics
 
-    def validate(self, max_batches: int = 200) -> Dict[str, float]:
+    def validate(self, max_samples: int = 12800) -> Dict[str, float]:
         """Validation loop.
 
         Args:
-            max_batches: Maximum number of validation batches (default: 200).
+            max_samples: Maximum number of samples to evaluate (default: 12800,
+                         equivalent to 200 batches at batch_size=64). This ensures
+                         consistent evaluation across configs with different batch sizes.
         """
         self.model.eval()
 
         total_loss = 0.0
         total_ce = 0.0
         num_batches = 0
+        total_samples = 0
 
         is_standard = isinstance(self.model, StandardTransformerLM)
 
         with torch.no_grad():
             for batch in self.val_loader:
+                if total_samples >= max_samples:
+                    break
+
                 input_ids, target_ids = batch
                 input_ids = input_ids.to(self.device)
                 target_ids = target_ids.to(self.device)
@@ -520,17 +526,14 @@ class FastTrainer:
                         lambda_gamma=self.config.lambda_gamma,
                         kappa_gamma=self.config.kappa_gamma,
                         pad_token_id=self.pad_token_id,
-                       
+
                     )
                     ce_loss = metrics['loss/ce']
 
                 total_loss += loss.item()
                 total_ce += ce_loss
                 num_batches += 1
-
-                # Limit validation batches if specified
-                if max_batches is not None and num_batches >= max_batches:
-                    break
+                total_samples += input_ids.size(0)
 
         avg_loss = total_loss / max(1, num_batches)
         avg_ce = total_ce / max(1, num_batches)
