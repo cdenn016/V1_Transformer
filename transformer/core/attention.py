@@ -761,8 +761,16 @@ def _compute_kl_matrix_torch(
         if cached_transport is not None and 'Omega' in cached_transport:
             # Use precomputed transport operators (saves 2 matrix exponentials!)
             Omega = cached_transport['Omega']
+        elif (cached_transport is not None
+              and 'exp_phi' in cached_transport
+              and 'exp_neg_phi' in cached_transport):
+            # Factored transport: construct Omega from exp_phi / exp_neg_phi
+            # This path is used by gauge_mode='constant' and the fused block exp approach
+            exp_phi = cached_transport['exp_phi']      # (B, N, K, K)
+            exp_neg_phi = cached_transport['exp_neg_phi']  # (B, N, K, K)
+            Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
         else:
-            # Compute transport operators
+            # Compute transport operators from phi and generators
             # phi: (B, N, n_gen) -> phi_matrix: (B, N, K, K)
             phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
 
@@ -1077,6 +1085,13 @@ def _compute_kl_matrix_diagonal(
     if cached_transport is not None and 'Omega' in cached_transport:
         # Use precomputed transport operators (saves 2 matrix exponentials!)
         Omega = cached_transport['Omega']
+    elif (cached_transport is not None
+          and 'exp_phi' in cached_transport
+          and 'exp_neg_phi' in cached_transport):
+        # Factored transport (constant gauge or fused block exp)
+        exp_phi = cached_transport['exp_phi']
+        exp_neg_phi = cached_transport['exp_neg_phi']
+        Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
     else:
         # Compute transport operators
         phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
