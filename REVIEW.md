@@ -208,3 +208,241 @@ All items from the initial prioritized fix list have been implemented:
 | Gradient checkpointing tests | Verify numerical equivalence of checkpointed vs non-checkpointed forward pass. | tests/ (new) | 2 hrs |
 | Benchmark suite | Add timing benchmarks for key operations: KL matrix, transport, natural gradient, SPD retraction. Track regressions. | benchmarks/ (new) | 1 day |
 | Mixed-precision audit | Verify all paths work correctly under `torch.amp.autocast`. Several `float()` upcasts exist but coverage is incomplete. | All core files | 1 day |
+
+---
+
+## 7. DEEP ANALYSIS: FlashAttention-Style Tiling for KL Attention
+
+**Date**: 2026-03-14
+**Context**: Currently limited to N=128, K=100, diagonal covariance. Will tiling unlock meaningful scaling?
+
+---
+
+### 7.1 Why FlashAttention Works (and Why KL Attention is Different)
+
+FlashAttention's core insight is simple: the softmax numerator `exp(q·k/√d)` factors over the key dimension, so you can tile the N×N attention matrix and accumulate partial softmax results with an online correction (the log-sum-exp trick). The key properties that make this work:
+
+1. **Dot-product factorization**: `score(i,j) = q_i^T k_j` decomposes as an inner product. You can compute partial sums over j-tiles and combine them.
+2. **Softmax is reducible**: `softmax(x)_i = exp(x_i) / Σ_j exp(x_j)` can be computed in streaming fashion using the online softmax trick (Milakov & Gimelshein 2018): maintain running max and running sum, rescale when a new tile introduces a larger max.
+3. **Value aggregation is linear**: `output_i = Σ_j β_ij v_j` is a weighted sum that can be accumulated tile by tile.
+4. **No intermediate N×N matrix**: The entire point is to never materialize the N×N attention matrix in HBM. Each tile computes its contribution to the output and discards the tile's scores.
+
+**For KL attention, every one of these properties changes:**
+
+| Property | Dot-Product Attention | KL Attention (This Codebase) |
+|---|---|---|
+| Score computation | `q_i^T k_j` — O(K) per pair | `KL(q_i \|\| Ω_ij q_j)` — O(K²) per pair (transport + KL) |
+| Factorization | Bilinear: separates into q and k | **Not bilinear**: KL involves log-det, trace, Mahalanobis — all couple i,j nonlinearly through Ω_ij |
+| Transport operator | None (or absorbed into W_Q, W_K) | Ω_ij = exp(φ_i)·exp(-φ_j) — requires K×K matrix multiply per pair |
+| Softmax reducibility | Yes — standard online softmax | Yes — **still works** (softmax is applied to scalar KL values) |
+| Value aggregation | Linear: `Σ β_ij v_j` | Linear: `Σ β_ij Ω_ij μ_j` — but Ω_ij must be recomputed or cached per tile |
+| Backward pass | QK^T gradient tiles naturally | KL gradients involve Ω, Σ, μ coupling — significantly more complex |
+
+The crucial difference: **KL scores are not bilinear in (i, j)**. Standard FlashAttention exploits Q·K^T = matrix multiply, which can be tiled using standard GEMM blocking. KL divergence between transported Gaussians involves:
+
+```
+KL(q_i || Ω_ij q_j) = ½[tr(Σ_j_t^{-1} Σ_i) + (μ_i - Ω_ij μ_j)^T Σ_j_t^{-1} (μ_i - Ω_ij μ_j) - K + log(det Σ_j_t / det Σ_i)]
+```
+
+where `Σ_j_t = Ω_ij Σ_j Ω_ij^T`. This cannot be decomposed into independent functions of i and j.
+
+### 7.2 What CAN Be Tiled (and What Can't)
+
+Despite the non-bilinear structure, tiling is still possible — it just provides different benefits than standard FlashAttention:
+
+**Tileable components (reduce HBM traffic):**
+
+1. **Online softmax over KL scores**: Once you have KL(i,j) for a tile of j-values, you can update running max / running sum for position i. This is identical to FlashAttention's online softmax.
+
+2. **Message aggregation**: `m_i = Σ_j β_ij Ω_ij μ_j` can be accumulated tile by tile. Load a j-tile, compute transport + KL + partial softmax + partial message, accumulate, move to next tile.
+
+3. **Transport factorization**: Ω_ij = exp(φ_i)·exp(-φ_j) factors! You can precompute exp(φ_i) for the i-tile and exp(-φ_j) for the j-tile, then form Ω_ij = A_i · B_j per-pair within the tile. This is O(tile_i × K²) + O(tile_j × K²) precompute, then O(tile_i × tile_j × K²) for the products.
+
+**Non-tileable complications:**
+
+1. **Per-pair K×K matrix multiply**: Even with the factored form, computing Ω_ij μ_j requires a K×K × K matmul per (i,j) pair. This is the fundamental cost that tiling cannot eliminate — it can only control when these happen (in SRAM vs HBM).
+
+2. **Backward pass through KL**: The gradient ∂KL/∂μ_i, ∂KL/∂Σ_i, ∂KL/∂φ_i all depend on the full Ω_ij and transported statistics. Recomputation in the backward pass (as FlashAttention does for QK^T) means recomputing transport operators, which is expensive.
+
+3. **Diagonal covariance path**: Your current path (`_compute_kl_matrix_diagonal`) avoids Cholesky but still materializes Omega as (B, N, N, K, K) at line 1130. **This is the actual bottleneck at your scale.**
+
+### 7.3 Memory Analysis at Your Current Scale: N=128, K=100
+
+Let's do the arithmetic for your actual configuration (B=16, N=128, K=100, diagonal covariance, GL(10) with 8 heads of d_head=10 via block-diagonal):
+
+**Block-diagonal path (what you're actually using with irrep_dims=[10]*8 + [1]*20 or similar):**
+
+With 8 heads of d_head=10, the block-diagonal path processes each head independently. Per head:
+- Omega per block: (B, N, N, d, d) = (16, 128, 128, 10, 10) = 16 × 128² × 100 × 4B ≈ **100 MB per head**
+- But fused_block_matrix_exp_pairs precomputes exp_phi per block: (B, N, d, d) = much smaller
+- Fused KL avoids materializing full Omega — the Triton kernels compute Omega in registers
+
+**If NOT using block-diagonal (raw diagonal path):**
+
+The non-block-diagonal `_compute_kl_matrix_diagonal` path at line 1055-1189 materializes:
+- `Omega`: (B, N, N, K, K) = (16, 128, 128, 100, 100) = **~25 GB** — impossible!
+- `mu_transported`: (B, N, N, K) = (16, 128, 128, 100) × 4B ≈ **100 MB**
+- `sigma_j_transported_diag`: (B, N, N, K) ≈ **100 MB**
+
+So the Omega tensor is the killer. Your block-diagonal decomposition already avoids this by never forming the full K×K Omega — each block only forms a d_head × d_head Omega.
+
+**With your Triton kernels (triton_kernels.py):**
+
+The existing Triton kernels (`_pairwise_kl_d1_kernel`, `_pairwise_kl_d3_kernel`, `_pairwise_kl_d5_kernel`, `_pairwise_kl_generic_kernel`) already implement the most important optimization: **they keep Omega in registers and never write it to HBM**. Each kernel:
+- Takes one (b, i, j) triple per program
+- Loads exp_phi[b,i] and exp_neg_phi[b,j] from HBM (2 × d² values)
+- Computes Omega = A·B in registers (d² register values)
+- Computes transport and KL in registers
+- Writes one scalar to output
+
+This is already a form of "FlashAttention-style" computation — the intermediate Omega never touches HBM!
+
+**What the Triton kernels DON'T do:**
+
+They don't tile over the N×N output. Each (b,i,j) is an independent program. The output KL matrix (B, N, N) = (16, 128, 128) × 4B ≈ 1 MB is small and fully materialized in HBM. This is fine for N=128.
+
+### 7.4 Where Does Your Memory Actually Go?
+
+At N=128, K=100, B=16, the memory breakdown is approximately:
+
+| Tensor | Shape | Size | Notes |
+|---|---|---|---|
+| Beliefs (μ, σ, φ) | 3 × (B, N, K) | 3 × 25 MB ≈ 75 MB | Small |
+| Generators | (n_gen, K, K) | (100, 100, 100) × 4B ≈ 4 MB | Tiny |
+| exp_phi, exp_neg_phi per block | 8 × (B, N, d, d) | 8 × 10 MB ≈ 80 MB | Precomputed |
+| KL matrix | (B, N, N) | 1 MB | Tiny |
+| Attention weights β | (B, N, N) per head, or (B, H, N, N) | 8 MB | Tiny |
+| VFE gradients (μ, σ, φ) | ~3 × (B, N, K) | 75 MB | Per iteration |
+| **Autograd graph** | All intermediates for backward | **~2-4 GB** | **Dominant!** |
+| Output projection | (K, vocab) × activations | ~50M params × grads | ~400 MB |
+
+**The autograd graph is the real memory bottleneck**, not HBM traffic from KL tiling. Each VFE iteration through the E-step loop records all intermediate tensors for backward. With `n_vfe_iterations=5`, that's 5× the single-pass autograd cost.
+
+### 7.5 Verdict: Does FlashAttention-Style Tiling Help at N=128, K=100?
+
+**Short answer: No, not meaningfully. Your bottleneck is elsewhere.**
+
+**Detailed reasoning:**
+
+1. **Your Triton kernels already eliminate the Omega HBM bottleneck.** The fused `_pairwise_kl_d*_kernel` kernels keep Omega in registers. This is the single most important optimization that FlashAttention-style approaches provide, and you already have it.
+
+2. **The N×N KL matrix is 1 MB at N=128.** FlashAttention avoids materializing the N×N attention matrix because at N=8192, that's 256 MB per head. At N=128, it's 64 KB per head. Tiling to avoid this is pointless.
+
+3. **The output accumulation (online softmax + message tiling) saves nothing at N=128.** The softmax is over 128 elements per query — this fits in a single cache line. There's no HBM round-trip to save.
+
+4. **The actual bottleneck is the autograd graph from VFE iterations.** Each E-step iteration records gradients through KL computation, transport, and natural gradient updates. Gradient checkpointing (which you've already implemented in blocks.py) addresses this directly.
+
+5. **The secondary bottleneck is compute, not memory.** At N=128, K=100 with 8 heads of GL(10), you're doing 128² × 8 = 131K matrix exponential products per forward pass. Each is a 10×10 matmul — fast in isolation, but the sheer count adds up. Tiling doesn't reduce compute; it reduces memory traffic. Your compute is already register-bound via Triton.
+
+### 7.6 What WOULD Help You Scale Beyond N=128, K=100
+
+The path to larger N and K follows a different priority ordering than FlashAttention tiling:
+
+#### Priority 1: Reduce VFE iteration autograd cost (immediate impact)
+
+**DEQ implicit differentiation** (already in your codebase via `use_deq=True`):
+- Replaces O(n_iterations) autograd memory with O(1)
+- For n_vfe_iterations=5, this alone could cut peak memory by ~60%
+- Combined with gradient checkpointing, should let you reach N=256 or N=512
+
+**Estimated scaling**: N=128 → N=256-384 at same K=100
+
+#### Priority 2: Sparse attention patterns (N scaling)
+
+For N > 512, the O(N²) pairwise KL computation becomes the bottleneck regardless of memory tricks. The principled approach:
+
+- **Sliding window + global tokens**: Compute KL only for |i-j| < W plus a few global positions. Reduces O(N²) to O(N·W). Your causal mask already supports this — extend `create_attention_mask` with a window parameter.
+- **Top-k KL approximation**: Compute KL for a random subset of j per query i, keep only top-k. Similar to routing in mixture-of-experts.
+- **Hierarchical attention**: Use the RG flow structure you already have — attend within meta-agent clusters at fine scale, between clusters at coarse scale.
+
+**Estimated scaling**: N=512 → N=2048+ with W=256 window
+
+#### Priority 3: Mixed precision for transport (K scaling)
+
+The `stable_matrix_exp_pair` function upcasts to float64 for K≥8. For GL(10) blocks (d_head=10), this doubles memory for the matrix exponential computation. Options:
+
+- **Float32 matrix_exp with tighter norm clamping**: For d=10, float32 Padé is accurate to ~1e-6 if ||M||_F < 5. Your norm clamp is already at 10.0 — tightening to 5.0 may allow staying in float32.
+- **Cayley transform instead of matrix_exp**: For SO(K), Ω = (I + A/2)(I - A/2)^{-1} is an algebraic alternative to exp(A) that avoids the Padé approximation entirely. Cheaper and more stable, but only covers SO(K), not GL+(K).
+
+#### Priority 4: FlashAttention-style tiling (ONLY for N > 512 with non-block-diagonal)
+
+If you eventually move to configurations where:
+- N > 512 (the N×N KL matrix exceeds ~4 MB)
+- Full K×K covariance (not diagonal)
+- No block-diagonal structure (single-head GL(K))
+
+Then tiling the N×N computation would help. The implementation would look like:
+
+```python
+# Pseudocode for FlashKL attention
+def flash_kl_attention(mu, sigma, exp_phi, exp_neg_phi, kappa):
+    B, N, K = mu.shape
+    TILE = 64  # tile size
+
+    # Output accumulators (in HBM)
+    output = torch.zeros(B, N, K)  # accumulated message
+    l = torch.zeros(B, N)           # log-sum-exp denominator
+    m = torch.full((B, N), -inf)    # running max
+
+    for j_start in range(0, N, TILE):
+        j_end = min(j_start + TILE, N)
+        # Load j-tile beliefs into SRAM
+        mu_j = mu[:, j_start:j_end]          # (B, Tj, K)
+        sigma_j = sigma[:, j_start:j_end]
+        exp_neg_phi_j = exp_neg_phi[:, j_start:j_end]
+
+        for i_start in range(0, N, TILE):
+            i_end = min(i_start + TILE, N)
+            # Load i-tile beliefs into SRAM
+            mu_i = mu[:, i_start:i_end]
+            sigma_i = sigma[:, i_start:i_end]
+            exp_phi_i = exp_phi[:, i_start:i_end]
+
+            # Compute Omega for tile (in SRAM/registers)
+            Omega_tile = exp_phi_i @ exp_neg_phi_j  # (B, Ti, Tj, K, K) — in SRAM
+
+            # Compute KL for tile (in SRAM)
+            kl_tile = kl_divergence(mu_i, sigma_i, mu_j, sigma_j, Omega_tile)
+
+            # Online softmax update
+            logits_tile = -kl_tile / (kappa * sqrt(K))
+            m_new = max(m[i_start:i_end], logits_tile.max(dim=-1))
+            # ... standard online softmax rescaling ...
+
+            # Accumulate transported messages
+            msg_tile = einsum('bijkl,bjl->bijk', Omega_tile, mu_j)
+            output[i_start:i_end] += beta_tile @ msg_tile  # rescaled
+
+            # Free tile intermediates (never written to HBM)
+```
+
+**But note**: the tile of Omega is (Ti, Tj, K, K). For Ti=Tj=64, K=100: 64² × 100² × 4B = 160 MB per tile. This is too large for GPU SRAM (typically 192 KB per SM). You'd need to further sub-tile the K dimension or rely on the block-diagonal structure to keep d small.
+
+This is why **for your architecture, the block-diagonal + Triton approach is already the right answer**. Each irrep block has d≤10, so the per-pair Omega is 10×10 = 400 bytes — easily fits in registers.
+
+### 7.7 Concrete Recommendation
+
+**Do not implement FlashAttention-style N×N tiling at this time.** Instead, pursue this scaling path:
+
+| Step | Action | Expected Gain | Effort |
+|---|---|---|---|
+| 1 | Enable `use_deq=True` for training | N: 128 → 256 (memory) | Already implemented, just config |
+| 2 | Enable `gradient_checkpointing=True` | N: 256 → 384 (memory) | Already implemented, just config |
+| 3 | Add sliding window attention mask | N: 384 → 2048 (compute) | 1-2 days |
+| 4 | Optimize Triton generic kernel for d=10 | 1.5-2× throughput | 2-3 days |
+| 5 | Float32 matrix_exp with tighter clamping | K: 100 → 150 (memory) | 1 day |
+| 6 | FlashKL tiling (if needed after steps 1-5) | N: 2048 → 8192 (memory) | 1-2 weeks |
+
+Steps 1-2 are free — just toggle config flags you already have. Step 3 is the highest-impact new code. Steps 4-5 are tuning. Step 6 is only worth doing if you actually hit the N×N memory wall after everything else.
+
+### 7.8 Why the Current Limit is N=128, K=100 (Root Cause)
+
+The limit isn't the KL matrix or attention computation — it's the **total forward+backward memory of the VFE E-step loop**. With n_vfe_iterations=5:
+
+- Each iteration records: KL matrix computation graph, natural gradient computation, belief update
+- PyTorch autograd retains all intermediate tensors until backward completes
+- For 5 iterations: ~5× the single-pass memory
+
+The fix is DEQ (O(1) memory in iterations) + gradient checkpointing (recompute instead of store). These two changes, which you've already implemented, should roughly triple your effective N before any tiling work is needed.
+
+**Bottom line**: FlashAttention-style tiling for KL attention is a real optimization, but it's item #6 on your priority list, not item #1. Your existing Triton kernels already capture the most important insight (register-resident Omega). The path to N=512+ runs through DEQ + gradient checkpointing + sparse attention, not through N×N tiling.
