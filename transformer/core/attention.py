@@ -1727,7 +1727,8 @@ def _compute_kl_matrix_block_diagonal_chunked(
 
                 del Omega_block
 
-                # Compute KL for this block                I_d = torch.eye(d, device=device, dtype=dtype)
+                # Compute KL for this block
+                I_d = torch.eye(d, device=device, dtype=dtype)
                 mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1)
                 sigma_i_exp = sigma_i[:, :, None, :, :].expand(-1, -1, n_j, -1, -1)
 
@@ -1851,89 +1852,144 @@ def aggregate_messages(
     dtype = mu_q.dtype
 
     # =========================================================================
-    # VECTORIZED aggregation - no Python loops!
+    # FACTORED transport path: use per-position exp_phi/exp_neg_phi
+    # instead of full pairwise Omega (B,N,N,K,K).
+    # Memory: O(BNK²) vs O(BN²K²) — massive savings for large N.
+    # =========================================================================
+    _has_exp_pairs = (cached_transport is not None
+                      and 'exp_phi' in cached_transport
+                      and 'exp_neg_phi' in cached_transport)
+
+    if _has_exp_pairs:
+        _exp_phi = cached_transport['exp_phi']      # (B, N, K, K)
+        _exp_neg_phi = cached_transport['exp_neg_phi']  # (B, N, K, K)
+
+        # FACTORED mu aggregation (no Omega needed):
+        # mu_agg_i = exp_phi_i @ Σ_j β_ij * (exp_neg_phi_j @ μ_j)
+        w = torch.einsum('bjkl,bjl->bjk', _exp_neg_phi, mu_q)  # (B, N, K)
+        w_weighted = torch.einsum('bij,bjk->bik', beta, w)  # (B, N, K)
+        mu_aggregated = torch.einsum('bikl,bil->bik', _exp_phi, w_weighted)  # (B, N, K)
+
+        # Covariance aggregation (if requested)
+        if aggregate_mode == 'full_distribution':
+            _tile_size = 16
+            if diagonal_covariance:
+                sigma_q_diag = sigma_q
+                while sigma_q_diag.dim() > 3 and sigma_q_diag.shape[-1] == 1:
+                    sigma_q_diag = sigma_q_diag.squeeze(-1)
+
+                # Tiled second moment computation to avoid full (B,N,N,K,K)
+                sigma_agg_accum = torch.zeros(batch_size, num_agents, K,
+                                              device=device, dtype=dtype)
+                for i_start in range(0, num_agents, _tile_size):
+                    i_end = min(i_start + _tile_size, num_agents)
+                    ep_tile = _exp_phi[:, i_start:i_end]  # (B, tile, K, K)
+
+                    # Omega_tile = exp_phi_i @ exp_neg_phi_j
+                    Omega_tile = torch.einsum(
+                        'bikl,bjlm->bijkm', ep_tile, _exp_neg_phi
+                    )  # (B, tile, N, K, K)
+
+                    # Transported diagonal sigma: diag(Ω diag(σ) Ω^T)_k = Σ_l Ω_kl² σ_l
+                    sigma_t_tile = torch.einsum(
+                        'bijkl,bijkl,bjl->bijk',
+                        Omega_tile, Omega_tile, sigma_q_diag
+                    ).clamp(min=1e-6)  # (B, tile, N, K)
+
+                    # Transported mu (per-pair, for second moment)
+                    mu_t_tile = torch.einsum(
+                        'bijkl,bjl->bijk', Omega_tile, mu_q
+                    )  # (B, tile, N, K)
+
+                    second_moment_tile = sigma_t_tile + mu_t_tile ** 2
+                    sigma_agg_accum[:, i_start:i_end] = torch.einsum(
+                        'bij,bijk->bik', beta[:, i_start:i_end], second_moment_tile
+                    )
+                    del Omega_tile
+
+                sigma_aggregated = (sigma_agg_accum - mu_aggregated ** 2).clamp(min=1e-6)
+            else:
+                # Full covariance: tiled approach
+                sigma_agg_accum = torch.zeros(batch_size, num_agents, K, K,
+                                              device=device, dtype=dtype)
+                for i_start in range(0, num_agents, _tile_size):
+                    i_end = min(i_start + _tile_size, num_agents)
+                    ep_tile = _exp_phi[:, i_start:i_end]
+                    Omega_tile = torch.einsum(
+                        'bikl,bjlm->bijkm', ep_tile, _exp_neg_phi
+                    )
+
+                    Sigma_t = torch.einsum(
+                        'bijkl,bjlm,bijmn->bijkn',
+                        Omega_tile, sigma_q, Omega_tile.transpose(-1, -2)
+                    )
+                    mu_t_tile = torch.einsum(
+                        'bijkl,bjl->bijk', Omega_tile, mu_q
+                    )
+                    second_moment = Sigma_t + torch.einsum(
+                        'bijk,bijl->bijkl', mu_t_tile, mu_t_tile
+                    )
+                    sigma_agg_accum[:, i_start:i_end] = torch.einsum(
+                        'bij,bijkl->bikl', beta[:, i_start:i_end], second_moment
+                    )
+                    del Omega_tile
+
+                sigma_aggregated = sigma_agg_accum - torch.einsum(
+                    'bik,bil->bikl', mu_aggregated, mu_aggregated
+                )
+                eps_eye = 1e-6 * torch.eye(K, device=device, dtype=dtype)
+                sigma_aggregated = sigma_aggregated + eps_eye
+        else:
+            sigma_aggregated = None
+
+        return mu_aggregated, sigma_aggregated
+
+    # =========================================================================
+    # LEGACY path: full Omega (B,N,N,K,K) — used when no exp pairs cached
     # =========================================================================
 
     # Step 1: Get transport operators (use cached if available)
     if cached_transport is not None and 'Omega' in cached_transport:
-        # Use precomputed transport operators (saves 2 matrix exponentials!)
         Omega = cached_transport['Omega']
     else:
-        # Compute all pairwise transport operators Ω_ij = exp(φ_i) exp(-φ_j)
         phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
         exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
-
-        # Omega_ij = exp(φ_i) @ exp(-φ_j)  ->  (B, N, N, K, K)
         Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
 
     # Step 2: Transport all means (primal: m_i = Σ β_ij Ω_ij μ_j)
     mu_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)  # (B, N, N, K)
 
     # Step 3: Weighted aggregation: m_i = Σ_j β_ij * μ_j^{→i}
-    # beta: (B, N, N), mu_transported: (B, N, N, K)
     mu_aggregated = torch.einsum('bij,bijk->bik', beta, mu_transported)  # (B, N, K)
 
     # Step 4: Covariance aggregation (if requested)
     if aggregate_mode == 'full_distribution':
         B, N, K = mu_q.shape
         if diagonal_covariance:
-            # DIAGONAL MODE: sigma_q is (B, N, K)
-            # IMPORTANT: Transport DOES change diagonal covariance!
-            # Σ_j^{→i} = Ω_ij @ diag(σ_j) @ Ω_ij^T is generally FULL, but we
-            # take its diagonal for the output to stay in diagonal mode.
-            # This is the CORRECT approximation: diag(Ω @ diag(σ) @ Ω^T)
-
-            # Squeeze trailing singleton dimensions for robustness
             sigma_q_diag = sigma_q
             while sigma_q_diag.dim() > 3 and sigma_q_diag.shape[-1] == 1:
                 sigma_q_diag = sigma_q_diag.squeeze(-1)
 
-            # Expand diagonal to full covariance for transport: (B, N, K, K)
-            sigma_full = torch.diag_embed(sigma_q_diag)  # (B, N, K, K)
+            # Diagonal of Ω @ diag(σ) @ Ω^T: Σ_l Ω_kl² * σ_l
+            sigma_transported_diag = torch.einsum(
+                'bijkl,bijkl,bjl->bijk', Omega, Omega, sigma_q_diag
+            ).clamp(min=1e-6)
 
-            # Transport covariances: Σ_j^{→i} = Ω_ij @ Σ_j @ Ω_ij^T
-            Sigma_transported_full = torch.einsum(
-                'bijkl,bjlm,bijmn->bijkn',
-                Omega, sigma_full, Omega.transpose(-1, -2)
-            )  # (B, N, N, K, K)
-
-            # Extract diagonal of transported covariance: (B, N, N, K)
-            # Use .clone() to avoid view-related gradient issues
-            sigma_transported_diag = torch.diagonal(Sigma_transported_full, dim1=-2, dim2=-1).clone()
-
-            # Second moment: E[x²] = diag(Σ_transported) + μ²
-            second_moment = sigma_transported_diag + mu_transported ** 2  # (B, N, N, K)
-
-            # Weighted sum
+            second_moment = sigma_transported_diag + mu_transported ** 2
             sigma_aggregated = torch.einsum('bij,bijk->bik', beta, second_moment)
-
-            # Complete mixture variance: Var = E[x²] - E[x]²
-            sigma_aggregated = sigma_aggregated - mu_aggregated ** 2  # (B, N, K)
-            # Clamp to ensure positivity (numerical cancellation can produce negatives)
-            sigma_aggregated = sigma_aggregated.clamp(min=1e-6)
+            sigma_aggregated = (sigma_aggregated - mu_aggregated ** 2).clamp(min=1e-6)
         else:
-            # FULL COVARIANCE MODE: sigma_q is (B, N, K, K)
-            # Transport covariances: Σ_j^{→i} = Ω_ij @ Σ_j @ Ω_ij^T
             Sigma_transported = torch.einsum(
                 'bijkl,bjlm,bijmn->bijkn',
                 Omega, sigma_q, Omega.transpose(-1, -2)
-            )  # (B, N, N, K, K)
-
-            # Second moment: E[x x^T] = Σ + μ μ^T
-            # (B, N, N, K, K) + (B, N, N, K, 1) @ (B, N, N, 1, K)
+            )
             second_moment = Sigma_transported + torch.einsum(
                 'bijk,bijl->bijkl', mu_transported, mu_transported
             )
-
-            # Weighted sum of second moments
-            # beta: (B, N, N), second_moment: (B, N, N, K, K)
             sigma_aggregated = torch.einsum('bij,bijkl->bikl', beta, second_moment)
-
-            # Complete mixture variance: Σ_mix = E[x x^T] - E[x] E[x]^T
             sigma_aggregated = sigma_aggregated - torch.einsum(
                 'bik,bil->bikl', mu_aggregated, mu_aggregated
             )
-            # Ensure SPD: add small positive diagonal for numerical stability
             eps_eye = 1e-6 * torch.eye(sigma_aggregated.shape[-1],
                                         device=sigma_aggregated.device,
                                         dtype=sigma_aggregated.dtype)
@@ -2272,31 +2328,58 @@ class IrrepMultiHeadAttention(nn.Module):
         all_attention_weights = []
         all_kl_matrices = []
 
+        # Precompute per-position exp_phi/exp_neg_phi for ALL heads in one
+        # batched matrix_exp call (via fused_block_matrix_exp_pairs).
+        # This replaces per-head compute_transport_operators which builds
+        # full Omega (B,N,N,d,d) — an O(N²d²) memory hog.
+        if cached_head_transports is not None:
+            # Cross-layer cache: reuse transport computed at model entry
+            _attn_block_exp_pairs = None  # will use cached_head_transports per head
+        else:
+            # Collect per-head generators into the format expected by fused_block_matrix_exp_pairs
+            # Build a combined generator tensor that is block-diagonal
+            _head_gens = [
+                self.head_generators[h].gen.to(
+                    device=generators.device, dtype=generators.dtype
+                ) for h in range(self.n_heads)
+            ]
+            n_gen = _head_gens[0].shape[0]
+            # Build block-diagonal generators: (n_gen, K, K)
+            _combined_gens = torch.zeros(n_gen, K, K,
+                                         device=generators.device, dtype=generators.dtype)
+            _start = 0
+            for h, d_h in enumerate(self.irrep_dims):
+                _combined_gens[:, _start:_start+d_h, _start:_start+d_h] = _head_gens[h]
+                _start += d_h
+
+            _attn_block_exp_pairs = fused_block_matrix_exp_pairs(
+                phi, _combined_gens, self.irrep_dims,
+                enforce_orthogonal=self.enforce_orthogonal,
+            )
+
         for head_idx, (mu_head, sigma_head, dim_head, label) in enumerate(
             zip(mu_blocks, sigma_blocks, self.irrep_dims, self.irrep_labels)
         ):
-            # Use proper SO(3) generators for this irrep dimension
-            # These were pre-computed in __init__ using Wigner D-matrices
             gen_head = self.head_generators[head_idx].gen.to(
                 device=generators.device, dtype=generators.dtype
             )
 
-            # Get transport operators: use cross-layer cache if provided, else compute
-            if cached_head_transports is not None:
-                # Cross-layer cache: reuse transport computed at model entry
-                head_cached_transport = cached_head_transports[head_idx]
-            else:
-                # Within-layer cache: compute once, reuse for KL and aggregation
-                head_cached_transport = compute_transport_operators(
-                    phi, gen_head, enforce_orthogonal=self.enforce_orthogonal,
-                    gauge_mode=self.gauge_mode
-                )
-
             kappa_h = self.kappa_beta
+
+            if cached_head_transports is not None:
+                # Cross-layer cache: use precomputed full Omega
+                head_cached_transport = cached_head_transports[head_idx]
+                _head_bep = None
+            else:
+                # Use per-position exp pairs (no full Omega!)
+                head_cached_transport = {
+                    'exp_phi': _attn_block_exp_pairs[head_idx][0],
+                    'exp_neg_phi': _attn_block_exp_pairs[head_idx][1],
+                }
+                _head_bep = [_attn_block_exp_pairs[head_idx]]
 
             # Compute attention for this head
             if return_attention:
-                # Full O(N²) attention with KL return
                 beta_head, kl_head = compute_attention_weights(
                     mu_head,
                     sigma_head,
@@ -2307,7 +2390,9 @@ class IrrepMultiHeadAttention(nn.Module):
                     mask,
                     return_kl=True,
                     diagonal_covariance=self.diagonal_covariance,
-                    cached_transport=head_cached_transport,
+                    cached_transport=head_cached_transport if _head_bep is None else None,
+                    irrep_dims=[dim_head] if _head_bep is not None else None,
+                    cached_block_exp_pairs=_head_bep,
                     alibi_slope=self.alibi_slope,
                     gauge_mode=self.gauge_mode,
                     mask_self_attention=self.mask_self_attention,
@@ -2318,7 +2403,6 @@ class IrrepMultiHeadAttention(nn.Module):
                 all_attention_weights.append(beta_head)
                 all_kl_matrices.append(kl_head)
             else:
-                # Full O(N²) attention without KL return
                 beta_head = compute_attention_weights(
                     mu_head,
                     sigma_head,
@@ -2329,7 +2413,9 @@ class IrrepMultiHeadAttention(nn.Module):
                     mask,
                     return_kl=False,
                     diagonal_covariance=self.diagonal_covariance,
-                    cached_transport=head_cached_transport,
+                    cached_transport=head_cached_transport if _head_bep is None else None,
+                    irrep_dims=[dim_head] if _head_bep is not None else None,
+                    cached_block_exp_pairs=_head_bep,
                     alibi_slope=self.alibi_slope,
                     gauge_mode=self.gauge_mode,
                     mask_self_attention=self.mask_self_attention,
@@ -2337,9 +2423,9 @@ class IrrepMultiHeadAttention(nn.Module):
                     use_rope=self.use_rope,
                     rope_base=self.rope_base,
                 )  # (B, N, N)
-                kl_head = None  # Not computed
+                kl_head = None
 
-            # Aggregate messages for this head (reuse cached transport!)
+            # Aggregate messages using factored transport (no full Omega!)
             mu_agg, sigma_agg = aggregate_messages(
                 mu_head,
                 sigma_head,
