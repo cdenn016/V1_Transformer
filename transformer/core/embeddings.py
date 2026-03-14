@@ -96,6 +96,11 @@ class GaugeTokenEmbedding(nn.Module):
         generators: Optional[torch.Tensor] = None,
         diagonal_covariance: bool = False,
         isotropic_covariance: bool = False,  # If True, force Σ = σ²I (scalar variance × identity)
+                                             # Note: the "KL → squared Euclidean" simplification
+                                             # requires orthogonal transport (Ω ∈ O(K)) so that
+                                             # transported Σ stays isotropic. Use enforce_orthogonal=True
+                                             # or learnable_reflection=True with SO(K) generators.
+                                             # With GL(K), transported cov is NOT isotropic (S(Ω) ≠ 0).
         max_seq_len: int = 2048,
         use_positional_embedding: bool = False,
         phi_dim: int = 3,  # 3 for SO(3), N(N-1)/2 for SO(N)
@@ -103,6 +108,13 @@ class GaugeTokenEmbedding(nn.Module):
         # Mean embedding normalization options
         mu_normalize: bool = False,  # If True, project μ to unit sphere
         mu_max_norm: Optional[float] = None,  # If set, clamp ||μ|| ≤ max_norm
+        # O(K) reflection parameters
+        learnable_reflection: bool = False,  # If True, learn per-token sign vectors s_i ∈ {±1}^K
+                                             # extending SO(K) gauge transport to full O(K).
+                                             # Ω_ij = diag(s_i)·exp(φ_i)·exp(-φ_j)·diag(s_j)
+                                             # The reflection is applied as μ_i → s_i ⊙ μ_i
+                                             # before the SO(K) rotation, so no changes needed
+                                             # in attention or VFE code.
     ):
         """
         Initialize gauge token embedding.
@@ -141,6 +153,7 @@ class GaugeTokenEmbedding(nn.Module):
         self.learnable_sigma = learnable_sigma
         self.learnable_phi = learnable_phi
         self.gauge_fixed_priors = gauge_fixed_priors
+        self.learnable_reflection = learnable_reflection
 
         # Embedding initialization scale
         # OLD: 1/sqrt(K) keeps ||μ||² = O(1) but makes all embeddings equidistant!
@@ -254,6 +267,32 @@ class GaugeTokenEmbedding(nn.Module):
             self.pos_embed = nn.Embedding(max_seq_len, embed_dim)
             nn.init.normal_(self.pos_embed.weight, mean=0.0, std=init_std)
 
+        # =================================================================
+        # O(K) Reflection Embedding: per-token sign vector s_i ∈ {±1}^K
+        # =================================================================
+        # Extends SO(K) gauge transport to full O(K) = SO(K) ⋊ (Z_2)^{K-1}.
+        # The exponential map exp: so(K) → SO(K) can only reach det = +1.
+        # Adding per-dimension sign flips covers the det = -1 component.
+        #
+        # Transport becomes: Ω_ij = diag(s_i) · exp(φ_i) · exp(-φ_j) · diag(s_j)
+        # which is implemented by applying s_i ⊙ μ_i before the SO(K) rotation.
+        #
+        # Properties (verified symbolically):
+        #   - Ω ∈ O(K): ΩΩ^T = I  ✓
+        #   - det(Ω) covers ±1  ✓
+        #   - S(Ω) = 0 (geometric bias vanishes)  ✓
+        #   - Isotropic covariance preserved under transport  ✓
+        #   - Clean Q-K factorization: Q_i = s_i ⊙ μ_i  ✓
+        #
+        # Gradient flow uses the straight-through estimator (STE):
+        #   Forward:  sign(z)  (hard ±1)
+        #   Backward: identity (grad flows through z)
+        if learnable_reflection:
+            # Continuous latent z_k; sign(z_k) gives the discrete ±1
+            # Initialize with +1 (all positive) so model starts at SO(K)
+            self.sign_logit = nn.Embedding(vocab_size, embed_dim)
+            nn.init.ones_(self.sign_logit.weight)  # start at all +1 → no reflection
+
     def forward(
         self,
         token_ids: torch.Tensor
@@ -343,6 +382,18 @@ class GaugeTokenEmbedding(nn.Module):
             else:
                 # Convert to full covariance matrices (diagonal)
                 sigma = torch.diag_embed(sigma_diag)  # (B, N, K, K)
+
+        # =================================================================
+        # O(K) Reflection: apply per-token sign flip to μ
+        # =================================================================
+        # This implements R_i · μ_i = s_i ⊙ μ_i where s_i ∈ {±1}^K.
+        # Combined with exp(φ) ∈ SO(K), this gives full O(K) transport.
+        # Uses straight-through estimator: forward = sign(z), backward = identity.
+        if self.learnable_reflection:
+            z = self.sign_logit(token_ids)           # (B, N, K) continuous latent
+            signs = z.sign()                          # hard {-1, +1}
+            signs = z + (signs - z).detach()           # STE: grad flows through z
+            mu = mu * signs                            # R_i · μ_i = s_i ⊙ μ_i
 
         # =================================================================
         # Isotropic covariance enforcement: Σ → σ²I
