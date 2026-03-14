@@ -1567,6 +1567,10 @@ class VariationalFFNDynamic(nn.Module):
         deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
         # Gauge mode
         gauge_mode: str = 'learned',          # 'learned' or 'trivial' (Ω = I)
+        # Isotropic covariance limit
+        isotropic_covariance: bool = False,   # If True, force Σ = σ²I after each E-step update
+        # Amortized inference: gradient flow through priors for learned E-step init
+        amortized_inference: bool = True,
     ):
         """
         Initialize dynamic-β VFE FFN.
@@ -1596,6 +1600,8 @@ class VariationalFFNDynamic(nn.Module):
             multihead_vfe: If True, maintain per-head attention β_h through VFE iterations.
                           Each irrep block gets its own attention pattern instead of a single
                           collapsed β. Requires irrep_dims to be set.
+            isotropic_covariance: If True, force Σ = σ²I after each E-step sigma update.
+                                 Enforces Limit 1 from the manuscript.
         """
         super().__init__()
 
@@ -1607,6 +1613,8 @@ class VariationalFFNDynamic(nn.Module):
         self.diagonal_covariance = diagonal_covariance
         self.compute_sigma_align_grad = compute_sigma_align_grad
         self.gauge_mode = gauge_mode
+        self.isotropic_covariance = isotropic_covariance
+        self.amortized_inference = amortized_inference
 
         # Phi evolution via VFE gradients (principled approach)
         self.update_phi = update_phi
@@ -2362,6 +2370,25 @@ class VariationalFFNDynamic(nn.Module):
                         trust_region=0.1,  # Max 10% change per iteration
                         eps=eps,
 
+                    )
+
+            # =============================================================
+            # STEP 4c: Isotropic covariance enforcement (Limit 1)
+            # =============================================================
+            # After sigma update, collapse per-dimension variances to scalar σ²I.
+            # This maintains the isotropic constraint through VFE dynamics.
+            if self.update_sigma and self.isotropic_covariance:
+                if is_diagonal:
+                    # sigma_current: (B, N, K) → average across K, expand back
+                    scalar_var = sigma_current.mean(dim=-1, keepdim=True)
+                    sigma_current = scalar_var.expand_as(sigma_current)
+                else:
+                    # sigma_current: (B, N, K, K) → extract diag, average, rebuild σ²I
+                    diag_vals = torch.diagonal(sigma_current, dim1=-2, dim2=-1)
+                    scalar_var = diag_vals.mean(dim=-1, keepdim=True)  # (B, N, 1)
+                    K = sigma_current.shape[-1]
+                    sigma_current = scalar_var.unsqueeze(-1) * torch.eye(
+                        K, device=sigma_current.device, dtype=sigma_current.dtype
                     )
 
             # =============================================================

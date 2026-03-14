@@ -95,6 +95,7 @@ class GaugeTokenEmbedding(nn.Module):
         gauge_fixed_priors: bool = False,
         generators: Optional[torch.Tensor] = None,
         diagonal_covariance: bool = False,
+        isotropic_covariance: bool = False,  # If True, force Σ = σ²I (scalar variance × identity)
         max_seq_len: int = 2048,
         use_positional_embedding: bool = False,
         phi_dim: int = 3,  # 3 for SO(3), N(N-1)/2 for SO(N)
@@ -168,6 +169,7 @@ class GaugeTokenEmbedding(nn.Module):
             diagonal_covariance = False
 
         self.diagonal_covariance = diagonal_covariance
+        self.isotropic_covariance = isotropic_covariance
         self.phi_dim = phi_dim
 
         if gauge_fixed_priors and generators is None:
@@ -341,6 +343,25 @@ class GaugeTokenEmbedding(nn.Module):
             else:
                 # Convert to full covariance matrices (diagonal)
                 sigma = torch.diag_embed(sigma_diag)  # (B, N, K, K)
+
+        # =================================================================
+        # Isotropic covariance enforcement: Σ → σ²I
+        # =================================================================
+        # When isotropic_covariance=True, collapse per-dimension variances to
+        # a single scalar (mean across K), then expand back. This enforces
+        # the Limit 1 from the manuscript: all dimensions share one variance,
+        # so KL(q_i || q_j) reduces to scaled squared Euclidean distance.
+        if self.isotropic_covariance:
+            if self.diagonal_covariance:
+                # sigma shape: (B, N, K) — average across K to get scalar per agent
+                scalar_var = sigma.mean(dim=-1, keepdim=True)  # (B, N, 1)
+                sigma = scalar_var.expand_as(sigma)             # (B, N, K) all equal
+            else:
+                # sigma shape: (B, N, K, K) — extract diagonal, average, rebuild
+                diag_vals = torch.diagonal(sigma, dim1=-2, dim2=-1)  # (B, N, K)
+                scalar_var = diag_vals.mean(dim=-1, keepdim=True)     # (B, N, 1)
+                K = sigma.shape[-1]
+                sigma = scalar_var.unsqueeze(-1) * torch.eye(K, device=sigma.device, dtype=sigma.dtype)
 
         # =================================================================
         # Add positional embeddings to μ (like standard transformers)
