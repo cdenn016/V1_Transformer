@@ -63,7 +63,10 @@ class BlockConfig:
     ffn_learnable_alpha: bool = False  # Bayesian precision via Gamma-Normal
 
     # === Gauge geometry ===
-    gauge_mode: str = 'learned'   # 'learned' or 'trivial' (Ω = I)
+    gauge_mode: str = 'learned'   # 'learned': Ω_ij = exp(φ_i)exp(-φ_j) (pair-dependent, cocycle)
+                                  # 'trivial': Ω_ij = I (identity, no transport)
+                                  # 'constant': Ω_ij = Ω (single learnable GL(K) matrix per head,
+                                  #   manuscript Limit 2; no matrix exp, gradients directly on Ω)
     enforce_orthogonal: bool = False  # Enforce Ω ∈ SO(K) via Newton-Schulz.
                                       # Combined with learnable_reflection=True, gives full O(K).
                                       # Required for isotropic_covariance to produce exact
