@@ -2086,11 +2086,14 @@ class VariationalFFNDynamic(nn.Module):
 
         else:
             # Standard mode: use embedding priors
-            # Prior = initial embedding beliefs (fixed reference, not optimized through E-step)
-            # detach() prevents gradient flow through the prior, matching the VFE formulation
-            # where p_i is a fixed reference distribution (Eq. 10 in manuscript)
-            mu_p_current = mu_prior.detach().clone()
-            sigma_p = sigma.detach().clone()
+            if self.amortized_inference:
+                # Amortized: gradient flows through priors → embeddings learn good E-step init
+                mu_p_current = mu_prior.clone()
+                sigma_p = sigma.clone()
+            else:
+                # Non-amortized: detach priors (fixed reference, Eq. 10 in manuscript)
+                mu_p_current = mu_prior.detach().clone()
+                sigma_p = sigma.detach().clone()
 
         # Current state (will evolve)
         mu_current = mu.clone()
