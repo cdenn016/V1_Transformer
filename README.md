@@ -505,4 +505,5 @@ If this work is useful, please cite:
 
 ## License
 
-This project is for research purposes.
+This project is for research purposes. For more information contact
+email: cdenn016@yahoo.com
