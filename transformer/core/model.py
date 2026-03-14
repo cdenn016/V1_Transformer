@@ -205,6 +205,16 @@ class GaugeTransformerLM(nn.Module):
 
         # Trivial gauge mode → Ω = I, no phi evolution
         # This is the mathematically principled "gauge fixing" to a global frame
+        # O(K) reflection: per-token sign vectors extending SO(K) → O(K)
+        learnable_reflection = config.get('learnable_reflection', False)
+        if learnable_reflection:
+            print(f"[INFO] O(K) reflection enabled: per-token s_i ∈ {{±1}}^K sign vectors")
+            print(f"       Transport: Ω_ij = diag(s_i)·exp(φ_i)·exp(-φ_j)·diag(s_j) ∈ O(K)")
+            print(f"       Extends SO(K) gauge to full O(K) = SO(K) ⋊ (Z_2)^{{K-1}}")
+            if isotropic_covariance:
+                print(f"       With isotropic Σ = σ²I: S(Ω) = 0, KL = (1/2σ²)||Q_i - M_ij K_j||²")
+                print(f"       where Q_i = s_i ⊙ μ_i, K_j = s_j ⊙ μ_j (sign-flipped embeddings)")
+
         if gauge_mode == 'trivial':
             evolve_phi = False  # No point updating φ when transport is identity
             evolve_phi_e_step = False
@@ -344,6 +354,8 @@ class GaugeTransformerLM(nn.Module):
             # Mean embedding normalization options
             mu_normalize=config.get('mu_normalize', False),
             mu_max_norm=config.get('mu_max_norm', None),
+            # O(K) reflection: per-token sign vectors extending SO(K) → O(K)
+            learnable_reflection=config.get('learnable_reflection', False),
         )
 
         # =================================================================

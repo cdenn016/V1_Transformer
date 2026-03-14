@@ -43,7 +43,13 @@ class BlockConfig:
     phi_dim: int = 3              # 3 for SO(3), N(N-1)/2 for SO(N)
     phi_natural_gradient: str = 'clip'  # 'clip'|'cartan'|'killing'|'pullback'
     diagonal_covariance: bool = False
-    isotropic_covariance: bool = False  # Force Σ = σ²I (Limit 1: KL → squared Euclidean)
+    isotropic_covariance: bool = False  # Force Σ = σ²I (Limit 1: KL → squared Euclidean
+                                       # when combined with O(K) gauge via enforce_orthogonal
+                                       # or gauge_mode='trivial')
+    learnable_reflection: bool = False  # If True, learn per-token sign vectors s_i ∈ {±1}^K
+                                        # extending SO(K) transport to full O(K) = SO(K) ⋊ Z_2.
+                                        # Ensures S(Ω) = 0 and isotropic covariance is preserved
+                                        # under transport (ΩΩ^T = I).
     amortized_inference: bool = True  # Gradient flow through priors for learned E-step init
 
     # === VFE dynamics (FFN E-step) ===
@@ -58,7 +64,10 @@ class BlockConfig:
 
     # === Gauge geometry ===
     gauge_mode: str = 'learned'   # 'learned' or 'trivial' (Ω = I)
-    enforce_orthogonal: bool = False  # Enforce Ω ∈ SO(K) via Newton-Schulz
+    enforce_orthogonal: bool = False  # Enforce Ω ∈ SO(K) via Newton-Schulz.
+                                      # Combined with learnable_reflection=True, gives full O(K).
+                                      # Required for isotropic_covariance to produce exact
+                                      # squared Euclidean KL (S(Ω)=0, transported Σ stays isotropic).
 
     # === Positional encoding ===
     alibi_slope: Optional[float] = None  # ALiBi positional bias
@@ -114,6 +123,7 @@ class BlockConfig:
             phi_natural_gradient=config.get('phi_natural_gradient', 'clip'),
             diagonal_covariance=config.get('diagonal_covariance', False),
             isotropic_covariance=config.get('isotropic_covariance', False),
+            learnable_reflection=config.get('learnable_reflection', False),
             amortized_inference=config.get('amortized_inference', True),
             # VFE dynamics
             ffn_mode=config.get('ffn_mode', 'VFE_dynamic'),
