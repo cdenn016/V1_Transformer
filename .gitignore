@@ -46,6 +46,9 @@ logs/
 # Results (regenerated locally)
 results/
 
+# Bayesian MCMC traces (large, regenerable)
+*_trace.json
+
 # OS
 .DS_Store
 Thumbs.db

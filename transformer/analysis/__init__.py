@@ -8,6 +8,7 @@ Tools for analyzing transformer behavior:
 - Publication metrics: Comprehensive metrics for papers
 - Trajectory: Belief trajectory tracking
 - Semantics: Gauge semantics analysis
+- Bayesian validation: PyMC models for manuscript claim validation
 """
 
 from transformer.analysis.rg_metrics import (
