@@ -31,7 +31,9 @@ Date: March 2026
 """
 
 import os
-os.environ.setdefault('OMP_NUM_THREADS', '1')  # Suppress sklearn MKL memory leak warning on Windows
+import warnings
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+warnings.filterwarnings('ignore', message='KMeans is known to have a memory leak')
 
 import numpy as np
 import networkx as nx
@@ -488,28 +490,52 @@ def run_rg_flow(
 def generate_synthetic_vfe_system(
     N: int = 64,
     K: int = 8,
-    g1: float = 0.5,
-    g2: float = 0.3,
+    g1: float = 0.3,
+    g2: float = 0.2,
     sigma2: float = 1.0,
-    n_true_clusters: int = 4,
+    n_true_clusters: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Generate a synthetic VFE system with known couplings.
 
-    Creates N tokens organized into n_true_clusters groups with:
-    - Within-cluster means close together
-    - Between-cluster means far apart
-    - Controlled anisotropy g₁ and gauge variation g₂
+    Creates N tokens organized into clusters with controlled anisotropy (g₁)
+    and gauge variation (g₂). The coupling strengths are scaled by 1/√K to
+    keep the system in the linearized regime where the RG predictions apply.
+
+    Parameters
+    ----------
+    N : int
+        Number of tokens.
+    K : int
+        Belief dimension.
+    g1 : float
+        Target anisotropy coupling (before 1/√K scaling).
+    g2 : float
+        Target gauge variation coupling (before 1/√K scaling).
+    sigma2 : float
+        Isotropic variance scale.
+    n_true_clusters : int or None
+        Number of ground-truth clusters. If None, uses max(4, N//8).
     """
     np.random.seed(42)
 
-    # Cluster centers
-    cluster_centers = np.random.randn(n_true_clusters, K) * 3.0
+    if n_true_clusters is None:
+        n_true_clusters = max(4, N // 8)
+
+    # Scale couplings by 1/√K to stay in the linearized (small-g) regime.
+    # Without this, large K produces huge initial couplings that violate
+    # the CLT-based RG predictions (those are linearized around g=0).
+    g1_eff = g1 / np.sqrt(K)
+    g2_eff = g2 / np.sqrt(K)
+
+    # Cluster centers — spread proportional to √K for proper scaling
+    cluster_centers = np.random.randn(n_true_clusters, K) * np.sqrt(K) * 0.5
     cluster_assignments = np.random.randint(0, n_true_clusters, N)
 
-    # Token means: cluster center + noise
+    # Token means: cluster center + within-cluster noise
+    within_noise = 0.3  # keep small so clusters are well-separated
     means = np.array([
-        cluster_centers[cluster_assignments[i]] + np.random.randn(K) * 0.5
+        cluster_centers[cluster_assignments[i]] + np.random.randn(K) * within_noise
         for i in range(N)
     ])
 
@@ -519,7 +545,11 @@ def generate_synthetic_vfe_system(
         Delta = np.random.randn(K, K)
         Delta = (Delta + Delta.T) / 2
         Delta -= np.trace(Delta) / K * np.eye(K)
-        Sigma = sigma2 * np.eye(K) + g1 * Delta
+        # Normalize perturbation by its Frobenius norm so g1_eff controls magnitude
+        Delta_norm = np.linalg.norm(Delta)
+        if Delta_norm > 1e-10:
+            Delta = Delta / Delta_norm * sigma2 * g1_eff
+        Sigma = sigma2 * np.eye(K) + Delta
         # Ensure positive definite
         eigvals = np.linalg.eigvalsh(Sigma)
         if eigvals.min() < 0.01:
@@ -527,19 +557,20 @@ def generate_synthetic_vfe_system(
         covariances[i] = Sigma
 
     # Gauge transports with controlled variation
-    Omega0 = np.eye(K) + 0.05 * np.random.randn(K, K)
+    Omega0 = np.eye(K) + 0.02 / np.sqrt(K) * np.random.randn(K, K)
     transports = np.zeros((N, N, K, K))
     for i in range(N):
         for j in range(N):
-            dOmega = np.random.randn(K, K) * g2
+            dOmega = np.random.randn(K, K) * g2_eff / np.sqrt(K)
             transports[i, j] = Omega0 + dOmega
 
-    # Attention from KL (simplified: use squared distance)
+    # Attention from KL (simplified: use squared distance with temperature)
+    tau = 2.0 * np.sqrt(K)  # predicted optimal temperature
     logits = np.zeros((N, N))
     for i in range(N):
         for j in range(N):
             diff = means[i] - means[j]
-            logits[i, j] = -0.5 * np.dot(diff, diff) / sigma2
+            logits[i, j] = -0.5 * np.dot(diff, diff) / (sigma2 * tau)
 
     # Softmax
     logits -= logits.max(axis=1, keepdims=True)
