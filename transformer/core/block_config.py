@@ -43,13 +43,6 @@ class BlockConfig:
     phi_dim: int = 3              # 3 for SO(3), N(N-1)/2 for SO(N)
     phi_natural_gradient: str = 'clip'  # 'clip'|'cartan'|'killing'|'pullback'
     diagonal_covariance: bool = False
-    isotropic_covariance: bool = False  # Force Σ = σ²I (Limit 1: KL → squared Euclidean
-                                       # when combined with O(K) gauge via enforce_orthogonal
-                                       # or gauge_mode='trivial')
-    learnable_reflection: bool = False  # If True, learn per-token sign vectors s_i ∈ {±1}^K
-                                        # extending SO(K) transport to full O(K) = SO(K) ⋊ Z_2.
-                                        # Ensures S(Ω) = 0 and isotropic covariance is preserved
-                                        # under transport (ΩΩ^T = I).
     amortized_inference: bool = True  # Gradient flow through priors for learned E-step init
 
     # === VFE dynamics (FFN E-step) ===
@@ -63,14 +56,23 @@ class BlockConfig:
     ffn_learnable_alpha: bool = False  # Bayesian precision via Gamma-Normal
 
     # === Gauge geometry ===
-    gauge_mode: str = 'learned'   # 'learned': Ω_ij = exp(φ_i)exp(-φ_j) (pair-dependent, cocycle)
-                                  # 'trivial': Ω_ij = I (identity, no transport)
-                                  # 'constant': Ω_ij = Ω (single learnable GL(K) matrix per head,
-                                  #   manuscript Limit 2; no matrix exp, gradients directly on Ω)
-    enforce_orthogonal: bool = False  # Enforce Ω ∈ SO(K) via Newton-Schulz.
-                                      # Combined with learnable_reflection=True, gives full O(K).
-                                      # Required for isotropic_covariance to produce exact
-                                      # squared Euclidean KL (S(Ω)=0, transported Σ stays isotropic).
+    gauge_mode: str = 'learned'   # 'learned' or 'trivial' (Ω = I)
+    enforce_orthogonal: bool = False  # Enforce Ω ∈ SO(K) via Newton-Schulz
+    isotropic_covariance: bool = False  # Force Σ = σ²I
+    learnable_reflection: bool = False  # Learn per-token sign vectors for O(K)
+
+    # === Non-flat gauge transport (flat bundle experiments) ===
+    # When non_flat_transport=True, the transport becomes:
+    #   Ω_ij = exp(φ_i·G) · exp(δ_ij·G) · exp(-φ_j·G)
+    # where δ_ij is an edge-local "connection" parameterized by connection_type.
+    # When non_flat_transport=False (default), all non-flat fields are ignored
+    # and the standard flat transport Ω_ij = exp(φ_i)·exp(-φ_j) is used.
+    non_flat_transport: bool = False       # Enable edge-dependent connection δ_ij
+    cocycle_relaxation: float = 0.0        # Scale factor for δ_ij: 0=flat, 1=fully non-flat
+    per_head_flatness_gate: bool = False   # Learnable per-head g_h ∈ [0,1]
+    connection_type: str = 'bilinear'      # 'bilinear' | 'mlp'
+    connection_hidden_dim: int = 64        # Hidden dim for MLP connection
+    holonomy_penalty: float = 0.0          # λ_H · E[‖H_ijk - I‖²_F] added to loss
 
     # === Positional encoding ===
     alibi_slope: Optional[float] = None  # ALiBi positional bias
@@ -125,8 +127,6 @@ class BlockConfig:
             phi_dim=config.get('phi_dim', 3),
             phi_natural_gradient=config.get('phi_natural_gradient', 'clip'),
             diagonal_covariance=config.get('diagonal_covariance', False),
-            isotropic_covariance=config.get('isotropic_covariance', False),
-            learnable_reflection=config.get('learnable_reflection', False),
             amortized_inference=config.get('amortized_inference', True),
             # VFE dynamics
             ffn_mode=config.get('ffn_mode', 'VFE_dynamic'),
@@ -140,6 +140,15 @@ class BlockConfig:
             # Gauge geometry
             gauge_mode=config.get('gauge_mode', 'learned'),
             enforce_orthogonal=config.get('enforce_orthogonal', False),
+            isotropic_covariance=config.get('isotropic_covariance', False),
+            learnable_reflection=config.get('learnable_reflection', False),
+            # Non-flat gauge transport
+            non_flat_transport=config.get('non_flat_transport', False),
+            cocycle_relaxation=config.get('cocycle_relaxation', 0.0),
+            per_head_flatness_gate=config.get('per_head_flatness_gate', False),
+            connection_type=config.get('connection_type', 'bilinear'),
+            connection_hidden_dim=config.get('connection_hidden_dim', 64),
+            holonomy_penalty=config.get('holonomy_penalty', 0.0),
             # Positional encoding
             alibi_slope=config.get('alibi_slope', None),
             use_rope=config.get('use_rope', False),
