@@ -569,8 +569,9 @@ if __name__ == '__main__':
     # CONFIG — edit these settings, then click Run (no CLI needed)
     # ================================================================
 
-    CHECKPOINT_PATH = None  # <-- paste your checkpoint path here, e.g.:
-                            #     'checkpoints_publication/run_20260315/best_model.pt'
+    CHECKPOINT_PATH = None  # <-- paste your checkpoint path here as a raw string, e.g.:
+                            #     r'C:\Users\name\checkpoints\best_model.pt'
+                            #     r'/home/user/checkpoints/best_model.pt'
                             # If None, runs synthetic demo.
 
     K = 8                   # Belief dimension (for synthetic demo)

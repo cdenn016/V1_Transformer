@@ -498,8 +498,9 @@ if __name__ == '__main__':
     # CONFIG — edit these settings, then click Run (no CLI needed)
     # ================================================================
 
-    DATA_PATH = None        # <-- paste path to training curves JSON here, e.g.:
-                            #     'checkpoints_rg_experiments/phase_1a/training_curves.json'
+    DATA_PATH = None        # <-- paste path to training curves JSON here as a raw string, e.g.:
+                            #     r'C:\Users\name\results\training_curves.json'
+                            #     r'/home/user/results/training_curves.json'
                             # If None, generates and analyzes synthetic data.
 
     USE_PYMC = True         # True = full Bayesian (requires PyMC installed)

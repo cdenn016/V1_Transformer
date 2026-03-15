@@ -763,8 +763,9 @@ if __name__ == '__main__':
     RUN_ANALYZE  = True     # Analyze Phase 1 results after training
 
     # Phase 0 settings:
-    CHECKPOINT_PATH = None  # <-- paste your checkpoint path here, e.g.:
-                            #     'checkpoints_publication/run_20260315/best_model.pt'
+    CHECKPOINT_PATH = None  # <-- paste your checkpoint path here as a raw string, e.g.:
+                            #     r'C:\Users\name\checkpoints\best_model.pt'
+                            #     r'/home/user/checkpoints/best_model.pt'
                             # If None, auto-finds the latest checkpoint.
 
     N_SAMPLES = 50          # Number of text samples for Phase 0 analysis
