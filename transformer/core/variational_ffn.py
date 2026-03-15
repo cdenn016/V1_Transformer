@@ -1639,7 +1639,8 @@ class VariationalFFNDynamic(nn.Module):
         # Phi evolution via VFE gradients (principled approach)
         self.update_phi = update_phi
         self.update_phi_per_iteration = update_phi_per_iteration  # Dynamical gauge frames
-        self.phi_update_interval = phi_update_interval
+        # If n_iterations=1, force phi_update_interval=1 so iteration 0 fires
+        self.phi_update_interval = 1 if n_iterations <= 1 else phi_update_interval
         if update_phi_per_iteration and gauge_mode == 'constant':
             import warnings
             warnings.warn(
