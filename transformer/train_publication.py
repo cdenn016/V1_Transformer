@@ -238,8 +238,12 @@ VFE_EM_CONFIG = {
     'evolve_phi_e_step': True,    # Update φ during E-step iterations (dynamical gauge frames)
                                   # When True: φ evolves via ∂F/∂φ at each VFE iteration
                                   # When False: φ only updated via backprop (M-step)
-                                  
-    'phi_update_interval': 1,                       
+
+    'phi_update_interval': 1,
+    'analytic_phi_grad': False,   # If True, bypass autograd for ∂F/∂φ (saves ~250MB per update)
+                                  # Uses hand-coded backward through matrix_exp → KL → softmax.
+                                  # Requires diagonal_covariance=True and irrep_dims (block-diag).
+    'analytic_phi_grad_dexp_order': 4,  # dexp series truncation (4=good, 8=very accurate)
     'diagonal_covariance': True,
     'isotropic_covariance': True,    # If True, force Σ = σ²I (scalar variance × identity)
                                        # This is Limit 1 from the manuscript: KL reduces to
@@ -2164,4 +2168,5 @@ def main():
 if __name__ == '__main__':
 
     main()
+
 

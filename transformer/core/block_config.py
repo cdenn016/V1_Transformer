@@ -52,6 +52,10 @@ class BlockConfig:
                                         # under transport (ΩΩ^T = I).
     amortized_inference: bool = True  # Gradient flow through priors for learned E-step init
 
+    # === Analytic phi gradient ===
+    analytic_phi_grad: bool = False     # If True, bypass autograd for ∂F/∂φ (saves ~250MB)
+    analytic_phi_grad_dexp_order: int = 4  # dexp series truncation order (4-8 typical)
+
     # === VFE dynamics (FFN E-step) ===
     ffn_mode: str = 'VFE_dynamic'
     ffn_alpha: float = 0.001      # Prior weight inside VFE loop
@@ -128,6 +132,9 @@ class BlockConfig:
             isotropic_covariance=config.get('isotropic_covariance', False),
             learnable_reflection=config.get('learnable_reflection', False),
             amortized_inference=config.get('amortized_inference', True),
+            # Analytic phi gradient
+            analytic_phi_grad=config.get('analytic_phi_grad', False),
+            analytic_phi_grad_dexp_order=config.get('analytic_phi_grad_dexp_order', 4),
             # VFE dynamics
             ffn_mode=config.get('ffn_mode', 'VFE_dynamic'),
             ffn_alpha=config.get('ffn_alpha', 0.001),
