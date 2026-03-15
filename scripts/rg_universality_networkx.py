@@ -402,7 +402,17 @@ def measure_couplings(
 
     g1 = _anisotropy(covariances)
     g1_orig = _anisotropy(covs_original) if covs_original is not None else g1
-    g1_emerg = _anisotropy(covs_emergent) if covs_emergent is not None else 0.0
+
+    # g₁ emergent: measure the MAGNITUDE of emergent variance relative to
+    # the original, not its shape anisotropy. A rank-1 Var_A(μ) from binary
+    # clusters is always maximally anisotropic (K-1 under _anisotropy),
+    # regardless of its magnitude. The physically meaningful quantity is
+    # how much variance the emergent channel adds: tr(Var_A(μ)) / tr(avg_Σ).
+    g1_emerg = 0.0
+    if covs_emergent is not None and covs_original is not None:
+        emerg_traces = np.array([np.trace(covs_emergent[i]) for i in range(M)])
+        orig_traces = np.array([np.trace(covs_original[i]) for i in range(M)])
+        g1_emerg = np.mean(emerg_traces / (orig_traces + 1e-10))
 
     # g₂: gauge variation = std of transports
     g2 = 0.0
