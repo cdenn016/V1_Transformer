@@ -165,7 +165,8 @@ def spectral_communities(beta: np.ndarray, n_clusters: Optional[int] = None) -> 
     """
     Detect communities via spectral clustering of the attention matrix.
 
-    Uses the symmetrized attention (β + βᵀ)/2 as an affinity matrix.
+    Uses the symmetrized attention (β + βᵀ)/2 as an affinity matrix,
+    with balanced cluster assignment to avoid singletons.
 
     Parameters
     ----------
@@ -202,15 +203,73 @@ def spectral_communities(beta: np.ndarray, n_clusters: Optional[int] = None) -> 
         n_clusters = max(2, np.argmax(gaps) + 1)
         n_clusters = min(n_clusters, N // 2)
 
-    # K-means on first n_clusters eigenvectors
-    from sklearn.cluster import KMeans
+    # Spectral embedding: first n_clusters eigenvectors
     features = eigvecs[:, :n_clusters]
-    # Normalize rows
     norms = np.linalg.norm(features, axis=1, keepdims=True) + 1e-10
     features = features / norms
 
+    # Balanced assignment: each cluster gets floor(N/k) or ceil(N/k) nodes.
+    # Use KMeans to get centroids, then assign greedily with balance constraint.
+    from sklearn.cluster import KMeans
     km = KMeans(n_clusters=n_clusters, n_init=10, random_state=42)
-    labels = km.fit_predict(features)
+    km.fit(features)
+    centroids = km.cluster_centers_
+
+    # Distance from each point to each centroid
+    # (N, n_clusters) distance matrix
+    dists = np.linalg.norm(features[:, None, :] - centroids[None, :, :], axis=2)
+
+    # Greedy balanced assignment
+    labels = _balanced_assignment(dists, n_clusters)
+
+    return labels
+
+
+def _balanced_assignment(dists: np.ndarray, k: int) -> np.ndarray:
+    """
+    Assign N points to k clusters with balanced sizes.
+
+    Each cluster gets either floor(N/k) or ceil(N/k) points.
+    Assignment is greedy: sort all (point, cluster) pairs by distance,
+    assign in order, skipping if either the point is already assigned
+    or the cluster is full.
+
+    Parameters
+    ----------
+    dists : (N, k) distance matrix
+    k : number of clusters
+
+    Returns
+    -------
+    labels : (N,) cluster assignments
+    """
+    N = dists.shape[0]
+    max_size = int(np.ceil(N / k))
+
+    # Sort all (point, cluster) pairs by distance
+    flat_indices = np.argsort(dists.ravel())
+    point_indices = flat_indices // k
+    cluster_indices = flat_indices % k
+
+    labels = -np.ones(N, dtype=int)
+    cluster_counts = np.zeros(k, dtype=int)
+
+    for pt, cl in zip(point_indices, cluster_indices):
+        if labels[pt] >= 0:
+            continue  # already assigned
+        if cluster_counts[cl] >= max_size:
+            continue  # cluster full
+        labels[pt] = cl
+        cluster_counts[cl] += 1
+        if (labels >= 0).all():
+            break
+
+    # Safety: assign any remaining points to least-full cluster
+    for i in range(N):
+        if labels[i] < 0:
+            cl = np.argmin(cluster_counts)
+            labels[i] = cl
+            cluster_counts[cl] += 1
 
     return labels
 
