@@ -445,6 +445,8 @@ def run_rg_flow(
         n_clusters = max(2, N_current // 2)
         labels = spectral_communities(current_beta, n_clusters=n_clusters)
         actual_clusters = len(np.unique(labels))
+        cluster_sizes = np.bincount(labels); print(f"  Level {level}: {actual_clusters} clusters, sizes: min={cluster_sizes.min()}, max={cluster_sizes.max()}, std={cluster_sizes.std():.1f}")
+        print(f"  Level {level}: actual/requested clusters = {actual_clusters}/{n_clusters} = {actual_clusters/n_clusters:.3f}")
 
         if actual_clusters >= N_current or actual_clusters < 2:
             break
