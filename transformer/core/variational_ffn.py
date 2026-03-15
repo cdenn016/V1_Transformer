@@ -366,9 +366,9 @@ def _compute_vfe_gradients_block_diagonal(
             # KL terms for this block
             mahal_block = torch.einsum('bijk,bijk->bij', delta_mu_block, grad_kl_block)  # (B, C, N)
 
-            # Contiguous slice, then expand view for pairwise comparison
+            # Use contiguous slice and clone for expand to avoid view issues
             sigma_i_block_slice = sigma_block[:, i_start:i_end].contiguous()  # (B, C, d, d)
-            sigma_i_block = sigma_i_block_slice[:, :, None, :, :].expand(-1, -1, N, -1, -1)  # (B, C, N, d, d)
+            sigma_i_block = sigma_i_block_slice[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()  # (B, C, N, d, d)
             trace_block = torch.einsum('bijkk->bij', torch.einsum('bijkl,bijlm->bijkm', sigma_j_inv, sigma_i_block))
 
             try:
@@ -396,8 +396,8 @@ def _compute_vfe_gradients_block_diagonal(
             # Sigma alignment gradient for this block
             if compute_sigma_align_grad:
                 sigma_i_inv_block = _safe_spd_inv(sigma_i_block_diag, eps=1e-4)  # (B, C, d, d)
-                # Expand view (read-only, no .clone() needed)
-                sigma_i_inv_exp = sigma_i_inv_block[:, :, None, :, :].expand(-1, -1, N, -1, -1)
+                # Use .clone() after expand to ensure contiguous memory layout
+                sigma_i_inv_exp = sigma_i_inv_block[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()
                 grad_sigma_block = 0.5 * (sigma_j_inv - sigma_i_inv_exp)
                 beta_chunk = beta[:, i_start:i_end, :].contiguous()  # (B, C, N)
                 grad_sigma_block_weighted = lambda_belief * torch.einsum('bij,bijkl->bikl', beta_chunk, grad_sigma_block)
@@ -513,101 +513,69 @@ def _compute_vfe_gradients_block_diagonal_diag(
     grad_sigma_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=dtype) if (
         compute_sigma_align_grad) else None
 
-    # Group blocks by dimension for batched processing
-    from collections import defaultdict as _defaultdict
-    _dim_groups = _defaultdict(list)
+    # Process each irrep block sequentially with direct Omega construction.
+    # This avoids the factored transport approach (A @ (B diag(σ) B^T) @ A^T)
+    # which accumulates more float32 rounding error through intermediate matmuls.
     block_start = 0
     for block_idx, d in enumerate(irrep_dims):
-        _dim_groups[d].append((block_idx, block_start, block_start + d))
-        block_start += d
+        block_end = block_start + d
 
-    # Tile size for sigma transport (avoids full (B,N,N,d,d) Omega)
-    _sigma_tile = max(1, min(16, N))
+        mu_block = mu_q[:, :, block_start:block_end].contiguous()        # (B, N, d)
+        sigma_block = sigma_q_safe[:, :, block_start:block_end].contiguous()  # (B, N, d)
 
-    for d, group in _dim_groups.items():
-        n_grp = len(group)
+        # Block Omega: (B, N, N, d, d) — direct construction for numerical precision
+        Omega_block = torch.einsum(
+            'bikl,bjlm->bijkm',
+            block_exp_phi[block_idx], block_exp_neg_phi[block_idx]
+        )
 
-        # Stack beliefs for all blocks of this dimension: (G, B, N, d)
-        mu_stack = torch.stack(
-            [mu_q[:, :, s:e].contiguous() for _, s, e in group], dim=0)
-        sigma_stack = torch.stack(
-            [sigma_q_safe[:, :, s:e].contiguous() for _, s, e in group], dim=0)
+        # Transport means
+        mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_block)  # (B, N, N, d)
 
-        # Stack exp pairs: (G, B, N, d, d)
-        A_stack = torch.stack(
-            [block_exp_phi[idx] for idx, _, _ in group], dim=0)
-        B_stack = torch.stack(
-            [block_exp_neg_phi[idx] for idx, _, _ in group], dim=0)
+        # Diagonal covariance transport: σ_t[k] = Σ_l Ω_kl² * σ[l]
+        # Uses 3-operand einsum to avoid materializing Omega² — more precise
+        # than factored A @ (B diag(σ) B^T) @ A^T approach
+        sigma_j_transported = torch.einsum(
+            'bijkl,bijkl,bjl->bijk', Omega_block, Omega_block, sigma_block
+        ).clamp(min=eps)  # (B, N, N, d)
 
-        # ── Factored mu transport: skip Omega for mean ──────────────
-        # w[g,b,j] = B[g,b,j] @ mu[g,b,j] — O(G*N*d²)
-        w = torch.einsum('gbjkl,gbjl->gbjk', B_stack, mu_stack)  # (G, B, N, d)
-        # mu_t[g,b,i,j] = A[g,b,i] @ w[g,b,j] — O(G*N²*d²)
-        mu_j_transported = torch.einsum(
-            'gbikl,gbjl->gbijk', A_stack, w)  # (G, B, N, N, d)
-        del w
+        del Omega_block
 
-        # ── Factored sigma transport: avoid full Omega via tiling ───
-        # G_mat[g,b,j] = B[g,b,j] @ diag(σ[g,b,j]) @ B[g,b,j]^T — O(G*N*d³)
-        B_sigma = B_stack * sigma_stack[:, :, :, None, :]  # (G, B, N, d, d) — scale columns
-        G_mat = B_sigma @ B_stack.transpose(-1, -2)  # (G, B, N, d, d)
-        del B_sigma
-
-        # σ_t[g,b,i,j,k] = diag(A[g,b,i] @ G[g,b,j] @ A[g,b,i]^T)[k]
-        # Tile over query positions to avoid (G,B,N,N,d,d) intermediate
-        sigma_j_transported = torch.empty(
-            n_grp, B, N, N, d, device=device, dtype=dtype)
-        for i_start in range(0, N, _sigma_tile):
-            i_end = min(i_start + _sigma_tile, N)
-            A_tile = A_stack[:, :, i_start:i_end]  # (G, B, tile, d, d)
-            # AG = A_tile @ G_mat: (G, B, tile, N, d, d)
-            AG_tile = torch.einsum('gbikm,gbjmn->gbijkn', A_tile, G_mat)
-            # diag(AG @ A^T)[k] = sum_n AG[k,n] * A[k,n]
-            sigma_j_transported[:, :, i_start:i_end] = torch.einsum(
-                'gbijkn,gbikn->gbijk', AG_tile, A_tile)
-            del AG_tile
-        sigma_j_transported = sigma_j_transported.clamp(min=eps)
-        del G_mat, A_stack, B_stack
-
-        # ── KL and gradients for this group ─────────────────────────
-        mu_i_exp = mu_stack[:, :, :, None, :].expand(-1, -1, -1, N, -1)  # view
-        delta_mu = mu_i_exp - mu_j_transported  # (G, B, N, N, d)
+        # Delta mu
+        mu_block_i = mu_block[:, :, None, :].expand(-1, -1, N, -1).clone()  # contiguous copy
+        delta_mu = mu_block_i - mu_j_transported  # (B, N, N, d)
 
         # ∂KL/∂μ_i = (μ_i - μ_j_t) / σ_j_t (element-wise)
-        grad_kl_grp = delta_mu / sigma_j_transported  # (G, B, N, N, d)
+        grad_kl_block = delta_mu / sigma_j_transported  # (B, N, N, d)
+        grad_kl_per_pair_full[:, :, :, block_start:block_end] = grad_kl_block
 
-        # Diagonal KL for this group
-        sigma_i_exp = sigma_stack[:, :, :, None, :].expand(-1, -1, -1, N, -1)
-        trace_grp = (sigma_i_exp / sigma_j_transported).sum(dim=-1)      # (G, B, N, N)
-        mahal_grp = (delta_mu ** 2 / sigma_j_transported).sum(dim=-1)    # (G, B, N, N)
-        logdet_grp = (torch.log(sigma_j_transported.clamp(min=eps))
-                      - torch.log(sigma_i_exp.clamp(min=eps))).sum(dim=-1)
+        # Diagonal KL for this block
+        sigma_i_block = sigma_block[:, :, None, :].expand(-1, -1, N, -1).clone()  # contiguous copy
+        trace_block = (sigma_i_block / sigma_j_transported).sum(dim=-1)
+        mahal_block = (delta_mu ** 2 / sigma_j_transported).sum(dim=-1)
+        logdet_block = (torch.log(sigma_j_transported.clamp(min=eps))
+                        - torch.log(sigma_i_block.clamp(min=eps))).sum(dim=-1)
 
-        kl_grp = 0.5 * (trace_grp + mahal_grp - d + logdet_grp)
-        kl_grp = kl_grp.clamp(min=0.0, max=max(100.0, 5.0 * K))
-        # Sum over blocks in group, accumulate into kl_values
-        kl_values = kl_values + kl_grp.sum(dim=0)  # (B, N, N)
+        kl_block = 0.5 * (trace_block + mahal_block - d + logdet_block)
+        kl_block = kl_block.clamp(min=0.0, max=max(100.0, 5.0 * K))
+        kl_values = kl_values + kl_block
 
-        # Sigma alignment gradient
+        # Sigma alignment gradient for this block
         if compute_sigma_align_grad:
-            sigma_j_inv_diag = 1.0 / sigma_j_transported  # (G, B, N, N, d)
-            sigma_i_inv = 1.0 / sigma_stack  # (G, B, N, d)
-            sigma_i_inv_exp = sigma_i_inv[:, :, :, None, :].expand(-1, -1, -1, N, -1)
-            grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv_exp)
-
-        # Scatter per-block results into full-K accumulators
-        for local_idx, (_, s, e) in enumerate(group):
-            grad_kl_per_pair_full[:, :, :, s:e] = grad_kl_grp[local_idx]
-            if compute_sigma_align_grad:
-                gsp = grad_sigma_pair[local_idx]  # (B, N, N, d)
-                grad_sigma_align[:, :, s:e] = (
-                    grad_sigma_align[:, :, s:e]
-                    + lambda_belief * torch.einsum('bij,bijk->bik', beta, gsp)
-                )
-                if grad_sigma_per_pair_full is not None:
-                    grad_sigma_per_pair_full[:, :, :, s:e] = gsp
+            sigma_j_inv_diag = 1.0 / sigma_j_transported  # (B, N, N, d)
+            sigma_i_inv = 1.0 / sigma_block  # (B, N, d)
+            sigma_i_inv_exp = sigma_i_inv[:, :, None, :].expand(-1, -1, N, -1).clone()
+            grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv_exp)  # (B, N, N, d)
+            grad_sigma_align[:, :, block_start:block_end] = (
+                grad_sigma_align[:, :, block_start:block_end]
+                + lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_sigma_pair)
+            )
+            # Store per-pair sigma gradient for softmax coupling
+            if grad_sigma_per_pair_full is not None:
+                grad_sigma_per_pair_full[:, :, :, block_start:block_end] = grad_sigma_pair
 
         del sigma_j_transported, mu_j_transported, delta_mu
+        block_start = block_end
 
     # avg_grad = Σ_j β_ij · ∂KL_ij/∂μ_i (used for both direct and softmax terms)
     avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
@@ -760,7 +728,7 @@ def _compute_vfe_gradients_chunked(
             if do_sigma_softmax and avg_sigma_grad_i is not None:
                 sigma_j_inv_diag = 1.0 / sigma_j_transported_diag
                 sigma_i_inv = 1.0 / sigma_i.clamp(min=1e-6)
-                sigma_i_inv_exp = sigma_i_inv[:, :, None, :].expand(-1, -1, n_j, -1)
+                sigma_i_inv_exp = sigma_i_inv[:, :, None, :].expand(-1, -1, n_j, -1).clone()
                 grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv_exp)
                 avg_sigma_grad_i = avg_sigma_grad_i + torch.einsum('bij,bijk->bik', beta_chunk, grad_sigma_pair)
 
@@ -798,7 +766,7 @@ def _compute_vfe_gradients_chunked(
             grad_mu_direct[:, i_start:i_end] = grad_mu_direct[:, i_start:i_end] + direct_contrib
 
             # KL values (for softmax coupling weight)
-            sigma_i_exp = sigma_i[:, :, None, :].expand(-1, -1, n_j, -1)
+            sigma_i_exp = sigma_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()
             trace_term = (sigma_i_exp / sigma_j_transported_diag).sum(dim=-1)
             mahal = (delta_mu_ij ** 2 / sigma_j_transported_diag).sum(dim=-1)
             logdet_term = (torch.log(sigma_j_transported_diag.clamp(min=eps)) - torch.log(sigma_i_exp.clamp(min=eps))).sum(dim=-1)
@@ -816,7 +784,7 @@ def _compute_vfe_gradients_chunked(
             if compute_sigma_align_grad:
                 sigma_j_inv_diag = 1.0 / sigma_j_transported_diag
                 sigma_i_inv = 1.0 / sigma_i.clamp(min=1e-6)
-                sigma_i_inv_exp = sigma_i_inv[:, :, None, :].expand(-1, -1, n_j, -1)
+                sigma_i_inv_exp = sigma_i_inv[:, :, None, :].expand(-1, -1, n_j, -1).clone()
                 grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv_exp)
                 sigma_contrib = lambda_belief * torch.einsum('bij,bijk->bik', beta_chunk, grad_sigma_pair)
                 grad_sigma_align[:, i_start:i_end] = grad_sigma_align[:, i_start:i_end] + sigma_contrib
@@ -1062,7 +1030,7 @@ def compute_vfe_gradients_gpu(
         # KL(N(μ_i,diag(σ_i)) || N(μ_j_t,diag(σ_j_t))) =
         #   0.5 * (Σ_k σ_i[k]/σ_j_t[k] + Σ_k (μ_i-μ_j_t)²[k]/σ_j_t[k] - K + Σ_k log(σ_j_t[k]/σ_i[k]))
 
-        sigma_i_expanded = sigma_q_safe[:, :, None, :].expand(-1, -1, N, -1)  # (B, N, N, K) view
+        sigma_i_expanded = sigma_q_safe[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
 
         # Trace term: Σ_k σ_i[k] / σ_j_transported[k]
         trace_term = (sigma_i_expanded / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
@@ -1115,7 +1083,7 @@ def compute_vfe_gradients_gpu(
         if compute_sigma_align_grad:
             sigma_j_inv_diag = 1.0 / sigma_j_transported_diag  # (B, N, N, K)
             sigma_i_inv = 1.0 / sigma_q_safe  # (B, N, K)
-            sigma_i_inv_expanded = sigma_i_inv[:, :, None, :].expand(-1, -1, N, -1)  # (B, N, N, K) view
+            sigma_i_inv_expanded = sigma_i_inv[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
 
             # Gradient per pair: 0.5 * (1/σ_j_transported[k] - 1/σ_i[k])
             grad_sigma_per_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv_expanded)  # (B, N, N, K)
@@ -1183,8 +1151,8 @@ def compute_vfe_gradients_gpu(
         mahal_term = torch.einsum('bijk,bijk->bij', delta_mu_ij, grad_kl_per_pair)  # (B, N, N)
 
         # Trace term: tr(Σ_j_transported^{-1} @ Σ_i)
-        # Expand view (read-only, no .clone() needed)
-        sigma_i_expanded = sigma_q[:, :, None, :, :].expand(-1, -1, N, -1, -1)  # (B, N, N, K, K)
+        # Use .clone() after expand for contiguous memory layout
+        sigma_i_expanded = sigma_q[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()  # (B, N, N, K, K)
         trace_term = torch.einsum('bijkk->bij', torch.einsum('bijkl,bijlm->bijkm', sigma_j_inv, sigma_i_expanded))
 
         # Log-determinant terms using Cholesky with fallback
@@ -1202,8 +1170,8 @@ def compute_vfe_gradients_gpu(
         except RuntimeError:
             eigvals = torch.linalg.eigvalsh(sigma_i_reg)
             logdet_i = torch.sum(torch.log(eigvals.clamp(min=eps)), dim=-1)
-        # Expand view (read-only, no .clone() needed)
-        logdet_i_expanded = logdet_i[:, :, None].expand(-1, -1, N)  # (B, N, N)
+        # Use .clone() after expand for contiguous memory layout
+        logdet_i_expanded = logdet_i[:, :, None].expand(-1, -1, N).clone()  # (B, N, N)
 
         # Full KL divergence
         kl_values = 0.5 * (trace_term + mahal_term - K + logdet_j_t - logdet_i_expanded)
@@ -1231,8 +1199,8 @@ def compute_vfe_gradients_gpu(
         # =================================================================
         if compute_sigma_align_grad:
             # Use Σ_i^{-1} computed earlier in self-coupling section (sigma_q_inv)
-            # Expand view (read-only, no .clone() needed)
-            sigma_i_inv_expanded = sigma_q_inv[:, :, None, :, :].expand(-1, -1, N, -1, -1)  # (B, N, N, K, K)
+            # Use .clone() after expand for contiguous memory layout
+            sigma_i_inv_expanded = sigma_q_inv[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()  # (B, N, N, K, K)
 
             # Gradient per pair: 0.5 * (Σ_j_transported^{-1} - Σ_i^{-1})
             grad_sigma_per_pair = 0.5 * (sigma_j_inv - sigma_i_inv_expanded)  # (B, N, N, K, K)
