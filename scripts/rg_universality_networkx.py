@@ -551,7 +551,12 @@ def run_rg_flow(
 
         current_beta = cg_beta
         current_means = cg_means
-        current_covs = cg_covs
+        # Feed ORIGINAL covariances forward, not total (orig + emergent).
+        # The emergent term Var_A(μ) is absorbed by W_Q, W_K in a real
+        # transformer — it doesn't propagate through the RG flow.
+        # This is the key physical insight: the CLT prediction applies
+        # to the original channel only.
+        current_covs = cg_orig
         current_transports = cg_transports
 
     return flow
