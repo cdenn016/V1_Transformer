@@ -771,9 +771,9 @@ def _compute_kl_matrix_torch(
         #   attention module. This path is hit when called from FFN VFE.
         # μ_transported = μ_j (no rotation)
         # Σ_transported = Σ_j (no rotation)
-        # Expand views (no .clone() needed — these are read-only)
-        mu_transported = mu_q[:, None, :, :].expand(-1, N, -1, -1)  # (B, N, N, K)
-        Sigma_transported = sigma_q[:, None, :, :, :].expand(-1, N, -1, -1, -1)  # (B, N, N, K, K)
+        # Use .clone() after expand to avoid view-related gradient issues
+        mu_transported = mu_q[:, None, :, :].expand(-1, N, -1, -1).clone()  # (B, N, N, K)
+        Sigma_transported = sigma_q[:, None, :, :, :].expand(-1, N, -1, -1, -1).clone()  # (B, N, N, K, K)
     else:
         if cached_transport is not None and 'Omega' in cached_transport:
             # Use precomputed transport operators (saves 2 matrix exponentials!)
@@ -821,10 +821,10 @@ def _compute_kl_matrix_torch(
 
     # =========================================================================
     # Step 3: Expand mu_i and Sigma_i for pairwise comparison
-    # Expand views (no .clone() needed — these are read-only)
+    # Use .clone() after expand to avoid view-related gradient issues
     # =========================================================================
-    mu_i = mu_q[:, :, None, :].expand(-1, -1, N, -1)  # (B, N, N, K)
-    Sigma_i = sigma_q[:, :, None, :, :].expand(-1, -1, N, -1, -1)  # (B, N, N, K, K)
+    mu_i = mu_q[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
+    Sigma_i = sigma_q[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()  # (B, N, N, K, K)
 
     # =========================================================================
     # Step 4: Compute all KL divergences
@@ -1141,9 +1141,9 @@ def _compute_kl_matrix_diagonal(
     # diag(Σ_j_transported)_k = Σ_l Ω_kl² * σ_j[l]
     # This is more accurate than just using σ_j, especially for non-identity Ω
     # =========================================================================
-    # σ_j expanded for all pairs (views, no memory allocation)
-    sigma_j_orig = sigma_q[:, None, :, :].expand(-1, N, -1, -1)  # (B, N, N, K)
-    sigma_i = sigma_q[:, :, None, :].expand(-1, -1, N, -1)  # (B, N, N, K)
+    # σ_j expanded for all pairs — .clone() ensures contiguous memory for CUDA kernels
+    sigma_j_orig = sigma_q[:, None, :, :].expand(-1, N, -1, -1).clone()  # (B, N, N, K)
+    sigma_i = sigma_q[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
 
     # Compute diagonal of transported covariance: diag(Ω @ diag(σ_j) @ Ω^T)_k = Σ_l Ω_kl² * σ_j[l]
     # Use 3-operand einsum to avoid materializing Omega**2 as a (B, N, N, K, K) tensor.
@@ -1166,7 +1166,7 @@ def _compute_kl_matrix_diagonal(
         mu_transported = mu_transported.float()
         mu_q_f32 = mu_q.float()
 
-        mu_i = mu_q_f32[:, :, None, :].expand(-1, -1, N, -1)  # (B, N, N, K)
+        mu_i = mu_q_f32[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
 
         # Trace term: sum(σ_i / σ_j_transported)
         trace_term = (sigma_i / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
@@ -1303,10 +1303,10 @@ def _compute_kl_matrix_chunked(
             # =================================================================
             # Compute KL divergence for this chunk
             # =================================================================
-            # Expand mu_i and sigma_i for pairwise comparison (read-only views)
+            # Expand mu_i and sigma_i for pairwise comparison - use .clone() after expand
             # Force float32 for Cholesky/solve/log
-            mu_i_exp = mu_i.float()[:, :, None, :].expand(-1, -1, n_j, -1)  # (B, n_i, n_j, K)
-            sigma_i_exp = sigma_i_reg.float()[:, :, None, :, :].expand(-1, -1, n_j, -1, -1)
+            mu_i_exp = mu_i.float()[:, :, None, :].expand(-1, -1, n_j, -1).clone()  # (B, n_i, n_j, K)
+            sigma_i_exp = sigma_i_reg.float()[:, :, None, :, :].expand(-1, -1, n_j, -1, -1).clone()
             mu_transported = mu_transported.float()
             Sigma_transported = Sigma_transported.float()
 
@@ -1461,7 +1461,7 @@ def _compute_kl_matrix_diagonal_chunked(
             # Compute diagonal of transported covariance
             # diag(Ω @ diag(σ_j) @ Ω^T)_k = Σ_l Ω_kl² * σ_j[l]
             # =================================================================
-            sigma_j_exp = sigma_j[:, None, :, :].expand(-1, n_i, -1, -1)  # (B, n_i, n_j, K)
+            sigma_j_exp = sigma_j[:, None, :, :].expand(-1, n_i, -1, -1).clone()  # (B, n_i, n_j, K)
             # Use 3-operand einsum to avoid materializing Omega_chunk**2
             sigma_j_transported = torch.einsum(
                 'bijkl,bijkl,bijl->bijk', Omega_chunk, Omega_chunk, sigma_j_exp
@@ -1478,8 +1478,8 @@ def _compute_kl_matrix_diagonal_chunked(
                 sigma_i_f32 = sigma_i.float()
                 sigma_j_transported_f32 = sigma_j_transported.float()
 
-                mu_i_exp = mu_i_f32[:, :, None, :].expand(-1, -1, n_j, -1)  # (B, n_i, n_j, K)
-                sigma_i_exp = sigma_i_f32[:, :, None, :].expand(-1, -1, n_j, -1)  # (B, n_i, n_j, K)
+                mu_i_exp = mu_i_f32[:, :, None, :].expand(-1, -1, n_j, -1).clone()  # (B, n_i, n_j, K)
+                sigma_i_exp = sigma_i_f32[:, :, None, :].expand(-1, -1, n_j, -1).clone()  # (B, n_i, n_j, K)
 
                 # Trace term: sum(σ_i / σ_j_transported)
                 trace_term = (sigma_i_exp / sigma_j_transported_f32).sum(dim=-1)
@@ -1759,10 +1759,10 @@ def _compute_kl_matrix_block_diagonal_chunked(
 
                 del Omega_block
 
-                # Compute KL for this block
+                # Compute KL for this block - use .clone() after expand to create copies
                 I_d = torch.eye(d, device=device, dtype=dtype)
-                mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1)
-                sigma_i_exp = sigma_i[:, :, None, :, :].expand(-1, -1, n_j, -1, -1)
+                mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()
+                sigma_i_exp = sigma_i[:, :, None, :, :].expand(-1, -1, n_j, -1, -1).clone()
 
                 sigma_i_reg = sigma_i_exp + eps * I_d
                 sigma_transported_reg = sigma_transported + eps * I_d

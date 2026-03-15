@@ -436,8 +436,8 @@ def fused_block_diagonal_kl_full(
         del Omega
 
         I_d = torch.eye(d, device=device, dtype=dtype)
-        mu_i = mu_stack[:, :, :, None, :].expand(-1, -1, -1, N, -1)
-        sigma_i = sigma_stack[:, :, :, None, :, :].expand(-1, -1, -1, N, -1, -1)
+        mu_i = mu_stack[:, :, :, None, :].expand(-1, -1, -1, N, -1).clone()
+        sigma_i = sigma_stack[:, :, :, None, :, :].expand(-1, -1, -1, N, -1, -1).clone()
 
         sigma_i_reg = sigma_i + eps * I_d
         sigma_t_reg = sigma_transported + eps * I_d
