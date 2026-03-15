@@ -484,3 +484,212 @@ def fused_block_diagonal_kl_full(
         del mu_transported, sigma_transported
 
     return kl_total
+
+
+# =============================================================================
+# Analytic Phi Gradient (Custom Backward — No Autograd Graph)
+# =============================================================================
+# Replaces torch.autograd.grad(alignment_loss, phi) with a hand-coded backward
+# pass. Eliminates the ~250MB autograd memory spike from recording the graph
+# through matrix_exp → KL → softmax for each phi update.
+#
+# Mathematical derivation (verified symbolically in derivations/analytic_phi_grad_derivation.py):
+#
+#   F_align = λ Σ_{i,j} β_ij KL(q_i || Ω_ij q_j)
+#
+#   ∂F_align/∂φ^a_i = λ Σ_j β_ij [1 + (w_i - KL_ij)/τ] ∂KL_ij/∂φ^a_i
+#
+#   where w_i = Σ_j β_ij KL_ij,  τ = κ√K  (softmax temperature)
+#
+# The ∂KL/∂φ chain:
+#   ∂KL_ij/∂φ^a_i = tr(∂KL/∂Ω_ij · ∂Ω_ij/∂φ^a_i)
+#
+# For diagonal covariance:
+#   ∂KL/∂Ω[r,s] = c_r · Ω[r,s] · σ_j[s] / σ_t[r]  -  δ_r · μ_j[s] / σ_t[r]
+#   where c_r = 1 - σ_i[r]/σ_t[r] - δ_r²/σ_t[r],  δ_r = μ_i[r] - μ_t[r]
+#
+# The dexp chain for ∂Ω_ij/∂φ^a_i uses the BCH-like series:
+#   ∂Ω_ij/∂φ^a_i = dexp_{X_i}(G_a) · exp(-X_j)
+#                 = exp(X_i) · Ψ(ad_{X_i})(G_a) · exp(-X_j)
+#   where Ψ(z) = (e^z - 1)/z = Σ_{k=0}^∞ z^k/(k+1)!
+#
+# Efficient computation via commutator iteration:
+#   Q^{(0)} = exp(-X_j) · (∂KL/∂Ω)^T · exp(X_i)
+#   Q^{(k)} = [Q^{(k-1)}, X_i]  (commutator)
+#   ∂KL_ij/∂φ^a_i = Σ_{k=0}^p 1/(k+1)! · tr(Q^{(k)} · G_a)
+
+
+def analytic_phi_gradient_block_diag(
+    mu_q: torch.Tensor,         # (B, N, K) belief means
+    sigma_q: torch.Tensor,      # (B, N, K) diagonal variances
+    beta: torch.Tensor,         # (B, N, N) attention weights
+    kl_matrix: torch.Tensor,    # (B, N, N) KL divergence values
+    phi: torch.Tensor,          # (B, N, n_gen) gauge frame coefficients
+    generators: torch.Tensor,   # (n_gen, K, K) Lie algebra generators
+    irrep_dims: List[int],      # block dimensions [d₁, d₂, ...]
+    lambda_belief: float,       # belief alignment weight
+    kappa: float,               # attention temperature
+    eps: float = 1e-6,
+    dexp_order: int = 4,        # truncation order for dexp series
+    tile_size: int = 16,        # query tile size for memory efficiency
+    enforce_orthogonal: bool = False,
+    cached_block_exp_pairs: Optional[list] = None,
+) -> torch.Tensor:
+    """Compute ∂F_align/∂φ analytically without building an autograd graph.
+
+    This is the memory-efficient replacement for:
+        phi_for_grad = phi.clone().requires_grad_(True)
+        ... compute alignment_loss through full KL pipeline ...
+        grad_phi = torch.autograd.grad(alignment_loss, phi_for_grad)[0]
+
+    Memory: O(tile_size × N × max(d²)) per tile vs O(N² × K²) for autograd.
+
+    Args:
+        mu_q: (B, N, K) belief means (detached)
+        sigma_q: (B, N, K) diagonal variances (detached, clamped)
+        beta: (B, N, N) attention weights β_ij
+        kl_matrix: (B, N, N) KL divergence values KL(q_i || Ω_ij q_j)
+        phi: (B, N, n_gen) current gauge frame coefficients
+        generators: (n_gen, K, K) Lie algebra generators
+        irrep_dims: block dimensions for multi-head structure
+        lambda_belief: weight for belief alignment term
+        kappa: softmax temperature parameter
+        eps: numerical stability floor
+        dexp_order: truncation order for dexp Bernoulli series (4-8 typical)
+        tile_size: number of query rows per tile
+        enforce_orthogonal: whether to apply Newton-Schulz orthogonalization
+        cached_block_exp_pairs: precomputed (exp_phi, exp_neg_phi) per block
+
+    Returns:
+        grad_phi: (B, N, n_gen) analytic gradient ∂F_align/∂φ
+    """
+    import math
+
+    B, N, K = mu_q.shape
+    n_gen = generators.shape[0]
+    device = mu_q.device
+    dtype = mu_q.dtype
+
+    # Work in float32 for numerical stability
+    mu_q = mu_q.float()
+    sigma_q = sigma_q.float().clamp(min=eps)
+    beta = beta.float()
+    kl_matrix = kl_matrix.float()
+    phi = phi.float()
+
+    # Softmax coupling coefficient:
+    # ∂F/∂φ^a_i = λ Σ_j β_ij [1 + (w_i - KL_ij)/τ] ∂KL_ij/∂φ^a_i
+    # where w_i = Σ_j β_ij KL_ij,  τ = κ√K
+    tau = max(kappa * math.sqrt(max(K, 1)), eps)
+    w_i = (beta * kl_matrix).sum(dim=-1, keepdim=True)  # (B, N, 1)
+    coupling_weight = 1.0 + (w_i - kl_matrix) / tau     # (B, N, N)
+    weight = lambda_belief * beta * coupling_weight       # (B, N, N)
+
+    # Compute matrix exponentials (reuse cached if available)
+    if cached_block_exp_pairs is not None:
+        block_exp_pairs = cached_block_exp_pairs
+    else:
+        block_exp_pairs = fused_block_matrix_exp_pairs(
+            phi, generators, irrep_dims,
+            enforce_orthogonal=enforce_orthogonal,
+        )
+
+    # Build block ranges
+    block_ranges = []
+    start = 0
+    for idx, d in enumerate(irrep_dims):
+        block_ranges.append((idx, start, start + d, d))
+        start += d
+
+    # Accumulator for phi gradient
+    grad_phi = torch.zeros(B, N, n_gen, device=device, dtype=torch.float32)
+
+    # Process each block independently
+    for block_idx, blk_start, blk_end, d in block_ranges:
+        exp_phi_blk = block_exp_pairs[block_idx][0]      # (B, N, d, d)
+        exp_neg_phi_blk = block_exp_pairs[block_idx][1]  # (B, N, d, d)
+
+        # Extract block-level beliefs
+        mu_blk = mu_q[:, :, blk_start:blk_end]           # (B, N, d)
+        sig_blk = sigma_q[:, :, blk_start:blk_end]       # (B, N, d)
+
+        # Block generators: (n_gen, d, d)
+        gen_blk = generators[:, blk_start:blk_end, blk_start:blk_end]
+
+        # Lie algebra element X_i = phi · G for this block: (B, N, d, d)
+        X_blk = torch.einsum('bna,aij->bnij', phi, gen_blk)
+
+        # Precompute w_j = exp(-X_j) @ mu_j for factored mean transport
+        w_j = torch.einsum('bjkl,bjl->bjk', exp_neg_phi_blk, mu_blk)  # (B, N, d)
+
+        # Precompute G_mat_j = exp(-X_j) diag(σ_j) exp(-X_j)^T for variance transport
+        B_sigma = exp_neg_phi_blk * sig_blk[:, :, None, :]  # scale columns
+        G_mat_j = B_sigma @ exp_neg_phi_blk.transpose(-1, -2)  # (B, N, d, d)
+        del B_sigma
+
+        gen_blk_t = gen_blk.transpose(-1, -2)  # (n_gen, d, d)
+
+        # Tile over query positions i
+        for i_start in range(0, N, tile_size):
+            i_end = min(i_start + tile_size, N)
+
+            exp_phi_i = exp_phi_blk[:, i_start:i_end]     # (B, tile, d, d)
+            mu_i = mu_blk[:, i_start:i_end]                # (B, tile, d)
+            sig_i = sig_blk[:, i_start:i_end]              # (B, tile, d)
+            X_i = X_blk[:, i_start:i_end]                  # (B, tile, d, d)
+            weight_tile = weight[:, i_start:i_end, :]      # (B, tile, N)
+
+            # Transport mean: μ_t[i,j] = exp(X_i) @ w_j
+            mu_t = torch.einsum('bikl,bjl->bijk', exp_phi_i, w_j)  # (B, tile, N, d)
+
+            # Transport diagonal variance: σ_t[i,j,k] = diag(exp(X_i) G_mat_j exp(X_i)^T)[k]
+            AG = torch.einsum('bikm,bjmn->bijkn', exp_phi_i, G_mat_j)  # (B, tile, N, d, d)
+            sig_t = torch.einsum('bijkn,bikn->bijk', AG, exp_phi_i).clamp(min=eps)
+            del AG
+
+            # ∂KL/∂Ω coefficients
+            delta = mu_i[:, :, None, :] - mu_t             # (B, tile, N, d)
+            c = 1.0 - sig_i[:, :, None, :] / sig_t - delta ** 2 / sig_t
+            v1 = c / sig_t                                 # (B, tile, N, d)
+            v2 = delta / sig_t                             # (B, tile, N, d)
+
+            # Build Q^{(0)} = exp(-X_j) @ (∂KL/∂Ω)^T @ exp(X_i)
+            # Term1: G_mat_j @ [exp(X_i)^T @ diag(v1) @ exp(X_i)]
+            exp_phi_i_t = exp_phi_i.transpose(-1, -2)      # (B, tile, d, d)
+            V1_scaled = exp_phi_i_t[:, :, None, :, :] * v1[:, :, :, None, :]
+            V1_mat = V1_scaled @ exp_phi_i[:, :, None, :, :]
+            del V1_scaled
+            Q0_term1 = torch.einsum('bjkl,bijlm->bijkm', G_mat_j, V1_mat)
+            del V1_mat
+
+            # Term2: -outer(w_j, v2 @ exp(X_i))
+            v2_exp = torch.einsum('bijk,bikm->bijm', v2, exp_phi_i)
+            Q0_term2 = -w_j[:, None, :, :, None] * v2_exp[:, :, :, None, :]
+            del v2_exp
+
+            Q0 = Q0_term1 + Q0_term2
+            del Q0_term1, Q0_term2, v1, v2, c, delta, mu_t, sig_t
+
+            # dexp series: ∂KL_ij/∂φ^a_i = Σ_{k=0}^p 1/(k+1)! tr(Q^{(k)} G_a)
+            # k=0 term
+            dkl_dphi = torch.einsum('bijkl,akl->bija', Q0, gen_blk_t)
+
+            # Higher order terms via commutator iteration
+            Q_k = Q0
+            factorial_inv = 1.0
+            for k in range(1, dexp_order + 1):
+                factorial_inv /= (k + 1)
+                comm = Q_k @ X_i[:, :, None, :, :] - X_i[:, :, None, :, :] @ Q_k
+                Q_k = comm
+                contrib = torch.einsum('bijkl,akl->bija', Q_k, gen_blk_t)
+                dkl_dphi = dkl_dphi + factorial_inv * contrib
+
+            del Q0, Q_k
+
+            # Weight by β and softmax coupling, sum over j
+            grad_phi_tile = torch.einsum('bij,bija->bia', weight_tile, dkl_dphi)
+            del dkl_dphi
+
+            grad_phi[:, i_start:i_end, :] = grad_phi[:, i_start:i_end, :] + grad_phi_tile
+
+    return grad_phi.to(dtype)

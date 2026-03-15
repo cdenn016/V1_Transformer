@@ -59,6 +59,7 @@ from transformer.core.gauge_utils import (
     fused_block_matrix_exp_pairs,
     fused_block_diagonal_kl_diag,
     fused_block_diagonal_kl_full,
+    analytic_phi_gradient_block_diag,
 )
 
 
@@ -1575,6 +1576,9 @@ class VariationalFFNDynamic(nn.Module):
         isotropic_covariance: bool = False,   # If True, force Σ = σ²I after each E-step update
         # Amortized inference: gradient flow through priors for learned E-step init
         amortized_inference: bool = True,
+        # Analytic phi gradient: bypass autograd for ∂F/∂φ (saves ~250MB per phi update)
+        analytic_phi_grad: bool = False,
+        analytic_phi_grad_dexp_order: int = 4,  # dexp series truncation (4-8 typical)
     ):
         """
         Initialize dynamic-β VFE FFN.
@@ -1619,6 +1623,11 @@ class VariationalFFNDynamic(nn.Module):
         self.gauge_mode = gauge_mode
         self.isotropic_covariance = isotropic_covariance
         self.amortized_inference = amortized_inference
+        self.analytic_phi_grad = analytic_phi_grad
+        self.analytic_phi_grad_dexp_order = analytic_phi_grad_dexp_order
+        if analytic_phi_grad:
+            print(f"[VariationalFFNDynamic] Analytic φ gradient enabled (dexp_order={analytic_phi_grad_dexp_order})")
+            print(f"  → Bypasses autograd for ∂F/∂φ, saving ~250MB per phi update")
 
         # Constant gauge: store reference to attention module's per-head Ω parameters.
         # When gauge_mode='constant', these are used to build transport operators
@@ -1844,6 +1853,156 @@ class VariationalFFNDynamic(nn.Module):
                 grad_phi * 10.0 / (grad_phi_norm + 1e-6),
                 grad_phi
             )
+
+    def _compute_phi_grad_analytic_or_autograd(
+        self,
+        phi_current: torch.Tensor,
+        mu_current: torch.Tensor,
+        sigma_current: Optional[torch.Tensor],
+        is_diagonal: bool,
+        mask: Optional[torch.Tensor],
+        eps: float,
+        cached_block_exp_pairs: Optional[list] = None,
+    ) -> Optional[torch.Tensor]:
+        """Compute ∂F_align/∂φ using either analytic or autograd path.
+
+        Returns the preconditioned gradient, or None if no gradient could be computed.
+        """
+        # ── Analytic path (no autograd graph) ───────────────────────────
+        if (self.analytic_phi_grad and is_diagonal
+                and self.irrep_dims is not None):
+            # Need beta and kl_matrix — compute with detached inputs (no autograd)
+            beta_kl_result = compute_attention_weights(
+                mu_q=mu_current.detach(),
+                sigma_q=sigma_current.detach() if sigma_current is not None else None,
+                phi=phi_current.detach(),
+                generators=self.generators,
+                kappa=self.kappa,
+                epsilon=eps,
+                mask=mask,
+                use_numba=False,
+                return_kl=True,
+                diagonal_covariance=is_diagonal,
+                irrep_dims=self.irrep_dims,
+                chunk_size=self.chunk_size,
+                mask_self_attention=self.mask_self_attention,
+                gauge_mode=self.gauge_mode,
+                cached_block_exp_pairs=cached_block_exp_pairs,
+            )
+            if isinstance(beta_kl_result, tuple):
+                beta_phi, kl_matrix = beta_kl_result
+            else:
+                beta_phi = beta_kl_result
+                # Need KL matrix — recompute
+                _, kl_matrix = compute_attention_weights(
+                    mu_q=mu_current.detach(),
+                    sigma_q=sigma_current.detach() if sigma_current is not None else None,
+                    phi=phi_current.detach(),
+                    generators=self.generators,
+                    kappa=self.kappa,
+                    epsilon=eps,
+                    mask=mask,
+                    use_numba=False,
+                    return_kl=True,
+                    diagonal_covariance=is_diagonal,
+                    irrep_dims=self.irrep_dims,
+                    chunk_size=self.chunk_size,
+                    mask_self_attention=self.mask_self_attention,
+                    gauge_mode=self.gauge_mode,
+                )
+
+            grad_phi = analytic_phi_gradient_block_diag(
+                mu_q=mu_current.detach(),
+                sigma_q=sigma_current.detach(),
+                beta=beta_phi.detach(),
+                kl_matrix=kl_matrix.detach(),
+                phi=phi_current.detach(),
+                generators=self.generators,
+                irrep_dims=self.irrep_dims,
+                lambda_belief=self.lambda_belief,
+                kappa=self.kappa,
+                eps=eps,
+                dexp_order=self.analytic_phi_grad_dexp_order,
+                enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                cached_block_exp_pairs=cached_block_exp_pairs,
+            )
+            return self._precondition_phi_grad(grad_phi, phi_current)
+
+        # ── Autograd path (original) ───────────────────────────────────
+        phi_for_grad = phi_current.clone().requires_grad_(True)
+
+        if self.multihead_vfe:
+            alignment_loss = torch.tensor(0.0, device=mu_current.device,
+                                          dtype=mu_current.dtype)
+            _phi_bep = None
+            if self.irrep_dims is not None:
+                _phi_bep = fused_block_matrix_exp_pairs(
+                    phi_for_grad, self.generators, self.irrep_dims,
+                    enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                )
+            block_start = 0
+            for h, d_h in enumerate(self.irrep_dims):
+                block_end = block_start + d_h
+                mu_h = mu_current[:, :, block_start:block_end].detach()
+                if sigma_current is None:
+                    sigma_h = None
+                elif is_diagonal:
+                    sigma_h = sigma_current[:, :, block_start:block_end].detach()
+                else:
+                    sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end].detach()
+                gen_h = self.generators[:, block_start:block_end, block_start:block_end]
+                kappa_h = self.kappa
+                _phi_head_bep = [_phi_bep[h]] if _phi_bep is not None else None
+
+                beta_phi_h_result = compute_attention_weights(
+                    mu_q=mu_h, sigma_q=sigma_h,
+                    phi=phi_for_grad, generators=gen_h,
+                    kappa=kappa_h, epsilon=eps, mask=mask,
+                    use_numba=False, return_kl=True,
+                    diagonal_covariance=is_diagonal,
+                    irrep_dims=[d_h],
+                    chunk_size=self.chunk_size,
+                    mask_self_attention=self.mask_self_attention,
+                    gauge_mode=self.gauge_mode,
+                    cached_block_exp_pairs=_phi_head_bep,
+                )
+                beta_phi_h, kl_h = beta_phi_h_result
+                alignment_loss = alignment_loss + self.lambda_belief * (beta_phi_h * kl_h).sum()
+                block_start = block_end
+        else:
+            beta_for_phi_result = compute_attention_weights(
+                mu_q=mu_current.detach(),
+                sigma_q=sigma_current.detach() if sigma_current is not None else None,
+                phi=phi_for_grad,
+                generators=self.generators,
+                kappa=self.kappa,
+                epsilon=eps,
+                mask=mask,
+                use_numba=False,
+                return_kl=True,
+                diagonal_covariance=is_diagonal,
+                irrep_dims=self.irrep_dims,
+                chunk_size=self.chunk_size,
+                mask_self_attention=self.mask_self_attention,
+                gauge_mode=self.gauge_mode,
+            )
+            if isinstance(beta_for_phi_result, tuple):
+                beta_phi, kl_matrix = beta_for_phi_result
+            else:
+                beta_phi = beta_for_phi_result
+                kl_matrix = beta_phi
+            alignment_loss = self.lambda_belief * (beta_phi * kl_matrix).sum()
+
+        if alignment_loss.grad_fn is not None:
+            grad_phi = torch.autograd.grad(
+                alignment_loss,
+                phi_for_grad,
+                create_graph=False,
+                retain_graph=False,
+            )[0]
+            return self._precondition_phi_grad(grad_phi, phi_current)
+
+        return None
 
     def _make_deq_step_fn(self, phi_current, mu_p_current, sigma_p,
                            mask, is_diagonal, eps, dtype):
@@ -2542,101 +2701,18 @@ class VariationalFFNDynamic(nn.Module):
             if (self.update_phi_per_iteration and torch.is_grad_enabled()
                     and not _skip_phi_update
                     and iteration % phi_update_interval == phi_update_interval - 1):
-                phi_for_grad = phi_current.clone().requires_grad_(True)
-
-                if self.multihead_vfe:
-                    # Multi-head phi update: sum alignment loss over heads
-                    alignment_loss = torch.tensor(0.0, device=mu_current.device,
-                                                  dtype=mu_current.dtype)
-                    # Compute block_exp_pairs from phi_for_grad (needs autograd)
-                    _phi_bep = None
-                    if self.irrep_dims is not None:
-                        _phi_bep = fused_block_matrix_exp_pairs(
-                            phi_for_grad, self.generators, self.irrep_dims,
-                            enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                        )
-                    block_start = 0
-                    for h, d_h in enumerate(self.irrep_dims):
-                        block_end = block_start + d_h
-                        mu_h = mu_current[:, :, block_start:block_end].detach()
-                        if sigma_current is None:
-                            sigma_h = None
-                        elif is_diagonal:
-                            sigma_h = sigma_current[:, :, block_start:block_end].detach()
-                        else:
-                            sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end].detach()
-                        gen_h = self.generators[:, block_start:block_end, block_start:block_end]
-                        kappa_h = self.kappa
-                        _phi_head_bep = [_phi_bep[h]] if _phi_bep is not None else None
-
-                        beta_phi_h_result = compute_attention_weights(
-                            mu_q=mu_h, sigma_q=sigma_h,
-                            phi=phi_for_grad, generators=gen_h,
-                            kappa=kappa_h, epsilon=eps, mask=mask,
-                            use_numba=False, return_kl=True,
-                            diagonal_covariance=is_diagonal,
-                            irrep_dims=[d_h],
-                            chunk_size=self.chunk_size,
-                            mask_self_attention=self.mask_self_attention,
-                            gauge_mode=self.gauge_mode,
-                            cached_block_exp_pairs=_phi_head_bep,
-                        )
-                        # compute_attention_weights with return_kl=True always returns a tuple
-                        beta_phi_h, kl_h = beta_phi_h_result
-                        alignment_loss = alignment_loss + self.lambda_belief * (beta_phi_h * kl_h).sum()
-                        block_start = block_end
-                else:
-                    # Single-β phi update
-                    # First iteration: must recompute with phi_for_grad for autograd
-                    beta_for_phi_result = compute_attention_weights(
-                        mu_q=mu_current.detach(),
-                        sigma_q=sigma_current.detach() if sigma_current is not None else None,
-                        phi=phi_for_grad,
-                        generators=self.generators,
-                        kappa=self.kappa,
-                        epsilon=eps,
-                        mask=mask,
-                        use_numba=False,
-                        return_kl=True,
-                        diagonal_covariance=is_diagonal,
-                        irrep_dims=self.irrep_dims,
-                        chunk_size=self.chunk_size,
-                        mask_self_attention=self.mask_self_attention,
-                        gauge_mode=self.gauge_mode,
-                    )
-
-                    if isinstance(beta_for_phi_result, tuple):
-                        beta_phi, kl_matrix = beta_for_phi_result
-                    else:
-                        beta_phi = beta_for_phi_result
-                        kl_matrix = beta_phi  # Fallback
-
-                    alignment_loss = self.lambda_belief * (beta_phi * kl_matrix).sum()
-
-                # Compute ∂F/∂φ (only if alignment_loss has a gradient path to phi)
-                if alignment_loss.grad_fn is not None:
-                    grad_phi = torch.autograd.grad(
-                        alignment_loss,
-                        phi_for_grad,
-                        create_graph=False,
-                        retain_graph=False,
-                    )[0]
-
-                    # Apply phi gradient preconditioning based on mode
-                    grad_phi = self._precondition_phi_grad(
-                        grad_phi, phi_current)
-
-                    # Update phi with proper retraction (auto-selects SO(N) or GL(K))
-                    # SO(N): trust_region=0.3, bch_order=1 (compact group)
-                    # GL(K): trust_region=0.1, bch_order=0 (non-compact, needs care)
-                    phi_lr_iter = self.phi_lr / self.n_iterations  # Scale by iterations
+                grad_phi = self._compute_phi_grad_analytic_or_autograd(
+                    phi_current, mu_current, sigma_current,
+                    is_diagonal, mask, eps,
+                )
+                if grad_phi is not None:
+                    phi_lr_iter = self.phi_lr / self.n_iterations
                     phi_current = _retract_phi(
                         phi=phi_current,
                         delta_phi=-grad_phi,
                         generators=self.generators,
                         step_size=phi_lr_iter,
                         max_norm=self.phi_max_norm,
-                        # trust_region and bch_order auto-selected based on gauge group
                     )
 
         # =================================================================
@@ -2665,115 +2741,17 @@ class VariationalFFNDynamic(nn.Module):
         if (self.update_phi and not self.update_phi_per_iteration
                 and torch.is_grad_enabled()
                 and self.gauge_mode not in ('trivial', 'constant')):
-            # Enable gradients for phi
-            phi_for_grad = phi_current.clone().requires_grad_(True)
-
-            if self.multihead_vfe:
-                # Multi-head: sum alignment loss over heads
-                alignment_loss = torch.tensor(0.0, device=mu_current.device,
-                                              dtype=mu_current.dtype)
-                # Compute block_exp_pairs from phi_for_grad (needs autograd for ∂F/∂φ)
-                _phi_bep5 = None
-                if self.irrep_dims is not None:
-                    _phi_bep5 = fused_block_matrix_exp_pairs(
-                        phi_for_grad, self.generators, self.irrep_dims,
-                        enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                    )
-                block_start = 0
-                for h, d_h in enumerate(self.irrep_dims):
-                    block_end = block_start + d_h
-                    mu_h = mu_current[:, :, block_start:block_end].detach()
-                    if sigma_current is None:
-                        sigma_h = None
-                    elif is_diagonal:
-                        sigma_h = sigma_current[:, :, block_start:block_end].detach()
-                    else:
-                        sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end].detach()
-                    gen_h = self.generators[:, block_start:block_end, block_start:block_end]
-                    kappa_h = self.kappa
-                    _phi_head_bep5 = [_phi_bep5[h]] if _phi_bep5 is not None else None
-
-                    beta_phi_h_result = compute_attention_weights(
-                        mu_q=mu_h, sigma_q=sigma_h,
-                        phi=phi_for_grad, generators=gen_h,
-                        kappa=kappa_h, epsilon=eps, mask=mask,
-                        use_numba=False, return_kl=True,
-                        diagonal_covariance=is_diagonal,
-                        irrep_dims=[d_h],
-                        chunk_size=self.chunk_size,
-                        mask_self_attention=self.mask_self_attention,
-                        gauge_mode=self.gauge_mode,
-                        cached_block_exp_pairs=_phi_head_bep5,
-                    )
-                    # compute_attention_weights with return_kl=True always returns a tuple
-                    beta_phi_h, kl_h = beta_phi_h_result
-                    alignment_loss = alignment_loss + self.lambda_belief * (beta_phi_h * kl_h).sum()
-                    block_start = block_end
-            else:
-                # Single-β: original alignment loss
-                beta_for_phi = compute_attention_weights(
-                    mu_q=mu_current.detach(),
-                    sigma_q=sigma_current.detach() if sigma_current is not None else None,
-                    phi=phi_for_grad,
-                    generators=self.generators,
-                    kappa=self.kappa,
-                    epsilon=eps,
-                    mask=mask,
-                    use_numba=False,
-                    return_kl=True,
-                    diagonal_covariance=is_diagonal,
-                    irrep_dims=self.irrep_dims,
-                    chunk_size=self.chunk_size,
-                    mask_self_attention=self.mask_self_attention,
-                    gauge_mode=self.gauge_mode,
-                )
-
-                if isinstance(beta_for_phi, tuple):
-                    beta_phi, kl_matrix = beta_for_phi
-                else:
-                    beta_phi = beta_for_phi
-                    kl_matrix = compute_attention_weights(
-                        mu_q=mu_current.detach(),
-                        sigma_q=sigma_current.detach() if sigma_current is not None else None,
-                        phi=phi_for_grad,
-                        generators=self.generators,
-                        kappa=self.kappa,
-                        epsilon=eps,
-                        mask=mask,
-                        use_numba=False,
-                        return_kl=True,
-                        diagonal_covariance=is_diagonal,
-                        irrep_dims=self.irrep_dims,
-                        chunk_size=self.chunk_size,
-                        mask_self_attention=self.mask_self_attention,
-                        gauge_mode=self.gauge_mode,
-                    )[1]
-
-                alignment_loss = self.lambda_belief * (beta_phi * kl_matrix).sum()
-
-            # Compute ∂F/∂φ (only if alignment_loss has a gradient path to phi)
-            if alignment_loss.grad_fn is not None:
-                grad_phi = torch.autograd.grad(
-                    alignment_loss,
-                    phi_for_grad,
-                    create_graph=False,
-                    retain_graph=False,
-                )[0]
-
-                # Apply phi gradient preconditioning based on mode
-                grad_phi = self._precondition_phi_grad(
-                    grad_phi, phi_current)
-
-                # Proper retraction with trust region (auto-selects SO(N) or GL(K))
-                # SO(N): trust_region=0.3, bch_order=1 (compact group)
-                # GL(K): trust_region=0.1, bch_order=0 (non-compact, needs care)
+            grad_phi = self._compute_phi_grad_analytic_or_autograd(
+                phi_current, mu_current, sigma_current,
+                is_diagonal, mask, eps,
+            )
+            if grad_phi is not None:
                 phi_current = _retract_phi(
                     phi=phi_current,
-                    delta_phi=-grad_phi,  # Negative gradient for descent
+                    delta_phi=-grad_phi,
                     generators=self.generators,
                     step_size=self.phi_lr,
                     max_norm=self.phi_max_norm,
-                    # trust_region and bch_order auto-selected based on gauge group
                 )
 
         # Re-enable autocast context and cast results back to original dtype
