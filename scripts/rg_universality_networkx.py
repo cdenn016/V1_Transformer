@@ -81,10 +81,14 @@ class RGFlow:
 
     def scaling_exponents(self) -> Dict[str, float]:
         """
-        Fit scaling exponents from the flow using log(n_nodes) as the RG scale.
+        Fit scaling exponents from the RG flow.
 
-        Uses log(N₀/N_ℓ) as the coarse-graining scale ζ_ℓ, fitting:
+        Uses log(N₁/N_ℓ) as the coarse-graining scale ζ_ℓ, fitting:
             log g_α = y_α · ζ + const
+
+        Excludes level 0 (the microscopic initial condition) from the fit.
+        Level 0 is constructed with exact coupling values, not produced by
+        coarse-graining, so including it biases the exponent estimate.
         """
         if self.n_levels < 3:
             return {}
@@ -92,15 +96,17 @@ class RGFlow:
         import numpy as np
 
         exponents = {}
-        n_nodes = np.array([lev.n_nodes for lev in self.levels])
-        # Use cumulative coarse-graining ratio as RG scale
+        # Start from level 1 (first coarse-grained level)
+        cg_levels = self.levels[1:]
+        n_nodes = np.array([lev.n_nodes for lev in cg_levels])
+        # RG scale: log of coarse-graining ratio relative to first CG level
         zetas = np.log(n_nodes[0] / n_nodes)
 
         for name, attr in [('y1', 'g1_anisotropy'),
                            ('y1_orig', 'g1_original'),
                            ('y2', 'g2_gauge_variation'),
                            ('y3', 'g3_holonomy')]:
-            vals = np.array([getattr(lev, attr, 0.0) for lev in self.levels])
+            vals = np.array([getattr(lev, attr, 0.0) for lev in cg_levels])
             mask = vals > 1e-10
             if mask.sum() >= 2:
                 log_vals = np.log(vals[mask])
