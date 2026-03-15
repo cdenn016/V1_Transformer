@@ -81,7 +81,7 @@ class FastTrainingConfig:
     #   - alpha · KL(q||p) couples μ_p, Σ_p to posterior (Bayesian self-consistency)
     #   - alpha_phi · ||φ||²/2 is literally L2 on gauge frames
     # Adding optimizer WD on top double-regularizes and conflicts with VFE gradients.
-    embed_weight_decay: Optional[float] = 0.0
+    embed_weight_decay: Optional[float] = 0.01
 
     # Gradient control
     grad_clip: float = 1.0
