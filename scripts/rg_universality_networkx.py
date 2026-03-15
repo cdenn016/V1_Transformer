@@ -30,6 +30,9 @@ Author: Claude / Robert C. Dennis
 Date: March 2026
 """
 
+import os
+os.environ.setdefault('OMP_NUM_THREADS', '1')  # Suppress sklearn MKL memory leak warning on Windows
+
 import numpy as np
 import networkx as nx
 from typing import Tuple, Dict, List, Optional
@@ -53,6 +56,8 @@ class RGLevel:
 
     # Measured couplings
     g1_anisotropy: float = 0.0
+    g1_original: float = 0.0      # anisotropy from original Σ_i only
+    g1_emergent: float = 0.0      # anisotropy from within-cluster Var_A(μ)
     g2_gauge_variation: float = 0.0
     g3_holonomy: float = 0.0
     modularity: float = 0.0
@@ -70,31 +75,34 @@ class RGFlow:
         return len(self.levels)
 
     def scaling_exponents(self) -> Dict[str, float]:
-        """Fit scaling exponents from the flow."""
-        if self.n_levels < 2:
+        """
+        Fit scaling exponents from the flow using log(n_nodes) as the RG scale.
+
+        Uses log(N₀/N_ℓ) as the coarse-graining scale ζ_ℓ, fitting:
+            log g_α = y_α · ζ + const
+        """
+        if self.n_levels < 3:
             return {}
 
-        # Fit g_α(ζ) ~ b^{y_α · ζ} → log g_α = y_α · ζ · log b + const
         import numpy as np
 
         exponents = {}
-        zetas = np.array([lev.level for lev in self.levels])
         n_nodes = np.array([lev.n_nodes for lev in self.levels])
-        # b = coarse-graining factor (ratio of successive node counts)
-        log_b = np.log(n_nodes[0] / n_nodes[1]) if n_nodes[1] > 0 else 1
+        # Use cumulative coarse-graining ratio as RG scale
+        zetas = np.log(n_nodes[0] / n_nodes)
 
         for name, attr in [('y1', 'g1_anisotropy'),
+                           ('y1_orig', 'g1_original'),
                            ('y2', 'g2_gauge_variation'),
                            ('y3', 'g3_holonomy')]:
-            vals = np.array([getattr(lev, attr) for lev in self.levels])
+            vals = np.array([getattr(lev, attr, 0.0) for lev in self.levels])
             mask = vals > 1e-10
             if mask.sum() >= 2:
-                log_vals = np.log(vals[mask] + 1e-20)
+                log_vals = np.log(vals[mask])
                 zs = zetas[mask]
-                # Linear fit: log g = y · ζ · log b + const
-                if len(zs) >= 2 and log_b > 0:
+                if len(zs) >= 2:
                     coeffs = np.polyfit(zs, log_vals, 1)
-                    exponents[name] = coeffs[0] / log_b
+                    exponents[name] = coeffs[0]
                 else:
                     exponents[name] = np.nan
             else:
@@ -212,7 +220,7 @@ def coarse_grain(
     covariances: np.ndarray,
     labels: np.ndarray,
     transports: Optional[np.ndarray] = None,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """
     Coarse-grain the VFE system by contracting clusters into meta-agents.
 
@@ -230,16 +238,19 @@ def coarse_grain(
     -------
     beta_cg : (M, M) coarse-grained attention
     means_cg : (M, K) meta-agent means
-    covs_cg : (M, K, K) meta-agent covariances
+    covs_cg : (M, K, K) meta-agent covariances (total = original + emergent)
+    covs_original : (M, K, K) averaged original covariances only
+    covs_emergent : (M, K, K) within-cluster Var_A(μ) only
     transports_cg : (M, M, K, K) or None
     """
     unique_labels = np.unique(labels)
     M = len(unique_labels)
     K = means.shape[1]
 
-    # Meta-agent means: attention-weighted average within cluster
     means_cg = np.zeros((M, K))
     covs_cg = np.zeros((M, K, K))
+    covs_original = np.zeros((M, K, K))
+    covs_emergent = np.zeros((M, K, K))
     beta_cg = np.zeros((M, M))
 
     label_to_idx = {l: i for i, l in enumerate(unique_labels)}
@@ -252,20 +263,21 @@ def coarse_grain(
         # Meta-agent mean
         means_cg[a] = means[members_a].mean(axis=0)
 
-        # Meta-agent covariance = average covariance + within-cluster variance
+        # Decomposed covariance: original (averaged Σ_i) + emergent (Var_A(μ))
         avg_cov = covariances[members_a].mean(axis=0)
+        covs_original[a] = avg_cov
         if n_a > 1:
             deviations = means[members_a] - means_cg[a]
             within_var = (deviations.T @ deviations) / n_a
         else:
             within_var = np.zeros((K, K))
+        covs_emergent[a] = within_var
         covs_cg[a] = avg_cov + within_var
 
         # Meta-agent attention
         for b_label in unique_labels:
             b = label_to_idx[b_label]
             members_b = np.where(labels == b_label)[0]
-            # Average attention from cluster a to cluster b
             beta_cg[a, b] = beta[np.ix_(members_a, members_b)].mean()
 
     # Renormalize attention rows
@@ -282,12 +294,11 @@ def coarse_grain(
             for b_label in unique_labels:
                 b = label_to_idx[b_label]
                 members_b = np.where(labels == b_label)[0]
-                # Average transport
                 transports_cg[a, b] = transports[
                     np.ix_(members_a, members_b)
                 ].mean(axis=(0, 1))
 
-    return beta_cg, means_cg, covs_cg, transports_cg
+    return beta_cg, means_cg, covs_cg, covs_original, covs_emergent, transports_cg
 
 
 # ============================================================================
@@ -297,29 +308,37 @@ def coarse_grain(
 def measure_couplings(
     covariances: np.ndarray,
     transports: Optional[np.ndarray] = None,
+    covs_original: Optional[np.ndarray] = None,
+    covs_emergent: Optional[np.ndarray] = None,
 ) -> Dict[str, float]:
     """
     Measure the effective coupling constants at a given RG level.
 
     Parameters
     ----------
-    covariances : (M, K, K) meta-agent covariances
+    covariances : (M, K, K) meta-agent covariances (total)
     transports : (M, M, K, K) or None
+    covs_original : (M, K, K) or None — averaged original covariances
+    covs_emergent : (M, K, K) or None — within-cluster Var_A(μ)
 
     Returns
     -------
-    dict with g1, g2, g3
+    dict with g1, g1_original, g1_emergent, g2, g3
     """
     M, K, _ = covariances.shape
 
-    # g₁: anisotropy = average ||Δ_i||_F / ||σ²I||_F
-    # where Δ_i = Σ_i - (tr Σ_i / K)·I is the traceless part
-    g1_vals = []
-    for i in range(M):
-        sigma2_eff = np.trace(covariances[i]) / K
-        Delta_i = covariances[i] - sigma2_eff * np.eye(K)
-        g1_vals.append(np.linalg.norm(Delta_i) / (sigma2_eff + 1e-10))
-    g1 = np.mean(g1_vals)
+    # g₁ (total): anisotropy = average ||Δ_i||_F / ||σ²I||_F
+    def _anisotropy(covs):
+        vals = []
+        for i in range(covs.shape[0]):
+            sigma2_eff = np.trace(covs[i]) / K
+            Delta_i = covs[i] - sigma2_eff * np.eye(K)
+            vals.append(np.linalg.norm(Delta_i) / (sigma2_eff + 1e-10))
+        return np.mean(vals) if vals else 0.0
+
+    g1 = _anisotropy(covariances)
+    g1_orig = _anisotropy(covs_original) if covs_original is not None else g1
+    g1_emerg = _anisotropy(covs_emergent) if covs_emergent is not None else 0.0
 
     # g₂: gauge variation = std of transports
     g2 = 0.0
@@ -341,7 +360,8 @@ def measure_couplings(
             holonomy_norms.append(np.linalg.norm(H - np.eye(K)))
         g3 = np.mean(holonomy_norms) if holonomy_norms else 0.0
 
-    return {'g1': g1, 'g2': g2, 'g3': g3}
+    return {'g1': g1, 'g1_original': g1_orig, 'g1_emergent': g1_emerg,
+            'g2': g2, 'g3': g3}
 
 
 def measure_effective_rank(beta: np.ndarray) -> float:
@@ -362,11 +382,14 @@ def run_rg_flow(
     means: np.ndarray,
     covariances: np.ndarray,
     transports: Optional[np.ndarray] = None,
-    max_levels: int = 5,
-    min_nodes: int = 4,
+    max_levels: int = 10,
+    min_nodes: int = 2,
 ) -> RGFlow:
     """
-    Run the full RG flow by iterating coarse-graining.
+    Run the full RG flow by iterating binary coarse-graining (halving).
+
+    Uses forced n_clusters = N//2 at each step instead of eigengap
+    heuristic, producing many more RG levels for reliable exponent fits.
 
     Parameters
     ----------
@@ -393,14 +416,16 @@ def run_rg_flow(
         covariances=covariances.copy(),
         transports=transports.copy() if transports is not None else None,
         g1_anisotropy=couplings['g1'],
+        g1_original=couplings['g1'],
+        g1_emergent=0.0,
         g2_gauge_variation=couplings['g2'],
         g3_holonomy=couplings['g3'],
-        modularity=compute_modularity_directed(build_attention_graph(beta)),
+        modularity=0.0,
         effective_rank=measure_effective_rank(beta),
     )
     flow.levels.append(level0)
 
-    # Iterate coarse-graining
+    # Iterate binary coarse-graining (halve at each step)
     current_beta = beta.copy()
     current_means = means.copy()
     current_covs = covariances.copy()
@@ -408,23 +433,27 @@ def run_rg_flow(
 
     for level in range(1, max_levels + 1):
         N_current = current_beta.shape[0]
-        if N_current < min_nodes:
+        if N_current < min_nodes * 2:
             break
 
-        # Detect communities
-        labels = spectral_communities(current_beta)
-        n_clusters = len(np.unique(labels))
+        # Force binary coarse-graining: always halve
+        n_clusters = max(2, N_current // 2)
+        labels = spectral_communities(current_beta, n_clusters=n_clusters)
+        actual_clusters = len(np.unique(labels))
 
-        if n_clusters >= N_current or n_clusters < 2:
+        if actual_clusters >= N_current or actual_clusters < 2:
             break
 
-        # Coarse-grain
-        cg_beta, cg_means, cg_covs, cg_transports = coarse_grain(
+        # Coarse-grain with decomposition
+        cg_beta, cg_means, cg_covs, cg_orig, cg_emerg, cg_transports = coarse_grain(
             current_beta, current_means, current_covs, labels, current_transports
         )
 
-        # Measure couplings
-        couplings = measure_couplings(cg_covs, cg_transports)
+        # Measure couplings with decomposition
+        couplings = measure_couplings(
+            cg_covs, cg_transports,
+            covs_original=cg_orig, covs_emergent=cg_emerg,
+        )
 
         lev = RGLevel(
             level=level,
@@ -434,11 +463,13 @@ def run_rg_flow(
             covariances=cg_covs,
             transports=cg_transports,
             g1_anisotropy=couplings['g1'],
+            g1_original=couplings['g1_original'],
+            g1_emergent=couplings['g1_emergent'],
             g2_gauge_variation=couplings['g2'],
             g3_holonomy=couplings['g3'],
-            modularity=compute_modularity_directed(build_attention_graph(cg_beta)),
+            modularity=0.0,
             effective_rank=measure_effective_rank(cg_beta),
-            n_clusters=n_clusters,
+            n_clusters=actual_clusters,
         )
         flow.levels.append(lev)
 
@@ -531,30 +562,41 @@ def run_synthetic_demo(K: int = 8, N: int = 64):
     print(f"\nGenerated {N} tokens with K={K} dimensions")
     print(f"Initial attention matrix: {beta.shape}")
 
-    # Run RG flow
-    flow = run_rg_flow(beta, means, covs, transports, max_levels=5)
+    # Run RG flow (binary coarse-graining)
+    flow = run_rg_flow(beta, means, covs, transports, max_levels=10)
 
-    print(f"\nRG Flow ({flow.n_levels} levels):")
-    print(f"{'Level':>6} {'Nodes':>6} {'g₁':>8} {'g₂':>8} {'g₃':>8} "
-          f"{'Q(β)':>8} {'eff_rank':>8}")
-    print("-" * 60)
+    print(f"\nRG Flow ({flow.n_levels} levels, binary coarse-graining):")
+    print(f"{'Level':>5} {'Nodes':>5} {'g₁(tot)':>8} {'g₁(orig)':>9} "
+          f"{'g₁(emer)':>9} {'g₂':>8} {'g₃':>8}")
+    print("-" * 70)
     for lev in flow.levels:
-        print(f"{lev.level:>6} {lev.n_nodes:>6} {lev.g1_anisotropy:>8.4f} "
-              f"{lev.g2_gauge_variation:>8.4f} {lev.g3_holonomy:>8.4f} "
-              f"{lev.modularity:>8.4f} {lev.effective_rank:>8.2f}")
+        print(f"{lev.level:>5} {lev.n_nodes:>5} {lev.g1_anisotropy:>8.4f} "
+              f"{lev.g1_original:>9.4f} {lev.g1_emergent:>9.4f} "
+              f"{lev.g2_gauge_variation:>8.4f} {lev.g3_holonomy:>8.4f}")
 
     # Scaling exponents
     exponents = flow.scaling_exponents()
     print(f"\nMeasured scaling exponents:")
+    predicted = {'y1': -0.5, 'y1_orig': -0.5, 'y2': -1.0, 'y3': -2.0}
     for name, val in exponents.items():
-        predicted = {'y1': -0.5, 'y2': -1.0, 'y3': -2.0}.get(name, np.nan)
-        print(f"  {name}: measured = {val:.3f}, predicted = {predicted:.3f}")
+        pred = predicted.get(name, np.nan)
+        label = {
+            'y1': 'g₁ total    ',
+            'y1_orig': 'g₁ original',
+            'y2': 'g₂         ',
+            'y3': 'g₃         ',
+        }.get(name, name)
+        print(f"  {label}: measured = {val:+.3f}, predicted = {pred:+.3f}")
 
     print(f"\nPredictions from universality theorem:")
-    print(f"  y₁ = -1/2 (anisotropy decays as 1/√n)")
+    print(f"  y₁ = -1/2 (original anisotropy decays as 1/√n)")
     print(f"  y₂ = -1   (gauge variation decays as 1/n)")
     print(f"  y₃ = -2   (holonomy decays as 1/n²)")
-    print(f"\nAll couplings flow toward zero → transformer fixed point ✓")
+    print()
+    print(f"NOTE: g₁(total) rises because emergent anisotropy Var_A(μ)")
+    print(f"      grows under coarse-graining. This is the mechanism that")
+    print(f"      transformers absorb into W_Q, W_K — track g₁(original)")
+    print(f"      for the CLT decay prediction.")
 
     return flow
 
