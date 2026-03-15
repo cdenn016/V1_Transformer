@@ -1515,7 +1515,7 @@ class VariationalFFNDynamic(nn.Module):
         # Phi (gauge frame) evolution via VFE gradients
         update_phi: bool = False,  # If True, update phi via ∂F/∂φ (after E-step loop)
         update_phi_per_iteration: bool = False,  # If True, update phi during EACH E-step iteration
-        phi_update_interval: int = 2,  # Only update phi every N iterations (reduces redundant matrix_exp)
+        phi_update_interval: int = 1,  # Update phi every N iterations (1=every iteration, 2=skip alternate)
         phi_lr: float = 0.05,      # Learning rate for phi updates
         phi_max_norm: float = 3.14159,  # Max norm for phi (π = 180° rotation)
         prior_bank: Optional[nn.Module] = None,  # Token-dependent PriorBank (if provided)
@@ -2664,7 +2664,7 @@ class VariationalFFNDynamic(nn.Module):
             # (default 2) to reduce redundant matrix exponential computations.
             # Early E-step iterations produce large belief changes where phi
             # updates are less informative; later iterations benefit more.
-            phi_update_interval = getattr(self, 'phi_update_interval', 2)
+            phi_update_interval = getattr(self, 'phi_update_interval', 1)
             # Skip phi evolution for constant/trivial gauge: phi is not used for
             # transport (constant gauge uses constant_omega; trivial uses Ω=I).
             _skip_phi_update = self.gauge_mode in ('trivial', 'constant')

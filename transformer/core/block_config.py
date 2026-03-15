@@ -38,6 +38,7 @@ class BlockConfig:
     evolve_sigma: bool = True     # Update covariances Σ
     evolve_phi: bool = True       # Update gauge frames φ (M-step)
     evolve_phi_e_step: bool = False  # Update φ during E-step iterations
+    phi_update_interval: int = 1  # Update phi every N E-step iterations (1=every iteration)
     phi_lr: float = 0.05          # Learning rate for ∂F/∂φ descent
     phi_max_norm: float = math.pi # Max phi norm (π radians)
     phi_dim: int = 3              # 3 for SO(3), N(N-1)/2 for SO(N)
@@ -126,6 +127,7 @@ class BlockConfig:
             evolve_sigma=config.get('evolve_sigma', True),
             evolve_phi=config.get('evolve_phi', True),
             evolve_phi_e_step=config.get('evolve_phi_e_step', False),
+            phi_update_interval=config.get('phi_update_interval', 1),
             phi_lr=config.get('phi_lr', 0.05),
             phi_max_norm=config.get('phi_max_norm', math.pi),
             phi_dim=config.get('phi_dim', 3),

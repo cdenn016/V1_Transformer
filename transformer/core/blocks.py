@@ -148,6 +148,7 @@ class GaugeTransformerBlock(nn.Module):
             diagonal_covariance=cfg.diagonal_covariance,
             update_phi=cfg.evolve_phi,
             update_phi_per_iteration=cfg.evolve_phi_e_step,
+            phi_update_interval=cfg.phi_update_interval,
             phi_lr=cfg.phi_lr,
             phi_max_norm=cfg.phi_max_norm,
             irrep_dims=cfg.ffn_irrep_dims,
