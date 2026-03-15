@@ -17,21 +17,9 @@ PHASE 1 (training runs, ~1-2 weeks on RTX 5090):
 
 USAGE
 -----
-    # Phase 0 — from existing checkpoint:
-    python scripts/run_rg_experiments.py --phase 0 --checkpoint <path>
-
-    # Phase 0 — from last training run:
-    python scripts/run_rg_experiments.py --phase 0 --find-latest
-
-    # Phase 1 — full sweep (will train 8 models):
-    python scripts/run_rg_experiments.py --phase 1
-
-    # Phase 1 — single K value (quick test):
-    python scripts/run_rg_experiments.py --phase 1 --K 16
-
-    # Both phases:
-    python scripts/run_rg_experiments.py --phase 0 --checkpoint <path>
-    python scripts/run_rg_experiments.py --phase 1
+    Click-to-run: edit the CONFIG section at the bottom of this file,
+    then run:
+        python scripts/run_rg_experiments.py
 
 Author: Claude / Robert C. Dennis
 Date: March 2026
@@ -52,7 +40,6 @@ import numpy as np
 import json
 import csv
 import time
-import argparse
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Tuple, Any, Optional
@@ -765,55 +752,62 @@ def find_latest_checkpoint() -> Optional[str]:
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        description='RG Universality Experiments (Phase 0 & 1)'
-    )
-    parser.add_argument('--phase', type=str, required=True,
-                        choices=['0', '1', '1-analyze'],
-                        help='Which phase to run')
-    parser.add_argument('--checkpoint', type=str, default=None,
-                        help='Path to trained model checkpoint (Phase 0)')
-    parser.add_argument('--find-latest', action='store_true',
-                        help='Auto-find most recent checkpoint (Phase 0)')
-    parser.add_argument('--K', type=int, nargs='+', default=[8, 16, 32, 64],
-                        help='K values for Phase 1')
-    parser.add_argument('--max-steps', type=int, default=15000,
-                        help='Max training steps per run (Phase 1)')
-    parser.add_argument('--dataset', type=str, default='wikitext-103')
-    parser.add_argument('--output-dir', type=str,
-                        default='checkpoints_rg_experiments')
-    parser.add_argument('--n-samples', type=int, default=50,
-                        help='Number of samples for Phase 0')
-    parser.add_argument('--results-dir', type=str, default=None,
-                        help='Results directory (Phase 1 analyze)')
 
-    args = parser.parse_args()
+    # ================================================================
+    # CONFIG — edit these settings, then click Run (no CLI needed)
+    # ================================================================
 
-    if args.phase == '0':
-        ckpt = args.checkpoint
-        if args.find_latest and ckpt is None:
+    # Which phases to run (set to True/False):
+    RUN_PHASE_0  = True     # Post-hoc analysis from checkpoint
+    RUN_PHASE_1  = True     # Training sweep across K values
+    RUN_ANALYZE  = True     # Analyze Phase 1 results after training
+
+    # Phase 0 settings:
+    CHECKPOINT_PATH = None  # <-- paste your checkpoint path here, e.g.:
+                            #     'checkpoints_publication/run_20260315/best_model.pt'
+                            # If None, auto-finds the latest checkpoint.
+
+    N_SAMPLES = 50          # Number of text samples for Phase 0 analysis
+
+    # Phase 1 settings:
+    K_VALUES   = [8, 16, 32, 64]
+    DATASET    = 'wikitext-103'
+    MAX_STEPS  = 15000
+    OUTPUT_DIR = 'checkpoints_rg_experiments'
+
+    # Phase 1-analyze settings:
+    RESULTS_DIR = None      # If None, defaults to OUTPUT_DIR/phase_1a
+
+    # ================================================================
+    # RUN — no need to edit below this line
+    # ================================================================
+
+    if RUN_PHASE_0:
+        ckpt = CHECKPOINT_PATH
+        if ckpt is None:
             ckpt = find_latest_checkpoint()
             if ckpt:
-                print(f"Found latest checkpoint: {ckpt}")
-            else:
-                print("No checkpoint found! Provide --checkpoint path.")
-                sys.exit(1)
+                print(f"Auto-found latest checkpoint: {ckpt}")
 
         if ckpt is None:
-            print("Phase 0 requires --checkpoint or --find-latest")
-            sys.exit(1)
+            print("⚠  Phase 0 skipped: no checkpoint found.")
+            print("   Set CHECKPOINT_PATH above, or train a model first.")
+        else:
+            phase_0a_coarse_graining_exponents(ckpt, n_samples=N_SAMPLES)
+            phase_0b_emergent_anisotropy(ckpt, n_samples=N_SAMPLES)
 
-        phase_0a_coarse_graining_exponents(ckpt, n_samples=args.n_samples)
-        phase_0b_emergent_anisotropy(ckpt, n_samples=args.n_samples)
-
-    elif args.phase == '1':
+    if RUN_PHASE_1:
         phase_1a_sample_efficiency(
-            K_values=args.K,
-            dataset=args.dataset,
-            max_steps=args.max_steps,
-            output_dir=args.output_dir,
+            K_values=K_VALUES,
+            dataset=DATASET,
+            max_steps=MAX_STEPS,
+            output_dir=OUTPUT_DIR,
         )
 
-    elif args.phase == '1-analyze':
-        results_dir = args.results_dir or args.output_dir + '/phase_1a'
-        phase_1_analyze(results_dir)
+    if RUN_ANALYZE:
+        results_dir = RESULTS_DIR or OUTPUT_DIR + '/phase_1a'
+        if Path(results_dir).exists():
+            phase_1_analyze(results_dir)
+        else:
+            print(f"⚠  Phase 1-analyze skipped: {results_dir} not found.")
+            print("   Run Phase 1 first, or set RESULTS_DIR above.")

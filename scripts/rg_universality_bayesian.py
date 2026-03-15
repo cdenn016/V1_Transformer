@@ -35,14 +35,9 @@ Model 3: Two-regime model with crossover
 
 USAGE
 -----
-    # Fit to training curves:
-    python scripts/rg_universality_bayesian.py --data training_curves.json
-
-    # Synthetic demonstration:
-    python scripts/rg_universality_bayesian.py --synthetic
-
-    # Prior predictive check:
-    python scripts/rg_universality_bayesian.py --prior-check
+    Click-to-run: edit the CONFIG section at the bottom of this file,
+    then run:
+        python scripts/rg_universality_bayesian.py
 
 Author: Claude / Robert C. Dennis
 Date: March 2026
@@ -51,7 +46,6 @@ Date: March 2026
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
-import argparse
 import json
 
 
@@ -499,21 +493,27 @@ SCALING LAW PREDICTIONS (from RG Universality Analysis)
 # ============================================================================
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        description='Bayesian Scaling Comparison: Gauge VFE vs Transformer'
-    )
-    parser.add_argument('--synthetic', action='store_true',
-                        help='Generate and analyze synthetic scaling data')
-    parser.add_argument('--data', type=str, default=None,
-                        help='Path to training curves JSON')
-    parser.add_argument('--prior-check', action='store_true',
-                        help='Run prior predictive check only')
-    parser.add_argument('--no-pymc', action='store_true',
-                        help='Use OLS instead of PyMC')
-    args = parser.parse_args()
 
-    if args.synthetic or args.data is None:
+    # ================================================================
+    # CONFIG — edit these settings, then click Run (no CLI needed)
+    # ================================================================
+
+    DATA_PATH = None        # <-- paste path to training curves JSON here, e.g.:
+                            #     'checkpoints_rg_experiments/phase_1a/training_curves.json'
+                            # If None, generates and analyzes synthetic data.
+
+    USE_PYMC = True         # True = full Bayesian (requires PyMC installed)
+                            # False = OLS fallback (no extra dependencies)
+
+    # ================================================================
+    # RUN — no need to edit below this line
+    # ================================================================
+
+    if DATA_PATH is not None:
+        with open(DATA_PATH) as f:
+            curves = json.load(f)
+    else:
         curves = generate_synthetic_scaling_data()
-        analyze_scaling_laws(curves, use_pymc=not args.no_pymc)
 
+    analyze_scaling_laws(curves, use_pymc=USE_PYMC)
     print_manuscript_predictions()

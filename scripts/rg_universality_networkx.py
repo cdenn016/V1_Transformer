@@ -22,11 +22,9 @@ STRUCTURE
 
 USAGE
 -----
-    # From checkpoint:
-    python scripts/rg_universality_networkx.py --checkpoint path/to/model.pt
-
-    # Synthetic demo:
-    python scripts/rg_universality_networkx.py --synthetic --K 8 --N 64
+    Click-to-run: edit the CONFIG section at the bottom of this file,
+    then run:
+        python scripts/rg_universality_networkx.py
 
 Author: Claude / Robert C. Dennis
 Date: March 2026
@@ -36,7 +34,7 @@ import numpy as np
 import networkx as nx
 from typing import Tuple, Dict, List, Optional
 from dataclasses import dataclass, field
-import argparse
+
 
 
 # ============================================================================
@@ -566,19 +564,24 @@ def run_synthetic_demo(K: int = 8, N: int = 64):
 # ============================================================================
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        description='RG Universality Analysis (NetworkX)'
-    )
-    parser.add_argument('--synthetic', action='store_true',
-                        help='Run synthetic demo')
-    parser.add_argument('--K', type=int, default=8)
-    parser.add_argument('--N', type=int, default=64)
-    parser.add_argument('--checkpoint', type=str, default=None,
-                        help='Path to model checkpoint')
-    args = parser.parse_args()
 
-    if args.checkpoint:
+    # ================================================================
+    # CONFIG — edit these settings, then click Run (no CLI needed)
+    # ================================================================
+
+    CHECKPOINT_PATH = None  # <-- paste your checkpoint path here, e.g.:
+                            #     'checkpoints_publication/run_20260315/best_model.pt'
+                            # If None, runs synthetic demo.
+
+    K = 8                   # Belief dimension (for synthetic demo)
+    N = 64                  # Number of tokens (for synthetic demo)
+
+    # ================================================================
+    # RUN — no need to edit below this line
+    # ================================================================
+
+    if CHECKPOINT_PATH:
         print("Loading from checkpoint... (not yet implemented)")
-        print("Use --synthetic for demo mode.")
-    else:
-        flow = run_synthetic_demo(K=args.K, N=args.N)
+        print("Running synthetic demo instead.")
+
+    flow = run_synthetic_demo(K=K, N=N)
