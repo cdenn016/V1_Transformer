@@ -240,25 +240,26 @@ VFE_EM_CONFIG = {
                                   # When False: φ only updated via backprop (M-step)
 
     'phi_update_interval': 1,
-    'analytic_phi_grad': False,   # If True, bypass autograd for ∂F/∂φ (saves ~250MB per update)
+    'analytic_phi_grad': True,   # If True, bypass autograd for ∂F/∂φ (saves ~250MB per update)
                                   # Uses hand-coded backward through matrix_exp → KL → softmax.
                                   # Requires diagonal_covariance=True and irrep_dims (block-diag).
     'analytic_phi_grad_dexp_order': 4,  # dexp series truncation (4=good, 8=very accurate)
+    
     'diagonal_covariance': True,
-    'isotropic_covariance': True,    # If True, force Σ = σ²I (scalar variance × identity)
+    'isotropic_covariance': False,    # If True, force Σ = σ²I (scalar variance × identity)
                                        # This is Limit 1 from the manuscript: KL reduces to
                                        # scaled squared Euclidean distance. Combined with
                                        # gauge_mode='trivial' (Limit 2), recovers standard attention.
     
-    'enforce_orthogonal': True,   # If True, enforce Ω ∈ SO(K) via Newton-Schulz
+    'enforce_orthogonal': False,   # If True, enforce Ω ∈ SO(K) via Newton-Schulz
                                    # Set False for GL(K) (faster, still gauge-invarian
     'learnable_reflection': False,   # Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk 
                                     #set gauge-mode=learned and the above 3 = true for transf limit
     
     
-    'use_positional_embedding': True,
-    'pos_encoding_mode': 'learned',           #'none' 'learned' or 'sinusoidal'
-    'use_rope': False,
+    'use_positional_embedding': False,
+    'pos_encoding_mode': 'none',           #'none' 'learned' or 'sinusoidal'
+    'use_rope': True,
     
     
     'alibi_slope': None,
@@ -336,7 +337,7 @@ VFE_EM_CONFIG = {
     
     'gauge_group': 'GLK',       # 'SO3', 'SON', or 'GLK'
     'gauge_dim': 10,            # N for SO(N) - only used when gauge_group='SON'
-    'gauge_mode': 'constant',    # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j) (cocycle)
+    'gauge_mode': 'learned',    # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j) (cocycle)
                                 # 'constant': per-head Ω ∈ GL(d_head), Ω_ij = Ω (manuscript Limit 2)
                                 # 'trivial': φ = 0, Ω = I (standard attention)
     
@@ -2168,5 +2169,4 @@ def main():
 if __name__ == '__main__':
 
     main()
-
 
