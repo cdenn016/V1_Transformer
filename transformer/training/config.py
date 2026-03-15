@@ -70,7 +70,7 @@ class TrainingConfig:
     #   - alpha · KL(q||p) couples μ_p/Σ_p to posterior (self-consistency)
     #   - alpha_phi · ||φ||²/2 is L2 on gauge frames
     # Optimizer WD on embeddings conflicts with these principled terms.
-    embed_weight_decay: Optional[float] = 0.0
+    embed_weight_decay: Optional[float] = 0.01
     beta1: float = 0.9
     beta2: float = 0.95
     eps: float = 1e-8
