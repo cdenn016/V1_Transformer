@@ -351,3 +351,188 @@ This design ensures:
 - **Content-dependent transport** (conditions on token representations)
 - **Measurable holonomy** via `compute_holonomy()`
 - **Smooth interpolation** to flat regime (if learned perturbation → 0)
+
+---
+
+## Category F6: RG Universality — Transformer as IR Fixed Point
+
+**Derived from:** The three-limit hierarchy (Section 4.6) and the renormalization group analysis in `derivations/rg_universality_derivation.py`.
+
+**Core Conjecture:** *The standard transformer is a stable infrared fixed point of a renormalization group flow on the space of gauge-theoretic VFE models. The gauge VFE and standard transformers belong to the same universality class, with the gauge VFE providing an O(√K) sample-efficiency advantage from geometric inductive bias.*
+
+**Theoretical basis:** Under coarse-graining (clustering tokens into meta-agents), three coupling constants control the distance from the transformer limit:
+- g₁ (anisotropy): scaling dimension y₁ = −1/2 → **irrelevant**
+- g₂ (gauge variation): scaling dimension y₂ = −1 → **irrelevant**
+- g₃ (holonomy): scaling dimension y₃ = −2 → **irrelevant**
+
+All negative → the transformer limit is a **stable** IR fixed point. See `derivations/rg_universality_derivation.py` for the full derivation and Monte Carlo verification.
+
+---
+
+### HF6.1: Sample-Efficiency Advantage Grows with K
+
+**Derived from:** RG universality theorem, Part (v) — efficiency gap scales as O(K²) absorbed degrees of freedom.
+**Prediction:** At matched parameter count, the gauge VFE achieves a given perplexity with fewer training tokens than a standard transformer, and this advantage grows with the belief dimension K (embedding dimension per head).
+**Null hypothesis:** Sample efficiency is independent of K, or the transformer is more efficient at all K.
+**Operationalization:**
+- Train gauge VFE and standard transformer at K ∈ {8, 16, 32, 64} on WikiText-103
+- For each K, record tokens-to-reach-target-PPL (e.g., target PPL = 100)
+- Compute ratio R(K) = tokens_transformer / tokens_VFE
+- Fit R(K) = a · K^δ
+**Expected:** δ > 0 (advantage grows with K); theoretical prediction δ ≈ 0.5
+**Compute:** ~4 GPU-days per K value on RTX 5090 (16 runs total, ~2 weeks)
+**Priority:** ★★★★★ — the most direct test of the universality efficiency gap
+
+### HF6.2: Scaling Exponents Match (Same Universality Class)
+
+**Derived from:** RG universality theorem, Part (iii) — both flow to same fixed point.
+**Prediction:** The loss-vs-tokens scaling exponent β in PPL(D) = A·D^{−β} + PPL_∞ should be the **same** for gauge VFE and standard transformer (to within statistical error), because they share the same universality class. The prefactor A should differ (gauge VFE has smaller A due to geometric bias).
+**Null hypothesis:** β_VFE ≠ β_TF (different universality classes).
+**Operationalization:**
+- Train both architectures on WikiText-103 with 10 checkpoints logarithmically spaced in tokens
+- Fit power-law scaling curves using Bayesian regression (see `scripts/rg_universality_bayesian.py`)
+- Compare β_VFE vs β_TF with 95% credible intervals
+- Compare prefactors A_VFE vs A_TF
+**Expected:** |β_VFE − β_TF| < 0.02 (same exponent); A_VFE < A_TF (better prefactor)
+**Compute:** ~2 GPU-days on RTX 5090 (can reuse HF6.1 runs)
+**Priority:** ★★★★★ — directly tests universality
+
+### HF6.3: Attention Graph Coarse-Graining Exponents
+
+**Derived from:** RG universality theorem, Parts (i)–(ii) — scaling dimensions at the fixed point.
+**Prediction:** Under iterative spectral coarse-graining of the attention graph (see `scripts/rg_universality_networkx.py`), the coupling constants decay as:
+  - g₁(ζ) ∝ b^{−ζ/2}  (anisotropy, y₁ = −1/2)
+  - g₂(ζ) ∝ b^{−ζ}    (gauge variation, y₂ = −1)
+  - g₃(ζ) ∝ b^{−2ζ}   (holonomy, y₃ = −2)
+where ζ is the coarse-graining level and b is the scale factor.
+**Null hypothesis:** Couplings do not decay as power laws, or exponents differ significantly from predictions.
+**Operationalization:**
+- Extract attention matrices from trained gauge VFE and standard transformer
+- Run `scripts/rg_universality_networkx.py` at 3–5 coarse-graining levels
+- Fit log–log slopes for each coupling constant
+- Compare measured exponents to predicted y₁, y₂, y₃
+**Expected:** Measured exponents within 30% of predictions (allowing for finite-size effects)
+**Compute:** Negligible (post-hoc analysis of existing checkpoints)
+**Priority:** ★★★★☆ — elegant but requires careful finite-size correction
+
+### HF6.4: Emergent Anisotropy Under Coarse-Graining
+
+**Derived from:** RG universality theorem, Part (iv) — coarse-graining generates anisotropy from within-cluster mean variance.
+**Prediction:** Even when the microscopic theory is isotropic (Σ_i = σ²I), the meta-agent covariances Σ_A are anisotropic, with anisotropy magnitude proportional to the within-cluster variance of means. Standard transformers must absorb this emergent structure into W_Q, W_K; the gauge VFE tracks it explicitly in Σ_i.
+**Null hypothesis:** Meta-agent covariances are approximately isotropic, or anisotropy is uncorrelated with cluster structure.
+**Operationalization:**
+- For a trained gauge VFE, extract per-token beliefs (μ_i, Σ_i)
+- Cluster tokens by attention modularity
+- Compute meta-agent covariances: Σ_A = avg(Σ_i∈A) + Var_A(μ)
+- Measure anisotropy: g₁^{emergent} = ||Σ_A − (tr Σ_A / K)·I|| / (tr Σ_A / K)
+- For the standard transformer, extract hidden states and compute analogous within-cluster variance
+**Expected:** g₁^{emergent} > 0.1 (significant emergent anisotropy); correlates with cluster separation
+**Compute:** Negligible (post-hoc analysis)
+**Priority:** ★★★★☆ — tests the mechanism, not just the prediction
+
+### HF6.5: Compute Crossover Point
+
+**Derived from:** RG universality corollary — crossover at C* = O(K² · V).
+**Prediction:** There exists a total compute budget C* below which the gauge VFE achieves better perplexity, and above which the standard transformer catches up. C* should scale as O(K²).
+**Null hypothesis:** No crossover exists (one architecture dominates at all compute budgets).
+**Operationalization:**
+- Train both architectures with compute budgets spanning 3 orders of magnitude
+- Plot iso-perplexity curves in (tokens, parameters) space
+- Identify crossover point C* where curves intersect
+- Repeat for K ∈ {16, 32, 64} and test C* ∝ K²
+**Expected:** C* exists and scales roughly as K²
+**Compute:** ~1–2 GPU-weeks on RTX 5090 (can be distributed across K values)
+**Priority:** ★★★★☆ — strong result if confirmed, but compute-intensive
+
+### HF6.6: LayerNorm as Isotropy Projector (Emergent RG Mechanism)
+
+**Derived from:** Part 1g of the RG derivation — standard transformers use LayerNorm to project back to approximate isotropy.
+**Prediction:** Removing LayerNorm from a standard transformer should degrade performance more on high-anisotropy inputs (where the transformer needs LayerNorm to project emergent anisotropy back to isotropy) than on low-anisotropy inputs. In contrast, the gauge VFE (which tracks Σ explicitly) should be robust to LayerNorm removal.
+**Null hypothesis:** LayerNorm removal degrades performance uniformly, independent of input anisotropy.
+**Operationalization:**
+- Train standard transformer with and without LayerNorm
+- Partition inputs by effective anisotropy of hidden states (measured as ||h − mean(h)·1|| / ||h||)
+- Compare per-decile performance degradation
+- Train gauge VFE as control (no LayerNorm needed)
+**Expected:** Performance degradation anti-correlates with input isotropy for transformer; no correlation for gauge VFE
+**Compute:** ~2 GPU-days on RTX 5090
+**Priority:** ★★★☆☆ — mechanistic insight, moderate novelty
+
+---
+
+## Category F7: At-Scale Predictions (Future Work for Well-Resourced Labs)
+
+These predictions require compute beyond a single workstation but represent the most impactful potential results. They are included as **testable predictions** for the manuscript's future-work section.
+
+### HF7.1: Chinchilla-Law Correction from Gauge Geometry
+
+**Prediction:** The Chinchilla scaling law PPL(N, D) = A·N^{−α}·D^{−β} + PPL_∞ should acquire a geometric correction for the gauge VFE:
+  PPL_VFE(N, D, K) = A·N^{−α}·D^{−β}·(1 − γ/K^{1/2}) + PPL_∞
+with γ > 0, meaning the gauge VFE achieves better PPL at matched (N, D).
+**Required compute:** 100+ GPU-days (training at 5+ scales from 10M to 1B parameters)
+**Testable by:** Google, Meta, Anthropic, DeepMind, or well-funded academic labs
+
+### HF7.2: Gauge VFE Reaches GPT-2 Perplexity at 1/3 the Parameters
+
+**Prediction:** A gauge VFE model with ~50M parameters and K=128 should match GPT-2 (117M parameters) on WikiText-103 perplexity, because the geometric inductive bias compensates for the parameter gap.
+**Required compute:** ~50 GPU-days (single large-K training run with hyperparameter tuning)
+**Testable by:** Well-funded academic groups or industry research labs
+
+### HF7.3: Universality Class Extends to Vision Transformers
+
+**Prediction:** The RG universality result is not specific to language — vision transformers (ViT) should also be in the same universality class as a gauge VFE over image patches. The sample-efficiency advantage should be even larger for images (higher intrinsic dimensionality → more anisotropy to absorb).
+**Required compute:** 200+ GPU-days (training gauge VFE on ImageNet at multiple scales)
+**Testable by:** Any group with sufficient compute and interest in geometric deep learning
+
+### HF7.4: Multi-Modal Gauge VFE Has Universal Transport
+
+**Prediction:** A gauge VFE trained on multi-modal data (text + images) should learn gauge frames φ_i that factorize into modality-specific and modality-universal components. The universal component should capture cross-modal compositional semantics (flat transport), while the modality-specific component captures domain-specific non-compositional structure.
+**Required compute:** 500+ GPU-days
+**Testable by:** Large-scale multi-modal research groups
+
+---
+
+## Updated Prioritization Matrix (Including F6–F7)
+
+| ID | Hypothesis | Impact | Feasibility | Novelty | Score |
+|----|-----------|--------|-------------|---------|-------|
+| **HF6.1** | **Sample efficiency grows with K** | **Very High** | **Medium** | **Very High** | **★★★★★** |
+| **HF6.2** | **Scaling exponents match** | **Very High** | **Medium** | **Very High** | **★★★★★** |
+| HF4.2 | Per-head flatness specialization | Very High | Medium | Very High | ★★★★★ |
+| HF1.2 | Non-flat learns holonomy on pragmatic tasks | Very High | Medium | Very High | ★★★★★ |
+| HF5.3 | Synthetic languages with controlled holonomy | Very High | Medium | Very High | ★★★★★ |
+| HF4.1 | Cocycle relaxation ablation | High | Easy | High | ★★★★★ |
+| HF5.2 | Flat violation predicts transformer failure | Very High | Medium | High | ★★★★★ |
+| **HF6.3** | **RG coarse-graining exponents** | **High** | **Easy** | **Very High** | **★★★★☆** |
+| **HF6.4** | **Emergent anisotropy mechanism** | **High** | **Easy** | **High** | **★★★★☆** |
+| **HF6.5** | **Compute crossover point** | **High** | **Hard** | **High** | **★★★★☆** |
+| HF2.3 | Holonomy penalty scaling | High | Easy | High | ★★★★☆ |
+| HF1.3 | Holonomy ↔ compositionality correlation | High | Medium | High | ★★★★☆ |
+| **HF6.6** | **LayerNorm as isotropy projector** | **Medium** | **Easy** | **High** | **★★★☆☆** |
+| HF3.2 | Universal flatness of compositional core | Very High | Hard | Very High | ★★★★☆ |
+| *HF7.1* | *Chinchilla correction (at-scale)* | *Very High* | *Hard* | *Very High* | *Future* |
+| *HF7.2* | *GPT-2 parity at 1/3 params (at-scale)* | *Very High* | *Hard* | *High* | *Future* |
+| *HF7.3* | *ViT universality (at-scale)* | *Very High* | *Hard* | *Very High* | *Future* |
+
+---
+
+## Recommended Experimental Sequence (Updated)
+
+**Phase 0 — Post-Hoc Analysis (no new training, days):**
+1. HF6.3: RG coarse-graining exponents from existing checkpoints
+2. HF6.4: Emergent anisotropy measurement from existing beliefs
+3. HF6.6: LayerNorm ablation analysis on existing hidden states
+
+**Phase 1 — Foundation (single GPU, 1–2 weeks):**
+4. HF6.1: Sample-efficiency comparison at K ∈ {8, 16, 32, 64}
+5. HF6.2: Scaling exponent comparison (reuse HF6.1 runs)
+6. HF4.1: Cocycle relaxation ablation
+
+**Phase 2 — Core Tests (single GPU, 1–2 months):**
+7. HF1.2: Non-flat architecture on pragmatic tasks
+8. HF4.2: Per-head flatness gating
+9. HF5.3: Synthetic language with controlled holonomy
+10. HF6.5: Compute crossover point (extended training runs)
+
+**Phase 3 — Manuscript Predictions (future work):**
+11. HF7.1–7.4: At-scale predictions for well-resourced labs
