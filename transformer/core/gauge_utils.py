@@ -497,26 +497,60 @@ def fused_block_diagonal_kl_full(
 #
 #   F_align = λ Σ_{i,j} β_ij KL(q_i || Ω_ij q_j)
 #
-#   ∂F_align/∂φ^a_i = λ Σ_j β_ij [1 + (w_i - KL_ij)/τ] ∂KL_ij/∂φ^a_i
+# The total gradient has TWO contributions (phi_i affects BOTH Ω_ij and Ω_ji):
 #
-#   where w_i = Σ_j β_ij KL_ij,  τ = κ√K  (softmax temperature)
+#   ∂F/∂φ^a_i = Σ_j [ w_ij · ∂KL_ij/∂φ^a_i  +  w_ji · ∂KL_ji/∂φ^a_i ]
+#                       ^^^^^ query side           ^^^^^ key side
 #
-# The ∂KL/∂φ chain:
-#   ∂KL_ij/∂φ^a_i = tr(∂KL/∂Ω_ij · ∂Ω_ij/∂φ^a_i)
+#   where w_ij = λ β_ij [1 + (w_i - KL_ij)/τ],  w_i = Σ_j β_ij KL_ij
 #
-# For diagonal covariance:
-#   ∂KL/∂Ω[r,s] = c_r · Ω[r,s] · σ_j[s] / σ_t[r]  -  δ_r · μ_j[s] / σ_t[r]
-#   where c_r = 1 - σ_i[r]/σ_t[r] - δ_r²/σ_t[r],  δ_r = μ_i[r] - μ_t[r]
+# Query side (through exp(X_i) in Ω_ij = exp(X_i)exp(-X_j)):
+#   ∂KL_ij/∂φ^a_i = Σ_k 1/(k+1)! tr(Q_k G_a)
+#   Q_0 = exp(-X_j)(∂KL_ij/∂Ω_ij)^T exp(X_i),  Q_k = [X_i, Q_{k-1}]
 #
-# The dexp chain for ∂Ω_ij/∂φ^a_i uses the BCH-like series:
-#   ∂Ω_ij/∂φ^a_i = dexp_{X_i}(G_a) · exp(-X_j)
-#                 = exp(X_i) · Ψ(ad_{X_i})(G_a) · exp(-X_j)
-#   where Ψ(z) = (e^z - 1)/z = Σ_{k=0}^∞ z^k/(k+1)!
+# Key side (through exp(-X_i) in Ω_ji = exp(X_j)exp(-X_i)):
+#   ∂KL_ji/∂φ^a_i = -Σ_k 1/(k+1)! tr(S_k G_a)
+#   S_0 = exp(-X_i)(∂KL_ji/∂Ω_ji)^T exp(X_j),  S_k = [X_i, S_{k-1}]
 #
-# Efficient computation via commutator iteration:
-#   Q^{(0)} = exp(-X_j) · (∂KL/∂Ω)^T · exp(X_i)
-#   Q^{(k)} = [Q^{(k-1)}, X_i]  (commutator)
-#   ∂KL_ij/∂φ^a_i = Σ_{k=0}^p 1/(k+1)! · tr(Q^{(k)} · G_a)
+# Key optimization: since commutator is linear, sum over j FIRST then iterate:
+#   C_0 = Σ_j [w_ij Q_0^{ij} - w_ji S_0^{ji}]
+#   C_k = [X_i, C_{k-1}]
+#   ∂F/∂φ^a_i = Σ_k 1/(k+1)! tr(C_k G_a)
+
+
+def _compute_dkl_domega_diag(
+    mu_i: torch.Tensor,     # (..., d) query means
+    sig_i: torch.Tensor,    # (..., d) query variances
+    mu_t: torch.Tensor,     # (..., d) transported means
+    sig_t: torch.Tensor,    # (..., d) transported diagonal variances
+    mu_j: torch.Tensor,     # (..., d) key means (for the outer product term)
+    sig_j: torch.Tensor,    # (..., d) key variances
+    Omega: torch.Tensor,    # (..., d, d) transport operator
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """Compute ∂KL/∂Ω for diagonal covariance KL.
+
+    Returns: (..., d, d) gradient matrix.
+
+    Formula (sympy-verified):
+        ∂KL/∂Ω[r,s] = c_r · Ω[r,s] · σ_j[s] / σ_t[r] - δ_r · μ_j[s] / σ_t[r]
+        where c_r = 1 - σ_i[r]/σ_t[r] - δ_r²/σ_t[r], δ_r = μ_i[r] - μ_t[r]
+    """
+    sig_t = sig_t.clamp(min=eps)
+    delta = mu_i - mu_t                                         # (..., d)
+    c = 1.0 - sig_i / sig_t - delta ** 2 / sig_t               # (..., d)
+
+    # Term 1: diag(c/σ_t) @ Ω @ diag(σ_j)
+    c_over_st = (c / sig_t).unsqueeze(-1)                       # (..., d, 1)
+    sig_j_diag = sig_j.unsqueeze(-2)                            # (..., 1, d)
+    term1 = c_over_st * Omega * sig_j_diag                     # (..., d, d)
+
+    # Term 2: -outer(δ/σ_t, μ_j)
+    delta_over_st = (delta / sig_t).unsqueeze(-1)               # (..., d, 1)
+    mu_j_row = mu_j.unsqueeze(-2)                               # (..., 1, d)
+    term2 = -delta_over_st * mu_j_row                           # (..., d, d)
+
+    return term1 + term2
 
 
 def analytic_phi_gradient_block_diag(
@@ -542,6 +576,9 @@ def analytic_phi_gradient_block_diag(
         ... compute alignment_loss through full KL pipeline ...
         grad_phi = torch.autograd.grad(alignment_loss, phi_for_grad)[0]
 
+    Handles both the query-side (∂KL_ij/∂φ_i through Ω_ij) and key-side
+    (∂KL_ji/∂φ_i through Ω_ji) contributions.
+
     Memory: O(tile_size × N × max(d²)) per tile vs O(N² × K²) for autograd.
 
     Args:
@@ -555,7 +592,7 @@ def analytic_phi_gradient_block_diag(
         lambda_belief: weight for belief alignment term
         kappa: softmax temperature parameter
         eps: numerical stability floor
-        dexp_order: truncation order for dexp Bernoulli series (4-8 typical)
+        dexp_order: truncation order for dexp series (4-8 typical)
         tile_size: number of query rows per tile
         enforce_orthogonal: whether to apply Newton-Schulz orthogonalization
         cached_block_exp_pairs: precomputed (exp_phi, exp_neg_phi) per block
@@ -577,13 +614,15 @@ def analytic_phi_gradient_block_diag(
     kl_matrix = kl_matrix.float()
     phi = phi.float()
 
-    # Softmax coupling coefficient:
-    # ∂F/∂φ^a_i = λ Σ_j β_ij [1 + (w_i - KL_ij)/τ] ∂KL_ij/∂φ^a_i
-    # where w_i = Σ_j β_ij KL_ij,  τ = κ√K
+    # Softmax coupling weight:
+    #   w_ij = λ β_ij [1 + (w_i - KL_ij)/τ]
+    # where w_i = Σ_j β_ij KL_ij, τ = κ√K
     tau = max(kappa * math.sqrt(max(K, 1)), eps)
     w_i = (beta * kl_matrix).sum(dim=-1, keepdim=True)  # (B, N, 1)
     coupling_weight = 1.0 + (w_i - kl_matrix) / tau     # (B, N, N)
     weight = lambda_belief * beta * coupling_weight       # (B, N, N)
+    # Key-side weight: w_ji for the ∂KL_ji/∂φ_i contribution
+    weight_key = weight.transpose(1, 2)                   # (B, N, N)
 
     # Compute matrix exponentials (reuse cached if available)
     if cached_block_exp_pairs is not None:
@@ -619,76 +658,105 @@ def analytic_phi_gradient_block_diag(
         # Lie algebra element X_i = phi · G for this block: (B, N, d, d)
         X_blk = torch.einsum('bna,aij->bnij', phi, gen_blk)
 
-        # Precompute w_j = exp(-X_j) @ mu_j for factored mean transport
-        w_j = torch.einsum('bjkl,bjl->bjk', exp_neg_phi_blk, mu_blk)  # (B, N, d)
-
-        # Precompute G_mat_j = exp(-X_j) diag(σ_j) exp(-X_j)^T for variance transport
-        B_sigma = exp_neg_phi_blk * sig_blk[:, :, None, :]  # scale columns
-        G_mat_j = B_sigma @ exp_neg_phi_blk.transpose(-1, -2)  # (B, N, d, d)
-        del B_sigma
-
         gen_blk_t = gen_blk.transpose(-1, -2)  # (n_gen, d, d)
 
-        # Tile over query positions i
+        # Tile over positions i (accumulate C₀ by summing over all j)
         for i_start in range(0, N, tile_size):
             i_end = min(i_start + tile_size, N)
+            n_tile = i_end - i_start
 
-            exp_phi_i = exp_phi_blk[:, i_start:i_end]     # (B, tile, d, d)
-            mu_i = mu_blk[:, i_start:i_end]                # (B, tile, d)
-            sig_i = sig_blk[:, i_start:i_end]              # (B, tile, d)
-            X_i = X_blk[:, i_start:i_end]                  # (B, tile, d, d)
-            weight_tile = weight[:, i_start:i_end, :]      # (B, tile, N)
+            exp_phi_i = exp_phi_blk[:, i_start:i_end]      # (B, tile, d, d)
+            exp_neg_phi_i = exp_neg_phi_blk[:, i_start:i_end]  # (B, tile, d, d)
+            mu_i = mu_blk[:, i_start:i_end]                 # (B, tile, d)
+            sig_i = sig_blk[:, i_start:i_end]               # (B, tile, d)
+            X_i = X_blk[:, i_start:i_end]                   # (B, tile, d, d)
+            wq_tile = weight[:, i_start:i_end, :]           # (B, tile, N) query weight
+            wk_tile = weight_key[:, i_start:i_end, :]       # (B, tile, N) key weight
 
-            # Transport mean: μ_t[i,j] = exp(X_i) @ w_j
-            mu_t = torch.einsum('bikl,bjl->bijk', exp_phi_i, w_j)  # (B, tile, N, d)
+            # Accumulate C₀ = Σ_j [w_ij Q₀^{ij} - w_ji S₀^{ji}]
+            # C₀ shape: (B, tile, d, d) — summed over j
+            C0 = torch.zeros(B, n_tile, d, d, device=device, dtype=torch.float32)
 
-            # Transport diagonal variance: σ_t[i,j,k] = diag(exp(X_i) G_mat_j exp(X_i)^T)[k]
-            AG = torch.einsum('bikm,bjmn->bijkn', exp_phi_i, G_mat_j)  # (B, tile, N, d, d)
-            sig_t = torch.einsum('bijkn,bikn->bijk', AG, exp_phi_i).clamp(min=eps)
-            del AG
+            for j_start in range(0, N, tile_size):
+                j_end = min(j_start + tile_size, N)
 
-            # ∂KL/∂Ω coefficients
-            delta = mu_i[:, :, None, :] - mu_t             # (B, tile, N, d)
-            c = 1.0 - sig_i[:, :, None, :] / sig_t - delta ** 2 / sig_t
-            v1 = c / sig_t                                 # (B, tile, N, d)
-            v2 = delta / sig_t                             # (B, tile, N, d)
+                exp_phi_j = exp_phi_blk[:, j_start:j_end]        # (B, chunk, d, d)
+                exp_neg_phi_j = exp_neg_phi_blk[:, j_start:j_end]  # (B, chunk, d, d)
+                mu_j = mu_blk[:, j_start:j_end]                  # (B, chunk, d)
+                sig_j = sig_blk[:, j_start:j_end]                # (B, chunk, d)
+                wq_chunk = wq_tile[:, :, j_start:j_end]          # (B, tile, chunk)
+                wk_chunk = wk_tile[:, :, j_start:j_end]          # (B, tile, chunk)
 
-            # Build Q^{(0)} = exp(-X_j) @ (∂KL/∂Ω)^T @ exp(X_i)
-            # Term1: G_mat_j @ [exp(X_i)^T @ diag(v1) @ exp(X_i)]
-            exp_phi_i_t = exp_phi_i.transpose(-1, -2)      # (B, tile, d, d)
-            V1_scaled = exp_phi_i_t[:, :, None, :, :] * v1[:, :, :, None, :]
-            V1_mat = V1_scaled @ exp_phi_i[:, :, None, :, :]
-            del V1_scaled
-            Q0_term1 = torch.einsum('bjkl,bijlm->bijkm', G_mat_j, V1_mat)
-            del V1_mat
+                # ═══ Query side: Ω_ij = exp(X_i) exp(-X_j) ═══
+                Omega_ij = torch.einsum(
+                    'bikl,bjlm->bijkm', exp_phi_i, exp_neg_phi_j)  # (B, tile, chunk, d, d)
 
-            # Term2: -outer(w_j, v2 @ exp(X_i))
-            v2_exp = torch.einsum('bijk,bikm->bijm', v2, exp_phi_i)
-            Q0_term2 = -w_j[:, None, :, :, None] * v2_exp[:, :, :, None, :]
-            del v2_exp
+                # Transport j→i
+                mu_t_ij = torch.einsum(
+                    'bijkl,bjl->bijk', Omega_ij, mu_j)              # (B, tile, chunk, d)
+                sig_t_ij = torch.einsum(
+                    'bijkl,bijkl,bjl->bijk',
+                    Omega_ij, Omega_ij, sig_j).clamp(min=eps)       # (B, tile, chunk, d)
 
-            Q0 = Q0_term1 + Q0_term2
-            del Q0_term1, Q0_term2, v1, v2, c, delta, mu_t, sig_t
+                # ∂KL_ij/∂Ω_ij
+                dKL_dOmega_ij = _compute_dkl_domega_diag(
+                    mu_i[:, :, None, :].expand_as(mu_t_ij),
+                    sig_i[:, :, None, :].expand_as(sig_t_ij),
+                    mu_t_ij, sig_t_ij,
+                    mu_j[:, None, :, :].expand_as(mu_t_ij),
+                    sig_j[:, None, :, :].expand_as(sig_t_ij),
+                    Omega_ij, eps)                                   # (B, tile, chunk, d, d)
 
-            # dexp series: ∂KL_ij/∂φ^a_i = Σ_{k=0}^p 1/(k+1)! tr(Q^{(k)} G_a)
-            # k=0 term
-            dkl_dphi = torch.einsum('bijkl,akl->bija', Q0, gen_blk_t)
+                # Q₀^{ij} = Ω_ij @ (∂KL_ij/∂Ω_ij)^T  (right-trivialized dexp seed)
+                Q0_ij = Omega_ij @ dKL_dOmega_ij.transpose(-1, -2)
+
+                # Weighted sum into C₀: + Σ_j w_ij Q₀^{ij}
+                C0 = C0 + torch.einsum('bij,bijkl->bikl', wq_chunk, Q0_ij)
+                del Q0_ij, dKL_dOmega_ij, mu_t_ij, sig_t_ij
+
+                # ═══ Key side: Ω_ji = exp(X_j) exp(-X_i) ═══
+                Omega_ji = torch.einsum(
+                    'bjkl,bilm->bjikm', exp_phi_j, exp_neg_phi_i)  # (B, chunk, tile, d, d)
+
+                # Transport i→j (i is being transported)
+                mu_t_ji = torch.einsum(
+                    'bjikl,bil->bjik', Omega_ji, mu_i)              # (B, chunk, tile, d)
+                sig_t_ji = torch.einsum(
+                    'bjikl,bjikl,bil->bjik',
+                    Omega_ji, Omega_ji, sig_i).clamp(min=eps)       # (B, chunk, tile, d)
+
+                # ∂KL_ji/∂Ω_ji  (q_j is the "query", transported q_i is the "key")
+                dKL_dOmega_ji = _compute_dkl_domega_diag(
+                    mu_j[:, :, None, :].expand_as(mu_t_ji),
+                    sig_j[:, :, None, :].expand_as(sig_t_ji),
+                    mu_t_ji, sig_t_ji,
+                    mu_i[:, None, :, :].expand_as(mu_t_ji),
+                    sig_i[:, None, :, :].expand_as(sig_t_ji),
+                    Omega_ji, eps)                                   # (B, chunk, tile, d, d)
+
+                # M₀^{ji} = (∂KL_ji/∂Ω_ji)^T @ Ω_ji  (right-trivialized dexp seed)
+                M0_ji = dKL_dOmega_ji.transpose(-1, -2) @ Omega_ji
+
+                # Weighted sum into C₀: - Σ_j w_ji M₀^{ji}
+                # M0_ji indexed as (B, chunk_j, tile_i, d, d), wk_chunk as (B, tile_i, chunk_j)
+                # Need: Σ_j wk[b,i,j] M0[b,j,i,k,l] = einsum('bij,bjikl->bikl')
+                C0 = C0 - torch.einsum('bij,bjikl->bikl', wk_chunk, M0_ji)
+                del M0_ji, dKL_dOmega_ji, mu_t_ji, sig_t_ji, Omega_ij, Omega_ji
+
+            # ═══ Commutator series: ∂F/∂φ^a_i = Σ_k 1/(k+1)! tr(C_k G_a) ═══
+            # k=0 term: tr(C₀ G_a) = Σ_{k,l} C₀[k,l] G_a[l,k]
+            grad_phi_tile = torch.einsum('bikl,akl->bia', C0, gen_blk_t)
 
             # Higher order terms via commutator iteration
-            Q_k = Q0
+            C_k = C0
             factorial_inv = 1.0
             for k in range(1, dexp_order + 1):
                 factorial_inv /= (k + 1)
-                comm = Q_k @ X_i[:, :, None, :, :] - X_i[:, :, None, :, :] @ Q_k
-                Q_k = comm
-                contrib = torch.einsum('bijkl,akl->bija', Q_k, gen_blk_t)
-                dkl_dphi = dkl_dphi + factorial_inv * contrib
+                C_k = C_k @ X_i[:, :, None, :, :].squeeze(2) - X_i[:, :, None, :, :].squeeze(2) @ C_k
+                contrib = torch.einsum('bikl,akl->bia', C_k, gen_blk_t)
+                grad_phi_tile = grad_phi_tile + factorial_inv * contrib
 
-            del Q0, Q_k
-
-            # Weight by β and softmax coupling, sum over j
-            grad_phi_tile = torch.einsum('bij,bija->bia', weight_tile, dkl_dphi)
-            del dkl_dphi
+            del C0, C_k
 
             grad_phi[:, i_start:i_end, :] = grad_phi[:, i_start:i_end, :] + grad_phi_tile
 
