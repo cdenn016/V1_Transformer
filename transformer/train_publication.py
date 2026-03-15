@@ -2127,7 +2127,6 @@ def main():
         print("   Position: None (emergent)")
         print("="*70 + "\n")
         config = VFE_EM_CONFIG.copy()
-        print("\n\n\n>>> USING HARDCODED VFE_EM_CONFIG (defined at line 207 in train_publication.py) <<<\n\n\n")
         ffn_mode = 'VFE_dynamic'
 
     else:
