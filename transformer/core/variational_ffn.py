@@ -1872,7 +1872,7 @@ class VariationalFFNDynamic(nn.Module):
         # ── Analytic path (no autograd graph) ───────────────────────────
         if (self.analytic_phi_grad and is_diagonal
                 and self.irrep_dims is not None):
-            print("\n\n\n>>> ANALYTIC PHI GRADIENT PATH IS FIRING <<<\n\n\n")
+            
             # Need beta and kl_matrix — compute with detached inputs (no autograd)
             beta_kl_result = compute_attention_weights(
                 mu_q=mu_current.detach(),
