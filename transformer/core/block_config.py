@@ -64,7 +64,8 @@ class BlockConfig:
     gauge_mode: str = 'learned'   # 'learned' or 'trivial' (Ω = I)
     enforce_orthogonal: bool = False  # Enforce Ω ∈ SO(K) via Newton-Schulz
     isotropic_covariance: bool = False  # Force Σ = σ²I
-    learnable_reflection: bool = False  # Learn per-token sign vectors for O(K)
+    # NOTE: learnable_reflection is an embedding-level feature, handled by
+    # model.py → GaugeTokenEmbedding, not by blocks. Not stored here.
 
     # === Non-flat gauge transport (flat bundle experiments) ===
     # When non_flat_transport=True, the transport becomes:
@@ -150,7 +151,6 @@ class BlockConfig:
             gauge_mode=config.get('gauge_mode', 'learned'),
             enforce_orthogonal=config.get('enforce_orthogonal', False),
             isotropic_covariance=config.get('isotropic_covariance', False),
-            learnable_reflection=config.get('learnable_reflection', False),
             # Non-flat gauge transport
             non_flat_transport=config.get('non_flat_transport', False),
             cocycle_relaxation=config.get('cocycle_relaxation', 0.0),
