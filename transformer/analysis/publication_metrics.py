@@ -93,6 +93,7 @@ class TrainingSnapshot:
     train_ppl: float
     train_bpc: float
     val_loss: Optional[float] = None
+    val_ce: Optional[float] = None
     val_ppl: Optional[float] = None
     val_bpc: Optional[float] = None
     grad_norm_total: float = 0.0
@@ -191,6 +192,7 @@ class TrainingTracker:
             if snapshot.step == step:
                 val_ce = val_metrics.get('ce_loss', val_metrics.get('loss', 0))
                 snapshot.val_loss = val_metrics.get('loss', val_ce)
+                snapshot.val_ce = val_ce
                 snapshot.val_ppl = val_metrics.get('perplexity',
                     math.exp(min(val_ce, 20)) if val_ce > 0 else float('inf'))
                 snapshot.val_bpc = val_ce / math.log(2) if val_ce > 0 else None
@@ -281,6 +283,7 @@ class PublicationFigures:
 
         # Validation data
         val_steps = [s.step for s in history if s.val_ppl is not None]
+        val_ces = [s.val_ce for s in history if s.val_ce is not None]
         val_ppls = [s.val_ppl for s in history if s.val_ppl is not None]
         val_bpcs = [s.val_bpc for s in history if s.val_bpc is not None]
 
@@ -290,16 +293,16 @@ class PublicationFigures:
             fig, axes = plt.subplots(1, 3, figsize=(12, 4))
             axes = axes.reshape(1, -1)
 
-        # (a) Loss curves
+        # (a) CE Loss curves
         ax = axes[0, 0] if show_components else axes[0, 0]
-        ax.plot(steps, [s.train_loss for s in history], 'b-',
+        ax.plot(steps, [s.train_ce for s in history], 'b-',
                 label='Train', alpha=0.7, linewidth=1)
-        if val_steps:
-            ax.plot(val_steps, [s.val_loss for s in history if s.val_loss],
+        if val_ces:
+            ax.plot(val_steps, val_ces,
                     'r-', label='Val', linewidth=2)
         ax.set_xlabel('Training Step')
         ax.set_ylabel('Loss')
-        ax.set_title('(a) Total Loss')
+        ax.set_title('(a) Cross-Entropy Loss')
         ax.legend(loc='upper right')
         ax.grid(True, alpha=0.3)
 
