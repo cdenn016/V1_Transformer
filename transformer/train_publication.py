@@ -2136,26 +2136,6 @@ def run_single_experiment(
         print(f"  Key costs: mat_exp={format_flops(flops_result.get('transport_mat_exp', 0))}/layer, "
               f"KL={format_flops(flops_result.get('kl_divergence', 0))}/layer")
 
-    # Save FLOPs estimation to JSON immediately (don't wait for training to finish)
-    flops_json = {
-        'model_type': 'standard' if is_standard else 'gauge',
-        'flops_per_step': step_flops,
-        'flops_per_step_str': format_flops(step_flops),
-        'total_training_flops': total_flops,
-        'total_training_flops_str': format_flops(total_flops),
-        'max_steps': max_steps,
-        'batch_size': batch_size,
-        'seq_len': seq_len,
-        'total_params': total_params,
-        'non_embed_params': non_embed_params,
-        'breakdown': {k: format_flops(v) for k, v in flops_result.items()},
-        'breakdown_raw': flops_result,
-    }
-    flops_json_path = exp_checkpoint_dir / 'flops_estimation.json'
-    with open(flops_json_path, 'w') as f:
-        json.dump(flops_json, f, indent=2)
-    print(f"  Saved: {flops_json_path}")
-
     # =================================================================
     # Training Configuration
     # =================================================================
