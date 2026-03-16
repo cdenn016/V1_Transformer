@@ -228,11 +228,20 @@ def count_gauge_transformer_flops(
     flops['softmax'] = softmax_flops
 
     # --- Per-layer: Message aggregation ---
-    # Weighted sum of transported beliefs: for each i, sum_j beta_ij * Omega_ij[q_j]
-    # mu aggregation: N queries, each summing N transported means (d-dim): 2*B*H*N*N*d
-    # sigma aggregation (diagonal): same cost
-    msg_flops = 2 * B * H * N * N * d * 2  # mu + sigma
+    # m_i = sum_j beta_ij * Omega_ij @ mu_j  (Eq. in manuscript)
+    # Gauge transport is applied to VALUES too, not just scoring!
+    # For each (i,j) pair:
+    #   1. Omega_ij @ mu_j: matrix-vector multiply (2*d^2 FLOPs)
+    #   2. beta_ij * result: scalar-vector multiply (d FLOPs)
+    # Then sum over j: N additions of d-vectors per query i
+    # Total mu: B*H*N*N*(2*d^2 + d) + B*H*N*d  (transport + scale + reduce)
+    # Sigma transport (diagonal): Omega @ diag(sigma) @ Omega^T per pair ≈ 2*d^3
+    #   but in practice sigma aggregation uses simpler weighted combination
+    msg_transport_flops = B * H * N * N * 2 * d * d  # Omega_ij @ mu_j for all pairs
+    msg_weighted_sum_flops = 2 * B * H * N * N * d    # beta_ij * transported_mu_j + accumulate
+    msg_flops = msg_transport_flops + msg_weighted_sum_flops
     flops['message_aggregation'] = msg_flops
+    flops['message_transport'] = msg_transport_flops  # The gauge-specific cost
 
     # --- Per-layer: VFE E-step iterations ---
     # The T iterations ARE the attention computation (not in addition to it).
