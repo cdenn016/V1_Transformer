@@ -100,17 +100,22 @@ from transformer.training.train_fast import FastTrainer, FastTrainingConfig
 from transformer.analysis.publication_metrics import PublicationMetrics, ExperimentResult
 
 
-
 # ============================================================================
 # EDIT THESE DEFAULTS TO RUN WITHOUT COMMAND-LINE ARGS (just click Run!)
 # ============================================================================
-# Two modes available:
+# Modes available:
 #   'standard'    - Standard transformer baseline (dot-product attention + MLP)
 #   'VFE_dynamic' - VFE with EM-step dynamics (backprop training)
+#   'standard_attn_only',      # (b) attention-only at d_model=90
+#   'standard_param_equalized', # (b') param-equalized wider FFN
+#   'standard_rope',            # (c) standard + RoPE at d=10
+#   'standard_rope_d90',        # (c') standard + RoPE at d=90
+
 DEFAULT_MODE = 'VFE_dynamic'      # Which mode to run
 
 # Dataset
-DEFAULT_DATASET = 'wikitext-103'  # 'wikitext-2' (~2M tokens) or 'wikitext-103' (~103M tokens)
+DEFAULT_DATASET = 'wikitext-103'  
+# 'wikitext-2' (~2M tokens) or 'wikitext-103' (~103M tokens), 'wiki-ja' japanese (~1B tokens, 100k vocab)
 # ============================================================================
 
 
