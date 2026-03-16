@@ -28,6 +28,9 @@ from transformer.core.attention import IrrepMultiHeadAttention
 # Import VFE FFN directly (no wrapper)
 from transformer.core.variational_ffn import VariationalFFNDynamic
 
+# Import gauge connection for non-flat transport
+from transformer.core.connection import GaugeConnection
+
 # Trajectory tracking (optional)
 try:
     from transformer.analysis.trajectory import get_global_recorder
@@ -89,7 +92,6 @@ class GaugeTransformerBlock(nn.Module):
     def __init__(self, cfg: BlockConfig):
         super().__init__()
         self.embed_dim = cfg.embed_dim
-        self.hidden_dim = cfg.hidden_dim
         self.evolve_sigma = cfg.evolve_sigma
         self.evolve_phi = cfg.evolve_phi
         self.ffn_mode = cfg.ffn_mode
@@ -151,6 +153,8 @@ class GaugeTransformerBlock(nn.Module):
             phi_update_interval=cfg.phi_update_interval,
             phi_lr=cfg.phi_lr,
             phi_max_norm=cfg.phi_max_norm,
+            prior_bank=cfg.ffn_prior_bank,
+            use_prior_bank=cfg.ffn_use_prior_bank,
             irrep_dims=cfg.ffn_irrep_dims,
             chunk_size=cfg.ffn_chunk_size,
             mask_self_attention=cfg.mask_self_attention,
@@ -174,6 +178,26 @@ class GaugeTransformerBlock(nn.Module):
         )
 
         self.norm2 = nn.LayerNorm(cfg.embed_dim) if cfg.use_layernorm else nn.Identity()
+
+        # =====================================================================
+        # Non-Flat Gauge Transport (optional)
+        # =====================================================================
+        self.non_flat_transport = cfg.non_flat_transport
+        self.cocycle_relaxation = cfg.cocycle_relaxation
+        self.holonomy_penalty = cfg.holonomy_penalty
+        if cfg.non_flat_transport:
+            n_gen = cfg.generators.shape[0] if cfg.generators is not None else 3
+            self.gauge_connection = GaugeConnection(
+                d_head=cfg.embed_dim,
+                n_gen=n_gen,
+                connection_type=cfg.connection_type,
+                hidden_dim=cfg.connection_hidden_dim,
+            )
+            if cfg.per_head_flatness_gate:
+                n_heads = len(cfg.irrep_spec)
+                self.flatness_gate_logit = nn.Parameter(torch.zeros(n_heads))
+        else:
+            self.gauge_connection = None
 
         # =====================================================================
         # Gauge Frame Evolution Configuration
@@ -219,6 +243,28 @@ class GaugeTransformerBlock(nn.Module):
 
         # Pre-layer normalization on means
         mu_normalized = self.norm1(mu_q)
+
+        # Non-flat transport: compute edge-local connection δ_ij and inject
+        # into cached transport so attention sees the modified Ω_ij.
+        if self.non_flat_transport and self.gauge_connection is not None and cached_head_transports is None:
+            from transformer.core.attention import compute_transport_operators
+            delta_ij = self.gauge_connection(mu_normalized, mu_normalized)  # (B, N, N, n_gen)
+            transport = compute_transport_operators(
+                phi, generators,
+                gauge_mode='learned',
+                connection_delta=delta_ij,
+                cocycle_relaxation=self.cocycle_relaxation,
+            )
+            # Split full Omega into per-head cached transports
+            Omega_full = transport['Omega']  # (B, N, N, K, K)
+            irrep_dims = self.attention.irrep_dims
+            cached_head_transports = []
+            dim_start = 0
+            for d in irrep_dims:
+                cached_head_transports.append({
+                    'Omega': Omega_full[:, :, :, dim_start:dim_start+d, dim_start:dim_start+d],
+                })
+                dim_start += d
 
         # Multi-head attention (gauge-theoretic!)
         recorder = get_global_recorder() if TRAJECTORY_TRACKING_AVAILABLE else None
@@ -286,7 +332,6 @@ class GaugeTransformerBlock(nn.Module):
     def extra_repr(self) -> str:
         return (
             f"embed_dim={self.embed_dim}, "
-            f"hidden_dim={self.hidden_dim}, "
             f"evolve_sigma={self.evolve_sigma}, "
             f"evolve_phi={self.evolve_phi}"
         )

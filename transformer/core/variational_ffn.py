@@ -316,6 +316,15 @@ def _compute_vfe_gradients_block_diagonal(
     kl_values = torch.zeros(B, N, N, device=device, dtype=dtype)
     grad_kl_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=dtype)
 
+    # Per-block per-pair sigma gradients for softmax coupling (Pass 2).
+    # Memory: Σ_b B*N²*d_b² instead of B*N²*K² (~82× savings for typical irrep specs).
+    grad_sigma_per_pair_blocks = None
+    if compute_sigma_align_grad:
+        grad_sigma_per_pair_blocks = [
+            torch.zeros(B, N, N, d, d, device=device, dtype=dtype)
+            for d in irrep_dims
+        ]
+
     # Process in chunks over query positions (i dimension)
     for i_start in range(0, N, C):
         i_end = min(i_start + C, N)
@@ -398,12 +407,14 @@ def _compute_vfe_gradients_block_diagonal(
                 sigma_i_inv_block = _safe_spd_inv(sigma_i_block_diag, eps=1e-4)  # (B, C, d, d)
                 # Use .clone() after expand to ensure contiguous memory layout
                 sigma_i_inv_exp = sigma_i_inv_block[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()
-                grad_sigma_block = 0.5 * (sigma_j_inv - sigma_i_inv_exp)
+                grad_sigma_block = 0.5 * (sigma_j_inv - sigma_i_inv_exp)  # (B, C, N, d, d)
                 beta_chunk = beta[:, i_start:i_end, :].contiguous()  # (B, C, N)
                 grad_sigma_block_weighted = lambda_belief * torch.einsum('bij,bijkl->bikl', beta_chunk, grad_sigma_block)
                 grad_sigma_align[:, i_start:i_end, block_start:block_end, block_start:block_end] = (
                     grad_sigma_align[:, i_start:i_end, block_start:block_end, block_start:block_end] + grad_sigma_block_weighted
                 )
+                # Store per-pair sigma gradients for softmax coupling (Pass 2)
+                grad_sigma_per_pair_blocks[block_idx][:, i_start:i_end, :, :, :] = grad_sigma_block
 
             del sigma_j_transported, sigma_j_inv, mu_j_transported
             block_start = block_end
@@ -423,10 +434,23 @@ def _compute_vfe_gradients_block_diagonal(
     grad_mu = grad_mu + grad_mu_align
     grad_sigma = grad_sigma + grad_sigma_align
 
-    # NOTE: ∂β/∂Σ softmax coupling is not implemented for the block-diagonal
-    # full covariance path because it would require storing (B, N, N, K, K)
-    # per-pair sigma gradients, defeating the memory savings.
-    # Use the main compute_vfe_gradients_gpu path for full sigma softmax coupling.
+    # Sigma softmax coupling (Pass 2): ∂β/∂Σ term computed per-block.
+    # Uses stored per-block per-pair sigma gradients to avoid (B, N, N, K, K) memory.
+    if compute_sigma_align_grad and grad_sigma_per_pair_blocks is not None:
+        kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
+        block_start = 0
+        for block_idx, d in enumerate(irrep_dims):
+            block_end = block_start + d
+            g_per_pair = grad_sigma_per_pair_blocks[block_idx]  # (B, N, N, d, d)
+            avg_g = torch.einsum('bij,bijkl->bikl', beta, g_per_pair)  # (B, N, d, d)
+            g_deviation = avg_g.unsqueeze(2) - g_per_pair  # (B, N, N, d, d)
+            d_beta_d_sigma = beta.unsqueeze(-1).unsqueeze(-1) * g_deviation / kappa_scaled  # (B, N, N, d, d)
+            grad_sigma_softmax_block = lambda_belief * torch.einsum('bij,bijkl->bikl', kl_values, d_beta_d_sigma)  # (B, N, d, d)
+            grad_sigma[:, :, block_start:block_end, block_start:block_end] = (
+                grad_sigma[:, :, block_start:block_end, block_start:block_end] + grad_sigma_softmax_block
+            )
+            block_start = block_end
+        del grad_sigma_per_pair_blocks
 
     return grad_mu, grad_sigma
 

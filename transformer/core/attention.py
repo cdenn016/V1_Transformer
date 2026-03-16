@@ -198,6 +198,8 @@ def compute_transport_operators(
     generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators
     enforce_orthogonal: bool = False,  # If True, project to SO(K) via Newton-Schulz
     gauge_mode: str = 'learned',  # 'learned', 'trivial', or 'constant'
+    connection_delta: Optional[torch.Tensor] = None,  # (B, N, N, n_gen) edge-local connection
+    cocycle_relaxation: float = 0.0,  # Scale factor for connection_delta: 0=flat, 1=fully non-flat
 ) -> dict:
     """
     Precompute transport operators for caching when phi is fixed.
@@ -237,6 +239,11 @@ def compute_transport_operators(
         gauge_mode: 'learned' for per-token frames, 'trivial' for Ω=I,
                    'constant' for per-head learned Ω (returns I here; actual Ω
                    injected by attention module)
+        connection_delta: Optional edge-local Lie algebra elements (B, N, N, n_gen).
+                         When provided, transport becomes:
+                         Ω_ij = exp(φ_i·G) · exp(α·δ_ij·G) · exp(-φ_j·G)
+                         where α = cocycle_relaxation ∈ [0,1].
+        cocycle_relaxation: Scale factor for connection_delta (0=flat, 1=fully non-flat).
 
     Returns:
         dict with:
@@ -296,8 +303,19 @@ def compute_transport_operators(
         exp_phi = newton_schulz_orthogonalize(exp_phi)
         exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
 
-    # Full pairwise transport: Ω_ij = exp(φ_i) @ exp(-φ_j)
-    Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)  # (B, N, N, K, K)
+    # Full pairwise transport
+    if connection_delta is not None and cocycle_relaxation > 0:
+        # Non-flat transport: Ω_ij = exp(φ_i·G) · exp(α·δ_ij·G) · exp(-φ_j·G)
+        scaled_delta = cocycle_relaxation * connection_delta  # (B, N, N, n_gen)
+        delta_matrix = torch.einsum('bija,akl->bijkl', scaled_delta, generators)  # (B, N, N, K, K)
+        exp_delta = torch.matrix_exp(delta_matrix.float()).to(dtype)  # (B, N, N, K, K)
+        # Ω_ij = exp(φ_i) @ exp(δ_ij) @ exp(-φ_j)
+        Omega = torch.einsum(
+            'bikl,bijlm,bjmn->bijkn', exp_phi, exp_delta, exp_neg_phi
+        )  # (B, N, N, K, K)
+    else:
+        # Standard flat transport: Ω_ij = exp(φ_i) @ exp(-φ_j)
+        Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)  # (B, N, N, K, K)
 
     return {
         'exp_phi': exp_phi,
