@@ -1,8 +1,13 @@
 """
-Evaluate a trained checkpoint on validation data.
+Validation-Set Evaluation for GaugeTransformerLM Checkpoints
+============================================================
+
+Quick validation-set evaluation of a trained checkpoint.  Computes
+cross-entropy loss and perplexity with all VFE regularisation terms
+disabled (alpha, lambda_beta, lambda_gamma = 0).
 
 Usage:
-    python evaluate_checkpoint.py --checkpoint checkpoints_realistic/best_model.pt
+    python -m transformer.utils.evaluation --checkpoint path/to/best_model.pt
 """
 
 import torch
@@ -17,11 +22,14 @@ from transformer.train import compute_free_energy_loss
 
 def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
     """
-    Load checkpoint and evaluate on validation set.
+    Load a GaugeTransformerLM checkpoint and evaluate on the validation split.
+
+    Runs pure cross-entropy evaluation (all VFE regularisation coefficients
+    zeroed) and prints loss, perplexity, and a qualitative assessment.
 
     Args:
-        checkpoint_path: Path to checkpoint file
-        max_batches: Number of validation batches to evaluate
+        checkpoint_path: Path to checkpoint file (e.g. best_model.pt).
+        max_batches: Number of validation batches to evaluate.
     """
     print("="*70)
     print("CHECKPOINT EVALUATION")

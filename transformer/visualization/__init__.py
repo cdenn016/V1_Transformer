@@ -2,12 +2,13 @@
 Visualization Module
 ====================
 
-Plotting and visualization tools:
-- Training plots: Loss curves, learning rate schedules
-- Ablation plots: Ablation study visualizations
-- Trajectory plots: Belief trajectory visualizations
-- Attention visualization: Attention pattern analysis
-- Belief space visualization: Belief distribution plots
+Plotting and visualization tools for the gauge-theoretic transformer.
+
+- Training plots: VFE loss curves, free energy components, learning rate schedules
+- Ablation plots: Gauge VFE vs standard transformer comparisons
+- Trajectory plots: Belief (mu, sigma, phi) evolution through layers
+- Attention visualization: KL-divergence-based attention pattern analysis
+- Belief space visualization: Token embedding structure in belief space (mu, sigma, phi)
 """
 
 # Note: These are script-style modules, import specific functions as needed

@@ -4,10 +4,14 @@ Enhanced RG Flow Analysis for VFE Gauge Transformers
 =====================================================
 
 This module extends the basic RG analysis to include the full VFE structure:
-- Gauge frames φ and their coarse-graining
+- Gauge frames phi (B, N, phi_dim) and their coarse-graining
 - KL divergence matrices (not just attention)
-- Transport operators Ω_ij at each scale
+- Transport operators Omega_ij at each scale
 - Free energy decomposition across scales
+
+Supports all gauge groups (SO(3), SO(N), GL(K)) via the phi_dim
+parameter. Gauge frame distances and coarse-graining use Euclidean
+geometry in the Lie algebra coordinate space.
 
 The key insight is that a true RG transformation must preserve the
 gauge-theoretic structure: meta-agents should have gauge frames that
@@ -117,9 +121,9 @@ class CoarseGrainedState:
     State of the system at a given coarse-graining level.
 
     Contains all the quantities needed for VFE computation:
-    - Meta-agent beliefs (μ, Σ)
-    - Meta-agent gauge frames (φ)
-    - Meta-agent attention (β)
+    - Meta-agent beliefs (mu, sigma)
+    - Meta-agent gauge frames (phi)
+    - Meta-agent attention (beta)
     - Meta-agent KL matrices
     """
     scale: int                    # Coarse-graining level (0=tokens, 1=meta-agents, ...)
@@ -127,7 +131,7 @@ class CoarseGrainedState:
 
     mu: torch.Tensor              # (B, n_agents, K) belief means
     sigma: torch.Tensor           # (B, n_agents, K) or (B, n_agents, K, K)
-    phi: torch.Tensor             # (B, n_agents, gauge_dim) gauge frames
+    phi: torch.Tensor             # (B, n_agents, phi_dim) gauge frames
     beta: torch.Tensor            # (B, n_agents, n_agents) attention
     kl_matrix: Optional[torch.Tensor] = None  # (B, n_agents, n_agents) raw KL
 
@@ -177,12 +181,13 @@ def compute_gauge_distance(phi1: torch.Tensor, phi2: torch.Tensor) -> torch.Tens
     """
     Compute distance between gauge frames in Lie algebra.
 
-    For SO(3), φ ∈ so(3) ≅ R³, so we use Euclidean distance.
-    For general SO(N), would use Frobenius norm.
+    Uses Euclidean (L2) distance in the phi_dim-dimensional Lie algebra
+    coordinates. This applies to any gauge group: SO(3) with phi_dim=3,
+    SO(N) with phi_dim=N(N-1)/2, or GL(K) with phi_dim=K^2.
 
     Args:
-        phi1: (*, gauge_dim) first gauge frame
-        phi2: (*, gauge_dim) second gauge frame
+        phi1: (*, phi_dim) first gauge frame
+        phi2: (*, phi_dim) second gauge frame
 
     Returns:
         Distances of same shape as input without last dim
@@ -197,11 +202,11 @@ def compute_gauge_coherence_within_clusters(
     """
     Compute how coherent gauge frames are within clusters.
 
-    High coherence = gauge frames are similar within clusters
+    High coherence = gauge frames are similar within clusters.
     This indicates meta-agents have well-defined gauge structure.
 
     Args:
-        phi: (B, N, gauge_dim) gauge frames
+        phi: (B, N, phi_dim) gauge frames
         cluster_labels: (B, N) cluster assignments
 
     Returns:
@@ -254,7 +259,7 @@ def compute_gauge_distance_between_clusters(
     Compute gauge distances between cluster centroids.
 
     Args:
-        phi: (B, N, gauge_dim) gauge frames
+        phi: (B, N, phi_dim) gauge frames
         cluster_labels: (B, N) cluster assignments
 
     Returns:
@@ -414,17 +419,17 @@ def coarse_grain_full_state(
     Perform full coarse-graining transformation including gauge frames.
 
     This implements the RG transformation:
-        (μ_i, Σ_i, φ_i, β_ij) → (μ_A, Σ_A, φ_A, β_AB)
+        (mu_i, Sigma_i, phi_i, beta_ij) -> (mu_A, Sigma_A, phi_A, beta_AB)
 
-    For meta-agent A containing tokens {i ∈ A}:
-        μ_A = Σ_i w_i μ_i        (coherence-weighted mean)
-        φ_A = Frechet_mean(φ_i)  (mean on Lie algebra, simplified to Euclidean mean)
-        β_AB = Σ_{i∈A,j∈B} β_ij  (aggregated attention)
+    For meta-agent A containing tokens {i in A}:
+        mu_A = sum_i w_i mu_i        (coherence-weighted mean)
+        phi_A = Euclidean mean of phi_i in Lie algebra coordinates
+        beta_AB = sum_{i in A, j in B} beta_ij  (aggregated attention)
 
     Args:
         mu: (B, N, K) token belief means
         sigma: (B, N, K) or (B, N, K, K) token covariances
-        phi: (B, N, gauge_dim) token gauge frames
+        phi: (B, N, phi_dim) token gauge frames
         beta: (B, N, N) attention matrix
         kl_matrix: Optional (B, N, N) KL divergences
         cluster_labels: Optional cluster assignments (auto-detected if None)
@@ -493,8 +498,7 @@ def coarse_grain_full_state(
                 for i, idx in enumerate(indices):
                     sigma_meta[b, c] += w[i] * sigma[b, idx]
 
-            # Frechet mean for gauge frames (simplified to Euclidean in Lie algebra)
-            # For SO(3), this is the "average rotation axis"
+            # Euclidean mean in Lie algebra coordinates (valid for any gauge group)
             phi_meta[b, c] = phi[b, indices].mean(dim=0)
 
         # Aggregate attention between meta-agents
@@ -552,7 +556,7 @@ def compute_full_rg_diagnostics(
     Args:
         mu: (B, N, K) belief means
         sigma: (B, N, K) or (B, N, K, K) belief covariances
-        phi: (B, N, gauge_dim) gauge frames
+        phi: (B, N, phi_dim) gauge frames
         beta: (B, N, N) attention matrix
         kl_matrix: Optional (B, N, N) or (B, H, N, N) raw KL divergences
         step: Current step number

@@ -9,9 +9,13 @@ Created on Tue Dec  9 21:05:21 2025
 Trajectory Tracking for Gauge Transformer
 ==========================================
 
-Records and visualizes (μ, Σ, φ) trajectories through:
-1. Transformer layers (embedding → output)
+Records (mu, sigma, phi) trajectories through:
+1. Transformer layers (embedding -> output)
 2. Training iterations
+
+Supports any gauge group via phi shape (B, N, phi_dim) where phi_dim=3
+for SO(3), N(N-1)/2 for SO(N), or K^2 for GL(K). Covariance sigma
+can be diagonal (B, N, K) or full (B, N, K, K).
 
 Key use cases:
 - Visualize belief evolution through the network
@@ -39,9 +43,9 @@ class LayerTrajectory:
     """
     Trajectory through a single transformer layer.
 
-    Records:
-    - Input/output beliefs
-    - Attention weights
+    Records input/output beliefs (mu, sigma, phi) and attention weights.
+    Sigma is stored as diagonal regardless of whether the model uses
+    full (B, N, K, K) or diagonal (B, N, K) covariance.
     """
     layer_idx: int
 

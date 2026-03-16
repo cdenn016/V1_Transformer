@@ -2,8 +2,9 @@
 Metrics Tracking for Training
 =============================
 
-Unified metrics tracking with CSV logging, extracted from
-train_publication.py and train_standard_baseline.py.
+Unified metrics tracking with CSV logging for gauge transformer
+and standard baseline training runs. Supports step-level and
+evaluation-level recording with automatic system info capture.
 """
 
 import csv
@@ -18,8 +19,9 @@ class MetricsTracker:
     """
     Unified metrics tracker with CSV logging.
 
-    Tracks training metrics and writes them to CSV files for
-    analysis and visualization.
+    Records per-step training metrics (loss, CE, perplexity, VFE terms)
+    and evaluation metrics, then writes them to CSV for analysis.
+    Optionally captures system info (GPU, git commit) at initialization.
     """
 
     def __init__(

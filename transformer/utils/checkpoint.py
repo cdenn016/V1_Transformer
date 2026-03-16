@@ -1,9 +1,12 @@
 """
-Checkpoint Loading Utilities
-=============================
+Checkpoint Utilities
+====================
 
-Shared utilities for loading trained model checkpoints.
-Used by visualization and analysis scripts.
+Save, load, and inspect GaugeTransformerLM checkpoints.
+
+Handles legacy config migration (kappa_beta_base -> kappa_beta,
+diagonal_covariance -> use_diagonal_covariance) and supports both
+experiment_config.json and in-checkpoint config extraction.
 """
 
 import torch
@@ -27,13 +30,13 @@ def save_checkpoint(
     Save a model checkpoint.
 
     Args:
-        model: The model to save
-        optimizer: Optimizer state to save
-        config: Model configuration
-        epoch: Current epoch
-        step: Current step
-        save_path: Path to save checkpoint
-        **kwargs: Additional items to save
+        model: GaugeTransformerLM instance to save.
+        optimizer: Optimizer whose state_dict is saved (or None).
+        config: Model configuration dict (BlockConfig fields, irrep_spec, etc.).
+        epoch: Current training epoch.
+        step: Current global training step.
+        save_path: Destination file path.
+        **kwargs: Additional items to include (e.g., best_val_loss).
     """
     checkpoint = {
         'model_state_dict': model.state_dict(),
@@ -68,22 +71,24 @@ def load_checkpoint(checkpoint_path: str, device: str = 'cpu') -> Dict[str, Any]
 
 def load_model(checkpoint_path: str) -> Tuple[GaugeTransformerLM, Dict[str, Any]]:
     """
-    Load a trained GaugeTransformerLM model from checkpoint.
+    Load a trained GaugeTransformerLM from checkpoint.
 
-    Handles both:
-    - experiment_config.json (preferred)
-    - Config embedded in checkpoint file (fallback)
+    Config resolution order:
+    1. experiment_config.json in the checkpoint directory (preferred).
+    2. Config dict embedded in the checkpoint file.
+    3. Hardcoded defaults (last resort).
+
+    Applies legacy config migrations (kappa_beta_base, diagonal_covariance).
 
     Args:
-        checkpoint_path: Path to best_model.pt or similar checkpoint
+        checkpoint_path: Path to best_model.pt or similar checkpoint.
 
     Returns:
-        model: Loaded GaugeTransformerLM in eval mode
-        config: Configuration dictionary used to create the model
+        model: GaugeTransformerLM in eval mode on CPU.
+        config: Configuration dict (embed_dim, irrep_spec, etc.).
 
     Raises:
-        FileNotFoundError: If checkpoint doesn't exist
-        RuntimeError: If config cannot be determined
+        FileNotFoundError: If checkpoint file does not exist.
     """
     checkpoint_path = Path(checkpoint_path)
 
@@ -172,18 +177,20 @@ def load_model(checkpoint_path: str) -> Tuple[GaugeTransformerLM, Dict[str, Any]
 
 def get_tokenizer(config: Dict[str, Any], dataset_name: Optional[str] = None):
     """
-    Get tokenizer for a given config.
+    Get tokenizer matching the vocabulary a model was trained with.
 
-    Selects the correct tiktoken encoding based on dataset:
-    - wiki-ja: cl100k_base (GPT-4 tokenizer, better CJK support)
-    - all others: gpt2 (GPT-2 tokenizer)
+    Encoding selection:
+    - wiki-ja (or vocab_size > 50257): cl100k_base (GPT-4, better CJK).
+    - All others: gpt2 encoding.
+
+    Falls back to WikiTextDataset tokenizer if tiktoken is unavailable.
 
     Args:
-        config: Model configuration dict
-        dataset_name: Dataset name override (default: from config or 'wikitext-103')
+        config: Model configuration dict (reads 'dataset' and 'vocab_size').
+        dataset_name: Override dataset name (default: from config or 'wikitext-103').
 
     Returns:
-        tokenizer: Object with encode/decode methods
+        Tokenizer with encode/decode methods, or None if unavailable.
     """
     if dataset_name is None:
         dataset_name = config.get('dataset', 'wikitext-103')
@@ -228,15 +235,16 @@ def get_tokenizer(config: Dict[str, Any], dataset_name: Optional[str] = None):
 
 def load_checkpoint_info(checkpoint_path: str) -> Dict[str, Any]:
     """
-    Load metadata from a checkpoint without loading the full model.
-
-    Useful for inspecting checkpoints before loading.
+    Load metadata from a checkpoint without instantiating the model.
 
     Args:
-        checkpoint_path: Path to checkpoint file
+        checkpoint_path: Path to checkpoint file.
 
     Returns:
-        Dict with config, epoch, step, and other metadata
+        Dict with keys: config, epoch, step, has_optimizer, n_parameters.
+
+    Raises:
+        FileNotFoundError: If checkpoint file does not exist.
     """
     checkpoint_path = Path(checkpoint_path)
 

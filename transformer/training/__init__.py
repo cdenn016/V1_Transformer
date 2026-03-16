@@ -1,20 +1,19 @@
 """
-Unified Training Module for Gauge Transformer
-==============================================
+Training Infrastructure for Gauge-Theoretic Transformer
+=======================================================
 
-This module consolidates training infrastructure previously scattered
-across multiple files (train.py, train_fast.py, train_publication.py).
+Consolidates training configuration, optimizer creation, and metrics
+tracking for the VFE (Variational Free Energy) training loop.
 
 Components:
-    - TrainingConfig: Unified configuration dataclass
-    - create_optimizer: Parameter group-aware optimizer creation
-    - create_scheduler: Learning rate scheduling
+    - TrainingConfig: Unified configuration dataclass (all training modes)
+    - create_optimizer: Parameter group-aware AdamW with natural gradient LRs
+    - create_param_groups: Per-parameter-type grouping (mu, sigma, phi, attn, ffn)
+    - create_scheduler: Cosine/linear LR scheduling with warmup
     - MetricsTracker: CSV logging for training metrics
-    - compute_free_energy_loss: Free energy loss computation
 
-Usage:
-    from transformer.training import TrainingConfig, create_optimizer
-    from transformer.train_publication import PublicationTrainer  # Main trainer class
+The main training loop lives in train_publication.py (PublicationTrainer).
+Loss computation (CE + VFE regularizers) is in transformer.train.compute_free_energy_loss.
 """
 
 from transformer.training.config import TrainingConfig

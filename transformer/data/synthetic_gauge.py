@@ -1,18 +1,20 @@
 """
-Synthetic Gauge Language — Controlled Holonomy for Flat Bundle Experiments (HF5.3).
-===================================================================================
+Synthetic Gauge Language — Controlled Holonomy for Flat Bundle Experiments.
+===========================================================================
 
 Generates (sequence, label) pairs where the label depends on parallel transport
-along the sequence through a discrete gauge field.
+along the sequence through a discrete GL(K) gauge field.
 
-Holonomy strength ε controls path-dependence:
-    ε = 0: completely flat — transport depends only on endpoints (path-independent)
-    ε > 0: non-flat — transport depends on the full path through intermediate tokens
+The gauge field assigns each token a local frame g_v in GL+(K) and defines
+connections A_{v->w} in gl(K) between token pairs. Holonomy strength epsilon
+controls path-dependence:
+    epsilon = 0: completely flat — transport depends only on endpoints (path-independent)
+    epsilon > 0: non-flat — transport depends on the full path through intermediate tokens
 
 This provides the cleanest falsification test for the flat bundle hypothesis:
-    - Flat architecture should excel at ε ≈ 0 and fail at ε >> 0
-    - Non-flat architecture should handle all ε values
-    - Crossover at ε* where non-flat surpasses flat
+    - Flat architecture should excel at epsilon ~ 0 and fail at epsilon >> 0
+    - Non-flat architecture should handle all epsilon values
+    - Crossover at epsilon* where non-flat surpasses flat
 """
 
 import numpy as np
@@ -26,6 +28,14 @@ def random_gl_element(K: int, rng: np.random.RandomState, scale: float = 1.0) ->
     """Sample a random element of GL+(K) near the identity.
 
     Uses exp(scale * random_matrix) to ensure det > 0 and invertibility.
+
+    Args:
+        K: Matrix dimension (gauge group is GL(K)).
+        rng: NumPy RandomState for reproducibility.
+        scale: Controls distance from identity; larger = more diverse frames.
+
+    Returns:
+        (K, K) matrix in GL+(K).
     """
     A = rng.randn(K, K) * scale
     return expm(A)
@@ -112,9 +122,15 @@ class SyntheticGaugeLanguage:
         return self.A_flat[v, w] + self.epsilon * self.A_noise[v, w]
 
     def compute_transport(self, sequence: np.ndarray) -> np.ndarray:
-        """Parallel transport along a token sequence.
+        """Parallel transport along a token sequence through the GL(K) gauge field.
 
-        T = Π_{i=0}^{n-2} exp(A_{t_i → t_{i+1}})
+        Computes T = Π_{i=0}^{n-2} exp(A_{t_i → t_{i+1}}).
+
+        Args:
+            sequence: Array of token indices, shape (seq_len,).
+
+        Returns:
+            Transport matrix in GL(K), shape (K, K).
         """
         T = np.eye(self.K)
         for i in range(len(sequence) - 1):
@@ -123,7 +139,7 @@ class SyntheticGaugeLanguage:
         return T
 
     def compute_label(self, transport: np.ndarray) -> int:
-        """Map transport matrix to a discrete label via Frobenius norm quantization."""
+        """Map a GL(K) transport matrix to a discrete label via Frobenius norm quantization."""
         norm = np.linalg.norm(transport, 'fro')
         label = 0
         for boundary in self.label_boundaries:
@@ -139,13 +155,19 @@ class SyntheticGaugeLanguage:
         return seq, label
 
     def measure_path_dependence(self, n_samples=1000, seed=None):
-        """Measure how path-dependent the language is.
+        """Measure how path-dependent the GL(K) gauge language is.
 
         For each sample, generates the original sequence and a permutation of
         the intermediate tokens (keeping endpoints fixed). Computes the fraction
         of samples where the label changes under permutation.
 
-        Returns 0 for flat (ε=0) language, increasing toward 1 for non-flat.
+        Args:
+            n_samples: Number of random sequences to test.
+            seed: Random seed. Defaults to self.seed + 999.
+
+        Returns:
+            Fraction of samples whose label changed under path permutation.
+            Returns 0 for flat (epsilon=0) language, increasing toward 1 for non-flat.
         """
         rng = np.random.RandomState(seed or self.seed + 999)
         changes = 0
@@ -166,13 +188,12 @@ class SyntheticGaugeLanguage:
 class SyntheticGaugeDataset(Dataset):
     """PyTorch Dataset wrapper for SyntheticGaugeLanguage.
 
-    Generates samples on-the-fly for memory efficiency.
-    Each sample is formatted as:
-        input_ids:  [t_1, t_2, ..., t_n, SEP_TOKEN]
-        target:     label ∈ {0, ..., n_classes - 1}
+    Pre-generates all samples for reproducibility. Each sample is formatted
+    for autoregressive next-token prediction:
+        input_ids:  [t_1, t_2, ..., t_n, SEP]
+        target_ids: [t_2, ..., t_n, SEP, LABEL_TOKEN]
 
-    For autoregressive LM framing:
-        input_ids:  [t_1, t_2, ..., t_n, SEP, LABEL]  (shifted for next-token prediction)
+    where LABEL_TOKEN encodes the GL(K) holonomy classification result.
     """
 
     def __init__(
@@ -230,8 +251,19 @@ def create_synthetic_dataloaders(
 ) -> Tuple[DataLoader, DataLoader, int]:
     """Create train/val dataloaders for the synthetic gauge language.
 
+    Args:
+        epsilon: Holonomy strength. 0 = flat (path-independent), >0 = non-flat.
+        vocab_size: Number of tokens in the synthetic vocabulary.
+        K: Dimension of the gauge group GL(K).
+        n_classes: Number of discrete label classes for classification.
+        seq_len: Length of generated token sequences.
+        n_train: Number of training samples to generate.
+        n_val: Number of validation samples to generate.
+        batch_size: Batch size for DataLoaders.
+        seed: Random seed for reproducibility.
+
     Returns:
-        train_loader, val_loader, total_vocab_size
+        Tuple of (train_loader, val_loader, total_vocab_size).
     """
     language = SyntheticGaugeLanguage(
         vocab_size=vocab_size, K=K, epsilon=epsilon,

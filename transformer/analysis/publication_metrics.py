@@ -2,13 +2,17 @@
 Publication Metrics for Gauge-Theoretic VFE Transformer
 ========================================================
 
-Generates publication-quality figures for the JMLR submission.
+Generates publication-quality figures and tracks training dynamics for the
+gauge-theoretic VFE transformer. Supports all gauge groups (SO(3), SO(N), GL(K))
+and both diagonal and full covariance modes.
 
 Key Figures:
 1. Training Curves - Loss, PPL, BPC over training steps
 2. Attention Heatmaps - KL-divergence based attention patterns
 3. Model Comparison - Bar charts comparing architectures
 4. Scaling Study - Performance vs embedding dimension K
+5. Gauge Frame Clustering - Semantic structure of phi embeddings
+6. Attention Entropy - Sharpness of KL-attention over training
 
 Author: Robert C. Dennis
 Date: December 2025
@@ -246,6 +250,9 @@ class TrainingTracker:
 class PublicationFigures:
     """
     Generate publication-quality figures for gauge VFE transformer paper.
+
+    Plots training curves, KL-attention heatmaps, model comparisons,
+    scaling studies, and attention entropy diagnostics.
     """
 
     def __init__(self, save_dir: Optional[Path] = None):

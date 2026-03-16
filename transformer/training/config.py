@@ -2,9 +2,13 @@
 Unified Training Configuration
 ==============================
 
-Single source of truth for all training configuration parameters.
-Supports multiple training modes through configuration rather than
-separate classes.
+Single source of truth for training hyperparameters across all modes.
+Supports standard transformers and VFE-based gauge-theoretic transformers
+with configurable gauge groups (SO(N), GL(K)) via BlockConfig.
+
+Modes are selected by training_mode ('standard' vs 'vfe_dynamic') and
+parameter grouping strategy (use_param_groups). Gauge transport can be
+trivialized (gauge_mode='trivial') to recover standard KL-attention.
 """
 
 from dataclasses import dataclass, field
@@ -17,13 +21,19 @@ class TrainingConfig:
     """
     Unified training configuration supporting all training modes.
 
-    Modes:
-    - Simple (use_param_groups=False): Single learning rate for all parameters
-    - Multi-group (use_param_groups=True): Separate learning rates for mu, sigma, phi, etc.
+    Optimizer Modes:
+        - Simple (use_param_groups=False): Single LR for all parameters.
+        - Multi-group (use_param_groups=True): Per-type LRs exploiting
+          natural gradient structure (mu, sigma, phi, attention, ffn, output).
 
     Training Types:
-    - 'standard': Standard transformer (no gauge theory)
-    - 'vfe_dynamic': VFE-based transformer with gauge theory
+        - 'standard': Standard transformer baseline (no gauge theory).
+        - 'vfe_dynamic': VFE-based transformer with gauge transport.
+          Gauge group (SO(N), GL(K)) is determined by BlockConfig.generators
+          shape (n_gen, K, K); this config controls training, not architecture.
+
+    The VFE loss hierarchy is:
+        observations -> q_i (beliefs, E-step) -> p_i (priors, M-step) -> hyper-prior N(0, 1/(2*wd))
     """
 
     # ==========================================================================
@@ -165,7 +175,7 @@ class TrainingConfig:
 # =============================================================================
 
 def get_standard_config(**overrides) -> TrainingConfig:
-    """Get configuration for standard transformer baseline."""
+    """Get configuration for standard transformer baseline (no VFE, no gauge transport)."""
     config = TrainingConfig(
         training_mode='standard',
         use_param_groups=False,
@@ -181,10 +191,11 @@ def get_standard_config(**overrides) -> TrainingConfig:
 
 def get_vfe_dynamic_config(**overrides) -> TrainingConfig:
     """
-    Get configuration for VFE-dynamic transformer.
+    Get configuration for VFE-dynamic gauge transformer.
 
-    Supports gauge_mode='trivial' to trivialize gauge transport
-    (sets all Ω_ij = I, bypassing matrix exponentials in attention).
+    Uses multi-group natural gradient LRs and VFE loss terms (alpha, lambda_beta).
+    Pass gauge_mode='trivial' to disable gauge transport (Omega_ij = I),
+    or gauge_mode='learned' for full per-token phi with transport.
     """
     config = TrainingConfig(
         training_mode='vfe_dynamic',

@@ -2,19 +2,16 @@
 Ablation Study Figures: Gauge VFE vs Standard Transformer
 ==========================================================
 
-Simple functions to generate comparison figures. No CLI needed.
+Generates step-matched and compute-matched comparison figures between
+a gauge-theoretic VFE model and a standard transformer baseline.
 
 Usage:
-    from transformer.plot_ablation import plot_ablation
+    from transformer.visualization.ablation_plots import plot_ablation
 
-    # Just call with two directories
     plot_ablation(
         vfe_dir='checkpoints_publication/vfe_run',
         std_dir='checkpoints_publication/standard_baseline',
     )
-
-Author: Ablation study for gauge transformer paper
-Date: December 2025
 """
 
 import os
@@ -79,7 +76,17 @@ class TrainingRun:
 
 
 def load_training_history(run_dir: Path, name: str = "model") -> Optional[TrainingRun]:
-    """Load training history from a checkpoint directory."""
+    """Load training history from a checkpoint directory.
+
+    Supports CSV (training_history.csv, metrics.csv) and JSON formats.
+
+    Args:
+        run_dir: Path to the checkpoint directory.
+        name: Display name for this training run.
+
+    Returns:
+        TrainingRun with parsed metrics, or None if no history found.
+    """
     run_dir = Path(run_dir)
 
     # Try to load from CSV first (more detailed)
@@ -396,6 +403,17 @@ def plot_combined_ablation(
 ) -> plt.Figure:
     """
     Combined 2x2 ablation figure for publication.
+
+    Panels: (a) training PPL vs steps, (b) validation PPL vs steps,
+    (c) training PPL vs wall-clock time, (d) final performance bar chart.
+
+    Args:
+        vfe_run: TrainingRun for the gauge VFE model.
+        std_run: TrainingRun for the standard transformer baseline.
+        save_dir: Directory to save output PDF and PNG.
+
+    Returns:
+        matplotlib Figure.
     """
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 

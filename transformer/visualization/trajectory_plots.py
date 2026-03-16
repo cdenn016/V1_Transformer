@@ -9,15 +9,12 @@ Created on Tue Dec  9 21:05:21 2025
 Trajectory Visualization for Gauge Transformer
 ================================================
 
-Plotting utilities for visualizing:
-1. Belief evolution through transformer layers
-2. Attention patterns
-3. Training convergence
+Plotting utilities for visualizing belief (mu, sigma, phi) evolution
+through transformer layers, KL-divergence attention patterns, and
+training convergence. Beliefs are distributions over K-dimensional
+space with gauge frames parameterized by phi.
 
 Requires matplotlib. Falls back gracefully if not available.
-
-Author: Chris & Claude
-Date: December 2025
 """
 
 import numpy as np
@@ -57,7 +54,7 @@ COLORS = {
 
 # Custom colormap for attention matrices
 def get_attention_cmap():
-    """Blue-white-red colormap for attention."""
+    """Create blue-white-red colormap for attention matrices."""
     if not MATPLOTLIB_AVAILABLE:
         return None
     colors = ['#2166AC', '#F7F7F7', '#B2182B']
@@ -218,20 +215,23 @@ def plot_attention_pattern(
     log_scale: bool = True,
 ) -> Optional[plt.Figure]:
     """
-    Plot attention matrix β for a specific layer and head.
+    Plot KL-divergence attention matrix beta for a specific layer and head.
+
+    Beta weights are derived from KL divergence between gauge-transported
+    belief distributions, not from dot-product attention scores.
 
     Args:
-        trajectory: ForwardTrajectory with attention data
-        layer_idx: Which layer (-1 = last)
-        head_idx: Which attention head
-        batch_idx: Which batch element
-        figsize: Figure size
-        save_path: If provided, save figure to this path
-        mask_diagonal: If True, mask out diagonal (self-attention) for clarity
-        log_scale: If True, use log scale to enhance small values
+        trajectory: ForwardTrajectory with attention data.
+        layer_idx: Which layer (-1 = last).
+        head_idx: Which attention head.
+        batch_idx: Which batch element.
+        figsize: Figure size.
+        save_path: If provided, save figure to this path.
+        mask_diagonal: If True, mask out diagonal (self-attention) for clarity.
+        log_scale: If True, use log scale to enhance small values.
 
     Returns:
-        matplotlib Figure or None if matplotlib unavailable
+        matplotlib Figure or None if matplotlib unavailable.
     """
     if not MATPLOTLIB_AVAILABLE:
         return None
@@ -520,21 +520,20 @@ def plot_trajectory_dashboard(
     save_path: Optional[str] = None,
 ) -> Optional[plt.Figure]:
     """
-    Create comprehensive dashboard of trajectory visualizations.
+    Create comprehensive dashboard of belief trajectory visualizations.
 
-    Includes:
-    - Belief evolution
-    - Attention patterns
-    - Belief trajectory in 2D
+    Six-panel layout showing mu component evolution, ||mu|| heatmap across
+    layers, phi (gauge frame) evolution, KL-divergence attention matrix,
+    2D belief trajectory, and KL(q_i||q_j) matrix.
 
     Args:
-        trajectory: ForwardTrajectory with all data
-        batch_idx: Which batch element
-        figsize: Figure size
-        save_path: If provided, save figure to this path
+        trajectory: ForwardTrajectory with all data.
+        batch_idx: Which batch element.
+        figsize: Figure size.
+        save_path: If provided, save figure to this path.
 
     Returns:
-        matplotlib Figure or None if matplotlib unavailable
+        matplotlib Figure or None if matplotlib unavailable.
     """
     if not MATPLOTLIB_AVAILABLE:
         return None

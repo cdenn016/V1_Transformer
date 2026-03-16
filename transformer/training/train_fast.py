@@ -2,17 +2,21 @@
 Fast Training Loop with Natural Gradient Learning Rates
 ========================================================
 
-Uses separate learning rates for different parameter types,
-based on empirical convergence from test suite:
-    - mu_q_lr = 0.1 (means)
-    - Sigma_q_lr = 0.005 (covariances)
-    - phi_lr = 0.01 (gauge frames)
-    - ffn_lr = 0.001 (standard FFN parameters)
+Lightweight trainer with per-parameter-type learning rates that
+exploit natural gradient structure on the belief manifold.
 
-This exploits the natural gradient speedup on statistical manifolds.
+Parameter groups and default LRs:
+    - mu (means):           0.1    -- location on Gaussian manifold
+    - sigma (covariances):  0.005  -- curvature-sensitive, needs small LR
+    - phi (gauge frames):   0.01   -- Lie algebra elements for SO(N)/GL(K)
+    - attention:            0.01   -- KL-divergence attention weights
+    - ffn:                  0.001  -- standard feed-forward parameters
+    - output:               0.001  -- LM head projection
 
-Author: Optimized from test suite convergence
-Date: November 2025
+Loss is computed by transformer.train.compute_free_energy_loss (CE + VFE
+regularizers: alpha*KL(q||p), lambda_beta*belief-alignment, etc.).
+
+Also supports StandardTransformerLM for baseline comparisons.
 """
 
 # Suppress noisy warnings BEFORE other imports
@@ -56,7 +60,11 @@ from transformer.baselines.standard_transformer import StandardTransformerLM
 
 @dataclass
 class FastTrainingConfig:
-    """Training configuration with per-parameter group learning rates."""
+    """Training configuration with per-parameter-type learning rates and VFE loss weights.
+
+    This is the config for FastTrainer. For the unified config used by
+    PublicationTrainer, see training.config.TrainingConfig.
+    """
 
     # Training steps (use epochs OR max_steps, epochs takes precedence)
     epochs: Optional[int] = None  # If set, overrides max_steps
@@ -160,17 +168,28 @@ class FastTrainingConfig:
 
 class FastTrainer:
     """
-    Trainer with separate learning rates for each parameter type.
+    Trainer with per-parameter-type learning rates for the gauge transformer.
+
+    Exploits natural gradient structure on the statistical manifold of
+    belief distributions. Each VFE E-step iteration co-evolves beliefs
+    and attention; the M-step (optimizer) uses group-specific LRs:
 
     Parameter Groups:
-        1. mu_embed: Mean embeddings (lr=0.1)
-        2. sigma_embed: Covariance embeddings (lr=0.005)
-        3. phi_embed: Gauge frame embeddings (lr=0.01)
-        4. attention: Attention mechanism (lr=0.01)
-        5. ffn: Feed-forward networks (lr=0.001)
-        6. output: Output projection (lr=0.001)
+        1. mu_embed:  Mean embeddings (default lr=0.1)
+        2. sigma_embed: Covariance embeddings (default lr=0.005)
+        3. phi_embed: Gauge frame embeddings (default lr=0.01)
+        4. attention: KL-divergence attention (default lr=0.01)
+        5. ffn: Feed-forward networks (default lr=0.001)
+        6. output: Output/LM-head projection (default lr=0.001)
 
-    This exploits natural gradient structure on statistical manifolds!
+    Also supports StandardTransformerLM (routes all params to ffn/no_decay groups).
+
+    Args:
+        model: GaugeTransformerLM or StandardTransformerLM instance.
+        train_loader: Training DataLoader.
+        val_loader: Validation DataLoader.
+        config: FastTrainingConfig with LRs, loss weights, and schedule.
+        device: Target device (defaults to CPU).
     """
 
     def __init__(
@@ -237,10 +256,14 @@ class FastTrainer:
 
     def _create_optimizer(self) -> torch.optim.Optimizer:
         """
-        Create optimizer with per-parameter group learning rates.
+        Create AdamW optimizer with per-parameter-type learning rates.
+
+        For gauge models, creates up to 6 groups (mu, sigma, phi, attention,
+        ffn, output). For StandardTransformerLM, splits into decay vs no-decay
+        groups following GPT-2/3 convention.
 
         Returns:
-            AdamW optimizer with 6 parameter groups
+            AdamW optimizer with parameter groups.
         """
         # Collect parameters by type
         mu_params = []
@@ -409,7 +432,14 @@ class FastTrainer:
         return scheduler
 
     def train_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Dict[str, float]:
-        """Single training step."""
+        """Single training step: forward, VFE loss, backward, optimizer update.
+
+        Args:
+            batch: (input_ids, target_ids) tensors.
+
+        Returns:
+            Dict with 'total_loss', 'ce_loss', and 'perplexity'.
+        """
         self.model.train()
 
         input_ids, target_ids = batch
@@ -489,12 +519,14 @@ class FastTrainer:
         return formatted_metrics
 
     def validate(self, max_samples: int = 12800) -> Dict[str, float]:
-        """Validation loop with token-weighted CE averaging.
+        """Validation loop with token-weighted CE averaging (no VFE regularizers).
 
         Args:
-            max_samples: Maximum number of samples to evaluate (default: 12800,
-                         equivalent to 200 batches at batch_size=64). This ensures
-                         consistent evaluation across configs with different batch sizes.
+            max_samples: Maximum number of samples to evaluate (default: 12800).
+                Ensures consistent evaluation across configs with different batch sizes.
+
+        Returns:
+            Dict with 'loss' (pure CE), 'ce_loss', and 'perplexity'.
         """
         self.model.eval()
 
@@ -551,7 +583,7 @@ class FastTrainer:
         }
 
     def train(self):
-        """Main training loop."""
+        """Main training loop with periodic validation, checkpointing, and early stopping."""
         print(f"{'='*70}")
         print("STARTING FAST TRAINING")
         print(f"{'='*70}\n")
@@ -682,7 +714,15 @@ class FastTrainer:
         print(f"{'='*70}\n")
 
     def save_checkpoint(self, is_best: bool = False):
-        """Save checkpoint."""
+        """Save model, optimizer, and scheduler state to disk.
+
+        Args:
+            is_best: If True, saves as 'best_model.pt'; otherwise as
+                'checkpoint_step_N.pt' with old checkpoint cleanup.
+
+        Returns:
+            Path to the saved checkpoint file.
+        """
         checkpoint = {
             'step': self.global_step,
             'model_state_dict': self.model.state_dict(),

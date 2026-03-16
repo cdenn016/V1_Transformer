@@ -6,42 +6,22 @@ Created on Sun Nov 16 19:40:08 2025
 """
 
 """
-Unified Training Visualization Tool
-====================================
+Unified Training Visualization for Gauge-Theoretic Transformer
+================================================================
 
-Single tool for all training visualization needs with three modes:
+Plots VFE training metrics including total loss, free energy components
+(belief alignment, self-consistency, model coupling), BPC, gradient norms
+for mu/sigma/phi parameter groups, and learning rate schedules.
 
-1. **Basic Mode** (`--mode basic`): Quick 3x2 grid visualization
-   - Training/validation loss curves
-   - Free energy components
-   - Bits-per-character
-   - Gradient norms
-   - Learning rate schedules
-   - Training throughput
-
-2. **Publication Mode** (`--mode pub`): Comprehensive publication-quality figures
-   - 4+ separate high-resolution figures
-   - Statistical analysis
-   - Publication-ready styling
-   - Multiple file formats
-
-3. **Paper Mode** (`--mode paper`): Focused 2x2 panel + LaTeX table
-   - Compact 2x2 panel figure
-   - LaTeX table for results
-   - JSON summary for text references
+Modes:
+    basic: Quick 3x2 grid of core training metrics.
+    pub:   Publication-quality 2x2 panel with training dynamics.
+    paper: Compact 2x2 panel + LaTeX table from ablation study directories.
 
 Usage:
-    # Auto-detect most recent metrics.csv and create basic plots
-    python plot_training.py
-
-    # Specify mode and file
-    python plot_training.py --mode pub --file checkpoints/metrics.csv
-
-    # Create paper-ready outputs for ablation study
-    python plot_training.py --mode paper --ablation_dir checkpoints_publication
-
-Author: Consolidated from plot_training_history.py, plot_training_history_pub.py, plot_pub_figs.py
-Date: November 2025
+    python -m transformer.visualization.training_plots
+    python -m transformer.visualization.training_plots --mode pub --file metrics.csv
+    python -m transformer.visualization.training_plots --mode paper --ablation_dir checkpoints_publication
 """
 
 import argparse
@@ -74,7 +54,15 @@ except ImportError:
 # =============================================================================
 
 def load_metrics_csv(csv_path: Path) -> Dict:
-    """Load training metrics from CSV file."""
+    """Load training metrics from CSV file.
+
+    Args:
+        csv_path: Path to a metrics CSV with columns like step, train_loss_total,
+            val_loss, train_bpc, val_bpc, val_ppl, grad_norm_mu, etc.
+
+    Returns:
+        Dict mapping column names to lists of parsed values (float or None).
+    """
     metrics = defaultdict(list)
 
     with open(csv_path, 'r') as f:
@@ -310,7 +298,7 @@ def create_basic_plots(metrics: Dict, output_path: Path, start_step: int = 5):
 
 
 def print_basic_summary(metrics: Dict):
-    """Print text summary of training."""
+    """Print text summary of training metrics (loss, PPL, BPC, timing)."""
     print("="*70)
     print("TRAINING SUMMARY")
     print("="*70)
@@ -493,7 +481,16 @@ def create_publication_figures(metrics: Dict, output_dir: Path, start_step: int 
 # =============================================================================
 
 def create_paper_outputs(ablation_dir: Path, output_dir: Path):
-    """Create paper-ready 2x2 panel and LaTeX table from ablation study."""
+    """Create paper-ready 2x2 panel and LaTeX table from ablation study.
+
+    Scans ablation_dir for ffn_* subdirectories, each containing a
+    metrics.csv. Generates a 4-panel figure (val BPC, training loss,
+    val PPL, free energy components) and a LaTeX results table.
+
+    Args:
+        ablation_dir: Directory containing ffn_<mode>/ subdirectories.
+        output_dir: Directory to write PDF, PNG, LaTeX, and JSON outputs.
+    """
     if not MATPLOTLIB_AVAILABLE:
         print("❌ Cannot create figures - matplotlib not installed")
         return

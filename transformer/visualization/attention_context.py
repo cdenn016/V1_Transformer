@@ -1,22 +1,16 @@
 #!/usr/bin/env python
 """
-Visualize attention patterns WITH FULL CONTEXT.
+Visualize KL-divergence attention patterns with full sequence context.
 
-This script shows:
-1. WHAT sequence is being visualized (decode tokens to readable text)
-2. WHERE it came from (training data? validation? specific example?)
-3. Per-head attention patterns (not averaged)
-4. Diagnostic information about uniformity
+Shows per-head and averaged attention matrices (beta) derived from
+KL divergence on gauge-transported belief distributions, alongside the
+KL divergence matrix KL(q_i || Omega_ij[q_j]) and row-uniformity
+diagnostics. Decoded token labels are overlaid for interpretability.
 
 Usage:
-    # Random sequence (for debugging)
-    python visualize_attention_with_context.py --mode random
-
-    # From validation data (real examples)
-    python visualize_attention_with_context.py --mode validation --data-path path/to/data
-
-    # Specific text
-    python visualize_attention_with_context.py --mode text --text "The quick brown fox jumps"
+    python -m transformer.visualization.attention_context --mode random
+    python -m transformer.visualization.attention_context --mode validation
+    python -m transformer.visualization.attention_context --mode text --text "The quick brown fox"
 """
 
 import argparse
@@ -174,7 +168,21 @@ def get_sequence(mode, tokenizer, args):
 
 def visualize_attention_with_labels(model, token_ids, description, token_strs, save_path='attention_analysis.png'):
     """
-    Visualize attention with full context: what sequence, what tokens, which heads.
+    Visualize KL-divergence attention with full context.
+
+    Creates a 4-row figure: decoded token sequence, per-head attention beta
+    matrices, head-averaged attention with row-uniformity stats, and the
+    KL divergence matrix that drives attention computation.
+
+    Args:
+        model: GaugeTransformerLM instance.
+        token_ids: (1, N) tensor of input token IDs.
+        description: Human-readable description of the sequence source.
+        token_strs: List of decoded token strings for axis labels.
+        save_path: File path to save the figure.
+
+    Returns:
+        matplotlib Figure.
     """
     model.eval()
 
