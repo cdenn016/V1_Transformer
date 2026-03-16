@@ -1457,6 +1457,14 @@ class PublicationTrainer(FastTrainer):
                     phi_weight.data = apply_slk_projection(
                         phi_weight.data, self._slk_trace_vec
                     )
+            # Also project PriorBank phi_embed if present
+            if hasattr(self.model, 'prior_bank') and self.model.prior_bank is not None:
+                if hasattr(self.model.prior_bank, 'phi_embed'):
+                    with torch.no_grad():
+                        pb_phi = self.model.prior_bank.phi_embed.weight
+                        pb_phi.data = apply_slk_projection(
+                            pb_phi.data, self._slk_trace_vec
+                        )
 
         # Re-enable requires_grad for W_out if it was disabled
         if use_delta_rule and hasattr(self.model, 'out_proj'):

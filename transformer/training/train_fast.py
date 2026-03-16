@@ -269,8 +269,8 @@ class FastTrainer:
                 continue
 
             # Gauge model parameter grouping
-            # Mean embeddings
-            if 'mu_embed' in name:
+            # Mean embeddings (token_embed.mu_embed AND prior_bank.prior_mu / base_prior_mu)
+            if 'mu_embed' in name or 'prior_mu' in name or 'base_prior_mu' in name:
                 mu_params.append(param)
 
             # Covariance embeddings (sigma_embed, log_sigma_diag, base_log_sigma_diag)
