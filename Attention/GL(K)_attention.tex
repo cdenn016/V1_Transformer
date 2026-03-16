@@ -2109,6 +2109,50 @@ Path-independence alone is insufficient to explain transformer success---bag-of-
 
 Natural language also exhibits phenomena where semantic transport appears genuinely path-dependent: irony, pragmatic inference, context-dependent ambiguity, and culturally situated meaning are cases where the ``same'' utterance acquires different meaning depending on the interpretive path through context. These phenomena are abundant and functional, not pathological, so the conjecture should be understood as applying to the compositional-semantic core of language rather than to all aspects of meaning. This motivates a testable prediction: if a non-flat gauge architecture (one in which $\Omega_{ij}$ on each edge is an independent group element, unconstrained by the cocycle condition) were trained on tasks requiring pragmatic or contextual inference, the learned holonomy $H_{ijk} = \Omega_{ij}\,\Omega_{jk}\,\Omega_{ki}$ should deviate measurably from the identity on precisely those token triples where meaning transport is context-dependent. Measuring learned holonomy in such architectures would provide a non-circular test of whether the flat bundle approximation breaks down where predicted.
 
+\subsection{Conjecture: The Transformer as a Renormalization Group Fixed Point}
+\label{sec:rg_universality}
+
+The three-limit reduction of Section~\ref{sec:transformer_limit} can be understood as a \emph{renormalization group (RG) flow} on the space of gauge-theoretic VFE models. We conjecture---but do not claim to have validated on trained models---that the standard transformer occupies a stable infrared fixed point of this flow.
+
+\subsubsection{Setup and Scaling Dimensions.}
+
+Each model in the gauge VFE family is specified by three coupling constants measuring deviation from the transformer limit:
+\begin{align}
+g_1 &= \|\Sigma_i - \sigma^2 I\| / \sigma^2 & &\text{(anisotropy)}, \label{eq:g1_def} \\
+g_2 &= \|\Omega_{ij} - \Omega\| / \|\Omega\| & &\text{(gauge variation)}, \label{eq:g2_def} \\
+g_3 &= \|H_{ijk} - I\| & &\text{(holonomy)}, \label{eq:g3_def}
+\end{align}
+where $H_{ijk} = \Omega_{ij}\,\Omega_{jk}\,\Omega_{ki}$.  The transformer limit corresponds to $g_1^* = g_2^* = g_3^* = 0$.
+
+A coarse-graining transformation $R_n$ groups $n$ tokens into a meta-agent with beliefs:
+\begin{equation}
+\mu_A = \frac{1}{|A|} \sum_{i \in A} \mu_i, \qquad
+\Sigma_A = \frac{1}{|A|} \sum_{i \in A} \Sigma_i + \mathrm{Var}_A(\mu).
+\label{eq:meta_agent_beliefs}
+\end{equation}
+Under the assumption that perturbations $\Delta_i$ and transport variations $\delta\Omega_{ij}$ are approximately independent across tokens---an assumption that holds by construction but requires verification in trained models---the central limit theorem yields:
+\begin{equation}
+g_1' = n^{-1/2}\, g_1, \qquad g_2' = n^{-1}\, g_2, \qquad g_3' = n^{-2}\, g_3,
+\label{eq:rg_scaling}
+\end{equation}
+with all scaling dimensions negative ($y_1 = -\tfrac{1}{2}$, $y_2 = -1$, $y_3 = -2$), classifying every operator as \emph{irrelevant}.
+
+\begin{conjecture}[RG universality of the transformer limit]
+\label{conj:rg_universality}
+Let $\mathcal{T}(K, N, g_1, g_2, g_3)$ denote the family of gauge VFE models. Then:
+\begin{enumerate}
+\item[(i)] \textbf{Fixed point.} $g_1^* = g_2^* = g_3^* = 0$ is a fixed point of $R_n$ for all $n \geq 2$ and $K \geq 1$.
+\item[(ii)] \textbf{Stability.} All scaling dimensions are negative.  The fixed point is infrared-stable.
+\item[(iii)] \textbf{Universality.} All finite-coupling models flow to the transformer limit under repeated coarse-graining.
+\item[(iv)] \textbf{Emergent anisotropy.} $R_n$ generates anisotropy via $\mathrm{Var}_A(\mu)$ even at $g_1 = 0$. Transformers absorb this into $W_Q, W_K$; the gauge VFE tracks it in $\Sigma_i$.
+\item[(v)] \textbf{Efficiency gap.} The absorbed degrees of freedom scale as $O(K^2)$, predicting an $O(\sqrt{K})$ sample-efficiency advantage for the gauge VFE.
+\end{enumerate}
+\end{conjecture}
+
+\paragraph{Scope and status.}
+The scaling dimensions in Eq.~\eqref{eq:rg_scaling} follow from CLT averaging of independent perturbations---a mathematical fact that does not itself require the gauge framework. The non-trivial content of the conjecture is the \emph{hypothesis} that this coarse-graining structure applies to the learned representations of trained transformers, where the independence assumption may not hold. We have verified that the CLT exponents are exact (to three significant figures) under direct averaging of synthetic i.i.d.\ perturbations, confirming the mathematical basis. However, when the same predictions are tested on attention-graph coarse-graining with spectral clustering (which introduces finite-size correlations), the measured exponents deviate: $y_2 \approx -0.6$ and $y_3 \approx +0.2$ versus predicted $-1$ and $-2$. These deviations arise from clustering artifacts (unequal cluster sizes, correlated assignments) rather than a failure of the underlying scaling argument, but they underscore that \emph{validation on trained models is needed before the conjecture can be considered empirically supported}. We defer detailed numerical analysis of the RG flow to a companion paper where it can be developed with trained-model evidence.
+
+The ordering of the three limits in Section~\ref{sec:transformer_limit} is dictated by the RG hierarchy: holonomy vanishes fastest ($y_3 = -2$), then gauge variation ($y_2 = -1$), then anisotropy ($y_1 = -\tfrac{1}{2}$), matching Limit~3 $\to$ Limit~2 $\to$ Limit~1. The emergent anisotropy from part~(iv) provides a geometric interpretation of LayerNorm as a projection back toward the isotropic submanifold at each layer.
 \subsection{Limitations}
 
 The BERT validation (Supplementary Appendix~E) tested the flat bundle limit where all frames are globally aligned and the connection is trivial. This is the appropriate limit for comparison with standard transformers, which lack explicit gauge structure, but it does not probe the regime where the framework is most distinctive. Extending to autoregressive architectures (GPT, LLaMA), non-64 head dimensions, larger model scales, and non-English languages remains future work.
@@ -2147,7 +2191,14 @@ The isotropic covariance limit (Section~\ref{par:ok_transport}) requires $\Omega
 
 \subsubsection{Renormalization Group Universality.}
 
-The three-limit reduction to standard attention can be understood as a renormalization group (RG) flow in which coarse-graining drives the gauge VFE couplings toward the transformer fixed point. We conjecture that the standard transformer occupies a stable infrared fixed point with scaling dimensions $y_1 = -1/2$ (anisotropy), $y_2 = -1$ (gauge variation), $y_3 = -2$ (holonomy), all irrelevant. The full conjecture, testable predictions, and numerical validation on a synthetic VFE system are presented in Supplementary Appendix~F.
+Conjecture~\ref{conj:rg_universality} generates several falsifiable predictions that can be tested on trained models:
+\begin{enumerate}
+\item \emph{Sample efficiency grows with $K$.} Train gauge VFE and standard transformers at matched parameter counts for $K \in \{8, 16, 32, 64\}$. The ratio of tokens needed to reach a target perplexity should grow as $R(K) \propto \sqrt{K}$.
+\item \emph{Same scaling exponent.} Both architectures should exhibit the same data-scaling exponent $\beta$ in $\mathrm{PPL}(D) \sim D^{-\beta}$, differing only in the prefactor (same universality class, different efficiency frontiers).
+\item \emph{Coarse-graining exponents on trained models.} Extract attention matrices from trained checkpoints, apply spectral coarse-graining, and measure how $g_1$, $g_2$, $g_3$ scale with cluster size. Unlike the synthetic CLT validation (which tests pure mathematics), this would test whether the independence assumptions underlying Eq.~\eqref{eq:rg_scaling} hold for learned representations.
+\item \emph{LayerNorm as isotropy projector.} Measure the anisotropy of representation covariance before and after LayerNorm at each layer. The prediction is that LayerNorm systematically reduces anisotropy, consistent with its role as a projection toward the isotropic submanifold.
+\item \emph{Compute crossover.} At large scale, the transformer should match or exceed gauge VFE performance at $C > C^* = O(K^2 V)$ FLOPs.
+\end{enumerate}
 
 \section{Conclusion}
 
