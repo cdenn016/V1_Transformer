@@ -46,9 +46,9 @@
 \begin{abstract}
 Transformer attention is variational inference over information sources. Modeling each token as a Gaussian agent on a statistical fiber bundle, we derive the generalized attention weight $\beta_{ij} = \operatorname{softmax}(-D_{\mathrm{KL}}[q_i \| \Omega_{ij} q_j] / \tau)$ from a single variational principle: minimizing the free energy of a mixture-of-sources generative model in which each agent infers, via gauge transport, which neighbor generated its state. The KL divergence arises exactly; the softmax follows from constrained optimization over the categorical source-selection posterior.
 
-Under specific limits of this principle, standard transformer architectural choices are recovered as special cases of the variational geometry: the temperature scaling $1/\sqrt{d_k}$ from dimensional concentration of the KL divergence, layer normalization as the geometric condition for frame-independent inference, multi-head attention as a block-diagonal restriction of the gauge algebra, and causal masking and positional biases from non-uniform attention priors $\pi_j$. Two successive limits (isotropic covariances, flat gauge connection) recover the standard rule $\beta_{ij} \propto \operatorname{softmax}(Q_i K_j^\top / \sqrt{d_k})$, while the $\mathrm{GL}(K)$ invariance of KL divergence implies that $W_Q, W_K$ are themselves gauge transformations with $W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$ parametrizing a learned gauge transport, suggesting that standard transformers already implement gauge-theoretic attention. Gradient descent on the free energy provides a variational interpretation of the transformer training loss, with the chain rule through layered compositions corresponding to variational message-passing.
+Under specific limits of this principle, standard transformer architectural choices are recovered as special cases of the variational geometry: the temperature scaling $1/\sqrt{d_k}$ from dimensional concentration of the KL divergence, layer normalization as the geometric condition for frame-independent inference, multi-head attention as a block-diagonal restriction of the gauge algebra, and causal masking and positional biases from non-uniform attention priors $\pi_j$. Two successive limits (isotropic covariances, flat gauge connection) recover the standard rule $\beta_{ij} \propto \operatorname{softmax}(Q_i K_j^\top / \sqrt{d_k})$, while the $\mathrm{GL}(K)$ invariance of KL divergence implies that $W_Q, W_K$ are themselves gauge transformations with $W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$, suggesting that standard transformers already implement gauge-theoretic attention.
 
-We validate the unreduced theory by training a $\mathrm{GL}(K)$ gauge transformer on WikiText-103 using only KL divergences, gauge transport, and natural gradient dynamics (without learned attention projections, MLPs, or pointwise activation functions such as ReLU or GELU). The model achieves test perplexity 71.6 without neural components, outperforming a standard transformer at matched embedding dimension by $1.66\times$ (PPL~118.6 at $d_{\text{model}} = 90$) while approaching the performance of a parameter-matched standard transformer (PPL~48.5 at $d_{\text{model}} = 1{,}280$, requiring $14\times$ the embedding dimension). The learned gauge frames develop a dual structure: categorical separation in a low-dimensional subspace with within-category diversification in the bulk. We separately validate the degenerate-limit predictions on frozen BERT across 105 diverse passages, confirming quantitative agreement between KL-based and dot-product attention (grand mean $r = 0.804$ at the predicted optimal temperature, 95\% CI $[0.771, 0.838]$, with cross-passage SE $< 0.02$ for all 144 heads). Both architectures operate in the flat bundle limit with trivially vanishing holonomy: a geometric regime we hypothesize is matched to the approximately path-independent semantic transport that compositional language requires.
+We validate the unreduced theory by training a $\mathrm{GL}(K)$ gauge transformer on WikiText-103 using only KL divergences, gauge transport, and natural gradient dynamics---without learned attention projections, MLPs, or pointwise activation functions. The model achieves test perplexity 71.6, outperforming a standard transformer at matched embedding dimension by $1.66\times$ (PPL~118.6 at $d_{\text{model}} = 90$) while approaching a parameter-matched standard transformer (PPL~48.5 at $d_{\text{model}} = 1{,}280$). The learned gauge frames develop categorical separation in a low-dimensional subspace with within-category diversification in the bulk. A separate consistency check on frozen BERT across 105 passages confirms quantitative agreement between KL-based and dot-product attention in the degenerate limit (grand mean $r = 0.804$, 95\% CI $[0.771, 0.838]$). Both architectures operate in the flat bundle limit with trivially vanishing holonomy, a geometric regime we hypothesize is matched to the approximately path-independent semantic transport that compositional language requires.
 \end{abstract}
 
 \noindent\textbf{Keywords:} gauge theory, free energy principle, transformer attention, variational inference, information geometry, natural gradient, symmetry breaking, multi-agent systems, $\mathrm{GL}(K)$ invariance
@@ -65,9 +65,9 @@ Several complementary mathematical perspectives on attention have been developed
 
 In this report we propose a first-principles, gauge-equivariant framework that connects these domains. Our framework is based on a principal bundle geometry whereby each agent is modeled as a smooth local section of an associated bundle with statistical manifold fibers over a "noumenal" base manifold. Inter-agent communication arises naturally through a (generally) non-abelian gauge connection that defines parallel-transport operators between agents' local gauge frames. Within this geometry, attention emerges as a gauge-aligned Kullback–Leibler (KL) term derived directly from the variational free energy of a coupled multi-agent generative model based on mixture Gaussians.
 
-We then show that in the flat-bundle, isotropic, delta-function limit, the gauge-covariant attention reduces to the standard transformer dot-product attention $QK^T$, establishing standard attention as a degenerate limit of the gauge-theoretic framework.  We demonstrate this by training a transformer based upon variational gradient descent of a generalized free energy of multivariate Gaussian agents as well as by applying our gauge attention theory to a frozen transformer (BERT) across a corpus of 105 diverse passages, with cross-passage validation confirming the robustness of our predictions.  We then describe numerical results that suggest that token encoding under data training (i.e. agent/token belief alignment) is a symmetry breaking phenomenon of our gauge-theoretic framework.
+We then show that in the flat-bundle, isotropic, delta-function limit, the gauge-covariant attention reduces to the standard transformer dot-product attention $QK^T$, establishing standard attention as a degenerate limit of the gauge-theoretic framework. We validate the unreduced theory by training a $\mathrm{GL}(K)$ gauge transformer on WikiText-103 using only KL divergences, gauge transport, and natural gradient dynamics---without learned attention projections, MLPs, or pointwise activation functions---demonstrating that gauge-covariant variational inference is a viable computational substrate for language modeling. We separately confirm the degenerate-limit predictions on frozen pretrained transformers (Supplementary Appendix~E).
 
-Finally, we show that gradient descent on the gauge-equivariant free energy, in the deterministic constant-gauge limit, recovers the standard transformer training update. This provides a variational interpretation of the training loss: the free energy functional maps onto the loss plus regularization, and the chain rule through layered compositions corresponds to variational message-passing. We emphasize that the chain rule is a general property of differentiable function composition; what the framework contributes is an interpretation of the loss function and its gradients as variational quantities, not a derivation of backpropagation itself. The framework naturally invokes natural gradient descent on the Fisher-Rao metric, which offers theoretical convergence advantages; whether this translates to practical speedup in deep learning requires controlled empirical comparison, which we leave to future work.
+Finally, we show that gradient descent on the gauge-equivariant free energy, in the deterministic constant-gauge limit, recovers the standard transformer training update. This provides a variational interpretation of the training loss: the free energy functional maps onto the loss plus regularization. We emphasize that the chain rule is a general property of differentiable function composition; what the framework contributes is an interpretation of the loss function and its gradients as variational quantities, not a derivation of backpropagation itself.
 
 
 
@@ -1877,30 +1877,13 @@ The $\mathrm{GL}(K)$ gauge invariance theorem (Theorem~\ref{thm:glk_invariance})
 
 All experiments were performed on a Windows workstation with 64GB RAM, AMD Ryzen 9900x CPU, and an Nvidia RTX5090 GPU.
 
-\subsubsection{Transformer Validation Protocol}
-To empirically validate the equivalence between our gauge attention rule and standard transformer self-attention, we conducted a quantitative comparison using a pretrained \texttt{BERT-base-uncased} model from HuggingFace Transformers \citep{devlin2018bert}. We constructed a corpus of 105 diverse English passages spanning multiple genres, registers, and subject domains, tokenized each using BERT's WordPiece tokenizer, and performed full forward passes while extracting hidden states from all 12 layers.
+\subsubsection{Transformer Validation Protocol (Summary)}
+\label{sec:bert_summary}
+To validate the degenerate-limit predictions, we compared the KL gauge attention $\beta_{ij}^{(\mathrm{flat})} = \softmax_j(-\|Q_i - K_j\|^2/\tau)$ against standard dot-product attention $\alpha_{ij} = \softmax_j(Q_i K_j^\top / \sqrt{d})$ on frozen pretrained transformers. The full protocol and detailed results are presented in Supplementary Appendix~E. Briefly, we extracted hidden states from all 144 heads of BERT-base-uncased across 105 diverse English passages, computed per-head Pearson correlations between $\alpha$ and $\beta$ attention rows, and performed a temperature sweep, key-norm bias analysis, entropy matching, multi-model validation (five architectures), per-head temperature dispersion diagnostic, and sequence-length sensitivity analysis.
 
-The validation proceeds in eight phases. All primary analyses use the theory-predicted temperature $\tau = 19.0 \approx 2\sqrt{d}$ for $d = 64$ (the value of $\tau$ that our gauge framework predicts from dimensional scaling; see Section~\ref{sec:temperature_scaling}): (1)~single-passage analysis establishing per-head agreement; (2)~multi-passage corpus validation across all 105 passages, quantifying cross-passage stability via standard errors and confidence intervals for each of the 144 attention heads; (3)~a temperature sweep across the full corpus at 10 values of $\tau$ from 0.1 to 50, confirming the empirical optimum at $\tau = 19.0$ and its consistency with the theoretical prediction $\tau_{\text{opt}} = 2\sqrt{d}$; (4)~multi-model validation across five architectures (BERT-base, BERT-large, DistilBERT, RoBERTa, ALBERT); (5)~per-head temperature dispersion diagnostic across all five architectures, testing four hypotheses for the cross-model variation in $\alpha$--$\beta$ correlation; (6)~mathematical identity decomposition verifying $Q \cdot K / \sqrt{d} = (-\|Q-K\|^2 + \|Q\|^2 + \|K\|^2)/2\sqrt{d}$ to machine precision; (7)~attention entropy analysis confirming that $H(\beta) \approx H(\alpha)$ at the optimal temperature; and (8)~sequence-length sensitivity analysis from $N = 16$ to $N = 512$ tokens.
+The principal findings are: (i)~grand mean correlation $\bar{r} = 0.804$ (95\% CI $[0.771, 0.838]$) at the theory-predicted optimal temperature $\tau = 19.0 \approx 2\sqrt{d_k}$ for $d_k = 64$, with cross-passage SE $< 0.02$ for all 144 heads; (ii)~entropy matching $H(\beta)/H(\alpha) = 1.076$, confirming the temperature recovers distributional shape, not merely correlation; (iii)~the correspondence generalizes across five architectures ($\bar{r} > 0.6$ for all, $\bar{r} = 0.851$ for ALBERT), with cross-model variation explained by per-head temperature dispersion rather than pretraining differences; and (iv)~a Bayesian hierarchical model yields a shrinkage-corrected grand mean of $\bar{r}_{\mathrm{post}} = 0.867$ (94\% HDI $[0.808, 0.915]$).
 
-For each layer $L$ and head $H$, we extracted query, key, and value matrices
-\[
-Q^{(L,H)},\; K^{(L,H)},\; V^{(L,H)} \in \mathbb{R}^{T \times d},
-\]
-where $T$ is the token sequence length and $d = 64$ is the head dimension. We compared two attention mechanisms:
-
-Standard transformer attention:
-
-\begin{equation}
-\alpha_{ij} = \operatorname{softmax}_j\!\left( \frac{Q_i \cdot K_j}{\sqrt{d}} \right)
-\end{equation}
-
-KL gauge attention (flat bundle):
-
-\begin{equation}
-\beta^{(\mathrm{flat})}_{ij} = \operatorname{softmax}_j\!\left( -\frac{\|Q_i - K_j\|^2}{\tau} \right)
-\end{equation}
-
-For each $(L,H)$ pair across all 144 attention heads and each passage, we computed the Pearson correlation between corresponding attention rows $\alpha$ and $\beta$, then aggregated per-head correlations across the 105-passage corpus to obtain means, standard errors, and 95\% confidence intervals. We additionally computed the fraction of tokens with identical argmax attention, $\arg\max_j \alpha_{ij} = \arg\max_j \beta_{ij}$ (peak match), and the key-norm correlation $\rho(\|K_j\|^2, \text{attention weight})$ for both $\alpha$ and $\beta$ on each passage.
+An important caveat: the high correlation follows in large part from an algebraic identity. When key-norms are approximately constant (as enforced by layer normalization), $\|Q_i - K_j\|^2$ and $-2Q_i K_j^\top$ differ only by terms approximately constant under softmax. The non-trivial content lies in the quantitative predictions: the temperature scaling $\tau \approx 2\sqrt{d_k}$, the key-norm bias (Cohen's $d = 1.43$, 94\% HDI $[1.08, 1.88]$), the per-head temperature structure, and their cross-model variation. We therefore treat the BERT validation as a \emph{consistency check} confirming that the degenerate limit behaves as predicted, while the GL($K$) language model (next section) provides the stronger test of the unreduced framework.
 
 \subsubsection{$\mathrm{GL}(K)$ Language Modeling}
 \label{sec:experimental_design_glk}
@@ -1977,248 +1960,9 @@ q_i(t=0) = p_{\text{token}(i)},
 
 where $\text{token}(i)$ denotes the token type at position $i$. Thus $\mu_i(0) = \mu_p^{\text{token}(i)}$ and $\Sigma_i(0) = \Sigma_p^{\text{token}(i)}$. All instances of the same token begin with identical beliefs regardless of position; context-dependent representations emerge through belief evolution during the E-step.
 
-\subsection{Empirical Results}
+\subsection{BERT Validation Results (Summary)}
 
-\subsubsection{Overall Agreement and Temperature Optimization}
-
-We validated the gauge-aligned KL attention against standard dot-product attention across all 144 heads of BERT-base-uncased on a corpus of 105 diverse passages, using $\tau = 19.0$ as the default temperature throughout. This value is not a free parameter: it is the empirical optimum, close to the theory-predicted $\tau = 2\sqrt{d} = 16$ for head dimension $d = 64$ (a 19\% deviation attributed to finite-dimensional corrections; see Section~\ref{sec:temperature_scaling}). The factor of $2$ arises from the $\frac{1}{2}$ prefactor in the Gaussian KL divergence, which remains explicit in the squared-distance form used here.
-
-At $\tau = 19.0$, the single-passage analysis yields mean correlation $\bar{r} = 0.795 \pm 0.229$ and median $\tilde{r} = 0.880$ across all 144 heads, with 94 heads (65.3\%) exceeding $r > 0.8$ and 67 heads (46.5\%) exceeding $r > 0.9$. All 144 heads achieve $p < 0.001$ significance.
-
-The multi-passage corpus validation across all 105 passages yields grand mean $\bar{r} = 0.804 \pm 0.182$ and grand median $\tilde{r} = 0.876$, with 93 of 144 heads (64.6\%) exceeding mean $r > 0.8$ and 59 heads (41.0\%) exceeding mean $r > 0.9$. The range of per-head mean correlations spans $[0.049, 0.999]$.
-
-\paragraph{Cross-passage stability.} The robustness of these results across the 105-passage corpus is a central finding. Standard errors for each head's correlation are uniformly small: mean $\mathrm{SE} = 0.004$, median $\mathrm{SE} = 0.004$, and maximum $\mathrm{SE} = 0.016$, with all 144 heads achieving $\mathrm{SE} < 0.05$ (Figure~\ref{fig:cross_passage_stability}). This demonstrates that the $\alpha$--$\beta$ agreement is a robust property of BERT's learned representations, not an artifact of any particular input passage.
-
-The distribution of per-head correlations (Figure~\ref{fig:correlation_distribution}) reveals substantial heterogeneity consistent with functional specialization. Some heads achieve near-perfect agreement (e.g., Layer~2, Head~0: mean $r = 0.999$, $\mathrm{SE} = 0.0004$), while a minority of heads show weaker correspondence ($r < 0.3$), typically those implementing positional or syntactic attention patterns orthogonal to the KL-based distance metric. All 144 heads achieve $p < 0.001$ significance on 100\% of passages, confirming that the agreement is statistically robust across the full head population.
-
-Figure~\ref{fig:per_head_heatmap} shows the per-head correlation structure across layers. Deeper layers (8--11) tend to exhibit higher correlations with KL attention, consistent with the expectation that semantic representations become more structured and therefore more amenable to distance-based comparison in deeper layers.
-
-\begin{figure*}[t]
-  \centering
-  \includegraphics[width=0.95\textwidth]{attention/figs/tau_sweep_across_passages.png}
-  \caption{
-    \textbf{Temperature sweep across 105 passages.}
-    Grand mean Pearson correlation between transformer and KL attention weights as a function of temperature $\tau$, averaged over all 144 heads and 105 passages. Shaded regions indicate 95\% confidence intervals.  The empirical optimum at $\tau = 19.0$ ($\bar{r} = 0.804$, 95\% CI $[0.771, 0.838]$) is consistent with the theoretical prediction $\tau_{\text{opt}} = 2\sqrt{d} = 16$ for $d = 64$.  Correlation increases monotonically from $\tau = 0.1$ ($\bar{r} = 0.654$) to $\tau = 19$, then decreases at higher temperatures as the softmax becomes overly diffuse.
-  }
-  \label{fig:temperature_sweep}
-\end{figure*}
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=\linewidth]{attention/figs/correlation_distribution_all_heads.png}
-  \caption{
-    \textbf{Distribution of per-head correlations across 105 passages.}
-    Each head's correlation is its mean $r(\alpha,\beta)$ across the full 105-passage corpus at the theory-predicted optimal temperature $\tau = 19.0$.  The grand mean is $\bar{r} = 0.804$ and grand median is $\tilde{r} = 0.876$; 93 of 144 heads (64.6\%) exceed $r > 0.8$ and 59 heads (41.0\%) exceed $r > 0.9$.  The rightward skew reflects that the majority of heads show strong agreement, with a tail of weakly correlated heads exhibiting specialized (e.g., positional) attention patterns.
-  }
-  \label{fig:correlation_distribution}
-\end{figure}
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=\linewidth]{attention/figs/cross_passage_stability.png}
-  \caption{
-    \textbf{Cross-passage stability of per-head correlations.}
-    Standard errors across the 105-passage corpus at $\tau = 19.0$ are uniformly small (mean $\mathrm{SE} = 0.004$, median $= 0.004$, max $= 0.016$), with all 144 heads achieving $\mathrm{SE} < 0.05$.  This demonstrates that the $\alpha$--$\beta$ agreement is a reproducible property of BERT's learned representations rather than an artifact of specific input text.
-  }
-  \label{fig:cross_passage_stability}
-\end{figure}
-
-
-
-\paragraph{Scope of the Validation.}
-An important caveat is in order. The high correlation between KL-based attention $\beta_{ij} \propto \exp(-\|Q_i - K_j\|^2/\tau)$ and dot-product attention $\alpha_{ij} \propto \exp(Q_i K_j^\top / \sqrt{d_k})$ follows in part from an algebraic identity: when key-norms $\|K_j\|$ are approximately constant (as enforced by layer normalization in BERT), the squared Euclidean distance $\|Q_i - K_j\|^2 = \|Q_i\|^2 + \|K_j\|^2 - 2Q_i K_j^\top$ differs from $-2Q_i K_j^\top$ only by terms that are approximately constant under softmax. The non-trivial content of this validation is therefore not the correlation per se (that much is guaranteed by the algebra) but rather four quantitative predictions that the identity alone does not supply: (a) the optimal temperature $\tau \approx 2\sqrt{d_k}$, confirmed empirically at $\tau = 19.0$ (within 19\% of the prediction $2\sqrt{64} = 16$), whose value is fixed by the dimensional scaling of dot-product variance in the gauge framework; (b) the existence, sign, and magnitude of a residual key-norm bias, a prediction specific to the gauge-theoretic decomposition that has no counterpart in the algebraic identity; (c) the entropy matching $H(\beta) \approx H(\alpha)$ at the optimal temperature (Section~\ref{sec:entropy_analysis}), confirming that the temperature does not merely maximize correlation but recovers the correct distributional shape; and (d) the per-layer variation in correlation strength, which reflects representational structure learned during training and is not predicted by the mathematical identity alone. The multi-passage design (105 passages, all heads, full temperature sweep) ensures that these findings are not artifacts of any particular input; the cross-passage standard errors ($\mathrm{SE} < 0.02$ for all 144 heads) confirm reproducibility.
-
-\subsubsection{Temperature Scaling and Finite-Dimensional Corrections}
-\label{sec:temperature_scaling}
-
-The multi-passage temperature sweep independently confirms that $\tau = 19.0$ maximizes the grand mean correlation across the full 105-passage corpus, yielding $\bar{r} = 0.804$ (95\% CI $[0.771, 0.838]$). The empirical comparison uses the squared-distance form $\beta_{ij} \propto \exp(-\|Q_i - K_j\|^2/\tau)$, for which the theoretical prediction is $\tau = 2\sqrt{d} = 16$ for $d = 64$: the $\sqrt{d}$ from dimensional concentration of dot-product variance, and the factor of $2$ from the $\frac{1}{2}$ in $D_{\mathrm{KL}} = \frac{1}{2\sigma^2}\|\cdot\|^2$ that remains after $\sigma^{-2}$ is absorbed into the learned projections. The empirical optimum at $\tau = 19$ represents a 19\% deviation from this prediction, attributable to finite-dimensional corrections that our framework explicitly predicts.
-
-Temperature scaling emerges from competing effects: (1) dot products $Q_i K_j^\top$ scale as $\mathcal{O}(d_k)$ in magnitude, while (2) key-norm fluctuations scale as $\mathcal{O}(\sqrt{d_k})$ under high-dimensional measure. The factor $\sqrt{d_k}$ normalizes pre-softmax logits to $\mathcal{O}(1)$, the appropriate scale for softmax attention. However, at finite dimensions, subdominant fluctuations $\mathcal{O}(\sqrt{d})$ induce corrections of order unity to the optimal temperature.
-
-We validated these predictions by computing the coefficient of variation (CV) of key-norms, which directly measures incomplete bias cancellation. For $d = 64$, theory predicts $\text{CV} = \sqrt{2/d} = 0.177$ (17.7\%), representing fundamental $\mathcal{O}(1/\sqrt{d})$ fluctuations. Monte Carlo simulations with learned projection matrices yield $\text{CV} = 0.240 \pm 0.001$ (24.0\%), where the amplification reflects typical BERT-like architectures.
-
-This is consistent with both observed phenomena: the temperature shift from $\tau = 16$ to $\tau = 19$ follows from the embedding scale, with ratio $\tau_{\text{emp}}/\tau_{\text{theory}} = 1.188$ closely tracking the $\text{CV} = 17.7\%$ predicted by dimensional scaling (the 18.75\% empirical deviation lies within the range expected from learned-weight amplification); and the magnitude of key-norm bias (discussed below) falls within the predicted range from 24\% norm heterogeneity. The multi-passage confidence interval $[0.771, 0.838]$ at the optimum confirms that these results are stable across diverse inputs.
-
-Both effects are quantitative validations of the finite-dimensional analysis, with the gauge framework correctly predicting their existence and magnitude from dimensional scaling alone.
-
-The temperature parameter $\tau$ plays a dual role. Geometrically, it represents the inverse stiffness of gauge alignment: higher $\tau$ allows greater tolerance for misalignment, softening attention peaks and distributing weight more uniformly among agents. The predicted value $\tau = 2\sqrt{d_k}$ in the squared-distance form arises from two distinct factors: the $\sqrt{d_k}$ from concentration of measure (dot products $Q_i K_j^\top$ have standard deviation $O(\sqrt{d_k})$ for unit-variance components), and the factor of $2$ from the $\frac{1}{2}$ prefactor in the Gaussian KL divergence $D_{\mathrm{KL}} = \frac{1}{2\sigma^2}\|\cdot\|^2$. In the dot-product form (Section~\ref{sec:dot_product_derivation}), where $\sigma^{-2}$ is absorbed into $W_Q W_K^\top$ and the $\frac{1}{2}$ is consumed by expanding the squared norm, the derivation yields $\tau = \sqrt{d_k}$ --- recovering the standard $1/\sqrt{d_k}$ scaling. In the squared-distance form $\beta_{ij} \propto \exp(-\|Q_i - K_j\|^2/\tau)$ used in the empirical comparison, the $\frac{1}{2}$ from the KL remains as an explicit prefactor, giving $\tau = 2\sqrt{d_k}$. The two forms are equivalent; the factor-of-two difference reflects whether the KL's $\frac{1}{2}$ is inside or outside the effective temperature. The broad plateau from $\tau = 15$ to $\tau = 25$ (Figure~\ref{fig:temperature_sweep}) indicates that the optimum is not sharply tuned, consistent with the theoretical picture of a smooth dimensional correction rather than a resonance.
-
-
-\subsubsection{Key-Norm Bias and Layer Normalization}
-
-A central prediction of our gauge-theoretic framework is the emergence of a key-dependent bias term that modulates attention beyond simple query-key compatibility. Recall from Section~4.2 that prior to absorbing $\sigma^{-2}$ into the learned projections, the full KL-derived attention logit contains a term $-\frac{1}{2\sigma^2}\|\mu_j\|^2$ depending only on the key embedding norm. After the absorption (Section~4.2.2), this bias term becomes implicit in the learned weight matrices. However, the bias is observable through its effect on the relationship between key-norms and attention weights. In the pre-absorption form, the attention score is:
-
-\begin{equation}
-\beta_{ij}^{(\text{flat})} = \text{softmax}_j\left( -\frac{\|Q_i - K_j\|^2}{\tau} - \lambda\|K_j\|^2 \right),
-\end{equation}
-
-where $\lambda > 0$ is the residual bias coefficient (equal to $1/(2\sigma^2)$ before absorption, and implicitly encoded in the learned projections afterward). The term $-\lambda\|K_j\|^2$ represents an intrinsic salience depending only on key vector norm. This bias is gauge-geometric in origin: each key carries information not only about semantic content but also about its representation magnitude in the embedding space.
-
-Our theory predicts this bias should approximately cancel. As shown in Section~4.2.1, the Mahalanobis metric \eqref{eq:mahalanobis_identity} already accounts for the gauge transport's effect on norms, so the residual bias depends on the raw embedding norms $\|\mu_j\|^2$ regardless of the gauge group. High-dimensional concentration then implies: for embeddings $\mu_j^{(i)} \sim \mathcal{N}(0, \sigma_0^2)$ in $\mathbb{R}^{d_k}$ (where $\sigma_0^2$ denotes the per-component embedding variance),
-
-\begin{equation}
-\|\mu_j\|^2 = \sum_{i=1}^{d_k} (\mu_j^{(i)})^2 = d_k\sigma_0^2 \pm \mathcal{O}(\sigma_0^2\sqrt{d_k}),
-\end{equation}
-
-with relative fluctuations $\mathcal{O}(1/\sqrt{d_k}) \to 0$ as $d_k \to \infty$. Thus $\|\mu_j\|^2 \approx d_k\sigma_0^2$ becomes approximately constant, and the bias term becomes approximately constant in $j$, cancelling under softmax normalization. At finite dimensions, this cancellation is incomplete, leading to a residual per-key bias.
-
-The multi-passage analysis confirms this effect (Figure~\ref{fig:key_norm_bias}). For dot-product attention ($\alpha$), the mean absolute correlation between key-norms $\|K_j\|^2$ and per-token attention weight is $\overline{|\rho|} = 0.139$ across all 144 heads, while for KL-based attention ($\beta$) at $\tau = 19.0$, the corresponding value is $\overline{|\rho|} = 0.256$. Both metrics aggregate across the full 105-passage corpus, providing robust cross-passage estimates.
-
-The stronger key-norm effect for $\beta$ at $\tau = 19$ compared to the $\overline{|\rho|} = 0.164$ observed at $\tau = 1$ is itself a theoretical prediction: at higher temperature, the softmax distribution is softer, so the norm-dependent bias term $-\lambda\|K_j\|^2$ contributes a larger relative perturbation to the flattened attention distribution. At $\tau = 1$, $\beta$ is extremely peaked (the nearest-neighbor dominates regardless of norms), masking the bias. At $\tau = 19$, the bias has room to express.
-
-Although the corpus-averaged magnitude is modest, individual heads show strong key-norm effects (e.g., Layer~1, Head~6 has $\overline{\rho}_\alpha = 0.889$, reflecting a head where key-norm variation dominates the attention pattern), and the cross-passage per-head key-norm correlations (Figure~\ref{fig:keynorm_cross_passage}) confirm that the sign and magnitude of the bias are reproducible across inputs.
-
-The predominantly negative sign for KL-based attention ($\beta$) is precisely what the theory predicts: the key-norm bias term $-\lambda\|K_j\|^2$ contributes negatively to attention logits, suppressing attention to high-norm keys. The weaker and sign-mixed correlations for dot-product attention ($\alpha$) reflect the query-dependent cancellation of key-norm terms under softmax, which is exact only when $\|K_j\|$ is constant across tokens.
-
-\begin{figure*}[t]
-  \centering
-  \includegraphics[width=0.92\textwidth]{attention/figs/key_norm_bias_analysis.png}
-  \caption{
-    \textbf{Key-norm bias analysis across 105 passages.}
-    Per-head correlations $\rho(\|K_j\|^2,\text{attention weight})$ for both dot-product attention ($\alpha$) and KL-based attention ($\beta$), aggregated across the full corpus.
-    The predominantly negative correlations for $\beta$ confirm the theoretical prediction that the KL-derived bias term $-\lambda\|K_j\|^2$ suppresses attention to high-norm keys.
-  }
-  \label{fig:key_norm_bias}
-\end{figure*}
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=\linewidth]{attention/figs/keynorm_cross_passage.png}
-  \caption{
-    \textbf{Cross-passage stability of key-norm bias.}
-    Per-head key-norm correlation distributions across 105 passages, demonstrating that the sign and magnitude of the key-norm bias are reproducible across diverse inputs for both $\alpha$ and $\beta$ attention mechanisms.
-  }
-  \label{fig:keynorm_cross_passage}
-\end{figure}
-
-These findings suggest why norm-regulating mechanisms are prevalent in transformer architectures. Layer normalization, RMSNorm, and related techniques enforce approximately constant norms across tokens, satisfying the gauge-theoretic cancellation condition that should hold asymptotically in high dimensions. Without such regulation, key-norm heterogeneity introduces systematic bias that modulates effective attention allocation. Our gauge theory derives the condition ($\|\mu_j\|^2 \approx C$) but does not uniquely predict which normalization scheme satisfies it; rather, it explains why some form of norm regulation is necessary: transformers approximate variational inference in a gauge geometry, and proper inference requires frame-independent comparisons achieved only when key-norms are regulated.
-
-
-\subsubsection{Attention Entropy Matching}
-\label{sec:entropy_analysis}
-
-A necessary condition for the gauge-theoretic interpretation is that the KL-distance attention $\beta$ not only correlates with dot-product attention $\alpha$ but reproduces its distributional shape: that is, the entropy of the two attention distributions should match. If $\tau$ merely maximized correlation by collapsing $\beta$ toward a delta function (low entropy) or inflating it toward uniformity (high entropy), the agreement would be artifactual.
-
-We computed the Shannon entropy $H(\cdot) = -\sum_j p_j \log p_j$ of both $\alpha$ and $\beta$ for each (layer, head) pair, averaged across 20 passages from the corpus. At the optimal temperature $\tau = 19.0$, the entropies are closely matched:
-\begin{equation}
-\overline{H(\alpha)} = 1.774 \;\text{nats}, \qquad \overline{H(\beta)} = 1.784 \;\text{nats}, \qquad \overline{H(\beta)/H(\alpha)} = 1.076.
-\end{equation}
-
-The entropy ratio $H(\beta)/H(\alpha) \approx 1.08$ confirms that $\beta$ at $\tau = 19$ is neither collapsed nor diffuse relative to $\alpha$: the two distributions occupy the same region of the probability simplex. This is a non-trivial consequence of the dimensional scaling. At $\tau = 1$ (no rescaling), the squared distances $\|Q_i - K_j\|^2$ are unscaled, producing extremely peaked $\beta$ distributions with $H(\beta) \ll H(\alpha)$. The identity $Q_i K_j^\top / \sqrt{d} = (-\|Q_i - K_j\|^2 + \|Q_i\|^2 + \|K_j\|^2)/2\sqrt{d}$ predicts that the natural scale for the distance-based logits involves a factor of $2\sqrt{d}$; the empirical optimum $\tau = 19 \approx 2\sqrt{64} = 16$ recovers this scale, and the entropy matching confirms it (Figure~\ref{fig:attention_entropy}).
-
-The layer-depth structure of entropy is also informative. Early layers exhibit higher attention entropy ($\overline{H(\alpha)}_{\text{early}} = 2.225$ nats for layers 0--2) than late layers ($\overline{H(\alpha)}_{\text{late}} = 1.801$ nats for layers 9--11), reflecting a transition from diffuse, exploratory attention in early layers to focused, task-specific attention in deeper layers. Both $\alpha$ and $\beta$ track this pattern, with the entropy ratio remaining near unity across all depths.
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=\linewidth]{attention/figs/attention_entropy_by_layer.png}
-  \caption{
-    \textbf{Attention entropy by layer depth.}
-    Shannon entropy $H(\alpha)$ and $H(\beta)$ for dot-product and KL-distance attention, averaged across heads and 20 passages at $\tau = 19.0$.
-    The close match $\overline{H(\beta)/H(\alpha)} = 1.076$ confirms that the optimal temperature recovers not just correlation but distributional shape. Early layers exhibit higher entropy (diffuse attention) while later layers are more peaked (selective attention), a pattern tracked by both $\alpha$ and $\beta$.
-  }
-  \label{fig:attention_entropy}
-\end{figure}
-
-
-
-\subsubsection{Multi-Model Generalization}
-\label{sec:multi_model}
-
-To test whether the $\alpha$--$\beta$ correspondence generalizes beyond BERT-base, we replicated the multi-passage analysis (20 passages, $\tau = 19.0$) across five pretrained transformer architectures spanning different model families, depths, and parameter counts. All models use $d_{\text{head}} = 64$, so the same temperature $\tau = 19.0$ applies.
-
-\begin{table}[h]
-\centering
-\renewcommand{\arraystretch}{1.15}
-\begin{tabular}{lcccc}
-\hline
-\textbf{Model} & \textbf{Architecture} & \textbf{Params} & Grand mean $\bar{r}$ & $\pm$ SE \\
-\hline
-ALBERT-base-v2       & 12L $\times$ 12H & 11.7M  & \textbf{0.851} & 0.008 \\
-BERT-base-uncased    & 12L $\times$ 12H & 109.5M & 0.804 & 0.012 \\
-BERT-large-uncased   & 24L $\times$ 16H & 335.1M & 0.778 & 0.013 \\
-DistilBERT-base      & 6L $\times$ 12H  & 66.4M  & 0.746 & 0.012 \\
-RoBERTa-base         & 12L $\times$ 12H & 124.6M & 0.612 & 0.006 \\
-\hline
-\end{tabular}
-\caption{Multi-model validation at $\tau = 19.0$ across 20 passages. All models use $d_{\text{head}} = 64$. The $\alpha$--$\beta$ correspondence holds across architectures, with $\bar{r} > 0.6$ for all five models and $\bar{r} > 0.8$ for ALBERT and BERT-base. RoBERTa's lower correlation is explained by per-head temperature dispersion rather than pretraining differences (see Section~\ref{sec:temp_dispersion}).}
-\label{tab:multi_model}
-\end{table}
-
-The correspondence holds across all five architectures ($\bar{r} > 0.6$ in every case), with ALBERT achieving the highest agreement ($\bar{r} = 0.851$). ALBERT's parameter-sharing across layers forces all layers to use the same projection matrices, constraining the gauge transport to be constant across layers and thereby regularizing attention patterns toward the distance-based structure predicted by the gauge theory. RoBERTa's lower correlation ($\bar{r} = 0.612$) is not attributable to its pretraining objective per se; rather, a targeted diagnostic analysis (Section~\ref{sec:temp_dispersion}) identifies per-head temperature dispersion as the dominant explanatory variable: RoBERTa's heads operate at nearly $2\times$ the temperature heterogeneity of BERT-base, and a single universal $\tau$ cannot simultaneously approximate all heads.
-
-The theoretical prediction $\tau \approx 2\sqrt{d_{\text{head}}}$ remains the best single-parameter approximation: all five models share $d_{\text{head}} = 64$, and the dimensional scaling correctly predicts the order of magnitude. However, the cross-model variation in correlation at this fixed $\tau$ reveals that the \emph{per-head} temperature structure --- predicted by the gauge framework's learnable $\kappa_a$ (Eq.~\ref{eq:per_head_temperature}) --- carries additional information that the single-$\tau$ approximation discards.
-
-
-\subsubsection{Per-Head Temperature: Prediction and Confirmation}
-\label{sec:temp_dispersion}
-
-The multi-head decomposition of Section~\ref{sec:multihead} predicts that each attention head carries its own effective temperature through the per-head belief covariance $\Sigma^{(a)}$: in the isotropic limit, $\sigma_a^2$ is the attention temperature for head $a$ (Eq.~\ref{eq:per_head_temperature}). Standard transformers absorb $\sigma_a^{-2}$ into $W_Q^{(a)}, W_K^{(a)}$, making this structure implicit. A single-$\tau$ KL approximation therefore corresponds to the assumption $\sigma_a^2 = \sigma^2$ for all heads, and models whose heads operate at heterogeneous implicit temperatures should show systematically worse agreement with this approximation. The multi-model validation provides a direct test: all five architectures share $d_{\text{head}} = 64$, yet the grand-mean $\alpha$--$\beta$ correlation at $\tau = 19.0$ spans a $0.24$ range from RoBERTa ($\bar{r} = 0.612$) to ALBERT ($\bar{r} = 0.851$).
-
-We investigated four hypotheses through a targeted diagnostic analysis across all five architectures (30 passages each): (1)~key-norm heterogeneity, where higher coefficient of variation (CV) of $\|K_j\|$ amplifies the residual norm-bias term; (2)~per-model optimal temperature, where the true optimal $\tau$ deviates from 19.0; (3)~angular versus norm decomposition of logit variance; and (4)~per-head effective temperature dispersion, where heads operate at heterogeneous implicit temperatures. The gauge framework predicts that Hypothesis~4 should be the dominant variable.
-
-\paragraph{Temperature dispersion as the dominant explanatory variable.}
-In standard dot-product attention, the score $s_{ij} = Q_i \cdot K_j / \sqrt{d}$ implicitly encodes a per-head temperature through the learned weight scales $\|W_Q^{(a)}\|$ and $\|W_K^{(a)}\|$. Heads with larger-norm projections produce higher-variance logits and therefore sharper attention distributions (lower effective temperature), while heads with smaller-norm projections produce softer distributions (higher effective temperature). We quantify this implicit temperature heterogeneity by computing the coefficient of variation (CV) of per-head attention-logit standard deviation across all (layer, head) pairs for each model.
-
-\begin{table}[h]
-\centering
-\renewcommand{\arraystretch}{1.15}
-\begin{tabular}{lccccc}
-\hline
-\textbf{Model} & \textbf{Key-norm CV} & $\boldsymbol{\tau}_{\textbf{opt}}$ & $\boldsymbol{r}$\textbf{@}$\boldsymbol{\tau^*}$ & $\boldsymbol{r}$\textbf{@19} & \textbf{Temp disp (CV)} \\
-\hline
-ALBERT-base-v2    & 0.148 & 35.0 & 0.872 & 0.853 & 0.429 \\
-BERT-base         & 0.141 & 20.0 & 0.800 & 0.800 & 0.367 \\
-BERT-large        & 0.194 & 15.0 & 0.779 & 0.776 & 0.331 \\
-DistilBERT-base   & 0.137 & 15.0 & 0.747 & 0.744 & 0.569 \\
-RoBERTa-base      & 0.105 & 29.0 & 0.618 & 0.611 & 0.787 \\
-\hline
-\end{tabular}
-\caption{Per-head temperature dispersion diagnostic across five architectures ($d_{\text{head}} = 64$, 30 passages). Key-norm CV: coefficient of variation of $\|K_j\|$ across tokens (Hypothesis~1). $\tau_{\text{opt}}$: temperature maximizing the mean $\alpha$--$\beta$ Pearson $r$ (Hypothesis~2). $r$@$\tau^*$: correlation at the model-specific optimal $\tau$. $r$@19: correlation at the universal prediction $\tau = 19.0$. Temp disp (CV): coefficient of variation of per-head logit standard deviation across all (layer, head) pairs (Hypothesis~4). Temperature dispersion is the strongest predictor of the cross-model correlation deficit.}
-\label{tab:temp_dispersion}
-\end{table}
-
-Table~\ref{tab:temp_dispersion} reveals that Hypothesis~4 (per-head temperature dispersion) is the dominant explanatory variable. RoBERTa exhibits the highest temperature dispersion (CV $= 0.787$, nearly $2\times$ that of BERT-base) and the lowest $\alpha$--$\beta$ correlation ($r = 0.611$). The ranking by temperature dispersion anti-correlates with the ranking by correlation: models with more heterogeneous implicit per-head temperatures show systematically worse agreement with a single-temperature KL approximation.
-
-\paragraph{Ruling out alternative hypotheses.}
-Key-norm CV (Hypothesis~1) does not explain the pattern: RoBERTa actually has the \emph{lowest} key-norm CV (0.105), indicating more uniform key-vector norms than any other model. The norm-fraction $R^2$ (Hypothesis~3) is similar across models ($0.09$--$0.19$) and does not differentiate RoBERTa from the other architectures. The per-model optimal $\tau$ (Hypothesis~2) shows that RoBERTa's optimum ($\tau = 29.0$) deviates from the dimensional prediction, but this alone is insufficient: ALBERT achieves the highest correlation ($r = 0.853$) despite its optimal $\tau = 35.0$ being even further from 19.0.
-
-\paragraph{The ALBERT anomaly as a control case.}
-ALBERT's weight-sharing across all 12 layers forces every layer to use the same $W_Q, W_K$ projection matrices. In the gauge-theoretic framework, this constrains the gauge transport to be constant across layers --- effectively a flat connection in which the per-head temperature structure is identical at every depth. This produces low temperature dispersion (CV $= 0.429$) despite a suboptimal global $\tau$, explaining why a single-temperature KL approximation remains accurate. ALBERT thus serves as a natural control: shared weights enforce the constant-gauge limit under which standard attention and KL attention are most tightly linked.
-
-\paragraph{Per-head optimal temperature distributions.}
-The per-head optimal $\tau$ distributions further support this analysis. RoBERTa's heads span the widest range (median $= 25.0$, std $= 15.3$), while BERT-base heads cluster more tightly around the prediction (median $= 21.0$, std $= 10.6$). This confirms that RoBERTa's heads have learned to operate at maximally heterogeneous effective temperatures, and a single universal $\tau$ cannot simultaneously approximate all of them.
-
-\paragraph{Confirmation of the per-head covariance prediction.}
-The results confirm the prediction derived in Section~\ref{sec:multihead}: the per-head attention temperature is not a separate parameter but arises from the per-head belief covariance $\Sigma^{(a)}$. In the isotropic limit $\Sigma^{(a)} = \sigma_a^2 I$, the KL divergence scales as $1/(2\sigma_a^2)$, so the covariance \emph{is} the temperature, parameterized by $\kappa_a \propto \sigma_a^2$ in Eq.~\ref{eq:per_head_temperature}. This degree of freedom is intrinsic to the multi-head decomposition --- each $\mathrm{GL}(d_{\text{head}})$ block carries its own covariance structure --- and does not need to be introduced as an additional architectural choice.
-
-Standard attention implicitly encodes per-head temperatures through the weight scales $\|W_Q^{(a)}\|, \|W_K^{(a)}\|$, which absorb $\sigma_a^{-2}$ into the learned projections. The theory predicts that when these implicit temperatures are heterogeneous, the single-$\tau$ KL approximation will degrade, and the degree of degradation should track the coefficient of variation of per-head temperatures. This is precisely what is observed: the ranking by temperature dispersion anti-correlates with the ranking by $\alpha$--$\beta$ agreement across all five architectures. The gauge framework retains the per-head covariance structure, allowing each head to operate at its own point on the rate--distortion curve: small $\sigma_a^2$ (sharp attention, high rate, low distortion) for heads performing precise source selection, large $\sigma_a^2$ (diffuse attention, low rate, high distortion) for heads performing contextual averaging.
-
-
-\subsubsection{Sequence-Length Sensitivity}
-\label{sec:seqlen}
-
-To verify that the $\alpha$-$\beta$ correspondence is not an artifact of a particular sequence length, we evaluated the correlation across six sequence lengths from $N = 16$ to $N = 512$ tokens at $\tau = 19.0$ (Table~\ref{tab:seqlen}).
-
-\begin{table}[h]
-\centering
-\renewcommand{\arraystretch}{1.15}
-\begin{tabular}{rcccc}
-\hline
-$N$ & Mean $\bar{r}$ & $\pm$ Std & Min $r$ & Max $r$ \\
-\hline
-16  & 0.790 & 0.220 & $-0.028$ & 0.998 \\
-32  & 0.798 & 0.193 & 0.036    & 0.999 \\
-64  & 0.795 & 0.191 & 0.121    & 0.997 \\
-128 & 0.773 & 0.207 & 0.109    & 0.999 \\
-256 & 0.747 & 0.226 & 0.057    & 1.000 \\
-512 & 0.714 & 0.238 & 0.044    & 0.999 \\
-\hline
-\end{tabular}
-\caption{Sequence-length sensitivity at $\tau = 19.0$. The mean correlation remains above 0.71 across all lengths. The mild degradation at longer sequences is consistent with the key-norm bias analysis: longer sequences increase key-norm variance (more tokens $\to$ more heterogeneous norms), amplifying the residual bias that the flat-bundle approximation neglects.}
-\label{tab:seqlen}
-\end{table}
-
-The mean correlation remains robust across all sequence lengths ($\bar{r} > 0.71$), with a mild monotonic decrease from $\bar{r} = 0.798$ at $N = 32$ to $\bar{r} = 0.714$ at $N = 512$. This degradation is consistent with the key-norm bias analysis (Section~5.2.3): longer sequences contain more diverse token types, increasing key-norm variance and amplifying the residual bias term that the flat-bundle isotropic limit neglects. The stability across a $32\times$ range of sequence lengths confirms that the correspondence is a structural property of the attention mechanism, not an artifact of sequence statistics.
+The full BERT validation results are reported in Supplementary Appendix~E. As summarized in the protocol description above, the degenerate-limit predictions are confirmed across 105 passages, five architectures, and sequence lengths from 16 to 512 tokens. The key quantitative findings are reported in Section~\ref{sec:bert_summary}. We now turn to the GL($K$) language model, which provides the primary empirical test of the unreduced framework.
 
 \subsection{$\mathrm{GL}(K)$ Language Modeling: The Full General Model}
 \label{sec:glk_lm}
@@ -2330,49 +2074,14 @@ Our results demonstrate that the gauge-theoretic framework scales to production 
 The full representational capacity is $K + n_{\mathrm{heads}} \cdot d_{\mathrm{head}}^2$ dimensions per token (990 for $K=90$ with 9 heads of $\mathrm{GL}(10)$), yet only the $K$-dimensional belief means $\mu$ couple to the output. This is a structural consequence of gauge covariance: the observation model must depend only on gauge-covariant quantities, not on the internal frame parameters. The gauge frames influence predictions indirectly through the transport operators $\Omega_{ij}$ that mediate belief aggregation during VFE iterations. Increasing $K$ (with multi-head $\mathrm{GL}(d_{\text{head}})$ to control matrix exponential cost) is the theoretically justified route to higher output capacity.
 
 
-\subsection{Bayesian Uncertainty Quantification}
-\label{sec:bayesian_validation}
-
-The preceding analyses report point estimates and frequentist confidence intervals throughout. To provide proper uncertainty quantification for the central empirical claims, we constructed five independent Bayesian models using Hamiltonian Monte Carlo (NUTS; \citealp{hoffman2014no}) implemented in PyMC~5 \citep{salvatier2016probabilistic}, sampling 2{,}000 draws per chain with 1{,}000 tuning iterations. All models achieved $\hat{R} < 1.05$ and effective sample sizes exceeding 1{,}000 for primary parameters, with no pathological divergences on the quantities of interest.
-
-\subsubsection{Hierarchical Correlation Model}
-
-The raw grand mean $\bar{r} = 0.804$ treats all 144 heads as exchangeable, ignoring the nested structure of heads within layers. We fit a three-level hierarchical model in Fisher-$z$ space:
-\begin{equation}
-z_h = \mu_{\mathrm{grand}} + \delta_{\ell(h)} + \epsilon_h, \qquad r_h = \tanh(z_h),
-\end{equation}
-where $\delta_\ell \sim \mathcal{N}(0, \sigma_{\mathrm{layer}}^2)$ captures between-layer variation and $\epsilon_h \sim \mathcal{N}(0, \sigma_{\mathrm{head}}^2)$ captures within-layer variation. Each head's observed correlation enters the likelihood with its empirically measured standard error, propagated to $z$-space via the delta method. The model places weakly informative priors: $\mu_{\mathrm{grand}} \sim \mathcal{N}(0.8,\, 0.5)$, $\sigma_{\mathrm{layer}} \sim \mathrm{HalfNormal}(0.5)$, $\sigma_{\mathrm{head}} \sim \mathrm{HalfNormal}(0.3)$.
-
-The posterior grand mean correlation is $\bar{r}_{\mathrm{post}} = 0.867$ (94\% HDI $[0.808,\, 0.915]$). The upward shift from the raw mean of 0.804 reflects hierarchical shrinkage: the model partially pools the minority of low-$r$ heads toward the population mean, recognizing that extreme values from heads with higher measurement uncertainty are likely regression-to-the-mean artifacts. The within-layer standard deviation ($\hat{\sigma}_{\mathrm{head}} = 0.530$ in $z$-space) exceeds the between-layer standard deviation ($\hat{\sigma}_{\mathrm{layer}} = 0.357$), indicating that most of the variance in $\alpha$--$\beta$ agreement is attributable to functional specialization across heads within the same layer rather than to systematic differences between layers. The posterior fraction of heads exceeding $r > 0.8$ is $0.647$ (94\% HDI $[0.639,\, 0.653]$), consistent with the observed fraction of 93/144 $= 0.646$.
-
-The layer-level posteriors reveal structure invisible in the aggregate statistics. Layers 4--8 and 11 achieve posterior mean correlations exceeding 0.91, while layers 0--3 cluster near 0.77. This gradient is consistent with the expectation that deeper layers develop more structured semantic representations, for which the isotropic-covariance KL approximation is tighter, though it may also reflect increasing low-rank structure in the learned projections.
-
-\subsubsection{Temperature Posterior}
-
-Rather than reporting the empirical optimum $\tau = 19.0$ as a point estimate, we fit a Bayesian response-surface model to the 10-point temperature sweep data. The correlation as a function of $\tau$ is modeled as a concave quadratic in log-space, $r(\tau) = r_{\max} - \kappa(\log\tau - \log\tau_{\mathrm{opt}})^2$, with priors $\log\tau_{\mathrm{opt}} \sim \mathcal{N}(\log 16, 0.3)$ centered on the theoretical prediction $\tau = 2\sqrt{d_k} = 16$, $r_{\max} \sim \mathcal{N}(0.81, 0.05)$, and $\kappa \sim \mathrm{HalfNormal}(0.02)$. The observation-level variance combines estimated standard errors from the bootstrap confidence intervals with a residual noise term.
-
-The posterior for the optimal temperature is $\hat{\tau}_{\mathrm{opt}} = 21.2$ (94\% HDI $[11.6,\, 31.5]$), with the theoretical prediction $\tau = 16$ falling well within the credible interval. The posterior deviation from theory is $+32\%$ (94\% HDI $[-27\%,\, +97\%]$), meaning the data cannot distinguish between the theoretical prediction and the empirical point estimate at $\tau = 19$; both are consistent with the posterior. The breadth of the HDI reflects the flatness of the response curve near the optimum (Figure~\ref{fig:temperature_sweep}): the correlation varies by only 0.005 between $\tau = 15$ and $\tau = 25$, providing limited information to localize the peak precisely. This is itself informative: the theory predicts a broad optimum arising from smooth dimensional corrections rather than a sharp resonance, and the posterior width confirms this.
-
-\subsubsection{Key-Norm Bias Effect Sizes}
-
-The frequentist analysis reports mean absolute correlations ($\overline{|\rho_\alpha|} = 0.139$, $\overline{|\rho_\beta|} = 0.256$) without formal comparison of effect magnitude. To quantify the difference, we fit a hierarchical model with population-level means and per-head random effects for each attention type, placing weakly informative priors $\mu_\alpha \sim \mathcal{N}(0, 0.5)$ and $\mu_\beta \sim \mathcal{N}(-0.5, 0.5)$ on the signed population means.
-
-The posterior population mean for dot-product key-norm correlation is $\hat{\mu}_\alpha = -0.144$ (94\% HDI $[-0.195,\, -0.096]$), with absolute magnitude $|\hat{\mu}_\alpha| = 0.144$, consistent with the reported $\overline{|\rho_\alpha|} = 0.139$. For KL-distance attention, the posterior population mean is $\hat{\mu}_\beta = -0.475$ (94\% HDI $[-0.507,\, -0.447]$). The consistently negative sign across all 144 heads matches the theoretical prediction that the $-\lambda\|K_j\|^2$ bias term suppresses attention to high-norm keys. The standardized effect size is Cohen's $d = 1.43$ (94\% HDI $[1.08,\, 1.88]$), a large effect by conventional criteria, and the posterior probability that KL-distance attention exhibits stronger key-norm sensitivity than dot-product attention is $P(|\mu_\beta| > |\mu_\alpha|) = 1.000$ across all posterior samples.
-
-\subsubsection{Multi-Model and Sequence-Length Analyses}
-
-A partial-pooling model across the five validated architectures yields a population mean correlation of $\hat{\mu}_{\mathrm{pop}} = 0.758$ (94\% HDI $[0.653,\, 0.853]$). The shrinkage is negligible (maximum $|\Delta r| < 0.001$), confirming that the five models are sufficiently well-separated that partial pooling adds little information beyond the individual estimates. ALBERT ($\hat{r} = 0.850$, 94\% HDI $[0.835,\, 0.865]$) and BERT-base ($\hat{r} = 0.803$, 94\% HDI $[0.781,\, 0.825]$) remain clearly above the population mean, while RoBERTa ($\hat{r} = 0.612$, 94\% HDI $[0.601,\, 0.624]$) remains clearly below.
-
-For sequence-length degradation, we model the correlation as $r(N) = r_0 - \beta_{\mathrm{decay}} \log_2(N/32)$, finding a degradation rate of $\hat{\beta}_{\mathrm{decay}} = 0.016$ per doubling (94\% HDI $[0.006,\, 0.024]$). The posterior predictive correlation at $N = 512$ is $\hat{r} = 0.731$ (94\% HDI $[0.704,\, 0.759]$), and extrapolation to $N = 1024$ gives $\hat{r} = 0.715$ (94\% HDI $[0.681,\, 0.752]$), indicating that the $\alpha$--$\beta$ correspondence remains above 0.7 well beyond the training sequence lengths of typical BERT models. The implied half-life, defined as the number of doublings from $N = 32$ required to reach $r = 0.5$, has posterior mean 27.6 doublings (94\% HDI $[10.5,\, 35.0]$), corresponding to sequence lengths far beyond any practical transformer context window.
+% Bayesian Uncertainty Quantification moved to Supplementary Appendix E
 
 
 \section{Discussion}
 
 \subsection{Summary of Contributions}
 
-\paragraph{Standard attention as a degenerate limit.} The BERT validation (Section~5.2) demonstrates quantitative agreement between gauge-aligned KL attention and standard dot-product attention across 105 diverse passages and all 144 heads ($\bar{r} = 0.804$ at optimal $\tau$; Figure~\ref{fig:temperature_sweep}), with the entropy of the two distributions closely matched ($H(\beta)/H(\alpha) = 1.076$; Section~\ref{sec:entropy_analysis}). A hierarchical Bayesian model accounting for the nested structure of heads within layers yields a shrinkage-corrected grand mean of $\bar{r}_{\mathrm{post}} = 0.867$ (94\% HDI $[0.808,\, 0.915]$; Section~\ref{sec:bayesian_validation}), with the upward shift from 0.804 reflecting partial pooling of the minority of low-correlation heads. The multi-model validation (Section~\ref{sec:multi_model}) extends this to five architectures ($\bar{r} > 0.6$ for all, $\bar{r} = 0.851$ for ALBERT), and the sequence-length analysis (Section~\ref{sec:seqlen}) confirms robustness from $N = 16$ to $N = 512$ tokens. Beyond the correlation itself (which partly reflects the algebraic relationship between squared distance and dot product under approximately constant norms), the framework generates predictions of varying discriminative power. The most distinctive is the temperature prediction: the Bayesian posterior for the optimal temperature is $\hat{\tau}_{\mathrm{opt}} = 21.2$ (94\% HDI $[11.6,\, 31.5]$), encompassing both the theoretical prediction $\tau = 2\sqrt{d_k} = 16$ and the empirical point estimate $\tau = 19$, with the breadth of the credible interval reflecting the flat response plateau predicted by smooth dimensional corrections. The key-norm bias has the predicted sign, with a Bayesian effect size of Cohen's $d = 1.43$ (94\% HDI $[1.08,\, 1.88]$) confirming that KL-distance attention exhibits substantially stronger key-norm sensitivity than dot-product attention ($P(|\mu_\beta| > |\mu_\alpha|) = 1.000$). Deeper layers exhibit stronger correlations, a trend consistent with increasingly structured representations, though this observation is also compatible with alternative explanations such as increasing low-rank structure in deeper layers.
-
-\paragraph{Per-head temperature as a confirmed prediction.} The per-head temperature analysis (Section~\ref{sec:temp_dispersion}) provides the most discriminative empirical test of the framework. The theory predicts that each head carries an intrinsic attention temperature through its belief covariance $\sigma_a^2$ (Section~\ref{sec:multihead}), and that models with heterogeneous implicit per-head temperatures should show degraded agreement with any single-$\tau$ KL approximation. This prediction is confirmed across all five architectures: the ranking by temperature dispersion anti-correlates with the ranking by $\alpha$--$\beta$ agreement, with the degree of degradation tracked by the coefficient of variation of per-head logit standard deviation (CV $= 0.367$ for BERT-base vs.\ $0.787$ for RoBERTa). ALBERT serves as a natural control: its weight-sharing constrains the gauge transport to be layer-constant, producing uniformly behaved heads and the highest single-$\tau$ correlation ($\bar{r} = 0.851$) despite the most suboptimal global temperature.
+\paragraph{Standard attention as a degenerate limit.} The BERT validation (Supplementary Appendix~E) confirms quantitative agreement between gauge-aligned KL attention and standard dot-product attention across 105 diverse passages and five pretrained architectures (grand mean $\bar{r} = 0.804$ at the theory-predicted optimal temperature $\tau \approx 2\sqrt{d_k}$, with entropy matching $H(\beta)/H(\alpha) = 1.076$). We note that this high correlation follows in part from an algebraic identity under approximately constant key-norms; the non-trivial content lies in the quantitative predictions (temperature scaling, key-norm bias with Cohen's $d = 1.43$, per-head temperature dispersion explaining cross-model variation). We treat the BERT analysis as a consistency check; the GL($K$) language model provides the stronger empirical test.
 
 \paragraph{The unreduced framework as a language model.} The $\mathrm{GL}(15)$ gauge VFE achieves test perplexity 71.6 on WikiText-103 (Table~\ref{tab:glk_results}), without MLPs, pointwise activation functions, or learned attention projections. Embedding-matched and parameter-matched baselines (Table~\ref{tab:glk_results}) clarify the nature of this result. At matched embedding dimension ($d_{\text{model}} = 90$), a standard transformer achieves only PPL~118.6 with 4.6M parameters, while the parameter-matched standard transformer (84.2M params, $d_{\text{model}} = 1{,}280$) achieves PPL~48.5 but requires $14\times$ the embedding dimension. The gauge VFE (81.4M params) thus outperforms standard transformers at comparable embedding dimensions by $1.66\times$, but underperforms when the standard transformer can invest its parameters in a much larger embedding space. This indicates that gauge transport and KL-divergence attention provide an effective mechanism for compensating for low embedding dimensionality through geometric structure, though the per-token covariance and gauge frame parameters incur a parameter overhead relative to shared weight matrices. That gauge-covariant variational inference alone, with no neural architecture beyond a linear output projection, produces a functioning language model supports the explanatory claim that transformers succeed in part because they approximate the underlying mathematical structure of distributed variational inference.
 
@@ -2400,74 +2109,13 @@ Path-independence alone is insufficient to explain transformer success---bag-of-
 
 Natural language also exhibits phenomena where semantic transport appears genuinely path-dependent: irony, pragmatic inference, context-dependent ambiguity, and culturally situated meaning are cases where the ``same'' utterance acquires different meaning depending on the interpretive path through context. These phenomena are abundant and functional, not pathological, so the conjecture should be understood as applying to the compositional-semantic core of language rather than to all aspects of meaning. This motivates a testable prediction: if a non-flat gauge architecture (one in which $\Omega_{ij}$ on each edge is an independent group element, unconstrained by the cocycle condition) were trained on tasks requiring pragmatic or contextual inference, the learned holonomy $H_{ijk} = \Omega_{ij}\,\Omega_{jk}\,\Omega_{ki}$ should deviate measurably from the identity on precisely those token triples where meaning transport is context-dependent. Measuring learned holonomy in such architectures would provide a non-circular test of whether the flat bundle approximation breaks down where predicted.
 
-\subsection{Conjecture: The Transformer as a Renormalization Group Fixed Point}
-\label{sec:rg_universality}
-
-The three-limit reduction of Section~\ref{sec:transformer_limit} can be understood not merely as a sequence of algebraic simplifications but as a \emph{renormalization group (RG) flow} on the space of gauge-theoretic VFE models. We conjecture that the standard transformer occupies a stable infrared fixed point of this flow, and that the gauge VFE and standard transformers belong to the same universality class with different efficiency frontiers.
-
-\subsubsection{Theory Space and Coupling Constants.}
-
-Each model in the gauge VFE family is specified by three coupling constants measuring deviation from the transformer limit:
-\begin{align}
-g_1 &= \|\Sigma_i - \sigma^2 I\| / \sigma^2 & &\text{(anisotropy: deviation from isotropic covariance)}, \label{eq:g1_def} \\
-g_2 &= \|\Omega_{ij} - \Omega\| / \|\Omega\| & &\text{(gauge variation: deviation from constant transport)}, \label{eq:g2_def} \\
-g_3 &= \|H_{ijk} - I\| & &\text{(holonomy: deviation from flat bundle)}, \label{eq:g3_def}
-\end{align}
-where $H_{ijk} = \Omega_{ij}\,\Omega_{jk}\,\Omega_{ki}$ is the holonomy around the triangle $(i,j,k)$.  The transformer limit corresponds to $g_1^* = g_2^* = g_3^* = 0$.
-
-\subsubsection{Coarse-Graining Map.}
-
-Define a coarse-graining transformation $R_n$ that groups $n$ tokens into a single \emph{meta-agent}. For a cluster $A$ of $n$ tokens, the meta-agent beliefs are:
-\begin{equation}
-\mu_A = \frac{1}{|A|} \sum_{i \in A} \mu_i, \qquad
-\Sigma_A = \frac{1}{|A|} \sum_{i \in A} \Sigma_i + \mathrm{Var}_A(\mu),
-\label{eq:meta_agent_beliefs}
-\end{equation}
-where $\mathrm{Var}_A(\mu) = \frac{1}{|A|} \sum_{i \in A} (\mu_i - \mu_A)(\mu_i - \mu_A)^\top$ is the within-cluster mean variance. The meta-agent transport is $\Omega_{AB} = \frac{1}{|A||B|} \sum_{i \in A, j \in B} \Omega_{ij}$.
-
-\subsubsection{Scaling Dimensions.}
-
-Under $R_n$, the coupling constants transform as:
-\begin{equation}
-g_1' = n^{-1/2}\, g_1, \qquad g_2' = n^{-1}\, g_2, \qquad g_3' = n^{-2}\, g_3,
-\label{eq:rg_scaling}
-\end{equation}
-where the exponents follow from the central limit theorem (averaging $n$ independent traceless perturbations $\Delta_i$ reduces the norm by $1/\sqrt{n}$), the law of large numbers applied to pairwise transport (averaging over $n^2$ pairs), and the product structure of holonomy (three transport factors each decaying as $1/n$).  The linearised RG matrix at the fixed point is diagonal:
-\begin{equation}
-\mathcal{R} = \begin{pmatrix} n^{-1/2} & 0 & 0 \\ 0 & n^{-1} & 0 \\ 0 & 0 & n^{-2} \end{pmatrix},
-\label{eq:rg_matrix}
-\end{equation}
-with all eigenvalues strictly less than one.  The corresponding scaling dimensions are $y_1 = -\tfrac{1}{2}$, $y_2 = -1$, $y_3 = -2$---all negative, classifying every operator as \emph{irrelevant} in the RG sense.
-
-\begin{conjecture}[RG universality of the transformer limit]
-\label{conj:rg_universality}
-Let $\mathcal{T}(K, N, g_1, g_2, g_3)$ denote the family of gauge VFE models with belief dimension $K$, sequence length $N$, and coupling constants $(g_1, g_2, g_3)$ as defined in Eqs.~\eqref{eq:g1_def}--\eqref{eq:g3_def}. Let $R_n: \mathcal{T} \to \mathcal{T}$ be the coarse-graining map~\eqref{eq:meta_agent_beliefs}. Then:
-\begin{enumerate}
-\item[(i)] \textbf{Fixed point.} $g_1^* = g_2^* = g_3^* = 0$ is a fixed point of $R_n$ for all $n \geq 2$ and $K \geq 1$.
-\item[(ii)] \textbf{Stability.} All scaling dimensions are negative: $y_1 = -\tfrac{1}{2}$, $y_2 = -1$, $y_3 = -2$.  The fixed point is infrared-stable.
-\item[(iii)] \textbf{Universality.} All finite-coupling models flow to the transformer limit under repeated coarse-graining, with $\|g(\zeta) - g^*\| \sim b^{y_1 \zeta}$ where $b$ is the rescaling factor and $\zeta$ the RG step.
-\item[(iv)] \textbf{Emergent anisotropy.} The coarse-graining map generates anisotropy from within-cluster variance: even at $g_1 = 0$, $\Sigma_A = \sigma^2 I + \mathrm{Var}_A(\mu)$ is generically anisotropic. Transformers absorb this structure into $W_Q, W_K$; the gauge VFE tracks it explicitly in $\Sigma_i$.
-\item[(v)] \textbf{Efficiency gap.} The absorbed degrees of freedom scale as $O(K^2)$, predicting an $O(\sqrt{K})$ sample-efficiency advantage for the gauge VFE over parameter-matched transformers.
-\end{enumerate}
-\end{conjecture}
-
-The conjecture has several immediate consequences. First, the \emph{ordering} of the three limits in Section~\ref{sec:transformer_limit} is not arbitrary but dictated by the RG: holonomy vanishes fastest ($y_3 = -2$), then gauge variation ($y_2 = -1$), then anisotropy ($y_1 = -\tfrac{1}{2}$), matching the natural hierarchy Limit~3 $\to$ Limit~2 $\to$ Limit~1.  Second, the crossover exponent $\varphi = y_2/y_1 = 2$ quantifies how much faster gauge variation decays relative to anisotropy.  Third, the critical exponents $\nu = -1/y_1 = 2$ (correlation length) and $\eta = 0$ (anomalous dimension) place the fixed point in a Gaussian (mean-field) universality class, consistent with the CLT basis of the scaling argument.
-
-\paragraph{Emergent anisotropy and LayerNorm.}
-The generation of anisotropy under coarse-graining~\eqref{eq:meta_agent_beliefs} provides a geometric interpretation of LayerNorm: it acts as a \emph{projection back toward the isotropic submanifold} at each layer, counteracting the emergent anisotropy that the RG flow produces.  Without LayerNorm, the transformer would drift away from the fixed point at each layer; with it, the network is repeatedly returned to a neighborhood of $g_1 = 0$.  The gauge VFE, by contrast, tracks the full anisotropic covariance $\Sigma_i$ and requires no such projection.
-
-\paragraph{Compute crossover.}
-Both architectures share the same scaling exponents (universality class), but differ in per-step computational cost: the gauge VFE requires approximately $10$--$30\times$ the FLOPs of standard attention due to matrix exponentials and per-pair KL divergences.  The efficiency gap from part~(v) of the conjecture predicts a crossover compute budget $C^* = O(K^2 V)$ (where $V$ is the vocabulary size) below which the gauge VFE's stronger inductive bias compensates for its higher per-step cost, and above which the transformer's cheaper iterations dominate.
-
 \subsection{Limitations}
 
-Our BERT validation tested the flat bundle limit where all frames are globally aligned and the connection is trivial. This is the appropriate limit for comparison with standard transformers, which lack explicit gauge structure, but it does not probe the regime where the framework is most distinctive. The multi-model validation (Section~\ref{sec:multi_model}) extends the results to five architectures (BERT-base, BERT-large, DistilBERT, RoBERTa, ALBERT), all sharing $d_{\text{head}} = 64$ and English-language pretraining. The temperature dispersion diagnostic (Section~\ref{sec:temp_dispersion}) resolves the principal anomaly in the multi-model comparison --- RoBERTa's lower $\alpha$--$\beta$ correlation --- by identifying per-head temperature heterogeneity as the dominant explanatory variable, a finding that is itself predicted by the framework's per-head $\kappa_a$ structure. Extending to autoregressive architectures (GPT, LLaMA), non-64 head dimensions, larger model scales, and non-English languages remains future work.
+The BERT validation (Supplementary Appendix~E) tested the flat bundle limit where all frames are globally aligned and the connection is trivial. This is the appropriate limit for comparison with standard transformers, which lack explicit gauge structure, but it does not probe the regime where the framework is most distinctive. Extending to autoregressive architectures (GPT, LLaMA), non-64 head dimensions, larger model scales, and non-English languages remains future work.
 
-The current comparison further focused on the scaled isotropic limit where uncertainty covariances $\Sigma_i = \sigma^2 I$ are absorbed into learned projections. The full theory incorporates non-trivial covariance matrices $\Sigma_i$ encoding per-token uncertainty, corresponding to ``fuzzy'' vector embeddings in unique token/agent frames. Comparing this against transformers with explicit uncertainty estimation (Bayesian neural networks, ensemble methods) remains untested.
+The gauge VFE language model uses 81.4M parameters yet achieves worse perplexity than a parameter-matched standard transformer (PPL~71.6 vs.\ 48.5 at 84.2M). The parameter overhead arises from per-token covariance matrices $\Sigma_i$ and gauge frame parameters $\phi_i$. At matched embedding dimension ($d_{\text{model}} = 90$), a standard transformer achieves only PPL~118.6 (4.6M params), and the gauge VFE outperforms it by $1.66\times$, indicating that gauge structure compensates for low embedding dimensionality at the cost of higher total parameter count. Whether architectural modifications (parameter sharing across tokens, low-rank covariance parameterizations) can close this efficiency gap while preserving the gauge-theoretic structure is an open question.
 
-The gauge VFE language model uses 81.4M parameters yet achieves worse perplexity than a parameter-matched standard transformer (PPL~71.6 vs.\ 48.5 at 84.2M). However, the embedding-matched baselines (Table~\ref{tab:glk_results}) reveal that comparing at matched embedding dimension tells a different story: at $d_{\text{model}} = 90$, a standard transformer achieves only PPL~118.6 (4.6M params), and the gauge VFE outperforms it by $1.66\times$. The parameter overhead arises from the per-token covariance matrices $\Sigma_i$ and gauge frame parameters $\phi_i$, which encode uncertainty and geometric structure that standard transformers absorb into larger shared embedding and weight matrices. Whether architectural modifications (parameter sharing across tokens, low-rank covariance parameterizations) can close this efficiency gap while preserving the gauge-theoretic structure is an open question. Preliminary results on WikiText-ja (Japanese) confirm that the gauge VFE framework generalizes beyond English; full cross-lingual validation remains future work.
-
-The gauge VFE is computationally more expensive than standard attention, primarily due to the matrix exponential $\exp(\phi_i \cdot G)$ required for transport operators and the need for per-pair KL divergences rather than batched dot products. We emphasize that this is an explanatory theory: the goal is not to produce state-of-the-art language models but to provide a mathematical foundation for understanding why attention-based architectures work. Just as statistical mechanics explains thermodynamics without replacing steam engines, the gauge-theoretic framework explains transformers without replacing them. The analogy extends further: statistical mechanics also predicted new phenomena (Brownian motion, the fluctuation-dissipation theorem) that were subsequently confirmed. The temperature prediction $\tau \approx 2\sqrt{d_k}$ (in the squared-distance form) is a genuine analogue: the $\sqrt{d_k}$ arises from concentration of measure and the factor of $2$ from the $\frac{1}{2}$ prefactor in the Gaussian KL divergence, yielding a zero-free-parameter prediction that matches the empirical optimum to within 19\%. The key-norm bias prediction (that residual key-norm variance introduces a systematic, temperature-dependent correction to attention weights) is similarly derived from the theory rather than fitted, though its modest effect size ($\bar{\rho} = 0.256$) leaves room for competing explanations of the same phenomenon.
+The gauge VFE is computationally more expensive than standard attention, primarily due to matrix exponentials and per-pair KL divergences. We emphasize that this is an explanatory theory: the goal is not to produce state-of-the-art language models but to provide a mathematical foundation for understanding why attention-based architectures work. Just as statistical mechanics explains thermodynamics without replacing steam engines, the gauge-theoretic framework explains transformers without replacing them.
 
 \subsection{Future Directions}
 
@@ -2497,80 +2145,17 @@ The full VFE prescribes coupled dynamics at both timescales simultaneously, with
 
 The isotropic covariance limit (Section~\ref{par:ok_transport}) requires $\Omega_{ij} \in \mathrm{O}(K)$ for both the vanishing of the geometric bias $S(\Omega_{ij}) = 0$ and the preservation of isotropic covariance under transport.  While the matrix exponential parameterization restricts to the identity component $\mathrm{SO}(K)$, the extension to full $\mathrm{O}(K)$ via per-agent diagonal reflections $R_i = \mathrm{diag}(s_i)$ (Eq.~\ref{eq:ok_transport}) introduces a controlled discrete degree of freedom without disrupting the continuous gauge dynamics.  The sign vectors $s_i \in \{-1,+1\}^K$ are learnable via the straight-through estimator, and the factorization $\mu_i \mapsto s_i \odot \mu_i$ (Eq.~\ref{eq:ok_mahalanobis}) means that reflections are applied at the embedding level, leaving all downstream attention and VFE computations unchanged.  Whether this additional discrete gauge freedom improves language modeling performance in the isotropic regime, and whether the learned sign vectors develop interpretable structure (e.g., clustering by semantic or syntactic category), are experimental questions that probe the role of the disconnected component of $\mathrm{O}(K)$ in natural language representation.
 
-\subsubsection{RG Universality: Testable Predictions.}
+\subsubsection{Renormalization Group Universality.}
 
-Conjecture~\ref{conj:rg_universality} generates several falsifiable predictions, organized by computational requirements:
-
-\paragraph{Workstation-scale experiments ($<50$ GPU-hours).}
-\begin{enumerate}
-\item \emph{Sample efficiency grows with $K$.} Train gauge VFE and standard transformers at matched parameter counts for $K \in \{8, 16, 32, 64\}$ on WikiText-103. The ratio $R(K) = D_{\mathrm{TF}}(K) / D_{\mathrm{VFE}}(K)$ of tokens needed to reach a target perplexity should grow as $R(K) \propto \sqrt{K}$. The null hypothesis is $R(K) = \mathrm{const}$.
-\item \emph{Same scaling exponent.} Both architectures should exhibit the same Chinchilla-style exponent $\beta$ in $\mathrm{PPL}(D) \sim D^{-\beta}$, differing only in the prefactor. The null hypothesis is $\beta_{\mathrm{VFE}} \neq \beta_{\mathrm{TF}}$ at $p < 0.05$.
-\item \emph{Coarse-graining exponents.} Extract attention matrices and beliefs from trained checkpoints, apply spectral coarse-graining, and measure how $g_1$, $g_2$, $g_3$ scale with cluster size $n$. The predicted exponents ($-\tfrac{1}{2}$, $-1$, $-2$) can be tested against the null of equal decay rates.
-\item \emph{Emergent anisotropy.} Decompose meta-agent covariances into $\sigma^2 I + \mathrm{Var}_A(\mu)$ and verify that the within-cluster variance is anisotropic (condition number $> 1 + \epsilon$) even when the original token covariances are isotropic.
-\item \emph{LayerNorm as isotropy projector.} Measure the anisotropy (condition number of the representation covariance matrix) before and after LayerNorm at each layer in a pre-trained transformer. The prediction is that LayerNorm systematically reduces anisotropy, with the effect size increasing at deeper layers.
-\end{enumerate}
-
-\paragraph{At-scale predictions ($>1000$ GPU-hours).}
-\begin{enumerate}
-\item \emph{Compute crossover.} At large scale, the transformer should match or exceed gauge VFE performance at $C > C^* = O(K^2 V)$ FLOPs, with the gauge VFE dominating for $C < C^*$.
-\item \emph{Emergent gauge structure.} As model scale increases, the learned $W_Q W_K^\top$ in standard transformers should increasingly approximate SPD structure (all eigenvalues positive), converging toward the gauge VFE's manifold constraint.
-\item \emph{Cross-lingual universality.} The scaling exponent $\beta$ should be language-independent (universality class), while the prefactor varies with linguistic typology.
-\end{enumerate}
-
-\subsubsection{Numerical Validation of the RG Scaling Predictions.}
-\label{sec:rg_numerical}
-
-We validate the scaling predictions of Conjecture~\ref{conj:rg_universality} using a synthetic VFE system with $K = 90$ belief dimensions and $N = 128$ tokens, applying binary spectral coarse-graining ($b = 2$) for seven RG levels. The validation proceeds in two stages: first, a direct CLT test that isolates the pure mathematical content of the scaling predictions; second, a graph-based RG flow that includes the finite-size effects of spectral clustering on a real attention graph.
-
-\paragraph{CLT validation.}
-For each coupling, we generate $200$ independent trials of $n$-token averages ($n = 2, 4, \ldots, 64$) and fit the decay exponent via log-log regression. The results confirm the predicted exponents to three significant figures:
-\begin{center}
-\begin{tabular}{lcc}
-\toprule
-\textbf{Coupling} & \textbf{Measured} & \textbf{Predicted} \\
-\midrule
-$y_1$ (anisotropy $g_1$) & $-0.500$ & $-0.500$ \\
-$y_2$ (gauge variation $g_2$) & $-1.000$ & $-1.000$ \\
-$y_3$ (holonomy $\|H - I\|$) & $-1.003$ & $-1.000$ \\
-$y_3$ (action $\|H - I\|^2$) & $-2.005$ & $-2.000$ \\
-\bottomrule
-\end{tabular}
-\end{center}
-The ratio of averaged to predicted norms at each $n$ remains within $1\%$ of unity across all couplings and all coarse-graining levels, confirming that the CLT basis of the scaling argument~\eqref{eq:rg_scaling} is exact in the large-$K$ regime.
-
-\paragraph{Graph-based RG flow.}
-We construct a synthetic gauge VFE system with initial couplings $g_1 = 0.3$, $g_2 \approx 0.20$, $g_3 \approx 0.03$ and apply spectral coarse-graining on the attention graph. The fit excludes level~$0$ (the microscopic initial condition with constructed exact coupling values) and uses $\zeta = \log(N_1 / N_\ell)$ as the RG scale, where $N_1 = 64$ is the first coarse-grained level. Table~\ref{tab:rg_flow} reports the full flow.
-
-\begin{table}[t]
-\centering
-\caption{RG flow of gauge couplings under binary spectral coarse-graining ($K = 90$, $N = 128$). The original-channel anisotropy $g_1^{(\mathrm{orig})}$ tracks the inherited traceless perturbation; the total anisotropy $g_1^{(\mathrm{tot})}$ includes the emergent within-cluster variance $\mathrm{Var}_A(\mu)$. Level~$0$ is the microscopic initial condition and is excluded from exponent fits.}
-\label{tab:rg_flow}
-\begin{tabular}{rrccccc}
-\toprule
-\textbf{Level} & $N_\ell$ & $g_1^{(\mathrm{tot})}$ & $g_1^{(\mathrm{orig})}$ & $g_1^{(\mathrm{emer})}$ & $g_2$ & $g_3$ \\
-\midrule
-0 & 128 & 0.300 & 0.300 & 0.000 & 0.198 & 0.035 \\
-1 & 64 & 42.47 & 0.212 & 2.259 & 0.138 & 0.311 \\
-2 & 32 & 35.29 & 0.150 & 1.064 & 0.096 & 0.422 \\
-3 & 16 & 33.15 & 0.106 & 0.692 & 0.066 & 0.477 \\
-4 & 8 & 47.29 & 0.075 & 1.367 & 0.044 & 0.505 \\
-5 & 4 & 46.64 & 0.053 & 1.141 & 0.027 & 0.518 \\
-6 & 2 & 34.74 & 0.038 & 0.636 & 0.013 & 0.000 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The graph-based exponent for the original-channel anisotropy is $y_1^{(\mathrm{orig})} = -0.499$ (predicted $-0.500$), confirming that the inherited traceless perturbation decays as $1/\sqrt{n}$ even through spectral clustering. The total anisotropy $g_1^{(\mathrm{tot})}$ does not decay ($y_1^{(\mathrm{tot})} \approx +0.01$), as predicted by Conjecture~\ref{conj:rg_universality}(iv): the emergent within-cluster variance $\mathrm{Var}_A(\mu)$ dominates at every coarse-grained level, producing $O(1)$ anisotropy even though the microscopic perturbation vanishes. This confirms that coarse-graining generates anisotropy as an irreducible feature of the RG flow, providing the geometric mechanism that LayerNorm must counteract.
-
-The gauge variation and holonomy exponents on the attention graph ($y_2 = -0.66$, $y_3 = +0.17$) deviate from the CLT predictions, which we attribute to finite-size effects inherent in spectral clustering: at $N = 128$ with binary coarse-graining, the deepest levels contain only $4$--$8$ meta-agents, and the clustering assignments introduce correlations absent from the pure-averaging CLT analysis. The sign and magnitude of these deviations are consistent with the fact that spectral clustering on a finite attention graph does not produce independent, equal-size clusters. The CLT validation confirms that the mathematical content of the scaling predictions is exact; the graph-based deviations quantify the finite-size corrections that would vanish in the $N \to \infty$ limit.
+The three-limit reduction to standard attention can be understood as a renormalization group (RG) flow in which coarse-graining drives the gauge VFE couplings toward the transformer fixed point. We conjecture that the standard transformer occupies a stable infrared fixed point with scaling dimensions $y_1 = -1/2$ (anisotropy), $y_2 = -1$ (gauge variation), $y_3 = -2$ (holonomy), all irrelevant. The full conjecture, testable predictions, and numerical validation on a synthetic VFE system are presented in Supplementary Appendix~F.
 
 \section{Conclusion}
 
-We have presented a gauge-theoretic framework in which attention emerges as the communication mechanism of distributed variational inference. Treating language as a dynamic informational system whereby agents exchange beliefs under uncertainty via gauge-covariant variational free energy minimization provides the mathematically natural formalism, with attention weights, transport operators, and gradient updates each corresponding to identifiable information-theoretic quantities within a single variational objective.
+We have presented a gauge-theoretic framework in which attention emerges as the communication mechanism of distributed variational inference. Modeling each token as a Gaussian agent on a statistical fiber bundle, we derived the generalized attention weight $\beta_{ij} = \softmax(-D_{\KL}[q_i \| \Omega_{ij} q_j]/\tau)$ from variational free energy minimization, and showed that standard transformer attention is recovered as a degenerate limit under successive restrictions (isotropic covariances, flat gauge connection).
 
-The $\mathrm{GL}(K)$ invariance theorem (Theorem~\ref{thm:glk_invariance}) reveals that standard transformers already implement this gauge structure: the learned projections $W_Q, W_K$ are gauge transformations, and standard attention is recovered as a degenerate limit in which gauge degrees of freedom are absorbed into learned parameters. Our empirical results validate this perspective: the transformer validation confirms quantitative agreement between KL-based and dot-product attention across five architectures and 105 passages ($\bar{r} = 0.804$, $H(\beta)/H(\alpha) = 1.076$; Section~5.2), with the optimal temperature predicted from head dimension alone ($\tau \approx 2\sqrt{d}$). The per-head temperature dispersion diagnostic (Section~\ref{sec:temp_dispersion}) further demonstrates that the cross-model variation in $\alpha$--$\beta$ correlation is explained by the heterogeneity of implicit per-head temperatures --- a structural feature that the gauge framework's learnable $\kappa_a$ is designed to capture. The unreduced $\mathrm{GL}(K)$ gauge VFE achieves non-trivial language modeling surpassing classical baselines without neural components, with the model learning structured, head-specialized attention patterns through gauge transport and KL-divergence dynamics alone (Section~\ref{sec:glk_lm}).
+The $\mathrm{GL}(K)$ invariance theorem (Theorem~\ref{thm:glk_invariance}) reveals that standard transformers already implement this gauge structure: the learned projections $W_Q, W_K$ are gauge transformations with $W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$. The unreduced $\mathrm{GL}(K)$ gauge VFE achieves test perplexity 71.6 on WikiText-103 without MLPs, learned attention projections, or pointwise activation functions, surpassing classical baselines and outperforming standard transformers at matched embedding dimension by $1.66\times$. The model learns structured, head-specialized attention patterns through gauge transport and KL-divergence dynamics alone (Section~\ref{sec:glk_lm}), with learned gauge frames developing a dual structure of categorical separation in a low-dimensional subspace and within-category diversification in the bulk. A separate consistency check on frozen BERT confirms quantitative agreement between KL-based and dot-product attention in the degenerate limit (Supplementary Appendix~E).
 
-The framework further reveals a geometric interpretation of learning itself: the untrained network corresponds to a gauge-symmetric vacuum state whose degeneracy is broken by observations, with training acting as explicit symmetry breaking. We anticipate this perspective (that attention is gauge-covariant inference, and learning is symmetry breaking) will find application not only in machine learning but in understanding biological cognition, collective intelligence, and other domains where distributed agents must communicate under geometric constraints.
+The framework further reveals a geometric interpretation of learning itself: the untrained network corresponds to a gauge-symmetric vacuum state whose degeneracy is broken by observations, with training acting as explicit symmetry breaking. We anticipate this perspective---that attention is gauge-covariant inference, and learning is symmetry breaking---will find application not only in machine learning but in understanding biological cognition, collective intelligence, and other domains where distributed agents must communicate under geometric constraints.
 
 
 \subsection{Code Availability}
@@ -2586,7 +2171,7 @@ Claude Opus 4.5/4.6 was utilized for programming our variational free energy des
 
 \appendix
 
-\textbf{Note on appendix structure.} Standard differential geometry, covariance dynamics, gauge frame gradient derivations, and numerical method details are provided in the Supplementary Material (Appendices~A--D). The appendices below present results that are more central to the argument: Appendix~A establishes the conditional uniqueness of the forward KL divergence, and Appendix~B details the symmetry breaking simulations.
+\textbf{Note on appendix structure.} Standard differential geometry, covariance dynamics, gauge frame gradient derivations, and numerical method details are provided in the Supplementary Material (Appendices~A--D). The BERT validation, Bayesian uncertainty quantification, RG universality conjecture and numerical validation, and symmetry breaking simulations are also in the Supplementary Material (Appendices~E--G). Appendix~A below establishes the conditional uniqueness of the forward KL divergence.
 
 \section{Conditional Uniqueness of the Forward KL Divergence via Variational Duality}
 
@@ -2819,60 +2404,7 @@ C_{ij}=D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)}
 is a necessary consequence of the variational and geometric structure underlying agent-agent coordination. By Theorem~\ref{thm:glk_invariance}, the KL divergence is invariant under the full general linear group $\mathrm{GL}(K)$, which includes compact subgroups such as $\mathrm{SO}(N)$ and $\mathrm{SU}(N)$ and more.
 
 
-\section{Symmetry Breaking Simulations}
-\label{app:symmetry_breaking_sims}
-
-To investigate observation-driven symmetry breaking, we simulated 8 overlapping agents on a 2-dimensional flat base manifold under periodic boundary conditions, using $\mathrm{SO}(3)$ with the $\ell = 4$ irrep (9-dimensional representation space). All agents were initialized with identical models and $\gamma_{ij} = 0$.
-
-\subsubsection{Vacuum State}
-Without observations, all agent beliefs converge to a shared rotationally invariant vacuum state with identical norms (Figure~\ref{fig:mu_q_center_vacuum}), occupying the gauge orbit predicted by the symmetric vacuum theory.
-
-\begin{figure*}[t]
-  \centering
-  \includegraphics[width=0.85\textwidth]{attention/figs/Symmetric Vacuum.png}
-  \caption{Symmetric vacuum state: $\mu_Q^{\text{center}}$ tracking summary without observations. \textbf{Top:} Norm trajectories for all six agents, converging to a shared equilibrium value. \textbf{Middle left:} Symmetry measure $\mathrm{Var}(\|\mu\|)$ decays to machine precision, confirming gauge symmetry is preserved. \textbf{Middle right:} Population-averaged norm stabilizes. \textbf{Bottom left:} Phase-space projection (dimensions 0,\,1) showing agents collapsing to a common point. \textbf{Bottom right:} Final statistics confirming zero variance across agents and preserved gauge symmetry.}
-  \label{fig:mu_q_center_vacuum}
-\end{figure*}
-
-\subsubsection{Observation-Driven Symmetry Breaking}
-With randomly drawn Gaussian observations, symmetry breaks and agents flow toward unique norms (Figure~\ref{fig:mu_q_center_observed}), with distinct feature directions emerging as specialized modes of the previously symmetric space.
-
-\begin{figure*}[t]
-  \centering
-  \includegraphics[width=0.85\textwidth]{attention/figs/Symmetry Breaking.png}
-  \caption{Observation-driven symmetry breaking: $\mu_Q^{\text{center}}$ tracking summary with observations. \textbf{Top:} Norm trajectories diverge as each agent specializes to a distinct belief magnitude. \textbf{Middle left:} Symmetry measure $\mathrm{Var}(\|\mu\|)$ grows and saturates, indicating strong symmetry breaking. \textbf{Middle right:} Population-averaged norm increases as agents acquire information from observations. \textbf{Bottom left:} Phase-space projection (dimensions 0,\,1) showing agents separating into distinct trajectories. \textbf{Bottom right:} Final statistics confirming high variance across agents and strong symmetry breaking.}
-  \label{fig:mu_q_center_observed}
-\end{figure*}
-
-These simulations use a different gauge group ($\mathrm{SO}(3)$) and base manifold dimension (2D) than the language modeling experiments ($\mathrm{GL}(10)$, 0D). The purpose is to validate the general theoretical prediction that observations break gauge symmetry (Section~\ref{sec:symmetry_breaking}), not to directly model the language modeling setting. Whether the specific dynamics of symmetry breaking transfer quantitatively across gauge groups and base manifold dimensions remains an open question.
-
-
-\subsection{Model-Channel Formalism}
-\label{app:model_channel}
-
-The most general formulation of the gauge-covariant variational free energy includes a model channel alongside the belief channel. Each agent $i$ maintains, in addition to its belief $q_i(k_i)$ and prior $p_i(k_i)$, a model distribution $s_i(m_i)$ over generative model parameters and a model hyper-prior $r_i(m_i)$. The complete free energy is (writing the partially minimized form with $\beta_{ij}$ and $\gamma_{ij}$ at their optimal softmax values, as discussed in Section~\ref{sec:final_free_energy}):
-
-\begin{equation}
-\begin{aligned}
-\mathcal{F}_{\text{full}}[\{q_i\},\{s_i\}]
-&=\sum_i D_{\mathrm{KL}}(q_i\,\|\,p_i)
-+\sum_i D_{\mathrm{KL}}(s_i\,\|\,r_i)\\
-&\quad+\sum_{i,j}\beta_{ij}\,D_{\mathrm{KL}}(q_i\,\|\,\Omega_{ij}q_j)
-+\sum_{i,j}\gamma_{ij}\,D_{\mathrm{KL}}(s_i\,\|\,\tilde{\Omega}_{ij}s_j)\\
-&\quad-\mathbb{E}_q[\log p(o\,|\{k_i\},\{m_i\})].
-\end{aligned}
-\label{eq:free_energy_full}
-\end{equation}
-
-The model prior $D_{\mathrm{KL}}(s_i \| r_i)$ regularizes agent $i$'s model toward a hyper-prior $r_i$ determined from a higher, slower meta-level. The model alignment term $\gamma_{ij} D_{\mathrm{KL}}(s_i \| \tilde{\Omega}_{ij} s_j)$ enforces meta-cognitive consensus: agents with high $\gamma_{ij}$ are driven to agree on their generative models, implementing distributed model learning.
-
-The prior $p_i(k_i \mid m_i)$ depends on model parameters that are themselves uncertain under $s_i(m_i)$, creating a hierarchical Bayesian structure:
-\begin{equation}
-p_i(k_i) = \int p_i(k_i \mid m_i) \, s_i(m_i) \, \mathrm{d}m_i.
-\end{equation}
-
-The free energy exhibits natural timescale separation: beliefs $q_i$ (fast subsystem) update rapidly while models $s_i$ (slow subsystem) evolve on a slower timescale with $\eta_s \ll \eta_q$. In the present work, we set $\gamma_{ij} = 0$ and hold models fixed, operating entirely in the fast (belief) subsystem. Standard transformers also operate in this regime: inference ($q_i$ updates) proceeds with frozen parameters during a forward pass, while model parameters update via backpropagation between forward passes.
-
+% Symmetry Breaking Simulations and Model-Channel Formalism moved to Supplementary Appendix G
 
 \bibliographystyle{plainnat}
 \bibliography{references}
