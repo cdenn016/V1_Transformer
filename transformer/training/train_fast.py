@@ -31,6 +31,8 @@ from pathlib import Path
 import time
 import json
 
+from math_utils.numerical_monitor import flush as _flush_numerical_events
+
 try:
     from tqdm import tqdm
     TQDM_AVAILABLE = True
@@ -622,6 +624,17 @@ class FastTrainer:
                         'train/step_time': step_time,
                         **{f'lr/{k}': v for k, v in lrs.items()},
                     }, step=step)
+
+                # Flush numerical fallback counters and report if any fired
+                _num_events = _flush_numerical_events()
+                if _num_events:
+                    _num_msg = "  [NUM] " + " | ".join(
+                        f"{k}: {v}" for k, v in sorted(_num_events.items())
+                    )
+                    if TQDM_AVAILABLE:
+                        tqdm.write(_num_msg)
+                    else:
+                        print(_num_msg)
 
             # Validation
             if (step + 1) % self.config.eval_interval == 0:

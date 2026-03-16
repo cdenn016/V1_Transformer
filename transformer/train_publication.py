@@ -98,6 +98,7 @@ from transformer.train import (
 )
 from transformer.training.train_fast import FastTrainer, FastTrainingConfig
 from transformer.analysis.publication_metrics import PublicationMetrics, ExperimentResult
+from math_utils.numerical_monitor import flush as _flush_numerical_events
 
 
 # ============================================================================
@@ -1806,6 +1807,17 @@ class PublicationTrainer(FastTrainer):
                               f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}\n\n")
                     if _rg_msg:
                         print(_rg_msg)
+
+                # Flush numerical fallback counters and report if any fired
+                _num_events = _flush_numerical_events()
+                if _num_events:
+                    _num_msg = "  [NUM] " + " | ".join(
+                        f"{k}: {v}" for k, v in sorted(_num_events.items())
+                    )
+                    if use_tqdm:
+                        tqdm.write(_num_msg)
+                    else:
+                        print(_num_msg)
 
             # Validation
             if (step + 1) % self.config.eval_interval == 0:
