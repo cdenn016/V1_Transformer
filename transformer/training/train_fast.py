@@ -185,8 +185,9 @@ class FastTrainer:
         self.config = config
         self.device = device or torch.device('cpu')
 
-        # Get pad_token_id from dataset for proper loss masking
-        self.pad_token_id = getattr(train_loader.dataset, 'pad_token_id', -100)
+        # Target padding uses -100 (PyTorch cross_entropy ignore_index default).
+        # Dataset.pad_token_id is for INPUT padding only — targets always use -100.
+        self.pad_token_id = -100
 
         self.model.to(self.device)
 
@@ -486,7 +487,7 @@ class FastTrainer:
         return formatted_metrics
 
     def validate(self, max_samples: int = 12800) -> Dict[str, float]:
-        """Validation loop.
+        """Validation loop with token-weighted CE averaging.
 
         Args:
             max_samples: Maximum number of samples to evaluate (default: 12800,
@@ -495,8 +496,8 @@ class FastTrainer:
         """
         self.model.eval()
 
-        total_loss = 0.0
-        total_ce = 0.0
+        total_ce_tokens = 0.0  # Sum of CE * non_pad_tokens (for token-weighted avg)
+        total_tokens = 0
         num_batches = 0
         total_samples = 0
 
@@ -511,36 +512,38 @@ class FastTrainer:
                 input_ids = input_ids.to(self.device)
                 target_ids = target_ids.to(self.device)
 
+                # Count non-padding tokens for proper weighting
+                non_pad = (target_ids != self.pad_token_id).sum().item()
+
                 if is_standard:
                     # Standard transformer: simple cross-entropy loss
                     output = self.model(input_ids, labels=target_ids)
-                    loss = output['loss']
-                    ce_loss = loss.item()
+                    ce_loss = output['loss'].item()
                 else:
-                    loss, metrics = compute_free_energy_loss(
+                    # Pure CE evaluation — disable all VFE regularization terms
+                    _, metrics = compute_free_energy_loss(
                         self.model,
                         input_ids,
                         target_ids,
-                        alpha=self.config.alpha,
-                        lambda_beta=self.config.beta,
-                        lambda_gamma=self.config.lambda_gamma,
-                        kappa_gamma=self.config.kappa_gamma,
+                        alpha=0.0,
+                        lambda_beta=0.0,
+                        lambda_gamma=0.0,
+                        kappa_gamma=1.0,
                         pad_token_id=self.pad_token_id,
-
                     )
                     ce_loss = metrics['loss/ce']
 
-                total_loss += loss.item()
-                total_ce += ce_loss
+                # Token-weighted accumulation (handles variable-size last batch)
+                total_ce_tokens += ce_loss * non_pad
+                total_tokens += non_pad
                 num_batches += 1
                 total_samples += input_ids.size(0)
 
-        avg_loss = total_loss / max(1, num_batches)
-        avg_ce = total_ce / max(1, num_batches)
+        avg_ce = total_ce_tokens / max(1, total_tokens)
         perplexity = torch.exp(torch.tensor(avg_ce)).item()
 
         return {
-            'loss': avg_loss,
+            'loss': avg_ce,       # Pure CE (no VFE regularization terms)
             'ce_loss': avg_ce,
             'perplexity': perplexity,
         }

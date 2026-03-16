@@ -794,18 +794,15 @@ def run_test_evaluation(
 
     print(f"  Evaluating up to {max_samples} samples...")
 
-    # Use same code path as validation: compute_free_energy_loss
-    # which calls model.forward_with_attention() internally.
+    # Pure CE evaluation — disable all VFE regularization terms for test.
     is_standard = isinstance(model, StandardTransformerLM)
 
-    # Extract config values (default to 0 for pure CE if no config)
-    alpha = config.get('alpha', 0) if config else 0
-    beta = config.get('beta', 0) if config else 0
-    lambda_gamma = config.get('lambda_gamma', 0) if config else 0
-    kappa_gamma = config.get('kappa_gamma', 1.0) if config else 1.0
+    # Target padding uses -100 (PyTorch cross_entropy ignore_index default).
+    pad_token_id = -100
 
     model.eval()
-    total_ce = 0.0
+    total_ce_tokens = 0.0  # Sum of CE * non_pad_tokens (for token-weighted avg)
+    total_tokens = 0
     num_batches = 0
     total_samples = 0
 
@@ -817,24 +814,28 @@ def run_test_evaluation(
             input_ids = input_ids.to(device)
             target_ids = target_ids.to(device)
 
+            # Count non-padding tokens for proper weighting
+            non_pad = (target_ids != pad_token_id).sum().item()
+
             if is_standard:
                 output = model(input_ids, labels=target_ids)
                 ce_loss = output['loss'].item()
             else:
-                pad_token_id = getattr(test_loader.dataset, 'pad_token_id', -100)
-                loss, metrics = compute_free_energy_loss(
+                _, metrics = compute_free_energy_loss(
                     model,
                     input_ids,
                     target_ids,
-                    alpha=alpha,
-                    lambda_beta=beta,
-                    lambda_gamma=lambda_gamma,
-                    kappa_gamma=kappa_gamma,
+                    alpha=0.0,
+                    lambda_beta=0.0,
+                    lambda_gamma=0.0,
+                    kappa_gamma=1.0,
                     pad_token_id=pad_token_id,
                 )
                 ce_loss = metrics['loss/ce']
 
-            total_ce += ce_loss
+            # Token-weighted accumulation (handles variable-size last batch)
+            total_ce_tokens += ce_loss * non_pad
+            total_tokens += non_pad
             num_batches += 1
             total_samples += input_ids.size(0)
 
@@ -842,8 +843,8 @@ def run_test_evaluation(
             if (batch_idx + 1) % 100 == 0:
                 print(f"  Evaluated {total_samples}/{max_samples} samples ({num_batches} batches)...")
 
-    # Compute metrics (same averaging as validation: mean of batch means)
-    test_ce = total_ce / max(1, num_batches)
+    # Token-weighted CE average (proper averaging for variable batch sizes)
+    test_ce = total_ce_tokens / max(1, total_tokens)
     test_ppl = math.exp(min(test_ce, 20))  # Clamp to prevent overflow
     test_bpc = test_ce / math.log(2)
     random_ppl = vocab_size

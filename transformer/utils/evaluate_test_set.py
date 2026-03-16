@@ -218,9 +218,9 @@ def evaluate_on_test(
         include_test=True,
     )
 
-    # Get pad_token_id from dataset for proper loss masking
-    # The dataset pads with token 0, so we must tell cross_entropy to ignore it
-    pad_token_id = getattr(test_loader.dataset, 'pad_token_id', 0)
+    # Target padding uses -100 (PyTorch cross_entropy ignore_index default).
+    # Dataset.pad_token_id is for INPUT padding only — targets always use -100.
+    pad_token_id = -100
 
     # Evaluate
     print(f"\n{'='*70}")
