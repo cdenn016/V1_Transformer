@@ -234,15 +234,15 @@ VFE_EM_CONFIG = {
     'deq_neumann_terms': 0,
 
     # Training
-    'batch_size': 64,
+    'batch_size': 32,
     'num_workers': 10,            #CPU workers 8--12
     'epochs': None,               # Set to 1-3 for WikiText-2, None for WikiText-103 (use max_steps)
-    'max_steps': 15000,           # ~105% coverage on WikiText-103
+    'max_steps': 30000,           # ~105% coverage on WikiText-103
     'warmup_steps': 100,
 
     # VFE transformer settings
     'ffn_mode': 'VFE_dynamic',    # VFE EM-step dynamics
-    'mask_self_attention': False,  # Prevent attention collapse? needed if learnable-reflection true??
+    'mask_self_attention': True,  # Prevent attention collapse? needed if learnable-reflection true??
     'tie_embeddings': False,
 
     # Gauge geometry
@@ -253,12 +253,14 @@ VFE_EM_CONFIG = {
                                   # When False: φ only updated via backprop (M-step)
 
     'phi_update_interval': 1,
-    'analytic_phi_grad': True,   # If True, bypass autograd for ∂F/∂φ (saves ~250MB per update)
+    'analytic_phi_grad': False,   # If True, bypass autograd for ∂F/∂φ (saves ~250MB per update)
                                   # Uses hand-coded backward through matrix_exp → KL → softmax.
                                   # Requires diagonal_covariance=True and irrep_dims (block-diag).
     'analytic_phi_grad_dexp_order': 4,  # dexp series truncation (4=good, 8=very accurate)
     
-    'diagonal_covariance': True,
+    'diagonal_covariance': True,    # approximate diag(Ω @ diag(σ) @ Ω^T) path runs with zero overhead
+    
+    'exact_diagonal_transport': True,  #exact diagonal transport - more expensive
     'isotropic_covariance': False,    # If True, force Σ = σ²I (scalar variance × identity)
                                        # This is Limit 1 from the manuscript: KL reduces to
                                        # scaled squared Euclidean distance. Combined with
@@ -266,8 +268,8 @@ VFE_EM_CONFIG = {
     
     'enforce_orthogonal': False,   # If True, enforce Ω ∈ SO(K) via Newton-Schulz
                                    # Set False for GL(K) (faster, still gauge-invarian
-    'learnable_reflection': False,   # Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk 
-                                    #set gauge-mode=learned and the above 3 = true for transf limit
+    'learnable_reflection': False ,   # Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk 
+                                      # Set gauge-mode=constant and the above 3 = true for transf limit
     
     
     'use_positional_embedding': False,
@@ -289,7 +291,7 @@ VFE_EM_CONFIG = {
     # VFE dynamics
     'ffn_n_iterations': 1,
     'ffn_learnable_lr': True,
-    'ffn_chunk_size': 512,          #smaller if running out of memory. make large as possible
+    'ffn_chunk_size': None,          #smaller if running out of memory. make large as possible
 
     # Learning rates
     'mu_lr':     0.05,
@@ -422,6 +424,7 @@ VFE_EM_CONFIG = {
     'use_prior_bank': False,
 
 }
+
 
 
 # =============================================================================
