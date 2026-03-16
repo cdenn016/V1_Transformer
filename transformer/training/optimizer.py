@@ -2,17 +2,20 @@
 Optimizer Creation with Parameter Grouping
 ==========================================
 
-Extracted from train.py and train_fast.py to eliminate duplication.
-Provides parameter-group-aware optimizer creation for natural gradient
-optimization on statistical manifolds.
+Parameter-group-aware AdamW optimizer for the gauge-theoretic transformer.
+Assigns per-type learning rates that exploit natural gradient structure
+on the statistical manifold of belief distributions.
 
 Parameter Groups:
-    1. mu_embed: Mean embeddings (higher LR for natural gradients)
-    2. sigma_embed: Covariance embeddings (lower LR for stability)
-    3. phi_embed: Gauge frame embeddings
-    4. attention: Attention mechanism parameters
+    1. mu_embed: Mean embeddings (higher LR -- natural gradient on location)
+    2. sigma_embed: Covariance embeddings (lower LR -- curvature-sensitive)
+    3. phi_embed: Gauge frame embeddings (Lie algebra elements for SO(N)/GL(K))
+    4. attention: KL-divergence attention parameters
     5. ffn: Feed-forward network parameters
-    6. output: Output projection parameters
+    6. output: Output/LM-head projection parameters
+
+Embedding weight decay acts as a Gaussian hyper-prior N(0, 1/(2*wd))
+at the top of the VFE Bayesian hierarchy.
 """
 
 import torch
@@ -29,16 +32,18 @@ def create_param_groups(
     """
     Create parameter groups for multi-group optimization.
 
-    This implements natural gradient structure on statistical manifolds
-    by assigning different learning rates to different parameter types.
+    Assigns different learning rates to belief parameters (mu, sigma),
+    gauge frame parameters (phi -- Lie algebra elements), and standard
+    neural network parameters (attention, ffn, output). This exploits
+    natural gradient structure on the statistical manifold.
 
     Args:
-        model: The model to create parameter groups for
-        config: Training configuration with per-group learning rates
-        verbose: If True, print parameter group information
+        model: The gauge transformer (or standard transformer) model.
+        config: TrainingConfig with per-group learning rates and weight decay.
+        verbose: If True, print parameter group information.
 
     Returns:
-        List of parameter group dicts for torch.optim
+        List of parameter group dicts suitable for torch.optim.AdamW.
     """
     # Collect parameters by type
     mu_params = []

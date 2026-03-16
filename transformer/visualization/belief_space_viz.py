@@ -1,10 +1,10 @@
 """
-Visualize Token Embeddings in Belief Space (μ, Σ, φ)
+Visualize Token Embeddings in Belief Space (mu, sigma, phi).
 
-Tests the meta-agent hypothesis: Do semantically similar tokens cluster in belief space?
-
-If yes → Evidence for emergent coarse-graining / meta-agent formation
-If no  → Beliefs don't reflect semantic structure
+Tests the meta-agent hypothesis: do semantically similar tokens cluster
+in belief space? Tokens are embedded as belief distributions
+(mu, sigma, phi) where phi parameterizes gauge frames for SO(N)/GL(K)
+transport. Clustering in this space suggests emergent coarse-graining.
 """
 
 import torch
@@ -55,14 +55,19 @@ CATEGORY_COLORS = {
 
 def get_token_embeddings(model, tokens: list, tokenizer):
     """
-    Extract μ, Σ, φ embeddings for a list of tokens.
+    Extract mu, sigma, phi embeddings for a list of tokens.
+
+    Args:
+        model: GaugeTransformerLM with token_embed returning (mu, sigma, phi).
+        tokens: List of token strings to look up.
+        tokenizer: Tokenizer with encode() method.
 
     Returns:
-        mu_embeddings: (N, K) - mean vectors
-        sigma_embeddings: (N, K) or (N, K, K) - covariance
-        phi_embeddings: (N, 3) - gauge frames
-        token_ids: List of token IDs
-        valid_tokens: List of tokens that were found
+        mu_embeddings: (N, K) - belief mean vectors.
+        sigma_embeddings: (N, K) or (N, K, K) - covariance (diagonal or full).
+        phi_embeddings: (N, phi_dim) - gauge frame parameters.
+        token_ids: List of resolved token IDs.
+        valid_tokens: List of tokens that were successfully resolved.
     """
     mu_list = []
     sigma_list = []

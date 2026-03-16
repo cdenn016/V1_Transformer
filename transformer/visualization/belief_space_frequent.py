@@ -6,14 +6,11 @@ Created on Sat Dec 27 15:06:23 2025
 """
 
 """
-Visualize FREQUENT BPE Token Embeddings in Belief Space
+Visualize frequent BPE token embeddings in belief space (mu, sigma, phi).
 
-Instead of mapping English words to BPE tokens, this script:
-1. Finds the most frequent tokens in the training data
-2. Visualizes their embeddings in belief space
-3. Shows what the model ACTUALLY learned
-
-This avoids the BPE mismatch problem.
+Avoids BPE mismatch by finding the most frequent tokens in training data
+and visualizing their learned belief embeddings directly. Tokens are
+embedded as (mu, sigma, phi) where phi parameterizes gauge frames.
 """
 
 import torch
@@ -95,12 +92,16 @@ def get_frequent_tokens(n_tokens=100, dataset='wikitext-2'):
 
 def get_embeddings_by_ids(model, token_ids):
     """
-    Extract μ, Σ, φ embeddings for token IDs directly from embedding layer.
+    Extract mu, sigma, phi embeddings for token IDs from the embedding layer.
+
+    Args:
+        model: GaugeTransformerLM with token_embed returning (mu, sigma, phi).
+        token_ids: List of integer token IDs.
 
     Returns:
-        mu_embeddings: (N, K)
-        sigma_embeddings: (N, K) or (N, K, K)
-        phi_embeddings: (N, 3)
+        mu_embeddings: (N, K) - belief mean vectors.
+        sigma_embeddings: (N, K) or (N, K, K) - covariance (diagonal or full).
+        phi_embeddings: (N, phi_dim) - gauge frame parameters.
     """
     mu_list = []
     sigma_list = []
@@ -234,7 +235,11 @@ def visualize_frequent_tokens(mu_embeddings, decoded_tokens, frequencies,
 
 
 def analyze_embedding_diversity(mu_embeddings):
-    """Compute statistics about embedding space."""
+    """Compute pairwise distance statistics for mu embeddings.
+
+    Args:
+        mu_embeddings: (N, K) array of belief mean vectors.
+    """
     from scipy.spatial.distance import pdist
 
     # Pairwise distances

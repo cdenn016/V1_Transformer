@@ -1,7 +1,18 @@
 #!/usr/bin/env python
 """
-Deep diagnostic for uniform attention rows.
-Run: python debug_attention_uniform.py
+Attention Uniformity Diagnostic
+================================
+
+Deep diagnostic for uniform attention rows in KL-based gauge attention.
+
+Traces the full pipeline -- embeddings (mu, sigma, phi), gauge transport
+operators Omega_ij = exp(phi_i . G) exp(-phi_j . G), transported means,
+KL matrix, and final attention weights -- to identify the source of
+attention collapse.
+
+Key insight tested: with gauge_fixed_priors=True the transported mean
+equals the query mean for *all* pairs, making KL identically zero and
+attention degenerate.
 """
 
 import torch

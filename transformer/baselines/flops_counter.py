@@ -2,19 +2,19 @@
 FLOPs Counter for Gauge and Standard Transformers
 ===================================================
 
-Reports FLOPs per training step and total training compute.
+Reports FLOPs per training step and total training compute for both the
+gauge-theoretic transformer (SO(3)/SO(N)/GL(K) groups, KL-divergence attention,
+VFE E-step FFN) and the standard dot-product baseline.
+
 Addresses peer review concern (M2e): the gauge model requires matrix exponentials
 and per-pair KL computations that are substantially more expensive than standard
 dot-product attention.
 
 Two estimation modes:
     1. Analytical: Formula-based estimation from model config (fast, deterministic)
-    2. Profile-based: torch.profiler measurement (accurate but requires GPU)
+    2. Profile-based: ``torch.utils.flop_counter`` measurement (accurate, needs GPU)
 
 FLOPs are reported as multiply-accumulate operations (MACs) * 2 = FLOPs.
-
-Author: Peer review response (M2e)
-Date: March 2026
 """
 
 import math
@@ -304,17 +304,22 @@ def compare_flops(
     max_steps: int = 15000,
 ) -> Dict[str, any]:
     """
-    Compare FLOPs between gauge and standard transformer configurations.
+    Compare per-step and total training FLOPs between gauge and standard models.
 
     Args:
-        gauge_config: Config dict for gauge model
-        standard_config: Config dict for standard model
-        seq_len: Sequence length
-        batch_size: Batch size
-        max_steps: Total training steps
+        gauge_config: Gauge model config with keys ``embed_dim``, ``n_layers``,
+            ``irrep_spec``, ``ffn_n_iterations``, etc. The gauge group
+            (SO(3)/SO(N)/GL(K)) is inferred from ``embed_dim`` for phi_dim.
+        standard_config: Standard model config with keys ``embed_dim``,
+            ``n_layers``, ``n_heads``, ``hidden_dim``, etc.
+        seq_len: Sequence length used for the estimate.
+        batch_size: Batch size used for the estimate.
+        max_steps: Total training steps (for cumulative compute).
 
     Returns:
-        Comparison dict with per-step and total FLOPs for both models
+        Dict with ``'gauge'`` and ``'standard'`` sub-dicts containing per-step
+        FLOPs, total training FLOPs, breakdowns, and the
+        ``'gauge_to_standard_ratio'``.
     """
     # Extract gauge model params
     gauge_embed = gauge_config.get('embed_dim', 90)
@@ -382,7 +387,11 @@ def compare_flops(
 
 
 def print_flops_comparison(result: Dict) -> None:
-    """Pretty-print FLOPs comparison results."""
+    """Pretty-print FLOPs comparison results.
+
+    Args:
+        result: Dict returned by :func:`compare_flops`.
+    """
     print("\n" + "="*70)
     print("FLOPs COMPARISON: GAUGE vs STANDARD TRANSFORMER")
     print("="*70)
@@ -424,18 +433,21 @@ def profile_flops(
     device='cpu',
 ) -> Dict[str, float]:
     """
-    Profile actual FLOPs using PyTorch's FlopCounterMode.
+    Profile actual FLOPs using PyTorch's ``FlopCounterMode``.
 
-    Requires PyTorch >= 2.1 with torch.utils.flop_counter.
+    Works with both the gauge transformer and the standard baseline. Falls back
+    to ``None`` when ``torch.utils.flop_counter`` is unavailable (PyTorch < 2.1).
 
     Args:
-        model: The model to profile
-        input_ids: (B, N) input tensor
-        labels: Optional (B, N) label tensor
-        device: Device string
+        model: The model to profile (gauge or standard).
+        input_ids: Token indices of shape (B, N).
+        labels: Optional target tensor of shape (B, N).
+        device: Device string (e.g. ``'cpu'``, ``'cuda'``).
 
     Returns:
-        Dict with measured FLOPs
+        Dict with ``'forward_flops_measured'``, ``'step_flops_estimated'``, and
+        their human-readable ``_str`` variants, or ``None`` if profiling is
+        unavailable.
     """
     import torch
 

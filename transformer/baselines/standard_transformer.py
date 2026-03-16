@@ -2,18 +2,17 @@
 Standard Transformer Baseline
 ==============================
 
-Vanilla transformer with dot-product attention for fair comparison with gauge model.
-
-NO gauge theory, NO SO(3), NO KL divergence - just standard MHA.
+Vanilla transformer with dot-product attention for fair comparison against the
+gauge-theoretic transformer. The gauge model replaces Q/K projections with
+KL-divergence attention over gauge-transported Gaussian beliefs and uses a VFE
+E-step FFN; this baseline uses conventional softmax(QK^T/sqrt(d)) attention and
+a standard two-layer GELU FFN, providing an apples-to-apples compute comparison.
 
 Supports multiple configurations for ablation studies:
     - Standard transformer (attention + FFN)
     - Attention-only (FFN disabled) to isolate attention mechanism contribution
     - RoPE positional encoding (to match gauge model's position scheme)
     - Parameter-equalized via wider layers
-
-Author: Baseline for ablation study
-Date: November 2025 (updated March 2026)
 """
 
 import math
@@ -84,8 +83,16 @@ class StandardMultiHeadAttention(nn.Module):
     """
     Standard dot-product multi-head attention with optional RoPE.
 
-    beta_ij = softmax(Q_i @ K_j^T / sqrt(d_k))
-    output_i = sum_j beta_ij @ V_j
+    Unlike the gauge transformer's KL-divergence attention (which needs no W_Q or
+    W_K), this module uses explicit Q/K/V projections with scaled dot-product
+    scoring: beta_ij = softmax(Q_i K_j^T / sqrt(d_k)).
+
+    Args:
+        embed_dim: Total model dimension (split across heads).
+        n_heads: Number of attention heads.
+        dropout: Dropout probability on attention weights.
+        use_rope: Apply Rotary Position Embeddings to Q and K.
+        rope_base: RoPE frequency base.
     """
 
     def __init__(self, embed_dim: int, n_heads: int = 1, dropout: float = 0.1,
@@ -124,6 +131,17 @@ class StandardMultiHeadAttention(nn.Module):
         mask: Optional[torch.Tensor] = None,
         return_attention: bool = False,
     ) -> torch.Tensor:
+        """Compute multi-head self-attention.
+
+        Args:
+            x: Input tensor of shape (B, N, embed_dim).
+            mask: Optional causal mask of shape broadcastable to (B, H, N, N).
+            return_attention: If True, return (output, attn_weights).
+
+        Returns:
+            Output tensor (B, N, embed_dim), or a tuple of (output, attn_weights)
+            when *return_attention* is True.
+        """
         B, N, embed_dim = x.shape
 
         # Project to Q, K, V
@@ -189,10 +207,20 @@ class StandardFFN(nn.Module):
 
 class StandardTransformerBlock(nn.Module):
     """
-    Standard transformer block: LayerNorm -> MHA -> Add -> LayerNorm -> FFN -> Add
+    Pre-norm transformer block: LN -> MHA -> residual -> LN -> FFN -> residual.
 
-    Supports attention-only mode (disable_ffn=True) where the FFN sublayer is skipped,
-    isolating the contribution of the attention mechanism alone.
+    In the gauge transformer the FFN is replaced by a VFE E-step update; here a
+    standard two-layer GELU FFN is used. Set *disable_ffn=True* to skip the FFN
+    sublayer entirely (attention-only ablation).
+
+    Args:
+        embed_dim: Model dimension.
+        n_heads: Number of attention heads.
+        hidden_dim: FFN intermediate dimension.
+        dropout: Dropout probability.
+        disable_ffn: If True, omit the FFN sublayer.
+        use_rope: Apply RoPE inside the attention sublayer.
+        rope_base: RoPE frequency base.
     """
 
     def __init__(
@@ -252,18 +280,27 @@ class StandardTransformerBlock(nn.Module):
 
 class StandardTransformerLM(nn.Module):
     """
-    Standard transformer language model.
+    Standard transformer language model for baseline comparison.
 
     Architecture:
-        Embedding -> Position Encoding -> N x Transformer Blocks -> LM Head
+        Token Embedding -> Position Encoding -> N x TransformerBlock -> LM Head
+
+    This is the conventional counterpart to the gauge transformer LM, which
+    replaces Q/K projections with KL-divergence attention over gauge-transported
+    beliefs (SO(3)/SO(N)/GL(K) groups) and swaps the FFN for VFE E-step updates.
+    None of those mechanisms are present here.
 
     Supports:
-        - Standard learned positional embeddings (default)
-        - RoPE positional encoding (use_rope=True) to match gauge model
+        - Learned positional embeddings (default)
+        - RoPE positional encoding (use_rope=True)
         - Attention-only mode (disable_ffn=True) for ablation
-        - No positional encoding at all (no_pos_encoding=True)
+        - No positional encoding (no_pos_encoding=True)
 
-    NO gauge theory, NO SO(3), NO KL divergence!
+    Args:
+        config: Dict with keys ``vocab_size``, ``embed_dim``, ``n_layers``,
+            ``n_heads``, ``hidden_dim``, ``max_seq_len``, and optional
+            ``dropout``, ``tie_embeddings``, ``disable_ffn``, ``use_rope``,
+            ``rope_base``, ``no_pos_encoding``.
     """
 
     def __init__(self, config: Dict):
@@ -337,6 +374,17 @@ class StandardTransformerLM(nn.Module):
         labels: Optional[torch.Tensor] = None,
         pad_token_id: int = -100,
     ) -> Dict[str, torch.Tensor]:
+        """Run a forward pass and optionally compute cross-entropy loss.
+
+        Args:
+            input_ids: Token indices of shape (B, N).
+            labels: Target token indices (B, N). If provided, cross-entropy
+                loss is included in the output dict under ``'loss'``.
+            pad_token_id: Index to ignore in the loss computation.
+
+        Returns:
+            Dict with ``'logits'`` (B, N, V) and optionally ``'loss'``.
+        """
         B, N = input_ids.shape
         device = input_ids.device
 
@@ -379,6 +427,17 @@ class StandardTransformerLM(nn.Module):
         input_ids: torch.Tensor,
         targets: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """Forward pass that also returns per-layer attention weights.
+
+        Args:
+            input_ids: Token indices of shape (B, N).
+            targets: Unused; kept for API compatibility with the gauge model.
+
+        Returns:
+            Tuple of (logits, attn_info) where *attn_info* contains
+            ``'beta'`` (last-layer weights) and ``'all_attention'`` (list of
+            per-layer weight tensors, each (B, H, N, N)).
+        """
         B, N = input_ids.shape
         device = input_ids.device
 
@@ -414,6 +473,18 @@ class StandardTransformerLM(nn.Module):
         top_k: Optional[int] = None,
         top_p: Optional[float] = None,
     ) -> torch.Tensor:
+        """Autoregressively generate tokens from a prompt.
+
+        Args:
+            prompt_ids: Starting token indices of shape (B, N_prompt).
+            max_new_tokens: Number of tokens to generate.
+            temperature: Sampling temperature (1.0 = unmodified logits).
+            top_k: If set, restrict sampling to the top-k highest-probability tokens.
+            top_p: If set, apply nucleus (top-p) sampling.
+
+        Returns:
+            Tensor of shape (B, N_prompt + max_new_tokens) with generated ids.
+        """
         self.eval()
         generated = prompt_ids.clone()
 

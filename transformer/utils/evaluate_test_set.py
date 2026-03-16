@@ -1,21 +1,23 @@
 """
-Evaluate trained checkpoints on the WikiText-103 TEST set.
+Test-Set Evaluation for GaugeTransformerLM Checkpoints
+======================================================
 
-This script evaluates models on the held-out test split for final publication metrics.
-The test set should only be used once, after all hyperparameter tuning is complete.
+Evaluate trained checkpoints on the held-out TEST split for final
+publication metrics.  Computes token-weighted cross-entropy and
+perplexity with all VFE regularisation terms disabled (pure CE).
+
+The test set should only be used once, after all hyperparameter tuning
+is complete.
 
 Usage:
     python -m transformer.utils.evaluate_test_set --checkpoint path/to/best_model.pt
 
     # Evaluate multiple checkpoints
-    python -m transformer.utils.evaluate_test_set \
+    python -m transformer.utils.evaluate_test_set \\
         --checkpoint checkpoints/vfe_best.pt checkpoints/std_best.pt
 
     # Full evaluation (all batches)
     python -m transformer.utils.evaluate_test_set --checkpoint path/to/model.pt --full
-
-Author: Generated for VFE_LLM manuscript test set evaluation
-Date: January 2026
 """
 
 import torch
@@ -41,19 +43,19 @@ def create_test_dataloader(
     dataset: str = 'wikitext-103',
 ) -> Tuple[DataLoader, int]:
     """
-    Create a TEST set dataloader for WikiText-103.
+    Create a TEST-split DataLoader.
 
     Args:
-        max_seq_len: Maximum sequence length
-        batch_size: Batch size for evaluation
-        vocab_size: Vocabulary size (should match training)
-        vocab_mapping: Vocabulary mapping from training (ensures consistency)
-        num_workers: Number of data loading workers
-        dataset: Dataset name ('wikitext-103' or 'wikitext-2')
+        max_seq_len: Maximum sequence length.
+        batch_size: Batch size for evaluation.
+        vocab_size: Expected vocabulary size (must match training).
+        vocab_mapping: Token-to-id mapping from training (ensures ID consistency).
+        num_workers: Number of data loading workers.
+        dataset: Dataset identifier ('wikitext-103', 'wikitext-2', or 'wiki-ja').
 
     Returns:
-        test_loader: DataLoader for test set
-        actual_vocab_size: Actual vocabulary size
+        test_loader: DataLoader over the test split (unshuffled, no drop_last).
+        actual_vocab_size: Vocabulary size reported by the dataset.
     """
     from transformer.data.datasets import (
         WikiText2TiktokenDataset,
@@ -103,7 +105,7 @@ def create_test_dataloader(
 
 
 def load_checkpoint(checkpoint_path: str, device: str = 'cpu') -> Dict:
-    """Load checkpoint and extract configuration."""
+    """Load a raw checkpoint dict and print training-state summary."""
     print(f"\nLoading checkpoint: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
@@ -132,17 +134,21 @@ def evaluate_on_test(
     device: str = 'auto',
 ) -> Dict[str, float]:
     """
-    Evaluate a checkpoint on the WikiText-103 TEST set.
+    Evaluate a GaugeTransformerLM checkpoint on the held-out test split.
+
+    Runs a pure cross-entropy forward pass (all VFE regularisation coefficients
+    set to zero) and reports token-weighted loss and perplexity.
 
     Args:
-        checkpoint_path: Path to checkpoint file
-        max_samples: Maximum samples to evaluate (None = all). Using samples
-                     instead of batches ensures consistent evaluation across
-                     configs with different batch sizes.
-        device: Device to use ('auto', 'cuda', 'cpu')
+        checkpoint_path: Path to checkpoint file.
+        max_samples: Maximum number of *samples* to evaluate (None = all).
+            Sample-based limiting gives consistent evaluation across configs
+            with different batch sizes.
+        device: Device to use ('auto', 'cuda', 'cpu').
 
     Returns:
-        Dictionary with test metrics
+        Dict with keys: test/loss, test/ce_loss, test/perplexity,
+        test/tokens_evaluated, test/batches_evaluated, checkpoint.
     """
     from transformer.core.model import GaugeTransformerLM
     from transformer.train import compute_free_energy_loss

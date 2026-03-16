@@ -2,8 +2,13 @@
 Data Pipeline for Gauge-Theoretic Transformer
 ===============================================
 
-Dataset loading and preprocessing for language modeling.
+Dataset loading and preprocessing for language modeling with
+gauge-equivariant architectures (SO(N), GL(K) gauge groups).
 Supports WikiText-2, WikiText-103, OpenWebText, and Japanese Wikipedia.
+
+The pipeline is tokenizer-agnostic: prefers tiktoken (lightweight) but
+falls back to HuggingFace transformers. Tokenized data is cached to disk
+(~/.cache/tokenized_cache/) so subsequent runs skip tokenization entirely.
 
 Dataset Details:
     - OpenWebText (~8B tokens, GPT-2's training data recreated openly)
@@ -40,9 +45,6 @@ Usage:
         batch_size=64,
         dataset='wiki-ja',
     )
-
-Author: Implementation for gauge transformer
-Date: November 2025
 """
 
 # Suppress Triton warnings BEFORE torch import (torch may trigger triton import)
@@ -533,14 +535,18 @@ def _load_wiki_ja_split(
 
 class WikiText2Dataset(Dataset):
     """
-    WikiText-2 dataset for language modeling.
+    WikiText-2 dataset for language modeling (transformers backend).
+
+    Uses HuggingFace transformers tokenizer (GPT-2 BPE). Prefer
+    WikiText2TiktokenDataset when tiktoken is available -- it is lighter
+    weight and supports all dataset variants.
 
     Processes text into fixed-length sequences for autoregressive training:
         Input:  [tok_0, tok_1, ..., tok_{T-1}]
         Target: [tok_1, tok_2, ..., tok_T]
 
     Features:
-        - Efficient tokenization using GPT-2 BPE tokenizer
+        - GPT-2 BPE tokenization via HuggingFace transformers
         - Fixed sequence length with truncation/padding
         - Vocabulary size control (top K tokens)
         - Caches tokenized data for speed
@@ -791,13 +797,17 @@ class WikiText2Dataset(Dataset):
 
 class WikiText2TiktokenDataset(Dataset):
     """
-    WikiText dataset using tiktoken (OpenAI's fast BPE tokenizer).
+    Primary dataset class using tiktoken (OpenAI's fast BPE tokenizer).
 
     Supports WikiText-2 (~2M tokens), WikiText-103 (~103M tokens),
     OpenWebText (~8B tokens), and Japanese Wikipedia (~1B chars).
-    Lighter weight than transformers - no sklearn/pyarrow dependencies.
+    Lighter weight than transformers -- no sklearn/pyarrow dependencies.
     Uses GPT-2's tokenizer (50257 vocab) for English, cl100k_base
     (100277 vocab) for Japanese.
+
+    Processes text into fixed-length sequences for autoregressive training:
+        Input:  [tok_0, tok_1, ..., tok_{T-1}]
+        Target: [tok_1, tok_2, ..., tok_T]
     """
 
     def __init__(
@@ -1610,9 +1620,10 @@ def create_dataloaders(
     """
     Create train, validation, and optionally test dataloaders.
 
-    Supports WikiText-2 (~2M tokens), WikiText-103 (~103M tokens), and
-    OpenWebText (~8B tokens). Uses tiktoken (OpenAI's fast tokenizer) if
-    available, falls back to transformers if not.
+    Supports WikiText-2 (~2M tokens), WikiText-103 (~103M tokens),
+    OpenWebText (~8B tokens), and Japanese Wikipedia (~1B chars).
+    Uses tiktoken (OpenAI's fast tokenizer) if available, falls back
+    to transformers if not.
 
     Tokenized data is cached to disk (~/.cache/tokenized_cache/) so subsequent
     runs skip the expensive tokenization step entirely.

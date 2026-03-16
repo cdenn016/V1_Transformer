@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-Quick test: Query-side variation for λ_β = 1.0 model
+Query-Side Variation Diagnostic
+================================
 
-Tests if different tokens attend differently despite uniform key-side patterns.
+Tests whether different query tokens produce distinct KL-based attention
+patterns.  Useful for diagnosing attention collapse where all queries
+attend uniformly despite gauge transport (SO(N)/GL(K)) differentiation.
+
+Analyses both attention-weight variation (L2 distance between attention
+rows) and belief-space separation (pairwise mu distances).
 """
 
 import torch
@@ -19,12 +25,15 @@ from transformer.core.model import GaugeTransformerLM
 
 def analyze_query_variation(beta, input_ids=None, tokenizer=None):
     """
-    Analyze if different queries (tokens) attend differently.
+    Measure pairwise L2 distances between attention rows across heads.
+
+    Reports per-head and overall query variation, flagging uniform
+    attention (all queries attending identically).
 
     Args:
-        beta: (B, H, N, N) attention weights
-        input_ids: (B, N) token IDs (optional, for display)
-        tokenizer: For decoding (optional)
+        beta: Attention weights, shape (B, H, N, N).
+        input_ids: Token IDs, shape (B, N). Optional, used for display.
+        tokenizer: Tokenizer with decode(). Optional, used for display.
     """
     B, H, N, _ = beta.shape
     beta_np = beta[0].cpu().numpy()
@@ -112,7 +121,14 @@ def analyze_query_variation(beta, input_ids=None, tokenizer=None):
 
 def test_belief_similarity(model, input_ids):
     """
-    Check if embeddings are truly compressed (all similar).
+    Check pairwise separation of belief means (mu) in embedding space.
+
+    Flags embedding collapse when all token mu vectors are too similar,
+    which prevents meaningful KL-based attention differentiation.
+
+    Args:
+        model: GaugeTransformerLM instance (eval mode).
+        input_ids: Token IDs, shape (B, N).
     """
     print("\n" + "=" * 70)
     print("BELIEF SPACE ANALYSIS")
@@ -150,10 +166,13 @@ def test_belief_similarity(model, input_ids):
 
 def main(checkpoint_path: str = None):
     """
-    Run query variation analysis on a trained model.
+    Run query variation and belief-space analysis on a trained checkpoint.
+
+    Loads the model, runs a forward pass to obtain attention weights
+    (beta), then analyses query-side variation and mu-space separation.
 
     Args:
-        checkpoint_path: Path to model checkpoint. If None, uses command line arg.
+        checkpoint_path: Path to model checkpoint. If None, uses CLI arg.
     """
     import argparse
 

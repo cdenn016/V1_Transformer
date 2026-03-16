@@ -1,9 +1,12 @@
 #!/usr/bin/env python
 """
-Visualize attention patterns for individual heads (not averaged).
-Shows how different heads learn different patterns.
+Visualize per-head KL-divergence-based attention patterns.
 
-Usage: python visualize_attention_heads.py
+Shows how individual attention heads develop distinct patterns when
+attention weights are derived from KL divergence on belief distributions
+with gauge transport, rather than dot-product similarity.
+
+Usage: python -m transformer.visualization.attention_viz
 """
 
 import torch
@@ -14,7 +17,15 @@ from matplotlib.gridspec import GridSpec
 from transformer.core.model import GaugeTransformerLM
 
 def visualize_per_head_attention():
-    """Visualize attention for each head separately."""
+    """Visualize KL-divergence attention for each head separately.
+
+    Creates a multi-panel figure showing per-head attention matrices (beta),
+    head-averaged attention, row uniformity statistics, and the KL divergence
+    matrix KL(q_i || Omega_ij[q_j]) that drives attention weight computation.
+
+    Attention weights beta are derived from pairwise KL divergences between
+    gauge-transported belief distributions, not from dot-product scores.
+    """
 
     # Simple model
     config = {

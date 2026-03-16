@@ -9,15 +9,12 @@ Created on Tue Dec  9 21:05:21 2025
 Trajectory Visualization for Gauge Transformer
 ================================================
 
-Plotting utilities for visualizing:
-1. Belief evolution through transformer layers
-2. Attention patterns
-3. Training convergence
+Plotting utilities for visualizing belief (mu, sigma, phi) evolution
+through transformer layers, KL-divergence attention patterns, and
+training convergence. Beliefs are distributions over K-dimensional
+space with gauge frames parameterized by phi.
 
 Requires matplotlib. Falls back gracefully if not available.
-
-Author: Chris & Claude
-Date: December 2025
 """
 
 import numpy as np
@@ -57,7 +54,7 @@ COLORS = {
 
 # Custom colormap for attention matrices
 def get_attention_cmap():
-    """Blue-white-red colormap for attention."""
+    """Create blue-white-red colormap for attention matrices."""
     if not MATPLOTLIB_AVAILABLE:
         return None
     colors = ['#2166AC', '#F7F7F7', '#B2182B']
