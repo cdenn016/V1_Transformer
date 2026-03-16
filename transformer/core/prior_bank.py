@@ -136,18 +136,23 @@ class PriorBank(nn.Module):
 
             # Per-token gauge frames φ_v — needed for gauge transport even
             # without gauge-fixed priors. Without this, phi has no gradient path.
+            # IMPORTANT: Scale std inversely with sqrt(phi_dim) to maintain consistent
+            # norm across different GL(K) dimensions, matching GaugeTokenEmbedding.
+            # Without this, ||φ|| ≈ phi_scale * sqrt(phi_dim) which explodes for
+            # large phi_dim (e.g., GL(75): phi_dim=5625, ||φ|| ≈ 22.5 vs target 0.3).
             self.phi_embed = nn.Embedding(vocab_size, phi_dim)
-            nn.init.normal_(self.phi_embed.weight, std=phi_scale)
+            phi_init_std = phi_scale / (phi_dim ** 0.5)
+            nn.init.normal_(self.phi_embed.weight, std=phi_init_std)
 
     @property
     def base_prior_sigma(self) -> torch.Tensor:
         """Get base prior variance (always positive). Only for gauge_fixed_priors=True."""
-        return torch.exp(self.base_log_prior_sigma).clamp(min=self.eps)
+        return torch.exp(self.base_log_prior_sigma).clamp(min=0.01, max=5.0)
 
     @property
     def prior_sigma(self) -> torch.Tensor:
         """Get prior variances (always positive). Only for gauge_fixed_priors=False."""
-        return torch.exp(self.log_prior_sigma).clamp(min=self.eps)
+        return torch.exp(self.log_prior_sigma).clamp(min=0.01, max=5.0)
 
     def _compute_rotation(self, phi: torch.Tensor) -> torch.Tensor:
         """
