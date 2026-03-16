@@ -3,7 +3,12 @@
 Model Inference & Qualitative Analysis
 =======================================
 
-Click-to-run inference for GaugeTransformerLM.
+Click-to-run inference for GaugeTransformerLM with belief-state
+and KL-attention visualization.
+
+Supports text generation, next-token probability inspection,
+attention pattern extraction (beta/KL from the gauge-theoretic
+attention mechanism), and belief state visualization (mu, sigma, phi).
 
 Instructions:
     1. Set CHECKPOINT_PATH below to your best_model.pt
@@ -43,7 +48,13 @@ from transformer.utils.checkpoint import load_model, get_tokenizer
 
 
 class GaugeTransformerInference:
-    """Inference wrapper for GaugeTransformerLM."""
+    """Inference wrapper for GaugeTransformerLM.
+
+    Provides generation, next-token probabilities, attention pattern
+    extraction, and belief state inspection. Attention patterns include
+    beta (KL-based weights) and pairwise KL divergences from the last layer.
+    Belief states include mu (B, N, K), sigma, and phi (gauge parameters).
+    """
 
     def __init__(self, checkpoint_path: str, device: Optional[str] = None, dataset_name: Optional[str] = None):
         if device is None:
@@ -115,6 +126,12 @@ class GaugeTransformerInference:
         return results
 
     def get_attention_patterns(self, text: str) -> Dict[str, torch.Tensor]:
+        """Extract attention beta, KL divergences, and mu from the last layer.
+
+        Returns:
+            Dict with 'beta' (n_heads, N, N), 'kl' (n_heads, N, N),
+            'mu' (N, K), and 'tokens' (list of str).
+        """
         token_ids = self.encode(text)
         with torch.no_grad():
             logits, attn_info = self.model.forward_with_attention(token_ids, targets=None)
@@ -137,6 +154,12 @@ class GaugeTransformerInference:
         }
 
     def get_belief_states(self, text: str) -> Dict[str, torch.Tensor]:
+        """Extract per-token belief states from a forward pass.
+
+        Returns:
+            Dict with 'mu' (N, K), 'sigma' (N, K) or (N, K, K) or None,
+            'phi' (N, phi_dim), 'tokens' (list of str), 'logits' (N, vocab).
+        """
         token_ids = self.encode(text)
         with torch.no_grad():
             logits, agent_states = self.model(token_ids, return_agents=True)
@@ -178,6 +201,14 @@ def _setup_cjk_fonts(plt):
 
 def visualize_attention(attn_data: Dict, save_path: Optional[str] = None, head_idx: int = 0,
                         figsize: Tuple[int, int] = (10, 8)):
+    """Plot attention weights and KL divergences for a single head.
+
+    Args:
+        attn_data: Dict from get_attention_patterns() with 'beta', 'kl', 'tokens'.
+        save_path: If provided, save figure to this path instead of displaying.
+        head_idx: Which attention head to visualize.
+        figsize: Figure dimensions.
+    """
     try:
         import matplotlib.pyplot as plt
         import matplotlib.colors as mcolors
@@ -231,6 +262,13 @@ def visualize_attention(attn_data: Dict, save_path: Optional[str] = None, head_i
 
 def visualize_beliefs(belief_data: Dict, save_path: Optional[str] = None,
                       figsize: Tuple[int, int] = (12, 4)):
+    """Plot belief means (mu) heatmap and per-token norm bar chart.
+
+    Args:
+        belief_data: Dict from get_belief_states() with 'mu' (N, K) and 'tokens'.
+        save_path: If provided, save figure to this path instead of displaying.
+        figsize: Figure dimensions.
+    """
     try:
         import matplotlib.pyplot as plt
     except ImportError:

@@ -3,7 +3,9 @@
 Data Loading Tests
 ==================
 
-Tests for transformer.data module.
+Tests for transformer.data module: dataloader creation for WikiText-2,
+character-level, byte-level, and OpenWebText datasets. All tests marked
+@pytest.mark.slow as they require dataset downloads.
 """
 
 import pytest

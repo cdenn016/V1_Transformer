@@ -112,23 +112,20 @@ except ImportError:
 
 def _rodrigues_formula(phi: np.ndarray, eps: float = 1e-8) -> np.ndarray:
     """
-    Compute exp(φ) ∈ SO(3) using Rodrigues' formula.
-    
-    NOW WITH NUMBA ACCELERATION (10-20x faster!)
-    
+    Compute exp(phi) in SO(3) using Rodrigues' formula (Numba-accelerated).
+
+    SO(3)-specific closed form. For SO(N)/GL(K) with K>3, use
+    _matrix_exponential_lie_algebra instead.
+
     Formula:
-        exp(φ) = I + sin(θ)/θ · [φ]_× + (1-cos(θ))/θ² · [φ]_×²
-    
+        exp(phi) = I + sin(theta)/theta * [phi]_x + (1-cos(theta))/theta^2 * [phi]_x^2
+
     Args:
         phi: Axis-angle vectors, shape (*S, 3)
         eps: Small-angle threshold
-    
+
     Returns:
         R: Rotation matrices, shape (*S, 3, 3)
-    
-    Performance:
-        - Scalar: 10x faster with Numba
-        - Batch (spatial fields): 20x faster with Numba
     """
     
     # ========================================================================
@@ -192,22 +189,23 @@ def compute_transport(
     project_to_orthogonal: bool = False,  # NEW: opt-in orthogonal projection
 ) -> np.ndarray:
     """
-    Compute transport operator Ω_ij = exp(φ_i) · exp(-φ_j) ∈ GL(K).
+    Compute transport operator Omega_ij = exp(phi_i . G) . exp(-phi_j . G).
 
-    NOW WITH NUMBA + CUDA ACCELERATION!
+    Supports SO(3), SO(N), and GL(K) gauge groups. The gauge group is
+    determined by the generators shape (n_gen, K, K):
+    - SO(3): n_gen=3, phi_dim=3
+    - SO(N): n_gen=N(N-1)/2, phi_dim=N(N-1)/2
+    - GL(K): n_gen=K^2, phi_dim=K^2
 
-    Acceleration priority:
-    1. GPU (CuPy) - Massive speedup for batched operations
-    2. Numba (CPU) - 10-20x faster than NumPy
-    3. NumPy fallback
+    Dispatches to CuPy (GPU), Numba (CPU), or NumPy (fallback).
 
     Args:
-        phi_i, phi_j: Gauge fields, shape (*S, n_generators)
-        generators: Lie algebra generators, shape (n_generators, K, K)
-        validate: Check invertibility of result (det ≠ 0)
+        phi_i, phi_j: Gauge fields, shape (*S, n_gen)
+        generators: Lie algebra generators, shape (n_gen, K, K)
+        validate: Check invertibility of result (|det(Omega)| > eps)
         eps: Small-angle threshold / minimum determinant
         use_gpu: Force GPU computation
-        project_to_orthogonal: If True, project to SO(K) (legacy behavior).
+        project_to_orthogonal: If True, project to SO(K) via SVD.
                               Default False for full GL(K) flexibility.
 
     Returns:
@@ -321,9 +319,9 @@ def _matrix_exponential_lie_algebra(
     enforce_skew_symmetry: bool = False,  # NEW: opt-in for skew-symmetry
 ) -> np.ndarray:
     """
-    Compute exp(Σ φ^a G_a) for general GL(K).
+    Compute exp(sum_a phi^a G_a) for general GL(K).
 
-    Uses eigendecomposition for large angles, Taylor series for small.
+    Uses scipy.linalg.expm for large ||phi||, Taylor series for small.
 
     Args:
         phi: Lie algebra coefficients, shape (*S, n_generators)
@@ -579,22 +577,22 @@ def compute_transport_differential(
     exp_phi_j: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Compute ∂Ω_ij/∂φ_i or ∂Ω_ij/∂φ_j as tuple of 3 matrices.
-    
+    Compute ∂Ω_ij/∂φ_i^a or ∂Ω_ij/∂φ_j^a as a tuple of n_gen matrices.
+
     Formula:
         ∂Ω_ij/∂φ_i^a = (dexp)_a(φ_i) · exp(-φ_j)
         ∂Ω_ij/∂φ_j^b = -exp(φ_i) · (dexp)_b(φ_j) · exp(-φ_j)
-    
+
     where (dexp)_a(φ) = d/dt[exp(φ + t·G_a)]|_{t=0}
-    
+
     Args:
-        phi_i, phi_j: Gauge fields, shape (*S, 3)
-        generators: Shape (3, K, K)
+        phi_i, phi_j: Gauge fields, shape (*S, n_gen)
+        generators: Lie algebra generators, shape (n_gen, K, K)
         direction: 'i' for ∂Ω/∂φ_i or 'j' for ∂Ω/∂φ_j
         exp_phi_i, exp_phi_j: Optional precomputed exponentials
-    
+
     Returns:
-        (dOmega_x, dOmega_y, dOmega_z): Each (*S, K, K)
+        Tuple of n_gen matrices, each shape (*S, K, K)
     """
     phi_i = np.asarray(phi_i, dtype=np.float64)
     phi_j = np.asarray(phi_j, dtype=np.float64)
@@ -645,11 +643,20 @@ import scipy
 
 def frechet_expm(X, H, steps=6):
     """
-    Approximate d/dt exp(X + tH) | t=0 using midpoint quadrature.
-    Works for ALL SO(3) irreps.
+    Approximate d/dt exp(X + tH)|_{t=0} via midpoint quadrature.
 
-    Uses the integral representation: dexp_X(H) = ∫₀¹ exp((1-s)X) H exp(sX) ds
+    Works for any square matrix X (all irreps, all gauge groups).
+
+    Uses the integral representation: dexp_X(H) = integral_0^1 exp((1-s)X) H exp(sX) ds.
     Midpoint rule avoids boundary double-counting of the rectangle rule.
+
+    Args:
+        X: Lie algebra element, shape (K, K)
+        H: Perturbation direction, shape (K, K)
+        steps: Number of quadrature points
+
+    Returns:
+        Frechet derivative, shape (K, K)
     """
     # Midpoint quadrature: evaluate at centers of equal-width subintervals
     ds = 1.0 / steps
@@ -667,13 +674,21 @@ def _compute_dexp_generators(
     """
     Compute Q_a = d/dφ^a[exp(Σ φ^b G_b)] using the dexp map.
 
-    For K=3 (fundamental so(3) representation), uses the exact closed-form:
+    For 3x3 matrices (fundamental so(3) representation), uses the exact
+    closed-form:
         Q_a = G_a - c1(θ) ad_X(G_a) + c2(θ) ad_X²(G_a)
     where c1 = (1-cosθ)/θ², c2 = (θ-sinθ)/θ³
 
-    For K>3 (higher irreps), the 3-term formula is inexact because the
-    Cayley-Hamilton truncation requires K terms for K×K matrices. Uses
-    Fréchet derivative of the matrix exponential via quadrature instead.
+    For K>3 matrices (higher irreps or GL(K)), the 3-term Cayley-Hamilton
+    truncation is inexact. Uses Frechet derivative of the matrix
+    exponential via quadrature instead.
+
+    Args:
+        phi: Lie algebra coefficients, shape (*S, n_gen)
+        generators: Lie algebra generators, shape (n_gen, K, K)
+
+    Returns:
+        Tuple of n_gen matrices Q_a, each shape (*S, K, K)
     """
     phi = np.asarray(phi, dtype=np.float64)
     G = np.asarray(generators, dtype=np.float64)

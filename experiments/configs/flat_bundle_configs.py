@@ -2,8 +2,13 @@
 Flat Bundle Experiment Configurations.
 =======================================
 
-Training configs for each flat bundle hypothesis experiment.
-Each config extends the base Gauge-Transformer config with non-flat transport settings.
+Training configs for flat-bundle hypothesis experiments.
+
+Each config extends the base gauge-theoretic transformer config. The base
+model uses flat (cocycle-satisfying) gauge transport; experiment variants
+enable non-flat transport, per-head flatness gating, and holonomy penalties
+to test when flat vs non-flat geometry is optimal. Gauge group and phi_dim
+are determined by irrep_spec and the resulting generators shape (n_gen, K, K).
 """
 
 from typing import Dict, List, Optional
@@ -12,8 +17,9 @@ from typing import Dict, List, Optional
 def get_base_experiment_config() -> dict:
     """Base config shared by all flat bundle experiments.
 
-    Small-to-medium model suitable for hypothesis testing
-    (not publication-scale, optimize later).
+    Small-to-medium gauge-theoretic transformer suitable for hypothesis
+    testing (not publication-scale). Default is flat transport with learned
+    gauge mode, diagonal covariance, and VFE_dynamic FFN.
     """
     return {
         # Model

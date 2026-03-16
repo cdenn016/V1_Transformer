@@ -1,8 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-Created on Mon Nov 10 14:04:57 2025
+Numba-Accelerated Kernels
+==========================
 
-@author: chris and christine
+JIT-compiled implementations of core operations: KL divergence between
+Gaussians, Gaussian transport (pushforward), and SO(3) Rodrigues formula.
+
+All KL and transport kernels work with arbitrary latent dimension K.
+The Rodrigues formula kernels are SO(3)-specific (phi_dim=3).
+
+Authors: Chris and Christine
+Created: November 2025
 """
 
 
@@ -181,16 +189,10 @@ def transport_gaussian_batch_numba(
 
 
 # =============================================================================
-# SO(3) Lie Algebra Operations - Accelerated
+# SO(3) Rodrigues Formula - Numba Accelerated
 # =============================================================================
-"""
-Ultra-Fast Rodrigues Formula with Numba
-========================================
-
-Optimized SO(3) matrix exponential computation.
-
-Add these to math_utils/numba_kernels.py
-"""
+# These kernels are specific to SO(3) (phi_dim=3, output 3x3 matrices).
+# For SO(N)/GL(K) with K>3, use _matrix_exponential_lie_algebra in transport.py.
 
 import numpy as np
 import numba as nb
@@ -318,9 +320,18 @@ def rodrigues_formula_numba_batch(phi_batch: np.ndarray, eps: float = 1e-8) -> n
 
 def kl_gaussian_numba_wrapper(mu_q, Sigma_q, mu_p, Sigma_p, eps=1e-8):
     """
-    Wrapper for drop-in replacement of kl_gaussian from numerical_utils.py.
-    
-    Handles shape broadcasting and type conversion.
+    Drop-in replacement for kl_gaussian from numerical_utils.py.
+
+    Handles shape broadcasting and type conversion. Supports single-pair
+    (mu (K,), Sigma (K,K)) or one-to-many batch (mu_q (K,), mu_p (N,K)).
+
+    Args:
+        mu_q, Sigma_q: Source distribution, shapes (K,) and (K, K)
+        mu_p, Sigma_p: Target distribution(s), shapes (K,)/(N,K) and (K,K)/(N,K,K)
+        eps: Unused (Numba kernel uses fixed 1e-8)
+
+    Returns:
+        Scalar KL or (N,) array of KL divergences
     """
     # Convert to contiguous float64 for Numba
     mu_q = np.ascontiguousarray(mu_q, dtype=np.float64)

@@ -8,29 +8,30 @@ parallel transport operators Ω_ij.
 Mathematical Framework:
 ----------------------
 **Associated Bundle Structure:**
-    - Principal bundle: (C, SO(3))
-    - Statistical fiber: F = {N(μ, Σ) : μ ∈ ℝᴷ, Σ ∈ Sym⁺⁺(K)}
-    - Agent sections: q(c) = N(μ_q(c), Σ_q(c))
+    - Principal bundle: (C, G) where G is SO(3), SO(N), or GL(K)
+    - Statistical fiber: F = {N(mu, Sigma) : mu in R^K, Sigma in Sym++(K)}
+    - Agent sections: q(c) = N(mu_q(c), Sigma_q(c))
 
 **Push-Forward Operation:**
-Given Gaussian q_j(c) = N(μ_j, Σ_j) and transport Ω_ij(c):
+Given Gaussian q_j(c) = N(mu_j, Sigma_j) and transport Omega_ij(c):
 
-    Ω_ij[q_j](c) = N(Ω_ij μ_j, Ω_ij Σ_j Ω_ijᵀ)
+    Omega_ij[q_j](c) = N(Omega_ij mu_j, Omega_ij Sigma_j Omega_ij^T)
 
 **Properties:**
-    1. Linear transport: μ' = Ω μ
-    2. Covariance transport: Σ' = Ω Σ Ωᵀ (preserves SPD)
-    3. Precision transport: Λ' = Ω⁻ᵀ Λ Ω⁻¹ = (Ω Σ Ωᵀ)⁻¹
-       (reduces to Ω Λ Ωᵀ only when Ω is orthogonal)
+    1. Linear transport: mu' = Omega mu
+    2. Covariance transport: Sigma' = Omega Sigma Omega^T (preserves SPD)
+    3. Precision transport: Lambda' = Omega^{-T} Lambda Omega^{-1}
+       (reduces to Omega Lambda Omega^T only when Omega is orthogonal)
 
 **Usage in Alignment:**
-    KL(q_i || Ω_ij[q_j]) measures how well i's belief matches
+    KL(q_i || Omega_ij[q_j]) measures how well i's belief matches
     the transported belief from j.
 
 Numerical Efficiency:
 --------------------
-- Precompute Σ⁻¹ when needed multiple times
-- Use Ω orthogonality: Ω⁻¹ = Ωᵀ (cheap!)
+- Precompute Sigma^{-1} when needed multiple times
+- For orthogonal Omega (SO(N)): Omega^{-1} = Omega^T (cheap)
+- For GL(K) Omega: explicit inverse needed for precision transport
 - Cache pushed distributions within optimization step
 
 Author: Chris & Christine
@@ -156,8 +157,8 @@ def push_gaussian(
     
     Properties:
         - Preserves Gaussianity
-        - Σ' remains SPD (Ω orthogonal)
-        - If Σ⁻¹ provided, computes (Σ')⁻¹ efficiently
+        - Sigma' remains SPD for any invertible Omega
+        - If Sigma^{-1} provided, computes (Sigma')^{-1} efficiently
     
     Examples:
         >>> # Create source distribution

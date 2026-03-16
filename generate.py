@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Simple click-to-run text generation with attention visualization.
+Text generation with KL-divergence attention visualization.
+
+Generates text from a trained GaugeTransformerLM checkpoint and optionally
+saves publication-quality plots of the attention weights (beta) and pairwise
+KL divergences from the last transformer layer.
 
 Instructions:
     1. Set CHECKPOINT_PATH below to your model
@@ -55,7 +59,18 @@ def _setup_cjk_fonts(plt):
 
 
 def plot_attention_publication(beta, kl, tokens, save_path="attention_pattern.pdf", title=None):
-    """Create publication-quality attention visualization."""
+    """Create publication-quality attention visualization.
+
+    Renders three panels: single-head attention beta, mean attention beta
+    across heads, and mean KL divergence (log-scaled). Saves both PDF and PNG.
+
+    Args:
+        beta: Attention weights, shape (n_heads, N, N).
+        kl: Pairwise KL divergences, shape (n_heads, N, N).
+        tokens: List of token strings for axis labels.
+        save_path: Output file path (PDF). A PNG copy is also saved.
+        title: Optional suptitle for the figure.
+    """
     import matplotlib.pyplot as plt
     from mpl_toolkits.axes_grid1 import make_axes_locatable
 

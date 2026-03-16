@@ -2,23 +2,28 @@
 """
 RoBERTa Diagnostic Analysis
 ============================
-Investigates WHY RoBERTa shows lower α–β correlation than other models.
+Investigates WHY RoBERTa shows lower alpha-beta correlation than other models
+in the KL-attention equivalence framework.
+
+The gauge-theoretic attention mechanism computes beta_ij via KL divergence
+on belief distributions, which approximates standard dot-product attention
+alpha_ij under isotropic Gaussian beliefs. This script diagnoses deviations.
 
 Four hypotheses:
   1. Key-norm CV: RoBERTa's key vectors have higher norm variance,
-     amplifying the residual -λ||K_j||² term that breaks the isotropic
+     amplifying the residual -lambda||K_j||^2 term that breaks the isotropic
      Gaussian approximation.
-  2. Per-head optimal temperature: RoBERTa's optimal τ differs from
-     the universal prediction τ = 2√d_k = 19.0 (for d_k = 90.25).
-  3. Angular vs norm decomposition: The dot-product logit Q·K decomposes
-     as ||Q||||K||cos(θ). If norm variation dominates over angular
+  2. Per-head optimal temperature: RoBERTa's optimal tau differs from
+     the universal prediction tau = 2*sqrt(d_k).
+  3. Angular vs norm decomposition: The dot-product logit Q*K decomposes
+     as ||Q||*||K||*cos(theta). If norm variation dominates over angular
      variation, the KL (pure distance) approximation loses information
      about the multiplicative norm structure.
   4. Per-head effective temperature dispersion: Standard attention heads
      have implicit per-head temperatures set by Q/K norm scales. If
      RoBERTa's heads have more dispersed effective temperatures, a
-     single universal τ fits worse. (Motivated by the gauge transformer's
-     learned per-head κ.)
+     single universal tau fits worse. (Motivated by the gauge transformer's
+     learned per-head kappa.)
 
 Usage:
     python roberta_diagnostics.py

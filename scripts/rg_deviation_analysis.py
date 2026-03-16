@@ -68,7 +68,12 @@ from rg_universality_networkx import (
 
 @dataclass
 class DeviationResult:
-    """Results for one (N, K) configuration."""
+    """Results for one (N, K) configuration.
+
+    Stores both graph-based and CLT exponents along with clustering
+    quality metrics (modularity, spectral gap, cluster balance CV,
+    intra/inter attention ratio) used to diagnose finite-size artifacts.
+    """
     N: int
     K: int
     # Graph-based exponents
@@ -298,8 +303,16 @@ def run_rg_flow_with_diagnostics(
 
 def run_single_configuration(N: int, K: int, seed: int = 42,
                               verbose: bool = False) -> DeviationResult:
-    """
-    Run both CLT and graph-based RG for a single (N, K) configuration.
+    """Run both CLT and graph-based RG for a single (N, K) configuration.
+
+    Args:
+        N: Number of tokens (agents).
+        K: Belief dimension.
+        seed: Random seed for reproducibility.
+        verbose: Print progress and errors.
+
+    Returns:
+        DeviationResult with exponents and clustering quality metrics.
     """
     result = DeviationResult(N=N, K=K)
 
@@ -417,8 +430,10 @@ def fit_finite_size_scaling(
 
 def run_multi_seed(N: int, K: int, n_seeds: int = 5,
                    verbose: bool = False) -> Dict:
-    """
-    Run analysis with multiple random seeds to get error bars.
+    """Run analysis with multiple random seeds to get error bars.
+
+    Returns:
+        Dict with mean/std of exponents and clustering quality metrics.
     """
     results = []
     for seed in range(42, 42 + n_seeds):
@@ -470,12 +485,17 @@ def plot_deviation_diagnostics(
     clt_results: List[Dict],
     output_path: str,
 ):
-    """
-    Generate publication-quality 3-panel diagnostic figure.
+    """Generate publication-quality 3-panel diagnostic figure.
 
-    Panel A: y2(N) and y3(N) vs 1/N with finite-size extrapolation
-    Panel B: |y - y_predicted| vs clustering quality metrics
-    Panel C: CLT vs graph-based exponents comparison
+    Args:
+        all_results: List of per-(N,K) multi-seed result dicts.
+        clt_results: List of CLT-only result dicts for comparison.
+        output_path: File path for the output PNG.
+
+    Panels:
+        A: y2(N), y3(N) vs 1/N with finite-size scaling extrapolation.
+        B: |y - y_predicted| vs clustering quality metrics (modularity, etc.).
+        C: CLT vs graph-based exponents side-by-side comparison.
     """
     fig, axes = plt.subplots(1, 3, figsize=(17, 5.5))
 

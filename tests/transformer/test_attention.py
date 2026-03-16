@@ -4,6 +4,12 @@ Attention Tests
 ===============
 
 Tests for transformer.core.attention module.
+
+Covers KL-divergence-based attention weight computation, attention masking,
+irrep multi-head attention, message aggregation with gauge transport,
+and transport operator construction. Gauge group is determined by the
+generators shape (n_gen, K, K); tests use skew-symmetric generators
+(SO(N)-like) unless explicitly testing GL(K).
 """
 
 import pytest
@@ -12,11 +18,15 @@ import math
 
 
 class TestComputeAttentionWeights:
-    """Test compute_attention_weights function."""
+    """Test KL-divergence-based attention weight computation.
+
+    Attention weights beta are computed via softmax(-KL / tau) on belief
+    distributions (mu, sigma) with gauge transport parameterized by phi.
+    """
 
     @staticmethod
     def _make_so3_generators(K, device):
-        """Create skew-symmetric SO(3) generators for K dimensions."""
+        """Create random skew-symmetric generators of shape (3, K, K)."""
         generators = torch.randn(3, K, K, device=device)
         generators = generators - generators.transpose(-1, -2)
         return generators
@@ -151,7 +161,11 @@ class TestComputeAttentionWeights:
 
 
 class TestComputeKLMatrix:
-    """Test compute_kl_matrix function."""
+    """Test pairwise KL divergence matrix computation.
+
+    The KL matrix has shape (B, N, N) with entry (i,j) = KL(p_i || T_{ij} p_j)
+    where T_{ij} is the gauge transport operator.
+    """
 
     def test_basic_computation(self, cpu_device):
         """Test basic KL matrix computation."""
@@ -252,7 +266,11 @@ class TestCreateAttentionMask:
 
 
 class TestIrrepMultiHeadAttention:
-    """Test IrrepMultiHeadAttention module."""
+    """Test IrrepMultiHeadAttention module.
+
+    Multi-head attention where each head corresponds to an irrep block.
+    Heads are defined by irrep_spec tuples (name, multiplicity, dim).
+    """
 
     @pytest.fixture
     def attention_module(self, cpu_device):
@@ -329,7 +347,11 @@ class TestIrrepMultiHeadAttention:
 
 
 class TestAggregateMessages:
-    """Test aggregate_messages function."""
+    """Test belief message aggregation with gauge transport.
+
+    Messages are transported via Omega operators before weighted
+    aggregation by attention weights beta.
+    """
 
     def test_basic_aggregation(self, cpu_device):
         """Test basic message aggregation with identity transport."""
@@ -377,10 +399,14 @@ class TestAggregateMessages:
 
 
 class TestGLKMetricCorrection:
-    """Test GL(K) aggregation in aggregate_messages.
+    """Test SO(K) vs GL(K) aggregation in aggregate_messages.
 
-    Message aggregation always uses primal transport: Ω μ_j.
-    For SO(K), Ω is orthogonal so Ω^{-T} = Ω identically.
+    Verifies correct transport for both gauge groups:
+    - SO(K): Omega is orthogonal, so Omega^{-T} = Omega.
+    - GL(K): Omega is general invertible; covariance uses Omega Sigma Omega^T.
+    Generators shape (n_gen, K, K) determines the group:
+      SO(K) -> n_gen = K(K-1)/2 skew-symmetric basis matrices
+      GL(K) -> n_gen = K^2 elementary matrices
     """
 
     @staticmethod
@@ -538,7 +564,11 @@ class TestGLKMetricCorrection:
 
 
 class TestComputeTransportOperators:
-    """Test compute_transport_operators function."""
+    """Test gauge transport operator computation.
+
+    Transport operators Omega have shape (B, N, N, K, K) and are computed
+    from phi (B, N, phi_dim) and generators (n_gen, K, K) via matrix exponential.
+    """
 
     def test_basic_computation(self, cpu_device):
         """Test basic transport operator computation."""

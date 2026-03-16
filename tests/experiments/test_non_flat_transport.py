@@ -1,5 +1,10 @@
 """
 Tests for non-flat gauge transport and holonomy computation.
+
+Covers GaugeConnection (bilinear and MLP variants that produce
+connection coefficients delta_ij of shape (B, N, N, n_gen)),
+holonomy computation around triples of positions, and the
+synthetic gauge language dataset with controlled path-dependence.
 """
 
 import pytest
@@ -18,7 +23,12 @@ from transformer.analysis.holonomy import (
 # =============================================================================
 
 class TestGaugeConnection:
-    """Tests for the GaugeConnection module."""
+    """Tests for GaugeConnection: learned connection coefficients delta_ij.
+
+    GaugeConnection maps pairs of belief means (mu_i, mu_j) to Lie-algebra-valued
+    connection coefficients delta of shape (B, N, N, n_gen). Supports bilinear
+    and MLP architectures, both zero-initialized (flat at init).
+    """
 
     @pytest.fixture
     def bilinear_conn(self):
@@ -83,7 +93,11 @@ class TestGaugeConnection:
 # =============================================================================
 
 class TestHolonomy:
-    """Tests for holonomy computation."""
+    """Tests for holonomy computation around position triples.
+
+    Holonomy H_{ijk} = exp(delta_ij) exp(delta_jk) exp(delta_ki) measures
+    curvature of the gauge connection. For flat transport H = I.
+    """
 
     def test_identity_exp_delta_gives_zero_holonomy(self):
         """exp(δ_ij) = I for all edges → holonomy = 0."""
@@ -149,7 +163,12 @@ class TestHolonomy:
 # =============================================================================
 
 class TestSyntheticLanguage:
-    """Tests for the synthetic gauge language."""
+    """Tests for the synthetic gauge language with controlled holonomy.
+
+    SyntheticGaugeLanguage generates sequences where token-to-token transport
+    has tunable path-dependence controlled by epsilon. At epsilon=0 transport
+    is flat (path-independent); at epsilon>0 holonomy is non-trivial.
+    """
 
     def test_flat_language_is_path_independent(self):
         """At ε=0, transport depends only on endpoints."""

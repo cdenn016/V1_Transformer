@@ -1,13 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-COMPREHENSIVE TRANSFORMER VALIDATION
-Addresses all critical issues from grade B- → A:
-1. Distribution of correlations across ALL 144 (layer, head) pairs
-2. Key-norm bias measurement (‖K_j‖² vs attention weight)
-3. Statistical significance (p-values, bootstrap confidence intervals)
-4. Ablation studies (forward KL, reverse KL, symmetric KL)
-5. Multi-passage corpus validation (100+ diverse sentences, cross-passage CIs)
-6. Temperature sweep with confidence intervals across passages
+Comprehensive Validation: KL-Attention Equivalence on Pretrained Models
+========================================================================
+
+Validates the core claim of the gauge-theoretic attention mechanism:
+standard dot-product attention (alpha) is well-approximated by
+KL-divergence-based attention (beta) under isotropic Gaussian beliefs.
+
+Tests run against BERT, RoBERTa, DistilBERT, and ALBERT to verify the
+equivalence is architecture-independent:
+
+1. Distribution of Pearson r(alpha, beta) across all (layer, head) pairs
+2. Key-norm bias: correlation of ||K_j||^2 with attention weight
+3. Statistical significance (p-values, bootstrap CIs)
+4. Ablation: forward KL, reverse KL, symmetric KL variants
+5. Multi-passage corpus validation (100+ passages, cross-passage CIs)
+6. Temperature sweep: optimal tau vs the 2*sqrt(d_head) prediction
+7. Mathematical identity decomposition Q*K/sqrt(d) = (-||Q-K||^2 + ||Q||^2 + ||K||^2) / 2*sqrt(d)
 """
 
 import os
@@ -221,7 +230,7 @@ mpl.rcParams.update({
 # Core Utilities
 # -----------------------------
 def get_qkv_for_layer(model, hidden_states, layer_idx: int, head_idx: int):
-    """Extract Q, K, V for a specific layer and head."""
+    """Extract Q, K, V for a specific layer and head (BERT-only)."""
     h = hidden_states[layer_idx][0]  # [seq_len, hidden_dim]
     
     attn_self = model.encoder.layer[layer_idx].attention.self
@@ -242,12 +251,18 @@ def get_qkv_for_layer(model, hidden_states, layer_idx: int, head_idx: int):
 
 
 def compute_attention_variants(Qh, Kh, tau: float) -> Dict[str, torch.Tensor]:
-    """
-    Compute multiple attention variants:
-    - alpha: standard dot-product attention
-    - beta_forward: KL-based with -||Q_i - K_j||^2 (our method)
-    - beta_reverse: KL-based with -||K_j - Q_i||^2 (should be identical)
-    - beta_symmetric: symmetrized KL
+    """Compute standard and KL-based attention variants for comparison.
+
+    Args:
+        Qh: Query vectors for one head, shape (seq_len, d).
+        Kh: Key vectors for one head, shape (seq_len, d).
+        tau: Temperature for the KL-based squared-distance scores.
+
+    Returns:
+        Dict with keys 'alpha' (dot-product), 'beta_forward' (-||Q-K||^2/tau),
+        'beta_reverse' (-||K-Q||^2/tau, identical to forward by symmetry),
+        'beta_symmetric' (average of forward and reverse scores),
+        'scores_dot', and 'scores_kl'.
     """
     seq_len, d = Qh.shape
     
@@ -358,14 +373,17 @@ def compute_metrics_with_stats(alpha: torch.Tensor,
                                 beta: torch.Tensor,
                                 Kh: torch.Tensor,
                                 n_boot: int = 1000) -> Dict:
-    """
-    Compute comprehensive metrics with statistical significance.
+    """Compute comprehensive alpha-vs-beta metrics with statistical significance.
 
-    Returns dictionary with:
-    - Rowwise correlations (per query token) -- vectorized, no bootstrap per row
-    - Global correlation with p-value and CI
-    - Key-norm bias analysis
-    - Peak match statistics
+    Args:
+        alpha: Dot-product attention, shape (seq_len, seq_len).
+        beta: KL-based attention, shape (seq_len, seq_len).
+        Kh: Key vectors, shape (seq_len, d). Used for key-norm bias analysis.
+        n_boot: Number of bootstrap samples for CI estimation.
+
+    Returns:
+        Dict with per-token correlations, global r/p/CI, peak match rate,
+        and key-norm bias (r, p, CI for both alpha and beta vs ||K_j||^2).
     """
     alpha_np = alpha.detach().cpu().numpy()
     beta_np = beta.detach().cpu().numpy()
@@ -1415,9 +1433,13 @@ MULTI_MODEL_NAMES = [
 # Adapter: each model family has different internal structure.
 # This returns (Q_all, K_all, V_all) each [seq_len, hidden_dim] for a given layer.
 def _get_qkv_generic(model, hidden_states, layer_idx: int, model_name: str):
-    """
-    Extract Q, K, V projections for a given layer across model families.
-    Returns Q_all, K_all, V_all: [seq_len, hidden_dim] and (num_heads, head_dim).
+    """Extract Q, K, V projections for a given layer across model families.
+
+    Supports BERT, RoBERTa, DistilBERT, and ALBERT architectures.
+
+    Returns:
+        (Q, K, V, num_heads, head_dim) where Q/K/V have shape
+        (seq_len, num_heads, head_dim).
     """
     h = hidden_states[layer_idx][0]  # [seq_len, hidden_dim]
 
@@ -1476,13 +1498,21 @@ def run_multi_model_validation(
     corpus: List[str], tau: float, device: str = "cpu",
     model_names: List[str] = None, n_passages: int = 20,
 ) -> Dict[str, Dict]:
-    """
-    Run fast multi-passage analysis on several pretrained models.
-    Uses a subset of the corpus for speed.
+    """Run fast multi-passage alpha-beta correlation on several pretrained models.
 
-    Returns dict mapping model_name -> {
-        grand_mean_r, grand_std_r, per_head_means, n_layers, n_heads, n_params
-    }
+    Computes grand-mean Pearson r(alpha, beta) across all (layer, head) pairs
+    and passages for each model. Uses a subset of the corpus for speed.
+
+    Args:
+        corpus: List of text passages.
+        tau: Temperature for KL-based attention scores.
+        device: 'cpu' or 'cuda'.
+        model_names: List of HuggingFace model identifiers to test.
+        n_passages: Number of passages to use per model.
+
+    Returns:
+        Dict mapping model_name to summary dict with grand_mean_r,
+        grand_std_r, per_passage_means, architecture info, and n_params.
     """
     if model_names is None:
         model_names = MULTI_MODEL_NAMES
@@ -1617,18 +1647,18 @@ def plot_multi_model_comparison(multi_model_results: Dict[str, Dict], save_path:
 def run_identity_decomposition(
     model, tokenizer, text: str, device: str = "cpu"
 ) -> Dict:
-    """
-    Test the core mathematical identity:
-        Q_i · K_j / √d = (-||Q_i - K_j||² + ||Q_i||² + ||K_j||²) / (2√d)
+    """Verify the exact identity linking dot-product and distance-based attention.
 
-    For each (layer, head), compute:
-    1. LHS: standard dot-product scores
-    2. RHS: decomposed form
-    3. Residual (should be ~0 to machine precision)
-    4. The relative contribution of each term: quadratic distance vs norms
+    For each (layer, head), checks that:
+        Q_i * K_j / sqrt(d) = (-||Q_i - K_j||^2 + ||Q_i||^2 + ||K_j||^2) / (2*sqrt(d))
 
-    This validates that the KL-attention form is an EXACT reparametrization,
-    not an approximation, addressing the theoretical core of the paper.
+    This identity is what makes KL-attention an exact reparametrization of
+    dot-product attention (up to token-dependent norm biases), rather than
+    an approximation.
+
+    Returns:
+        List of per-head dicts with residual statistics and fractional
+        contribution of the distance vs norm terms.
     """
     inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512).to(device)
     with torch.no_grad():
@@ -1780,12 +1810,15 @@ def run_attention_entropy_analysis(
     model, tokenizer, corpus: List[str], tau: float,
     device: str = "cpu", n_passages: int = 20,
 ) -> Dict:
-    """
-    For each (layer, head), compute attention entropy for both α and β
-    across passages. High entropy ≈ uniform attention.
+    """Compute Shannon entropy of alpha and beta attention per (layer, head).
 
-    Returns per-(layer, head) mean entropy for α and β, and the
-    entropy ratio β/α (>1 means KL attention is more diffuse).
+    High entropy indicates near-uniform attention. The entropy ratio
+    beta/alpha (>1 means KL-based attention is more diffuse than
+    dot-product attention) is diagnostic of temperature mismatch.
+
+    Returns:
+        Dict with entropy_alpha, entropy_beta arrays of shape
+        (n_layers, n_heads), their elementwise ratio, and metadata.
     """
     sub_corpus = corpus[:n_passages]
     num_layers = len(model.encoder.layer)
@@ -1936,9 +1969,14 @@ def plot_attention_entropy(entropy_results: Dict, save_path: Path):
 def run_seqlen_sensitivity(
     model, tokenizer, tau: float, device: str = "cpu",
 ) -> Dict:
-    """
-    Test how the alpha-beta correlation changes with sequence length.
-    Uses repeated concatenation of a base passage to create varying lengths.
+    """Test how alpha-beta correlation varies with sequence length.
+
+    Uses repeated concatenation of a base passage to create inputs of
+    varying lengths. Helps determine whether the KL-attention equivalence
+    degrades for longer contexts.
+
+    Returns:
+        List of dicts, one per target length, with mean/std/median/min/max r.
     """
     base_text = (
         "The quick brown fox jumps over the lazy dog. "

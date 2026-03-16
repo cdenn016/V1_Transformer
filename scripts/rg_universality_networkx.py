@@ -5,29 +5,30 @@ Graph-Theoretic RG Coarse-Graining Analysis (NetworkX)
 ======================================================
 
 Implements the attention-graph coarse-graining that underlies the
-RG universality argument for the transformer limit.
+RG universality argument for the gauge VFE transformer.
 
-The key claim: under graph coarse-graining of the attention matrix,
-both gauge VFE and standard transformer attention converge to the
-same modular structure. This is the graph-theoretic signature of
-belonging to the same universality class.
+The key claim: under iterative spectral-clustering coarse-graining of the
+attention matrix beta_ij, the coupling constants (g1 anisotropy, g2 gauge
+variation, g3 holonomy) decay as power laws with predicted exponents
+y1=-1/2, y2=-1, y3=-2. This decay makes all gauge-specific structure
+irrelevant in the IR, so both gauge VFE and standard transformer attention
+converge to the same fixed point -- the signature of a shared universality
+class.
 
-STRUCTURE
----------
-1. Build attention graphs from β_ij (weighted directed graphs)
-2. Detect communities (meta-agents) via spectral clustering
-3. Coarse-grain: contract communities to single nodes
-4. Measure coupling constants at each coarse-graining level
-5. Track RG flow across levels and compare VFE vs transformer
+Structure:
+    1. Build weighted directed graphs from attention beta_ij
+    2. Detect communities (meta-agents) via spectral clustering
+    3. Coarse-grain: contract communities into meta-agents
+    4. Measure coupling constants g1, g2, g3 at each RG level
+    5. Fit scaling exponents from log(g) vs log(coarse-graining ratio)
+    6. Direct CLT validation of exponents (independent of clustering)
 
-USAGE
------
-    Click-to-run: edit the CONFIG section at the bottom of this file,
-    then run:
-        python scripts/rg_universality_networkx.py
+The belief covariance at each level decomposes into original (averaged
+Sigma_i from micro-agents) and emergent (within-cluster Var_A(mu))
+channels, tracked separately through the flow.
 
-Author: Claude / Robert C. Dennis
-Date: March 2026
+Usage:
+    python scripts/rg_universality_networkx.py
 """
 
 import os
@@ -51,7 +52,19 @@ from dataclasses import dataclass, field
 
 @dataclass
 class RGLevel:
-    """State of the theory at one coarse-graining level."""
+    """State of the theory at one coarse-graining level.
+
+    Attributes:
+        attention: (n_nodes, n_nodes) renormalized attention matrix.
+        means: (n_nodes, K) belief means of meta-agents.
+        covariances: (n_nodes, K, K) total meta-agent covariances.
+        transports: (n_nodes, n_nodes, K, K) or None, gauge transport matrices.
+        g1_anisotropy: Total anisotropy coupling (original + emergent).
+        g1_original: Anisotropy from averaged microscopic Sigma_i only.
+        g1_emergent: Emergent anisotropy from within-cluster Var_A(mu).
+        g2_gauge_variation: Gauge connection variation coupling.
+        g3_holonomy: Holonomy (curvature) coupling.
+    """
     level: int
     n_nodes: int
     attention: np.ndarray          # (n_nodes, n_nodes)
@@ -72,7 +85,7 @@ class RGLevel:
 
 @dataclass
 class RGFlow:
-    """Complete RG flow trajectory."""
+    """Complete RG flow trajectory across coarse-graining levels."""
     levels: List[RGLevel] = field(default_factory=list)
 
     @property
@@ -580,23 +593,22 @@ def generate_synthetic_vfe_system(
     sigma2: float = 1.0,
     n_true_clusters: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Generate a synthetic VFE system with known couplings.
+    """Generate a synthetic VFE system with known coupling constants.
 
-    Creates N tokens organized into clusters with controlled anisotropy (g₁)
-    and gauge variation (g₂). The coupling strengths are scaled by 1/√K to
-    keep the system in the linearized regime where the RG predictions apply.
+    Creates N tokens organized into clusters with controlled anisotropy (g1)
+    and gauge variation (g2). Transports are constructed as cocycle-plus-noise
+    to produce controlled holonomy.
 
     Parameters
     ----------
     N : int
-        Number of tokens.
+        Number of tokens (agents).
     K : int
-        Belief dimension.
+        Belief dimension (embedding dimension).
     g1 : float
-        Target anisotropy coupling (before 1/√K scaling).
+        Target anisotropy coupling.
     g2 : float
-        Target gauge variation coupling (before 1/√K scaling).
+        Target gauge variation coupling.
     sigma2 : float
         Isotropic variance scale.
     n_true_clusters : int or None
@@ -673,14 +685,20 @@ def generate_synthetic_vfe_system(
 
 
 def direct_clt_validation(K: int = 8, N: int = 128, n_trials: int = 200):
-    """
-    Direct validation of CLT-based scaling predictions, independent of
-    spectral clustering. Tests the pure averaging claim:
+    """Direct CLT validation of RG scaling predictions, independent of clustering.
 
-        If Δ_i are i.i.d. traceless perturbations, then
-        ||mean(Δ_{1..n})|| decays as n^{-1/2}.
+    Tests the pure averaging claim without spectral clustering artifacts:
+      - g1: ||mean(Delta_{1..n})|| decays as n^{-1/2} for i.i.d. traceless perturbations
+      - g2: ||mean(delta_Omega)|| decays as n^{-1} (n^2 transport entries)
+      - g3: ||H - I|| decays as n^{-1} (holonomy from averaged noise)
 
-    Similarly for transports and holonomy.
+    Args:
+        K: Belief dimension.
+        N: Number of tokens (determines max cluster size).
+        n_trials: Monte Carlo trials per cluster size.
+
+    Returns:
+        Dict with fitted exponents y1, y2, y3 and raw data arrays.
     """
     print("\n" + "=" * 72)
     print(f"DIRECT CLT VALIDATION (K={K}, N={N}, {n_trials} trials)")

@@ -1,28 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-Created on Thu Dec 11 20:21:52 2025
+CUDA-Optimized Kernels for Gauge-Theoretic Transformer
+=======================================================
 
-@author: chris and christine
-"""
+GPU-accelerated implementations of core operations using CuPy:
+KL divergence, Gaussian transport, gauge transport (matrix exponential),
+and softmax weight computation.
 
-"""
-CUDA-Optimized Kernels for VFE Simulation
-==========================================
-
-GPU-accelerated implementations of core operations using CuPy.
-These provide massive speedups for RTX 5090 (and similar GPUs).
+All functions operate on K-dimensional Gaussians where K is determined
+by the gauge group representation. Transport operators Omega in GL(K)
+are computed via the Lie algebra generators (n_gen, K, K).
 
 Performance Expectations (RTX 5090, N=100 agents, K=8):
 - KL divergence batch: CPU ~10ms, GPU ~0.1ms (100x speedup)
 - Transport batch: CPU ~5ms, GPU ~0.05ms (100x speedup)
 - Gradient computation: CPU ~100ms, GPU ~5ms (20x speedup)
 
-Architecture:
-- Uses CuPy for NumPy-compatible GPU arrays
-- Raw CUDA kernels via CuPy for custom operations
-- Batched operations to maximize GPU utilization
-
-Author: Chris
+Authors: Chris and Christine
 Date: December 2025
 """
 

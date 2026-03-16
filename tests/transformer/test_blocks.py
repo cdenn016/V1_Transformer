@@ -4,6 +4,11 @@ Blocks Tests
 ============
 
 Tests for transformer.core.blocks module.
+
+GaugeTransformerBlock is a single layer (attention + VFE FFN) operating
+on belief states (mu, sigma, phi). GaugeTransformerStack chains multiple
+blocks. Both accept generators of shape (n_gen, K, K) that define the
+gauge group; tests here use random skew-symmetric generators.
 """
 
 import pytest
@@ -12,7 +17,7 @@ from transformer.core.block_config import BlockConfig
 
 
 def _make_generators(K=16):
-    """Create antisymmetric SO(3) generators."""
+    """Create random skew-symmetric generators of shape (3, K, K)."""
     G = torch.randn(3, K, K)
     return G - G.transpose(-1, -2)
 
@@ -36,7 +41,7 @@ def _make_block_config(K=16, hidden_dim=32, n_layers=1, **overrides):
 
 
 class TestGaugeTransformerBlock:
-    """Test GaugeTransformerBlock class."""
+    """Test single GaugeTransformerBlock (attention + VFE FFN layer)."""
 
     @pytest.fixture
     def block(self, cpu_device):
@@ -83,7 +88,7 @@ class TestGaugeTransformerBlock:
 
 
 class TestGaugeTransformerStack:
-    """Test GaugeTransformerStack class."""
+    """Test GaugeTransformerStack: sequential composition of multiple blocks."""
 
     @pytest.fixture
     def stack(self, cpu_device):

@@ -3,7 +3,12 @@
 Model Tests
 ===========
 
-Tests for transformer.core.model.GaugeTransformerLM
+Tests for transformer.core.model.GaugeTransformerLM.
+
+Covers model creation, forward pass, gradient flow, eval-mode determinism,
+configuration variants (evolve_sigma, evolve_phi, kappa, covariance mode),
+and state-dict save/load. The gauge group and phi_dim are derived from the
+irrep_spec and generators; these tests exercise the default SO(N) path.
 """
 
 import pytest
@@ -12,7 +17,11 @@ import torch.nn as nn
 
 
 class TestGaugeTransformerLMCreation:
-    """Test model creation and configuration."""
+    """Test GaugeTransformerLM creation with various configs.
+
+    Verifies that model construction succeeds with different irrep_spec
+    layouts, FFN modes, embedding tying, and covariance settings.
+    """
 
     def test_create_minimal_model(self, minimal_config, cpu_device):
         """Test creating model with minimal config."""
@@ -97,7 +106,11 @@ class TestGaugeTransformerLMCreation:
 
 
 class TestGaugeTransformerLMForward:
-    """Test model forward pass."""
+    """Test GaugeTransformerLM forward pass.
+
+    Forward maps input_ids -> logits (B, N, V), propagating belief states
+    (mu, sigma, phi) through the gauge transformer stack.
+    """
 
     def test_forward_basic(self, gauge_model, batch_tensors, cpu_device):
         """Test basic forward pass."""
@@ -193,7 +206,7 @@ class TestGaugeTransformerLMForward:
 
 
 class TestGaugeTransformerLMGradients:
-    """Test model gradient computation."""
+    """Test gradient flow through the full gauge transformer stack."""
 
     def test_gradients_flow(self, minimal_config, cpu_device):
         """Test gradients flow through model."""
@@ -284,7 +297,11 @@ class TestGaugeTransformerLMEvalMode:
 
 
 class TestGaugeTransformerLMConfigurations:
-    """Test various model configurations."""
+    """Test model behavior under different configuration knobs.
+
+    Exercises evolve_sigma, evolve_phi, kappa_beta temperature,
+    layer count, and diagonal vs full covariance mode.
+    """
 
     def test_config_evolve_sigma(self, cpu_device):
         """Test evolve_sigma configuration."""

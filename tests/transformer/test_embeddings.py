@@ -4,6 +4,10 @@ Embeddings Tests
 ================
 
 Tests for transformer.core.embeddings module.
+
+GaugeTokenEmbedding maps token IDs to belief states (mu, sigma, phi).
+GaugePositionalEncoding composes positional information into phi
+(shape (B, N, phi_dim)) via learned or sinusoidal encodings.
 """
 
 import pytest
@@ -11,7 +15,7 @@ import torch
 
 
 class TestGaugeTokenEmbedding:
-    """Test GaugeTokenEmbedding class."""
+    """Test GaugeTokenEmbedding: token IDs -> (mu, sigma, phi) belief states."""
 
     def test_creation(self, cpu_device):
         """Test creating token embedding."""
@@ -69,7 +73,11 @@ class TestGaugeTokenEmbedding:
 
 
 class TestGaugePositionalEncoding:
-    """Test GaugePositionalEncoding class."""
+    """Test GaugePositionalEncoding: positional information composed into phi.
+
+    Supports learned and sinusoidal modes. phi_dim is determined by the
+    gauge group generators (n_gen).
+    """
 
     def test_creation_learned(self, cpu_device):
         """Test creating learned positional encoding."""

@@ -3,7 +3,9 @@
 Import Tests
 ============
 
-Verify all import paths work correctly.
+Verify all public import paths for the gauge-theoretic transformer package:
+core (model, attention, blocks, embeddings, variational FFN, prior bank),
+data, training, analysis, and baselines modules.
 """
 
 import pytest

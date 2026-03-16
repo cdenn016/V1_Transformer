@@ -2,7 +2,12 @@
 Test analytic phi gradient against autograd reference.
 
 Verifies that analytic_phi_gradient_block_diag produces gradients
-matching torch.autograd.grad through the full KL → softmax pipeline.
+matching torch.autograd.grad through the full KL -> softmax pipeline.
+
+phi has shape (B, N, n_gen) where n_gen is the Lie algebra dimension
+(e.g., 3 for SO(3)). The analytic gradient uses a dexp series expansion
+to avoid autograd through the matrix exponential. Tests cover various
+irrep block layouts and dexp truncation orders.
 """
 
 import pytest
@@ -17,7 +22,11 @@ from transformer.core.gauge_utils import (
 
 
 def _make_so3_generators(K: int, irrep_dims: list):
-    """Create block-diagonal SO(3)-like generators for testing."""
+    """Create block-diagonal skew-symmetric generators for testing.
+
+    Returns generators of shape (3, K, K). Each irrep block of dimension d
+    gets standard so(3) generators (d=3) or generic antisymmetric entries.
+    """
     n_gen = 3  # SO(3)
     generators = torch.zeros(n_gen, K, K)
     start = 0

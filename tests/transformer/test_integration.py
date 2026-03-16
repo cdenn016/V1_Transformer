@@ -3,7 +3,11 @@
 Integration Tests
 =================
 
-End-to-end tests for the transformer module.
+End-to-end tests for the gauge-theoretic transformer.
+
+Covers full training loops (forward + backward + optimizer step),
+output distribution validity, causal attention masking, determinism,
+gauge-vs-standard baseline comparison, and memory behavior.
 """
 
 import pytest
@@ -12,7 +16,7 @@ import torch.nn.functional as F
 
 
 class TestEndToEndTraining:
-    """Test complete training workflow."""
+    """Test complete training workflow (forward, loss, backward, optimizer step)."""
 
     def test_single_training_step(self, minimal_config, cpu_device):
         """Test a single training step completes without errors."""
@@ -214,7 +218,11 @@ class TestModelDeterminism:
 
 
 class TestGaugeVsStandard:
-    """Compare gauge transformer to standard transformer."""
+    """Compare GaugeTransformerLM to StandardTransformerLM baseline.
+
+    Both models should produce valid finite logits of the same shape;
+    outputs will differ due to the gauge-theoretic attention mechanism.
+    """
 
     def test_both_produce_valid_outputs(self, minimal_config, cpu_device):
         """Test both model types produce valid outputs."""

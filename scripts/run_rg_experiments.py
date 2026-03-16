@@ -1,28 +1,27 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-RG Universality Experiments — Phase 0 & Phase 1
-================================================
+RG Universality Experiments -- Phase 0 & Phase 1
+=================================================
 
 Concrete, runnable experiments testing the RG universality claim:
 "The standard transformer is a stable IR fixed point of the gauge VFE."
 
-PHASE 0 (post-hoc, no training needed, ~hours):
-    0A: RG coarse-graining exponents from existing checkpoints  [HF6.3]
-    0B: Emergent anisotropy measurement                         [HF6.4]
+Extracts attention matrices (beta) and belief states (mu, sigma) from
+trained GaugeTransformerLM checkpoints, runs RG coarse-graining, and
+measures scaling exponents. Sigma can be diagonal (B, N, K) or full
+(B, N, K, K) depending on the model's diagonal_covariance setting.
 
-PHASE 1 (training runs, ~1-2 weeks on RTX 5090):
-    1A: Sample-efficiency comparison at K ∈ {8, 16, 32, 64}    [HF6.1]
-    1B: Scaling exponent comparison (same/different β?)          [HF6.2]
+PHASE 0 (post-hoc, no training needed):
+    0A: RG coarse-graining exponents from existing checkpoints
+    0B: Emergent anisotropy measurement (Var_A(mu) decomposition)
 
-USAGE
------
-    Click-to-run: edit the CONFIG section at the bottom of this file,
-    then run:
-        python scripts/run_rg_experiments.py
+PHASE 1 (training runs):
+    1A: Sample-efficiency comparison at varying K
+    1B: Scaling exponent comparison (same/different beta?)
 
-Author: Claude / Robert C. Dennis
-Date: March 2026
+Usage:
+    python scripts/run_rg_experiments.py
 """
 
 import sys
@@ -50,15 +49,16 @@ from typing import Dict, List, Tuple, Any, Optional
 # ============================================================================
 
 def phase_0a_coarse_graining_exponents(checkpoint_path: str, n_samples: int = 50):
-    """
-    Extract attention matrices + beliefs from a trained model,
-    run the RG coarse-graining flow, measure scaling exponents.
+    """Extract attention and beliefs from a trained model, run RG flow.
 
-    This tests: y₁ = -1/2, y₂ = -1, y₃ = -2
+    Tests the predicted scaling exponents: y1 = -1/2, y2 = -1, y3 = -2.
+    Attention beta and belief states (mu, sigma) are extracted from the
+    model's forward_with_attention pass. Sigma is handled as either
+    diagonal (N, K) or full (N, K, K).
 
     Args:
-        checkpoint_path: Path to a trained model .pt file
-        n_samples: Number of text samples to analyze
+        checkpoint_path: Path to a trained GaugeTransformerLM .pt file.
+        n_samples: Number of validation-set samples to analyze.
     """
     from transformer.utils.checkpoint import load_checkpoint, get_tokenizer
     from transformer.core.model import GaugeTransformerLM
@@ -426,7 +426,12 @@ def phase_1a_sample_efficiency(
 
 
 def _build_vfe_config(K: int, max_steps: int, dataset: str) -> dict:
-    """Build a gauge VFE config for a given K."""
+    """Build a gauge VFE config for a given belief dimension K.
+
+    Gauge group and head count are determined by K: smaller K uses
+    single-head GL(K), larger K splits across multiple heads with
+    reduced irrep dimension.
+    """
     # Determine gauge group dimensions
     # For small K, use single head; for larger K, multi-head
     if K <= 16:
@@ -482,7 +487,11 @@ def _build_vfe_config(K: int, max_steps: int, dataset: str) -> dict:
 
 
 def _build_transformer_config(K: int, max_steps: int, dataset: str) -> dict:
-    """Build a standard transformer config parameter-matched to VFE."""
+    """Build a standard transformer config, parameter-matched to gauge VFE.
+
+    Extra parameters that VFE spends on sigma and phi are redirected
+    to the MLP hidden dimension for a fair comparison.
+    """
     # Standard transformer at matched embedding dimension
     # MLP hidden dim absorbs the parameters VFE spends on σ, φ
     n_heads = max(1, K // 8)
