@@ -51,10 +51,12 @@ The experimental comparison suffers from significant confounds that weaken the c
 
 - **The "outperforms by 1.66x" comparison** (PPL 71.6 vs. 118.6) is at matched *embedding dimension* ($d_{\text{model}} = 90$), where the standard transformer has only 4.6M parameters vs. the GL(K) model's 58.8M. This is a 12.8x parameter advantage for the gauge model. The per-token covariance matrices and gauge frame parameters ($\Sigma_i \in \mathbb{R}^{K \times K}$, $\phi_i \in \mathbb{R}^{K^2}$) constitute an enormous parameter overhead that is not present in the standard architecture.
 - **The parameter-matched comparison** (PPL 71.6 vs. 48.5 at ~84.2M params) shows the standard transformer *outperforms* the gauge model by 32%. This is the more relevant comparison for practical claims about model quality.
-- **No positional encoding** is used in either model (a design choice acknowledged by the authors), which disadvantages both architectures but particularly limits the ceiling performance.
+- **Different positional encoding schemes** are used: the standard transformer uses learned positional embeddings while the GL(K) model uses RoPE (which the manuscript itself derives as a position-dependent gauge frame restriction to $\text{SO}(2)^{d_k/2}$). While both models have positional encoding, the use of different schemes introduces a confound---any performance difference could partly reflect the choice of positional encoding rather than the gauge-theoretic architecture per se.
 - **Training for only 1 epoch** on WikiText-103 means both models are likely undertrained, making perplexity comparisons less informative.
 
-**Suggestion:** (a) Present the parameter-matched comparison as the primary result, not the embedding-matched one. The "1.66x improvement" headline is misleading given the parameter asymmetry. (b) Add intermediate baselines: a standard transformer at $d_{\text{model}} = 90$ with MLP disabled (to isolate the attention mechanism contribution) and with parameter count equalized via wider layers. (c) Consider training both models to convergence (multiple epochs) for a fairer comparison. (d) Report FLOPs per training step and total training compute, since the gauge model requires matrix exponentials and per-pair KL computations that are substantially more expensive.
+It is noteworthy that the GL(K) model's use of RoPE is itself a prediction of the gauge framework (Section 3.5 derives RoPE as position-dependent gauge frames in $\text{SO}(2)^{d_k/2}$), which lends internal consistency. However, since the standard baseline uses a different positional encoding scheme (learned embeddings), attributing performance differences solely to gauge-theoretic attention vs. dot-product attention is complicated by this confound.
+
+**Suggestion:** (a) Present the parameter-matched comparison as the primary result, not the embedding-matched one. The "1.66x improvement" headline is misleading given the parameter asymmetry. (b) Add intermediate baselines: a standard transformer at $d_{\text{model}} = 90$ with MLP disabled (to isolate the attention mechanism contribution) and with parameter count equalized via wider layers. (c) Include a baseline where both models use the same positional encoding (e.g., both with RoPE) to isolate the attention mechanism contribution. (d) Consider training both models to convergence (multiple epochs) for a fairer comparison. (e) Report FLOPs per training step and total training compute, since the gauge model requires matrix exponentials and per-pair KL computations that are substantially more expensive.
 
 ### M3. Manuscript Length and Structure
 
@@ -115,7 +117,8 @@ The manuscript references a GitHub repository (epistemic-geometry), but the code
 
 ### m9. Missing Baselines
 The language modeling comparison lacks several relevant baselines:
-- A standard transformer *with* positional encoding (to quantify the impact of omitting PE)
+- A standard transformer using RoPE (matching the GL(K) model's positional encoding) to control for the positional encoding confound
+- A GL(K) model using learned positional embeddings (matching the standard baseline) for the same reason
 - Linear attention models (to compare with the kernel interpretation)
 - A pure distance-based attention model without the gauge machinery (to isolate the contribution of gauge transport)
 
@@ -153,7 +156,7 @@ The Bayesian hierarchical model (Section 5.2.5, referenced but not fully shown i
 |---|---|---|
 | Reproducibility | Partial | Code available but no version tags; single-run perplexity without confidence intervals |
 | Statistical reporting | Good | CIs, SEs reported for BERT validation; missing for GL(K) model |
-| Baselines | Incomplete | Missing positional-encoding baseline, linear attention, ablations |
+| Baselines | Incomplete | Missing matched-PE baselines, linear attention, ablations |
 | Figures | Adequate | Some figures may need vector format for publication |
 | Data availability | Good | WikiText-103 is public; BERT models are public |
 | Hyperparameter sensitivity | Missing | No ablation over $K$, gauge group dimension, $\alpha$, $T_{\text{inner}}$ |
