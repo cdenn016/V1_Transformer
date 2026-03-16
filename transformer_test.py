@@ -1,13 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-COMPREHENSIVE TRANSFORMER VALIDATION
-Addresses all critical issues from grade B- → A:
-1. Distribution of correlations across ALL 144 (layer, head) pairs
-2. Key-norm bias measurement (‖K_j‖² vs attention weight)
-3. Statistical significance (p-values, bootstrap confidence intervals)
-4. Ablation studies (forward KL, reverse KL, symmetric KL)
-5. Multi-passage corpus validation (100+ diverse sentences, cross-passage CIs)
-6. Temperature sweep with confidence intervals across passages
+Comprehensive Validation: KL-Attention Equivalence on Pretrained Models
+========================================================================
+
+Validates the core claim of the gauge-theoretic attention mechanism:
+standard dot-product attention (alpha) is well-approximated by
+KL-divergence-based attention (beta) under isotropic Gaussian beliefs.
+
+Tests run against BERT, RoBERTa, DistilBERT, and ALBERT to verify the
+equivalence is architecture-independent:
+
+1. Distribution of Pearson r(alpha, beta) across all (layer, head) pairs
+2. Key-norm bias: correlation of ||K_j||^2 with attention weight
+3. Statistical significance (p-values, bootstrap CIs)
+4. Ablation: forward KL, reverse KL, symmetric KL variants
+5. Multi-passage corpus validation (100+ passages, cross-passage CIs)
+6. Temperature sweep: optimal tau vs the 2*sqrt(d_head) prediction
+7. Mathematical identity decomposition Q*K/sqrt(d) = (-||Q-K||^2 + ||Q||^2 + ||K||^2) / 2*sqrt(d)
 """
 
 import os
@@ -221,7 +230,7 @@ mpl.rcParams.update({
 # Core Utilities
 # -----------------------------
 def get_qkv_for_layer(model, hidden_states, layer_idx: int, head_idx: int):
-    """Extract Q, K, V for a specific layer and head."""
+    """Extract Q, K, V for a specific layer and head (BERT-only)."""
     h = hidden_states[layer_idx][0]  # [seq_len, hidden_dim]
     
     attn_self = model.encoder.layer[layer_idx].attention.self
@@ -242,12 +251,18 @@ def get_qkv_for_layer(model, hidden_states, layer_idx: int, head_idx: int):
 
 
 def compute_attention_variants(Qh, Kh, tau: float) -> Dict[str, torch.Tensor]:
-    """
-    Compute multiple attention variants:
-    - alpha: standard dot-product attention
-    - beta_forward: KL-based with -||Q_i - K_j||^2 (our method)
-    - beta_reverse: KL-based with -||K_j - Q_i||^2 (should be identical)
-    - beta_symmetric: symmetrized KL
+    """Compute standard and KL-based attention variants for comparison.
+
+    Args:
+        Qh: Query vectors for one head, shape (seq_len, d).
+        Kh: Key vectors for one head, shape (seq_len, d).
+        tau: Temperature for the KL-based squared-distance scores.
+
+    Returns:
+        Dict with keys 'alpha' (dot-product), 'beta_forward' (-||Q-K||^2/tau),
+        'beta_reverse' (-||K-Q||^2/tau, identical to forward by symmetry),
+        'beta_symmetric' (average of forward and reverse scores),
+        'scores_dot', and 'scores_kl'.
     """
     seq_len, d = Qh.shape
     

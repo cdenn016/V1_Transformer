@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Created on Sat Nov  8 16:43:41 2025
+Numerical Stability Utilities
+==============================
 
-@author: chris and christine
+KL divergence between Gaussians, safe matrix inversion, and covariance
+sanitization. Dispatches to GPU (CuPy) or Numba when available, with
+a pure-NumPy fallback.
 
+Authors: Chris and Christine
+Created: November 2025
 Updated: December 2025 - Added CUDA/GPU support via backend abstraction
 """
 
@@ -118,10 +123,18 @@ def _kl_gaussian_numpy_impl(
     return_terms: bool = False
 ):
     """
-    Original NumPy implementation - used as fallback.
-    
-    This is your existing kl_gaussian code - just renamed.
-    Keep ALL your existing implementation here!
+    Pure NumPy KL(q||p) implementation, used as fallback when Numba/CuPy
+    are unavailable or when return_terms=True is requested.
+
+    Args:
+        mu_q, Sigma_q: Source distribution N(mu_q, Sigma_q)
+        mu_p, Sigma_p: Target distribution N(mu_p, Sigma_p)
+        eps: Regularization (default: 1e-8)
+        return_terms: If True, return dict with term breakdown
+
+    Returns:
+        kl: KL divergence as float32 scalar or array
+        OR (kl, terms) if return_terms=True
     """
     # Get latent dimension
     K = mu_q.shape[-1]
@@ -368,8 +381,17 @@ def sanitize_sigma(Sigma: np.ndarray,
     """
     Sanitize covariance matrix for numerical stability.
 
-    Uses adaptive eigenvalue floor: max(eps * λ_max, MIN_EIGENVALUE)
+    Uses adaptive eigenvalue floor: max(eps * lambda_max, MIN_EIGENVALUE)
     to avoid systematic KL bias that grows with dimension K.
+
+    Args:
+        Sigma: Covariance matrix, shape (..., K, K)
+        eps: Relative eigenvalue floor (fraction of lambda_max)
+        max_cond: Maximum allowed condition number
+        max_eig: Optional upper bound on eigenvalues
+
+    Returns:
+        Sigma_clean: Sanitized SPD matrix, same shape as input
     """
     # Symmetrize
     Sigma = 0.5 * (Sigma + np.swapaxes(Sigma, -1, -2))

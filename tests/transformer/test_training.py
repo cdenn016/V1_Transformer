@@ -3,7 +3,9 @@
 Training Utilities Tests
 ========================
 
-Tests for transformer.training module.
+Tests for transformer.training module: TrainingConfig, parameter group
+construction (separate LRs for mu, sigma, phi, attention, FFN, output),
+optimizer creation, and MetricsTracker logging/saving.
 """
 
 import pytest
@@ -13,7 +15,11 @@ from pathlib import Path
 
 
 class TestTrainingConfig:
-    """Test TrainingConfig class."""
+    """Test TrainingConfig presets and overrides.
+
+    TrainingConfig controls per-component learning rates (mu, sigma, phi),
+    training mode (standard vs vfe_dynamic), and gauge_mode (learned vs trivial).
+    """
 
     def test_default_config(self):
         """Test creating default config."""
@@ -76,7 +82,12 @@ class TestTrainingConfig:
 
 
 class TestCreateParamGroups:
-    """Test create_param_groups function."""
+    """Test parameter group creation with per-component learning rates.
+
+    The gauge transformer has distinct parameter families (mu/sigma/phi
+    belief parameters, attention weights, FFN weights, output projection)
+    that benefit from separate learning rates.
+    """
 
     def test_param_groups_creation(self, minimal_config, cpu_device):
         """Test creating parameter groups."""

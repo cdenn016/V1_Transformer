@@ -4,6 +4,11 @@ VariationalFFNDynamic Tests
 ===========================
 
 Tests for transformer.core.variational_ffn.VariationalFFNDynamic.
+
+VariationalFFNDynamic implements the VFE (Variational Free Energy) E-step:
+iterative updates to belief states (mu, sigma, phi) that minimize free
+energy against a prior. Generators of shape (n_gen, K, K) define the
+gauge group; sigma can be diagonal or full.
 """
 
 import pytest
@@ -11,11 +16,16 @@ import torch
 
 
 class TestVariationalFFNDynamic:
-    """Test VariationalFFNDynamic class."""
+    """Test VFE E-step iterations in VariationalFFNDynamic.
+
+    Each iteration refines (mu, sigma, phi) toward the VFE optimum.
+    Tests cover creation, forward pass with diagonal covariance,
+    output finiteness, and multiple VFE iteration counts.
+    """
 
     @pytest.fixture
     def generators(self):
-        """Create SO(3)-like skew-symmetric generators for K=11."""
+        """Create random skew-symmetric generators of shape (3, K, K) with K=11."""
         K = 11
         generators = torch.randn(3, K, K)
         generators = generators - generators.transpose(-1, -2)

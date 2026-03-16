@@ -5,14 +5,17 @@ Math Utilities Module
 
 Mathematical utilities for gauge-equivariant transformer (NumPy CPU).
 
+Supports SO(3), SO(N), and GL(K) gauge groups via configurable Lie algebra
+generators of shape (n_gen, K, K).
+
 Modules:
-    - transport: Gauge transport operators
-    - push_pull: Gaussian push-pull operations
-    - generators: SO(N) Lie algebra generators
+    - generators: Lie algebra generators for SO(3)/SO(N)/GL(K) gauge groups
+    - transport: Gauge transport operators Ω_ij = exp(φ_i·G)·exp(-φ_j·G)
+    - push_pull: Pushforward/pullback of Gaussians on the statistical manifold
     - numerical_utils: Safe matrix inversion, KL divergence
-    - numerical_monitor: Debug logging
-    - numba_kernels: Optional Numba acceleration
-    - cuda_kernels: Optional CUDA acceleration
+    - numerical_monitor: Debug logging for numerical fallback events
+    - numba_kernels: Optional Numba-accelerated kernels
+    - cuda_kernels: Optional CuPy/CUDA-accelerated kernels
 """
 
 # NumPy utilities

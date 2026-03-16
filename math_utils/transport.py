@@ -579,22 +579,22 @@ def compute_transport_differential(
     exp_phi_j: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Compute ∂Ω_ij/∂φ_i or ∂Ω_ij/∂φ_j as tuple of 3 matrices.
-    
+    Compute ∂Ω_ij/∂φ_i^a or ∂Ω_ij/∂φ_j^a as a tuple of n_gen matrices.
+
     Formula:
         ∂Ω_ij/∂φ_i^a = (dexp)_a(φ_i) · exp(-φ_j)
         ∂Ω_ij/∂φ_j^b = -exp(φ_i) · (dexp)_b(φ_j) · exp(-φ_j)
-    
+
     where (dexp)_a(φ) = d/dt[exp(φ + t·G_a)]|_{t=0}
-    
+
     Args:
-        phi_i, phi_j: Gauge fields, shape (*S, 3)
-        generators: Shape (3, K, K)
+        phi_i, phi_j: Gauge fields, shape (*S, n_gen)
+        generators: Lie algebra generators, shape (n_gen, K, K)
         direction: 'i' for ∂Ω/∂φ_i or 'j' for ∂Ω/∂φ_j
         exp_phi_i, exp_phi_j: Optional precomputed exponentials
-    
+
     Returns:
-        (dOmega_x, dOmega_y, dOmega_z): Each (*S, K, K)
+        Tuple of n_gen matrices, each shape (*S, K, K)
     """
     phi_i = np.asarray(phi_i, dtype=np.float64)
     phi_j = np.asarray(phi_j, dtype=np.float64)
@@ -645,11 +645,20 @@ import scipy
 
 def frechet_expm(X, H, steps=6):
     """
-    Approximate d/dt exp(X + tH) | t=0 using midpoint quadrature.
-    Works for ALL SO(3) irreps.
+    Approximate d/dt exp(X + tH)|_{t=0} via midpoint quadrature.
 
-    Uses the integral representation: dexp_X(H) = ∫₀¹ exp((1-s)X) H exp(sX) ds
+    Works for any square matrix X (all irreps, all gauge groups).
+
+    Uses the integral representation: dexp_X(H) = integral_0^1 exp((1-s)X) H exp(sX) ds.
     Midpoint rule avoids boundary double-counting of the rectangle rule.
+
+    Args:
+        X: Lie algebra element, shape (K, K)
+        H: Perturbation direction, shape (K, K)
+        steps: Number of quadrature points
+
+    Returns:
+        Frechet derivative, shape (K, K)
     """
     # Midpoint quadrature: evaluate at centers of equal-width subintervals
     ds = 1.0 / steps
@@ -667,13 +676,21 @@ def _compute_dexp_generators(
     """
     Compute Q_a = d/dφ^a[exp(Σ φ^b G_b)] using the dexp map.
 
-    For K=3 (fundamental so(3) representation), uses the exact closed-form:
+    For 3x3 matrices (fundamental so(3) representation), uses the exact
+    closed-form:
         Q_a = G_a - c1(θ) ad_X(G_a) + c2(θ) ad_X²(G_a)
     where c1 = (1-cosθ)/θ², c2 = (θ-sinθ)/θ³
 
-    For K>3 (higher irreps), the 3-term formula is inexact because the
-    Cayley-Hamilton truncation requires K terms for K×K matrices. Uses
-    Fréchet derivative of the matrix exponential via quadrature instead.
+    For K>3 matrices (higher irreps or GL(K)), the 3-term Cayley-Hamilton
+    truncation is inexact. Uses Frechet derivative of the matrix
+    exponential via quadrature instead.
+
+    Args:
+        phi: Lie algebra coefficients, shape (*S, n_gen)
+        generators: Lie algebra generators, shape (n_gen, K, K)
+
+    Returns:
+        Tuple of n_gen matrices Q_a, each shape (*S, K, K)
     """
     phi = np.asarray(phi, dtype=np.float64)
     G = np.asarray(generators, dtype=np.float64)

@@ -3,7 +3,12 @@
 Pytest Configuration and Shared Fixtures
 =========================================
 
-Provides common fixtures for transformer tests.
+Provides common fixtures for gauge-theoretic transformer tests.
+
+Fixtures supply model configs, belief-state tensors (mu, sigma, phi),
+and pre-built GaugeTransformerLM instances. Gauge group and phi_dim
+are determined by the irrep_spec / generators shape (n_gen, K, K);
+fixtures here default to small configs suitable for CI.
 """
 
 import pytest
@@ -129,7 +134,7 @@ def batch_tensors(minimal_config):
 
 @pytest.fixture
 def belief_tensors():
-    """Create belief state tensors (mu, sigma)."""
+    """Create belief state tensors (mu, sigma) with shape (B, N, K)."""
     B, N, K = 2, 8, 16
 
     mu = torch.randn(B, N, K)

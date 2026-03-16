@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Tests for cross-head gauge coupling (sparse off-diagonal transport).
+Tests for cross-head GL(K) gauge coupling (sparse off-diagonal transport).
+
+When heads are coupled, the gauge group extends from block-diagonal GL(d)^H
+to include off-diagonal generators connecting head pairs. Coupled heads are
+merged into super-blocks for block-diagonal KL computation.
 
 Tests the full pipeline:
   1. Generator construction (generate_glK_cross_head_generators)
@@ -26,7 +30,12 @@ from math_utils.generators import (
 # =========================================================================
 
 class TestGeneratorConstruction:
-    """Test generate_glK_cross_head_generators."""
+    """Test GL(K) cross-head generator construction.
+
+    Generators have shape (n_gen, K, K) where n_gen includes both
+    per-head diagonal generators (H * d^2) and cross-coupling
+    generators (n_couplings * d^2).
+    """
 
     def test_shape(self):
         K, H, d = 24, 4, 6
@@ -146,7 +155,11 @@ class TestReorderGenerators:
 # =========================================================================
 
 class TestModelIntegration:
-    """Test full model forward/backward with cross-head coupling."""
+    """Test full model forward/backward with cross-head GL(K) coupling.
+
+    Verifies that cross_couplings config correctly adjusts phi_dim,
+    irrep_dims (super-block structure), and produces valid gradients.
+    """
 
     @pytest.fixture
     def base_config(self):
