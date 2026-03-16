@@ -6,35 +6,90 @@ Vanilla transformer with dot-product attention for fair comparison with gauge mo
 
 NO gauge theory, NO SO(3), NO KL divergence - just standard MHA.
 
-Parameter-matched to gauge model (~5,334 params):
-    - vocab_size: 256
-    - embed_dim: 11
-    - n_layers: 2
-    - n_heads: 1 (for K=11, single head to save params)
-    - hidden_dim: 44
+Supports multiple configurations for ablation studies:
+    - Standard transformer (attention + FFN)
+    - Attention-only (FFN disabled) to isolate attention mechanism contribution
+    - RoPE positional encoding (to match gauge model's position scheme)
+    - Parameter-equalized via wider layers
 
 Author: Baseline for ablation study
-Date: November 2025
+Date: November 2025 (updated March 2026)
 """
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Dict, Tuple
 
 
+# =============================================================================
+# RoPE Implementation (matches gauge model's attention.py implementation)
+# =============================================================================
+
+def _build_rope_freqs(dim: int, base: float = 10000.0,
+                      device: torch.device = None,
+                      dtype: torch.dtype = None) -> torch.Tensor:
+    """Compute RoPE frequency bands for dim-dimensional vectors.
+
+    Returns:
+        freqs: (dim//2,) inverse frequency bands
+    """
+    half_dim = dim // 2
+    freqs = 1.0 / (base ** (torch.arange(0, half_dim, device=device, dtype=dtype) / half_dim))
+    return freqs
+
+
+def apply_rope_to_qk(Q: torch.Tensor, K: torch.Tensor,
+                      rope_base: float = 10000.0) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Apply Rotary Position Embeddings to Q and K tensors.
+
+    Standard RoPE as in Su et al. (2021) / Llama / etc.
+    Rotates consecutive pairs of dimensions by position-dependent angles.
+
+    Args:
+        Q: (B, H, N, D) query tensor
+        K: (B, H, N, D) key tensor
+        rope_base: RoPE frequency base
+
+    Returns:
+        Q_rotated, K_rotated: position-encoded Q and K
+    """
+    B, H, N, D = Q.shape
+    half_D = D // 2
+
+    freqs = _build_rope_freqs(D, rope_base, device=Q.device, dtype=Q.dtype)  # (D//2,)
+    positions = torch.arange(N, device=Q.device, dtype=Q.dtype)  # (N,)
+    angles = torch.outer(positions, freqs)  # (N, D//2)
+
+    cos_angles = torch.cos(angles)  # (N, D//2)
+    sin_angles = torch.sin(angles)  # (N, D//2)
+
+    # Reshape for broadcasting: (1, 1, N, D//2)
+    cos_angles = cos_angles.unsqueeze(0).unsqueeze(0)
+    sin_angles = sin_angles.unsqueeze(0).unsqueeze(0)
+
+    def rotate(x):
+        x_even = x[..., :2*half_D:2]   # dims 0,2,4,...
+        x_odd = x[..., 1:2*half_D:2]   # dims 1,3,5,...
+        x_rotated = x.clone()
+        x_rotated[..., :2*half_D:2] = x_even * cos_angles - x_odd * sin_angles
+        x_rotated[..., 1:2*half_D:2] = x_even * sin_angles + x_odd * cos_angles
+        return x_rotated
+
+    return rotate(Q), rotate(K)
+
+
 class StandardMultiHeadAttention(nn.Module):
     """
-    Standard dot-product multi-head attention.
+    Standard dot-product multi-head attention with optional RoPE.
 
-    β_ij = softmax(Q_i @ K_j^T / sqrt(d_k))
-    output_i = Σ_j β_ij @ V_j
-
-    Compare to gauge model:
-        β_ij = softmax(-KL(q_i || Ω_ij[q_j]) / κ)
+    beta_ij = softmax(Q_i @ K_j^T / sqrt(d_k))
+    output_i = sum_j beta_ij @ V_j
     """
 
-    def __init__(self, embed_dim: int, n_heads: int = 1, dropout: float = 0.1):
+    def __init__(self, embed_dim: int, n_heads: int = 1, dropout: float = 0.1,
+                 use_rope: bool = False, rope_base: float = 10000.0):
         super().__init__()
         assert embed_dim % n_heads == 0, "embed_dim must be divisible by n_heads"
 
@@ -42,6 +97,8 @@ class StandardMultiHeadAttention(nn.Module):
         self.n_heads = n_heads
         self.head_dim = embed_dim // n_heads
         self.scale = self.head_dim ** -0.5
+        self.use_rope = use_rope
+        self.rope_base = rope_base
 
         # Warn about pathologically small head dimensions
         if self.head_dim < 16:
@@ -67,33 +124,27 @@ class StandardMultiHeadAttention(nn.Module):
         mask: Optional[torch.Tensor] = None,
         return_attention: bool = False,
     ) -> torch.Tensor:
-        """
-        Args:
-            x: (B, N, embed_dim) input
-            mask: (N, N) or (B, N, N) causal mask
-            return_attention: If True, also return attention weights
-
-        Returns:
-            (B, N, embed_dim) attended output, or tuple with attention weights
-        """
         B, N, embed_dim = x.shape
 
         # Project to Q, K, V
-        Q = self.W_Q(x)  # (B, N, embed_dim)
-        K = self.W_K(x)  # (B, N, embed_dim)
-        V = self.W_V(x)  # (B, N, embed_dim)
+        Q = self.W_Q(x)
+        K = self.W_K(x)
+        V = self.W_V(x)
 
-        # Reshape for multi-head (if n_heads > 1)
+        # Reshape for multi-head
         Q = Q.view(B, N, self.n_heads, self.head_dim).transpose(1, 2)  # (B, H, N, D)
         K = K.view(B, N, self.n_heads, self.head_dim).transpose(1, 2)
         V = V.view(B, N, self.n_heads, self.head_dim).transpose(1, 2)
+
+        # Apply RoPE to Q and K if enabled
+        if self.use_rope:
+            Q, K = apply_rope_to_qk(Q, K, rope_base=self.rope_base)
 
         # Scaled dot-product attention
         scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale  # (B, H, N, N)
 
         # Apply causal mask
         if mask is not None:
-            # Ensure mask has shape (1, 1, N, N) for proper broadcasting with (B, H, N, N) scores
             while mask.dim() < 4:
                 mask = mask.unsqueeze(0)
             scores = scores.masked_fill(mask == 0, float('-inf'))
@@ -105,13 +156,13 @@ class StandardMultiHeadAttention(nn.Module):
         out = torch.matmul(attn_weights_dropped, V)  # (B, H, N, D)
 
         # Concatenate heads
-        out = out.transpose(1, 2).contiguous().view(B, N, embed_dim)  # (B, N, embed_dim)
+        out = out.transpose(1, 2).contiguous().view(B, N, embed_dim)
 
         # Output projection
         out = self.W_O(out)
 
         if return_attention:
-            return out, attn_weights  # Return pre-dropout weights for visualization
+            return out, attn_weights
         return out
 
 
@@ -120,9 +171,6 @@ class StandardFFN(nn.Module):
     Standard feed-forward network.
 
     FFN(x) = W2 @ GELU(W1 @ x + b1) + b2
-
-    Compare to gauge model's variational FFN:
-        Performs inference via gradient descent on free energy
     """
 
     def __init__(self, embed_dim: int, hidden_dim: int, dropout: float = 0.1):
@@ -142,6 +190,9 @@ class StandardFFN(nn.Module):
 class StandardTransformerBlock(nn.Module):
     """
     Standard transformer block: LayerNorm -> MHA -> Add -> LayerNorm -> FFN -> Add
+
+    Supports attention-only mode (disable_ffn=True) where the FFN sublayer is skipped,
+    isolating the contribution of the attention mechanism alone.
     """
 
     def __init__(
@@ -150,14 +201,22 @@ class StandardTransformerBlock(nn.Module):
         n_heads: int,
         hidden_dim: int,
         dropout: float = 0.1,
+        disable_ffn: bool = False,
+        use_rope: bool = False,
+        rope_base: float = 10000.0,
     ):
         super().__init__()
+        self.disable_ffn = disable_ffn
 
         self.ln1 = nn.LayerNorm(embed_dim)
-        self.attn = StandardMultiHeadAttention(embed_dim, n_heads, dropout)
+        self.attn = StandardMultiHeadAttention(
+            embed_dim, n_heads, dropout,
+            use_rope=use_rope, rope_base=rope_base,
+        )
 
-        self.ln2 = nn.LayerNorm(embed_dim)
-        self.ffn = StandardFFN(embed_dim, hidden_dim, dropout)
+        if not disable_ffn:
+            self.ln2 = nn.LayerNorm(embed_dim)
+            self.ffn = StandardFFN(embed_dim, hidden_dim, dropout)
 
         self.dropout = nn.Dropout(dropout)
 
@@ -167,15 +226,6 @@ class StandardTransformerBlock(nn.Module):
         mask: Optional[torch.Tensor] = None,
         return_attention: bool = False,
     ) -> torch.Tensor:
-        """
-        Args:
-            x: (B, N, K) input
-            mask: (N, N) causal mask
-            return_attention: If True, also return attention weights
-
-        Returns:
-            (B, N, K) output, or tuple with attention weights
-        """
         # Attention block (pre-norm)
         residual = x
         x = self.ln1(x)
@@ -187,12 +237,13 @@ class StandardTransformerBlock(nn.Module):
         x = self.dropout(x)
         x = residual + x
 
-        # FFN block (pre-norm)
-        residual = x
-        x = self.ln2(x)
-        x = self.ffn(x)
-        x = self.dropout(x)
-        x = residual + x
+        # FFN block (pre-norm) - skip if attention-only mode
+        if not self.disable_ffn:
+            residual = x
+            x = self.ln2(x)
+            x = self.ffn(x)
+            x = self.dropout(x)
+            x = residual + x
 
         if return_attention:
             return x, attn_weights
@@ -204,7 +255,13 @@ class StandardTransformerLM(nn.Module):
     Standard transformer language model.
 
     Architecture:
-        Embedding → Position Encoding → N × Transformer Blocks → LM Head
+        Embedding -> Position Encoding -> N x Transformer Blocks -> LM Head
+
+    Supports:
+        - Standard learned positional embeddings (default)
+        - RoPE positional encoding (use_rope=True) to match gauge model
+        - Attention-only mode (disable_ffn=True) for ablation
+        - No positional encoding at all (no_pos_encoding=True)
 
     NO gauge theory, NO SO(3), NO KL divergence!
     """
@@ -221,18 +278,33 @@ class StandardTransformerLM(nn.Module):
         max_seq_len = config['max_seq_len']
         dropout = config.get('dropout', 0.1)
         tie_embeddings = config.get('tie_embeddings', True)
+        disable_ffn = config.get('disable_ffn', False)
+        use_rope = config.get('use_rope', False)
+        rope_base = config.get('rope_base', 10000.0)
+        no_pos_encoding = config.get('no_pos_encoding', False)
 
-        # Token embeddings (same as gauge model)
+        self.use_rope = use_rope
+        self.no_pos_encoding = no_pos_encoding
+
+        # Token embeddings
         self.token_embed = nn.Embedding(vocab_size, embed_dim)
         nn.init.normal_(self.token_embed.weight, mean=0.0, std=0.02)
 
-        # Positional embeddings (learned, same as gauge model)
-        self.pos_embed = nn.Embedding(max_seq_len, embed_dim)
-        nn.init.normal_(self.pos_embed.weight, mean=0.0, std=0.02)
+        # Positional embeddings (learned) - only if not using RoPE and not disabled
+        if not use_rope and not no_pos_encoding:
+            self.pos_embed = nn.Embedding(max_seq_len, embed_dim)
+            nn.init.normal_(self.pos_embed.weight, mean=0.0, std=0.02)
+        else:
+            self.pos_embed = None
 
         # Transformer blocks
         self.blocks = nn.ModuleList([
-            StandardTransformerBlock(embed_dim, n_heads, hidden_dim, dropout)
+            StandardTransformerBlock(
+                embed_dim, n_heads, hidden_dim, dropout,
+                disable_ffn=disable_ffn,
+                use_rope=use_rope,
+                rope_base=rope_base,
+            )
             for _ in range(n_layers)
         ])
 
@@ -240,7 +312,6 @@ class StandardTransformerLM(nn.Module):
         self.ln_final = nn.LayerNorm(embed_dim)
 
         if tie_embeddings:
-            # Tie input and output embeddings via a Linear with shared weight
             self.lm_head = nn.Linear(embed_dim, vocab_size, bias=False)
             self.lm_head.weight = self.token_embed.weight
         else:
@@ -256,7 +327,9 @@ class StandardTransformerLM(nn.Module):
 
         # Count parameters
         n_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        print(f"StandardTransformerLM initialized: {n_params/1e6:.2f}M parameters")
+        mode_str = "attention-only" if disable_ffn else "standard"
+        pos_str = "RoPE" if use_rope else ("none" if no_pos_encoding else "learned")
+        print(f"StandardTransformerLM initialized ({mode_str}, pos={pos_str}): {n_params/1e6:.2f}M parameters")
 
     def forward(
         self,
@@ -264,24 +337,16 @@ class StandardTransformerLM(nn.Module):
         labels: Optional[torch.Tensor] = None,
         pad_token_id: int = -100,
     ) -> Dict[str, torch.Tensor]:
-        """
-        Args:
-            input_ids: (B, N) token indices
-            labels: (B, N) target tokens (for loss computation)
-            pad_token_id: Token ID for padding (ignored in loss). Default -100.
-
-        Returns:
-            Dictionary with 'logits' and optionally 'loss'
-        """
         B, N = input_ids.shape
         device = input_ids.device
 
         # Embed tokens
         x = self.token_embed(input_ids)  # (B, N, K)
 
-        # Add positional embeddings
-        pos_ids = torch.arange(N, device=device).unsqueeze(0)  # (1, N)
-        x = x + self.pos_embed(pos_ids)
+        # Add positional embeddings (if using learned pos encoding)
+        if self.pos_embed is not None:
+            pos_ids = torch.arange(N, device=device).unsqueeze(0)
+            x = x + self.pos_embed(pos_ids)
 
         x = self.dropout(x)
 
@@ -294,23 +359,16 @@ class StandardTransformerLM(nn.Module):
         x = self.ln_final(x)
 
         # LM head
-        logits = self.lm_head(x)  # (B, N, vocab_size)
+        logits = self.lm_head(x)
 
-        # Compute loss if labels provided
         output = {'logits': logits}
 
         if labels is not None:
-            # NOTE: The dataset already provides pre-shifted targets:
-            #   input_ids  = [tok_0, tok_1, ..., tok_{T-1}]
-            #   labels     = [tok_1, tok_2, ..., tok_T]
-            # So logits[i] (predicting next token after position i) should be
-            # compared directly to labels[i] (= tok_{i+1}). No shifting needed.
-            # This matches how compute_free_energy_loss handles the gauge model.
             loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)),
                 labels.view(-1),
                 reduction='mean',
-                ignore_index=pad_token_id,  # Ignore padding tokens in loss
+                ignore_index=pad_token_id,
             )
             output['loss'] = loss
 
@@ -321,47 +379,29 @@ class StandardTransformerLM(nn.Module):
         input_ids: torch.Tensor,
         targets: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-        """
-        Forward pass that also returns attention weights for visualization.
-
-        Args:
-            input_ids: (B, N) token indices
-            targets: Unused, for API compatibility with GaugeTransformerLM
-
-        Returns:
-            logits: (B, N, vocab_size) prediction logits
-            attn_info: Dict with 'beta' key containing attention weights (B, H, N, N)
-        """
         B, N = input_ids.shape
         device = input_ids.device
 
-        # Embed tokens
-        x = self.token_embed(input_ids)  # (B, N, K)
+        x = self.token_embed(input_ids)
 
-        # Add positional embeddings
-        pos_ids = torch.arange(N, device=device).unsqueeze(0)  # (1, N)
-        x = x + self.pos_embed(pos_ids)
+        if self.pos_embed is not None:
+            pos_ids = torch.arange(N, device=device).unsqueeze(0)
+            x = x + self.pos_embed(pos_ids)
 
         x = self.dropout(x)
 
-        # Apply transformer blocks, collecting attention weights
         mask = self.causal_mask[:, :N, :N]
         all_attn_weights = []
         for block in self.blocks:
             x, attn_weights = block(x, mask, return_attention=True)
             all_attn_weights.append(attn_weights)
 
-        # Final layer norm
         x = self.ln_final(x)
+        logits = self.lm_head(x)
 
-        # LM head
-        logits = self.lm_head(x)  # (B, N, vocab_size)
-
-        # Stack attention weights: (n_layers, B, H, N, N) -> use last layer for viz
-        # For compatibility with GaugeTransformerLM, return 'beta' key
         attn_info = {
-            'beta': all_attn_weights[-1],  # Last layer attention (B, H, N, N)
-            'all_attention': all_attn_weights,  # All layers
+            'beta': all_attn_weights[-1],
+            'all_attention': all_attn_weights,
         }
 
         return logits, attn_info
@@ -374,61 +414,34 @@ class StandardTransformerLM(nn.Module):
         top_k: Optional[int] = None,
         top_p: Optional[float] = None,
     ) -> torch.Tensor:
-        """
-        Autoregressive generation.
-
-        Args:
-            prompt_ids: (1, prompt_len) initial tokens
-            max_new_tokens: Number of tokens to generate
-            temperature: Sampling temperature (higher = more random)
-            top_k: Top-k sampling (optional)
-            top_p: Nucleus sampling (optional)
-
-        Returns:
-            generated: (1, prompt_len + max_new_tokens) full sequence
-        """
         self.eval()
         generated = prompt_ids.clone()
 
         for _ in range(max_new_tokens):
-            # Truncate if exceeds max_seq_len
             if generated.shape[1] > self.config['max_seq_len']:
                 generated = generated[:, -self.config['max_seq_len']:]
 
-            # Forward pass
             output = self.forward(generated)
-            logits = output['logits']  # (1, T, V)
+            logits = output['logits']
+            logits_next = logits[:, -1, :] / temperature
 
-            # Get logits for last token
-            logits_next = logits[:, -1, :] / temperature  # (1, V)
-
-            # Apply top-k filtering
             if top_k is not None:
                 v, _ = torch.topk(logits_next, min(top_k, logits_next.size(-1)))
                 logits_next[logits_next < v[:, [-1]]] = -float('inf')
 
-            # Apply top-p (nucleus) filtering
             if top_p is not None:
                 sorted_logits, sorted_indices = torch.sort(logits_next, descending=True)
                 cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
-
-                # Remove tokens with cumulative probability above threshold
                 sorted_indices_to_remove = cumulative_probs > top_p
-                # Shift right to keep first token above threshold
                 sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
                 sorted_indices_to_remove[..., 0] = 0
-
-                # Scatter back to original indexing
                 indices_to_remove = sorted_indices_to_remove.scatter(
                     1, sorted_indices, sorted_indices_to_remove
                 )
                 logits_next[indices_to_remove] = -float('inf')
 
-            # Sample
             probs = F.softmax(logits_next, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1)  # (1, 1)
-
-            # Append
+            next_token = torch.multinomial(probs, num_samples=1)
             generated = torch.cat([generated, next_token], dim=1)
 
         return generated
@@ -437,9 +450,9 @@ class StandardTransformerLM(nn.Module):
         """Count parameters by component."""
         counts = {}
         counts['token_embed'] = self.token_embed.weight.numel()
-        counts['pos_embed'] = self.pos_embed.weight.numel()
+        if self.pos_embed is not None:
+            counts['pos_embed'] = self.pos_embed.weight.numel()
 
-        # Count transformer block parameters
         block_params = 0
         for block in self.blocks:
             block_params += sum(p.numel() for p in block.parameters())
@@ -506,6 +519,30 @@ if __name__ == '__main__':
     print(f"  Input shape:  {input_ids.shape}")
     print(f"  Output logits: {output['logits'].shape}")
     print(f"  Loss:         {output['loss'].item():.4f}")
+
+    # Test RoPE variant
+    print("\n" + "="*70)
+    print("TEST RoPE VARIANT")
+    print("="*70)
+
+    rope_config = config.copy()
+    rope_config['use_rope'] = True
+    rope_config['embed_dim'] = 12  # Must be even for RoPE
+    rope_model = StandardTransformerLM(rope_config)
+    input_ids_rope = torch.randint(0, config['vocab_size'], (B, N))
+    output_rope = rope_model(input_ids_rope, labels=input_ids_rope)
+    print(f"  Loss (RoPE):  {output_rope['loss'].item():.4f}")
+
+    # Test attention-only variant
+    print("\n" + "="*70)
+    print("TEST ATTENTION-ONLY VARIANT")
+    print("="*70)
+
+    attn_config = config.copy()
+    attn_config['disable_ffn'] = True
+    attn_model = StandardTransformerLM(attn_config)
+    output_attn = attn_model(input_ids, labels=input_ids)
+    print(f"  Loss (attn-only): {output_attn['loss'].item():.4f}")
 
     print("\n✓ Standard transformer baseline ready!")
     print("="*70)

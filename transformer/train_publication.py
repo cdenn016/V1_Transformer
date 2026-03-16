@@ -83,6 +83,13 @@ from typing import Dict, List, Tuple, Any
 
 from transformer.core.model import GaugeTransformerLM
 from transformer.baselines.standard_transformer import StandardTransformerLM
+from transformer.baselines.flops_counter import (
+    count_standard_transformer_flops,
+    count_gauge_transformer_flops,
+    format_flops,
+    compare_flops,
+    print_flops_comparison,
+)
 from transformer.data import create_dataloaders, create_char_dataloaders
 from transformer.train import (
     compute_free_energy_loss,
@@ -408,6 +415,292 @@ VFE_EM_CONFIG = {
     'pos_encoding_scale': 0.3,
     'use_prior_bank': False,
 
+}
+
+
+# =============================================================================
+# INTERMEDIATE BASELINES (Peer Review M2b, M2c, M2e)
+# =============================================================================
+# These baselines address reviewer concerns about confounded comparisons:
+#
+# (b) ATTENTION-ONLY BASELINE: Standard transformer at d_model=90 with MLP
+#     disabled, to isolate the attention mechanism contribution.
+#
+# (b') PARAM-EQUALIZED WIDER BASELINE: Standard transformer with parameter
+#      count equalized to gauge model via wider FFN layers.
+#
+# (c) MATCHED POSITIONAL ENCODING: Standard transformer using RoPE (same as
+#     gauge model) to control for positional encoding confound.
+#
+# (e) FLOPs are reported via flops_counter.py for all configurations.
+# =============================================================================
+
+
+# Config (b): Standard transformer at d_model=90, MLP disabled (attention-only)
+# Isolates the contribution of dot-product attention without FFN
+STANDARD_ATTN_ONLY_CONFIG = {
+    # Model architecture — match gauge model's embed_dim
+    'vocab_size': 50257,
+    'embed_dim': 90,              # Same as gauge model embed_dim
+    'n_layers': 1,                # Same depth
+    'n_heads': 9,                 # 9 heads * 10 = 90 (head_dim=10, matching gauge d_head)
+    'hidden_dim': 360,            # Not used (FFN disabled), but needed for config
+    'max_seq_len': 128,
+    'disable_ffn': True,          # KEY: no FFN, attention only
+
+    # Training — match VFE config
+    'batch_size': 64,
+    'use_amp': False,
+    'num_workers': 10,
+    'epochs': None,
+    'max_steps': 15000,
+    'warmup_steps': 100,
+
+    # Standard transformer settings
+    'ffn_mode': 'standard',
+    'attention_type': 'standard',
+    'pos_encoding_mode': 'learned',
+    'tie_embeddings': False,
+
+    # Disable gauge features
+    'evolve_sigma': False,
+    'evolve_phi': False,
+    'diagonal_covariance': True,
+    'isotropic_covariance': False,
+    'use_positional_embedding': True,
+
+    # Learning rates
+    'mu_lr': 3e-4,
+    'sigma_lr': 0.0001,
+    'phi_lr': 0.0001,
+    'ffn_lr': 3e-4,
+
+    # Free energy weights (not used in standard mode)
+    'alpha': 0,
+    'beta': 0,
+    'lambda_gamma': 0,
+    'kappa_gamma': 1.0,
+
+    # Regularization
+    'weight_decay': 0.01,
+    'dropout': 0.1,
+    'grad_clip': 1.0,
+
+    # Logging
+    'log_interval': 100,
+    'eval_interval': 1000,
+    'checkpoint_interval': 25000,
+    'patience': 5,
+
+    # Unused in standard mode
+    'kappa_beta': 1.0,
+    'attention_pattern': 'full',
+    'attention_window': 24,
+    'gauge_group': 'SO3',
+    'gauge_dim': 3,
+    'gauge_mode': 'learned',
+    'gauge_fixed_priors': True,
+    'irrep_spec': [('ℓ0', 5, 1)],
+    'compute_rg_metrics': False,
+}
+
+
+# Config (b'): Standard transformer parameter-equalized via wider FFN
+# Match the gauge model's total parameter count (~58.8M) by widening FFN
+STANDARD_PARAM_EQUALIZED_CONFIG = {
+    # Model architecture — wider FFN to absorb parameter budget
+    'vocab_size': 50257,
+    'embed_dim': 90,              # Same as gauge model
+    'n_layers': 1,
+    'n_heads': 9,                 # 9 heads * 10 = 90
+    'hidden_dim': 360,            # Will be auto-calculated to match param count
+    'max_seq_len': 128,
+
+    # Training
+    'batch_size': 64,
+    'use_amp': False,
+    'num_workers': 10,
+    'epochs': None,
+    'max_steps': 15000,
+    'warmup_steps': 100,
+
+    # Standard transformer settings
+    'ffn_mode': 'standard',
+    'attention_type': 'standard',
+    'pos_encoding_mode': 'learned',
+    'tie_embeddings': False,
+
+    # Disable gauge features
+    'evolve_sigma': False,
+    'evolve_phi': False,
+    'diagonal_covariance': True,
+    'isotropic_covariance': False,
+    'use_positional_embedding': True,
+
+    # Learning rates
+    'mu_lr': 3e-4,
+    'sigma_lr': 0.0001,
+    'phi_lr': 0.0001,
+    'ffn_lr': 3e-4,
+
+    # Free energy weights
+    'alpha': 0,
+    'beta': 0,
+    'lambda_gamma': 0,
+    'kappa_gamma': 1.0,
+
+    # Regularization
+    'weight_decay': 0.01,
+    'dropout': 0.1,
+    'grad_clip': 1.0,
+
+    # Logging
+    'log_interval': 100,
+    'eval_interval': 1000,
+    'checkpoint_interval': 25000,
+    'patience': 5,
+
+    # Unused in standard mode
+    'kappa_beta': 1.0,
+    'attention_pattern': 'full',
+    'attention_window': 24,
+    'gauge_group': 'SO3',
+    'gauge_dim': 3,
+    'gauge_mode': 'learned',
+    'gauge_fixed_priors': True,
+    'irrep_spec': [('ℓ0', 5, 1)],
+    'compute_rg_metrics': False,
+}
+
+
+# Config (c): Standard transformer with RoPE (matching gauge model's PE)
+# Isolates attention mechanism contribution by controlling for positional encoding
+STANDARD_ROPE_CONFIG = {
+    # Model architecture — same as STANDARD_CONFIG but with RoPE
+    'vocab_size': 50257,
+    'embed_dim': 10,              # Same as VFE for apples-to-apples
+    'n_layers': 1,
+    'n_heads': 1,
+    'hidden_dim': 24527,          # Same as STANDARD_CONFIG
+    'max_seq_len': 128,
+    'use_rope': True,             # KEY: RoPE to match gauge model
+    'rope_base': 10000.0,
+
+    # Training
+    'batch_size': 64,
+    'use_amp': False,
+    'num_workers': 10,
+    'epochs': None,
+    'max_steps': 15000,
+    'warmup_steps': 100,
+
+    # Standard transformer settings
+    'ffn_mode': 'standard',
+    'attention_type': 'standard',
+    'pos_encoding_mode': 'rope',  # Use RoPE instead of learned
+    'tie_embeddings': False,
+
+    # Disable gauge features
+    'evolve_sigma': False,
+    'evolve_phi': False,
+    'diagonal_covariance': True,
+    'isotropic_covariance': False,
+    'use_positional_embedding': False,  # No learned pos embed when using RoPE
+
+    # Learning rates
+    'mu_lr': 3e-4,
+    'sigma_lr': 0.0001,
+    'phi_lr': 0.0001,
+    'ffn_lr': 3e-4,
+
+    # Free energy weights
+    'alpha': 0,
+    'beta': 0,
+    'lambda_gamma': 0,
+    'kappa_gamma': 1.0,
+
+    # Regularization
+    'weight_decay': 0.01,
+    'dropout': 0.1,
+    'grad_clip': 1.0,
+
+    # Logging
+    'log_interval': 100,
+    'eval_interval': 1000,
+    'checkpoint_interval': 25000,
+    'patience': 5,
+
+    # Unused in standard mode
+    'kappa_beta': 1.0,
+    'attention_pattern': 'full',
+    'attention_window': 24,
+    'gauge_group': 'SO3',
+    'gauge_dim': 3,
+    'gauge_mode': 'learned',
+    'gauge_fixed_priors': True,
+    'irrep_spec': [('ℓ0', 5, 1)],
+    'compute_rg_metrics': False,
+}
+
+
+# Config (c'): Standard transformer with RoPE, at d_model=90 and param-matched
+# Both matched PE and matched params for the fairest possible comparison
+STANDARD_ROPE_D90_CONFIG = {
+    'vocab_size': 50257,
+    'embed_dim': 90,
+    'n_layers': 1,
+    'n_heads': 9,                 # 9 heads * 10 = 90
+    'hidden_dim': 360,            # Moderate FFN for fair comparison
+    'max_seq_len': 128,
+    'use_rope': True,             # Match gauge model
+    'rope_base': 10000.0,
+
+    'batch_size': 64,
+    'use_amp': False,
+    'num_workers': 10,
+    'epochs': None,
+    'max_steps': 15000,
+    'warmup_steps': 100,
+
+    'ffn_mode': 'standard',
+    'attention_type': 'standard',
+    'pos_encoding_mode': 'rope',
+    'tie_embeddings': False,
+
+    'evolve_sigma': False,
+    'evolve_phi': False,
+    'diagonal_covariance': True,
+    'isotropic_covariance': False,
+    'use_positional_embedding': False,
+
+    'mu_lr': 3e-4,
+    'sigma_lr': 0.0001,
+    'phi_lr': 0.0001,
+    'ffn_lr': 3e-4,
+
+    'alpha': 0,
+    'beta': 0,
+    'lambda_gamma': 0,
+    'kappa_gamma': 1.0,
+
+    'weight_decay': 0.01,
+    'dropout': 0.1,
+    'grad_clip': 1.0,
+
+    'log_interval': 100,
+    'eval_interval': 1000,
+    'checkpoint_interval': 25000,
+    'patience': 5,
+
+    'kappa_beta': 1.0,
+    'attention_pattern': 'full',
+    'attention_window': 24,
+    'gauge_group': 'SO3',
+    'gauge_dim': 3,
+    'gauge_mode': 'learned',
+    'gauge_fixed_priors': True,
+    'irrep_spec': [('ℓ0', 5, 1)],
+    'compute_rg_metrics': False,
 }
 
 
@@ -1742,6 +2035,12 @@ def run_single_experiment(
             'hidden_dim': config.get('hidden_dim', config['embed_dim'] * 4),
             'max_seq_len': config['max_seq_len'],
             'dropout': config.get('dropout', 0.1),
+            # Baseline ablation options (peer review M2b, M2c)
+            'disable_ffn': config.get('disable_ffn', False),
+            'use_rope': config.get('use_rope', False),
+            'rope_base': config.get('rope_base', 10000.0),
+            'tie_embeddings': config.get('tie_embeddings', True),
+            'no_pos_encoding': config.get('use_positional_embedding', True) is False and not config.get('use_rope', False),
         }
         model = StandardTransformerLM(model_config)
 
@@ -1779,6 +2078,54 @@ def run_single_experiment(
     print(f"  Total:         {total_params:,}")
     print(f"  Non-embedding: {non_embed_params:,}")
     print(f"  Embedding:     {total_params - non_embed_params:,}")
+
+    # =================================================================
+    # FLOPs Estimation (Peer Review M2e)
+    # =================================================================
+    seq_len = config['max_seq_len']
+    batch_size = config['batch_size']
+    max_steps = config['max_steps']
+
+    is_standard = isinstance(model, StandardTransformerLM)
+    if is_standard:
+        flops_result = count_standard_transformer_flops(
+            vocab_size=config['vocab_size'],
+            embed_dim=config['embed_dim'],
+            n_layers=config['n_layers'],
+            n_heads=config.get('n_heads', 1),
+            hidden_dim=config.get('hidden_dim', config['embed_dim'] * 4),
+            seq_len=seq_len,
+            batch_size=batch_size,
+            disable_ffn=config.get('disable_ffn', False),
+            tie_embeddings=config.get('tie_embeddings', False),
+        )
+    else:
+        gauge_irrep = config.get('irrep_spec', [('fund', 1, config['embed_dim'])])
+        n_heads_g = gauge_irrep[0][1] if gauge_irrep else 1
+        head_dim_g = gauge_irrep[0][2] if gauge_irrep else config['embed_dim']
+        phi_dim = config['embed_dim'] * config['embed_dim']  # GL(K) default
+        flops_result = count_gauge_transformer_flops(
+            vocab_size=config['vocab_size'],
+            embed_dim=config['embed_dim'],
+            n_layers=config['n_layers'],
+            n_heads=n_heads_g,
+            head_dim=head_dim_g,
+            seq_len=seq_len,
+            batch_size=batch_size,
+            phi_dim=phi_dim,
+            ffn_n_iterations=config.get('ffn_n_iterations', 1),
+            use_rope=config.get('use_rope', False),
+            diagonal_covariance=config.get('diagonal_covariance', True),
+        )
+
+    step_flops = flops_result['step_total']
+    total_flops = step_flops * max_steps
+    print(f"\nFLOPs Estimation (Peer Review M2e):")
+    print(f"  FLOPs/step:     {format_flops(step_flops)}")
+    print(f"  Total training: {format_flops(total_flops)}")
+    if not is_standard:
+        print(f"  Key costs: mat_exp={format_flops(flops_result.get('transport_mat_exp', 0))}/layer, "
+              f"KL={format_flops(flops_result.get('kl_divergence', 0))}/layer")
 
     # =================================================================
     # Training Configuration
@@ -2012,6 +2359,11 @@ def run_single_experiment(
             'dataset_coverage': total_tokens / dataset_tokens if dataset_tokens else None,
             'batch_size': batch_size,
             'seq_len': seq_len,
+            # FLOPs (Peer Review M2e)
+            'flops_per_step': step_flops,
+            'flops_per_step_str': format_flops(step_flops),
+            'total_training_flops': total_flops,
+            'total_training_flops_str': format_flops(total_flops),
         }
 
         # Add test metrics if available
@@ -2039,10 +2391,17 @@ def run_single_experiment(
 def main():
     parser = argparse.ArgumentParser(description='Publication Training Script')
 
-    # Mode selection (three distinct modes)
+    # Mode selection
     parser.add_argument('--mode', type=str, default=DEFAULT_MODE,
-                        choices=['standard', 'VFE_dynamic'],
-                        help='Training mode: standard (baseline), VFE_dynamic (EM-step)')
+                        choices=[
+                            'standard', 'VFE_dynamic',
+                            # Intermediate baselines (peer review M2b, M2c)
+                            'standard_attn_only',      # (b) attention-only at d_model=90
+                            'standard_param_equalized', # (b') param-equalized wider FFN
+                            'standard_rope',            # (c) standard + RoPE at d=10
+                            'standard_rope_d90',        # (c') standard + RoPE at d=90
+                        ],
+                        help='Training mode: standard, VFE_dynamic, or intermediate baselines')
 
     # Legacy alias for backwards compatibility
     parser.add_argument('--ffn_mode', type=str, default=None,
@@ -2098,9 +2457,13 @@ def main():
     # =================================================================
     # SELECT CONFIG BASED ON MODE
     # =================================================================
-    # Three distinct configs for clarity:
-    #   STANDARD_CONFIG  - Baseline transformer (dot-product + MLP)
-    #   VFE_EM_CONFIG    - VFE with EM-step dynamics (backprop)
+    # Configs:
+    #   STANDARD_CONFIG               - Baseline transformer (dot-product + MLP)
+    #   VFE_EM_CONFIG                 - VFE with EM-step dynamics (backprop)
+    #   STANDARD_ATTN_ONLY_CONFIG     - (M2b) Attention-only at d_model=90
+    #   STANDARD_PARAM_EQUALIZED_CONFIG - (M2b') Param-equalized wider FFN
+    #   STANDARD_ROPE_CONFIG          - (M2c) Standard + RoPE at d=10
+    #   STANDARD_ROPE_D90_CONFIG      - (M2c') Standard + RoPE at d=90
     # =================================================================
 
     mode = args.mode
@@ -2130,9 +2493,58 @@ def main():
         config = VFE_EM_CONFIG.copy()
         ffn_mode = 'VFE_dynamic'
 
+    elif mode == 'standard_attn_only':
+        print("\n" + "="*70)
+        print("MODE: STANDARD ATTENTION-ONLY (Peer Review M2b)")
+        print("="*70)
+        print("   d_model=90 (matching gauge model)")
+        print("   Attention: Q·K^T / √d (dot-product softmax)")
+        print("   FFN: DISABLED (attention mechanism only)")
+        print("   Purpose: Isolate attention contribution")
+        print("="*70 + "\n")
+        config = STANDARD_ATTN_ONLY_CONFIG.copy()
+        ffn_mode = 'standard'
+
+    elif mode == 'standard_param_equalized':
+        print("\n" + "="*70)
+        print("MODE: STANDARD PARAM-EQUALIZED (Peer Review M2b')")
+        print("="*70)
+        print("   d_model=90 with wider FFN layers")
+        print("   Attention: Q·K^T / √d (dot-product softmax)")
+        print("   FFN: Wider layers for parameter matching")
+        print("   Purpose: Fair param-count comparison")
+        print("="*70 + "\n")
+        config = STANDARD_PARAM_EQUALIZED_CONFIG.copy()
+        ffn_mode = 'standard'
+
+    elif mode == 'standard_rope':
+        print("\n" + "="*70)
+        print("MODE: STANDARD + RoPE (Peer Review M2c)")
+        print("="*70)
+        print("   d_model=10, matching STANDARD_CONFIG dimensions")
+        print("   Attention: Q·K^T / √d with RoPE")
+        print("   FFN: Linear → GELU → Linear")
+        print("   Purpose: Control for positional encoding confound")
+        print("="*70 + "\n")
+        config = STANDARD_ROPE_CONFIG.copy()
+        ffn_mode = 'standard'
+
+    elif mode == 'standard_rope_d90':
+        print("\n" + "="*70)
+        print("MODE: STANDARD + RoPE at d=90 (Peer Review M2c')")
+        print("="*70)
+        print("   d_model=90, matching gauge model embedding dim")
+        print("   Attention: Q·K^T / √d with RoPE")
+        print("   FFN: Linear → GELU → Linear")
+        print("   Purpose: Matched PE + matched embed_dim comparison")
+        print("="*70 + "\n")
+        config = STANDARD_ROPE_D90_CONFIG.copy()
+        ffn_mode = 'standard'
+
     else:
         print(f"\nError: Unknown mode '{mode}'")
-        print("Valid modes: standard, VFE_dynamic")
+        print("Valid modes: standard, VFE_dynamic, standard_attn_only, "
+              "standard_param_equalized, standard_rope, standard_rope_d90")
         return
 
     config['dataset'] = args.dataset
