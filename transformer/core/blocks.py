@@ -169,6 +169,8 @@ class GaugeTransformerBlock(nn.Module):
             isotropic_covariance=cfg.isotropic_covariance,
             analytic_phi_grad=cfg.analytic_phi_grad,
             analytic_phi_grad_dexp_order=cfg.analytic_phi_grad_dexp_order,
+            use_rope=cfg.use_rope,
+            rope_base=cfg.rope_base,
         )
 
         self.norm2 = nn.LayerNorm(cfg.embed_dim) if cfg.use_layernorm else nn.Identity()

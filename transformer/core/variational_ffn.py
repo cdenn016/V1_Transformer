@@ -1750,6 +1750,9 @@ class VariationalFFNDynamic(nn.Module):
         # Analytic phi gradient: bypass autograd for ∂F/∂φ (saves ~250MB per phi update)
         analytic_phi_grad: bool = False,
         analytic_phi_grad_dexp_order: int = 4,  # dexp series truncation (4-8 typical)
+        # Rotary Position Embeddings (RoPE) — must match attention sublayer setting
+        use_rope: bool = False,
+        rope_base: float = 10000.0,
     ):
         """
         Initialize dynamic-β VFE FFN.
@@ -1796,6 +1799,9 @@ class VariationalFFNDynamic(nn.Module):
         self.amortized_inference = amortized_inference
         self.analytic_phi_grad = analytic_phi_grad
         self.analytic_phi_grad_dexp_order = analytic_phi_grad_dexp_order
+        # RoPE: store so VFE iterations apply the same position encoding as attention
+        self._use_rope_vfe = use_rope
+        self._rope_base_vfe = rope_base
         if analytic_phi_grad:
             print(f"[VariationalFFNDynamic] Analytic φ gradient enabled (dexp_order={analytic_phi_grad_dexp_order})")
             print(f"  → Bypasses autograd for ∂F/∂φ, saving ~250MB per phi update")
@@ -2617,7 +2623,8 @@ class VariationalFFNDynamic(nn.Module):
                             cached_block_exp_pairs=_head_bep,
                             mask=mask,
                             mask_self_attention=self.mask_self_attention,
-                            use_rope=getattr(self, '_use_rope_vfe', False),
+                            use_rope=self._use_rope_vfe,
+                            rope_base=self._rope_base_vfe,
                         )
                     else:
                         # Fallback: separate attention + gradient (full covariance)
@@ -2631,6 +2638,8 @@ class VariationalFFNDynamic(nn.Module):
                             mask_self_attention=self.mask_self_attention,
                             gauge_mode=self.gauge_mode,
                             cached_block_exp_pairs=_head_bep,
+                            use_rope=self._use_rope_vfe,
+                            rope_base=self._rope_base_vfe,
                         )
                         grad_mu_h, grad_sigma_h = compute_vfe_gradients_gpu(
                             mu_q=mu_h, sigma_q=sigma_h,
@@ -2719,7 +2728,8 @@ class VariationalFFNDynamic(nn.Module):
                         cached_block_exp_pairs=_cached_bep,
                         mask=mask,
                         mask_self_attention=self.mask_self_attention,
-                        use_rope=getattr(self, '_use_rope_vfe', False),
+                        use_rope=self._use_rope_vfe,
+                        rope_base=self._rope_base_vfe,
                     )
                 else:
                     # Fallback: separate attention + gradient
@@ -2734,6 +2744,8 @@ class VariationalFFNDynamic(nn.Module):
                         mask_self_attention=self.mask_self_attention,
                         gauge_mode=self.gauge_mode,
                         cached_block_exp_pairs=_cached_bep,
+                        use_rope=self._use_rope_vfe,
+                        rope_base=self._rope_base_vfe,
                     )
                     grad_mu, grad_sigma = compute_vfe_gradients_gpu(
                         mu_q=mu_current, sigma_q=sigma_current,
