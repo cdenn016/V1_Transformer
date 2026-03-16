@@ -260,7 +260,7 @@ VFE_EM_CONFIG = {
     
     'diagonal_covariance': True,    # approximate diag(Ω @ diag(σ) @ Ω^T) path runs with zero overhead
     
-    'exact_diagonal_transport': True,  #exact diagonal transport - more expensive
+    'exact_diagonal_transport': False,  #exact diagonal transport - more expensive
     'isotropic_covariance': False,    # If True, force Σ = σ²I (scalar variance × identity)
                                        # This is Limit 1 from the manuscript: KL reduces to
                                        # scaled squared Euclidean distance. Combined with
