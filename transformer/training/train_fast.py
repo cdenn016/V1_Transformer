@@ -430,7 +430,14 @@ class FastTrainer:
         return scheduler
 
     def train_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Dict[str, float]:
-        """Single training step."""
+        """Single training step: forward, VFE loss, backward, optimizer update.
+
+        Args:
+            batch: (input_ids, target_ids) tensors.
+
+        Returns:
+            Dict with 'total_loss', 'ce_loss', and 'perplexity'.
+        """
         self.model.train()
 
         input_ids, target_ids = batch
@@ -510,12 +517,14 @@ class FastTrainer:
         return formatted_metrics
 
     def validate(self, max_samples: int = 12800) -> Dict[str, float]:
-        """Validation loop with token-weighted CE averaging.
+        """Validation loop with token-weighted CE averaging (no VFE regularizers).
 
         Args:
-            max_samples: Maximum number of samples to evaluate (default: 12800,
-                         equivalent to 200 batches at batch_size=64). This ensures
-                         consistent evaluation across configs with different batch sizes.
+            max_samples: Maximum number of samples to evaluate (default: 12800).
+                Ensures consistent evaluation across configs with different batch sizes.
+
+        Returns:
+            Dict with 'loss' (pure CE), 'ce_loss', and 'perplexity'.
         """
         self.model.eval()
 
@@ -572,7 +581,7 @@ class FastTrainer:
         }
 
     def train(self):
-        """Main training loop."""
+        """Main training loop with periodic validation, checkpointing, and early stopping."""
         print(f"{'='*70}")
         print("STARTING FAST TRAINING")
         print(f"{'='*70}\n")
@@ -692,7 +701,15 @@ class FastTrainer:
         print(f"{'='*70}\n")
 
     def save_checkpoint(self, is_best: bool = False):
-        """Save checkpoint."""
+        """Save model, optimizer, and scheduler state to disk.
+
+        Args:
+            is_best: If True, saves as 'best_model.pt'; otherwise as
+                'checkpoint_step_N.pt' with old checkpoint cleanup.
+
+        Returns:
+            Path to the saved checkpoint file.
+        """
         checkpoint = {
             'step': self.global_step,
             'model_state_dict': self.model.state_dict(),

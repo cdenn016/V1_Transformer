@@ -162,7 +162,18 @@ def categorize_tokens(decoded_tokens):
 
 def visualize_frequent_tokens(mu_embeddings, decoded_tokens, frequencies,
                               method='pca', save_path=None):
-    """Visualize embeddings with size proportional to frequency."""
+    """Visualize mu embeddings in 2D with marker size proportional to frequency.
+
+    Args:
+        mu_embeddings: (N, K) array of belief mean vectors.
+        decoded_tokens: List of decoded token strings.
+        frequencies: List of token occurrence counts (used for marker sizing).
+        method: Dimensionality reduction method, 'pca' or 'tsne'.
+        save_path: Optional path to save the figure.
+
+    Returns:
+        matplotlib Figure.
+    """
 
     # Dimensionality reduction
     if method == 'pca':

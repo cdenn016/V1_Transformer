@@ -24,6 +24,14 @@ from transformer.core.model import GaugeTransformerLM
 
 
 def diagnose():
+    """Run end-to-end attention uniformity diagnostic on a small synthetic model.
+
+    Creates a 1-layer GaugeTransformerLM with mixed irrep_spec, feeds a
+    short token sequence, and inspects every intermediate quantity:
+    embeddings (mu, sigma, phi), transport operators Omega_ij, transported
+    means, the raw KL matrix, and final attention weights.  Prints
+    row-uniformity statistics and identifies the root cause of collapse.
+    """
     print("=" * 80)
     print("DEEP ATTENTION UNIFORMITY DIAGNOSTIC")
     print("=" * 80)

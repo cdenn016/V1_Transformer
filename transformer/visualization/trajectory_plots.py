@@ -215,20 +215,23 @@ def plot_attention_pattern(
     log_scale: bool = True,
 ) -> Optional[plt.Figure]:
     """
-    Plot attention matrix β for a specific layer and head.
+    Plot KL-divergence attention matrix beta for a specific layer and head.
+
+    Beta weights are derived from KL divergence between gauge-transported
+    belief distributions, not from dot-product attention scores.
 
     Args:
-        trajectory: ForwardTrajectory with attention data
-        layer_idx: Which layer (-1 = last)
-        head_idx: Which attention head
-        batch_idx: Which batch element
-        figsize: Figure size
-        save_path: If provided, save figure to this path
-        mask_diagonal: If True, mask out diagonal (self-attention) for clarity
-        log_scale: If True, use log scale to enhance small values
+        trajectory: ForwardTrajectory with attention data.
+        layer_idx: Which layer (-1 = last).
+        head_idx: Which attention head.
+        batch_idx: Which batch element.
+        figsize: Figure size.
+        save_path: If provided, save figure to this path.
+        mask_diagonal: If True, mask out diagonal (self-attention) for clarity.
+        log_scale: If True, use log scale to enhance small values.
 
     Returns:
-        matplotlib Figure or None if matplotlib unavailable
+        matplotlib Figure or None if matplotlib unavailable.
     """
     if not MATPLOTLIB_AVAILABLE:
         return None
@@ -517,21 +520,20 @@ def plot_trajectory_dashboard(
     save_path: Optional[str] = None,
 ) -> Optional[plt.Figure]:
     """
-    Create comprehensive dashboard of trajectory visualizations.
+    Create comprehensive dashboard of belief trajectory visualizations.
 
-    Includes:
-    - Belief evolution
-    - Attention patterns
-    - Belief trajectory in 2D
+    Six-panel layout showing mu component evolution, ||mu|| heatmap across
+    layers, phi (gauge frame) evolution, KL-divergence attention matrix,
+    2D belief trajectory, and KL(q_i||q_j) matrix.
 
     Args:
-        trajectory: ForwardTrajectory with all data
-        batch_idx: Which batch element
-        figsize: Figure size
-        save_path: If provided, save figure to this path
+        trajectory: ForwardTrajectory with all data.
+        batch_idx: Which batch element.
+        figsize: Figure size.
+        save_path: If provided, save figure to this path.
 
     Returns:
-        matplotlib Figure or None if matplotlib unavailable
+        matplotlib Figure or None if matplotlib unavailable.
     """
     if not MATPLOTLIB_AVAILABLE:
         return None

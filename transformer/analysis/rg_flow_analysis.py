@@ -270,7 +270,7 @@ class RGFlowTracker:
             mu: Belief means (B, N, K)
             sigma: Belief covariances (B, N, K) or (B, N, K, K)
             step: Current step number
-            phi: Optional gauge frames (B, N, gauge_dim) for enhanced analysis
+            phi: Optional gauge frames (B, N, phi_dim) for enhanced analysis
             kl_matrix: Optional raw KL divergences (B, N, N) or (B, H, N, N)
         """
         if self._current_trajectory is None:
@@ -346,7 +346,7 @@ class RGFlowTracker:
             beta: Attention matrix (B, N, N)
             mu: Belief means (B, N, K)
             sigma: Belief covariances
-            phi: Optional gauge frames (B, N, gauge_dim) for enhanced analysis
+            phi: Optional gauge frames (B, N, phi_dim) for enhanced analysis
             kl_matrix: Optional raw KL divergences (B, N, N) or (B, H, N, N)
 
         Returns:
@@ -970,7 +970,7 @@ def run_rg_analysis(
             beta = attn_info['beta']  # (n_layers, B, H, N, N)
             mu = attn_info['mu']      # (B, N, K)
             sigma = attn_info.get('sigma')  # May be None
-            phi = attn_info.get('phi')      # (B, N, gauge_dim) if available
+            phi = attn_info.get('phi')      # (B, N, phi_dim) if available
             kl_mat = attn_info.get('kl_matrix')  # Raw KL divergences if available
 
             if sigma is None:
