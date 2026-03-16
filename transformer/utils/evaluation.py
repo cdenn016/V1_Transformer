@@ -121,8 +121,9 @@ def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
 
         vocab_size = actual_vocab_size
 
-    # Get pad_token_id from dataset for proper loss masking
-    pad_token_id = getattr(val_loader.dataset, 'pad_token_id', 0)
+    # Target padding uses -100 (PyTorch cross_entropy ignore_index default).
+    # Dataset.pad_token_id is for INPUT padding only — targets always use -100.
+    pad_token_id = -100
 
     # Evaluate on validation set
     print(f"\n{'='*70}")
