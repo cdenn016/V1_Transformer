@@ -1,11 +1,15 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Analyze RG Flow in VFE Gauge Transformers
+Analyze RG Flow in Gauge VFE Transformers
 ==========================================
 
-This script performs comprehensive Renormalization Group (RG) flow analysis
-on trained VFE gauge transformer models.
+Performs Renormalization Group (RG) coarse-graining analysis on trained
+GaugeTransformerLM checkpoints. Extracts attention matrices (beta) and
+belief states (mu, sigma) from the model, then runs iterative spectral
+clustering to coarse-grain the attention graph and track coupling
+constants (g1 anisotropy, g2 gauge variation, g3 holonomy) across
+RG levels.
 
 The analysis reveals:
 1. Meta-agent emergence through modularity in attention
@@ -14,18 +18,12 @@ The analysis reveals:
 4. Multi-scale self-similarity (scale invariance)
 5. Fixed points and phase transitions
 
+Sigma can be (B, N, K, K) full or (B, N, K) when diagonal_covariance=True.
+
 Usage:
-    # Analyze a trained checkpoint
     python scripts/analyze_rg_flow.py --checkpoint path/to/model.pt --output rg_analysis/
-
-    # Quick analysis (fewer batches)
     python scripts/analyze_rg_flow.py --checkpoint path/to/model.pt --n_batches 5
-
-    # With custom dataset
     python scripts/analyze_rg_flow.py --checkpoint path/to/model.pt --dataset wikitext-2
-
-Author: VFE Transformer Team
-Date: January 2026
 """
 
 import sys

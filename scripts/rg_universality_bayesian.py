@@ -55,7 +55,17 @@ import json
 
 @dataclass
 class TrainingCurve:
-    """A single training curve (loss vs step/tokens)."""
+    """A single training curve (loss vs step/tokens).
+
+    Attributes:
+        architecture: 'gauge_vfe' or 'transformer'.
+        K: Belief/embedding dimension.
+        N_params: Total number of model parameters.
+        steps: Training step indices.
+        tokens_seen: Cumulative tokens processed.
+        perplexity: Perplexity at each step.
+        flops: Optional cumulative FLOPs.
+    """
     architecture: str           # 'gauge_vfe' or 'transformer'
     K: int                      # belief/embedding dimension
     N_params: int               # number of parameters
@@ -67,7 +77,16 @@ class TrainingCurve:
 
 @dataclass
 class ScalingFit:
-    """Results of a Bayesian scaling fit."""
+    """Results of a Bayesian scaling fit.
+
+    Attributes:
+        architecture: 'gauge_vfe' or 'transformer'.
+        alpha: Parameter-count scaling exponent with CI.
+        beta: Data scaling exponent with CI.
+        ppl_inf: Irreducible perplexity with CI.
+        gamma: Geometric correction factor (0 for standard transformer).
+        r_hat_max: Worst R-hat across MCMC chains (convergence diagnostic).
+    """
     architecture: str
     alpha: float               # parameter scaling exponent
     alpha_ci: Tuple[float, float]

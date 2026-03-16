@@ -68,7 +68,12 @@ from rg_universality_networkx import (
 
 @dataclass
 class DeviationResult:
-    """Results for one (N, K) configuration."""
+    """Results for one (N, K) configuration.
+
+    Stores both graph-based and CLT exponents along with clustering
+    quality metrics (modularity, spectral gap, cluster balance CV,
+    intra/inter attention ratio) used to diagnose finite-size artifacts.
+    """
     N: int
     K: int
     # Graph-based exponents
@@ -298,8 +303,16 @@ def run_rg_flow_with_diagnostics(
 
 def run_single_configuration(N: int, K: int, seed: int = 42,
                               verbose: bool = False) -> DeviationResult:
-    """
-    Run both CLT and graph-based RG for a single (N, K) configuration.
+    """Run both CLT and graph-based RG for a single (N, K) configuration.
+
+    Args:
+        N: Number of tokens (agents).
+        K: Belief dimension.
+        seed: Random seed for reproducibility.
+        verbose: Print progress and errors.
+
+    Returns:
+        DeviationResult with exponents and clustering quality metrics.
     """
     result = DeviationResult(N=N, K=K)
 
@@ -417,8 +430,10 @@ def fit_finite_size_scaling(
 
 def run_multi_seed(N: int, K: int, n_seeds: int = 5,
                    verbose: bool = False) -> Dict:
-    """
-    Run analysis with multiple random seeds to get error bars.
+    """Run analysis with multiple random seeds to get error bars.
+
+    Returns:
+        Dict with mean/std of exponents and clustering quality metrics.
     """
     results = []
     for seed in range(42, 42 + n_seeds):

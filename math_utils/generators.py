@@ -1764,7 +1764,8 @@ def soN_compose_bch_torch(
     Args:
         phi1: First so(N) element (..., n_gen)
         phi2: Second so(N) element (..., n_gen)
-        generators: Lie algebra generators (n_gen, N, N)
+        generators: Transport generators (n_gen, K, K); only n_gen is used
+                   to infer the gauge group dimension N
         order: BCH expansion order (0=addition, 1=first correction, 2=second)
 
     Returns:
@@ -1809,10 +1810,10 @@ def retract_soN_torch(
     Args:
         phi: Current gauge frames (..., n_gen)
         delta_phi: Update direction (typically -grad_phi) (..., n_gen)
-        generators: Lie algebra generators (n_gen, N, N)
+        generators: Transport generators (n_gen, K, K); only n_gen is used
         step_size: Learning rate for the update
-        trust_region: Maximum relative change ||δφ|| / ||φ|| per update
-        max_norm: Maximum allowed norm for phi (π = 180° rotation)
+        trust_region: Maximum relative change ||delta_phi|| / ||phi|| per update
+        max_norm: Maximum allowed norm for phi (pi for SO(N))
         bch_order: Order of BCH expansion (0=add, 1=first correction)
         eps: Numerical stability constant
 
@@ -1866,7 +1867,7 @@ def retract_soN_exact_torch(
     Args:
         phi: Current gauge frames (..., n_gen)
         delta_phi: Update direction (..., n_gen)
-        generators: Lie algebra generators (n_gen, N, N)
+        generators: Transport generators (n_gen, K, K); only n_gen is used
         step_size: Learning rate
         trust_region: Maximum relative change
         max_norm: Maximum norm for phi
@@ -2114,11 +2115,11 @@ def glK_bracket_torch(
     Args:
         phi1: First Lie algebra element coordinates (..., n_gen) where n_gen = K²
         phi2: Second Lie algebra element coordinates (..., n_gen)
-        generators: Transport generators (n_gen, dim, dim) - used only for n_gen count.
-                   The actual K×K generators are computed internally.
+        generators: Transport generators (n_gen, K, K) - used only for n_gen count.
+                   The actual gauge-group K×K generators are computed internally.
 
     Returns:
-        bracket_coords: Coordinates of [φ₁·G, φ₂·G] in generator basis (..., n_gen)
+        bracket_coords: Coordinates of [phi_1 . G, phi_2 . G] in generator basis (..., n_gen)
     """
     import torch
 
@@ -2185,7 +2186,7 @@ def glK_compose_bch_torch(
     Args:
         phi1: First gl(K) element (..., n_gen) where n_gen = K²
         phi2: Second gl(K) element (..., n_gen)
-        generators: Lie algebra generators (n_gen, dim, dim)
+        generators: Transport generators (n_gen, K, K); only n_gen is used
         order: BCH expansion order (0=addition, 1=first correction, 2=second)
 
     Returns:
@@ -2236,10 +2237,10 @@ def retract_glK_torch(
     Args:
         phi: Current gauge frames (..., n_gen) where n_gen = K²
         delta_phi: Update direction (typically -grad_phi) (..., n_gen)
-        generators: Lie algebra generators (n_gen, dim, dim)
+        generators: Transport generators (n_gen, K, K); only n_gen is used
         step_size: Learning rate for the update
-        trust_region: Maximum relative change ||δφ|| / ||φ|| per update
-        max_norm: Maximum allowed norm for phi
+        trust_region: Maximum relative change ||delta_phi|| / ||phi|| per update
+        max_norm: Maximum allowed norm for phi (no periodicity for GL(K))
         bch_order: Order of BCH expansion (0=add, 1=first correction)
         eps: Numerical stability constant
         grad_clip: Maximum gradient norm (per-element clipping)

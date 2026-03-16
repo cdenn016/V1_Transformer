@@ -74,7 +74,18 @@ from rg_universality_networkx import (
 
 @dataclass
 class ExponentEstimate:
-    """Posterior estimate for a single scaling exponent."""
+    """Posterior estimate for a single RG scaling exponent.
+
+    Attributes:
+        coupling: Name of the coupling constant (e.g. 'g1_orig', 'g2', 'g3').
+        y_predicted: Theoretically predicted exponent value.
+        y_mean: Posterior mean of the exponent.
+        y_std: Posterior standard deviation.
+        y_hdi_low, y_hdi_high: 95% highest density interval bounds.
+        pred_in_hdi: Whether y_predicted falls within the 95% HDI.
+        method: 'bootstrap' or 'pymc'.
+        source: 'graph' (spectral clustering RG) or 'clt' (direct averaging).
+    """
     coupling: str
     y_predicted: float
     y_mean: float

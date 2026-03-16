@@ -4,22 +4,19 @@ KN-5 Baseline Comparison for WikiText-103
 ==========================================
 
 Pure-Python Modified Kneser-Ney 5-gram model on WikiText-103 using the
-SAME GPT-2 BPE tokenization (50,257 vocab) as the gauge VFE model,
+SAME GPT-2 BPE tokenization (50,257 vocab) as the GaugeTransformerLM,
 enabling an apples-to-apples perplexity comparison.
 
 The Merity et al. (2017) KN-5 result (~153-156 PPL) uses word-level
 tokenization with ~267K vocabulary. This script re-evaluates under
-matched BPE tokenization so the comparison is commensurable.
+matched BPE tokenization so the comparison against the gauge VFE
+transformer is commensurable.
 
-No C++ compilation required — runs on any platform with Python 3.8+.
+No C++ compilation required -- runs on any platform with Python 3.8+.
 
 Usage:
     python scripts/kn5_baseline.py
-
-    # With custom n-gram order:
     python scripts/kn5_baseline.py --order 3
-
-    # Skip dependency auto-install:
     python scripts/kn5_baseline.py --no-install
 
 Requirements (auto-installed if missing):
@@ -131,11 +128,12 @@ def make_sentences(token_ids: list, sent_len: int = 512) -> list:
 # ===================================================================
 
 class ModifiedKneserNey:
-    """
-    Modified Kneser-Ney smoothed n-gram language model.
+    """Modified Kneser-Ney smoothed n-gram language model.
 
-    Implements Chen & Goodman (1998) with three discount parameters
-    per order and interpolated continuation probabilities at all levels.
+    Implements Chen & Goodman (1998) with three discount parameters (D1, D2,
+    D3+) per order and interpolated continuation probabilities at all levels.
+    Used as a non-neural baseline for perplexity comparison against
+    GaugeTransformerLM on the same GPT-2 BPE tokenization.
 
     Reference:
         Chen, S.F. and Goodman, J. (1998). "An empirical study of

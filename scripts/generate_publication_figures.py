@@ -3,18 +3,19 @@
 Generate Publication-Quality Figures for Gauge VFE Manuscript
 =============================================================
 
-Generates clean figures with properly formatted x-axis labels (no overlap).
+Reads training metrics CSV files from GaugeTransformerLM runs and produces
+publication-quality figures: loss curves, perplexity, VFE components (if
+logged), and gauge diagnostics. Handles the full set of metrics emitted
+by the training loop including train_loss_total, val_loss, val_ppl, and
+optional per-component VFE terms.
 
 Usage:
     python scripts/generate_publication_figures.py --metrics_file <path> --output_dir <path>
 
 Example:
-    python scripts/generate_publication_figures.py \
-        --metrics_file 230_K=100_N=128_so20_200k_3batch_ffn_VFE_dynamic/metrics.csv \
+    python scripts/generate_publication_figures.py \\
+        --metrics_file 230_K=100_N=128_so20_200k_3batch_ffn_VFE_dynamic/metrics.csv \\
         --output_dir figures/
-
-Author: Generated for LLM_VFE_manuscript
-Date: January 2026
 """
 
 import argparse
