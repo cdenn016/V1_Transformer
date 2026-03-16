@@ -235,8 +235,9 @@ def count_gauge_transformer_flops(
     flops['message_aggregation'] = msg_flops
 
     # --- Per-layer: VFE E-step iterations ---
-    # Each iteration recomputes KL, transport, softmax, messages
-    # Cost per iteration ≈ kl_transport + softmax + msg
+    # The T iterations ARE the attention computation (not in addition to it).
+    # Each iteration: recompute KL scores, softmax, aggregate messages.
+    # Transport operators (mat_exp, Omega products) are computed once and cached.
     vfe_per_iter = kl_transport_flops + softmax_flops + msg_flops
     flops['vfe_iterations'] = T * vfe_per_iter
 
@@ -245,9 +246,9 @@ def count_gauge_transformer_flops(
     flops['layernorm_per_layer'] = ln_flops
 
     # --- Per-layer total ---
+    # Transport setup (once) + T VFE iterations + layernorm
     per_layer = (
         lin_comb_flops + mat_exp_flops + transport_product_flops +
-        kl_transport_flops + softmax_flops + msg_flops +
         flops['vfe_iterations'] + ln_flops
     )
     flops['per_layer_total'] = per_layer
