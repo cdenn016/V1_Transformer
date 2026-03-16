@@ -1058,6 +1058,7 @@ def compute_vfe_gradients_gpu(
     chunk_size: Optional[int] = None,  # Chunk size for memory-efficient processing
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
     cached_block_exp_pairs: Optional[list] = None,  # Precomputed block exponential pairs
+    exact_diagonal_transport: bool = False,  # Lift diagonal σ for exact transport
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Compute VFE gradients entirely on GPU using PyTorch.
@@ -1115,6 +1116,19 @@ def compute_vfe_gradients_gpu(
 
     # Detect diagonal vs full covariance
     is_diagonal = sigma_q.dim() == 3
+
+    # Exact diagonal transport: lift to full, use full-cov path, extract diagonal
+    if exact_diagonal_transport and is_diagonal:
+        sigma_q_full = torch.diag_embed(sigma_q)
+        sigma_p_full = torch.diag_embed(sigma_p)
+        grad_mu, grad_sigma_full = compute_vfe_gradients_gpu(
+            mu_q, sigma_q_full, mu_p, sigma_p_full, beta, phi, generators,
+            alpha, lambda_belief, kappa, eps, alpha_c0,
+            cached_transport, compute_sigma_align_grad, irrep_dims,
+            chunk_size, enforce_orthogonal, cached_block_exp_pairs,
+            exact_diagonal_transport=False,
+        )
+        return grad_mu, torch.diagonal(grad_sigma_full, dim1=-2, dim2=-1)
 
     # =================================================================
     # MEMORY-EFFICIENT PATH: Block-diagonal processing
@@ -1777,6 +1791,7 @@ class VariationalFFNDynamic(nn.Module):
         # Rotary Position Embeddings (RoPE) — must match attention sublayer setting
         use_rope: bool = False,
         rope_base: float = 10000.0,
+        exact_diagonal_transport: bool = False,  # Lift diagonal σ for exact transport
     ):
         """
         Initialize dynamic-β VFE FFN.
@@ -1817,6 +1832,7 @@ class VariationalFFNDynamic(nn.Module):
         self.mask_self_attention = mask_self_attention
         self.update_sigma = update_sigma
         self.diagonal_covariance = diagonal_covariance
+        self.exact_diagonal_transport = exact_diagonal_transport
         self.compute_sigma_align_grad = compute_sigma_align_grad
         self.gauge_mode = gauge_mode
         self.isotropic_covariance = isotropic_covariance
@@ -2091,6 +2107,7 @@ class VariationalFFNDynamic(nn.Module):
                 mask_self_attention=self.mask_self_attention,
                 gauge_mode=self.gauge_mode,
                 cached_block_exp_pairs=cached_block_exp_pairs,
+                exact_diagonal_transport=self.exact_diagonal_transport,
             )
             if isinstance(beta_kl_result, tuple):
                 beta_phi, kl_matrix = beta_kl_result
@@ -2112,6 +2129,7 @@ class VariationalFFNDynamic(nn.Module):
                     chunk_size=self.chunk_size,
                     mask_self_attention=self.mask_self_attention,
                     gauge_mode=self.gauge_mode,
+                    exact_diagonal_transport=self.exact_diagonal_transport,
                 )
 
             grad_phi = analytic_phi_gradient_block_diag(
@@ -2168,6 +2186,7 @@ class VariationalFFNDynamic(nn.Module):
                     mask_self_attention=self.mask_self_attention,
                     gauge_mode=self.gauge_mode,
                     cached_block_exp_pairs=_phi_head_bep,
+                    exact_diagonal_transport=self.exact_diagonal_transport,
                 )
                 beta_phi_h, kl_h = beta_phi_h_result
                 alignment_loss = alignment_loss + self.lambda_belief * (beta_phi_h * kl_h).sum()
@@ -2188,6 +2207,7 @@ class VariationalFFNDynamic(nn.Module):
                 chunk_size=self.chunk_size,
                 mask_self_attention=self.mask_self_attention,
                 gauge_mode=self.gauge_mode,
+                exact_diagonal_transport=self.exact_diagonal_transport,
             )
             if isinstance(beta_for_phi_result, tuple):
                 beta_phi, kl_matrix = beta_for_phi_result
@@ -2256,6 +2276,7 @@ class VariationalFFNDynamic(nn.Module):
                         chunk_size=self.chunk_size,
                         mask_self_attention=self.mask_self_attention,
                         gauge_mode=self.gauge_mode,
+                        exact_diagonal_transport=self.exact_diagonal_transport,
                     )
                     # Slice alpha per head block if per-dim tensor
                     alpha_h = alpha_eff[:, :, block_start:block_end] if isinstance(alpha_eff, torch.Tensor) and alpha_eff.dim() == 3 else alpha_eff
@@ -2268,7 +2289,7 @@ class VariationalFFNDynamic(nn.Module):
                         kappa=kappa_h, eps=eps,
                         alpha_c0=c0_h,
                         compute_sigma_align_grad=self.compute_sigma_align_grad,
-
+                        exact_diagonal_transport=self.exact_diagonal_transport,
                     )
                     grad_mu[:, :, block_start:block_end] = grad_mu_h
                     if is_diagonal:
@@ -2288,6 +2309,7 @@ class VariationalFFNDynamic(nn.Module):
                     chunk_size=self.chunk_size,
                     mask_self_attention=self.mask_self_attention,
                     gauge_mode=self.gauge_mode,
+                    exact_diagonal_transport=self.exact_diagonal_transport,
                 )
                 grad_mu, grad_sigma = compute_vfe_gradients_gpu(
                     mu_q=mu_in, sigma_q=sigma_in,
@@ -2298,9 +2320,9 @@ class VariationalFFNDynamic(nn.Module):
                     alpha_c0=_alpha_c0,
                     cached_transport=cached_transport,
                     compute_sigma_align_grad=self.compute_sigma_align_grad,
-
                     irrep_dims=self.irrep_dims,
                     chunk_size=self.chunk_size,
+                    exact_diagonal_transport=self.exact_diagonal_transport,
                 )
 
             grad_mu = torch.clamp(grad_mu, min=-1e3, max=1e3)
@@ -2602,7 +2624,8 @@ class VariationalFFNDynamic(nn.Module):
                 # Previously: compute_attention_weights + compute_vfe_gradients_gpu
                 # built Omega separately → 2× Omega per head. Now: 1× per head.
                 # =============================================================
-                _use_fused_mh = is_diagonal and self.irrep_dims is not None
+                _use_fused_mh = (is_diagonal and self.irrep_dims is not None
+                                 and not self.exact_diagonal_transport)
                 block_start = 0
                 for h, d_h in enumerate(self.irrep_dims):
                     block_end = block_start + d_h
@@ -2664,6 +2687,7 @@ class VariationalFFNDynamic(nn.Module):
                             cached_block_exp_pairs=_head_bep,
                             use_rope=self._use_rope_vfe,
                             rope_base=self._rope_base_vfe,
+                            exact_diagonal_transport=self.exact_diagonal_transport,
                         )
                         grad_mu_h, grad_sigma_h = compute_vfe_gradients_gpu(
                             mu_q=mu_h, sigma_q=sigma_h,
@@ -2674,6 +2698,7 @@ class VariationalFFNDynamic(nn.Module):
                             compute_sigma_align_grad=self.compute_sigma_align_grad,
                             irrep_dims=[d_h],
                             cached_block_exp_pairs=_head_bep,
+                            exact_diagonal_transport=self.exact_diagonal_transport,
                         )
 
                     beta_heads.append(beta_h)
@@ -2737,7 +2762,8 @@ class VariationalFFNDynamic(nn.Module):
 
                 # Use fused path for diagonal + block-diagonal (no chunk_size)
                 _use_fused_single = (is_diagonal and self.irrep_dims is not None
-                                     and self.chunk_size is None)
+                                     and self.chunk_size is None
+                                     and not self.exact_diagonal_transport)
                 if _use_fused_single:
                     beta_current, grad_mu, grad_sigma, _ = _fused_attention_and_vfe_gradients_block_diag(
                         mu_q=mu_current, sigma_q=sigma_current,
@@ -2770,6 +2796,7 @@ class VariationalFFNDynamic(nn.Module):
                         cached_block_exp_pairs=_cached_bep,
                         use_rope=self._use_rope_vfe,
                         rope_base=self._rope_base_vfe,
+                        exact_diagonal_transport=self.exact_diagonal_transport,
                     )
                     grad_mu, grad_sigma = compute_vfe_gradients_gpu(
                         mu_q=mu_current, sigma_q=sigma_current,
@@ -2782,6 +2809,7 @@ class VariationalFFNDynamic(nn.Module):
                         compute_sigma_align_grad=self.compute_sigma_align_grad,
                         irrep_dims=self.irrep_dims, chunk_size=self.chunk_size,
                         cached_block_exp_pairs=_cached_bep,
+                        exact_diagonal_transport=self.exact_diagonal_transport,
                     )
 
                 if return_beta_history:

@@ -356,6 +356,8 @@ def compute_attention_weights(
     rope_base: float = 10000.0,        # RoPE frequency base
     # Cached block exponentials (avoids redundant fused_block_matrix_exp_pairs calls)
     cached_block_exp_pairs: Optional[list] = None,
+    # Exact diagonal transport: lift diagonal σ to full for exact Ω@diag(σ)@Ω^T
+    exact_diagonal_transport: bool = False,
 ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
     """
     Compute attention weights from KL divergences (0D version).
@@ -427,6 +429,14 @@ def compute_attention_weights(
         >>> beta.sum(dim=-1)  # Should sum to 1 (plus epsilon)
         tensor([[1.0000, 1.0000, ...], ...])
     """
+    # =========================================================================
+    # Exact diagonal transport: lift diagonal σ to full and use full-cov paths.
+    # KL output is (B,N,N) regardless, so no output conversion needed.
+    # =========================================================================
+    if exact_diagonal_transport and diagonal_covariance and sigma_q.dim() == 3:
+        sigma_q = torch.diag_embed(sigma_q)  # (B, N, K) → (B, N, K, K)
+        diagonal_covariance = False
+
     batch_size, num_agents, K = mu_q.shape
     device = mu_q.device
     dtype = mu_q.dtype
@@ -609,6 +619,7 @@ def compute_kl_matrix(
     chunk_size: Optional[int] = None,
     gauge_mode: str = 'learned',
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
+    exact_diagonal_transport: bool = False,
 ) -> torch.Tensor:
     """
     Compute pairwise KL divergence matrix: KL(q_i || Ω_ij[q_j]).
@@ -643,6 +654,11 @@ def compute_kl_matrix(
         >>> kl.shape
         torch.Size([2, 10, 10])
     """
+    # Exact diagonal transport: lift to full
+    if exact_diagonal_transport and diagonal_covariance and sigma_q.dim() == 3:
+        sigma_q = torch.diag_embed(sigma_q)
+        diagonal_covariance = False
+
     batch_size, num_agents, K = mu_q.shape
     device = mu_q.device
     dtype = mu_q.dtype
@@ -1864,6 +1880,7 @@ def aggregate_messages(
     aggregate_mode: str = 'mean_only',  # 'mean_only' or 'full_distribution'
     diagonal_covariance: bool = False,
     cached_transport: Optional[dict] = None,  # Precomputed transport operators
+    exact_diagonal_transport: bool = False,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
     """
     Aggregate messages with gauge transport.
@@ -1897,6 +1914,12 @@ def aggregate_messages(
         >>> mu_agg, _ = aggregate_messages(mu, sigma, phi, beta, G, mode='mean_only')
         >>> # mu_agg[b, i] = Σ_j β[b,i,j] * Ω_ij[μ[b,j]]
     """
+    # Exact diagonal transport: lift to full, aggregate, extract diagonal
+    _exact_diag_lift = exact_diagonal_transport and diagonal_covariance and sigma_q.dim() == 3
+    if _exact_diag_lift:
+        sigma_q = torch.diag_embed(sigma_q)  # (B, N, K) → (B, N, K, K)
+        diagonal_covariance = False
+
     batch_size, num_agents, K = mu_q.shape
     device = mu_q.device
     dtype = mu_q.dtype
@@ -1992,6 +2015,8 @@ def aggregate_messages(
         else:
             sigma_aggregated = None
 
+        if _exact_diag_lift and sigma_aggregated is not None:
+            sigma_aggregated = torch.diagonal(sigma_aggregated, dim1=-2, dim2=-1)
         return mu_aggregated, sigma_aggregated
 
     # =========================================================================
@@ -2047,6 +2072,8 @@ def aggregate_messages(
     else:
         sigma_aggregated = None
 
+    if _exact_diag_lift and sigma_aggregated is not None:
+        sigma_aggregated = torch.diagonal(sigma_aggregated, dim1=-2, dim2=-1)
     return mu_aggregated, sigma_aggregated
 
 
@@ -2101,6 +2128,7 @@ class IrrepMultiHeadAttention(nn.Module):
         irrep_dims_override: Optional[List[int]] = None,  # Override block dims (for cross-head coupling)
         use_rope: bool = False,  # If True, apply RoPE rotations to μ before KL computation
         rope_base: float = 10000.0,  # RoPE frequency base
+        exact_diagonal_transport: bool = False,  # Lift diagonal σ for exact transport
     ):
         """
         Initialize irrep-structured multi-head attention.
@@ -2128,6 +2156,7 @@ class IrrepMultiHeadAttention(nn.Module):
         """
         super().__init__()
         self.diagonal_covariance = diagonal_covariance
+        self.exact_diagonal_transport = exact_diagonal_transport
         self.embed_dim = embed_dim
         self.irrep_spec = irrep_spec
         self.kappa_beta = kappa_beta
@@ -2495,6 +2524,7 @@ class IrrepMultiHeadAttention(nn.Module):
                     enforce_orthogonal=self.enforce_orthogonal,
                     use_rope=self.use_rope,
                     rope_base=self.rope_base,
+                    exact_diagonal_transport=self.exact_diagonal_transport,
                 )  # (B, N, N), (B, N, N)
                 all_attention_weights.append(beta_head)
                 all_kl_matrices.append(kl_head)
@@ -2518,6 +2548,7 @@ class IrrepMultiHeadAttention(nn.Module):
                     enforce_orthogonal=self.enforce_orthogonal,
                     use_rope=self.use_rope,
                     rope_base=self.rope_base,
+                    exact_diagonal_transport=self.exact_diagonal_transport,
                 )  # (B, N, N)
                 kl_head = None
 
@@ -2531,6 +2562,7 @@ class IrrepMultiHeadAttention(nn.Module):
                 aggregate_mode=self.aggregate_mode,
                 diagonal_covariance=self.diagonal_covariance,
                 cached_transport=head_cached_transport,
+                exact_diagonal_transport=self.exact_diagonal_transport,
             )
 
             head_outputs_mu.append(mu_agg)
