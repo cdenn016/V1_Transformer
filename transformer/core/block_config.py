@@ -44,6 +44,8 @@ class BlockConfig:
     phi_dim: int = 3              # 3 for SO(3), N(N-1)/2 for SO(N)
     phi_natural_gradient: str = 'clip'  # 'clip'|'cartan'|'killing'|'pullback'
     diagonal_covariance: bool = False
+    exact_diagonal_transport: bool = False  # When True + diagonal_covariance, lift σ to full
+                                            # for exact Ω@diag(σ)@Ω^T transport (slower but exact)
     amortized_inference: bool = True  # Gradient flow through priors for learned E-step init
 
     # === Analytic phi gradient ===
@@ -134,6 +136,7 @@ class BlockConfig:
             phi_dim=config.get('phi_dim', 3),
             phi_natural_gradient=config.get('phi_natural_gradient', 'clip'),
             diagonal_covariance=config.get('diagonal_covariance', False),
+            exact_diagonal_transport=config.get('exact_diagonal_transport', False),
             amortized_inference=config.get('amortized_inference', True),
             # Analytic phi gradient
             analytic_phi_grad=config.get('analytic_phi_grad', False),
