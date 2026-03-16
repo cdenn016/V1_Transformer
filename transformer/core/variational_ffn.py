@@ -541,16 +541,16 @@ def _compute_vfe_gradients_block_diagonal_diag(
 
         del Omega_block
 
-        # Delta mu
-        mu_block_i = mu_block[:, :, None, :].expand(-1, -1, N, -1).clone()  # contiguous copy
+        # Delta mu (broadcast instead of expand+clone to avoid 59M-element copy)
+        mu_block_i = mu_block[:, :, None, :]  # (B, N, 1, d) - broadcasts with (B, N, N, d)
         delta_mu = mu_block_i - mu_j_transported  # (B, N, N, d)
 
         # ∂KL/∂μ_i = (μ_i - μ_j_t) / σ_j_t (element-wise)
         grad_kl_block = delta_mu / sigma_j_transported  # (B, N, N, d)
         grad_kl_per_pair_full[:, :, :, block_start:block_end] = grad_kl_block
 
-        # Diagonal KL for this block
-        sigma_i_block = sigma_block[:, :, None, :].expand(-1, -1, N, -1).clone()  # contiguous copy
+        # Diagonal KL for this block (broadcast, no clone)
+        sigma_i_block = sigma_block[:, :, None, :]  # (B, N, 1, d)
         trace_block = (sigma_i_block / sigma_j_transported).sum(dim=-1)
         mahal_block = (delta_mu ** 2 / sigma_j_transported).sum(dim=-1)
         logdet_block = (torch.log(sigma_j_transported.clamp(min=eps))
@@ -564,13 +564,11 @@ def _compute_vfe_gradients_block_diagonal_diag(
         if compute_sigma_align_grad:
             sigma_j_inv_diag = 1.0 / sigma_j_transported  # (B, N, N, d)
             sigma_i_inv = 1.0 / sigma_block  # (B, N, d)
-            sigma_i_inv_exp = sigma_i_inv[:, :, None, :].expand(-1, -1, N, -1).clone()
-            grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv_exp)  # (B, N, N, d)
+            grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv[:, :, None, :])  # broadcast
             grad_sigma_align[:, :, block_start:block_end] = (
                 grad_sigma_align[:, :, block_start:block_end]
                 + lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_sigma_pair)
             )
-            # Store per-pair sigma gradient for softmax coupling
             if grad_sigma_per_pair_full is not None:
                 grad_sigma_per_pair_full[:, :, :, block_start:block_end] = grad_sigma_pair
 
@@ -601,6 +599,215 @@ def _compute_vfe_gradients_block_diagonal_diag(
     grad_sigma = grad_sigma_self + grad_sigma_align
 
     return grad_mu.to(dtype), grad_sigma.to(dtype)
+
+
+def _fused_attention_and_vfe_gradients_block_diag(
+    mu_q: torch.Tensor,        # (B, N, K) belief means
+    sigma_q: torch.Tensor,     # (B, N, K) diagonal variances
+    mu_p: torch.Tensor,        # (B, N, K) prior means
+    sigma_p: torch.Tensor,     # (B, N, K) prior variances
+    phi: torch.Tensor,         # (B, N, n_gen) gauge frames
+    generators: torch.Tensor,  # (n_gen, K, K) generators
+    alpha: 'float | torch.Tensor',
+    lambda_belief: float,
+    kappa: float,
+    eps: float,
+    irrep_dims: List[int],
+    compute_sigma_align_grad: bool,
+    enforce_orthogonal: bool = False,
+    alpha_c0: Optional[torch.Tensor] = None,
+    cached_block_exp_pairs: Optional[list] = None,
+    mask: Optional[torch.Tensor] = None,
+    mask_self_attention: bool = False,
+    use_rope: bool = False,
+    rope_base: float = 10000.0,
+    return_kl: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+    """
+    FUSED attention + VFE gradient computation for block-diagonal diagonal mode.
+
+    Computes β (attention weights) AND VFE gradients in a SINGLE pass over blocks,
+    sharing the Omega construction. This eliminates the redundant Omega computation
+    that occurs when compute_attention_weights and compute_vfe_gradients_gpu are
+    called separately.
+
+    For a config with 5 heads × d=15, this saves 5 × O(B×N²×d²) Omega constructions
+    per VFE iteration — roughly 2× speedup on the dominant computation.
+
+    Returns:
+        beta: (B, N, N) attention weights
+        grad_mu: (B, N, K) gradient w.r.t. μ
+        grad_sigma: (B, N, K) gradient w.r.t. σ
+        kl_matrix: (B, N, N) KL divergence matrix (only if return_kl=True)
+    """
+    while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
+        sigma_q = sigma_q.squeeze(-1)
+    while sigma_p.dim() > 3 and sigma_p.shape[-1] == 1:
+        sigma_p = sigma_p.squeeze(-1)
+
+    B, N, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+
+    mu_q = mu_q.float()
+    mu_p = mu_p.float()
+    sigma_q = sigma_q.float()
+    sigma_p = sigma_p.float()
+
+    sigma_q_safe = sigma_q.clamp(min=eps)
+    sigma_p_safe = sigma_p.clamp(min=eps)
+
+    # Apply RoPE to a copy of mu for KL computation (not for gradients)
+    if use_rope:
+        from transformer.core.attention import _apply_rope
+        mu_q_rope = _apply_rope(mu_q, base=rope_base)
+    else:
+        mu_q_rope = mu_q
+
+    # Self-coupling gradient
+    delta_mu_sp = mu_q - mu_p
+    grad_mu_self = alpha * delta_mu_sp / sigma_p_safe
+    grad_sigma_self = alpha * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
+
+    if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
+        kl_k = 0.5 * (sigma_q_safe / sigma_p_safe + delta_mu_sp ** 2 / sigma_p_safe
+                      - 1.0 + torch.log(sigma_p_safe) - torch.log(sigma_q_safe))
+        kl_k = kl_k.clamp(min=0.0)
+        grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * delta_mu_sp / sigma_p_safe
+        grad_sigma_self = grad_sigma_self - (alpha ** 2 / alpha_c0) * kl_k * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
+
+    # Precompute matrix exponentials
+    if cached_block_exp_pairs is not None:
+        _fused_pairs = cached_block_exp_pairs
+    else:
+        _fused_pairs = fused_block_matrix_exp_pairs(
+            phi, generators, irrep_dims, enforce_orthogonal=enforce_orthogonal
+        )
+    block_exp_phi = [p[0] for p in _fused_pairs]
+    block_exp_neg_phi = [p[1] for p in _fused_pairs]
+
+    # Accumulators
+    kl_values = torch.zeros(B, N, N, device=device, dtype=torch.float32)
+    grad_kl_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=torch.float32)
+    grad_sigma_align = torch.zeros_like(sigma_q)
+    grad_sigma_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=torch.float32) if (
+        compute_sigma_align_grad) else None
+    kl_max = max(100.0, 5.0 * K)
+
+    # Single pass over blocks: compute Omega, KL, and gradients together
+    block_start = 0
+    for block_idx, d in enumerate(irrep_dims):
+        block_end = block_start + d
+
+        # Use RoPE-rotated mu for KL/attention, raw mu for gradients
+        mu_block_rope = mu_q_rope[:, :, block_start:block_end].contiguous()
+        mu_block = mu_q[:, :, block_start:block_end].contiguous()
+        sigma_block = sigma_q_safe[:, :, block_start:block_end].contiguous()
+
+        # Build Omega ONCE for this block
+        Omega_block = torch.einsum(
+            'bikl,bjlm->bijkm',
+            block_exp_phi[block_idx], block_exp_neg_phi[block_idx]
+        )
+
+        # Transport (use RoPE mu for KL computation)
+        mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_block_rope)
+        sigma_j_transported = torch.einsum(
+            'bijkl,bijkl,bjl->bijk', Omega_block, Omega_block, sigma_block
+        ).clamp(min=eps)
+
+        # KL computation (for attention weights)
+        mu_block_i_rope = mu_block_rope[:, :, None, :]  # broadcast, no clone needed
+        delta_mu_kl = mu_block_i_rope - mu_j_transported
+
+        trace_block = (sigma_block[:, :, None, :] / sigma_j_transported).sum(dim=-1)
+        mahal_block = (delta_mu_kl ** 2 / sigma_j_transported).sum(dim=-1)
+        logdet_block = (torch.log(sigma_j_transported) - torch.log(sigma_block[:, :, None, :].clamp(min=eps))).sum(dim=-1)
+
+        kl_block = 0.5 * (trace_block + mahal_block - d + logdet_block)
+        kl_block = kl_block.clamp(min=0.0, max=kl_max)
+        kl_values = kl_values + kl_block
+
+        # Gradient computation (use raw mu, not RoPE)
+        # Re-transport with raw mu if RoPE is active
+        if use_rope:
+            mu_j_transported_raw = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_block)
+            delta_mu_grad = mu_block[:, :, None, :] - mu_j_transported_raw
+        else:
+            delta_mu_grad = mu_block[:, :, None, :] - mu_j_transported
+
+        grad_kl_block = delta_mu_grad / sigma_j_transported
+        grad_kl_per_pair_full[:, :, :, block_start:block_end] = grad_kl_block
+
+        if compute_sigma_align_grad:
+            sigma_j_inv_diag = 1.0 / sigma_j_transported
+            sigma_i_inv = 1.0 / sigma_block
+            grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv[:, :, None, :])
+            if grad_sigma_per_pair_full is not None:
+                grad_sigma_per_pair_full[:, :, :, block_start:block_end] = grad_sigma_pair
+
+        del Omega_block, sigma_j_transported, mu_j_transported
+        block_start = block_end
+
+    # Compute attention weights from KL values
+    dim_scale = math.sqrt(max(K, 1))
+    logits = -kl_values / (kappa * dim_scale)
+
+    if mask is not None:
+        logits = logits.masked_fill(mask == 0, float('-inf'))
+
+    if mask_self_attention:
+        diag_idx = torch.arange(N, device=device)
+        has_other_targets = (logits != float('-inf')).sum(dim=-1) > 1
+        logits = logits.clone()
+        diag_vals = logits[:, diag_idx, diag_idx]
+        masked_diag_vals = torch.where(
+            has_other_targets,
+            torch.full_like(diag_vals, float('-inf')),
+            diag_vals
+        )
+        logits[:, diag_idx, diag_idx] = masked_diag_vals
+
+    beta = torch.nn.functional.softmax(logits, dim=-1)
+    masked_positions = (logits == float('-inf'))
+    beta = torch.where(masked_positions, beta, beta.clamp(min=eps))
+    beta_sum = beta.sum(dim=-1, keepdim=True).clamp(min=eps)
+    beta = beta / beta_sum
+
+    # Compute VFE gradients using the beta we just computed
+    avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
+    grad_mu_direct = lambda_belief * avg_grad
+
+    kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
+    grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair_full
+    d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
+    grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
+
+    grad_mu = grad_mu_self + grad_mu_direct + grad_mu_softmax
+
+    # Sigma gradients
+    if grad_sigma_per_pair_full is not None:
+        # Direct sigma gradient
+        block_start = 0
+        for block_idx, d in enumerate(irrep_dims):
+            block_end = block_start + d
+            grad_sigma_pair = grad_sigma_per_pair_full[:, :, :, block_start:block_end]
+            grad_sigma_align[:, :, block_start:block_end] = (
+                grad_sigma_align[:, :, block_start:block_end]
+                + lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_sigma_pair)
+            )
+            block_start = block_end
+        # Sigma softmax coupling
+        avg_sigma_grad = torch.einsum('bij,bijk->bik', beta, grad_sigma_per_pair_full)
+        sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair_full
+        d_beta_d_sigma = beta.unsqueeze(-1) * sigma_grad_deviation / kappa_scaled
+        grad_sigma_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_sigma)
+        grad_sigma_align = grad_sigma_align + grad_sigma_softmax
+
+    grad_sigma = grad_sigma_self + grad_sigma_align
+
+    kl_out = kl_values if return_kl else None
+    return beta.to(dtype), grad_mu.to(dtype), grad_sigma.to(dtype), kl_out
 
 
 def _compute_vfe_gradients_chunked(
@@ -728,8 +935,7 @@ def _compute_vfe_gradients_chunked(
             if do_sigma_softmax and avg_sigma_grad_i is not None:
                 sigma_j_inv_diag = 1.0 / sigma_j_transported_diag
                 sigma_i_inv = 1.0 / sigma_i.clamp(min=1e-6)
-                sigma_i_inv_exp = sigma_i_inv[:, :, None, :].expand(-1, -1, n_j, -1).clone()
-                grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv_exp)
+                grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv[:, :, None, :])  # broadcast
                 avg_sigma_grad_i = avg_sigma_grad_i + torch.einsum('bij,bijk->bik', beta_chunk, grad_sigma_pair)
 
             del sigma_j_transported_diag, mu_j_transported, delta_mu_ij, grad_kl
@@ -765,11 +971,11 @@ def _compute_vfe_gradients_chunked(
             direct_contrib = lambda_belief * torch.einsum('bij,bijk->bik', beta_chunk, grad_kl)
             grad_mu_direct[:, i_start:i_end] = grad_mu_direct[:, i_start:i_end] + direct_contrib
 
-            # KL values (for softmax coupling weight)
-            sigma_i_exp = sigma_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()
-            trace_term = (sigma_i_exp / sigma_j_transported_diag).sum(dim=-1)
+            # KL values (for softmax coupling weight) — broadcast instead of clone
+            sigma_i_bc = sigma_i[:, :, None, :]  # (B, n_i, 1, K) broadcasts with (B, n_i, n_j, K)
+            trace_term = (sigma_i_bc / sigma_j_transported_diag).sum(dim=-1)
             mahal = (delta_mu_ij ** 2 / sigma_j_transported_diag).sum(dim=-1)
-            logdet_term = (torch.log(sigma_j_transported_diag.clamp(min=eps)) - torch.log(sigma_i_exp.clamp(min=eps))).sum(dim=-1)
+            logdet_term = (torch.log(sigma_j_transported_diag.clamp(min=eps)) - torch.log(sigma_i_bc.clamp(min=eps))).sum(dim=-1)
 
             kl_ceil = max(100.0, 5.0 * K)
             kl_chunk = 0.5 * (trace_term + mahal - K + logdet_term).clamp(min=0.0, max=kl_ceil)
@@ -784,8 +990,7 @@ def _compute_vfe_gradients_chunked(
             if compute_sigma_align_grad:
                 sigma_j_inv_diag = 1.0 / sigma_j_transported_diag
                 sigma_i_inv = 1.0 / sigma_i.clamp(min=1e-6)
-                sigma_i_inv_exp = sigma_i_inv[:, :, None, :].expand(-1, -1, n_j, -1).clone()
-                grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv_exp)
+                grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv[:, :, None, :])  # broadcast
                 sigma_contrib = lambda_belief * torch.einsum('bij,bijk->bik', beta_chunk, grad_sigma_pair)
                 grad_sigma_align[:, i_start:i_end] = grad_sigma_align[:, i_start:i_end] + sigma_contrib
 
@@ -1030,7 +1235,7 @@ def compute_vfe_gradients_gpu(
         # KL(N(μ_i,diag(σ_i)) || N(μ_j_t,diag(σ_j_t))) =
         #   0.5 * (Σ_k σ_i[k]/σ_j_t[k] + Σ_k (μ_i-μ_j_t)²[k]/σ_j_t[k] - K + Σ_k log(σ_j_t[k]/σ_i[k]))
 
-        sigma_i_expanded = sigma_q_safe[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
+        sigma_i_expanded = sigma_q_safe[:, :, None, :]  # (B, N, 1, K) - broadcasts
 
         # Trace term: Σ_k σ_i[k] / σ_j_transported[k]
         trace_term = (sigma_i_expanded / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
@@ -1083,10 +1288,8 @@ def compute_vfe_gradients_gpu(
         if compute_sigma_align_grad:
             sigma_j_inv_diag = 1.0 / sigma_j_transported_diag  # (B, N, N, K)
             sigma_i_inv = 1.0 / sigma_q_safe  # (B, N, K)
-            sigma_i_inv_expanded = sigma_i_inv[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
-
             # Gradient per pair: 0.5 * (1/σ_j_transported[k] - 1/σ_i[k])
-            grad_sigma_per_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv_expanded)  # (B, N, N, K)
+            grad_sigma_per_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv[:, :, None, :])  # broadcast
 
             # Direct term: Σ_j β_ij * ∂KL_ij/∂σ_i
             grad_sigma_direct = lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_sigma_per_pair)  # (B, N, K)
@@ -2297,6 +2500,10 @@ class VariationalFFNDynamic(nn.Module):
                 alpha_effective = self.alpha  # scalar (backward compatible)
                 _alpha_c0 = None
 
+            # Initialize cached block exp pairs for phi gradient reuse
+            _mh_cached_bep = None
+            _cached_bep = None
+
             if self.multihead_vfe:
                 # =============================================================
                 # MULTI-HEAD VFE: Per-block β_h through iterations
@@ -2359,17 +2566,17 @@ class VariationalFFNDynamic(nn.Module):
                             enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
                         )
 
+                # =============================================================
+                # FUSED MULTI-HEAD VFE: Compute β_h and gradients in single
+                # Omega pass per head (eliminates redundant Omega construction).
+                # Previously: compute_attention_weights + compute_vfe_gradients_gpu
+                # built Omega separately → 2× Omega per head. Now: 1× per head.
+                # =============================================================
+                _use_fused_mh = is_diagonal and self.irrep_dims is not None
                 block_start = 0
                 for h, d_h in enumerate(self.irrep_dims):
                     block_end = block_start + d_h
 
-                    # Extract per-head slices.
-                    # .detach() prevents autograd graph from growing 3× deeper
-                    # per iteration — VFE gradients are computed analytically,
-                    # so we don't need autograd through the per-head attention/KL.
-                    # Gradient flow to embeddings is preserved through the
-                    # mu_current = mu_current + delta_mu update chain.
-                    # When detach=False (DEQ backward), we need autograd through this.
                     mu_h = mu_current[:, :, block_start:block_end]
                     if _detach_e_step:
                         mu_h = mu_h.detach()
@@ -2390,53 +2597,53 @@ class VariationalFFNDynamic(nn.Module):
                     gen_h = self.generators[:, block_start:block_end, block_start:block_end]
 
                     kappa_h = self.kappa
-
-                    # Per-head attention: β_h = softmax(-KL_h / κ_h)
-                    # Use block-diagonal path with cached exp pairs to avoid
-                    # building full Omega (B,N,N,d,d) per head.
                     _head_bep = [_mh_cached_bep[h]] if _mh_cached_bep is not None else None
-                    beta_h = compute_attention_weights(
-                        mu_q=mu_h,
-                        sigma_q=sigma_h,
-                        phi=phi_current,
-                        generators=gen_h,
-                        kappa=kappa_h,
-                        epsilon=eps,
-                        mask=mask,
-                        use_numba=False,
-                        return_kl=False,
-                        diagonal_covariance=is_diagonal,
-                        irrep_dims=[d_h],
-                        chunk_size=self.chunk_size,
-                        mask_self_attention=self.mask_self_attention,
-                        gauge_mode=self.gauge_mode,
-                        cached_block_exp_pairs=_head_bep,
-                    )  # (B, N, N)
-                    beta_heads.append(beta_h)
 
-                    # Slice alpha per head block if per-dim tensor
                     alpha_h = alpha_effective[:, :, block_start:block_end] if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3 else alpha_effective
                     c0_h = _alpha_c0[block_start:block_end] if _alpha_c0 is not None else None
 
-                    # Per-head VFE gradients (use block-diagonal path with cached exp pairs)
-                    grad_mu_h, grad_sigma_h = compute_vfe_gradients_gpu(
-                        mu_q=mu_h,
-                        sigma_q=sigma_h,
-                        mu_p=mu_p_h,
-                        sigma_p=sigma_p_h,
-                        beta=beta_h,
-                        phi=phi_current,
-                        generators=gen_h,
-                        alpha=alpha_h,
-                        lambda_belief=self.lambda_belief,
-                        kappa=kappa_h,
-                        eps=eps,
-                        alpha_c0=c0_h,
-                        compute_sigma_align_grad=self.compute_sigma_align_grad,
-                        irrep_dims=[d_h],
-                        cached_block_exp_pairs=_head_bep,
-                    )
+                    if _use_fused_mh:
+                        # FUSED: single pass computes β_h AND gradients (1× Omega)
+                        beta_h, grad_mu_h, grad_sigma_h, _ = _fused_attention_and_vfe_gradients_block_diag(
+                            mu_q=mu_h, sigma_q=sigma_h,
+                            mu_p=mu_p_h, sigma_p=sigma_p_h,
+                            phi=phi_current, generators=gen_h,
+                            alpha=alpha_h, lambda_belief=self.lambda_belief,
+                            kappa=kappa_h, eps=eps,
+                            irrep_dims=[d_h],
+                            compute_sigma_align_grad=self.compute_sigma_align_grad,
+                            enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                            alpha_c0=c0_h,
+                            cached_block_exp_pairs=_head_bep,
+                            mask=mask,
+                            mask_self_attention=self.mask_self_attention,
+                            use_rope=getattr(self, '_use_rope_vfe', False),
+                        )
+                    else:
+                        # Fallback: separate attention + gradient (full covariance)
+                        beta_h = compute_attention_weights(
+                            mu_q=mu_h, sigma_q=sigma_h,
+                            phi=phi_current, generators=gen_h,
+                            kappa=kappa_h, epsilon=eps, mask=mask,
+                            use_numba=False, return_kl=False,
+                            diagonal_covariance=is_diagonal,
+                            irrep_dims=[d_h], chunk_size=self.chunk_size,
+                            mask_self_attention=self.mask_self_attention,
+                            gauge_mode=self.gauge_mode,
+                            cached_block_exp_pairs=_head_bep,
+                        )
+                        grad_mu_h, grad_sigma_h = compute_vfe_gradients_gpu(
+                            mu_q=mu_h, sigma_q=sigma_h,
+                            mu_p=mu_p_h, sigma_p=sigma_p_h,
+                            beta=beta_h, phi=phi_current, generators=gen_h,
+                            alpha=alpha_h, lambda_belief=self.lambda_belief,
+                            kappa=kappa_h, eps=eps, alpha_c0=c0_h,
+                            compute_sigma_align_grad=self.compute_sigma_align_grad,
+                            irrep_dims=[d_h],
+                            cached_block_exp_pairs=_head_bep,
+                        )
 
+                    beta_heads.append(beta_h)
                     grad_mu[:, :, block_start:block_end] = grad_mu_h
                     if is_diagonal:
                         grad_sigma[:, :, block_start:block_end] = grad_sigma_h
@@ -2444,24 +2651,21 @@ class VariationalFFNDynamic(nn.Module):
                         grad_sigma[:, :, block_start:block_end, block_start:block_end] = grad_sigma_h
                     block_start = block_end
 
-                # Stack per-head betas into (B, n_heads, N, N) for history tracking
-                # Preserves per-head patterns (averaging destroys them!)
                 if return_beta_history:
-                    beta_stacked = torch.stack(beta_heads, dim=1)  # (B, n_heads, N, N)
+                    beta_stacked = torch.stack(beta_heads, dim=1)
                     beta_history.append(beta_stacked.detach().clone())
-                # Store last head's beta for phi update (uses alignment loss)
                 beta_current = beta_heads[-1]
 
             else:
                 # =============================================================
                 # SINGLE-β VFE: Original behavior (all blocks share one β)
                 # =============================================================
-                # Cache block_exp_pairs: computed once, shared between attention
-                # and gradient computation (both depend only on phi, not mu/sigma)
+                # SINGLE-β VFE: All blocks share one β
+                # Use fused path when possible (diagonal + block-diagonal)
+                # =============================================================
                 _cached_bep = None
                 if self.irrep_dims is not None:
                     if self.gauge_mode == 'trivial':
-                        # Identity transport: skip matrix exponentials
                         _cached_bep = []
                         for d_h in self.irrep_dims:
                             eye_h = torch.eye(d_h, device=mu_current.device,
@@ -2470,7 +2674,6 @@ class VariationalFFNDynamic(nn.Module):
                                 B, N, -1, -1).contiguous()
                             _cached_bep.append((eye_h, eye_h))
                     elif self.gauge_mode == 'constant' and self.constant_omega is not None:
-                        # Constant gauge: use per-head Ω from the attention module.
                         _cached_bep = []
                         for h, d_h in enumerate(self.irrep_dims):
                             omega_h = self.constant_omega[h].to(
@@ -2486,7 +2689,6 @@ class VariationalFFNDynamic(nn.Module):
                                 B, N, -1, -1).contiguous()
                             _cached_bep.append((exp_phi_h, exp_neg_phi_h))
                     elif self.gauge_mode == 'constant':
-                        # Constant gauge without constant_omega: fall back to identity
                         _cached_bep = []
                         for d_h in self.irrep_dims:
                             eye_h = torch.eye(d_h, device=mu_current.device,
@@ -2500,49 +2702,54 @@ class VariationalFFNDynamic(nn.Module):
                             enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
                         )
 
-                # STEP 1: Recompute attention β from current beliefs
-                beta_current = compute_attention_weights(
-                    mu_q=mu_current,
-                    sigma_q=sigma_current,
-                    phi=phi_current,
-                    generators=self.generators,
-                    kappa=self.kappa,
-                    epsilon=eps,
-                    mask=mask,
-                    use_numba=False,
-                    return_kl=False,
-                    diagonal_covariance=is_diagonal,
-                    cached_transport=cached_transport,
-                    irrep_dims=self.irrep_dims,
-                    chunk_size=self.chunk_size,
-                    mask_self_attention=self.mask_self_attention,
-                    gauge_mode=self.gauge_mode,
-                    cached_block_exp_pairs=_cached_bep,
-                )  # (B, N, N)
+                # Use fused path for diagonal + block-diagonal (no chunk_size)
+                _use_fused_single = (is_diagonal and self.irrep_dims is not None
+                                     and self.chunk_size is None)
+                if _use_fused_single:
+                    beta_current, grad_mu, grad_sigma, _ = _fused_attention_and_vfe_gradients_block_diag(
+                        mu_q=mu_current, sigma_q=sigma_current,
+                        mu_p=mu_p_current, sigma_p=sigma_p,
+                        phi=phi_current, generators=self.generators,
+                        alpha=alpha_effective, lambda_belief=self.lambda_belief,
+                        kappa=self.kappa, eps=eps,
+                        irrep_dims=self.irrep_dims,
+                        compute_sigma_align_grad=self.compute_sigma_align_grad,
+                        enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                        alpha_c0=_alpha_c0,
+                        cached_block_exp_pairs=_cached_bep,
+                        mask=mask,
+                        mask_self_attention=self.mask_self_attention,
+                        use_rope=getattr(self, '_use_rope_vfe', False),
+                    )
+                else:
+                    # Fallback: separate attention + gradient
+                    beta_current = compute_attention_weights(
+                        mu_q=mu_current, sigma_q=sigma_current,
+                        phi=phi_current, generators=self.generators,
+                        kappa=self.kappa, epsilon=eps, mask=mask,
+                        use_numba=False, return_kl=False,
+                        diagonal_covariance=is_diagonal,
+                        cached_transport=cached_transport,
+                        irrep_dims=self.irrep_dims, chunk_size=self.chunk_size,
+                        mask_self_attention=self.mask_self_attention,
+                        gauge_mode=self.gauge_mode,
+                        cached_block_exp_pairs=_cached_bep,
+                    )
+                    grad_mu, grad_sigma = compute_vfe_gradients_gpu(
+                        mu_q=mu_current, sigma_q=sigma_current,
+                        mu_p=mu_p_current, sigma_p=sigma_p,
+                        beta=beta_current, phi=phi_current,
+                        generators=self.generators, alpha=alpha_effective,
+                        lambda_belief=self.lambda_belief, kappa=self.kappa,
+                        eps=eps, alpha_c0=_alpha_c0,
+                        cached_transport=cached_transport,
+                        compute_sigma_align_grad=self.compute_sigma_align_grad,
+                        irrep_dims=self.irrep_dims, chunk_size=self.chunk_size,
+                        cached_block_exp_pairs=_cached_bep,
+                    )
 
                 if return_beta_history:
                     beta_history.append(beta_current.detach().clone())
-
-                # STEP 2: Compute VFE gradients with current β
-                grad_mu, grad_sigma = compute_vfe_gradients_gpu(
-                    mu_q=mu_current,
-                    sigma_q=sigma_current,
-                    mu_p=mu_p_current,
-                    sigma_p=sigma_p,
-                    beta=beta_current,
-                    phi=phi_current,
-                    generators=self.generators,
-                    alpha=alpha_effective,
-                    lambda_belief=self.lambda_belief,
-                    kappa=self.kappa,
-                    eps=eps,
-                    alpha_c0=_alpha_c0,
-                    cached_transport=cached_transport,
-                    compute_sigma_align_grad=self.compute_sigma_align_grad,
-                    irrep_dims=self.irrep_dims,
-                    chunk_size=self.chunk_size,
-                    cached_block_exp_pairs=_cached_bep,
-                )
 
             # Add FRESH observation gradient (recomputed from current beliefs)
             # Use .detach() on mu_current to avoid second-order gradients through the
@@ -2671,9 +2878,12 @@ class VariationalFFNDynamic(nn.Module):
             if (self.update_phi_per_iteration and torch.is_grad_enabled()
                     and not _skip_phi_update
                     and iteration % phi_update_interval == phi_update_interval - 1):
+                # Pass cached block_exp_pairs to avoid recomputing matrix exponentials
+                _phi_bep = _mh_cached_bep if self.multihead_vfe else _cached_bep
                 grad_phi = self._compute_phi_grad_analytic_or_autograd(
                     phi_current, mu_current, sigma_current,
                     is_diagonal, mask, eps,
+                    cached_block_exp_pairs=_phi_bep,
                 )
                 if grad_phi is not None:
                     phi_lr_iter = self.phi_lr / self.n_iterations
@@ -2711,9 +2921,18 @@ class VariationalFFNDynamic(nn.Module):
         if (self.update_phi and not self.update_phi_per_iteration
                 and torch.is_grad_enabled()
                 and self.gauge_mode not in ('trivial', 'constant')):
+            # Recompute block_exp_pairs for post-loop phi gradient
+            # (phi may have changed if update_phi_per_iteration was True in an earlier config)
+            _phi_bep_post = None
+            if self.irrep_dims is not None and self.gauge_mode == 'learned':
+                _phi_bep_post = fused_block_matrix_exp_pairs(
+                    phi_current, self.generators, self.irrep_dims,
+                    enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                )
             grad_phi = self._compute_phi_grad_analytic_or_autograd(
                 phi_current, mu_current, sigma_current,
                 is_diagonal, mask, eps,
+                cached_block_exp_pairs=_phi_bep_post,
             )
             if grad_phi is not None:
                 phi_current = _retract_phi(

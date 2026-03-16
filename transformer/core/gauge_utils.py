@@ -22,7 +22,7 @@ except ImportError:
 
 def stable_matrix_exp_pair(
     matrix: torch.Tensor,
-    dim_threshold: int = 8,
+    dim_threshold: int = 20,
     max_norm: float = 10.0,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Compute exp(M) and exp(-M) with norm clamping and float64 upcasting.
@@ -32,7 +32,8 @@ def stable_matrix_exp_pair(
        Padé scaling-squaring algorithm from overflowing. For GL⁺(K),
        exp(M) with ‖M‖ >> 1 produces extreme condition numbers that
        make downstream Ω Σ Ω^T numerically non-positive-definite.
-    2. Float64 upcasting for K >= dim_threshold.
+    2. Float64 upcasting for K >= dim_threshold (default 20, raised from 8
+       since float32 + norm clamping is sufficient for typical head dims ≤16).
 
     Note on surjectivity:
         exp(M) always has det > 0 (since det(exp(M)) = exp(tr(M))), so the
