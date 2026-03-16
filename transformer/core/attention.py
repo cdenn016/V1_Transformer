@@ -2727,7 +2727,7 @@ class IrrepMultiHeadAttention(nn.Module):
         to forward() as cached_head_transports to skip redundant matrix exponentials.
 
         Args:
-            phi: (B, N, 3) gauge frames
+            phi: (B, N, phi_dim) gauge frames
             device: Device for generators
             dtype: Dtype for generators
 
