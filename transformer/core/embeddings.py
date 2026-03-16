@@ -144,6 +144,14 @@ class GaugeTokenEmbedding(nn.Module):
                     - K²: gl(K) full algebra (maximum flexibility for GL(K) gauge)
             phi_scale: Target ||φ|| norm for gauge frame initialization. Higher values
                       (e.g., 1.0-2.0) encourage semantic clustering in gauge frames.
+            isotropic_covariance: If True, force Σ = σ²I (scalar variance × identity).
+                Simplifies KL to squared Euclidean but requires orthogonal transport
+                (Ω ∈ O(K)) to preserve isotropy. With GL(K), transported cov is NOT isotropic.
+            mu_normalize: If True, project μ to unit sphere after embedding lookup.
+            mu_max_norm: If set, clamp ||μ|| ≤ max_norm after embedding lookup.
+            learnable_reflection: If True, learn per-token sign vectors s_i ∈ {±1}^K
+                extending SO(K) gauge transport to full O(K). Applied as μ_i → s_i ⊙ μ_i
+                before rotation, so no changes needed in attention or VFE code.
         """
         super().__init__()
         self.phi_scale = phi_scale
@@ -308,7 +316,7 @@ class GaugeTokenEmbedding(nn.Module):
             sigma: (batch, num_agents, K, K) covariances if diagonal_covariance=False
                    (batch, num_agents, K) diagonal variances if diagonal_covariance=True
             phi: (batch, num_agents, phi_dim) gauge frames (one per agent)
-                 phi_dim = 3 for SO(3), N(N-1)/2 for SO(N)
+                 phi_dim = 3 for SO(3), N(N-1)/2 for SO(N), K² for GL(K)
 
         NOTE: seq_len = number of agents at the single point c*
               This is NOT a spatial dimension!

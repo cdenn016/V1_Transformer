@@ -6,6 +6,9 @@ Instead of:
 
 Now:
     config dict → BlockConfig.from_config(config) → Stack(cfg) → Block(cfg) → FFN(cfg)
+
+All block-level parameters live here. Embedding-level parameters (learnable_reflection,
+mu_normalize, mu_max_norm) are handled by model.py → GaugeTokenEmbedding directly.
 """
 
 from dataclasses import dataclass, field
@@ -18,54 +21,63 @@ import torch.nn as nn
 
 @dataclass
 class BlockConfig:
-    """All parameters needed to construct a GaugeTransformerBlock (and its sub-modules)."""
+    """All parameters needed to construct a GaugeTransformerBlock (and its sub-modules).
+
+    Consumed by:
+        - GaugeTransformerStack: uses n_layers
+        - GaugeTransformerBlock: uses attention + FFN + non-flat transport fields
+        - IrrepMultiHeadAttention: uses attention, gauge geometry, positional encoding fields
+        - VariationalFFNDynamic: uses VFE dynamics, belief evolution, gauge geometry fields
+    """
 
     # === Structural ===
-    embed_dim: int = 64
-    irrep_spec: List[Tuple[str, int, int]] = field(default_factory=lambda: [('ℓ0', 8, 1)])
-    hidden_dim: int = 256
-    n_layers: int = 1  # Only used by Stack
+    embed_dim: int = 64                 # Total belief dimension K = Σ (mult_ℓ × dim_ℓ)
+    irrep_spec: List[Tuple[str, int, int]] = field(  # [(label, multiplicity, dim), ...]
+        default_factory=lambda: [('ℓ0', 8, 1)]       #   e.g. [('ℓ0',75,1),('ℓ1',30,3),('ℓ2',18,5)]
+    )
+    hidden_dim: int = 256               # FFN hidden dimension (kept for config compat, not used by blocks)
+    n_layers: int = 1                   # Number of stacked blocks (only used by Stack)
 
     # === Attention ===
-    kappa_beta: float = 1.0       # Temperature for KL-based attention
-    attention_pattern: str = 'full'
-    attention_window: int = 64
-    mask_self_attention: bool = False  # Prevent KL(q_i||q_i)=0 collapse
-    use_output_projection: bool = False  # W_O after multi-head attention
-    multihead_vfe: bool = False   # Per-head β through VFE iterations
+    kappa_beta: float = 1.0             # Temperature τ for KL-based attention softmax
+    attention_pattern: str = 'full'     # 'full' (only supported pattern)
+    attention_window: int = 64          # Window size (unused, kept for API compat)
+    mask_self_attention: bool = False   # Prevent KL(q_i||q_i)=0 collapse
+    use_output_projection: bool = False # W_O ∈ R^{K×K} after multi-head concat
+    multihead_vfe: bool = False         # Per-head β_h through VFE iterations
 
     # === Belief evolution ===
-    evolve_sigma: bool = True     # Update covariances Σ
-    evolve_phi: bool = True       # Update gauge frames φ (M-step)
-    evolve_phi_e_step: bool = False  # Update φ during E-step iterations
-    phi_update_interval: int = 1  # Update phi every N E-step iterations (1=every iteration)
-    phi_lr: float = 0.05          # Learning rate for ∂F/∂φ descent
-    phi_max_norm: float = math.pi # Max phi norm (π radians)
-    phi_dim: int = 3              # 3 for SO(3), N(N-1)/2 for SO(N)
+    evolve_sigma: bool = True           # Update covariances Σ via natural gradient
+    evolve_phi: bool = True             # Update gauge frames φ (M-step, after E-step loop)
+    evolve_phi_e_step: bool = False     # Update φ during EACH E-step iteration
+    phi_update_interval: int = 1        # Update phi every N E-step iterations (1=every)
+    phi_lr: float = 0.05               # Learning rate for ∂F/∂φ descent
+    phi_max_norm: float = math.pi       # Max phi norm (π radians = 180°)
+    phi_dim: int = 3                    # 3 for SO(3), N(N-1)/2 for SO(N), K² for GL(K)
     phi_natural_gradient: str = 'clip'  # 'clip'|'cartan'|'killing'|'pullback'
-    diagonal_covariance: bool = False
+    diagonal_covariance: bool = False   # σ as (B,N,K) diagonal instead of (B,N,K,K) full
     exact_diagonal_transport: bool = False  # When True + diagonal_covariance, lift σ to full
                                             # for exact Ω@diag(σ)@Ω^T transport (slower but exact)
-    amortized_inference: bool = True  # Gradient flow through priors for learned E-step init
+    amortized_inference: bool = True    # Gradient flow through priors for learned E-step init
 
     # === Analytic phi gradient ===
     analytic_phi_grad: bool = False     # If True, bypass autograd for ∂F/∂φ (saves ~250MB)
     analytic_phi_grad_dexp_order: int = 4  # dexp series truncation order (4-8 typical)
 
     # === VFE dynamics (FFN E-step) ===
-    ffn_mode: str = 'VFE_dynamic'
-    ffn_alpha: float = 0.001      # Prior weight inside VFE loop
-    ffn_kappa: float = 1.0        # Softmax temperature (unified with kappa_beta)
-    ffn_n_iterations: int = 1     # VFE inference iterations
-    ffn_learnable_lr: bool = True # Learn step size for variational descent
-    ffn_lambda_belief: float = 1.0  # Belief alignment weight
-    ffn_update_sigma: bool = True # Update covariances during FFN
-    ffn_learnable_alpha: bool = False  # Bayesian precision via Gamma-Normal
+    ffn_mode: str = 'VFE_dynamic'       # FFN mode (only 'VFE_dynamic' supported)
+    ffn_alpha: float = 0.001            # Prior self-coupling weight α in VFE loop
+    ffn_kappa: float = 1.0              # Softmax temperature (unified with kappa_beta)
+    ffn_n_iterations: int = 1           # VFE inference iterations per forward pass
+    ffn_learnable_lr: bool = True       # Learn step size η for variational descent
+    ffn_lambda_belief: float = 1.0      # Belief alignment weight λ
+    ffn_update_sigma: bool = True       # Update covariances during FFN E-step
+    ffn_learnable_alpha: bool = False   # Bayesian precision via Gamma-Normal conjugacy
 
     # === Gauge geometry ===
-    gauge_mode: str = 'learned'   # 'learned' or 'trivial' (Ω = I)
-    enforce_orthogonal: bool = False  # Enforce Ω ∈ SO(K) via Newton-Schulz
-    isotropic_covariance: bool = False  # Force Σ = σ²I
+    gauge_mode: str = 'learned'         # 'learned' | 'trivial' (Ω=I) | 'constant' (per-head Ω)
+    enforce_orthogonal: bool = False    # Enforce Ω ∈ SO(K) via Newton-Schulz iteration
+    isotropic_covariance: bool = False  # Force Σ = σ²I (manuscript Limit 1)
     # NOTE: learnable_reflection is an embedding-level feature, handled by
     # model.py → GaugeTokenEmbedding, not by blocks. Not stored here.
 
@@ -83,35 +95,45 @@ class BlockConfig:
     holonomy_penalty: float = 0.0          # λ_H · E[‖H_ijk - I‖²_F] added to loss
 
     # === Positional encoding ===
-    alibi_slope: Optional[float] = None  # ALiBi positional bias
-    use_rope: bool = False
-    rope_base: float = 10000.0
+    alibi_slope: Optional[float] = None    # ALiBi positional bias (negative = recency)
+    use_rope: bool = False                 # Rotary position embeddings on μ before KL
+    rope_base: float = 10000.0             # RoPE frequency base
 
     # === Memory efficiency ===
-    ffn_irrep_dims: Optional[List[int]] = None  # Block dims for KL decomposition
-    ffn_chunk_size: Optional[int] = None
+    ffn_irrep_dims: Optional[List[int]] = None  # Block dims for block-diagonal KL decomposition
+    ffn_chunk_size: Optional[int] = None         # Chunk size C for O(C²K²) memory processing
 
     # === DEQ (Deep Equilibrium) ===
-    use_deq: bool = False
-    deq_neumann_terms: int = 5
+    use_deq: bool = False              # Use implicit differentiation for E-step fixed point
+    deq_neumann_terms: int = 5         # Neumann series terms for DEQ backward pass
 
     # === Pure VFE mode flags ===
-    use_layernorm: bool = True
-    use_residual: bool = True
+    use_layernorm: bool = True         # LayerNorm on means (False for pure VFE ablation)
+    use_residual: bool = True          # Residual connections (False for pure VFE ablation)
 
     # === Non-serializable objects (set after construction) ===
-    # These are torch tensors / nn.Modules that can't be part of a plain dataclass default
-    generators: Optional[torch.Tensor] = field(default=None, repr=False)
-    ffn_prior_bank: Optional[nn.Module] = field(default=None, repr=False)
-    ffn_use_prior_bank: bool = False
-    cross_head_perm: Optional[object] = field(default=None, repr=False)
+    # These are torch tensors / nn.Modules that can't be part of a plain dataclass default.
+    # Passed via from_config() or set directly after construction.
+    generators: Optional[torch.Tensor] = field(default=None, repr=False)   # (n_gen, K, K) Lie algebra generators
+    ffn_prior_bank: Optional[nn.Module] = field(default=None, repr=False)  # Token-dependent PriorBank module
+    ffn_use_prior_bank: bool = False   # If True, FFN uses PriorBank for token-dependent priors
+    cross_head_perm: Optional[object] = field(default=None, repr=False)    # Cross-head coupling permutation
 
     @classmethod
     def from_config(cls, config: dict, generators: Optional[torch.Tensor] = None,
                     prior_bank: Optional[nn.Module] = None,
                     cross_head_perm=None,
                     ffn_irrep_dims: Optional[List[int]] = None) -> 'BlockConfig':
-        """Build BlockConfig from the flat config dict used by train_publication.py."""
+        """Build BlockConfig from the flat config dict used by train_publication.py.
+
+        Args:
+            config: Flat dict with all hyperparameters. Required keys: embed_dim,
+                    irrep_spec, hidden_dim, n_layers, kappa_beta. All others optional.
+            generators: (n_gen, K, K) Lie algebra generators for gauge transport.
+            prior_bank: Optional PriorBank nn.Module for token-dependent priors.
+            cross_head_perm: Optional cross-head coupling permutation.
+            ffn_irrep_dims: Optional flat list of block dimensions [d₁, d₂, ...].
+        """
         kappa_beta = config['kappa_beta']
         return cls(
             # Structural
