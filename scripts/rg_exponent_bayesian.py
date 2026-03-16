@@ -361,8 +361,21 @@ def analyze_single_config(
     use_pymc: bool = False,
     verbose: bool = True,
 ) -> List[ExponentEstimate]:
-    """
-    Full analysis for one (N, K) configuration.
+    """Full Bayesian exponent analysis for one (N, K) configuration.
+
+    Runs RG flow over multiple seeds, pools data, and estimates each
+    scaling exponent via bootstrap (and optionally PyMC). Tests whether
+    the predicted exponent falls within the 95% HDI.
+
+    Args:
+        N: Number of tokens.
+        K: Belief dimension.
+        n_seeds: Number of random seeds for the synthetic VFE system.
+        use_pymc: If True, also fit with PyMC MCMC (requires pymc package).
+        verbose: Print per-coupling summary.
+
+    Returns:
+        List of ExponentEstimate objects, one per coupling per method.
     """
     if verbose:
         print(f"\n--- N={N}, K={K}, {n_seeds} seeds ---")

@@ -72,12 +72,16 @@ from transformer.data import create_dataloaders
 
 
 def load_model_from_checkpoint(checkpoint_path: str, device: str = 'cuda') -> tuple:
-    """
-    Load model from checkpoint.
+    """Load a GaugeTransformerLM from a training checkpoint.
+
+    Handles both 'config' and 'model_config' checkpoint formats.
+
+    Args:
+        checkpoint_path: Path to a .pt checkpoint file.
+        device: Device string ('cuda' or 'cpu').
 
     Returns:
-        model: GaugeTransformerLM instance
-        config: Model configuration dict
+        (model, config) tuple where config is the model's hyperparameter dict.
     """
     checkpoint = torch.load(checkpoint_path, map_location=device)
 

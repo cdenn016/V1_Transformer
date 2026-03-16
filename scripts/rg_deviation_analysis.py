@@ -485,12 +485,17 @@ def plot_deviation_diagnostics(
     clt_results: List[Dict],
     output_path: str,
 ):
-    """
-    Generate publication-quality 3-panel diagnostic figure.
+    """Generate publication-quality 3-panel diagnostic figure.
 
-    Panel A: y2(N) and y3(N) vs 1/N with finite-size extrapolation
-    Panel B: |y - y_predicted| vs clustering quality metrics
-    Panel C: CLT vs graph-based exponents comparison
+    Args:
+        all_results: List of per-(N,K) multi-seed result dicts.
+        clt_results: List of CLT-only result dicts for comparison.
+        output_path: File path for the output PNG.
+
+    Panels:
+        A: y2(N), y3(N) vs 1/N with finite-size scaling extrapolation.
+        B: |y - y_predicted| vs clustering quality metrics (modularity, etc.).
+        C: CLT vs graph-based exponents side-by-side comparison.
     """
     fig, axes = plt.subplots(1, 3, figsize=(17, 5.5))
 
