@@ -2,48 +2,45 @@
 Variational Feed-Forward Networks for Gauge Transformer
 ========================================================
 
-Integrates with validated gradient_engine.py for theoretically correct active inference!
+VFE E-step belief evolution: iteratively updates beliefs (mu, Sigma) and
+optionally gauge frames (phi) by minimizing variational free energy with
+dynamic attention weights beta recomputed at each iteration.
 
-Three implementations:
-1. APPROXIMATE: Omit second-order ∂β_ij/∂μ_i term (legacy, simple)
-2. FULL: Include all terms manually (legacy, exact but complex)
-3. GRADIENT_ENGINE: Use validated gradient_engine backend (RECOMMENDED!)
+Supports SO(3), SO(N), and GL(K) gauge groups. Generator count determines
+the group: phi_dim=3 for SO(3), N(N-1)/2 for SO(N), K**2 for GL(K).
 
-The GRADIENT_ENGINE version:
-- Updates BOTH means μ AND covariances Σ
-- Uses natural gradients via Fisher-Rao metric
-- Includes all energy terms (self-coupling, alignment, observations, softmax coupling)
-- Proper χ-weighting and gauge transport
-- Theoretically principled active inference
+Key features:
+- Dynamic beta: attention weights co-evolve with beliefs each VFE iteration
+- Sigma softmax coupling: includes dBeta/dSigma term in VFE gradients
+- Block-diagonal KL decomposition via irrep_dims for memory efficiency
+- Fused attention+gradient paths for diagonal covariance mode
+- Multi-head VFE: per-head beta_h through VFE iterations (multihead_vfe)
+- Analytic phi gradient: bypass autograd for dF/dphi (analytic_phi_grad)
+- Isotropic covariance: force Sigma = sigma^2 I (isotropic_covariance)
+- DEQ mode: implicit differentiation for E-step fixed point (use_deq)
+- Amortized inference: gradient flow through priors for learned E-step init
+- Learnable alpha: Bayesian precision via Gamma-Normal conjugacy
+- PriorBank: token-dependent priors via token_ids (prior_bank / use_prior_bank)
+- exact_diagonal_transport: lifts diagonal sigma to full for exact transport
 
 Mathematical Foundation:
 -----------------------
 Free Energy (E-STEP):
-    F = α·Σ_i KL(q_i||p_i)                      # Prior consistency
-      + λ_β·Σ_{i,j} β_ij·KL(q_i||Ω_{ij}q_j)    # Belief alignment
-      + λ_γ·Σ_{i,j} γ_ij·KL(p_i||Ω_{ij}p_j)    # Prior alignment
-      + CE(W_out·μ, targets)                    # DISCRETE OBSERVATIONS!
+    F = alpha * Sum_i KL(q_i||p_i)                         # Prior consistency
+      + lambda_beta * Sum_{i,j} beta_ij * KL(q_i||Omega_{ij}q_j)  # Belief alignment
+      + lambda_gamma * Sum_{i,j} gamma_ij * KL(p_i||Omega_{ij}p_j)  # Prior alignment
+      + CE(W_out * mu, targets)                             # Discrete observations
 
-CRITICAL: The cross-entropy term is the SINGLE observation model!
-- E-step: Minimize F w.r.t. μ, Σ → compute ∂CE/∂μ with W_out frozen
-- M-step: Minimize F w.r.t. W_out, embeddings → compute ∂CE/∂W_out with μ frozen
+E-step: Minimize F w.r.t. mu, Sigma (with W_out frozen)
+M-step: Minimize F w.r.t. W_out, embeddings (with mu frozen)
 
-This is classic EM:
-- E-step: "Given model (W_out), what beliefs (μ) explain observations?"
-- M-step: "Given beliefs (μ), what model parameters explain observations?"
-
-The SAME cross-entropy appears in both steps, just optimizing different parameters!
-
-Gradient Engine computes:
-    ∂F/∂θ for θ = {μ_q, Σ_q, μ_p, Σ_p, φ}
+Gradient computation:
+    dF/dtheta for theta = {mu_q, Sigma_q, mu_p, Sigma_p, phi}
 
 With natural gradient projection:
-    Δθ = -η · F⁻¹(θ) · ∇F(θ)
+    Delta_theta = -eta * F_inv(theta) * grad_F(theta)
 
-Where F(θ) is the Fisher-Rao metric.
-
-Author: Integrated with validated gradient_engine.py
-Date: November 2025
+Where F(theta) is the Fisher-Rao metric.
 """
 
 import math
@@ -260,10 +257,34 @@ def _compute_vfe_gradients_block_diagonal(
     cached_block_exp_pairs: Optional[list] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Block-diagonal VFE gradient computation with optional chunking.
+    Block-diagonal VFE gradient computation for full covariance mode.
 
-    Processes each irrep block separately to reduce memory from O(N²K²) to O(N² × max(dᵢ²)).
-    When chunk_size is provided, also chunks over query positions to reduce memory further.
+    Processes each irrep block separately to reduce memory from O(N^2 K^2) to
+    O(N^2 * max(d_i^2)). When chunk_size is provided, also chunks over query
+    positions to reduce memory further. Includes sigma softmax coupling
+    (dBeta/dSigma) via per-block per-pair storage.
+
+    Args:
+        mu_q: Belief means (B, N, K).
+        sigma_q: Full block-diagonal covariances (B, N, K, K).
+        mu_p: Prior means (B, N, K).
+        sigma_p: Prior covariances (B, N, K, K).
+        beta: Attention weights (B, N, N).
+        phi: Gauge frames (B, N, phi_dim), phi_dim = n_gen.
+        generators: Lie algebra generators (n_gen, K, K).
+        alpha: Self-coupling weight, scalar or (B, N, K) Bayesian precision.
+        lambda_belief: Belief alignment weight.
+        kappa: Temperature for softmax coupling.
+        eps: Numerical stability floor.
+        irrep_dims: Block dimensions [d_1, d_2, ...] for block-diagonal KL.
+        chunk_size: Optional chunk size over query positions.
+        compute_sigma_align_grad: Whether to compute dF/dSigma from alignment.
+        enforce_orthogonal: If True, enforce Omega in SO(K) via Newton-Schulz.
+        cached_block_exp_pairs: Precomputed (exp_phi, exp_neg_phi) per block.
+
+    Returns:
+        grad_mu: (B, N, K) gradient w.r.t. mu.
+        grad_sigma: (B, N, K, K) gradient w.r.t. Sigma.
     """
     B, N, K = mu_q.shape
     device = mu_q.device
@@ -476,10 +497,33 @@ def _compute_vfe_gradients_block_diagonal_diag(
     """
     Block-diagonal VFE gradient computation for diagonal covariance mode.
 
-    Processes each irrep block separately with small d×d Omega tensors
+    Processes each irrep block separately with small d x d Omega tensors
     and O(d) diagonal KL formulas. No matrix inverse or Cholesky needed.
+    Includes sigma softmax coupling (dBeta/dSigma term).
 
-    Memory: O(N² × max(dᵢ²)) instead of O(N² × K²)
+    Memory: O(N^2 * max(d_i^2)) instead of O(N^2 * K^2).
+
+    Args:
+        mu_q: Belief means (B, N, K).
+        sigma_q: Diagonal variances (B, N, K).
+        mu_p: Prior means (B, N, K).
+        sigma_p: Prior diagonal variances (B, N, K).
+        beta: Attention weights (B, N, N).
+        phi: Gauge frames (B, N, phi_dim), phi_dim = n_gen.
+        generators: Lie algebra generators (n_gen, K, K).
+        alpha: Self-coupling weight, scalar or (B, N, K) Bayesian precision.
+        lambda_belief: Belief alignment weight.
+        kappa: Temperature for softmax coupling.
+        eps: Numerical stability floor.
+        irrep_dims: Block dimensions [d_1, d_2, ...] for block-diagonal KL.
+        compute_sigma_align_grad: Whether to compute dF/dSigma from alignment.
+        enforce_orthogonal: If True, enforce Omega in SO(K) via Newton-Schulz.
+        alpha_c0: (K,) softplus(raw_c0) for product-rule correction when alpha is learnable.
+        cached_block_exp_pairs: Precomputed (exp_phi, exp_neg_phi) per block.
+
+    Returns:
+        grad_mu: (B, N, K) gradient w.r.t. mu.
+        grad_sigma: (B, N, K) gradient w.r.t. diagonal sigma.
     """
     # Squeeze trailing singleton dimensions for robustness
     while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
@@ -648,21 +692,45 @@ def _fused_attention_and_vfe_gradients_block_diag(
     return_kl: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
     """
-    FUSED attention + VFE gradient computation for block-diagonal diagonal mode.
+    Fused attention + VFE gradient computation for block-diagonal diagonal mode.
 
-    Computes β (attention weights) AND VFE gradients in a SINGLE pass over blocks,
-    sharing the Omega construction. This eliminates the redundant Omega computation
-    that occurs when compute_attention_weights and compute_vfe_gradients_gpu are
-    called separately.
+    Computes beta (attention weights) AND VFE gradients in a single pass over
+    irrep blocks, sharing the Omega construction. Eliminates the redundant Omega
+    computation that occurs when compute_attention_weights and
+    compute_vfe_gradients_gpu are called separately. Includes sigma softmax
+    coupling (dBeta/dSigma). Incompatible with exact_diagonal_transport (which
+    lifts to full covariance and disables fused diagonal paths).
 
-    For a config with 5 heads × d=15, this saves 5 × O(B×N²×d²) Omega constructions
-    per VFE iteration — roughly 2× speedup on the dominant computation.
+    For a config with 5 heads x d=15, this saves 5 x O(B*N^2*d^2) Omega
+    constructions per VFE iteration.
+
+    Args:
+        mu_q: Belief means (B, N, K).
+        sigma_q: Diagonal variances (B, N, K).
+        mu_p: Prior means (B, N, K).
+        sigma_p: Prior diagonal variances (B, N, K).
+        phi: Gauge frames (B, N, phi_dim), phi_dim = n_gen.
+        generators: Lie algebra generators (n_gen, K, K).
+        alpha: Self-coupling weight, scalar or (B, N, K) Bayesian precision.
+        lambda_belief: Belief alignment weight.
+        kappa: Temperature for softmax coupling.
+        eps: Numerical stability floor.
+        irrep_dims: Block dimensions [d_1, d_2, ...] for block-diagonal KL.
+        compute_sigma_align_grad: Whether to compute dF/dSigma from alignment.
+        enforce_orthogonal: If True, enforce Omega in SO(K) via Newton-Schulz.
+        alpha_c0: (K,) softplus(raw_c0) for product-rule correction.
+        cached_block_exp_pairs: Precomputed (exp_phi, exp_neg_phi) per block.
+        mask: Causal mask (B, N, N), 0 = cannot attend.
+        mask_self_attention: If True, mask diagonal (no self-attention).
+        use_rope: Apply rotary position embeddings to mu for KL computation.
+        rope_base: RoPE base frequency.
+        return_kl: If True, also return pairwise KL matrix.
 
     Returns:
-        beta: (B, N, N) attention weights
-        grad_mu: (B, N, K) gradient w.r.t. μ
-        grad_sigma: (B, N, K) gradient w.r.t. σ
-        kl_matrix: (B, N, N) KL divergence matrix (only if return_kl=True)
+        beta: (B, N, N) attention weights.
+        grad_mu: (B, N, K) gradient w.r.t. mu.
+        grad_sigma: (B, N, K) gradient w.r.t. diagonal sigma.
+        kl_matrix: (B, N, N) pairwise KL divergences, or None if return_kl=False.
     """
     while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
         sigma_q = sigma_q.squeeze(-1)
@@ -1045,7 +1113,7 @@ def compute_vfe_gradients_gpu(
     sigma_p: torch.Tensor,     # (B, N, K) diagonal or (B, N, K, K) full
     beta: torch.Tensor,        # (B, N, N) attention weights
     phi: torch.Tensor,         # (B, N, n_gen) gauge frames where n_gen is # of generators
-    generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators (SO(3) or SO(N))
+    generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators
     alpha: 'float | torch.Tensor' = 0.01,  # Self-coupling weight: scalar or (B, N, K) per-dim Bayesian precision
     lambda_belief: float = 1.0,  # Belief alignment weight
     kappa: float = 1.0,        # Temperature (for normalization)
@@ -1063,46 +1131,54 @@ def compute_vfe_gradients_gpu(
     """
     Compute VFE gradients entirely on GPU using PyTorch.
 
-    This is the FAST version that replaces the NumPy-based gradient_engine.
-    Fully vectorized - no loops over batch or agents!
-
-    Supports both SO(3) and SO(N) gauge groups. The number of generators
-    determines the gauge group: 3 for SO(3), N(N-1)/2 for SO(N).
+    Fully vectorized. Supports SO(3), SO(N), and GL(K) gauge groups.
+    The number of generators (n_gen) determines the group: 3 for SO(3),
+    N(N-1)/2 for SO(N), K^2 for GL(K).
 
     Gradients computed:
-    1. Self-coupling: ∂/∂μ_q [α · KL(q||p)]
-    2. Belief alignment: ∂/∂μ_q [λ · Σ_j β_ij · KL(q_i || Ω_ij q_j)]
+    1. Self-coupling: d/d_mu_q [alpha * KL(q||p)]
+    2. Belief alignment: d/d_mu_q [lambda * Sum_j beta_ij * KL(q_i || Omega_ij q_j)]
 
-    The ∂β/∂Σ softmax coupling term is always included:
-        ∂F/∂Σ_i = Σ_j β_ij · ∂KL_ij/∂Σ_i + Σ_j KL_ij · ∂β_ij/∂Σ_i
+    The dBeta/dSigma softmax coupling term is always included:
+        dF/dSigma_i = Sum_j beta_ij * dKL_ij/dSigma_i + Sum_j KL_ij * dBeta_ij/dSigma_i
+
+    Dispatches to memory-efficient paths when irrep_dims or chunk_size is set:
+    - irrep_dims + full cov  -> _compute_vfe_gradients_block_diagonal
+    - irrep_dims + diagonal  -> _compute_vfe_gradients_block_diagonal_diag
+    - chunk_size + diagonal  -> _compute_vfe_gradients_chunked
 
     Args:
-        mu_q: Belief means (B, N, K)
-        sigma_q: Belief variances - diagonal (B, N, K) or full (B, N, K, K)
-        mu_p: Prior means (B, N, K)
-        sigma_p: Prior variances - diagonal (B, N, K) or full (B, N, K, K)
-        beta: Attention weights (B, N, N), already normalized
-        phi: Gauge frames (B, N, n_gen) where n_gen is # of generators
-        generators: Lie algebra generators (n_gen, K, K) - SO(3) has 3, SO(N) has N(N-1)/2
-        alpha: Weight for KL(q||p) self-coupling term. Can be a float (uniform)
-               or a (B, N, K) tensor from per-dimension Bayesian precision.
-        lambda_belief: Weight for belief alignment term
-        kappa: Temperature parameter
-        eps: Numerical stability
-        cached_transport: Optional dict with precomputed 'Omega' from compute_transport_operators().
-                         When provided, avoids redundant matrix exponential computations.
-        compute_sigma_align_grad: If True (default), compute sigma gradient from belief alignment term.
-                                  This is the theoretically correct gradient:
-                                    ∂KL/∂Σ_q = 0.5 * (Σ_transported^{-1} - Σ_q^{-1})
-                                  Set to False for legacy behavior (zero sigma alignment gradient).
-        irrep_dims: Optional list of block dimensions for memory-efficient block-diagonal processing.
-                   When provided, processes each irrep block separately to reduce memory from
-                   O(N²K²) to O(N² × max(dᵢ²)).
-        chunk_size: Optional chunk size for processing N×N pairs in C×C chunks.
+        mu_q: Belief means (B, N, K).
+        sigma_q: Belief variances - diagonal (B, N, K) or full (B, N, K, K).
+        mu_p: Prior means (B, N, K).
+        sigma_p: Prior variances - diagonal (B, N, K) or full (B, N, K, K).
+        beta: Attention weights (B, N, N), already normalized.
+        phi: Gauge frames (B, N, phi_dim) where phi_dim = n_gen.
+        generators: Lie algebra generators (n_gen, K, K).
+        alpha: Weight for KL(q||p) self-coupling. Scalar (uniform) or (B, N, K)
+            tensor from per-dimension Bayesian precision (learnable_alpha).
+        lambda_belief: Weight for belief alignment term.
+        kappa: Temperature parameter.
+        eps: Numerical stability floor.
+        alpha_c0: (K,) softplus(raw_c0) for product-rule correction when alpha
+            is a learnable (B, N, K) tensor.
+        cached_transport: Optional dict with precomputed 'Omega' (B, N, N, K, K)
+            from compute_transport_operators(). Avoids redundant matrix exponentials.
+        compute_sigma_align_grad: If True (default), include the sigma alignment
+            gradient dKL/dSigma_q = 0.5 * (Sigma_transported^{-1} - Sigma_q^{-1}).
+        irrep_dims: Block dimensions [d_1, ...] for block-diagonal KL decomposition.
+            Reduces memory from O(N^2 K^2) to O(N^2 * max(d_i^2)).
+        chunk_size: Chunk size for processing N x N pairs in C x C chunks.
+        enforce_orthogonal: If True, enforce Omega in SO(K) via Newton-Schulz.
+        cached_block_exp_pairs: Precomputed (exp_phi, exp_neg_phi) per irrep block.
+        exact_diagonal_transport: When True and sigma is diagonal, lifts sigma to
+            full covariance via diag_embed for exact gauge transport, then extracts
+            the diagonal from the result. Disables fused diagonal paths.
 
     Returns:
-        grad_mu: Gradient w.r.t. μ_q, shape (B, N, K)
-        grad_sigma: Gradient w.r.t. σ_q, shape (B, N, K) for diagonal
+        grad_mu: Gradient w.r.t. mu_q, shape (B, N, K).
+        grad_sigma: Gradient w.r.t. sigma_q, shape (B, N, K) diagonal or
+            (B, N, K, K) full, matching input.
     """
     # Squeeze trailing singleton dimensions for robustness
     while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
@@ -1713,38 +1789,39 @@ class DEQFixedPoint(torch.autograd.Function):
 
 class VariationalFFNDynamic(nn.Module):
     """
-    Dynamic-β Variational FFN: Recomputes attention at each VFE step.
+    Dynamic-beta Variational FFN: VFE E-step with beta recomputed each iteration.
 
-    This is the theoretically correct implementation where beliefs and attention
-    co-evolve. At each integration step:
+    At each integration step, beliefs (mu, Sigma) and attention weights (beta)
+    co-evolve:
 
-        1. Compute β from current beliefs: β_ij = softmax(-KL(q_i||Ω_ij[q_j])/κ)
-        2. Compute full VFE gradient: ∂F/∂θ (includes ∂β/∂θ nonlinearity)
+        1. Compute beta from current beliefs: beta_ij = softmax(-KL(q_i||Omega_ij[q_j])/kappa)
+        2. Compute full VFE gradient: dF/dtheta (includes dBeta/dtheta nonlinearity)
         3. Update beliefs via natural gradient descent
-        4. (Optional) M-step: update priors toward beliefs
-        5. Repeat
+        4. (Optional) Update gauge frames phi via dF/dphi
+        5. Repeat for n_iterations steps
 
-    Key difference from VariationalFFNGradientEngine:
-        - GradientEngine: β computed once, held fixed during descent
-        - Dynamic: β recomputed at each step → attention-belief co-evolution
+    The dBeta/dmu softmax coupling is the principled nonlinearity (replaces GELU):
+        dBeta_ij/dmu_i = -beta_ij * [dKL_ij/dmu_i - Sum_k beta_ik * dKL_ik/dmu_i] / kappa
 
-    This enables emergent block structure in β as beliefs cluster.
+    Supports SO(3), SO(N), and GL(K) gauge groups via generators (n_gen, K, K)
+    and gauge frames phi (B, N, phi_dim). Additional capabilities:
+        - multihead_vfe: per-head beta_h through VFE iterations (requires irrep_dims)
+        - prior_bank / use_prior_bank: token-dependent priors via PriorBank and token_ids
+        - learnable_alpha: Bayesian precision via Gamma-Normal conjugacy
+        - analytic_phi_grad: bypass autograd for dF/dphi
+        - isotropic_covariance: force Sigma = sigma^2 I
+        - DEQ mode (use_deq): implicit differentiation for E-step fixed point
+        - amortized_inference: gradient flow through priors for learned E-step init
+        - exact_diagonal_transport: lift diagonal sigma to full for exact transport,
+          then extract diagonal from result; disables fused diagonal paths
 
-    The ∂β/∂μ term is the principled nonlinearity (replaces GELU):
-        ∂β_ij/∂μ_i = -β_ij · [∂KL_ij/∂μ_i - Σ_k β_ik · ∂KL_ik/∂μ_i] / κ
-
-    With dynamic β, this creates positive feedback:
-        - Tokens with similar beliefs → higher β between them
-        - Higher β → beliefs pulled closer together
-        - → Cluster formation (meta-agents!)
-
-    Complexity: O(n_steps × N² × K) - more expensive but theoretically sound
+    Complexity: O(n_steps * N^2 * K)
     """
 
     def __init__(
         self,
         embed_dim: int,
-        generators: torch.Tensor,  # (3, K, K) SO(3) generators
+        generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators
         alpha: float = 0.01,       # Self-coupling weight (KL(q||p))
         lambda_belief: float = 1.0,  # Belief alignment weight
         kappa: float = 1.0,        # Attention temperature
@@ -1794,35 +1871,54 @@ class VariationalFFNDynamic(nn.Module):
         exact_diagonal_transport: bool = False,  # Lift diagonal σ for exact transport
     ):
         """
-        Initialize dynamic-β VFE FFN.
+        Initialize dynamic-beta VFE FFN.
 
         Args:
-            embed_dim: K - dimension of belief vectors
-            generators: SO(3) generators for gauge transport (3, K, K)
-            alpha: Weight for KL(q||p) self-coupling (prior anchoring)
-            lambda_belief: Weight for belief alignment term Σ β_ij KL(q_i||q_j)
-            kappa: Temperature for attention softmax (higher = softer)
-            n_iterations: Number of VFE descent iterations per forward pass
-            learnable_lr: If True, step size η is a learnable parameter
-            update_sigma: If True, also update covariance matrices Σ
-            diagonal_covariance: Use diagonal Σ for O(K) instead of O(K²)
-            compute_sigma_align_grad: If True, compute sigma gradient from alignment term
-            prior_bank: Optional PriorBank module with token-dependent priors (recommended!)
-            use_prior_bank: If True, use PriorBank (token-dependent priors) instead of
-                           position-dependent priors. CRITICAL for language modeling!
-            irrep_dims: Block dimensions [d₁, d₂, ...] for memory-efficient block-diagonal KL.
-                       When provided, exploits O(N² × Σᵢdᵢ²) vs O(N² × K²) - massive savings!
-            chunk_size: Chunk size for memory-efficient processing. Processes N×N in C×C chunks.
-            mask_self_attention: If True, mask out diagonal (no self-attention).
-                                Prevents attention collapse since KL(q_i||q_i)=0 always.
-            learnable_alpha: If True, use Bayesian precision via Gamma-Normal conjugacy.
-                            α_i = (a₀ + K/2) / (b₀ + ½ ∥μ_q - μ_p∥²_{Σ_p⁻¹})
-                            Gauge-invariant, state-dependent, only 2 learnable parameters.
-            multihead_vfe: If True, maintain per-head attention β_h through VFE iterations.
-                          Each irrep block gets its own attention pattern instead of a single
-                          collapsed β. Requires irrep_dims to be set.
-            isotropic_covariance: If True, force Σ = σ²I after each E-step sigma update.
-                                 Enforces Limit 1 from the manuscript.
+            embed_dim: K, dimension of belief vectors.
+            generators: Lie algebra generators (n_gen, K, K). n_gen = 3 for SO(3),
+                N(N-1)/2 for SO(N), K^2 for GL(K).
+            alpha: Weight for KL(q||p) self-coupling (prior anchoring).
+            lambda_belief: Weight for belief alignment term.
+            kappa: Temperature for attention softmax (higher = softer).
+            n_iterations: Number of VFE descent iterations per forward pass.
+            learnable_lr: If True, step size eta is a learnable parameter.
+            update_sigma: If True, also update covariance matrices Sigma.
+            diagonal_covariance: Use diagonal Sigma for O(K) instead of O(K^2).
+            compute_sigma_align_grad: If True, compute sigma gradient from alignment.
+            update_phi: If True, update phi via dF/dphi after E-step loop.
+            update_phi_per_iteration: If True, evolve phi during each E-step iteration.
+            phi_update_interval: Update phi every N iterations (1=every, 2=alternate).
+            phi_lr: Learning rate for phi updates.
+            phi_max_norm: Max norm for phi (pi for SO(N), smaller for GL(K)).
+            prior_bank: Optional PriorBank module providing token-dependent priors via
+                token_ids. When set with use_prior_bank=True, replaces position-dependent
+                priors with token-dependent priors from the PriorBank.
+            use_prior_bank: If True, use PriorBank for token-dependent priors.
+                Requires prior_bank and token_ids in forward().
+            irrep_dims: Block dimensions [d_1, d_2, ...] for memory-efficient
+                block-diagonal KL decomposition.
+            chunk_size: Chunk size for memory-efficient N x N processing.
+            mask_self_attention: If True, mask diagonal to prevent attention collapse.
+            learnable_alpha: If True, Bayesian precision via Gamma-Normal conjugacy:
+                alpha_k = c0_k / (b0_k + kl_k). Per-dimension, gauge-invariant.
+            multihead_vfe: If True, per-head beta_h through VFE iterations.
+                Requires irrep_dims.
+            phi_natural_gradient: Phi gradient preconditioning mode
+                ('clip'|'cartan'|'killing'|'pullback').
+            use_deq: If True, use DEQ implicit differentiation for E-step fixed point.
+            deq_neumann_terms: Neumann series terms for DEQ backward pass.
+            gauge_mode: 'learned', 'trivial' (Omega=I), or 'constant'.
+            constant_omega: Per-head learnable Omega from the attention module for
+                gauge_mode='constant'.
+            isotropic_covariance: If True, force Sigma = sigma^2 I after each update.
+            amortized_inference: If True, gradients flow through priors for learned
+                E-step initialization.
+            analytic_phi_grad: If True, bypass autograd for dF/dphi.
+            exact_diagonal_transport: When True with diagonal_covariance, lifts sigma
+                to full covariance via diag_embed for exact gauge transport, then
+                extracts the diagonal from the result. Disables fused diagonal paths.
+            use_rope: Apply rotary position embeddings (must match attention sublayer).
+            rope_base: RoPE base frequency.
         """
         super().__init__()
 
@@ -2372,7 +2468,7 @@ class VariationalFFNDynamic(nn.Module):
         mu: torch.Tensor,          # (B, N, K) - current beliefs
         beta: torch.Tensor = None, # (B, n_heads, N, N) - UNUSED, kept for API compat
         mu_prior: torch.Tensor = None,    # (B, N, K) - embedding priors
-        phi: torch.Tensor = None,         # (B, N, 3) - gauge frames
+        phi: torch.Tensor = None,         # (B, N, phi_dim) - gauge frames
         sigma: Optional[torch.Tensor] = None,  # (B, N, K, K) or (B, N, K) if diagonal
         mask: Optional[torch.Tensor] = None,   # (B, N, N) - causal mask
         targets: Optional[torch.Tensor] = None,  # (B, N) - target token IDs
@@ -2381,33 +2477,38 @@ class VariationalFFNDynamic(nn.Module):
         return_beta_history: bool = False,  # Return β evolution for analysis
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor, Optional[list]]:
         """
-        Dynamic VFE descent with β recomputation at each step.
+        Dynamic VFE E-step descent with beta recomputation at each iteration.
 
         Flow at each iteration:
-            1. β = softmax(-KL(q||Ω[q])/κ)  [RECOMPUTE from current beliefs]
-            2. ∂F/∂μ = α(μ-μ_p)/σ_p + λΣβ(∂KL/∂μ) + Σ KL(∂β/∂μ) + ∂CE/∂μ
-            3. μ ← μ - η·F⁻¹·∂F/∂μ  [Natural gradient descent]
-            4. (Optional) σ ← retract_spd(σ, -η·∂F/∂σ)
-            5. (Optional) φ ← φ - η_φ·∂F/∂φ  [VFE gradient descent on gauge frames]
-            6. (Optional M-step) μ_p ← μ_p + rate·(μ - μ_p)
+            1. beta = softmax(-KL(q||Omega[q])/kappa)  [recompute from current beliefs]
+            2. dF/dmu = alpha*(mu-mu_p)/sigma_p + lambda*Sum_j beta*(dKL/dmu)
+                        + Sum_j KL*(dBeta/dmu) + dCE/dmu
+            3. mu <- mu - eta * F_inv * dF/dmu  [natural gradient descent]
+            4. (Optional) sigma <- retract_spd(sigma, -eta * dF/dsigma)
+            5. (Optional) phi <- retract(phi, -eta_phi * dF/dphi)
+
+        When multihead_vfe=True, each irrep block gets its own beta_h.
+        When use_prior_bank=True, priors come from PriorBank via token_ids.
 
         Args:
-            mu: Current belief means (B, N, K)
-            beta: Initial attention weights (B, n_heads, N, N) - used only for first step
-            mu_prior: Prior means from embeddings (B, N, K)
-            phi: Gauge frames (B, N, phi_dim)
-            sigma: Belief covariances - (B, N, K, K) full or (B, N, K) diagonal
-            mask: Causal mask (B, N, N) where 0 = cannot attend
-            targets: Target tokens for observation term (B, N)
-            W_out: Output projection for ∂CE/∂μ computation
-            token_ids: Token IDs for PriorBank lookup (required if use_prior_bank=True)
-            return_beta_history: If True, return list of β at each step
+            mu: Current belief means (B, N, K).
+            beta: UNUSED, kept for API compatibility.
+            mu_prior: Prior means from embeddings (B, N, K).
+            phi: Gauge frames (B, N, phi_dim) where phi_dim = n_gen.
+            sigma: Belief covariances - (B, N, K, K) full or (B, N, K) diagonal.
+                When diagonal_covariance=True, shape is (B, N, K).
+            mask: Causal mask (B, N, N) where 0 = cannot attend.
+            targets: Target token IDs for observation term (B, N).
+            W_out: Output projection (V, K) for dCE/dmu computation.
+            token_ids: Token IDs (B, N) for PriorBank lookup. Required when
+                use_prior_bank=True.
+            return_beta_history: If True, return list of beta at each step.
 
         Returns:
-            mu_new: Updated beliefs (B, N, K)
-            sigma_new: Updated covariances (same shape as input) or None
-            phi_new: Updated gauge frames (B, N, phi_dim)
-            beta_history: List of β tensors if return_beta_history, else None
+            mu_new: Updated beliefs (B, N, K).
+            sigma_new: Updated covariances (same shape as input) or None.
+            phi_new: Updated gauge frames (B, N, phi_dim).
+            beta_history: List of beta tensors if return_beta_history, else None.
         """
         B, N, K = mu.shape
         device = mu.device

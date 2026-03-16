@@ -331,8 +331,8 @@ def compute_transport_operators(
 def compute_attention_weights(
     mu_q: torch.Tensor,        # (B, N, K) belief means
     sigma_q: torch.Tensor,     # (B, N, K, K) or (B, N, K) if diagonal_covariance=True
-    phi: torch.Tensor,         # (B, N, 3) gauge frames
-    generators: torch.Tensor,  # (3, K, K) SO(3) generators
+    phi: torch.Tensor,         # (B, N, phi_dim) gauge frames (phi_dim=3 for SO(3), N(N-1)/2 for SO(N), K² for GL(K))
+    generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators
     kappa: float,              # Temperature
     epsilon: float = 1e-8,     # Numerical stability
     mask: Optional[torch.Tensor] = None,  # (B, N, N) causal mask
@@ -376,8 +376,9 @@ def compute_attention_weights(
         mu_q: Query belief means, shape (B, N, K)
               N = num_agents at single point c*
         sigma_q: Query covariances, shape (B, N, K, K) if full, (B, N, K) if diagonal
-        phi: Gauge frames, shape (B, N, 3) in so(3)
-        generators: SO(3) generators for irrep, shape (3, K, K)
+        phi: Gauge frames, shape (B, N, phi_dim) in Lie algebra
+             phi_dim = 3 for SO(3), N(N-1)/2 for SO(N), K² for GL(K)
+        generators: Lie algebra generators, shape (n_gen, K, K)
         kappa: Temperature parameter (higher = softer attention)
         epsilon: Softmax stability constant
         mask: Optional causal mask (B, N, N) - 0 masks out position
@@ -410,6 +411,12 @@ def compute_attention_weights(
                             forcing it to attend to other tokens. Critical for
                             preventing attention collapse since KL(q_i||q_i)=0
                             always makes self-attention the most attractive.
+        enforce_orthogonal: If True, enforce Ω ∈ SO(K) via Newton-Schulz iteration.
+        use_rope: If True, apply RoPE rotations to μ before KL computation.
+        rope_base: RoPE frequency base (default 10000.0).
+        exact_diagonal_transport: When True and diagonal_covariance=True, lifts σ
+                                 to full via diag_embed for exact Ω@Σ@Ω^T transport,
+                                 then extracts diagonal from result.
 
     Returns:
         beta: Attention weights, shape (B, N, N)
@@ -421,8 +428,9 @@ def compute_attention_weights(
         >>> B, N, K = 2, 10, 32
         >>> mu = torch.randn(B, N, K)
         >>> sigma = torch.eye(K).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1)
-        >>> phi = torch.randn(B, N, 3) * 0.1
-        >>> G = torch.from_numpy(generate_so3_generators(K)).float()
+        >>> n_gen = 3  # SO(3); use N*(N-1)//2 for SO(N), K**2 for GL(K)
+        >>> phi = torch.randn(B, N, n_gen) * 0.1
+        >>> G = torch.from_numpy(generate_so3_generators(K)).float()  # (n_gen, K, K)
         >>> beta = compute_attention_weights(mu, sigma, phi, G, kappa=1.0)
         >>> beta.shape
         torch.Size([2, 10, 10])
@@ -639,6 +647,9 @@ def compute_kl_matrix(
         gauge_mode: 'learned' for full transport, 'trivial' for Ω = I,
                    'constant' for per-head learned Ω (manuscript Limit 2)
         enforce_orthogonal: If True, enforce Ω ∈ SO(K) via Newton-Schulz iteration
+        exact_diagonal_transport: When True and diagonal_covariance=True, lifts σ
+                                 to full via diag_embed for exact Ω@Σ@Ω^T transport,
+                                 then extracts diagonal from result.
 
     Returns:
         kl_matrix: (B, N, N) pairwise KL divergences
@@ -648,8 +659,9 @@ def compute_kl_matrix(
         >>> B, N, K = 2, 10, 32
         >>> mu = torch.randn(B, N, K)
         >>> sigma = torch.ones(B, N, K)  # Diagonal variances
-        >>> phi = torch.randn(B, N, 3) * 0.1
-        >>> G = generate_so3_generators(K)  # (3, K, K)
+        >>> n_gen = 3  # SO(3); use N*(N-1)//2 for SO(N), K**2 for GL(K)
+        >>> phi = torch.randn(B, N, n_gen) * 0.1
+        >>> G = generate_so3_generators(K)  # (n_gen, K, K)
         >>> kl = compute_kl_matrix(mu, sigma, phi, G, diagonal_covariance=True)
         >>> kl.shape
         torch.Size([2, 10, 10])
@@ -778,8 +790,8 @@ def _compute_kl_matrix_torch(
     Args:
         mu_q: (B, N, K) belief means
         sigma_q: (B, N, K, K) belief covariances
-        phi: (B, N, 3) gauge fields
-        generators: (3, K, K) SO(3) generators
+        phi: (B, N, phi_dim) gauge frames in Lie algebra
+        generators: (n_gen, K, K) Lie algebra generators
         cached_transport: Optional dict with precomputed 'Omega' from compute_transport_operators()
         gauge_mode: 'learned' for full transport, 'trivial'/'constant' for Ω = I
                    (raw KL). For 'constant', actual per-head Ω is injected via
@@ -993,9 +1005,9 @@ def _compute_kl_matrix_torch(
 def _transport_gaussian_torch(
     mu: torch.Tensor,         # (K,)
     sigma: torch.Tensor,      # (K, K)
-    phi_dst: torch.Tensor,    # (3,)
-    phi_src: torch.Tensor,    # (3,)
-    generators: torch.Tensor, # (3, K, K)
+    phi_dst: torch.Tensor,    # (phi_dim,)
+    phi_src: torch.Tensor,    # (phi_dim,)
+    generators: torch.Tensor, # (n_gen, K, K)
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Transport Gaussian via Ω = exp(φ_dst) · exp(-φ_src).
@@ -1089,8 +1101,8 @@ def _kl_gaussian_torch(
 def _compute_kl_matrix_diagonal(
     mu_q: torch.Tensor,        # (B, N, K) belief means
     sigma_q: torch.Tensor,     # (B, N, K) diagonal variances (NOT K×K!)
-    phi: torch.Tensor,         # (B, N, 3) gauge frames
-    generators: torch.Tensor,  # (3, K, K) SO(3) generators
+    phi: torch.Tensor,         # (B, N, phi_dim) gauge frames
+    generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators
     cached_transport: Optional[dict] = None,  # Precomputed transport operators
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
 ) -> torch.Tensor:
@@ -1110,8 +1122,8 @@ def _compute_kl_matrix_diagonal(
     Args:
         mu_q: (B, N, K) belief means
         sigma_q: (B, N, K) diagonal variances (positive)
-        phi: (B, N, 3) gauge fields
-        generators: (3, K, K) SO(3) generators
+        phi: (B, N, phi_dim) gauge frames in Lie algebra
+        generators: (n_gen, K, K) Lie algebra generators
         cached_transport: Optional dict with precomputed 'Omega' from compute_transport_operators()
 
     Returns:
@@ -1874,9 +1886,9 @@ def _compute_kl_matrix_block_diagonal_chunked(
 def aggregate_messages(
     mu_q: torch.Tensor,         # (B, N, K)
     sigma_q: torch.Tensor,      # (B, N, K, K) or (B, N, K) if diagonal
-    phi: torch.Tensor,          # (B, N, 3)
+    phi: torch.Tensor,          # (B, N, phi_dim) gauge frames
     beta: torch.Tensor,         # (B, N, N) attention weights
-    generators: torch.Tensor,   # (3, K, K)
+    generators: torch.Tensor,   # (n_gen, K, K) Lie algebra generators
     aggregate_mode: str = 'mean_only',  # 'mean_only' or 'full_distribution'
     diagonal_covariance: bool = False,
     cached_transport: Optional[dict] = None,  # Precomputed transport operators
@@ -1899,16 +1911,20 @@ def aggregate_messages(
 
     Args:
         mu_q: Belief means (B, N, K)
-        sigma_q: Belief covariances (B, N, K, K)
-        phi: Gauge frames (B, N, 3)
+        sigma_q: Belief covariances (B, N, K, K) full or (B, N, K) if diagonal
+        phi: Gauge frames (B, N, phi_dim) in Lie algebra
         beta: Attention weights (B, N, N) - SCALARS, not fields!
-        generators: SO(3) generators (3, K, K)
+        generators: Lie algebra generators (n_gen, K, K)
         aggregate_mode: 'mean_only' or 'full_distribution'
+        diagonal_covariance: If True, sigma_q is (B, N, K) diagonal variances
         cached_transport: Optional dict with precomputed 'Omega' from compute_transport_operators()
+        exact_diagonal_transport: When True and diagonal_covariance=True, lifts σ
+                                 to full via diag_embed for exact Ω@Σ@Ω^T transport,
+                                 then extracts diagonal from result.
 
     Returns:
         mu_agg: Aggregated means (B, N, K)
-        sigma_agg: Aggregated covariances (B, N, K, K) or None
+        sigma_agg: Aggregated covariances (B, N, K, K), (B, N, K) if diagonal, or None
 
     Example:
         >>> mu_agg, _ = aggregate_messages(mu, sigma, phi, beta, G, mode='mean_only')
@@ -2083,23 +2099,30 @@ def aggregate_messages(
 
 class IrrepMultiHeadAttention(nn.Module):
     """
-    Multi-head attention where heads correspond to SO(3) irreducible representations.
+    Multi-head attention using KL divergence on gauge-transported belief distributions.
+
+    Supports SO(3), SO(N), and GL(K) gauge groups. Heads correspond to irreducible
+    representations (SO(3)/SO(N)) or block-diagonal GL(d_head) factors.
 
     Standard Transformer:
         - n_heads separate (W_Q, W_K, W_V) projections
         - Head dim = embed_dim / n_heads
-        - Free parameter choices
 
     Gauge Transformer:
-        - NO W_Q, W_K! (attention from KL divergence)
-        - Heads = irrep blocks (ℓ0, ℓ1, ℓ2, ℓ3, ...)
-        - Constrained by SO(3) symmetry
-        - Each irrep transforms with specific rule under gauge
+        - NO W_Q, W_K! (attention from KL divergence on transported beliefs)
+        - Heads = irrep blocks (SO(3)/SO(N)) or GL(d_head) blocks
+        - Each head has its own gauge transport Ω_ij
 
-    Irrep Decomposition:
-        K = Σ_ℓ multiplicity_ℓ × dim_ℓ
+    Features:
+        - RoPE: Position-dependent SO(2)^{K/2} rotations (use_rope, rope_base)
+        - ALiBi: Additive positional bias on logits (alibi_slope)
+        - Self-attention masking (mask_self_attention)
+        - Orthogonal projection to SO(K) (enforce_orthogonal)
+        - Gauge modes: 'learned' (per-token φ), 'trivial' (Ω=I), 'constant' (per-head Ω)
+        - Exact diagonal transport (exact_diagonal_transport)
+        - Optional W_O output projection (use_output_projection)
 
-    Example (96-dim embedding):
+    Irrep Decomposition (SO(3) example, 96-dim):
         K = 12×1 + 7×3 + 5×5 + 2×7 = 96
         ℓ0: 12 scalar channels (gauge-invariant)
         ℓ1: 7 vector channels (transform as vectors)
@@ -2143,16 +2166,23 @@ class IrrepMultiHeadAttention(nn.Module):
             diagonal_covariance: If True, sigma is (B,N,K) diagonal variances
             attention_pattern: Only 'full' is supported (kept for API compatibility)
             attention_window: Unused, kept for API compatibility
-            gauge_group: 'SO3' for SO(3) Wigner D-matrices, 'SON' for SO(N) fundamentals
+            gauge_group: 'SO3', 'SON', or 'GLK'
             gauge_dim: N for SO(N) mode - determines generator structure
-            global_generators: Pre-computed generators for SO(N) mode (n_gen, K, K)
-                              Required when gauge_group='SON'
+            global_generators: Pre-computed generators (n_gen, K, K).
+                              Required when gauge_group='SON' or 'GLK'.
+            alibi_slope: ALiBi-style positional bias slope. Negative = recency bias.
+            gauge_mode: 'learned' (per-token φ), 'trivial' (Ω=I), or
+                       'constant' (per-head learnable Ω)
             mask_self_attention: If True, mask out diagonal (no self-attention).
-                                This prevents attention collapse since KL(q_i||q_i)=0
-                                always makes self-attention the most attractive.
-            use_output_projection: If True, add a learned W_O ∈ R^{K×K} linear
-                                  projection after concatenating head outputs.
-                                  Enables cross-head information mixing.
+                                Prevents attention collapse since KL(q_i||q_i)=0.
+            enforce_orthogonal: If True, enforce Ω ∈ SO(K) via Newton-Schulz.
+            use_output_projection: If True, add learned W_O ∈ R^{K×K} after heads.
+            irrep_dims_override: Override block dims (for cross-head coupling).
+            use_rope: If True, apply RoPE rotations to μ before KL computation.
+            rope_base: RoPE frequency base (default 10000.0).
+            exact_diagonal_transport: When True and diagonal_covariance=True, lifts σ
+                                     to full via diag_embed for exact Ω@Σ@Ω^T transport,
+                                     then extracts diagonal from result.
         """
         super().__init__()
         self.diagonal_covariance = diagonal_covariance
@@ -2392,22 +2422,25 @@ class IrrepMultiHeadAttention(nn.Module):
         cached_head_transports: Optional[List[dict]] = None,  # Cross-layer cache
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
-        Forward pass through multi-head attention.
+        Forward pass through multi-head KL-divergence attention.
+
+        Computes per-head KL(q_i || Ω_ij[q_j]) attention weights and
+        aggregates gauge-transported messages.
 
         Args:
             mu_q: (B, N, K) belief means
-            sigma_q: (B, N, K, K) belief covariances
-            phi: (B, N, 3) gauge frames
-            generators: (3, K, K) SO(3) generators
+            sigma_q: (B, N, K, K) full covariances or (B, N, K) if diagonal_covariance
+            phi: (B, N, phi_dim) gauge frames in Lie algebra
+            generators: (n_gen, K, K) Lie algebra generators
             mask: (B, N, N) optional causal mask
             return_attention: If True, return attention weights and KL matrices
             cached_head_transports: Optional list of precomputed transport dicts, one per head.
                                    When evolve_phi=False, this can be computed once at model
-                                   entry and reused across all layers (6× speedup).
+                                   entry and reused across all layers.
 
         Returns:
             mu_out: (B, N, K) updated means
-            sigma_out: (B, N, K, K) updated covariances (or None)
+            sigma_out: (B, N, K, K) or (B, N, K) updated covariances (or None)
             attention_weights: (B, n_heads, N, N) for visualization (or None)
             kl_matrices: (B, n_heads, N, N) KL divergences (or None)
         """
@@ -2694,7 +2727,7 @@ class IrrepMultiHeadAttention(nn.Module):
         to forward() as cached_head_transports to skip redundant matrix exponentials.
 
         Args:
-            phi: (B, N, 3) gauge frames
+            phi: (B, N, phi_dim) gauge frames
             device: Device for generators
             dtype: Dtype for generators
 

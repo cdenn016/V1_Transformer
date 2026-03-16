@@ -2,19 +2,19 @@
 Complete Gauge-Theoretic Language Model (0D Architecture)
 ==========================================================
 
-Full transformer language model using gauge theory and active inference.
+Full transformer language model using gauge theory and variational free energy.
 
 Architecture:
-    Token Embedding → Position Encoding →
-    N × Transformer Blocks → Output Projection
+    token_ids → GaugeTokenEmbedding → (μ, Σ, φ) → Positional Encoding
+    → N × GaugeTransformerBlock (KL-attention + VFE E-step FFN)
+    → LayerNorm(μ) → Output Projection → logits
 
-Key Innovation: Attention via KL divergence on statistical manifold,
-                no learned W_Q, W_K matrices!
+Key Innovation: Attention via KL divergence on statistical manifold with gauge
+    transport — no learned W_Q, W_K, W_V matrices. Beliefs (μ, Σ, φ) evolve
+    through variational inference rather than neural network layers.
 
-0D Structure: All agents at single point c* (standard transformer topology)
-
-Author: Implementation from plan.py
-Date: November 2025
+Gauge groups: SO(3), SO(N), GL(K) — determined by generator shape.
+Configuration: flat dict → BlockConfig (see block_config.py for all 60+ params).
 """
 
 # Suppress noisy warnings BEFORE torch import (torch may trigger imports)
@@ -68,18 +68,18 @@ class GaugeTransformerLM(nn.Module):
     Complete gauge-theoretic language model.
 
     Architecture Flow:
-        token_ids → (μ, Σ, φ) → Transformer Stack → μ_final → logits
+        token_ids → (μ, Σ, φ) → Positional Encoding → N × Transformer Blocks
+        → LayerNorm(μ) → W_out @ μ → logits
 
     Components:
-        1. GaugeTokenEmbedding: Maps tokens to beliefs
-        2. GaugePositionalEncoding: Agent-index encoding in so(3)
-        3. GaugeTransformerStack: N layers of gauge attention
-        4. Output projection: μ → logits over vocabulary
+        1. GaugeTokenEmbedding: tokens → beliefs (μ, Σ, φ) with optional O(K) reflections
+        2. GaugePositionalEncoding: agent-index encoding in Lie algebra (so(3)/so(N)/gl(K))
+        3. GaugeTransformerStack: N layers of KL-attention + VFE E-step FFN
+        4. Output projection: μ → logits over vocabulary (optionally tied to embeddings)
 
-    0D Structure:
-        - All N tokens → N agents at single point c*
-        - No spatial structure, sequence via agent index
-        - Attention β_ij are scalars (not fields)
+    Gauge groups: SO(3), SO(N), GL(K) — determined by generators shape.
+    Belief state: μ ∈ ℝ^K (means), Σ ∈ SPD(K) (covariances), φ ∈ g (gauge frames).
+    All configuration flows through a flat config dict → BlockConfig.
     """
 
     def __init__(self, config: Dict):
@@ -87,18 +87,29 @@ class GaugeTransformerLM(nn.Module):
         Initialize gauge transformer language model.
 
         Args:
-            config: Dictionary with model hyperparameters:
-                - vocab_size: Vocabulary size
-                - embed_dim: Embedding dimension K
+            config: Flat dictionary with all hyperparameters. Required keys:
+                - vocab_size: Vocabulary size V
+                - embed_dim: Belief dimension K = Σ(mult_ℓ × dim_ℓ)
                 - n_layers: Number of transformer blocks
-                - irrep_spec: Irrep structure [(label, mult, dim), ...]
-                - hidden_dim: FFN hidden dimension
+                - irrep_spec: [(label, multiplicity, dim), ...] defining head structure
+                - hidden_dim: FFN hidden dimension (kept for config compat)
                 - max_seq_len: Maximum sequence length
-                - kappa_beta: Attention temperature
-                - pos_encoding_mode: 'learned' or 'sinusoidal'
-                - evolve_sigma: If True, evolve covariances
-                - evolve_phi: If True, evolve gauge frames
-                - tie_embeddings: If True, tie input/output embeddings
+                - kappa_beta: Attention/VFE temperature τ
+
+                Optional keys (with defaults):
+                - pos_encoding_mode: 'none' (default) | 'learned' | 'sinusoidal'
+                - evolve_sigma: Update covariances (default True)
+                - evolve_phi: Update gauge frames (default True)
+                - tie_embeddings: Tie input/output projection weights (default True)
+                - diagonal_covariance: Σ as (B,N,K) diagonal (default False)
+                - exact_diagonal_transport: Lift diagonal for exact transport (default False)
+                - gauge_mode: 'learned' | 'trivial' | 'constant' (default 'learned')
+                - phi_dim: Gauge frame dimension (default 3)
+                - use_rope: Rotary position embeddings (default False)
+                - non_flat_transport: Edge-local connection (default False)
+                - use_prior_bank: Token-dependent priors (default False)
+                - use_obs_in_vfe: Ground E-step in observations (default False)
+                See BlockConfig for the full list of 60+ parameters.
         """
         super().__init__()
         self.config = config
@@ -698,8 +709,11 @@ class GaugeTransformerLM(nn.Module):
                 - 'beta': (n_layers, B, n_heads, N, N) attention weights per head per layer
                 - 'kl': (n_layers, B, n_heads, N, N) KL divergences per head per layer
                 - 'mu': (B, N, K) final belief means
-                - 'sigma': (B, N, K, K) final covariances
-                - 'phi': (B, N, 3) final gauge frames
+                - 'sigma': (B, N, K, K) or (B, N, K) final covariances
+                - 'phi': (B, N, phi_dim) final gauge frames
+                - 'mu_prior': (B, N, K) prior means (before position encoding)
+                - 'sigma_prior': (B, N, K, K) or (B, N, K) prior covariances
+                - 'phi_prior': (B, N, phi_dim) prior gauge frames
                 - 'n_layers': int number of layers
         """
         batch_size, num_agents = token_ids.shape
