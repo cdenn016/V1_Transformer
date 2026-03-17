@@ -71,7 +71,7 @@ BASELINE_CONFIG = {
     'batch_size': 16,
     'num_workers': 10,
     'epochs': None,
-    'max_steps': 30000,      # Reduced from 60k for ablation efficiency
+    'max_steps': 1000,      # Reduced from 60k for ablation efficiency
     'warmup_steps': 100,
 
     # VFE mode
@@ -169,7 +169,7 @@ BASELINE_CONFIG = {
 
     'use_amp': False,
 
-    'dataset': 'wikitext-103',
+    'dataset': 'wikitext-2', #'wiki-2' for quick sweeps
 }
 
 
@@ -291,7 +291,7 @@ SWEEPS = {
             {'gauge_dim': 12, 'irrep_spec': [('fund', 4, 12)], 'embed_dim': 48, 'label': 'GL(12)_h4'},
             {'gauge_dim': 16, 'irrep_spec': [('fund', 3, 16)], 'embed_dim': 48, 'label': 'GL(16)_h3'},
         ],
-        'baseline_value': 'GL(10)_h9',
+        'baseline_value': 'GL(10)_h2',
     },
 
     # --- Tier 6: Alpha_phi (gauge prior) ---
@@ -305,9 +305,19 @@ SWEEPS = {
 
 # Sweep execution order (cheapest → most expensive)
 SWEEP_ORDER = [
-    'alpha', 'beta', 'alpha_phi', 'ffn_alpha', 'ffn_lambda_belief',
-    'rope', 'covariance', 'gauge_mode', 'phi_preconditioner',
-    'n_vfe_iterations', 'gauge_dim', 'K', 'n_layers',
+    #'alpha', 
+    #'beta', 
+    'alpha_phi', 
+    'ffn_alpha', 
+    'ffn_lambda_belief',
+    #'rope', 
+    #'covariance', 
+    'gauge_mode', 
+    #'phi_preconditioner',
+    'n_vfe_iterations', 
+    #'gauge_dim', 
+    #'K', 
+    'n_layers',
 ]
 
 
@@ -662,7 +672,7 @@ def main():
                         help='Run a specific sweep (e.g., "alpha", "K"). '
                              'If not set, runs all sweeps in order.')
     parser.add_argument('--device', type=str, default='auto')
-    parser.add_argument('--dataset', type=str, default='wikitext-103',
+    parser.add_argument('--dataset', type=str, default='wikitext-2',
                         choices=['wikitext-2', 'wikitext-103'])
     parser.add_argument('--output_dir', type=str, default='ablation_results')
     parser.add_argument('--max_steps', type=int, default=None,
