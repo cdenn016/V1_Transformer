@@ -22,10 +22,14 @@ from transformer.training.optimizer import (
     create_param_groups,
 )
 from transformer.training.metrics import MetricsTracker
+from transformer.training.lightning_module import GaugeTransformerLitModule
+from transformer.training.lightning_data import GaugeDataModule
 
 __all__ = [
     'TrainingConfig',
     'create_optimizer',
     'create_param_groups',
     'MetricsTracker',
+    'GaugeTransformerLitModule',
+    'GaugeDataModule',
 ]
