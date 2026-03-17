@@ -1,3 +1,10 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Mar 16 22:17:49 2026
+
+@author: chris and christine
+"""
+
 #!/usr/bin/env python3
 """
 Systematic Ablation Suite for Gauge VFE Transformer
@@ -48,7 +55,7 @@ from transformer.train_publication import run_single_experiment
 BASELINE_CONFIG = {
     # Architecture
     'vocab_size': 50257,
-    'embed_dim': 90,
+    'embed_dim': 20,
     'n_layers': 1,
     'hidden_dim': 508,
     'max_seq_len': 128,
@@ -139,9 +146,7 @@ BASELINE_CONFIG = {
     'checkpoint_interval': 25000,
     'semantic_analysis_interval': 0,  # Disable for speed
 
-    # Early stopping
-    'patience': 5,
-
+    
     # Gauge group
     'gauge_group': 'GLK',
     'gauge_dim': 10,
@@ -152,19 +157,16 @@ BASELINE_CONFIG = {
     'killing_form_sym_dampening': 0.1,
 
     # Multi-head
-    'irrep_spec': [('fund', 9, 10)],  # 9 heads × 10 = 90
-    'per_head_kappa': True,
+    'irrep_spec': [('fund', 2, 10)],  # 9 heads × 10 = 90
+    
     'use_output_projection': True,
     'multihead_vfe': True,
 
     # Misc
     'use_p_flow': False,
     'use_delta_rule_w_out': False,
-    'use_prior_bank': True,
-    'use_exp_map_retraction': True,
-    'use_full_nat_grad': True,
-    'detach_sigma_kl': True,
-    'sigma_softmax_coupling': True,
+    'use_prior_bank': False,
+
     'use_amp': False,
 
     'dataset': 'wikitext-103',
@@ -182,21 +184,21 @@ SWEEPS = {
     'alpha': {
         'description': 'Self-consistency KL(q||p) weight in training loss',
         'param': 'alpha',
-        'values': [0.01, 0.025, 0.05, 0.075, 0.1, 0.2, 0.5],
+        'values': [0, 0.025, 0.05, 0.075, 0.1, 0.2, 0.5],
         'baseline_value': 0.075,
     },
 
     'ffn_alpha': {
         'description': 'Prior coupling weight inside VFE E-step iterations',
         'param': 'ffn_alpha',
-        'values': [0.1, 0.5, 1.0, 2.0, 5.0],
+        'values': [0, 0.1, 0.5, 1.0, 2.0, 5.0],
         'baseline_value': 1.0,
     },
 
     'ffn_lambda_belief': {
         'description': 'Belief alignment weight inside VFE E-step iterations',
         'param': 'ffn_lambda_belief',
-        'values': [0.1, 0.5, 1.0, 2.0, 5.0],
+        'values': [0, 0.1, 0.5, 1.0, 2.0, 5.0],
         'baseline_value': 1.0,
     },
 
@@ -212,14 +214,14 @@ SWEEPS = {
         'description': 'Embedding dimension (belief dimensionality)',
         'param': None,  # Multi-param override
         'configs': [
+            {'embed_dim': 10, 'irrep_spec': [('fund', 1, 10)], 'label': 'K=10'},
+            {'embed_dim': 20, 'irrep_spec': [('fund', 2, 10)], 'label': 'K=20'},
             {'embed_dim': 40, 'irrep_spec': [('fund', 4, 10)], 'label': 'K=40'},
             {'embed_dim': 60, 'irrep_spec': [('fund', 6, 10)], 'label': 'K=60'},
             {'embed_dim': 80, 'irrep_spec': [('fund', 8, 10)], 'label': 'K=80'},
-            {'embed_dim': 90, 'irrep_spec': [('fund', 9, 10)], 'label': 'K=90'},
             {'embed_dim': 100, 'irrep_spec': [('fund', 10, 10)], 'label': 'K=100'},
-            {'embed_dim': 120, 'irrep_spec': [('fund', 12, 10)], 'label': 'K=120'},
         ],
-        'baseline_value': 'K=90',
+        'baseline_value': 'K=20',
     },
 
     'n_vfe_iterations': {
@@ -282,12 +284,12 @@ SWEEPS = {
         'description': 'GL(K) gauge group dimension (d_head)',
         'param': None,
         'configs': [
-            {'gauge_dim': 5, 'irrep_spec': [('fund', 18, 5)], 'embed_dim': 90, 'label': 'GL(5)_h18'},
-            {'gauge_dim': 10, 'irrep_spec': [('fund', 9, 10)], 'embed_dim': 90, 'label': 'GL(10)_h9'},
-            {'gauge_dim': 15, 'irrep_spec': [('fund', 6, 15)], 'embed_dim': 90, 'label': 'GL(15)_h6'},
-            {'gauge_dim': 30, 'irrep_spec': [('fund', 3, 30)], 'embed_dim': 90, 'label': 'GL(30)_h3'},
-            {'gauge_dim': 45, 'irrep_spec': [('fund', 2, 45)], 'embed_dim': 90, 'label': 'GL(45)_h2'},
-            {'gauge_dim': 90, 'irrep_spec': [('fund', 1, 90)], 'embed_dim': 90, 'label': 'GL(90)_h1'},
+            {'gauge_dim': 2, 'irrep_spec': [('fund', 24, 2)], 'embed_dim': 48, 'label': 'GL(2)_h24'},
+            {'gauge_dim': 4, 'irrep_spec': [('fund', 12, 4)], 'embed_dim': 48, 'label': 'GL(4)_h12'},
+            {'gauge_dim': 6, 'irrep_spec': [('fund', 8, 6)], 'embed_dim': 48, 'label': 'GL(6)_h8'},
+            {'gauge_dim': 8, 'irrep_spec': [('fund', 6, 8)], 'embed_dim': 48, 'label': 'GL(8)_h6'},
+            {'gauge_dim': 12, 'irrep_spec': [('fund', 4, 12)], 'embed_dim': 48, 'label': 'GL(12)_h4'},
+            {'gauge_dim': 16, 'irrep_spec': [('fund', 3, 16)], 'embed_dim': 48, 'label': 'GL(16)_h3'},
         ],
         'baseline_value': 'GL(10)_h9',
     },
