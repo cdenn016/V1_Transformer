@@ -346,6 +346,7 @@ def run_sweep(
     output_dir: Path,
     seed: int = 42,
     max_steps_override: int = None,
+    resume: bool = False,
 ) -> pd.DataFrame:
     """Run all configs in a sweep, return results DataFrame."""
     sweep = SWEEPS[sweep_name]
@@ -357,12 +358,30 @@ def run_sweep(
     print(f"  {sweep['description']}")
     print(f"  Baseline: {sweep['baseline_value']}")
     print(f"  Output: {sweep_dir}")
+    if resume:
+        print(f"  Resume: ON (skipping completed runs)")
     print(f"{'='*70}\n")
 
     runs = make_run_configs(sweep_name, base_config)
     results = []
 
+    # In resume mode, load any previously completed results
+    if resume:
+        for label, _cfg in runs:
+            run_dir = sweep_dir / label.replace('=', '_').replace(' ', '_')
+            result_file = run_dir / 'ablation_result.json'
+            if result_file.exists():
+                with open(result_file) as f:
+                    results.append(json.load(f))
+
     for i, (label, cfg) in enumerate(runs):
+        run_dir = sweep_dir / label.replace('=', '_').replace(' ', '_')
+
+        # Skip already-completed runs in resume mode
+        if resume and (run_dir / 'ablation_result.json').exists():
+            print(f"\n--- Run {i+1}/{len(runs)}: {label} [CACHED] ---")
+            continue
+
         print(f"\n--- Run {i+1}/{len(runs)}: {label} ---")
 
         # Override max_steps if requested
@@ -376,8 +395,6 @@ def run_sweep(
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
-
-        run_dir = sweep_dir / label.replace('=', '_').replace(' ', '_')
 
         try:
             t0 = time.time()
@@ -670,6 +687,9 @@ def main():
                         help='Analyze results in directory (default: ablation_results/)')
     parser.add_argument('--plot', type=str, default=None, nargs='?', const='ablation_results',
                         help='Generate plots from results in directory')
+    parser.add_argument('--resume', action='store_true',
+                        help='Resume interrupted run: skip sweeps/runs that already '
+                             'have ablation_result.json on disk')
     parser.add_argument('--list', action='store_true',
                         help='List all available sweeps')
 
@@ -728,6 +748,8 @@ def main():
     print(f"  Sweeps:    {', '.join(sweep_names)}")
     if args.max_steps:
         print(f"  Max steps: {args.max_steps} (override)")
+    if args.resume:
+        print(f"  Resume:    ON (skipping completed runs)")
     print()
 
     # Run sweeps
@@ -740,6 +762,7 @@ def main():
             output_dir=output_dir,
             seed=args.seed,
             max_steps_override=args.max_steps,
+            resume=args.resume,
         )
         all_dfs[sweep_name] = df
 
