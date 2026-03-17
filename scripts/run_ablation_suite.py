@@ -298,7 +298,7 @@ SWEEPS = {
     'alpha_phi': {
         'description': 'Gauge frame L2 prior weight (α_φ/2)||φ||²',
         'param': 'alpha_phi',
-        'values': [0.0, 0.01, 0.05, 0.1, 0.5, 1.0],
+        'values': [0.0, 0.01, 0.02, 0.03, 0.04, 0.06, 0.08, 0.1],
         'baseline_value': 0.1,
     },
 }
@@ -307,17 +307,17 @@ SWEEPS = {
 SWEEP_ORDER = [
     #'alpha', 
     #'beta', 
-    'alpha_phi', 
+    #'alpha_phi', 
     'ffn_alpha', 
     'ffn_lambda_belief',
     #'rope', 
     #'covariance', 
-    'gauge_mode', 
+    #'gauge_mode', 
     #'phi_preconditioner',
-    'n_vfe_iterations', 
+    #'n_vfe_iterations', 
     #'gauge_dim', 
     #'K', 
-    'n_layers',
+    #'n_layers',
 ]
 
 
