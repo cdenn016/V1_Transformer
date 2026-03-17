@@ -254,6 +254,7 @@ def _compute_vfe_gradients_block_diagonal(
     chunk_size: Optional[int],
     compute_sigma_align_grad: bool,
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
+    alpha_c0: Optional[torch.Tensor] = None,  # (K,) for product-rule correction when alpha is learnable
     cached_block_exp_pairs: Optional[list] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
@@ -280,6 +281,7 @@ def _compute_vfe_gradients_block_diagonal(
         chunk_size: Optional chunk size over query positions.
         compute_sigma_align_grad: Whether to compute dF/dSigma from alignment.
         enforce_orthogonal: If True, enforce Omega in SO(K) via Newton-Schulz.
+        alpha_c0: (K,) softplus(raw_c0) for product-rule correction when alpha is learnable.
         cached_block_exp_pairs: Precomputed (exp_phi, exp_neg_phi) per block.
 
     Returns:
@@ -308,6 +310,25 @@ def _compute_vfe_gradients_block_diagonal(
     # For full covariance (4D), alpha (B,N,1) needs extra dim to broadcast with (B,N,K,K)
     alpha_4d = alpha.unsqueeze(-1) if isinstance(alpha, torch.Tensor) else alpha
     grad_sigma_self = alpha_4d * 0.5 * (sigma_p_inv - sigma_q_inv)
+
+    # Product-rule correction for learnable alpha (full covariance):
+    # ∂(α·KL)/∂θ = α·∂KL/∂θ + (∂α/∂θ)·KL
+    # When α_k = c₀_k/(b₀_k + kl_k), ∂α_k/∂θ = -α_k²/c₀_k · ∂kl_k/∂θ
+    if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
+        # Per-dimension KL proxy from diagonal elements
+        prod_qp = torch.matmul(sigma_p_inv, sigma_q)  # (B, N, K, K)
+        trace_k = prod_qp.diagonal(dim1=-2, dim2=-1)  # (B, N, K)
+        sp_inv_delta = torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
+        mahal_k = delta_mu * sp_inv_delta  # (B, N, K)
+        logdet_p = torch.linalg.slogdet(sigma_p.float())[1]  # (B, N)
+        logdet_q = torch.linalg.slogdet(sigma_q.float())[1]  # (B, N)
+        logdet_k = ((logdet_p - logdet_q) / K).unsqueeze(-1).expand_as(delta_mu)  # (B, N, K)
+        kl_k = 0.5 * (trace_k + mahal_k - 1 + logdet_k).clamp(min=0.0)
+        # Correction to mu gradient
+        grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
+        # Correction to sigma gradient (4D broadcast)
+        correction_scale = ((alpha ** 2 / alpha_c0) * kl_k).unsqueeze(-1)  # (B, N, K, 1)
+        grad_sigma_self = grad_sigma_self - correction_scale * 0.5 * (sigma_p_inv - sigma_q_inv)
 
     grad_mu = grad_mu + grad_mu_self
     grad_sigma = grad_sigma + grad_sigma_self
@@ -1214,6 +1235,7 @@ def compute_vfe_gradients_gpu(
             mu_q, sigma_q, mu_p, sigma_p, beta, phi, generators,
             alpha, lambda_belief, kappa, eps, irrep_dims, chunk_size,
             compute_sigma_align_grad, enforce_orthogonal,
+            alpha_c0=alpha_c0,
             cached_block_exp_pairs=cached_block_exp_pairs,
         )
 
@@ -1293,6 +1315,21 @@ def compute_vfe_gradients_gpu(
         # For full covariance (4D), alpha (B,N,K) needs extra dim to broadcast with (B,N,K,K)
         alpha_4d = alpha.unsqueeze(-1) if isinstance(alpha, torch.Tensor) else alpha
         grad_sigma_self = alpha_4d * 0.5 * (sigma_p_inv - sigma_q_inv)
+
+        # Product-rule correction for learnable alpha (full covariance):
+        # ∂(α·KL)/∂θ = α·∂KL/∂θ + (∂α/∂θ)·KL
+        if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
+            prod_qp = torch.matmul(sigma_p_inv, sigma_q)  # (B, N, K, K)
+            trace_k = prod_qp.diagonal(dim1=-2, dim2=-1)  # (B, N, K)
+            sp_inv_delta = torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
+            mahal_k = delta_mu * sp_inv_delta  # (B, N, K)
+            logdet_p = torch.linalg.slogdet(sigma_p.float())[1]  # (B, N)
+            logdet_q = torch.linalg.slogdet(sigma_q.float())[1]  # (B, N)
+            logdet_k = ((logdet_p - logdet_q) / K).unsqueeze(-1).expand_as(delta_mu)
+            kl_k = 0.5 * (trace_k + mahal_k - 1 + logdet_k).clamp(min=0.0)
+            grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * sp_inv_delta
+            correction_scale = ((alpha ** 2 / alpha_c0) * kl_k).unsqueeze(-1)  # (B, N, K, 1)
+            grad_sigma_self = grad_sigma_self - correction_scale * 0.5 * (sigma_p_inv - sigma_q_inv)
 
     # =================================================================
     # 2. Belief Alignment Gradient: ∂/∂μ_i [λ · Σ_j β_ij · KL(q_i || Ω_ij q_j)]
