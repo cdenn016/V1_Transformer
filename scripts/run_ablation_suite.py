@@ -778,8 +778,8 @@ def main():
         )
         all_dfs[sweep_name] = df
 
-    # Generate plots
-    generate_plots(output_dir)
+        # Generate plots after each sweep so figures are never lost
+        generate_plots(output_dir)
 
     # Final summary
     analyze_all(output_dir)
