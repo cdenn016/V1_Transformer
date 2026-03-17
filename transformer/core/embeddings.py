@@ -466,6 +466,7 @@ class GaugeTokenEmbedding(nn.Module):
         prediction_errors: torch.Tensor,   # (B, N) per-position CE loss
         ema_decay: float = 0.99,           # EMA decay rate (higher = slower update)
         min_weight: float = 0.01,          # Minimum weight to prevent dead tokens
+        pad_token_id: int = -1,            # Padding token ID to ignore
     ):
         """
         P-flow: Update token embeddings toward successful beliefs via EMA.
@@ -486,6 +487,7 @@ class GaugeTokenEmbedding(nn.Module):
             prediction_errors: (B, N) per-position cross-entropy loss
             ema_decay: EMA decay rate (0.99 = slow, 0.9 = faster)
             min_weight: Minimum weight to ensure all tokens get some update
+            pad_token_id: Token ID for padding positions (excluded from update)
         """
         if self.gauge_fixed_priors:
             # For gauge_fixed_priors, we'd need to update phi_embed instead
@@ -499,15 +501,27 @@ class GaugeTokenEmbedding(nn.Module):
         with torch.no_grad():
             # Compute success weights from prediction errors
             # Low error = high weight (successful predictions should update more)
+            # Padded positions have CE=0 which would get the HIGHEST softmax weight,
+            # so we must mask them out before softmax.
+            valid_mask = (token_ids != pad_token_id)  # (B, N)
             errors_clamped = prediction_errors.clamp(min=1e-6, max=20.0)
+            # Set padded positions to large error so they get near-zero softmax weight
+            errors_clamped = errors_clamped.masked_fill(~valid_mask, 20.0)
             weights = torch.softmax(-errors_clamped, dim=-1)  # (B, N)
-            weights = weights.clamp(min=min_weight)  # Ensure minimum update
+            weights = weights * valid_mask.float()  # Zero out padded positions entirely
+            weights = weights.clamp(min=0.0)  # No min_weight for padded positions
+            # Apply min_weight only to valid positions
+            weights[valid_mask] = weights[valid_mask].clamp(min=min_weight)
 
             # For each unique token in batch, accumulate weighted belief updates
             # This handles repeated tokens correctly
             unique_tokens = token_ids.unique()
 
             for token_id in unique_tokens:
+                # Skip pad tokens entirely
+                if token_id == pad_token_id:
+                    continue
+
                 # Find all occurrences of this token
                 mask = (token_ids == token_id)  # (B, N)
 
@@ -520,6 +534,8 @@ class GaugeTokenEmbedding(nn.Module):
 
                 # Weighted average belief for this token
                 total_weight = token_weights.sum()
+                if total_weight < 1e-8:
+                    continue  # Skip if all occurrences have zero weight
                 weighted_belief = (token_beliefs * token_weights.unsqueeze(-1)).sum(dim=0) / total_weight
 
                 # EMA update: prior ← (1 - lr) · prior + lr · belief
