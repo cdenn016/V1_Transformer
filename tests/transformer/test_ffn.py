@@ -145,3 +145,85 @@ class TestVariationalFFNDynamic:
 
         assert torch.isfinite(mu_out).all()
         assert (sigma_out > 0).all()
+
+    def test_learnable_alpha_creation(self, generators, cpu_device):
+        """Test creating VariationalFFNDynamic with learnable_alpha=True."""
+        from transformer.core.variational_ffn import VariationalFFNDynamic
+
+        K = generators.shape[1]
+        ffn = VariationalFFNDynamic(
+            embed_dim=K,
+            generators=generators,
+            alpha=1.0,
+            learnable_alpha=True,
+            diagonal_covariance=True,
+        ).to(cpu_device)
+
+        assert hasattr(ffn, 'raw_c0')
+        assert hasattr(ffn, 'raw_b0')
+        assert ffn.raw_c0.shape == (K,)
+        assert ffn.raw_b0.shape == (K,)
+        assert ffn.raw_c0.requires_grad
+        assert ffn.raw_b0.requires_grad
+
+    def test_learnable_alpha_forward(self, generators, cpu_device):
+        """Test forward pass with learnable_alpha produces finite outputs and gradients."""
+        from transformer.core.variational_ffn import VariationalFFNDynamic
+
+        K = generators.shape[1]
+        ffn = VariationalFFNDynamic(
+            embed_dim=K,
+            generators=generators,
+            alpha=1.0,
+            learnable_alpha=True,
+            diagonal_covariance=True,
+        ).to(cpu_device)
+
+        B, N = 2, 4
+        mu = torch.randn(B, N, K) * 0.1
+        mu_prior = torch.randn(B, N, K) * 0.1
+        phi = torch.zeros(B, N, 3)
+        sigma = torch.ones(B, N, K)
+        mask = torch.tril(torch.ones(N, N)).unsqueeze(0).expand(B, -1, -1)
+        beta = torch.softmax(torch.randn(B, N, N), dim=-1)
+
+        mu_out, sigma_out, phi_out, _bh = ffn(
+            mu=mu, beta=beta, mu_prior=mu_prior, phi=phi, sigma=sigma, mask=mask,
+        )
+
+        assert torch.isfinite(mu_out).all(), "mu_out has NaN/Inf with learnable alpha"
+        assert torch.isfinite(sigma_out).all(), "sigma_out has NaN/Inf with learnable alpha"
+        assert (sigma_out > 0).all(), "sigma_out must be positive with learnable alpha"
+
+        # Verify gradients flow to raw_c0 and raw_b0
+        loss = mu_out.sum()
+        loss.backward()
+        assert ffn.raw_c0.grad is not None, "raw_c0 received no gradient"
+        assert ffn.raw_b0.grad is not None, "raw_b0 received no gradient"
+        assert torch.isfinite(ffn.raw_c0.grad).all(), "raw_c0 gradient has NaN/Inf"
+        assert torch.isfinite(ffn.raw_b0.grad).all(), "raw_b0 gradient has NaN/Inf"
+
+    def test_learnable_alpha_bayesian_alpha_shape(self, generators, cpu_device):
+        """Test get_bayesian_alpha returns correct shape and values."""
+        from transformer.core.variational_ffn import VariationalFFNDynamic
+
+        K = generators.shape[1]
+        ffn = VariationalFFNDynamic(
+            embed_dim=K,
+            generators=generators,
+            alpha=1.0,
+            learnable_alpha=True,
+            diagonal_covariance=True,
+        ).to(cpu_device)
+
+        B, N = 2, 4
+        mu_q = torch.randn(B, N, K) * 0.1
+        mu_p = torch.randn(B, N, K) * 0.1
+        sigma_q = torch.ones(B, N, K)
+        sigma_p = torch.ones(B, N, K)
+
+        alpha = ffn.get_bayesian_alpha(mu_q, mu_p, sigma_p, sigma_q)
+
+        assert alpha.shape == (B, N, K), f"Expected (B,N,K) shape, got {alpha.shape}"
+        assert (alpha > 0).all(), "Bayesian alpha must be positive"
+        assert torch.isfinite(alpha).all(), "Bayesian alpha has NaN/Inf"

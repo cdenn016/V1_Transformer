@@ -621,7 +621,7 @@ def compute_free_energy_loss(
     # Bayesian alpha diagnostics
     with torch.no_grad():
         for block in model.transformer.blocks:
-            vffn = getattr(block.ffn, 'variational_ffn', None)
+            vffn = block.ffn if hasattr(block.ffn, 'learnable_alpha') else getattr(block.ffn, 'variational_ffn', None)
             if vffn is not None and vffn.learnable_alpha and mu_q is not None and mu_p is not None:
                 import torch.nn.functional as _F
                 alpha_vals = vffn.get_bayesian_alpha(mu_q, mu_p, sigma_p, sigma_q)
