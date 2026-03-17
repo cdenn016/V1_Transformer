@@ -301,6 +301,49 @@ SWEEPS = {
         'values': [0.0, 0.01, 0.02, 0.03, 0.04, 0.06, 0.08, 0.1],
         'baseline_value': 0.1,
     },
+
+    # --- Tier 7: Learning rates ---
+    'mu_lr': {
+        'description': 'Belief mean (μ) learning rate',
+        'param': 'mu_lr',
+        'values': [0.005, 0.01, 0.02, 0.05, 0.1, 0.2],
+        'baseline_value': 0.05,
+    },
+
+    'sigma_lr': {
+        'description': 'Belief precision (σ) learning rate',
+        'param': 'sigma_lr',
+        'values': [0.0005, 0.001, 0.002, 0.005, 0.01, 0.02],
+        'baseline_value': 0.005,
+    },
+
+    'phi_lr': {
+        'description': 'Gauge frame (φ) learning rate',
+        'param': 'phi_lr',
+        'values': [0.0005, 0.001, 0.002, 0.005, 0.01, 0.02],
+        'baseline_value': 0.005,
+    },
+
+    'ffn_lr': {
+        'description': 'FFN / VFE module learning rate',
+        'param': 'ffn_lr',
+        'values': [0.005, 0.01, 0.02, 0.05, 0.1, 0.2],
+        'baseline_value': 0.05,
+    },
+
+    'attention_lr': {
+        'description': 'Attention module learning rate',
+        'param': 'attention_lr',
+        'values': [0.0005, 0.001, 0.002, 0.005, 0.01, 0.02],
+        'baseline_value': 0.005,
+    },
+
+    'output_lr': {
+        'description': 'Output projection learning rate',
+        'param': 'output_lr',
+        'values': [0.005, 0.01, 0.02, 0.05, 0.1, 0.2],
+        'baseline_value': 0.05,
+    },
 }
 
 # Sweep execution order (cheapest → most expensive)
@@ -308,9 +351,15 @@ SWEEP_ORDER = [
     #'alpha', 
     #'beta', 
     #'alpha_phi', 
-    'ffn_alpha', 
+    'ffn_alpha',
     'ffn_lambda_belief',
-    #'rope', 
+    'mu_lr',
+    'sigma_lr',
+    'phi_lr',
+    'ffn_lr',
+    'attention_lr',
+    'output_lr',
+    #'rope',
     #'covariance', 
     #'gauge_mode', 
     #'phi_preconditioner',
