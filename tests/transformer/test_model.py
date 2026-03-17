@@ -455,3 +455,138 @@ class TestGaugeTransformerLMSaveLoad:
             out2 = model2(input_ids)
 
         assert torch.allclose(out1, out2)
+
+
+class TestPFlowAndDeltaRule:
+    """Test P-flow EMA embedding updates and delta rule W_out updates."""
+
+    @pytest.fixture
+    def model_for_pflow(self, minimal_config, cpu_device):
+        """Create a model with tie_embeddings=False for clean P-flow/delta rule testing."""
+        from transformer.core.model import GaugeTransformerLM
+
+        config = minimal_config.copy()
+        config['tie_embeddings'] = False
+        model = GaugeTransformerLM(config).to(cpu_device)
+        return model
+
+    def test_p_flow_update_modifies_embeddings(self, model_for_pflow, cpu_device):
+        """Test that P-flow EMA updates modify token embeddings."""
+        model = model_for_pflow
+        B, N, K = 2, 8, model.config['embed_dim']
+        V = model.config['vocab_size']
+
+        token_ids = torch.randint(0, V, (B, N))
+        mu_beliefs = torch.randn(B, N, K) * 0.1
+        prediction_errors = torch.rand(B, N) * 5.0  # CE losses
+
+        # Save original embeddings for comparison
+        original_weight = model.token_embed.mu_embed.weight.data.clone()
+
+        model.p_flow_update(
+            token_ids=token_ids,
+            mu_beliefs=mu_beliefs,
+            prediction_errors=prediction_errors,
+            ema_decay=0.9,
+        )
+
+        # Embeddings for tokens in the batch should have changed
+        changed = (model.token_embed.mu_embed.weight.data != original_weight).any(dim=-1)
+        assert changed.any(), "P-flow should modify at least some token embeddings"
+
+    def test_p_flow_ignores_padding(self, model_for_pflow, cpu_device):
+        """Test that P-flow does NOT update pad token embeddings."""
+        model = model_for_pflow
+        B, N, K = 2, 8, model.config['embed_dim']
+        pad_id = 0  # Use token 0 as pad
+
+        token_ids = torch.randint(1, 50, (B, N))
+        token_ids[:, -2:] = pad_id  # Last 2 positions are padding
+        mu_beliefs = torch.randn(B, N, K) * 0.1
+        prediction_errors = torch.rand(B, N) * 5.0
+        prediction_errors[:, -2:] = 0.0  # Pad positions have CE=0
+
+        original_pad_embed = model.token_embed.mu_embed.weight.data[pad_id].clone()
+
+        model.p_flow_update(
+            token_ids=token_ids,
+            mu_beliefs=mu_beliefs,
+            prediction_errors=prediction_errors,
+            ema_decay=0.9,
+            pad_token_id=pad_id,
+        )
+
+        # Pad token embedding should NOT have changed
+        assert torch.allclose(
+            model.token_embed.mu_embed.weight.data[pad_id],
+            original_pad_embed,
+        ), "P-flow should not update padding token embeddings"
+
+    def test_delta_rule_modifies_w_out(self, model_for_pflow, cpu_device):
+        """Test that delta rule updates modify W_out."""
+        model = model_for_pflow
+        B, N, K = 2, 8, model.config['embed_dim']
+        V = model.config['vocab_size']
+
+        mu_beliefs = torch.randn(B, N, K) * 0.1
+        targets = torch.randint(0, V, (B, N))
+
+        original_weight = model.out_proj.weight.data.clone()
+
+        model.delta_rule_update_w_out(
+            mu_beliefs=mu_beliefs,
+            targets=targets,
+            lr=0.1,
+        )
+
+        assert not torch.allclose(
+            model.out_proj.weight.data, original_weight
+        ), "Delta rule should modify W_out"
+
+    def test_delta_rule_ignores_padding(self, model_for_pflow, cpu_device):
+        """Test that delta rule excludes padding positions from update."""
+        model = model_for_pflow
+        B, N, K = 2, 8, model.config['embed_dim']
+        V = model.config['vocab_size']
+        pad_id = 0
+
+        mu_beliefs = torch.randn(B, N, K) * 0.1
+
+        # All-padding batch should produce no update
+        targets_all_pad = torch.full((B, N), pad_id, dtype=torch.long)
+
+        original_weight = model.out_proj.weight.data.clone()
+        model.delta_rule_update_w_out(
+            mu_beliefs=mu_beliefs,
+            targets=targets_all_pad,
+            lr=0.1,
+            pad_token_id=pad_id,
+        )
+
+        assert torch.allclose(
+            model.out_proj.weight.data, original_weight
+        ), "Delta rule should not update W_out when all positions are padding"
+
+    def test_delta_rule_tied_embeddings_safe(self, minimal_config, cpu_device):
+        """Test that delta rule with tied embeddings doesn't crash."""
+        from transformer.core.model import GaugeTransformerLM
+
+        config = minimal_config.copy()
+        config['tie_embeddings'] = True
+        model = GaugeTransformerLM(config).to(cpu_device)
+
+        B, N, K = 2, 8, config['embed_dim']
+        V = config['vocab_size']
+
+        mu_beliefs = torch.randn(B, N, K) * 0.1
+        targets = torch.randint(0, V, (B, N))
+
+        # Should not crash even with tied weights
+        model.delta_rule_update_w_out(
+            mu_beliefs=mu_beliefs,
+            targets=targets,
+            lr=0.1,
+        )
+
+        # Verify weight is still shared
+        assert model.out_proj.weight is model.token_embed.mu_embed.weight

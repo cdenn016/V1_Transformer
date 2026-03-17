@@ -1328,8 +1328,15 @@ class PublicationTrainer(FastTrainer):
         # Check if using delta rule for W_out (backprop-free)
         use_delta_rule = getattr(self.config, 'use_delta_rule_w_out', False) and not is_standard
 
-        # If delta rule is enabled, exclude W_out from backprop
-        if use_delta_rule and hasattr(self.model, 'out_proj'):
+        # If delta rule is enabled, exclude W_out from backprop.
+        # When tie_embeddings=True, out_proj.weight IS mu_embed.weight (same tensor),
+        # so we must NOT disable requires_grad (it would kill embedding gradients too).
+        # Instead, we zero out the out_proj gradient after backward.
+        _tied_weights = (use_delta_rule and hasattr(self.model, 'out_proj')
+                         and hasattr(self.model, 'token_embed')
+                         and hasattr(self.model.token_embed, 'mu_embed')
+                         and self.model.out_proj.weight is self.model.token_embed.mu_embed.weight)
+        if use_delta_rule and hasattr(self.model, 'out_proj') and not _tied_weights:
             self.model.out_proj.weight.requires_grad = False
 
         # Forward pass with full metrics (with optional AMP)
@@ -1475,8 +1482,8 @@ class PublicationTrainer(FastTrainer):
                             pb_phi.data, self._slk_trace_vec
                         )
 
-        # Re-enable requires_grad for W_out if it was disabled
-        if use_delta_rule and hasattr(self.model, 'out_proj'):
+        # Re-enable requires_grad for W_out if it was disabled (non-tied case)
+        if use_delta_rule and hasattr(self.model, 'out_proj') and not _tied_weights:
             self.model.out_proj.weight.requires_grad = True
 
         # =================================================================
@@ -1498,6 +1505,7 @@ class PublicationTrainer(FastTrainer):
                     mu_beliefs=mu_beliefs,
                     prediction_errors=ce_per_position,
                     ema_decay=ema_decay,
+                    pad_token_id=self.pad_token_id,
                 )
 
         # =================================================================
@@ -1507,7 +1515,7 @@ class PublicationTrainer(FastTrainer):
         # Combined with P-flow, this makes learning fully backprop-free!
         if use_delta_rule and 'p_flow/mu_q' in full_metrics:
             mu_beliefs = full_metrics['p_flow/mu_q']
-            delta_lr = getattr(self.config, 'delta_rule_lr', 0.001)
+            delta_lr = getattr(self.config, 'delta_rule_lr', 0.1)
 
             # Call delta rule update on the model
             if hasattr(self.model, 'delta_rule_update_w_out'):
@@ -1515,6 +1523,7 @@ class PublicationTrainer(FastTrainer):
                     mu_beliefs=mu_beliefs,
                     targets=target_ids,
                     lr=delta_lr,
+                    pad_token_id=self.pad_token_id,
                 )
 
         # Format comprehensive metrics

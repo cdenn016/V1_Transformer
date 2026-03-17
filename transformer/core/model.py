@@ -1147,6 +1147,7 @@ class GaugeTransformerLM(nn.Module):
         mu_beliefs: torch.Tensor,          # (B, N, K) final beliefs after VFE
         prediction_errors: torch.Tensor,   # (B, N) per-position CE loss
         ema_decay: float = 0.99,           # EMA decay (higher = slower)
+        pad_token_id: int = -1,            # Padding token ID to ignore
     ):
         """
         P-flow: Update token embeddings toward successful beliefs.
@@ -1161,6 +1162,7 @@ class GaugeTransformerLM(nn.Module):
             mu_beliefs: (B, N, K) final belief means after VFE
             prediction_errors: (B, N) per-position CE loss
             ema_decay: EMA decay rate (0.99 = slow, 0.9 = faster)
+            pad_token_id: Token ID for padding positions (excluded from update)
         """
         if self.use_prior_bank and self.prior_bank is not None:
             # PriorBank has its own update mechanism
@@ -1177,13 +1179,15 @@ class GaugeTransformerLM(nn.Module):
                 mu_beliefs=mu_beliefs,
                 prediction_errors=prediction_errors,
                 ema_decay=ema_decay,
+                pad_token_id=pad_token_id,
             )
 
     def delta_rule_update_w_out(
         self,
         mu_beliefs: torch.Tensor,          # (B, N, K) final beliefs after VFE
         targets: torch.Tensor,             # (B, N) target token IDs
-        lr: float = 0.001,                 # Learning rate for delta rule
+        lr: float = 0.1,                   # Learning rate for delta rule
+        pad_token_id: int = -1,            # Padding token ID to ignore
     ):
         """
         Delta rule update for W_out - backprop-free learning.
@@ -1199,7 +1203,8 @@ class GaugeTransformerLM(nn.Module):
         Args:
             mu_beliefs: (B, N, K) final belief means after VFE
             targets: (B, N) target token indices
-            lr: Learning rate for delta rule update
+            lr: Learning rate for delta rule update (default 0.1)
+            pad_token_id: Token ID for padding positions (excluded from update)
         """
         if self.use_prior_bank and self.prior_bank is not None:
             # PriorBank has no W_out — decode is KL-based, priors update via backprop
@@ -1209,24 +1214,33 @@ class GaugeTransformerLM(nn.Module):
             B, N, K = mu_beliefs.shape
             V = self.config['vocab_size']
 
+            # Mask out padding positions
+            valid_mask = (targets != pad_token_id)  # (B, N)
+            n_valid = valid_mask.sum().item()
+            if n_valid == 0:
+                return
+
             # Get current predictions: softmax(W_out @ mu)
             logits = self.out_proj(mu_beliefs)  # (B, N, V)
             predictions = F.softmax(logits, dim=-1)  # (B, N, V)
 
-            # One-hot encode targets
-            targets_onehot = F.one_hot(targets, num_classes=V).float()  # (B, N, V)
+            # One-hot encode targets (clamp pad tokens to 0 for valid one-hot)
+            targets_safe = targets.clone()
+            targets_safe[~valid_mask] = 0
+            targets_onehot = F.one_hot(targets_safe, num_classes=V).float()  # (B, N, V)
 
-            # Prediction error: (target - prediction)
+            # Prediction error: (target - prediction), zeroed at padding positions
             error = targets_onehot - predictions  # (B, N, V)
+            error = error * valid_mask.unsqueeze(-1).float()  # Zero out pad positions
 
-            # Delta rule: ΔW = error^T @ mu (outer product averaged over batch & positions)
+            # Delta rule: ΔW = error^T @ mu (outer product averaged over valid positions)
             # W_out shape is (V, K), so we need: (V, K) += (B*N, V)^T @ (B*N, K)
             error_flat = error.reshape(-1, V)  # (B*N, V)
             mu_flat = mu_beliefs.reshape(-1, K)  # (B*N, K)
 
             # Compute delta: (V, K) = (V, B*N) @ (B*N, K)
             delta_W = error_flat.t() @ mu_flat  # (V, K)
-            delta_W /= (B * N)  # Average over batch and positions
+            delta_W /= n_valid  # Average over valid (non-padded) positions
 
             # Apply update to W_out
             self.out_proj.weight.add_(lr * delta_W)
