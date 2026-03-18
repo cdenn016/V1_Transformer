@@ -710,6 +710,7 @@ def _fused_attention_and_vfe_gradients_block_diag(
     mask_self_attention: bool = False,
     use_rope: bool = False,
     rope_base: float = 10000.0,
+    rope_mode: str = 'rotate',
     return_kl: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
     """
@@ -771,7 +772,15 @@ def _fused_attention_and_vfe_gradients_block_diag(
     sigma_p_safe = sigma_p.clamp(min=eps)
 
     # Apply RoPE to a copy of mu for KL computation (not for gradients)
-    if use_rope:
+    # 'rotate' mode: standard belief rotation; 'logit_bias' mode: additive bias on logits
+    _rope_logit_bias = None
+    if use_rope and rope_mode == 'logit_bias':
+        from transformer.core.attention import _compute_rope_logit_bias
+        _rope_logit_bias = _compute_rope_logit_bias(
+            K, N, base=rope_base, device=device, dtype=torch.float32
+        )
+        mu_q_rope = mu_q  # No rotation in logit_bias mode
+    elif use_rope:
         from transformer.core.attention import _apply_rope
         mu_q_rope = _apply_rope(mu_q, base=rope_base)
     else:
@@ -865,6 +874,11 @@ def _fused_attention_and_vfe_gradients_block_diag(
     # Compute attention weights from KL values
     dim_scale = math.sqrt(max(K, 1))
     logits = -kl_values / (kappa * dim_scale)
+
+    # RoPE logit bias: add position signal directly to logits
+    if _rope_logit_bias is not None:
+        rope_scale = 1.0 / (kappa * dim_scale)
+        logits = logits + rope_scale * _rope_logit_bias.unsqueeze(0)
 
     if mask is not None:
         logits = logits.masked_fill(mask == 0, float('-inf'))
@@ -1905,6 +1919,7 @@ class VariationalFFNDynamic(nn.Module):
         # Rotary Position Embeddings (RoPE) — must match attention sublayer setting
         use_rope: bool = False,
         rope_base: float = 10000.0,
+        rope_mode: str = 'rotate',  # 'rotate' or 'logit_bias'
         exact_diagonal_transport: bool = False,  # Lift diagonal σ for exact transport
     ):
         """
@@ -1975,6 +1990,7 @@ class VariationalFFNDynamic(nn.Module):
         # RoPE: store so VFE iterations apply the same position encoding as attention
         self._use_rope_vfe = use_rope
         self._rope_base_vfe = rope_base
+        self._rope_mode_vfe = rope_mode
         if analytic_phi_grad:
             print(f"[VariationalFFNDynamic] Analytic φ gradient enabled (dexp_order={analytic_phi_grad_dexp_order})")
             print(f"  → Bypasses autograd for ∂F/∂φ, saving ~250MB per phi update")
@@ -2810,6 +2826,7 @@ class VariationalFFNDynamic(nn.Module):
                             mask_self_attention=self.mask_self_attention,
                             use_rope=self._use_rope_vfe,
                             rope_base=self._rope_base_vfe,
+                            rope_mode=self._rope_mode_vfe,
                         )
                     else:
                         # Fallback: separate attention + gradient (full covariance)
@@ -2825,6 +2842,7 @@ class VariationalFFNDynamic(nn.Module):
                             cached_block_exp_pairs=_head_bep,
                             use_rope=self._use_rope_vfe,
                             rope_base=self._rope_base_vfe,
+                            rope_mode=self._rope_mode_vfe,
                             exact_diagonal_transport=self.exact_diagonal_transport,
                         )
                         grad_mu_h, grad_sigma_h = compute_vfe_gradients_gpu(
@@ -2918,6 +2936,7 @@ class VariationalFFNDynamic(nn.Module):
                         mask_self_attention=self.mask_self_attention,
                         use_rope=self._use_rope_vfe,
                         rope_base=self._rope_base_vfe,
+                        rope_mode=self._rope_mode_vfe,
                     )
                 else:
                     # Fallback: separate attention + gradient
@@ -2934,6 +2953,7 @@ class VariationalFFNDynamic(nn.Module):
                         cached_block_exp_pairs=_cached_bep,
                         use_rope=self._use_rope_vfe,
                         rope_base=self._rope_base_vfe,
+                        rope_mode=self._rope_mode_vfe,
                         exact_diagonal_transport=self.exact_diagonal_transport,
                     )
                     grad_mu, grad_sigma = compute_vfe_gradients_gpu(

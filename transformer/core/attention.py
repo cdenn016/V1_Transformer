@@ -104,6 +104,18 @@ __all__ = [
 # In the gauge-theoretic framework (see GL(K)_attention.tex §3):
 #   Ω_ij^{RoPE} = R(θ_{j-i}) · Ω_ij^{content}
 # where R(θ) ∈ SO(2)^{K/2} ⊂ GL(K) is the position-dependent rotation.
+#
+# TWO MODES:
+#   'rotate' (default): Rotates μ before KL computation. Position signal enters
+#     through the Mahalanobis term: ||R_i μ_i - Ω_ij R_j μ_j||²/σ. Works well
+#     when beliefs have similar magnitudes, but with PriorBank the content-based
+#     KL (||μ_A - μ_B||²) can dominate the position signal since they're additive.
+#
+#   'logit_bias': Computes a RoPE-derived position bias and adds it directly to
+#     attention logits (like ALiBi but with RoPE multi-frequency structure).
+#     The bias is: -Σ_d w_d · 2sin²(freq_d · (j-i) / 2) where w_d are learned
+#     or derived from belief magnitudes. This keeps position signal independent
+#     of content KL magnitude, fixing the PriorBank compatibility issue.
 # =============================================================================
 
 def _build_rope_freqs(K: int, base: float = 10000.0,
@@ -153,6 +165,58 @@ def _apply_rope(mu: torch.Tensor, base: float = 10000.0) -> torch.Tensor:
     mu_rotated[:, :, 1:2*half_K:2] = mu_even * sin_angles + mu_odd * cos_angles
 
     return mu_rotated
+
+
+def _compute_rope_logit_bias(
+    K: int,
+    N: int,
+    base: float = 10000.0,
+    device: torch.device = None,
+    dtype: torch.dtype = None,
+) -> torch.Tensor:
+    """Compute RoPE-derived additive logit bias for KL-based attention.
+
+    Instead of rotating beliefs (which buries position signal in KL distances),
+    this computes a position-dependent bias added directly to attention logits.
+
+    The bias uses the same multi-frequency structure as RoPE:
+        bias[i,j] = -Σ_d 2·sin²(freq_d · (j-i) / 2)
+
+    This is equivalent to the position contribution from RoPE rotations when
+    beliefs have unit magnitude, but applied additively to logits so it isn't
+    dominated by content-based KL divergences.
+
+    Args:
+        K: Belief dimension (determines number of frequency bands)
+        N: Sequence length
+        base: RoPE frequency base
+        device: Target device
+        dtype: Target dtype
+
+    Returns:
+        bias: (N, N) position bias matrix (negative values, to be added to logits)
+    """
+    half_K = K // 2
+    if half_K == 0:
+        return torch.zeros(N, N, device=device, dtype=dtype)
+
+    freqs = _build_rope_freqs(K, base, device=device, dtype=dtype)  # (K//2,)
+    positions = torch.arange(N, device=device, dtype=dtype)  # (N,)
+
+    # Relative positions: (N, N) where rel_pos[i,j] = j - i
+    rel_pos = positions.unsqueeze(0) - positions.unsqueeze(1)  # (N, N)
+
+    # Angles for each frequency band: (N, N, K//2)
+    angles = rel_pos.unsqueeze(-1) * freqs.unsqueeze(0).unsqueeze(0)  # (N, N, K//2)
+
+    # RoPE distance contribution: 2·sin²(θ/2) = 1 - cos(θ)
+    # This matches the squared distance ||R_i·e_d - R_j·e_d||² for unit vectors
+    per_freq_dist = 1.0 - torch.cos(angles)  # (N, N, K//2)
+
+    # Sum across frequency bands, normalize by K//2 for scale invariance
+    bias = -per_freq_dist.sum(dim=-1) / half_K  # (N, N)
+
+    return bias
 
 
 # =============================================================================
@@ -354,6 +418,7 @@ def compute_attention_weights(
     # Rotary Position Embeddings (RoPE)
     use_rope: bool = False,            # If True, apply RoPE rotations to μ before KL computation
     rope_base: float = 10000.0,        # RoPE frequency base
+    rope_mode: str = 'rotate',         # 'rotate': rotate beliefs (default), 'logit_bias': additive position bias
     # Cached block exponentials (avoids redundant fused_block_matrix_exp_pairs calls)
     cached_block_exp_pairs: Optional[list] = None,
     # Exact diagonal transport: lift diagonal σ to full for exact Ω@diag(σ)@Ω^T
@@ -453,9 +518,20 @@ def compute_attention_weights(
     # RoPE: Apply position-dependent SO(2)^{K/2} rotations to belief means
     # This makes KL(q_i || Ω_ij[q_j]) sensitive to relative position (j-i).
     # Applied ONLY to attention scores, NOT to message aggregation values.
+    #
+    # 'rotate' mode: standard RoPE rotation of beliefs (position enters KL)
+    # 'logit_bias' mode: additive bias on logits (position independent of content KL)
     # =========================================================================
+    _rope_logit_bias = None
     if use_rope:
-        mu_q = _apply_rope(mu_q, base=rope_base)
+        if rope_mode == 'logit_bias':
+            # Compute RoPE-derived position bias (added to logits later)
+            _rope_logit_bias = _compute_rope_logit_bias(
+                K, num_agents, base=rope_base, device=device, dtype=dtype
+            )
+        else:
+            # Default: rotate beliefs
+            mu_q = _apply_rope(mu_q, base=rope_base)
 
     # =========================================================================
     # Compute all pairwise KL divergences: KL(q_i || Ω_ij[q_j])
@@ -566,6 +642,17 @@ def compute_attention_weights(
         # Apply slope (typically negative to favor recent tokens)
         alibi_bias = alibi_slope * rel_pos  # (N, N)
         logits = logits + alibi_bias.unsqueeze(0)  # (B, N, N)
+
+    # ==========================================================================
+    # RoPE LOGIT BIAS: When rope_mode='logit_bias', add position bias directly
+    # to logits. This keeps the position signal independent of content-based KL,
+    # fixing the PriorBank compatibility issue where content KL dominates.
+    # The bias is scaled by 1/(κ·√K) to match KL logit scale.
+    # ==========================================================================
+    if _rope_logit_bias is not None:
+        # Scale by inverse temperature to match KL logit magnitudes
+        rope_scale = 1.0 / (kappa * dim_scale)
+        logits = logits + rope_scale * _rope_logit_bias.unsqueeze(0)  # (B, N, N)
 
     # Apply causal mask if provided (BEFORE self-attention masking)
     if mask is not None:
@@ -2151,6 +2238,7 @@ class IrrepMultiHeadAttention(nn.Module):
         irrep_dims_override: Optional[List[int]] = None,  # Override block dims (for cross-head coupling)
         use_rope: bool = False,  # If True, apply RoPE rotations to μ before KL computation
         rope_base: float = 10000.0,  # RoPE frequency base
+        rope_mode: str = 'rotate',  # 'rotate': rotate beliefs, 'logit_bias': additive position bias
         exact_diagonal_transport: bool = False,  # Lift diagonal σ for exact transport
     ):
         """
@@ -2200,6 +2288,7 @@ class IrrepMultiHeadAttention(nn.Module):
         self.enforce_orthogonal = enforce_orthogonal
         self.use_rope = use_rope
         self.rope_base = rope_base
+        self.rope_mode = rope_mode
 
         # Build irrep block structure
         self.irrep_dims = []
@@ -2557,6 +2646,7 @@ class IrrepMultiHeadAttention(nn.Module):
                     enforce_orthogonal=self.enforce_orthogonal,
                     use_rope=self.use_rope,
                     rope_base=self.rope_base,
+                    rope_mode=self.rope_mode,
                     exact_diagonal_transport=self.exact_diagonal_transport,
                 )  # (B, N, N), (B, N, N)
                 all_attention_weights.append(beta_head)
@@ -2581,6 +2671,7 @@ class IrrepMultiHeadAttention(nn.Module):
                     enforce_orthogonal=self.enforce_orthogonal,
                     use_rope=self.use_rope,
                     rope_base=self.rope_base,
+                    rope_mode=self.rope_mode,
                     exact_diagonal_transport=self.exact_diagonal_transport,
                 )  # (B, N, N)
                 kl_head = None

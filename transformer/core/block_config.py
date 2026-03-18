@@ -98,6 +98,7 @@ class BlockConfig:
     alibi_slope: Optional[float] = None    # ALiBi positional bias (negative = recency)
     use_rope: bool = False                 # Rotary position embeddings on μ before KL
     rope_base: float = 10000.0             # RoPE frequency base
+    rope_mode: str = 'rotate'              # 'rotate': rotate beliefs, 'logit_bias': additive position bias (better with PriorBank)
 
     # === Memory efficiency ===
     ffn_irrep_dims: Optional[List[int]] = None  # Block dims for block-diagonal KL decomposition
@@ -187,6 +188,7 @@ class BlockConfig:
             alibi_slope=config.get('alibi_slope', None),
             use_rope=config.get('use_rope', False),
             rope_base=config.get('rope_base', 10000.0),
+            rope_mode=config.get('rope_mode', 'rotate'),
             # Memory efficiency
             ffn_irrep_dims=ffn_irrep_dims,
             ffn_chunk_size=config.get('ffn_chunk_size', None),
