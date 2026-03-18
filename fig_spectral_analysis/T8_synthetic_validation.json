@@ -1,0 +1,75 @@
+{
+  "experiment": "T8 Synthetic Validation",
+  "checks": {
+    "gl_plus_all_positive_det": true,
+    "mixed_approx_half_positive": true,
+    "gl_plus_entropy_decreasing": true,
+    "random_no_significant_trend": true,
+    "all_passed": true
+  },
+  "details": {
+    "synthetic_GL+": {
+      "determinant": {
+        "n_positive": 144,
+        "n_negative": 0,
+        "n_zero": 0,
+        "n_total": 144,
+        "fraction_positive": 1.0,
+        "gl_plus_holds": true,
+        "log_abs_det_mean": -180.0992506547681,
+        "log_abs_det_std": 99.26709379788583
+      },
+      "entropy_regression": {
+        "slope": -0.030921514996932284,
+        "intercept": 0.8528960847582876,
+        "r_value": -0.9964577382735884,
+        "p_value": 4.366043817680489e-12,
+        "std_err": 0.0008252247862148291,
+        "decreasing": true,
+        "significant": true
+      }
+    },
+    "synthetic_mixed": {
+      "determinant": {
+        "n_positive": 72,
+        "n_negative": 72,
+        "n_zero": 0,
+        "n_total": 144,
+        "fraction_positive": 0.5,
+        "gl_plus_holds": false,
+        "log_abs_det_mean": -19.45907265845844,
+        "log_abs_det_std": 2.600035891037538
+      },
+      "entropy_regression": {
+        "slope": 6.897504679015515e-05,
+        "intercept": 0.8671474324159039,
+        "r_value": 0.1375418488701757,
+        "p_value": 0.6699118062902575,
+        "std_err": 0.00015707600705711184,
+        "decreasing": false,
+        "significant": false
+      }
+    },
+    "synthetic_random": {
+      "determinant": {
+        "n_positive": 66,
+        "n_negative": 78,
+        "n_zero": 0,
+        "n_total": 144,
+        "fraction_positive": 0.4583333333333333,
+        "gl_plus_holds": false,
+        "log_abs_det_mean": -47.46241485285581,
+        "log_abs_det_std": 1.9818021580711007
+      },
+      "entropy_regression": {
+        "slope": -2.7580491941839878e-05,
+        "intercept": 0.981134309338933,
+        "r_value": -0.19316552096091738,
+        "p_value": 0.5475013716671143,
+        "std_err": 4.430114698506055e-05,
+        "decreasing": true,
+        "significant": false
+      }
+    }
+  }
+}
