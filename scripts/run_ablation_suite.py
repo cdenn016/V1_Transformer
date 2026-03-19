@@ -480,6 +480,18 @@ def run_sweep(
                 with open(run_dir / 'ablation_result.json', 'w') as f:
                     json.dump(result, f, indent=2)
 
+                # Save per-run CSV (individual + append to sweep CSV)
+                run_df = pd.DataFrame([result])
+                run_df.to_csv(run_dir / 'run_result.csv', index=False)
+
+                sweep_csv = sweep_dir / 'sweep_results.csv'
+                run_df.to_csv(
+                    sweep_csv,
+                    mode='a',
+                    header=not sweep_csv.exists(),
+                    index=False,
+                )
+
                 print(f"  -> Val PPL: {result['final_ppl']:.2f}, "
                       f"Test PPL: {result.get('test_ppl', 'N/A')}, "
                       f"Time: {elapsed:.0f}s")
