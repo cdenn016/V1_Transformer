@@ -24,8 +24,8 @@ def safe_inverse(M, eps=1e-6):
     """Robust matrix inverse with conditioning check."""
     try:
         return torch.linalg.inv(M)
-    except torch.linalg.LinAlgError:
-        # Add regularization
+    except (torch.linalg.LinAlgError, RuntimeError):
+        # Add regularization (RuntimeError can occur on CUDA for singular matrices)
         eye = torch.eye(M.shape[-1], device=M.device, dtype=M.dtype)
         return torch.linalg.inv(M + eps * eye.expand_as(M))
 
@@ -35,9 +35,11 @@ def safe_logdet(M):
     try:
         L = torch.linalg.cholesky(M)
         return 2.0 * torch.diagonal(L, dim1=-2, dim2=-1).log().sum(-1)
-    except torch.linalg.LinAlgError:
+    except (torch.linalg.LinAlgError, RuntimeError):
+        # RuntimeError can occur on CUDA for non-PD matrices
         sign, logabsdet = torch.linalg.slogdet(M)
-        return logabsdet
+        # For SPD matrices sign should be +1; clamp to 0 if negative (non-PD)
+        return torch.where(sign > 0, logabsdet, torch.zeros_like(logabsdet))
 
 
 def symmetrize(M):
@@ -185,22 +187,12 @@ def _pairwise_kl_torch(Q, rho, P, nu, ldc_q, ldc_k, causal):
     """Pure PyTorch pairwise KL. [B, H, N, N]."""
     B, H, N, K = rho.shape
 
-    # Trace term: tr(P_j @ Q_i) for all (i, j)
-    # P: [B,H,N,K,K], Q: [B,H,N,K,K]
-    # tr(P_j Q_i) = sum over a,b of P_j[a,b] * Q_i[b,a]
-    # = (P_j * Q_iᵀ).sum(-1,-2)  but we need all pairs...
-    # Efficient: tr(P_j Q_i) = sum_ab P_j[a,b] Q_i[b,a]
-    #   = vec(P_j)ᵀ vec(Q_iᵀ) — a dot product of vectorized matrices
+    # Trace term: tr(P_j Q_i) for all (i, j)
+    # tr(P_j Q_i) = Σ_{a,b} P_j[a,b] Q_i[b,a] = vec(P_j) · vec(Q_iᵀ)
     P_flat = P.reshape(B, H, N, K * K)         # [B, H, N, K²]
     Qt_flat = Q.transpose(-2, -1).reshape(B, H, N, K * K)  # Q transposed, then flattened
-    trace_term = torch.einsum('bhin,bhjn->bhij', Qt_flat, P_flat)  # [B, H, N, N]
-    # Wait — this is tr(Q_iᵀ P_j) = tr(P_j Q_iᵀ)ᵀ ... we need tr(P_j Q_i).
-    # tr(P_j Q_i) = Σ_{a,b} P_j[a,b] Q_i[b,a] = Σ_{a,b} P_j[a,b] Qt_i[a,b]
-    # So it's element-wise product summed: (P_j * Qt_i).sum
-    # As a batched operation over pairs: einsum 'bhj(ab),bhi(ab)->bhij'
-    # = P_flat[j] · Qt_flat[i]
+    # Contract over flattened K² dim: result[b,h,j,i] = Σ_k P_flat[j,k] * Qt_flat[i,k] = tr(P_j Q_i)
     trace_term = torch.einsum('bhjk,bhik->bhij', P_flat, Qt_flat)  # [B, H, N_j, N_i]
-    # That gives [B, H, j, i]. We want [B, H, i, j], so transpose:
     trace_term = trace_term.transpose(-2, -1)  # [B, H, N_i, N_j]
 
     # Mahalanobis term: (ρ_i - ν_j)ᵀ P_j (ρ_i - ν_j)
@@ -528,7 +520,6 @@ def kl_decode_logits(mu, Sigma, prior_mu_bank, prior_Sigma_bank):
     chunk_size = min(V, 1024)
     logits = torch.empty(B, N, V, device=mu.device, dtype=mu.dtype)
 
-    Sigma_inv = safe_inverse(Sigma)  # [B, N, K, K]
     logdet_Sigma = safe_logdet(Sigma)  # [B, N]
 
     for v_start in range(0, V, chunk_size):

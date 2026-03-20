@@ -257,10 +257,9 @@ def natural_grad_omega(grad_Omega, Omega):
     """
     Left-invariant natural gradient on GL(K).
 
-    ΔΩ = Ω · (Ω⁻ᵀ · ∂F/∂Ω)
+    ΔΩ = Ω · Ωᵀ · ∂F/∂Ω
 
-    This left-translates the Euclidean gradient to the identity,
-    giving the bi-invariant metric natural gradient.
+    For metric g_Ω(X,Y) = tr((Ω⁻¹X)ᵀ(Ω⁻¹Y)), the natural gradient is Ω Ωᵀ ∂F/∂Ω.
 
     Args:
         grad_Omega: [..., K, K] Euclidean gradient ∂F/∂Ω
