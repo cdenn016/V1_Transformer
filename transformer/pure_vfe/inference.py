@@ -194,8 +194,9 @@ def e_step(token_ids, model, config):
         # Actually fix: Sigma_h_inv from extract is [B,N,H,K,K]
         # precomp['Sigma_inv'] is [B,H,N,K,K] — let's use the direct one
         Sigma_h_inv_bn = Sigma_h_inv  # [B, N, H, K_h, K_h]
+        # Entropy coefficient: α from prior KL + 1 from alignment KL
         grad_Sigma_h = 0.5 * (
-            alpha_expanded * prior_prec_h + weighted_prec - 2.0 * Sigma_h_inv_bn
+            alpha_expanded * prior_prec_h + weighted_prec - (alpha_expanded + 1.0) * Sigma_h_inv_bn
         )
 
         # 4. Natural gradient on SPD: ΔΣ = -2 Σ sym(∂F/∂Σ) Σ

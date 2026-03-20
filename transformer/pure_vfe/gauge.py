@@ -245,11 +245,10 @@ def natural_grad_omega(grad_Omega, Omega):
 
     Returns: [..., K, K] natural gradient direction
     """
-    Omega_invT = torch.linalg.inv(Omega).transpose(-2, -1)
-    # Lie algebra element: Ω⁻ᵀ ∂F/∂Ω
-    lie_grad = Omega_invT @ grad_Omega
-    # Left-translate back: Ω · lie_grad
-    return Omega @ lie_grad
+    # Lie algebra element via left-invariant metric on GL(K):
+    # g_Ω(X,Y) = tr((Ω⁻¹X)ᵀ(Ω⁻¹Y)), so natural gradient = Ω Ωᵀ ∂F/∂Ω
+    OmegaT = Omega.transpose(-2, -1)
+    return Omega @ OmegaT @ grad_Omega
 
 
 # ---------------------------------------------------------------------------
