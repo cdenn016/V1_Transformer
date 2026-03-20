@@ -180,6 +180,7 @@ class GaugeTransformerBlock(nn.Module):
             analytic_phi_grad_dexp_order=cfg.analytic_phi_grad_dexp_order,
             use_rope=cfg.use_rope,
             rope_base=cfg.rope_base,
+            gauge_param=cfg.gauge_param,
         )
 
         self.norm2 = nn.LayerNorm(cfg.embed_dim) if cfg.use_layernorm else nn.Identity()
@@ -222,6 +223,7 @@ class GaugeTransformerBlock(nn.Module):
         targets: Optional[torch.Tensor] = None,
         W_out: Optional[torch.Tensor] = None,
         cached_head_transports: Optional[list] = None,
+        omega: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Forward pass through transformer block.
@@ -281,6 +283,25 @@ class GaugeTransformerBlock(nn.Module):
                 dim_start += d
 
         # Multi-head attention (gauge-theoretic!)
+        # For direct omega mode: build per-head cached transports from omega blocks
+        # so the attention sublayer uses Omega_h / Omega_h_inv instead of matrix_exp.
+        if omega is not None and getattr(self.ffn, 'gauge_param', 'phi') == 'omega' and cached_head_transports is None:
+            from transformer.core.attention import compute_transport_operators_direct
+            irrep_dims = self.attention.irrep_dims
+            B, N = mu_q.shape[:2]
+            cached_head_transports = []
+            block_start = 0
+            for d_h in irrep_dims:
+                omega_h = omega[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
+                omega_h_inv = torch.linalg.inv(omega_h)
+                # Build pairwise Omega_ij = Omega_i @ Omega_j_inv
+                Omega_h_ij = torch.einsum('bnik,bnjk->bnij', omega_h.unsqueeze(2).expand(-1,-1,N,-1,-1),
+                                           omega_h_inv.unsqueeze(1).expand(-1,N,-1,-1,-1).transpose(-2,-1))
+                # Actually simpler: Omega_ij[b,i,j] = omega_h[b,i] @ omega_h_inv[b,j]
+                Omega_h_ij = torch.einsum('bimk,bjkn->bijmn', omega_h, omega_h_inv)
+                cached_head_transports.append({'Omega': Omega_h_ij})
+                block_start += d_h
+
         recorder = get_global_recorder() if TRAJECTORY_TRACKING_AVAILABLE else None
         recording_attention = recorder is not None and recorder.enabled and recorder.record_attention
         need_beta = self.ffn_mode == 'VFE_dynamic'
@@ -329,6 +350,7 @@ class GaugeTransformerBlock(nn.Module):
             token_ids=token_ids,
             targets=targets,
             W_out=W_out,
+            omega=omega,
         )
 
         # Update covariances from FFN if evolving
@@ -400,6 +422,7 @@ class GaugeTransformerStack(nn.Module):
         cached_head_transports: Optional[list] = None,
         targets: Optional[torch.Tensor] = None,
         W_out: Optional[torch.Tensor] = None,
+        omega: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[List]]:
         """
         Forward through all transformer blocks sequentially.
@@ -450,6 +473,7 @@ class GaugeTransformerStack(nn.Module):
                             mu, sigma, phi_arg, generators, mask, mu_prior,
                             token_ids=token_ids,
                             cached_head_transports=cached_head_transports,
+                            omega=omega,
                         )
                     return block_fn
 
@@ -465,6 +489,7 @@ class GaugeTransformerStack(nn.Module):
                     cached_head_transports=cached_head_transports,
                     targets=targets if is_final else None,
                     W_out=W_out if is_final else None,
+                    omega=omega,
                 )
 
             # Trajectory recording: record output

@@ -209,6 +209,17 @@ class GaugeTransformerLM(nn.Module):
         if gauge_mode not in ('learned', 'trivial', 'constant'):
             raise ValueError(f"gauge_mode must be 'learned', 'trivial', or 'constant', got '{gauge_mode}'")
 
+        # Gauge parameterization: 'phi' (Lie algebra) or 'omega' (direct GL(K))
+        gauge_param = config.get('gauge_param', 'phi')
+        self.gauge_param = gauge_param
+        # Compute omega_head_dims from irrep_spec for direct omega path
+        if gauge_param == 'omega':
+            self.omega_head_dims = [dim for _, mult, dim in irrep_spec for _ in range(mult)]
+            print(f"[INFO] Direct Omega parameterization: per-head dims {self.omega_head_dims}")
+            print(f"       No matrix_exp needed. Full GL(K) including reflections.")
+        else:
+            self.omega_head_dims = None
+
         # Store gauge group info for position encoding and other components
         self.gauge_group = gauge_group
         self.gauge_dim = gauge_dim
@@ -376,6 +387,9 @@ class GaugeTransformerLM(nn.Module):
             mu_max_norm=config.get('mu_max_norm', None),
             # O(K) reflection: per-token sign vectors extending SO(K) → O(K)
             learnable_reflection=config.get('learnable_reflection', False),
+            # Direct Omega parameterization
+            gauge_param=gauge_param,
+            omega_head_dims=self.omega_head_dims,
         )
 
         # =================================================================
@@ -420,6 +434,8 @@ class GaugeTransformerLM(nn.Module):
                 generators=self.generators if gauge_fixed_priors else None,
                 phi_dim=self.phi_dim,
                 phi_scale=config.get('phi_scale', 0.3),
+                gauge_param=gauge_param,
+                omega_head_dims=self.omega_head_dims,
             )
             print(f"[GaugeTransformerLM] Created PriorBank with token-dependent priors (vocab_size={vocab_size})")
             print(f"                     gauge_fixed_priors={gauge_fixed_priors}, tau={self.prior_bank_tau}")
@@ -427,6 +443,9 @@ class GaugeTransformerLM(nn.Module):
         # =================================================================
         # Transformer Stack
         # =================================================================
+        # Ensure gauge_param is in config for BlockConfig
+        if 'gauge_param' not in config:
+            config['gauge_param'] = gauge_param
         block_cfg = BlockConfig.from_config(
             config,
             generators=self.generators,
@@ -555,11 +574,20 @@ class GaugeTransformerLM(nn.Module):
         # =================================================================
         # 1. Token Embeddings (0D: one per agent at c*, not per spatial point)
         # =================================================================
+        omega = None  # Direct omega matrices (set when gauge_param='omega')
         if self.use_prior_bank and self.prior_bank is not None:
             # PriorBank encode: token → (μ_v, σ_v, φ_v) prior belief
-            mu_q, sigma_q, phi = self.prior_bank.encode(token_ids)
+            embed_out = self.prior_bank.encode(token_ids)
+            if len(embed_out) == 4:
+                mu_q, sigma_q, phi, omega = embed_out
+            else:
+                mu_q, sigma_q, phi = embed_out
         else:
-            mu_q, sigma_q, phi = self.token_embed(token_ids)
+            embed_out = self.token_embed(token_ids)
+            if len(embed_out) == 4:
+                mu_q, sigma_q, phi, omega = embed_out
+            else:
+                mu_q, sigma_q, phi = embed_out
 
         # =================================================================
         # 1b. Cross-Head Permutation (reorder dims for super-block contiguity)
@@ -614,7 +642,18 @@ class GaugeTransformerLM(nn.Module):
         # =================================================================
         # When phi doesn't evolve, we can compute transport operators once
         # and reuse across all layers, saving ~6× matrix exponential calls.
-        if not self.evolve_phi:
+        if omega is not None and self.gauge_param == 'omega':
+            # Direct omega: build per-head cached transports from omega blocks
+            irrep_dims = self.transformer.blocks[0].attention.irrep_dims
+            cached_head_transports = []
+            block_start = 0
+            for d_h in irrep_dims:
+                omega_h = omega[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
+                omega_h_inv = torch.linalg.inv(omega_h)
+                Omega_h_ij = torch.einsum('bimk,bjkn->bijmn', omega_h, omega_h_inv)
+                cached_head_transports.append({'Omega': Omega_h_ij})
+                block_start += d_h
+        elif not self.evolve_phi:
             # Get the first block's attention layer to access head generators
             first_attention = self.transformer.blocks[0].attention
             cached_head_transports = first_attention.precompute_head_transports(
@@ -644,6 +683,7 @@ class GaugeTransformerLM(nn.Module):
             cached_head_transports=cached_head_transports,
             targets=vfe_targets,
             W_out=vfe_W_out,
+            omega=omega,
         )
 
         # =================================================================
@@ -720,10 +760,19 @@ class GaugeTransformerLM(nn.Module):
         device = token_ids.device
 
         # Embeddings
+        omega = None
         if self.use_prior_bank and self.prior_bank is not None:
-            mu_q, sigma_q, phi = self.prior_bank.encode(token_ids)
+            embed_out = self.prior_bank.encode(token_ids)
+            if len(embed_out) == 4:
+                mu_q, sigma_q, phi, omega = embed_out
+            else:
+                mu_q, sigma_q, phi = embed_out
         else:
-            mu_q, sigma_q, phi = self.token_embed(token_ids)
+            embed_out = self.token_embed(token_ids)
+            if len(embed_out) == 4:
+                mu_q, sigma_q, phi, omega = embed_out
+            else:
+                mu_q, sigma_q, phi = embed_out
 
         # Cross-head permutation (same as in forward())
         if getattr(self, '_cross_head_perm', None) is not None:
@@ -754,7 +803,18 @@ class GaugeTransformerLM(nn.Module):
         mask = mask.unsqueeze(0).expand(batch_size, -1, -1)
 
         # Precompute transport operators when evolve_phi=False (saves ~6× matrix exps)
-        if not self.evolve_phi:
+        if omega is not None and self.gauge_param == 'omega':
+            # Direct omega: build per-head cached transports from omega blocks
+            irrep_dims = self.transformer.blocks[0].attention.irrep_dims
+            cached_head_transports = []
+            block_start = 0
+            for d_h in irrep_dims:
+                omega_h = omega[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
+                omega_h_inv = torch.linalg.inv(omega_h)
+                Omega_h_ij = torch.einsum('bimk,bjkn->bijmn', omega_h, omega_h_inv)
+                cached_head_transports.append({'Omega': Omega_h_ij})
+                block_start += d_h
+        elif not self.evolve_phi:
             first_attention = self.transformer.blocks[0].attention
             cached_head_transports = first_attention.precompute_head_transports(
                 phi, device, mu_q.dtype
@@ -810,6 +870,7 @@ class GaugeTransformerLM(nn.Module):
                 targets=targets if is_final else None,  # Only final layer gets observations
                 W_out=self.out_proj.weight if hasattr(self.out_proj, 'weight') else None,
                 token_ids=token_ids,  # Required for PriorBank lookup
+                omega=omega,
             )
 
             if block.evolve_sigma and sigma_ffn is not None:
@@ -899,10 +960,19 @@ class GaugeTransformerLM(nn.Module):
         device = token_ids.device
 
         # Embeddings
+        omega = None
         if self.use_prior_bank and self.prior_bank is not None:
-            mu_q, sigma_q, phi = self.prior_bank.encode(token_ids)
+            embed_out = self.prior_bank.encode(token_ids)
+            if len(embed_out) == 4:
+                mu_q, sigma_q, phi, omega = embed_out
+            else:
+                mu_q, sigma_q, phi = embed_out
         else:
-            mu_q, sigma_q, phi = self.token_embed(token_ids)
+            embed_out = self.token_embed(token_ids)
+            if len(embed_out) == 4:
+                mu_q, sigma_q, phi, omega = embed_out
+            else:
+                mu_q, sigma_q, phi = embed_out
 
         # Cross-head permutation (same as in forward())
         if getattr(self, '_cross_head_perm', None) is not None:
@@ -930,7 +1000,17 @@ class GaugeTransformerLM(nn.Module):
         mask = mask.unsqueeze(0).expand(batch_size, -1, -1)
 
         # Precompute transport operators
-        if not self.evolve_phi:
+        if omega is not None and self.gauge_param == 'omega':
+            irrep_dims = self.transformer.blocks[0].attention.irrep_dims
+            cached_head_transports = []
+            block_start = 0
+            for d_h in irrep_dims:
+                omega_h = omega[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
+                omega_h_inv = torch.linalg.inv(omega_h)
+                Omega_h_ij = torch.einsum('bimk,bjkn->bijmn', omega_h, omega_h_inv)
+                cached_head_transports.append({'Omega': Omega_h_ij})
+                block_start += d_h
+        elif not self.evolve_phi:
             first_attention = self.transformer.blocks[0].attention
             cached_head_transports = first_attention.precompute_head_transports(
                 phi, device, mu_q.dtype
@@ -981,6 +1061,7 @@ class GaugeTransformerLM(nn.Module):
                 W_out=self.out_proj.weight if hasattr(self.out_proj, 'weight') else None,
                 return_beta_history=is_final,  # Only final layer tracks VFE iterations
                 token_ids=token_ids,  # Required for PriorBank lookup
+                omega=omega,
             )
 
             if is_final:

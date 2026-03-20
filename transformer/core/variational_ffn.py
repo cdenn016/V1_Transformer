@@ -1906,6 +1906,7 @@ class VariationalFFNDynamic(nn.Module):
         use_rope: bool = False,
         rope_base: float = 10000.0,
         exact_diagonal_transport: bool = False,  # Lift diagonal σ for exact transport
+        gauge_param: str = 'phi',  # 'phi' (Lie algebra) or 'omega' (direct GL(K))
     ):
         """
         Initialize dynamic-beta VFE FFN.
@@ -1962,6 +1963,7 @@ class VariationalFFNDynamic(nn.Module):
         self.embed_dim = embed_dim
         self.register_buffer('generators', generators)
         self.n_iterations = n_iterations
+        self.gauge_param = gauge_param
         self.mask_self_attention = mask_self_attention
         self.update_sigma = update_sigma
         self.diagonal_covariance = diagonal_covariance
@@ -2866,7 +2868,14 @@ class VariationalFFNDynamic(nn.Module):
             # Skip caching when using block-diagonal or chunked paths (they
             # compute transport internally in chunks to save memory).
             if self.irrep_dims is None and self.chunk_size is None and not self.multihead_vfe:
-                if self.gauge_mode == 'constant' and self.constant_omega is not None:
+                if omega_current is not None and self.gauge_param == 'omega':
+                    # Direct omega: build full-K transport from omega blocks
+                    from transformer.core.attention import compute_transport_operators_direct
+                    cached_transport = compute_transport_operators_direct(
+                        omega=omega_current,
+                        irrep_dims=self.irrep_dims if self.irrep_dims is not None else [self.embed_dim],
+                    )
+                elif self.gauge_mode == 'constant' and self.constant_omega is not None:
                     # Constant gauge with known Ω: build full-K transport from
                     # per-head constant_omega blocks (non-block-diagonal path).
                     K = mu_current.shape[-1]
@@ -2927,7 +2936,17 @@ class VariationalFFNDynamic(nn.Module):
                 # causing 2×n_heads redundant matrix_exp calls per VFE iteration.
                 _mh_cached_bep = None
                 if self.irrep_dims is not None:
-                    if self.gauge_mode == 'trivial':
+                    if omega_current is not None and self.gauge_param == 'omega':
+                        # Direct omega path: build (Omega_h, Omega_h_inv) per head
+                        # from the block-diagonal omega matrix. No matrix_exp needed.
+                        _mh_cached_bep = []
+                        block_start = 0
+                        for d_h in self.irrep_dims:
+                            omega_h = omega_current[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
+                            omega_h_inv = torch.linalg.inv(omega_h)
+                            _mh_cached_bep.append((omega_h, omega_h_inv))
+                            block_start += d_h
+                    elif self.gauge_mode == 'trivial':
                         # No matrix exponentials needed: Ω = I for all blocks.
                         # 'trivial': global frame (no transport).
                         _mh_cached_bep = []
@@ -3077,7 +3096,16 @@ class VariationalFFNDynamic(nn.Module):
                 # =============================================================
                 _cached_bep = None
                 if self.irrep_dims is not None:
-                    if self.gauge_mode == 'trivial':
+                    if omega_current is not None and self.gauge_param == 'omega':
+                        # Direct omega path: build (Omega_h, Omega_h_inv) per head
+                        _cached_bep = []
+                        block_start = 0
+                        for d_h in self.irrep_dims:
+                            omega_h = omega_current[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
+                            omega_h_inv = torch.linalg.inv(omega_h)
+                            _cached_bep.append((omega_h, omega_h_inv))
+                            block_start += d_h
+                    elif self.gauge_mode == 'trivial':
                         _cached_bep = []
                         for d_h in self.irrep_dims:
                             eye_h = torch.eye(d_h, device=mu_current.device,
