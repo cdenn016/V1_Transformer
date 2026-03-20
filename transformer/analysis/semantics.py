@@ -848,7 +848,66 @@ def extract_omega(
         (omega, gauge_label) where omega is (n_tokens, K, K) on CPU,
         or None if extraction fails.
     """
-    # --- locate phi_embed ---
+    # --- Try direct omega_embed first (gauge_param='omega') ---
+    omega_embed = None
+    omega_head_dims = None
+    for attr_path in [
+        ('omega_embed',),
+        ('token_embed', 'omega_embed'),
+        ('token_embedding', 'omega_embed'),
+    ]:
+        obj = model
+        for a in attr_path:
+            obj = getattr(obj, a, None)
+            if obj is None:
+                break
+        if obj is not None:
+            omega_embed = obj
+            break
+
+    if omega_embed is not None:
+        # Direct omega path: reshape flat embedding to block-diagonal K×K
+        # Locate omega_head_dims from model
+        for attr in ['omega_head_dims']:
+            omega_head_dims = getattr(model, attr, None)
+            if omega_head_dims is not None:
+                break
+        if omega_head_dims is None:
+            # Fallback: try to infer from embed_dim / gauge_dim
+            embed_dim = getattr(model, 'embed_dim', None)
+            gauge_dim = getattr(model, 'gauge_dim', None)
+            if embed_dim and gauge_dim:
+                n_heads = embed_dim // gauge_dim
+                omega_head_dims = [gauge_dim] * n_heads
+
+        n = min(n_tokens, omega_embed.weight.shape[0])
+        omega_flat = omega_embed.weight[:n].detach().to(device)  # (n, total_params)
+        K = sum(d for d in omega_head_dims) if omega_head_dims else int(omega_flat.shape[1] ** 0.5)
+        omega = torch.zeros(n, K, K, device=device, dtype=omega_flat.dtype)
+        if omega_head_dims is not None:
+            offset = 0
+            block_start = 0
+            for d in omega_head_dims:
+                omega_blk = omega_flat[:, offset:offset + d * d].reshape(n, d, d)
+                omega[:, block_start:block_start + d, block_start:block_start + d] = omega_blk
+                offset += d * d
+                block_start += d
+        else:
+            # Single block: assume square
+            d = int(omega_flat.shape[1] ** 0.5)
+            omega = omega_flat.reshape(n, d, d)
+
+        omega = omega.float().cpu()
+
+        gauge_label = None
+        if hasattr(model, 'gauge_group') and hasattr(model, 'gauge_dim'):
+            gauge_label = format_gauge_group_label(model.gauge_group, model.gauge_dim)
+        if gauge_label is None:
+            gauge_label = f'GL({K})'
+
+        return omega, gauge_label
+
+    # --- Fallback: locate phi_embed and compute Ω = exp(φ·G) ---
     phi_embed = None
     for attr_path in [
         ('phi_embed',),
