@@ -70,6 +70,9 @@ class PriorBank(nn.Module):
         generators: Optional[torch.Tensor] = None,  # (n_gen, K, K) Lie algebra generators
         phi_dim: int = 3,  # 3 for SO(3), N(N-1)/2 for SO(N)
         phi_scale: float = 1.0,  # Init scale for gauge frames (non-gauge-fixed mode)
+        # Direct Omega parameterization
+        gauge_param: str = 'phi',  # 'phi' or 'omega'
+        omega_head_dims: Optional[list] = None,  # Per-head dims for omega path
     ):
         """
         Initialize the prior bank.
@@ -92,6 +95,8 @@ class PriorBank(nn.Module):
         self.learnable_sigma = learnable_sigma
         self.gauge_fixed_priors = gauge_fixed_priors
         self.phi_dim = phi_dim
+        self.gauge_param = gauge_param
+        self.omega_head_dims = omega_head_dims
 
         # Dimension-aware initialization: 1/sqrt(K) keeps ||μ||² = O(1)
         if init_std is None:
@@ -134,15 +139,30 @@ class PriorBank(nn.Module):
                     torch.full((vocab_size, embed_dim), math.log(init_sigma_scale))
                 )
 
-            # Per-token gauge frames φ_v — needed for gauge transport even
-            # without gauge-fixed priors. Without this, phi has no gradient path.
-            # IMPORTANT: Scale std inversely with sqrt(phi_dim) to maintain consistent
-            # norm across different GL(K) dimensions, matching GaugeTokenEmbedding.
-            # Without this, ||φ|| ≈ phi_scale * sqrt(phi_dim) which explodes for
-            # large phi_dim (e.g., GL(75): phi_dim=5625, ||φ|| ≈ 22.5 vs target 0.3).
-            self.phi_embed = nn.Embedding(vocab_size, phi_dim)
-            phi_init_std = phi_scale / (phi_dim ** 0.5)
-            nn.init.normal_(self.phi_embed.weight, std=phi_init_std)
+            if gauge_param == 'omega' and omega_head_dims is not None:
+                # Direct Omega parameterization: per-head K_h×K_h matrices
+                total_omega_params = sum(d * d for d in omega_head_dims)
+                self.omega_embed = nn.Embedding(vocab_size, total_omega_params)
+                with torch.no_grad():
+                    omega_scale = phi_scale * 0.1
+                    weight = torch.zeros(vocab_size, total_omega_params)
+                    offset = 0
+                    for d in omega_head_dims:
+                        eye_flat = torch.eye(d).reshape(-1)
+                        weight[:, offset:offset + d * d] = eye_flat.unsqueeze(0) + omega_scale * torch.randn(vocab_size, d * d)
+                        offset += d * d
+                    self.omega_embed.weight.copy_(weight)
+                # Dummy phi_embed for compatibility
+                self.phi_embed = nn.Embedding(vocab_size, phi_dim)
+                nn.init.zeros_(self.phi_embed.weight)
+            else:
+                # Per-token gauge frames φ_v — needed for gauge transport even
+                # without gauge-fixed priors. Without this, phi has no gradient path.
+                # IMPORTANT: Scale std inversely with sqrt(phi_dim) to maintain consistent
+                # norm across different GL(K) dimensions, matching GaugeTokenEmbedding.
+                self.phi_embed = nn.Embedding(vocab_size, phi_dim)
+                phi_init_std = phi_scale / (phi_dim ** 0.5)
+                nn.init.normal_(self.phi_embed.weight, std=phi_init_std)
 
     @property
     def base_prior_sigma(self) -> torch.Tensor:
@@ -220,6 +240,23 @@ class PriorBank(nn.Module):
             sigma_p = self.prior_sigma[token_ids]
             # Learnable per-token gauge frames
             phi = self.phi_embed(token_ids)
+
+            if self.gauge_param == 'omega' and hasattr(self, 'omega_embed'):
+                # Return omega matrices alongside phi (phi is dummy zeros)
+                omega_flat = self.omega_embed(token_ids)
+                K = self.embed_dim
+                omega = torch.zeros(*token_ids.shape, K, K,
+                                    device=token_ids.device, dtype=omega_flat.dtype)
+                offset = 0
+                block_start = 0
+                for d in self.omega_head_dims:
+                    omega_blk = omega_flat[..., offset:offset + d * d].reshape(
+                        *token_ids.shape, d, d)
+                    omega[..., block_start:block_start + d, block_start:block_start + d] = omega_blk
+                    offset += d * d
+                    block_start += d
+                return mu_p, sigma_p, phi, omega
+
             return mu_p, sigma_p, phi
 
     def encode(

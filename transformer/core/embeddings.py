@@ -37,7 +37,7 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
-from typing import Tuple, Optional
+from typing import List, Tuple, Optional
 from transformer.core.gauge_utils import stable_matrix_exp_pair
 
 # Import Lie algebra composition functions
@@ -105,6 +105,9 @@ class GaugeTokenEmbedding(nn.Module):
         use_positional_embedding: bool = False,
         phi_dim: int = 3,  # 3 for SO(3), N(N-1)/2 for SO(N)
         phi_scale: float = 0.3,  # Target ||φ|| norm for gauge frame initialization
+        # Direct Omega parameterization (alternative to phi)
+        gauge_param: str = 'phi',  # 'phi' (Lie algebra) or 'omega' (direct GL(K) matrices)
+        omega_head_dims: Optional[List[int]] = None,  # Per-head dims [K_h1, K_h2, ...] for omega
         # Mean embedding normalization options
         mu_normalize: bool = False,  # If True, project μ to unit sphere
         mu_max_norm: Optional[float] = None,  # If set, clamp ||μ|| ≤ max_norm
@@ -192,6 +195,8 @@ class GaugeTokenEmbedding(nn.Module):
         self.diagonal_covariance = diagonal_covariance
         self.isotropic_covariance = isotropic_covariance
         self.phi_dim = phi_dim
+        self.gauge_param = gauge_param
+        self.omega_head_dims = omega_head_dims
 
         if gauge_fixed_priors and generators is None:
             raise ValueError("gauge_fixed_priors=True requires generators to be provided")
@@ -237,27 +242,33 @@ class GaugeTokenEmbedding(nn.Module):
             )
 
         # =================================================================
-        # Gauge Frame Embeddings φ_i ∈ so(n)
+        # Gauge Frame Embeddings
         # =================================================================
-        # CRITICAL: With gauge_fixed_priors=True, φ defines the token embedding!
-        # μ_i = R(φ_i) @ μ_base, so different φ = different embeddings.
-        # Zero init would make ALL tokens identical - must use random init!
-
-        if learnable_phi or gauge_fixed_priors:
-            # Per-token gauge frame
-            self.phi_embed = nn.Embedding(vocab_size, phi_dim)  # so(n) has phi_dim components
-            # RANDOM init for non-trivial gauge structure from the start!
-            # NOTE: Random init is required BOTH for gauge_fixed_priors=True (where phi
-            # defines token identity) AND for gauge_fixed_priors=False (where phi
-            # provides gauge structure via transport Ω_ij). Zero init makes Ω=I,
-            # completely disabling the gauge-theoretic attention mechanism!
-            # Phi will grow during training via learnable_phi=True.
-            #
+        if gauge_param == 'omega' and omega_head_dims is not None:
+            # Direct Omega parameterization: store K_h×K_h matrices per head.
+            # Covers full GL(K) including reflections. No matrix_exp needed.
+            total_omega_params = sum(d * d for d in omega_head_dims)
+            self.omega_embed = nn.Embedding(vocab_size, total_omega_params)
+            # Initialize near identity: I + scale * randn per head block
+            with torch.no_grad():
+                omega_scale = phi_scale * 0.1  # Small perturbation from identity
+                weight = torch.zeros(vocab_size, total_omega_params)
+                offset = 0
+                for d in omega_head_dims:
+                    eye_flat = torch.eye(d).reshape(-1)  # (d*d,)
+                    weight[:, offset:offset + d * d] = eye_flat.unsqueeze(0) + omega_scale * torch.randn(vocab_size, d * d)
+                    offset += d * d
+                self.omega_embed.weight.copy_(weight)
+            # Dummy phi_base for compatibility (phi won't be used)
+            self.register_buffer('phi_base', torch.zeros(phi_dim))
+        elif learnable_phi or gauge_fixed_priors:
+            # Lie algebra parameterization: φ_i ∈ ℝ^{n_gen}
+            # CRITICAL: With gauge_fixed_priors=True, φ defines the token embedding!
+            # μ_i = R(φ_i) @ μ_base, so different φ = different embeddings.
+            # Zero init would make ALL tokens identical - must use random init!
+            self.phi_embed = nn.Embedding(vocab_size, phi_dim)
             # IMPORTANT: Scale std inversely with sqrt(phi_dim) to maintain consistent
             # norm across different SO(N) dimensions. Target ||φ|| ≈ phi_scale regardless of N.
-            # - SO(3): phi_dim=3, phi_scale=1.0 → std=0.577, ||φ||≈1.0
-            # - SO(50): phi_dim=1225, phi_scale=1.0 → std=0.029, ||φ||≈1.0
-            # - SO(100): phi_dim=4950, phi_scale=1.0 → std=0.014, ||φ||≈1.0
             phi_init_std = phi_scale / (phi_dim ** 0.5)
             nn.init.normal_(self.phi_embed.weight, mean=0.0, std=phi_init_std)
         else:
@@ -317,6 +328,8 @@ class GaugeTokenEmbedding(nn.Module):
                    (batch, num_agents, K) diagonal variances if diagonal_covariance=True
             phi: (batch, num_agents, phi_dim) gauge frames (one per agent)
                  phi_dim = 3 for SO(3), N(N-1)/2 for SO(N), K² for GL(K)
+            omega: (batch, num_agents, K, K) direct group elements (only when gauge_param='omega')
+                   Block-diagonal GL(K) matrices. Returned as 4th element of tuple.
 
         NOTE: seq_len = number of agents at the single point c*
               This is NOT a spatial dimension!
@@ -330,13 +343,31 @@ class GaugeTokenEmbedding(nn.Module):
         # =================================================================
         # Gauge Frame Embeddings (computed first for gauge_fixed_priors)
         # =================================================================
-        if self.learnable_phi or self.gauge_fixed_priors:
-            # Per-token gauge frame
-            phi = self.phi_embed(token_ids)  # (B, N, 3)
+        omega = None  # Will be set if gauge_param='omega'
+        if self.gauge_param == 'omega' and hasattr(self, 'omega_embed'):
+            # Direct Omega path: reshape flat embedding to per-head K_h×K_h matrices
+            omega_flat = self.omega_embed(token_ids)  # (B, N, total_omega_params)
+            # Reshape into block-diagonal K×K matrix
+            K = self.embed_dim
+            omega = torch.zeros(batch_size, num_agents, K, K,
+                                device=token_ids.device, dtype=omega_flat.dtype)
+            offset = 0
+            block_start = 0
+            for d in self.omega_head_dims:
+                omega_blk = omega_flat[:, :, offset:offset + d * d].reshape(
+                    batch_size, num_agents, d, d)
+                omega[:, :, block_start:block_start + d, block_start:block_start + d] = omega_blk
+                offset += d * d
+                block_start += d
+            # phi is a dummy for compatibility
+            phi = self.phi_base.unsqueeze(0).unsqueeze(0).expand(batch_size, num_agents, -1)
+        elif self.learnable_phi or self.gauge_fixed_priors:
+            # Per-token gauge frame (Lie algebra path)
+            phi = self.phi_embed(token_ids)  # (B, N, phi_dim)
         else:
             # All agents at identity frame
-            phi = self.phi_base.unsqueeze(0).unsqueeze(0)  # (1, 1, 3)
-            phi = phi.expand(batch_size, num_agents, -1)  # (B, N, 3)
+            phi = self.phi_base.unsqueeze(0).unsqueeze(0)  # (1, 1, phi_dim)
+            phi = phi.expand(batch_size, num_agents, -1)  # (B, N, phi_dim)
 
         # =================================================================
         # Mean and Covariance Embeddings
@@ -443,6 +474,8 @@ class GaugeTokenEmbedding(nn.Module):
             scale = torch.clamp(self.mu_max_norm / mu_norm, max=1.0)
             mu = mu * scale
 
+        if omega is not None:
+            return mu, sigma, phi, omega
         return mu, sigma, phi
 
     def extra_repr(self) -> str:

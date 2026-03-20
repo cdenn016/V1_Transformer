@@ -19,20 +19,35 @@ from .gaussians import safe_inverse, symmetrize
 # Transport operations
 # ---------------------------------------------------------------------------
 
-def compute_transport(Omega_i, Omega_j):
+def compute_transport(Omega_i, Omega_j, connection_delta=None, generators=None,
+                      cocycle_relaxation=0.0):
     """
-    Compute pairwise gauge transport Ω_ij = Ω_i · Ω_j⁻¹.
+    Compute pairwise gauge transport Ω_ij.
 
-    The cocycle condition Ω_ij · Ω_jk = Ω_ik is automatically satisfied:
-    (Ω_i Ω_j⁻¹)(Ω_j Ω_k⁻¹) = Ω_i Ω_k⁻¹.
+    Flat:      Ω_ij = Ω_i · Ω_j⁻¹  (cocycle condition automatic)
+    Non-flat:  Ω_ij = Ω_i · exp(α·δ_ij·G) · Ω_j⁻¹
+
+    The cocycle condition Ω_ij · Ω_jk = Ω_ik is automatically satisfied
+    in the flat case: (Ω_i Ω_j⁻¹)(Ω_j Ω_k⁻¹) = Ω_i Ω_k⁻¹.
 
     Args:
         Omega_i: [..., K, K]
         Omega_j: [..., K, K]
+        connection_delta: Optional [..., n_gen] edge-local Lie algebra elements
+        generators: Optional (n_gen, K, K) generators for connection
+        cocycle_relaxation: Scale for connection (0=flat, 1=fully non-flat)
 
     Returns: [..., K, K]
     """
     Omega_j_inv = torch.linalg.inv(Omega_j)
+
+    if connection_delta is not None and generators is not None and cocycle_relaxation > 0:
+        # Non-flat: Ω_ij = Ω_i · exp(α·δ_ij·G) · Ω_j⁻¹
+        scaled_delta = cocycle_relaxation * connection_delta
+        delta_matrix = torch.einsum('...a,aij->...ij', scaled_delta, generators)
+        exp_delta = torch.linalg.matrix_exp(delta_matrix.float()).to(Omega_i.dtype)
+        return Omega_i @ exp_delta @ Omega_j_inv
+
     return Omega_i @ Omega_j_inv
 
 

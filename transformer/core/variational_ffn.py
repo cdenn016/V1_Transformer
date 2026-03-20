@@ -2205,6 +2205,220 @@ class VariationalFFNDynamic(nn.Module):
                 grad_phi
             )
 
+    # =================================================================
+    # Direct Omega Gradient (No Lie Algebra / No matrix_exp)
+    # =================================================================
+
+    def _compute_omega_grad_direct(
+        self,
+        omega_current: torch.Tensor,    # (B, N, K, K) direct group elements
+        mu_current: torch.Tensor,       # (B, N, K) belief means
+        sigma_current: Optional[torch.Tensor],  # (B, N, K) diagonal variances
+        is_diagonal: bool,
+        mask: Optional[torch.Tensor],
+        eps: float,
+    ) -> Optional[torch.Tensor]:
+        """Compute ∂F_align/∂Ω_i directly via chain rule (no dexp series).
+
+        For each pair (i,j), the transport is Ω_ij = Ω_i · Ω_j⁻¹.
+        The gradient decomposes into forward (query-side) and reverse (key-side):
+
+            ∂F/∂Ω_i = Σ_j w_ij · (∂KL_ij/∂Ω_ij) @ Ω_j⁻ᵀ     (query side)
+                     + Σ_j w_ji · (∂KL_ji/∂Ω_i)               (key side)
+
+        where ∂KL_ji/∂Ω_i = -(∂KL_ji/∂Ω_ji) @ Ω_ji @ Ω_i⁻¹ @ Ω_i⁻ᵀ  (chain rule for inverse)
+
+        This replaces the dexp commutator series with direct matrix operations.
+
+        Returns:
+            grad_omega: (B, N, K, K) gradient ∂F_align/∂Ω_i, or None if no gradient computed.
+        """
+        import math
+        from transformer.core.gauge_utils import _compute_dkl_domega_diag
+
+        if sigma_current is None or not is_diagonal:
+            return None  # Full covariance path not yet implemented
+
+        B, N, K = mu_current.shape
+        device = mu_current.device
+
+        mu_q = mu_current.detach().float()
+        sigma_q = sigma_current.detach().float().clamp(min=eps)
+        omega = omega_current.detach().float()  # (B, N, K, K)
+
+        # Compute omega_inv for all positions
+        omega_inv = torch.linalg.inv(omega)  # (B, N, K, K)
+
+        # Compute block-diagonal KL + attention for softmax coupling weights
+        # Use the same approach as analytic_phi_gradient: precompute beta and kl_matrix
+        from transformer.core.attention import compute_attention_weights
+        beta_kl = compute_attention_weights(
+            mu_q=mu_q, sigma_q=sigma_q,
+            phi=torch.zeros(B, N, 1, device=device),  # dummy
+            generators=torch.zeros(1, K, K, device=device),  # dummy
+            kappa=self.kappa, epsilon=eps, mask=mask,
+            use_numba=False, return_kl=True,
+            diagonal_covariance=True,
+            gauge_param='omega', omega=omega,
+            gauge_mode=self.gauge_mode,
+            irrep_dims=self.irrep_dims,
+            mask_self_attention=self.mask_self_attention,
+        )
+        if isinstance(beta_kl, tuple):
+            beta, kl_matrix = beta_kl
+        else:
+            beta = beta_kl
+            kl_matrix = beta
+
+        # Softmax coupling weights (same formula as analytic_phi_gradient)
+        tau = max(self.kappa * math.sqrt(max(K, 1)), eps)
+        w_i = (beta * kl_matrix).sum(dim=-1, keepdim=True)  # (B, N, 1)
+        coupling = 1.0 + (w_i - kl_matrix) / tau
+        weight = self.lambda_belief * beta * coupling  # (B, N, N)
+        weight_key = weight.transpose(1, 2)  # w_ji
+
+        # Process block-diagonally (per irrep block)
+        grad_omega = torch.zeros_like(omega)
+        irrep_dims = self.irrep_dims if self.irrep_dims is not None else [K]
+
+        tile_size = 16
+        block_start = 0
+        for d in irrep_dims:
+            block_end = block_start + d
+            mu_blk = mu_q[:, :, block_start:block_end]
+            sig_blk = sigma_q[:, :, block_start:block_end]
+            om_blk = omega[:, :, block_start:block_end, block_start:block_end]
+            om_inv_blk = omega_inv[:, :, block_start:block_end, block_start:block_end]
+
+            for i_start in range(0, N, tile_size):
+                i_end = min(i_start + tile_size, N)
+                n_tile = i_end - i_start
+
+                om_i = om_blk[:, i_start:i_end]      # (B, tile, d, d)
+                om_inv_i = om_inv_blk[:, i_start:i_end]
+                mu_i = mu_blk[:, i_start:i_end]       # (B, tile, d)
+                sig_i = sig_blk[:, i_start:i_end]     # (B, tile, d)
+                wq = weight[:, i_start:i_end, :]      # (B, tile, N)
+                wk = weight_key[:, i_start:i_end, :]  # (B, tile, N)
+
+                grad_tile = torch.zeros(B, n_tile, d, d, device=device, dtype=torch.float32)
+
+                for j_start in range(0, N, tile_size):
+                    j_end = min(j_start + tile_size, N)
+
+                    om_j = om_blk[:, j_start:j_end]
+                    om_inv_j = om_inv_blk[:, j_start:j_end]
+                    mu_j = mu_blk[:, j_start:j_end]
+                    sig_j = sig_blk[:, j_start:j_end]
+                    wq_chunk = wq[:, :, j_start:j_end]  # (B, tile, chunk)
+                    wk_chunk = wk[:, :, j_start:j_end]
+
+                    # === Query side: Ω_ij = Ω_i · Ω_j⁻¹ ===
+                    Omega_ij = torch.einsum('bikl,bjlm->bijkm', om_i, om_inv_j)
+
+                    # Transport j→i
+                    mu_t = torch.einsum('bijkl,bjl->bijk', Omega_ij, mu_j)
+                    sig_t = torch.einsum(
+                        'bijkl,bijkl,bjl->bijk',
+                        Omega_ij, Omega_ij, sig_j).clamp(min=eps)
+
+                    # ∂KL/∂Ω_ij
+                    dKL_dO = _compute_dkl_domega_diag(
+                        mu_i[:, :, None, :].expand_as(mu_t),
+                        sig_i[:, :, None, :].expand_as(sig_t),
+                        mu_t, sig_t,
+                        mu_j[:, None, :, :].expand_as(mu_t),
+                        sig_j[:, None, :, :].expand_as(sig_t),
+                        Omega_ij, eps)  # (B, tile, chunk, d, d)
+
+                    # Chain rule: ∂KL/∂Ω_i = (∂KL/∂Ω_ij) @ Ω_j⁻ᵀ
+                    om_inv_jT = om_inv_j.transpose(-2, -1)  # (B, chunk, d, d)
+                    dKL_dOi_fwd = torch.einsum(
+                        'bijkl,bjlm->bijkm', dKL_dO, om_inv_jT)
+
+                    # Weighted sum: Σ_j w_ij · ∂KL_ij/∂Ω_i
+                    grad_tile = grad_tile + torch.einsum(
+                        'bij,bijkl->bikl', wq_chunk, dKL_dOi_fwd)
+
+                    # === Key side: Ω_ji = Ω_j · Ω_i⁻¹ ===
+                    Omega_ji = torch.einsum('bjkl,bilm->bjikm', om_j, om_inv_i)
+
+                    # Transport i→j
+                    mu_t_ji = torch.einsum('bjikl,bil->bjik', Omega_ji, mu_i)
+                    sig_t_ji = torch.einsum(
+                        'bjikl,bjikl,bil->bjik',
+                        Omega_ji, Omega_ji, sig_i).clamp(min=eps)
+
+                    # ∂KL_ji/∂Ω_ji
+                    dKL_dO_ji = _compute_dkl_domega_diag(
+                        mu_j[:, :, None, :].expand_as(mu_t_ji),
+                        sig_j[:, :, None, :].expand_as(sig_t_ji),
+                        mu_t_ji, sig_t_ji,
+                        mu_i[:, None, :, :].expand_as(mu_t_ji),
+                        sig_i[:, None, :, :].expand_as(sig_t_ji),
+                        Omega_ji, eps)  # (B, chunk, tile, d, d)
+
+                    # Chain rule for key side: ∂KL_ji/∂Ω_i through Ω_ji = Ω_j · Ω_i⁻¹
+                    # ∂Ω_ji/∂Ω_i = -Ω_ji · Ω_i⁻¹ (from derivative of inverse)
+                    # So ∂KL_ji/∂Ω_i = -(∂KL_ji/∂Ω_ji)ᵀ contracted appropriately
+                    # Full chain rule: ∂KL/∂Ω_i = -Ω_ji^T @ ∂KL/∂Ω_ji @ Ω_i⁻ᵀ
+                    Omega_ji_T = Omega_ji.transpose(-2, -1)  # (B, chunk, tile, d, d)
+                    om_inv_iT = om_inv_i.transpose(-2, -1)   # (B, tile, d, d)
+                    dKL_dOi_key = -torch.einsum(
+                        'bjikl,bjilm,bimn->bjikn',
+                        Omega_ji_T, dKL_dO_ji, om_inv_iT)
+
+                    # Weighted sum: Σ_j w_ji · ∂KL_ji/∂Ω_i
+                    # dKL_dOi_key: (B, chunk, tile, d, d), wk_chunk: (B, tile, chunk)
+                    grad_tile = grad_tile + torch.einsum(
+                        'bij,bjikl->bikl', wk_chunk, dKL_dOi_key)
+
+                    del Omega_ij, Omega_ji, dKL_dO, dKL_dO_ji, dKL_dOi_fwd, dKL_dOi_key
+
+                grad_omega[:, i_start:i_end, block_start:block_end, block_start:block_end] = grad_tile
+
+            block_start = block_end
+
+        return grad_omega
+
+    def _retract_omega(
+        self,
+        omega: torch.Tensor,      # (B, N, K, K)
+        grad_omega: torch.Tensor,  # (B, N, K, K) Euclidean gradient
+        step_size: float,
+        trust_region: float = 0.3,
+    ) -> torch.Tensor:
+        """Retract Omega update on GL(K) manifold using left-invariant natural gradient.
+
+        Natural gradient: ΔΩ = Ω · (Ωᵀ · ∂F/∂Ω) (left-invariant metric on GL(K))
+        Trust region: clip Frobenius norm of update
+        Update: Ω_new = Ω - η · ΔΩ
+
+        Args:
+            omega: Current group elements (B, N, K, K)
+            grad_omega: Euclidean gradient ∂F/∂Ω (B, N, K, K)
+            step_size: Learning rate
+            trust_region: Maximum relative Frobenius norm of update
+
+        Returns:
+            omega_new: Updated group elements (B, N, K, K)
+        """
+        # Natural gradient on GL(K): ΔΩ = Ω · Ωᵀ · ∂F/∂Ω
+        OmegaT = omega.transpose(-2, -1)
+        nat_grad = omega @ OmegaT @ grad_omega
+
+        # Trust region clip
+        nat_norm = torch.norm(nat_grad.flatten(-2), dim=-1, keepdim=True).unsqueeze(-1)
+        omega_norm = torch.norm(omega.flatten(-2), dim=-1, keepdim=True).unsqueeze(-1).clamp(min=1e-6)
+        max_update = trust_region * omega_norm
+        scale = torch.clamp(max_update / (nat_norm + 1e-8), max=1.0)
+        nat_grad = nat_grad * scale
+
+        # Update
+        omega_new = omega - step_size * nat_grad
+
+        return omega_new
+
     def _compute_phi_grad_analytic_or_autograd(
         self,
         phi_current: torch.Tensor,
@@ -2512,6 +2726,7 @@ class VariationalFFNDynamic(nn.Module):
         W_out: Optional[torch.Tensor] = None,    # (V, K) - output projection
         token_ids: Optional[torch.Tensor] = None,  # (B, N) - token IDs for PriorBank lookup
         return_beta_history: bool = False,  # Return β evolution for analysis
+        omega: Optional[torch.Tensor] = None,  # (B, N, K, K) direct group elements (gauge_param='omega')
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor, Optional[list]]:
         """
         Dynamic VFE E-step descent with beta recomputation at each iteration.
@@ -2621,6 +2836,7 @@ class VariationalFFNDynamic(nn.Module):
         mu_current = mu.clone()
         sigma_current = sigma.clone()
         phi_current = phi.clone()  # Track phi for dynamical gauge frames
+        omega_current = omega.clone() if omega is not None else None  # Track omega for direct GL(K)
 
         # Track β evolution if requested
         beta_history = [] if return_beta_history else None
@@ -3065,37 +3281,45 @@ class VariationalFFNDynamic(nn.Module):
                     )
 
             # =============================================================
-            # STEP 4b: Optional Phi Evolution DURING E-step (dynamical gauge frames)
+            # STEP 4b: Optional Gauge Frame Evolution DURING E-step
             # =============================================================
-            # When update_phi_per_iteration=True, φ evolves at each iteration
-            # This makes gauge frames dynamical, co-evolving with beliefs
-            # OPTIMIZATION: Only update phi every phi_update_interval iterations
-            # (default 2) to reduce redundant matrix exponential computations.
-            # Early E-step iterations produce large belief changes where phi
-            # updates are less informative; later iterations benefit more.
             phi_update_interval = getattr(self, 'phi_update_interval', 1)
-            # Skip phi evolution for constant/trivial gauge: phi is not used for
-            # transport (constant gauge uses constant_omega; trivial uses Ω=I).
             _skip_phi_update = self.gauge_mode in ('trivial', 'constant')
+            _use_omega = omega_current is not None and getattr(self, 'gauge_param', 'phi') == 'omega'
+
             if (self.update_phi_per_iteration and torch.is_grad_enabled()
                     and not _skip_phi_update
                     and iteration % phi_update_interval == phi_update_interval - 1):
-                # Pass cached block_exp_pairs to avoid recomputing matrix exponentials
-                _phi_bep = _mh_cached_bep if self.multihead_vfe else _cached_bep
-                grad_phi = self._compute_phi_grad_analytic_or_autograd(
-                    phi_current, mu_current, sigma_current,
-                    is_diagonal, mask, eps,
-                    cached_block_exp_pairs=_phi_bep,
-                )
-                if grad_phi is not None:
-                    phi_lr_iter = self.phi_lr / self.n_iterations
-                    phi_current = _retract_phi(
-                        phi=phi_current,
-                        delta_phi=-grad_phi,
-                        generators=self.generators,
-                        step_size=phi_lr_iter,
-                        max_norm=self.phi_max_norm,
+
+                if _use_omega:
+                    # Direct Omega path: no matrix_exp, no dexp series
+                    grad_omega = self._compute_omega_grad_direct(
+                        omega_current, mu_current, sigma_current,
+                        is_diagonal, mask, eps,
                     )
+                    if grad_omega is not None:
+                        omega_lr_iter = self.phi_lr / self.n_iterations
+                        omega_current = self._retract_omega(
+                            omega_current, grad_omega, omega_lr_iter,
+                            trust_region=getattr(self, 'omega_trust_region', 0.3),
+                        )
+                else:
+                    # Phi path (existing): matrix_exp + dexp series
+                    _phi_bep = _mh_cached_bep if self.multihead_vfe else _cached_bep
+                    grad_phi = self._compute_phi_grad_analytic_or_autograd(
+                        phi_current, mu_current, sigma_current,
+                        is_diagonal, mask, eps,
+                        cached_block_exp_pairs=_phi_bep,
+                    )
+                    if grad_phi is not None:
+                        phi_lr_iter = self.phi_lr / self.n_iterations
+                        phi_current = _retract_phi(
+                            phi=phi_current,
+                            delta_phi=-grad_phi,
+                            generators=self.generators,
+                            step_size=phi_lr_iter,
+                            max_norm=self.phi_max_norm,
+                        )
 
         # =================================================================
         # DEQ implicit differentiation: replace straight-through backward
@@ -3112,38 +3336,45 @@ class VariationalFFNDynamic(nn.Module):
             )
 
         # =================================================================
-        # STEP 5: Optional Phi Evolution via VFE Gradient (after loop)
+        # STEP 5: Optional Gauge Frame Evolution via VFE Gradient (after loop)
         # =================================================================
-        # This runs when update_phi=True but update_phi_per_iteration=False
-        # The belief alignment term F_align = λ·Σ β_ij KL(q_i || Ω_ij[q_j])
-        # depends on φ through the transport operator Ω_ij = exp(φ_i)·exp(-φ_j).
-        # Only update phi during training (when gradients are enabled)
-        # Skip if already updated per-iteration
-        # Skip phi evolution for constant/trivial gauge (phi not used for transport)
+        _use_omega = omega_current is not None and getattr(self, 'gauge_param', 'phi') == 'omega'
         if (self.update_phi and not self.update_phi_per_iteration
                 and torch.is_grad_enabled()
                 and self.gauge_mode not in ('trivial', 'constant')):
-            # Recompute block_exp_pairs for post-loop phi gradient
-            # (phi may have changed if update_phi_per_iteration was True in an earlier config)
-            _phi_bep_post = None
-            if self.irrep_dims is not None and self.gauge_mode == 'learned':
-                _phi_bep_post = fused_block_matrix_exp_pairs(
-                    phi_current, self.generators, self.irrep_dims,
-                    enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+
+            if _use_omega:
+                # Direct Omega path
+                grad_omega = self._compute_omega_grad_direct(
+                    omega_current, mu_current, sigma_current,
+                    is_diagonal, mask, eps,
                 )
-            grad_phi = self._compute_phi_grad_analytic_or_autograd(
-                phi_current, mu_current, sigma_current,
-                is_diagonal, mask, eps,
-                cached_block_exp_pairs=_phi_bep_post,
-            )
-            if grad_phi is not None:
-                phi_current = _retract_phi(
-                    phi=phi_current,
-                    delta_phi=-grad_phi,
-                    generators=self.generators,
-                    step_size=self.phi_lr,
-                    max_norm=self.phi_max_norm,
+                if grad_omega is not None:
+                    omega_current = self._retract_omega(
+                        omega_current, grad_omega, self.phi_lr,
+                        trust_region=getattr(self, 'omega_trust_region', 0.3),
+                    )
+            else:
+                # Phi path (existing)
+                _phi_bep_post = None
+                if self.irrep_dims is not None and self.gauge_mode == 'learned':
+                    _phi_bep_post = fused_block_matrix_exp_pairs(
+                        phi_current, self.generators, self.irrep_dims,
+                        enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                    )
+                grad_phi = self._compute_phi_grad_analytic_or_autograd(
+                    phi_current, mu_current, sigma_current,
+                    is_diagonal, mask, eps,
+                    cached_block_exp_pairs=_phi_bep_post,
                 )
+                if grad_phi is not None:
+                    phi_current = _retract_phi(
+                        phi=phi_current,
+                        delta_phi=-grad_phi,
+                        generators=self.generators,
+                        step_size=self.phi_lr,
+                        max_norm=self.phi_max_norm,
+                    )
 
         # Re-enable autocast context and cast results back to original dtype
         if _amp_ctx is not None:

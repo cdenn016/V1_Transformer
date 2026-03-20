@@ -325,6 +325,110 @@ def compute_transport_operators(
 
 
 # =============================================================================
+# Direct Omega Transport (No Lie Algebra / No matrix_exp)
+# =============================================================================
+
+def compute_transport_operators_direct(
+    omega: torch.Tensor,  # (B, N, K, K) direct group elements
+    gauge_mode: str = 'learned',
+    connection_delta: Optional[torch.Tensor] = None,  # (B, N, N, n_gen) edge-local
+    generators: Optional[torch.Tensor] = None,  # needed only for non-flat connection
+    cocycle_relaxation: float = 0.0,
+) -> dict:
+    """
+    Compute transport operators from direct GL(K) group elements (no matrix_exp).
+
+    Flat:      Ω_ij = Ω_i · Ω_j⁻¹  (cocycle condition automatic)
+    Non-flat:  Ω_ij = Ω_i · exp(α·δ_ij·G) · Ω_j⁻¹
+
+    Unlike compute_transport_operators (phi-based), this:
+    - Stores Ω_i ∈ GL(K) directly (no Lie algebra coefficients)
+    - No matrix_exp for per-token frames (only for edge-local connection if non-flat)
+    - Covers full GL(K) including reflections (det < 0)
+    - Simpler gradient: ∂KL/∂Ω_i via chain rule, no dexp series
+
+    Args:
+        omega: (B, N, K, K) per-token group elements Ω_i ∈ GL(K).
+               Can have any determinant sign (reflections allowed).
+        gauge_mode: 'learned' for per-token frames, 'trivial' for Ω = I.
+        connection_delta: Optional (B, N, N, n_gen) edge-local Lie algebra elements.
+                         Only used when cocycle_relaxation > 0.
+        generators: (n_gen, K, K) Lie algebra generators. Only needed for non-flat.
+        cocycle_relaxation: Scale factor for connection_delta (0=flat, 1=fully non-flat).
+
+    Returns:
+        dict with:
+            'omega_i': (B, N, K, K) — per-token Ω_i
+            'omega_j_inv': (B, N, K, K) — per-token Ω_j⁻¹
+            'Omega': (B, N, N, K, K) — pairwise transport Ω_ij
+    """
+    B, N, K, _ = omega.shape
+    dtype = omega.dtype
+    device = omega.device
+
+    if gauge_mode in ('trivial', 'constant'):
+        eye_K = torch.eye(K, device=device, dtype=dtype)
+        omega_i = eye_K.expand(B, N, K, K).contiguous()
+        omega_j_inv = eye_K.expand(B, N, K, K).contiguous()
+        Omega = eye_K.expand(B, N, N, K, K).contiguous()
+        return {
+            'omega_i': omega_i,
+            'omega_j_inv': omega_j_inv,
+            'Omega': Omega,
+        }
+
+    # Per-token inverse (needed for transport and gradients)
+    omega_j_inv = torch.linalg.inv(omega)  # (B, N, K, K)
+
+    if connection_delta is not None and cocycle_relaxation > 0 and generators is not None:
+        # Non-flat: Ω_ij = Ω_i · exp(α·δ_ij·G) · Ω_j⁻¹
+        scaled_delta = cocycle_relaxation * connection_delta  # (B, N, N, n_gen)
+        delta_matrix = torch.einsum('bija,akl->bijkl', scaled_delta, generators)
+        exp_delta = torch.linalg.matrix_exp(delta_matrix.float()).to(dtype)  # (B, N, N, K, K)
+        # Ω_ij = Ω_i @ exp(δ_ij) @ Ω_j⁻¹
+        Omega = torch.einsum(
+            'bikl,bijlm,bjmn->bijkn', omega, exp_delta, omega_j_inv
+        )
+    else:
+        # Flat: Ω_ij = Ω_i · Ω_j⁻¹ (cocycle condition automatic)
+        Omega = torch.einsum('bikl,bjlm->bijkm', omega, omega_j_inv)
+
+    return {
+        'omega_i': omega,
+        'omega_j_inv': omega_j_inv,
+        'Omega': Omega,
+    }
+
+
+def omega_to_block_exp_pairs(
+    omega: torch.Tensor,  # (B, N, K, K) direct group elements
+    irrep_dims: List[int],
+) -> List[Tuple[torch.Tensor, torch.Tensor]]:
+    """Convert direct Omega matrices to block_exp_pairs format for KL computation.
+
+    The block-diagonal KL functions expect a list of (forward, inverse) pairs
+    per irrep block, originally from fused_block_matrix_exp_pairs (exp(phi), exp(-phi)).
+    For the direct Omega path, we provide (omega_block, omega_block_inv) instead.
+
+    Args:
+        omega: (B, N, K, K) per-token group elements.
+        irrep_dims: List of block dimensions [d₁, d₂, ...].
+
+    Returns:
+        List of (omega_block, omega_block_inv) tuples, each shape (B, N, d, d).
+    """
+    results = []
+    start = 0
+    for d in irrep_dims:
+        end = start + d
+        omega_blk = omega[:, :, start:end, start:end].contiguous()
+        omega_blk_inv = torch.linalg.inv(omega_blk)
+        results.append((omega_blk, omega_blk_inv))
+        start = end
+    return results
+
+
+# =============================================================================
 # Core Attention: KL-Based Weights
 # =============================================================================
 
@@ -358,6 +462,9 @@ def compute_attention_weights(
     cached_block_exp_pairs: Optional[list] = None,
     # Exact diagonal transport: lift diagonal σ to full for exact Ω@diag(σ)@Ω^T
     exact_diagonal_transport: bool = False,
+    # Direct Omega parameterization (gauge_param='omega')
+    gauge_param: str = 'phi',  # 'phi' (Lie algebra) or 'omega' (direct GL(K))
+    omega: Optional[torch.Tensor] = None,  # (B, N, K, K) direct group elements (when gauge_param='omega')
 ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
     """
     Compute attention weights from KL divergences (0D version).
@@ -437,6 +544,21 @@ def compute_attention_weights(
         >>> beta.sum(dim=-1)  # Should sum to 1 (plus epsilon)
         tensor([[1.0000, 1.0000, ...], ...])
     """
+    # =========================================================================
+    # Direct Omega path: precompute transport and inject as cached_transport
+    # =========================================================================
+    if gauge_param == 'omega' and omega is not None:
+        if cached_transport is None:
+            cached_transport = compute_transport_operators_direct(
+                omega=omega,
+                gauge_mode=gauge_mode,
+                generators=generators,
+            )
+        # For block-diagonal paths: convert per-head omega to block_exp_pairs format.
+        # The KL functions expect (omega_h, omega_h_inv) in place of (exp_phi_h, exp_neg_phi_h).
+        if irrep_dims is not None and cached_block_exp_pairs is None:
+            cached_block_exp_pairs = omega_to_block_exp_pairs(omega, irrep_dims)
+
     # =========================================================================
     # Exact diagonal transport: lift diagonal σ to full and use full-cov paths.
     # KL output is (B,N,N) regardless, so no output conversion needed.
