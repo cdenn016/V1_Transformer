@@ -24,8 +24,8 @@ def safe_inverse(M, eps=1e-6):
     """Robust matrix inverse with conditioning check."""
     try:
         return torch.linalg.inv(M)
-    except torch.linalg.LinAlgError:
-        # Add regularization
+    except (torch.linalg.LinAlgError, RuntimeError):
+        # Add regularization (RuntimeError can occur on CUDA for singular matrices)
         eye = torch.eye(M.shape[-1], device=M.device, dtype=M.dtype)
         return torch.linalg.inv(M + eps * eye.expand_as(M))
 
@@ -35,9 +35,11 @@ def safe_logdet(M):
     try:
         L = torch.linalg.cholesky(M)
         return 2.0 * torch.diagonal(L, dim1=-2, dim2=-1).log().sum(-1)
-    except torch.linalg.LinAlgError:
+    except (torch.linalg.LinAlgError, RuntimeError):
+        # RuntimeError can occur on CUDA for non-PD matrices
         sign, logabsdet = torch.linalg.slogdet(M)
-        return logabsdet
+        # For SPD matrices sign should be +1; clamp to 0 if negative (non-PD)
+        return torch.where(sign > 0, logabsdet, torch.zeros_like(logabsdet))
 
 
 def symmetrize(M):
@@ -518,7 +520,6 @@ def kl_decode_logits(mu, Sigma, prior_mu_bank, prior_Sigma_bank):
     chunk_size = min(V, 1024)
     logits = torch.empty(B, N, V, device=mu.device, dtype=mu.dtype)
 
-    Sigma_inv = safe_inverse(Sigma)  # [B, N, K, K]
     logdet_Sigma = safe_logdet(Sigma)  # [B, N]
 
     for v_start in range(0, V, chunk_size):
