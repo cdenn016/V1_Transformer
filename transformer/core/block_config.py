@@ -84,10 +84,11 @@ class BlockConfig:
 
     # === Non-flat gauge transport (flat bundle experiments) ===
     # When non_flat_transport=True, the transport becomes:
-    #   Ω_ij = exp(φ_i·G) · exp(δ_ij·G) · exp(-φ_j·G)
+    #   phi path:  Ω_ij = exp(φ_i·G) · exp(α·δ_ij·G) · exp(-φ_j·G)
+    #   omega path: Ω_ij = Ω_i · exp(α·δ_ij·G) · Ω_j⁻¹
     # where δ_ij is an edge-local "connection" parameterized by connection_type.
     # When non_flat_transport=False (default), all non-flat fields are ignored
-    # and the standard flat transport Ω_ij = exp(φ_i)·exp(-φ_j) is used.
+    # and the standard flat transport is used (cocycle condition holds, holonomy trivial).
     non_flat_transport: bool = False       # Enable edge-dependent connection δ_ij
     cocycle_relaxation: float = 0.0        # Scale factor for δ_ij: 0=flat, 1=fully non-flat
     per_head_flatness_gate: bool = False   # Learnable per-head g_h ∈ [0,1]

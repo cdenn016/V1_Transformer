@@ -253,5 +253,126 @@ def test_monitor_omega_health(device):
     assert metrics['test/det_min'] > 0  # Near-identity should have positive det
 
 
+# ── Test 9: Non-flat omega transport (holonomy) ──────────────────────────
+
+def test_compute_transport_operators_direct_non_flat(device, small_config):
+    """Non-flat transport: Ω_ij = Ω_i · exp(α·δ_ij·G) · Ω_j⁻¹ breaks cocycle."""
+    from transformer.core.attention import compute_transport_operators_direct
+
+    B, N, K = small_config['B'], small_config['N'], small_config['K']
+    n_gen = K * K  # GL(K) generators
+
+    # Random group elements near identity
+    omega = torch.eye(K, device=device).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).clone()
+    omega = omega + 0.1 * torch.randn(B, N, K, K, device=device)
+
+    # GL(K) generators: standard basis matrices E_ab
+    generators = torch.zeros(n_gen, K, K, device=device)
+    idx = 0
+    for a in range(K):
+        for b in range(K):
+            generators[idx, a, b] = 1.0
+            idx += 1
+
+    # Random non-zero connection
+    connection_delta = 0.1 * torch.randn(B, N, N, n_gen, device=device)
+
+    result = compute_transport_operators_direct(
+        omega,
+        gauge_mode='learned',
+        connection_delta=connection_delta,
+        generators=generators,
+        cocycle_relaxation=1.0,
+    )
+
+    Omega = result['Omega']
+    assert Omega.shape == (B, N, N, K, K)
+
+    # Cocycle should be BROKEN: Ω_ij · Ω_jk ≠ Ω_ik
+    i, j, k = 0, 1, 2
+    Omega_ij = Omega[0, i, j]
+    Omega_jk = Omega[0, j, k]
+    Omega_ik = Omega[0, i, k]
+    product = Omega_ij @ Omega_jk
+    cocycle_error = (product - Omega_ik).norm()
+    assert cocycle_error > 1e-3, \
+        f"Expected cocycle violation, but ||Ω_ij·Ω_jk - Ω_ik|| = {cocycle_error:.6f}"
+
+
+def test_non_flat_omega_reduces_to_flat_when_delta_zero(device, small_config):
+    """When δ_ij = 0, non-flat transport matches flat transport exactly."""
+    from transformer.core.attention import compute_transport_operators_direct
+
+    B, N, K = small_config['B'], small_config['N'], small_config['K']
+    n_gen = K * K
+
+    omega = torch.eye(K, device=device).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).clone()
+    omega = omega + 0.1 * torch.randn(B, N, K, K, device=device)
+
+    generators = torch.zeros(n_gen, K, K, device=device)
+    idx = 0
+    for a in range(K):
+        for b in range(K):
+            generators[idx, a, b] = 1.0
+            idx += 1
+
+    # Zero connection → should match flat
+    connection_delta = torch.zeros(B, N, N, n_gen, device=device)
+
+    result_nonflat = compute_transport_operators_direct(
+        omega, gauge_mode='learned',
+        connection_delta=connection_delta,
+        generators=generators,
+        cocycle_relaxation=1.0,
+    )
+    result_flat = compute_transport_operators_direct(
+        omega, gauge_mode='learned',
+    )
+
+    assert torch.allclose(result_nonflat['Omega'], result_flat['Omega'], atol=1e-5), \
+        "Non-flat with δ=0 should match flat transport"
+
+
+def test_non_flat_omega_cocycle_relaxation_interpolates(device, small_config):
+    """cocycle_relaxation=0 → flat, cocycle_relaxation=1 → fully non-flat."""
+    from transformer.core.attention import compute_transport_operators_direct
+
+    B, N, K = small_config['B'], small_config['N'], small_config['K']
+    n_gen = K * K
+
+    omega = torch.eye(K, device=device).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).clone()
+    omega = omega + 0.1 * torch.randn(B, N, K, K, device=device)
+
+    generators = torch.zeros(n_gen, K, K, device=device)
+    idx = 0
+    for a in range(K):
+        for b in range(K):
+            generators[idx, a, b] = 1.0
+            idx += 1
+
+    connection_delta = 0.1 * torch.randn(B, N, N, n_gen, device=device)
+
+    result_flat = compute_transport_operators_direct(omega, gauge_mode='learned')
+
+    result_alpha0 = compute_transport_operators_direct(
+        omega, gauge_mode='learned',
+        connection_delta=connection_delta, generators=generators,
+        cocycle_relaxation=0.0,
+    )
+
+    result_alpha1 = compute_transport_operators_direct(
+        omega, gauge_mode='learned',
+        connection_delta=connection_delta, generators=generators,
+        cocycle_relaxation=1.0,
+    )
+
+    # α=0 should equal flat
+    assert torch.allclose(result_alpha0['Omega'], result_flat['Omega'], atol=1e-5)
+
+    # α=1 should differ from flat
+    diff = (result_alpha1['Omega'] - result_flat['Omega']).norm()
+    assert diff > 1e-3, f"α=1 should differ from flat, but diff = {diff:.6f}"
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
