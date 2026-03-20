@@ -46,8 +46,10 @@ class PureVFEConfig:
     spd_kappa_max: float = 1e4          # Condition number cap
     spd_exp_clip: float = 50.0          # Eigenvalue exponent clip
 
-    # Prior covariance safeguards
-    prior_sigma_floor: float = 0.1      # Min eigenvalue of prior Σ_v (prevents collapse)
+    # Prior safeguards
+    prior_sigma_floor: float = 0.5      # Min eigenvalue of prior Σ_v (prevents collapse)
+    prior_mu_max_norm: float = 3.0      # Max L2 norm of prior μ_v (prevents mean spread)
+    m_step_trust_mu: float = 0.5        # Trust region for M-step μ updates
 
     # Causal masking
     causal: bool = True
