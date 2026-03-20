@@ -2,17 +2,13 @@
 """
 Click-to-run Pure VFE Transformer.
 
-Usage:
-    python run.py                          # Synthetic data, CPU, immediate
-    python run.py --data wikitext2         # WikiText-2 (needs: pip install datasets transformers)
-    python run.py --device cuda            # GPU
-    python run.py --belief-dim 64 --n-heads 8  # Larger model
+Usage: Just press Run (F5 / Shift+Enter / python run.py).
+Edit PURE_VFE_CONFIG below to change settings — no CLI needed.
 
 No nn.Module. No autograd. No loss.backward().
 Just variational free energy descent on a gauge-covariant prior bank.
 """
 
-import argparse
 import time
 import sys
 
@@ -23,7 +19,71 @@ from transformer.pure_vfe.model import PureVFETransformer
 from transformer.pure_vfe.gauge import monitor_omega_health
 
 
-# ── Synthetic data (zero external deps) ─────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════
+#  CONFIGURATION — edit this dict, then hit Run
+# ═══════════════════════════════════════════════════════════════════
+
+PURE_VFE_CONFIG = {
+    # ── Data ──────────────────────────────────────────────────────
+    'data_source': 'synthetic',       # 'synthetic' or 'wikitext2'
+    'vocab_size': 256,                # Only used for synthetic data
+    'n_synthetic_seqs': 500,          # Number of synthetic sequences
+
+    # ── Belief geometry ───────────────────────────────────────────
+    'belief_dim': 16,                 # K: full belief dimension
+    'n_heads': 4,                     # H: number of attention heads
+    # head_dim is derived: belief_dim // n_heads
+
+    # ── E-step (inference = forward pass) ─────────────────────────
+    'n_esteps': 6,                    # VFE descent iterations (depth)
+    'tau': None,                      # Attention temperature (None → √head_dim)
+    'eta_E': 0.1,                     # E-step natural gradient step size
+
+    # ── M-step (learning = parameter update) ──────────────────────
+    'eta_M': 0.001,                   # M-step natural gradient step size
+
+    # ── Prior precision ───────────────────────────────────────────
+    'alpha_b0': 1.0,                  # Denominator offset
+    'alpha_c0': 1.0,                  # Numerator scale
+
+    # ── Hyper-prior ───────────────────────────────────────────────
+    'hyper_var': 1.0,                 # Variance of hyper-prior on means
+
+    # ── Sequence / batching ───────────────────────────────────────
+    'max_seq_len': 32,                # N: maximum sequence length
+    'batch_size': 4,                  # Batch size
+
+    # ── Initialization ────────────────────────────────────────────
+    'sigma_init': 1.0,                # Initial covariance scale
+    'omega_init_scale': 0.01,         # GL(K) frame perturbation from I
+
+    # ── Trust regions ─────────────────────────────────────────────
+    'trust_region_mu': 1.0,
+    'trust_region_sigma': 0.3,
+    'trust_region_omega': 0.3,
+
+    # ── SPD retraction safeguards ─────────────────────────────────
+    'spd_eps_min': 1e-4,              # Spectral floor
+    'spd_kappa_max': 1e4,             # Condition number cap
+    'spd_exp_clip': 50.0,             # Eigenvalue exponent clip
+
+    # ── Causal masking ────────────────────────────────────────────
+    'causal': True,
+
+    # ── Device ────────────────────────────────────────────────────
+    'device': 'cpu',                  # 'cpu' or 'cuda'
+    'use_cuda_kernels': False,        # Custom CUDA kernels (needs ninja + CUDA)
+
+    # ── Training ──────────────────────────────────────────────────
+    'epochs': 3,                      # Number of training epochs
+    'log_interval': 5,                # Print every N steps
+    'save_path': None,                # Path to save best checkpoint (None = don't save)
+}
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  DATA LOADERS
+# ═══════════════════════════════════════════════════════════════════
 
 def make_synthetic_data(vocab_size, seq_len, n_seqs=500):
     """
@@ -36,7 +96,6 @@ def make_synthetic_data(vocab_size, seq_len, n_seqs=500):
         tok = torch.randint(0, vocab_size, (1,)).item()
         data[i, 0] = tok
         for t in range(1, seq_len + 1):
-            # Next token is drawn from a window around the current token
             window = max(vocab_size // 20, 5)
             lo = max(0, tok - window)
             hi = min(vocab_size, tok + window)
@@ -44,8 +103,6 @@ def make_synthetic_data(vocab_size, seq_len, n_seqs=500):
             data[i, t] = tok
     return data
 
-
-# ── WikiText-2 loader ───────────────────────────────────────────────────────
 
 def load_wikitext2(seq_len):
     """Load WikiText-2. Requires: pip install datasets transformers"""
@@ -64,7 +121,9 @@ def load_wikitext2(seq_len):
     return token_ids.reshape(n_seqs, seq_len + 1)
 
 
-# ── Batch iterator ──────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════
+#  BATCH ITERATOR
+# ═══════════════════════════════════════════════════════════════════
 
 def batches(data, batch_size, device, shuffle=True):
     n = data.shape[0]
@@ -75,73 +134,85 @@ def batches(data, batch_size, device, shuffle=True):
         yield chunk[:, :-1], chunk[:, 1:]
 
 
-# ── Main ────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════
+#  BUILD CONFIG FROM DICT
+# ═══════════════════════════════════════════════════════════════════
 
-def main():
-    p = argparse.ArgumentParser(
-        description="Pure VFE Transformer — click to run",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    p.add_argument(
-        "--data",
-        choices=["synthetic", "wikitext2"],
-        default="synthetic",
-        help="Data source (default: synthetic — no extra deps)",
-    )
-    p.add_argument("--device", default="cpu", help="cpu or cuda (default: cpu)")
-    p.add_argument("--belief-dim", type=int, default=16, help="Belief dimension K")
-    p.add_argument("--n-heads", type=int, default=4, help="Number of attention heads")
-    p.add_argument("--n-esteps", type=int, default=6, help="E-step iterations (depth)")
-    p.add_argument("--eta-E", type=float, default=0.1, help="E-step learning rate")
-    p.add_argument("--eta-M", type=float, default=0.001, help="M-step learning rate")
-    p.add_argument("--seq-len", type=int, default=32, help="Sequence length")
-    p.add_argument("--batch-size", type=int, default=4, help="Batch size")
-    p.add_argument("--epochs", type=int, default=3, help="Training epochs")
-    p.add_argument("--vocab-size", type=int, default=256, help="Vocab size (synthetic only)")
-    p.add_argument("--save", type=str, default=None, help="Path to save best checkpoint")
-    p.add_argument("--log-interval", type=int, default=5, help="Print every N steps")
-    args = p.parse_args()
+def build_config(cfg):
+    """Convert PURE_VFE_CONFIG dict → PureVFEConfig dataclass."""
+    head_dim = cfg['belief_dim'] // cfg['n_heads']
+
+    # Collect only the fields that PureVFEConfig accepts
+    config_kwargs = {
+        'vocab_size':         cfg['vocab_size'],
+        'belief_dim':         cfg['belief_dim'],
+        'n_heads':            cfg['n_heads'],
+        'head_dim':           head_dim,
+        'n_esteps':           cfg['n_esteps'],
+        'tau':                cfg['tau'],
+        'eta_E':              cfg['eta_E'],
+        'eta_M':              cfg['eta_M'],
+        'alpha_b0':           cfg['alpha_b0'],
+        'alpha_c0':           cfg['alpha_c0'],
+        'hyper_var':          cfg['hyper_var'],
+        'max_seq_len':        cfg['max_seq_len'],
+        'batch_size':         cfg['batch_size'],
+        'sigma_init':         cfg['sigma_init'],
+        'omega_init_scale':   cfg['omega_init_scale'],
+        'trust_region_mu':    cfg['trust_region_mu'],
+        'trust_region_sigma': cfg['trust_region_sigma'],
+        'trust_region_omega': cfg['trust_region_omega'],
+        'spd_eps_min':        cfg['spd_eps_min'],
+        'spd_kappa_max':      cfg['spd_kappa_max'],
+        'spd_exp_clip':       cfg['spd_exp_clip'],
+        'causal':             cfg['causal'],
+        'device':             cfg['device'],
+        'use_cuda_kernels':   cfg['use_cuda_kernels'],
+    }
+
+    return PureVFEConfig(**config_kwargs)
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  MAIN
+# ═══════════════════════════════════════════════════════════════════
+
+def main(cfg=None):
+    """
+    Train the Pure VFE Transformer using the provided config dict.
+    Falls back to PURE_VFE_CONFIG if none given.
+    """
+    if cfg is None:
+        cfg = PURE_VFE_CONFIG
 
     # ── Resolve device ──
-    device = args.device
-    if device == "cuda" and not torch.cuda.is_available():
+    device = cfg['device']
+    if device == 'cuda' and not torch.cuda.is_available():
         print("[WARN] CUDA not available, falling back to CPU")
-        device = "cpu"
+        device = 'cpu'
+        cfg['device'] = 'cpu'
+        cfg['use_cuda_kernels'] = False
 
     # ── Load data ──
-    if args.data == "wikitext2":
+    if cfg['data_source'] == 'wikitext2':
         try:
             print("Loading WikiText-2...")
-            data = load_wikitext2(args.seq_len)
-            vocab_size = 50257  # GPT-2 vocab
-            print(f"  {data.shape[0]} sequences, vocab={vocab_size}")
+            data = load_wikitext2(cfg['max_seq_len'])
+            cfg['vocab_size'] = 50257  # GPT-2 vocab
+            print(f"  {data.shape[0]} sequences, vocab={cfg['vocab_size']}")
         except ImportError:
             print("ERROR: WikiText-2 requires:  pip install datasets transformers")
-            print("       Or run with --data synthetic (default)")
+            print("       Set data_source='synthetic' to run without extra deps.")
             sys.exit(1)
     else:
-        vocab_size = args.vocab_size
-        data = make_synthetic_data(vocab_size, args.seq_len)
-        print(f"Synthetic data: {data.shape[0]} seqs, vocab={vocab_size}, seq_len={args.seq_len}")
+        data = make_synthetic_data(
+            cfg['vocab_size'], cfg['max_seq_len'], cfg['n_synthetic_seqs']
+        )
+        print(f"Synthetic data: {data.shape[0]} seqs, "
+              f"vocab={cfg['vocab_size']}, seq_len={cfg['max_seq_len']}")
 
-    # ── Build config ──
-    head_dim = args.belief_dim // args.n_heads
-    config = PureVFEConfig(
-        vocab_size=vocab_size,
-        belief_dim=args.belief_dim,
-        n_heads=args.n_heads,
-        head_dim=head_dim,
-        n_esteps=args.n_esteps,
-        eta_E=args.eta_E,
-        eta_M=args.eta_M,
-        batch_size=args.batch_size,
-        max_seq_len=args.seq_len,
-        device=device,
-        use_cuda_kernels=(device == "cuda"),
-    )
-
-    # ── Build model ──
+    # ── Build config and model ──
+    config = build_config(cfg)
     model = PureVFETransformer(config)
     params = model.param_count()
 
@@ -165,8 +236,10 @@ def main():
     # ── Train ──
     best_loss = float("inf")
     global_step = 0
+    log_interval = cfg['log_interval']
+    save_path = cfg['save_path']
 
-    for epoch in range(args.epochs):
+    for epoch in range(cfg['epochs']):
         epoch_loss = 0.0
         epoch_steps = 0
 
@@ -179,7 +252,7 @@ def main():
             epoch_steps += 1
             global_step += 1
 
-            if global_step % args.log_interval == 0:
+            if global_step % log_interval == 0:
                 ppl = torch.exp(torch.tensor(ce_loss)).item()
                 vfe_0 = vfe_history[0] if vfe_history else 0.0
                 vfe_f = vfe_history[-1] if vfe_history else 0.0
@@ -197,10 +270,10 @@ def main():
         avg_ppl = torch.exp(torch.tensor(avg_loss)).item()
         print(f"\n  Epoch {epoch} summary: loss={avg_loss:.3f}  ppl={avg_ppl:.1f}\n")
 
-        if args.save and avg_loss < best_loss:
+        if save_path and avg_loss < best_loss:
             best_loss = avg_loss
-            model.save(args.save)
-            print(f"  Saved best model -> {args.save}\n")
+            model.save(save_path)
+            print(f"  Saved best model -> {save_path}\n")
 
     print("Done.")
     return model
