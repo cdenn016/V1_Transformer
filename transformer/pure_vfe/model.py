@@ -86,7 +86,8 @@ class PureVFETransformer:
             ce_loss: scalar float
         """
         mu, Sigma, Omega, logits, vfe = e_step(token_ids, self, self.config)
-        ce_loss = m_step(token_ids, targets, mu, Sigma, Omega, self, self.config)
+        ce_loss = m_step(token_ids, targets, mu, Sigma, Omega, self, self.config,
+                         logits=logits)
         return logits, ce_loss, vfe
 
     def save(self, path):
