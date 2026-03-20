@@ -7,15 +7,6 @@ Created on Thu Mar 12 08:09:57 2026
 
 
 # =============================================================================
-# PATH SETUP - Ensure the project root is in the Python path# -*- coding: utf-8 -*-
-"""
-Created on Thu Mar 12 08:09:57 2026
-
-@author: chris and christine
-"""
-
-
-# =============================================================================
 # PATH SETUP - Ensure the project root is in the Python path
 # This allows the script to be run from any directory (including the transformer/ folder)
 # =============================================================================

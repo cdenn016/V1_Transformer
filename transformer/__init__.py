@@ -30,7 +30,9 @@ from transformer.core.model import GaugeTransformerLM
 # =============================================================================
 # Training (from transformer.training and transformer.train_publication)
 # =============================================================================
-from transformer.train_publication import PublicationTrainer as Trainer
+# NOTE: PublicationTrainer is imported lazily via __getattr__ to avoid a
+# circular import (train_publication.py imports from transformer.core which
+# triggers this __init__.py).
 from transformer.training.config import TrainingConfig
 from transformer.training import (
     create_optimizer,
@@ -50,6 +52,13 @@ from transformer.data import (
     create_char_dataloaders,
     create_byte_dataloaders,
 )
+
+def __getattr__(name):
+    if name == "Trainer":
+        from transformer.train_publication import PublicationTrainer
+        return PublicationTrainer
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     # Core model
