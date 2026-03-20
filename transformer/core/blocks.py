@@ -287,28 +287,17 @@ class GaugeTransformerBlock(nn.Module):
         # For direct omega mode: build per-head cached transports from omega blocks
         # so the attention sublayer uses Omega_h / Omega_h_inv instead of matrix_exp.
         if omega is not None and getattr(self.ffn, 'gauge_param', 'phi') == 'omega' and cached_head_transports is None:
-            from transformer.core.attention import compute_transport_operators_direct
-
-            # Non-flat omega transport: compute edge-local connection δ_ij
-            delta_ij = None
-            if self.non_flat_transport and self.gauge_connection is not None:
-                delta_ij = self.gauge_connection(mu_normalized, mu_normalized)  # (B, N, N, n_gen)
-
-            # Use compute_transport_operators_direct for full-K, then split per head
-            transport = compute_transport_operators_direct(
-                omega=omega,
-                gauge_mode='learned',
-                connection_delta=delta_ij,
-                generators=generators if delta_ij is not None else None,
-                cocycle_relaxation=self.cocycle_relaxation,
-            )
-            Omega_full = transport['Omega']  # (B, N, N, K, K)
+            # Build per-head (omega_h, omega_h_inv) pairs using per-block inv
+            # (avoids full K×K inv when omega is block-diagonal)
             irrep_dims = self.attention.irrep_dims
             cached_head_transports = []
             block_start = 0
             for d_h in irrep_dims:
+                omega_h = omega[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
+                omega_h_inv = torch.linalg.inv(omega_h)  # (B, N, d_h, d_h)
                 cached_head_transports.append({
-                    'Omega': Omega_full[:, :, :, block_start:block_start+d_h, block_start:block_start+d_h],
+                    'exp_phi': omega_h,
+                    'exp_neg_phi': omega_h_inv,
                 })
                 block_start += d_h
 

@@ -645,13 +645,18 @@ class GaugeTransformerLM(nn.Module):
         if omega is not None and self.gauge_param == 'omega':
             # Direct omega: build per-head cached transports from omega blocks
             irrep_dims = self.transformer.blocks[0].attention.irrep_dims
+            # Pass per-position (omega_h, omega_h_inv) pairs instead of
+            # materializing O(B×N×N×d²) pairwise Omega. The attention module
+            # converts these to block_exp_pairs for the fast block-diagonal KL path.
             cached_head_transports = []
             block_start = 0
             for d_h in irrep_dims:
                 omega_h = omega[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
                 omega_h_inv = torch.linalg.inv(omega_h)
-                Omega_h_ij = torch.einsum('bimk,bjkn->bijmn', omega_h, omega_h_inv)
-                cached_head_transports.append({'Omega': Omega_h_ij})
+                cached_head_transports.append({
+                    'exp_phi': omega_h,
+                    'exp_neg_phi': omega_h_inv,
+                })
                 block_start += d_h
         elif not self.evolve_phi:
             # Get the first block's attention layer to access head generators
@@ -806,13 +811,18 @@ class GaugeTransformerLM(nn.Module):
         if omega is not None and self.gauge_param == 'omega':
             # Direct omega: build per-head cached transports from omega blocks
             irrep_dims = self.transformer.blocks[0].attention.irrep_dims
+            # Pass per-position (omega_h, omega_h_inv) pairs instead of
+            # materializing O(B×N×N×d²) pairwise Omega. The attention module
+            # converts these to block_exp_pairs for the fast block-diagonal KL path.
             cached_head_transports = []
             block_start = 0
             for d_h in irrep_dims:
                 omega_h = omega[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
                 omega_h_inv = torch.linalg.inv(omega_h)
-                Omega_h_ij = torch.einsum('bimk,bjkn->bijmn', omega_h, omega_h_inv)
-                cached_head_transports.append({'Omega': Omega_h_ij})
+                cached_head_transports.append({
+                    'exp_phi': omega_h,
+                    'exp_neg_phi': omega_h_inv,
+                })
                 block_start += d_h
         elif not self.evolve_phi:
             first_attention = self.transformer.blocks[0].attention
@@ -1002,13 +1012,18 @@ class GaugeTransformerLM(nn.Module):
         # Precompute transport operators
         if omega is not None and self.gauge_param == 'omega':
             irrep_dims = self.transformer.blocks[0].attention.irrep_dims
+            # Pass per-position (omega_h, omega_h_inv) pairs instead of
+            # materializing O(B×N×N×d²) pairwise Omega. The attention module
+            # converts these to block_exp_pairs for the fast block-diagonal KL path.
             cached_head_transports = []
             block_start = 0
             for d_h in irrep_dims:
                 omega_h = omega[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
                 omega_h_inv = torch.linalg.inv(omega_h)
-                Omega_h_ij = torch.einsum('bimk,bjkn->bijmn', omega_h, omega_h_inv)
-                cached_head_transports.append({'Omega': Omega_h_ij})
+                cached_head_transports.append({
+                    'exp_phi': omega_h,
+                    'exp_neg_phi': omega_h_inv,
+                })
                 block_start += d_h
         elif not self.evolve_phi:
             first_attention = self.transformer.blocks[0].attention

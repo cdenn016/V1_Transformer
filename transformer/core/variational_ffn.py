@@ -2248,8 +2248,18 @@ class VariationalFFNDynamic(nn.Module):
         sigma_q = sigma_current.detach().float().clamp(min=eps)
         omega = omega_current.detach().float()  # (B, N, K, K)
 
-        # Compute omega_inv for all positions
-        omega_inv = torch.linalg.inv(omega)  # (B, N, K, K)
+        # Compute per-block omega_inv (block-diagonal: 5×10×10 inv instead of 1×50×50)
+        irrep_dims = self.irrep_dims if self.irrep_dims is not None else [K]
+        omega_inv = torch.zeros_like(omega)
+        _block_exp_pairs = []
+        block_start = 0
+        for d in irrep_dims:
+            block_end = block_start + d
+            om_blk = omega[:, :, block_start:block_end, block_start:block_end]
+            om_inv_blk = torch.linalg.inv(om_blk)  # (B, N, d, d) — much smaller
+            omega_inv[:, :, block_start:block_end, block_start:block_end] = om_inv_blk
+            _block_exp_pairs.append((om_blk, om_inv_blk))
+            block_start = block_end
 
         # Compute block-diagonal KL + attention for softmax coupling weights
         # Use the same approach as analytic_phi_gradient: precompute beta and kl_matrix
@@ -2265,6 +2275,7 @@ class VariationalFFNDynamic(nn.Module):
             gauge_mode=self.gauge_mode,
             irrep_dims=self.irrep_dims,
             mask_self_attention=self.mask_self_attention,
+            cached_block_exp_pairs=_block_exp_pairs,
         )
         if isinstance(beta_kl, tuple):
             beta, kl_matrix = beta_kl
@@ -2281,7 +2292,6 @@ class VariationalFFNDynamic(nn.Module):
 
         # Process block-diagonally (per irrep block)
         grad_omega = torch.zeros_like(omega)
-        irrep_dims = self.irrep_dims if self.irrep_dims is not None else [K]
 
         tile_size = 16
         block_start = 0
