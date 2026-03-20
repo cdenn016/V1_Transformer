@@ -71,7 +71,7 @@ BASELINE_CONFIG = {
     'batch_size': 16,
     'num_workers': 10,
     'epochs': None,
-    'max_steps': 1000,      # Reduced from 60k for ablation efficiency
+    'max_steps': 60000,      # Reduced from 60k for ablation efficiency
     'warmup_steps': 100,
 
     # VFE mode
@@ -113,20 +113,22 @@ BASELINE_CONFIG = {
     'ffn_chunk_size': 512,
 
     # Learning rates
-    'mu_lr': 0.05,
-    'sigma_lr': 0.005,
-    'phi_lr': 0.005,
-    'ffn_lr': 0.05,
+    'mu_lr':     0.05,
+    'sigma_lr':  0.0125,
+    'phi_lr':    0.0075,
+    'ffn_lr':    0.05,
+    
     'attention_lr': 0.005,
     'output_lr': 0.05,
 
     # Free energy loss weights
-    'alpha': 0.075,
+    'alpha': 0.0,
     'alpha_phi': 0.1,
     'beta': 0,              # lambda_beta in loss (outer loop)
     'lambda_gamma': 0,
     'lambda_hyper': 0,
     'kappa_gamma': 1,
+    
     'ffn_lambda_belief': 1,  # lambda_belief inside VFE E-step
     'ffn_alpha': 1,          # alpha inside VFE E-step
 
@@ -142,7 +144,7 @@ BASELINE_CONFIG = {
 
     # Logging
     'log_interval': 100,
-    'eval_interval': 1000,
+    'eval_interval': 5000,
     'checkpoint_interval': 25000,
     'semantic_analysis_interval': 0,  # Disable for speed
 
@@ -151,7 +153,9 @@ BASELINE_CONFIG = {
     'gauge_group': 'GLK',
     'gauge_dim': 10,
     'gauge_mode': 'learned',
+    
     'phi_natural_gradient': 'killing',
+    
     'use_slk_projection': False,
     'use_killing_form': True,
     'killing_form_sym_dampening': 0.1,
@@ -169,7 +173,7 @@ BASELINE_CONFIG = {
 
     'use_amp': False,
 
-    'dataset': 'wikitext-2', #'wiki-2' for quick sweeps
+    'dataset': 'wikitext-103', #'wiki-2' for quick sweeps
 }
 
 
@@ -185,7 +189,7 @@ SWEEPS = {
         'description': 'Self-consistency KL(q||p) weight in training loss',
         'param': 'alpha',
         'values': [0, 0.025, 0.05, 0.075, 0.1, 0.2, 0.5],
-        'baseline_value': 0.075,
+        'baseline_value': 0.00,
     },
 
     'ffn_alpha': {
@@ -234,7 +238,7 @@ SWEEPS = {
     'n_layers': {
         'description': 'Number of transformer layers (RG depth)',
         'param': 'n_layers',
-        'values': [1, 2, 3, 4],
+        'values': [1, 2, 3],
         'baseline_value': 1,
     },
 
@@ -306,35 +310,35 @@ SWEEPS = {
     'mu_lr': {
         'description': 'Belief mean (μ) learning rate',
         'param': 'mu_lr',
-        'values': [0.005, 0.01, 0.02, 0.05, 0.1, 0.2],
+        'values': [0.0025, 0.01, 0.02, 0.04, 0.05, 0.06, 0.08, 0.1],
         'baseline_value': 0.05,
     },
 
     'sigma_lr': {
         'description': 'Belief precision (σ) learning rate',
         'param': 'sigma_lr',
-        'values': [0.0005, 0.001, 0.002, 0.005, 0.01, 0.02],
+        'values': [0.001, 0.0025, 0.005, 0.0075, 0.0125, 0.05, 0.1],
         'baseline_value': 0.005,
     },
 
     'phi_lr': {
         'description': 'Gauge frame (φ) learning rate',
         'param': 'phi_lr',
-        'values': [0.0005, 0.001, 0.002, 0.005, 0.01, 0.02],
+        'values': [0.001, 0.0025, 0.005, 0.0075, 0.0125, 0.02, 0.05, 0.1],
         'baseline_value': 0.005,
     },
 
     'ffn_lr': {
         'description': 'FFN / VFE module learning rate',
         'param': 'ffn_lr',
-        'values': [0.005, 0.01, 0.02, 0.05, 0.1, 0.2],
+        'values': [0.0025, 0.01, 0.03, 0.05, 0.07, 0.09, 0.15],
         'baseline_value': 0.05,
     },
 
     'attention_lr': {
         'description': 'Attention module learning rate',
         'param': 'attention_lr',
-        'values': [0.0005, 0.001, 0.002, 0.005, 0.01, 0.02],
+        'values': [0.005, 0.006, 0.007, 0.008, 0.009],
         'baseline_value': 0.005,
     },
 
@@ -348,25 +352,32 @@ SWEEPS = {
 
 # Sweep execution order (cheapest → most expensive)
 SWEEP_ORDER = [
+    
+    #'gauge_dim', 
+    'K', 
+    #'n_layers',
+    #'n_vfe_iterations', 
+      
     #'alpha', 
     #'beta', 
     #'alpha_phi', 
-    'ffn_alpha',
-    'ffn_lambda_belief',
-    'mu_lr',
-    'sigma_lr',
-    'phi_lr',
-    'ffn_lr',
-    'attention_lr',
-    'output_lr',
-    #'rope',
+    #'ffn_alpha',
+    #'ffn_lambda_belief',  
+    
+    #'attention_lr',
+    #'output_lr',
+    
     #'covariance', 
+    
     #'gauge_mode', 
     #'phi_preconditioner',
-    #'n_vfe_iterations', 
-    #'gauge_dim', 
-    #'K', 
-    #'n_layers',
+    
+    #'sigma_lr',
+    #'phi_lr',
+    
+    #'ffn_lr',
+    #'mu_lr',
+    #'rope',
 ]
 
 
@@ -750,7 +761,7 @@ def main():
                         help='Run a specific sweep (e.g., "alpha", "K"). '
                              'If not set, runs all sweeps in order.')
     parser.add_argument('--device', type=str, default='auto')
-    parser.add_argument('--dataset', type=str, default='wikitext-2',
+    parser.add_argument('--dataset', type=str, default='wikitext-103',
                         choices=['wikitext-2', 'wikitext-103'])
     parser.add_argument('--output_dir', type=str, default='ablation_results')
     parser.add_argument('--max_steps', type=int, default=None,
