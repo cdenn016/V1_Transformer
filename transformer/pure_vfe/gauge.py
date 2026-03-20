@@ -169,10 +169,8 @@ def vfe_grad_Omega(mu_h, Sigma_h, Omega, beta, kl_ij, precomp):
     Full VFE gradient ∂F/∂Ω_i aggregated over attention-weighted pairs.
 
     ∂F/∂Ω_i = Σ_j β_ij · ∂KL_ij/∂Ω_i  (forward contribution)
-             + Σ_k β_ki · ∂KL_ki/∂Ω_i  (reverse contribution: i as key)
 
-    For efficiency, we combine forward and reverse in a single pass.
-    The softmax correction for Ω is typically small and omitted.
+    Fully vectorized over all (b, i, j) pairs per head.
 
     Args:
         mu_h: [B, N, H, K_h] per-head means
@@ -186,57 +184,67 @@ def vfe_grad_Omega(mu_h, Sigma_h, Omega, beta, kl_ij, precomp):
     """
     B, N, H, K_h = mu_h.shape
     device = mu_h.device
+    dtype = mu_h.dtype
 
-    grad_Omega = torch.zeros(B, N, H, K_h, K_h, device=device, dtype=mu_h.dtype)
+    grad_Omega = torch.zeros(B, N, H, K_h, K_h, device=device, dtype=dtype)
 
     # Transpose to head-first for consistency with beta
     mu = mu_h.permute(0, 2, 1, 3)          # [B, H, N, K_h]
     Sig = Sigma_h.permute(0, 2, 1, 3, 4)   # [B, H, N, K_h, K_h]
     Om = Omega.permute(0, 2, 1, 3, 4)      # [B, H, N, K_h, K_h]
 
-    # For memory efficiency, iterate over heads
+    # Iterate over heads only (not over batch or positions)
     for h in range(H):
-        mu_h_slice = mu[:, h]        # [B, N, K_h]
-        Sig_h_slice = Sig[:, h]      # [B, N, K_h, K_h]
-        Om_h_slice = Om[:, h]        # [B, N, K_h, K_h]
-        beta_h = beta[:, h]          # [B, N, N]
+        mu_h_s = mu[:, h]           # [B, N, K_h]
+        Sig_h_s = Sig[:, h]         # [B, N, K_h, K_h]
+        Om_h_s = Om[:, h]           # [B, N, K_h, K_h]
+        beta_h = beta[:, h]         # [B, N, N]
 
-        Om_inv_h = torch.linalg.inv(Om_h_slice)  # [B, N, K_h, K_h]
+        # Compute Ω_j⁻¹ for all j: [B, N, K_h, K_h]
+        Om_inv = torch.linalg.inv(Om_h_s)
 
-        # Forward contribution: Σ_j β_ij ∂KL_ij/∂Ω_i
-        # For each i, aggregate over top-k j (sparse attention)
-        for b in range(B):
-            # Vectorized over (i, j) pairs with significant β
-            for i in range(N):
-                beta_row = beta_h[b, i]  # [N]
-                # Only compute for j with significant weight
-                active = beta_row > 1e-8
-                if not active.any():
-                    continue
+        # Compute Ω_ij = Ω_i @ Ω_j⁻¹ for all (i,j) pairs
+        # Om_h_s[:, :, None] is [B, N_i, 1, K_h, K_h]
+        # Om_inv[:, None, :] is [B, 1, N_j, K_h, K_h]
+        Om_ij = Om_h_s[:, :, None] @ Om_inv[:, None, :]  # [B, N, N, K_h, K_h]
+        Om_ij_inv = torch.linalg.inv(Om_ij)               # [B, N, N, K_h, K_h]
+        Om_ij_invT = Om_ij_inv.transpose(-2, -1)
 
-                j_indices = active.nonzero(as_tuple=True)[0]
-                mu_i = mu_h_slice[b, i]          # [K_h]
-                Sig_i = Sig_h_slice[b, i]        # [K_h, K_h]
-                Om_i = Om_h_slice[b, i]          # [K_h, K_h]
+        # Σ_j⁻¹ for all j
+        Sig_j_inv = safe_inverse(Sig_h_s)  # [B, N, K_h, K_h]
 
-                mu_js = mu_h_slice[b, j_indices]      # [J, K_h]
-                Sig_js = Sig_h_slice[b, j_indices]     # [J, K_h, K_h]
-                Om_js = Om_h_slice[b, j_indices]       # [J, K_h, K_h]
+        # Λ_ij = Ω_ij⁻ᵀ Σ_j⁻¹ Ω_ij⁻¹: [B, N_i, N_j, K_h, K_h]
+        Lambda_ij = Om_ij_invT @ Sig_j_inv[:, None, :] @ Om_ij_inv
 
-                # Expand i to match j batch
-                J = j_indices.shape[0]
-                mu_i_exp = mu_i.unsqueeze(0).expand(J, -1)
-                Sig_i_exp = Sig_i.unsqueeze(0).expand(J, -1, -1)
-                Om_i_exp = Om_i.unsqueeze(0).expand(J, -1, -1)
+        # δ_ij = μ_i - Ω_ij μ_j: [B, N_i, N_j, K_h]
+        Om_ij_mu_j = torch.einsum('bijnk,bjk->bijn', Om_ij, mu_h_s)
+        delta_ij = mu_h_s[:, :, None] - Om_ij_mu_j  # [B, N_i, N_j, K_h]
 
-                # ∂KL/∂Ω_i for all active j
-                dKL_dOi = grad_kl_Omega_i(
-                    mu_i_exp, Sig_i_exp, mu_js, Sig_js, Om_i_exp, Om_js
-                )  # [J, K_h, K_h]
+        # ∂KL/∂Ω_ij:
+        # Term 1: -Λ δ μ_jᵀ
+        Lam_delta = torch.einsum('bijpq,bijq->bijp', Lambda_ij, delta_ij)
+        term1 = -Lam_delta.unsqueeze(-1) * mu_h_s[:, None, :].unsqueeze(-2)
+        # term1: [B, N_i, N_j, K_h, 1] * [B, 1, N_j, 1, K_h] = [B, N_i, N_j, K_h, K_h]
 
-                # Weighted sum
-                weights = beta_row[j_indices]  # [J]
-                grad_Omega[b, i, h] += (weights.unsqueeze(-1).unsqueeze(-1) * dKL_dOi).sum(0)
+        # Term 2: -Λ (Σ_i + δδᵀ) Ω_ij⁻ᵀ
+        outer_ij = delta_ij.unsqueeze(-1) * delta_ij.unsqueeze(-2)
+        inner_ij = Sig_h_s[:, :, None] + outer_ij  # [B, N_i, N_j, K_h, K_h]
+        term2 = -(Lambda_ij @ inner_ij @ Om_ij_invT)
+
+        # Term 3: Ω_ij⁻ᵀ
+        term3 = Om_ij_invT
+
+        dKL_dOij = 0.5 * (term1 + term2) + 0.5 * term3  # [B, N_i, N_j, K_h, K_h]
+
+        # Chain rule: ∂KL/∂Ω_i = ∂KL/∂Ω_ij @ Ω_j⁻ᵀ
+        Om_j_invT = Om_inv.transpose(-2, -1)  # [B, N_j, K_h, K_h]
+        dKL_dOi = dKL_dOij @ Om_j_invT[:, None, :]  # [B, N_i, N_j, K_h, K_h]
+
+        # Weighted sum: Σ_j β_ij · ∂KL/∂Ω_i
+        # beta_h: [B, N_i, N_j], dKL_dOi: [B, N_i, N_j, K_h, K_h]
+        grad_h = torch.einsum('bij,bijpq->bipq', beta_h, dKL_dOi)  # [B, N, K_h, K_h]
+
+        grad_Omega[:, :, h] = grad_h
 
     return grad_Omega
 

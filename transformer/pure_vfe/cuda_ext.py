@@ -18,7 +18,18 @@ def get_cuda_ext():
         return None
 
     try:
-        from torch.utils.cpp_extension import load
+        from torch.utils.cpp_extension import load, is_ninja_available
+
+        if not is_ninja_available():
+            # ninja system binary exists but Python package missing
+            import shutil
+            if shutil.which("ninja"):
+                print("[pure_vfe] System ninja found but Python ninja package missing. "
+                      "Run: pip install ninja")
+            else:
+                print("[pure_vfe] ninja not found. Run: pip install ninja")
+            _cuda_module = None
+            return _cuda_module
 
         csrc_dir = os.path.join(os.path.dirname(__file__), "csrc")
         _cuda_module = load(

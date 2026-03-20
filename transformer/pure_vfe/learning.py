@@ -80,7 +80,8 @@ def _precompute_obs_gradient(ce_grad, mu_star, Sigma_star, update_tokens):
 
 
 @torch.no_grad()
-def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config):
+def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
+           logits=None):
     """
     Update prior bank via natural gradient on marginal VFE.
     Observation gradient enters HERE (not in E-step).
@@ -93,6 +94,7 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config):
         Omega_star: [B, N, H, K_h, K_h] converged gauge frames
         model: PureVFETransformer
         config: PureVFEConfig
+        logits: [B, N, V] optional precomputed logits from e_step
 
     Returns:
         ce_loss: scalar cross-entropy loss (for monitoring only)
@@ -106,7 +108,8 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config):
     # ================================================================
     # 1. Observation gradient (analytic softmax-CE)
     # ================================================================
-    logits = kl_decode_logits(mu_star, Sigma_star, model.prior_mu, model.prior_Sigma)
+    if logits is None:
+        logits = kl_decode_logits(mu_star, Sigma_star, model.prior_mu, model.prior_Sigma)
     ce_grad = softmax_ce_gradient(logits, targets)  # [B, N, V]
 
     # CE loss for monitoring
@@ -136,107 +139,123 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config):
     obs_weighted_outer = obs['obs_weighted_outer']
 
     # ================================================================
-    # 3. Update prior bank
+    # 3. Update prior bank (vectorized over all update tokens)
     # ================================================================
-    for idx, v in enumerate(update_tokens):
-        v = v.item()
+    T = len(update_tokens)
+    dev = mu_star.device
 
-        # Current priors
-        mu_v = model.prior_mu[v]              # [K]
-        Sigma_v = model.prior_Sigma[v]        # [K, K]
-        Sigma_v_inv = safe_inverse(Sigma_v.unsqueeze(0)).squeeze(0)
+    # Gather current priors for all update tokens: [T, K], [T, K, K]
+    mu_all = model.prior_mu[update_tokens]          # [T, K]
+    Sigma_all = model.prior_Sigma[update_tokens]    # [T, K, K]
+    Sigma_all_inv = safe_inverse(Sigma_all)          # [T, K, K]
 
-        # Check if token appears as input (has VFE prior gradient)
-        input_mask = (token_ids == v)
-        n_v = input_mask.sum().item()
+    # ---- Compute VFE prior gradients via scatter-based aggregation ----
+    # Map each (b,n) position to its token index in update_tokens
+    flat_ids = token_ids.reshape(-1)                  # [BN]
+    flat_idx = token_to_idx[flat_ids]                 # [BN] -> index in [0..T-1]
 
-        # ---- Prior mean gradient ----
-        if n_v > 0:
-            mu_star_v = mu_star[input_mask]   # [n_v, K]
-            mu_diff_v = mu_star_v - mu_v      # [n_v, K]
+    # Count occurrences of each update token as input
+    n_counts = torch.zeros(T, device=dev, dtype=mu_star.dtype)
+    n_counts.scatter_add_(0, flat_idx, torch.ones(B * N, device=dev, dtype=mu_star.dtype))
 
-            # ∂KL(q*||p_v)/∂μ_v = -Σ_v⁻¹(μ* - μ_v)
-            grad_mu_v = -(Sigma_v_inv @ mu_diff_v.mean(0))
-        else:
-            grad_mu_v = torch.zeros(K, device=mu_v.device, dtype=mu_v.dtype)
+    # Sum of mu_star per token: [T, K]
+    mu_star_flat = mu_star.reshape(BN, K)              # [BN, K]
+    mu_star_sum = torch.zeros(T, K, device=dev, dtype=mu_star.dtype)
+    mu_star_sum.scatter_add_(0, flat_idx.unsqueeze(-1).expand(-1, K), mu_star_flat)
 
-        # Hyper-prior pull: regularize toward origin
-        grad_mu_v = grad_mu_v + mu_v / config.hyper_var
+    # Sum of Sigma_star per token: [T, K, K]
+    Sigma_star_flat = Sigma_star.reshape(BN, K, K)
+    Sigma_star_sum = torch.zeros(T, K, K, device=dev, dtype=mu_star.dtype)
+    Sigma_star_sum.scatter_add_(0, flat_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, K, K),
+                                 Sigma_star_flat)
 
-        # Exact observation gradient for μ_v over ALL positions:
-        # ∂CE/∂μ_v = (1/BN) Σ_{b,n} ce_grad[b,n,v] · Σ_v⁻¹(μ*_{b,n} - μ_v)
-        #          = (1/BN) · Σ_v⁻¹ · (obs_weighted_mu[v] - obs_ce_sum[v]·μ_v)
-        obs_diff = obs_weighted_mu[idx] - obs_ce_sum[idx] * mu_v
-        obs_grad_mu = Sigma_v_inv @ (obs_diff / BN)
-        grad_mu_v = grad_mu_v + obs_grad_mu
+    # Sum of (mu_star - mu_v)(mu_star - mu_v)^T per token
+    # mu_diff_flat[bn] = mu_star[bn] - mu_v[token_of_bn]
+    mu_v_expanded = mu_all[flat_idx]                   # [BN, K]
+    mu_diff_flat = mu_star_flat - mu_v_expanded        # [BN, K]
+    outer_flat = mu_diff_flat.unsqueeze(-1) * mu_diff_flat.unsqueeze(-2)  # [BN, K, K]
+    outer_sum = torch.zeros(T, K, K, device=dev, dtype=mu_star.dtype)
+    outer_sum.scatter_add_(0, flat_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, K, K),
+                            outer_flat)
 
-        # Natural gradient: Δμ_v = -η Σ_v ∂F/∂μ_v
-        nat_mu_v = Sigma_v @ grad_mu_v
-        nat_mu_v = clip_norm(nat_mu_v.unsqueeze(0), 1.0).squeeze(0)
-        model.prior_mu[v] = mu_v - config.eta_M * nat_mu_v
+    # Omega_star aggregation per token
+    Omega_star_flat = Omega_star.reshape(BN, H, K_h, K_h)
+    Omega_star_sum = torch.zeros(T, H, K_h, K_h, device=dev, dtype=mu_star.dtype)
+    Omega_star_sum.scatter_add_(
+        0, flat_idx.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, H, K_h, K_h),
+        Omega_star_flat
+    )
 
-        # ---- Prior covariance gradient ----
-        if n_v > 0:
-            mu_star_v = mu_star[input_mask]
-            Sigma_star_v = Sigma_star[input_mask]
-            mu_diff_v = mu_star_v - mu_v
+    # Mask for tokens that actually appear as input (n_v > 0)
+    has_input = n_counts > 0                           # [T]
+    n_safe = n_counts.clamp(min=1)                     # avoid div by 0
 
-            # ∂KL(q*||p_v)/∂Σ_v = ½[Σ_v⁻¹ - Σ_v⁻¹(E[Σ*] + E[ΔμΔμᵀ])Σ_v⁻¹]
-            Sigma_star_avg = Sigma_star_v.mean(0)     # [K, K]
-            outer_avg = (mu_diff_v.unsqueeze(-1) * mu_diff_v.unsqueeze(-2)).mean(0)
+    # ---- Prior mean gradient (vectorized) ----
+    # VFE gradient: -Σ_v⁻¹ (mean(mu_star_v) - mu_v) for tokens with input
+    mu_star_avg = mu_star_sum / n_safe.unsqueeze(-1)   # [T, K]
+    mu_diff_avg = mu_star_avg - mu_all                 # [T, K]
+    grad_mu_vfe = -torch.einsum('tij,tj->ti', Sigma_all_inv, mu_diff_avg)
+    grad_mu_vfe[~has_input] = 0.0
 
-            grad_Sigma_v = 0.5 * (
-                Sigma_v_inv
-                - Sigma_v_inv @ (Sigma_star_avg + outer_avg) @ Sigma_v_inv
-            )
-        else:
-            grad_Sigma_v = torch.zeros(K, K, device=mu_v.device, dtype=mu_v.dtype)
+    # Hyper-prior
+    grad_mu = grad_mu_vfe + mu_all / config.hyper_var
 
-        # Hyper-prior regularization
-        grad_Sigma_v = grad_Sigma_v + 0.5 * Sigma_v_inv / config.hyper_var
+    # Observation gradient
+    obs_diff = obs_weighted_mu - obs_ce_sum.unsqueeze(-1) * mu_all  # [T, K]
+    obs_grad_mu = torch.einsum('tij,tj->ti', Sigma_all_inv, obs_diff / BN)
+    grad_mu = grad_mu + obs_grad_mu
 
-        # Exact observation gradient for Σ_v over ALL positions:
-        # ∂logit_v/∂Σ_v = ½[Σ_v⁻¹(Σ* + δδᵀ)Σ_v⁻¹ - Σ_v⁻¹]
-        # ∂CE/∂Σ_v = (1/BN) Σ_{b,n} ce_grad[b,n,v] · ∂logit_v/∂Σ_v
-        #
-        # W_v = Σ_{b,n} ce_grad[b,n,v]·(Σ* + (μ*-μ_v)(μ*-μ_v)ᵀ)
-        #     = obs_weighted_Sigma + obs_weighted_outer
-        #       - obs_weighted_mu·μ_vᵀ - μ_v·obs_weighted_muᵀ + obs_ce_sum·μ_vμ_vᵀ
-        w_mu = obs_weighted_mu[idx]  # [K]
-        s_v = obs_ce_sum[idx]        # scalar
-        W_v = (
-            obs_weighted_Sigma[idx]
-            + obs_weighted_outer[idx]
-            - w_mu.unsqueeze(-1) * mu_v.unsqueeze(0)
-            - mu_v.unsqueeze(-1) * w_mu.unsqueeze(0)
-            + s_v * mu_v.unsqueeze(-1) * mu_v.unsqueeze(0)
-        )
-        obs_grad_Sigma = 0.5 * (Sigma_v_inv @ W_v @ Sigma_v_inv - s_v * Sigma_v_inv) / BN
-        obs_grad_Sigma = symmetrize(obs_grad_Sigma)
-        grad_Sigma_v = grad_Sigma_v + obs_grad_Sigma
+    # Natural gradient and update
+    nat_mu = torch.einsum('tij,tj->ti', Sigma_all, grad_mu)  # [T, K]
+    nat_mu = clip_norm(nat_mu, 1.0)
+    model.prior_mu[update_tokens] = mu_all - config.eta_M * nat_mu
 
-        # Natural gradient on SPD
-        nat_Sigma_v = natural_grad_sigma(
-            grad_Sigma_v.unsqueeze(0), Sigma_v.unsqueeze(0)
-        ).squeeze(0)
-        nat_Sigma_v = clip_matrix_norm(nat_Sigma_v.unsqueeze(0), 0.3).squeeze(0)
+    # ---- Prior covariance gradient (vectorized) ----
+    Sigma_star_avg = Sigma_star_sum / n_safe.unsqueeze(-1).unsqueeze(-1)
+    outer_avg = outer_sum / n_safe.unsqueeze(-1).unsqueeze(-1)
 
-        model.prior_Sigma[v] = retract_spd(
-            Sigma_v.unsqueeze(0), nat_Sigma_v.unsqueeze(0), config.eta_M,
-            eps_min=config.spd_eps_min, kappa_max=config.spd_kappa_max,
-        ).squeeze(0)
+    grad_Sigma_vfe = 0.5 * (
+        Sigma_all_inv
+        - Sigma_all_inv @ (Sigma_star_avg + outer_avg) @ Sigma_all_inv
+    )
+    grad_Sigma_vfe[~has_input] = 0.0
 
-        # ---- Prior gauge frame gradient ----
-        if n_v > 0:
-            Omega_star_v = Omega_star[input_mask]   # [n_v, H, K_h, K_h]
-            Omega_v = model.prior_Omega[v]          # [H, K_h, K_h]
+    # Hyper-prior
+    grad_Sigma = grad_Sigma_vfe + 0.5 * Sigma_all_inv / config.hyper_var
 
-            Omega_star_avg = Omega_star_v.mean(0)   # [H, K_h, K_h]
-            grad_Omega_v = -(Omega_star_avg - Omega_v)
+    # Observation gradient for Σ_v
+    # W_v = obs_weighted_Sigma + obs_weighted_outer
+    #       - obs_weighted_mu·μ_vᵀ - μ_v·obs_weighted_muᵀ + obs_ce_sum·μ_vμ_vᵀ
+    W = (
+        obs_weighted_Sigma + obs_weighted_outer
+        - obs_weighted_mu.unsqueeze(-1) * mu_all.unsqueeze(-2)
+        - mu_all.unsqueeze(-1) * obs_weighted_mu.unsqueeze(-2)
+        + obs_ce_sum.unsqueeze(-1).unsqueeze(-1) * (mu_all.unsqueeze(-1) * mu_all.unsqueeze(-2))
+    )  # [T, K, K]
+    obs_grad_Sigma = 0.5 * (
+        Sigma_all_inv @ W @ Sigma_all_inv
+        - obs_ce_sum.unsqueeze(-1).unsqueeze(-1) * Sigma_all_inv
+    ) / BN
+    obs_grad_Sigma = symmetrize(obs_grad_Sigma)
+    grad_Sigma = grad_Sigma + obs_grad_Sigma
 
-            nat_Omega_v = natural_grad_omega(grad_Omega_v, Omega_v)
-            nat_Omega_v = clip_matrix_norm(nat_Omega_v, 0.3)
-            model.prior_Omega[v] = Omega_v - config.eta_M * nat_Omega_v
+    # Natural gradient on SPD and retract
+    nat_Sigma = natural_grad_sigma(grad_Sigma, Sigma_all)
+    nat_Sigma = clip_matrix_norm(nat_Sigma, 0.3)
+    model.prior_Sigma[update_tokens] = retract_spd(
+        Sigma_all, nat_Sigma, config.eta_M,
+        eps_min=config.spd_eps_min, kappa_max=config.spd_kappa_max,
+    )
+
+    # ---- Prior gauge frame gradient (vectorized) ----
+    Omega_all = model.prior_Omega[update_tokens]       # [T, H, K_h, K_h]
+    Omega_star_avg = Omega_star_sum / n_safe.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+    grad_Omega_all = -(Omega_star_avg - Omega_all)
+    grad_Omega_all[~has_input] = 0.0
+
+    nat_Omega = natural_grad_omega(grad_Omega_all, Omega_all)
+    nat_Omega = clip_matrix_norm(nat_Omega, 0.3)
+    model.prior_Omega[update_tokens] = Omega_all - config.eta_M * nat_Omega
 
     # ================================================================
     # 4. Update positional gauge offsets
@@ -249,18 +268,15 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config):
 def _update_pos_omega(Omega_star, token_ids, model, config):
     """
     Update positional gauge offsets toward mean converged frames per position.
+    Vectorized over all positions.
     """
     B, N = token_ids.shape
-    H = config.n_heads
-    K_h = config.head_dim
 
-    for n in range(N):
-        # Average converged gauge at position n across batch
-        Om_avg_n = Omega_star[:, n].mean(0)  # [H, K_h, K_h]
+    # Average converged gauge at each position across batch: [N, H, K_h, K_h]
+    Om_avg = Omega_star.mean(0)               # [N, H, K_h, K_h]
+    pos_Om = model.pos_Omega[:N]              # [N, H, K_h, K_h]
 
-        # Pull positional frame toward average
-        pos_Om_n = model.pos_Omega[n]        # [H, K_h, K_h]
-        grad = -(Om_avg_n - pos_Om_n)
-        nat = natural_grad_omega(grad, pos_Om_n)
-        nat = clip_matrix_norm(nat, 0.3)
-        model.pos_Omega[n] = pos_Om_n - config.eta_M * 0.1 * nat  # Slower rate for positions
+    grad = -(Om_avg - pos_Om)
+    nat = natural_grad_omega(grad, pos_Om)
+    nat = clip_matrix_norm(nat, 0.3)
+    model.pos_Omega[:N] = pos_Om - config.eta_M * 0.1 * nat
