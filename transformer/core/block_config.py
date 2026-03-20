@@ -76,6 +76,7 @@ class BlockConfig:
 
     # === Gauge geometry ===
     gauge_mode: str = 'learned'         # 'learned' | 'trivial' (Ω=I) | 'constant' (per-head Ω)
+    gauge_param: str = 'phi'            # 'phi' (Lie algebra) | 'omega' (direct GL(K) matrices)
     enforce_orthogonal: bool = False    # Enforce Ω ∈ SO(K) via Newton-Schulz iteration
     isotropic_covariance: bool = False  # Force Σ = σ²I (manuscript Limit 1)
     # NOTE: learnable_reflection is an embedding-level feature, handled by
@@ -174,6 +175,7 @@ class BlockConfig:
             ffn_learnable_alpha=config.get('learnable_alpha', False),
             # Gauge geometry
             gauge_mode=config.get('gauge_mode', 'learned'),
+            gauge_param=config.get('gauge_param', 'phi'),
             enforce_orthogonal=config.get('enforce_orthogonal', False),
             isotropic_covariance=config.get('isotropic_covariance', False),
             # Non-flat gauge transport
