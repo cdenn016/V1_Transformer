@@ -2647,9 +2647,15 @@ class IrrepMultiHeadAttention(nn.Module):
                 }
                 _head_bep = None
             elif cached_head_transports is not None:
-                # Cross-layer cache: use precomputed full Omega
+                # Cross-layer cache: use precomputed per-position pairs
                 head_cached_transport = cached_head_transports[head_idx]
-                _head_bep = None
+                # If cache has per-position exp_phi/exp_neg_phi (not full Omega),
+                # convert to block_exp_pairs for the fast block-diagonal KL path.
+                if 'exp_phi' in head_cached_transport and 'Omega' not in head_cached_transport:
+                    _head_bep = [(head_cached_transport['exp_phi'],
+                                  head_cached_transport['exp_neg_phi'])]
+                else:
+                    _head_bep = None
             else:
                 # Use per-position exp pairs (no full Omega!)
                 head_cached_transport = {
