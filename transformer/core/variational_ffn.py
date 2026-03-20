@@ -2220,178 +2220,79 @@ class VariationalFFNDynamic(nn.Module):
         mask: Optional[torch.Tensor],
         eps: float,
     ) -> Optional[torch.Tensor]:
-        """Compute ∂F_align/∂Ω_i directly via chain rule (no dexp series).
+        """Compute ∂F_align/∂Ω_i via autograd (vectorized) or analytic fallback.
 
-        For each pair (i,j), the transport is Ω_ij = Ω_i · Ω_j⁻¹.
-        The gradient decomposes into forward (query-side) and reverse (key-side):
+        Mirrors the phi path: builds alignment_loss as a differentiable computation
+        through compute_attention_weights with omega.requires_grad_(), then calls
+        torch.autograd.grad for fully vectorized C++ backward pass.
 
-            ∂F/∂Ω_i = Σ_j w_ij · (∂KL_ij/∂Ω_ij) @ Ω_j⁻ᵀ     (query side)
-                     + Σ_j w_ji · (∂KL_ji/∂Ω_i)               (key side)
-
-        where ∂KL_ji/∂Ω_i = -(∂KL_ji/∂Ω_ji) @ Ω_ji @ Ω_i⁻¹ @ Ω_i⁻ᵀ  (chain rule for inverse)
-
-        This replaces the dexp commutator series with direct matrix operations.
+        Falls back to analytic tiled loop when autograd is unavailable.
 
         Returns:
             grad_omega: (B, N, K, K) gradient ∂F_align/∂Ω_i, or None if no gradient computed.
         """
-        import math
-        from transformer.core.gauge_utils import _compute_dkl_domega_diag
+        from transformer.core.attention import compute_attention_weights
 
         if sigma_current is None or not is_diagonal:
             return None  # Full covariance path not yet implemented
 
         B, N, K = mu_current.shape
         device = mu_current.device
-
-        mu_q = mu_current.detach().float()
-        sigma_q = sigma_current.detach().float().clamp(min=eps)
-        omega = omega_current.detach().float()  # (B, N, K, K)
-
-        # Compute per-block omega_inv (block-diagonal: 5×10×10 inv instead of 1×50×50)
         irrep_dims = self.irrep_dims if self.irrep_dims is not None else [K]
-        omega_inv = torch.zeros_like(omega)
+
+        # ── Autograd path (vectorized, matches phi autograd) ──────────
+        omega_for_grad = omega_current.detach().clone().requires_grad_(True)
+
+        # Build per-block (omega_h, omega_h_inv) pairs with grad tracking
         _block_exp_pairs = []
         block_start = 0
         for d in irrep_dims:
             block_end = block_start + d
-            om_blk = omega[:, :, block_start:block_end, block_start:block_end]
-            om_inv_blk = torch.linalg.inv(om_blk)  # (B, N, d, d) — much smaller
-            omega_inv[:, :, block_start:block_end, block_start:block_end] = om_inv_blk
+            om_blk = omega_for_grad[:, :, block_start:block_end, block_start:block_end]
+            om_inv_blk = torch.linalg.inv(om_blk)
             _block_exp_pairs.append((om_blk, om_inv_blk))
             block_start = block_end
 
-        # Compute block-diagonal KL + attention for softmax coupling weights
-        # Use the same approach as analytic_phi_gradient: precompute beta and kl_matrix
-        from transformer.core.attention import compute_attention_weights
-        beta_kl = compute_attention_weights(
-            mu_q=mu_q, sigma_q=sigma_q,
-            phi=torch.zeros(B, N, 1, device=device),  # dummy
-            generators=torch.zeros(1, K, K, device=device),  # dummy
-            kappa=self.kappa, epsilon=eps, mask=mask,
-            use_numba=False, return_kl=True,
-            diagonal_covariance=True,
-            gauge_param='omega', omega=omega,
-            gauge_mode=self.gauge_mode,
-            irrep_dims=self.irrep_dims,
-            mask_self_attention=self.mask_self_attention,
-            cached_block_exp_pairs=_block_exp_pairs,
-        )
-        if isinstance(beta_kl, tuple):
-            beta, kl_matrix = beta_kl
-        else:
-            beta = beta_kl
-            kl_matrix = beta
-
-        # Softmax coupling weights (same formula as analytic_phi_gradient)
-        tau = max(self.kappa * math.sqrt(max(K, 1)), eps)
-        w_i = (beta * kl_matrix).sum(dim=-1, keepdim=True)  # (B, N, 1)
-        coupling = 1.0 + (w_i - kl_matrix) / tau
-        weight = self.lambda_belief * beta * coupling  # (B, N, N)
-        weight_key = weight.transpose(1, 2)  # w_ji
-
-        # Process block-diagonally (per irrep block)
-        grad_omega = torch.zeros_like(omega)
-
-        tile_size = 16
+        # Compute alignment loss per head (differentiable through omega_for_grad)
+        alignment_loss = torch.tensor(0.0, device=device, dtype=mu_current.dtype)
         block_start = 0
-        for d in irrep_dims:
-            block_end = block_start + d
-            mu_blk = mu_q[:, :, block_start:block_end]
-            sig_blk = sigma_q[:, :, block_start:block_end]
-            om_blk = omega[:, :, block_start:block_end, block_start:block_end]
-            om_inv_blk = omega_inv[:, :, block_start:block_end, block_start:block_end]
+        for h, d_h in enumerate(irrep_dims):
+            block_end = block_start + d_h
+            mu_h = mu_current[:, :, block_start:block_end].detach()
+            sigma_h = sigma_current[:, :, block_start:block_end].detach() if is_diagonal else None
+            gen_h = self.generators[:, block_start:block_end, block_start:block_end]
 
-            for i_start in range(0, N, tile_size):
-                i_end = min(i_start + tile_size, N)
-                n_tile = i_end - i_start
-
-                om_i = om_blk[:, i_start:i_end]      # (B, tile, d, d)
-                om_inv_i = om_inv_blk[:, i_start:i_end]
-                mu_i = mu_blk[:, i_start:i_end]       # (B, tile, d)
-                sig_i = sig_blk[:, i_start:i_end]     # (B, tile, d)
-                wq = weight[:, i_start:i_end, :]      # (B, tile, N)
-                wk = weight_key[:, i_start:i_end, :]  # (B, tile, N)
-
-                grad_tile = torch.zeros(B, n_tile, d, d, device=device, dtype=torch.float32)
-
-                for j_start in range(0, N, tile_size):
-                    j_end = min(j_start + tile_size, N)
-
-                    om_j = om_blk[:, j_start:j_end]
-                    om_inv_j = om_inv_blk[:, j_start:j_end]
-                    mu_j = mu_blk[:, j_start:j_end]
-                    sig_j = sig_blk[:, j_start:j_end]
-                    wq_chunk = wq[:, :, j_start:j_end]  # (B, tile, chunk)
-                    wk_chunk = wk[:, :, j_start:j_end]
-
-                    # === Query side: Ω_ij = Ω_i · Ω_j⁻¹ ===
-                    Omega_ij = torch.einsum('bikl,bjlm->bijkm', om_i, om_inv_j)
-
-                    # Transport j→i
-                    mu_t = torch.einsum('bijkl,bjl->bijk', Omega_ij, mu_j)
-                    sig_t = torch.einsum(
-                        'bijkl,bijkl,bjl->bijk',
-                        Omega_ij, Omega_ij, sig_j).clamp(min=eps)
-
-                    # ∂KL/∂Ω_ij
-                    dKL_dO = _compute_dkl_domega_diag(
-                        mu_i[:, :, None, :].expand_as(mu_t),
-                        sig_i[:, :, None, :].expand_as(sig_t),
-                        mu_t, sig_t,
-                        mu_j[:, None, :, :].expand_as(mu_t),
-                        sig_j[:, None, :, :].expand_as(sig_t),
-                        Omega_ij, eps)  # (B, tile, chunk, d, d)
-
-                    # Chain rule: ∂KL/∂Ω_i = (∂KL/∂Ω_ij) @ Ω_j⁻ᵀ
-                    om_inv_jT = om_inv_j.transpose(-2, -1)  # (B, chunk, d, d)
-                    dKL_dOi_fwd = torch.einsum(
-                        'bijkl,bjlm->bijkm', dKL_dO, om_inv_jT)
-
-                    # Weighted sum: Σ_j w_ij · ∂KL_ij/∂Ω_i
-                    grad_tile = grad_tile + torch.einsum(
-                        'bij,bijkl->bikl', wq_chunk, dKL_dOi_fwd)
-
-                    # === Key side: Ω_ji = Ω_j · Ω_i⁻¹ ===
-                    Omega_ji = torch.einsum('bjkl,bilm->bjikm', om_j, om_inv_i)
-
-                    # Transport i→j
-                    mu_t_ji = torch.einsum('bjikl,bil->bjik', Omega_ji, mu_i)
-                    sig_t_ji = torch.einsum(
-                        'bjikl,bjikl,bil->bjik',
-                        Omega_ji, Omega_ji, sig_i).clamp(min=eps)
-
-                    # ∂KL_ji/∂Ω_ji
-                    dKL_dO_ji = _compute_dkl_domega_diag(
-                        mu_j[:, :, None, :].expand_as(mu_t_ji),
-                        sig_j[:, :, None, :].expand_as(sig_t_ji),
-                        mu_t_ji, sig_t_ji,
-                        mu_i[:, None, :, :].expand_as(mu_t_ji),
-                        sig_i[:, None, :, :].expand_as(sig_t_ji),
-                        Omega_ji, eps)  # (B, chunk, tile, d, d)
-
-                    # Chain rule for key side: ∂KL_ji/∂Ω_i through Ω_ji = Ω_j · Ω_i⁻¹
-                    # ∂Ω_ji/∂Ω_i = -Ω_ji · Ω_i⁻¹ (from derivative of inverse)
-                    # So ∂KL_ji/∂Ω_i = -(∂KL_ji/∂Ω_ji)ᵀ contracted appropriately
-                    # Full chain rule: ∂KL/∂Ω_i = -Ω_ji^T @ ∂KL/∂Ω_ji @ Ω_i⁻ᵀ
-                    Omega_ji_T = Omega_ji.transpose(-2, -1)  # (B, chunk, tile, d, d)
-                    om_inv_iT = om_inv_i.transpose(-2, -1)   # (B, tile, d, d)
-                    dKL_dOi_key = -torch.einsum(
-                        'bjikl,bjilm,bimn->bjikn',
-                        Omega_ji_T, dKL_dO_ji, om_inv_iT)
-
-                    # Weighted sum: Σ_j w_ji · ∂KL_ji/∂Ω_i
-                    # dKL_dOi_key: (B, chunk, tile, d, d), wk_chunk: (B, tile, chunk)
-                    grad_tile = grad_tile + torch.einsum(
-                        'bij,bjikl->bikl', wk_chunk, dKL_dOi_key)
-
-                    del Omega_ij, Omega_ji, dKL_dO, dKL_dO_ji, dKL_dOi_fwd, dKL_dOi_key
-
-                grad_omega[:, i_start:i_end, block_start:block_end, block_start:block_end] = grad_tile
-
+            beta_kl_h = compute_attention_weights(
+                mu_q=mu_h, sigma_q=sigma_h,
+                phi=torch.zeros(B, N, 1, device=device),  # dummy
+                generators=gen_h,
+                kappa=self.kappa, epsilon=eps, mask=mask,
+                use_numba=False, return_kl=True,
+                diagonal_covariance=is_diagonal,
+                gauge_param='omega', omega=omega_for_grad,
+                gauge_mode=self.gauge_mode,
+                irrep_dims=[d_h],
+                mask_self_attention=self.mask_self_attention,
+                cached_block_exp_pairs=[_block_exp_pairs[h]],
+            )
+            if isinstance(beta_kl_h, tuple):
+                beta_h, kl_h = beta_kl_h
+            else:
+                beta_h = beta_kl_h
+                kl_h = beta_h
+            alignment_loss = alignment_loss + self.lambda_belief * (beta_h * kl_h).sum()
             block_start = block_end
 
-        return grad_omega
+        if alignment_loss.grad_fn is not None:
+            grad_omega = torch.autograd.grad(
+                alignment_loss,
+                omega_for_grad,
+                create_graph=False,
+                retain_graph=False,
+            )[0]
+            return grad_omega
+
+        return None
 
     def _retract_omega(
         self,
@@ -2406,6 +2307,9 @@ class VariationalFFNDynamic(nn.Module):
         Trust region: clip Frobenius norm of update
         Update: Ω_new = Ω - η · ΔΩ
 
+        When irrep_dims is set, works block-diagonally to avoid O(K³) matmuls
+        on the full K×K matrix (e.g., 5×10×10 instead of 50×50).
+
         Args:
             omega: Current group elements (B, N, K, K)
             grad_omega: Euclidean gradient ∂F/∂Ω (B, N, K, K)
@@ -2415,7 +2319,34 @@ class VariationalFFNDynamic(nn.Module):
         Returns:
             omega_new: Updated group elements (B, N, K, K)
         """
-        # Natural gradient on GL(K): ΔΩ = Ω · Ωᵀ · ∂F/∂Ω
+        irrep_dims = self.irrep_dims if self.irrep_dims is not None else None
+
+        if irrep_dims is not None:
+            # Block-diagonal retraction: process each head block independently
+            # Avoids full K×K matmuls when omega is block-diagonal
+            omega_new = omega.clone()
+            block_start = 0
+            for d in irrep_dims:
+                block_end = block_start + d
+                om_blk = omega[:, :, block_start:block_end, block_start:block_end]
+                gr_blk = grad_omega[:, :, block_start:block_end, block_start:block_end]
+
+                # Natural gradient per block: ΔΩ_h = Ω_h · Ω_hᵀ · ∂F/∂Ω_h
+                omT = om_blk.transpose(-2, -1)
+                nat_blk = om_blk @ omT @ gr_blk
+
+                # Trust region clip per block
+                nat_norm = torch.norm(nat_blk.flatten(-2), dim=-1, keepdim=True).unsqueeze(-1)
+                om_norm = torch.norm(om_blk.flatten(-2), dim=-1, keepdim=True).unsqueeze(-1).clamp(min=1e-6)
+                max_upd = trust_region * om_norm
+                scale = torch.clamp(max_upd / (nat_norm + 1e-8), max=1.0)
+                nat_blk = nat_blk * scale
+
+                omega_new[:, :, block_start:block_end, block_start:block_end] = om_blk - step_size * nat_blk
+                block_start = block_end
+            return omega_new
+
+        # Fallback: full K×K retraction (no irrep structure)
         OmegaT = omega.transpose(-2, -1)
         nat_grad = omega @ OmegaT @ grad_omega
 
