@@ -15,7 +15,7 @@ class PureVFEConfig:
 
     # E-step (inference = forward pass)
     n_esteps: int = 12         # Iterations of VFE descent (replaces "depth")
-    tau: float = 2.83          # Attention temperature (√K_h)
+    tau: float = None           # Attention temperature (defaults to √K_h)
     eta_E: float = 0.1         # E-step natural gradient step size
 
     # M-step (learning = parameter update)
@@ -56,4 +56,5 @@ class PureVFEConfig:
     def __post_init__(self):
         assert self.belief_dim == self.n_heads * self.head_dim, \
             f"belief_dim ({self.belief_dim}) must equal n_heads * head_dim ({self.n_heads}*{self.head_dim})"
-        self.tau = self.head_dim ** 0.5
+        if self.tau is None:
+            self.tau = self.head_dim ** 0.5

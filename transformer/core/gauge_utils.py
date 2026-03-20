@@ -749,13 +749,16 @@ def analytic_phi_gradient_block_diag(
             grad_phi_tile = torch.einsum('bikl,akl->bia', C0, gen_blk_t)
 
             # Higher order terms via commutator iteration
+            # Left-trivialized dexp: dexp_X^L(H) = Σ_k (-1)^k/(k+1)! ad_X^k(H)
             C_k = C0
             factorial_inv = 1.0
+            sign = -1.0  # (-1)^k, starting at k=1
             for k in range(1, dexp_order + 1):
                 factorial_inv /= (k + 1)
                 C_k = C_k @ X_i[:, :, None, :, :].squeeze(2) - X_i[:, :, None, :, :].squeeze(2) @ C_k
                 contrib = torch.einsum('bikl,akl->bia', C_k, gen_blk_t)
-                grad_phi_tile = grad_phi_tile + factorial_inv * contrib
+                grad_phi_tile = grad_phi_tile + sign * factorial_inv * contrib
+                sign = -sign
 
             del C0, C_k
 
