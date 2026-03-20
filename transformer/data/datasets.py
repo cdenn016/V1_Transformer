@@ -295,7 +295,14 @@ def _download_wikitext2_fallback(cache_dir: Optional[str] = None) -> dict:
 
         # Ultimate fallback: use embedded sample
         if not downloaded:
-            print(f"    Using embedded sample data for {split}")
+            import logging
+            logging.warning(
+                f"USING EMBEDDED SAMPLE DATA for {split}! "
+                f"Training on this tiny dataset (~5KB) will produce meaningless results. "
+                f"Install 'datasets' package or fix network: pip install datasets"
+            )
+            print(f"    *** WARNING: Using embedded sample data for {split} ***")
+            print(f"    *** Results will NOT be meaningful - install 'datasets' package ***")
             # Use the sample data, duplicated to make it larger
             sample = WIKITEXT2_SAMPLE * (50 if split == 'train' else 10)
             result[split] = sample

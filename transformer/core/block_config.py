@@ -35,13 +35,13 @@ class BlockConfig:
     irrep_spec: List[Tuple[str, int, int]] = field(  # [(label, multiplicity, dim), ...]
         default_factory=lambda: [('ℓ0', 8, 1)]       #   e.g. [('ℓ0',75,1),('ℓ1',30,3),('ℓ2',18,5)]
     )
-    hidden_dim: int = 256               # FFN hidden dimension (kept for config compat, not used by blocks)
+    hidden_dim: int = 256               # Deprecated: not used by blocks (kept for config compat)
     n_layers: int = 1                   # Number of stacked blocks (only used by Stack)
 
     # === Attention ===
     kappa_beta: float = 1.0             # Temperature τ for KL-based attention softmax
     attention_pattern: str = 'full'     # 'full' (only supported pattern)
-    attention_window: int = 64          # Window size (unused, kept for API compat)
+    attention_window: int = 64          # Deprecated: unused (kept for API compat)
     mask_self_attention: bool = False   # Prevent KL(q_i||q_i)=0 collapse
     use_output_projection: bool = False # W_O ∈ R^{K×K} after multi-head concat
     multihead_vfe: bool = False         # Per-head β_h through VFE iterations
@@ -171,7 +171,7 @@ class BlockConfig:
             ffn_learnable_lr=config.get('ffn_learnable_lr', True),
             ffn_lambda_belief=config.get('ffn_lambda_belief', 1.0),
             ffn_update_sigma=config.get('ffn_update_sigma', True),
-            ffn_learnable_alpha=config.get('learnable_alpha', False),
+            ffn_learnable_alpha=config.get('ffn_learnable_alpha', config.get('learnable_alpha', False)),
             # Gauge geometry
             gauge_mode=config.get('gauge_mode', 'learned'),
             enforce_orthogonal=config.get('enforce_orthogonal', False),

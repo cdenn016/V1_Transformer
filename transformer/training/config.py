@@ -76,11 +76,13 @@ class TrainingConfig:
     # For mu_embed: wd pulls prior means toward zero
     # For sigma_embed: wd on log_sigma pulls covariances toward σ=1
     # For phi_embed: wd pulls gauge frames toward identity (exp(0)=I)
-    # Default 0.0: VFE loss terms handle embedding regularization:
+    # Default None: inherits from weight_decay (same as other params).
+    # Set to 0.0 for uninformative hyper-prior when VFE loss terms
+    # handle embedding regularization:
     #   - alpha · KL(q||p) couples μ_p/Σ_p to posterior (self-consistency)
     #   - alpha_phi · ||φ||²/2 is L2 on gauge frames
-    # Optimizer WD on embeddings conflicts with these principled terms.
-    embed_weight_decay: Optional[float] = 0.01
+    # Explicit WD on embeddings may conflict with these principled terms.
+    embed_weight_decay: Optional[float] = None
     beta1: float = 0.9
     beta2: float = 0.95
     eps: float = 1e-8
