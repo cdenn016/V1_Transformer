@@ -2753,7 +2753,11 @@ class VariationalFFNDynamic(nn.Module):
                 )
 
             # Get token-dependent priors from PriorBank
-            mu_p_from_bank, sigma_p_from_bank, _ = self.prior_bank.encode(token_ids)  # (B, N, K)
+            _bank_out = self.prior_bank.encode(token_ids)  # (B, N, K)
+            if len(_bank_out) == 4:
+                mu_p_from_bank, sigma_p_from_bank, _, _ = _bank_out
+            else:
+                mu_p_from_bank, sigma_p_from_bank, _ = _bank_out
 
             # Use PriorBank priors for VFE dynamics
             mu_p_current = mu_p_from_bank
