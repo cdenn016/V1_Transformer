@@ -42,9 +42,12 @@ class PureVFEConfig:
     trust_region_omega: float = 0.3
 
     # SPD retraction safeguards
-    spd_eps_min: float = 1e-4           # Spectral floor
+    spd_eps_min: float = 1e-4           # Spectral floor (beliefs)
     spd_kappa_max: float = 1e4          # Condition number cap
     spd_exp_clip: float = 50.0          # Eigenvalue exponent clip
+
+    # Prior covariance safeguards
+    prior_sigma_floor: float = 0.1      # Min eigenvalue of prior Σ_v (prevents collapse)
 
     # Causal masking
     causal: bool = True
