@@ -39,8 +39,10 @@ class PureVFETransformer:
         # Prior bank (THE model — raw tensors, not nn.Parameters)
         # -----------------------------------------------------------
 
-        # Prior means: small random init
-        self.prior_mu = torch.randn(V, K, device=dev) * 0.02
+        # Prior means: spread must be O(√(ln V / K)) so KL differences
+        # between priors are comparable to ln(V), breaking the uniform
+        # softmax fixed point.  0.02 is far too small (see issue analysis).
+        self.prior_mu = torch.randn(V, K, device=dev) * 0.5
 
         # Prior covariances: σ²I (SPD, stored directly)
         self.prior_Sigma = (
