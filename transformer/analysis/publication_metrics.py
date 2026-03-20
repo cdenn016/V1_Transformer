@@ -41,7 +41,12 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
 # Import gauge frame semantic analysis
-from .semantics import analyze_gauge_semantics, plot_gauge_frame_clustering
+from .semantics import (
+    analyze_gauge_semantics,
+    plot_gauge_frame_clustering,
+    analyze_omega_semantics,
+    plot_omega_clustering,
+)
 
 # Import holonomy analysis
 from .holonomy import compute_holonomy, holonomy_statistics

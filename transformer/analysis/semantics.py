@@ -559,6 +559,23 @@ def analyze_gauge_semantics(
                 total = metrics.get(f'{name}_pca_total_components', '?')
                 print(f"    PCA: 3 comp = {pca3*100:.1f}% var; 50%@{n50}, 90%@{n90}, 95%@{n95} of {total} dims")
 
+    # --- Omega_i group element analysis (if model provides generators) ---
+    if model is not None:
+        try:
+            omega_results = analyze_omega_semantics(
+                model=model,
+                step=step,
+                save_dir=save_dir if save_plots else None,
+                save_plots=save_plots,
+                verbose=verbose,
+                n_tokens=500,
+            )
+            if 'error' not in omega_results:
+                results['omega'] = omega_results
+        except Exception as e:
+            if verbose:
+                print(f"  [WARN] Omega analysis failed: {e}")
+
     # Generate plots
     if save_plots:
         save_dir = Path(save_dir) if save_dir else Path("./outputs/figures")
@@ -796,3 +813,499 @@ def plot_embedding_clustering(
 def plot_gauge_frame_clustering(phi_embed, step=None, save_path=None, n_tokens=500, gauge_group_label=None):
     """Alias for plot_embedding_clustering with embed_type='phi'."""
     return plot_embedding_clustering(phi_embed, embed_type='phi', step=step, save_path=save_path, n_tokens=n_tokens, gauge_group_label=gauge_group_label)
+
+
+# =============================================================================
+# Group Element Ω_i Analysis
+# =============================================================================
+#
+# While φ_i ∈ ℝ^{n_gen} lives in a flat Lie algebra, the group element
+#   Ω_i = exp(φ_i · G)  ∈  GL⁺(K)  (or SO(K))
+# lives on a curved manifold.  Semantic structure in Ω-space may differ
+# from φ-space because the exponential map is nonlinear.
+#
+# Key metrics for Ω_i:
+#   - Frobenius distance:  ‖Ω_i − Ω_j‖_F   (ambient)
+#   - Geodesic distance:   ‖log(Ω_i⁻¹ Ω_j)‖_F  (intrinsic, = ‖Ω_ij − I‖ at identity)
+#   - Determinant profile: det(Ω_i) ≈ 1 for SO(K), > 0 for GL⁺(K)
+#   - Spectral spread:     eigenvalue distribution of Ω_i
+# =============================================================================
+
+
+def extract_omega(
+    model: "Any",
+    n_tokens: int = 500,
+    device: str = 'cpu',
+) -> Optional[Tuple[torch.Tensor, str]]:
+    """Extract per-token group elements Ω_i = exp(φ_i · G) from a model.
+
+    Args:
+        model: GaugeTransformerLM (or any model with phi_embed + generators).
+        n_tokens: Number of tokens to extract (first n_tokens from vocab).
+        device: Computation device.
+
+    Returns:
+        (omega, gauge_label) where omega is (n_tokens, K, K) on CPU,
+        or None if extraction fails.
+    """
+    # --- locate phi_embed ---
+    phi_embed = None
+    for attr_path in [
+        ('phi_embed',),
+        ('token_embed', 'phi_embed'),
+        ('token_embedding', 'phi_embed'),
+    ]:
+        obj = model
+        for a in attr_path:
+            obj = getattr(obj, a, None)
+            if obj is None:
+                break
+        if obj is not None:
+            phi_embed = obj
+            break
+
+    if phi_embed is None:
+        return None
+
+    # --- locate generators ---
+    generators = getattr(model, 'generators', None)
+    if generators is None:
+        return None
+
+    # --- compute Ω_i = exp(φ_i · G) ---
+    n = min(n_tokens, phi_embed.weight.shape[0])
+    phi = phi_embed.weight[:n].detach().to(device)   # (n, n_gen)
+    G = generators.detach().to(device)                # (n_gen, K, K)
+
+    phi_matrix = torch.einsum('na,aij->nij', phi, G)  # (n, K, K)
+
+    # Use float64 for large K to avoid matrix_exp overflow
+    K = G.shape[1]
+    compute_dtype = torch.float64 if K >= 16 else torch.float32
+    omega = torch.linalg.matrix_exp(phi_matrix.to(compute_dtype)).float().cpu()
+
+    # Determine gauge group label
+    gauge_label = None
+    if hasattr(model, 'gauge_group') and hasattr(model, 'gauge_dim'):
+        gauge_label = format_gauge_group_label(model.gauge_group, model.gauge_dim)
+    if gauge_label is None:
+        gauge_label = identify_gauge_group(phi.shape[1])
+
+    return omega, gauge_label
+
+
+def omega_frobenius_dist(omega: torch.Tensor, i: int, j: int) -> float:
+    """Frobenius distance ‖Ω_i − Ω_j‖_F (ambient metric)."""
+    return torch.norm(omega[i] - omega[j], p='fro').item()
+
+
+def omega_geodesic_dist(omega: torch.Tensor, i: int, j: int) -> float:
+    """Geodesic distance ‖log(Ω_i⁻¹ Ω_j)‖_F (intrinsic metric on GL(K))."""
+    try:
+        Oij = torch.linalg.solve(omega[i].unsqueeze(0).double(),
+                                  omega[j].unsqueeze(0).double())
+        log_Oij = _safe_logm(Oij.squeeze(0))
+        return torch.norm(log_Oij, p='fro').float().item()
+    except Exception:
+        # Fallback to Frobenius if logm fails (e.g. negative eigenvalues)
+        return omega_frobenius_dist(omega, i, j)
+
+
+def _safe_logm(M: torch.Tensor) -> torch.Tensor:
+    """Matrix logarithm via eigendecomposition, handling complex eigenvalues."""
+    evals, evecs = torch.linalg.eig(M)
+    log_evals = torch.log(evals)  # complex log
+    return (evecs @ torch.diag(log_evals) @ torch.linalg.inv(evecs)).real.float()
+
+
+# =============================================================================
+# Omega Clustering Metrics
+# =============================================================================
+
+def compute_omega_clustering_metrics(
+    omega: torch.Tensor,
+    n_tokens: int = 500,
+) -> Dict[str, Any]:
+    """Compute clustering quality of Ω_i in matrix space.
+
+    Flattens each K×K matrix to a vector for sklearn metrics, but also
+    computes group-specific metrics (det profile, spectral spread).
+
+    Args:
+        omega: Group elements (n_tokens, K, K).
+        n_tokens: Limit analysis to first n tokens.
+
+    Returns:
+        Dict of clustering and group-geometry metrics.
+    """
+    n = min(n_tokens, omega.shape[0])
+    K = omega.shape[1]
+    omega_flat = omega[:n].reshape(n, -1).numpy()  # (n, K²)
+    results = {}
+
+    # --- Frobenius-space clustering (same machinery as phi) ---
+    frob_metrics = compute_clustering_metrics(
+        torch.from_numpy(omega_flat), n_tokens=n, embed_name='omega_frob',
+    )
+    results.update(frob_metrics)
+
+    # --- Geodesic pairwise distances (sampled) for inter/intra class ---
+    categories = [categorize_token(tid) for tid in range(n)]
+    cat_counts = {}
+    for c in categories:
+        cat_counts[c] = cat_counts.get(c, 0) + 1
+    valid_cats = sorted(c for c, cnt in cat_counts.items() if cnt >= 2)
+
+    if len(valid_cats) >= 2:
+        rng = np.random.RandomState(42)
+        cat_to_idx = {}
+        for i, c in enumerate(categories):
+            cat_to_idx.setdefault(c, []).append(i)
+
+        intra_geo, inter_geo = [], []
+        intra_frob, inter_frob = [], []
+        for cat in valid_cats:
+            idx = cat_to_idx[cat]
+            n_pairs = min(100, len(idx) * (len(idx) - 1) // 2)
+            for _ in range(n_pairs):
+                i, j = rng.choice(len(idx), 2, replace=False)
+                intra_geo.append(omega_geodesic_dist(omega[:n], idx[i], idx[j]))
+                intra_frob.append(omega_frobenius_dist(omega[:n], idx[i], idx[j]))
+            other_idx = [i for i, c in enumerate(categories) if c != cat and c in valid_cats]
+            for _ in range(min(100, len(idx) * len(other_idx))):
+                i = rng.choice(idx)
+                j = rng.choice(other_idx)
+                inter_geo.append(omega_geodesic_dist(omega[:n], i, j))
+                inter_frob.append(omega_frobenius_dist(omega[:n], i, j))
+
+        if intra_geo and inter_geo:
+            results['omega_geodesic_intra_mean'] = float(np.mean(intra_geo))
+            results['omega_geodesic_inter_mean'] = float(np.mean(inter_geo))
+            results['omega_geodesic_ratio'] = float(
+                np.mean(inter_geo) / max(np.mean(intra_geo), 1e-10)
+            )
+            results['omega_frobenius_intra_mean'] = float(np.mean(intra_frob))
+            results['omega_frobenius_inter_mean'] = float(np.mean(inter_frob))
+            results['omega_frobenius_ratio'] = float(
+                np.mean(inter_frob) / max(np.mean(intra_frob), 1e-10)
+            )
+
+    # --- Determinant profile ---
+    dets = torch.det(omega[:n].double()).float().numpy()
+    results['omega_det_mean'] = float(np.mean(dets))
+    results['omega_det_std'] = float(np.std(dets))
+    results['omega_det_min'] = float(np.min(dets))
+    results['omega_det_max'] = float(np.max(dets))
+    # For SO(K), det ≈ 1; deviation indicates GL drift
+    results['omega_det_deviation'] = float(np.mean(np.abs(dets - 1.0)))
+
+    # --- Spectral spread: eigenvalue distribution ---
+    try:
+        evals = torch.linalg.eigvals(omega[:n].double()).abs().float().numpy()  # (n, K)
+        # Spread = max/min eigenvalue magnitude ratio (condition number proxy)
+        evals_sorted = np.sort(evals, axis=1)  # ascending
+        evals_max = evals_sorted[:, -1]
+        evals_min = np.clip(evals_sorted[:, 0], 1e-10, None)
+        cond = evals_max / evals_min
+        results['omega_spectral_spread_mean'] = float(np.mean(cond))
+        results['omega_spectral_spread_std'] = float(np.std(cond))
+        # For SO(K), all eigenvalues have |λ| = 1
+        results['omega_spectral_unit_deviation'] = float(np.mean(np.abs(evals - 1.0)))
+    except Exception as e:
+        results['omega_spectral_error'] = str(e)
+
+    # --- Distance from identity: ‖Ω_i − I‖_F ---
+    eye = torch.eye(K).unsqueeze(0).expand(n, K, K)
+    dist_from_id = torch.norm((omega[:n] - eye).reshape(n, -1), dim=1).numpy()
+    results['omega_identity_dist_mean'] = float(np.mean(dist_from_id))
+    results['omega_identity_dist_std'] = float(np.std(dist_from_id))
+
+    return results
+
+
+# =============================================================================
+# Main Omega Semantic Analysis Entry Point
+# =============================================================================
+
+def analyze_omega_semantics(
+    model: "Any" = None,
+    omega: Optional[torch.Tensor] = None,
+    step: Optional[int] = None,
+    save_dir: Optional[Path] = None,
+    save_plots: bool = True,
+    verbose: bool = True,
+    n_tokens: int = 500,
+) -> Dict[str, Any]:
+    """Comprehensive semantic analysis of per-token group elements Ω_i.
+
+    Parallels analyze_gauge_semantics() but operates on Ω_i = exp(φ_i · G)
+    rather than the raw Lie algebra coefficients φ_i.  Because Ω lives on a
+    curved group manifold, we report both ambient (Frobenius) and intrinsic
+    (geodesic) distances, plus group-specific diagnostics (determinant, spectrum).
+
+    Args:
+        model: GaugeTransformerLM (extracts phi_embed + generators → Ω).
+        omega: Alternatively, provide pre-computed (n_tokens, K, K) tensor.
+        step: Training step for plot titles.
+        save_dir: Directory for saved figures.
+        save_plots: Whether to generate figures.
+        verbose: Print analysis to console.
+        n_tokens: Number of tokens to analyze.
+
+    Returns:
+        Dict with all Omega semantic metrics.
+    """
+    gauge_label = None
+
+    # Extract Omega from model if not provided
+    if omega is None and model is not None:
+        result = extract_omega(model, n_tokens=n_tokens)
+        if result is None:
+            return {'error': 'Could not extract Omega from model (no phi_embed or generators)'}
+        omega, gauge_label = result
+    elif omega is not None:
+        omega = omega.detach().cpu().float() if isinstance(omega, torch.Tensor) else omega
+    else:
+        return {'error': 'Must provide either model or omega tensor'}
+
+    n = min(n_tokens, omega.shape[0])
+    K = omega.shape[1]
+
+    results = {
+        'step': step,
+        'omega_shape': list(omega[:n].shape),
+        'K': K,
+        'gauge_group': gauge_label,
+    }
+
+    # Quantitative clustering metrics (Frobenius + geodesic + spectral)
+    cluster_metrics = compute_omega_clustering_metrics(omega, n_tokens=n)
+    results['omega_clustering'] = cluster_metrics
+
+    # Token class analysis (using Frobenius distance on Ω)
+    omega_flat_embed = omega[:n].reshape(n, -1)  # (n, K²)
+    class_results = analyze_token_classes(
+        mu_embed=omega_flat_embed,  # reuse machinery with flattened Ω
+        phi_embed=None,
+    )
+    # Rename keys: mu_ → omega_ since we passed Ω as "mu"
+    omega_class = {}
+    for k, v in class_results.items():
+        new_k = k.replace('mu_', 'omega_') if k.startswith('mu_') else k
+        omega_class[new_k] = v
+    results['token_classes'] = omega_class
+
+    # Word pair analysis (Frobenius distances between Ω_i)
+    pair_results = analyze_word_pairs(mu_embed=omega_flat_embed, phi_embed=None)
+    omega_pairs = {}
+    for k, v in pair_results.items():
+        new_k = k.replace('mu_', 'omega_') if k.startswith('mu_') else k
+        omega_pairs[new_k] = v
+    results['word_pairs'] = omega_pairs
+
+    if verbose:
+        step_str = f" (step {step})" if step is not None else ""
+        print(f"\n{'='*60}")
+        print(f"GROUP ELEMENT Omega_i SEMANTIC ANALYSIS{step_str}")
+        print(f"{'='*60}")
+        print(f"Omega shape: {results['omega_shape']}  (K={K}, gauge={gauge_label})")
+
+        # Class structure
+        cr = omega_class.get('omega_class_ratio', 0)
+        print(f"\nToken Class Analysis (Frobenius distance on Omega):")
+        print(f"  inter/intra ratio: {cr:.2f}x {'<-- structure!' if cr > 1.2 else ''}")
+
+        # Geodesic vs Frobenius
+        cm = cluster_metrics
+        geo_r = cm.get('omega_geodesic_ratio')
+        frob_r = cm.get('omega_frobenius_ratio')
+        if geo_r is not None:
+            print(f"\nDistance Ratios (inter-class / intra-class):")
+            print(f"  Frobenius: {frob_r:.3f}")
+            print(f"  Geodesic:  {geo_r:.3f}")
+
+        # Determinant profile
+        print(f"\nDeterminant Profile:")
+        print(f"  mean: {cm.get('omega_det_mean', 0):.4f}  "
+              f"std: {cm.get('omega_det_std', 0):.4f}  "
+              f"range: [{cm.get('omega_det_min', 0):.4f}, {cm.get('omega_det_max', 0):.4f}]")
+        print(f"  |det - 1| mean: {cm.get('omega_det_deviation', 0):.4f} "
+              f"{'(SO(K): should be ~0)' if gauge_label and 'SO' in str(gauge_label) else ''}")
+
+        # Spectral
+        spread = cm.get('omega_spectral_spread_mean')
+        if spread is not None:
+            print(f"\nSpectral Analysis:")
+            print(f"  Condition number (|λ_max/λ_min|): {spread:.3f} +/- {cm.get('omega_spectral_spread_std', 0):.3f}")
+            print(f"  Unit deviation (|λ| - 1): {cm.get('omega_spectral_unit_deviation', 0):.4f}")
+
+        # Identity distance
+        print(f"\nDistance from Identity:")
+        print(f"  mean ‖Omega_i - I‖_F: {cm.get('omega_identity_dist_mean', 0):.4f} "
+              f"+/- {cm.get('omega_identity_dist_std', 0):.4f}")
+
+        # Clustering quality
+        sil = cm.get('omega_frob_silhouette_score')
+        if isinstance(sil, float):
+            print(f"\nClustering Quality (Frobenius-flattened Omega):")
+            print(f"  Silhouette: {sil:.3f}")
+            ch = cm.get('omega_frob_calinski_harabasz')
+            if isinstance(ch, float):
+                print(f"  Calinski-Harabasz: {ch:.1f}")
+
+    # Generate plots
+    if save_plots:
+        save_dir = Path(save_dir) if save_dir else Path("./outputs/figures")
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            fig = plot_omega_clustering(
+                omega[:n], step=step,
+                save_path=save_dir / f"omega_clustering{'_step'+str(step) if step is not None else ''}.png",
+                gauge_group_label=gauge_label,
+                n_tokens=n,
+            )
+            if fig is not None:
+                plt.close(fig)
+                results['omega_plot_saved'] = True
+        except Exception as e:
+            if verbose:
+                print(f"  [WARN] Could not generate omega plot: {e}")
+            results['omega_plot_saved'] = False
+
+    return results
+
+
+# =============================================================================
+# Omega Visualization
+# =============================================================================
+
+def plot_omega_clustering(
+    omega: torch.Tensor,
+    step: Optional[int] = None,
+    save_path: Optional[Path] = None,
+    n_tokens: int = 500,
+    gauge_group_label: Optional[str] = None,
+) -> Optional["Any"]:
+    """Visualize per-token group elements Ω_i colored by token category.
+
+    Layout (4 panels):
+      (a) PCA of flattened Ω_i (K² → 2D)  — cluster structure
+      (b) Determinant distribution by category  — group geometry
+      (c) Distance from identity ‖Ω_i − I‖_F by category  — magnitude
+      (d) Eigenvalue magnitude distribution   — spectral character
+
+    Args:
+        omega: Group elements (n_tokens, K, K).
+        step: Training step for title.
+        save_path: Output file path.
+        n_tokens: Tokens to visualize.
+        gauge_group_label: e.g. 'SO(3)' or 'GL(30)'.
+
+    Returns:
+        matplotlib Figure (or None if matplotlib unavailable).
+    """
+    if not MATPLOTLIB_AVAILABLE or not SKLEARN_AVAILABLE:
+        return None
+
+    n = min(n_tokens, omega.shape[0])
+    K = omega.shape[1]
+    omega_np = omega[:n].numpy() if isinstance(omega, torch.Tensor) else omega[:n]
+
+    categories = [categorize_token(tid) for tid in range(n)]
+    colors = [CATEGORY_COLORS.get(c, '#95A5A6') for c in categories]
+
+    step_str = f" (Step {step})" if step is not None else ""
+    group_str = gauge_group_label or f"K={K}"
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle(f'Group Element Ω_i Analysis — {group_str}{step_str}', fontsize=14, y=1.01)
+
+    # ---- (a) PCA of flattened Omega ----
+    ax = axes[0, 0]
+    omega_flat = omega_np.reshape(n, -1)  # (n, K²)
+    pca = PCA(n_components=min(3, omega_flat.shape[1]))
+    omega_pca = pca.fit_transform(omega_flat)
+    var = pca.explained_variance_ratio_
+
+    for cat in CATEGORY_COLORS:
+        mask = [c == cat for c in categories]
+        if any(mask):
+            idx = [i for i, m in enumerate(mask) if m]
+            ax.scatter(omega_pca[idx, 0], omega_pca[idx, 1],
+                       c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
+    ax.set_xlabel(f'PC1 ({var[0]:.1%})')
+    ax.set_ylabel(f'PC2 ({var[1]:.1%})')
+    ax.set_title(f'(a) Ω_i PCA (from {K}×{K} matrices)')
+    ax.legend(loc='upper right', fontsize=7)
+    ax.grid(True, alpha=0.3)
+
+    # ---- (b) Determinant distribution by category ----
+    ax = axes[0, 1]
+    dets = np.linalg.det(omega_np.astype(np.float64)).astype(np.float32)
+    for cat in CATEGORY_COLORS:
+        mask = [c == cat for c in categories]
+        if any(mask):
+            idx = [i for i, m in enumerate(mask) if m]
+            vals = dets[idx]
+            ax.hist(vals, bins=30, alpha=0.5, label=cat, color=CATEGORY_COLORS[cat])
+    ax.axvline(x=1.0, color='k', linestyle='--', linewidth=1, label='det=1')
+    ax.set_xlabel('det(Ω_i)')
+    ax.set_ylabel('Count')
+    ax.set_title('(b) Determinant Distribution')
+    ax.legend(loc='upper right', fontsize=7)
+
+    # ---- (c) Distance from identity by category ----
+    ax = axes[1, 0]
+    eye = np.eye(K, dtype=np.float32)
+    dist_id = np.linalg.norm((omega_np - eye).reshape(n, -1), axis=1)
+    cat_list = sorted(set(categories), key=lambda c: list(CATEGORY_COLORS.keys()).index(c) if c in CATEGORY_COLORS else 99)
+    cat_data = []
+    cat_labels = []
+    cat_colors_bp = []
+    for cat in cat_list:
+        idx = [i for i, c in enumerate(categories) if c == cat]
+        if idx:
+            cat_data.append(dist_id[idx])
+            cat_labels.append(cat)
+            cat_colors_bp.append(CATEGORY_COLORS.get(cat, '#95A5A6'))
+
+    bp = ax.boxplot(cat_data, labels=cat_labels, patch_artist=True, showfliers=False)
+    for patch, color in zip(bp['boxes'], cat_colors_bp):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.5)
+    ax.set_ylabel('‖Ω_i − I‖_F')
+    ax.set_title('(c) Distance from Identity by Category')
+    ax.grid(True, alpha=0.3, axis='y')
+
+    # ---- (d) Eigenvalue magnitude spectrum ----
+    ax = axes[1, 1]
+    try:
+        evals = np.abs(np.linalg.eigvals(omega_np.astype(np.float64))).astype(np.float32)
+        # Histogram of all eigenvalue magnitudes
+        for cat in CATEGORY_COLORS:
+            mask = [c == cat for c in categories]
+            if any(mask):
+                idx = [i for i, m in enumerate(mask) if m]
+                ax.hist(evals[idx].flatten(), bins=40, alpha=0.4,
+                        label=cat, color=CATEGORY_COLORS[cat], density=True)
+        ax.axvline(x=1.0, color='k', linestyle='--', linewidth=1, label='|λ|=1')
+        ax.set_xlabel('|λ|  (eigenvalue magnitude)')
+        ax.set_ylabel('Density')
+        ax.set_title('(d) Eigenvalue Magnitude Spectrum')
+        ax.legend(loc='upper right', fontsize=7)
+    except Exception:
+        ax.text(0.5, 0.5, 'Eigenvalue computation failed',
+                transform=ax.transAxes, ha='center', va='center')
+
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+
+    return fig
+
+
+def plot_omega_group_clustering(omega, step=None, save_path=None, n_tokens=500, gauge_group_label=None):
+    """Alias for plot_omega_clustering (matches plot_gauge_frame_clustering pattern)."""
+    return plot_omega_clustering(omega, step=step, save_path=save_path, n_tokens=n_tokens, gauge_group_label=gauge_group_label)
