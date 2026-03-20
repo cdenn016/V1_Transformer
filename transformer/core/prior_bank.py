@@ -24,7 +24,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Union
 
 
 class PriorBank(nn.Module):
@@ -262,7 +262,8 @@ class PriorBank(nn.Module):
     def encode(
         self,
         token_ids: torch.Tensor,  # (B, N)
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Union[Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+               Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
         """
         Encode tokens by looking up their prior beliefs.
 
@@ -275,6 +276,7 @@ class PriorBank(nn.Module):
             mu_q: (B, N, K) belief means initialized from priors
             sigma_q: (B, N, K) belief variances initialized from priors
             phi: (B, N, phi_dim) gauge frames for tokens
+            omega: (B, N, K, K) direct gauge frames (only when gauge_param='omega')
         """
         return self._get_prior_for_tokens(token_ids)
 
@@ -393,24 +395,24 @@ class PriorBank(nn.Module):
             n_unique = unique_tokens.shape[0]
 
             # Segment-wise max for stable softmax
-            seg_max = torch.full((n_unique,), float('-inf'), device=flat_ids.device)
+            seg_max = torch.full((n_unique,), float('-inf'), device=flat_ids.device, dtype=flat_mu.dtype)
             seg_max.scatter_reduce_(0, inverse_idx, neg_errors, reduce='amax', include_self=False)
             shifted = neg_errors - seg_max[inverse_idx]
             exp_shifted = torch.exp(shifted)
 
             # Segment-wise sum of exp for normalization
-            seg_sum = torch.zeros(n_unique, device=flat_ids.device)
+            seg_sum = torch.zeros(n_unique, device=flat_ids.device, dtype=flat_mu.dtype)
             seg_sum.scatter_add_(0, inverse_idx, exp_shifted)
             weights = exp_shifted / seg_sum[inverse_idx].clamp(min=1e-12)  # (B*N,)
 
             # Weighted means per token type via scatter_add
-            weighted_mu = torch.zeros(n_unique, K, device=flat_ids.device)
+            weighted_mu = torch.zeros(n_unique, K, device=flat_ids.device, dtype=flat_mu.dtype)
             weighted_mu.scatter_add_(0, inverse_idx.unsqueeze(-1).expand(-1, K), flat_mu * weights.unsqueeze(-1))
 
             # Mean error per token type for confidence-weighted LR
-            seg_error_sum = torch.zeros(n_unique, device=flat_ids.device)
+            seg_error_sum = torch.zeros(n_unique, device=flat_ids.device, dtype=flat_mu.dtype)
             seg_error_sum.scatter_add_(0, inverse_idx, flat_errors)
-            seg_count = torch.zeros(n_unique, device=flat_ids.device)
+            seg_count = torch.zeros(n_unique, device=flat_ids.device, dtype=flat_mu.dtype)
             seg_count.scatter_add_(0, inverse_idx, torch.ones_like(flat_errors))
             mean_errors = seg_error_sum / seg_count.clamp(min=1)
             confidence = 1.0 / (1.0 + mean_errors)  # (n_unique,)
@@ -424,7 +426,7 @@ class PriorBank(nn.Module):
 
             # Vectorized EMA update for sigma
             if self.learnable_sigma:
-                weighted_sigma = torch.zeros(n_unique, K, device=flat_ids.device)
+                weighted_sigma = torch.zeros(n_unique, K, device=flat_ids.device, dtype=flat_mu.dtype)
                 weighted_sigma.scatter_add_(0, inverse_idx.unsqueeze(-1).expand(-1, K), flat_sigma * weights.unsqueeze(-1))
                 sigma_lr = effective_lr * 0.1
                 current_sigma = torch.exp(self.log_prior_sigma.data[unique_tokens])

@@ -185,22 +185,12 @@ def _pairwise_kl_torch(Q, rho, P, nu, ldc_q, ldc_k, causal):
     """Pure PyTorch pairwise KL. [B, H, N, N]."""
     B, H, N, K = rho.shape
 
-    # Trace term: tr(P_j @ Q_i) for all (i, j)
-    # P: [B,H,N,K,K], Q: [B,H,N,K,K]
-    # tr(P_j Q_i) = sum over a,b of P_j[a,b] * Q_i[b,a]
-    # = (P_j * Q_iᵀ).sum(-1,-2)  but we need all pairs...
-    # Efficient: tr(P_j Q_i) = sum_ab P_j[a,b] Q_i[b,a]
-    #   = vec(P_j)ᵀ vec(Q_iᵀ) — a dot product of vectorized matrices
+    # Trace term: tr(P_j Q_i) for all (i, j)
+    # tr(P_j Q_i) = Σ_{a,b} P_j[a,b] Q_i[b,a] = vec(P_j) · vec(Q_iᵀ)
     P_flat = P.reshape(B, H, N, K * K)         # [B, H, N, K²]
     Qt_flat = Q.transpose(-2, -1).reshape(B, H, N, K * K)  # Q transposed, then flattened
-    trace_term = torch.einsum('bhin,bhjn->bhij', Qt_flat, P_flat)  # [B, H, N, N]
-    # Wait — this is tr(Q_iᵀ P_j) = tr(P_j Q_iᵀ)ᵀ ... we need tr(P_j Q_i).
-    # tr(P_j Q_i) = Σ_{a,b} P_j[a,b] Q_i[b,a] = Σ_{a,b} P_j[a,b] Qt_i[a,b]
-    # So it's element-wise product summed: (P_j * Qt_i).sum
-    # As a batched operation over pairs: einsum 'bhj(ab),bhi(ab)->bhij'
-    # = P_flat[j] · Qt_flat[i]
+    # Contract over flattened K² dim: result[b,h,j,i] = Σ_k P_flat[j,k] * Qt_flat[i,k] = tr(P_j Q_i)
     trace_term = torch.einsum('bhjk,bhik->bhij', P_flat, Qt_flat)  # [B, H, N_j, N_i]
-    # That gives [B, H, j, i]. We want [B, H, i, j], so transpose:
     trace_term = trace_term.transpose(-2, -1)  # [B, H, N_i, N_j]
 
     # Mahalanobis term: (ρ_i - ν_j)ᵀ P_j (ρ_i - ν_j)
