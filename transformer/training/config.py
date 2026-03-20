@@ -142,9 +142,24 @@ class TrainingConfig:
     # ==========================================================================
     # Gauge Group
     # ==========================================================================
-    # Gauge mode: 'learned' (per-token φ, full transport Ω_ij = exp(φ_i)·exp(-φ_j))
-    # or 'trivial' (global frame, φ = 0, Ω = I, standard KL-attention).
+    # Gauge mode: 'learned' (per-token frames, full transport Ω_ij)
+    # or 'trivial' (global frame, Ω = I, standard KL-attention).
     gauge_mode: str = 'learned'
+
+    # Gauge parameterization: how gauge frames are stored and optimized.
+    #   'phi':   Lie algebra coefficients φ_i ∈ ℝ^{n_gen}, with Ω_i = exp(φ_i·G).
+    #            Requires matrix_exp forward + dexp series backward.
+    #            Only reaches GL⁺(K) (det > 0); needs separate reflection for O(K).
+    #   'omega': Direct group elements Ω_i ∈ GL(K), stored as K_h×K_h matrices per head.
+    #            No matrix_exp needed. Gradient via chain rule through Ω_ij = Ω_i·Ω_j⁻¹.
+    #            Covers full GL(K) including reflections (det < 0). Major compute savings.
+    gauge_param: str = 'phi'  # 'phi' or 'omega'
+
+    # Learning rate for direct Omega embeddings (used when gauge_param='omega')
+    omega_lr: float = 0.01
+
+    # Trust region for Omega retraction on GL(K) manifold
+    omega_trust_region: float = 0.3
 
     # Isotropic covariance: force Σ = σ²I (scalar variance × identity)
     # This is Limit 1 from the manuscript: KL reduces to scaled squared Euclidean.

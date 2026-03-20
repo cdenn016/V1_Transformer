@@ -49,6 +49,7 @@ def create_param_groups(
     mu_params = []
     sigma_params = []
     phi_params = []
+    omega_params = []  # Direct GL(K) gauge frame matrices
     attention_params = []
     ffn_params = []
     output_params = []
@@ -63,7 +64,10 @@ def create_param_groups(
         # Covariance embeddings (matches log_sigma, sigma_prior, log_prior_sigma, etc.)
         elif 'sigma_embed' in name or 'log_sigma' in name or 'sigma_prior' in name or 'prior_sigma' in name or 'log_prior' in name:
             sigma_params.append(param)
-        # Gauge frame embeddings
+        # Direct Omega gauge frame embeddings (gauge_param='omega')
+        elif 'omega_embed' in name:
+            omega_params.append(param)
+        # Lie algebra gauge frame embeddings (gauge_param='phi')
         elif 'phi_embed' in name or 'phi_prior' in name:
             phi_params.append(param)
         # Positional encoding (treat as gauge frames)
@@ -115,6 +119,17 @@ def create_param_groups(
         })
         if verbose:
             print(f"  Parameter group 'phi_embed': {len(phi_params)} tensors @ lr={config.phi_lr}, wd={embed_wd}")
+
+    if omega_params:
+        omega_lr = getattr(config, 'omega_lr', config.phi_lr)
+        param_groups.append({
+            'params': omega_params,
+            'lr': omega_lr,
+            'weight_decay': embed_wd,
+            'name': 'omega_embed',
+        })
+        if verbose:
+            print(f"  Parameter group 'omega_embed': {len(omega_params)} tensors @ lr={omega_lr}, wd={embed_wd}")
 
     if attention_params:
         param_groups.append({
