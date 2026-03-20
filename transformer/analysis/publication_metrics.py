@@ -43,6 +43,16 @@ except ImportError:
 # Import gauge frame semantic analysis
 from .semantics import analyze_gauge_semantics, plot_gauge_frame_clustering
 
+# Import holonomy analysis
+from .holonomy import compute_holonomy, holonomy_statistics
+from .holonomy_metrics import (
+    HolonomySnapshot,
+    HolonomyProfile,
+    compute_holonomy_snapshot,
+    compute_curvature_by_distance,
+    compute_flatness_trajectory,
+)
+
 
 # =============================================================================
 # Publication Style Settings
@@ -112,6 +122,12 @@ class TrainingSnapshot:
     beta_loss: float = 0.0  # Belief alignment term
     attention_entropy: float = 0.0  # Entropy of attention weights (higher = more uniform)
     attention_concentration: float = 0.0  # Concentration of attention (higher = more peaked)
+    # Holonomy diagnostics (non-flat transport curvature)
+    holonomy_mean_norm: float = 0.0       # Mean ‖C_ijk - I‖_F across sampled triples
+    holonomy_max_norm: float = 0.0        # Max ‖C_ijk - I‖_F
+    holonomy_frac_gt_01: float = 0.0      # Fraction of triples with ‖C-I‖ > 0.1
+    holonomy_spectral_gap: float = 0.0    # Mean eigenvalue spread of C_ijk
+    holonomy_wilson_trace: float = 0.0    # Mean |tr(C)/K - 1| (Wilson loop deviation)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -186,6 +202,11 @@ class TrainingTracker:
             step_time=step_time,
             attention_entropy=train_metrics.get('attention_entropy', 0),
             attention_concentration=train_metrics.get('attention_concentration', 0),
+            holonomy_mean_norm=train_metrics.get('holonomy/mean_norm', 0),
+            holonomy_max_norm=train_metrics.get('holonomy/max_norm', 0),
+            holonomy_frac_gt_01=train_metrics.get('holonomy/frac_gt_0.1', 0),
+            holonomy_spectral_gap=train_metrics.get('holonomy/spectral_gap', 0),
+            holonomy_wilson_trace=train_metrics.get('holonomy/wilson_trace', 0),
         )
 
         self.history.append(snapshot)
@@ -766,6 +787,11 @@ class PublicationMetrics:
         self.semantic_analysis_history: List[Dict[str, Any]] = []
         self.semantic_analysis_interval: int = 10000  # Default: analyze every 10k steps
 
+        # Holonomy tracking for non-flat transport experiments
+        self.holonomy_history: List[HolonomyProfile] = []
+        self.holonomy_interval: int = 500  # Default: compute every 500 steps
+        self.holonomy_sample_size: int = 500  # Triples per computation
+
         print(f"[PublicationMetrics] Initialized: {self.experiment_dir}")
 
     def record_step(
@@ -913,6 +939,271 @@ class PublicationMetrics:
 
         return results
 
+    # ------------------------------------------------------------------
+    # Holonomy (Non-Flat Transport Curvature)
+    # ------------------------------------------------------------------
+
+    def set_holonomy_interval(self, interval: int, sample_size: int = 500):
+        """Configure holonomy computation frequency.
+
+        Args:
+            interval: Compute holonomy every N steps (0 = disabled).
+            sample_size: Number of random triples per computation.
+        """
+        self.holonomy_interval = interval
+        self.holonomy_sample_size = sample_size
+
+    def should_compute_holonomy(self, step: int) -> bool:
+        """Check if holonomy diagnostics should run at this step."""
+        if self.holonomy_interval <= 0:
+            return False
+        return step % self.holonomy_interval == 0
+
+    def compute_holonomy_diagnostics(
+        self,
+        model: Any,
+        step: int,
+        verbose: bool = False,
+    ) -> Optional[Dict[str, float]]:
+        """Compute holonomy metrics from the model's current state.
+
+        Finds all blocks with non-flat transport (GaugeConnection),
+        recomputes exp(δ_ij · G) from embeddings, and computes holonomy.
+
+        Args:
+            model: The GaugeTransformerLM model.
+            step: Current training step.
+            verbose: Print diagnostics.
+
+        Returns:
+            Flat dict of holonomy metrics suitable for logging, or None
+            if the model has no non-flat transport.
+        """
+        blocks = self._find_gauge_blocks(model)
+        if not blocks:
+            return None
+
+        snapshots = []
+        all_norms = []
+
+        with torch.no_grad():
+            for layer_idx, block in blocks:
+                exp_delta = self._extract_exp_delta(model, block)
+                if exp_delta is None:
+                    continue
+
+                snap = compute_holonomy_snapshot(
+                    exp_delta,
+                    step=step,
+                    layer=layer_idx,
+                    head=0,
+                    sample_size=self.holonomy_sample_size,
+                    seed=42,
+                )
+                snapshots.append(snap)
+                all_norms.append(snap.mean_norm)
+
+        if not snapshots:
+            return None
+
+        profile = HolonomyProfile(
+            step=step,
+            snapshots=snapshots,
+            global_mean_norm=float(np.mean(all_norms)),
+            global_max_norm=float(np.max(all_norms)),
+        )
+        self.holonomy_history.append(profile)
+
+        # Build flat logging dict
+        log_dict = {
+            'holonomy/mean_norm': profile.global_mean_norm,
+            'holonomy/max_norm': profile.global_max_norm,
+        }
+        # Use first snapshot for detailed metrics (aggregated across layers)
+        if snapshots:
+            agg = snapshots[0]
+            log_dict.update({
+                'holonomy/frac_gt_0.1': agg.frac_gt_01,
+                'holonomy/spectral_gap': agg.mean_spectral_gap,
+                'holonomy/wilson_trace': agg.mean_wilson_trace,
+            })
+
+        if verbose:
+            print(f"  [HOLONOMY] mean ‖C-I‖={profile.global_mean_norm:.4f} | "
+                  f"max={profile.global_max_norm:.4f} | "
+                  f"frac>0.1={log_dict.get('holonomy/frac_gt_0.1', 0):.3f}")
+
+        return log_dict
+
+    def generate_holonomy_figures(
+        self,
+        model: Any = None,
+        save_prefix: str = 'holonomy',
+    ):
+        """Generate all holonomy publication figures.
+
+        Args:
+            model: Optional model for extracting current exp_delta (for
+                   distribution and spectrum plots at current state).
+            save_prefix: Filename prefix for saved figures.
+        """
+        if not MATPLOTLIB_AVAILABLE:
+            print("[WARN] matplotlib not available, skipping holonomy figures")
+            return
+
+        try:
+            from transformer.visualization.holonomy_plots import (
+                plot_holonomy_evolution,
+                plot_holonomy_distribution,
+                plot_holonomy_summary,
+                plot_wilson_spectrum,
+                plot_curvature_vs_distance,
+                plot_layer_holonomy_profile,
+            )
+        except ImportError:
+            print("[WARN] holonomy_plots not available, skipping figures")
+            return
+
+        figures_dir = self.experiment_dir / "figures"
+        figures_dir.mkdir(parents=True, exist_ok=True)
+
+        if not self.holonomy_history:
+            print("[WARN] No holonomy history to plot")
+            return
+
+        trajectory = compute_flatness_trajectory(self.holonomy_history)
+
+        # Figure: Evolution over training
+        if len(trajectory['steps']) > 1:
+            try:
+                plot_holonomy_evolution(
+                    steps=trajectory['steps'],
+                    global_mean=trajectory['global_mean'],
+                    global_max=trajectory['global_max'],
+                    per_layer_mean=trajectory['per_layer_mean'],
+                    title='Holonomy Evolution During Training',
+                    output_path=figures_dir / f'{save_prefix}_evolution.png',
+                )
+                plt.close('all')
+                print(f"  Saved {save_prefix}_evolution.png")
+            except Exception as e:
+                print(f"[WARN] Holonomy evolution plot failed: {e}")
+
+        # Figure: Per-layer profile (using latest snapshot)
+        latest = self.holonomy_history[-1]
+        if latest.snapshots:
+            try:
+                layer_means = np.array([s.mean_norm for s in latest.snapshots])
+                layer_stds = np.array([s.std_norm for s in latest.snapshots])
+                plot_layer_holonomy_profile(
+                    layer_means=layer_means,
+                    layer_stds=layer_stds,
+                    title='Holonomy by Layer (Final)',
+                    output_path=figures_dir / f'{save_prefix}_layer_profile.png',
+                )
+                plt.close('all')
+                print(f"  Saved {save_prefix}_layer_profile.png")
+            except Exception as e:
+                print(f"[WARN] Holonomy layer profile plot failed: {e}")
+
+        # Figure: Distribution + Spectrum (requires model for current exp_delta)
+        if model is not None:
+            blocks = self._find_gauge_blocks(model)
+            if blocks:
+                try:
+                    _, block = blocks[0]
+                    exp_delta = self._extract_exp_delta(model, block)
+                    if exp_delta is not None:
+                        C, norms, _ = compute_holonomy(
+                            exp_delta, sample_size=min(2000, self.holonomy_sample_size * 4)
+                        )
+                        norms_np = norms.detach().cpu().float().mean(dim=0).numpy()
+                        C_np = C.detach().cpu().float()[0].numpy()  # first batch
+
+                        plot_holonomy_distribution(
+                            norms_np,
+                            title='Holonomy Norm Distribution (Final)',
+                            output_path=figures_dir / f'{save_prefix}_distribution.png',
+                        )
+                        plt.close('all')
+                        print(f"  Saved {save_prefix}_distribution.png")
+
+                        plot_wilson_spectrum(
+                            C_np,
+                            title='Wilson Loop Eigenvalue Spectrum (Final)',
+                            output_path=figures_dir / f'{save_prefix}_wilson_spectrum.png',
+                        )
+                        plt.close('all')
+                        print(f"  Saved {save_prefix}_wilson_spectrum.png")
+
+                        # Curvature vs distance
+                        dist_data = compute_curvature_by_distance(exp_delta)
+                        plot_curvature_vs_distance(
+                            **dist_data,
+                            title='Curvature vs Token Distance (Final)',
+                            output_path=figures_dir / f'{save_prefix}_curvature_vs_distance.png',
+                        )
+                        plt.close('all')
+                        print(f"  Saved {save_prefix}_curvature_vs_distance.png")
+
+                except Exception as e:
+                    print(f"[WARN] Holonomy distribution/spectrum plots failed: {e}")
+
+        # Save holonomy history to JSON
+        try:
+            history_data = []
+            for h in self.holonomy_history:
+                entry = {'step': h.step, 'global_mean': h.global_mean_norm,
+                         'global_max': h.global_max_norm}
+                for s in h.snapshots:
+                    entry[f'L{s.layer}_mean'] = s.mean_norm
+                    entry[f'L{s.layer}_spectral_gap'] = s.mean_spectral_gap
+                    entry[f'L{s.layer}_wilson'] = s.mean_wilson_trace
+                history_data.append(entry)
+            with open(self.experiment_dir / 'holonomy_history.json', 'w') as f:
+                json.dump(history_data, f, indent=2)
+            print(f"  Saved holonomy_history.json")
+        except Exception as e:
+            print(f"[WARN] Could not save holonomy history JSON: {e}")
+
+    def _find_gauge_blocks(self, model: Any) -> list:
+        """Find all GaugeTransformerBlocks with non-flat transport."""
+        blocks = []
+        stack = getattr(model, 'stack', None)
+        if stack is not None:
+            block_list = getattr(stack, 'blocks', None)
+            if block_list is not None:
+                for i, block in enumerate(block_list):
+                    if getattr(block, 'non_flat_transport', False):
+                        blocks.append((i, block))
+        return blocks
+
+    def _extract_exp_delta(self, model: Any, block: Any) -> Optional[torch.Tensor]:
+        """Recompute exp(δ_ij · G) from current model state."""
+        try:
+            embed = getattr(model, 'token_embedding', None)
+            if embed is None:
+                return None
+            mu_embed = getattr(embed, 'mu_embed', None)
+            if mu_embed is None:
+                return None
+
+            N = min(32, mu_embed.weight.shape[0])
+            mu = mu_embed.weight[:N].unsqueeze(0)  # (1, N, K)
+
+            generators = getattr(model, 'generators', None)
+            if generators is None:
+                return None
+
+            delta = block.gauge_connection(mu, mu)  # (1, N, N, n_gen)
+            cocycle = getattr(block, 'cocycle_relaxation', 1.0)
+            scaled_delta = cocycle * delta
+            delta_matrix = torch.einsum('bija,akl->bijkl', scaled_delta, generators)
+            exp_delta = torch.linalg.matrix_exp(delta_matrix.float())
+            return exp_delta
+        except Exception:
+            return None
+
     def save_all(self):
         """Save all metrics to files."""
         self.tracker.save_json()
@@ -988,6 +1279,14 @@ class PublicationMetrics:
                 plt.close()
             except Exception as e:
                 print(f"[WARN] Could not generate attention heatmap: {e}")
+
+        # Holonomy figures (non-flat transport)
+        if self.holonomy_history:
+            try:
+                self.generate_holonomy_figures()
+                figures_generated.append("holonomy")
+            except Exception as e:
+                print(f"[WARN] Could not generate holonomy figures: {e}")
 
         print(f"[PublicationMetrics] Generated figures: {', '.join(figures_generated)}")
 
@@ -1072,6 +1371,20 @@ class PublicationMetrics:
             print(f"Final Val BPC:   {summary.get('final_val_bpc', 'N/A')}")
             print(f"Throughput:      {summary.get('avg_tokens_per_sec', 0):.0f} tok/s")
             print(f"Total Time:      {summary.get('total_time_sec', 0)/60:.1f} min")
+
+        # Holonomy summary
+        if self.holonomy_history:
+            latest = self.holonomy_history[-1]
+            print(f"\nHolonomy (Non-Flat Transport):")
+            print(f"  Mean ‖C-I‖_F:  {latest.global_mean_norm:.4f}")
+            print(f"  Max ‖C-I‖_F:   {latest.global_max_norm:.4f}")
+            if latest.snapshots:
+                print(f"  Layers tracked: {len(latest.snapshots)}")
+                for s in latest.snapshots:
+                    print(f"    L{s.layer}: mean={s.mean_norm:.4f}, "
+                          f"spectral_gap={s.mean_spectral_gap:.4f}, "
+                          f"wilson_dev={s.mean_wilson_trace:.4f}")
+            print(f"  History points: {len(self.holonomy_history)}")
 
         print("=" * 60)
 
