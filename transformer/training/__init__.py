@@ -22,8 +22,22 @@ from transformer.training.optimizer import (
     create_param_groups,
 )
 from transformer.training.metrics import MetricsTracker
-from transformer.training.lightning_module import GaugeTransformerLitModule
-from transformer.training.lightning_data import GaugeDataModule
+
+# Lightning modules are imported lazily to avoid requiring pytorch_lightning
+# at package import time. Access them via:
+#   from transformer.training.lightning_module import GaugeTransformerLitModule
+#   from transformer.training.lightning_data import GaugeDataModule
+
+
+def __getattr__(name):
+    if name == "GaugeTransformerLitModule":
+        from transformer.training.lightning_module import GaugeTransformerLitModule
+        return GaugeTransformerLitModule
+    if name == "GaugeDataModule":
+        from transformer.training.lightning_data import GaugeDataModule
+        return GaugeDataModule
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     'TrainingConfig',
