@@ -414,6 +414,21 @@ VFE_EM_CONFIG = {
     'pos_encoding_scale': 0.3,
     'use_prior_bank': False,
 
+    # =================================================================
+    # NON-FLAT GAUGE TRANSPORT (holonomy)
+    # =================================================================
+    # When enabled, transport acquires an edge-local connection δ_ij:
+    #   phi path:  Ω_ij = exp(φ_i·G) · exp(α·δ_ij·G) · exp(-φ_j·G)
+    #   omega path: Ω_ij = Ω_i · exp(α·δ_ij·G) · Ω_j⁻¹
+    # δ_ij is zero-initialized so the model starts flat and learns
+    # curvature only where the data warrants it.
+    # Holonomy H_ijk = Ω_ij·Ω_jk·Ω_ki ≠ I when δ ≠ 0.
+    'non_flat_transport': False,        # Enable edge-dependent connection δ_ij
+    'cocycle_relaxation': 0.0,          # Scale for δ_ij: 0=flat, 1=fully non-flat
+    'connection_type': 'bilinear',      # 'bilinear' (δ_ij^a = μ_i^T W^a μ_j) | 'mlp'
+    'connection_hidden_dim': 64,        # Hidden dim for MLP connection (ignored for bilinear)
+    'holonomy_penalty': 0.0,            # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
+
 }
 
 
