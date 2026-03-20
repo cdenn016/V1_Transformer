@@ -9,6 +9,7 @@ Tools for analyzing transformer behavior:
 - Trajectory: Belief trajectory tracking
 - Semantics: Gauge semantics analysis
 - Bayesian validation: PyMC models for manuscript claim validation
+- Holonomy metrics: Curvature diagnostics for non-flat transport
 """
 
 from transformer.analysis.rg_metrics import (
@@ -29,6 +30,19 @@ from transformer.analysis.trajectory import (
     LayerTrajectory,
     ForwardTrajectory,
 )
+from transformer.analysis.holonomy import (
+    compute_holonomy,
+    holonomy_penalty_loss,
+    holonomy_statistics,
+    holonomy_by_token_pairs,
+)
+from transformer.analysis.holonomy_metrics import (
+    HolonomySnapshot,
+    HolonomyProfile,
+    compute_holonomy_snapshot,
+    compute_curvature_by_distance,
+    compute_flatness_trajectory,
+)
 
 __all__ = [
     # RG metrics
@@ -48,4 +62,15 @@ __all__ = [
     'TrajectoryRecorder',
     'LayerTrajectory',
     'ForwardTrajectory',
+
+    # Holonomy (curvature diagnostics)
+    'compute_holonomy',
+    'holonomy_penalty_loss',
+    'holonomy_statistics',
+    'holonomy_by_token_pairs',
+    'HolonomySnapshot',
+    'HolonomyProfile',
+    'compute_holonomy_snapshot',
+    'compute_curvature_by_distance',
+    'compute_flatness_trajectory',
 ]
