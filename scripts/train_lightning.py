@@ -3,34 +3,209 @@
 Train Gauge Transformer with PyTorch Lightning
 ===============================================
 
-Unified entry point for training all three transformer architectures:
-    - vfe_dynamic: Gauge-covariant VFE transformer (GaugeTransformerLM)
+Edit the config dictionaries below and run this script directly.
+Supports three model architectures:
+    - VFE_dynamic: Gauge-covariant VFE transformer (GaugeTransformerLM)
     - standard: Vanilla dot-product attention baseline (StandardTransformerLM)
     - pure_fep: Pure VFE with analytic natural gradients (PureVFETransformer)
 
-Examples:
-    # VFE-dynamic on WikiText-2 (quick test)
-    python scripts/train_lightning.py --training_mode vfe_dynamic --dataset wikitext-2 --max_steps 500
-
-    # Standard baseline
-    python scripts/train_lightning.py --training_mode standard --dataset wikitext-2 --max_steps 500
-
-    # Pure FEP (single-GPU, smaller batch)
-    python scripts/train_lightning.py --training_mode pure_fep --dataset wikitext-2 --max_steps 500 --max_seq_len 64 --batch_size 8
-
-    # Multi-GPU with mixed precision (vfe_dynamic or standard only)
-    python scripts/train_lightning.py --accelerator gpu --devices 2 --precision 16-mixed
-
-    # With Weights & Biases
-    python scripts/train_lightning.py --wandb --wandb_project my-project
+Usage:
+    python scripts/train_lightning.py
 """
 
-import argparse
 import sys
 import os
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+# ============================================================================
+# SELECT MODE — change this to switch between model architectures
+# ============================================================================
+ACTIVE_MODE = 'VFE_dynamic'     # 'standard', 'VFE_dynamic', or 'pure_fep'
+DATASET = 'wikitext-103'        # 'wikitext-2', 'wikitext-103', 'openwebtext', 'wiki-ja'
+SEED = 42
+
+
+# ============================================================================
+# CONFIG 1: STANDARD TRANSFORMER (Baseline)
+# ============================================================================
+STANDARD_CONFIG = {
+    # Model architecture
+    'vocab_size': 50257,
+    'embed_dim': 10,
+    'n_layers': 1,
+    'n_heads': 1,
+    'hidden_dim': 24527,
+    'max_seq_len': 128,
+    'dropout': 0.1,
+    'use_rope': False,
+    'disable_ffn': False,
+
+    # Training
+    'batch_size': 64,
+    'num_workers': 10,
+    'max_steps': 15000,
+    'warmup_steps': 100,
+    'learning_rate': 3e-4,
+    'lr_decay': 'cosine',
+    'weight_decay': 0.01,
+    'grad_clip': 1.0,
+
+    # Logging
+    'log_interval': 100,
+    'eval_interval': 1000,
+    'checkpoint_interval': 25000,
+
+    # Lightning
+    'accelerator': 'auto',
+    'devices': 'auto',
+    'precision': '32-true',
+    'accumulate_grad_batches': 1,
+
+    # W&B (set use_wandb=True to enable)
+    'use_wandb': False,
+    'wandb_project': 'gauge-transformer',
+    'wandb_run_name': None,
+
+    # Checkpointing
+    'checkpoint_dir': 'checkpoints',
+    'patience': 0,                    # Early stopping (0=disabled)
+}
+
+
+# ============================================================================
+# CONFIG 2: VFE_DYNAMIC (Gauge-covariant VFE transformer)
+# ============================================================================
+VFE_DYNAMIC_CONFIG = {
+    # Model architecture
+    'vocab_size': 50257,
+    'embed_dim': 10,
+    'n_layers': 1,
+    'hidden_dim': 508,
+    'max_seq_len': 128,
+    'kappa_beta': 1.0,
+
+    # Irrep specification: (name, n_heads, head_dim)
+    'irrep_spec': [
+        ('fund', 1, 10),
+    ],
+
+    # Training
+    'batch_size': 32,
+    'num_workers': 10,
+    'max_steps': 30000,
+    'warmup_steps': 100,
+    'lr_decay': 'cosine',
+    'grad_clip': 1.0,
+
+    # Natural gradient learning rates
+    'mu_lr': 0.05,
+    'sigma_lr': 0.005,
+    'phi_lr': 0.005,
+    'attention_lr': 0.005,
+    'ffn_lr': 0.05,
+    'output_lr': 0.05,
+
+    # VFE loss weights
+    'alpha': 0.075,
+    'lambda_beta': 0.0,
+    'lambda_gamma': 0.0,
+    'kappa_gamma': 1.0,
+
+    # Logging
+    'log_interval': 100,
+    'eval_interval': 1000,
+    'checkpoint_interval': 25000,
+
+    # Lightning
+    'accelerator': 'auto',
+    'devices': 'auto',
+    'precision': '32-true',
+    'accumulate_grad_batches': 1,
+
+    # W&B
+    'use_wandb': False,
+    'wandb_project': 'gauge-transformer',
+    'wandb_run_name': None,
+
+    # Checkpointing
+    'checkpoint_dir': 'checkpoints',
+    'patience': 0,
+}
+
+
+# ============================================================================
+# CONFIG 3: PURE FEP (Pure VFE — no autograd, no optimizer)
+# ============================================================================
+PURE_FEP_CONFIG = {
+    # Belief geometry
+    'vocab_size': 50257,
+    'belief_dim': 32,
+    'n_heads': 4,
+    'head_dim': 8,
+    'max_seq_len': 64,
+
+    # E-step (inference = forward pass)
+    'n_esteps': 12,
+    'eta_E': 0.1,
+
+    # M-step (learning = parameter update)
+    'eta_M': 0.001,
+
+    # Prior precision
+    'alpha_b0': 1.0,
+    'alpha_c0': 1.0,
+    'hyper_var': 1.0,
+
+    # Initialization
+    'sigma_init': 1.0,
+    'omega_init_scale': 0.01,
+
+    # Trust regions
+    'trust_region_mu': 1.0,
+    'trust_region_sigma': 0.3,
+    'trust_region_omega': 0.3,
+
+    # SPD safeguards
+    'spd_eps_min': 1e-4,
+    'spd_kappa_max': 1e4,
+
+    # Prior safeguards
+    'prior_sigma_floor': 0.5,
+    'prior_mu_max_norm': 3.0,
+
+    # Causal masking
+    'causal': True,
+
+    # Training
+    'batch_size': 8,
+    'num_workers': 0,
+    'max_steps': 15000,
+
+    # Logging
+    'log_interval': 100,
+    'eval_interval': 1000,
+
+    # Lightning (single-GPU only — DDP incompatible)
+    'accelerator': 'auto',
+    'precision': '32-true',
+
+    # W&B
+    'use_wandb': False,
+    'wandb_project': 'gauge-transformer',
+    'wandb_run_name': None,
+
+    # Checkpointing
+    'checkpoint_dir': 'checkpoints',
+    'patience': 0,
+}
+
+
+# ============================================================================
+# Implementation — no need to edit below this line
+# ============================================================================
 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import (
@@ -42,238 +217,178 @@ from pytorch_lightning.callbacks import (
 from transformer.training.lightning_data import GaugeDataModule
 
 
-def parse_args():
-    p = argparse.ArgumentParser(description="Train Gauge Transformer with Lightning")
-
-    # Training mode
-    p.add_argument('--training_mode', default='vfe_dynamic',
-                   choices=['standard', 'vfe_dynamic', 'pure_fep'],
-                   help='Model architecture to train')
-
-    # Data
-    p.add_argument('--dataset', default='wikitext-103',
-                   choices=['wikitext-2', 'wikitext-103', 'openwebtext', 'wiki-ja'])
-    p.add_argument('--max_seq_len', type=int, default=256)
-    p.add_argument('--batch_size', type=int, default=64)
-    p.add_argument('--num_workers', type=int, default=0)
-
-    # Model architecture (shared)
-    p.add_argument('--embed_dim', type=int, default=80)
-    p.add_argument('--n_layers', type=int, default=1)
-    p.add_argument('--hidden_dim', type=int, default=320)
-    p.add_argument('--n_heads', type=int, default=10)
-    p.add_argument('--head_dim', type=int, default=1,
-                   help='Head dim for VFE_dynamic irrep spec')
-    p.add_argument('--kappa_beta', type=float, default=1.0)
-
-    # Standard-specific
-    p.add_argument('--dropout', type=float, default=0.1,
-                   help='Dropout rate (standard mode)')
-    p.add_argument('--use_rope', action='store_true',
-                   help='Use RoPE positional encoding (standard mode)')
-    p.add_argument('--disable_ffn', action='store_true',
-                   help='Attention-only ablation (standard mode)')
-
-    # PureFEP-specific
-    p.add_argument('--belief_dim', type=int, default=32,
-                   help='Full belief dimension K (pure_fep mode)')
-    p.add_argument('--pure_head_dim', type=int, default=8,
-                   help='Per-head dimension K_h (pure_fep mode)')
-    p.add_argument('--n_esteps', type=int, default=12,
-                   help='VFE descent iterations (pure_fep mode)')
-    p.add_argument('--eta_E', type=float, default=0.1,
-                   help='E-step learning rate (pure_fep mode)')
-    p.add_argument('--eta_M', type=float, default=0.001,
-                   help='M-step learning rate (pure_fep mode)')
-
-    # Training
-    p.add_argument('--max_steps', type=int, default=15000)
-    p.add_argument('--warmup_steps', type=int, default=1000)
-    p.add_argument('--learning_rate', type=float, default=3e-4,
-                   help='Learning rate (standard mode)')
-    p.add_argument('--lr_decay', default='cosine', choices=['cosine', 'linear', 'constant'])
-
-    # Natural gradient learning rates (vfe_dynamic mode)
-    p.add_argument('--mu_lr', type=float, default=0.1)
-    p.add_argument('--sigma_lr', type=float, default=0.005)
-    p.add_argument('--phi_lr', type=float, default=0.01)
-    p.add_argument('--attention_lr', type=float, default=0.01)
-    p.add_argument('--ffn_lr', type=float, default=0.001)
-    p.add_argument('--output_lr', type=float, default=0.001)
-
-    # VFE loss weights (vfe_dynamic mode)
-    p.add_argument('--alpha', type=float, default=0.1)
-    p.add_argument('--lambda_beta', type=float, default=1.0)
-
-    # Lightning trainer
-    p.add_argument('--accelerator', default='auto')
-    p.add_argument('--devices', default='auto')
-    p.add_argument('--precision', default='32-true')
-    p.add_argument('--gradient_clip_val', type=float, default=1.0)
-    p.add_argument('--accumulate_grad_batches', type=int, default=1)
-    p.add_argument('--val_check_interval', type=int, default=100)
-    p.add_argument('--log_every_n_steps', type=int, default=10)
-
-    # Checkpointing
-    p.add_argument('--checkpoint_dir', default='checkpoints')
-    p.add_argument('--patience', type=int, default=0, help='Early stopping patience (0=disabled)')
-
-    # W&B
-    p.add_argument('--wandb', action='store_true')
-    p.add_argument('--wandb_project', default='gauge-transformer')
-    p.add_argument('--wandb_run_name', default=None)
-
-    # Misc
-    p.add_argument('--seed', type=int, default=42)
-
-    return p.parse_args()
-
-
-def _create_vfe_dynamic_model(args, vocab_size):
-    """Create GaugeTransformerLM + GaugeTransformerLitModule."""
+def _build_vfe_dynamic(config, vocab_size):
     from transformer.core.model import GaugeTransformerLM
     from transformer.training.config import TrainingConfig
     from transformer.training.lightning_module import GaugeTransformerLitModule
 
-    irrep_spec = [('\u21130', args.n_heads, args.head_dim)]
     model_config = {
         'vocab_size': vocab_size,
-        'embed_dim': args.embed_dim,
-        'n_layers': args.n_layers,
-        'irrep_spec': irrep_spec,
-        'hidden_dim': args.hidden_dim,
-        'max_seq_len': args.max_seq_len,
-        'kappa_beta': args.kappa_beta,
+        'embed_dim': config['embed_dim'],
+        'n_layers': config['n_layers'],
+        'irrep_spec': config['irrep_spec'],
+        'hidden_dim': config['hidden_dim'],
+        'max_seq_len': config['max_seq_len'],
+        'kappa_beta': config.get('kappa_beta', 1.0),
     }
     model = GaugeTransformerLM(model_config)
 
     training_config = TrainingConfig(
         training_mode='vfe_dynamic',
         use_param_groups=True,
-        mu_lr=args.mu_lr,
-        sigma_lr=args.sigma_lr,
-        phi_lr=args.phi_lr,
-        attention_lr=args.attention_lr,
-        ffn_lr=args.ffn_lr,
-        output_lr=args.output_lr,
-        alpha=args.alpha,
-        lambda_beta=args.lambda_beta,
-        warmup_steps=args.warmup_steps,
-        max_steps=args.max_steps,
-        lr_decay=args.lr_decay,
-        batch_size=args.batch_size,
-        max_seq_len=args.max_seq_len,
+        mu_lr=config['mu_lr'],
+        sigma_lr=config['sigma_lr'],
+        phi_lr=config['phi_lr'],
+        attention_lr=config['attention_lr'],
+        ffn_lr=config['ffn_lr'],
+        output_lr=config['output_lr'],
+        alpha=config['alpha'],
+        lambda_beta=config.get('lambda_beta', 0.0),
+        lambda_gamma=config.get('lambda_gamma', 0.0),
+        kappa_gamma=config.get('kappa_gamma', 1.0),
+        warmup_steps=config['warmup_steps'],
+        max_steps=config['max_steps'],
+        lr_decay=config.get('lr_decay', 'cosine'),
+        batch_size=config['batch_size'],
+        max_seq_len=config['max_seq_len'],
+        grad_clip=config.get('grad_clip', 1.0),
     )
 
     return GaugeTransformerLitModule(model, training_config)
 
 
-def _create_standard_model(args, vocab_size):
-    """Create StandardTransformerLM + GaugeTransformerLitModule."""
+def _build_standard(config, vocab_size):
     from transformer.baselines.standard_transformer import StandardTransformerLM
     from transformer.training.config import get_standard_config
     from transformer.training.lightning_module import GaugeTransformerLitModule
 
     model_config = {
         'vocab_size': vocab_size,
-        'embed_dim': args.embed_dim,
-        'n_layers': args.n_layers,
-        'n_heads': args.n_heads,
-        'hidden_dim': args.hidden_dim,
-        'max_seq_len': args.max_seq_len,
-        'dropout': args.dropout,
-        'use_rope': args.use_rope,
-        'disable_ffn': args.disable_ffn,
+        'embed_dim': config['embed_dim'],
+        'n_layers': config['n_layers'],
+        'n_heads': config['n_heads'],
+        'hidden_dim': config['hidden_dim'],
+        'max_seq_len': config['max_seq_len'],
+        'dropout': config.get('dropout', 0.1),
+        'use_rope': config.get('use_rope', False),
+        'disable_ffn': config.get('disable_ffn', False),
     }
     model = StandardTransformerLM(model_config)
 
     training_config = get_standard_config(
-        learning_rate=args.learning_rate,
-        warmup_steps=args.warmup_steps,
-        max_steps=args.max_steps,
-        lr_decay=args.lr_decay,
-        batch_size=args.batch_size,
-        max_seq_len=args.max_seq_len,
+        learning_rate=config.get('learning_rate', 3e-4),
+        warmup_steps=config.get('warmup_steps', 1000),
+        max_steps=config['max_steps'],
+        lr_decay=config.get('lr_decay', 'cosine'),
+        batch_size=config['batch_size'],
+        max_seq_len=config['max_seq_len'],
+        weight_decay=config.get('weight_decay', 0.01),
+        grad_clip=config.get('grad_clip', 1.0),
     )
 
     return GaugeTransformerLitModule(model, training_config)
 
 
-def _create_pure_fep_model(args, vocab_size):
-    """Create PureVFETransformer + PureVFELitModule."""
+def _build_pure_fep(config, vocab_size):
     from transformer.pure_vfe.config import PureVFEConfig
     from transformer.training.lightning_pure_vfe import PureVFELitModule
 
-    # For pure_fep, n_heads is derived from belief_dim / pure_head_dim
-    n_heads_pure = args.belief_dim // args.pure_head_dim
-
     pure_config = PureVFEConfig(
         vocab_size=vocab_size,
-        belief_dim=args.belief_dim,
-        n_heads=n_heads_pure,
-        head_dim=args.pure_head_dim,
-        n_esteps=args.n_esteps,
-        eta_E=args.eta_E,
-        eta_M=args.eta_M,
-        max_seq_len=args.max_seq_len,
-        batch_size=args.batch_size,
+        belief_dim=config['belief_dim'],
+        n_heads=config['n_heads'],
+        head_dim=config['head_dim'],
+        n_esteps=config.get('n_esteps', 12),
+        eta_E=config.get('eta_E', 0.1),
+        eta_M=config.get('eta_M', 0.001),
+        max_seq_len=config['max_seq_len'],
+        batch_size=config['batch_size'],
+        alpha_b0=config.get('alpha_b0', 1.0),
+        alpha_c0=config.get('alpha_c0', 1.0),
+        hyper_var=config.get('hyper_var', 1.0),
+        sigma_init=config.get('sigma_init', 1.0),
+        omega_init_scale=config.get('omega_init_scale', 0.01),
+        trust_region_mu=config.get('trust_region_mu', 1.0),
+        trust_region_sigma=config.get('trust_region_sigma', 0.3),
+        trust_region_omega=config.get('trust_region_omega', 0.3),
+        spd_eps_min=config.get('spd_eps_min', 1e-4),
+        spd_kappa_max=config.get('spd_kappa_max', 1e4),
+        prior_sigma_floor=config.get('prior_sigma_floor', 0.5),
+        prior_mu_max_norm=config.get('prior_mu_max_norm', 3.0),
+        causal=config.get('causal', True),
     )
 
     return PureVFELitModule(pure_config)
 
 
 def main():
-    args = parse_args()
-    pl.seed_everything(args.seed)
+    pl.seed_everything(SEED)
+
+    # Select config by mode
+    MODE_CONFIGS = {
+        'standard': STANDARD_CONFIG,
+        'VFE_dynamic': VFE_DYNAMIC_CONFIG,
+        'pure_fep': PURE_FEP_CONFIG,
+    }
+
+    if ACTIVE_MODE not in MODE_CONFIGS:
+        raise ValueError(f"Unknown ACTIVE_MODE: {ACTIVE_MODE!r}. "
+                         f"Choose from: {list(MODE_CONFIGS.keys())}")
+
+    config = MODE_CONFIGS[ACTIVE_MODE].copy()
+    print(f"Mode: {ACTIVE_MODE}")
+    print(f"Dataset: {DATASET}")
 
     # -----------------------------------------------------------
     # Data
     # -----------------------------------------------------------
     dm = GaugeDataModule(
-        max_seq_len=args.max_seq_len,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        dataset=args.dataset,
+        max_seq_len=config['max_seq_len'],
+        batch_size=config['batch_size'],
+        num_workers=config.get('num_workers', 0),
+        dataset=DATASET,
     )
     dm.setup()
 
-    # -----------------------------------------------------------
-    # Model (dispatch by training_mode)
-    # -----------------------------------------------------------
-    if args.training_mode == 'vfe_dynamic':
-        lit_model = _create_vfe_dynamic_model(args, dm.vocab_size)
-    elif args.training_mode == 'standard':
-        lit_model = _create_standard_model(args, dm.vocab_size)
-    elif args.training_mode == 'pure_fep':
-        lit_model = _create_pure_fep_model(args, dm.vocab_size)
-    else:
-        raise ValueError(f"Unknown training_mode: {args.training_mode}")
+    # Override vocab_size from tokenizer
+    config['vocab_size'] = dm.vocab_size
 
-    print(f"Training mode: {args.training_mode}")
+    # -----------------------------------------------------------
+    # Model
+    # -----------------------------------------------------------
+    BUILDERS = {
+        'standard': _build_standard,
+        'VFE_dynamic': _build_vfe_dynamic,
+        'pure_fep': _build_pure_fep,
+    }
+    lit_model = BUILDERS[ACTIVE_MODE](config, dm.vocab_size)
 
     # -----------------------------------------------------------
     # Callbacks
     # -----------------------------------------------------------
+    eval_interval = config.get('eval_interval', 1000)
+
     callbacks = [
         ModelCheckpoint(
-            dirpath=args.checkpoint_dir,
-            filename=f'{args.training_mode}' + '-{step}-{val/ce_loss:.4f}',
+            dirpath=config.get('checkpoint_dir', 'checkpoints'),
+            filename=f'{ACTIVE_MODE}' + '-{step}-{val/ce_loss:.4f}',
             monitor='val/ce_loss',
             mode='min',
             save_top_k=3,
-            every_n_train_steps=args.val_check_interval,
+            every_n_train_steps=eval_interval,
         ),
     ]
 
     # LR monitor only for modes with an optimizer
-    if args.training_mode != 'pure_fep':
+    if ACTIVE_MODE != 'pure_fep':
         callbacks.append(LearningRateMonitor(logging_interval='step'))
 
-    if args.patience > 0:
+    patience = config.get('patience', 0)
+    if patience > 0:
         callbacks.append(
             EarlyStopping(
                 monitor='val/ce_loss',
-                patience=args.patience,
+                patience=patience,
                 mode='min',
             )
         )
@@ -281,39 +396,39 @@ def main():
     # -----------------------------------------------------------
     # Logger
     # -----------------------------------------------------------
-    if args.wandb:
+    if config.get('use_wandb', False):
         try:
             from pytorch_lightning.loggers import WandbLogger
             logger = WandbLogger(
-                project=args.wandb_project,
-                name=args.wandb_run_name or f'{args.training_mode}',
+                project=config.get('wandb_project', 'gauge-transformer'),
+                name=config.get('wandb_run_name') or ACTIVE_MODE,
             )
         except ImportError:
             print("wandb not installed, falling back to CSV logger")
-            logger = pl.loggers.CSVLogger(args.checkpoint_dir)
+            logger = pl.loggers.CSVLogger(config.get('checkpoint_dir', 'checkpoints'))
     else:
-        logger = pl.loggers.CSVLogger(args.checkpoint_dir)
+        logger = pl.loggers.CSVLogger(config.get('checkpoint_dir', 'checkpoints'))
 
     # -----------------------------------------------------------
     # Trainer
     # -----------------------------------------------------------
-    # PureFEP: single-GPU only, no gradient clipping (no autograd)
-    if args.training_mode == 'pure_fep':
+    # PureFEP: single-GPU, no gradient clipping (no autograd)
+    if ACTIVE_MODE == 'pure_fep':
         devices = 1
         gradient_clip_val = None
     else:
-        devices = args.devices
-        gradient_clip_val = args.gradient_clip_val
+        devices = config.get('devices', 'auto')
+        gradient_clip_val = config.get('grad_clip', 1.0)
 
     trainer = pl.Trainer(
-        max_steps=args.max_steps,
-        accelerator=args.accelerator,
+        max_steps=config['max_steps'],
+        accelerator=config.get('accelerator', 'auto'),
         devices=devices,
-        precision=args.precision,
+        precision=config.get('precision', '32-true'),
         gradient_clip_val=gradient_clip_val,
-        accumulate_grad_batches=args.accumulate_grad_batches,
-        val_check_interval=args.val_check_interval,
-        log_every_n_steps=args.log_every_n_steps,
+        accumulate_grad_batches=config.get('accumulate_grad_batches', 1),
+        val_check_interval=eval_interval,
+        log_every_n_steps=config.get('log_interval', 10),
         callbacks=callbacks,
         logger=logger,
         enable_progress_bar=True,
