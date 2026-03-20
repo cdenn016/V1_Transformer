@@ -144,6 +144,14 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     T = len(update_tokens)
     dev = mu_star.device
 
+    # Confidence-weighted learning rate (from dynamic transformer):
+    # When predictions are bad (high CE), gradients are large and noisy,
+    # so we should learn LESS, not more. Scale eta_M by 1/(1 + mean_ce).
+    per_pos_ce = -log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)  # [B, N]
+    mean_ce = per_pos_ce.mean().item()
+    confidence = 1.0 / (1.0 + mean_ce)
+    effective_eta_M = config.eta_M * confidence
+
     # Gather current priors for all update tokens: [T, K], [T, K, K]
     mu_all = model.prior_mu[update_tokens]          # [T, K]
     Sigma_all = model.prior_Sigma[update_tokens]    # [T, K, K]
@@ -207,8 +215,16 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
 
     # Natural gradient and update
     nat_mu = torch.einsum('tij,tj->ti', Sigma_all, grad_mu)  # [T, K]
-    nat_mu = clip_norm(nat_mu, 1.0)
-    model.prior_mu[update_tokens] = mu_all - config.eta_M * nat_mu
+    nat_mu = clip_norm(nat_mu, config.m_step_trust_mu)
+    mu_new = mu_all - effective_eta_M * nat_mu
+
+    # Enforce prior mean norm constraint (prevents mean spread → logit explosion)
+    if config.prior_mu_max_norm > 0:
+        mu_norms = mu_new.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        scale = torch.clamp(config.prior_mu_max_norm / mu_norms, max=1.0)
+        mu_new = mu_new * scale
+
+    model.prior_mu[update_tokens] = mu_new
 
     # ---- Prior covariance gradient (vectorized) ----
     Sigma_star_avg = Sigma_star_sum / n_safe.unsqueeze(-1).unsqueeze(-1)
@@ -242,8 +258,9 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     # Natural gradient on SPD and retract
     nat_Sigma = natural_grad_sigma(grad_Sigma, Sigma_all)
     nat_Sigma = clip_matrix_norm(nat_Sigma, 0.3)
+    # Use even smaller step for Sigma (5x slower, matching dynamic transformer's sigma_lr/mu_lr ratio)
     Sigma_new = retract_spd(
-        Sigma_all, nat_Sigma, config.eta_M,
+        Sigma_all, nat_Sigma, effective_eta_M * 0.2,
         eps_min=config.spd_eps_min, kappa_max=config.spd_kappa_max,
     )
 
@@ -266,7 +283,7 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
 
     nat_Omega = natural_grad_omega(grad_Omega_all, Omega_all)
     nat_Omega = clip_matrix_norm(nat_Omega, 0.3)
-    model.prior_Omega[update_tokens] = Omega_all - config.eta_M * nat_Omega
+    model.prior_Omega[update_tokens] = Omega_all - effective_eta_M * nat_Omega
 
     # ================================================================
     # 4. Update positional gauge offsets
@@ -290,4 +307,4 @@ def _update_pos_omega(Omega_star, token_ids, model, config):
     grad = -(Om_avg - pos_Om)
     nat = natural_grad_omega(grad, pos_Om)
     nat = clip_matrix_norm(nat, 0.3)
-    model.pos_Omega[:N] = pos_Om - config.eta_M * 0.1 * nat
+    model.pos_Omega[:N] = pos_Om - config.eta_M * 0.1 * nat  # pos uses base eta_M (stable)
