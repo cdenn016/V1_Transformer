@@ -117,7 +117,7 @@ def precompute_tokens(mu_h, Sigma_h, Omega, Sigma_h_inv=None):
     Om_inv = torch.linalg.inv(Om)                          # [B, H, N, K_h, K_h]
 
     # ρ = ν = Ω⁻¹ μ
-    rho = torch.einsum('bhnij,bhnj->bhni', Om_inv, mu)     # [B, H, N, K_h]
+    rho = torch.einsum('bhnpq,bhnq->bhnp', Om_inv, mu)     # [B, H, N, K_h]
 
     # Q = Ω⁻¹ Σ Ω⁻ᵀ
     temp = Om_inv @ Sig                                     # [B, H, N, K_h, K_h]
@@ -208,8 +208,8 @@ def _pairwise_kl_torch(Q, rho, P, nu, ldc_q, ldc_k, causal):
     d = rho.unsqueeze(3) - nu.unsqueeze(2)     # [B, H, N_i, N_j, K]
 
     # P_j @ d_ij: [B, H, 1, N_j, K, K] @ [B, H, N_i, N_j, K, 1]
-    Pd = torch.einsum('bhjab,bhijb->bhija', P, d)  # [B, H, N_i, N_j, K]
-    mahal = (d * Pd).sum(-1)                    # [B, H, N_i, N_j]
+    Pd = torch.einsum('bhjpq,bhijq->bhijp', P, d)  # [B, H, N_i, N_j, K]
+    mahal = (d * Pd).sum(-1)                     # [B, H, N_i, N_j]
 
     # Log-det contributions
     logdet = ldc_q.unsqueeze(-1) + ldc_k.unsqueeze(-2)  # [B, H, N_i, N_j]
@@ -264,11 +264,11 @@ def grad_kl_mu_i_perpair(precomp):
     d = rho.unsqueeze(3) - nu.unsqueeze(2)  # [B, H, N_i, N_j, K]
 
     # P_j @ d_ij in pulled-back frame
-    Pd = torch.einsum('bhjab,bhijb->bhija', P, d)  # [B, H, N_i, N_j, K]
+    Pd = torch.einsum('bhjpq,bhijq->bhijp', P, d)  # [B, H, N_i, N_j, K]
 
     # Push forward: Ω_i⁻ᵀ @ Pd (per query i, broadcast over j)
     Om_invT = Om_inv.transpose(-2, -1)  # [B, H, N, K, K]
-    grad = torch.einsum('bhiab,bhijb->bhija', Om_invT, Pd)  # [B, H, N_i, N_j, K]
+    grad = torch.einsum('bhipq,bhijq->bhijp', Om_invT, Pd)  # [B, H, N_i, N_j, K]
 
     return grad
 
@@ -340,7 +340,7 @@ def vfe_grad_Sigma_alignment(precomp, beta):
     B, H, N, K, _ = P.shape
 
     # Weighted sum of P_j: [B, H, N_i, K, K] = Σ_j β_ij P_j
-    wP = torch.einsum('bhij,bhjab->bhiab', beta, P)  # [B, H, N, K, K]
+    wP = torch.einsum('bhij,bhjpq->bhipq', beta, P)  # [B, H, N, K, K]
 
     # Transform: Ω_i⁻ᵀ wP Ω_i⁻¹
     Om_invT = Om_inv.transpose(-2, -1)
@@ -545,11 +545,11 @@ def kl_decode_logits(mu, Sigma, prior_mu_bank, prior_Sigma_bank):
 
         # Trace: tr(Σ_v⁻¹ Σ_i) — same for all v given i
         # [B, N, cV]: need Σ_v⁻¹[v] and Σ_i
-        trace_term = torch.einsum('vab,bnba->bnv', Sig_v_inv, Sigma)  # [B, N, cV]
+        trace_term = torch.einsum('vpq,bnqp->bnv', Sig_v_inv, Sigma)  # [B, N, cV]
 
         # Mahalanobis: (μ_v - μ_i)ᵀ Σ_v⁻¹ (μ_v - μ_i)
         delta = mu_v.unsqueeze(0).unsqueeze(0) - mu.unsqueeze(2)  # [B, N, cV, K]
-        Sinv_d = torch.einsum('vab,bnvb->bnva', Sig_v_inv, delta)  # [B, N, cV, K]
+        Sinv_d = torch.einsum('vpq,bnvq->bnvp', Sig_v_inv, delta)  # [B, N, cV, K]
         mahal = (delta * Sinv_d).sum(-1)  # [B, N, cV]
 
         # Log-det

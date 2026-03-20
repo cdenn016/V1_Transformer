@@ -23,58 +23,56 @@ warnings.filterwarnings("ignore", message="Failed to find cuobjdump", category=U
 warnings.filterwarnings("ignore", message="Failed to find nvdisasm", category=UserWarning, module="triton")
 
 # =============================================================================
-# Core Model (from transformer.core)
+# Core Model, Training, Data — wrapped in try/except so that lightweight
+# subpackages (e.g. pure_vfe) can be imported without full deps like scipy.
 # =============================================================================
-from transformer.core.model import GaugeTransformerLM
+try:
+    from transformer.core.model import GaugeTransformerLM
 
-# =============================================================================
-# Training (from transformer.training and transformer.train_publication)
-# =============================================================================
-# NOTE: PublicationTrainer is imported lazily via __getattr__ to avoid a
-# circular import (train_publication.py imports from transformer.core which
-# triggers this __init__.py).
-from transformer.training.config import TrainingConfig
-from transformer.training import (
-    create_optimizer,
-    create_param_groups,
-    MetricsTracker,
-)
-from transformer.training.config import (
-    get_standard_config,
-    get_vfe_dynamic_config,
-)
+    # NOTE: PublicationTrainer is imported lazily via __getattr__ to avoid a
+    # circular import (train_publication.py imports from transformer.core which
+    # triggers this __init__.py).
+    from transformer.training.config import TrainingConfig
+    from transformer.training import (
+        create_optimizer,
+        create_param_groups,
+        MetricsTracker,
+    )
+    from transformer.training.config import (
+        get_standard_config,
+        get_vfe_dynamic_config,
+    )
 
-# =============================================================================
-# Data Loading (from transformer.data)
-# =============================================================================
-from transformer.data import (
-    create_dataloaders,
-    create_char_dataloaders,
-    create_byte_dataloaders,
-)
+    from transformer.data import (
+        create_dataloaders,
+        create_char_dataloaders,
+        create_byte_dataloaders,
+    )
 
-def __getattr__(name):
-    if name == "Trainer":
-        from transformer.train_publication import PublicationTrainer
-        return PublicationTrainer
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    def __getattr__(name):
+        if name == "Trainer":
+            from transformer.train_publication import PublicationTrainer
+            return PublicationTrainer
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
+    __all__ = [
+        # Core model
+        'GaugeTransformerLM',
 
-__all__ = [
-    # Core model
-    'GaugeTransformerLM',
+        # Training
+        'Trainer',
+        'TrainingConfig',
+        'create_optimizer',
+        'create_param_groups',
+        'MetricsTracker',
+        'get_standard_config',
+        'get_vfe_dynamic_config',
 
-    # Training
-    'Trainer',
-    'TrainingConfig',
-    'create_optimizer',
-    'create_param_groups',
-    'MetricsTracker',
-    'get_standard_config',
-    'get_vfe_dynamic_config',
-
-    # Data loading
-    'create_dataloaders',
-    'create_char_dataloaders',
-    'create_byte_dataloaders',
-]
+        # Data loading
+        'create_dataloaders',
+        'create_char_dataloaders',
+        'create_byte_dataloaders',
+    ]
+except ImportError:
+    # Allow pure_vfe subpackage to be imported without full deps (scipy, etc.)
+    __all__ = []

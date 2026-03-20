@@ -183,20 +183,13 @@ def e_step(token_ids, model, config):
         prior_Sigma_h = extract_block_diag(prior_Sigma, H, K_h)
         prior_prec_h = safe_inverse(prior_Sigma_h)  # [B, N, H, K_h, K_h]
 
-        # 3. Full gradient per head: ½[α_i Σ_prior⁻¹ + Σ_j β_ij (transported prec) - 2Σ_i⁻¹]
-        # Note: the -Σ_i⁻¹ term comes from ∂(-ln det Σ_i)/∂Σ_i in the KL
+        # 3. Full gradient per head: ½[α_i Σ_prior⁻¹ + Σ_j β_ij (transported prec) - (α+1)Σ_i⁻¹]
+        # Entropy coefficient: α from prior KL + 1 from alignment KL
+        # Sigma_h_inv is [B, N, H, K_h, K_h] from extract_block_diag
         alpha_expanded = alpha.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
         grad_Sigma_h = 0.5 * (
             alpha_expanded * prior_prec_h + weighted_prec
-            - 2.0 * Sigma_h_inv.permute(0, 2, 1, 3, 4)
-        )  # Note: Sigma_h_inv from precomp is [B,H,N,K,K], need [B,N,H,K,K]
-
-        # Actually fix: Sigma_h_inv from extract is [B,N,H,K,K]
-        # precomp['Sigma_inv'] is [B,H,N,K,K] — let's use the direct one
-        Sigma_h_inv_bn = Sigma_h_inv  # [B, N, H, K_h, K_h]
-        # Entropy coefficient: α from prior KL + 1 from alignment KL
-        grad_Sigma_h = 0.5 * (
-            alpha_expanded * prior_prec_h + weighted_prec - (alpha_expanded + 1.0) * Sigma_h_inv_bn
+            - (alpha_expanded + 1.0) * Sigma_h_inv
         )
 
         # 4. Natural gradient on SPD: ΔΣ = -2 Σ sym(∂F/∂Σ) Σ
