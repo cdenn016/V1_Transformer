@@ -242,10 +242,21 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     # Natural gradient on SPD and retract
     nat_Sigma = natural_grad_sigma(grad_Sigma, Sigma_all)
     nat_Sigma = clip_matrix_norm(nat_Sigma, 0.3)
-    model.prior_Sigma[update_tokens] = retract_spd(
+    Sigma_new = retract_spd(
         Sigma_all, nat_Sigma, config.eta_M,
         eps_min=config.spd_eps_min, kappa_max=config.spd_kappa_max,
     )
+
+    # Enforce prior covariance spectral floor (prevents collapse → divergence)
+    floor = config.prior_sigma_floor
+    if floor > 0:
+        eigs, V = torch.linalg.eigh(Sigma_new)
+        clamped = eigs.clamp(min=floor)
+        if (eigs < floor).any():
+            Sigma_new = V @ torch.diag_embed(clamped) @ V.transpose(-2, -1)
+            Sigma_new = symmetrize(Sigma_new)
+
+    model.prior_Sigma[update_tokens] = Sigma_new
 
     # ---- Prior gauge frame gradient (vectorized) ----
     Omega_all = model.prior_Omega[update_tokens]       # [T, H, K_h, K_h]
