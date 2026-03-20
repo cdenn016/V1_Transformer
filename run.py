@@ -17,6 +17,7 @@ import torch
 from transformer.pure_vfe.config import PureVFEConfig
 from transformer.pure_vfe.model import PureVFETransformer
 from transformer.pure_vfe.gauge import monitor_omega_health
+from transformer.data.datasets import create_dataloaders
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -25,9 +26,9 @@ from transformer.pure_vfe.gauge import monitor_omega_health
 
 PURE_VFE_CONFIG = {
     # ── Data ──────────────────────────────────────────────────────
-    'data_source': 'synthetic',       # 'synthetic' or 'wikitext2'
-    'vocab_size': 256,                # Only used for synthetic data
-    'n_synthetic_seqs': 500,          # Number of synthetic sequences
+    'dataset': 'wikitext-2',          # 'wikitext-2', 'wikitext-103', or 'wiki-ja'
+    'vocab_size': 50257,              # 50257 for English (GPT-2), 100277 for wiki-ja (cl100k)
+    'num_workers': 4,                 # DataLoader CPU workers
 
     # ── Belief geometry ───────────────────────────────────────────
     'belief_dim': 16,                 # K: full belief dimension
@@ -82,59 +83,6 @@ PURE_VFE_CONFIG = {
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  DATA LOADERS
-# ═══════════════════════════════════════════════════════════════════
-
-def make_synthetic_data(vocab_size, seq_len, n_seqs=500):
-    """
-    Generate synthetic token sequences with local bigram structure.
-    Each token biases the next toward a nearby vocabulary region,
-    giving the model something non-trivial to learn.
-    """
-    data = torch.zeros(n_seqs, seq_len + 1, dtype=torch.long)
-    for i in range(n_seqs):
-        tok = torch.randint(0, vocab_size, (1,)).item()
-        data[i, 0] = tok
-        for t in range(1, seq_len + 1):
-            window = max(vocab_size // 20, 5)
-            lo = max(0, tok - window)
-            hi = min(vocab_size, tok + window)
-            tok = torch.randint(lo, hi, (1,)).item()
-            data[i, t] = tok
-    return data
-
-
-def load_wikitext2(seq_len):
-    """Load WikiText-2. Requires: pip install datasets transformers"""
-    from datasets import load_dataset
-    from transformers import GPT2TokenizerFast
-
-    tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
-    ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
-
-    text = "\n".join([x for x in ds["text"] if x.strip()])
-    token_ids = tokenizer.encode(text)
-    token_ids = torch.tensor(token_ids, dtype=torch.long)
-
-    n_seqs = len(token_ids) // (seq_len + 1)
-    token_ids = token_ids[: n_seqs * (seq_len + 1)]
-    return token_ids.reshape(n_seqs, seq_len + 1)
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  BATCH ITERATOR
-# ═══════════════════════════════════════════════════════════════════
-
-def batches(data, batch_size, device, shuffle=True):
-    n = data.shape[0]
-    if shuffle:
-        data = data[torch.randperm(n)]
-    for i in range(0, n - batch_size + 1, batch_size):
-        chunk = data[i : i + batch_size].to(device)
-        yield chunk[:, :-1], chunk[:, 1:]
-
-
-# ═══════════════════════════════════════════════════════════════════
 #  BUILD CONFIG FROM DICT
 # ═══════════════════════════════════════════════════════════════════
 
@@ -142,7 +90,6 @@ def build_config(cfg):
     """Convert PURE_VFE_CONFIG dict → PureVFEConfig dataclass."""
     head_dim = cfg['belief_dim'] // cfg['n_heads']
 
-    # Collect only the fields that PureVFEConfig accepts
     config_kwargs = {
         'vocab_size':         cfg['vocab_size'],
         'belief_dim':         cfg['belief_dim'],
@@ -193,23 +140,23 @@ def main(cfg=None):
         cfg['device'] = 'cpu'
         cfg['use_cuda_kernels'] = False
 
-    # ── Load data ──
-    if cfg['data_source'] == 'wikitext2':
-        try:
-            print("Loading WikiText-2...")
-            data = load_wikitext2(cfg['max_seq_len'])
-            cfg['vocab_size'] = 50257  # GPT-2 vocab
-            print(f"  {data.shape[0]} sequences, vocab={cfg['vocab_size']}")
-        except ImportError:
-            print("ERROR: WikiText-2 requires:  pip install datasets transformers")
-            print("       Set data_source='synthetic' to run without extra deps.")
-            sys.exit(1)
-    else:
-        data = make_synthetic_data(
-            cfg['vocab_size'], cfg['max_seq_len'], cfg['n_synthetic_seqs']
-        )
-        print(f"Synthetic data: {data.shape[0]} seqs, "
-              f"vocab={cfg['vocab_size']}, seq_len={cfg['max_seq_len']}")
+    # ── Load data via the shared pipeline ──
+    dataset_name = cfg['dataset']
+
+    # Auto-adjust vocab for Japanese
+    if dataset_name == 'wiki-ja' and cfg['vocab_size'] == 50257:
+        cfg['vocab_size'] = 100277
+
+    print(f"Loading {dataset_name}...")
+    train_loader, val_loader, actual_vocab_size = create_dataloaders(
+        max_seq_len=cfg['max_seq_len'],
+        batch_size=cfg['batch_size'],
+        vocab_size=cfg['vocab_size'],
+        num_workers=cfg['num_workers'],
+        dataset=dataset_name,
+    )
+    cfg['vocab_size'] = actual_vocab_size
+    print(f"  vocab_size={actual_vocab_size}, seq_len={cfg['max_seq_len']}")
 
     # ── Build config and model ──
     config = build_config(cfg)
@@ -220,6 +167,7 @@ def main(cfg=None):
     print("=" * 60)
     print("  Pure VFE Transformer")
     print("=" * 60)
+    print(f"  dataset={dataset_name}")
     print(f"  belief_dim={config.belief_dim}  n_heads={config.n_heads}  head_dim={config.head_dim}")
     print(f"  n_esteps={config.n_esteps}  tau={config.tau:.2f}")
     print(f"  eta_E={config.eta_E}  eta_M={config.eta_M}")
@@ -243,7 +191,10 @@ def main(cfg=None):
         epoch_loss = 0.0
         epoch_steps = 0
 
-        for inputs, targets in batches(data, config.batch_size, device):
+        for inputs, targets in train_loader:
+            inputs = inputs.to(device)
+            targets = targets.to(device)
+
             t0 = time.time()
             logits, ce_loss, vfe_history = model.update(inputs, targets)
             dt = time.time() - t0
