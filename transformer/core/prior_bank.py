@@ -314,7 +314,8 @@ class PriorBank(nn.Module):
 
         # Get all token priors: mu_p (V, K), sigma_p (V, K)
         all_token_ids = torch.arange(V, device=device)
-        mu_p, sigma_p, _ = self._get_prior_for_tokens(all_token_ids)
+        _prior_out = self._get_prior_for_tokens(all_token_ids)
+        mu_p, sigma_p = _prior_out[0], _prior_out[1]
 
         variance_floor = max(self.eps, 1e-4)
         sigma_q_safe = sigma_q.clamp(min=variance_floor)    # (B, N, K)
