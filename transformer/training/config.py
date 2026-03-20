@@ -39,7 +39,7 @@ class TrainingConfig:
     # ==========================================================================
     # Training Mode
     # ==========================================================================
-    training_mode: str = 'vfe_dynamic'  # 'standard', 'vfe_dynamic'
+    training_mode: str = 'vfe_dynamic'  # 'standard', 'vfe_dynamic', 'pure_fep'
 
     # ==========================================================================
     # Parameter Grouping Strategy
@@ -225,6 +225,25 @@ def get_vfe_dynamic_config(**overrides) -> TrainingConfig:
         lambda_beta=1.0,
         lambda_gamma=0.0,
         use_obs_in_vfe=True,
+    )
+    for key, value in overrides.items():
+        setattr(config, key, value)
+    return config
+
+
+def get_pure_fep_config(**overrides) -> TrainingConfig:
+    """
+    Get configuration for Pure VFE transformer (no autograd, no optimizer).
+
+    PureFEP handles its own VFE loss and natural gradient updates internally,
+    so alpha/lambda_beta/lambda_gamma are set to 0 (unused by Lightning wrapper).
+    """
+    config = TrainingConfig(
+        training_mode='pure_fep',
+        use_param_groups=False,
+        alpha=0.0,
+        lambda_beta=0.0,
+        lambda_gamma=0.0,
     )
     for key, value in overrides.items():
         setattr(config, key, value)

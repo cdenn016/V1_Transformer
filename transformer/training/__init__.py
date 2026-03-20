@@ -36,6 +36,9 @@ def __getattr__(name):
     if name == "GaugeDataModule":
         from transformer.training.lightning_data import GaugeDataModule
         return GaugeDataModule
+    if name == "PureVFELitModule":
+        from transformer.training.lightning_pure_vfe import PureVFELitModule
+        return PureVFELitModule
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -46,4 +49,5 @@ __all__ = [
     'MetricsTracker',
     'GaugeTransformerLitModule',
     'GaugeDataModule',
+    'PureVFELitModule',
 ]

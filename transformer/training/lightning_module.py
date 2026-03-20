@@ -87,6 +87,10 @@ class GaugeTransformerLitModule(pl.LightningModule):
         self.log('train/ce_loss', ce_loss, on_step=True, on_epoch=False)
         self.log('train/perplexity', ppl, prog_bar=True, on_step=True, on_epoch=False)
 
+        if not self._is_standard:
+            self.log('train/kl_alpha', metrics.get('loss/kl_alpha', 0.0), on_step=True, on_epoch=False)
+            self.log('train/beta_align', metrics.get('loss/beta_align', 0.0), on_step=True, on_epoch=False)
+
         return loss
 
     # ------------------------------------------------------------------
