@@ -50,6 +50,7 @@ class GaugeConnection(nn.Module):
         connection_type: str = 'bilinear',
         hidden_dim: int = 64,
         antisymmetrize: bool = False,
+        init_scale: float = 0.0,
     ):
         super().__init__()
         self.d_head = d_head
@@ -60,8 +61,14 @@ class GaugeConnection(nn.Module):
         if connection_type == 'bilinear':
             # δ_ij^a = μ_i^T W^a μ_j — one bilinear form per generator
             # Parameters: n_gen × d_head × d_head
-            # Zero init → δ_ij = 0 → flat at initialization
-            self.W = nn.Parameter(torch.zeros(n_gen, d_head, d_head))
+            #
+            # init_scale=0 → zero init (flat saddle point — no gradient signal!)
+            # init_scale>0 → small random init breaks the flat saddle point so
+            # the optimizer can discover useful curvature.  Recommended: 0.01.
+            W = torch.zeros(n_gen, d_head, d_head)
+            if init_scale > 0:
+                W = W + init_scale * torch.randn_like(W) / math.sqrt(d_head)
+            self.W = nn.Parameter(W)
         elif connection_type == 'mlp':
             self.net = nn.Sequential(
                 nn.Linear(2 * d_head, hidden_dim),

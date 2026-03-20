@@ -198,6 +198,7 @@ class GaugeTransformerBlock(nn.Module):
                 n_gen=n_gen,
                 connection_type=cfg.connection_type,
                 hidden_dim=cfg.connection_hidden_dim,
+                init_scale=cfg.connection_init_scale,
             )
             if cfg.per_head_flatness_gate:
                 n_heads = len(cfg.irrep_spec)
