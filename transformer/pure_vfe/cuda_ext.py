@@ -18,18 +18,29 @@ def get_cuda_ext():
         return None
 
     try:
-        from torch.utils.cpp_extension import load, is_ninja_available
+        from torch.utils.cpp_extension import load
 
-        if not is_ninja_available():
-            # ninja system binary exists but Python package missing
-            import shutil
-            if shutil.which("ninja"):
-                print("[pure_vfe] System ninja found but Python ninja package missing. "
-                      "Run: pip install ninja")
-            else:
-                print("[pure_vfe] ninja not found. Run: pip install ninja")
-            _cuda_module = None
-            return _cuda_module
+        # Find ninja: Anaconda on Windows often has it installed but not on PATH
+        import shutil
+        ninja_path = shutil.which("ninja")
+        if ninja_path is None:
+            # Try to find ninja via the Python package's bundled binary
+            try:
+                import ninja
+                ninja_dir = os.path.dirname(ninja.__file__)
+                # ninja package puts the binary in its package directory
+                for candidate in [
+                    os.path.join(ninja_dir, "ninja"),
+                    os.path.join(ninja_dir, "ninja.exe"),
+                    os.path.join(os.path.dirname(ninja_dir), "Scripts", "ninja.exe"),
+                    os.path.join(os.path.dirname(ninja_dir), "bin", "ninja"),
+                ]:
+                    if os.path.isfile(candidate):
+                        # Add its directory to PATH so cpp_extension can find it
+                        os.environ["PATH"] = os.path.dirname(candidate) + os.pathsep + os.environ.get("PATH", "")
+                        break
+            except ImportError:
+                pass
 
         csrc_dir = os.path.join(os.path.dirname(__file__), "csrc")
         _cuda_module = load(
