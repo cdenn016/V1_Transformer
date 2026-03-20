@@ -427,6 +427,7 @@ VFE_EM_CONFIG = {
     'cocycle_relaxation': 0.0,          # Scale for δ_ij: 0=flat, 1=fully non-flat
     'connection_type': 'bilinear',      # 'bilinear' (δ_ij^a = μ_i^T W^a μ_j) | 'mlp'
     'connection_hidden_dim': 64,        # Hidden dim for MLP connection (ignored for bilinear)
+    'connection_init_scale': 0.01,      # W init scale (0=flat saddle point, 0.01 recommended)
     'holonomy_penalty': 0.0,            # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
 
 }

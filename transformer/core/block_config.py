@@ -94,6 +94,7 @@ class BlockConfig:
     per_head_flatness_gate: bool = False   # Learnable per-head g_h ∈ [0,1]
     connection_type: str = 'bilinear'      # 'bilinear' | 'mlp'
     connection_hidden_dim: int = 64        # Hidden dim for MLP connection
+    connection_init_scale: float = 0.01    # W init scale (0=flat saddle, >0 breaks symmetry)
     holonomy_penalty: float = 0.0          # λ_H · E[‖H_ijk - I‖²_F] added to loss
 
     # === Positional encoding ===
@@ -185,6 +186,7 @@ class BlockConfig:
             per_head_flatness_gate=config.get('per_head_flatness_gate', False),
             connection_type=config.get('connection_type', 'bilinear'),
             connection_hidden_dim=config.get('connection_hidden_dim', 64),
+            connection_init_scale=config.get('connection_init_scale', 0.01),
             holonomy_penalty=config.get('holonomy_penalty', 0.0),
             # Positional encoding
             alibi_slope=config.get('alibi_slope', None),
