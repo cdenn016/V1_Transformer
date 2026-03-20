@@ -986,6 +986,10 @@ class PublicationMetricsTracker:
 
             # Performance
             'step_time', 'tokens_per_sec',
+
+            # Holonomy (non-flat transport curvature)
+            'holonomy_mean_norm', 'holonomy_max_norm',
+            'holonomy_frac_gt_01', 'holonomy_spectral_gap', 'holonomy_wilson_trace',
         ]
 
         with open(self.save_path, 'w', newline='') as f:
@@ -1074,6 +1078,13 @@ class PublicationMetricsTracker:
             # Performance
             'step_time': step_time,
             'tokens_per_sec': tokens_per_sec,
+
+            # Holonomy
+            'holonomy_mean_norm': metrics.get('holonomy/mean_norm'),
+            'holonomy_max_norm': metrics.get('holonomy/max_norm'),
+            'holonomy_frac_gt_01': metrics.get('holonomy/frac_gt_0.1'),
+            'holonomy_spectral_gap': metrics.get('holonomy/spectral_gap'),
+            'holonomy_wilson_trace': metrics.get('holonomy/wilson_trace'),
         }
 
         self.history.append(entry)
@@ -1916,6 +1927,27 @@ class PublicationTrainer(FastTrainer):
                 self.save_checkpoint(is_best=False)
                 self.metrics_tracker.save()
 
+            # Periodic holonomy diagnostics (non-flat transport curvature)
+            if self.pub_metrics and self.pub_metrics.should_compute_holonomy(step + 1):
+                try:
+                    holonomy_dict = self.pub_metrics.compute_holonomy_diagnostics(
+                        model=self.model,
+                        step=step + 1,
+                        verbose=True,
+                    )
+                    if holonomy_dict:
+                        # Merge holonomy metrics into the current step's CSV entry
+                        for entry in reversed(self.metrics_tracker.history):
+                            if entry['step'] == step + 1:
+                                entry['holonomy_mean_norm'] = holonomy_dict.get('holonomy/mean_norm')
+                                entry['holonomy_max_norm'] = holonomy_dict.get('holonomy/max_norm')
+                                entry['holonomy_frac_gt_01'] = holonomy_dict.get('holonomy/frac_gt_0.1')
+                                entry['holonomy_spectral_gap'] = holonomy_dict.get('holonomy/spectral_gap')
+                                entry['holonomy_wilson_trace'] = holonomy_dict.get('holonomy/wilson_trace')
+                                break
+                except Exception as e:
+                    print(f"[WARN] Holonomy computation failed at step {step+1}: {e}")
+
             # Periodic gauge frame semantic analysis
             if self.pub_metrics and self.pub_metrics.should_run_semantic_analysis(step + 1):
                 try:
@@ -1944,6 +1976,17 @@ class PublicationTrainer(FastTrainer):
                 )
             except Exception as e:
                 print(f"[WARN] Final semantic analysis failed: {e}")
+
+            # Generate final holonomy figures (non-flat transport)
+            if self.pub_metrics.holonomy_history:
+                try:
+                    print("\n[PublicationMetrics] Generating holonomy figures...")
+                    self.pub_metrics.generate_holonomy_figures(
+                        model=self.model,
+                        save_prefix='holonomy',
+                    )
+                except Exception as e:
+                    print(f"[WARN] Final holonomy figure generation failed: {e}")
 
             # Generate interpretability outputs using a sample batch from validation
             try:
