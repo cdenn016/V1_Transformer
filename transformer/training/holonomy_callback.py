@@ -168,8 +168,8 @@ class HolonomyCallback(pl.Callback):
     def _find_gauge_blocks(self, model: nn.Module) -> list:
         """Find all GaugeTransformerBlocks with non-flat transport."""
         blocks = []
-        # Try common model structures
-        stack = getattr(model, 'stack', None)
+        # Try both attribute names: 'transformer' (GaugeTransformerLM) and 'stack' (legacy)
+        stack = getattr(model, 'transformer', None) or getattr(model, 'stack', None)
         if stack is not None:
             block_list = getattr(stack, 'blocks', None)
             if block_list is not None:
@@ -188,7 +188,8 @@ class HolonomyCallback(pl.Callback):
 
         Uses the block's GaugeConnection + model's embedding means
         to reconstruct what exp_delta would be for the current parameters.
-        We use a small synthetic input for shape consistency.
+        Uses raw delta (without cocycle_relaxation scaling) so diagnostics
+        measure the connection's intrinsic curvature.
         """
         try:
             # Get embedding parameters
@@ -216,10 +217,10 @@ class HolonomyCallback(pl.Callback):
             # Compute delta
             delta = block.gauge_connection(mu, mu)  # (1, N, N, n_gen)
 
-            # Build exp(δ · G)
-            cocycle = getattr(block, 'cocycle_relaxation', 1.0)
-            scaled_delta = cocycle * delta
-            delta_matrix = torch.einsum('bija,akl->bijkl', scaled_delta, generators)
+            # Build exp(δ · G) using raw delta for diagnostics —
+            # cocycle_relaxation=0 would zero out the connection and
+            # produce trivially flat holonomy, hiding learned curvature.
+            delta_matrix = torch.einsum('bija,akl->bijkl', delta, generators)
             exp_delta = torch.linalg.matrix_exp(delta_matrix.float())
 
             return exp_delta
