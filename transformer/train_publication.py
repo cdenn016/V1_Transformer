@@ -250,10 +250,15 @@ EM_CONFIG = {
     'amortized_inference': False,
 
     # === VFE loss weights (M-step objective) ===
-    # Must match E-step: same F, same coefficients. E-step uses ffn_alpha=1,
-    # ffn_lambda_belief=1, so M-step must use alpha=1, beta=1.
-    'alpha': 1.0,                   # = ffn_alpha (prior self-coupling)
-    'beta': 1.0,                    # = ffn_lambda_belief (belief alignment)
+    # With n_iterations=1, E-step hasn't converged so ∂F/∂q ≠ 0.
+    # The alignment term (beta) in the loss directly minimizes pairwise KLs
+    # → homogenizes embeddings → uniform attention. Even beta=0.01 kills it.
+    # At convergence the envelope theorem makes this term's M-step contribution
+    # zero anyway, so beta=0 is correct for finite iterations.
+    # The IFT scale uses ffn_alpha (=1.0), not loss alpha, so CE→embeddings
+    # works at s_k≈0.5 even with alpha=0 here.
+    'alpha': 0.0,                   # KL(q*||p) — set 0; IFT scale uses ffn_alpha
+    'beta': 0.0,                    # β·KL alignment — MUST be 0 (homogenizes)
     'alpha_phi': 0.1,               # Gauge prior: (α_φ/2)||φ||²
     'lambda_hyper': 0.1,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
     'lambda_gamma': 0.0,
