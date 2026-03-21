@@ -658,8 +658,12 @@ class GaugeTransformerLM(nn.Module):
                     'exp_neg_phi': omega_h_inv,
                 })
                 block_start += d_h
-        elif not self.evolve_phi:
+        elif not self.evolve_phi and not self.config.get('non_flat_transport', False):
             # Get the first block's attention layer to access head generators
+            # NOTE: Skip caching when non_flat_transport=True because the
+            # connection delta δ_ij depends on per-batch input, making transport
+            # input-dependent. Each block must recompute transport with its
+            # gauge_connection to ensure gradient flow to connection weights.
             first_attention = self.transformer.blocks[0].attention
             cached_head_transports = first_attention.precompute_head_transports(
                 phi, device, mu_q.dtype
@@ -824,7 +828,7 @@ class GaugeTransformerLM(nn.Module):
                     'exp_neg_phi': omega_h_inv,
                 })
                 block_start += d_h
-        elif not self.evolve_phi:
+        elif not self.evolve_phi and not self.config.get('non_flat_transport', False):
             first_attention = self.transformer.blocks[0].attention
             cached_head_transports = first_attention.precompute_head_transports(
                 phi, device, mu_q.dtype
@@ -1025,7 +1029,7 @@ class GaugeTransformerLM(nn.Module):
                     'exp_neg_phi': omega_h_inv,
                 })
                 block_start += d_h
-        elif not self.evolve_phi:
+        elif not self.evolve_phi and not self.config.get('non_flat_transport', False):
             first_attention = self.transformer.blocks[0].attention
             cached_head_transports = first_attention.precompute_head_transports(
                 phi, device, mu_q.dtype
