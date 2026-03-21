@@ -622,8 +622,13 @@ def _compute_vfe_gradients_block_diagonal_diag(
         mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_block)  # (B, N, N, d)
 
         # Diagonal covariance transport: σ_t[k] = Σ_l Ω_kl² * σ[l]
-        # Uses 3-operand einsum to avoid materializing Omega² — more precise
-        # than factored A @ (B diag(σ) B^T) @ A^T approach
+        # This extracts diag(Ω @ diag(σ) @ Ω^T), discarding off-diagonal elements
+        # of the transported covariance. For non-identity Ω ∈ GL(K), the full
+        # transported covariance is NOT diagonal, so this is an approximation that
+        # breaks strict gauge equivariance. Use exact_diagonal_transport=True for
+        # exact transport (lifts to full covariance, applies sandwich product,
+        # extracts diagonal). The approximation quality depends on how far Ω is
+        # from identity within each irrep block.
         sigma_j_transported = torch.einsum(
             'bijkl,bijkl,bjl->bijk', Omega_block, Omega_block, sigma_block
         ).clamp(min=eps)  # (B, N, N, d)
@@ -801,6 +806,10 @@ def _fused_attention_and_vfe_gradients_block_diag(
 
     # Accumulators
     kl_values = torch.zeros(B, N, N, device=device, dtype=torch.float32)
+    # When RoPE is active, kl_values uses RoPE-rotated mu (for attention β) but
+    # gradients use raw mu. The softmax coupling ∂β/∂μ requires KL values consistent
+    # with the gradient space, so we accumulate raw-mu KLs separately.
+    kl_values_raw = torch.zeros(B, N, N, device=device, dtype=torch.float32) if use_rope else None
     grad_kl_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=torch.float32)
     grad_sigma_align = torch.zeros_like(sigma_q)
     grad_sigma_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=torch.float32) if (
@@ -852,6 +861,12 @@ def _fused_attention_and_vfe_gradients_block_diag(
         grad_kl_block = delta_mu_grad / sigma_j_transported
         grad_kl_per_pair_full[:, :, :, block_start:block_end] = grad_kl_block
 
+        # Accumulate raw-mu KL for softmax coupling consistency when RoPE is active
+        if kl_values_raw is not None:
+            mahal_raw = (delta_mu_grad ** 2 / sigma_j_transported).sum(dim=-1)
+            kl_block_raw = 0.5 * (trace_block + mahal_raw - d + logdet_block)
+            kl_values_raw = kl_values_raw + kl_block_raw.clamp(min=0.0, max=kl_max)
+
         if compute_sigma_align_grad:
             sigma_j_inv_diag = 1.0 / sigma_j_transported
             sigma_i_inv = 1.0 / sigma_block
@@ -894,7 +909,11 @@ def _fused_attention_and_vfe_gradients_block_diag(
     kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
     grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair_full
     d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
-    grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
+    # Use raw-mu KL values for the softmax coupling when RoPE is active,
+    # so the chain rule ∂(β·KL)/∂μ is consistent: both KL and ∂KL/∂μ
+    # are computed in the same (raw, non-rotated) space.
+    kl_for_coupling = kl_values_raw if kl_values_raw is not None else kl_values
+    grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_for_coupling, d_beta_d_mu)
 
     grad_mu = grad_mu_self + grad_mu_direct + grad_mu_softmax
 
@@ -910,11 +929,11 @@ def _fused_attention_and_vfe_gradients_block_diag(
                 + lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_sigma_pair)
             )
             block_start = block_end
-        # Sigma softmax coupling
+        # Sigma softmax coupling (use raw-mu KL for consistency, same as mu coupling)
         avg_sigma_grad = torch.einsum('bij,bijk->bik', beta, grad_sigma_per_pair_full)
         sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair_full
         d_beta_d_sigma = beta.unsqueeze(-1) * sigma_grad_deviation / kappa_scaled
-        grad_sigma_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_sigma)
+        grad_sigma_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_for_coupling, d_beta_d_sigma)
         grad_sigma_align = grad_sigma_align + grad_sigma_softmax
 
     grad_sigma = grad_sigma_self + grad_sigma_align
@@ -1593,7 +1612,11 @@ def compute_natural_gradient_gpu(
 
     For Gaussian distributions, the Fisher information metric is:
         F_μ = Σ^{-1}  →  natural_grad_μ = Σ @ euclidean_grad_μ
-        F_σ = 2Σ^{-2} →  natural_grad_σ = 0.5 * Σ² @ euclidean_grad_σ (diagonal approx)
+        F_σ = (1/2)Σ^{-2} →  natural_grad_σ = 2 * Σ² @ euclidean_grad_σ (diagonal approx)
+
+    Derivation: The Fisher metric on the covariance Σ of a Gaussian is
+    g(δΣ₁, δΣ₂) = (1/2) tr(Σ⁻¹ δΣ₁ Σ⁻¹ δΣ₂). For diagonal Σ = diag(σ),
+    this gives g_{kk} = 1/(2σ_k²), so g^{kk} = 2σ_k².
 
     Args:
         grad_mu: Euclidean gradient w.r.t. μ
@@ -1622,12 +1645,12 @@ def compute_natural_gradient_gpu(
             # Diagonal case: simple element-wise multiplication
             sigma_safe = sigma_q.clamp(min=eps)
             nat_grad_mu = sigma_safe * grad_mu  # (B, N, K)
-            nat_grad_sigma = 0.5 * sigma_safe * sigma_safe * grad_sigma  # (B, N, K)
+            nat_grad_sigma = 2.0 * sigma_safe * sigma_safe * grad_sigma  # (B, N, K)
         else:
             # Full covariance: matrix multiplication
             nat_grad_mu = torch.einsum('bnij,bnj->bni', sigma_q, grad_mu)
-            # Full Fisher natural gradient: δΣ = 0.5 * Σ @ ∇_Σ @ Σ
-            nat_grad_sigma = 0.5 * torch.einsum('bnij,bnjk,bnkl->bnil', sigma_q, grad_sigma, sigma_q)
+            # Full Fisher natural gradient: δΣ = 2 * Σ @ ∇_Σ @ Σ
+            nat_grad_sigma = 2.0 * torch.einsum('bnij,bnjk,bnkl->bnil', sigma_q, grad_sigma, sigma_q)
 
     return nat_grad_mu.to(orig_dtype), nat_grad_sigma.to(orig_dtype)
 
@@ -1859,7 +1882,13 @@ class VariationalFFNDynamic(nn.Module):
         self,
         embed_dim: int,
         generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators
-        alpha: float = 0.01,       # Self-coupling weight (KL(q||p))
+        alpha: float = 0.01,       # Self-coupling weight (KL(q||p)) for E-step VFE descent.
+                                   # NOTE: This is typically different from the M-step loss alpha
+                                   # (config['alpha']). The E-step uses strong coupling (e.g. 1.0)
+                                   # for belief stability, while the M-step uses weak coupling
+                                   # (e.g. 0.075) to avoid KL dominating the loss. This deviates
+                                   # from exact EM (which requires the same F for both steps) but
+                                   # is motivated by training stability.
         lambda_belief: float = 1.0,  # Belief alignment weight
         kappa: float = 1.0,        # Attention temperature
         n_iterations: int = 10,    # VFE descent steps (more steps = deeper equilibration)
@@ -3239,8 +3268,9 @@ class VariationalFFNDynamic(nn.Module):
 
             if self.update_sigma:
                 # Use SPD-preserving retraction for stability with multiple iterations
-                # Much smaller lr for sigma (matches simulation_runner: 0.005 vs 0.1)
-                sigma_lr = effective_lr * 0.05
+                # Much smaller lr for sigma — compensates for 2σ² Fisher natural gradient
+                # (0.0125 = previous 0.05 / 4, since nat_grad was corrected from 0.5σ² to 2σ²)
+                sigma_lr = effective_lr * 0.0125
                 if is_diagonal:
                     sigma_current = retract_spd_diagonal_torch(
                         sigma_diag=sigma_current,

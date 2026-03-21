@@ -486,6 +486,10 @@ def compute_free_energy_loss(
     # =================================================================
     if alpha > 0.0:
         K = mu_q.shape[-1]
+        # Sigma is detached here intentionally: sigma embeddings learn only through
+        # the CE loss (via VFE dynamics in the forward pass) and weight decay, not
+        # through the KL(q||p) term. This prevents sigma gradients from the KL
+        # regularizer from dominating/destabilizing sigma embedding learning.
         kl_per_agent = gaussian_kl_divergence(
             mu_q=mu_q,
             sigma_q=sigma_q.detach() if sigma_q is not None else None,
