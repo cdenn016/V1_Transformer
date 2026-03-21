@@ -36,8 +36,7 @@ from .gaussians import (
 )
 from .gauge import (
     vfe_grad_Omega,
-    natural_grad_omega,
-    relative_trust_clip,
+    lie_algebra_clip_grad,
     regularize_omega_conditioning,
 )
 
@@ -124,10 +123,11 @@ def e_step(token_ids, model, config):
     K_h = config.head_dim
     dev = config.device
     grad_clamp = getattr(config, 'grad_clamp', 1e3)
+    omega_grad_clamp = getattr(config, 'omega_grad_clamp', 10.0)
     sigma_lr_ratio = getattr(config, 'sigma_lr_ratio', 0.05)
     e_step_lr_decay = getattr(config, 'e_step_lr_decay', 0.5)
     nan_recovery = getattr(config, 'nan_recovery', True)
-    omega_cond_max = getattr(config, 'omega_cond_max', 100.0)
+    omega_cond_max = getattr(config, 'omega_cond_max', 50.0)
 
     # --- Initialize beliefs from priors ---
     mu = model.prior_mu[token_ids].clone()          # [B, N, K]
@@ -264,14 +264,16 @@ def e_step(token_ids, model, config):
         # Compute gauge gradient (attention-weighted)
         grad_Omega = vfe_grad_Omega(mu_h, Sigma_h, Omega, beta, kl_ij, precomp)
         # Shape: [B, N, H, K_h, K_h]
-        grad_Omega = torch.clamp(grad_Omega, -grad_clamp, grad_clamp)
+        # Element-wise safety clamp on Euclidean gradient (numerical guard
+        # against extreme values from cascading inversions in vfe_grad_Omega)
+        grad_Omega = torch.clamp(grad_Omega, -omega_grad_clamp, omega_grad_clamp)
         diagnostics['grad_norm_omega'].append(grad_Omega.norm().item())
 
-        # Natural gradient on GL(K): left-invariant
-        nat_Omega = natural_grad_omega(grad_Omega, Omega)
-
-        # Relative trust-region clip and update (matching VFE dynamic)
-        nat_Omega = relative_trust_clip(nat_Omega, Omega, config.trust_region_omega)
+        # Natural gradient via Lie algebra with Riemannian trust region:
+        # ξ = Ωᵀ·g, clip ||ξ||_F ≤ trust_radius, ΔΩ = Ω·ξ
+        nat_Omega = lie_algebra_clip_grad(
+            grad_Omega, Omega, trust_radius=config.trust_region_omega,
+        )
         Omega = Omega - effective_lr * nat_Omega
 
         # Post-update Omega conditioning

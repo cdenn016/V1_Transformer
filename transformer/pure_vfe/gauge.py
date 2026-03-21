@@ -249,6 +249,9 @@ def natural_grad_omega(grad_Omega, Omega):
 
     For metric g_Ω(X,Y) = tr((Ω⁻¹X)ᵀ(Ω⁻¹Y)), the natural gradient is Ω Ωᵀ ∂F/∂Ω.
 
+    Note: prefer lie_algebra_clip_grad which computes and clips the natural
+    gradient in the Lie algebra for geometric consistency.
+
     Args:
         grad_Omega: [..., K, K] Euclidean gradient ∂F/∂Ω
         Omega: [..., K, K] current gauge frame
@@ -260,36 +263,79 @@ def natural_grad_omega(grad_Omega, Omega):
 
 
 # ---------------------------------------------------------------------------
-# Trust region and conditioning (ported from VFE dynamic)
+# Trust region and conditioning
 # ---------------------------------------------------------------------------
 
-def relative_trust_clip(nat_grad, Omega, trust_region=0.3):
+def lie_algebra_clip_grad(grad_Omega, Omega, trust_radius=0.3):
     """
-    Relative trust region clip for Omega natural gradient.
+    Compute and clip the natural gradient via the Lie algebra of GL(K).
 
-    Clips ||nat_grad|| to trust_region × ||Omega|| (Frobenius norm).
-    Matches VFE dynamic's _retract_omega behavior.
+    Instead of forming Ω·Ωᵀ·g in the ambient space (which amplifies by σ(Ω)²)
+    and then clipping in Euclidean norm (which depends on where Ω sits), we:
+
+      1. Pull back to the Lie algebra: ξ = Ωᵀ · ∂F/∂Ω
+      2. Clip ||ξ||_F ≤ trust_radius
+      3. Push forward: ΔΩ = Ω · ξ_clipped
+
+    Why this works: ||ξ||_F = ||Ω⁻¹ΔΩ||_F is the Riemannian step size
+    under the left-invariant metric. It is invariant under left translation
+    (Ω → A·Ω for any A ∈ GL(K)), so the trust region has the same intrinsic
+    size everywhere on the manifold. No feedback loop is possible because
+    the clip threshold is a *constant* in the Riemannian geometry.
+
+    The subsequent Euler retraction Ω - η·ΔΩ = Ω·(I - η·ξ) approximates
+    the geodesic retraction Ω·exp(-η·ξ) to first order, which is accurate
+    when η·||ξ|| is small — guaranteed by the trust region.
 
     Args:
-        nat_grad: [..., K, K] natural gradient
+        grad_Omega: [..., K, K] Euclidean gradient ∂F/∂Ω
         Omega: [..., K, K] current gauge frame
-        trust_region: max relative step size
+        trust_radius: max Riemannian step size ||ξ||_F
 
-    Returns: [..., K, K] clipped natural gradient
+    Returns: [..., K, K] natural gradient direction (clipped)
+    """
+    # Step 1: Lie algebra element ξ = Ωᵀ · g
+    # (This is Ω⁻¹ · (Ω·Ωᵀ·g) = Ωᵀ·g, the pullback of the Riemannian
+    # gradient to the identity, i.e. the gradient in gl(K) coordinates.)
+    OmegaT = Omega.transpose(-2, -1)
+    xi = OmegaT @ grad_Omega  # [..., K, K]
+
+    # Step 2: Clip in Lie algebra norm (= Riemannian norm)
+    xi_norm = xi.flatten(-2).norm(dim=-1, keepdim=True).unsqueeze(-1)
+    scale = torch.clamp(trust_radius / (xi_norm + 1e-8), max=1.0)
+    xi = xi * scale
+
+    # Step 3: Push forward to tangent space at Ω
+    return Omega @ xi
+
+
+def relative_trust_clip(nat_grad, Omega, trust_region=0.3, max_norm=None):
+    """
+    Legacy Euclidean trust region clip (kept for backward compatibility).
+
+    Prefer lie_algebra_clip_grad for geometrically consistent clipping.
     """
     nat_norm = nat_grad.flatten(-2).norm(dim=-1, keepdim=True).unsqueeze(-1)
     om_norm = Omega.flatten(-2).norm(dim=-1, keepdim=True).unsqueeze(-1).clamp(min=1e-6)
     max_upd = trust_region * om_norm
+    if max_norm is not None:
+        abs_cap = torch.tensor(max_norm, device=nat_grad.device, dtype=nat_grad.dtype)
+        max_upd = torch.minimum(max_upd, abs_cap)
     scale = torch.clamp(max_upd / (nat_norm + 1e-8), max=1.0)
     return nat_grad * scale
 
 
-def regularize_omega_conditioning(Omega, cond_max=100.0):
+def regularize_omega_conditioning(Omega, cond_max=50.0):
     """
-    Regularize ill-conditioned Omega by shrinking toward identity.
+    Progressive regularization of ill-conditioned Omega toward identity.
 
-    When condition number exceeds cond_max, blend Omega toward I:
-      Omega_new = 0.95 * Omega + 0.05 * I
+    When condition number exceeds cond_max, blend Omega toward I with
+    strength proportional to the excess:
+      blend = clamp(0.1 × (cond/cond_max - 1), 0, 0.5)
+      Omega_new = (1 - blend) × Omega + blend × I
+
+    This is more aggressive than the previous fixed 5% blend: matrices
+    at 2× the threshold get a 10% blend, at 6× they get the maximum 50%.
 
     Args:
         Omega: [..., K, K] gauge frames
@@ -303,9 +349,13 @@ def regularize_omega_conditioning(Omega, cond_max=100.0):
     needs_reg = cond > cond_max
     if needs_reg.any():
         eye = torch.eye(K, device=Omega.device, dtype=Omega.dtype)
+        # Progressive blend: stronger for worse conditioning
+        excess = (cond / cond_max).clamp(min=1.0)
+        blend = torch.clamp(0.1 * (excess - 1.0), min=0.0, max=0.5)
+        blend = blend.unsqueeze(-1).unsqueeze(-1)
         Omega = torch.where(
             needs_reg.unsqueeze(-1).unsqueeze(-1),
-            0.95 * Omega + 0.05 * eye,
+            (1.0 - blend) * Omega + blend * eye,
             Omega
         )
     return Omega
