@@ -270,15 +270,15 @@ VFE_EM_CONFIG = {
     'kappa_beta': 1.0,
 
     # === Training ===
-    'batch_size': 32,
+    'batch_size': 64,
     'num_workers': 10,
-    'max_steps': 30000,
+    'max_steps': 15000,
     'warmup_steps': 100,
 
     # === Learning rates ===
     'mu_lr': 0.05,
-    'sigma_lr': 0.005,
-    'phi_lr': 0.005,
+    'sigma_lr': 0.0125,
+    'phi_lr': 0.0075,
     'ffn_lr': 0.05,
     'attention_lr': 0.005,
     'output_lr': 0.05,
