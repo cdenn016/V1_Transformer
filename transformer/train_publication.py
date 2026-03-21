@@ -200,15 +200,16 @@ STANDARD_CONFIG = {
 # =============================================================================
 # Gauge-covariant VFE transformer with proper E/M separation:
 #
-#   E-step: Natural gradient descent on F w.r.t. (μ_q, Σ_q, φ) inside forward pass.
-#           Fisher-preconditioned μ, SPD retraction for Σ, Killing-form for φ.
-#           Adaptive α_i = c0/(b0 + KL) gates prior coupling per agent.
+#   E-step: Partial VFE descent (prior + alignment, no observations) w.r.t.
+#           (μ_q, Σ_q, φ). 1 iteration. Fisher-preconditioned μ, SPD retraction
+#           for Σ, Killing-form for φ. Adaptive α_i = c0/(b0 + KL).
+#           Observations excluded: with 1 iter, obs gradient overwhelms
+#           prior+alignment → beliefs become target-dependent → cheating.
 #
-#   M-step: Backprop through IFT-scaled gradient. Scale s_k = (α/σ²_p)/A_k
-#           where A_k is the effective precision at the E-step fixed point.
-#           Replaces ad-hoc straight-through (s=1) with the info-geometrically
-#           correct value. CE → W_out directly; CE → embeddings via IFT scale.
-#           KL(q*||p) → embeddings directly. KL(s||h) → sigma with fixed Σ_h.
+#   M-step: CE (observation signal) + auxiliary regularizers.
+#           CE → W_out directly; CE → embeddings via IFT scale s_k ≈ 0.5.
+#           KL(s||h) → sigma with fixed Σ_h. Gauge prior on φ.
+#           No α·KL(q*||p) (homogenizing with 1-iter q*). No β·KL (vacuum-seeking).
 #
 #   Hierarchy: h(fixed) → s(embed params) → p=s → q(E-step beliefs) → obs
 # =============================================================================
@@ -250,15 +251,15 @@ EM_CONFIG = {
     'amortized_inference': False,
 
     # === VFE loss weights (M-step objective) ===
-    # With n_iterations=1, E-step hasn't converged so ∂F/∂q ≠ 0.
-    # The alignment term (beta) in the loss directly minimizes pairwise KLs
-    # → homogenizes embeddings → uniform attention. Even beta=0.01 kills it.
-    # At convergence the envelope theorem makes this term's M-step contribution
-    # zero anyway, so beta=0 is correct for finite iterations.
-    # The IFT scale uses ffn_alpha (=1.0), not loss alpha, so CE→embeddings
-    # works at s_k≈0.5 even with alpha=0 here.
-    'alpha': 0.0,                   # KL(q*||p) — set 0; IFT scale uses ffn_alpha
-    'beta': 0.0,                    # β·KL alignment — MUST be 0 (homogenizes)
+    # E-step is partial VFE (prior + alignment, no observations) with 1 iteration.
+    # Observations enter through M-step CE loss (analogous to VAE ELBO).
+    # alpha=0: KL(q*||p) is mildly homogenizing because q* ≈ smoothed beliefs
+    # (1 iter, no obs). IFT scale uses ffn_alpha=1, so CE still reaches
+    # embeddings at s_k ≈ 0.5 independent of loss alpha.
+    # beta=0: alignment term is vacuum-seeking in M-step. Even beta=0.01 kills
+    # attention. E-step handles alignment internally.
+    'alpha': 0.0,                   # KL(q*||p) — 0 to avoid homogenization
+    'beta': 0.0,                    # β·KL alignment — MUST be 0 (vacuum-seeking)
     'alpha_phi': 0.1,               # Gauge prior: (α_φ/2)||φ||²
     'lambda_hyper': 0.1,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
     'lambda_gamma': 0.0,
