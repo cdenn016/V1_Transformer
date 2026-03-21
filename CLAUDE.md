@@ -102,9 +102,9 @@ pytest transformer/pure_vfe/tests/  # pure VFE gradient tests
 
 ### Training
 
-- **nn.Module VFE**: Edit config in `transformer/train.py` and run, or use `scripts/train_lightning.py`
+- **nn.Module VFE**: Edit config in `transformer/train_publication.py` and run, or use `scripts/train_lightning.py`
 - **Publication-quality**: `transformer/train_publication.py` (full RG diagnostics, holonomy monitoring)
-- **Pure VFE (no autograd)**: Edit `PURE_VFE_CONFIG` in `run.py` and run
+- **Pure VFE (no autograd)**: Edit `PURE_VFE_CONFIG` in `train_publication.py` and run
 - **Resume**: `transformer/resume_training.py`
 
 ### Generation
