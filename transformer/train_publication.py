@@ -198,254 +198,105 @@ STANDARD_CONFIG = {
 
 
 # =============================================================================
-# CONFIG 2: VFE_EM (VFE with EM-step dynamics, uses backprop)
+# CONFIG 2: VFE_EM — Principled E/M with implicit differentiation
 # =============================================================================
-# Gauge-equivariant transformer with Variational Free Energy dynamics.
-# Uses EM-step belief updates with backprop for training.
+# Gauge-covariant VFE transformer with proper E/M separation:
 #
-# Architecture:
-#   - Attention: KL-divergence based (gauge-equivariant)
-#   - FFN: VFE EM-step dynamics (belief inference)
-#   - Output: Linear projection to vocab
-#   - Learning: Backpropagation
-#   - Position: None (emergent from data)
+#   E-step: Natural gradient descent on F w.r.t. (μ_q, Σ_q, φ) inside forward pass.
+#           Fisher-preconditioned μ, SPD retraction for Σ, Killing-form for φ.
+#           Adaptive α_i = c0/(b0 + KL) gates prior coupling per agent.
+#
+#   M-step: Backprop through IFT-scaled gradient. Scale s_k = (α/σ²_p)/A_k
+#           where A_k is the effective precision at the E-step fixed point.
+#           Replaces ad-hoc straight-through (s=1) with the info-geometrically
+#           correct value. CE → W_out directly; CE → embeddings via IFT scale.
+#           KL(q*||p) → embeddings directly. KL(s||h) → sigma with fixed Σ_h.
+#
+#   Hierarchy: h(fixed) → s(embed params) → p=s → q(E-step beliefs) → obs
 # =============================================================================
 SEED = 6
 
 VFE_EM_CONFIG = {
-    # Model architecture
-    'vocab_size': 50257,          # Will be overridden by tokenizer
-    'embed_dim': 10,              # Embedding dimension K
-    'n_layers': 1,                # Transformer depth
-    'hidden_dim': 508,            # Only used if ffn_mode='learned'
-    'max_seq_len': 128,           # Context length N
-
-    'learnable_alpha': False,
-    
-    'use_obs_in_vfe': False,        #cheats when true!  low trainPPL huge val PPL
-    'obs_sigma_gradient': False,    # Add ∂E_q[CE]/∂σ Hessian-diagonal gradient in VFE E-step
-                                    # Requires use_obs_in_vfe=True to have any effect
-    'obs_sigma_weight': 1.0,        # Weight for sigma observation gradient
-    'amortized_inference': True,   # Gradient flow through priors → embeddings learn good E-step init
-
-    'use_deq': False,
-    'deq_neumann_terms': 0,
-
-    # Training
-    'batch_size': 32,
-    'num_workers': 10,            #CPU workers 8--12
-    'epochs': None,               # Set to 1-3 for WikiText-2, None for WikiText-103 (use max_steps)
-    'max_steps': 30000,           # ~105% coverage on WikiText-103
-    'warmup_steps': 100,
-
-    # VFE transformer settings
-    'ffn_mode': 'VFE_dynamic',    # VFE EM-step dynamics
-    'mask_self_attention': True,  # Prevent attention collapse? needed if learnable-reflection true??
+    # === Architecture ===
+    'vocab_size': 50257,
+    'embed_dim': 10,
+    'n_layers': 1,
+    'hidden_dim': 508,
+    'max_seq_len': 128,
+    'ffn_mode': 'VFE_dynamic',
     'tie_embeddings': False,
+    'use_layernorm': True,
+    'use_residual': True,
+    'use_output_projection': True,
 
-    # Gauge geometry
-    'evolve_sigma': True,         # Learn covariances Σ
-    'evolve_phi': True,           # Learn gauge frames φ (M-step, via backprop)
-    'evolve_phi_e_step': True,    # Update φ during E-step iterations (dynamical gauge frames)
-                                  # When True: φ evolves via ∂F/∂φ at each VFE iteration
-                                  # When False: φ only updated via backprop (M-step)
+    # === Gauge group: GL(K) with multi-head block-diagonal structure ===
+    'gauge_group': 'GLK',
+    'gauge_mode': 'learned',
+    'gauge_param': 'phi',
+    'irrep_spec': [('fund', 1, 10)],
+    'multihead_vfe': True,
 
-    'phi_update_interval': 1,
-    'analytic_phi_grad': False,   # If True, bypass autograd for ∂F/∂φ (saves ~250MB per update)
-                                  # Uses hand-coded backward through matrix_exp → KL → softmax.
-                                  # Requires diagonal_covariance=True and irrep_dims (block-diag).
-    'analytic_phi_grad_dexp_order': 4,  # dexp series truncation (4=good, 8=very accurate)
-    
-    'diagonal_covariance': True,    # approximate diag(Ω @ diag(σ) @ Ω^T) path runs with zero overhead
-    
-    'exact_diagonal_transport': False,  #exact diagonal transport - more expensive
-    'isotropic_covariance': False,    # If True, force Σ = σ²I (scalar variance × identity)
-                                       # This is Limit 1 from the manuscript: KL reduces to
-                                       # scaled squared Euclidean distance. Combined with
-                                       # gauge_mode='trivial' (Limit 2), recovers standard attention.
-    
-    'enforce_orthogonal': False,   # If True, enforce Ω ∈ SO(K) via Newton-Schulz
-                                   # Set False for GL(K) (faster, still gauge-invarian
-    'learnable_reflection': False ,   # Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk 
-                                      # Set gauge-mode=constant and the above 3 = true for transf limit
-    
-    
-    'use_positional_embedding': False,
-    'pos_encoding_mode': 'none',           #'none' 'learned' or 'sinusoidal'
-    'use_rope': True,
-    
-    
-    'alibi_slope': None,
-
-    # Temperature: κ is a scalar sharpness dial; dimension scaling (√K) is hardcoded in attention
-    'kappa_beta': 1,
-
-    # Embedding initialization
-    'mu_init_std': 1.0,
-    'mu_normalize': False,
-    'mu_max_norm': None,
-    'phi_scale': 1.0,             # Gauge frame initialization scale (try 1.0-2.0 for clustering)
-
-    # VFE dynamics
+    # === E-step dynamics ===
     'ffn_n_iterations': 1,
     'ffn_learnable_lr': True,
-    'ffn_chunk_size': None,          #smaller if running out of memory. make large as possible
+    'ffn_alpha': 1.0,               # Prior coupling inside VFE E-step
+    'ffn_lambda_belief': 1.0,       # Belief alignment inside VFE E-step
+    'ffn_learnable_alpha': True,    # Adaptive α_i = c0/(b0 + KL) per dimension
+    'evolve_sigma': True,
+    'evolve_phi': True,
+    'evolve_phi_e_step': True,
+    'diagonal_covariance': True,
 
-    # Learning rates
-    'mu_lr':     0.05,
-    'sigma_lr':  0.005,
-    'phi_lr':    0.005,
-    'ffn_lr':    0.05 ,
+    # === M-step: implicit differentiation ===
+    # IFT-based gradient: detaches beliefs at E-step start, re-attaches via
+    # s_k = (α/σ²_p) / (α/σ²_p + Σβ/σ²_q). Requires alpha > 0 in loss.
+    'implicit_em': True,
+    'amortized_inference': False,   # Proper EM: priors are fixed reference in E-step
 
+    # === VFE loss weights (M-step objective) ===
+    'alpha': 0.1,                   # KL(q*||p) self-coupling — MUST be > 0 for implicit_em
+    'alpha_phi': 0.1,               # Gauge prior: (α_φ/2)||φ||²
+    'lambda_hyper': 0.1,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
+    'beta': 0.0,                    # Belief alignment in loss (λ_β)
+    'lambda_gamma': 0.0,            # Model coupling (off)
+    'kappa_gamma': 1.0,
+
+    # === Phi gradient geometry ===
+    'phi_natural_gradient': 'killing',
+    'use_killing_form': True,
+    'killing_form_sym_dampening': 0.1,
+
+    # === Position encoding ===
+    'use_rope': True,
+    'pos_encoding_mode': 'none',
+
+    # === Embedding init ===
+    'mu_init_std': 1.0,
+    'phi_scale': 1.0,
+    'kappa_beta': 1.0,
+
+    # === Training ===
+    'batch_size': 32,
+    'num_workers': 10,
+    'max_steps': 30000,
+    'warmup_steps': 100,
+
+    # === Learning rates ===
+    'mu_lr': 0.05,
+    'sigma_lr': 0.005,
+    'phi_lr': 0.005,
+    'ffn_lr': 0.05,
     'attention_lr': 0.005,
     'output_lr': 0.05,
-    
-    # Free energy loss weights (see compute_free_energy_loss in train.py)
-    # NOTE: config['beta'] maps to the lambda_beta parameter in compute_free_energy_loss().
-    # This is the belief coupling weight Σ β_ij·KL(q_i||Ω_ij q_j) in the TRAINING LOSS,
-    # NOT the attention weights β_ij used inside VFE dynamics. Confusing but entrenched.
-    'alpha':        0.075,        # KL(q||p) self-consistency weight
-    'alpha_phi':    0.1,          # Gauge prior: (α_φ/2)||φ||² mass term (0 = disabled)
-    'beta':         0,            # beta=lambda_beta in loss: belief alignment weight (0 = off)
-    'beta_warmup_steps': 2000,    # Linear warmup for beta: 0 → target over this many steps
-                                  # Lets CE differentiate embeddings before coupling kicks in
-    'lambda_gamma': 0,            # Model coupling: Σγ_ij·KL(s_i||Ω s_j) (0 = off)
-    'lambda_hyper': 0,            # Hyper-prior: KL(s_i||h) models to centroid (0 = off)
-    'kappa_gamma':  1,            # Temperature for γ_ij coupling weights
-    
-    # VFE E-step internal weights (inside VariationalFFNDynamic, NOT the training loss)
-    'ffn_lambda_belief': 1,       # Belief alignment inside VFE iterations
-    'ffn_alpha': 1,               # Prior coupling inside VFE iterations
 
-    # Regularization
+    # === Regularization ===
     'weight_decay': 0.01,
-    'grad_clip':    1.0,
+    'grad_clip': 1.0,
 
-    'use_layernorm': True,      # Critical!
-    'use_residual':  True,
-
+    # === Logging ===
     'log_interval': 100,
     'eval_interval': 1000,
     'checkpoint_interval': 25000,
-    'semantic_analysis_interval': 10000,
-
-    # =================================================================
-    # GAUGE GROUP SELECTION (Generators from so(N), Transport in GL(K))
-    # =================================================================
-    # NOTE: The VFE is invariant under GL(K), not just SO(K)!
-    # We use so(N) generators to parameterize φ, but transport operators
-    # Ω = exp(φ·G) live in GL(K). No orthogonality constraint is needed.
-    #
-    # SO3: so(3) generators with 3 parameters (rotation-only subalgebra)
-    #      Requires embed_dim = sum(mult * dim) for irrep_spec or odd embed_dim
-    # SON: so(N) generators with N(N-1)/2 parameters
-    #      Supports multiple irrep types for representational diversity:
-    #        - 'scalar': dim = 1              (gauge-invariant)
-    #        - 'fund':   dim = N              (fundamental/vector)
-    #        - 'wedge2': dim = N*(N-1)/2      (antisymmetric 2-tensor ∧²V)
-    #        - 'sym2':   dim = N*(N+1)/2 - 1  (symmetric traceless Sym²₀V)
-    #
-    #      Different irreps have different Casimir eigenvalues:
-    #        fund ~1.0x, wedge2 ~1.5x, sym2 ~2.5x
-    #      This provides genuine transformation diversity (like SO(3) spin-ℓ)
-    # =================================================================
-    
-    'gauge_group': 'GLK',       # 'SO3', 'SON', or 'GLK'
-    'gauge_dim': 10,            # N for SO(N) - only used when gauge_group='SON'
-    'gauge_mode': 'learned',    # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j) (cocycle)
-                                # 'constant': per-head Ω ∈ GL(d_head), Ω_ij = Ω (manuscript Limit 2)
-                                # 'trivial': φ = 0, Ω = I (standard attention)
-    
-    # Gauge geometry: principled phi gradient control (replaces ad-hoc clipping)
-    'phi_natural_gradient': 'killing',  # E-step: 'pullback', 'killing', 'cartan', 'clip'
-    
-    
-    'use_slk_projection': False,         # Project phi to traceless sl(K) after each step
-    'use_killing_form': True,            # M-step Cartan decomposition preconditioning for phi grads
-    'killing_form_sym_dampening': 0.1,   # M-step Dampening for non-compact directions (0.1 = 10× reduction)
-    
-                        
-
-    # P-FLOW: EMA update of token embeddings toward successful beliefs
-    # This is the key learning mechanism from fep_transformer.py
-    'use_p_flow': False,           # Enable P-flow updates on token embeddings
-    'p_flow_ema_decay': 0.95,      # EMA decay (higher = slower update, 0.99 = 1% per step)
-
-    # PHI DETACH: Detach phi from backprop in non-amortized mode.
-    # When True + use_p_flow, phi learns via phi P-flow (EMA toward VFE-evolved values)
-    # instead of backprop. Combined with P-flow + delta rule, makes training fully backprop-free.
-    'detach_phi': False,               # Detach phi in non-amortized mode (default False for compat)
-
-    # DELTA RULE: Backprop-free learning for W_out
-    # If True, W_out is updated via delta rule instead of backpropagation
-    # Combined with P-flow + detach_phi, this makes learning fully backprop-free.
-    'use_delta_rule_w_out': False,  # Enable delta rule for W_out (instead of backprop)
-    'delta_rule_lr': 0.1,           # Learning rate for delta rule updates
-
-    
-    # Irrep structure for SO(N)
-    # Example for SO(5) with K=132:
-    #   [('scalar', 10, 1), ('fund', 8, 5), ('wedge2', 4, 10), ('sym2', 3, 14)]
-    #   = 10 + 40 + 40 + 42 = 132
-    'irrep_spec': [
-      # ('ℓ0', 50, 1),   # 75 dimensions (scalars)
-      # ('ℓ1', 1, 3),   # 90 dimensions (vectors)
-      # ('ℓ2', 2, 5),   # 90 dimensions (rank-2 tensors)
-     #  ('ℓ3', 1, 7),
-      # ('ℓ4', 1, 9),
-      #('ℓ5', 9, 11),
-     # ('ℓ6', 1, 13),
-     # ('ℓ7', 1, 15),
-      # ('ℓ50', 1, 101),
-      ('fund', 1, 10)  #For SO(8)
-     # ('fund', 10, 5),   # SO(5)
-       
-     # SO(5) multi-irrep example:
-     # ('scalar', 10, 1),   # 10 dims (invariant)
-     # ('fund', 8, 5),      # 40 dims (vector)
-     # ('wedge2', 4, 10),   # 40 dims (∧² - angular momentum)
-     # ('sym2', 3, 14),     # 42 dims (Sym²₀ - quadrupolar)
-    ],
-     
-         
-    # Option A: couple just 0↔1, head 2 stays independent
-    #'cross_couplings': [(0, 1), (1, 0)],
-    # → super-blocks: [20, 10]  (heads 0,1 merged into GL(20), head 2 alone)
-
-
-    # Per-head specialization & multi-head VFE
-    'use_output_projection': True,  # W_O cross-head mixing after attention (toggle)
-    'multihead_vfe': True,          # Maintain per-head β_h through VFE iterations
-
-    # RG metrics
-    #'compute_rg_metrics': True,   # Enable RG flow analysis
-    #'rg_metrics_interval': 500,   # Compute every 100 steps (not too frequent)
-    #'rg_auto_cluster': True,
-    #'rg_n_clusters': None,
-    #'track_dynamic_rg': True,  # Track RG flow across VFE iterations (requires n_iterations > 1)
-
-
-    'pos_encoding_scale': 0.3,
-    'use_prior_bank': False,
-
-    # =================================================================
-    # NON-FLAT GAUGE TRANSPORT (holonomy)
-    # =================================================================
-    # When enabled, transport acquires an edge-local connection δ_ij:
-    #   phi path:  Ω_ij = exp(φ_i·G) · exp(α·δ_ij·G) · exp(-φ_j·G)
-    #   omega path: Ω_ij = Ω_i · exp(α·δ_ij·G) · Ω_j⁻¹
-    # δ_ij is zero-initialized so the model starts flat and learns
-    # curvature only where the data warrants it.
-    # Holonomy H_ijk = Ω_ij·Ω_jk·Ω_ki ≠ I when δ ≠ 0.
-    'non_flat_transport': False,        # Enable edge-dependent connection δ_ij
-    'cocycle_relaxation': 0.0,          # Scale for δ_ij: 0=flat, 1=fully non-flat
-    'connection_type': 'bilinear',      # 'bilinear' (δ_ij^a = μ_i^T W^a μ_j) | 'mlp'
-    'connection_hidden_dim': 64,        # Hidden dim for MLP connection (ignored for bilinear)
-    'connection_init_scale': 0.01,      # W init scale (0=flat saddle point, 0.01 recommended)
-    'holonomy_penalty': 0.0,            # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
-    'holonomy_interval': 500,           # Holonomy diagnostics every N steps (0 = disabled)
-    'holonomy_sample_size': 500,        # Random triples per holonomy computation
-
 }
 
 
