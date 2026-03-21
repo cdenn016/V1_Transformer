@@ -216,18 +216,19 @@ STANDARD_CONFIG = {
 
 EM_CONFIG = {
     # === Architecture ===
-    'vocab_size': 50257,
-    'embed_dim': 10,
-    'n_layers': 1,
-    'hidden_dim': 508,
+    'vocab_size':  50257,
+    'embed_dim':   10,
+    'n_layers':    1,
+    'hidden_dim':  508,
     'max_seq_len': 128,
+    
     'ffn_mode': 'VFE_dynamic',
     
     # === Training ===
-    'batch_size': 64,    
-    'max_steps': 15000,
-    'warmup_steps': 100,
-    'num_workers': 10,
+    'batch_size':    64,    
+    'max_steps':     15000,
+    'warmup_steps':  100,
+    'num_workers':   10,
     
     'tie_embeddings': False,
     
@@ -236,13 +237,12 @@ EM_CONFIG = {
     'use_output_projection': True,
     'multihead_vfe':         True,
 
-    'use_prior_bank': True,
-    'use_obs_in_vfe': False,        #cheats when true!  low trainPPL huge val PPL
-
+    'use_prior_bank':        True,
+    
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
     'gauge_group':      'GLK',
-    'gauge_mode':       'learned',
+    'gauge_mode':       'learned',  
     'gauge_param':      'phi',
     'irrep_spec':       [('fund', 1, 10)],
   
@@ -296,8 +296,8 @@ EM_CONFIG = {
     'kappa_gamma':  1.0,
 
     # === Phi gradient geometry ===
-    'phi_natural_gradient':      'killing',
-    'use_killing_form':          True,
+    'phi_natural_gradient':       'killing',
+    'use_killing_form':           True,
     'killing_form_sym_dampening': 0.1,
 
     # === Position encoding ===
@@ -364,7 +364,7 @@ AMORTIZED_CONFIG = {
     **EM_CONFIG,
     # Override: amortized inference, no implicit EM
     'amortized_inference': True,
-    'implicit_em': False,
+    'implicit_em':         False,
     'ffn_learnable_alpha': False,   # Fixed scalar alpha (simpler)
 }
 
@@ -391,80 +391,85 @@ HEBBIAN_CONFIG = {
     'n_layers': 1,
     'hidden_dim': 508,
     'max_seq_len': 128,
-    'ffn_mode': 'VFE_dynamic',
-    'tie_embeddings': False,
-    'use_layernorm': True,
-    'use_residual': True,
+    
+    # === Training ===
+    'batch_size':   64,
+    'num_workers':  10,
+    'max_steps':    15000,
+    'warmup_steps': 100,
+    
+    'ffn_mode':              'VFE_dynamic',
+    'tie_embeddings':        False,
+    'use_layernorm':         True,
+    'use_residual':          True,
     'use_output_projection': True,
+    'ffn_learnable_lr':      True,
 
     # === Gauge group ===
-    'gauge_group': 'GLK',
-    'gauge_mode': 'learned',
-    'gauge_param': 'phi',
-    'irrep_spec': [('fund', 1, 10)],
+    'gauge_group':   'GLK',
+    'gauge_mode':    'learned',
+    'gauge_param':   'phi',
+    'irrep_spec':    [('fund', 1, 10)],
     'multihead_vfe': True,
 
     # === E-step dynamics (same as EM) ===
     'ffn_n_iterations': 1,
-    'ffn_learnable_lr': True,
-    'ffn_alpha': 1.0,
+    
+    'ffn_alpha':         1.0,
     'ffn_lambda_belief': 1.0,
-    'evolve_sigma': True,
-    'evolve_phi': True,
-    'evolve_phi_e_step': True,
+    
+    'evolve_sigma':        True,
+    'evolve_phi':          True,
+    'evolve_phi_e_step':   True,
     'diagonal_covariance': True,
 
     # === Hebbian M-step: no backprop ===
-    'amortized_inference': False,
-    'use_p_flow': True,             # EMA update of embeddings toward successful beliefs
-    'p_flow_ema_decay': 0.95,
+    'amortized_inference':  False,
+    'use_p_flow':           True,             # EMA update of embeddings toward successful beliefs
+    'p_flow_ema_decay':     0.95,
     'use_delta_rule_w_out': True,   # Widrow-Hoff local learning for W_out
-    'delta_rule_lr': 0.1,
-    'detach_phi': True,             # phi learns via P-flow only (no backprop)
+    'delta_rule_lr':        0.1,
+    'detach_phi':           True,             # phi learns via P-flow only (no backprop)
 
     # === Loss weights: CE only (no VFE regularizers in backprop loss) ===
-    'alpha': 0.0,
-    'beta': 0.0,
-    'alpha_phi': 0.0,
+    'alpha':        0.0,
+    'beta':         0.0,
+    'alpha_phi':    0.0,
     'lambda_hyper': 0.0,
     'lambda_gamma': 0.0,
-    'kappa_gamma': 1.0,
+    'kappa_gamma':  1.0,
 
     # === Phi gradient geometry ===
-    'phi_natural_gradient': 'killing',
-    'use_killing_form': True,
+    'phi_natural_gradient':      'killing',
+    'use_killing_form':           True,
     'killing_form_sym_dampening': 0.1,
 
     # === Position encoding ===
-    'use_rope': True,
+    'use_rope':          True,
     'pos_encoding_mode': 'none',
 
     # === Embedding init ===
     'mu_init_std': 1.0,
-    'phi_scale': 1.0,
-    'kappa_beta': 1.0,
+    'phi_scale':   1.0,
+    'kappa_beta':  1.0,
 
-    # === Training ===
-    'batch_size': 64,
-    'num_workers': 10,
-    'max_steps': 15000,
-    'warmup_steps': 100,
+    
 
     # === Learning rates (backprop LRs less important; P-flow dominates) ===
-    'mu_lr': 0.05,
-    'sigma_lr': 0.0125,
-    'phi_lr': 0.0075,
-    'ffn_lr': 0.05,
+    'mu_lr':        0.05,
+    'sigma_lr':     0.0125,
+    'phi_lr':       0.0075,
+    'ffn_lr':       0.05,
     'attention_lr': 0.005,
-    'output_lr': 0.05,
+    'output_lr':    0.05,
 
     # === Regularization ===
     'weight_decay': 0.01,
-    'grad_clip': 1.0,
+    'grad_clip':    1.0,
 
     # === Logging ===
-    'log_interval': 100,
-    'eval_interval': 500,
+    'log_interval':        100,
+    'eval_interval':       1000,
     'checkpoint_interval': 25000,
 }
 
