@@ -1052,13 +1052,22 @@ class PublicationMetrics:
 
         if verbose:
             w_info = f" | ‖W‖={np.mean(w_norms):.6f}" if w_norms else ""
-            # Use .6f precision to detect slow drift that .4f would hide
-            norm_std = float(np.std([s.std_norm for s in snapshots])) if snapshots else 0.0
-            print(f"  [HOLONOMY] mean ‖C-I‖={profile.global_mean_norm:.6f} | "
-                  f"max={profile.global_max_norm:.6f} | "
-                  f"std={norm_std:.6f} | "
-                  f"frac>0.1={log_dict.get('holonomy/frac_gt_0.1', 0):.3f}"
-                  f"{w_info}")
+            # Per-snapshot detail: show the actual within-layer distribution
+            for s in snapshots:
+                print(f"  [HOLONOMY] L{s.layer}H{s.head} "
+                      f"mean ‖C-I‖={s.mean_norm:.6f} | "
+                      f"max={s.max_norm:.6f} | "
+                      f"std={s.std_norm:.6f} | "
+                      f"median={s.median_norm:.6f} | "
+                      f"frac>0.1={s.frac_gt_01:.3f} | "
+                      f"spectral_gap={s.mean_spectral_gap:.6f}"
+                      f"{w_info}")
+            # Summary line when multiple layers/heads
+            if len(snapshots) > 1:
+                print(f"  [HOLONOMY] global: "
+                      f"mean={profile.global_mean_norm:.6f} | "
+                      f"max={profile.global_max_norm:.6f} | "
+                      f"cross-layer std={np.std([s.mean_norm for s in snapshots]):.6f}")
 
         return log_dict
 
