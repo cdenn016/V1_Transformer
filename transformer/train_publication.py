@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Thu Mar 12 08:09:57 2026
-
-@author: chris and christine
-"""
 
 
 # =============================================================================
@@ -223,24 +217,21 @@ VFE_EM_CONFIG = {
     'learnable_alpha': False,
     
     'use_obs_in_vfe': False,        #cheats when true!  low trainPPL huge val PPL
-    'obs_sigma_gradient': False,    # Add ∂E_q[CE]/∂σ Hessian-diagonal gradient in VFE E-step
-                                    # Requires use_obs_in_vfe=True to have any effect
-    'obs_sigma_weight': 1.0,        # Weight for sigma observation gradient
-    'amortized_inference': True,   # Gradient flow through priors → embeddings learn good E-step init
+    'amortized_inference': False,   # Gradient flow through priors → embeddings learn good E-step init
 
     'use_deq': False,
     'deq_neumann_terms': 0,
 
     # Training
-    'batch_size': 32,
+    'batch_size': 64,
     'num_workers': 10,            #CPU workers 8--12
     'epochs': None,               # Set to 1-3 for WikiText-2, None for WikiText-103 (use max_steps)
-    'max_steps': 30000,           # ~105% coverage on WikiText-103
+    'max_steps': 15000,           # ~105% coverage on WikiText-103
     'warmup_steps': 100,
 
     # VFE transformer settings
     'ffn_mode': 'VFE_dynamic',    # VFE EM-step dynamics
-    'mask_self_attention': True,  # Prevent attention collapse? needed if learnable-reflection true??
+    'mask_self_attention': False,  # Prevent attention collapse? needed if learnable-reflection true??
     'tie_embeddings': False,
 
     # Gauge geometry
@@ -293,10 +284,10 @@ VFE_EM_CONFIG = {
 
     # Learning rates
     'mu_lr':     0.05,
-    'sigma_lr':  0.005,
-    'phi_lr':    0.005,
+    'sigma_lr':  0.0125,
+    'phi_lr':    0.0075,
     'ffn_lr':    0.05 ,
-
+    
     'attention_lr': 0.005,
     'output_lr': 0.05,
     
@@ -304,11 +295,12 @@ VFE_EM_CONFIG = {
     # NOTE: config['beta'] maps to the lambda_beta parameter in compute_free_energy_loss().
     # This is the belief coupling weight Σ β_ij·KL(q_i||Ω_ij q_j) in the TRAINING LOSS,
     # NOT the attention weights β_ij used inside VFE dynamics. Confusing but entrenched.
-    'alpha':        0.075,        # KL(q||p) self-consistency weight
+    'alpha':        0,        # KL(q||p) self-consistency weight
     'alpha_phi':    0.1,          # Gauge prior: (α_φ/2)||φ||² mass term (0 = disabled)
     'beta':         0,            # beta=lambda_beta in loss: belief alignment weight (0 = off)
-    'beta_warmup_steps': 2000,    # Linear warmup for beta: 0 → target over this many steps
-                                  # Lets CE differentiate embeddings before coupling kicks in
+    'beta_warmup_steps': 1,    # Linear warmup for beta: 0 → target over this many steps
+                                 # Lets CE differentiate embeddings before coupling kicks in
+    
     'lambda_gamma': 0,            # Model coupling: Σγ_ij·KL(s_i||Ω s_j) (0 = off)
     'lambda_hyper': 0,            # Hyper-prior: KL(s_i||h) models to centroid (0 = off)
     'kappa_gamma':  1,            # Temperature for γ_ij coupling weights
@@ -325,7 +317,7 @@ VFE_EM_CONFIG = {
     'use_residual':  True,
 
     'log_interval': 100,
-    'eval_interval': 1000,
+    'eval_interval': 500,
     'checkpoint_interval': 25000,
     'semantic_analysis_interval': 10000,
 
@@ -355,7 +347,25 @@ VFE_EM_CONFIG = {
     'gauge_mode': 'learned',    # 'learned': per-token φ, Ω_ij = exp(φ_i)·exp(-φ_j) (cocycle)
                                 # 'constant': per-head Ω ∈ GL(d_head), Ω_ij = Ω (manuscript Limit 2)
                                 # 'trivial': φ = 0, Ω = I (standard attention)
-    
+    'gauge_param': 'phi',       #'omega' or 'phi'  
+
+              
+    # =================================================================
+    # NON-FLAT GAUGE TRANSPORT (holonomy)
+    # =================================================================
+    # When enabled, transport acquires an edge-local connection δ_ij:
+    #   phi path:  Ω_ij = exp(φ_i·G) · exp(α·δ_ij·G) · exp(-φ_j·G)
+    #   omega path: Ω_ij = Ω_i · exp(α·δ_ij·G) · Ω_j⁻¹
+    # δ_ij is zero-initialized so the model starts flat and learns
+    # curvature only where the data warrants it.
+    # Holonomy H_ijk = Ω_ij·Ω_jk·Ω_ki ≠ I when δ ≠ 0.
+    'non_flat_transport': False,        # Enable edge-dependent connection δ_ij
+    'cocycle_relaxation': 0.5,          # Scale for δ_ij: 0=flat, 1=fully non-flat
+    'connection_type': 'bilinear',      # 'bilinear' (δ_ij^a = μ_i^T W^a μ_j) | 'mlp'
+    'connection_hidden_dim': 64,        # Hidden dim for MLP connection (ignored for bilinear)
+    'connection_init_scale': 0.01,      # W init scale (0=flat saddle point, 0.01 recommended)
+    'holonomy_penalty': 0.0,            # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
+
     # Gauge geometry: principled phi gradient control (replaces ad-hoc clipping)
     'phi_natural_gradient': 'killing',  # E-step: 'pullback', 'killing', 'cartan', 'clip'
     
@@ -368,35 +378,27 @@ VFE_EM_CONFIG = {
 
     # P-FLOW: EMA update of token embeddings toward successful beliefs
     # This is the key learning mechanism from fep_transformer.py
-    'use_p_flow': False,           # Enable P-flow updates on token embeddings
+    
+    'use_p_flow': True,           # Enable P-flow updates on token embeddings
     'p_flow_ema_decay': 0.95,      # EMA decay (higher = slower update, 0.99 = 1% per step)
-
-    # PHI DETACH: Detach phi from backprop in non-amortized mode.
-    # When True + use_p_flow, phi learns via phi P-flow (EMA toward VFE-evolved values)
-    # instead of backprop. Combined with P-flow + delta rule, makes training fully backprop-free.
-    'detach_phi': False,               # Detach phi in non-amortized mode (default False for compat)
 
     # DELTA RULE: Backprop-free learning for W_out
     # If True, W_out is updated via delta rule instead of backpropagation
     # Combined with P-flow + detach_phi, this makes learning fully backprop-free.
-    'use_delta_rule_w_out': False,  # Enable delta rule for W_out (instead of backprop)
+    'use_delta_rule_w_out': True,  # Enable delta rule for W_out (instead of backprop)
     'delta_rule_lr': 0.1,           # Learning rate for delta rule updates
 
-    
+    # PHI DETACH: Detach phi from backprop in non-amortized mode.
+    # When True + use_p_flow, phi learns via phi P-flow (EMA toward VFE-evolved values)
+    # instead of backprop. Combined with P-flow + delta rule, makes training fully backprop-free.
+    'detach_phi': True,               # Detach phi in non-amortized mode (default False for com
     # Irrep structure for SO(N)
     # Example for SO(5) with K=132:
     #   [('scalar', 10, 1), ('fund', 8, 5), ('wedge2', 4, 10), ('sym2', 3, 14)]
     #   = 10 + 40 + 40 + 42 = 132
     'irrep_spec': [
       # ('ℓ0', 50, 1),   # 75 dimensions (scalars)
-      # ('ℓ1', 1, 3),   # 90 dimensions (vectors)
-      # ('ℓ2', 2, 5),   # 90 dimensions (rank-2 tensors)
-     #  ('ℓ3', 1, 7),
-      # ('ℓ4', 1, 9),
-      #('ℓ5', 9, 11),
-     # ('ℓ6', 1, 13),
-     # ('ℓ7', 1, 15),
-      # ('ℓ50', 1, 101),
+      
       ('fund', 1, 10)  #For SO(8)
      # ('fund', 10, 5),   # SO(5)
        
@@ -424,30 +426,14 @@ VFE_EM_CONFIG = {
     #'rg_n_clusters': None,
     #'track_dynamic_rg': True,  # Track RG flow across VFE iterations (requires n_iterations > 1)
 
+    'obs_sigma_gradient': True,    # Add ∂E_q[CE]/∂σ Hessian-diagonal gradient in VFE E-step
+                                    # Requires use_obs_in_vfe=True to have any effect
+    'obs_sigma_weight': 1.0,        # Weight for sigma observation gradient
 
-    'pos_encoding_scale': 0.3,
+
     'use_prior_bank': False,
 
-    # =================================================================
-    # NON-FLAT GAUGE TRANSPORT (holonomy)
-    # =================================================================
-    # When enabled, transport acquires an edge-local connection δ_ij:
-    #   phi path:  Ω_ij = exp(φ_i·G) · exp(α·δ_ij·G) · exp(-φ_j·G)
-    #   omega path: Ω_ij = Ω_i · exp(α·δ_ij·G) · Ω_j⁻¹
-    # δ_ij is zero-initialized so the model starts flat and learns
-    # curvature only where the data warrants it.
-    # Holonomy H_ijk = Ω_ij·Ω_jk·Ω_ki ≠ I when δ ≠ 0.
-    'non_flat_transport': False,        # Enable edge-dependent connection δ_ij
-    'cocycle_relaxation': 0.0,          # Scale for δ_ij: 0=flat, 1=fully non-flat
-    'connection_type': 'bilinear',      # 'bilinear' (δ_ij^a = μ_i^T W^a μ_j) | 'mlp'
-    'connection_hidden_dim': 64,        # Hidden dim for MLP connection (ignored for bilinear)
-    'connection_init_scale': 0.01,      # W init scale (0=flat saddle point, 0.01 recommended)
-    'holonomy_penalty': 0.0,            # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
-    'holonomy_interval': 500,           # Holonomy diagnostics every N steps (0 = disabled)
-    'holonomy_sample_size': 500,        # Random triples per holonomy computation
-
 }
-
 
 # =============================================================================
 # CONFIG 3: PURE VFE TRANSFORMER (No backprop, natural gradient only)
@@ -830,6 +816,8 @@ STANDARD_ROPE_D90_CONFIG = {
 
 
 # =============================================================================
+
+
 
 
 
@@ -1412,9 +1400,9 @@ class PublicationTrainer(FastTrainer):
                             attn_head = beta_layer_np[head_idx]  # (N, N)
                             attn_plot = attn_head.copy()
                             #np.fill_diagonal(attn_plot, np.nan)  # Mask diagonal
-                            attn_plot = np.log10(np.maximum(attn_plot, 1e-6))  # Log scale
+                            attn_plot = np.log10(np.maximum(attn_plot, 1e-5))  # Log scale
 
-                            im = ax.imshow(attn_plot, cmap='viridis', aspect='auto', vmin=-6, vmax=0)
+                            im = ax.imshow(attn_plot, cmap='viridis', aspect='auto', vmin=-5, vmax=0)
                             ax.set_xlabel('Key Position (j)')
                             ax.set_ylabel('Query Position (i)')
 
