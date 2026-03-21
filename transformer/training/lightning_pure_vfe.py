@@ -65,11 +65,33 @@ class PureVFELitModule(pl.LightningModule):
 
         # vfe may be a list (per E-step iteration) or scalar; log final value
         vfe_scalar = vfe[-1] if isinstance(vfe, (list, tuple)) else vfe
+        vfe_first = vfe[0] if isinstance(vfe, (list, tuple)) and len(vfe) > 0 else vfe_scalar
 
         self.log('train/loss', ce_loss, prog_bar=True, on_step=True, on_epoch=False)
         self.log('train/ce_loss', ce_loss, on_step=True, on_epoch=False)
         self.log('train/vfe', vfe_scalar, on_step=True, on_epoch=False)
         self.log('train/perplexity', ppl, prog_bar=True, on_step=True, on_epoch=False)
+
+        # VFE convergence diagnostics
+        if isinstance(vfe, (list, tuple)) and len(vfe) > 1:
+            vfe_ratio = vfe[-1] / max(abs(vfe[0]), 1e-8) if vfe[0] != 0 else 0.0
+            self.log('train/vfe_first', vfe_first, on_step=True, on_epoch=False)
+            self.log('train/vfe_ratio', vfe_ratio, on_step=True, on_epoch=False)
+            self.log('train/vfe_steps', float(len(vfe)), on_step=True, on_epoch=False)
+
+        # Prior health diagnostics (every 50 steps to avoid overhead)
+        if batch_idx % 50 == 0:
+            with torch.no_grad():
+                from transformer.pure_vfe.gauge import monitor_omega_health
+                sig_eigs = torch.linalg.eigvalsh(self.model.prior_Sigma[:100])
+                self.log('diag/sigma_min', sig_eigs[..., 0].min().item(), on_step=True, on_epoch=False)
+                self.log('diag/sigma_max', sig_eigs[..., -1].max().item(), on_step=True, on_epoch=False)
+                mu_norms = self.model.prior_mu.norm(dim=-1)
+                self.log('diag/mu_norm_mean', mu_norms.mean().item(), on_step=True, on_epoch=False)
+                self.log('diag/mu_norm_max', mu_norms.max().item(), on_step=True, on_epoch=False)
+                health = monitor_omega_health(self.model.prior_Omega[:100], "Omega")
+                self.log('diag/omega_cond_max', health['Omega/cond_max'], on_step=True, on_epoch=False)
+                self.log('diag/omega_cond_mean', health['Omega/cond_mean'], on_step=True, on_epoch=False)
 
         # Manual optimization: step the dummy optimizer to increment global_step,
         # which Lightning uses for max_steps tracking and checkpoint scheduling.
@@ -107,12 +129,16 @@ class PureVFELitModule(pl.LightningModule):
     # Checkpointing
     # ------------------------------------------------------------------
     def on_save_checkpoint(self, checkpoint):
-        checkpoint['pure_vfe_state'] = {
+        state = {
             'prior_mu': self.model.prior_mu.cpu(),
             'prior_Sigma': self.model.prior_Sigma.cpu(),
             'prior_Omega': self.model.prior_Omega.cpu(),
             'pos_Omega': self.model.pos_Omega.cpu(),
         }
+        if self.model.prior_phi is not None:
+            state['prior_phi'] = self.model.prior_phi.cpu()
+            state['pos_phi'] = self.model.pos_phi.cpu()
+        checkpoint['pure_vfe_state'] = state
         checkpoint['pure_vfe_config'] = self.pure_vfe_config
 
     def on_load_checkpoint(self, checkpoint):
@@ -129,3 +155,6 @@ class PureVFELitModule(pl.LightningModule):
         self.model.prior_Sigma = state['prior_Sigma'].to(dev)
         self.model.prior_Omega = state['prior_Omega'].to(dev)
         self.model.pos_Omega = state['pos_Omega'].to(dev)
+        if 'prior_phi' in state and self.model.prior_phi is not None:
+            self.model.prior_phi = state['prior_phi'].to(dev)
+            self.model.pos_phi = state['pos_phi'].to(dev)

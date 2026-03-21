@@ -22,7 +22,12 @@ from .gaussians import (
     clip_norm,
     clip_matrix_norm,
 )
-from .gauge import natural_grad_omega
+from .gauge import (
+    natural_grad_omega,
+    relative_trust_clip,
+    regularize_omega_conditioning,
+    retract_phi,
+)
 
 
 def _precompute_obs_gradient(ce_grad, mu_star, Sigma_star, update_tokens):
@@ -150,7 +155,10 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     per_pos_ce = -log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)  # [B, N]
     mean_ce = per_pos_ce.mean().item()
     confidence = 1.0 / (1.0 + mean_ce)
-    effective_eta_M = config.eta_M * confidence
+    eta_floor = getattr(config, 'm_step_eta_floor', 0.01)
+    effective_eta_M = max(config.eta_M * confidence, config.eta_M * eta_floor)
+
+    grad_clamp = getattr(config, 'grad_clamp', 1e3)
 
     # Gather current priors for all update tokens: [T, K], [T, K, K]
     mu_all = model.prior_mu[update_tokens]          # [T, K]
@@ -213,6 +221,9 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     obs_grad_mu = torch.einsum('tij,tj->ti', Sigma_all_inv, obs_diff / BN)
     grad_mu = grad_mu + obs_grad_mu
 
+    # Gradient clamping (ported from VFE dynamic)
+    grad_mu = torch.clamp(grad_mu, -grad_clamp, grad_clamp)
+
     # Natural gradient and update
     nat_mu = torch.einsum('tij,tj->ti', Sigma_all, grad_mu)  # [T, K]
     nat_mu = clip_norm(nat_mu, config.m_step_trust_mu)
@@ -239,25 +250,41 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     # Hyper-prior
     grad_Sigma = grad_Sigma_vfe + 0.5 * Sigma_all_inv / config.hyper_var
 
-    # Observation gradient for Σ_v
-    # W_v = obs_weighted_Sigma + obs_weighted_outer
-    #       - obs_weighted_mu·μ_vᵀ - μ_v·obs_weighted_muᵀ + obs_ce_sum·μ_vμ_vᵀ
-    W = (
-        obs_weighted_Sigma + obs_weighted_outer
-        - obs_weighted_mu.unsqueeze(-1) * mu_all.unsqueeze(-2)
-        - mu_all.unsqueeze(-1) * obs_weighted_mu.unsqueeze(-2)
-        + obs_ce_sum.unsqueeze(-1).unsqueeze(-1) * (mu_all.unsqueeze(-1) * mu_all.unsqueeze(-2))
-    )  # [T, K, K]
-    obs_grad_Sigma = 0.5 * (
-        Sigma_all_inv @ W @ Sigma_all_inv
-        - obs_ce_sum.unsqueeze(-1).unsqueeze(-1) * Sigma_all_inv
-    ) / BN
-    obs_grad_Sigma = symmetrize(obs_grad_Sigma)
-    grad_Sigma = grad_Sigma + obs_grad_Sigma
+    # Observation gradient for Σ_v (togglable via config.sigma_obs_grad)
+    sigma_obs_mode = getattr(config, 'sigma_obs_grad', 'none')
+    if sigma_obs_mode == 'full':
+        # Full analytic observation gradient (original, error-prone)
+        W = (
+            obs_weighted_Sigma + obs_weighted_outer
+            - obs_weighted_mu.unsqueeze(-1) * mu_all.unsqueeze(-2)
+            - mu_all.unsqueeze(-1) * obs_weighted_mu.unsqueeze(-2)
+            + obs_ce_sum.unsqueeze(-1).unsqueeze(-1) * (mu_all.unsqueeze(-1) * mu_all.unsqueeze(-2))
+        )  # [T, K, K]
+        obs_grad_Sigma = 0.5 * (
+            Sigma_all_inv @ W @ Sigma_all_inv
+            - obs_ce_sum.unsqueeze(-1).unsqueeze(-1) * Sigma_all_inv
+        ) / BN
+        obs_grad_Sigma = symmetrize(obs_grad_Sigma)
+        grad_Sigma = grad_Sigma + obs_grad_Sigma
+    elif sigma_obs_mode == 'diagonal':
+        # Diagonal approximation: only use the diagonal of the full obs gradient
+        W_diag = (
+            torch.diagonal(obs_weighted_Sigma, dim1=-2, dim2=-1)
+            + torch.diagonal(obs_weighted_outer, dim1=-2, dim2=-1)
+            - 2 * obs_weighted_mu * mu_all
+            + obs_ce_sum.unsqueeze(-1) * mu_all ** 2
+        )  # [T, K]
+        Sigma_all_inv_diag = torch.diagonal(Sigma_all_inv, dim1=-2, dim2=-1)  # [T, K]
+        obs_diag = 0.5 * (Sigma_all_inv_diag ** 2 * W_diag - obs_ce_sum.unsqueeze(-1) * Sigma_all_inv_diag) / BN
+        grad_Sigma = grad_Sigma + torch.diag_embed(obs_diag)
+    # else: sigma_obs_mode == 'none' — match VFE dynamic, no obs gradient for Sigma
+
+    # Gradient clamping
+    grad_Sigma = torch.clamp(grad_Sigma, -grad_clamp, grad_clamp)
 
     # Natural gradient on SPD and retract
     nat_Sigma = natural_grad_sigma(grad_Sigma, Sigma_all)
-    nat_Sigma = clip_matrix_norm(nat_Sigma, 0.3)
+    nat_Sigma = clip_matrix_norm(nat_Sigma, config.trust_region_sigma)
     # Use even smaller step for Sigma (5x slower, matching dynamic transformer's sigma_lr/mu_lr ratio)
     Sigma_new = retract_spd(
         Sigma_all, nat_Sigma, effective_eta_M * 0.2,
@@ -281,14 +308,37 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     grad_Omega_all = -(Omega_star_avg - Omega_all)
     grad_Omega_all[~has_input] = 0.0
 
-    nat_Omega = natural_grad_omega(grad_Omega_all, Omega_all)
-    nat_Omega = clip_matrix_norm(nat_Omega, 0.3)
-    model.prior_Omega[update_tokens] = Omega_all - effective_eta_M * nat_Omega
+    # Gradient clamping
+    grad_Omega_all = torch.clamp(grad_Omega_all, -grad_clamp, grad_clamp)
+
+    if model.prior_phi is not None:
+        # Phi path: update phi coordinates, then recompute Omega
+        # Gradient in Lie algebra: ∂F/∂φ^a = tr(∂F/∂Ω · Ω · T_a)
+        # (first-order approximation; dexp correction negligible near identity)
+        phi_all = model.prior_phi[update_tokens]  # [T, H, n_gen_h]
+        grad_phi = torch.einsum(
+            'thij,thik,akj->tha',
+            grad_Omega_all, Omega_all, model.gl_generators
+        )  # [T, H, n_gen_h]
+        grad_phi = torch.clamp(grad_phi, -grad_clamp, grad_clamp)
+        phi_new = retract_phi(phi_all, -effective_eta_M * grad_phi, config.phi_max_norm)
+        model.prior_phi[update_tokens] = phi_new
+    else:
+        # Omega path: direct update with relative trust clip + conditioning
+        nat_Omega = natural_grad_omega(grad_Omega_all, Omega_all)
+        nat_Omega = relative_trust_clip(nat_Omega, Omega_all, config.trust_region_omega)
+        Omega_new = Omega_all - effective_eta_M * nat_Omega
+        Omega_new = regularize_omega_conditioning(Omega_new, config.omega_cond_max)
+        model.prior_Omega[update_tokens] = Omega_new
 
     # ================================================================
     # 4. Update positional gauge offsets
     # ================================================================
     _update_pos_omega(Omega_star, token_ids, model, config)
+
+    # Sync Omega from phi if using phi path
+    if model.prior_phi is not None:
+        model.sync_omega_from_phi()
 
     return ce_loss.item()
 
@@ -299,12 +349,30 @@ def _update_pos_omega(Omega_star, token_ids, model, config):
     Vectorized over all positions.
     """
     B, N = token_ids.shape
+    grad_clamp = getattr(config, 'grad_clamp', 1e3)
 
     # Average converged gauge at each position across batch: [N, H, K_h, K_h]
     Om_avg = Omega_star.mean(0)               # [N, H, K_h, K_h]
     pos_Om = model.pos_Omega[:N]              # [N, H, K_h, K_h]
 
     grad = -(Om_avg - pos_Om)
-    nat = natural_grad_omega(grad, pos_Om)
-    nat = clip_matrix_norm(nat, 0.3)
-    model.pos_Omega[:N] = pos_Om - config.eta_M * 0.1 * nat  # pos uses base eta_M (stable)
+    grad = torch.clamp(grad, -grad_clamp, grad_clamp)
+
+    if model.pos_phi is not None:
+        # Phi path: update pos_phi coordinates
+        pos_phi = model.pos_phi[:N]  # [N, H, n_gen_h]
+        grad_phi = torch.einsum(
+            'nhij,nhik,akj->nha',
+            grad, pos_Om, model.gl_generators
+        )  # [N, H, n_gen_h]
+        grad_phi = torch.clamp(grad_phi, -grad_clamp, grad_clamp)
+        model.pos_phi[:N] = retract_phi(
+            pos_phi, -config.eta_M * 0.1 * grad_phi, config.phi_max_norm
+        )
+    else:
+        # Omega path with relative trust clip
+        nat = natural_grad_omega(grad, pos_Om)
+        nat = relative_trust_clip(nat, pos_Om, config.trust_region_omega)
+        pos_Om_new = pos_Om - config.eta_M * 0.1 * nat
+        pos_Om_new = regularize_omega_conditioning(pos_Om_new, config.omega_cond_max)
+        model.pos_Omega[:N] = pos_Om_new

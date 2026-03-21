@@ -1,8 +1,10 @@
 """
-Direct GL(K) gauge transport for the Pure VFE Transformer.
+Gauge transport for the Pure VFE Transformer.
 
-No Lie algebra parameterization. Ω_i ∈ GL⁺(K_h) stored directly per head.
-Transport: Ω_ij = Ω_i · Ω_j⁻¹ (automatic cocycle condition).
+Supports two parameterizations (togglable via config.gauge_param):
+  'omega': Direct GL⁺(K_h) storage per head. Transport Ω_ij = Ω_i · Ω_j⁻¹.
+  'phi':   Lie algebra φ ∈ gl(K_h). Transport Ω_ij = exp(φ_i) · exp(-φ_j).
+
 Natural gradient: left-invariant metric on GL(K).
 
 Mathematical reference:
@@ -131,17 +133,7 @@ def grad_kl_Omega_i(mu_i, Sigma_i, mu_j, Sigma_j, Omega_i, Omega_j, beta_ij=None
     """
     ∂KL(q_i || Ω_ij · q_j)/∂Ω_i via chain rule through Ω_ij = Ω_i · Ω_j⁻¹.
 
-    ∂KL/∂Ω_i[a,b] = Σ_{c,d} (∂KL/∂Ω_ij[a,c]) · (∂Ω_ij/∂Ω_i[a,b])[a,c]
-
-    Since Ω_ij = Ω_i Ω_j⁻¹, ∂Ω_ij[a,c]/∂Ω_i[a,b] = δ_{ac} (Ω_j⁻¹)[b,c]
-    Actually: ∂(Ω_i M)[a,c]/∂Ω_i[a',b] = δ_{aa'} M[b,c]
-
-    So: ∂KL/∂Ω_i = (∂KL/∂Ω_ij) @ Ω_j⁻ᵀ  (right multiply by Ω_j⁻ᵀ)
-
-    Wait, let me be more careful.
-    Ω_ij = Ω_i @ Ω_j⁻¹ = Ω_i @ M where M = Ω_j⁻¹.
-    ∂(Ω_i M)/∂Ω_i = I ⊗ Mᵀ in Kronecker notation.
-    So ∂KL/∂Ω_i = ∂KL/∂Ω_ij @ Mᵀ = ∂KL/∂Ω_ij @ (Ω_j⁻¹)ᵀ = ∂KL/∂Ω_ij @ Ω_j⁻ᵀ
+    ∂KL/∂Ω_i = ∂KL/∂Ω_ij @ Ω_j⁻ᵀ
 
     Args:
         mu_i, Sigma_i: query Gaussian [..., K], [..., K, K]
@@ -204,8 +196,6 @@ def vfe_grad_Omega(mu_h, Sigma_h, Omega, beta, kl_ij, precomp):
         Om_inv = torch.linalg.inv(Om_h_s)
 
         # Compute Ω_ij = Ω_i @ Ω_j⁻¹ for all (i,j) pairs
-        # Om_h_s[:, :, None] is [B, N_i, 1, K_h, K_h]
-        # Om_inv[:, None, :] is [B, 1, N_j, K_h, K_h]
         Om_ij = Om_h_s[:, :, None] @ Om_inv[:, None, :]  # [B, N, N, K_h, K_h]
         Om_ij_inv = torch.linalg.inv(Om_ij)               # [B, N, N, K_h, K_h]
         Om_ij_invT = Om_ij_inv.transpose(-2, -1)
@@ -224,7 +214,6 @@ def vfe_grad_Omega(mu_h, Sigma_h, Omega, beta, kl_ij, precomp):
         # Term 1: -Λ δ μ_jᵀ
         Lam_delta = torch.einsum('bijpq,bijq->bijp', Lambda_ij, delta_ij)
         term1 = -Lam_delta.unsqueeze(-1) * mu_h_s[:, None, :].unsqueeze(-2)
-        # term1: [B, N_i, N_j, K_h, 1] * [B, 1, N_j, 1, K_h] = [B, N_i, N_j, K_h, K_h]
 
         # Term 2: -Λ (Σ_i + δδᵀ) Ω_ij⁻ᵀ
         outer_ij = delta_ij.unsqueeze(-1) * delta_ij.unsqueeze(-2)
@@ -241,7 +230,6 @@ def vfe_grad_Omega(mu_h, Sigma_h, Omega, beta, kl_ij, precomp):
         dKL_dOi = dKL_dOij @ Om_j_invT[:, None, :]  # [B, N_i, N_j, K_h, K_h]
 
         # Weighted sum: Σ_j β_ij · ∂KL/∂Ω_i
-        # beta_h: [B, N_i, N_j], dKL_dOi: [B, N_i, N_j, K_h, K_h]
         grad_h = torch.einsum('bij,bijpq->bipq', beta_h, dKL_dOi)  # [B, N, K_h, K_h]
 
         grad_Omega[:, :, h] = grad_h
@@ -267,10 +255,129 @@ def natural_grad_omega(grad_Omega, Omega):
 
     Returns: [..., K, K] natural gradient direction
     """
-    # Lie algebra element via left-invariant metric on GL(K):
-    # g_Ω(X,Y) = tr((Ω⁻¹X)ᵀ(Ω⁻¹Y)), so natural gradient = Ω Ωᵀ ∂F/∂Ω
     OmegaT = Omega.transpose(-2, -1)
     return Omega @ OmegaT @ grad_Omega
+
+
+# ---------------------------------------------------------------------------
+# Trust region and conditioning (ported from VFE dynamic)
+# ---------------------------------------------------------------------------
+
+def relative_trust_clip(nat_grad, Omega, trust_region=0.3):
+    """
+    Relative trust region clip for Omega natural gradient.
+
+    Clips ||nat_grad|| to trust_region × ||Omega|| (Frobenius norm).
+    Matches VFE dynamic's _retract_omega behavior.
+
+    Args:
+        nat_grad: [..., K, K] natural gradient
+        Omega: [..., K, K] current gauge frame
+        trust_region: max relative step size
+
+    Returns: [..., K, K] clipped natural gradient
+    """
+    nat_norm = nat_grad.flatten(-2).norm(dim=-1, keepdim=True).unsqueeze(-1)
+    om_norm = Omega.flatten(-2).norm(dim=-1, keepdim=True).unsqueeze(-1).clamp(min=1e-6)
+    max_upd = trust_region * om_norm
+    scale = torch.clamp(max_upd / (nat_norm + 1e-8), max=1.0)
+    return nat_grad * scale
+
+
+def regularize_omega_conditioning(Omega, cond_max=100.0):
+    """
+    Regularize ill-conditioned Omega by shrinking toward identity.
+
+    When condition number exceeds cond_max, blend Omega toward I:
+      Omega_new = 0.95 * Omega + 0.05 * I
+
+    Args:
+        Omega: [..., K, K] gauge frames
+        cond_max: maximum allowed condition number
+
+    Returns: [..., K, K] regularized gauge frames
+    """
+    K = Omega.shape[-1]
+    svs = torch.linalg.svdvals(Omega)
+    cond = svs[..., 0] / svs[..., -1].clamp(min=1e-8)
+    needs_reg = cond > cond_max
+    if needs_reg.any():
+        eye = torch.eye(K, device=Omega.device, dtype=Omega.dtype)
+        Omega = torch.where(
+            needs_reg.unsqueeze(-1).unsqueeze(-1),
+            0.95 * Omega + 0.05 * eye,
+            Omega
+        )
+    return Omega
+
+
+# ---------------------------------------------------------------------------
+# Phi (Lie algebra) path utilities
+# ---------------------------------------------------------------------------
+
+def make_gl_generators(K, device='cpu'):
+    """
+    Construct GL(K) generators: K² basis matrices E_{ab} with (E_{ab})_{ij} = δ_{ai}δ_{bj}.
+
+    Args:
+        K: dimension
+        device: torch device
+
+    Returns: (K², K, K) generators
+    """
+    n_gen = K * K
+    generators = torch.zeros(n_gen, K, K, device=device)
+    idx = 0
+    for a in range(K):
+        for b in range(K):
+            generators[idx, a, b] = 1.0
+            idx += 1
+    return generators
+
+
+def phi_to_omega(phi, generators):
+    """
+    Convert Lie algebra element φ to group element Ω = exp(Σ_a φ^a T_a).
+
+    Args:
+        phi: [..., n_gen] Lie algebra coordinates
+        generators: (n_gen, K, K) basis matrices
+
+    Returns: [..., K, K] group element
+    """
+    X = torch.einsum('...a,aij->...ij', phi, generators)
+    return torch.linalg.matrix_exp(X)
+
+
+def retract_phi(phi, delta_phi, max_norm=3.14159):
+    """
+    Retract phi update: clamp ||phi|| to max_norm.
+
+    Args:
+        phi: [..., n_gen] current Lie algebra element
+        delta_phi: [..., n_gen] update direction
+        max_norm: maximum norm (default π)
+
+    Returns: [..., n_gen] updated phi
+    """
+    phi_new = phi + delta_phi
+    norm = phi_new.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+    scale = torch.clamp(max_norm / norm, max=1.0)
+    return phi_new * scale
+
+
+def init_phi(shape, scale=0.01, device='cpu'):
+    """
+    Initialize Lie algebra elements near zero (identity group element).
+
+    Args:
+        shape: tuple, e.g. (V, H, n_gen_h) or (N, H, n_gen_h)
+        scale: perturbation magnitude
+        device: torch device
+
+    Returns: tensor of shape `shape`
+    """
+    return scale * torch.randn(shape, device=device)
 
 
 # ---------------------------------------------------------------------------

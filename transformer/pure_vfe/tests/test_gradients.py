@@ -256,6 +256,7 @@ class TestEStepMonotonicity:
         """VFE should not increase during E-step."""
         from ..config import PureVFEConfig
         from ..model import PureVFETransformer
+        from ..inference import e_step
 
         config = PureVFEConfig(
             vocab_size=100,
