@@ -2662,7 +2662,7 @@ class VariationalFFNDynamic(nn.Module):
                 else:
                     sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end].detach()
                 gen_h = self.generators[:, block_start:block_end, block_start:block_end]
-                kappa_h = self.kappa
+                kappa_h = self.kappa * math.sqrt(d_h)  # Normalize for block dimension
                 _phi_head_bep = [_phi_bep[h]] if _phi_bep is not None else None
 
                 beta_phi_h_result = compute_attention_weights(
@@ -3179,7 +3179,11 @@ class VariationalFFNDynamic(nn.Module):
                         sigma_p_h = sigma_p[:, :, block_start:block_end, block_start:block_end].contiguous()
                     gen_h = self.generators[:, block_start:block_end, block_start:block_end]
 
-                    kappa_h = self.kappa
+                    # Scale kappa by sqrt(d_h) to normalize KL across different-dim
+                    # super-blocks. Without this, larger blocks (e.g., 12-dim from
+                    # cross-coupled heads) produce proportionally larger KL values,
+                    # causing attention sharpness imbalance vs smaller blocks.
+                    kappa_h = self.kappa * math.sqrt(d_h)
                     _head_bep = [_mh_cached_bep[h]] if _mh_cached_bep is not None else None
 
                     alpha_h = alpha_effective[:, :, block_start:block_end] if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3 else alpha_effective
@@ -3604,9 +3608,10 @@ class VariationalFFNDynamic(nn.Module):
         # beta_current holds the last iteration's attention weights
         # (multihead: last head's beta; single-head: full beta)
         if self.implicit_em:
-            # For multihead, reconstruct full beta from beta_heads if available
+            # For multihead, reconstruct full beta from beta_heads if available.
+            # beta_heads is always defined when self.multihead_vfe=True (set at line 3088).
             try:
-                if self.multihead_vfe and 'beta_heads' in dir():
+                if self.multihead_vfe and 'beta_heads' in locals():
                     self._last_beta_for_implicit = torch.stack(beta_heads, dim=1).detach()
                 else:
                     self._last_beta_for_implicit = beta_current.detach()

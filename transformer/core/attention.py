@@ -2622,7 +2622,10 @@ class IrrepMultiHeadAttention(nn.Module):
                 device=generators.device, dtype=generators.dtype
             )
 
-            kappa_h = self.kappa_beta
+            # Scale kappa by sqrt(dim) to normalize KL across different-dim
+            # super-blocks (e.g., 12-dim cross-coupled vs 6-dim uncoupled).
+            # For uniform heads, all dim_head are equal so this is a constant factor.
+            kappa_h = self.kappa_beta * math.sqrt(dim_head)
 
             if self.gauge_mode == 'constant':
                 # Constant gauge: Ω_ij = Ω for all pairs.

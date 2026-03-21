@@ -240,6 +240,39 @@ class TestModelIntegration:
         model_cross = GaugeTransformerLM(base_config)
         assert model_cross.phi_dim == n_heads * d_head**2 + 2 * d_head**2
 
+    def test_non_adjacent_coupling_with_obs(self, base_config):
+        """Non-adjacent coupling with observation gradient (tests W_out permutation).
+
+        When heads are non-adjacent (e.g., 0 and 2), the reorder permutation
+        is non-trivial. W_out must be permuted to match the reordered mu basis
+        inside the transformer stack, otherwise the observation gradient
+        dCE/dmu is computed in the wrong coordinate system.
+        """
+        from transformer.core.model import GaugeTransformerLM
+        base_config['cross_couplings'] = [(0, 2), (2, 0)]
+        base_config['use_obs_in_vfe'] = True
+        base_config['ffn_n_iterations'] = 1
+        model = GaugeTransformerLM(base_config)
+        x = torch.randint(0, 50, (2, 8))
+        targets = torch.randint(0, 50, (2, 8))
+        logits = model(x, targets=targets)
+        assert logits.shape == (2, 8, 50)
+        logits.sum().backward()
+        # Verify non-trivial permutation was applied
+        assert model._cross_head_perm is not None
+        assert not np.array_equal(model._cross_head_perm, np.arange(24))
+
+    def test_multihead_vfe_with_coupling(self, base_config):
+        """Multi-head VFE with cross-coupling (tests kappa normalization)."""
+        from transformer.core.model import GaugeTransformerLM
+        base_config['cross_couplings'] = [(0, 1), (1, 0)]
+        base_config['multihead_vfe'] = True
+        model = GaugeTransformerLM(base_config)
+        x = torch.randint(0, 50, (2, 8))
+        logits = model(x)
+        assert logits.shape == (2, 8, 50)
+        logits.sum().backward()
+
     def test_forward_with_attention(self, base_config):
         """forward_with_attention works with cross-coupling."""
         from transformer.core.model import GaugeTransformerLM

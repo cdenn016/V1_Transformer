@@ -264,6 +264,9 @@ class GaugeTransformerLM(nn.Module):
         cross_couplings = config.get('cross_couplings', [])
         self.cross_couplings = cross_couplings
 
+        if cross_couplings and gauge_mode == 'trivial':
+            print("[WARN] cross_couplings have no effect with gauge_mode='trivial' (Ω=I, no mixing)")
+
         # Compute phi dimension (number of generators)
         if gauge_group == 'SO3':
             self.phi_dim = 3  # SO(3) has 3 generators
@@ -677,6 +680,13 @@ class GaugeTransformerLM(nn.Module):
         vfe_targets = targets if use_obs else None
         vfe_W_out = self.out_proj.weight if (use_obs and hasattr(self.out_proj, 'weight')) else None
 
+        # When cross-head coupling is active, mu inside the transformer stack is in
+        # the permuted basis. W_out must be permuted to match, otherwise the
+        # observation gradient dCE/dmu is computed in the wrong coordinate system.
+        if vfe_W_out is not None and getattr(self, '_cross_head_perm', None) is not None:
+            perm = self._perm_tensor.to(device=device)
+            vfe_W_out = vfe_W_out[:, perm]
+
         mu_q, sigma_q, phi, intermediates = self.transformer(
             mu_q,
             sigma_q,
@@ -871,6 +881,11 @@ class GaugeTransformerLM(nn.Module):
             # FFN sublayer
             mu_normalized = block.norm2(mu_q)
 
+            # Permute W_out to match cross-head reordered mu basis
+            _w_out_fwa = (self.out_proj.weight if hasattr(self.out_proj, 'weight') else None) if is_final else None
+            if _w_out_fwa is not None and getattr(self, '_cross_head_perm', None) is not None:
+                _w_out_fwa = _w_out_fwa[:, self._perm_tensor.to(device=device)]
+
             mu_ffn, sigma_ffn, phi_ffn, _bh = block.ffn(
                 mu=mu_normalized,
                 beta=beta,
@@ -879,7 +894,7 @@ class GaugeTransformerLM(nn.Module):
                 sigma=sigma_q,
                 mask=mask,
                 targets=targets if is_final else None,  # Only final layer gets observations
-                W_out=(self.out_proj.weight if hasattr(self.out_proj, 'weight') else None) if is_final else None,
+                W_out=_w_out_fwa,
                 token_ids=token_ids,  # Required for PriorBank lookup
                 omega=omega,
             )
@@ -1089,6 +1104,11 @@ class GaugeTransformerLM(nn.Module):
             # FFN sublayer — only final layer gets beta_history tracking
             mu_normalized = block.norm2(mu_q)
 
+            # Permute W_out to match cross-head reordered mu basis
+            _w_out_tf = (self.out_proj.weight if hasattr(self.out_proj, 'weight') else None) if is_final else None
+            if _w_out_tf is not None and getattr(self, '_cross_head_perm', None) is not None:
+                _w_out_tf = _w_out_tf[:, self._perm_tensor.to(device=device)]
+
             mu_ffn, sigma_ffn, phi_ffn, bh = block.ffn(
                 mu=mu_normalized,
                 beta=beta,
@@ -1097,7 +1117,7 @@ class GaugeTransformerLM(nn.Module):
                 sigma=sigma_q,
                 mask=mask,
                 targets=targets if is_final else None,
-                W_out=(self.out_proj.weight if hasattr(self.out_proj, 'weight') else None) if is_final else None,
+                W_out=_w_out_tf,
                 return_beta_history=is_final,  # Only final layer tracks VFE iterations
                 token_ids=token_ids,  # Required for PriorBank lookup
                 omega=omega,
