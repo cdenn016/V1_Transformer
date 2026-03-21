@@ -3167,9 +3167,13 @@ class VariationalFFNDynamic(nn.Module):
                 discrete_obs_grad = torch.matmul(grad_error, W_out)
                 grad_mu = grad_mu + discrete_obs_grad
 
-                # Observation gradient for sigma via expected CE Hessian diagonal:
-                # ∂E_q[CE]/∂σ_k = 0.5 * [E_p[W[:,k]²] - E_p[W[:,k]]²]
-                # = 0.5 * Var_p[W[:,k]] ≥ 0: shrinks σ near observed tokens.
+                # Observation gradient for sigma (exact via Stein's lemma):
+                #
+                #   ∂/∂σ_k E_q[CE(z)] = (1/2) · E_q[∂²CE/∂z_k²]
+                #
+                # This is EXACT for any smooth loss, not a Taylor approximation.
+                # For CE with softmax: ∂²CE/∂z_k² = Var_p[W[:,k]] ≥ 0.
+                # We approximate E_q[H_kk(z)] ≈ H_kk(μ) (zeroth-order in σ).
                 if self.obs_sigma_gradient:
                     W_out_sq = W_out ** 2                                # (V, K)
                     EW2 = torch.matmul(probs, W_out_sq)                  # (B, N, K)
