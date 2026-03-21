@@ -307,6 +307,8 @@ VFE_EM_CONFIG = {
     'alpha':        0.075,        # KL(q||p) self-consistency weight
     'alpha_phi':    0.1,          # Gauge prior: (α_φ/2)||φ||² mass term (0 = disabled)
     'beta':         0,            # beta=lambda_beta in loss: belief alignment weight (0 = off)
+    'beta_warmup_steps': 2000,    # Linear warmup for beta: 0 → target over this many steps
+                                  # Lets CE differentiate embeddings before coupling kicks in
     'lambda_gamma': 0,            # Model coupling: Σγ_ij·KL(s_i||Ω s_j) (0 = off)
     'lambda_hyper': 0,            # Hyper-prior: KL(s_i||h) models to centroid (0 = off)
     'kappa_gamma':  1,            # Temperature for γ_ij coupling weights
@@ -1473,6 +1475,16 @@ class PublicationTrainer(FastTrainer):
         if use_delta_rule and hasattr(self.model, 'out_proj') and not _tied_weights:
             self.model.out_proj.weight.requires_grad = False
 
+        # Beta warmup: ramp lambda_beta from 0 → target over beta_warmup_steps.
+        # Prevents uniform attention collapse by letting CE differentiate embeddings
+        # before belief coupling gradient (which is uniform when β ≈ 1/N) kicks in.
+        target_beta = self.config.beta
+        beta_warmup = getattr(self.config, 'beta_warmup_steps', 0)
+        if beta_warmup > 0 and self.global_step < beta_warmup:
+            effective_beta = target_beta * (self.global_step / beta_warmup)
+        else:
+            effective_beta = target_beta
+
         # Forward pass with full metrics (with optional AMP)
         if self.scaler is not None:
             # Mixed precision forward pass
@@ -1491,7 +1503,7 @@ class PublicationTrainer(FastTrainer):
                         input_ids,
                         target_ids,
                         alpha=self.config.alpha,
-                        lambda_beta=self.config.beta,  # config['beta'] → training loss belief coupling
+                        lambda_beta=effective_beta,
                         lambda_gamma=self.config.lambda_gamma,
                         kappa_gamma=self.config.kappa_gamma,
                         lambda_hyper=self.config.lambda_hyper,
@@ -1518,7 +1530,7 @@ class PublicationTrainer(FastTrainer):
                     input_ids,
                     target_ids,
                     alpha=self.config.alpha,
-                    lambda_beta=self.config.beta,  # config['beta'] → training loss belief coupling
+                    lambda_beta=effective_beta,
                     lambda_gamma=self.config.lambda_gamma,
                     kappa_gamma=self.config.kappa_gamma,
                     lambda_hyper=self.config.lambda_hyper,
@@ -1698,6 +1710,7 @@ class PublicationTrainer(FastTrainer):
             # Crucial attention interpretability metrics
             'attention_entropy': full_metrics.get('attention/entropy', 0),
             'attention_concentration': full_metrics.get('attention/concentration', 0),
+            'schedule/effective_beta': effective_beta,
         }
 
         # Carry over Bayesian alpha diagnostics
