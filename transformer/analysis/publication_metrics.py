@@ -995,6 +995,8 @@ class PublicationMetrics:
             for layer_idx, block in blocks:
                 exp_delta = self._extract_exp_delta(model, block)
                 if exp_delta is None:
+                    if verbose:
+                        print(f"  [HOLONOMY] Skipping layer {layer_idx}: could not extract exp_delta")
                     continue
 
                 snap = compute_holonomy_snapshot(
@@ -1024,13 +1026,12 @@ class PublicationMetrics:
             'holonomy/mean_norm': profile.global_mean_norm,
             'holonomy/max_norm': profile.global_max_norm,
         }
-        # Use first snapshot for detailed metrics (aggregated across layers)
+        # Aggregate detailed metrics across all layers
         if snapshots:
-            agg = snapshots[0]
             log_dict.update({
-                'holonomy/frac_gt_0.1': agg.frac_gt_01,
-                'holonomy/spectral_gap': agg.mean_spectral_gap,
-                'holonomy/wilson_trace': agg.mean_wilson_trace,
+                'holonomy/frac_gt_0.1': float(np.mean([s.frac_gt_01 for s in snapshots])),
+                'holonomy/spectral_gap': float(np.mean([s.mean_spectral_gap for s in snapshots])),
+                'holonomy/wilson_trace': float(np.mean([s.mean_wilson_trace for s in snapshots])),
             })
 
         if verbose:
