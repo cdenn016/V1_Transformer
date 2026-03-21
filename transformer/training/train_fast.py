@@ -104,6 +104,7 @@ class FastTrainingConfig:
     lambda_gamma: float = 0.0     # Model alignment (disabled by default)
     kappa_gamma: float = 1.0      # Temperature for γ_ij coupling weights
     lambda_hyper: float = 0.0     # Hyper-prior: KL(s_i||h) models to centroid
+    alpha_phi: float = 0.0        # Gauge prior: (α_φ/2)||φ||² mass term
 
     # VFE observation coupling
     use_obs_in_vfe: bool = False  # Pass targets into VFE E-step (last layer only)
@@ -461,8 +462,10 @@ class FastTrainer:
                     lambda_beta=self.config.beta,
                     lambda_gamma=self.config.lambda_gamma,
                     kappa_gamma=self.config.kappa_gamma,
+                    lambda_hyper=self.config.lambda_hyper,
                     pad_token_id=self.pad_token_id,
-                    
+                    use_obs_in_vfe=self.config.use_obs_in_vfe,
+                    alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
                 )
         else:
             loss, metrics = compute_free_energy_loss(
