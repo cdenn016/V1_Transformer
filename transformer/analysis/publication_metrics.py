@@ -1034,10 +1034,31 @@ class PublicationMetrics:
                 'holonomy/wilson_trace': float(np.mean([s.mean_wilson_trace for s in snapshots])),
             })
 
+        # Track connection weight norms to verify W is actually evolving
+        w_norms = []
+        for _, block in blocks:
+            gc = getattr(block, 'gauge_connection', None)
+            if gc is not None:
+                W = getattr(gc, 'W', None)  # bilinear
+                if W is not None:
+                    w_norms.append(W.data.norm().item())
+                else:
+                    # MLP: track output layer weight norm
+                    net = getattr(gc, 'net', None)
+                    if net is not None:
+                        w_norms.append(net[-1].weight.data.norm().item())
+        if w_norms:
+            log_dict['holonomy/connection_w_norm'] = float(np.mean(w_norms))
+
         if verbose:
-            print(f"  [HOLONOMY] mean ‖C-I‖={profile.global_mean_norm:.4f} | "
-                  f"max={profile.global_max_norm:.4f} | "
-                  f"frac>0.1={log_dict.get('holonomy/frac_gt_0.1', 0):.3f}")
+            w_info = f" | ‖W‖={np.mean(w_norms):.6f}" if w_norms else ""
+            # Use .6f precision to detect slow drift that .4f would hide
+            norm_std = float(np.std([s.std_norm for s in snapshots])) if snapshots else 0.0
+            print(f"  [HOLONOMY] mean ‖C-I‖={profile.global_mean_norm:.6f} | "
+                  f"max={profile.global_max_norm:.6f} | "
+                  f"std={norm_std:.6f} | "
+                  f"frac>0.1={log_dict.get('holonomy/frac_gt_0.1', 0):.3f}"
+                  f"{w_info}")
 
         return log_dict
 
@@ -1191,17 +1212,41 @@ class PublicationMetrics:
         Uses the raw connection delta (without cocycle_relaxation scaling)
         so that holonomy diagnostics measure the connection's intrinsic
         curvature even when cocycle_relaxation is scheduled from 0→1.
+
+        When use_prior_bank=True, uses PriorBank embeddings (which are the
+        actual inputs to gauge_connection during training) instead of the
+        unused token_embed.mu_embed weights.
         """
         try:
-            embed = getattr(model, 'token_embed', None) or getattr(model, 'token_embedding', None)
-            if embed is None:
-                return None
-            mu_embed = getattr(embed, 'mu_embed', None)
-            if mu_embed is None:
-                return None
+            # Prefer PriorBank embeddings when available — these are the actual
+            # inputs to gauge_connection during training. Using token_embed when
+            # prior_bank is active would show frozen diagnostics because
+            # token_embed.mu_embed never receives gradients in that mode.
+            prior_bank = getattr(model, 'prior_bank', None)
+            if prior_bank is not None and getattr(model, 'use_prior_bank', False):
+                if getattr(prior_bank, 'gauge_fixed_priors', False):
+                    # Gauge-fixed: mu = R_v @ base_mu. Sample first N tokens.
+                    N = min(32, getattr(prior_bank, 'vocab_size', 32))
+                    token_ids = torch.arange(N, device=next(model.parameters()).device)
+                    pb_out = prior_bank.encode(token_ids.unsqueeze(0))
+                    mu = pb_out[0]  # (1, N, K)
+                else:
+                    # Standard PriorBank: per-token mu lookup
+                    prior_mu = getattr(prior_bank, 'prior_mu', None)
+                    if prior_mu is None:
+                        return None
+                    N = min(32, prior_mu.shape[0])
+                    mu = prior_mu[:N].unsqueeze(0)  # (1, N, K)
+            else:
+                embed = getattr(model, 'token_embed', None) or getattr(model, 'token_embedding', None)
+                if embed is None:
+                    return None
+                mu_embed = getattr(embed, 'mu_embed', None)
+                if mu_embed is None:
+                    return None
 
-            N = min(32, mu_embed.weight.shape[0])
-            mu = mu_embed.weight[:N].unsqueeze(0)  # (1, N, K)
+                N = min(32, mu_embed.weight.shape[0])
+                mu = mu_embed.weight[:N].unsqueeze(0)  # (1, N, K)
 
             generators = getattr(model, 'generators', None)
             if generators is None:
