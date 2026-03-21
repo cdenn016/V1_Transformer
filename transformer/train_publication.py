@@ -283,15 +283,13 @@ EM_CONFIG = {
     
     
     # === VFE loss weights (M-step objective) ===
-    # Must match E-step: same F, same coefficients. E-step uses ffn_alpha=1,
-    # alpha=1: once obs warmup completes, E-step produces data-grounded beliefs.
-    # KL(q*||p) carries genuine signal: "adjust priors toward beliefs that
-    # explain the data." IFT scale also uses ffn_alpha, so CE→embeddings at s_k≈0.5.
-    # beta=0: alignment term is vacuum-seeking in M-step (minimizes all pairwise
-    # KLs → homogeneous state). Even beta=0.01 kills attention. E-step handles
-    # alignment internally.
-    'alpha':        1.0,                   # KL(q*||p) — meaningful after obs warmup
-    'beta':         0.0,                    # = ffn_lambda_belief (belief alignment)
+    # alpha=0: KL(q*||p) homogenizes with 1-iter smoothed q*. IFT scale uses
+    # fixed ffn_alpha=1 → CE reaches embeddings at s_k ≈ 0.5 regardless.
+    # beta=0: alignment term is vacuum-seeking. E-step handles it internally.
+    # obs_warmup: when ready, set obs_warmup_steps > 0 to enable obs in E-step
+    # after warmup, then alpha=1 becomes meaningful (data-grounded q*).
+    'alpha':        0.0,                   # KL(q*||p) — 0 until obs_warmup proven
+    'beta':         0.0,                   # β·KL alignment — MUST be 0 (vacuum-seeking)
     'alpha_phi':    0.1,               # Gauge prior: (α_φ/2)||φ||²
     'lambda_hyper': 0.1,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
     'lambda_gamma': 0.0,

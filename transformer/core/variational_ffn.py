@@ -3614,7 +3614,12 @@ class VariationalFFNDynamic(nn.Module):
             _beta_for_scale = getattr(self, '_last_beta_for_implicit', None)
 
             if _beta_for_scale is not None:
-                _alpha_for_scale = alpha_effective if self.learnable_alpha else self.alpha
+                # Always use fixed ffn_alpha for IFT scale, NOT adaptive alpha_i.
+                # Adaptive α_i gates E-step dynamics (shrinks as KL grows), but using
+                # it for IFT creates a death spiral: α_i↓ → scale↓ → weak CE signal
+                # → embeddings don't learn → more smoothing → KL↑ → α_i↓ further.
+                # The IFT scale should be a stable structural property.
+                _alpha_for_scale = self.alpha
                 mu_scale, sigma_scale = compute_implicit_em_scales(
                     alpha_i=_alpha_for_scale,
                     sigma_p=sigma_p,
