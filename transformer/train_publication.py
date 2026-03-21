@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Thu Mar 12 08:09:57 2026
-
-@author: chris and christine
-"""
 
 
 # =============================================================================
@@ -248,17 +242,15 @@ VFE_EM_CONFIG = {
     'diagonal_covariance': True,
 
     # === M-step: implicit differentiation ===
-    # IFT-based gradient: detaches beliefs at E-step start, re-attaches via
-    # s_k = (α/σ²_p) / (α/σ²_p + Σβ/σ²_q). Requires alpha > 0 in loss.
     'implicit_em': True,
-    'amortized_inference': False,   # Proper EM: priors are fixed reference in E-step
+    'amortized_inference': False,
 
     # === VFE loss weights (M-step objective) ===
-    'alpha': 0.1,                   # KL(q*||p) self-coupling — MUST be > 0 for implicit_em
-    'alpha_phi': 0.1,               # Gauge prior: (α_φ/2)||φ||²
-    'lambda_hyper': 0.1,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
-    'beta': 0.0,                    # Belief alignment in loss (λ_β)
-    'lambda_gamma': 0.0,            # Model coupling (off)
+    'alpha': 0.1,
+    'alpha_phi': 0.1,
+    'lambda_hyper': 0.1,
+    'beta': 0.0,
+    'lambda_gamma': 0.0,
     'kappa_gamma': 1.0,
 
     # === Phi gradient geometry ===
@@ -295,10 +287,9 @@ VFE_EM_CONFIG = {
 
     # === Logging ===
     'log_interval': 100,
-    'eval_interval': 1000,
+    'eval_interval': 500,
     'checkpoint_interval': 25000,
 }
-
 
 # =============================================================================
 # CONFIG 3: PURE VFE TRANSFORMER (No backprop, natural gradient only)
@@ -681,6 +672,8 @@ STANDARD_ROPE_D90_CONFIG = {
 
 
 # =============================================================================
+
+
 
 
 
@@ -1263,9 +1256,9 @@ class PublicationTrainer(FastTrainer):
                             attn_head = beta_layer_np[head_idx]  # (N, N)
                             attn_plot = attn_head.copy()
                             #np.fill_diagonal(attn_plot, np.nan)  # Mask diagonal
-                            attn_plot = np.log10(np.maximum(attn_plot, 1e-6))  # Log scale
+                            attn_plot = np.log10(np.maximum(attn_plot, 1e-5))  # Log scale
 
-                            im = ax.imshow(attn_plot, cmap='viridis', aspect='auto', vmin=-6, vmax=0)
+                            im = ax.imshow(attn_plot, cmap='viridis', aspect='auto', vmin=-5, vmax=0)
                             ax.set_xlabel('Key Position (j)')
                             ax.set_ylabel('Query Position (i)')
 
