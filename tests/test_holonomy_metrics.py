@@ -274,7 +274,10 @@ class TestHolonomyCallback:
 
     @pytest.fixture(autouse=True)
     def _require_lightning(self):
-        pytest.importorskip('pytorch_lightning')
+        try:
+            pytest.importorskip('pytorch_lightning')
+        except pytest.skip.Exception:
+            pytest.importorskip('lightning.pytorch')
 
     def test_callback_init(self):
         from transformer.training.holonomy_callback import HolonomyCallback

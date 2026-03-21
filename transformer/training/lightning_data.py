@@ -19,7 +19,10 @@ Usage:
     print(f"Vocab size: {dm.vocab_size}")
 """
 
-import pytorch_lightning as pl
+try:
+    import pytorch_lightning as pl
+except ImportError:
+    import lightning.pytorch as pl
 from torch.utils.data import DataLoader
 from typing import Optional
 

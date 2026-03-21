@@ -207,12 +207,20 @@ PURE_FEP_CONFIG = {
 # Implementation — no need to edit below this line
 # ============================================================================
 
-import pytorch_lightning as pl
-from pytorch_lightning.callbacks import (
-    ModelCheckpoint,
-    LearningRateMonitor,
-    EarlyStopping,
-)
+try:
+    import pytorch_lightning as pl
+    from pytorch_lightning.callbacks import (
+        ModelCheckpoint,
+        LearningRateMonitor,
+        EarlyStopping,
+    )
+except ImportError:
+    import lightning.pytorch as pl
+    from lightning.pytorch.callbacks import (
+        ModelCheckpoint,
+        LearningRateMonitor,
+        EarlyStopping,
+    )
 
 from transformer.training.lightning_data import GaugeDataModule
 
@@ -398,7 +406,10 @@ def main():
     # -----------------------------------------------------------
     if config.get('use_wandb', False):
         try:
-            from pytorch_lightning.loggers import WandbLogger
+            try:
+                from pytorch_lightning.loggers import WandbLogger
+            except ImportError:
+                from lightning.pytorch.loggers import WandbLogger
             logger = WandbLogger(
                 project=config.get('wandb_project', 'gauge-transformer'),
                 name=config.get('wandb_run_name') or ACTIVE_MODE,
