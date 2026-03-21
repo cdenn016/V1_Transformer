@@ -111,8 +111,6 @@ class GaugeTransformerLitModule(pl.LightningModule):
             )
             ce_loss = metrics['loss/ce']
 
-        # Count non-padding tokens for proper weighting
-        non_pad = (target_ids != self.pad_token_id).sum().item()
         ppl = math.exp(min(ce_loss, 20.0))
 
         self.log('val/ce_loss', ce_loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)

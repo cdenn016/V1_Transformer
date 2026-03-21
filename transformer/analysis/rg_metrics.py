@@ -477,7 +477,7 @@ def detect_clusters_spectral(
             # Find largest gap in eigenvalues
             eigengaps = eigenvalues[1:max_clusters] - eigenvalues[:max_clusters-1]
             if len(eigengaps) > 0:
-                n_clusters_detected = eigengaps.argmax().item() + 2  # +2 because gap at index i means (i+2) clusters
+                n_clusters_detected = eigengaps.argmax().item() + 1  # +1 because gap at index i means (i+1) clusters
                 n_clusters_detected = max(min_clusters, min(n_clusters_detected, max_clusters))
             else:
                 n_clusters_detected = min_clusters

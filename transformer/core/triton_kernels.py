@@ -389,7 +389,7 @@ if TRITON_AVAILABLE:
             kl_block = tl.maximum(kl_block, 0.0)
             kl_total += kl_block
 
-        tl.store(kl_out_ptr + b * N * N + i * N + j, kl_total)
+        tl.atomic_add(kl_out_ptr + b * N * N + i * N + j, kl_total)
 
 
 def _next_power_of_2(n: int) -> int:

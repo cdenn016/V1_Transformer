@@ -2516,7 +2516,7 @@ def main():
 
     # Set random seed for reproducibility
     # Default to seed=42 if not specified, for consistent results
-    seed = SEED
+    seed = args.seed if args.seed is not None else SEED
     import random
     import numpy as np
     random.seed(seed)

@@ -222,7 +222,7 @@ class FastTrainer:
         self.patience_counter = 0  # Early stopping counter
 
         # Mixed precision (using modern AMP API for PyTorch 2.x / CUDA 12+)
-        self.scaler = torch.amp.GradScaler('cuda') if config.use_amp else None
+        self.scaler = torch.amp.GradScaler('cuda') if config.use_amp and self.device.type == 'cuda' else None
 
         # W&B logging
         if config.use_wandb and WANDB_AVAILABLE:
