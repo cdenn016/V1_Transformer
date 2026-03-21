@@ -180,11 +180,10 @@ def _retract_phi(
         bch_order = 0 if is_glk else 1
 
     if not RETRACTION_AVAILABLE:
-        # Fallback: simple gradient descent with trust region
+        # Fallback: gradient descent with constant trust region in Lie algebra norm
         update = step_size * delta_phi
-        phi_norm = torch.norm(phi, dim=-1, keepdim=True).clamp(min=0.1)
         update_norm = torch.norm(update, dim=-1, keepdim=True)
-        scale = torch.clamp(trust_region * phi_norm / (update_norm + eps), max=1.0)
+        scale = torch.clamp(trust_region / (update_norm + eps), max=1.0)
         phi_new = phi + scale * update
         # Clamp to max norm
         phi_new_norm = torch.norm(phi_new, dim=-1, keepdim=True)
@@ -207,7 +206,6 @@ def _retract_phi(
             max_norm=max_norm,
             bch_order=bch_order,
             eps=eps,
-            grad_clip=10.0,
         )
     elif is_son:
         # SO(N) is compact - can use standard settings
@@ -222,11 +220,10 @@ def _retract_phi(
             eps=eps,
         )
     else:
-        # Unknown gauge group - use conservative fallback
+        # Unknown gauge group - conservative fallback with constant trust region
         update = step_size * delta_phi
-        phi_norm = torch.norm(phi, dim=-1, keepdim=True).clamp(min=0.1)
         update_norm = torch.norm(update, dim=-1, keepdim=True)
-        scale = torch.clamp(trust_region * phi_norm / (update_norm + eps), max=1.0)
+        scale = torch.clamp(trust_region / (update_norm + eps), max=1.0)
         phi_new = phi + scale * update
         phi_new_norm = torch.norm(phi_new, dim=-1, keepdim=True)
         phi_new = torch.where(
@@ -2308,11 +2305,16 @@ class VariationalFFNDynamic(nn.Module):
         step_size: float,
         trust_region: float = 0.3,
     ) -> torch.Tensor:
-        """Retract Omega update on GL(K) manifold using left-invariant natural gradient.
+        """Retract Omega update on GL(K) via Lie algebra clipping.
 
-        Natural gradient: ΔΩ = Ω · (Ωᵀ · ∂F/∂Ω) (left-invariant metric on GL(K))
-        Trust region: clip Frobenius norm of update
-        Update: Ω_new = Ω - η · ΔΩ
+        Computes the natural gradient in the Lie algebra gl(K):
+          ξ = Ωᵀ · ∂F/∂Ω           (pullback to Lie algebra)
+          clip ||ξ||_F ≤ trust_region  (Riemannian trust region)
+          ΔΩ = Ω · ξ_clipped        (push forward)
+          Ω_new = Ω - η · ΔΩ        (Euler retraction ≈ Ω·exp(-η·ξ))
+
+        The Riemannian norm ||ξ||_F is invariant under left translation,
+        so the trust region is constant in the intrinsic geometry.
 
         When irrep_dims is set, works block-diagonally to avoid O(K³) matmuls
         on the full K×K matrix (e.g., 5×10×10 instead of 50×50).
@@ -2321,7 +2323,7 @@ class VariationalFFNDynamic(nn.Module):
             omega: Current group elements (B, N, K, K)
             grad_omega: Euclidean gradient ∂F/∂Ω (B, N, K, K)
             step_size: Learning rate
-            trust_region: Maximum relative Frobenius norm of update
+            trust_region: Max Riemannian step size ||ξ||_F
 
         Returns:
             omega_new: Updated group elements (B, N, K, K)
@@ -2330,7 +2332,6 @@ class VariationalFFNDynamic(nn.Module):
 
         if irrep_dims is not None:
             # Block-diagonal retraction: process each head block independently
-            # Avoids full K×K matmuls when omega is block-diagonal
             omega_new = omega.clone()
             block_start = 0
             for d in irrep_dims:
@@ -2338,34 +2339,33 @@ class VariationalFFNDynamic(nn.Module):
                 om_blk = omega[:, :, block_start:block_end, block_start:block_end]
                 gr_blk = grad_omega[:, :, block_start:block_end, block_start:block_end]
 
-                # Natural gradient per block: ΔΩ_h = Ω_h · Ω_hᵀ · ∂F/∂Ω_h
+                # Lie algebra element per block: ξ_h = Ω_hᵀ · ∂F/∂Ω_h
                 omT = om_blk.transpose(-2, -1)
-                nat_blk = om_blk @ omT @ gr_blk
+                xi_blk = omT @ gr_blk
 
-                # Trust region clip per block
-                nat_norm = torch.norm(nat_blk.flatten(-2), dim=-1, keepdim=True).unsqueeze(-1)
-                om_norm = torch.norm(om_blk.flatten(-2), dim=-1, keepdim=True).unsqueeze(-1).clamp(min=1e-6)
-                max_upd = trust_region * om_norm
-                scale = torch.clamp(max_upd / (nat_norm + 1e-8), max=1.0)
-                nat_blk = nat_blk * scale
+                # Clip in Lie algebra norm (= Riemannian norm)
+                xi_norm = xi_blk.flatten(-2).norm(dim=-1, keepdim=True).unsqueeze(-1)
+                scale = torch.clamp(trust_region / (xi_norm + 1e-8), max=1.0)
+                xi_blk = xi_blk * scale
 
-                omega_new[:, :, block_start:block_end, block_start:block_end] = om_blk - step_size * nat_blk
+                # Push forward and Euler retract: Ω·(I - η·ξ)
+                omega_new[:, :, block_start:block_end, block_start:block_end] = (
+                    om_blk - step_size * (om_blk @ xi_blk)
+                )
                 block_start = block_end
             return omega_new
 
         # Fallback: full K×K retraction (no irrep structure)
         OmegaT = omega.transpose(-2, -1)
-        nat_grad = omega @ OmegaT @ grad_omega
+        xi = OmegaT @ grad_omega
 
-        # Trust region clip
-        nat_norm = torch.norm(nat_grad.flatten(-2), dim=-1, keepdim=True).unsqueeze(-1)
-        omega_norm = torch.norm(omega.flatten(-2), dim=-1, keepdim=True).unsqueeze(-1).clamp(min=1e-6)
-        max_update = trust_region * omega_norm
-        scale = torch.clamp(max_update / (nat_norm + 1e-8), max=1.0)
-        nat_grad = nat_grad * scale
+        # Clip in Lie algebra norm
+        xi_norm = xi.flatten(-2).norm(dim=-1, keepdim=True).unsqueeze(-1)
+        scale = torch.clamp(trust_region / (xi_norm + 1e-8), max=1.0)
+        xi = xi * scale
 
-        # Update
-        omega_new = omega - step_size * nat_grad
+        # Push forward and Euler retract
+        omega_new = omega - step_size * (omega @ xi)
 
         return omega_new
 

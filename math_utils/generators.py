@@ -2218,62 +2218,51 @@ def retract_glK_torch(
     max_norm: float = 1.0,  # Smaller than SO(N) - GL(K) doesn't have periodicity
     bch_order: int = 0,  # Use simple addition - BCH bracket can amplify noise
     eps: float = 1e-6,
-    grad_clip: float = 10.0,  # Clip gradient norm before scaling
+    **kwargs,  # Accept but ignore legacy grad_clip parameter
 ) -> 'torch.Tensor':
     """
-    Retract phi update in GL(K) with trust region.
+    Retract phi update in GL(K) with constant trust region.
 
     Unlike SO(N), GL(K) doesn't require orthogonality constraints.
     We use conservative settings since GL(K) can produce ill-conditioned
     transport operators more easily than SO(K).
 
+    The trust region clips ||update||_F ≤ trust_region (constant).
+    Since phi lives in the Lie algebra gl(K) (a flat vector space),
+    the Frobenius norm is the intrinsic metric. Scaling with ||phi||
+    would create a feedback loop.
+
     Steps:
-    1. Clip gradient to prevent explosions
-    2. Scale update by step_size
-    3. Apply trust region (limit relative change)
-    4. Compose (simple addition for stability, or BCH if requested)
-    5. Clamp final norm
+    1. Scale update by step_size
+    2. Apply trust region (constant Lie algebra norm clip)
+    3. Compose (simple addition for stability, or BCH if requested)
+    4. Clamp final norm
 
     Args:
         phi: Current gauge frames (..., n_gen) where n_gen = K²
         delta_phi: Update direction (typically -grad_phi) (..., n_gen)
         generators: Transport generators (n_gen, K, K); only n_gen is used
         step_size: Learning rate for the update
-        trust_region: Maximum relative change ||delta_phi|| / ||phi|| per update
+        trust_region: Max step size ||update||_F in Lie algebra norm
         max_norm: Maximum allowed norm for phi (no periodicity for GL(K))
         bch_order: Order of BCH expansion (0=add, 1=first correction)
         eps: Numerical stability constant
-        grad_clip: Maximum gradient norm (per-element clipping)
 
     Returns:
         phi_new: Updated gauge frames (..., n_gen)
     """
     import torch
 
-    # Clip gradient to prevent explosions
-    delta_norm = torch.norm(delta_phi, dim=-1, keepdim=True)
-    clip_scale = torch.clamp(grad_clip / (delta_norm + eps), max=1.0)
-    delta_phi_clipped = clip_scale * delta_phi
+    # Scale update by step size
+    update = step_size * delta_phi
 
-    # Scale update
-    update = step_size * delta_phi_clipped
-
-    # Trust region: limit step size relative to current phi
-    phi_norm = torch.norm(phi, dim=-1, keepdim=True).clamp(min=0.1)
+    # Trust region: clip ||update|| to constant trust_radius.
+    # Since phi lives in the Lie algebra gl(K) (a flat vector space),
+    # the Frobenius norm IS the intrinsic metric — no need to scale
+    # with ||phi|| (which would create a feedback loop).
     update_norm = torch.norm(update, dim=-1, keepdim=True)
-
-    # Scale down if update is too large relative to current phi
-    scale = torch.clamp(trust_region * phi_norm / (update_norm + eps), max=1.0)
+    scale = torch.clamp(trust_region / (update_norm + eps), max=1.0)
     update = scale * update
-
-    # Additional absolute clipping on update magnitude
-    update_norm_after = torch.norm(update, dim=-1, keepdim=True)
-    max_update = 0.5  # Max absolute update per step
-    update = torch.where(
-        update_norm_after > max_update,
-        update * max_update / (update_norm_after + eps),
-        update
-    )
 
     # Compose: use simple addition for GL(K) stability (BCH bracket can explode)
     if bch_order == 0:
