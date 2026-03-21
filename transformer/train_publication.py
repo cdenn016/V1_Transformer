@@ -200,7 +200,9 @@ STANDARD_CONFIG = {
 # =============================================================================
 # Gauge-covariant VFE transformer with proper E/M separation:
 #
-#   E-step: Natural gradient descent on F w.r.t. (μ_q, Σ_q, φ) inside forward pass.
+#   E-step: Natural gradient descent on FULL F (prior + alignment + observation)
+#           w.r.t. (μ_q, Σ_q, φ) inside forward pass. Observations ground beliefs
+#           in data — without them, E-step just smooths toward vacuum.
 #           Fisher-preconditioned μ, SPD retraction for Σ, Killing-form for φ.
 #           Adaptive α_i = c0/(b0 + KL) gates prior coupling per agent.
 #
@@ -240,6 +242,11 @@ EM_CONFIG = {
     'ffn_alpha': 1.0,               # Prior coupling inside VFE E-step
     'ffn_lambda_belief': 1.0,       # Belief alignment inside VFE E-step
     'ffn_learnable_alpha': True,    # Adaptive α_i = c0/(b0 + KL) per dimension
+    'use_obs_in_vfe': True,         # Observations in E-step: -E_q[log p(o|k)]
+                                    # NOT cheating with implicit_em — beliefs are detached,
+                                    # obs gradient can't reach embeddings via backprop.
+                                    # Without this, E-step has no data-dependent force and
+                                    # just smooths beliefs toward vacuum.
     'evolve_sigma': True,
     'evolve_phi': True,
     'evolve_phi_e_step': True,
@@ -250,15 +257,15 @@ EM_CONFIG = {
     'amortized_inference': False,
 
     # === VFE loss weights (M-step objective) ===
-    # With n_iterations=1, E-step hasn't converged so ∂F/∂q ≠ 0.
-    # The alignment term (beta) in the loss directly minimizes pairwise KLs
-    # → homogenizes embeddings → uniform attention. Even beta=0.01 kills it.
-    # At convergence the envelope theorem makes this term's M-step contribution
-    # zero anyway, so beta=0 is correct for finite iterations.
-    # The IFT scale uses ffn_alpha (=1.0), not loss alpha, so CE→embeddings
-    # works at s_k≈0.5 even with alpha=0 here.
-    'alpha': 0.0,                   # KL(q*||p) — set 0; IFT scale uses ffn_alpha
-    'beta': 0.0,                    # β·KL alignment — MUST be 0 (homogenizes)
+    # alpha=1: KL(q*||p) now meaningful because E-step includes observations,
+    # so q* is data-grounded (not vacuum-smoothed). ∂KL/∂p tells embeddings
+    # "adjust priors toward the beliefs that explain the data."
+    # beta=0: alignment term is vacuum-seeking in M-step (minimizes all pairwise
+    # KLs → homogeneous state). Even beta=0.01 kills attention. The E-step
+    # handles alignment internally; at convergence the envelope theorem makes
+    # this term's M-step contribution through q* vanish anyway.
+    'alpha': 1.0,                   # KL(q*||p) — meaningful with obs in E-step
+    'beta': 0.0,                    # β·KL alignment — MUST be 0 (vacuum-seeking)
     'alpha_phi': 0.1,               # Gauge prior: (α_φ/2)||φ||²
     'lambda_hyper': 0.1,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
     'lambda_gamma': 0.0,
