@@ -1175,7 +1175,8 @@ class PublicationMetrics:
     def _find_gauge_blocks(self, model: Any) -> list:
         """Find all GaugeTransformerBlocks with non-flat transport."""
         blocks = []
-        stack = getattr(model, 'stack', None)
+        # Try both attribute names: 'transformer' (GaugeTransformerLM) and 'stack' (legacy)
+        stack = getattr(model, 'transformer', None) or getattr(model, 'stack', None)
         if stack is not None:
             block_list = getattr(stack, 'blocks', None)
             if block_list is not None:
@@ -1185,7 +1186,12 @@ class PublicationMetrics:
         return blocks
 
     def _extract_exp_delta(self, model: Any, block: Any) -> Optional[torch.Tensor]:
-        """Recompute exp(δ_ij · G) from current model state."""
+        """Recompute exp(δ_ij · G) from current model state.
+
+        Uses the raw connection delta (without cocycle_relaxation scaling)
+        so that holonomy diagnostics measure the connection's intrinsic
+        curvature even when cocycle_relaxation is scheduled from 0→1.
+        """
         try:
             embed = getattr(model, 'token_embedding', None)
             if embed is None:
@@ -1202,9 +1208,10 @@ class PublicationMetrics:
                 return None
 
             delta = block.gauge_connection(mu, mu)  # (1, N, N, n_gen)
-            cocycle = getattr(block, 'cocycle_relaxation', 1.0)
-            scaled_delta = cocycle * delta
-            delta_matrix = torch.einsum('bija,akl->bijkl', scaled_delta, generators)
+            # Use raw delta for diagnostics — cocycle_relaxation=0 would
+            # zero out the connection and produce trivially flat holonomy,
+            # hiding the learned curvature structure.
+            delta_matrix = torch.einsum('bija,akl->bijkl', delta, generators)
             exp_delta = torch.linalg.matrix_exp(delta_matrix.float())
             return exp_delta
         except Exception:
