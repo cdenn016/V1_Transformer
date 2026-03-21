@@ -64,7 +64,6 @@ class PureVFEConfig:
     gauge_param: str = 'omega'          # 'omega' (direct GL(K)) or 'phi' (Lie algebra)
     omega_cond_max: float = 50.0        # Max condition number for Omega (regularize if exceeded)
     omega_grad_clamp: float = 10.0      # Element-wise clamp for omega gradients (tighter than general grad_clamp)
-    omega_nat_max_norm: float = 1.0     # Absolute Frobenius norm cap on omega natural gradient
     phi_max_norm: float = 3.14159       # Max norm for phi (π = 180° rotation)
 
     # M-step options

@@ -249,6 +249,9 @@ def natural_grad_omega(grad_Omega, Omega):
 
     For metric g_Ω(X,Y) = tr((Ω⁻¹X)ᵀ(Ω⁻¹Y)), the natural gradient is Ω Ωᵀ ∂F/∂Ω.
 
+    Note: prefer lie_algebra_clip_grad which computes and clips the natural
+    gradient in the Lie algebra for geometric consistency.
+
     Args:
         grad_Omega: [..., K, K] Euclidean gradient ∂F/∂Ω
         Omega: [..., K, K] current gauge frame
@@ -260,39 +263,64 @@ def natural_grad_omega(grad_Omega, Omega):
 
 
 # ---------------------------------------------------------------------------
-# Trust region and conditioning (ported from VFE dynamic)
+# Trust region and conditioning
 # ---------------------------------------------------------------------------
+
+def lie_algebra_clip_grad(grad_Omega, Omega, trust_radius=0.3):
+    """
+    Compute and clip the natural gradient via the Lie algebra of GL(K).
+
+    Instead of forming Ω·Ωᵀ·g in the ambient space (which amplifies by σ(Ω)²)
+    and then clipping in Euclidean norm (which depends on where Ω sits), we:
+
+      1. Pull back to the Lie algebra: ξ = Ωᵀ · ∂F/∂Ω
+      2. Clip ||ξ||_F ≤ trust_radius
+      3. Push forward: ΔΩ = Ω · ξ_clipped
+
+    Why this works: ||ξ||_F = ||Ω⁻¹ΔΩ||_F is the Riemannian step size
+    under the left-invariant metric. It is invariant under left translation
+    (Ω → A·Ω for any A ∈ GL(K)), so the trust region has the same intrinsic
+    size everywhere on the manifold. No feedback loop is possible because
+    the clip threshold is a *constant* in the Riemannian geometry.
+
+    The subsequent Euler retraction Ω - η·ΔΩ = Ω·(I - η·ξ) approximates
+    the geodesic retraction Ω·exp(-η·ξ) to first order, which is accurate
+    when η·||ξ|| is small — guaranteed by the trust region.
+
+    Args:
+        grad_Omega: [..., K, K] Euclidean gradient ∂F/∂Ω
+        Omega: [..., K, K] current gauge frame
+        trust_radius: max Riemannian step size ||ξ||_F
+
+    Returns: [..., K, K] natural gradient direction (clipped)
+    """
+    # Step 1: Lie algebra element ξ = Ωᵀ · g
+    # (This is Ω⁻¹ · (Ω·Ωᵀ·g) = Ωᵀ·g, the pullback of the Riemannian
+    # gradient to the identity, i.e. the gradient in gl(K) coordinates.)
+    OmegaT = Omega.transpose(-2, -1)
+    xi = OmegaT @ grad_Omega  # [..., K, K]
+
+    # Step 2: Clip in Lie algebra norm (= Riemannian norm)
+    xi_norm = xi.flatten(-2).norm(dim=-1, keepdim=True).unsqueeze(-1)
+    scale = torch.clamp(trust_radius / (xi_norm + 1e-8), max=1.0)
+    xi = xi * scale
+
+    # Step 3: Push forward to tangent space at Ω
+    return Omega @ xi
+
 
 def relative_trust_clip(nat_grad, Omega, trust_region=0.3, max_norm=None):
     """
-    Two-level trust region clip for Omega natural gradient.
+    Legacy Euclidean trust region clip (kept for backward compatibility).
 
-    Level 1 (relative): ||nat_grad|| ≤ trust_region × ||Omega||_F
-        Scales step size with parameter magnitude.
-    Level 2 (absolute): ||nat_grad|| ≤ max_norm
-        Hard cap that prevents runaway when Omega grows large.
-        This breaks the positive feedback loop where large Omega → large
-        natural gradient → large step → even larger Omega.
-
-    The tighter of the two bounds is applied.
-
-    Args:
-        nat_grad: [..., K, K] natural gradient
-        Omega: [..., K, K] current gauge frame
-        trust_region: max relative step size
-        max_norm: absolute Frobenius norm cap (None = no absolute cap)
-
-    Returns: [..., K, K] clipped natural gradient
+    Prefer lie_algebra_clip_grad for geometrically consistent clipping.
     """
     nat_norm = nat_grad.flatten(-2).norm(dim=-1, keepdim=True).unsqueeze(-1)
     om_norm = Omega.flatten(-2).norm(dim=-1, keepdim=True).unsqueeze(-1).clamp(min=1e-6)
     max_upd = trust_region * om_norm
-
-    # Apply absolute cap if specified (takes the tighter bound)
     if max_norm is not None:
         abs_cap = torch.tensor(max_norm, device=nat_grad.device, dtype=nat_grad.dtype)
         max_upd = torch.minimum(max_upd, abs_cap)
-
     scale = torch.clamp(max_upd / (nat_norm + 1e-8), max=1.0)
     return nat_grad * scale
 

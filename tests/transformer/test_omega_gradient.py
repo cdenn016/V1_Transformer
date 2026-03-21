@@ -189,6 +189,73 @@ def test_natural_gradient_omega(device):
         "At identity, natural gradient should equal Euclidean gradient"
 
 
+# ── Test 5b: Lie algebra clip grad ────────────────────────────────────────
+
+def test_lie_algebra_clip_grad_riemannian_invariance(device):
+    """lie_algebra_clip_grad clips in Riemannian norm, invariant to Omega scale."""
+    from transformer.pure_vfe.gauge import lie_algebra_clip_grad
+
+    K = 4
+    trust_radius = 0.3
+    grad = torch.randn(K, K, device=device)
+
+    # At Omega near identity
+    omega_small = torch.eye(K, device=device) + 0.01 * torch.randn(K, K, device=device)
+    nat_small = lie_algebra_clip_grad(grad, omega_small, trust_radius)
+
+    # At Omega far from identity (scaled up)
+    omega_large = 5.0 * omega_small
+    nat_large = lie_algebra_clip_grad(grad, omega_large, trust_radius)
+
+    # The Riemannian step size ||Ω⁻¹ΔΩ||_F should be bounded by trust_radius
+    # for both cases (up to the element-wise gradient difference)
+    xi_small = torch.linalg.solve(omega_small, nat_small)
+    xi_large = torch.linalg.solve(omega_large, nat_large)
+
+    assert xi_small.norm() <= trust_radius + 1e-5, \
+        f"Small Omega: Riemannian norm {xi_small.norm():.4f} > trust_radius {trust_radius}"
+    assert xi_large.norm() <= trust_radius + 1e-5, \
+        f"Large Omega: Riemannian norm {xi_large.norm():.4f} > trust_radius {trust_radius}"
+
+
+def test_lie_algebra_clip_grad_identity_equivalence(device):
+    """At Ω=I, lie_algebra_clip_grad matches natural_grad_omega (before clipping)."""
+    from transformer.pure_vfe.gauge import lie_algebra_clip_grad, natural_grad_omega
+
+    K = 4
+    omega_id = torch.eye(K, device=device)
+    grad = 0.01 * torch.randn(K, K, device=device)  # small so no clipping
+
+    nat_new = lie_algebra_clip_grad(grad, omega_id, trust_radius=100.0)  # large radius = no clip
+    nat_old = natural_grad_omega(grad, omega_id)
+
+    assert torch.allclose(nat_new, nat_old, atol=1e-5), \
+        "At identity with no clipping, lie_algebra_clip_grad should match natural_grad_omega"
+
+
+def test_lie_algebra_clip_grad_prevents_spike(device):
+    """Large Omega no longer amplifies gradient — the key regression test."""
+    from transformer.pure_vfe.gauge import lie_algebra_clip_grad, natural_grad_omega
+
+    K = 4
+    trust_radius = 0.3
+
+    # Omega with large singular values (simulates drift during training)
+    omega_large = 10.0 * torch.eye(K, device=device)
+    grad = torch.randn(K, K, device=device)
+
+    # Old path: Ω·Ωᵀ·g amplifies by 100x
+    nat_old = natural_grad_omega(grad, omega_large)
+    assert nat_old.norm() > 50.0, "Sanity: old natural gradient should be huge"
+
+    # New path: clipped in Lie algebra
+    nat_new = lie_algebra_clip_grad(grad, omega_large, trust_radius)
+    # ΔΩ = Ω·ξ where ||ξ|| ≤ trust_radius, so ||ΔΩ|| ≤ ||Ω||·trust_radius
+    xi = torch.linalg.solve(omega_large, nat_new)
+    assert xi.norm() <= trust_radius + 1e-5, \
+        f"Lie algebra element should be bounded: ||ξ|| = {xi.norm():.4f}"
+
+
 # ── Test 6: Retract preserves invertibility ───────────────────────────────
 
 def test_retract_omega_preserves_invertibility(device):
