@@ -231,20 +231,21 @@ EM_CONFIG = {
     
     'tie_embeddings': False,
     
-    'use_layernorm': True,
-    'use_residual':  True,
+    'use_layernorm':         True,
+    'use_residual':          True,
     'use_output_projection': True,
+    'multihead_vfe':         True,
 
-    'use_prior_bank': False,
-    'use_obs_in_vfe': True,        #cheats when true!  low trainPPL huge val PPL
+    'use_prior_bank': True,
+    'use_obs_in_vfe': False,        #cheats when true!  low trainPPL huge val PPL
 
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
-    'gauge_group': 'GLK',
-    'gauge_mode': 'learned',
-    'gauge_param': 'phi',
-    'irrep_spec': [('fund', 1, 10)],
-    'multihead_vfe': True,
+    'gauge_group':      'GLK',
+    'gauge_mode':       'learned',
+    'gauge_param':      'phi',
+    'irrep_spec':       [('fund', 1, 10)],
+  
     
     
     'diagonal_covariance':      True,
@@ -263,8 +264,8 @@ EM_CONFIG = {
     'ffn_alpha':           1.0,               # Prior coupling inside VFE E-step
     'ffn_lambda_belief':   1.0,       # Belief alignment inside VFE E-step
     
-    'learnable_alpha':     False,
-    'ffn_learnable_alpha': False,    # Adaptive α_i = c0/(b0 + KL) per dimension
+    'learnable_alpha':     True,
+    'ffn_learnable_alpha': True,    # Adaptive α_i = c0/(b0 + KL) per dimension
     
     'evolve_sigma':        True,
     'evolve_phi':          True,
@@ -295,12 +296,12 @@ EM_CONFIG = {
     'kappa_gamma':  1.0,
 
     # === Phi gradient geometry ===
-    'phi_natural_gradient': 'killing',
-    'use_killing_form': True,
+    'phi_natural_gradient':      'killing',
+    'use_killing_form':          True,
     'killing_form_sym_dampening': 0.1,
 
     # === Position encoding ===
-    'use_rope': True,
+    'use_rope':           True,
     'pos_encoding_mode': 'none',
 
     # === Embedding init ===
@@ -311,21 +312,21 @@ EM_CONFIG = {
     'mu_max_norm':     None,
     
     # === Learning rates ===
-    'mu_lr': 0.05,
-    'sigma_lr': 0.0125,
-    'phi_lr': 0.0075,
-    'ffn_lr': 0.05,
+    'mu_lr':        0.05,
+    'sigma_lr':     0.0125,
+    'phi_lr':       0.0075,
+    'ffn_lr':       0.05,
     'attention_lr': 0.005,
-    'output_lr': 0.05,
+    'output_lr':    0.05,
 
     # === Regularization ===
-    'weight_decay': 0.01,
-    'grad_clip': 1.0,
+    'weight_decay':  0.01,
+    'grad_clip':     1.0,
 
     # === Logging ===
-    'log_interval': 100,
-    'eval_interval': 500,
-    'checkpoint_interval': 25000,
+    'log_interval':               100,
+    'eval_interval':              1000,
+    'checkpoint_interval':        25000,
     'semantic_analysis_interval': 10000,
     
     # =================================================================
@@ -337,12 +338,12 @@ EM_CONFIG = {
     # δ_ij is zero-initialized so the model starts flat and learns
     # curvature only where the data warrants it.
     # Holonomy H_ijk = Ω_ij·Ω_jk·Ω_ki ≠ I when δ ≠ 0.
-    'non_flat_transport': False,        # Enable edge-dependent connection δ_ij
-    'cocycle_relaxation': 0.5,          # Scale for δ_ij: 0=flat, 1=fully non-flat
-    'connection_type': 'bilinear',      # 'bilinear' (δ_ij^a = μ_i^T W^a μ_j) | 'mlp'
+    'non_flat_transport':    False,        # Enable edge-dependent connection δ_ij
+    'cocycle_relaxation':    0.5,          # Scale for δ_ij: 0=flat, 1=fully non-flat
+    'connection_type':       'bilinear',      # 'bilinear' (δ_ij^a = μ_i^T W^a μ_j) | 'mlp'
     'connection_hidden_dim': 64,        # Hidden dim for MLP connection (ignored for bilinear)
     'connection_init_scale': 0.01,      # W init scale (0=flat saddle point, 0.01 recommended)
-    'holonomy_penalty': 0.0,            # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
+    'holonomy_penalty':      0.0,            # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
     
     # Option A: couple just 0↔1, head 2 stays independent
     #'cross_couplings': [(0, 1), (1, 0)],
@@ -2424,9 +2425,11 @@ def run_single_experiment(
         # Free energy loss weights
         alpha=config['alpha'],
         beta=config['beta'],             # → lambda_beta in compute_free_energy_loss
+        
         lambda_gamma=config['lambda_gamma'],
         lambda_hyper=config.get('lambda_hyper', 0.0),
         use_obs_in_vfe=config.get('use_obs_in_vfe', False),
+        
 
         # Gauge geometry: phi gradient control
         alpha_phi=config.get('alpha_phi', 0.0),
