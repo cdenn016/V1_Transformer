@@ -509,14 +509,13 @@ def compute_free_energy_loss(
     # 2. Belief Coupling: λ_β · Σ_ij β_ij · KL(q_i || Ω_ij q_j)
     # =================================================================
     if lambda_beta > 0.0:
-        # Use final layer's beta/kl for loss (matches pre-refactor behavior).
-        # CRITICAL: Detach beta (attention weights) so the M-step gradient only
-        # flows through KL, not through the softmax. Without detach, minimizing
-        # β·KL through β pushes all KL_ij toward equality → uniform attention.
-        # Detaching β is also the correct EM formulation: in the M-step, β is
-        # held fixed at its E-step value. The gradient β.detach() · ∂KL/∂θ says
-        # "reduce the KLs that E-step attention focuses on" rather than
-        # "rearrange attention to be uniform."
+        # Detach β: correct EM formulation. In the M-step, β is held fixed at
+        # its E-step value. At convergence ∂F/∂β = 0 (β* is optimal), so the
+        # β-gradient contribution vanishes by the envelope theorem. Detaching
+        # is the finite-iteration approximation of this.
+        #
+        # Note: the non-detached softmax gradient (β_ij/κ)(E_β[KL] - KL_ij)
+        # actually sharpens, not uniformizes. But it's not part of the M-step.
         beta_final = beta[-1].detach()  # (B, n_heads, N, N) — E-step weights, fixed
         kl_final = kl[-1]               # (B, n_heads, N, N) — gradient flows through
         weighted_kl = beta_final * kl_final
@@ -596,8 +595,8 @@ def compute_free_energy_loss(
             diagonal_covariance=diagonal_cov,
         )
 
-        # Detach gamma for same reason as beta: gradient through softmax
-        # pushes toward uniform model coupling, destroying structure.
+        # Detach gamma: same EM justification as beta. γ is an E-step
+        # quantity, held fixed in the M-step.
         weighted_kl_model = gamma.detach() * kl_model  # (B, N, N)
         K = mu_s.shape[-1]
         dim_scale = math.sqrt(max(K, 1))
