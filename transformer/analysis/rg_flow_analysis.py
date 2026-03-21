@@ -511,7 +511,7 @@ class RGFlowTracker:
                 # Check stability by looking at second derivatives
                 if i > 0 and i < len(d_mod) - 1:
                     d2_mod = d_mod[i+1] - d_mod[i-1]
-                    stability = 'stable' if d2_mod > 0 else 'unstable'
+                    stability = 'unstable' if d2_mod > 0 else 'stable'
                 else:
                     stability = 'unknown'
 

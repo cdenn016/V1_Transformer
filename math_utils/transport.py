@@ -625,21 +625,20 @@ def compute_transport_differential(
         return tuple(d.astype(np.float32, copy=False) for d in dOmega_list)
 
     elif direction == 'j':
-        # ∂Ω/∂φ_j^b = -exp(φ_i) · R_b(φ_j) · exp(-φ_j)
-        R_all = _compute_dexp_generators(phi_j, G)
+        # ∂Ω/∂φ_j^b = -exp(φ_i) · exp(-φ_j) · dexp_{-X_j}(G_b)
+        # where X_j = φ_j·G, using the chain rule on exp(-X_j)
+        R_all = _compute_dexp_generators(-phi_j, G)
+        Omega = np.matmul(exp_phi_i, exp_neg_phi_j)
 
         dOmega_list = []
         for R_b in R_all:
-            tmp = np.matmul(exp_phi_i, R_b)
-            dOm_b = -np.matmul(tmp, exp_neg_phi_j)
+            dOm_b = -np.matmul(Omega, R_b)
             dOmega_list.append(dOm_b)
 
         return tuple(d.astype(np.float32, copy=False) for d in dOmega_list)
     
     else:
         raise ValueError(f"Invalid direction: {direction}")
-
-import scipy
 
 def frechet_expm(X, H, steps=6):
     """
@@ -658,6 +657,7 @@ def frechet_expm(X, H, steps=6):
     Returns:
         Frechet derivative, shape (K, K)
     """
+    import scipy.linalg
     # Midpoint quadrature: evaluate at centers of equal-width subintervals
     ds = 1.0 / steps
     out = 0
@@ -736,6 +736,7 @@ def _compute_dexp_generators(
         return tuple(Q_list)
 
     else:
+        import scipy.linalg
         # Higher irreps (K>3): use Fréchet derivative via quadrature
         # frechet_expm computes d/dt[exp(X + t G_a)]|_{t=0} = exp(X) · dexp_X(G_a)
         # We need Q_a = dexp_X(G_a) = exp(-X) · frechet_expm(X, G_a)

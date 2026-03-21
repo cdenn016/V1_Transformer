@@ -169,7 +169,7 @@ class SyntheticGaugeLanguage:
             Fraction of samples whose label changed under path permutation.
             Returns 0 for flat (epsilon=0) language, increasing toward 1 for non-flat.
         """
-        rng = np.random.RandomState(seed or self.seed + 999)
+        rng = np.random.RandomState(seed if seed is not None else self.seed + 999)
         changes = 0
         for _ in range(n_samples):
             seq = rng.randint(0, self.vocab_size, size=self.seq_len)

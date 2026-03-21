@@ -174,7 +174,7 @@ class BlockConfig:
             ffn_learnable_lr=config.get('ffn_learnable_lr', True),
             ffn_lambda_belief=config.get('ffn_lambda_belief', 1.0),
             ffn_update_sigma=config.get('ffn_update_sigma', True),
-            ffn_learnable_alpha=config.get('learnable_alpha', False),
+            ffn_learnable_alpha=config.get('ffn_learnable_alpha', config.get('learnable_alpha', False)),
             # Gauge geometry
             gauge_mode=config.get('gauge_mode', 'learned'),
             gauge_param=config.get('gauge_param', 'phi'),

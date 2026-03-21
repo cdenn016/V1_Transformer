@@ -203,13 +203,13 @@ def analyze_token_classes(
         'n_punct': len(punct_ids),
         'mu_intra_class_dist': np.mean(intra_mu) if intra_mu else 0,
         'mu_inter_class_dist': np.mean(inter_mu) if inter_mu else 0,
-        'mu_class_ratio': (np.mean(inter_mu) / np.mean(intra_mu)) if intra_mu and inter_mu else 0,
+        'mu_class_ratio': (np.mean(inter_mu) / max(np.mean(intra_mu), 1e-10)) if intra_mu and inter_mu else 0,
     }
 
     if intra_phi and inter_phi:
         results['phi_intra_class_dist'] = np.mean(intra_phi)
         results['phi_inter_class_dist'] = np.mean(inter_phi)
-        results['phi_class_ratio'] = np.mean(inter_phi) / np.mean(intra_phi)
+        results['phi_class_ratio'] = np.mean(inter_phi) / max(np.mean(intra_phi), 1e-10)
         results['phi_shows_structure'] = results['phi_class_ratio'] > 1.2
 
     return results
@@ -427,7 +427,7 @@ def analyze_word_pairs(
     if related_phi and unrelated_phi:
         results['phi_related_mean'] = np.mean(related_phi)
         results['phi_unrelated_mean'] = np.mean(unrelated_phi)
-        results['phi_semantic_ratio'] = np.mean(unrelated_phi) / np.mean(related_phi)
+        results['phi_semantic_ratio'] = np.mean(unrelated_phi) / max(np.mean(related_phi), 1e-10)
 
     return results
 
@@ -758,6 +758,9 @@ def plot_embedding_clustering(
 
     else:
         # High-dimensional: Use PCA
+        if not SKLEARN_AVAILABLE:
+            print("Warning: sklearn not available for PCA visualization")
+            return None
         n_components = min(3, embed_dim)
         pca = PCA(n_components=n_components)
         embed_pca = pca.fit_transform(embed_np)

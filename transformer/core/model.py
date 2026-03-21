@@ -878,7 +878,7 @@ class GaugeTransformerLM(nn.Module):
                 sigma=sigma_q,
                 mask=mask,
                 targets=targets if is_final else None,  # Only final layer gets observations
-                W_out=self.out_proj.weight if hasattr(self.out_proj, 'weight') else None,
+                W_out=(self.out_proj.weight if hasattr(self.out_proj, 'weight') else None) if is_final else None,
                 token_ids=token_ids,  # Required for PriorBank lookup
                 omega=omega,
             )
@@ -1073,7 +1073,7 @@ class GaugeTransformerLM(nn.Module):
                 sigma=sigma_q,
                 mask=mask,
                 targets=targets if is_final else None,
-                W_out=self.out_proj.weight if hasattr(self.out_proj, 'weight') else None,
+                W_out=(self.out_proj.weight if hasattr(self.out_proj, 'weight') else None) if is_final else None,
                 return_beta_history=is_final,  # Only final layer tracks VFE iterations
                 token_ids=token_ids,  # Required for PriorBank lookup
                 omega=omega,

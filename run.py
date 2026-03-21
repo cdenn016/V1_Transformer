@@ -169,7 +169,7 @@ def main(cfg=None):
     print("=" * 60)
     print(f"  dataset={dataset_name}")
     print(f"  belief_dim={config.belief_dim}  n_heads={config.n_heads}  head_dim={config.head_dim}")
-    print(f"  n_esteps={config.n_esteps}  tau={config.tau:.2f}")
+    print(f"  n_esteps={config.n_esteps}  tau={config.tau if config.tau is None else f'{config.tau:.2f}'}")
     print(f"  eta_E={config.eta_E}  eta_M={config.eta_M}")
     print(f"  device={device}  params={params['total']:,}")
     for k, v in params.items():
