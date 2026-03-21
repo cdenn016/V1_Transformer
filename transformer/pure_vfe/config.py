@@ -61,9 +61,10 @@ class PureVFEConfig:
     m_step_trust_mu: float = 0.5        # Trust region for M-step μ updates
 
     # Gauge frame parameterization
-    gauge_param: str = 'omega'          # 'omega' (direct GL(K)) or 'phi' (Lie algebra)
-    omega_cond_max: float = 50.0        # Max condition number for Omega (regularize if exceeded)
+    gauge_param: str = 'omega'          # 'omega' (direct GL(K), both det signs) or 'phi' (Lie algebra → GL⁺(K))
+    omega_cond_max: float = 50.0        # Max condition number for Omega (regularize toward polar factor)
     omega_grad_clamp: float = 10.0      # Element-wise clamp for omega gradients (tighter than general grad_clamp)
+    omega_negative_det_fraction: float = 0.0  # Fraction of omega frames initialized in GL⁻(K) (det < 0)
     phi_max_norm: float = 3.14159       # Max norm for phi (π = 180° rotation)
 
     # M-step options

@@ -327,15 +327,22 @@ def relative_trust_clip(nat_grad, Omega, trust_region=0.3, max_norm=None):
 
 def regularize_omega_conditioning(Omega, cond_max=50.0):
     """
-    Progressive regularization of ill-conditioned Omega toward identity.
+    Progressive regularization of ill-conditioned Omega toward its polar factor.
 
-    When condition number exceeds cond_max, blend Omega toward I with
-    strength proportional to the excess:
+    When condition number exceeds cond_max, blend Omega toward Q = U·Vᵀ
+    (the nearest orthogonal matrix from polar decomposition) with strength
+    proportional to the excess:
       blend = clamp(0.1 × (cond/cond_max - 1), 0, 0.5)
-      Omega_new = (1 - blend) × Omega + blend × I
+      Omega_new = (1 - blend) × Omega + blend × Q
 
-    This is more aggressive than the previous fixed 5% blend: matrices
-    at 2× the threshold get a 10% blend, at 6× they get the maximum 50%.
+    Using the polar factor instead of the identity matrix is critical for
+    GL(K) support: Q preserves the sign of det(Omega), so frames in GL⁻(K)
+    (det < 0) are regularized toward O⁻(K), not pushed through det = 0
+    toward I. For frames already in GL⁺(K), Q ∈ SO(K) ⊂ GL⁺(K).
+
+    Geometrically, the polar decomposition Ω = Q·P separates the "rotation"
+    Q ∈ O(K) from the "stretch" P ∈ SPD(K). Regularizing toward Q shrinks
+    P toward I (reducing condition number) while preserving Q.
 
     Args:
         Omega: [..., K, K] gauge frames
@@ -343,19 +350,20 @@ def regularize_omega_conditioning(Omega, cond_max=50.0):
 
     Returns: [..., K, K] regularized gauge frames
     """
-    K = Omega.shape[-1]
     svs = torch.linalg.svdvals(Omega)
     cond = svs[..., 0] / svs[..., -1].clamp(min=1e-8)
     needs_reg = cond > cond_max
     if needs_reg.any():
-        eye = torch.eye(K, device=Omega.device, dtype=Omega.dtype)
+        # Full SVD only when regularization is needed (K_h typically 3-8, cheap)
+        U, S, Vh = torch.linalg.svd(Omega)
+        Q = U @ Vh  # polar factor: nearest orthogonal, preserves det sign
         # Progressive blend: stronger for worse conditioning
         excess = (cond / cond_max).clamp(min=1.0)
         blend = torch.clamp(0.1 * (excess - 1.0), min=0.0, max=0.5)
         blend = blend.unsqueeze(-1).unsqueeze(-1)
         Omega = torch.where(
             needs_reg.unsqueeze(-1).unsqueeze(-1),
-            (1.0 - blend) * Omega + blend * eye,
+            (1.0 - blend) * Omega + blend * Q,
             Omega
         )
     return Omega
@@ -434,16 +442,28 @@ def init_phi(shape, scale=0.01, device='cpu'):
 # Initialization
 # ---------------------------------------------------------------------------
 
-def init_omega(shape, scale=0.01, device='cuda'):
+def init_omega(shape, scale=0.01, device='cuda', negative_det_fraction=0.0):
     """
-    Initialize GL⁺(K) gauge frames near identity.
+    Initialize gauge frames near identity.
 
-    Ω = I + scale · randn(K, K), ensuring det > 0.
+    Ω = I + scale · randn(K, K)
+
+    For the omega path (gauge_param='omega'), frames live in full GL(K).
+    Setting negative_det_fraction > 0 seeds a fraction of frames in GL⁻(K)
+    (det < 0) by flipping the first column. This is necessary because the
+    Lie algebra retraction preserves det sign — frames cannot cross between
+    GL⁺(K) and GL⁻(K) during training.
+
+    For the phi path (gauge_param='phi'), this function is not used (phi
+    uses init_phi + exp → GL⁺(K) automatically).
 
     Args:
         shape: tuple, e.g. (V, H, K_h, K_h) or (N, H, K_h, K_h)
         scale: perturbation magnitude
         device: torch device
+        negative_det_fraction: fraction of frames to initialize with det < 0.
+            0.0 = all positive det (GL⁺(K), backward compatible default).
+            0.5 = half negative (seeds both components of GL(K)).
 
     Returns: tensor of shape `shape`
     """
@@ -453,12 +473,22 @@ def init_omega(shape, scale=0.01, device='cuda'):
     Omega = eye.expand(shape).clone()
     Omega = Omega + scale * torch.randn(shape, device=device)
 
-    # Ensure positive determinant
-    dets = torch.linalg.det(Omega)
-    neg_mask = dets < 0
-    if neg_mask.any():
-        # Flip first column to fix determinant sign
-        Omega[neg_mask, :, 0] *= -1
+    if negative_det_fraction <= 0.0:
+        # GL⁺(K): ensure all frames have positive determinant
+        dets = torch.linalg.det(Omega)
+        neg_mask = dets < 0
+        if neg_mask.any():
+            Omega[neg_mask, :, 0] *= -1
+    else:
+        # GL(K): first ensure all positive, then flip a fraction to negative
+        dets = torch.linalg.det(Omega)
+        neg_mask = dets < 0
+        if neg_mask.any():
+            Omega[neg_mask, :, 0] *= -1
+
+        # Randomly select frames to place in GL⁻(K)
+        flip_mask = torch.rand(shape[:-2], device=device) < negative_det_fraction
+        Omega[flip_mask, :, 0] *= -1
 
     return Omega
 
