@@ -13,9 +13,6 @@ Updated: December 2025 - Added CUDA/GPU support via backend abstraction
 """
 
 import numpy as np
-from typing import Tuple, Optional
-import inspect
-import os
 
 # ============================================================================
 # GPU/CUDA BACKEND INTEGRATION
@@ -193,17 +190,6 @@ def _kl_gaussian_numpy_impl(
 
 
 
-def _caller_info(levels_back=4):
-    """Return short 'module:func:line' string of caller `levels_back` up."""
-    try:
-        frame = inspect.stack()[levels_back]
-        fname = os.path.basename(frame.filename)
-        return f"{fname}:{frame.function}:{frame.lineno}"
-    except (IndexError, AttributeError, OSError):
-        return "<?>"
-    
-    
-
 
 
 def safe_inv(Sigma: np.ndarray, eps: float = 1e-8) -> np.ndarray:
@@ -308,62 +294,6 @@ def safe_inv(Sigma: np.ndarray, eps: float = 1e-8) -> np.ndarray:
     return Sigma_inv.astype(original_dtype, copy=False)
 
 
-# =============================================================================
-# Optional: Cholesky Version (Advanced - Use Only If You Need Speed)
-# =============================================================================
-
-def safe_inv_cholesky(Sigma: np.ndarray, eps: float = 1e-8) -> np.ndarray:
-    """
-    Cholesky-based inversion (faster but more complex).
-    
-    ~20% faster than safe_inv() but requires careful handling.
-    Only use if profiling shows safe_inv() is a bottleneck.
-    
-    Args:
-        Sigma: Covariance matrix, shape (..., K, K)
-        eps: Regularization strength
-    
-    Returns:
-        Sigma_inv: Matrix inverse, same shape as input
-    """
-    original_dtype = Sigma.dtype
-    Sigma = np.asarray(Sigma, dtype=np.float64)
-    
-    K = Sigma.shape[-1]
-    batch_shape = Sigma.shape[:-2]
-    
-    # Ensure symmetric
-    Sigma = 0.5 * (Sigma + np.swapaxes(Sigma, -1, -2))
-    
-    # Create identity with proper batch shape
-    if batch_shape:
-        I = np.tile(np.eye(K), batch_shape + (1, 1))
-    else:
-        I = np.eye(K)
-    
-    # Try Cholesky with progressive regularization
-    for attempt in range(1, 5):
-        try:
-            # Add regularization
-            current_eps = eps * (10 ** (attempt - 1))
-            Sigma_reg = Sigma + current_eps * np.eye(K)
-            
-            # Cholesky: Sigma = L L^T
-            L = np.linalg.cholesky(Sigma_reg)
-            
-            # Solve L @ Y = I, then L^T @ X = Y
-            # Using np.linalg.solve (supports batching!)
-            Y = np.linalg.solve(L, I)
-            Sigma_inv = np.linalg.solve(np.swapaxes(L, -1, -2), Y)
-            
-            return Sigma_inv.astype(original_dtype, copy=False)
-            
-        except np.linalg.LinAlgError:
-            if attempt == 4:
-                # Final fallback to direct inversion
-                Sigma_reg = Sigma + (eps * 1000) * np.eye(K)
-                Sigma_inv = np.linalg.inv(Sigma_reg)
-                return Sigma_inv.astype(original_dtype, copy=False)
 
 
 
@@ -425,28 +355,3 @@ def sanitize_sigma(Sigma: np.ndarray,
 
 
 
-def _chol_logdet(Sigma: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Compute Cholesky decomposition and log-determinant.
-    
-    Args:
-        Sigma: SPD matrices, shape (..., K, K) in float64
-    
-    Returns:
-        L: Lower-triangular Cholesky factors, shape (..., K, K)
-        logdet: Log-determinants, shape (...,)
-    
-    Notes:
-        - Uses float64 to avoid underflow in log(diag(L))
-        - logdet = 2 * sum(log(diag(L)))
-    """
-    L = np.linalg.cholesky(Sigma)                               # (..., K, K)
-    diag_L = np.diagonal(L, axis1=-2, axis2=-1)                # (..., K)
-    
-    # Clip to avoid log(0)
-    tiny = np.finfo(np.float64).tiny
-    diag_L_safe = np.clip(diag_L, tiny, None)
-    
-    logdet = 2.0 * np.sum(np.log(diag_L_safe), axis=-1)       # (...,)
-    
-    return L, logdet

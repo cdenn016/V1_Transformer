@@ -191,21 +191,3 @@ class MetricsTracker:
         return summary
 
 
-def format_metrics(metrics: Dict[str, Any], precision: int = 4) -> str:
-    """
-    Format metrics dict for printing.
-
-    Args:
-        metrics: Dict of metric names to values
-        precision: Decimal precision for floats
-
-    Returns:
-        Formatted string
-    """
-    parts = []
-    for key, value in sorted(metrics.items()):
-        if isinstance(value, float):
-            parts.append(f"{key}={value:.{precision}f}")
-        else:
-            parts.append(f"{key}={value}")
-    return " | ".join(parts)
