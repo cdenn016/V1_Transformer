@@ -219,6 +219,9 @@ VFE_EM_CONFIG = {
     'learnable_alpha': False,
     
     'use_obs_in_vfe': False,        #cheats when true!  low trainPPL huge val PPL
+    'obs_sigma_gradient': False,    # Add ∂E_q[CE]/∂σ Hessian-diagonal gradient in VFE E-step
+                                    # Requires use_obs_in_vfe=True to have any effect
+    'obs_sigma_weight': 1.0,        # Weight for sigma observation gradient
     'amortized_inference': True,   # Gradient flow through priors → embeddings learn good E-step init
 
     'use_deq': False,

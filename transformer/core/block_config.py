@@ -73,6 +73,8 @@ class BlockConfig:
     ffn_lambda_belief: float = 1.0      # Belief alignment weight λ
     ffn_update_sigma: bool = True       # Update covariances during FFN E-step
     ffn_learnable_alpha: bool = False   # Bayesian precision via Gamma-Normal conjugacy
+    obs_sigma_gradient: bool = False    # ∂E_q[CE]/∂σ Hessian-diagonal obs gradient for sigma
+    obs_sigma_weight: float = 1.0      # Weight for sigma observation gradient
 
     # === Gauge geometry ===
     gauge_mode: str = 'learned'         # 'learned' | 'trivial' (Ω=I) | 'constant' (per-head Ω)
@@ -175,6 +177,8 @@ class BlockConfig:
             ffn_lambda_belief=config.get('ffn_lambda_belief', 1.0),
             ffn_update_sigma=config.get('ffn_update_sigma', True),
             ffn_learnable_alpha=config.get('ffn_learnable_alpha', config.get('learnable_alpha', False)),
+            obs_sigma_gradient=config.get('obs_sigma_gradient', False),
+            obs_sigma_weight=config.get('obs_sigma_weight', 1.0),
             # Gauge geometry
             gauge_mode=config.get('gauge_mode', 'learned'),
             gauge_param=config.get('gauge_param', 'phi'),

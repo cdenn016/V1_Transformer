@@ -105,6 +105,9 @@ def _safe_spd_inv(M: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
 # Import attention computation for dynamic β
 from transformer.core.attention import compute_attention_weights, compute_transport_operators
 
+# Numerical event monitor (shared with attention.py)
+from math_utils.numerical_monitor import record as _nr
+
 # Import SO(N) and GL(K) retraction for proper phi updates
 try:
     from math_utils.generators import (
@@ -1907,6 +1910,8 @@ class VariationalFFNDynamic(nn.Module):
         rope_base: float = 10000.0,
         exact_diagonal_transport: bool = False,  # Lift diagonal σ for exact transport
         gauge_param: str = 'phi',  # 'phi' (Lie algebra) or 'omega' (direct GL(K))
+        obs_sigma_gradient: bool = False,  # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
+        obs_sigma_weight: float = 1.0,     # Weight for sigma observation gradient
     ):
         """
         Initialize dynamic-beta VFE FFN.
@@ -1974,6 +1979,8 @@ class VariationalFFNDynamic(nn.Module):
         self.amortized_inference = amortized_inference
         self.analytic_phi_grad = analytic_phi_grad
         self.analytic_phi_grad_dexp_order = analytic_phi_grad_dexp_order
+        self.obs_sigma_gradient = obs_sigma_gradient
+        self.obs_sigma_weight = obs_sigma_weight
         # RoPE: store so VFE iterations apply the same position encoding as attention
         self._use_rope_vfe = use_rope
         self._rope_base_vfe = rope_base
@@ -3159,6 +3166,20 @@ class VariationalFFNDynamic(nn.Module):
                 grad_error = (probs - one_hot) * mask_obs
                 discrete_obs_grad = torch.matmul(grad_error, W_out)
                 grad_mu = grad_mu + discrete_obs_grad
+
+                # Observation gradient for sigma via expected CE Hessian diagonal:
+                # ∂E_q[CE]/∂σ_k = 0.5 * [E_p[W[:,k]²] - E_p[W[:,k]]²]
+                # = 0.5 * Var_p[W[:,k]] ≥ 0: shrinks σ near observed tokens.
+                if self.obs_sigma_gradient:
+                    W_out_sq = W_out ** 2                                # (V, K)
+                    EW2 = torch.matmul(probs, W_out_sq)                  # (B, N, K)
+                    EW  = torch.matmul(probs, W_out)                     # (B, N, K)
+                    hessian_diag = EW2 - EW ** 2                         # (B, N, K)
+                    # Clamp: FP rounding can violate Var ≥ 0
+                    if (hessian_diag < 0).any():
+                        _nr("obs_sigma_hessian_neg_clamp")
+                        hessian_diag = hessian_diag.clamp(min=0.0)
+                    grad_sigma = grad_sigma + (0.5 * self.obs_sigma_weight) * hessian_diag * mask_obs
 
             # Clip for stability
             grad_mu = torch.clamp(grad_mu, min=-1e3, max=1e3)
