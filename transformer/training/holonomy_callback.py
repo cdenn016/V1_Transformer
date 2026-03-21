@@ -193,7 +193,7 @@ class HolonomyCallback(pl.Callback):
         """
         try:
             # Get embedding parameters
-            embed = getattr(model, 'token_embedding', None)
+            embed = getattr(model, 'token_embed', None) or getattr(model, 'token_embedding', None)
             if embed is None:
                 return None
 
