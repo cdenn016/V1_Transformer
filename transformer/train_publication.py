@@ -101,7 +101,7 @@ from math_utils.numerical_monitor import flush as _flush_numerical_events
 #   'standard_rope',            # (c) standard + RoPE at d=10
 #   'standard_rope_d90',        # (c') standard + RoPE at d=90
 
-DEFAULT_MODE = 'VFE_dynamic'      # Which mode to run
+DEFAULT_MODE = 'em'               # Which mode to run
 
 # Dataset
 DEFAULT_DATASET = 'wikitext-103'  
@@ -124,7 +124,7 @@ DEFAULT_DATASET = 'wikitext-103'
 #   - Position: Learned positional embeddings
 # =============================================================================
 STANDARD_CONFIG = {
-    # Model architecture — param-matched to VFE_EM_CONFIG (1.52M)
+    # Model architecture — param-matched to EM_CONFIG (1.52M)
     'vocab_size': 50257,
     'embed_dim': 10,              # Same as VFE for apples-to-apples comparison
     'n_layers': 1,                # Same depth
@@ -192,7 +192,7 @@ STANDARD_CONFIG = {
 
 
 # =============================================================================
-# CONFIG 2: VFE_EM — Principled E/M with implicit differentiation
+# CONFIG: EM — Principled E/M with implicit differentiation (mode='em')
 # =============================================================================
 # Gauge-covariant VFE transformer with proper E/M separation:
 #
@@ -210,7 +210,7 @@ STANDARD_CONFIG = {
 # =============================================================================
 SEED = 6
 
-VFE_EM_CONFIG = {
+EM_CONFIG = {
     # === Architecture ===
     'vocab_size': 50257,
     'embed_dim': 10,
@@ -293,8 +293,109 @@ VFE_EM_CONFIG = {
     'checkpoint_interval': 25000,
 }
 
+
 # =============================================================================
-# CONFIG 3: PURE VFE TRANSFORMER (No backprop, natural gradient only)
+# CONFIG: HEBBIAN — Backprop-free learning via P-flow + delta rule (mode='hebbian')
+# =============================================================================
+# Same gauge-VFE model as EM, but ALL parameter learning is local/Hebbian:
+#
+#   E-step: Same VFE natural gradient descent on (μ_q, Σ_q, φ).
+#
+#   M-step (no backprop):
+#     μ_embed, σ_embed: P-flow EMA toward successful beliefs (prediction-error weighted)
+#     φ_embed:          P-flow EMA toward E-step evolved φ (detached from backprop)
+#     W_out:            Delta rule ΔW = η·(target - pred) ⊗ μ^T (Widrow-Hoff)
+#
+#   Loss: CE only (alpha=0, beta=0). VFE regularizers are implicit in the
+#         E-step dynamics, not in the training loss.
+# =============================================================================
+HEBBIAN_CONFIG = {
+    # === Architecture (same model as EM) ===
+    'vocab_size': 50257,
+    'embed_dim': 10,
+    'n_layers': 1,
+    'hidden_dim': 508,
+    'max_seq_len': 128,
+    'ffn_mode': 'VFE_dynamic',
+    'tie_embeddings': False,
+    'use_layernorm': True,
+    'use_residual': True,
+    'use_output_projection': True,
+
+    # === Gauge group ===
+    'gauge_group': 'GLK',
+    'gauge_mode': 'learned',
+    'gauge_param': 'phi',
+    'irrep_spec': [('fund', 1, 10)],
+    'multihead_vfe': True,
+
+    # === E-step dynamics (same as EM) ===
+    'ffn_n_iterations': 1,
+    'ffn_learnable_lr': True,
+    'ffn_alpha': 1.0,
+    'ffn_lambda_belief': 1.0,
+    'evolve_sigma': True,
+    'evolve_phi': True,
+    'evolve_phi_e_step': True,
+    'diagonal_covariance': True,
+
+    # === Hebbian M-step: no backprop ===
+    'amortized_inference': False,
+    'use_p_flow': True,             # EMA update of embeddings toward successful beliefs
+    'p_flow_ema_decay': 0.95,
+    'use_delta_rule_w_out': True,   # Widrow-Hoff local learning for W_out
+    'delta_rule_lr': 0.1,
+    'detach_phi': True,             # phi learns via P-flow only (no backprop)
+
+    # === Loss weights: CE only (no VFE regularizers in backprop loss) ===
+    'alpha': 0.0,
+    'beta': 0.0,
+    'alpha_phi': 0.0,
+    'lambda_hyper': 0.0,
+    'lambda_gamma': 0.0,
+    'kappa_gamma': 1.0,
+
+    # === Phi gradient geometry ===
+    'phi_natural_gradient': 'killing',
+    'use_killing_form': True,
+    'killing_form_sym_dampening': 0.1,
+
+    # === Position encoding ===
+    'use_rope': True,
+    'pos_encoding_mode': 'none',
+
+    # === Embedding init ===
+    'mu_init_std': 1.0,
+    'phi_scale': 1.0,
+    'kappa_beta': 1.0,
+
+    # === Training ===
+    'batch_size': 64,
+    'num_workers': 10,
+    'max_steps': 15000,
+    'warmup_steps': 100,
+
+    # === Learning rates (backprop LRs less important; P-flow dominates) ===
+    'mu_lr': 0.05,
+    'sigma_lr': 0.0125,
+    'phi_lr': 0.0075,
+    'ffn_lr': 0.05,
+    'attention_lr': 0.005,
+    'output_lr': 0.05,
+
+    # === Regularization ===
+    'weight_decay': 0.01,
+    'grad_clip': 1.0,
+
+    # === Logging ===
+    'log_interval': 100,
+    'eval_interval': 500,
+    'checkpoint_interval': 25000,
+}
+
+
+# =============================================================================
+# CONFIG: PURE VFE — No backprop, natural gradient only (mode='pure_vfe')
 # =============================================================================
 # The purest realization of the free energy principle for sequence modeling.
 # NO nn.Module, NO autograd, NO optimizer. The entire system — inference AND
@@ -2931,16 +3032,20 @@ def main():
     # Mode selection
     parser.add_argument('--mode', type=str, default=DEFAULT_MODE,
                         choices=[
-                            'standard', 'VFE_dynamic',
-                            # Pure VFE (no backprop)
-                            'pure_vfe',                 # Pure VFE transformer (natural gradient only)
-                            # Intermediate baselines (peer review M2b, M2c)
-                            'standard_attn_only',      # (b) attention-only at d_model=90
-                            'standard_param_equalized', # (b') param-equalized wider FFN
-                            'standard_rope',            # (c) standard + RoPE at d=10
-                            'standard_rope_d90',        # (c') standard + RoPE at d=90
+                            # Primary modes
+                            'standard',                 # Dot-product attention + MLP baseline
+                            'em',                       # Gauge VFE + IFT implicit differentiation M-step
+                            'hebbian',                  # Gauge VFE + P-flow/delta-rule (no backprop)
+                            'pure_vfe',                 # Pure natural gradient (no autograd)
+                            # Backward compat alias
+                            'VFE_dynamic',              # → 'em'
+                            # Peer review ablations
+                            'standard_attn_only',       # (M2b) attention-only at d_model=90
+                            'standard_param_equalized', # (M2b') param-equalized wider FFN
+                            'standard_rope',            # (M2c) standard + RoPE at d=10
+                            'standard_rope_d90',        # (M2c') standard + RoPE at d=90
                         ],
-                        help='Training mode: standard, VFE_dynamic, pure_vfe, or intermediate baselines')
+                        help='Training mode: standard, em, hebbian, pure_vfe, or peer-review ablations')
 
     # Legacy alias for backwards compatibility
     parser.add_argument('--ffn_mode', type=str, default=None,
@@ -2996,13 +3101,11 @@ def main():
     # =================================================================
     # SELECT CONFIG BASED ON MODE
     # =================================================================
-    # Configs:
-    #   STANDARD_CONFIG               - Baseline transformer (dot-product + MLP)
-    #   VFE_EM_CONFIG                 - VFE with EM-step dynamics (backprop)
-    #   STANDARD_ATTN_ONLY_CONFIG     - (M2b) Attention-only at d_model=90
-    #   STANDARD_PARAM_EQUALIZED_CONFIG - (M2b') Param-equalized wider FFN
-    #   STANDARD_ROPE_CONFIG          - (M2c) Standard + RoPE at d=10
-    #   STANDARD_ROPE_D90_CONFIG      - (M2c') Standard + RoPE at d=90
+    # Primary modes:
+    #   standard  → STANDARD_CONFIG    Dot-product attention + MLP
+    #   em        → EM_CONFIG          Gauge VFE + IFT M-step (backprop)
+    #   hebbian   → HEBBIAN_CONFIG     Gauge VFE + P-flow/delta-rule (no backprop)
+    #   pure_vfe  → PURE_VFE_CONFIG    Pure natural gradient (no autograd)
     # =================================================================
 
     mode = args.mode
@@ -3013,23 +3116,33 @@ def main():
         print("="*70)
         print("   Attention: Q·K^T / √d (dot-product softmax)")
         print("   FFN: Linear → GELU → Linear (learned MLP)")
-        print("   Output: Linear projection")
         print("   Learning: Backpropagation")
         print("="*70 + "\n")
         config = STANDARD_CONFIG.copy()
         ffn_mode = 'standard'
 
-    elif mode == 'VFE_dynamic':
+    elif mode in ('em', 'VFE_dynamic'):
         print("\n" + "="*70)
-        print("MODE: VFE_EM (VFE with EM-step dynamics)")
+        print("MODE: EM (Gauge VFE + implicit differentiation M-step)")
         print("="*70)
-        print("   Attention: KL-divergence based (gauge-equivariant)")
-        print("   FFN: VFE EM-step dynamics")
-        print("   Output: Linear projection")
-        print("   Learning: Backpropagation")
-        print("   Position: None (emergent)")
+        print("   Attention: KL-divergence (gauge-equivariant)")
+        print("   E-step: Natural gradient VFE descent")
+        print("   M-step: Backprop with IFT-scaled gradient s_k = (α/σ²_p)/A_k")
+        print("   α_i adaptive: c0/(b0 + KL)")
         print("="*70 + "\n")
-        config = VFE_EM_CONFIG.copy()
+        config = EM_CONFIG.copy()
+        ffn_mode = 'VFE_dynamic'
+
+    elif mode == 'hebbian':
+        print("\n" + "="*70)
+        print("MODE: HEBBIAN (Gauge VFE + P-flow/delta-rule, no backprop)")
+        print("="*70)
+        print("   Attention: KL-divergence (gauge-equivariant)")
+        print("   E-step: Natural gradient VFE descent")
+        print("   M-step: P-flow EMA (μ,σ,φ) + delta rule (W_out)")
+        print("   No backpropagation through E-step")
+        print("="*70 + "\n")
+        config = HEBBIAN_CONFIG.copy()
         ffn_mode = 'VFE_dynamic'
 
     elif mode == 'standard_attn_only':
@@ -3119,8 +3232,8 @@ def main():
 
     else:
         print(f"\nError: Unknown mode '{mode}'")
-        print("Valid modes: standard, VFE_dynamic, pure_vfe, standard_attn_only, "
-              "standard_param_equalized, standard_rope, standard_rope_d90")
+        print("Valid modes: standard, em, hebbian, pure_vfe, "
+              "standard_attn_only, standard_param_equalized, standard_rope, standard_rope_d90")
         return
 
     config['dataset'] = args.dataset
