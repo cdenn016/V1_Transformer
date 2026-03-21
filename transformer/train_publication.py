@@ -106,7 +106,7 @@ from math_utils.numerical_monitor import flush as _flush_numerical_events
 #   'standard_rope_d90'         - (M2c') standard + RoPE at d=90
 
 DEFAULT_MODE = 'em'               # Which mode to run
-
+SEED = 6
 # Dataset
 DEFAULT_DATASET = 'wikitext-103'  
 # 'wikitext-2' (~2M tokens) or 'wikitext-103' (~103M tokens), 'wiki-ja' japanese (~1B tokens, 100k vocab)
@@ -200,20 +200,19 @@ STANDARD_CONFIG = {
 # =============================================================================
 # Gauge-covariant VFE transformer with proper E/M separation:
 #
-#   E-step: Partial VFE descent (prior + alignment, no observations) w.r.t.
-#           (μ_q, Σ_q, φ). 1 iteration. Fisher-preconditioned μ, SPD retraction
-#           for Σ, Killing-form for φ. Adaptive α_i = c0/(b0 + KL).
-#           Observations excluded: with 1 iter, obs gradient overwhelms
-#           prior+alignment → beliefs become target-dependent → cheating.
+#   E-step: Natural gradient descent on F w.r.t. (μ_q, Σ_q, φ) inside forward pass.
+#           Fisher-preconditioned μ, SPD retraction for Σ, Killing-form for φ.
+#           Adaptive α_i = c0/(b0 + KL) gates prior coupling per agent.
 #
-#   M-step: CE (observation signal) + auxiliary regularizers.
-#           CE → W_out directly; CE → embeddings via IFT scale s_k ≈ 0.5.
-#           KL(s||h) → sigma with fixed Σ_h. Gauge prior on φ.
-#           No α·KL(q*||p) (homogenizing with 1-iter q*). No β·KL (vacuum-seeking).
+#   M-step: Backprop through IFT-scaled gradient. Scale s_k = (α/σ²_p)/A_k
+#           where A_k is the effective precision at the E-step fixed point.
+#           Replaces ad-hoc straight-through (s=1) with the info-geometrically
+#           correct value. CE → W_out directly; CE → embeddings via IFT scale.
+#           KL(q*||p) → embeddings directly. KL(s||h) → sigma with fixed Σ_h.
 #
 #   Hierarchy: h(fixed) → s(embed params) → p=s → q(E-step beliefs) → obs
 # =============================================================================
-SEED = 6
+
 
 EM_CONFIG = {
     # === Architecture ===
@@ -223,10 +222,22 @@ EM_CONFIG = {
     'hidden_dim': 508,
     'max_seq_len': 128,
     'ffn_mode': 'VFE_dynamic',
+    
+    # === Training ===
+    'batch_size': 64,    
+    'max_steps': 15000,
+    'warmup_steps': 100,
+    'num_workers': 10,
+    
     'tie_embeddings': False,
+    
     'use_layernorm': True,
-    'use_residual': True,
+    'use_residual':  True,
     'use_output_projection': True,
+
+    'use_prior_bank': False,
+    'use_obs_in_vfe': True,        #cheats when true!  low trainPPL huge val PPL
+    'obs_warmup_steps': 2000,
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
     'gauge_group': 'GLK',
@@ -234,41 +245,57 @@ EM_CONFIG = {
     'gauge_param': 'phi',
     'irrep_spec': [('fund', 1, 10)],
     'multihead_vfe': True,
+    
+    
+    'diagonal_covariance':      True,
+    'exact_diagonal_transport': False,  #exact diagonal transport - more expensive
+    'isotropic_covariance':     False,    # If True, force Σ = σ²I (scalar variance × identity)
+                                       
+    'enforce_orthogonal':       False,   
+    'learnable_reflection':     False ,   # Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk 
+                                      # Set gauge-mode=constant and the above 3 = true for transf limit
+    
+    
 
     # === E-step dynamics ===
-    'ffn_n_iterations': 1,
-    'ffn_learnable_lr': True,
-    'ffn_alpha': 1.0,               # Prior coupling inside VFE E-step
-    'ffn_lambda_belief': 1.0,       # Belief alignment inside VFE E-step
-    'ffn_learnable_alpha': True,    # Adaptive α_i = c0/(b0 + KL) per dimension
-    'evolve_sigma': True,
-    'evolve_phi': True,
-    'evolve_phi_e_step': True,
-    'diagonal_covariance': True,
+    'ffn_n_iterations':    1,
+    
+    'ffn_alpha':           1.0,               # Prior coupling inside VFE E-step
+    'ffn_lambda_belief':   1.0,       # Belief alignment inside VFE E-step
+    
+    'learnable_alpha':     False,
+    'ffn_learnable_alpha': False,    # Adaptive α_i = c0/(b0 + KL) per dimension
+    
+    'evolve_sigma':        True,
+    'evolve_phi':          True,
+    'evolve_phi_e_step':   True,
+    
+    
+    'ffn_learnable_lr':    True,
 
     # === M-step: implicit differentiation ===
-    'implicit_em': True,
+    'implicit_em':         True,
     'amortized_inference': False,
-
-    # === E-step observation warmup ===
-    # Observations (-E_q[log p(o|k)]) are part of the VFE but with 1 iteration
-    # the obs gradient overwhelms prior+alignment at init (prior grad = 0 when
-    # q = p). After warmup, priors are calibrated and forces balance.
-    'obs_warmup_steps': 2000,       # E-step obs OFF for 2000 steps, then ON
-
+    'mask_self_attention': False,  # Prevent attention collapse?
+    
+    
+    
+    
+    
     # === VFE loss weights (M-step objective) ===
+    # Must match E-step: same F, same coefficients. E-step uses ffn_alpha=1,
     # alpha=1: once obs warmup completes, E-step produces data-grounded beliefs.
     # KL(q*||p) carries genuine signal: "adjust priors toward beliefs that
     # explain the data." IFT scale also uses ffn_alpha, so CE→embeddings at s_k≈0.5.
     # beta=0: alignment term is vacuum-seeking in M-step (minimizes all pairwise
     # KLs → homogeneous state). Even beta=0.01 kills attention. E-step handles
     # alignment internally.
-    'alpha': 1.0,                   # KL(q*||p) — meaningful after obs warmup
-    'beta': 0.0,                    # β·KL alignment — MUST be 0 (vacuum-seeking)
-    'alpha_phi': 0.1,               # Gauge prior: (α_φ/2)||φ||²
+    'alpha':        1.0,                   # KL(q*||p) — meaningful after obs warmup
+    'beta':         0.0,                    # = ffn_lambda_belief (belief alignment)
+    'alpha_phi':    0.1,               # Gauge prior: (α_φ/2)||φ||²
     'lambda_hyper': 0.1,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
     'lambda_gamma': 0.0,
-    'kappa_gamma': 1.0,
+    'kappa_gamma':  1.0,
 
     # === Phi gradient geometry ===
     'phi_natural_gradient': 'killing',
@@ -280,16 +307,12 @@ EM_CONFIG = {
     'pos_encoding_mode': 'none',
 
     # === Embedding init ===
-    'mu_init_std': 1.0,
-    'phi_scale': 1.0,
-    'kappa_beta': 1.0,
-
-    # === Training ===
-    'batch_size': 64,
-    'num_workers': 10,
-    'max_steps': 15000,
-    'warmup_steps': 100,
-
+    'mu_init_std':     1.0,
+    'phi_scale':       1.0,
+    'kappa_beta':      1.0,
+    'mu_normalize':    False,
+    'mu_max_norm':     None,
+    
     # === Learning rates ===
     'mu_lr': 0.05,
     'sigma_lr': 0.0125,
@@ -306,6 +329,28 @@ EM_CONFIG = {
     'log_interval': 100,
     'eval_interval': 500,
     'checkpoint_interval': 25000,
+    'semantic_analysis_interval': 10000,
+    
+    # =================================================================
+    # NON-FLAT GAUGE TRANSPORT (holonomy)
+    # =================================================================
+    # When enabled, transport acquires an edge-local connection δ_ij:
+    #   phi path:  Ω_ij = exp(φ_i·G) · exp(α·δ_ij·G) · exp(-φ_j·G)
+    #   omega path: Ω_ij = Ω_i · exp(α·δ_ij·G) · Ω_j⁻¹
+    # δ_ij is zero-initialized so the model starts flat and learns
+    # curvature only where the data warrants it.
+    # Holonomy H_ijk = Ω_ij·Ω_jk·Ω_ki ≠ I when δ ≠ 0.
+    'non_flat_transport': False,        # Enable edge-dependent connection δ_ij
+    'cocycle_relaxation': 0.5,          # Scale for δ_ij: 0=flat, 1=fully non-flat
+    'connection_type': 'bilinear',      # 'bilinear' (δ_ij^a = μ_i^T W^a μ_j) | 'mlp'
+    'connection_hidden_dim': 64,        # Hidden dim for MLP connection (ignored for bilinear)
+    'connection_init_scale': 0.01,      # W init scale (0=flat saddle point, 0.01 recommended)
+    'holonomy_penalty': 0.0,            # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
+    
+    # Option A: couple just 0↔1, head 2 stays independent
+    #'cross_couplings': [(0, 1), (1, 0)],
+    # → super-blocks: [20, 10]  (heads 0,1 merged into GL(20), head 2 alone)
+    
 }
 
 
@@ -807,6 +852,8 @@ STANDARD_ROPE_D90_CONFIG = {
 
 
 # =============================================================================
+
+
 
 
 
@@ -3327,4 +3374,3 @@ def main():
 if __name__ == '__main__':
 
     main()
-
