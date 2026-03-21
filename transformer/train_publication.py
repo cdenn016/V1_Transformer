@@ -432,6 +432,8 @@ VFE_EM_CONFIG = {
     'connection_hidden_dim': 64,        # Hidden dim for MLP connection (ignored for bilinear)
     'connection_init_scale': 0.01,      # W init scale (0=flat saddle point, 0.01 recommended)
     'holonomy_penalty': 0.0,            # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
+    'holonomy_interval': 500,           # Holonomy diagnostics every N steps (0 = disabled)
+    'holonomy_sample_size': 500,        # Random triples per holonomy computation
 
 }
 
@@ -1953,6 +1955,7 @@ class PublicationTrainer(FastTrainer):
                     )
                     if holonomy_dict:
                         # Merge holonomy metrics into the current step's CSV entry
+                        merged = False
                         for entry in reversed(self.metrics_tracker.history):
                             if entry['step'] == step + 1:
                                 entry['holonomy_mean_norm'] = holonomy_dict.get('holonomy/mean_norm')
@@ -1960,7 +1963,11 @@ class PublicationTrainer(FastTrainer):
                                 entry['holonomy_frac_gt_01'] = holonomy_dict.get('holonomy/frac_gt_0.1')
                                 entry['holonomy_spectral_gap'] = holonomy_dict.get('holonomy/spectral_gap')
                                 entry['holonomy_wilson_trace'] = holonomy_dict.get('holonomy/wilson_trace')
+                                merged = True
                                 break
+                        if not merged:
+                            print(f"[WARN] Holonomy at step {step+1}: no matching CSV entry "
+                                  f"(holonomy_interval may not be divisible by log_interval)")
                 except Exception as e:
                     print(f"[WARN] Holonomy computation failed at step {step+1}: {e}")
 
@@ -2387,6 +2394,12 @@ def run_single_experiment(
                                        getattr(args, 'semantic_analysis_interval', 10000) if args else 10000)
         pub_metrics.set_semantic_analysis_interval(semantic_interval)
         print(f"[Config] Gauge frame semantic analysis every {semantic_interval} steps")
+
+        # Configure holonomy diagnostics interval
+        holonomy_interval = config.get('holonomy_interval', 500)
+        holonomy_sample_size = config.get('holonomy_sample_size', 500)
+        pub_metrics.set_holonomy_interval(holonomy_interval, holonomy_sample_size)
+        print(f"[Config] Holonomy diagnostics every {holonomy_interval} steps (sample_size={holonomy_sample_size})")
 
     trainer = PublicationTrainer(
         model=model,
