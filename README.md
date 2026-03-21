@@ -10,6 +10,8 @@ achieves **76 test perplexity** on WikiText-103 (BPE-2 tokenization) with K=80, 
 8 heads, RoPE, and sequence length 128 after 1 epoch of training. All representational
 capacity comes from iterative variational free energy minimization over belief tuples (μ, Σ, φ). The E-step *is* the computation---it is not a learned feed-forward network.
 
+A separate **Pure VFE** mode eliminates autograd and backpropagation entirely---the model is a prior bank updated by natural-gradient M-steps.
+
 
 ## Core Thesis
 
@@ -68,6 +70,19 @@ beta_ij = softmax_j(-D_KL(q_i || Omega_ij q_j) / tau)
 ```
 
 where `Omega_ij = exp(phi_i) exp(-phi_j)` is the gauge transport between agents. **No W_Q, W_K, W_V projections are used**---attention arises from the geometry of belief distributions.
+
+
+## Training Modes
+
+The framework supports three training modes that span the spectrum from standard deep learning to fully analytic variational inference:
+
+| Mode | Architecture | Learning | Entry Point |
+|------|-------------|----------|-------------|
+| `VFE_dynamic` (default) | GaugeTransformerLM | Autograd + EM dynamics | `scripts/train_lightning.py` |
+| `standard` | StandardTransformerLM | Standard backprop baseline | `scripts/train_lightning.py` |
+| `pure_fep` | PureVFETransformer | No autograd; analytic natural gradient | `run.py` |
+
+**VFE_dynamic** is the default gauge-covariant mode: attention weights β recompute at each VFE iteration, and belief updates follow natural gradient descent on the full free energy. **Standard** provides a dot-product attention + MLP baseline for controlled comparison. **Pure FEP** is the most radical: no `nn.Module`, no `loss.backward()`, no optimizer---the model is a bank of Gaussian priors updated by analytic natural gradient M-steps.
 
 
 ## Theoretical Framework
@@ -173,6 +188,30 @@ The gauge transport Ω_ij = exp(φ_i)·exp(-φ_j) via matrix exponentials always
 
 covering both connected components of O(K). Sign vectors are applied at embedding time via `μ_i ← s_i ⊙ μ_i` with straight-through estimator for gradient flow.
 
+### Non-Flat Transport and Holonomy
+
+The default transport assumes a **flat bundle**: `Ω_ij = exp(φ_i)·exp(-φ_j)` satisfies the cocycle condition `Ω_ij · Ω_jk = Ω_ik` exactly, meaning parallel transport around any closed loop is trivial. The `GaugeConnection` module (`transformer/core/connection.py`) generalizes this by introducing edge-local Lie algebra elements `δ_ij`:
+
+```
+Ω_ij = exp(φ_i · G) · exp(α · δ_ij · G) · exp(-φ_j · G)
+```
+
+Two parameterizations are available:
+- **Bilinear** (default): `δ_ij^a = μ_i^T W^a μ_j` --- one bilinear form per generator, parameter-efficient
+- **MLP**: `δ_ij = MLP([μ_i; μ_j])` --- more expressive, higher memory
+
+Both are **zero-initialized** so the model starts in the flat regime and learns curvature only where the data warrants it.
+
+**Holonomy** measures the curvature of the learned connection. For a triangle `(i, j, k)`:
+
+```
+C_ijk = exp(δ_ij · G) · exp(δ_jk · G) · exp(δ_ki · G)
+```
+
+When the connection is flat, `C_ijk = I` for all triples. The Frobenius norm `‖C_ijk - I‖_F` quantifies deviation from flatness. A `holonomy_penalty_loss()` regularizer pushes the model toward flatness, controlled by `holonomy_penalty` in the config.
+
+Holonomy analysis tools include per-snapshot statistics (`transformer/analysis/holonomy_metrics.py`), curvature-by-distance profiles, flatness trajectories over training, and visualization (`transformer/visualization/holonomy_plots.py`). A synthetic gauge language generator (`transformer/data/synthetic_gauge.py`) produces data with controlled holonomy for testing.
+
 ### Phi Gradient Preconditioning
 
 The gauge frame φ ∈ gl(K) requires geometric preconditioning because the backward pass through `matrix_exp` amplifies non-compact (symmetric) directions exponentially. Four modes:
@@ -199,6 +238,20 @@ Enabled via `use_deq=True`. Provides O(1) memory in iterations vs O(n_iterations
 ### Symmetry Breaking
 
 Without observations, the free energy defines a gauge-symmetric vacuum---all agents converge to identical beliefs modulo gauge orbit (analogous to an untrained network). Observations break this symmetry, driving agents toward specialized representations determined by training data. Learning is thus interpreted as explicit symmetry breaking.
+
+### Pure VFE Transformer
+
+The `PureVFETransformer` (`transformer/pure_vfe/model.py`) takes the variational principle to its logical conclusion: **no `nn.Module`, no autograd, no backpropagation**. The entire model is a prior bank---one Gaussian `N(μ_v, Σ_v)` per vocabulary token plus per-head gauge frames `Ω_v ∈ GL(K_h)`:
+
+- **Forward pass = E-step**: Given token IDs, look up priors, then run VFE natural gradient descent to infer posterior beliefs `q_i`. Attention weights emerge from KL geometry exactly as in the autograd version.
+- **Learning = M-step**: Update priors via analytic natural gradient on the free energy. No `loss.backward()`, no optimizer. Gauge frames update via the left-invariant natural gradient on GL(K):
+
+```
+ξ = Ωᵀ · ∂F/∂Ω          (pullback to Lie algebra)
+ΔΩ = -η · Ω · clip(ξ)   (push forward with trust region)
+```
+
+Covariances update on the SPD manifold via retraction. The `PureVFEConfig` (`transformer/pure_vfe/config.py`) controls E-step iterations, trust regions, SPD safeguards, and gauge frame stability. Quick-start: edit the config in `run.py` and execute directly.
 
 
 ## Experimental Results
@@ -245,10 +298,11 @@ pip install torch numpy scipy numba matplotlib seaborn plotly networkx scikit-le
 | Category | Packages |
 |---|---|
 | **Core** | PyTorch (>=2.0.0), NumPy, SciPy, Numba |
+| **Training** | PyTorch Lightning, Weights & Biases (`wandb`) |
 | **Visualization** | Matplotlib, Seaborn, Plotly |
 | **Data** | HuggingFace `datasets`, `tiktoken` |
 | **Analysis** | scikit-learn, NetworkX |
-| **Optional** | SymPy (symbolic derivations), Triton (GPU kernels), CuPy (CUDA kernels), `transformers` (BERT diagnostics) |
+| **Optional** | SymPy (symbolic derivations), Triton (GPU kernels), CuPy (CUDA kernels), `transformers` (BERT diagnostics), PyMC (Bayesian analysis), SHAP, UMAP-learn |
 
 
 ## Usage
@@ -256,13 +310,15 @@ pip install torch numpy scipy numba matplotlib seaborn plotly networkx scikit-le
 ### Training
 
 ```bash
-# Standard VFE training with gauge-theoretic attention
-python transformer/train.py
+# PyTorch Lightning training (recommended — supports VFE_dynamic, standard, pure_fep)
+python scripts/train_lightning.py
 
-# Publication-quality training with full experimental features
-python transformer/train_publication.py
+# Quick-start Pure VFE (edit config in file, then run)
+python run.py
 
-# Resume from checkpoint
+# Legacy training scripts
+python transformer/train.py                                # Standard VFE training
+python transformer/train_publication.py                    # Publication-quality with ablations
 python transformer/resume_training.py --checkpoint path/to/model.pt
 ```
 
@@ -287,6 +343,18 @@ python roberta_diagnostics.py
 
 # RG flow analysis over training
 python scripts/analyze_rg_flow.py
+
+# Ablation suite (systematic hyperparameter sweeps)
+python scripts/run_ablation_suite.py
+
+# Interactive visualization (UMAP + Plotly + SHAP)
+python scripts/run_interactive_viz.py
+
+# Gauge frame spectral analysis (validates W_Q W_K^T = σ⁻² Ω⁻ᵀ on BERT/GPT-2)
+python scripts/gauge_frame_spectral_analysis.py
+
+# Bayesian RG exponent analysis
+python scripts/rg_exponent_bayesian.py
 
 # Generate publication figures
 python scripts/generate_publication_figures.py
@@ -316,37 +384,56 @@ gauge-holonomy/
 │   │   ├── prior_bank.py           #     Token-dependent prior distributions
 │   │   ├── gauge_utils.py          #     matrix_exp, Newton-Schulz, fused KL
 │   │   ├── gauge_preconditioner.py #     Riemannian φ preconditioning
-│   │   ├── connection.py           #     Gauge connection abstraction
-│   │   ├── block_config.py         #     BlockConfig dataclass
+│   │   ├── connection.py           #     GaugeConnection (non-flat transport, holonomy)
+│   │   ├── block_config.py         #     BlockConfig dataclass (60+ unified params)
 │   │   └── triton_kernels.py       #     Triton-optimized KL and matrix exp
+│   ├── pure_vfe/                   #   Pure VFE transformer (no autograd)
+│   │   ├── model.py                #     PureVFETransformer (prior bank architecture)
+│   │   ├── train.py                #     Pure VFE training loop
+│   │   ├── gauge.py                #     GL(K) transport and natural gradients
+│   │   ├── config.py               #     PureVFEConfig dataclass
+│   │   ├── inference.py            #     E-step belief inference
+│   │   ├── learning.py             #     M-step natural gradient updates
+│   │   ├── gaussians.py            #     Gaussian distribution utilities
+│   │   └── cuda_ext.py             #     Optional CUDA kernel compilation
 │   ├── analysis/                   #   Analysis & diagnostics
 │   │   ├── rg_metrics.py           #     RG flow: meta-agents, modularity, effective rank
 │   │   ├── rg_flow_analysis.py     #     RG flow tracking across layers/iterations
-│   │   ├── rg_flow_enhanced.py     #     Full RG diagnostics
+│   │   ├── rg_flow_enhanced.py     #     Full RG diagnostics with gauge frames
 │   │   ├── publication_metrics.py  #     BPC, perplexity, statistical significance
 │   │   ├── semantics.py            #     Clustering interpretation, emergent categories
 │   │   ├── bayesian_validation.py  #     Bayesian validation of KL alignment
-│   │   ├── holonomy.py             #     Holonomy measurement
+│   │   ├── holonomy.py             #     Holonomy computation and penalty loss
+│   │   ├── holonomy_metrics.py     #     HolonomySnapshot/Profile, curvature analysis
 │   │   └── trajectory.py           #     Belief trajectory tracking
 │   ├── visualization/              #   Plotting utilities
 │   │   ├── attention_viz.py        #     Attention heatmaps and KL plots
 │   │   ├── belief_space_viz.py     #     Belief distribution visualization
+│   │   ├── interactive_belief_viz.py #   UMAP + Plotly + SHAP visualizations
+│   │   ├── holonomy_plots.py       #     Curvature diagnostics visualization
 │   │   ├── training_plots.py       #     Training curves
 │   │   ├── trajectory_plots.py     #     Belief evolution
-│   │   └── ablation_plots.py       #     Ablation comparisons
+│   │   ├── ablation_plots.py       #     Ablation comparisons
+│   │   ├── belief_space_frequent.py #    Frequent token analysis
+│   │   └── attention_context.py    #     Context-aware attention analysis
 │   ├── data/                       #   Data loading
-│   │   ├── datasets.py             #     WikiText-2/103, synthetic gauge language
+│   │   ├── datasets.py             #     WikiText-2/103, wiki-ja, OpenWebText
 │   │   └── synthetic_gauge.py      #     Synthetic language with controlled holonomy
 │   ├── training/                   #   Training infrastructure
-│   │   ├── config.py               #     TrainingConfig dataclass
+│   │   ├── config.py               #     TrainingConfig (standard/VFE_dynamic/pure_fep)
 │   │   ├── train_fast.py           #     Optimized training loop
 │   │   ├── optimizer.py            #     Gauge-specific parameter grouping
-│   │   └── metrics.py              #     Training metrics
+│   │   ├── metrics.py              #     Training metrics
+│   │   ├── lightning_module.py     #     GaugeTransformerLitModule (Lightning)
+│   │   ├── lightning_pure_vfe.py   #     PureVFELitModule (Lightning)
+│   │   ├── lightning_data.py       #     GaugeDataModule (Lightning)
+│   │   └── holonomy_callback.py    #     Holonomy tracking callback
 │   ├── baselines/                  #   Reference implementations
-│   │   └── standard_transformer.py #     StandardTransformerLM (dot-product attention + MLP)
+│   │   ├── standard_transformer.py #     StandardTransformerLM (dot-product + MLP)
+│   │   └── flops_counter.py        #     FLOPs comparison (gauge vs standard)
 │   ├── utils/                      #   Checkpoint, evaluation, testing utilities
 │   ├── train.py                    #   Main training entry point
-│   ├── train_publication.py        #   Publication-quality training
+│   ├── train_publication.py        #   Publication-quality training with ablations
 │   └── resume_training.py          #   Resume from checkpoint
 ├── math_utils/                     # Mathematical primitives
 │   ├── generators.py               #   SO(3)/SO(N)/GL(K) Lie algebra generators
@@ -355,30 +442,29 @@ gauge-holonomy/
 │   ├── numba_kernels.py            #   Numba JIT kernels (KL, Rodrigues)
 │   ├── cuda_kernels.py             #   CuPy CUDA kernels
 │   └── numerical_utils.py          #   Stability helpers (regularization, clipping)
-├── experiments/                    # Experiment configurations
-│   └── configs/
-│       └── flat_bundle_configs.py  #   Flat bundle hypothesis test configs
-├── derivations/                    # Symbolic mathematical derivations
-│   ├── constant_gauge_kl_derivation.py   # KL under constant GL(K) transport (SymPy)
-│   ├── analytic_phi_grad_derivation.py   # ∂KL/∂Ω for diagonal covariances
-│   └── constant_gauge_kl_derivation.md   # Derivation documentation
-├── scripts/                        # Utility scripts
+├── scripts/                        # Analysis and utility scripts
+│   ├── train_lightning.py          #   Lightning training (3 modes: standard/VFE/pure_fep)
+│   ├── run_ablation_suite.py       #   Systematic hyperparameter sweeps
+│   ├── run_interactive_viz.py      #   Interactive UMAP + Plotly + SHAP visualization
 │   ├── analyze_rg_flow.py          #   RG flow analysis
+│   ├── run_rg_experiments.py       #   RG coarse-graining experiments
+│   ├── rg_exponent_bayesian.py     #   Bayesian RG exponent inference (PyMC)
+│   ├── rg_universality_bayesian.py #   Bayesian universality analysis
+│   ├── rg_universality_networkx.py #   Graph-based RG coarse-graining
+│   ├── rg_deviation_analysis.py    #   RG deviation diagnostics
+│   ├── gauge_frame_spectral_analysis.py  # Spectral analysis (BERT/GPT-2 validation)
 │   ├── generate_publication_figures.py   # Publication figures
 │   └── kn5_baseline.py             #   KN5 baseline comparison
-├── tests/                          # Test suite
-│   ├── transformer/                #   Core tests (attention, model, training, ...)
-│   └── experiments/                #   Experiment tests (non-flat transport)
+├── tests/                          # Test suite (18 test files)
 ├── Data/                           # Experimental data and baselines
 │   └── Standard_Baselines/         #   Standard transformer baseline results
+├── run.py                          # Click-to-run Pure VFE training
 ├── generate.py                     # Interactive text generation
 ├── inference.py                    # Model inference and analysis
 ├── transformer_test.py             # BERT validation (144 heads)
 ├── roberta_diagnostics.py          # RoBERTa analysis
 ├── claude.md                       # Architecture reference and code standards
-├── FLAT_BUNDLE_HYPOTHESES.md       # Testable predictions for flat bundle conjecture
-├── FLAT_BUNDLE_IMPLEMENTATION_PLAN.md  # Implementation plan for hypothesis tests
-├── REVIEW.md                       # Codebase review (theory–implementation alignment)
+├── dynamic_language_plan.md        # Diachronic language evolution plan
 └── pytest.ini                      # Test configuration
 ```
 
