@@ -990,6 +990,9 @@ class PublicationMetricsTracker:
             # Holonomy (non-flat transport curvature)
             'holonomy_mean_norm', 'holonomy_max_norm',
             'holonomy_frac_gt_01', 'holonomy_spectral_gap', 'holonomy_wilson_trace',
+
+            # Numerical fallback counters
+            'num_chol_recover', 'num_chol_fail', 'num_nan_replace', 'num_inv_pinv',
         ]
 
         with open(self.save_path, 'w', newline='') as f:
@@ -1085,6 +1088,12 @@ class PublicationMetricsTracker:
             'holonomy_frac_gt_01': metrics.get('holonomy/frac_gt_0.1'),
             'holonomy_spectral_gap': metrics.get('holonomy/spectral_gap'),
             'holonomy_wilson_trace': metrics.get('holonomy/wilson_trace'),
+
+            # Numerical fallback counters
+            'num_chol_recover': metrics.get('num/chol_recover', 0),
+            'num_chol_fail': metrics.get('num/chol_fail', 0),
+            'num_nan_replace': metrics.get('num/nan_replace', 0),
+            'num_inv_pinv': metrics.get('num/inv_pinv', 0),
         }
 
         self.history.append(entry)
@@ -1756,6 +1765,11 @@ class PublicationTrainer(FastTrainer):
 
             # Log to basic tracker and console at log intervals OR when RG metrics were computed
             if is_log_step or has_rg:
+                # Flush numerical fallback counters and inject into metrics
+                _num_events = _flush_numerical_events()
+                for _nk, _nv in _num_events.items():
+                    metrics[f'num/{_nk}'] = _nv
+
                 batch_size = batch[0].shape[0]
                 seq_len = batch[0].shape[1]
                 self.metrics_tracker.log_step(
@@ -1838,8 +1852,7 @@ class PublicationTrainer(FastTrainer):
                     if _rg_msg:
                         print(_rg_msg)
 
-                # Flush numerical fallback counters and report if any fired
-                _num_events = _flush_numerical_events()
+                # Report numerical fallback counters if any fired
                 if _num_events:
                     _num_msg = "  [NUM] " + " | ".join(
                         f"{k}: {v}" for k, v in sorted(_num_events.items())
@@ -1958,6 +1971,13 @@ class PublicationTrainer(FastTrainer):
                     )
                 except Exception as e:
                     print(f"[WARN] Semantic analysis failed at step {step+1}: {e}")
+
+        # Flush any remaining numerical events accumulated after the last log step
+        _final_num_events = _flush_numerical_events()
+        if _final_num_events:
+            print("  [NUM] Final: " + " | ".join(
+                f"{k}: {v}" for k, v in sorted(_final_num_events.items())
+            ))
 
         # Save final metrics
         self.metrics_tracker.save()
