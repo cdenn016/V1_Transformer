@@ -1193,7 +1193,7 @@ class PublicationMetrics:
         curvature even when cocycle_relaxation is scheduled from 0→1.
         """
         try:
-            embed = getattr(model, 'token_embedding', None)
+            embed = getattr(model, 'token_embed', None) or getattr(model, 'token_embedding', None)
             if embed is None:
                 return None
             mu_embed = getattr(embed, 'mu_embed', None)
