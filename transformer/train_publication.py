@@ -74,6 +74,9 @@ from typing import Dict, List, Tuple, Any
 
 from transformer.core.model import GaugeTransformerLM
 from transformer.baselines.standard_transformer import StandardTransformerLM
+from transformer.pure_vfe.model import PureVFETransformer
+from transformer.pure_vfe.config import PureVFEConfig
+from transformer.pure_vfe.gauge import monitor_omega_health
 from transformer.baselines.flops_counter import (
     count_standard_transformer_flops,
     count_gauge_transformer_flops,
@@ -98,6 +101,7 @@ from math_utils.numerical_monitor import flush as _flush_numerical_events
 # Modes available:
 #   'standard'    - Standard transformer baseline (dot-product attention + MLP)
 #   'VFE_dynamic' - VFE with EM-step dynamics (backprop training)
+#   'pure_vfe'    - Pure VFE transformer (no backprop, natural gradient only)
 #   'standard_attn_only',      # (b) attention-only at d_model=90
 #   'standard_param_equalized', # (b') param-equalized wider FFN
 #   'standard_rope',            # (c) standard + RoPE at d=10
@@ -435,6 +439,99 @@ VFE_EM_CONFIG = {
     'holonomy_interval': 500,           # Holonomy diagnostics every N steps (0 = disabled)
     'holonomy_sample_size': 500,        # Random triples per holonomy computation
 
+}
+
+
+# =============================================================================
+# CONFIG 3: PURE VFE TRANSFORMER (No backprop, natural gradient only)
+# =============================================================================
+# The purest realization of the free energy principle for sequence modeling.
+# NO nn.Module, NO autograd, NO optimizer. The entire system — inference AND
+# learning — operates through natural gradient descent on the gauge-covariant
+# VFE with analytic closed-form gradients.
+#
+# Architecture:
+#   - Model: Prior bank {N(μ_v, Σ_v), Ω_v} per vocabulary token
+#   - Inference: E-step VFE descent (replaces forward pass)
+#   - Learning: M-step natural gradient on prior bank
+#   - Attention: KL-divergence based with gauge transport
+#   - No linear projections, no output head — logits = −KL(q||π_v)
+# =============================================================================
+PURE_VFE_CONFIG = {
+    # Belief geometry
+    'vocab_size': 50257,
+    'belief_dim': 32,             # K: full belief dimension
+    'n_heads': 4,                 # H: number of heads (block-diagonal)
+    'head_dim': 8,                # K_h = K / H
+
+    # E-step (inference = forward pass)
+    'n_esteps': 12,               # Iterations of VFE descent (replaces "depth")
+    'tau': None,                  # Attention temperature (defaults to √K_h)
+    'eta_E': 0.1,                 # E-step natural gradient step size
+
+    # M-step (learning = parameter update)
+    'eta_M': 0.001,               # M-step natural gradient step size
+
+    # Prior precision (state-dependent α)
+    'alpha_b0': 1.0,
+    'alpha_c0': 1.0,
+
+    # Hyper-prior regularization
+    'hyper_var': 1.0,
+
+    # Sequence
+    'max_seq_len': 128,           # Match other modes
+    'batch_size': 32,
+
+    # Initialization
+    'sigma_init': 1.0,
+    'omega_init_scale': 0.01,
+
+    # E-step numerical stability
+    'sigma_lr_ratio': 0.05,
+    'e_step_lr_decay': 0.5,
+    'grad_clamp': 1e3,
+
+    # Trust regions
+    'trust_region_mu': 2.0,
+    'trust_region_sigma': 0.15,
+    'trust_region_omega': 0.3,
+
+    # SPD retraction
+    'spd_eps_min': 1e-3,
+    'spd_kappa_max': 1e4,
+    'spd_exp_clip': 20.0,
+
+    # Prior safeguards
+    'prior_sigma_floor': 0.5,
+    'prior_mu_max_norm': 3.0,
+    'm_step_trust_mu': 0.5,
+
+    # Gauge frame parameterization
+    'gauge_param': 'omega',       # 'omega' (direct GL(K)) or 'phi' (Lie algebra)
+    'omega_cond_max': 100.0,
+    'phi_max_norm': 3.14159,
+
+    # M-step options
+    'sigma_obs_grad': 'none',
+    'm_step_eta_floor': 0.01,
+
+    # Recovery
+    'nan_recovery': True,
+
+    # Causal masking
+    'causal': True,
+
+    # Device & kernels
+    'device': 'cuda',
+    'use_cuda_kernels': True,
+
+    # Training loop params (used by run_pure_vfe_experiment, not PureVFEConfig)
+    'max_steps': 30000,
+    'log_interval': 100,
+    'eval_interval': 1000,
+    'checkpoint_interval': 25000,
+    'num_workers': 10,
 }
 
 
@@ -2512,6 +2609,434 @@ def run_single_experiment(
         raise
 
 
+# =============================================================================
+# PURE VFE EXPERIMENT (dedicated loop — no nn.Module, no optimizer)
+# =============================================================================
+
+def _validate_pure_vfe(model, loader, device, max_samples=12800):
+    """Validation for PureVFETransformer: forward-only, compute CE manually."""
+    total_ce_tokens = 0.0
+    total_tokens = 0
+    total_samples = 0
+
+    with torch.no_grad():
+        for input_ids, target_ids in loader:
+            if total_samples >= max_samples:
+                break
+            input_ids = input_ids.to(device)
+            target_ids = target_ids.to(device)
+
+            logits = model.forward(input_ids)
+            ce = F.cross_entropy(
+                logits.reshape(-1, logits.size(-1)),
+                target_ids.reshape(-1),
+                ignore_index=-100,
+            ).item()
+
+            non_pad = (target_ids != -100).sum().item()
+            total_ce_tokens += ce * non_pad
+            total_tokens += non_pad
+            total_samples += input_ids.size(0)
+
+    avg_ce = total_ce_tokens / max(1, total_tokens)
+    return {
+        'loss': avg_ce,
+        'ce_loss': avg_ce,
+        'perplexity': math.exp(min(avg_ce, 20)),
+    }
+
+
+def run_pure_vfe_experiment(
+    config: dict,
+    device: torch.device,
+    checkpoint_dir: Path,
+    args: argparse.Namespace = None,
+) -> Dict:
+    """
+    Run a training experiment with the Pure VFE Transformer.
+
+    This is a dedicated training loop since PureVFETransformer is NOT an
+    nn.Module — it has no parameters(), no backward(), no optimizer.
+    Training happens via model.update() which internally runs E-step
+    (VFE descent) + M-step (natural gradient on priors).
+    """
+    print("\n" + "="*70)
+    print("EXPERIMENT: PURE VFE TRANSFORMER")
+    print("="*70)
+
+    ffn_mode = 'pure_vfe'
+    exp_checkpoint_dir = checkpoint_dir / f"ffn_{ffn_mode}"
+    exp_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save experiment configuration
+    save_experiment_config(config, ffn_mode, exp_checkpoint_dir, args)
+
+    # =================================================================
+    # Data Loading (same pipeline as other modes)
+    # =================================================================
+    dataset_name = config.get('dataset', 'wikitext-103')
+    print("\n" + "="*70)
+    print(f"LOADING {dataset_name.upper()} DATA")
+    print("="*70)
+
+    tokenizer_mode = config.get('tokenizer', 'auto')
+    if tokenizer_mode == 'auto':
+        use_char = config['vocab_size'] <= 256
+    else:
+        use_char = (tokenizer_mode == 'char')
+
+    test_loader = None
+    if use_char:
+        print(f"Using CHARACTER-LEVEL tokenizer (vocab_size={config['vocab_size']})")
+        train_loader, val_loader, actual_vocab_size = create_char_dataloaders(
+            max_seq_len=config['max_seq_len'],
+            batch_size=config['batch_size'],
+            num_workers=config.get('num_workers', 0),
+        )
+    else:
+        print(f"Using BPE tokenizer (vocab_size={config['vocab_size']})")
+        train_loader, val_loader, test_loader, actual_vocab_size, tokenizer = create_dataloaders(
+            max_seq_len=config['max_seq_len'],
+            batch_size=config['batch_size'],
+            vocab_size=config['vocab_size'],
+            num_workers=config.get('num_workers', 0),
+            dataset=dataset_name,
+            include_test=True,
+            return_tokenizer=True,
+        )
+
+    config['vocab_size'] = actual_vocab_size
+
+    # =================================================================
+    # Model Creation
+    # =================================================================
+    print("\n" + "="*70)
+    print("CREATING PURE VFE MODEL")
+    print("="*70)
+
+    # Build PureVFEConfig from the config dict (only pass fields that PureVFEConfig accepts)
+    import dataclasses
+    vfe_field_names = {f.name for f in dataclasses.fields(PureVFEConfig)}
+    vfe_kwargs = {k: v for k, v in config.items() if k in vfe_field_names}
+    vfe_kwargs['device'] = str(device)
+    pure_config = PureVFEConfig(**vfe_kwargs)
+
+    model = PureVFETransformer(pure_config)
+    params = model.param_count()
+    total_params = params['total']
+
+    print(f"  K (belief_dim): {pure_config.belief_dim}")
+    print(f"  H (n_heads):    {pure_config.n_heads}")
+    print(f"  K_h (head_dim): {pure_config.head_dim}")
+    print(f"  N (seq len):    {pure_config.max_seq_len}")
+    print(f"  E-steps:        {pure_config.n_esteps}")
+    print(f"  eta_E:          {pure_config.eta_E}")
+    print(f"  eta_M:          {pure_config.eta_M}")
+    print(f"  gauge_param:    {pure_config.gauge_param}")
+    print(f"  Vocab:          {actual_vocab_size}")
+    print(f"\nModel Parameters: {total_params:,}")
+    for k, v in params.items():
+        if k != 'total':
+            print(f"  {k}: {v:,}")
+
+    # Attempt to load CUDA kernels
+    if pure_config.use_cuda_kernels and str(device) == 'cuda':
+        try:
+            from transformer.pure_vfe.cuda_ext import get_cuda_ext
+            cuda_ext = get_cuda_ext()
+            if cuda_ext:
+                print("\n[CUDA kernels active]")
+            else:
+                print("\n[Falling back to PyTorch ops]")
+        except Exception:
+            print("\n[CUDA kernels not available, using PyTorch ops]")
+
+    # =================================================================
+    # Training Configuration
+    # =================================================================
+    max_steps = config.get('max_steps', 30000)
+    log_interval = config.get('log_interval', 100)
+    eval_interval = config.get('eval_interval', 1000)
+    checkpoint_interval = config.get('checkpoint_interval', 25000)
+
+    steps_per_epoch = len(train_loader)
+    batch_size = config['batch_size']
+    seq_len = config['max_seq_len']
+    tokens_per_step = batch_size * seq_len
+    total_tokens = max_steps * tokens_per_step
+
+    try:
+        dataset_tokens = len(train_loader.dataset.tokens)
+    except AttributeError:
+        dataset_tokens = None
+
+    print("\n" + "="*70)
+    print("TRAINING CONFIGURATION")
+    print("="*70)
+    print(f"  Max steps:      {max_steps:,}")
+    print(f"  Steps/epoch:    {steps_per_epoch:,}")
+    equiv_epochs = max_steps / steps_per_epoch if steps_per_epoch > 0 else 0
+    print(f"  *** EPOCHS:     {equiv_epochs:.4f} ***")
+    print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
+    if dataset_tokens:
+        coverage = total_tokens / dataset_tokens * 100
+        print(f"  Dataset:        {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
+    print(f"  Batch size:     {batch_size}")
+    print(f"  Seq length:     {seq_len}")
+    print(f"  No optimizer (natural gradient only)")
+
+    # =================================================================
+    # Metrics Tracker
+    # =================================================================
+    metrics_path = exp_checkpoint_dir / 'metrics.csv'
+    metrics_tracker = PublicationMetricsTracker(metrics_path)
+    print(f"\n[INFO] Logging metrics to: {metrics_path}")
+
+    # =================================================================
+    # Training Loop
+    # =================================================================
+    print("\n" + "="*70)
+    print("STARTING PURE VFE TRAINING")
+    print("="*70)
+    print(f"  Device: {device}")
+    print(f"  No backprop — E-step VFE descent + M-step natural gradient")
+    print("="*70 + "\n")
+
+    best_val_ce = float('inf')
+    train_iterator = iter(train_loader)
+    start_time = time.time()
+
+    try:
+        from tqdm import tqdm
+        pbar = tqdm(range(max_steps), desc="Training")
+        use_tqdm = True
+    except ImportError:
+        pbar = range(max_steps)
+        use_tqdm = False
+
+    try:
+        for step in pbar:
+            step_start = time.time()
+
+            # Get batch
+            try:
+                batch = next(train_iterator)
+            except StopIteration:
+                train_iterator = iter(train_loader)
+                batch = next(train_iterator)
+
+            input_ids, target_ids = batch
+            input_ids = input_ids.to(device)
+            target_ids = target_ids.to(device)
+
+            # Training step: E-step + M-step (no backward!)
+            logits, ce_loss, vfe_history = model.update(input_ids, target_ids)
+
+            step_time = time.time() - step_start
+
+            # Logging
+            if (step + 1) % log_interval == 0:
+                ppl = math.exp(min(ce_loss, 20))
+                bpc = ce_loss / math.log(2)
+                vfe_0 = vfe_history[0] if vfe_history else 0.0
+                vfe_f = vfe_history[-1] if vfe_history else 0.0
+
+                metrics = {
+                    'train_loss_total': ce_loss,
+                    'train_loss_ce': ce_loss,
+                    'train_loss_belief_align': 0,
+                    'train_loss_self_consistency': 0,
+                    'train_loss_model_coupling': 0,
+                    'train_ppl': ppl,
+                    'beta_mean': 0,
+                    'beta_std': 0,
+                    'kl_mean': 0,
+                    'kl_std': 0,
+                    'attention_entropy': 0,
+                    'attention_concentration': 0,
+                }
+
+                # No optimizer LRs — use eta_E/eta_M as stand-ins
+                lrs = {
+                    'eta_E': pure_config.eta_E,
+                    'eta_M': pure_config.eta_M,
+                }
+
+                metrics_tracker.log_step(
+                    step + 1, metrics, lrs, None, step_time, batch_size, seq_len
+                )
+
+                log_msg = (
+                    f"Step {step+1}/{max_steps} | "
+                    f"CE: {ce_loss:.4f} | "
+                    f"PPL: {ppl:.1f} | "
+                    f"BPC: {bpc:.3f} | "
+                    f"VFE: {vfe_0:.1f}->{vfe_f:.1f} | "
+                    f"{step_time:.2f}s"
+                )
+
+                if use_tqdm:
+                    pbar.set_description(log_msg)
+                else:
+                    print(log_msg)
+
+                # Prior health diagnostics
+                with torch.no_grad():
+                    sig_eigs = torch.linalg.eigvalsh(model.prior_Sigma[:100])
+                    sig_min = sig_eigs[..., 0].min().item()
+                    sig_max = sig_eigs[..., -1].max().item()
+                    mu_norms = model.prior_mu.norm(dim=-1)
+                    mu_mean = mu_norms.mean().item()
+                    mu_max = mu_norms.max().item()
+
+                    if sig_min < 0.05 or mu_max > 10.0:
+                        health_msg = (f"  [WARN] Sigma_min={sig_min:.4f} Sigma_max={sig_max:.2f} "
+                                      f"mu_mean={mu_mean:.2f} mu_max={mu_max:.2f}")
+                        if use_tqdm:
+                            tqdm.write(health_msg)
+                        else:
+                            print(health_msg)
+
+                    health = monitor_omega_health(model.prior_Omega[:100], "prior_Omega")
+                    if health['prior_Omega/cond_max'] > 100:
+                        omega_msg = f"  [WARN] Omega cond number high: {health['prior_Omega/cond_max']:.1f}"
+                        if use_tqdm:
+                            tqdm.write(omega_msg)
+                        else:
+                            print(omega_msg)
+
+                # Flush numerical events
+                _num_events = _flush_numerical_events()
+                if _num_events:
+                    _num_msg = "  [NUM] " + " | ".join(
+                        f"{k}: {v}" for k, v in sorted(_num_events.items())
+                    )
+                    if use_tqdm:
+                        tqdm.write(_num_msg)
+                    else:
+                        print(_num_msg)
+
+            # Validation
+            if (step + 1) % eval_interval == 0:
+                val_metrics = _validate_pure_vfe(model, val_loader, device)
+                metrics_tracker.log_val(step + 1, val_metrics)
+
+                print(f"\n  Validation @ step {step+1}:")
+                print(f"    Loss: {val_metrics['loss']:.4f}")
+                print(f"    PPL: {val_metrics['perplexity']:.2f}")
+                print(f"    BPC: {val_metrics['ce_loss']/math.log(2):.3f}\n")
+
+                # Save best model
+                if val_metrics['ce_loss'] < best_val_ce:
+                    best_val_ce = val_metrics['ce_loss']
+                    best_path = exp_checkpoint_dir / 'best_model.pt'
+                    model.save(best_path)
+                    print(f"    Saved best model (CE={best_val_ce:.4f})")
+
+            # Checkpointing
+            if (step + 1) % checkpoint_interval == 0:
+                ckpt_path = exp_checkpoint_dir / f'checkpoint_step_{step+1}.pt'
+                model.save(ckpt_path)
+                metrics_tracker.save()
+
+        # Save final metrics
+        metrics_tracker.save()
+        print(f"\n[INFO] Final metrics saved to: {metrics_path}")
+
+        # Final evaluation
+        print("\n" + "="*70)
+        print("TRAINING COMPLETE!")
+        print("="*70)
+
+        elapsed = time.time() - start_time
+        print(f"Total time: {elapsed/60:.1f} minutes ({elapsed/3600:.2f} hours)")
+
+        final_metrics = _validate_pure_vfe(model, val_loader, device)
+
+        print(f"\nFinal Validation Metrics:")
+        print(f"  Loss:       {final_metrics['loss']:.4f}")
+        print(f"  Perplexity: {final_metrics['perplexity']:.2f}")
+
+        random_ppl = actual_vocab_size
+        improvement = random_ppl / final_metrics['perplexity']
+        print(f"\nValidation improvement over random:")
+        print(f"  Random:     {random_ppl:.0f}")
+        print(f"  Model:      {final_metrics['perplexity']:.2f}")
+        print(f"  Factor:     {improvement:.1f}x better!")
+
+        # Save final checkpoint
+        final_path = exp_checkpoint_dir / 'best_model.pt'
+        model.save(final_path)
+        print(f"\nSaved: {final_path}")
+
+        # Test set evaluation
+        test_metrics = None
+        if test_loader is not None:
+            print("\n" + "="*70)
+            print("FINAL TEST SET EVALUATION")
+            print("="*70)
+            test_val = _validate_pure_vfe(model, test_loader, device, max_samples=128000)
+            test_bpc = test_val['ce_loss'] / math.log(2)
+            test_improvement = random_ppl / test_val['perplexity']
+            test_metrics = {
+                'test_loss': test_val['loss'],
+                'test_ppl': test_val['perplexity'],
+                'test_bpc': test_bpc,
+                'improvement': test_improvement,
+            }
+            print(f"  Test Loss: {test_val['loss']:.4f}")
+            print(f"  Test PPL:  {test_val['perplexity']:.2f}")
+            print(f"  Test BPC:  {test_bpc:.3f}")
+            print(f"  vs random: {test_improvement:.1f}x better")
+
+        # Return result dict (same format as run_single_experiment)
+        result = {
+            'ffn_mode': ffn_mode,
+            'final_loss': final_metrics['loss'],
+            'final_ppl': final_metrics['perplexity'],
+            'random_ppl': random_ppl,
+            'improvement': improvement,
+            'total_params': total_params,
+            'vocab_size': actual_vocab_size,
+            'checkpoint': str(final_path),
+            'total_steps': max_steps,
+            'tokens_seen': total_tokens,
+            'dataset_tokens': dataset_tokens,
+            'dataset_coverage': total_tokens / dataset_tokens if dataset_tokens else None,
+            'batch_size': batch_size,
+            'seq_len': seq_len,
+            # Pure VFE-specific
+            'belief_dim': pure_config.belief_dim,
+            'n_heads': pure_config.n_heads,
+            'n_esteps': pure_config.n_esteps,
+            'eta_E': pure_config.eta_E,
+            'eta_M': pure_config.eta_M,
+            'gauge_param': pure_config.gauge_param,
+        }
+
+        if test_metrics is not None:
+            result['test_loss'] = test_metrics['test_loss']
+            result['test_ppl'] = test_metrics['test_ppl']
+            result['test_bpc'] = test_metrics['test_bpc']
+            result['test_improvement'] = test_metrics['improvement']
+
+        return result
+
+    except KeyboardInterrupt:
+        print("\n\n" + "="*70)
+        print("TRAINING INTERRUPTED")
+        print("="*70)
+        ckpt_path = exp_checkpoint_dir / 'interrupted_model.pt'
+        model.save(ckpt_path)
+        print(f"Saved: {ckpt_path}")
+        metrics_tracker.save()
+        return None
+
+    except Exception as e:
+        print(f"\n\n Error: {e}")
+        raise
+
+
 def main():
     parser = argparse.ArgumentParser(description='Publication Training Script')
 
@@ -2519,13 +3044,15 @@ def main():
     parser.add_argument('--mode', type=str, default=DEFAULT_MODE,
                         choices=[
                             'standard', 'VFE_dynamic',
+                            # Pure VFE (no backprop)
+                            'pure_vfe',                 # Pure VFE transformer (natural gradient only)
                             # Intermediate baselines (peer review M2b, M2c)
                             'standard_attn_only',      # (b) attention-only at d_model=90
                             'standard_param_equalized', # (b') param-equalized wider FFN
                             'standard_rope',            # (c) standard + RoPE at d=10
                             'standard_rope_d90',        # (c') standard + RoPE at d=90
                         ],
-                        help='Training mode: standard, VFE_dynamic, or intermediate baselines')
+                        help='Training mode: standard, VFE_dynamic, pure_vfe, or intermediate baselines')
 
     # Legacy alias for backwards compatibility
     parser.add_argument('--ffn_mode', type=str, default=None,
@@ -2665,9 +3192,46 @@ def main():
         config = STANDARD_ROPE_D90_CONFIG.copy()
         ffn_mode = 'standard'
 
+    elif mode == 'pure_vfe':
+        print("\n" + "="*70)
+        print("MODE: PURE VFE TRANSFORMER (No backprop)")
+        print("="*70)
+        print("   Model: Prior bank {N(mu_v, Sigma_v), Omega_v} per token")
+        print("   Inference: E-step VFE descent (replaces forward pass)")
+        print("   Learning: M-step natural gradient on prior bank")
+        print("   Attention: KL-divergence based with gauge transport")
+        print("   No nn.Module, no autograd, no optimizer")
+        print("="*70 + "\n")
+        config = PURE_VFE_CONFIG.copy()
+        config['dataset'] = args.dataset
+
+        if args.dataset == 'wiki-ja' and config['vocab_size'] == 50257:
+            config['vocab_size'] = 100277
+            print(f"\n[wiki-ja] Auto-adjusted vocab_size: 50257 -> 100277 (cl100k_base full vocab)")
+
+        # Pure VFE uses a dedicated experiment loop (not run_single_experiment)
+        result = run_pure_vfe_experiment(
+            config=config,
+            device=device,
+            checkpoint_dir=checkpoint_dir,
+            args=args,
+        )
+
+        if result is not None:
+            result_file = checkpoint_dir / f"result_{mode}.json"
+            result_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(result_file, 'w') as f:
+                json.dump(result, f, indent=2)
+            print(f"\nSaved result: {result_file}")
+
+        print("\n" + "="*70)
+        print("SESSION COMPLETE")
+        print("="*70)
+        return
+
     else:
         print(f"\nError: Unknown mode '{mode}'")
-        print("Valid modes: standard, VFE_dynamic, standard_attn_only, "
+        print("Valid modes: standard, VFE_dynamic, pure_vfe, standard_attn_only, "
               "standard_param_equalized, standard_rope, standard_rope_d90")
         return
 
@@ -2678,7 +3242,7 @@ def main():
     # would discard important Japanese tokens and map them to UNK
     if args.dataset == 'wiki-ja' and config['vocab_size'] == 50257:
         config['vocab_size'] = 100277
-        print(f"\n[wiki-ja] Auto-adjusted vocab_size: 50257 → 100277 (cl100k_base full vocab)")
+        print(f"\n[wiki-ja] Auto-adjusted vocab_size: 50257 -> 100277 (cl100k_base full vocab)")
 
     result = run_single_experiment(
         config=config,
