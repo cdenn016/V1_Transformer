@@ -10,6 +10,8 @@ Mathematical reference:
   - derivations/constant_gauge_kl_derivation.md (KL decomposition)
 """
 
+import warnings
+
 import torch
 import torch.nn.functional as F
 
@@ -21,24 +23,70 @@ from .cuda_ext import get_cuda_ext
 # ---------------------------------------------------------------------------
 
 def safe_inverse(M, eps=1e-6):
-    """Robust matrix inverse with conditioning check."""
+    """
+    Robust matrix inverse with escalating regularization.
+
+    Mirrors math_utils.numerical_utils.safe_inv pattern:
+    try bare inv, then eps*I, 100*eps*I, 10000*eps*I.
+    CUDA raises RuntimeError (not LinAlgError) for singular matrices.
+    """
     try:
         return torch.linalg.inv(M)
     except (torch.linalg.LinAlgError, RuntimeError):
-        # Add regularization (RuntimeError can occur on CUDA for singular matrices)
         eye = torch.eye(M.shape[-1], device=M.device, dtype=M.dtype)
-        return torch.linalg.inv(M + eps * eye.expand_as(M))
+        for scale in (1, 100, 10000):
+            reg = eps * scale
+            try:
+                result = torch.linalg.inv(M + reg * eye.expand_as(M))
+                warnings.warn(
+                    f"safe_inverse: singular matrix, regularized with "
+                    f"eps={reg:.1e} (shape {list(M.shape)}, "
+                    f"device={M.device})",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                return result
+            except (torch.linalg.LinAlgError, RuntimeError):
+                continue
+        # Should never reach here, but final fallback
+        warnings.warn(
+            f"safe_inverse: all regularization levels failed "
+            f"(shape {list(M.shape)}), returning heavy regularization",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return torch.linalg.inv(M + (eps * 100000) * eye.expand_as(M))
 
 
 def safe_logdet(M):
-    """Log-determinant via Cholesky for SPD matrices, slogdet fallback."""
+    """
+    Log-determinant via Cholesky for SPD matrices, slogdet fallback.
+
+    CUDA raises RuntimeError (not LinAlgError) for non-PD matrices.
+    Returns 0 for negative determinants (non-PD) rather than silently
+    returning a wrong log-determinant.
+    """
     try:
         L = torch.linalg.cholesky(M)
         return 2.0 * torch.diagonal(L, dim1=-2, dim2=-1).log().sum(-1)
     except (torch.linalg.LinAlgError, RuntimeError):
-        # RuntimeError can occur on CUDA for non-PD matrices
         sign, logabsdet = torch.linalg.slogdet(M)
-        # For SPD matrices sign should be +1; clamp to 0 if negative (non-PD)
+        n_bad = (sign <= 0).sum().item()
+        if n_bad > 0:
+            warnings.warn(
+                f"safe_logdet: Cholesky failed, slogdet found {n_bad} "
+                f"non-PD matrices (shape {list(M.shape)}, "
+                f"device={M.device}); clamping their logdet to 0",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        else:
+            warnings.warn(
+                f"safe_logdet: Cholesky failed but slogdet succeeded "
+                f"(shape {list(M.shape)}, device={M.device})",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         return torch.where(sign > 0, logabsdet, torch.zeros_like(logabsdet))
 
 
