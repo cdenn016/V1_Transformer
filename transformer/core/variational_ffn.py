@@ -1883,12 +1883,13 @@ class VariationalFFNDynamic(nn.Module):
         embed_dim: int,
         generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators
         alpha: float = 0.01,       # Self-coupling weight (KL(q||p)) for E-step VFE descent.
-                                   # NOTE: This is typically different from the M-step loss alpha
-                                   # (config['alpha']). The E-step uses strong coupling (e.g. 1.0)
-                                   # for belief stability, while the M-step uses weak coupling
-                                   # (e.g. 0.075) to avoid KL dominating the loss. This deviates
-                                   # from exact EM (which requires the same F for both steps) but
-                                   # is motivated by training stability.
+                                   # NOTE: Decoupled from the M-step loss alpha (config['alpha']).
+                                   # With amortized inference, dCE/dθ flows through q*(θ) via the
+                                   # VFE computation graph, so dq*/dθ already encodes the
+                                   # self-coupling effect. Adding explicit KL(q||p) in the M-step
+                                   # loss double-counts the coupling. Correct separation: E-step
+                                   # handles belief regularization (α_E > 0), M-step handles
+                                   # prediction quality (CE only, α_M = 0).
         lambda_belief: float = 1.0,  # Belief alignment weight
         kappa: float = 1.0,        # Attention temperature
         n_iterations: int = 10,    # VFE descent steps (more steps = deeper equilibration)
