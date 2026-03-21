@@ -66,12 +66,15 @@ class PureVFETransformer:
             self.prior_Omega = phi_to_omega(self.prior_phi, self.gl_generators)
             self.pos_Omega = phi_to_omega(self.pos_phi, self.gl_generators)
         else:
-            # Direct GL⁺(K_h) storage (default 'omega' path)
+            # Direct GL(K_h) storage (default 'omega' path)
+            neg_frac = getattr(config, 'omega_negative_det_fraction', 0.0)
             self.prior_Omega = init_omega(
-                (V, H, K_h, K_h), scale=config.omega_init_scale, device=dev
+                (V, H, K_h, K_h), scale=config.omega_init_scale, device=dev,
+                negative_det_fraction=neg_frac,
             )
             self.pos_Omega = init_omega(
-                (N_max, H, K_h, K_h), scale=config.omega_init_scale, device=dev
+                (N_max, H, K_h, K_h), scale=config.omega_init_scale, device=dev,
+                negative_det_fraction=neg_frac,
             )
             self.prior_phi = None
             self.pos_phi = None

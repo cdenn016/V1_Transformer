@@ -287,18 +287,23 @@ class GaugeTokenEmbedding(nn.Module):
             nn.init.normal_(self.pos_embed.weight, mean=0.0, std=init_std)
 
         # =================================================================
-        # O(K) Reflection Embedding: per-token sign vector s_i ∈ {±1}^K
+        # Reflection Embedding: per-token sign vector s_i ∈ {±1}^K
         # =================================================================
-        # Extends SO(K) gauge transport to full O(K) = SO(K) ⋊ (Z_2)^{K-1}.
-        # The exponential map exp: so(K) → SO(K) can only reach det = +1.
-        # Adding per-dimension sign flips covers the det = -1 component.
+        # Adds discrete per-dimension sign flips to extend the continuous
+        # gauge group to include reflections (det < 0 component):
         #
-        # Transport becomes: Ω_ij = diag(s_i) · exp(φ_i) · exp(-φ_j) · diag(s_j)
-        # which is implemented by applying s_i ⊙ μ_i before the SO(K) rotation.
+        #   phi path:  extends SO(K) → O(K) = SO(K) ⋊ (Z_2)^{K-1}
+        #   omega path: extends GL⁺(K) → GL(K) via diag(s_i) · Ω_i
+        #
+        # The Lie algebra retraction preserves det sign, so continuous
+        # gradient descent cannot cross between GL⁺ and GL⁻. The discrete
+        # sign vectors provide the missing degree of freedom.
+        #
+        # Transport becomes: Ω_ij = diag(s_i) · Ω_i · Ω_j⁻¹ · diag(s_j)
+        # which is implemented by applying s_i ⊙ μ_i before gauge transport.
         #
         # Properties (verified symbolically):
-        #   - Ω ∈ O(K): ΩΩ^T = I  ✓
-        #   - det(Ω) covers ±1  ✓
+        #   - det(Ω_eff) covers both signs  ✓
         #   - S(Ω) = 0 (geometric bias vanishes)  ✓
         #   - Isotropic covariance preserved under transport  ✓
         #   - Clean Q-K factorization: Q_i = s_i ⊙ μ_i  ✓

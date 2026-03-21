@@ -281,8 +281,8 @@ def test_retract_omega_preserves_invertibility(device):
 
 # ── Test 7: Init omega near identity ──────────────────────────────────────
 
-def test_init_omega(device):
-    """init_omega produces well-conditioned matrices near identity."""
+def test_init_omega_gl_plus(device):
+    """Default init_omega produces GL⁺(K) frames (positive det)."""
     from transformer.pure_vfe.gauge import init_omega
 
     shape = (10, 2, 3, 3)
@@ -290,7 +290,7 @@ def test_init_omega(device):
 
     assert omega.shape == shape
 
-    # All determinants should be positive (init ensures this)
+    # All determinants should be positive (default = GL⁺(K))
     dets = torch.linalg.det(omega)
     assert (dets > 0).all(), f"Some determinants are negative: {dets.min():.4f}"
 
@@ -298,6 +298,68 @@ def test_init_omega(device):
     eye = torch.eye(3, device=device)
     diff = (omega - eye).norm(dim=(-2, -1)).mean()
     assert diff < 0.1, f"Init too far from identity: mean ||Ω-I|| = {diff:.4f}"
+
+
+def test_init_omega_gl_full(device):
+    """With negative_det_fraction > 0, init_omega seeds both GL(K) components."""
+    from transformer.pure_vfe.gauge import init_omega
+
+    shape = (100, 2, 3, 3)
+    omega = init_omega(shape, scale=0.01, device=device, negative_det_fraction=0.5)
+
+    assert omega.shape == shape
+
+    dets = torch.linalg.det(omega)
+    n_pos = (dets > 0).sum().item()
+    n_neg = (dets < 0).sum().item()
+    total = dets.numel()
+
+    # With 50% fraction and 200 frames, expect roughly 100 of each
+    assert n_neg > 0, "Expected some negative determinants"
+    assert n_pos > 0, "Expected some positive determinants"
+    assert 0.3 < n_neg / total < 0.7, \
+        f"Expected ~50% negative, got {n_neg/total:.1%}"
+
+
+# ── Test 7b: Polar factor regularization preserves det sign ───────────────
+
+def test_regularize_preserves_det_sign(device):
+    """Polar-factor regularization preserves determinant sign for both components."""
+    from transformer.pure_vfe.gauge import regularize_omega_conditioning
+
+    K = 4
+    # Create well-conditioned frames, then make ill-conditioned via scaling
+    D = torch.diag(torch.tensor([20.0, 0.1, 1.0, 1.0], device=device))
+
+    # GL⁺(K) frames (positive det)
+    base_pos = torch.eye(K, device=device) + 0.05 * torch.randn(5, K, K, device=device)
+    omega_pos = base_pos @ D  # ill-conditioned, det > 0
+
+    # GL⁻(K) frames (negative det) — flip first column
+    omega_neg = omega_pos.clone()
+    omega_neg[:, :, 0] *= -1
+
+    # Verify preconditions
+    assert (torch.linalg.det(omega_pos) > 0).all()
+    assert (torch.linalg.det(omega_neg) < 0).all()
+
+    # Regularize with tight threshold
+    reg_pos = regularize_omega_conditioning(omega_pos, cond_max=5.0)
+    reg_neg = regularize_omega_conditioning(omega_neg, cond_max=5.0)
+
+    # Det sign must be preserved
+    assert (torch.linalg.det(reg_pos) > 0).all(), \
+        "Regularization flipped positive det to negative"
+    assert (torch.linalg.det(reg_neg) < 0).all(), \
+        "Regularization flipped negative det to positive"
+
+    # Condition number should decrease
+    cond_before = torch.linalg.svdvals(omega_pos)
+    cond_before = cond_before[..., 0] / cond_before[..., -1].clamp(min=1e-8)
+    cond_after = torch.linalg.svdvals(reg_pos)
+    cond_after = cond_after[..., 0] / cond_after[..., -1].clamp(min=1e-8)
+    assert (cond_after < cond_before).all(), \
+        "Regularization should reduce condition number"
 
 
 # ── Test 8: Monitor omega health ──────────────────────────────────────────
