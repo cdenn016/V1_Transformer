@@ -246,6 +246,12 @@ VFE_EM_CONFIG = {
     'amortized_inference': False,
 
     # === VFE loss weights (M-step objective) ===
+    # Must match E-step: same F, same coefficients. E-step uses ffn_alpha=1,
+    # ffn_lambda_belief=1, so M-step must use alpha=1, beta=1.
+    'alpha': 1.0,                   # = ffn_alpha (prior self-coupling)
+    'beta': 1.0,                    # = ffn_lambda_belief (belief alignment)
+    'alpha_phi': 0.1,               # Gauge prior: (α_φ/2)||φ||²
+    'lambda_hyper': 0.1,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
     'alpha': 1,
     'alpha_phi': 0.1,
     'lambda_hyper': 0.1,
