@@ -14,11 +14,12 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 ### Entry Points
 
-- `run.py` — Click-to-run Pure VFE transformer (no nn.Module, no autograd)
+
 - `generate.py` — Interactive text generation with attention visualization
 - `inference.py` — Model inference and token probability analysis
 - `transformer_test.py` — BERT 144-head KL-alignment validation
 - `roberta_diagnostics.py` — RoBERTa diagnostic analysis
+- 'train_publication.py' - the primary training entry point
 
 ### `transformer/core/` — Architecture
 
@@ -46,6 +47,7 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 ### `transformer/training/` — Training Infrastructure
 
+- 'train_publication.py' - primary training entrypoint.  
 - `config.py` — `TrainingConfig` dataclass (single source of truth for hyperparameters)
 - `optimizer.py` — Parameter-group-aware AdamW with per-type learning rates
 - `lightning_module.py` — `GaugeTransformerLitModule` (PyTorch Lightning wrapper)
@@ -67,7 +69,6 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 - `baselines/` — `standard_transformer.py` (dot-product attention baseline), `flops_counter.py`
 - `utils/` — `checkpoint.py`, `evaluation.py`, `testing.py`
 - `train.py` — Standard training loop
-- `train_publication.py` — Publication-quality training with full diagnostics
 - `resume_training.py` — Checkpoint resume
 
 ### `math_utils/` — Mathematical Primitives
