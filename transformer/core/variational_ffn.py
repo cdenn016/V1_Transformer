@@ -3167,9 +3167,20 @@ class VariationalFFNDynamic(nn.Module):
                 discrete_obs_grad = torch.matmul(grad_error, W_out)
                 grad_mu = grad_mu + discrete_obs_grad
 
-                # Observation gradient for sigma via expected CE Hessian diagonal:
-                # ∂E_q[CE]/∂σ_k = 0.5 * [E_p[W[:,k]²] - E_p[W[:,k]]²]
-                # = 0.5 * Var_p[W[:,k]] ≥ 0: shrinks σ near observed tokens.
+                # Observation gradient for sigma via precision-weighted Hessian:
+                #
+                # The CE Hessian diagonal H_kk = Var_p[W[:,k]] gives the
+                # observation Fisher precision per latent dimension.
+                #
+                # Naive gradient 0.5*H_kk is O(1) in σ, but the prior/alignment
+                # gradients are O(1/σ) from KL structure. After the σ² natural
+                # gradient scaling, the whitened updates become:
+                #   prior:  whitened ∝ (1 - σ/σ_p)   — O(1), survives
+                #   naive:  whitened ∝ σ·H_kk         — O(σ), vanishes
+                #
+                # Fix: use ∂/∂σ[0.5·H_kk·log(σ)] = 0.5·H_kk/σ, which is the
+                # precision-space gradient (adding H_kk to π=1/σ) converted via
+                # chain rule. This gives whitened ∝ H_kk — O(1), matching prior.
                 if self.obs_sigma_gradient:
                     W_out_sq = W_out ** 2                                # (V, K)
                     EW2 = torch.matmul(probs, W_out_sq)                  # (B, N, K)
@@ -3179,7 +3190,9 @@ class VariationalFFNDynamic(nn.Module):
                     if (hessian_diag < 0).any():
                         _nr("obs_sigma_hessian_neg_clamp")
                         hessian_diag = hessian_diag.clamp(min=0.0)
-                    grad_sigma = grad_sigma + (0.5 * self.obs_sigma_weight) * hessian_diag * mask_obs
+                    # Precision-weighted: divide by σ for O(1/σ) scaling
+                    sigma_safe = sigma_current.clamp(min=eps)
+                    grad_sigma = grad_sigma + (0.5 * self.obs_sigma_weight) * hessian_diag / sigma_safe * mask_obs
 
             # Clip for stability
             grad_mu = torch.clamp(grad_mu, min=-1e3, max=1e3)
