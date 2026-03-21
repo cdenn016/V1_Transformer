@@ -3370,6 +3370,10 @@ class VariationalFFNDynamic(nn.Module):
                 one_hot = one_hot * mask_obs
                 grad_error = (probs - one_hot) * mask_obs
                 discrete_obs_grad = torch.matmul(grad_error, W_out)
+                # Scale observation gradient by obs_weight (for warmup ramp)
+                _obs_weight = getattr(self, '_obs_weight', 1.0)
+                if _obs_weight < 1.0:
+                    discrete_obs_grad = discrete_obs_grad * _obs_weight
                 grad_mu = grad_mu + discrete_obs_grad
 
                 # Observation gradient for sigma (exact via Stein's lemma):
@@ -3388,7 +3392,8 @@ class VariationalFFNDynamic(nn.Module):
                     if (hessian_diag < 0).any():
                         _nr("obs_sigma_hessian_neg_clamp")
                         hessian_diag = hessian_diag.clamp(min=0.0)
-                    grad_sigma = grad_sigma + (0.5 * self.obs_sigma_weight) * hessian_diag * mask_obs
+                    _sigma_obs_scale = (0.5 * self.obs_sigma_weight) * _obs_weight
+                    grad_sigma = grad_sigma + _sigma_obs_scale * hessian_diag * mask_obs
 
             # Clip for stability
             grad_mu = torch.clamp(grad_mu, min=-1e3, max=1e3)
@@ -3614,7 +3619,12 @@ class VariationalFFNDynamic(nn.Module):
             _beta_for_scale = getattr(self, '_last_beta_for_implicit', None)
 
             if _beta_for_scale is not None:
-                _alpha_for_scale = alpha_effective if self.learnable_alpha else self.alpha
+                # Always use fixed ffn_alpha for IFT scale, NOT adaptive alpha_i.
+                # Adaptive α_i gates E-step dynamics (shrinks as KL grows), but using
+                # it for IFT creates a death spiral: α_i↓ → scale↓ → weak CE signal
+                # → embeddings don't learn → more smoothing → KL↑ → α_i↓ further.
+                # The IFT scale should be a stable structural property.
+                _alpha_for_scale = self.alpha
                 mu_scale, sigma_scale = compute_implicit_em_scales(
                     alpha_i=_alpha_for_scale,
                     sigma_p=sigma_p,

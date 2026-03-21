@@ -282,16 +282,19 @@ EM_CONFIG = {
     
     
     
+    # === E-step observation warmup ===
+    # Ramp observation weight in E-step from 0 → 1 linearly over warmup_steps.
+    # At step 0, obs_weight=0 (E-step = prior+alignment only). At step W,
+    # obs_weight=1 (full VFE). Gradual ramp avoids the "cheating" of binary ON.
+    'obs_warmup_steps': 2000,
+
     # === VFE loss weights (M-step objective) ===
-    # Must match E-step: same F, same coefficients. E-step uses ffn_alpha=1,
-    # alpha=1: once obs warmup completes, E-step produces data-grounded beliefs.
-    # KL(q*||p) carries genuine signal: "adjust priors toward beliefs that
-    # explain the data." IFT scale also uses ffn_alpha, so CE→embeddings at s_k≈0.5.
-    # beta=0: alignment term is vacuum-seeking in M-step (minimizes all pairwise
-    # KLs → homogeneous state). Even beta=0.01 kills attention. E-step handles
-    # alignment internally.
-    'alpha':        1.0,                   # KL(q*||p) — meaningful after obs warmup
-    'beta':         0.0,                    # = ffn_lambda_belief (belief alignment)
+    # alpha=1: as obs ramps up, E-step produces data-grounded beliefs.
+    # KL(q*||p) carries signal: "adjust priors toward beliefs that explain data."
+    # IFT scale uses fixed ffn_alpha → s_k ≈ 0.5 regardless of loss alpha.
+    # beta=0: alignment term is vacuum-seeking. E-step handles it internally.
+    'alpha':        1.0,                   # KL(q*||p) — meaningful as obs ramps up
+    'beta':         0.0,                   # β·KL alignment — MUST be 0 (vacuum-seeking)
     'alpha_phi':    0.1,               # Gauge prior: (α_φ/2)||φ||²
     'lambda_hyper': 0.1,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
     'lambda_gamma': 0.0,
@@ -1511,15 +1514,22 @@ class PublicationTrainer(FastTrainer):
         else:
             effective_beta = target_beta
 
-        # Obs warmup: E-step observations OFF for obs_warmup_steps, then ON.
+        # Obs warmup: linearly ramp observation weight in E-step from 0 → 1.
         # With 1 E-step iteration, the observation gradient (-∂CE/∂μ) overwhelms
-        # prior+alignment forces at init (prior grad = 0 when q = p). After warmup,
-        # priors are calibrated (KL > 0) and the forces can balance.
+        # prior+alignment forces at init (prior grad = 0 when q = p). Ramping
+        # lets priors calibrate first, then gradually introduces data coupling.
         obs_warmup = getattr(self.config, 'obs_warmup_steps', 0)
         if obs_warmup > 0:
-            use_obs = self.global_step >= obs_warmup
+            obs_weight = min(1.0, self.global_step / obs_warmup)
+            use_obs = True  # Always pass targets; weight controls strength
         else:
+            obs_weight = 1.0
             use_obs = getattr(self.config, 'use_obs_in_vfe', False)
+
+        # Set obs_weight on the last block's FFN (read inside VFE E-step)
+        if not is_standard and hasattr(self.model, 'transformer'):
+            for block in self.model.transformer.blocks:
+                block.ffn._obs_weight = obs_weight
 
         # Forward pass with full metrics (with optional AMP)
         if self.scaler is not None:
