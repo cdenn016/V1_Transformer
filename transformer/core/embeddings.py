@@ -497,89 +497,181 @@ class GaugeTokenEmbedding(nn.Module):
     # =========================================================================
     # P-FLOW: EMA update of token embeddings toward successful beliefs
     # =========================================================================
+    def _compute_pflow_weights(
+        self,
+        token_ids: torch.Tensor,           # (B, N)
+        prediction_errors: torch.Tensor,   # (B, N)
+        pad_token_id: int = -1,
+    ) -> tuple:
+        r"""Compute per-token-type prediction-error-weighted averages.
+
+        Returns (unique_tokens, inverse_idx, weights) where weights are
+        segment-wise softmax(-error) per token type, matching PriorBank's
+        implementation. Uses scatter ops for O(B*N) vectorized computation.
+        """
+        flat_ids = token_ids.reshape(-1)            # (B*N,)
+        flat_errors = prediction_errors.reshape(-1)  # (B*N,)
+
+        # Mask padding
+        valid = (flat_ids != pad_token_id)
+        neg_errors = (-flat_errors.clamp(min=-10, max=10))
+        # Set padding to very negative so it gets near-zero softmax weight
+        neg_errors = neg_errors.masked_fill(~valid, -20.0)
+
+        unique_tokens, inverse_idx = torch.unique(flat_ids, return_inverse=True)
+        n_unique = unique_tokens.shape[0]
+
+        # Segment-wise softmax: max per token type for numerical stability
+        seg_max = torch.full((n_unique,), float('-inf'), device=flat_ids.device, dtype=neg_errors.dtype)
+        seg_max.scatter_reduce_(0, inverse_idx, neg_errors, reduce='amax', include_self=False)
+        shifted = neg_errors - seg_max[inverse_idx]
+        exp_shifted = torch.exp(shifted)
+        exp_shifted = exp_shifted * valid.float()  # Zero padding contributions
+
+        # Normalize per token type
+        seg_sum = torch.zeros(n_unique, device=flat_ids.device, dtype=neg_errors.dtype)
+        seg_sum.scatter_add_(0, inverse_idx, exp_shifted)
+        weights = exp_shifted / seg_sum[inverse_idx].clamp(min=1e-12)
+
+        return unique_tokens, inverse_idx, weights, n_unique
+
     def update_embeddings_from_beliefs(
         self,
         token_ids: torch.Tensor,           # (B, N) token IDs in this batch
         mu_beliefs: torch.Tensor,          # (B, N, K) final beliefs after VFE
         prediction_errors: torch.Tensor,   # (B, N) per-position CE loss
         ema_decay: float = 0.99,           # EMA decay rate (higher = slower update)
-        min_weight: float = 0.01,          # Minimum weight to prevent dead tokens
+        sigma_beliefs: Optional[torch.Tensor] = None,  # (B, N, K) belief variances
         pad_token_id: int = -1,            # Padding token ID to ignore
     ):
-        """
-        P-flow: Update token embeddings toward successful beliefs via EMA.
+        r"""P-flow: Update token embeddings toward successful beliefs via EMA.
 
-        This is the key learning mechanism from fep_transformer.py:
-        - Beliefs with low prediction error are "successful"
-        - Token embeddings should drift toward successful beliefs
-        - EMA provides stable, gradual updates
+        Uses vectorized scatter ops (matching PriorBank implementation) with
+        segment-wise softmax per token type. Updates both mu and sigma embeddings.
 
         Formula:
-            μ_token ← (1 - η·w) · μ_token + η·w · μ_belief
+            \mu_{\text{token}} \leftarrow (1 - \eta) \mu_{\text{token}} + \eta \bar{\mu}_{\text{belief}}
 
-        where w = softmax(-error) weights by prediction success.
+        where \bar{\mu} is the prediction-error-weighted mean across all
+        occurrences of this token in the batch.
 
         Args:
             token_ids: (B, N) token indices that were in this batch
             mu_beliefs: (B, N, K) final belief means after VFE dynamics
             prediction_errors: (B, N) per-position cross-entropy loss
             ema_decay: EMA decay rate (0.99 = slow, 0.9 = faster)
-            min_weight: Minimum weight to ensure all tokens get some update
+            sigma_beliefs: (B, N, K) belief variances (optional, for sigma P-flow)
             pad_token_id: Token ID for padding positions (excluded from update)
         """
         if self.gauge_fixed_priors:
-            # For gauge_fixed_priors, we'd need to update phi_embed instead
-            # This is more complex - skip for now
             return
 
         B, N, K = mu_beliefs.shape
-        device = mu_beliefs.device
-        lr = 1.0 - ema_decay  # Convert decay to learning rate
+        lr = 1.0 - ema_decay
 
         with torch.no_grad():
-            # Compute success weights from prediction errors
-            # Low error = high weight (successful predictions should update more)
-            # Padded positions have CE=0 which would get the HIGHEST softmax weight,
-            # so we must mask them out before softmax.
-            valid_mask = (token_ids != pad_token_id)  # (B, N)
-            errors_clamped = prediction_errors.clamp(min=1e-6, max=20.0)
-            # Set padded positions to large error so they get near-zero softmax weight
-            errors_clamped = errors_clamped.masked_fill(~valid_mask, 20.0)
-            weights = torch.softmax(-errors_clamped, dim=-1)  # (B, N)
-            weights = weights * valid_mask.float()  # Zero out padded positions entirely
-            weights = weights.clamp(min=0.0)  # No min_weight for padded positions
-            # Apply min_weight only to valid positions
-            weights[valid_mask] = weights[valid_mask].clamp(min=min_weight)
+            unique_tokens, inverse_idx, weights, n_unique = self._compute_pflow_weights(
+                token_ids, prediction_errors, pad_token_id
+            )
 
-            # For each unique token in batch, accumulate weighted belief updates
-            # This handles repeated tokens correctly
-            unique_tokens = token_ids.unique()
+            flat_mu = mu_beliefs.reshape(-1, K)  # (B*N, K)
 
-            for token_id in unique_tokens:
-                # Skip pad tokens entirely
-                if token_id == pad_token_id:
-                    continue
+            # Weighted mean mu per token type via scatter_add
+            weighted_mu = torch.zeros(n_unique, K, device=flat_mu.device, dtype=flat_mu.dtype)
+            weighted_mu.scatter_add_(0, inverse_idx.unsqueeze(-1).expand(-1, K),
+                                     flat_mu * weights.unsqueeze(-1))
 
-                # Find all occurrences of this token
-                mask = (token_ids == token_id)  # (B, N)
+            # Confidence-weighted LR: tokens with lower mean error get higher LR
+            flat_errors = prediction_errors.reshape(-1)
+            seg_error_sum = torch.zeros(n_unique, device=flat_mu.device, dtype=flat_mu.dtype)
+            seg_error_sum.scatter_add_(0, inverse_idx, flat_errors.clamp(min=0))
+            seg_count = torch.zeros(n_unique, device=flat_mu.device, dtype=flat_mu.dtype)
+            seg_count.scatter_add_(0, inverse_idx, torch.ones_like(flat_errors))
+            mean_errors = seg_error_sum / seg_count.clamp(min=1)
+            confidence = 1.0 / (1.0 + mean_errors)
+            effective_lr = lr * confidence  # (n_unique,)
 
-                if mask.sum() == 0:
-                    continue
+            # Skip padding token if present
+            pad_mask = (unique_tokens != pad_token_id)
+            update_tokens = unique_tokens[pad_mask]
+            update_mu = weighted_mu[pad_mask]
+            update_lr = effective_lr[pad_mask]
 
-                # Get beliefs and weights for this token
-                token_beliefs = mu_beliefs[mask]  # (num_occurrences, K)
-                token_weights = weights[mask]     # (num_occurrences,)
+            # Vectorized EMA update for mu
+            self.mu_embed.weight.data[update_tokens] = (
+                (1.0 - update_lr.unsqueeze(-1)) * self.mu_embed.weight.data[update_tokens] +
+                update_lr.unsqueeze(-1) * update_mu
+            )
 
-                # Weighted average belief for this token
-                total_weight = token_weights.sum()
-                if total_weight < 1e-8:
-                    continue  # Skip if all occurrences have zero weight
-                weighted_belief = (token_beliefs * token_weights.unsqueeze(-1)).sum(dim=0) / total_weight
+            # Sigma P-flow: update log_sigma_embed if available
+            if sigma_beliefs is not None and hasattr(self, 'log_sigma_embed'):
+                # Handle full covariance (B, N, K, K) → extract diagonal
+                if sigma_beliefs.dim() == 4:
+                    sigma_beliefs_diag = sigma_beliefs.diagonal(dim1=-2, dim2=-1)  # (B, N, K)
+                else:
+                    sigma_beliefs_diag = sigma_beliefs  # Already (B, N, K)
+                flat_sigma = sigma_beliefs_diag.reshape(-1, K)  # (B*N, K)
+                weighted_sigma = torch.zeros(n_unique, K, device=flat_mu.device, dtype=flat_mu.dtype)
+                weighted_sigma.scatter_add_(0, inverse_idx.unsqueeze(-1).expand(-1, K),
+                                            flat_sigma * weights.unsqueeze(-1))
+                update_sigma = weighted_sigma[pad_mask]
+                sigma_lr = update_lr * 0.1  # Slower sigma updates for stability
+                current_sigma = torch.exp(self.log_sigma_embed.weight.data[update_tokens])
+                new_sigma = (
+                    (1.0 - sigma_lr.unsqueeze(-1)) * current_sigma +
+                    sigma_lr.unsqueeze(-1) * update_sigma
+                )
+                self.log_sigma_embed.weight.data[update_tokens] = torch.log(new_sigma.clamp(min=1e-6))
 
-                # EMA update: prior ← (1 - lr) · prior + lr · belief
-                current_embedding = self.mu_embed.weight.data[token_id]  # (K,)
-                new_embedding = (1.0 - lr) * current_embedding + lr * weighted_belief
-                self.mu_embed.weight.data[token_id] = new_embedding
+    def update_phi_from_beliefs(
+        self,
+        token_ids: torch.Tensor,           # (B, N) token IDs
+        phi_evolved: torch.Tensor,         # (B, N, phi_dim) VFE-evolved phi values
+        prediction_errors: torch.Tensor,   # (B, N) per-position CE loss
+        ema_decay: float = 0.99,           # EMA decay rate
+        pad_token_id: int = -1,            # Padding token ID to ignore
+    ):
+        r"""Phi P-flow: Update gauge frame embeddings toward VFE-evolved values.
+
+        The E-step evolves phi within each forward pass to minimize transported KL.
+        This method persists those evolved values back to phi_embed via EMA,
+        providing a local learning rule for gauge frames without backprop.
+
+        Args:
+            token_ids: (B, N) token indices
+            phi_evolved: (B, N, phi_dim) evolved phi after VFE iterations
+            prediction_errors: (B, N) per-position CE loss
+            ema_decay: EMA decay rate
+            pad_token_id: Padding token ID
+        """
+        if not hasattr(self, 'phi_embed'):
+            return
+
+        phi_dim = phi_evolved.shape[-1]
+        lr = 1.0 - ema_decay
+
+        with torch.no_grad():
+            unique_tokens, inverse_idx, weights, n_unique = self._compute_pflow_weights(
+                token_ids, prediction_errors, pad_token_id
+            )
+
+            flat_phi = phi_evolved.reshape(-1, phi_dim)  # (B*N, phi_dim)
+
+            # Weighted mean phi per token type
+            weighted_phi = torch.zeros(n_unique, phi_dim, device=flat_phi.device, dtype=flat_phi.dtype)
+            weighted_phi.scatter_add_(0, inverse_idx.unsqueeze(-1).expand(-1, phi_dim),
+                                      flat_phi * weights.unsqueeze(-1))
+
+            # Skip padding
+            pad_mask = (unique_tokens != pad_token_id)
+            update_tokens = unique_tokens[pad_mask]
+            update_phi = weighted_phi[pad_mask]
+
+            # Vectorized EMA update for phi
+            self.phi_embed.weight.data[update_tokens] = (
+                (1.0 - lr) * self.phi_embed.weight.data[update_tokens] +
+                lr * update_phi
+            )
 
     def get_embedding_stats(self) -> dict:
         """Get statistics about embeddings for logging."""

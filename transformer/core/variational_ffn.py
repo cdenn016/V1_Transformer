@@ -1939,6 +1939,8 @@ class VariationalFFNDynamic(nn.Module):
         gauge_param: str = 'phi',  # 'phi' (Lie algebra) or 'omega' (direct GL(K))
         obs_sigma_gradient: bool = False,  # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
         obs_sigma_weight: float = 1.0,     # Weight for sigma observation gradient
+        detach_phi: bool = False,          # Detach phi from backprop in non-amortized mode
+                                           # (enables fully backprop-free training with phi P-flow)
     ):
         """
         Initialize dynamic-beta VFE FFN.
@@ -2008,6 +2010,7 @@ class VariationalFFNDynamic(nn.Module):
         self.analytic_phi_grad_dexp_order = analytic_phi_grad_dexp_order
         self.obs_sigma_gradient = obs_sigma_gradient
         self.obs_sigma_weight = obs_sigma_weight
+        self.detach_phi = detach_phi
         # RoPE: store so VFE iterations apply the same position encoding as attention
         self._use_rope_vfe = use_rope
         self._rope_base_vfe = rope_base
@@ -2819,7 +2822,12 @@ class VariationalFFNDynamic(nn.Module):
         # Current state (will evolve)
         mu_current = mu.clone()
         sigma_current = sigma.clone()
-        phi_current = phi.clone()  # Track phi for dynamical gauge frames
+        # Detach phi when detach_phi=True and non-amortized: enables fully backprop-free
+        # training where phi_embed learns via phi P-flow instead of backprop.
+        if not self.amortized_inference and self.detach_phi:
+            phi_current = phi.detach().clone()
+        else:
+            phi_current = phi.clone()
         omega_current = omega.clone() if omega is not None else None  # Track omega for direct GL(K)
 
         # Track β evolution if requested
