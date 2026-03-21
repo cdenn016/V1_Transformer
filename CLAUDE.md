@@ -166,7 +166,7 @@ F = alpha * KL(q_i || p_i)                    # self-coupling: beliefs to priors
 
 ## Manuscript Style
 
-Write in academic prose, not bullet points. Use flowing paragraphs with clear logical progression.
+Write in academic prose, not bullet points. Use flowing paragraphs with clear logical progression. Use /literature-review, /scientific-writing, /sympy, and other relavent skills
 
 **Banned patterns:** horizontal rules (`---`), "key insight", "crucially", "critically", "notably", "importantly", "it's worth noting", "interestingly", "fundamentally", "in particular", "leverages", "underscores". These are Claude-isms — never use them in manuscripts.
 
