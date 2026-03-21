@@ -100,7 +100,7 @@ class FastTrainingConfig:
     # Free energy coefficients
     alpha: float = 1.0            # Self-consistency KL(q||p) weight — stronger than TrainingConfig (0.1) for FastTrainer stability
     beta: float = 1.0             # Belief alignment (maps to lambda_beta in loss)
-    beta_warmup_steps: int = 0    # Linear warmup for beta (0 = instant full value)
+
     lambda_gamma: float = 0.0     # Model alignment (disabled by default)
     kappa_gamma: float = 1.0      # Temperature for γ_ij coupling weights
     lambda_hyper: float = 0.0     # Hyper-prior: KL(s_i||h) models to centroid
@@ -108,7 +108,6 @@ class FastTrainingConfig:
 
     # VFE observation coupling
     use_obs_in_vfe: bool = False  # Pass targets into VFE E-step (last layer only)
-    obs_warmup_steps: int = 0     # E-step obs OFF for N steps, then ON (0 = use use_obs_in_vfe)
 
     # Learning rate schedule
     lr_decay: str = 'cosine'  # 'cosine', 'linear', 'constant'

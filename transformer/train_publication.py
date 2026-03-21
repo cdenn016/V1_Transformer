@@ -237,7 +237,7 @@ EM_CONFIG = {
 
     'use_prior_bank': False,
     'use_obs_in_vfe': True,        #cheats when true!  low trainPPL huge val PPL
-    'obs_warmup_steps': 2000,
+
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
     'gauge_group': 'GLK',
@@ -282,19 +282,13 @@ EM_CONFIG = {
     
     
     
-    # === E-step observation warmup ===
-    # Ramp observation weight in E-step from 0 → 1 linearly over warmup_steps.
-    # At step 0, obs_weight=0 (E-step = prior+alignment only). At step W,
-    # obs_weight=1 (full VFE). Gradual ramp avoids the "cheating" of binary ON.
-    'obs_warmup_steps': 2000,
-
     # === VFE loss weights (M-step objective) ===
-    # alpha=1: as obs ramps up, E-step produces data-grounded beliefs.
-    # KL(q*||p) carries signal: "adjust priors toward beliefs that explain data."
-    # IFT scale uses fixed ffn_alpha → s_k ≈ 0.5 regardless of loss alpha.
+    # E-step: prior + alignment (no observations with n_iterations=1).
+    # CE enters through M-step via IFT (s_k ≈ 0.5 from fixed ffn_alpha=1).
+    # alpha=0: KL(q*||p) homogenizes (q* is smoothed, not data-grounded).
     # beta=0: alignment term is vacuum-seeking. E-step handles it internally.
-    'alpha':        1.0,                   # KL(q*||p) — meaningful as obs ramps up
-    'beta':         0.0,                   # β·KL alignment — MUST be 0 (vacuum-seeking)
+    'alpha':        0.0,
+    'beta':         0.0,
     'alpha_phi':    0.1,               # Gauge prior: (α_φ/2)||φ||²
     'lambda_hyper': 0.1,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
     'lambda_gamma': 0.0,
@@ -1504,32 +1498,8 @@ class PublicationTrainer(FastTrainer):
         if use_delta_rule and hasattr(self.model, 'out_proj') and not _tied_weights:
             self.model.out_proj.weight.requires_grad = False
 
-        # Beta warmup: ramp lambda_beta from 0 → target over beta_warmup_steps.
-        # Prevents uniform attention collapse by letting CE differentiate embeddings
-        # before belief coupling gradient (which is uniform when β ≈ 1/N) kicks in.
-        target_beta = self.config.beta
-        beta_warmup = getattr(self.config, 'beta_warmup_steps', 0)
-        if beta_warmup > 0 and self.global_step < beta_warmup:
-            effective_beta = target_beta * (self.global_step / beta_warmup)
-        else:
-            effective_beta = target_beta
-
-        # Obs warmup: linearly ramp observation weight in E-step from 0 → 1.
-        # With 1 E-step iteration, the observation gradient (-∂CE/∂μ) overwhelms
-        # prior+alignment forces at init (prior grad = 0 when q = p). Ramping
-        # lets priors calibrate first, then gradually introduces data coupling.
-        obs_warmup = getattr(self.config, 'obs_warmup_steps', 0)
-        if obs_warmup > 0:
-            obs_weight = min(1.0, self.global_step / obs_warmup)
-            use_obs = True  # Always pass targets; weight controls strength
-        else:
-            obs_weight = 1.0
-            use_obs = getattr(self.config, 'use_obs_in_vfe', False)
-
-        # Set obs_weight on the last block's FFN (read inside VFE E-step)
-        if not is_standard and hasattr(self.model, 'transformer'):
-            for block in self.model.transformer.blocks:
-                block.ffn._obs_weight = obs_weight
+        effective_beta = self.config.beta
+        use_obs = getattr(self.config, 'use_obs_in_vfe', False)
 
         # Forward pass with full metrics (with optional AMP)
         if self.scaler is not None:
@@ -2454,11 +2424,11 @@ def run_single_experiment(
         # Free energy loss weights
         alpha=config['alpha'],
         beta=config['beta'],             # → lambda_beta in compute_free_energy_loss
-        beta_warmup_steps=config.get('beta_warmup_steps', 0),
+        beta_warmup_steps=0,
         lambda_gamma=config['lambda_gamma'],
         lambda_hyper=config.get('lambda_hyper', 0.0),
         use_obs_in_vfe=config.get('use_obs_in_vfe', False),
-        obs_warmup_steps=config.get('obs_warmup_steps', 0),
+        obs_warmup_steps=0,
 
         # Gauge geometry: phi gradient control
         alpha_phi=config.get('alpha_phi', 0.0),
