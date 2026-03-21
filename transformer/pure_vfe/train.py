@@ -111,7 +111,7 @@ def train(config=None, n_epochs=10, log_interval=10, save_path=None):
         for inputs, targets in make_batches(data, config.batch_size, config.device):
             t0 = time.time()
 
-            logits, ce_loss, vfe_history = model.update(inputs, targets)
+            logits, ce_loss, vfe_history, diag = model.update(inputs, targets)
 
             dt = time.time() - t0
             epoch_loss += ce_loss
@@ -125,6 +125,14 @@ def train(config=None, n_epochs=10, log_interval=10, save_path=None):
                 vfe_ratio = vfe_f / max(abs(vfe_0), 1e-8) if vfe_0 != 0 else 0.0
                 print(f"{epoch:5d} {global_step:6d} {ce_loss:8.3f} {ppl:10.1f} "
                       f"{vfe_0:10.1f} {vfe_f:10.1f} {dt:8.3f}")
+
+                # E-step gradient norms (final iteration)
+                if diag['grad_norm_mu']:
+                    print(f"  [GRAD] mu={diag['grad_norm_mu'][-1]:.2f} "
+                          f"sigma={diag['grad_norm_sigma'][-1]:.2f} "
+                          f"omega={diag['grad_norm_omega'][-1]:.2f}")
+                if diag['nan_events'] > 0:
+                    print(f"  [WARN] NaN recovery events: {diag['nan_events']}")
 
                 # Monitor prior health
                 with torch.no_grad():

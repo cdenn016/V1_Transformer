@@ -2830,7 +2830,7 @@ def run_pure_vfe_experiment(
             target_ids = target_ids.to(device)
 
             # Training step: E-step + M-step (no backward!)
-            logits, ce_loss, vfe_history = model.update(input_ids, target_ids)
+            logits, ce_loss, vfe_history, _diag = model.update(input_ids, target_ids)
 
             step_time = time.time() - step_start
 

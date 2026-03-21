@@ -144,6 +144,11 @@ def e_step(token_ids, model, config):
 
     vfe_history = []
     nan_events = 0
+    diagnostics = {
+        'grad_norm_mu': [],
+        'grad_norm_sigma': [],
+        'grad_norm_omega': [],
+    }
 
     for step in range(config.n_esteps):
         # --- E-step LR decay (matching VFE dynamic) ---
@@ -199,6 +204,7 @@ def e_step(token_ids, model, config):
         # 3. Total mean gradient + element-wise clamp
         grad_mu = grad_mu_align + grad_mu_prior
         grad_mu = torch.clamp(grad_mu, -grad_clamp, grad_clamp)
+        diagnostics['grad_norm_mu'].append(grad_mu.norm().item())
 
         # 4. Natural gradient: Δμ = -η Σ ∂F/∂μ (Fisher-Rao for Gaussian mean)
         nat_mu = torch.einsum('bnij,bnj->bni', Sigma, grad_mu)
@@ -235,6 +241,7 @@ def e_step(token_ids, model, config):
             - (alpha_expanded + 1.0) * Sigma_h_inv
         )
         grad_Sigma_h = torch.clamp(grad_Sigma_h, -grad_clamp, grad_clamp)
+        diagnostics['grad_norm_sigma'].append(grad_Sigma_h.norm().item())
 
         # 4. Natural gradient on SPD: ΔΣ = -2 Σ sym(∂F/∂Σ) Σ
         nat_Sigma_h = natural_grad_sigma(grad_Sigma_h, Sigma_h)
@@ -258,6 +265,7 @@ def e_step(token_ids, model, config):
         grad_Omega = vfe_grad_Omega(mu_h, Sigma_h, Omega, beta, kl_ij, precomp)
         # Shape: [B, N, H, K_h, K_h]
         grad_Omega = torch.clamp(grad_Omega, -grad_clamp, grad_clamp)
+        diagnostics['grad_norm_omega'].append(grad_Omega.norm().item())
 
         # Natural gradient on GL(K): left-invariant
         nat_Omega = natural_grad_omega(grad_Omega, Omega)
@@ -288,4 +296,6 @@ def e_step(token_ids, model, config):
     # --- Decode: logit_v = -KL(q_i || π_v) ---
     logits = kl_decode_logits(mu, Sigma, model.prior_mu, model.prior_Sigma)
 
-    return mu, Sigma, Omega, logits, vfe_history
+    diagnostics['nan_events'] = nan_events
+
+    return mu, Sigma, Omega, logits, vfe_history, diagnostics

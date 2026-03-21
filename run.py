@@ -196,7 +196,7 @@ def main(cfg=None):
             targets = targets.to(device)
 
             t0 = time.time()
-            logits, ce_loss, vfe_history = model.update(inputs, targets)
+            logits, ce_loss, vfe_history, _diag = model.update(inputs, targets)
             dt = time.time() - t0
 
             epoch_loss += ce_loss

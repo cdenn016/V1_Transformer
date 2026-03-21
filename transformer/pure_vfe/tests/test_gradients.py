@@ -274,7 +274,7 @@ class TestEStepMonotonicity:
         model = PureVFETransformer(config)
         tokens = torch.randint(0, 100, (1, 8))
 
-        _, _, _, _, vfe_history = e_step(tokens, model, config)
+        _, _, _, _, vfe_history, _ = e_step(tokens, model, config)
 
         # Check monotonicity (allowing small numerical tolerance)
         for t in range(1, len(vfe_history)):

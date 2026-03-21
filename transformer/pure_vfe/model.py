@@ -87,7 +87,7 @@ class PureVFETransformer:
         Returns:
             logits: [B, N, V]
         """
-        mu, Sigma, Omega, logits, vfe = e_step(token_ids, self, self.config)
+        mu, Sigma, Omega, logits, vfe, _diag = e_step(token_ids, self, self.config)
         return logits
 
     def update(self, token_ids, targets):
@@ -101,11 +101,15 @@ class PureVFETransformer:
         Returns:
             logits: [B, N, V]
             ce_loss: scalar float
+            vfe: list of VFE values per E-step
+            diagnostics: dict with E-step gradient norms and NaN events
         """
-        mu, Sigma, Omega, logits, vfe = e_step(token_ids, self, self.config)
+        mu, Sigma, Omega, logits, vfe, diagnostics = e_step(
+            token_ids, self, self.config
+        )
         ce_loss = m_step(token_ids, targets, mu, Sigma, Omega, self, self.config,
                          logits=logits)
-        return logits, ce_loss, vfe
+        return logits, ce_loss, vfe, diagnostics
 
     def sync_omega_from_phi(self):
         """Recompute Omega from phi (call after phi updates in M-step)."""
