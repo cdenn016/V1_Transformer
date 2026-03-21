@@ -60,6 +60,154 @@ from transformer.core.gauge_utils import (
 )
 
 
+# =============================================================================
+# Implicit EM Gradient (IFT-based M-step)
+# =============================================================================
+# In proper EM, the M-step gradient is dF/dθ = ∂F/∂θ|_{q=q*}. With finite
+# E-step iterations, q* ≠ q_converged, so ∂F/∂q ≠ 0. The implicit function
+# theorem gives the exact gradient without requiring convergence:
+#
+#   dq*/dθ = -(∂²F/∂q²)⁻¹ · ∂²F/(∂q∂θ)
+#
+# For diagonal Gaussians, this yields a per-dimension scale factor:
+#   s_k = (α/σ²_p,k) / (α/σ²_p,k + Σ_j β_ij/σ²_j,k)  ∈ [0, 1]
+#
+# This interpolates between straight-through (s=1) and pure EM (s=0).
+
+class ImplicitEMGradient(torch.autograd.Function):
+    r"""Apply implicit differentiation scaling to M-step gradient for mu.
+
+    Forward: returns mu_final unchanged (identity).
+    Backward: scales gradient flowing to mu_embed by the implicit
+    differentiation factor s_k = (α/σ²_p) / A_k, where A_k is the
+    effective precision at the E-step fixed point.
+
+    This replaces straight-through (s=1) with the information-geometrically
+    correct gradient from the IFT, while still allowing CE gradients to
+    reach embeddings (unlike pure EM where s=0).
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        mu_final: torch.Tensor,       # (B, N, K) — evolved beliefs from E-step
+        mu_embed: torch.Tensor,        # (B, N, K) — embedding means (need grad)
+        implicit_scale: torch.Tensor,  # (B, N, K) — IFT scale factors ∈ [0, 1]
+    ) -> torch.Tensor:
+        ctx.save_for_backward(implicit_scale)
+        return mu_final  # forward is identity
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        implicit_scale, = ctx.saved_tensors
+        # grad to mu_final: unchanged (flows to W_out via logits)
+        # grad to mu_embed: scaled by IFT factor
+        # grad to implicit_scale: None (detached)
+        return grad_output, implicit_scale * grad_output, None
+
+
+class ImplicitEMGradientSigma(torch.autograd.Function):
+    r"""Apply implicit differentiation scaling to M-step gradient for sigma.
+
+    Analogous to ImplicitEMGradient but for covariance parameters.
+    The sigma fixed-point equation (supplementary Eq. B.6) gives:
+        Σ_i^{-1} = (1/2)[Σ_p^{-1} + Σ_j β_ij (Ω_ij Σ_j Ω_ij^T)^{-1}]
+
+    The implicit gradient scale is:
+        s_k = (Σ_p^{-2}) / (Σ_p^{-2} + Σ_j β_ij Σ_j^{-2})
+
+    Works for both diagonal (B, N, K) and full covariance (B, N, K, K).
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        sigma_final: torch.Tensor,       # Evolved covariance from E-step
+        sigma_embed: torch.Tensor,        # Embedding covariance (need grad)
+        implicit_scale: torch.Tensor,     # IFT scale factors
+    ) -> torch.Tensor:
+        ctx.save_for_backward(implicit_scale)
+        return sigma_final
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        implicit_scale, = ctx.saved_tensors
+        return grad_output, implicit_scale * grad_output, None
+
+
+def compute_implicit_em_scales(
+    alpha_i: torch.Tensor,     # (B, N, K) or scalar — prior coupling strength
+    sigma_p: torch.Tensor,     # (B, N, K) diagonal or (B, N, K, K) full — prior sigma
+    beta: torch.Tensor,        # (B, H, N, N) or (B, N, N) — attention weights
+    sigma_q: torch.Tensor,     # (B, N, K) diagonal or (B, N, K, K) full — evolved sigma
+    eps: float = 1e-6,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    r"""Compute implicit differentiation scale factors for principled EM M-step.
+
+    From the E-step fixed-point equation for μ:
+        A_k = α/σ²_{p,k} + Σ_j β_{ij}/σ²_{j,k}
+        s_k^{(μ)} = (α/σ²_{p,k}) / A_k
+
+    For σ (from covariance fixed-point):
+        s_k^{(σ)} = (α/σ⁴_{p,k}) / (α/σ⁴_{p,k} + Σ_j β_{ij}/σ⁴_{j,k})
+
+    At the covariance alignment fixed point, transported sigmas ≈ sigma_q,
+    so we approximate Σ_j β_ij σ_{j,transported}^{-2} ≈ σ_q^{-2} (since
+    Σ_j β_ij = 1).
+
+    Args:
+        alpha_i: Prior coupling. Scalar or (B, N, K) from adaptive α.
+        sigma_p: Prior covariance (diagonal or full).
+        beta: Attention weights from final E-step iteration.
+        sigma_q: Evolved covariance from E-step.
+        eps: Numerical floor.
+
+    Returns:
+        mu_scale: Same shape as sigma_p diagonal — per-dim scale for μ gradient
+        sigma_scale: Same shape as sigma_p diagonal — per-dim scale for σ gradient
+    """
+    is_diagonal = sigma_p.dim() == 3
+
+    if is_diagonal:
+        sigma_p_safe = sigma_p.clamp(min=eps)  # (B, N, K)
+        sigma_q_safe = sigma_q.clamp(min=eps)  # (B, N, K)
+    else:
+        # Full covariance: extract diagonal for scale computation
+        sigma_p_safe = torch.diagonal(sigma_p, dim1=-2, dim2=-1).clamp(min=eps)  # (B, N, K)
+        sigma_q_safe = torch.diagonal(sigma_q, dim1=-2, dim2=-1).clamp(min=eps)  # (B, N, K)
+
+    # Broadcast alpha_i to (B, N, K) if scalar
+    if not isinstance(alpha_i, torch.Tensor):
+        alpha_val = alpha_i
+        alpha_i = torch.full_like(sigma_p_safe, alpha_val)
+    elif alpha_i.dim() == 0:
+        alpha_i = alpha_i.expand_as(sigma_p_safe)
+    elif alpha_i.dim() < sigma_p_safe.dim():
+        # (B, N) → (B, N, K)
+        alpha_i = alpha_i.unsqueeze(-1).expand_as(sigma_p_safe)
+
+    # === Mu scale ===
+    # Prior precision contribution: α_k / σ²_{p,k}
+    prior_prec_mu = alpha_i / sigma_p_safe  # (B, N, K)
+
+    # Attention-weighted transported precision (approximation at covariance alignment):
+    # Σ_j β_ij / σ²_{j,transported,k} ≈ 1 / σ²_{q,k}  (since Σ_j β_ij = 1)
+    attn_prec_mu = 1.0 / sigma_q_safe  # (B, N, K)
+
+    effective_prec_mu = prior_prec_mu + attn_prec_mu
+    mu_scale = (prior_prec_mu / effective_prec_mu.clamp(min=eps)).detach()
+
+    # === Sigma scale ===
+    # From the covariance fixed-point Hessian: uses precision squared
+    prior_prec_sigma = alpha_i / (sigma_p_safe ** 2)  # (B, N, K)
+    attn_prec_sigma = 1.0 / (sigma_q_safe ** 2)  # (B, N, K)
+
+    effective_prec_sigma = prior_prec_sigma + attn_prec_sigma
+    sigma_scale = (prior_prec_sigma / effective_prec_sigma.clamp(min=eps)).detach()
+
+    return mu_scale, sigma_scale
+
+
 def _safe_spd_inv(M: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     """
     Robust inversion for SPD (symmetric positive-definite) covariance matrices.
@@ -1941,6 +2089,12 @@ class VariationalFFNDynamic(nn.Module):
         obs_sigma_weight: float = 1.0,     # Weight for sigma observation gradient
         detach_phi: bool = False,          # Detach phi from backprop in non-amortized mode
                                            # (enables fully backprop-free training with phi P-flow)
+        implicit_em: bool = False,         # Principled M-step via implicit differentiation.
+                                           # Detaches mu/sigma at E-step start (proper EM boundary)
+                                           # then scales CE→embedding gradient by IFT factor
+                                           # s_k = (α/σ²_p) / (α/σ²_p + Σβ/σ²_q) ∈ [0,1].
+                                           # Replaces ad-hoc straight-through (s=1) and pure EM (s=0)
+                                           # with info-geometrically correct value.
     ):
         """
         Initialize dynamic-beta VFE FFN.
@@ -2011,6 +2165,12 @@ class VariationalFFNDynamic(nn.Module):
         self.obs_sigma_gradient = obs_sigma_gradient
         self.obs_sigma_weight = obs_sigma_weight
         self.detach_phi = detach_phi
+        self.implicit_em = implicit_em
+        self._last_implicit_mu_scale = None   # (B, N, K) stored after E-step for model.py
+        self._last_implicit_sigma_scale = None
+        if implicit_em:
+            print(f"[VariationalFFNDynamic] Implicit EM enabled: IFT-based M-step gradient")
+            print(f"  → Detaches mu/sigma at E-step start, applies s_k = (α/σ²_p)/A_k scaling")
         # RoPE: store so VFE iterations apply the same position encoding as attention
         self._use_rope_vfe = use_rope
         self._rope_base_vfe = rope_base
@@ -2820,8 +2980,15 @@ class VariationalFFNDynamic(nn.Module):
                 sigma_p = sigma.detach().clone()
 
         # Current state (will evolve)
-        mu_current = mu.clone()
-        sigma_current = sigma.clone()
+        # Implicit EM: detach beliefs at E-step start (proper EM boundary).
+        # The implicit gradient scale factor compensates for detachment with
+        # the info-geometrically correct CE→embedding gradient.
+        if self.implicit_em:
+            mu_current = mu.detach().clone()
+            sigma_current = sigma.detach().clone()
+        else:
+            mu_current = mu.clone()
+            sigma_current = sigma.clone()
         # Detach phi when detach_phi=True and non-amortized: enables fully backprop-free
         # training where phi_embed learns via phi P-flow instead of backprop.
         if not self.amortized_inference and self.detach_phi:
@@ -3420,6 +3587,49 @@ class VariationalFFNDynamic(nn.Module):
             if sigma_current is not None:
                 sigma_current = sigma_current.to(dtype)
             phi_current = phi_current.to(dtype)
+
+        # Store final alpha_i for M-step loss (avoids changing return signatures)
+        # alpha_effective is (B, N, K) if learnable_alpha, else scalar
+        if self.learnable_alpha:
+            self._last_alpha_i = alpha_effective.detach()  # (B, N, K)
+        else:
+            self._last_alpha_i = None
+
+        # Store final beta for implicit EM scale computation
+        # beta_current holds the last iteration's attention weights
+        # (multihead: last head's beta; single-head: full beta)
+        if self.implicit_em:
+            # For multihead, reconstruct full beta from beta_heads if available
+            try:
+                if self.multihead_vfe and 'beta_heads' in dir():
+                    self._last_beta_for_implicit = torch.stack(beta_heads, dim=1).detach()
+                else:
+                    self._last_beta_for_implicit = beta_current.detach()
+            except (NameError, UnboundLocalError):
+                self._last_beta_for_implicit = None
+
+        # Compute and store implicit EM gradient scales (Phase 3/4)
+        if self.implicit_em:
+            # Get last beta — use _last_beta stored during the VFE loop
+            _beta_for_scale = getattr(self, '_last_beta_for_implicit', None)
+
+            if _beta_for_scale is not None:
+                _alpha_for_scale = alpha_effective if self.learnable_alpha else self.alpha
+                mu_scale, sigma_scale = compute_implicit_em_scales(
+                    alpha_i=_alpha_for_scale,
+                    sigma_p=sigma_p,
+                    beta=_beta_for_scale,
+                    sigma_q=sigma_current if sigma_current is not None else sigma_p,
+                    eps=eps,
+                )
+                self._last_implicit_mu_scale = mu_scale      # (B, N, K)
+                self._last_implicit_sigma_scale = sigma_scale  # (B, N, K)
+            else:
+                self._last_implicit_mu_scale = None
+                self._last_implicit_sigma_scale = None
+        else:
+            self._last_implicit_mu_scale = None
+            self._last_implicit_sigma_scale = None
 
         # Return results
         # NOTE: Previously returned .detach() which BREAKS gradient flow!

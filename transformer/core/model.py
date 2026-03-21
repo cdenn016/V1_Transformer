@@ -33,6 +33,7 @@ import numpy as np
 # Import our components
 from transformer.core.embeddings import GaugeTokenEmbedding, GaugePositionalEncoding
 from transformer.core.blocks import GaugeTransformerStack
+from transformer.core.variational_ffn import ImplicitEMGradient, ImplicitEMGradientSigma
 from transformer.core.block_config import BlockConfig
 from transformer.core.attention import create_attention_mask
 
@@ -908,6 +909,24 @@ class GaugeTransformerLM(nn.Module):
                 else:
                     sigma_q = sigma_q[:, :, inv_perm][:, :, :, inv_perm]
 
+        # =================================================================
+        # Implicit EM: Re-establish gradient path from mu_q → mu_embed
+        # =================================================================
+        # When implicit_em=True, mu_current was detached at E-step start.
+        # mu_q has no autograd path to mu_embed. ImplicitEMGradient.apply()
+        # creates a scaled gradient path: ∂CE/∂mu_embed = s_k · ∂CE/∂mu_q
+        # where s_k ∈ [0,1] is the IFT-derived scale factor.
+        last_block = self.transformer.blocks[-1]
+        implicit_mu_scale = getattr(last_block.ffn, '_last_implicit_mu_scale', None)
+        implicit_sigma_scale = getattr(last_block.ffn, '_last_implicit_sigma_scale', None)
+
+        if implicit_mu_scale is not None:
+            # mu_prior has gradient to mu_embed; mu_q is detached from it.
+            # Re-attach with IFT-scaled gradient.
+            mu_q = ImplicitEMGradient.apply(mu_q, mu_prior, implicit_mu_scale)
+        if implicit_sigma_scale is not None and sigma_q is not None and sigma_prior is not None:
+            sigma_q = ImplicitEMGradientSigma.apply(sigma_q, sigma_prior, implicit_sigma_scale)
+
         # Project to vocabulary
         if self.use_prior_bank and self.prior_bank is not None:
             logits = self.prior_bank.decode(mu_q, sigma_q, tau=self.prior_bank_tau)
@@ -920,6 +939,9 @@ class GaugeTransformerLM(nn.Module):
         valid_kls = [k for k in all_kls if k is not None]
         stacked_beta = torch.stack(valid_betas, dim=0) if valid_betas else None
         stacked_kl = torch.stack(valid_kls, dim=0) if valid_kls else None
+
+        # Retrieve adaptive alpha_i from last block's FFN (if learnable_alpha enabled)
+        alpha_i = getattr(last_block.ffn, '_last_alpha_i', None)
 
         attention_info = {
             'beta': stacked_beta,      # (n_layers, B, n_heads, N, N)
@@ -934,6 +956,8 @@ class GaugeTransformerLM(nn.Module):
             'mu_prior': mu_prior,        # (B, N, K) - model means s_i
             'sigma_prior': sigma_prior,  # (B, N, K, K) - model covariances
             'phi_prior': phi_prior,      # (B, N, gauge_dim) - model gauge frames
+            # Adaptive alpha_i from E-step (if learnable_alpha enabled)
+            'alpha_i': alpha_i,          # (B, N, K) or None
         }
 
         return logits, attention_info

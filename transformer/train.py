@@ -366,6 +366,50 @@ def gaussian_kl_divergence(
     return kl
 
 
+def _get_sigma_target(
+    model: torch.nn.Module,
+    sigma_s: torch.Tensor,
+) -> torch.Tensor:
+    r"""Get frozen sigma hyperprior target Σ_h, broadcast to match sigma_s shape.
+
+    Uses the frozen ``sigma_target`` buffer from GaugeTokenEmbedding (registered
+    at model creation with initial sigma values). Falls back to broadened
+    centroid ``2 \times \mathrm{mean}(\sigma_s)`` if no buffer is available
+    (backward compatibility with old checkpoints).
+
+    Handles both diagonal (B, N, K) and full covariance (B, N, K, K).
+
+    Returns:
+        sigma_h: Same shape as sigma_s, detached (fixed target).
+    """
+    # Try to get frozen sigma_target from embedding
+    sigma_target = None
+    if hasattr(model, 'token_embed') and hasattr(model.token_embed, 'sigma_target'):
+        sigma_target = model.token_embed.sigma_target  # (K,)
+    elif hasattr(model, 'prior_bank') and model.prior_bank is not None:
+        if hasattr(model.prior_bank, 'sigma_target'):
+            sigma_target = model.prior_bank.sigma_target  # (K,)
+
+    if sigma_target is not None:
+        # sigma_target is (K,) — expand to match sigma_s shape
+        if sigma_s.dim() == 3:
+            # Diagonal: sigma_s is (B, N, K)
+            sigma_h = sigma_target.unsqueeze(0).unsqueeze(0).expand_as(sigma_s)
+        elif sigma_s.dim() == 4:
+            # Full covariance: sigma_s is (B, N, K, K)
+            # Build diag matrix from sigma_target
+            K = sigma_target.shape[0]
+            sigma_h_mat = torch.diag(sigma_target)  # (K, K)
+            sigma_h = sigma_h_mat.unsqueeze(0).unsqueeze(0).expand_as(sigma_s)
+        else:
+            sigma_h = sigma_target.expand_as(sigma_s)
+        return sigma_h.detach()
+    else:
+        # Fallback: broadened centroid (old behavior, backward compatible)
+        sigma_h = sigma_s.mean(dim=1, keepdim=True).detach() * 2.0
+        return sigma_h.expand_as(sigma_s)
+
+
 # =============================================================================
 # Free Energy Loss Computation (ATTENTION-WEIGHTED)
 # =============================================================================
@@ -484,17 +528,20 @@ def compute_free_energy_loss(
         belief_align_loss = torch.tensor(0.0, device=ce_loss.device)
 
     # =================================================================
-    # 3. Self-Coupling: α · KL(q_i || p_i) — beliefs toward PRIORS
+    # 3. Self-Coupling: α_i · KL(q_i || p_i) — beliefs toward PRIORS
     # =================================================================
     # This pulls evolved beliefs (fast) back toward priors (derived from
     # models). This is NOT KL(q||s) — it's KL(q||p) where p = f(s).
     # Currently p = s, so they're numerically identical, but the
     # conceptual distinction matters for the hierarchy.
+    #
+    # When learnable_alpha is enabled, α_i = c0/(b0 + KL(q||p)) is
+    # per-agent, per-dimension (from E-step). We use it here in the
+    # M-step loss for consistency: same α weights the self-coupling
+    # in both E-step gradient and M-step loss.
     # =================================================================
     if alpha > 0.0:
         K = mu_q.shape[-1]
-        # Sigma gradients flow through KL(q||p): ∂KL/∂Σ_q = 0.5(Σ_p⁻¹ - Σ_q⁻¹)
-        # pulls sigma embeddings toward consistency with evolved beliefs.
         kl_per_agent = gaussian_kl_divergence(
             mu_q=mu_q,
             sigma_q=sigma_q,
@@ -502,7 +549,16 @@ def compute_free_energy_loss(
             sigma_p=sigma_p,
         )  # (B, N)
         dim_scale = math.sqrt(max(K, 1))
-        self_consistency_loss = alpha * kl_per_agent.mean() / dim_scale
+
+        # Use adaptive α_i from E-step if available (learnable_alpha mode)
+        alpha_i = attn_info.get('alpha_i', None)
+        if alpha_i is not None:
+            # alpha_i is (B, N, K) per-dimension; kl_per_agent is (B, N) scalar
+            # Use mean over dimensions for scalar KL weighting
+            alpha_scalar = alpha_i.mean(dim=-1)  # (B, N)
+            self_consistency_loss = (alpha_scalar * kl_per_agent).mean() / dim_scale
+        else:
+            self_consistency_loss = alpha * kl_per_agent.mean() / dim_scale
     else:
         self_consistency_loss = torch.tensor(0.0, device=ce_loss.device)
 
@@ -552,35 +608,39 @@ def compute_free_energy_loss(
     # =================================================================
     # 5. Hyper-Prior: λ_h · Σ_i KL(s_i || h) — models toward centroid
     # =================================================================
-    # h = centroid of all models {s_i}. This is the key anti-memorization
-    # mechanism: constrains per-position models to stay near a shared
-    # centroid, forcing generalization through gauge transport Ω_{ij}
-    # rather than per-position lookup tables.
+    # h = (μ_h, Σ_h) is the Level 3 hyperprior target.
+    #   μ_h = centroid of all models (detached, anti-memorization)
+    #   Σ_h = frozen initial sigma (fixed anchor, prevents collective drift)
     #
-    # h has broadened variance (2×) to allow model diversity while
-    # preventing unconstrained drift.
+    # Previous bug: sigma_s was .detach()'d in the KL, giving zero gradient
+    # to sigma_embed. Now sigma_s flows through, providing bidirectional
+    # gradient: pulls sigma toward Σ_h if it inflates OR deflates.
     # =================================================================
     if lambda_hyper > 0.0:
         batch_size, num_agents, K = mu_s.shape
         dim_scale = math.sqrt(max(K, 1))
 
-        # Centroid h = mean of all models (detach: treat as fixed target)
+        # μ centroid: mean of all models (detach: treat as fixed target)
         mu_h = mu_s.mean(dim=1, keepdim=True).detach()  # (B, 1, K)
 
         if sigma_s is not None:
-            # Broadened variance (2×) allows model diversity
-            sigma_h = sigma_s.mean(dim=1, keepdim=True).detach() * 2.0
+            # Σ_h: frozen initial sigma from embedding buffer (fixed anchor).
+            # This replaces the old moving target (2×mean(sigma_s)) which
+            # inflated together with sigma_s, providing no downward pressure.
+            sigma_target = _get_sigma_target(model, sigma_s)  # (B, N, K) or (B, N, K, K)
+            sigma_h = sigma_target
         else:
             sigma_h = None
 
         # Expand centroid to match all agents
         mu_h_expanded = mu_h.expand_as(mu_s)
-        sigma_h_expanded = sigma_h.expand_as(sigma_s) if sigma_h is not None else None
+        sigma_h_expanded = sigma_h  # already (B, N, ...) from _get_sigma_target
 
         # KL(s_i || h) for each agent position
+        # sigma_s NOT detached: gradient flows to sigma_embed (bidirectional)
         kl_hyper = gaussian_kl_divergence(
             mu_q=mu_s,
-            sigma_q=sigma_s.detach() if sigma_s is not None else None,
+            sigma_q=sigma_s,
             mu_p=mu_h_expanded,
             sigma_p=sigma_h_expanded,
         )  # (B, N)
