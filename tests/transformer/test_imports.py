@@ -89,11 +89,9 @@ class TestDataImports:
         from transformer.data import (
             create_dataloaders,
             create_char_dataloaders,
-            create_byte_dataloaders,
         )
         assert callable(create_dataloaders)
         assert callable(create_char_dataloaders)
-        assert callable(create_byte_dataloaders)
 
     def test_data_datasets_import(self):
         """Test importing from transformer.data.datasets."""

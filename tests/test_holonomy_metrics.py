@@ -1,5 +1,5 @@
 """
-Tests for holonomy metrics, visualization, and Lightning callback.
+Tests for holonomy metrics and visualization.
 
 Covers:
     - HolonomySnapshot / HolonomyProfile data classes
@@ -7,7 +7,6 @@ Covers:
     - compute_curvature_by_distance binning
     - compute_flatness_trajectory extraction
     - Visualization figure generation (smoke tests)
-    - HolonomyCallback state management
 """
 
 import pytest
@@ -266,35 +265,3 @@ class TestVisualization:
         plt.close(fig)
 
 
-# =============================================================================
-# Callback Tests
-# =============================================================================
-
-class TestHolonomyCallback:
-
-    @pytest.fixture(autouse=True)
-    def _require_lightning(self):
-        try:
-            pytest.importorskip('pytorch_lightning')
-        except pytest.skip.Exception:
-            pytest.importorskip('lightning.pytorch')
-
-    def test_callback_init(self):
-        from transformer.training.holonomy_callback import HolonomyCallback
-
-        cb = HolonomyCallback(log_interval=100, sample_size=50)
-        assert cb.log_interval == 100
-        assert cb.sample_size == 50
-        assert len(cb.history) == 0
-
-    def test_state_dict_roundtrip(self):
-        from transformer.training.holonomy_callback import HolonomyCallback
-
-        cb = HolonomyCallback()
-        cb._computation_count = 5
-        state = cb.state_dict()
-        assert state['computation_count'] == 5
-
-        cb2 = HolonomyCallback()
-        cb2.load_state_dict(state)
-        assert cb2._computation_count == 5

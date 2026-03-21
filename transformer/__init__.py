@@ -46,7 +46,6 @@ try:
     from transformer.data import (
         create_dataloaders,
         create_char_dataloaders,
-        create_byte_dataloaders,
     )
 
     def __getattr__(name):
@@ -71,7 +70,6 @@ try:
         # Data loading
         'create_dataloaders',
         'create_char_dataloaders',
-        'create_byte_dataloaders',
     ]
 except ImportError:
     # Allow pure_vfe subpackage to be imported without full deps (scipy, etc.)
