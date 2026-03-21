@@ -3370,6 +3370,10 @@ class VariationalFFNDynamic(nn.Module):
                 one_hot = one_hot * mask_obs
                 grad_error = (probs - one_hot) * mask_obs
                 discrete_obs_grad = torch.matmul(grad_error, W_out)
+                # Scale observation gradient by obs_weight (for warmup ramp)
+                _obs_weight = getattr(self, '_obs_weight', 1.0)
+                if _obs_weight < 1.0:
+                    discrete_obs_grad = discrete_obs_grad * _obs_weight
                 grad_mu = grad_mu + discrete_obs_grad
 
                 # Observation gradient for sigma (exact via Stein's lemma):
@@ -3388,7 +3392,8 @@ class VariationalFFNDynamic(nn.Module):
                     if (hessian_diag < 0).any():
                         _nr("obs_sigma_hessian_neg_clamp")
                         hessian_diag = hessian_diag.clamp(min=0.0)
-                    grad_sigma = grad_sigma + (0.5 * self.obs_sigma_weight) * hessian_diag * mask_obs
+                    _sigma_obs_scale = (0.5 * self.obs_sigma_weight) * _obs_weight
+                    grad_sigma = grad_sigma + _sigma_obs_scale * hessian_diag * mask_obs
 
             # Clip for stability
             grad_mu = torch.clamp(grad_mu, min=-1e3, max=1e3)
