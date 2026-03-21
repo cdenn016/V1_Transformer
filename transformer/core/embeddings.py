@@ -242,6 +242,18 @@ class GaugeTokenEmbedding(nn.Module):
             )
 
         # =================================================================
+        # Sigma hyperprior target (frozen initial sigma for Level 3)
+        # =================================================================
+        # Fixed reference Σ_h for the hyperprior KL(s||h). Provides bidirectional
+        # gradient on sigma_embed: pulls sigma toward init if it inflates OR deflates.
+        # This is the "h" in the hierarchy h → s → p → q for covariance.
+        sigma_target_val = init_sigma_scale  # scalar — initial σ value
+        self.register_buffer(
+            'sigma_target',
+            torch.full((embed_dim,), sigma_target_val)
+        )
+
+        # =================================================================
         # Gauge Frame Embeddings
         # =================================================================
         if gauge_param == 'omega' and omega_head_dims is not None:

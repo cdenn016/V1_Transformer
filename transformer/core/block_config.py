@@ -61,6 +61,8 @@ class BlockConfig:
     amortized_inference: bool = True    # Gradient flow through priors for learned E-step init
     detach_phi: bool = False            # Detach phi from backprop in non-amortized mode
                                         # (enables fully backprop-free training with phi P-flow)
+    implicit_em: bool = False           # IFT-based M-step: detach beliefs at E-step start,
+                                        # apply info-geometric scale s_k = (α/σ²_p)/A_k
 
     # === Analytic phi gradient ===
     analytic_phi_grad: bool = False     # If True, bypass autograd for ∂F/∂φ (saves ~250MB)
@@ -168,6 +170,7 @@ class BlockConfig:
             exact_diagonal_transport=config.get('exact_diagonal_transport', False),
             amortized_inference=config.get('amortized_inference', True),
             detach_phi=config.get('detach_phi', False),
+            implicit_em=config.get('implicit_em', False),
             # Analytic phi gradient
             analytic_phi_grad=config.get('analytic_phi_grad', False),
             analytic_phi_grad_dexp_order=config.get('analytic_phi_grad_dexp_order', 4),
