@@ -93,10 +93,11 @@ from math_utils.numerical_monitor import flush as _flush_numerical_events
 # EDIT THESE DEFAULTS TO RUN WITHOUT COMMAND-LINE ARGS (just click Run!)
 # ============================================================================
 # Primary modes:
-#   'standard'  - Dot-product attention + MLP baseline (backprop)
-#   'em'        - Gauge VFE + IFT implicit differentiation M-step (backprop)
-#   'hebbian'   - Gauge VFE + P-flow/delta-rule (no backprop)
-#   'pure_vfe'  - Pure natural gradient E/M (no autograd)
+#   'standard'   - Dot-product attention + MLP baseline (backprop)
+#   'em'         - Gauge VFE + IFT implicit differentiation M-step (backprop)
+#   'amortized'  - Gauge VFE + straight-through gradient (no E/M separation)
+#   'hebbian'    - Gauge VFE + P-flow/delta-rule (no backprop)
+#   'pure_vfe'   - Pure natural gradient E/M (no autograd)
 #
 # Peer-review ablations:
 #   'standard_attn_only'        - (M2b) attention-only at d_model=90
@@ -294,6 +295,23 @@ EM_CONFIG = {
     'log_interval': 100,
     'eval_interval': 500,
     'checkpoint_interval': 25000,
+}
+
+
+# =============================================================================
+# CONFIG: AMORTIZED — Straight-through gradient, no E/M separation (mode='amortized')
+# =============================================================================
+# Same gauge-VFE model, but gradients flow through priors in the E-step
+# (amortized_inference=True). CE gradient reaches embeddings via straight-through
+# (scale=1), not via IFT. This is the original "VFE_dynamic" mode — faster to
+# converge but theoretically unjustified (conflates E-step and M-step).
+# =============================================================================
+AMORTIZED_CONFIG = {
+    **EM_CONFIG,
+    # Override: amortized inference, no implicit EM
+    'amortized_inference': True,
+    'implicit_em': False,
+    'ffn_learnable_alpha': False,   # Fixed scalar alpha (simpler)
 }
 
 
@@ -3038,17 +3056,18 @@ def main():
                             # Primary modes
                             'standard',                 # Dot-product attention + MLP baseline
                             'em',                       # Gauge VFE + IFT implicit differentiation M-step
+                            'amortized',                # Gauge VFE + straight-through (no E/M separation)
                             'hebbian',                  # Gauge VFE + P-flow/delta-rule (no backprop)
                             'pure_vfe',                 # Pure natural gradient (no autograd)
                             # Backward compat alias
-                            'VFE_dynamic',              # → 'em'
+                            'VFE_dynamic',              # → 'amortized'
                             # Peer review ablations
                             'standard_attn_only',       # (M2b) attention-only at d_model=90
                             'standard_param_equalized', # (M2b') param-equalized wider FFN
                             'standard_rope',            # (M2c) standard + RoPE at d=10
                             'standard_rope_d90',        # (M2c') standard + RoPE at d=90
                         ],
-                        help='Training mode: standard, em, hebbian, pure_vfe, or peer-review ablations')
+                        help='Training mode: standard, em, amortized, hebbian, pure_vfe')
 
     # Legacy alias for backwards compatibility
     parser.add_argument('--ffn_mode', type=str, default=None,
@@ -3105,10 +3124,11 @@ def main():
     # SELECT CONFIG BASED ON MODE
     # =================================================================
     # Primary modes:
-    #   standard  → STANDARD_CONFIG    Dot-product attention + MLP
-    #   em        → EM_CONFIG          Gauge VFE + IFT M-step (backprop)
-    #   hebbian   → HEBBIAN_CONFIG     Gauge VFE + P-flow/delta-rule (no backprop)
-    #   pure_vfe  → PURE_VFE_CONFIG    Pure natural gradient (no autograd)
+    #   standard   → STANDARD_CONFIG     Dot-product attention + MLP
+    #   em         → EM_CONFIG           Gauge VFE + IFT M-step (backprop)
+    #   amortized  → AMORTIZED_CONFIG    Gauge VFE + straight-through (no E/M separation)
+    #   hebbian    → HEBBIAN_CONFIG      Gauge VFE + P-flow/delta-rule (no backprop)
+    #   pure_vfe   → PURE_VFE_CONFIG     Pure natural gradient (no autograd)
     # =================================================================
 
     mode = args.mode
@@ -3124,7 +3144,7 @@ def main():
         config = STANDARD_CONFIG.copy()
         ffn_mode = 'standard'
 
-    elif mode in ('em', 'VFE_dynamic'):
+    elif mode == 'em':
         print("\n" + "="*70)
         print("MODE: EM (Gauge VFE + implicit differentiation M-step)")
         print("="*70)
@@ -3134,6 +3154,18 @@ def main():
         print("   α_i adaptive: c0/(b0 + KL)")
         print("="*70 + "\n")
         config = EM_CONFIG.copy()
+        ffn_mode = 'VFE_dynamic'
+
+    elif mode in ('amortized', 'VFE_dynamic'):
+        print("\n" + "="*70)
+        print("MODE: AMORTIZED (Gauge VFE + straight-through gradient)")
+        print("="*70)
+        print("   Attention: KL-divergence (gauge-equivariant)")
+        print("   E-step: Natural gradient VFE descent")
+        print("   M-step: Backprop with straight-through CE → embeddings")
+        print("   Gradients flow through priors (amortized inference)")
+        print("="*70 + "\n")
+        config = AMORTIZED_CONFIG.copy()
         ffn_mode = 'VFE_dynamic'
 
     elif mode == 'hebbian':
@@ -3235,7 +3267,7 @@ def main():
 
     else:
         print(f"\nError: Unknown mode '{mode}'")
-        print("Valid modes: standard, em, hebbian, pure_vfe, "
+        print("Valid modes: standard, em, amortized, hebbian, pure_vfe, "
               "standard_attn_only, standard_param_equalized, standard_rope, standard_rope_d90")
         return
 
