@@ -304,13 +304,16 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     model.prior_Sigma[update_tokens] = Sigma_new
 
     # ---- Prior gauge frame gradient (vectorized) ----
+    omega_grad_clamp = getattr(config, 'omega_grad_clamp', 10.0)
+    omega_nat_max_norm = getattr(config, 'omega_nat_max_norm', 1.0)
+
     Omega_all = model.prior_Omega[update_tokens]       # [T, H, K_h, K_h]
     Omega_star_avg = Omega_star_sum / n_safe.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
     grad_Omega_all = -(Omega_star_avg - Omega_all)
     grad_Omega_all[~has_input] = 0.0
 
-    # Gradient clamping
-    grad_Omega_all = torch.clamp(grad_Omega_all, -grad_clamp, grad_clamp)
+    # Omega-specific gradient clamping (tighter than general grad_clamp)
+    grad_Omega_all = torch.clamp(grad_Omega_all, -omega_grad_clamp, omega_grad_clamp)
 
     if model.prior_phi is not None:
         # Phi path: update phi coordinates, then recompute Omega
@@ -325,9 +328,12 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
         phi_new = retract_phi(phi_all, -effective_eta_M * grad_phi, config.phi_max_norm)
         model.prior_phi[update_tokens] = phi_new
     else:
-        # Omega path: direct update with relative trust clip + conditioning
+        # Omega path: direct update with two-level trust clip + conditioning
         nat_Omega = natural_grad_omega(grad_Omega_all, Omega_all)
-        nat_Omega = relative_trust_clip(nat_Omega, Omega_all, config.trust_region_omega)
+        nat_Omega = relative_trust_clip(
+            nat_Omega, Omega_all, config.trust_region_omega,
+            max_norm=omega_nat_max_norm,
+        )
         Omega_new = Omega_all - effective_eta_M * nat_Omega
         Omega_new = regularize_omega_conditioning(Omega_new, config.omega_cond_max)
         model.prior_Omega[update_tokens] = Omega_new
@@ -350,6 +356,8 @@ def _update_pos_omega(Omega_star, token_ids, model, config):
     Vectorized over all positions.
     """
     B, N = token_ids.shape
+    omega_grad_clamp = getattr(config, 'omega_grad_clamp', 10.0)
+    omega_nat_max_norm = getattr(config, 'omega_nat_max_norm', 1.0)
     grad_clamp = getattr(config, 'grad_clamp', 1e3)
 
     # Average converged gauge at each position across batch: [N, H, K_h, K_h]
@@ -357,7 +365,7 @@ def _update_pos_omega(Omega_star, token_ids, model, config):
     pos_Om = model.pos_Omega[:N]              # [N, H, K_h, K_h]
 
     grad = -(Om_avg - pos_Om)
-    grad = torch.clamp(grad, -grad_clamp, grad_clamp)
+    grad = torch.clamp(grad, -omega_grad_clamp, omega_grad_clamp)
 
     if model.pos_phi is not None:
         # Phi path: update pos_phi coordinates
@@ -371,9 +379,12 @@ def _update_pos_omega(Omega_star, token_ids, model, config):
             pos_phi, -config.eta_M * 0.1 * grad_phi, config.phi_max_norm
         )
     else:
-        # Omega path with relative trust clip
+        # Omega path with two-level trust clip
         nat = natural_grad_omega(grad, pos_Om)
-        nat = relative_trust_clip(nat, pos_Om, config.trust_region_omega)
+        nat = relative_trust_clip(
+            nat, pos_Om, config.trust_region_omega,
+            max_norm=omega_nat_max_norm,
+        )
         pos_Om_new = pos_Om - config.eta_M * 0.1 * nat
         pos_Om_new = regularize_omega_conditioning(pos_Om_new, config.omega_cond_max)
         model.pos_Omega[:N] = pos_Om_new
