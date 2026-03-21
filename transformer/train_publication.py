@@ -246,10 +246,10 @@ VFE_EM_CONFIG = {
     'amortized_inference': False,
 
     # === VFE loss weights (M-step objective) ===
-    'alpha': 0.1,
+    'alpha': 1,
     'alpha_phi': 0.1,
     'lambda_hyper': 0.1,
-    'beta': 0.0,
+    'beta': 1.0,
     'lambda_gamma': 0.0,
     'kappa_gamma': 1.0,
 
@@ -268,15 +268,15 @@ VFE_EM_CONFIG = {
     'kappa_beta': 1.0,
 
     # === Training ===
-    'batch_size': 32,
+    'batch_size': 64,
     'num_workers': 10,
-    'max_steps': 30000,
+    'max_steps': 15000,
     'warmup_steps': 100,
 
     # === Learning rates ===
     'mu_lr': 0.05,
-    'sigma_lr': 0.005,
-    'phi_lr': 0.005,
+    'sigma_lr': 0.0125,
+    'phi_lr': 0.0075,
     'ffn_lr': 0.05,
     'attention_lr': 0.005,
     'output_lr': 0.05,
