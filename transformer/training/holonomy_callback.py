@@ -190,20 +190,38 @@ class HolonomyCallback(pl.Callback):
         to reconstruct what exp_delta would be for the current parameters.
         Uses raw delta (without cocycle_relaxation scaling) so diagnostics
         measure the connection's intrinsic curvature.
+
+        When use_prior_bank=True, uses PriorBank embeddings (the actual
+        inputs to gauge_connection during training) instead of token_embed.
         """
         try:
-            # Get embedding parameters
-            embed = getattr(model, 'token_embed', None) or getattr(model, 'token_embedding', None)
-            if embed is None:
-                return None
+            # Prefer PriorBank embeddings when available — these are the
+            # actual inputs to gauge_connection during training.
+            prior_bank = getattr(model, 'prior_bank', None)
+            if prior_bank is not None and getattr(model, 'use_prior_bank', False):
+                if getattr(prior_bank, 'gauge_fixed_priors', False):
+                    N = min(32, getattr(prior_bank, 'vocab_size', 32))
+                    token_ids = torch.arange(N, device=next(model.parameters()).device)
+                    pb_out = prior_bank.encode(token_ids.unsqueeze(0))
+                    mu = pb_out[0]  # (1, N, K)
+                else:
+                    prior_mu = getattr(prior_bank, 'prior_mu', None)
+                    if prior_mu is None:
+                        return None
+                    N = min(32, prior_mu.shape[0])
+                    mu = prior_mu[:N].unsqueeze(0)  # (1, N, K)
+            else:
+                # Standard path: use token_embed
+                embed = getattr(model, 'token_embed', None) or getattr(model, 'token_embedding', None)
+                if embed is None:
+                    return None
 
-            mu_embed = getattr(embed, 'mu_embed', None)
-            if mu_embed is None:
-                return None
+                mu_embed = getattr(embed, 'mu_embed', None)
+                if mu_embed is None:
+                    return None
 
-            # Use a sample of embeddings (first N tokens)
-            N = min(32, mu_embed.weight.shape[0])
-            mu = mu_embed.weight[:N].unsqueeze(0)  # (1, N, K)
+                N = min(32, mu_embed.weight.shape[0])
+                mu = mu_embed.weight[:N].unsqueeze(0)  # (1, N, K)
 
             # Get generators
             generators = getattr(model, 'generators', None)
