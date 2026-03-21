@@ -36,10 +36,11 @@ def _precompute_obs_gradient(ce_grad, mu_star, Sigma_star, update_tokens):
     for a set of vocabulary tokens.
 
     The CE observation gradient for prior μ_v is:
-      ∂CE/∂μ_v = (1/BN) Σ_{b,n} ce_grad[b,n,v] · Σ_v⁻¹(μ*_{b,n} - μ_v)
+      ∂CE/∂μ_v = (1/n_v) Σ_{b,n} ce_grad[b,n,v] · Σ_v⁻¹(μ*_{b,n} - μ_v)
 
     The CE observation gradient for prior Σ_v is:
-      ∂CE/∂Σ_v = (1/BN) Σ_{b,n} ce_grad[b,n,v] · ∂logit_v/∂Σ_v
+      ∂CE/∂Σ_v = (1/n_v) Σ_{b,n} ce_grad[b,n,v] · ∂logit_v/∂Σ_v
+    where n_v is the number of input occurrences of token v in the batch.
     where ∂logit_v/∂Σ_v = ½[Σ_v⁻¹(Σ*+δδᵀ)Σ_v⁻¹ - Σ_v⁻¹]
 
     We precompute the position-summed quantities needed for both.
@@ -149,14 +150,11 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     T = len(update_tokens)
     dev = mu_star.device
 
-    # Confidence-weighted learning rate (from dynamic transformer):
-    # When predictions are bad (high CE), gradients are large and noisy,
-    # so we should learn LESS, not more. Scale eta_M by 1/(1 + mean_ce).
-    per_pos_ce = -log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)  # [B, N]
-    mean_ce = per_pos_ce.mean().item()
-    confidence = 1.0 / (1.0 + mean_ce)
-    eta_floor = getattr(config, 'm_step_eta_floor', 0.01)
-    effective_eta_M = max(config.eta_M * confidence, config.eta_M * eta_floor)
+    # Use eta_M directly. No confidence weighting — at initialization CE ≈ 11
+    # (random PPL), which would shrink eta_M by ~12x via 1/(1+CE), creating a
+    # Catch-22 where the model can't learn because predictions are bad, and
+    # predictions are bad because the model can't learn.
+    effective_eta_M = config.eta_M
 
     grad_clamp = getattr(config, 'grad_clamp', 1e3)
 
@@ -216,9 +214,12 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     # Hyper-prior
     grad_mu = grad_mu_vfe + mu_all / config.hyper_var
 
-    # Observation gradient
+    # Observation gradient — normalize per-token by occurrence count, not BN.
+    # Dividing by BN=4096 dilutes the CE signal for rare tokens to ~1e-4,
+    # making it negligible compared to hyper-prior/VFE forces.
     obs_diff = obs_weighted_mu - obs_ce_sum.unsqueeze(-1) * mu_all  # [T, K]
-    obs_grad_mu = torch.einsum('tij,tj->ti', Sigma_all_inv, obs_diff / BN)
+    obs_norm = n_safe.unsqueeze(-1)  # [T, 1] — per-token occurrence count
+    obs_grad_mu = torch.einsum('tij,tj->ti', Sigma_all_inv, obs_diff / obs_norm)
     grad_mu = grad_mu + obs_grad_mu
 
     # Gradient clamping (ported from VFE dynamic)
@@ -263,7 +264,7 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
         obs_grad_Sigma = 0.5 * (
             Sigma_all_inv @ W @ Sigma_all_inv
             - obs_ce_sum.unsqueeze(-1).unsqueeze(-1) * Sigma_all_inv
-        ) / BN
+        ) / obs_norm.unsqueeze(-1)
         obs_grad_Sigma = symmetrize(obs_grad_Sigma)
         grad_Sigma = grad_Sigma + obs_grad_Sigma
     elif sigma_obs_mode == 'diagonal':
@@ -275,7 +276,7 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
             + obs_ce_sum.unsqueeze(-1) * mu_all ** 2
         )  # [T, K]
         Sigma_all_inv_diag = torch.diagonal(Sigma_all_inv, dim1=-2, dim2=-1)  # [T, K]
-        obs_diag = 0.5 * (Sigma_all_inv_diag ** 2 * W_diag - obs_ce_sum.unsqueeze(-1) * Sigma_all_inv_diag) / BN
+        obs_diag = 0.5 * (Sigma_all_inv_diag ** 2 * W_diag - obs_ce_sum.unsqueeze(-1) * Sigma_all_inv_diag) / obs_norm
         grad_Sigma = grad_Sigma + torch.diag_embed(obs_diag)
     # else: sigma_obs_mode == 'none' — match VFE dynamic, no obs gradient for Sigma
 

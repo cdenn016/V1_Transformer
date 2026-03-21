@@ -19,14 +19,18 @@ class PureVFEConfig:
     eta_E: float = 0.1         # E-step natural gradient step size
 
     # M-step (learning = parameter update)
-    eta_M: float = 0.001       # M-step natural gradient step size
+    # Must be comparable to VFE_dynamic's mu_lr=0.05 for priors to move.
+    # Was 0.001, which with /BN and confidence weighting gave ~2e-8 per scalar.
+    eta_M: float = 0.05        # M-step natural gradient step size
 
     # Prior precision (state-dependent α)
     alpha_b0: float = 1.0      # Denominator offset
     alpha_c0: float = 1.0      # Numerator scale
 
-    # Hyper-prior regularization
-    hyper_var: float = 1.0     # Variance of hyper-prior on prior means
+    # Hyper-prior regularization — must be large enough that the hyper-prior
+    # doesn't overpower the observation gradient.  At hyper_var=1 the pull-to-zero
+    # force (|μ_v|≈2.8) dwarfs the CE signal; 100 weakens it to ~0.03.
+    hyper_var: float = 100.0   # Variance of hyper-prior on prior means
 
     # Sequence
     max_seq_len: int = 64      # N: maximum sequence length
@@ -53,7 +57,7 @@ class PureVFEConfig:
 
     # Prior safeguards
     prior_sigma_floor: float = 0.5      # Min eigenvalue of prior Σ_v (prevents collapse)
-    prior_mu_max_norm: float = 3.0      # Max L2 norm of prior μ_v (prevents mean spread)
+    prior_mu_max_norm: float = 10.0     # Max L2 norm of prior μ_v (was 3.0, too tight — init already ≈2.83)
     m_step_trust_mu: float = 0.5        # Trust region for M-step μ updates
 
     # Gauge frame parameterization
