@@ -541,9 +541,15 @@ def compute_free_energy_loss(
     # =================================================================
     if alpha > 0.0:
         K = mu_q.shape[-1]
+        # Detach E-step covariances: backprop through the E-step sigma evolution
+        # produces NaN from numerically unstable second derivatives (matrix_exp
+        # backward through Omega @ Sigma @ Omega.T). Sigma learning is handled by
+        # the E-step dynamics and ImplicitEMGradient — same EM principle as beta/gamma.
+        # mu_q keeps gradient (flows through ImplicitEMGradient to mu_embed).
+        sigma_q_for_kl = sigma_q.detach() if sigma_q is not None else None
         kl_per_agent = gaussian_kl_divergence(
             mu_q=mu_q,
-            sigma_q=sigma_q,
+            sigma_q=sigma_q_for_kl,
             mu_p=mu_p,        # PRIORS (not models directly)
             sigma_p=sigma_p,
         )  # (B, N)
