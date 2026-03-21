@@ -55,7 +55,7 @@ We validate the unreduced theory by training a $\mathrm{GL}(K)$ gauge transforme
 
 \section{Introduction}
 
-Language is fundamentally a dynamic informational system: speakers and writers encode beliefs under uncertainty, listeners decode them, and the statistical regularities of this process reflect the structure of communication itself. Language modeling is a snapshot of this dynamic system, and the architectures that excel at it should reflect the mathematical structure of information exchange under uncertainty.
+Language is a dynamic informational system: speakers and writers encode beliefs under uncertainty, listeners decode them, and the statistical regularities of this process reflect the structure of communication itself. Language modeling is a snapshot of this dynamic system, and the architectures that excel at it should reflect the mathematical structure of information exchange under uncertainty.
 
 Recent advances in neuroscience and intelligent systems have independently converged on the idea that intelligent systems integrate perception, inference, and communication under the constraints of uncertainty \citep{bahdanau2014neural,amari1998natural,bronstein2021geometric,foerster2016learning,wooldridge2009introduction}. Friston's Free Energy Principle (FEP) provides a general variational formulation of inference in cognitive systems \citep{friston2010free,parr2022active,friston2017graphical,ramstead2020variational}, whereas the attention mechanism in modern machine learning architectures defines a powerful (although empirically derived) rule for token prediction \citep{clark2019does,vaswani2017attention}. Despite their shared reliance on probabilistic inference and pairwise interaction, these two frameworks remain stubbornly separated. While several mathematical perspectives on attention have been developed (discussed below), a unified geometric framework from which the full suite of transformer architectural choices emerges as consequences of a single variational principle has been lacking.
 
@@ -555,7 +555,7 @@ Under the pushforward $\Omega_* P = \mathcal{N}(\Omega\mu_P, \Omega\Sigma_P\Omeg
 The $(\det\Omega)^2$ factors cancel identically. Since all three components are invariant, $\\ D_{\mathrm{KL}}(\Omega_* P \| \Omega_* Q) = D_{\mathrm{KL}}(P \| Q)$.
 \end{proof}
 
-Importantly, the proof extends to all $f$-divergences: i.e. for any convex function $f$ such that $f(1) = 0$,
+The proof extends to all $f$-divergences: i.e. for any convex function $f$ such that $f(1) = 0$,
 
 \begin{equation}
 D_f(\Omega_* P \| \Omega_* Q) = D_f(P \| Q), \quad \forall\, \Omega \in \mathrm{GL}(K),
@@ -685,7 +685,7 @@ where $P(z = j) = \pi_j$ is the prior probability of attending to agent $j$ (the
 
 This construction leads to a generative model consistent with our required gauge structure. Agent $j$'s belief $q_j(k_j)$ lives in $j$'s local frame, and $\Omega_{ij}q_j(k_j)$ is agent $i$'s representation of what agent $j$ believes, as seen by agent $i$. The categorical variable $z$ endows the model with probabilistic source selection whereby attention is considered as posterior inference over which neighbor generated agent $i$'s state.
 
-To clarify, the component distributions $P(k \mid z{=}j) = \Omega_{ij}q_j$ depend on the variational posteriors $q_j$ of other agents, making the generative model itself a function of variational quantities. This construction can be understood via two complementary points. First, as an augmented model whereby the full system has a joint generative model over all agents' latent states, and the pairwise KL terms emerge as variational couplings in the mean-field decomposition of the joint ELBO.  Second, as a consensus energy whereby the alignment free energy $\sum_j \beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ can be viewed as an engineered energy functional that penalizes belief disagreement after gauge transport, motivated by the KL term of a fixed generative model. In either framing, the resulting update equations are the same. Importantly, at the fixed point of the joint optimization (over all $\{q_i\}$ simultaneously), the pairwise objectives are mutually consistent.
+To clarify, the component distributions $P(k \mid z{=}j) = \Omega_{ij}q_j$ depend on the variational posteriors $q_j$ of other agents, making the generative model itself a function of variational quantities. This construction can be understood via two complementary points. First, as an augmented model whereby the full system has a joint generative model over all agents' latent states, and the pairwise KL terms emerge as variational couplings in the mean-field decomposition of the joint ELBO.  Second, as a consensus energy whereby the alignment free energy $\sum_j \beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ can be viewed as an engineered energy functional that penalizes belief disagreement after gauge transport, motivated by the KL term of a fixed generative model. In either framing, the resulting update equations are the same. At the fixed point of the joint optimization (over all $\{q_i\}$ simultaneously), the pairwise objectives are mutually consistent.
 
 \subsubsection{Variational Posterior}
 
@@ -738,7 +738,7 @@ Requiring $\partial \mathcal{L} / \partial \beta_{ik} = 0$ produces:
 E_{ik} + \log \beta_{ik} + 1 - \log \pi_k - \lambda = 0.
 \end{equation}
 
-Solving and normalizing we find the softmax form (importantly) weighted by attention priors $\pi_k$:
+Solving and normalizing we find the softmax form, weighted by attention priors $\pi_k$:
 
 \begin{equation}
 \beta_{ik} = \frac{\pi_k \exp(-E_{ik})}{\sum_m \pi_m \exp(-E_{im})}.
@@ -899,7 +899,7 @@ R(\alpha_i) = b_0\,\alpha_i - c_0\,\log \alpha_i, \qquad b_0 > 0,\; c_0 > 0.
 \label{eq:precision_regularizer}
 \end{equation}
 
-The first term penalizes arbitrarily large precision (preventing $\alpha_i \to \infty$),  the second is a log-barrier that enforces $\alpha_i > 0$ and penalizes vanishing precision (preventing $\alpha_i \to 0$, which would trivially eliminate the self-coupling cost). 
+The first term penalizes arbitrarily large precision (preventing $\alpha_i \to \infty$), the second is a log-barrier that enforces $\alpha_i > 0$ and penalizes vanishing precision (preventing $\alpha_i \to 0$, which would trivially eliminate the self-coupling cost). 
 
 \subsubsection{Optimal Precision}
 
@@ -944,7 +944,7 @@ Note that in the full theory with general, possibly curved, base manifolds we wo
 \label{sec:symmetry_breaking}
 In the absence of observations ($p(o|\cdot) = \text{const}$), the free energy \eqref{eq:free_energy_final} possesses a reparameterization degeneracy under the gauge group $G$ (which is $\mathrm{GL}(K)$ in general, or a compact subgroup such as $\mathrm{SO}(K)$). The vacuum state corresponds to perfect alignment: $q_i = \Omega_{ij}q_j$ and $p_i = \tilde{\Omega}_{ij}p_j$ for all agent pairs $(i,j)$, meaning that all agents maintain gauge-equivalent beliefs that differ only by frame transformations. In this regime, the dynamics drive the system toward a degenerate manifold of ground states parameterized by the gauge orbit. Agents synchronize over gradient descent towards $\|\mu_i(c)\| = \mu^*$, but the absolute orientations remain arbitrary.
 
-A terminological note is warranted. In physics, local gauge symmetries are more precisely understood as redundancies of description rather than physical symmetries, and there are well-known subtleties in applying the language of spontaneous symmetry breaking to gauge redundancies (notably, Elitzur's theorem forbids spontaneous breaking of local gauge symmetries in lattice gauge theory \citep{weinberg1995quantum}). Our gauge group acts as a reparameterization symmetry of the KL divergence (Theorem~\ref{thm:glk_invariance}), and the degeneracy of the vacuum manifold is a consequence of this reparameterization freedom rather than of a global physical symmetry.
+A terminological note is warranted. In physics, local gauge symmetries are more precisely understood as redundancies of description rather than physical symmetries, and there are well-known subtleties in applying the language of spontaneous symmetry breaking to gauge redundancies (Elitzur's theorem forbids spontaneous breaking of local gauge symmetries in lattice gauge theory \citep{weinberg1995quantum}). Our gauge group acts as a reparameterization symmetry of the KL divergence (Theorem~\ref{thm:glk_invariance}), and the degeneracy of the vacuum manifold is a consequence of this reparameterization freedom rather than of a global physical symmetry.
 
 Observations destroy this degeneracy by coupling agents to external data through the likelihood terms. Each agent's data stream $o_i$ acts as an external field that selects a preferred orientation in its fiber. This is \emph{explicit} symmetry breaking: the observation/likelihood term $-\mathbb{E}_q[\log p(o|k)]$ is manifestly not gauge-invariant, and it is this term that forces agents into distinct configurations. The system transitions from the symmetric vacuum to a phase where agents develop distinct specializations such that $\|\mu_i(c)\| \neq \|\mu_j(c)\|$ with the diversity driven by observations/data. The frame transformations $\Omega_{ij}$ then encode how these specialized representations relate geometrically. This observation-induced specialization is what enables non-trivial multi-agent coordination in that agents must actively maintain geometric relationships between their specialized frames rather than simply coexisting in a gauge-symmetric configuration. Whether the vacuum manifold supports approximate zero modes of the Hessian (corresponding to directions of near-zero curvature along the gauge orbit) is a question we leave to future work.
 
@@ -952,7 +952,7 @@ Observations destroy this degeneracy by coupling agents to external data through
 
 The gauge-covariant variational free energy \eqref{eq:free_energy_final} has been derived from two principles: (i) the standard free energy principle for single agents (prior regularization + observation likelihood), and (ii) the mixture-of-sources model for inter-agent communication (KL-based alignment with softmax attention weights). Both belief alignment and model alignment arise from variational inference over gauge-transported sources. The forward KL divergence $D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ emerges as the alignment energy from the mixture generative model, and the softmax form of attention weights $\beta_{ij} = \operatorname{softmax}(-E_{ij}/\tau)$ follow from Lagrange optimization of the alignment free energy. Non-uniform attention priors $\pi_k$ provide multiple theoretically grounded mechanisms for positional relationships. Furthermore, a context-dependent self-coupling weight $\alpha_i$ can be derived as a state-dependent precision through variational optimization with a log-barrier regularizer (Section~\ref{sec:state_dependent_precision}), with the fixed-$\alpha$ case recovered as a limit.
 
-Multi-agent communication within this gauge-covariant formulation allows the FEP to be satisfied. Importantly, there is no necessitation of any informational substrate (such as neural networks, transmission lines, etc) within our formalism. Next, we show that this formulation connects attention, transformers, and architecture to variational inference without neural networks, MLPs, and other standard ad-hoc architectures.
+Multi-agent communication within this gauge-covariant formulation allows the FEP to be satisfied. There is no necessitation of any informational substrate (such as neural networks, transmission lines, etc) within our formalism. Next, we show that this formulation connects attention, transformers, and architecture to variational inference without neural networks, MLPs, and other standard ad-hoc architectures.
 
 \section{Reduction to Transformer Attention}
 
@@ -1150,7 +1150,7 @@ W_Q W_K^\top = \frac{1}{\sigma^2} \Omega^{-\top} \in \mathrm{GL}(d_k).
 
 Such a factorization always exists for any invertible $\Omega$ since for $\Omega^{-\top} \in \mathrm{GL}(d_k)$, any matrix $M \in \mathrm{GL}(d_k)$ can be written as $M = AB^\top$ for suitable $A, B$ (e.g., via SVD: $M = U\Lambda V^\top = (U\Lambda^{1/2})(V\Lambda^{1/2})^\top$).
 
-Importantly this identification concerns the bilinear form $M = W_Q W_K^\top$ that determines the attention logits rather than the individual matrices $W_Q$ and $W_K$ separately. In standard transformer implementations, the per-head projection matrices $W_Q^a, W_K^a \in \mathbb{R}^{d_{\text{model}} \times d_{\text{head}}}$ are rectangular (with $d_{\text{model}} \gg d_{\text{head}}$), and neither is individually invertible in the $d_{\text{model}}$-dimensional space. The gauge-theoretic identification is within the $d_{\text{head}}$-dimensional projected subspace where the effective bilinear form $M^a = (W_Q^a)^\top W_K^a \in \mathbb{R}^{d_{\text{head}} \times d_{\text{head}}}$ acts.
+This identification concerns the bilinear form $M = W_Q W_K^\top$ that determines the attention logits rather than the individual matrices $W_Q$ and $W_K$ separately. In standard transformer implementations, the per-head projection matrices $W_Q^a, W_K^a \in \mathbb{R}^{d_{\text{model}} \times d_{\text{head}}}$ are rectangular (with $d_{\text{model}} \gg d_{\text{head}}$), and neither is individually invertible in the $d_{\text{model}}$-dimensional space. The gauge-theoretic identification is within the $d_{\text{head}}$-dimensional projected subspace where the effective bilinear form $M^a = (W_Q^a)^\top W_K^a \in \mathbb{R}^{d_{\text{head}} \times d_{\text{head}}}$ acts.
 
 The standard rectangular shape of $W_Q^a$ arises from a further restriction: decomposing $\Omega$ into a block-diagonal subgroup $\mathrm{GL}(d_{\text{head}})^H \subset \mathrm{GL}(d_k)$, where each head $a$ operates within an independent $d_{\text{head}}$-dimensional subspace. The rectangular shape encodes both the orthogonal projection onto block $a$ and the $\mathrm{GL}(d_{\text{head}})$ transport within that block. We develop and discuss this identification in detail in Section~\ref{sec:multihead}. For now we return to the attention derivation.
 
@@ -1622,7 +1622,7 @@ Recall from Section~\ref{sec:glk_invariance} that standard transformers implemen
 \end{pmatrix}, \quad \Omega^a = (\sigma^2 W_K^a (W_Q^a)^\top)^{-1} \in \mathrm{GL}(d_{\text{head}}),
 \end{equation}
 
-where each head $a$ learns its own $\mathrm{GL}(d_{\text{head}})$ gauge transformation. This block structure means that components in different heads do not mix under gauge transport. Each head implements an independent gauge-theoretic attention mechanism. Importantly, each per-head transport $\Omega^a \in \mathrm{GL}(d_{\text{head}})$ is full rank and invertible within its block, so the Mahalanobis metric correction $(\Omega^a)^{-\top}$ from Eq.~\eqref{eq:mahalanobis_identity} remains well-defined. The rectangular shape of the standard per-head projection matrices $W_Q^a \in \mathbb{R}^{d_k \times d_{\text{head}}}$ reflects the composition of (i) the orthogonal projection $P_a : \mathbb{R}^{d_k} \to \mathbb{R}^{d_{\text{head}}}$ onto block $a$, with (ii) the $\mathrm{GL}(d_{\text{head}})$ gauge transport within that block. The rectangular outer shape is therefore the projection, not a rank deficiency.
+where each head $a$ learns its own $\mathrm{GL}(d_{\text{head}})$ gauge transformation. This block structure means that components in different heads do not mix under gauge transport. Each head implements an independent gauge-theoretic attention mechanism. Each per-head transport $\Omega^a \in \mathrm{GL}(d_{\text{head}})$ is full rank and invertible within its block, so the Mahalanobis metric correction $(\Omega^a)^{-\top}$ from Eq.~\eqref{eq:mahalanobis_identity} remains well-defined. The rectangular shape of the standard per-head projection matrices $W_Q^a \in \mathbb{R}^{d_k \times d_{\text{head}}}$ reflects the composition of (i) the orthogonal projection $P_a : \mathbb{R}^{d_k} \to \mathbb{R}^{d_{\text{head}}}$ onto block $a$, with (ii) the $\mathrm{GL}(d_{\text{head}})$ gauge transport within that block. The rectangular outer shape is therefore the projection, not a rank deficiency.
 
 The full multi-head gauge group is thus the direct product:
 
@@ -1768,7 +1768,7 @@ Beyond the attention mechanism, several additional transformer components posses
 \subsubsection{Feed forward Networks and Non-linear Activations.}
 \label{sec:ffn_nonlinearity}
 
-Standard transformers interleave attention sublayers with feedforward networks (FFNs), typically two-layer MLPs with a nonlinear activation such as GeLU \citep{hendrycks2016gaussian}. Within the gauge-theoretic framework, the FFN corresponds to the iterative VFE dynamics that adjust beliefs between attention computations. The nonlinear activation function is not an independent architectural choice but a necessary consequence of the information-geometric structure: variational inference on Gaussian beliefs produces a Gated Linear Unit (GLU) \citep{dauphin2017language} whose gate is a Boltzmann weight over KL energies. The neural network is the computational substrate of a deeper information-geometric dynamics; the activation functions used in practice (SiLU, GELU, ReLU) are specific instantiations of this dynamics under successive limits.
+Standard transformers interleave attention sublayers with feedforward networks (FFNs), typically two-layer MLPs with a nonlinear activation such as GeLU \citep{hendrycks2016gaussian}. Within the gauge-theoretic framework, the FFN corresponds to the iterative VFE dynamics that adjust beliefs between attention computations. The nonlinear activation function is not an independent architectural choice but a natural consequence of the information-geometric structure: variational inference on Gaussian beliefs produces a Gated Linear Unit (GLU) \citep{dauphin2017language} whose gate is a Boltzmann weight over KL energies. The neural network is the computational substrate of a deeper information-geometric dynamics; the activation functions used in practice (SiLU, GELU, ReLU) are specific instantiations of this dynamics under successive limits.
 
 \paragraph{Message passing as a gated linear unit.}
 
@@ -1821,7 +1821,7 @@ The information-geometric origin of the gate determines its functional form. For
 %
 All three belong to the Gaussian family of gated linear units, but the correspondence is one of family membership rather than functional identity. The VFE gate uses the Gaussian PDF $\propto \exp(-x^2/2)$ as its un-normalized weight, while GELU uses the Gaussian CDF $\Phi(x) = \frac{1}{2}\operatorname{erfc}(-x/\sqrt{2})$, the integral of the same PDF. The logistic sigmoid $\sigma(x) = 1/(1+e^{-x})$ is the two-state Boltzmann distribution. These are related by the number of competing information sources ($n_s = 2$ for sigmoid, $n_s > 2$ for softmax) and the functional form of the energy ($E \propto x$ for SiLU, $E \propto x^2$ for VFE). The framework thus explains why gated activations from this family work well (they implement information-geometric gating), but does not uniquely predict GELU over SiLU or vice versa.
 
-ReLU is the zero-temperature ($\tau \to 0$) limit: the Boltzmann distribution concentrates on the lowest-energy state and the gate becomes a step function $\Theta$, giving $x \cdot \Theta(x) = \max(0, x)$.
+In the binary case ($n_s = 2$), ReLU is the zero-temperature ($\tau \to 0$) limit: the sigmoid concentrates into a step function $\Theta$, giving $x \cdot \Theta(x) = \max(0, x)$.
 
 \paragraph{Softmax-gradient correction.}
 
@@ -1933,7 +1933,7 @@ where $\theta = \{\mu_{\text{embed}}, \Sigma_{\text{embed}}, \phi_{\text{embed}}
       + \underbrace{\nabla_\mu \mathcal{L}_{\text{obs}}}_{\text{observation}}$
     \STATE $\tilde{\nabla}_\mu \leftarrow \Sigma_i \cdot \nabla_\mu \mathcal{F}$ \hfill $\triangleright$ Natural gradient (Fisher preconditioning)
     \STATE $\mu_i \leftarrow \mu_i - \eta_E\, \tilde{\nabla}_\mu$ \hfill $\triangleright$ Trust-region-constrained update
-    \STATE \textit{--- Covariance gradient (Eq.~\ref{eq:Sigma_gradient_main}):}
+    \STATE \textit{--- Covariance gradient (first line of Eq.~\ref{eq:Sigma_gradient_main}; $\partial\alpha/\partial\Sigma$, $\partial\beta/\partial\Sigma$ corrections omitted):}
     \STATE $\nabla_{\Sigma} \mathcal{F} \leftarrow \tfrac{\alpha}{2}(\Sigma_p^{-1} - \Sigma_i^{-1})
       + \tfrac{1}{2}\sum_h \sum_j \beta_{ij}^{(h)} \big[(\Omega_{ij}^{(h)}\Sigma_j^{(h)}\Omega_{ij}^{(h)\top})^{-1} - \Sigma_i^{(h)-1}\big]$
     \STATE $\Sigma_i \leftarrow \mathrm{Retract}_{\mathrm{SPD}}(\Sigma_i,\, -\eta_\Sigma\, \Sigma_i\,\nabla_\Sigma\mathcal{F}\,\Sigma_i)$ \hfill $\triangleright$ SPD retraction with Fisher metric

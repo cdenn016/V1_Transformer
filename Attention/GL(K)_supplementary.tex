@@ -655,7 +655,7 @@ where $\theta = \|\phi\|$, $c_1(\theta) = (1-\cos\theta)/\theta^2$, and $c_2(\th
 
 The resulting Euclidean gradient $\partial\mathcal{F}/\partial\phi^a$ can optionally be preconditioned using one of several Lie-algebraic metrics.  In the transformer implementation, these include: (i)~the \emph{Killing form} natural gradient, which uses the Cartan-involution-modified Killing form $\tilde{g}_{ab} = 2K\,\mathrm{tr}(T_a^\top T_b) - 2\,\mathrm{tr}(T_a)\mathrm{tr}(T_b)$ as a position-independent metric with no free parameters; (ii)~a \emph{Cartan decomposition} preconditioner that dampens the non-compact (symmetric) directions of $\mathfrak{gl}(K)$ relative to the compact $\mathfrak{so}(K)$ directions; and (iii)~the full \emph{pullback} natural gradient $G_{ab}(\phi) = \langle \Psi(\mathrm{ad}_X)(T_a),\, \Psi(\mathrm{ad}_X)(T_b) \rangle$, where $\Psi(z) = (e^z - 1)/z$, which captures the position-dependent curvature of the exponential map.
 
-Once the gradient direction is determined, we apply a step with learning rate $\eta_\phi$ (typically $10^{-1}$), forming a candidate update $\phi_{\text{cand}} = \phi + \eta_\phi\,\delta \phi$. However, the Lie algebra has a natural periodic boundary (rotation angles wrap at $\pm \pi$) nd numerical drift can cause $\phi$ to wander outside the principal domain. To prevent this, we apply a retraction via \texttt{retract\_to\_principal\_ball}, which wraps angles modulo $2\pi$, applies an antipodal flip for angles exceeding $\pi$, and clamps the result to $\|\phi\| < \pi - \varepsilon_{\mathrm{margin}}$ with $\varepsilon_{\mathrm{margin}} = 10^{-2}$ to avoid numerical instability near the critical points where the exponential map degenerates.
+Once the gradient direction is determined, we apply a step with learning rate $\eta_\phi$ (typically $10^{-1}$), forming a candidate update $\phi_{\text{cand}} = \phi + \eta_\phi\,\delta \phi$. However, the Lie algebra has a natural periodic boundary (rotation angles wrap at $\pm \pi$) and numerical drift can cause $\phi$ to wander outside the principal domain. To prevent this, we apply a retraction via \texttt{retract\_to\_principal\_ball}, which wraps angles modulo $2\pi$, applies an antipodal flip for angles exceeding $\pi$, and clamps the result to $\|\phi\| < \pi - \varepsilon_{\mathrm{margin}}$ with $\varepsilon_{\mathrm{margin}} = 10^{-2}$ to avoid numerical instability near the critical points where the exponential map degenerates.
 
 
 \paragraph{Gradient validation.} All gauge frame gradient implementations are validated against finite-difference approximations $(\partial \mathcal{F}/\partial \phi_i^a \approx [\mathcal{F}(\phi_i + \epsilon e_a) - \mathcal{F}(\phi_i - \epsilon e_a)]/(2\epsilon))$ with relative error $< 10^{-5}$.
@@ -701,14 +701,14 @@ The multi-passage corpus validation across all 105 passages yields grand mean $\
 
 \paragraph{Cross-passage stability.} The robustness of these results across the 105-passage corpus is a central finding. Standard errors for each head's correlation are uniformly small: mean $\mathrm{SE} = 0.004$, median $\mathrm{SE} = 0.004$, and maximum $\mathrm{SE} = 0.016$, with all 144 heads achieving $\mathrm{SE} < 0.05$ (Figure~\ref{fig:cross_passage_stability_supp}). This demonstrates that the $\alpha$--$\beta$ agreement is a robust property of BERT's learned representations, not an artifact of any particular input passage.
 
-The distribution of per-head correlations reveals substantial heterogeneity consistent with functional specialization. Some heads achieve near-perfect agreement (e.g., Layer~2, Head~0: mean $r = 0.999$, $\mathrm{SE} = 0.0004$), while a minority of heads show weaker correspondence ($r < 0.3$), typically those implementing positional or syntactic attention patterns orthogonal to the KL-based distance metric. All 144 heads achieve $p < 0.001$ significance on 100\% of passages, confirming that the agreement is statistically robust across the full head population.
+The distribution of per-head correlations reveals substantial heterogeneity consistent with functional specialization. Some heads achieve near-perfect agreement (e.g., Layer~2, Head~0: mean $r = 0.999$, $\mathrm{SE} = 0.0004$), while a minority of heads show weaker correspondence ($r < 0.3$), typically those implementing positional or syntactic attention patterns orthogonal to the KL-based distance metric. All 144 heads achieve $p < 0.001$ significance on 100\% of passages; all 15{,}120 head--passage comparisons survive Bonferroni correction at $\alpha = 0.05$ (adjusted threshold $p < 3.3 \times 10^{-6}$), confirming that the agreement is statistically robust across the full head population.
 
 \begin{figure*}[t]
   \centering
   \includegraphics[width=0.95\textwidth]{attention/figs/tau_sweep_across_passages.png}
   \caption{
     \textbf{Temperature sweep across 105 passages.}
-    Grand mean Pearson correlation between transformer and KL attention weights as a function of temperature $\tau$, averaged over all 144 heads and 105 passages. Shaded regions indicate 95\% confidence intervals.  The empirical optimum at $\tau = 19.0$ ($\bar{r} = 0.804$, 95\% CI $[0.771, 0.838]$) is consistent with the theoretical prediction $\tau_{\text{opt}} = 2\sqrt{d} = 16$ for $d = 64$.
+    Grand mean Pearson correlation between transformer and KL attention weights as a function of temperature $\tau$, averaged over all 144 heads and 105 passages. Shaded regions indicate 95\% confidence intervals.  The empirical optimum at $\tau = 19.0$ ($\bar{r} = 0.804$, 95\% CI $[0.771, 0.838]$) is within 19\% of the theoretical prediction $\tau_{\text{opt}} = 2\sqrt{d} = 16$ for $d = 64$.
   }
   \label{fig:temperature_sweep_supp}
 \end{figure*}
@@ -956,7 +956,7 @@ Let $\mathcal{T}(K, N, g_1, g_2, g_3)$ denote the family of gauge VFE models wit
 \item[(ii)] \textbf{Stability.} All scaling dimensions are negative: $y_1 = -\tfrac{1}{2}$, $y_2 = -1$, $y_3 = -2$.  The fixed point is infrared-stable.
 \item[(iii)] \textbf{Universality.} All finite-coupling models flow to the transformer limit under repeated coarse-graining.
 \item[(iv)] \textbf{Emergent anisotropy.} The coarse-graining map generates anisotropy from within-cluster variance: even at $g_1 = 0$, $\Sigma_A = \sigma^2 I + \mathrm{Var}_A(\mu)$ is generically anisotropic.
-\item[(v)] \textbf{Efficiency gap.} The absorbed degrees of freedom scale as $O(K^2)$, predicting an $O(\sqrt{K})$ sample-efficiency advantage for the gauge VFE over parameter-matched transformers.
+\item[(v)] \textbf{Efficiency gap.} The absorbed degrees of freedom scale as $O(K^2)$, suggesting a potential sample-efficiency advantage whose scaling with $K$ remains to be characterized.
 \end{enumerate}
 \end{conjecture}
 
@@ -1096,7 +1096,7 @@ These three conditions, each individually nonrestrictive, are jointly restrictiv
 
 Within a broad, but well-defined, class, the forward KL divergence $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ is the only divergence that yields a closed-form Gibbs-type solution for the belief update and a consistent dual interpretation for the attention weights.  Agents locally minimize their agent-specific variational free energy and the system of agents minimize their collective global free energies.  This local-global coordination gives rise to the expected forward KL attention term.
 
-In what follows we restrict to our "matched-fiber" framework.  The full generalization follows by applying the appropriate bundle morphisms/intertwiners.
+In what follows we restrict to our ``matched-fiber'' framework, where all agents share the same fiber dimension $K$ and representation $\rho$, so that gauge transport acts within a single vector space.  The full generalization follows by applying the appropriate bundle morphisms/intertwiners.
 
 The uniqueness of the term is conditional and follows from three assumptions: (i) $\mathcal{D}$ is local in $c$, of f-divergence form $\displaystyle \int q_i(c)\, f\!\left(\frac{q_i(c)}{\Omega_{ij}(c) q_j(c)}\right) dc$; (ii) the coupling is linear; and (iii) the minimizing belief $q_i^*$ remains in the exponential-family (log-linear).
 
