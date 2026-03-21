@@ -36,20 +36,37 @@ class PureVFEConfig:
     sigma_init: float = 1.0             # Initial covariance scale
     omega_init_scale: float = 0.01      # GL(K) frame perturbation from I
 
+    # E-step numerical stability (ported from VFE dynamic)
+    sigma_lr_ratio: float = 0.05        # Sigma evolves at this × mu rate (VFE dynamic: 0.05)
+    e_step_lr_decay: float = 0.5        # LR decays to (1 - this) × eta_E over E-step iterations
+    grad_clamp: float = 1e3             # Element-wise gradient clamp before natural gradient
+
     # Trust regions (Frobenius norm caps on natural gradient steps)
-    trust_region_mu: float = 1.0
-    trust_region_sigma: float = 0.3
-    trust_region_omega: float = 0.3
+    trust_region_mu: float = 2.0        # Whitened trust region for mu (VFE dynamic: 2.0)
+    trust_region_sigma: float = 0.15    # Trust region for sigma retraction (tightened from 0.3)
+    trust_region_omega: float = 0.3     # Relative trust region for omega updates
 
     # SPD retraction safeguards
-    spd_eps_min: float = 1e-4           # Spectral floor (beliefs)
+    spd_eps_min: float = 1e-3           # Spectral floor (tightened from 1e-4)
     spd_kappa_max: float = 1e4          # Condition number cap
-    spd_exp_clip: float = 50.0          # Eigenvalue exponent clip
+    spd_exp_clip: float = 20.0          # Eigenvalue exponent clip (tightened from 50.0)
 
     # Prior safeguards
     prior_sigma_floor: float = 0.5      # Min eigenvalue of prior Σ_v (prevents collapse)
     prior_mu_max_norm: float = 3.0      # Max L2 norm of prior μ_v (prevents mean spread)
     m_step_trust_mu: float = 0.5        # Trust region for M-step μ updates
+
+    # Gauge frame parameterization
+    gauge_param: str = 'omega'          # 'omega' (direct GL(K)) or 'phi' (Lie algebra)
+    omega_cond_max: float = 100.0       # Max condition number for Omega (regularize if exceeded)
+    phi_max_norm: float = 3.14159       # Max norm for phi (π = 180° rotation)
+
+    # M-step options
+    sigma_obs_grad: str = 'none'        # 'none' (match VFE dynamic), 'diagonal', 'full'
+    m_step_eta_floor: float = 0.01      # Min multiplier for confidence-weighted eta_M
+
+    # Recovery
+    nan_recovery: bool = True           # Reset beliefs to priors on NaN detection
 
     # Causal masking
     causal: bool = True

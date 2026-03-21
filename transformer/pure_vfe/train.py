@@ -122,6 +122,7 @@ def train(config=None, n_epochs=10, log_interval=10, save_path=None):
                 ppl = torch.exp(torch.tensor(ce_loss)).item()
                 vfe_0 = vfe_history[0] if vfe_history else 0.0
                 vfe_f = vfe_history[-1] if vfe_history else 0.0
+                vfe_ratio = vfe_f / max(abs(vfe_0), 1e-8) if vfe_0 != 0 else 0.0
                 print(f"{epoch:5d} {global_step:6d} {ce_loss:8.3f} {ppl:10.1f} "
                       f"{vfe_0:10.1f} {vfe_f:10.1f} {dt:8.3f}")
 
@@ -137,12 +138,23 @@ def train(config=None, n_epochs=10, log_interval=10, save_path=None):
                     mu_mean = mu_norms.mean().item()
                     mu_max = mu_norms.max().item()
 
+                    # VFE convergence ratio
+                    if vfe_ratio > 1.1:
+                        print(f"  [WARN] VFE diverged: ratio={vfe_ratio:.3f}")
+                    elif len(vfe_history) > 1:
+                        print(f"  [INFO] VFE {vfe_0:.1f}→{vfe_f:.1f} "
+                              f"({len(vfe_history)} steps, ratio={vfe_ratio:.3f})")
+
                     if sig_min < 0.05 or mu_max > 10.0:
                         print(f"  [WARN] Σ_min={sig_min:.4f} Σ_max={sig_max:.2f} "
                               f"μ_mean={mu_mean:.2f} μ_max={mu_max:.2f}")
 
                 # Monitor gauge health
                 health = monitor_omega_health(model.prior_Omega[:100], "prior_Omega")
+                print(f"  [DIAG] Ω cond: mean={health['prior_Omega/cond_mean']:.1f} "
+                      f"max={health['prior_Omega/cond_max']:.1f} "
+                      f"det_range=[{health['prior_Omega/det_min']:.3f}, "
+                      f"{health['prior_Omega/det_max']:.3f}]")
                 if health['prior_Omega/cond_max'] > 100:
                     print(f"  [WARN] Ω condition number high: {health['prior_Omega/cond_max']:.1f}")
 
