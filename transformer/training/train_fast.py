@@ -100,6 +100,7 @@ class FastTrainingConfig:
     # Free energy coefficients
     alpha: float = 1.0            # Self-consistency KL(q||p) weight — stronger than TrainingConfig (0.1) for FastTrainer stability
     beta: float = 1.0             # Belief alignment (maps to lambda_beta in loss)
+    beta_warmup_steps: int = 0    # Linear warmup for beta (0 = instant full value)
     lambda_gamma: float = 0.0     # Model alignment (disabled by default)
     kappa_gamma: float = 1.0      # Temperature for γ_ij coupling weights
     lambda_hyper: float = 0.0     # Hyper-prior: KL(s_i||h) models to centroid
