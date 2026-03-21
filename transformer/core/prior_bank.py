@@ -98,9 +98,13 @@ class PriorBank(nn.Module):
         self.gauge_param = gauge_param
         self.omega_head_dims = omega_head_dims
 
-        # Dimension-aware initialization: 1/sqrt(K) keeps ||μ||² = O(1)
+        # Dimension-aware initialization: √(ln V / K) makes pairwise KL ≈ ln(V).
+        # Old 1/√K made KL = O(1), but attention divides by √K_h →
+        # logit differences O(1/(H√K_h)) vanish for large K (e.g. K=90 GL(15)).
+        # With √(ln V / K): ||μ||² = ln(V) ≈ 10.8, KL ≈ ln(V), and attention
+        # logits ≈ -ln(V)/(H√K_h) which stays discriminative up to K ≈ ln²(V).
         if init_std is None:
-            init_std = 1.0 / math.sqrt(embed_dim)
+            init_std = math.sqrt(math.log(vocab_size) / embed_dim)
 
         if gauge_fixed_priors:
             # Validate generators
