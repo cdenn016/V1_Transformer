@@ -92,14 +92,17 @@ from math_utils.numerical_monitor import flush as _flush_numerical_events
 # ============================================================================
 # EDIT THESE DEFAULTS TO RUN WITHOUT COMMAND-LINE ARGS (just click Run!)
 # ============================================================================
-# Modes available:
-#   'standard'    - Standard transformer baseline (dot-product attention + MLP)
-#   'VFE_dynamic' - VFE with EM-step dynamics (backprop training)
-#   'pure_vfe'    - Pure VFE transformer (no backprop, natural gradient only)
-#   'standard_attn_only',      # (b) attention-only at d_model=90
-#   'standard_param_equalized', # (b') param-equalized wider FFN
-#   'standard_rope',            # (c) standard + RoPE at d=10
-#   'standard_rope_d90',        # (c') standard + RoPE at d=90
+# Primary modes:
+#   'standard'  - Dot-product attention + MLP baseline (backprop)
+#   'em'        - Gauge VFE + IFT implicit differentiation M-step (backprop)
+#   'hebbian'   - Gauge VFE + P-flow/delta-rule (no backprop)
+#   'pure_vfe'  - Pure natural gradient E/M (no autograd)
+#
+# Peer-review ablations:
+#   'standard_attn_only'        - (M2b) attention-only at d_model=90
+#   'standard_param_equalized'  - (M2b') param-equalized wider FFN
+#   'standard_rope'             - (M2c) standard + RoPE at d=10
+#   'standard_rope_d90'         - (M2c') standard + RoPE at d=90
 
 DEFAULT_MODE = 'em'               # Which mode to run
 
