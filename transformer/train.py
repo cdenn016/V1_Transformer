@@ -465,9 +465,16 @@ def compute_free_energy_loss(
     # 2. Belief Coupling: λ_β · Σ_ij β_ij · KL(q_i || Ω_ij q_j)
     # =================================================================
     if lambda_beta > 0.0:
-        # Use final layer's beta/kl for loss (matches pre-refactor behavior)
-        beta_final = beta[-1]  # (B, n_heads, N, N)
-        kl_final = kl[-1]      # (B, n_heads, N, N)
+        # Use final layer's beta/kl for loss (matches pre-refactor behavior).
+        # CRITICAL: Detach beta (attention weights) so the M-step gradient only
+        # flows through KL, not through the softmax. Without detach, minimizing
+        # β·KL through β pushes all KL_ij toward equality → uniform attention.
+        # Detaching β is also the correct EM formulation: in the M-step, β is
+        # held fixed at its E-step value. The gradient β.detach() · ∂KL/∂θ says
+        # "reduce the KLs that E-step attention focuses on" rather than
+        # "rearrange attention to be uniform."
+        beta_final = beta[-1].detach()  # (B, n_heads, N, N) — E-step weights, fixed
+        kl_final = kl[-1]               # (B, n_heads, N, N) — gradient flows through
         weighted_kl = beta_final * kl_final
         belief_align_loss = weighted_kl.sum(dim=(-2, -1)).mean()
         K = mu_q.shape[-1]
@@ -533,7 +540,9 @@ def compute_free_energy_loss(
             diagonal_covariance=diagonal_cov,
         )
 
-        weighted_kl_model = gamma * kl_model  # (B, N, N)
+        # Detach gamma for same reason as beta: gradient through softmax
+        # pushes toward uniform model coupling, destroying structure.
+        weighted_kl_model = gamma.detach() * kl_model  # (B, N, N)
         K = mu_s.shape[-1]
         dim_scale = math.sqrt(max(K, 1))
         model_align_loss = lambda_gamma * weighted_kl_model.sum(dim=(-2, -1)).mean() / dim_scale
