@@ -2408,6 +2408,7 @@ def run_single_experiment(
         # Free energy loss weights
         alpha=config['alpha'],
         beta=config['beta'],             # → lambda_beta in compute_free_energy_loss
+        beta_warmup_steps=config.get('beta_warmup_steps', 0),
         lambda_gamma=config['lambda_gamma'],
         lambda_hyper=config.get('lambda_hyper', 0.0),
         use_obs_in_vfe=config.get('use_obs_in_vfe', False),
