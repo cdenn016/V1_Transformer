@@ -200,17 +200,16 @@ STANDARD_CONFIG = {
 # =============================================================================
 # Gauge-covariant VFE transformer with proper E/M separation:
 #
-#   E-step: Natural gradient descent on FULL F (prior + alignment + observation)
-#           w.r.t. (μ_q, Σ_q, φ) inside forward pass. Observations ground beliefs
-#           in data — without them, E-step just smooths toward vacuum.
-#           Fisher-preconditioned μ, SPD retraction for Σ, Killing-form for φ.
-#           Adaptive α_i = c0/(b0 + KL) gates prior coupling per agent.
+#   E-step: Partial VFE descent (prior + alignment, no observations) w.r.t.
+#           (μ_q, Σ_q, φ). 1 iteration. Fisher-preconditioned μ, SPD retraction
+#           for Σ, Killing-form for φ. Adaptive α_i = c0/(b0 + KL).
+#           Observations excluded: with 1 iter, obs gradient overwhelms
+#           prior+alignment → beliefs become target-dependent → cheating.
 #
-#   M-step: Backprop through IFT-scaled gradient. Scale s_k = (α/σ²_p)/A_k
-#           where A_k is the effective precision at the E-step fixed point.
-#           Replaces ad-hoc straight-through (s=1) with the info-geometrically
-#           correct value. CE → W_out directly; CE → embeddings via IFT scale.
-#           KL(q*||p) → embeddings directly. KL(s||h) → sigma with fixed Σ_h.
+#   M-step: CE (observation signal) + auxiliary regularizers.
+#           CE → W_out directly; CE → embeddings via IFT scale s_k ≈ 0.5.
+#           KL(s||h) → sigma with fixed Σ_h. Gauge prior on φ.
+#           No α·KL(q*||p) (homogenizing with 1-iter q*). No β·KL (vacuum-seeking).
 #
 #   Hierarchy: h(fixed) → s(embed params) → p=s → q(E-step beliefs) → obs
 # =============================================================================
@@ -242,11 +241,6 @@ EM_CONFIG = {
     'ffn_alpha': 1.0,               # Prior coupling inside VFE E-step
     'ffn_lambda_belief': 1.0,       # Belief alignment inside VFE E-step
     'ffn_learnable_alpha': True,    # Adaptive α_i = c0/(b0 + KL) per dimension
-    'use_obs_in_vfe': True,         # Observations in E-step: -E_q[log p(o|k)]
-                                    # NOT cheating with implicit_em — beliefs are detached,
-                                    # obs gradient can't reach embeddings via backprop.
-                                    # Without this, E-step has no data-dependent force and
-                                    # just smooths beliefs toward vacuum.
     'evolve_sigma': True,
     'evolve_phi': True,
     'evolve_phi_e_step': True,
@@ -257,14 +251,14 @@ EM_CONFIG = {
     'amortized_inference': False,
 
     # === VFE loss weights (M-step objective) ===
-    # alpha=1: KL(q*||p) now meaningful because E-step includes observations,
-    # so q* is data-grounded (not vacuum-smoothed). ∂KL/∂p tells embeddings
-    # "adjust priors toward the beliefs that explain the data."
-    # beta=0: alignment term is vacuum-seeking in M-step (minimizes all pairwise
-    # KLs → homogeneous state). Even beta=0.01 kills attention. The E-step
-    # handles alignment internally; at convergence the envelope theorem makes
-    # this term's M-step contribution through q* vanish anyway.
-    'alpha': 1.0,                   # KL(q*||p) — meaningful with obs in E-step
+    # E-step is partial VFE (prior + alignment, no observations) with 1 iteration.
+    # Observations enter through M-step CE loss (analogous to VAE ELBO).
+    # alpha=0: KL(q*||p) is mildly homogenizing because q* ≈ smoothed beliefs
+    # (1 iter, no obs). IFT scale uses ffn_alpha=1, so CE still reaches
+    # embeddings at s_k ≈ 0.5 independent of loss alpha.
+    # beta=0: alignment term is vacuum-seeking in M-step. Even beta=0.01 kills
+    # attention. E-step handles alignment internally.
+    'alpha': 0.0,                   # KL(q*||p) — 0 to avoid homogenization
     'beta': 0.0,                    # β·KL alignment — MUST be 0 (vacuum-seeking)
     'alpha_phi': 0.1,               # Gauge prior: (α_φ/2)||φ||²
     'lambda_hyper': 0.1,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
