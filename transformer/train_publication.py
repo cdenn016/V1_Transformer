@@ -470,14 +470,14 @@ PURE_VFE_CONFIG = {
     'eta_E': 0.1,                 # E-step natural gradient step size
 
     # M-step (learning = parameter update)
-    'eta_M': 0.001,               # M-step natural gradient step size
+    'eta_M': 0.05,                # M-step natural gradient step size (match VFE_dynamic mu_lr)
 
     # Prior precision (state-dependent α)
     'alpha_b0': 1.0,
     'alpha_c0': 1.0,
 
     # Hyper-prior regularization
-    'hyper_var': 1.0,
+    'hyper_var': 100.0,
 
     # Sequence
     'max_seq_len': 128,           # Match other modes
@@ -504,7 +504,7 @@ PURE_VFE_CONFIG = {
 
     # Prior safeguards
     'prior_sigma_floor': 0.5,
-    'prior_mu_max_norm': 3.0,
+    'prior_mu_max_norm': 10.0,
     'm_step_trust_mu': 0.5,
 
     # Gauge frame parameterization
