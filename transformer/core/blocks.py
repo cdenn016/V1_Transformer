@@ -183,6 +183,7 @@ class GaugeTransformerBlock(nn.Module):
             use_rope=cfg.use_rope,
             rope_base=cfg.rope_base,
             gauge_param=cfg.gauge_param,
+            detach_phi=cfg.detach_phi,
         )
 
         self.norm2 = nn.LayerNorm(cfg.embed_dim) if cfg.use_layernorm else nn.Identity()

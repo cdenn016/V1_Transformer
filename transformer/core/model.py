@@ -1243,36 +1243,62 @@ class GaugeTransformerLM(nn.Module):
         mu_beliefs: torch.Tensor,          # (B, N, K) final beliefs after VFE
         prediction_errors: torch.Tensor,   # (B, N) per-position CE loss
         ema_decay: float = 0.99,           # EMA decay (higher = slower)
+        sigma_beliefs: Optional[torch.Tensor] = None,  # (B, N, K) belief variances
         pad_token_id: int = -1,            # Padding token ID to ignore
     ):
         """
-        P-flow: Update token embeddings toward successful beliefs.
+        P-flow: Update token embeddings (mu + sigma) toward successful beliefs.
 
-        This is the key learning mechanism from fep_transformer.py:
-        - After VFE dynamics produce final beliefs
-        - Update token priors (embeddings) toward beliefs that predicted well
-        - Uses EMA for stable, gradual updates
+        Routes to PriorBank or GaugeTokenEmbedding depending on architecture.
 
         Args:
             token_ids: (B, N) token indices
             mu_beliefs: (B, N, K) final belief means after VFE
             prediction_errors: (B, N) per-position CE loss
             ema_decay: EMA decay rate (0.99 = slow, 0.9 = faster)
+            sigma_beliefs: (B, N, K) belief variances (optional, for sigma P-flow)
             pad_token_id: Token ID for padding positions (excluded from update)
         """
         if self.use_prior_bank and self.prior_bank is not None:
-            # PriorBank has its own update mechanism
             self.prior_bank.update_from_beliefs(
                 token_ids=token_ids,
                 mu_beliefs=mu_beliefs,
-                sigma_beliefs=torch.ones_like(mu_beliefs),  # Default sigma for EMA
+                sigma_beliefs=sigma_beliefs if sigma_beliefs is not None else torch.ones_like(mu_beliefs),
                 prediction_errors=prediction_errors,
-                lr=1.0 - ema_decay,  # Convert EMA decay to learning rate
+                lr=1.0 - ema_decay,
             )
         elif hasattr(self.token_embed, 'update_embeddings_from_beliefs'):
             self.token_embed.update_embeddings_from_beliefs(
                 token_ids=token_ids,
                 mu_beliefs=mu_beliefs,
+                prediction_errors=prediction_errors,
+                ema_decay=ema_decay,
+                sigma_beliefs=sigma_beliefs,
+                pad_token_id=pad_token_id,
+            )
+
+    def phi_flow_update(
+        self,
+        token_ids: torch.Tensor,           # (B, N) token IDs
+        phi_evolved: torch.Tensor,         # (B, N, phi_dim) VFE-evolved phi
+        prediction_errors: torch.Tensor,   # (B, N) per-position CE loss
+        ema_decay: float = 0.99,           # EMA decay (higher = slower)
+        pad_token_id: int = -1,            # Padding token ID to ignore
+    ):
+        """
+        Phi P-flow: Update gauge frame embeddings toward VFE-evolved values.
+
+        Args:
+            token_ids: (B, N) token indices
+            phi_evolved: (B, N, phi_dim) evolved phi after VFE iterations
+            prediction_errors: (B, N) per-position CE loss
+            ema_decay: EMA decay rate
+            pad_token_id: Padding token ID
+        """
+        if hasattr(self.token_embed, 'update_phi_from_beliefs'):
+            self.token_embed.update_phi_from_beliefs(
+                token_ids=token_ids,
+                phi_evolved=phi_evolved,
                 prediction_errors=prediction_errors,
                 ema_decay=ema_decay,
                 pad_token_id=pad_token_id,

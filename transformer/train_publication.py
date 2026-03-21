@@ -369,9 +369,14 @@ VFE_EM_CONFIG = {
     'use_p_flow': False,           # Enable P-flow updates on token embeddings
     'p_flow_ema_decay': 0.95,      # EMA decay (higher = slower update, 0.99 = 1% per step)
 
+    # PHI DETACH: Detach phi from backprop in non-amortized mode.
+    # When True + use_p_flow, phi learns via phi P-flow (EMA toward VFE-evolved values)
+    # instead of backprop. Combined with P-flow + delta rule, makes training fully backprop-free.
+    'detach_phi': False,               # Detach phi in non-amortized mode (default False for compat)
+
     # DELTA RULE: Backprop-free learning for W_out
     # If True, W_out is updated via delta rule instead of backpropagation
-    # Combined with P-flow, this makes learning fully backprop-free!
+    # Combined with P-flow + detach_phi, this makes learning fully backprop-free.
     'use_delta_rule_w_out': False,  # Enable delta rule for W_out (instead of backprop)
     'delta_rule_lr': 0.1,           # Learning rate for delta rule updates
 
@@ -1523,6 +1528,14 @@ class PublicationTrainer(FastTrainer):
                 )
             loss.backward()
 
+        # Tied weights + delta rule: zero out W_out gradient component.
+        # With tie_embeddings, out_proj.weight IS mu_embed.weight. In non-amortized
+        # mode mu_embed is detached from VFE, so any gradient on this shared tensor
+        # comes purely from the output projection (logits = W_out @ mu_q). Zero it
+        # so delta rule is the sole W_out update and P-flow is the sole mu update.
+        if _tied_weights and self.model.out_proj.weight.grad is not None:
+            self.model.out_proj.weight.grad.zero_()
+
         # =================================================================
         # KILLING FORM PRECONDITIONING (Cartan decomposition)
         # =================================================================
@@ -1627,11 +1640,26 @@ class PublicationTrainer(FastTrainer):
             ce_per_position = full_metrics['p_flow/ce_per_position']
             ema_decay = getattr(self.config, 'p_flow_ema_decay', 0.99)
 
-            # Call P-flow update on the model
+            # Call P-flow update on the model (mu + sigma)
+            sigma_beliefs = full_metrics.get('p_flow/sigma_q')
             if hasattr(self.model, 'p_flow_update'):
                 self.model.p_flow_update(
                     token_ids=input_ids,
                     mu_beliefs=mu_beliefs,
+                    prediction_errors=ce_per_position,
+                    ema_decay=ema_decay,
+                    sigma_beliefs=sigma_beliefs,
+                    pad_token_id=self.pad_token_id,
+                )
+
+            # Phi P-flow: update gauge frames toward VFE-evolved values
+            # Only when detach_phi=True (phi is detached from backprop)
+            if (getattr(self.config, 'detach_phi', False) and
+                    'p_flow/phi_evolved' in full_metrics and
+                    hasattr(self.model, 'phi_flow_update')):
+                self.model.phi_flow_update(
+                    token_ids=input_ids,
+                    phi_evolved=full_metrics['p_flow/phi_evolved'],
                     prediction_errors=ce_per_position,
                     ema_decay=ema_decay,
                     pad_token_id=self.pad_token_id,
@@ -1641,7 +1669,7 @@ class PublicationTrainer(FastTrainer):
         # DELTA RULE: Backprop-free update of W_out
         # =================================================================
         # Uses local learning rule: ΔW = η · (target - prediction) ⊗ μ^T
-        # Combined with P-flow, this makes learning fully backprop-free!
+        # Combined with P-flow + detach_phi, this makes learning fully backprop-free.
         if use_delta_rule and 'p_flow/mu_q' in full_metrics:
             mu_beliefs = full_metrics['p_flow/mu_q']
             delta_lr = getattr(self.config, 'delta_rule_lr', 0.1)

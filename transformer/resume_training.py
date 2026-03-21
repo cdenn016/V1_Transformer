@@ -430,6 +430,7 @@ def resume_training():
         # P-FLOW and delta rule
         use_p_flow=config.get('use_p_flow', False),
         p_flow_ema_decay=config.get('p_flow_ema_decay', 0.99),
+        detach_phi=config.get('detach_phi', False),
         use_delta_rule_w_out=config.get('use_delta_rule_w_out', False),
         delta_rule_lr=config.get('delta_rule_lr', 0.001),
     )

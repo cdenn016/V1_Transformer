@@ -685,6 +685,11 @@ def compute_free_energy_loss(
     # Store in metrics for optional P-flow in training loop
     metrics['p_flow/mu_q'] = mu_q.detach()           # (B, N, K) final beliefs
     metrics['p_flow/ce_per_position'] = ce_per_position  # (B, N) per-position CE
+    if sigma_q is not None:
+        metrics['p_flow/sigma_q'] = sigma_q.detach()  # (B, N, K) or (B, N, K, K) belief variances
+    phi_evolved = attn_info.get('phi')
+    if phi_evolved is not None:
+        metrics['p_flow/phi_evolved'] = phi_evolved.detach()  # (B, N, phi_dim) VFE-evolved phi
 
     # Store attention info for RG metrics computation (detached)
     metrics['attention_info'] = {

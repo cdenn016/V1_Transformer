@@ -59,6 +59,8 @@ class BlockConfig:
     exact_diagonal_transport: bool = False  # When True + diagonal_covariance, lift σ to full
                                             # for exact Ω@diag(σ)@Ω^T transport (slower but exact)
     amortized_inference: bool = True    # Gradient flow through priors for learned E-step init
+    detach_phi: bool = False            # Detach phi from backprop in non-amortized mode
+                                        # (enables fully backprop-free training with phi P-flow)
 
     # === Analytic phi gradient ===
     analytic_phi_grad: bool = False     # If True, bypass autograd for ∂F/∂φ (saves ~250MB)
@@ -165,6 +167,7 @@ class BlockConfig:
             diagonal_covariance=config.get('diagonal_covariance', False),
             exact_diagonal_transport=config.get('exact_diagonal_transport', False),
             amortized_inference=config.get('amortized_inference', True),
+            detach_phi=config.get('detach_phi', False),
             # Analytic phi gradient
             analytic_phi_grad=config.get('analytic_phi_grad', False),
             analytic_phi_grad_dexp_order=config.get('analytic_phi_grad_dexp_order', 4),
