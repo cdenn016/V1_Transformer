@@ -20,7 +20,10 @@ Usage:
 
 import math
 import torch
-import pytorch_lightning as pl
+try:
+    import pytorch_lightning as pl
+except ImportError:
+    import lightning.pytorch as pl
 from typing import Any, Dict, Optional, Tuple
 
 from transformer.train import compute_free_energy_loss

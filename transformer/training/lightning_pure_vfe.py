@@ -17,7 +17,10 @@ import math
 
 import torch
 import torch.nn.functional as F
-import pytorch_lightning as pl
+try:
+    import pytorch_lightning as pl
+except ImportError:
+    import lightning.pytorch as pl
 
 from transformer.pure_vfe.config import PureVFEConfig
 from transformer.pure_vfe.model import PureVFETransformer
