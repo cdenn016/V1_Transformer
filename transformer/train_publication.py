@@ -236,7 +236,8 @@ EM_CONFIG = {
     'use_residual':          True,
     'use_output_projection': True,
     'multihead_vfe':         True,
-
+    
+    'mask_self_attention':   False,  # Prevent attention collapse?
     'use_prior_bank':        True,
     
 
@@ -247,16 +248,14 @@ EM_CONFIG = {
     'irrep_spec':       [('fund', 1, 10)],
   
     
-    
     'diagonal_covariance':      True,
     'exact_diagonal_transport': False,  #exact diagonal transport - more expensive
     'isotropic_covariance':     False,    # If True, force Σ = σ²I (scalar variance × identity)
                                        
     'enforce_orthogonal':       False,   
     'learnable_reflection':     False ,   # Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk 
-                                      # Set gauge-mode=constant and the above 3 = true for transf limit
-    
-    
+                                          # Set gauge-mode=constant and the above 3 = true for transf limit
+
 
     # === E-step dynamics ===
     'ffn_n_iterations':    1,
@@ -277,9 +276,6 @@ EM_CONFIG = {
     # === M-step: implicit differentiation ===
     'implicit_em':         True,
     'amortized_inference': False,
-    'mask_self_attention': False,  # Prevent attention collapse?
-    
-    
     
     
     
@@ -288,6 +284,7 @@ EM_CONFIG = {
     # CE enters through M-step via IFT (s_k ≈ 0.5 from fixed ffn_alpha=1).
     # alpha=0: KL(q*||p) homogenizes (q* is smoothed, not data-grounded).
     # beta=0: alignment term is vacuum-seeking. E-step handles it internally.
+    
     'alpha':        0.0,
     'beta':         0.0,
     'alpha_phi':    0.1,               # Gauge prior: (α_φ/2)||φ||²
@@ -365,7 +362,7 @@ AMORTIZED_CONFIG = {
     # Override: amortized inference, no implicit EM
     'amortized_inference': True,
     'implicit_em':         False,
-    'ffn_learnable_alpha': False,   # Fixed scalar alpha (simpler)
+    'ffn_learnable_alpha': True,   # Fixed scalar alpha (simpler)
 }
 
 
