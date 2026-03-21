@@ -85,17 +85,26 @@ def _format_step_axis(ax):
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(fmt))
 
 
-# =============================================================================
-# Figure 1: Holonomy Norm Distribution
-# =============================================================================
-
 def _require_matplotlib():
     """Raise ImportError if matplotlib is not available."""
     if not MATPLOTLIB_AVAILABLE:
         raise ImportError("matplotlib is required for holonomy visualization")
 
 
-    _require_matplotlib()
+# =============================================================================
+# Figure 1: Holonomy Norm Distribution
+# =============================================================================
+
+def plot_holonomy_distribution(
+    norms: np.ndarray,
+    title: str = 'Holonomy Norm Distribution',
+    thresholds: Tuple[float, ...] = (0.01, 0.1, 1.0),
+    log_scale: bool = True,
+    ax=None,
+    output_path: Optional[Path] = None,
+):
+    """Histogram + KDE of ‖C_ijk - I‖_F with threshold annotations."""
+    _require_matplotlib()
     _apply_style()
     own_fig = ax is None
     if own_fig:
@@ -135,7 +144,17 @@ def _require_matplotlib():
 # Figure 2: Holonomy Evolution Over Training
 # =============================================================================
 
-    _require_matplotlib()
+def plot_holonomy_evolution(
+    steps: np.ndarray,
+    global_mean: np.ndarray,
+    global_max: np.ndarray,
+    per_layer_mean: Optional[np.ndarray] = None,
+    layer_indices: Optional[List[int]] = None,
+    title: str = 'Holonomy Evolution',
+    output_path: Optional[Path] = None,
+):
+    """Training curves: global mean/max + optional per-layer decomposition."""
+    _require_matplotlib()
     _apply_style()
     n_panels = 2 if per_layer_mean is not None and per_layer_mean.shape[1] > 0 else 1
     fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels, 4))
@@ -160,8 +179,9 @@ def _require_matplotlib():
         n_layers = per_layer_mean.shape[1]
         cmap = plt.cm.viridis(np.linspace(0.2, 0.9, n_layers))
         for li in range(n_layers):
+            label = f'Layer {layer_indices[li]}' if layer_indices else f'Layer {li}'
             ax.plot(steps, per_layer_mean[:, li], color=cmap[li],
-                    label=f'Layer {li}', linewidth=1.2)
+                    label=label, linewidth=1.2)
         ax.set_xlabel('Training Step')
         ax.set_ylabel(r'Mean $\|C - I\|_F$')
         ax.set_title('Per-Layer Holonomy')
@@ -180,7 +200,15 @@ def _require_matplotlib():
 # Figure 3: Per-Layer Holonomy Profile (Bar Chart)
 # =============================================================================
 
-    _require_matplotlib()
+def plot_layer_holonomy_profile(
+    layer_means: np.ndarray,
+    layer_stds: Optional[np.ndarray] = None,
+    head_means: Optional[np.ndarray] = None,
+    title: str = 'Per-Layer Holonomy Profile',
+    output_path: Optional[Path] = None,
+):
+    """Bar chart of per-layer holonomy, optionally with per-head heatmap."""
+    _require_matplotlib()
     _apply_style()
     n_layers = len(layer_means)
 
@@ -220,7 +248,16 @@ def _require_matplotlib():
 # Figure 4: Curvature vs Triangle Size (Distance)
 # =============================================================================
 
-    _require_matplotlib()
+def plot_curvature_vs_distance(
+    bin_centers: np.ndarray,
+    mean_norms: np.ndarray,
+    std_norms: np.ndarray,
+    counts: np.ndarray,
+    title: str = 'Curvature vs Token Distance',
+    output_path: Optional[Path] = None,
+):
+    """Holonomy norm as a function of mean pairwise token distance."""
+    _require_matplotlib()
     _apply_style()
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6, 6), height_ratios=[3, 1],
                                     sharex=True)
@@ -253,7 +290,14 @@ def _require_matplotlib():
 # Figure 5: Wilson Loop Spectrum
 # =============================================================================
 
-    _require_matplotlib()
+def plot_wilson_spectrum(
+    C_matrices,
+    max_samples: int = 500,
+    title: str = 'Wilson Loop Eigenvalue Spectrum',
+    output_path: Optional[Path] = None,
+):
+    """Eigenvalue scatter in complex plane + |lambda| histogram."""
+    _require_matplotlib()
     _apply_style()
 
     n = min(len(C_matrices), max_samples)
@@ -302,7 +346,18 @@ def _require_matplotlib():
 # Figure 6: Flat vs Non-Flat PPL Comparison
 # =============================================================================
 
-    _require_matplotlib()
+def plot_flat_vs_nonflat_comparison(
+    flat_steps: np.ndarray,
+    flat_ppl: np.ndarray,
+    nonflat_steps: np.ndarray,
+    nonflat_ppl: np.ndarray,
+    holonomy_steps: Optional[np.ndarray] = None,
+    holonomy_mean: Optional[np.ndarray] = None,
+    title: str = 'Flat vs Non-Flat Transport',
+    output_path: Optional[Path] = None,
+):
+    """Side-by-side PPL curves with optional holonomy overlay on twin axis."""
+    _require_matplotlib()
     _apply_style()
     has_holonomy = holonomy_steps is not None and holonomy_mean is not None
     fig, ax1 = plt.subplots(1, 1, figsize=(7, 4.5))
@@ -353,7 +408,18 @@ def _require_matplotlib():
 # Figure 7: Multi-Panel Summary (the "money figure")
 # =============================================================================
 
-    _require_matplotlib()
+def plot_holonomy_summary(
+    norms: np.ndarray,
+    steps: np.ndarray,
+    global_mean: np.ndarray,
+    global_max: np.ndarray,
+    layer_means: np.ndarray,
+    C_matrices=None,
+    title: str = 'Holonomy Summary',
+    output_path: Optional[Path] = None,
+):
+    """Multi-panel overview: distribution, evolution, per-layer, and spectrum."""
+    _require_matplotlib()
     _apply_style()
     n_cols = 3 if C_matrices is None else 4
     fig = plt.figure(figsize=(4.5 * n_cols, 4))
@@ -384,8 +450,8 @@ def _require_matplotlib():
     ax_c.set_title('(c) Per-Layer Profile')
     ax_c.set_xticks(range(n_layers))
 
-    # Panel D: Wilson spectrum (if matrices provided)
-    if C_matrices is not None:
+    # Panel D: Wilson spectrum (if holonomy matrices provided as array)
+    if C_matrices is not None and isinstance(C_matrices, (np.ndarray,) + ((torch.Tensor,) if torch else ())):
         ax_d = fig.add_subplot(gs[0, 3])
         n = min(len(C_matrices), 300)
         if torch is not None and isinstance(C_matrices, torch.Tensor):

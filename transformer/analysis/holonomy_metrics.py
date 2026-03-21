@@ -241,12 +241,15 @@ def compute_flatness_trajectory(
             for li, layer in enumerate(layers):
                 if layer in layer_norms:
                     per_layer_mean[t, li] = np.mean(layer_norms[layer])
+        layer_indices = layers
     else:
         per_layer_mean = np.zeros((len(holonomy_history), 0))
+        layer_indices = []
 
     return {
         'steps': steps,
         'global_mean': global_mean,
         'global_max': global_max,
         'per_layer_mean': per_layer_mean,
+        'layer_indices': layer_indices,
     }

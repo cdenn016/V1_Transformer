@@ -1117,6 +1117,7 @@ class PublicationMetrics:
                     global_mean=trajectory['global_mean'],
                     global_max=trajectory['global_max'],
                     per_layer_mean=trajectory['per_layer_mean'],
+                    layer_indices=trajectory.get('layer_indices'),
                     title='Holonomy Evolution During Training',
                     output_path=figures_dir / f'{save_prefix}_evolution.png',
                 )
