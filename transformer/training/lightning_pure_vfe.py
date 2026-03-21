@@ -62,7 +62,7 @@ class PureVFELitModule(pl.LightningModule):
     # ------------------------------------------------------------------
     def training_step(self, batch, batch_idx):
         input_ids, target_ids = batch
-        logits, ce_loss, vfe = self.model.update(input_ids, target_ids)
+        logits, ce_loss, vfe, diag = self.model.update(input_ids, target_ids)
 
         ppl = math.exp(min(ce_loss, 20.0))
 
@@ -81,6 +81,14 @@ class PureVFELitModule(pl.LightningModule):
             self.log('train/vfe_first', vfe_first, on_step=True, on_epoch=False)
             self.log('train/vfe_ratio', vfe_ratio, on_step=True, on_epoch=False)
             self.log('train/vfe_steps', float(len(vfe)), on_step=True, on_epoch=False)
+
+        # E-step gradient norms (final iteration)
+        if diag.get('grad_norm_mu'):
+            self.log('diag/estep_grad_mu', diag['grad_norm_mu'][-1], on_step=True, on_epoch=False)
+            self.log('diag/estep_grad_sigma', diag['grad_norm_sigma'][-1], on_step=True, on_epoch=False)
+            self.log('diag/estep_grad_omega', diag['grad_norm_omega'][-1], on_step=True, on_epoch=False)
+        if diag.get('nan_events', 0) > 0:
+            self.log('diag/nan_events', float(diag['nan_events']), on_step=True, on_epoch=False)
 
         # Prior health diagnostics (every 50 steps to avoid overhead)
         if batch_idx % 50 == 0:
