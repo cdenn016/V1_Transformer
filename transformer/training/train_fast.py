@@ -108,6 +108,7 @@ class FastTrainingConfig:
 
     # VFE observation coupling
     use_obs_in_vfe: bool = False  # Pass targets into VFE E-step (last layer only)
+    obs_warmup_steps: int = 0     # E-step obs OFF for N steps, then ON (0 = use use_obs_in_vfe)
 
     # Learning rate schedule
     lr_decay: str = 'cosine'  # 'cosine', 'linear', 'constant'

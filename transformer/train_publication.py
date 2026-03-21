@@ -250,15 +250,20 @@ EM_CONFIG = {
     'implicit_em': True,
     'amortized_inference': False,
 
+    # === E-step observation warmup ===
+    # Observations (-E_q[log p(o|k)]) are part of the VFE but with 1 iteration
+    # the obs gradient overwhelms prior+alignment at init (prior grad = 0 when
+    # q = p). After warmup, priors are calibrated and forces balance.
+    'obs_warmup_steps': 2000,       # E-step obs OFF for 2000 steps, then ON
+
     # === VFE loss weights (M-step objective) ===
-    # E-step is partial VFE (prior + alignment, no observations) with 1 iteration.
-    # Observations enter through M-step CE loss (analogous to VAE ELBO).
-    # alpha=0: KL(q*||p) is mildly homogenizing because q* ≈ smoothed beliefs
-    # (1 iter, no obs). IFT scale uses ffn_alpha=1, so CE still reaches
-    # embeddings at s_k ≈ 0.5 independent of loss alpha.
-    # beta=0: alignment term is vacuum-seeking in M-step. Even beta=0.01 kills
-    # attention. E-step handles alignment internally.
-    'alpha': 0.0,                   # KL(q*||p) — 0 to avoid homogenization
+    # alpha=1: once obs warmup completes, E-step produces data-grounded beliefs.
+    # KL(q*||p) carries genuine signal: "adjust priors toward beliefs that
+    # explain the data." IFT scale also uses ffn_alpha, so CE→embeddings at s_k≈0.5.
+    # beta=0: alignment term is vacuum-seeking in M-step (minimizes all pairwise
+    # KLs → homogeneous state). Even beta=0.01 kills attention. E-step handles
+    # alignment internally.
+    'alpha': 1.0,                   # KL(q*||p) — meaningful after obs warmup
     'beta': 0.0,                    # β·KL alignment — MUST be 0 (vacuum-seeking)
     'alpha_phi': 0.1,               # Gauge prior: (α_φ/2)||φ||²
     'lambda_hyper': 0.1,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
@@ -1459,6 +1464,16 @@ class PublicationTrainer(FastTrainer):
         else:
             effective_beta = target_beta
 
+        # Obs warmup: E-step observations OFF for obs_warmup_steps, then ON.
+        # With 1 E-step iteration, the observation gradient (-∂CE/∂μ) overwhelms
+        # prior+alignment forces at init (prior grad = 0 when q = p). After warmup,
+        # priors are calibrated (KL > 0) and the forces can balance.
+        obs_warmup = getattr(self.config, 'obs_warmup_steps', 0)
+        if obs_warmup > 0:
+            use_obs = self.global_step >= obs_warmup
+        else:
+            use_obs = getattr(self.config, 'use_obs_in_vfe', False)
+
         # Forward pass with full metrics (with optional AMP)
         if self.scaler is not None:
             # Mixed precision forward pass
@@ -1482,7 +1497,7 @@ class PublicationTrainer(FastTrainer):
                         kappa_gamma=self.config.kappa_gamma,
                         lambda_hyper=self.config.lambda_hyper,
                         pad_token_id=self.pad_token_id,
-                        use_obs_in_vfe=self.config.use_obs_in_vfe,
+                        use_obs_in_vfe=use_obs,
                         alpha_phi=self.config.alpha_phi,
 
                     )
@@ -2386,6 +2401,7 @@ def run_single_experiment(
         lambda_gamma=config['lambda_gamma'],
         lambda_hyper=config.get('lambda_hyper', 0.0),
         use_obs_in_vfe=config.get('use_obs_in_vfe', False),
+        obs_warmup_steps=config.get('obs_warmup_steps', 0),
 
         # Gauge geometry: phi gradient control
         alpha_phi=config.get('alpha_phi', 0.0),
