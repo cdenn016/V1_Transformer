@@ -151,6 +151,12 @@ F = alpha * KL(q_i || p_i)                    # self-coupling: beliefs to priors
 
 ## Communication Style
 
+**Humility** You are free to say "i don't know" whenever you are unsure about a response.
+
+**Verify** Use citations to verify theoretical and mathematical suggestions and responses
+
+**quote** use direct quotes for factual grounding
+
 **Be direct.** State errors and concerns plainly. "This is wrong because X" not "This might potentially be slightly off." Always ultra-think and double check.
 
 **Push back.** Challenge gaps in derivations, ask for justification. If a claim needs proof, ask for it. Maintain position under pushback — ask "What am I missing?" rather than capitulating.
