@@ -73,6 +73,8 @@ class PriorBank(nn.Module):
         # Direct Omega parameterization
         gauge_param: str = 'phi',  # 'phi' or 'omega'
         omega_head_dims: Optional[list] = None,  # Per-head dims for omega path
+        # Gradient scaling for sigma in decode (CE loss path)
+        sigma_ce_scale: float = 0.01,  # Fraction of CE gradient to sigma_p
     ):
         """
         Initialize the prior bank.
@@ -97,6 +99,7 @@ class PriorBank(nn.Module):
         self.phi_dim = phi_dim
         self.gauge_param = gauge_param
         self.omega_head_dims = omega_head_dims
+        self.sigma_ce_scale = sigma_ce_scale
 
         # Dimension-aware initialization: √(ln V / K) makes pairwise KL ≈ ln(V).
         # Old 1/√K made KL = O(1), but attention divides by √K_h →
@@ -344,14 +347,19 @@ class PriorBank(nn.Module):
         mu_p, sigma_p = _prior_out[0], _prior_out[1]
 
         variance_floor = max(self.eps, 1e-4)
-        # Detach sigma from CE gradient path. The 1/σ_p terms create O(B*N*V)
-        # gradient contributions to log_prior_sigma, with 1/σ² scaling that
-        # explodes when σ is small. Sigma should learn from VFE terms (hyper-prior
-        # KL(s||h), self-consistency KL(q||p)) which provide principled bidirectional
-        # pressure — not from CE which just wants to sharpen everything.
-        # sigma_q similarly detached: CE trains mu_q location, not belief width.
+        # Scale sigma gradients from CE rather than fully detaching.
+        # Full detach kills learning (loss→25): sigma_p stuck at init, can't sharpen
+        # priors, and mu's sudden 1600× effective gradient increase destabilizes.
+        # Full gradient has 1/σ² scaling → norm ~65 vs mu's ~0.03, dominates clipping.
+        # Solution: pass fraction of gradient via detach-scale trick:
+        #   x_scaled = x.detach() + scale * (x - x.detach())
+        # This gives ∂L/∂x_scaled = scale * ∂L/∂x, bringing sigma from ~65 to ~0.65.
+        # sigma_q stays detached: CE should train mu_q location, not belief width.
+        _sigma_ce_scale = self.sigma_ce_scale
         sigma_q_safe = sigma_q.detach().clamp(min=variance_floor)    # (B, N, K)
-        sigma_p_safe = sigma_p.detach().clamp(min=variance_floor)    # (V, K)
+        sigma_p_clamped = sigma_p.clamp(min=variance_floor)          # (V, K)
+        sigma_p_safe = (sigma_p_clamped.detach()
+                        + _sigma_ce_scale * (sigma_p_clamped - sigma_p_clamped.detach()))
 
         inv_sigma_p = 1.0 / sigma_p_safe                    # (V, K)
         mu_p_inv_sigma_p = mu_p * inv_sigma_p               # (V, K)
