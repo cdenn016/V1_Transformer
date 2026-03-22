@@ -325,7 +325,12 @@ EM_CONFIG = {
     'eval_interval':              1000,
     'checkpoint_interval':        25000,
     'semantic_analysis_interval': 10000,
-    
+
+    # === Layer/iteration diagnostics ===
+    'track_layer_diagnostics':     True,
+    'track_iteration_diagnostics': True,
+    'diagnostics_interval':        50,
+
     # =================================================================
     # NON-FLAT GAUGE TRANSPORT (holonomy)
     # =================================================================
@@ -468,6 +473,11 @@ HEBBIAN_CONFIG = {
     'log_interval':        100,
     'eval_interval':       1000,
     'checkpoint_interval': 25000,
+
+    # === Layer/iteration diagnostics ===
+    'track_layer_diagnostics':     True,
+    'track_iteration_diagnostics': True,
+    'diagnostics_interval':        50,
 }
 
 
@@ -1260,6 +1270,57 @@ class PublicationMetricsTracker:
             writer.writerows(self.history)
 
 
+class LayerDiagnosticsTracker:
+    """Write per-layer diagnostics to CSV (append mode, no in-memory accumulation)."""
+
+    HEADERS = [
+        'step', 'layer',
+        'mu_input_norm', 'mu_output_norm', 'delta_mu_norm', 'delta_mu_relative',
+        'sigma_mean_diag', 'phi_norm',
+        'attention_entropy', 'kl_mean', 'kl_std',
+        'mu_attn_norm', 'mu_ffn_norm', 'residual_ratio',
+        'ce_loss', 'perplexity', 'mu_position_std',
+    ]
+
+    def __init__(self, save_path: Path):
+        self.save_path = save_path
+        self.save_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.save_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(self.HEADERS)
+
+    def log(self, diag: Dict):
+        """Append a single row."""
+        with open(self.save_path, 'a', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=self.HEADERS, extrasaction='ignore')
+            writer.writerow(diag)
+
+
+class IterationDiagnosticsTracker:
+    """Write per-VFE-iteration diagnostics to CSV (append mode)."""
+
+    HEADERS = [
+        'step', 'layer', 'iteration',
+        'grad_mu_norm', 'grad_sigma_norm', 'nat_grad_mu_norm',
+        'delta_mu_norm', 'mu_norm', 'sigma_mean',
+        'effective_lr', 'scale_mean',
+        'mu_diff_to_prior_norm', 'beta_entropy', 'mu_change_rel',
+    ]
+
+    def __init__(self, save_path: Path):
+        self.save_path = save_path
+        self.save_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.save_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(self.HEADERS)
+
+    def log(self, diag: Dict):
+        """Append a single row."""
+        with open(self.save_path, 'a', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=self.HEADERS, extrasaction='ignore')
+            writer.writerow(diag)
+
+
 class PublicationTrainer(FastTrainer):
     """Enhanced trainer with publication-quality metrics."""
 
@@ -1281,6 +1342,18 @@ class PublicationTrainer(FastTrainer):
 
         # Track attention visualization count
         self._attention_viz_count = 0
+
+        # Layer/iteration diagnostics trackers (gated by config flags)
+        self.layer_tracker = None
+        self.iter_tracker = None
+        if getattr(self.config, 'track_layer_diagnostics', False):
+            layer_path = self.config.checkpoint_dir / 'layer_diagnostics.csv'
+            self.layer_tracker = LayerDiagnosticsTracker(layer_path)
+            print(f"[INFO] Layer diagnostics enabled: {layer_path}")
+        if getattr(self.config, 'track_iteration_diagnostics', False):
+            iter_path = self.config.checkpoint_dir / 'iteration_diagnostics.csv'
+            self.iter_tracker = IterationDiagnosticsTracker(iter_path)
+            print(f"[INFO] Iteration diagnostics enabled: {iter_path}")
 
         # =================================================================
         # Gauge geometry: Cartan preconditioning & SL(K) projection
@@ -1777,6 +1850,53 @@ class PublicationTrainer(FastTrainer):
                 except Exception as e:
                     # Don't crash training on RG tracking errors
                     print(f"[WARNING] Dynamic RG tracking failed: {e}")
+
+        # =================================================================
+        # LAYER/ITERATION DIAGNOSTICS: Debug multi-layer/multi-iteration
+        # =================================================================
+        _diag_interval = getattr(self.config, 'diagnostics_interval', 50)
+        _track_layers = self.layer_tracker is not None
+        _track_iters = self.iter_tracker is not None
+
+        if ((_track_layers or _track_iters)
+                and not is_standard
+                and (self.global_step + 1) % _diag_interval == 0):
+            try:
+                with torch.no_grad():
+                    # Enable diagnostic flags on model/FFN
+                    if _track_iters:
+                        for block in self.model.transformer.blocks:
+                            block.ffn._collect_iteration_diagnostics = True
+                            block.ffn._iteration_diagnostics = []
+                    if _track_layers:
+                        self.model._collect_layer_diagnostics = True
+                        self.model._layer_diagnostics = []
+
+                    # Diagnostic forward pass (no grad)
+                    self.model.forward_with_attention(input_ids, targets=target_ids)
+
+                    # Write per-layer diagnostics
+                    if _track_layers and self.model._layer_diagnostics:
+                        for ld in self.model._layer_diagnostics:
+                            ld['step'] = self.global_step
+                            self.layer_tracker.log(ld)
+
+                    # Write per-iteration diagnostics
+                    if _track_iters:
+                        for layer_idx, block in enumerate(self.model.transformer.blocks):
+                            for id_ in block.ffn._iteration_diagnostics:
+                                id_['step'] = self.global_step
+                                id_['layer'] = layer_idx
+                                self.iter_tracker.log(id_)
+
+                    # Disable flags
+                    if _track_iters:
+                        for block in self.model.transformer.blocks:
+                            block.ffn._collect_iteration_diagnostics = False
+                    if _track_layers:
+                        self.model._collect_layer_diagnostics = False
+            except Exception as e:
+                print(f"[WARNING] Layer/iteration diagnostics failed: {e}")
 
         return metrics, grad_norms
 
@@ -2466,6 +2586,11 @@ def run_single_experiment(
         rg_auto_cluster=config.get('rg_auto_cluster', True),
         rg_n_clusters=config.get('rg_n_clusters', None),
         track_dynamic_rg=config.get('track_dynamic_rg', False),
+
+        # Layer/iteration diagnostics
+        track_layer_diagnostics=config.get('track_layer_diagnostics', False),
+        track_iteration_diagnostics=config.get('track_iteration_diagnostics', False),
+        diagnostics_interval=config.get('diagnostics_interval', 50),
     )
 
     print("\n" + "="*70)

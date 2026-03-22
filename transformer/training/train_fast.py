@@ -151,6 +151,11 @@ class FastTrainingConfig:
     rg_n_clusters: Optional[int] = None  # Fixed number of clusters (None = auto)
     track_dynamic_rg: bool = False       # Track beta evolution across VFE iterations
 
+    # LAYER/ITERATION DIAGNOSTICS: Debug multi-layer/multi-iteration performance
+    track_layer_diagnostics: bool = False      # Per-layer belief statistics
+    track_iteration_diagnostics: bool = False  # Per-VFE-iteration convergence data
+    diagnostics_interval: int = 50             # Collect every N steps (expensive)
+
     # Resume from checkpoint
     resume_from: Optional[str] = None  # Path to checkpoint to resume from
 
