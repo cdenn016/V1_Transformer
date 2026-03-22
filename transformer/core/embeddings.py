@@ -229,8 +229,15 @@ class GaugeTokenEmbedding(nn.Module):
                 torch.full((embed_dim,), math.log(init_sigma_scale))
             )
         elif learnable_sigma:
-            # Per-token covariance — dense gradients so ALL tokens get σ updates
-            # (nn.Embedding sparse gradients leave rare tokens at init, miscalibrating KL)
+            # Per-token covariance as nn.Parameter (NOT nn.Embedding).
+            # Both produce sparse gradients when indexed by token_ids, but
+            # nn.Parameter yields a dense zero-padded gradient tensor.  This
+            # matters for AdamW: Adam's v_t (second moment) accumulates the
+            # zeros for absent tokens, gradually lowering v_t and raising the
+            # effective LR when those tokens finally appear — an implicit
+            # exploration bias for rare tokens.  Weight decay still applies to
+            # all rows every step, acting as the Level 3 hyper-prior N(0, 1/(2·wd))
+            # that pulls log_sigma toward 0 (i.e., σ² toward 1).
             self.log_sigma_diag = nn.Parameter(
                 torch.full((vocab_size, embed_dim), math.log(init_sigma_scale))
             )
@@ -403,8 +410,8 @@ class GaugeTokenEmbedding(nn.Module):
 
             # Build base covariance Σ_0 = diag(exp(log_σ_0))
             sigma_diag_base = torch.exp(self.base_log_sigma_diag)  # (K,)
-            # STABILITY: Clamp to prevent singular matrices in deep networks
-            sigma_diag_base = torch.clamp(sigma_diag_base, min=0.01, max=5.0)
+            # Detach-clamp: forward value bounded, backward gradient passes through
+            sigma_diag_base = sigma_diag_base + (sigma_diag_base.clamp(min=0.01, max=5.0) - sigma_diag_base).detach()
             Sigma_0 = torch.diag(sigma_diag_base)  # (K, K)
 
             # Rotate base prior covariance: Σ_i = R_i @ Σ_0 @ R_i^T
@@ -418,17 +425,22 @@ class GaugeTokenEmbedding(nn.Module):
             mu = self.mu_embed(token_ids)  # (B, N, K) where N = num_agents
 
             # Build diagonal covariances: Σ = diag(exp(log_σ))
+            #
+            # Use exp() for the ℝ → ℝ⁺ map (standard log-parameterization of
+            # SPD diagonals), then detach-clamp for numerical safety.  The
+            # detach-clamp trick:  σ_safe = σ + (clamp(σ) - σ).detach()
+            # keeps the forward value clamped but passes gradients as if
+            # unclamped, preventing the dead-gradient problem of hard clamp.
+            _SIGMA_MIN = 0.01
+            _SIGMA_MAX = 5.0
             if self.learnable_sigma:
-                # Per-token covariance (dense gradients — all tokens updated every step)
                 log_sigma = self.log_sigma_diag[token_ids]  # (B, N, K)
                 sigma_diag = torch.exp(log_sigma)  # (B, N, K)
-                # STABILITY: Clamp to prevent singular matrices in deep networks
-                sigma_diag = torch.clamp(sigma_diag, min=0.01, max=5.0)
+                sigma_diag = sigma_diag + (sigma_diag.clamp(_SIGMA_MIN, _SIGMA_MAX) - sigma_diag).detach()
             else:
                 # Shared covariance
                 sigma_diag = torch.exp(self.log_sigma_diag)  # (K,)
-                # STABILITY: Clamp to prevent singular matrices in deep networks
-                sigma_diag = torch.clamp(sigma_diag, min=0.01, max=5.0)
+                sigma_diag = sigma_diag + (sigma_diag.clamp(_SIGMA_MIN, _SIGMA_MAX) - sigma_diag).detach()
                 sigma_diag = sigma_diag.unsqueeze(0).unsqueeze(0)  # (1, 1, K)
                 sigma_diag = sigma_diag.expand(batch_size, num_agents, -1)  # (B, N, K)
 
@@ -615,8 +627,8 @@ class GaugeTokenEmbedding(nn.Module):
                 update_lr.unsqueeze(-1) * update_mu
             )
 
-            # Sigma P-flow: update log_sigma_embed if available
-            if sigma_beliefs is not None and hasattr(self, 'log_sigma_embed'):
+            # Sigma P-flow: update log_sigma_diag if learnable
+            if sigma_beliefs is not None and self.learnable_sigma and hasattr(self, 'log_sigma_diag'):
                 # Handle full covariance (B, N, K, K) → extract diagonal
                 if sigma_beliefs.dim() == 4:
                     sigma_beliefs_diag = sigma_beliefs.diagonal(dim1=-2, dim2=-1)  # (B, N, K)
@@ -628,12 +640,13 @@ class GaugeTokenEmbedding(nn.Module):
                                             flat_sigma * weights.unsqueeze(-1))
                 update_sigma = weighted_sigma[pad_mask]
                 sigma_lr = update_lr * 0.1  # Slower sigma updates for stability
-                current_sigma = torch.exp(self.log_sigma_embed.weight.data[update_tokens])
+                # log_sigma_diag is nn.Parameter (V, K), not nn.Embedding
+                current_sigma = torch.exp(self.log_sigma_diag.data[update_tokens])
                 new_sigma = (
                     (1.0 - sigma_lr.unsqueeze(-1)) * current_sigma +
                     sigma_lr.unsqueeze(-1) * update_sigma
                 )
-                self.log_sigma_embed.weight.data[update_tokens] = torch.log(new_sigma.clamp(min=1e-6))
+                self.log_sigma_diag.data[update_tokens] = torch.log(new_sigma.clamp(min=1e-6))
 
     def update_phi_from_beliefs(
         self,
