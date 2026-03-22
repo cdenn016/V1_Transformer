@@ -70,7 +70,7 @@ class BlockConfig:
 
     # === VFE dynamics (FFN E-step) ===
     ffn_mode: str = 'VFE_dynamic'       # FFN mode (only 'VFE_dynamic' supported)
-    ffn_alpha: float = 1           # Prior self-coupling weight α in VFE loop
+    ffn_alpha: float = 1.0              # Prior self-coupling weight α in VFE loop
     ffn_kappa: float = 1.0              # Softmax temperature (unified with kappa_beta)
     ffn_n_iterations: int = 1           # VFE inference iterations per forward pass
     ffn_learnable_lr: bool = True       # Learn step size η for variational descent
@@ -176,7 +176,7 @@ class BlockConfig:
             analytic_phi_grad_dexp_order=config.get('analytic_phi_grad_dexp_order', 4),
             # VFE dynamics
             ffn_mode=config.get('ffn_mode', 'VFE_dynamic'),
-            ffn_alpha=config.get('ffn_alpha', 0.001),
+            ffn_alpha=config.get('ffn_alpha', 1.0),
             ffn_kappa=kappa_beta,  # Unified temperature
             ffn_n_iterations=config.get('ffn_n_iterations', 1),
             ffn_learnable_lr=config.get('ffn_learnable_lr', True),
