@@ -23,6 +23,7 @@ from .gaussians import (
     kl_attention,
     kl_divergence,
     kl_decode_logits,
+    build_alibi_log_prior,
     vfe_grad_mu_alignment,
     vfe_grad_Sigma_alignment,
     vfe_grad_mu_prior,
@@ -142,6 +143,14 @@ def e_step(token_ids, model, config):
     prior_mu = model.prior_mu[token_ids]             # [B, N, K]
     prior_Sigma = model.prior_Sigma[token_ids]       # [B, N, K, K]
 
+    # --- Build attention prior (manuscript §3.3.4) ---
+    alibi_slope = getattr(config, 'alibi_slope', 0.0)
+    mask_self = getattr(config, 'mask_self_attention', False)
+    if alibi_slope > 0:
+        log_prior = build_alibi_log_prior(N, alibi_slope, device=dev)
+    else:
+        log_prior = None
+
     vfe_history = []
     nan_events = 0
     diagnostics = {
@@ -169,7 +178,8 @@ def e_step(token_ids, model, config):
 
         # --- Pairwise KL and attention weights ---
         kl_ij = pairwise_kl(precomp, causal=config.causal)       # [B, H, N, N]
-        beta = kl_attention(kl_ij, config.tau, causal=config.causal)  # [B, H, N, N]
+        beta = kl_attention(kl_ij, config.tau, causal=config.causal,
+                            log_prior=log_prior, mask_self=mask_self)  # [B, H, N, N]
 
         # --- State-dependent prior precision ---
         alpha = state_dependent_alpha(

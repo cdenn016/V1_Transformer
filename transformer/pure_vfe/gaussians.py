@@ -268,19 +268,82 @@ def _pairwise_kl_torch(Q, rho, P, nu, ldc_q, ldc_k, causal):
 # Attention weights from KL
 # ---------------------------------------------------------------------------
 
-def kl_attention(kl_ij, tau, causal=True):
-    """
-    β_ij = softmax_j(-KL_ij / τ)
+def kl_attention(kl_ij, tau, causal=True, log_prior=None, mask_self=False):
+    r"""
+    Attention weights from KL divergences with optional non-uniform prior.
+
+    From the manuscript Eq. 13, the general softmax solution is:
+
+    .. math::
+        \beta_{ik} = \frac{\pi_k \exp(-E_{ik}/\tau)}{\sum_m \pi_m \exp(-E_{im}/\tau)}
+                   = \operatorname{softmax}_k(-E_{ik}/\tau + \log \pi_k)
+
+    For uniform prior (\pi_k = 1/N) the log-prior terms cancel,
+    recovering the standard \beta_{ij} = \operatorname{softmax}(-KL_{ij}/\tau).
 
     Args:
-        kl_ij: [B, H, N, N] pairwise KL
+        kl_ij: [B, H, N, N] pairwise KL divergences
         tau: temperature scalar
-        causal: if True, entries already masked with large KL
+        causal: if True, entries already masked with large KL (1e9)
+        log_prior: optional [N, N] or [1, 1, N, N] log-attention-prior
+            log π_j, added to logits before softmax. Encodes positional
+            biases (ALiBi, relative position biases) per manuscript §3.3.4.
+        mask_self: if True, mask diagonal (self-attention) to prevent
+            KL(q_i||q_i)=0 collapse. Equivalent to setting π_i=0 for
+            the self-source. Position 0 under causal masking is protected
+            (it has no other valid targets).
     Returns:
         beta: [B, H, N, N] attention weights
     """
     logits = -kl_ij / tau
+
+    # Non-uniform attention prior π_j (manuscript Eq. 13)
+    if log_prior is not None:
+        logits = logits + log_prior
+
+    # Self-attention masking: prevent KL(q_i||q_i)=0 dominance
+    if mask_self:
+        N = logits.shape[-1]
+        diag_idx = torch.arange(N, device=logits.device)
+        # Check which positions have other valid targets
+        has_other = (logits > -1e8).sum(dim=-1) > 1  # [B, H, N]
+        logits = logits.clone()
+        diag_vals = logits[..., diag_idx, diag_idx]  # [B, H, N]
+        masked_vals = torch.where(
+            has_other,
+            torch.full_like(diag_vals, -1e9),
+            diag_vals,
+        )
+        logits[..., diag_idx, diag_idx] = masked_vals
+
     return torch.softmax(logits, dim=-1)
+
+
+# ---------------------------------------------------------------------------
+# Attention prior helpers (manuscript §3.3.4)
+# ---------------------------------------------------------------------------
+
+def build_alibi_log_prior(N: int, slope: float, device: torch.device,
+                          dtype: torch.dtype = torch.float32) -> torch.Tensor:
+    r"""
+    Build ALiBi log-prior: \log \pi_j \propto -m|i - j|.
+
+    From the manuscript Eq. 18, a distance-decaying attention prior
+    \pi_j \propto \exp(-m|i - j|) produces an additive bias of -m|i - j|
+    in the pre-softmax logits, recovering ALiBi (Press et al., 2022).
+
+    Args:
+        N: sequence length
+        slope: ALiBi slope m (positive = decay with distance)
+        device: torch device
+        dtype: torch dtype
+
+    Returns:
+        log_prior: [N, N] additive bias for logits
+    """
+    positions = torch.arange(N, device=device, dtype=dtype)
+    rel_dist = (positions[:, None] - positions[None, :]).abs()  # [N, N]
+    return -slope * rel_dist
 
 
 # ---------------------------------------------------------------------------
