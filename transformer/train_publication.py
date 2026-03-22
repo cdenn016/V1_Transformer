@@ -238,20 +238,24 @@ STANDARD_CONFIG = {
 EM_CONFIG = {
     # === Architecture ===
     'vocab_size':  50257,
-    'embed_dim':   5,
-    'n_layers':    4,
-    #'hidden_dim':  508,
+    'embed_dim':   10,
+    'n_layers':    1,
+    'hidden_dim':  508,
     'max_seq_len': 32,
     
     'ffn_mode': 'VFE_dynamic',
     
-    'optimizer_type': 'adamw',  # or 'natural_gradient' or 'adamw'
+    'use_deq': False,
+    'deq_neumann_terms': 0,
+    
+    
+    'optimizer_type': 'adamw',  # or 'natural_gradient' or 'adamw' or 'riemannian_adam'
     'fisher_ema_decay': 0.95,            # for natural_gradient
     'fisher_damping': 1e-4,              # for natural_gradient
     
     # === Training ===
-    'batch_size':    32,    
-    'max_steps':     5000,
+    'batch_size':    64,    
+    'max_steps':     15000,
     'warmup_steps':  100,
     'num_workers':   10,
     
@@ -271,7 +275,7 @@ EM_CONFIG = {
     'gauge_mode':       'learned',  
     'gauge_param':      'phi',
     
-    'irrep_spec':       [('fund', 1, 5)],
+    'irrep_spec':       [('fund', 1, 10)],
   
     
     'diagonal_covariance':      True,
@@ -284,19 +288,6 @@ EM_CONFIG = {
 
     # === E-step dynamics ===
     'ffn_n_iterations':    1,
-
-    'ffn_alpha':           1.0,               # Prior coupling inside VFE E-step
-    'ffn_lambda_belief':   1.0,       # Belief alignment inside VFE E-step
-
-    'learnable_alpha':     True,
-    'ffn_learnable_alpha': True,    # Adaptive α_i = c0/(b0 + KL) per dimension
-
-    'evolve_sigma':        True,
-    'evolve_phi':          True,
-    'evolve_phi_e_step':   True,
-
-
-    'ffn_n_iterations':    5,
     
     'ffn_alpha':           1.0,               # Prior coupling inside VFE E-step
     'ffn_lambda_belief':   1.0,       # Belief alignment inside VFE E-step
@@ -309,8 +300,7 @@ EM_CONFIG = {
     'evolve_phi_e_step':   True,
         
     'ffn_learnable_lr':    True,
-    'e_step_phi_lr':       0.05,               # E-step φ descent step size (decoupled from M-step phi_lr)
-
+    
     # === M-step: implicit differentiation ===
     'implicit_em':         False,
     'amortized_inference': True,
@@ -354,6 +344,7 @@ EM_CONFIG = {
     'attention_lr': 0.005,
     'output_lr':    0.05,
 
+    'e_step_phi_lr':       0.05,               # E-step φ descent step size (decoupled from M-step phi_lr)
     # === Regularization ===
     'weight_decay':  0.01,
     'grad_clip':     1.0,
@@ -386,7 +377,7 @@ EM_CONFIG = {
     # === Layer/iteration diagnostics ===
     'track_layer_diagnostics':     True,
     'track_iteration_diagnostics': True,
-    'diagnostics_interval':        50,
+    'diagnostics_interval':        25,
     
 }
 
@@ -428,7 +419,7 @@ HEBBIAN_CONFIG = {
     'vocab_size':   50257,
     'embed_dim':    10,
     'n_layers':     1,
-    #'hidden_dim':   508,
+    'hidden_dim':   508,
     'max_seq_len':  128,
     
     # === Training ===
@@ -512,6 +503,101 @@ HEBBIAN_CONFIG = {
     'log_interval':        100,
     'eval_interval':       1000,
     'checkpoint_interval': 25000,
+}
+
+
+# =============================================================================
+# CONFIG: PURE VFE — No backprop, natural gradient only (mode='pure_vfe')
+# =============================================================================
+# The purest realization of the free energy principle for sequence modeling.
+# NO nn.Module, NO autograd, NO optimizer. The entire system — inference AND
+# learning — operates through natural gradient descent on the gauge-covariant
+# VFE with analytic closed-form gradients.
+#
+# Architecture:
+#   - Model: Prior bank {N(μ_v, Σ_v), Ω_v} per vocabulary token
+#   - Inference: E-step VFE descent (replaces forward pass)
+#   - Learning: M-step natural gradient on prior bank
+#   - Attention: KL-divergence based with gauge transport
+#   - No linear projections, no output head — logits = −KL(q||π_v)
+# =============================================================================
+PURE_VFE_CONFIG = {
+    # Belief geometry
+    'vocab_size': 50257,
+    'belief_dim': 32,             # K: full belief dimension
+    'n_heads':    4,                 # H: number of heads (block-diagonal)
+    'head_dim':   8,                # K_h = K / H
+
+    # Sequence
+    'max_seq_len': 64,           # Match other modes
+    'batch_size':  32,
+    'max_steps':   30000,
+
+    # E-step (inference = forward pass)
+    'n_esteps': 12,               # Iterations of VFE descent (replaces "depth")
+    'tau':      None,                  # Attention temperature (defaults to √K_h)
+    'eta_E':    0.1,                 # E-step natural gradient step size
+
+    # M-step (learning = parameter update)
+    'eta_M':    0.05,                # M-step natural gradient step size (match VFE_dynamic mu_lr)
+
+    # Prior precision (state-dependent α)
+    'alpha_b0': 1.0,
+    'alpha_c0': 1.0,
+
+    # Hyper-prior regularization
+    'hyper_var': 100.0,
+
+
+    # Initialization
+    'sigma_init':       1.0,
+    'omega_init_scale': 0.01,
+
+    # E-step numerical stability
+    'sigma_lr_ratio':  0.05,
+    'e_step_lr_decay': 0.5,
+    'grad_clamp':      1e3,
+
+    # Trust regions
+    'trust_region_mu':    2.0,
+    'trust_region_sigma': 0.15,
+    'trust_region_omega': 0.3,
+
+    # SPD retraction
+    'spd_eps_min':   1e-3,
+    'spd_kappa_max': 1e4,
+    'spd_exp_clip':  20.0,
+
+    # Prior safeguards
+    'prior_sigma_floor': 0.5,
+    'prior_mu_max_norm': 10.0,
+    'm_step_trust_mu':   0.5,
+
+    # Gauge frame parameterization
+    'gauge_param':    'omega',       # 'omega' (direct GL(K)) or 'phi' (Lie algebra)
+    'omega_cond_max': 100.0,
+    'phi_max_norm':   3.14159,
+
+    # M-step options
+    'sigma_obs_grad':   'none',
+    'm_step_eta_floor': 0.01,
+
+    # Recovery
+    'nan_recovery':     True,
+
+    # Causal masking
+    'causal':           True,
+
+    # Device & kernels
+    'device': 'cuda',
+    'use_cuda_kernels': True,
+
+    # Training loop params (used by run_pure_vfe_experiment, not PureVFEConfig)
+    
+    'log_interval':        100,
+    'eval_interval':       1000,
+    'checkpoint_interval': 25000,
+    'num_workers':         10,
 }
 
 
