@@ -1812,7 +1812,7 @@ def retract_soN_torch(
         delta_phi: Update direction (typically -grad_phi) (..., n_gen)
         generators: Transport generators (n_gen, K, K); only n_gen is used
         step_size: Learning rate for the update
-        trust_region: Maximum relative change ||delta_phi|| / ||phi|| per update
+        trust_region: Maximum step size ||update|| in Lie algebra norm
         max_norm: Maximum allowed norm for phi (pi for SO(N))
         bch_order: Order of BCH expansion (0=add, 1=first correction)
         eps: Numerical stability constant
@@ -1825,12 +1825,15 @@ def retract_soN_torch(
     # Scale update
     update = step_size * delta_phi
 
-    # Trust region: limit step size relative to current phi
-    phi_norm = torch.norm(phi, dim=-1, keepdim=True).clamp(min=0.1)
+    # Trust region: clip ||update|| to constant trust_radius.
+    # The Lie algebra so(N) is a flat vector space with the Killing-form
+    # metric, so the Frobenius norm IS the intrinsic metric — the correct
+    # trust region is a constant-radius ball, not phi-relative. A phi-relative
+    # radius creates an unprincipled feedback loop (small phi → small trust →
+    # slow escape from identity) and has no Riemannian justification. This
+    # matches the GL(K) retraction which already uses constant trust radius.
     update_norm = torch.norm(update, dim=-1, keepdim=True)
-
-    # Scale down if update is too large relative to current phi
-    scale = torch.clamp(trust_region * phi_norm / (update_norm + eps), max=1.0)
+    scale = torch.clamp(trust_region / (update_norm + eps), max=1.0)
     update = scale * update
 
     # Compose using BCH (proper Lie group composition)
