@@ -2284,10 +2284,12 @@ class VariationalFFNDynamic(nn.Module):
         self.deq_neumann_terms = deq_neumann_terms
 
         # Learnable step size (stored in unconstrained space, apply softplus for positive LR)
+        # Init at 0.03: empirically the network learns lr down to ~0.04 from 0.1,
+        # and the overshoot during early training causes FFN to dominate attention 15:1.
         if learnable_lr:
-            self.raw_lr = nn.Parameter(torch.tensor(self._softplus_inverse(0.1)))
+            self.raw_lr = nn.Parameter(torch.tensor(self._softplus_inverse(0.03)))
         else:
-            self.register_buffer('raw_lr', torch.tensor(self._softplus_inverse(0.1)))
+            self.register_buffer('raw_lr', torch.tensor(self._softplus_inverse(0.03)))
 
     @property
     def lr(self) -> torch.Tensor:
@@ -3396,7 +3398,7 @@ class VariationalFFNDynamic(nn.Module):
                 whitened_delta = delta_mu / torch.sqrt(sigma_diag).to(delta_mu.dtype)
 
             whitened_norm = torch.linalg.norm(whitened_delta, dim=-1, keepdim=True)
-            mu_trust_region = 2.0  # Trust region on whitened norm
+            mu_trust_region = 0.5  # Trust region on whitened norm (tightened from 2.0)
             scale = torch.clamp(mu_trust_region / (whitened_norm + eps), max=1.0)
             mu_current = mu_current + scale * delta_mu
 
