@@ -146,6 +146,14 @@ class PriorBank(nn.Module):
                     torch.full((vocab_size, embed_dim), math.log(init_sigma_scale))
                 )
 
+            # Fixed sigma target for hyper-prior KL(s||h). Frozen at init values
+            # so _get_sigma_target() finds a proper anchor instead of falling back
+            # to the moving target (2×mean(sigma_s)) which collapses with sigma_s.
+            self.register_buffer(
+                'sigma_target',
+                torch.full((embed_dim,), init_sigma_scale)
+            )
+
             if gauge_param == 'omega' and omega_head_dims is not None:
                 # Direct Omega parameterization: per-head K_h×K_h matrices
                 total_omega_params = sum(d * d for d in omega_head_dims)
