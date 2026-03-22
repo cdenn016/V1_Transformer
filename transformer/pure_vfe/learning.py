@@ -116,7 +116,9 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     # 1. Observation gradient (analytic softmax-CE)
     # ================================================================
     if logits is None:
-        logits = kl_decode_logits(mu_star, Sigma_star, model.prior_mu, model.prior_Sigma)
+        _decode_tau = getattr(config, 'decode_tau', 1.0)
+        logits = kl_decode_logits(mu_star, Sigma_star, model.prior_mu, model.prior_Sigma,
+                                  decode_tau=_decode_tau)
     ce_grad = softmax_ce_gradient(logits, targets)  # [B, N, V]
 
     # CE loss for monitoring
@@ -212,14 +214,23 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     grad_mu_vfe = -torch.einsum('tij,tj->ti', Sigma_all_inv, mu_diff_avg)
     grad_mu_vfe[~has_input] = 0.0
 
-    # Hyper-prior
-    grad_mu = grad_mu_vfe + mu_all / config.hyper_var
+    # Hyper-prior (frequency-adaptive: stronger for rare tokens)
+    _rare_reg = getattr(config, 'rare_token_reg', 0.0)
+    if _rare_reg > 0:
+        _freq_weight = 1.0 + _rare_reg / n_safe  # [T] — larger for rare tokens
+        grad_mu = grad_mu_vfe + _freq_weight.unsqueeze(-1) * mu_all / config.hyper_var
+    else:
+        grad_mu = grad_mu_vfe + mu_all / config.hyper_var
 
-    # Observation gradient — normalize per-token by occurrence count, not BN.
-    # Dividing by BN=4096 dilutes the CE signal for rare tokens to ~1e-4,
-    # making it negligible compared to hyper-prior/VFE forces.
+    # Observation gradient — normalize per-token with a floor to prevent
+    # rare tokens (n_v=1) from getting disproportionately large updates.
+    # Without floor: a single-occurrence token gets gradient / 1 vs / BN,
+    # causing 4096x amplification that overfits rare token priors.
     obs_diff = obs_weighted_mu - obs_ce_sum.unsqueeze(-1) * mu_all  # [T, K]
-    obs_norm = n_safe.unsqueeze(-1)  # [T, 1] — per-token occurrence count
+    _obs_floor = getattr(config, 'obs_norm_floor', 0)
+    if _obs_floor <= 0:
+        _obs_floor = max(8, int(B * N * 0.01))  # Auto: 1% of BN
+    obs_norm = n_safe.clamp(min=_obs_floor).unsqueeze(-1)  # [T, 1]
     obs_grad_mu = torch.einsum('tij,tj->ti', Sigma_all_inv, obs_diff / obs_norm)
     grad_mu = grad_mu + obs_grad_mu
 
