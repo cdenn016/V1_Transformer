@@ -10,6 +10,7 @@ This module provides functions for:
 Can be used as a standalone script or imported for use during training.
 """
 
+import json
 import torch
 import numpy as np
 from pathlib import Path
@@ -371,6 +372,98 @@ def compute_clustering_metrics(
     return results
 
 
+SEMANTIC_FIELDS = {
+    'animals': ['cat', 'dog', 'bird', 'fish', 'horse'],
+    'colors': ['red', 'blue', 'green', 'black', 'white'],
+    'temporal': ['now', 'then', 'soon', 'once', 'never'],
+    'spatial': ['up', 'down', 'left', 'right', 'near'],
+    'function_words': ['the', 'a', 'an', 'is', 'of'],
+    'emotions': ['happy', 'sad', 'angry', 'fear', 'love'],
+    'body': ['hand', 'head', 'eye', 'heart', 'face'],
+    'verbs_motion': ['run', 'walk', 'go', 'come', 'move'],
+    'verbs_cognition': ['think', 'know', 'see', 'feel', 'want'],
+    'morphological': [('run', 'running'), ('has', 'had'), ('big', 'bigger')],
+}
+
+
+def compute_semantic_field_coherence(
+    embed: torch.Tensor,
+    fields: Optional[Dict[str, List]] = None,
+    embed_name: str = 'embed',
+) -> Dict[str, Any]:
+    r"""Compute within-field and between-field distances for semantic fields.
+
+    For each semantic field, computes mean pairwise distance among field members
+    (intra-field) and mean distance to tokens from other fields (inter-field).
+    The ratio inter/intra > 1 indicates the field forms a coherent cluster.
+
+    Args:
+        embed: Embedding tensor [vocab_size, embed_dim].
+        fields: Dict mapping field names to lists of words. Defaults to SEMANTIC_FIELDS.
+        embed_name: Prefix for result keys.
+
+    Returns:
+        Dict with per-field coherence ratios and aggregate statistics.
+    """
+    if fields is None:
+        fields = {k: v for k, v in SEMANTIC_FIELDS.items() if k != 'morphological'}
+
+    results = {}
+    field_means = {}
+
+    for field_name, words in fields.items():
+        # Resolve token IDs (skip multi-token words)
+        token_ids = []
+        for w in words:
+            tid = get_token_id(w)
+            if tid is not None and tid < len(embed):
+                token_ids.append(tid)
+
+        if len(token_ids) < 2:
+            results[f'{embed_name}_{field_name}_n_tokens'] = len(token_ids)
+            continue
+
+        field_embeds = embed[token_ids]
+        if isinstance(field_embeds, torch.Tensor):
+            field_embeds = field_embeds.float()
+
+        # Intra-field distances
+        intra = []
+        for i in range(len(token_ids)):
+            for j in range(i + 1, len(token_ids)):
+                d = torch.norm(field_embeds[i] - field_embeds[j]).item()
+                if np.isfinite(d):
+                    intra.append(d)
+
+        results[f'{embed_name}_{field_name}_n_tokens'] = len(token_ids)
+        results[f'{embed_name}_{field_name}_intra_mean'] = float(np.mean(intra)) if intra else 0.0
+        field_means[field_name] = field_embeds.mean(dim=0) if isinstance(field_embeds, torch.Tensor) else torch.tensor(field_embeds).mean(dim=0)
+
+    # Inter-field distances (between field centroids)
+    field_names = list(field_means.keys())
+    inter_dists = []
+    for i in range(len(field_names)):
+        for j in range(i + 1, len(field_names)):
+            d = torch.norm(field_means[field_names[i]] - field_means[field_names[j]]).item()
+            if np.isfinite(d):
+                inter_dists.append(d)
+
+    if inter_dists:
+        results[f'{embed_name}_inter_field_mean'] = float(np.mean(inter_dists))
+
+    # Aggregate coherence: mean intra / inter ratio across fields
+    intra_vals = [results.get(f'{embed_name}_{fn}_intra_mean', 0) for fn in field_names]
+    mean_intra = np.mean([v for v in intra_vals if v > 0]) if any(v > 0 for v in intra_vals) else 0
+    if mean_intra > 0 and inter_dists:
+        results[f'{embed_name}_field_coherence_ratio'] = float(np.mean(inter_dists) / mean_intra)
+    else:
+        results[f'{embed_name}_field_coherence_ratio'] = 0.0
+
+    results[f'{embed_name}_n_fields_resolved'] = len(field_names)
+
+    return results
+
+
 def analyze_word_pairs(
     mu_embed: torch.Tensor,
     phi_embed: Optional[torch.Tensor] = None,
@@ -385,6 +478,16 @@ def analyze_word_pairs(
         ("big", "new", "unrelated"),
         ("run", "see", "related"),
         ("has", "had", "related"),
+        # Expanded: within-field pairs
+        ("red", "blue", "related"),
+        ("up", "down", "related"),
+        ("hand", "head", "related"),
+        ("think", "know", "related"),
+        # Expanded: cross-field unrelated
+        ("red", "run", "unrelated"),
+        ("hand", "blue", "unrelated"),
+        ("think", "up", "unrelated"),
+        ("dog", "down", "unrelated"),
     ]
 
     related_mu, unrelated_mu = [], []
@@ -512,6 +615,29 @@ def analyze_gauge_semantics(
         phi_cluster = compute_clustering_metrics(phi_embed, n_tokens=500, embed_name='phi')
         results['phi_clustering'] = phi_cluster
 
+    # Semantic field coherence
+    mu_fields = compute_semantic_field_coherence(mu_embed, embed_name='mu')
+    results['mu_field_coherence'] = mu_fields
+    if phi_embed is not None:
+        phi_fields = compute_semantic_field_coherence(phi_embed, embed_name='phi')
+        results['phi_field_coherence'] = phi_fields
+
+    # Sigma covariance analysis (if model provides sigma_embed)
+    sigma_embed = None
+    if model is not None:
+        for attr_path in [('sigma_embed',), ('token_embed', 'sigma_embed')]:
+            obj = model
+            for a in attr_path:
+                obj = getattr(obj, a, None)
+                if obj is None:
+                    break
+            if obj is not None and hasattr(obj, 'weight'):
+                sigma_embed = obj.weight.detach().cpu()
+                break
+    if sigma_embed is not None:
+        sigma_results = analyze_sigma_semantics(sigma_embed, n_tokens=500, verbose=verbose)
+        results['sigma_analysis'] = sigma_results
+
     if verbose:
         step_str = f" (step {step})" if step is not None else ""
         print(f"\n{'='*60}")
@@ -529,6 +655,14 @@ def analyze_gauge_semantics(
                 print(f"  --> phi DOES show class structure!")
             else:
                 print(f"  --> phi does NOT show clear class structure")
+
+        # Semantic field coherence
+        mu_fc = mu_fields.get('mu_field_coherence_ratio', 0)
+        print(f"\nSemantic Field Coherence:")
+        print(f"  mu inter/intra field ratio: {mu_fc:.3f} ({mu_fields.get('mu_n_fields_resolved', 0)} fields)")
+        if phi_embed is not None and 'phi_field_coherence' in results:
+            phi_fc = results['phi_field_coherence'].get('phi_field_coherence_ratio', 0)
+            print(f"  phi inter/intra field ratio: {phi_fc:.3f}")
 
         if 'phi_semantic_ratio' in pair_results:
             print(f"\nWord Pair Analysis:")
@@ -1371,3 +1505,552 @@ def plot_omega_clustering(
 def plot_omega_group_clustering(omega, step=None, save_path=None, n_tokens=500, gauge_group_label=None):
     """Alias for plot_omega_clustering (matches plot_gauge_frame_clustering pattern)."""
     return plot_omega_clustering(omega, step=step, save_path=save_path, n_tokens=n_tokens, gauge_group_label=gauge_group_label)
+
+
+# =============================================================================
+# Sigma Covariance Semantic Analysis
+# =============================================================================
+
+def analyze_sigma_semantics(
+    sigma: torch.Tensor,
+    n_tokens: int = 500,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    r"""Analyze semantic structure in covariance embeddings Sigma.
+
+    The covariance Sigma encodes uncertainty in beliefs. Tokens with similar
+    uncertainty profiles may share representational roles (e.g., function words
+    having high uncertainty vs content words with low uncertainty).
+
+    For diagonal Sigma: analyzes the K-dimensional uncertainty vector directly.
+    For full Sigma (K x K): analyzes both the diagonal and the Frobenius-flattened
+    matrix, plus computes effective rank = exp(entropy of normalized eigenvalues).
+
+    Args:
+        sigma: Covariance tensor, either [vocab, K] (diagonal) or [vocab, K, K] (full).
+        n_tokens: Number of tokens to analyze.
+        verbose: Print results to console.
+
+    Returns:
+        Dict with clustering metrics, effective rank, and uncertainty profile.
+    """
+    n = min(n_tokens, sigma.shape[0])
+    sigma_sub = sigma[:n].detach().cpu().float()
+    results = {}
+    is_full = sigma_sub.dim() == 3  # (n, K, K) vs (n, K)
+
+    if is_full:
+        K = sigma_sub.shape[1]
+        results['sigma_mode'] = 'full'
+        results['sigma_K'] = K
+
+        # Diagonal uncertainty profile
+        sigma_diag = torch.diagonal(sigma_sub, dim1=-2, dim2=-1)  # (n, K)
+
+        # Effective rank per token: exp(H(normalized eigenvalues))
+        try:
+            evals = torch.linalg.eigvalsh(sigma_sub)  # (n, K), real since SPD
+            evals = evals.clamp(min=1e-10)
+            evals_norm = evals / evals.sum(dim=-1, keepdim=True)
+            entropy = -(evals_norm * torch.log(evals_norm)).sum(dim=-1)  # (n,)
+            eff_rank = torch.exp(entropy)
+            results['sigma_effective_rank_mean'] = float(eff_rank.mean())
+            results['sigma_effective_rank_std'] = float(eff_rank.std())
+
+            # Per-category effective rank
+            categories = [categorize_token(tid) for tid in range(n)]
+            for cat in sorted(set(categories)):
+                idx = [i for i, c in enumerate(categories) if c == cat]
+                if len(idx) >= 2:
+                    results[f'sigma_eff_rank_{cat}'] = float(eff_rank[idx].mean())
+        except Exception as e:
+            results['sigma_effective_rank_error'] = str(e)
+
+        # Frobenius-space clustering on full matrix
+        sigma_flat = sigma_sub.reshape(n, -1)
+        full_metrics = compute_clustering_metrics(sigma_flat, n_tokens=n, embed_name='sigma_full')
+        results.update(full_metrics)
+    else:
+        results['sigma_mode'] = 'diagonal'
+        sigma_diag = sigma_sub  # (n, K)
+
+    # Diagonal clustering metrics
+    diag_metrics = compute_clustering_metrics(sigma_diag, n_tokens=n, embed_name='sigma_diag')
+    results.update(diag_metrics)
+
+    # Uncertainty magnitude by token category
+    categories = [categorize_token(tid) for tid in range(min(n, len(sigma_diag)))]
+    diag_np = sigma_diag.numpy()
+    trace_per_token = diag_np.sum(axis=-1)  # total uncertainty
+
+    for cat in sorted(set(categories)):
+        idx = [i for i, c in enumerate(categories) if c == cat]
+        if idx:
+            results[f'sigma_trace_{cat}_mean'] = float(np.mean(trace_per_token[idx]))
+            results[f'sigma_trace_{cat}_std'] = float(np.std(trace_per_token[idx]))
+
+    # ANOVA on trace across categories
+    try:
+        from scipy.stats import f_oneway
+        groups = []
+        for cat in sorted(set(categories)):
+            idx = [i for i, c in enumerate(categories) if c == cat]
+            if len(idx) >= 2:
+                groups.append(trace_per_token[idx])
+        if len(groups) >= 2:
+            f_stat, p_val = f_oneway(*groups)
+            results['sigma_trace_anova_f'] = float(f_stat)
+            results['sigma_trace_anova_p'] = float(p_val)
+    except ImportError:
+        pass
+
+    if verbose:
+        print(f"\n  Sigma Covariance Analysis ({results.get('sigma_mode', '?')}):")
+        sil = results.get('sigma_diag_silhouette_score')
+        if isinstance(sil, float):
+            print(f"    Diagonal silhouette: {sil:.3f}")
+        eff = results.get('sigma_effective_rank_mean')
+        if eff is not None:
+            print(f"    Effective rank: {eff:.2f} +/- {results.get('sigma_effective_rank_std', 0):.2f}")
+        f_stat = results.get('sigma_trace_anova_f')
+        if f_stat is not None:
+            print(f"    Trace ANOVA F={f_stat:.1f}, p={results.get('sigma_trace_anova_p', 1):.2e}")
+
+    return results
+
+
+# =============================================================================
+# Per-Layer Belief Evolution Analysis
+# =============================================================================
+
+def analyze_per_layer_semantics(
+    model: "Any",
+    token_ids: torch.Tensor,
+    targets: Optional[torch.Tensor] = None,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    r"""Analyze how semantic structure evolves through transformer layers.
+
+    Runs a forward pass with attention tracking and extracts per-layer beliefs
+    (mu, sigma, phi). For each layer, computes:
+      - Token class inter/intra distance ratio on mu
+      - Semantic field coherence on mu
+      - Sigma effective rank (if full covariance)
+      - Delta norms (how much each layer changes beliefs)
+
+    This reveals whether semantic structure emerges gradually across layers
+    or appears suddenly, and whether deeper layers refine or diffuse clusters.
+
+    Args:
+        model: GaugeTransformerLM with forward_with_attention method.
+        token_ids: (batch, seq_len) input tokens.
+        targets: Optional (batch, seq_len) target tokens.
+        verbose: Print per-layer summary.
+
+    Returns:
+        Dict with per-layer semantic metrics and evolution summary.
+    """
+    if not hasattr(model, 'forward_with_attention'):
+        return {'error': 'Model lacks forward_with_attention method'}
+
+    device = next(model.parameters()).device
+    token_ids = token_ids.to(device)
+    if targets is not None:
+        targets = targets.to(device)
+
+    # Enable layer diagnostics to capture per-layer states
+    model._collect_layer_diagnostics = True
+    model._layer_diagnostics = []
+
+    with torch.no_grad():
+        logits, attn_info = model.forward_with_attention(token_ids, targets)
+
+    layer_diags = model._layer_diagnostics
+    model._collect_layer_diagnostics = False
+
+    results = {
+        'n_layers': attn_info.get('n_layers', len(layer_diags)),
+        'layers': [],
+    }
+
+    # Analyze final-layer beliefs using attention_info
+    mu_final = attn_info.get('mu')
+    sigma_final = attn_info.get('sigma')
+    phi_final = attn_info.get('phi')
+    mu_prior = attn_info.get('mu_prior')
+
+    if mu_final is not None and mu_prior is not None:
+        # Compute per-position belief drift from embedding to final
+        delta = (mu_final - mu_prior).detach().cpu()
+        results['total_belief_drift_norm'] = float(delta.norm().item())
+        results['per_position_drift_mean'] = float(delta.norm(dim=-1).mean().item())
+
+    # Per-layer diagnostics from the model's collection
+    for ld in layer_diags:
+        layer_info = {
+            'layer': ld['layer'],
+            'delta_mu_norm': ld.get('delta_mu_norm', 0),
+            'delta_mu_relative': ld.get('delta_mu_relative', 0),
+            'sigma_mean_diag': ld.get('sigma_mean_diag', 0),
+            'attention_entropy': ld.get('attention_entropy', None),
+            'kl_mean': ld.get('kl_mean', None),
+        }
+        if 'ce_loss' in ld:
+            layer_info['ce_loss'] = ld['ce_loss']
+            layer_info['perplexity'] = ld.get('perplexity')
+        results['layers'].append(layer_info)
+
+    # Summarize evolution pattern
+    if len(layer_diags) >= 2:
+        deltas = [ld.get('delta_mu_relative', 0) for ld in layer_diags]
+        results['delta_mu_trend'] = 'decreasing' if deltas[-1] < deltas[0] else 'increasing'
+        results['max_delta_layer'] = int(np.argmax(deltas))
+
+        if all('ce_loss' in ld for ld in layer_diags):
+            ce_losses = [ld['ce_loss'] for ld in layer_diags]
+            results['ce_improvement_per_layer'] = [
+                ce_losses[i] - ce_losses[i + 1] for i in range(len(ce_losses) - 1)
+            ]
+
+    if verbose:
+        print(f"\n  Per-Layer Belief Evolution ({len(layer_diags)} layers):")
+        for ld in layer_diags:
+            ce_str = f", CE={ld.get('ce_loss', 0):.3f}" if 'ce_loss' in ld else ""
+            ent_str = f", H_attn={ld.get('attention_entropy', 0):.2f}" if ld.get('attention_entropy') else ""
+            print(f"    L{ld['layer']}: Δμ_rel={ld.get('delta_mu_relative', 0):.4f}, "
+                  f"σ_mean={ld.get('sigma_mean_diag', 0):.4f}{ent_str}{ce_str}")
+
+    return results
+
+
+# =============================================================================
+# Holonomy-Semantic Correlation
+# =============================================================================
+
+def analyze_holonomy_semantic_correlation(
+    model: "Any",
+    n_tokens: int = 200,
+    n_triangles: int = 100,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    r"""Analyze whether holonomy (transport curvature) correlates with semantics.
+
+    Gauge-theoretic prediction: tokens in the same semantic field should have
+    smaller holonomy deficits when transported around triangles within the field
+    vs triangles crossing field boundaries. Flat transport within a field means
+    the gauge connection respects semantic coherence.
+
+    Computes holonomy for within-field and cross-field token triangles, then
+    tests whether the difference is significant.
+
+    Args:
+        model: GaugeTransformerLM with phi_embed and generators.
+        n_tokens: Number of tokens to consider.
+        n_triangles: Number of random triangles to sample per condition.
+        verbose: Print results.
+
+    Returns:
+        Dict with within-field vs cross-field holonomy statistics.
+    """
+    from .holonomy import compute_holonomy
+
+    # Extract omega
+    result = extract_omega(model, n_tokens=n_tokens)
+    if result is None:
+        return {'error': 'Could not extract Omega from model'}
+
+    omega, gauge_label = result
+    n = omega.shape[0]
+
+    # Build field membership
+    fields = {k: v for k, v in SEMANTIC_FIELDS.items() if k != 'morphological'}
+    token_to_field: Dict[int, str] = {}
+    field_to_tokens: Dict[str, List[int]] = {}
+
+    for field_name, words in fields.items():
+        tids = []
+        for w in words:
+            tid = get_token_id(w)
+            if tid is not None and tid < n:
+                tids.append(tid)
+                token_to_field[tid] = field_name
+        if len(tids) >= 2:
+            field_to_tokens[field_name] = tids
+
+    if len(field_to_tokens) < 2:
+        return {'error': 'Not enough resolved semantic fields for holonomy analysis'}
+
+    rng = np.random.RandomState(42)
+
+    def sample_holonomy_deficit(i: int, j: int, k: int) -> float:
+        """Compute holonomy deficit for triangle (i, j, k)."""
+        # Ω_ij Ω_jk Ω_ki should = I for flat connection
+        try:
+            Oij = torch.linalg.solve(omega[i].unsqueeze(0).double(),
+                                      omega[j].unsqueeze(0).double()).squeeze(0)
+            Ojk = torch.linalg.solve(omega[j].unsqueeze(0).double(),
+                                      omega[k].unsqueeze(0).double()).squeeze(0)
+            Oki = torch.linalg.solve(omega[k].unsqueeze(0).double(),
+                                      omega[i].unsqueeze(0).double()).squeeze(0)
+            holonomy = Oij @ Ojk @ Oki
+            deficit = torch.norm(holonomy - torch.eye(holonomy.shape[0], dtype=torch.float64), p='fro').item()
+            return deficit
+        except Exception:
+            return float('nan')
+
+    # Within-field holonomy
+    within_deficits = []
+    all_field_tokens = []
+    for fn, tids in field_to_tokens.items():
+        all_field_tokens.extend(tids)
+        if len(tids) >= 3:
+            for _ in range(min(n_triangles // len(field_to_tokens), 50)):
+                tri = rng.choice(tids, 3, replace=False)
+                d = sample_holonomy_deficit(tri[0], tri[1], tri[2])
+                if np.isfinite(d):
+                    within_deficits.append(d)
+
+    # Cross-field holonomy
+    cross_deficits = []
+    field_names = list(field_to_tokens.keys())
+    for _ in range(n_triangles):
+        # Pick tokens from 2-3 different fields
+        chosen_fields = rng.choice(field_names, min(3, len(field_names)), replace=False)
+        tri = []
+        for fn in chosen_fields:
+            tri.append(rng.choice(field_to_tokens[fn]))
+        if len(tri) == 2:
+            # Need a third token from any field
+            remaining = [t for t in all_field_tokens if t not in tri]
+            if remaining:
+                tri.append(rng.choice(remaining))
+        if len(tri) >= 3:
+            d = sample_holonomy_deficit(tri[0], tri[1], tri[2])
+            if np.isfinite(d):
+                cross_deficits.append(d)
+
+    results = {
+        'gauge_group': gauge_label,
+        'n_fields': len(field_to_tokens),
+        'n_within_triangles': len(within_deficits),
+        'n_cross_triangles': len(cross_deficits),
+    }
+
+    if within_deficits:
+        results['within_field_deficit_mean'] = float(np.mean(within_deficits))
+        results['within_field_deficit_std'] = float(np.std(within_deficits))
+    if cross_deficits:
+        results['cross_field_deficit_mean'] = float(np.mean(cross_deficits))
+        results['cross_field_deficit_std'] = float(np.std(cross_deficits))
+
+    if within_deficits and cross_deficits:
+        results['deficit_ratio'] = float(
+            np.mean(cross_deficits) / max(np.mean(within_deficits), 1e-10)
+        )
+        # Statistical test
+        try:
+            from scipy.stats import mannwhitneyu
+            stat, p = mannwhitneyu(within_deficits, cross_deficits, alternative='less')
+            results['mannwhitney_stat'] = float(stat)
+            results['mannwhitney_p'] = float(p)
+        except ImportError:
+            pass
+
+    if verbose:
+        print(f"\n  Holonomy-Semantic Correlation ({gauge_label}):")
+        print(f"    Fields resolved: {len(field_to_tokens)}")
+        if within_deficits:
+            print(f"    Within-field deficit: {results.get('within_field_deficit_mean', 0):.4f} "
+                  f"+/- {results.get('within_field_deficit_std', 0):.4f}")
+        if cross_deficits:
+            print(f"    Cross-field deficit:  {results.get('cross_field_deficit_mean', 0):.4f} "
+                  f"+/- {results.get('cross_field_deficit_std', 0):.4f}")
+        ratio = results.get('deficit_ratio')
+        if ratio is not None:
+            print(f"    Ratio (cross/within): {ratio:.3f} {'(>1 = fields are flatter)' if ratio > 1 else ''}")
+            p = results.get('mannwhitney_p')
+            if p is not None:
+                print(f"    Mann-Whitney p={p:.4e}")
+
+    return results
+
+
+# =============================================================================
+# Semantic Trajectory Tracker (training-time)
+# =============================================================================
+
+class SemanticTrajectoryTracker:
+    """Track evolution of semantic metrics across training steps.
+
+    Records periodic snapshots of embedding-level semantic structure
+    (clustering quality, field coherence, uncertainty profile) to detect
+    when and how semantic organization emerges during training.
+
+    Usage::
+
+        tracker = SemanticTrajectoryTracker()
+        # During training loop:
+        if tracker.should_record(step):
+            tracker.record(model, step)
+        # At end:
+        tracker.save(path)
+        summary = tracker.summarize()
+    """
+
+    def __init__(self, interval: int = 5000):
+        self.interval = interval
+        self.snapshots: List[Dict[str, Any]] = []
+
+    def should_record(self, step: int) -> bool:
+        """Check if a snapshot should be recorded at this step."""
+        return self.interval > 0 and step % self.interval == 0
+
+    def record(
+        self,
+        model: "Any",
+        step: int,
+        n_tokens: int = 500,
+    ) -> Dict[str, Any]:
+        """Record a semantic snapshot at the current training step.
+
+        Args:
+            model: GaugeTransformerLM.
+            step: Current training step.
+            n_tokens: Number of tokens to analyze.
+
+        Returns:
+            Snapshot dict with all computed metrics.
+        """
+        snapshot = {'step': step}
+
+        # Extract embeddings
+        mu_embed = None
+        phi_embed = None
+        sigma_embed = None
+
+        for attr_path in [('token_embed',), ()]:
+            obj = model
+            for a in attr_path:
+                obj = getattr(obj, a, None)
+                if obj is None:
+                    break
+            if obj is None:
+                continue
+            if hasattr(obj, 'mu_embed'):
+                mu_embed = obj.mu_embed.weight.detach().cpu()[:n_tokens]
+            if hasattr(obj, 'phi_embed'):
+                phi_embed = obj.phi_embed.weight.detach().cpu()[:n_tokens]
+            if hasattr(obj, 'sigma_embed'):
+                sigma_embed = obj.sigma_embed.weight.detach().cpu()[:n_tokens]
+            if mu_embed is not None:
+                break
+
+        if mu_embed is None:
+            snapshot['error'] = 'no embeddings found'
+            self.snapshots.append(snapshot)
+            return snapshot
+
+        # Clustering quality on mu
+        mu_cluster = compute_clustering_metrics(mu_embed, n_tokens=n_tokens, embed_name='mu')
+        sil = mu_cluster.get('mu_silhouette_score')
+        if isinstance(sil, float):
+            snapshot['mu_silhouette'] = sil
+        ch = mu_cluster.get('mu_calinski_harabasz')
+        if isinstance(ch, float):
+            snapshot['mu_calinski_harabasz'] = ch
+        ratio = mu_cluster.get('mu_inter_intra_ratio')
+        if isinstance(ratio, float):
+            snapshot['mu_inter_intra_ratio'] = ratio
+
+        # Semantic field coherence on mu
+        field_results = compute_semantic_field_coherence(mu_embed, embed_name='mu')
+        snapshot['mu_field_coherence'] = field_results.get('mu_field_coherence_ratio', 0)
+        snapshot['mu_n_fields'] = field_results.get('mu_n_fields_resolved', 0)
+
+        # Phi clustering if available
+        if phi_embed is not None:
+            phi_cluster = compute_clustering_metrics(phi_embed, n_tokens=n_tokens, embed_name='phi')
+            sil_phi = phi_cluster.get('phi_silhouette_score')
+            if isinstance(sil_phi, float):
+                snapshot['phi_silhouette'] = sil_phi
+
+        # Sigma analysis if available
+        if sigma_embed is not None:
+            sigma_results = analyze_sigma_semantics(sigma_embed, n_tokens=n_tokens, verbose=False)
+            eff_rank = sigma_results.get('sigma_effective_rank_mean')
+            if eff_rank is not None:
+                snapshot['sigma_effective_rank'] = eff_rank
+
+        # Embedding norms (detect collapse or explosion)
+        snapshot['mu_norm_mean'] = float(mu_embed.norm(dim=-1).mean())
+        if phi_embed is not None:
+            snapshot['phi_norm_mean'] = float(phi_embed.norm(dim=-1).mean())
+
+        self.snapshots.append(snapshot)
+        return snapshot
+
+    def summarize(self) -> Dict[str, Any]:
+        """Summarize semantic evolution across all recorded snapshots.
+
+        Returns:
+            Dict with trend analysis: when structure emerged, stability, etc.
+        """
+        if not self.snapshots:
+            return {'error': 'no snapshots recorded'}
+
+        steps = [s['step'] for s in self.snapshots]
+        summary = {
+            'n_snapshots': len(self.snapshots),
+            'step_range': [min(steps), max(steps)],
+        }
+
+        # Track silhouette over time
+        sil_values = [(s['step'], s['mu_silhouette']) for s in self.snapshots if 'mu_silhouette' in s]
+        if len(sil_values) >= 2:
+            sil_steps, sil_vals = zip(*sil_values)
+            summary['mu_silhouette_initial'] = sil_vals[0]
+            summary['mu_silhouette_final'] = sil_vals[-1]
+            summary['mu_silhouette_improvement'] = sil_vals[-1] - sil_vals[0]
+            # Find when silhouette first exceeds 0 (meaningful clustering)
+            for step, val in sil_values:
+                if val > 0:
+                    summary['mu_silhouette_positive_at_step'] = step
+                    break
+
+        # Track field coherence over time
+        fc_values = [(s['step'], s['mu_field_coherence']) for s in self.snapshots if 'mu_field_coherence' in s]
+        if len(fc_values) >= 2:
+            fc_steps, fc_vals = zip(*fc_values)
+            summary['field_coherence_initial'] = fc_vals[0]
+            summary['field_coherence_final'] = fc_vals[-1]
+
+        return summary
+
+    def save(self, path: Path) -> None:
+        """Save snapshot history to JSON."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        def _serialize(obj):
+            if isinstance(obj, (np.integer, np.floating)):
+                return obj.item()
+            if isinstance(obj, np.bool_):
+                return bool(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            return obj
+
+        serializable = []
+        for snap in self.snapshots:
+            serializable.append({k: _serialize(v) for k, v in snap.items()})
+
+        with open(path, 'w') as f:
+            json.dump(serializable, f, indent=2)
+
+    @classmethod
+    def load(cls, path: Path) -> "SemanticTrajectoryTracker":
+        """Load snapshot history from JSON."""
+        tracker = cls()
+        with open(path, 'r') as f:
+            tracker.snapshots = json.load(f)
+        return tracker

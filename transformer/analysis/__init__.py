@@ -30,6 +30,16 @@ from transformer.analysis.trajectory import (
     LayerTrajectory,
     ForwardTrajectory,
 )
+from transformer.analysis.semantics import (
+    analyze_gauge_semantics,
+    analyze_omega_semantics,
+    analyze_sigma_semantics,
+    analyze_per_layer_semantics,
+    analyze_holonomy_semantic_correlation,
+    compute_semantic_field_coherence,
+    SemanticTrajectoryTracker,
+    SEMANTIC_FIELDS,
+)
 from transformer.analysis.holonomy import (
     compute_holonomy,
     holonomy_penalty_loss,
@@ -62,6 +72,16 @@ __all__ = [
     'TrajectoryRecorder',
     'LayerTrajectory',
     'ForwardTrajectory',
+
+    # Semantics
+    'analyze_gauge_semantics',
+    'analyze_omega_semantics',
+    'analyze_sigma_semantics',
+    'analyze_per_layer_semantics',
+    'analyze_holonomy_semantic_correlation',
+    'compute_semantic_field_coherence',
+    'SemanticTrajectoryTracker',
+    'SEMANTIC_FIELDS',
 
     # Holonomy (curvature diagnostics)
     'compute_holonomy',
