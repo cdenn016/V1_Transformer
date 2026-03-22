@@ -533,31 +533,38 @@ def retract_spd(Sigma, nat_grad, step_size, eps_min=1e-4, kappa_max=1e4, exp_cli
 # State-dependent prior precision (Eq. 16)
 # ---------------------------------------------------------------------------
 
-def state_dependent_alpha(mu, Sigma, prior_mu, prior_Sigma, b0, c0):
+def state_dependent_alpha(mu, Sigma, prior_mu, prior_Sigma, b0, c0, alpha_floor=0.0):
     """
     α_i = c₀ / (b₀ + KL(q_i || p_i))
+
+    With optional floor to prevent positive feedback loop where high KL
+    reduces α, loosening the prior constraint and causing more drift.
 
     Returns: [B, N]
     """
     kl = kl_divergence(mu, Sigma, prior_mu, prior_Sigma)  # [B, N]
-    return c0 / (b0 + kl.clamp(min=0.0))
+    alpha = c0 / (b0 + kl.clamp(min=0.0))
+    if alpha_floor > 0:
+        alpha = alpha.clamp(min=alpha_floor)
+    return alpha
 
 
 # ---------------------------------------------------------------------------
 # KL-based decoding (logits from prior bank)
 # ---------------------------------------------------------------------------
 
-def kl_decode_logits(mu, Sigma, prior_mu_bank, prior_Sigma_bank):
+def kl_decode_logits(mu, Sigma, prior_mu_bank, prior_Sigma_bank, decode_tau=1.0):
     """
     Compute logits for each vocabulary token via negative KL to prior.
 
-    logit_v(i) = -KL(q_i || π_v)
+    logit_v(i) = -KL(q_i || π_v) / τ
 
     Args:
         mu: [B, N, K]
         Sigma: [B, N, K, K]
         prior_mu_bank: [V, K]
         prior_Sigma_bank: [V, K, K]
+        decode_tau: temperature (>1 softens predictions, prevents overconfidence)
 
     Returns: [B, N, V]
     """
@@ -595,7 +602,7 @@ def kl_decode_logits(mu, Sigma, prior_mu_bank, prior_Sigma_bank):
         logdet_term = logdet_v.unsqueeze(0).unsqueeze(0) - logdet_Sigma.unsqueeze(-1)
 
         kl = 0.5 * (trace_term + mahal - K + logdet_term)
-        logits[:, :, v_start:v_end] = -kl
+        logits[:, :, v_start:v_end] = -kl / decode_tau
 
     return logits
 

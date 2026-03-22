@@ -71,6 +71,12 @@ class PureVFEConfig:
     sigma_obs_grad: str = 'none'        # 'none' (match VFE dynamic), 'diagonal', 'full'
     m_step_eta_floor: float = 0.01      # Min multiplier for confidence-weighted eta_M
 
+    # Overfitting prevention
+    obs_norm_floor: int = 0             # Floor for per-token obs gradient normalization (0 = auto: 1% of BN)
+    rare_token_reg: float = 0.0         # Frequency-adaptive hyper-prior strength (0 = disabled)
+    alpha_floor: float = 0.0            # Minimum prior precision α (0 = no floor)
+    decode_tau: float = 1.0             # Temperature for KL-decode logits (>1 softens predictions)
+
     # Recovery
     nan_recovery: bool = True           # Reset beliefs to priors on NaN detection
 

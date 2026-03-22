@@ -173,7 +173,8 @@ def e_step(token_ids, model, config):
 
         # --- State-dependent prior precision ---
         alpha = state_dependent_alpha(
-            mu, Sigma, prior_mu, prior_Sigma, config.alpha_b0, config.alpha_c0
+            mu, Sigma, prior_mu, prior_Sigma, config.alpha_b0, config.alpha_c0,
+            alpha_floor=getattr(config, 'alpha_floor', 0.0),
         )  # [B, N]
 
         # --- Monitor VFE ---
@@ -295,8 +296,10 @@ def e_step(token_ids, model, config):
             Omega = model.prior_Omega[token_ids].clone() @ pos_Om
             break
 
-    # --- Decode: logit_v = -KL(q_i || π_v) ---
-    logits = kl_decode_logits(mu, Sigma, model.prior_mu, model.prior_Sigma)
+    # --- Decode: logit_v = -KL(q_i || π_v) / τ_decode ---
+    _decode_tau = getattr(config, 'decode_tau', 1.0)
+    logits = kl_decode_logits(mu, Sigma, model.prior_mu, model.prior_Sigma,
+                              decode_tau=_decode_tau)
 
     diagnostics['nan_events'] = nan_events
 

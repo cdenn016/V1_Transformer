@@ -545,6 +545,12 @@ PURE_VFE_CONFIG = {
     'sigma_obs_grad': 'none',
     'm_step_eta_floor': 0.01,
 
+    # Overfitting prevention
+    'obs_norm_floor': 0,          # Auto: 1% of BN (prevents rare token gradient amplification)
+    'rare_token_reg': 0.0,        # Frequency-adaptive hyper-prior (0 = disabled)
+    'alpha_floor': 0.0,           # Min prior precision α (0 = no floor)
+    'decode_tau': 1.0,            # KL-decode temperature (>1 softens predictions)
+
     # Recovery
     'nan_recovery': True,
 
