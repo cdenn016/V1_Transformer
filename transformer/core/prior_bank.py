@@ -170,13 +170,33 @@ class PriorBank(nn.Module):
 
     @property
     def base_prior_sigma(self) -> torch.Tensor:
-        """Get base prior variance (always positive). Only for gauge_fixed_priors=True."""
-        return torch.exp(self.base_log_prior_sigma).clamp(min=0.01, max=5.0)
+        """Get base prior variance (always positive). Only for gauge_fixed_priors=True.
+
+        Uses the detach-clamp pattern: forward values are bounded to [_SIGMA_MIN, _SIGMA_MAX]
+        for numerical stability, but gradients flow through unclamped so the optimizer
+        can still receive signal when the parameter hits the boundary. This matches
+        the treatment in GaugeTokenEmbedding.forward().
+
+        The bounds are SPD constraints:
+        - min=0.01: prevents covariance collapse (singular precision matrix)
+        - max=5.0: prevents diffuse priors from producing vanishing KL gradients
+        """
+        _SIGMA_MIN, _SIGMA_MAX = 0.01, 5.0
+        sigma = torch.exp(self.base_log_prior_sigma)
+        return sigma + (sigma.clamp(_SIGMA_MIN, _SIGMA_MAX) - sigma).detach()
 
     @property
     def prior_sigma(self) -> torch.Tensor:
-        """Get prior variances (always positive). Only for gauge_fixed_priors=False."""
-        return torch.exp(self.log_prior_sigma).clamp(min=0.01, max=5.0)
+        """Get prior variances (always positive). Only for gauge_fixed_priors=False.
+
+        Uses the detach-clamp pattern: forward values are bounded to [_SIGMA_MIN, _SIGMA_MAX]
+        for numerical stability, but gradients flow through unclamped so the optimizer
+        can still receive signal when the parameter hits the boundary. This matches
+        the treatment in GaugeTokenEmbedding.forward().
+        """
+        _SIGMA_MIN, _SIGMA_MAX = 0.01, 5.0
+        sigma = torch.exp(self.log_prior_sigma)
+        return sigma + (sigma.clamp(_SIGMA_MIN, _SIGMA_MAX) - sigma).detach()
 
     def _compute_rotation(self, phi: torch.Tensor) -> torch.Tensor:
         """
