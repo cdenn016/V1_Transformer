@@ -385,8 +385,7 @@ gauge-holonomy/
 │   │   ├── gauge_utils.py          #     matrix_exp, Newton-Schulz, fused KL
 │   │   ├── gauge_preconditioner.py #     Riemannian φ preconditioning
 │   │   ├── connection.py           #     GaugeConnection (non-flat transport, holonomy)
-│   │   ├── block_config.py         #     BlockConfig dataclass (60+ unified params)
-│   │   └── triton_kernels.py       #     Triton-optimized KL and matrix exp
+│   │   └── block_config.py         #     BlockConfig dataclass (60+ unified params)
 │   ├── pure_vfe/                   #   Pure VFE transformer (no autograd)
 │   │   ├── model.py                #     PureVFETransformer (prior bank architecture)
 │   │   ├── train.py                #     Pure VFE training loop

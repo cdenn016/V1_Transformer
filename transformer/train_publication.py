@@ -104,6 +104,26 @@ from math_utils.numerical_monitor import flush as _flush_numerical_events
 #   'standard_param_equalized'  - (M2b') param-equalized wider FFN
 #   'standard_rope'             - (M2c) standard + RoPE at d=10
 #   'standard_rope_d90'         - (M2c') standard + RoPE at d=90
+# =================================================================
+# GAUGE GROUP SELECTION (Generators from so(N), Transport in GL(K))
+# =================================================================
+# NOTE: The VFE is invariant under GL(K), not just SO(K)!
+# We use so(N) generators to parameterize φ, but transport operators
+# Ω = exp(φ·G) live in GL(K). No orthogonality constraint is needed.
+# SON: so(N) generators with N(N-1)/2 parameters
+#
+# SO(3), e.g.  ('ℓ0', 50, 1),   
+# SO(5) multi-irrep example:
+# ('scalar', 10, 1),   # 10 dims (invariant)
+# ('fund', 8, 5),      # 40 dims (vector)
+# ('wedge2', 4, 10),   # 40 dims (∧² - angular momentum)
+# ('sym2', 3, 14),     # 42 dims (Sym²₀ - quadrupolar)
+#
+#      Supports multiple irrep types for representational diversity:
+#        - 'scalar': dim = 1              (gauge-invariant)
+#        - 'fund':   dim = N              (fundamental/vector)
+#        - 'wedge2': dim = N*(N-1)/2      (antisymmetric 2-tensor ∧²V)
+#        - 'sym2':   dim = N*(N+1)/2 - 1  (symmetric traceless Sym²₀V)
 
 DEFAULT_MODE = 'em'               # Which mode to run
 SEED = 6
@@ -127,6 +147,7 @@ DEFAULT_DATASET = 'wikitext-103'
 #   - Learning: Backpropagation (standard)
 #   - Position: Learned positional embeddings
 # =============================================================================
+
 STANDARD_CONFIG = {
     # Model architecture — param-matched to EM_CONFIG (1.52M)
     'vocab_size': 50257,
@@ -217,16 +238,20 @@ STANDARD_CONFIG = {
 EM_CONFIG = {
     # === Architecture ===
     'vocab_size':  50257,
-    'embed_dim':   10,
-    'n_layers':    1,
-    'hidden_dim':  508,
-    'max_seq_len': 128,
+    'embed_dim':   5,
+    'n_layers':    4,
+    #'hidden_dim':  508,
+    'max_seq_len': 32,
     
     'ffn_mode': 'VFE_dynamic',
     
+    'optimizer_type': 'adamw',  # or 'natural_gradient' or 'adamw'
+    'fisher_ema_decay': 0.95,            # for natural_gradient
+    'fisher_damping': 1e-4,              # for natural_gradient
+    
     # === Training ===
-    'batch_size':    64,    
-    'max_steps':     15000,
+    'batch_size':    32,    
+    'max_steps':     5000,
     'warmup_steps':  100,
     'num_workers':   10,
     
@@ -245,7 +270,8 @@ EM_CONFIG = {
     'gauge_group':      'GLK',
     'gauge_mode':       'learned',  
     'gauge_param':      'phi',
-    'irrep_spec':       [('fund', 1, 10)],
+    
+    'irrep_spec':       [('fund', 1, 5)],
   
     
     'diagonal_covariance':      True,
@@ -255,7 +281,6 @@ EM_CONFIG = {
     'enforce_orthogonal':       False,   
     'learnable_reflection':     False ,   # Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk 
                                           # Set gauge-mode=constant and the above 3 = true for transf limit
-
 
     # === E-step dynamics ===
     'ffn_n_iterations':    1,
@@ -271,12 +296,24 @@ EM_CONFIG = {
     'evolve_phi_e_step':   True,
 
 
+    'ffn_n_iterations':    5,
+    
+    'ffn_alpha':           1.0,               # Prior coupling inside VFE E-step
+    'ffn_lambda_belief':   1.0,       # Belief alignment inside VFE E-step
+    
+    'learnable_alpha':     False,
+    'ffn_learnable_alpha': False,    # Adaptive α_i = c0/(b0 + KL) per dimension
+    
+    'evolve_sigma':        True,
+    'evolve_phi':          True,
+    'evolve_phi_e_step':   True,
+        
     'ffn_learnable_lr':    True,
     'e_step_phi_lr':       0.05,               # E-step φ descent step size (decoupled from M-step phi_lr)
 
     # === M-step: implicit differentiation ===
-    'implicit_em':         True,
-    'amortized_inference': False,
+    'implicit_em':         False,
+    'amortized_inference': True,
     
     
     
@@ -288,7 +325,7 @@ EM_CONFIG = {
     
     'alpha':        0.0,
     'beta':         0.0,
-    'alpha_phi':    0.1,               # Gauge prior: (α_φ/2)||φ||²
+    'alpha_phi':    0.1,            # Gauge prior: (α_φ/2)||φ||²
     'lambda_hyper': 0.1,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
     'lambda_gamma': 0.0,
     'kappa_gamma':  1.0,
@@ -326,12 +363,7 @@ EM_CONFIG = {
     'eval_interval':              1000,
     'checkpoint_interval':        25000,
     'semantic_analysis_interval': 10000,
-
-    # === Layer/iteration diagnostics ===
-    'track_layer_diagnostics':     True,
-    'track_iteration_diagnostics': True,
-    'diagnostics_interval':        50,
-
+    
     # =================================================================
     # NON-FLAT GAUGE TRANSPORT (holonomy)
     # =================================================================
@@ -351,6 +383,10 @@ EM_CONFIG = {
     # Option A: couple just 0↔1, head 2 stays independent
     #'cross_couplings': [(0, 1), (1, 0)],
     # → super-blocks: [20, 10]  (heads 0,1 merged into GL(20), head 2 alone)
+    # === Layer/iteration diagnostics ===
+    'track_layer_diagnostics':     True,
+    'track_iteration_diagnostics': True,
+    'diagnostics_interval':        50,
     
 }
 
@@ -389,11 +425,11 @@ AMORTIZED_CONFIG = {
 # =============================================================================
 HEBBIAN_CONFIG = {
     # === Architecture (same model as EM) ===
-    'vocab_size': 50257,
-    'embed_dim': 10,
-    'n_layers': 1,
-    'hidden_dim': 508,
-    'max_seq_len': 128,
+    'vocab_size':   50257,
+    'embed_dim':    10,
+    'n_layers':     1,
+    #'hidden_dim':   508,
+    'max_seq_len':  128,
     
     # === Training ===
     'batch_size':   64,
@@ -403,6 +439,7 @@ HEBBIAN_CONFIG = {
     
     'ffn_mode':              'VFE_dynamic',
     'tie_embeddings':        False,
+    
     'use_layernorm':         True,
     'use_residual':          True,
     'use_output_projection': True,
@@ -428,11 +465,14 @@ HEBBIAN_CONFIG = {
 
     # === Hebbian M-step: no backprop ===
     'amortized_inference':  False,
+    
     'use_p_flow':           True,             # EMA update of embeddings toward successful beliefs
-    'p_flow_ema_decay':     0.95,
     'use_delta_rule_w_out': True,   # Widrow-Hoff local learning for W_out
-    'delta_rule_lr':        0.1,
     'detach_phi':           True,             # phi learns via P-flow only (no backprop)
+    
+    'p_flow_ema_decay':     0.95,
+    'delta_rule_lr':        0.1,
+    
 
     # === Loss weights: CE only (no VFE regularizers in backprop loss) ===
     'alpha':        0.0,
@@ -456,8 +496,6 @@ HEBBIAN_CONFIG = {
     'phi_scale':   1.0,
     'kappa_beta':  1.0,
 
-    
-
     # === Learning rates (backprop LRs less important; P-flow dominates) ===
     'mu_lr':        0.05,
     'sigma_lr':     0.0125,
@@ -474,11 +512,6 @@ HEBBIAN_CONFIG = {
     'log_interval':        100,
     'eval_interval':       1000,
     'checkpoint_interval': 25000,
-
-    # === Layer/iteration diagnostics ===
-    'track_layer_diagnostics':     True,
-    'track_iteration_diagnostics': True,
-    'diagnostics_interval':        50,
 }
 
 
@@ -501,16 +534,21 @@ PURE_VFE_CONFIG = {
     # Belief geometry
     'vocab_size': 50257,
     'belief_dim': 32,             # K: full belief dimension
-    'n_heads': 4,                 # H: number of heads (block-diagonal)
-    'head_dim': 8,                # K_h = K / H
+    'n_heads':    4,                 # H: number of heads (block-diagonal)
+    'head_dim':   8,                # K_h = K / H
+
+    # Sequence
+    'max_seq_len': 64,           # Match other modes
+    'batch_size':  32,
+    'max_steps':   30000,
 
     # E-step (inference = forward pass)
     'n_esteps': 12,               # Iterations of VFE descent (replaces "depth")
-    'tau': None,                  # Attention temperature (defaults to √K_h)
-    'eta_E': 0.1,                 # E-step natural gradient step size
+    'tau':      None,                  # Attention temperature (defaults to √K_h)
+    'eta_E':    0.1,                 # E-step natural gradient step size
 
     # M-step (learning = parameter update)
-    'eta_M': 0.05,                # M-step natural gradient step size (match VFE_dynamic mu_lr)
+    'eta_M':    0.05,                # M-step natural gradient step size (match VFE_dynamic mu_lr)
 
     # Prior precision (state-dependent α)
     'alpha_b0': 1.0,
@@ -519,65 +557,56 @@ PURE_VFE_CONFIG = {
     # Hyper-prior regularization
     'hyper_var': 100.0,
 
-    # Sequence
-    'max_seq_len': 128,           # Match other modes
-    'batch_size': 32,
 
     # Initialization
-    'sigma_init': 1.0,
+    'sigma_init':       1.0,
     'omega_init_scale': 0.01,
 
     # E-step numerical stability
-    'sigma_lr_ratio': 0.05,
+    'sigma_lr_ratio':  0.05,
     'e_step_lr_decay': 0.5,
-    'grad_clamp': 1e3,
+    'grad_clamp':      1e3,
 
     # Trust regions
-    'trust_region_mu': 2.0,
+    'trust_region_mu':    2.0,
     'trust_region_sigma': 0.15,
     'trust_region_omega': 0.3,
 
     # SPD retraction
-    'spd_eps_min': 1e-3,
+    'spd_eps_min':   1e-3,
     'spd_kappa_max': 1e4,
-    'spd_exp_clip': 20.0,
+    'spd_exp_clip':  20.0,
 
     # Prior safeguards
     'prior_sigma_floor': 0.5,
     'prior_mu_max_norm': 10.0,
-    'm_step_trust_mu': 0.5,
+    'm_step_trust_mu':   0.5,
 
     # Gauge frame parameterization
-    'gauge_param': 'omega',       # 'omega' (direct GL(K)) or 'phi' (Lie algebra)
+    'gauge_param':    'omega',       # 'omega' (direct GL(K)) or 'phi' (Lie algebra)
     'omega_cond_max': 100.0,
-    'phi_max_norm': 3.14159,
+    'phi_max_norm':   3.14159,
 
     # M-step options
-    'sigma_obs_grad': 'none',
+    'sigma_obs_grad':   'none',
     'm_step_eta_floor': 0.01,
 
-    # Overfitting prevention
-    'obs_norm_floor': 0,          # Auto: 1% of BN (prevents rare token gradient amplification)
-    'rare_token_reg': 0.0,        # Frequency-adaptive hyper-prior (0 = disabled)
-    'alpha_floor': 0.0,           # Min prior precision α (0 = no floor)
-    'decode_tau': 1.0,            # KL-decode temperature (>1 softens predictions)
-
     # Recovery
-    'nan_recovery': True,
+    'nan_recovery':     True,
 
     # Causal masking
-    'causal': True,
+    'causal':           True,
 
     # Device & kernels
     'device': 'cuda',
     'use_cuda_kernels': True,
 
     # Training loop params (used by run_pure_vfe_experiment, not PureVFEConfig)
-    'max_steps': 30000,
-    'log_interval': 100,
-    'eval_interval': 1000,
+    
+    'log_interval':        100,
+    'eval_interval':       1000,
     'checkpoint_interval': 25000,
-    'num_workers': 10,
+    'num_workers':         10,
 }
 
 
@@ -869,6 +898,7 @@ STANDARD_ROPE_D90_CONFIG = {
 
 
 # =============================================================================
+
 
 
 
