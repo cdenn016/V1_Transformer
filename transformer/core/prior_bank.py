@@ -344,8 +344,14 @@ class PriorBank(nn.Module):
         mu_p, sigma_p = _prior_out[0], _prior_out[1]
 
         variance_floor = max(self.eps, 1e-4)
-        sigma_q_safe = sigma_q.clamp(min=variance_floor)    # (B, N, K)
-        sigma_p_safe = sigma_p.clamp(min=variance_floor)    # (V, K)
+        # Detach sigma from CE gradient path. The 1/σ_p terms create O(B*N*V)
+        # gradient contributions to log_prior_sigma, with 1/σ² scaling that
+        # explodes when σ is small. Sigma should learn from VFE terms (hyper-prior
+        # KL(s||h), self-consistency KL(q||p)) which provide principled bidirectional
+        # pressure — not from CE which just wants to sharpen everything.
+        # sigma_q similarly detached: CE trains mu_q location, not belief width.
+        sigma_q_safe = sigma_q.detach().clamp(min=variance_floor)    # (B, N, K)
+        sigma_p_safe = sigma_p.detach().clamp(min=variance_floor)    # (V, K)
 
         inv_sigma_p = 1.0 / sigma_p_safe                    # (V, K)
         mu_p_inv_sigma_p = mu_p * inv_sigma_p               # (V, K)
