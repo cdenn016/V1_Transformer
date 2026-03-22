@@ -2945,10 +2945,12 @@ class VariationalFFNDynamic(nn.Module):
         # VFE Descent Loop with Dynamic β (runs outside AMP autocast)
         # =====================================================================
         for iteration in range(self.n_iterations):
-            # Decay within loop: lr decreases as we approach convergence
-            # iteration 0: factor=1.0, iteration n-1: factor=0.5 (for n>1)
+            # Cosine decay: lr drops from 1.0 to 0.1 across iterations
+            # Steeper than linear 0.5 decay — stabilizes later iterations where
+            # natural gradients can amplify and cause oscillatory divergence
             if self.n_iterations > 1:
-                decay_factor = 1.0 - 0.5 * (iteration / (self.n_iterations - 1))
+                progress = iteration / (self.n_iterations - 1)  # 0→1
+                decay_factor = 0.1 + 0.9 * 0.5 * (1.0 + math.cos(math.pi * progress))
             else:
                 decay_factor = 1.0
             effective_lr = self.lr * decay_factor
@@ -3366,6 +3368,15 @@ class VariationalFFNDynamic(nn.Module):
                 grad_mu, grad_sigma, sigma_current, eps=eps,
 
             )
+
+            # Clamp natural gradient norm to prevent oscillatory divergence
+            # in deeper layers where Sigma eigenvalues amplify gradients
+            nat_grad_mu_norm = torch.linalg.norm(nat_grad_mu, dim=-1, keepdim=True)
+            max_nat_grad_norm = 500.0
+            nat_grad_scale = torch.clamp(
+                max_nat_grad_norm / (nat_grad_mu_norm + eps), max=1.0
+            )
+            nat_grad_mu = nat_grad_mu * nat_grad_scale
 
             # =================================================================
             # STEP 4: Update beliefs (E-step) with WHITENED trust region
