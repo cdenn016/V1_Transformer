@@ -317,6 +317,7 @@ EM_CONFIG = {
     'beta':         0.0,
     'alpha_phi':    0.1,            # Gauge prior: (α_φ/2)||φ||²
     'lambda_hyper': 0.1,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
+    'sigma_ce_scale': 0.0,          # 0.0=detach sigma_p from CE, 0.01=1% gradient, 1.0=full
     'lambda_gamma': 0.0,
     'kappa_gamma':  1.0,
 
@@ -2697,6 +2698,9 @@ def run_single_experiment(
         # DELTA RULE: Backprop-free learning for W_out
         use_delta_rule_w_out=config.get('use_delta_rule_w_out', False),
         delta_rule_lr=config.get('delta_rule_lr', 0.001),
+
+        # SIGMA CE SCALE: Gradient scaling for sigma_p in decode
+        sigma_ce_scale=config.get('sigma_ce_scale', 0.01),
 
         # RG METRICS: Track renormalization group flow
         compute_rg_metrics=config.get('compute_rg_metrics', False),

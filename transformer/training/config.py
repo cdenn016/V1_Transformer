@@ -123,6 +123,7 @@ class TrainingConfig:
     use_obs_in_vfe: bool = False # Pass targets as observations into VFE E-step (last layer only)
     obs_sigma_gradient: bool = False  # ∂E_q[CE]/∂σ Hessian-diagonal obs gradient for sigma
     obs_sigma_weight: float = 1.0     # Weight for sigma observation gradient
+    sigma_ce_scale: float = 0.01     # CE gradient scale for sigma_p (0.0=detach, 1.0=full)
 
     # ==========================================================================
     # Training Loop
