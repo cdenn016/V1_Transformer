@@ -3336,7 +3336,11 @@ class VariationalFFNDynamic(nn.Module):
                         _nr("obs_sigma_hessian_neg_clamp")
                         hessian_diag = hessian_diag.clamp(min=0.0)
                     _sigma_obs_scale = (0.5 * self.obs_sigma_weight) * _obs_weight
-                    grad_sigma = grad_sigma + _sigma_obs_scale * hessian_diag * mask_obs
+                    # Cap observation sigma gradient to prevent systematic upward bias
+                    # from dominating. Var_p[W[:,k]] >= 0 always, so this term only
+                    # pushes sigma upward; cap prevents runaway growth.
+                    obs_sigma_grad = (_sigma_obs_scale * hessian_diag * mask_obs).clamp(max=10.0)
+                    grad_sigma = grad_sigma + obs_sigma_grad
 
             # Clip for stability
             grad_mu = torch.clamp(grad_mu, min=-1e3, max=1e3)
@@ -3379,6 +3383,24 @@ class VariationalFFNDynamic(nn.Module):
             )
             nat_grad_mu = nat_grad_mu * nat_grad_scale
 
+            # Clamp nat_grad_sigma norm (analogous to nat_grad_mu clipping above).
+            # The natural gradient nat_grad_sigma = 2σ²·grad_sigma squares the
+            # covariance, amplifying gradients when sigma is large. Without clipping,
+            # the backward pass sees unclipped gradient magnitudes even though the
+            # forward retraction trust region clips the whitened step.
+            if is_diagonal:
+                nat_grad_sigma_norm = torch.linalg.norm(nat_grad_sigma, dim=-1, keepdim=True)
+            else:
+                nat_grad_sigma_norm = torch.linalg.norm(
+                    nat_grad_sigma.flatten(-2), dim=-1, keepdim=True
+                ).unsqueeze(-1)
+            _raw_nat_grad_sigma_norm = nat_grad_sigma.detach().norm().item()
+            max_nat_grad_sigma_norm = 500.0
+            nat_grad_sigma_scale = torch.clamp(
+                max_nat_grad_sigma_norm / (nat_grad_sigma_norm + eps), max=1.0
+            )
+            nat_grad_sigma = nat_grad_sigma * nat_grad_sigma_scale
+
             # =================================================================
             # STEP 4: Update beliefs (E-step) with WHITENED trust region
             # =================================================================
@@ -3401,26 +3423,33 @@ class VariationalFFNDynamic(nn.Module):
             mu_current = mu_current + scale * delta_mu
 
             if self.update_sigma:
-                # Use SPD-preserving retraction for stability with multiple iterations
-                # Much smaller lr for sigma — compensates for 2σ² Fisher natural gradient
-                # (0.0125 = previous 0.05 / 4, since nat_grad was corrected from 0.5σ² to 2σ²)
-                sigma_lr = effective_lr * 0.0125
+                # SPD-preserving retraction with restructured step control.
+                #
+                # Previously, step_size=sigma_lr AND trust_region=0.2 double-attenuated:
+                #   whitened = delta/sigma, clamped to [-0.2, 0.2]
+                #   exp_arg = sigma_lr * whitened → max |exp_arg| = 0.2 * 0.00125 = 0.00025
+                #   → sigma changed by ~0.025% per iteration (effectively frozen)
+                #
+                # Fix: use step_size=1.0 so the trust_region alone controls the max
+                # relative change per iteration. The sigma_trust value absorbs the
+                # 2σ² natural gradient correction (0.0125 factor) and effective_lr.
+                sigma_trust_diag = effective_lr * 0.05    # ~0.5% max change at full lr
+                sigma_trust_full = effective_lr * 0.025   # ~0.25% max change (full cov more sensitive)
                 if is_diagonal:
                     sigma_current = retract_spd_diagonal_torch(
                         sigma_diag=sigma_current,
                         delta_sigma=-nat_grad_sigma,
-                        step_size=sigma_lr,
-                        trust_region=0.2,  # Max 20% change per iteration
+                        step_size=1.0,
+                        trust_region=sigma_trust_diag,
                         eps=eps,
                     )
                 else:
                     sigma_current = retract_spd_torch(
                         Sigma=sigma_current,
                         delta_Sigma=-nat_grad_sigma,
-                        step_size=sigma_lr,
-                        trust_region=0.1,  # Max 10% change per iteration
+                        step_size=1.0,
+                        trust_region=sigma_trust_full,
                         eps=eps,
-
                     )
 
             # =============================================================
@@ -3432,35 +3461,32 @@ class VariationalFFNDynamic(nn.Module):
             # natural gradient well-conditioned without forcing full
             # isotropy.
             if self.update_sigma:
-                max_condition = 10.0
+                target_condition = 10.0
                 if is_diagonal:
-                    # sigma_current: (B, N, K)
+                    # Smooth condition clamping: quadratic pull toward geometric mean
+                    # when condition number exceeds target. Unlike hard torch.where(),
+                    # this is differentiable at the threshold boundary, eliminating
+                    # gradient noise for tokens oscillating near the condition limit.
                     s_min = sigma_current.min(dim=-1, keepdim=True).values.clamp(min=eps)
                     s_max = sigma_current.max(dim=-1, keepdim=True).values
                     condition = s_max / s_min  # (B, N, 1)
-                    needs_clamp = condition > max_condition
-                    if needs_clamp.any():
-                        # Geometric mean preserves det(Sigma) = product of eigenvalues
+                    excess = ((condition - target_condition) / target_condition).clamp(min=0.0)
+                    pull_strength = (excess ** 2).clamp(max=1.0)  # quadratic, saturates at 1.0
+                    if (pull_strength > 0).any():
                         geo_mean = sigma_current.log().mean(dim=-1, keepdim=True).exp()
-                        lower = geo_mean / max_condition.sqrt() if isinstance(max_condition, torch.Tensor) else geo_mean / (max_condition ** 0.5)
-                        upper = geo_mean * (max_condition ** 0.5)
-                        sigma_clamped = sigma_current.clamp(min=lower, max=upper)
-                        sigma_current = torch.where(
-                            needs_clamp.expand_as(sigma_current),
-                            sigma_clamped,
-                            sigma_current,
-                        )
+                        sigma_current = (1.0 - pull_strength) * sigma_current + pull_strength * geo_mean
                 else:
-                    # Full covariance: clamp eigenvalue ratio
+                    # Full covariance: smooth eigenvalue ratio regularization
                     eigvals = torch.linalg.eigvalsh(sigma_current)  # (B, N, K)
                     e_min = eigvals[..., 0:1].clamp(min=eps)
                     e_max = eigvals[..., -1:]
                     condition = e_max / e_min
-                    if (condition > max_condition).any():
+                    excess = ((condition - target_condition) / target_condition).clamp(min=0.0)
+                    pull_strength = (excess ** 2).clamp(max=1.0)
+                    if (pull_strength > 0).any():
                         geo_mean = eigvals.log().mean(dim=-1, keepdim=True).exp()
-                        lower = geo_mean / (max_condition ** 0.5)
-                        # Regularize toward isotropic: Sigma → Sigma + ridge * I
-                        ridge = (lower - e_min).clamp(min=0.0).mean(dim=-1, keepdim=True)
+                        lower = geo_mean / (target_condition ** 0.5)
+                        ridge = (pull_strength * (lower - e_min).clamp(min=0.0)).mean(dim=-1, keepdim=True)
                         K = sigma_current.shape[-1]
                         sigma_current = sigma_current + ridge.unsqueeze(-1) * torch.eye(
                             K, device=sigma_current.device, dtype=sigma_current.dtype
@@ -3489,18 +3515,29 @@ class VariationalFFNDynamic(nn.Module):
             # DIAGNOSTIC: Per-iteration convergence data
             # =============================================================
             if self._collect_iteration_diagnostics:
+                # Sigma condition number for diagnostics
+                if is_diagonal:
+                    _s_det = sigma_current.detach()
+                    _s_cond = (_s_det.max(dim=-1).values / _s_det.min(dim=-1).values.clamp(min=eps)).mean().item()
+                else:
+                    _s_diag_det = torch.diagonal(sigma_current.detach(), dim1=-2, dim2=-1)
+                    _s_cond = (_s_diag_det.max(dim=-1).values / _s_diag_det.min(dim=-1).values.clamp(min=eps)).mean().item()
                 _diag = {
                     'iteration': iteration,
                     'grad_mu_norm': grad_mu.detach().norm().item(),
                     'grad_sigma_norm': grad_sigma.detach().norm().item(),
                     'nat_grad_mu_norm': nat_grad_mu.detach().norm().item(),
                     'nat_grad_mu_raw_norm': _raw_nat_grad_norm,
+                    'nat_grad_sigma_norm': nat_grad_sigma.detach().norm().item(),
+                    'nat_grad_sigma_raw_norm': _raw_nat_grad_sigma_norm,
+                    'nat_grad_sigma_max': nat_grad_sigma.detach().abs().max().item(),
                     'delta_mu_norm': delta_mu.detach().norm().item(),
                     'mu_norm': mu_current.detach().norm().item(),
                     'sigma_mean': sigma_current.detach().mean().item(),
                     'sigma_max': sigma_current.detach().max().item(),
                     'sigma_min': sigma_current.detach().min().item(),
                     'sigma_std': sigma_current.detach().std().item(),
+                    'sigma_condition': _s_cond,
                     'effective_lr': effective_lr.detach().item() if isinstance(effective_lr, torch.Tensor) else float(effective_lr),
                     'scale_mean': scale.detach().mean().item(),
                 }
