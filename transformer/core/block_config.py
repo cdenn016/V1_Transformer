@@ -64,10 +64,6 @@ class BlockConfig:
     implicit_em: bool = False           # IFT-based M-step: detach beliefs at E-step start,
                                         # apply info-geometric scale s_k = (α/σ²_p)/A_k
 
-    # === Analytic phi gradient ===
-    analytic_phi_grad: bool = False     # If True, bypass autograd for ∂F/∂φ (saves ~250MB)
-    analytic_phi_grad_dexp_order: int = 4  # dexp series truncation order (4-8 typical)
-
     # === VFE dynamics (FFN E-step) ===
     ffn_mode: str = 'VFE_dynamic'       # FFN mode (only 'VFE_dynamic' supported)
     ffn_alpha: float = 1.0              # Prior self-coupling weight α in VFE loop
@@ -171,9 +167,6 @@ class BlockConfig:
             amortized_inference=config.get('amortized_inference', True),
             detach_phi=config.get('detach_phi', False),
             implicit_em=config.get('implicit_em', False),
-            # Analytic phi gradient
-            analytic_phi_grad=config.get('analytic_phi_grad', False),
-            analytic_phi_grad_dexp_order=config.get('analytic_phi_grad_dexp_order', 4),
             # VFE dynamics
             ffn_mode=config.get('ffn_mode', 'VFE_dynamic'),
             ffn_alpha=config.get('ffn_alpha', 1.0),

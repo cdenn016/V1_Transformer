@@ -176,8 +176,6 @@ class GaugeTransformerBlock(nn.Module):
             constant_omega=self.attention.constant_omega,
             amortized_inference=cfg.amortized_inference,
             isotropic_covariance=cfg.isotropic_covariance,
-            analytic_phi_grad=cfg.analytic_phi_grad,
-            analytic_phi_grad_dexp_order=cfg.analytic_phi_grad_dexp_order,
             obs_sigma_gradient=cfg.obs_sigma_gradient,
             obs_sigma_weight=cfg.obs_sigma_weight,
             use_rope=cfg.use_rope,
