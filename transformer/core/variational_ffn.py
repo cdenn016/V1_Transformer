@@ -1994,6 +1994,73 @@ class DEQFixedPoint(torch.autograd.Function):
         return total_mu, total_sigma, None, None, None
 
 
+class DEQFixedPointFull(torch.autograd.Function):
+    r"""Implicit differentiation through joint (μ, Σ, φ) fixed point.
+
+    Extends DEQFixedPoint to include gauge frame φ in the fixed-point
+    variables.  At the E-step fixed point, all VFE gradients vanish:
+        ∂F/∂μ = 0,  ∂F/∂Σ = 0,  ∂F/∂φ = 0.
+
+    The IFT gives the exact M-step gradient:
+        ∂z*/∂θ = −(∂²F/∂z²)⁻¹ · ∂²F/∂z∂θ
+    where z = (μ, Σ, φ) and θ are model parameters (embeddings, etc.).
+
+    We approximate (I − J)⁻¹ via Neumann series:
+        (I − J^T)⁻¹ v ≈ v + J^T v + (J^T)² v + ⋯  (K terms)
+    where J is the Jacobian of one full E-step (μ, Σ, φ) → (μ', Σ', φ')
+    evaluated at the fixed point.
+
+    This corrects the straight-through bias in the M-step φ gradient:
+    instead of ∂φ*/∂φ_init ≈ I, we get the IFT-corrected Jacobian that
+    accounts for how the E-step trajectory depends on initial conditions.
+    """
+
+    @staticmethod
+    def forward(ctx, mu_star, sigma_star, phi_star, e_step_fn, n_steps, neumann_terms):
+        ctx.save_for_backward(
+            mu_star.detach(), sigma_star.detach(), phi_star.detach(),
+        )
+        ctx.e_step_fn = e_step_fn
+        ctx.neumann_terms = neumann_terms
+        return mu_star, sigma_star, phi_star
+
+    @staticmethod
+    def backward(ctx, grad_mu, grad_sigma, grad_phi):
+        mu_star, sigma_star, phi_star = ctx.saved_tensors
+        e_step_fn = ctx.e_step_fn
+        K = ctx.neumann_terms
+
+        # Neumann series: (I - J^T)^{-1} v ≈ v + J^T v + (J^T)^2 v + ...
+        v_mu = grad_mu.clone()
+        v_sigma = grad_sigma.clone()
+        v_phi = grad_phi.clone()
+        total_mu = grad_mu.clone()
+        total_sigma = grad_sigma.clone()
+        total_phi = grad_phi.clone()
+
+        for _ in range(K):
+            mu_in = mu_star.detach().requires_grad_(True)
+            sigma_in = sigma_star.detach().requires_grad_(True)
+            phi_in = phi_star.detach().requires_grad_(True)
+            with torch.enable_grad():
+                mu_out, sigma_out, phi_out = e_step_fn(mu_in, sigma_in, phi_in)
+            jt_v = torch.autograd.grad(
+                outputs=[mu_out, sigma_out, phi_out],
+                inputs=[mu_in, sigma_in, phi_in],
+                grad_outputs=[v_mu, v_sigma, v_phi],
+                retain_graph=False,
+                allow_unused=True,
+            )
+            v_mu = jt_v[0] if jt_v[0] is not None else torch.zeros_like(grad_mu)
+            v_sigma = jt_v[1] if jt_v[1] is not None else torch.zeros_like(grad_sigma)
+            v_phi = jt_v[2] if jt_v[2] is not None else torch.zeros_like(grad_phi)
+            total_mu = total_mu + v_mu
+            total_sigma = total_sigma + v_sigma
+            total_phi = total_phi + v_phi
+
+        return total_mu, total_sigma, total_phi, None, None, None
+
+
 # =============================================================================
 # Dynamic-β VFE: Full Active Inference with Evolving Attention (RECOMMENDED!)
 # =============================================================================
@@ -2088,6 +2155,11 @@ class VariationalFFNDynamic(nn.Module):
         obs_sigma_weight: float = 1.0,     # Weight for sigma observation gradient
         detach_phi: bool = False,          # Detach phi from backprop in non-amortized mode
                                            # (enables fully backprop-free training with phi P-flow)
+        deq_include_phi: bool = False,     # Include phi in DEQ fixed-point variables.
+                                           # When True, the Neumann-series IFT correction applies
+                                           # to the joint (mu, sigma, phi) fixed point, giving the
+                                           # exact M-step phi gradient instead of straight-through.
+                                           # Requires use_deq=True and evolve_phi=True.
         implicit_em: bool = False,         # Principled M-step via implicit differentiation.
                                            # Detaches mu/sigma at E-step start (proper EM boundary)
                                            # then scales CE→embedding gradient by IFT factor
@@ -2282,6 +2354,7 @@ class VariationalFFNDynamic(nn.Module):
         # DEQ implicit differentiation
         self.use_deq = use_deq
         self.deq_neumann_terms = deq_neumann_terms
+        self.deq_include_phi = deq_include_phi
 
         # Learnable step size (stored in unconstrained space, apply softplus for positive LR)
         if learnable_lr:
@@ -2806,6 +2879,251 @@ class VariationalFFNDynamic(nn.Module):
                 sigma_out = sigma_in
 
             return mu_out, sigma_out
+
+        return step_fn
+
+    def _make_deq_step_fn_with_phi(
+        self,
+        mu_p_current: torch.Tensor,
+        sigma_p: torch.Tensor,
+        mask: Optional[torch.Tensor],
+        is_diagonal: bool,
+        eps: float,
+        dtype: torch.dtype,
+    ):
+        r"""Create a differentiable E-step closure for joint (μ, Σ, φ) DEQ backward.
+
+        Returns a function (mu, sigma, phi) -> (mu', sigma', phi') that performs
+        one VFE natural gradient step with full autograd tracking, including a
+        differentiable phi update via Euclidean gradient descent on F_align.
+
+        The phi update is a differentiable Euclidean step:
+            φ' = φ - η_φ · ∂F_align/∂φ
+        rather than the Lie group retraction used in the forward E-step.
+        At the fixed point (where ∂F_align/∂φ ≈ 0), the Euclidean and
+        retraction steps coincide to first order, so the IFT Jacobian
+        is correct regardless of which retraction is used forward.
+        """
+        def step_fn(mu_in: torch.Tensor, sigma_in: torch.Tensor,
+                     phi_in: torch.Tensor) -> tuple:
+            # --- mu/sigma update (same as _make_deq_step_fn) ---
+            if self.irrep_dims is None and self.chunk_size is None and not self.multihead_vfe:
+                cached_transport = compute_transport_operators(
+                    phi=phi_in,
+                    generators=self.generators,
+                    enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                    gauge_mode=self.gauge_mode,
+                )
+            else:
+                cached_transport = None
+
+            alpha_eff = (
+                self.get_bayesian_alpha(mu_in, mu_p_current, sigma_p, sigma_in, eps=eps)
+                if self.learnable_alpha else self.alpha
+            )
+            _alpha_c0 = F.softplus(self.raw_c0) if self.learnable_alpha else None
+
+            if self.multihead_vfe:
+                grad_mu = torch.zeros_like(mu_in)
+                grad_sigma = torch.zeros_like(sigma_in)
+                block_start = 0
+                for h, d_h in enumerate(self.irrep_dims):
+                    block_end = block_start + d_h
+                    mu_h = mu_in[:, :, block_start:block_end].contiguous()
+                    mu_p_h = mu_p_current[:, :, block_start:block_end].contiguous()
+                    if is_diagonal:
+                        sigma_h = sigma_in[:, :, block_start:block_end].contiguous()
+                        sigma_p_h = sigma_p[:, :, block_start:block_end].contiguous()
+                    else:
+                        sigma_h = sigma_in[:, :, block_start:block_end, block_start:block_end].contiguous()
+                        sigma_p_h = sigma_p[:, :, block_start:block_end, block_start:block_end].contiguous()
+                    gen_h = self.generators[:, block_start:block_end, block_start:block_end]
+                    kappa_h = self.kappa
+
+                    beta_h = compute_attention_weights(
+                        mu_q=mu_h, sigma_q=sigma_h,
+                        phi=phi_in, generators=gen_h,
+                        kappa=kappa_h, epsilon=eps, mask=mask,
+                        use_numba=False, return_kl=False,
+                        diagonal_covariance=is_diagonal,
+                        chunk_size=self.chunk_size,
+                        mask_self_attention=self.mask_self_attention,
+                        gauge_mode=self.gauge_mode,
+                        exact_diagonal_transport=self.exact_diagonal_transport,
+                    )
+                    alpha_h = (
+                        alpha_eff[:, :, block_start:block_end]
+                        if isinstance(alpha_eff, torch.Tensor) and alpha_eff.dim() == 3
+                        else alpha_eff
+                    )
+                    c0_h = _alpha_c0[block_start:block_end] if _alpha_c0 is not None else None
+                    grad_mu_h, grad_sigma_h = compute_vfe_gradients_gpu(
+                        mu_q=mu_h, sigma_q=sigma_h,
+                        mu_p=mu_p_h, sigma_p=sigma_p_h,
+                        beta=beta_h, phi=phi_in, generators=gen_h,
+                        alpha=alpha_h, lambda_belief=self.lambda_belief,
+                        kappa=kappa_h, eps=eps,
+                        alpha_c0=c0_h,
+                        compute_sigma_align_grad=self.compute_sigma_align_grad,
+                        exact_diagonal_transport=self.exact_diagonal_transport,
+                    )
+                    grad_mu[:, :, block_start:block_end] = grad_mu_h
+                    if is_diagonal:
+                        grad_sigma[:, :, block_start:block_end] = grad_sigma_h
+                    else:
+                        grad_sigma[:, :, block_start:block_end, block_start:block_end] = grad_sigma_h
+                    block_start = block_end
+            else:
+                beta = compute_attention_weights(
+                    mu_q=mu_in, sigma_q=sigma_in,
+                    phi=phi_in, generators=self.generators,
+                    kappa=self.kappa, epsilon=eps, mask=mask,
+                    use_numba=False, return_kl=False,
+                    diagonal_covariance=is_diagonal,
+                    cached_transport=cached_transport,
+                    irrep_dims=self.irrep_dims,
+                    chunk_size=self.chunk_size,
+                    mask_self_attention=self.mask_self_attention,
+                    gauge_mode=self.gauge_mode,
+                    exact_diagonal_transport=self.exact_diagonal_transport,
+                )
+                grad_mu, grad_sigma = compute_vfe_gradients_gpu(
+                    mu_q=mu_in, sigma_q=sigma_in,
+                    mu_p=mu_p_current, sigma_p=sigma_p,
+                    beta=beta, phi=phi_in, generators=self.generators,
+                    alpha=alpha_eff, lambda_belief=self.lambda_belief,
+                    kappa=self.kappa, eps=eps,
+                    alpha_c0=_alpha_c0,
+                    cached_transport=cached_transport,
+                    compute_sigma_align_grad=self.compute_sigma_align_grad,
+                    irrep_dims=self.irrep_dims,
+                    chunk_size=self.chunk_size,
+                    exact_diagonal_transport=self.exact_diagonal_transport,
+                )
+
+            grad_mu = torch.clamp(grad_mu, min=-1e3, max=1e3)
+            grad_sigma = torch.clamp(grad_sigma, min=-1e3, max=1e3)
+
+            nat_grad_mu, nat_grad_sigma = compute_natural_gradient_gpu(
+                grad_mu, grad_sigma, sigma_in, eps=eps,
+            )
+
+            nat_grad_mu_norm = torch.linalg.norm(nat_grad_mu, dim=-1, keepdim=True)
+            nat_grad_mu = nat_grad_mu * torch.clamp(
+                500.0 / (nat_grad_mu_norm + eps), max=1.0
+            )
+
+            if is_diagonal:
+                nat_grad_sigma_norm = torch.linalg.norm(nat_grad_sigma, dim=-1, keepdim=True)
+            else:
+                nat_grad_sigma_norm = torch.linalg.norm(
+                    nat_grad_sigma.flatten(-2), dim=-1, keepdim=True
+                ).unsqueeze(-1)
+            nat_grad_sigma = nat_grad_sigma * torch.clamp(
+                500.0 / (nat_grad_sigma_norm + eps), max=1.0
+            )
+
+            # mu update with trust region
+            delta_mu = -self.lr * nat_grad_mu
+            if is_diagonal:
+                sigma_sqrt = torch.sqrt(sigma_in.float().clamp(min=eps)).to(dtype)
+                whitened = delta_mu / sigma_sqrt
+            else:
+                sigma_diag = torch.diagonal(sigma_in, dim1=-2, dim2=-1).clone().float().clamp(min=eps)
+                whitened = delta_mu / torch.sqrt(sigma_diag).to(dtype)
+
+            w_norm = torch.linalg.norm(whitened, dim=-1, keepdim=True)
+            scale = torch.clamp(2.0 / (w_norm + eps), max=1.0)
+            mu_out = mu_in + scale * delta_mu
+
+            # sigma update
+            if self.update_sigma:
+                sigma_trust = self.lr * 0.05
+                if is_diagonal:
+                    sigma_out = retract_spd_diagonal_torch(
+                        sigma_diag=sigma_in, delta_sigma=-nat_grad_sigma,
+                        step_size=1.0, trust_region=sigma_trust, eps=eps,
+                    )
+                else:
+                    sigma_out = retract_spd_torch(
+                        Sigma=sigma_in, delta_Sigma=-nat_grad_sigma,
+                        step_size=1.0, trust_region=sigma_trust * 0.5, eps=eps,
+                    )
+            else:
+                sigma_out = sigma_in
+
+            # --- phi update: differentiable Euclidean descent on F_align ---
+            # Compute alignment loss with autograd tracking through phi_in.
+            # At the fixed point ∂F_align/∂φ ≈ 0, so the Euclidean step and
+            # Lie group retraction agree to first order (both give φ' ≈ φ).
+            if self.multihead_vfe:
+                alignment_loss = torch.tensor(0.0, device=mu_in.device, dtype=mu_in.dtype)
+                block_start = 0
+                for h, d_h in enumerate(self.irrep_dims):
+                    block_end = block_start + d_h
+                    mu_h = mu_in[:, :, block_start:block_end].detach()
+                    if sigma_in is None:
+                        sigma_h = None
+                    elif is_diagonal:
+                        sigma_h = sigma_in[:, :, block_start:block_end].detach()
+                    else:
+                        sigma_h = sigma_in[:, :, block_start:block_end, block_start:block_end].detach()
+                    gen_h = self.generators[:, block_start:block_end, block_start:block_end]
+                    kappa_h = self.kappa * math.sqrt(d_h)
+
+                    beta_phi_h_result = compute_attention_weights(
+                        mu_q=mu_h, sigma_q=sigma_h,
+                        phi=phi_in, generators=gen_h,
+                        kappa=kappa_h, epsilon=eps, mask=mask,
+                        use_numba=False, return_kl=True,
+                        diagonal_covariance=is_diagonal,
+                        irrep_dims=[d_h],
+                        chunk_size=self.chunk_size,
+                        mask_self_attention=self.mask_self_attention,
+                        gauge_mode=self.gauge_mode,
+                        exact_diagonal_transport=self.exact_diagonal_transport,
+                    )
+                    beta_phi_h, kl_h = beta_phi_h_result
+                    alignment_loss = alignment_loss + self.lambda_belief * (beta_phi_h * kl_h).sum()
+                    block_start = block_end
+            else:
+                beta_for_phi_result = compute_attention_weights(
+                    mu_q=mu_in.detach(), sigma_q=sigma_in.detach() if sigma_in is not None else None,
+                    phi=phi_in, generators=self.generators,
+                    kappa=self.kappa, epsilon=eps, mask=mask,
+                    use_numba=False, return_kl=True,
+                    diagonal_covariance=is_diagonal,
+                    irrep_dims=self.irrep_dims,
+                    chunk_size=self.chunk_size,
+                    mask_self_attention=self.mask_self_attention,
+                    gauge_mode=self.gauge_mode,
+                    exact_diagonal_transport=self.exact_diagonal_transport,
+                )
+                if isinstance(beta_for_phi_result, tuple):
+                    beta_phi, kl_matrix = beta_for_phi_result
+                else:
+                    beta_phi = beta_for_phi_result
+                    kl_matrix = beta_phi
+                alignment_loss = self.lambda_belief * (beta_phi * kl_matrix).sum()
+
+            # Differentiable Euclidean phi step (autograd tracks through alignment_loss)
+            phi_lr_step = self.phi_lr / max(self.n_iterations, 1)
+            if alignment_loss.grad_fn is not None:
+                grad_phi_align = torch.autograd.grad(
+                    alignment_loss, phi_in,
+                    create_graph=True,  # Keep graph for DEQ backward VJP
+                    retain_graph=False,
+                )[0]
+                # Norm clipping (differentiable)
+                grad_phi_norm = torch.linalg.norm(grad_phi_align, dim=-1, keepdim=True)
+                grad_phi_align = grad_phi_align * torch.clamp(
+                    10.0 / (grad_phi_norm + 1e-6), max=1.0
+                )
+                phi_out = phi_in - phi_lr_step * grad_phi_align
+            else:
+                phi_out = phi_in
+
+            return mu_out, sigma_out, phi_out
 
         return step_fn
 
@@ -3627,14 +3945,27 @@ class VariationalFFNDynamic(nn.Module):
         # with Neumann-series approximation of (I - J)^{-1}
         # =================================================================
         if self.use_deq and self.training and torch.is_grad_enabled():
-            step_fn = self._make_deq_step_fn(
-                phi_current, mu_p_current, sigma_p,
-                mask, is_diagonal, eps, dtype,
-            )
-            mu_current, sigma_current = DEQFixedPoint.apply(
-                mu_current, sigma_current, step_fn,
-                self.n_iterations, self.deq_neumann_terms,
-            )
+            if self.deq_include_phi and self.update_phi:
+                # Joint (μ, Σ, φ) fixed-point: IFT corrects ALL three variables,
+                # eliminating the straight-through bias in the M-step φ gradient.
+                step_fn = self._make_deq_step_fn_with_phi(
+                    mu_p_current, sigma_p,
+                    mask, is_diagonal, eps, dtype,
+                )
+                mu_current, sigma_current, phi_current = DEQFixedPointFull.apply(
+                    mu_current, sigma_current, phi_current, step_fn,
+                    self.n_iterations, self.deq_neumann_terms,
+                )
+            else:
+                # Original (μ, Σ)-only fixed point; φ gets straight-through gradient.
+                step_fn = self._make_deq_step_fn(
+                    phi_current, mu_p_current, sigma_p,
+                    mask, is_diagonal, eps, dtype,
+                )
+                mu_current, sigma_current = DEQFixedPoint.apply(
+                    mu_current, sigma_current, step_fn,
+                    self.n_iterations, self.deq_neumann_terms,
+                )
 
         # =================================================================
         # STEP 5: Optional Gauge Frame Evolution via VFE Gradient (after loop)
