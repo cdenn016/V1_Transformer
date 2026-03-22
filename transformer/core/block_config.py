@@ -158,7 +158,7 @@ class BlockConfig:
             evolve_phi=config.get('evolve_phi', True),
             evolve_phi_e_step=config.get('evolve_phi_e_step', False),
             phi_update_interval=config.get('phi_update_interval', 1),
-            phi_lr=config.get('phi_lr', 0.05),
+            phi_lr=config.get('e_step_phi_lr', config.get('phi_lr', 0.05)),
             phi_max_norm=config.get('phi_max_norm', math.pi),
             phi_dim=config.get('phi_dim', 3),
             phi_natural_gradient=config.get('phi_natural_gradient', 'clip'),

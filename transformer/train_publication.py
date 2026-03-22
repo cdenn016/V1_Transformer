@@ -283,6 +283,19 @@ EM_CONFIG = {
                                           # Set gauge-mode=constant and the above 3 = true for transf limit
 
     # === E-step dynamics ===
+    'ffn_n_iterations':    1,
+
+    'ffn_alpha':           1.0,               # Prior coupling inside VFE E-step
+    'ffn_lambda_belief':   1.0,       # Belief alignment inside VFE E-step
+
+    'learnable_alpha':     True,
+    'ffn_learnable_alpha': True,    # Adaptive α_i = c0/(b0 + KL) per dimension
+
+    'evolve_sigma':        True,
+    'evolve_phi':          True,
+    'evolve_phi_e_step':   True,
+
+
     'ffn_n_iterations':    5,
     
     'ffn_alpha':           1.0,               # Prior coupling inside VFE E-step
@@ -296,6 +309,7 @@ EM_CONFIG = {
     'evolve_phi_e_step':   True,
         
     'ffn_learnable_lr':    True,
+    'e_step_phi_lr':       0.05,               # E-step φ descent step size (decoupled from M-step phi_lr)
 
     # === M-step: implicit differentiation ===
     'implicit_em':         False,
