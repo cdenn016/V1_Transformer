@@ -358,6 +358,24 @@ class GaugeTransformerBlock(nn.Module):
         if self.evolve_sigma and sigma_ffn is not None:
             sigma_q = sigma_ffn
 
+        # Per-layer sigma diagnostics (opt-in via model._debug_sigma = True)
+        if getattr(self, '_debug_sigma', False) and sigma_q is not None:
+            _sd = sigma_q.detach()
+            _eps = 1e-6
+            if _sd.dim() == 3:
+                _cond = (_sd.max(dim=-1).values / _sd.min(dim=-1).values.clamp(min=_eps)).mean().item()
+            else:
+                _diag_vals = torch.diagonal(_sd, dim1=-2, dim2=-1)
+                _cond = (_diag_vals.max(dim=-1).values / _diag_vals.min(dim=-1).values.clamp(min=_eps)).mean().item()
+            if not hasattr(self, '_sigma_log'):
+                self._sigma_log = []
+            self._sigma_log.append({
+                'sigma_mean': _sd.mean().item(),
+                'sigma_max': _sd.max().item(),
+                'sigma_min': _sd.min().item(),
+                'sigma_condition': _cond,
+            })
+
         # Residual connection (optional for pure VFE)
         if self.use_residual:
             mu_q = mu_q + mu_ffn
