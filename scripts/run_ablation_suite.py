@@ -84,7 +84,6 @@ BASELINE_CONFIG = {
     'evolve_phi': True,
     'evolve_phi_e_step': True,
     'phi_update_interval': 1,
-    'analytic_phi_grad': False,
     'diagonal_covariance': True,
     'exact_diagonal_transport': False,
     'isotropic_covariance': False,

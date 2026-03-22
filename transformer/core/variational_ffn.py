@@ -15,7 +15,6 @@ Key features:
 - Block-diagonal KL decomposition via irrep_dims for memory efficiency
 - Fused attention+gradient paths for diagonal covariance mode
 - Multi-head VFE: per-head beta_h through VFE iterations (multihead_vfe)
-- Analytic phi gradient: bypass autograd for dF/dphi (analytic_phi_grad)
 - Isotropic covariance: force Sigma = sigma^2 I (isotropic_covariance)
 - DEQ mode: implicit differentiation for E-step fixed point (use_deq)
 - Amortized inference: gradient flow through priors for learned E-step init
@@ -56,7 +55,6 @@ from transformer.core.gauge_utils import (
     fused_block_matrix_exp_pairs,
     fused_block_diagonal_kl_diag,
     fused_block_diagonal_kl_full,
-    analytic_phi_gradient_block_diag,
 )
 
 
@@ -2021,7 +2019,6 @@ class VariationalFFNDynamic(nn.Module):
         - multihead_vfe: per-head beta_h through VFE iterations (requires irrep_dims)
         - prior_bank / use_prior_bank: token-dependent priors via PriorBank and token_ids
         - learnable_alpha: Bayesian precision via Gamma-Normal conjugacy
-        - analytic_phi_grad: bypass autograd for dF/dphi
         - isotropic_covariance: force Sigma = sigma^2 I
         - DEQ mode (use_deq): implicit differentiation for E-step fixed point
         - amortized_inference: gradient flow through priors for learned E-step init
@@ -2082,9 +2079,6 @@ class VariationalFFNDynamic(nn.Module):
         isotropic_covariance: bool = False,   # If True, force Σ = σ²I after each E-step update
         # Amortized inference: gradient flow through priors for learned E-step init
         amortized_inference: bool = True,
-        # Analytic phi gradient: bypass autograd for ∂F/∂φ (saves ~250MB per phi update)
-        analytic_phi_grad: bool = False,
-        analytic_phi_grad_dexp_order: int = 4,  # dexp series truncation (4-8 typical)
         # Rotary Position Embeddings (RoPE) — must match attention sublayer setting
         use_rope: bool = False,
         rope_base: float = 10000.0,
@@ -2144,7 +2138,6 @@ class VariationalFFNDynamic(nn.Module):
             isotropic_covariance: If True, force Sigma = sigma^2 I after each update.
             amortized_inference: If True, gradients flow through priors for learned
                 E-step initialization.
-            analytic_phi_grad: If True, bypass autograd for dF/dphi.
             exact_diagonal_transport: When True with diagonal_covariance, lifts sigma
                 to full covariance via diag_embed for exact gauge transport, then
                 extracts the diagonal from the result. Disables fused diagonal paths.
@@ -2165,8 +2158,6 @@ class VariationalFFNDynamic(nn.Module):
         self.gauge_mode = gauge_mode
         self.isotropic_covariance = isotropic_covariance
         self.amortized_inference = amortized_inference
-        self.analytic_phi_grad = analytic_phi_grad
-        self.analytic_phi_grad_dexp_order = analytic_phi_grad_dexp_order
         self.obs_sigma_gradient = obs_sigma_gradient
         self.obs_sigma_weight = obs_sigma_weight
         self.detach_phi = detach_phi
@@ -2179,10 +2170,6 @@ class VariationalFFNDynamic(nn.Module):
         # RoPE: store so VFE iterations apply the same position encoding as attention
         self._use_rope_vfe = use_rope
         self._rope_base_vfe = rope_base
-        if analytic_phi_grad:
-            print(f"[VariationalFFNDynamic] Analytic φ gradient enabled (dexp_order={analytic_phi_grad_dexp_order})")
-            print(f"  → Bypasses autograd for ∂F/∂φ, saving ~250MB per phi update")
-
         # Constant gauge: store reference to attention module's per-head Ω parameters.
         # When gauge_mode='constant', these are used to build transport operators
         # in VFE iterations, ensuring consistency with the attention module.
@@ -2571,7 +2558,7 @@ class VariationalFFNDynamic(nn.Module):
 
         return omega_new
 
-    def _compute_phi_grad_analytic_or_autograd(
+    def _compute_phi_grad(
         self,
         phi_current: torch.Tensor,
         mu_current: torch.Tensor,
@@ -2581,74 +2568,10 @@ class VariationalFFNDynamic(nn.Module):
         eps: float,
         cached_block_exp_pairs: Optional[list] = None,
     ) -> Optional[torch.Tensor]:
-        """Compute ∂F_align/∂φ using either analytic or autograd path.
+        """Compute ∂F_align/∂φ via autograd.
 
         Returns the preconditioned gradient, or None if no gradient could be computed.
         """
-        # ── Analytic path (no autograd graph) ───────────────────────────
-        if (self.analytic_phi_grad and is_diagonal
-                and self.irrep_dims is not None):
-            
-            # Need beta and kl_matrix — compute with detached inputs (no autograd)
-            beta_kl_result = compute_attention_weights(
-                mu_q=mu_current.detach(),
-                sigma_q=sigma_current.detach() if sigma_current is not None else None,
-                phi=phi_current.detach(),
-                generators=self.generators,
-                kappa=self.kappa,
-                epsilon=eps,
-                mask=mask,
-                use_numba=False,
-                return_kl=True,
-                diagonal_covariance=is_diagonal,
-                irrep_dims=self.irrep_dims,
-                chunk_size=self.chunk_size,
-                mask_self_attention=self.mask_self_attention,
-                gauge_mode=self.gauge_mode,
-                cached_block_exp_pairs=cached_block_exp_pairs,
-                exact_diagonal_transport=self.exact_diagonal_transport,
-            )
-            if isinstance(beta_kl_result, tuple):
-                beta_phi, kl_matrix = beta_kl_result
-            else:
-                beta_phi = beta_kl_result
-                # Need KL matrix — recompute
-                _, kl_matrix = compute_attention_weights(
-                    mu_q=mu_current.detach(),
-                    sigma_q=sigma_current.detach() if sigma_current is not None else None,
-                    phi=phi_current.detach(),
-                    generators=self.generators,
-                    kappa=self.kappa,
-                    epsilon=eps,
-                    mask=mask,
-                    use_numba=False,
-                    return_kl=True,
-                    diagonal_covariance=is_diagonal,
-                    irrep_dims=self.irrep_dims,
-                    chunk_size=self.chunk_size,
-                    mask_self_attention=self.mask_self_attention,
-                    gauge_mode=self.gauge_mode,
-                    exact_diagonal_transport=self.exact_diagonal_transport,
-                )
-
-            grad_phi = analytic_phi_gradient_block_diag(
-                mu_q=mu_current.detach(),
-                sigma_q=sigma_current.detach(),
-                beta=beta_phi.detach(),
-                kl_matrix=kl_matrix.detach(),
-                phi=phi_current.detach(),
-                generators=self.generators,
-                irrep_dims=self.irrep_dims,
-                lambda_belief=self.lambda_belief,
-                kappa=self.kappa,
-                eps=eps,
-                dexp_order=self.analytic_phi_grad_dexp_order,
-                enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                cached_block_exp_pairs=cached_block_exp_pairs,
-            )
-            return self._precondition_phi_grad(grad_phi, phi_current)
-
-        # ── Autograd path (original) ───────────────────────────────────
         phi_for_grad = phi_current.clone().requires_grad_(True)
 
         if self.multihead_vfe:
@@ -3568,7 +3491,7 @@ class VariationalFFNDynamic(nn.Module):
                 else:
                     # Phi path (existing): matrix_exp + dexp series
                     _phi_bep = _mh_cached_bep if self.multihead_vfe else _cached_bep
-                    grad_phi = self._compute_phi_grad_analytic_or_autograd(
+                    grad_phi = self._compute_phi_grad(
                         phi_current, mu_current, sigma_current,
                         is_diagonal, mask, eps,
                         cached_block_exp_pairs=_phi_bep,
@@ -3624,7 +3547,7 @@ class VariationalFFNDynamic(nn.Module):
                         phi_current, self.generators, self.irrep_dims,
                         enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
                     )
-                grad_phi = self._compute_phi_grad_analytic_or_autograd(
+                grad_phi = self._compute_phi_grad(
                     phi_current, mu_current, sigma_current,
                     is_diagonal, mask, eps,
                     cached_block_exp_pairs=_phi_bep_post,
