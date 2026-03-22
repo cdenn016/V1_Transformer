@@ -3437,7 +3437,7 @@ class VariationalFFNDynamic(nn.Module):
                     'delta_mu_norm': delta_mu.detach().norm().item(),
                     'mu_norm': mu_current.detach().norm().item(),
                     'sigma_mean': sigma_current.detach().mean().item(),
-                    'effective_lr': effective_lr,
+                    'effective_lr': effective_lr.detach().item() if isinstance(effective_lr, torch.Tensor) else float(effective_lr),
                     'scale_mean': scale.detach().mean().item(),
                 }
                 if mu_p_current is not None:
