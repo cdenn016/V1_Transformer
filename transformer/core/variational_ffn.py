@@ -2757,7 +2757,23 @@ class VariationalFFNDynamic(nn.Module):
 
             nat_grad_mu, nat_grad_sigma = compute_natural_gradient_gpu(
                 grad_mu, grad_sigma, sigma_in, eps=eps,
+            )
 
+            # Norm clipping for nat_grad_mu (was missing in DEQ path)
+            nat_grad_mu_norm = torch.linalg.norm(nat_grad_mu, dim=-1, keepdim=True)
+            nat_grad_mu = nat_grad_mu * torch.clamp(
+                500.0 / (nat_grad_mu_norm + eps), max=1.0
+            )
+
+            # Norm clipping for nat_grad_sigma (matching main path Fix 1)
+            if is_diagonal:
+                nat_grad_sigma_norm = torch.linalg.norm(nat_grad_sigma, dim=-1, keepdim=True)
+            else:
+                nat_grad_sigma_norm = torch.linalg.norm(
+                    nat_grad_sigma.flatten(-2), dim=-1, keepdim=True
+                ).unsqueeze(-1)
+            nat_grad_sigma = nat_grad_sigma * torch.clamp(
+                500.0 / (nat_grad_sigma_norm + eps), max=1.0
             )
 
             # mu update with trust region
@@ -2773,19 +2789,18 @@ class VariationalFFNDynamic(nn.Module):
             scale = torch.clamp(2.0 / (w_norm + eps), max=1.0)
             mu_out = mu_in + scale * delta_mu
 
-            # sigma update
+            # sigma update — restructured step_size/trust_region (matching main path Fix 2)
             if self.update_sigma:
-                sigma_lr = self.lr * 0.05
+                sigma_trust = self.lr * 0.05
                 if is_diagonal:
                     sigma_out = retract_spd_diagonal_torch(
                         sigma_diag=sigma_in, delta_sigma=-nat_grad_sigma,
-                        step_size=sigma_lr, trust_region=0.2, eps=eps,
+                        step_size=1.0, trust_region=sigma_trust, eps=eps,
                     )
                 else:
                     sigma_out = retract_spd_torch(
                         Sigma=sigma_in, delta_Sigma=-nat_grad_sigma,
-                        step_size=sigma_lr, trust_region=0.1, eps=eps,
-
+                        step_size=1.0, trust_region=sigma_trust * 0.5, eps=eps,
                     )
             else:
                 sigma_out = sigma_in
