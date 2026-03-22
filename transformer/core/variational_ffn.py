@@ -3372,6 +3372,7 @@ class VariationalFFNDynamic(nn.Module):
             # Clamp natural gradient norm to prevent oscillatory divergence
             # in deeper layers where Sigma eigenvalues amplify gradients
             nat_grad_mu_norm = torch.linalg.norm(nat_grad_mu, dim=-1, keepdim=True)
+            _raw_nat_grad_norm = nat_grad_mu.detach().norm().item()  # pre-clamp for diagnostics
             max_nat_grad_norm = 500.0
             nat_grad_scale = torch.clamp(
                 max_nat_grad_norm / (nat_grad_mu_norm + eps), max=1.0
@@ -3423,6 +3424,49 @@ class VariationalFFNDynamic(nn.Module):
                     )
 
             # =============================================================
+            # STEP 4b2: Sigma condition clamping
+            # =============================================================
+            # Prevent sigma anisotropy from growing unbounded. When
+            # sigma_max / sigma_min > max_condition, clamp outlier
+            # dimensions toward the geometric mean. This keeps the
+            # natural gradient well-conditioned without forcing full
+            # isotropy.
+            if self.update_sigma:
+                max_condition = 10.0
+                if is_diagonal:
+                    # sigma_current: (B, N, K)
+                    s_min = sigma_current.min(dim=-1, keepdim=True).values.clamp(min=eps)
+                    s_max = sigma_current.max(dim=-1, keepdim=True).values
+                    condition = s_max / s_min  # (B, N, 1)
+                    needs_clamp = condition > max_condition
+                    if needs_clamp.any():
+                        # Geometric mean preserves det(Sigma) = product of eigenvalues
+                        geo_mean = sigma_current.log().mean(dim=-1, keepdim=True).exp()
+                        lower = geo_mean / max_condition.sqrt() if isinstance(max_condition, torch.Tensor) else geo_mean / (max_condition ** 0.5)
+                        upper = geo_mean * (max_condition ** 0.5)
+                        sigma_clamped = sigma_current.clamp(min=lower, max=upper)
+                        sigma_current = torch.where(
+                            needs_clamp.expand_as(sigma_current),
+                            sigma_clamped,
+                            sigma_current,
+                        )
+                else:
+                    # Full covariance: clamp eigenvalue ratio
+                    eigvals = torch.linalg.eigvalsh(sigma_current)  # (B, N, K)
+                    e_min = eigvals[..., 0:1].clamp(min=eps)
+                    e_max = eigvals[..., -1:]
+                    condition = e_max / e_min
+                    if (condition > max_condition).any():
+                        geo_mean = eigvals.log().mean(dim=-1, keepdim=True).exp()
+                        lower = geo_mean / (max_condition ** 0.5)
+                        # Regularize toward isotropic: Sigma → Sigma + ridge * I
+                        ridge = (lower - e_min).clamp(min=0.0).mean(dim=-1, keepdim=True)
+                        K = sigma_current.shape[-1]
+                        sigma_current = sigma_current + ridge.unsqueeze(-1) * torch.eye(
+                            K, device=sigma_current.device, dtype=sigma_current.dtype
+                        )
+
+            # =============================================================
             # STEP 4c: Isotropic covariance enforcement (Limit 1)
             # =============================================================
             # After sigma update, collapse per-dimension variances to scalar σ²I.
@@ -3450,9 +3494,13 @@ class VariationalFFNDynamic(nn.Module):
                     'grad_mu_norm': grad_mu.detach().norm().item(),
                     'grad_sigma_norm': grad_sigma.detach().norm().item(),
                     'nat_grad_mu_norm': nat_grad_mu.detach().norm().item(),
+                    'nat_grad_mu_raw_norm': _raw_nat_grad_norm,
                     'delta_mu_norm': delta_mu.detach().norm().item(),
                     'mu_norm': mu_current.detach().norm().item(),
                     'sigma_mean': sigma_current.detach().mean().item(),
+                    'sigma_max': sigma_current.detach().max().item(),
+                    'sigma_min': sigma_current.detach().min().item(),
+                    'sigma_std': sigma_current.detach().std().item(),
                     'effective_lr': effective_lr.detach().item() if isinstance(effective_lr, torch.Tensor) else float(effective_lr),
                     'scale_mean': scale.detach().mean().item(),
                 }

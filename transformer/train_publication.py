@@ -1418,8 +1418,9 @@ class IterationDiagnosticsTracker:
 
     HEADERS = [
         'step', 'layer', 'iteration',
-        'grad_mu_norm', 'grad_sigma_norm', 'nat_grad_mu_norm',
+        'grad_mu_norm', 'grad_sigma_norm', 'nat_grad_mu_norm', 'nat_grad_mu_raw_norm',
         'delta_mu_norm', 'mu_norm', 'sigma_mean',
+        'sigma_max', 'sigma_min', 'sigma_std',
         'effective_lr', 'scale_mean',
         'mu_diff_to_prior_norm', 'beta_entropy', 'mu_change_rel',
     ]
