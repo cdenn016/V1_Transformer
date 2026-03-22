@@ -490,6 +490,10 @@ class GaugeTransformerLM(nn.Module):
         elif tie_embeddings and gauge_fixed_priors:
             print("Warning: tie_embeddings disabled because gauge_fixed_priors=True")
 
+        # Per-layer diagnostics (set externally by trainer)
+        self._collect_layer_diagnostics = False
+        self._layer_diagnostics: list = []
+
         # Count parameters
         n_params = sum(p.numel() for p in self.parameters())
         print(f"GaugeTransformerLM initialized: {n_params/1e6:.2f}M parameters")
@@ -853,6 +857,10 @@ class GaugeTransformerLM(nn.Module):
         for layer_idx, block in enumerate(self.transformer.blocks):
             is_final = (layer_idx == n_blocks - 1)
 
+            # Save pre-layer state for diagnostics
+            if self._collect_layer_diagnostics:
+                _mu_before_layer = mu_q.detach().clone()
+
             # Pre-norm + attention with tracking
             mu_normalized = block.norm1(mu_q)
             mu_attn, sigma_attn, beta, kl = block.attention(
@@ -910,6 +918,49 @@ class GaugeTransformerLM(nn.Module):
             # Propagate updated phi to next layer (critical when evolve_phi=True)
             if phi_ffn is not None:
                 phi = phi_ffn
+
+            # =============================================================
+            # Per-layer diagnostics collection
+            # =============================================================
+            if self._collect_layer_diagnostics:
+                _ld = {
+                    'layer': layer_idx,
+                    'mu_input_norm': _mu_before_layer.norm().item(),
+                    'mu_output_norm': mu_q.detach().norm().item(),
+                    'delta_mu_norm': (mu_q.detach() - _mu_before_layer).norm().item(),
+                    'delta_mu_relative': (
+                        (mu_q.detach() - _mu_before_layer).norm().item()
+                        / (_mu_before_layer.norm().item() + 1e-8)
+                    ),
+                    'sigma_mean_diag': sigma_q.detach().mean().item() if sigma_q is not None else 0.0,
+                    'phi_norm': phi.detach().norm().item(),
+                    'mu_attn_norm': mu_attn.detach().norm().item(),
+                    'mu_ffn_norm': mu_ffn.detach().norm().item(),
+                    'residual_ratio': (
+                        mu_ffn.detach().norm().item()
+                        / (mu_q.detach().norm().item() + 1e-8)
+                    ),
+                    'mu_position_std': mu_q.detach().std(dim=1).mean().item(),
+                }
+                if beta is not None:
+                    _beta_d = beta.detach().clamp(min=1e-10)
+                    _ld['attention_entropy'] = -(_beta_d * _beta_d.log()).sum(dim=-1).mean().item()
+                if kl is not None:
+                    _ld['kl_mean'] = kl.detach().mean().item()
+                    _ld['kl_std'] = kl.detach().std().item()
+                # Per-layer CE probe
+                if targets is not None:
+                    with torch.no_grad():
+                        _probe_mu = self.transformer.final_norm(mu_q.detach())
+                        _probe_logits = self.out_proj(_probe_mu)
+                        _ld['ce_loss'] = F.cross_entropy(
+                            _probe_logits.reshape(-1, _probe_logits.size(-1)),
+                            targets.reshape(-1),
+                            reduction='mean',
+                            ignore_index=-100,
+                        ).item()
+                        _ld['perplexity'] = math.exp(min(_ld['ce_loss'], 20.0))
+                self._layer_diagnostics.append(_ld)
 
         # Final norm
         mu_q = self.transformer.final_norm(mu_q)

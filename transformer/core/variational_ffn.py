@@ -2288,6 +2288,10 @@ class VariationalFFNDynamic(nn.Module):
                 "Create a PriorBank and pass it to VariationalFFNDynamic."
             )
 
+        # Per-iteration diagnostics (set externally by trainer)
+        self._collect_iteration_diagnostics = False
+        self._iteration_diagnostics: list = []
+
         # DEQ implicit differentiation
         self.use_deq = use_deq
         self.deq_neumann_terms = deq_neumann_terms
@@ -3497,6 +3501,46 @@ class VariationalFFNDynamic(nn.Module):
                     sigma_current = scalar_var.unsqueeze(-1) * torch.eye(
                         K, device=sigma_current.device, dtype=sigma_current.dtype
                     )
+
+            # =============================================================
+            # DIAGNOSTIC: Per-iteration convergence data
+            # =============================================================
+            if self._collect_iteration_diagnostics:
+                _diag = {
+                    'iteration': iteration,
+                    'grad_mu_norm': grad_mu.detach().norm().item(),
+                    'grad_sigma_norm': grad_sigma.detach().norm().item(),
+                    'nat_grad_mu_norm': nat_grad_mu.detach().norm().item(),
+                    'delta_mu_norm': delta_mu.detach().norm().item(),
+                    'mu_norm': mu_current.detach().norm().item(),
+                    'sigma_mean': sigma_current.detach().mean().item(),
+                    'effective_lr': effective_lr,
+                    'scale_mean': scale.detach().mean().item(),
+                }
+                if mu_p_current is not None:
+                    _diag['mu_diff_to_prior_norm'] = (mu_current - mu_p_current).detach().norm().item()
+                # Beta entropy from last computed beta
+                try:
+                    if self.multihead_vfe and beta_heads:
+                        _b_diag = beta_heads[-1].detach().clamp(min=1e-10)
+                    elif 'beta_current' in locals() and beta_current is not None:
+                        _b_diag = beta_current.detach().clamp(min=1e-10)
+                    else:
+                        _b_diag = None
+                    if _b_diag is not None:
+                        _diag['beta_entropy'] = -(_b_diag * _b_diag.log()).sum(dim=-1).mean().item()
+                except Exception:
+                    pass
+                # Relative belief change from previous iteration
+                if iteration == 0:
+                    self._diag_prev_mu = mu_current.detach().clone()
+                else:
+                    _diag['mu_change_rel'] = (
+                        (mu_current - self._diag_prev_mu).detach().norm().item()
+                        / (mu_current.detach().norm().item() + 1e-8)
+                    )
+                    self._diag_prev_mu = mu_current.detach().clone()
+                self._iteration_diagnostics.append(_diag)
 
             # =============================================================
             # STEP 4b: Optional Gauge Frame Evolution DURING E-step
