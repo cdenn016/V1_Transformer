@@ -2862,9 +2862,9 @@ class VariationalFFNDynamic(nn.Module):
             scale = torch.clamp(2.0 / (w_norm + eps), max=1.0)
             mu_out = mu_in + scale * delta_mu
 
-            # sigma update — restructured step_size/trust_region (matching main path Fix 2)
+            # sigma update — calibrated step: ~0.1% max change per iter
             if self.update_sigma:
-                sigma_trust = self.lr * 0.05
+                sigma_trust = self.lr * 0.01
                 if is_diagonal:
                     sigma_out = retract_spd_diagonal_torch(
                         sigma_diag=sigma_in, delta_sigma=-nat_grad_sigma,
@@ -3036,9 +3036,9 @@ class VariationalFFNDynamic(nn.Module):
             scale = torch.clamp(2.0 / (w_norm + eps), max=1.0)
             mu_out = mu_in + scale * delta_mu
 
-            # sigma update
+            # sigma update — calibrated step: ~0.1% max change per iter
             if self.update_sigma:
-                sigma_trust = self.lr * 0.05
+                sigma_trust = self.lr * 0.01
                 if is_diagonal:
                     sigma_out = retract_spd_diagonal_torch(
                         sigma_diag=sigma_in, delta_sigma=-nat_grad_sigma,
@@ -3756,18 +3756,13 @@ class VariationalFFNDynamic(nn.Module):
             mu_current = mu_current + scale * delta_mu
 
             if self.update_sigma:
-                # SPD-preserving retraction with restructured step control.
-                #
-                # Previously, step_size=sigma_lr AND trust_region=0.2 double-attenuated:
-                #   whitened = delta/sigma, clamped to [-0.2, 0.2]
-                #   exp_arg = sigma_lr * whitened → max |exp_arg| = 0.2 * 0.00125 = 0.00025
-                #   → sigma changed by ~0.025% per iteration (effectively frozen)
-                #
-                # Fix: use step_size=1.0 so the trust_region alone controls the max
-                # relative change per iteration. The sigma_trust value absorbs the
-                # 2σ² natural gradient correction (0.0125 factor) and effective_lr.
-                sigma_trust_diag = effective_lr * 0.05    # ~0.5% max change at full lr
-                sigma_trust_full = effective_lr * 0.025   # ~0.25% max change (full cov more sensitive)
+                # SPD-preserving retraction: sigma_new = sigma * exp(step * clip(delta/sigma, -trust, trust))
+                # step_size=1.0 so trust_region alone controls max relative change.
+                # nat_grad_sigma = 2σ²·grad → whitened = -2σ·grad, clipped by trust.
+                # With effective_lr≈0.1: max_exp = 0.001 → ~0.1% per iter, ~1% over 10 iters.
+                # Calibrated between frozen (pre-#768: 0.025%/iter) and overcorrected (0.5%/iter).
+                sigma_trust_diag = effective_lr * 0.01    # ~0.1% max change at full lr
+                sigma_trust_full = effective_lr * 0.005   # ~0.05% max change (full cov more sensitive)
                 if is_diagonal:
                     sigma_current = retract_spd_diagonal_torch(
                         sigma_diag=sigma_current,
@@ -3794,32 +3789,35 @@ class VariationalFFNDynamic(nn.Module):
             # natural gradient well-conditioned without forcing full
             # isotropy.
             if self.update_sigma:
-                target_condition = 10.0
+                max_condition = 10.0
                 if is_diagonal:
-                    # Smooth condition clamping: quadratic pull toward geometric mean
-                    # when condition number exceeds target. Unlike hard torch.where(),
-                    # this is differentiable at the threshold boundary, eliminating
-                    # gradient noise for tokens oscillating near the condition limit.
+                    # sigma_current: (B, N, K)
                     s_min = sigma_current.min(dim=-1, keepdim=True).values.clamp(min=eps)
                     s_max = sigma_current.max(dim=-1, keepdim=True).values
                     condition = s_max / s_min  # (B, N, 1)
-                    excess = ((condition - target_condition) / target_condition).clamp(min=0.0)
-                    pull_strength = (excess ** 2).clamp(max=1.0)  # quadratic, saturates at 1.0
-                    if (pull_strength > 0).any():
+                    needs_clamp = condition > max_condition
+                    if needs_clamp.any():
+                        # Geometric mean preserves det(Sigma) = product of eigenvalues
                         geo_mean = sigma_current.log().mean(dim=-1, keepdim=True).exp()
-                        sigma_current = (1.0 - pull_strength) * sigma_current + pull_strength * geo_mean
+                        lower = geo_mean / (max_condition ** 0.5)
+                        upper = geo_mean * (max_condition ** 0.5)
+                        sigma_clamped = sigma_current.clamp(min=lower, max=upper)
+                        sigma_current = torch.where(
+                            needs_clamp.expand_as(sigma_current),
+                            sigma_clamped,
+                            sigma_current,
+                        )
                 else:
-                    # Full covariance: smooth eigenvalue ratio regularization
+                    # Full covariance: clamp eigenvalue ratio
                     eigvals = torch.linalg.eigvalsh(sigma_current)  # (B, N, K)
                     e_min = eigvals[..., 0:1].clamp(min=eps)
                     e_max = eigvals[..., -1:]
                     condition = e_max / e_min
-                    excess = ((condition - target_condition) / target_condition).clamp(min=0.0)
-                    pull_strength = (excess ** 2).clamp(max=1.0)
-                    if (pull_strength > 0).any():
+                    if (condition > max_condition).any():
                         geo_mean = eigvals.log().mean(dim=-1, keepdim=True).exp()
-                        lower = geo_mean / (target_condition ** 0.5)
-                        ridge = (pull_strength * (lower - e_min).clamp(min=0.0)).mean(dim=-1, keepdim=True)
+                        lower = geo_mean / (max_condition ** 0.5)
+                        # Regularize toward isotropic: Sigma → Sigma + ridge * I
+                        ridge = (lower - e_min).clamp(min=0.0).mean(dim=-1, keepdim=True)
                         K = sigma_current.shape[-1]
                         sigma_current = sigma_current + ridge.unsqueeze(-1) * torch.eye(
                             K, device=sigma_current.device, dtype=sigma_current.dtype
