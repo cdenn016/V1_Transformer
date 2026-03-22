@@ -80,8 +80,10 @@ class PureVFEConfig:
     # Recovery
     nan_recovery: bool = True           # Reset beliefs to priors on NaN detection
 
-    # Causal masking
+    # Attention masking and priors (manuscript §3.3.4)
     causal: bool = True
+    mask_self_attention: bool = False    # Mask KL diagonal to prevent self-attention collapse
+    alibi_slope: float = 0.0            # ALiBi slope m (0 = uniform prior, >0 = recency bias)
 
     # Device
     device: str = "cuda"
