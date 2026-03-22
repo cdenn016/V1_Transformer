@@ -3372,6 +3372,7 @@ class VariationalFFNDynamic(nn.Module):
             # Clamp natural gradient norm to prevent oscillatory divergence
             # in deeper layers where Sigma eigenvalues amplify gradients
             nat_grad_mu_norm = torch.linalg.norm(nat_grad_mu, dim=-1, keepdim=True)
+            _raw_nat_grad_norm = nat_grad_mu.detach().norm().item()  # pre-clamp for diagnostics
             max_nat_grad_norm = 500.0
             nat_grad_scale = torch.clamp(
                 max_nat_grad_norm / (nat_grad_mu_norm + eps), max=1.0
@@ -3450,9 +3451,13 @@ class VariationalFFNDynamic(nn.Module):
                     'grad_mu_norm': grad_mu.detach().norm().item(),
                     'grad_sigma_norm': grad_sigma.detach().norm().item(),
                     'nat_grad_mu_norm': nat_grad_mu.detach().norm().item(),
+                    'nat_grad_mu_raw_norm': _raw_nat_grad_norm,
                     'delta_mu_norm': delta_mu.detach().norm().item(),
                     'mu_norm': mu_current.detach().norm().item(),
                     'sigma_mean': sigma_current.detach().mean().item(),
+                    'sigma_max': sigma_current.detach().max().item(),
+                    'sigma_min': sigma_current.detach().min().item(),
+                    'sigma_std': sigma_current.detach().std().item(),
                     'effective_lr': effective_lr.detach().item() if isinstance(effective_lr, torch.Tensor) else float(effective_lr),
                     'scale_mean': scale.detach().mean().item(),
                 }
