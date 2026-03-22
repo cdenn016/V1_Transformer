@@ -12,12 +12,6 @@ import torch
 from collections import defaultdict
 from typing import List, Optional, Tuple
 
-try:
-    from .triton_kernels import pairwise_kl_diag_triton as _pairwise_kl_diag_triton
-    from .triton_kernels import TRITON_AVAILABLE as _TRITON_AVAILABLE
-except ImportError:
-    _TRITON_AVAILABLE = False
-    _pairwise_kl_diag_triton = None
 
 
 def stable_matrix_exp_pair(
@@ -275,22 +269,8 @@ def fused_block_diagonal_kl_diag(
     for idx, s, e, d in block_ranges:
         dim_groups[d].append((idx, s, e))
 
-    # ── Triton dispatch (zero intermediate memory) ──────────────────────
-    groups_to_process = dim_groups
-    if _TRITON_AVAILABLE and device.type == 'cuda':
-        try:
-            kl_triton, fallback_groups = _pairwise_kl_diag_triton(
-                mu_q, sigma_q, block_exp_pairs, irrep_dims, eps
-            )
-            kl_total = kl_total + kl_triton.clamp(max=kl_max).nan_to_num(
-                nan=0.0, posinf=kl_max, neginf=0.0
-            )
-            groups_to_process = fallback_groups  # empty if all dims handled
-        except Exception:
-            pass  # fall through to PyTorch path
-
     # ── PyTorch path (tiled for memory efficiency) ──────────────────────
-    for d, group in groups_to_process.items():
+    for d, group in dim_groups.items():
         n_blocks = len(group)
 
         # Stack beliefs: (n_blocks, B, N, d)

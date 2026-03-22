@@ -33,7 +33,6 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 - `prior_bank.py` — `PriorBank` (unified embedding + output projection via KL)
 - `connection.py` — `GaugeConnection` (non-flat parallel transport, holonomy experiments)
 - `block_config.py` — `BlockConfig` dataclass (single source of truth for gauge group structure)
-- `triton_kernels.py` — GPU-accelerated pairwise KL computation
 
 ### `transformer/analysis/` — Diagnostics
 
