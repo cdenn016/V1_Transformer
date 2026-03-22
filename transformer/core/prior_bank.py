@@ -73,6 +73,8 @@ class PriorBank(nn.Module):
         # Direct Omega parameterization
         gauge_param: str = 'phi',  # 'phi' or 'omega'
         omega_head_dims: Optional[list] = None,  # Per-head dims for omega path
+        # Gradient scaling for sigma in decode (CE loss path)
+        sigma_ce_scale: float = 0.01,  # Fraction of CE gradient passed to sigma_p
     ):
         """
         Initialize the prior bank.
@@ -97,6 +99,7 @@ class PriorBank(nn.Module):
         self.phi_dim = phi_dim
         self.gauge_param = gauge_param
         self.omega_head_dims = omega_head_dims
+        self.sigma_ce_scale = sigma_ce_scale
 
         # Dimension-aware initialization: √(ln V / K) makes pairwise KL ≈ ln(V).
         # Old 1/√K made KL = O(1), but attention divides by √K_h →
@@ -345,7 +348,16 @@ class PriorBank(nn.Module):
 
         variance_floor = max(self.eps, 1e-4)
         sigma_q_safe = sigma_q.clamp(min=variance_floor)    # (B, N, K)
-        sigma_p_safe = sigma_p.clamp(min=variance_floor)    # (V, K)
+        sigma_p_clamped = sigma_p.clamp(min=variance_floor)  # (V, K)
+
+        # Scale sigma_p gradient from CE's precision (1/σ_p) terms.
+        # Gradient to log_sigma_p scales as (mu_q-mu_p)²/sigma_p, creating a
+        # positive feedback loop: CE shrinks sigma_p for discrimination →
+        # gradient grows as 1/sigma_p → sigma_p shrinks faster → explosion.
+        # Detach-scale trick: forward value unchanged, backward gets scale×gradient.
+        # sigma_q stays unscaled (its CE gradient flows back to E-step parameters).
+        _s = self.sigma_ce_scale
+        sigma_p_safe = sigma_p_clamped.detach() + _s * (sigma_p_clamped - sigma_p_clamped.detach())
 
         inv_sigma_p = 1.0 / sigma_p_safe                    # (V, K)
         mu_p_inv_sigma_p = mu_p * inv_sigma_p               # (V, K)
