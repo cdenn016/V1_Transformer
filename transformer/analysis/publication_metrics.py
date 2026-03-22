@@ -46,6 +46,10 @@ from .semantics import (
     plot_gauge_frame_clustering,
     analyze_omega_semantics,
     plot_omega_clustering,
+    analyze_sigma_semantics,
+    analyze_holonomy_semantic_correlation,
+    compute_semantic_field_coherence,
+    SemanticTrajectoryTracker,
 )
 
 # Import holonomy analysis
@@ -792,6 +796,9 @@ class PublicationMetrics:
         self.semantic_analysis_history: List[Dict[str, Any]] = []
         self.semantic_analysis_interval: int = 10000  # Default: analyze every 10k steps
 
+        # Semantic trajectory tracker (lightweight per-step snapshots)
+        self.semantic_tracker = SemanticTrajectoryTracker(interval=5000)
+
         # Holonomy tracking for non-flat transport experiments
         self.holonomy_history: List[HolonomyProfile] = []
         self.holonomy_interval: int = 500  # Default: compute every 500 steps
@@ -890,6 +897,10 @@ class PublicationMetrics:
         # Store in history
         self.semantic_analysis_history.append(results)
 
+        # Record lightweight trajectory snapshot
+        if self.semantic_tracker.should_record(step):
+            self.semantic_tracker.record(model, step)
+
         
         return results
 
@@ -941,6 +952,25 @@ class PublicationMetrics:
                 serializable_history = [make_serializable(entry) for entry in self.semantic_analysis_history]
                 json.dump(serializable_history, f, indent=2)
             print(f"  Saved semantic analysis history to: {history_path}")
+
+        # Save semantic trajectory
+        if self.semantic_tracker.snapshots:
+            traj_path = self.experiment_dir / "semantic_trajectory.json"
+            self.semantic_tracker.save(traj_path)
+            trajectory_summary = self.semantic_tracker.summarize()
+            results['trajectory_summary'] = trajectory_summary
+            print(f"  Saved semantic trajectory ({len(self.semantic_tracker.snapshots)} snapshots) to: {traj_path}")
+
+        # Holonomy-semantic correlation
+        try:
+            holonomy_sem = analyze_holonomy_semantic_correlation(
+                model=model, n_tokens=200, n_triangles=100, verbose=verbose,
+            )
+            if 'error' not in holonomy_sem:
+                results['holonomy_semantic'] = holonomy_sem
+        except Exception as e:
+            if verbose:
+                print(f"  [WARN] Holonomy-semantic analysis failed: {e}")
 
         return results
 
