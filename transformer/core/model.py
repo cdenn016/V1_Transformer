@@ -440,6 +440,7 @@ class GaugeTransformerLM(nn.Module):
                 phi_scale=config.get('phi_scale', 0.3),
                 gauge_param=gauge_param,
                 omega_head_dims=self.omega_head_dims,
+                sigma_ce_scale=config.get('sigma_ce_scale', 0.01),
             )
             print(f"[GaugeTransformerLM] Created PriorBank with token-dependent priors (vocab_size={vocab_size})")
             print(f"                     gauge_fixed_priors={gauge_fixed_priors}, tau={self.prior_bank_tau}")

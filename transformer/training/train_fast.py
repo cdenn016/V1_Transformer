@@ -137,6 +137,12 @@ class FastTrainingConfig:
     use_p_flow: bool = False          # Enable P-flow updates
     p_flow_ema_decay: float = 0.99    # EMA decay (0.99 = 1% update per step)
 
+    # SIGMA DETACH: Scale CE gradient to sigma_p in PriorBank.decode
+    # 0.0 = full detach (no CE gradient to sigma_p, only hyper-prior drives it)
+    # 1.0 = full gradient (unscaled CE gradient, risks 1/sigma_p divergence)
+    # 0.01 = default (1% of CE gradient passes through)
+    sigma_ce_scale: float = 0.01
+
     # PHI DETACH: Detach phi from backprop in non-amortized mode
     detach_phi: bool = False             # Enables fully backprop-free with phi P-flow
 
