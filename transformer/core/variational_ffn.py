@@ -3229,25 +3229,34 @@ class VariationalFFNDynamic(nn.Module):
             else:
                 mu_p_from_bank, sigma_p_from_bank, _ = _bank_out
 
-            # Use PriorBank priors for VFE dynamics
+            # Use PriorBank priors for VFE dynamics.
+            # mu_p: live (amortized gradient is well-conditioned).
+            # sigma_p: detached (M-step parameter; 1/σ_p in E-step creates feedback).
             mu_p_current = mu_p_from_bank
 
             # Convert diagonal sigma_p to full covariance if needed
             if is_diagonal:
-                sigma_p = sigma_p_from_bank
+                sigma_p = sigma_p_from_bank.detach()
             else:
-                sigma_p = torch.diag_embed(sigma_p_from_bank)  # (B, N, K) -> (B, N, K, K)
+                sigma_p = torch.diag_embed(sigma_p_from_bank.detach())
 
         else:
             # Standard mode: use embedding priors
             if self.amortized_inference:
-                # Amortized: gradient flows through priors → embeddings learn good E-step init
+                # Amortized: gradient flows through mu_p → embeddings learn good E-step init.
+                # mu_p gradient is well-conditioned: d(grad)/d(mu_p) = -α/σ_p, no feedback loop.
                 mu_p_current = mu_prior.clone()
-                sigma_p = sigma.clone()
             else:
                 # Non-amortized: detach priors (fixed reference, Eq. 10 in manuscript)
                 mu_p_current = mu_prior.detach().clone()
-                sigma_p = sigma.detach().clone()
+
+            # sigma_p is ALWAYS detached in the E-step: it is an M-step parameter (Level 2).
+            # The E-step treats (μ_p, σ_p) as fixed while inferring q. Letting CE gradient
+            # flow through the E-step's 1/σ_p terms creates positive feedback: smaller σ_p
+            # → larger gradient → even smaller σ_p. The M-step loss (lambda_hyper · KL(s||h))
+            # provides the correct, bounded gradient for sigma learning.
+            sigma_p = sigma.detach().clone()
+
 
         # Current state (will evolve)
         # Implicit EM: detach beliefs at E-step start (proper EM boundary).
