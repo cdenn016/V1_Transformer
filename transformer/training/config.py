@@ -68,6 +68,21 @@ class TrainingConfig:
     #
     # For embedding parameters (μ_p, σ_p, φ_p), weight decay is the hyper-prior
     # precision that prevents prior drift. Larger wd = tighter hyper-prior.
+    # Optimizer type:
+    #   'adamw': Standard AdamW (default). Diagonal Fisher approximation via EMA.
+    #   'riemannian_adam': AdamW + Killing-form metric for phi + Fisher metric for mu.
+    #       Applies the correct Riemannian gradient on the Lie algebra (Killing form
+    #       g̃_ab = 2K tr(G_a^T G_b) - 2 tr(G_a) tr(G_b)) and the information-geometric
+    #       natural gradient for location parameters (scale by variance).
+    #   'natural_gradient': Per-token block-diagonal empirical Fisher.
+    #       Maintains K×K Fisher blocks per vocabulary token via EMA of gradient
+    #       outer products. O(V·K³) per step. Memory: V×K×K floats.
+    optimizer_type: str = 'adamw'
+
+    # Natural gradient settings (only used when optimizer_type='natural_gradient')
+    fisher_ema_decay: float = 0.95   # EMA decay for Fisher matrix estimation
+    fisher_damping: float = 1e-4     # Tikhonov regularization λI for invertibility
+
     weight_decay: float = 0.1
     # Embedding-specific weight decay (Level 3 hyper-prior on priors).
     # None = use weight_decay (same as other params).
