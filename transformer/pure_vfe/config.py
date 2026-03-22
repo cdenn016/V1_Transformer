@@ -67,6 +67,12 @@ class PureVFEConfig:
     omega_negative_det_fraction: float = 0.0  # Fraction of omega frames initialized in GL⁻(K) (det < 0)
     phi_max_norm: float = 3.14159       # Max norm for phi (π = 180° rotation)
 
+    # M-step per-component ratios (relative to eta_M)
+    # Natural gradient normalizes curvature, but Σ_p and pos_Ω need slower
+    # updates for stability. These ratios are multiplied into eta_M.
+    m_step_sigma_ratio: float = 0.2     # Σ_p step = eta_M × this (SPD sensitivity)
+    m_step_pos_ratio: float = 0.1       # pos_Ω step = eta_M × this (positional stability)
+
     # M-step options
     sigma_obs_grad: str = 'none'        # 'none' (match VFE dynamic), 'diagonal', 'full'
     m_step_eta_floor: float = 0.01      # Min multiplier for confidence-weighted eta_M

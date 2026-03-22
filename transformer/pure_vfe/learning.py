@@ -310,9 +310,10 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     # Natural gradient on SPD and retract
     nat_Sigma = natural_grad_sigma(grad_Sigma, Sigma_all)
     nat_Sigma = clip_matrix_norm(nat_Sigma, config.trust_region_sigma)
-    # Use even smaller step for Sigma (5x slower, matching dynamic transformer's sigma_lr/mu_lr ratio)
+    # Σ_p uses a reduced step size (SPD retraction is geometrically sensitive)
+    _sigma_ratio = getattr(config, 'm_step_sigma_ratio', 0.2)
     Sigma_new = retract_spd(
-        Sigma_all, nat_Sigma, effective_eta_M * 0.2,
+        Sigma_all, nat_Sigma, effective_eta_M * _sigma_ratio,
         eps_min=config.spd_eps_min, kappa_max=config.spd_kappa_max,
     )
 
@@ -388,6 +389,10 @@ def _update_pos_omega(Omega_star, token_ids, model, config):
     grad = -(Om_avg - pos_Om)
     grad = torch.clamp(grad, -omega_grad_clamp, omega_grad_clamp)
 
+    # Positional frames use a reduced step size (must be stable across sequences)
+    _pos_ratio = getattr(config, 'm_step_pos_ratio', 0.1)
+    pos_lr = config.eta_M * _pos_ratio
+
     if model.pos_phi is not None:
         # Phi path: update pos_phi coordinates
         pos_phi = model.pos_phi[:N]  # [N, H, n_gen_h]
@@ -397,13 +402,13 @@ def _update_pos_omega(Omega_star, token_ids, model, config):
         )  # [N, H, n_gen_h]
         grad_phi = torch.clamp(grad_phi, -grad_clamp, grad_clamp)
         model.pos_phi[:N] = retract_phi(
-            pos_phi, -config.eta_M * 0.1 * grad_phi, config.phi_max_norm
+            pos_phi, -pos_lr * grad_phi, config.phi_max_norm
         )
     else:
         # Omega path: Lie algebra clip + conditioning regularization
         nat = lie_algebra_clip_grad(
             grad, pos_Om, trust_radius=config.trust_region_omega,
         )
-        pos_Om_new = pos_Om - config.eta_M * 0.1 * nat
+        pos_Om_new = pos_Om - pos_lr * nat
         pos_Om_new = regularize_omega_conditioning(pos_Om_new, config.omega_cond_max)
         model.pos_Omega[:N] = pos_Om_new
