@@ -955,7 +955,14 @@ class GaugeTransformerLM(nn.Module):
                         # Undo cross-head permutation before projecting to vocab
                         if getattr(self, '_cross_head_perm', None) is not None:
                             _probe_mu = _probe_mu[:, :, self._inv_perm_tensor.to(device=_probe_mu.device)]
-                        _probe_logits = self.out_proj(_probe_mu)
+                        # Use PriorBank decode when active (out_proj is untrained in that case)
+                        if self.use_prior_bank and self.prior_bank is not None:
+                            _probe_sigma = sigma_q.detach() if sigma_q is not None else None
+                            _probe_logits = self.prior_bank.decode(
+                                _probe_mu, _probe_sigma, tau=self.prior_bank_tau
+                            )
+                        else:
+                            _probe_logits = self.out_proj(_probe_mu)
                         _ld['ce_loss'] = F.cross_entropy(
                             _probe_logits.reshape(-1, _probe_logits.size(-1)),
                             targets.reshape(-1),
