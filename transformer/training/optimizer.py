@@ -2,26 +2,319 @@
 Optimizer Creation with Parameter Grouping
 ==========================================
 
-Parameter-group-aware AdamW optimizer for the gauge-theoretic transformer.
-Assigns per-type learning rates that exploit natural gradient structure
-on the statistical manifold of belief distributions.
+Parameter-group-aware optimizers for the gauge-theoretic transformer.
+Three optimizer types:
 
-Parameter Groups:
-    1. mu_embed: Mean embeddings (higher LR -- natural gradient on location)
-    2. sigma_embed: Covariance embeddings (lower LR -- curvature-sensitive)
-    3. phi_embed: Gauge frame embeddings (Lie algebra elements for SO(N)/GL(K))
-    4. attention: KL-divergence attention parameters
-    5. ffn: Feed-forward network parameters
-    6. output: Output/LM-head projection parameters
+1. AdamW (default): Standard adaptive optimizer. Diagonal Fisher approximation
+   via exponential moving average of squared gradients.
+
+2. RiemannianAdamW: AdamW with geometric preconditioning.
+   - phi params: Killing-form metric g̃_ab = 2K tr(G_a^T G_b) - 2 tr(G_a) tr(G_b)
+     on the Lie algebra. For SO(N) with Frobenius-orthonormal generators this is
+     trivial (scalar); for GL(K) it couples the trace direction.
+   - mu params: Fisher metric for Gaussian location parameters. Scales gradients
+     by the current variance σ²_v per token per dimension, giving the natural
+     gradient ∇_nat μ = Σ_v · ∇_E μ. High-uncertainty dimensions move faster.
+   - sigma params: Fisher metric for log-variance is constant (= 1/2), so the
+     natural gradient is 2× the Euclidean gradient. Handled via LR scaling.
+
+3. NaturalGradientOptimizer: Per-token block-diagonal empirical Fisher.
+   Maintains K×K Fisher blocks for each vocabulary token via EMA of gradient
+   outer products. The off-diagonal structure captures dimension correlations
+   that Adam misses. O(V·K³) per step; memory O(V·K²).
 
 Embedding weight decay acts as a Gaussian hyper-prior N(0, 1/(2*wd))
 at the top of the VFE Bayesian hierarchy.
 """
 
+import math
 import torch
 import torch.nn as nn
 from typing import Dict, List, Optional, Any
 from transformer.training.config import TrainingConfig
+
+
+# =============================================================================
+# Riemannian AdamW
+# =============================================================================
+
+class RiemannianAdamW(torch.optim.AdamW):
+    r"""AdamW with Riemannian preconditioning for gauge-theoretic parameters.
+
+    Extends AdamW by applying the geometrically correct metric to gradients
+    before the Adam moment update. Since the Lie algebra is a flat vector space,
+    parallel transport is trivial and the exponential map is addition, so
+    Riemannian Adam reduces to: (1) transform gradient by metric inverse,
+    (2) run standard Adam on the transformed gradient.
+
+    Metrics applied per parameter group:
+        - 'phi_embed' / 'omega_embed': Killing-form inverse on gl(K).
+          Precomputed as g̃^{-1} where g̃_ab = 2K tr(G_a^T G_b) - 2 tr(G_a) tr(G_b).
+          For SO(N) with orthonormal generators this is ~(1/2K)·I (scalar rescaling);
+          for GL(K) the trace direction is regularized.
+        - 'mu_embed': Fisher metric for Gaussian location. Natural gradient is
+          Σ_v · ∇_E μ_v (scale by variance). Only active when model has
+          learnable sigma (otherwise all tokens share the same variance and
+          the scaling is equivalent to an LR change).
+        - 'sigma_embed': Fisher metric for log-variance is 1/2, so natural
+          gradient = 2 · ∇_E η. Applied as a fixed factor-of-2 rescaling.
+        - All others: standard AdamW (no preconditioning).
+
+    Args:
+        params: Parameter groups from create_param_groups()
+        model: Reference to GaugeTransformerLM for accessing sigma values
+        killing_inv: Precomputed inverse Killing metric (n_gen, n_gen) or None
+        **kwargs: Forwarded to torch.optim.AdamW (lr, betas, eps, weight_decay)
+    """
+
+    def __init__(
+        self,
+        params,
+        model: nn.Module = None,
+        killing_inv: Optional[torch.Tensor] = None,
+        **kwargs,
+    ):
+        super().__init__(params, **kwargs)
+        self._model = model
+        self._killing_inv = killing_inv
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        # Precondition gradients before AdamW processes them
+        for group in self.param_groups:
+            name = group.get('name', '')
+
+            if 'phi' in name or 'omega' in name:
+                self._precondition_phi(group)
+            elif 'mu' in name:
+                self._precondition_mu(group)
+            elif 'sigma' in name:
+                self._precondition_sigma(group)
+
+        return super().step(closure)
+
+    def _precondition_phi(self, group: dict) -> None:
+        """Apply inverse Killing metric to phi/omega gradients."""
+        if self._killing_inv is None:
+            return
+        for p in group['params']:
+            if p.grad is None:
+                continue
+            # grad: (V, n_gen) or (n_gen,) — metric: (n_gen, n_gen)
+            dev = p.grad.device
+            K_inv = self._killing_inv.to(device=dev, dtype=p.grad.dtype)
+            p.grad = p.grad @ K_inv
+
+    def _precondition_mu(self, group: dict) -> None:
+        r"""Apply Fisher metric for Gaussian location: ∇_nat μ = Σ · ∇_E μ.
+
+        The Fisher information for the mean of N(μ, Σ) is Σ^{-1}.
+        The natural gradient is therefore F^{-1} g = Σ · g, which scales each
+        dimension by the current variance. High-uncertainty directions get
+        larger steps (the optimizer should explore more where it knows less).
+        """
+        if self._model is None:
+            return
+        sigma = self._get_sigma()
+        if sigma is None:
+            return
+        for p in group['params']:
+            if p.grad is None:
+                continue
+            # p.grad: (V, K), sigma: (V, K) — elementwise multiply
+            if p.grad.shape == sigma.shape:
+                p.grad = p.grad * sigma
+
+    def _precondition_sigma(self, group: dict) -> None:
+        r"""Apply Fisher metric for log-variance: ∇_nat η = 2 · ∇_E η.
+
+        For the log-variance parameterization η = log(σ²), the Fisher
+        information is F_ηη = 1/2 (constant). The natural gradient is
+        F^{-1} g = 2g.
+        """
+        for p in group['params']:
+            if p.grad is not None:
+                p.grad = p.grad * 2.0
+
+    def _get_sigma(self) -> Optional[torch.Tensor]:
+        """Retrieve current variance values from model embeddings."""
+        embed = getattr(self._model, 'token_embed', None)
+        if embed is None:
+            return None
+        if hasattr(embed, 'log_sigma_diag') and isinstance(embed.log_sigma_diag, nn.Parameter):
+            return torch.exp(embed.log_sigma_diag.data).clamp(min=1e-6, max=10.0)
+        return None
+
+
+# =============================================================================
+# Natural Gradient Optimizer (block-diagonal empirical Fisher)
+# =============================================================================
+
+class NaturalGradientOptimizer(torch.optim.Optimizer):
+    r"""Natural gradient descent with per-token block-diagonal Fisher information.
+
+    For embedding parameters (V, K), maintains a K×K empirical Fisher block
+    per vocabulary token, updated via EMA of gradient outer products:
+
+        F̂_v^{(t)} = (1 - ρ) F̂_v^{(t-1)} + ρ · g_v g_v^T
+
+    The natural gradient update is:
+
+        θ_v ← θ_v - lr · (F̂_v + λI)^{-1} g_v
+
+    This captures per-dimension correlations that diagonal approximations
+    (Adam) miss. The Fisher F̂_v converges to the true Fisher E[g_v g_v^T]
+    under ergodic sampling.
+
+    Cost: O(K²) per token for outer product, O(K³) for solve. Total per step:
+    O(|batch_tokens| · K³) for the solve (only tokens in the batch are updated).
+    Memory: O(V · K²) for storing Fisher blocks — substantial for large V.
+    For V=50K, K=64: ~819 MB. Use with small vocabularies or reduce K.
+
+    For non-embedding parameters (1D, small 2D), falls back to standard
+    gradient descent with weight decay (no Fisher tracking).
+
+    Args:
+        params: Parameter groups from create_param_groups()
+        lr: Learning rate (default 1e-3)
+        weight_decay: Decoupled weight decay coefficient
+        ema_decay: EMA decay for Fisher estimation (default 0.95)
+        damping: Tikhonov regularization λ for Fisher inversion (default 1e-4)
+    """
+
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-3,
+        weight_decay: float = 0.01,
+        ema_decay: float = 0.95,
+        damping: float = 1e-4,
+    ):
+        defaults = dict(lr=lr, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+        self.ema_decay = ema_decay
+        self.damping = damping
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            lr = group['lr']
+            wd = group['weight_decay']
+
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+
+                grad = p.grad
+                state = self.state[p]
+
+                # Decoupled weight decay (applies to all rows, every step)
+                if wd > 0:
+                    p.mul_(1.0 - lr * wd)
+
+                # For 2D embedding-like parameters: per-row Fisher blocks
+                if grad.dim() == 2 and grad.shape[-1] >= 4:
+                    self._natural_step_embedding(p, grad, state, lr)
+                else:
+                    # Fallback: plain gradient descent for 1D / small params
+                    p.add_(grad, alpha=-lr)
+
+        return loss
+
+    def _natural_step_embedding(
+        self,
+        param: torch.Tensor,    # (V, K)
+        grad: torch.Tensor,     # (V, K)
+        state: dict,
+        lr: float,
+    ) -> None:
+        """Per-token natural gradient step with block-diagonal Fisher."""
+        V, K = grad.shape
+        device = grad.device
+        dtype = grad.dtype
+
+        # Initialize Fisher blocks on first call
+        if 'fisher' not in state:
+            state['fisher'] = torch.zeros(V, K, K, device=device, dtype=dtype)
+            state['step'] = 0
+        state['step'] += 1
+
+        fisher = state['fisher']
+
+        # Find tokens with nonzero gradient (only batch tokens)
+        grad_norm = grad.abs().sum(dim=-1)  # (V,)
+        nz_mask = grad_norm > 0
+        if not nz_mask.any():
+            return
+
+        nz_idx = nz_mask.nonzero(as_tuple=True)[0]  # (n_active,)
+        g = grad[nz_idx]  # (n_active, K)
+
+        # Update Fisher EMA: F = (1-ρ)F + ρ g gᵀ
+        outer = g.unsqueeze(-1) * g.unsqueeze(-2)  # (n_active, K, K)
+        rho = self.ema_decay
+        # Bias correction: effective ρ for early steps
+        step = state['step']
+        if step < 20:
+            rho = min(rho, 2.0 / (step + 1))
+
+        fisher[nz_idx] = (1.0 - rho) * fisher[nz_idx] + rho * outer
+
+        # Natural gradient: ng = (F + λI)⁻¹ g
+        F_active = fisher[nz_idx]  # (n_active, K, K)
+        I_K = torch.eye(K, device=device, dtype=dtype)
+        F_damped = F_active + self.damping * I_K
+
+        # Solve F_damped @ ng = g  (batched K×K linear solve)
+        ng = torch.linalg.solve(F_damped, g.unsqueeze(-1)).squeeze(-1)  # (n_active, K)
+
+        # Clip natural gradient to prevent explosion from ill-conditioned Fisher
+        ng_norm = ng.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        g_norm = g.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        max_ratio = 10.0  # Natural gradient shouldn't be >10x the Euclidean gradient
+        scale = torch.clamp(max_ratio * g_norm / ng_norm, max=1.0)
+        ng = ng * scale
+
+        param[nz_idx] -= lr * ng
+
+
+# =============================================================================
+# Utility: Precompute Killing metric inverse from generators
+# =============================================================================
+
+def compute_killing_metric_inv(
+    generators: torch.Tensor,
+    center_reg: float = 1e-4,
+) -> torch.Tensor:
+    r"""Compute inverse modified Killing metric for M-step phi preconditioning.
+
+    Uses the Cartan-involution-modified Killing form:
+        g̃_ab = 2K · tr(G_a^T G_b) - 2 · tr(G_a) · tr(G_b)
+
+    This is positive semidefinite, degenerate only on the center ℝ·I of gl(K).
+    The center direction is regularized with a small ε.
+
+    For SO(N) with orthonormal generators (tr(G_a^T G_b) = δ_{ab}/2, tr(G_a) = 0):
+        g̃ = K · I  →  g̃^{-1} = (1/K) · I  (trivial scalar rescaling)
+
+    For GL(K) with standard E_{ij} basis:
+        Non-trivial coupling through the trace direction.
+
+    Args:
+        generators: (n_gen, K, K) Lie algebra basis
+        center_reg: Regularization for the degenerate center direction
+
+    Returns:
+        inv_metric: (n_gen, n_gen) inverse metric tensor
+    """
+    # Reuse the existing implementation in gauge_preconditioner
+    from transformer.core.gauge_preconditioner import build_killing_form_preconditioner
+    return build_killing_form_preconditioner(generators, center_reg=center_reg)
 
 
 def create_param_groups(
@@ -206,34 +499,100 @@ def create_optimizer(
     config: TrainingConfig,
     verbose: bool = True,
 ) -> torch.optim.Optimizer:
-    """
-    Create AdamW optimizer with configurable parameter grouping.
+    r"""Create optimizer with configurable type and parameter grouping.
+
+    Optimizer types:
+        'adamw': Standard AdamW. Diagonal Fisher via EMA of g².
+        'riemannian_adam': AdamW + Killing metric on phi + Fisher on mu.
+        'natural_gradient': Per-token K×K empirical Fisher blocks.
 
     Args:
         model: The model to optimize
-        config: Training configuration
+        config: Training configuration (optimizer_type, use_param_groups, ...)
         verbose: If True, print optimizer information
 
     Returns:
-        Configured AdamW optimizer
+        Configured optimizer
     """
+    optimizer_type = getattr(config, 'optimizer_type', 'adamw')
+
     if config.use_param_groups:
-        # Multi-group mode: Natural gradients with per-parameter-type learning rates
         if verbose:
-            print("Creating multi-group optimizer (natural gradients):")
+            print(f"Creating multi-group optimizer ({optimizer_type}):")
         param_groups = create_param_groups(model, config, verbose=verbose)
     else:
-        # Simple mode: Traditional 2-group optimizer (decay vs no-decay)
         if verbose:
-            print("Creating simple optimizer:")
+            print(f"Creating simple optimizer ({optimizer_type}):")
         param_groups = create_simple_param_groups(model, config, verbose=verbose)
 
-    optimizer = torch.optim.AdamW(
-        param_groups,
-        lr=config.learning_rate,  # Base LR (overridden by group-specific LRs)
+    base_kwargs = dict(
+        lr=config.learning_rate,
         betas=(config.beta1, config.beta2),
         eps=config.eps,
     )
+
+    if optimizer_type == 'riemannian_adam':
+        # Precompute Killing metric inverse from model generators
+        killing_inv = None
+        generators = getattr(model, 'generators', None)
+        if generators is not None:
+            killing_inv = compute_killing_metric_inv(generators)
+            if verbose:
+                n_gen = generators.shape[0]
+                K = generators.shape[1]
+                # Check if metric is approximately scalar (SO(N) case)
+                diag_var = killing_inv.diag().var().item()
+                off_diag = (killing_inv - torch.diag(killing_inv.diag())).abs().max().item()
+                if off_diag < 1e-3 * killing_inv.diag().abs().mean().item():
+                    scale = killing_inv.diag().mean().item()
+                    print(f"  Killing metric: ~{scale:.4f}·I (SO-like, {n_gen} generators)")
+                else:
+                    cond = torch.linalg.cond(killing_inv).item()
+                    print(f"  Killing metric: non-trivial ({n_gen}×{n_gen}), cond={cond:.1f}")
+        else:
+            if verbose:
+                print("  Warning: No generators found; phi preconditioning disabled")
+
+        optimizer = RiemannianAdamW(
+            param_groups,
+            model=model,
+            killing_inv=killing_inv,
+            **base_kwargs,
+        )
+
+    elif optimizer_type == 'natural_gradient':
+        ema_decay = getattr(config, 'fisher_ema_decay', 0.95)
+        damping = getattr(config, 'fisher_damping', 1e-4)
+
+        # Estimate memory cost
+        if verbose:
+            total_fisher_params = 0
+            for group in param_groups:
+                for p in group['params']:
+                    if p.dim() == 2 and p.shape[-1] >= 4:
+                        V, K = p.shape
+                        total_fisher_params += V * K * K
+            mem_mb = total_fisher_params * 4 / (1024 ** 2)
+            print(f"  Fisher memory: {mem_mb:.0f} MB ({total_fisher_params:,} floats)")
+            print(f"  EMA decay: {ema_decay}, damping: {damping}")
+            if mem_mb > 500:
+                print(f"  Warning: Fisher storage is large ({mem_mb:.0f} MB). "
+                      f"Consider reducing vocab_size or embed_dim.")
+
+        optimizer = NaturalGradientOptimizer(
+            param_groups,
+            lr=config.learning_rate,
+            weight_decay=config.weight_decay,
+            ema_decay=ema_decay,
+            damping=damping,
+        )
+
+    else:
+        # Default: standard AdamW
+        optimizer = torch.optim.AdamW(
+            param_groups,
+            **base_kwargs,
+        )
 
     return optimizer
 
