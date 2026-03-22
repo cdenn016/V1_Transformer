@@ -111,6 +111,7 @@ class BlockConfig:
     # === DEQ (Deep Equilibrium) ===
     use_deq: bool = False              # Use implicit differentiation for E-step fixed point
     deq_neumann_terms: int = 5         # Neumann series terms for DEQ backward pass
+    deq_include_phi: bool = False      # Include phi in DEQ fixed-point (joint mu, sigma, phi IFT)
 
     # === Pure VFE mode flags ===
     use_layernorm: bool = True         # LayerNorm on means (False for pure VFE ablation)
@@ -201,6 +202,7 @@ class BlockConfig:
             # DEQ
             use_deq=config.get('use_deq', False),
             deq_neumann_terms=config.get('deq_neumann_terms', 5),
+            deq_include_phi=config.get('deq_include_phi', False),
             # Pure VFE mode
             use_layernorm=config.get('use_layernorm', True),
             use_residual=config.get('use_residual', True),

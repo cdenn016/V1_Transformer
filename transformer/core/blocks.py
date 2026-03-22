@@ -168,6 +168,7 @@ class GaugeTransformerBlock(nn.Module):
             phi_natural_gradient=cfg.phi_natural_gradient,
             use_deq=cfg.use_deq,
             deq_neumann_terms=cfg.deq_neumann_terms,
+            deq_include_phi=cfg.deq_include_phi,
             gauge_mode=cfg.gauge_mode,
             # Pass constant_omega from the attention module so the FFN's VFE
             # iterations use the same per-head Ω transport (manuscript Limit 2).
