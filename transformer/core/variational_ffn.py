@@ -2283,11 +2283,16 @@ class VariationalFFNDynamic(nn.Module):
         self.use_deq = use_deq
         self.deq_neumann_terms = deq_neumann_terms
 
-        # Learnable step size
+        # Learnable step size (stored in unconstrained space, apply softplus for positive LR)
         if learnable_lr:
-            self.lr = nn.Parameter(torch.tensor(0.1))
+            self.raw_lr = nn.Parameter(torch.tensor(self._softplus_inverse(0.1)))
         else:
-            self.register_buffer('lr', torch.tensor(0.1))
+            self.register_buffer('raw_lr', torch.tensor(self._softplus_inverse(0.1)))
+
+    @property
+    def lr(self) -> torch.Tensor:
+        """E-step learning rate, constrained to (0, ∞) via softplus."""
+        return F.softplus(self.raw_lr)
 
     @staticmethod
     def _softplus_inverse(x: float) -> float:
