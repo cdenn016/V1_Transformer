@@ -181,33 +181,28 @@ class PriorBank(nn.Module):
 
     @property
     def base_prior_sigma(self) -> torch.Tensor:
-        """Get base prior variance (always positive). Only for gauge_fixed_priors=True.
+        r"""Get base prior variance (always positive). Only for gauge_fixed_priors=True.
 
-        Uses the detach-clamp pattern: forward values are bounded to [_SIGMA_MIN, _SIGMA_MAX]
-        for numerical stability, but gradients flow through unclamped so the optimizer
-        can still receive signal when the parameter hits the boundary. This matches
-        the treatment in GaugeTokenEmbedding.forward().
-
-        The bounds are SPD constraints:
+        Hard clamp bounds output to [0.01, 5.0] for numerical safety:
         - min=0.01: prevents covariance collapse (singular precision matrix)
         - max=5.0: prevents diffuse priors from producing vanishing KL gradients
+
+        Hard clamp zeros gradient at boundaries, preventing log_sigma drift.
         """
         _SIGMA_MIN, _SIGMA_MAX = 0.01, 5.0
         sigma = torch.exp(self.base_log_prior_sigma)
-        return sigma + (sigma.clamp(_SIGMA_MIN, _SIGMA_MAX) - sigma).detach()
+        return sigma.clamp(_SIGMA_MIN, _SIGMA_MAX)
 
     @property
     def prior_sigma(self) -> torch.Tensor:
-        """Get prior variances (always positive). Only for gauge_fixed_priors=False.
+        r"""Get prior variances (always positive). Only for gauge_fixed_priors=False.
 
-        Uses the detach-clamp pattern: forward values are bounded to [_SIGMA_MIN, _SIGMA_MAX]
-        for numerical stability, but gradients flow through unclamped so the optimizer
-        can still receive signal when the parameter hits the boundary. This matches
-        the treatment in GaugeTokenEmbedding.forward().
+        Hard clamp bounds output to [0.01, 5.0] for numerical safety.
+        Zeros gradient at boundaries, preventing log_sigma drift.
         """
         _SIGMA_MIN, _SIGMA_MAX = 0.01, 5.0
         sigma = torch.exp(self.log_prior_sigma)
-        return sigma + (sigma.clamp(_SIGMA_MIN, _SIGMA_MAX) - sigma).detach()
+        return sigma.clamp(_SIGMA_MIN, _SIGMA_MAX)
 
     def _compute_rotation(self, phi: torch.Tensor) -> torch.Tensor:
         """

@@ -409,9 +409,7 @@ class GaugeTokenEmbedding(nn.Module):
             mu = torch.einsum('bnkl,l->bnk', R, self.base_mu)  # (B, N, K)
 
             # Build base covariance Σ_0 = diag(exp(log_σ_0))
-            sigma_diag_base = torch.exp(self.base_log_sigma_diag)  # (K,)
-            # Detach-clamp: forward value bounded, backward gradient passes through
-            sigma_diag_base = sigma_diag_base + (sigma_diag_base.clamp(min=0.01, max=5.0) - sigma_diag_base).detach()
+            sigma_diag_base = torch.exp(self.base_log_sigma_diag).clamp(min=0.01, max=5.0)  # (K,)
             Sigma_0 = torch.diag(sigma_diag_base)  # (K, K)
 
             # Rotate base prior covariance: Σ_i = R_i @ Σ_0 @ R_i^T
@@ -427,20 +425,18 @@ class GaugeTokenEmbedding(nn.Module):
             # Build diagonal covariances: Σ = diag(exp(log_σ))
             #
             # Use exp() for the ℝ → ℝ⁺ map (standard log-parameterization of
-            # SPD diagonals), then detach-clamp for numerical safety.  The
-            # detach-clamp trick:  σ_safe = σ + (clamp(σ) - σ).detach()
-            # keeps the forward value clamped but passes gradients as if
-            # unclamped, preventing the dead-gradient problem of hard clamp.
+            # SPD diagonals), then hard clamp for numerical safety.  Hard clamp
+            # zeros gradient at the boundary, which is correct: it prevents
+            # log_sigma from drifting out of range.  (The detach-clamp variant
+            # causes gradient explosion — see commit message.)
             _SIGMA_MIN = 0.01
             _SIGMA_MAX = 5.0
             if self.learnable_sigma:
                 log_sigma = self.log_sigma_diag[token_ids]  # (B, N, K)
-                sigma_diag = torch.exp(log_sigma)  # (B, N, K)
-                sigma_diag = sigma_diag + (sigma_diag.clamp(_SIGMA_MIN, _SIGMA_MAX) - sigma_diag).detach()
+                sigma_diag = torch.exp(log_sigma).clamp(_SIGMA_MIN, _SIGMA_MAX)  # (B, N, K)
             else:
                 # Shared covariance
-                sigma_diag = torch.exp(self.log_sigma_diag)  # (K,)
-                sigma_diag = sigma_diag + (sigma_diag.clamp(_SIGMA_MIN, _SIGMA_MAX) - sigma_diag).detach()
+                sigma_diag = torch.exp(self.log_sigma_diag).clamp(_SIGMA_MIN, _SIGMA_MAX)  # (K,)
                 sigma_diag = sigma_diag.unsqueeze(0).unsqueeze(0)  # (1, 1, K)
                 sigma_diag = sigma_diag.expand(batch_size, num_agents, -1)  # (B, N, K)
 
