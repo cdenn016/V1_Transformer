@@ -232,6 +232,10 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
         _obs_floor = max(8, int(B * N * 0.01))  # Auto: 1% of BN
     obs_norm = n_safe.clamp(min=_obs_floor).unsqueeze(-1)  # [T, 1]
     obs_grad_mu = torch.einsum('tij,tj->ti', Sigma_all_inv, obs_diff / obs_norm)
+    # Chain rule: logits = -KL/τ, so ∂logit/∂μ_v includes a 1/τ factor
+    _decode_tau = getattr(config, 'decode_tau', 1.0)
+    if _decode_tau != 1.0:
+        obs_grad_mu = obs_grad_mu / _decode_tau
     grad_mu = grad_mu + obs_grad_mu
 
     # Gradient clamping (ported from VFE dynamic)
@@ -260,8 +264,10 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     )
     grad_Sigma_vfe[~has_input] = 0.0
 
-    # Hyper-prior
-    grad_Sigma = grad_Sigma_vfe + 0.5 * Sigma_all_inv / config.hyper_var
+    # Hyper-prior: ∂KL(p_v || h)/∂Σ_v where h = N(0, σ²_h I)
+    # = ½[(1/σ²_h)I - Σ_v⁻¹]  (pulls Σ_v toward σ²_h·I, not always-shrink)
+    _eye = torch.eye(K, device=dev, dtype=mu_star.dtype)
+    grad_Sigma = grad_Sigma_vfe + 0.5 * (_eye / config.hyper_var - Sigma_all_inv)
 
     # Observation gradient for Σ_v (togglable via config.sigma_obs_grad)
     sigma_obs_mode = getattr(config, 'sigma_obs_grad', 'none')
@@ -278,6 +284,9 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
             - obs_ce_sum.unsqueeze(-1).unsqueeze(-1) * Sigma_all_inv
         ) / obs_norm.unsqueeze(-1)
         obs_grad_Sigma = symmetrize(obs_grad_Sigma)
+        # Chain rule: logits = -KL/τ, so ∂logit/∂Σ_v includes a 1/τ factor
+        if _decode_tau != 1.0:
+            obs_grad_Sigma = obs_grad_Sigma / _decode_tau
         grad_Sigma = grad_Sigma + obs_grad_Sigma
     elif sigma_obs_mode == 'diagonal':
         # Diagonal approximation: only use the diagonal of the full obs gradient
@@ -289,6 +298,9 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
         )  # [T, K]
         Sigma_all_inv_diag = torch.diagonal(Sigma_all_inv, dim1=-2, dim2=-1)  # [T, K]
         obs_diag = 0.5 * (Sigma_all_inv_diag ** 2 * W_diag - obs_ce_sum.unsqueeze(-1) * Sigma_all_inv_diag) / obs_norm
+        # Chain rule: logits = -KL/τ
+        if _decode_tau != 1.0:
+            obs_diag = obs_diag / _decode_tau
         grad_Sigma = grad_Sigma + torch.diag_embed(obs_diag)
     # else: sigma_obs_mode == 'none' — match VFE dynamic, no obs gradient for Sigma
 

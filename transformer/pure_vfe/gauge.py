@@ -126,7 +126,9 @@ def grad_kl_Omega_ij(mu_i, Sigma_i, mu_j, Sigma_j, Omega_ij):
     # Term 3: Ω⁻ᵀ (from log-det)
     term3 = Omega_ij_invT
 
-    return 0.5 * (term1 + term2) + 0.5 * term3  # ½ factor from KL formula
+    # The ½ from KL = ½[...] is already absorbed into each term's derivation.
+    # term1, term2, term3 ARE the full ∂KL/∂Ω — no additional factor needed.
+    return term1 + term2 + term3
 
 
 def grad_kl_Omega_i(mu_i, Sigma_i, mu_j, Sigma_j, Omega_i, Omega_j, beta_ij=None):
@@ -223,7 +225,8 @@ def vfe_grad_Omega(mu_h, Sigma_h, Omega, beta, kl_ij, precomp):
         # Term 3: Ω_ij⁻ᵀ
         term3 = Om_ij_invT
 
-        dKL_dOij = 0.5 * (term1 + term2) + 0.5 * term3  # [B, N_i, N_j, K_h, K_h]
+        # The ½ from KL = ½[...] is already absorbed into each term's derivation.
+        dKL_dOij = term1 + term2 + term3  # [B, N_i, N_j, K_h, K_h]
 
         # Chain rule: ∂KL/∂Ω_i = ∂KL/∂Ω_ij @ Ω_j⁻ᵀ
         Om_j_invT = Om_inv.transpose(-2, -1)  # [B, N_j, K_h, K_h]
