@@ -280,7 +280,9 @@ EM_CONFIG = {
     'learnable_alpha':       False,    
     'ffn_learnable_alpha':   False,   # False = fixed scalar α; True = adaptive α_k = c0/(b0 + KL_k)
 
-    'e_step_phi_lr': 0.05,   # E-step φ descent step size (decoupled from M-step phi_lr)
+    'e_step_mu_lr':    0.1,    # E-step μ natural gradient step size (used when ffn_learnable_lr=False)
+    'e_step_sigma_lr': 0.001,  # E-step σ trust region scale (used when ffn_learnable_lr=False)
+    'e_step_phi_lr':   0.05,   # E-step φ descent step size (decoupled from M-step phi_lr)
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
     'gauge_group':      'GLK',
