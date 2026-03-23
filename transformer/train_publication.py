@@ -239,6 +239,7 @@ EM_CONFIG = {
     # === Architecture ===
     'vocab_size':  50257,
     'embed_dim':   10,
+    'gauge_dim':   10,    
     'n_layers':    1,
     'hidden_dim':  508,
     'max_seq_len': 32,
