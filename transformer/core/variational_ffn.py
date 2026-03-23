@@ -3554,6 +3554,13 @@ class VariationalFFNDynamic(nn.Module):
             _mh_cached_bep = None
             _cached_bep = None
 
+            # Enable/disable VFE gradient debug dict for this iteration
+            global _VFE_GRAD_DEBUG
+            if self._debug_vfe_gradients:
+                _VFE_GRAD_DEBUG = {}
+            else:
+                _VFE_GRAD_DEBUG = None
+
             if self.multihead_vfe:
                 # =============================================================
                 # MULTI-HEAD VFE: Per-block β_h through iterations
@@ -3724,6 +3731,17 @@ class VariationalFFNDynamic(nn.Module):
                         if grad_sigma_h.dim() == 3 and d_h == 1:
                             grad_sigma_h = grad_sigma_h.unsqueeze(-1)
                         grad_sigma[:, :, block_start:block_end, block_start:block_end] = grad_sigma_h
+
+                    # Accumulate per-head debug norms (sum of squares for proper norm aggregation)
+                    if _VFE_GRAD_DEBUG is not None and _VFE_GRAD_DEBUG:
+                        _pfx = f'head{h}(d={d_h})'
+                        for _k, _v in list(_VFE_GRAD_DEBUG.items()):
+                            # Store per-head values with prefix, clear base keys
+                            _VFE_GRAD_DEBUG[f'{_pfx}/{_k}'] = _v
+                        # Reset base keys for next head
+                        for _k in [k for k in _VFE_GRAD_DEBUG if '/' not in k]:
+                            del _VFE_GRAD_DEBUG[_k]
+
                     block_start = block_end
 
                 if return_beta_history:
@@ -3785,13 +3803,6 @@ class VariationalFFNDynamic(nn.Module):
                             phi_current, self.generators, self.irrep_dims,
                             enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
                         )
-
-                # Enable debug dict if requested
-                global _VFE_GRAD_DEBUG
-                if self._debug_vfe_gradients:
-                    _VFE_GRAD_DEBUG = {}
-                else:
-                    _VFE_GRAD_DEBUG = None
 
                 # Use fused path for diagonal + block-diagonal (no chunk_size)
                 _use_fused_single = (is_diagonal and self.irrep_dims is not None
@@ -3985,9 +3996,17 @@ class VariationalFFNDynamic(nn.Module):
             # =================================================================
             if _VFE_GRAD_DEBUG is not None:
                 d = _VFE_GRAD_DEBUG
-                # Compute nat_grad amplification factors
-                _eu_mu = d.get('euclidean_mu_total', 1e-12)
-                _eu_sig = d.get('euclidean_sigma_total', 1e-12)
+
+                # Detect multihead mode: keys have 'headN(d=M)/' prefix
+                _is_multihead = any('/' in k for k in d)
+
+                # Euclidean totals computed on the full (already assembled) grad tensors
+                _eu_mu = _grad_norm(grad_mu)
+                _eu_sig = _grad_norm(grad_sigma)
+                _ps_mu = _per_pos_stats(grad_mu)
+                _ps_sig = _per_pos_stats(grad_sigma)
+
+                # Nat_grad amplification factors
                 _amp_mu = _raw_nat_grad_norm / max(_eu_mu, 1e-12)
                 _amp_sig = _raw_nat_grad_sigma_norm / max(_eu_sig, 1e-12)
                 # Fraction of positions hitting the 500 clip
@@ -4000,55 +4019,80 @@ class VariationalFFNDynamic(nn.Module):
                 print(f"\n{'='*80}")
                 print(f"  [VFE GRAD DEBUG] iter {vfe_iter}/{self.n_iterations}"
                       f"  diag={is_diagonal}  K={mu_current.shape[-1]}"
-                      f"  B×N={mu_current.shape[0]}×{mu_current.shape[1]}")
+                      f"  B×N={mu_current.shape[0]}×{mu_current.shape[1]}"
+                      f"  multihead={_is_multihead}")
                 print(f"{'='*80}")
-                print(f"  --- Covariance state ---")
-                print(f"  σ_p  range:  [{d.get('sigma_p_min', 0):.4f}, {d.get('sigma_p_max', 0):.4f}]"
-                      f"  →  1/σ_p range: [{1/max(d.get('sigma_p_max', 1), 1e-12):.2f},"
-                      f" {1/max(d.get('sigma_p_min', 1e-12), 1e-12):.2f}]")
-                print(f"  σ_q  eig range: [{d.get('sigma_q_eig_min', 0):.4f}, {d.get('sigma_q_eig_max', 0):.4f}]")
-                print()
-                print(f"  --- Euclidean gradient components (global norms) ---")
-                print(f"  {'Component':<30} {'μ':>12} {'σ':>12} {'σ pos_mean':>12} {'σ pos_max':>12}")
-                print(f"  {'─'*30} {'─'*12} {'─'*12} {'─'*12} {'─'*12}")
-                print(f"  {'self-coupling (α·∂KL/∂θ)':<30}"
-                      f" {d.get('grad_mu_self', 0):>12.1f}"
-                      f" {d.get('grad_sigma_self', 0):>12.1f}"
-                      f" {d.get('grad_sigma_self_pos_mean', 0):>12.2f}"
-                      f" {d.get('grad_sigma_self_pos_max', 0):>12.2f}")
-                print(f"  {'align direct (λ·β·∂KL/∂θ)':<30}"
-                      f" {d.get('grad_mu_direct', 0):>12.1f}"
-                      f" {d.get('grad_sigma_align_direct', 0):>12.1f}"
-                      f" {d.get('grad_sigma_align_pos_mean', 0):>12.2f}"
-                      f" {d.get('grad_sigma_align_pos_max', 0):>12.2f}")
-                print(f"  {'softmax (KL·∂β/∂θ)':<30}"
-                      f" {d.get('grad_mu_softmax', 0):>12.1f}"
-                      f" {d.get('grad_sigma_softmax', 0):>12.1f}"
-                      f" {d.get('grad_sigma_softmax_pos_mean', 0):>12.2f}"
-                      f" {d.get('grad_sigma_softmax_pos_max', 0):>12.2f}")
+
+                if _is_multihead:
+                    # Extract unique head prefixes
+                    _heads = sorted(set(k.split('/')[0] for k in d if '/' in k),
+                                    key=lambda x: int(x.split('head')[1].split('(')[0]))
+                    print(f"  --- Per-head breakdown ({len(_heads)} heads) ---")
+                    print(f"  {'Head':<16} {'σ_self':>8} {'σ_align':>8} {'σ_smx':>8}"
+                          f" {'μ_self':>8} {'μ_dir':>8} {'μ_smx':>8}"
+                          f" {'KL_avg':>8} {'KL_max':>8} {'σ_p_min':>8} {'σ_q_max':>8}")
+                    print(f"  {'─'*16} {'─'*8} {'─'*8} {'─'*8}"
+                          f" {'─'*8} {'─'*8} {'─'*8}"
+                          f" {'─'*8} {'─'*8} {'─'*8} {'─'*8}")
+                    for hp in _heads:
+                        def _hget(key, default=0):
+                            return d.get(f'{hp}/{key}', default)
+                        print(f"  {hp:<16}"
+                              f" {_hget('grad_sigma_self'):>8.1f}"
+                              f" {_hget('grad_sigma_align_direct'):>8.1f}"
+                              f" {_hget('grad_sigma_softmax'):>8.1f}"
+                              f" {_hget('grad_mu_self'):>8.1f}"
+                              f" {_hget('grad_mu_direct'):>8.1f}"
+                              f" {_hget('grad_mu_softmax'):>8.1f}"
+                              f" {_hget('kl_pairwise_mean'):>8.2f}"
+                              f" {_hget('kl_pairwise_max'):>8.1f}"
+                              f" {_hget('sigma_p_min'):>8.4f}"
+                              f" {_hget('sigma_q_eig_max'):>8.4f}")
+                else:
+                    # Single-β mode
+                    print(f"  --- Covariance state ---")
+                    print(f"  σ_p  range:  [{d.get('sigma_p_min', 0):.4f}, {d.get('sigma_p_max', 0):.4f}]"
+                          f"  →  1/σ_p range: [{1/max(d.get('sigma_p_max', 1), 1e-12):.2f},"
+                          f" {1/max(d.get('sigma_p_min', 1e-12), 1e-12):.2f}]")
+                    print(f"  σ_q  eig range: [{d.get('sigma_q_eig_min', 0):.4f}, {d.get('sigma_q_eig_max', 0):.4f}]")
+                    print()
+                    print(f"  --- Euclidean gradient components (global norms) ---")
+                    print(f"  {'Component':<30} {'μ':>12} {'σ':>12} {'σ pos_mean':>12} {'σ pos_max':>12}")
+                    print(f"  {'─'*30} {'─'*12} {'─'*12} {'─'*12} {'─'*12}")
+                    print(f"  {'self-coupling (α·∂KL/∂θ)':<30}"
+                          f" {d.get('grad_mu_self', 0):>12.1f}"
+                          f" {d.get('grad_sigma_self', 0):>12.1f}"
+                          f" {d.get('grad_sigma_self_pos_mean', 0):>12.2f}"
+                          f" {d.get('grad_sigma_self_pos_max', 0):>12.2f}")
+                    print(f"  {'align direct (λ·β·∂KL/∂θ)':<30}"
+                          f" {d.get('grad_mu_direct', 0):>12.1f}"
+                          f" {d.get('grad_sigma_align_direct', 0):>12.1f}"
+                          f" {d.get('grad_sigma_align_pos_mean', 0):>12.2f}"
+                          f" {d.get('grad_sigma_align_pos_max', 0):>12.2f}")
+                    print(f"  {'softmax (KL·∂β/∂θ)':<30}"
+                          f" {d.get('grad_mu_softmax', 0):>12.1f}"
+                          f" {d.get('grad_sigma_softmax', 0):>12.1f}"
+                          f" {d.get('grad_sigma_softmax_pos_mean', 0):>12.2f}"
+                          f" {d.get('grad_sigma_softmax_pos_max', 0):>12.2f}")
+
+                # Observation (shared between multihead and single-β, computed on full tensor)
                 if 'obs_mu_grad' in d:
                     print(f"  {'observation (CE)':<30}"
                           f" {d.get('obs_mu_grad', 0):>12.1f}"
                           f" {d.get('obs_sigma_grad', 0):>12.1f}")
-                print(f"  {'─'*30} {'─'*12} {'─'*12} {'─'*12} {'─'*12}")
-                print(f"  {'EUCLIDEAN TOTAL':<30}"
-                      f" {d.get('euclidean_mu_total', 0):>12.1f}"
-                      f" {d.get('euclidean_sigma_total', 0):>12.1f}"
-                      f" {d.get('euclidean_sigma_pos_mean', 0):>12.2f}"
-                      f" {d.get('euclidean_sigma_pos_max', 0):>12.2f}")
+
+                print()
+                print(f"  --- Euclidean total (assembled, after obs) ---")
+                print(f"  grad_mu:    {_eu_mu:>10.1f}  (pos mean: {_ps_mu[0]:.2f}, max: {_ps_mu[1]:.2f})")
+                print(f"  grad_sigma: {_eu_sig:>10.1f}  (pos mean: {_ps_sig[0]:.2f}, max: {_ps_sig[1]:.2f})")
                 print()
                 print(f"  --- Natural gradient (Fisher projection) ---")
-                print(f"  nat_grad_mu:    {_raw_nat_grad_norm:>10.1f}  (amplification: {_amp_mu:.2f}×)"
+                print(f"  nat_grad_mu:    {_raw_nat_grad_norm:>10.1f}  (amplification: {_amp_mu:.2f}x)"
                       f"  clip: {self._e_step_grad_norms['nat_grad_mu_clipped']:.1f}"
                       f"  ({_mu_clip_frac*100:.0f}% positions at cap)")
-                print(f"  nat_grad_sigma: {_raw_nat_grad_sigma_norm:>10.1f}  (amplification: {_amp_sig:.2f}×)"
+                print(f"  nat_grad_sigma: {_raw_nat_grad_sigma_norm:>10.1f}  (amplification: {_amp_sig:.2f}x)"
                       f"  clip: {self._e_step_grad_norms['nat_grad_sigma_clipped']:.1f}"
                       f"  ({_sig_clip_frac*100:.0f}% positions at cap)")
-                print()
-                print(f"  --- Pairwise KL (drives softmax coupling) ---")
-                print(f"  KL mean: {d.get('kl_pairwise_mean', 0):.2f}"
-                      f"  max: {d.get('kl_pairwise_max', 0):.2f}"
-                      f"  κ_scaled: {d.get('kappa_scaled', 0):.2f}")
                 print(f"{'='*80}\n")
                 _VFE_GRAD_DEBUG = None  # Reset for next iteration
 
