@@ -334,16 +334,20 @@ def compute_clustering_metrics(
         for d in dim_indices:
             groups = [groups_per_dim[ci][:, d] for ci in range(len(valid_cats)) if len(groups_per_dim[ci]) >= 2]
             if len(groups) >= 2:
+                # Skip dimensions where all groups are constant (no variance)
+                if all(np.std(g) == 0.0 for g in groups):
+                    continue
                 f, p = f_oneway(*groups)
-                if np.isfinite(f):
+                if np.isfinite(f) and np.isfinite(p):
                     f_stats.append(f)
-                    p_vals.append(max(p, 1e-300))  # floor for log
+                    p_vals.append(max(float(p), 1e-300))  # floor for log
 
         if f_stats:
             results[f'{embed_name}_anova_mean_f'] = float(np.mean(f_stats))
             results[f'{embed_name}_anova_median_f'] = float(np.median(f_stats))
             # Geometric mean of p-values (more robust than arithmetic for small p)
-            results[f'{embed_name}_anova_geomean_p'] = float(np.exp(np.mean(np.log(p_vals))))
+            log_p = np.log(np.array(p_vals, dtype=np.float64))
+            results[f'{embed_name}_anova_geomean_p'] = float(np.exp(np.mean(log_p)))
             results[f'{embed_name}_anova_frac_significant'] = float(np.mean([p < 0.05 for p in p_vals]))
             results[f'{embed_name}_anova_n_dims_tested'] = len(f_stats)
     except ImportError:
@@ -354,6 +358,11 @@ def compute_clustering_metrics(
     # --- PCA variance profile ---
     try:
         from sklearn.decomposition import PCA as PCA_full
+        # Skip PCA if data has zero total variance (all embeddings identical)
+        total_var = np.var(X, axis=0).sum()
+        if total_var < 1e-30:
+            results[f'{embed_name}_pca_variance_profile'] = 'zero variance'
+            return results
         n_components = min(embed_dim, len(X), 50)
         pca = PCA_full(n_components=n_components)
         pca.fit(X)
