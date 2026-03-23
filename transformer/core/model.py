@@ -906,6 +906,7 @@ class GaugeTransformerLM(nn.Module):
                 W_out=_w_out_fwa,
                 token_ids=token_ids,  # Required for PriorBank lookup
                 omega=omega,
+                sigma_prior=sigma_prior,  # Embedding prior covariance for proper E-step reference
             )
 
             if block.evolve_sigma and sigma_ffn is not None:
@@ -1096,6 +1097,7 @@ class GaugeTransformerLM(nn.Module):
                     sigma_q = sigma_q[:, :, perm][:, :, :, perm]
 
         mu_prior = mu_q.clone()
+        sigma_prior = sigma_q.clone() if sigma_q is not None else None
 
         # Position encoding
         phi = self.pos_encoding.compose(phi, num_agents, device=device)
@@ -1183,6 +1185,7 @@ class GaugeTransformerLM(nn.Module):
                 return_beta_history=is_final,  # Only final layer tracks VFE iterations
                 token_ids=token_ids,  # Required for PriorBank lookup
                 omega=omega,
+                sigma_prior=sigma_prior,  # Embedding prior covariance for proper E-step reference
             )
 
             if is_final:
