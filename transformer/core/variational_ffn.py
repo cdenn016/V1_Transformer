@@ -3472,14 +3472,14 @@ class VariationalFFNDynamic(nn.Module):
         # on the first iteration. The retraction clamps AFTER the update, but the
         # gradient was already computed on the un-clamped value.
         if self.update_sigma:
-            eps = max(self.eps, 1e-6)
+            _eps = 1e-6
             if sigma_current.dim() == 3:
                 # Diagonal: element-wise clamp
-                sigma_current = sigma_current.clamp(min=eps, max=self.sigma_max)
+                sigma_current = sigma_current.clamp(min=_eps, max=self.sigma_max)
             else:
                 # Full covariance: spectral clamp on eigenvalues
                 eigvals, eigvecs = torch.linalg.eigh(sigma_current)
-                eigvals = eigvals.clamp(min=eps, max=self.sigma_max * self.sigma_max)
+                eigvals = eigvals.clamp(min=_eps, max=self.sigma_max * self.sigma_max)
                 sigma_current = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
 
         # Detach phi when detach_phi=True and non-amortized: enables fully backprop-free
