@@ -70,6 +70,8 @@ class BlockConfig:
     ffn_kappa: float = 1.0              # Softmax temperature (unified with kappa_beta)
     ffn_n_iterations: int = 1           # VFE inference iterations per forward pass
     ffn_learnable_lr: bool = True       # Learn step size η for variational descent
+    e_step_mu_lr: float = 0.1            # E-step μ natural gradient step size (used when ffn_learnable_lr=False)
+    e_step_sigma_lr: float = 0.001       # E-step σ trust region scale (used when ffn_learnable_lr=False)
     ffn_lambda_belief: float = 1.0      # Belief alignment weight λ
     ffn_update_sigma: bool = True       # Update covariances during FFN E-step
     ffn_learnable_alpha: bool = False   # Bayesian precision via Gamma-Normal conjugacy
@@ -174,6 +176,8 @@ class BlockConfig:
             ffn_kappa=kappa_beta,  # Unified temperature
             ffn_n_iterations=config.get('ffn_n_iterations', 1),
             ffn_learnable_lr=config.get('ffn_learnable_lr', True),
+            e_step_mu_lr=config.get('e_step_mu_lr', 0.1),
+            e_step_sigma_lr=config.get('e_step_sigma_lr', 0.001),
             ffn_lambda_belief=config.get('ffn_lambda_belief', 1.0),
             ffn_update_sigma=config.get('ffn_update_sigma', True),
             ffn_learnable_alpha=config.get('ffn_learnable_alpha', config.get('learnable_alpha', False)),

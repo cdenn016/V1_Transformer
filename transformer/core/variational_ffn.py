@@ -2111,6 +2111,8 @@ class VariationalFFNDynamic(nn.Module):
         kappa: float = 1.0,        # Attention temperature
         n_iterations: int = 1,    # VFE descent steps (more steps = deeper equilibration)
         learnable_lr: bool = True, # Learn step size?
+        mu_lr: float = 0.1,           # E-step μ step size (used when learnable_lr=False)
+        sigma_lr: float = 0.001,      # E-step σ trust region scale (used when learnable_lr=False)
         update_sigma: bool = True, # Update covariances?
         diagonal_covariance: bool = False,  # Use diagonal Σ for efficiency
         compute_sigma_align_grad: bool = True,  # Compute sigma gradient from alignment term
@@ -2179,6 +2181,9 @@ class VariationalFFNDynamic(nn.Module):
             kappa: Temperature for attention softmax (higher = softer).
             n_iterations: Number of VFE descent iterations per forward pass.
             learnable_lr: If True, step size eta is a learnable parameter.
+                If False, uses fixed mu_lr and sigma_lr instead.
+            mu_lr: E-step μ natural gradient step size (used when learnable_lr=False).
+            sigma_lr: E-step σ trust region scale (used when learnable_lr=False).
             update_sigma: If True, also update covariance matrices Sigma.
             diagonal_covariance: Use diagonal Sigma for O(K) instead of O(K^2).
             compute_sigma_align_grad: If True, compute sigma gradient from alignment.
@@ -2361,12 +2366,25 @@ class VariationalFFNDynamic(nn.Module):
         if learnable_lr:
             self.raw_lr = nn.Parameter(torch.tensor(self._softplus_inverse(0.1)))
         else:
-            self.register_buffer('raw_lr', torch.tensor(self._softplus_inverse(0.1)))
+            # Fixed per-variable E-step rates from config
+            self.register_buffer('raw_lr', torch.tensor(self._softplus_inverse(mu_lr)))
+            self._fixed_sigma_lr = sigma_lr
 
     @property
     def lr(self) -> torch.Tensor:
-        """E-step learning rate, constrained to (0, ∞) via softplus."""
+        """E-step μ learning rate, constrained to (0, ∞) via softplus."""
         return F.softplus(self.raw_lr)
+
+    def _get_sigma_trust(self, effective_lr: torch.Tensor) -> float:
+        r"""E-step σ trust region scale.
+
+        When learnable_lr=False, returns the user-specified sigma_lr directly,
+        decoupled from the μ step size. When learnable_lr=True, falls back to
+        the legacy coupled ratio effective_lr * 0.01.
+        """
+        if hasattr(self, '_fixed_sigma_lr'):
+            return self._fixed_sigma_lr
+        return effective_lr * 0.01
 
     @staticmethod
     def _softplus_inverse(x: float) -> float:
@@ -2865,7 +2883,7 @@ class VariationalFFNDynamic(nn.Module):
 
             # sigma update — calibrated step: ~0.1% max change per iter
             if self.update_sigma:
-                sigma_trust = self.lr * 0.01
+                sigma_trust = self._get_sigma_trust(self.lr)
                 if is_diagonal:
                     sigma_out = retract_spd_diagonal_torch(
                         sigma_diag=sigma_in, delta_sigma=-nat_grad_sigma,
@@ -3039,7 +3057,7 @@ class VariationalFFNDynamic(nn.Module):
 
             # sigma update — calibrated step: ~0.1% max change per iter
             if self.update_sigma:
-                sigma_trust = self.lr * 0.01
+                sigma_trust = self._get_sigma_trust(self.lr)
                 if is_diagonal:
                     sigma_out = retract_spd_diagonal_torch(
                         sigma_diag=sigma_in, delta_sigma=-nat_grad_sigma,
@@ -3108,7 +3126,7 @@ class VariationalFFNDynamic(nn.Module):
                 alignment_loss = self.lambda_belief * (beta_phi * kl_matrix).sum()
 
             # Differentiable Euclidean phi step (autograd tracks through alignment_loss)
-            phi_lr_step = self.phi_lr / max(self.n_iterations, 1)
+            phi_lr_step = self.phi_lr
             if alignment_loss.grad_fn is not None:
                 grad_phi_align = torch.autograd.grad(
                     alignment_loss, phi_in,
@@ -3771,8 +3789,9 @@ class VariationalFFNDynamic(nn.Module):
                 # nat_grad_sigma = 2σ²·grad → whitened = -2σ·grad, clipped by trust.
                 # With effective_lr≈0.1: max_exp = 0.001 → ~0.1% per iter, ~1% over 10 iters.
                 # Calibrated between frozen (pre-#768: 0.025%/iter) and overcorrected (0.5%/iter).
-                sigma_trust_diag = effective_lr * 0.01    # ~0.1% max change at full lr
-                sigma_trust_full = effective_lr * 0.005   # ~0.05% max change (full cov more sensitive)
+                sigma_trust_base = self._get_sigma_trust(effective_lr)
+                sigma_trust_diag = sigma_trust_base
+                sigma_trust_full = sigma_trust_base * 0.5  # Full cov more sensitive
                 if is_diagonal:
                     sigma_current = retract_spd_diagonal_torch(
                         sigma_diag=sigma_current,
@@ -3925,9 +3944,8 @@ class VariationalFFNDynamic(nn.Module):
                         is_diagonal, mask, eps,
                     )
                     if grad_omega is not None:
-                        omega_lr_iter = self.phi_lr / self.n_iterations
                         omega_current = self._retract_omega(
-                            omega_current, grad_omega, omega_lr_iter,
+                            omega_current, grad_omega, self.phi_lr,
                             trust_region=getattr(self, 'omega_trust_region', 0.3),
                         )
                 else:
@@ -3939,12 +3957,11 @@ class VariationalFFNDynamic(nn.Module):
                         cached_block_exp_pairs=_phi_bep,
                     )
                     if grad_phi is not None:
-                        phi_lr_iter = self.phi_lr / self.n_iterations
                         phi_current = _retract_phi(
                             phi=phi_current,
                             delta_phi=-grad_phi,
                             generators=self.generators,
-                            step_size=phi_lr_iter,
+                            step_size=self.phi_lr,
                             max_norm=self.phi_max_norm,
                         )
 
