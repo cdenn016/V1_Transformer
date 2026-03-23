@@ -2109,14 +2109,14 @@ class VariationalFFNDynamic(nn.Module):
                                    # prediction quality (CE only, α_M = 0).
         lambda_belief: float = 1.0,  # Belief alignment weight
         kappa: float = 1.0,        # Attention temperature
-        n_iterations: int = 10,    # VFE descent steps (more steps = deeper equilibration)
+        n_iterations: int = 1,    # VFE descent steps (more steps = deeper equilibration)
         learnable_lr: bool = True, # Learn step size?
         update_sigma: bool = True, # Update covariances?
         diagonal_covariance: bool = False,  # Use diagonal Σ for efficiency
         compute_sigma_align_grad: bool = True,  # Compute sigma gradient from alignment term
         # Phi (gauge frame) evolution via VFE gradients
-        update_phi: bool = False,  # If True, update phi via ∂F/∂φ (after E-step loop)
-        update_phi_per_iteration: bool = False,  # If True, update phi during EACH E-step iteration
+        update_phi: bool = True,  # If True, update phi via ∂F/∂φ (after E-step loop)
+        update_phi_per_iteration: bool = True,  # If True, update phi during EACH E-step iteration
         phi_update_interval: int = 1,  # Update phi every N iterations (1=every iteration, 2=skip alternate)
         phi_lr: float = 0.05,      # Learning rate for phi updates
         phi_max_norm: float = 3.14159,  # Max norm for phi (π = 180° rotation)
@@ -2130,9 +2130,9 @@ class VariationalFFNDynamic(nn.Module):
         # Bayesian precision (learned prior self-coupling)
         learnable_alpha: bool = False,  # If True, use Gamma-Normal conjugate precision
         # Multi-head VFE: maintain per-head β through iterations
-        multihead_vfe: bool = False,  # If True, compute separate β_h per irrep block
+        multihead_vfe: bool = True,  # If True, compute separate β_h per irrep block
         # Phi gradient preconditioning mode
-        phi_natural_gradient: str = 'clip',  # 'clip'|'cartan'|'killing'|'pullback'
+        phi_natural_gradient: str = 'killing',  # 'clip'|'cartan'|'killing'|'pullback'
         # DEQ implicit differentiation
         use_deq: bool = False,                # Use DEQ backward for E-step fixed point
         deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
@@ -2147,11 +2147,11 @@ class VariationalFFNDynamic(nn.Module):
         # Amortized inference: gradient flow through priors for learned E-step init
         amortized_inference: bool = True,
         # Rotary Position Embeddings (RoPE) — must match attention sublayer setting
-        use_rope: bool = False,
+        use_rope: bool = True,
         rope_base: float = 10000.0,
         exact_diagonal_transport: bool = False,  # Lift diagonal σ for exact transport
         gauge_param: str = 'phi',  # 'phi' (Lie algebra) or 'omega' (direct GL(K))
-        obs_sigma_gradient: bool = False,  # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
+        obs_sigma_gradient: bool = True,  # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
         obs_sigma_weight: float = 1.0,     # Weight for sigma observation gradient
         detach_phi: bool = False,          # Detach phi from backprop in non-amortized mode
                                            # (enables fully backprop-free training with phi P-flow)
