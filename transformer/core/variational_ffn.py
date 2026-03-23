@@ -4017,7 +4017,7 @@ class VariationalFFNDynamic(nn.Module):
                     _sig_clip_frac = (nat_grad_sigma_norm.squeeze(-1).squeeze(-1) >= max_nat_grad_sigma_norm * 0.99).float().mean().item()
 
                 print(f"\n{'='*80}")
-                print(f"  [VFE GRAD DEBUG] iter {vfe_iter}/{self.n_iterations}"
+                print(f"  [VFE GRAD DEBUG] iter {iteration}/{self.n_iterations}"
                       f"  diag={is_diagonal}  K={mu_current.shape[-1]}"
                       f"  B×N={mu_current.shape[0]}×{mu_current.shape[1]}"
                       f"  multihead={_is_multihead}")
