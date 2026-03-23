@@ -1142,12 +1142,20 @@ class PublicationMetrics:
         # Figure: Evolution over training
         if len(trajectory['steps']) > 1:
             try:
+                # Convert per_layer_mean dict → 2D ndarray for plot function
+                plm_dict = trajectory['per_layer_mean']
+                layer_indices = trajectory.get('layer_indices', [])
+                if plm_dict and layer_indices:
+                    per_layer_mean = np.column_stack([plm_dict[li] for li in layer_indices])
+                else:
+                    per_layer_mean = None
+
                 plot_holonomy_evolution(
                     steps=trajectory['steps'],
                     global_mean=trajectory['global_mean'],
                     global_max=trajectory['global_max'],
-                    per_layer_mean=trajectory['per_layer_mean'],
-                    layer_indices=trajectory.get('layer_indices'),
+                    per_layer_mean=per_layer_mean,
+                    layer_indices=layer_indices if layer_indices else None,
                     title='Holonomy Evolution During Training',
                     output_path=figures_dir / f'{save_prefix}_evolution.png',
                 )
@@ -1206,7 +1214,10 @@ class PublicationMetrics:
                         # Curvature vs distance
                         dist_data = compute_curvature_by_distance(exp_delta)
                         plot_curvature_vs_distance(
-                            **dist_data,
+                            bin_centers=dist_data['distances'],
+                            mean_norms=dist_data['mean_norms'],
+                            std_norms=dist_data['std_norms'],
+                            counts=np.ones_like(dist_data['distances']),
                             title='Curvature vs Token Distance (Final)',
                             output_path=figures_dir / f'{save_prefix}_curvature_vs_distance.png',
                         )
