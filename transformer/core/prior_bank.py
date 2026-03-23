@@ -385,14 +385,20 @@ class PriorBank(nn.Module):
         # logits = -KL/τ ≈ -0.5/τ * (combined + prior_bias)
         # (dropping softmax-invariant terms -K and log|Σ_q|)
         #
-        # √K concentration-of-measure correction: with init_std = √(ln V / K),
-        # each KL term is O(ln V / K), summing K terms gives E[KL] = ln(V) but
-        # std(KL) = O(ln V / √K). Raw logit spread thus shrinks as 1/√K —
-        # at K=90 the softmax is near-uniform, killing gradient signal.
-        # Multiplying by √K restores K-independent logit spread.
-        # (Attention uses /√d_h because per-head beliefs have O(1) variance;
-        # here init_std already bakes in 1/√K, so we compensate oppositely.)
-        dim_scale = math.sqrt(K)
+        # √(K/ln V) concentration-of-measure correction:
+        # With init_std = √(ln V / K), each KL component is O(ln V / K).
+        # Summing K components: E[KL] = O(ln V), std(KL) = O(ln V / √K).
+        # Raw logit spread shrinks as 1/√K — at K=90 softmax is near-uniform.
+        #
+        # Previous fix (√K) restored spread but made logit offsets O(√K · ln V),
+        # giving CE ≈ 100 at K=90 (the self-prediction bias — beliefs trivially
+        # match their input prior — gets amplified by √K).
+        #
+        # Correct fix: √(K / ln V). The √K cancels the 1/√K in std(KL), and
+        # the 1/√(ln V) absorbs the ln(V) magnitude:
+        #   std(logit) = √(c · ln V) / (2τ), K-independent
+        #   logit gap  = √(K · ln V) instead of √K · ln V — factor √(ln V) smaller
+        dim_scale = math.sqrt(K / math.log(V))
         logits = -0.5 * dim_scale / tau * (combined + prior_bias.unsqueeze(0).unsqueeze(0))
 
         return logits
