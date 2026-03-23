@@ -52,7 +52,7 @@ class BlockConfig:
     evolve_phi_e_step: bool = True     # Update φ during EACH E-step iteration
     phi_update_interval: int = 1        # Update phi every N E-step iterations (1=every)
     phi_lr: float = 0.05               # Learning rate for ∂F/∂φ descent
-    phi_max_norm: float = math.pi       # Max phi norm (π radians = 180°)
+    phi_max_norm: Optional[float] = None  # Max phi norm; None = auto (π for SO(N), 5.0 for GL(K))
     phi_dim: int = 3                    # 3 for SO(3), N(N-1)/2 for SO(N), K² for GL(K)
     phi_natural_gradient: str = 'killing'  # 'clip'|'cartan'|'killing'|'pullback'
     diagonal_covariance: bool = False   # σ as (B,N,K) diagonal instead of (B,N,K,K) full
@@ -160,7 +160,7 @@ class BlockConfig:
             evolve_phi_e_step=config.get('evolve_phi_e_step', True),
             phi_update_interval=config.get('phi_update_interval', 1),
             phi_lr=config.get('e_step_phi_lr', config.get('phi_lr', 0.05)),
-            phi_max_norm=config.get('phi_max_norm', math.pi),
+            phi_max_norm=config.get('phi_max_norm', None),
             phi_dim=config.get('phi_dim', 3),
             phi_natural_gradient=config.get('phi_natural_gradient', 'killing'),
             diagonal_covariance=config.get('diagonal_covariance', False),

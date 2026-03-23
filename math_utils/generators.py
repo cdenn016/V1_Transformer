@@ -2095,8 +2095,8 @@ def retract_glK_torch(
     generators: 'torch.Tensor',
     step_size: float = 1.0,
     trust_region: float = 0.1,  # Tighter than SO(N) for stability
-    max_norm: float = 1.0,  # Smaller than SO(N) - GL(K) doesn't have periodicity
-    bch_order: int = 0,  # Use simple addition - BCH bracket can amplify noise
+    max_norm: float = 5.0,  # GL(K) is non-compact; 5.0 → singular values in [e⁻⁵, e⁵] ≈ [0.007, 148]
+    bch_order: int = 2,  # Second-order BCH for proper Lie group composition
     eps: float = 1e-6,
     **kwargs,  # Accept but ignore legacy grad_clip parameter
 ) -> 'torch.Tensor':
@@ -2115,7 +2115,7 @@ def retract_glK_torch(
     Steps:
     1. Scale update by step_size
     2. Apply trust region (constant Lie algebra norm clip)
-    3. Compose (simple addition for stability, or BCH if requested)
+    3. Compose via BCH formula (second-order by default for proper Lie group composition)
     4. Clamp final norm
 
     Args:
@@ -2124,8 +2124,8 @@ def retract_glK_torch(
         generators: Transport generators (n_gen, K, K); only n_gen is used
         step_size: Learning rate for the update
         trust_region: Max step size ||update||_F in Lie algebra norm
-        max_norm: Maximum allowed norm for phi (no periodicity for GL(K))
-        bch_order: Order of BCH expansion (0=add, 1=first correction)
+        max_norm: Maximum allowed norm for phi; 5.0 → singular values in [e⁻⁵, e⁵]
+        bch_order: Order of BCH expansion (0=add, 1=first correction, 2=second order)
         eps: Numerical stability constant
 
     Returns:
