@@ -2140,11 +2140,11 @@ class PublicationTrainer(FastTrainer):
         # Run initial gauge frame semantic analysis (only if starting fresh)
         if start_step == 0 and self.pub_metrics:
             try:
-                print("[Semantic] Running initial analysis (step 0)...")
+                
                 self.pub_metrics.run_semantic_analysis(
                     model=self.model,
                     step=0,
-                    verbose=True,
+                    verbose=False,
                 )
             except Exception as e:
                 print(f"[WARN] Initial semantic analysis failed: {e}")
