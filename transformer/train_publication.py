@@ -278,7 +278,7 @@ EM_CONFIG = {
     'ffn_alpha':             1.0,       # Prior coupling inside VFE E-step
     'ffn_lambda_belief':     1.0,       # Belief alignment inside VFE E-step
     'learnable_alpha':       False,    
-    'ffn_learnable_alpha':   False,   # Adaptive α_i = c0/(b0 + KL) per dimension
+    'ffn_learnable_alpha':   False,   # False = fixed scalar α; True = adaptive α_k = c0/(b0 + KL_k)
 
     'e_step_phi_lr': 0.05,   # E-step φ descent step size (decoupled from M-step phi_lr)
 
@@ -400,7 +400,7 @@ AMORTIZED_CONFIG = {
     # Override: amortized inference, no implicit EM
     'amortized_inference': True,
     'implicit_em':         False,
-    'ffn_learnable_alpha': True,   # Fixed scalar alpha (simpler)
+    'ffn_learnable_alpha': True,   # Adaptive α_k = c0/(b0 + KL_k) per dimension
 }
 
 
