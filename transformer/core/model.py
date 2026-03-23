@@ -693,6 +693,12 @@ class GaugeTransformerLM(nn.Module):
             perm = self._perm_tensor.to(device=device)
             vfe_W_out = vfe_W_out[:, perm]
 
+        # Set sigma_prior on each block's FFN so the E-step uses embedding
+        # prior covariance (not the evolving belief sigma). This avoids
+        # threading sigma_prior through Stack/Block forward() signatures.
+        for blk in self.transformer.blocks:
+            blk.ffn._sigma_prior_cache = sigma_prior
+
         mu_q, sigma_q, phi, intermediates = self.transformer(
             mu_q,
             sigma_q,
@@ -700,7 +706,6 @@ class GaugeTransformerLM(nn.Module):
             self.generators,
             mask=mask,
             mu_prior=mu_prior,  # Pass priors for variational FFN
-            sigma_prior=sigma_prior,  # Embedding prior covariance for proper E-step reference
             token_ids=token_ids,  # Pass token IDs for PriorBank lookup
             return_intermediates=return_agents,
             cached_head_transports=cached_head_transports,
