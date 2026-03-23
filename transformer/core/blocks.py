@@ -182,6 +182,7 @@ class GaugeTransformerBlock(nn.Module):
             isotropic_covariance=cfg.isotropic_covariance,
             obs_sigma_gradient=cfg.obs_sigma_gradient,
             obs_sigma_weight=cfg.obs_sigma_weight,
+            sigma_max=cfg.sigma_max,
             use_rope=cfg.use_rope,
             rope_base=cfg.rope_base,
             gauge_param=cfg.gauge_param,

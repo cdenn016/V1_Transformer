@@ -1816,6 +1816,7 @@ def retract_spd_torch(
     step_size: float = 1.0,
     trust_region: float = 2.0,
     eps: float = 1e-6,
+    sigma_max: float = 5.0,
 ) -> torch.Tensor:
     """
     SPD-preserving retraction for covariance matrices (PyTorch GPU).
@@ -1828,6 +1829,7 @@ def retract_spd_torch(
         step_size: Learning rate τ
         trust_region: Max Frobenius norm of whitened tangent
         eps: Regularization floor for numerical stability
+        sigma_max: Upper bound on eigenvalues (sigma_max² for covariance eigenvalues)
 
     Returns:
         Sigma_new: SPD matrices, same shape as Sigma
@@ -1879,9 +1881,10 @@ def retract_spd_torch(
         Sigma_new = Sigma_sqrt @ exp_R @ Sigma_sqrt
         Sigma_new = 0.5 * (Sigma_new + Sigma_new.transpose(-1, -2))
 
-        # Spectral floor
+        # Spectral floor + ceiling: eigenvalues in [eps, sigma_max²]
+        # sigma_max bounds the standard deviation; covariance eigenvalues are σ².
         eig_new, vec_new = torch.linalg.eigh(Sigma_new)
-        eig_new = eig_new.clamp(min=eps)
+        eig_new = eig_new.clamp(min=eps, max=sigma_max * sigma_max)
         Sigma_new = vec_new * eig_new.unsqueeze(-2) @ vec_new.transpose(-1, -2)
 
     Sigma_new = Sigma_new.to(orig_dtype)
@@ -1899,6 +1902,7 @@ def retract_spd_diagonal_torch(
     step_size: float = 1.0,
     trust_region: float = 5.0,
     eps: float = 1e-6,
+    sigma_max: float = 5.0,
 ) -> torch.Tensor:
     """
     SPD retraction for diagonal covariances (much simpler).
@@ -1914,6 +1918,8 @@ def retract_spd_diagonal_torch(
         step_size: Learning rate τ
         trust_region: Max absolute value of exponent argument
         eps: Floor for sigma values
+        sigma_max: Upper bound on σ. Posterior σ should not greatly exceed the prior.
+            Prevents nat_grad_sigma = 2σ²·∇σ blowup (amplification grows as σ⁴).
 
     Returns:
         sigma_new: Positive diagonal variances, shape (B, N, K)
@@ -1937,9 +1943,10 @@ def retract_spd_diagonal_torch(
         exp_arg = (step_size * whitened).clamp(-50.0, 50.0)
         sigma_new = sigma_safe * torch.exp(exp_arg)
 
-    # Clamp to [eps, 100.0] for numerical stability
-    # Floor prevents division by zero; ceiling prevents KL divergence explosion
-    return sigma_new.clamp(min=eps, max=100.0).to(orig_dtype)
+    # Clamp to [eps, sigma_max] — posterior σ should not blow up past the prior.
+    # With sigma_max=5.0 and init_sigma_scale=1.0, allows 5× expansion before clamping.
+    # This bounds the natural gradient amplification: 2σ² ≤ 2·sigma_max² = 50.
+    return sigma_new.clamp(min=eps, max=sigma_max).to(orig_dtype)
 
 
 # =============================================================================
@@ -2156,6 +2163,7 @@ class VariationalFFNDynamic(nn.Module):
         gauge_param: str = 'phi',  # 'phi' (Lie algebra) or 'omega' (direct GL(K))
         obs_sigma_gradient: bool = True,  # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
         obs_sigma_weight: float = 1.0,     # Weight for sigma observation gradient
+        sigma_max: float = 5.0,            # Upper bound on σ (prevents nat_grad blowup from 2σ²·∇σ)
         detach_phi: bool = False,          # Detach phi from backprop in non-amortized mode
                                            # (enables fully backprop-free training with phi P-flow)
         deq_include_phi: bool = False,     # Include phi in DEQ fixed-point variables.
@@ -2239,6 +2247,7 @@ class VariationalFFNDynamic(nn.Module):
         self.amortized_inference = amortized_inference
         self.obs_sigma_gradient = obs_sigma_gradient
         self.obs_sigma_weight = obs_sigma_weight
+        self.sigma_max = sigma_max
         self.detach_phi = detach_phi
         self.implicit_em = implicit_em
         self._last_implicit_mu_scale = None   # (B, N, K) stored after E-step for model.py
@@ -2902,11 +2911,13 @@ class VariationalFFNDynamic(nn.Module):
                     sigma_out = retract_spd_diagonal_torch(
                         sigma_diag=sigma_in, delta_sigma=-nat_grad_sigma,
                         step_size=1.0, trust_region=sigma_trust, eps=eps,
+                        sigma_max=self.sigma_max,
                     )
                 else:
                     sigma_out = retract_spd_torch(
                         Sigma=sigma_in, delta_Sigma=-nat_grad_sigma,
                         step_size=1.0, trust_region=sigma_trust * 0.5, eps=eps,
+                        sigma_max=self.sigma_max,
                     )
             else:
                 sigma_out = sigma_in
@@ -3078,11 +3089,13 @@ class VariationalFFNDynamic(nn.Module):
                     sigma_out = retract_spd_diagonal_torch(
                         sigma_diag=sigma_in, delta_sigma=-nat_grad_sigma,
                         step_size=1.0, trust_region=sigma_trust, eps=eps,
+                        sigma_max=self.sigma_max,
                     )
                 else:
                     sigma_out = retract_spd_torch(
                         Sigma=sigma_in, delta_Sigma=-nat_grad_sigma,
                         step_size=1.0, trust_region=sigma_trust * 0.5, eps=eps,
+                        sigma_max=self.sigma_max,
                     )
             else:
                 sigma_out = sigma_in
@@ -3826,6 +3839,7 @@ class VariationalFFNDynamic(nn.Module):
                         step_size=1.0,
                         trust_region=sigma_trust_diag,
                         eps=eps,
+                        sigma_max=self.sigma_max,
                     )
                 else:
                     sigma_current = retract_spd_torch(
@@ -3834,6 +3848,7 @@ class VariationalFFNDynamic(nn.Module):
                         step_size=1.0,
                         trust_region=sigma_trust_full,
                         eps=eps,
+                        sigma_max=self.sigma_max,
                     )
 
             # =============================================================
