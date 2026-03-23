@@ -904,6 +904,20 @@ class PublicationMetrics:
         
         return results
 
+    def maybe_record_semantic_trajectory(self, model: Any, step: int) -> None:
+        """Record a lightweight semantic trajectory snapshot if due.
+
+        Call this every step (or every log step). The tracker's internal interval
+        determines whether a snapshot is actually recorded. This is separate from
+        run_semantic_analysis() so trajectory snapshots can be taken at a higher
+        frequency than full semantic analysis.
+        """
+        if self.semantic_tracker.should_record(step):
+            try:
+                self.semantic_tracker.record(model, step)
+            except Exception:
+                pass  # Silent — trajectory is diagnostic, not critical
+
     def run_final_semantic_analysis(self, model: Any, verbose: bool = True) -> Dict[str, Any]:
         """
         Run final comprehensive semantic analysis at end of training.

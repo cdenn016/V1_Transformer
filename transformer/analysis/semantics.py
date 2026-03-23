@@ -699,9 +699,10 @@ def analyze_gauge_semantics(
         phi_fields = compute_semantic_field_coherence(phi_embed, embed_name='phi')
         results['phi_field_coherence'] = phi_fields
 
-    # Sigma covariance analysis (if model provides sigma_embed)
+    # Sigma covariance analysis (if model provides sigma parameters)
     sigma_embed = None
     if model is not None:
+        # Try sigma_embed (nn.Embedding) first
         for attr_path in [('sigma_embed',), ('token_embed', 'sigma_embed')]:
             obj = model
             for a in attr_path:
@@ -711,6 +712,18 @@ def analyze_gauge_semantics(
             if obj is not None and hasattr(obj, 'weight'):
                 sigma_embed = obj.weight.detach().cpu()
                 break
+        # Fall back to log_sigma_diag (nn.Parameter, common in GaugeTokenEmbedding)
+        if sigma_embed is None:
+            for attr_path in [('log_sigma_diag',), ('token_embed', 'log_sigma_diag')]:
+                obj = model
+                for a in attr_path:
+                    obj = getattr(obj, a, None)
+                    if obj is None:
+                        break
+                if obj is not None and isinstance(obj, torch.Tensor):
+                    # Convert log_sigma to sigma (diagonal covariance)
+                    sigma_embed = torch.exp(obj.detach().cpu()).clamp(min=1e-6)
+                    break
     if sigma_embed is not None:
         sigma_results = analyze_sigma_semantics(sigma_embed, n_tokens=500, verbose=verbose)
         results['sigma_analysis'] = sigma_results
@@ -2039,6 +2052,8 @@ class SemanticTrajectoryTracker:
                     phi_embed = obj.phi_embed.weight.detach().cpu()[:n_tokens]
                 if hasattr(obj, 'sigma_embed'):
                     sigma_embed = obj.sigma_embed.weight.detach().cpu()[:n_tokens]
+                elif hasattr(obj, 'log_sigma_diag') and isinstance(obj.log_sigma_diag, torch.Tensor):
+                    sigma_embed = torch.exp(obj.log_sigma_diag.detach().cpu()).clamp(min=1e-6)[:n_tokens]
                 if mu_embed is not None:
                     break
 

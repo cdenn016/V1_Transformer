@@ -2443,7 +2443,11 @@ class PublicationTrainer(FastTrainer):
                     print(f"[WARN] Holonomy computation failed at step {
                           step+1}: {e}")
 
-            # Periodic gauge frame semantic analysis
+            # Lightweight semantic trajectory snapshot (higher frequency than full analysis)
+            if self.pub_metrics:
+                self.pub_metrics.maybe_record_semantic_trajectory(self.model, step + 1)
+
+            # Periodic gauge frame semantic analysis (full: clustering, field coherence, omega, sigma)
             if self.pub_metrics and self.pub_metrics.should_run_semantic_analysis(step + 1):
                 try:
                     self.pub_metrics.run_semantic_analysis(
