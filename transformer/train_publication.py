@@ -2194,11 +2194,15 @@ class PublicationTrainer(FastTrainer):
                                    f"mu: {grad_norms['mu']:.3e} | sigma: { grad_norms['sigma']:.3e} | "
                                    f"phi: {grad_norms['phi']:.3e}")
                     if e_step_norms:
-                        _mu_c = e_step_norms.get('nat_grad_mu_clipped', 0.0)
-                        _sig_c = e_step_norms.get('nat_grad_sigma_clipped', 0.0)
-                        tqdm.write(f"  [E-STEP] nat_grad_mu: {e_step_norms['nat_grad_mu']:.3e} (clip: {_mu_c:.3e}) | "
-                                   f"nat_grad_sigma: {e_step_norms['nat_grad_sigma']:.3e} (clip: {_sig_c:.3e}) | "
-                                   f"grad_phi: {e_step_norms['grad_phi']:.3e}\n")
+                        _mu_cap = e_step_norms.get('mu_cap_frac', 0.0) * 100
+                        _sig_cap = e_step_norms.get('sigma_cap_frac', 0.0) * 100
+                        _mu_tr = e_step_norms.get('mu_trust_frac', 0.0) * 100
+                        _wh_mean = e_step_norms.get('whitened_mu_mean', 0.0)
+                        _wh_max = e_step_norms.get('whitened_mu_max', 0.0)
+                        tqdm.write(f"  [E-STEP] nat_mu: {e_step_norms['nat_grad_mu']:.3e} (cap: {_mu_cap:.0f}%) | "
+                                   f"nat_sig: {e_step_norms['nat_grad_sigma']:.3e} (cap: {_sig_cap:.0f}%) | "
+                                   f"phi: {e_step_norms['grad_phi']:.3e} | "
+                                   f"trust: {_mu_tr:.0f}% (wh: {_wh_mean:.3f}/{_wh_max:.3f})\n")
                     # Print Bayesian alpha diagnostics
                     if metrics.get('bayesian/alpha_mean') is not None:
                         tqdm.write(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
@@ -2216,11 +2220,15 @@ class PublicationTrainer(FastTrainer):
                               f"mu: {grad_norms['mu']:.3e} | sigma: { grad_norms['sigma']:.3e} | "
                               f"phi: {grad_norms['phi']:.3e}")
                     if e_step_norms:
-                        _mu_c = e_step_norms.get('nat_grad_mu_clipped', 0.0)
-                        _sig_c = e_step_norms.get('nat_grad_sigma_clipped', 0.0)
-                        print(f"  [E-STEP] nat_grad_mu: {e_step_norms['nat_grad_mu']:.3e} (clip: {_mu_c:.3e}) | "
-                              f"nat_grad_sigma: {e_step_norms['nat_grad_sigma']:.3e} (clip: {_sig_c:.3e}) | "
-                              f"grad_phi: {e_step_norms['grad_phi']:.3e}\n")
+                        _mu_cap = e_step_norms.get('mu_cap_frac', 0.0) * 100
+                        _sig_cap = e_step_norms.get('sigma_cap_frac', 0.0) * 100
+                        _mu_tr = e_step_norms.get('mu_trust_frac', 0.0) * 100
+                        _wh_mean = e_step_norms.get('whitened_mu_mean', 0.0)
+                        _wh_max = e_step_norms.get('whitened_mu_max', 0.0)
+                        print(f"  [E-STEP] nat_mu: {e_step_norms['nat_grad_mu']:.3e} (cap: {_mu_cap:.0f}%) | "
+                              f"nat_sig: {e_step_norms['nat_grad_sigma']:.3e} (cap: {_sig_cap:.0f}%) | "
+                              f"phi: {e_step_norms['grad_phi']:.3e} | "
+                              f"trust: {_mu_tr:.0f}% (wh: {_wh_mean:.3f}/{_wh_max:.3f})\n")
                     if metrics.get('bayesian/alpha_mean') is not None:
                         print(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
                               f"std: {metrics['bayesian/alpha_std']:.4f} | "
