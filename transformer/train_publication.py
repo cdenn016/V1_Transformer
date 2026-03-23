@@ -238,25 +238,26 @@ STANDARD_CONFIG = {
 
 EM_CONFIG = {
     # === Architecture ===
-    'vocab_size':          50257,
-    'embed_dim':           90,
-    'max_seq_len':         128,
-    'batch_size':          16, # for debugging use K=10 batch=448, steps = 4250 and seq=64 ~1epoch~20min
-    'max_steps':           60000,
+    'vocab_size':            50257,
+    'embed_dim':             10,
+    'max_seq_len':           64,
     
-    'n_layers':            1,
-    'ffn_n_iterations':    1,
+    'batch_size':            256, 
+    'max_steps':             7500,
     
-    'gauge_dim':                        15,
-    'irrep_spec':          [('fund', 6, 15)],
+    'n_layers':              1,
+    'ffn_n_iterations':      1,
+    
+    'gauge_dim':                          10,
+    'irrep_spec':            [('fund', 1, 10)],
 
-    'use_prior_bank':      True,
-    'mask_self_attention': False,  # Prevent attention collapse?
+    'use_prior_bank':        True,
+    'mask_self_attention':   False,  # Prevent attention collapse?
   
     # === M-step: implicit differentiation ===
-    'implicit_em':         False,
-    'amortized_inference': True,
-    'use_obs_in_vfe':      False,  #cheats when true
+    'implicit_em':           False,
+    'amortized_inference':   True,
+    'use_obs_in_vfe':        False,  #cheats when true
        
     # === M-step: Optimizer ===  
     'optimizer_type':        'natural_gradient',# or 'natural_gradient' or 'adamw' or 'riemannian_adam'
@@ -279,6 +280,7 @@ EM_CONFIG = {
     'learnable_alpha':       False,    
     'ffn_learnable_alpha':   False,   # Adaptive α_i = c0/(b0 + KL) per dimension
 
+    'e_step_phi_lr': 0.05,   # E-step φ descent step size (decoupled from M-step phi_lr)
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
     'gauge_group':      'GLK',
@@ -303,7 +305,7 @@ EM_CONFIG = {
     'alpha':        0.0,
     'beta':         0.0,
     'alpha_phi':    0.1,            # Gauge prior: (α_φ/2)||φ||²
-    'lambda_hyper': 0.1,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
+    'lambda_hyper': 0.0,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
     'lambda_gamma': 0.0,
     'kappa_gamma':  1.0,
 
@@ -323,11 +325,13 @@ EM_CONFIG = {
     'mu_normalize':    False,
     'mu_max_norm':     None,
 
-    # === Learning rates ===
+    
+
+    # === M-step Learning rates ===
     'mu_lr':         0.05,
     'sigma_lr':      0.0125,
     'phi_lr':        0.0075,
-    'e_step_phi_lr': 0.05,   # E-step φ descent step size (decoupled from M-step phi_lr)
+    
     
     'ffn_lr':        0.05,
     'attention_lr':  0.005,
@@ -584,7 +588,7 @@ PURE_VFE_CONFIG = {
     # 'omega' (direct GL(K)) or 'phi' (Lie algebra)
     'gauge_param':    'omega',
     'omega_cond_max': 100.0,
-    # phi_max_norm: omitted → auto-select in retraction (π for SO(N), 5.0 for GL(K))
+    
 
     # M-step options
     'sigma_obs_grad':   'none',
@@ -609,103 +613,7 @@ PURE_VFE_CONFIG = {
 }
 
 
-# =============================================================================
-# CONFIG: PURE VFE — No backprop, natural gradient only (mode='pure_vfe')
-# =============================================================================
-# The purest realization of the free energy principle for sequence modeling.
-# NO nn.Module, NO autograd, NO optimizer. The entire system — inference AND
-# learning — operates through natural gradient descent on the gauge-covariant
-# VFE with analytic closed-form gradients.
-#
-# Architecture:
-#   - Model: Prior bank {N(μ_v, Σ_v), Ω_v} per vocabulary token
-#   - Inference: E-step VFE descent (replaces forward pass)
-#   - Learning: M-step natural gradient on prior bank
-#   - Attention: KL-divergence based with gauge transport
-#   - No linear projections, no output head — logits = −KL(q||π_v)
-# =============================================================================
-PURE_VFE_CONFIG = {
-    # Belief geometry
-    'vocab_size': 50257,
-    'belief_dim': 32,             # K: full belief dimension
-    'n_heads':    4,                 # H: number of heads (block-diagonal)
-    'head_dim':   8,                # K_h = K / H
 
-    # Sequence
-    'max_seq_len': 64,           # Match other modes
-    'batch_size':  32,
-    'max_steps':   30000,
-
-    # E-step (inference = forward pass)
-    # Iterations of VFE descent (replaces "depth")
-    'n_esteps': 12,
-    # Attention temperature (defaults to √K_h)
-    'tau':      None,
-    'eta_E':    0.1,                 # E-step natural gradient step size
-
-    # M-step (learning = parameter update)
-    # M-step natural gradient step size (match VFE_dynamic mu_lr)
-    'eta_M':    0.05,
-
-    # Prior precision (state-dependent α)
-    'alpha_b0': 1.0,
-    'alpha_c0': 1.0,
-
-    # Hyper-prior regularization
-    'hyper_var': 100.0,
-
-
-    # Initialization
-    'sigma_init':       1.0,
-    'omega_init_scale': 0.01,
-
-    # E-step numerical stability
-    'sigma_lr_ratio':  0.05,
-    'e_step_lr_decay': 0.5,
-    'grad_clamp':      1e3,
-
-    # Trust regions
-    'trust_region_mu':    2.0,
-    'trust_region_sigma': 0.15,
-    'trust_region_omega': 0.3,
-
-    # SPD retraction
-    'spd_eps_min':   1e-3,
-    'spd_kappa_max': 1e4,
-    'spd_exp_clip':  20.0,
-
-    # Prior safeguards
-    'prior_sigma_floor': 0.5,
-    'prior_mu_max_norm': 10.0,
-    'm_step_trust_mu':   0.5,
-
-    # Gauge frame parameterization
-    # 'omega' (direct GL(K)) or 'phi' (Lie algebra)
-    'gauge_param':    'omega',
-    'omega_cond_max': 100.0,
-    # phi_max_norm: omitted → auto-select in retraction (π for SO(N), 5.0 for GL(K))
-
-    # M-step options
-    'sigma_obs_grad':   'none',
-    'm_step_eta_floor': 0.01,
-
-    # Recovery
-    'nan_recovery':     True,
-
-    # Causal masking
-    'causal':           True,
-
-    # Device & kernels
-    'device': 'cuda',
-    'use_cuda_kernels': True,
-
-    # Training loop params (used by run_pure_vfe_experiment, not PureVFEConfig)
-
-    'log_interval':        100,
-    'eval_interval':       1000,
-    'checkpoint_interval': 25000,
-    'num_workers':         10,
-}
 
 
 # =============================================================================
