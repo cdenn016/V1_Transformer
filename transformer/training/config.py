@@ -49,13 +49,18 @@ class TrainingConfig:
     # Simple mode: Single learning rate (used when use_param_groups=False)
     learning_rate: float = 3e-4
 
-    # Multi-group mode: Per-parameter group learning rates
-    mu_lr: float = 0.1           # Mean embeddings (natural gradient scale)
-    sigma_lr: float = 0.005      # Covariance embeddings (smaller for stability)
-    phi_lr: float = 0.01         # Gauge frames
-    attention_lr: float = 0.01   # Attention parameters
-    ffn_lr: float = 0.001        # FFN parameters (standard)
-    output_lr: float = 0.001     # Output projection
+    # Multi-group mode: M-step learning rates for AdamW parameter groups.
+    # These control how fast nn.Parameter objects update via backprop (M-step).
+    # The E-step (inner VFE loop) has its own rates: e_step_mu_lr, e_step_sigma_lr,
+    # e_step_phi_lr — set in BlockConfig / EM_CONFIG, not here.
+    # Note: mu_embed and log_sigma_diag serve dual roles (q₀ init AND prior μ_p/σ_p),
+    # so these rates indirectly affect E-step initialization.
+    mu_lr: float = 0.1           # Prior mean embeddings (μ_p)
+    sigma_lr: float = 0.005      # Prior covariance embeddings (log σ_p)
+    phi_lr: float = 0.01         # Gauge frame embeddings (φ)
+    attention_lr: float = 0.01   # Attention params (W_O, constant_omega)
+    ffn_lr: float = 0.001        # FFN params (raw_c0, raw_b0, raw_lr via no_decay group)
+    output_lr: float = 0.001     # Output projection (vocab logits)
 
     # ==========================================================================
     # Optimizer Hyperparameters
