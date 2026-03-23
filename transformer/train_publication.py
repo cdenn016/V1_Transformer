@@ -1,5 +1,4 @@
 
-
 # =============================================================================
 # PATH SETUP - Ensure the project root is in the Python path
 # This allows the script to be run from any directory (including the transformer/ folder)
@@ -152,6 +151,7 @@ STANDARD_CONFIG = {
     # Model architecture — param-matched to EM_CONFIG (1.52M)
     'vocab_size': 50257,
     'embed_dim': 10,              # Same as VFE for apples-to-apples comparison
+    
     'n_layers': 1,                # Same depth
     'n_heads': 1,                 # Single head (head_dim=10)
     'hidden_dim': 24527,          # Absorbs params that VFE spends on σ table + VFE machinery
@@ -235,90 +235,98 @@ STANDARD_CONFIG = {
 # =============================================================================
 
 
+
 EM_CONFIG = {
     # === Architecture ===
     'vocab_size':  50257,
-    'embed_dim':   10,
-    'gauge_dim':   10,    
+    'embed_dim':   90,
+    'gauge_dim':   15,    
     'n_layers':    1,
     'hidden_dim':  508,
-    'max_seq_len': 32,
-    
+    'max_seq_len': 128,
+
     'ffn_mode': 'VFE_dynamic',
-    
-    'use_deq': False,
+
+    'use_deq':           False,
+    'deq_include_phi':   True,    # NEW: corrects M-step phi gradient
     'deq_neumann_terms': 0,
+
+    # === M-step: implicit differentiation ===
+    'implicit_em':         False,
+    'amortized_inference': True,
+
     
+    'obs_sigma_gradient': True,    # Add ∂E_q[CE]/∂σ Hessian-diagonal gradient in VFE E-step
+                                    # Requires use_obs_in_vfe=True to have any effect
+    'obs_sigma_weight':   1.0,        # Weight for sigma observation gradient
+
+
+    # === M-step: Optimizer ===
     
-    'optimizer_type': 'adamw',  # or 'natural_gradient' or 'adamw' or 'riemannian_adam'
+    'optimizer_type':   'natural_gradient',# or 'natural_gradient' or 'adamw' or 'riemannian_adam'
     'fisher_ema_decay': 0.95,            # for natural_gradient
-    'fisher_damping': 1e-4,              # for natural_gradient
-    
+    'fisher_damping':   1e-4,              # for natural_gradient
+
     # === Training ===
-    'batch_size':    64,    
-    'max_steps':     15000,
+    # for debugging use K=10 batch=448, steps = 4250 and seq=64 ~1epoch~20min
+    'batch_size':    16,
+    'max_steps':     60000,
     'warmup_steps':  100,
     'num_workers':   10,
-    
+
     'tie_embeddings': False,
-    
+
     'use_layernorm':         True,
     'use_residual':          True,
     'use_output_projection': True,
     'multihead_vfe':         True,
-    
+
     'mask_self_attention':   False,  # Prevent attention collapse?
     'use_prior_bank':        True,
-    
+
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
     'gauge_group':      'GLK',
-    'gauge_mode':       'learned',  
+    'gauge_mode':       'learned',
     'gauge_param':      'phi',
-    
-    'irrep_spec':       [('fund', 1, 10)],
-  
-    
+
+    'irrep_spec':       [('fund', 6, 15)],
+
+
     'diagonal_covariance':      True,
-    'exact_diagonal_transport': False,  #exact diagonal transport - more expensive
-    'isotropic_covariance':     False,    # If True, force Σ = σ²I (scalar variance × identity)
-                                       
-    'enforce_orthogonal':       False,   
-    'learnable_reflection':     False ,   # Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk 
-                                          # Set gauge-mode=constant and the above 3 = true for transf limit
+    'exact_diagonal_transport': False,  # exact diagonal transport - more expensive
+                                        # If True, force Σ = σ²I (scalar variance × identity)
+    'isotropic_covariance':     False,
+
+    'enforce_orthogonal':       False,
+    
+    'learnable_reflection':     False,# Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk
+                                        # Set gauge-mode=constant and the above 3 = true for transf limit
 
     # === E-step dynamics ===
     'ffn_n_iterations':    1,
-    
+
     'ffn_alpha':           1.0,               # Prior coupling inside VFE E-step
     'ffn_lambda_belief':   1.0,       # Belief alignment inside VFE E-step
-    
-    'learnable_alpha':     False,
-    'ffn_learnable_alpha': False,    # Adaptive α_i = c0/(b0 + KL) per dimension
-    
+
+    'learnable_alpha':     False,    
+    'ffn_learnable_alpha': False,   # Adaptive α_i = c0/(b0 + KL) per dimension
+
     'evolve_sigma':        True,
     'evolve_phi':          True,
     'evolve_phi_e_step':   True,
-        
-    'ffn_learnable_lr':    True,
-    
-    # === M-step: implicit differentiation ===
-    'implicit_em':         False,
-    'amortized_inference': True,
-    
-    
-    
+
+
     # === VFE loss weights (M-step objective) ===
     # E-step: prior + alignment (no observations with n_iterations=1).
     # CE enters through M-step via IFT (s_k ≈ 0.5 from fixed ffn_alpha=1).
     # alpha=0: KL(q*||p) homogenizes (q* is smoothed, not data-grounded).
     # beta=0: alignment term is vacuum-seeking. E-step handles it internally.
-    
+
     'alpha':        0.0,
     'beta':         0.0,
     'alpha_phi':    0.1,            # Gauge prior: (α_φ/2)||φ||²
     'lambda_hyper': 0.1,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
-    'sigma_ce_scale': 0.0,          # 0.0=detach sigma_p from CE, 0.01=1% gradient, 1.0=full
     'lambda_gamma': 0.0,
     'kappa_gamma':  1.0,
 
@@ -337,8 +345,13 @@ EM_CONFIG = {
     'kappa_beta':      1.0,
     'mu_normalize':    False,
     'mu_max_norm':     None,
-    
+
     # === Learning rates ===
+    'ffn_learnable_lr':    True,  # E-step
+    # E-step φ descent step size (decoupled from M-step phi_lr)
+    'e_step_phi_lr':       0.025,
+
+
     'mu_lr':        0.05,
     'sigma_lr':     0.0125,
     'phi_lr':       0.0075,
@@ -346,7 +359,7 @@ EM_CONFIG = {
     'attention_lr': 0.005,
     'output_lr':    0.05,
 
-    'e_step_phi_lr':       0.05,               # E-step φ descent step size (decoupled from M-step phi_lr)
+
     # === Regularization ===
     'weight_decay':  0.01,
     'grad_clip':     1.0,
@@ -356,7 +369,7 @@ EM_CONFIG = {
     'eval_interval':              1000,
     'checkpoint_interval':        25000,
     'semantic_analysis_interval': 10000,
-    
+
     # =================================================================
     # NON-FLAT GAUGE TRANSPORT (holonomy)
     # =================================================================
@@ -367,20 +380,21 @@ EM_CONFIG = {
     # curvature only where the data warrants it.
     # Holonomy H_ijk = Ω_ij·Ω_jk·Ω_ki ≠ I when δ ≠ 0.
     'non_flat_transport':    False,        # Enable edge-dependent connection δ_ij
-    'cocycle_relaxation':    0.5,          # Scale for δ_ij: 0=flat, 1=fully non-flat
-    'connection_type':       'bilinear',      # 'bilinear' (δ_ij^a = μ_i^T W^a μ_j) | 'mlp'
-    'connection_hidden_dim': 64,        # Hidden dim for MLP connection (ignored for bilinear)
-    'connection_init_scale': 0.01,      # W init scale (0=flat saddle point, 0.01 recommended)
-    'holonomy_penalty':      0.0,            # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
-    
+    'cocycle_relaxation':    0.5,          # Scale for δ_ij: 0=flat, 1=fully non-flat    
+    'connection_type':       'bilinear',  # 'bilinear' (δ_ij^a = μ_i^T W^a μ_j) | 'mlp'   
+    'connection_hidden_dim': 64,   # Hidden dim for MLP connection (ignored for bilinear)   
+    'connection_init_scale': 0.01,   # W init scale (0=flat saddle point, 0.01 recommended)    
+    'holonomy_penalty':      0.0,  # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
+
     # Option A: couple just 0↔1, head 2 stays independent
-    #'cross_couplings': [(0, 1), (1, 0)],
+    # 'cross_couplings': [(0, 1), (1, 0)],
     # → super-blocks: [20, 10]  (heads 0,1 merged into GL(20), head 2 alone)
     # === Layer/iteration diagnostics ===
-    'track_layer_diagnostics':     True,
-    'track_iteration_diagnostics': True,
+    'track_layer_diagnostics':     False,
+    'track_iteration_diagnostics': False,
     'diagnostics_interval':        25,
-    
+    'gauge_fixed_priors':          False
+
 }
 
 
@@ -420,19 +434,20 @@ HEBBIAN_CONFIG = {
     # === Architecture (same model as EM) ===
     'vocab_size':   50257,
     'embed_dim':    10,
+    'gauge_dim':    10,
     'n_layers':     1,
     'hidden_dim':   508,
     'max_seq_len':  128,
-    
+
     # === Training ===
     'batch_size':   64,
     'num_workers':  10,
     'max_steps':    15000,
     'warmup_steps': 100,
-    
+
     'ffn_mode':              'VFE_dynamic',
     'tie_embeddings':        False,
-    
+
     'use_layernorm':         True,
     'use_residual':          True,
     'use_output_projection': True,
@@ -447,10 +462,10 @@ HEBBIAN_CONFIG = {
 
     # === E-step dynamics (same as EM) ===
     'ffn_n_iterations': 1,
-    
+
     'ffn_alpha':         1.0,
     'ffn_lambda_belief': 1.0,
-    
+
     'evolve_sigma':        True,
     'evolve_phi':          True,
     'evolve_phi_e_step':   True,
@@ -458,14 +473,16 @@ HEBBIAN_CONFIG = {
 
     # === Hebbian M-step: no backprop ===
     'amortized_inference':  False,
-    
-    'use_p_flow':           True,             # EMA update of embeddings toward successful beliefs
+
+    # EMA update of embeddings toward successful beliefs
+    'use_p_flow':           True,
     'use_delta_rule_w_out': True,   # Widrow-Hoff local learning for W_out
-    'detach_phi':           True,             # phi learns via P-flow only (no backprop)
-    
+    # phi learns via P-flow only (no backprop)
+    'detach_phi':           True,
+
     'p_flow_ema_decay':     0.95,
     'delta_rule_lr':        0.1,
-    
+
 
     # === Loss weights: CE only (no VFE regularizers in backprop loss) ===
     'alpha':        0.0,
@@ -536,12 +553,15 @@ PURE_VFE_CONFIG = {
     'max_steps':   30000,
 
     # E-step (inference = forward pass)
-    'n_esteps': 12,               # Iterations of VFE descent (replaces "depth")
-    'tau':      None,                  # Attention temperature (defaults to √K_h)
+    # Iterations of VFE descent (replaces "depth")
+    'n_esteps': 12,
+    # Attention temperature (defaults to √K_h)
+    'tau':      None,
     'eta_E':    0.1,                 # E-step natural gradient step size
 
     # M-step (learning = parameter update)
-    'eta_M':    0.05,                # M-step natural gradient step size (match VFE_dynamic mu_lr)
+    # M-step natural gradient step size (match VFE_dynamic mu_lr)
+    'eta_M':    0.05,
 
     # Prior precision (state-dependent α)
     'alpha_b0': 1.0,
@@ -576,7 +596,8 @@ PURE_VFE_CONFIG = {
     'm_step_trust_mu':   0.5,
 
     # Gauge frame parameterization
-    'gauge_param':    'omega',       # 'omega' (direct GL(K)) or 'phi' (Lie algebra)
+    # 'omega' (direct GL(K)) or 'phi' (Lie algebra)
+    'gauge_param':    'omega',
     'omega_cond_max': 100.0,
     'phi_max_norm':   3.14159,
 
@@ -595,7 +616,7 @@ PURE_VFE_CONFIG = {
     'use_cuda_kernels': True,
 
     # Training loop params (used by run_pure_vfe_experiment, not PureVFEConfig)
-    
+
     'log_interval':        100,
     'eval_interval':       1000,
     'checkpoint_interval': 25000,
@@ -631,12 +652,15 @@ PURE_VFE_CONFIG = {
     'max_steps':   30000,
 
     # E-step (inference = forward pass)
-    'n_esteps': 12,               # Iterations of VFE descent (replaces "depth")
-    'tau':      None,                  # Attention temperature (defaults to √K_h)
+    # Iterations of VFE descent (replaces "depth")
+    'n_esteps': 12,
+    # Attention temperature (defaults to √K_h)
+    'tau':      None,
     'eta_E':    0.1,                 # E-step natural gradient step size
 
     # M-step (learning = parameter update)
-    'eta_M':    0.05,                # M-step natural gradient step size (match VFE_dynamic mu_lr)
+    # M-step natural gradient step size (match VFE_dynamic mu_lr)
+    'eta_M':    0.05,
 
     # Prior precision (state-dependent α)
     'alpha_b0': 1.0,
@@ -671,7 +695,8 @@ PURE_VFE_CONFIG = {
     'm_step_trust_mu':   0.5,
 
     # Gauge frame parameterization
-    'gauge_param':    'omega',       # 'omega' (direct GL(K)) or 'phi' (Lie algebra)
+    # 'omega' (direct GL(K)) or 'phi' (Lie algebra)
+    'gauge_param':    'omega',
     'omega_cond_max': 100.0,
     'phi_max_norm':   3.14159,
 
@@ -690,13 +715,12 @@ PURE_VFE_CONFIG = {
     'use_cuda_kernels': True,
 
     # Training loop params (used by run_pure_vfe_experiment, not PureVFEConfig)
-    
+
     'log_interval':        100,
     'eval_interval':       1000,
     'checkpoint_interval': 25000,
     'num_workers':         10,
 }
-
 
 
 # =============================================================================
@@ -724,8 +748,10 @@ STANDARD_ATTN_ONLY_CONFIG = {
     'vocab_size': 50257,
     'embed_dim': 90,              # Same as gauge model embed_dim
     'n_layers': 1,                # Same depth
-    'n_heads': 9,                 # 9 heads * 10 = 90 (head_dim=10, matching gauge d_head)
-    'hidden_dim': 360,            # Not used (FFN disabled), but needed for config
+    # 9 heads * 10 = 90 (head_dim=10, matching gauge d_head)
+    'n_heads': 9,
+    # Not used (FFN disabled), but needed for config
+    'hidden_dim': 360,
     'max_seq_len': 128,
     'disable_ffn': True,          # KEY: no FFN, attention only
 
@@ -780,7 +806,7 @@ STANDARD_ATTN_ONLY_CONFIG = {
     'gauge_group': 'SO3',
     'gauge_dim': 3,
     'gauge_mode': 'learned',
-    'gauge_fixed_priors': True,
+    'gauge_fixed_priors': False,
     'irrep_spec': [('ℓ0', 5, 1)],
     'compute_rg_metrics': False,
 }
@@ -988,12 +1014,6 @@ STANDARD_ROPE_D90_CONFIG = {
 # =============================================================================
 
 
-
-
-
-
-
-
 def get_git_info() -> Dict[str, str]:
     """Get current git commit info."""
     try:
@@ -1036,7 +1056,8 @@ def get_system_info() -> Dict[str, Any]:
         info['cuda_version'] = torch.version.cuda
         info['gpu_name'] = torch.cuda.get_device_name(0)
         info['gpu_count'] = torch.cuda.device_count()
-        info['gpu_memory_gb'] = torch.cuda.get_device_properties(0).total_memory / 1e9
+        info['gpu_memory_gb'] = torch.cuda.get_device_properties(
+            0).total_memory / 1e9
 
     return info
 
@@ -1087,7 +1108,8 @@ def run_test_evaluation(
     pad_token_id = -100
 
     model.eval()
-    total_ce_tokens = 0.0  # Sum of CE * non_pad_tokens (for token-weighted avg)
+    # Sum of CE * non_pad_tokens (for token-weighted avg)
+    total_ce_tokens = 0.0
     total_tokens = 0
     num_batches = 0
     total_samples = 0
@@ -1127,7 +1149,8 @@ def run_test_evaluation(
 
             # Progress indicator
             if (batch_idx + 1) % 100 == 0:
-                print(f"  Evaluated {total_samples}/{max_samples} samples ({num_batches} batches)...")
+                print(f"  Evaluated {
+                      total_samples}/{max_samples} samples ({num_batches} batches)...")
 
     # Token-weighted CE average (proper averaging for variable batch sizes)
     test_ce = total_ce_tokens / max(1, total_tokens)
@@ -1136,7 +1159,8 @@ def run_test_evaluation(
     random_ppl = vocab_size
     improvement = random_ppl / test_ppl if test_ppl > 0 else 0
 
-    print(f"\nTest Set Results ({total_samples} samples across {num_batches} batches):")
+    print(f"\nTest Set Results ({total_samples} samples across {
+          num_batches} batches):")
     print(f"  Cross-entropy loss: {test_ce:.4f}")
     print(f"  Perplexity:         {test_ppl:.2f}")
     print(f"  Bits per character: {test_bpc:.3f}")
@@ -1202,8 +1226,6 @@ def save_experiment_config(
     print(f"📋 Saved experiment config: {config_path}")
 
     return config_path
-
-
 
 
 class PublicationMetricsTracker:
@@ -1274,7 +1296,8 @@ class PublicationMetricsTracker:
         """Log training step with full metrics."""
 
         # Compute tokens/sec
-        tokens_per_sec = (batch_size * seq_len) / step_time if step_time > 0 else 0
+        tokens_per_sec = (batch_size * seq_len) / \
+            step_time if step_time > 0 else 0
 
         # Bits per character (convert from nats)
         train_bpc = metrics.get('train_loss_ce', 0) / math.log(2)
@@ -1373,9 +1396,11 @@ class PublicationMetricsTracker:
         for entry in reversed(self.history):
             if entry['step'] == step:
                 entry['val_loss'] = val_metrics.get('loss')
-                entry['val_ce'] = val_metrics.get('ce_loss', val_metrics.get('loss'))
+                entry['val_ce'] = val_metrics.get(
+                    'ce_loss', val_metrics.get('loss'))
                 entry['val_ppl'] = val_metrics.get('perplexity')
-                entry['val_bpc'] = entry['val_ce'] / math.log(2) if entry['val_ce'] else None
+                entry['val_bpc'] = entry['val_ce'] / \
+                    math.log(2) if entry['val_ce'] else None
                 break
 
     def save(self):
@@ -1411,7 +1436,8 @@ class LayerDiagnosticsTracker:
     def log(self, diag: Dict):
         """Append a single row."""
         with open(self.save_path, 'a', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=self.HEADERS, extrasaction='ignore')
+            writer = csv.DictWriter(
+                f, fieldnames=self.HEADERS, extrasaction='ignore')
             writer.writerow(diag)
 
 
@@ -1423,6 +1449,7 @@ class IterationDiagnosticsTracker:
         'grad_mu_norm', 'grad_sigma_norm', 'nat_grad_mu_norm', 'nat_grad_mu_raw_norm',
         'delta_mu_norm', 'mu_norm', 'sigma_mean',
         'sigma_max', 'sigma_min', 'sigma_std',
+        'delta_mu_norm', 'mu_norm', 'sigma_mean',
         'effective_lr', 'scale_mean',
         'mu_diff_to_prior_norm', 'beta_entropy', 'mu_change_rel',
     ]
@@ -1437,7 +1464,8 @@ class IterationDiagnosticsTracker:
     def log(self, diag: Dict):
         """Append a single row."""
         with open(self.save_path, 'a', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=self.HEADERS, extrasaction='ignore')
+            writer = csv.DictWriter(
+                f, fieldnames=self.HEADERS, extrasaction='ignore')
             writer.writerow(diag)
 
 
@@ -1455,7 +1483,8 @@ class PublicationTrainer(FastTrainer):
         # Comprehensive publication metrics (optional)
         self.pub_metrics = publication_metrics
         if self.pub_metrics:
-            print(f"[INFO] Comprehensive metrics enabled: {self.pub_metrics.experiment_dir}")
+            print(f"[INFO] Comprehensive metrics enabled: {
+                  self.pub_metrics.experiment_dir}")
 
         # Tokenizer for decoding sequences in interpretability outputs
         self.tokenizer = tokenizer
@@ -1492,7 +1521,8 @@ class PublicationTrainer(FastTrainer):
             generators = self.model.generators  # (n_gen, K, K)
 
             if use_killing_form:
-                sym_dampening = getattr(self.config, 'killing_form_sym_dampening', 0.1)
+                sym_dampening = getattr(
+                    self.config, 'killing_form_sym_dampening', 0.1)
                 self._cartan_preconditioner = build_cartan_projector(
                     generators, sym_dampening=sym_dampening
                 ).to(self.device)
@@ -1504,7 +1534,8 @@ class PublicationTrainer(FastTrainer):
                 # which flows through model → blocks → ffn → VariationalFFNDynamic.
 
             if use_slk:
-                self._slk_trace_vec = build_slk_projector(generators).to(self.device)
+                self._slk_trace_vec = build_slk_projector(
+                    generators).to(self.device)
                 trace_norm = self._slk_trace_vec.norm().item()
                 print(f"[INFO] SL(K) projection enabled: "
                       f"removing trace component (||v||={trace_norm:.2f}, "
@@ -1541,7 +1572,8 @@ class PublicationTrainer(FastTrainer):
         for font_name in cjk_fonts:
             if font_name in available:
                 plt.rcParams['font.family'] = 'sans-serif'
-                plt.rcParams['font.sans-serif'] = [font_name] + plt.rcParams.get('font.sans-serif', [])
+                plt.rcParams['font.sans-serif'] = [font_name] + \
+                    plt.rcParams.get('font.sans-serif', [])
                 plt.rcParams['axes.unicode_minus'] = False
                 self._cjk_fonts_configured = True
                 return
@@ -1570,7 +1602,8 @@ class PublicationTrainer(FastTrainer):
             return  # Skip if matplotlib unavailable
 
         # Configure CJK font support for Japanese text in plot titles
-        dataset_name = getattr(self.train_loader.dataset, 'dataset_name', 'wikitext-2')
+        dataset_name = getattr(self.train_loader.dataset,
+                               'dataset_name', 'wikitext-2')
         if dataset_name == 'wiki-ja':
             self._setup_cjk_fonts(plt)
 
@@ -1581,7 +1614,8 @@ class PublicationTrainer(FastTrainer):
         # Get attention from forward pass
         with torch.no_grad():
             if hasattr(self.model, 'forward_with_attention'):
-                _, attn_info = self.model.forward_with_attention(input_ids, targets=None)
+                _, attn_info = self.model.forward_with_attention(
+                    input_ids, targets=None)
                 beta = attn_info.get('beta')
                 kl = attn_info.get('kl')
                 n_layers = attn_info.get('n_layers', 1)
@@ -1597,7 +1631,8 @@ class PublicationTrainer(FastTrainer):
                         n_layers = 1
                     elif beta.dim() == 3:
                         # Very old format: (B, N, N) — no heads, no layers
-                        beta = beta.unsqueeze(0).unsqueeze(2)  # (1, B, 1, N, N)
+                        beta = beta.unsqueeze(0).unsqueeze(
+                            2)  # (1, B, 1, N, N)
                         if kl is not None:
                             kl = kl.unsqueeze(0).unsqueeze(2)
                         n_layers = 1
@@ -1613,13 +1648,17 @@ class PublicationTrainer(FastTrainer):
                     # Show what sequence we're visualizing
                     if hasattr(self, 'tokenizer') and self.tokenizer is not None:
                         try:
-                            decoded = self.tokenizer.decode(input_ids[0].tolist())
-                            preview = decoded[:80] + ('...' if len(decoded) > 80 else '')
+                            decoded = self.tokenizer.decode(
+                                input_ids[0].tolist())
+                            preview = decoded[:80] + \
+                                ('...' if len(decoded) > 80 else '')
                             seq_info = f"Step {step}, Text: {preview}"
                         except Exception:
-                            seq_info = f"Step {step}, Tokens: {input_ids[0, :20].tolist()}..."
+                            seq_info = f"Step {step}, Tokens: {
+                                input_ids[0, :20].tolist()}..."
                     else:
-                        seq_info = f"Step {step}, Tokens: {input_ids[0, :20].tolist()}..."
+                        seq_info = f"Step {step}, Tokens: {
+                            input_ids[0, :20].tolist()}..."
 
                     # Save directory
                     save_dir = self.config.checkpoint_dir / 'attention_patterns'
@@ -1629,31 +1668,41 @@ class PublicationTrainer(FastTrainer):
                     # SAVE PER-LAYER, PER-HEAD VISUALIZATIONS (NOT AVERAGED!)
                     # ============================================================
                     for layer_idx in range(n_layers_actual):
-                        beta_layer_np = beta[layer_idx, 0].cpu().numpy()  # (n_heads, N, N)
+                        # (n_heads, N, N)
+                        beta_layer_np = beta[layer_idx, 0].cpu().numpy()
 
                         for head_idx in range(n_heads):
                             fig, ax = plt.subplots(figsize=(8, 6))
 
                             attn_head = beta_layer_np[head_idx]  # (N, N)
                             attn_plot = attn_head.copy()
-                            #np.fill_diagonal(attn_plot, np.nan)  # Mask diagonal
-                            attn_plot = np.log10(np.maximum(attn_plot, 1e-5))  # Log scale
+                            # np.fill_diagonal(attn_plot, np.nan)  # Mask diagonal
+                            attn_plot = np.log10(np.maximum(
+                                attn_plot, 1e-5))  # Log scale
 
-                            im = ax.imshow(attn_plot, cmap='viridis', aspect='auto', vmin=-5, vmax=0)
+                            im = ax.imshow(attn_plot, cmap='viridis',
+                                           aspect='auto', vmin=-5, vmax=0)
                             ax.set_xlabel('Key Position (j)')
                             ax.set_ylabel('Query Position (i)')
 
-                            irrep_label = head_labels[head_idx] if head_idx < len(head_labels) else f"H{head_idx}"
-                            layer_label = f"L{layer_idx}" if n_layers_actual > 1 else ""
-                            title_prefix = f"{layer_label} " if layer_label else ""
+                            irrep_label = head_labels[head_idx] if head_idx < len(head_labels) else f"H{
+                                head_idx}"
+                            layer_label = f"L{
+                                layer_idx}" if n_layers_actual > 1 else ""
+                            title_prefix = f"{
+                                layer_label} " if layer_label else ""
                             ax.set_title(
-                                f'{title_prefix}Head {head_idx} ({irrep_label}) - {seq_info}',
+                                f'{title_prefix}Head {
+                                    head_idx} ({irrep_label}) - {seq_info}',
                                 fontsize=10,
                             )
-                            plt.colorbar(im, ax=ax, label='log\u2081\u2080(\u03b2)')
+                            plt.colorbar(
+                                im, ax=ax, label='log\u2081\u2080(\u03b2)')
 
                             fig.savefig(
-                                save_dir / f'attention_step_{step:06d}_layer{layer_idx}_head{head_idx}.png',
+                                save_dir /
+                                f'attention_step_{step:06d}_layer{
+                                    layer_idx}_head{head_idx}.png',
                                 dpi=100, bbox_inches='tight',
                             )
                             plt.close(fig)
@@ -1663,8 +1712,10 @@ class PublicationTrainer(FastTrainer):
                     # ============================================================
                     self._attention_viz_count += 1
                     if self._attention_viz_count == 1:
-                        print(f"\n[INFO] Attention patterns saved to: {save_dir}/")
-                        print(f"  Saving per-layer, per-head visualizations ({n_layers_actual} layers, {n_heads} heads)")
+                        print(f"\n[INFO] Attention patterns saved to: {
+                              save_dir}/")
+                        print(
+                            f"  Saving per-layer, per-head visualizations ({n_layers_actual} layers, {n_heads} heads)")
 
         self.model.train()
 
@@ -1680,14 +1731,16 @@ class PublicationTrainer(FastTrainer):
         # NOTE: Use (step + 1) to align with eval_interval which also uses (step + 1)
         compute_rg = (
             getattr(self.config, 'compute_rg_metrics', False) and
-            (self.global_step + 1) % getattr(self.config, 'rg_metrics_interval', 100) == 0
+            (self.global_step + 1) % getattr(self.config,
+                                             'rg_metrics_interval', 100) == 0
         )
 
         # Check if using standard transformer (no VFE loss)
         is_standard = isinstance(self.model, StandardTransformerLM)
 
         # Check if using delta rule for W_out (backprop-free)
-        use_delta_rule = getattr(self.config, 'use_delta_rule_w_out', False) and not is_standard
+        use_delta_rule = getattr(
+            self.config, 'use_delta_rule_w_out', False) and not is_standard
 
         # If delta rule is enabled, exclude W_out from backprop.
         # When tie_embeddings=True, out_proj.weight IS mu_embed.weight (same tensor),
@@ -1920,7 +1973,8 @@ class PublicationTrainer(FastTrainer):
             'train_loss_belief_align': full_metrics.get('loss/belief_align', 0),
             'train_loss_self_consistency': full_metrics.get('loss/self_consistency', 0),
             'train_loss_model_coupling': full_metrics.get('loss/model_coupling', 0),
-            'train_ppl': math.exp(min(full_metrics['loss/ce'], 20)),  # Clamp to prevent overflow
+            # Clamp to prevent overflow
+            'train_ppl': math.exp(min(full_metrics['loss/ce'], 20)),
             'beta_mean': full_metrics.get('attention/beta_mean', 0),
             'beta_std': 0,  # Could compute if needed
             'kl_mean': full_metrics.get('attention/kl_mean', 0),
@@ -1933,9 +1987,9 @@ class PublicationTrainer(FastTrainer):
 
         # Carry over Bayesian alpha diagnostics
         for key in ['bayesian/alpha_mean', 'bayesian/alpha_std', 'bayesian/alpha_min',
-                     'bayesian/alpha_max', 'bayesian/c0', 'bayesian/b0',
-                     'bayesian/c0_std', 'bayesian/b0_std',
-                     'bayesian/mahal_sq_mean', 'bayesian/mahal_sq_std']:
+                    'bayesian/alpha_max', 'bayesian/c0', 'bayesian/b0',
+                    'bayesian/c0_std', 'bayesian/b0_std',
+                    'bayesian/mahal_sq_mean', 'bayesian/mahal_sq_std']:
             if key in full_metrics:
                 metrics[key] = full_metrics[key]
 
@@ -1962,7 +2016,8 @@ class PublicationTrainer(FastTrainer):
                             token_ids=input_ids,
                             targets=target_ids,
                         )
-                    dynamic_metrics = compute_dynamic_rg_metrics(rg_info, self.global_step)
+                    dynamic_metrics = compute_dynamic_rg_metrics(
+                        rg_info, self.global_step)
 
                     # Add dynamic RG metrics
                     for key, value in dynamic_metrics.items():
@@ -1993,7 +2048,8 @@ class PublicationTrainer(FastTrainer):
                         self.model._layer_diagnostics = []
 
                     # Diagnostic forward pass (no grad)
-                    self.model.forward_with_attention(input_ids, targets=target_ids)
+                    self.model.forward_with_attention(
+                        input_ids, targets=target_ids)
 
                     # Write per-layer diagnostics
                     if _track_layers and self.model._layer_diagnostics:
@@ -2052,7 +2108,6 @@ class PublicationTrainer(FastTrainer):
 
         return norms
 
-
     def sample_text(
         self,
         prompt: str = "The",
@@ -2107,8 +2162,6 @@ class PublicationTrainer(FastTrainer):
         if start_step > 0:
             print(f"  Resuming from step {start_step}")
 
-        
-
         start_time = time.time()
         train_iterator = iter(self.train_loader)
 
@@ -2117,12 +2170,14 @@ class PublicationTrainer(FastTrainer):
         if epochs is not None and epochs > 0:
             steps_per_epoch = len(self.train_loader)
             total_steps = epochs * steps_per_epoch
-            print(f"  Training for {epochs} epoch(s) ({steps_per_epoch} steps/epoch = {total_steps:,} total steps)")
+            print(f"  Training for {epochs} epoch(s) ({
+                  steps_per_epoch} steps/epoch = {total_steps:,} total steps)")
         else:
             total_steps = self.config.max_steps
             steps_per_epoch = len(self.train_loader)
             equiv_epochs = total_steps / steps_per_epoch if steps_per_epoch > 0 else 0
-            print(f"  Training for {total_steps:,} steps (~{equiv_epochs:.1f} epochs)")
+            print(f"  Training for {
+                  total_steps:,} steps (~{equiv_epochs:.1f} epochs)")
 
         try:
             from tqdm import tqdm
@@ -2169,7 +2224,8 @@ class PublicationTrainer(FastTrainer):
             has_rg = metrics.get('rg/modularity') is not None
 
             # Get learning rates
-            lrs = {group['name']: group['lr'] for group in self.optimizer.param_groups}
+            lrs = {group['name']: group['lr']
+                   for group in self.optimizer.param_groups}
 
             # Log to basic tracker and console at log intervals OR when RG metrics were computed
             if is_log_step or has_rg:
@@ -2224,7 +2280,8 @@ class PublicationTrainer(FastTrainer):
                     if metrics.get('rg/dynamic/n_iterations') is not None and metrics['rg/dynamic/n_iterations'] > 1:
                         _rg_msg += (
                             f" | dyn({metrics['rg/dynamic/n_iterations']}it): "
-                            f"Q {metrics.get('rg/dynamic/modularity_init', 0):.3f}->{metrics.get('rg/dynamic/modularity_final', 0):.3f}"
+                            f"Q {metrics.get('rg/dynamic/modularity_init', 0):.3f}->{
+                                metrics.get('rg/dynamic/modularity_final', 0):.3f}"
                         )
 
                 if use_tqdm:
@@ -2232,15 +2289,20 @@ class PublicationTrainer(FastTrainer):
                     # Print gradient norms using tqdm.write for proper display
                     if grad_norms:
                         tqdm.write(f"  [GRAD] total: {grad_norms['total']:.3e} | "
-                                   f"mu: {grad_norms['mu']:.3e} | sigma: {grad_norms['sigma']:.3e} | "
+                                   f"mu: {grad_norms['mu']:.3e} | sigma: {
+                                       grad_norms['sigma']:.3e} | "
                                    f"phi: {grad_norms['phi']:.3e}\n\n")
                     # Print Bayesian alpha diagnostics
                     if metrics.get('bayesian/alpha_mean') is not None:
                         tqdm.write(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
-                                   f"std: {metrics['bayesian/alpha_std']:.4f} | "
-                                   f"range: [{metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
-                                   f"c0: {metrics['bayesian/c0']:.4f}±{metrics.get('bayesian/c0_std', 0):.4f} | "
-                                   f"b0: {metrics['bayesian/b0']:.4f}±{metrics.get('bayesian/b0_std', 0):.4f} | "
+                                   f"std: {
+                                       metrics['bayesian/alpha_std']:.4f} | "
+                                   f"range: [{
+                                       metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
+                                   f"c0: {
+                                       metrics['bayesian/c0']:.4f}±{metrics.get('bayesian/c0_std', 0):.4f} | "
+                                   f"b0: {
+                                       metrics['bayesian/b0']:.4f}±{metrics.get('bayesian/b0_std', 0):.4f} | "
                                    f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}")
                     if _rg_msg:
                         tqdm.write(_rg_msg)
@@ -2248,14 +2310,17 @@ class PublicationTrainer(FastTrainer):
                     print(log_msg)
                     if grad_norms:
                         print(f"  [GRAD] total: {grad_norms['total']:.3e} | "
-                              f"mu: {grad_norms['mu']:.3e} | sigma: {grad_norms['sigma']:.3e} | "
+                              f"mu: {grad_norms['mu']:.3e} | sigma: {
+                                  grad_norms['sigma']:.3e} | "
                               f"phi: {grad_norms['phi']:.3e}\n\n")
                     if metrics.get('bayesian/alpha_mean') is not None:
                         print(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
                               f"std: {metrics['bayesian/alpha_std']:.4f} | "
                               f"range: [{metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
-                              f"c0: {metrics['bayesian/c0']:.4f}±{metrics.get('bayesian/c0_std', 0):.4f} | "
-                              f"b0: {metrics['bayesian/b0']:.4f}±{metrics.get('bayesian/b0_std', 0):.4f} | "
+                              f"c0: {
+                                  metrics['bayesian/c0']:.4f}±{metrics.get('bayesian/c0_std', 0):.4f} | "
+                              f"b0: {
+                                  metrics['bayesian/b0']:.4f}±{metrics.get('bayesian/b0_std', 0):.4f} | "
                               f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}\n\n")
                     if _rg_msg:
                         print(_rg_msg)
@@ -2288,32 +2353,44 @@ class PublicationTrainer(FastTrainer):
                 print(f"    CE: {val_metrics['ce_loss']:.4f}")
                 print(f"    PPL: {val_metrics['perplexity']:.2f}")
                 print(f"    BPC: {val_metrics['ce_loss']/math.log(2):.3f}")
-                print(f"    Attn entropy: {attn_entropy:.3f} | concentration: {attn_concentration:.3f}\n\n")
+                print(f"    Attn entropy: {attn_entropy:.3f} | concentration: {
+                      attn_concentration:.3f}\n\n")
 
                 # Log RG metrics if available (meta-agent emergence!)
                 if metrics.get('rg/modularity') is not None:
                     print(f"    RG Metrics (meta-agent emergence):")
-                    print(f"      Modularity Q: {metrics['rg/modularity']:.4f} (higher = more structure)")
-                    print(f"      Effective rank: {metrics['rg/effective_rank']:.2f} (lower = concentrated)")
-                    print(f"      Clusters (meta-agents): {metrics['rg/n_clusters']}")
-                    print(f"      KL within: {metrics['rg/kl_within_mean']:.4f} (lower = tighter)")
-                    print(f"      KL between: {metrics['rg/kl_between_mean']:.4f}\n\n")
+                    print(f"      Modularity Q: {
+                          metrics['rg/modularity']:.4f} (higher = more structure)")
+                    print(f"      Effective rank: {
+                          metrics['rg/effective_rank']:.2f} (lower = concentrated)")
+                    print(
+                        f"      Clusters (meta-agents): {metrics['rg/n_clusters']}")
+                    print(f"      KL within: {
+                          metrics['rg/kl_within_mean']:.4f} (lower = tighter)")
+                    print(f"      KL between: {
+                          metrics['rg/kl_between_mean']:.4f}\n\n")
 
                     # Dynamic RG flow (within forward pass)
                     if metrics.get('rg/dynamic/n_iterations') is not None:
                         n_iters = metrics['rg/dynamic/n_iterations']
                         if n_iters > 1:
-                            mod_change = metrics.get('rg/dynamic/modularity_change', 0)
-                            rank_change = metrics.get('rg/dynamic/rank_change', 0)
-                            print(f"    Dynamic RG ({n_iters} VFE iterations):")
-                            print(f"      Modularity: {metrics.get('rg/dynamic/modularity_init', 0):.4f} → {metrics.get('rg/dynamic/modularity_final', 0):.4f} (Δ={mod_change:+.4f})")
-                            print(f"      Eff. Rank:  {metrics.get('rg/dynamic/rank_init', 0):.1f} → {metrics.get('rg/dynamic/rank_final', 0):.1f} (Δ={rank_change:+.1f})")
+                            mod_change = metrics.get(
+                                'rg/dynamic/modularity_change', 0)
+                            rank_change = metrics.get(
+                                'rg/dynamic/rank_change', 0)
+                            print(
+                                f"    Dynamic RG ({n_iters} VFE iterations):")
+                            print(f"      Modularity: {metrics.get('rg/dynamic/modularity_init', 0):.4f} → {
+                                  metrics.get('rg/dynamic/modularity_final', 0):.4f} (Δ={mod_change:+.4f})")
+                            print(f"      Eff. Rank:  {metrics.get('rg/dynamic/rank_init', 0):.1f} → {
+                                  metrics.get('rg/dynamic/rank_final', 0):.1f} (Δ={rank_change:+.1f})")
 
                 # Generate sample text to verify learning (varied prompts for diversity)
                 try:
                     import random
                     # Use language-appropriate prompts
-                    dataset_name = getattr(self.train_loader.dataset, 'dataset_name', 'wikitext-2')
+                    dataset_name = getattr(
+                        self.train_loader.dataset, 'dataset_name', 'wikitext-2')
                     if dataset_name == 'wiki-ja':
                         prompts = ["日本", "東京", "世界", "歴史", "文化", "科学", "政治", "経済", "教育", "自然",
                                    "社会", "技術", "音楽", "映画", "大学"]
@@ -2322,7 +2399,8 @@ class PublicationTrainer(FastTrainer):
                                    "After", "Before", "During", "While", "Although", "However"]
                     prompt = random.choice(prompts)
                     # Use temperature 0.9 and lower top_k for more diversity
-                    sample = self.sample_text(prompt=prompt, max_new_tokens=30, temperature=0.9, top_k=30)
+                    sample = self.sample_text(
+                        prompt=prompt, max_new_tokens=30, temperature=0.9, top_k=30)
                     print(f"    Sample: {sample[:100]}...")
                 except Exception as e:
                     import traceback
@@ -2361,18 +2439,24 @@ class PublicationTrainer(FastTrainer):
                         merged = False
                         for entry in reversed(self.metrics_tracker.history):
                             if entry['step'] == step + 1:
-                                entry['holonomy_mean_norm'] = holonomy_dict.get('holonomy/mean_norm')
-                                entry['holonomy_max_norm'] = holonomy_dict.get('holonomy/max_norm')
-                                entry['holonomy_frac_gt_01'] = holonomy_dict.get('holonomy/frac_gt_0.1')
-                                entry['holonomy_spectral_gap'] = holonomy_dict.get('holonomy/spectral_gap')
-                                entry['holonomy_wilson_trace'] = holonomy_dict.get('holonomy/wilson_trace')
+                                entry['holonomy_mean_norm'] = holonomy_dict.get(
+                                    'holonomy/mean_norm')
+                                entry['holonomy_max_norm'] = holonomy_dict.get(
+                                    'holonomy/max_norm')
+                                entry['holonomy_frac_gt_01'] = holonomy_dict.get(
+                                    'holonomy/frac_gt_0.1')
+                                entry['holonomy_spectral_gap'] = holonomy_dict.get(
+                                    'holonomy/spectral_gap')
+                                entry['holonomy_wilson_trace'] = holonomy_dict.get(
+                                    'holonomy/wilson_trace')
                                 merged = True
                                 break
                         if not merged:
                             print(f"[WARN] Holonomy at step {step+1}: no matching CSV entry "
                                   f"(holonomy_interval may not be divisible by log_interval)")
                 except Exception as e:
-                    print(f"[WARN] Holonomy computation failed at step {step+1}: {e}")
+                    print(f"[WARN] Holonomy computation failed at step {
+                          step+1}: {e}")
 
             # Periodic gauge frame semantic analysis
             if self.pub_metrics and self.pub_metrics.should_run_semantic_analysis(step + 1):
@@ -2383,7 +2467,8 @@ class PublicationTrainer(FastTrainer):
                         verbose=False,  # Minimal output during training
                     )
                 except Exception as e:
-                    print(f"[WARN] Semantic analysis failed at step {step+1}: {e}")
+                    print(f"[WARN] Semantic analysis failed at step {
+                          step+1}: {e}")
 
         # Flush any remaining numerical events accumulated after the last log step
         _final_num_events = _flush_numerical_events()
@@ -2394,7 +2479,8 @@ class PublicationTrainer(FastTrainer):
 
         # Save final metrics
         self.metrics_tracker.save()
-        print(f"\n[INFO] Final metrics saved to: {self.metrics_tracker.save_path}")
+        print(f"\n[INFO] Final metrics saved to: {
+              self.metrics_tracker.save_path}")
 
         # Save comprehensive publication metrics
         if self.pub_metrics:
@@ -2419,7 +2505,8 @@ class PublicationTrainer(FastTrainer):
                         save_prefix='holonomy',
                     )
                 except Exception as e:
-                    print(f"[WARN] Final holonomy figure generation failed: {e}")
+                    print(
+                        f"[WARN] Final holonomy figure generation failed: {e}")
 
             # Generate interpretability outputs using a sample batch from validation
             try:
@@ -2432,7 +2519,8 @@ class PublicationTrainer(FastTrainer):
                 )
             except Exception as e:
                 import traceback
-                print(f"[WARNING] Could not generate interpretability outputs: {e}")
+                print(
+                    f"[WARNING] Could not generate interpretability outputs: {e}")
                 print(f"  Traceback: {traceback.format_exc()}")
 
             self.pub_metrics.print_summary()
@@ -2443,7 +2531,8 @@ class PublicationTrainer(FastTrainer):
         print("TRAINING COMPLETE!")
         print(f"{'='*70}")
         print(f"Time: {elapsed/3600:.2f} hours")
-        print(f"Best val CE: {self.best_val_ce:.4f} (PPL: {math.exp(min(self.best_val_ce, 20.0)):.2f})")
+        print(f"Best val CE: {self.best_val_ce:.4f} (PPL: {
+              math.exp(min(self.best_val_ce, 20.0)):.2f})")
         print(f"{'='*70}\n")
 
 
@@ -2505,7 +2594,8 @@ def run_single_experiment(
 
     test_loader = None  # Will be set if available
     if use_char:
-        print(f"Using CHARACTER-LEVEL tokenizer (vocab_size={config['vocab_size']})")
+        print(
+            f"Using CHARACTER-LEVEL tokenizer (vocab_size={config['vocab_size']})")
         # Note: create_char_dataloaders doesn't support test set yet
         train_loader, val_loader, actual_vocab_size = create_char_dataloaders(
             max_seq_len=config['max_seq_len'],
@@ -2593,7 +2683,8 @@ def run_single_experiment(
         non_embed_params = model.get_num_params(non_embedding=True)
     else:
         total_params = sum(p.numel() for p in model.parameters())
-        non_embed_params = sum(p.numel() for name, p in model.named_parameters() if 'embed' not in name)
+        non_embed_params = sum(
+            p.numel() for name, p in model.named_parameters() if 'embed' not in name)
 
     print(f"\nModel Parameters:")
     print(f"  Total:         {total_params:,}")
@@ -2621,7 +2712,8 @@ def run_single_experiment(
             tie_embeddings=config.get('tie_embeddings', False),
         )
     else:
-        gauge_irrep = config.get('irrep_spec', [('fund', 1, config['embed_dim'])])
+        gauge_irrep = config.get(
+            'irrep_spec', [('fund', 1, config['embed_dim'])])
         n_heads_g = gauge_irrep[0][1] if gauge_irrep else 1
         head_dim_g = gauge_irrep[0][2] if gauge_irrep else config['embed_dim']
         phi_dim = config['embed_dim'] * config['embed_dim']  # GL(K) default
@@ -2663,7 +2755,8 @@ def run_single_experiment(
         mu_lr=config['mu_lr'],
         sigma_lr=config['sigma_lr'],
         phi_lr=config['phi_lr'],
-        attention_lr=config.get('attention_lr', config['ffn_lr'] if ffn_mode == 'standard' else config['phi_lr']),
+        attention_lr=config.get(
+            'attention_lr', config['ffn_lr'] if ffn_mode == 'standard' else config['phi_lr']),
         ffn_lr=config['ffn_lr'],
         output_lr=config['ffn_lr'],
 
@@ -2672,18 +2765,20 @@ def run_single_experiment(
 
         # Free energy loss weights
         alpha=config['alpha'],
-        beta=config['beta'],             # → lambda_beta in compute_free_energy_loss
-        
+        # → lambda_beta in compute_free_energy_loss
+        beta=config['beta'],
+
         lambda_gamma=config['lambda_gamma'],
         lambda_hyper=config.get('lambda_hyper', 0.0),
         use_obs_in_vfe=config.get('use_obs_in_vfe', False),
-        
+
 
         # Gauge geometry: phi gradient control
         alpha_phi=config.get('alpha_phi', 0.0),
         use_slk_projection=config.get('use_slk_projection', False),
         use_killing_form=config.get('use_killing_form', False),
-        killing_form_sym_dampening=config.get('killing_form_sym_dampening', 0.1),
+        killing_form_sym_dampening=config.get(
+            'killing_form_sym_dampening', 0.1),
 
         log_interval=config['log_interval'],
         eval_interval=config['eval_interval'],
@@ -2700,9 +2795,6 @@ def run_single_experiment(
         use_delta_rule_w_out=config.get('use_delta_rule_w_out', False),
         delta_rule_lr=config.get('delta_rule_lr', 0.001),
 
-        # SIGMA CE SCALE: Gradient scaling for sigma_p in decode
-        sigma_ce_scale=config.get('sigma_ce_scale', 0.01),
-
         # RG METRICS: Track renormalization group flow
         compute_rg_metrics=config.get('compute_rg_metrics', False),
         rg_metrics_interval=config.get('rg_metrics_interval', 100),
@@ -2712,7 +2804,8 @@ def run_single_experiment(
 
         # Layer/iteration diagnostics
         track_layer_diagnostics=config.get('track_layer_diagnostics', False),
-        track_iteration_diagnostics=config.get('track_iteration_diagnostics', False),
+        track_iteration_diagnostics=config.get(
+            'track_iteration_diagnostics', False),
         diagnostics_interval=config.get('diagnostics_interval', 50),
     )
 
@@ -2740,7 +2833,8 @@ def run_single_experiment(
         print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
         if dataset_tokens:
             coverage = total_tokens / dataset_tokens * 100
-            print(f"  Dataset:        {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
+            print(f"  Dataset:        {dataset_tokens:,} ({
+                  dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
     else:
         equiv_epochs = train_config.max_steps / steps_per_epoch
         total_tokens = train_config.max_steps * tokens_per_step
@@ -2750,7 +2844,8 @@ def run_single_experiment(
         print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
         if dataset_tokens:
             coverage = total_tokens / dataset_tokens * 100
-            print(f"  Dataset:        {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
+            print(f"  Dataset:        {dataset_tokens:,} ({
+                  dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
     print(f"  Warmup:         {train_config.warmup_steps}")
     print(f"  Batch size:     {batch_size}")
     print(f"  Seq length:     {seq_len}")
@@ -2763,7 +2858,8 @@ def run_single_experiment(
     # P-FLOW configuration
     if train_config.use_p_flow:
         print(f"\nP-FLOW (EMA prior updates): ENABLED")
-        print(f"  EMA decay: {train_config.p_flow_ema_decay} ({(1-train_config.p_flow_ema_decay)*100:.1f}% update per step)")
+        print(f"  EMA decay: {train_config.p_flow_ema_decay} ({
+              (1-train_config.p_flow_ema_decay)*100:.1f}% update per step)")
     else:
         print(f"\nP-FLOW: disabled")
 
@@ -2779,7 +2875,8 @@ def run_single_experiment(
     # RG METRICS configuration
     if train_config.compute_rg_metrics:
         print(f"\nRG METRICS (meta-agent emergence): ENABLED")
-        print(f"  Compute interval: every {train_config.rg_metrics_interval} steps")
+        print(f"  Compute interval: every {
+              train_config.rg_metrics_interval} steps")
         print(f"  Dynamic RG tracking: {train_config.track_dynamic_rg}")
     else:
         print(f"\nRG METRICS: disabled")
@@ -2806,13 +2903,16 @@ def run_single_experiment(
         semantic_interval = config.get('semantic_analysis_interval',
                                        getattr(args, 'semantic_analysis_interval', 10000) if args else 10000)
         pub_metrics.set_semantic_analysis_interval(semantic_interval)
-        print(f"[Config] Gauge frame semantic analysis every {semantic_interval} steps")
+        print(f"[Config] Gauge frame semantic analysis every {
+              semantic_interval} steps")
 
         # Configure holonomy diagnostics interval
         holonomy_interval = config.get('holonomy_interval', 500)
         holonomy_sample_size = config.get('holonomy_sample_size', 500)
-        pub_metrics.set_holonomy_interval(holonomy_interval, holonomy_sample_size)
-        print(f"[Config] Holonomy diagnostics every {holonomy_interval} steps (sample_size={holonomy_sample_size})")
+        pub_metrics.set_holonomy_interval(
+            holonomy_interval, holonomy_sample_size)
+        print(f"[Config] Holonomy diagnostics every {
+              holonomy_interval} steps (sample_size={holonomy_sample_size})")
 
     trainer = PublicationTrainer(
         model=model,
@@ -2836,7 +2936,8 @@ def run_single_experiment(
     # Show epochs-based info if set
     if train_config.epochs is not None and train_config.epochs > 0:
         eff_steps = train_config.epochs * steps_per_epoch
-        print(f"Epochs: {train_config.epochs} ({steps_per_epoch:,} steps/epoch = {eff_steps:,} total)")
+        print(f"Epochs: {train_config.epochs} ({
+              steps_per_epoch:,} steps/epoch = {eff_steps:,} total)")
     else:
         print(f"Total steps: {train_config.max_steps:,}")
     print("\nNOTE: First few batches may be slow (JIT compilation)")
@@ -3003,7 +3104,8 @@ def run_pure_vfe_experiment(
 
     test_loader = None
     if use_char:
-        print(f"Using CHARACTER-LEVEL tokenizer (vocab_size={config['vocab_size']})")
+        print(
+            f"Using CHARACTER-LEVEL tokenizer (vocab_size={config['vocab_size']})")
         train_loader, val_loader, actual_vocab_size = create_char_dataloaders(
             max_seq_len=config['max_seq_len'],
             batch_size=config['batch_size'],
@@ -3096,7 +3198,8 @@ def run_pure_vfe_experiment(
     print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
     if dataset_tokens:
         coverage = total_tokens / dataset_tokens * 100
-        print(f"  Dataset:        {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
+        print(f"  Dataset:        {dataset_tokens:,} ({
+              dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
     print(f"  Batch size:     {batch_size}")
     print(f"  Seq length:     {seq_len}")
     print(f"  No optimizer (natural gradient only)")
@@ -3146,7 +3249,8 @@ def run_pure_vfe_experiment(
             target_ids = target_ids.to(device)
 
             # Training step: E-step + M-step (no backward!)
-            logits, ce_loss, vfe_history, _diag = model.update(input_ids, target_ids)
+            logits, ce_loss, vfe_history, _diag = model.update(
+                input_ids, target_ids)
 
             step_time = time.time() - step_start
 
@@ -3213,9 +3317,11 @@ def run_pure_vfe_experiment(
                         else:
                             print(health_msg)
 
-                    health = monitor_omega_health(model.prior_Omega[:100], "prior_Omega")
+                    health = monitor_omega_health(
+                        model.prior_Omega[:100], "prior_Omega")
                     if health['prior_Omega/cond_max'] > 100:
-                        omega_msg = f"  [WARN] Omega cond number high: {health['prior_Omega/cond_max']:.1f}"
+                        omega_msg = f"  [WARN] Omega cond number high: {
+                            health['prior_Omega/cond_max']:.1f}"
                         if use_tqdm:
                             tqdm.write(omega_msg)
                         else:
@@ -3265,7 +3371,8 @@ def run_pure_vfe_experiment(
         print("="*70)
 
         elapsed = time.time() - start_time
-        print(f"Total time: {elapsed/60:.1f} minutes ({elapsed/3600:.2f} hours)")
+        print(f"Total time: {
+              elapsed/60:.1f} minutes ({elapsed/3600:.2f} hours)")
 
         final_metrics = _validate_pure_vfe(model, val_loader, device)
 
@@ -3291,7 +3398,8 @@ def run_pure_vfe_experiment(
             print("\n" + "="*70)
             print("FINAL TEST SET EVALUATION")
             print("="*70)
-            test_val = _validate_pure_vfe(model, test_loader, device, max_samples=128000)
+            test_val = _validate_pure_vfe(
+                model, test_loader, device, max_samples=128000)
             test_bpc = test_val['ce_loss'] / math.log(2)
             test_improvement = random_ppl / test_val['perplexity']
             test_metrics = {
@@ -3362,16 +3470,23 @@ def main():
                             # Primary modes
                             'standard',                 # Dot-product attention + MLP baseline
                             'em',                       # Gauge VFE + IFT implicit differentiation M-step
-                            'amortized',                # Gauge VFE + straight-through (no E/M separation)
-                            'hebbian',                  # Gauge VFE + P-flow/delta-rule (no backprop)
-                            'pure_vfe',                 # Pure natural gradient (no autograd)
+                            # Gauge VFE + straight-through (no E/M separation)
+                            'amortized',
+                            # Gauge VFE + P-flow/delta-rule (no backprop)
+                            'hebbian',
+                            # Pure natural gradient (no autograd)
+                            'pure_vfe',
                             # Backward compat alias
                             'VFE_dynamic',              # → 'amortized'
                             # Peer review ablations
-                            'standard_attn_only',       # (M2b) attention-only at d_model=90
-                            'standard_param_equalized', # (M2b') param-equalized wider FFN
-                            'standard_rope',            # (M2c) standard + RoPE at d=10
-                            'standard_rope_d90',        # (M2c') standard + RoPE at d=90
+                            # (M2b) attention-only at d_model=90
+                            'standard_attn_only',
+                            # (M2b') param-equalized wider FFN
+                            'standard_param_equalized',
+                            # (M2c) standard + RoPE at d=10
+                            'standard_rope',
+                            # (M2c') standard + RoPE at d=90
+                            'standard_rope_d90',
                         ],
                         help='Training mode: standard, em, amortized, hebbian, pure_vfe')
 
@@ -3381,7 +3496,8 @@ def main():
                         help='DEPRECATED: Use --mode instead')
     # System
     parser.add_argument('--device', type=str, default='auto')
-    parser.add_argument('--checkpoint_dir', type=str, default='checkpoints_publication')
+    parser.add_argument('--checkpoint_dir', type=str,
+                        default='checkpoints_publication')
     parser.add_argument('--use_wandb', action='store_true')
     parser.add_argument('--seed', type=int, default=None,
                         help='Random seed for reproducibility')
@@ -3549,7 +3665,8 @@ def main():
 
         if args.dataset == 'wiki-ja' and config['vocab_size'] == 50257:
             config['vocab_size'] = 100277
-            print(f"\n[wiki-ja] Auto-adjusted vocab_size: 50257 -> 100277 (cl100k_base full vocab)")
+            print(
+                f"\n[wiki-ja] Auto-adjusted vocab_size: 50257 -> 100277 (cl100k_base full vocab)")
 
         # Pure VFE uses a dedicated experiment loop (not run_single_experiment)
         result = run_pure_vfe_experiment(
@@ -3584,7 +3701,8 @@ def main():
     # would discard important Japanese tokens and map them to UNK
     if args.dataset == 'wiki-ja' and config['vocab_size'] == 50257:
         config['vocab_size'] = 100277
-        print(f"\n[wiki-ja] Auto-adjusted vocab_size: 50257 -> 100277 (cl100k_base full vocab)")
+        print(
+            f"\n[wiki-ja] Auto-adjusted vocab_size: 50257 -> 100277 (cl100k_base full vocab)")
 
     result = run_single_experiment(
         config=config,
