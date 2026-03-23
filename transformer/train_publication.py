@@ -238,51 +238,46 @@ STANDARD_CONFIG = {
 
 EM_CONFIG = {
     # === Architecture ===
-    'vocab_size':  50257,
-    'embed_dim':   90,
-    'gauge_dim':   15,    
-    'n_layers':    1,
-    'hidden_dim':  508,
-    'max_seq_len': 128,
+    'vocab_size':          50257,
+    'embed_dim':           90,
+    'max_seq_len':         128,
+    'batch_size':          16, # for debugging use K=10 batch=448, steps = 4250 and seq=64 ~1epoch~20min
+    'max_steps':           60000,
+    
+    'n_layers':            1,
+    'ffn_n_iterations':    1,
+    
+    'gauge_dim':                        15,
+    'irrep_spec':          [('fund', 6, 15)],
 
-    'ffn_mode': 'VFE_dynamic',
-
-    'use_deq':           False,
-    'deq_include_phi':   True,    # NEW: corrects M-step phi gradient
-    'deq_neumann_terms': 0,
-
+    'use_prior_bank':      True,
+    'mask_self_attention': False,  # Prevent attention collapse?
+  
     # === M-step: implicit differentiation ===
     'implicit_em':         False,
     'amortized_inference': True,
+    'use_obs_in_vfe':      False,  #cheats when true
+       
+    # === M-step: Optimizer ===  
+    'optimizer_type':        'natural_gradient',# or 'natural_gradient' or 'adamw' or 'riemannian_adam'
+    'fisher_ema_decay':      0.95,            # for natural_gradient
+    'fisher_damping':        1e-4,              # for natural_gradient
 
     
-    'obs_sigma_gradient': True,    # Add ∂E_q[CE]/∂σ Hessian-diagonal gradient in VFE E-step
-                                    # Requires use_obs_in_vfe=True to have any effect
-    'obs_sigma_weight':   1.0,        # Weight for sigma observation gradient
-
-
-    # === M-step: Optimizer ===
-    
-    'optimizer_type':   'natural_gradient',# or 'natural_gradient' or 'adamw' or 'riemannian_adam'
-    'fisher_ema_decay': 0.95,            # for natural_gradient
-    'fisher_damping':   1e-4,              # for natural_gradient
-
-    # === Training ===
-    # for debugging use K=10 batch=448, steps = 4250 and seq=64 ~1epoch~20min
-    'batch_size':    16,
-    'max_steps':     60000,
-    'warmup_steps':  100,
-    'num_workers':   10,
-
-    'tie_embeddings': False,
-
     'use_layernorm':         True,
     'use_residual':          True,
     'use_output_projection': True,
     'multihead_vfe':         True,
+    'ffn_learnable_lr':      True,  # E-step
+    'evolve_sigma':          True,
+    'evolve_phi':            True,
+    'evolve_phi_e_step':     True,
 
-    'mask_self_attention':   False,  # Prevent attention collapse?
-    'use_prior_bank':        True,
+    # === E-step dynamics ===
+    'ffn_alpha':             1.0,       # Prior coupling inside VFE E-step
+    'ffn_lambda_belief':     1.0,       # Belief alignment inside VFE E-step
+    'learnable_alpha':       False,    
+    'ffn_learnable_alpha':   False,   # Adaptive α_i = c0/(b0 + KL) per dimension
 
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
@@ -290,33 +285,15 @@ EM_CONFIG = {
     'gauge_mode':       'learned',
     'gauge_param':      'phi',
 
-    'irrep_spec':       [('fund', 6, 15)],
-
 
     'diagonal_covariance':      True,
     'exact_diagonal_transport': False,  # exact diagonal transport - more expensive
                                         # If True, force Σ = σ²I (scalar variance × identity)
     'isotropic_covariance':     False,
-
-    'enforce_orthogonal':       False,
-    
+    'enforce_orthogonal':       False,    
     'learnable_reflection':     False,# Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk
                                         # Set gauge-mode=constant and the above 3 = true for transf limit
-
-    # === E-step dynamics ===
-    'ffn_n_iterations':    1,
-
-    'ffn_alpha':           1.0,               # Prior coupling inside VFE E-step
-    'ffn_lambda_belief':   1.0,       # Belief alignment inside VFE E-step
-
-    'learnable_alpha':     False,    
-    'ffn_learnable_alpha': False,   # Adaptive α_i = c0/(b0 + KL) per dimension
-
-    'evolve_sigma':        True,
-    'evolve_phi':          True,
-    'evolve_phi_e_step':   True,
-
-
+ 
     # === VFE loss weights (M-step objective) ===
     # E-step: prior + alignment (no observations with n_iterations=1).
     # CE enters through M-step via IFT (s_k ≈ 0.5 from fixed ffn_alpha=1).
@@ -347,28 +324,25 @@ EM_CONFIG = {
     'mu_max_norm':     None,
 
     # === Learning rates ===
-    'ffn_learnable_lr':    True,  # E-step
-    # E-step φ descent step size (decoupled from M-step phi_lr)
-    'e_step_phi_lr':       0.025,
-
-
-    'mu_lr':        0.05,
-    'sigma_lr':     0.0125,
-    'phi_lr':       0.0075,
-    'ffn_lr':       0.05,
-    'attention_lr': 0.005,
-    'output_lr':    0.05,
-
-
-    # === Regularization ===
-    'weight_decay':  0.01,
-    'grad_clip':     1.0,
-
+    'mu_lr':         0.05,
+    'sigma_lr':      0.0125,
+    'phi_lr':        0.0075,
+    'e_step_phi_lr': 0.05,   # E-step φ descent step size (decoupled from M-step phi_lr)
+    
+    'ffn_lr':        0.05,
+    'attention_lr':  0.005,
+    'output_lr':     0.05,
+    
     # === Logging ===
     'log_interval':               100,
     'eval_interval':              1000,
     'checkpoint_interval':        25000,
     'semantic_analysis_interval': 10000,
+
+
+    'use_deq':           False,
+    'deq_include_phi':   True,    # NEW: corrects M-step phi gradient
+    'deq_neumann_terms': 0,
 
     # =================================================================
     # NON-FLAT GAUGE TRANSPORT (holonomy)
@@ -393,7 +367,18 @@ EM_CONFIG = {
     'track_layer_diagnostics':     False,
     'track_iteration_diagnostics': False,
     'diagnostics_interval':        25,
-    'gauge_fixed_priors':          False
+    
+    'gauge_fixed_priors':          False,
+    'tie_embeddings':              False,
+    'ffn_mode': 'VFE_dynamic',
+    
+    # === Regularization ===
+    'weight_decay':  0.01,
+    'grad_clip':     1.0,
+    'hidden_dim':  508,
+    'warmup_steps':  100,
+    'num_workers':   10,
+
 
 }
 
