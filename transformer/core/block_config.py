@@ -55,6 +55,7 @@ class BlockConfig:
     phi_max_norm: Optional[float] = None  # Max phi norm; None = auto (π for SO(N), 5.0 for GL(K))
     phi_dim: int = 3                    # 3 for SO(3), N(N-1)/2 for SO(N), K² for GL(K)
     phi_natural_gradient: str = 'killing'  # 'clip'|'cartan'|'killing'|'pullback'
+    killing_center_reg: Optional[float] = None  # Killing form center regularization (None=2K)
     diagonal_covariance: bool = False   # σ as (B,N,K) diagonal instead of (B,N,K,K) full
     exact_diagonal_transport: bool = False  # When True + diagonal_covariance, lift σ to full
                                             # for exact Ω@diag(σ)@Ω^T transport (slower but exact)
@@ -165,6 +166,7 @@ class BlockConfig:
             phi_max_norm=config.get('phi_max_norm', None),
             phi_dim=config.get('phi_dim', 3),
             phi_natural_gradient=config.get('phi_natural_gradient', 'killing'),
+            killing_center_reg=config.get('killing_center_reg', None),
             diagonal_covariance=config.get('diagonal_covariance', False),
             exact_diagonal_transport=config.get('exact_diagonal_transport', False),
             amortized_inference=config.get('amortized_inference', True),

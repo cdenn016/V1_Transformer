@@ -195,9 +195,9 @@ def apply_cartan_preconditioning(
 
 def build_killing_form_preconditioner(
     generators: torch.Tensor,  # (n_gen, K, K)
-    center_reg: float = 1e-4,
+    center_reg: float = None,
 ) -> torch.Tensor:
-    """
+    r"""
     Build the Killing form natural gradient preconditioner for gl(K).
 
     Uses the Cartan-involution-modified Killing form as metric:
@@ -216,9 +216,21 @@ def build_killing_form_preconditioner(
         - Diagonal traceless: eigenvalue 2(K-1) to 2K
         - Center (trace): eigenvalue 0 → regularized
 
+    The center (trace) direction of gl(K) = sl(K) ⊕ ℝ·I has zero Killing
+    eigenvalue.  With center_reg ≪ 2K, the inverse metric amplifies this
+    direction by 1/center_reg, creating a condition number of
+    2K/center_reg.  For K=10 and center_reg=1e-4 this is 200,000×,
+    which makes the preconditioned gradient dominated by center noise
+    and defeats the purpose of the natural gradient.
+
+    Default: center_reg = 2K (matches the typical non-center eigenvalue),
+    giving condition number ~1 so no single Lie-algebra direction is
+    artificially amplified.
+
     Args:
         generators: Lie algebra generators (n_gen, K, K)
-        center_reg: Regularization for the degenerate center direction
+        center_reg: Regularization for the degenerate center direction.
+            Default None → 2K (isotropic conditioning).
 
     Returns:
         inv_metric: (n_gen, n_gen) inverse metric for natural gradient
@@ -227,8 +239,16 @@ def build_killing_form_preconditioner(
     device = generators.device
     dtype = generators.dtype
 
-    # Gram matrix: G_ab = tr(T_a^T T_b) (Frobenius inner product)
-    gram = torch.einsum('aij,bij->ab', generators.transpose(-2, -1), generators)
+    if center_reg is None:
+        center_reg = 2.0 * K
+
+    # Gram matrix: G_ab = tr(T_a^T T_b) = Σ_{ij} T_a[i,j] T_b[i,j] (Frobenius inner product)
+    # NOTE: No transpose in the einsum — the Frobenius inner product is Σ_{ij} A_{ij} B_{ij}.
+    # Previously used generators.transpose(-2,-1) which computed tr(T_a T_b) instead,
+    # giving a permutation matrix (E_{ij} ↦ E_{ji}) with eigenvalues ±1 — making the
+    # metric indefinite for non-symmetric generators (antisymmetric directions got
+    # negative eigenvalues ≈ -2K).
+    gram = torch.einsum('aij,bij->ab', generators, generators)
 
     # Trace vector: v_a = tr(T_a)
     traces = generators.diagonal(dim1=-2, dim2=-1).sum(dim=-1)  # (n_gen,)

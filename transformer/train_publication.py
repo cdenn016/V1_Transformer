@@ -1998,7 +1998,10 @@ class PublicationTrainer(FastTrainer):
 
     def _collect_e_step_grad_norms(self) -> Dict[str, float]:
         """Collect E-step natural gradient norms from FFN layers (last VFE iteration)."""
-        norms = {'nat_grad_mu': 0.0, 'nat_grad_sigma': 0.0, 'grad_phi': 0.0}
+        norms = {
+            'nat_grad_mu': 0.0, 'nat_grad_sigma': 0.0, 'grad_phi': 0.0,
+            'nat_grad_mu_clipped': 0.0, 'nat_grad_sigma_clipped': 0.0,
+        }
         n_layers = 0
         for module in self.model.modules():
             if hasattr(module, '_e_step_grad_norms'):
@@ -2191,8 +2194,10 @@ class PublicationTrainer(FastTrainer):
                                    f"mu: {grad_norms['mu']:.3e} | sigma: { grad_norms['sigma']:.3e} | "
                                    f"phi: {grad_norms['phi']:.3e}")
                     if e_step_norms:
-                        tqdm.write(f"  [E-STEP] nat_grad_mu: {e_step_norms['nat_grad_mu']:.3e} | "
-                                   f"nat_grad_sigma: {e_step_norms['nat_grad_sigma']:.3e} | "
+                        _mu_c = e_step_norms.get('nat_grad_mu_clipped', 0.0)
+                        _sig_c = e_step_norms.get('nat_grad_sigma_clipped', 0.0)
+                        tqdm.write(f"  [E-STEP] nat_grad_mu: {e_step_norms['nat_grad_mu']:.3e} (clip: {_mu_c:.3e}) | "
+                                   f"nat_grad_sigma: {e_step_norms['nat_grad_sigma']:.3e} (clip: {_sig_c:.3e}) | "
                                    f"grad_phi: {e_step_norms['grad_phi']:.3e}\n")
                     # Print Bayesian alpha diagnostics
                     if metrics.get('bayesian/alpha_mean') is not None:
@@ -2211,8 +2216,10 @@ class PublicationTrainer(FastTrainer):
                               f"mu: {grad_norms['mu']:.3e} | sigma: { grad_norms['sigma']:.3e} | "
                               f"phi: {grad_norms['phi']:.3e}")
                     if e_step_norms:
-                        print(f"  [E-STEP] nat_grad_mu: {e_step_norms['nat_grad_mu']:.3e} | "
-                              f"nat_grad_sigma: {e_step_norms['nat_grad_sigma']:.3e} | "
+                        _mu_c = e_step_norms.get('nat_grad_mu_clipped', 0.0)
+                        _sig_c = e_step_norms.get('nat_grad_sigma_clipped', 0.0)
+                        print(f"  [E-STEP] nat_grad_mu: {e_step_norms['nat_grad_mu']:.3e} (clip: {_mu_c:.3e}) | "
+                              f"nat_grad_sigma: {e_step_norms['nat_grad_sigma']:.3e} (clip: {_sig_c:.3e}) | "
                               f"grad_phi: {e_step_norms['grad_phi']:.3e}\n")
                     if metrics.get('bayesian/alpha_mean') is not None:
                         print(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
