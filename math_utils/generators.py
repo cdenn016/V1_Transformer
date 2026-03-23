@@ -1987,36 +1987,32 @@ def glK_bracket_torch(
     phi2: 'torch.Tensor',
     generators: 'torch.Tensor',
 ) -> 'torch.Tensor':
-    """
+    r"""
     Compute the Lie bracket [φ₁·G, φ₂·G] in gl(K) and return coordinates.
 
     For gl(K), the Lie bracket is the matrix commutator: [A, B] = AB - BA
 
     Args:
-        phi1: First Lie algebra element coordinates (..., n_gen) where n_gen = K²
+        phi1: First Lie algebra element coordinates (..., n_gen)
         phi2: Second Lie algebra element coordinates (..., n_gen)
-        generators: Transport generators (n_gen, K, K) - used only for n_gen count.
-                   The actual gauge-group K×K generators are computed internally.
+        generators: Transport generators (n_gen, K, K). Used directly to build
+            matrices and extract coordinates (supports cross-head coupling where
+            n_gen ≠ K²).
 
     Returns:
-        bracket_coords: Coordinates of [phi_1 . G, phi_2 . G] in generator basis (..., n_gen)
+        bracket_coords: Coordinates of [φ₁·G, φ₂·G] in generator basis (..., n_gen)
     """
     import torch
 
-    n_gen = generators.shape[0]
-
-    # Get K×K gauge generators (elementary matrices)
-    gauge_gens = _get_glK_gauge_generators(n_gen, phi1.device, phi1.dtype)
-
-    # Build matrices using K×K gauge generators
-    A1 = torch.einsum('...a,aij->...ij', phi1, gauge_gens)  # (..., K, K)
-    A2 = torch.einsum('...a,aij->...ij', phi2, gauge_gens)  # (..., K, K)
+    # Build matrices using the actual transport generators
+    A1 = torch.einsum('...a,aij->...ij', phi1, generators)  # (..., K, K)
+    A2 = torch.einsum('...a,aij->...ij', phi2, generators)  # (..., K, K)
 
     # Lie bracket: [A, B] = AB - BA
     bracket = A1 @ A2 - A2 @ A1  # (..., K, K)
 
-    # Extract coordinates
-    bracket_coords = extract_glK_coords_torch(bracket, gauge_gens)
+    # Extract coordinates in the generator basis
+    bracket_coords = extract_glK_coords_torch(bracket, generators)
 
     return bracket_coords
 
@@ -2025,29 +2021,48 @@ def extract_glK_coords_torch(
     A: 'torch.Tensor',
     generators: 'torch.Tensor',
 ) -> 'torch.Tensor':
-    """
+    r"""
     Extract gl(K) Lie algebra coordinates from a matrix.
 
-    Given A = Σ_a φ_a E_a where E_a are elementary matrices,
-    the coordinates are simply the matrix elements: φ_{ij} = A[i, j].
+    Given A = Σ_a φ_a G_a, extracts φ_a = tr(G_a^T · A) / tr(G_a^T · G_a)
+    for each generator G_a. When generators are orthonormal elementary matrices
+    (standard GL(K)), this reduces to reading off matrix elements.
+
+    For cross-head coupling generators (n_gen ≠ K²), uses inner product
+    projection onto the generator basis.
 
     Args:
         A: Matrix (..., K, K)
-        generators: Gauge generators (n_gen, K, K) - used for shape only
+        generators: Generators (n_gen, K, K)
 
     Returns:
-        phi: Lie algebra coordinates (..., n_gen) where n_gen = K²
+        phi: Lie algebra coordinates (..., n_gen)
     """
     import torch
 
     K = A.shape[-1]
-    batch_shape = A.shape[:-2]
+    n_gen = generators.shape[0]
 
-    # Flatten the matrix to get coordinates
-    # E_ij has index i*K + j, so A[i,j] = phi[i*K + j]
-    phi = A.reshape(batch_shape + (K * K,))
+    # Fast path: standard GL(K) with n_gen = K² elementary matrices
+    if n_gen == K * K:
+        batch_shape = A.shape[:-2]
+        return A.reshape(batch_shape + (K * K,))
 
-    return phi
+    # General path: project onto generator basis via Frobenius inner product
+    # φ_a = tr(G_a^T · A) / tr(G_a^T · G_a)
+    # generators: (n_gen, K, K), A: (..., K, K)
+    A_flat = A.reshape(-1, K, K)  # (B, K, K)
+    G_flat = generators.reshape(n_gen, K * K)  # (n_gen, K²)
+    A_flat2 = A_flat.reshape(-1, K * K)  # (B, K²)
+
+    # Numerator: tr(G_a^T A) = sum_{ij} G_a[i,j] * A[i,j]
+    coords = A_flat2 @ G_flat.T  # (B, n_gen)
+
+    # Denominator: tr(G_a^T G_a) = ||G_a||²_F
+    norms_sq = (G_flat * G_flat).sum(dim=-1)  # (n_gen,)
+    coords = coords / norms_sq.unsqueeze(0).clamp(min=1e-12)
+
+    return coords.reshape(A.shape[:-2] + (n_gen,))
 
 
 def glK_compose_bch_torch(
