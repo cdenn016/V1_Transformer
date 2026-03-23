@@ -345,6 +345,7 @@ def create_param_groups(
     omega_params = []  # Direct GL(K) gauge frame matrices
     attention_params = []
     ffn_params = []
+    no_decay_params = []  # Norms, biases, and VFE hyperparameters (no weight decay)
     output_params = []
 
     for name, param in model.named_parameters():
@@ -372,6 +373,9 @@ def create_param_groups(
         # Output projection
         elif 'out_proj' in name or 'lm_head' in name:
             output_params.append(param)
+        # LayerNorm, biases, and VFE hyperparameters: never weight-decay
+        elif 'norm' in name or 'bias' in name or 'raw_' in name or 'gate' in name:
+            no_decay_params.append(param)
         # FFN (default for everything else)
         else:
             ffn_params.append(param)
@@ -443,6 +447,16 @@ def create_param_groups(
         })
         if verbose:
             print(f"  Parameter group 'ffn': {len(ffn_params)} tensors @ lr={config.ffn_lr}")
+
+    if no_decay_params:
+        param_groups.append({
+            'params': no_decay_params,
+            'lr': config.ffn_lr,
+            'weight_decay': 0.0,
+            'name': 'no_decay',
+        })
+        if verbose:
+            print(f"  Parameter group 'no_decay': {len(no_decay_params)} tensors @ lr={config.ffn_lr}, wd=0.0")
 
     if output_params:
         param_groups.append({
