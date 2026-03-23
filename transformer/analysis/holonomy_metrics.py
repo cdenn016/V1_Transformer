@@ -30,7 +30,9 @@ class HolonomySnapshot:
         head: Head index (0 for head-averaged).
         mean_norm: Mean :math:`\|C_{ijk} - I\|_F` over sampled triples.
         std_norm: Standard deviation of holonomy norms.
+        median_norm: Median holonomy norm.
         max_norm: Maximum holonomy norm observed.
+        frac_gt_001: Fraction of triples with norm > 0.01.
         frac_gt_01: Fraction of triples with norm > 0.1.
         mean_spectral_gap: Mean gap between largest and second-largest
             singular values of :math:`C_{ijk}`.
@@ -42,11 +44,28 @@ class HolonomySnapshot:
     head: int
     mean_norm: float
     std_norm: float
+    median_norm: float
     max_norm: float
+    frac_gt_001: float
     frac_gt_01: float
     mean_spectral_gap: float
     mean_wilson_trace: float
     sample_size: int
+
+    def to_log_dict(self, prefix: str = 'holonomy') -> Dict[str, float]:
+        """Return a flat dictionary of metrics for logging."""
+        key = f"{prefix}/L{self.layer}_H{self.head}"
+        return {
+            f"{key}/mean_norm": self.mean_norm,
+            f"{key}/std_norm": self.std_norm,
+            f"{key}/median_norm": self.median_norm,
+            f"{key}/max_norm": self.max_norm,
+            f"{key}/frac_gt_001": self.frac_gt_001,
+            f"{key}/frac_gt_01": self.frac_gt_01,
+            f"{key}/spectral_gap": self.mean_spectral_gap,
+            f"{key}/wilson_trace": self.mean_wilson_trace,
+            f"{key}/sample_size": float(self.sample_size),
+        }
 
 
 @dataclass
@@ -63,6 +82,16 @@ class HolonomyProfile:
     snapshots: List[HolonomySnapshot] = field(default_factory=list)
     global_mean_norm: float = 0.0
     global_max_norm: float = 0.0
+
+    def to_log_dict(self, prefix: str = 'holonomy') -> Dict[str, float]:
+        """Return a flat dictionary of global + per-snapshot metrics."""
+        d: Dict[str, float] = {
+            f"{prefix}/global_mean_norm": self.global_mean_norm,
+            f"{prefix}/global_max_norm": self.global_max_norm,
+        }
+        for snap in self.snapshots:
+            d.update(snap.to_log_dict(prefix=prefix))
+        return d
 
 
 def compute_holonomy_snapshot(
@@ -96,7 +125,9 @@ def compute_holonomy_snapshot(
 
     mean_norm = float(norms_flat.mean().item())
     std_norm = float(norms_flat.std().item())
+    median_norm = float(norms_flat.median().item())
     max_norm = float(norms_flat.max().item())
+    frac_gt_001 = float((norms_flat > 0.01).float().mean().item())
     frac_gt_01 = float((norms_flat > 0.1).float().mean().item())
 
     # Spectral gap: gap between top-2 singular values of C
@@ -122,7 +153,9 @@ def compute_holonomy_snapshot(
         head=head,
         mean_norm=mean_norm,
         std_norm=std_norm,
+        median_norm=median_norm,
         max_norm=max_norm,
+        frac_gt_001=frac_gt_001,
         frac_gt_01=frac_gt_01,
         mean_spectral_gap=mean_spectral_gap,
         mean_wilson_trace=mean_wilson_trace,

@@ -69,8 +69,8 @@ class TestHolonomySnapshot:
         from transformer.analysis.holonomy_metrics import compute_holonomy_snapshot
 
         snap = compute_holonomy_snapshot(flat_exp_delta, step=0, layer=0, head=0, sample_size=50)
-        # |tr(I)/K - 1| = 0 for flat
-        assert snap.mean_wilson_trace < 1e-5
+        # |tr(I)| / K = K / K = 1.0 for flat (identity) transport
+        assert abs(snap.mean_wilson_trace - 1.0) < 1e-5
 
     def test_wilson_trace_curved(self, curved_exp_delta):
         from transformer.analysis.holonomy_metrics import compute_holonomy_snapshot
@@ -126,22 +126,23 @@ class TestCurvatureByDistance:
     def test_output_shapes(self, curved_exp_delta):
         from transformer.analysis.holonomy_metrics import compute_curvature_by_distance
 
-        result = compute_curvature_by_distance(curved_exp_delta, n_bins=5, sample_size=200)
-        assert result['bin_centers'].shape == (5,)
-        assert result['mean_norms'].shape == (5,)
-        assert result['std_norms'].shape == (5,)
-        assert result['counts'].shape == (5,)
+        result = compute_curvature_by_distance(curved_exp_delta, max_distance=5, samples_per_distance=200)
+        assert len(result['distances']) > 0
+        assert result['distances'].shape == result['mean_norms'].shape
+        assert result['distances'].shape == result['std_norms'].shape
 
-    def test_counts_sum_to_sample_size(self, curved_exp_delta):
+    def test_distances_are_sequential(self, curved_exp_delta):
         from transformer.analysis.holonomy_metrics import compute_curvature_by_distance
 
-        result = compute_curvature_by_distance(curved_exp_delta, n_bins=5, sample_size=200)
-        assert result['counts'].sum() == 200
+        result = compute_curvature_by_distance(curved_exp_delta, max_distance=5, samples_per_distance=200)
+        # Distances should be monotonically increasing
+        assert all(result['distances'][i] < result['distances'][i + 1]
+                    for i in range(len(result['distances']) - 1))
 
     def test_flat_transport_low_norms(self, flat_exp_delta):
         from transformer.analysis.holonomy_metrics import compute_curvature_by_distance
 
-        result = compute_curvature_by_distance(flat_exp_delta, n_bins=5, sample_size=100)
+        result = compute_curvature_by_distance(flat_exp_delta, max_distance=5, samples_per_distance=100)
         assert result['mean_norms'].max() < 1e-5
 
 
@@ -168,7 +169,9 @@ class TestFlatnessTrajectory:
         traj = compute_flatness_trajectory(history)
         assert np.array_equal(traj['steps'], [100, 200, 300])
         assert len(traj['global_mean']) == 3
-        assert traj['per_layer_mean'].shape == (3, 1)  # 3 steps, 1 layer
+        # per_layer_mean is a dict mapping layer index -> array of means
+        assert 0 in traj['per_layer_mean']
+        assert traj['per_layer_mean'][0].shape == (3,)  # 3 steps for layer 0
 
 
 # =============================================================================
