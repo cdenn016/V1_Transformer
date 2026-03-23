@@ -3432,9 +3432,13 @@ class VariationalFFNDynamic(nn.Module):
                 mu_p_from_bank, sigma_p_from_bank, _ = _bank_out
 
             # Use PriorBank priors for VFE dynamics.
-            # mu_p: live (amortized gradient is well-conditioned).
-            # sigma_p: detached (M-step parameter; 1/σ_p in E-step creates feedback).
-            mu_p_current = mu_p_from_bank
+            # mu_p: live when amortized (gradient is well-conditioned: -α/σ_p).
+            # Detached when non-amortized or implicit_em (same logic as standard path).
+            # sigma_p: always detached (M-step parameter; 1/σ_p in E-step creates feedback).
+            if self.amortized_inference and not self.implicit_em:
+                mu_p_current = mu_p_from_bank
+            else:
+                mu_p_current = mu_p_from_bank.detach()
 
             # Convert diagonal sigma_p to full covariance if needed
             if is_diagonal:
