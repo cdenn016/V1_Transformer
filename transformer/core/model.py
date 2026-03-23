@@ -195,7 +195,18 @@ class GaugeTransformerLM(nn.Module):
         # Gauge Group and Mode (SO(3), SO(N), or GL(K))
         # =================================================================
         gauge_group = config.get('gauge_group', 'SO3')
-        gauge_dim = config.get('gauge_dim', 3)  # N for SO(N), K for GL(K)
+        gauge_dim = config.get('gauge_dim', None)  # N for SO(N), K for GL(K)
+        # Infer gauge_dim from irrep_spec when not explicitly provided
+        if gauge_dim is None:
+            if gauge_group == 'GLK' and irrep_spec is not None and len(irrep_spec) >= 1:
+                # GL(K): K is the per-head dimension from irrep_spec
+                gauge_dim = irrep_spec[0][2]  # d_head
+            elif gauge_group == 'SO3':
+                gauge_dim = 3
+            elif gauge_group == 'SON' and irrep_spec is not None and len(irrep_spec) >= 1:
+                gauge_dim = irrep_spec[0][2]
+            else:
+                gauge_dim = 3
         # =================================================================
         # Gauge Mode: Controls transport operator behavior
         # =================================================================
