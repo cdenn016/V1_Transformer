@@ -1330,7 +1330,7 @@ class PublicationMetrics:
 
         print(f"[PublicationMetrics] Saved to {self.experiment_dir}")
 
-    def generate_figures(self, attention_weights: Optional[torch.Tensor] = None):
+    def generate_figures(self, attention_weights: Optional[torch.Tensor] = None, model: Any = None):
         """Generate all publication figures."""
         figures_generated = []
 
@@ -1392,16 +1392,16 @@ class PublicationMetrics:
         # Holonomy figures (non-flat transport)
         if self.holonomy_history:
             try:
-                self.generate_holonomy_figures()
+                self.generate_holonomy_figures(model=model)
                 figures_generated.append("holonomy")
             except Exception as e:
                 print(f"[WARN] Could not generate holonomy figures: {e}")
 
         print(f"[PublicationMetrics] Generated figures: {', '.join(figures_generated)}")
 
-    def generate_all_figures(self, attention_weights: Optional[torch.Tensor] = None):
+    def generate_all_figures(self, attention_weights: Optional[torch.Tensor] = None, model: Any = None):
         """Alias for generate_figures (compatibility)."""
-        self.generate_figures(attention_weights)
+        self.generate_figures(attention_weights, model=model)
 
     def generate_interpretability_outputs(
         self,
@@ -1457,7 +1457,7 @@ class PublicationMetrics:
                                 save_name="attention_heatmap",
                                 title="KL-Divergence Attention"
                             )
-                        self.generate_figures(attention_weights=beta)
+                        self.generate_figures(attention_weights=beta, model=model)
             model.train()
             print(f"[PublicationMetrics] ✓ Generated interpretability outputs")
         except Exception as e:
