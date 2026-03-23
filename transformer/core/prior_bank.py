@@ -183,13 +183,9 @@ class PriorBank(nn.Module):
     def base_prior_sigma(self) -> torch.Tensor:
         r"""Get base prior variance (always positive). Only for gauge_fixed_priors=True.
 
-        Hard clamp bounds output to [0.01, 5.0] for numerical safety:
-        - min=0.01: prevents covariance collapse (singular precision matrix)
-        - max=5.0: prevents diffuse priors from producing vanishing KL gradients
-
-        Hard clamp zeros gradient at boundaries, preventing log_sigma drift.
+        Hard clamp bounds output to [0.2, 5.0] — same reasoning as prior_sigma.
         """
-        _SIGMA_MIN, _SIGMA_MAX = 0.01, 5.0
+        _SIGMA_MIN, _SIGMA_MAX = 0.2, 5.0
         sigma = torch.exp(self.base_log_prior_sigma)
         return sigma.clamp(_SIGMA_MIN, _SIGMA_MAX)
 
@@ -197,10 +193,16 @@ class PriorBank(nn.Module):
     def prior_sigma(self) -> torch.Tensor:
         r"""Get prior variances (always positive). Only for gauge_fixed_priors=False.
 
-        Hard clamp bounds output to [0.01, 5.0] for numerical safety.
-        Zeros gradient at boundaries, preventing log_sigma drift.
+        Hard clamp bounds output to [0.2, 5.0] for numerical safety:
+        - min=0.2: prevents 1/σ_p from exceeding 5.0 in the E-step self-coupling
+          gradient ∂KL(q||p)/∂σ = 0.5·(1/σ_p - 1/σ_q). At the old floor of 0.01,
+          1/σ_p = 100 → per-component gradient ≈ 50, driving nat_grad_sigma to ~7e3.
+          Floor of 0.2 caps 1/σ_p at 5.0, keeping gradients well-scaled.
+        - max=5.0: prevents diffuse priors from producing vanishing KL gradients.
+
+        Hard clamp zeros gradient at boundaries, preventing log_sigma drift.
         """
-        _SIGMA_MIN, _SIGMA_MAX = 0.01, 5.0
+        _SIGMA_MIN, _SIGMA_MAX = 0.2, 5.0
         sigma = torch.exp(self.log_prior_sigma)
         return sigma.clamp(_SIGMA_MIN, _SIGMA_MAX)
 
