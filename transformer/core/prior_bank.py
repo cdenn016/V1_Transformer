@@ -101,6 +101,15 @@ class PriorBank(nn.Module):
         self.omega_head_dims = omega_head_dims
         self.sigma_ce_scale = sigma_ce_scale
 
+        # Learnable inverse-temperature for decode logits.
+        # At init, scale = exp(0) = 1.0 → no amplification → CE ≈ ln(V).
+        # Gradient: dCE/d(log_scale) = scale * [E_p[KL] - KL_target].
+        #   If target has high KL (wrong prediction): gradient > 0 → scale decreases.
+        #   If target has low KL (good prediction): gradient < 0 → scale increases.
+        # Self-regulating: prevents overconfident wrong predictions at init,
+        # then sharpens as beliefs become informative during training.
+        self.decode_log_scale = nn.Parameter(torch.tensor(0.0))
+
         # Dimension-aware initialization: √(ln V / K) makes pairwise KL ≈ ln(V).
         # Old 1/√K made KL = O(1), but attention divides by √K_h →
         # logit differences O(1/(H√K_h)) vanish for large K (e.g. K=90 GL(15)).
@@ -385,21 +394,13 @@ class PriorBank(nn.Module):
         # logits = -KL/τ ≈ -0.5/τ * (combined + prior_bias)
         # (dropping softmax-invariant terms -K and log|Σ_q|)
         #
-        # √(K/ln V) concentration-of-measure correction:
-        # With init_std = √(ln V / K), each KL component is O(ln V / K).
-        # Summing K components: E[KL] = O(ln V), std(KL) = O(ln V / √K).
-        # Raw logit spread shrinks as 1/√K — at K=90 softmax is near-uniform.
-        #
-        # Previous fix (√K) restored spread but made logit offsets O(√K · ln V),
-        # giving CE ≈ 100 at K=90 (the self-prediction bias — beliefs trivially
-        # match their input prior — gets amplified by √K).
-        #
-        # Correct fix: √(K / ln V). The √K cancels the 1/√K in std(KL), and
-        # the 1/√(ln V) absorbs the ln(V) magnitude:
-        #   std(logit) = √(c · ln V) / (2τ), K-independent
-        #   logit gap  = √(K · ln V) instead of √K · ln V — factor √(ln V) smaller
-        dim_scale = math.sqrt(K / math.log(V))
-        logits = -0.5 * dim_scale / tau * (combined + prior_bias.unsqueeze(0).unsqueeze(0))
+        # Learnable scale replaces the fixed √K or √(K/ln V) corrections.
+        # Any fixed multiplier amplifies the self-prediction bias at init
+        # (beliefs trivially match their input prior, KL ≈ 0, while KL to
+        # all other priors ≈ ln V). With scale=1 at init: CE ≈ ln(V) ≈ 10.8.
+        # The model learns to increase scale as beliefs become informative.
+        scale = torch.exp(self.decode_log_scale)
+        logits = -0.5 * scale / tau * (combined + prior_bias.unsqueeze(0).unsqueeze(0))
 
         return logits
 
