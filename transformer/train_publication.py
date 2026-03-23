@@ -1047,8 +1047,7 @@ def run_test_evaluation(
 
             # Progress indicator
             if (batch_idx + 1) % 100 == 0:
-                print(f"  Evaluated {
-                      total_samples}/{max_samples} samples ({num_batches} batches)...")
+                print(f"  Evaluated {total_samples}/{max_samples} samples ({num_batches} batches)...")
 
     # Token-weighted CE average (proper averaging for variable batch sizes)
     test_ce = total_ce_tokens / max(1, total_tokens)
@@ -1057,8 +1056,7 @@ def run_test_evaluation(
     random_ppl = vocab_size
     improvement = random_ppl / test_ppl if test_ppl > 0 else 0
 
-    print(f"\nTest Set Results ({total_samples} samples across {
-          num_batches} batches):")
+    print(f"\nTest Set Results ({total_samples} samples across {num_batches} batches):")
     print(f"  Cross-entropy loss: {test_ce:.4f}")
     print(f"  Perplexity:         {test_ppl:.2f}")
     print(f"  Bits per character: {test_bpc:.3f}")
@@ -1381,8 +1379,7 @@ class PublicationTrainer(FastTrainer):
         # Comprehensive publication metrics (optional)
         self.pub_metrics = publication_metrics
         if self.pub_metrics:
-            print(f"[INFO] Comprehensive metrics enabled: {
-                  self.pub_metrics.experiment_dir}")
+            print(f"[INFO] Comprehensive metrics enabled: { self.pub_metrics.experiment_dir}")
 
         # Tokenizer for decoding sequences in interpretability outputs
         self.tokenizer = tokenizer
@@ -1552,11 +1549,9 @@ class PublicationTrainer(FastTrainer):
                                 ('...' if len(decoded) > 80 else '')
                             seq_info = f"Step {step}, Text: {preview}"
                         except Exception:
-                            seq_info = f"Step {step}, Tokens: {
-                                input_ids[0, :20].tolist()}..."
+                            seq_info = f"Step {step}, Tokens: { input_ids[0, :20].tolist()}..."
                     else:
-                        seq_info = f"Step {step}, Tokens: {
-                            input_ids[0, :20].tolist()}..."
+                        seq_info = f"Step {step}, Tokens: { input_ids[0, :20].tolist()}..."
 
                     # Save directory
                     save_dir = self.config.checkpoint_dir / 'attention_patterns'
@@ -1583,15 +1578,11 @@ class PublicationTrainer(FastTrainer):
                             ax.set_xlabel('Key Position (j)')
                             ax.set_ylabel('Query Position (i)')
 
-                            irrep_label = head_labels[head_idx] if head_idx < len(head_labels) else f"H{
-                                head_idx}"
-                            layer_label = f"L{
-                                layer_idx}" if n_layers_actual > 1 else ""
-                            title_prefix = f"{
-                                layer_label} " if layer_label else ""
+                            irrep_label = head_labels[head_idx] if head_idx < len(head_labels) else f"H{ head_idx}"
+                            layer_label = f"L{ layer_idx}" if n_layers_actual > 1 else ""
+                            title_prefix = f"{ layer_label} " if layer_label else ""
                             ax.set_title(
-                                f'{title_prefix}Head {
-                                    head_idx} ({irrep_label}) - {seq_info}',
+                                f'{title_prefix}Head { head_idx} ({irrep_label}) - {seq_info}',
                                 fontsize=10,
                             )
                             plt.colorbar(
@@ -1599,8 +1590,7 @@ class PublicationTrainer(FastTrainer):
 
                             fig.savefig(
                                 save_dir /
-                                f'attention_step_{step:06d}_layer{
-                                    layer_idx}_head{head_idx}.png',
+                                f'attention_step_{step:06d}_layer{ layer_idx}_head{head_idx}.png',
                                 dpi=100, bbox_inches='tight',
                             )
                             plt.close(fig)
@@ -1610,8 +1600,7 @@ class PublicationTrainer(FastTrainer):
                     # ============================================================
                     self._attention_viz_count += 1
                     if self._attention_viz_count == 1:
-                        print(f"\n[INFO] Attention patterns saved to: {
-                              save_dir}/")
+                        print(f"\n[INFO] Attention patterns saved to: { save_dir}/")
                         print(
                             f"  Saving per-layer, per-head visualizations ({n_layers_actual} layers, {n_heads} heads)")
 
@@ -2083,14 +2072,12 @@ class PublicationTrainer(FastTrainer):
         if epochs is not None and epochs > 0:
             steps_per_epoch = len(self.train_loader)
             total_steps = epochs * steps_per_epoch
-            print(f"  Training for {epochs} epoch(s) ({
-                  steps_per_epoch} steps/epoch = {total_steps:,} total steps)")
+            print(f"  Training for {epochs} epoch(s) ({ steps_per_epoch} steps/epoch = {total_steps:,} total steps)")
         else:
             total_steps = self.config.max_steps
             steps_per_epoch = len(self.train_loader)
             equiv_epochs = total_steps / steps_per_epoch if steps_per_epoch > 0 else 0
-            print(f"  Training for {
-                  total_steps:,} steps (~{equiv_epochs:.1f} epochs)")
+            print(f"  Training for { total_steps:,} steps (~{equiv_epochs:.1f} epochs)")
 
         try:
             from tqdm import tqdm
@@ -2193,8 +2180,7 @@ class PublicationTrainer(FastTrainer):
                     if metrics.get('rg/dynamic/n_iterations') is not None and metrics['rg/dynamic/n_iterations'] > 1:
                         _rg_msg += (
                             f" | dyn({metrics['rg/dynamic/n_iterations']}it): "
-                            f"Q {metrics.get('rg/dynamic/modularity_init', 0):.3f}->{
-                                metrics.get('rg/dynamic/modularity_final', 0):.3f}"
+                            f"Q {metrics.get('rg/dynamic/modularity_init', 0):.3f}->{ metrics.get('rg/dynamic/modularity_final', 0):.3f}"
                         )
 
                 if use_tqdm:
@@ -2202,8 +2188,7 @@ class PublicationTrainer(FastTrainer):
                     # Print gradient norms using tqdm.write for proper display
                     if grad_norms:
                         tqdm.write(f"  [M-STEP] total: {grad_norms['total']:.3e} | "
-                                   f"mu: {grad_norms['mu']:.3e} | sigma: {
-                                       grad_norms['sigma']:.3e} | "
+                                   f"mu: {grad_norms['mu']:.3e} | sigma: { grad_norms['sigma']:.3e} | "
                                    f"phi: {grad_norms['phi']:.3e}")
                     if e_step_norms:
                         tqdm.write(f"  [E-STEP] nat_grad_mu: {e_step_norms['nat_grad_mu']:.3e} | "
@@ -2212,14 +2197,10 @@ class PublicationTrainer(FastTrainer):
                     # Print Bayesian alpha diagnostics
                     if metrics.get('bayesian/alpha_mean') is not None:
                         tqdm.write(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
-                                   f"std: {
-                                       metrics['bayesian/alpha_std']:.4f} | "
-                                   f"range: [{
-                                       metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
-                                   f"c0: {
-                                       metrics['bayesian/c0']:.4f}±{metrics.get('bayesian/c0_std', 0):.4f} | "
-                                   f"b0: {
-                                       metrics['bayesian/b0']:.4f}±{metrics.get('bayesian/b0_std', 0):.4f} | "
+                                   f"std: { metrics['bayesian/alpha_std']:.4f} | "
+                                   f"range: [{ metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
+                                   f"c0: { metrics['bayesian/c0']:.4f}±{metrics.get('bayesian/c0_std', 0):.4f} | "
+                                   f"b0: { metrics['bayesian/b0']:.4f}±{metrics.get('bayesian/b0_std', 0):.4f} | "
                                    f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}")
                     if _rg_msg:
                         tqdm.write(_rg_msg)
@@ -2227,8 +2208,7 @@ class PublicationTrainer(FastTrainer):
                     print(log_msg)
                     if grad_norms:
                         print(f"  [M-STEP] total: {grad_norms['total']:.3e} | "
-                              f"mu: {grad_norms['mu']:.3e} | sigma: {
-                                  grad_norms['sigma']:.3e} | "
+                              f"mu: {grad_norms['mu']:.3e} | sigma: { grad_norms['sigma']:.3e} | "
                               f"phi: {grad_norms['phi']:.3e}")
                     if e_step_norms:
                         print(f"  [E-STEP] nat_grad_mu: {e_step_norms['nat_grad_mu']:.3e} | "
@@ -2238,10 +2218,8 @@ class PublicationTrainer(FastTrainer):
                         print(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
                               f"std: {metrics['bayesian/alpha_std']:.4f} | "
                               f"range: [{metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
-                              f"c0: {
-                                  metrics['bayesian/c0']:.4f}±{metrics.get('bayesian/c0_std', 0):.4f} | "
-                              f"b0: {
-                                  metrics['bayesian/b0']:.4f}±{metrics.get('bayesian/b0_std', 0):.4f} | "
+                              f"c0: { metrics['bayesian/c0']:.4f}±{metrics.get('bayesian/c0_std', 0):.4f} | "
+                              f"b0: { metrics['bayesian/b0']:.4f}±{metrics.get('bayesian/b0_std', 0):.4f} | "
                               f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}\n\n")
                     if _rg_msg:
                         print(_rg_msg)
@@ -2274,22 +2252,17 @@ class PublicationTrainer(FastTrainer):
                 print(f"    CE: {val_metrics['ce_loss']:.4f}")
                 print(f"    PPL: {val_metrics['perplexity']:.2f}")
                 print(f"    BPC: {val_metrics['ce_loss']/math.log(2):.3f}")
-                print(f"    Attn entropy: {attn_entropy:.3f} | concentration: {
-                      attn_concentration:.3f}\n\n")
+                print(f"    Attn entropy: {attn_entropy:.3f} | concentration: { attn_concentration:.3f}\n\n")
 
                 # Log RG metrics if available (meta-agent emergence!)
                 if metrics.get('rg/modularity') is not None:
                     print(f"    RG Metrics (meta-agent emergence):")
-                    print(f"      Modularity Q: {
-                          metrics['rg/modularity']:.4f} (higher = more structure)")
-                    print(f"      Effective rank: {
-                          metrics['rg/effective_rank']:.2f} (lower = concentrated)")
+                    print(f"      Modularity Q: { metrics['rg/modularity']:.4f} (higher = more structure)")
+                    print(f"      Effective rank: { metrics['rg/effective_rank']:.2f} (lower = concentrated)")
                     print(
                         f"      Clusters (meta-agents): {metrics['rg/n_clusters']}")
-                    print(f"      KL within: {
-                          metrics['rg/kl_within_mean']:.4f} (lower = tighter)")
-                    print(f"      KL between: {
-                          metrics['rg/kl_between_mean']:.4f}\n\n")
+                    print(f"      KL within: { metrics['rg/kl_within_mean']:.4f} (lower = tighter)")
+                    print(f"      KL between: { metrics['rg/kl_between_mean']:.4f}\n\n")
 
                     # Dynamic RG flow (within forward pass)
                     if metrics.get('rg/dynamic/n_iterations') is not None:
@@ -2301,10 +2274,8 @@ class PublicationTrainer(FastTrainer):
                                 'rg/dynamic/rank_change', 0)
                             print(
                                 f"    Dynamic RG ({n_iters} VFE iterations):")
-                            print(f"      Modularity: {metrics.get('rg/dynamic/modularity_init', 0):.4f} → {
-                                  metrics.get('rg/dynamic/modularity_final', 0):.4f} (Δ={mod_change:+.4f})")
-                            print(f"      Eff. Rank:  {metrics.get('rg/dynamic/rank_init', 0):.1f} → {
-                                  metrics.get('rg/dynamic/rank_final', 0):.1f} (Δ={rank_change:+.1f})")
+                            print(f"      Modularity: {metrics.get('rg/dynamic/modularity_init', 0):.4f} → { metrics.get('rg/dynamic/modularity_final', 0):.4f} (Δ={mod_change:+.4f})")
+                            print(f"      Eff. Rank:  {metrics.get('rg/dynamic/rank_init', 0):.1f} → { metrics.get('rg/dynamic/rank_final', 0):.1f} (Δ={rank_change:+.1f})")
 
                 # Generate sample text to verify learning (varied prompts for diversity)
                 try:
@@ -2376,8 +2347,7 @@ class PublicationTrainer(FastTrainer):
                             print(f"[WARN] Holonomy at step {step+1}: no matching CSV entry "
                                   f"(holonomy_interval may not be divisible by log_interval)")
                 except Exception as e:
-                    print(f"[WARN] Holonomy computation failed at step {
-                          step+1}: {e}")
+                    print(f"[WARN] Holonomy computation failed at step { step+1}: {e}")
 
             # Lightweight semantic trajectory snapshot (higher frequency than full analysis)
             if self.pub_metrics:
@@ -2392,8 +2362,7 @@ class PublicationTrainer(FastTrainer):
                         verbose=False,  # Minimal output during training
                     )
                 except Exception as e:
-                    print(f"[WARN] Semantic analysis failed at step {
-                          step+1}: {e}")
+                    print(f"[WARN] Semantic analysis failed at step { step+1}: {e}")
 
         # Flush any remaining numerical events accumulated after the last log step
         _final_num_events = _flush_numerical_events()
@@ -2404,8 +2373,7 @@ class PublicationTrainer(FastTrainer):
 
         # Save final metrics
         self.metrics_tracker.save()
-        print(f"\n[INFO] Final metrics saved to: {
-              self.metrics_tracker.save_path}")
+        print(f"\n[INFO] Final metrics saved to: { self.metrics_tracker.save_path}")
 
         # Save comprehensive publication metrics
         if self.pub_metrics:
@@ -2456,8 +2424,7 @@ class PublicationTrainer(FastTrainer):
         print("TRAINING COMPLETE!")
         print(f"{'='*70}")
         print(f"Time: {elapsed/3600:.2f} hours")
-        print(f"Best val CE: {self.best_val_ce:.4f} (PPL: {
-              math.exp(min(self.best_val_ce, 20.0)):.2f})")
+        print(f"Best val CE: {self.best_val_ce:.4f} (PPL: { math.exp(min(self.best_val_ce, 20.0)):.2f})")
         print(f"{'='*70}\n")
 
 
@@ -2758,8 +2725,7 @@ def run_single_experiment(
         print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
         if dataset_tokens:
             coverage = total_tokens / dataset_tokens * 100
-            print(f"  Dataset:        {dataset_tokens:,} ({
-                  dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
+            print(f"  Dataset:        {dataset_tokens:,} ({ dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
     else:
         equiv_epochs = train_config.max_steps / steps_per_epoch
         total_tokens = train_config.max_steps * tokens_per_step
@@ -2769,8 +2735,7 @@ def run_single_experiment(
         print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
         if dataset_tokens:
             coverage = total_tokens / dataset_tokens * 100
-            print(f"  Dataset:        {dataset_tokens:,} ({
-                  dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
+            print(f"  Dataset:        {dataset_tokens:,} ({ dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
     print(f"  Warmup:         {train_config.warmup_steps}")
     print(f"  Batch size:     {batch_size}")
     print(f"  Seq length:     {seq_len}")
@@ -2783,8 +2748,7 @@ def run_single_experiment(
     # P-FLOW configuration
     if train_config.use_p_flow:
         print(f"\nP-FLOW (EMA prior updates): ENABLED")
-        print(f"  EMA decay: {train_config.p_flow_ema_decay} ({
-              (1-train_config.p_flow_ema_decay)*100:.1f}% update per step)")
+        print(f"  EMA decay: {train_config.p_flow_ema_decay} ({ (1-train_config.p_flow_ema_decay)*100:.1f}% update per step)")
     else:
         print(f"\nP-FLOW: disabled")
 
@@ -2800,8 +2764,7 @@ def run_single_experiment(
     # RG METRICS configuration
     if train_config.compute_rg_metrics:
         print(f"\nRG METRICS (meta-agent emergence): ENABLED")
-        print(f"  Compute interval: every {
-              train_config.rg_metrics_interval} steps")
+        print(f"  Compute interval: every { train_config.rg_metrics_interval} steps")
         print(f"  Dynamic RG tracking: {train_config.track_dynamic_rg}")
     else:
         print(f"\nRG METRICS: disabled")
@@ -2828,16 +2791,14 @@ def run_single_experiment(
         semantic_interval = config.get('semantic_analysis_interval',
                                        getattr(args, 'semantic_analysis_interval', 10000) if args else 10000)
         pub_metrics.set_semantic_analysis_interval(semantic_interval)
-        print(f"[Config] Gauge frame semantic analysis every {
-              semantic_interval} steps")
+        print(f"[Config] Gauge frame semantic analysis every { semantic_interval} steps")
 
         # Configure holonomy diagnostics interval
         holonomy_interval = config.get('holonomy_interval', 500)
         holonomy_sample_size = config.get('holonomy_sample_size', 500)
         pub_metrics.set_holonomy_interval(
             holonomy_interval, holonomy_sample_size)
-        print(f"[Config] Holonomy diagnostics every {
-              holonomy_interval} steps (sample_size={holonomy_sample_size})")
+        print(f"[Config] Holonomy diagnostics every { holonomy_interval} steps (sample_size={holonomy_sample_size})")
 
     trainer = PublicationTrainer(
         model=model,
@@ -2861,8 +2822,7 @@ def run_single_experiment(
     # Show epochs-based info if set
     if train_config.epochs is not None and train_config.epochs > 0:
         eff_steps = train_config.epochs * steps_per_epoch
-        print(f"Epochs: {train_config.epochs} ({
-              steps_per_epoch:,} steps/epoch = {eff_steps:,} total)")
+        print(f"Epochs: {train_config.epochs} ({ steps_per_epoch:,} steps/epoch = {eff_steps:,} total)")
     else:
         print(f"Total steps: {train_config.max_steps:,}")
     print("\nNOTE: First few batches may be slow (JIT compilation)")
@@ -3123,8 +3083,7 @@ def run_pure_vfe_experiment(
     print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
     if dataset_tokens:
         coverage = total_tokens / dataset_tokens * 100
-        print(f"  Dataset:        {dataset_tokens:,} ({
-              dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
+        print(f"  Dataset:        {dataset_tokens:,} ({ dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
     print(f"  Batch size:     {batch_size}")
     print(f"  Seq length:     {seq_len}")
     print(f"  No optimizer (natural gradient only)")
@@ -3245,8 +3204,7 @@ def run_pure_vfe_experiment(
                     health = monitor_omega_health(
                         model.prior_Omega[:100], "prior_Omega")
                     if health['prior_Omega/cond_max'] > 100:
-                        omega_msg = f"  [WARN] Omega cond number high: {
-                            health['prior_Omega/cond_max']:.1f}"
+                        omega_msg = f"  [WARN] Omega cond number high: { health['prior_Omega/cond_max']:.1f}"
                         if use_tqdm:
                             tqdm.write(omega_msg)
                         else:
@@ -3296,8 +3254,7 @@ def run_pure_vfe_experiment(
         print("="*70)
 
         elapsed = time.time() - start_time
-        print(f"Total time: {
-              elapsed/60:.1f} minutes ({elapsed/3600:.2f} hours)")
+        print(f"Total time: { elapsed/60:.1f} minutes ({elapsed/3600:.2f} hours)")
 
         final_metrics = _validate_pure_vfe(model, val_loader, device)
 

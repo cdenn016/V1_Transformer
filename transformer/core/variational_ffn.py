@@ -2819,6 +2819,8 @@ class VariationalFFNDynamic(nn.Module):
                     if is_diagonal:
                         grad_sigma[:, :, block_start:block_end] = grad_sigma_h
                     else:
+                        if grad_sigma_h.dim() == 3 and d_h == 1:
+                            grad_sigma_h = grad_sigma_h.unsqueeze(-1)
                         grad_sigma[:, :, block_start:block_end, block_start:block_end] = grad_sigma_h
                     block_start = block_end
             else:
@@ -2995,6 +2997,8 @@ class VariationalFFNDynamic(nn.Module):
                     if is_diagonal:
                         grad_sigma[:, :, block_start:block_end] = grad_sigma_h
                     else:
+                        if grad_sigma_h.dim() == 3 and d_h == 1:
+                            grad_sigma_h = grad_sigma_h.unsqueeze(-1)
                         grad_sigma[:, :, block_start:block_end, block_start:block_end] = grad_sigma_h
                     block_start = block_end
             else:
@@ -3545,6 +3549,11 @@ class VariationalFFNDynamic(nn.Module):
                     if is_diagonal:
                         grad_sigma[:, :, block_start:block_end] = grad_sigma_h
                     else:
+                        # compute_vfe_gradients_gpu squeezes trailing singletons,
+                        # so d_h=1 heads return (B,N,1) instead of (B,N,1,1).
+                        # Restore full covariance shape for block assignment.
+                        if grad_sigma_h.dim() == 3 and d_h == 1:
+                            grad_sigma_h = grad_sigma_h.unsqueeze(-1)
                         grad_sigma[:, :, block_start:block_end, block_start:block_end] = grad_sigma_h
                     block_start = block_end
 
