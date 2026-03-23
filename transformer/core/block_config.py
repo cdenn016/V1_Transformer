@@ -43,18 +43,18 @@ class BlockConfig:
     attention_pattern: str = 'full'     # 'full' (only supported pattern)
     attention_window: int = 64          # Window size (unused, kept for API compat)
     mask_self_attention: bool = False   # Prevent KL(q_i||q_i)=0 collapse
-    use_output_projection: bool = False # W_O ∈ R^{K×K} after multi-head concat
-    multihead_vfe: bool = False         # Per-head β_h through VFE iterations
+    use_output_projection: bool = True # W_O ∈ R^{K×K} after multi-head concat
+    multihead_vfe: bool = True         # Per-head β_h through VFE iterations
 
     # === Belief evolution ===
     evolve_sigma: bool = True           # Update covariances Σ via natural gradient
     evolve_phi: bool = True             # Update gauge frames φ (M-step, after E-step loop)
-    evolve_phi_e_step: bool = False     # Update φ during EACH E-step iteration
+    evolve_phi_e_step: bool = True     # Update φ during EACH E-step iteration
     phi_update_interval: int = 1        # Update phi every N E-step iterations (1=every)
     phi_lr: float = 0.05               # Learning rate for ∂F/∂φ descent
     phi_max_norm: float = math.pi       # Max phi norm (π radians = 180°)
     phi_dim: int = 3                    # 3 for SO(3), N(N-1)/2 for SO(N), K² for GL(K)
-    phi_natural_gradient: str = 'clip'  # 'clip'|'cartan'|'killing'|'pullback'
+    phi_natural_gradient: str = 'killing'  # 'clip'|'cartan'|'killing'|'pullback'
     diagonal_covariance: bool = False   # σ as (B,N,K) diagonal instead of (B,N,K,K) full
     exact_diagonal_transport: bool = False  # When True + diagonal_covariance, lift σ to full
                                             # for exact Ω@diag(σ)@Ω^T transport (slower but exact)
@@ -92,7 +92,7 @@ class BlockConfig:
     # When non_flat_transport=False (default), all non-flat fields are ignored
     # and the standard flat transport is used (cocycle condition holds, holonomy trivial).
     non_flat_transport: bool = False       # Enable edge-dependent connection δ_ij
-    cocycle_relaxation: float = 0.0        # Scale factor for δ_ij: 0=flat, 1=fully non-flat
+    cocycle_relaxation: float = 0.5        # Scale factor for δ_ij: 0=flat, 1=fully non-flat
     per_head_flatness_gate: bool = False   # Learnable per-head g_h ∈ [0,1]
     connection_type: str = 'bilinear'      # 'bilinear' | 'mlp'
     connection_hidden_dim: int = 64        # Hidden dim for MLP connection
@@ -101,7 +101,7 @@ class BlockConfig:
 
     # === Positional encoding ===
     alibi_slope: Optional[float] = None    # ALiBi positional bias (negative = recency)
-    use_rope: bool = False                 # Rotary position embeddings on μ before KL
+    use_rope: bool = True                 # Rotary position embeddings on μ before KL
     rope_base: float = 10000.0             # RoPE frequency base
 
     # === Memory efficiency ===
@@ -152,17 +152,17 @@ class BlockConfig:
             attention_pattern=config.get('attention_pattern', 'full'),
             attention_window=config.get('attention_window', 64),
             mask_self_attention=config.get('mask_self_attention', False),
-            use_output_projection=config.get('use_output_projection', False),
-            multihead_vfe=config.get('multihead_vfe', False),
+            use_output_projection=config.get('use_output_projection', True),
+            multihead_vfe=config.get('multihead_vfe', True),
             # Belief evolution
             evolve_sigma=config.get('evolve_sigma', True),
             evolve_phi=config.get('evolve_phi', True),
-            evolve_phi_e_step=config.get('evolve_phi_e_step', False),
+            evolve_phi_e_step=config.get('evolve_phi_e_step', True),
             phi_update_interval=config.get('phi_update_interval', 1),
             phi_lr=config.get('e_step_phi_lr', config.get('phi_lr', 0.05)),
             phi_max_norm=config.get('phi_max_norm', math.pi),
             phi_dim=config.get('phi_dim', 3),
-            phi_natural_gradient=config.get('phi_natural_gradient', 'clip'),
+            phi_natural_gradient=config.get('phi_natural_gradient', 'killing'),
             diagonal_covariance=config.get('diagonal_covariance', False),
             exact_diagonal_transport=config.get('exact_diagonal_transport', False),
             amortized_inference=config.get('amortized_inference', True),
@@ -186,7 +186,7 @@ class BlockConfig:
             isotropic_covariance=config.get('isotropic_covariance', False),
             # Non-flat gauge transport
             non_flat_transport=config.get('non_flat_transport', False),
-            cocycle_relaxation=config.get('cocycle_relaxation', 0.0),
+            cocycle_relaxation=config.get('cocycle_relaxation', 0.5),
             per_head_flatness_gate=config.get('per_head_flatness_gate', False),
             connection_type=config.get('connection_type', 'bilinear'),
             connection_hidden_dim=config.get('connection_hidden_dim', 64),
@@ -194,7 +194,7 @@ class BlockConfig:
             holonomy_penalty=config.get('holonomy_penalty', 0.0),
             # Positional encoding
             alibi_slope=config.get('alibi_slope', None),
-            use_rope=config.get('use_rope', False),
+            use_rope=config.get('use_rope', True),
             rope_base=config.get('rope_base', 10000.0),
             # Memory efficiency
             ffn_irrep_dims=ffn_irrep_dims,
