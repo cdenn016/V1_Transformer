@@ -114,10 +114,14 @@ class TrainingConfig:
     # ==========================================================================
     # NOTE: alpha > 0 is CRITICAL for gradient flow to embeddings!
     alpha: float = 0.1           # Self-consistency: KL(q||p) to embedding priors
-    lambda_beta: float = 1.0     # Belief alignment: Σβ_ij·KL (CRUCIAL!)
+    lambda_beta: float = 1.0     # Belief alignment: Σβ_ij·KL (CRUCIAL!) [M-step loss]
     beta_warmup_steps: int = 0   # Linear warmup for lambda_beta (0 = instant full value)
                                  # Prevents uniform attention collapse: lets CE differentiate
                                  # embeddings before belief coupling gradient kicks in.
+    ffn_lambda_belief: float = 1.0  # Belief alignment weight inside VFE E-step [E-step dynamics]
+                                    # Controls strength of Σβ_ij·KL(q_i||Ω_ij q_j) gradient
+                                    # in FFN VFE iterations. Analogous to lambda_beta but for
+                                    # the E-step rather than the M-step loss.
     lambda_gamma: float = 0.0    # Model alignment (disabled by default)
     kappa_gamma: float = 1.0     # Temperature for γ_ij coupling weights
     use_obs_in_vfe: bool = False # Pass targets as observations into VFE E-step (last layer only)
