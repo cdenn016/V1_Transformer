@@ -313,7 +313,7 @@ class PriorBank(nn.Module):
     def decode(
         self,
         mu_q: torch.Tensor,      # (B, N, K) belief means
-        sigma_q: torch.Tensor,   # (B, N, K) belief variances (diagonal)
+        sigma_q: torch.Tensor,   # (B, N, K) or (B, N, K, K) belief covariances
         tau: float = 1.0,        # Temperature
     ) -> torch.Tensor:
         """
@@ -332,15 +332,25 @@ class PriorBank(nn.Module):
         2. Drop terms constant across V (cancel in softmax): -K, log|Σ_q|
         3. Combine prior-side constants into single (V,) bias
 
+        When sigma_q is full covariance (B, N, K, K), extracts the diagonal
+        variances for the fused matmul. Off-diagonal terms cancel in softmax
+        since priors are diagonal.
+
         Args:
             mu_q: (B, N, K) belief means
-            sigma_q: (B, N, K) belief variances
+            sigma_q: (B, N, K) diagonal variances or (B, N, K, K) full covariance
             tau: Temperature for softmax
 
         Returns:
             logits: (B, N, vocab_size) log-probabilities (unnormalized)
         """
         B, N, K = mu_q.shape
+
+        # Full covariance (B, N, K, K) → extract diagonal variances (B, N, K).
+        # The fused KL only needs tr(Σ_q Σ_p⁻¹) = Σ_k σ_q[k]/σ_p[k] when
+        # priors are diagonal, so off-diagonal Σ_q entries don't contribute.
+        if sigma_q.dim() == 4:
+            sigma_q = torch.diagonal(sigma_q, dim1=-2, dim2=-1)  # (B, N, K)
         V = self.vocab_size
         device = mu_q.device
 
@@ -419,6 +429,10 @@ class PriorBank(nn.Module):
             return
 
         with torch.no_grad():
+            # Full covariance (B, N, K, K) → diagonal variances (B, N, K)
+            if sigma_beliefs.dim() == 4:
+                sigma_beliefs = torch.diagonal(sigma_beliefs, dim1=-2, dim2=-1)
+
             B, N, K = mu_beliefs.shape
 
             # Flatten batch dimensions: (B*N,)
