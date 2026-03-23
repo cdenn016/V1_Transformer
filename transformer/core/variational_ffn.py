@@ -2722,11 +2722,12 @@ class VariationalFFNDynamic(nn.Module):
             sigma_h = sigma_current[:, :, block_start:block_end].detach() if is_diagonal else None
             gen_h = self.generators[:, block_start:block_end, block_start:block_end]
 
+            kappa_h = self.kappa * math.sqrt(d_h)  # Match main multihead path scaling
             beta_kl_h = compute_attention_weights(
                 mu_q=mu_h, sigma_q=sigma_h,
                 phi=torch.zeros(B, N, 1, device=device),  # dummy
                 generators=gen_h,
-                kappa=self.kappa, epsilon=eps, mask=mask,
+                kappa=kappa_h, epsilon=eps, mask=mask,
                 use_numba=False, return_kl=True,
                 diagonal_covariance=is_diagonal,
                 gauge_param='omega', omega=omega_for_grad,
@@ -2954,7 +2955,7 @@ class VariationalFFNDynamic(nn.Module):
                         sigma_h = sigma_in[:, :, block_start:block_end, block_start:block_end].contiguous()
                         sigma_p_h = sigma_p[:, :, block_start:block_end, block_start:block_end].contiguous()
                     gen_h = self.generators[:, block_start:block_end, block_start:block_end]
-                    kappa_h = self.kappa
+                    kappa_h = self.kappa * math.sqrt(d_h)  # Match main path scaling
 
                     beta_h = compute_attention_weights(
                         mu_q=mu_h, sigma_q=sigma_h,
@@ -3131,7 +3132,7 @@ class VariationalFFNDynamic(nn.Module):
                         sigma_h = sigma_in[:, :, block_start:block_end, block_start:block_end].contiguous()
                         sigma_p_h = sigma_p[:, :, block_start:block_end, block_start:block_end].contiguous()
                     gen_h = self.generators[:, block_start:block_end, block_start:block_end]
-                    kappa_h = self.kappa
+                    kappa_h = self.kappa * math.sqrt(d_h)  # Match main path scaling
 
                     beta_h = compute_attention_weights(
                         mu_q=mu_h, sigma_q=sigma_h,

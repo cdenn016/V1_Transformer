@@ -621,6 +621,7 @@ class GaugeTransformerLM(nn.Module):
         # Priors represent "expected meaning of token" - independent of position.
         # This is the correct VFE setup: prior = semantic, belief = contextualized.
         mu_prior = mu_q.clone()
+        sigma_prior = sigma_q.clone() if sigma_q is not None else None
 
         # =================================================================
         # 3. Position Encoding - Compose with token phi
@@ -699,6 +700,7 @@ class GaugeTransformerLM(nn.Module):
             self.generators,
             mask=mask,
             mu_prior=mu_prior,  # Pass priors for variational FFN
+            sigma_prior=sigma_prior,  # Embedding prior covariance for proper E-step reference
             token_ids=token_ids,  # Pass token IDs for PriorBank lookup
             return_intermediates=return_agents,
             cached_head_transports=cached_head_transports,
