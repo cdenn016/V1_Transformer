@@ -2576,6 +2576,15 @@ def run_single_experiment(
 
     model = model.to(device)
 
+    # Enable E-step gradient component debug (prints per-component breakdown)
+    # Set to True to diagnose gradient explosion sources; disable for production.
+    _DEBUG_VFE_GRADS = False
+    if _DEBUG_VFE_GRADS:
+        for module in model.modules():
+            if hasattr(module, '_debug_vfe_gradients'):
+                module._debug_vfe_gradients = True
+        print("[DEBUG] VFE gradient component debug ENABLED for all FFN layers")
+
     # Get parameter counts
     if hasattr(model, 'get_num_params'):
         total_params = model.get_num_params(non_embedding=False)
