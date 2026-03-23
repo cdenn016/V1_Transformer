@@ -3472,14 +3472,14 @@ class VariationalFFNDynamic(nn.Module):
         # on the first iteration. The retraction clamps AFTER the update, but the
         # gradient was already computed on the un-clamped value.
         if self.update_sigma:
-            eps = max(self.eps, 1e-6)
+            _eps = 1e-6
             if sigma_current.dim() == 3:
                 # Diagonal: element-wise clamp
-                sigma_current = sigma_current.clamp(min=eps, max=self.sigma_max)
+                sigma_current = sigma_current.clamp(min=_eps, max=self.sigma_max)
             else:
                 # Full covariance: spectral clamp on eigenvalues
                 eigvals, eigvecs = torch.linalg.eigh(sigma_current)
-                eigvals = eigvals.clamp(min=eps, max=self.sigma_max * self.sigma_max)
+                eigvals = eigvals.clamp(min=_eps, max=self.sigma_max * self.sigma_max)
                 sigma_current = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
 
         # Detach phi when detach_phi=True and non-amortized: enables fully backprop-free
@@ -4007,6 +4007,18 @@ class VariationalFFNDynamic(nn.Module):
             self._e_step_grad_norms['nat_grad_sigma'] = _raw_nat_grad_sigma_norm
             self._e_step_grad_norms['nat_grad_mu_clipped'] = nat_grad_mu.detach().norm().item()
             self._e_step_grad_norms['nat_grad_sigma_clipped'] = nat_grad_sigma.detach().norm().item()
+            # Per-position clip fraction for the 500-norm cap
+            self._e_step_grad_norms['mu_cap_frac'] = (
+                nat_grad_mu_norm.squeeze(-1) >= max_nat_grad_norm * 0.99
+            ).float().mean().item()
+            if is_diagonal:
+                self._e_step_grad_norms['sigma_cap_frac'] = (
+                    nat_grad_sigma_norm.squeeze(-1) >= max_nat_grad_sigma_norm * 0.99
+                ).float().mean().item()
+            else:
+                self._e_step_grad_norms['sigma_cap_frac'] = (
+                    nat_grad_sigma_norm.squeeze(-1).squeeze(-1) >= max_nat_grad_sigma_norm * 0.99
+                ).float().mean().item()
 
             # =================================================================
             # DEBUG: Print per-component gradient breakdown
@@ -4133,6 +4145,13 @@ class VariationalFFNDynamic(nn.Module):
             mu_trust_region = 2.0  # Trust region on whitened norm
             scale = torch.clamp(mu_trust_region / (whitened_norm + eps), max=1.0)
             mu_current = mu_current + scale * delta_mu
+
+            # Track trust region clip fraction
+            self._e_step_grad_norms['mu_trust_frac'] = (
+                scale.squeeze(-1) < 0.99
+            ).float().mean().item()
+            self._e_step_grad_norms['whitened_mu_mean'] = whitened_norm.mean().item()
+            self._e_step_grad_norms['whitened_mu_max'] = whitened_norm.max().item()
 
             if self.update_sigma:
                 # SPD-preserving retraction: sigma_new = sigma * exp(step * clip(delta/sigma, -trust, trust))
