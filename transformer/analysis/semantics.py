@@ -536,32 +536,42 @@ def analyze_word_pairs(
 
 
 def _reconstruct_gauge_fixed_embeddings(
-    token_embed: Any,
+    embed_module: Any,
     n_tokens: Optional[int] = None,
 ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
     r"""Reconstruct per-token μ embeddings when ``gauge_fixed_priors=True``.
 
-    When gauge_fixed_priors is active, there is no ``mu_embed``. Instead:
+    When gauge_fixed_priors is active, there is no per-token ``mu_embed``.
+    Instead:
 
     .. math::
         \mu_i = R(\phi_i) \, \mu_0, \quad R_i = \exp(\phi_i \cdot T_a)
 
     where :math:`T_a` are the Lie algebra generators.
 
+    Works with both ``GaugeTokenEmbedding`` (``base_mu``) and ``PriorBank``
+    (``base_prior_mu``).
+
     Args:
-        token_embed: ``GaugeTokenEmbedding`` instance.
+        embed_module: ``GaugeTokenEmbedding`` or ``PriorBank`` instance.
         n_tokens: If given, only reconstruct the first *n_tokens* rows.
 
     Returns:
         ``(mu_embed, phi_embed)`` tensors on CPU, or ``(None, None)``
-        if *token_embed* is not in gauge_fixed_priors mode.
+        if *embed_module* is not in gauge_fixed_priors mode.
     """
-    if not getattr(token_embed, 'gauge_fixed_priors', False):
+    if not getattr(embed_module, 'gauge_fixed_priors', False):
         return None, None
 
-    base_mu = token_embed.base_mu                # (K,)
-    phi_weight = token_embed.phi_embed.weight     # (vocab, phi_dim)
-    generators = token_embed.generators           # (phi_dim, K, K)
+    # PriorBank uses base_prior_mu; GaugeTokenEmbedding uses base_mu
+    base_mu = getattr(embed_module, 'base_prior_mu', None)
+    if base_mu is None:
+        base_mu = getattr(embed_module, 'base_mu', None)
+    if base_mu is None:
+        return None, None
+
+    phi_weight = embed_module.phi_embed.weight     # (vocab, phi_dim)
+    generators = embed_module.generators           # (phi_dim, K, K)
 
     if n_tokens is not None:
         phi_weight = phi_weight[:n_tokens]
@@ -603,22 +613,37 @@ def analyze_gauge_semantics(
     Returns:
         Dictionary with analysis results
     """
-    # Extract embeddings from model if provided
+    # Extract embeddings from model if provided.
+    # Priority: prior_bank (actually trained when use_prior_bank=True)
+    #         > token_embed
+    #         > gauge_fixed_priors reconstruction
     if model is not None:
-        # Try direct attributes first
-        if hasattr(model, 'mu_embed'):
+        pb = getattr(model, 'prior_bank', None)
+        use_pb = getattr(model, 'use_prior_bank', False) and pb is not None
+
+        # --- mu embeddings ---
+        if use_pb and hasattr(pb, 'prior_mu'):
+            # prior_bank.prior_mu is nn.Parameter (vocab, K), not nn.Embedding
+            mu_embed = pb.prior_mu.detach().cpu()
+        elif use_pb and hasattr(pb, 'base_prior_mu'):
+            # gauge_fixed_priors inside prior_bank: reconstruct from base + phi
+            mu_recon, _ = _reconstruct_gauge_fixed_embeddings(pb)
+            if mu_recon is not None:
+                mu_embed = mu_recon
+        elif hasattr(model, 'mu_embed'):
             mu_embed = model.mu_embed.weight.detach().cpu()
-        # Then try nested in token_embed (GaugeTransformerLM structure)
         elif hasattr(model, 'token_embed') and hasattr(model.token_embed, 'mu_embed'):
             mu_embed = model.token_embed.mu_embed.weight.detach().cpu()
 
-        # Same for phi_embed
-        if hasattr(model, 'phi_embed'):
+        # --- phi embeddings ---
+        if use_pb and hasattr(pb, 'phi_embed'):
+            phi_embed = pb.phi_embed.weight.detach().cpu()
+        elif hasattr(model, 'phi_embed'):
             phi_embed = model.phi_embed.weight.detach().cpu()
         elif hasattr(model, 'token_embed') and hasattr(model.token_embed, 'phi_embed'):
             phi_embed = model.token_embed.phi_embed.weight.detach().cpu()
 
-    # gauge_fixed_priors mode: reconstruct μ from base_mu + phi rotations
+    # gauge_fixed_priors mode on token_embed: reconstruct μ from base_mu + phi
     if mu_embed is None and model is not None:
         te = getattr(model, 'token_embed', None)
         if te is not None:
@@ -1975,29 +2000,49 @@ class SemanticTrajectoryTracker:
         """
         snapshot = {'step': step}
 
-        # Extract embeddings
+        # Extract embeddings — prefer prior_bank (trained) over token_embed (dead)
         mu_embed = None
         phi_embed = None
         sigma_embed = None
 
-        for attr_path in [('token_embed',), ()]:
-            obj = model
-            for a in attr_path:
-                obj = getattr(obj, a, None)
-                if obj is None:
-                    break
-            if obj is None:
-                continue
-            if hasattr(obj, 'mu_embed'):
-                mu_embed = obj.mu_embed.weight.detach().cpu()[:n_tokens]
-            if hasattr(obj, 'phi_embed'):
-                phi_embed = obj.phi_embed.weight.detach().cpu()[:n_tokens]
-            if hasattr(obj, 'sigma_embed'):
-                sigma_embed = obj.sigma_embed.weight.detach().cpu()[:n_tokens]
-            if mu_embed is not None:
-                break
+        pb = getattr(model, 'prior_bank', None)
+        use_pb = getattr(model, 'use_prior_bank', False) and pb is not None
 
-        # gauge_fixed_priors fallback: reconstruct μ from base_mu + phi
+        if use_pb:
+            if hasattr(pb, 'prior_mu'):
+                mu_embed = pb.prior_mu.detach().cpu()[:n_tokens]
+            elif hasattr(pb, 'base_prior_mu'):
+                mu_recon, phi_recon = _reconstruct_gauge_fixed_embeddings(
+                    pb, n_tokens=n_tokens,
+                )
+                if mu_recon is not None:
+                    mu_embed = mu_recon
+                if phi_recon is not None:
+                    phi_embed = phi_recon
+            if hasattr(pb, 'phi_embed'):
+                phi_embed = pb.phi_embed.weight.detach().cpu()[:n_tokens]
+            if hasattr(pb, 'log_prior_sigma') and isinstance(pb.log_prior_sigma, torch.nn.Parameter):
+                sigma_embed = torch.exp(pb.log_prior_sigma).detach().cpu()[:n_tokens]
+
+        if mu_embed is None:
+            for attr_path in [('token_embed',), ()]:
+                obj = model
+                for a in attr_path:
+                    obj = getattr(obj, a, None)
+                    if obj is None:
+                        break
+                if obj is None:
+                    continue
+                if hasattr(obj, 'mu_embed'):
+                    mu_embed = obj.mu_embed.weight.detach().cpu()[:n_tokens]
+                if phi_embed is None and hasattr(obj, 'phi_embed'):
+                    phi_embed = obj.phi_embed.weight.detach().cpu()[:n_tokens]
+                if hasattr(obj, 'sigma_embed'):
+                    sigma_embed = obj.sigma_embed.weight.detach().cpu()[:n_tokens]
+                if mu_embed is not None:
+                    break
+
+        # gauge_fixed_priors fallback on token_embed
         if mu_embed is None:
             te = getattr(model, 'token_embed', None)
             if te is not None:
