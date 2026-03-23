@@ -57,6 +57,34 @@ from transformer.core.gauge_utils import (
     fused_block_diagonal_kl_full,
 )
 
+# =============================================================================
+# VFE Gradient Debug Infrastructure
+# =============================================================================
+# Module-level dict populated by gradient functions when _VFE_GRAD_DEBUG is not None.
+# The E-step loop sets this before calling gradient functions, then reads it after.
+_VFE_GRAD_DEBUG: Optional[Dict[str, float]] = None
+
+
+def _grad_norm(t: torch.Tensor) -> float:
+    """Global Frobenius norm as float, detached."""
+    return t.detach().norm().item()
+
+
+def _per_pos_stats(t: torch.Tensor) -> Tuple[float, float, float]:
+    """Per-position norm stats: (mean, max, frac_above_100).
+
+    For (B, N, K) or (B, N, K, K) tensors, computes norm over last dim(s).
+    """
+    if t.dim() == 3:
+        norms = torch.linalg.norm(t, dim=-1)  # (B, N)
+    else:
+        norms = torch.linalg.norm(t.flatten(-2), dim=-1)  # (B, N)
+    return (
+        norms.mean().item(),
+        norms.max().item(),
+        (norms > 100.0).float().mean().item(),
+    )
+
 
 # =============================================================================
 # Implicit EM Gradient (IFT-based M-step)
@@ -484,6 +512,22 @@ def _compute_vfe_gradients_block_diagonal(
     grad_mu = grad_mu + grad_mu_self
     grad_sigma = grad_sigma + grad_sigma_self
 
+    # Debug: self-coupling component norms
+    if _VFE_GRAD_DEBUG is not None:
+        _VFE_GRAD_DEBUG['grad_mu_self'] = _grad_norm(grad_mu_self)
+        _VFE_GRAD_DEBUG['grad_sigma_self'] = _grad_norm(grad_sigma_self)
+        _ps = _per_pos_stats(grad_sigma_self)
+        _VFE_GRAD_DEBUG['grad_sigma_self_pos_mean'] = _ps[0]
+        _VFE_GRAD_DEBUG['grad_sigma_self_pos_max'] = _ps[1]
+        # sigma_p eigenvalue range (shows how tight priors are)
+        sp_diag = torch.diagonal(sigma_p, dim1=-2, dim2=-1)
+        _VFE_GRAD_DEBUG['sigma_p_min'] = sp_diag.min().item()
+        _VFE_GRAD_DEBUG['sigma_p_max'] = sp_diag.max().item()
+        # sigma_q eigenvalue range
+        sq_eig = torch.linalg.eigvalsh(sigma_q)
+        _VFE_GRAD_DEBUG['sigma_q_eig_min'] = sq_eig.min().item()
+        _VFE_GRAD_DEBUG['sigma_q_eig_max'] = sq_eig.max().item()
+
     # =================================================================
     # 2. Belief Alignment Gradient (block-diagonal + chunked processing)
     # =================================================================
@@ -627,8 +671,22 @@ def _compute_vfe_gradients_block_diagonal(
     grad_mu = grad_mu + grad_mu_align
     grad_sigma = grad_sigma + grad_sigma_align
 
+    # Debug: alignment component norms (before softmax coupling)
+    if _VFE_GRAD_DEBUG is not None:
+        _VFE_GRAD_DEBUG['grad_mu_direct'] = _grad_norm(grad_mu_direct)
+        _VFE_GRAD_DEBUG['grad_mu_softmax'] = _grad_norm(grad_mu_softmax)
+        _VFE_GRAD_DEBUG['grad_sigma_align_direct'] = _grad_norm(grad_sigma_align)
+        _ps = _per_pos_stats(grad_sigma_align)
+        _VFE_GRAD_DEBUG['grad_sigma_align_pos_mean'] = _ps[0]
+        _VFE_GRAD_DEBUG['grad_sigma_align_pos_max'] = _ps[1]
+        # KL pairwise stats (drives softmax coupling magnitude)
+        _VFE_GRAD_DEBUG['kl_pairwise_mean'] = kl_values.mean().item()
+        _VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
+        _VFE_GRAD_DEBUG['kappa_scaled'] = kappa_scaled
+
     # Sigma softmax coupling (Pass 2): ∂β/∂Σ term computed per-block.
     # Uses stored per-block per-pair sigma gradients to avoid (B, N, N, K, K) memory.
+    _grad_sigma_before_softmax = grad_sigma.clone() if (_VFE_GRAD_DEBUG is not None) else None
     if compute_sigma_align_grad and grad_sigma_per_pair_blocks is not None:
         kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
         block_start = 0
@@ -644,6 +702,20 @@ def _compute_vfe_gradients_block_diagonal(
             )
             block_start = block_end
         del grad_sigma_per_pair_blocks
+
+    # Debug: softmax coupling contribution and final totals
+    if _VFE_GRAD_DEBUG is not None:
+        if _grad_sigma_before_softmax is not None:
+            _sigma_softmax_contrib = grad_sigma - _grad_sigma_before_softmax
+            _VFE_GRAD_DEBUG['grad_sigma_softmax'] = _grad_norm(_sigma_softmax_contrib)
+            _ps = _per_pos_stats(_sigma_softmax_contrib)
+            _VFE_GRAD_DEBUG['grad_sigma_softmax_pos_mean'] = _ps[0]
+            _VFE_GRAD_DEBUG['grad_sigma_softmax_pos_max'] = _ps[1]
+        _VFE_GRAD_DEBUG['grad_mu_total'] = _grad_norm(grad_mu)
+        _VFE_GRAD_DEBUG['grad_sigma_total'] = _grad_norm(grad_sigma)
+        _ps = _per_pos_stats(grad_sigma)
+        _VFE_GRAD_DEBUG['grad_sigma_total_pos_mean'] = _ps[0]
+        _VFE_GRAD_DEBUG['grad_sigma_total_pos_max'] = _ps[1]
 
     return grad_mu, grad_sigma
 
@@ -731,6 +803,18 @@ def _compute_vfe_gradients_block_diagonal_diag(
         kl_k = kl_k.clamp(min=0.0)
         grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * delta_mu / sigma_p_safe
         grad_sigma_self = grad_sigma_self - (alpha ** 2 / alpha_c0) * kl_k * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
+
+    # Debug: self-coupling component norms
+    if _VFE_GRAD_DEBUG is not None:
+        _VFE_GRAD_DEBUG['grad_mu_self'] = _grad_norm(grad_mu_self)
+        _VFE_GRAD_DEBUG['grad_sigma_self'] = _grad_norm(grad_sigma_self)
+        _ps = _per_pos_stats(grad_sigma_self)
+        _VFE_GRAD_DEBUG['grad_sigma_self_pos_mean'] = _ps[0]
+        _VFE_GRAD_DEBUG['grad_sigma_self_pos_max'] = _ps[1]
+        _VFE_GRAD_DEBUG['sigma_p_min'] = sigma_p_safe.min().item()
+        _VFE_GRAD_DEBUG['sigma_p_max'] = sigma_p_safe.max().item()
+        _VFE_GRAD_DEBUG['sigma_q_eig_min'] = sigma_q_safe.min().item()
+        _VFE_GRAD_DEBUG['sigma_q_eig_max'] = sigma_q_safe.max().item()
 
     # =================================================================
     # 2. Belief Alignment Gradient (block-diagonal + diagonal formulas)
@@ -833,15 +917,39 @@ def _compute_vfe_gradients_block_diagonal_diag(
     grad_mu_align = grad_mu_direct + grad_mu_softmax
     grad_mu = grad_mu_self + grad_mu_align
 
+    # Debug: alignment component norms (before softmax coupling for sigma)
+    if _VFE_GRAD_DEBUG is not None:
+        _VFE_GRAD_DEBUG['grad_mu_direct'] = _grad_norm(grad_mu_direct)
+        _VFE_GRAD_DEBUG['grad_mu_softmax'] = _grad_norm(grad_mu_softmax)
+        _VFE_GRAD_DEBUG['grad_sigma_align_direct'] = _grad_norm(grad_sigma_align)
+        _ps = _per_pos_stats(grad_sigma_align)
+        _VFE_GRAD_DEBUG['grad_sigma_align_pos_mean'] = _ps[0]
+        _VFE_GRAD_DEBUG['grad_sigma_align_pos_max'] = _ps[1]
+        _VFE_GRAD_DEBUG['kl_pairwise_mean'] = kl_values.mean().item()
+        _VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
+        _VFE_GRAD_DEBUG['kappa_scaled'] = kappa_scaled
+
     # Sigma softmax coupling: Σ_j KL_ij · ∂β_ij/∂σ_i
+    grad_sigma_softmax_norm = 0.0
     if grad_sigma_per_pair_full is not None:
         avg_sigma_grad = torch.einsum('bij,bijk->bik', beta, grad_sigma_per_pair_full)
         sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair_full
         d_beta_d_sigma = beta.unsqueeze(-1) * sigma_grad_deviation / kappa_scaled
         grad_sigma_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_sigma)
+        if _VFE_GRAD_DEBUG is not None:
+            grad_sigma_softmax_norm = _grad_norm(grad_sigma_softmax)
         grad_sigma_align = grad_sigma_align + grad_sigma_softmax
 
     grad_sigma = grad_sigma_self + grad_sigma_align
+
+    # Debug: final totals
+    if _VFE_GRAD_DEBUG is not None:
+        _VFE_GRAD_DEBUG['grad_sigma_softmax'] = grad_sigma_softmax_norm
+        _VFE_GRAD_DEBUG['grad_mu_total'] = _grad_norm(grad_mu)
+        _VFE_GRAD_DEBUG['grad_sigma_total'] = _grad_norm(grad_sigma)
+        _ps = _per_pos_stats(grad_sigma)
+        _VFE_GRAD_DEBUG['grad_sigma_total_pos_mean'] = _ps[0]
+        _VFE_GRAD_DEBUG['grad_sigma_total_pos_max'] = _ps[1]
 
     return grad_mu.to(dtype), grad_sigma.to(dtype)
 
@@ -944,6 +1052,18 @@ def _fused_attention_and_vfe_gradients_block_diag(
         kl_k = kl_k.clamp(min=0.0)
         grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * delta_mu_sp / sigma_p_safe
         grad_sigma_self = grad_sigma_self - (alpha ** 2 / alpha_c0) * kl_k * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
+
+    # Debug: self-coupling component norms (fused path)
+    if _VFE_GRAD_DEBUG is not None:
+        _VFE_GRAD_DEBUG['grad_mu_self'] = _grad_norm(grad_mu_self)
+        _VFE_GRAD_DEBUG['grad_sigma_self'] = _grad_norm(grad_sigma_self)
+        _ps = _per_pos_stats(grad_sigma_self)
+        _VFE_GRAD_DEBUG['grad_sigma_self_pos_mean'] = _ps[0]
+        _VFE_GRAD_DEBUG['grad_sigma_self_pos_max'] = _ps[1]
+        _VFE_GRAD_DEBUG['sigma_p_min'] = sigma_p_safe.min().item()
+        _VFE_GRAD_DEBUG['sigma_p_max'] = sigma_p_safe.max().item()
+        _VFE_GRAD_DEBUG['sigma_q_eig_min'] = sigma_q_safe.min().item()
+        _VFE_GRAD_DEBUG['sigma_q_eig_max'] = sigma_q_safe.max().item()
 
     # Precompute matrix exponentials
     if cached_block_exp_pairs is not None:
@@ -1069,6 +1189,7 @@ def _fused_attention_and_vfe_gradients_block_diag(
     grad_mu = grad_mu_self + grad_mu_direct + grad_mu_softmax
 
     # Sigma gradients
+    grad_sigma_softmax_norm = 0.0
     if grad_sigma_per_pair_full is not None:
         # Direct sigma gradient
         block_start = 0
@@ -1080,14 +1201,38 @@ def _fused_attention_and_vfe_gradients_block_diag(
                 + lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_sigma_pair)
             )
             block_start = block_end
+
+        # Debug: capture direct alignment norm before softmax coupling
+        if _VFE_GRAD_DEBUG is not None:
+            _VFE_GRAD_DEBUG['grad_sigma_align_direct'] = _grad_norm(grad_sigma_align)
+            _ps = _per_pos_stats(grad_sigma_align)
+            _VFE_GRAD_DEBUG['grad_sigma_align_pos_mean'] = _ps[0]
+            _VFE_GRAD_DEBUG['grad_sigma_align_pos_max'] = _ps[1]
+
         # Sigma softmax coupling (use raw-mu KL for consistency, same as mu coupling)
         avg_sigma_grad = torch.einsum('bij,bijk->bik', beta, grad_sigma_per_pair_full)
         sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair_full
         d_beta_d_sigma = beta.unsqueeze(-1) * sigma_grad_deviation / kappa_scaled
         grad_sigma_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_for_coupling, d_beta_d_sigma)
+        if _VFE_GRAD_DEBUG is not None:
+            grad_sigma_softmax_norm = _grad_norm(grad_sigma_softmax)
         grad_sigma_align = grad_sigma_align + grad_sigma_softmax
 
     grad_sigma = grad_sigma_self + grad_sigma_align
+
+    # Debug: final totals (fused path)
+    if _VFE_GRAD_DEBUG is not None:
+        _VFE_GRAD_DEBUG['grad_mu_direct'] = _grad_norm(grad_mu_direct)
+        _VFE_GRAD_DEBUG['grad_mu_softmax'] = _grad_norm(grad_mu_softmax)
+        _VFE_GRAD_DEBUG['grad_sigma_softmax'] = grad_sigma_softmax_norm
+        _VFE_GRAD_DEBUG['kl_pairwise_mean'] = kl_values.mean().item()
+        _VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
+        _VFE_GRAD_DEBUG['kappa_scaled'] = kappa_scaled
+        _VFE_GRAD_DEBUG['grad_mu_total'] = _grad_norm(grad_mu)
+        _VFE_GRAD_DEBUG['grad_sigma_total'] = _grad_norm(grad_sigma)
+        _ps = _per_pos_stats(grad_sigma)
+        _VFE_GRAD_DEBUG['grad_sigma_total_pos_mean'] = _ps[0]
+        _VFE_GRAD_DEBUG['grad_sigma_total_pos_max'] = _ps[1]
 
     kl_out = kl_values if return_kl else None
     return beta.to(dtype), grad_mu.to(dtype), grad_sigma.to(dtype), kl_out
@@ -2378,6 +2523,10 @@ class VariationalFFNDynamic(nn.Module):
             'nat_grad_mu_clipped': 0.0, 'nat_grad_sigma_clipped': 0.0,
         }
 
+        # Debug: set to True to print per-component gradient breakdown each E-step iteration.
+        # Shows self-coupling, alignment, softmax, obs, Euclidean total, nat_grad amplification.
+        self._debug_vfe_gradients: bool = False
+
         # DEQ implicit differentiation
         self.use_deq = use_deq
         self.deq_neumann_terms = deq_neumann_terms
@@ -3637,6 +3786,13 @@ class VariationalFFNDynamic(nn.Module):
                             enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
                         )
 
+                # Enable debug dict if requested
+                global _VFE_GRAD_DEBUG
+                if self._debug_vfe_gradients:
+                    _VFE_GRAD_DEBUG = {}
+                else:
+                    _VFE_GRAD_DEBUG = None
+
                 # Use fused path for diagonal + block-diagonal (no chunk_size)
                 _use_fused_single = (is_diagonal and self.irrep_dims is not None
                                      and self.chunk_size is None
@@ -3712,6 +3868,10 @@ class VariationalFFNDynamic(nn.Module):
                 _obs_weight = getattr(self, '_obs_weight', 1.0)
                 if _obs_weight < 1.0:
                     discrete_obs_grad = discrete_obs_grad * _obs_weight
+                # Debug: observation mu gradient
+                if _VFE_GRAD_DEBUG is not None:
+                    _VFE_GRAD_DEBUG['obs_mu_grad'] = _grad_norm(discrete_obs_grad)
+
                 grad_mu = grad_mu + discrete_obs_grad
 
                 # Observation gradient for sigma (exact via Stein's lemma):
@@ -3735,11 +3895,25 @@ class VariationalFFNDynamic(nn.Module):
                     # from dominating. Var_p[W[:,k]] >= 0 always, so this term only
                     # pushes sigma upward; cap prevents runaway growth.
                     obs_sigma_grad = (_sigma_obs_scale * hessian_diag * mask_obs).clamp(max=10.0)
+                    # Debug: observation sigma gradient (before diag_embed)
+                    if _VFE_GRAD_DEBUG is not None:
+                        _VFE_GRAD_DEBUG['obs_sigma_grad'] = _grad_norm(obs_sigma_grad)
                     # For full covariance, obs gradient is diagonal-only: embed on diagonal
                     # to avoid broadcasting (B, N, K) into every row of (B, N, K, K).
                     if not is_diagonal:
                         obs_sigma_grad = torch.diag_embed(obs_sigma_grad)
                     grad_sigma = grad_sigma + obs_sigma_grad
+
+            # Debug: Euclidean totals (after obs, before clip)
+            if _VFE_GRAD_DEBUG is not None:
+                _VFE_GRAD_DEBUG['euclidean_mu_total'] = _grad_norm(grad_mu)
+                _VFE_GRAD_DEBUG['euclidean_sigma_total'] = _grad_norm(grad_sigma)
+                _ps = _per_pos_stats(grad_mu)
+                _VFE_GRAD_DEBUG['euclidean_mu_pos_mean'] = _ps[0]
+                _VFE_GRAD_DEBUG['euclidean_mu_pos_max'] = _ps[1]
+                _ps = _per_pos_stats(grad_sigma)
+                _VFE_GRAD_DEBUG['euclidean_sigma_pos_mean'] = _ps[0]
+                _VFE_GRAD_DEBUG['euclidean_sigma_pos_max'] = _ps[1]
 
             # Clip for stability
             grad_mu = torch.clamp(grad_mu, min=-1e3, max=1e3)
@@ -3805,6 +3979,78 @@ class VariationalFFNDynamic(nn.Module):
             self._e_step_grad_norms['nat_grad_sigma'] = _raw_nat_grad_sigma_norm
             self._e_step_grad_norms['nat_grad_mu_clipped'] = nat_grad_mu.detach().norm().item()
             self._e_step_grad_norms['nat_grad_sigma_clipped'] = nat_grad_sigma.detach().norm().item()
+
+            # =================================================================
+            # DEBUG: Print per-component gradient breakdown
+            # =================================================================
+            if _VFE_GRAD_DEBUG is not None:
+                d = _VFE_GRAD_DEBUG
+                # Compute nat_grad amplification factors
+                _eu_mu = d.get('euclidean_mu_total', 1e-12)
+                _eu_sig = d.get('euclidean_sigma_total', 1e-12)
+                _amp_mu = _raw_nat_grad_norm / max(_eu_mu, 1e-12)
+                _amp_sig = _raw_nat_grad_sigma_norm / max(_eu_sig, 1e-12)
+                # Fraction of positions hitting the 500 clip
+                _mu_clip_frac = (nat_grad_mu_norm.squeeze(-1) >= max_nat_grad_norm * 0.99).float().mean().item()
+                if is_diagonal:
+                    _sig_clip_frac = (nat_grad_sigma_norm.squeeze(-1) >= max_nat_grad_sigma_norm * 0.99).float().mean().item()
+                else:
+                    _sig_clip_frac = (nat_grad_sigma_norm.squeeze(-1).squeeze(-1) >= max_nat_grad_sigma_norm * 0.99).float().mean().item()
+
+                print(f"\n{'='*80}")
+                print(f"  [VFE GRAD DEBUG] iter {vfe_iter}/{self.n_iterations}"
+                      f"  diag={is_diagonal}  K={mu_current.shape[-1]}"
+                      f"  B×N={mu_current.shape[0]}×{mu_current.shape[1]}")
+                print(f"{'='*80}")
+                print(f"  --- Covariance state ---")
+                print(f"  σ_p  range:  [{d.get('sigma_p_min', 0):.4f}, {d.get('sigma_p_max', 0):.4f}]"
+                      f"  →  1/σ_p range: [{1/max(d.get('sigma_p_max', 1), 1e-12):.2f},"
+                      f" {1/max(d.get('sigma_p_min', 1e-12), 1e-12):.2f}]")
+                print(f"  σ_q  eig range: [{d.get('sigma_q_eig_min', 0):.4f}, {d.get('sigma_q_eig_max', 0):.4f}]")
+                print()
+                print(f"  --- Euclidean gradient components (global norms) ---")
+                print(f"  {'Component':<30} {'μ':>12} {'σ':>12} {'σ pos_mean':>12} {'σ pos_max':>12}")
+                print(f"  {'─'*30} {'─'*12} {'─'*12} {'─'*12} {'─'*12}")
+                print(f"  {'self-coupling (α·∂KL/∂θ)':<30}"
+                      f" {d.get('grad_mu_self', 0):>12.1f}"
+                      f" {d.get('grad_sigma_self', 0):>12.1f}"
+                      f" {d.get('grad_sigma_self_pos_mean', 0):>12.2f}"
+                      f" {d.get('grad_sigma_self_pos_max', 0):>12.2f}")
+                print(f"  {'align direct (λ·β·∂KL/∂θ)':<30}"
+                      f" {d.get('grad_mu_direct', 0):>12.1f}"
+                      f" {d.get('grad_sigma_align_direct', 0):>12.1f}"
+                      f" {d.get('grad_sigma_align_pos_mean', 0):>12.2f}"
+                      f" {d.get('grad_sigma_align_pos_max', 0):>12.2f}")
+                print(f"  {'softmax (KL·∂β/∂θ)':<30}"
+                      f" {d.get('grad_mu_softmax', 0):>12.1f}"
+                      f" {d.get('grad_sigma_softmax', 0):>12.1f}"
+                      f" {d.get('grad_sigma_softmax_pos_mean', 0):>12.2f}"
+                      f" {d.get('grad_sigma_softmax_pos_max', 0):>12.2f}")
+                if 'obs_mu_grad' in d:
+                    print(f"  {'observation (CE)':<30}"
+                          f" {d.get('obs_mu_grad', 0):>12.1f}"
+                          f" {d.get('obs_sigma_grad', 0):>12.1f}")
+                print(f"  {'─'*30} {'─'*12} {'─'*12} {'─'*12} {'─'*12}")
+                print(f"  {'EUCLIDEAN TOTAL':<30}"
+                      f" {d.get('euclidean_mu_total', 0):>12.1f}"
+                      f" {d.get('euclidean_sigma_total', 0):>12.1f}"
+                      f" {d.get('euclidean_sigma_pos_mean', 0):>12.2f}"
+                      f" {d.get('euclidean_sigma_pos_max', 0):>12.2f}")
+                print()
+                print(f"  --- Natural gradient (Fisher projection) ---")
+                print(f"  nat_grad_mu:    {_raw_nat_grad_norm:>10.1f}  (amplification: {_amp_mu:.2f}×)"
+                      f"  clip: {self._e_step_grad_norms['nat_grad_mu_clipped']:.1f}"
+                      f"  ({_mu_clip_frac*100:.0f}% positions at cap)")
+                print(f"  nat_grad_sigma: {_raw_nat_grad_sigma_norm:>10.1f}  (amplification: {_amp_sig:.2f}×)"
+                      f"  clip: {self._e_step_grad_norms['nat_grad_sigma_clipped']:.1f}"
+                      f"  ({_sig_clip_frac*100:.0f}% positions at cap)")
+                print()
+                print(f"  --- Pairwise KL (drives softmax coupling) ---")
+                print(f"  KL mean: {d.get('kl_pairwise_mean', 0):.2f}"
+                      f"  max: {d.get('kl_pairwise_max', 0):.2f}"
+                      f"  κ_scaled: {d.get('kappa_scaled', 0):.2f}")
+                print(f"{'='*80}\n")
+                _VFE_GRAD_DEBUG = None  # Reset for next iteration
 
             # =================================================================
             # STEP 4: Update beliefs (E-step) with WHITENED trust region
