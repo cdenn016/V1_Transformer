@@ -78,6 +78,10 @@ class BlockConfig:
     ffn_learnable_alpha: bool = False   # Bayesian precision via Gamma-Normal conjugacy
     obs_sigma_gradient: bool = True    # ∂E_q[CE]/∂σ Hessian-diagonal obs gradient for sigma
     obs_sigma_weight: float = 1.0      # Weight for sigma observation gradient
+    sigma_max: float = 5.0             # Upper bound on σ (diagonal) or eigenvalues (full cov).
+                                        # Posterior σ should not exceed prior σ by much.
+                                        # Default 5.0: with init_sigma_scale=1.0, allows 5× expansion
+                                        # before clamping. Prevents nat_grad_sigma = 2σ²·∇σ blowup.
 
     # === Gauge geometry ===
     gauge_mode: str = 'learned'         # 'learned' | 'trivial' (Ω=I) | 'constant' (per-head Ω)
@@ -185,6 +189,7 @@ class BlockConfig:
             ffn_learnable_alpha=config.get('ffn_learnable_alpha', config.get('learnable_alpha', False)),
             obs_sigma_gradient=config.get('obs_sigma_gradient', True),
             obs_sigma_weight=config.get('obs_sigma_weight', 1.0),
+            sigma_max=config.get('sigma_max', 5.0),
             # Gauge geometry
             gauge_mode=config.get('gauge_mode', 'learned'),
             gauge_param=config.get('gauge_param', 'phi'),
