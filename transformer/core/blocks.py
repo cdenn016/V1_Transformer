@@ -227,7 +227,6 @@ class GaugeTransformerBlock(nn.Module):
         generators: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
         mu_prior: Optional[torch.Tensor] = None,
-        sigma_prior: Optional[torch.Tensor] = None,
         token_ids: Optional[torch.Tensor] = None,
         targets: Optional[torch.Tensor] = None,
         W_out: Optional[torch.Tensor] = None,
@@ -248,8 +247,6 @@ class GaugeTransformerBlock(nn.Module):
             generators: Lie algebra generators (n_gen, K, K) — n_gen matches phi_dim.
             mask: Optional causal mask (B, N, N) or (B, 1, N, N).
             mu_prior: Embedding priors (B, N, K) — required, used as VFE prior means.
-            sigma_prior: Embedding prior covariances (B, N, K, K) or (B, N, K) —
-                used as sigma_p in VFE E-step. When None, falls back to sigma_q.
             token_ids: Token IDs (B, N) — passed to PriorBank for token-dependent priors.
             targets: Target token IDs (B, N) — for E-step discrete observation grounding.
             W_out: Output projection weights (V, K) — for CE gradient in E-step.
@@ -360,7 +357,7 @@ class GaugeTransformerBlock(nn.Module):
             targets=targets,
             W_out=W_out,
             omega=omega,
-            sigma_prior=sigma_prior,
+            sigma_prior=getattr(self.ffn, '_sigma_prior_cache', None),
         )
 
         # Update covariances from FFN if evolving
@@ -445,7 +442,6 @@ class GaugeTransformerStack(nn.Module):
         generators: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
         mu_prior: Optional[torch.Tensor] = None,
-        sigma_prior: Optional[torch.Tensor] = None,
         token_ids: Optional[torch.Tensor] = None,
         return_intermediates: bool = False,
         cached_head_transports: Optional[list] = None,
@@ -500,7 +496,6 @@ class GaugeTransformerStack(nn.Module):
                     def block_fn(mu, sigma, phi_arg):
                         return blk(
                             mu, sigma, phi_arg, generators, mask, mu_prior,
-                            sigma_prior=sigma_prior,
                             token_ids=token_ids,
                             cached_head_transports=cached_head_transports,
                             omega=omega,
@@ -515,7 +510,6 @@ class GaugeTransformerStack(nn.Module):
             else:
                 mu_q, sigma_q, phi = block(
                     mu_q, sigma_q, phi, generators, mask, mu_prior,
-                    sigma_prior=sigma_prior,
                     token_ids=token_ids,
                     cached_head_transports=cached_head_transports,
                     targets=targets if is_final else None,
