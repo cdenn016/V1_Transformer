@@ -329,15 +329,18 @@ EM_CONFIG = {
 
     
 
-    # === M-step Learning rates ===
-    'mu_lr':         0.05,
-    'sigma_lr':      0.0125,
-    'phi_lr':        0.0075,
-    
-    
-    'ffn_lr':        0.05,
-    'attention_lr':  0.005,
-    'output_lr':     0.05,
+    # === M-step learning rates (AdamW parameter groups) ===
+    # These update nn.Parameter objects via backprop. The E-step (inner VFE
+    # loop) uses e_step_mu_lr / e_step_sigma_lr / e_step_phi_lr above.
+    # mu_embed and log_sigma_diag have dual roles: they initialize E-step
+    # beliefs (q₀) AND serve as prior parameters (μ_p, σ_p), so these rates
+    # indirectly affect E-step initialization speed.
+    'mu_lr':         0.05,     # Prior mean embeddings (μ_p)
+    'sigma_lr':      0.0125,   # Prior covariance embeddings (log σ_p)
+    'phi_lr':        0.0075,   # Gauge frame embeddings (φ)
+    'ffn_lr':        0.05,     # FFN params (raw_c0, raw_b0, raw_lr)
+    'attention_lr':  0.005,    # Attention params (W_O, constant_omega)
+    'output_lr':     0.05,     # Output projection (vocab logits)
     
     # === Logging ===
     'log_interval':               100,
