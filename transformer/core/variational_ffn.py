@@ -3735,6 +3735,10 @@ class VariationalFFNDynamic(nn.Module):
                     # from dominating. Var_p[W[:,k]] >= 0 always, so this term only
                     # pushes sigma upward; cap prevents runaway growth.
                     obs_sigma_grad = (_sigma_obs_scale * hessian_diag * mask_obs).clamp(max=10.0)
+                    # For full covariance, obs gradient is diagonal-only: embed on diagonal
+                    # to avoid broadcasting (B, N, K) into every row of (B, N, K, K).
+                    if not is_diagonal:
+                        obs_sigma_grad = torch.diag_embed(obs_sigma_grad)
                     grad_sigma = grad_sigma + obs_sigma_grad
 
             # Clip for stability
