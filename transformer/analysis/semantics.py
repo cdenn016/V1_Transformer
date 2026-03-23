@@ -535,6 +535,48 @@ def analyze_word_pairs(
     return results
 
 
+def _reconstruct_gauge_fixed_embeddings(
+    token_embed: Any,
+    n_tokens: Optional[int] = None,
+) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    r"""Reconstruct per-token μ embeddings when ``gauge_fixed_priors=True``.
+
+    When gauge_fixed_priors is active, there is no ``mu_embed``. Instead:
+
+    .. math::
+        \mu_i = R(\phi_i) \, \mu_0, \quad R_i = \exp(\phi_i \cdot T_a)
+
+    where :math:`T_a` are the Lie algebra generators.
+
+    Args:
+        token_embed: ``GaugeTokenEmbedding`` instance.
+        n_tokens: If given, only reconstruct the first *n_tokens* rows.
+
+    Returns:
+        ``(mu_embed, phi_embed)`` tensors on CPU, or ``(None, None)``
+        if *token_embed* is not in gauge_fixed_priors mode.
+    """
+    if not getattr(token_embed, 'gauge_fixed_priors', False):
+        return None, None
+
+    base_mu = token_embed.base_mu                # (K,)
+    phi_weight = token_embed.phi_embed.weight     # (vocab, phi_dim)
+    generators = token_embed.generators           # (phi_dim, K, K)
+
+    if n_tokens is not None:
+        phi_weight = phi_weight[:n_tokens]
+
+    with torch.no_grad():
+        # φ_i · T_a  →  (n, K, K)
+        phi_matrix = torch.einsum('nc,ckl->nkl', phi_weight, generators)
+        from transformer.core.gauge_utils import stable_matrix_exp_pair
+        R, _ = stable_matrix_exp_pair(phi_matrix)   # (n, K, K)
+        # μ_i = R_i @ μ_0
+        mu_embed = torch.einsum('nkl,l->nk', R, base_mu)  # (n, K)
+
+    return mu_embed.cpu(), phi_weight.detach().cpu()
+
+
 def analyze_gauge_semantics(
     model: Any = None,
     mu_embed: Optional[torch.Tensor] = None,
@@ -575,6 +617,16 @@ def analyze_gauge_semantics(
             phi_embed = model.phi_embed.weight.detach().cpu()
         elif hasattr(model, 'token_embed') and hasattr(model.token_embed, 'phi_embed'):
             phi_embed = model.token_embed.phi_embed.weight.detach().cpu()
+
+    # gauge_fixed_priors mode: reconstruct μ from base_mu + phi rotations
+    if mu_embed is None and model is not None:
+        te = getattr(model, 'token_embed', None)
+        if te is not None:
+            mu_recon, phi_recon = _reconstruct_gauge_fixed_embeddings(te)
+            if mu_recon is not None:
+                mu_embed = mu_recon
+            if phi_embed is None and phi_recon is not None:
+                phi_embed = phi_recon
 
     if mu_embed is None:
         return {'error': 'No mu embeddings provided'}
@@ -1944,6 +1996,18 @@ class SemanticTrajectoryTracker:
                 sigma_embed = obj.sigma_embed.weight.detach().cpu()[:n_tokens]
             if mu_embed is not None:
                 break
+
+        # gauge_fixed_priors fallback: reconstruct μ from base_mu + phi
+        if mu_embed is None:
+            te = getattr(model, 'token_embed', None)
+            if te is not None:
+                mu_recon, phi_recon = _reconstruct_gauge_fixed_embeddings(
+                    te, n_tokens=n_tokens,
+                )
+                if mu_recon is not None:
+                    mu_embed = mu_recon
+                if phi_embed is None and phi_recon is not None:
+                    phi_embed = phi_recon
 
         if mu_embed is None:
             snapshot['error'] = 'no embeddings found'
