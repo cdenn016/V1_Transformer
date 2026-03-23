@@ -3337,6 +3337,7 @@ class VariationalFFNDynamic(nn.Module):
         token_ids: Optional[torch.Tensor] = None,  # (B, N) - token IDs for PriorBank lookup
         return_beta_history: bool = False,  # Return β evolution for analysis
         omega: Optional[torch.Tensor] = None,  # (B, N, K, K) direct group elements (gauge_param='omega')
+        sigma_prior: Optional[torch.Tensor] = None,  # (B, N, K, K) or (B, N, K) - embedding prior covariance
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor, Optional[list]]:
         """
         Dynamic VFE E-step descent with beta recomputation at each iteration.
@@ -3365,6 +3366,9 @@ class VariationalFFNDynamic(nn.Module):
             token_ids: Token IDs (B, N) for PriorBank lookup. Required when
                 use_prior_bank=True.
             return_beta_history: If True, return list of beta at each step.
+            sigma_prior: Embedding prior covariance (B, N, K, K) or (B, N, K).
+                When provided, used as sigma_p in the E-step (proper prior
+                reference). When None, falls back to sigma.detach() (legacy).
 
         Returns:
             mu_new: Updated beliefs (B, N, K).
@@ -3439,12 +3443,17 @@ class VariationalFFNDynamic(nn.Module):
 
         else:
             # Standard mode: use embedding priors
-            if self.amortized_inference:
+            if self.amortized_inference and not self.implicit_em:
                 # Amortized: gradient flows through mu_p → embeddings learn good E-step init.
                 # mu_p gradient is well-conditioned: d(grad)/d(mu_p) = -α/σ_p, no feedback loop.
+                #
+                # When implicit_em=True, the IFT scale factor is the sole gradient path
+                # to embeddings (via ImplicitEMGradient.apply after the E-step). Keeping
+                # mu_p live here would double-count: embeddings receive BOTH the IFT-scaled
+                # gradient AND the straight-through gradient through self-coupling.
                 mu_p_current = mu_prior.clone()
             else:
-                # Non-amortized: detach priors (fixed reference, Eq. 10 in manuscript)
+                # Non-amortized (or implicit_em): detach priors (fixed reference)
                 mu_p_current = mu_prior.detach().clone()
 
             # sigma_p is ALWAYS detached in the E-step: it is an M-step parameter (Level 2).
@@ -3452,7 +3461,14 @@ class VariationalFFNDynamic(nn.Module):
             # flow through the E-step's 1/σ_p terms creates positive feedback: smaller σ_p
             # → larger gradient → even smaller σ_p. The M-step loss (lambda_hyper · KL(s||h))
             # provides the correct, bounded gradient for sigma learning.
-            sigma_p = sigma.detach().clone()
+            #
+            # Use the embedding prior sigma when available (proper prior reference).
+            # Previously used sigma.detach() (the current belief sigma), which made
+            # sigma_p ≈ sigma_q and silenced the self-coupling sigma gradient.
+            if sigma_prior is not None:
+                sigma_p = sigma_prior.detach().clone()
+            else:
+                sigma_p = sigma.detach().clone()
 
 
         # Current state (will evolve)
@@ -3825,9 +3841,17 @@ class VariationalFFNDynamic(nn.Module):
                 _use_fused_single = (is_diagonal and self.irrep_dims is not None
                                      and self.chunk_size is None
                                      and not self.exact_diagonal_transport)
+
+                # Detach beliefs for gradient computation (consistent with multihead
+                # path at line 3667). Without this, analytical VFE gradients
+                # participate in autograd, giving the single-β path a different
+                # backward (I - lr*J) vs multihead's straight-through (I).
+                _mu_for_grad = mu_current.detach() if _detach_e_step else mu_current
+                _sigma_for_grad = sigma_current.detach() if _detach_e_step else sigma_current
+
                 if _use_fused_single:
                     beta_current, grad_mu, grad_sigma, _ = _fused_attention_and_vfe_gradients_block_diag(
-                        mu_q=mu_current, sigma_q=sigma_current,
+                        mu_q=_mu_for_grad, sigma_q=_sigma_for_grad,
                         mu_p=mu_p_current, sigma_p=sigma_p,
                         phi=phi_current, generators=self.generators,
                         alpha=alpha_effective, lambda_belief=self.lambda_belief,
@@ -3845,7 +3869,7 @@ class VariationalFFNDynamic(nn.Module):
                 else:
                     # Fallback: separate attention + gradient
                     beta_current = compute_attention_weights(
-                        mu_q=mu_current, sigma_q=sigma_current,
+                        mu_q=_mu_for_grad, sigma_q=_sigma_for_grad,
                         phi=phi_current, generators=self.generators,
                         kappa=self.kappa, epsilon=eps, mask=mask,
                         use_numba=False, return_kl=False,
@@ -3860,7 +3884,7 @@ class VariationalFFNDynamic(nn.Module):
                         exact_diagonal_transport=self.exact_diagonal_transport,
                     )
                     grad_mu, grad_sigma = compute_vfe_gradients_gpu(
-                        mu_q=mu_current, sigma_q=sigma_current,
+                        mu_q=_mu_for_grad, sigma_q=_sigma_for_grad,
                         mu_p=mu_p_current, sigma_p=sigma_p,
                         beta=beta_current, phi=phi_current,
                         generators=self.generators, alpha=alpha_effective,
