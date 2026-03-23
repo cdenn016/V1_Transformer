@@ -1738,6 +1738,7 @@ class PublicationTrainer(FastTrainer):
         # Check if this is a log step (need to check global_step here)
         is_log_step = (self.global_step + 1) % self.config.log_interval == 0
         grad_norms = self._compute_gradient_norms() if is_log_step else None
+        e_step_norms = self._collect_e_step_grad_norms() if is_log_step else None
 
         # Clip and step (with scaler if AMP enabled)
         # Per-group clipping for large gauge groups (SO(N>3)):
@@ -1972,7 +1973,7 @@ class PublicationTrainer(FastTrainer):
             except Exception as e:
                 print(f"[WARNING] Layer/iteration diagnostics failed: {e}")
 
-        return metrics, grad_norms
+        return metrics, grad_norms, e_step_norms
 
     def _compute_gradient_norms(self) -> Dict[str, float]:
         """Compute gradient norms for different parameter groups."""
@@ -2004,6 +2005,20 @@ class PublicationTrainer(FastTrainer):
         norms['phi'] = math.sqrt(phi_norm)
         norms['ffn'] = math.sqrt(ffn_norm)
 
+        return norms
+
+    def _collect_e_step_grad_norms(self) -> Dict[str, float]:
+        """Collect E-step natural gradient norms from FFN layers (last VFE iteration)."""
+        norms = {'nat_grad_mu': 0.0, 'nat_grad_sigma': 0.0, 'grad_phi': 0.0}
+        n_layers = 0
+        for module in self.model.modules():
+            if hasattr(module, '_e_step_grad_norms'):
+                for key in norms:
+                    norms[key] += module._e_step_grad_norms.get(key, 0.0) ** 2
+                n_layers += 1
+        if n_layers > 0:
+            for key in norms:
+                norms[key] = math.sqrt(norms[key])
         return norms
 
     def sample_text(
@@ -2114,7 +2129,7 @@ class PublicationTrainer(FastTrainer):
                 batch = next(train_iterator)
 
             # Train step with full metrics (grad_norms computed inside before zero_grad)
-            metrics, grad_norms = self.train_step(batch)
+            metrics, grad_norms, e_step_norms = self.train_step(batch)
 
             step_time = time.time() - step_start
 
@@ -2186,10 +2201,14 @@ class PublicationTrainer(FastTrainer):
                     pbar.set_description(log_msg)
                     # Print gradient norms using tqdm.write for proper display
                     if grad_norms:
-                        tqdm.write(f"  [GRAD] total: {grad_norms['total']:.3e} | "
+                        tqdm.write(f"  [M-STEP] total: {grad_norms['total']:.3e} | "
                                    f"mu: {grad_norms['mu']:.3e} | sigma: {
                                        grad_norms['sigma']:.3e} | "
-                                   f"phi: {grad_norms['phi']:.3e}\n\n")
+                                   f"phi: {grad_norms['phi']:.3e}")
+                    if e_step_norms:
+                        tqdm.write(f"  [E-STEP] nat_grad_mu: {e_step_norms['nat_grad_mu']:.3e} | "
+                                   f"nat_grad_sigma: {e_step_norms['nat_grad_sigma']:.3e} | "
+                                   f"grad_phi: {e_step_norms['grad_phi']:.3e}\n")
                     # Print Bayesian alpha diagnostics
                     if metrics.get('bayesian/alpha_mean') is not None:
                         tqdm.write(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
@@ -2207,10 +2226,14 @@ class PublicationTrainer(FastTrainer):
                 else:
                     print(log_msg)
                     if grad_norms:
-                        print(f"  [GRAD] total: {grad_norms['total']:.3e} | "
+                        print(f"  [M-STEP] total: {grad_norms['total']:.3e} | "
                               f"mu: {grad_norms['mu']:.3e} | sigma: {
                                   grad_norms['sigma']:.3e} | "
-                              f"phi: {grad_norms['phi']:.3e}\n\n")
+                              f"phi: {grad_norms['phi']:.3e}")
+                    if e_step_norms:
+                        print(f"  [E-STEP] nat_grad_mu: {e_step_norms['nat_grad_mu']:.3e} | "
+                              f"nat_grad_sigma: {e_step_norms['nat_grad_sigma']:.3e} | "
+                              f"grad_phi: {e_step_norms['grad_phi']:.3e}\n")
                     if metrics.get('bayesian/alpha_mean') is not None:
                         print(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
                               f"std: {metrics['bayesian/alpha_std']:.4f} | "

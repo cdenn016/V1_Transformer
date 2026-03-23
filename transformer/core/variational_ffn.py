@@ -2357,6 +2357,11 @@ class VariationalFFNDynamic(nn.Module):
         self._collect_iteration_diagnostics = False
         self._iteration_diagnostics: list = []
 
+        # Lightweight E-step gradient norms (always stored, last iteration only)
+        self._e_step_grad_norms: Dict[str, float] = {
+            'nat_grad_mu': 0.0, 'nat_grad_sigma': 0.0, 'grad_phi': 0.0,
+        }
+
         # DEQ implicit differentiation
         self.use_deq = use_deq
         self.deq_neumann_terms = deq_neumann_terms
@@ -3762,6 +3767,10 @@ class VariationalFFNDynamic(nn.Module):
             )
             nat_grad_sigma = nat_grad_sigma * nat_grad_sigma_scale
 
+            # Store E-step gradient norms (overwritten each iteration; final = last iter)
+            self._e_step_grad_norms['nat_grad_mu'] = _raw_nat_grad_norm
+            self._e_step_grad_norms['nat_grad_sigma'] = _raw_nat_grad_sigma_norm
+
             # =================================================================
             # STEP 4: Update beliefs (E-step) with WHITENED trust region
             # =================================================================
@@ -3944,6 +3953,7 @@ class VariationalFFNDynamic(nn.Module):
                         is_diagonal, mask, eps,
                     )
                     if grad_omega is not None:
+                        self._e_step_grad_norms['grad_phi'] = grad_omega.detach().norm().item()
                         omega_current = self._retract_omega(
                             omega_current, grad_omega, self.phi_lr,
                             trust_region=getattr(self, 'omega_trust_region', 0.3),
@@ -3957,6 +3967,7 @@ class VariationalFFNDynamic(nn.Module):
                         cached_block_exp_pairs=_phi_bep,
                     )
                     if grad_phi is not None:
+                        self._e_step_grad_norms['grad_phi'] = grad_phi.detach().norm().item()
                         phi_current = _retract_phi(
                             phi=phi_current,
                             delta_phi=-grad_phi,
