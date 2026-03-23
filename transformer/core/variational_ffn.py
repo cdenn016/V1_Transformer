@@ -289,7 +289,7 @@ def _retract_phi(
     When gauge_group is provided, uses it directly. Otherwise auto-selects
     based on n_gen:
     - n_gen = N(N-1)/2 → SO(N): compact, uses trust_region=0.3, max_norm=π, bch_order=1
-    - n_gen = K²       → GL(K): non-compact, uses trust_region=0.1, max_norm=1.0, bch_order=0
+    - n_gen = K²       → GL(K): non-compact, uses trust_region=0.1, max_norm=5.0, bch_order=2
 
     Args:
         phi: Current gauge frames (..., n_gen)
@@ -326,9 +326,9 @@ def _retract_phi(
     if trust_region is None:
         trust_region = 0.1 if is_glk else 0.3
     if max_norm is None:
-        max_norm = 1.0 if is_glk else math.pi
+        max_norm = 5.0 if is_glk else math.pi
     if bch_order is None:
-        bch_order = 0 if is_glk else 1
+        bch_order = 2 if is_glk else 1
 
     if not RETRACTION_AVAILABLE:
         # Fallback: gradient descent with constant trust region in Lie algebra norm
@@ -2119,7 +2119,7 @@ class VariationalFFNDynamic(nn.Module):
         update_phi_per_iteration: bool = True,  # If True, update phi during EACH E-step iteration
         phi_update_interval: int = 1,  # Update phi every N iterations (1=every iteration, 2=skip alternate)
         phi_lr: float = 0.05,      # Learning rate for phi updates
-        phi_max_norm: float = 3.14159,  # Max norm for phi (π = 180° rotation)
+        phi_max_norm: Optional[float] = None,  # Max phi norm; None = auto (π for SO(N), 5.0 for GL(K))
         prior_bank: Optional[nn.Module] = None,  # Token-dependent PriorBank (if provided)
         use_prior_bank: bool = False,  # If True, use PriorBank (token-dependent) instead of position-dependent priors
         # Memory-efficient options (NEW!)
@@ -2186,7 +2186,8 @@ class VariationalFFNDynamic(nn.Module):
             update_phi_per_iteration: If True, evolve phi during each E-step iteration.
             phi_update_interval: Update phi every N iterations (1=every, 2=alternate).
             phi_lr: Learning rate for phi updates.
-            phi_max_norm: Max norm for phi (pi for SO(N), smaller for GL(K)).
+            phi_max_norm: Max norm for phi; None = auto-select in retraction
+                (π for SO(N), 5.0 for GL(K)).
             prior_bank: Optional PriorBank module providing token-dependent priors via
                 token_ids. When set with use_prior_bank=True, replaces position-dependent
                 priors with token-dependent priors from the PriorBank.

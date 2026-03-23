@@ -410,17 +410,24 @@ def phi_to_omega(phi, generators):
     return torch.linalg.matrix_exp(X)
 
 
-def retract_phi(phi, delta_phi, max_norm=3.14159):
+def retract_phi(phi, delta_phi, max_norm=None):
     """
     Retract phi update: clamp ||phi|| to max_norm.
 
     Args:
         phi: [..., n_gen] current Lie algebra element
         delta_phi: [..., n_gen] update direction
-        max_norm: maximum norm (default π)
+        max_norm: maximum norm; None = auto-select based on n_gen
+            (π for SO(N) i.e. n_gen is triangular, 5.0 for GL(K) i.e. n_gen is a perfect square)
 
     Returns: [..., n_gen] updated phi
     """
+    if max_norm is None:
+        import math
+        n_gen = phi.shape[-1]
+        K = int(math.isqrt(n_gen))
+        is_glk = (K * K == n_gen and K > 0)
+        max_norm = 5.0 if is_glk else math.pi
     phi_new = phi + delta_phi
     norm = phi_new.norm(dim=-1, keepdim=True).clamp(min=1e-8)
     scale = torch.clamp(max_norm / norm, max=1.0)

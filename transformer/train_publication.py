@@ -584,7 +584,7 @@ PURE_VFE_CONFIG = {
     # 'omega' (direct GL(K)) or 'phi' (Lie algebra)
     'gauge_param':    'omega',
     'omega_cond_max': 100.0,
-    'phi_max_norm':   3.14159,
+    # phi_max_norm: omitted → auto-select in retraction (π for SO(N), 5.0 for GL(K))
 
     # M-step options
     'sigma_obs_grad':   'none',
@@ -683,7 +683,7 @@ PURE_VFE_CONFIG = {
     # 'omega' (direct GL(K)) or 'phi' (Lie algebra)
     'gauge_param':    'omega',
     'omega_cond_max': 100.0,
-    'phi_max_norm':   3.14159,
+    # phi_max_norm: omitted → auto-select in retraction (π for SO(N), 5.0 for GL(K))
 
     # M-step options
     'sigma_obs_grad':   'none',
