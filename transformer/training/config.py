@@ -97,7 +97,7 @@ class TrainingConfig:
     # Optimizer WD on embeddings conflicts with these principled terms.
     embed_weight_decay: Optional[float] = 0.01
     beta1: float = 0.9
-    beta2: float = 0.95
+    beta2: float = 0.999
     eps: float = 1e-8
     grad_clip: float = 1.0
 
@@ -112,9 +112,9 @@ class TrainingConfig:
     # ==========================================================================
     # Free Energy Weights
     # ==========================================================================
-    # NOTE: alpha > 0 is CRITICAL for gradient flow to embeddings!
-    alpha: float = 0.1           # Self-consistency: KL(q||p) to embedding priors
-    lambda_beta: float = 1.0     # Belief alignment: Σβ_ij·KL (CRUCIAL!) [M-step loss]
+    # 
+    alpha: float = 0.0           # Self-consistency: KL(q||p) to embedding priors
+    lambda_beta: float = 0.0     # Belief alignment: Σβ_ij·KL  [M-step loss]
     beta_warmup_steps: int = 0   # Linear warmup for lambda_beta (0 = instant full value)
                                  # Prevents uniform attention collapse: lets CE differentiate
                                  # embeddings before belief coupling gradient kicks in.
@@ -131,17 +131,17 @@ class TrainingConfig:
     # ==========================================================================
     # Training Loop
     # ==========================================================================
-    batch_size: int = 16
-    max_seq_len: int = 256
+    batch_size: int = 64
+    max_seq_len: int = 64
     num_epochs: Optional[int] = None  # If set, overrides max_steps
     accumulation_steps: int = 1
 
     # ==========================================================================
     # Logging & Evaluation
     # ==========================================================================
-    log_interval: int = 10
-    eval_interval: int = 100
-    checkpoint_interval: int = 500
+    log_interval: int = 100
+    eval_interval: int = 1000
+    checkpoint_interval: int = 10000
 
     # ==========================================================================
     # Checkpointing
@@ -193,7 +193,7 @@ class TrainingConfig:
     # ==========================================================================
     # Positional Encoding
     # ==========================================================================
-    use_rope: bool = False       # RoPE: SO(2)^{K/2} position rotations on μ in attention
+    use_rope: bool = True       # RoPE: SO(2)^{K/2} position rotations on μ in attention
     rope_base: float = 10000.0   # RoPE frequency base
 
     # ==========================================================================
