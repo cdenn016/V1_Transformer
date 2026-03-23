@@ -168,6 +168,7 @@ class GaugeTransformerBlock(nn.Module):
             learnable_alpha=cfg.ffn_learnable_alpha,
             multihead_vfe=cfg.multihead_vfe,
             phi_natural_gradient=cfg.phi_natural_gradient,
+            killing_center_reg=cfg.killing_center_reg,
             use_deq=cfg.use_deq,
             deq_neumann_terms=cfg.deq_neumann_terms,
             deq_include_phi=cfg.deq_include_phi,

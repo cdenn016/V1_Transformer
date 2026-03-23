@@ -2135,6 +2135,7 @@ class VariationalFFNDynamic(nn.Module):
         multihead_vfe: bool = True,  # If True, compute separate β_h per irrep block
         # Phi gradient preconditioning mode
         phi_natural_gradient: str = 'killing',  # 'clip'|'cartan'|'killing'|'pullback'
+        killing_center_reg: Optional[float] = None,  # Killing form center regularization (None=2K)
         # DEQ implicit differentiation
         use_deq: bool = False,                # Use DEQ backward for E-step fixed point
         deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
@@ -2290,8 +2291,11 @@ class VariationalFFNDynamic(nn.Module):
                 self._phi_preconditioner = build_cartan_projector(generators)
                 print(f"[VariationalFFNDynamic] φ preconditioning: Cartan (sym_dampening=0.1)")
             elif phi_natural_gradient == 'killing':
-                self._phi_preconditioner = build_killing_form_preconditioner(generators)
-                print(f"[VariationalFFNDynamic] φ preconditioning: Killing form natural gradient")
+                self._phi_preconditioner = build_killing_form_preconditioner(
+                    generators, center_reg=killing_center_reg,
+                )
+                _cr = killing_center_reg if killing_center_reg is not None else 2.0 * generators.shape[-1]
+                print(f"[VariationalFFNDynamic] φ preconditioning: Killing form natural gradient (center_reg={_cr:.1f})")
             elif phi_natural_gradient == 'pullback':
                 self._structure_constants = build_structure_constants(generators)
                 self._gram = torch.einsum('aij,bij->ab',
@@ -2358,8 +2362,11 @@ class VariationalFFNDynamic(nn.Module):
         self._iteration_diagnostics: list = []
 
         # Lightweight E-step gradient norms (always stored, last iteration only)
+        # 'nat_grad_mu'/'nat_grad_sigma'/'grad_phi' are RAW (pre-clip) norms.
+        # 'nat_grad_mu_clipped'/'nat_grad_sigma_clipped' are post-clip norms.
         self._e_step_grad_norms: Dict[str, float] = {
             'nat_grad_mu': 0.0, 'nat_grad_sigma': 0.0, 'grad_phi': 0.0,
+            'nat_grad_mu_clipped': 0.0, 'nat_grad_sigma_clipped': 0.0,
         }
 
         # DEQ implicit differentiation
@@ -3779,6 +3786,8 @@ class VariationalFFNDynamic(nn.Module):
             # Store E-step gradient norms (overwritten each iteration; final = last iter)
             self._e_step_grad_norms['nat_grad_mu'] = _raw_nat_grad_norm
             self._e_step_grad_norms['nat_grad_sigma'] = _raw_nat_grad_sigma_norm
+            self._e_step_grad_norms['nat_grad_mu_clipped'] = nat_grad_mu.detach().norm().item()
+            self._e_step_grad_norms['nat_grad_sigma_clipped'] = nat_grad_sigma.detach().norm().item()
 
             # =================================================================
             # STEP 4: Update beliefs (E-step) with WHITENED trust region
