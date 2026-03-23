@@ -74,7 +74,7 @@ class PriorBank(nn.Module):
         gauge_param: str = 'phi',  # 'phi' or 'omega'
         omega_head_dims: Optional[list] = None,  # Per-head dims for omega path
         # Gradient scaling for sigma in decode (CE loss path)
-        sigma_ce_scale: float = 0.01,  # Fraction of CE gradient passed to sigma_p
+        sigma_ce_scale: float = 1,  # Fraction of CE gradient passed to sigma_p
     ):
         """
         Initialize the prior bank.
@@ -100,15 +100,6 @@ class PriorBank(nn.Module):
         self.gauge_param = gauge_param
         self.omega_head_dims = omega_head_dims
         self.sigma_ce_scale = sigma_ce_scale
-
-        # Learnable inverse-temperature for decode logits.
-        # At init, scale = exp(0) = 1.0 → no amplification → CE ≈ ln(V).
-        # Gradient: dCE/d(log_scale) = scale * [E_p[KL] - KL_target].
-        #   If target has high KL (wrong prediction): gradient > 0 → scale decreases.
-        #   If target has low KL (good prediction): gradient < 0 → scale increases.
-        # Self-regulating: prevents overconfident wrong predictions at init,
-        # then sharpens as beliefs become informative during training.
-        self.decode_log_scale = nn.Parameter(torch.tensor(0.0))
 
         # Dimension-aware initialization: √(ln V / K) makes pairwise KL ≈ ln(V).
         # Old 1/√K made KL = O(1), but attention divides by √K_h →
@@ -393,14 +384,7 @@ class PriorBank(nn.Module):
 
         # logits = -KL/τ ≈ -0.5/τ * (combined + prior_bias)
         # (dropping softmax-invariant terms -K and log|Σ_q|)
-        #
-        # Learnable scale replaces the fixed √K or √(K/ln V) corrections.
-        # Any fixed multiplier amplifies the self-prediction bias at init
-        # (beliefs trivially match their input prior, KL ≈ 0, while KL to
-        # all other priors ≈ ln V). With scale=1 at init: CE ≈ ln(V) ≈ 10.8.
-        # The model learns to increase scale as beliefs become informative.
-        scale = torch.exp(self.decode_log_scale)
-        logits = -0.5 * scale / tau * (combined + prior_bias.unsqueeze(0).unsqueeze(0))
+        logits = -0.5 / tau * (combined + prior_bias.unsqueeze(0).unsqueeze(0))
 
         return logits
 
