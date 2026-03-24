@@ -578,6 +578,18 @@ class GaugeTransformerLM(nn.Module):
         batch_size, num_agents = token_ids.shape
         device = token_ids.device
 
+        # Warn if implicit_em is active in forward() — no ImplicitEMGradient
+        # re-attachment here.  Use forward_with_attention() for training.
+        if (getattr(self.transformer.blocks[-1].ffn, 'implicit_em', False)
+                and self.training and torch.is_grad_enabled()):
+            import warnings
+            warnings.warn(
+                "forward() called with implicit_em=True during training. "
+                "Gradient path to embeddings is broken — use "
+                "forward_with_attention() for training.",
+                stacklevel=2,
+            )
+
         # =================================================================
         # Trajectory Recording: Start forward pass
         # =================================================================
@@ -991,6 +1003,25 @@ class GaugeTransformerLM(nn.Module):
                         _ld['perplexity'] = math.exp(min(_ld['ce_loss'], 20.0))
                 self._layer_diagnostics.append(_ld)
 
+        # =================================================================
+        # Implicit EM: Re-establish gradient path from mu_q → mu_embed
+        # =================================================================
+        # Applied BEFORE final_norm and inv_perm so that:
+        # (a) scale, mu_q, and mu_prior are all in the same (permuted) K space
+        #     — applying after inv_perm misaligns per-dimension scales
+        # (b) the IFT scale was derived at the E-step fixed point (pre-norm),
+        #     so J_norm should be part of the scaled gradient path
+        last_block = self.transformer.blocks[-1]
+        implicit_mu_scale = getattr(last_block.ffn, '_last_implicit_mu_scale', None)
+        implicit_sigma_scale = getattr(last_block.ffn, '_last_implicit_sigma_scale', None)
+
+        if implicit_mu_scale is not None:
+            # mu_prior has gradient to mu_embed; mu_q is detached from it.
+            # Re-attach with IFT-scaled gradient.
+            mu_q = ImplicitEMGradient.apply(mu_q, mu_prior, implicit_mu_scale)
+        if implicit_sigma_scale is not None and sigma_q is not None and sigma_prior is not None:
+            sigma_q = ImplicitEMGradientSigma.apply(sigma_q, sigma_prior, implicit_sigma_scale)
+
         # Final norm
         mu_q = self.transformer.final_norm(mu_q)
 
@@ -1003,24 +1034,6 @@ class GaugeTransformerLM(nn.Module):
                     sigma_q = sigma_q[:, :, inv_perm]
                 else:
                     sigma_q = sigma_q[:, :, inv_perm][:, :, :, inv_perm]
-
-        # =================================================================
-        # Implicit EM: Re-establish gradient path from mu_q → mu_embed
-        # =================================================================
-        # When implicit_em=True, mu_current was detached at E-step start.
-        # mu_q has no autograd path to mu_embed. ImplicitEMGradient.apply()
-        # creates a scaled gradient path: ∂CE/∂mu_embed = s_k · ∂CE/∂mu_q
-        # where s_k ∈ [0,1] is the IFT-derived scale factor.
-        last_block = self.transformer.blocks[-1]
-        implicit_mu_scale = getattr(last_block.ffn, '_last_implicit_mu_scale', None)
-        implicit_sigma_scale = getattr(last_block.ffn, '_last_implicit_sigma_scale', None)
-
-        if implicit_mu_scale is not None:
-            # mu_prior has gradient to mu_embed; mu_q is detached from it.
-            # Re-attach with IFT-scaled gradient.
-            mu_q = ImplicitEMGradient.apply(mu_q, mu_prior, implicit_mu_scale)
-        if implicit_sigma_scale is not None and sigma_q is not None and sigma_prior is not None:
-            sigma_q = ImplicitEMGradientSigma.apply(sigma_q, sigma_prior, implicit_sigma_scale)
 
         # Project to vocabulary
         if self.use_prior_bank and self.prior_bank is not None:

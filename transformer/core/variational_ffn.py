@@ -3517,6 +3517,8 @@ class VariationalFFNDynamic(nn.Module):
         # Store observation info for fresh gradient computation
         has_observations = targets is not None and W_out is not None
         _detach_e_step = True  # Standard path detaches; DEQ step_fn sets False
+        beta_current = None  # Sentinel; set inside VFE loop for implicit EM scale computation
+        beta_heads = []      # Per-head betas (multihead); populated inside VFE loop
 
         # =====================================================================
         # VFE Descent Loop with Dynamic β (runs outside AMP autocast)
@@ -4455,14 +4457,12 @@ class VariationalFFNDynamic(nn.Module):
         # beta_current holds the last iteration's attention weights
         # (multihead: last head's beta; single-head: full beta)
         if self.implicit_em:
-            # For multihead, reconstruct full beta from beta_heads if available.
-            # beta_heads is always defined when self.multihead_vfe=True (set at line 3088).
-            try:
-                if self.multihead_vfe and 'beta_heads' in locals():
-                    self._last_beta_for_implicit = torch.stack(beta_heads, dim=1).detach()
-                else:
-                    self._last_beta_for_implicit = beta_current.detach()
-            except (NameError, UnboundLocalError):
+            if self.multihead_vfe and beta_heads:
+                # Multihead: stack per-head betas into (B, H, N, N)
+                self._last_beta_for_implicit = torch.stack(beta_heads, dim=1).detach()
+            elif beta_current is not None:
+                self._last_beta_for_implicit = beta_current.detach()
+            else:
                 self._last_beta_for_implicit = None
 
         # Compute and store implicit EM gradient scales (Phase 3/4)
