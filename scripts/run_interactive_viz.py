@@ -281,8 +281,8 @@ def run():
     )
     print(f"  -> {output_dir / 'multi_space_comparison.html'}")
 
-    # ---- Multi-scale UMAP (RG flow) ----
-    print("\n[4/6] Computing multi-scale UMAP (RG flow analogy)...")
+    # ---- Multi-scale UMAP ----
+    print("\n[4/6] Computing multi-scale UMAP...")
     multi_scale = compute_multi_scale_umap(mu, n_neighbors_list=[5, 15, 50])
     fig_ms = plot_umap_multiscale(
         multi_scale, tokens, categories,

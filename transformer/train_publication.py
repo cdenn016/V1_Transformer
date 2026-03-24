@@ -78,11 +78,7 @@ from transformer.baselines.flops_counter import (
     print_flops_comparison,
 )
 from transformer.data import create_dataloaders, create_char_dataloaders
-from transformer.train import (
-    compute_free_energy_loss,
-    compute_rg_metrics_from_attention,
-    compute_dynamic_rg_metrics,
-)
+from transformer.train import compute_free_energy_loss
 from transformer.training.train_fast import FastTrainer, FastTrainingConfig
 from transformer.analysis.publication_metrics import PublicationMetrics, ExperimentResult
 from math_utils.numerical_monitor import flush as _flush_numerical_events
@@ -210,7 +206,6 @@ STANDARD_CONFIG = {
     'gauge_mode': 'learned',
     'gauge_fixed_priors': True,
     'irrep_spec': [('ℓ0', 5, 1)],
-    'compute_rg_metrics': False,
 }
 
 
@@ -706,7 +701,6 @@ STANDARD_ATTN_ONLY_CONFIG = {
     'gauge_mode': 'learned',
     'gauge_fixed_priors': False,
     'irrep_spec': [('ℓ0', 5, 1)],
-    'compute_rg_metrics': False,
 }
 
 
@@ -774,7 +768,6 @@ STANDARD_PARAM_EQUALIZED_CONFIG = {
     'gauge_mode': 'learned',
     'gauge_fixed_priors': True,
     'irrep_spec': [('ℓ0', 5, 1)],
-    'compute_rg_metrics': False,
 }
 
 
@@ -844,7 +837,6 @@ STANDARD_ROPE_CONFIG = {
     'gauge_mode': 'learned',
     'gauge_fixed_priors': True,
     'irrep_spec': [('ℓ0', 5, 1)],
-    'compute_rg_metrics': False,
 }
 
 
@@ -905,7 +897,6 @@ STANDARD_ROPE_D90_CONFIG = {
     'gauge_mode': 'learned',
     'gauge_fixed_priors': True,
     'irrep_spec': [('ℓ0', 5, 1)],
-    'compute_rg_metrics': False,
 }
 
 
@@ -1150,17 +1141,6 @@ class PublicationMetricsTracker:
             'beta_mean', 'beta_std', 'kl_mean', 'kl_std',
             'attention_entropy', 'attention_concentration',
 
-            # RG Metrics (meta-agent emergence!)
-            'rg_modularity', 'rg_effective_rank', 'rg_n_clusters',
-            'rg_kl_within_mean', 'rg_kl_within_std',
-            'rg_kl_between_mean', 'rg_kl_between_std',
-            'rg_beta_entropy',
-
-            # Dynamic RG (across VFE iterations)
-            'rg_dynamic_n_iterations',
-            'rg_dynamic_modularity_init', 'rg_dynamic_modularity_final', 'rg_dynamic_modularity_change',
-            'rg_dynamic_rank_init', 'rg_dynamic_rank_final', 'rg_dynamic_rank_change',
-
             # Learning rates
             'mu_lr', 'sigma_lr', 'phi_lr', 'ffn_lr',
 
@@ -1224,25 +1204,6 @@ class PublicationMetricsTracker:
             'kl_std': metrics.get('kl_std'),
             'attention_entropy': metrics.get('attention_entropy'),
             'attention_concentration': metrics.get('attention_concentration'),
-
-            # RG Metrics (meta-agent emergence!)
-            'rg_modularity': metrics.get('rg/modularity'),
-            'rg_effective_rank': metrics.get('rg/effective_rank'),
-            'rg_n_clusters': metrics.get('rg/n_clusters'),
-            'rg_kl_within_mean': metrics.get('rg/kl_within_mean'),
-            'rg_kl_within_std': metrics.get('rg/kl_within_std'),
-            'rg_kl_between_mean': metrics.get('rg/kl_between_mean'),
-            'rg_kl_between_std': metrics.get('rg/kl_between_std'),
-            'rg_beta_entropy': metrics.get('rg/beta_entropy'),
-
-            # Dynamic RG (across VFE iterations)
-            'rg_dynamic_n_iterations': metrics.get('rg/dynamic/n_iterations'),
-            'rg_dynamic_modularity_init': metrics.get('rg/dynamic/modularity_init'),
-            'rg_dynamic_modularity_final': metrics.get('rg/dynamic/modularity_final'),
-            'rg_dynamic_modularity_change': metrics.get('rg/dynamic/modularity_change'),
-            'rg_dynamic_rank_init': metrics.get('rg/dynamic/rank_init'),
-            'rg_dynamic_rank_final': metrics.get('rg/dynamic/rank_final'),
-            'rg_dynamic_rank_change': metrics.get('rg/dynamic/rank_change'),
 
             # Learning rates
             'mu_lr': lrs.get('mu_embed', 0),
@@ -1614,14 +1575,6 @@ class PublicationTrainer(FastTrainer):
         input_ids = input_ids.to(self.device)
         target_ids = target_ids.to(self.device)
 
-        # Check if we should compute RG metrics this step
-        # NOTE: Use (step + 1) to align with eval_interval which also uses (step + 1)
-        compute_rg = (
-            getattr(self.config, 'compute_rg_metrics', False) and
-            (self.global_step + 1) % getattr(self.config,
-                                             'rg_metrics_interval', 100) == 0
-        )
-
         # Check if using standard transformer (no VFE loss)
         is_standard = isinstance(self.model, StandardTransformerLM)
 
@@ -1881,39 +1834,6 @@ class PublicationTrainer(FastTrainer):
             if key in full_metrics:
                 metrics[key] = full_metrics[key]
 
-        # Compute RG metrics if enabled and attention info was returned
-        if compute_rg and 'attention_info' in full_metrics:
-            rg_metrics = compute_rg_metrics_from_attention(
-                attn_info=full_metrics['attention_info'],
-                step=self.global_step,
-                auto_cluster=getattr(self.config, 'rg_auto_cluster', True),
-                n_clusters=getattr(self.config, 'rg_n_clusters', None),
-            )
-            # Add RG metrics with proper key mapping for CSV
-            for key, value in rg_metrics.items():
-                metrics[key] = value
-
-            # Dynamic RG tracking (across VFE iterations within forward pass)
-            track_dynamic = getattr(self.config, 'track_dynamic_rg', False)
-            if track_dynamic and hasattr(self.model, 'forward_with_rg_tracking'):
-                try:
-                    # Run a separate forward pass with RG tracking
-                    # This captures beta_history across VFE iterations
-                    with torch.no_grad():
-                        _, rg_info = self.model.forward_with_rg_tracking(
-                            token_ids=input_ids,
-                            targets=target_ids,
-                        )
-                    dynamic_metrics = compute_dynamic_rg_metrics(
-                        rg_info, self.global_step)
-
-                    # Add dynamic RG metrics
-                    for key, value in dynamic_metrics.items():
-                        metrics[key] = value
-                except Exception as e:
-                    # Don't crash training on RG tracking errors
-                    print(f"[WARNING] Dynamic RG tracking failed: {e}")
-
         # =================================================================
         # LAYER/ITERATION DIAGNOSTICS: Debug multi-layer/multi-iteration
         # =================================================================
@@ -2124,14 +2044,12 @@ class PublicationTrainer(FastTrainer):
             step_time = time.time() - step_start
 
             is_log_step = (step + 1) % self.config.log_interval == 0
-            has_rg = metrics.get('rg/modularity') is not None
 
             # Get learning rates
             lrs = {group['name']: group['lr']
                    for group in self.optimizer.param_groups}
 
-            # Log to basic tracker and console at log intervals OR when RG metrics were computed
-            if is_log_step or has_rg:
+            if is_log_step:
                 # Flush numerical fallback counters and inject into metrics
                 _num_events = _flush_numerical_events()
                 for _nk, _nv in _num_events.items():
@@ -2171,21 +2089,6 @@ class PublicationTrainer(FastTrainer):
                     f"PPL: {metrics['train_ppl']:.1f}"
                 )
 
-                # RG metrics console output
-                _rg_msg = None
-                if has_rg:
-                    _rg_msg = (
-                        f"  [RG] Q={metrics['rg/modularity']:.4f} | "
-                        f"rank={metrics['rg/effective_rank']:.1f} | "
-                        f"clusters={metrics['rg/n_clusters']} | "
-                        f"H={metrics['rg/beta_entropy']:.3f}"
-                    )
-                    if metrics.get('rg/dynamic/n_iterations') is not None and metrics['rg/dynamic/n_iterations'] > 1:
-                        _rg_msg += (
-                            f" | dyn({metrics['rg/dynamic/n_iterations']}it): "
-                            f"Q {metrics.get('rg/dynamic/modularity_init', 0):.3f}->{ metrics.get('rg/dynamic/modularity_final', 0):.3f}"
-                        )
-
                 if use_tqdm:
                     pbar.set_description(log_msg)
                     # Print gradient norms using tqdm.write for proper display
@@ -2211,8 +2114,6 @@ class PublicationTrainer(FastTrainer):
                                    f"c0: { metrics['bayesian/c0']:.4f}±{metrics.get('bayesian/c0_std', 0):.4f} | "
                                    f"b0: { metrics['bayesian/b0']:.4f}±{metrics.get('bayesian/b0_std', 0):.4f} | "
                                    f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}")
-                    if _rg_msg:
-                        tqdm.write(_rg_msg)
                 else:
                     print(log_msg)
                     if grad_norms:
@@ -2236,8 +2137,6 @@ class PublicationTrainer(FastTrainer):
                               f"c0: { metrics['bayesian/c0']:.4f}±{metrics.get('bayesian/c0_std', 0):.4f} | "
                               f"b0: { metrics['bayesian/b0']:.4f}±{metrics.get('bayesian/b0_std', 0):.4f} | "
                               f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}\n\n")
-                    if _rg_msg:
-                        print(_rg_msg)
 
                 # Report numerical fallback counters if any fired
                 if _num_events:
@@ -2268,29 +2167,6 @@ class PublicationTrainer(FastTrainer):
                 print(f"    PPL: {val_metrics['perplexity']:.2f}")
                 print(f"    BPC: {val_metrics['ce_loss']/math.log(2):.3f}")
                 print(f"    Attn entropy: {attn_entropy:.3f} | concentration: { attn_concentration:.3f}\n\n")
-
-                # Log RG metrics if available (meta-agent emergence!)
-                if metrics.get('rg/modularity') is not None:
-                    print(f"    RG Metrics (meta-agent emergence):")
-                    print(f"      Modularity Q: { metrics['rg/modularity']:.4f} (higher = more structure)")
-                    print(f"      Effective rank: { metrics['rg/effective_rank']:.2f} (lower = concentrated)")
-                    print(
-                        f"      Clusters (meta-agents): {metrics['rg/n_clusters']}")
-                    print(f"      KL within: { metrics['rg/kl_within_mean']:.4f} (lower = tighter)")
-                    print(f"      KL between: { metrics['rg/kl_between_mean']:.4f}\n\n")
-
-                    # Dynamic RG flow (within forward pass)
-                    if metrics.get('rg/dynamic/n_iterations') is not None:
-                        n_iters = metrics['rg/dynamic/n_iterations']
-                        if n_iters > 1:
-                            mod_change = metrics.get(
-                                'rg/dynamic/modularity_change', 0)
-                            rank_change = metrics.get(
-                                'rg/dynamic/rank_change', 0)
-                            print(
-                                f"    Dynamic RG ({n_iters} VFE iterations):")
-                            print(f"      Modularity: {metrics.get('rg/dynamic/modularity_init', 0):.4f} → { metrics.get('rg/dynamic/modularity_final', 0):.4f} (Δ={mod_change:+.4f})")
-                            print(f"      Eff. Rank:  {metrics.get('rg/dynamic/rank_init', 0):.1f} → { metrics.get('rg/dynamic/rank_final', 0):.1f} (Δ={rank_change:+.1f})")
 
                 # Generate sample text to verify learning (varied prompts for diversity)
                 try:
@@ -2711,13 +2587,6 @@ def run_single_experiment(
         use_delta_rule_w_out=config.get('use_delta_rule_w_out', False),
         delta_rule_lr=config.get('delta_rule_lr', 0.001),
 
-        # RG METRICS: Track renormalization group flow
-        compute_rg_metrics=config.get('compute_rg_metrics', False),
-        rg_metrics_interval=config.get('rg_metrics_interval', 100),
-        rg_auto_cluster=config.get('rg_auto_cluster', True),
-        rg_n_clusters=config.get('rg_n_clusters', None),
-        track_dynamic_rg=config.get('track_dynamic_rg', False),
-
         # Layer/iteration diagnostics
         track_layer_diagnostics=config.get('track_layer_diagnostics', False),
         track_iteration_diagnostics=config.get(
@@ -2785,13 +2654,6 @@ def run_single_experiment(
     else:
         print(f"\nDELTA RULE: disabled (using backprop for W_out)")
 
-    # RG METRICS configuration
-    if train_config.compute_rg_metrics:
-        print(f"\nRG METRICS (meta-agent emergence): ENABLED")
-        print(f"  Compute interval: every { train_config.rg_metrics_interval} steps")
-        print(f"  Dynamic RG tracking: {train_config.track_dynamic_rg}")
-    else:
-        print(f"\nRG METRICS: disabled")
 
     # =================================================================
     # Create Trainer (Pure FEP or Standard)

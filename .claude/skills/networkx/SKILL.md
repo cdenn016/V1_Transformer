@@ -240,10 +240,9 @@ See the `plotly` skill for interactive 3D network visualization.
 
 ## Integration with Gauge-Transformer
 
-The project already imports networkx in `transformer/analysis/rg_metrics.py`. Key integration points:
+Key integration points:
 
 - **Meta-agent detection**: Use community detection to identify groups of tokens that attend to each other
-- **RG flow analysis**: Track how graph structure changes across layers (coarse-graining)
 - **Attention head specialization**: Classify heads by their graph-theoretic properties
 - **Emergent syntax**: Detect if attention communities correspond to syntactic constituents
 

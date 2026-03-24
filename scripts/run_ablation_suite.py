@@ -235,7 +235,7 @@ SWEEPS = {
     },
 
     'n_layers': {
-        'description': 'Number of transformer layers (RG depth)',
+        'description': 'Number of transformer layers',
         'param': 'n_layers',
         'values': [1, 2, 3],
         'baseline_value': 1,

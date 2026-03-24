@@ -16,7 +16,7 @@ If true, the spectral structure of M^h = W_Q^h (W_K^h)^T should reveal:
       block-diagonal gauge algebra prediction
 
   (c) Spectral entropy of M^h decreases with layer depth —
-      RG flow prediction (coarse-graining concentrates spectral weight)
+      Spectral entropy trend (coarse-graining concentrates spectral weight)
 
 Models analyzed: BERT-base, GPT-2, DistilBERT
 """
@@ -337,13 +337,13 @@ def cluster_heads_by_spectrum(
 
 
 # ---------------------------------------------------------------------------
-# T8c: Spectral entropy vs layer depth (RG flow)
+# T8c: Spectral entropy vs layer depth
 # ---------------------------------------------------------------------------
-def analyze_rg_flow(spectral_features: List[List[Dict]]) -> Dict:
+def analyze_spectral_entropy_trend(spectral_features: List[List[Dict]]) -> Dict:
     """Test whether spectral entropy decreases with layer depth.
 
-    Under RG flow, deeper layers perform more coarse-graining, which should
-    concentrate spectral weight into fewer dominant modes (lower entropy).
+    Deeper layers may concentrate spectral weight into fewer dominant
+    modes (lower entropy).
 
     Returns per-layer statistics and regression results.
     """
@@ -597,12 +597,12 @@ def plot_spectral_clustering(
     plt.close(fig)
 
 
-def plot_rg_flow(all_rg: Dict[str, Dict], save_dir: Path):
+def plot_spectral_entropy_trend(all_spectral_trends: Dict[str, Dict], save_dir: Path):
     """Figure 5: Spectral entropy and effective rank vs layer depth."""
-    n_models = len(all_rg)
+    n_models = len(all_spectral_trends)
     fig, axes = plt.subplots(2, n_models, figsize=(4.5 * n_models, 6), squeeze=False)
 
-    for idx, (model_name, rg) in enumerate(all_rg.items()):
+    for idx, (model_name, rg) in enumerate(all_spectral_trends.items()):
         abbrev = MODELS.get(model_name, {}).get("abbrev", model_name)
 
         # Spectral entropy
@@ -662,8 +662,8 @@ def plot_rg_flow(all_rg: Dict[str, Dict], save_dir: Path):
         ax_rank.legend(loc="best", frameon=False)
 
     plt.tight_layout()
-    fig.savefig(save_dir / "T8c_rg_flow.png")
-    fig.savefig(save_dir / "T8c_rg_flow.pdf")
+    fig.savefig(save_dir / "T8c_spectral_entropy.png")
+    fig.savefig(save_dir / "T8c_spectral_entropy.pdf")
     plt.close(fig)
 
 
@@ -701,7 +701,7 @@ def plot_asymmetry_analysis(
 
 
 def plot_summary_dashboard(
-    det_results: Dict, all_rg: Dict, all_spectral: Dict, save_dir: Path,
+    det_results: Dict, all_spectral_trends: Dict, all_spectral: Dict, save_dir: Path,
 ):
     """Summary dashboard: key results across all models."""
     fig, axes = plt.subplots(2, 2, figsize=(10, 8))
@@ -723,13 +723,13 @@ def plot_summary_dashboard(
 
     # Panel B: Entropy slope per model
     ax = axes[0, 1]
-    slopes = [all_rg[m]["entropy_regression"]["slope"] for m in model_names]
-    pvals = [all_rg[m]["entropy_regression"]["p_value"] for m in model_names]
+    slopes = [all_spectral_trends[m]["entropy_regression"]["slope"] for m in model_names]
+    pvals = [all_spectral_trends[m]["entropy_regression"]["p_value"] for m in model_names]
     colors_slope = ["#2ca02c" if s < 0 else "#d62728" for s in slopes]
     bars = ax.bar(abbrevs, slopes, color=colors_slope, edgecolor="k", linewidth=0.5)
     ax.axhline(0, color="gray", linestyle="--", linewidth=0.5)
     ax.set_ylabel("Entropy slope (per layer)")
-    ax.set_title("(b) RG Flow: Entropy Trend")
+    ax.set_title("(b) Spectral Entropy Trend")
     for bar, p in zip(bars, pvals):
         sig = "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else "n.s."
         y_offset = -0.001 if bar.get_height() < 0 else 0.001
@@ -740,7 +740,7 @@ def plot_summary_dashboard(
     ax = axes[1, 0]
     for model_name in model_names:
         abbrev = MODELS.get(model_name, {}).get("abbrev", model_name)
-        rg = all_rg[model_name]
+        rg = all_spectral_trends[model_name]
         layers = [le["layer"] for le in rg["layer_effective_ranks"]]
         ranks = [le["mean"] for le in rg["layer_effective_ranks"]]
         ax.plot(layers, ranks, "o-", markersize=4, label=abbrev, linewidth=1.0)
@@ -780,7 +780,7 @@ def generate_synthetic_gauge_weights(
     head_dim: int = 64,
     hidden_dim: int = 768,
     gauge_group: str = "GL+",
-    rg_decay: float = 0.15,
+    entropy_decay: float = 0.15,
     seed: int = 42,
 ) -> Dict[str, List[List[np.ndarray]]]:
     """Generate synthetic W_Q W_K^T matrices with known gauge-theoretic properties.
@@ -788,28 +788,28 @@ def generate_synthetic_gauge_weights(
     Creates three synthetic "models" to validate the analysis pipeline:
 
     1. "synthetic_GL+" — M^h = σ⁻² Ω⁻ᵀ where Ω ∈ GL⁺(K), with spectral entropy
-       decreasing across layers (RG flow). All det(M) > 0 by construction.
+       decreasing across layers. All det(M) > 0 by construction.
 
     2. "synthetic_mixed" — Half heads GL⁺, half GL⁻ (det < 0). Tests T8a
        discrimination.
 
     3. "synthetic_random" — Random Gaussian matrices (null model).
-       No gauge structure, no RG flow expected.
+       No gauge structure, no spectral trend expected.
 
     Args:
-        rg_decay: Rate at which spectral entropy decreases per layer.
+        entropy_decay: Rate at which spectral entropy decreases per layer.
     """
     rng = np.random.RandomState(seed)
     results = {}
 
-    # --- Model 1: GL⁺ with RG flow ---
+    # --- Model 1: GL⁺ with spectral entropy decay ---
     from scipy.linalg import expm
     layers_M_glp = []
     for l in range(n_layers):
         heads = []
         for h in range(n_heads):
             # Generate Ω ∈ GL⁺(K) via exponential map: Ω = exp(A)
-            # RG flow: spectral weight concentrates into fewer dominant modes
+            # spectral weight concentrates into fewer dominant modes
             # at deeper layers (coarse-graining → simpler gauge structure).
             # Achieved by making the singular value decay steeper with depth.
             A = rng.randn(head_dim, head_dim) * 0.3
@@ -820,7 +820,7 @@ def generate_synthetic_gauge_weights(
             # Apply spectral shaping: steepen singular value decay with depth
             U, s, Vt = np.linalg.svd(M_base)
             # Power-law decay exponent increases with layer
-            decay_exp = 1.0 + rg_decay * l
+            decay_exp = 1.0 + entropy_decay * l
             s_shaped = s[0] * (s / s[0]) ** decay_exp
             M = U @ np.diag(s_shaped) @ Vt
             # Preserve GL⁺: det(M) = det(M_base) * prod(s_shaped/s) which
@@ -872,7 +872,7 @@ def run_synthetic_validation(save_dir: Path = SAVE_DIR) -> Dict:
     Validates that the analysis correctly identifies:
     - All det > 0 for GL⁺ model
     - Mixed det signs for mixed model
-    - Decreasing entropy for GL⁺ model (RG flow)
+    - Decreasing entropy for GL⁺ model
     - No trend for random model (null)
     """
     print("=" * 72)
@@ -882,7 +882,7 @@ def run_synthetic_validation(save_dir: Path = SAVE_DIR) -> Dict:
     synthetic_M = generate_synthetic_gauge_weights()
     all_spectral = {}
     all_clusters = {}
-    all_rg = {}
+    all_spectral_trends = {}
     det_results = {}
 
     for model_name, layers_M in synthetic_M.items():
@@ -916,8 +916,8 @@ def run_synthetic_validation(save_dir: Path = SAVE_DIR) -> Dict:
         print(f"  [T8b] Clusters: {dict(zip(unique.tolist(), counts.tolist()))}")
 
         # T8c
-        rg = analyze_rg_flow(layers_spectral)
-        all_rg[model_name] = rg
+        rg = analyze_spectral_entropy_trend(layers_spectral)
+        all_spectral_trends[model_name] = rg
         ent = rg["entropy_regression"]
         print(f"  [T8c] Entropy slope: {ent['slope']:.6f}, p={ent['p_value']:.4f}")
 
@@ -930,9 +930,9 @@ def run_synthetic_validation(save_dir: Path = SAVE_DIR) -> Dict:
     plot_eigenvalue_spectra(all_spectral, save_dir)
     plot_eigenvalue_complex_plane(all_spectral, save_dir)
     plot_spectral_clustering(all_spectral, all_clusters, save_dir)
-    plot_rg_flow(all_rg, save_dir)
+    plot_spectral_entropy_trend(all_spectral_trends, save_dir)
     plot_asymmetry_analysis(all_spectral, save_dir)
-    plot_summary_dashboard(det_results, all_rg, all_spectral, save_dir)
+    plot_summary_dashboard(det_results, all_spectral_trends, all_spectral, save_dir)
     print(f"\n  Figures saved to: {save_dir.resolve()}")
 
     MODELS = orig_models
@@ -957,15 +957,15 @@ def run_synthetic_validation(save_dir: Path = SAVE_DIR) -> Dict:
     checks.append(check2)
 
     # GL+ should have decreasing entropy (negative slope)
-    glp_rg = all_rg["synthetic_GL+"]["entropy_regression"]
-    check3 = glp_rg["decreasing"]
-    print(f"  GL⁺ entropy decreasing: {check3} (slope={glp_rg['slope']:.6f})")
+    glp_ent = all_spectral_trends["synthetic_GL+"]["entropy_regression"]
+    check3 = glp_ent["decreasing"]
+    print(f"  GL⁺ entropy decreasing: {check3} (slope={glp_ent['slope']:.6f})")
     checks.append(check3)
 
     # Random should NOT have significant entropy trend
-    rand_rg = all_rg["synthetic_random"]["entropy_regression"]
-    check4 = not rand_rg["significant"]
-    print(f"  Random no significant trend: {check4} (p={rand_rg['p_value']:.3f})")
+    rand_ent = all_spectral_trends["synthetic_random"]["entropy_regression"]
+    check4 = not rand_ent["significant"]
+    print(f"  Random no significant trend: {check4} (p={rand_ent['p_value']:.3f})")
     checks.append(check4)
 
     all_pass = all(checks)
@@ -984,7 +984,7 @@ def run_synthetic_validation(save_dir: Path = SAVE_DIR) -> Dict:
         "details": {
             name: {
                 "determinant": {k: v for k, v in det_results[name].items() if k != "per_head"},
-                "entropy_regression": all_rg[name]["entropy_regression"],
+                "entropy_regression": all_spectral_trends[name]["entropy_regression"],
             }
             for name in synthetic_M.keys()
         },
@@ -1013,7 +1013,7 @@ def run_analysis(model_names: Optional[List[str]] = None, save_dir: Path = SAVE_
     all_M = {}           # model -> list of list of M matrices
     all_spectral = {}    # model -> list of list of spectral feature dicts
     all_clusters = {}    # model -> (labels, features, linkage)
-    all_rg = {}          # model -> RG flow analysis dict
+    all_spectral_trends = {}   # model -> spectral entropy trend analysis
     det_results = {}     # model -> determinant analysis dict
 
     for model_name in model_names:
@@ -1074,10 +1074,10 @@ def run_analysis(model_names: Optional[List[str]] = None, save_dir: Path = SAVE_
         for u, c in zip(unique, counts):
             print(f"    Cluster {u}: {c} heads")
 
-        # T8c: RG flow
-        print("\n  [T8c] RG flow analysis (spectral entropy vs depth)...")
-        rg = analyze_rg_flow(layers_spectral)
-        all_rg[model_name] = rg
+        # T8c: spectral entropy trend
+        print("\n  [T8c] Spectral entropy trend analysis (entropy vs depth)...")
+        rg = analyze_spectral_entropy_trend(layers_spectral)
+        all_spectral_trends[model_name] = rg
         ent_reg = rg["entropy_regression"]
         print(f"    Entropy slope: {ent_reg['slope']:.6f}")
         print(f"    Entropy decreasing: {ent_reg['decreasing']}")
@@ -1109,13 +1109,13 @@ def run_analysis(model_names: Optional[List[str]] = None, save_dir: Path = SAVE_
     plot_spectral_clustering(all_spectral, all_clusters, save_dir)
     print("  [saved] T8b_spectral_clustering.png/pdf")
 
-    plot_rg_flow(all_rg, save_dir)
-    print("  [saved] T8c_rg_flow.png/pdf")
+    plot_spectral_entropy_trend(all_spectral_trends, save_dir)
+    print("  [saved] T8c_spectral_entropy.png/pdf")
 
     plot_asymmetry_analysis(all_spectral, save_dir)
     print("  [saved] T8_asymmetry_vs_layer.png/pdf")
 
-    plot_summary_dashboard(det_results, all_rg, all_spectral, save_dir)
+    plot_summary_dashboard(det_results, all_spectral_trends, all_spectral, save_dir)
     print("  [saved] T8_summary_dashboard.png/pdf")
 
     # Save numerical results
@@ -1130,12 +1130,12 @@ def run_analysis(model_names: Optional[List[str]] = None, save_dir: Path = SAVE_
             "determinant_analysis": {
                 k: v for k, v in det_results[model_name].items() if k != "per_head"
             },
-            "rg_flow": {
-                "entropy_regression": all_rg[model_name]["entropy_regression"],
-                "effective_rank_regression": all_rg[model_name]["effective_rank_regression"],
-                "asymmetry_regression": all_rg[model_name]["asymmetry_regression"],
-                "spearman_entropy": all_rg[model_name]["spearman_entropy"],
-                "spearman_effective_rank": all_rg[model_name]["spearman_effective_rank"],
+            "spectral_entropy_trend": {
+                "entropy_regression": all_spectral_trends[model_name]["entropy_regression"],
+                "effective_rank_regression": all_spectral_trends[model_name]["effective_rank_regression"],
+                "asymmetry_regression": all_spectral_trends[model_name]["asymmetry_regression"],
+                "spearman_entropy": all_spectral_trends[model_name]["spearman_entropy"],
+                "spearman_effective_rank": all_spectral_trends[model_name]["spearman_effective_rank"],
             },
             "cluster_sizes": {
                 int(u): int(c) for u, c in zip(
@@ -1160,10 +1160,10 @@ def run_analysis(model_names: Optional[List[str]] = None, save_dir: Path = SAVE_
         status = "CONFIRMED" if r["gl_plus_holds"] else "PARTIAL"
         print(f"    {abbrev:12s}: {r['fraction_positive']:6.1%} positive  [{status}]")
 
-    print("\n  T8c — RG Flow (spectral entropy decreasing with depth):")
+    print("\n  T8c — Spectral Entropy Trend (decreasing with depth):")
     for model_name in model_names:
         abbrev = MODELS.get(model_name, {}).get("abbrev", model_name)
-        rg = all_rg[model_name]
+        rg = all_spectral_trends[model_name]
         ent = rg["entropy_regression"]
         direction = "↓ decreasing" if ent["decreasing"] else "↑ increasing"
         sig = f"p={ent['p_value']:.3f}"

@@ -12,7 +12,7 @@ from gauge_frame_spectral_analysis import (
     compute_per_head_M,
     compute_spectral_features,
     analyze_determinants,
-    analyze_rg_flow,
+    analyze_spectral_entropy_trend,
     cluster_heads_by_spectrum,
     generate_synthetic_gauge_weights,
     run_synthetic_validation,
@@ -136,9 +136,9 @@ class TestDeterminants:
 
 
 # ---------------------------------------------------------------------------
-# analyze_rg_flow
+# analyze_spectral_entropy_trend
 # ---------------------------------------------------------------------------
-class TestRGFlow:
+class TestSpectralEntropyTrend:
     def test_monotone_decreasing_entropy(self):
         """Construct spectral features with decreasing entropy."""
         spectral = []
@@ -153,7 +153,7 @@ class TestRGFlow:
                 feats.append(compute_spectral_features(M))
             spectral.append(feats)
 
-        rg = analyze_rg_flow(spectral)
+        rg = analyze_spectral_entropy_trend(spectral)
         assert rg["entropy_regression"]["decreasing"]
         assert rg["entropy_regression"]["slope"] < 0
 

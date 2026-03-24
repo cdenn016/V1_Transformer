@@ -102,16 +102,6 @@ class TestDataImports:
 class TestAnalysisImports:
     """Test analysis module imports."""
 
-    def test_analysis_rg_metrics_import(self):
-        """Test importing from transformer.analysis.rg_metrics."""
-        from transformer.analysis.rg_metrics import (
-            compute_rg_diagnostics,
-            RGDiagnostics,
-            RGFlowSummary,
-        )
-        assert callable(compute_rg_diagnostics)
-        assert RGDiagnostics is not None
-
     def test_analysis_trajectory_import(self):
         """Test importing from transformer.analysis.trajectory."""
         from transformer.analysis.trajectory import (
