@@ -249,8 +249,8 @@ EM_CONFIG = {
     'mask_self_attention':   False,  # Prevent attention collapse?
   
     # === M-step: implicit differentiation ===
-    'implicit_em':           True,
-    'amortized_inference':   False,
+    'implicit_em':           False,
+    'amortized_inference':   True,
     'use_obs_in_vfe':        False,  #cheats when true
        
     # === M-step: Optimizer ===  
@@ -2095,7 +2095,7 @@ class PublicationTrainer(FastTrainer):
                     pbar.set_description(log_msg)
                     # Print gradient norms using tqdm.write for proper display
                     if grad_norms:
-                        tqdm.write(f"\n  [M-STEP] total: {grad_norms['total']:.3e} | "
+                        tqdm.write(f"\n\n  [M-STEP] total: {grad_norms['total']:.3e} | "
                                    f"mu: {grad_norms['mu']:.3e} | sigma: { grad_norms['sigma']:.3e} | "
                                    f"phi: {grad_norms['phi']:.3e}")
                     if e_step_norms:
@@ -2119,7 +2119,7 @@ class PublicationTrainer(FastTrainer):
                 else:
                     print(log_msg)
                     if grad_norms:
-                        print(f"\n  [M-STEP] total: {grad_norms['total']:.3e} | "
+                        print(f"\n\n  [M-STEP] total: {grad_norms['total']:.3e} | "
                               f"mu: {grad_norms['mu']:.3e} | sigma: { grad_norms['sigma']:.3e} | "
                               f"phi: {grad_norms['phi']:.3e}")
                     if e_step_norms:
