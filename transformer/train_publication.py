@@ -94,11 +94,7 @@ from math_utils.numerical_monitor import flush as _flush_numerical_events
 #   'hebbian'    - Gauge VFE + P-flow/delta-rule (no backprop)
 #   'pure_vfe'   - Pure natural gradient E/M (no autograd)
 #
-# Peer-review ablations:
-#   'standard_attn_only'        - (M2b) attention-only at d_model=90
-#   'standard_param_equalized'  - (M2b') param-equalized wider FFN
-#   'standard_rope'             - (M2c) standard + RoPE at d=10
-#   'standard_rope_d90'         - (M2c') standard + RoPE at d=90
+
 # =================================================================
 # GAUGE GROUP SELECTION (Generators from so(N), Transport in GL(K))
 # =================================================================
@@ -125,6 +121,7 @@ SEED = 6
 # Dataset
 DEFAULT_DATASET = 'wikitext-103'  
 # 'wikitext-2' (~2M tokens) or 'wikitext-103' (~103M tokens), 'wiki-ja' japanese (~1B tokens, 100k vocab)
+_DEBUG_VFE_GRADS = False
 # ============================================================================
 
 
@@ -229,7 +226,7 @@ STANDARD_CONFIG = {
 #   Hierarchy: h(fixed) → s(embed params) → p=s → q(E-step beliefs) → obs
 # =============================================================================
 
-_DEBUG_VFE_GRADS = False
+
 EM_CONFIG = {
     # === Architecture ===
     'vocab_size':            50257,
@@ -249,8 +246,8 @@ EM_CONFIG = {
     'mask_self_attention':   False,  # Prevent attention collapse?
   
     # === M-step: implicit differentiation ===
-    'implicit_em':           False,
-    'amortized_inference':   True,
+    'implicit_em':           True,
+    'amortized_inference':   False,
     'use_obs_in_vfe':        False,  #cheats when true
        
     # === M-step: Optimizer ===  
@@ -276,9 +273,9 @@ EM_CONFIG = {
     'learnable_alpha':       True,    
     'ffn_learnable_alpha':   True,   # when true Adaptive α_i = c0/(b0 + KL) per dimension
 
-    'e_step_mu_lr':    0.1,    # whitened steps ~0.1, well within trust=2.0
-    'e_step_sigma_lr': 0.05,   # conservative sigma movement
-    'e_step_phi_lr':   0.05,   # keep as-is, already reasonable
+    'e_step_mu_lr':          0.1,    # whitened steps ~0.1, well within trust=2.0
+    'e_step_sigma_lr':       0.05,   # conservative sigma movement
+    'e_step_phi_lr':         0.05,   # keep as-is, already reasonable
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
     'gauge_group':      'GLK',
@@ -300,12 +297,12 @@ EM_CONFIG = {
     # alpha=0: KL(q*||p) homogenizes (q* is smoothed, not data-grounded).
     # beta=0: alignment term is vacuum-seeking. E-step handles it internally.
     
-    'alpha':        0.0,
-    'beta':         0.0,
-    'alpha_phi':    0.0,            # Gauge prior: (α_φ/2)||φ||²
-    'lambda_hyper': 0.0,            # KL(s||h) with fixed Σ_h set if if using embed-weight-decay 
-    'lambda_gamma': 0.0,
-    'kappa_gamma':  1.0,
+    'alpha':               0.01,
+    'beta':                0.0,
+    'alpha_phi':           0.1,            # Gauge prior: (α_φ/2)||φ||²
+    'lambda_hyper':        0.0,            # KL(s||h) with fixed Σ_h set if if using embed-weight-decay 
+    'lambda_gamma':        0.0,
+    'kappa_gamma':         1.0,
     
     'embed_weight_decay':  0.01,   #acts like lambda_hyper N(o, 1/2sig) set zero when using lambda_hyper/alpha_phi
     'weight_decay':        0.01,   #acts on non-vfe params
@@ -378,7 +375,7 @@ EM_CONFIG = {
     
     'gauge_fixed_priors':          False,
     'tie_embeddings':              False,
-    'ffn_mode': 'VFE_dynamic',
+    'ffn_mode':                    'VFE_dynamic',
     
     # === Regularization ===
     'sigma_max':     10.0,
@@ -388,21 +385,6 @@ EM_CONFIG = {
     'num_workers':   10,
 
 
-}
-# =============================================================================
-# CONFIG: AMORTIZED — Straight-through gradient, no E/M separation (mode='amortized')
-# =============================================================================
-# Same gauge-VFE model, but gradients flow through priors in the E-step
-# (amortized_inference=True). CE gradient reaches embeddings via straight-through
-# (scale=1), not via IFT. This is the original "VFE_dynamic" mode — faster to
-# converge but theoretically unjustified (conflates E-step and M-step).
-# =============================================================================
-AMORTIZED_CONFIG = {
-    **EM_CONFIG,
-    # Override: amortized inference, no implicit EM
-    'amortized_inference': True,
-    'implicit_em':         False,
-    'ffn_learnable_alpha': True,   # Adaptive α_k = c0/(b0 + KL_k) per dimension
 }
 
 
@@ -706,200 +688,6 @@ STANDARD_ATTN_ONLY_CONFIG = {
 }
 
 
-# Config (b'): Standard transformer parameter-equalized via wider FFN
-# Match the gauge model's total parameter count (~58.8M) by widening FFN
-STANDARD_PARAM_EQUALIZED_CONFIG = {
-    # Model architecture — wider FFN to absorb parameter budget
-    'vocab_size': 50257,
-    'embed_dim': 90,              # Same as gauge model
-    'n_layers': 1,
-    'n_heads': 9,                 # 9 heads * 10 = 90
-    'hidden_dim': 360,            # Will be auto-calculated to match param count
-    'max_seq_len': 128,
-
-    # Training
-    'batch_size': 64,
-    'use_amp': False,
-    'num_workers': 10,
-    'epochs': None,
-    'max_steps': 15000,
-    'warmup_steps': 100,
-
-    # Standard transformer settings
-    'ffn_mode': 'standard',
-    'attention_type': 'standard',
-    'pos_encoding_mode': 'learned',
-    'tie_embeddings': False,
-
-    # Disable gauge features
-    'evolve_sigma': False,
-    'evolve_phi': False,
-    'diagonal_covariance': True,
-    'isotropic_covariance': False,
-    'use_positional_embedding': True,
-
-    # Learning rates
-    'mu_lr': 3e-4,
-    'sigma_lr': 0.0001,
-    'phi_lr': 0.0001,
-    'ffn_lr': 3e-4,
-
-    # Free energy weights
-    'alpha': 0,
-    'beta': 0,
-    'lambda_gamma': 0,
-    'kappa_gamma': 1.0,
-
-    # Regularization
-    'weight_decay': 0.01,
-    'dropout': 0.1,
-    'grad_clip': 1.0,
-
-    # Logging
-    'log_interval': 100,
-    'eval_interval': 1000,
-    'checkpoint_interval': 25000,
-    'patience': 5,
-
-    # Unused in standard mode
-    'kappa_beta': 1.0,
-    'attention_pattern': 'full',
-    'attention_window': 24,
-    'gauge_group': 'SO3',
-    'gauge_dim': 3,
-    'gauge_mode': 'learned',
-    'gauge_fixed_priors': True,
-    'irrep_spec': [('ℓ0', 5, 1)],
-}
-
-
-# Config (c): Standard transformer with RoPE (matching gauge model's PE)
-# Isolates attention mechanism contribution by controlling for positional encoding
-STANDARD_ROPE_CONFIG = {
-    # Model architecture — same as STANDARD_CONFIG but with RoPE
-    'vocab_size': 50257,
-    'embed_dim': 10,              # Same as VFE for apples-to-apples
-    'n_layers': 1,
-    'n_heads': 1,
-    'hidden_dim': 24527,          # Same as STANDARD_CONFIG
-    'max_seq_len': 128,
-    'use_rope': True,             # KEY: RoPE to match gauge model
-    'rope_base': 10000.0,
-
-    # Training
-    'batch_size': 64,
-    'use_amp': False,
-    'num_workers': 10,
-    'epochs': None,
-    'max_steps': 15000,
-    'warmup_steps': 100,
-
-    # Standard transformer settings
-    'ffn_mode': 'standard',
-    'attention_type': 'standard',
-    'pos_encoding_mode': 'rope',  # Use RoPE instead of learned
-    'tie_embeddings': False,
-
-    # Disable gauge features
-    'evolve_sigma': False,
-    'evolve_phi': False,
-    'diagonal_covariance': True,
-    'isotropic_covariance': False,
-    'use_positional_embedding': False,  # No learned pos embed when using RoPE
-
-    # Learning rates
-    'mu_lr': 3e-4,
-    'sigma_lr': 0.0001,
-    'phi_lr': 0.0001,
-    'ffn_lr': 3e-4,
-
-    # Free energy weights
-    'alpha': 0,
-    'beta': 0,
-    'lambda_gamma': 0,
-    'kappa_gamma': 1.0,
-
-    # Regularization
-    'weight_decay': 0.01,
-    'dropout': 0.1,
-    'grad_clip': 1.0,
-
-    # Logging
-    'log_interval': 100,
-    'eval_interval': 1000,
-    'checkpoint_interval': 25000,
-    'patience': 5,
-
-    # Unused in standard mode
-    'kappa_beta': 1.0,
-    'attention_pattern': 'full',
-    'attention_window': 24,
-    'gauge_group': 'SO3',
-    'gauge_dim': 3,
-    'gauge_mode': 'learned',
-    'gauge_fixed_priors': True,
-    'irrep_spec': [('ℓ0', 5, 1)],
-}
-
-
-# Config (c'): Standard transformer with RoPE, at d_model=90 and param-matched
-# Both matched PE and matched params for the fairest possible comparison
-STANDARD_ROPE_D90_CONFIG = {
-    'vocab_size': 50257,
-    'embed_dim': 90,
-    'n_layers': 1,
-    'n_heads': 9,                 # 9 heads * 10 = 90
-    'hidden_dim': 360,            # Moderate FFN for fair comparison
-    'max_seq_len': 128,
-    'use_rope': True,             # Match gauge model
-    'rope_base': 10000.0,
-
-    'batch_size': 64,
-    'use_amp': False,
-    'num_workers': 10,
-    'epochs': None,
-    'max_steps': 15000,
-    'warmup_steps': 100,
-
-    'ffn_mode': 'standard',
-    'attention_type': 'standard',
-    'pos_encoding_mode': 'rope',
-    'tie_embeddings': False,
-
-    'evolve_sigma': False,
-    'evolve_phi': False,
-    'diagonal_covariance': True,
-    'isotropic_covariance': False,
-    'use_positional_embedding': False,
-
-    'mu_lr': 3e-4,
-    'sigma_lr': 0.0001,
-    'phi_lr': 0.0001,
-    'ffn_lr': 3e-4,
-
-    'alpha': 0,
-    'beta': 0,
-    'lambda_gamma': 0,
-    'kappa_gamma': 1.0,
-
-    'weight_decay': 0.01,
-    'dropout': 0.1,
-    'grad_clip': 1.0,
-
-    'log_interval': 100,
-    'eval_interval': 1000,
-    'checkpoint_interval': 25000,
-    'patience': 5,
-
-    'kappa_beta': 1.0,
-    'attention_pattern': 'full',
-    'attention_window': 24,
-    'gauge_group': 'SO3',
-    'gauge_dim': 3,
-    'gauge_mode': 'learned',
-    'gauge_fixed_priors': True,
-    'irrep_spec': [('ℓ0', 5, 1)],
-}
 
 
 # =============================================================================
@@ -3348,17 +3136,6 @@ def main():
         config = EM_CONFIG.copy()
         ffn_mode = 'VFE_dynamic'
 
-    elif mode in ('amortized', 'VFE_dynamic'):
-        print("\n" + "="*70)
-        print("MODE: AMORTIZED (Gauge VFE + straight-through gradient)")
-        print("="*70)
-        print("   Attention: KL-divergence (gauge-equivariant)")
-        print("   E-step: Natural gradient VFE descent")
-        print("   M-step: Backprop with straight-through CE → embeddings")
-        print("   Gradients flow through priors (amortized inference)")
-        print("="*70 + "\n")
-        config = AMORTIZED_CONFIG.copy()
-        ffn_mode = 'VFE_dynamic'
 
     elif mode == 'hebbian':
         print("\n" + "="*70)
@@ -3384,42 +3161,7 @@ def main():
         config = STANDARD_ATTN_ONLY_CONFIG.copy()
         ffn_mode = 'standard'
 
-    elif mode == 'standard_param_equalized':
-        print("\n" + "="*70)
-        print("MODE: STANDARD PARAM-EQUALIZED (Peer Review M2b')")
-        print("="*70)
-        print("   d_model=90 with wider FFN layers")
-        print("   Attention: Q·K^T / √d (dot-product softmax)")
-        print("   FFN: Wider layers for parameter matching")
-        print("   Purpose: Fair param-count comparison")
-        print("="*70 + "\n")
-        config = STANDARD_PARAM_EQUALIZED_CONFIG.copy()
-        ffn_mode = 'standard'
-
-    elif mode == 'standard_rope':
-        print("\n" + "="*70)
-        print("MODE: STANDARD + RoPE (Peer Review M2c)")
-        print("="*70)
-        print("   d_model=10, matching STANDARD_CONFIG dimensions")
-        print("   Attention: Q·K^T / √d with RoPE")
-        print("   FFN: Linear → GELU → Linear")
-        print("   Purpose: Control for positional encoding confound")
-        print("="*70 + "\n")
-        config = STANDARD_ROPE_CONFIG.copy()
-        ffn_mode = 'standard'
-
-    elif mode == 'standard_rope_d90':
-        print("\n" + "="*70)
-        print("MODE: STANDARD + RoPE at d=90 (Peer Review M2c')")
-        print("="*70)
-        print("   d_model=90, matching gauge model embedding dim")
-        print("   Attention: Q·K^T / √d with RoPE")
-        print("   FFN: Linear → GELU → Linear")
-        print("   Purpose: Matched PE + matched embed_dim comparison")
-        print("="*70 + "\n")
-        config = STANDARD_ROPE_D90_CONFIG.copy()
-        ffn_mode = 'standard'
-
+    
     elif mode == 'pure_vfe':
         print("\n" + "="*70)
         print("MODE: PURE VFE TRANSFORMER (No backprop)")
