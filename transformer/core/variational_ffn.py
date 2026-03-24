@@ -2400,8 +2400,12 @@ class VariationalFFNDynamic(nn.Module):
         if implicit_em:
             print(f"[VariationalFFNDynamic] Implicit EM enabled: IFT-based M-step gradient")
             print(f"  → Detaches mu/sigma at E-step start, applies s_k = (α/σ²_p)/A_k scaling")
-        # RoPE: store so VFE iterations apply the same position encoding as attention
-        self._use_rope_vfe = use_rope
+        # RoPE: DISABLED in VFE E-step iterations. The E-step is belief refinement
+        # (analogous to V aggregation), not attention scoring (Q·K). Position
+        # awareness enters via β_ij from the attention sublayer, which already
+        # applies RoPE. Applying RoPE inside the E-step double-counts position,
+        # breaks KL geometry (rotates μ but not Σ), and distorts the VFE fixed point.
+        self._use_rope_vfe = False
         self._rope_base_vfe = rope_base
         # Constant gauge: store reference to attention module's per-head Ω parameters.
         # When gauge_mode='constant', these are used to build transport operators
