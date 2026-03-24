@@ -445,6 +445,12 @@ class GaugeTransformerLM(nn.Module):
             print(f"[GaugeTransformerLM] Created PriorBank with token-dependent priors (vocab_size={vocab_size})")
             print(f"                     gauge_fixed_priors={gauge_fixed_priors}, tau={self.prior_bank_tau}")
 
+            # Freeze token_embed: PriorBank replaces it for encode/decode.
+            # Without this, token_embed's parameters receive optimizer weight_decay
+            # updates every step despite never appearing in the computation graph.
+            # (sigma_target buffer is unaffected by requires_grad.)
+            self.token_embed.requires_grad_(False)
+
         # =================================================================
         # Transformer Stack
         # =================================================================
@@ -684,7 +690,12 @@ class GaugeTransformerLM(nn.Module):
         # Controlled by use_obs_in_vfe in config; only final layer receives them.
         use_obs = self.config.get('use_obs_in_vfe', False) if hasattr(self, 'config') else False
         vfe_targets = targets if use_obs else None
-        vfe_W_out = self.out_proj.weight if (use_obs and hasattr(self.out_proj, 'weight')) else None
+        # PriorBank decodes via KL (no linear output projection), so out_proj
+        # is untrained when PriorBank is active — never pass it as W_out.
+        if use_obs and not self.use_prior_bank and hasattr(self, 'out_proj'):
+            vfe_W_out = self.out_proj.weight
+        else:
+            vfe_W_out = None
 
         # When cross-head coupling is active, mu inside the transformer stack is in
         # the permuted basis. W_out must be permuted to match, otherwise the
@@ -893,7 +904,11 @@ class GaugeTransformerLM(nn.Module):
             mu_normalized = block.norm2(mu_q)
 
             # Permute W_out to match cross-head reordered mu basis
-            _w_out_fwa = (self.out_proj.weight if hasattr(self.out_proj, 'weight') else None) if is_final else None
+            # PriorBank decodes via KL — out_proj is untrained, never use as W_out.
+            if is_final and not self.use_prior_bank and hasattr(self, 'out_proj'):
+                _w_out_fwa = self.out_proj.weight
+            else:
+                _w_out_fwa = None
             if _w_out_fwa is not None and getattr(self, '_cross_head_perm', None) is not None:
                 _w_out_fwa = _w_out_fwa[:, self._perm_tensor.to(device=device)]
 
@@ -1171,7 +1186,11 @@ class GaugeTransformerLM(nn.Module):
             mu_normalized = block.norm2(mu_q)
 
             # Permute W_out to match cross-head reordered mu basis
-            _w_out_tf = (self.out_proj.weight if hasattr(self.out_proj, 'weight') else None) if is_final else None
+            # PriorBank decodes via KL — out_proj is untrained, never use as W_out.
+            if is_final and not self.use_prior_bank and hasattr(self, 'out_proj'):
+                _w_out_tf = self.out_proj.weight
+            else:
+                _w_out_tf = None
             if _w_out_tf is not None and getattr(self, '_cross_head_perm', None) is not None:
                 _w_out_tf = _w_out_tf[:, self._perm_tensor.to(device=device)]
 
@@ -1406,7 +1425,35 @@ class GaugeTransformerLM(nn.Module):
             ema_decay: EMA decay rate
             pad_token_id: Padding token ID
         """
-        if hasattr(self.token_embed, 'update_phi_from_beliefs'):
+        if self.use_prior_bank and self.prior_bank is not None:
+            # PriorBank owns phi_embed — update it directly via EMA
+            phi_embed = self.prior_bank.phi_embed
+            phi_dim = phi_evolved.shape[-1]
+            lr = 1.0 - ema_decay
+            with torch.no_grad():
+                flat_ids = token_ids.reshape(-1)
+                flat_phi = phi_evolved.reshape(-1, phi_dim)
+                flat_errors = prediction_errors.reshape(-1)
+                # Prediction-error-weighted average per token type
+                neg_errors = -flat_errors.clamp(min=-10, max=10)
+                unique_tokens, inverse_idx = torch.unique(flat_ids, return_inverse=True)
+                n_unique = unique_tokens.shape[0]
+                seg_max = torch.full((n_unique,), float('-inf'), device=flat_ids.device, dtype=flat_phi.dtype)
+                seg_max.scatter_reduce_(0, inverse_idx, neg_errors, reduce='amax', include_self=False)
+                exp_shifted = torch.exp(neg_errors - seg_max[inverse_idx])
+                seg_sum = torch.zeros(n_unique, device=flat_ids.device, dtype=flat_phi.dtype)
+                seg_sum.scatter_add_(0, inverse_idx, exp_shifted)
+                weights = exp_shifted / seg_sum[inverse_idx].clamp(min=1e-12)
+                weighted_phi = torch.zeros(n_unique, phi_dim, device=flat_phi.device, dtype=flat_phi.dtype)
+                weighted_phi.scatter_add_(0, inverse_idx.unsqueeze(-1).expand(-1, phi_dim),
+                                          flat_phi * weights.unsqueeze(-1))
+                pad_mask = (unique_tokens != pad_token_id)
+                update_tokens = unique_tokens[pad_mask]
+                update_phi = weighted_phi[pad_mask]
+                phi_embed.weight.data[update_tokens] = (
+                    (1.0 - lr) * phi_embed.weight.data[update_tokens] + lr * update_phi
+                )
+        elif hasattr(self.token_embed, 'update_phi_from_beliefs'):
             self.token_embed.update_phi_from_beliefs(
                 token_ids=token_ids,
                 phi_evolved=phi_evolved,

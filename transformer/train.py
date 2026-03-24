@@ -382,13 +382,15 @@ def _get_sigma_target(
     Returns:
         sigma_h: Same shape as sigma_s, detached (fixed target).
     """
-    # Try to get frozen sigma_target from embedding
+    # Try to get frozen sigma_target from embedding.
+    # Check PriorBank FIRST: when active, it owns the sigma parameters
+    # (token_embed.sigma_target also exists but is stale/unused).
     sigma_target = None
-    if hasattr(model, 'token_embed') and hasattr(model.token_embed, 'sigma_target'):
-        sigma_target = model.token_embed.sigma_target  # (K,)
-    elif hasattr(model, 'prior_bank') and model.prior_bank is not None:
+    if hasattr(model, 'prior_bank') and model.prior_bank is not None:
         if hasattr(model.prior_bank, 'sigma_target'):
             sigma_target = model.prior_bank.sigma_target  # (K,)
+    if sigma_target is None and hasattr(model, 'token_embed') and hasattr(model.token_embed, 'sigma_target'):
+        sigma_target = model.token_embed.sigma_target  # (K,)
 
     if sigma_target is not None:
         # sigma_target is (K,) — expand to match sigma_s shape
