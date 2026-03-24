@@ -454,7 +454,7 @@ class PublicationFigures:
                 ax_m.semilogy(steps, vals, style, label=label, alpha=alpha, linewidth=lw)
         ax_m.set_xlabel('Training Step')
         ax_m.set_ylabel('Gradient Norm')
-        ax_m.set_title('M-step (p) Gradient Norms — Backprop on Parameters')
+        ax_m.set_title('M-step (p) Gradient Norms — AdamW Backprop')
         ax_m.legend(loc='upper right', ncol=2)
         ax_m.grid(True, alpha=0.3)
         format_step_axis(ax_m)
