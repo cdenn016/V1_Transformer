@@ -73,8 +73,6 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 - `generators.py` — Lie algebra generators: SO(3), SO(N), GL(K), multi-irrep block-diagonal
 - `transport.py` — Parallel transport: `Omega_ij = exp(phi_i) * exp(-phi_j)`
 - `push_pull.py` — Gaussian pushforward under transport: `(mu, Sigma) -> (Omega @ mu, Omega @ Sigma @ Omega.T)`
-- `numba_kernels.py` — Numba JIT: KL, Rodrigues, transported KL
-- `cuda_kernels.py` — Optional CuPy CUDA kernels
 - `numerical_utils.py` — Regularization, gradient clipping, condition estimates
 
 ### `tests/` — Test Suite
@@ -110,7 +108,7 @@ pytest transformer/pure_vfe/tests/  # pure VFE gradient tests
 
 ### Dependencies
 
-Defined in `pyproject.toml`. Core: `torch>=2.1`, `pytorch-lightning>=2.2`, `numpy`, `numba`, `tiktoken`, `datasets`. Optional groups: `wandb`, `transformers`, `viz` (matplotlib, seaborn, plotly), `all`.
+Defined in `pyproject.toml`. Core: `torch>=2.1`, `pytorch-lightning>=2.2`, `numpy`, `tiktoken`, `datasets`. Optional groups: `wandb`, `transformers`, `viz` (matplotlib, seaborn, plotly), `all`.
 
 ## Code Conventions
 

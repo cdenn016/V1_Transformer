@@ -435,8 +435,6 @@ gauge-holonomy/
 │   ├── generators.py               #   SO(3)/SO(N)/GL(K) Lie algebra generators
 │   ├── transport.py                #   Parallel transport Ω_ij = exp(φ_i)·exp(-φ_j)
 │   ├── push_pull.py                #   Gaussian pushforward under transport
-│   ├── numba_kernels.py            #   Numba JIT kernels (KL, Rodrigues)
-│   ├── cuda_kernels.py             #   CuPy CUDA kernels
 │   └── numerical_utils.py          #   Stability helpers (regularization, clipping)
 ├── scripts/                        # Analysis and utility scripts
 │   ├── train_lightning.py          #   Lightning training (3 modes: standard/VFE/pure_fep)

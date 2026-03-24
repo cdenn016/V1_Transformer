@@ -424,7 +424,6 @@ def compute_free_energy_loss(
             kappa_gamma,
             epsilon=1e-8,
             mask=mask,
-            use_numba=False,
             return_kl=True,
             diagonal_covariance=diagonal_cov,
         )
