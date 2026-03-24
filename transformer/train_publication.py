@@ -124,90 +124,6 @@ DEFAULT_DATASET = 'wikitext-103'
 _DEBUG_VFE_GRADS = False
 # ============================================================================
 
-
-
-# =============================================================================
-# CONFIG 1: STANDARD TRANSFORMER (Baseline)
-# =============================================================================
-# Standard dot-product attention + learned MLP for fair comparison.
-# This is the BASELINE to beat!
-#
-# Architecture:
-#   - Attention: Q·K^T / √d (standard dot-product softmax)
-#   - FFN: Linear → GELU → Linear (learned MLP)
-#   - Output: Linear projection to vocab
-#   - Learning: Backpropagation (standard)
-#   - Position: Learned positional embeddings
-# =============================================================================
-
-STANDARD_CONFIG = {
-    # Model architecture — param-matched to EM_CONFIG (1.52M)
-    'vocab_size': 50257,
-    'embed_dim': 10,              # Same as VFE for apples-to-apples comparison
-    
-    'n_layers': 1,                # Same depth
-    'n_heads': 1,                 # Single head (head_dim=10)
-    'hidden_dim': 24527,          # Absorbs params that VFE spends on σ table + VFE machinery
-    'max_seq_len': 128,
-
-    # Training — match VFE config
-    'batch_size': 64,
-    'use_amp': False,
-    'num_workers': 10,
-    'epochs': None,
-    'max_steps': 15000,
-    'warmup_steps': 100,
-
-    # Standard transformer settings
-    'ffn_mode': 'standard',
-    'attention_type': 'standard',
-    'pos_encoding_mode': 'learned',
-    'tie_embeddings': False,        # Match VFE (tie=False)
-
-    # Disable gauge features
-    'evolve_sigma': False,
-    'evolve_phi': False,
-    'diagonal_covariance': True,
-    'isotropic_covariance': False,
-    'use_positional_embedding': True,
-
-    # Learning rates
-    'mu_lr': 3e-4,
-    'sigma_lr': 0.0001,
-    'phi_lr': 0.0001,
-    'ffn_lr': 3e-4,
-
-    # Free energy weights (not used in standard mode)
-    'alpha': 0,
-    'beta': 0,
-    'lambda_gamma': 0,
-    'kappa_gamma': 1.0,
-
-    # Regularization
-    'weight_decay': 0.01,
-    'dropout': 0.1,
-    'grad_clip': 1.0,
-
-    # Logging — match VFE config
-    'log_interval': 100,
-    'eval_interval': 1000,
-    'checkpoint_interval': 25000,
-    'patience': 5,
-
-    # Unused in standard mode
-    'kappa_beta': 1.0,
-    'attention_pattern': 'full',
-    'attention_window': 24,
-    'gauge_group': 'SO3',
-    'gauge_dim': 3,
-    'gauge_mode': 'learned',
-    'gauge_fixed_priors': True,
-    'irrep_spec': [('ℓ0', 5, 1)],
-}
-
-
-
-
 # =============================================================================
 # CONFIG: EM — Principled E/M with implicit differentiation (mode='em')
 # =============================================================================
@@ -297,7 +213,7 @@ EM_CONFIG = {
     # alpha=0: KL(q*||p) homogenizes (q* is smoothed, not data-grounded).
     # beta=0: alignment term is vacuum-seeking. E-step handles it internally.
     
-    'alpha':               0.01,
+    'alpha':               0.0,
     'beta':                0.0,
     'alpha_phi':           0.1,            # Gauge prior: (α_φ/2)||φ||²
     'lambda_hyper':        0.0,            # KL(s||h) with fixed Σ_h set if if using embed-weight-decay 
@@ -331,12 +247,12 @@ EM_CONFIG = {
     # mu_embed and log_sigma_diag have dual roles: they initialize E-step
     # beliefs (q₀) AND serve as prior parameters (μ_p, σ_p), so these rates
     # indirectly affect E-step initialization speed.
-    'mu_lr':        0.05, # Prior mean embeddings (μ_p)
+    'mu_lr':        0.05,   # Prior mean embeddings (μ_p)
     'sigma_lr':     0.0125, # Prior covariance embeddings (log σ_p)
     'phi_lr':       0.0075, # Gauge frame embeddings (φ)
-    'ffn_lr':       0.05, # FFN params (raw_c0, raw_b0, raw_lr)
-    'attention_lr': 0.005, # Attention params (W_O, constant_omega)
-    'output_lr':    0.05, # Output projection (vocab logits)
+    'ffn_lr':       0.05,   # FFN params (raw_c0, raw_b0, raw_lr)
+    'attention_lr': 0.005,  # Attention params (W_O, constant_omega)
+    'output_lr':    0.05,   # Output projection (vocab logits)
     
     # === Logging ===
     'log_interval':               100,
@@ -594,6 +510,86 @@ PURE_VFE_CONFIG = {
     'eval_interval':       1000,
     'checkpoint_interval': 25000,
     'num_workers':         10,
+}
+
+
+# =============================================================================
+# CONFIG 1: STANDARD TRANSFORMER (Baseline)
+# =============================================================================
+# Standard dot-product attention + learned MLP for fair comparison.
+# This is the BASELINE to beat!
+#
+# Architecture:
+#   - Attention: Q·K^T / √d (standard dot-product softmax)
+#   - FFN: Linear → GELU → Linear (learned MLP)
+#   - Output: Linear projection to vocab
+#   - Learning: Backpropagation (standard)
+#   - Position: Learned positional embeddings
+# =============================================================================
+
+STANDARD_CONFIG = {
+    # Model architecture — param-matched to EM_CONFIG (1.52M)
+    'vocab_size': 50257,
+    'embed_dim': 10,              # Same as VFE for apples-to-apples comparison
+    
+    'n_layers': 1,                # Same depth
+    'n_heads': 1,                 # Single head (head_dim=10)
+    'hidden_dim': 24527,          # Absorbs params that VFE spends on σ table + VFE machinery
+    'max_seq_len': 128,
+
+    # Training — match VFE config
+    'batch_size': 64,
+    'use_amp': False,
+    'num_workers': 10,
+    'epochs': None,
+    'max_steps': 15000,
+    'warmup_steps': 100,
+
+    # Standard transformer settings
+    'ffn_mode': 'standard',
+    'attention_type': 'standard',
+    'pos_encoding_mode': 'learned',
+    'tie_embeddings': False,        # Match VFE (tie=False)
+
+    # Disable gauge features
+    'evolve_sigma': False,
+    'evolve_phi': False,
+    'diagonal_covariance': True,
+    'isotropic_covariance': False,
+    'use_positional_embedding': True,
+
+    # Learning rates
+    'mu_lr': 3e-4,
+    'sigma_lr': 0.0001,
+    'phi_lr': 0.0001,
+    'ffn_lr': 3e-4,
+
+    # Free energy weights (not used in standard mode)
+    'alpha': 0,
+    'beta': 0,
+    'lambda_gamma': 0,
+    'kappa_gamma': 1.0,
+
+    # Regularization
+    'weight_decay': 0.01,
+    'dropout': 0.1,
+    'grad_clip': 1.0,
+
+    # Logging — match VFE config
+    'log_interval': 100,
+    'eval_interval': 1000,
+    'checkpoint_interval': 25000,
+    'patience': 5,
+
+    # Unused in standard mode
+    'kappa_beta': 1.0,
+    'attention_pattern': 'full',
+    'attention_window': 24,
+    'gauge_group': 'SO3',
+    'gauge_dim': 3,
+    'gauge_mode': 'learned',
+    'gauge_fixed_priors': True,
+    'irrep_spec': [('ℓ0', 5, 1)],
 }
 
 
