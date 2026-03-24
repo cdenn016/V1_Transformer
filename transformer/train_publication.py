@@ -1868,6 +1868,7 @@ class PublicationTrainer(FastTrainer):
                         step_time=step_time,
                         batch_size=batch_size,
                         seq_len=seq_len,
+                        e_step_norms=e_step_norms,
                     )
 
                 # Console logging
