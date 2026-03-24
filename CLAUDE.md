@@ -10,6 +10,8 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 **PRESERVE GAUGE EQUIVARIANCE**: Covariance transport must always use the sandwich product: `Sigma_transported = Omega @ Sigma @ Omega.T`. Never transport covariance without the conjugation. This is the single most common correctness bug.
 
+**Figures**: ALL Figures should be publication quality by default.
+
 ## Codebase Map
 
 ### Entry Points
