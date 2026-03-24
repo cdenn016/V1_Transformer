@@ -46,30 +46,6 @@ from typing import Tuple, Optional
 from dataclasses import dataclass
 from math_utils.numerical_utils import safe_inv
 
-# ===========================================================================
-# GPU/CUDA BACKEND INTEGRATION
-# ===========================================================================
-
-try:
-    from math_utils.cuda_kernels import (
-        transport_gaussian_cupy,
-        transport_gaussian_batch_cupy,
-        kl_transported_cupy,
-        is_cupy_available,
-    )
-    _CUDA_KERNELS_AVAILABLE = is_cupy_available()
-except ImportError:
-    _CUDA_KERNELS_AVAILABLE = False
-
-# NEW: Import Numba-accelerated versions
-try:
-    from math_utils.numba_kernels import (
-        push_gaussian_numba,
-        compute_kl_transported_numba
-    )
-    _NUMBA_AVAILABLE = True
-except ImportError:
-    _NUMBA_AVAILABLE = False
 
 
 # =============================================================================
@@ -184,30 +160,6 @@ def push_gaussian(
         - Returns float32 for memory efficiency
         - Symmetrizes Σ' to remove numerical asymmetry
     """
-    
-    # ========================================================================
-    # NEW: FAST PATH for simple scalar case (3-5x faster)
-    # ========================================================================
-    if (_NUMBA_AVAILABLE and 
-        not compute_precision and 
-        gaussian.mu.ndim == 1 and 
-        Omega.ndim == 2):
-        
-        # Convert to float64 for Numba
-        mu = np.asarray(gaussian.mu, dtype=np.float64)
-        Sigma = np.asarray(gaussian.Sigma, dtype=np.float64)
-        Omega_f64 = np.asarray(Omega, dtype=np.float64)
-        
-        # Ultra-fast Numba kernel
-        mu_pushed, Sigma_pushed = push_gaussian_numba(mu, Sigma, Omega_f64)
-        
-        # Return as float32
-        return GaussianDistribution(
-            mu_pushed.astype(np.float32),
-            Sigma_pushed.astype(np.float32),
-            None
-        )
-    
     
     mu = np.asarray(gaussian.mu, dtype=np.float64)
     Sigma = np.asarray(gaussian.Sigma, dtype=np.float64)
@@ -476,27 +428,6 @@ def compute_kl_transported(
         >>> kl.shape
         ()
     """
-    
-    # ========================================================================
-    # NEW: ULTRA-FAST PATH (10x faster - combines transport + KL)
-    # ========================================================================
-    if (_NUMBA_AVAILABLE and 
-        gaussian_i.mu.ndim == 1 and 
-        gaussian_j.mu.ndim == 1 and
-        Omega_ij.ndim == 2):
-        
-        # Convert to float64 for Numba
-        mu_i = np.asarray(gaussian_i.mu, dtype=np.float64)
-        Sigma_i = np.asarray(gaussian_i.Sigma, dtype=np.float64)
-        mu_j = np.asarray(gaussian_j.mu, dtype=np.float64)
-        Sigma_j = np.asarray(gaussian_j.Sigma, dtype=np.float64)
-        Omega = np.asarray(Omega_ij, dtype=np.float64)
-        
-        # Single Numba kernel does transport + KL
-        kl = compute_kl_transported_numba(mu_i, Sigma_i, mu_j, Sigma_j, Omega)
-        
-        return np.float32(kl)
-    
     
     # Import here to avoid circular dependency
     from math_utils.numerical_utils import kl_gaussian

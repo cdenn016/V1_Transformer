@@ -78,106 +78,6 @@ import numpy as np
 from typing import Optional, Tuple
 
 
-# ===========================================================================
-# GPU/CUDA BACKEND INTEGRATION
-# ===========================================================================
-
-try:
-    from math_utils.cuda_kernels import (
-        compute_transport_cupy,
-        rodrigues_formula_cupy,
-        is_cupy_available,
-    )
-    _CUDA_KERNELS_AVAILABLE = is_cupy_available()
-except (ImportError, AttributeError):
-    _CUDA_KERNELS_AVAILABLE = False
-
-# Numba CPU acceleration
-try:
-    from math_utils.numba_kernels import (
-        rodrigues_formula_numba_scalar,
-        rodrigues_formula_numba_batch,
-
-    )
-    _NUMBA_AVAILABLE = True
-except ImportError:
-    _NUMBA_AVAILABLE = False
-
-
-
-
-# ===========================================================================
-# Replace ENTIRE _rodrigues_formula function with this smart version
-# ===========================================================================
-
-def _rodrigues_formula(phi: np.ndarray, eps: float = 1e-8) -> np.ndarray:
-    """
-    Compute exp(phi) in SO(3) using Rodrigues' formula (Numba-accelerated).
-
-    SO(3)-specific closed form. For SO(N)/GL(K) with K>3, use
-    _matrix_exponential_lie_algebra instead.
-
-    Formula:
-        exp(phi) = I + sin(theta)/theta * [phi]_x + (1-cos(theta))/theta^2 * [phi]_x^2
-
-    Args:
-        phi: Axis-angle vectors, shape (*S, 3)
-        eps: Small-angle threshold
-
-    Returns:
-        R: Rotation matrices, shape (*S, 3, 3)
-    """
-    
-    # ========================================================================
-    # FAST PATH: Numba (10-20x faster)
-    # ========================================================================
-    if _NUMBA_AVAILABLE:
-        phi_f64 = np.asarray(phi, dtype=np.float64)
-        
-        if phi.ndim == 1:
-            # Scalar case (single rotation)
-            R = rodrigues_formula_numba_scalar(phi_f64, eps)
-        else:
-            # Batch case (spatial field)
-            R = rodrigues_formula_numba_batch(phi_f64, eps)
-        
-        # Return in original dtype
-        return R.astype(phi.dtype, copy=False)
-    
-    # ========================================================================
-    # FALLBACK: NumPy (if Numba not available)
-    # ========================================================================
-    spatial_shape = phi.shape[:-1]
-    theta = np.linalg.norm(phi, axis=-1, keepdims=True)
-    small_angle = (theta[..., 0] < eps)
-    
-    I = np.eye(3, dtype=phi.dtype)
-    R = np.zeros((*spatial_shape, 3, 3), dtype=phi.dtype)
-    
-    # Small angle: Taylor expansion
-    if np.any(small_angle):
-        phi_small = phi[small_angle]
-        phi_x = _skew_symmetric(phi_small)
-        R[small_angle] = I + phi_x + 0.5 * (phi_x @ phi_x)
-    
-    # Normal angle: Rodrigues formula
-    if np.any(~small_angle):
-        phi_normal = phi[~small_angle]
-        theta_normal = theta[~small_angle, 0]
-        
-        phi_x = _skew_symmetric(phi_normal)
-        c1 = np.sin(theta_normal) / theta_normal
-        c2 = (1 - np.cos(theta_normal)) / (theta_normal ** 2)
-        
-        R[~small_angle] = I + c1[:, None, None] * phi_x + c2[:, None, None] * (phi_x @ phi_x)
-    
-    return R
-
-
-# ===========================================================================
-# OPTIONAL: Also accelerate compute_transport (the main bottleneck)
-# ===========================================================================
-
 def compute_transport(
     phi_i: np.ndarray,
     phi_j: np.ndarray,
@@ -197,14 +97,12 @@ def compute_transport(
     - SO(N): n_gen=N(N-1)/2, phi_dim=N(N-1)/2
     - GL(K): n_gen=K^2, phi_dim=K^2
 
-    Dispatches to CuPy (GPU), Numba (CPU), or NumPy (fallback).
-
     Args:
         phi_i, phi_j: Gauge fields, shape (*S, n_gen)
         generators: Lie algebra generators, shape (n_gen, K, K)
         validate: Check invertibility of result (|det(Omega)| > eps)
         eps: Small-angle threshold / minimum determinant
-        use_gpu: Force GPU computation
+        use_gpu: Ignored (kept for API compatibility)
         project_to_orthogonal: If True, project to SO(K) via SVD.
                               Default False for full GL(K) flexibility.
 
@@ -217,34 +115,6 @@ def compute_transport(
         Orthogonal projection is only needed for specific applications
         (e.g., volume preservation, Haar measure averaging).
     """
-    # Check if input is already on GPU (CuPy array)
-    is_gpu_array = False
-    if _CUDA_KERNELS_AVAILABLE:
-        try:
-            import cupy as cp
-            is_gpu_array = isinstance(phi_i, cp.ndarray)
-        except ImportError:
-            pass
-
-    # GPU path
-    if (_CUDA_KERNELS_AVAILABLE and (is_gpu_array or use_gpu)):
-        import cupy as cp
-        # Transfer to GPU if needed
-        if not is_gpu_array:
-            phi_i_gpu = cp.asarray(phi_i, dtype=cp.float64)
-            phi_j_gpu = cp.asarray(phi_j, dtype=cp.float64)
-            generators_gpu = cp.asarray(generators, dtype=cp.float64)
-        else:
-            phi_i_gpu = phi_i
-            phi_j_gpu = phi_j
-            generators_gpu = cp.asarray(generators, dtype=cp.float64)
-        result = compute_transport_cupy(phi_i_gpu, phi_j_gpu, generators_gpu, eps)
-        # Return on CPU if input was CPU
-        if not is_gpu_array:
-            return cp.asnumpy(result)
-        return result
-
-    # CPU path
     phi_i = np.asarray(phi_i, dtype=np.float64)
     phi_j = np.asarray(phi_j, dtype=np.float64)
     G = np.asarray(generators, dtype=np.float64)
@@ -276,38 +146,8 @@ def compute_transport(
 
 
 
-def _skew_symmetric(v: np.ndarray) -> np.ndarray:
-    """
-    Construct skew-symmetric matrix [v]_× from vector v ∈ ℝ³.
-    
-    For v = [v_x, v_y, v_z]ᵀ:
-    
-        [v]_× = [  0   -v_z   v_y ]
-                [ v_z    0   -v_x ]
-                [-v_y   v_x    0  ]
-    
-    Args:
-        v: Vectors, shape (*S, 3)
-    
-    Returns:
-        v_x: Skew-symmetric matrices, shape (*S, 3, 3)
-    """
-    v_x = v[..., 0]
-    v_y = v[..., 1]
-    v_z = v[..., 2]
-    
-    zero = np.zeros_like(v_x)
-    
-    # Construct rows
-    row1 = np.stack([zero, -v_z, v_y], axis=-1)
-    row2 = np.stack([v_z, zero, -v_x], axis=-1)
-    row3 = np.stack([-v_y, v_x, zero], axis=-1)
-    
-    return np.stack([row1, row2, row3], axis=-2)
-
-
 # =============================================================================
-# General SO(N) Matrix Exponential (K>3 case)
+# General GL(K) Matrix Exponential
 # =============================================================================
 
 def _matrix_exponential_lie_algebra(

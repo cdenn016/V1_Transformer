@@ -4,46 +4,17 @@ Numerical Stability Utilities
 ==============================
 
 KL divergence between Gaussians, safe matrix inversion, and covariance
-sanitization. Dispatches to GPU (CuPy) or Numba when available, with
-a pure-NumPy fallback.
+sanitization. Pure NumPy implementation.
 
 Authors: Chris and Christine
 Created: November 2025
-Updated: December 2025 - Added CUDA/GPU support via backend abstraction
 """
 
 import numpy as np
 
-# ============================================================================
-# GPU/CUDA BACKEND INTEGRATION
-# ============================================================================
-
-try:
-    from math_utils.cuda_kernels import (
-        kl_gaussian_cupy,
-        kl_gaussian_batch_cupy,
-        is_cupy_available,
-    )
-    _CUDA_KERNELS_AVAILABLE = is_cupy_available()
-except ImportError:
-    _CUDA_KERNELS_AVAILABLE = False
 
 # ============================================================================
-# NUMBA INTEGRATION (Windows-safe)
-# ============================================================================
-
-try:
-    from math_utils.numba_kernels import kl_gaussian_numba
-    _NUMBA_AVAILABLE = True
-except ImportError:
-    _NUMBA_AVAILABLE = False
-    # Windows-safe warning (no emoji)
-    import warnings
-    warnings.warn("Numba not available - falling back to NumPy (80x slower)", RuntimeWarning)
-
-
-# ============================================================================
-# SMART KL DIVERGENCE (Numba-accelerated)
+# KL DIVERGENCE
 # ============================================================================
 
 def kl_gaussian(
@@ -56,58 +27,19 @@ def kl_gaussian(
     use_gpu: bool = False
 ):
     """
-    KL divergence KL(q||p) between Gaussians - GPU/Numba-accelerated!
-
-    Acceleration priority:
-    1. GPU (CuPy) - 100x faster for batched operations
-    2. Numba (CPU) - 80x faster than pure NumPy
-    3. NumPy fallback - always available
+    KL divergence KL(q||p) between Gaussians.
 
     Args:
         mu_q, Sigma_q: Source distribution N(μ_q, Σ_q)
         mu_p, Sigma_p: Target distribution N(μ_p, Σ_p)
         eps: Regularization (default: 1e-8)
         return_terms: If True, return dict with term breakdown
-        use_gpu: Force GPU computation (default: False)
+        use_gpu: Ignored (kept for API compatibility)
 
     Returns:
         kl: KL divergence (scalar or array)
         OR (kl, terms) if return_terms=True
     """
-    # Check if input is already on GPU (CuPy array)
-    is_gpu_array = False
-    if _CUDA_KERNELS_AVAILABLE:
-        try:
-            import cupy as cp
-            is_gpu_array = isinstance(mu_q, cp.ndarray)
-        except ImportError:
-            pass
-
-    # GPU path: Use CuPy for GPU arrays or when explicitly requested
-    if (_CUDA_KERNELS_AVAILABLE and
-        (is_gpu_array or use_gpu) and
-        not return_terms and
-        mu_q.ndim == 1 and mu_p.ndim == 1):
-        import cupy as cp
-        # Transfer to GPU if needed
-        if not is_gpu_array:
-            mu_q = cp.asarray(mu_q, dtype=cp.float64)
-            Sigma_q = cp.asarray(Sigma_q, dtype=cp.float64)
-            mu_p = cp.asarray(mu_p, dtype=cp.float64)
-            Sigma_p = cp.asarray(Sigma_p, dtype=cp.float64)
-        return kl_gaussian_cupy(mu_q, Sigma_q, mu_p, Sigma_p, eps)
-
-    # CPU Numba path
-    if _NUMBA_AVAILABLE and not return_terms and eps == 1e-8:
-        if mu_q.ndim == 1 and mu_p.ndim == 1:
-            # Convert to contiguous float64 for Numba (homogeneous dtypes required)
-            mu_q_f64 = np.ascontiguousarray(mu_q, dtype=np.float64)
-            Sigma_q_f64 = np.ascontiguousarray(Sigma_q, dtype=np.float64)
-            mu_p_f64 = np.ascontiguousarray(mu_p, dtype=np.float64)
-            Sigma_p_f64 = np.ascontiguousarray(Sigma_p, dtype=np.float64)
-            return kl_gaussian_numba(mu_q_f64, Sigma_q_f64, mu_p_f64, Sigma_p_f64)
-
-    # FALLBACK: NumPy implementation (handles all edge cases)
     return _kl_gaussian_numpy_impl(mu_q, Sigma_q, mu_p, Sigma_p, eps, return_terms)
 
 
@@ -120,8 +52,7 @@ def _kl_gaussian_numpy_impl(
     return_terms: bool = False
 ):
     """
-    Pure NumPy KL(q||p) implementation, used as fallback when Numba/CuPy
-    are unavailable or when return_terms=True is requested.
+    NumPy KL(q||p) implementation via Cholesky decomposition.
 
     Args:
         mu_q, Sigma_q: Source distribution N(mu_q, Sigma_q)

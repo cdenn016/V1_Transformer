@@ -14,8 +14,6 @@ Modules:
     - push_pull: Pushforward/pullback of Gaussians on the statistical manifold
     - numerical_utils: Safe matrix inversion, KL divergence
     - numerical_monitor: Debug logging for numerical fallback events
-    - numba_kernels: Optional Numba-accelerated kernels
-    - cuda_kernels: Optional CuPy/CUDA-accelerated kernels
 """
 
 # NumPy utilities

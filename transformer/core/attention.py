@@ -46,18 +46,6 @@ from transformer.core.gauge_utils import (
     fused_block_diagonal_kl_full,
 )
 
-# Import our fast math kernels
-try:
-    from math_utils.numba_kernels import (
-        kl_gaussian_numba,
-        compute_kl_transported_numba,
-        push_gaussian_numba,
-    )
-    NUMBA_AVAILABLE = True
-except ImportError:
-    NUMBA_AVAILABLE = False
-    print("⚠️  Numba kernels not available - falling back to PyTorch (slower)")
-
 # Import transport operators
 try:
     from math_utils.transport import compute_transport
@@ -89,7 +77,6 @@ __all__ = [
     'estimate_chunk_size',
 
     # Constants for checking availability
-    'NUMBA_AVAILABLE',
     'TRANSPORT_AVAILABLE',
 ]
 
@@ -440,7 +427,6 @@ def compute_attention_weights(
     kappa: float,              # Temperature
     epsilon: float = 1e-8,     # Numerical stability
     mask: Optional[torch.Tensor] = None,  # (B, N, N) causal mask
-    use_numba: bool = True,
     return_kl: bool = False,   # Return KL matrix for loss computation
     diagonal_covariance: bool = False,  # Use diagonal sigma (B,N,K) instead of full (B,N,K,K)
     cached_transport: Optional[dict] = None,  # Precomputed transport operators (from compute_transport_operators)
@@ -489,7 +475,6 @@ def compute_attention_weights(
         kappa: Temperature parameter (higher = softer attention)
         epsilon: Softmax stability constant
         mask: Optional causal mask (B, N, N) - 0 masks out position
-        use_numba: Use fast Numba kernels if available
         diagonal_covariance: If True, sigma_q is (B,N,K) diagonal variances.
                             Uses O(N²×K) memory instead of O(N²×K²)!
         cached_transport: Optional precomputed transport operators from compute_transport_operators().
@@ -634,14 +619,6 @@ def compute_attention_weights(
                 mu_q, sigma_q, phi, generators, cached_transport,
                 enforce_orthogonal=enforce_orthogonal
             )
-    elif use_numba and NUMBA_AVAILABLE and TRANSPORT_AVAILABLE and not is_cuda:
-        # Fast path: Use Numba kernels (CPU only)
-        # Note: Numba path doesn't support cached_transport (CPU-only fallback)
-        # Numba operates on numpy so pre-allocate buffer (no autograd needed)
-        kl_matrix = torch.zeros(batch_size, num_agents, num_agents, device=device, dtype=dtype)
-        _compute_kl_matrix_numba(
-            mu_q, sigma_q, phi, generators, kl_matrix
-        )
     else:
         # GPU path OR CPU fallback: Pure PyTorch (fully vectorized, CUDA-compatible)
         kl_matrix = _compute_kl_matrix_torch(
@@ -830,12 +807,6 @@ def compute_kl_matrix(
                 mu_q, sigma_q, phi, generators, None,
                 enforce_orthogonal=enforce_orthogonal
             )
-    elif NUMBA_AVAILABLE and TRANSPORT_AVAILABLE and not is_cuda:
-        # Numba operates on numpy so pre-allocate buffer (no autograd needed)
-        kl_matrix = torch.zeros(batch_size, num_agents, num_agents, device=device, dtype=dtype)
-        _compute_kl_matrix_numba(
-            mu_q, sigma_q, phi, generators, kl_matrix
-        )
     else:
         kl_matrix = _compute_kl_matrix_torch(
             mu_q, sigma_q, phi, generators, None,
@@ -844,55 +815,6 @@ def compute_kl_matrix(
         )
 
     return kl_matrix
-
-
-def _compute_kl_matrix_numba(
-    mu_q: torch.Tensor,
-    sigma_q: torch.Tensor,
-    phi: torch.Tensor,
-    generators: torch.Tensor,
-    kl_matrix: torch.Tensor,
-) -> None:
-    """
-    Fast KL matrix computation using Numba kernels.
-
-    Computes KL(q_i || Ω_ij[q_j]) for all pairs (i,j) using:
-    1. Transport q_j → i's frame via Ω_ij
-    2. Compute KL divergence
-
-    Modifies kl_matrix in-place.
-    """
-    batch_size, num_agents, K = mu_q.shape
-
-    # Convert to numpy for Numba
-    mu_np = mu_q.detach().cpu().numpy().astype(np.float64)
-    sigma_np = sigma_q.detach().cpu().numpy().astype(np.float64)
-    phi_np = phi.detach().cpu().numpy().astype(np.float64)
-    G_np = generators.detach().cpu().numpy().astype(np.float64)
-
-    # Compute KL matrix
-    for b in range(batch_size):
-        for i in range(num_agents):
-            for j in range(num_agents):
-                # Compute transport operator Ω_ij
-                Omega_ij = compute_transport(
-                    phi_np[b, i],      # φ_i
-                    phi_np[b, j],      # φ_j
-                    G_np,
-                    validate=False,
-                    eps=1e-8
-                )  # (K, K)
-
-                # Compute KL(q_i || Ω_ij[q_j]) in one shot
-                kl_ij = compute_kl_transported_numba(
-                    mu_np[b, i],       # μ_i
-                    sigma_np[b, i],    # Σ_i
-                    mu_np[b, j],       # μ_j
-                    sigma_np[b, j],    # Σ_j
-                    Omega_ij           # Ω_ij
-                )
-
-                kl_matrix[b, i, j] = kl_ij
 
 
 def _compute_kl_matrix_torch(
@@ -2943,7 +2865,7 @@ if __name__ == '__main__':
     # Test attention weights
     print(f"\n[2] Computing KL-based attention weights...")
     beta = compute_attention_weights(
-        mu_q, sigma_q, phi, G, kappa, use_numba=False  # Use PyTorch for testing
+        mu_q, sigma_q, phi, G, kappa  # Use PyTorch
     )
     print(f"    β shape: {beta.shape}")
     print(f"    β sum over keys: {beta.sum(dim=-1)[0, 0].item():.4f} (should ≈ 1)")
@@ -2954,7 +2876,7 @@ if __name__ == '__main__':
     print(f"\n[3] Testing causal mask...")
     mask = torch.tril(torch.ones(N, N)).unsqueeze(0).expand(B, -1, -1)
     beta_causal = compute_attention_weights(
-        mu_q, sigma_q, phi, G, kappa, mask=mask, use_numba=False
+        mu_q, sigma_q, phi, G, kappa, mask=mask
     )
     print(f"    Causal β[0, 0, :5]: {beta_causal[0, 0, :5]}")
     print(f"    Future positions should be ~0: {beta_causal[0, 0, 5:].sum().item():.6f}")
