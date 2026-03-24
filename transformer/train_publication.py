@@ -241,7 +241,7 @@ EM_CONFIG = {
     'max_steps':             7500,
     
     'n_layers':              1,
-    'ffn_n_iterations':      1,
+    'ffn_n_iterations':      3,
     
     'gauge_dim':                          10,
     'irrep_spec':            [('fund', 1, 10)],
@@ -250,8 +250,8 @@ EM_CONFIG = {
     'mask_self_attention':   False,  # Prevent attention collapse?
   
     # === M-step: implicit differentiation ===
-    'implicit_em':           False,
-    'amortized_inference':   True,
+    'implicit_em':           True,
+    'amortized_inference':   False,
     'use_obs_in_vfe':        False,  #cheats when true
        
     # === M-step: Optimizer ===  
@@ -286,7 +286,7 @@ EM_CONFIG = {
 
 
     'diagonal_covariance':      True,
-    'exact_diagonal_transport': False,  # exact diagonal transport - more expensive
+    'exact_diagonal_transport': True,   # exact Ω@diag(σ)@Ω^T transport (correct gauge covariance)
                                         # If True, force Σ = σ²I (scalar variance × identity)
     'isotropic_covariance':     False,
     'enforce_orthogonal':       False,    

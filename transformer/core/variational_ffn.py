@@ -3451,6 +3451,21 @@ class VariationalFFNDynamic(nn.Module):
         else:
             sigma_p = sigma.detach().clone()
 
+        # E-step sigma_p floor: prevent 1/σ_p blowup in self-coupling gradient.
+        # PriorBank now allows σ_p down to 0.01 (for sharp decode logits), but
+        # the E-step gradient ∂KL(q||p)/∂σ = 0.5·(1/σ_p - 1/σ_q) needs a higher
+        # floor to prevent nat_grad_sigma explosion (at σ_p=0.01, 1/σ_p=100).
+        # Floor of 0.1 caps 1/σ_p at 10.0 — tight enough for good gradients,
+        # loose enough for precision learning.
+        _E_STEP_SIGMA_FLOOR = 0.1
+        if sigma_p.dim() == 3:
+            sigma_p = sigma_p.clamp(min=_E_STEP_SIGMA_FLOOR)
+        else:
+            # Full covariance: clamp diagonal elements
+            diag_vals = torch.diagonal(sigma_p, dim1=-2, dim2=-1)
+            diag_clamped = diag_vals.clamp(min=_E_STEP_SIGMA_FLOOR)
+            sigma_p = sigma_p + torch.diag_embed(diag_clamped - diag_vals)
+
         # Convert diagonal sigma_p to full covariance if needed (PriorBank returns diagonal)
         if not is_diagonal and sigma_p.dim() == 3:
             sigma_p = torch.diag_embed(sigma_p)
