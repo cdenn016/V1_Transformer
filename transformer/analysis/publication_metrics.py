@@ -462,15 +462,13 @@ class PublicationFigures:
 
         steps = [s.step for s in history]
 
-        # --- M-step (p) gradient norms: backprop on embedding tables ---
+        # --- M-step (p) gradient norms: embedding parameters only ---
         fig_m, ax_m = plt.subplots(1, 1, figsize=(7, 4.5))
         m_groups = [
             ('grad_norm_total', 'Total', 'k-', 0.8, 1.5),
             ('grad_norm_mu', r'$\mu$ embed', 'b--', 0.6, 1),
             ('grad_norm_sigma', r'$\Sigma$ embed', 'g--', 0.6, 1),
             ('grad_norm_phi', r'$\varphi$ embed', 'r--', 0.6, 1),
-            ('grad_norm_ffn', 'FFN / decoder', 'm:', 0.5, 1),
-            ('grad_norm_other', 'Other', 'c:', 0.5, 1),
         ]
         for attr, label, style, alpha, lw in m_groups:
             vals = [getattr(s, attr) for s in history]
@@ -478,12 +476,36 @@ class PublicationFigures:
                 ax_m.semilogy(steps, vals, style, label=label, alpha=alpha, linewidth=lw)
         ax_m.set_xlabel('Training Step')
         ax_m.set_ylabel('Gradient Norm')
-        ax_m.set_title(r'M-step ($p$) Gradient Norms — Raw $\partial L / \partial \theta$')
+        ax_m.set_title(r'M-step ($p$) Gradient Norms — Embedding Parameters')
         ax_m.legend(loc='upper right', ncol=2)
         ax_m.grid(True, alpha=0.3)
         format_step_axis(ax_m)
         fig_m.tight_layout()
         fig_m.savefig(self.save_dir / f"{save_name}_mstep.png", dpi=300)
+
+        # --- M-step (p) gradient norms: FFN / decoder / other ---
+        fig_d, ax_d = plt.subplots(1, 1, figsize=(7, 4.5))
+        d_groups = [
+            ('grad_norm_ffn', 'FFN / decoder', 'm-', 0.7, 1.5),
+            ('grad_norm_other', 'Other', 'c--', 0.6, 1),
+        ]
+        has_decoder_data = any(
+            getattr(s, 'grad_norm_ffn', 0) > 0 or getattr(s, 'grad_norm_other', 0) > 0
+            for s in history
+        )
+        if has_decoder_data:
+            for attr, label, style, alpha, lw in d_groups:
+                vals = [getattr(s, attr) for s in history]
+                if any(v > 0 for v in vals):
+                    ax_d.semilogy(steps, vals, style, label=label, alpha=alpha, linewidth=lw)
+        ax_d.set_xlabel('Training Step')
+        ax_d.set_ylabel('Gradient Norm')
+        ax_d.set_title(r'M-step ($p$) Gradient Norms — Decoder / Other')
+        ax_d.legend(loc='upper right')
+        ax_d.grid(True, alpha=0.3)
+        format_step_axis(ax_d)
+        fig_d.tight_layout()
+        fig_d.savefig(self.save_dir / f"{save_name}_decoder.png", dpi=300)
 
         # --- E-step (q) gradient norms: natural gradients from VFE iterations ---
         fig_e, ax_e = plt.subplots(1, 1, figsize=(7, 4.5))
@@ -516,7 +538,7 @@ class PublicationFigures:
         fig_e.tight_layout()
         fig_e.savefig(self.save_dir / f"{save_name}_estep.png", dpi=300)
 
-        return fig_m, fig_e
+        return fig_m, fig_e, fig_d
 
     def plot_mstep_fisher_preconditioning(
         self,
