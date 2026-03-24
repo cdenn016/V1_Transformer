@@ -229,24 +229,23 @@ STANDARD_CONFIG = {
 #   Hierarchy: h(fixed) → s(embed params) → p=s → q(E-step beliefs) → obs
 # =============================================================================
 
-
-
+_DEBUG_VFE_GRADS = False
 EM_CONFIG = {
     # === Architecture ===
     'vocab_size':            50257,
     'embed_dim':             10,
-    'max_seq_len':           64,
+    'max_seq_len':           128,
     
-    'batch_size':            256, 
-    'max_steps':             7500,
+    'batch_size':            64, 
+    'max_steps':             15000,
     
     'n_layers':              1,
-    'ffn_n_iterations':      3,
+    'ffn_n_iterations':      1,
     
     'gauge_dim':                          10,
     'irrep_spec':            [('fund', 1, 10)],
 
-    'use_prior_bank':        True,
+    'use_prior_bank':        False,
     'mask_self_attention':   False,  # Prevent attention collapse?
   
     # === M-step: implicit differentiation ===
@@ -264,20 +263,22 @@ EM_CONFIG = {
     'use_residual':          True,
     'use_output_projection': True,
     'multihead_vfe':         True,
-    'ffn_learnable_lr':      True,  # E-step
+    
     'evolve_sigma':          True,
     'evolve_phi':            True,
     'evolve_phi_e_step':     True,
 
     # === E-step dynamics ===
-    'ffn_alpha':             1.0,       # Prior coupling inside VFE E-step
+    'ffn_learnable_lr':      True,  # E-step
+    
+    'ffn_alpha':             1,       # Prior coupling inside VFE E-step
     'ffn_lambda_belief':     1.0,       # Belief alignment inside VFE E-step
-    'learnable_alpha':       False,    
-    'ffn_learnable_alpha':   False,   # False = fixed scalar α; True = adaptive α_k = c0/(b0 + KL_k)
+    'learnable_alpha':       True,    
+    'ffn_learnable_alpha':   True,   # when true Adaptive α_i = c0/(b0 + KL) per dimension
 
-    'e_step_mu_lr':    0.1,    # E-step μ natural gradient step size (used when ffn_learnable_lr=False)
-    'e_step_sigma_lr': 0.001,  # E-step σ trust region scale (used when ffn_learnable_lr=False)
-    'e_step_phi_lr':   0.05,   # E-step φ descent step size (decoupled from M-step phi_lr)
+    'e_step_mu_lr':    0.1,    # whitened steps ~0.1, well within trust=2.0
+    'e_step_sigma_lr': 0.05,   # conservative sigma movement
+    'e_step_phi_lr':   0.05,   # keep as-is, already reasonable
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
     'gauge_group':      'GLK',
@@ -286,7 +287,7 @@ EM_CONFIG = {
 
 
     'diagonal_covariance':      True,
-    'exact_diagonal_transport': True,   # exact Ω@diag(σ)@Ω^T transport (correct gauge covariance)
+    'exact_diagonal_transport': False,  # exact diagonal transport - more expensive
                                         # If True, force Σ = σ²I (scalar variance × identity)
     'isotropic_covariance':     False,
     'enforce_orthogonal':       False,    
@@ -298,14 +299,17 @@ EM_CONFIG = {
     # CE enters through M-step via IFT (s_k ≈ 0.5 from fixed ffn_alpha=1).
     # alpha=0: KL(q*||p) homogenizes (q* is smoothed, not data-grounded).
     # beta=0: alignment term is vacuum-seeking. E-step handles it internally.
-
+    
     'alpha':        0.0,
     'beta':         0.0,
-    'alpha_phi':    0.1,            # Gauge prior: (α_φ/2)||φ||²
-    'lambda_hyper': 0.0,            # Sigma hyperprior: KL(s||h) with fixed Σ_h
+    'alpha_phi':    0.0,            # Gauge prior: (α_φ/2)||φ||²
+    'lambda_hyper': 0.0,            # KL(s||h) with fixed Σ_h set if if using embed-weight-decay 
     'lambda_gamma': 0.0,
     'kappa_gamma':  1.0,
-
+    
+    'embed_weight_decay':  0.01,   #acts like lambda_hyper N(o, 1/2sig) set zero when using lambda_hyper/alpha_phi
+    'weight_decay':        0.01,   #acts on non-vfe params
+    
     # === Phi gradient geometry ===
     'phi_natural_gradient':       'killing',
     'use_killing_form':           True,
@@ -330,12 +334,12 @@ EM_CONFIG = {
     # mu_embed and log_sigma_diag have dual roles: they initialize E-step
     # beliefs (q₀) AND serve as prior parameters (μ_p, σ_p), so these rates
     # indirectly affect E-step initialization speed.
-    'mu_lr':         0.05,     # Prior mean embeddings (μ_p)
-    'sigma_lr':      0.0125,   # Prior covariance embeddings (log σ_p)
-    'phi_lr':        0.0075,   # Gauge frame embeddings (φ)
-    'ffn_lr':        0.05,     # FFN params (raw_c0, raw_b0, raw_lr)
-    'attention_lr':  0.005,    # Attention params (W_O, constant_omega)
-    'output_lr':     0.05,     # Output projection (vocab logits)
+    'mu_lr':        0.05, # Prior mean embeddings (μ_p)
+    'sigma_lr':     0.0125, # Prior covariance embeddings (log σ_p)
+    'phi_lr':       0.0075, # Gauge frame embeddings (φ)
+    'ffn_lr':       0.05, # FFN params (raw_c0, raw_b0, raw_lr)
+    'attention_lr': 0.005, # Attention params (W_O, constant_omega)
+    'output_lr':    0.05, # Output projection (vocab logits)
     
     # === Logging ===
     'log_interval':               100,
@@ -377,16 +381,14 @@ EM_CONFIG = {
     'ffn_mode': 'VFE_dynamic',
     
     # === Regularization ===
-    'weight_decay':  0.01,
+    'sigma_max':     10.0,
     'grad_clip':     1.0,
-    'hidden_dim':  508,
+    'hidden_dim':    508,
     'warmup_steps':  100,
     'num_workers':   10,
 
 
 }
-
-
 # =============================================================================
 # CONFIG: AMORTIZED — Straight-through gradient, no E/M separation (mode='amortized')
 # =============================================================================
