@@ -3416,64 +3416,45 @@ class VariationalFFNDynamic(nn.Module):
         # =====================================================================
         # PriorBank: Use token-dependent priors for VFE dynamics
         # =====================================================================
-        if self.use_prior_bank and self.prior_bank is not None:
-            # Token-dependent priors via PriorBank
-            if token_ids is None:
-                raise ValueError(
-                    "token_ids required when use_prior_bank=True! "
-                    "Pass token_ids to forward() for PriorBank lookup."
-                )
-
-            # Get token-dependent priors from PriorBank
-            _bank_out = self.prior_bank.encode(token_ids)  # (B, N, K)
-            if len(_bank_out) == 4:
-                mu_p_from_bank, sigma_p_from_bank, _, _ = _bank_out
-            else:
-                mu_p_from_bank, sigma_p_from_bank, _ = _bank_out
-
-            # Use PriorBank priors for VFE dynamics.
-            # mu_p: live when amortized (gradient is well-conditioned: -α/σ_p).
-            # Detached when non-amortized or implicit_em (same logic as standard path).
-            # sigma_p: always detached (M-step parameter; 1/σ_p in E-step creates feedback).
-            if self.amortized_inference and not self.implicit_em:
-                mu_p_current = mu_p_from_bank
-            else:
-                mu_p_current = mu_p_from_bank.detach()
-
-            # Convert diagonal sigma_p to full covariance if needed
-            if is_diagonal:
-                sigma_p = sigma_p_from_bank.detach()
-            else:
-                sigma_p = torch.diag_embed(sigma_p_from_bank.detach())
-
-        else:
-            # Standard mode: use embedding priors
-            if self.amortized_inference and not self.implicit_em:
-                # Amortized: gradient flows through mu_p → embeddings learn good E-step init.
-                # mu_p gradient is well-conditioned: d(grad)/d(mu_p) = -α/σ_p, no feedback loop.
-                #
-                # When implicit_em=True, the IFT scale factor is the sole gradient path
-                # to embeddings (via ImplicitEMGradient.apply after the E-step). Keeping
-                # mu_p live here would double-count: embeddings receive BOTH the IFT-scaled
-                # gradient AND the straight-through gradient through self-coupling.
-                mu_p_current = mu_prior.clone()
-            else:
-                # Non-amortized (or implicit_em): detach priors (fixed reference)
-                mu_p_current = mu_prior.detach().clone()
-
-            # sigma_p is ALWAYS detached in the E-step: it is an M-step parameter (Level 2).
-            # The E-step treats (μ_p, σ_p) as fixed while inferring q. Letting CE gradient
-            # flow through the E-step's 1/σ_p terms creates positive feedback: smaller σ_p
-            # → larger gradient → even smaller σ_p. The M-step loss (lambda_hyper · KL(s||h))
-            # provides the correct, bounded gradient for sigma learning.
+        # =====================================================================
+        # Prior Setup: mu_p and sigma_p for VFE self-coupling
+        # =====================================================================
+        # Use mu_prior / sigma_prior passed from model.py for BOTH PriorBank
+        # and standard embedding paths.  These are already in the correct
+        # coordinate frame (cross_head_perm applied).  The FFN must NOT
+        # re-encode from PriorBank — that returns un-permuted priors which
+        # would misalign with the permuted beliefs in the VFE loop.
+        #
+        # mu_p: live when amortized (gradient is well-conditioned: -α/σ_p).
+        # Detached when non-amortized or implicit_em.
+        # sigma_p: ALWAYS detached (M-step parameter; 1/σ_p in E-step
+        # creates positive feedback).
+        if self.amortized_inference and not self.implicit_em:
+            # Amortized: gradient flows through mu_p → embeddings learn good E-step init.
+            # mu_p gradient is well-conditioned: d(grad)/d(mu_p) = -α/σ_p, no feedback loop.
             #
-            # Use the embedding prior sigma when available (proper prior reference).
-            # Previously used sigma.detach() (the current belief sigma), which made
-            # sigma_p ≈ sigma_q and silenced the self-coupling sigma gradient.
-            if sigma_prior is not None:
-                sigma_p = sigma_prior.detach().clone()
-            else:
-                sigma_p = sigma.detach().clone()
+            # When implicit_em=True, the IFT scale factor is the sole gradient path
+            # to embeddings (via ImplicitEMGradient.apply after the E-step). Keeping
+            # mu_p live here would double-count: embeddings receive BOTH the IFT-scaled
+            # gradient AND the straight-through gradient through self-coupling.
+            mu_p_current = mu_prior.clone()
+        else:
+            # Non-amortized (or implicit_em): detach priors (fixed reference)
+            mu_p_current = mu_prior.detach().clone()
+
+        # sigma_p is ALWAYS detached in the E-step: it is an M-step parameter (Level 2).
+        # The E-step treats (μ_p, σ_p) as fixed while inferring q. Letting CE gradient
+        # flow through the E-step's 1/σ_p terms creates positive feedback: smaller σ_p
+        # → larger gradient → even smaller σ_p. The M-step loss (lambda_hyper · KL(s||h))
+        # provides the correct, bounded gradient for sigma learning.
+        if sigma_prior is not None:
+            sigma_p = sigma_prior.detach().clone()
+        else:
+            sigma_p = sigma.detach().clone()
+
+        # Convert diagonal sigma_p to full covariance if needed (PriorBank returns diagonal)
+        if not is_diagonal and sigma_p.dim() == 3:
+            sigma_p = torch.diag_embed(sigma_p)
 
 
         # Current state (will evolve)
