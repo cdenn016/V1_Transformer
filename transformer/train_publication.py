@@ -90,7 +90,7 @@ from math_utils.numerical_monitor import flush as _flush_numerical_events
 # Primary modes:
 #   'standard'   - Dot-product attention + MLP baseline (backprop)
 #   'em'         - Gauge VFE + IFT implicit differentiation M-step (backprop)
-#   'amortized'  - Gauge VFE + straight-through gradient (no E/M separation)
+#   'em' + amortized_inference=True  - Gauge VFE + straight-through gradient (no E/M separation)
 #   'hebbian'    - Gauge VFE + P-flow/delta-rule (no backprop)
 #   'pure_vfe'   - Pure natural gradient E/M (no autograd)
 #
@@ -2343,10 +2343,16 @@ def run_single_experiment(
         attention_lr=config.get(
             'attention_lr', config['ffn_lr'] if ffn_mode == 'standard' else config['phi_lr']),
         ffn_lr=config['ffn_lr'],
-        output_lr=config['ffn_lr'],
+        output_lr=config.get('output_lr', config['ffn_lr']),
 
         weight_decay=config['weight_decay'],
+        embed_weight_decay=config.get('embed_weight_decay', None),
         grad_clip=config['grad_clip'],
+
+        # M-step optimizer type
+        optimizer_type=config.get('optimizer_type', 'adamw'),
+        fisher_ema_decay=config.get('fisher_ema_decay', 0.95),
+        fisher_damping=config.get('fisher_damping', 1e-4),
 
         # Free energy loss weights
         alpha=config['alpha'],
@@ -3031,14 +3037,10 @@ def main():
                             # Primary modes
                             'standard',                 # Dot-product attention + MLP baseline
                             'em',                       # Gauge VFE + IFT implicit differentiation M-step
-                            # Gauge VFE + straight-through (no E/M separation)
-                            'amortized',
                             # Gauge VFE + P-flow/delta-rule (no backprop)
                             'hebbian',
                             # Pure natural gradient (no autograd)
                             'pure_vfe',
-                            # Backward compat alias
-                            'VFE_dynamic',              # → 'amortized'
                             # Peer review ablations
                             # (M2b) attention-only at d_model=90
                             'standard_attn_only',
@@ -3108,8 +3110,7 @@ def main():
     # =================================================================
     # Primary modes:
     #   standard   → STANDARD_CONFIG     Dot-product attention + MLP
-    #   em         → EM_CONFIG           Gauge VFE + IFT M-step (backprop)
-    #   amortized  → AMORTIZED_CONFIG    Gauge VFE + straight-through (no E/M separation)
+    #   em         → EM_CONFIG           Gauge VFE + IFT M-step (toggle amortized_inference in config)
     #   hebbian    → HEBBIAN_CONFIG      Gauge VFE + P-flow/delta-rule (no backprop)
     #   pure_vfe   → PURE_VFE_CONFIG     Pure natural gradient (no autograd)
     # =================================================================
@@ -3138,7 +3139,6 @@ def main():
         print("="*70 + "\n")
         config = EM_CONFIG.copy()
         ffn_mode = 'VFE_dynamic'
-
 
     elif mode == 'hebbian':
         print("\n" + "="*70)
@@ -3205,7 +3205,7 @@ def main():
 
     else:
         print(f"\nError: Unknown mode '{mode}'")
-        print("Valid modes: standard, em, amortized, hebbian, pure_vfe, "
+        print("Valid modes: standard, em, hebbian, pure_vfe, "
               "standard_attn_only, standard_param_equalized, standard_rope, standard_rope_d90")
         return
 
