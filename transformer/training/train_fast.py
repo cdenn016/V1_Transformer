@@ -165,6 +165,14 @@ class FastTrainingConfig:
     use_killing_form: bool = False             # Cartan decomposition preconditioning for phi grads
     killing_form_sym_dampening: float = 0.1    # Dampening for non-compact (symmetric) directions
 
+    # M-step optimizer type
+    # 'adamw': Standard AdamW (diagonal Fisher via EMA of g²)
+    # 'riemannian_adam': AdamW + Killing metric on phi + Fisher on mu
+    # 'natural_gradient': Per-token K×K empirical Fisher blocks
+    optimizer_type: str = 'adamw'
+    fisher_ema_decay: float = 0.95   # EMA decay for Fisher estimation (natural_gradient only)
+    fisher_damping: float = 1e-4     # Tikhonov regularization λI (natural_gradient only)
+
     # Ablation toggles (for PPL regression experiments)
     use_exp_map_retraction: bool = True   # True=exp map, False=linear+Cholesky (original)
     use_full_nat_grad: bool = True        # True=Σ@∇@Σ, False=diag approx (original)
@@ -265,14 +273,19 @@ class FastTrainer:
 
     def _create_optimizer(self) -> torch.optim.Optimizer:
         """
-        Create AdamW optimizer with per-parameter-type learning rates.
+        Create optimizer with per-parameter-type learning rates.
+
+        Dispatches on config.optimizer_type:
+            'adamw': Standard AdamW (default)
+            'riemannian_adam': AdamW + Killing/Fisher preconditioning
+            'natural_gradient': Per-token block-diagonal empirical Fisher
 
         For gauge models, creates up to 6 groups (mu, sigma, phi, attention,
         ffn, output). For StandardTransformerLM, splits into decay vs no-decay
         groups following GPT-2/3 convention.
 
         Returns:
-            AdamW optimizer with parameter groups.
+            Configured optimizer with parameter groups.
         """
         # Collect parameters by type
         mu_params = []
@@ -401,11 +414,57 @@ class FastTrainer:
             })
             print(f"  Parameter group 'no_decay': {len(no_decay_params)} tensors @ lr={self.config.ffn_lr} (embeddings, LN, biases)")
 
-        optimizer = torch.optim.AdamW(
-            param_groups,
-            betas=(self.config.beta1, self.config.beta2),
-            eps=self.config.eps,
-        )
+        optimizer_type = getattr(self.config, 'optimizer_type', 'adamw')
+
+        if optimizer_type == 'riemannian_adam':
+            from transformer.training.optimizer import RiemannianAdamW, compute_killing_metric_inv
+            killing_inv = None
+            generators = getattr(self.model, 'generators', None)
+            if generators is not None:
+                killing_inv = compute_killing_metric_inv(generators)
+                print(f"  Riemannian Adam: Killing metric from {generators.shape[0]} generators")
+            else:
+                print("  Riemannian Adam: No generators found; phi preconditioning disabled")
+            optimizer = RiemannianAdamW(
+                param_groups,
+                model=self.model,
+                killing_inv=killing_inv,
+                betas=(self.config.beta1, self.config.beta2),
+                eps=self.config.eps,
+            )
+
+        elif optimizer_type == 'natural_gradient':
+            from transformer.training.optimizer import NaturalGradientOptimizer
+            ema_decay = getattr(self.config, 'fisher_ema_decay', 0.95)
+            damping = getattr(self.config, 'fisher_damping', 1e-4)
+            # Estimate memory cost
+            total_fisher_params = 0
+            for group in param_groups:
+                for p in group['params']:
+                    if p.dim() == 2 and p.shape[-1] >= 4:
+                        V, K = p.shape
+                        total_fisher_params += V * K * K
+            mem_mb = total_fisher_params * 4 / (1024 ** 2)
+            print(f"  Natural Gradient Optimizer:")
+            print(f"    Fisher memory: {mem_mb:.0f} MB ({total_fisher_params:,} floats)")
+            print(f"    EMA decay: {ema_decay}, damping: {damping}")
+            if mem_mb > 500:
+                print(f"    Warning: Fisher storage is large ({mem_mb:.0f} MB)")
+            optimizer = NaturalGradientOptimizer(
+                param_groups,
+                lr=self.config.mu_lr,  # base LR (per-group LRs override)
+                weight_decay=self.config.weight_decay,
+                ema_decay=ema_decay,
+                damping=damping,
+            )
+
+        else:
+            # Default: standard AdamW
+            optimizer = torch.optim.AdamW(
+                param_groups,
+                betas=(self.config.beta1, self.config.beta2),
+                eps=self.config.eps,
+            )
 
         return optimizer
 
