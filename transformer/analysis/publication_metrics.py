@@ -131,6 +131,11 @@ class TrainingSnapshot:
     e_step_grad_phi: float = 0.0
     e_step_nat_grad_mu_clipped: float = 0.0
     e_step_nat_grad_sigma_clipped: float = 0.0
+    # M-step Fisher-preconditioned gradient norms (from NaturalGradientOptimizer)
+    mstep_nat_grad_mu: float = 0.0
+    mstep_nat_grad_sigma: float = 0.0
+    mstep_nat_grad_phi: float = 0.0
+    mstep_nat_grad_other: float = 0.0
     lr_current: float = 0.0
     tokens_per_sec: float = 0.0
     step_time: float = 0.0
@@ -191,13 +196,28 @@ class TrainingTracker:
         batch_size: int = 1,
         seq_len: int = 1,
         e_step_norms: Optional[Dict[str, float]] = None,
+        mstep_natural_norms: Optional[Dict[str, Dict[str, float]]] = None,
     ):
-        """Record a training step."""
+        """Record a training step.
+
+        Args:
+            mstep_natural_norms: Per-group dict from NaturalGradientOptimizer.get_grad_norms().
+                Maps group name → {'euclidean': float, 'natural': float}.
+        """
         tokens_per_sec = (batch_size * seq_len) / step_time if step_time > 0 else 0
 
         train_ce = train_metrics.get('ce_loss', train_metrics.get('ce', 0))
         train_bpc = train_ce / math.log(2) if train_ce > 0 else 0
         train_ppl = math.exp(min(train_ce, 20)) if train_ce > 0 else float('inf')
+
+        # Extract M-step natural gradient norms per group
+        def _mstep_nat(group_name: str) -> float:
+            if mstep_natural_norms is None:
+                return 0.0
+            entry = mstep_natural_norms.get(group_name, None)
+            if entry is None:
+                return 0.0
+            return entry.get('natural', 0.0)
 
         snapshot = TrainingSnapshot(
             step=step,
@@ -218,6 +238,10 @@ class TrainingTracker:
             e_step_grad_phi=e_step_norms.get('grad_phi', 0) if e_step_norms else 0,
             e_step_nat_grad_mu_clipped=e_step_norms.get('nat_grad_mu_clipped', 0) if e_step_norms else 0,
             e_step_nat_grad_sigma_clipped=e_step_norms.get('nat_grad_sigma_clipped', 0) if e_step_norms else 0,
+            mstep_nat_grad_mu=_mstep_nat('mu_embed'),
+            mstep_nat_grad_sigma=_mstep_nat('sigma_embed'),
+            mstep_nat_grad_phi=_mstep_nat('phi_embed'),
+            mstep_nat_grad_other=_mstep_nat('output'),
             lr_current=lr,
             tokens_per_sec=tokens_per_sec,
             step_time=step_time,
@@ -454,7 +478,7 @@ class PublicationFigures:
                 ax_m.semilogy(steps, vals, style, label=label, alpha=alpha, linewidth=lw)
         ax_m.set_xlabel('Training Step')
         ax_m.set_ylabel('Gradient Norm')
-        ax_m.set_title('M-step (p) Gradient Norms — Backprop on Parameters')
+        ax_m.set_title(r'M-step ($p$) Gradient Norms — Raw $\partial L / \partial \theta$')
         ax_m.legend(loc='upper right', ncol=2)
         ax_m.grid(True, alpha=0.3)
         format_step_axis(ax_m)
@@ -493,6 +517,89 @@ class PublicationFigures:
         fig_e.savefig(self.save_dir / f"{save_name}_estep.png", dpi=300)
 
         return fig_m, fig_e
+
+    def plot_mstep_fisher_preconditioning(
+        self,
+        tracker: TrainingTracker,
+        save_name: str = "mstep_fisher_preconditioning",
+        start_step: int = 100,
+    ) -> "Any":
+        r"""Plot M-step raw vs Fisher-preconditioned gradient norms.
+
+        Shows per-parameter-group comparison of $\|\partial L / \partial \theta\|$
+        (Euclidean) vs $\|\hat{F}^{-1} \partial L / \partial \theta\|$
+        (natural gradient after Fisher inversion). The ratio between these
+        curves reveals how much the empirical Fisher reshapes the update
+        direction for each parameter type.
+
+        Only produces output when the NaturalGradientOptimizer is active
+        and has logged per-group norms.
+
+        Args:
+            tracker: TrainingTracker with recorded history
+            save_name: Filename for saved figure
+            start_step: Skip initial steps to avoid transient spikes
+
+        Returns:
+            matplotlib Figure, or None if no M-step natural gradient data
+        """
+        import matplotlib.pyplot as plt
+
+        history = [s for s in tracker.history if s.step >= start_step]
+        if not history:
+            return None
+
+        # Check if any M-step natural gradient data exists
+        has_data = any(
+            getattr(s, 'mstep_nat_grad_mu', 0) > 0
+            or getattr(s, 'mstep_nat_grad_sigma', 0) > 0
+            or getattr(s, 'mstep_nat_grad_phi', 0) > 0
+            for s in history
+        )
+        if not has_data:
+            return None
+
+        steps = [s.step for s in history]
+
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
+
+        # Per-group: raw (Euclidean) vs natural (Fisher-preconditioned)
+        groups = [
+            (r'$\mu$ embed', 'grad_norm_mu', 'mstep_nat_grad_mu', 'tab:blue'),
+            (r'$\Sigma$ embed', 'grad_norm_sigma', 'mstep_nat_grad_sigma', 'tab:green'),
+            (r'$\varphi$ embed', 'grad_norm_phi', 'mstep_nat_grad_phi', 'tab:red'),
+        ]
+
+        for ax, (label, eucl_attr, nat_attr, color) in zip(axes, groups):
+            eucl_vals = [getattr(s, eucl_attr) for s in history]
+            nat_vals = [getattr(s, nat_attr) for s in history]
+
+            has_eucl = any(v > 0 for v in eucl_vals)
+            has_nat = any(v > 0 for v in nat_vals)
+
+            if has_eucl:
+                ax.semilogy(steps, eucl_vals, '-', color=color, alpha=0.7,
+                           linewidth=1.5, label=r'Euclidean $\|g\|$')
+            if has_nat:
+                ax.semilogy(steps, nat_vals, '--', color=color, alpha=0.7,
+                           linewidth=1.5, label=r'Natural $\|\hat{F}^{-1}g\|$')
+
+            ax.set_xlabel('Training Step')
+            ax.set_ylabel('Gradient Norm')
+            ax.set_title(label)
+            ax.legend(loc='upper right')
+            ax.grid(True, alpha=0.3)
+            format_step_axis(ax)
+
+        fig.suptitle(
+            r'M-step Fisher Preconditioning: $\|g\|$ vs $\|\hat{F}^{-1}g\|$',
+            fontsize=13, y=1.02,
+        )
+        fig.tight_layout()
+        fig.savefig(self.save_dir / f"{save_name}.png", dpi=300,
+                   bbox_inches='tight')
+
+        return fig
 
     def plot_attention_heatmap(
         self,
@@ -914,11 +1021,13 @@ class PublicationMetrics:
         batch_size: int = 1,
         seq_len: int = 1,
         e_step_norms: Optional[Dict[str, float]] = None,
+        mstep_natural_norms: Optional[Dict[str, Dict[str, float]]] = None,
     ):
         """Record training step metrics."""
         self.tracker.record(step, epoch, train_metrics, grad_norms,
                            lr, step_time, batch_size, seq_len,
-                           e_step_norms=e_step_norms)
+                           e_step_norms=e_step_norms,
+                           mstep_natural_norms=mstep_natural_norms)
 
     def record_training_step(
         self,
@@ -932,13 +1041,15 @@ class PublicationMetrics:
         batch_size: int = 1,
         seq_len: int = 1,
         e_step_norms: Optional[Dict[str, float]] = None,
+        mstep_natural_norms: Optional[Dict[str, Dict[str, float]]] = None,
     ):
         """Record training step metrics (compatibility wrapper)."""
         # Extract lr from lrs dict if provided
         lr = lrs.get('mu_embed', 0.0) if lrs else 0.0
         self.tracker.record(step, epoch, train_metrics, grad_norms,
                            lr, step_time, batch_size, seq_len,
-                           e_step_norms=e_step_norms)
+                           e_step_norms=e_step_norms,
+                           mstep_natural_norms=mstep_natural_norms)
 
     def record_validation(self, step: int, val_metrics: Dict[str, float]):
         """Record validation metrics."""
@@ -1464,6 +1575,15 @@ class PublicationMetrics:
             plt.close('all')
         except Exception as e:
             print(f"[WARN] Could not generate split gradient norms: {e}")
+
+        # M-step Fisher preconditioning (raw vs natural gradient)
+        try:
+            fig = self.figures.plot_mstep_fisher_preconditioning(self.tracker)
+            if fig is not None:
+                figures_generated.append("mstep_fisher_preconditioning")
+                plt.close('all')
+        except Exception as e:
+            print(f"[WARN] Could not generate Fisher preconditioning plot: {e}")
 
         # Train-val gap
         try:

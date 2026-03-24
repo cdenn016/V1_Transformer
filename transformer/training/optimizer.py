@@ -30,7 +30,7 @@ at the top of the VFE Bayesian hierarchy.
 import math
 import torch
 import torch.nn as nn
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from transformer.training.config import TrainingConfig
 
 
@@ -194,6 +194,8 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
         super().__init__(params, defaults)
         self.ema_decay = ema_decay
         self.damping = damping
+        # Per-group gradient norm diagnostics (populated by step())
+        self._grad_norms: Dict[str, Dict[str, float]] = {}
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -202,9 +204,14 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
+        # Reset per-step norm accumulators
+        group_euclidean_sq: Dict[str, float] = {}
+        group_natural_sq: Dict[str, float] = {}
+
         for group in self.param_groups:
             lr = group['lr']
             wd = group['weight_decay']
+            gname = group.get('name', 'unnamed')
 
             for p in group['params']:
                 if p.grad is None:
@@ -219,10 +226,23 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
 
                 # For 2D embedding-like parameters: per-row Fisher blocks
                 if grad.dim() == 2 and grad.shape[-1] >= 4:
-                    self._natural_step_embedding(p, grad, state, lr)
+                    eucl_sq, nat_sq = self._natural_step_embedding(p, grad, state, lr)
+                    group_euclidean_sq[gname] = group_euclidean_sq.get(gname, 0.0) + eucl_sq
+                    group_natural_sq[gname] = group_natural_sq.get(gname, 0.0) + nat_sq
                 else:
                     # Fallback: plain gradient descent for 1D / small params
                     p.add_(grad, alpha=-lr)
+                    g_sq = grad.norm().item() ** 2
+                    group_euclidean_sq[gname] = group_euclidean_sq.get(gname, 0.0) + g_sq
+                    group_natural_sq[gname] = group_natural_sq.get(gname, 0.0) + g_sq
+
+        # Store L2 norms per group
+        self._grad_norms = {}
+        for gname in set(list(group_euclidean_sq.keys()) + list(group_natural_sq.keys())):
+            self._grad_norms[gname] = {
+                'euclidean': math.sqrt(group_euclidean_sq.get(gname, 0.0)),
+                'natural': math.sqrt(group_natural_sq.get(gname, 0.0)),
+            }
 
         return loss
 
@@ -232,8 +252,13 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
         grad: torch.Tensor,     # (V, K)
         state: dict,
         lr: float,
-    ) -> None:
-        """Per-token natural gradient step with block-diagonal Fisher."""
+    ) -> Tuple[float, float]:
+        """Per-token natural gradient step with block-diagonal Fisher.
+
+        Returns:
+            (euclidean_norm_sq, natural_norm_sq): Squared L2 norms of the
+            raw gradient and the Fisher-preconditioned gradient for this param.
+        """
         V, K = grad.shape
         device = grad.device
         dtype = grad.dtype
@@ -250,7 +275,8 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
         grad_norm = grad.abs().sum(dim=-1)  # (V,)
         nz_mask = grad_norm > 0
         if not nz_mask.any():
-            return
+            eucl_sq = grad.norm().item() ** 2
+            return eucl_sq, eucl_sq
 
         nz_idx = nz_mask.nonzero(as_tuple=True)[0]  # (n_active,)
         g = grad[nz_idx]  # (n_active, K)
@@ -273,6 +299,10 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
         # Solve F_damped @ ng = g  (batched K×K linear solve)
         ng = torch.linalg.solve(F_damped, g.unsqueeze(-1)).squeeze(-1)  # (n_active, K)
 
+        # Record norms before clipping
+        eucl_sq = g.norm().item() ** 2
+        nat_sq = ng.norm().item() ** 2
+
         # Clip natural gradient to prevent explosion from ill-conditioned Fisher
         ng_norm = ng.norm(dim=-1, keepdim=True).clamp(min=1e-8)
         g_norm = g.norm(dim=-1, keepdim=True).clamp(min=1e-8)
@@ -281,6 +311,17 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
         ng = ng * scale
 
         param[nz_idx] -= lr * ng
+
+        return eucl_sq, nat_sq
+
+    def get_grad_norms(self) -> Dict[str, Dict[str, float]]:
+        r"""Return per-group gradient norms from the last step() call.
+
+        Returns:
+            Dict mapping group name → {'euclidean': ‖g‖, 'natural': ‖F⁻¹g‖}.
+            For non-embedding params (plain SGD fallback), both values are equal.
+        """
+        return dict(self._grad_norms)
 
 
 # =============================================================================

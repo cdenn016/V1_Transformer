@@ -1506,6 +1506,11 @@ class PublicationTrainer(FastTrainer):
                     )
             self.optimizer.step()
 
+        # Collect M-step natural gradient norms (after optimizer.step populates them)
+        mstep_natural_norms = None
+        if is_log_step and hasattr(self.optimizer, 'get_grad_norms'):
+            mstep_natural_norms = self.optimizer.get_grad_norms()
+
         if self.scheduler is not None:
             self.scheduler.step()
         self.optimizer.zero_grad()
@@ -1668,7 +1673,7 @@ class PublicationTrainer(FastTrainer):
             except Exception as e:
                 print(f"[WARNING] Layer/iteration diagnostics failed: {e}")
 
-        return metrics, grad_norms, e_step_norms
+        return metrics, grad_norms, e_step_norms, mstep_natural_norms
 
     def _compute_gradient_norms(self) -> Dict[str, float]:
         """Compute gradient norms for different parameter groups."""
@@ -1825,7 +1830,7 @@ class PublicationTrainer(FastTrainer):
                 batch = next(train_iterator)
 
             # Train step with full metrics (grad_norms computed inside before zero_grad)
-            metrics, grad_norms, e_step_norms = self.train_step(batch)
+            metrics, grad_norms, e_step_norms, mstep_natural_norms = self.train_step(batch)
 
             step_time = time.time() - step_start
 
@@ -1865,6 +1870,7 @@ class PublicationTrainer(FastTrainer):
                         batch_size=batch_size,
                         seq_len=seq_len,
                         e_step_norms=e_step_norms,
+                        mstep_natural_norms=mstep_natural_norms,
                     )
 
                 # Console logging
