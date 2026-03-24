@@ -125,6 +125,12 @@ class TrainingSnapshot:
     grad_norm_phi: float = 0.0
     grad_norm_ffn: float = 0.0
     grad_norm_other: float = 0.0
+    # E-step natural gradient norms (from VFE iterations inside forward pass)
+    e_step_nat_grad_mu: float = 0.0
+    e_step_nat_grad_sigma: float = 0.0
+    e_step_grad_phi: float = 0.0
+    e_step_nat_grad_mu_clipped: float = 0.0
+    e_step_nat_grad_sigma_clipped: float = 0.0
     lr_current: float = 0.0
     tokens_per_sec: float = 0.0
     step_time: float = 0.0
@@ -184,6 +190,7 @@ class TrainingTracker:
         step_time: float = 0.0,
         batch_size: int = 1,
         seq_len: int = 1,
+        e_step_norms: Optional[Dict[str, float]] = None,
     ):
         """Record a training step."""
         tokens_per_sec = (batch_size * seq_len) / step_time if step_time > 0 else 0
@@ -206,6 +213,11 @@ class TrainingTracker:
             grad_norm_phi=grad_norms.get('phi', 0) if grad_norms else 0,
             grad_norm_ffn=grad_norms.get('ffn', 0) if grad_norms else 0,
             grad_norm_other=grad_norms.get('other', 0) if grad_norms else 0,
+            e_step_nat_grad_mu=e_step_norms.get('nat_grad_mu', 0) if e_step_norms else 0,
+            e_step_nat_grad_sigma=e_step_norms.get('nat_grad_sigma', 0) if e_step_norms else 0,
+            e_step_grad_phi=e_step_norms.get('grad_phi', 0) if e_step_norms else 0,
+            e_step_nat_grad_mu_clipped=e_step_norms.get('nat_grad_mu_clipped', 0) if e_step_norms else 0,
+            e_step_nat_grad_sigma_clipped=e_step_norms.get('nat_grad_sigma_clipped', 0) if e_step_norms else 0,
             lr_current=lr,
             tokens_per_sec=tokens_per_sec,
             step_time=step_time,
@@ -396,6 +408,91 @@ class PublicationFigures:
         fig.savefig(self.save_dir / f"{save_name}.png", dpi=300)
 
         return fig
+
+    def plot_gradient_norms_split(
+        self,
+        tracker: TrainingTracker,
+        save_name: str = "gradient_norms_split",
+        start_step: int = 100,
+    ) -> "Any":
+        """
+        Plot E-step (q) and M-step (p) gradient norms as two separate figures.
+
+        The E-step figure shows natural gradient norms from VFE iterations
+        (belief inference within a single forward pass). The M-step figure
+        shows backprop gradient norms on embedding parameters.
+
+        Args:
+            tracker: TrainingTracker with recorded history
+            save_name: Base filename prefix for saved figures
+            start_step: Skip initial steps to avoid transient spikes
+
+        Returns:
+            Tuple of (fig_mstep, fig_estep) matplotlib Figures
+        """
+        import matplotlib.pyplot as plt
+
+        history = [s for s in tracker.history if s.step >= start_step]
+        if not history:
+            return None, None
+
+        steps = [s.step for s in history]
+
+        # --- M-step (p) gradient norms: backprop on embedding tables ---
+        fig_m, ax_m = plt.subplots(1, 1, figsize=(7, 4.5))
+        m_groups = [
+            ('grad_norm_total', 'Total', 'k-', 0.8, 1.5),
+            ('grad_norm_mu', r'$\mu$ embed', 'b--', 0.6, 1),
+            ('grad_norm_sigma', r'$\Sigma$ embed', 'g--', 0.6, 1),
+            ('grad_norm_phi', r'$\varphi$ embed', 'r--', 0.6, 1),
+            ('grad_norm_ffn', 'FFN / decoder', 'm:', 0.5, 1),
+            ('grad_norm_other', 'Other', 'c:', 0.5, 1),
+        ]
+        for attr, label, style, alpha, lw in m_groups:
+            vals = [getattr(s, attr) for s in history]
+            if any(v > 0 for v in vals):
+                ax_m.semilogy(steps, vals, style, label=label, alpha=alpha, linewidth=lw)
+        ax_m.set_xlabel('Training Step')
+        ax_m.set_ylabel('Gradient Norm')
+        ax_m.set_title('M-step (p) Gradient Norms — Backprop on Parameters')
+        ax_m.legend(loc='upper right', ncol=2)
+        ax_m.grid(True, alpha=0.3)
+        format_step_axis(ax_m)
+        fig_m.tight_layout()
+        fig_m.savefig(self.save_dir / f"{save_name}_mstep.png", dpi=300)
+
+        # --- E-step (q) gradient norms: natural gradients from VFE iterations ---
+        fig_e, ax_e = plt.subplots(1, 1, figsize=(7, 4.5))
+        e_groups = [
+            ('e_step_nat_grad_mu', r'$\nabla_\mu$ (raw)', 'b-', 0.7, 1.5),
+            ('e_step_nat_grad_mu_clipped', r'$\nabla_\mu$ (clipped)', 'b--', 0.5, 1),
+            ('e_step_nat_grad_sigma', r'$\nabla_\Sigma$ (raw)', 'g-', 0.7, 1.5),
+            ('e_step_nat_grad_sigma_clipped', r'$\nabla_\Sigma$ (clipped)', 'g--', 0.5, 1),
+            ('e_step_grad_phi', r'$\nabla_\varphi$', 'r-', 0.7, 1.5),
+        ]
+        has_estep_data = any(
+            getattr(s, 'e_step_nat_grad_mu', 0) > 0 for s in history
+        )
+        if has_estep_data:
+            for attr, label, style, alpha, lw in e_groups:
+                vals = [getattr(s, attr) for s in history]
+                if any(v > 0 for v in vals):
+                    ax_e.semilogy(steps, vals, style, label=label, alpha=alpha, linewidth=lw)
+            ax_e.set_xlabel('Training Step')
+            ax_e.set_ylabel('Gradient Norm')
+            ax_e.set_title('E-step (q) Gradient Norms — Natural Gradients in VFE Iterations')
+            ax_e.legend(loc='upper right', ncol=2)
+            ax_e.grid(True, alpha=0.3)
+        else:
+            ax_e.text(0.5, 0.5, 'No E-step gradient data recorded',
+                     transform=ax_e.transAxes, ha='center', va='center',
+                     fontsize=14, color='gray')
+            ax_e.set_title('E-step (q) Gradient Norms — No Data')
+        format_step_axis(ax_e)
+        fig_e.tight_layout()
+        fig_e.savefig(self.save_dir / f"{save_name}_estep.png", dpi=300)
+
+        return fig_m, fig_e
 
     def plot_attention_heatmap(
         self,
@@ -816,10 +913,12 @@ class PublicationMetrics:
         step_time: float = 0.0,
         batch_size: int = 1,
         seq_len: int = 1,
+        e_step_norms: Optional[Dict[str, float]] = None,
     ):
         """Record training step metrics."""
         self.tracker.record(step, epoch, train_metrics, grad_norms,
-                           lr, step_time, batch_size, seq_len)
+                           lr, step_time, batch_size, seq_len,
+                           e_step_norms=e_step_norms)
 
     def record_training_step(
         self,
@@ -832,12 +931,14 @@ class PublicationMetrics:
         step_time: float = 0.0,
         batch_size: int = 1,
         seq_len: int = 1,
+        e_step_norms: Optional[Dict[str, float]] = None,
     ):
         """Record training step metrics (compatibility wrapper)."""
         # Extract lr from lrs dict if provided
         lr = lrs.get('mu_embed', 0.0) if lrs else 0.0
         self.tracker.record(step, epoch, train_metrics, grad_norms,
-                           lr, step_time, batch_size, seq_len)
+                           lr, step_time, batch_size, seq_len,
+                           e_step_norms=e_step_norms)
 
     def record_validation(self, step: int, val_metrics: Dict[str, float]):
         """Record validation metrics."""
@@ -1355,6 +1456,14 @@ class PublicationMetrics:
             plt.close()
         except Exception as e:
             print(f"[WARN] Could not generate training curves: {e}")
+
+        # Split gradient norms (E-step / M-step)
+        try:
+            self.figures.plot_gradient_norms_split(self.tracker)
+            figures_generated.append("gradient_norms_split")
+            plt.close('all')
+        except Exception as e:
+            print(f"[WARN] Could not generate split gradient norms: {e}")
 
         # Train-val gap
         try:
