@@ -2095,7 +2095,7 @@ class PublicationTrainer(FastTrainer):
                     pbar.set_description(log_msg)
                     # Print gradient norms using tqdm.write for proper display
                     if grad_norms:
-                        tqdm.write(f"  [M-STEP] total: {grad_norms['total']:.3e} | "
+                        tqdm.write(f"\n  [M-STEP] total: {grad_norms['total']:.3e} | "
                                    f"mu: {grad_norms['mu']:.3e} | sigma: { grad_norms['sigma']:.3e} | "
                                    f"phi: {grad_norms['phi']:.3e}")
                     if e_step_norms:
@@ -2104,22 +2104,22 @@ class PublicationTrainer(FastTrainer):
                         _mu_tr = e_step_norms.get('mu_trust_frac', 0.0) * 100
                         _wh_mean = e_step_norms.get('whitened_mu_mean', 0.0)
                         _wh_max = e_step_norms.get('whitened_mu_max', 0.0)
-                        tqdm.write(f"  [E-STEP] nat_mu: {e_step_norms['nat_grad_mu']:.3e} (cap: {_mu_cap:.0f}%) | "
+                        tqdm.write(f"\n  [E-STEP] nat_mu: {e_step_norms['nat_grad_mu']:.3e} (cap: {_mu_cap:.0f}%) | "
                                    f"nat_sig: {e_step_norms['nat_grad_sigma']:.3e} (cap: {_sig_cap:.0f}%) | "
                                    f"phi: {e_step_norms['grad_phi']:.3e} | "
                                    f"trust: {_mu_tr:.0f}% (wh: {_wh_mean:.3f}/{_wh_max:.3f})\n")
                     # Print Bayesian alpha diagnostics
-                    if metrics.get('bayesian/alpha_mean') is not None:
-                        tqdm.write(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
-                                   f"std: { metrics['bayesian/alpha_std']:.4f} | "
-                                   f"range: [{ metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
-                                   f"c0: { metrics['bayesian/c0']:.4f}±{metrics.get('bayesian/c0_std', 0):.4f} | "
-                                   f"b0: { metrics['bayesian/b0']:.4f}±{metrics.get('bayesian/b0_std', 0):.4f} | "
-                                   f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}")
+       #             if metrics.get('bayesian/alpha_mean') is not None:
+        #                tqdm.write(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
+          #                         f"std: { metrics['bayesian/alpha_std']:.4f} | "
+           #                        f"range: [{ metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
+            #                       f"c0: { metrics['bayesian/c0']:.4f}±{metrics.get('bayesian/c0_std', 0):.4f} | "
+             #                      f"b0: { metrics['bayesian/b0']:.4f}±{metrics.get('bayesian/b0_std', 0):.4f} | "
+              #                     f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}")
                 else:
                     print(log_msg)
                     if grad_norms:
-                        print(f"  [M-STEP] total: {grad_norms['total']:.3e} | "
+                        print(f"\n  [M-STEP] total: {grad_norms['total']:.3e} | "
                               f"mu: {grad_norms['mu']:.3e} | sigma: { grad_norms['sigma']:.3e} | "
                               f"phi: {grad_norms['phi']:.3e}")
                     if e_step_norms:
@@ -2128,17 +2128,17 @@ class PublicationTrainer(FastTrainer):
                         _mu_tr = e_step_norms.get('mu_trust_frac', 0.0) * 100
                         _wh_mean = e_step_norms.get('whitened_mu_mean', 0.0)
                         _wh_max = e_step_norms.get('whitened_mu_max', 0.0)
-                        print(f"  [E-STEP] nat_mu: {e_step_norms['nat_grad_mu']:.3e} (cap: {_mu_cap:.0f}%) | "
+                        print(f"\n  [E-STEP] nat_mu: {e_step_norms['nat_grad_mu']:.3e} (cap: {_mu_cap:.0f}%) | "
                               f"nat_sig: {e_step_norms['nat_grad_sigma']:.3e} (cap: {_sig_cap:.0f}%) | "
                               f"phi: {e_step_norms['grad_phi']:.3e} | "
                               f"trust: {_mu_tr:.0f}% (wh: {_wh_mean:.3f}/{_wh_max:.3f})\n")
-                    if metrics.get('bayesian/alpha_mean') is not None:
-                        print(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
-                              f"std: {metrics['bayesian/alpha_std']:.4f} | "
-                              f"range: [{metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
-                              f"c0: { metrics['bayesian/c0']:.4f}±{metrics.get('bayesian/c0_std', 0):.4f} | "
-                              f"b0: { metrics['bayesian/b0']:.4f}±{metrics.get('bayesian/b0_std', 0):.4f} | "
-                              f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}\n\n")
+     #               if metrics.get('bayesian/alpha_mean') is not None:
+      #                  print(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
+       #                       f"std: {metrics['bayesian/alpha_std']:.4f} | "
+        #                      f"range: [{metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
+         #                     f"c0: { metrics['bayesian/c0']:.4f}±{metrics.get('bayesian/c0_std', 0):.4f} | "
+          #                    f"b0: { metrics['bayesian/b0']:.4f}±{metrics.get('bayesian/b0_std', 0):.4f} | "
+           #                   f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}\n\n")
 
                 # Report numerical fallback counters if any fired
                 if _num_events:
@@ -2464,7 +2464,7 @@ def run_single_experiment(
 
     # Enable E-step gradient component debug (prints per-component breakdown)
     # Set to True to diagnose gradient explosion sources; disable for production.
-    _DEBUG_VFE_GRADS = False
+   
     if _DEBUG_VFE_GRADS:
         for module in model.modules():
             if hasattr(module, '_debug_vfe_gradients'):
