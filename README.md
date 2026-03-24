@@ -396,9 +396,6 @@ gauge-holonomy/
 │   │   ├── gaussians.py            #     Gaussian distribution utilities
 │   │   └── cuda_ext.py             #     Optional CUDA kernel compilation
 │   ├── analysis/                   #   Analysis & diagnostics
-│   │   ├── rg_metrics.py           #     RG flow: meta-agents, modularity, effective rank
-│   │   ├── rg_flow_analysis.py     #     RG flow tracking across layers/iterations
-│   │   ├── rg_flow_enhanced.py     #     Full RG diagnostics with gauge frames
 │   │   ├── publication_metrics.py  #     BPC, perplexity, statistical significance
 │   │   ├── semantics.py            #     Clustering interpretation, emergent categories
 │   │   ├── bayesian_validation.py  #     Bayesian validation of KL alignment
@@ -445,12 +442,6 @@ gauge-holonomy/
 │   ├── train_lightning.py          #   Lightning training (3 modes: standard/VFE/pure_fep)
 │   ├── run_ablation_suite.py       #   Systematic hyperparameter sweeps
 │   ├── run_interactive_viz.py      #   Interactive UMAP + Plotly + SHAP visualization
-│   ├── analyze_rg_flow.py          #   RG flow analysis
-│   ├── run_rg_experiments.py       #   RG coarse-graining experiments
-│   ├── rg_exponent_bayesian.py     #   Bayesian RG exponent inference (PyMC)
-│   ├── rg_universality_bayesian.py #   Bayesian universality analysis
-│   ├── rg_universality_networkx.py #   Graph-based RG coarse-graining
-│   ├── rg_deviation_analysis.py    #   RG deviation diagnostics
 │   ├── gauge_frame_spectral_analysis.py  # Spectral analysis (BERT/GPT-2 validation)
 │   ├── generate_publication_figures.py   # Publication figures
 │   └── kn5_baseline.py             #   KN5 baseline comparison

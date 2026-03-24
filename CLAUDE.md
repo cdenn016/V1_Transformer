@@ -36,8 +36,6 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 ### `transformer/analysis/` — Diagnostics
 
-- `rg_metrics.py` — `RGDiagnostics` (modularity, effective rank, KL clustering)
-- `rg_flow_analysis.py`, `rg_flow_enhanced.py` — RG flow dynamics across training
 - `holonomy.py`, `holonomy_metrics.py` — Gauge connection curvature measurement
 - `semantics.py` — Gauge frame clustering analysis
 - `bayesian_validation.py` — BERT KL-alignment hypothesis testing
@@ -85,7 +83,7 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 ### `scripts/` — Analysis & Experiments
 
-RG flow analysis, ablation suites, publication figure generation, spectral analysis, `train_lightning.py`.
+Ablation suites, publication figure generation, spectral analysis, `train_lightning.py`.
 
 ## Development Workflow
 
@@ -102,7 +100,7 @@ pytest transformer/pure_vfe/tests/  # pure VFE gradient tests
 ### Training
 
 - **nn.Module VFE**: Edit config in `transformer/train_publication.py` and run, or use `scripts/train_lightning.py`
-- **Publication-quality**: `transformer/train_publication.py` (full RG diagnostics, holonomy monitoring)
+- **Publication-quality**: `transformer/train_publication.py` (holonomy monitoring)
 - **Pure VFE (no autograd)**: Edit `PURE_VFE_CONFIG` in `train_publication.py` and run
 - **Resume**: `transformer/resume_training.py`
 
@@ -195,6 +193,6 @@ Minimize itemizations, lists, and enumerations. If content can be expressed as a
 
 1. **Preserve gauge equivariance** — covariance transport is always `Omega @ Sigma @ Omega.T`
 2. **Use natural gradients** for phi parameters — never raw Euclidean gradients on Lie algebra without preconditioning
-3. **Test RG behavior** — new features should maintain or improve RG trends (modularity, effective rank)
+3. **Test spectral behavior** — new features should maintain or improve spectral trends (effective rank, entropy)
 4. **Document math** — include LaTeX notation in docstrings for any non-trivial formula
 5. **Domain expertise areas**: differential geometry (SPD manifolds, Lie theory), variational inference (KL, ELBO, information geometry), gauge theory (equivariance, parallel transport, irreps), matrix algebra (eigendecomposition, matrix exponentials)

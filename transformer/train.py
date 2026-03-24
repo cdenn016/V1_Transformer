@@ -2,12 +2,10 @@
 Training Loss Functions for Gauge-Theoretic Transformer
 =======================================================
 
-Core loss computation and RG metrics used by training scripts.
+Core loss computation used by training scripts.
 
 Exports:
     - compute_free_energy_loss(): M-step training loss (CE + KL regularizers)
-    - compute_rg_metrics_from_attention(): RG flow analysis from attention info
-    - compute_dynamic_rg_metrics(): Dynamic RG tracking across VFE iterations
     - gaussian_kl_divergence(): KL(N(μ_q,Σ_q) || N(μ_p,Σ_p)) for Gaussians
 
 The actual training loop is in train_publication.py (PublicationTrainer).
@@ -25,181 +23,9 @@ import math
 import torch
 import torch.nn.functional as F
 from typing import Dict, Optional, Tuple, Any
-from transformer.analysis.rg_metrics import compute_rg_diagnostics
-from transformer.analysis.rg_flow_enhanced import compute_full_rg_diagnostics
 
 # Import attention computation for gamma term
 from transformer.core.attention import compute_attention_weights
-
-
-
-def compute_rg_metrics_from_attention(
-    attn_info: Dict,
-    step: int,
-    auto_cluster: bool = True,
-    n_clusters: Optional[int] = None,
-) -> Dict[str, float]:
-    """
-    Compute RG metrics from attention info returned by forward_with_attention.
-
-    This analyzes the emergent renormalization group structure in the
-    attention-belief dynamics, detecting meta-agent emergence.
-
-    Args:
-        attn_info: Dict with 'beta', 'mu', 'sigma' from forward_with_attention
-        step: Current training step
-        auto_cluster: Auto-detect clusters via spectral clustering
-        n_clusters: Fixed number of clusters (None = auto)
-
-    Returns:
-        Dict with RG metrics for logging:
-            - rg/modularity: Block structure in attention (higher = more meta-agents)
-            - rg/effective_rank: Effective dimensionality (lower = concentrated)
-            - rg/n_clusters: Number of detected meta-agents
-            - rg/kl_within_mean: KL divergence within clusters (lower = tighter)
-            - rg/kl_between_mean: KL divergence between clusters (stable = distinct)
-            - rg/beta_entropy: Attention distribution entropy
-    """
-    beta = attn_info.get('beta')  # (n_layers, B, n_heads, N, N)
-    mu = attn_info.get('mu')      # (B, N, K)
-    sigma = attn_info.get('sigma')  # (B, N, K) or (B, N, K, K)
-
-    if beta is None or mu is None:
-        return {}
-
-    # Use final layer's attention for RG metrics, average over heads
-    if beta.dim() == 5:
-        beta_avg = beta[-1].mean(dim=1)  # (B, N, N) — last layer, head-averaged
-    elif beta.dim() == 4:
-        beta_avg = beta.mean(dim=1)  # (B, N, N) — legacy 4D format
-    else:
-        beta_avg = beta
-
-    # Handle sigma - default to ones if None
-    if sigma is None:
-        sigma = torch.ones_like(mu)
-
-    # Compute RG diagnostics
-    try:
-        diagnostics = compute_rg_diagnostics(
-            mu=mu,
-            sigma=sigma,
-            beta=beta_avg,
-            step=step,
-            auto_cluster=auto_cluster,
-            n_clusters=n_clusters,
-        )
-
-        # Convert to metrics dict
-        rg_metrics = {
-            'rg/modularity': diagnostics.modularity,
-            'rg/effective_rank': diagnostics.effective_rank,
-            'rg/n_clusters': diagnostics.n_clusters,
-            'rg/kl_within_mean': diagnostics.kl_within_mean,
-            'rg/kl_within_std': diagnostics.kl_within_std,
-            'rg/kl_between_mean': diagnostics.kl_between_mean,
-            'rg/kl_between_std': diagnostics.kl_between_std,
-            'rg/beta_entropy': diagnostics.beta_entropy,
-        }
-
-        # Add meta-agent sizes if available
-        if diagnostics.meta_agent_sizes:
-            rg_metrics['rg/meta_agent_sizes'] = diagnostics.meta_agent_sizes
-
-        # Enhanced gauge-frame metrics if phi is available
-        phi = attn_info.get('phi')  # (B, N, gauge_dim)
-        kl_matrix = attn_info.get('kl_matrix')  # (B, N, N) or (B, H, N, N)
-        if phi is not None:
-            try:
-                enhanced = compute_full_rg_diagnostics(
-                    mu=mu, sigma=sigma, phi=phi, beta=beta_avg,
-                    kl_matrix=kl_matrix, step=step,
-                    auto_cluster=auto_cluster,
-                )
-                rg_metrics['rg/gauge_coherence'] = enhanced.gauge_coherence
-                rg_metrics['rg/phi_within_mean'] = enhanced.phi_within_mean
-                rg_metrics['rg/phi_between_mean'] = enhanced.phi_between_mean
-                rg_metrics['rg/kl_matrix_rank'] = enhanced.kl_matrix_rank
-                if kl_matrix is not None:
-                    rg_metrics['rg/fe_belief_align'] = enhanced.fe_belief_align
-            except Exception as e:
-                print(f"[WARNING] Enhanced RG metrics failed: {e}")
-
-        return rg_metrics
-
-    except Exception as e:
-        # Return empty metrics on error (don't crash training)
-        print(f"[WARNING] RG metrics computation failed: {e}")
-        return {}
-
-
-def compute_dynamic_rg_metrics(
-    rg_info: Dict,
-    step: int,
-) -> Dict[str, Any]:
-    """
-    Compute RG flow metrics from beta_history (dynamic RG within forward pass).
-
-    This tracks how attention structure evolves across VFE iterations,
-    revealing dynamic cluster formation.
-
-    Args:
-        rg_info: Dict from forward_with_rg_tracking() containing 'beta_history'
-        step: Current training step
-
-    Returns:
-        Dict with dynamic RG metrics:
-            - rg/dynamic/n_iterations: Number of VFE steps
-            - rg/dynamic/modularity_init: Modularity at first VFE step
-            - rg/dynamic/modularity_final: Modularity at last VFE step
-            - rg/dynamic/modularity_change: Final - Init (positive = emergence)
-            - rg/dynamic/rank_init: Effective rank at first step
-            - rg/dynamic/rank_final: Effective rank at last step
-            - rg/dynamic/rank_change: Final - Init (negative = compression)
-    """
-    beta_history = rg_info.get('beta_history')
-
-    if beta_history is None or len(beta_history) == 0:
-        return {'rg/dynamic/n_iterations': 0}
-
-    n_iterations = len(beta_history)
-
-    # Import RG metrics
-    from transformer.analysis.rg_metrics import compute_modularity, compute_effective_rank
-
-    # Compute metrics at first and last step
-    beta_init = beta_history[0]
-    beta_final = beta_history[-1]
-
-    if beta_init.dim() == 4:
-        beta_init = beta_init.mean(dim=1)
-        beta_final = beta_final.mean(dim=1)
-
-    mod_init = compute_modularity(beta_init)
-    mod_final = compute_modularity(beta_final)
-    rank_init = compute_effective_rank(beta_init)
-    rank_final = compute_effective_rank(beta_final)
-
-    metrics = {
-        'rg/dynamic/n_iterations': n_iterations,
-        'rg/dynamic/modularity_init': mod_init,
-        'rg/dynamic/modularity_final': mod_final,
-        'rg/dynamic/modularity_change': mod_final - mod_init,
-        'rg/dynamic/rank_init': rank_init,
-        'rg/dynamic/rank_final': rank_final,
-        'rg/dynamic/rank_change': rank_final - rank_init,
-    }
-
-    # If enough iterations, compute mid-point too
-    if n_iterations >= 3:
-        mid_idx = n_iterations // 2
-        beta_mid = beta_history[mid_idx]
-        if beta_mid.dim() == 4:
-            beta_mid = beta_mid.mean(dim=1)
-        metrics['rg/dynamic/modularity_mid'] = compute_modularity(beta_mid)
-        metrics['rg/dynamic/rank_mid'] = compute_effective_rank(beta_mid)
-
-    return metrics
 
 
 # =============================================================================
@@ -766,13 +592,5 @@ def compute_free_energy_loss(
     phi_evolved = attn_info.get('phi')
     if phi_evolved is not None:
         metrics['p_flow/phi_evolved'] = phi_evolved.detach()  # (B, N, phi_dim) VFE-evolved phi
-
-    # Store attention info for RG metrics computation (detached)
-    metrics['attention_info'] = {
-        'beta': beta.detach(),
-        'kl': kl.detach(),
-        'mu': mu_q.detach(),
-        'sigma': sigma_q.detach() if sigma_q is not None else None,
-    }
 
     return total_loss, metrics

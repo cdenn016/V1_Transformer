@@ -126,7 +126,7 @@ def compute_multi_scale_umap(
     """Compute UMAP at multiple neighborhood scales.
 
     Shows how cluster structure changes from local (small n_neighbors)
-    to global (large n_neighbors) — analogous to RG flow across scales.
+    to global (large n_neighbors).
 
     Returns:
         Dict mapping n_neighbors -> (N, n_components) embeddings.
@@ -322,10 +322,9 @@ def plot_umap_multiscale(
     save_html: Optional[Path] = None,
     save_png: Optional[Path] = None,
 ) -> "go.Figure":
-    """Visualize UMAP at multiple neighborhood scales (RG flow analogy).
+    """Visualize UMAP at multiple neighborhood scales.
 
-    Shows how semantic structure emerges/dissolves at different scales,
-    analogous to renormalization group flow in the gauge framework.
+    Shows how semantic structure emerges/dissolves at different scales.
     """
     if not PLOTLY_AVAILABLE:
         raise ImportError("plotly required: pip install plotly")
@@ -364,7 +363,7 @@ def plot_umap_multiscale(
 
     fig.update_layout(
         title=dict(
-            text="UMAP Multi-Scale View (Local → Global, cf. RG Flow)",
+            text="UMAP Multi-Scale View (Local → Global)",
             font=dict(size=16),
         ),
         height=450,
@@ -866,7 +865,7 @@ def run_full_visualization(
     Produces:
     1. 3D interactive UMAP of belief space (mu) — HTML + PNG
     2. Multi-space comparison: mu vs sigma vs phi — HTML + PNG
-    3. Multi-scale UMAP (RG flow analogy) — HTML + PNG
+    3. Multi-scale UMAP — HTML + PNG
     4. Silhouette analysis of semantic clustering — PNG
     5. HDBSCAN discovered clusters — HTML + PNG
     6. SHAP feature attribution — PNG
@@ -996,9 +995,9 @@ def run_full_visualization(
         if verbose:
             print("\n[2/6] Skipping multi-space (sigma/phi not available)")
 
-    # ---- 3. Multi-scale UMAP (RG flow analogy) ----
+    # ---- 3. Multi-scale UMAP ----
     if verbose:
-        print("\n[3/6] Computing multi-scale UMAP (RG flow analogy)...")
+        print("\n[3/6] Computing multi-scale UMAP...")
 
     multi_scale = compute_multi_scale_umap(
         mu_emb,
@@ -1008,10 +1007,10 @@ def run_full_visualization(
 
     fig_ms = plot_umap_multiscale(
         multi_scale, valid_tokens, valid_categories,
-        save_html=output_dir / "umap_multiscale_rg_flow.html",
-        save_png=output_dir / "umap_multiscale_rg_flow.png",
+        save_html=output_dir / "umap_multiscale.html",
+        save_png=output_dir / "umap_multiscale.png",
     )
-    results['multiscale_path'] = str(output_dir / "umap_multiscale_rg_flow.html")
+    results['multiscale_path'] = str(output_dir / "umap_multiscale.html")
     if verbose:
         print(f"  Saved: {results['multiscale_path']}")
 
