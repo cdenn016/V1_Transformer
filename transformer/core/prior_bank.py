@@ -183,9 +183,12 @@ class PriorBank(nn.Module):
     def base_prior_sigma(self) -> torch.Tensor:
         r"""Get base prior variance (always positive). Only for gauge_fixed_priors=True.
 
-        Hard clamp bounds output to [0.2, 5.0] — same reasoning as prior_sigma.
+        Hard clamp bounds output to [0.01, 5.0].
+        The E-step applies its own higher floor (0.2) to prevent gradient blowup
+        from 1/σ_p terms; this property keeps the full [0.01, 5.0] range so that
+        KL-based decode can achieve high precision (1/σ_p up to 100) for sharp logits.
         """
-        _SIGMA_MIN, _SIGMA_MAX = 0.2, 5.0
+        _SIGMA_MIN, _SIGMA_MAX = 0.01, 5.0
         sigma = torch.exp(self.base_log_prior_sigma)
         return sigma.clamp(_SIGMA_MIN, _SIGMA_MAX)
 
@@ -193,16 +196,15 @@ class PriorBank(nn.Module):
     def prior_sigma(self) -> torch.Tensor:
         r"""Get prior variances (always positive). Only for gauge_fixed_priors=False.
 
-        Hard clamp bounds output to [0.2, 5.0] for numerical safety:
-        - min=0.2: prevents 1/σ_p from exceeding 5.0 in the E-step self-coupling
-          gradient ∂KL(q||p)/∂σ = 0.5·(1/σ_p - 1/σ_q). At the old floor of 0.01,
-          1/σ_p = 100 → per-component gradient ≈ 50, driving nat_grad_sigma to ~7e3.
-          Floor of 0.2 caps 1/σ_p at 5.0, keeping gradients well-scaled.
+        Hard clamp bounds output to [0.01, 5.0] for numerical safety:
+        - min=0.01: allows fine-grained precision (1/σ_p up to 100) needed for
+          discriminative KL-based decode logits. The E-step applies its own higher
+          floor (0.2) on sigma_p to prevent self-coupling gradient blowup.
         - max=5.0: prevents diffuse priors from producing vanishing KL gradients.
 
         Hard clamp zeros gradient at boundaries, preventing log_sigma drift.
         """
-        _SIGMA_MIN, _SIGMA_MAX = 0.2, 5.0
+        _SIGMA_MIN, _SIGMA_MAX = 0.01, 5.0
         sigma = torch.exp(self.log_prior_sigma)
         return sigma.clamp(_SIGMA_MIN, _SIGMA_MAX)
 
