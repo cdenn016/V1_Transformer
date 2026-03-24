@@ -174,12 +174,18 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
     For non-embedding parameters (1D, small 2D), falls back to standard
     gradient descent with weight decay (no Fisher tracking).
 
+    WARNING on damping: For rarely-seen tokens, the Fisher is near-zero and
+    (F + λI)^{-1} ≈ (1/λ)I. Small λ (e.g., 1e-4) amplifies rare tokens'
+    gradients by up to 1/λ (clipped to max_ratio=10×), causing systematic
+    over-updating of rare embeddings → embedding homogenization → attention
+    collapse. Use λ ≥ 1e-2 for stability.
+
     Args:
         params: Parameter groups from create_param_groups()
         lr: Learning rate (default 1e-3)
         weight_decay: Decoupled weight decay coefficient
         ema_decay: EMA decay for Fisher estimation (default 0.95)
-        damping: Tikhonov regularization λ for Fisher inversion (default 1e-4)
+        damping: Tikhonov regularization λ for Fisher inversion (default 1e-2)
     """
 
     def __init__(
@@ -188,7 +194,7 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
         lr: float = 1e-3,
         weight_decay: float = 0.01,
         ema_decay: float = 0.95,
-        damping: float = 1e-4,
+        damping: float = 1e-2,
     ):
         defaults = dict(lr=lr, weight_decay=weight_decay)
         super().__init__(params, defaults)
@@ -330,7 +336,7 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
 
 def compute_killing_metric_inv(
     generators: torch.Tensor,
-    center_reg: float = 1e-4,
+    center_reg: float = None,
 ) -> torch.Tensor:
     r"""Compute inverse modified Killing metric for M-step phi preconditioning.
 
@@ -338,7 +344,7 @@ def compute_killing_metric_inv(
         g̃_ab = 2K · tr(G_a^T G_b) - 2 · tr(G_a) · tr(G_b)
 
     This is positive semidefinite, degenerate only on the center ℝ·I of gl(K).
-    The center direction is regularized with a small ε.
+    The center direction is regularized to prevent pathological amplification.
 
     For SO(N) with orthonormal generators (tr(G_a^T G_b) = δ_{ab}/2, tr(G_a) = 0):
         g̃ = K · I  →  g̃^{-1} = (1/K) · I  (trivial scalar rescaling)
@@ -348,7 +354,11 @@ def compute_killing_metric_inv(
 
     Args:
         generators: (n_gen, K, K) Lie algebra basis
-        center_reg: Regularization for the degenerate center direction
+        center_reg: Regularization for the degenerate center direction.
+            Default None → 2K (matches non-center eigenvalues for isotropic
+            conditioning). WARNING: Small values like 1e-4 create condition
+            numbers of 2K/center_reg (200,000× for K=10), amplifying the
+            trace direction and causing phi runaway → attention collapse.
 
     Returns:
         inv_metric: (n_gen, n_gen) inverse metric tensor
@@ -617,7 +627,7 @@ def create_optimizer(
 
     elif optimizer_type == 'natural_gradient':
         ema_decay = getattr(config, 'fisher_ema_decay', 0.95)
-        damping = getattr(config, 'fisher_damping', 1e-4)
+        damping = getattr(config, 'fisher_damping', 1e-2)
 
         # Estimate memory cost
         if verbose:
