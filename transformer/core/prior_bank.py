@@ -74,7 +74,9 @@ class PriorBank(nn.Module):
         gauge_param: str = 'phi',  # 'phi' or 'omega'
         omega_head_dims: Optional[list] = None,  # Per-head dims for omega path
         # Gradient scaling for sigma in decode (CE loss path)
-        sigma_ce_scale: float = 1,  # Fraction of CE gradient passed to sigma_p
+        sigma_ce_scale: float = 0.01,  # Fraction of CE gradient passed to sigma_p
+        # Learnable inverse-temperature for decode logits
+        learnable_temperature: bool = False,  # If True, learn decode scale factor
     ):
         """
         Initialize the prior bank.
@@ -89,6 +91,11 @@ class PriorBank(nn.Module):
             gauge_fixed_priors: If True, use single base prior with per-token rotations
             generators: Lie algebra generators for computing rotations (required if gauge_fixed_priors=True)
             phi_dim: Dimension of gauge frame (3 for SO(3))
+            sigma_ce_scale: Fraction of CE gradient passed to sigma_p (0.01 recommended)
+            learnable_temperature: If True, learn a decode scale factor via backprop.
+                Starts at scale=1 (CE ≈ ln V at init). Gradient is self-regulating:
+                dCE/d(log_scale) = scale·[E_p[KL] - KL_target], which decreases scale
+                when overconfident on wrong tokens and increases it as predictions improve.
         """
         super().__init__()
         self.vocab_size = vocab_size
@@ -100,6 +107,13 @@ class PriorBank(nn.Module):
         self.gauge_param = gauge_param
         self.omega_head_dims = omega_head_dims
         self.sigma_ce_scale = sigma_ce_scale
+        self.learnable_temperature = learnable_temperature
+
+        # Learnable inverse-temperature for decode logits.
+        # At init, scale = exp(0) = 1.0 → no amplification → CE ≈ ln(V).
+        # The model discovers the right K-dependent scale during training.
+        if learnable_temperature:
+            self.decode_log_scale = nn.Parameter(torch.tensor(0.0))
 
         # Dimension-aware initialization: √(ln V / K) makes pairwise KL ≈ ln(V).
         # Old 1/√K made KL = O(1), but attention divides by √K_h →
@@ -398,7 +412,8 @@ class PriorBank(nn.Module):
 
         # logits = -KL/τ ≈ -0.5/τ * (combined + prior_bias)
         # (dropping softmax-invariant terms -K and log|Σ_q|)
-        logits = -0.5 / tau * (combined + prior_bias.unsqueeze(0).unsqueeze(0))
+        scale = torch.exp(self.decode_log_scale) if self.learnable_temperature else 1.0
+        logits = -0.5 * scale / tau * (combined + prior_bias.unsqueeze(0).unsqueeze(0))
 
         return logits
 
@@ -522,5 +537,6 @@ class PriorBank(nn.Module):
             f"vocab_size={self.vocab_size}, "
             f"embed_dim={self.embed_dim}, "
             f"learnable_sigma={self.learnable_sigma}, "
-            f"gauge_fixed_priors={self.gauge_fixed_priors}"
+            f"gauge_fixed_priors={self.gauge_fixed_priors}, "
+            f"learnable_temperature={self.learnable_temperature}"
         )

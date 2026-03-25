@@ -64,7 +64,7 @@ def minimal_config():
         'evolve_sigma': True,
         'evolve_phi': False,
         'tie_embeddings': True,
-        'use_diagonal_covariance': True,
+        'diagonal_covariance': True,
         'ffn_mode': 'VFE_dynamic',
     }
 
@@ -85,7 +85,7 @@ def small_config():
         'evolve_sigma': True,
         'evolve_phi': True,
         'tie_embeddings': True,
-        'use_diagonal_covariance': True,
+        'diagonal_covariance': True,
         'ffn_mode': 'VFE_dynamic',
     }
 
