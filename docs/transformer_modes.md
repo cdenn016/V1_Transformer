@@ -244,21 +244,108 @@ The backprop learning rates (`mu_lr`, `sigma_lr`, `phi_lr`, `output_lr`) still a
 
 **Config:** `PURE_VFE_CONFIG` | **Mode string:** `'pure_vfe'` | **Model class:** `PureVFETransformer`
 
-The purest realization: no `nn.Module`, no autograd, no optimizer. The entire system operates through analytic natural gradient descent on the gauge-covariant VFE.
+The Pure VFE mode is the most minimal realization of the gauge-theoretic free energy principle for sequence modeling. It uses no `nn.Module`, no autograd, no optimizer, and no neural network components whatsoever. The entire system — both inference and learning — operates through analytic natural gradient descent on the gauge-covariant variational free energy with hand-derived, closed-form gradients. All tensors are raw `torch.Tensor` objects manipulated within `torch.no_grad()` contexts.
 
-**Architecture:** A prior bank of raw tensors -- one Gaussian `N(mu_v, Sigma_v)` per vocabulary token, with associated gauge frames. No linear projections, no output head. Logits are computed as `-KL(q || pi_v)`.
+#### Architecture: The Prior Bank
 
-**Inference:** E-step VFE descent replaces the forward pass entirely.
+The "model" is a prior bank: a set of raw tensors indexed by vocabulary token ID (`pure_vfe/model.py:22–108`). Each token $v \in \{1, \ldots, V\}$ is associated with a Gaussian prior $\pi_v = \mathcal{N}(\mu_v, \Sigma_v)$ with $\mu_v \in \mathbb{R}^K$ and $\Sigma_v \in \mathrm{SPD}(K)$, plus gauge frames $\Omega_v \in \mathrm{GL}(K_h)^H$ (one per head). Positional information is encoded by a separate set of positional gauge frames $\Omega_{\mathrm{pos},n}$ that compose multiplicatively with the token frames: $\Omega_n = \Omega_{v_n} \cdot \Omega_{\mathrm{pos},n}$.
 
-**Learning:** M-step natural gradient on prior bank parameters with analytic closed-form gradients.
+There are no linear projections, no learned query/key/value matrices, and no output head. The representational capacity comes entirely from the geometry of the prior bank and the VFE dynamics.
 
-Key flags:
-- `gauge_param='omega'` (direct GL(K)) or `'phi'` (Lie algebra)
-- `n_esteps=12` controls inference depth (replaces network depth)
-- `eta_E=0.1` (E-step step size), `eta_M=0.05` (M-step step size)
-- `causal=True` for autoregressive masking
+Two gauge parameterizations are supported (`gauge_param`). In the `'omega'` path (default), the gauge frames $\Omega_v \in \mathrm{GL}(K_h)$ are stored directly as matrices. In the `'phi'` path, Lie algebra coordinates $\phi_v \in \mathbb{R}^{K_h^2}$ are stored, with $\Omega_v = \exp(\sum_a \phi_v^a T_a)$ computed via the matrix exponential and $\mathrm{GL}(K_h)$ generators.
 
-Files: `transformer/pure_vfe/model.py`, `inference.py`, `learning.py`, `config.py`
+#### Inference: E-Step as Forward Pass
+
+The forward pass is VFE descent. Given input token IDs $[v_1, \ldots, v_N]$, beliefs are initialized from the priors: $\mu^{(0)} = \mu_{v_n}$, $\Sigma^{(0)} = \Sigma_{v_n}$. The E-step then runs `n_esteps` iterations (default 12) of natural gradient descent on the belief VFE, which contains only the prior and alignment terms — no observation term (`pure_vfe/inference.py:160–400`):
+
+$$F_E = \sum_i \alpha_i \, \mathrm{KL}(q_i \| p_i) + \sum_{i,j} \beta_{ij} \, \mathrm{KL}(q_i \| \Omega_{ij} q_j)$$
+
+The state-dependent precision $\alpha_i = c_0 / (b_0 + \mathrm{KL}(q_i \| p_i))$ gates prior coupling per position, matching the adaptive alpha in the nn.Module modes.
+
+At each iteration, the E-step computes three natural gradient updates in sequence.
+
+**Mean update.** The gradient $\nabla_\mu F = \nabla_\mu^{\mathrm{prior}} + \nabla_\mu^{\mathrm{align}}$ is computed analytically (alignment term includes the softmax coupling, identical to the EM mode derivation). The natural gradient applies the Fisher-Rao metric for Gaussian means:
+
+$$\Delta \mu = -\eta_E \, \Sigma \, \nabla_\mu F$$
+
+A whitened trust region clips the update: $\|\Delta\mu / \sqrt{\sigma}\|$ is clamped to `trust_region_mu` (default 2.0) before the step is applied. The learning rate decays linearly across iterations from $\eta_E$ to $\eta_E \cdot (1 - \text{decay})$ (`inference.py:241–346`).
+
+**Covariance update.** The covariance gradient per head is:
+
+$$\nabla_{\Sigma_h} F = \frac{1}{2}\!\left[\alpha_i \, \Sigma_{p,h}^{-1} + \sum_j \beta_{ij} \, \Lambda_{ij,h} - (\alpha_i + 1)\,\Sigma_{q,h}^{-1}\right]$$
+
+where $\Lambda_{ij,h} = \Omega_{ij,h}^{-\top} \Sigma_{j,h}^{-1} \Omega_{ij,h}^{-1}$ is the transported precision. The natural gradient on the SPD manifold is $\Delta\Sigma = -2\,\Sigma \, \mathrm{sym}(\nabla_\Sigma F) \, \Sigma$, and the retraction uses the matrix exponential to ensure positive definiteness:
+
+$$\Sigma^{(t+1)} = \Sigma^{1/2} \, \exp\!\left(-\eta_\sigma \, \Sigma^{-1/2} \, \Delta\Sigma \, \Sigma^{-1/2}\right) \, \Sigma^{1/2}$$
+
+with eigenvalues clamped to $[\epsilon_{\min}, \kappa_{\max}]$ for numerical stability (`inference.py:348–389`).
+
+**Gauge frame update.** The gauge gradient $\partial F / \partial \Omega_i$ is derived from the chain rule through transported KL divergences. For each head $h$, the per-pair gradient decomposes as (`pure_vfe/gauge.py:161–240`):
+
+$$\frac{\partial \mathrm{KL}_{ij}}{\partial \Omega_{ij}} = -\Lambda_{ij} \delta_{ij} \mu_j^\top - \Lambda_{ij}(\Sigma_i + \delta_{ij}\delta_{ij}^\top)\Omega_{ij}^{-\top} + \Omega_{ij}^{-\top}$$
+
+where $\delta_{ij} = \mu_i - \Omega_{ij}\mu_j$. The chain rule to the token frame is $\partial \mathrm{KL}_{ij}/\partial \Omega_i = (\partial \mathrm{KL}_{ij}/\partial \Omega_{ij}) \cdot \Omega_j^{-\top}$, and the total gradient sums over attention-weighted pairs: $\nabla_{\Omega_i} F = \sum_j \beta_{ij} \, \partial \mathrm{KL}_{ij}/\partial \Omega_i$.
+
+The natural gradient uses the left-invariant metric on $\mathrm{GL}(K)$. The Euclidean gradient is pulled back to the Lie algebra via $\xi = \Omega^\top \nabla_\Omega F$, clipped, and pushed forward:
+
+$$\Delta\Omega = -\eta_\Omega \, \Omega \, \mathrm{clip}(\xi)$$
+
+This ensures updates respect the group geometry (`pure_vfe/gauge.py:247–280`).
+
+#### Decoding: KL-Based Logits
+
+After the E-step converges, logits are computed without any linear projection. Each token's logit is the negative KL divergence from the converged belief to the corresponding prior (`pure_vfe/gaussians.py:619–670`):
+
+$$\mathrm{logit}_v(i) = \frac{-\mathrm{KL}(q_i \| \pi_v)}{\tau_{\mathrm{decode}}}$$
+
+where the KL is computed over the full Gaussian:
+
+$$\mathrm{KL}(q_i \| \pi_v) = \frac{1}{2}\!\left[\mathrm{tr}(\Sigma_v^{-1} \Sigma_i) + (\mu_v - \mu_i)^\top \Sigma_v^{-1}(\mu_v - \mu_i) - K + \log\frac{|\Sigma_v|}{|\Sigma_i|}\right]$$
+
+Tokens whose priors are close to the converged beliefs receive high logits; distant priors receive low logits. The decode temperature $\tau_{\mathrm{decode}}$ softens the distribution to prevent overconfidence. This replaces the standard $W_{\mathrm{out}} \mu$ linear projection with a fully geometric operation.
+
+#### Learning: M-Step Natural Gradient
+
+The M-step updates the prior bank parameters $\theta = \{\mu_v, \Sigma_v, \Omega_v\}$ using analytic gradients of the marginal VFE, which now includes the observation term. All gradients are derived in closed form — no `loss.backward()` is called anywhere (`pure_vfe/learning.py:221–400`).
+
+**Mean gradient.** The VFE gradient for the prior mean $\mu_v$ aggregates sufficient statistics across all occurrences of token $v$ in the batch. The E-step converged beliefs $\mu^*_n$ provide the data term, and a hyper-prior $\mathcal{N}(0, \sigma_h^2 I)$ provides regularization:
+
+$$\nabla_{\mu_v} F = -\Sigma_v^{-1}(\bar{\mu}^*_v - \mu_v) + \frac{\mu_v}{\sigma_h^2} + \nabla_{\mu_v}^{\mathrm{obs}}$$
+
+where $\bar{\mu}^*_v = (1/n_v)\sum_{n: v_n = v} \mu^*_n$ is the count-weighted average of converged beliefs. The observation gradient $\nabla_{\mu_v}^{\mathrm{obs}}$ enters through the analytic cross-entropy gradient $\partial \mathrm{CE}/\partial \mathrm{logit} = \hat{y} - y$ (the softmax residual), chain-ruled through the KL decode:
+
+$$\nabla_{\mu_v}^{\mathrm{obs}} = \Sigma_v^{-1} \frac{1}{n_v}\sum_n (\hat{y}_{n,v} - y_{n,v})(\mu^*_n - \mu_v)$$
+
+The natural gradient is $\Delta\mu_v = -\eta_M \, \Sigma_v \, \nabla_{\mu_v} F$, with trust-region clipping and optional Adam momentum for variance reduction across batches.
+
+**Covariance gradient.** The prior covariance $\Sigma_v$ gradient uses the converged second moments:
+
+$$\nabla_{\Sigma_v} F = \frac{1}{2}\!\left[\Sigma_v^{-1} - \Sigma_v^{-1}\!\left(\bar{\Sigma}^*_v + \overline{(\mu^* - \mu_v)(\mu^* - \mu_v)^\top}_v\right)\!\Sigma_v^{-1}\right] + \frac{1}{2}\!\left(\frac{I}{\sigma_h^2} - \Sigma_v^{-1}\right)$$
+
+The first bracket is the VFE data term (optimal $\Sigma_v$ would match the empirical second moment of converged beliefs); the second is the hyper-prior regularization. The natural gradient on SPD uses the same $\Delta\Sigma = -2\Sigma \, \mathrm{sym}(\nabla F) \, \Sigma$ formula as the E-step, with matrix exponential retraction.
+
+**Gauge frame gradient.** For the `'omega'` parameterization, the M-step gradient pushes prior frames toward the E-step evolved frames: $\nabla_{\Omega_v} F \propto -(\bar{\Omega}^*_v - \Omega_v)$, with left-invariant natural gradient and trust-region clipping. For the `'phi'` parameterization, the chain rule through $\exp$ is applied: $\nabla_{\phi_v} = \sum_a [\Omega_v^\top \nabla_{\Omega_v} F]_{:,a} \cdot T_a$, with retraction on the Lie algebra (`learning.py:381–399`).
+
+#### Gradient Accumulation
+
+The `MStepAccumulator` class (`learning.py:44–218`) collects per-token sufficient statistics — occurrence counts, converged belief sums, outer product sums, and observation gradient quantities — into vocabulary-sized buffers across multiple micro-batches. After $K$ micro-batches, `apply_m_step_from_accumulated` consumes the accumulated (lower-variance) gradient in a single M-step update. All buffers are indexed by token ID, so different micro-batches with different token sets merge automatically via scatter-add.
+
+#### Pure VFE Configuration
+
+| Flag | Default | Role |
+|------|---------|------|
+| `n_esteps` | `12` | E-step iterations (replaces network depth) |
+| `eta_E` | `0.1` | E-step natural gradient step size |
+| `eta_M` | `0.05` | M-step natural gradient step size |
+| `gauge_param` | `'omega'` | `'omega'` (direct $\mathrm{GL}(K)$) or `'phi'` (Lie algebra) |
+| `causal` | `True` | Autoregressive masking in attention |
+| `alpha_b0`, `alpha_c0` | `1.0`, `1.0` | State-dependent precision $\alpha = c_0/(b_0 + \mathrm{KL})$ |
+| `hyper_var` | `100.0` | Hyper-prior variance $\sigma_h^2$ (larger = weaker regularization) |
+| `use_adam_m_step` | `True` | Adam momentum buffers for M-step variance reduction |
+| `use_rope` | `True` | Rotary position embeddings on $\mu$ before KL |
+| `grad_accum_steps` | `1` | Micro-batches per M-step update |
+
+Files: `transformer/pure_vfe/model.py`, `inference.py`, `learning.py`, `gaussians.py`, `gauge.py`, `config.py`
 
 ### Standard (Baseline)
 
