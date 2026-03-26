@@ -168,41 +168,184 @@ See the Configuration Axes section below for flags shared across modes (gauge ge
 
 **Config:** `HEBBIAN_CONFIG` | **Mode string:** `'hebbian'` | **Model class:** `GaugeTransformerLM`
 
-Same gauge-VFE architecture as EM, but all parameter learning is local and backprop-free.
+The Hebbian mode uses the same gauge-VFE architecture as EM but replaces all backpropagation-based parameter learning with local, biologically plausible update rules. The E-step is identical to EM mode — natural gradient VFE descent on $(\mu_q, \Sigma_q, \phi)$ as described above. The M-step replaces the global loss-gradient-optimizer loop with three local learning rules: P-flow for embeddings, P-flow for gauge frames, and the Widrow-Hoff delta rule for the output projection. No gradient flows backward through the computation graph; all parameter updates are computed from locally available quantities.
 
-**E-step:** Identical to EM mode -- natural gradient VFE descent on `(mu_q, Sigma_q, phi)`.
+The M-step loss is pure cross-entropy with all VFE regularizers set to zero ($\alpha = 0$, $\beta = 0$, $\alpha_\phi = 0$, $\lambda_h = 0$). The VFE regularization is implicit in the E-step dynamics — priors anchor beliefs and gauge transport structures attention — but these terms do not appear in the training loss. This decoupling is possible because the P-flow and delta rule update embeddings directly from the E-step output, bypassing the loss function entirely.
 
-**M-step (no backprop):**
-- `mu_embed`, `sigma_embed`: P-flow exponential moving average toward successful beliefs, weighted by prediction error
-- `phi_embed`: P-flow EMA toward E-step evolved phi (detached from computation graph)
-- `W_out`: Delta rule `DeltaW = eta * (target - pred) outer mu^T` (Widrow-Hoff)
+#### P-Flow: Prediction-Error-Weighted EMA
 
-**Loss:** Cross-entropy only (`alpha=0`, `beta=0`). VFE regularizers are implicit in E-step dynamics, not in the training loss.
+P-flow updates each token embedding $\mu_v$ toward the beliefs $\mu_{q}$ that the E-step produced for that token, weighted by how well those beliefs predicted the next token. The update runs after the forward pass and is entirely within a `torch.no_grad()` context (`embeddings.py:558–645`, `model.py:1187–1226`).
 
-Key flags:
-- `use_p_flow=True`, `use_delta_rule_w_out=True`
-- `detach_phi=True` prevents backprop through gauge frames
-- `p_flow_ema_decay=0.95`, `delta_rule_lr=0.1`
+For each token type $v$ appearing in the batch, the update collects all occurrences of $v$ across batch elements and sequence positions, computes prediction-error-weighted averages of the final beliefs, and applies an exponential moving average. The weighting uses a segment-wise softmax over negative cross-entropy errors, so occurrences where the model predicted well receive higher weight (`embeddings.py:520–556`):
+
+$$w_{v,n} = \frac{\exp(-\ell_n)}{\sum_{m : \mathrm{id}_m = v} \exp(-\ell_m)}$$
+
+where $\ell_n$ is the per-position cross-entropy loss and the sum runs over all positions in the batch where token $v$ appears. The weighted target belief for token $v$ is:
+
+$$\bar{\mu}_v = \sum_{n : \mathrm{id}_n = v} w_{v,n} \, \mu_{q,n}$$
+
+The embedding update is then an EMA step with a confidence-modulated learning rate:
+
+$$\mu_v \;\leftarrow\; (1 - \eta_v) \, \mu_v \;+\; \eta_v \, \bar{\mu}_v$$
+
+where the effective learning rate $\eta_v$ incorporates a confidence factor that scales inversely with the token's mean prediction error:
+
+$$\eta_v = (1 - \rho) \cdot \frac{1}{1 + \bar{\ell}_v}$$
+
+Here $\rho$ is the base EMA decay (default 0.95, so base $\eta = 0.05$) and $\bar{\ell}_v$ is the mean cross-entropy across all occurrences of token $v$ in the batch. Tokens that the model already predicts well receive larger updates; tokens with high error receive smaller, more conservative steps. This prevents the embeddings from being destabilized by poorly predicted occurrences.
+
+The sigma embedding receives a parallel P-flow update with a 10$\times$ slower learning rate ($\eta_\sigma = 0.1 \cdot \eta_v$) for stability. The update targets $\bar{\sigma}_v$ (computed analogously from $\sigma_{q,n}$) and is applied in log-space to maintain positivity (`embeddings.py:626–645`):
+
+$$\log \sigma_v \;\leftarrow\; (1 - \eta_\sigma) \, \log \sigma_v \;+\; \eta_\sigma \, \log \bar{\sigma}_v$$
+
+#### Phi P-Flow: Gauge Frame Learning Without Backprop
+
+In Hebbian mode, `detach_phi=True` disconnects $\phi$ from the computation graph, so no gradient from the loss reaches $\phi_{\mathrm{embed}}$. Instead, the gauge frame embeddings learn via a separate P-flow update that pushes $\phi_v$ toward the VFE-evolved values $\phi_{\mathrm{evolved}}$ from the E-step (`embeddings.py:647–695`, `model.py:1227–1280`).
+
+The E-step evolves $\phi$ through natural gradient descent on the VFE (minimizing transported KL divergences), producing $\phi_{\mathrm{evolved}}$ that reflects the gauge geometry preferred by the current data. After the forward pass, this evolved value is persisted back to the embedding via EMA:
+
+$$\phi_v \;\leftarrow\; (1 - \eta) \, \phi_v \;+\; \eta \, \bar{\phi}_v$$
+
+where $\bar{\phi}_v$ is the prediction-error-weighted average of evolved phi values across all occurrences of token $v$ (using the same segment-wise softmax weights $w_{v,n}$ as the mu P-flow). The learning rate $\eta = 1 - \rho$ uses the base EMA decay without the confidence modulation applied to mu.
+
+This creates a two-timescale system for gauge frames: within each forward pass, the E-step rapidly adapts $\phi$ to the local context (fast timescale), while across training steps, the embedding slowly accumulates the context-averaged preferred frame (slow timescale). The embedding converges toward the frame that, on average across contexts, minimizes the transported KL divergences for that token.
+
+#### Delta Rule: Local Learning for $W_{\mathrm{out}}$
+
+The output projection $W_{\mathrm{out}} \in \mathbb{R}^{V \times K}$ maps belief means to vocabulary logits. In Hebbian mode, instead of receiving gradients through backpropagation from the cross-entropy loss, $W_{\mathrm{out}}$ is updated by the Widrow-Hoff delta rule — a local learning rule that requires only the prediction error and the pre-synaptic activity (`model.py:1282–1343`):
+
+$$\Delta W_{\mathrm{out}} = \eta_\delta \cdot (y - \hat{y}) \otimes \mu_q^\top$$
+
+where $y \in \{0, 1\}^V$ is the one-hot encoded target, $\hat{y} = \mathrm{softmax}(W_{\mathrm{out}} \mu_q) \in [0,1]^V$ is the predicted distribution, $\mu_q \in \mathbb{R}^K$ is the belief mean from the E-step, and $\otimes$ denotes the outer product. The update is averaged over all non-padding positions in the batch:
+
+$$W_{\mathrm{out}} \;\leftarrow\; W_{\mathrm{out}} + \frac{\eta_\delta}{|\mathcal{V}|} \sum_{n \in \mathcal{V}} (y_n - \hat{y}_n) \, \mu_{q,n}^\top$$
+
+where $\mathcal{V}$ is the set of valid (non-padding) positions. This is equivalent to one step of gradient descent on the cross-entropy loss with respect to $W_{\mathrm{out}}$ alone (since $\partial \mathrm{CE} / \partial W_{\mathrm{out}} = (\hat{y} - y) \mu_q^\top$ for the softmax-cross-entropy pair), but computed without backpropagation through the rest of the graph.
+
+#### Fully Backprop-Free Training
+
+When all three local rules are active (`use_p_flow=True`, `use_delta_rule_w_out=True`, `detach_phi=True`), the Hebbian mode achieves fully backprop-free learning. The training loop still computes a forward pass (including the E-step VFE iterations) and a cross-entropy loss for logging, but no `loss.backward()` gradient propagation is needed for parameter updates. All three embedding types ($\mu$, $\sigma$, $\phi$) update via P-flow, and $W_{\mathrm{out}}$ updates via the delta rule.
+
+The backprop learning rates (`mu_lr`, `sigma_lr`, `phi_lr`, `output_lr`) still appear in the config for the optimizer but are less important in practice — P-flow dominates the embedding updates, and the delta rule dominates $W_{\mathrm{out}}$. The VFE E-step internal parameters (learnable step sizes $\eta_\mu$, $\eta_\sigma$, learnable $c_0$/$b_0$ for adaptive alpha) still require gradients through the E-step computation, but these are E-step dynamics parameters, not representation parameters.
+
+#### Hebbian Mode Configuration
+
+| Flag | Default | Role |
+|------|---------|------|
+| `use_p_flow` | `True` | Enable P-flow EMA for $\mu_{\mathrm{embed}}$ and $\sigma_{\mathrm{embed}}$ |
+| `use_delta_rule_w_out` | `True` | Enable Widrow-Hoff delta rule for $W_{\mathrm{out}}$ |
+| `detach_phi` | `True` | Detach $\phi$ from backprop; learns via phi P-flow only |
+| `p_flow_ema_decay` | `0.95` | EMA decay $\rho$ (higher = slower embedding drift) |
+| `delta_rule_lr` | `0.1` | Step size $\eta_\delta$ for delta rule |
+| `amortized_inference` | `False` | Priors detached (P-flow replaces gradient-based embedding learning) |
+| `alpha`, `beta`, `alpha_phi`, `lambda_hyper` | All `0.0` | No VFE terms in training loss; regularization is implicit in E-step |
 
 ### Pure VFE (No Autograd, No Optimizer)
 
 **Config:** `PURE_VFE_CONFIG` | **Mode string:** `'pure_vfe'` | **Model class:** `PureVFETransformer`
 
-The purest realization: no `nn.Module`, no autograd, no optimizer. The entire system operates through analytic natural gradient descent on the gauge-covariant VFE.
+The Pure VFE mode is the most minimal realization of the gauge-theoretic free energy principle for sequence modeling. It uses no `nn.Module`, no autograd, no optimizer, and no neural network components whatsoever. The entire system — both inference and learning — operates through analytic natural gradient descent on the gauge-covariant variational free energy with hand-derived, closed-form gradients. All tensors are raw `torch.Tensor` objects manipulated within `torch.no_grad()` contexts.
 
-**Architecture:** A prior bank of raw tensors -- one Gaussian `N(mu_v, Sigma_v)` per vocabulary token, with associated gauge frames. No linear projections, no output head. Logits are computed as `-KL(q || pi_v)`.
+#### Architecture: The Prior Bank
 
-**Inference:** E-step VFE descent replaces the forward pass entirely.
+The "model" is a prior bank: a set of raw tensors indexed by vocabulary token ID (`pure_vfe/model.py:22–108`). Each token $v \in \{1, \ldots, V\}$ is associated with a Gaussian prior $\pi_v = \mathcal{N}(\mu_v, \Sigma_v)$ with $\mu_v \in \mathbb{R}^K$ and $\Sigma_v \in \mathrm{SPD}(K)$, plus gauge frames $\Omega_v \in \mathrm{GL}(K_h)^H$ (one per head). Positional information is encoded by a separate set of positional gauge frames $\Omega_{\mathrm{pos},n}$ that compose multiplicatively with the token frames: $\Omega_n = \Omega_{v_n} \cdot \Omega_{\mathrm{pos},n}$.
 
-**Learning:** M-step natural gradient on prior bank parameters with analytic closed-form gradients.
+There are no linear projections, no learned query/key/value matrices, and no output head. The representational capacity comes entirely from the geometry of the prior bank and the VFE dynamics.
 
-Key flags:
-- `gauge_param='omega'` (direct GL(K)) or `'phi'` (Lie algebra)
-- `n_esteps=12` controls inference depth (replaces network depth)
-- `eta_E=0.1` (E-step step size), `eta_M=0.05` (M-step step size)
-- `causal=True` for autoregressive masking
+Two gauge parameterizations are supported (`gauge_param`). In the `'omega'` path (default), the gauge frames $\Omega_v \in \mathrm{GL}(K_h)$ are stored directly as matrices. In the `'phi'` path, Lie algebra coordinates $\phi_v \in \mathbb{R}^{K_h^2}$ are stored, with $\Omega_v = \exp(\sum_a \phi_v^a T_a)$ computed via the matrix exponential and $\mathrm{GL}(K_h)$ generators.
 
-Files: `transformer/pure_vfe/model.py`, `inference.py`, `learning.py`, `config.py`
+#### Inference: E-Step as Forward Pass
+
+The forward pass is VFE descent. Given input token IDs $[v_1, \ldots, v_N]$, beliefs are initialized from the priors: $\mu^{(0)} = \mu_{v_n}$, $\Sigma^{(0)} = \Sigma_{v_n}$. The E-step then runs `n_esteps` iterations (default 12) of natural gradient descent on the belief VFE, which contains only the prior and alignment terms — no observation term (`pure_vfe/inference.py:160–400`):
+
+$$F_E = \sum_i \alpha_i \, \mathrm{KL}(q_i \| p_i) + \sum_{i,j} \beta_{ij} \, \mathrm{KL}(q_i \| \Omega_{ij} q_j)$$
+
+The state-dependent precision $\alpha_i = c_0 / (b_0 + \mathrm{KL}(q_i \| p_i))$ gates prior coupling per position, matching the adaptive alpha in the nn.Module modes.
+
+At each iteration, the E-step computes three natural gradient updates in sequence.
+
+**Mean update.** The gradient $\nabla_\mu F = \nabla_\mu^{\mathrm{prior}} + \nabla_\mu^{\mathrm{align}}$ is computed analytically (alignment term includes the softmax coupling, identical to the EM mode derivation). The natural gradient applies the Fisher-Rao metric for Gaussian means:
+
+$$\Delta \mu = -\eta_E \, \Sigma \, \nabla_\mu F$$
+
+A whitened trust region clips the update: $\|\Delta\mu / \sqrt{\sigma}\|$ is clamped to `trust_region_mu` (default 2.0) before the step is applied. The learning rate decays linearly across iterations from $\eta_E$ to $\eta_E \cdot (1 - \text{decay})$ (`inference.py:241–346`).
+
+**Covariance update.** The covariance gradient per head is:
+
+$$\nabla_{\Sigma_h} F = \frac{1}{2}\!\left[\alpha_i \, \Sigma_{p,h}^{-1} + \sum_j \beta_{ij} \, \Lambda_{ij,h} - (\alpha_i + 1)\,\Sigma_{q,h}^{-1}\right]$$
+
+where $\Lambda_{ij,h} = \Omega_{ij,h}^{-\top} \Sigma_{j,h}^{-1} \Omega_{ij,h}^{-1}$ is the transported precision. The natural gradient on the SPD manifold is $\Delta\Sigma = -2\,\Sigma \, \mathrm{sym}(\nabla_\Sigma F) \, \Sigma$, and the retraction uses the matrix exponential to ensure positive definiteness:
+
+$$\Sigma^{(t+1)} = \Sigma^{1/2} \, \exp\!\left(-\eta_\sigma \, \Sigma^{-1/2} \, \Delta\Sigma \, \Sigma^{-1/2}\right) \, \Sigma^{1/2}$$
+
+with eigenvalues clamped to $[\epsilon_{\min}, \kappa_{\max}]$ for numerical stability (`inference.py:348–389`).
+
+**Gauge frame update.** The gauge gradient $\partial F / \partial \Omega_i$ is derived from the chain rule through transported KL divergences. For each head $h$, the per-pair gradient decomposes as (`pure_vfe/gauge.py:161–240`):
+
+$$\frac{\partial \mathrm{KL}_{ij}}{\partial \Omega_{ij}} = -\Lambda_{ij} \delta_{ij} \mu_j^\top - \Lambda_{ij}(\Sigma_i + \delta_{ij}\delta_{ij}^\top)\Omega_{ij}^{-\top} + \Omega_{ij}^{-\top}$$
+
+where $\delta_{ij} = \mu_i - \Omega_{ij}\mu_j$. The chain rule to the token frame is $\partial \mathrm{KL}_{ij}/\partial \Omega_i = (\partial \mathrm{KL}_{ij}/\partial \Omega_{ij}) \cdot \Omega_j^{-\top}$, and the total gradient sums over attention-weighted pairs: $\nabla_{\Omega_i} F = \sum_j \beta_{ij} \, \partial \mathrm{KL}_{ij}/\partial \Omega_i$.
+
+The natural gradient uses the left-invariant metric on $\mathrm{GL}(K)$. The Euclidean gradient is pulled back to the Lie algebra via $\xi = \Omega^\top \nabla_\Omega F$, clipped, and pushed forward:
+
+$$\Delta\Omega = -\eta_\Omega \, \Omega \, \mathrm{clip}(\xi)$$
+
+This ensures updates respect the group geometry (`pure_vfe/gauge.py:247–280`).
+
+#### Decoding: KL-Based Logits
+
+After the E-step converges, logits are computed without any linear projection. Each token's logit is the negative KL divergence from the converged belief to the corresponding prior (`pure_vfe/gaussians.py:619–670`):
+
+$$\mathrm{logit}_v(i) = \frac{-\mathrm{KL}(q_i \| \pi_v)}{\tau_{\mathrm{decode}}}$$
+
+where the KL is computed over the full Gaussian:
+
+$$\mathrm{KL}(q_i \| \pi_v) = \frac{1}{2}\!\left[\mathrm{tr}(\Sigma_v^{-1} \Sigma_i) + (\mu_v - \mu_i)^\top \Sigma_v^{-1}(\mu_v - \mu_i) - K + \log\frac{|\Sigma_v|}{|\Sigma_i|}\right]$$
+
+Tokens whose priors are close to the converged beliefs receive high logits; distant priors receive low logits. The decode temperature $\tau_{\mathrm{decode}}$ softens the distribution to prevent overconfidence. This replaces the standard $W_{\mathrm{out}} \mu$ linear projection with a fully geometric operation.
+
+#### Learning: M-Step Natural Gradient
+
+The M-step updates the prior bank parameters $\theta = \{\mu_v, \Sigma_v, \Omega_v\}$ using analytic gradients of the marginal VFE, which now includes the observation term. All gradients are derived in closed form — no `loss.backward()` is called anywhere (`pure_vfe/learning.py:221–400`).
+
+**Mean gradient.** The VFE gradient for the prior mean $\mu_v$ aggregates sufficient statistics across all occurrences of token $v$ in the batch. The E-step converged beliefs $\mu^*_n$ provide the data term, and a hyper-prior $\mathcal{N}(0, \sigma_h^2 I)$ provides regularization:
+
+$$\nabla_{\mu_v} F = -\Sigma_v^{-1}(\bar{\mu}^*_v - \mu_v) + \frac{\mu_v}{\sigma_h^2} + \nabla_{\mu_v}^{\mathrm{obs}}$$
+
+where $\bar{\mu}^*_v = (1/n_v)\sum_{n: v_n = v} \mu^*_n$ is the count-weighted average of converged beliefs. The observation gradient $\nabla_{\mu_v}^{\mathrm{obs}}$ enters through the analytic cross-entropy gradient $\partial \mathrm{CE}/\partial \mathrm{logit} = \hat{y} - y$ (the softmax residual), chain-ruled through the KL decode:
+
+$$\nabla_{\mu_v}^{\mathrm{obs}} = \Sigma_v^{-1} \frac{1}{n_v}\sum_n (\hat{y}_{n,v} - y_{n,v})(\mu^*_n - \mu_v)$$
+
+The natural gradient is $\Delta\mu_v = -\eta_M \, \Sigma_v \, \nabla_{\mu_v} F$, with trust-region clipping and optional Adam momentum for variance reduction across batches.
+
+**Covariance gradient.** The prior covariance $\Sigma_v$ gradient uses the converged second moments:
+
+$$\nabla_{\Sigma_v} F = \frac{1}{2}\!\left[\Sigma_v^{-1} - \Sigma_v^{-1}\!\left(\bar{\Sigma}^*_v + \overline{(\mu^* - \mu_v)(\mu^* - \mu_v)^\top}_v\right)\!\Sigma_v^{-1}\right] + \frac{1}{2}\!\left(\frac{I}{\sigma_h^2} - \Sigma_v^{-1}\right)$$
+
+The first bracket is the VFE data term (optimal $\Sigma_v$ would match the empirical second moment of converged beliefs); the second is the hyper-prior regularization. The natural gradient on SPD uses the same $\Delta\Sigma = -2\Sigma \, \mathrm{sym}(\nabla F) \, \Sigma$ formula as the E-step, with matrix exponential retraction.
+
+**Gauge frame gradient.** For the `'omega'` parameterization, the M-step gradient pushes prior frames toward the E-step evolved frames: $\nabla_{\Omega_v} F \propto -(\bar{\Omega}^*_v - \Omega_v)$, with left-invariant natural gradient and trust-region clipping. For the `'phi'` parameterization, the chain rule through $\exp$ is applied: $\nabla_{\phi_v} = \sum_a [\Omega_v^\top \nabla_{\Omega_v} F]_{:,a} \cdot T_a$, with retraction on the Lie algebra (`learning.py:381–399`).
+
+#### Gradient Accumulation
+
+The `MStepAccumulator` class (`learning.py:44–218`) collects per-token sufficient statistics — occurrence counts, converged belief sums, outer product sums, and observation gradient quantities — into vocabulary-sized buffers across multiple micro-batches. After $K$ micro-batches, `apply_m_step_from_accumulated` consumes the accumulated (lower-variance) gradient in a single M-step update. All buffers are indexed by token ID, so different micro-batches with different token sets merge automatically via scatter-add.
+
+#### Pure VFE Configuration
+
+| Flag | Default | Role |
+|------|---------|------|
+| `n_esteps` | `12` | E-step iterations (replaces network depth) |
+| `eta_E` | `0.1` | E-step natural gradient step size |
+| `eta_M` | `0.05` | M-step natural gradient step size |
+| `gauge_param` | `'omega'` | `'omega'` (direct $\mathrm{GL}(K)$) or `'phi'` (Lie algebra) |
+| `causal` | `True` | Autoregressive masking in attention |
+| `alpha_b0`, `alpha_c0` | `1.0`, `1.0` | State-dependent precision $\alpha = c_0/(b_0 + \mathrm{KL})$ |
+| `hyper_var` | `100.0` | Hyper-prior variance $\sigma_h^2$ (larger = weaker regularization) |
+| `use_adam_m_step` | `True` | Adam momentum buffers for M-step variance reduction |
+| `use_rope` | `True` | Rotary position embeddings on $\mu$ before KL |
+| `grad_accum_steps` | `1` | Micro-batches per M-step update |
+
+Files: `transformer/pure_vfe/model.py`, `inference.py`, `learning.py`, `gaussians.py`, `gauge.py`, `config.py`
 
 ### Standard (Baseline)
 
@@ -291,11 +434,55 @@ Additionally, `evolve_phi_e_step=True` updates phi during each E-step VFE iterat
 
 ### Optimizer Types (`optimizer_type`)
 
-| Type | Description |
-|------|-------------|
-| `'adamw'` | Standard AdamW with diagonal Fisher EMA |
-| `'riemannian_adam'` | AdamW + Killing-form metric for phi + Fisher metric for location parameters |
-| `'natural_gradient'` | Per-token block-diagonal empirical Fisher. Cost: `O(V * K^3)` per step. Controlled by `fisher_ema_decay` and `fisher_damping` |
+Three M-step optimizer types are available, each providing a different approximation to the natural gradient on the parameter manifold. All are implemented in `transformer/training/optimizer.py`.
+
+#### AdamW (default)
+
+Standard AdamW with decoupled weight decay. The diagonal exponential moving average of squared gradients provides an implicit diagonal Fisher approximation. No geometric awareness of the Lie algebra or statistical manifold structure. Suitable as a baseline or when training is dominated by non-embedding parameters.
+
+#### RiemannianAdamW
+
+Extends AdamW by applying the geometrically correct metric tensor to gradients before the Adam moment update (`optimizer.py:41–146`). Since the Lie algebra $\mathfrak{gl}(K)$ is a flat vector space, parallel transport is trivial and the Riemannian exponential map reduces to addition, so the optimizer applies preconditioning as a gradient transformation followed by standard Adam.
+
+Three parameter-type-specific metrics are applied in the `step()` method before delegating to the parent AdamW:
+
+**Phi / Omega parameters** (gauge frame embeddings): The inverse Killing-form metric $\tilde{g}^{-1}$ is applied, where $\tilde{g}_{ab} = 2K\,\mathrm{tr}(T_a^\top T_b) - 2\,\mathrm{tr}(T_a)\mathrm{tr}(T_b)$ as described in the EM section. The precomputed inverse metric is applied as a matrix multiply on the last dimension of the gradient:
+
+$$g_{\mathrm{phi}}^{\mathrm{nat}} = g_{\mathrm{phi}}^{\mathrm{eucl}} \cdot \tilde{g}^{-1}$$
+
+For $\mathrm{SO}(N)$ with Frobenius-orthonormal generators, $\tilde{g} \approx K \cdot I$, so preconditioning reduces to a scalar rescaling by $1/K$. For $\mathrm{GL}(K)$ with the standard $E_{ij}$ basis, the metric is non-trivial and couples the trace direction.
+
+**Mu parameters** (mean embeddings): The Fisher information metric for the mean of $\mathcal{N}(\mu, \Sigma)$ is $\Sigma^{-1}$. The natural gradient is therefore:
+
+$$g_{\mu}^{\mathrm{nat}} = \Sigma_v \cdot g_{\mu}^{\mathrm{eucl}}$$
+
+where $\Sigma_v = \exp(\log\sigma_v^2)$ is the current per-token variance, read from the model's `log_sigma_diag` parameter. High-uncertainty dimensions receive larger steps (the optimizer explores more where beliefs are uncertain). When the model has no learnable sigma, the scaling is uniform and equivalent to a learning rate change.
+
+**Sigma parameters** (log-variance embeddings): For the log-variance parameterization $\eta = \log(\sigma^2)$, the Fisher information is constant $F_{\eta\eta} = 1/2$. The natural gradient is therefore $2 \times$ the Euclidean gradient:
+
+$$g_{\sigma}^{\mathrm{nat}} = 2 \cdot g_{\sigma}^{\mathrm{eucl}}$$
+
+#### NaturalGradientOptimizer
+
+A full per-token block-diagonal empirical Fisher optimizer (`optimizer.py:153–331`). For each embedding parameter with shape $(V, K)$, it maintains a $K \times K$ Fisher information block per vocabulary token, updated via exponential moving average of gradient outer products:
+
+$$\hat{F}_v^{(t)} = (1 - \rho)\,\hat{F}_v^{(t-1)} + \rho \cdot g_v \, g_v^\top$$
+
+where $\rho$ is the EMA decay rate (`fisher_ema_decay`, default 0.95) with bias correction for early steps: $\rho_{\mathrm{eff}} = \min(\rho, 2/(t+1))$ for $t < 20$. The Fisher $\hat{F}_v$ converges to the true Fisher $\mathbb{E}[g_v g_v^\top]$ under ergodic sampling.
+
+The natural gradient update solves a damped linear system per active token:
+
+$$\theta_v \;\leftarrow\; \theta_v - \eta \cdot (\hat{F}_v + \lambda I)^{-1} g_v$$
+
+The Tikhonov damping $\lambda$ (`fisher_damping`) regularizes the inversion. For rarely-seen tokens, $\hat{F}_v \approx 0$ and $(\hat{F}_v + \lambda I)^{-1} \approx (1/\lambda)I$, so small $\lambda$ amplifies rare tokens' gradients. To prevent this, the natural gradient is clipped to at most $10\times$ the Euclidean gradient norm per token. The implementation recommends $\lambda \geq 10^{-2}$ for stability.
+
+The solve is batched over all active tokens (those with nonzero gradient in the current batch) via `torch.linalg.solve`. Cost per step is $O(|\text{batch tokens}| \cdot K^3)$ for the solve plus $O(|\text{batch tokens}| \cdot K^2)$ for the outer product update. Memory is $O(V \cdot K^2)$ for storing Fisher blocks (e.g., $V = 50257$, $K = 64$ requires ~819 MB).
+
+For non-embedding parameters (1D tensors or small 2D tensors with $K < 4$), the optimizer falls back to plain gradient descent with decoupled weight decay.
+
+#### Embedding Weight Decay as Hyper-Prior
+
+Across all three optimizers, embedding weight decay serves a dual role. In the VFE hierarchy, the hyper-prior $h = \mathcal{N}(0, \sigma_h^2 I)$ regularizes the model parameters $s$. Decoupled weight decay with coefficient $\lambda_{\mathrm{wd}}$ implements this as an $L_2$ penalty $\lambda_{\mathrm{wd}} \|\theta\|^2 / 2$, which is equivalent to a Gaussian prior $\mathcal{N}(0, 1/(2\lambda_{\mathrm{wd}}) \cdot I)$ on the embedding parameters. The `embed_weight_decay` config parameter controls this independently from the general `weight_decay` applied to non-VFE parameters.
 
 ### Non-flat Transport (Holonomy)
 
@@ -316,16 +503,109 @@ Implementation: `transformer/core/connection.py`
 
 ### Deep Equilibrium (DEQ) Mode
 
-When `use_deq=True`, implicit differentiation is used at the E-step fixed point instead of unrolling through all VFE iterations.
+When `use_deq=True`, the backward pass through the E-step is replaced by implicit differentiation at the fixed point, avoiding the need to backpropagate through all VFE iterations. The forward pass is unchanged — the E-step loop runs for `ffn_n_iterations` steps as usual, producing converged beliefs $z^* = (\mu^*, \Sigma^*)$ (or $z^* = (\mu^*, \Sigma^*, \phi^*)$ when `deq_include_phi=True`). Only the backward pass differs.
 
-- `deq_neumann_terms`: Number of Neumann series terms for the backward pass
-- `deq_include_phi`: Include phi in the joint fixed-point system `(mu, sigma, phi)`
+#### Fixed-Point Condition and the IFT
+
+At convergence, the E-step satisfies $z^* = g(z^*, \theta)$, where $g$ is one VFE natural gradient step and $\theta$ are model parameters. Differentiating both sides:
+
+$$\frac{dz^*}{d\theta} = J \frac{dz^*}{d\theta} + \frac{\partial g}{\partial \theta}$$
+
+where $J = \partial g / \partial z |_{z^*}$ is the Jacobian of one E-step evaluated at the fixed point. Solving:
+
+$$\frac{dz^*}{d\theta} = (I - J)^{-1} \frac{\partial g}{\partial \theta}$$
+
+The loss gradient with respect to $\theta$ is then $\nabla_\theta \mathcal{L} = \nabla_{z^*} \mathcal{L} \cdot (I - J)^{-1} \cdot \partial g / \partial \theta$, which requires the vector-Jacobian product $v^\top (I - J)^{-1}$ where $v = \nabla_{z^*} \mathcal{L}$.
+
+#### Neumann Series Approximation
+
+Computing $(I - J)^{-1}$ exactly is intractable for the high-dimensional belief state. The implementation approximates it via a truncated Neumann series (`variational_ffn.py:2101–2213`):
+
+$$(I - J^\top)^{-1} v \;\approx\; v + J^\top v + (J^\top)^2 v + \cdots + (J^\top)^K v$$
+
+where $K$ is controlled by `deq_neumann_terms` (default 5). Each term requires one vector-Jacobian product (VJP) through the E-step function $g$, computed via `torch.autograd.grad`. The series converges when the spectral radius $\rho(J) < 1$, which holds at a stable fixed point (the E-step is contractive near convergence).
+
+The implementation uses custom `torch.autograd.Function` classes. `DEQFixedPoint` handles the $(\mu, \Sigma)$ fixed point; `DEQFixedPointFull` extends this to the joint $(\mu, \Sigma, \phi)$ system. In the forward pass, both return their inputs unchanged (identity). In the backward pass, they accumulate the Neumann series by iteratively applying VJPs through the E-step function.
+
+#### Two Variants
+
+**$(\mu, \Sigma)$-only** (`deq_include_phi=False`, default): Only the belief mean and covariance are treated as fixed-point variables. The gauge frame $\phi$ receives a straight-through gradient ($\partial \phi^* / \partial \phi_{\mathrm{init}} \approx I$). This is cheaper (two VJP targets per Neumann term) but leaves the $\phi$ M-step gradient uncorrected.
+
+**Joint $(\mu, \Sigma, \phi)$** (`deq_include_phi=True`): All three E-step variables are included in the fixed-point system. The Neumann series corrects the gradient for all three simultaneously, eliminating the straight-through bias in the $\phi$ M-step gradient. At the joint fixed point, $\partial F/\partial \mu = 0$, $\partial F/\partial \Sigma = 0$, and $\partial F/\partial \phi = 0$, so the IFT applies to the full system. This adds one VJP target per Neumann term but provides the exact M-step gradient for $\phi$ as well.
+
+#### Relationship to Implicit EM
+
+DEQ and implicit EM address the same problem — correcting the M-step gradient for the E-step optimization — but with different approaches. Implicit EM computes a closed-form per-dimension scale factor $s_k$ from the diagonal structure of the Gaussian VFE Hessian, which is cheap but limited to the diagonal approximation. DEQ uses the full (non-diagonal) Jacobian via the Neumann series, which captures cross-dimensional interactions but requires $K$ additional VJP passes. In practice, implicit EM is preferred for the mean and covariance (where the diagonal approximation is accurate), while DEQ is most useful for correcting the $\phi$ gradient (where no diagonal closed form exists).
+
+| Flag | Default | Role |
+|------|---------|------|
+| `use_deq` | `False` | Enable DEQ implicit differentiation for E-step backward |
+| `deq_neumann_terms` | `5` | Neumann series truncation order $K$ |
+| `deq_include_phi` | `False` | Include $\phi$ in the joint fixed-point system |
 
 ### Implicit EM vs. Amortized Inference
 
-- `implicit_em=True`: IFT-based M-step with principled gradient scaling `s_k = (alpha / sigma_p^2) / A_k`
-- `amortized_inference=True`: Gradient flows through priors for learned E-step initialization (straight-through)
-- `amortized_inference=False`: Detached E-step (no gradient from beliefs back to prior parameters)
+The `implicit_em` and `amortized_inference` flags jointly determine how M-step gradients reach the embedding parameters $\theta = (\mu_{\mathrm{embed}}, \sigma_{\mathrm{embed}}, \phi_{\mathrm{embed}})$. The E-step evolves beliefs $q = (\mu_q, \Sigma_q)$ by minimizing the VFE with priors held fixed, producing a final belief state $q^*$. The question is: when cross-entropy loss $\mathcal{L}(\mu_{q^*})$ is computed on these evolved beliefs and backpropagated, how does the gradient reach $\theta$?
+
+Three regimes exist, each with different gradient paths and different theoretical justifications.
+
+#### Amortized Inference (`amortized_inference=True`, `implicit_em=False`)
+
+In the amortized path, the prior mean $\mu_p$ is **not** detached at E-step entry. Since $\mu_p$ is a view of $\mu_{\mathrm{embed}}$, the full computation graph from embeddings through VFE iterations to the final loss is preserved. The gradient $d\mathcal{L}/d\theta$ flows by standard backpropagation through the E-step dynamics — this is a "straight-through" estimator where $s = 1$ (all gradient passes unscaled).
+
+Concretely, the E-step initializes beliefs at the prior: $\mu_q^{(0)} = \mu_p$. Each VFE iteration updates beliefs via the natural gradient:
+
+$$\mu_q^{(t+1)} = \mu_q^{(t)} - \eta_\mu \, \Sigma_q^{(t)} \, \nabla_{\mu} F\big|_{q^{(t)}}$$
+
+Because $\mu_q^{(0)} = \mu_p$ retains its gradient connection to $\mu_{\mathrm{embed}}$, backpropagation through this chain yields:
+
+$$\frac{d\mathcal{L}}{d\mu_{\mathrm{embed}}} = \frac{\partial \mathcal{L}}{\partial \mu_{q^*}} \cdot \prod_{t=0}^{T-1} \left(I - \eta_\mu \, \Sigma_q^{(t)} \, \frac{\partial^2 F}{\partial \mu_q^2}\bigg|_{q^{(t)}}\right)$$
+
+where the product of Jacobians $(I - \eta \, H_t)$ propagates through each VFE iteration. This is the standard unrolled differentiation approach. Its advantage is simplicity: no custom autograd functions are needed, and the gradient is exact for the finite number of iterations taken. The well-conditioned self-coupling gradient $\partial(\alpha \, \mathrm{KL})/\partial \mu_p = -\alpha(\mu_q - \mu_p)/\sigma_p$ provides a stable learning signal that pushes embeddings toward successful belief states (`variational_ffn.py:3435–3442`).
+
+The disadvantage is that the gradient magnitude depends on the number of E-step iterations and can either vanish (if $\eta H \approx 1$, the Jacobian factors approach zero) or explode (if $\eta H > 1$). For a single iteration ($T = 1$), the Jacobian is simply $(I - \eta H_0)$, which is well-behaved. For deeper E-steps, gradient pathology becomes more likely.
+
+The prior covariance $\sigma_p$ is always detached regardless of amortization mode. Leaving $\sigma_p$ live creates a positive feedback loop: the E-step gradient $\partial \mathrm{KL}/\partial \sigma_q \propto 1/\sigma_p$, so smaller $\sigma_p$ produces larger gradients that push $\sigma_p$ even smaller. The M-step loss $\lambda_h \, \mathrm{KL}(s \| h)$ provides the correct, bounded gradient path for $\sigma_{\mathrm{embed}}$ learning (`variational_ffn.py:3448–3456`).
+
+#### Implicit EM (`implicit_em=True`)
+
+In the implicit EM path, **both** $\mu_p$ and $\sigma_p$ are detached at E-step entry (`variational_ffn.py:3482–3484`). The E-step runs with no gradient connection to embeddings — a clean separation between inference and learning. After the E-step completes, the gradient path is re-established through the `ImplicitEMGradient` custom autograd function, which applies the IFT-derived scale factor (`model.py:1024–1029`):
+
+$$\frac{d\mathcal{L}}{d\mu_{\mathrm{embed}}} = s_k^{(\mu)} \cdot \frac{\partial \mathcal{L}}{\partial \mu_{q^*}}$$
+
+where the per-dimension scale factor is:
+
+$$s_k^{(\mu)} = \frac{\alpha / \sigma_{p,k}^2}{\alpha / \sigma_{p,k}^2 + \sum_j \beta_{ij} / \sigma_{j,k}^2}$$
+
+This replaces the product-of-Jacobians chain in the amortized path with a single multiplicative correction derived from the structure of the fixed-point equation. The IFT guarantees that this is the correct total derivative $dq^*/d\theta$ at convergence, and provides a principled interpolation for finite iterations.
+
+When `implicit_em=True`, the `amortized_inference` flag is forced to have no effect on $\mu_p$ — even if set to `True`, the prior is detached because the IFT scale is the sole intended gradient path. Keeping $\mu_p$ live would double-count: embeddings would receive both the IFT-scaled gradient and the straight-through gradient through the self-coupling term.
+
+An analogous scale factor applies to the covariance path via `ImplicitEMGradientSigma`:
+
+$$s_k^{(\sigma)} = \frac{\alpha / \sigma_{p,k}^4}{\alpha / \sigma_{p,k}^4 + \sum_j \beta_{ij} / \sigma_{j,k}^4}$$
+
+Both scale factors are computed from quantities available at the end of the E-step (final $\alpha_i$, $\sigma_p$, $\beta$, $\sigma_q$) and are detached from the computation graph — they modulate the gradient magnitude but do not themselves require gradients.
+
+#### Detached E-Step (`amortized_inference=False`, `implicit_em=False`)
+
+When both flags are `False`, $\mu_p$ is detached and no IFT re-attachment occurs. The E-step runs in isolation, and no gradient from $\mathcal{L}$ reaches the embedding means through the belief evolution path. Embeddings learn only through explicit regularization terms in the M-step loss (e.g., $\alpha \, \mathrm{KL}(q^* \| p)$ or $\lambda_h \, \mathrm{KL}(s \| h)$) and through direct gradient to $W_{\mathrm{out}}$.
+
+This is the "pure EM" limit ($s = 0$) — beliefs are treated as latent variables inferred independently of the parameters that generated them. It is the most theoretically clean separation but provides the weakest learning signal to embeddings, since the cross-entropy gradient must pass through the explicit KL terms rather than flowing directly from prediction error.
+
+#### Phi Gradient Paths
+
+The gauge frame embeddings $\phi_{\mathrm{embed}}$ follow a parallel logic. When `detach_phi=True` (used in Hebbian mode), $\phi$ is detached from the computation graph entirely, enabling fully backprop-free training where $\phi_{\mathrm{embed}}$ learns via P-flow EMA instead of gradient descent (`variational_ffn.py:3505–3510`). When `detach_phi=False` (default in EM), $\phi$ retains its gradient connection through the E-step, and the DEQ option (`deq_include_phi=True`) can further correct the $\phi$ M-step gradient via the Neumann-series IFT.
+
+#### Summary
+
+| Setting | $\mu_p$ at E-step entry | Gradient path to $\mu_{\mathrm{embed}}$ | Scale factor |
+|---------|------------------------|----------------------------------------|--------------|
+| `amortized_inference=True` | Live (gradient retained) | Backprop through E-step Jacobian chain | $s = 1$ (straight-through) |
+| `implicit_em=True` | Detached | IFT re-attachment after E-step | $s_k \in [0, 1]$ from fixed-point Hessian |
+| Both `False` | Detached | Only via explicit M-step KL terms | $s = 0$ (pure EM) |
+
+The implicit EM path is recommended for training because it provides the information-geometrically correct gradient without the vanishing/exploding gradient risks of unrolled differentiation, and without the weak learning signal of pure EM. The amortized path is useful for shallow E-steps ($T = 1$) where the Jacobian chain is short and well-conditioned.
 
 ---
 
