@@ -323,9 +323,67 @@ When `use_deq=True`, implicit differentiation is used at the E-step fixed point 
 
 ### Implicit EM vs. Amortized Inference
 
-- `implicit_em=True`: IFT-based M-step with principled gradient scaling `s_k = (alpha / sigma_p^2) / A_k`
-- `amortized_inference=True`: Gradient flows through priors for learned E-step initialization (straight-through)
-- `amortized_inference=False`: Detached E-step (no gradient from beliefs back to prior parameters)
+The `implicit_em` and `amortized_inference` flags jointly determine how M-step gradients reach the embedding parameters $\theta = (\mu_{\mathrm{embed}}, \sigma_{\mathrm{embed}}, \phi_{\mathrm{embed}})$. The E-step evolves beliefs $q = (\mu_q, \Sigma_q)$ by minimizing the VFE with priors held fixed, producing a final belief state $q^*$. The question is: when cross-entropy loss $\mathcal{L}(\mu_{q^*})$ is computed on these evolved beliefs and backpropagated, how does the gradient reach $\theta$?
+
+Three regimes exist, each with different gradient paths and different theoretical justifications.
+
+#### Amortized Inference (`amortized_inference=True`, `implicit_em=False`)
+
+In the amortized path, the prior mean $\mu_p$ is **not** detached at E-step entry. Since $\mu_p$ is a view of $\mu_{\mathrm{embed}}$, the full computation graph from embeddings through VFE iterations to the final loss is preserved. The gradient $d\mathcal{L}/d\theta$ flows by standard backpropagation through the E-step dynamics — this is a "straight-through" estimator where $s = 1$ (all gradient passes unscaled).
+
+Concretely, the E-step initializes beliefs at the prior: $\mu_q^{(0)} = \mu_p$. Each VFE iteration updates beliefs via the natural gradient:
+
+$$\mu_q^{(t+1)} = \mu_q^{(t)} - \eta_\mu \, \Sigma_q^{(t)} \, \nabla_{\mu} F\big|_{q^{(t)}}$$
+
+Because $\mu_q^{(0)} = \mu_p$ retains its gradient connection to $\mu_{\mathrm{embed}}$, backpropagation through this chain yields:
+
+$$\frac{d\mathcal{L}}{d\mu_{\mathrm{embed}}} = \frac{\partial \mathcal{L}}{\partial \mu_{q^*}} \cdot \prod_{t=0}^{T-1} \left(I - \eta_\mu \, \Sigma_q^{(t)} \, \frac{\partial^2 F}{\partial \mu_q^2}\bigg|_{q^{(t)}}\right)$$
+
+where the product of Jacobians $(I - \eta \, H_t)$ propagates through each VFE iteration. This is the standard unrolled differentiation approach. Its advantage is simplicity: no custom autograd functions are needed, and the gradient is exact for the finite number of iterations taken. The well-conditioned self-coupling gradient $\partial(\alpha \, \mathrm{KL})/\partial \mu_p = -\alpha(\mu_q - \mu_p)/\sigma_p$ provides a stable learning signal that pushes embeddings toward successful belief states (`variational_ffn.py:3435–3442`).
+
+The disadvantage is that the gradient magnitude depends on the number of E-step iterations and can either vanish (if $\eta H \approx 1$, the Jacobian factors approach zero) or explode (if $\eta H > 1$). For a single iteration ($T = 1$), the Jacobian is simply $(I - \eta H_0)$, which is well-behaved. For deeper E-steps, gradient pathology becomes more likely.
+
+The prior covariance $\sigma_p$ is always detached regardless of amortization mode. Leaving $\sigma_p$ live creates a positive feedback loop: the E-step gradient $\partial \mathrm{KL}/\partial \sigma_q \propto 1/\sigma_p$, so smaller $\sigma_p$ produces larger gradients that push $\sigma_p$ even smaller. The M-step loss $\lambda_h \, \mathrm{KL}(s \| h)$ provides the correct, bounded gradient path for $\sigma_{\mathrm{embed}}$ learning (`variational_ffn.py:3448–3456`).
+
+#### Implicit EM (`implicit_em=True`)
+
+In the implicit EM path, **both** $\mu_p$ and $\sigma_p$ are detached at E-step entry (`variational_ffn.py:3482–3484`). The E-step runs with no gradient connection to embeddings — a clean separation between inference and learning. After the E-step completes, the gradient path is re-established through the `ImplicitEMGradient` custom autograd function, which applies the IFT-derived scale factor (`model.py:1024–1029`):
+
+$$\frac{d\mathcal{L}}{d\mu_{\mathrm{embed}}} = s_k^{(\mu)} \cdot \frac{\partial \mathcal{L}}{\partial \mu_{q^*}}$$
+
+where the per-dimension scale factor is:
+
+$$s_k^{(\mu)} = \frac{\alpha / \sigma_{p,k}^2}{\alpha / \sigma_{p,k}^2 + \sum_j \beta_{ij} / \sigma_{j,k}^2}$$
+
+This replaces the product-of-Jacobians chain in the amortized path with a single multiplicative correction derived from the structure of the fixed-point equation. The IFT guarantees that this is the correct total derivative $dq^*/d\theta$ at convergence, and provides a principled interpolation for finite iterations.
+
+When `implicit_em=True`, the `amortized_inference` flag is forced to have no effect on $\mu_p$ — even if set to `True`, the prior is detached because the IFT scale is the sole intended gradient path. Keeping $\mu_p$ live would double-count: embeddings would receive both the IFT-scaled gradient and the straight-through gradient through the self-coupling term.
+
+An analogous scale factor applies to the covariance path via `ImplicitEMGradientSigma`:
+
+$$s_k^{(\sigma)} = \frac{\alpha / \sigma_{p,k}^4}{\alpha / \sigma_{p,k}^4 + \sum_j \beta_{ij} / \sigma_{j,k}^4}$$
+
+Both scale factors are computed from quantities available at the end of the E-step (final $\alpha_i$, $\sigma_p$, $\beta$, $\sigma_q$) and are detached from the computation graph — they modulate the gradient magnitude but do not themselves require gradients.
+
+#### Detached E-Step (`amortized_inference=False`, `implicit_em=False`)
+
+When both flags are `False`, $\mu_p$ is detached and no IFT re-attachment occurs. The E-step runs in isolation, and no gradient from $\mathcal{L}$ reaches the embedding means through the belief evolution path. Embeddings learn only through explicit regularization terms in the M-step loss (e.g., $\alpha \, \mathrm{KL}(q^* \| p)$ or $\lambda_h \, \mathrm{KL}(s \| h)$) and through direct gradient to $W_{\mathrm{out}}$.
+
+This is the "pure EM" limit ($s = 0$) — beliefs are treated as latent variables inferred independently of the parameters that generated them. It is the most theoretically clean separation but provides the weakest learning signal to embeddings, since the cross-entropy gradient must pass through the explicit KL terms rather than flowing directly from prediction error.
+
+#### Phi Gradient Paths
+
+The gauge frame embeddings $\phi_{\mathrm{embed}}$ follow a parallel logic. When `detach_phi=True` (used in Hebbian mode), $\phi$ is detached from the computation graph entirely, enabling fully backprop-free training where $\phi_{\mathrm{embed}}$ learns via P-flow EMA instead of gradient descent (`variational_ffn.py:3505–3510`). When `detach_phi=False` (default in EM), $\phi$ retains its gradient connection through the E-step, and the DEQ option (`deq_include_phi=True`) can further correct the $\phi$ M-step gradient via the Neumann-series IFT.
+
+#### Summary
+
+| Setting | $\mu_p$ at E-step entry | Gradient path to $\mu_{\mathrm{embed}}$ | Scale factor |
+|---------|------------------------|----------------------------------------|--------------|
+| `amortized_inference=True` | Live (gradient retained) | Backprop through E-step Jacobian chain | $s = 1$ (straight-through) |
+| `implicit_em=True` | Detached | IFT re-attachment after E-step | $s_k \in [0, 1]$ from fixed-point Hessian |
+| Both `False` | Detached | Only via explicit M-step KL terms | $s = 0$ (pure EM) |
+
+The implicit EM path is recommended for training because it provides the information-geometrically correct gradient without the vanishing/exploding gradient risks of unrolled differentiation, and without the weak learning signal of pure EM. The amortized path is useful for shallow E-steps ($T = 1$) where the Jacobian chain is short and well-conditioned.
 
 ---
 
