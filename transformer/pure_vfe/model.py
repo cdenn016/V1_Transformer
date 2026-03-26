@@ -15,7 +15,7 @@ import torch
 
 from .config import PureVFEConfig
 from .inference import e_step
-from .learning import m_step
+from .learning import m_step, MStepAccumulator, apply_m_step_from_accumulated
 from .gauge import init_omega, init_phi, make_gl_generators, phi_to_omega
 
 
@@ -190,6 +190,21 @@ class PureVFETransformer:
                          logits=logits, effective_eta_M=effective_eta_M)
         self.global_step += 1
         return logits, ce_loss, vfe, diagnostics
+
+    def create_accumulator(self):
+        """Create an M-step accumulator for gradient accumulation.
+
+        Usage::
+
+            accum = model.create_accumulator()
+            for micro_batch in micro_batches:
+                mu, Sigma, Omega, logits, vfe, diag = e_step(ids, model, config)
+                accum.accumulate(ids, targets, mu, Sigma, Omega, model, config, logits)
+            ce_loss = apply_m_step_from_accumulated(accum, model, config)
+            model.global_step += 1
+            accum.reset()
+        """
+        return MStepAccumulator(self.config, self.config.device)
 
     def sync_omega_from_phi(self):
         """Recompute Omega from phi (call after phi updates in M-step)."""

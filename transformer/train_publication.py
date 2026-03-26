@@ -529,6 +529,9 @@ PURE_VFE_CONFIG = {
     'device': 'cuda',
     'use_cuda_kernels': True,
 
+    # Gradient accumulation (K micro-batches per M-step)
+    'grad_accum_steps':    1,
+
     # Training loop params (used by run_pure_vfe_experiment, not PureVFEConfig)
     'log_interval':        100,
     'eval_interval':       1000,
@@ -2987,6 +2990,7 @@ def run_pure_vfe_experiment(
     print(f"    RoPE:          {pure_config.use_rope}")
     print(f"    Adam M-step:   {pure_config.use_adam_m_step}")
     print(f"    LR schedule:   {pure_config.lr_schedule} (warmup={pure_config.warmup_steps})")
+    print(f"    Grad accum:    {pure_config.grad_accum_steps}")
     print(f"    Diagonal Σ:    {pure_config.diagonal_covariance}")
     print(f"    LayerNorm:     {pure_config.use_layernorm}")
     print(f"    Holonomy:      {pure_config.use_holonomy}")
@@ -3014,24 +3018,65 @@ def run_pure_vfe_experiment(
         pbar = range(max_steps)
         use_tqdm = False
 
+    # Gradient accumulation setup
+    grad_accum_steps = getattr(pure_config, 'grad_accum_steps', 1)
+    if grad_accum_steps > 1:
+        from transformer.pure_vfe.learning import (
+            MStepAccumulator, apply_m_step_from_accumulated,
+        )
+        from transformer.pure_vfe.inference import e_step as pure_e_step
+        accum = model.create_accumulator()
+        print(f"  Grad accum:  {grad_accum_steps} micro-batches per M-step")
+        print(f"  Effective batch: {batch_size * grad_accum_steps} × {seq_len}")
+
     try:
         for step in pbar:
             step_start = time.time()
 
-            # Get batch
-            try:
-                batch = next(train_iterator)
-            except StopIteration:
-                train_iterator = iter(train_loader)
-                batch = next(train_iterator)
+            if grad_accum_steps > 1:
+                # --- Accumulated M-step: K E-steps, one M-step ---
+                accum.reset()
+                vfe_history = []
+                for _micro in range(grad_accum_steps):
+                    try:
+                        batch = next(train_iterator)
+                    except StopIteration:
+                        train_iterator = iter(train_loader)
+                        batch = next(train_iterator)
 
-            input_ids, target_ids = batch
-            input_ids = input_ids.to(device)
-            target_ids = target_ids.to(device)
+                    input_ids, target_ids = batch
+                    input_ids = input_ids.to(device)
+                    target_ids = target_ids.to(device)
 
-            # Training step: E-step + M-step (no backward!)
-            logits, ce_loss, vfe_history, _diag = model.update(
-                input_ids, target_ids)
+                    mu, Sigma, Omega, logits, vfe, _diag = pure_e_step(
+                        input_ids, model, pure_config,
+                    )
+                    accum.accumulate(
+                        input_ids, target_ids, mu, Sigma, Omega,
+                        model, pure_config, logits=logits,
+                    )
+                    if _micro == 0:
+                        vfe_history = vfe  # Track VFE from first micro-batch
+
+                effective_eta_M = model.get_effective_eta_M()
+                ce_loss = apply_m_step_from_accumulated(
+                    accum, model, pure_config, effective_eta_M=effective_eta_M,
+                )
+                model.global_step += 1
+            else:
+                # --- Standard: single E-step + M-step ---
+                try:
+                    batch = next(train_iterator)
+                except StopIteration:
+                    train_iterator = iter(train_loader)
+                    batch = next(train_iterator)
+
+                input_ids, target_ids = batch
+                input_ids = input_ids.to(device)
+                target_ids = target_ids.to(device)
+
+                logits, ce_loss, vfe_history, _diag = model.update(
+                    input_ids, target_ids)
 
             step_time = time.time() - step_start
 

@@ -121,6 +121,13 @@ class PureVFEConfig:
     min_eta_M_ratio: float = 0.1        # Floor for cosine decay as fraction of eta_M
     max_steps: int = 30000              # Total training steps (for cosine schedule)
 
+    # Gradient accumulation
+    # Accumulates M-step sufficient statistics over K micro-batches before
+    # applying one M-step update. E-step runs per micro-batch (beliefs are
+    # sequence-local), but the M-step gradient is a sum over all data —
+    # accumulation gives a K-times-lower-variance estimate of the true M-step.
+    grad_accum_steps: int = 1           # Number of micro-batches per M-step (1 = no accumulation)
+
     # Device
     device: str = "cuda"
     use_cuda_kernels: bool = True       # Use custom CUDA kernels when available
