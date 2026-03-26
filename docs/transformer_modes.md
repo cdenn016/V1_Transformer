@@ -168,21 +168,77 @@ See the Configuration Axes section below for flags shared across modes (gauge ge
 
 **Config:** `HEBBIAN_CONFIG` | **Mode string:** `'hebbian'` | **Model class:** `GaugeTransformerLM`
 
-Same gauge-VFE architecture as EM, but all parameter learning is local and backprop-free.
+The Hebbian mode uses the same gauge-VFE architecture as EM but replaces all backpropagation-based parameter learning with local, biologically plausible update rules. The E-step is identical to EM mode — natural gradient VFE descent on $(\mu_q, \Sigma_q, \phi)$ as described above. The M-step replaces the global loss-gradient-optimizer loop with three local learning rules: P-flow for embeddings, P-flow for gauge frames, and the Widrow-Hoff delta rule for the output projection. No gradient flows backward through the computation graph; all parameter updates are computed from locally available quantities.
 
-**E-step:** Identical to EM mode -- natural gradient VFE descent on `(mu_q, Sigma_q, phi)`.
+The M-step loss is pure cross-entropy with all VFE regularizers set to zero ($\alpha = 0$, $\beta = 0$, $\alpha_\phi = 0$, $\lambda_h = 0$). The VFE regularization is implicit in the E-step dynamics — priors anchor beliefs and gauge transport structures attention — but these terms do not appear in the training loss. This decoupling is possible because the P-flow and delta rule update embeddings directly from the E-step output, bypassing the loss function entirely.
 
-**M-step (no backprop):**
-- `mu_embed`, `sigma_embed`: P-flow exponential moving average toward successful beliefs, weighted by prediction error
-- `phi_embed`: P-flow EMA toward E-step evolved phi (detached from computation graph)
-- `W_out`: Delta rule `DeltaW = eta * (target - pred) outer mu^T` (Widrow-Hoff)
+#### P-Flow: Prediction-Error-Weighted EMA
 
-**Loss:** Cross-entropy only (`alpha=0`, `beta=0`). VFE regularizers are implicit in E-step dynamics, not in the training loss.
+P-flow updates each token embedding $\mu_v$ toward the beliefs $\mu_{q}$ that the E-step produced for that token, weighted by how well those beliefs predicted the next token. The update runs after the forward pass and is entirely within a `torch.no_grad()` context (`embeddings.py:558–645`, `model.py:1187–1226`).
 
-Key flags:
-- `use_p_flow=True`, `use_delta_rule_w_out=True`
-- `detach_phi=True` prevents backprop through gauge frames
-- `p_flow_ema_decay=0.95`, `delta_rule_lr=0.1`
+For each token type $v$ appearing in the batch, the update collects all occurrences of $v$ across batch elements and sequence positions, computes prediction-error-weighted averages of the final beliefs, and applies an exponential moving average. The weighting uses a segment-wise softmax over negative cross-entropy errors, so occurrences where the model predicted well receive higher weight (`embeddings.py:520–556`):
+
+$$w_{v,n} = \frac{\exp(-\ell_n)}{\sum_{m : \mathrm{id}_m = v} \exp(-\ell_m)}$$
+
+where $\ell_n$ is the per-position cross-entropy loss and the sum runs over all positions in the batch where token $v$ appears. The weighted target belief for token $v$ is:
+
+$$\bar{\mu}_v = \sum_{n : \mathrm{id}_n = v} w_{v,n} \, \mu_{q,n}$$
+
+The embedding update is then an EMA step with a confidence-modulated learning rate:
+
+$$\mu_v \;\leftarrow\; (1 - \eta_v) \, \mu_v \;+\; \eta_v \, \bar{\mu}_v$$
+
+where the effective learning rate $\eta_v$ incorporates a confidence factor that scales inversely with the token's mean prediction error:
+
+$$\eta_v = (1 - \rho) \cdot \frac{1}{1 + \bar{\ell}_v}$$
+
+Here $\rho$ is the base EMA decay (default 0.95, so base $\eta = 0.05$) and $\bar{\ell}_v$ is the mean cross-entropy across all occurrences of token $v$ in the batch. Tokens that the model already predicts well receive larger updates; tokens with high error receive smaller, more conservative steps. This prevents the embeddings from being destabilized by poorly predicted occurrences.
+
+The sigma embedding receives a parallel P-flow update with a 10$\times$ slower learning rate ($\eta_\sigma = 0.1 \cdot \eta_v$) for stability. The update targets $\bar{\sigma}_v$ (computed analogously from $\sigma_{q,n}$) and is applied in log-space to maintain positivity (`embeddings.py:626–645`):
+
+$$\log \sigma_v \;\leftarrow\; (1 - \eta_\sigma) \, \log \sigma_v \;+\; \eta_\sigma \, \log \bar{\sigma}_v$$
+
+#### Phi P-Flow: Gauge Frame Learning Without Backprop
+
+In Hebbian mode, `detach_phi=True` disconnects $\phi$ from the computation graph, so no gradient from the loss reaches $\phi_{\mathrm{embed}}$. Instead, the gauge frame embeddings learn via a separate P-flow update that pushes $\phi_v$ toward the VFE-evolved values $\phi_{\mathrm{evolved}}$ from the E-step (`embeddings.py:647–695`, `model.py:1227–1280`).
+
+The E-step evolves $\phi$ through natural gradient descent on the VFE (minimizing transported KL divergences), producing $\phi_{\mathrm{evolved}}$ that reflects the gauge geometry preferred by the current data. After the forward pass, this evolved value is persisted back to the embedding via EMA:
+
+$$\phi_v \;\leftarrow\; (1 - \eta) \, \phi_v \;+\; \eta \, \bar{\phi}_v$$
+
+where $\bar{\phi}_v$ is the prediction-error-weighted average of evolved phi values across all occurrences of token $v$ (using the same segment-wise softmax weights $w_{v,n}$ as the mu P-flow). The learning rate $\eta = 1 - \rho$ uses the base EMA decay without the confidence modulation applied to mu.
+
+This creates a two-timescale system for gauge frames: within each forward pass, the E-step rapidly adapts $\phi$ to the local context (fast timescale), while across training steps, the embedding slowly accumulates the context-averaged preferred frame (slow timescale). The embedding converges toward the frame that, on average across contexts, minimizes the transported KL divergences for that token.
+
+#### Delta Rule: Local Learning for $W_{\mathrm{out}}$
+
+The output projection $W_{\mathrm{out}} \in \mathbb{R}^{V \times K}$ maps belief means to vocabulary logits. In Hebbian mode, instead of receiving gradients through backpropagation from the cross-entropy loss, $W_{\mathrm{out}}$ is updated by the Widrow-Hoff delta rule — a local learning rule that requires only the prediction error and the pre-synaptic activity (`model.py:1282–1343`):
+
+$$\Delta W_{\mathrm{out}} = \eta_\delta \cdot (y - \hat{y}) \otimes \mu_q^\top$$
+
+where $y \in \{0, 1\}^V$ is the one-hot encoded target, $\hat{y} = \mathrm{softmax}(W_{\mathrm{out}} \mu_q) \in [0,1]^V$ is the predicted distribution, $\mu_q \in \mathbb{R}^K$ is the belief mean from the E-step, and $\otimes$ denotes the outer product. The update is averaged over all non-padding positions in the batch:
+
+$$W_{\mathrm{out}} \;\leftarrow\; W_{\mathrm{out}} + \frac{\eta_\delta}{|\mathcal{V}|} \sum_{n \in \mathcal{V}} (y_n - \hat{y}_n) \, \mu_{q,n}^\top$$
+
+where $\mathcal{V}$ is the set of valid (non-padding) positions. This is equivalent to one step of gradient descent on the cross-entropy loss with respect to $W_{\mathrm{out}}$ alone (since $\partial \mathrm{CE} / \partial W_{\mathrm{out}} = (\hat{y} - y) \mu_q^\top$ for the softmax-cross-entropy pair), but computed without backpropagation through the rest of the graph.
+
+#### Fully Backprop-Free Training
+
+When all three local rules are active (`use_p_flow=True`, `use_delta_rule_w_out=True`, `detach_phi=True`), the Hebbian mode achieves fully backprop-free learning. The training loop still computes a forward pass (including the E-step VFE iterations) and a cross-entropy loss for logging, but no `loss.backward()` gradient propagation is needed for parameter updates. All three embedding types ($\mu$, $\sigma$, $\phi$) update via P-flow, and $W_{\mathrm{out}}$ updates via the delta rule.
+
+The backprop learning rates (`mu_lr`, `sigma_lr`, `phi_lr`, `output_lr`) still appear in the config for the optimizer but are less important in practice — P-flow dominates the embedding updates, and the delta rule dominates $W_{\mathrm{out}}$. The VFE E-step internal parameters (learnable step sizes $\eta_\mu$, $\eta_\sigma$, learnable $c_0$/$b_0$ for adaptive alpha) still require gradients through the E-step computation, but these are E-step dynamics parameters, not representation parameters.
+
+#### Hebbian Mode Configuration
+
+| Flag | Default | Role |
+|------|---------|------|
+| `use_p_flow` | `True` | Enable P-flow EMA for $\mu_{\mathrm{embed}}$ and $\sigma_{\mathrm{embed}}$ |
+| `use_delta_rule_w_out` | `True` | Enable Widrow-Hoff delta rule for $W_{\mathrm{out}}$ |
+| `detach_phi` | `True` | Detach $\phi$ from backprop; learns via phi P-flow only |
+| `p_flow_ema_decay` | `0.95` | EMA decay $\rho$ (higher = slower embedding drift) |
+| `delta_rule_lr` | `0.1` | Step size $\eta_\delta$ for delta rule |
+| `amortized_inference` | `False` | Priors detached (P-flow replaces gradient-based embedding learning) |
+| `alpha`, `beta`, `alpha_phi`, `lambda_hyper` | All `0.0` | No VFE terms in training loss; regularization is implicit in E-step |
 
 ### Pure VFE (No Autograd, No Optimizer)
 
