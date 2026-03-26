@@ -42,6 +42,73 @@ from .gauge import (
 )
 
 
+# ---------------------------------------------------------------------------
+# RoPE: Rotary Position Embeddings for KL-based attention
+# ---------------------------------------------------------------------------
+# Reuse the implementation from transformer.core.attention but keep a local
+# copy to avoid circular imports and maintain pure_vfe independence.
+
+def _build_rope_freqs(K: int, base: float = 10000.0,
+                      device=None, dtype=None) -> torch.Tensor:
+    r"""Compute RoPE frequency bands for K-dimensional beliefs.
+
+    Returns:
+        freqs: (K//2,) inverse frequency bands
+    """
+    half_K = K // 2
+    freqs = 1.0 / (base ** (torch.arange(0, half_K, device=device, dtype=dtype) / half_K))
+    return freqs
+
+
+def _apply_rope(mu: torch.Tensor, base: float = 10000.0) -> torch.Tensor:
+    r"""Apply Rotary Position Embeddings to belief means.
+
+    Rotates consecutive pairs of dimensions by position-dependent angles,
+    making KL divergences sensitive to relative position via SO(2)^{K/2}.
+
+    Args:
+        mu: (B, N, K) belief means
+        base: RoPE frequency base
+
+    Returns:
+        mu_rotated: (B, N, K) position-rotated belief means
+    """
+    B, N, K = mu.shape
+    half_K = K // 2
+
+    freqs = _build_rope_freqs(K, base, device=mu.device, dtype=mu.dtype)
+    positions = torch.arange(N, device=mu.device, dtype=mu.dtype)
+    angles = torch.outer(positions, freqs)  # (N, K//2)
+
+    cos_a = torch.cos(angles)
+    sin_a = torch.sin(angles)
+
+    mu_even = mu[:, :, :2*half_K:2]
+    mu_odd = mu[:, :, 1:2*half_K:2]
+
+    mu_rotated = mu.clone()
+    mu_rotated[:, :, :2*half_K:2] = mu_even * cos_a - mu_odd * sin_a
+    mu_rotated[:, :, 1:2*half_K:2] = mu_even * sin_a + mu_odd * cos_a
+
+    return mu_rotated
+
+
+def _apply_layernorm(mu: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
+    r"""Apply LayerNorm to belief means (optional, for testing).
+
+    This is a neural-like component included as an optional toggle.
+
+    Args:
+        mu: (B, N, K) belief means
+
+    Returns:
+        mu_normed: (B, N, K) normalized belief means
+    """
+    mean = mu.mean(dim=-1, keepdim=True)
+    var = mu.var(dim=-1, keepdim=True, unbiased=False)
+    return (mu - mean) / (var + eps).sqrt()
+
+
 def extract_block_diag(Sigma, H, K_h):
     """
     Extract H diagonal blocks of size K_h from full [B, N, K, K] covariance.
@@ -92,13 +159,15 @@ def compute_vfe(mu, Sigma, prior_mu, prior_Sigma, alpha, beta, kl_ij):
 
 @torch.no_grad()
 def e_step(token_ids, model, config):
-    """
-    Run VFE descent to convergence. This IS the forward pass.
+    r"""Run VFE descent to convergence. This IS the forward pass.
 
     E-step minimizes belief VFE (prior + alignment terms only).
     Observation gradient enters ONLY in M-step.
 
-    Numerical stability features (ported from VFE dynamic):
+    Features:
+      - RoPE: SO(2)^{K/2} rotations on μ for position-sensitive attention
+      - LayerNorm: optional normalization of μ between iterations
+      - Diagonal covariance: optional diagonal-only Σ for speed
       - E-step LR decay (linear, 1.0 → 0.5)
       - Separate sigma LR (sigma_lr_ratio × mu LR)
       - Element-wise gradient clamping (grad_clamp)
@@ -117,6 +186,7 @@ def e_step(token_ids, model, config):
         Omega: [B, N, H, K_h, K_h] converged gauge frames
         logits: [B, N, V] decoding logits
         vfe_history: list of VFE values per step
+        diagnostics: dict with gradient norms, attention weights, holonomy
     """
     B, N = token_ids.shape
     K = config.belief_dim
@@ -129,6 +199,11 @@ def e_step(token_ids, model, config):
     e_step_lr_decay = getattr(config, 'e_step_lr_decay', 0.5)
     nan_recovery = getattr(config, 'nan_recovery', True)
     omega_cond_max = getattr(config, 'omega_cond_max', 50.0)
+    use_rope = getattr(config, 'use_rope', False)
+    rope_base = getattr(config, 'rope_base', 10000.0)
+    use_layernorm = getattr(config, 'use_layernorm', False)
+    diagonal_cov = getattr(config, 'diagonal_covariance', False)
+    use_holonomy = getattr(config, 'use_holonomy', False)
 
     # --- Initialize beliefs from priors ---
     mu = model.prior_mu[token_ids].clone()          # [B, N, K]
@@ -159,6 +234,9 @@ def e_step(token_ids, model, config):
         'grad_norm_omega': [],
     }
 
+    # Holonomy tracking: measure gauge curvature if enabled
+    holonomy_data = [] if use_holonomy else None
+
     for step in range(config.n_esteps):
         # --- E-step LR decay (matching VFE dynamic) ---
         if config.n_esteps > 1:
@@ -168,16 +246,38 @@ def e_step(token_ids, model, config):
         effective_lr = config.eta_E * decay
         sigma_lr = effective_lr * sigma_lr_ratio
 
+        # --- Optional LayerNorm on μ before KL computation ---
+        if use_layernorm:
+            mu = _apply_layernorm(mu)
+
         # --- Extract per-head block-diagonal ---
         mu_h = mu.view(B, N, H, K_h)                             # [B, N, H, K_h]
         Sigma_h = extract_block_diag(Sigma, H, K_h)              # [B, N, H, K_h, K_h]
+
+        # Diagonal covariance: zero out off-diagonal entries
+        if diagonal_cov:
+            diag_vals = torch.diagonal(Sigma_h, dim1=-2, dim2=-1)  # [B, N, H, K_h]
+            Sigma_h = torch.diag_embed(diag_vals)                  # [B, N, H, K_h, K_h]
+
         Sigma_h_inv = safe_inverse(Sigma_h)
 
-        # --- Precompute per-token quantities ---
+        # --- RoPE: apply position-dependent SO(2)^{K/2} rotations ---
+        # Use RoPE-rotated μ for KL/attention, raw μ for gradients.
+        if use_rope:
+            mu_rope = _apply_rope(mu, base=rope_base)              # [B, N, K]
+            mu_h_rope = mu_rope.view(B, N, H, K_h)                # [B, N, H, K_h]
+            precomp_rope = precompute_tokens(mu_h_rope, Sigma_h, Omega, Sigma_h_inv)
+        else:
+            precomp_rope = None
+
+        # Raw precomp (always needed for gradients; also for KL when RoPE is off)
         precomp = precompute_tokens(mu_h, Sigma_h, Omega, Sigma_h_inv)
 
+        # Select which precomp to use for KL/attention
+        precomp_attn = precomp_rope if use_rope else precomp
+
         # --- Pairwise KL and attention weights ---
-        kl_ij = pairwise_kl(precomp, causal=config.causal)       # [B, H, N, N]
+        kl_ij = pairwise_kl(precomp_attn, causal=config.causal)   # [B, H, N, N]
         beta = kl_attention(kl_ij, config.tau, causal=config.causal,
                             log_prior=log_prior, mask_self=mask_self)  # [B, H, N, N]
 
@@ -188,7 +288,13 @@ def e_step(token_ids, model, config):
         )  # [B, N]
 
         # --- Monitor VFE ---
-        vfe = compute_vfe(mu, Sigma, prior_mu, prior_Sigma, alpha, beta, kl_ij)
+        # Use raw precomp KL for VFE monitoring (geometric truth, not RoPE-rotated)
+        if use_rope:
+            kl_ij_raw = pairwise_kl(precomp, causal=config.causal)
+            vfe = compute_vfe(mu, Sigma, prior_mu, prior_Sigma, alpha, beta, kl_ij_raw)
+        else:
+            kl_ij_raw = kl_ij
+            vfe = compute_vfe(mu, Sigma, prior_mu, prior_Sigma, alpha, beta, kl_ij)
         vfe_history.append(vfe)
 
         # --- VFE divergence early stopping ---
@@ -200,11 +306,19 @@ def e_step(token_ids, model, config):
             )
             break
 
+        # --- Holonomy: measure gauge curvature ---
+        if use_holonomy and step == config.n_esteps - 1:
+            holonomy_data = _compute_holonomy(Omega, H, K_h)
+
         # ================================================================
-        # MEAN GRADIENT: ∂F/∂μ_i
+        # MEAN GRADIENT: ∂F/∂μ_i (uses raw precomp for gradients)
         # ================================================================
         # 1. Alignment gradient (with softmax correction, Eq. 21 + 24)
-        grad_mu_align = vfe_grad_mu_alignment(precomp, beta, kl_ij, config.tau)
+        # When RoPE is active: beta comes from RoPE-KL (position-aware attention),
+        # but kl_ij in the softmax correction w_ij = β_ij[1 + (E[KL] - KL_ij)/τ]
+        # must use raw-mu KL for geometric consistency of the gradient direction.
+        # See VFE_dynamic variational_ffn.py:1183-1187 for the same pattern.
+        grad_mu_align = vfe_grad_mu_alignment(precomp, beta, kl_ij_raw, config.tau)
         # Shape: [B, H, N, K_h] — transpose to [B, N, H, K_h] and reshape to [B, N, K]
         grad_mu_align = grad_mu_align.permute(0, 2, 1, 3).reshape(B, N, K)
 
@@ -266,6 +380,11 @@ def e_step(token_ids, model, config):
             exp_clip=config.spd_exp_clip,
         )
 
+        # Enforce diagonal if configured
+        if diagonal_cov:
+            diag_new = torch.diagonal(Sigma_h_new, dim1=-2, dim2=-1)
+            Sigma_h_new = torch.diag_embed(diag_new)
+
         # 6. Write back to full Sigma
         Sigma = set_block_diag(Sigma, Sigma_h_new, H, K_h)
 
@@ -312,5 +431,50 @@ def e_step(token_ids, model, config):
                               decode_tau=_decode_tau)
 
     diagnostics['nan_events'] = nan_events
+    diagnostics['final_beta'] = beta  # For attention visualization
+    if holonomy_data is not None:
+        diagnostics['holonomy'] = holonomy_data
 
     return mu, Sigma, Omega, logits, vfe_history, diagnostics
+
+
+def _compute_holonomy(Omega, H, K_h):
+    r"""Compute holonomy metrics from gauge frames.
+
+    Measures gauge curvature via Wilson loops on small triangles:
+    C_{ijk} = Ω_{ij} · Ω_{jk} · Ω_{ki} should be identity for flat connections.
+
+    Args:
+        Omega: [B, N, H, K_h, K_h] gauge frames
+
+    Returns:
+        dict with holonomy metrics
+    """
+    B, N = Omega.shape[:2]
+    if N < 3:
+        return {'mean_norm': 0.0, 'max_norm': 0.0}
+
+    # Sample a few triangles (i, i+1, i+2)
+    Om = Omega.permute(0, 2, 1, 3, 4)  # [B, H, N, K_h, K_h]
+    Om_inv = torch.linalg.inv(Om)
+
+    # Wilson loop: C = Ω_i Ω_j^{-1} · Ω_j Ω_k^{-1} · Ω_k Ω_i^{-1}
+    # = Ω_{ij} · Ω_{jk} · Ω_{ki}
+    # For flat connection: C = I
+    n_triangles = min(N - 2, 16)  # Sample up to 16 triangles
+    norms = []
+    eye = torch.eye(K_h, device=Omega.device, dtype=Omega.dtype)
+    for t in range(n_triangles):
+        i, j, k = t, t + 1, t + 2
+        Omega_ij = Om[:, :, i] @ Om_inv[:, :, j]  # [B, H, K_h, K_h]
+        Omega_jk = Om[:, :, j] @ Om_inv[:, :, k]
+        Omega_ki = Om[:, :, k] @ Om_inv[:, :, i]
+        C = Omega_ij @ Omega_jk @ Omega_ki  # Should be I
+        deviation = (C - eye).norm(dim=(-2, -1))  # [B, H]
+        norms.append(deviation.mean().item())
+
+    return {
+        'mean_norm': sum(norms) / len(norms) if norms else 0.0,
+        'max_norm': max(norms) if norms else 0.0,
+        'n_triangles': len(norms),
+    }

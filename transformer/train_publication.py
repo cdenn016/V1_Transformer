@@ -488,7 +488,6 @@ PURE_VFE_CONFIG = {
     # 'omega' (direct GL(K)) or 'phi' (Lie algebra)
     'gauge_param':    'omega',
     'omega_cond_max': 100.0,
-    
 
     # M-step options
     'sigma_obs_grad':   'none',
@@ -500,16 +499,45 @@ PURE_VFE_CONFIG = {
     # Causal masking
     'causal':           True,
 
+    # --- New features ---
+
+    # RoPE: SO(2)^{K/2} position rotations on μ before KL scoring
+    'use_rope':         True,
+    'rope_base':        10000.0,
+
+    # Adam momentum in M-step (variance reduction across batches)
+    'use_adam_m_step':  True,
+    'adam_beta1':       0.9,
+    'adam_beta2':       0.999,
+    'adam_eps':         1e-8,
+
+    # LR scheduling (warmup + cosine decay)
+    'warmup_steps':     500,
+    'lr_schedule':      'cosine',
+    'min_eta_M_ratio':  0.1,
+
+    # Diagonal covariance (faster, optional)
+    'diagonal_covariance': False,
+
+    # LayerNorm (optional, for testing)
+    'use_layernorm':    False,
+
+    # Holonomy monitoring (measure gauge curvature)
+    'use_holonomy':     False,
+
     # Device & kernels
     'device': 'cuda',
     'use_cuda_kernels': True,
 
-    # Training loop params (used by run_pure_vfe_experiment, not PureVFEConfig)
+    # Gradient accumulation (K micro-batches per M-step)
+    'grad_accum_steps':    1,
 
+    # Training loop params (used by run_pure_vfe_experiment, not PureVFEConfig)
     'log_interval':        100,
     'eval_interval':       1000,
     'checkpoint_interval': 25000,
     'num_workers':         10,
+    'figure_interval':     2000,   # Save attention/diagnostic figures every N steps
 }
 
 
@@ -2633,6 +2661,170 @@ def _validate_pure_vfe(model, loader, device, max_samples=12800):
     }
 
 
+def _save_pure_vfe_figures(model, val_loader, device, step, attn_dir,
+                           figures_dir, config, tokenizer=None, final=False):
+    """Save diagnostic figures for pure VFE training.
+
+    Generates attention heatmaps, prior mu/sigma statistics, and optional
+    holonomy and semantic analyses.
+    """
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import numpy as np
+    except ImportError:
+        return  # matplotlib not available
+
+    prefix = "final" if final else f"step_{step:06d}"
+
+    # --- 1. Attention Patterns ---
+    try:
+        batch = next(iter(val_loader))
+        input_ids = batch[0][:1].to(device)  # Single example for viz
+        logits, beta, _diag = model.forward_with_attention(input_ids)
+
+        if beta is not None:
+            B, H, N, N2 = beta.shape
+            for h in range(H):
+                fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+                attn = beta[0, h, :N, :N].cpu().float().numpy()
+                # Log scale for better visibility
+                attn_log = np.log10(np.maximum(attn, 1e-5))
+                im = ax.imshow(attn_log, aspect='auto', cmap='viridis')
+                ax.set_xlabel('Key position (j)')
+                ax.set_ylabel('Query position (i)')
+                ax.set_title(f'Attention head {h} (log10) — step {step}')
+                plt.colorbar(im, ax=ax)
+                fig.tight_layout()
+                fig.savefig(attn_dir / f'{prefix}_head{h}.png', dpi=150)
+                plt.close(fig)
+    except Exception as e:
+        print(f"  [WARN] Attention figure failed: {e}")
+
+    # --- 2. Prior Statistics ---
+    try:
+        with torch.no_grad():
+            mu_norms = model.prior_mu.norm(dim=-1).cpu().numpy()
+            sig_eigs = torch.linalg.eigvalsh(model.prior_Sigma[:500])
+            sig_min = sig_eigs[..., 0].cpu().numpy()
+            sig_max = sig_eigs[..., -1].cpu().numpy()
+
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+
+        # Prior mean norms
+        axes[0].hist(mu_norms, bins=50, alpha=0.7, edgecolor='black')
+        axes[0].set_xlabel(r'$\|\mu_v\|$')
+        axes[0].set_ylabel('Count')
+        axes[0].set_title(f'Prior Mean Norms (step {step})')
+
+        # Min eigenvalues of prior Sigma
+        axes[1].hist(sig_min, bins=50, alpha=0.7, color='orange', edgecolor='black')
+        axes[1].set_xlabel(r'$\lambda_{\min}(\Sigma_v)$')
+        axes[1].set_ylabel('Count')
+        axes[1].set_title(f'Prior Covariance Min Eigenvalues')
+
+        # Max eigenvalues
+        axes[2].hist(sig_max, bins=50, alpha=0.7, color='green', edgecolor='black')
+        axes[2].set_xlabel(r'$\lambda_{\max}(\Sigma_v)$')
+        axes[2].set_ylabel('Count')
+        axes[2].set_title(f'Prior Covariance Max Eigenvalues')
+
+        fig.tight_layout()
+        fig.savefig(figures_dir / f'{prefix}_prior_stats.png', dpi=150)
+        plt.close(fig)
+    except Exception as e:
+        print(f"  [WARN] Prior stats figure failed: {e}")
+
+    # --- 3. Gauge Frame Health ---
+    try:
+        with torch.no_grad():
+            Om = model.prior_Omega[:500]
+            conds = torch.linalg.cond(Om).cpu().numpy().flatten()
+            _, dets_log = torch.linalg.slogdet(Om)
+            dets = dets_log.cpu().numpy().flatten()
+
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+        axes[0].hist(conds, bins=50, alpha=0.7, edgecolor='black')
+        axes[0].set_xlabel('Condition number')
+        axes[0].set_title(f'Gauge Frame Conditioning (step {step})')
+
+        axes[1].hist(dets, bins=50, alpha=0.7, color='purple', edgecolor='black')
+        axes[1].set_xlabel(r'$\ln|\det \Omega_v|$')
+        axes[1].set_title(f'Gauge Frame Log-Determinants')
+
+        fig.tight_layout()
+        fig.savefig(figures_dir / f'{prefix}_gauge_health.png', dpi=150)
+        plt.close(fig)
+    except Exception as e:
+        print(f"  [WARN] Gauge health figure failed: {e}")
+
+    # --- 4. Semantic Clustering (final only) ---
+    if final:
+        try:
+            from sklearn.decomposition import PCA
+
+            with torch.no_grad():
+                mu_embed = model.prior_mu.cpu().numpy()
+
+            # PCA of prior means
+            pca = PCA(n_components=2)
+            mu_2d = pca.fit_transform(mu_embed[:2000])  # First 2000 tokens
+
+            fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+            scatter = ax.scatter(mu_2d[:, 0], mu_2d[:, 1], s=1, alpha=0.3)
+            ax.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%})')
+            ax.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%})')
+            ax.set_title('Prior Mean Embedding Space (PCA)')
+
+            # Annotate a few tokens if tokenizer available
+            if tokenizer is not None:
+                for idx in [0, 1, 2, 3, 4, 5, 10, 100, 256, 500]:
+                    if idx < len(mu_2d):
+                        try:
+                            token_str = tokenizer.decode([idx])
+                            ax.annotate(repr(token_str), (mu_2d[idx, 0], mu_2d[idx, 1]),
+                                       fontsize=6, alpha=0.7)
+                        except Exception:
+                            pass
+
+            fig.tight_layout()
+            fig.savefig(figures_dir / f'{prefix}_semantic_pca.png', dpi=150)
+            plt.close(fig)
+        except Exception as e:
+            print(f"  [WARN] Semantic PCA figure failed: {e}")
+
+    # --- 5. Holonomy (if enabled and final) ---
+    if final and getattr(config, 'use_holonomy', False):
+        try:
+            from transformer.pure_vfe.inference import _compute_holonomy
+
+            with torch.no_grad():
+                batch = next(iter(val_loader))
+                input_ids = batch[0][:4].to(device)
+                B_h, N_h = input_ids.shape
+                Omega_h = model.prior_Omega[input_ids].clone()
+                pos_Om_h = model.pos_Omega[:N_h].unsqueeze(0).expand(B_h, -1, -1, -1, -1)
+                Omega_h = Omega_h @ pos_Om_h
+
+                holonomy = _compute_holonomy(
+                    Omega_h, config.n_heads, config.head_dim
+                )
+
+            print(f"\n  Holonomy Analysis (final):")
+            print(f"    Mean ||C - I||_F: {holonomy['mean_norm']:.6f}")
+            print(f"    Max  ||C - I||_F: {holonomy['max_norm']:.6f}")
+            print(f"    Triangles:        {holonomy['n_triangles']}")
+        except Exception as e:
+            print(f"  [WARN] Holonomy analysis failed: {e}")
+
+    if final:
+        print(f"\n[INFO] Final figures saved to: {figures_dir}")
+    else:
+        print(f"  [INFO] Figures saved at step {step}")
+
+
 def run_pure_vfe_experiment(
     config: dict,
     device: torch.device,
@@ -2673,6 +2865,7 @@ def run_pure_vfe_experiment(
         use_char = (tokenizer_mode == 'char')
 
     test_loader = None
+    tokenizer = None
     if use_char:
         print(
             f"Using CHARACTER-LEVEL tokenizer (vocab_size={config['vocab_size']})")
@@ -2781,6 +2974,29 @@ def run_pure_vfe_experiment(
     print(f"\n[INFO] Logging metrics to: {metrics_path}")
 
     # =================================================================
+    # Figure Directories
+    # =================================================================
+    figures_dir = exp_checkpoint_dir / 'figures'
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    attn_dir = figures_dir / 'attention_patterns'
+    attn_dir.mkdir(parents=True, exist_ok=True)
+    figure_interval = config.get('figure_interval', 2000)
+
+    # Propagate max_steps to model config for LR scheduling
+    pure_config.max_steps = max_steps
+
+    # Print new feature status
+    print(f"\n  Features enabled:")
+    print(f"    RoPE:          {pure_config.use_rope}")
+    print(f"    Adam M-step:   {pure_config.use_adam_m_step}")
+    print(f"    LR schedule:   {pure_config.lr_schedule} (warmup={pure_config.warmup_steps})")
+    print(f"    Grad accum:    {pure_config.grad_accum_steps}")
+    print(f"    Diagonal Σ:    {pure_config.diagonal_covariance}")
+    print(f"    LayerNorm:     {pure_config.use_layernorm}")
+    print(f"    Holonomy:      {pure_config.use_holonomy}")
+    print(f"    Figure save:   every {figure_interval} steps")
+
+    # =================================================================
     # Training Loop
     # =================================================================
     print("\n" + "="*70)
@@ -2802,24 +3018,65 @@ def run_pure_vfe_experiment(
         pbar = range(max_steps)
         use_tqdm = False
 
+    # Gradient accumulation setup
+    grad_accum_steps = getattr(pure_config, 'grad_accum_steps', 1)
+    if grad_accum_steps > 1:
+        from transformer.pure_vfe.learning import (
+            MStepAccumulator, apply_m_step_from_accumulated,
+        )
+        from transformer.pure_vfe.inference import e_step as pure_e_step
+        accum = model.create_accumulator()
+        print(f"  Grad accum:  {grad_accum_steps} micro-batches per M-step")
+        print(f"  Effective batch: {batch_size * grad_accum_steps} × {seq_len}")
+
     try:
         for step in pbar:
             step_start = time.time()
 
-            # Get batch
-            try:
-                batch = next(train_iterator)
-            except StopIteration:
-                train_iterator = iter(train_loader)
-                batch = next(train_iterator)
+            if grad_accum_steps > 1:
+                # --- Accumulated M-step: K E-steps, one M-step ---
+                accum.reset()
+                vfe_history = []
+                for _micro in range(grad_accum_steps):
+                    try:
+                        batch = next(train_iterator)
+                    except StopIteration:
+                        train_iterator = iter(train_loader)
+                        batch = next(train_iterator)
 
-            input_ids, target_ids = batch
-            input_ids = input_ids.to(device)
-            target_ids = target_ids.to(device)
+                    input_ids, target_ids = batch
+                    input_ids = input_ids.to(device)
+                    target_ids = target_ids.to(device)
 
-            # Training step: E-step + M-step (no backward!)
-            logits, ce_loss, vfe_history, _diag = model.update(
-                input_ids, target_ids)
+                    mu, Sigma, Omega, logits, vfe, _diag = pure_e_step(
+                        input_ids, model, pure_config,
+                    )
+                    accum.accumulate(
+                        input_ids, target_ids, mu, Sigma, Omega,
+                        model, pure_config, logits=logits,
+                    )
+                    if _micro == 0:
+                        vfe_history = vfe  # Track VFE from first micro-batch
+
+                effective_eta_M = model.get_effective_eta_M()
+                ce_loss = apply_m_step_from_accumulated(
+                    accum, model, pure_config, effective_eta_M=effective_eta_M,
+                )
+                model.global_step += 1
+            else:
+                # --- Standard: single E-step + M-step ---
+                try:
+                    batch = next(train_iterator)
+                except StopIteration:
+                    train_iterator = iter(train_loader)
+                    batch = next(train_iterator)
+
+                input_ids, target_ids = batch
+                input_ids = input_ids.to(device)
+                target_ids = target_ids.to(device)
+
+                logits, ce_loss, vfe_history, _diag = model.update(
+                    input_ids, target_ids)
 
             step_time = time.time() - step_start
 
@@ -2845,10 +3102,11 @@ def run_pure_vfe_experiment(
                     'attention_concentration': 0,
                 }
 
-                # No optimizer LRs — use eta_E/eta_M as stand-ins
+                # Use scheduled LRs
+                current_eta_M = model.get_effective_eta_M()
                 lrs = {
                     'eta_E': pure_config.eta_E,
-                    'eta_M': pure_config.eta_M,
+                    'eta_M': current_eta_M,
                 }
 
                 metrics_tracker.log_step(
@@ -2929,9 +3187,27 @@ def run_pure_vfe_experiment(
                 model.save(ckpt_path)
                 metrics_tracker.save()
 
+            # =========================================================
+            # Figure Saving (attention patterns, semantics, holonomy)
+            # =========================================================
+            if figure_interval > 0 and (step + 1) % figure_interval == 0:
+                _save_pure_vfe_figures(
+                    model, val_loader, device, step + 1, attn_dir,
+                    figures_dir, pure_config,
+                    tokenizer=tokenizer if not use_char else None,
+                )
+
         # Save final metrics
         metrics_tracker.save()
         print(f"\n[INFO] Final metrics saved to: {metrics_path}")
+
+        # Save final figures
+        _save_pure_vfe_figures(
+            model, val_loader, device, max_steps, attn_dir,
+            figures_dir, pure_config,
+            tokenizer=tokenizer if not use_char else None,
+            final=True,
+        )
 
         # Final evaluation
         print("\n" + "="*70)
