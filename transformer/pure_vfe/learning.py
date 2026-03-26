@@ -86,11 +86,64 @@ def _precompute_obs_gradient(ce_grad, mu_star, Sigma_star, update_tokens):
     }
 
 
+def _adam_update_mu(nat_mu, update_tokens, model, config):
+    r"""Apply Adam-like momentum to prior_mu natural gradient.
+
+    Tracks EMA of first moment (momentum) and second moment (adaptive scaling)
+    for variance reduction across batches. No neural components — purely an
+    optimization algorithm on natural gradient outputs.
+
+    Args:
+        nat_mu: [T, K] natural gradient for active tokens
+        update_tokens: [T] token indices
+        model: PureVFETransformer with momentum buffers
+        config: PureVFEConfig
+
+    Returns:
+        nat_mu_corrected: [T, K] bias-corrected Adam update direction
+    """
+    beta1 = config.adam_beta1
+    beta2 = config.adam_beta2
+    eps = config.adam_eps
+
+    model.adam_step += 1
+    t = model.adam_step
+
+    # Update running moments for active tokens only
+    model.m1_mu[update_tokens] = beta1 * model.m1_mu[update_tokens] + (1 - beta1) * nat_mu
+    model.m2_mu[update_tokens] = beta2 * model.m2_mu[update_tokens] + (1 - beta2) * nat_mu ** 2
+
+    # Bias-corrected estimates
+    m1_hat = model.m1_mu[update_tokens] / (1 - beta1 ** t)
+    m2_hat = model.m2_mu[update_tokens] / (1 - beta2 ** t)
+
+    return m1_hat / (m2_hat.sqrt() + eps)
+
+
+def _momentum_update(nat_grad, momentum_buffer, update_tokens, beta1):
+    r"""Apply simple momentum (first moment EMA) to a natural gradient.
+
+    Used for Sigma and Omega where Adam's per-element adaptive scaling
+    interacts poorly with manifold geometry.
+
+    Args:
+        nat_grad: [T, ...] natural gradient for active tokens
+        momentum_buffer: [V, ...] running first moment
+        update_tokens: [T] token indices
+        beta1: EMA decay factor
+
+    Returns:
+        corrected: [T, ...] momentum-corrected gradient
+    """
+    momentum_buffer[update_tokens] = beta1 * momentum_buffer[update_tokens] + (1 - beta1) * nat_grad
+    return momentum_buffer[update_tokens]
+
+
 @torch.no_grad()
 def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
-           logits=None):
-    """
-    Update prior bank via natural gradient on marginal VFE.
+           logits=None, effective_eta_M=None):
+    r"""Update prior bank via natural gradient on marginal VFE.
+
     Observation gradient enters HERE (not in E-step).
 
     Args:
@@ -102,6 +155,7 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
         model: PureVFETransformer
         config: PureVFEConfig
         logits: [B, N, V] optional precomputed logits from e_step
+        effective_eta_M: optional override for M-step learning rate (from LR schedule)
 
     Returns:
         ce_loss: scalar cross-entropy loss (for monitoring only)
@@ -153,11 +207,12 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     T = len(update_tokens)
     dev = mu_star.device
 
-    # Use eta_M directly. No confidence weighting — at initialization CE ≈ 11
-    # (random PPL), which would shrink eta_M by ~12x via 1/(1+CE), creating a
-    # Catch-22 where the model can't learn because predictions are bad, and
-    # predictions are bad because the model can't learn.
-    effective_eta_M = config.eta_M
+    # Use eta_M directly (or scheduled override). No confidence weighting — at
+    # initialization CE ≈ 11 (random PPL), which would shrink eta_M by ~12x via
+    # 1/(1+CE), creating a Catch-22.
+    if effective_eta_M is None:
+        effective_eta_M = config.eta_M
+    use_adam = getattr(config, 'use_adam_m_step', False) and model.m1_mu is not None
 
     grad_clamp = getattr(config, 'grad_clamp', 1e3)
 
@@ -244,6 +299,11 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     # Natural gradient and update
     nat_mu = torch.einsum('tij,tj->ti', Sigma_all, grad_mu)  # [T, K]
     nat_mu = clip_norm(nat_mu, config.m_step_trust_mu)
+
+    # Adam momentum for μ (variance reduction + adaptive step sizes)
+    if use_adam:
+        nat_mu = _adam_update_mu(nat_mu, update_tokens, model, config)
+
     mu_new = mu_all - effective_eta_M * nat_mu
 
     # Enforce prior mean norm constraint (prevents mean spread → logit explosion)
@@ -310,6 +370,13 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     # Natural gradient on SPD and retract
     nat_Sigma = natural_grad_sigma(grad_Sigma, Sigma_all)
     nat_Sigma = clip_matrix_norm(nat_Sigma, config.trust_region_sigma)
+
+    # Momentum for Σ (first moment only — adaptive scaling conflicts with SPD geometry)
+    if use_adam and model.m1_Sigma is not None:
+        nat_Sigma = _momentum_update(
+            nat_Sigma, model.m1_Sigma, update_tokens, config.adam_beta1
+        )
+
     # Σ_p uses a reduced step size (SPD retraction is geometrically sensitive)
     _sigma_ratio = getattr(config, 'm_step_sigma_ratio', 0.2)
     Sigma_new = retract_spd(
@@ -357,6 +424,13 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
             grad_Omega_all, Omega_all,
             trust_radius=config.trust_region_omega,
         )
+
+        # Momentum for Ω (first moment only)
+        if use_adam and model.m1_Omega is not None:
+            nat_Omega = _momentum_update(
+                nat_Omega, model.m1_Omega, update_tokens, config.adam_beta1
+            )
+
         Omega_new = Omega_all - effective_eta_M * nat_Omega
         Omega_new = regularize_omega_conditioning(Omega_new, config.omega_cond_max)
         model.prior_Omega[update_tokens] = Omega_new
@@ -364,7 +438,8 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     # ================================================================
     # 4. Update positional gauge offsets
     # ================================================================
-    _update_pos_omega(Omega_star, token_ids, model, config)
+    _update_pos_omega(Omega_star, token_ids, model, config,
+                      effective_eta_M=effective_eta_M)
 
     # Sync Omega from phi if using phi path
     if model.prior_phi is not None:
@@ -373,7 +448,8 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     return ce_loss.item()
 
 
-def _update_pos_omega(Omega_star, token_ids, model, config):
+def _update_pos_omega(Omega_star, token_ids, model, config,
+                      effective_eta_M=None):
     """
     Update positional gauge offsets toward mean converged frames per position.
     Vectorized over all positions.
@@ -381,6 +457,9 @@ def _update_pos_omega(Omega_star, token_ids, model, config):
     B, N = token_ids.shape
     omega_grad_clamp = getattr(config, 'omega_grad_clamp', 10.0)
     grad_clamp = getattr(config, 'grad_clamp', 1e3)
+    if effective_eta_M is None:
+        effective_eta_M = config.eta_M
+    use_adam = getattr(config, 'use_adam_m_step', False) and model.m1_pos_Omega is not None
 
     # Average converged gauge at each position across batch: [N, H, K_h, K_h]
     Om_avg = Omega_star.mean(0)               # [N, H, K_h, K_h]
@@ -391,7 +470,7 @@ def _update_pos_omega(Omega_star, token_ids, model, config):
 
     # Positional frames use a reduced step size (must be stable across sequences)
     _pos_ratio = getattr(config, 'm_step_pos_ratio', 0.1)
-    pos_lr = config.eta_M * _pos_ratio
+    pos_lr = effective_eta_M * _pos_ratio
 
     if model.pos_phi is not None:
         # Phi path: update pos_phi coordinates
@@ -409,6 +488,14 @@ def _update_pos_omega(Omega_star, token_ids, model, config):
         nat = lie_algebra_clip_grad(
             grad, pos_Om, trust_radius=config.trust_region_omega,
         )
+
+        # Momentum for positional Ω
+        if use_adam:
+            pos_indices = torch.arange(N, device=nat.device)
+            nat = _momentum_update(
+                nat, model.m1_pos_Omega, pos_indices, config.adam_beta1
+            )
+
         pos_Om_new = pos_Om - pos_lr * nat
         pos_Om_new = regularize_omega_conditioning(pos_Om_new, config.omega_cond_max)
         model.pos_Omega[:N] = pos_Om_new

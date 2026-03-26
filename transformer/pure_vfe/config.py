@@ -78,6 +78,15 @@ class PureVFEConfig:
     sigma_obs_grad: str = 'none'        # 'none' (match VFE dynamic), 'diagonal', 'full'
     m_step_eta_floor: float = 0.01      # Min multiplier for confidence-weighted eta_M
 
+    # Covariance mode
+    diagonal_covariance: bool = False   # Use diagonal Σ (K,) instead of full (K, K) — faster, less expressive
+
+    # LayerNorm (optional, for testing — this IS a neural-like component)
+    use_layernorm: bool = False         # Apply LayerNorm to μ between E-step iterations
+
+    # Holonomy / non-flat transport
+    use_holonomy: bool = False          # Enable holonomy monitoring (measure gauge curvature)
+
     # Overfitting prevention
     obs_norm_floor: int = 0             # Floor for per-token obs gradient normalization (0 = auto: 1% of BN)
     rare_token_reg: float = 0.0         # Frequency-adaptive hyper-prior strength (0 = disabled)
@@ -91,6 +100,26 @@ class PureVFEConfig:
     causal: bool = True
     mask_self_attention: bool = False    # Mask KL diagonal to prevent self-attention collapse
     alibi_slope: float = 0.0            # ALiBi slope m (0 = uniform prior, >0 = recency bias)
+
+    # Rotary Position Embeddings (RoPE)
+    # SO(2)^{K/2} rotations applied to μ before KL scoring for attention β.
+    # Raw (un-rotated) μ used for gradient computation.
+    use_rope: bool = False              # Enable RoPE position encoding
+    rope_base: float = 10000.0          # RoPE frequency base
+
+    # M-step momentum (Adam-like natural gradient)
+    # Tracks EMA of natural gradient first/second moments for variance reduction.
+    # No neural components — purely an optimization algorithm improvement.
+    use_adam_m_step: bool = False        # Enable Adam-like momentum in M-step
+    adam_beta1: float = 0.9             # First moment decay (momentum)
+    adam_beta2: float = 0.999           # Second moment decay (adaptive scaling)
+    adam_eps: float = 1e-8              # Denominator epsilon for numerical stability
+
+    # LR scheduling
+    warmup_steps: int = 0               # Linear warmup for eta_M (0 = no warmup)
+    lr_schedule: str = 'constant'       # 'constant', 'cosine'
+    min_eta_M_ratio: float = 0.1        # Floor for cosine decay as fraction of eta_M
+    max_steps: int = 30000              # Total training steps (for cosine schedule)
 
     # Device
     device: str = "cuda"
