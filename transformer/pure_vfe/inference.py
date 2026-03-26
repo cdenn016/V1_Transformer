@@ -293,6 +293,7 @@ def e_step(token_ids, model, config):
             kl_ij_raw = pairwise_kl(precomp, causal=config.causal)
             vfe = compute_vfe(mu, Sigma, prior_mu, prior_Sigma, alpha, beta, kl_ij_raw)
         else:
+            kl_ij_raw = kl_ij
             vfe = compute_vfe(mu, Sigma, prior_mu, prior_Sigma, alpha, beta, kl_ij)
         vfe_history.append(vfe)
 
@@ -313,7 +314,11 @@ def e_step(token_ids, model, config):
         # MEAN GRADIENT: ∂F/∂μ_i (uses raw precomp for gradients)
         # ================================================================
         # 1. Alignment gradient (with softmax correction, Eq. 21 + 24)
-        grad_mu_align = vfe_grad_mu_alignment(precomp, beta, kl_ij, config.tau)
+        # When RoPE is active: beta comes from RoPE-KL (position-aware attention),
+        # but kl_ij in the softmax correction w_ij = β_ij[1 + (E[KL] - KL_ij)/τ]
+        # must use raw-mu KL for geometric consistency of the gradient direction.
+        # See VFE_dynamic variational_ffn.py:1183-1187 for the same pattern.
+        grad_mu_align = vfe_grad_mu_alignment(precomp, beta, kl_ij_raw, config.tau)
         # Shape: [B, H, N, K_h] — transpose to [B, N, H, K_h] and reshape to [B, N, K]
         grad_mu_align = grad_mu_align.permute(0, 2, 1, 3).reshape(B, N, K)
 
