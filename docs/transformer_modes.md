@@ -434,11 +434,55 @@ Additionally, `evolve_phi_e_step=True` updates phi during each E-step VFE iterat
 
 ### Optimizer Types (`optimizer_type`)
 
-| Type | Description |
-|------|-------------|
-| `'adamw'` | Standard AdamW with diagonal Fisher EMA |
-| `'riemannian_adam'` | AdamW + Killing-form metric for phi + Fisher metric for location parameters |
-| `'natural_gradient'` | Per-token block-diagonal empirical Fisher. Cost: `O(V * K^3)` per step. Controlled by `fisher_ema_decay` and `fisher_damping` |
+Three M-step optimizer types are available, each providing a different approximation to the natural gradient on the parameter manifold. All are implemented in `transformer/training/optimizer.py`.
+
+#### AdamW (default)
+
+Standard AdamW with decoupled weight decay. The diagonal exponential moving average of squared gradients provides an implicit diagonal Fisher approximation. No geometric awareness of the Lie algebra or statistical manifold structure. Suitable as a baseline or when training is dominated by non-embedding parameters.
+
+#### RiemannianAdamW
+
+Extends AdamW by applying the geometrically correct metric tensor to gradients before the Adam moment update (`optimizer.py:41–146`). Since the Lie algebra $\mathfrak{gl}(K)$ is a flat vector space, parallel transport is trivial and the Riemannian exponential map reduces to addition, so the optimizer applies preconditioning as a gradient transformation followed by standard Adam.
+
+Three parameter-type-specific metrics are applied in the `step()` method before delegating to the parent AdamW:
+
+**Phi / Omega parameters** (gauge frame embeddings): The inverse Killing-form metric $\tilde{g}^{-1}$ is applied, where $\tilde{g}_{ab} = 2K\,\mathrm{tr}(T_a^\top T_b) - 2\,\mathrm{tr}(T_a)\mathrm{tr}(T_b)$ as described in the EM section. The precomputed inverse metric is applied as a matrix multiply on the last dimension of the gradient:
+
+$$g_{\mathrm{phi}}^{\mathrm{nat}} = g_{\mathrm{phi}}^{\mathrm{eucl}} \cdot \tilde{g}^{-1}$$
+
+For $\mathrm{SO}(N)$ with Frobenius-orthonormal generators, $\tilde{g} \approx K \cdot I$, so preconditioning reduces to a scalar rescaling by $1/K$. For $\mathrm{GL}(K)$ with the standard $E_{ij}$ basis, the metric is non-trivial and couples the trace direction.
+
+**Mu parameters** (mean embeddings): The Fisher information metric for the mean of $\mathcal{N}(\mu, \Sigma)$ is $\Sigma^{-1}$. The natural gradient is therefore:
+
+$$g_{\mu}^{\mathrm{nat}} = \Sigma_v \cdot g_{\mu}^{\mathrm{eucl}}$$
+
+where $\Sigma_v = \exp(\log\sigma_v^2)$ is the current per-token variance, read from the model's `log_sigma_diag` parameter. High-uncertainty dimensions receive larger steps (the optimizer explores more where beliefs are uncertain). When the model has no learnable sigma, the scaling is uniform and equivalent to a learning rate change.
+
+**Sigma parameters** (log-variance embeddings): For the log-variance parameterization $\eta = \log(\sigma^2)$, the Fisher information is constant $F_{\eta\eta} = 1/2$. The natural gradient is therefore $2 \times$ the Euclidean gradient:
+
+$$g_{\sigma}^{\mathrm{nat}} = 2 \cdot g_{\sigma}^{\mathrm{eucl}}$$
+
+#### NaturalGradientOptimizer
+
+A full per-token block-diagonal empirical Fisher optimizer (`optimizer.py:153–331`). For each embedding parameter with shape $(V, K)$, it maintains a $K \times K$ Fisher information block per vocabulary token, updated via exponential moving average of gradient outer products:
+
+$$\hat{F}_v^{(t)} = (1 - \rho)\,\hat{F}_v^{(t-1)} + \rho \cdot g_v \, g_v^\top$$
+
+where $\rho$ is the EMA decay rate (`fisher_ema_decay`, default 0.95) with bias correction for early steps: $\rho_{\mathrm{eff}} = \min(\rho, 2/(t+1))$ for $t < 20$. The Fisher $\hat{F}_v$ converges to the true Fisher $\mathbb{E}[g_v g_v^\top]$ under ergodic sampling.
+
+The natural gradient update solves a damped linear system per active token:
+
+$$\theta_v \;\leftarrow\; \theta_v - \eta \cdot (\hat{F}_v + \lambda I)^{-1} g_v$$
+
+The Tikhonov damping $\lambda$ (`fisher_damping`) regularizes the inversion. For rarely-seen tokens, $\hat{F}_v \approx 0$ and $(\hat{F}_v + \lambda I)^{-1} \approx (1/\lambda)I$, so small $\lambda$ amplifies rare tokens' gradients. To prevent this, the natural gradient is clipped to at most $10\times$ the Euclidean gradient norm per token. The implementation recommends $\lambda \geq 10^{-2}$ for stability.
+
+The solve is batched over all active tokens (those with nonzero gradient in the current batch) via `torch.linalg.solve`. Cost per step is $O(|\text{batch tokens}| \cdot K^3)$ for the solve plus $O(|\text{batch tokens}| \cdot K^2)$ for the outer product update. Memory is $O(V \cdot K^2)$ for storing Fisher blocks (e.g., $V = 50257$, $K = 64$ requires ~819 MB).
+
+For non-embedding parameters (1D tensors or small 2D tensors with $K < 4$), the optimizer falls back to plain gradient descent with decoupled weight decay.
+
+#### Embedding Weight Decay as Hyper-Prior
+
+Across all three optimizers, embedding weight decay serves a dual role. In the VFE hierarchy, the hyper-prior $h = \mathcal{N}(0, \sigma_h^2 I)$ regularizes the model parameters $s$. Decoupled weight decay with coefficient $\lambda_{\mathrm{wd}}$ implements this as an $L_2$ penalty $\lambda_{\mathrm{wd}} \|\theta\|^2 / 2$, which is equivalent to a Gaussian prior $\mathcal{N}(0, 1/(2\lambda_{\mathrm{wd}}) \cdot I)$ on the embedding parameters. The `embed_weight_decay` config parameter controls this independently from the general `weight_decay` applied to non-VFE parameters.
 
 ### Non-flat Transport (Holonomy)
 
