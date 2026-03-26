@@ -703,21 +703,10 @@ class GaugeTransformerLM(nn.Module):
         # Controlled by use_obs_in_vfe in config; only final layer receives them.
         use_obs = self.config.get('use_obs_in_vfe', False) if hasattr(self, 'config') else False
         vfe_targets = targets if use_obs else None
-        # Build W_out for VFE observation coupling.
-        # Standard path: use out_proj.weight.
-        # PriorBank path: out_proj is untrained, so construct a pseudo-W_out
-        # from the PriorBank priors. The KL-based decode has the linear form:
-        #   logits[v] ≈ (1/τ) · μ_q · (μ_p[v]/σ_p[v]) + const
-        # so W_pseudo[v,k] = μ_p[v,k] / (τ·σ_p[v,k]) acts as an effective
-        # output projection, giving the E-step observation grounding that
-        # drives beliefs toward the predicted next token.
+        # PriorBank decodes via KL (no linear output projection), so out_proj
+        # is untrained when PriorBank is active — never pass it as W_out.
         if use_obs and not self.use_prior_bank and hasattr(self, 'out_proj'):
             vfe_W_out = self.out_proj.weight
-        elif use_obs and self.use_prior_bank and self.prior_bank is not None:
-            with torch.no_grad():
-                _pb = self.prior_bank
-                _sigma_p_safe = _pb.prior_sigma.clamp(min=1e-4)  # (V, K)
-                vfe_W_out = (_pb.prior_mu / (_sigma_p_safe * self.prior_bank_tau)).detach()  # (V, K)
         else:
             vfe_W_out = None
 
@@ -932,15 +921,10 @@ class GaugeTransformerLM(nn.Module):
             # FFN sublayer
             mu_normalized = block.norm2(mu_q)
 
-            # Build W_out for VFE observation coupling in final layer.
-            # PriorBank: construct pseudo-W_out from priors (see forward() comment).
+            # Permute W_out to match cross-head reordered mu basis
+            # PriorBank decodes via KL — out_proj is untrained, never use as W_out.
             if is_final and not self.use_prior_bank and hasattr(self, 'out_proj'):
                 _w_out_fwa = self.out_proj.weight
-            elif is_final and self.use_prior_bank and self.prior_bank is not None:
-                with torch.no_grad():
-                    _pb = self.prior_bank
-                    _sigma_p_safe = _pb.prior_sigma.clamp(min=1e-4)
-                    _w_out_fwa = (_pb.prior_mu / (_sigma_p_safe * self.prior_bank_tau)).detach()
             else:
                 _w_out_fwa = None
             if _w_out_fwa is not None and getattr(self, '_cross_head_perm', None) is not None:
