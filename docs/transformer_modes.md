@@ -459,10 +459,45 @@ Implementation: `transformer/core/connection.py`
 
 ### Deep Equilibrium (DEQ) Mode
 
-When `use_deq=True`, implicit differentiation is used at the E-step fixed point instead of unrolling through all VFE iterations.
+When `use_deq=True`, the backward pass through the E-step is replaced by implicit differentiation at the fixed point, avoiding the need to backpropagate through all VFE iterations. The forward pass is unchanged — the E-step loop runs for `ffn_n_iterations` steps as usual, producing converged beliefs $z^* = (\mu^*, \Sigma^*)$ (or $z^* = (\mu^*, \Sigma^*, \phi^*)$ when `deq_include_phi=True`). Only the backward pass differs.
 
-- `deq_neumann_terms`: Number of Neumann series terms for the backward pass
-- `deq_include_phi`: Include phi in the joint fixed-point system `(mu, sigma, phi)`
+#### Fixed-Point Condition and the IFT
+
+At convergence, the E-step satisfies $z^* = g(z^*, \theta)$, where $g$ is one VFE natural gradient step and $\theta$ are model parameters. Differentiating both sides:
+
+$$\frac{dz^*}{d\theta} = J \frac{dz^*}{d\theta} + \frac{\partial g}{\partial \theta}$$
+
+where $J = \partial g / \partial z |_{z^*}$ is the Jacobian of one E-step evaluated at the fixed point. Solving:
+
+$$\frac{dz^*}{d\theta} = (I - J)^{-1} \frac{\partial g}{\partial \theta}$$
+
+The loss gradient with respect to $\theta$ is then $\nabla_\theta \mathcal{L} = \nabla_{z^*} \mathcal{L} \cdot (I - J)^{-1} \cdot \partial g / \partial \theta$, which requires the vector-Jacobian product $v^\top (I - J)^{-1}$ where $v = \nabla_{z^*} \mathcal{L}$.
+
+#### Neumann Series Approximation
+
+Computing $(I - J)^{-1}$ exactly is intractable for the high-dimensional belief state. The implementation approximates it via a truncated Neumann series (`variational_ffn.py:2101–2213`):
+
+$$(I - J^\top)^{-1} v \;\approx\; v + J^\top v + (J^\top)^2 v + \cdots + (J^\top)^K v$$
+
+where $K$ is controlled by `deq_neumann_terms` (default 5). Each term requires one vector-Jacobian product (VJP) through the E-step function $g$, computed via `torch.autograd.grad`. The series converges when the spectral radius $\rho(J) < 1$, which holds at a stable fixed point (the E-step is contractive near convergence).
+
+The implementation uses custom `torch.autograd.Function` classes. `DEQFixedPoint` handles the $(\mu, \Sigma)$ fixed point; `DEQFixedPointFull` extends this to the joint $(\mu, \Sigma, \phi)$ system. In the forward pass, both return their inputs unchanged (identity). In the backward pass, they accumulate the Neumann series by iteratively applying VJPs through the E-step function.
+
+#### Two Variants
+
+**$(\mu, \Sigma)$-only** (`deq_include_phi=False`, default): Only the belief mean and covariance are treated as fixed-point variables. The gauge frame $\phi$ receives a straight-through gradient ($\partial \phi^* / \partial \phi_{\mathrm{init}} \approx I$). This is cheaper (two VJP targets per Neumann term) but leaves the $\phi$ M-step gradient uncorrected.
+
+**Joint $(\mu, \Sigma, \phi)$** (`deq_include_phi=True`): All three E-step variables are included in the fixed-point system. The Neumann series corrects the gradient for all three simultaneously, eliminating the straight-through bias in the $\phi$ M-step gradient. At the joint fixed point, $\partial F/\partial \mu = 0$, $\partial F/\partial \Sigma = 0$, and $\partial F/\partial \phi = 0$, so the IFT applies to the full system. This adds one VJP target per Neumann term but provides the exact M-step gradient for $\phi$ as well.
+
+#### Relationship to Implicit EM
+
+DEQ and implicit EM address the same problem — correcting the M-step gradient for the E-step optimization — but with different approaches. Implicit EM computes a closed-form per-dimension scale factor $s_k$ from the diagonal structure of the Gaussian VFE Hessian, which is cheap but limited to the diagonal approximation. DEQ uses the full (non-diagonal) Jacobian via the Neumann series, which captures cross-dimensional interactions but requires $K$ additional VJP passes. In practice, implicit EM is preferred for the mean and covariance (where the diagonal approximation is accurate), while DEQ is most useful for correcting the $\phi$ gradient (where no diagonal closed form exists).
+
+| Flag | Default | Role |
+|------|---------|------|
+| `use_deq` | `False` | Enable DEQ implicit differentiation for E-step backward |
+| `deq_neumann_terms` | `5` | Neumann series truncation order $K$ |
+| `deq_include_phi` | `False` | Include $\phi$ in the joint fixed-point system |
 
 ### Implicit EM vs. Amortized Inference
 
