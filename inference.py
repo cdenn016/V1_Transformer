@@ -20,7 +20,7 @@ Instructions:
 # CONFIGURATION - EDIT THESE
 # =============================================================================
 
-CHECKPOINT_PATH = r"checkpoints_publication\ffn_VFE_dynamic\best_model.pt"
+CHECKPOINT_PATH = str(Path("checkpoints_publication") / "ffn_VFE_dynamic" / "best_model.pt")
 
 # Set to None for auto-detect from checkpoint config
 # Override: 'wikitext-2', 'wikitext-103', or 'wiki-ja'

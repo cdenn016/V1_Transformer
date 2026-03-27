@@ -483,7 +483,7 @@ class FastTrainer:
             progress = min(progress, 1.0)  # Clamp for steps beyond max_steps
 
             if self.config.lr_decay == 'cosine':
-                decay = 0.5 * (1.0 + torch.cos(torch.tensor(progress * math.pi)).item())
+                decay = 0.5 * (1.0 + math.cos(progress * math.pi))
                 return max(min_ratio, decay)
             elif self.config.lr_decay == 'linear':
                 return max(min_ratio, 1.0 - progress)
