@@ -240,7 +240,7 @@ def main(checkpoint_path: str = None):
                 'evolve_sigma': True,
                 'evolve_phi': False,
                 'tie_embeddings': True,
-                'use_diagonal_covariance': True,
+                'diagonal_covariance': True,
                 'ffn_mode': 'VFE_dynamic',
             }
 
@@ -252,8 +252,8 @@ def main(checkpoint_path: str = None):
     config.pop('kappa_beta_base', None)
     config.pop('kappa_beta_k_ref', None)
 
-    if 'use_diagonal_covariance' not in config and 'diagonal_covariance' in config:
-        config['use_diagonal_covariance'] = config['diagonal_covariance']
+    if 'diagonal_covariance' not in config and 'use_diagonal_covariance' in config:
+        config['diagonal_covariance'] = config['use_diagonal_covariance']
 
     # Show the actual config we're using
     print(f"\nConfig:")

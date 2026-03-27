@@ -1460,7 +1460,7 @@ class PublicationTrainer(FastTrainer):
                     kappa_gamma=self.config.kappa_gamma,
                     lambda_hyper=self.config.lambda_hyper,
                     pad_token_id=self.pad_token_id,
-                    use_obs_in_vfe=self.config.use_obs_in_vfe,
+                    use_obs_in_vfe=use_obs,
                     alpha_phi=self.config.alpha_phi,
                 )
             loss.backward()

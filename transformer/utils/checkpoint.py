@@ -112,7 +112,7 @@ def load_model(checkpoint_path: str) -> Tuple[GaugeTransformerLM, Dict[str, Any]
         'evolve_sigma': True,
         'evolve_phi': False,
         'tie_embeddings': True,
-        'use_diagonal_covariance': True,
+        'diagonal_covariance': True,
         'ffn_mode': 'VFE_dynamic',
     }
 
@@ -154,8 +154,9 @@ def load_model(checkpoint_path: str) -> Tuple[GaugeTransformerLM, Dict[str, Any]
     config.pop('kappa_beta_auto_scale', None)
     config.pop('kappa_beta_base', None)
     config.pop('kappa_beta_k_ref', None)
-    if 'use_diagonal_covariance' not in config and 'diagonal_covariance' in config:
-        config['use_diagonal_covariance'] = config['diagonal_covariance']
+    # Legacy compat: old configs may use 'use_diagonal_covariance' but model reads 'diagonal_covariance'
+    if 'diagonal_covariance' not in config and 'use_diagonal_covariance' in config:
+        config['diagonal_covariance'] = config['use_diagonal_covariance']
 
     print(f"Config: K={config['embed_dim']}, vocab={config['vocab_size']}, "
           f"layers={config['n_layers']}")

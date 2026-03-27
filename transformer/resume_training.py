@@ -172,10 +172,8 @@ def infer_config_from_state_dict(state_dict: dict) -> dict:
     # log_sigma_embed/log_sigma_diag = diagonal mode, log_sigma or sigma_embed = full mode
     if 'token_embed.log_sigma_embed.weight' in state_dict or 'token_embed.log_sigma_diag' in state_dict:
         config['diagonal_covariance'] = True
-        config['use_diagonal_covariance'] = True
     elif 'token_embed.log_sigma' in state_dict or 'token_embed.sigma_embed' in state_dict:
         config['diagonal_covariance'] = False
-        config['use_diagonal_covariance'] = False
 
     return config
 
@@ -268,7 +266,6 @@ def resume_training():
     print(f"    batch_size: {config.get('batch_size', 32)}")
     print(f"    hidden_dim: {config.get('hidden_dim', 'NOT SET')}")
     print(f"    diagonal_covariance: {config.get('diagonal_covariance', 'NOT SET')}")
-    print(f"    use_diagonal_covariance: {config.get('use_diagonal_covariance', 'NOT SET')}")
 
     # Override max_steps if specified
     original_max_steps = config.get('max_steps', 200000)
@@ -336,7 +333,6 @@ def resume_training():
         'ffn_mode': 'VFE_dynamic',
         'pos_encoding_mode': 'learned',
         'diagonal_covariance': True,
-        'use_diagonal_covariance': True,
         'evolve_sigma': True,
         'evolve_phi': True,
         'tie_embeddings': True,

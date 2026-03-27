@@ -59,7 +59,7 @@ def visualize_per_head_attention():
     if beta.dim() == 5:
         beta = beta[-1]  # (B, n_heads, N, N)
 
-    B, n_heads, N, N = beta.shape
+    B, n_heads, N, _N = beta.shape
     print(f"Attention shape: {beta.shape}")
     print(f"  B={B} (batch), H={n_heads} (heads), N={N} (sequence)")
 
@@ -194,8 +194,6 @@ def visualize_per_head_attention():
             print("  ⚠️  KL divergences are too uniform → uniform attention!")
 
     print("="*80)
-
-    plt.show()
 
 
 if __name__ == '__main__':

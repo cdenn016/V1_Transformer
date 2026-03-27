@@ -104,8 +104,6 @@ class FastTrainingConfig:
     lambda_gamma: float = 0.0     # Model alignment (disabled by default)
     kappa_gamma: float = 1.0      # Temperature for γ_ij coupling weights
     lambda_hyper: float = 0.0     # Hyper-prior: KL(s_i||h) models to centroid
-    alpha_phi: float = 0.0        # Gauge prior: (α_φ/2)||φ||² mass term
-
     # VFE observation coupling
     use_obs_in_vfe: bool = False  # Pass targets into VFE E-step (last layer only)
 
@@ -239,7 +237,7 @@ class FastTrainer:
         self.patience_counter = 0  # Early stopping counter
 
         # Mixed precision (using modern AMP API for PyTorch 2.x / CUDA 12+)
-        self.scaler = torch.amp.GradScaler('cuda') if config.use_amp and self.device.type == 'cuda' else None
+        self.scaler = torch.amp.GradScaler() if config.use_amp and self.device.type == 'cuda' else None
 
         # W&B logging
         if config.use_wandb and WANDB_AVAILABLE:
@@ -485,7 +483,7 @@ class FastTrainer:
             progress = min(progress, 1.0)  # Clamp for steps beyond max_steps
 
             if self.config.lr_decay == 'cosine':
-                decay = 0.5 * (1.0 + torch.cos(torch.tensor(progress * math.pi)).item())
+                decay = 0.5 * (1.0 + math.cos(progress * math.pi))
                 return max(min_ratio, decay)
             elif self.config.lr_decay == 'linear':
                 return max(min_ratio, 1.0 - progress)
@@ -539,8 +537,10 @@ class FastTrainer:
                 lambda_beta=self.config.beta,
                 lambda_gamma=self.config.lambda_gamma,
                 kappa_gamma=self.config.kappa_gamma,
+                lambda_hyper=self.config.lambda_hyper,
                 pad_token_id=self.pad_token_id,
-                
+                use_obs_in_vfe=self.config.use_obs_in_vfe,
+                alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
             )
 
         # Backward pass
@@ -633,7 +633,10 @@ class FastTrainer:
                         lambda_beta=0.0,
                         lambda_gamma=0.0,
                         kappa_gamma=1.0,
+                        lambda_hyper=0.0,
                         pad_token_id=self.pad_token_id,
+                        use_obs_in_vfe=False,
+                        alpha_phi=0.0,
                     )
                     ce_loss = metrics['loss/ce']
 
@@ -812,10 +815,7 @@ class FastTrainer:
         else:
             path = self.config.checkpoint_dir / f'checkpoint_step_{self.global_step}.pt'
 
-        # Use pickle protocol 4 to avoid the PyTorch zip serialization
-        # 2GB limit on Windows (inline_container.cc position overflow).
-        torch.save(checkpoint, path, pickle_protocol=4,
-                   _use_new_zipfile_serialization=False)
+        torch.save(checkpoint, path, pickle_protocol=4)
 
         # Cleanup old checkpoints
         if not is_best:
