@@ -18,7 +18,7 @@ FLOPs are reported as multiply-accumulate operations (MACs) * 2 = FLOPs.
 """
 
 import math
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 
 def count_standard_transformer_flops(
@@ -302,7 +302,7 @@ def compare_flops(
     seq_len: int = 128,
     batch_size: int = 64,
     max_steps: int = 15000,
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """
     Compare per-step and total training FLOPs between gauge and standard models.
 

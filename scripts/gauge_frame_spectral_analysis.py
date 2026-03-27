@@ -28,6 +28,8 @@ import warnings
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
+import numpy as np
+
 
 class NumpyEncoder(json.JSONEncoder):
     """JSON encoder that handles numpy types."""
@@ -41,8 +43,6 @@ class NumpyEncoder(json.JSONEncoder):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
         return super().default(obj)
-
-import numpy as np
 import torch
 import matplotlib
 matplotlib.use("Agg")

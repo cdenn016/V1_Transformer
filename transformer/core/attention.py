@@ -295,7 +295,7 @@ def compute_transport_operators(
         # Non-flat transport: Ω_ij = exp(φ_i·G) · exp(α·δ_ij·G) · exp(-φ_j·G)
         scaled_delta = cocycle_relaxation * connection_delta  # (B, N, N, n_gen)
         delta_matrix = torch.einsum('bija,akl->bijkl', scaled_delta, generators)  # (B, N, N, K, K)
-        exp_delta = torch.matrix_exp(delta_matrix.float()).to(dtype)  # (B, N, N, K, K)
+        exp_delta = torch.linalg.matrix_exp(delta_matrix.float()).to(dtype)  # (B, N, N, K, K)
         # Ω_ij = exp(φ_i) @ exp(δ_ij) @ exp(-φ_j)
         Omega = torch.einsum(
             'bikl,bijlm,bjmn->bijkn', exp_phi, exp_delta, exp_neg_phi
@@ -1098,8 +1098,8 @@ def _kl_gaussian_torch(
     I_K = torch.eye(K, device=sigma1.device, dtype=sigma1.dtype)
 
     # Symmetrize (transported covariances can drift from symmetry)
-    sigma1 = 0.5 * (sigma1 + sigma1.T)
-    sigma2 = 0.5 * (sigma2 + sigma2.T)
+    sigma1 = 0.5 * (sigma1 + sigma1.mT)
+    sigma2 = 0.5 * (sigma2 + sigma2.mT)
 
     # Regularize: add eps*I, then clamp eigenvalues if still not PD.
     # This handles numerical drift from matrix exponential transport.
@@ -1114,8 +1114,8 @@ def _kl_gaussian_torch(
         # Eigenvalue repair: clamp negative eigenvalues to eps
         eig1, V1 = torch.linalg.eigh(sigma1_reg)
         eig2, V2 = torch.linalg.eigh(sigma2_reg)
-        sigma1_reg = V1 @ torch.diag(eig1.clamp(min=eps)) @ V1.T
-        sigma2_reg = V2 @ torch.diag(eig2.clamp(min=eps)) @ V2.T
+        sigma1_reg = V1 @ torch.diag(eig1.clamp(min=eps)) @ V1.mT
+        sigma2_reg = V2 @ torch.diag(eig2.clamp(min=eps)) @ V2.mT
         L1 = torch.linalg.cholesky(sigma1_reg)
         L2 = torch.linalg.cholesky(sigma2_reg)
 

@@ -352,8 +352,6 @@ def main(checkpoint_path: str = None):
         save_path=output_dir / 'frequent_tokens_tsne.png'
     )
 
-    plt.show()
-
     print(f"\n{'='*70}")
     print(f"DONE")
     print(f"{'='*70}")

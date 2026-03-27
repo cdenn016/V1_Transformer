@@ -306,9 +306,6 @@ def main(checkpoint_path: str = None):
         save_path=output_dir / 'belief_space_tsne.png'
     )
 
-    # Show plots
-    plt.show()
-
     print(f"\n{'='*70}")
     print(f"DONE")
     print(f"{'='*70}")
