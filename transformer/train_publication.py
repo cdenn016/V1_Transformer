@@ -395,13 +395,17 @@ HEBBIAN_CONFIG = {
     'phi_scale':   1.0,
     'kappa_beta':  1.0,
 
-    # === Learning rates (backprop LRs less important; P-flow dominates) ===
-    'mu_lr':        0.05,
-    'sigma_lr':     0.0125,
-    'phi_lr':       0.0075,
+    # === Learning rates ===
+    # mu/sigma/phi: 0.0 because P-flow EMA is the sole embedding update mechanism.
+    # Nonzero backprop LR here would create a hybrid (optimizer + P-flow) that
+    # conflicts with the "no backprop" design. Attention/FFN params still need
+    # backprop since they have no P-flow equivalent.
+    'mu_lr':        0.0,
+    'sigma_lr':     0.0,
+    'phi_lr':       0.0,     # phi learns via phi_flow_update only (detach_phi=True)
     'ffn_lr':       0.05,
     'attention_lr': 0.005,
-    'output_lr':    0.05,
+    'output_lr':    0.0,     # W_out learns via delta rule only
 
     # === Regularization ===
     'weight_decay': 0.01,
