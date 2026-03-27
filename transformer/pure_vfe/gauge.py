@@ -227,6 +227,9 @@ def vfe_grad_Omega(mu_h, Sigma_h, Omega, beta, kl_ij, precomp):
 
         # The ½ from KL = ½[...] is already absorbed into each term's derivation.
         dKL_dOij = term1 + term2 + term3  # [B, N_i, N_j, K_h, K_h]
+        # Clamp intermediate to prevent NaN propagation from cascading
+        # inversions through the chain rule (O(N²) matrices per head).
+        dKL_dOij = torch.clamp(dKL_dOij, -1e6, 1e6)
 
         # Chain rule: ∂KL/∂Ω_i = ∂KL/∂Ω_ij @ Ω_j⁻ᵀ
         Om_j_invT = Om_inv.transpose(-2, -1)  # [B, N_j, K_h, K_h]
