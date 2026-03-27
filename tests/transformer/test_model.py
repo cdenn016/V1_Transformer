@@ -67,7 +67,7 @@ class TestGaugeTransformerLMCreation:
                 'max_seq_len': 32,
                 'kappa_beta': 1.0,
                 'dropout': 0.0,
-                'use_diagonal_covariance': True,
+                'diagonal_covariance': True,
                 'ffn_mode': ffn_mode,
             }
             model = GaugeTransformerLM(config)
@@ -85,7 +85,7 @@ class TestGaugeTransformerLMCreation:
             'hidden_dim': 32,
             'max_seq_len': 32,
             'kappa_beta': 1.0,
-            'use_diagonal_covariance': True,
+            'diagonal_covariance': True,
             'tie_embeddings': True,
         }
         model = GaugeTransformerLM(config)
@@ -317,7 +317,7 @@ class TestGaugeTransformerLMConfigurations:
                 'kappa_beta': 1.0,
                 'evolve_sigma': evolve_sigma,
                 'irrep_spec': [('l0', 6, 1), ('l1', 3, 3)],
-                'use_diagonal_covariance': True,
+                'diagonal_covariance': True,
                 'ffn_mode': 'VFE_dynamic',
             }
             model = GaugeTransformerLM(config)
@@ -342,7 +342,7 @@ class TestGaugeTransformerLMConfigurations:
                 'kappa_beta': 1.0,
                 'evolve_phi': evolve_phi,
                 'irrep_spec': [('l0', 6, 1), ('l1', 3, 3)],
-                'use_diagonal_covariance': True,
+                'diagonal_covariance': True,
                 'ffn_mode': 'VFE_dynamic',
             }
             model = GaugeTransformerLM(config)
@@ -366,7 +366,7 @@ class TestGaugeTransformerLMConfigurations:
                 'max_seq_len': 32,
                 'kappa_beta': kappa,
                 'irrep_spec': [('l0', 6, 1), ('l1', 3, 3)],
-                'use_diagonal_covariance': True,
+                'diagonal_covariance': True,
                 'ffn_mode': 'VFE_dynamic',
             }
             model = GaugeTransformerLM(config)
@@ -390,7 +390,7 @@ class TestGaugeTransformerLMConfigurations:
                 'max_seq_len': 32,
                 'kappa_beta': 1.0,
                 'irrep_spec': [('l0', 6, 1), ('l1', 3, 3)],
-                'use_diagonal_covariance': True,
+                'diagonal_covariance': True,
                 'ffn_mode': 'VFE_dynamic',
             }
             model = GaugeTransformerLM(config)

@@ -78,7 +78,7 @@ def build_fresh_model():
         'evolve_sigma': True,
         'evolve_phi': True,
         'tie_embeddings': True,
-        'use_diagonal_covariance': True,
+        'diagonal_covariance': True,
         'ffn_mode': 'VFE_dynamic',
     }
 
