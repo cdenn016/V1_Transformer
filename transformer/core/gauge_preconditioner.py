@@ -90,9 +90,11 @@ def build_cartan_projector(
     device = generators.device
     dtype = generators.dtype
 
-    # Gram matrix: G_ab = tr(T_a^T T_b) (Frobenius inner product)
+    # Gram matrix: G_ab = tr(T_a^T T_b) = Σ_{ij} T_a[i,j] T_b[i,j] (Frobenius inner product)
     # For standard E_ij basis this is the identity.
-    gram = torch.einsum('aij,bij->ab', generators.transpose(-2, -1), generators)
+    # NOTE: No transpose in the einsum — see build_killing_form_preconditioner (line 251)
+    # for why generators.transpose(-2,-1) gives tr(T_a T_b) instead.
+    gram = torch.einsum('aij,bij->ab', generators, generators)
 
     # Trace product: tr(T_a T_b) — captures symmetric/antisymmetric structure
     # For antisymmetric T: tr(T^2) < 0. For symmetric T: tr(T^2) > 0.
@@ -313,17 +315,20 @@ def build_structure_constants(
     device = generators.device
     dtype = generators.dtype
 
-    # Gram matrix and its pseudoinverse
-    gram = torch.einsum('aij,bij->ab', generators.transpose(-2, -1), generators)
+    # Gram matrix (Frobenius inner product) and its pseudoinverse
+    # NOTE: No transpose — Frobenius is Σ_{ij} T_a[i,j] T_b[i,j], consistent
+    # with build_killing_form_preconditioner and build_cartan_projector.
+    gram = torch.einsum('aij,bij->ab', generators, generators)
     gram_inv = torch.linalg.pinv(gram)
 
     # Brackets: [T_a, T_b] = T_a @ T_b - T_b @ T_a, shape (n_gen, n_gen, K, K)
     brackets = (torch.einsum('aik,bkj->abij', generators, generators) -
                 torch.einsum('bik,akj->abij', generators, generators))
 
-    # Project onto generator basis: f̃_{ab,d} = tr(T_d^T · [T_a, T_b])
+    # Project onto generator basis: f̃_{ab,d} = ⟨T_d, [T_a, T_b]⟩_F = tr(T_d^T · [T_a, T_b])
+    # Must use same bilinear form as gram (Frobenius) for self-consistency.
     f_tilde = torch.einsum('dij,abij->abd',
-                           generators.transpose(-2, -1), brackets)  # (n_gen, n_gen, n_gen)
+                           generators, brackets)  # (n_gen, n_gen, n_gen)
 
     # Apply gram inverse: f^c_{ab} = Σ_d G^{cd} f̃_{ab,d}
     structure_constants = torch.einsum('cd,abd->abc', gram_inv, f_tilde)
