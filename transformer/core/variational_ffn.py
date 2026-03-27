@@ -2573,6 +2573,13 @@ class VariationalFFNDynamic(nn.Module):
         self.use_deq = use_deq
         self.deq_neumann_terms = deq_neumann_terms
         self.deq_include_phi = deq_include_phi
+        if use_deq and implicit_em:
+            raise ValueError(
+                "use_deq=True and implicit_em=True are mutually exclusive. "
+                "Both correct the M-step gradient for E-step dynamics: DEQ via "
+                "Neumann-series (I-J)^{-1}, implicit_em via per-dimension IFT "
+                "scale s_k. Using both double-counts the correction."
+            )
 
         # Learnable step size (stored in unconstrained space, apply softplus for positive LR)
         if learnable_lr:
