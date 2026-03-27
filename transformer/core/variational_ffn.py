@@ -182,9 +182,9 @@ def compute_implicit_em_scales(
     For σ (from covariance fixed-point):
         s_k^{(σ)} = (α/σ⁴_{p,k}) / (α/σ⁴_{p,k} + Σ_j β_{ij}/σ⁴_{j,k})
 
-    At the covariance alignment fixed point, transported sigmas ≈ sigma_q,
-    so we approximate Σ_j β_ij σ_{j,transported}^{-2} ≈ σ_q^{-2} (since
-    Σ_j β_ij = 1).
+    The attention-weighted precision Σ_j β_{ij}/σ²_{j,k} uses per-position j
+    covariances weighted by the actual attention weights, rather than
+    approximating all transported covariances as equal to σ²_{q,i,k}.
 
     Args:
         alpha_i: Prior coupling. Scalar or (B, N, K) from adaptive α.
@@ -217,13 +217,22 @@ def compute_implicit_em_scales(
         # (B, N) → (B, N, K)
         alpha_i = alpha_i.unsqueeze(-1).expand_as(sigma_p_safe)
 
+    # Reduce beta to (B, N, N) if multihead
+    if beta.dim() == 4:  # (B, H, N, N)
+        beta_2d = beta.mean(dim=1)  # Average over heads → (B, N, N)
+    else:
+        beta_2d = beta  # Already (B, N, N)
+
     # === Mu scale ===
     # Prior precision contribution: α_k / σ²_{p,k}
     prior_prec_mu = alpha_i / sigma_p_safe  # (B, N, K)
 
-    # Attention-weighted transported precision (approximation at covariance alignment):
-    # Σ_j β_ij / σ²_{j,transported,k} ≈ 1 / σ²_{q,k}  (since Σ_j β_ij = 1)
-    attn_prec_mu = 1.0 / sigma_q_safe  # (B, N, K)
+    # Attention-weighted precision: Σ_j β_{ij} / σ²_{q,j,k}
+    # Uses per-position j covariances rather than approximating with σ²_{q,i,k}.
+    # At the fixed point, σ²_{j,transported} ≈ σ²_{q,j} (transport ≈ identity near
+    # convergence). This captures variance heterogeneity across positions.
+    inv_sigma_q = 1.0 / sigma_q_safe  # (B, N, K) — per-position precision
+    attn_prec_mu = torch.einsum('bij,bjk->bik', beta_2d, inv_sigma_q)  # (B, N, K)
 
     effective_prec_mu = prior_prec_mu + attn_prec_mu
     mu_scale = (prior_prec_mu / effective_prec_mu.clamp(min=eps)).detach()
@@ -231,7 +240,8 @@ def compute_implicit_em_scales(
     # === Sigma scale ===
     # From the covariance fixed-point Hessian: uses precision squared
     prior_prec_sigma = alpha_i / (sigma_p_safe ** 2)  # (B, N, K)
-    attn_prec_sigma = 1.0 / (sigma_q_safe ** 2)  # (B, N, K)
+    inv_sigma_q_sq = 1.0 / (sigma_q_safe ** 2)  # (B, N, K)
+    attn_prec_sigma = torch.einsum('bij,bjk->bik', beta_2d, inv_sigma_q_sq)  # (B, N, K)
 
     effective_prec_sigma = prior_prec_sigma + attn_prec_sigma
     sigma_scale = (prior_prec_sigma / effective_prec_sigma.clamp(min=eps)).detach()
@@ -1633,15 +1643,43 @@ def compute_vfe_gradients_gpu(
 
         # Product-rule correction for learnable alpha (full covariance):
         # ∂(α·KL)/∂θ = α·∂KL/∂θ + (∂α/∂θ)·KL
+        # Per-dimension KL via eigendecomposition of Σ_p^{-1/2} Σ_q Σ_p^{-1/2},
+        # which is symmetric with eigenvalues λ_k giving per-mode contributions
+        # kl_mode_k = 0.5(λ_k - 1 - log λ_k). Projected back to original basis
+        # via eigenvector magnitudes.
         if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
-            prod_qp = torch.matmul(sigma_p_inv, sigma_q)  # (B, N, K, K)
-            trace_k = prod_qp.diagonal(dim1=-2, dim2=-1)  # (B, N, K)
             sp_inv_delta = torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
-            mahal_k = delta_mu * sp_inv_delta  # (B, N, K)
-            logdet_p = torch.linalg.slogdet(sigma_p.float())[1]  # (B, N)
-            logdet_q = torch.linalg.slogdet(sigma_q.float())[1]  # (B, N)
-            logdet_k = ((logdet_p - logdet_q) / K).unsqueeze(-1).expand_as(delta_mu)
-            kl_k = 0.5 * (trace_k + mahal_k - 1 + logdet_k).clamp(min=0.0)
+            mahal_k = delta_mu * sp_inv_delta  # (B, N, K) — per-dim Mahalanobis
+
+            # Per-mode KL from eigendecomposition of L^{-1} Σ_q L^{-T}
+            # where L = cholesky(Σ_p). Eigenvalues λ_k of this symmetric matrix
+            # equal eigenvalues of Σ_p^{-1} Σ_q.
+            try:
+                L_p = torch.linalg.cholesky(sigma_p.float())
+                # M = L^{-1} Σ_q L^{-T} (symmetric, same eigenvalues as Σ_p^{-1} Σ_q)
+                Lp_inv_Sq = torch.linalg.solve_triangular(L_p, sigma_q.float(), upper=False)
+                M = torch.linalg.solve_triangular(
+                    L_p, Lp_inv_Sq.transpose(-1, -2), upper=False
+                ).transpose(-1, -2)
+                eigvals, eigvecs = torch.linalg.eigh(M)  # (B,N,K), (B,N,K,K)
+                eigvals = eigvals.clamp(min=eps).to(sigma_q.dtype)
+                eigvecs = eigvecs.to(sigma_q.dtype)
+                # Per-eigenmode KL: kl_mode_k = 0.5(λ_k - 1 - log λ_k) ≥ 0
+                kl_mode = 0.5 * (eigvals - 1.0 - torch.log(eigvals))  # (B, N, K)
+                # Project to original basis via L^{-T} V: kl_orig_k = Σ_m |V_km|² kl_mode_m
+                # eigvecs are in the L^{-1} basis; |V_km|² distributes modes to original dims
+                V_sq = eigvecs ** 2  # (B, N, K, K) — squared eigenvector components
+                kl_k_trace_logdet = torch.einsum('bnkm,bnm->bnk', V_sq, kl_mode)
+                kl_k = (kl_k_trace_logdet + 0.5 * mahal_k).clamp(min=0.0)
+            except RuntimeError:
+                # Fallback: uniform logdet distribution (original approximation)
+                prod_qp = torch.matmul(sigma_p_inv, sigma_q)
+                trace_k = prod_qp.diagonal(dim1=-2, dim2=-1)
+                logdet_p = torch.linalg.slogdet(sigma_p.float())[1]
+                logdet_q = torch.linalg.slogdet(sigma_q.float())[1]
+                logdet_k = ((logdet_p - logdet_q) / K).unsqueeze(-1).expand_as(delta_mu)
+                kl_k = 0.5 * (trace_k + mahal_k - 1 + logdet_k).clamp(min=0.0)
+
             grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * sp_inv_delta
             correction_scale = ((alpha ** 2 / alpha_c0) * kl_k).unsqueeze(-1)  # (B, N, K, 1)
             grad_sigma_self = grad_sigma_self - correction_scale * 0.5 * (sigma_p_inv - sigma_q_inv)
