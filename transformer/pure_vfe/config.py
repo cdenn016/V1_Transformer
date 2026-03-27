@@ -54,7 +54,7 @@ class PureVFEConfig:
     # SPD retraction safeguards
     spd_eps_min: float = 1e-3           # Spectral floor (tightened from 1e-4)
     spd_kappa_max: float = 1e4          # Condition number cap
-    spd_exp_clip: float = 20.0          # Eigenvalue exponent clip (tightened from 50.0)
+    spd_exp_clip: float = 5.0            # Eigenvalue exponent clip — exp(±5) ≈ [0.007, 148], max ratio ~2e4
 
     # Prior safeguards
     prior_sigma_floor: float = 0.5      # Min eigenvalue of prior Σ_v (prevents collapse)
@@ -90,7 +90,7 @@ class PureVFEConfig:
     # Overfitting prevention
     obs_norm_floor: int = 0             # Floor for per-token obs gradient normalization (0 = auto: 1% of BN)
     rare_token_reg: float = 0.0         # Frequency-adaptive hyper-prior strength (0 = disabled)
-    alpha_floor: float = 0.0            # Minimum prior precision α (0 = no floor)
+    alpha_floor: float = 0.01           # Minimum prior precision α (prevents drift runaway in multi-step E-step)
     decode_tau: float = 1.0             # Temperature for KL-decode logits (>1 softens predictions)
 
     # Recovery

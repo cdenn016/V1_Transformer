@@ -10,6 +10,7 @@ Mathematical reference:
   - derivations/constant_gauge_kl_derivation.md (KL decomposition)
 """
 
+import math
 import warnings
 
 import torch
@@ -59,12 +60,13 @@ def safe_inverse(M, eps=1e-6):
 
 
 def safe_logdet(M):
-    """
-    Log-determinant via Cholesky for SPD matrices, slogdet fallback.
+    r"""Log-determinant via Cholesky for SPD matrices, slogdet fallback.
 
     CUDA raises RuntimeError (not LinAlgError) for non-PD matrices.
-    Returns 0 for negative determinants (non-PD) rather than silently
-    returning a wrong log-determinant.
+    For non-PD matrices, returns a large negative penalty ``K \ln(10^{-6})``
+    rather than 0, so that downstream KL computations produce large (but
+    finite) values that trigger trust-region clipping instead of silently
+    corrupting gradients.
     """
     try:
         L = torch.linalg.cholesky(M)
@@ -76,7 +78,7 @@ def safe_logdet(M):
             warnings.warn(
                 f"safe_logdet: Cholesky failed, slogdet found {n_bad} "
                 f"non-PD matrices (shape {list(M.shape)}, "
-                f"device={M.device}); clamping their logdet to 0",
+                f"device={M.device}); returning penalty logdet",
                 RuntimeWarning,
                 stacklevel=2,
             )
@@ -87,7 +89,9 @@ def safe_logdet(M):
                 RuntimeWarning,
                 stacklevel=2,
             )
-        return torch.where(sign > 0, logabsdet, torch.zeros_like(logabsdet))
+        K = M.shape[-1]
+        penalty = torch.full_like(logabsdet, K * math.log(1e-6))
+        return torch.where(sign > 0, logabsdet, penalty)
 
 
 def symmetrize(M):
@@ -415,7 +419,10 @@ def vfe_grad_mu_alignment(precomp, beta, kl_ij, tau):
     e_kl = (beta * kl_ij).sum(-1, keepdim=True)  # [B, H, N, 1]
 
     # Softmax-corrected weights: w_ij = β_ij [1 + (E_β[KL] - KL_ij)/τ]
-    w = beta * (1.0 + (e_kl - kl_ij) / tau)  # [B, H, N, N]
+    # Clamp correction to [-1, 2] to prevent extreme negative weights
+    # from causing catastrophic cancellation in gradient aggregation.
+    correction = ((e_kl - kl_ij) / tau).clamp(-1.0, 2.0)
+    w = beta * (1.0 + correction)  # [B, H, N, N]
 
     # Aggregate: Σ_j w_ij g_ij
     grad = torch.einsum('bhij,bhijk->bhik', w, g_ij)  # [B, H, N, K]
@@ -560,33 +567,39 @@ def retract_spd(Sigma, nat_grad, step_size, eps_min=1e-4, kappa_max=1e4, exp_cli
     Sigma_new = VLU * exp_Lambda_B.unsqueeze(-2) @ VLU.transpose(-2, -1)
     Sigma_new = symmetrize(Sigma_new)
 
-    # 6. Enforce spectral safeguards
-    eigs_new = torch.linalg.eigvalsh(Sigma_new)
-    min_eig = eigs_new[..., 0:1]
-    max_eig = eigs_new[..., -1:]
+    # 6. Enforce spectral safeguards via eigenvalue clamping
+    eigs_new, V_new = torch.linalg.eigh(Sigma_new)
 
-    # Spectral floor
-    needs_floor = (min_eig < eps_min).squeeze(-1)
-    if needs_floor.any():
-        eye = torch.eye(Sigma.shape[-1], device=Sigma.device, dtype=Sigma.dtype)
+    # Spectral floor: clamp minimum eigenvalue (fixes negative eigenvalues
+    # that adding eps_min*I cannot repair)
+    needs_repair = (eigs_new[..., 0] < eps_min)
+    if needs_repair.any():
+        eigs_clamped = eigs_new.clamp(min=eps_min)
+        Sigma_repaired = V_new @ torch.diag_embed(eigs_clamped) @ V_new.transpose(-2, -1)
         Sigma_new = torch.where(
-            needs_floor.unsqueeze(-1).unsqueeze(-1),
-            Sigma_new + eps_min * eye,
-            Sigma_new
+            needs_repair.unsqueeze(-1).unsqueeze(-1),
+            symmetrize(Sigma_repaired),
+            Sigma_new,
+        )
+        eigs_new = torch.where(
+            needs_repair.unsqueeze(-1),
+            eigs_clamped,
+            eigs_new,
         )
 
-    # Condition cap
-    condition = max_eig / min_eig.clamp(min=eps_min)
-    needs_cap = (condition > kappa_max).squeeze(-1)
+    # Condition cap: shrink toward isotropic if κ > kappa_max
+    condition = eigs_new[..., -1] / eigs_new[..., 0].clamp(min=eps_min)
+    needs_cap = (condition > kappa_max)
     if needs_cap.any():
-        # Shrink toward identity
-        eye = torch.eye(Sigma.shape[-1], device=Sigma.device, dtype=Sigma.dtype)
-        trace = torch.diagonal(Sigma_new, dim1=-2, dim2=-1).sum(-1, keepdim=True).unsqueeze(-1)
-        K = Sigma.shape[-1]
+        trace_val = eigs_new.sum(-1, keepdim=True)
+        K_dim = Sigma.shape[-1]
+        iso_eig = trace_val / K_dim
+        eigs_blended = 0.9 * eigs_new + 0.1 * iso_eig
+        Sigma_iso = V_new @ torch.diag_embed(eigs_blended) @ V_new.transpose(-2, -1)
         Sigma_new = torch.where(
             needs_cap.unsqueeze(-1).unsqueeze(-1),
-            0.9 * Sigma_new + 0.1 * (trace / K) * eye,
-            Sigma_new
+            symmetrize(Sigma_iso),
+            Sigma_new,
         )
 
     return Sigma_new

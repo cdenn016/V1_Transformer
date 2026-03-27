@@ -273,6 +273,22 @@ def e_step(token_ids, model, config):
         # Raw precomp (always needed for gradients; also for KL when RoPE is off)
         precomp = precompute_tokens(mu_h, Sigma_h, Omega, Sigma_h_inv)
 
+        # Early NaN detection: catch NaN/Inf from Omega inversion before it
+        # propagates through all gradient computations.
+        if nan_recovery and (
+            torch.isnan(precomp['P']).any() or torch.isinf(precomp['P']).any()
+        ):
+            nan_events += 1
+            warnings.warn(
+                f"E-step NaN/Inf in precomputed quantities at step {step}, "
+                f"resetting beliefs (event #{nan_events})",
+                RuntimeWarning, stacklevel=2,
+            )
+            mu = prior_mu.clone()
+            Sigma = model.prior_Sigma[token_ids].clone()
+            Omega = model.prior_Omega[token_ids].clone() @ pos_Om
+            break
+
         # Select which precomp to use for KL/attention
         precomp_attn = precomp_rope if use_rope else precomp
 
@@ -282,9 +298,13 @@ def e_step(token_ids, model, config):
                             log_prior=log_prior, mask_self=mask_self)  # [B, H, N, N]
 
         # --- State-dependent prior precision ---
+        _alpha_floor = getattr(config, 'alpha_floor', 0.01)
+        # Warm start: stronger floor in early iterations to prevent initial drift.
+        # Decays linearly from 3× floor to 1× floor over E-step iterations.
+        _alpha_floor_scaled = _alpha_floor * (1.0 + 2.0 * (1.0 - step / max(config.n_esteps - 1, 1)))
         alpha = state_dependent_alpha(
             mu, Sigma, prior_mu, prior_Sigma, config.alpha_b0, config.alpha_c0,
-            alpha_floor=getattr(config, 'alpha_floor', 0.0),
+            alpha_floor=_alpha_floor_scaled,
         )  # [B, N]
 
         # --- Monitor VFE ---
@@ -298,13 +318,17 @@ def e_step(token_ids, model, config):
         vfe_history.append(vfe)
 
         # --- VFE divergence early stopping ---
-        if len(vfe_history) >= 2 and vfe_history[-1] > vfe_history[-2] * 1.5:
-            warnings.warn(
-                f"E-step VFE divergence at step {step}: "
-                f"{vfe_history[-2]:.2f} -> {vfe_history[-1]:.2f}, stopping early",
-                RuntimeWarning, stacklevel=2,
-            )
-            break
+        if len(vfe_history) >= 2:
+            _prev_vfe = abs(vfe_history[-2]) + 1e-10
+            _vfe_ratio = vfe_history[-1] / _prev_vfe
+            if _vfe_ratio > 1.1:  # 10% increase (was 1.5x)
+                warnings.warn(
+                    f"E-step VFE divergence at step {step}: "
+                    f"{vfe_history[-2]:.2f} -> {vfe_history[-1]:.2f} "
+                    f"(ratio {_vfe_ratio:.3f}), stopping early",
+                    RuntimeWarning, stacklevel=2,
+                )
+                break
 
         # --- Holonomy: measure gauge curvature ---
         if use_holonomy and step == config.n_esteps - 1:
