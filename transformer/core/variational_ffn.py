@@ -647,7 +647,7 @@ def _compute_vfe_gradients_block_diagonal(
             kl_block = 0.5 * (trace_block + mahal_block - d + logdet_j - logdet_i[:, :, None])
             # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
             kl_ceil = max(100.0, 5.0 * K)
-            kl_values[:, i_start:i_end, :] = kl_values[:, i_start:i_end, :] + kl_block.clamp(min=0.0, max=kl_ceil)
+            kl_values[:, i_start:i_end, :] = kl_values[:, i_start:i_end, :] + kl_block.clamp(min=0.0, max=max(100.0, 5.0 * d))
 
             # Sigma alignment gradient for this block
             if compute_sigma_align_grad:
@@ -896,7 +896,7 @@ def _compute_vfe_gradients_block_diagonal_diag(
                         - torch.log(sigma_i_block.clamp(min=eps))).sum(dim=-1)
 
         kl_block = 0.5 * (trace_block + mahal_block - d + logdet_block)
-        kl_block = kl_block.clamp(min=0.0, max=max(100.0, 5.0 * K))
+        kl_block = kl_block.clamp(min=0.0, max=max(100.0, 5.0 * d))
         kl_values = kl_values + kl_block
 
         # Sigma alignment gradient for this block
@@ -1095,8 +1095,6 @@ def _fused_attention_and_vfe_gradients_block_diag(
     grad_sigma_align = torch.zeros_like(sigma_q)
     grad_sigma_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=torch.float32) if (
         compute_sigma_align_grad) else None
-    kl_max = max(100.0, 5.0 * K)
-
     # Single pass over blocks: compute Omega, KL, and gradients together
     block_start = 0
     for block_idx, d in enumerate(irrep_dims):
@@ -1128,7 +1126,7 @@ def _fused_attention_and_vfe_gradients_block_diag(
         logdet_block = (torch.log(sigma_j_transported) - torch.log(sigma_block[:, :, None, :].clamp(min=eps))).sum(dim=-1)
 
         kl_block = 0.5 * (trace_block + mahal_block - d + logdet_block)
-        kl_block = kl_block.clamp(min=0.0, max=kl_max)
+        kl_block = kl_block.clamp(min=0.0, max=max(100.0, 5.0 * d))
         kl_values = kl_values + kl_block
 
         # Gradient computation (use raw mu, not RoPE)
@@ -1146,7 +1144,7 @@ def _fused_attention_and_vfe_gradients_block_diag(
         if kl_values_raw is not None:
             mahal_raw = (delta_mu_grad ** 2 / sigma_j_transported).sum(dim=-1)
             kl_block_raw = 0.5 * (trace_block + mahal_raw - d + logdet_block)
-            kl_values_raw = kl_values_raw + kl_block_raw.clamp(min=0.0, max=kl_max)
+            kl_values_raw = kl_values_raw + kl_block_raw.clamp(min=0.0, max=max(100.0, 5.0 * d))
 
         if compute_sigma_align_grad:
             sigma_j_inv_diag = 1.0 / sigma_j_transported

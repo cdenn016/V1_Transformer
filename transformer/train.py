@@ -188,7 +188,9 @@ def gaussian_kl_divergence(
     bad_mask = torch.isnan(kl) | torch.isinf(kl)
     if bad_mask.any():
         _nr("nan_replace")
-    kl = kl.nan_to_num(nan=0.0, posinf=kl_ceil, neginf=0.0)
+    # NaN → kl_ceil (repulsive): a NaN KL should be treated as maximum distance,
+    # not zero distance. Zero would make the pair maximally attractive in softmax.
+    kl = kl.nan_to_num(nan=kl_ceil, posinf=kl_ceil, neginf=0.0)
     return kl
 
 
