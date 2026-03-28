@@ -30,7 +30,7 @@ from transformer.core.model import GaugeTransformerLM
 from transformer.baselines.standard_transformer import StandardTransformerLM
 from transformer.data import create_dataloaders, create_char_dataloaders
 from transformer.training.train_fast import FastTrainingConfig
-from transformer.train_publication import run_test_evaluation, PublicationTrainer
+from transformer.training.experiment_runner import run_test_evaluation, PublicationTrainer
 from transformer.analysis.publication_metrics import PublicationMetrics
 
 

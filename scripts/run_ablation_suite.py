@@ -45,7 +45,7 @@ import torch
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from transformer.train_publication import run_single_experiment
+from transformer.training.experiment_runner import run_single_experiment
 
 
 # =============================================================================
