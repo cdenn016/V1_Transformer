@@ -977,7 +977,12 @@ class GaugeTransformerLM(nn.Module):
                         _aux_mu, _aux_sigma, tau=self.prior_bank_tau
                     )
                 else:
-                    _aux_logits = self.out_proj(_aux_mu)
+                    # Detach out_proj weights from aux loss: gradient flows to
+                    # the layer's mu (training attention W_O and embeddings) but
+                    # NOT to out_proj, which should only learn from the final
+                    # layer's best representation.
+                    _W = self.out_proj.weight.detach()
+                    _aux_logits = F.linear(_aux_mu, _W)
                 _aux_ce = F.cross_entropy(
                     _aux_logits.reshape(-1, _aux_logits.size(-1)),
                     targets.reshape(-1),
