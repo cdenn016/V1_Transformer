@@ -992,6 +992,25 @@ class PublicationMetricsTracker:
             'phi_top1_variance_fraction', 'phi_top5_variance_fraction',
             'phi_spectral_gap', 'phi_frobenius_norm',
             'phi_mean_token_norm', 'phi_std_token_norm',
+
+            # VFE gradient decomposition (E-step component analysis)
+            'vfe_grad_mu_self', 'vfe_grad_mu_direct', 'vfe_grad_mu_softmax', 'vfe_grad_mu_total',
+            'vfe_grad_sigma_self', 'vfe_grad_sigma_align_direct',
+            'vfe_grad_sigma_softmax', 'vfe_grad_sigma_total',
+            'vfe_kl_pairwise_mean', 'vfe_kl_pairwise_max', 'vfe_kappa_scaled',
+
+            # Covariance health
+            'sigma_q_mean', 'sigma_q_min', 'sigma_q_max', 'sigma_q_std',
+            'sigma_q_cond_mean', 'sigma_q_cond_max',
+            'sigma_p_mean', 'sigma_p_min', 'sigma_p_max',
+            'prior_belief_kl_mean', 'prior_belief_kl_max', 'prior_belief_kl_std',
+
+            # Transport & attention structure
+            'phi_norm_mean', 'phi_norm_std', 'phi_norm_max',
+            'phi_pairwise_dist_mean', 'phi_pairwise_dist_max',
+            'attn_entropy_per_head_mean', 'attn_entropy_per_head_std',
+            'attn_entropy_per_head_min', 'attn_entropy_per_head_max',
+            'head_correlation_mean',
         ]
 
         with open(self.save_path, 'w', newline='') as f:
@@ -1086,6 +1105,45 @@ class PublicationMetricsTracker:
             'phi_frobenius_norm': metrics.get('phi/frobenius_norm'),
             'phi_mean_token_norm': metrics.get('phi/mean_token_norm'),
             'phi_std_token_norm': metrics.get('phi/std_token_norm'),
+
+            # VFE gradient decomposition
+            'vfe_grad_mu_self': metrics.get('vfe/grad_mu_self'),
+            'vfe_grad_mu_direct': metrics.get('vfe/grad_mu_direct'),
+            'vfe_grad_mu_softmax': metrics.get('vfe/grad_mu_softmax'),
+            'vfe_grad_mu_total': metrics.get('vfe/grad_mu_total'),
+            'vfe_grad_sigma_self': metrics.get('vfe/grad_sigma_self'),
+            'vfe_grad_sigma_align_direct': metrics.get('vfe/grad_sigma_align_direct'),
+            'vfe_grad_sigma_softmax': metrics.get('vfe/grad_sigma_softmax'),
+            'vfe_grad_sigma_total': metrics.get('vfe/grad_sigma_total'),
+            'vfe_kl_pairwise_mean': metrics.get('vfe/kl_pairwise_mean'),
+            'vfe_kl_pairwise_max': metrics.get('vfe/kl_pairwise_max'),
+            'vfe_kappa_scaled': metrics.get('vfe/kappa_scaled'),
+
+            # Covariance health
+            'sigma_q_mean': metrics.get('cov/sigma_q_mean'),
+            'sigma_q_min': metrics.get('cov/sigma_q_min'),
+            'sigma_q_max': metrics.get('cov/sigma_q_max'),
+            'sigma_q_std': metrics.get('cov/sigma_q_std'),
+            'sigma_q_cond_mean': metrics.get('cov/sigma_q_cond_mean'),
+            'sigma_q_cond_max': metrics.get('cov/sigma_q_cond_max'),
+            'sigma_p_mean': metrics.get('cov/sigma_p_mean'),
+            'sigma_p_min': metrics.get('cov/sigma_p_min'),
+            'sigma_p_max': metrics.get('cov/sigma_p_max'),
+            'prior_belief_kl_mean': metrics.get('cov/prior_belief_kl_mean'),
+            'prior_belief_kl_max': metrics.get('cov/prior_belief_kl_max'),
+            'prior_belief_kl_std': metrics.get('cov/prior_belief_kl_std'),
+
+            # Transport & attention structure
+            'phi_norm_mean': metrics.get('transport/phi_norm_mean'),
+            'phi_norm_std': metrics.get('transport/phi_norm_std'),
+            'phi_norm_max': metrics.get('transport/phi_norm_max'),
+            'phi_pairwise_dist_mean': metrics.get('transport/phi_pairwise_dist_mean'),
+            'phi_pairwise_dist_max': metrics.get('transport/phi_pairwise_dist_max'),
+            'attn_entropy_per_head_mean': metrics.get('transport/attn_entropy_per_head_mean'),
+            'attn_entropy_per_head_std': metrics.get('transport/attn_entropy_per_head_std'),
+            'attn_entropy_per_head_min': metrics.get('transport/attn_entropy_per_head_min'),
+            'attn_entropy_per_head_max': metrics.get('transport/attn_entropy_per_head_max'),
+            'head_correlation_mean': metrics.get('transport/head_correlation_mean'),
         }
 
         self.history.append(entry)
@@ -1201,6 +1259,16 @@ class PublicationTrainer(FastTrainer):
             iter_path = self.config.checkpoint_dir / 'iteration_diagnostics.csv'
             self.iter_tracker = IterationDiagnosticsTracker(iter_path)
             print(f"[INFO] Iteration diagnostics enabled: {iter_path}")
+
+        # Enable VFE dynamics metrics collection on model and FFN modules.
+        # This populates vfe_debug, transport_metrics, covariance_metrics
+        # in forward_with_attention at negligible cost (no extra forward pass).
+        if hasattr(self.model, '_collect_dynamics_metrics'):
+            self.model._collect_dynamics_metrics = True
+        for module in self.model.modules():
+            if hasattr(module, '_collect_vfe_metrics'):
+                module._collect_vfe_metrics = True
+        print("[INFO] VFE dynamics metrics collection enabled")
 
         # =================================================================
         # Gauge geometry: Cartan preconditioning & SL(K) projection
@@ -1328,6 +1396,43 @@ class PublicationTrainer(FastTrainer):
             'phi/mean_token_norm': token_norms.mean().item(),
             'phi/std_token_norm': token_norms.std().item(),
         }
+
+    def _format_vfe_dynamics(self, metrics: Dict) -> list:
+        """Format VFE dynamics metrics for console output. Returns list of lines."""
+        lines = []
+        # VFE gradient decomposition
+        _mu_self = metrics.get('vfe/grad_mu_self')
+        _mu_dir = metrics.get('vfe/grad_mu_direct')
+        _mu_sm = metrics.get('vfe/grad_mu_softmax')
+        _mu_tot = metrics.get('vfe/grad_mu_total')
+        if _mu_tot is not None:
+            lines.append(
+                f"  [VFE] grad_mu: self={_mu_self:.3e} align={_mu_dir:.3e} "
+                f"softmax={_mu_sm:.3e} total={_mu_tot:.3e}"
+            )
+        _sig_self = metrics.get('vfe/grad_sigma_self')
+        _sig_dir = metrics.get('vfe/grad_sigma_align_direct')
+        _sig_tot = metrics.get('vfe/grad_sigma_total')
+        if _sig_tot is not None:
+            lines.append(
+                f"  [VFE] grad_sig: self={_sig_self:.3e} align={_sig_dir:.3e} "
+                f"total={_sig_tot:.3e}"
+            )
+        # Covariance health
+        _sq_mean = metrics.get('cov/sigma_q_mean')
+        _sq_cond = metrics.get('cov/sigma_q_cond_mean')
+        _kl_pb = metrics.get('cov/prior_belief_kl_mean')
+        if _sq_mean is not None:
+            _cond_str = f" cond={_sq_cond:.1f}" if _sq_cond is not None else ""
+            _kl_str = f" KL(q*||p)={_kl_pb:.2f}" if _kl_pb is not None else ""
+            lines.append(f"  [COV] sigma_q: mean={_sq_mean:.4f}{_cond_str}{_kl_str}")
+        # Attention structure
+        _h_ent = metrics.get('transport/attn_entropy_per_head_mean')
+        _h_corr = metrics.get('transport/head_correlation_mean')
+        if _h_ent is not None:
+            _corr_str = f" head_corr={_h_corr:.3f}" if _h_corr is not None else ""
+            lines.append(f"  [ATTN] per-head entropy: mean={_h_ent:.3f}{_corr_str}")
+        return lines
 
     def _setup_cjk_fonts(self, plt):
         """Configure matplotlib to render CJK (Japanese/Chinese/Korean) characters."""
@@ -2052,6 +2157,10 @@ class PublicationTrainer(FastTrainer):
                         tqdm.write(f"  [PHI] eff_rank: {_erank:.1f} ({_rratio:.1%} of max) | "
                                    f"top1σ²: {_top1:.1%} top5σ²: {_top5:.1%} | "
                                    f"gap: {_sgap:.2f} | ||φ||: {_mnorm:.3f}")
+                    # VFE dynamics summary
+                    _vfe_lines = self._format_vfe_dynamics(metrics)
+                    for _vl in _vfe_lines:
+                        tqdm.write(_vl)
                 else:
                     print(log_msg)
                     if grad_norms:
@@ -2079,6 +2188,10 @@ class PublicationTrainer(FastTrainer):
                         print(f"  [PHI] eff_rank: {_erank:.1f} ({_rratio:.1%} of max) | "
                               f"top1σ²: {_top1:.1%} top5σ²: {_top5:.1%} | "
                               f"gap: {_sgap:.2f} | ||φ||: {_mnorm:.3f}")
+                    # VFE dynamics summary
+                    _vfe_lines = self._format_vfe_dynamics(metrics)
+                    for _vl in _vfe_lines:
+                        print(_vl)
 
                 # Report numerical fallback counters if any fired
                 if _num_events:
@@ -2691,6 +2804,18 @@ def run_single_experiment(
         # Save final checkpoint
         final_ckpt = trainer.save_checkpoint(is_best=True)
         print(f"\n✓ Saved: {final_ckpt}")
+
+        # Generate VFE dynamics figures from training metrics CSV
+        try:
+            from transformer.visualization.vfe_dynamics_plots import generate_all_vfe_figures
+            metrics_csv = exp_checkpoint_dir / 'metrics.csv'
+            if metrics_csv.exists():
+                vfe_fig_dir = exp_checkpoint_dir / 'vfe_dynamics_figures'
+                saved_figs = generate_all_vfe_figures(metrics_csv, vfe_fig_dir)
+                if saved_figs:
+                    print(f"\n✓ Generated {len(saved_figs)} VFE dynamics figures in {vfe_fig_dir}")
+        except Exception as e:
+            print(f"\n[WARN] VFE dynamics figure generation failed: {e}")
 
         # Run test set evaluation if test loader is available
         test_metrics = None

@@ -614,4 +614,22 @@ def compute_free_energy_loss(
     if phi_evolved is not None:
         metrics['p_flow/phi_evolved'] = phi_evolved.detach()  # (B, N, phi_dim) VFE-evolved phi
 
+    # =================================================================
+    # VFE Gradient Decomposition & Dynamics Metrics
+    # =================================================================
+    # Surface VFE debug dict from E-step (gradient component breakdown)
+    vfe_debug = attn_info.get('vfe_debug')
+    if vfe_debug is not None:
+        for key, val in vfe_debug.items():
+            if isinstance(val, (int, float)):
+                metrics[f'vfe/{key}'] = val
+
+    # Surface transport operator and covariance health metrics
+    transport_m = attn_info.get('transport_metrics', {})
+    for key, val in transport_m.items():
+        metrics[f'transport/{key}'] = val
+    covariance_m = attn_info.get('covariance_metrics', {})
+    for key, val in covariance_m.items():
+        metrics[f'cov/{key}'] = val
+
     return total_loss, metrics
