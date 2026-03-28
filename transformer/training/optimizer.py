@@ -290,15 +290,16 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
         # Update Fisher EMA: F = (1-ρ)F + ρ g gᵀ
         outer = g.unsqueeze(-1) * g.unsqueeze(-2)  # (n_active, K, K)
         rho = self.ema_decay
-        # Bias correction: effective ρ for early steps
+        # Bias correction for early steps: use Adam-style correction factor
+        # to compensate for cold-start (Fisher initialized at zero).
+        # Without correction, the early Fisher is biased toward zero,
+        # making the natural gradient ≈ Euclidean gradient.
         step = state['step']
-        if step < 20:
-            rho = min(rho, 2.0 / (step + 1))
-
+        bias_correction = 1.0 - (1.0 - rho) ** step
         fisher[nz_idx] = (1.0 - rho) * fisher[nz_idx] + rho * outer
 
-        # Natural gradient: ng = (F + λI)⁻¹ g
-        F_active = fisher[nz_idx]  # (n_active, K, K)
+        # Natural gradient: ng = (F̂ + λI)⁻¹ g  where F̂ = F / bias_correction
+        F_active = fisher[nz_idx] / bias_correction  # Bias-corrected Fisher
         I_K = torch.eye(K, device=device, dtype=dtype)
         F_damped = F_active + self.damping * I_K
 
