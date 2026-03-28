@@ -267,7 +267,7 @@ class TestEStepMonotonicity:
             max_seq_len=8,
             device='cpu',
             use_cuda_kernels=False,
-            eta_E=0.05,  # Conservative step size for monotonicity
+            mu_q_lr=0.05,  # Conservative step size for monotonicity
         )
 
         torch.manual_seed(202)

@@ -14,15 +14,18 @@ class PureVFEConfig:
     n_heads: int = 4           # H: number of heads (block-diagonal Σ)
     head_dim: int = 8          # K_h = K / H per head
 
-    # E-step (inference = forward pass)
+    # VFE descent (inference = forward pass)
     n_esteps: int = 12         # Iterations of VFE descent (replaces "depth")
     tau: float = None           # Attention temperature (defaults to √K_h)
-    eta_E: float = 0.1         # E-step natural gradient step size
 
-    # M-step (learning = parameter update)
-    # Must be comparable to VFE_dynamic's mu_lr=0.05 for priors to move.
-    # Was 0.001, which with /BN and confidence weighting gave ~2e-8 per scalar.
-    eta_M: float = 0.05        # M-step natural gradient step size
+    # Per-variable natural gradient learning rates
+    # Single VFE objective F(mu_q, Sigma_q, phi, mu_p, Sigma_p) —
+    # no E/M distinction, just per-variable step sizes.
+    mu_q_lr: float = 0.1       # Belief mean step size
+    sigma_q_lr: float = 0.005  # Belief covariance step size (SPD-sensitive)
+    phi_lr: float = 0.1        # Gauge connection step size (all frames: prior, positional, E-step)
+    mu_p_lr: float = 0.05      # Prior mean step size
+    sigma_p_lr: float = 0.01   # Prior covariance step size (SPD-sensitive)
 
     # Prior precision (state-dependent α)
     alpha_b0: float = 1.0      # Denominator offset
@@ -41,9 +44,7 @@ class PureVFEConfig:
     sigma_init: float = 1.0             # Initial covariance scale
     omega_init_scale: float = 0.01      # GL(K) frame perturbation from I
 
-    # E-step numerical stability (ported from VFE dynamic)
-    sigma_lr_ratio: float = 0.05        # Sigma evolves at this × mu rate (VFE dynamic: 0.05)
-    e_step_lr_decay: float = 0.5        # LR decays to (1 - this) × eta_E over E-step iterations
+    # Numerical stability
     grad_clamp: float = 1e3             # Element-wise gradient clamp before natural gradient
 
     # Trust regions (Frobenius norm caps on natural gradient steps)
@@ -68,15 +69,9 @@ class PureVFEConfig:
     omega_negative_det_fraction: float = 0.0  # Fraction of omega frames initialized in GL⁻(K) (det < 0)
     phi_max_norm: Optional[float] = None  # Max phi norm; None = auto (π for SO(N), 5.0 for GL(K))
 
-    # M-step per-component ratios (relative to eta_M)
-    # Natural gradient normalizes curvature, but Σ_p and pos_Ω need slower
-    # updates for stability. These ratios are multiplied into eta_M.
-    m_step_sigma_ratio: float = 0.2     # Σ_p step = eta_M × this (SPD sensitivity)
-    m_step_pos_ratio: float = 0.1       # pos_Ω step = eta_M × this (positional stability)
 
-    # M-step options
+    # Observation gradient options
     sigma_obs_grad: str = 'none'        # 'none' (match VFE dynamic), 'diagonal', 'full'
-    m_step_eta_floor: float = 0.01      # Min multiplier for confidence-weighted eta_M
 
     # Covariance mode
     diagonal_covariance: bool = False   # Use diagonal Σ (K,) instead of full (K, K) — faster, less expressive
@@ -115,10 +110,10 @@ class PureVFEConfig:
     adam_beta2: float = 0.999           # Second moment decay (adaptive scaling)
     adam_eps: float = 1e-8              # Denominator epsilon for numerical stability
 
-    # LR scheduling
-    warmup_steps: int = 0               # Linear warmup for eta_M (0 = no warmup)
+    # LR scheduling (applies to all 5 per-variable learning rates)
+    warmup_steps: int = 0               # Linear warmup (0 = no warmup)
     lr_schedule: str = 'constant'       # 'constant', 'cosine'
-    min_eta_M_ratio: float = 0.1        # Floor for cosine decay as fraction of eta_M
+    min_lr_ratio: float = 0.1           # Floor for cosine decay as fraction of base LR
     max_steps: int = 30000              # Total training steps (for cosine schedule)
 
     # Gradient accumulation

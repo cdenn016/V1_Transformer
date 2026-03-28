@@ -158,18 +158,18 @@ def compute_vfe(mu, Sigma, prior_mu, prior_Sigma, alpha, beta, kl_ij):
 
 
 @torch.no_grad()
-def e_step(token_ids, model, config):
+def e_step(token_ids, model, config, effective_lrs=None):
     r"""Run VFE descent to convergence. This IS the forward pass.
 
-    E-step minimizes belief VFE (prior + alignment terms only).
-    Observation gradient enters ONLY in M-step.
+    Minimizes belief VFE (prior + alignment terms only) via natural
+    gradient descent on q-variables (mu_q, Sigma_q, phi).
+    Observation gradient enters ONLY in the prior update step.
 
     Features:
       - RoPE: SO(2)^{K/2} rotations on μ for position-sensitive attention
       - LayerNorm: optional normalization of μ between iterations
       - Diagonal covariance: optional diagonal-only Σ for speed
-      - E-step LR decay (linear, 1.0 → 0.5)
-      - Separate sigma LR (sigma_lr_ratio × mu LR)
+      - Per-variable learning rates (mu_q_lr, sigma_q_lr, phi_lr)
       - Element-wise gradient clamping (grad_clamp)
       - Whitened trust region for mu updates
       - NaN/Inf detection and recovery
@@ -179,6 +179,8 @@ def e_step(token_ids, model, config):
         token_ids: [B, N] long tensor of token indices
         model: PureVFETransformer instance
         config: PureVFEConfig
+        effective_lrs: optional dict of scheduled learning rates from
+            ``model.get_effective_lrs()``. If None, uses base config LRs.
 
     Returns:
         mu: [B, N, K] converged beliefs (means)
@@ -195,9 +197,17 @@ def e_step(token_ids, model, config):
     dev = config.device
     grad_clamp = getattr(config, 'grad_clamp', 1e3)
     omega_grad_clamp = getattr(config, 'omega_grad_clamp', 10.0)
-    sigma_lr_ratio = getattr(config, 'sigma_lr_ratio', 0.05)
-    e_step_lr_decay = getattr(config, 'e_step_lr_decay', 0.5)
     nan_recovery = getattr(config, 'nan_recovery', True)
+
+    # Per-variable learning rates (scheduled or base)
+    if effective_lrs is None:
+        _mu_q_lr = config.mu_q_lr
+        _sigma_q_lr = config.sigma_q_lr
+        _phi_lr = config.phi_lr
+    else:
+        _mu_q_lr = effective_lrs['mu_q_lr']
+        _sigma_q_lr = effective_lrs['sigma_q_lr']
+        _phi_lr = effective_lrs['phi_lr']
     omega_cond_max = getattr(config, 'omega_cond_max', 50.0)
     use_rope = getattr(config, 'use_rope', False)
     rope_base = getattr(config, 'rope_base', 10000.0)
@@ -238,13 +248,6 @@ def e_step(token_ids, model, config):
     holonomy_data = [] if use_holonomy else None
 
     for step in range(config.n_esteps):
-        # --- E-step LR decay (matching VFE dynamic) ---
-        if config.n_esteps > 1:
-            decay = 1.0 - e_step_lr_decay * (step / (config.n_esteps - 1))
-        else:
-            decay = 1.0
-        effective_lr = config.eta_E * decay
-        sigma_lr = effective_lr * sigma_lr_ratio
 
         # --- Optional LayerNorm on μ before KL computation ---
         if use_layernorm:
@@ -367,7 +370,7 @@ def e_step(token_ids, model, config):
         nat_mu = nat_mu * scale
 
         # 6. Update
-        mu = mu - effective_lr * nat_mu
+        mu = mu - _mu_q_lr * nat_mu
 
         # ================================================================
         # COVARIANCE GRADIENT: ∂F/∂Σ_i
@@ -395,10 +398,10 @@ def e_step(token_ids, model, config):
         # 4. Natural gradient on SPD: ΔΣ = -2 Σ sym(∂F/∂Σ) Σ
         nat_Sigma_h = natural_grad_sigma(grad_Sigma_h, Sigma_h)
 
-        # 5. Retract on SPD manifold (sigma uses reduced LR)
+        # 5. Retract on SPD manifold
         nat_Sigma_h = clip_matrix_norm(nat_Sigma_h, config.trust_region_sigma)
         Sigma_h_new = retract_spd(
-            Sigma_h, nat_Sigma_h, sigma_lr,
+            Sigma_h, nat_Sigma_h, _sigma_q_lr,
             eps_min=config.spd_eps_min,
             kappa_max=config.spd_kappa_max,
             exp_clip=config.spd_exp_clip,
@@ -428,7 +431,7 @@ def e_step(token_ids, model, config):
         nat_Omega = lie_algebra_clip_grad(
             grad_Omega, Omega, trust_radius=config.trust_region_omega,
         )
-        Omega = Omega - effective_lr * nat_Omega
+        Omega = Omega - _phi_lr * nat_Omega
 
         # Post-update Omega conditioning
         Omega = regularize_omega_conditioning(Omega, omega_cond_max)

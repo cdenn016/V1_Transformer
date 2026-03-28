@@ -219,8 +219,8 @@ class MStepAccumulator:
 
 
 @torch.no_grad()
-def apply_m_step_from_accumulated(accum, model, config, effective_eta_M=None):
-    r"""Apply M-step using accumulated sufficient statistics.
+def apply_m_step_from_accumulated(accum, model, config, effective_lrs=None):
+    r"""Apply prior updates using accumulated sufficient statistics.
 
     Consumes the vocabulary-sized buffers in ``accum`` and updates the
     model's prior bank. Equivalent to running ``m_step`` on the union
@@ -230,7 +230,7 @@ def apply_m_step_from_accumulated(accum, model, config, effective_eta_M=None):
         accum: MStepAccumulator with accumulated statistics
         model: PureVFETransformer
         config: PureVFEConfig
-        effective_eta_M: optional LR override (from scheduler)
+        effective_lrs: optional dict of per-variable LRs (from scheduler)
 
     Returns:
         ce_loss: average CE loss across accumulated micro-batches
@@ -240,8 +240,12 @@ def apply_m_step_from_accumulated(accum, model, config, effective_eta_M=None):
     K_h = config.head_dim
     dev = accum.n_counts.device
 
-    if effective_eta_M is None:
-        effective_eta_M = config.eta_M
+    if effective_lrs is None:
+        effective_lrs = {
+            'mu_p_lr': config.mu_p_lr,
+            'sigma_p_lr': config.sigma_p_lr,
+            'phi_lr': config.phi_lr,
+        }
     use_adam = getattr(config, 'use_adam_m_step', False) and model.m1_mu is not None
     grad_clamp = getattr(config, 'grad_clamp', 1e3)
 
@@ -304,7 +308,7 @@ def apply_m_step_from_accumulated(accum, model, config, effective_eta_M=None):
     nat_mu = clip_norm(nat_mu, config.m_step_trust_mu)
     if use_adam:
         nat_mu = _adam_update_mu(nat_mu, update_tokens, model, config)
-    mu_new = mu_all - effective_eta_M * nat_mu
+    mu_new = mu_all - effective_lrs['mu_p_lr'] * nat_mu
 
     if config.prior_mu_max_norm > 0:
         mu_norms = mu_new.norm(dim=-1, keepdim=True).clamp(min=1e-8)
@@ -363,9 +367,8 @@ def apply_m_step_from_accumulated(accum, model, config, effective_eta_M=None):
     if use_adam and model.m1_Sigma is not None:
         nat_Sigma = _momentum_update(nat_Sigma, model.m1_Sigma, update_tokens, config.adam_beta1)
 
-    _sigma_ratio = getattr(config, 'm_step_sigma_ratio', 0.2)
     Sigma_new = retract_spd(
-        Sigma_all, nat_Sigma, effective_eta_M * _sigma_ratio,
+        Sigma_all, nat_Sigma, effective_lrs['sigma_p_lr'],
         eps_min=config.spd_eps_min, kappa_max=config.spd_kappa_max,
     )
 
@@ -395,7 +398,7 @@ def apply_m_step_from_accumulated(accum, model, config, effective_eta_M=None):
             grad_Omega_all, Omega_all, model.gl_generators,
         )
         grad_phi = torch.clamp(grad_phi, -grad_clamp, grad_clamp)
-        phi_new = retract_phi(phi_all, -effective_eta_M * grad_phi, config.phi_max_norm)
+        phi_new = retract_phi(phi_all, -effective_lrs['phi_lr'] * grad_phi, config.phi_max_norm)
         model.prior_phi[update_tokens] = phi_new
     else:
         nat_Omega = lie_algebra_clip_grad(
@@ -405,7 +408,7 @@ def apply_m_step_from_accumulated(accum, model, config, effective_eta_M=None):
             nat_Omega = _momentum_update(
                 nat_Omega, model.m1_Omega, update_tokens, config.adam_beta1,
             )
-        Omega_new = Omega_all - effective_eta_M * nat_Omega
+        Omega_new = Omega_all - effective_lrs['phi_lr'] * nat_Omega
         Omega_new = regularize_omega_conditioning(Omega_new, config.omega_cond_max)
         model.prior_Omega[update_tokens] = Omega_new
 
@@ -419,8 +422,7 @@ def apply_m_step_from_accumulated(accum, model, config, effective_eta_M=None):
         grad_pos = -(Om_avg - pos_Om)
         grad_pos = torch.clamp(grad_pos, -omega_grad_clamp, omega_grad_clamp)
 
-        _pos_ratio = getattr(config, 'm_step_pos_ratio', 0.1)
-        pos_lr = effective_eta_M * _pos_ratio
+        _phi_lr = effective_lrs['phi_lr']
 
         if model.pos_phi is not None:
             pos_phi = model.pos_phi[:N_pos]
@@ -429,7 +431,7 @@ def apply_m_step_from_accumulated(accum, model, config, effective_eta_M=None):
             )
             grad_phi_pos = torch.clamp(grad_phi_pos, -grad_clamp, grad_clamp)
             model.pos_phi[:N_pos] = retract_phi(
-                pos_phi, -pos_lr * grad_phi_pos, config.phi_max_norm,
+                pos_phi, -_phi_lr * grad_phi_pos, config.phi_max_norm,
             )
         else:
             nat_pos = lie_algebra_clip_grad(
@@ -441,7 +443,7 @@ def apply_m_step_from_accumulated(accum, model, config, effective_eta_M=None):
                 nat_pos = _momentum_update(
                     nat_pos, model.m1_pos_Omega, pos_indices, config.adam_beta1,
                 )
-            pos_Om_new = pos_Om - pos_lr * nat_pos
+            pos_Om_new = pos_Om - _phi_lr * nat_pos
             pos_Om_new = regularize_omega_conditioning(pos_Om_new, config.omega_cond_max)
             model.pos_Omega[:N_pos] = pos_Om_new
 
@@ -562,21 +564,21 @@ def _momentum_update(nat_grad, momentum_buffer, update_tokens, beta1):
 
 @torch.no_grad()
 def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
-           logits=None, effective_eta_M=None):
-    r"""Update prior bank via natural gradient on marginal VFE.
+           logits=None, effective_lrs=None):
+    r"""Update prior bank via natural gradient on VFE.
 
-    Observation gradient enters HERE (not in E-step).
+    Observation gradient enters HERE (not in belief descent).
 
     Args:
         token_ids: [B, N] input token indices
         targets: [B, N] target token indices
-        mu_star: [B, N, K] converged E-step beliefs (means)
-        Sigma_star: [B, N, K, K] converged E-step beliefs (covariances)
+        mu_star: [B, N, K] converged beliefs (means)
+        Sigma_star: [B, N, K, K] converged beliefs (covariances)
         Omega_star: [B, N, H, K_h, K_h] converged gauge frames
         model: PureVFETransformer
         config: PureVFEConfig
         logits: [B, N, V] optional precomputed logits from e_step
-        effective_eta_M: optional override for M-step learning rate (from LR schedule)
+        effective_lrs: optional dict of per-variable LRs (from scheduler)
 
     Returns:
         ce_loss: scalar cross-entropy loss (for monitoring only)
@@ -628,11 +630,12 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     T = len(update_tokens)
     dev = mu_star.device
 
-    # Use eta_M directly (or scheduled override). No confidence weighting — at
-    # initialization CE ≈ 11 (random PPL), which would shrink eta_M by ~12x via
-    # 1/(1+CE), creating a Catch-22.
-    if effective_eta_M is None:
-        effective_eta_M = config.eta_M
+    if effective_lrs is None:
+        effective_lrs = {
+            'mu_p_lr': config.mu_p_lr,
+            'sigma_p_lr': config.sigma_p_lr,
+            'phi_lr': config.phi_lr,
+        }
     use_adam = getattr(config, 'use_adam_m_step', False) and model.m1_mu is not None
 
     grad_clamp = getattr(config, 'grad_clamp', 1e3)
@@ -725,7 +728,7 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     if use_adam:
         nat_mu = _adam_update_mu(nat_mu, update_tokens, model, config)
 
-    mu_new = mu_all - effective_eta_M * nat_mu
+    mu_new = mu_all - effective_lrs['mu_p_lr'] * nat_mu
 
     # Enforce prior mean norm constraint (prevents mean spread → logit explosion)
     if config.prior_mu_max_norm > 0:
@@ -798,10 +801,8 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
             nat_Sigma, model.m1_Sigma, update_tokens, config.adam_beta1
         )
 
-    # Σ_p uses a reduced step size (SPD retraction is geometrically sensitive)
-    _sigma_ratio = getattr(config, 'm_step_sigma_ratio', 0.2)
     Sigma_new = retract_spd(
-        Sigma_all, nat_Sigma, effective_eta_M * _sigma_ratio,
+        Sigma_all, nat_Sigma, effective_lrs['sigma_p_lr'],
         eps_min=config.spd_eps_min, kappa_max=config.spd_kappa_max,
     )
 
@@ -837,7 +838,7 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
             grad_Omega_all, Omega_all, model.gl_generators
         )  # [T, H, n_gen_h]
         grad_phi = torch.clamp(grad_phi, -grad_clamp, grad_clamp)
-        phi_new = retract_phi(phi_all, -effective_eta_M * grad_phi, config.phi_max_norm)
+        phi_new = retract_phi(phi_all, -effective_lrs['phi_lr'] * grad_phi, config.phi_max_norm)
         model.prior_phi[update_tokens] = phi_new
     else:
         # Omega path: Lie algebra clip + conditioning regularization
@@ -852,7 +853,7 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
                 nat_Omega, model.m1_Omega, update_tokens, config.adam_beta1
             )
 
-        Omega_new = Omega_all - effective_eta_M * nat_Omega
+        Omega_new = Omega_all - effective_lrs['phi_lr'] * nat_Omega
         Omega_new = regularize_omega_conditioning(Omega_new, config.omega_cond_max)
         model.prior_Omega[update_tokens] = Omega_new
 
@@ -860,7 +861,7 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     # 4. Update positional gauge offsets
     # ================================================================
     _update_pos_omega(Omega_star, token_ids, model, config,
-                      effective_eta_M=effective_eta_M)
+                      effective_lrs=effective_lrs)
 
     # Sync Omega from phi if using phi path
     if model.prior_phi is not None:
@@ -870,7 +871,7 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
 
 
 def _update_pos_omega(Omega_star, token_ids, model, config,
-                      effective_eta_M=None):
+                      effective_lrs=None):
     """
     Update positional gauge offsets toward mean converged frames per position.
     Vectorized over all positions.
@@ -878,8 +879,10 @@ def _update_pos_omega(Omega_star, token_ids, model, config,
     B, N = token_ids.shape
     omega_grad_clamp = getattr(config, 'omega_grad_clamp', 10.0)
     grad_clamp = getattr(config, 'grad_clamp', 1e3)
-    if effective_eta_M is None:
-        effective_eta_M = config.eta_M
+    if effective_lrs is None:
+        _phi_lr = config.phi_lr
+    else:
+        _phi_lr = effective_lrs['phi_lr']
     use_adam = getattr(config, 'use_adam_m_step', False) and model.m1_pos_Omega is not None
 
     # Average converged gauge at each position across batch: [N, H, K_h, K_h]
@@ -888,10 +891,6 @@ def _update_pos_omega(Omega_star, token_ids, model, config,
 
     grad = -(Om_avg - pos_Om)
     grad = torch.clamp(grad, -omega_grad_clamp, omega_grad_clamp)
-
-    # Positional frames use a reduced step size (must be stable across sequences)
-    _pos_ratio = getattr(config, 'm_step_pos_ratio', 0.1)
-    pos_lr = effective_eta_M * _pos_ratio
 
     if model.pos_phi is not None:
         # Phi path: update pos_phi coordinates
@@ -902,7 +901,7 @@ def _update_pos_omega(Omega_star, token_ids, model, config,
         )  # [N, H, n_gen_h]
         grad_phi = torch.clamp(grad_phi, -grad_clamp, grad_clamp)
         model.pos_phi[:N] = retract_phi(
-            pos_phi, -pos_lr * grad_phi, config.phi_max_norm
+            pos_phi, -_phi_lr * grad_phi, config.phi_max_norm
         )
     else:
         # Omega path: Lie algebra clip + conditioning regularization
@@ -917,6 +916,6 @@ def _update_pos_omega(Omega_star, token_ids, model, config,
                 nat, model.m1_pos_Omega, pos_indices, config.adam_beta1
             )
 
-        pos_Om_new = pos_Om - pos_lr * nat
+        pos_Om_new = pos_Om - _phi_lr * nat
         pos_Om_new = regularize_omega_conditioning(pos_Om_new, config.omega_cond_max)
         model.pos_Omega[:N] = pos_Om_new

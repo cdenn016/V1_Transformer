@@ -445,16 +445,16 @@ PURE_VFE_CONFIG = {
     'batch_size':  32,
     'max_steps':   30000,
 
-    # E-step (inference = forward pass)
-    # Iterations of VFE descent (replaces "depth")
-    'n_esteps': 12,
-    # Attention temperature (defaults to √K_h)
-    'tau':      None,
-    'eta_E':    0.1,                 # E-step natural gradient step size
+    # VFE descent
+    'n_esteps': 12,                  # Iterations of VFE descent (replaces "depth")
+    'tau':      None,                # Attention temperature (defaults to √K_h)
 
-    # M-step (learning = parameter update)
-    # M-step natural gradient step size (match VFE_dynamic mu_lr)
-    'eta_M':    0.05,
+    # Per-variable natural gradient learning rates
+    'mu_q_lr':    0.1,               # Belief mean step size
+    'sigma_q_lr': 0.005,             # Belief covariance step size
+    'phi_lr':     0.1,               # Gauge connection step size (all frames)
+    'mu_p_lr':    0.05,              # Prior mean step size
+    'sigma_p_lr': 0.01,              # Prior covariance step size
 
     # Prior precision (state-dependent α)
     'alpha_b0': 1.0,
@@ -468,9 +468,7 @@ PURE_VFE_CONFIG = {
     'sigma_init':       1.0,
     'omega_init_scale': 0.01,
 
-    # E-step numerical stability
-    'sigma_lr_ratio':  0.05,
-    'e_step_lr_decay': 0.5,
+    # Numerical stability
     'grad_clamp':      1e3,
 
     # Trust regions
@@ -493,9 +491,8 @@ PURE_VFE_CONFIG = {
     'gauge_param':    'omega',
     'omega_cond_max': 100.0,
 
-    # M-step options
+    # Observation gradient options
     'sigma_obs_grad':   'none',
-    'm_step_eta_floor': 0.01,
 
     # Recovery
     'nan_recovery':     True,
@@ -518,7 +515,7 @@ PURE_VFE_CONFIG = {
     # LR scheduling (warmup + cosine decay)
     'warmup_steps':     500,
     'lr_schedule':      'cosine',
-    'min_eta_M_ratio':  0.1,
+    'min_lr_ratio':     0.1,
 
     # Diagonal covariance (faster, optional)
     'diagonal_covariance': False,
@@ -2918,8 +2915,11 @@ def run_pure_vfe_experiment(
     print(f"  K_h (head_dim): {pure_config.head_dim}")
     print(f"  N (seq len):    {pure_config.max_seq_len}")
     print(f"  E-steps:        {pure_config.n_esteps}")
-    print(f"  eta_E:          {pure_config.eta_E}")
-    print(f"  eta_M:          {pure_config.eta_M}")
+    print(f"  mu_q_lr:        {pure_config.mu_q_lr}")
+    print(f"  sigma_q_lr:     {pure_config.sigma_q_lr}")
+    print(f"  phi_lr:         {pure_config.phi_lr}")
+    print(f"  mu_p_lr:        {pure_config.mu_p_lr}")
+    print(f"  sigma_p_lr:     {pure_config.sigma_p_lr}")
     print(f"  gauge_param:    {pure_config.gauge_param}")
     print(f"  Vocab:          {actual_vocab_size}")
     print(f"\nModel Parameters: {total_params:,}")
@@ -3065,9 +3065,9 @@ def run_pure_vfe_experiment(
                     if _micro == 0:
                         vfe_history = vfe  # Track VFE from first micro-batch
 
-                effective_eta_M = model.get_effective_eta_M()
+                effective_lrs = model.get_effective_lrs()
                 ce_loss = apply_m_step_from_accumulated(
-                    accum, model, pure_config, effective_eta_M=effective_eta_M,
+                    accum, model, pure_config, effective_lrs=effective_lrs,
                 )
                 model.global_step += 1
             else:
@@ -3110,11 +3110,7 @@ def run_pure_vfe_experiment(
                 }
 
                 # Use scheduled LRs
-                current_eta_M = model.get_effective_eta_M()
-                lrs = {
-                    'eta_E': pure_config.eta_E,
-                    'eta_M': current_eta_M,
-                }
+                lrs = model.get_effective_lrs()
 
                 metrics_tracker.log_step(
                     step + 1, metrics, lrs, None, step_time, batch_size, seq_len
@@ -3283,8 +3279,11 @@ def run_pure_vfe_experiment(
             'belief_dim': pure_config.belief_dim,
             'n_heads': pure_config.n_heads,
             'n_esteps': pure_config.n_esteps,
-            'eta_E': pure_config.eta_E,
-            'eta_M': pure_config.eta_M,
+            'mu_q_lr': pure_config.mu_q_lr,
+            'sigma_q_lr': pure_config.sigma_q_lr,
+            'phi_lr': pure_config.phi_lr,
+            'mu_p_lr': pure_config.mu_p_lr,
+            'sigma_p_lr': pure_config.sigma_p_lr,
             'gauge_param': pure_config.gauge_param,
         }
 
