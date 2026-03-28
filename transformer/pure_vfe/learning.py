@@ -86,10 +86,6 @@ class MStepAccumulator:
             self.obs_weighted_Sigma = None
             self.obs_weighted_outer = None
 
-        # Per-position Omega statistics (for positional gauge update)
-        self.pos_Omega_sum = torch.zeros(N, H, K_h, K_h, device=device)
-        self.pos_batch_count = 0
-
         # Monitoring
         self.ce_loss_sum = 0.0
         self.n_micro_batches = 0
@@ -184,10 +180,6 @@ class MStepAccumulator:
             Omega_star_flat,
         )
 
-        # --- Per-position Omega (for pos_Omega update) ---
-        self.pos_Omega_sum[:N] += Omega_star.sum(0)  # sum across batch dim
-        self.pos_batch_count += B
-
         # --- Monitoring ---
         self.ce_loss_sum += ce_loss.item()
         self.n_micro_batches += 1
@@ -206,8 +198,6 @@ class MStepAccumulator:
         if self.obs_weighted_Sigma is not None:
             self.obs_weighted_Sigma.zero_()
             self.obs_weighted_outer.zero_()
-        self.pos_Omega_sum.zero_()
-        self.pos_batch_count = 0
         self.ce_loss_sum = 0.0
         self.n_micro_batches = 0
 
@@ -411,41 +401,6 @@ def apply_m_step_from_accumulated(accum, model, config, effective_lrs=None):
         Omega_new = Omega_all - effective_lrs['phi_lr'] * nat_Omega
         Omega_new = regularize_omega_conditioning(Omega_new, config.omega_cond_max)
         model.prior_Omega[update_tokens] = Omega_new
-
-    # ================================================================
-    # Positional gauge offsets (from accumulated per-position sums)
-    # ================================================================
-    if accum.pos_batch_count > 0:
-        N_pos = config.max_seq_len
-        Om_avg = accum.pos_Omega_sum[:N_pos] / accum.pos_batch_count
-        pos_Om = model.pos_Omega[:N_pos]
-        grad_pos = -(Om_avg - pos_Om)
-        grad_pos = torch.clamp(grad_pos, -omega_grad_clamp, omega_grad_clamp)
-
-        _phi_lr = effective_lrs['phi_lr']
-
-        if model.pos_phi is not None:
-            pos_phi = model.pos_phi[:N_pos]
-            grad_phi_pos = torch.einsum(
-                'nhij,nhik,akj->nha', grad_pos, pos_Om, model.gl_generators,
-            )
-            grad_phi_pos = torch.clamp(grad_phi_pos, -grad_clamp, grad_clamp)
-            model.pos_phi[:N_pos] = retract_phi(
-                pos_phi, -_phi_lr * grad_phi_pos, config.phi_max_norm,
-            )
-        else:
-            nat_pos = lie_algebra_clip_grad(
-                grad_pos, pos_Om, trust_radius=config.trust_region_omega,
-            )
-            use_adam_pos = getattr(config, 'use_adam_m_step', False) and model.m1_pos_Omega is not None
-            if use_adam_pos:
-                pos_indices = torch.arange(N_pos, device=dev)
-                nat_pos = _momentum_update(
-                    nat_pos, model.m1_pos_Omega, pos_indices, config.adam_beta1,
-                )
-            pos_Om_new = pos_Om - _phi_lr * nat_pos
-            pos_Om_new = regularize_omega_conditioning(pos_Om_new, config.omega_cond_max)
-            model.pos_Omega[:N_pos] = pos_Om_new
 
     # Sync Omega from phi if using phi path
     if model.prior_phi is not None:
@@ -860,62 +815,9 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     # ================================================================
     # 4. Update positional gauge offsets
     # ================================================================
-    _update_pos_omega(Omega_star, token_ids, model, config,
-                      effective_lrs=effective_lrs)
-
     # Sync Omega from phi if using phi path
     if model.prior_phi is not None:
         model.sync_omega_from_phi()
 
     return ce_loss.item()
 
-
-def _update_pos_omega(Omega_star, token_ids, model, config,
-                      effective_lrs=None):
-    """
-    Update positional gauge offsets toward mean converged frames per position.
-    Vectorized over all positions.
-    """
-    B, N = token_ids.shape
-    omega_grad_clamp = getattr(config, 'omega_grad_clamp', 10.0)
-    grad_clamp = getattr(config, 'grad_clamp', 1e3)
-    if effective_lrs is None:
-        _phi_lr = config.phi_lr
-    else:
-        _phi_lr = effective_lrs['phi_lr']
-    use_adam = getattr(config, 'use_adam_m_step', False) and model.m1_pos_Omega is not None
-
-    # Average converged gauge at each position across batch: [N, H, K_h, K_h]
-    Om_avg = Omega_star.mean(0)               # [N, H, K_h, K_h]
-    pos_Om = model.pos_Omega[:N]              # [N, H, K_h, K_h]
-
-    grad = -(Om_avg - pos_Om)
-    grad = torch.clamp(grad, -omega_grad_clamp, omega_grad_clamp)
-
-    if model.pos_phi is not None:
-        # Phi path: update pos_phi coordinates
-        pos_phi = model.pos_phi[:N]  # [N, H, n_gen_h]
-        grad_phi = torch.einsum(
-            'nhij,nhik,akj->nha',
-            grad, pos_Om, model.gl_generators
-        )  # [N, H, n_gen_h]
-        grad_phi = torch.clamp(grad_phi, -grad_clamp, grad_clamp)
-        model.pos_phi[:N] = retract_phi(
-            pos_phi, -_phi_lr * grad_phi, config.phi_max_norm
-        )
-    else:
-        # Omega path: Lie algebra clip + conditioning regularization
-        nat = lie_algebra_clip_grad(
-            grad, pos_Om, trust_radius=config.trust_region_omega,
-        )
-
-        # Momentum for positional Ω
-        if use_adam:
-            pos_indices = torch.arange(N, device=nat.device)
-            nat = _momentum_update(
-                nat, model.m1_pos_Omega, pos_indices, config.adam_beta1
-            )
-
-        pos_Om_new = pos_Om - _phi_lr * nat
-        pos_Om_new = regularize_omega_conditioning(pos_Om_new, config.omega_cond_max)
-        model.pos_Omega[:N] = pos_Om_new

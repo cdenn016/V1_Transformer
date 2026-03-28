@@ -3,10 +3,10 @@ PureVFETransformer: the model class.
 
 No nn.Module. No autograd. No backprop.
 The "model" is a prior bank: one Gaussian N(μ_v, Σ_v) per vocabulary token,
-plus gauge frames Ω_v ∈ GL(K_h) per head and positional gauge offsets.
+plus gauge frames Ω_v ∈ GL(K_h) per head. Position encoding via RoPE.
 
-"Forward pass" = E-step VFE descent.
-"Learning" = M-step natural gradient on priors.
+"Forward pass" = VFE descent on belief variables.
+"Learning" = natural gradient on prior variables.
 """
 
 import math
@@ -53,20 +53,17 @@ class PureVFETransformer:
         )
 
         # Gauge frames: two parameterizations togglable via config.gauge_param
+        # Position encoding handled by RoPE — no positional gauge offsets.
         if config.gauge_param == 'phi':
             # Lie algebra path: φ ∈ gl(K_h), Ω = exp(φ)
             n_gen_h = K_h * K_h
             self.prior_phi = init_phi(
                 (V, H, n_gen_h), scale=config.omega_init_scale, device=dev
             )
-            self.pos_phi = init_phi(
-                (N_max, H, n_gen_h), scale=config.omega_init_scale, device=dev
-            )
             self.gl_generators = make_gl_generators(K_h, device=dev)  # [K_h², K_h, K_h]
 
             # Compute Omega from phi for use in E-step
             self.prior_Omega = phi_to_omega(self.prior_phi, self.gl_generators)
-            self.pos_Omega = phi_to_omega(self.pos_phi, self.gl_generators)
         else:
             # Direct GL(K_h) storage (default 'omega' path)
             neg_frac = getattr(config, 'omega_negative_det_fraction', 0.0)
@@ -74,12 +71,7 @@ class PureVFETransformer:
                 (V, H, K_h, K_h), scale=config.omega_init_scale, device=dev,
                 negative_det_fraction=neg_frac,
             )
-            self.pos_Omega = init_omega(
-                (N_max, H, K_h, K_h), scale=config.omega_init_scale, device=dev,
-                negative_det_fraction=neg_frac,
-            )
             self.prior_phi = None
-            self.pos_phi = None
             self.gl_generators = None
 
         # -----------------------------------------------------------
@@ -94,13 +86,11 @@ class PureVFETransformer:
             # interacts poorly with manifold geometry)
             self.m1_Sigma = torch.zeros(V, K, K, device=dev)
             self.m1_Omega = torch.zeros(V, H, K_h, K_h, device=dev)
-            self.m1_pos_Omega = torch.zeros(N_max, H, K_h, K_h, device=dev)
         else:
             self.m1_mu = None
             self.m2_mu = None
             self.m1_Sigma = None
             self.m1_Omega = None
-            self.m1_pos_Omega = None
 
         # -----------------------------------------------------------
         # Training step counter (for LR scheduling)
@@ -226,7 +216,6 @@ class PureVFETransformer:
         """Recompute Omega from phi (call after phi updates in M-step)."""
         if self.prior_phi is not None:
             self.prior_Omega = phi_to_omega(self.prior_phi, self.gl_generators)
-            self.pos_Omega = phi_to_omega(self.pos_phi, self.gl_generators)
 
     def save(self, path):
         """Save model state to disk."""
@@ -234,26 +223,26 @@ class PureVFETransformer:
             'prior_mu': self.prior_mu.cpu(),
             'prior_Sigma': self.prior_Sigma.cpu(),
             'prior_Omega': self.prior_Omega.cpu(),
-            'pos_Omega': self.pos_Omega.cpu(),
             'config': self.config,
             'global_step': self.global_step,
             'adam_step': self.adam_step,
         }
         if self.prior_phi is not None:
             state['prior_phi'] = self.prior_phi.cpu()
-            state['pos_phi'] = self.pos_phi.cpu()
-        # Save momentum buffers if they exist
         if self.m1_mu is not None:
             state['m1_mu'] = self.m1_mu.cpu()
             state['m2_mu'] = self.m2_mu.cpu()
             state['m1_Sigma'] = self.m1_Sigma.cpu()
             state['m1_Omega'] = self.m1_Omega.cpu()
-            state['m1_pos_Omega'] = self.m1_pos_Omega.cpu()
         torch.save(state, path)
 
     @classmethod
     def load(cls, path, device=None):
-        """Load model from disk."""
+        """Load model from disk.
+
+        Legacy checkpoints with pos_Omega/pos_phi/m1_pos_Omega keys are
+        loaded without error — those keys are silently ignored.
+        """
         data = torch.load(path, weights_only=False)
         config = data['config']
         if device is not None:
@@ -263,19 +252,15 @@ class PureVFETransformer:
         model.prior_mu = data['prior_mu'].to(dev)
         model.prior_Sigma = data['prior_Sigma'].to(dev)
         model.prior_Omega = data['prior_Omega'].to(dev)
-        model.pos_Omega = data['pos_Omega'].to(dev)
         if 'prior_phi' in data and model.prior_phi is not None:
             model.prior_phi = data['prior_phi'].to(dev)
-            model.pos_phi = data['pos_phi'].to(dev)
         model.global_step = data.get('global_step', 0)
         model.adam_step = data.get('adam_step', 0)
-        # Restore momentum buffers
         if 'm1_mu' in data and model.m1_mu is not None:
             model.m1_mu = data['m1_mu'].to(dev)
             model.m2_mu = data['m2_mu'].to(dev)
             model.m1_Sigma = data['m1_Sigma'].to(dev)
             model.m1_Omega = data['m1_Omega'].to(dev)
-            model.m1_pos_Omega = data['m1_pos_Omega'].to(dev)
         return model
 
     def to(self, device):
@@ -284,17 +269,14 @@ class PureVFETransformer:
         self.prior_mu = self.prior_mu.to(device)
         self.prior_Sigma = self.prior_Sigma.to(device)
         self.prior_Omega = self.prior_Omega.to(device)
-        self.pos_Omega = self.pos_Omega.to(device)
         if self.prior_phi is not None:
             self.prior_phi = self.prior_phi.to(device)
-            self.pos_phi = self.pos_phi.to(device)
             self.gl_generators = self.gl_generators.to(device)
         if self.m1_mu is not None:
             self.m1_mu = self.m1_mu.to(device)
             self.m2_mu = self.m2_mu.to(device)
             self.m1_Sigma = self.m1_Sigma.to(device)
             self.m1_Omega = self.m1_Omega.to(device)
-            self.m1_pos_Omega = self.m1_pos_Omega.to(device)
         return self
 
     def param_count(self):
@@ -303,7 +285,6 @@ class PureVFETransformer:
         V = self.config.vocab_size
         H = self.config.n_heads
         K_h = self.config.head_dim
-        N = self.config.max_seq_len
 
         mu_params = V * K
         sigma_params = V * K * K
@@ -311,20 +292,15 @@ class PureVFETransformer:
         if self.config.gauge_param == 'phi':
             n_gen_h = K_h * K_h
             gauge_params = V * H * n_gen_h
-            pos_params = N * H * n_gen_h
             gauge_key = 'prior_phi'
-            pos_key = 'pos_phi'
         else:
             gauge_params = V * H * K_h * K_h
-            pos_params = N * H * K_h * K_h
             gauge_key = 'prior_Omega'
-            pos_key = 'pos_Omega'
 
-        total = mu_params + sigma_params + gauge_params + pos_params
+        total = mu_params + sigma_params + gauge_params
         return {
             'prior_mu': mu_params,
             'prior_Sigma': sigma_params,
             gauge_key: gauge_params,
-            pos_key: pos_params,
             'total': total,
         }
