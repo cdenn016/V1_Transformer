@@ -281,6 +281,8 @@ class GaugeTransformerBlock(nn.Module):
             )
             # Split full Omega into per-head cached transports
             Omega_full = transport['Omega']  # (B, N, N, K, K)
+            # Store exp_delta for holonomy penalty (if configured)
+            self._last_exp_delta = transport.get('exp_delta')
             irrep_dims = self.attention.irrep_dims
             cached_head_transports = []
             dim_start = 0
