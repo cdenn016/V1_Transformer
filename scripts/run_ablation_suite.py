@@ -253,6 +253,35 @@ SWEEPS = {
         'baseline_value': 0.0,
     },
 
+    # --- Tier 1b: Temperature / kappa parameters ---
+    'kappa_beta': {
+        'description': 'Attention/VFE temperature τ: β_ij = softmax(-KL/κ√K). Higher = softer attention',
+        'param': 'kappa_beta',
+        'values': [0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0],
+        'baseline_value': 1.0,
+    },
+
+    'kappa_gamma': {
+        'description': 'Model coupling temperature for γ_ij (meta-cognition layer)',
+        'param': 'kappa_gamma',
+        'values': [0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0],
+        'baseline_value': 1.0,
+    },
+
+    'prior_bank_tau': {
+        'description': 'PriorBank decode temperature: logits = -KL(q||π_v)/τ. Lower = sharper decode',
+        'param': 'prior_bank_tau',
+        'values': [0.1, 0.25, 0.5, 1.0, 2.0, 5.0],
+        'baseline_value': 1.0,
+    },
+
+    'rope_base': {
+        'description': 'RoPE frequency base: θ_n = 1/base^(2n/K). Lower = faster position decay',
+        'param': 'rope_base',
+        'values': [100, 500, 1000, 5000, 10000, 50000],
+        'baseline_value': 1000,
+    },
+
     # --- Tier 2: Architecture ---
     'K': {
         'description': 'Embedding dimension (belief dimensionality)',
@@ -439,8 +468,14 @@ SWEEP_ORDER = [
     #'beta', 
     #'alpha_phi', 
     #'ffn_alpha',
-    #'ffn_lambda_belief',  
-    
+    #'ffn_lambda_belief',
+
+    # Temperature / kappa
+    #'kappa_beta',
+    #'kappa_gamma',
+    #'prior_bank_tau',
+    #'rope_base',
+
     #'attention_lr',
     #'output_lr',
     
