@@ -139,8 +139,8 @@ def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
     print(f"{'='*70}")
     print(f"Evaluating on {max_batches} batches...")
 
-    total_loss = 0.0
-    total_ce = 0.0
+    total_ce_tokens = 0.0
+    total_tokens = 0
     num_batches = 0
 
     with torch.no_grad():
@@ -150,6 +150,9 @@ def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
 
             input_ids, target_ids = batch
 
+            # Count non-padding tokens for proper weighting
+            non_pad = (target_ids != pad_token_id).sum().item()
+
             # Compute loss (all gauge terms disabled for pure CE evaluation)
             loss, metrics = compute_free_energy_loss(
                 model,
@@ -158,26 +161,31 @@ def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
                 alpha=0.0,
                 lambda_beta=0.0,
                 lambda_gamma=0.0,
-                kappa_gamma=1.0,  # Unused when lambda_gamma=0
+                kappa_gamma=1.0,
+                lambda_hyper=0.0,
                 pad_token_id=pad_token_id,
+                use_obs_in_vfe=False,
+                alpha_phi=0.0,
             )
 
-            total_loss += loss.item()
-            total_ce += metrics['loss/ce']
+            ce_loss = metrics['loss/ce']
+            # Token-weighted accumulation: ce_loss is per-token average,
+            # multiply by non_pad to recover total, then divide by total_tokens
+            total_ce_tokens += ce_loss * non_pad
+            total_tokens += non_pad
             num_batches += 1
 
             if (batch_idx + 1) % 10 == 0:
                 print(f"  Batch {batch_idx + 1}/{max_batches}...")
 
-    # Results
-    avg_loss = total_loss / max(1, num_batches)
-    avg_ce = total_ce / max(1, num_batches)
+    # Results (token-weighted average)
+    avg_ce = total_ce_tokens / max(1, total_tokens)
     perplexity = np.exp(avg_ce)
 
     print(f"\n{'='*70}")
     print("RESULTS")
     print(f"{'='*70}")
-    print(f"Validation Loss: {avg_loss:.4f}")
+    print(f"Validation CE:   {avg_ce:.4f}")
     print(f"Validation PPL:  {perplexity:.2f}")
     print(f"\nComparison:")
     print(f"  Random baseline: ~{vocab_size:,} PPL")
