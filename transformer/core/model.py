@@ -884,6 +884,8 @@ class GaugeTransformerLM(nn.Module):
         # Only the final layer gets targets so its E-step can ground beliefs in observations.
         all_betas = []
         all_kls = []
+        aux_losses = []  # Per-layer auxiliary CE losses (M-step signal for non-final layers)
+        _aux_layer_loss = self.config.get('aux_layer_loss', False)
         n_blocks = len(self.transformer.blocks)
 
         for layer_idx, block in enumerate(self.transformer.blocks):
@@ -955,6 +957,34 @@ class GaugeTransformerLM(nn.Module):
             # Propagate updated phi to next layer (critical when evolve_phi=True)
             if phi_ffn is not None:
                 phi = phi_ffn
+
+            # =============================================================
+            # Auxiliary per-layer CE loss (M-step task signal for non-final layers)
+            # =============================================================
+            # Computed AFTER E-step on the layer's output μ. Enters through
+            # standard backprop (M-step), NOT through the E-step. The E-step
+            # remains purely geometric (prior + alignment). This provides
+            # task-relevant gradient signal to non-final layers' attention W_O
+            # and (indirectly) to embeddings, enabling genuine feature composition.
+            if _aux_layer_loss and not is_final and targets is not None:
+                _aux_mu = self.transformer.final_norm(mu_q)
+                # Undo cross-head permutation before projecting to vocab
+                if getattr(self, '_cross_head_perm', None) is not None:
+                    _aux_mu = _aux_mu[:, :, self._inv_perm_tensor.to(device=_aux_mu.device)]
+                if self.use_prior_bank and self.prior_bank is not None:
+                    _aux_sigma = sigma_q if sigma_q is not None else None
+                    _aux_logits = self.prior_bank.decode(
+                        _aux_mu, _aux_sigma, tau=self.prior_bank_tau
+                    )
+                else:
+                    _aux_logits = self.out_proj(_aux_mu)
+                _aux_ce = F.cross_entropy(
+                    _aux_logits.reshape(-1, _aux_logits.size(-1)),
+                    targets.reshape(-1),
+                    reduction='mean',
+                    ignore_index=-100,
+                )
+                aux_losses.append(_aux_ce)
 
             # =============================================================
             # Per-layer diagnostics collection
@@ -1072,6 +1102,8 @@ class GaugeTransformerLM(nn.Module):
             'phi_prior': phi_prior,      # (B, N, gauge_dim) - model gauge frames
             # Adaptive alpha_i from E-step (if learnable_alpha enabled)
             'alpha_i': alpha_i,          # (B, N, K) or None
+            # Auxiliary per-layer CE losses (M-step signal for non-final layers)
+            'aux_losses': aux_losses,    # List of scalar tensors, one per non-final layer
         }
 
         return logits, attention_info

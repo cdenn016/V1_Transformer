@@ -107,6 +107,11 @@ class FastTrainingConfig:
     # VFE observation coupling
     use_obs_in_vfe: bool = False  # Pass targets into VFE E-step (last layer only)
 
+    # Multi-layer depth signal
+    aux_layer_loss: bool = False     # Per-layer auxiliary CE loss (M-step task signal for non-final layers)
+    aux_loss_weight: float = 0.3     # Weight for auxiliary per-layer CE losses
+    sigma_residual: bool = False     # Additive σ residual across layers (instead of replacement)
+
     # Learning rate schedule
     lr_decay: str = 'cosine'  # 'cosine', 'linear', 'constant'
     min_lr_ratio: float = 0.1  # Minimum LR as fraction of peak (floor for cosine decay)
@@ -527,6 +532,7 @@ class FastTrainer:
                     pad_token_id=self.pad_token_id,
                     use_obs_in_vfe=self.config.use_obs_in_vfe,
                     alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
+                    aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
                 )
         else:
             loss, metrics = compute_free_energy_loss(
@@ -541,6 +547,7 @@ class FastTrainer:
                 pad_token_id=self.pad_token_id,
                 use_obs_in_vfe=self.config.use_obs_in_vfe,
                 alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
+                aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
             )
 
         # Backward pass

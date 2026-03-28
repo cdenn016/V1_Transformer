@@ -293,6 +293,11 @@ EM_CONFIG = {
     'tie_embeddings':              False,
     'ffn_mode':                    'VFE_dynamic',
     
+    # === Multi-layer depth signal ===
+    'aux_layer_loss':  False,   # Enable for multi-layer: per-layer M-step CE loss
+    'aux_loss_weight': 0.3,     # Weight for auxiliary per-layer CE losses
+    'sigma_residual':  False,   # Additive σ residual across layers
+
     # === Regularization ===
     'sigma_max':     10.0,
     'grad_clip':     1.0,
@@ -950,6 +955,7 @@ class PublicationMetricsTracker:
             # Losses
             'train_loss_total', 'train_loss_ce', 'train_loss_belief_align',
             'train_loss_self_consistency', 'train_loss_model_coupling',
+            'train_loss_aux_layer_ce',
             'val_loss', 'val_ce',
 
             # Metrics
@@ -1006,6 +1012,7 @@ class PublicationMetricsTracker:
             'train_loss_belief_align': metrics.get('train_loss_belief_align', 0),
             'train_loss_self_consistency': metrics.get('train_loss_self_consistency', 0),
             'train_loss_model_coupling': metrics.get('train_loss_model_coupling', 0),
+            'train_loss_aux_layer_ce': metrics.get('train_loss_aux_layer_ce', 0),
             'val_loss': None,
             'val_ce': None,
 
@@ -1525,7 +1532,7 @@ class PublicationTrainer(FastTrainer):
                         pad_token_id=self.pad_token_id,
                         use_obs_in_vfe=use_obs,
                         alpha_phi=self.config.alpha_phi,
-
+                        aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
                     )
             # Scaled backward
             self.scaler.scale(loss).backward()
@@ -1552,6 +1559,7 @@ class PublicationTrainer(FastTrainer):
                     pad_token_id=self.pad_token_id,
                     use_obs_in_vfe=use_obs,
                     alpha_phi=self.config.alpha_phi,
+                    aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
                 )
             loss.backward()
 
@@ -1723,6 +1731,7 @@ class PublicationTrainer(FastTrainer):
             'train_loss_belief_align': full_metrics.get('loss/belief_align', 0),
             'train_loss_self_consistency': full_metrics.get('loss/self_consistency', 0),
             'train_loss_model_coupling': full_metrics.get('loss/model_coupling', 0),
+            'train_loss_aux_layer_ce': full_metrics.get('loss/aux_layer_ce', 0),
             # Clamp to prevent overflow
             'train_ppl': math.exp(min(full_metrics['loss/ce'], 20)),
             'beta_mean': full_metrics.get('attention/beta_mean', 0),
@@ -2492,6 +2501,10 @@ def run_single_experiment(
         lambda_hyper=config.get('lambda_hyper', 0.0),
         use_obs_in_vfe=config.get('use_obs_in_vfe', False),
 
+        # Multi-layer depth signal
+        aux_layer_loss=config.get('aux_layer_loss', False),
+        aux_loss_weight=config.get('aux_loss_weight', 0.3),
+        sigma_residual=config.get('sigma_residual', False),
 
         # Gauge geometry: phi gradient control
         alpha_phi=config.get('alpha_phi', 0.0),
