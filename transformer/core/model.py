@@ -897,6 +897,31 @@ class GaugeTransformerLM(nn.Module):
 
             # Pre-norm + attention with tracking
             mu_normalized = block.norm1(mu_q)
+
+            # Non-flat transport: compute edge-local connection δ_ij and inject
+            # into cached transports (mirrors GaugeTransformerBlock.forward).
+            _layer_cached_ht = cached_head_transports
+            if (block.non_flat_transport and block.gauge_connection is not None
+                    and cached_head_transports is None):
+                from transformer.core.attention import compute_transport_operators
+                delta_ij = block.gauge_connection(mu_normalized, mu_normalized)
+                transport = compute_transport_operators(
+                    phi, self.generators,
+                    gauge_mode='learned',
+                    connection_delta=delta_ij,
+                    cocycle_relaxation=block.cocycle_relaxation,
+                )
+                Omega_full = transport['Omega']
+                block._last_exp_delta = transport.get('exp_delta')
+                irrep_dims = block.attention.irrep_dims
+                _layer_cached_ht = []
+                dim_start = 0
+                for d in irrep_dims:
+                    _layer_cached_ht.append({
+                        'Omega': Omega_full[:, :, :, dim_start:dim_start+d, dim_start:dim_start+d],
+                    })
+                    dim_start += d
+
             mu_attn, sigma_attn, beta, kl = block.attention(
                 mu_normalized,
                 sigma_q,
@@ -904,7 +929,7 @@ class GaugeTransformerLM(nn.Module):
                 self.generators,
                 mask=mask,
                 return_attention=True,  # Get β_ij and KL_ij from every layer
-                cached_head_transports=cached_head_transports,
+                cached_head_transports=_layer_cached_ht,
             )
 
             # Store per-layer attention (keep gradients for loss computation)
@@ -918,7 +943,10 @@ class GaugeTransformerLM(nn.Module):
                 mu_q = mu_attn
 
             if block.evolve_sigma and sigma_attn is not None:
-                sigma_q = sigma_attn
+                if block.sigma_residual:
+                    sigma_q = (sigma_q + sigma_attn).clamp(min=1e-4)
+                else:
+                    sigma_q = sigma_attn
 
             # FFN sublayer
             mu_normalized = block.norm2(mu_q)
@@ -947,7 +975,10 @@ class GaugeTransformerLM(nn.Module):
             )
 
             if block.evolve_sigma and sigma_ffn is not None:
-                sigma_q = sigma_ffn
+                if block.sigma_residual:
+                    sigma_q = (sigma_q + sigma_ffn).clamp(min=1e-4)
+                else:
+                    sigma_q = sigma_ffn
 
             if block.use_residual:
                 mu_q = mu_q + mu_ffn
@@ -957,6 +988,13 @@ class GaugeTransformerLM(nn.Module):
             # Propagate updated phi to next layer (critical when evolve_phi=True)
             if phi_ffn is not None:
                 phi = phi_ffn
+
+            # Propagate evolved omega from E-step to next layer (gauge_param='omega').
+            # Without this, each layer receives the original embedding omega,
+            # discarding E-step omega evolution from previous layers.
+            evolved_omega = getattr(block.ffn, '_last_omega', None)
+            if evolved_omega is not None:
+                omega = evolved_omega
 
             # =============================================================
             # Auxiliary per-layer CE loss (M-step task signal for non-final layers)
@@ -1052,16 +1090,23 @@ class GaugeTransformerLM(nn.Module):
         #     — applying after inv_perm misaligns per-dimension scales
         # (b) the IFT scale was derived at the E-step fixed point (pre-norm),
         #     so J_norm should be part of the scaled gradient path
+        #
+        # IMPORTANT: Detach mu_q from the residual+attention chain before
+        # re-attaching with IFT scaling. Without this, embeddings receive BOTH
+        # the unscaled residual+attention gradient AND the IFT-scaled gradient,
+        # violating the EM separation. The IFT scale should be the SOLE gradient
+        # path to embeddings when implicit_em=True.
         last_block = self.transformer.blocks[-1]
         implicit_mu_scale = getattr(last_block.ffn, '_last_implicit_mu_scale', None)
         implicit_sigma_scale = getattr(last_block.ffn, '_last_implicit_sigma_scale', None)
 
         if implicit_mu_scale is not None:
-            # mu_prior has gradient to mu_embed; mu_q is detached from it.
-            # Re-attach with IFT-scaled gradient.
-            mu_q = ImplicitEMGradient.apply(mu_q, mu_prior, implicit_mu_scale)
+            # Detach mu_q to remove the residual+attention gradient path.
+            # ImplicitEMGradient.apply then establishes the IFT-scaled path as
+            # the sole gradient to mu_prior (→ embeddings).
+            mu_q = ImplicitEMGradient.apply(mu_q.detach(), mu_prior, implicit_mu_scale)
         if implicit_sigma_scale is not None and sigma_q is not None and sigma_prior is not None:
-            sigma_q = ImplicitEMGradientSigma.apply(sigma_q, sigma_prior, implicit_sigma_scale)
+            sigma_q = ImplicitEMGradientSigma.apply(sigma_q.detach(), sigma_prior, implicit_sigma_scale)
 
         # Final norm
         mu_q = self.transformer.final_norm(mu_q)

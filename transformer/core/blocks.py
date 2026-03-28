@@ -313,8 +313,10 @@ class GaugeTransformerBlock(nn.Module):
 
         recorder = get_global_recorder() if TRAJECTORY_TRACKING_AVAILABLE else None
         recording_attention = recorder is not None and recorder.enabled and recorder.record_attention
-        need_beta = self.ffn_mode == 'VFE_dynamic'
-        need_attention_output = need_beta or recording_attention
+        # Request attention weights for trajectory recording. The FFN recomputes
+        # its own beta internally (the beta arg is unused), so this is only needed
+        # when attention diagnostics are being collected.
+        need_attention_output = recording_attention
 
         mu_attn, sigma_attn, beta, kl_matrix = self.attention(
             mu_normalized,
@@ -390,6 +392,12 @@ class GaugeTransformerBlock(nn.Module):
                 'sigma_min': _sd.min().item(),
                 'sigma_condition': _cond,
             })
+
+        # Propagate evolved omega from FFN E-step (gauge_param='omega').
+        # Without this, omega evolution is lost between layers.
+        evolved_omega = getattr(self.ffn, '_last_omega', None)
+        if evolved_omega is not None:
+            self._last_evolved_omega = evolved_omega
 
         # Residual connection (optional for pure VFE)
         if self.use_residual:
@@ -525,6 +533,13 @@ class GaugeTransformerStack(nn.Module):
                     W_out=W_out if is_final else None,
                     omega=omega,
                 )
+
+            # Propagate evolved omega from E-step to next layer (gauge_param='omega').
+            # Without this, each layer receives the original embedding omega,
+            # discarding E-step omega evolution from previous layers.
+            evolved_omega = getattr(block, '_last_evolved_omega', None)
+            if evolved_omega is not None:
+                omega = evolved_omega
 
             # Trajectory recording: record output
             if recording_enabled:

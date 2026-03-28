@@ -645,8 +645,7 @@ def _compute_vfe_gradients_block_diagonal(
                 logdet_i = torch.where(sign_i > 0, logdet_i, torch.zeros_like(logdet_i))
 
             kl_block = 0.5 * (trace_block + mahal_block - d + logdet_j - logdet_i[:, :, None])
-            # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
-            kl_ceil = max(100.0, 5.0 * K)
+            # Clamp KL to [0, max] for numerical stability (scale ceiling with block dim d)
             kl_values[:, i_start:i_end, :] = kl_values[:, i_start:i_end, :] + kl_block.clamp(min=0.0, max=max(100.0, 5.0 * d))
 
             # Sigma alignment gradient for this block
@@ -4534,6 +4533,11 @@ class VariationalFFNDynamic(nn.Module):
         else:
             self._last_implicit_mu_scale = None
             self._last_implicit_sigma_scale = None
+
+        # Store evolved omega for multi-layer propagation (gauge_param='omega').
+        # Without this, omega evolution from E-step iterations is lost between
+        # layers — each layer would receive the original embedding omega.
+        self._last_omega = omega_current
 
         # Return results
         # NOTE: Previously returned .detach() which BREAKS gradient flow!
