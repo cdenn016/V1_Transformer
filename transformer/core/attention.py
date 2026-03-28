@@ -308,6 +308,7 @@ def compute_transport_operators(
         'exp_phi': exp_phi,
         'exp_neg_phi': exp_neg_phi,
         'Omega': Omega,
+        'exp_delta': exp_delta if (connection_delta is not None and cocycle_relaxation > 0) else None,
     }
 
 
