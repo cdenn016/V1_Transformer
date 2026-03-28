@@ -21,6 +21,7 @@ from matplotlib.gridspec import GridSpec
 from pathlib import Path
 
 from transformer.core.model import GaugeTransformerLM
+from transformer.visualization.pub_style import set_pub_style
 
 
 def create_tokenizer(vocab_size=50257):
@@ -184,6 +185,8 @@ def visualize_attention_with_labels(model, token_ids, description, token_strs, s
     Returns:
         matplotlib Figure.
     """
+    set_pub_style()
+
     model.eval()
 
     with torch.no_grad():
@@ -345,7 +348,7 @@ def visualize_attention_with_labels(model, token_ids, description, token_strs, s
                            va='top', ha='center',
                            bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.8))
 
-    plt.savefig(save_path, dpi=200, bbox_inches='tight')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
     print(f"\n[SAVED] {save_path}")
 
     # =========================================================================

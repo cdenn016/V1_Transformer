@@ -31,6 +31,8 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
     print("Warning: matplotlib not available. Plotting disabled.")
 
+from transformer.visualization.pub_style import set_pub_style, PUB_COLORS
+
 # Import trajectory classes
 from transformer.analysis.trajectory import (
     ForwardTrajectory,
@@ -92,6 +94,8 @@ def plot_mu_evolution(
     if not MATPLOTLIB_AVAILABLE:
         return None
 
+    set_pub_style()
+
     if token_idx == -1:
         token_idx = trajectory.seq_len - 1
 
@@ -140,7 +144,7 @@ def plot_mu_evolution(
     plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
 
     return fig
 
@@ -165,6 +169,8 @@ def plot_mu_norm_evolution(
     """
     if not MATPLOTLIB_AVAILABLE:
         return None
+
+    set_pub_style()
 
     N = trajectory.seq_len
 
@@ -195,7 +201,7 @@ def plot_mu_norm_evolution(
     plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
 
     return fig
 
@@ -235,6 +241,8 @@ def plot_attention_pattern(
     """
     if not MATPLOTLIB_AVAILABLE:
         return None
+
+    set_pub_style()
 
     if layer_idx == -1:
         layer_idx = len(trajectory.layer_trajectories) - 1
@@ -289,7 +297,7 @@ def plot_attention_pattern(
     plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
 
     return fig
 
@@ -316,6 +324,8 @@ def plot_attention_summary(
     """
     if not MATPLOTLIB_AVAILABLE:
         return None
+
+    set_pub_style()
 
     # Compute attention entropy per layer
     entropies = []
@@ -368,7 +378,7 @@ def plot_attention_summary(
     plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
 
     return fig
 
@@ -397,6 +407,8 @@ def plot_training_curves(
     """
     if not MATPLOTLIB_AVAILABLE:
         return None
+
+    set_pub_style()
 
     # Determine number of subplots
     n_metrics = len(history)
@@ -433,7 +445,7 @@ def plot_training_curves(
     plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
 
     return fig
 
@@ -468,6 +480,8 @@ def plot_phase_space_2d(
     """
     if not MATPLOTLIB_AVAILABLE:
         return None
+
+    set_pub_style()
 
     if token_idx == -1:
         token_idx = trajectory.seq_len - 1
@@ -504,7 +518,7 @@ def plot_phase_space_2d(
     plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
 
     return fig
 
@@ -537,6 +551,8 @@ def plot_trajectory_dashboard(
     """
     if not MATPLOTLIB_AVAILABLE:
         return None
+
+    set_pub_style()
 
     fig = plt.figure(figsize=figsize)
     gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.3, wspace=0.3)
@@ -659,7 +675,7 @@ def plot_trajectory_dashboard(
         ax.set_title('KL Matrix (no data)')
 
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
 
     return fig
 

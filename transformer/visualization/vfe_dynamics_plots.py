@@ -31,10 +31,8 @@ from typing import TYPE_CHECKING
 try:
     import matplotlib.pyplot as plt
     import matplotlib.gridspec as gridspec
-    from matplotlib import rcParams
-    MATPLOTLIB_AVAILABLE = True
 except ImportError:
-    MATPLOTLIB_AVAILABLE = False
+    pass  # MATPLOTLIB_AVAILABLE checked via pub_style
 
 if TYPE_CHECKING:
     from matplotlib.figure import Figure
@@ -45,29 +43,7 @@ try:
 except ImportError:
     SCIPY_AVAILABLE = False
 
-
-# =============================================================================
-# Publication style
-# =============================================================================
-
-def _set_pub_style():
-    """Set publication-quality matplotlib defaults."""
-    rcParams.update({
-        'font.family': 'serif',
-        'font.size': 10,
-        'axes.labelsize': 11,
-        'axes.titlesize': 12,
-        'xtick.labelsize': 9,
-        'ytick.labelsize': 9,
-        'legend.fontsize': 8,
-        'figure.dpi': 150,
-        'savefig.dpi': 300,
-        'savefig.bbox': 'tight',
-        'axes.grid': True,
-        'grid.alpha': 0.3,
-        'axes.spines.top': False,
-        'axes.spines.right': False,
-    })
+from transformer.visualization.pub_style import set_pub_style, PUB_COLORS, MATPLOTLIB_AVAILABLE
 
 
 def _smooth(data: list, window: int = 15) -> np.ndarray:
@@ -143,7 +119,7 @@ def plot_vfe_gradient_decomposition(
     """
     if not MATPLOTLIB_AVAILABLE:
         return None
-    _set_pub_style()
+    set_pub_style()
 
     fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
 
@@ -225,7 +201,7 @@ def plot_covariance_health(
     """
     if not MATPLOTLIB_AVAILABLE:
         return None
-    _set_pub_style()
+    set_pub_style()
 
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
 
@@ -308,7 +284,7 @@ def plot_transport_attention(
     """
     if not MATPLOTLIB_AVAILABLE:
         return None
-    _set_pub_style()
+    set_pub_style()
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
 
@@ -397,7 +373,7 @@ def plot_kl_landscape(
     """
     if not MATPLOTLIB_AVAILABLE:
         return None
-    _set_pub_style()
+    set_pub_style()
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
 
@@ -466,7 +442,7 @@ def plot_vfe_dynamics_dashboard(
     """
     if not MATPLOTLIB_AVAILABLE:
         return None
-    _set_pub_style()
+    set_pub_style()
 
     fig = plt.figure(figsize=(15, 12))
     gs = gridspec.GridSpec(3, 2, hspace=0.35, wspace=0.3)

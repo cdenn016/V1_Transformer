@@ -24,6 +24,8 @@ from typing import Dict, List, Tuple, Optional
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
 
+from transformer.visualization.pub_style import set_pub_style, PUB_COLORS
+
 
 # =============================================================================
 # Publication Style
@@ -47,6 +49,8 @@ PUBLICATION_STYLE = {
     'savefig.dpi': 300,
     'savefig.bbox': 'tight',
     'savefig.pad_inches': 0.1,
+    'axes.spines.top': False,
+    'axes.spines.right': False,
 }
 
 # Color scheme for models
@@ -519,6 +523,7 @@ def plot_ablation(
             'checkpoints_publication/standard_baseline',
         )
     """
+    set_pub_style()
     plt.rcParams.update(PUBLICATION_STYLE)
 
     vfe_run = load_training_history(Path(vfe_dir), name=vfe_name)

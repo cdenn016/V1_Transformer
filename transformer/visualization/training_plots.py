@@ -48,6 +48,8 @@ try:
 except ImportError:
     SEABORN_AVAILABLE = False
 
+from transformer.visualization.pub_style import set_pub_style, PUB_COLORS
+
 
 # =============================================================================
 # CSV Loading (Shared)
@@ -121,6 +123,7 @@ def create_basic_plots(metrics: Dict, output_path: Path, start_step: int = 5):
         output_path: Path to save the figure
         start_step: Skip initial steps to avoid transient spikes (default: 5)
     """
+    set_pub_style()
     if not MATPLOTLIB_AVAILABLE:
         print("❌ Cannot create plots - matplotlib not installed")
         return
@@ -292,7 +295,7 @@ def create_basic_plots(metrics: Dict, output_path: Path, start_step: int = 5):
         ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"\n📊 Basic plots saved to: {output_path}")
     plt.close()
 
@@ -363,16 +366,7 @@ def create_publication_figures(metrics: Dict, output_dir: Path, start_step: int 
         return
 
     # Setup publication style
-    if SEABORN_AVAILABLE:
-        sns.set_style("whitegrid")
-
-    rcParams.update({
-        'font.size': 10,
-        'axes.labelsize': 11,
-        'axes.titlesize': 12,
-        'figure.dpi': 100,
-        'savefig.dpi': 300,
-    })
+    set_pub_style()
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -494,6 +488,8 @@ def create_paper_outputs(ablation_dir: Path, output_dir: Path):
     if not MATPLOTLIB_AVAILABLE:
         print("❌ Cannot create figures - matplotlib not installed")
         return
+
+    set_pub_style()
 
     # Find all FFN mode metrics
     ffn_modes = {}
