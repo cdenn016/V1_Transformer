@@ -50,7 +50,7 @@ try:
 
     def __getattr__(name):
         if name == "Trainer":
-            from transformer.train_publication import PublicationTrainer
+            from transformer.training.experiment_runner import PublicationTrainer
             return PublicationTrainer
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
