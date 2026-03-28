@@ -1770,40 +1770,44 @@ class PublicationTrainer(FastTrainer):
                 and not is_standard
                 and (self.global_step + 1) % _diag_interval == 0):
             try:
-                with torch.no_grad():
-                    # Enable diagnostic flags on model/FFN
-                    if _track_iters:
-                        for block in self.model.transformer.blocks:
-                            block.ffn._collect_iteration_diagnostics = True
-                            block.ffn._iteration_diagnostics = []
-                    if _track_layers:
-                        self.model._collect_layer_diagnostics = True
-                        self.model._layer_diagnostics = []
+                # Enable diagnostic flags on model/FFN
+                if _track_iters:
+                    for block in self.model.transformer.blocks:
+                        block.ffn._collect_iteration_diagnostics = True
+                        block.ffn._iteration_diagnostics = []
+                if _track_layers:
+                    self.model._collect_layer_diagnostics = True
+                    self.model._layer_diagnostics = []
 
-                    # Diagnostic forward pass (no grad)
-                    self.model.forward_with_attention(
-                        input_ids, targets=target_ids)
+                # Diagnostic forward pass WITH grad enabled so phi evolves
+                # across layers (phi update is gated by torch.is_grad_enabled()).
+                # Zero grads afterward to avoid polluting the next train step.
+                self.model.forward_with_attention(
+                    input_ids, targets=target_ids)
 
-                    # Write per-layer diagnostics
-                    if _track_layers and self.model._layer_diagnostics:
-                        for ld in self.model._layer_diagnostics:
-                            ld['step'] = self.global_step
-                            self.layer_tracker.log(ld)
+                # Zero any gradients accumulated during diagnostic pass
+                self.model.zero_grad(set_to_none=True)
 
-                    # Write per-iteration diagnostics
-                    if _track_iters:
-                        for layer_idx, block in enumerate(self.model.transformer.blocks):
-                            for id_ in block.ffn._iteration_diagnostics:
-                                id_['step'] = self.global_step
-                                id_['layer'] = layer_idx
-                                self.iter_tracker.log(id_)
+                # Write per-layer diagnostics
+                if _track_layers and self.model._layer_diagnostics:
+                    for ld in self.model._layer_diagnostics:
+                        ld['step'] = self.global_step
+                        self.layer_tracker.log(ld)
 
-                    # Disable flags
-                    if _track_iters:
-                        for block in self.model.transformer.blocks:
-                            block.ffn._collect_iteration_diagnostics = False
-                    if _track_layers:
-                        self.model._collect_layer_diagnostics = False
+                # Write per-iteration diagnostics
+                if _track_iters:
+                    for layer_idx, block in enumerate(self.model.transformer.blocks):
+                        for id_ in block.ffn._iteration_diagnostics:
+                            id_['step'] = self.global_step
+                            id_['layer'] = layer_idx
+                            self.iter_tracker.log(id_)
+
+                # Disable flags
+                if _track_iters:
+                    for block in self.model.transformer.blocks:
+                        block.ffn._collect_iteration_diagnostics = False
+                if _track_layers:
+                    self.model._collect_layer_diagnostics = False
             except Exception as e:
                 print(f"[WARNING] Layer/iteration diagnostics failed: {e}")
 
