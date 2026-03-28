@@ -442,6 +442,7 @@ class GaugeTransformerLM(nn.Module):
                 omega_head_dims=self.omega_head_dims,
                 sigma_ce_scale=config.get('sigma_ce_scale', 0.01),
                 learnable_temperature=config.get('learnable_pb_temperature', False),
+                diagonal_covariance=diagonal_covariance,
             )
             print(f"[GaugeTransformerLM] Created PriorBank with token-dependent priors (vocab_size={vocab_size})")
             print(f"                     gauge_fixed_priors={gauge_fixed_priors}, tau={self.prior_bank_tau}")
@@ -705,6 +706,16 @@ class GaugeTransformerLM(nn.Module):
         vfe_targets = targets if use_obs else None
         # PriorBank decodes via KL (no linear output projection), so out_proj
         # is untrained when PriorBank is active — never pass it as W_out.
+        # The E-step observation gradient requires W_out for dCE/dmu = (softmax - onehot) @ W,
+        # which has no PriorBank analog (would need KL-based gradient over all V priors).
+        if use_obs and self.use_prior_bank:
+            import warnings
+            warnings.warn(
+                "use_obs_in_vfe=True has no effect when PriorBank is active: "
+                "E-step observation grounding requires W_out (linear projection), "
+                "but PriorBank decodes via KL. The E-step will have no observation term.",
+                stacklevel=2,
+            )
         if use_obs and not self.use_prior_bank and hasattr(self, 'out_proj'):
             vfe_W_out = self.out_proj.weight
         else:
@@ -1011,6 +1022,14 @@ class GaugeTransformerLM(nn.Module):
                     _aux_mu = _aux_mu[:, :, self._inv_perm_tensor.to(device=_aux_mu.device)]
                 if self.use_prior_bank and self.prior_bank is not None:
                     _aux_sigma = sigma_q if sigma_q is not None else None
+                    # Un-permute sigma to match un-permuted mu — PriorBank.decode()
+                    # computes per-dim KL(q||π_v) so mu and sigma must be aligned.
+                    if _aux_sigma is not None and getattr(self, '_cross_head_perm', None) is not None:
+                        _inv = self._inv_perm_tensor.to(device=_aux_sigma.device)
+                        if _aux_sigma.dim() == 3:
+                            _aux_sigma = _aux_sigma[:, :, _inv]
+                        else:
+                            _aux_sigma = _aux_sigma[:, :, _inv][:, :, :, _inv]
                     _aux_logits = self.prior_bank.decode(
                         _aux_mu, _aux_sigma, tau=self.prior_bank_tau
                     )
@@ -1068,6 +1087,13 @@ class GaugeTransformerLM(nn.Module):
                         # Use PriorBank decode when active (out_proj is untrained in that case)
                         if self.use_prior_bank and self.prior_bank is not None:
                             _probe_sigma = sigma_q.detach() if sigma_q is not None else None
+                            # Un-permute sigma to match un-permuted mu for KL decode
+                            if _probe_sigma is not None and getattr(self, '_cross_head_perm', None) is not None:
+                                _inv = self._inv_perm_tensor.to(device=_probe_sigma.device)
+                                if _probe_sigma.dim() == 3:
+                                    _probe_sigma = _probe_sigma[:, :, _inv]
+                                else:
+                                    _probe_sigma = _probe_sigma[:, :, _inv][:, :, :, _inv]
                             _probe_logits = self.prior_bank.decode(
                                 _probe_mu, _probe_sigma, tau=self.prior_bank_tau
                             )

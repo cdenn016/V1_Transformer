@@ -77,6 +77,8 @@ class PriorBank(nn.Module):
         sigma_ce_scale: float = 0.01,  # Fraction of CE gradient passed to sigma_p
         # Learnable inverse-temperature for decode logits
         learnable_temperature: bool = False,  # If True, learn decode scale factor
+        # Covariance mode (must match model's diagonal_covariance setting)
+        diagonal_covariance: bool = True,  # If False, gauge_fixed_priors returns full Σ_v = R@diag(σ_0)@R^T
     ):
         """
         Initialize the prior bank.
@@ -108,6 +110,7 @@ class PriorBank(nn.Module):
         self.omega_head_dims = omega_head_dims
         self.sigma_ce_scale = sigma_ce_scale
         self.learnable_temperature = learnable_temperature
+        self.diagonal_covariance = diagonal_covariance
 
         # Learnable inverse-temperature for decode logits.
         # At init, scale = exp(0) = 1.0 → no amplification → CE ≈ ln(V).
