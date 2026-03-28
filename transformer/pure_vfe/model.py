@@ -107,11 +107,11 @@ class PureVFETransformer:
         # -----------------------------------------------------------
         self.global_step = 0
 
-    def get_effective_eta_M(self) -> float:
-        r"""Compute effective M-step learning rate with warmup + cosine decay.
+    def _lr_scale(self) -> float:
+        r"""Compute LR multiplier from warmup + cosine decay schedule.
 
-        Schedule: linear warmup over ``warmup_steps``, then cosine decay
-        from ``eta_M`` to ``eta_M * min_eta_M_ratio``.
+        Returns a scalar in (0, 1] that is applied uniformly to all 5
+        per-variable learning rates.
         """
         cfg = self.config
         warmup = getattr(cfg, 'warmup_steps', 0)
@@ -119,11 +119,11 @@ class PureVFETransformer:
         step = self.global_step
 
         if schedule == 'constant' and warmup <= 0:
-            return cfg.eta_M
+            return 1.0
 
         # Warmup phase
         if warmup > 0 and step < warmup:
-            return cfg.eta_M * (step + 1) / warmup
+            return (step + 1) / warmup
 
         # Cosine decay phase
         if schedule == 'cosine':
@@ -132,10 +132,26 @@ class PureVFETransformer:
             decay_steps = max(max_steps - decay_start, 1)
             progress = (step - decay_start) / decay_steps
             progress = min(progress, 1.0)
-            min_ratio = getattr(cfg, 'min_eta_M_ratio', 0.1)
-            return cfg.eta_M * (min_ratio + (1 - min_ratio) * 0.5 * (1 + math.cos(math.pi * progress)))
+            min_ratio = getattr(cfg, 'min_lr_ratio', 0.1)
+            return min_ratio + (1 - min_ratio) * 0.5 * (1 + math.cos(math.pi * progress))
 
-        return cfg.eta_M
+        return 1.0
+
+    def get_effective_lrs(self) -> dict:
+        r"""Compute scheduled learning rates for all 5 variable groups.
+
+        Applies warmup + cosine decay uniformly to ``mu_q_lr``,
+        ``sigma_q_lr``, ``phi_lr``, ``mu_p_lr``, ``sigma_p_lr``.
+        """
+        cfg = self.config
+        scale = self._lr_scale()
+        return {
+            'mu_q_lr': cfg.mu_q_lr * scale,
+            'sigma_q_lr': cfg.sigma_q_lr * scale,
+            'phi_lr': cfg.phi_lr * scale,
+            'mu_p_lr': cfg.mu_p_lr * scale,
+            'sigma_p_lr': cfg.sigma_p_lr * scale,
+        }
 
     def forward(self, token_ids):
         """
@@ -182,12 +198,12 @@ class PureVFETransformer:
             vfe: list of VFE values per E-step
             diagnostics: dict with E-step gradient norms and NaN events
         """
+        effective_lrs = self.get_effective_lrs()
         mu, Sigma, Omega, logits, vfe, diagnostics = e_step(
-            token_ids, self, self.config
+            token_ids, self, self.config, effective_lrs=effective_lrs
         )
-        effective_eta_M = self.get_effective_eta_M()
         ce_loss = m_step(token_ids, targets, mu, Sigma, Omega, self, self.config,
-                         logits=logits, effective_eta_M=effective_eta_M)
+                         logits=logits, effective_lrs=effective_lrs)
         self.global_step += 1
         return logits, ce_loss, vfe, diagnostics
 

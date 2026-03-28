@@ -35,13 +35,16 @@ PURE_VFE_CONFIG = {
     'n_heads': 4,                     # H: number of attention heads
     # head_dim is derived: belief_dim // n_heads
 
-    # ── E-step (inference = forward pass) ─────────────────────────
+    # ── VFE descent ─────────────────────────────────────────────────
     'n_esteps': 6,                    # VFE descent iterations (depth)
     'tau': None,                      # Attention temperature (None → √head_dim)
-    'eta_E': 0.1,                     # E-step natural gradient step size
 
-    # ── M-step (learning = parameter update) ──────────────────────
-    'eta_M': 0.001,                   # M-step natural gradient step size
+    # ── Per-variable natural gradient learning rates ──────────────
+    'mu_q_lr': 0.1,                   # Belief mean step size
+    'sigma_q_lr': 0.005,              # Belief covariance step size
+    'phi_lr': 0.1,                    # Gauge connection step size
+    'mu_p_lr': 0.001,                 # Prior mean step size
+    'sigma_p_lr': 0.0002,             # Prior covariance step size
 
     # ── Prior precision ───────────────────────────────────────────
     'alpha_b0': 1.0,                  # Denominator offset
@@ -97,8 +100,11 @@ def build_config(cfg):
         'head_dim':           head_dim,
         'n_esteps':           cfg['n_esteps'],
         'tau':                cfg['tau'],
-        'eta_E':              cfg['eta_E'],
-        'eta_M':              cfg['eta_M'],
+        'mu_q_lr':            cfg['mu_q_lr'],
+        'sigma_q_lr':         cfg['sigma_q_lr'],
+        'phi_lr':             cfg['phi_lr'],
+        'mu_p_lr':            cfg['mu_p_lr'],
+        'sigma_p_lr':         cfg['sigma_p_lr'],
         'alpha_b0':           cfg['alpha_b0'],
         'alpha_c0':           cfg['alpha_c0'],
         'hyper_var':          cfg['hyper_var'],
@@ -170,7 +176,8 @@ def main(cfg=None):
     print(f"  dataset={dataset_name}")
     print(f"  belief_dim={config.belief_dim}  n_heads={config.n_heads}  head_dim={config.head_dim}")
     print(f"  n_esteps={config.n_esteps}  tau={config.tau if config.tau is None else f'{config.tau:.2f}'}")
-    print(f"  eta_E={config.eta_E}  eta_M={config.eta_M}")
+    print(f"  mu_q_lr={config.mu_q_lr}  sigma_q_lr={config.sigma_q_lr}  phi_lr={config.phi_lr}")
+    print(f"  mu_p_lr={config.mu_p_lr}  sigma_p_lr={config.sigma_p_lr}")
     print(f"  device={device}  params={params['total']:,}")
     for k, v in params.items():
         if k != "total":
