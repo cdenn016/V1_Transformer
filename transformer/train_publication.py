@@ -2809,8 +2809,6 @@ def _save_pure_vfe_figures(model, val_loader, device, step, attn_dir,
                 input_ids = batch[0][:4].to(device)
                 B_h, N_h = input_ids.shape
                 Omega_h = model.prior_Omega[input_ids].clone()
-                pos_Om_h = model.pos_Omega[:N_h].unsqueeze(0).expand(B_h, -1, -1, -1, -1)
-                Omega_h = Omega_h @ pos_Om_h
 
                 holonomy = _compute_holonomy(
                     Omega_h, config.n_heads, config.head_dim

@@ -219,10 +219,8 @@ def e_step(token_ids, model, config, effective_lrs=None):
     mu = model.prior_mu[token_ids].clone()          # [B, N, K]
     Sigma = model.prior_Sigma[token_ids].clone()     # [B, N, K, K]
 
-    # Initialize gauge frames: token prior + positional composition
+    # Initialize gauge frames from token priors (position via RoPE)
     Omega = model.prior_Omega[token_ids].clone()     # [B, N, H, K_h, K_h]
-    pos_Om = model.pos_Omega[:N].unsqueeze(0).expand(B, -1, -1, -1, -1)
-    Omega = Omega @ pos_Om                           # Compose: Ω_token · Ω_pos
 
     # Prior references (fixed during E-step)
     prior_mu = model.prior_mu[token_ids]             # [B, N, K]
@@ -289,7 +287,7 @@ def e_step(token_ids, model, config, effective_lrs=None):
             )
             mu = prior_mu.clone()
             Sigma = model.prior_Sigma[token_ids].clone()
-            Omega = model.prior_Omega[token_ids].clone() @ pos_Om
+            Omega = model.prior_Omega[token_ids].clone()
             break
 
         # Select which precomp to use for KL/attention
@@ -449,7 +447,7 @@ def e_step(token_ids, model, config, effective_lrs=None):
             )
             mu = prior_mu.clone()
             Sigma = model.prior_Sigma[token_ids].clone()
-            Omega = model.prior_Omega[token_ids].clone() @ pos_Om
+            Omega = model.prior_Omega[token_ids].clone()
             break
 
     # --- Decode: logit_v = -KL(q_i || π_v) / τ_decode ---
