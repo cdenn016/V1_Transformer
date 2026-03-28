@@ -503,6 +503,9 @@ class GaugeTransformerLM(nn.Module):
         self._collect_layer_diagnostics = False
         self._layer_diagnostics: list = []
 
+        # VFE dynamics metrics collection (set externally by trainer)
+        self._collect_dynamics_metrics = False
+
         # Count parameters
         n_params = sum(p.numel() for p in self.parameters())
         print(f"GaugeTransformerLM initialized: {n_params/1e6:.2f}M parameters")
@@ -1163,6 +1166,113 @@ class GaugeTransformerLM(nn.Module):
         # Retrieve adaptive alpha_i from last block's FFN (if learnable_alpha enabled)
         alpha_i = getattr(last_block.ffn, '_last_alpha_i', None)
 
+        # =====================================================================
+        # Collect VFE gradient decomposition from last block's FFN
+        # =====================================================================
+        vfe_debug = None
+        for block in self.transformer.blocks:
+            _dbg = getattr(block.ffn, 'last_vfe_debug', None)
+            if _dbg is not None:
+                vfe_debug = _dbg  # Use last layer's debug (most informative)
+
+        # =====================================================================
+        # Compute transport operator & covariance health diagnostics
+        # =====================================================================
+        transport_metrics = {}
+        covariance_metrics = {}
+        if self._collect_dynamics_metrics:
+            with torch.no_grad():
+                # --- Covariance health ---
+                if sigma_q is not None:
+                    if sigma_q.dim() == 3:
+                        # Diagonal: (B, N, K)
+                        _sq = sigma_q.detach().float()
+                        covariance_metrics['sigma_q_mean'] = _sq.mean().item()
+                        covariance_metrics['sigma_q_min'] = _sq.min().item()
+                        covariance_metrics['sigma_q_max'] = _sq.max().item()
+                        covariance_metrics['sigma_q_std'] = _sq.std().item()
+                        # Condition number: max/min per position
+                        _cond = _sq.max(dim=-1).values / _sq.min(dim=-1).values.clamp(min=1e-8)
+                        covariance_metrics['sigma_q_cond_mean'] = _cond.mean().item()
+                        covariance_metrics['sigma_q_cond_max'] = _cond.max().item()
+                    else:
+                        # Full: (B, N, K, K)
+                        _sq_diag = torch.diagonal(sigma_q.detach().float(), dim1=-2, dim2=-1)
+                        covariance_metrics['sigma_q_mean'] = _sq_diag.mean().item()
+                        covariance_metrics['sigma_q_min'] = _sq_diag.min().item()
+                        covariance_metrics['sigma_q_max'] = _sq_diag.max().item()
+                        covariance_metrics['sigma_q_std'] = _sq_diag.std().item()
+                        _cond = _sq_diag.max(dim=-1).values / _sq_diag.min(dim=-1).values.clamp(min=1e-8)
+                        covariance_metrics['sigma_q_cond_mean'] = _cond.mean().item()
+                        covariance_metrics['sigma_q_cond_max'] = _cond.max().item()
+                if sigma_prior is not None:
+                    if sigma_prior.dim() == 3:
+                        _sp = sigma_prior.detach().float()
+                        covariance_metrics['sigma_p_mean'] = _sp.mean().item()
+                        covariance_metrics['sigma_p_min'] = _sp.min().item()
+                        covariance_metrics['sigma_p_max'] = _sp.max().item()
+                    else:
+                        _sp_diag = torch.diagonal(sigma_prior.detach().float(), dim1=-2, dim2=-1)
+                        covariance_metrics['sigma_p_mean'] = _sp_diag.mean().item()
+                        covariance_metrics['sigma_p_min'] = _sp_diag.min().item()
+                        covariance_metrics['sigma_p_max'] = _sp_diag.max().item()
+
+                # --- Prior-belief gap: per-position KL(q*||p) ---
+                if mu_q is not None and mu_prior is not None and sigma_q is not None and sigma_prior is not None:
+                    _mq = mu_q.detach().float()
+                    _mp = mu_prior.detach().float()
+                    if sigma_q.dim() == 3 and sigma_prior.dim() == 3:
+                        _sq = sigma_q.detach().float().clamp(min=1e-8)
+                        _sp = sigma_prior.detach().float().clamp(min=1e-8)
+                        K = _sq.shape[-1]
+                        # Diagonal Gaussian KL: 0.5 * [tr(Sp^{-1}Sq) + (mp-mq)^T Sp^{-1}(mp-mq) - K + ln(|Sp|/|Sq|)]
+                        ratio = _sq / _sp  # (B, N, K)
+                        diff = _mp - _mq
+                        mahal = (diff ** 2 / _sp).sum(dim=-1)  # (B, N)
+                        kl_per_pos = 0.5 * (ratio.sum(dim=-1) + mahal - K + (_sp.log() - _sq.log()).sum(dim=-1))
+                        covariance_metrics['prior_belief_kl_mean'] = kl_per_pos.mean().item()
+                        covariance_metrics['prior_belief_kl_max'] = kl_per_pos.max().item()
+                        covariance_metrics['prior_belief_kl_std'] = kl_per_pos.std().item()
+
+                # --- Transport proxy: phi norm statistics ---
+                # ||φ_i - φ_j|| governs how far Ω_ij deviates from identity.
+                # Large phi norms → large transport deviations.
+                _phi_final = (phi_ffn if phi_ffn is not None else phi).detach().float()
+                _phi_norms = _phi_final.norm(dim=-1)  # (B, N)
+                transport_metrics['phi_norm_mean'] = _phi_norms.mean().item()
+                transport_metrics['phi_norm_std'] = _phi_norms.std().item()
+                transport_metrics['phi_norm_max'] = _phi_norms.max().item()
+                # Pairwise phi distance (sample to avoid O(N²) cost)
+                _N = _phi_final.shape[1]
+                _n_sample = min(32, _N)
+                _idx = torch.randperm(_N, device=_phi_final.device)[:_n_sample]
+                _phi_sample = _phi_final[:, _idx]  # (B, n_sample, phi_dim)
+                _phi_diff = _phi_sample.unsqueeze(2) - _phi_sample.unsqueeze(1)  # (B, n_s, n_s, phi_dim)
+                _pair_dist = _phi_diff.norm(dim=-1)  # (B, n_s, n_s)
+                transport_metrics['phi_pairwise_dist_mean'] = _pair_dist.mean().item()
+                transport_metrics['phi_pairwise_dist_max'] = _pair_dist.max().item()
+
+                # --- Attention information-theoretic metrics ---
+                if stacked_beta is not None:
+                    _beta_d = stacked_beta.detach().float().clamp(min=1e-10)
+                    # Per-head entropy: H(β_i) = -Σ_j β_ij log β_ij
+                    _entropy = -(_beta_d * _beta_d.log()).sum(dim=-1)  # (..., N)
+                    # Effective rank via nuclear norm / max singular value
+                    _beta_last = _beta_d[-1, 0]  # (n_heads, N, N) - last layer, first batch
+                    # Per-head entropy statistics
+                    _h_per_head = _entropy[-1, 0].mean(dim=-1)  # (n_heads,)
+                    transport_metrics['attn_entropy_per_head_mean'] = _h_per_head.mean().item()
+                    transport_metrics['attn_entropy_per_head_std'] = _h_per_head.std().item()
+                    transport_metrics['attn_entropy_per_head_min'] = _h_per_head.min().item()
+                    transport_metrics['attn_entropy_per_head_max'] = _h_per_head.max().item()
+                    # Head diversity: std of per-head mean attention patterns
+                    _head_means = _beta_last.mean(dim=1)  # (n_heads, N)
+                    _head_corr = torch.corrcoef(_head_means) if _head_means.shape[0] > 1 else None
+                    if _head_corr is not None:
+                        # Mean off-diagonal correlation (lower = more diverse)
+                        _mask = ~torch.eye(_head_corr.shape[0], dtype=torch.bool, device=_head_corr.device)
+                        transport_metrics['head_correlation_mean'] = _head_corr[_mask].mean().item()
+
         attention_info = {
             'beta': stacked_beta,      # (n_layers, B, n_heads, N, N)
             'kl': stacked_kl,          # (n_layers, B, n_heads, N, N)
@@ -1180,6 +1290,11 @@ class GaugeTransformerLM(nn.Module):
             'alpha_i': alpha_i,          # (B, N, K) or None
             # Auxiliary per-layer CE losses (M-step signal for non-final layers)
             'aux_losses': aux_losses,    # List of scalar tensors, one per non-final layer
+            # VFE gradient decomposition (from last layer's E-step)
+            'vfe_debug': vfe_debug,      # Dict or None
+            # Transport & covariance health
+            'transport_metrics': transport_metrics,
+            'covariance_metrics': covariance_metrics,
         }
 
         return logits, attention_info

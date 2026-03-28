@@ -2566,6 +2566,11 @@ class VariationalFFNDynamic(nn.Module):
         # Shows self-coupling, alignment, softmax, obs, Euclidean total, nat_grad amplification.
         self._debug_vfe_gradients: bool = False
 
+        # Lightweight VFE gradient decomposition (always stored when _collect_vfe_metrics=True).
+        # Populated from _VFE_GRAD_DEBUG at end of E-step; readable after forward().
+        self._collect_vfe_metrics: bool = False
+        self.last_vfe_debug: Optional[Dict[str, float]] = None
+
         # DEQ implicit differentiation
         self.use_deq = use_deq
         self.deq_neumann_terms = deq_neumann_terms
@@ -3637,7 +3642,7 @@ class VariationalFFNDynamic(nn.Module):
 
             # Enable/disable VFE gradient debug dict for this iteration
             global _VFE_GRAD_DEBUG
-            if self._debug_vfe_gradients:
+            if self._debug_vfe_gradients or self._collect_vfe_metrics:
                 _VFE_GRAD_DEBUG = {}
             else:
                 _VFE_GRAD_DEBUG = None
@@ -4196,6 +4201,11 @@ class VariationalFFNDynamic(nn.Module):
                       f"  ({_sig_clip_frac*100:.0f}% positions at cap)")
                 print(f"{'='*80}\n")
                 _VFE_GRAD_DEBUG = None  # Reset for next iteration
+
+            # Store lightweight copy for external consumption (no printing overhead)
+            if self._collect_vfe_metrics and _VFE_GRAD_DEBUG is not None:
+                self.last_vfe_debug = dict(_VFE_GRAD_DEBUG)
+                _VFE_GRAD_DEBUG = None
 
             # =================================================================
             # STEP 4: Update beliefs (E-step) with WHITENED trust region
