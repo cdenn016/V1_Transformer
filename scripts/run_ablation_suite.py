@@ -120,6 +120,14 @@ BASELINE_CONFIG = {
     'attention_lr': 0.005,
     'output_lr': 0.05,
 
+    # E-step learning rates
+    'e_step_mu_lr': 0.1,
+    'e_step_sigma_lr': 0.05,
+    'e_step_phi_lr': 0.05,
+
+    # Embedding weight decay (hyper-prior)
+    'embed_weight_decay': 0.01,
+
     # Free energy loss weights
     'alpha': 0.0,
     'alpha_phi': 0.1,
@@ -347,6 +355,43 @@ SWEEPS = {
         'values': [0.005, 0.01, 0.02, 0.05, 0.1, 0.2],
         'baseline_value': 0.05,
     },
+
+    # --- Tier 8: E-step learning rates ---
+    'e_step_mu_lr': {
+        'description': 'E-step μ natural gradient step size',
+        'param': 'e_step_mu_lr',
+        'values': [0.01, 0.05, 0.1, 0.2, 0.5, 1.0],
+        'baseline_value': 0.1,
+    },
+
+    'e_step_sigma_lr': {
+        'description': 'E-step σ trust region scale',
+        'param': 'e_step_sigma_lr',
+        'values': [0.005, 0.01, 0.05, 0.1, 0.2, 0.5],
+        'baseline_value': 0.05,
+    },
+
+    'e_step_phi_lr': {
+        'description': 'E-step φ gauge frame step size',
+        'param': 'e_step_phi_lr',
+        'values': [0.01, 0.05, 0.1, 0.2, 0.5, 1.0],
+        'baseline_value': 0.05,
+    },
+
+    # --- Tier 9: Regularization ---
+    'embed_weight_decay': {
+        'description': 'Weight decay on embedding parameters (hyper-prior precision)',
+        'param': 'embed_weight_decay',
+        'values': [0.0, 0.001, 0.005, 0.01, 0.02, 0.05, 0.1],
+        'baseline_value': 0.01,
+    },
+
+    'weight_decay': {
+        'description': 'Weight decay on non-embedding parameters',
+        'param': 'weight_decay',
+        'values': [0.0, 0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2],
+        'baseline_value': 0.01,
+    },
 }
 
 # Sweep execution order (cheapest → most expensive)
@@ -377,6 +422,15 @@ SWEEP_ORDER = [
     #'ffn_lr',
     #'mu_lr',
     #'rope',
+
+    # E-step LRs
+    #'e_step_mu_lr',
+    #'e_step_sigma_lr',
+    #'e_step_phi_lr',
+
+    # Regularization
+    #'embed_weight_decay',
+    #'weight_decay',
 ]
 
 
