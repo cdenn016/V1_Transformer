@@ -986,6 +986,12 @@ class PublicationMetricsTracker:
 
             # Numerical fallback counters
             'num_chol_recover', 'num_chol_fail', 'num_nan_replace', 'num_inv_pinv',
+
+            # Phi embedding spectral diagnostics
+            'phi_effective_rank', 'phi_rank_ratio',
+            'phi_top1_variance_fraction', 'phi_top5_variance_fraction',
+            'phi_spectral_gap', 'phi_frobenius_norm',
+            'phi_mean_token_norm', 'phi_std_token_norm',
         ]
 
         with open(self.save_path, 'w', newline='') as f:
