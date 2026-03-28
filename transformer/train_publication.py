@@ -146,30 +146,30 @@ _DEBUG_VFE_GRADS = False
 EM_CONFIG = {
     # === Architecture ===
     'vocab_size':            50257,
-    'embed_dim':             10,
+    'embed_dim':             90,
     'max_seq_len':           128,
     
-    'batch_size':            64, 
-    'max_steps':             15000,
+    'batch_size':            16, 
+    'max_steps':             60000,
     
-    'n_layers':              1,
+    'n_layers':              2,
     'ffn_n_iterations':      1,
     
     'gauge_dim':                          10,
-    'irrep_spec':            [('fund', 1, 10)],
+    'irrep_spec':            [('fund', 9, 10)],
 
     'use_prior_bank':        False,
     'mask_self_attention':   False,  # Prevent attention collapse?
   
     # === M-step: implicit differentiation ===
-    'implicit_em':           True,
-    'amortized_inference':   False,
+    'implicit_em':           False,
+    'amortized_inference':   True,
     'use_obs_in_vfe':        False,  #cheats when true
        
     # === M-step: Optimizer ===  
-    'optimizer_type':        'natural_gradient',# or 'natural_gradient' or 'adamw' or 'riemannian_adam'
+    'optimizer_type':        'riemannian_adam',# or 'natural_gradient' or 'adamw' or 'riemannian_adam'
     'fisher_ema_decay':      0.95,            # for natural_gradient
-    'fisher_damping':        1e-4,              # for natural_gradient
+    'fisher_damping':        1e-2,              # for natural_gradient
 
     
     'use_layernorm':         True,
@@ -213,7 +213,7 @@ EM_CONFIG = {
     # alpha=0: KL(q*||p) homogenizes (q* is smoothed, not data-grounded).
     # beta=0: alignment term is vacuum-seeking. E-step handles it internally.
     
-    'alpha':               0.0,
+    'alpha':               0.00,
     'beta':                0.0,
     'alpha_phi':           0.1,            # Gauge prior: (α_φ/2)||φ||²
     'lambda_hyper':        0.0,            # KL(s||h) with fixed Σ_h set if if using embed-weight-decay 
@@ -230,6 +230,7 @@ EM_CONFIG = {
 
     # === Position encoding ===
     'use_rope':           True,
+    'rope_base':          1000, 
     'pos_encoding_mode': 'none',
 
     # === Embedding init ===
@@ -239,7 +240,6 @@ EM_CONFIG = {
     'mu_normalize':    False,
     'mu_max_norm':     None,
 
-    
 
     # === M-step learning rates (AdamW parameter groups) ===
     # These update nn.Parameter objects via backprop. The E-step (inner VFE
@@ -260,9 +260,8 @@ EM_CONFIG = {
     'checkpoint_interval':        25000,
     'semantic_analysis_interval': 10000,
 
-
     'use_deq':           False,
-    'deq_include_phi':   True,    # NEW: corrects M-step phi gradient
+    'deq_include_phi':   True,    # Corrects M-step phi gradient
     'deq_neumann_terms': 0,
 
     # =================================================================
@@ -274,6 +273,7 @@ EM_CONFIG = {
     # δ_ij is zero-initialized so the model starts flat and learns
     # curvature only where the data warrants it.
     # Holonomy H_ijk = Ω_ij·Ω_jk·Ω_ki ≠ I when δ ≠ 0.
+    
     'non_flat_transport':    False,        # Enable edge-dependent connection δ_ij
     'cocycle_relaxation':    0.5,          # Scale for δ_ij: 0=flat, 1=fully non-flat    
     'connection_type':       'bilinear',  # 'bilinear' (δ_ij^a = μ_i^T W^a μ_j) | 'mlp'   
@@ -302,6 +302,7 @@ EM_CONFIG = {
 
 
 }
+
 
 
 # =============================================================================
