@@ -1062,6 +1062,16 @@ class PublicationMetricsTracker:
             'num_chol_fail': metrics.get('num/chol_fail', 0),
             'num_nan_replace': metrics.get('num/nan_replace', 0),
             'num_inv_pinv': metrics.get('num/inv_pinv', 0),
+
+            # Phi embedding spectral diagnostics
+            'phi_effective_rank': metrics.get('phi/effective_rank'),
+            'phi_rank_ratio': metrics.get('phi/rank_ratio'),
+            'phi_top1_variance_fraction': metrics.get('phi/top1_variance_fraction'),
+            'phi_top5_variance_fraction': metrics.get('phi/top5_variance_fraction'),
+            'phi_spectral_gap': metrics.get('phi/spectral_gap'),
+            'phi_frobenius_norm': metrics.get('phi/frobenius_norm'),
+            'phi_mean_token_norm': metrics.get('phi/mean_token_norm'),
+            'phi_std_token_norm': metrics.get('phi/std_token_norm'),
         }
 
         self.history.append(entry)
@@ -1228,6 +1238,82 @@ class PublicationTrainer(FastTrainer):
             for _ in range(num_heads):
                 labels.append(irrep_name)
         return labels
+
+    @torch.no_grad()
+    def _compute_phi_diagnostics(self) -> Dict[str, float]:
+        r"""Compute effective rank and spectral diagnostics of the phi embedding matrix.
+
+        The phi embedding matrix \Phi \in \mathbb{R}^{V \times d_\phi} maps each
+        vocabulary token to a Lie algebra coefficient vector. Its singular value
+        spectrum reveals whether the gauge frames exploit the full algebra or
+        collapse to a low-dimensional subspace (overfitting signature).
+
+        Metrics returned:
+            phi/effective_rank: exp(H(\hat\sigma)) where \hat\sigma_i = \sigma_i / \sum \sigma_j.
+                Ranges from 1 (rank-1) to min(V, d_phi) (full rank). Values much
+                smaller than d_phi indicate the frames live in a low-dimensional
+                subspace and may be memorizing rather than learning structure.
+            phi/rank_ratio: effective_rank / min(V, d_phi). Fraction of available
+                dimensions actually used. < 0.3 is suspicious.
+            phi/top1_variance_fraction: \sigma_1^2 / \sum \sigma_i^2. If close to 1,
+                almost all phi variation is along a single direction.
+            phi/top5_variance_fraction: \sum_{i=1}^{5} \sigma_i^2 / \sum \sigma_i^2.
+            phi/spectral_gap: \sigma_1 / \sigma_2. Large gap means a dominant mode.
+            phi/frobenius_norm: ||\Phi||_F. Tracks overall magnitude growth.
+            phi/mean_token_norm: mean ||\phi_v||_2 across vocabulary.
+            phi/std_token_norm: std of ||\phi_v||_2. Low std = uniform norms (healthy).
+        """
+        # Find the phi embedding weight
+        phi_weight = None
+        if hasattr(self.model, 'token_embed') and hasattr(self.model.token_embed, 'phi_embed'):
+            phi_weight = self.model.token_embed.phi_embed.weight  # (V, phi_dim)
+        elif hasattr(self.model, 'prior_bank') and self.model.prior_bank is not None:
+            if hasattr(self.model.prior_bank, 'phi_embed'):
+                phi_weight = self.model.prior_bank.phi_embed.weight
+
+        if phi_weight is None:
+            return {}
+
+        # (V, phi_dim) — work in float32 for numerical stability
+        W = phi_weight.detach().float()
+        V, d = W.shape
+
+        # SVD (only need singular values for most metrics; compute thin U/S/V)
+        # For large V, use the smaller dimension: SVD of W^T W or W W^T
+        S = torch.linalg.svdvals(W)  # descending order, length = min(V, d)
+
+        # Effective rank: exp(entropy of normalized singular values)
+        # Roy & Bhattacharyya (2007): "Effective Rank"
+        S_pos = S[S > 1e-12]  # filter numerical zeros
+        p = S_pos / S_pos.sum()  # normalize to probability distribution
+        entropy = -(p * p.log()).sum().item()
+        effective_rank = math.exp(entropy)
+        max_rank = min(V, d)
+        rank_ratio = effective_rank / max_rank
+
+        # Variance fractions (sigma^2 proportions)
+        S_sq = S_pos ** 2
+        total_var = S_sq.sum().item()
+        top1_var_frac = (S_sq[0] / total_var).item() if total_var > 0 else 0.0
+        top5_var_frac = (S_sq[:5].sum() / total_var).item() if total_var > 0 else 0.0
+
+        # Spectral gap
+        spectral_gap = (S[0] / S[1]).item() if len(S_pos) >= 2 else float('inf')
+
+        # Norm statistics
+        token_norms = W.norm(dim=1)  # (V,)
+        frob_norm = W.norm().item()
+
+        return {
+            'phi/effective_rank': effective_rank,
+            'phi/rank_ratio': rank_ratio,
+            'phi/top1_variance_fraction': top1_var_frac,
+            'phi/top5_variance_fraction': top5_var_frac,
+            'phi/spectral_gap': spectral_gap,
+            'phi/frobenius_norm': frob_norm,
+            'phi/mean_token_norm': token_norms.mean().item(),
+            'phi/std_token_norm': token_norms.std().item(),
+        }
 
     def _setup_cjk_fonts(self, plt):
         """Configure matplotlib to render CJK (Japanese/Chinese/Korean) characters."""
@@ -1878,6 +1964,10 @@ class PublicationTrainer(FastTrainer):
                 for _nk, _nv in _num_events.items():
                     metrics[f'num/{_nk}'] = _nv
 
+                # Phi embedding spectral diagnostics (effective rank, variance fractions)
+                phi_diag = self._compute_phi_diagnostics()
+                metrics.update(phi_diag)
+
                 batch_size = batch[0].shape[0]
                 seq_len = batch[0].shape[1]
                 self.metrics_tracker.log_step(
@@ -1931,14 +2021,17 @@ class PublicationTrainer(FastTrainer):
                                    f"nat_sig: {e_step_norms['nat_grad_sigma']:.3e} (cap: {_sig_cap:.0f}%) | "
                                    f"phi: {e_step_norms['grad_phi']:.3e} | "
                                    f"trust: {_mu_tr:.0f}% (wh: {_wh_mean:.3f}/{_wh_max:.3f})\n")
-                    # Print Bayesian alpha diagnostics
-       #             if metrics.get('bayesian/alpha_mean') is not None:
-        #                tqdm.write(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
-          #                         f"std: { metrics['bayesian/alpha_std']:.4f} | "
-           #                        f"range: [{ metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
-            #                       f"c0: { metrics['bayesian/c0']:.4f}±{metrics.get('bayesian/c0_std', 0):.4f} | "
-             #                      f"b0: { metrics['bayesian/b0']:.4f}±{metrics.get('bayesian/b0_std', 0):.4f} | "
-              #                     f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}")
+                    # Phi embedding spectral diagnostics
+                    if phi_diag:
+                        _erank = phi_diag['phi/effective_rank']
+                        _rratio = phi_diag['phi/rank_ratio']
+                        _top1 = phi_diag['phi/top1_variance_fraction']
+                        _top5 = phi_diag['phi/top5_variance_fraction']
+                        _sgap = phi_diag['phi/spectral_gap']
+                        _mnorm = phi_diag['phi/mean_token_norm']
+                        tqdm.write(f"  [PHI] eff_rank: {_erank:.1f} ({_rratio:.1%} of max) | "
+                                   f"top1σ²: {_top1:.1%} top5σ²: {_top5:.1%} | "
+                                   f"gap: {_sgap:.2f} | ||φ||: {_mnorm:.3f}")
                 else:
                     print(log_msg)
                     if grad_norms:
@@ -1955,13 +2048,17 @@ class PublicationTrainer(FastTrainer):
                               f"nat_sig: {e_step_norms['nat_grad_sigma']:.3e} (cap: {_sig_cap:.0f}%) | "
                               f"phi: {e_step_norms['grad_phi']:.3e} | "
                               f"trust: {_mu_tr:.0f}% (wh: {_wh_mean:.3f}/{_wh_max:.3f})\n")
-     #               if metrics.get('bayesian/alpha_mean') is not None:
-      #                  print(f"  [ALPHA] mean: {metrics['bayesian/alpha_mean']:.4f} | "
-       #                       f"std: {metrics['bayesian/alpha_std']:.4f} | "
-        #                      f"range: [{metrics['bayesian/alpha_min']:.4f}, {metrics['bayesian/alpha_max']:.4f}] | "
-         #                     f"c0: { metrics['bayesian/c0']:.4f}±{metrics.get('bayesian/c0_std', 0):.4f} | "
-          #                    f"b0: { metrics['bayesian/b0']:.4f}±{metrics.get('bayesian/b0_std', 0):.4f} | "
-           #                   f"mahal: {metrics['bayesian/mahal_sq_mean']:.4f}\n\n")
+                    # Phi embedding spectral diagnostics
+                    if phi_diag:
+                        _erank = phi_diag['phi/effective_rank']
+                        _rratio = phi_diag['phi/rank_ratio']
+                        _top1 = phi_diag['phi/top1_variance_fraction']
+                        _top5 = phi_diag['phi/top5_variance_fraction']
+                        _sgap = phi_diag['phi/spectral_gap']
+                        _mnorm = phi_diag['phi/mean_token_norm']
+                        print(f"  [PHI] eff_rank: {_erank:.1f} ({_rratio:.1%} of max) | "
+                              f"top1σ²: {_top1:.1%} top5σ²: {_top5:.1%} | "
+                              f"gap: {_sgap:.2f} | ||φ||: {_mnorm:.3f}")
 
                 # Report numerical fallback counters if any fired
                 if _num_events:
