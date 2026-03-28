@@ -60,6 +60,8 @@ try:
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
+from transformer.visualization.pub_style import set_pub_style
+
 def _safe_write_image(fig, path, scale=2):
     """Write Plotly figure to PNG, silently skipping if Chrome is unavailable."""
     try:
@@ -215,7 +217,7 @@ def plot_belief_space_3d(
         ))
 
     fig.update_layout(
-        title=dict(text=title, font=dict(size=16)),
+        title=dict(text=title, font=dict(size=16, family='serif')),
         scene=dict(
             xaxis_title='UMAP 1',
             yaxis_title='UMAP 2',
@@ -300,7 +302,7 @@ def plot_multi_space_comparison(
             ), row=1, col=col_idx)
 
     fig.update_layout(
-        title=dict(text="Multi-Space UMAP Comparison: μ vs Σ vs φ", font=dict(size=16)),
+        title=dict(text="Multi-Space UMAP Comparison: μ vs Σ vs φ", font=dict(size=16, family='serif')),
         height=500,
         width=1400,
         legend=dict(title='Category'),
@@ -401,6 +403,7 @@ def plot_silhouette_analysis(
         return None
 
     unique_cats = sorted(set(categories))
+    set_pub_style()
     cat_to_int = {c: i for i, c in enumerate(unique_cats)}
     labels = np.array([cat_to_int[c] for c in categories])
 
@@ -556,7 +559,7 @@ def plot_discovered_clusters_3d(
         ))
 
     fig.update_layout(
-        title=dict(text=title, font=dict(size=16)),
+        title=dict(text=title, font=dict(size=16, family='serif')),
         scene=dict(
             xaxis_title='UMAP 1',
             yaxis_title='UMAP 2',
@@ -832,7 +835,7 @@ def plot_attention_belief_heatmap(
         fig.add_trace(heatmap)
 
     fig.update_layout(
-        title=dict(text=title, font=dict(size=16)),
+        title=dict(text=title, font=dict(size=16, family='serif')),
         height=600,
         width=900,
     )

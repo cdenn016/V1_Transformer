@@ -19,6 +19,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from transformer.utils.checkpoint import load_model, get_tokenizer
+from transformer.visualization.pub_style import set_pub_style
 
 
 # Define test tokens organized by semantic category
@@ -122,6 +123,8 @@ def visualize_belief_space(mu_embeddings, valid_tokens, token_categories,
         method: 'pca' or 'tsne'
         save_path: Optional path to save figure
     """
+    set_pub_style()
+
     # Dimensionality reduction
     if method == 'pca':
         reducer = PCA(n_components=2)
@@ -170,7 +173,7 @@ def visualize_belief_space(mu_embeddings, valid_tokens, token_categories,
     plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"✓ Saved to {save_path}")
 
     return fig

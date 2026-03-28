@@ -35,6 +35,8 @@ try:
 except ImportError:
     torch = None
 
+from transformer.visualization.pub_style import set_pub_style, PUB_COLORS
+
 
 # =============================================================================
 # Publication Style
@@ -58,6 +60,8 @@ HOLONOMY_STYLE = {
     'savefig.dpi': 300,
     'savefig.bbox': 'tight',
     'savefig.pad_inches': 0.1,
+    'axes.spines.top': False,
+    'axes.spines.right': False,
 }
 
 # Colorblind-safe palette (Okabe-Ito)
@@ -75,6 +79,7 @@ COLORS = {
 
 def _apply_style():
     if MATPLOTLIB_AVAILABLE:
+        set_pub_style()
         plt.rcParams.update(HOLONOMY_STYLE)
 
 

@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
 from transformer.core.model import GaugeTransformerLM
+from transformer.visualization.pub_style import set_pub_style
 
 def visualize_per_head_attention():
     """Visualize KL-divergence attention for each head separately.
@@ -26,6 +27,8 @@ def visualize_per_head_attention():
     Attention weights beta are derived from pairwise KL divergences between
     gauge-transported belief distributions, not from dot-product scores.
     """
+
+    set_pub_style()
 
     # Simple model
     config = {
@@ -160,7 +163,7 @@ def visualize_per_head_attention():
 
     plt.suptitle('Per-Head Attention Analysis', fontsize=16, fontweight='bold')
 
-    plt.savefig('attention_heads_separate.png', dpi=200, bbox_inches='tight')
+    plt.savefig('attention_heads_separate.png', dpi=300, bbox_inches='tight')
     print(f"\nSaved: attention_heads_separate.png")
 
     # Print diagnostic summary

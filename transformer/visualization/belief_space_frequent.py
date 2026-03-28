@@ -26,6 +26,7 @@ from collections import Counter
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from transformer.utils.checkpoint import load_model
+from transformer.visualization.pub_style import set_pub_style
 
 
 def get_frequent_tokens(n_tokens=100, dataset='wikitext-2'):
@@ -175,6 +176,8 @@ def visualize_frequent_tokens(mu_embeddings, decoded_tokens, frequencies,
         matplotlib Figure.
     """
 
+    set_pub_style()
+
     # Dimensionality reduction
     if method == 'pca':
         reducer = PCA(n_components=2)
@@ -239,7 +242,7 @@ def visualize_frequent_tokens(mu_embeddings, decoded_tokens, frequencies,
     plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"✓ Saved to {save_path}")
 
     return fig
