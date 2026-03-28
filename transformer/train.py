@@ -256,6 +256,7 @@ def compute_free_energy_loss(
     pad_token_id: int = -100,     # Token ID to ignore in loss (padding)
     use_obs_in_vfe: bool = False, # Pass targets into VFE E-step (last layer only)
     alpha_phi: float = 0.0,       # Gauge prior weight: (α_φ/2) Σ_i ||φ_i||²
+    aux_loss_weight: float = 0.0, # Weight for auxiliary per-layer CE losses (0 = disabled)
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     Compute training loss (M-step objective in the hierarchical VFE).
@@ -500,10 +501,24 @@ def compute_free_energy_loss(
         gauge_prior_loss = torch.tensor(0.0, device=ce_loss.device)
 
     # =================================================================
+    # 7. Auxiliary Per-Layer CE Loss (M-step task signal for non-final layers)
+    # =================================================================
+    # Computed AFTER each non-final layer's E-step on its output μ. Enters
+    # through standard backprop (M-step), NOT through the E-step. Gives
+    # non-final layers a task-relevant gradient signal for feature composition.
+    aux_losses = attn_info.get('aux_losses', [])
+    if aux_losses and aux_loss_weight > 0:
+        aux_layer_ce = sum(aux_losses) / len(aux_losses)
+        aux_loss = aux_loss_weight * aux_layer_ce
+    else:
+        aux_loss = torch.tensor(0.0, device=ce_loss.device)
+
+    # =================================================================
     # Total Training Loss (CE + optional auxiliary VFE regularizers)
     # =================================================================
     total_loss = (ce_loss + belief_align_loss + self_consistency_loss
-                  + model_align_loss + hyper_prior_loss + gauge_prior_loss)
+                  + model_align_loss + hyper_prior_loss + gauge_prior_loss
+                  + aux_loss)
 
     # Compute attention metrics outside the computation graph
     with torch.no_grad():
@@ -521,6 +536,7 @@ def compute_free_energy_loss(
         'loss/model_coupling': model_align_loss.item() if lambda_gamma > 0 else 0.0,
         'loss/hyper_prior': hyper_prior_loss.item() if lambda_hyper > 0 else 0.0,
         'loss/gauge_prior': gauge_prior_loss.item() if alpha_phi > 0 else 0.0,
+        'loss/aux_layer_ce': aux_loss.item() if aux_losses else 0.0,
         'attention/beta_mean': beta.mean().item(),
         'attention/kl_mean': kl.mean().item(),
         'attention/entropy': attn_entropy.item(),

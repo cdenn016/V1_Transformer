@@ -133,6 +133,11 @@ class TrainingConfig:
     obs_sigma_gradient: bool = True  # ∂E_q[CE]/∂σ Hessian-diagonal obs gradient for sigma
     obs_sigma_weight: float = 1.0     # Weight for sigma observation gradient
 
+    # Multi-layer depth signal
+    aux_layer_loss: bool = False     # Per-layer auxiliary CE loss (M-step task signal for non-final layers)
+    aux_loss_weight: float = 0.3     # Weight for auxiliary per-layer CE losses
+    sigma_residual: bool = False     # Additive σ residual across layers (instead of replacement)
+
     # ==========================================================================
     # Training Loop
     # ==========================================================================

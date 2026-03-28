@@ -124,6 +124,11 @@ class BlockConfig:
     use_layernorm: bool = True         # LayerNorm on means (False for pure VFE ablation)
     use_residual: bool = True          # Residual connections (False for pure VFE ablation)
 
+    # === Multi-layer depth signal ===
+    aux_layer_loss: bool = False       # Per-layer auxiliary CE loss (M-step task signal for non-final layers)
+    aux_loss_weight: float = 0.3       # Weight for auxiliary per-layer CE losses
+    sigma_residual: bool = False       # Additive σ residual across layers (instead of replacement)
+
     # === Non-serializable objects (set after construction) ===
     # These are torch tensors / nn.Modules that can't be part of a plain dataclass default.
     # Passed via from_config() or set directly after construction.
@@ -217,6 +222,10 @@ class BlockConfig:
             # Pure VFE mode
             use_layernorm=config.get('use_layernorm', True),
             use_residual=config.get('use_residual', True),
+            # Multi-layer depth signal
+            aux_layer_loss=config.get('aux_layer_loss', False),
+            aux_loss_weight=config.get('aux_loss_weight', 0.3),
+            sigma_residual=config.get('sigma_residual', False),
             # Non-serializable
             generators=generators,
             ffn_prior_bank=prior_bank,

@@ -104,6 +104,7 @@ class GaugeTransformerBlock(nn.Module):
         # Pure VFE mode flags
         self.use_layernorm = cfg.use_layernorm
         self.use_residual = cfg.use_residual
+        self.sigma_residual = getattr(cfg, 'sigma_residual', False)
 
         # =====================================================================
         # Attention Sublayer
@@ -337,7 +338,10 @@ class GaugeTransformerBlock(nn.Module):
 
         # Update covariances if evolving
         if self.evolve_sigma and sigma_attn is not None:
-            sigma_q = sigma_attn
+            if self.sigma_residual:
+                sigma_q = (sigma_q + sigma_attn).clamp(min=1e-4)
+            else:
+                sigma_q = sigma_attn
 
         # =====================================================================
         # 2. Feedforward Sublayer (with optional Pre-Norm + Residual)
@@ -364,7 +368,10 @@ class GaugeTransformerBlock(nn.Module):
 
         # Update covariances from FFN if evolving
         if self.evolve_sigma and sigma_ffn is not None:
-            sigma_q = sigma_ffn
+            if self.sigma_residual:
+                sigma_q = (sigma_q + sigma_ffn).clamp(min=1e-4)
+            else:
+                sigma_q = sigma_ffn
 
         # Per-layer sigma diagnostics (opt-in via model._debug_sigma = True)
         if getattr(self, '_debug_sigma', False) and sigma_q is not None:
