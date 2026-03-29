@@ -1262,7 +1262,7 @@ class GaugeTransformerLM(nn.Module):
                     # Per-head entropy statistics
                     _h_per_head = _entropy[-1, 0].mean(dim=-1)  # (n_heads,)
                     transport_metrics['attn_entropy_per_head_mean'] = _h_per_head.mean().item()
-                    transport_metrics['attn_entropy_per_head_std'] = _h_per_head.std().item()
+                    transport_metrics['attn_entropy_per_head_std'] = _h_per_head.std().item() if _h_per_head.numel() > 1 else 0.0
                     transport_metrics['attn_entropy_per_head_min'] = _h_per_head.min().item()
                     transport_metrics['attn_entropy_per_head_max'] = _h_per_head.max().item()
                     # Head diversity: std of per-head mean attention patterns
