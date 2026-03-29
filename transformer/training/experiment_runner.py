@@ -1194,6 +1194,12 @@ class PublicationTrainer(FastTrainer):
             if key in full_metrics:
                 metrics[key] = full_metrics[key]
 
+        # Carry over VFE gradient decomposition, covariance health,
+        # and transport/attention structure metrics for dashboard plots
+        for key, val in full_metrics.items():
+            if key.startswith(('vfe/', 'cov/', 'transport/')):
+                metrics[key] = val
+
         # =================================================================
         # LAYER/ITERATION DIAGNOSTICS: Debug multi-layer/multi-iteration
         # =================================================================
