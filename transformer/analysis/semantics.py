@@ -325,6 +325,7 @@ def compute_clustering_metrics(
     # --- Per-dimension ANOVA F-test ---
     try:
         from scipy.stats import f_oneway
+        import warnings as _w
         f_stats = []
         p_vals = []
         # Test each dimension: do category means differ?
@@ -334,10 +335,12 @@ def compute_clustering_metrics(
         for d in dim_indices:
             groups = [groups_per_dim[ci][:, d] for ci in range(len(valid_cats)) if len(groups_per_dim[ci]) >= 2]
             if len(groups) >= 2:
-                # Skip dimensions where all groups are constant (no variance)
-                if all(np.std(g) == 0.0 for g in groups):
+                # Skip dimensions where all groups are near-constant (no variance)
+                if all(np.std(g) < 1e-12 for g in groups):
                     continue
-                f, p = f_oneway(*groups)
+                with _w.catch_warnings():
+                    _w.simplefilter("ignore")
+                    f, p = f_oneway(*groups)
                 if np.isfinite(f) and np.isfinite(p):
                     f_stats.append(f)
                     p_vals.append(max(float(p), 1e-300))  # floor for log
@@ -1691,15 +1694,19 @@ def analyze_sigma_semantics(
     # ANOVA on trace across categories
     try:
         from scipy.stats import f_oneway
+        import warnings as _w
         groups = []
         for cat in sorted(set(categories)):
             idx = [i for i, c in enumerate(categories) if c == cat]
             if len(idx) >= 2:
                 groups.append(trace_per_token[idx])
-        if len(groups) >= 2:
-            f_stat, p_val = f_oneway(*groups)
-            results['sigma_trace_anova_f'] = float(f_stat)
-            results['sigma_trace_anova_p'] = float(p_val)
+        if len(groups) >= 2 and not all(np.std(g) < 1e-12 for g in groups):
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                f_stat, p_val = f_oneway(*groups)
+            if np.isfinite(f_stat):
+                results['sigma_trace_anova_f'] = float(f_stat)
+                results['sigma_trace_anova_p'] = float(p_val)
     except ImportError:
         pass
 
