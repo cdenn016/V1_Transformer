@@ -86,6 +86,48 @@ def _per_pos_stats(t: torch.Tensor) -> Tuple[float, float, float]:
     )
 
 
+def _aggregate_multihead_vfe_debug(d: Dict[str, float], irrep_dims) -> None:
+    r"""Aggregate per-head VFE debug metrics into base keys for plotting.
+
+    In multi-head VFE mode, gradient functions write base keys (e.g. ``grad_mu_self``)
+    which are then renamed to ``headN(d=M)/grad_mu_self`` per head.  Downstream CSV
+    logging and plotting expect the base keys.  This function adds them in-place:
+
+    - Gradient norms: :math:`\sqrt{\sum_h d_h \|\nabla_h\|^2 / K}` (RMS over
+      orthogonal blocks, weighted by head dimension :math:`d_h`).
+    - ``kl_pairwise_mean``, ``kappa_scaled``: dimension-weighted mean across heads.
+    - ``kl_pairwise_max``: max across heads.
+    """
+    head_keys = [k for k in d if '/' in k]
+    if not head_keys:
+        return
+    base_names = set(k.split('/', 1)[1] for k in head_keys)
+    heads = sorted(
+        set(k.split('/')[0] for k in head_keys),
+        key=lambda x: int(x.split('head')[1].split('(')[0]),
+    )
+    dims = list(irrep_dims) if irrep_dims else [1] * len(heads)
+    total_dim = sum(dims)
+    if total_dim == 0:
+        return
+    for base in base_names:
+        vals = []
+        for h, hp in enumerate(heads):
+            v = d.get(f'{hp}/{base}')
+            if v is not None and isinstance(v, (int, float)):
+                vals.append((v, dims[h] if h < len(dims) else 1))
+        if not vals:
+            continue
+        if 'grad_' in base:
+            # Gradient norms: RMS weighted by head dimension (orthogonal blocks)
+            d[base] = math.sqrt(sum(dim * v ** 2 for v, dim in vals) / total_dim)
+        elif base == 'kl_pairwise_max':
+            d[base] = max(v for v, _ in vals)
+        else:
+            # Dimension-weighted mean (kl_pairwise_mean, kappa_scaled, etc.)
+            d[base] = sum(dim * v for v, dim in vals) / total_dim
+
+
 # =============================================================================
 # Implicit EM Gradient (IFT-based M-step)
 # =============================================================================
@@ -4203,11 +4245,13 @@ class VariationalFFNDynamic(nn.Module):
                 print(f"{'='*80}\n")
                 # Store before resetting (debug mode may coexist with metrics collection)
                 if self._collect_vfe_metrics:
+                    _aggregate_multihead_vfe_debug(_VFE_GRAD_DEBUG, self.irrep_dims)
                     self.last_vfe_debug = dict(_VFE_GRAD_DEBUG)
                 _VFE_GRAD_DEBUG = None  # Reset for next iteration
 
             # Store lightweight copy for external consumption (no printing overhead)
             elif self._collect_vfe_metrics and _VFE_GRAD_DEBUG is not None:
+                _aggregate_multihead_vfe_debug(_VFE_GRAD_DEBUG, self.irrep_dims)
                 self.last_vfe_debug = dict(_VFE_GRAD_DEBUG)
                 _VFE_GRAD_DEBUG = None
 
