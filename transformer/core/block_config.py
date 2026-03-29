@@ -57,6 +57,7 @@ class BlockConfig:
     phi_natural_gradient: str = 'killing'  # 'clip'|'cartan'|'killing'|'pullback'
     killing_center_reg: Optional[float] = None  # Killing form center regularization (None=2K)
     diagonal_covariance: bool = False   # σ as (B,N,K) diagonal instead of (B,N,K,K) full
+    sigma_aggregation: str = 'mixture'  # 'mixture' (moment matching) or 'precision' (VFE equilibrium)
     exact_diagonal_transport: bool = False  # When True + diagonal_covariance, lift σ to full
                                             # for exact Ω@diag(σ)@Ω^T transport (slower but exact)
     amortized_inference: bool = True    # Gradient flow through priors for learned E-step init
@@ -181,6 +182,7 @@ class BlockConfig:
             killing_center_reg=config.get('killing_center_reg', None),
             diagonal_covariance=config.get('diagonal_covariance', False),
             exact_diagonal_transport=config.get('exact_diagonal_transport', False),
+            sigma_aggregation=config.get('sigma_aggregation', 'mixture'),
             amortized_inference=config.get('amortized_inference', True),
             detach_phi=config.get('detach_phi', False),
             implicit_em=config.get('implicit_em', False),
