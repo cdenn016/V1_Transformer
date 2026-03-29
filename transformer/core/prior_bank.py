@@ -74,7 +74,7 @@ class PriorBank(nn.Module):
         gauge_param: str = 'phi',  # 'phi' or 'omega'
         omega_head_dims: Optional[list] = None,  # Per-head dims for omega path
         # Gradient scaling for sigma in decode (CE loss path)
-        sigma_ce_scale: float = 0.01,  # Fraction of CE gradient passed to sigma_p
+        sigma_ce_scale: float = 0.1,  # Fraction of CE gradient passed to sigma_p
         # Learnable inverse-temperature for decode logits
         learnable_temperature: bool = False,  # If True, learn decode scale factor
         # Covariance mode (must match model's diagonal_covariance setting)

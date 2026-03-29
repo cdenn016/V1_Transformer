@@ -378,15 +378,18 @@ def compute_free_energy_loss(
         # the E-step dynamics and ImplicitEMGradient — same EM principle as beta/gamma.
         # mu_q keeps gradient (flows through ImplicitEMGradient to mu_embed).
         sigma_q_for_kl = sigma_q.detach() if sigma_q is not None else None
-        # Detach sigma_p: consistent with E-step policy (variational_ffn.py:3448-3452).
-        # sigma_p is a Level 2 (M-step) parameter — its gradient should come from the
-        # hyper-prior KL(s||h) below, not from the self-coupling KL(q||p). Leaving it
-        # live creates positive feedback: smaller σ_p → larger ∂KL/∂σ_p → even smaller σ_p.
+        # sigma_p kept LIVE: the M-step KL(q||p) is the correct gradient source
+        # for sigma_p when alpha > 0. The positive feedback concern (smaller σ_p →
+        # larger ∂KL/∂σ_p) applies to the E-step's natural gradient (where 1/σ_p
+        # amplifies), but in the M-step with AdamW the gradient is bounded by
+        # adaptive learning rates and gradient clipping. Detaching here starves
+        # sigma_p of gradient when the E-step also detaches it (variational_ffn.py)
+        # and sigma_ce_scale dampens the decode path.
         kl_per_agent = gaussian_kl_divergence(
             mu_q=mu_q,
             sigma_q=sigma_q_for_kl,
             mu_p=mu_p,
-            sigma_p=sigma_p.detach() if sigma_p is not None else None,
+            sigma_p=sigma_p,
         )  # (B, N)
         dim_scale = math.sqrt(max(K, 1))
 
