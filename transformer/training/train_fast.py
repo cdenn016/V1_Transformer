@@ -345,6 +345,10 @@ class FastTrainer:
             elif 'out_proj' in name:
                 output_params.append(param)
 
+            # VFE hyperparameters, norms, biases: no weight decay
+            elif 'norm' in name or 'bias' in name or 'raw_' in name or 'gate' in name or 'log_scale' in name:
+                no_decay_params.append(param)
+
             # FFN (default for everything else)
             else:
                 ffn_params.append(param)

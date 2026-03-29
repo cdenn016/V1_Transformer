@@ -441,7 +441,8 @@ class GaugeTransformerLM(nn.Module):
                 gauge_param=gauge_param,
                 omega_head_dims=self.omega_head_dims,
                 sigma_ce_scale=config.get('sigma_ce_scale', 0.1),
-                learnable_temperature=config.get('learnable_pb_temperature', False),
+                learnable_temperature=config.get('learnable_pb_temperature',
+                                                  config.get('learnable_temperature', False)),
                 diagonal_covariance=diagonal_covariance,
             )
             print(f"[GaugeTransformerLM] Created PriorBank with token-dependent priors (vocab_size={vocab_size})")
