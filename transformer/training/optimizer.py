@@ -426,7 +426,7 @@ def create_param_groups(
         elif 'out_proj' in name or 'lm_head' in name:
             output_params.append(param)
         # LayerNorm, biases, and VFE hyperparameters: never weight-decay
-        elif 'norm' in name or 'bias' in name or 'raw_' in name or 'gate' in name:
+        elif 'norm' in name or 'bias' in name or 'raw_' in name or 'gate' in name or 'log_scale' in name:
             no_decay_params.append(param)
         # FFN (default for everything else)
         else:
