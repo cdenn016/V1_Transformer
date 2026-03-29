@@ -12,6 +12,8 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 **Figures**: ALL Figures should be publication quality by default.
 
+**LOCALLY DEFINED CONFIGS**: User may not be running the config values which match the repo.  always double check what values the user is using!
+
 ## Codebase Map
 
 ### Entry Points
