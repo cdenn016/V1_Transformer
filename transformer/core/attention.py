@@ -2075,8 +2075,19 @@ def aggregate_messages(
                 sigma_aggregated = sigma_agg_accum - torch.einsum(
                     'bik,bil->bikl', mu_aggregated, mu_aggregated
                 )
-                eps_eye = 1e-6 * torch.eye(K, device=device, dtype=dtype)
-                sigma_aggregated = sigma_aggregated + eps_eye
+                # Ensure SPD: the mean subtraction above can produce indefinite
+                # matrices (negative eigenvalues) when transport operators are
+                # poorly conditioned early in training. Symmetrize and clamp
+                # eigenvalues to guarantee positive-definiteness downstream.
+                sigma_aggregated = 0.5 * (sigma_aggregated + sigma_aggregated.transpose(-1, -2))
+                try:
+                    eigvals, eigvecs = torch.linalg.eigh(sigma_aggregated)
+                    eigvals = eigvals.clamp(min=1e-4)
+                    sigma_aggregated = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
+                except (RuntimeError, torch.linalg.LinAlgError):
+                    # Fallback: add stronger jitter if eigh itself fails
+                    eps_eye = 1e-3 * torch.eye(K, device=device, dtype=dtype)
+                    sigma_aggregated = sigma_aggregated + eps_eye
         else:
             sigma_aggregated = None
 

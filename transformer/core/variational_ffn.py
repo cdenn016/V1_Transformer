@@ -333,6 +333,61 @@ def _safe_spd_inv(M: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
 
     return result.to(orig_dtype)
 
+
+def _safe_eigh(
+    M: torch.Tensor,
+    jitter: float = 1e-6,
+    max_jitter: float = 1e-2,
+    symmetrize: bool = True,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    r"""
+    Robust eigendecomposition for symmetric matrices with escalating jitter.
+
+    Retries ``torch.linalg.eigh`` with geometrically increasing jitter
+    (×10 per retry) until ``max_jitter`` is reached. If all retries fail,
+    falls back to SVD which uses a different algorithm (gesdd vs syev) and
+    is more tolerant of ill-conditioning. For symmetric PSD matrices the
+    singular values equal the eigenvalues and U provides the eigenvectors.
+
+    Runs in float32 to survive AMP autocast contexts.
+
+    Args:
+        M: (..., K, K) symmetric matrices
+        jitter: Initial diagonal regularization
+        max_jitter: Maximum jitter before SVD fallback
+        symmetrize: Whether to symmetrize M before decomposition
+
+    Returns:
+        (eigenvalues, eigenvectors) — same shapes as ``torch.linalg.eigh``
+    """
+    K = M.shape[-1]
+    device = M.device
+    orig_dtype = M.dtype
+
+    with torch.amp.autocast('cuda', enabled=False):
+        M = M.float()
+
+        if symmetrize:
+            M = 0.5 * (M + M.transpose(-1, -2))
+
+        I_K = torch.eye(K, device=device, dtype=torch.float32)
+        current_jitter = jitter
+
+        while current_jitter <= max_jitter:
+            try:
+                M_reg = M + current_jitter * I_K
+                eigvals, eigvecs = torch.linalg.eigh(M_reg)
+                return eigvals.to(orig_dtype), eigvecs.to(orig_dtype)
+            except (RuntimeError, torch.linalg.LinAlgError):
+                current_jitter *= 10.0
+
+        # Ultimate fallback: SVD (gesdd algorithm, more numerically stable)
+        # For symmetric M: M = U @ diag(s) @ U^T, so s = eigenvalues, U = eigenvectors
+        M_reg = M + max_jitter * I_K
+        U, s, Vh = torch.linalg.svd(M_reg, full_matrices=False)
+        return s.to(orig_dtype), U.to(orig_dtype)
+
+
 # Import attention computation for dynamic β
 from transformer.core.attention import compute_attention_weights, compute_transport_operators
 
@@ -576,9 +631,13 @@ def _compute_vfe_gradients_block_diagonal(
         _VFE_GRAD_DEBUG['sigma_p_min'] = sp_diag.min().item()
         _VFE_GRAD_DEBUG['sigma_p_max'] = sp_diag.max().item()
         # sigma_q eigenvalue range
-        sq_eig = torch.linalg.eigvalsh(sigma_q)
-        _VFE_GRAD_DEBUG['sigma_q_eig_min'] = sq_eig.min().item()
-        _VFE_GRAD_DEBUG['sigma_q_eig_max'] = sq_eig.max().item()
+        try:
+            sq_eig = torch.linalg.eigvalsh(sigma_q)
+            _VFE_GRAD_DEBUG['sigma_q_eig_min'] = sq_eig.min().item()
+            _VFE_GRAD_DEBUG['sigma_q_eig_max'] = sq_eig.max().item()
+        except (RuntimeError, torch.linalg.LinAlgError):
+            _VFE_GRAD_DEBUG['sigma_q_eig_min'] = float('nan')
+            _VFE_GRAD_DEBUG['sigma_q_eig_max'] = float('nan')
 
     # =================================================================
     # 2. Belief Alignment Gradient (block-diagonal + chunked processing)
@@ -2077,7 +2136,7 @@ def retract_spd_torch(
         delta_Sigma = 0.5 * (delta_Sigma + delta_Sigma.transpose(-1, -2))
 
         # Exponential map retraction on SPD manifold
-        eigenvalues, eigenvectors = torch.linalg.eigh(Sigma)
+        eigenvalues, eigenvectors = _safe_eigh(Sigma, jitter=eps, symmetrize=False)
         eigenvalues = eigenvalues.clamp(min=eps)
 
         sqrt_eig = torch.sqrt(eigenvalues)
@@ -2096,7 +2155,7 @@ def retract_spd_torch(
             R = R * scale
 
         # exp(R) via eigendecomposition
-        R_eigenvalues, R_eigenvectors = torch.linalg.eigh(R)
+        R_eigenvalues, R_eigenvectors = _safe_eigh(R, jitter=eps, symmetrize=False)
         R_eigenvalues = R_eigenvalues.clamp(-50.0, 50.0)
         exp_R = R_eigenvectors * torch.exp(R_eigenvalues).unsqueeze(-2) @ R_eigenvectors.transpose(-1, -2)
 
@@ -2105,7 +2164,7 @@ def retract_spd_torch(
 
         # Spectral floor + ceiling: eigenvalues in [eps, sigma_max²]
         # sigma_max bounds the standard deviation; covariance eigenvalues are σ².
-        eig_new, vec_new = torch.linalg.eigh(Sigma_new)
+        eig_new, vec_new = _safe_eigh(Sigma_new, jitter=eps, symmetrize=False)
         eig_new = eig_new.clamp(min=eps, max=sigma_max * sigma_max)
         Sigma_new = vec_new * eig_new.unsqueeze(-2) @ vec_new.transpose(-1, -2)
 
@@ -3588,12 +3647,10 @@ class VariationalFFNDynamic(nn.Module):
                 sigma_current = sigma_current.clamp(min=_eps, max=self.sigma_max)
             else:
                 # Full covariance: spectral clamp on eigenvalues
-                # Symmetrize + jitter for numerical stability (matches retract_spd_torch pattern)
-                sigma_current = 0.5 * (sigma_current + sigma_current.transpose(-1, -2))
-                sigma_current = sigma_current + _eps * torch.eye(
-                    sigma_current.shape[-1], device=sigma_current.device, dtype=sigma_current.dtype
-                )
-                eigvals, eigvecs = torch.linalg.eigh(sigma_current)
+                # Use _safe_eigh for robust decomposition — sigma from attention
+                # aggregate_messages can be ill-conditioned or near-indefinite
+                # early in training (wild transport operators, uncalibrated β).
+                eigvals, eigvecs = _safe_eigh(sigma_current, jitter=_eps)
                 eigvals = eigvals.clamp(min=_eps, max=self.sigma_max * self.sigma_max)
                 sigma_current = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
 
@@ -4345,19 +4402,23 @@ class VariationalFFNDynamic(nn.Module):
                         )
                 else:
                     # Full covariance: clamp eigenvalue ratio
-                    eigvals = torch.linalg.eigvalsh(sigma_current)  # (B, N, K)
-                    e_min = eigvals[..., 0:1].clamp(min=eps)
-                    e_max = eigvals[..., -1:]
-                    condition = e_max / e_min
-                    if (condition > max_condition).any():
-                        geo_mean = eigvals.log().mean(dim=-1, keepdim=True).exp()
-                        lower = geo_mean / (max_condition ** 0.5)
-                        # Regularize toward isotropic: Sigma → Sigma + ridge * I
-                        ridge = (lower - e_min).clamp(min=0.0).mean(dim=-1, keepdim=True)
-                        K = sigma_current.shape[-1]
-                        sigma_current = sigma_current + ridge.unsqueeze(-1) * torch.eye(
-                            K, device=sigma_current.device, dtype=sigma_current.dtype
-                        )
+                    try:
+                        eigvals = torch.linalg.eigvalsh(sigma_current)  # (B, N, K)
+                    except (RuntimeError, torch.linalg.LinAlgError):
+                        eigvals = None
+                    if eigvals is not None:
+                        e_min = eigvals[..., 0:1].clamp(min=eps)
+                        e_max = eigvals[..., -1:]
+                        condition = e_max / e_min
+                        if (condition > max_condition).any():
+                            geo_mean = eigvals.log().mean(dim=-1, keepdim=True).exp()
+                            lower = geo_mean / (max_condition ** 0.5)
+                            # Regularize toward isotropic: Sigma → Sigma + ridge * I
+                            ridge = (lower - e_min).clamp(min=0.0).mean(dim=-1, keepdim=True)
+                            K = sigma_current.shape[-1]
+                            sigma_current = sigma_current + ridge.unsqueeze(-1) * torch.eye(
+                                K, device=sigma_current.device, dtype=sigma_current.dtype
+                            )
 
             # =============================================================
             # STEP 4c: Isotropic covariance enforcement (Limit 1)
