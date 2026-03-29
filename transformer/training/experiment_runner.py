@@ -2119,6 +2119,12 @@ def run_single_experiment(
         # Final evaluation
         final_metrics = trainer.validate()
 
+        # Update best_val_ce so the checkpoint (and summary) reflect the final result.
+        # Periodic validation may not have run (eval_interval > max_steps in ablations),
+        # leaving best_val_ce at inf despite a successful final eval.
+        if final_metrics['ce_loss'] < trainer.best_val_ce:
+            trainer.best_val_ce = final_metrics['ce_loss']
+
         print(f"\nFinal Validation Metrics:")
         print(f"  Loss:       {final_metrics['loss']:.4f}")
         print(f"  Perplexity: {final_metrics['perplexity']:.2f}")
