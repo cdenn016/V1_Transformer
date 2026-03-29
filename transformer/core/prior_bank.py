@@ -423,7 +423,7 @@ class PriorBank(nn.Module):
         # init (logit differences ~√K × ln V ≈ 97 for K=80), causing CE >> ln V
         # when the E-step hasn't learned yet. Use learnable_temperature or tune
         # prior_bank_tau for large K instead.
-        scale = torch.exp(self.decode_log_scale) if self.learnable_temperature else 1.0
+        scale = torch.exp(self.decode_log_scale.clamp(-3.0, 3.0)) if self.learnable_temperature else 1.0
         logits = -0.5 * scale / tau * (combined + prior_bias.unsqueeze(0).unsqueeze(0))
 
         return logits
