@@ -1468,6 +1468,8 @@ class PublicationTrainer(FastTrainer):
                 _verbose = self.config.verbose_diagnostics
                 if use_tqdm:
                     pbar.set_description(log_msg)
+                    if not _verbose:
+                        tqdm.write(log_msg)
                     if _verbose and grad_norms:
                         tqdm.write(f"\n\n  [M-STEP] total: {grad_norms['total']:.3e} | "
                                    f"mu: {grad_norms['mu']:.3e} | sigma: { grad_norms['sigma']:.3e} | "
