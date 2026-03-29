@@ -4100,7 +4100,7 @@ class VariationalFFNDynamic(nn.Module):
             # =================================================================
             # DEBUG: Print per-component gradient breakdown
             # =================================================================
-            if _VFE_GRAD_DEBUG is not None:
+            if _VFE_GRAD_DEBUG is not None and self._debug_vfe_gradients:
                 d = _VFE_GRAD_DEBUG
 
                 # Detect multihead mode: keys have 'headN(d=M)/' prefix
