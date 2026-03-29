@@ -416,14 +416,15 @@ class PriorBank(nn.Module):
         # logits = -KL/τ ≈ -0.5/τ * (combined + prior_bias)
         # (dropping softmax-invariant terms -K and log|Σ_q|)
         #
-        # Dimension scaling: multiply by √K to compensate for diminishing
-        # discriminability at high K. With init_std = √(ln V / K), the average
-        # KL is O(ln V) but the std of pairwise KL DIFFERENCES scales as
-        # ln(V)/√K — so logit differences shrink as 1/√K without correction.
-        # This mirrors the attention module's kappa * √d_head normalization.
+        # No dimension scaling here: init_std = √(ln V / K) already calibrates
+        # the average KL to O(ln V) regardless of K. The 1/√K decay of logit
+        # DIFFERENCES at high K is a convergence speed issue, not an init issue.
+        # Scaling by √K would make the model catastrophically overconfident at
+        # init (logit differences ~√K × ln V ≈ 97 for K=80), causing CE >> ln V
+        # when the E-step hasn't learned yet. Use learnable_temperature or tune
+        # prior_bank_tau for large K instead.
         scale = torch.exp(self.decode_log_scale) if self.learnable_temperature else 1.0
-        dim_scale = math.sqrt(K)
-        logits = -0.5 * scale * dim_scale / tau * (combined + prior_bias.unsqueeze(0).unsqueeze(0))
+        logits = -0.5 * scale / tau * (combined + prior_bias.unsqueeze(0).unsqueeze(0))
 
         return logits
 
