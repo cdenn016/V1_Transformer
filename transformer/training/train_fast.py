@@ -323,8 +323,9 @@ class FastTrainer:
             if 'mu_embed' in name or 'prior_mu' in name or 'base_prior_mu' in name:
                 mu_params.append(param)
 
-            # Covariance embeddings (sigma_embed, log_sigma_diag, base_log_sigma_diag)
-            elif 'sigma_embed' in name or 'log_sigma' in name:
+            # Covariance embeddings (sigma_embed, log_sigma_diag, base_log_sigma_diag,
+            # AND PriorBank's log_prior_sigma which doesn't match 'log_sigma')
+            elif 'sigma_embed' in name or 'log_sigma' in name or 'log_prior_sigma' in name:
                 sigma_params.append(param)
 
             # Gauge frame embeddings
