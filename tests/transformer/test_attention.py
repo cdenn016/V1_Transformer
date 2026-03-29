@@ -520,26 +520,21 @@ class TestGLKMetricCorrection:
         mu_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu)
         mu_expected = torch.einsum('bij,bijk->bik', beta, mu_transported)
 
-        # Covariance: VFE precision aggregation
-        # Σ_i^{-1} = Σ_j β_ij (Ω_ij Σ_j Ω_ij^T)^{-1}
+        # Covariance: mixture moment matching (default sigma_aggregation='mixture')
         Sigma_transported = torch.einsum(
             'bijkl,bjlm,bijmn->bijkn',
             Omega, sigma, Omega.transpose(-1, -2)
         )
-        eps = 1e-6
-        K = sigma.shape[-1]
-        I_K = torch.eye(K, device=sigma.device, dtype=sigma.dtype)
-        Sigma_transported = 0.5 * (Sigma_transported + Sigma_transported.transpose(-1, -2)) + eps * I_K
-        Sigma_t_inv = torch.linalg.inv(Sigma_transported)
-        precision_expected = torch.einsum('bij,bijkl->bikl', beta, Sigma_t_inv)
-        precision_expected = 0.5 * (precision_expected + precision_expected.transpose(-1, -2)) + eps * I_K
-        sigma_expected = torch.linalg.inv(precision_expected)
-        sigma_expected = 0.5 * (sigma_expected + sigma_expected.transpose(-1, -2))
+        second_moment = Sigma_transported + torch.einsum(
+            'bijk,bijl->bijkl', mu_transported, mu_transported
+        )
+        sigma_expected = torch.einsum('bij,bijkl->bikl', beta, second_moment) \
+            - torch.einsum('bik,bil->bikl', mu_expected, mu_expected)
 
         assert torch.allclose(mu_agg, mu_expected, atol=1e-5), \
             "GL(K) mean aggregation incorrect in full_distribution mode"
-        assert torch.allclose(sigma_agg, sigma_expected, atol=1e-3), \
-            "GL(K) covariance should use precision aggregation"
+        assert torch.allclose(sigma_agg, sigma_expected, atol=1e-4), \
+            "GL(K) covariance should use mixture moment matching"
 
     def test_glk_output_finite(self, cpu_device):
         """GL(K) aggregation should produce finite outputs."""

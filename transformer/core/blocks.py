@@ -132,6 +132,7 @@ class GaugeTransformerBlock(nn.Module):
             irrep_dims_override=cfg.ffn_irrep_dims if (gauge_group == 'GLK' and cfg.cross_head_perm is not None) else None,
             use_rope=cfg.use_rope,
             rope_base=cfg.rope_base,
+            sigma_aggregation=cfg.sigma_aggregation,
         )
 
         # Conditionally create LayerNorm (disabled for pure VFE)
