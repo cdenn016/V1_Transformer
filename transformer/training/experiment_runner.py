@@ -1847,8 +1847,8 @@ def run_single_experiment(
 
     # Enable E-step gradient component debug (prints per-component breakdown)
     # Set to True to diagnose gradient explosion sources; disable for production.
-   
-    if _DEBUG_VFE_GRADS:
+    # Reads from config dict (set by _DEBUG_VFE_GRADS in train_publication.py).
+    if config.get('debug_vfe_grads', False):
         for module in model.modules():
             if hasattr(module, '_debug_vfe_gradients'):
                 module._debug_vfe_gradients = True
