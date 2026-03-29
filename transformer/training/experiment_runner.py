@@ -1465,14 +1465,14 @@ class PublicationTrainer(FastTrainer):
                     f"PPL: {metrics['train_ppl']:.1f}"
                 )
 
+                _verbose = self.config.verbose_diagnostics
                 if use_tqdm:
                     pbar.set_description(log_msg)
-                    # Print gradient norms using tqdm.write for proper display
-                    if grad_norms:
+                    if _verbose and grad_norms:
                         tqdm.write(f"\n\n  [M-STEP] total: {grad_norms['total']:.3e} | "
                                    f"mu: {grad_norms['mu']:.3e} | sigma: { grad_norms['sigma']:.3e} | "
                                    f"phi: {grad_norms['phi']:.3e}")
-                    if e_step_norms:
+                    if _verbose and e_step_norms:
                         _mu_cap = e_step_norms.get('mu_cap_frac', 0.0) * 100
                         _sig_cap = e_step_norms.get('sigma_cap_frac', 0.0) * 100
                         _mu_tr = e_step_norms.get('mu_trust_frac', 0.0) * 100
@@ -1482,8 +1482,7 @@ class PublicationTrainer(FastTrainer):
                                    f"nat_sig: {e_step_norms['nat_grad_sigma']:.3e} (cap: {_sig_cap:.0f}%) | "
                                    f"phi: {e_step_norms['grad_phi']:.3e} | "
                                    f"trust: {_mu_tr:.0f}% (wh: {_wh_mean:.3f}/{_wh_max:.3f})\n")
-                    # Phi embedding spectral diagnostics
-                    if phi_diag:
+                    if _verbose and phi_diag:
                         _erank = phi_diag['phi/effective_rank']
                         _rratio = phi_diag['phi/rank_ratio']
                         _top1 = phi_diag['phi/top1_variance_fraction']
@@ -1493,17 +1492,17 @@ class PublicationTrainer(FastTrainer):
                         tqdm.write(f"  [PHI] eff_rank: {_erank:.1f} ({_rratio:.1%} of max) | "
                                    f"top1σ²: {_top1:.1%} top5σ²: {_top5:.1%} | "
                                    f"gap: {_sgap:.2f} | ||φ||: {_mnorm:.3f}")
-                    # VFE dynamics summary
-                    _vfe_lines = self._format_vfe_dynamics(metrics)
-                    for _vl in _vfe_lines:
-                        tqdm.write(_vl)
+                    if _verbose:
+                        _vfe_lines = self._format_vfe_dynamics(metrics)
+                        for _vl in _vfe_lines:
+                            tqdm.write(_vl)
                 else:
                     print(log_msg)
-                    if grad_norms:
+                    if _verbose and grad_norms:
                         print(f"\n\n  [M-STEP] total: {grad_norms['total']:.3e} | "
                               f"mu: {grad_norms['mu']:.3e} | sigma: { grad_norms['sigma']:.3e} | "
                               f"phi: {grad_norms['phi']:.3e}")
-                    if e_step_norms:
+                    if _verbose and e_step_norms:
                         _mu_cap = e_step_norms.get('mu_cap_frac', 0.0) * 100
                         _sig_cap = e_step_norms.get('sigma_cap_frac', 0.0) * 100
                         _mu_tr = e_step_norms.get('mu_trust_frac', 0.0) * 100
@@ -1513,8 +1512,7 @@ class PublicationTrainer(FastTrainer):
                               f"nat_sig: {e_step_norms['nat_grad_sigma']:.3e} (cap: {_sig_cap:.0f}%) | "
                               f"phi: {e_step_norms['grad_phi']:.3e} | "
                               f"trust: {_mu_tr:.0f}% (wh: {_wh_mean:.3f}/{_wh_max:.3f})\n")
-                    # Phi embedding spectral diagnostics
-                    if phi_diag:
+                    if _verbose and phi_diag:
                         _erank = phi_diag['phi/effective_rank']
                         _rratio = phi_diag['phi/rank_ratio']
                         _top1 = phi_diag['phi/top1_variance_fraction']
@@ -1524,10 +1522,10 @@ class PublicationTrainer(FastTrainer):
                         print(f"  [PHI] eff_rank: {_erank:.1f} ({_rratio:.1%} of max) | "
                               f"top1σ²: {_top1:.1%} top5σ²: {_top5:.1%} | "
                               f"gap: {_sgap:.2f} | ||φ||: {_mnorm:.3f}")
-                    # VFE dynamics summary
-                    _vfe_lines = self._format_vfe_dynamics(metrics)
-                    for _vl in _vfe_lines:
-                        print(_vl)
+                    if _verbose:
+                        _vfe_lines = self._format_vfe_dynamics(metrics)
+                        for _vl in _vfe_lines:
+                            print(_vl)
 
                 # Report numerical fallback counters if any fired
                 if _num_events:
@@ -1993,6 +1991,7 @@ def run_single_experiment(
         track_iteration_diagnostics=config.get(
             'track_iteration_diagnostics', False),
         diagnostics_interval=config.get('diagnostics_interval', 50),
+        verbose_diagnostics=config.get('verbose_diagnostics', True),
     )
 
     print("\n" + "="*70)

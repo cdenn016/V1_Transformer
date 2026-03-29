@@ -157,6 +157,7 @@ class FastTrainingConfig:
     track_layer_diagnostics: bool = False      # Per-layer belief statistics
     track_iteration_diagnostics: bool = False  # Per-VFE-iteration convergence data
     diagnostics_interval: int = 50             # Collect every N steps (expensive)
+    verbose_diagnostics: bool = True           # Print [M-STEP], [E-STEP], [PHI] to console
 
     # Resume from checkpoint
     resume_from: Optional[str] = None  # Path to checkpoint to resume from
