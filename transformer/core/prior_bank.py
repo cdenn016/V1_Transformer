@@ -380,10 +380,14 @@ class PriorBank(nn.Module):
         V = self.vocab_size
         device = mu_q.device
 
-        # Get all token priors: mu_p (V, K), sigma_p (V, K)
+        # Get all token priors: mu_p (V, K), sigma_p (V, K) or (V, K, K)
         all_token_ids = torch.arange(V, device=device)
         _prior_out = self._get_prior_for_tokens(all_token_ids)
         mu_p, sigma_p = _prior_out[0], _prior_out[1]
+        # Full covariance priors (V, K, K) → extract diagonal for fused KL matmul.
+        # The fused trace only needs diag(Σ_p) since priors are initialized diagonal.
+        if sigma_p.dim() > mu_p.dim():
+            sigma_p = torch.diagonal(sigma_p, dim1=-2, dim2=-1)
 
         variance_floor = max(self.eps, 1e-4)
         sigma_q_safe = sigma_q.clamp(min=variance_floor)    # (B, N, K)
