@@ -3588,6 +3588,11 @@ class VariationalFFNDynamic(nn.Module):
                 sigma_current = sigma_current.clamp(min=_eps, max=self.sigma_max)
             else:
                 # Full covariance: spectral clamp on eigenvalues
+                # Symmetrize + jitter for numerical stability (matches retract_spd_torch pattern)
+                sigma_current = 0.5 * (sigma_current + sigma_current.transpose(-1, -2))
+                sigma_current = sigma_current + _eps * torch.eye(
+                    sigma_current.shape[-1], device=sigma_current.device, dtype=sigma_current.dtype
+                )
                 eigvals, eigvecs = torch.linalg.eigh(sigma_current)
                 eigvals = eigvals.clamp(min=_eps, max=self.sigma_max * self.sigma_max)
                 sigma_current = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
