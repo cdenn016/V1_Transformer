@@ -958,7 +958,11 @@ class GaugeTransformerLM(nn.Module):
                 mu_q = mu_attn
 
             if block.evolve_sigma and sigma_attn is not None:
-                if block.sigma_residual:
+                if sigma_attn.shape != sigma_q.shape:
+                    # Shape mismatch (e.g., per-head vs full-K sigma) — skip residual,
+                    # use attention output directly to avoid broadcast errors.
+                    sigma_q = sigma_attn
+                elif block.sigma_residual:
                     sigma_q = (sigma_q + sigma_attn).clamp(min=1e-4)
                 else:
                     sigma_q = sigma_attn

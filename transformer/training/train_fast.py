@@ -243,7 +243,14 @@ class FastTrainer:
         self.patience_counter = 0  # Early stopping counter
 
         # Mixed precision (using modern AMP API for PyTorch 2.x / CUDA 12+)
-        self.scaler = torch.amp.GradScaler() if config.use_amp and self.device.type == 'cuda' else None
+        # AMP is incompatible with full covariance operations (eigendecomposition,
+        # matrix inversion, Cholesky) — float16 causes convergence failures.
+        # Force-disable when covariance evolution is active.
+        _evolve_sigma = getattr(config, 'evolve_sigma', False)
+        _use_amp = config.use_amp and self.device.type == 'cuda' and not _evolve_sigma
+        if config.use_amp and _evolve_sigma:
+            print("  ⚠ AMP disabled: incompatible with covariance evolution (evolve_sigma=True)")
+        self.scaler = torch.amp.GradScaler() if _use_amp else None
 
         # W&B logging
         if config.use_wandb and WANDB_AVAILABLE:
