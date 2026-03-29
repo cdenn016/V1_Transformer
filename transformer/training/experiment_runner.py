@@ -674,12 +674,14 @@ class PublicationTrainer(FastTrainer):
             phi/std_token_norm: std of ||\phi_v||_2. Low std = uniform norms (healthy).
         """
         # Find the phi embedding weight
+        # PriorBank takes priority: when active, token_embed is frozen but its
+        # phi_embed attribute still exists — reading it gives stale values.
         phi_weight = None
-        if hasattr(self.model, 'token_embed') and hasattr(self.model.token_embed, 'phi_embed'):
-            phi_weight = self.model.token_embed.phi_embed.weight  # (V, phi_dim)
-        elif hasattr(self.model, 'prior_bank') and self.model.prior_bank is not None:
+        if hasattr(self.model, 'prior_bank') and self.model.prior_bank is not None:
             if hasattr(self.model.prior_bank, 'phi_embed'):
                 phi_weight = self.model.prior_bank.phi_embed.weight
+        if phi_weight is None and hasattr(self.model, 'token_embed') and hasattr(self.model.token_embed, 'phi_embed'):
+            phi_weight = self.model.token_embed.phi_embed.weight  # (V, phi_dim)
 
         if phi_weight is None:
             return {}
