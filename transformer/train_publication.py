@@ -893,6 +893,7 @@ def main():
         return
 
     config['dataset'] = args.dataset
+    config['debug_vfe_grads'] = _DEBUG_VFE_GRADS
 
     if args.dataset == 'wiki-ja' and config['vocab_size'] == 50257:
         config['vocab_size'] = 100277
