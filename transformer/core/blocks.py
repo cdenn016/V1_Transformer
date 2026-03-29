@@ -341,7 +341,9 @@ class GaugeTransformerBlock(nn.Module):
 
         # Update covariances if evolving
         if self.evolve_sigma and sigma_attn is not None:
-            if self.sigma_residual:
+            if sigma_attn.shape != sigma_q.shape:
+                sigma_q = sigma_attn
+            elif self.sigma_residual:
                 sigma_q = (sigma_q + sigma_attn).clamp(min=1e-4)
             else:
                 sigma_q = sigma_attn

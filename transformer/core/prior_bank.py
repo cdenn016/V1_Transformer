@@ -288,7 +288,12 @@ class PriorBank(nn.Module):
         else:
             # Standard per-token lookup (TOKEN-INDEXED!)
             mu_p = self.prior_mu[token_ids]  # Index by token ID
-            sigma_p = self.prior_sigma[token_ids]
+            sigma_p_diag = self.prior_sigma[token_ids]  # (B, N, K) diagonal
+            # Convert to full covariance when diagonal_covariance=False
+            if not getattr(self, 'diagonal_covariance', True):
+                sigma_p = torch.diag_embed(sigma_p_diag)  # (B, N, K, K)
+            else:
+                sigma_p = sigma_p_diag
             # Learnable per-token gauge frames
             phi = self.phi_embed(token_ids)
 

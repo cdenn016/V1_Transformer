@@ -1954,9 +1954,10 @@ def aggregate_messages(
         1. 'mean_only': Only aggregate means (faster)
            Returns: (messages, None)
 
-        2. 'full_distribution': Aggregate full distributions
+        2. 'full_distribution': Aggregate means + covariances
            Returns: (mu_aggregated, sigma_aggregated)
-           Uses mixture of Gaussians approximation
+           Covariance via VFE precision aggregation (GL(K)_supplementary.tex):
+           Σ_i^{-1} = Σ_j β_ij (Ω_ij Σ_j Ω_ij^T)^{-1}
 
     Args:
         mu_q: Belief means (B, N, K)
@@ -2008,48 +2009,55 @@ def aggregate_messages(
         w_weighted = torch.einsum('bij,bjk->bik', beta, w)  # (B, N, K)
         mu_aggregated = torch.einsum('bikl,bil->bik', _exp_phi, w_weighted)  # (B, N, K)
 
-        # Covariance aggregation (if requested)
+        # Covariance aggregation via precision averaging (VFE equilibrium).
+        # Theory (GL(K)_supplementary.tex, eq. sigma_fixed_point_beta):
+        #   Σ_i^{-1} = Σ_j β_ij (Ω_ij Σ_j Ω_ij^T)^{-1}
+        # The prior term (1/2)[Σ_p^{-1} + ...] is handled by the VFE E-step;
+        # here we compute only the β-weighted transported precision from neighbors.
+        # This is guaranteed PD (sum of PD matrices) and numerically stable
+        # (no catastrophic cancellation from second-moment subtraction).
         if aggregate_mode == 'full_distribution':
             _tile_size = 16
+            _eps = 1e-6
             if diagonal_covariance:
                 sigma_q_diag = sigma_q
                 while sigma_q_diag.dim() > 3 and sigma_q_diag.shape[-1] == 1:
                     sigma_q_diag = sigma_q_diag.squeeze(-1)
 
-                # Tiled second moment computation to avoid full (B,N,N,K,K)
-                sigma_agg_accum = torch.zeros(batch_size, num_agents, K,
-                                              device=device, dtype=dtype)
+                # Precision aggregation (diagonal): 1/σ_agg = Σ_j β_ij / σ_t_j
+                precision_agg = torch.zeros(batch_size, num_agents, K,
+                                            device=device, dtype=dtype)
                 for i_start in range(0, num_agents, _tile_size):
                     i_end = min(i_start + _tile_size, num_agents)
-                    ep_tile = _exp_phi[:, i_start:i_end]  # (B, tile, K, K)
+                    ep_tile = _exp_phi[:, i_start:i_end]
 
-                    # Omega_tile = exp_phi_i @ exp_neg_phi_j
                     Omega_tile = torch.einsum(
                         'bikl,bjlm->bijkm', ep_tile, _exp_neg_phi
                     )  # (B, tile, N, K, K)
 
-                    # Transported diagonal sigma: diag(Ω diag(σ) Ω^T)_k = Σ_l Ω_kl² σ_l
+                    # Transported diagonal sigma: diag(Ω diag(σ) Ω^T)
                     sigma_t_tile = torch.einsum(
                         'bijkl,bijkl,bjl->bijk',
                         Omega_tile, Omega_tile, sigma_q_diag
-                    ).clamp(min=1e-6)  # (B, tile, N, K)
+                    ).clamp(min=_eps)  # (B, tile, N, K)
 
-                    # Transported mu (per-pair, for second moment)
-                    mu_t_tile = torch.einsum(
-                        'bijkl,bjl->bijk', Omega_tile, mu_q
-                    )  # (B, tile, N, K)
+                    # Transported precision: 1 / σ_transported
+                    precision_t_tile = 1.0 / sigma_t_tile  # (B, tile, N, K)
 
-                    second_moment_tile = sigma_t_tile + mu_t_tile ** 2
-                    sigma_agg_accum[:, i_start:i_end] = torch.einsum(
-                        'bij,bijk->bik', beta[:, i_start:i_end], second_moment_tile
+                    # β-weighted precision accumulation
+                    precision_agg[:, i_start:i_end] = torch.einsum(
+                        'bij,bijk->bik', beta[:, i_start:i_end], precision_t_tile
                     )
                     del Omega_tile
 
-                sigma_aggregated = (sigma_agg_accum - mu_aggregated ** 2).clamp(min=1e-6)
+                # Invert precision to get covariance
+                sigma_aggregated = (1.0 / precision_agg.clamp(min=_eps)).clamp(min=_eps)
             else:
-                # Full covariance: tiled approach
-                sigma_agg_accum = torch.zeros(batch_size, num_agents, K, K,
-                                              device=device, dtype=dtype)
+                # Full covariance: precision aggregation
+                # Accumulate Σ_j β_ij (Ω_ij Σ_j Ω_ij^T)^{-1}
+                precision_agg = torch.zeros(batch_size, num_agents, K, K,
+                                            device=device, dtype=dtype)
+                I_K = torch.eye(K, device=device, dtype=dtype)
                 for i_start in range(0, num_agents, _tile_size):
                     i_end = min(i_start + _tile_size, num_agents)
                     ep_tile = _exp_phi[:, i_start:i_end]
@@ -2057,37 +2065,35 @@ def aggregate_messages(
                         'bikl,bjlm->bijkm', ep_tile, _exp_neg_phi
                     )
 
+                    # Transported covariance: Ω Σ Ω^T
                     Sigma_t = torch.einsum(
                         'bijkl,bjlm,bijmn->bijkn',
                         Omega_tile, sigma_q, Omega_tile.transpose(-1, -2)
                     )
-                    mu_t_tile = torch.einsum(
-                        'bijkl,bjl->bijk', Omega_tile, mu_q
-                    )
-                    second_moment = Sigma_t + torch.einsum(
-                        'bijk,bijl->bijkl', mu_t_tile, mu_t_tile
-                    )
-                    sigma_agg_accum[:, i_start:i_end] = torch.einsum(
-                        'bij,bijkl->bikl', beta[:, i_start:i_end], second_moment
+                    # Symmetrize + regularize for inversion
+                    Sigma_t = 0.5 * (Sigma_t + Sigma_t.transpose(-1, -2))
+                    Sigma_t = Sigma_t + _eps * I_K
+
+                    # Invert transported covariance to get precision
+                    try:
+                        Sigma_t_inv = torch.linalg.inv(Sigma_t)
+                    except (RuntimeError, torch.linalg.LinAlgError):
+                        Sigma_t_inv = torch.linalg.pinv(Sigma_t)
+
+                    # β-weighted precision accumulation
+                    precision_agg[:, i_start:i_end] = torch.einsum(
+                        'bij,bijkl->bikl', beta[:, i_start:i_end], Sigma_t_inv
                     )
                     del Omega_tile
 
-                sigma_aggregated = sigma_agg_accum - torch.einsum(
-                    'bik,bil->bikl', mu_aggregated, mu_aggregated
-                )
-                # Ensure SPD: the mean subtraction above can produce indefinite
-                # matrices (negative eigenvalues) when transport operators are
-                # poorly conditioned early in training. Symmetrize and clamp
-                # eigenvalues to guarantee positive-definiteness downstream.
-                sigma_aggregated = 0.5 * (sigma_aggregated + sigma_aggregated.transpose(-1, -2))
+                # Symmetrize accumulated precision and invert to get covariance
+                precision_agg = 0.5 * (precision_agg + precision_agg.transpose(-1, -2))
+                precision_agg = precision_agg + _eps * I_K
                 try:
-                    eigvals, eigvecs = torch.linalg.eigh(sigma_aggregated)
-                    eigvals = eigvals.clamp(min=1e-4)
-                    sigma_aggregated = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
+                    sigma_aggregated = torch.linalg.inv(precision_agg)
                 except (RuntimeError, torch.linalg.LinAlgError):
-                    # Fallback: add stronger jitter if eigh itself fails
-                    eps_eye = 1e-3 * torch.eye(K, device=device, dtype=dtype)
-                    sigma_aggregated = sigma_aggregated + eps_eye
+                    sigma_aggregated = torch.linalg.pinv(precision_agg)
+                sigma_aggregated = 0.5 * (sigma_aggregated + sigma_aggregated.transpose(-1, -2))
         else:
             sigma_aggregated = None
 
@@ -2113,38 +2119,49 @@ def aggregate_messages(
     # Step 3: Weighted aggregation: m_i = Σ_j β_ij * μ_j^{→i}
     mu_aggregated = torch.einsum('bij,bijk->bik', beta, mu_transported)  # (B, N, K)
 
-    # Step 4: Covariance aggregation (if requested)
+    # Step 4: Covariance aggregation via precision averaging (VFE equilibrium).
+    # Σ_i^{-1} = Σ_j β_ij (Ω_ij Σ_j Ω_ij^T)^{-1}  (prior term in E-step)
     if aggregate_mode == 'full_distribution':
         B, N, K = mu_q.shape
+        _eps = 1e-6
         if diagonal_covariance:
             sigma_q_diag = sigma_q
             while sigma_q_diag.dim() > 3 and sigma_q_diag.shape[-1] == 1:
                 sigma_q_diag = sigma_q_diag.squeeze(-1)
 
-            # Diagonal of Ω @ diag(σ) @ Ω^T: Σ_l Ω_kl² * σ_l
+            # Transported diagonal sigma: diag(Ω diag(σ) Ω^T)
             sigma_transported_diag = torch.einsum(
                 'bijkl,bijkl,bjl->bijk', Omega, Omega, sigma_q_diag
-            ).clamp(min=1e-6)
+            ).clamp(min=_eps)
 
-            second_moment = sigma_transported_diag + mu_transported ** 2
-            sigma_aggregated = torch.einsum('bij,bijk->bik', beta, second_moment)
-            sigma_aggregated = (sigma_aggregated - mu_aggregated ** 2).clamp(min=1e-6)
+            # Precision aggregation: Σ_j β_ij / σ_transported_j
+            precision_agg = torch.einsum(
+                'bij,bijk->bik', beta, 1.0 / sigma_transported_diag
+            )
+            sigma_aggregated = (1.0 / precision_agg.clamp(min=_eps)).clamp(min=_eps)
         else:
+            # Full covariance precision aggregation
             Sigma_transported = torch.einsum(
                 'bijkl,bjlm,bijmn->bijkn',
                 Omega, sigma_q, Omega.transpose(-1, -2)
             )
-            second_moment = Sigma_transported + torch.einsum(
-                'bijk,bijl->bijkl', mu_transported, mu_transported
-            )
-            sigma_aggregated = torch.einsum('bij,bijkl->bikl', beta, second_moment)
-            sigma_aggregated = sigma_aggregated - torch.einsum(
-                'bik,bil->bikl', mu_aggregated, mu_aggregated
-            )
-            eps_eye = 1e-6 * torch.eye(sigma_aggregated.shape[-1],
-                                        device=sigma_aggregated.device,
-                                        dtype=sigma_aggregated.dtype)
-            sigma_aggregated = sigma_aggregated + eps_eye
+            Sigma_transported = 0.5 * (Sigma_transported + Sigma_transported.transpose(-1, -2))
+            I_K = torch.eye(K, device=Sigma_transported.device, dtype=Sigma_transported.dtype)
+            Sigma_transported = Sigma_transported + _eps * I_K
+
+            try:
+                Sigma_t_inv = torch.linalg.inv(Sigma_transported)
+            except (RuntimeError, torch.linalg.LinAlgError):
+                Sigma_t_inv = torch.linalg.pinv(Sigma_transported)
+
+            precision_agg = torch.einsum('bij,bijkl->bikl', beta, Sigma_t_inv)
+            precision_agg = 0.5 * (precision_agg + precision_agg.transpose(-1, -2))
+            precision_agg = precision_agg + _eps * I_K
+            try:
+                sigma_aggregated = torch.linalg.inv(precision_agg)
+            except (RuntimeError, torch.linalg.LinAlgError):
+                sigma_aggregated = torch.linalg.pinv(precision_agg)
+            sigma_aggregated = 0.5 * (sigma_aggregated + sigma_aggregated.transpose(-1, -2))
     else:
         sigma_aggregated = None
 
