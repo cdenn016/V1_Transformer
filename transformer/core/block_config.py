@@ -82,6 +82,9 @@ class BlockConfig:
                                         # Posterior σ should not exceed prior σ by much.
                                         # Default 5.0: with init_sigma_scale=1.0, allows 5× expansion
                                         # before clamping. Prevents nat_grad_sigma = 2σ²·∇σ blowup.
+    e_step_sigma_floor: float = 0.1    # Floor on σ_p inside E-step (caps 1/σ_p gradient).
+                                        # PriorBank allows σ_p ∈ [0.01, 5.0] for sharp decode,
+                                        # but E-step needs a higher floor to prevent nat_grad blowup.
 
     # === Gauge geometry ===
     gauge_mode: str = 'learned'         # 'learned' | 'trivial' (Ω=I) | 'constant' (per-head Ω)
@@ -195,6 +198,7 @@ class BlockConfig:
             obs_sigma_gradient=config.get('obs_sigma_gradient', True),
             obs_sigma_weight=config.get('obs_sigma_weight', 1.0),
             sigma_max=config.get('sigma_max', 5.0),
+            e_step_sigma_floor=config.get('e_step_sigma_floor', 0.1),
             # Gauge geometry
             gauge_mode=config.get('gauge_mode', 'learned'),
             gauge_param=config.get('gauge_param', 'phi'),

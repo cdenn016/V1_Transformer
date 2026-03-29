@@ -184,6 +184,7 @@ class GaugeTransformerBlock(nn.Module):
             obs_sigma_gradient=cfg.obs_sigma_gradient,
             obs_sigma_weight=cfg.obs_sigma_weight,
             sigma_max=cfg.sigma_max,
+            e_step_sigma_floor=cfg.e_step_sigma_floor,
             use_rope=cfg.use_rope,
             rope_base=cfg.rope_base,
             gauge_param=cfg.gauge_param,

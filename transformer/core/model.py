@@ -440,7 +440,7 @@ class GaugeTransformerLM(nn.Module):
                 phi_scale=config.get('phi_scale', 0.3),
                 gauge_param=gauge_param,
                 omega_head_dims=self.omega_head_dims,
-                sigma_ce_scale=config.get('sigma_ce_scale', 0.01),
+                sigma_ce_scale=config.get('sigma_ce_scale', 0.1),
                 learnable_temperature=config.get('learnable_pb_temperature', False),
                 diagonal_covariance=diagonal_covariance,
             )
