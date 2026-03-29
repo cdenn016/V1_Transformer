@@ -4201,10 +4201,13 @@ class VariationalFFNDynamic(nn.Module):
                       f"  clip: {self._e_step_grad_norms['nat_grad_sigma_clipped']:.1f}"
                       f"  ({_sig_clip_frac*100:.0f}% positions at cap)")
                 print(f"{'='*80}\n")
+                # Store before resetting (debug mode may coexist with metrics collection)
+                if self._collect_vfe_metrics:
+                    self.last_vfe_debug = dict(_VFE_GRAD_DEBUG)
                 _VFE_GRAD_DEBUG = None  # Reset for next iteration
 
             # Store lightweight copy for external consumption (no printing overhead)
-            if self._collect_vfe_metrics and _VFE_GRAD_DEBUG is not None:
+            elif self._collect_vfe_metrics and _VFE_GRAD_DEBUG is not None:
                 self.last_vfe_debug = dict(_VFE_GRAD_DEBUG)
                 _VFE_GRAD_DEBUG = None
 

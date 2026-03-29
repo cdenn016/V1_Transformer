@@ -58,6 +58,16 @@ def _smooth(data: list, window: int = 15) -> np.ndarray:
     return arr
 
 
+def _safe_legend(ax, *args, **kwargs):
+    """Call ax.legend() only if there are labeled artists, suppressing warnings."""
+    if args:
+        ax.legend(*args, **kwargs)
+        return
+    handles, labels = ax.get_legend_handles_labels()
+    if labels:
+        ax.legend(**kwargs)
+
+
 # =============================================================================
 # CSV Loading
 # =============================================================================
@@ -148,7 +158,7 @@ def plot_vfe_gradient_decomposition(
     ax.set_ylabel(r'$\|\nabla_\mu F\|$')
     ax.set_yscale('log')
     ax.set_title(r'(a) Mean gradient $\nabla_\mu F$ decomposition')
-    ax.legend(loc='upper right', framealpha=0.9)
+    _safe_legend(ax, loc='upper right', framealpha=0.9)
 
     # --- Panel B: sigma gradient components ---
     ax = axes[1]
@@ -174,7 +184,7 @@ def plot_vfe_gradient_decomposition(
     ax.set_xlabel('Training step')
     ax.set_yscale('log')
     ax.set_title(r'(b) Covariance gradient $\nabla_\Sigma F$ decomposition')
-    ax.legend(loc='upper right', framealpha=0.9)
+    _safe_legend(ax, loc='upper right', framealpha=0.9)
 
     fig.suptitle('VFE Gradient Component Decomposition', fontsize=14, y=1.02)
     fig.tight_layout()
@@ -227,7 +237,7 @@ def plot_covariance_health(
     ax.set_ylabel('Diagonal covariance')
     ax.set_xlabel('Training step')
     ax.set_title(r'(a) Belief covariance $\Sigma_q$')
-    ax.legend(loc='best', framealpha=0.9)
+    _safe_legend(ax, loc='best', framealpha=0.9)
 
     # --- Panel B: Condition number ---
     ax = axes[1]
@@ -243,7 +253,7 @@ def plot_covariance_health(
     ax.set_xlabel('Training step')
     ax.set_yscale('log')
     ax.set_title(r'(b) Covariance conditioning')
-    ax.legend(loc='best', framealpha=0.9)
+    _safe_legend(ax, loc='best', framealpha=0.9)
 
     # --- Panel C: Prior-belief gap ---
     ax = axes[2]
@@ -258,7 +268,7 @@ def plot_covariance_health(
     ax.set_ylabel(r'$KL(q^* \| p)$ (nats)')
     ax.set_xlabel('Training step')
     ax.set_title(r'(c) Prior-belief divergence')
-    ax.legend(loc='best', framealpha=0.9)
+    _safe_legend(ax, loc='best', framealpha=0.9)
 
     fig.suptitle('Covariance Health & Prior-Belief Gap', fontsize=14, y=1.02)
     fig.tight_layout()
@@ -317,7 +327,7 @@ def plot_transport_attention(
     # Combined legend
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = ax2.get_legend_handles_labels()
-    ax.legend(h1 + h2, l1 + l2, loc='upper left', framealpha=0.9)
+    _safe_legend(ax, h1 + h2, l1 + l2, loc='upper left', framealpha=0.9)
     ax.set_xlabel('Training step')
     ax.set_title(r'(a) Transport geometry ($\phi$ statistics)')
 
@@ -347,7 +357,7 @@ def plot_transport_attention(
     ax.set_title(r'(b) Attention entropy & head diversity')
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = ax2.get_legend_handles_labels()
-    ax.legend(h1 + h2, l1 + l2, loc='upper right', framealpha=0.9)
+    _safe_legend(ax, h1 + h2, l1 + l2, loc='upper right', framealpha=0.9)
 
     fig.suptitle('Transport Geometry & Attention Structure', fontsize=14, y=1.02)
     fig.tight_layout()
@@ -390,7 +400,7 @@ def plot_kl_landscape(
     ax.set_ylabel(r'Pairwise $KL(q_i \| \Omega_{ij} q_j)$')
     ax.set_xlabel('Training step')
     ax.set_title(r'(a) Pairwise KL divergence (attention driver)')
-    ax.legend(loc='best', framealpha=0.9)
+    _safe_legend(ax, loc='best', framealpha=0.9)
 
     # --- Panel B: Effective temperature ---
     ax = axes[1]
@@ -409,9 +419,9 @@ def plot_kl_landscape(
         ax2.tick_params(axis='y', labelcolor='#2E7D32')
         h1, l1 = ax.get_legend_handles_labels()
         h2, l2 = ax2.get_legend_handles_labels()
-        ax.legend(h1 + h2, l1 + l2, loc='best', framealpha=0.9)
+        _safe_legend(ax, h1 + h2, l1 + l2, loc='best', framealpha=0.9)
     else:
-        ax.legend(loc='best', framealpha=0.9)
+        _safe_legend(ax, loc='best', framealpha=0.9)
     ax.set_ylabel(r'Effective temperature $\kappa_{\mathrm{eff}}$')
     ax.set_xlabel('Training step')
     ax.set_title(r'(b) Softmax temperature & attention sharpness')
@@ -459,7 +469,7 @@ def plot_vfe_dynamics_dashboard(
             ax.plot(steps, vals, color=color, alpha=0.12, linewidth=0.5)
     ax.set_ylabel('Loss')
     ax.set_title('(a) Training & validation loss')
-    ax.legend(loc='upper right', framealpha=0.9)
+    _safe_legend(ax, loc='upper right', framealpha=0.9)
 
     # PPL on secondary axis
     ax2 = ax.twinx()
@@ -486,7 +496,7 @@ def plot_vfe_dynamics_dashboard(
     ax.set_ylabel(r'$\|\nabla_\mu F\|$')
     ax.set_yscale('log')
     ax.set_title(r'(b) VFE $\nabla_\mu$ decomposition')
-    ax.legend(loc='upper right', framealpha=0.9, fontsize=7)
+    _safe_legend(ax, loc='upper right', framealpha=0.9, fontsize=7)
 
     # --- (c) Covariance health ---
     ax = fig.add_subplot(gs[1, 0])
@@ -504,7 +514,7 @@ def plot_vfe_dynamics_dashboard(
             ax.plot(steps, vals, color=color, alpha=0.12, linewidth=0.5)
     ax.set_ylabel('Diagonal covariance')
     ax.set_title(r'(c) Belief covariance $\Sigma_q$ vs prior $\Sigma_p$')
-    ax.legend(loc='best', framealpha=0.9, fontsize=7)
+    _safe_legend(ax, loc='best', framealpha=0.9, fontsize=7)
 
     # --- (d) Prior-belief gap ---
     ax = fig.add_subplot(gs[1, 1])
@@ -519,7 +529,7 @@ def plot_vfe_dynamics_dashboard(
             ax.plot(steps, vals, color=color, alpha=0.12, linewidth=0.5)
     ax.set_ylabel(r'$KL(q^* \| p)$ (nats)')
     ax.set_title('(d) Prior-belief divergence')
-    ax.legend(loc='best', framealpha=0.9, fontsize=7)
+    _safe_legend(ax, loc='best', framealpha=0.9, fontsize=7)
 
     # --- (e) Transport phi statistics ---
     ax = fig.add_subplot(gs[2, 0])
@@ -534,7 +544,7 @@ def plot_vfe_dynamics_dashboard(
     ax.set_ylabel('Norm')
     ax.set_xlabel('Training step')
     ax.set_title(r'(e) Transport geometry ($\phi$ norms)')
-    ax.legend(loc='best', framealpha=0.9)
+    _safe_legend(ax, loc='best', framealpha=0.9)
 
     # --- (f) Attention entropy + head diversity ---
     ax = fig.add_subplot(gs[2, 1])
@@ -555,9 +565,9 @@ def plot_vfe_dynamics_dashboard(
         ax2.tick_params(axis='y', labelcolor='#FF6F00')
         h1, l1 = ax.get_legend_handles_labels()
         h2, l2 = ax2.get_legend_handles_labels()
-        ax.legend(h1 + h2, l1 + l2, loc='best', framealpha=0.9, fontsize=7)
+        _safe_legend(ax, h1 + h2, l1 + l2, loc='best', framealpha=0.9, fontsize=7)
     else:
-        ax.legend(loc='best', framealpha=0.9)
+        _safe_legend(ax, loc='best', framealpha=0.9)
     ax.set_ylabel(r'Attention entropy $H(\beta)$')
     ax.set_xlabel('Training step')
     ax.set_title('(f) Attention entropy & head diversity')
@@ -603,27 +613,29 @@ def generate_all_vfe_figures(
         ('vfe_dynamics_dashboard', plot_vfe_dynamics_dashboard),
     ]
 
-    for name, plot_fn in figures:
-        path = output_dir / f'{name}.png'
-        try:
-            fig = plot_fn(data, save_path=path, smooth_window=smooth_window)
-            if fig is not None:
-                plt.close(fig)
-                saved[name] = path
-                print(f"  Saved: {path}")
-        except Exception as e:
-            print(f"  Warning: {name} failed: {e}")
+    import warnings as _w
+    with _w.catch_warnings():
+        _w.simplefilter("ignore", UserWarning)
+        for name, plot_fn in figures:
+            path = output_dir / f'{name}.png'
+            try:
+                fig = plot_fn(data, save_path=path, smooth_window=smooth_window)
+                if fig is not None:
+                    plt.close(fig)
+                    saved[name] = path
+            except Exception:
+                pass  # Skip silently; missing columns are expected for old CSVs
 
-    # Also save PDF versions for publication
-    for name, plot_fn in figures:
-        pdf_path = output_dir / f'{name}.pdf'
-        try:
-            fig = plot_fn(data, save_path=pdf_path, smooth_window=smooth_window)
-            if fig is not None:
-                plt.close(fig)
-                saved[f'{name}_pdf'] = pdf_path
-        except Exception:
-            pass
+        # Also save PDF versions for publication
+        for name, plot_fn in figures:
+            pdf_path = output_dir / f'{name}.pdf'
+            try:
+                fig = plot_fn(data, save_path=pdf_path, smooth_window=smooth_window)
+                if fig is not None:
+                    plt.close(fig)
+                    saved[f'{name}_pdf'] = pdf_path
+            except Exception:
+                pass
 
     return saved
 
