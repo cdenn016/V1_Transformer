@@ -3681,6 +3681,19 @@ class VariationalFFNDynamic(nn.Module):
         beta_heads = []      # Per-head betas (multihead); populated inside VFE loop
 
         # =====================================================================
+        # Determine alpha: Bayesian precision or fixed scalar
+        # (needed by both closed-form and gradient descent paths)
+        # =====================================================================
+        if self.learnable_alpha:
+            alpha_effective = self.get_bayesian_alpha(
+                mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
+            )  # (B, N, K) - per-dim gauge-invariant, state-dependent
+            _alpha_c0 = F.softplus(self.raw_c0)
+        else:
+            alpha_effective = self.alpha  # scalar (backward compatible)
+            _alpha_c0 = None
+
+        # =====================================================================
         # CLOSED-FORM E-STEP: Precision-weighted fixed point (optional)
         # =====================================================================
         # When closed_form_e_step=True, compute the exact fixed point of the
@@ -3898,15 +3911,13 @@ class VariationalFFNDynamic(nn.Module):
 
             # =================================================================
             # Determine alpha: Bayesian precision or fixed scalar
+            # Recompute per-iteration for learnable alpha (state-dependent);
+            # for fixed alpha, alpha_effective was set before the loop.
             # =================================================================
             if self.learnable_alpha:
                 alpha_effective = self.get_bayesian_alpha(
                     mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
                 )  # (B, N, K) - per-dim gauge-invariant, state-dependent
-                _alpha_c0 = F.softplus(self.raw_c0)
-            else:
-                alpha_effective = self.alpha  # scalar (backward compatible)
-                _alpha_c0 = None
 
             # Initialize cached block exp pairs for phi gradient reuse
             _mh_cached_bep = None
