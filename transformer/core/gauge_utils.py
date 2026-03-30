@@ -254,7 +254,7 @@ def fused_block_diagonal_kl_diag(
     B, N, K = mu_q.shape
     device = mu_q.device
     dtype = mu_q.dtype
-    kl_max = max(100.0, 5.0 * K)
+    kl_max = max(100.0, 20.0 * K)
 
     kl_total = torch.zeros(B, N, N, device=device, dtype=dtype)
 
@@ -376,7 +376,7 @@ def fused_block_diagonal_kl_full(
     B, N, K = mu_q.shape
     device = mu_q.device
     dtype = mu_q.dtype
-    kl_max = max(100.0, 5.0 * K)
+    kl_max = max(100.0, 20.0 * K)
 
     kl_total = torch.zeros(B, N, N, device=device, dtype=dtype)
 

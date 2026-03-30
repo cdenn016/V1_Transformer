@@ -182,7 +182,7 @@ def gaussian_kl_divergence(
 
     # Clamp to [0, max] for numerical stability.
     # Scale ceiling with K: each dimension contributes O(1) to KL.
-    kl_ceil = max(100.0, 5.0 * K)
+    kl_ceil = max(100.0, 20.0 * K)
     kl = torch.clamp(kl, min=0.0, max=kl_ceil)
     # NaN/Inf safety: replace any residual numerical failures
     bad_mask = torch.isnan(kl) | torch.isinf(kl)
