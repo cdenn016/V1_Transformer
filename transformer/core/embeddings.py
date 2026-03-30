@@ -118,6 +118,7 @@ class GaugeTokenEmbedding(nn.Module):
                                              # The reflection is applied as μ_i → s_i ⊙ μ_i
                                              # before the SO(K) rotation, so no changes needed
                                              # in attention or VFE code.
+        sigma_max: float = 5.0,  # Upper bound for prior covariance clamp
     ):
         """
         Initialize gauge token embedding.
@@ -165,6 +166,7 @@ class GaugeTokenEmbedding(nn.Module):
         self.learnable_phi = learnable_phi
         self.gauge_fixed_priors = gauge_fixed_priors
         self.learnable_reflection = learnable_reflection
+        self.sigma_max = sigma_max
 
         # Embedding initialization scale
         # OLD: 1/sqrt(K) keeps ||μ||² = O(1) but makes all embeddings equidistant!
@@ -409,7 +411,7 @@ class GaugeTokenEmbedding(nn.Module):
             mu = torch.einsum('bnkl,l->bnk', R, self.base_mu)  # (B, N, K)
 
             # Build base covariance Σ_0 = diag(exp(log_σ_0))
-            sigma_diag_base = torch.exp(self.base_log_sigma_diag).clamp(min=0.01, max=5.0)  # (K,)
+            sigma_diag_base = torch.exp(self.base_log_sigma_diag).clamp(min=0.1, max=self.sigma_max)  # (K,)
             Sigma_0 = torch.diag(sigma_diag_base)  # (K, K)
 
             # Rotate base prior covariance: Σ_i = R_i @ Σ_0 @ R_i^T
@@ -429,8 +431,8 @@ class GaugeTokenEmbedding(nn.Module):
             # zeros gradient at the boundary, which is correct: it prevents
             # log_sigma from drifting out of range.  (The detach-clamp variant
             # causes gradient explosion — see commit message.)
-            _SIGMA_MIN = 0.01
-            _SIGMA_MAX = 5.0
+            _SIGMA_MIN = 0.1
+            _SIGMA_MAX = self.sigma_max
             if self.learnable_sigma:
                 log_sigma = self.log_sigma_diag[token_ids]  # (B, N, K)
                 sigma_diag = torch.exp(log_sigma).clamp(_SIGMA_MIN, _SIGMA_MAX)  # (B, N, K)
