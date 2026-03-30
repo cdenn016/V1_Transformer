@@ -12,9 +12,15 @@ from typing import Dict
 _counts: Dict[str, int] = {}
 
 
-def record(event: str) -> None:
-    """Increment counter for a numerical fallback event."""
-    _counts[event] = _counts.get(event, 0) + 1
+def record(event: str, count: int = 1) -> None:
+    """Increment counter for a numerical fallback event.
+
+    Args:
+        event: Event name (e.g., 'chol_recover', 'nan_replace')
+        count: Number of occurrences to add (default 1). Use for
+               element-level counting: ``record('neg_clamp', n=neg_mask.sum().item())``
+    """
+    _counts[event] = _counts.get(event, 0) + count
 
 
 def flush() -> Dict[str, int]:

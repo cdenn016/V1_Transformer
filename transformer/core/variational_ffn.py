@@ -4101,8 +4101,9 @@ class VariationalFFNDynamic(nn.Module):
                     EW  = torch.matmul(probs, W_out)                     # (B, N, K)
                     hessian_diag = EW2 - EW ** 2                         # (B, N, K)
                     # Clamp: FP rounding can violate Var ≥ 0
-                    if (hessian_diag < 0).any():
-                        _nr("obs_sigma_hessian_neg_clamp")
+                    _neg_mask = hessian_diag < 0
+                    if _neg_mask.any():
+                        _nr("obs_sigma_hessian_neg_clamp", count=int(_neg_mask.sum().item()))
                         hessian_diag = hessian_diag.clamp(min=0.0)
                     _sigma_obs_scale = (0.5 * self.obs_sigma_weight) * _obs_weight
                     # Cap observation sigma gradient to prevent systematic upward bias

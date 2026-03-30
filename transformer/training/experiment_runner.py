@@ -1223,8 +1223,11 @@ class PublicationTrainer(FastTrainer):
                 # Diagnostic forward pass WITH grad enabled so phi evolves
                 # across layers (phi update is gated by torch.is_grad_enabled()).
                 # Zero grads afterward to avoid polluting the next train step.
+                # Respect use_obs_in_vfe: only pass targets if training uses them,
+                # so diagnostics measure the same E-step path as training.
+                _diag_targets = target_ids if getattr(self.config, 'use_obs_in_vfe', False) else None
                 self.model.forward_with_attention(
-                    input_ids, targets=target_ids)
+                    input_ids, targets=_diag_targets)
 
                 # Zero any gradients accumulated during diagnostic pass
                 self.model.zero_grad(set_to_none=True)
