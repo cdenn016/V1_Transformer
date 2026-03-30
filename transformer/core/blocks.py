@@ -151,6 +151,7 @@ class GaugeTransformerBlock(nn.Module):
             generators=cfg.generators,
             alpha=cfg.ffn_alpha,
             lambda_belief=cfg.ffn_lambda_belief,
+            lambda_softmax=cfg.ffn_lambda_softmax,
             kappa=cfg.ffn_kappa,
             n_iterations=cfg.ffn_n_iterations,
             learnable_lr=cfg.ffn_learnable_lr,

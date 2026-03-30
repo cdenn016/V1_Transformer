@@ -534,6 +534,7 @@ def _compute_vfe_gradients_block_diagonal(
     generators: torch.Tensor,  # (n_gen, K, K) generators
     alpha: 'float | torch.Tensor',
     lambda_belief: float,
+    lambda_softmax: float,
     kappa: float,
     eps: float,
     irrep_dims: List[int],
@@ -778,7 +779,7 @@ def _compute_vfe_gradients_block_diagonal(
     kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
     grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair_full
     d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
-    grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
+    grad_mu_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
 
     grad_mu_align = grad_mu_direct + grad_mu_softmax
     grad_mu = grad_mu + grad_mu_align
@@ -813,7 +814,7 @@ def _compute_vfe_gradients_block_diagonal(
             avg_g = torch.einsum('bij,bijkl->bikl', beta, g_per_pair)  # (B, N, d, d)
             g_deviation = avg_g.unsqueeze(2) - g_per_pair  # (B, N, N, d, d)
             d_beta_d_sigma = beta.unsqueeze(-1).unsqueeze(-1) * g_deviation / kappa_scaled  # (B, N, N, d, d)
-            grad_sigma_softmax_block = lambda_belief * torch.einsum('bij,bijkl->bikl', kl_values, d_beta_d_sigma)  # (B, N, d, d)
+            grad_sigma_softmax_block = lambda_softmax * torch.einsum('bij,bijkl->bikl', kl_values, d_beta_d_sigma)  # (B, N, d, d)
             grad_sigma[:, :, block_start:block_end, block_start:block_end] = (
                 grad_sigma[:, :, block_start:block_end, block_start:block_end] + grad_sigma_softmax_block
             )
@@ -847,6 +848,7 @@ def _compute_vfe_gradients_block_diagonal_diag(
     generators: torch.Tensor,  # (n_gen, K, K) generators
     alpha: 'float | torch.Tensor',
     lambda_belief: float,
+    lambda_softmax: float,
     kappa: float,
     eps: float,
     irrep_dims: List[int],
@@ -1029,7 +1031,7 @@ def _compute_vfe_gradients_block_diagonal_diag(
     kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
     grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair_full
     d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
-    grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
+    grad_mu_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
 
     grad_mu_align = grad_mu_direct + grad_mu_softmax
     grad_mu = grad_mu_self + grad_mu_align
@@ -1056,7 +1058,7 @@ def _compute_vfe_gradients_block_diagonal_diag(
         avg_sigma_grad = torch.einsum('bij,bijk->bik', beta, grad_sigma_per_pair_full)
         sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair_full
         d_beta_d_sigma = beta.unsqueeze(-1) * sigma_grad_deviation / kappa_scaled
-        grad_sigma_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_sigma)
+        grad_sigma_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_sigma)
         if _VFE_GRAD_DEBUG is not None:
             grad_sigma_softmax_norm = _grad_norm(grad_sigma_softmax)
         grad_sigma_align = grad_sigma_align + grad_sigma_softmax
@@ -1084,6 +1086,7 @@ def _fused_attention_and_vfe_gradients_block_diag(
     generators: torch.Tensor,  # (n_gen, K, K) generators
     alpha: 'float | torch.Tensor',
     lambda_belief: float,
+    lambda_softmax: float,
     kappa: float,
     eps: float,
     irrep_dims: List[int],
@@ -1304,7 +1307,7 @@ def _fused_attention_and_vfe_gradients_block_diag(
     # so the chain rule ∂(β·KL)/∂μ is consistent: both KL and ∂KL/∂μ
     # are computed in the same (raw, non-rotated) space.
     kl_for_coupling = kl_values_raw if kl_values_raw is not None else kl_values
-    grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_for_coupling, d_beta_d_mu)
+    grad_mu_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_for_coupling, d_beta_d_mu)
 
     grad_mu = grad_mu_self + grad_mu_direct + grad_mu_softmax
 
@@ -1333,7 +1336,7 @@ def _fused_attention_and_vfe_gradients_block_diag(
         avg_sigma_grad = torch.einsum('bij,bijk->bik', beta, grad_sigma_per_pair_full)
         sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair_full
         d_beta_d_sigma = beta.unsqueeze(-1) * sigma_grad_deviation / kappa_scaled
-        grad_sigma_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_for_coupling, d_beta_d_sigma)
+        grad_sigma_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_for_coupling, d_beta_d_sigma)
         if _VFE_GRAD_DEBUG is not None:
             grad_sigma_softmax_norm = _grad_norm(grad_sigma_softmax)
         grad_sigma_align = grad_sigma_align + grad_sigma_softmax
@@ -1372,6 +1375,7 @@ def _compute_vfe_gradients_chunked(
     generators: torch.Tensor,  # (n_gen, K, K) generators
     alpha: 'float | torch.Tensor',
     lambda_belief: float,
+    lambda_softmax: float,
     kappa: float,
     eps: float,
     chunk_size: int,
@@ -1575,7 +1579,8 @@ def compute_vfe_gradients_gpu(
     phi: torch.Tensor,         # (B, N, n_gen) gauge frames where n_gen is # of generators
     generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators
     alpha: 'float | torch.Tensor' = 0.01,  # Self-coupling weight: scalar or (B, N, K) per-dim Bayesian precision
-    lambda_belief: float = 1.0,  # Belief alignment weight
+    lambda_belief: float = 1.0,  # Belief alignment weight (direct: β·∇KL)
+    lambda_softmax: float = 1.0,  # Softmax coupling weight (GELU-like ∂β/∂θ · KL)
     kappa: float = 1.0,        # Temperature (for normalization)
     eps: float = 1e-6,
     alpha_c0: Optional[torch.Tensor] = None,  # (K,) softplus(raw_c0) for product-rule correction when alpha is learnable
@@ -1893,7 +1898,7 @@ def compute_vfe_gradients_gpu(
         d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled  # (B, N, N, K)
 
         # Weight by KL values and sum: Σ_j KL_ij · ∂β_ij/∂μ_i
-        grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
+        grad_mu_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
 
         # Total alignment gradient (direct + softmax coupling)
         grad_mu_align = grad_mu_direct + grad_mu_softmax
@@ -1918,7 +1923,7 @@ def compute_vfe_gradients_gpu(
             avg_sigma_grad = torch.einsum('bij,bijk->bik', beta, grad_sigma_per_pair)  # (B, N, K)
             sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair  # (B, N, N, K)
             d_beta_d_sigma = beta.unsqueeze(-1) * sigma_grad_deviation / kappa_scaled  # (B, N, N, K)
-            grad_sigma_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_sigma)  # (B, N, K)
+            grad_sigma_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_sigma)  # (B, N, K)
             grad_sigma_align = grad_sigma_direct + grad_sigma_softmax
         else:
             # Simplified: no sigma gradient from alignment (legacy behavior)
@@ -2009,7 +2014,7 @@ def compute_vfe_gradients_gpu(
         kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
         grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair
         d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
-        grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
+        grad_mu_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
 
         grad_mu_align = grad_mu_direct + grad_mu_softmax
 
@@ -2033,7 +2038,7 @@ def compute_vfe_gradients_gpu(
             avg_sigma_grad = torch.einsum('bij,bijkl->bikl', beta, grad_sigma_per_pair)  # (B, N, K, K)
             sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair  # (B, N, N, K, K)
             d_beta_d_sigma = beta.unsqueeze(-1).unsqueeze(-1) * sigma_grad_deviation / kappa_scaled  # (B, N, N, K, K)
-            grad_sigma_softmax = lambda_belief * torch.einsum('bij,bijkl->bikl', kl_values, d_beta_d_sigma)  # (B, N, K, K)
+            grad_sigma_softmax = lambda_softmax * torch.einsum('bij,bijkl->bikl', kl_values, d_beta_d_sigma)  # (B, N, K, K)
             grad_sigma_align = grad_sigma_direct + grad_sigma_softmax
         else:
             # Simplified: no sigma gradient from alignment (legacy behavior)
@@ -2411,7 +2416,8 @@ class VariationalFFNDynamic(nn.Module):
                                    # loss double-counts the coupling. Correct separation: E-step
                                    # handles belief regularization (α_E > 0), M-step handles
                                    # prediction quality (CE only, α_M = 0).
-        lambda_belief: float = 1.0,  # Belief alignment weight
+        lambda_belief: float = 1.0,  # Belief alignment weight (direct: β·∇KL)
+        lambda_softmax: float = 1.0,  # Softmax coupling weight (GELU-like ∂β/∂θ · KL)
         kappa: float = 1.0,        # Attention temperature
         n_iterations: int = 1,    # VFE descent steps (more steps = deeper equilibration)
         learnable_lr: bool = True, # Learn step size?
@@ -2626,6 +2632,7 @@ class VariationalFFNDynamic(nn.Module):
         # VFE hyperparameters
         self.alpha = alpha
         self.lambda_belief = lambda_belief
+        self.lambda_softmax = lambda_softmax
         self.kappa = kappa
 
         # =================================================================
@@ -3149,7 +3156,7 @@ class VariationalFFNDynamic(nn.Module):
                         mu_q=mu_h, sigma_q=sigma_h,
                         mu_p=mu_p_h, sigma_p=sigma_p_h,
                         beta=beta_h, phi=phi_current, generators=gen_h,
-                        alpha=alpha_h, lambda_belief=self.lambda_belief,
+                        alpha=alpha_h, lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax,
                         kappa=kappa_h, eps=eps,
                         alpha_c0=c0_h,
                         compute_sigma_align_grad=self.compute_sigma_align_grad,
@@ -3181,7 +3188,7 @@ class VariationalFFNDynamic(nn.Module):
                     mu_q=mu_in, sigma_q=sigma_in,
                     mu_p=mu_p_current, sigma_p=sigma_p,
                     beta=beta, phi=phi_current, generators=self.generators,
-                    alpha=alpha_eff, lambda_belief=self.lambda_belief,
+                    alpha=alpha_eff, lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax,
                     kappa=self.kappa, eps=eps,
                     alpha_c0=_alpha_c0,
                     cached_transport=cached_transport,
@@ -3329,7 +3336,7 @@ class VariationalFFNDynamic(nn.Module):
                         mu_q=mu_h, sigma_q=sigma_h,
                         mu_p=mu_p_h, sigma_p=sigma_p_h,
                         beta=beta_h, phi=phi_in, generators=gen_h,
-                        alpha=alpha_h, lambda_belief=self.lambda_belief,
+                        alpha=alpha_h, lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax,
                         kappa=kappa_h, eps=eps,
                         alpha_c0=c0_h,
                         compute_sigma_align_grad=self.compute_sigma_align_grad,
@@ -3361,7 +3368,7 @@ class VariationalFFNDynamic(nn.Module):
                     mu_q=mu_in, sigma_q=sigma_in,
                     mu_p=mu_p_current, sigma_p=sigma_p,
                     beta=beta, phi=phi_in, generators=self.generators,
-                    alpha=alpha_eff, lambda_belief=self.lambda_belief,
+                    alpha=alpha_eff, lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax,
                     kappa=self.kappa, eps=eps,
                     alpha_c0=_alpha_c0,
                     cached_transport=cached_transport,
@@ -4061,7 +4068,7 @@ class VariationalFFNDynamic(nn.Module):
                             mu_q=mu_h, sigma_q=sigma_h,
                             mu_p=mu_p_h, sigma_p=sigma_p_h,
                             phi=phi_current, generators=gen_h,
-                            alpha=alpha_h, lambda_belief=self.lambda_belief,
+                            alpha=alpha_h, lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax,
                             kappa=kappa_h, eps=eps,
                             irrep_dims=[d_h],
                             compute_sigma_align_grad=self.compute_sigma_align_grad,
@@ -4093,7 +4100,7 @@ class VariationalFFNDynamic(nn.Module):
                             mu_q=mu_h, sigma_q=sigma_h,
                             mu_p=mu_p_h, sigma_p=sigma_p_h,
                             beta=beta_h, phi=phi_current, generators=gen_h,
-                            alpha=alpha_h, lambda_belief=self.lambda_belief,
+                            alpha=alpha_h, lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax,
                             kappa=kappa_h, eps=eps, alpha_c0=c0_h,
                             compute_sigma_align_grad=self.compute_sigma_align_grad,
                             irrep_dims=[d_h],
@@ -4202,7 +4209,7 @@ class VariationalFFNDynamic(nn.Module):
                         mu_q=_mu_for_grad, sigma_q=_sigma_for_grad,
                         mu_p=mu_p_current, sigma_p=sigma_p,
                         phi=phi_current, generators=self.generators,
-                        alpha=alpha_effective, lambda_belief=self.lambda_belief,
+                        alpha=alpha_effective, lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax,
                         kappa=self.kappa, eps=eps,
                         irrep_dims=self.irrep_dims,
                         compute_sigma_align_grad=self.compute_sigma_align_grad,
@@ -4236,7 +4243,7 @@ class VariationalFFNDynamic(nn.Module):
                         mu_p=mu_p_current, sigma_p=sigma_p,
                         beta=beta_current, phi=phi_current,
                         generators=self.generators, alpha=alpha_effective,
-                        lambda_belief=self.lambda_belief, kappa=self.kappa,
+                        lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax, kappa=self.kappa,
                         eps=eps, alpha_c0=_alpha_c0,
                         cached_transport=cached_transport,
                         compute_sigma_align_grad=self.compute_sigma_align_grad,

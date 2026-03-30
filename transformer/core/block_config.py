@@ -74,7 +74,8 @@ class BlockConfig:
     ffn_learnable_lr: bool = True       # Learn step size η for variational descent
     e_step_mu_lr: float = 0.1            # E-step μ natural gradient step size (used when ffn_learnable_lr=False)
     e_step_sigma_lr: float = 0.001       # E-step σ trust region scale (used when ffn_learnable_lr=False)
-    ffn_lambda_belief: float = 1.0      # Belief alignment weight λ
+    ffn_lambda_belief: float = 1.0      # Belief alignment weight λ (direct: β·∇KL)
+    ffn_lambda_softmax: float = 1.0    # Softmax coupling weight (GELU-like ∂β/∂θ · KL)
     ffn_update_sigma: bool = True       # Update covariances during FFN E-step
     ffn_learnable_alpha: bool = False   # Bayesian precision via Gamma-Normal conjugacy
     obs_sigma_gradient: bool = True    # ∂E_q[CE]/∂σ Hessian-diagonal obs gradient for sigma
@@ -197,6 +198,7 @@ class BlockConfig:
             e_step_mu_lr=config.get('e_step_mu_lr', 0.1),
             e_step_sigma_lr=config.get('e_step_sigma_lr', 0.001),
             ffn_lambda_belief=config.get('ffn_lambda_belief', 1.0),
+            ffn_lambda_softmax=config.get('ffn_lambda_softmax', 1.0),
             ffn_update_sigma=config.get('ffn_update_sigma', True),
             ffn_learnable_alpha=config.get('ffn_learnable_alpha', config.get('learnable_alpha', False)),
             obs_sigma_gradient=config.get('obs_sigma_gradient', True),
