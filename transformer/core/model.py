@@ -397,6 +397,8 @@ class GaugeTransformerLM(nn.Module):
             mu_max_norm=config.get('mu_max_norm', None),
             # O(K) reflection: per-token sign vectors extending SO(K) → O(K)
             learnable_reflection=config.get('learnable_reflection', False),
+            # Prior covariance ceiling (matches VFE sigma_max)
+            sigma_max=config.get('sigma_max', 5.0),
             # Direct Omega parameterization
             gauge_param=gauge_param,
             omega_head_dims=self.omega_head_dims,
@@ -450,6 +452,7 @@ class GaugeTransformerLM(nn.Module):
                 learnable_temperature=config.get('learnable_pb_temperature',
                                                   config.get('learnable_temperature', False)),
                 diagonal_covariance=diagonal_covariance,
+                sigma_max=config.get('sigma_max', 5.0),
             )
             print(f"[GaugeTransformerLM] Created PriorBank with token-dependent priors (vocab_size={vocab_size})")
             print(f"                     gauge_fixed_priors={gauge_fixed_priors}, tau={self.prior_bank_tau}")
