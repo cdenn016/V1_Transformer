@@ -411,7 +411,7 @@ class GaugeTokenEmbedding(nn.Module):
             mu = torch.einsum('bnkl,l->bnk', R, self.base_mu)  # (B, N, K)
 
             # Build base covariance Σ_0 = diag(exp(log_σ_0))
-            sigma_diag_base = torch.exp(self.base_log_sigma_diag).clamp(min=0.1, max=self.sigma_max)  # (K,)
+            sigma_diag_base = torch.exp(self.base_log_sigma_diag).clamp(min=0.01, max=self.sigma_max)  # (K,)
             Sigma_0 = torch.diag(sigma_diag_base)  # (K, K)
 
             # Rotate base prior covariance: Σ_i = R_i @ Σ_0 @ R_i^T
@@ -431,7 +431,7 @@ class GaugeTokenEmbedding(nn.Module):
             # zeros gradient at the boundary, which is correct: it prevents
             # log_sigma from drifting out of range.  (The detach-clamp variant
             # causes gradient explosion — see commit message.)
-            _SIGMA_MIN = 0.1
+            _SIGMA_MIN = 0.01
             _SIGMA_MAX = self.sigma_max
             if self.learnable_sigma:
                 log_sigma = self.log_sigma_diag[token_ids]  # (B, N, K)

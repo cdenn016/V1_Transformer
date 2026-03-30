@@ -202,11 +202,11 @@ class PriorBank(nn.Module):
     def base_prior_sigma(self) -> torch.Tensor:
         r"""Get base prior variance (always positive). Only for gauge_fixed_priors=True.
 
-        Hard clamp bounds output to [0.1, sigma_max].
-        The E-step applies its own higher floor (0.2) to prevent gradient blowup
-        from 1/σ_p terms.
+        Hard clamp bounds output to [0.01, sigma_max].
+        The E-step applies its own higher floor (0.1) to prevent gradient blowup
+        from 1/σ_p terms; the embedding keeps [0.01, sigma_max] for sharp decode.
         """
-        _SIGMA_MIN = 0.1
+        _SIGMA_MIN = 0.01
         sigma = torch.exp(self.base_log_prior_sigma)
         return sigma.clamp(_SIGMA_MIN, self.sigma_max)
 
@@ -214,13 +214,14 @@ class PriorBank(nn.Module):
     def prior_sigma(self) -> torch.Tensor:
         r"""Get prior variances (always positive). Only for gauge_fixed_priors=False.
 
-        Hard clamp bounds output to [0.1, sigma_max] for numerical safety:
-        - min=0.1: caps 1/σ_p at 10.0, matching the VFE E-step floor.
+        Hard clamp bounds output to [0.01, sigma_max] for numerical safety:
+        - min=0.01: allows sharp decode priors (1/σ_p up to 100).
+          The E-step applies its own higher floor (0.1) for gradient safety.
         - max=sigma_max: configurable upper bound matching the belief covariance ceiling.
 
         Hard clamp zeros gradient at boundaries, preventing log_sigma drift.
         """
-        _SIGMA_MIN = 0.1
+        _SIGMA_MIN = 0.01
         sigma = torch.exp(self.log_prior_sigma)
         return sigma.clamp(_SIGMA_MIN, self.sigma_max)
 
