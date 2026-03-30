@@ -127,6 +127,7 @@ class BlockConfig:
     # === Pure VFE mode flags ===
     use_layernorm: bool = True         # LayerNorm on means (False for pure VFE ablation)
     use_residual: bool = True          # Residual connections (False for pure VFE ablation)
+    skip_attention: bool = False       # Skip attention sublayer; VFE E-step computes its own β
 
     # === Multi-layer depth signal ===
     aux_layer_loss: bool = False       # Per-layer auxiliary CE loss (M-step task signal for non-final layers)
@@ -228,6 +229,7 @@ class BlockConfig:
             # Pure VFE mode
             use_layernorm=config.get('use_layernorm', True),
             use_residual=config.get('use_residual', True),
+            skip_attention=config.get('skip_attention', False),
             # Multi-layer depth signal
             aux_layer_loss=config.get('aux_layer_loss', False),
             aux_loss_weight=config.get('aux_loss_weight', 0.3),
