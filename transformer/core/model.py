@@ -1076,7 +1076,7 @@ class GaugeTransformerLM(nn.Module):
                     ),
                     'sigma_mean_diag': sigma_q.detach().mean().item() if sigma_q is not None else 0.0,
                     'phi_norm': phi.detach().norm().item(),
-                    'mu_attn_norm': mu_attn.detach().norm().item(),
+                    'mu_attn_norm': mu_attn.detach().norm().item() if not block.skip_attention else 0.0,
                     'mu_ffn_norm': mu_ffn.detach().norm().item(),
                     'residual_ratio': (
                         mu_ffn.detach().norm().item()
