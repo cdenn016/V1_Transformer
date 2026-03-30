@@ -524,8 +524,34 @@ def compute_free_energy_loss(
                   + aux_loss)
 
     # Compute attention metrics outside the computation graph
+    # When skip_attention=True, beta/kl from the attention sublayer are None.
+    # Fall back to the VFE E-step's internally computed beta (stored on the FFN).
     with torch.no_grad():
-        beta_avg = beta[-1].mean(dim=1)  # (B, N, N) - last layer, average over heads
+        if beta is not None and beta[-1] is not None:
+            beta_avg = beta[-1].mean(dim=1)  # (B, N, N) - last layer, average over heads
+            _beta_mean = beta.mean().item()
+            _kl_mean = kl.mean().item() if kl is not None else 0.0
+        else:
+            # Retrieve beta from VFE E-step (last block's FFN stores it)
+            _vfe_beta = None
+            if hasattr(model, 'transformer'):
+                last_ffn = model.transformer.blocks[-1].ffn
+                _vfe_beta = getattr(last_ffn, '_last_beta_for_implicit', None)
+                if _vfe_beta is None:
+                    # Try beta_history from last forward
+                    _bh = getattr(last_ffn, '_last_beta_history', None)
+                    if _bh and len(_bh) > 0:
+                        _vfe_beta = _bh[-1]
+            if _vfe_beta is not None:
+                beta_avg = _vfe_beta.mean(dim=1) if _vfe_beta.dim() == 4 else _vfe_beta
+                _beta_mean = _vfe_beta.mean().item()
+            else:
+                # No beta available at all — use uniform
+                N = logits.shape[1]
+                beta_avg = torch.ones(1, N, N, device=logits.device) / N
+                _beta_mean = 1.0 / N
+            _kl_mean = 0.0
+
         beta_safe = beta_avg.clamp(min=1e-10)
         attn_entropy = -(beta_safe * beta_safe.log()).sum(dim=-1).mean()
         attn_concentration = beta_avg.max(dim=-1)[0].mean()
@@ -540,8 +566,8 @@ def compute_free_energy_loss(
         'loss/hyper_prior': hyper_prior_loss.item() if lambda_hyper > 0 else 0.0,
         'loss/gauge_prior': gauge_prior_loss.item() if alpha_phi > 0 else 0.0,
         'loss/aux_layer_ce': aux_loss.item() if aux_losses else 0.0,
-        'attention/beta_mean': beta.mean().item(),
-        'attention/kl_mean': kl.mean().item(),
+        'attention/beta_mean': _beta_mean,
+        'attention/kl_mean': _kl_mean,
         'attention/entropy': attn_entropy.item(),
         'attention/concentration': attn_concentration.item(),
     }
