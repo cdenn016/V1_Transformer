@@ -991,7 +991,7 @@ class GaugeTransformerLM(nn.Module):
                         # use attention output directly to avoid broadcast errors.
                         sigma_q = sigma_attn
                     elif block.sigma_residual:
-                        sigma_q = (sigma_q + sigma_attn).clamp(min=1e-4)
+                        sigma_q = (sigma_q + sigma_attn).clamp(min=1e-4, max=block.sigma_max)
                     else:
                         sigma_q = sigma_attn
 
@@ -1027,7 +1027,7 @@ class GaugeTransformerLM(nn.Module):
 
             if block.evolve_sigma and sigma_ffn is not None:
                 if block.sigma_residual:
-                    sigma_q = (sigma_q + sigma_ffn).clamp(min=1e-4)
+                    sigma_q = (sigma_q + sigma_ffn).clamp(min=1e-4, max=block.sigma_max)
                 else:
                     sigma_q = sigma_ffn
 

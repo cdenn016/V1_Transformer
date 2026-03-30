@@ -105,6 +105,7 @@ class GaugeTransformerBlock(nn.Module):
         self.use_layernorm = cfg.use_layernorm
         self.use_residual = cfg.use_residual
         self.sigma_residual = getattr(cfg, 'sigma_residual', False)
+        self.sigma_max = cfg.sigma_max
         self.skip_attention = getattr(cfg, 'skip_attention', False)
 
         # =====================================================================
