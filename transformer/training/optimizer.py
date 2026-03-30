@@ -400,12 +400,18 @@ def create_param_groups(
     no_decay_params = []  # Norms, biases, and VFE hyperparameters (no weight decay)
     output_params = []
 
+    sign_params = []  # O(K) reflection sign vectors (learnable_reflection=True)
+
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
 
+        # O(K) reflection sign logits (learnable_reflection=True)
+        # Must be checked BEFORE mu_embed to avoid false match on 'embed'
+        if 'sign_logit' in name:
+            sign_params.append(param)
         # Mean embeddings (matches both mu_prior and prior_mu naming conventions)
-        if 'mu_embed' in name or 'mu_prior' in name or 'prior_mu' in name:
+        elif 'mu_embed' in name or 'mu_prior' in name or 'prior_mu' in name:
             mu_params.append(param)
         # Covariance embeddings (matches log_sigma, sigma_prior, log_prior_sigma, etc.)
         elif 'sigma_embed' in name or 'log_sigma' in name or 'sigma_prior' in name or 'prior_sigma' in name or 'log_prior' in name:
@@ -479,6 +485,20 @@ def create_param_groups(
         })
         if verbose:
             print(f"  Parameter group 'omega_embed': {len(omega_params)} tensors @ lr={omega_lr}, wd={embed_wd}")
+
+    if sign_params:
+        # O(K) reflection sign logits: use mu_lr (same scale as embedding params).
+        # No Riemannian preconditioning — these are continuous STE latents, not
+        # Lie algebra elements. Weight decay acts as L2 prior pulling signs toward
+        # +1 (init), which is desirable to avoid gratuitous reflections.
+        param_groups.append({
+            'params': sign_params,
+            'lr': config.mu_lr,
+            'weight_decay': embed_wd,
+            'name': 'sign_embed',
+        })
+        if verbose:
+            print(f"  Parameter group 'sign_embed': {len(sign_params)} tensors @ lr={config.mu_lr}, wd={embed_wd}")
 
     if attention_params:
         param_groups.append({
