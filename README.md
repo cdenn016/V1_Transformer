@@ -82,7 +82,7 @@ Embeddings: (μ_q, σ_q, φ) ← GaugeTokenEmbedding(token_ids)
 Position Encoding: φ ← φ_token + φ_pos  [μ unchanged]
     ↓
 FOR EACH LAYER:
-    ├─ ATTENTION SUBLAYER (if skip_attention=False):
+    ├─ ATTENTION SUBLAYER (optional: if skip_attention=False):
     │   ├─ PreNorm: μ̃ ← LayerNorm(μ)
     │   ├─ Per-head KL-attention:
     │   │   β_ij = softmax(−KL(q_i || Ω_ij[q_j]) / κ√K)
@@ -98,8 +98,8 @@ FOR EACH LAYER:
         │   │   (attention sublayer's β is discarded)
         │   ├─ Compute VFE gradient decomposition:
         │   │   ∇F = α·∇KL(q||p)           [self-coupling]
-        │   │      + λ·Σ_j β·∇KL_ij        [alignment]
-        │   │      + λ·Σ_j ∂β/∂μ·KL_ij     [softmax coupling]
+        │   │      + λ_β·Σ_j β·∇KL_ij        [alignment]
+        │   │      + λ_sm·Σ_j ∂β/∂μ·KL_ij     [softmax coupling] λ_β = λ_sm = 1 
         │   ├─ Natural gradient: Δμ = −η · Σ · ∇F
         │   └─ Update: q^(t+1) ← q^(t) + Δμ
         │
