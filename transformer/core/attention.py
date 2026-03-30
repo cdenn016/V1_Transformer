@@ -1261,6 +1261,12 @@ def _compute_kl_matrix_diagonal(
 
         mu_i = mu_q_f32[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
 
+        # Clamp transported sigma to prevent NaN from 1/σ and log(σ)
+        # GL(K) transport can produce near-zero diagonals early in training
+        _kl_eps = 1e-4
+        sigma_j_transported_diag = sigma_j_transported_diag.clamp(min=_kl_eps)
+        sigma_i = sigma_i.clamp(min=_kl_eps)
+
         # Trace term: sum(σ_i / σ_j_transported)
         trace_term = (sigma_i / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
 
@@ -1334,11 +1340,17 @@ def _compute_kl_matrix_chunked(
     # Force float32 for Cholesky, solve_triangular, log — all break in float16
     I = torch.eye(K, device=device, dtype=torch.float32)
     sigma_q_f32 = sigma_q.float()
-    sigma_q_reg = sigma_q_f32 + eps * I
-    L_q_all = torch.linalg.cholesky(sigma_q_reg)  # (B, N, K, K)
-    logdet_q_all = 2.0 * torch.sum(
-        torch.log(torch.diagonal(L_q_all, dim1=-2, dim2=-1) + eps), dim=-1
-    )  # (B, N)
+    sigma_q_reg = sigma_q_f32 + 1e-4 * I
+    sigma_q_reg = 0.5 * (sigma_q_reg + sigma_q_reg.transpose(-1, -2))
+    try:
+        L_q_all = torch.linalg.cholesky(sigma_q_reg)  # (B, N, K, K)
+        logdet_q_all = 2.0 * torch.sum(
+            torch.log(torch.diagonal(L_q_all, dim1=-2, dim2=-1).clamp(min=1e-6)), dim=-1
+        )  # (B, N)
+    except (RuntimeError, torch.linalg.LinAlgError):
+        # Fallback: eigenvalue-based logdet
+        eigvals = torch.linalg.eigvalsh(sigma_q_reg)
+        logdet_q_all = torch.sum(torch.log(eigvals.clamp(min=1e-6)), dim=-1)
 
     # =========================================================================
     # Step 2: Process in chunks, collecting results for non-in-place assembly
@@ -1569,10 +1581,10 @@ def _compute_kl_matrix_diagonal_chunked(
                 mu_i_f32 = mu_i.float()
                 mu_transported_f32 = mu_transported.float()
                 sigma_i_f32 = sigma_i.float()
-                sigma_j_transported_f32 = sigma_j_transported.float()
+                sigma_j_transported_f32 = sigma_j_transported.float().clamp(min=1e-4)
 
                 mu_i_exp = mu_i_f32[:, :, None, :].expand(-1, -1, n_j, -1).clone()  # (B, n_i, n_j, K)
-                sigma_i_exp = sigma_i_f32[:, :, None, :].expand(-1, -1, n_j, -1).clone()  # (B, n_i, n_j, K)
+                sigma_i_exp = sigma_i_f32[:, :, None, :].expand(-1, -1, n_j, -1).clone().clamp(min=1e-4)
 
                 # Trace term: sum(σ_i / σ_j_transported)
                 trace_term = (sigma_i_exp / sigma_j_transported_f32).sum(dim=-1)

@@ -288,12 +288,11 @@ class PriorBank(nn.Module):
         else:
             # Standard per-token lookup (TOKEN-INDEXED!)
             mu_p = self.prior_mu[token_ids]  # Index by token ID
-            sigma_p_diag = self.prior_sigma[token_ids]  # (B, N, K) diagonal
-            # Convert to full covariance when diagonal_covariance=False
-            if not getattr(self, 'diagonal_covariance', True):
-                sigma_p = torch.diag_embed(sigma_p_diag)  # (B, N, K, K)
-            else:
-                sigma_p = sigma_p_diag
+            sigma_p = self.prior_sigma[token_ids]  # Always (B, N, K) diagonal
+            # PriorBank priors are inherently diagonal (per-dimension variances).
+            # Downstream modules handle diagonal→full conversion when needed:
+            #   - _split_irreps_sigma: converts (B,N,K) → (B,N,K,K) if diagonal_covariance=False
+            #   - FFN sigma_prior: converts via diag_embed at variational_ffn.py:3627
             # Learnable per-token gauge frames
             phi = self.phi_embed(token_ids)
 
@@ -380,14 +379,11 @@ class PriorBank(nn.Module):
         V = self.vocab_size
         device = mu_q.device
 
-        # Get all token priors: mu_p (V, K), sigma_p (V, K) or (V, K, K)
+        # Get all token priors: mu_p (V, K), sigma_p (V, K)
+        # PriorBank always returns diagonal sigma — no conversion needed.
         all_token_ids = torch.arange(V, device=device)
         _prior_out = self._get_prior_for_tokens(all_token_ids)
         mu_p, sigma_p = _prior_out[0], _prior_out[1]
-        # Full covariance priors (V, K, K) → extract diagonal for fused KL matmul.
-        # The fused trace only needs diag(Σ_p) since priors are initialized diagonal.
-        if sigma_p.dim() > mu_p.dim():
-            sigma_p = torch.diagonal(sigma_p, dim1=-2, dim2=-1)
 
         variance_floor = max(self.eps, 1e-4)
         sigma_q_safe = sigma_q.clamp(min=variance_floor)    # (B, N, K)

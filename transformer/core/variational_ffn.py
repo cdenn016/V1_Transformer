@@ -708,9 +708,12 @@ def _compute_vfe_gradients_block_diagonal(
             del Omega_chunk
 
             # Regularize and invert (adaptive regularization for numerical stability)
+            # Use 1e-4 jitter (not eps=1e-6) — GL(K) transport can produce
+            # near-singular covariances that need stronger regularization.
             I_d = torch.eye(d, device=device, dtype=dtype)
-            sigma_j_reg = sigma_j_transported + eps * I_d
-            sigma_j_inv = _safe_spd_inv(sigma_j_reg, eps=eps)  # (B, C, N, d, d)
+            sigma_j_transported = 0.5 * (sigma_j_transported + sigma_j_transported.transpose(-1, -2))
+            sigma_j_reg = sigma_j_transported + 1e-4 * I_d
+            sigma_j_inv = _safe_spd_inv(sigma_j_reg, eps=1e-4)  # (B, C, N, d, d)
 
             # Delta mu for this block (query chunk) - contiguous to avoid view issues
             mu_block_i = mu_block[:, i_start:i_end].contiguous()  # (B, C, d)
@@ -1215,15 +1218,16 @@ def _fused_attention_and_vfe_gradients_block_diag(
         mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_block_rope)
         sigma_j_transported = torch.einsum(
             'bijkl,bijkl,bjl->bijk', Omega_block, Omega_block, sigma_block
-        ).clamp(min=eps)
+        ).clamp(min=1e-4)
 
         # KL computation (for attention weights)
         mu_block_i_rope = mu_block_rope[:, :, None, :]  # broadcast, no clone needed
         delta_mu_kl = mu_block_i_rope - mu_j_transported
 
-        trace_block = (sigma_block[:, :, None, :] / sigma_j_transported).sum(dim=-1)
+        sigma_block_safe = sigma_block[:, :, None, :].clamp(min=1e-4)
+        trace_block = (sigma_block_safe / sigma_j_transported).sum(dim=-1)
         mahal_block = (delta_mu_kl ** 2 / sigma_j_transported).sum(dim=-1)
-        logdet_block = (torch.log(sigma_j_transported) - torch.log(sigma_block[:, :, None, :].clamp(min=eps))).sum(dim=-1)
+        logdet_block = (torch.log(sigma_j_transported) - torch.log(sigma_block_safe)).sum(dim=-1)
 
         kl_block = 0.5 * (trace_block + mahal_block - d + logdet_block)
         kl_block = kl_block.clamp(min=0.0, max=max(100.0, 5.0 * d))
@@ -1496,7 +1500,7 @@ def _compute_vfe_gradients_chunked(
             mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu_j)
             sigma_j_transported_diag = torch.einsum(
                 'bijkl,bijkl,bjl->bijk', Omega, Omega, sigma_j
-            ).clamp(min=eps)
+            ).clamp(min=1e-4)
 
             del Omega
 
@@ -1508,10 +1512,10 @@ def _compute_vfe_gradients_chunked(
             grad_mu_direct[:, i_start:i_end] = grad_mu_direct[:, i_start:i_end] + direct_contrib
 
             # KL values (for softmax coupling weight) — broadcast instead of clone
-            sigma_i_bc = sigma_i[:, :, None, :]  # (B, n_i, 1, K) broadcasts with (B, n_i, n_j, K)
+            sigma_i_bc = sigma_i[:, :, None, :].clamp(min=1e-4)
             trace_term = (sigma_i_bc / sigma_j_transported_diag).sum(dim=-1)
             mahal = (delta_mu_ij ** 2 / sigma_j_transported_diag).sum(dim=-1)
-            logdet_term = (torch.log(sigma_j_transported_diag.clamp(min=eps)) - torch.log(sigma_i_bc.clamp(min=eps))).sum(dim=-1)
+            logdet_term = (torch.log(sigma_j_transported_diag) - torch.log(sigma_i_bc)).sum(dim=-1)
 
             kl_ceil = max(100.0, 5.0 * K)
             kl_chunk = 0.5 * (trace_term + mahal - K + logdet_term).clamp(min=0.0, max=kl_ceil)
@@ -1525,7 +1529,7 @@ def _compute_vfe_gradients_chunked(
             # Sigma alignment + softmax coupling
             if compute_sigma_align_grad:
                 sigma_j_inv_diag = 1.0 / sigma_j_transported_diag
-                sigma_i_inv = 1.0 / sigma_i.clamp(min=1e-6)
+                sigma_i_inv = 1.0 / sigma_i.clamp(min=1e-4)
                 grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv[:, :, None, :])  # broadcast
                 sigma_contrib = lambda_belief * torch.einsum('bij,bijk->bik', beta_chunk, grad_sigma_pair)
                 grad_sigma_align[:, i_start:i_end] = grad_sigma_align[:, i_start:i_end] + sigma_contrib
