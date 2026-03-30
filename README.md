@@ -72,6 +72,45 @@ beta_ij = softmax_j(-D_KL(q_i || Omega_ij q_j) / tau)
 where `Omega_ij = exp(phi_i) exp(-phi_j)` is the gauge transport between agents. **No W_Q, W_K, W_V projections are used**---attention arises from the geometry of belief distributions.
 
 
+### Forward Pass (Actual Code Flow)
+
+```
+Input: token_ids
+    ↓
+Embeddings: (μ_q, σ_q, φ) ← GaugeTokenEmbedding(token_ids)
+    ↓
+Position Encoding: φ ← φ_token + φ_pos  [μ unchanged]
+    ↓
+FOR EACH LAYER:
+    ├─ ATTENTION SUBLAYER (if skip_attention=False):
+    │   ├─ PreNorm: μ̃ ← LayerNorm(μ)
+    │   ├─ Per-head KL-attention:
+    │   │   β_ij = softmax(−KL(q_i || Ω_ij[q_j]) / κ√K)
+    │   ├─ Per-head message aggregation:
+    │   │   μ_agg = Σ_j β_ij · Ω_ij @ μ_j
+    │   ├─ Output projection: μ_out = W_O · concat(μ_agg_h)
+    │   └─ Residual: μ ← μ + μ_out
+    │
+    └─ VFE E-STEP SUBLAYER:
+        ├─ PreNorm: μ̃ ← LayerNorm(μ)
+        ├─ E-step iterations (t = 1...T):
+        │   ├─ Recompute β_ij from current beliefs q^(t)
+        │   │   (attention sublayer's β is discarded)
+        │   ├─ Compute VFE gradient decomposition:
+        │   │   ∇F = α·∇KL(q||p)           [self-coupling]
+        │   │      + λ·Σ_j β·∇KL_ij        [alignment]
+        │   │      + λ·Σ_j ∂β/∂μ·KL_ij     [softmax coupling]
+        │   ├─ Natural gradient: Δμ = −η · Σ · ∇F
+        │   └─ Update: q^(t+1) ← q^(t) + Δμ
+        │
+        └─ Residual: μ ← μ + μ_final
+
+Final LayerNorm → Output Projection → Logits
+```
+
+**Architectural note:** The separate attention sublayer is an engineering heuristic, not derived from the VFE theory. The theory (Algorithm 1) identifies each layer with a single E-step iteration where attention (β computation) and belief updates are unified. The E-step recomputes β internally and discards the attention sublayer's β entirely. The attention sublayer's only contribution is the message aggregation residual (μ ← μ + W_O · μ_agg), which approximates one step of the alignment gradient but uses a learned projection W_O instead of the Fisher metric, and lacks step-size control. Setting `skip_attention=True` recovers the pure VFE architecture.
+
+
 ## Training Modes
 
 The framework supports three training modes that span the spectrum from standard deep learning to fully analytic variational inference:
