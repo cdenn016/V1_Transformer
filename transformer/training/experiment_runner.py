@@ -326,6 +326,7 @@ class PublicationMetricsTracker:
             'vfe_grad_sigma_self', 'vfe_grad_sigma_align_direct',
             'vfe_grad_sigma_softmax', 'vfe_grad_sigma_total',
             'vfe_kl_pairwise_mean', 'vfe_kl_pairwise_max', 'vfe_kappa_scaled',
+            'vfe_kl_frac_above_90pct', 'vfe_kl_p95',
 
             # Covariance health
             'sigma_q_mean', 'sigma_q_min', 'sigma_q_max', 'sigma_q_std',
@@ -446,6 +447,8 @@ class PublicationMetricsTracker:
             'vfe_kl_pairwise_mean': metrics.get('vfe/kl_pairwise_mean'),
             'vfe_kl_pairwise_max': metrics.get('vfe/kl_pairwise_max'),
             'vfe_kappa_scaled': metrics.get('vfe/kappa_scaled'),
+            'vfe_kl_frac_above_90pct': metrics.get('vfe/kl_frac_above_90pct'),
+            'vfe_kl_p95': metrics.get('vfe/kl_p95'),
 
             # Covariance health
             'sigma_q_mean': metrics.get('cov/sigma_q_mean'),

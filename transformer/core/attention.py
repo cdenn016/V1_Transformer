@@ -1012,7 +1012,7 @@ def _compute_kl_matrix_torch(
         # Clamp KL to [0, max] for numerical stability.
         # Scale ceiling with K: each dimension contributes O(1) to KL,
         # so max reasonable KL ≈ O(K). Use 5*K as generous ceiling.
-        kl_ceil = max(100.0, 5.0 * K)
+        kl_ceil = max(100.0, 20.0 * K)
         kl_all = torch.clamp(kl_all, min=0.0, max=kl_ceil)
 
         # NaN/Inf safety: replace any residual numerical failures with zero KL
@@ -1281,7 +1281,7 @@ def _compute_kl_matrix_diagonal(
         kl_all = 0.5 * (trace_term + mahal_term - K + logdet_term)
         # Clamp KL to [0, max] for numerical stability.
         # Scale ceiling with K: each dimension contributes O(1) to KL.
-        kl_ceil = max(100.0, 5.0 * K)
+        kl_ceil = max(100.0, 20.0 * K)
         kl_all = torch.clamp(kl_all, min=0.0, max=kl_ceil)
         kl_all = kl_all.nan_to_num(nan=kl_ceil, posinf=kl_ceil, neginf=0.0)
 
@@ -1443,8 +1443,8 @@ def _compute_kl_matrix_chunked(
                 # KL divergence for chunk
                 kl_chunk = 0.5 * (trace_term + mahal_term - K + logdet_term)
                 # Clamp KL to [0, 100] for numerical stability
-                kl_chunk = torch.clamp(kl_chunk, min=0.0, max=max(100.0, 5.0 * K))
-                kl_chunk = kl_chunk.nan_to_num(nan=max(100.0, 5.0 * K), posinf=max(100.0, 5.0 * K), neginf=0.0)
+                kl_chunk = torch.clamp(kl_chunk, min=0.0, max=max(100.0, 20.0 * K))
+                kl_chunk = kl_chunk.nan_to_num(nan=max(100.0, 20.0 * K), posinf=max(100.0, 20.0 * K), neginf=0.0)
 
                 col_chunks_list.append(kl_chunk)
 
@@ -1599,7 +1599,7 @@ def _compute_kl_matrix_diagonal_chunked(
                 # Full KL
                 kl_chunk = 0.5 * (trace_term + mahal_term - K + logdet_term)
                 # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
-                kl_ceil = max(100.0, 5.0 * K)
+                kl_ceil = max(100.0, 20.0 * K)
                 kl_chunk = torch.clamp(kl_chunk, min=0.0, max=kl_ceil)
                 kl_chunk = kl_chunk.nan_to_num(nan=kl_ceil, posinf=kl_ceil, neginf=0.0).to(dtype)
 
@@ -1898,7 +1898,7 @@ def _compute_kl_matrix_block_diagonal_chunked(
 
                     # Accumulate block KL (non-in-place to preserve autograd graph)
                     kl_block = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
-                    kl_block_ceil = max(100.0, 5.0 * d)
+                    kl_block_ceil = max(100.0, 20.0 * d)
                     kl_block = torch.clamp(kl_block, min=0.0, max=kl_block_ceil)
                     kl_block = kl_block.nan_to_num(nan=kl_block_ceil, posinf=kl_block_ceil, neginf=0.0)
                     kl_chunk = kl_chunk + kl_block
@@ -1923,7 +1923,7 @@ def _compute_kl_matrix_block_diagonal_chunked(
                     ).sum(dim=-1)
 
                     kl_block = 0.5 * (trace_term + mahal_term - d + logdet_term)
-                    kl_block_ceil = max(100.0, 5.0 * d)
+                    kl_block_ceil = max(100.0, 20.0 * d)
                     kl_block = torch.clamp(kl_block, min=0.0, max=kl_block_ceil)
                     kl_block = kl_block.nan_to_num(nan=kl_block_ceil, posinf=kl_block_ceil, neginf=0.0)
                     kl_chunk = kl_chunk + kl_block
