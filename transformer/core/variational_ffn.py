@@ -1348,6 +1348,10 @@ def _fused_attention_and_vfe_gradients_block_diag(
         _VFE_GRAD_DEBUG['kl_pairwise_mean'] = kl_values.mean().item()
         _VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
         _VFE_GRAD_DEBUG['kappa_scaled'] = kappa_scaled
+        # Fraction of pairs near the KL ceiling (diagnoses clamp saturation)
+        _kl_ceil = max(100.0, 20.0 * K)
+        _VFE_GRAD_DEBUG['kl_frac_above_90pct'] = (kl_values > 0.9 * _kl_ceil).float().mean().item()
+        _VFE_GRAD_DEBUG['kl_p95'] = kl_values.quantile(0.95).item()
         _VFE_GRAD_DEBUG['grad_mu_total'] = _grad_norm(grad_mu)
         _VFE_GRAD_DEBUG['grad_sigma_total'] = _grad_norm(grad_sigma)
         _ps = _per_pos_stats(grad_sigma)
