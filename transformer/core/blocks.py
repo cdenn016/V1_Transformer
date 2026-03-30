@@ -192,6 +192,7 @@ class GaugeTransformerBlock(nn.Module):
             gauge_param=cfg.gauge_param,
             detach_phi=cfg.detach_phi,
             implicit_em=cfg.implicit_em,
+            closed_form_e_step=getattr(cfg, 'closed_form_e_step', False),
         )
 
         self.norm2 = nn.LayerNorm(cfg.embed_dim) if cfg.use_layernorm else nn.Identity()

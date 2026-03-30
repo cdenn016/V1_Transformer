@@ -2457,6 +2457,10 @@ class VariationalFFNDynamic(nn.Module):
                                            # to the joint (mu, sigma, phi) fixed point, giving the
                                            # exact M-step phi gradient instead of straight-through.
                                            # Requires use_deq=True and evolve_phi=True.
+        closed_form_e_step: bool = False,  # Use closed-form precision-weighted fixed point
+                                           # instead of gradient descent. Approximation: drops
+                                           # the softmax coupling term KL·∂β/∂μ but naturally
+                                           # includes aggregation (Σ_j β_ij Ω_ij μ_j).
         implicit_em: bool = False,         # Principled M-step via implicit differentiation.
                                            # Detaches mu/sigma at E-step start (proper EM boundary)
                                            # then scales CE→embedding gradient by IFT factor
@@ -2536,6 +2540,7 @@ class VariationalFFNDynamic(nn.Module):
         self.sigma_max = sigma_max
         self.e_step_sigma_floor = e_step_sigma_floor
         self.detach_phi = detach_phi
+        self.closed_form_e_step = closed_form_e_step
         self.implicit_em = implicit_em
         self._last_implicit_mu_scale = None   # (B, N, K) stored after E-step for model.py
         self._last_implicit_sigma_scale = None
@@ -3676,9 +3681,167 @@ class VariationalFFNDynamic(nn.Module):
         beta_heads = []      # Per-head betas (multihead); populated inside VFE loop
 
         # =====================================================================
+        # CLOSED-FORM E-STEP: Precision-weighted fixed point (optional)
+        # =====================================================================
+        # When closed_form_e_step=True, compute the exact fixed point of the
+        # VFE objective (dropping the softmax coupling term KL·∂β/∂μ):
+        #
+        #   μ_i* = [α·μ_p/σ_p + λ·Σ_j β_ij·(Ω_ij μ_j)/σ_j] / [α/σ_p + λ·Σ_j β_ij/σ_j]
+        #   σ_i* = 1 / [α/σ_p + λ·Σ_j β_ij/σ_j]
+        #
+        # This naturally includes aggregation and replaces the gradient descent loop.
+        if self.closed_form_e_step and is_diagonal:
+            # 1. Compute block exp pairs for transport
+            if self.irrep_dims is not None:
+                if omega_current is not None and self.gauge_param == 'omega':
+                    _cf_bep = []
+                    block_start = 0
+                    for d_h in self.irrep_dims:
+                        omega_h = omega_current[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
+                        omega_h_inv = torch.linalg.inv(omega_h)
+                        _cf_bep.append((omega_h, omega_h_inv))
+                        block_start += d_h
+                elif self.gauge_mode == 'trivial':
+                    _cf_bep = []
+                    for d_h in self.irrep_dims:
+                        eye_h = torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous()
+                        _cf_bep.append((eye_h, eye_h))
+                elif self.gauge_mode == 'constant' and self.constant_omega is not None:
+                    _cf_bep = []
+                    for h, d_h in enumerate(self.irrep_dims):
+                        omega_h = self.constant_omega[h].to(device=device, dtype=dtype)
+                        if getattr(self, 'enforce_orthogonal', False) and d_h >= 2:
+                            omega_h = newton_schulz_orthogonalize(omega_h.unsqueeze(0)).squeeze(0)
+                        eye_h = torch.eye(d_h, device=device, dtype=dtype)
+                        _cf_bep.append((
+                            omega_h.unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous(),
+                            eye_h.unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous(),
+                        ))
+                else:
+                    _cf_bep = fused_block_matrix_exp_pairs(
+                        phi_current, self.generators, self.irrep_dims,
+                        enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                    )
+            else:
+                _cf_bep = None
+
+            # 2. Per-head: compute β_h, then closed-form fixed point
+            mu_star = torch.zeros_like(mu_current)
+            sigma_star = torch.zeros_like(sigma_current)
+            beta_heads = []
+            block_start = 0
+
+            for h, d_h in enumerate(self.irrep_dims or [self.embed_dim]):
+                block_end = block_start + d_h
+
+                mu_h = mu_current[:, :, block_start:block_end].detach().contiguous()
+                mu_p_h = mu_p_current[:, :, block_start:block_end].contiguous()
+                sigma_h = sigma_current[:, :, block_start:block_end].detach().contiguous()
+                sigma_p_h = sigma_p[:, :, block_start:block_end].contiguous()
+                gen_h = self.generators[:, block_start:block_end, block_start:block_end]
+
+                kappa_h = self.kappa * math.sqrt(d_h) if self.irrep_dims else self.kappa
+                alpha_h = alpha_effective[:, :, block_start:block_end] if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3 else alpha_effective
+                _head_bep = [_cf_bep[h]] if _cf_bep is not None else None
+
+                # Compute β_h (attention weights for this head)
+                beta_h = compute_attention_weights(
+                    mu_q=mu_h, sigma_q=sigma_h,
+                    phi=phi_current, generators=gen_h,
+                    kappa=kappa_h, epsilon=eps, mask=mask,
+                    return_kl=False,
+                    diagonal_covariance=True,
+                    irrep_dims=[d_h] if self.irrep_dims else None,
+                    cached_block_exp_pairs=_head_bep,
+                    mask_self_attention=self.mask_self_attention,
+                    gauge_mode=self.gauge_mode,
+                    use_rope=self._use_rope_vfe,
+                    rope_base=self._rope_base_vfe,
+                )
+                beta_heads.append(beta_h)
+
+                # Transport operators for this head
+                exp_phi_h, exp_neg_phi_h = _cf_bep[h] if _cf_bep is not None else (
+                    torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1),
+                    torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1),
+                )
+
+                # Prior precision and information vector
+                inv_sigma_p_h = 1.0 / sigma_p_h.clamp(min=eps)       # (B, N, d_h)
+                prior_prec_h = alpha_h * inv_sigma_p_h                # (B, N, d_h)
+                prior_info_h = alpha_h * mu_p_h * inv_sigma_p_h       # (B, N, d_h)
+
+                # Alignment: precision-weighted transported aggregation
+                # w_j = exp_neg_phi_j @ μ_j  (transform to common frame)
+                inv_sigma_h = 1.0 / sigma_h.clamp(min=eps)            # (B, N, d_h)
+                w = torch.einsum('bjkl,bjl->bjk', exp_neg_phi_h, mu_h)  # (B, N, d_h)
+                # Precision-weight: w_j / σ_j
+                w_prec = w * inv_sigma_h                               # (B, N, d_h)
+                # Aggregate: Σ_j β_ij (w_j / σ_j)
+                w_agg = torch.einsum('bij,bjk->bik', beta_h, w_prec)   # (B, N, d_h)
+                # Transport back to position i's frame
+                align_info_h = self.lambda_belief * torch.einsum('bikl,bil->bik', exp_phi_h, w_agg)  # (B, N, d_h)
+
+                # Alignment precision: λ · Σ_j β_ij / σ_j
+                align_prec_h = self.lambda_belief * torch.einsum('bij,bjk->bik', beta_h, inv_sigma_h)  # (B, N, d_h)
+
+                # Fixed point
+                total_prec_h = prior_prec_h + align_prec_h             # (B, N, d_h)
+                mu_star[:, :, block_start:block_end] = (prior_info_h + align_info_h) / total_prec_h.clamp(min=eps)
+                sigma_star[:, :, block_start:block_end] = (1.0 / total_prec_h.clamp(min=eps)).clamp(max=self.sigma_max)
+
+                block_start = block_end
+
+            mu_current = mu_star
+            if self.update_sigma:
+                sigma_current = sigma_star
+
+            beta_current = beta_heads[-1] if beta_heads else None
+
+            # Store beta for implicit EM (if needed)
+            if return_beta_history:
+                beta_stacked = torch.stack(beta_heads, dim=1) if len(beta_heads) > 1 else beta_heads[0].unsqueeze(1)
+                beta_history = [beta_stacked.detach().clone()]
+
+            # Phi evolution via gradient (phi enters nonlinearly, no closed form)
+            if (self.update_phi and torch.is_grad_enabled()
+                    and self.gauge_mode not in ('trivial', 'constant')):
+                _use_omega = omega_current is not None and self.gauge_param == 'omega'
+                if _use_omega:
+                    grad_omega = self._compute_omega_grad_direct(
+                        omega_current, mu_current, sigma_current,
+                        is_diagonal, mask, eps,
+                    )
+                    if grad_omega is not None:
+                        omega_current = self._retract_omega(
+                            omega_current, grad_omega, self.phi_lr,
+                            trust_region=getattr(self, 'omega_trust_region', 0.3),
+                        )
+                else:
+                    _phi_bep_cf = fused_block_matrix_exp_pairs(
+                        phi_current, self.generators, self.irrep_dims,
+                        enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                    ) if self.irrep_dims is not None and self.gauge_mode == 'learned' else None
+                    grad_phi = self._compute_phi_grad(
+                        phi_current, mu_current, sigma_current,
+                        is_diagonal, mask, eps,
+                        cached_block_exp_pairs=_phi_bep_cf,
+                    )
+                    if grad_phi is not None:
+                        phi_current = _retract_phi(
+                            phi=phi_current,
+                            delta_phi=-grad_phi,
+                            generators=self.generators,
+                            step_size=self.phi_lr,
+                            max_norm=self.phi_max_norm,
+                        )
+
+        # =====================================================================
         # VFE Descent Loop with Dynamic β (runs outside AMP autocast)
         # =====================================================================
-        for iteration in range(self.n_iterations):
+        # Skip when closed_form_e_step handled the E-step above.
+        _n_iters = 0 if (self.closed_form_e_step and is_diagonal) else self.n_iterations
+        for iteration in range(_n_iters):
             # Cosine decay: lr drops from 1.0 to 0.1 across iterations
             # Steeper than linear 0.5 decay — stabilizes later iterations where
             # natural gradients can amplify and cause oscillatory divergence
@@ -4570,10 +4733,13 @@ class VariationalFFNDynamic(nn.Module):
         # =================================================================
         # STEP 5: Optional Gauge Frame Evolution via VFE Gradient (after loop)
         # =================================================================
+        # Skip when closed_form_e_step already handled phi evolution above.
         _use_omega = omega_current is not None and getattr(self, 'gauge_param', 'phi') == 'omega'
+        _skip_phi_post = self.closed_form_e_step and is_diagonal  # Already done in closed-form path
         if (self.update_phi and not self.update_phi_per_iteration
                 and torch.is_grad_enabled()
-                and self.gauge_mode not in ('trivial', 'constant')):
+                and self.gauge_mode not in ('trivial', 'constant')
+                and not _skip_phi_post):
 
             if _use_omega:
                 # Direct Omega path
