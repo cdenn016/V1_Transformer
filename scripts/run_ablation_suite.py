@@ -259,6 +259,13 @@ SWEEPS = {
         'baseline_value': 1.0,
     },
 
+    'ffn_lambda_softmax': {
+        'description': 'Softmax coupling weight (GELU-like ∂β/∂θ·KL term) inside VFE E-step',
+        'param': 'ffn_lambda_softmax',
+        'values': [0, 0.5, 1.0, 2.0, 5.0],
+        'baseline_value': 0,
+    },
+
     'beta': {
         'description': 'Belief alignment weight in outer training loss (lambda_beta)',
         'param': 'beta',
