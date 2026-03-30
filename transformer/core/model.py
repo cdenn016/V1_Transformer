@@ -230,6 +230,12 @@ class GaugeTransformerLM(nn.Module):
         # This is the mathematically principled "gauge fixing" to a global frame
         # O(K) reflection: per-token sign vectors extending SO(K) → O(K)
         learnable_reflection = config.get('learnable_reflection', False)
+        if learnable_reflection and use_prior_bank:
+            raise ValueError(
+                "learnable_reflection=True is incompatible with use_prior_bank=True. "
+                "PriorBank bypasses GaugeTokenEmbedding (where sign_logit lives), so "
+                "the sign vectors would never be applied. Disable one of these options."
+            )
         if learnable_reflection:
             print(f"[INFO] O(K) reflection enabled: per-token s_i ∈ {{±1}}^K sign vectors")
             print(f"       Transport: Ω_ij = diag(s_i)·exp(φ_i)·exp(-φ_j)·diag(s_j) ∈ O(K)")
@@ -775,7 +781,25 @@ class GaugeTransformerLM(nn.Module):
             # Need sigma_q for KL computation
             logits = self.prior_bank.decode(mu_q, sigma_q, tau=self.prior_bank_tau)
         else:
-            logits = self.out_proj(mu_q)  # (B, N, V)
+            # When learnable_reflection is active, the evolved μ lives in
+            # the sign-flipped coordinate system (s_v ⊙ raw_μ_v). The tied
+            # out_proj.weight contains raw embeddings, so we must apply the
+            # per-token signs to the weight rows before the dot product.
+            # Equivalently: logits[b,n,v] = <μ_q[b,n], s_v ⊙ W[v]>
+            #             = <μ_q[b,n] ⊙ s_v, W[v]>  — but s_v is per-vocab,
+            # not per-query, so the correct formulation is:
+            # logits = μ_q @ (s ⊙ W)^T = μ_q @ diag(s_v) @ W^T per vocab row.
+            # Implemented as W_signed[v] = s_v ⊙ W[v], then matmul.
+            if getattr(self.token_embed, 'learnable_reflection', False):
+                all_ids = torch.arange(self.out_proj.weight.shape[0],
+                                       device=device)
+                z = self.token_embed.sign_logit(all_ids)  # (V, K)
+                signs = z.sign()
+                signs = z + (signs - z).detach()  # STE
+                W_signed = self.out_proj.weight * signs  # (V, K)
+                logits = torch.matmul(mu_q, W_signed.T)  # (B, N, V)
+            else:
+                logits = self.out_proj(mu_q)  # (B, N, V)
 
         # =================================================================
         # Trajectory Recording: End forward pass
@@ -1164,7 +1188,18 @@ class GaugeTransformerLM(nn.Module):
         if self.use_prior_bank and self.prior_bank is not None:
             logits = self.prior_bank.decode(mu_q, sigma_q, tau=self.prior_bank_tau)
         else:
-            logits = self.out_proj(mu_q)
+            # Apply sign vectors at decode when learnable_reflection is active
+            # (same logic as in forward() — see comment there for derivation)
+            if getattr(self.token_embed, 'learnable_reflection', False):
+                all_ids = torch.arange(self.out_proj.weight.shape[0],
+                                       device=device)
+                z = self.token_embed.sign_logit(all_ids)
+                signs = z.sign()
+                signs = z + (signs - z).detach()
+                W_signed = self.out_proj.weight * signs
+                logits = torch.matmul(mu_q, W_signed.T)
+            else:
+                logits = self.out_proj(mu_q)
 
         # Stack per-layer attention into (n_layers, B, n_heads, N, N) tensors
         # Filter out None entries (shouldn't happen, but defensive)
@@ -1551,6 +1586,9 @@ class GaugeTransformerLM(nn.Module):
                 return
 
             # Get current predictions: softmax(W_out @ mu)
+            # NOTE: when learnable_reflection=True, this should apply sign
+            # vectors to W_out rows (as in forward()). Currently unsupported
+            # in delta_rule_update_w_out — use standard backprop training instead.
             logits = self.out_proj(mu_beliefs)  # (B, N, V)
             predictions = F.softmax(logits, dim=-1)  # (B, N, V)
 

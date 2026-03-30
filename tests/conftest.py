@@ -128,3 +128,23 @@ def gauge_model(minimal_config, cpu_device):
     return model
 
 
+# =============================================================================
+# Generator Fixtures
+# =============================================================================
+
+@pytest.fixture
+def so3_generators():
+    """SO(3) generators for K=3 (spin-1)."""
+    from math_utils.generators import generate_so3_generators
+    return torch.from_numpy(generate_so3_generators(3)).float()
+
+
+@pytest.fixture
+def random_spd_matrix():
+    """Factory for random SPD matrices."""
+    def _make(K, batch_shape=()):
+        A = torch.randn(*batch_shape, K, K)
+        return A @ A.transpose(-1, -2) + 0.1 * torch.eye(K)
+    return _make
+
+

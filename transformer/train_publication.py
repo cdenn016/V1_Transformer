@@ -623,7 +623,7 @@ STANDARD_CONFIG = {
     'gauge_group': 'SO3',
     'gauge_dim': 3,
     'gauge_mode': 'learned',
-    'gauge_fixed_priors': True,
+    'gauge_fixed_priors': False,
     'irrep_spec': [('ℓ0', 5, 1)],
 }
 
