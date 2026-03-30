@@ -105,6 +105,7 @@ class GaugeTransformerBlock(nn.Module):
         self.use_layernorm = cfg.use_layernorm
         self.use_residual = cfg.use_residual
         self.sigma_residual = getattr(cfg, 'sigma_residual', False)
+        self.skip_attention = getattr(cfg, 'skip_attention', False)
 
         # =====================================================================
         # Attention Sublayer
@@ -267,93 +268,100 @@ class GaugeTransformerBlock(nn.Module):
         # =====================================================================
         # 1. Attention Sublayer with Pre-Norm + Residual
         # =====================================================================
+        # When skip_attention=True, the VFE E-step IS the entire block:
+        # it computes its own β internally, so the separate attention sublayer
+        # is redundant. Skip it and go straight to VFE gradients.
 
-        # Pre-layer normalization on means
-        mu_normalized = self.norm1(mu_q)
+        beta = None
+        if not self.skip_attention:
+            # Pre-layer normalization on means
+            mu_normalized = self.norm1(mu_q)
 
-        # Non-flat transport: compute edge-local connection δ_ij and inject
-        # into cached transport so attention sees the modified Ω_ij.
-        if self.non_flat_transport and self.gauge_connection is not None and cached_head_transports is None:
-            from transformer.core.attention import compute_transport_operators
-            delta_ij = self.gauge_connection(mu_normalized, mu_normalized)  # (B, N, N, n_gen)
-            transport = compute_transport_operators(
-                phi, generators,
-                gauge_mode='learned',
-                connection_delta=delta_ij,
-                cocycle_relaxation=self.cocycle_relaxation,
+            # Non-flat transport: compute edge-local connection δ_ij and inject
+            # into cached transport so attention sees the modified Ω_ij.
+            if self.non_flat_transport and self.gauge_connection is not None and cached_head_transports is None:
+                from transformer.core.attention import compute_transport_operators
+                delta_ij = self.gauge_connection(mu_normalized, mu_normalized)  # (B, N, N, n_gen)
+                transport = compute_transport_operators(
+                    phi, generators,
+                    gauge_mode='learned',
+                    connection_delta=delta_ij,
+                    cocycle_relaxation=self.cocycle_relaxation,
+                )
+                # Split full Omega into per-head cached transports
+                Omega_full = transport['Omega']  # (B, N, N, K, K)
+                # Store exp_delta for holonomy penalty (if configured)
+                self._last_exp_delta = transport.get('exp_delta')
+                irrep_dims = self.attention.irrep_dims
+                cached_head_transports = []
+                dim_start = 0
+                for d in irrep_dims:
+                    cached_head_transports.append({
+                        'Omega': Omega_full[:, :, :, dim_start:dim_start+d, dim_start:dim_start+d],
+                    })
+                    dim_start += d
+
+            # Multi-head attention (gauge-theoretic!)
+            # For direct omega mode: build per-head cached transports from omega blocks
+            # so the attention sublayer uses Omega_h / Omega_h_inv instead of matrix_exp.
+            if omega is not None and getattr(self.ffn, 'gauge_param', 'phi') == 'omega' and cached_head_transports is None:
+                # Build per-head (omega_h, omega_h_inv) pairs using per-block inv
+                # (avoids full K×K inv when omega is block-diagonal)
+                irrep_dims = self.attention.irrep_dims
+                cached_head_transports = []
+                block_start = 0
+                for d_h in irrep_dims:
+                    omega_h = omega[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
+                    omega_h_inv = torch.linalg.inv(omega_h)  # (B, N, d_h, d_h)
+                    cached_head_transports.append({
+                        'exp_phi': omega_h,
+                        'exp_neg_phi': omega_h_inv,
+                    })
+                    block_start += d_h
+
+            recorder = get_global_recorder() if TRAJECTORY_TRACKING_AVAILABLE else None
+            recording_attention = recorder is not None and recorder.enabled and recorder.record_attention
+            # Request attention weights for trajectory recording. The FFN recomputes
+            # its own beta internally (the beta arg is unused), so this is only needed
+            # when attention diagnostics are being collected.
+            need_attention_output = recording_attention
+
+            mu_attn, sigma_attn, beta, kl_matrix = self.attention(
+                mu_normalized,
+                sigma_q,
+                phi,
+                generators,
+                mask=mask,
+                return_attention=need_attention_output,
+                cached_head_transports=cached_head_transports,
             )
-            # Split full Omega into per-head cached transports
-            Omega_full = transport['Omega']  # (B, N, N, K, K)
-            # Store exp_delta for holonomy penalty (if configured)
-            self._last_exp_delta = transport.get('exp_delta')
-            irrep_dims = self.attention.irrep_dims
-            cached_head_transports = []
-            dim_start = 0
-            for d in irrep_dims:
-                cached_head_transports.append({
-                    'Omega': Omega_full[:, :, :, dim_start:dim_start+d, dim_start:dim_start+d],
-                })
-                dim_start += d
 
-        # Multi-head attention (gauge-theoretic!)
-        # For direct omega mode: build per-head cached transports from omega blocks
-        # so the attention sublayer uses Omega_h / Omega_h_inv instead of matrix_exp.
-        if omega is not None and getattr(self.ffn, 'gauge_param', 'phi') == 'omega' and cached_head_transports is None:
-            # Build per-head (omega_h, omega_h_inv) pairs using per-block inv
-            # (avoids full K×K inv when omega is block-diagonal)
-            irrep_dims = self.attention.irrep_dims
-            cached_head_transports = []
-            block_start = 0
-            for d_h in irrep_dims:
-                omega_h = omega[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
-                omega_h_inv = torch.linalg.inv(omega_h)  # (B, N, d_h, d_h)
-                cached_head_transports.append({
-                    'exp_phi': omega_h,
-                    'exp_neg_phi': omega_h_inv,
-                })
-                block_start += d_h
+            # Record attention for trajectory tracking
+            if recording_attention and beta is not None:
+                recorder.record_attention(beta, kl_matrix)
 
-        recorder = get_global_recorder() if TRAJECTORY_TRACKING_AVAILABLE else None
-        recording_attention = recorder is not None and recorder.enabled and recorder.record_attention
-        # Request attention weights for trajectory recording. The FFN recomputes
-        # its own beta internally (the beta arg is unused), so this is only needed
-        # when attention diagnostics are being collected.
-        need_attention_output = recording_attention
-
-        mu_attn, sigma_attn, beta, kl_matrix = self.attention(
-            mu_normalized,
-            sigma_q,
-            phi,
-            generators,
-            mask=mask,
-            return_attention=need_attention_output,
-            cached_head_transports=cached_head_transports,
-        )
-
-        # Record attention for trajectory tracking
-        if recording_attention and beta is not None:
-            recorder.record_attention(beta, kl_matrix)
-
-        # Residual connection (optional for pure VFE)
-        if self.use_residual:
-            mu_q = mu_q + mu_attn
-        else:
-            mu_q = mu_attn
-
-        # Update covariances if evolving
-        if self.evolve_sigma and sigma_attn is not None:
-            if sigma_attn.shape != sigma_q.shape:
-                sigma_q = sigma_attn
-            elif self.sigma_residual:
-                sigma_q = (sigma_q + sigma_attn).clamp(min=1e-4)
+            # Residual connection (optional for pure VFE)
+            if self.use_residual:
+                mu_q = mu_q + mu_attn
             else:
-                sigma_q = sigma_attn
+                mu_q = mu_attn
+
+            # Update covariances if evolving
+            if self.evolve_sigma and sigma_attn is not None:
+                if sigma_attn.shape != sigma_q.shape:
+                    sigma_q = sigma_attn
+                elif self.sigma_residual:
+                    sigma_q = (sigma_q + sigma_attn).clamp(min=1e-4)
+                else:
+                    sigma_q = sigma_attn
 
         # =====================================================================
-        # 2. Feedforward Sublayer (with optional Pre-Norm + Residual)
+        # 2. VFE E-step (with optional Pre-Norm + Residual)
         # =====================================================================
+        # When skip_attention=True, this is the ONLY sublayer: the VFE gradient
+        # computes β internally and handles all cross-position communication.
 
-        mu_normalized = self.norm2(mu_q)
+        mu_normalized = self.norm2(mu_q) if not self.skip_attention else self.norm1(mu_q)
 
         if mu_prior is None:
             raise ValueError("VFE_dynamic mode requires mu_prior argument")
@@ -420,6 +428,7 @@ class GaugeTransformerBlock(nn.Module):
             f"ffn_mode={self.ffn_mode!r}",
             f"use_layernorm={self.use_layernorm}",
             f"use_residual={self.use_residual}",
+            f"skip_attention={self.skip_attention}",
             f"non_flat_transport={self.non_flat_transport}",
         ]
         return ", ".join(parts)

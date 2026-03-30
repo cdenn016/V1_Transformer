@@ -911,64 +911,69 @@ class GaugeTransformerLM(nn.Module):
                 _mu_before_layer = mu_q.detach().clone()
 
             # Pre-norm + attention with tracking
-            mu_normalized = block.norm1(mu_q)
+            # When skip_attention=True, the VFE E-step computes its own β;
+            # the separate attention sublayer is skipped.
+            beta = None
+            kl = None
+            if not block.skip_attention:
+                mu_normalized = block.norm1(mu_q)
 
-            # Non-flat transport: compute edge-local connection δ_ij and inject
-            # into cached transports (mirrors GaugeTransformerBlock.forward).
-            _layer_cached_ht = cached_head_transports
-            if (block.non_flat_transport and block.gauge_connection is not None
-                    and cached_head_transports is None):
-                from transformer.core.attention import compute_transport_operators
-                delta_ij = block.gauge_connection(mu_normalized, mu_normalized)
-                transport = compute_transport_operators(
-                    phi, self.generators,
-                    gauge_mode='learned',
-                    connection_delta=delta_ij,
-                    cocycle_relaxation=block.cocycle_relaxation,
+                # Non-flat transport: compute edge-local connection δ_ij and inject
+                # into cached transports (mirrors GaugeTransformerBlock.forward).
+                _layer_cached_ht = cached_head_transports
+                if (block.non_flat_transport and block.gauge_connection is not None
+                        and cached_head_transports is None):
+                    from transformer.core.attention import compute_transport_operators
+                    delta_ij = block.gauge_connection(mu_normalized, mu_normalized)
+                    transport = compute_transport_operators(
+                        phi, self.generators,
+                        gauge_mode='learned',
+                        connection_delta=delta_ij,
+                        cocycle_relaxation=block.cocycle_relaxation,
+                    )
+                    Omega_full = transport['Omega']
+                    block._last_exp_delta = transport.get('exp_delta')
+                    irrep_dims = block.attention.irrep_dims
+                    _layer_cached_ht = []
+                    dim_start = 0
+                    for d in irrep_dims:
+                        _layer_cached_ht.append({
+                            'Omega': Omega_full[:, :, :, dim_start:dim_start+d, dim_start:dim_start+d],
+                        })
+                        dim_start += d
+
+                mu_attn, sigma_attn, beta, kl = block.attention(
+                    mu_normalized,
+                    sigma_q,
+                    phi,
+                    self.generators,
+                    mask=mask,
+                    return_attention=True,  # Get β_ij and KL_ij from every layer
+                    cached_head_transports=_layer_cached_ht,
                 )
-                Omega_full = transport['Omega']
-                block._last_exp_delta = transport.get('exp_delta')
-                irrep_dims = block.attention.irrep_dims
-                _layer_cached_ht = []
-                dim_start = 0
-                for d in irrep_dims:
-                    _layer_cached_ht.append({
-                        'Omega': Omega_full[:, :, :, dim_start:dim_start+d, dim_start:dim_start+d],
-                    })
-                    dim_start += d
 
-            mu_attn, sigma_attn, beta, kl = block.attention(
-                mu_normalized,
-                sigma_q,
-                phi,
-                self.generators,
-                mask=mask,
-                return_attention=True,  # Get β_ij and KL_ij from every layer
-                cached_head_transports=_layer_cached_ht,
-            )
+                # Complete block forward (residual + FFN)
+                if block.use_residual:
+                    mu_q = mu_q + mu_attn
+                else:
+                    mu_q = mu_attn
+
+                if block.evolve_sigma and sigma_attn is not None:
+                    if sigma_attn.shape != sigma_q.shape:
+                        # Shape mismatch (e.g., per-head vs full-K sigma) — skip residual,
+                        # use attention output directly to avoid broadcast errors.
+                        sigma_q = sigma_attn
+                    elif block.sigma_residual:
+                        sigma_q = (sigma_q + sigma_attn).clamp(min=1e-4)
+                    else:
+                        sigma_q = sigma_attn
 
             # Store per-layer attention (keep gradients for loss computation)
-            all_betas.append(beta if beta is not None else None)
-            all_kls.append(kl if kl is not None else None)
+            all_betas.append(beta)
+            all_kls.append(kl)
 
-            # Complete block forward (residual + FFN)
-            if block.use_residual:
-                mu_q = mu_q + mu_attn
-            else:
-                mu_q = mu_attn
-
-            if block.evolve_sigma and sigma_attn is not None:
-                if sigma_attn.shape != sigma_q.shape:
-                    # Shape mismatch (e.g., per-head vs full-K sigma) — skip residual,
-                    # use attention output directly to avoid broadcast errors.
-                    sigma_q = sigma_attn
-                elif block.sigma_residual:
-                    sigma_q = (sigma_q + sigma_attn).clamp(min=1e-4)
-                else:
-                    sigma_q = sigma_attn
-
-            # FFN sublayer
-            mu_normalized = block.norm2(mu_q)
+            # VFE E-step sublayer
+            mu_normalized = block.norm2(mu_q) if not block.skip_attention else block.norm1(mu_q)
 
             # Permute W_out to match cross-head reordered mu basis
             # PriorBank decodes via KL — out_proj is untrained, never use as W_out.
