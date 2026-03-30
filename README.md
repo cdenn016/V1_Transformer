@@ -6,9 +6,9 @@ A research framework implementing gauge-covariant variational free energy (VFE) 
 > Robert C. Dennis
 
 **Key result:** A single-layer VFE transformer with no MLPs or neural network components
-achieves **76 test perplexity** on WikiText-103 (BPE-2 tokenization) with K=80, GL(10),
-8 heads, RoPE, and sequence length 128 after 1 epoch of training. All representational
-capacity comes from iterative variational free energy minimization over belief tuples (μ, Σ, φ). The E-step *is* the computation---it is not a learned feed-forward network.
+achieves **71 test perplexity** on WikiText-103 (BPE-2 tokenization) with K=90, GL(15),
+6 heads, RoPE, and sequence length 128 after 1 epoch of training. All representational
+capacity comes from iterative variational free energy minimization over belief tuples (μ, Σ, φ). The E-step *is* the computation: it is not a learned feed-forward network.
 
 A separate **Pure VFE** mode eliminates autograd and backpropagation entirely---the model is a prior bank updated by natural-gradient M-steps.
 
