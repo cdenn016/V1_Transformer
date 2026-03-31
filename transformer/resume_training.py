@@ -323,8 +323,8 @@ def resume_training():
     model_defaults = {
         'kappa_beta': 1.0,
         'lambda_beta': 1.0,
-        'alpha': 0.1,
-        'beta': 1.0,
+        'M_alpha': 0.1,
+        'M_beta': 1.0,
         'lambda_gamma': 0.0,
         'dropout': 0.1,
         'n_layers': 4,

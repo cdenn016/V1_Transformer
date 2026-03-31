@@ -172,14 +172,14 @@ def run_test_evaluation(
                     model,
                     input_ids,
                     target_ids,
-                    alpha=0.0,
-                    lambda_beta=0.0,
+                    M_alpha=0.0,
+                    M_beta=0.0,
                     lambda_gamma=0.0,
                     kappa_gamma=1.0,
                     lambda_hyper=0.0,
                     pad_token_id=pad_token_id,
                     use_obs_in_vfe=False,
-                    alpha_phi=0.0,
+                    mass_phi=0.0,
                 )
                 ce_loss = metrics['loss/ce']
 
@@ -966,14 +966,14 @@ class PublicationTrainer(FastTrainer):
                 self.model,
                 input_ids,
                 target_ids,
-                alpha=self.config.M_alpha,
-                lambda_beta=effective_beta,
+                M_alpha=self.config.M_alpha,
+                M_beta=effective_beta,
                 lambda_gamma=self.config.lambda_gamma,
                 kappa_gamma=self.config.kappa_gamma,
                 lambda_hyper=self.config.lambda_hyper,
                 pad_token_id=self.pad_token_id,
                 use_obs_in_vfe=use_obs,
-                alpha_phi=self.config.mass_phi,
+                mass_phi=self.config.mass_phi,
                 aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
             )
         loss.backward()
@@ -1656,6 +1656,13 @@ class PublicationTrainer(FastTrainer):
 
             self.pub_metrics.print_summary()
 
+        # Final validation (ensures best_val_ce is updated even when
+        # eval_interval > max_steps, e.g. in ablation sweeps)
+        final_val = self.validate()
+        if final_val['ce_loss'] < self.best_val_ce:
+            self.best_val_ce = final_val['ce_loss']
+            self.save_checkpoint(is_best=True)
+
         # Summary
         elapsed = time.time() - start_time
         print(f"\n{'='*70}")
@@ -1911,7 +1918,7 @@ def run_single_experiment(
 
         # Free energy loss weights
         M_alpha=config.get('M_alpha', config.get('alpha', 0.0)),
-        # → lambda_beta in compute_free_energy_loss
+        # → M_beta in compute_free_energy_loss
         M_beta=config.get('M_beta', config.get('beta', 0.0)),
 
         lambda_gamma=config['lambda_gamma'],

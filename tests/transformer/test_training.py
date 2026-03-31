@@ -98,12 +98,12 @@ class TestCreateParamGroups:
         model = GaugeTransformerLM(minimal_config)
 
         config = TrainingConfig(
-            mu_lr=0.1,
-            sigma_lr=0.01,
-            phi_lr=0.05,
-            attention_lr=0.001,
-            ffn_lr=0.001,
-            output_lr=0.001,
+            M_mu_p_lr=0.1,
+            M_sigma_p_lr=0.01,
+            M_phi_lr=0.05,
+            M_attention_lr=0.001,
+            M_vfe_hyperparam_lr=0.001,
+            M_output_lr=0.001,
         )
 
         param_groups = create_param_groups(model, config)
@@ -125,12 +125,12 @@ class TestCreateParamGroups:
         model = GaugeTransformerLM(minimal_config)
 
         config = TrainingConfig(
-            mu_lr=0.1,
-            sigma_lr=0.01,
-            phi_lr=0.05,
-            attention_lr=0.001,
-            ffn_lr=0.001,
-            output_lr=0.001,
+            M_mu_p_lr=0.1,
+            M_sigma_p_lr=0.01,
+            M_phi_lr=0.05,
+            M_attention_lr=0.001,
+            M_vfe_hyperparam_lr=0.001,
+            M_output_lr=0.001,
         )
 
         param_groups = create_param_groups(model, config)
@@ -161,12 +161,12 @@ class TestCreateOptimizer:
         model = GaugeTransformerLM(minimal_config)
 
         config = TrainingConfig(
-            mu_lr=0.1,
-            sigma_lr=0.01,
-            phi_lr=0.05,
-            attention_lr=0.001,
-            ffn_lr=0.001,
-            output_lr=0.001,
+            M_mu_p_lr=0.1,
+            M_sigma_p_lr=0.01,
+            M_phi_lr=0.05,
+            M_attention_lr=0.001,
+            M_vfe_hyperparam_lr=0.001,
+            M_output_lr=0.001,
         )
 
         optimizer = create_optimizer(model, config)
@@ -184,12 +184,12 @@ class TestCreateOptimizer:
         model = model.to(cpu_device)
 
         config = TrainingConfig(
-            mu_lr=0.1,
-            sigma_lr=0.01,
-            phi_lr=0.05,
-            attention_lr=0.001,
-            ffn_lr=0.001,
-            output_lr=0.001,
+            M_mu_p_lr=0.1,
+            M_sigma_p_lr=0.01,
+            M_phi_lr=0.05,
+            M_attention_lr=0.001,
+            M_vfe_hyperparam_lr=0.001,
+            M_output_lr=0.001,
         )
 
         optimizer = create_optimizer(model, config)

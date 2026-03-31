@@ -385,14 +385,14 @@ class FastTrainer:
             self.model,
             input_ids,
             target_ids,
-            alpha=self.config.M_alpha,
-            lambda_beta=self.config.M_beta,
+            M_alpha=self.config.M_alpha,
+            M_beta=self.config.M_beta,
             lambda_gamma=self.config.lambda_gamma,
             kappa_gamma=self.config.kappa_gamma,
             lambda_hyper=self.config.lambda_hyper,
             pad_token_id=self.pad_token_id,
             use_obs_in_vfe=self.config.use_obs_in_vfe,
-            alpha_phi=getattr(self.config, 'mass_phi', 0.05),
+            mass_phi=getattr(self.config, 'mass_phi', 0.05),
             aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
         )
 
@@ -470,14 +470,14 @@ class FastTrainer:
                         self.model,
                         input_ids,
                         target_ids,
-                        alpha=0.0,
-                        lambda_beta=0.0,
+                        M_alpha=0.0,
+                        M_beta=0.0,
                         lambda_gamma=0.0,
                         kappa_gamma=1.0,
                         lambda_hyper=0.0,
                         pad_token_id=self.pad_token_id,
                         use_obs_in_vfe=False,
-                        alpha_phi=0.0,
+                        mass_phi=0.0,
                     )
                     ce_loss = metrics['loss/ce']
 
