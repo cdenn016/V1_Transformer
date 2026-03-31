@@ -1482,7 +1482,7 @@ def compute_vfe_gradients_gpu(
     if irrep_dims is not None and is_diagonal:
         return _compute_vfe_gradients_block_diagonal_diag(
             mu_q, sigma_q, mu_p, sigma_p, beta, phi, generators,
-            alpha, lambda_belief, kappa, eps, irrep_dims,
+            alpha, lambda_belief, lambda_softmax, kappa, eps, irrep_dims,
             compute_sigma_align_grad, enforce_orthogonal,
             alpha_c0=alpha_c0,
             cached_block_exp_pairs=cached_block_exp_pairs,

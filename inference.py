@@ -20,6 +20,8 @@ Instructions:
 # CONFIGURATION - EDIT THESE
 # =============================================================================
 
+from pathlib import Path
+
 CHECKPOINT_PATH = str(Path("checkpoints_publication") / "ffn_VFE_dynamic" / "best_model.pt")
 
 # Set to None for auto-detect from checkpoint config
@@ -35,7 +37,6 @@ NUM_SAMPLES = 3
 # =============================================================================
 
 import sys
-from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
 import torch
