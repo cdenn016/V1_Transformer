@@ -147,17 +147,17 @@ _DEBUG_VFE_GRADS = False
 EM_CONFIG = {
     # === Architecture ===
     'vocab_size':            50257,
-    'embed_dim':             90,
+    'embed_dim':             20,
     'max_seq_len':           128,
     
-    'batch_size':            16, 
-    'max_steps':             60000,
+    'batch_size':            64, 
+    'max_steps':             15000,
     
-    'n_layers':              2,
+    'n_layers':              1,
     'ffn_n_iterations':      1,
     
     'gauge_dim':                          10,
-    'irrep_spec':            [('fund', 9, 10)],
+    'irrep_spec':            [('fund', 2, 10)],
 
     'use_prior_bank':        False,
     'mask_self_attention':   False,  # Prevent attention collapse?
@@ -197,6 +197,8 @@ EM_CONFIG = {
     'gauge_mode':       'learned',
     'gauge_param':      'phi',
 
+    'skip_attention':        False,   #skips ad hoc attention sublayer
+    'closed_form_e_step':    False,   #closed form...ignores non-linear softmax gradient
 
     'diagonal_covariance':      True,
     'exact_diagonal_transport': False,  # exact diagonal transport - more expensive
@@ -225,11 +227,11 @@ EM_CONFIG = {
     # === Phi gradient geometry ===
     'phi_natural_gradient':       'killing',
     'use_killing_form':           True,
-    'killing_form_sym_dampening': 0.1,
+    'killing_form_sym_dampening': 0.5,
 
     # === Position encoding ===
     'use_rope':           True,
-    'rope_base':          1000, 
+    'rope_base':          5000, 
     'pos_encoding_mode': 'none',
 
     # === Embedding init ===
@@ -247,7 +249,7 @@ EM_CONFIG = {
     # beliefs (q₀) AND serve as prior parameters (μ_p, σ_p), so these rates
     # indirectly affect E-step initialization speed.
     'M_mu_p_lr':        0.05,   # M-step prior mean embeddings (μ_p)
-    'M_sigma_p_lr':     0.0125, # M-step prior covariance embeddings (log σ_p)
+    'M_sigma_p_lr':     0.005, # M-step prior covariance embeddings (log σ_p)
     'M_phi_lr':         0.0075, # M-step gauge frame embeddings (φ)
     'M_vfe_hyperparam_lr': 0.05, # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr)
     'M_attention_lr':   0.005,  # M-step attention params (W_O, constant_omega)
