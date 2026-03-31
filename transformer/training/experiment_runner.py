@@ -985,6 +985,8 @@ class PublicationTrainer(FastTrainer):
                 mass_phi=self.config.mass_phi,
                 aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
             )
+        # Scale loss for gradient accumulation
+        loss = loss / self.config.grad_accumulation_steps
         loss.backward()
 
         # Tied weights + delta rule: zero out W_out gradient component.
@@ -1021,29 +1023,33 @@ class PublicationTrainer(FastTrainer):
         # Per-group clipping for large gauge groups (SO(N>3)):
         # phi_embed gradients dominate global norm, starving mu/sigma.
         _use_param_groups = getattr(self.config, 'use_param_groups', True)
-        if self.config.grad_clip > 0:
-            if _use_param_groups:
-                for group in self.optimizer.param_groups:
-                    if group['params']:
-                        torch.nn.utils.clip_grad_norm_(
-                            group['params'],
-                            self.config.grad_clip,
-                        )
-            else:
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    self.config.grad_clip,
-                )
-        self.optimizer.step()
-
-        # Collect M-step natural gradient norms (after optimizer.step populates them)
+        # Only clip, step, and zero_grad on accumulation boundaries
+        _is_accum_step = (self.global_step + 1) % self.config.grad_accumulation_steps == 0
         mstep_natural_norms = None
-        if is_log_step and hasattr(self.optimizer, 'get_grad_norms'):
-            mstep_natural_norms = self.optimizer.get_grad_norms()
 
-        if self.scheduler is not None:
-            self.scheduler.step()
-        self.optimizer.zero_grad()
+        if _is_accum_step:
+            if self.config.grad_clip > 0:
+                if _use_param_groups:
+                    for group in self.optimizer.param_groups:
+                        if group['params']:
+                            torch.nn.utils.clip_grad_norm_(
+                                group['params'],
+                                self.config.grad_clip,
+                            )
+                else:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(),
+                        self.config.grad_clip,
+                    )
+            self.optimizer.step()
+
+            # Collect M-step natural gradient norms (after optimizer.step populates them)
+            if is_log_step and hasattr(self.optimizer, 'get_grad_norms'):
+                mstep_natural_norms = self.optimizer.get_grad_norms()
+
+            if self.scheduler is not None:
+                self.scheduler.step()
+            self.optimizer.zero_grad()
 
         # =================================================================
         # SL(K) PROJECTION: Remove trace component from phi_embed

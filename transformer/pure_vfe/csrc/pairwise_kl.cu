@@ -191,8 +191,10 @@ __global__ void grad_mu_alignment_kernel(
         if (b_ij < 1e-10f) continue;
 
         float kl_ij = kl_vals[beta_row + j];
-        // Weight with softmax correction (Eq. 24)
-        float w = b_ij * (1.0f + (e_kl - kl_ij) / tau);
+        // Weight with softmax correction (Eq. 24), clamped to match Python path
+        float correction = (e_kl - kl_ij) / tau;
+        correction = fminf(fmaxf(correction, -1.0f), 2.0f);
+        float w = b_ij * (1.0f + correction);
 
         // Load P_j, nu_j
         const int pj_off = (bh * N + j) * K * K;
