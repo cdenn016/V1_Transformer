@@ -2437,14 +2437,17 @@ class IrrepMultiHeadAttention(nn.Module):
         # =================================================================
         # Manuscript: β_ij^(a) = softmax(-KL / (κ_a √d_h))
         # Static:   κ_h = kappa_beta * √d_h  (normalizes KL across head dims)
-        # Learnable: κ_h = exp(log_kappa_per_head[h])  (initialized to static value)
+        # Learnable: κ_h = clamp(exp(log_kappa[h]), 0.5×κ₀, 1.5×κ₀)
+        # Clamped to [0.5, 1.5] × init to prevent extreme drift.
         if learnable_head_kappa:
             init_kappas = torch.tensor([
                 kappa_beta * math.sqrt(d_h) for d_h in self.irrep_dims
             ])
             self.log_kappa_per_head = nn.Parameter(torch.log(init_kappas))
+            self.register_buffer('_kappa_init', init_kappas)
         else:
             self.log_kappa_per_head = None
+            self._kappa_init = None
 
         # Store gauge group info
         self.gauge_group = gauge_group
@@ -2672,10 +2675,12 @@ class IrrepMultiHeadAttention(nn.Module):
             )
 
             # Per-head temperature κ_h for attention softmax.
-            # Learnable: κ_h = exp(log_kappa_per_head[h]), trained via backprop.
+            # Learnable: κ_h = clamp(exp(log_kappa[h]), 0.5×κ₀, 1.5×κ₀).
             # Static: κ_h = kappa_beta * √d_h, normalizes KL across head dims.
             if self.learnable_head_kappa:
                 kappa_h = torch.exp(self.log_kappa_per_head[head_idx])
+                k0 = self._kappa_init[head_idx]
+                kappa_h = kappa_h.clamp(min=0.5 * k0, max=1.5 * k0)
             else:
                 kappa_h = self.kappa_beta * math.sqrt(dim_head)
 
