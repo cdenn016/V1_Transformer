@@ -120,7 +120,6 @@ class BlockConfig:
 
     # === Memory efficiency ===
     ffn_irrep_dims: Optional[List[int]] = None  # Block dims for block-diagonal KL decomposition
-    ffn_chunk_size: Optional[int] = None         # Chunk size C for O(C²K²) memory processing
 
     # === DEQ (Deep Equilibrium) ===
     use_deq: bool = False              # Use implicit differentiation for E-step fixed point
@@ -226,7 +225,6 @@ class BlockConfig:
             rope_base=config.get('rope_base', 10000.0),
             # Memory efficiency
             ffn_irrep_dims=ffn_irrep_dims,
-            ffn_chunk_size=config.get('ffn_chunk_size', None),
             # DEQ
             use_deq=config.get('use_deq', False),
             deq_neumann_terms=config.get('deq_neumann_terms', 5),
