@@ -51,16 +51,15 @@ class TrainingConfig:
 
     # Multi-group mode: M-step learning rates for AdamW parameter groups.
     # These control how fast nn.Parameter objects update via backprop (M-step).
-    # The E-step (inner VFE loop) has its own rates: e_step_mu_lr, e_step_sigma_lr,
-    # e_step_phi_lr — set in BlockConfig / EM_CONFIG, not here.
+    # The E-step (inner VFE loop) has its own rates (E_mu_q_lr, etc.) in BlockConfig.
     # Note: mu_embed and log_sigma_diag serve dual roles (q₀ init AND prior μ_p/σ_p),
     # so these rates indirectly affect E-step initialization.
-    mu_lr: float = 0.1           # Prior mean embeddings (μ_p)
-    sigma_lr: float = 0.005      # Prior covariance embeddings (log σ_p)
-    phi_lr: float = 0.01         # Gauge frame embeddings (φ)
-    attention_lr: float = 0.01   # Attention params (W_O, constant_omega)
-    ffn_lr: float = 0.001        # FFN params (raw_c0, raw_b0, raw_lr via no_decay group)
-    output_lr: float = 0.001     # Output projection (vocab logits)
+    M_mu_p_lr: float = 0.1           # Prior mean embeddings (μ_p)
+    M_sigma_p_lr: float = 0.005      # Prior covariance embeddings (log σ_p)
+    M_phi_lr: float = 0.01           # Gauge frame embeddings (φ)
+    M_attention_lr: float = 0.01     # Attention params (W_O, constant_omega)
+    M_vfe_hyperparam_lr: float = 0.001  # VFE hyperparams (raw_c0, raw_b0, raw_lr, norms, biases)
+    M_output_lr: float = 0.001       # Output projection (vocab logits)
 
     # ==========================================================================
     # Optimizer Hyperparameters
@@ -75,10 +74,14 @@ class TrainingConfig:
     fisher_ema_decay: float = 0.95   # EMA decay for Fisher matrix estimation
     fisher_damping: float = 1e-4     # Tikhonov regularization λI for invertibility
 
-    # weight_decay implements a Gaussian hyper-prior on parameters:
+    # non_embed_weight_decay: L2 on non-embedding params (attention, output projection).
     #   p(θ) = N(0, 1/(2·wd))  →  -log p(θ) = wd·||θ||²
-    weight_decay: float = 0.1
-    embed_weight_decay: Optional[float] = 0.01
+    non_embed_weight_decay: float = 0.1
+    # embed_weight_decay: L2 regularizer in AdamW on embedding parameters (μ_p, σ_p, φ).
+    #   Implements implicit Gaussian hyper-prior N(0, 1/(2·wd)).
+    #   Acts through optimizer weight decay — pulls parameters toward zero.
+    #   Distinct from lambda_hyper (explicit KL loss pulling tokens toward centroid).
+    embed_weight_decay: Optional[float] = 0.05
     beta1: float = 0.9
     beta2: float = 0.999
     eps: float = 1e-8
@@ -96,16 +99,18 @@ class TrainingConfig:
     min_lr_ratio: float = 0.1      # Min LR as fraction of peak (used by FastTrainer)
 
     # ==========================================================================
-    # Free Energy Weights
+    # Free Energy Weights (M-step objective)
     # ==========================================================================
-    alpha: float = 0.0           # Self-consistency: KL(q||p) to embedding priors
-    lambda_beta: float = 0.0     # Belief alignment: Σβ_ij·KL  [M-step loss]
-    beta: float = 0.0            # Alias for lambda_beta (used by FastTrainer)
-    ffn_lambda_belief: float = 1.0  # Belief alignment weight inside VFE E-step
+    M_alpha: float = 0.0         # M-step KL(q||p) self-consistency weight
+    M_beta: float = 0.0          # M-step belief alignment: Σβ_ij·KL
     lambda_gamma: float = 0.0    # Model alignment (disabled by default)
     kappa_gamma: float = 1.0     # Temperature for γ_ij coupling weights
-    lambda_hyper: float = 0.0    # Hyper-prior: KL(s_i||h) models to centroid
-    use_obs_in_vfe: bool = False # Pass targets as observations into VFE E-step (last layer only)
+    # lambda_hyper: Explicit KL loss term KL(s_i || h) in M-step objective.
+    #   Pulls each token's embedding distribution toward the population centroid.
+    #   Acts through backprop — gradient flows to both μ and σ.
+    #   Orthogonal to embed_weight_decay (which regularizes magnitudes via AdamW).
+    lambda_hyper: float = 0.0
+    use_obs_in_vfe: bool = False  # Pass targets as observations into VFE E-step (last layer only)
     obs_sigma_gradient: bool = True  # ∂E_q[CE]/∂σ Hessian-diagonal obs gradient for sigma
     obs_sigma_weight: float = 1.0     # Weight for sigma observation gradient
 
@@ -164,7 +169,7 @@ class TrainingConfig:
     # ==========================================================================
     # Gauge Geometry: Phi gradient preconditioning (M-step)
     # ==========================================================================
-    alpha_phi: float = 0.0                     # Gauge prior: (α_φ/2)||φ||² loss term
+    mass_phi: float = 0.05                     # Gauge prior: (mass_φ/2)||φ||² loss term
     use_slk_projection: bool = False           # Project phi to traceless sl(K) after each step
     use_killing_form: bool = False             # Cartan decomposition preconditioning for phi grads
     killing_form_sym_dampening: float = 0.1    # Dampening for non-compact (symmetric) directions
@@ -203,8 +208,8 @@ def get_standard_config(**overrides) -> TrainingConfig:
         training_mode='standard',
         use_param_groups=False,
         learning_rate=3e-4,
-        alpha=0.0,
-        lambda_beta=0.0,
+        M_alpha=0.0,
+        M_beta=0.0,
         lambda_gamma=0.0,
     )
     for key, value in overrides.items():
@@ -216,21 +221,21 @@ def get_vfe_dynamic_config(**overrides) -> TrainingConfig:
     """
     Get configuration for VFE-dynamic gauge transformer.
 
-    Uses multi-group natural gradient LRs and VFE loss terms (alpha, lambda_beta).
+    Uses multi-group natural gradient LRs and VFE loss terms (M_alpha, M_beta).
     Pass gauge_mode='trivial' to disable gauge transport (Omega_ij = I),
     or gauge_mode='learned' for full per-token phi with transport.
     """
     config = TrainingConfig(
         training_mode='vfe_dynamic',
         use_param_groups=True,
-        mu_lr=0.1,
-        sigma_lr=0.005,
-        phi_lr=0.01,
-        attention_lr=0.01,
-        ffn_lr=0.001,
-        output_lr=0.001,
-        alpha=0.1,
-        lambda_beta=1.0,
+        M_mu_p_lr=0.1,
+        M_sigma_p_lr=0.005,
+        M_phi_lr=0.01,
+        M_attention_lr=0.01,
+        M_vfe_hyperparam_lr=0.001,
+        M_output_lr=0.001,
+        M_alpha=0.1,
+        M_beta=1.0,
         lambda_gamma=0.0,
         use_obs_in_vfe=True,
     )
@@ -244,13 +249,13 @@ def get_pure_fep_config(**overrides) -> TrainingConfig:
     Get configuration for Pure VFE transformer (no autograd, no optimizer).
 
     PureFEP handles its own VFE loss and natural gradient updates internally,
-    so alpha/lambda_beta/lambda_gamma are set to 0 (unused by Lightning wrapper).
+    so M_alpha/M_beta/lambda_gamma are set to 0 (unused by Lightning wrapper).
     """
     config = TrainingConfig(
         training_mode='pure_fep',
         use_param_groups=False,
-        alpha=0.0,
-        lambda_beta=0.0,
+        M_alpha=0.0,
+        M_beta=0.0,
         lambda_gamma=0.0,
     )
     for key, value in overrides.items():

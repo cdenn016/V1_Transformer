@@ -99,19 +99,18 @@ BASELINE_CONFIG = {
     'evolve_phi_e_step':     True,
 
     # === E-step dynamics ===
-    'ffn_learnable_lr':      True,  # E-step
-    
-    'ffn_alpha':             1,       # Prior coupling inside VFE E-step
-    'ffn_lambda_belief':     1,       # Belief alignment inside VFE E-step
-    'ffn_lambda_softmax':    0,
-    
-    
-    'learnable_alpha':       True,    
-    'ffn_learnable_alpha':   True,   # when true Adaptive α_i = c0/(b0 + KL) per dimension
+    'E_learnable_lr':        True,  # E-step
 
-    'e_step_mu_lr':          0.1,    # whitened steps ~0.1, well within trust=2.0
-    'e_step_sigma_lr':       0.05,   # conservative sigma movement
-    'e_step_phi_lr':         0.05,   # keep as-is, already reasonable
+    'E_alpha':               1,       # Prior coupling inside VFE E-step
+    'E_lambda_belief':       1,       # Belief alignment inside VFE E-step
+    'E_lambda_softmax':      0,
+
+
+    'E_learnable_alpha':     True,   # when true Adaptive α_i = c0/(b0 + KL) per dimension
+
+    'E_mu_q_lr':             0.1,    # whitened steps ~0.1, well within trust=2.0
+    'E_sigma_q_lr':          0.05,   # conservative sigma movement
+    'E_phi_lr':              0.05,   # keep as-is, already reasonable
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
     'gauge_group':      'GLK',
@@ -133,15 +132,15 @@ BASELINE_CONFIG = {
     # alpha=0: KL(q*||p) homogenizes (q* is smoothed, not data-grounded).
     # beta=0: alignment term is vacuum-seeking. E-step handles it internally.
     
-    'alpha':               0.00,
-    'beta':                0.0,
-    'alpha_phi':           0.05,            # Gauge prior: (α_φ/2)||φ||²
-    'lambda_hyper':        0.0,            # KL(s||h) with fixed Σ_h set if if using embed-weight-decay 
+    'M_alpha':             0.00,
+    'M_beta':              0.0,
+    'mass_phi':            0.05,            # Gauge prior: (mass_φ/2)||φ||²
+    'lambda_hyper':        0.0,            # KL(s||h) with fixed Σ_h set if if using embed-weight-decay
     'lambda_gamma':        0.0,
     'kappa_gamma':         1.0,
-    
+
     'embed_weight_decay':  0.05,   #acts like lambda_hyper N(o, 1/2sig) set zero when using lambda_hyper/alpha_phi
-    'weight_decay':        0.01,   #acts on non-vfe params
+    'non_embed_weight_decay': 0.01,   #acts on non-vfe params
     
     # === Phi gradient geometry ===
     'phi_natural_gradient':       'killing',

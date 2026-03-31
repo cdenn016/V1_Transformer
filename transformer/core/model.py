@@ -125,7 +125,7 @@ class GaugeTransformerLM(nn.Module):
         embed_dim = config['embed_dim']
         n_layers = config['n_layers']
         irrep_spec = config['irrep_spec']
-        hidden_dim = config['hidden_dim']
+        hidden_dim = config.get('hidden_dim', 256)
         max_seq_len = config['max_seq_len']
         kappa_beta = config['kappa_beta']
         pos_mode = config.get('pos_encoding_mode', 'none')  # Default: no position in gauge space

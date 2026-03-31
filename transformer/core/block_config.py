@@ -65,18 +65,18 @@ class BlockConfig:
     implicit_em: bool = False           # IFT-based M-step: detach beliefs at E-step start,
                                         # apply info-geometric scale s_k = (α/σ²_p)/A_k
 
-    # === VFE dynamics (FFN E-step) ===
+    # === VFE dynamics (E-step) ===
     ffn_mode: str = 'VFE_dynamic'       # FFN mode (only 'VFE_dynamic' supported)
-    ffn_alpha: float = 1.0              # Prior self-coupling weight α in VFE loop
+    E_alpha: float = 1.0               # E-step prior self-coupling weight α
     ffn_kappa: float = 1.0              # Softmax temperature (unified with kappa_beta)
     ffn_n_iterations: int = 1           # VFE inference iterations per forward pass
-    ffn_learnable_lr: bool = True       # Learn step size η for variational descent
-    e_step_mu_lr: float = 0.1            # E-step μ natural gradient step size (used when ffn_learnable_lr=False)
-    e_step_sigma_lr: float = 0.001       # E-step σ trust region scale (used when ffn_learnable_lr=False)
-    ffn_lambda_belief: float = 1.0      # Belief alignment weight λ (direct: β·∇KL)
-    ffn_lambda_softmax: float = 1.0    # Softmax coupling weight (GELU-like ∂β/∂θ · KL)
-    ffn_update_sigma: bool = True       # Update covariances during FFN E-step
-    ffn_learnable_alpha: bool = False   # Bayesian precision via Gamma-Normal conjugacy
+    E_learnable_lr: bool = True        # Learn step size η for variational descent
+    E_mu_q_lr: float = 0.1             # E-step μ natural gradient step size
+    E_sigma_q_lr: float = 0.001        # E-step σ trust region scale
+    E_lambda_belief: float = 1.0       # E-step belief alignment weight λ (direct: β·∇KL)
+    E_lambda_softmax: float = 1.0      # E-step softmax coupling weight (GELU-like ∂β/∂θ · KL)
+    ffn_update_sigma: bool = True       # Update covariances during E-step
+    E_learnable_alpha: bool = False    # Bayesian precision via Gamma-Normal conjugacy
     obs_sigma_gradient: bool = True    # ∂E_q[CE]/∂σ Hessian-diagonal obs gradient for sigma
     obs_sigma_weight: float = 1.0      # Weight for sigma observation gradient
     sigma_max: float = 5.0             # Upper bound on σ (diagonal) or eigenvalues (full cov).
@@ -163,7 +163,7 @@ class BlockConfig:
             # Structural
             embed_dim=config['embed_dim'],
             irrep_spec=config['irrep_spec'],
-            hidden_dim=config['hidden_dim'],
+            hidden_dim=config.get('hidden_dim', 256),
             n_layers=config['n_layers'],
             # Attention
             kappa_beta=kappa_beta,
@@ -176,7 +176,7 @@ class BlockConfig:
             evolve_sigma=config.get('evolve_sigma', True),
             evolve_phi=config.get('evolve_phi', True),
             evolve_phi_e_step=config.get('evolve_phi_e_step', True),
-            phi_lr=config.get('e_step_phi_lr', config.get('phi_lr', 0.05)),
+            phi_lr=config.get('E_phi_lr', config.get('e_step_phi_lr', config.get('phi_lr', 0.05))),
             phi_max_norm=config.get('phi_max_norm', None),
             phi_dim=config.get('phi_dim', 3),
             phi_natural_gradient=config.get('phi_natural_gradient', 'killing'),
@@ -187,18 +187,18 @@ class BlockConfig:
             amortized_inference=config.get('amortized_inference', True),
             detach_phi=config.get('detach_phi', False),
             implicit_em=config.get('implicit_em', False),
-            # VFE dynamics
+            # VFE dynamics (E-step) — new names with old-name fallbacks
             ffn_mode=config.get('ffn_mode', 'VFE_dynamic'),
-            ffn_alpha=config.get('ffn_alpha', 1.0),
+            E_alpha=config.get('E_alpha', config.get('ffn_alpha', 1.0)),
             ffn_kappa=kappa_beta,  # Unified temperature
             ffn_n_iterations=config.get('ffn_n_iterations', 1),
-            ffn_learnable_lr=config.get('ffn_learnable_lr', True),
-            e_step_mu_lr=config.get('e_step_mu_lr', 0.1),
-            e_step_sigma_lr=config.get('e_step_sigma_lr', 0.001),
-            ffn_lambda_belief=config.get('ffn_lambda_belief', 1.0),
-            ffn_lambda_softmax=config.get('ffn_lambda_softmax', 1.0),
+            E_learnable_lr=config.get('E_learnable_lr', config.get('ffn_learnable_lr', True)),
+            E_mu_q_lr=config.get('E_mu_q_lr', config.get('e_step_mu_lr', 0.1)),
+            E_sigma_q_lr=config.get('E_sigma_q_lr', config.get('e_step_sigma_lr', 0.001)),
+            E_lambda_belief=config.get('E_lambda_belief', config.get('ffn_lambda_belief', 1.0)),
+            E_lambda_softmax=config.get('E_lambda_softmax', config.get('ffn_lambda_softmax', 1.0)),
             ffn_update_sigma=config.get('ffn_update_sigma', True),
-            ffn_learnable_alpha=config.get('ffn_learnable_alpha', config.get('learnable_alpha', False)),
+            E_learnable_alpha=config.get('E_learnable_alpha', config.get('ffn_learnable_alpha', config.get('learnable_alpha', False))),
             obs_sigma_gradient=config.get('obs_sigma_gradient', True),
             obs_sigma_weight=config.get('obs_sigma_weight', 1.0),
             sigma_max=config.get('sigma_max', 5.0),
