@@ -162,7 +162,6 @@ class GaugeTransformerBlock(nn.Module):
             exact_diagonal_transport=cfg.exact_diagonal_transport,
             update_phi=cfg.evolve_phi,
             update_phi_per_iteration=cfg.evolve_phi_e_step,
-            phi_update_interval=cfg.phi_update_interval,
             phi_lr=cfg.phi_lr,
             phi_max_norm=cfg.phi_max_norm,
             prior_bank=cfg.ffn_prior_bank,

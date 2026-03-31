@@ -1721,7 +1721,6 @@ def run_single_experiment(
     ffn_mode: str,
     device: torch.device,
     checkpoint_dir: Path,
-    use_wandb: bool = False,
     args: argparse.Namespace = None,
     enable_publication_metrics: bool = True,
 ) -> Dict:
@@ -1733,7 +1732,6 @@ def run_single_experiment(
         ffn_mode: FFN mode ('VFE_dynamic')
         device: Device to train on
         checkpoint_dir: Directory to save checkpoints
-        use_wandb: Whether to use Weights & Biases logging
         args: Command-line arguments for logging
         enable_publication_metrics: Whether to enable comprehensive publication metrics
 
@@ -1983,7 +1981,6 @@ def run_single_experiment(
         eval_interval=config['eval_interval'],
         checkpoint_interval=config['checkpoint_interval'],
 
-        use_wandb=use_wandb,
         checkpoint_dir=exp_checkpoint_dir,
 
         # P-FLOW: EMA update of token embeddings toward successful beliefs

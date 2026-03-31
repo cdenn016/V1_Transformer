@@ -143,7 +143,6 @@ class TrainingConfig:
     # ==========================================================================
     batch_size: int = 64
     max_seq_len: int = 64
-    num_epochs: Optional[int] = None  # If set, overrides max_steps
     accumulation_steps: int = 1
 
     # ==========================================================================
@@ -160,13 +159,6 @@ class TrainingConfig:
     save_optimizer: bool = True
     save_total_limit: int = 3
     resume_from: Optional[str] = None  # Path to checkpoint to resume from
-
-    # ==========================================================================
-    # Weights & Biases
-    # ==========================================================================
-    use_wandb: bool = False
-    wandb_project: str = 'gauge-transformer'
-    wandb_run_name: Optional[str] = None
 
     # ==========================================================================
     # Hardware

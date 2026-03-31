@@ -43,12 +43,6 @@ try:
 except ImportError:
     TQDM_AVAILABLE = False
 
-try:
-    import wandb
-    WANDB_AVAILABLE = True
-except ImportError:
-    WANDB_AVAILABLE = False
-
 # Import standard loss computation
 from transformer.train import compute_free_energy_loss
 from transformer.baselines.standard_transformer import StandardTransformerLM
@@ -121,20 +115,9 @@ class FastTrainingConfig:
     eval_interval: int = 100
     checkpoint_interval: int = 200
 
-    # Early stopping
-    patience: int = 0  # If > 0, stop if no improvement for this many evals
-
     # Checkpointing
     checkpoint_dir: Path = Path('checkpoints')
     save_total_limit: int = 3
-
-    # Weights & Biases
-    use_wandb: bool = False
-    wandb_project: str = 'gauge-transformer-fast'
-    wandb_run_name: Optional[str] = None
-
-    # Mixed precision
-    use_amp: bool = False
 
     # P-FLOW: EMA update of token embeddings toward successful beliefs
     use_p_flow: bool = False          # Enable P-flow updates
@@ -177,10 +160,6 @@ class FastTrainingConfig:
     fisher_ema_decay: float = 0.95   # EMA decay for Fisher estimation (natural_gradient only)
     fisher_damping: float = 1e-4     # Tikhonov regularization λI (natural_gradient only)
 
-    # Ablation toggles (for PPL regression experiments)
-    use_exp_map_retraction: bool = True   # True=exp map, False=linear+Cholesky (original)
-    use_full_nat_grad: bool = True        # True=Σ@∇@Σ, False=diag approx (original)
-   
 
 
 # =============================================================================
@@ -240,25 +219,6 @@ class FastTrainer:
         # Training state
         self.global_step = 0
         self.best_val_ce = float('inf')  # Track CE loss (not total loss) for best model
-        self.patience_counter = 0  # Early stopping counter
-
-        # Mixed precision (using modern AMP API for PyTorch 2.x / CUDA 12+)
-        # AMP is incompatible with full covariance operations (eigendecomposition,
-        # matrix inversion, Cholesky) — float16 causes convergence failures.
-        # Force-disable when covariance evolution is active.
-        _evolve_sigma = getattr(config, 'evolve_sigma', False)
-        _use_amp = config.use_amp and self.device.type == 'cuda' and not _evolve_sigma
-        if config.use_amp and _evolve_sigma:
-            print("  ⚠ AMP disabled: incompatible with covariance evolution (evolve_sigma=True)")
-        self.scaler = torch.amp.GradScaler() if _use_amp else None
-
-        # W&B logging
-        if config.use_wandb and WANDB_AVAILABLE:
-            wandb.init(
-                project=config.wandb_project,
-                name=config.wandb_run_name,
-                config=vars(config),
-            )
 
         # Create checkpoint directory
         config.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -530,65 +490,36 @@ class FastTrainer:
         input_ids = input_ids.to(self.device)
         target_ids = target_ids.to(self.device)
 
-        # Forward pass (with optional AMP using modern API for PyTorch 2.x / CUDA 12+)
-        if self.config.use_amp:
-            with torch.amp.autocast('cuda'):
-                loss, metrics = compute_free_energy_loss(
-                    self.model,
-                    input_ids,
-                    target_ids,
-                    alpha=self.config.alpha,
-                    lambda_beta=self.config.beta,
-                    lambda_gamma=self.config.lambda_gamma,
-                    kappa_gamma=self.config.kappa_gamma,
-                    lambda_hyper=self.config.lambda_hyper,
-                    pad_token_id=self.pad_token_id,
-                    use_obs_in_vfe=self.config.use_obs_in_vfe,
-                    alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
-                    aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
-                )
-        else:
-            loss, metrics = compute_free_energy_loss(
-                self.model,
-                input_ids,
-                target_ids,
-                alpha=self.config.alpha,
-                lambda_beta=self.config.beta,
-                lambda_gamma=self.config.lambda_gamma,
-                kappa_gamma=self.config.kappa_gamma,
-                lambda_hyper=self.config.lambda_hyper,
-                pad_token_id=self.pad_token_id,
-                use_obs_in_vfe=self.config.use_obs_in_vfe,
-                alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
-                aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
-            )
+        # Forward pass
+        loss, metrics = compute_free_energy_loss(
+            self.model,
+            input_ids,
+            target_ids,
+            alpha=self.config.alpha,
+            lambda_beta=self.config.beta,
+            lambda_gamma=self.config.lambda_gamma,
+            kappa_gamma=self.config.kappa_gamma,
+            lambda_hyper=self.config.lambda_hyper,
+            pad_token_id=self.pad_token_id,
+            use_obs_in_vfe=self.config.use_obs_in_vfe,
+            alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
+            aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
+        )
 
         # Backward pass
         loss = loss / self.config.grad_accumulation_steps
-
-        if self.config.use_amp:
-            self.scaler.scale(loss).backward()
-        else:
-            loss.backward()
+        loss.backward()
 
         # Gradient accumulation
         if (self.global_step + 1) % self.config.grad_accumulation_steps == 0:
             # Gradient clipping
             if self.config.grad_clip > 0:
-                if self.config.use_amp:
-                    self.scaler.unscale_(self.optimizer)
-
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(),
                     self.config.grad_clip,
                 )
 
-            # Optimizer step
-            if self.config.use_amp:
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            else:
-                self.optimizer.step()
+            self.optimizer.step()
 
             # Scheduler step
             if self.scheduler is not None:
@@ -740,16 +671,6 @@ class FastTrainer:
                 else:
                     print(log_msg)
 
-                # W&B logging
-                if self.config.use_wandb and WANDB_AVAILABLE:
-                    wandb.log({
-                        'train/loss': metrics['total_loss'],
-                        'train/ce_loss': metrics['ce_loss'],
-                        'train/perplexity': metrics['perplexity'],
-                        'train/step_time': step_time,
-                        **{f'lr/{k}': v for k, v in lrs.items()},
-                    }, step=step)
-
                 # Flush numerical fallback counters and report if any fired
                 _num_events = _flush_numerical_events()
                 if _num_events:
@@ -769,25 +690,11 @@ class FastTrainer:
                 print(f"    Loss: {val_metrics['loss']:.4f}")
                 print(f"    Perplexity: {val_metrics['perplexity']:.2f}\n")
 
-                # W&B logging
-                if self.config.use_wandb and WANDB_AVAILABLE:
-                    wandb.log({
-                        'val/loss': val_metrics['loss'],
-                        'val/perplexity': val_metrics['perplexity'],
-                    }, step=step)
-
                 # Save best model based on CE loss (not total loss)
                 # CE loss is the proper metric since PPL = exp(CE)
                 if val_metrics['ce_loss'] < self.best_val_ce:
                     self.best_val_ce = val_metrics['ce_loss']
-                    self.patience_counter = 0  # Reset patience
                     self.save_checkpoint(is_best=True)
-                else:
-                    self.patience_counter += 1  # Increment patience
-                    if self.config.patience > 0 and self.patience_counter >= self.config.patience:
-                        print(f"\n⚠ Early stopping triggered! No improvement for {self.config.patience} evaluations.")
-                        print(f"  Best validation CE: {self.best_val_ce:.4f}")
-                        break  # Stop training
 
             # Checkpointing
             if (step + 1) % self.config.checkpoint_interval == 0:
@@ -822,12 +729,9 @@ class FastTrainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'best_val_ce': self.best_val_ce,
             'config': vars(self.config),
-            'patience_counter': self.patience_counter,
         }
         if self.scheduler is not None:
             checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
-        if self.scaler is not None:
-            checkpoint['scaler_state_dict'] = self.scaler.state_dict()
 
         if is_best:
             path = self.config.checkpoint_dir / 'best_model.pt'
@@ -879,7 +783,6 @@ class FastTrainer:
         # Restore training state
         self.global_step = checkpoint.get('step', checkpoint.get('global_step', 0))
         self.best_val_ce = checkpoint.get('best_val_ce', checkpoint.get('best_val_loss', float('inf')))
-        self.patience_counter = checkpoint.get('patience_counter', 0)
 
         # Restore scheduler state
         if self.scheduler is not None and 'scheduler_state_dict' in checkpoint:

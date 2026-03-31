@@ -2429,7 +2429,6 @@ class VariationalFFNDynamic(nn.Module):
         # Phi (gauge frame) evolution via VFE gradients
         update_phi: bool = True,  # If True, update phi via ∂F/∂φ (after E-step loop)
         update_phi_per_iteration: bool = True,  # If True, update phi during EACH E-step iteration
-        phi_update_interval: int = 1,  # Update phi every N iterations (1=every iteration, 2=skip alternate)
         phi_lr: float = 0.05,      # Learning rate for phi updates
         phi_max_norm: Optional[float] = None,  # Max phi norm; None = auto (π for SO(N), 5.0 for GL(K))
         prior_bank: Optional[nn.Module] = None,  # Token-dependent PriorBank (if provided)
@@ -2506,7 +2505,6 @@ class VariationalFFNDynamic(nn.Module):
             compute_sigma_align_grad: If True, compute sigma gradient from alignment.
             update_phi: If True, update phi via dF/dphi after E-step loop.
             update_phi_per_iteration: If True, evolve phi during each E-step iteration.
-            phi_update_interval: Update phi every N iterations (1=every, 2=alternate).
             phi_lr: Learning rate for phi updates.
             phi_max_norm: Max norm for phi; None = auto-select in retraction
                 (π for SO(N), 5.0 for GL(K)).
@@ -2582,8 +2580,6 @@ class VariationalFFNDynamic(nn.Module):
         # Phi evolution via VFE gradients (principled approach)
         self.update_phi = update_phi
         self.update_phi_per_iteration = update_phi_per_iteration  # Dynamical gauge frames
-        # If n_iterations=1, force phi_update_interval=1 so iteration 0 fires
-        self.phi_update_interval = 1 if n_iterations <= 1 else phi_update_interval
         if update_phi_per_iteration and gauge_mode == 'constant':
             import warnings
             warnings.warn(
@@ -4695,13 +4691,11 @@ class VariationalFFNDynamic(nn.Module):
             # =============================================================
             # STEP 4b: Optional Gauge Frame Evolution DURING E-step
             # =============================================================
-            phi_update_interval = getattr(self, 'phi_update_interval', 1)
             _skip_phi_update = self.gauge_mode in ('trivial', 'constant')
             _use_omega = omega_current is not None and getattr(self, 'gauge_param', 'phi') == 'omega'
 
             if (self.update_phi_per_iteration and torch.is_grad_enabled()
-                    and not _skip_phi_update
-                    and iteration % phi_update_interval == phi_update_interval - 1):
+                    and not _skip_phi_update):
 
                 if _use_omega:
                     # Direct Omega path: no matrix_exp, no dexp series
