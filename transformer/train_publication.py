@@ -159,8 +159,9 @@ EM_CONFIG = {
     'gauge_dim':                          10,
     'irrep_spec':            [('fund', 2, 10)],
 
-    'use_prior_bank':        False,
-    'mask_self_attention':   False,  # Prevent attention collapse?
+    'use_prior_bank':           False,
+    'learnable_pb_temperature': False,
+    'mask_self_attention':      False,  # Prevent attention collapse?
   
     # === M-step: implicit differentiation ===
     'implicit_em':           False,
@@ -185,7 +186,8 @@ EM_CONFIG = {
     # === E-step dynamics ===
     'E_learnable_lr':        True,   # Learnable E-step LR
     'E_alpha':               1,      # E-step prior coupling weight
-    'E_lambda_belief':       1.0,    # E-step belief alignment weight
+    'E_lambda_belief':       5.0,    # E-step belief alignment weight
+    'E_lambda_softmax':      2,
     'E_learnable_alpha':     True,   # Adaptive α_i = c0/(b0 + KL) per dimension
 
     'E_mu_q_lr':             0.1,    # E-step μ step size (whitened, within trust=2.0)
@@ -197,8 +199,8 @@ EM_CONFIG = {
     'gauge_mode':       'learned',
     'gauge_param':      'phi',
 
-    'skip_attention':        False,   #skips ad hoc attention sublayer
-    'closed_form_e_step':    False,   #closed form...ignores non-linear softmax gradient
+    'skip_attention':           False,   #skips ad hoc attention sublayer
+    'closed_form_e_step':       False,   #closed form...ignores non-linear softmax gradient
 
     'diagonal_covariance':      True,
     'exact_diagonal_transport': False,  # exact diagonal transport - more expensive
@@ -216,7 +218,7 @@ EM_CONFIG = {
     
     'M_alpha':             0.00,   # M-step KL(q||p) self-consistency
     'M_beta':              0.0,    # M-step belief alignment
-    'mass_phi':            0.1,    # Gauge prior: (mass_φ/2)||φ||²
+    'mass_phi':            0.01,    # Gauge prior: (mass_φ/2)||φ||²
     'lambda_hyper':        0.0,    # KL(s||h) explicit loss (pulls tokens toward centroid)
     'lambda_gamma':        0.0,
     'kappa_gamma':         1.0,
@@ -293,6 +295,9 @@ EM_CONFIG = {
     'gauge_fixed_priors':          False,
     'tie_embeddings':              False,
     'ffn_mode':                    'VFE_dynamic',
+    
+    'debug_vfe_grads':             False,
+    'verbose_diagnostics':         False,
     
     # === Multi-layer depth signal ===
     'aux_layer_loss':  False,   # Enable for multi-layer: per-layer M-step CE loss
