@@ -167,7 +167,6 @@ class GaugeTransformerBlock(nn.Module):
             prior_bank=cfg.ffn_prior_bank,
             use_prior_bank=cfg.ffn_use_prior_bank,
             irrep_dims=cfg.ffn_irrep_dims,
-            chunk_size=cfg.ffn_chunk_size,
             mask_self_attention=cfg.mask_self_attention,
             learnable_alpha=cfg.E_learnable_alpha,
             multihead_vfe=cfg.multihead_vfe,

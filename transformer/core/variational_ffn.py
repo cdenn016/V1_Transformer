@@ -538,7 +538,6 @@ def _compute_vfe_gradients_block_diagonal(
     kappa: float,
     eps: float,
     irrep_dims: List[int],
-    chunk_size: Optional[int],
     compute_sigma_align_grad: bool,
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
     alpha_c0: Optional[torch.Tensor] = None,  # (K,) for product-rule correction when alpha is learnable
@@ -548,8 +547,7 @@ def _compute_vfe_gradients_block_diagonal(
     Block-diagonal VFE gradient computation for full covariance mode.
 
     Processes each irrep block separately to reduce memory from O(N^2 K^2) to
-    O(N^2 * max(d_i^2)). When chunk_size is provided, also chunks over query
-    positions to reduce memory further. Includes sigma softmax coupling
+    O(N^2 * max(d_i^2)). Includes sigma softmax coupling
     (dBeta/dSigma) via per-block per-pair storage.
 
     Args:
@@ -565,7 +563,6 @@ def _compute_vfe_gradients_block_diagonal(
         kappa: Temperature for softmax coupling.
         eps: Numerical stability floor.
         irrep_dims: Block dimensions [d_1, d_2, ...] for block-diagonal KL.
-        chunk_size: Optional chunk size over query positions.
         compute_sigma_align_grad: Whether to compute dF/dSigma from alignment.
         enforce_orthogonal: If True, enforce Omega in SO(K) via Newton-Schulz.
         alpha_c0: (K,) softplus(raw_c0) for product-rule correction when alpha is learnable.
@@ -578,9 +575,6 @@ def _compute_vfe_gradients_block_diagonal(
     B, N, K = mu_q.shape
     device = mu_q.device
     dtype = mu_q.dtype
-
-    # Default chunk size to N (no chunking) if not provided
-    C = chunk_size if chunk_size is not None else N
 
     # Initialize output gradients
     grad_mu = torch.zeros(B, N, K, device=device, dtype=dtype)
@@ -1365,207 +1359,9 @@ def _fused_attention_and_vfe_gradients_block_diag(
     return beta.to(dtype), grad_mu.to(dtype), grad_sigma.to(dtype), kl_out
 
 
-def _compute_vfe_gradients_chunked(
-    mu_q: torch.Tensor,        # (B, N, K) belief means
-    sigma_q: torch.Tensor,     # (B, N, K) diagonal variances
-    mu_p: torch.Tensor,        # (B, N, K) prior means
-    sigma_p: torch.Tensor,     # (B, N, K) prior variances
-    beta: torch.Tensor,        # (B, N, N) attention weights
-    phi: torch.Tensor,         # (B, N, n_gen) gauge frames
-    generators: torch.Tensor,  # (n_gen, K, K) generators
-    alpha: 'float | torch.Tensor',
-    lambda_belief: float,
-    lambda_softmax: float,
-    kappa: float,
-    eps: float,
-    chunk_size: int,
-    compute_sigma_align_grad: bool,
-    enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
-    alpha_c0: Optional[torch.Tensor] = None,  # (K,) for product-rule correction
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Chunked VFE gradient computation for diagonal covariance mode.
-
-    Processes N×N pairs in C×C chunks to reduce peak memory.
-
-    Uses single-pass with incremental avg_grad and normalization by beta sum.
-    This matches the original stable algorithm - only the inplace modification
-    issue is fixed by using non-inplace operations (= ... + instead of +=).
-    """
-    B, N, K = mu_q.shape
-    device = mu_q.device
-    dtype = mu_q.dtype
-
-    # Force float32 for all sigma divisions, logs, and KL computation under AMP
-    mu_q = mu_q.float()
-    mu_p = mu_p.float()
-    sigma_q = sigma_q.float()
-    sigma_p = sigma_p.float()
-    beta = beta.float()
-
-    sigma_q_safe = sigma_q.clamp(min=eps)
-    sigma_p_safe = sigma_p.clamp(min=eps)
-
-    # =================================================================
-    # 1. Self-Coupling Gradient (simple, no chunking needed)
-    # =================================================================
-    delta_mu = mu_q - mu_p
-    grad_mu_self = alpha * delta_mu / sigma_p_safe
-    grad_sigma_self = alpha * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
-
-    # Product-rule correction for learnable alpha
-    if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
-        kl_k = 0.5 * (sigma_q_safe / sigma_p_safe + delta_mu ** 2 / sigma_p_safe
-                      - 1.0 + torch.log(sigma_p_safe) - torch.log(sigma_q_safe))
-        kl_k = kl_k.clamp(min=0.0)
-        grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * delta_mu / sigma_p_safe
-        grad_sigma_self = grad_sigma_self - (alpha ** 2 / alpha_c0) * kl_k * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
-
-    # =================================================================
-    # 2. Alignment Gradient (chunked processing)
-    # =================================================================
-    # Precompute matrix exponentials for all positions
-    # Float64 for GL(K) numerical stability (prevents NaN in matrix_exp)
-    phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
-    exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
-    del phi_matrix
-
-    # Re-orthogonalization for SO(K) if requested
-    if enforce_orthogonal and K >= 16:
-        exp_phi = newton_schulz_orthogonalize(exp_phi)
-        exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
-
-    # Accumulators - use non-inplace operations throughout
-    grad_mu_direct = torch.zeros_like(mu_q)
-    grad_mu_softmax = torch.zeros_like(mu_q)
-    grad_sigma_align = torch.zeros_like(sigma_q)
-
-    # Scale kappa by √K to match attention temperature τ = √K
-    kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
-
-    # Two-pass approach for correct softmax coupling gradient:
-    # Pass 1: Accumulate avg_grad (= Σ_j β_ij ∂KL_ij/∂μ_i) and per-chunk KL/grad_kl
-    # Pass 2: Compute softmax coupling with the correct (full) avg_grad
-
-    do_sigma_softmax = compute_sigma_align_grad
-
-    for i_start in range(0, N, chunk_size):
-        i_end = min(i_start + chunk_size, N)
-        n_i = i_end - i_start
-
-        exp_phi_i = exp_phi[:, i_start:i_end].contiguous()
-        mu_i = mu_q[:, i_start:i_end].contiguous()
-        sigma_i = sigma_q_safe[:, i_start:i_end].contiguous()
-        beta_i = beta[:, i_start:i_end, :].contiguous()
-
-        # ============================================================
-        # PASS 1 (lightweight): Accumulate avg_grad over all j
-        # Only computes transport + grad_kl, does NOT store chunk data.
-        # ============================================================
-        avg_grad_i = torch.zeros(B, n_i, K, device=device, dtype=dtype)
-        avg_sigma_grad_i = torch.zeros(B, n_i, K, device=device, dtype=dtype) if do_sigma_softmax else None
-
-        for j_start in range(0, N, chunk_size):
-            j_end = min(j_start + chunk_size, N)
-            n_j = j_end - j_start
-
-            exp_neg_phi_j = exp_neg_phi[:, j_start:j_end].contiguous()
-            mu_j = mu_q[:, j_start:j_end].contiguous()
-            sigma_j = sigma_q_safe[:, j_start:j_end].contiguous()
-            beta_chunk = beta_i[:, :, j_start:j_end]
-
-            # Compute Omega for this chunk
-            Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi_i, exp_neg_phi_j)
-            mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu_j)
-            sigma_j_transported_diag = torch.einsum(
-                'bijkl,bijkl,bjl->bijk', Omega, Omega, sigma_j
-            ).clamp(min=eps)
-
-            del Omega
-
-            delta_mu_ij = mu_i[:, :, None, :] - mu_j_transported
-            grad_kl = delta_mu_ij / sigma_j_transported_diag
-
-            avg_grad_i = avg_grad_i + torch.einsum('bij,bijk->bik', beta_chunk, grad_kl)
-
-            if do_sigma_softmax and avg_sigma_grad_i is not None:
-                sigma_j_inv_diag = 1.0 / sigma_j_transported_diag
-                sigma_i_inv = 1.0 / sigma_i.clamp(min=1e-6)
-                grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv[:, :, None, :])  # broadcast
-                avg_sigma_grad_i = avg_sigma_grad_i + torch.einsum('bij,bijk->bik', beta_chunk, grad_sigma_pair)
-
-            del sigma_j_transported_diag, mu_j_transported, delta_mu_ij, grad_kl
-
-        # ============================================================
-        # PASS 2: Recompute transport and compute direct + softmax
-        # gradients with the now-complete avg_grad_i.
-        # Recomputes transport (2 einsums per chunk) but avoids
-        # O(N/chunk_size * B * n_i * n_j * K) stored chunk_data.
-        # ============================================================
-        for j_start in range(0, N, chunk_size):
-            j_end = min(j_start + chunk_size, N)
-            n_j = j_end - j_start
-
-            exp_neg_phi_j = exp_neg_phi[:, j_start:j_end].contiguous()
-            mu_j = mu_q[:, j_start:j_end].contiguous()
-            sigma_j = sigma_q_safe[:, j_start:j_end].contiguous()
-            beta_chunk = beta_i[:, :, j_start:j_end]
-
-            # Recompute transport for this chunk
-            Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi_i, exp_neg_phi_j)
-            mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu_j)
-            sigma_j_transported_diag = torch.einsum(
-                'bijkl,bijkl,bjl->bijk', Omega, Omega, sigma_j
-            ).clamp(min=1e-4)
-
-            del Omega
-
-            delta_mu_ij = mu_i[:, :, None, :] - mu_j_transported
-            grad_kl = delta_mu_ij / sigma_j_transported_diag
-
-            # Direct gradient
-            direct_contrib = lambda_belief * torch.einsum('bij,bijk->bik', beta_chunk, grad_kl)
-            grad_mu_direct[:, i_start:i_end] = grad_mu_direct[:, i_start:i_end] + direct_contrib
-
-            # KL values (for softmax coupling weight) — broadcast instead of clone
-            sigma_i_bc = sigma_i[:, :, None, :].clamp(min=1e-4)
-            trace_term = (sigma_i_bc / sigma_j_transported_diag).sum(dim=-1)
-            mahal = (delta_mu_ij ** 2 / sigma_j_transported_diag).sum(dim=-1)
-            logdet_term = (torch.log(sigma_j_transported_diag) - torch.log(sigma_i_bc)).sum(dim=-1)
-
-            kl_ceil = max(100.0, 20.0 * K)
-            kl_chunk = 0.5 * (trace_term + mahal - K + logdet_term).clamp(min=0.0, max=kl_ceil)
-
-            # Mu softmax coupling
-            grad_deviation = avg_grad_i.unsqueeze(2) - grad_kl
-            d_beta_d_mu = beta_chunk.unsqueeze(-1) * grad_deviation / kappa_scaled
-            softmax_contrib = lambda_belief * torch.einsum('bij,bijk->bik', kl_chunk, d_beta_d_mu)
-            grad_mu_softmax[:, i_start:i_end] = grad_mu_softmax[:, i_start:i_end] + softmax_contrib
-
-            # Sigma alignment + softmax coupling
-            if compute_sigma_align_grad:
-                sigma_j_inv_diag = 1.0 / sigma_j_transported_diag
-                sigma_i_inv = 1.0 / sigma_i.clamp(min=1e-4)
-                grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv[:, :, None, :])  # broadcast
-                sigma_contrib = lambda_belief * torch.einsum('bij,bijk->bik', beta_chunk, grad_sigma_pair)
-                grad_sigma_align[:, i_start:i_end] = grad_sigma_align[:, i_start:i_end] + sigma_contrib
-
-                # Sigma softmax coupling: Σ_j KL_ij · ∂β_ij/∂σ_i
-                if avg_sigma_grad_i is not None:
-                    sigma_grad_deviation = avg_sigma_grad_i.unsqueeze(2) - grad_sigma_pair
-                    d_beta_d_sigma = beta_chunk.unsqueeze(-1) * sigma_grad_deviation / kappa_scaled
-                    sigma_softmax_contrib = lambda_belief * torch.einsum('bij,bijk->bik', kl_chunk, d_beta_d_sigma)
-                    grad_sigma_align[:, i_start:i_end] = grad_sigma_align[:, i_start:i_end] + sigma_softmax_contrib
-
-            del sigma_j_transported_diag, mu_j_transported
-
-    grad_mu_align = grad_mu_direct + grad_mu_softmax
-    grad_mu = grad_mu_self + grad_mu_align
-    grad_sigma = grad_sigma_self + grad_sigma_align
-
-    return grad_mu.to(dtype), grad_sigma.to(dtype)
-
-
+# Chunked VFE gradient path removed — block-diagonal path handles memory
+# efficiency via irrep decomposition (always enabled via use_block_diagonal_kl=True).
+# See _compute_vfe_gradients_block_diagonal_diag for the active path.
 # =============================================================================
 # GPU-Based Gradient Computation (PyTorch - FAST!)
 # =============================================================================
@@ -1586,9 +1382,7 @@ def compute_vfe_gradients_gpu(
     alpha_c0: Optional[torch.Tensor] = None,  # (K,) softplus(raw_c0) for product-rule correction when alpha is learnable
     cached_transport: Optional[dict] = None,  # Precomputed transport operators
     compute_sigma_align_grad: bool = True,  # Compute sigma gradient from alignment term
-    # Memory-efficient options (NEW!)
     irrep_dims: Optional[List[int]] = None,  # Block dimensions for block-diagonal processing
-    chunk_size: Optional[int] = None,  # Chunk size for memory-efficient processing
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
     cached_block_exp_pairs: Optional[list] = None,  # Precomputed block exponential pairs
     exact_diagonal_transport: bool = False,  # Lift diagonal σ for exact transport
@@ -1607,10 +1401,9 @@ def compute_vfe_gradients_gpu(
     The dBeta/dSigma softmax coupling term is always included:
         dF/dSigma_i = Sum_j beta_ij * dKL_ij/dSigma_i + Sum_j KL_ij * dBeta_ij/dSigma_i
 
-    Dispatches to memory-efficient paths when irrep_dims or chunk_size is set:
+    Dispatches to memory-efficient block-diagonal paths when irrep_dims is set:
     - irrep_dims + full cov  -> _compute_vfe_gradients_block_diagonal
     - irrep_dims + diagonal  -> _compute_vfe_gradients_block_diagonal_diag
-    - chunk_size + diagonal  -> _compute_vfe_gradients_chunked
 
     Args:
         mu_q: Belief means (B, N, K).
@@ -1633,7 +1426,6 @@ def compute_vfe_gradients_gpu(
             gradient dKL/dSigma_q = 0.5 * (Sigma_transported^{-1} - Sigma_q^{-1}).
         irrep_dims: Block dimensions [d_1, ...] for block-diagonal KL decomposition.
             Reduces memory from O(N^2 K^2) to O(N^2 * max(d_i^2)).
-        chunk_size: Chunk size for processing N x N pairs in C x C chunks.
         enforce_orthogonal: If True, enforce Omega in SO(K) via Newton-Schulz.
         cached_block_exp_pairs: Precomputed (exp_phi, exp_neg_phi) per irrep block.
         exact_diagonal_transport: When True and sigma is diagonal, lifts sigma to
@@ -1666,7 +1458,7 @@ def compute_vfe_gradients_gpu(
             mu_q, sigma_q_full, mu_p, sigma_p_full, beta, phi, generators,
             alpha, lambda_belief, kappa, eps, alpha_c0,
             cached_transport, compute_sigma_align_grad, irrep_dims,
-            chunk_size, enforce_orthogonal, cached_block_exp_pairs,
+            enforce_orthogonal, cached_block_exp_pairs,
             exact_diagonal_transport=False,
         )
         return grad_mu, torch.diagonal(grad_sigma_full, dim1=-2, dim2=-1)
@@ -1677,7 +1469,7 @@ def compute_vfe_gradients_gpu(
     if irrep_dims is not None and not is_diagonal:
         return _compute_vfe_gradients_block_diagonal(
             mu_q, sigma_q, mu_p, sigma_p, beta, phi, generators,
-            alpha, lambda_belief, lambda_softmax, kappa, eps, irrep_dims, chunk_size,
+            alpha, lambda_belief, lambda_softmax, kappa, eps, irrep_dims,
             compute_sigma_align_grad, enforce_orthogonal,
             alpha_c0=alpha_c0,
             cached_block_exp_pairs=cached_block_exp_pairs,
@@ -1693,17 +1485,6 @@ def compute_vfe_gradients_gpu(
             compute_sigma_align_grad, enforce_orthogonal,
             alpha_c0=alpha_c0,
             cached_block_exp_pairs=cached_block_exp_pairs,
-        )
-
-    # =================================================================
-    # MEMORY-EFFICIENT PATH: Chunked processing for diagonal mode
-    # =================================================================
-    if chunk_size is not None and is_diagonal:
-        return _compute_vfe_gradients_chunked(
-            mu_q, sigma_q, mu_p, sigma_p, beta, phi, generators,
-            alpha, lambda_belief, kappa, eps, chunk_size,
-            compute_sigma_align_grad, enforce_orthogonal,
-            alpha_c0=alpha_c0,
         )
 
     # =================================================================
@@ -2435,7 +2216,6 @@ class VariationalFFNDynamic(nn.Module):
         use_prior_bank: bool = False,  # If True, use PriorBank (token-dependent) instead of position-dependent priors
         # Memory-efficient options (NEW!)
         irrep_dims: Optional[List[int]] = None,  # Block dimensions for principled KL decomposition
-        chunk_size: Optional[int] = None,  # Chunk size for memory-efficient attention
         # Self-attention masking (prevents attention collapse)
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
         # Bayesian precision (learned prior self-coupling)
@@ -2515,7 +2295,6 @@ class VariationalFFNDynamic(nn.Module):
                 Requires prior_bank and token_ids in forward().
             irrep_dims: Block dimensions [d_1, d_2, ...] for memory-efficient
                 block-diagonal KL decomposition.
-            chunk_size: Chunk size for memory-efficient N x N processing.
             mask_self_attention: If True, mask diagonal to prevent attention collapse.
             learnable_alpha: If True, Bayesian precision via Gamma-Normal conjugacy:
                 alpha_k = c0_k / (b0_k + kl_k). Per-dimension, gauge-invariant.
@@ -2623,7 +2402,6 @@ class VariationalFFNDynamic(nn.Module):
 
         # Memory-efficient options
         self.irrep_dims = irrep_dims
-        self.chunk_size = chunk_size
 
         # VFE hyperparameters
         self.alpha = alpha
@@ -3050,7 +2828,6 @@ class VariationalFFNDynamic(nn.Module):
                     return_kl=True,
                     diagonal_covariance=is_diagonal,
                     irrep_dims=[d_h],
-                    chunk_size=self.chunk_size,
                     mask_self_attention=self.mask_self_attention,
                     gauge_mode=self.gauge_mode,
                     cached_block_exp_pairs=_phi_head_bep,
@@ -3071,7 +2848,6 @@ class VariationalFFNDynamic(nn.Module):
                                 return_kl=True,
                 diagonal_covariance=is_diagonal,
                 irrep_dims=self.irrep_dims,
-                chunk_size=self.chunk_size,
                 mask_self_attention=self.mask_self_attention,
                 gauge_mode=self.gauge_mode,
                 exact_diagonal_transport=self.exact_diagonal_transport,
@@ -3103,7 +2879,7 @@ class VariationalFFNDynamic(nn.Module):
         """
         def step_fn(mu_in, sigma_in):
             # Compute transport
-            if self.irrep_dims is None and self.chunk_size is None and not self.multihead_vfe:
+            if self.irrep_dims is None and not self.multihead_vfe:
                 cached_transport = compute_transport_operators(
                     phi=phi_current,
                     generators=self.generators,
@@ -3140,8 +2916,7 @@ class VariationalFFNDynamic(nn.Module):
                         kappa=kappa_h, epsilon=eps, mask=mask,
                         return_kl=False,
                         diagonal_covariance=is_diagonal,
-                        chunk_size=self.chunk_size,
-                        mask_self_attention=self.mask_self_attention,
+                            mask_self_attention=self.mask_self_attention,
                         gauge_mode=self.gauge_mode,
                         exact_diagonal_transport=self.exact_diagonal_transport,
                     )
@@ -3175,7 +2950,6 @@ class VariationalFFNDynamic(nn.Module):
                     diagonal_covariance=is_diagonal,
                     cached_transport=cached_transport,
                     irrep_dims=self.irrep_dims,
-                    chunk_size=self.chunk_size,
                     mask_self_attention=self.mask_self_attention,
                     gauge_mode=self.gauge_mode,
                     exact_diagonal_transport=self.exact_diagonal_transport,
@@ -3190,7 +2964,6 @@ class VariationalFFNDynamic(nn.Module):
                     cached_transport=cached_transport,
                     compute_sigma_align_grad=self.compute_sigma_align_grad,
                     irrep_dims=self.irrep_dims,
-                    chunk_size=self.chunk_size,
                     exact_diagonal_transport=self.exact_diagonal_transport,
                 )
 
@@ -3278,7 +3051,7 @@ class VariationalFFNDynamic(nn.Module):
         def step_fn(mu_in: torch.Tensor, sigma_in: torch.Tensor,
                      phi_in: torch.Tensor) -> tuple:
             # --- mu/sigma update (same as _make_deq_step_fn) ---
-            if self.irrep_dims is None and self.chunk_size is None and not self.multihead_vfe:
+            if self.irrep_dims is None and not self.multihead_vfe:
                 cached_transport = compute_transport_operators(
                     phi=phi_in,
                     generators=self.generators,
@@ -3317,8 +3090,7 @@ class VariationalFFNDynamic(nn.Module):
                         kappa=kappa_h, epsilon=eps, mask=mask,
                         return_kl=False,
                         diagonal_covariance=is_diagonal,
-                        chunk_size=self.chunk_size,
-                        mask_self_attention=self.mask_self_attention,
+                            mask_self_attention=self.mask_self_attention,
                         gauge_mode=self.gauge_mode,
                         exact_diagonal_transport=self.exact_diagonal_transport,
                     )
@@ -3355,7 +3127,6 @@ class VariationalFFNDynamic(nn.Module):
                     diagonal_covariance=is_diagonal,
                     cached_transport=cached_transport,
                     irrep_dims=self.irrep_dims,
-                    chunk_size=self.chunk_size,
                     mask_self_attention=self.mask_self_attention,
                     gauge_mode=self.gauge_mode,
                     exact_diagonal_transport=self.exact_diagonal_transport,
@@ -3370,7 +3141,6 @@ class VariationalFFNDynamic(nn.Module):
                     cached_transport=cached_transport,
                     compute_sigma_align_grad=self.compute_sigma_align_grad,
                     irrep_dims=self.irrep_dims,
-                    chunk_size=self.chunk_size,
                     exact_diagonal_transport=self.exact_diagonal_transport,
                 )
 
@@ -3453,8 +3223,7 @@ class VariationalFFNDynamic(nn.Module):
                         return_kl=True,
                         diagonal_covariance=is_diagonal,
                         irrep_dims=[d_h],
-                        chunk_size=self.chunk_size,
-                        mask_self_attention=self.mask_self_attention,
+                            mask_self_attention=self.mask_self_attention,
                         gauge_mode=self.gauge_mode,
                         exact_diagonal_transport=self.exact_diagonal_transport,
                     )
@@ -3469,7 +3238,6 @@ class VariationalFFNDynamic(nn.Module):
                     return_kl=True,
                     diagonal_covariance=is_diagonal,
                     irrep_dims=self.irrep_dims,
-                    chunk_size=self.chunk_size,
                     mask_self_attention=self.mask_self_attention,
                     gauge_mode=self.gauge_mode,
                     exact_diagonal_transport=self.exact_diagonal_transport,
@@ -3888,7 +3656,7 @@ class VariationalFFNDynamic(nn.Module):
             # cached_transport avoids redundant matrix exponentials.
             # Skip caching when using block-diagonal or chunked paths (they
             # compute transport internally in chunks to save memory).
-            if self.irrep_dims is None and self.chunk_size is None and not self.multihead_vfe:
+            if self.irrep_dims is None and not self.multihead_vfe:
                 if omega_current is not None and self.gauge_param == 'omega':
                     # Direct omega: build full-K transport from omega blocks
                     from transformer.core.attention import compute_transport_operators_direct
@@ -4084,7 +3852,7 @@ class VariationalFFNDynamic(nn.Module):
                             kappa=kappa_h, epsilon=eps, mask=mask,
                             return_kl=False,
                             diagonal_covariance=is_diagonal,
-                            irrep_dims=[d_h], chunk_size=self.chunk_size,
+                            irrep_dims=[d_h],
                             mask_self_attention=self.mask_self_attention,
                             gauge_mode=self.gauge_mode,
                             cached_block_exp_pairs=_head_bep,
@@ -4188,9 +3956,8 @@ class VariationalFFNDynamic(nn.Module):
                             enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
                         )
 
-                # Use fused path for diagonal + block-diagonal (no chunk_size)
+                # Use fused path for diagonal + block-diagonal
                 _use_fused_single = (is_diagonal and self.irrep_dims is not None
-                                     and self.chunk_size is None
                                      and not self.exact_diagonal_transport)
 
                 # Detach beliefs for gradient computation (consistent with multihead
@@ -4226,7 +3993,7 @@ class VariationalFFNDynamic(nn.Module):
                         return_kl=False,
                         diagonal_covariance=is_diagonal,
                         cached_transport=cached_transport,
-                        irrep_dims=self.irrep_dims, chunk_size=self.chunk_size,
+                        irrep_dims=self.irrep_dims,
                         mask_self_attention=self.mask_self_attention,
                         gauge_mode=self.gauge_mode,
                         cached_block_exp_pairs=_cached_bep,
@@ -4243,7 +4010,7 @@ class VariationalFFNDynamic(nn.Module):
                         eps=eps, alpha_c0=_alpha_c0,
                         cached_transport=cached_transport,
                         compute_sigma_align_grad=self.compute_sigma_align_grad,
-                        irrep_dims=self.irrep_dims, chunk_size=self.chunk_size,
+                        irrep_dims=self.irrep_dims,
                         cached_block_exp_pairs=_cached_bep,
                         exact_diagonal_transport=self.exact_diagonal_transport,
                     )
