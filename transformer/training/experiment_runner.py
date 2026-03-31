@@ -2006,6 +2006,9 @@ def run_single_experiment(
             'track_iteration_diagnostics', False),
         diagnostics_interval=config.get('diagnostics_interval', 50),
         verbose_diagnostics=config.get('verbose_diagnostics', True),
+
+        # Learnable per-head kappa warmup
+        kappa_warmup_steps=config.get('kappa_warmup_steps', 0),
     )
 
     print("\n" + "="*70)
