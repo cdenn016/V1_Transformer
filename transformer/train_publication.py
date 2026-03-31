@@ -183,16 +183,14 @@ EM_CONFIG = {
     'evolve_phi_e_step':     True,
 
     # === E-step dynamics ===
-    'ffn_learnable_lr':      True,  # E-step
-    
-    'ffn_alpha':             1,       # Prior coupling inside VFE E-step
-    'ffn_lambda_belief':     1.0,       # Belief alignment inside VFE E-step
-    'learnable_alpha':       True,    
-    'ffn_learnable_alpha':   True,   # when true Adaptive α_i = c0/(b0 + KL) per dimension
+    'E_learnable_lr':        True,   # Learnable E-step LR
+    'E_alpha':               1,      # E-step prior coupling weight
+    'E_lambda_belief':       1.0,    # E-step belief alignment weight
+    'E_learnable_alpha':     True,   # Adaptive α_i = c0/(b0 + KL) per dimension
 
-    'e_step_mu_lr':          0.1,    # whitened steps ~0.1, well within trust=2.0
-    'e_step_sigma_lr':       0.05,   # conservative sigma movement
-    'e_step_phi_lr':         0.05,   # keep as-is, already reasonable
+    'E_mu_q_lr':             0.1,    # E-step μ step size (whitened, within trust=2.0)
+    'E_sigma_q_lr':          0.05,   # E-step σ step size (conservative)
+    'E_phi_lr':              0.05,   # E-step φ step size
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
     'gauge_group':      'GLK',
@@ -214,15 +212,15 @@ EM_CONFIG = {
     # alpha=0: KL(q*||p) homogenizes (q* is smoothed, not data-grounded).
     # beta=0: alignment term is vacuum-seeking. E-step handles it internally.
     
-    'alpha':               0.00,
-    'beta':                0.0,
-    'alpha_phi':           0.1,            # Gauge prior: (α_φ/2)||φ||²
-    'lambda_hyper':        0.0,            # KL(s||h) with fixed Σ_h set if if using embed-weight-decay 
+    'M_alpha':             0.00,   # M-step KL(q||p) self-consistency
+    'M_beta':              0.0,    # M-step belief alignment
+    'mass_phi':            0.1,    # Gauge prior: (mass_φ/2)||φ||²
+    'lambda_hyper':        0.0,    # KL(s||h) explicit loss (pulls tokens toward centroid)
     'lambda_gamma':        0.0,
     'kappa_gamma':         1.0,
-    
-    'embed_weight_decay':  0.01,   #acts like lambda_hyper N(o, 1/2sig) set zero when using lambda_hyper/alpha_phi
-    'weight_decay':        0.01,   #acts on non-vfe params
+
+    'embed_weight_decay':  0.05,   # L2 hyper-prior on embeddings (μ_p, σ_p, φ) via AdamW
+    'non_embed_weight_decay': 0.01,  # L2 on non-embedding params (attention, output)
     
     # === Phi gradient geometry ===
     'phi_natural_gradient':       'killing',
@@ -248,12 +246,12 @@ EM_CONFIG = {
     # mu_embed and log_sigma_diag have dual roles: they initialize E-step
     # beliefs (q₀) AND serve as prior parameters (μ_p, σ_p), so these rates
     # indirectly affect E-step initialization speed.
-    'mu_lr':        0.05,   # Prior mean embeddings (μ_p)
-    'sigma_lr':     0.0125, # Prior covariance embeddings (log σ_p)
-    'phi_lr':       0.0075, # Gauge frame embeddings (φ)
-    'ffn_lr':       0.05,   # FFN params (raw_c0, raw_b0, raw_lr)
-    'attention_lr': 0.005,  # Attention params (W_O, constant_omega)
-    'output_lr':    0.05,   # Output projection (vocab logits)
+    'M_mu_p_lr':        0.05,   # M-step prior mean embeddings (μ_p)
+    'M_sigma_p_lr':     0.0125, # M-step prior covariance embeddings (log σ_p)
+    'M_phi_lr':         0.0075, # M-step gauge frame embeddings (φ)
+    'M_vfe_hyperparam_lr': 0.05, # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr)
+    'M_attention_lr':   0.005,  # M-step attention params (W_O, constant_omega)
+    'M_output_lr':      0.05,   # M-step output projection (vocab logits)
     
     # === Logging ===
     'log_interval':               100,
@@ -347,7 +345,7 @@ HEBBIAN_CONFIG = {
     'use_layernorm':         True,
     'use_residual':          True,
     'use_output_projection': True,
-    'ffn_learnable_lr':      True,
+    'E_learnable_lr':      True,
 
     # === Gauge group ===
     'gauge_group':   'GLK',
@@ -359,8 +357,8 @@ HEBBIAN_CONFIG = {
     # === E-step dynamics (same as EM) ===
     'ffn_n_iterations': 1,
 
-    'ffn_alpha':         1.0,
-    'ffn_lambda_belief': 1.0,
+    'E_alpha':         1.0,
+    'E_lambda_belief': 1.0,
 
     'evolve_sigma':        True,
     'evolve_phi':          True,
@@ -381,9 +379,9 @@ HEBBIAN_CONFIG = {
 
 
     # === Loss weights: CE only (no VFE regularizers in backprop loss) ===
-    'alpha':        0.0,
-    'beta':         0.0,
-    'alpha_phi':    0.0,
+    'M_alpha':      0.0,
+    'M_beta':       0.0,
+    'mass_phi':     0.0,
     'lambda_hyper': 0.0,
     'lambda_gamma': 0.0,
     'kappa_gamma':  1.0,
@@ -407,15 +405,15 @@ HEBBIAN_CONFIG = {
     # Nonzero backprop LR here would create a hybrid (optimizer + P-flow) that
     # conflicts with the "no backprop" design. Attention/FFN params still need
     # backprop since they have no P-flow equivalent.
-    'mu_lr':        0.0,
-    'sigma_lr':     0.0,
-    'phi_lr':       0.0,     # phi learns via phi_flow_update only (detach_phi=True)
-    'ffn_lr':       0.05,
-    'attention_lr': 0.005,
-    'output_lr':    0.0,     # W_out learns via delta rule only
+    'M_mu_p_lr':        0.0,
+    'M_sigma_p_lr':     0.0,
+    'M_phi_lr':         0.0,     # phi learns via phi_flow_update only (detach_phi=True)
+    'M_vfe_hyperparam_lr': 0.05,
+    'M_attention_lr':   0.005,
+    'M_output_lr':      0.0,     # W_out learns via delta rule only
 
     # === Regularization ===
-    'weight_decay': 0.01,
+    'non_embed_weight_decay': 0.01,
     'grad_clip':    1.0,
 
     # === Logging ===
@@ -594,19 +592,19 @@ STANDARD_CONFIG = {
     'use_positional_embedding': True,
 
     # Learning rates
-    'mu_lr': 3e-4,
-    'sigma_lr': 0.0001,
-    'phi_lr': 0.0001,
-    'ffn_lr': 3e-4,
+    'M_mu_p_lr': 3e-4,
+    'M_sigma_p_lr': 0.0001,
+    'M_phi_lr': 0.0001,
+    'M_vfe_hyperparam_lr': 3e-4,
 
     # Free energy weights (not used in standard mode)
-    'alpha': 0,
-    'beta': 0,
+    'M_alpha': 0,
+    'M_beta': 0,
     'lambda_gamma': 0,
     'kappa_gamma': 1.0,
 
     # Regularization
-    'weight_decay': 0.01,
+    'non_embed_weight_decay': 0.01,
     'dropout': 0.1,
     'grad_clip': 1.0,
 
@@ -683,19 +681,19 @@ STANDARD_ATTN_ONLY_CONFIG = {
     'use_positional_embedding': True,
 
     # Learning rates
-    'mu_lr': 3e-4,
-    'sigma_lr': 0.0001,
-    'phi_lr': 0.0001,
-    'ffn_lr': 3e-4,
+    'M_mu_p_lr': 3e-4,
+    'M_sigma_p_lr': 0.0001,
+    'M_phi_lr': 0.0001,
+    'M_vfe_hyperparam_lr': 3e-4,
 
     # Free energy weights (not used in standard mode)
-    'alpha': 0,
-    'beta': 0,
+    'M_alpha': 0,
+    'M_beta': 0,
     'lambda_gamma': 0,
     'kappa_gamma': 1.0,
 
     # Regularization
-    'weight_decay': 0.01,
+    'non_embed_weight_decay': 0.01,
     'dropout': 0.1,
     'grad_clip': 1.0,
 
