@@ -238,6 +238,7 @@ EM_CONFIG = {
     'mu_init_std':     1.0,
     'phi_scale':       1.0,
     'kappa_beta':      1.0,
+    'learnable_head_kappa': False,  # Per-head learnable κ_h (init from kappa_beta * √d_h)
     'mu_normalize':    False,
     'mu_max_norm':     None,
 

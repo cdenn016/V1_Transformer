@@ -135,6 +135,7 @@ class GaugeTransformerBlock(nn.Module):
             use_rope=cfg.use_rope,
             rope_base=cfg.rope_base,
             sigma_aggregation=cfg.sigma_aggregation,
+            learnable_head_kappa=cfg.learnable_head_kappa,
         )
 
         # Conditionally create LayerNorm (disabled for pure VFE)
@@ -194,6 +195,7 @@ class GaugeTransformerBlock(nn.Module):
             detach_phi=cfg.detach_phi,
             implicit_em=cfg.implicit_em,
             closed_form_e_step=getattr(cfg, 'closed_form_e_step', False),
+            learnable_head_kappa=cfg.learnable_head_kappa,
         )
 
         self.norm2 = nn.LayerNorm(cfg.embed_dim) if cfg.use_layernorm else nn.Identity()

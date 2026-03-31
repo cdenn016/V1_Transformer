@@ -40,6 +40,9 @@ class BlockConfig:
 
     # === Attention ===
     kappa_beta: float = 1.0             # Temperature τ for KL-based attention softmax
+    learnable_head_kappa: bool = False  # If True, learn per-head κ_h via log_kappa_per_head
+                                        # Initialized to kappa_beta * sqrt(d_h); replaces
+                                        # the static kappa_h = kappa_beta * sqrt(d_h) scaling.
     attention_pattern: str = 'full'     # 'full' (only supported pattern)
     attention_window: int = 64          # Window size (unused, kept for API compat)
     mask_self_attention: bool = False   # Prevent KL(q_i||q_i)=0 collapse
@@ -167,6 +170,7 @@ class BlockConfig:
             n_layers=config['n_layers'],
             # Attention
             kappa_beta=kappa_beta,
+            learnable_head_kappa=config.get('learnable_head_kappa', False),
             attention_pattern=config.get('attention_pattern', 'full'),
             attention_window=config.get('attention_window', 64),
             mask_self_attention=config.get('mask_self_attention', False),
