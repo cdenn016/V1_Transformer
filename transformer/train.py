@@ -288,11 +288,12 @@ def compute_free_energy_loss(
         model: GaugeTransformerLM with forward_with_attention() method
         token_ids: (B, N) input token IDs
         targets: (B, N) target token IDs
-        alpha: Weight for self-coupling KL(q||p) (default: 0.0)
-        lambda_beta: Weight for belief coupling (default: 1.0)
+        M_alpha: Weight for self-coupling KL(q||p) (default: 0.0)
+        M_beta: Weight for belief coupling (default: 1.0)
         lambda_gamma: Weight for model coupling (default: 0.0)
         kappa_gamma: Temperature for γ_ij model coupling weights (default: 1.0)
         lambda_hyper: Weight for hyper-prior KL(s_i||h) (default: 0.0)
+        mass_phi: Gauge prior weight: (mass_φ/2) Σ_i ||φ_i||² (default: 0.0)
         pad_token_id: Token ID for padding (ignored in loss). Default -100.
 
     Returns:
@@ -506,12 +507,12 @@ def compute_free_energy_loss(
     # =================================================================
     # 6. Gauge Prior: (α_φ/2) Σ_i ||φ_i||² — mass term for gauge field
     # =================================================================
-    if alpha_phi > 0.0:
+    if mass_phi > 0.0:
         K = mu_q.shape[-1]
         dim_scale = math.sqrt(max(K, 1))
         # phi_s is the model gauge frame from embeddings (B, N, n_gen)
         phi_norm_sq = (phi_s ** 2).sum(dim=-1).mean()  # Mean over batch and tokens
-        gauge_prior_loss = (alpha_phi / 2.0) * phi_norm_sq / dim_scale
+        gauge_prior_loss = (mass_phi / 2.0) * phi_norm_sq / dim_scale
     else:
         gauge_prior_loss = torch.tensor(0.0, device=ce_loss.device)
 
@@ -573,10 +574,10 @@ def compute_free_energy_loss(
         'loss/total': total_loss.item(),
         'loss/ce': ce_loss.item(),
         'loss/belief_align': belief_align_loss.item(),
-        'loss/self_consistency': self_consistency_loss.item() if alpha > 0 else 0.0,
+        'loss/self_consistency': self_consistency_loss.item() if M_alpha > 0 else 0.0,
         'loss/model_coupling': model_align_loss.item() if lambda_gamma > 0 else 0.0,
         'loss/hyper_prior': hyper_prior_loss.item() if lambda_hyper > 0 else 0.0,
-        'loss/gauge_prior': gauge_prior_loss.item() if alpha_phi > 0 else 0.0,
+        'loss/gauge_prior': gauge_prior_loss.item() if mass_phi > 0 else 0.0,
         'loss/aux_layer_ce': aux_loss.item() if aux_losses else 0.0,
         'attention/beta_mean': _beta_mean,
         'attention/kl_mean': _kl_mean,
