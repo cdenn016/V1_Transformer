@@ -2434,16 +2434,6 @@ class VariationalFFNDynamic(nn.Module):
         else:
             self.log_kappa_per_head = None
 
-    def _get_kappa_h(self, head_idx: int, d_h: int) -> float:
-        r"""Get per-head temperature κ_h.
-
-        When learnable_head_kappa=True: κ_h = exp(log_kappa_per_head[h])
-        When False: κ_h = self.kappa * √d_h (static scaling)
-        """
-        if self.learnable_head_kappa and self.log_kappa_per_head is not None:
-            return torch.exp(self.log_kappa_per_head[head_idx])
-        return self.kappa * math.sqrt(d_h)
-
         # =================================================================
         # Bayesian Precision: Log-barrier form (Eq. 882-884)
         # =================================================================
@@ -2527,6 +2517,16 @@ class VariationalFFNDynamic(nn.Module):
     def lr(self) -> torch.Tensor:
         """E-step μ learning rate, constrained to (0, ∞) via softplus."""
         return F.softplus(self.raw_lr)
+
+    def _get_kappa_h(self, head_idx: int, d_h: int) -> float:
+        r"""Get per-head temperature κ_h.
+
+        When learnable_head_kappa=True: κ_h = exp(log_kappa_per_head[h])
+        When False: κ_h = self.kappa * √d_h (static scaling)
+        """
+        if self.learnable_head_kappa and self.log_kappa_per_head is not None:
+            return torch.exp(self.log_kappa_per_head[head_idx])
+        return self.kappa * math.sqrt(d_h)
 
     def _get_sigma_trust(self, effective_lr: torch.Tensor) -> float:
         r"""E-step σ trust region scale.
