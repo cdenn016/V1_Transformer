@@ -223,7 +223,9 @@ class GaugeTokenEmbedding(nn.Module):
         # Parameterize via log-diagonal (ensures positivity):
         #   Σ = diag(exp(log_σ_diag))
         #
-        # This is a simplified SPD parametrization. Future: full Cholesky.
+        # Diagonal priors are sufficient: gauge transport Ω@Σ@Ω.T rotates
+        # diagonal Σ_p into non-diagonal covariance in the transported frame,
+        # providing off-diagonal structure where it matters (between tokens).
 
         if gauge_fixed_priors:
             # Single base prior covariance Σ_0 - all token priors are rotations of this
