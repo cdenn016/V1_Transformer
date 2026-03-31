@@ -30,7 +30,6 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from typing import Dict, Optional, Tuple, List
-from dataclasses import dataclass, field
 from pathlib import Path
 import time
 
@@ -48,30 +47,8 @@ except ImportError:
 from transformer.train import compute_free_energy_loss
 from transformer.baselines.standard_transformer import StandardTransformerLM
 
-
-# =============================================================================
-# Fast Training Configuration
-# =============================================================================
-
-@dataclass
-class FastTrainingConfig(TrainingConfig):
-    """FastTrainer config — inherits from TrainingConfig with production defaults.
-
-    Overrides TrainingConfig defaults for fields where FastTrainer needs
-    different values (e.g., shorter warmup, stronger alpha, different logging).
-    All fields are defined in TrainingConfig; this class only sets defaults.
-    """
-
-    # Override defaults for FastTrainer
-    max_steps: int = 1000
-    warmup_steps: int = 50
-    weight_decay: float = 0.01
-    alpha: float = 1.0            # Stronger than TrainingConfig default (0.0)
-    beta: float = 1.0             # Belief alignment (maps to lambda_beta in loss)
-    log_interval: int = 10
-    eval_interval: int = 100
-    checkpoint_interval: int = 200
-    checkpoint_dir: Optional[Path] = Path('checkpoints')
+# Backward-compatible alias — old checkpoints and call sites may reference this name.
+FastTrainingConfig = TrainingConfig
 
 
 
@@ -101,7 +78,7 @@ class FastTrainer:
         model: GaugeTransformerLM or StandardTransformerLM instance.
         train_loader: Training DataLoader.
         val_loader: Validation DataLoader.
-        config: FastTrainingConfig with LRs, loss weights, and schedule.
+        config: TrainingConfig with LRs, loss weights, and schedule.
         device: Target device (defaults to CPU).
     """
 
@@ -725,15 +702,16 @@ if __name__ == '__main__':
     print("""
 from transformer.model import GaugeTransformerLM, VFEConfig
 from transformer.data import create_dataloaders
-from transformer.training.train_fast import FastTrainer, FastTrainingConfig
+from transformer.training.train_fast import FastTrainer
+from transformer.training.config import TrainingConfig
 
 # Create model & data
 config = VFEConfig()  # Use default config
 model = GaugeTransformerLM(config)
 train_loader, val_loader, vocab_size = create_dataloaders(...)
 
-# Fast training config
-config = FastTrainingConfig(
+# Training config
+config = TrainingConfig(
     max_steps=1000,
     mu_lr=0.1,
     sigma_lr=0.005,
