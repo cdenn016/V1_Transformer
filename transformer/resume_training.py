@@ -391,21 +391,21 @@ def resume_training():
         max_steps=config['max_steps'],
         warmup_steps=config.get('warmup_steps', 1000),
 
-        # Learning rates
-        mu_lr=config.get('mu_lr', 0.1),
-        sigma_lr=config.get('sigma_lr', 0.005),
-        phi_lr=config.get('phi_lr', 0.01),
-        attention_lr=config.get('attention_lr', 0.01),
-        ffn_lr=config.get('ffn_lr', 0.001),
-        output_lr=config.get('output_lr', 0.001),
+        # M-step learning rates (with old-name fallbacks for old checkpoints)
+        M_mu_p_lr=config.get('M_mu_p_lr', config.get('mu_lr', 0.1)),
+        M_sigma_p_lr=config.get('M_sigma_p_lr', config.get('sigma_lr', 0.005)),
+        M_phi_lr=config.get('M_phi_lr', config.get('phi_lr', 0.01)),
+        M_attention_lr=config.get('M_attention_lr', config.get('attention_lr', 0.01)),
+        M_vfe_hyperparam_lr=config.get('M_vfe_hyperparam_lr', config.get('ffn_lr', 0.001)),
+        M_output_lr=config.get('M_output_lr', config.get('output_lr', 0.001)),
 
-        weight_decay=config.get('weight_decay', 0.01),
+        non_embed_weight_decay=config.get('non_embed_weight_decay', config.get('weight_decay', 0.01)),
         grad_clip=config.get('grad_clip', 1.0),
         grad_accumulation_steps=GRAD_ACCUMULATION,
 
         # Free energy weights
-        alpha=config.get('alpha', 0.1),
-        beta=config.get('beta', 1.0),
+        M_alpha=config.get('M_alpha', config.get('alpha', 0.0)),
+        M_beta=config.get('M_beta', config.get('beta', 0.0)),
         lambda_gamma=config.get('lambda_gamma', 0.0),
 
         # Intervals

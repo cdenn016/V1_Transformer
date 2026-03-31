@@ -27,8 +27,8 @@ class TestTrainingConfig:
 
         config = TrainingConfig()
         assert config is not None
-        assert hasattr(config, 'mu_lr')
-        assert hasattr(config, 'sigma_lr')
+        assert hasattr(config, 'M_mu_p_lr')
+        assert hasattr(config, 'M_sigma_p_lr')
 
     def test_get_standard_config(self):
         """Test get_standard_config preset."""
@@ -51,11 +51,11 @@ class TestTrainingConfig:
         from transformer.training.config import get_standard_config
 
         config = get_standard_config(
-            mu_lr=0.05,
+            M_mu_p_lr=0.05,
             max_steps=500,
         )
 
-        assert config.mu_lr == 0.05
+        assert config.M_mu_p_lr == 0.05
         assert config.max_steps == 500
 
     def test_gauge_mode_default_learned(self):

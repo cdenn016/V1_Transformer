@@ -248,15 +248,19 @@ def compute_free_energy_loss(
     model,
     token_ids: torch.Tensor,
     targets: torch.Tensor,
-    alpha: float = 0.0,           # Self-coupling: KL(q_i || p_i) — beliefs to priors
-    lambda_beta: float = 1.0,     # Belief coupling weight
+    M_alpha: float = 0.0,         # Self-coupling: KL(q_i || p_i) — beliefs to priors
+    M_beta: float = 1.0,          # Belief coupling weight
     lambda_gamma: float = 0.0,    # Model coupling weight
     kappa_gamma: float = 1.0,     # Temperature for γ_ij coupling weights
     lambda_hyper: float = 0.0,    # Hyper-prior: KL(s_i || h) — models to centroid
     pad_token_id: int = -100,     # Token ID to ignore in loss (padding)
     use_obs_in_vfe: bool = False, # Pass targets into VFE E-step (last layer only)
-    alpha_phi: float = 0.0,       # Gauge prior weight: (α_φ/2) Σ_i ||φ_i||²
+    mass_phi: float = 0.0,        # Gauge prior weight: (mass_φ/2) Σ_i ||φ_i||²
     aux_loss_weight: float = 0.0, # Weight for auxiliary per-layer CE losses (0 = disabled)
+    # Backward-compatible aliases (deprecated)
+    alpha: float = None,
+    lambda_beta: float = None,
+    alpha_phi: float = None,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     Compute training loss (M-step objective in the hierarchical VFE).
@@ -295,6 +299,14 @@ def compute_free_energy_loss(
         total_loss: Scalar loss for backprop
         metrics: Dict with loss components
     """
+    # Backward-compatible aliases: old callers may pass alpha=, lambda_beta=, alpha_phi=
+    if alpha is not None:
+        M_alpha = alpha
+    if lambda_beta is not None:
+        M_beta = lambda_beta
+    if alpha_phi is not None:
+        mass_phi = alpha_phi
+
     # =================================================================
     # Forward pass with attention weights and KL matrices
     # =================================================================
@@ -339,7 +351,7 @@ def compute_free_energy_loss(
     # =================================================================
     # 2. Belief Coupling: λ_β · Σ_ij β_ij · KL(q_i || Ω_ij q_j)
     # =================================================================
-    if lambda_beta > 0.0:
+    if M_beta > 0.0:
         # Detach β: correct EM formulation. In the M-step, β is held fixed at
         # its E-step value. At convergence ∂F/∂β = 0 (β* is optimal), so the
         # β-gradient contribution vanishes by the envelope theorem. Detaching
@@ -353,7 +365,7 @@ def compute_free_energy_loss(
         belief_align_loss = weighted_kl.sum(dim=(-2, -1)).mean()
         K = mu_q.shape[-1]
         dim_scale = math.sqrt(max(K, 1))
-        belief_align_loss = lambda_beta * belief_align_loss / dim_scale
+        belief_align_loss = M_beta * belief_align_loss / dim_scale
     else:
         belief_align_loss = torch.tensor(0.0, device=ce_loss.device)
 
@@ -370,7 +382,7 @@ def compute_free_energy_loss(
     # M-step loss for consistency: same α weights the self-coupling
     # in both E-step gradient and M-step loss.
     # =================================================================
-    if alpha > 0.0:
+    if M_alpha > 0.0:
         K = mu_q.shape[-1]
         # Detach E-step covariances: backprop through the E-step sigma evolution
         # produces NaN from numerically unstable second derivatives (matrix_exp
@@ -379,7 +391,7 @@ def compute_free_energy_loss(
         # mu_q keeps gradient (flows through ImplicitEMGradient to mu_embed).
         sigma_q_for_kl = sigma_q.detach() if sigma_q is not None else None
         # sigma_p kept LIVE: the M-step KL(q||p) is the correct gradient source
-        # for sigma_p when alpha > 0. The positive feedback concern (smaller σ_p →
+        # for sigma_p when M_alpha > 0. The positive feedback concern (smaller σ_p →
         # larger ∂KL/∂σ_p) applies to the E-step's natural gradient (where 1/σ_p
         # amplifies), but in the M-step with AdamW the gradient is bounded by
         # adaptive learning rates and gradient clipping. Detaching here starves
@@ -401,7 +413,7 @@ def compute_free_energy_loss(
             alpha_scalar = alpha_i.mean(dim=-1)  # (B, N)
             self_consistency_loss = (alpha_scalar * kl_per_agent).mean() / dim_scale
         else:
-            self_consistency_loss = alpha * kl_per_agent.mean() / dim_scale
+            self_consistency_loss = M_alpha * kl_per_agent.mean() / dim_scale
     else:
         self_consistency_loss = torch.tensor(0.0, device=ce_loss.device)
 

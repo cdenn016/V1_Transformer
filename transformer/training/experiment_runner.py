@@ -950,7 +950,7 @@ class PublicationTrainer(FastTrainer):
         if use_delta_rule and hasattr(self.model, 'out_proj') and not _tied_weights:
             self.model.out_proj.weight.requires_grad = False
 
-        effective_beta = self.config.beta
+        effective_beta = self.config.M_beta
         use_obs = getattr(self.config, 'use_obs_in_vfe', False)
 
         # Forward pass
@@ -966,14 +966,14 @@ class PublicationTrainer(FastTrainer):
                 self.model,
                 input_ids,
                 target_ids,
-                alpha=self.config.alpha,
+                alpha=self.config.M_alpha,
                 lambda_beta=effective_beta,
                 lambda_gamma=self.config.lambda_gamma,
                 kappa_gamma=self.config.kappa_gamma,
                 lambda_hyper=self.config.lambda_hyper,
                 pad_token_id=self.pad_token_id,
                 use_obs_in_vfe=use_obs,
-                alpha_phi=self.config.alpha_phi,
+                alpha_phi=self.config.mass_phi,
                 aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
             )
         loss.backward()
@@ -1889,15 +1889,18 @@ def run_single_experiment(
         # Learning rates
         # For standard transformer: attention_lr should match ffn_lr (all standard Adam)
         # For gauge transformer: attention_lr matches phi_lr (natural gradient scale)
-        mu_lr=config['mu_lr'],
-        sigma_lr=config['sigma_lr'],
-        phi_lr=config['phi_lr'],
-        attention_lr=config.get(
-            'attention_lr', config['ffn_lr'] if ffn_mode == 'standard' else config['phi_lr']),
-        ffn_lr=config['ffn_lr'],
-        output_lr=config.get('output_lr', config['ffn_lr']),
+        M_mu_p_lr=config.get('M_mu_p_lr', config.get('mu_lr', 0.1)),
+        M_sigma_p_lr=config.get('M_sigma_p_lr', config.get('sigma_lr', 0.005)),
+        M_phi_lr=config.get('M_phi_lr', config.get('phi_lr', 0.01)),
+        M_attention_lr=config.get(
+            'M_attention_lr', config.get('attention_lr',
+                config.get('M_vfe_hyperparam_lr', config.get('ffn_lr', 0.001)) if ffn_mode == 'standard'
+                else config.get('M_phi_lr', config.get('phi_lr', 0.01)))),
+        M_vfe_hyperparam_lr=config.get('M_vfe_hyperparam_lr', config.get('ffn_lr', 0.001)),
+        M_output_lr=config.get('M_output_lr', config.get('output_lr',
+            config.get('M_vfe_hyperparam_lr', config.get('ffn_lr', 0.001)))),
 
-        weight_decay=config['weight_decay'],
+        non_embed_weight_decay=config.get('non_embed_weight_decay', config.get('weight_decay', 0.01)),
         embed_weight_decay=config.get('embed_weight_decay', None),
         grad_clip=config['grad_clip'],
 
@@ -1907,9 +1910,9 @@ def run_single_experiment(
         fisher_damping=config.get('fisher_damping', 1e-4),
 
         # Free energy loss weights
-        alpha=config['alpha'],
+        M_alpha=config.get('M_alpha', config.get('alpha', 0.0)),
         # → lambda_beta in compute_free_energy_loss
-        beta=config['beta'],
+        M_beta=config.get('M_beta', config.get('beta', 0.0)),
 
         lambda_gamma=config['lambda_gamma'],
         lambda_hyper=config.get('lambda_hyper', 0.0),
@@ -1921,7 +1924,7 @@ def run_single_experiment(
         sigma_residual=config.get('sigma_residual', False),
 
         # Gauge geometry: phi gradient control
-        alpha_phi=config.get('alpha_phi', 0.0),
+        mass_phi=config.get('mass_phi', config.get('alpha_phi', 0.0)),
         use_slk_projection=config.get('use_slk_projection', False),
         use_killing_form=config.get('use_killing_form', False),
         killing_form_sym_dampening=config.get(
@@ -1989,8 +1992,8 @@ def run_single_experiment(
     print(f"  Seq length:     {seq_len}")
     print(f"  Num workers:    {config.get('num_workers', 0)}")
     print(f"\nFree Energy Weights:")
-    print(f"  α (self-consistency): {train_config.alpha}")
-    print(f"  β (belief align):     {train_config.beta}")
+    print(f"  α (self-consistency): {train_config.M_alpha}")
+    print(f"  β (belief align):     {train_config.M_beta}")
     print(f"  γ (model align):      {train_config.lambda_gamma}")
 
     # P-FLOW configuration
