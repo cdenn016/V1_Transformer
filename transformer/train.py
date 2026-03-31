@@ -631,6 +631,21 @@ def compute_free_energy_loss(
                 metrics['bayesian/mahal_sq_std'] = mahal_t.std().item()
                 break  # Only first layer for now
 
+    # Per-head learnable kappa diagnostics (first layer only)
+    for block in model.transformer.blocks:
+        vffn = block.ffn if hasattr(block.ffn, 'learnable_head_kappa') else None
+        if vffn is not None and vffn.learnable_head_kappa and vffn.log_kappa_per_head is not None:
+            with torch.no_grad():
+                kappa_vals = torch.exp(vffn.log_kappa_per_head)  # (n_heads,)
+                metrics['kappa/per_head_mean'] = kappa_vals.mean().item()
+                metrics['kappa/per_head_std'] = kappa_vals.std().item()
+                metrics['kappa/per_head_min'] = kappa_vals.min().item()
+                metrics['kappa/per_head_max'] = kappa_vals.max().item()
+                # Log each head individually
+                for h_idx, kv in enumerate(kappa_vals):
+                    metrics[f'kappa/head_{h_idx}'] = kv.item()
+            break  # Only first layer
+
     if lambda_gamma > 0.0:
         metrics['attention/gamma_mean'] = gamma.mean().item()
         metrics['attention/kl_model_mean'] = kl_model.mean().item()
