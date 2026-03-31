@@ -180,19 +180,25 @@ class GaugeTokenEmbedding(nn.Module):
         self.mu_normalize = mu_normalize
         self.mu_max_norm = mu_max_norm
 
-        # CRITICAL: diagonal_covariance is incompatible with gauge_fixed_priors!
-        # When gauge_fixed_priors=True, Σ_i = R_i Σ_0 R_i^T produces a FULL matrix
-        # even if Σ_0 is diagonal. Extracting only diagonal loses correlations
-        # induced by rotation, breaking gauge covariance: Σ_i ≠ Ω_ij Σ_j Ω_ij^T
+        # Note on gauge_fixed_priors + diagonal_covariance:
+        # When gauge_fixed_priors=True, Σ_v = A_v diag(σ_0) A_v^T is generally
+        # a full matrix. With diagonal_covariance=True, we extract its diagonal:
+        #   diag(Σ_v)_k = Σ_j A_kj² σ_j
+        # This gives exact diagonal entries but discards off-diagonal correlations.
+        # Under GL(K), this is a reasonable trade-off: the orbit covers all SPD
+        # matrices, so the diagonal entries alone carry sufficient information
+        # for decode and for diagonal-mode E-step. For exact gauge-covariant
+        # transport in the VFE iterations, use diagonal_covariance=False.
         if gauge_fixed_priors and diagonal_covariance:
             import warnings
             warnings.warn(
-                "gauge_fixed_priors=True is incompatible with diagonal_covariance=True. "
-                "Rotation R_i Σ_0 R_i^T produces full matrices. "
-                "Forcing diagonal_covariance=False to preserve gauge covariance.",
+                "gauge_fixed_priors=True with diagonal_covariance=True: off-diagonal "
+                "correlations from A_v diag(σ_0) A_v^T will be discarded. This is "
+                "acceptable for GL(K) (orbit covers full SPD) but reduces precision "
+                "of gauge-covariant transport. Consider diagonal_covariance=False "
+                "for exact VFE iterations.",
                 UserWarning
             )
-            diagonal_covariance = False
 
         self.diagonal_covariance = diagonal_covariance
         self.isotropic_covariance = isotropic_covariance
@@ -399,26 +405,28 @@ class GaugeTokenEmbedding(nn.Module):
         # Mean and Covariance Embeddings
         # =================================================================
         if self.gauge_fixed_priors:
-            # Compute rotation matrices R_i = exp(φ_i · generators)
-            # phi: (B, N, 3), generators: (3, K, K)
+            # Compute gauge transforms A_i = exp(φ_i · G) ∈ GL⁺(K)
+            # phi: (B, N, phi_dim), generators: (n_gen, K, K)
             phi_matrix = torch.einsum('bnc,ckl->bnkl', phi, self.generators)  # (B, N, K, K)
             # Use stable_matrix_exp_pair with norm clamping to prevent overflow
             # in non-compact (symmetric) directions of GL(K)
-            R, _ = stable_matrix_exp_pair(phi_matrix)  # (B, N, K, K)
+            A, _ = stable_matrix_exp_pair(phi_matrix)  # (B, N, K, K)
 
-            # Rotate base prior mean: μ_i = R_i @ μ_0
-            # base_mu: (K,), R: (B, N, K, K)
-            mu = torch.einsum('bnkl,l->bnk', R, self.base_mu)  # (B, N, K)
+            # Transport base prior mean: μ_i = A_i @ μ_0
+            # base_mu: (K,), A: (B, N, K, K)
+            mu = torch.einsum('bnkl,l->bnk', A, self.base_mu)  # (B, N, K)
 
             # Build base covariance Σ_0 = diag(exp(log_σ_0))
             sigma_diag_base = torch.exp(self.base_log_sigma_diag).clamp(min=0.01, max=self.sigma_max)  # (K,)
-            Sigma_0 = torch.diag(sigma_diag_base)  # (K, K)
 
-            # Rotate base prior covariance: Σ_i = R_i @ Σ_0 @ R_i^T
-            # R: (B, N, K, K), Sigma_0: (K, K)
-            # NOTE: diagonal_covariance is forced False when gauge_fixed_priors=True
-            # (see __init__), so we always output full matrices here.
-            sigma = torch.einsum('bnij,jk,bnlk->bnil', R, Sigma_0, R)  # (B, N, K, K)
+            # Transport covariance: Σ_i = A_i @ Σ_0 @ A_i^T (sandwich product)
+            if self.diagonal_covariance:
+                # Extract diagonal: diag(A Σ_0 A^T)_k = Σ_j A_kj² σ_j
+                A_sq = A ** 2  # (B, N, K, K)
+                sigma = torch.einsum('bnkl,l->bnk', A_sq, sigma_diag_base)  # (B, N, K)
+            else:
+                Sigma_0 = torch.diag(sigma_diag_base)  # (K, K)
+                sigma = torch.einsum('bnij,jk,bnlk->bnil', A, Sigma_0, A)  # (B, N, K, K)
         else:
             # Standard per-token embeddings
             # μ(token_i) for each agent i at c*

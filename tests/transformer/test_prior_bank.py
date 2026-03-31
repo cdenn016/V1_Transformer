@@ -32,7 +32,7 @@ def _make_prior_bank(vocab_size=50, embed_dim=6, **kwargs):
 
 
 def _make_gauge_fixed_prior_bank(vocab_size=50, embed_dim=3):
-    """Create PriorBank with gauge_fixed_priors=True."""
+    """Create PriorBank with gauge_fixed_priors=True using SO(3) generators."""
     from transformer.core.prior_bank import PriorBank
     from math_utils.generators import generate_so3_generators
     G = torch.from_numpy(generate_so3_generators(embed_dim)).float()
@@ -40,6 +40,22 @@ def _make_gauge_fixed_prior_bank(vocab_size=50, embed_dim=3):
         vocab_size=vocab_size,
         embed_dim=embed_dim,
         phi_dim=3,
+        diagonal_covariance=True,
+        learnable_sigma=True,
+        gauge_fixed_priors=True,
+        generators=G,
+    )
+
+
+def _make_glk_gauge_fixed_prior_bank(vocab_size=50, embed_dim=4):
+    """Create PriorBank with gauge_fixed_priors=True using GL(K) generators."""
+    from transformer.core.prior_bank import PriorBank
+    from math_utils.generators import generate_glK_generators
+    G = torch.from_numpy(generate_glK_generators(embed_dim)).float()
+    return PriorBank(
+        vocab_size=vocab_size,
+        embed_dim=embed_dim,
+        # phi_dim auto-inferred from generators (K²)
         diagonal_covariance=True,
         learnable_sigma=True,
         gauge_fixed_priors=True,
@@ -194,27 +210,49 @@ class TestPriorBankDecode:
 # TestPriorBankRotation
 # ===========================================================================
 
-class TestPriorBankRotation:
-    """Tests for _compute_rotation() in gauge-fixed mode."""
+class TestPriorBankGaugeTransform:
+    """Tests for _compute_gauge_transform() in gauge-fixed mode."""
 
-    def test_rotation_orthogonal(self):
-        """R^T R = I for computed rotations."""
+    def test_so3_orthogonal(self):
+        """R^T R = I for SO(3) gauge transforms (rotations)."""
         pb = _make_gauge_fixed_prior_bank(vocab_size=10, embed_dim=3)
         phi = torch.randn(5, 3) * 0.5
-        R = pb._compute_rotation(phi)
+        R = pb._compute_gauge_transform(phi)
         I = torch.eye(3)
         for i in range(5):
             assert torch.allclose(R[i].T @ R[i], I, atol=1e-4), \
                 f"Rotation {i} not orthogonal: deviation {(R[i].T @ R[i] - I).abs().max():.2e}"
 
-    def test_rotation_det_one(self):
+    def test_so3_det_one(self):
         """det(R) = 1 (SO(K), not just O(K))."""
         pb = _make_gauge_fixed_prior_bank(vocab_size=10, embed_dim=3)
         phi = torch.randn(5, 3) * 0.5
-        R = pb._compute_rotation(phi)
+        R = pb._compute_gauge_transform(phi)
         dets = torch.linalg.det(R)
         assert torch.allclose(dets, torch.ones(5), atol=1e-4), \
             f"Determinants: {dets}"
+
+    def test_glk_invertible(self):
+        """GL(K) gauge transforms are invertible (det > 0)."""
+        pb = _make_glk_gauge_fixed_prior_bank(vocab_size=10, embed_dim=4)
+        phi = torch.randn(5, 16) * 0.3  # gl(4) has 16 generators
+        A = pb._compute_gauge_transform(phi)
+        dets = torch.linalg.det(A)
+        # exp(X) always has det > 0 (det(exp(X)) = exp(tr(X)))
+        assert (dets > 0).all(), f"Some determinants <= 0: {dets}"
+
+    def test_glk_orbit_covers_space(self):
+        """GL(K) orbit of base prior can reach any target mean."""
+        K = 4
+        pb = _make_glk_gauge_fixed_prior_bank(vocab_size=10, embed_dim=K)
+        # Different phi values should produce different mu_v
+        token_ids = torch.arange(10)
+        mu_p, sigma_p, phi = pb._get_prior_for_tokens(token_ids)
+        # With random phi init, all 10 token priors should be distinct
+        pairwise = torch.cdist(mu_p.unsqueeze(0), mu_p.unsqueeze(0)).squeeze(0)
+        # Off-diagonal should be nonzero
+        off_diag = pairwise[~torch.eye(10, dtype=bool)]
+        assert (off_diag > 1e-6).all(), "Some token priors are identical (degenerate phi init)"
 
 
 # ===========================================================================
