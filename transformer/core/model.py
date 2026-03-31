@@ -390,7 +390,7 @@ class GaugeTransformerLM(nn.Module):
             isotropic_covariance=config.get('isotropic_covariance', False),
             max_seq_len=max_seq_len,
             use_positional_embedding=use_positional_embedding,
-            phi_dim=self.phi_dim,  # SO(3): 3, SO(N): N(N-1)/2
+            phi_dim=self.phi_dim,  # SO(3): 3, SO(N): N(N-1)/2, GL(K): K² or H×d²
             phi_scale=config.get('phi_scale', 0.3),  # Gauge frame init scale (higher for clustering)
             # Mean embedding normalization options
             mu_normalize=config.get('mu_normalize', False),
