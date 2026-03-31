@@ -33,7 +33,6 @@ from typing import Dict, Optional, Tuple, List
 from dataclasses import dataclass, field
 from pathlib import Path
 import time
-import json
 
 from math_utils.numerical_monitor import flush as _flush_numerical_events
 

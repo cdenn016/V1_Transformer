@@ -120,9 +120,6 @@ class TrainingConfig:
     # 
     alpha: float = 0.0           # Self-consistency: KL(q||p) to embedding priors
     lambda_beta: float = 0.0     # Belief alignment: Σβ_ij·KL  [M-step loss]
-    beta_warmup_steps: int = 0   # Linear warmup for lambda_beta (0 = instant full value)
-                                 # Prevents uniform attention collapse: lets CE differentiate
-                                 # embeddings before belief coupling gradient kicks in.
     ffn_lambda_belief: float = 1.0  # Belief alignment weight inside VFE E-step [E-step dynamics]
                                     # Controls strength of Σβ_ij·KL(q_i||Ω_ij q_j) gradient
                                     # in FFN VFE iterations. Analogous to lambda_beta but for
@@ -156,7 +153,6 @@ class TrainingConfig:
     # Checkpointing
     # ==========================================================================
     checkpoint_dir: Optional[Path] = None
-    save_optimizer: bool = True
     save_total_limit: int = 3
     resume_from: Optional[str] = None  # Path to checkpoint to resume from
 
