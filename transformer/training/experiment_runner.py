@@ -306,6 +306,9 @@ class PublicationMetricsTracker:
             'alpha_c0', 'alpha_b0', 'alpha_c0_std', 'alpha_b0_std',
             'alpha_mahal_sq_mean', 'alpha_mahal_sq_std',
 
+            # Learnable per-head kappa (temperature)
+            'kappa_mean', 'kappa_std', 'kappa_min', 'kappa_max',
+
             # Performance
             'step_time', 'tokens_per_sec',
 
@@ -408,6 +411,12 @@ class PublicationMetricsTracker:
             'alpha_b0_std': metrics.get('bayesian/b0_std'),
             'alpha_mahal_sq_mean': metrics.get('bayesian/mahal_sq_mean'),
             'alpha_mahal_sq_std': metrics.get('bayesian/mahal_sq_std'),
+
+            # Learnable per-head kappa
+            'kappa_mean': metrics.get('kappa/per_head_mean'),
+            'kappa_std': metrics.get('kappa/per_head_std'),
+            'kappa_min': metrics.get('kappa/per_head_min'),
+            'kappa_max': metrics.get('kappa/per_head_max'),
 
             # Performance
             'step_time': step_time,
@@ -1147,6 +1156,16 @@ class PublicationTrainer(FastTrainer):
             if key in full_metrics:
                 metrics[key] = full_metrics[key]
 
+        # Carry over per-head kappa diagnostics
+        for key in ['kappa/per_head_mean', 'kappa/per_head_std',
+                    'kappa/per_head_min', 'kappa/per_head_max']:
+            if key in full_metrics:
+                metrics[key] = full_metrics[key]
+        # Per-head individual kappa values
+        for key, val in full_metrics.items():
+            if key.startswith('kappa/head_'):
+                metrics[key] = val
+
         # Carry over VFE gradient decomposition, covariance health,
         # and transport/attention structure metrics for dashboard plots
         for key, val in full_metrics.items():
@@ -1420,6 +1439,12 @@ class PublicationTrainer(FastTrainer):
                     f"β: {metrics['train_loss_belief_align']:.4f} | "
                     f"PPL: {metrics['train_ppl']:.1f}"
                 )
+                # Append per-head kappa range if learnable
+                if 'kappa/per_head_mean' in metrics:
+                    log_msg += (
+                        f" | κ: [{metrics['kappa/per_head_min']:.2f}"
+                        f"-{metrics['kappa/per_head_max']:.2f}]"
+                    )
 
                 _verbose = self.config.verbose_diagnostics
                 if use_tqdm:
@@ -2122,6 +2147,18 @@ def run_single_experiment(
                     print(f"\n✓ Generated {len(saved_figs)} VFE dynamics figures in {vfe_fig_dir}")
         except Exception as e:
             print(f"\n[WARN] VFE dynamics figure generation failed: {e}")
+
+        # Generate per-head kappa plot if learnable_head_kappa was enabled
+        try:
+            from transformer.visualization.training_plots import plot_head_kappas, load_metrics_csv
+            metrics_csv = exp_checkpoint_dir / 'metrics.csv'
+            if metrics_csv.exists():
+                csv_metrics = load_metrics_csv(metrics_csv)
+                if csv_metrics.get('kappa_mean'):
+                    kappa_fig_path = exp_checkpoint_dir / 'head_kappas.png'
+                    plot_head_kappas(csv_metrics, kappa_fig_path)
+        except Exception as e:
+            print(f"\n[WARN] Head kappa plot generation failed: {e}")
 
         # Run test set evaluation if test loader is available
         test_metrics = None
