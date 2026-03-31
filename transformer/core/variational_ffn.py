@@ -2518,7 +2518,7 @@ class VariationalFFNDynamic(nn.Module):
         """E-step μ learning rate, constrained to (0, ∞) via softplus."""
         return F.softplus(self.raw_lr)
 
-    def _get_kappa_h(self, head_idx: int, d_h: int) -> float:
+    def _get_kappa_h(self, head_idx: int, d_h: int):
         r"""Get per-head temperature κ_h.
 
         When learnable_head_kappa=True: κ_h = exp(log_kappa_per_head[h])
