@@ -425,6 +425,11 @@ def create_param_groups(
         # Positional encoding (treat as gauge frames)
         elif 'pos_encoding' in name or 'position' in name:
             phi_params.append(param)
+        # Learnable per-head kappa (temperature) — no weight decay.
+        # Must be checked BEFORE 'attention' to avoid false match on
+        # attention.log_kappa_per_head being routed to attention_params.
+        elif 'log_kappa' in name:
+            no_decay_params.append(param)
         # Attention mechanism
         elif 'attention' in name or 'attn' in name:
             attention_params.append(param)
@@ -432,7 +437,7 @@ def create_param_groups(
         elif 'out_proj' in name or 'lm_head' in name:
             output_params.append(param)
         # LayerNorm, biases, and VFE hyperparameters: never weight-decay
-        elif 'norm' in name or 'bias' in name or 'raw_' in name or 'gate' in name or 'log_scale' in name or 'log_kappa' in name:
+        elif 'norm' in name or 'bias' in name or 'raw_' in name or 'gate' in name or 'log_scale' in name:
             no_decay_params.append(param)
         # FFN (default for everything else)
         else:
