@@ -924,7 +924,7 @@ class PublicationTrainer(FastTrainer):
         self.model.train()
 
     def train_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[Dict[str, float], Dict[str, float]]:
-        """Train step with comprehensive metrics and AMP support."""
+        """Train step with comprehensive metrics."""
         self.model.train()
 
         input_ids, target_ids = batch
@@ -952,61 +952,30 @@ class PublicationTrainer(FastTrainer):
         effective_beta = self.config.beta
         use_obs = getattr(self.config, 'use_obs_in_vfe', False)
 
-        # Forward pass with full metrics (with optional AMP)
-        if self.scaler is not None:
-            # Mixed precision forward pass
-            with torch.amp.autocast('cuda'):
-                if is_standard:
-                    # Standard transformer: simple cross-entropy loss
-                    output = self.model(input_ids, labels=target_ids)
-                    loss = output['loss']
-                    full_metrics = {
-                        'loss/total': loss.item(),
-                        'loss/ce': loss.item(),
-                    }
-                else:
-                    loss, full_metrics = compute_free_energy_loss(
-                        self.model,
-                        input_ids,
-                        target_ids,
-                        alpha=self.config.alpha,
-                        lambda_beta=effective_beta,
-                        lambda_gamma=self.config.lambda_gamma,
-                        kappa_gamma=self.config.kappa_gamma,
-                        lambda_hyper=self.config.lambda_hyper,
-                        pad_token_id=self.pad_token_id,
-                        use_obs_in_vfe=use_obs,
-                        alpha_phi=self.config.alpha_phi,
-                        aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
-                    )
-            # Scaled backward
-            self.scaler.scale(loss).backward()
+        # Forward pass
+        if is_standard:
+            output = self.model(input_ids, labels=target_ids)
+            loss = output['loss']
+            full_metrics = {
+                'loss/total': loss.item(),
+                'loss/ce': loss.item(),
+            }
         else:
-            # Standard forward pass
-            if is_standard:
-                # Standard transformer: simple cross-entropy loss
-                output = self.model(input_ids, labels=target_ids)
-                loss = output['loss']
-                full_metrics = {
-                    'loss/total': loss.item(),
-                    'loss/ce': loss.item(),
-                }
-            else:
-                loss, full_metrics = compute_free_energy_loss(
-                    self.model,
-                    input_ids,
-                    target_ids,
-                    alpha=self.config.alpha,
-                    lambda_beta=effective_beta,
-                    lambda_gamma=self.config.lambda_gamma,
-                    kappa_gamma=self.config.kappa_gamma,
-                    lambda_hyper=self.config.lambda_hyper,
-                    pad_token_id=self.pad_token_id,
-                    use_obs_in_vfe=use_obs,
-                    alpha_phi=self.config.alpha_phi,
-                    aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
-                )
-            loss.backward()
+            loss, full_metrics = compute_free_energy_loss(
+                self.model,
+                input_ids,
+                target_ids,
+                alpha=self.config.alpha,
+                lambda_beta=effective_beta,
+                lambda_gamma=self.config.lambda_gamma,
+                kappa_gamma=self.config.kappa_gamma,
+                lambda_hyper=self.config.lambda_hyper,
+                pad_token_id=self.pad_token_id,
+                use_obs_in_vfe=use_obs,
+                alpha_phi=self.config.alpha_phi,
+                aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
+            )
+        loss.backward()
 
         # Tied weights + delta rule: zero out W_out gradient component.
         # With tie_embeddings, out_proj.weight IS mu_embed.weight. In non-amortized
@@ -1039,43 +1008,23 @@ class PublicationTrainer(FastTrainer):
         grad_norms = self._compute_gradient_norms() if is_log_step else None
         e_step_norms = self._collect_e_step_grad_norms() if is_log_step else None
 
-        # Clip and step (with scaler if AMP enabled)
         # Per-group clipping for large gauge groups (SO(N>3)):
         # phi_embed gradients dominate global norm, starving mu/sigma.
-        # FastTrainingConfig always uses param groups; TrainingConfig has use_param_groups flag.
         _use_param_groups = getattr(self.config, 'use_param_groups', True)
-        if self.scaler is not None:
-            if self.config.grad_clip > 0:
-                self.scaler.unscale_(self.optimizer)
-                if _use_param_groups:
-                    for group in self.optimizer.param_groups:
-                        if group['params']:
-                            torch.nn.utils.clip_grad_norm_(
-                                group['params'],
-                                self.config.grad_clip,
-                            )
-                else:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(),
-                        self.config.grad_clip,
-                    )
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-        else:
-            if self.config.grad_clip > 0:
-                if _use_param_groups:
-                    for group in self.optimizer.param_groups:
-                        if group['params']:
-                            torch.nn.utils.clip_grad_norm_(
-                                group['params'],
-                                self.config.grad_clip,
-                            )
-                else:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(),
-                        self.config.grad_clip,
-                    )
-            self.optimizer.step()
+        if self.config.grad_clip > 0:
+            if _use_param_groups:
+                for group in self.optimizer.param_groups:
+                    if group['params']:
+                        torch.nn.utils.clip_grad_norm_(
+                            group['params'],
+                            self.config.grad_clip,
+                        )
+            else:
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    self.config.grad_clip,
+                )
+        self.optimizer.step()
 
         # Collect M-step natural gradient norms (after optimizer.step populates them)
         mstep_natural_norms = None

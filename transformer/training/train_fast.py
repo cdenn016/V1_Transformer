@@ -791,13 +791,6 @@ class FastTrainer:
             except Exception as e:
                 print(f"  Warning: Could not restore scheduler state: {e}")
 
-        # Restore AMP scaler state
-        if self.scaler is not None and 'scaler_state_dict' in checkpoint:
-            try:
-                self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
-            except Exception as e:
-                print(f"  Warning: Could not restore scaler state: {e}")
-
         print(f"  ✓ Loaded checkpoint from step {self.global_step}")
 
 
