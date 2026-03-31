@@ -1656,6 +1656,13 @@ class PublicationTrainer(FastTrainer):
 
             self.pub_metrics.print_summary()
 
+        # Final validation (ensures best_val_ce is updated even when
+        # eval_interval > max_steps, e.g. in ablation sweeps)
+        final_val = self.validate()
+        if final_val['ce_loss'] < self.best_val_ce:
+            self.best_val_ce = final_val['ce_loss']
+            self.save_checkpoint(is_best=True)
+
         # Summary
         elapsed = time.time() - start_time
         print(f"\n{'='*70}")
