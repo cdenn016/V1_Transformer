@@ -2426,13 +2426,17 @@ class VariationalFFNDynamic(nn.Module):
         # =================================================================
         # Per-head learnable temperature κ_h (shared concept with attention)
         # =================================================================
+        # Clamped to [0.5, 1.5] × init to prevent drift toward values that
+        # collapse attention (κ→0) or make it permanently uniform (κ→∞).
         if learnable_head_kappa and irrep_dims is not None:
             init_kappas = torch.tensor([
                 kappa * math.sqrt(d_h) for d_h in irrep_dims
             ])
             self.log_kappa_per_head = nn.Parameter(torch.log(init_kappas))
+            self.register_buffer('_kappa_init', init_kappas)
         else:
             self.log_kappa_per_head = None
+            self._kappa_init = None
 
         # =================================================================
         # Bayesian Precision: Log-barrier form (Eq. 882-884)
@@ -2519,13 +2523,18 @@ class VariationalFFNDynamic(nn.Module):
         return F.softplus(self.raw_lr)
 
     def _get_kappa_h(self, head_idx: int, d_h: int):
-        r"""Get per-head temperature κ_h.
+        r"""Get per-head temperature κ_h, clamped to [0.5, 1.5] × init.
 
-        When learnable_head_kappa=True: κ_h = exp(log_kappa_per_head[h])
+        When learnable_head_kappa=True: κ_h = clamp(exp(log_kappa[h]), 0.5×κ₀, 1.5×κ₀)
         When False: κ_h = self.kappa * √d_h (static scaling)
+
+        The clamp prevents kappa from drifting to extremes that either
+        collapse attention (κ→0) or make it permanently uniform (κ→∞).
         """
         if self.learnable_head_kappa and self.log_kappa_per_head is not None:
-            return torch.exp(self.log_kappa_per_head[head_idx])
+            kappa_h = torch.exp(self.log_kappa_per_head[head_idx])
+            k0 = self._kappa_init[head_idx]
+            return kappa_h.clamp(min=0.5 * k0, max=1.5 * k0)
         return self.kappa * math.sqrt(d_h)
 
     def _get_sigma_trust(self, effective_lr: torch.Tensor) -> float:
