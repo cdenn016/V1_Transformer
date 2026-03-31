@@ -29,7 +29,7 @@ from pathlib import Path
 from transformer.core.model import GaugeTransformerLM
 from transformer.baselines.standard_transformer import StandardTransformerLM
 from transformer.data import create_dataloaders, create_char_dataloaders
-from transformer.training.train_fast import FastTrainingConfig
+from transformer.training.config import TrainingConfig
 from transformer.training.experiment_runner import run_test_evaluation, PublicationTrainer
 from transformer.analysis.publication_metrics import PublicationMetrics
 
@@ -387,7 +387,7 @@ def resume_training():
     print(f"    grad_accumulation: {GRAD_ACCUMULATION}")
     print(f"    diagonal_covariance: {config.get('diagonal_covariance', True)}")
 
-    train_config = FastTrainingConfig(
+    train_config = TrainingConfig(
         max_steps=config['max_steps'],
         warmup_steps=config.get('warmup_steps', 1000),
 

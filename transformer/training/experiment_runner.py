@@ -47,7 +47,8 @@ from transformer.baselines.flops_counter import (
 )
 from transformer.data import create_dataloaders, create_char_dataloaders
 from transformer.train import compute_free_energy_loss
-from transformer.training.train_fast import FastTrainer, FastTrainingConfig
+from transformer.training.train_fast import FastTrainer
+from transformer.training.config import TrainingConfig
 from transformer.analysis.publication_metrics import PublicationMetrics, ExperimentResult
 from math_utils.numerical_monitor import flush as _flush_numerical_events
 
@@ -1880,7 +1881,7 @@ def run_single_experiment(
     # Training Configuration
     # =================================================================
 
-    train_config = FastTrainingConfig(
+    train_config = TrainingConfig(
         epochs=config.get('epochs', None),
         max_steps=config['max_steps'],
         warmup_steps=config['warmup_steps'],
