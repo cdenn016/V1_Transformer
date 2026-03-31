@@ -574,7 +574,6 @@ STANDARD_CONFIG = {
 
     # Training — match VFE config
     'batch_size': 64,
-    'use_amp': False,
     'num_workers': 10,
     'epochs': None,
     'max_steps': 15000,
@@ -614,7 +613,6 @@ STANDARD_CONFIG = {
     'log_interval': 100,
     'eval_interval': 1000,
     'checkpoint_interval': 25000,
-    'patience': 5,
 
     # Unused in standard mode
     'kappa_beta': 1.0,
@@ -665,7 +663,6 @@ STANDARD_ATTN_ONLY_CONFIG = {
 
     # Training — match VFE config
     'batch_size': 64,
-    'use_amp': False,
     'num_workers': 10,
     'epochs': None,
     'max_steps': 15000,
@@ -705,7 +702,6 @@ STANDARD_ATTN_ONLY_CONFIG = {
     'log_interval': 100,
     'eval_interval': 1000,
     'checkpoint_interval': 25000,
-    'patience': 5,
 
     # Unused in standard mode
     'kappa_beta': 1.0,
@@ -780,7 +776,6 @@ def main():
     parser.add_argument('--device', type=str, default='auto')
     parser.add_argument('--checkpoint_dir', type=str,
                         default='checkpoints_publication')
-    parser.add_argument('--use_wandb', action='store_true')
     parser.add_argument('--seed', type=int, default=None,
                         help='Random seed for reproducibility')
     parser.add_argument('--dataset', type=str, default=DEFAULT_DATASET,
@@ -905,7 +900,6 @@ def main():
         ffn_mode=ffn_mode,
         device=device,
         checkpoint_dir=checkpoint_dir,
-        use_wandb=args.use_wandb,
         args=args,
     )
 

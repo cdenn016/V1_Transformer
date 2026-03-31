@@ -622,7 +622,6 @@ def run_sweep(
                 ffn_mode=cfg.get('ffn_mode', 'VFE_dynamic'),
                 device=device,
                 checkpoint_dir=run_dir,
-                use_wandb=False,
                 enable_publication_metrics=False,
             )
             elapsed = time.time() - t0
