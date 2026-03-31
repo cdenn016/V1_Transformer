@@ -668,7 +668,8 @@ def _compute_vfe_gradients_block_diagonal(
             for d in irrep_dims
         ]
 
-    # Process in chunks over query positions (i dimension)
+    # Process all query positions (no chunking)
+    C = N
     for i_start in range(0, N, C):
         i_end = min(i_start + C, N)
         C_actual = i_end - i_start
@@ -2264,6 +2265,7 @@ class VariationalFFNDynamic(nn.Module):
                                            # s_k = (α/σ²_p) / (α/σ²_p + Σβ/σ²_q) ∈ [0,1].
                                            # Replaces ad-hoc straight-through (s=1) and pure EM (s=0)
                                            # with info-geometrically correct value.
+        learnable_head_kappa: bool = False,  # If True, learn per-head κ_h
     ):
         """
         Initialize dynamic-beta VFE FFN.
@@ -2408,6 +2410,7 @@ class VariationalFFNDynamic(nn.Module):
         self.lambda_belief = lambda_belief
         self.lambda_softmax = lambda_softmax
         self.kappa = kappa
+        self.learnable_head_kappa = learnable_head_kappa
 
         # =================================================================
         # Multi-head VFE: per-block β through iterations
@@ -2415,7 +2418,31 @@ class VariationalFFNDynamic(nn.Module):
         self.multihead_vfe = multihead_vfe and irrep_dims is not None
         if self.multihead_vfe:
             n_heads = len(irrep_dims)
-            print(f"[VariationalFFNDynamic] Multi-head VFE: {n_heads} heads with shared κ={kappa}")
+            if learnable_head_kappa:
+                print(f"[VariationalFFNDynamic] Multi-head VFE: {n_heads} heads with learnable per-head κ (init from κ={kappa})")
+            else:
+                print(f"[VariationalFFNDynamic] Multi-head VFE: {n_heads} heads with shared κ={kappa}")
+
+        # =================================================================
+        # Per-head learnable temperature κ_h (shared concept with attention)
+        # =================================================================
+        if learnable_head_kappa and irrep_dims is not None:
+            init_kappas = torch.tensor([
+                kappa * math.sqrt(d_h) for d_h in irrep_dims
+            ])
+            self.log_kappa_per_head = nn.Parameter(torch.log(init_kappas))
+        else:
+            self.log_kappa_per_head = None
+
+    def _get_kappa_h(self, head_idx: int, d_h: int) -> float:
+        r"""Get per-head temperature κ_h.
+
+        When learnable_head_kappa=True: κ_h = exp(log_kappa_per_head[h])
+        When False: κ_h = self.kappa * √d_h (static scaling)
+        """
+        if self.learnable_head_kappa and self.log_kappa_per_head is not None:
+            return torch.exp(self.log_kappa_per_head[head_idx])
+        return self.kappa * math.sqrt(d_h)
 
         # =================================================================
         # Bayesian Precision: Log-barrier form (Eq. 882-884)
@@ -2678,7 +2705,7 @@ class VariationalFFNDynamic(nn.Module):
             sigma_h = sigma_current[:, :, block_start:block_end].detach() if is_diagonal else None
             gen_h = self.generators[:, block_start:block_end, block_start:block_end]
 
-            kappa_h = self.kappa * math.sqrt(d_h)  # Match main multihead path scaling
+            kappa_h = self._get_kappa_h(h, d_h)  # Match main multihead path scaling
             beta_kl_h = compute_attention_weights(
                 mu_q=mu_h, sigma_q=sigma_h,
                 phi=torch.zeros(B, N, 1, device=device),  # dummy
@@ -2818,7 +2845,7 @@ class VariationalFFNDynamic(nn.Module):
                 else:
                     sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end].detach()
                 gen_h = self.generators[:, block_start:block_end, block_start:block_end]
-                kappa_h = self.kappa * math.sqrt(d_h)  # Normalize for block dimension
+                kappa_h = self._get_kappa_h(h, d_h)  # Normalize for block dimension
                 _phi_head_bep = [_phi_bep[h]] if _phi_bep is not None else None
 
                 beta_phi_h_result = compute_attention_weights(
@@ -2908,7 +2935,7 @@ class VariationalFFNDynamic(nn.Module):
                         sigma_h = sigma_in[:, :, block_start:block_end, block_start:block_end].contiguous()
                         sigma_p_h = sigma_p[:, :, block_start:block_end, block_start:block_end].contiguous()
                     gen_h = self.generators[:, block_start:block_end, block_start:block_end]
-                    kappa_h = self.kappa * math.sqrt(d_h)  # Match main path scaling
+                    kappa_h = self._get_kappa_h(h, d_h)  # Match main path scaling
 
                     beta_h = compute_attention_weights(
                         mu_q=mu_h, sigma_q=sigma_h,
@@ -3082,7 +3109,7 @@ class VariationalFFNDynamic(nn.Module):
                         sigma_h = sigma_in[:, :, block_start:block_end, block_start:block_end].contiguous()
                         sigma_p_h = sigma_p[:, :, block_start:block_end, block_start:block_end].contiguous()
                     gen_h = self.generators[:, block_start:block_end, block_start:block_end]
-                    kappa_h = self.kappa * math.sqrt(d_h)  # Match main path scaling
+                    kappa_h = self._get_kappa_h(h, d_h)  # Match main path scaling
 
                     beta_h = compute_attention_weights(
                         mu_q=mu_h, sigma_q=sigma_h,
@@ -3214,7 +3241,7 @@ class VariationalFFNDynamic(nn.Module):
                     else:
                         sigma_h = sigma_in[:, :, block_start:block_end, block_start:block_end].detach()
                     gen_h = self.generators[:, block_start:block_end, block_start:block_end]
-                    kappa_h = self.kappa * math.sqrt(d_h)
+                    kappa_h = self._get_kappa_h(h, d_h)
 
                     beta_phi_h_result = compute_attention_weights(
                         mu_q=mu_h, sigma_q=sigma_h,
@@ -3536,7 +3563,7 @@ class VariationalFFNDynamic(nn.Module):
                 sigma_p_h = sigma_p[:, :, block_start:block_end].contiguous()
                 gen_h = self.generators[:, block_start:block_end, block_start:block_end]
 
-                kappa_h = self.kappa * math.sqrt(d_h) if self.irrep_dims else self.kappa
+                kappa_h = self._get_kappa_h(h, d_h) if self.irrep_dims else self.kappa
                 alpha_h = alpha_effective[:, :, block_start:block_end] if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3 else alpha_effective
                 _head_bep = [_cf_bep[h]] if _cf_bep is not None else None
 
@@ -3820,7 +3847,7 @@ class VariationalFFNDynamic(nn.Module):
                     # super-blocks. Without this, larger blocks (e.g., 12-dim from
                     # cross-coupled heads) produce proportionally larger KL values,
                     # causing attention sharpness imbalance vs smaller blocks.
-                    kappa_h = self.kappa * math.sqrt(d_h)
+                    kappa_h = self._get_kappa_h(h, d_h)
                     _head_bep = [_mh_cached_bep[h]] if _mh_cached_bep is not None else None
 
                     alpha_h = alpha_effective[:, :, block_start:block_end] if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3 else alpha_effective

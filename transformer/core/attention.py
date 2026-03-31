@@ -2305,6 +2305,7 @@ class IrrepMultiHeadAttention(nn.Module):
         rope_base: float = 10000.0,  # RoPE frequency base
         exact_diagonal_transport: bool = False,  # Lift diagonal σ for exact transport
         sigma_aggregation: str = 'mixture',  # 'mixture' or 'precision'
+        learnable_head_kappa: bool = False,  # If True, learn per-head κ_h
     ):
         """
         Initialize irrep-structured multi-head attention.
@@ -2314,6 +2315,7 @@ class IrrepMultiHeadAttention(nn.Module):
             irrep_spec: List of (label, multiplicity, dim) tuples
                 Example: [('ℓ0', 12, 1), ('ℓ1', 7, 3), ...]
             kappa_beta: Temperature for attention softmax
+            learnable_head_kappa: If True, learn per-head κ_h (initialized to kappa_beta * sqrt(d_h))
             epsilon: Numerical stability constant
             aggregate_mode: 'mean_only' or 'full_distribution'
             diagonal_covariance: If True, sigma is (B,N,K) diagonal variances
@@ -2428,6 +2430,21 @@ class IrrepMultiHeadAttention(nn.Module):
 
         self.n_heads = len(self.irrep_dims)
         self.total_dim = total_dim
+        self.learnable_head_kappa = learnable_head_kappa
+
+        # =================================================================
+        # Per-head learnable temperature κ_h
+        # =================================================================
+        # Manuscript: β_ij^(a) = softmax(-KL / (κ_a √d_h))
+        # Static:   κ_h = kappa_beta * √d_h  (normalizes KL across head dims)
+        # Learnable: κ_h = exp(log_kappa_per_head[h])  (initialized to static value)
+        if learnable_head_kappa:
+            init_kappas = torch.tensor([
+                kappa_beta * math.sqrt(d_h) for d_h in self.irrep_dims
+            ])
+            self.log_kappa_per_head = nn.Parameter(torch.log(init_kappas))
+        else:
+            self.log_kappa_per_head = None
 
         # Store gauge group info
         self.gauge_group = gauge_group
@@ -2654,10 +2671,13 @@ class IrrepMultiHeadAttention(nn.Module):
                 device=generators.device, dtype=generators.dtype
             )
 
-            # Scale kappa by sqrt(dim) to normalize KL across different-dim
-            # super-blocks (e.g., 12-dim cross-coupled vs 6-dim uncoupled).
-            # For uniform heads, all dim_head are equal so this is a constant factor.
-            kappa_h = self.kappa_beta * math.sqrt(dim_head)
+            # Per-head temperature κ_h for attention softmax.
+            # Learnable: κ_h = exp(log_kappa_per_head[h]), trained via backprop.
+            # Static: κ_h = kappa_beta * √d_h, normalizes KL across head dims.
+            if self.learnable_head_kappa:
+                kappa_h = torch.exp(self.log_kappa_per_head[head_idx])
+            else:
+                kappa_h = self.kappa_beta * math.sqrt(dim_head)
 
             if self.gauge_mode == 'constant':
                 # Constant gauge: Ω_ij = Ω for all pairs.
