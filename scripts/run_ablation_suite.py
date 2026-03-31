@@ -272,6 +272,13 @@ SWEEPS = {
         'baseline_value': 0.0,
     },
 
+    'lambda_hyper': {
+        'description': 'Hyper-prior coupling KL(s||h) weight in training loss',
+        'param': 'lambda_hyper',
+        'values': [0.0, 0.001, 0.01, 0.05, 0.1, 0.5, 1.0],
+        'baseline_value': 0.0,
+    },
+
     # --- Tier 1b: Temperature / kappa parameters ---
     'kappa_beta': {
         'description': 'Attention/VFE temperature τ: β_ij = softmax(-KL/κ√K). Higher = softer attention',
@@ -480,6 +487,8 @@ SWEEP_ORDER = [
     #'M_alpha',Done
     #'M_beta', Done
     #'mass_phi', Done
+
+    'lambda_hyper',
 
     #'embed_weight_decay',
    # 'non_embed_weight_decay',
