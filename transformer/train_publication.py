@@ -241,6 +241,7 @@ EM_CONFIG = {
     'phi_scale':       1.0,
     'kappa_beta':      1.0,
     'learnable_head_kappa': False,  # Per-head learnable κ_h (init from kappa_beta * √d_h)
+    'kappa_warmup_steps':   0,     # Freeze kappa for N steps (0=no freeze, rec: 2000-5000)
     'mu_normalize':    False,
     'mu_max_norm':     None,
 

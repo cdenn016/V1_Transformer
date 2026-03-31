@@ -98,6 +98,12 @@ class TrainingConfig:
     min_lr: float = 3e-5           # Absolute minimum LR (used by presets)
     min_lr_ratio: float = 0.1      # Min LR as fraction of peak (used by FastTrainer)
 
+    # Learnable per-head kappa warmup: freeze log_kappa_per_head for the
+    # first N steps so embeddings differentiate before temperature adapts.
+    # Without this, early uniform-attention gradient pushes kappa toward
+    # values that flatten attention permanently.
+    kappa_warmup_steps: int = 0    # 0 = no warmup (always learnable). Recommend 2000-5000.
+
     # ==========================================================================
     # Free Energy Weights (M-step objective)
     # ==========================================================================
