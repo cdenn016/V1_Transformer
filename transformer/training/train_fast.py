@@ -119,12 +119,12 @@ class FastTrainer:
         print(f"  Device: {self.device}")
         print(f"  Max steps: {self.config.max_steps:,}")
         print(f"\n  Learning Rates (Natural Gradients!):")
-        print(f"    μ (means):        {config.mu_lr}")
-        print(f"    Σ (covariances):  {config.sigma_lr}")
-        print(f"    φ (gauge frames): {config.phi_lr}")
-        print(f"    Attention:        {config.attention_lr}")
-        print(f"    FFN:              {config.ffn_lr}")
-        print(f"    Output:           {config.output_lr}")
+        print(f"    μ (means):        {config.M_mu_p_lr}")
+        print(f"    Σ (covariances):  {config.M_sigma_p_lr}")
+        print(f"    φ (gauge frames): {config.M_phi_lr}")
+        print(f"    Attention:        {config.M_attention_lr}")
+        print(f"    FFN:              {config.M_vfe_hyperparam_lr}")
+        print(f"    Output:           {config.M_output_lr}")
         print(f"{'='*70}\n")
 
         # Resume from checkpoint if specified
@@ -213,72 +213,72 @@ class FastTrainer:
         # Create parameter groups
         # Embedding weight decay = Level 3 hyper-prior: N(0, 1/(2·wd))
         # None → inherit from weight_decay; 0.0 → uninformative hyper-prior
-        embed_wd = self.config.embed_weight_decay if self.config.embed_weight_decay is not None else self.config.weight_decay
+        non_embed_wd = self.config.non_embed_weight_decay
+        embed_wd = self.config.embed_weight_decay if self.config.embed_weight_decay is not None else non_embed_wd
 
         param_groups = []
         if mu_params:
             param_groups.append({
                 'params': mu_params,
-                'lr': self.config.mu_lr,
+                'lr': self.config.M_mu_p_lr,
                 'weight_decay': embed_wd,
                 'name': 'mu_embed',
             })
-            print(f"  Parameter group 'mu_embed': {len(mu_params)} tensors @ lr={self.config.mu_lr}, wd={embed_wd}")
+            print(f"  Parameter group 'mu_embed': {len(mu_params)} tensors @ lr={self.config.M_mu_p_lr}, wd={embed_wd}")
 
         if sigma_params:
             param_groups.append({
                 'params': sigma_params,
-                'lr': self.config.sigma_lr,
+                'lr': self.config.M_sigma_p_lr,
                 'weight_decay': embed_wd,
                 'name': 'sigma_embed',
             })
-            print(f"  Parameter group 'sigma_embed': {len(sigma_params)} tensors @ lr={self.config.sigma_lr}, wd={embed_wd}")
+            print(f"  Parameter group 'sigma_embed': {len(sigma_params)} tensors @ lr={self.config.M_sigma_p_lr}, wd={embed_wd}")
 
         if phi_params:
             param_groups.append({
                 'params': phi_params,
-                'lr': self.config.phi_lr,
+                'lr': self.config.M_phi_lr,
                 'weight_decay': embed_wd,
                 'name': 'phi_embed',
             })
-            print(f"  Parameter group 'phi_embed': {len(phi_params)} tensors @ lr={self.config.phi_lr}, wd={embed_wd}")
+            print(f"  Parameter group 'phi_embed': {len(phi_params)} tensors @ lr={self.config.M_phi_lr}, wd={embed_wd}")
 
         if attention_params:
             param_groups.append({
                 'params': attention_params,
-                'lr': self.config.attention_lr,
-                'weight_decay': self.config.weight_decay,
+                'lr': self.config.M_attention_lr,
+                'weight_decay': non_embed_wd,
                 'name': 'attention',
             })
-            print(f"  Parameter group 'attention': {len(attention_params)} tensors @ lr={self.config.attention_lr}")
+            print(f"  Parameter group 'attention': {len(attention_params)} tensors @ lr={self.config.M_attention_lr}")
 
         if ffn_params:
             param_groups.append({
                 'params': ffn_params,
-                'lr': self.config.ffn_lr,
-                'weight_decay': self.config.weight_decay,
+                'lr': self.config.M_vfe_hyperparam_lr,
+                'weight_decay': non_embed_wd,
                 'name': 'ffn',
             })
-            print(f"  Parameter group 'ffn': {len(ffn_params)} tensors @ lr={self.config.ffn_lr}")
+            print(f"  Parameter group 'ffn': {len(ffn_params)} tensors @ lr={self.config.M_vfe_hyperparam_lr}")
 
         if output_params:
             param_groups.append({
                 'params': output_params,
-                'lr': self.config.output_lr,
-                'weight_decay': 0.0,  # Often tied to embeddings
+                'lr': self.config.M_output_lr,
+                'weight_decay': 0.0,
                 'name': 'output',
             })
-            print(f"  Parameter group 'output': {len(output_params)} tensors @ lr={self.config.output_lr}")
+            print(f"  Parameter group 'output': {len(output_params)} tensors @ lr={self.config.M_output_lr}")
 
         if no_decay_params:
-            # Embeddings, LayerNorm, biases — no weight decay (GPT-2/3 convention)
             param_groups.append({
                 'params': no_decay_params,
-                'lr': self.config.ffn_lr,
+                'lr': self.config.M_vfe_hyperparam_lr,
                 'weight_decay': 0.0,
                 'name': 'no_decay',
             })
-            print(f"  Parameter group 'no_decay': {len(no_decay_params)} tensors @ lr={self.config.ffn_lr} (embeddings, LN, biases)")
+            print(f"  Parameter group 'no_decay': {len(no_decay_params)} tensors @ lr={self.config.M_vfe_hyperparam_lr} (LN, biases, VFE hyperparams)")
 
         optimizer_type = getattr(self.config, 'optimizer_type', 'adamw')
 
@@ -318,8 +318,8 @@ class FastTrainer:
                 print(f"    Warning: Fisher storage is large ({mem_mb:.0f} MB)")
             optimizer = NaturalGradientOptimizer(
                 param_groups,
-                lr=self.config.mu_lr,  # base LR (per-group LRs override)
-                weight_decay=self.config.weight_decay,
+                lr=self.config.M_mu_p_lr,  # base LR (per-group LRs override)
+                weight_decay=self.config.non_embed_weight_decay,
                 ema_decay=ema_decay,
                 damping=damping,
             )
@@ -385,14 +385,14 @@ class FastTrainer:
             self.model,
             input_ids,
             target_ids,
-            alpha=self.config.alpha,
-            lambda_beta=self.config.beta,
+            alpha=self.config.M_alpha,
+            lambda_beta=self.config.M_beta,
             lambda_gamma=self.config.lambda_gamma,
             kappa_gamma=self.config.kappa_gamma,
             lambda_hyper=self.config.lambda_hyper,
             pad_token_id=self.pad_token_id,
             use_obs_in_vfe=self.config.use_obs_in_vfe,
-            alpha_phi=getattr(self.config, 'alpha_phi', 0.0),
+            alpha_phi=getattr(self.config, 'mass_phi', 0.05),
             aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
         )
 
@@ -713,10 +713,10 @@ train_loader, val_loader, vocab_size = create_dataloaders(...)
 # Training config
 config = TrainingConfig(
     max_steps=1000,
-    mu_lr=0.1,
-    sigma_lr=0.005,
-    phi_lr=0.01,
-    ffn_lr=0.001,
+    M_mu_p_lr=0.1,
+    M_sigma_p_lr=0.005,
+    M_phi_lr=0.01,
+    M_vfe_hyperparam_lr=0.001,
 )
 
 # Train!

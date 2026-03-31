@@ -248,15 +248,19 @@ def compute_free_energy_loss(
     model,
     token_ids: torch.Tensor,
     targets: torch.Tensor,
-    alpha: float = 0.0,           # Self-coupling: KL(q_i || p_i) — beliefs to priors
-    lambda_beta: float = 1.0,     # Belief coupling weight
+    M_alpha: float = 0.0,         # Self-coupling: KL(q_i || p_i) — beliefs to priors
+    M_beta: float = 1.0,          # Belief coupling weight
     lambda_gamma: float = 0.0,    # Model coupling weight
     kappa_gamma: float = 1.0,     # Temperature for γ_ij coupling weights
     lambda_hyper: float = 0.0,    # Hyper-prior: KL(s_i || h) — models to centroid
     pad_token_id: int = -100,     # Token ID to ignore in loss (padding)
     use_obs_in_vfe: bool = False, # Pass targets into VFE E-step (last layer only)
-    alpha_phi: float = 0.0,       # Gauge prior weight: (α_φ/2) Σ_i ||φ_i||²
+    mass_phi: float = 0.0,        # Gauge prior weight: (mass_φ/2) Σ_i ||φ_i||²
     aux_loss_weight: float = 0.0, # Weight for auxiliary per-layer CE losses (0 = disabled)
+    # Backward-compatible aliases (deprecated)
+    alpha: float = None,
+    lambda_beta: float = None,
+    alpha_phi: float = None,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     Compute training loss (M-step objective in the hierarchical VFE).
@@ -284,17 +288,26 @@ def compute_free_energy_loss(
         model: GaugeTransformerLM with forward_with_attention() method
         token_ids: (B, N) input token IDs
         targets: (B, N) target token IDs
-        alpha: Weight for self-coupling KL(q||p) (default: 0.0)
-        lambda_beta: Weight for belief coupling (default: 1.0)
+        M_alpha: Weight for self-coupling KL(q||p) (default: 0.0)
+        M_beta: Weight for belief coupling (default: 1.0)
         lambda_gamma: Weight for model coupling (default: 0.0)
         kappa_gamma: Temperature for γ_ij model coupling weights (default: 1.0)
         lambda_hyper: Weight for hyper-prior KL(s_i||h) (default: 0.0)
+        mass_phi: Gauge prior weight: (mass_φ/2) Σ_i ||φ_i||² (default: 0.0)
         pad_token_id: Token ID for padding (ignored in loss). Default -100.
 
     Returns:
         total_loss: Scalar loss for backprop
         metrics: Dict with loss components
     """
+    # Backward-compatible aliases: old callers may pass alpha=, lambda_beta=, alpha_phi=
+    if alpha is not None:
+        M_alpha = alpha
+    if lambda_beta is not None:
+        M_beta = lambda_beta
+    if alpha_phi is not None:
+        mass_phi = alpha_phi
+
     # =================================================================
     # Forward pass with attention weights and KL matrices
     # =================================================================
@@ -339,7 +352,7 @@ def compute_free_energy_loss(
     # =================================================================
     # 2. Belief Coupling: λ_β · Σ_ij β_ij · KL(q_i || Ω_ij q_j)
     # =================================================================
-    if lambda_beta > 0.0:
+    if M_beta > 0.0:
         # Detach β: correct EM formulation. In the M-step, β is held fixed at
         # its E-step value. At convergence ∂F/∂β = 0 (β* is optimal), so the
         # β-gradient contribution vanishes by the envelope theorem. Detaching
@@ -353,7 +366,7 @@ def compute_free_energy_loss(
         belief_align_loss = weighted_kl.sum(dim=(-2, -1)).mean()
         K = mu_q.shape[-1]
         dim_scale = math.sqrt(max(K, 1))
-        belief_align_loss = lambda_beta * belief_align_loss / dim_scale
+        belief_align_loss = M_beta * belief_align_loss / dim_scale
     else:
         belief_align_loss = torch.tensor(0.0, device=ce_loss.device)
 
@@ -370,7 +383,7 @@ def compute_free_energy_loss(
     # M-step loss for consistency: same α weights the self-coupling
     # in both E-step gradient and M-step loss.
     # =================================================================
-    if alpha > 0.0:
+    if M_alpha > 0.0:
         K = mu_q.shape[-1]
         # Detach E-step covariances: backprop through the E-step sigma evolution
         # produces NaN from numerically unstable second derivatives (matrix_exp
@@ -379,7 +392,7 @@ def compute_free_energy_loss(
         # mu_q keeps gradient (flows through ImplicitEMGradient to mu_embed).
         sigma_q_for_kl = sigma_q.detach() if sigma_q is not None else None
         # sigma_p kept LIVE: the M-step KL(q||p) is the correct gradient source
-        # for sigma_p when alpha > 0. The positive feedback concern (smaller σ_p →
+        # for sigma_p when M_alpha > 0. The positive feedback concern (smaller σ_p →
         # larger ∂KL/∂σ_p) applies to the E-step's natural gradient (where 1/σ_p
         # amplifies), but in the M-step with AdamW the gradient is bounded by
         # adaptive learning rates and gradient clipping. Detaching here starves
@@ -401,7 +414,7 @@ def compute_free_energy_loss(
             alpha_scalar = alpha_i.mean(dim=-1)  # (B, N)
             self_consistency_loss = (alpha_scalar * kl_per_agent).mean() / dim_scale
         else:
-            self_consistency_loss = alpha * kl_per_agent.mean() / dim_scale
+            self_consistency_loss = M_alpha * kl_per_agent.mean() / dim_scale
     else:
         self_consistency_loss = torch.tensor(0.0, device=ce_loss.device)
 
@@ -494,12 +507,12 @@ def compute_free_energy_loss(
     # =================================================================
     # 6. Gauge Prior: (α_φ/2) Σ_i ||φ_i||² — mass term for gauge field
     # =================================================================
-    if alpha_phi > 0.0:
+    if mass_phi > 0.0:
         K = mu_q.shape[-1]
         dim_scale = math.sqrt(max(K, 1))
         # phi_s is the model gauge frame from embeddings (B, N, n_gen)
         phi_norm_sq = (phi_s ** 2).sum(dim=-1).mean()  # Mean over batch and tokens
-        gauge_prior_loss = (alpha_phi / 2.0) * phi_norm_sq / dim_scale
+        gauge_prior_loss = (mass_phi / 2.0) * phi_norm_sq / dim_scale
     else:
         gauge_prior_loss = torch.tensor(0.0, device=ce_loss.device)
 
@@ -561,10 +574,10 @@ def compute_free_energy_loss(
         'loss/total': total_loss.item(),
         'loss/ce': ce_loss.item(),
         'loss/belief_align': belief_align_loss.item(),
-        'loss/self_consistency': self_consistency_loss.item() if alpha > 0 else 0.0,
+        'loss/self_consistency': self_consistency_loss.item() if M_alpha > 0 else 0.0,
         'loss/model_coupling': model_align_loss.item() if lambda_gamma > 0 else 0.0,
         'loss/hyper_prior': hyper_prior_loss.item() if lambda_hyper > 0 else 0.0,
-        'loss/gauge_prior': gauge_prior_loss.item() if alpha_phi > 0 else 0.0,
+        'loss/gauge_prior': gauge_prior_loss.item() if mass_phi > 0 else 0.0,
         'loss/aux_layer_ce': aux_loss.item() if aux_losses else 0.0,
         'attention/beta_mean': _beta_mean,
         'attention/kl_mean': _kl_mean,

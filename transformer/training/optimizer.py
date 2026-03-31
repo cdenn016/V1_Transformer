@@ -443,40 +443,41 @@ def create_param_groups(
 
     # Embedding weight decay = Level 3 hyper-prior: N(0, 1/(2·wd))
     # None → inherit from weight_decay; 0.0 → uninformative hyper-prior
-    embed_wd = config.embed_weight_decay if config.embed_weight_decay is not None else config.weight_decay
+    non_embed_wd = getattr(config, 'non_embed_weight_decay', getattr(config, 'weight_decay', 0.01))
+    embed_wd = config.embed_weight_decay if config.embed_weight_decay is not None else non_embed_wd
 
     if mu_params:
         param_groups.append({
             'params': mu_params,
-            'lr': config.mu_lr,
+            'lr': config.M_mu_p_lr,
             'weight_decay': embed_wd,
             'name': 'mu_embed',
         })
         if verbose:
-            print(f"  Parameter group 'mu_embed': {len(mu_params)} tensors @ lr={config.mu_lr}, wd={embed_wd}")
+            print(f"  Parameter group 'mu_embed': {len(mu_params)} tensors @ lr={config.M_mu_p_lr}, wd={embed_wd}")
 
     if sigma_params:
         param_groups.append({
             'params': sigma_params,
-            'lr': config.sigma_lr,
+            'lr': config.M_sigma_p_lr,
             'weight_decay': embed_wd,
             'name': 'sigma_embed',
         })
         if verbose:
-            print(f"  Parameter group 'sigma_embed': {len(sigma_params)} tensors @ lr={config.sigma_lr}, wd={embed_wd}")
+            print(f"  Parameter group 'sigma_embed': {len(sigma_params)} tensors @ lr={config.M_sigma_p_lr}, wd={embed_wd}")
 
     if phi_params:
         param_groups.append({
             'params': phi_params,
-            'lr': config.phi_lr,
+            'lr': config.M_phi_lr,
             'weight_decay': embed_wd,
             'name': 'phi_embed',
         })
         if verbose:
-            print(f"  Parameter group 'phi_embed': {len(phi_params)} tensors @ lr={config.phi_lr}, wd={embed_wd}")
+            print(f"  Parameter group 'phi_embed': {len(phi_params)} tensors @ lr={config.M_phi_lr}, wd={embed_wd}")
 
     if omega_params:
-        omega_lr = getattr(config, 'omega_lr', config.phi_lr)
+        omega_lr = getattr(config, 'omega_lr', config.M_phi_lr)
         param_groups.append({
             'params': omega_params,
             'lr': omega_lr,
@@ -487,58 +488,54 @@ def create_param_groups(
             print(f"  Parameter group 'omega_embed': {len(omega_params)} tensors @ lr={omega_lr}, wd={embed_wd}")
 
     if sign_params:
-        # O(K) reflection sign logits: use mu_lr (same scale as embedding params).
-        # No Riemannian preconditioning — these are continuous STE latents, not
-        # Lie algebra elements. Weight decay acts as L2 prior pulling signs toward
-        # +1 (init), which is desirable to avoid gratuitous reflections.
         param_groups.append({
             'params': sign_params,
-            'lr': config.mu_lr,
+            'lr': config.M_mu_p_lr,
             'weight_decay': embed_wd,
             'name': 'sign_embed',
         })
         if verbose:
-            print(f"  Parameter group 'sign_embed': {len(sign_params)} tensors @ lr={config.mu_lr}, wd={embed_wd}")
+            print(f"  Parameter group 'sign_embed': {len(sign_params)} tensors @ lr={config.M_mu_p_lr}, wd={embed_wd}")
 
     if attention_params:
         param_groups.append({
             'params': attention_params,
-            'lr': config.attention_lr,
-            'weight_decay': config.weight_decay,
+            'lr': config.M_attention_lr,
+            'weight_decay': non_embed_wd,
             'name': 'attention',
         })
         if verbose:
-            print(f"  Parameter group 'attention': {len(attention_params)} tensors @ lr={config.attention_lr}")
+            print(f"  Parameter group 'attention': {len(attention_params)} tensors @ lr={config.M_attention_lr}")
 
     if ffn_params:
         param_groups.append({
             'params': ffn_params,
-            'lr': config.ffn_lr,
-            'weight_decay': config.weight_decay,
+            'lr': config.M_vfe_hyperparam_lr,
+            'weight_decay': non_embed_wd,
             'name': 'ffn',
         })
         if verbose:
-            print(f"  Parameter group 'ffn': {len(ffn_params)} tensors @ lr={config.ffn_lr}")
+            print(f"  Parameter group 'ffn': {len(ffn_params)} tensors @ lr={config.M_vfe_hyperparam_lr}")
 
     if no_decay_params:
         param_groups.append({
             'params': no_decay_params,
-            'lr': config.ffn_lr,
+            'lr': config.M_vfe_hyperparam_lr,
             'weight_decay': 0.0,
             'name': 'no_decay',
         })
         if verbose:
-            print(f"  Parameter group 'no_decay': {len(no_decay_params)} tensors @ lr={config.ffn_lr}, wd=0.0")
+            print(f"  Parameter group 'no_decay': {len(no_decay_params)} tensors @ lr={config.M_vfe_hyperparam_lr}, wd=0.0")
 
     if output_params:
         param_groups.append({
             'params': output_params,
-            'lr': config.output_lr,
-            'weight_decay': 0.0,  # Often tied to embeddings
+            'lr': config.M_output_lr,
+            'weight_decay': 0.0,
             'name': 'output',
         })
         if verbose:
-            print(f"  Parameter group 'output': {len(output_params)} tensors @ lr={config.output_lr}")
+            print(f"  Parameter group 'output': {len(output_params)} tensors @ lr={config.M_output_lr}")
 
     return param_groups
 
@@ -570,7 +567,7 @@ def create_simple_param_groups(
                 decay_params.append(param)
 
     param_groups = [
-        {'params': decay_params, 'weight_decay': config.weight_decay},
+        {'params': decay_params, 'weight_decay': config.non_embed_weight_decay},
         {'params': no_decay_params, 'weight_decay': 0.0},
     ]
 
@@ -668,7 +665,7 @@ def create_optimizer(
         optimizer = NaturalGradientOptimizer(
             param_groups,
             lr=config.learning_rate,
-            weight_decay=config.weight_decay,
+            weight_decay=config.non_embed_weight_decay,
             ema_decay=ema_decay,
             damping=damping,
         )

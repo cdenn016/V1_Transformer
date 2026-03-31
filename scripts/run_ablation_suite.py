@@ -477,35 +477,35 @@ SWEEP_ORDER = [
     #'K', 
     
       
-    #'alpha',Done
-    #'beta', Done
-    #'alpha_phi', Done
-    
+    #'M_alpha',Done
+    #'M_beta', Done
+    #'mass_phi', Done
+
     #'embed_weight_decay',
-   # 'weight_decay',
-    
-    'ffn_lambda_belief',
-    'ffn_alpha',
-  
-    #'mu_lr',
-    #'sigma_lr',
-    #'phi_lr',
-    
-    #'ffn_lr',
-    
-    
-    #'e_step_mu_lr',
-    #'e_step_sigma_lr',
-    #'e_step_phi_lr',  
-  
+   # 'non_embed_weight_decay',
+
+    'E_lambda_belief',
+    'E_alpha',
+
+    #'M_mu_p_lr',
+    #'M_sigma_p_lr',
+    #'M_phi_lr',
+
+    #'M_vfe_hyperparam_lr',
+
+
+    #'E_mu_q_lr',
+    #'E_sigma_q_lr',
+    #'E_phi_lr',
+
     # 'kappa_beta',Done
-   
+
     #'prior_bank_tau',
-    
+
     #'rope_base', Done
 
-    #'attention_lr',
-    #'output_lr',
+    #'M_attention_lr',
+    #'M_output_lr',
     
     #'covariance', 
     
