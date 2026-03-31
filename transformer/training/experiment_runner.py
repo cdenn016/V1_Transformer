@@ -1321,6 +1321,14 @@ class PublicationTrainer(FastTrainer):
         self.model.train()
         return generated_text
 
+    def _set_kappa_frozen(self, frozen: bool):
+        """Freeze or unfreeze all log_kappa_per_head parameters across layers."""
+        for block in self.model.transformer.blocks:
+            for module in [block.attention, block.ffn]:
+                param = getattr(module, 'log_kappa_per_head', None)
+                if param is not None:
+                    param.requires_grad = not frozen
+
     def train(self):
         """Training loop with publication metrics."""
         print(f"{'='*70}")
@@ -1372,9 +1380,25 @@ class PublicationTrainer(FastTrainer):
             except Exception as e:
                 print(f"[WARN] Initial semantic analysis failed: {e}")
 
+        # Kappa warmup: freeze log_kappa_per_head until embeddings differentiate.
+        # Without this, early uniform-attention gradients push kappa toward
+        # values that permanently flatten attention.
+        kappa_warmup = getattr(self.config, 'kappa_warmup_steps', 0)
+        _kappa_frozen = False
+        if kappa_warmup > 0:
+            self._set_kappa_frozen(True)
+            _kappa_frozen = True
+            print(f"  [kappa warmup] Frozen log_kappa_per_head for first {kappa_warmup} steps")
+
         for step in pbar:
             self.global_step = step
             step_start = time.time()
+
+            # Unfreeze kappa after warmup period
+            if _kappa_frozen and step >= kappa_warmup:
+                self._set_kappa_frozen(False)
+                _kappa_frozen = False
+                print(f"\n  [kappa warmup] Unfreezing log_kappa_per_head at step {step}")
 
             # Get batch
             try:
