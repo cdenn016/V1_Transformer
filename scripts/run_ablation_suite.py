@@ -128,9 +128,9 @@ BASELINE_CONFIG = {
  
     # === VFE loss weights (M-step objective) ===
     # E-step: prior + alignment (no observations with n_iterations=1).
-    # CE enters through M-step via IFT (s_k ≈ 0.5 from fixed ffn_alpha=1).
-    # alpha=0: KL(q*||p) homogenizes (q* is smoothed, not data-grounded).
-    # beta=0: alignment term is vacuum-seeking. E-step handles it internally.
+    # CE enters through M-step via IFT (s_k ≈ 0.5 from fixed E_alpha=1).
+    # M_alpha=0: KL(q*||p) homogenizes (q* is smoothed, not data-grounded).
+    # M_beta=0: alignment term is vacuum-seeking. E-step handles it internally.
     
     'M_alpha':             0.00,
     'M_beta':              0.0,

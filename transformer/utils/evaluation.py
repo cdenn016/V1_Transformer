@@ -158,14 +158,14 @@ def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
                 model,
                 input_ids,
                 target_ids,
-                alpha=0.0,
-                lambda_beta=0.0,
+                M_alpha=0.0,
+                M_beta=0.0,
                 lambda_gamma=0.0,
                 kappa_gamma=1.0,
                 lambda_hyper=0.0,
                 pad_token_id=pad_token_id,
                 use_obs_in_vfe=False,
-                alpha_phi=0.0,
+                mass_phi=0.0,
             )
 
             ce_loss = metrics['loss/ce']
