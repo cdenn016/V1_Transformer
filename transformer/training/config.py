@@ -65,82 +65,60 @@ class TrainingConfig:
     # ==========================================================================
     # Optimizer Hyperparameters
     # ==========================================================================
-    # weight_decay implements a Gaussian hyper-prior on parameters:
-    #   p(θ) = N(0, 1/(2·wd))  →  -log p(θ) = wd·||θ||²
-    #
-    # In the hierarchical VFE, this is the top level of the Bayesian hierarchy:
-    #   observations → q_i (beliefs, E-step) → p_i (priors, M-step) → N(0, 1/(2·wd))
-    #
-    # For embedding parameters (μ_p, σ_p, φ_p), weight decay is the hyper-prior
-    # precision that prevents prior drift. Larger wd = tighter hyper-prior.
     # Optimizer type:
     #   'adamw': Standard AdamW (default). Diagonal Fisher approximation via EMA.
     #   'riemannian_adam': AdamW + Killing-form metric for phi + Fisher metric for mu.
-    #       Applies the correct Riemannian gradient on the Lie algebra (Killing form
-    #       g̃_ab = 2K tr(G_a^T G_b) - 2 tr(G_a) tr(G_b)) and the information-geometric
-    #       natural gradient for location parameters (scale by variance).
     #   'natural_gradient': Per-token block-diagonal empirical Fisher.
-    #       Maintains K×K Fisher blocks per vocabulary token via EMA of gradient
-    #       outer products. O(V·K³) per step. Memory: V×K×K floats.
     optimizer_type: str = 'adamw'
 
     # Natural gradient settings (only used when optimizer_type='natural_gradient')
     fisher_ema_decay: float = 0.95   # EMA decay for Fisher matrix estimation
     fisher_damping: float = 1e-4     # Tikhonov regularization λI for invertibility
 
+    # weight_decay implements a Gaussian hyper-prior on parameters:
+    #   p(θ) = N(0, 1/(2·wd))  →  -log p(θ) = wd·||θ||²
     weight_decay: float = 0.1
-    # Embedding-specific weight decay (Level 3 hyper-prior on priors).
-    # None = use weight_decay (same as other params).
-    # 0.0 = uninformative hyper-prior (no pull toward zero).
-    # The VFE hierarchy is: N(0,1/(2·wd)) → p_i(embeddings) → q_i(beliefs) → obs
-    # For mu_embed: wd pulls prior means toward zero
-    # For sigma_embed: wd on log_sigma pulls covariances toward σ=1
-    # For phi_embed: wd pulls gauge frames toward identity (exp(0)=I)
-    # Default 0.0: VFE loss terms handle embedding regularization:
-    #   - alpha · KL(q||p) couples μ_p/Σ_p to posterior (self-consistency)
-    #   - alpha_phi · ||φ||²/2 is L2 on gauge frames
-    # Optimizer WD on embeddings conflicts with these principled terms.
     embed_weight_decay: Optional[float] = 0.01
     beta1: float = 0.9
     beta2: float = 0.999
     eps: float = 1e-8
     grad_clip: float = 1.0
+    grad_accumulation_steps: int = 1
 
     # ==========================================================================
     # Learning Rate Schedule
     # ==========================================================================
+    epochs: Optional[int] = None  # If set, overrides max_steps
     warmup_steps: int = 1000
     max_steps: int = 50000
     lr_decay: str = 'cosine'  # 'cosine', 'linear', 'constant'
-    min_lr: float = 3e-5
+    min_lr: float = 3e-5           # Absolute minimum LR (used by presets)
+    min_lr_ratio: float = 0.1      # Min LR as fraction of peak (used by FastTrainer)
 
     # ==========================================================================
     # Free Energy Weights
     # ==========================================================================
-    # 
     alpha: float = 0.0           # Self-consistency: KL(q||p) to embedding priors
     lambda_beta: float = 0.0     # Belief alignment: Σβ_ij·KL  [M-step loss]
-    ffn_lambda_belief: float = 1.0  # Belief alignment weight inside VFE E-step [E-step dynamics]
-                                    # Controls strength of Σβ_ij·KL(q_i||Ω_ij q_j) gradient
-                                    # in FFN VFE iterations. Analogous to lambda_beta but for
-                                    # the E-step rather than the M-step loss.
+    beta: float = 0.0            # Alias for lambda_beta (used by FastTrainer)
+    ffn_lambda_belief: float = 1.0  # Belief alignment weight inside VFE E-step
     lambda_gamma: float = 0.0    # Model alignment (disabled by default)
     kappa_gamma: float = 1.0     # Temperature for γ_ij coupling weights
+    lambda_hyper: float = 0.0    # Hyper-prior: KL(s_i||h) models to centroid
     use_obs_in_vfe: bool = False # Pass targets as observations into VFE E-step (last layer only)
     obs_sigma_gradient: bool = True  # ∂E_q[CE]/∂σ Hessian-diagonal obs gradient for sigma
     obs_sigma_weight: float = 1.0     # Weight for sigma observation gradient
 
     # Multi-layer depth signal
-    aux_layer_loss: bool = False     # Per-layer auxiliary CE loss (M-step task signal for non-final layers)
+    aux_layer_loss: bool = False     # Per-layer auxiliary CE loss
     aux_loss_weight: float = 0.3     # Weight for auxiliary per-layer CE losses
-    sigma_residual: bool = False     # Additive σ residual across layers (instead of replacement)
+    sigma_residual: bool = False     # Additive σ residual across layers
 
     # ==========================================================================
     # Training Loop
     # ==========================================================================
     batch_size: int = 64
     max_seq_len: int = 64
-    accumulation_steps: int = 1
 
     # ==========================================================================
     # Logging & Evaluation
@@ -164,35 +142,17 @@ class TrainingConfig:
     # ==========================================================================
     # Gauge Group
     # ==========================================================================
-    # Gauge mode: 'learned' (per-token frames, full transport Ω_ij)
-    # or 'trivial' (global frame, Ω = I, standard KL-attention).
-    gauge_mode: str = 'learned'
-
-    # Gauge parameterization: how gauge frames are stored and optimized.
-    #   'phi':   Lie algebra coefficients φ_i ∈ ℝ^{n_gen}, with Ω_i = exp(φ_i·G).
-    #            Requires matrix_exp forward + dexp series backward.
-    #            Only reaches GL⁺(K) (det > 0); needs separate reflection for O(K).
-    #   'omega': Direct group elements Ω_i ∈ GL(K), stored as K_h×K_h matrices per head.
-    #            No matrix_exp needed. Gradient via chain rule through Ω_ij = Ω_i·Ω_j⁻¹.
-    #            Covers full GL(K) including reflections (det < 0). Major compute savings.
-    gauge_param: str = 'phi'  # 'phi' or 'omega'
-
-    # Learning rate for direct Omega embeddings (used when gauge_param='omega')
-    omega_lr: float = 0.01
-
-    # Trust region for Omega retraction on GL(K) manifold
+    gauge_mode: str = 'learned'    # 'learned', 'trivial', 'constant'
+    gauge_param: str = 'phi'       # 'phi' or 'omega'
+    omega_lr: float = 0.01         # LR for direct Omega embeddings (gauge_param='omega')
     omega_trust_region: float = 0.3
-
-    # Isotropic covariance: force Σ = σ²I (scalar variance × identity)
-    # This is Limit 1 from the manuscript: KL reduces to scaled squared Euclidean.
-    # Combined with gauge_mode='trivial' (Limit 2), recovers standard attention.
-    isotropic_covariance: bool = False
+    isotropic_covariance: bool = False  # Force Σ = σ²I (Limit 1 from manuscript)
 
     # ==========================================================================
     # Positional Encoding
     # ==========================================================================
-    use_rope: bool = True       # RoPE: SO(2)^{K/2} position rotations on μ in attention
-    rope_base: float = 10000.0   # RoPE frequency base
+    use_rope: bool = True       # RoPE: SO(2)^{K/2} position rotations on μ
+    rope_base: float = 10000.0
 
     # ==========================================================================
     # Model Architecture (for creation, not training)
@@ -200,6 +160,32 @@ class TrainingConfig:
     embed_dim: int = 128
     n_layers: int = 4
     vocab_size: int = 50257  # GPT-2 tokenizer size
+
+    # ==========================================================================
+    # Gauge Geometry: Phi gradient preconditioning (M-step)
+    # ==========================================================================
+    alpha_phi: float = 0.0                     # Gauge prior: (α_φ/2)||φ||² loss term
+    use_slk_projection: bool = False           # Project phi to traceless sl(K) after each step
+    use_killing_form: bool = False             # Cartan decomposition preconditioning for phi grads
+    killing_form_sym_dampening: float = 0.1    # Dampening for non-compact (symmetric) directions
+
+    # ==========================================================================
+    # P-Flow & Delta Rule (backprop-free learning)
+    # ==========================================================================
+    use_p_flow: bool = False          # EMA update of token embeddings toward successful beliefs
+    p_flow_ema_decay: float = 0.99
+    sigma_ce_scale: float = 0.01      # Scale CE gradient to sigma_p (0=detach, 1=full)
+    detach_phi: bool = False           # Detach phi from backprop (enables backprop-free phi)
+    use_delta_rule_w_out: bool = False # Delta rule for W_out (backprop-free)
+    delta_rule_lr: float = 0.001
+
+    # ==========================================================================
+    # Diagnostics
+    # ==========================================================================
+    track_layer_diagnostics: bool = False
+    track_iteration_diagnostics: bool = False
+    diagnostics_interval: int = 50
+    verbose_diagnostics: bool = True
 
     def __post_init__(self):
         """Convert checkpoint_dir to Path if string."""
