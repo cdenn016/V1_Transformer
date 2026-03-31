@@ -33,7 +33,8 @@ from typing import Dict, Optional, Tuple, List
 from dataclasses import dataclass, field
 from pathlib import Path
 import time
-import json
+
+from transformer.training.config import TrainingConfig
 
 from math_utils.numerical_monitor import flush as _flush_numerical_events
 
@@ -53,112 +54,24 @@ from transformer.baselines.standard_transformer import StandardTransformerLM
 # =============================================================================
 
 @dataclass
-class FastTrainingConfig:
-    """Training configuration with per-parameter-type learning rates and VFE loss weights.
+class FastTrainingConfig(TrainingConfig):
+    """FastTrainer config — inherits from TrainingConfig with production defaults.
 
-    This is the config for FastTrainer. For the unified config used by
-    PublicationTrainer, see training.config.TrainingConfig.
+    Overrides TrainingConfig defaults for fields where FastTrainer needs
+    different values (e.g., shorter warmup, stronger alpha, different logging).
+    All fields are defined in TrainingConfig; this class only sets defaults.
     """
 
-    # Training steps (use epochs OR max_steps, epochs takes precedence)
-    epochs: Optional[int] = None  # If set, overrides max_steps
+    # Override defaults for FastTrainer
     max_steps: int = 1000
     warmup_steps: int = 50
-
-    # Per-parameter group learning rates (NATURAL GRADIENTS!)
-    mu_lr: float = 0.1           # Mean embeddings (from test suite)
-    sigma_lr: float = 0.005      # Covariance embeddings (from test suite)
-    phi_lr: float = 0.01         # Gauge frames
-    attention_lr: float = 0.01   # Attention parameters
-    ffn_lr: float = 0.001        # FFN parameters (standard)
-    output_lr: float = 0.001     # Output projection
-
-    # Optimizer hyperparameters
-    beta1: float = 0.9
-    beta2: float = 0.999  # Higher β₂ for stable second-moment estimates in FastTrainer
-    eps: float = 1e-8
-    # weight_decay implements the Level 3 hyper-prior N(0, 1/(2·wd)) on parameters.
-    # For embedding parameters (μ_p, σ_p, φ), this is the top of the Bayesian hierarchy:
-    #   x → q(E-step) → p(M-step) → N(0, 1/(2·wd))
-    weight_decay: float = 0.01  # L2 for non-VFE params (attention, FFN) only
-    # Embedding weight decay: 0.0 because VFE loss terms already regularize:
-    #   - alpha · KL(q||p) couples μ_p, Σ_p to posterior (Bayesian self-consistency)
-    #   - alpha_phi · ||φ||²/2 is literally L2 on gauge frames
-    # Adding optimizer WD on top double-regularizes and conflicts with VFE gradients.
-    embed_weight_decay: Optional[float] = 0.01
-
-    # Gradient control
-    grad_clip: float = 1.0
-    grad_accumulation_steps: int = 1
-
-    # Free energy coefficients
-    alpha: float = 1.0            # Self-consistency KL(q||p) weight — stronger than TrainingConfig (0.1) for FastTrainer stability
+    weight_decay: float = 0.01
+    alpha: float = 1.0            # Stronger than TrainingConfig default (0.0)
     beta: float = 1.0             # Belief alignment (maps to lambda_beta in loss)
-
-    lambda_gamma: float = 0.0     # Model alignment (disabled by default)
-    kappa_gamma: float = 1.0      # Temperature for γ_ij coupling weights
-    lambda_hyper: float = 0.0     # Hyper-prior: KL(s_i||h) models to centroid
-    # VFE observation coupling
-    use_obs_in_vfe: bool = False  # Pass targets into VFE E-step (last layer only)
-
-    # Multi-layer depth signal
-    aux_layer_loss: bool = False     # Per-layer auxiliary CE loss (M-step task signal for non-final layers)
-    aux_loss_weight: float = 0.3     # Weight for auxiliary per-layer CE losses
-    sigma_residual: bool = False     # Additive σ residual across layers (instead of replacement)
-
-    # Learning rate schedule
-    lr_decay: str = 'cosine'  # 'cosine', 'linear', 'constant'
-    min_lr_ratio: float = 0.1  # Minimum LR as fraction of peak (floor for cosine decay)
-
-    # Logging
     log_interval: int = 10
     eval_interval: int = 100
     checkpoint_interval: int = 200
-
-    # Checkpointing
-    checkpoint_dir: Path = Path('checkpoints')
-    save_total_limit: int = 3
-
-    # P-FLOW: EMA update of token embeddings toward successful beliefs
-    use_p_flow: bool = False          # Enable P-flow updates
-    p_flow_ema_decay: float = 0.99    # EMA decay (0.99 = 1% update per step)
-
-    # SIGMA DETACH: Scale CE gradient to sigma_p in PriorBank.decode
-    # 0.0 = full detach (no CE gradient to sigma_p, only hyper-prior drives it)
-    # 1.0 = full gradient (unscaled CE gradient, risks 1/sigma_p divergence)
-    # 0.01 = default (1% of CE gradient passes through)
-    sigma_ce_scale: float = 0.01
-
-    # PHI DETACH: Detach phi from backprop in non-amortized mode
-    detach_phi: bool = False             # Enables fully backprop-free with phi P-flow
-
-    # DELTA RULE: Backprop-free learning for W_out
-    use_delta_rule_w_out: bool = False  # Enable delta rule for W_out
-    delta_rule_lr: float = 0.001        # Learning rate for delta rule
-
-    # LAYER/ITERATION DIAGNOSTICS: Debug multi-layer/multi-iteration performance
-    track_layer_diagnostics: bool = False      # Per-layer belief statistics
-    track_iteration_diagnostics: bool = False  # Per-VFE-iteration convergence data
-    diagnostics_interval: int = 50             # Collect every N steps (expensive)
-    verbose_diagnostics: bool = True           # Print [M-STEP], [E-STEP], [PHI] to console
-
-    # Resume from checkpoint
-    resume_from: Optional[str] = None  # Path to checkpoint to resume from
-
-    # GAUGE GEOMETRY: Principled phi gradient control
-    # These replace ad-hoc gradient clipping with theoretically motivated approaches.
-    alpha_phi: float = 0.0                     # Gauge prior: (α_φ/2)||φ||² loss term (0 = disabled)
-    use_slk_projection: bool = False           # Project phi to traceless sl(K) after each step
-    use_killing_form: bool = False             # Cartan decomposition preconditioning for phi grads
-    killing_form_sym_dampening: float = 0.1    # Dampening for non-compact (symmetric) directions
-
-    # M-step optimizer type
-    # 'adamw': Standard AdamW (diagonal Fisher via EMA of g²)
-    # 'riemannian_adam': AdamW + Killing metric on phi + Fisher on mu
-    # 'natural_gradient': Per-token K×K empirical Fisher blocks
-    optimizer_type: str = 'adamw'
-    fisher_ema_decay: float = 0.95   # EMA decay for Fisher estimation (natural_gradient only)
-    fisher_damping: float = 1e-4     # Tikhonov regularization λI (natural_gradient only)
+    checkpoint_dir: Optional[Path] = Path('checkpoints')
 
 
 
@@ -197,7 +110,7 @@ class FastTrainer:
         model,
         train_loader: DataLoader,
         val_loader: DataLoader,
-        config: FastTrainingConfig,
+        config: 'TrainingConfig',
         device: torch.device = None,
     ):
         self.model = model
