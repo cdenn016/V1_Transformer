@@ -7,7 +7,7 @@ and the PublicationTrainer class. This module contains all the machinery
 that runs after config selection.
 
 Extracted from train_publication.py to separate config (entry point) from
-execution (this module). The entry point sets configs and calls
+execution (this module).. The entry point sets configs and calls
 run_single_experiment() or run_pure_vfe_experiment() from here.
 
 Public API:
