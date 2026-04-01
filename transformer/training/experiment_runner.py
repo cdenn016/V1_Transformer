@@ -1868,10 +1868,11 @@ def run_single_experiment(
     # MODE 2: HYBRID GAUGE-ATTENTION TRANSFORMER
     # =====================================================================
     elif ffn_mode == 'hybrid':
+        _pb = config.get('use_prior_bank', True)
         print("  Model type: HYBRID GAUGE-ATTENTION TRANSFORMER")
         print("  - Attention: KL-divergence (gauge-theoretic)")
         print("  - FFN: Standard GELU MLP")
-        print("  - Embeddings: PriorBank (KL encode/decode)")
+        print(f"  - Embeddings: {'PriorBank (KL encode/decode)' if _pb else 'nn.Embedding + nn.Linear'}")
         print("  - Learning: Backprop (pure CE)")
 
         if 'kappa_beta' not in config:
