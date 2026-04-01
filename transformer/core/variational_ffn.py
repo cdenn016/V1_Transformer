@@ -2266,6 +2266,8 @@ class VariationalFFNDynamic(nn.Module):
                                            # Replaces ad-hoc straight-through (s=1) and pure EM (s=0)
                                            # with info-geometrically correct value.
         learnable_head_kappa: bool = False,  # If True, learn per-head κ_h
+        n_picard_steps: int = 0,           # Picard corrections after closed-form E-step
+        picard_trust_region: float = 5.0,  # Whitened trust region for Picard steps
     ):
         """
         Initialize dynamic-beta VFE FFN.
@@ -2338,6 +2340,8 @@ class VariationalFFNDynamic(nn.Module):
         self.e_step_sigma_floor = e_step_sigma_floor
         self.detach_phi = detach_phi
         self.closed_form_e_step = closed_form_e_step
+        self.n_picard_steps = n_picard_steps
+        self.picard_trust_region = picard_trust_region
         self.implicit_em = implicit_em
         self._last_implicit_mu_scale = None   # (B, N, K) stored after E-step for model.py
         self._last_implicit_sigma_scale = None
@@ -3625,6 +3629,84 @@ class VariationalFFNDynamic(nn.Module):
                     sigma_current = scalar_var.expand_as(sigma_current)
 
             beta_current = beta_heads[-1] if beta_heads else None
+
+            # =================================================================
+            # Picard corrections: preconditioned iteration on softmax residual
+            # =================================================================
+            # At mu_0 (closed-form), the linear gradient is zero by construction.
+            # The full gradient equals the softmax coupling term alone:
+            #   ∇F(mu_0) = ∇F_softmax(mu_0)
+            # Picard iteration using closed-form covariance as preconditioner:
+            #   mu^(n+1) = mu_0 - sigma_0 * ∇F_softmax(mu^(n))
+            if self.n_picard_steps > 0 and self.lambda_softmax > 0 and _cf_bep is not None:
+                mu_0 = mu_current.clone()   # closed-form linear fixed point
+                sigma_0 = sigma_current     # closed-form covariance = A^{-1}
+
+                for _picard_iter in range(self.n_picard_steps):
+                    grad_softmax_full = torch.zeros_like(mu_current)
+                    block_start = 0
+
+                    for h, d_h in enumerate(self.irrep_dims or [self.embed_dim]):
+                        block_end = block_start + d_h
+                        beta_h = beta_heads[h]
+                        exp_phi_h, exp_neg_phi_h = _cf_bep[h]
+
+                        mu_h = mu_current[:, :, block_start:block_end]      # (B, N, d_h)
+                        sigma_h = sigma_current[:, :, block_start:block_end]  # (B, N, d_h)
+
+                        # Transport: Omega_h = exp_phi_i @ exp_neg_phi_j
+                        Omega_h = torch.einsum(
+                            'bikl,bjlm->bijkm', exp_phi_h, exp_neg_phi_h
+                        )  # (B, N, N, d_h, d_h)
+
+                        # Transported means and diagonal covariance
+                        mu_j_t = torch.einsum(
+                            'bijkl,bjl->bijk', Omega_h, mu_h
+                        )  # (B, N, N, d_h)
+                        sigma_j_t = torch.einsum(
+                            'bijkl,bijkl,bjl->bijk', Omega_h, Omega_h, sigma_h
+                        ).clamp(min=eps)  # (B, N, N, d_h)
+
+                        # Per-pair KL gradient: ∂KL_ij/∂mu_i = (mu_i - Omega mu_j) / sigma_j_t
+                        delta = mu_h[:, :, None, :] - mu_j_t  # (B, N, N, d_h)
+                        grad_kl_pair = delta / sigma_j_t      # (B, N, N, d_h)
+
+                        # Per-pair KL values (needed for softmax coupling weight)
+                        sigma_i_h = sigma_h[:, :, None, :]    # (B, N, 1, d_h)
+                        trace_h = (sigma_i_h / sigma_j_t).sum(dim=-1)
+                        mahal_h = (delta ** 2 / sigma_j_t).sum(dim=-1)
+                        logdet_h = (torch.log(sigma_j_t.clamp(min=eps))
+                                    - torch.log(sigma_i_h.clamp(min=eps))).sum(dim=-1)
+                        kl_h = (0.5 * (trace_h + mahal_h - d_h + logdet_h)).clamp(min=0.0)
+
+                        # Softmax Jacobian: d_beta/d_mu = beta * (avg_grad - grad_kl) / kappa
+                        kappa_h = self._get_kappa_h(h, d_h) if self.irrep_dims else self.kappa
+                        kappa_h_scaled = max(kappa_h * math.sqrt(max(d_h, 1)), eps)
+                        avg_grad_h = torch.einsum('bij,bijk->bik', beta_h, grad_kl_pair)
+                        grad_dev = avg_grad_h.unsqueeze(2) - grad_kl_pair  # (B, N, N, d_h)
+                        d_beta_d_mu_h = beta_h.unsqueeze(-1) * grad_dev / kappa_h_scaled
+                        grad_softmax_h = self.lambda_softmax * torch.einsum(
+                            'bij,bijk->bik', kl_h, d_beta_d_mu_h
+                        )  # (B, N, d_h)
+
+                        grad_softmax_full[:, :, block_start:block_end] = grad_softmax_h
+                        block_start = block_end
+
+                    # Picard update: mu^(n+1) = mu_0 - sigma_0 * ∇F_softmax(mu^(n))
+                    nat_grad = sigma_0 * grad_softmax_full
+                    correction = nat_grad  # = mu_0 - mu_new
+
+                    # Whitened trust region on Picard correction
+                    w_norm = (correction / sigma_0.sqrt().clamp(min=eps)).norm(
+                        dim=-1, keepdim=True
+                    )
+                    scale = (self.picard_trust_region / w_norm.clamp(min=eps)).clamp(max=1.0)
+                    mu_current = mu_0 - scale * correction
+
+                    # Isotropic enforcement after Picard step
+                    if self.isotropic_covariance:
+                        # sigma doesn't change in Picard (only mu is corrected)
+                        pass
 
             # Store beta for implicit EM (if needed)
             if return_beta_history:

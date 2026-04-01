@@ -89,6 +89,15 @@ class BlockConfig:
     e_step_sigma_floor: float = 0.1    # Floor on σ_p inside E-step (caps 1/σ_p gradient).
                                         # PriorBank allows σ_p ∈ [0.01, 5.0] for sharp decode,
                                         # but E-step needs a higher floor to prevent nat_grad blowup.
+    n_picard_steps: int = 0            # Picard corrections after closed-form E-step.
+                                        # Preconditioned Picard iteration on the nonlinear VFE
+                                        # residual: mu^(n+1) = mu_0 - sigma_0 * ∇F_softmax(mu^(n))
+                                        # where mu_0, sigma_0 are the closed-form linear fixed point.
+                                        # 0 = pure closed-form (no softmax coupling).
+                                        # 1-3 = recommended range. Requires closed_form_e_step=True.
+    picard_trust_region: float = 5.0   # Whitened trust region for Picard corrections.
+                                        # More permissive than iterative E-step (2.0) since the
+                                        # closed-form base point is already at the linear optimum.
 
     # === Gauge geometry ===
     gauge_mode: str = 'learned'         # 'learned' | 'trivial' (Ω=I) | 'constant' (per-head Ω)
@@ -216,6 +225,8 @@ class BlockConfig:
             obs_sigma_weight=config.get('obs_sigma_weight', 1.0),
             sigma_max=config.get('sigma_max', 5.0),
             e_step_sigma_floor=config.get('e_step_sigma_floor', 0.1),
+            n_picard_steps=config.get('n_picard_steps', 0),
+            picard_trust_region=config.get('picard_trust_region', 5.0),
             # Gauge geometry
             gauge_mode=config.get('gauge_mode', 'learned'),
             gauge_param=config.get('gauge_param', 'phi'),
