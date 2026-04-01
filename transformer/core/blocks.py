@@ -415,8 +415,13 @@ class GaugeTransformerBlock(nn.Module):
             self._last_evolved_omega = evolved_omega
 
         # Residual connection (optional for pure VFE)
+        # The VFE FFN returns the full evolved state (mu_normalized + delta),
+        # not just the correction delta. Extract the delta so the residual
+        # stream accumulates corrections, not copies of normalized inputs.
+        # Without this, each layer dumps norm(mu) into the residual, burying
+        # the VFE correction and preventing effective depth scaling.
         if self.use_residual:
-            mu_q = mu_q + mu_ffn
+            mu_q = mu_q + (mu_ffn - mu_normalized)
         else:
             mu_q = mu_ffn
 

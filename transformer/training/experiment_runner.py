@@ -7,7 +7,7 @@ and the PublicationTrainer class. This module contains all the machinery
 that runs after config selection.
 
 Extracted from train_publication.py to separate config (entry point) from
-execution (this module). The entry point sets configs and calls
+execution (this module).. The entry point sets configs and calls
 run_single_experiment() or run_pure_vfe_experiment() from here.
 
 Public API:
@@ -35,7 +35,6 @@ from typing import Dict, List, Tuple, Any
 
 from transformer.core.model import GaugeTransformerLM
 from transformer.baselines.standard_transformer import StandardTransformerLM
-from transformer.baselines.hybrid_gauge_transformer import HybridGaugeTransformerLM
 from transformer.pure_vfe.model import PureVFETransformer
 from transformer.pure_vfe.config import PureVFEConfig
 from transformer.pure_vfe.gauge import monitor_omega_health
@@ -571,6 +570,14 @@ class IterationDiagnosticsTracker:
 class PublicationTrainer(FastTrainer):
     """Enhanced trainer with publication-quality metrics."""
 
+    @property
+    def _model_blocks(self):
+        """Resolve transformer blocks from either GaugeTransformerLM or HybridGaugeTransformerLM."""
+        t = getattr(self.model, 'transformer', None)
+        if t is not None:
+            return t.blocks
+        return getattr(self.model, 'blocks', [])
+
     def __init__(self, *args, publication_metrics: PublicationMetrics = None, tokenizer=None, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -986,8 +993,6 @@ class PublicationTrainer(FastTrainer):
                 mass_phi=self.config.mass_phi,
                 aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
             )
-        # Scale loss for gradient accumulation
-        loss = loss / self.config.grad_accumulation_steps
         loss.backward()
 
         # Tied weights + delta rule: zero out W_out gradient component.
@@ -1024,33 +1029,29 @@ class PublicationTrainer(FastTrainer):
         # Per-group clipping for large gauge groups (SO(N>3)):
         # phi_embed gradients dominate global norm, starving mu/sigma.
         _use_param_groups = getattr(self.config, 'use_param_groups', True)
-        # Only clip, step, and zero_grad on accumulation boundaries
-        _is_accum_step = (self.global_step + 1) % self.config.grad_accumulation_steps == 0
+        if self.config.grad_clip > 0:
+            if _use_param_groups:
+                for group in self.optimizer.param_groups:
+                    if group['params']:
+                        torch.nn.utils.clip_grad_norm_(
+                            group['params'],
+                            self.config.grad_clip,
+                        )
+            else:
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    self.config.grad_clip,
+                )
+        self.optimizer.step()
+
+        # Collect M-step natural gradient norms (after optimizer.step populates them)
         mstep_natural_norms = None
+        if is_log_step and hasattr(self.optimizer, 'get_grad_norms'):
+            mstep_natural_norms = self.optimizer.get_grad_norms()
 
-        if _is_accum_step:
-            if self.config.grad_clip > 0:
-                if _use_param_groups:
-                    for group in self.optimizer.param_groups:
-                        if group['params']:
-                            torch.nn.utils.clip_grad_norm_(
-                                group['params'],
-                                self.config.grad_clip,
-                            )
-                else:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(),
-                        self.config.grad_clip,
-                    )
-            self.optimizer.step()
-
-            # Collect M-step natural gradient norms (after optimizer.step populates them)
-            if is_log_step and hasattr(self.optimizer, 'get_grad_norms'):
-                mstep_natural_norms = self.optimizer.get_grad_norms()
-
-            if self.scheduler is not None:
-                self.scheduler.step()
-            self.optimizer.zero_grad()
+        if self.scheduler is not None:
+            self.scheduler.step()
+        self.optimizer.zero_grad()
 
         # =================================================================
         # KAPPA PROJECTION: Clamp log_kappa_per_head to [0.5, 1.5] × init
@@ -1060,8 +1061,10 @@ class PublicationTrainer(FastTrainer):
         # pushes log_kappa unboundedly even though the forward value is
         # clamped — the parameter accumulates momentum in a dead zone.
         # Project the parameter directly so gradient signal stays meaningful.
-        for block in self.model.transformer.blocks:
-            for module in [block.attention, block.ffn]:
+        for block in self._model_blocks:
+            for module in [getattr(block, 'attention', None), getattr(block, 'ffn', None)]:
+                if module is None:
+                    continue
                 p = getattr(module, 'log_kappa_per_head', None)
                 k0 = getattr(module, '_kappa_init', None)
                 if p is not None and k0 is not None:
@@ -1210,9 +1213,10 @@ class PublicationTrainer(FastTrainer):
             try:
                 # Enable diagnostic flags on model/FFN
                 if _track_iters:
-                    for block in self.model.transformer.blocks:
-                        block.ffn._collect_iteration_diagnostics = True
-                        block.ffn._iteration_diagnostics = []
+                    for block in self._model_blocks:
+                        if hasattr(block, 'ffn'):
+                            block.ffn._collect_iteration_diagnostics = True
+                            block.ffn._iteration_diagnostics = []
                 if _track_layers:
                     self.model._collect_layer_diagnostics = True
                     self.model._layer_diagnostics = []
@@ -1237,16 +1241,18 @@ class PublicationTrainer(FastTrainer):
 
                 # Write per-iteration diagnostics
                 if _track_iters:
-                    for layer_idx, block in enumerate(self.model.transformer.blocks):
-                        for id_ in block.ffn._iteration_diagnostics:
-                            id_['step'] = self.global_step
-                            id_['layer'] = layer_idx
-                            self.iter_tracker.log(id_)
+                    for layer_idx, block in enumerate(self._model_blocks):
+                        if hasattr(block, 'ffn'):
+                            for id_ in block.ffn._iteration_diagnostics:
+                                id_['step'] = self.global_step
+                                id_['layer'] = layer_idx
+                                self.iter_tracker.log(id_)
 
                 # Disable flags
                 if _track_iters:
-                    for block in self.model.transformer.blocks:
-                        block.ffn._collect_iteration_diagnostics = False
+                    for block in self._model_blocks:
+                        if hasattr(block, 'ffn'):
+                            block.ffn._collect_iteration_diagnostics = False
                 if _track_layers:
                     self.model._collect_layer_diagnostics = False
             except Exception as e:
@@ -1348,7 +1354,7 @@ class PublicationTrainer(FastTrainer):
 
     def _set_kappa_frozen(self, frozen: bool):
         """Freeze or unfreeze all log_kappa_per_head parameters across layers."""
-        for block in self.model.transformer.blocks:
+        for block in self._model_blocks:
             for module in [block.attention, block.ffn]:
                 param = getattr(module, 'log_kappa_per_head', None)
                 if param is not None:
@@ -1867,13 +1873,16 @@ def run_single_experiment(
     # =====================================================================
     # MODE 2: HYBRID GAUGE-ATTENTION TRANSFORMER
     # =====================================================================
+    # KL-divergence attention + PriorBank encode/decode + standard GELU FFN.
+    # Isolates the gauge attention contribution from VFE dynamics.
     elif ffn_mode == 'hybrid':
+        from transformer.baselines.hybrid_gauge_transformer import HybridGaugeTransformerLM
         _pb = config.get('use_prior_bank', True)
         print("  Model type: HYBRID GAUGE-ATTENTION TRANSFORMER")
-        print("  - Attention: KL-divergence (gauge-theoretic)")
+        print("  - Attention: KL-divergence based (gauge-theoretic)")
         print("  - FFN: Standard GELU MLP")
         print(f"  - Embeddings: {'PriorBank (KL encode/decode)' if _pb else 'nn.Embedding + nn.Linear'}")
-        print("  - Learning: Backprop (pure CE)")
+        print("  - Learning: Backprop")
 
         if 'kappa_beta' not in config:
             config['kappa_beta'] = 1.0
@@ -2962,4 +2971,3 @@ def run_pure_vfe_experiment(
     except Exception as e:
         print(f"\n\n Error: {e}")
         raise
-

@@ -586,8 +586,10 @@ def compute_free_energy_loss(
     }
 
     # Bayesian alpha diagnostics
+    _blocks = getattr(model, 'transformer', None)
+    _blocks = _blocks.blocks if _blocks is not None else getattr(model, 'blocks', [])
     with torch.no_grad():
-        for block in model.transformer.blocks:
+        for block in _blocks:
             vffn = block.ffn if hasattr(block.ffn, 'learnable_alpha') else getattr(block.ffn, 'variational_ffn', None)
             if vffn is not None and vffn.learnable_alpha and mu_q is not None and mu_p is not None:
                 import torch.nn.functional as _F
@@ -632,15 +634,16 @@ def compute_free_energy_loss(
                 break  # Only first layer for now
 
     # Per-head learnable kappa diagnostics (first layer only)
-    for block in model.transformer.blocks:
+    for block in _blocks:
         vffn = block.ffn if hasattr(block.ffn, 'learnable_head_kappa') else None
         if vffn is not None and vffn.learnable_head_kappa and vffn.log_kappa_per_head is not None:
             with torch.no_grad():
                 # Use clamped values (matching what the forward pass actually sees)
                 kappa_vals = torch.exp(vffn.log_kappa_per_head)  # (n_heads,)
-                if vffn._kappa_init is not None:
+                k0 = getattr(vffn, '_kappa_init', None)
+                if k0 is not None:
                     kappa_vals = kappa_vals.clamp(
-                        min=0.5 * vffn._kappa_init, max=1.5 * vffn._kappa_init
+                        min=0.5 * k0, max=1.5 * k0
                     )
                 metrics['kappa/per_head_mean'] = kappa_vals.mean().item()
                 metrics['kappa/per_head_std'] = kappa_vals.std().item()
