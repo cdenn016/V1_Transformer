@@ -381,8 +381,8 @@ def apply_pullback_natural_gradient(
     dtype = phi.dtype
 
     if gram is None:
-        gram = torch.einsum('aij,bij->ab',
-                            generators.transpose(-2, -1), generators)
+        # Frobenius inner product: <T_a, T_b> = tr(T_a^T T_b) = sum_{ij} T_a[i,j] T_b[i,j]
+        gram = torch.einsum('aij,bij->ab', generators, generators)
 
     # Compute ad_X: [ad_X]_bc = Σ_a φ^a f^c_{ab}
     # phi: (..., n_gen), structure_constants: (n_gen, n_gen, n_gen)
