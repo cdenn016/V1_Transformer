@@ -3618,6 +3618,11 @@ class VariationalFFNDynamic(nn.Module):
             mu_current = mu_star
             if self.update_sigma:
                 sigma_current = sigma_star
+                # Isotropic enforcement: closed-form produces per-dimension sigma,
+                # must project back to σ²I to maintain Limit 1 constraint.
+                if self.isotropic_covariance:
+                    scalar_var = sigma_current.mean(dim=-1, keepdim=True)
+                    sigma_current = scalar_var.expand_as(sigma_current)
 
             beta_current = beta_heads[-1] if beta_heads else None
 
