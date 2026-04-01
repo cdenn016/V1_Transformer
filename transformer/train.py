@@ -638,9 +638,10 @@ def compute_free_energy_loss(
             with torch.no_grad():
                 # Use clamped values (matching what the forward pass actually sees)
                 kappa_vals = torch.exp(vffn.log_kappa_per_head)  # (n_heads,)
-                if vffn._kappa_init is not None:
+                k0 = getattr(vffn, '_kappa_init', None)
+                if k0 is not None:
                     kappa_vals = kappa_vals.clamp(
-                        min=0.5 * vffn._kappa_init, max=1.5 * vffn._kappa_init
+                        min=0.5 * k0, max=1.5 * k0
                     )
                 metrics['kappa/per_head_mean'] = kappa_vals.mean().item()
                 metrics['kappa/per_head_std'] = kappa_vals.std().item()
