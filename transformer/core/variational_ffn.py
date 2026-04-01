@@ -3626,10 +3626,15 @@ class VariationalFFNDynamic(nn.Module):
 
                     del Omega_h_cf, sigma_j_t_diag, inv_sigma_j_t, mu_j_t_cf, info_per_pair
 
-                    # Fixed point
+                    # Fixed point: mu* = A^{-1} b, sigma* = c * A^{-1}
+                    # where c = alpha + lambda (entropy scaling from ∂F/∂Σ = 0).
+                    # Each KL contributes a -ln|Σ| entropy term; the total coefficient
+                    # is alpha + lambda * sum_j beta_ij = alpha + lambda (since sum beta = 1).
+                    # Without this factor, sigma is underestimated by (alpha + lambda).
                     total_prec_h = prior_prec_h + align_prec_h             # (B, N, d_h)
                     mu_star[:, :, block_start:block_end] = (prior_info_h + align_info_h) / total_prec_h.clamp(min=eps)
-                    sigma_star[:, :, block_start:block_end] = (1.0 / total_prec_h.clamp(min=eps)).clamp(max=self.sigma_max)
+                    entropy_scale = alpha_h + self.lambda_belief  # scalar or (B, N, d_h)
+                    sigma_star[:, :, block_start:block_end] = (entropy_scale / total_prec_h.clamp(min=eps)).clamp(max=self.sigma_max)
 
                     block_start = block_end
 
@@ -3749,12 +3754,22 @@ class VariationalFFNDynamic(nn.Module):
                     # Regularize A_h for numerical stability
                     A_h = A_h + eps * torch.eye(d_h, device=device, dtype=dtype)
 
-                    # Cholesky solve: A_h @ mu* = b_h
+                    # Cholesky solve: A_h @ mu* = b_h, Sigma* = c * A^{-1}
+                    # Entropy scaling: c = alpha + lambda (from ∂F/∂Σ = 0)
                     L_A = torch.linalg.cholesky(A_h)                     # (B, N, d_h, d_h)
                     mu_star_h = torch.cholesky_solve(
                         b_h.unsqueeze(-1), L_A
                     ).squeeze(-1)                                         # (B, N, d_h)
-                    Sigma_star_h = torch.cholesky_inverse(L_A)           # (B, N, d_h, d_h)
+                    A_inv_h = torch.cholesky_inverse(L_A)                # (B, N, d_h, d_h)
+
+                    # Exact posterior covariance: Sigma* = (alpha + lambda) * A^{-1}
+                    if isinstance(alpha_h, torch.Tensor) and alpha_h.dim() == 3:
+                        # Per-dimension alpha: c_k = alpha_k + lambda, scale each row/col
+                        entropy_scale = (alpha_h + self.lambda_belief).unsqueeze(-1)  # (B, N, d_h, 1)
+                        Sigma_star_h = entropy_scale * A_inv_h  # broadcast (B,N,d,1)*(B,N,d,d)
+                    else:
+                        entropy_scale = alpha_h + self.lambda_belief  # scalar
+                        Sigma_star_h = entropy_scale * A_inv_h       # (B, N, d_h, d_h)
 
                     # Clamp Sigma eigenvalues to [eps, sigma_max]
                     Sigma_star_h = Sigma_star_h.clamp(max=self.sigma_max)

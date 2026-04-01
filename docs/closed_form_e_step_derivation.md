@@ -82,13 +82,27 @@ $$
 \underbrace{\Big[\alpha\,\Sigma_p^{-1} + \lambda\sum_j \beta_{ij}\,\Sigma_{j,t}^{-1}\Big]}_{A_i}\;\mu_i = \underbrace{\alpha\,\Sigma_p^{-1}\mu_p + \lambda\sum_j \beta_{ij}\,\Sigma_{j,t}^{-1}\Omega_{ij}\mu_j}_{b_i}
 $$
 
-The solution is:
+The mean fixed point is:
 
 $$
-\mu_i^* = A_i^{-1}\,b_i \qquad \Sigma_i^* = A_i^{-1}
+\mu_i^* = A_i^{-1}\,b_i
 $$
 
-where $A_i$ is the posterior precision matrix (SPD by construction as a sum of SPD matrices) and $b_i$ is the information vector.
+For the covariance, the $\Sigma_i$-dependent terms in the VFE are the trace terms $\frac{1}{2}\text{tr}(\Sigma_k^{-1}\Sigma_i)$ and the entropy terms $-\frac{1}{2}\ln|\Sigma_i|$. Setting $\partial F / \partial \Sigma_i = 0$:
+
+$$
+\frac{1}{2}A_i - \frac{1}{2}\underbrace{(\alpha + \lambda)}_{c}\,\Sigma_i^{-1} = 0
+$$
+
+where $c = \alpha + \lambda\sum_j\beta_{ij} = \alpha + \lambda$ (since $\sum_j\beta_{ij} = 1$ under softmax). Each KL contributes a $-\ln|\Sigma_i|$ entropy term; the total coefficient is $c$. Solving:
+
+$$
+\Sigma_i^* = (\alpha + \lambda)\,A_i^{-1}
+$$
+
+The factor $(\alpha + \lambda)$ arises because the entropy terms favor larger covariance (more uncertainty), inflating the precision-only solution $A^{-1}$ by $(\alpha + \lambda)$. With per-dimension $\alpha_k$ (learnable precision), the factor becomes $c_k = \alpha_k + \lambda$ per dimension.
+
+$A_i$ is the posterior precision matrix (SPD by construction as a sum of SPD matrices) and $b_i$ is the information vector.
 
 ## 5. Diagonal Specialization
 
@@ -109,7 +123,7 @@ b_i[k] = \frac{\alpha\,\mu_p[k]}{\sigma_p[k]} + \lambda\sum_j \frac{\beta_{ij}\,
 $$
 
 $$
-\mu_i^*[k] = b_i[k] / A_i[k] \qquad \sigma_i^*[k] = 1 / A_i[k]
+\mu_i^*[k] = b_i[k] / A_i[k] \qquad \sigma_i^*[k] = (\alpha + \lambda) / A_i[k]
 $$
 
 This is the existing implementation in `variational_ffn.py` (lines 3551-3616). The diagonal approximation discards off-diagonal entries of $\Omega\,\text{diag}(\sigma_j)\,\Omega^\top$ when $\Omega$ is non-diagonal, which is exact only when $\Omega$ is itself diagonal or when $\Omega$ is orthogonal with diagonal source covariance.
