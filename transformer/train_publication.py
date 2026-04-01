@@ -117,7 +117,7 @@ from math_utils.numerical_monitor import flush as _flush_numerical_events
 #        - 'wedge2': dim = N*(N-1)/2      (antisymmetric 2-tensor ∧²V)
 #        - 'sym2':   dim = N*(N+1)/2 - 1  (symmetric traceless Sym²₀V)
 
-DEFAULT_MODE = 'hybrid'               # Which mode to run
+DEFAULT_MODE = 'em'               # Which mode to run
 SEED = 6
 # Dataset
 DEFAULT_DATASET = 'wikitext-103'  
@@ -147,25 +147,25 @@ _DEBUG_VFE_GRADS = False
 EM_CONFIG = {
     # === Architecture ===
     'vocab_size':            50257,
-    'embed_dim':             80,
+    'embed_dim':             20,
     'max_seq_len':           128,
     
-    'batch_size':            16, 
-    'max_steps':             60000,
+    'batch_size':            64, 
+    'max_steps':             15000,
     
     'n_layers':              1,
     'ffn_n_iterations':      1,
     
-    'gauge_dim':                          8,
-    'irrep_spec':            [('fund', 10, 8)],
+    'gauge_dim':                          10,
+    'irrep_spec':            [('fund', 2, 10)],
 
     'use_prior_bank':           True,
     'learnable_pb_temperature': True,
     'mask_self_attention':      True,  # Prevent attention collapse?
   
     
-    'kappa_warmup_steps':       30000,  # freeze kappa for first n steps
-    'learnable_head_kappa':     False, # If True, learn per-head κ_h via log_kappa_per_head
+    'kappa_warmup_steps':       7500,  # freeze kappa for first n steps
+    'learnable_head_kappa':     True, # If True, learn per-head κ_h via log_kappa_per_head
     
     # === M-step: implicit differentiation ===
     'implicit_em':           False,
@@ -315,7 +315,7 @@ EM_CONFIG = {
     # === Regularization ===
     'sigma_ce_scale':  0.1,
     'sigma_max':     10.0,
-    'grad_clip':     1.0,
+    'grad_clip':     5.0,
     'hidden_dim':    508,
     'warmup_steps':  100,
     'num_workers':   10,
@@ -780,8 +780,8 @@ HYBRID_CONFIG = {
     'prior_bank_tau':        1.0,
 
     # === Training ===
-    'batch_size':            64,
-    'max_steps':             30000,
+    'batch_size':            128,
+    'max_steps':             15000,
     'num_workers':           10,
     'warmup_steps':          100,
 
