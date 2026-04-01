@@ -2865,7 +2865,15 @@ class VariationalFFNDynamic(nn.Module):
                     exact_diagonal_transport=self.exact_diagonal_transport,
                 )
                 beta_phi_h, kl_h = beta_phi_h_result
-                alignment_loss = alignment_loss + self.lambda_belief * (beta_phi_h * kl_h).sum()
+                # Separate direct and softmax coupling weights for phi gradient.
+                # d/dphi [sum(beta * KL)] = sum(dBeta/dphi * KL) + sum(beta * dKL/dphi)
+                # Direct term (beta * dKL/dphi) gets lambda_belief.
+                # Softmax coupling (dBeta/dphi * KL) gets lambda_softmax.
+                # Achieved via stop-gradient: detach the factor NOT being differentiated.
+                alignment_loss = alignment_loss + (
+                    self.lambda_belief * (beta_phi_h.detach() * kl_h).sum()
+                    + self.lambda_softmax * (beta_phi_h * kl_h.detach()).sum()
+                )
                 block_start = block_end
         else:
             beta_for_phi_result = compute_attention_weights(
@@ -2888,7 +2896,10 @@ class VariationalFFNDynamic(nn.Module):
             else:
                 beta_phi = beta_for_phi_result
                 kl_matrix = beta_phi
-            alignment_loss = self.lambda_belief * (beta_phi * kl_matrix).sum()
+            alignment_loss = (
+                self.lambda_belief * (beta_phi.detach() * kl_matrix).sum()
+                + self.lambda_softmax * (beta_phi * kl_matrix.detach()).sum()
+            )
 
         if alignment_loss.grad_fn is not None:
             grad_phi = torch.autograd.grad(
