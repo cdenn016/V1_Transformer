@@ -723,6 +723,89 @@ STANDARD_ATTN_ONLY_CONFIG = {
 }
 
 
+# =============================================================================
+# HYBRID GAUGE-ATTENTION CONFIG
+# =============================================================================
+# Standard neural transformer with gauge KL-attention and PriorBank embeddings.
+# Isolates the gauge attention mechanism from the VFE E-step FFN.
+#
+# Components:
+#   - Embeddings: PriorBank (KL encode/decode)
+#   - Attention: IrrepMultiHeadAttention (gauge-theoretic KL-divergence)
+#   - FFN: Standard GELU (nn.Linear -> GELU -> nn.Linear)
+#   - Training: Pure CE loss (no VFE terms)
+
+HYBRID_CONFIG = {
+    # === Architecture ===
+    'vocab_size':            50257,
+    'embed_dim':             20,
+    'max_seq_len':           128,
+    'n_layers':              1,
+    'hidden_dim':            80,   # 4x embed_dim (standard convention)
+    'dropout':               0.1,
+
+    # === Gauge group: GL(K) with multi-head block-diagonal structure ===
+    'gauge_group':           'GLK',
+    'gauge_dim':             10,
+    'irrep_spec':            [('fund', 2, 10)],
+    'gauge_mode':            'learned',
+    'diagonal_covariance':   True,
+    'exact_diagonal_transport': False,
+    'enforce_orthogonal':    False,
+    'mask_self_attention':   False,
+
+    # === Attention ===
+    'kappa_beta':            1.0,
+    'learnable_head_kappa':  False,
+    'use_output_projection': True,
+    'sigma_aggregation':     'mixture',
+
+    # === Position encoding ===
+    'use_rope':              True,
+    'rope_base':             5000,
+    'pos_encoding_mode':     'none',
+
+    # === Embedding init ===
+    'mu_init_std':           1.0,
+    'phi_scale':             1.0,
+    'evolve_sigma':          True,
+    'gauge_fixed_priors':    False,
+    'sigma_ce_scale':        0.1,
+    'prior_bank_tau':        1.0,
+
+    # === Training ===
+    'batch_size':            64,
+    'max_steps':             15000,
+    'num_workers':           10,
+    'warmup_steps':          100,
+
+    # === Optimizer (pure CE, no VFE terms) ===
+    'optimizer_type':        'adamw',
+    'M_mu_p_lr':             0.05,
+    'M_sigma_p_lr':          0.005,
+    'M_phi_lr':              0.0075,
+    'M_vfe_hyperparam_lr':   0.005,
+    'M_attention_lr':        0.005,
+    'M_output_lr':           0.05,
+
+    # === Loss weights (pure CE by default) ===
+    'M_alpha':               0.0,
+    'M_beta':                0.0,
+    'mass_phi':              0.01,
+    'lambda_gamma':          0.0,
+    'lambda_hyper':          0.0,
+    'kappa_gamma':           1.0,
+
+    # === Regularization ===
+    'embed_weight_decay':    0.05,
+    'non_embed_weight_decay': 0.01,
+    'grad_clip':             1.0,
+
+    # === Logging ===
+    'log_interval':          100,
+    'eval_interval':         1000,
+    'checkpoint_interval':   25000,
+}
 
 # =============================================================================
 # IMPORT TRAINING INFRASTRUCTURE
@@ -773,6 +856,8 @@ def main():
                             'standard_rope',
                             # (M2c\') standard + RoPE at d=90
                             'standard_rope_d90',
+                            # Hybrid: gauge KL-attention + PriorBank + standard GELU FFN
+                            'hybrid',
                         ],
                         help='Training mode: standard, em, amortized, hebbian, pure_vfe')
 
@@ -857,6 +942,13 @@ def main():
         print("="*70)
         config = STANDARD_ATTN_ONLY_CONFIG.copy()
         ffn_mode = 'standard'
+
+    elif mode == 'hybrid':
+        print("\n" + "="*70)
+        print("MODE: HYBRID (Gauge KL-Attention + PriorBank + Standard GELU FFN)")
+        print("="*70)
+        config = HYBRID_CONFIG.copy()
+        ffn_mode = 'hybrid'
 
     elif mode == 'pure_vfe':
         print("\n" + "="*70)

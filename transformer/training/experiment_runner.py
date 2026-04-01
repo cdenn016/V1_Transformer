@@ -35,6 +35,7 @@ from typing import Dict, List, Tuple, Any
 
 from transformer.core.model import GaugeTransformerLM
 from transformer.baselines.standard_transformer import StandardTransformerLM
+from transformer.baselines.hybrid_gauge_transformer import HybridGaugeTransformerLM
 from transformer.pure_vfe.model import PureVFETransformer
 from transformer.pure_vfe.config import PureVFEConfig
 from transformer.pure_vfe.gauge import monitor_omega_health
@@ -1864,9 +1865,23 @@ def run_single_experiment(
         model = StandardTransformerLM(model_config)
 
     # =====================================================================
-    # MODE 2: PURE FEP TRANSFORMER (most principled)
+    # MODE 2: HYBRID GAUGE-ATTENTION TRANSFORMER
     # =====================================================================
-    # MODE 2: VFE_DYNAMIC TRANSFORMER (EM-step, uses backprop)
+    elif ffn_mode == 'hybrid':
+        print("  Model type: HYBRID GAUGE-ATTENTION TRANSFORMER")
+        print("  - Attention: KL-divergence (gauge-theoretic)")
+        print("  - FFN: Standard GELU MLP")
+        print("  - Embeddings: PriorBank (KL encode/decode)")
+        print("  - Learning: Backprop (pure CE)")
+
+        if 'kappa_beta' not in config:
+            config['kappa_beta'] = 1.0
+        print(f"  kappa_beta: {config['kappa_beta']}")
+
+        model = HybridGaugeTransformerLM(config)
+
+    # =====================================================================
+    # MODE 3: VFE_DYNAMIC TRANSFORMER (EM-step, uses backprop)
     # =====================================================================
     else:
         print("  Model type: GAUGE VFE TRANSFORMER (KL-divergence attention)")
