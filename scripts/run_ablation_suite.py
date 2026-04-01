@@ -161,6 +161,7 @@ BASELINE_CONFIG = {
     'mu_normalize':    False,
     'mu_max_norm':     None,
 
+    'sigma_ce_scale':    0.1,
     'sigma_aggregation': 'mixture',
     # === M-step learning rates (AdamW parameter groups) ===
     # These update nn.Parameter objects via backprop. The E-step (inner VFE
@@ -461,7 +462,15 @@ SWEEPS = {
         'baseline_value': 0.05,
     },
 
-    # --- Tier 9: Regularization ---
+    # --- Tier 9: M-step gradient scaling ---
+    'sigma_ce_scale': {
+        'description': 'CE→σ_p gradient scale in PriorBank decode (0=detach, 1=full)',
+        'param': 'sigma_ce_scale',
+        'values': [0.0, 0.01, 0.05, 0.1, 0.2],
+        'baseline_value': 0.1,
+    },
+
+    # --- Tier 10: Regularization ---
     'embed_weight_decay': {
         'description': 'Weight decay on embedding parameters (hyper-prior precision)',
         'param': 'embed_weight_decay',
@@ -527,8 +536,10 @@ SWEEP_ORDER = [
     
    
 
+    #'sigma_ce_scale',
+
     #'n_layers',
-    #'n_vfe_iterations', 
+    #'n_vfe_iterations',
 
    
     
