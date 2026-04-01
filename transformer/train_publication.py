@@ -94,7 +94,7 @@ from math_utils.numerical_monitor import flush as _flush_numerical_events
 #   'em' + amortized_inference=True  - Gauge VFE + straight-through gradient (no E/M separation)
 #   'hebbian'    - Gauge VFE + P-flow/delta-rule (no backprop)
 #   'pure_vfe'   - Pure natural gradient E/M (no autograd)
-#
+#   'hybrid'
 
 # =================================================================
 # GAUGE GROUP SELECTION (Generators from so(N), Transport in GL(K))
@@ -117,7 +117,7 @@ from math_utils.numerical_monitor import flush as _flush_numerical_events
 #        - 'wedge2': dim = N*(N-1)/2      (antisymmetric 2-tensor ∧²V)
 #        - 'sym2':   dim = N*(N+1)/2 - 1  (symmetric traceless Sym²₀V)
 
-DEFAULT_MODE = 'em'               # Which mode to run
+DEFAULT_MODE = 'hybrid'               # Which mode to run
 SEED = 6
 # Dataset
 DEFAULT_DATASET = 'wikitext-103'  
@@ -147,22 +147,26 @@ _DEBUG_VFE_GRADS = False
 EM_CONFIG = {
     # === Architecture ===
     'vocab_size':            50257,
-    'embed_dim':             20,
+    'embed_dim':             80,
     'max_seq_len':           128,
     
-    'batch_size':            64, 
-    'max_steps':             15000,
+    'batch_size':            16, 
+    'max_steps':             60000,
     
     'n_layers':              1,
     'ffn_n_iterations':      1,
     
-    'gauge_dim':                          10,
-    'irrep_spec':            [('fund', 2, 10)],
+    'gauge_dim':                          8,
+    'irrep_spec':            [('fund', 10, 8)],
 
-    'use_prior_bank':           False,
-    'learnable_pb_temperature': False,
-    'mask_self_attention':      False,  # Prevent attention collapse?
+    'use_prior_bank':           True,
+    'learnable_pb_temperature': True,
+    'mask_self_attention':      True,  # Prevent attention collapse?
   
+    
+    'kappa_warmup_steps':       30000,  # freeze kappa for first n steps
+    'learnable_head_kappa':     False, # If True, learn per-head κ_h via log_kappa_per_head
+    
     # === M-step: implicit differentiation ===
     'implicit_em':           False,
     'amortized_inference':   True,
@@ -184,14 +188,18 @@ EM_CONFIG = {
     'evolve_phi_e_step':     True,
 
     # === E-step dynamics ===
-    'E_learnable_lr':        True,   # Learnable E-step LR
+    
+    
     'E_alpha':               1,      # E-step prior coupling weight
-    'E_lambda_belief':       5.0,    # E-step belief alignment weight
-    'E_lambda_softmax':      2,
+    'E_lambda_belief':       2,    # E-step belief alignment weight
+    'E_lambda_softmax':      4,
     'E_learnable_alpha':     True,   # Adaptive α_i = c0/(b0 + KL) per dimension
 
+    
+    'E_learnable_lr':        True,   # Learnable E-step LR
     'E_mu_q_lr':             0.1,    # E-step μ step size (whitened, within trust=2.0)
     'E_sigma_q_lr':          0.05,   # E-step σ step size (conservative)
+    
     'E_phi_lr':              0.05,   # E-step φ step size
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
@@ -240,8 +248,6 @@ EM_CONFIG = {
     'mu_init_std':     1.0,
     'phi_scale':       1.0,
     'kappa_beta':      1.0,
-    'learnable_head_kappa': False,  # Per-head learnable κ_h (init from kappa_beta * √d_h)
-    'kappa_warmup_steps':   0,     # Freeze kappa for N steps (0=no freeze, rec: 2000-5000)
     'mu_normalize':    False,
     'mu_max_norm':     None,
 
@@ -307,6 +313,7 @@ EM_CONFIG = {
     'sigma_residual':  False,   # Additive σ residual across layers
 
     # === Regularization ===
+    'sigma_ce_scale':  0.1,
     'sigma_max':     10.0,
     'grad_clip':     1.0,
     'hidden_dim':    508,
@@ -722,7 +729,6 @@ STANDARD_ATTN_ONLY_CONFIG = {
     'irrep_spec': [('ℓ0', 5, 1)],
 }
 
-
 # =============================================================================
 # HYBRID GAUGE-ATTENTION CONFIG
 # =============================================================================
@@ -738,16 +744,16 @@ STANDARD_ATTN_ONLY_CONFIG = {
 HYBRID_CONFIG = {
     # === Architecture ===
     'vocab_size':            50257,
-    'embed_dim':             20,
-    'max_seq_len':           128,
+    'embed_dim':             40,
+    'max_seq_len':           64,
     'n_layers':              1,
-    'hidden_dim':            80,   # 4x embed_dim (standard convention)
+    'hidden_dim':            160,   # 4x embed_dim (standard convention)
     'dropout':               0.1,
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
     'gauge_group':           'GLK',
     'gauge_dim':             10,
-    'irrep_spec':            [('fund', 2, 10)],
+    'irrep_spec':            [('fund', 4, 10)],
     'gauge_mode':            'learned',
     'diagonal_covariance':   True,
     'exact_diagonal_transport': False,
@@ -775,7 +781,7 @@ HYBRID_CONFIG = {
 
     # === Training ===
     'batch_size':            64,
-    'max_steps':             15000,
+    'max_steps':             30000,
     'num_workers':           10,
     'warmup_steps':          100,
 
@@ -805,6 +811,8 @@ HYBRID_CONFIG = {
     'log_interval':          100,
     'eval_interval':         1000,
     'checkpoint_interval':   25000,
+    'debug_vfe_grads':             False,
+    'verbose_diagnostics':         False,
 }
 
 # =============================================================================
@@ -983,7 +991,7 @@ def main():
 
     else:
         print(f"\nError: Unknown mode \'{mode}\'")
-        print("Valid modes: standard, em, hebbian, pure_vfe, "
+        print("Valid modes: standard, em, hebbian, hybrid, pure_vfe, "
               "standard_attn_only, standard_param_equalized, standard_rope, standard_rope_d90")
         return
 
