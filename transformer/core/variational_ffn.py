@@ -3626,10 +3626,15 @@ class VariationalFFNDynamic(nn.Module):
 
                     del Omega_h_cf, sigma_j_t_diag, inv_sigma_j_t, mu_j_t_cf, info_per_pair
 
-                    # Fixed point
+                    # Fixed point: mu* = A^{-1} b, sigma* = c * A^{-1}
+                    # where c = alpha + lambda (entropy scaling from ∂F/∂Σ = 0).
+                    # Each KL contributes a -ln|Σ| entropy term; the total coefficient
+                    # is alpha + lambda * sum_j beta_ij = alpha + lambda (since sum beta = 1).
+                    # Without this factor, sigma is underestimated by (alpha + lambda).
                     total_prec_h = prior_prec_h + align_prec_h             # (B, N, d_h)
                     mu_star[:, :, block_start:block_end] = (prior_info_h + align_info_h) / total_prec_h.clamp(min=eps)
-                    sigma_star[:, :, block_start:block_end] = (1.0 / total_prec_h.clamp(min=eps)).clamp(max=self.sigma_max)
+                    entropy_scale = alpha_h + self.lambda_belief  # scalar or (B, N, d_h)
+                    sigma_star[:, :, block_start:block_end] = (entropy_scale / total_prec_h.clamp(min=eps)).clamp(max=self.sigma_max)
 
                     block_start = block_end
 
@@ -3749,12 +3754,22 @@ class VariationalFFNDynamic(nn.Module):
                     # Regularize A_h for numerical stability
                     A_h = A_h + eps * torch.eye(d_h, device=device, dtype=dtype)
 
-                    # Cholesky solve: A_h @ mu* = b_h
+                    # Cholesky solve: A_h @ mu* = b_h, Sigma* = c * A^{-1}
+                    # Entropy scaling: c = alpha + lambda (from ∂F/∂Σ = 0)
                     L_A = torch.linalg.cholesky(A_h)                     # (B, N, d_h, d_h)
                     mu_star_h = torch.cholesky_solve(
                         b_h.unsqueeze(-1), L_A
                     ).squeeze(-1)                                         # (B, N, d_h)
-                    Sigma_star_h = torch.cholesky_inverse(L_A)           # (B, N, d_h, d_h)
+                    A_inv_h = torch.cholesky_inverse(L_A)                # (B, N, d_h, d_h)
+
+                    # Exact posterior covariance: Sigma* = (alpha + lambda) * A^{-1}
+                    if isinstance(alpha_h, torch.Tensor) and alpha_h.dim() == 3:
+                        # Per-dimension alpha: c_k = alpha_k + lambda, scale each row/col
+                        entropy_scale = (alpha_h + self.lambda_belief).unsqueeze(-1)  # (B, N, d_h, 1)
+                        Sigma_star_h = entropy_scale * A_inv_h  # broadcast (B,N,d,1)*(B,N,d,d)
+                    else:
+                        entropy_scale = alpha_h + self.lambda_belief  # scalar
+                        Sigma_star_h = entropy_scale * A_inv_h       # (B, N, d_h, d_h)
 
                     # Clamp Sigma eigenvalues to [eps, sigma_max]
                     Sigma_star_h = Sigma_star_h.clamp(max=self.sigma_max)
@@ -3866,7 +3881,53 @@ class VariationalFFNDynamic(nn.Module):
                         grad_softmax_full[:, :, block_start:block_end] = grad_softmax_h
                         block_start = block_end
 
-                    # Picard update: mu^(n+1) = mu_0 - Sigma_0 @ ∇F_softmax(mu^(n))
+                    # -------------------------------------------------------
+                    # Alpha correction for learnable Bayesian precision
+                    # -------------------------------------------------------
+                    # Two nonlinear residuals from learnable alpha:
+                    # 1. Alpha-mismatch: closed-form used alpha_0 = alpha(mu_initial),
+                    #    but at mu^(n), alpha(mu^(n)) differs → linear gradient ≠ 0.
+                    # 2. Product-rule: d[alpha*KL]/dmu has a -(alpha^2/c0)*KL*(mu-mu_p)/sigma_p
+                    #    term that's nonlinear (KL depends on mu).
+                    if self.learnable_alpha and _alpha_c0 is not None:
+                        # Recompute alpha at current mu^(n)
+                        alpha_n = self.get_bayesian_alpha(
+                            mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
+                        )  # (B, N, K)
+
+                        if is_diagonal:
+                            sigma_p_safe = sigma_p.clamp(min=eps)  # (B, N, K)
+                            delta_mu_p = mu_current - mu_p_current  # (B, N, K)
+
+                            # 1. Alpha-mismatch residual:
+                            #    [alpha(mu^n) - alpha_0] * (mu^n - mu_p) / sigma_p
+                            alpha_mismatch = (alpha_n - alpha_effective) * delta_mu_p / sigma_p_safe
+
+                            # 2. Product-rule correction:
+                            #    -(alpha^2 / c0) * kl_k * (mu - mu_p) / sigma_p
+                            sigma_q_safe = sigma_current.clamp(min=eps) if is_diagonal else None
+                            kl_k = 0.5 * (sigma_q_safe / sigma_p_safe + delta_mu_p ** 2 / sigma_p_safe
+                                          - 1.0 + torch.log(sigma_p_safe) - torch.log(sigma_q_safe))
+                            kl_k = kl_k.clamp(min=0.0)
+                            product_rule = -(alpha_n ** 2 / _alpha_c0) * kl_k * delta_mu_p / sigma_p_safe
+
+                            grad_softmax_full = grad_softmax_full + alpha_mismatch + product_rule
+                        else:
+                            # Full covariance: use diagonal of Sigma_p for the correction
+                            # (the product-rule correction is defined per-dimension)
+                            sigma_p_diag = torch.diagonal(sigma_p, dim1=-2, dim2=-1).clamp(min=eps)  # (B, N, K)
+                            sigma_q_diag = torch.diagonal(sigma_current, dim1=-2, dim2=-1).clamp(min=eps)  # (B, N, K)
+                            delta_mu_p = mu_current - mu_p_current
+
+                            alpha_mismatch = (alpha_n - alpha_effective) * delta_mu_p / sigma_p_diag
+                            kl_k = 0.5 * (sigma_q_diag / sigma_p_diag + delta_mu_p ** 2 / sigma_p_diag
+                                          - 1.0 + torch.log(sigma_p_diag) - torch.log(sigma_q_diag))
+                            kl_k = kl_k.clamp(min=0.0)
+                            product_rule = -(alpha_n ** 2 / _alpha_c0) * kl_k * delta_mu_p / sigma_p_diag
+
+                            grad_softmax_full = grad_softmax_full + alpha_mismatch + product_rule
+
+                    # Picard update: mu^(n+1) = mu_0 - Sigma_0 @ ∇F_nonlinear(mu^(n))
                     if is_diagonal:
                         correction = sigma_0 * grad_softmax_full
                         # Whitened trust region (diagonal)
