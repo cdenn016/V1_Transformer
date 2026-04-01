@@ -25,6 +25,9 @@ venv/
 ENV/
 .venv/
 
+# Lockfiles (auto-generated)
+uv.lock
+
 # IDE
 .idea/
 .vscode/
