@@ -586,8 +586,10 @@ def compute_free_energy_loss(
     }
 
     # Bayesian alpha diagnostics
+    _blocks = getattr(model, 'transformer', None)
+    _blocks = _blocks.blocks if _blocks is not None else getattr(model, 'blocks', [])
     with torch.no_grad():
-        for block in model.transformer.blocks:
+        for block in _blocks:
             vffn = block.ffn if hasattr(block.ffn, 'learnable_alpha') else getattr(block.ffn, 'variational_ffn', None)
             if vffn is not None and vffn.learnable_alpha and mu_q is not None and mu_p is not None:
                 import torch.nn.functional as _F
@@ -632,7 +634,7 @@ def compute_free_energy_loss(
                 break  # Only first layer for now
 
     # Per-head learnable kappa diagnostics (first layer only)
-    for block in model.transformer.blocks:
+    for block in _blocks:
         vffn = block.ffn if hasattr(block.ffn, 'learnable_head_kappa') else None
         if vffn is not None and vffn.learnable_head_kappa and vffn.log_kappa_per_head is not None:
             with torch.no_grad():
