@@ -3881,7 +3881,53 @@ class VariationalFFNDynamic(nn.Module):
                         grad_softmax_full[:, :, block_start:block_end] = grad_softmax_h
                         block_start = block_end
 
-                    # Picard update: mu^(n+1) = mu_0 - Sigma_0 @ ∇F_softmax(mu^(n))
+                    # -------------------------------------------------------
+                    # Alpha correction for learnable Bayesian precision
+                    # -------------------------------------------------------
+                    # Two nonlinear residuals from learnable alpha:
+                    # 1. Alpha-mismatch: closed-form used alpha_0 = alpha(mu_initial),
+                    #    but at mu^(n), alpha(mu^(n)) differs → linear gradient ≠ 0.
+                    # 2. Product-rule: d[alpha*KL]/dmu has a -(alpha^2/c0)*KL*(mu-mu_p)/sigma_p
+                    #    term that's nonlinear (KL depends on mu).
+                    if self.learnable_alpha and _alpha_c0 is not None:
+                        # Recompute alpha at current mu^(n)
+                        alpha_n = self.get_bayesian_alpha(
+                            mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
+                        )  # (B, N, K)
+
+                        if is_diagonal:
+                            sigma_p_safe = sigma_p.clamp(min=eps)  # (B, N, K)
+                            delta_mu_p = mu_current - mu_p_current  # (B, N, K)
+
+                            # 1. Alpha-mismatch residual:
+                            #    [alpha(mu^n) - alpha_0] * (mu^n - mu_p) / sigma_p
+                            alpha_mismatch = (alpha_n - alpha_effective) * delta_mu_p / sigma_p_safe
+
+                            # 2. Product-rule correction:
+                            #    -(alpha^2 / c0) * kl_k * (mu - mu_p) / sigma_p
+                            sigma_q_safe = sigma_current.clamp(min=eps) if is_diagonal else None
+                            kl_k = 0.5 * (sigma_q_safe / sigma_p_safe + delta_mu_p ** 2 / sigma_p_safe
+                                          - 1.0 + torch.log(sigma_p_safe) - torch.log(sigma_q_safe))
+                            kl_k = kl_k.clamp(min=0.0)
+                            product_rule = -(alpha_n ** 2 / _alpha_c0) * kl_k * delta_mu_p / sigma_p_safe
+
+                            grad_softmax_full = grad_softmax_full + alpha_mismatch + product_rule
+                        else:
+                            # Full covariance: use diagonal of Sigma_p for the correction
+                            # (the product-rule correction is defined per-dimension)
+                            sigma_p_diag = torch.diagonal(sigma_p, dim1=-2, dim2=-1).clamp(min=eps)  # (B, N, K)
+                            sigma_q_diag = torch.diagonal(sigma_current, dim1=-2, dim2=-1).clamp(min=eps)  # (B, N, K)
+                            delta_mu_p = mu_current - mu_p_current
+
+                            alpha_mismatch = (alpha_n - alpha_effective) * delta_mu_p / sigma_p_diag
+                            kl_k = 0.5 * (sigma_q_diag / sigma_p_diag + delta_mu_p ** 2 / sigma_p_diag
+                                          - 1.0 + torch.log(sigma_p_diag) - torch.log(sigma_q_diag))
+                            kl_k = kl_k.clamp(min=0.0)
+                            product_rule = -(alpha_n ** 2 / _alpha_c0) * kl_k * delta_mu_p / sigma_p_diag
+
+                            grad_softmax_full = grad_softmax_full + alpha_mismatch + product_rule
+
+                    # Picard update: mu^(n+1) = mu_0 - Sigma_0 @ ∇F_nonlinear(mu^(n))
                     if is_diagonal:
                         correction = sigma_0 * grad_softmax_full
                         # Whitened trust region (diagonal)
