@@ -636,7 +636,12 @@ def compute_free_energy_loss(
         vffn = block.ffn if hasattr(block.ffn, 'learnable_head_kappa') else None
         if vffn is not None and vffn.learnable_head_kappa and vffn.log_kappa_per_head is not None:
             with torch.no_grad():
+                # Use clamped values (matching what the forward pass actually sees)
                 kappa_vals = torch.exp(vffn.log_kappa_per_head)  # (n_heads,)
+                if vffn._kappa_init is not None:
+                    kappa_vals = kappa_vals.clamp(
+                        min=0.5 * vffn._kappa_init, max=1.5 * vffn._kappa_init
+                    )
                 metrics['kappa/per_head_mean'] = kappa_vals.mean().item()
                 metrics['kappa/per_head_std'] = kappa_vals.std().item()
                 metrics['kappa/per_head_min'] = kappa_vals.min().item()
