@@ -610,7 +610,10 @@ def compute_attention_weights(
     elif diagonal_covariance:
         # DIAGONAL MODE: O(N²×K) memory instead of O(N²×K²)!
         # sigma_q is (B, N, K) not (B, N, K, K)
-        if chunk_size is not None:
+        if chunk_size is not None and cached_transport is None:
+            # Chunked path only supports phi-based transport (learned mode).
+            # When cached_transport is set (constant/trivial gauge mode),
+            # fall through to non-chunked diagonal path which handles it.
             kl_matrix = _compute_kl_matrix_diagonal_chunked(
                 mu_q, sigma_q, phi, generators, chunk_size,
                 enforce_orthogonal=enforce_orthogonal
@@ -798,7 +801,9 @@ def compute_kl_matrix(
             mu_q, sigma_q, phi, generators, chunk_size
         )
     elif diagonal_covariance:
-        if chunk_size is not None:
+        if chunk_size is not None and gauge_mode == 'learned':
+            # Chunked diagonal path only supports phi-based transport.
+            # For constant/trivial modes, fall through to non-chunked path.
             kl_matrix = _compute_kl_matrix_diagonal_chunked(
                 mu_q, sigma_q, phi, generators, chunk_size,
                 enforce_orthogonal=enforce_orthogonal

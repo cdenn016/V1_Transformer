@@ -52,7 +52,7 @@ class BlockConfig:
     # === Belief evolution ===
     evolve_sigma: bool = True           # Update covariances Σ via natural gradient
     evolve_phi: bool = True             # Update gauge frames φ (M-step, after E-step loop)
-    evolve_phi_e_step: bool = True     # Update φ during EACH E-step iteration
+    evolve_phi_e_step: bool = False    # Update φ during EACH E-step iteration
     phi_lr: float = 0.05               # Learning rate for ∂F/∂φ descent
     phi_max_norm: Optional[float] = None  # Max phi norm; None = auto (π for SO(N), 5.0 for GL(K))
     phi_dim: int = 3                    # 3 for SO(3), N(N-1)/2 for SO(N), K² for GL(K)
@@ -97,6 +97,16 @@ class BlockConfig:
     isotropic_covariance: bool = False  # Force Σ = σ²I (manuscript Limit 1)
     # NOTE: learnable_reflection is an embedding-level feature, handled by
     # model.py → GaugeTokenEmbedding, not by blocks. Not stored here.
+
+    def __post_init__(self):
+        """Enforce mode invariants that must hold regardless of how BlockConfig is constructed."""
+        # Constant/trivial gauge: phi is not used for transport
+        if self.gauge_mode in ('constant', 'trivial'):
+            self.evolve_phi = False
+            self.evolve_phi_e_step = False
+        # Isotropic covariance requires diagonal representation
+        if self.isotropic_covariance and not self.diagonal_covariance:
+            self.diagonal_covariance = True
 
     # === Non-flat gauge transport (flat bundle experiments) ===
     # When non_flat_transport=True, the transport becomes:
@@ -178,7 +188,7 @@ class BlockConfig:
             # Belief evolution
             evolve_sigma=config.get('evolve_sigma', True),
             evolve_phi=config.get('evolve_phi', True),
-            evolve_phi_e_step=config.get('evolve_phi_e_step', True),
+            evolve_phi_e_step=config.get('evolve_phi_e_step', False),
             phi_lr=config.get('E_phi_lr', config.get('e_step_phi_lr', config.get('phi_lr', 0.05))),
             phi_max_norm=config.get('phi_max_norm', None),
             phi_dim=config.get('phi_dim', 3),

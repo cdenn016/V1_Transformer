@@ -1031,8 +1031,12 @@ class GaugeTransformerLM(nn.Module):
                 else:
                     sigma_q = sigma_ffn
 
+            # Extract VFE correction delta: the FFN returns the full evolved state
+            # (mu_normalized + delta), not just the correction. Must subtract
+            # mu_normalized so the residual stream accumulates corrections,
+            # matching blocks.py:GaugeTransformerBlock.forward().
             if block.use_residual:
-                mu_q = mu_q + mu_ffn
+                mu_q = mu_q + (mu_ffn - mu_normalized)
             else:
                 mu_q = mu_ffn
 

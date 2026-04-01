@@ -305,7 +305,10 @@ def fused_block_diagonal_kl_diag(
             kl = 0.5 * (sig_i / sig_t + delta * delta / sig_t - 1.0
                         + torch.log(sig_t) - torch.log(sig_i))
             kl = kl.clamp(min=0.0, max=kl_max)
-            kl = kl.nan_to_num(nan=0.0, posinf=kl_max, neginf=0.0)
+            # NaN → kl_max (repulsive): a NaN pair should be IGNORED (β→0),
+            # not ATTENDED (β→1). Using nan=0.0 would make NaN pairs maximally
+            # attractive under softmax, which is the wrong default.
+            kl = kl.nan_to_num(nan=kl_max, posinf=kl_max, neginf=0.0)
 
             kl_total = kl_total + kl.sum(dim=0)  # sum over blocks → (B,N,N)
 
@@ -342,7 +345,7 @@ def fused_block_diagonal_kl_diag(
                 kl_tile = 0.5 * (trace + mahal - d + logdet)
                 kl_tile = kl_tile.clamp(min=0.0, max=kl_max)
                 kl_tile = kl_tile.nan_to_num(
-                    nan=0.0, posinf=kl_max, neginf=0.0)
+                    nan=kl_max, posinf=kl_max, neginf=0.0)
 
                 # Sum over blocks and accumulate into output rows
                 kl_total[:, i_start:i_end, :] = (
