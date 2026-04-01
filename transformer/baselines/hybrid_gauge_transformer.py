@@ -268,8 +268,10 @@ class HybridGaugeTransformerLM(nn.Module):
         exact_diagonal_transport = config.get('exact_diagonal_transport', False)
 
         # PriorBank config
+        use_prior_bank = config.get('use_prior_bank', True)
         gauge_fixed_priors = config.get('gauge_fixed_priors', False)
         prior_bank_tau = config.get('prior_bank_tau', 1.0)
+        self.use_prior_bank = use_prior_bank
         self.prior_bank_tau = prior_bank_tau
 
         self.diagonal_covariance = diagonal_covariance
@@ -334,24 +336,39 @@ class HybridGaugeTransformerLM(nn.Module):
         )
 
         # =================================================================
-        # PriorBank (encode + decode)
+        # Embedding: PriorBank (Gaussian beliefs) or nn.Embedding (plain)
         # =================================================================
-        self.prior_bank = PriorBank(
-            vocab_size=vocab_size,
-            embed_dim=embed_dim,
-            init_std=config.get('mu_init_std', None),
-            init_sigma_scale=1.0,
-            learnable_sigma=config.get('evolve_sigma', True),
-            gauge_fixed_priors=gauge_fixed_priors,
-            generators=self.generators if gauge_fixed_priors else None,
-            phi_dim=phi_dim,
-            phi_scale=config.get('phi_scale', 0.3),
-            sigma_ce_scale=config.get('sigma_ce_scale', 0.1),
-            learnable_temperature=config.get('learnable_pb_temperature',
-                                              config.get('learnable_temperature', False)),
-            diagonal_covariance=diagonal_covariance,
-            sigma_max=config.get('sigma_max', 5.0),
-        )
+        if use_prior_bank:
+            self.prior_bank = PriorBank(
+                vocab_size=vocab_size,
+                embed_dim=embed_dim,
+                init_std=config.get('mu_init_std', None),
+                init_sigma_scale=1.0,
+                learnable_sigma=config.get('evolve_sigma', True),
+                gauge_fixed_priors=gauge_fixed_priors,
+                generators=self.generators if gauge_fixed_priors else None,
+                phi_dim=phi_dim,
+                phi_scale=config.get('phi_scale', 0.3),
+                sigma_ce_scale=config.get('sigma_ce_scale', 0.1),
+                learnable_temperature=config.get('learnable_pb_temperature',
+                                                  config.get('learnable_temperature', False)),
+                diagonal_covariance=diagonal_covariance,
+                sigma_max=config.get('sigma_max', 5.0),
+            )
+        else:
+            # Standard nn.Embedding + learned sigma/phi for gauge attention
+            self.prior_bank = None
+            self.token_embed = nn.Embedding(vocab_size, embed_dim)
+            nn.init.normal_(self.token_embed.weight, mean=0.0, std=0.02)
+
+            # Learnable diagonal covariances (gauge attention needs sigma)
+            self.log_sigma_embed = nn.Embedding(vocab_size, embed_dim)
+            nn.init.zeros_(self.log_sigma_embed.weight)  # sigma_init = 1.0
+
+            # Learnable gauge frames (gauge attention needs phi for transport)
+            self.phi_embed = nn.Embedding(vocab_size, phi_dim)
+            phi_init_std = config.get('phi_scale', 0.3) / (phi_dim ** 0.5)
+            nn.init.normal_(self.phi_embed.weight, std=phi_init_std)
 
         # =================================================================
         # Positional Encoding (in gauge frame space)
@@ -393,8 +410,12 @@ class HybridGaugeTransformerLM(nn.Module):
         # Final layer norm
         self.ln_final = nn.LayerNorm(embed_dim)
 
-        # Fallback output projection (used only if PriorBank is disabled)
-        self.out_proj = nn.Linear(embed_dim, vocab_size, bias=False)
+        # Linear output projection (used when PriorBank is disabled)
+        if not use_prior_bank:
+            self.out_proj = nn.Linear(embed_dim, vocab_size, bias=False)
+            # Tie weights
+            if config.get('tie_embeddings', True):
+                self.out_proj.weight = self.token_embed.weight
 
         # Initialize weights
         self.apply(self._init_weights)
@@ -402,9 +423,10 @@ class HybridGaugeTransformerLM(nn.Module):
         # Count parameters
         n_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
         print(f"HybridGaugeTransformerLM initialized: {n_params/1e6:.2f}M parameters")
+        embed_str = "PriorBank (KL encode/decode)" if use_prior_bank else "nn.Embedding + nn.Linear"
         print(f"  Attention: KL-divergence (gauge-theoretic)")
         print(f"  FFN: Standard GELU ({embed_dim} -> {hidden_dim} -> {embed_dim})")
-        print(f"  Embeddings: PriorBank (KL encode/decode)")
+        print(f"  Embeddings: {embed_str}")
         print(f"  Gauge group: {gauge_group}, mode={gauge_mode}")
 
     def _init_weights(self, module):
@@ -438,8 +460,13 @@ class HybridGaugeTransformerLM(nn.Module):
         batch_size, num_agents = token_ids.shape
         device = token_ids.device
 
-        # 1. PriorBank encode: token -> (mu, sigma, phi)
-        mu_q, sigma_q, phi = self.prior_bank.encode(token_ids)
+        # 1. Encode: token -> (mu, sigma, phi)
+        if self.use_prior_bank:
+            mu_q, sigma_q, phi = self.prior_bank.encode(token_ids)
+        else:
+            mu_q = self.token_embed(token_ids)                      # (B, N, K)
+            sigma_q = torch.exp(self.log_sigma_embed(token_ids))    # (B, N, K)
+            phi = self.phi_embed(token_ids)                         # (B, N, phi_dim)
 
         # Save priors (before position encoding)
         mu_prior = mu_q.clone()
@@ -475,8 +502,11 @@ class HybridGaugeTransformerLM(nn.Module):
         # 6. Final layer norm on mu
         mu_q = self.ln_final(mu_q)
 
-        # 7. PriorBank decode: beliefs -> logits via KL
-        logits = self.prior_bank.decode(mu_q, sigma_q, tau=self.prior_bank_tau)
+        # 7. Decode: beliefs -> logits
+        if self.use_prior_bank:
+            logits = self.prior_bank.decode(mu_q, sigma_q, tau=self.prior_bank_tau)
+        else:
+            logits = self.out_proj(mu_q)  # (B, N, V)
 
         if return_agents:
             agent_states = {
@@ -507,8 +537,13 @@ class HybridGaugeTransformerLM(nn.Module):
         batch_size, num_agents = token_ids.shape
         device = token_ids.device
 
-        # 1. PriorBank encode
-        mu_q, sigma_q, phi = self.prior_bank.encode(token_ids)
+        # 1. Encode
+        if self.use_prior_bank:
+            mu_q, sigma_q, phi = self.prior_bank.encode(token_ids)
+        else:
+            mu_q = self.token_embed(token_ids)
+            sigma_q = torch.exp(self.log_sigma_embed(token_ids))
+            phi = self.phi_embed(token_ids)
 
         # Save priors
         mu_prior = mu_q.clone()
@@ -552,8 +587,11 @@ class HybridGaugeTransformerLM(nn.Module):
         # 6. Final layer norm
         mu_q = self.ln_final(mu_q)
 
-        # 7. PriorBank decode
-        logits = self.prior_bank.decode(mu_q, sigma_q, tau=self.prior_bank_tau)
+        # 7. Decode
+        if self.use_prior_bank:
+            logits = self.prior_bank.decode(mu_q, sigma_q, tau=self.prior_bank_tau)
+        else:
+            logits = self.out_proj(mu_q)
 
         # Pack attention info (compatible with compute_free_energy_loss).
         # Stack betas/kls across layers: (n_layers, B, n_heads, N, N).

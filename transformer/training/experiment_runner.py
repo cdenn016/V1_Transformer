@@ -1877,10 +1877,11 @@ def run_single_experiment(
     # Isolates the gauge attention contribution from VFE dynamics.
     elif ffn_mode == 'hybrid':
         from transformer.baselines.hybrid_gauge_transformer import HybridGaugeTransformerLM
+        _pb = config.get('use_prior_bank', True)
         print("  Model type: HYBRID GAUGE-ATTENTION TRANSFORMER")
         print("  - Attention: KL-divergence based (gauge-theoretic)")
         print("  - FFN: Standard GELU MLP")
-        print("  - Encode/Decode: PriorBank (Gaussian beliefs)")
+        print(f"  - Embeddings: {'PriorBank (KL encode/decode)' if _pb else 'nn.Embedding + nn.Linear'}")
         print("  - Learning: Backprop")
 
         if 'kappa_beta' not in config:
