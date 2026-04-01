@@ -195,6 +195,8 @@ class GaugeTransformerBlock(nn.Module):
             implicit_em=cfg.implicit_em,
             closed_form_e_step=getattr(cfg, 'closed_form_e_step', False),
             learnable_head_kappa=cfg.learnable_head_kappa,
+            n_picard_steps=cfg.n_picard_steps,
+            picard_trust_region=cfg.picard_trust_region,
         )
 
         self.norm2 = nn.LayerNorm(cfg.embed_dim) if cfg.use_layernorm else nn.Identity()
