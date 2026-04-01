@@ -1052,6 +1052,24 @@ class PublicationTrainer(FastTrainer):
             self.optimizer.zero_grad()
 
         # =================================================================
+        # KAPPA PROJECTION: Clamp log_kappa_per_head to [0.5, 1.5] × init
+        # =================================================================
+        # The clamp in _get_kappa_h/forward only affects the forward value,
+        # not the parameter itself. Without this projection, the optimizer
+        # pushes log_kappa unboundedly even though the forward value is
+        # clamped — the parameter accumulates momentum in a dead zone.
+        # Project the parameter directly so gradient signal stays meaningful.
+        for block in self.model.transformer.blocks:
+            for module in [block.attention, block.ffn]:
+                p = getattr(module, 'log_kappa_per_head', None)
+                k0 = getattr(module, '_kappa_init', None)
+                if p is not None and k0 is not None:
+                    with torch.no_grad():
+                        lo = torch.log(0.5 * k0)
+                        hi = torch.log(1.5 * k0)
+                        p.data.clamp_(min=lo, max=hi)
+
+        # =================================================================
         # SL(K) PROJECTION: Remove trace component from phi_embed
         # =================================================================
         # Projects φ to the traceless subalgebra sl(K), ensuring
