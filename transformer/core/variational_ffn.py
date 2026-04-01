@@ -3810,6 +3810,8 @@ class VariationalFFNDynamic(nn.Module):
 
                 for _picard_iter in range(self.n_picard_steps):
                     grad_softmax_full = torch.zeros_like(mu_current)
+                    # Sigma softmax gradient (diagonal only — see derivation doc Section 9)
+                    grad_sigma_softmax_full = torch.zeros_like(mu_current) if (is_diagonal and self.update_sigma) else None
                     block_start = 0
 
                     for h, d_h in enumerate(self.irrep_dims or [self.embed_dim]):
@@ -3890,6 +3892,22 @@ class VariationalFFNDynamic(nn.Module):
                         )  # (B, N, d_h)
 
                         grad_softmax_full[:, :, block_start:block_end] = grad_softmax_h
+
+                        # Sigma softmax coupling: Σ_j KL_ij · ∂β_ij/∂σ_i (diagonal only)
+                        # ∂KL_ij/∂σ_i[k] = 0.5 * (1/σ_j_t[k] - 1/σ_i[k])
+                        if grad_sigma_softmax_full is not None and is_diagonal:
+                            sigma_i_inv_h = 1.0 / sigma_h_blk.clamp(min=eps)  # (B, N, d_h)
+                            sigma_jt_inv_h = 1.0 / sigma_j_t  # (B, N, N, d_h)
+                            grad_sigma_pair = 0.5 * (sigma_jt_inv_h - sigma_i_inv_h[:, :, None, :])
+                            # Softmax Jacobian for sigma (same pattern as mu)
+                            avg_sigma_grad_h = torch.einsum('bij,bijk->bik', beta_h, grad_sigma_pair)
+                            sigma_grad_dev = avg_sigma_grad_h.unsqueeze(2) - grad_sigma_pair
+                            d_beta_d_sigma_h = beta_h.unsqueeze(-1) * sigma_grad_dev / kappa_h_scaled
+                            grad_sigma_softmax_h = self.lambda_softmax * torch.einsum(
+                                'bij,bijk->bik', kl_h, d_beta_d_sigma_h
+                            )  # (B, N, d_h)
+                            grad_sigma_softmax_full[:, :, block_start:block_end] = grad_sigma_softmax_h
+
                         block_start = block_end
 
                     # -------------------------------------------------------
@@ -3964,6 +3982,33 @@ class VariationalFFNDynamic(nn.Module):
 
                     scale = (self.picard_trust_region / w_norm.clamp(min=eps)).clamp(max=1.0)
                     mu_current = mu_0 - scale * correction
+
+                    # Sigma Picard correction (diagonal only)
+                    # At sigma_0 the linear sigma gradient is zero. The residual is
+                    # the sigma softmax coupling: Σ_j KL_ij · ∂β_ij/∂σ_i.
+                    # Natural gradient: nat_grad_sigma = 2σ² · grad_sigma_softmax
+                    # Applied via SPD exponential retraction for positivity.
+                    if grad_sigma_softmax_full is not None and self.update_sigma:
+                        sigma_safe = sigma_current.clamp(min=eps)
+                        nat_grad_sigma = 2.0 * sigma_safe * sigma_safe * grad_sigma_softmax_full
+                        # Clip natural gradient norm (matching iterative E-step)
+                        nat_grad_sigma_norm = torch.linalg.norm(nat_grad_sigma, dim=-1, keepdim=True)
+                        nat_grad_sigma = nat_grad_sigma * torch.clamp(
+                            500.0 / (nat_grad_sigma_norm + eps), max=1.0
+                        )
+                        sigma_trust = self._get_sigma_trust(self.lr)
+                        sigma_current = retract_spd_diagonal_torch(
+                            sigma_diag=sigma_current,
+                            delta_sigma=-nat_grad_sigma,
+                            step_size=1.0,
+                            trust_region=sigma_trust,
+                            eps=eps,
+                            sigma_max=self.sigma_max,
+                        )
+                        # Re-enforce isotropic constraint after sigma correction
+                        if self.isotropic_covariance:
+                            scalar_var = sigma_current.mean(dim=-1, keepdim=True)
+                            sigma_current = scalar_var.expand_as(sigma_current)
 
             # Store beta for implicit EM (if needed)
             if return_beta_history:
