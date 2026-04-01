@@ -1,3 +1,10 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Mar 31 21:29:20 2026
+
+@author: chris and christine
+"""
+
 """
 Hybrid Gauge-Attention Transformer
 ====================================
@@ -548,12 +555,15 @@ class HybridGaugeTransformerLM(nn.Module):
         # 7. PriorBank decode
         logits = self.prior_bank.decode(mu_q, sigma_q, tau=self.prior_bank_tau)
 
-        # Pack attention info (compatible with compute_free_energy_loss)
+        # Pack attention info (compatible with compute_free_energy_loss).
+        # Stack betas/kls across layers: (n_layers, B, n_heads, N, N).
+        # compute_free_energy_loss indexes beta[-1] to get the final layer.
+        stacked_beta = torch.stack(all_betas) if all_betas else None
+        stacked_kl = torch.stack(all_kls) if all_kls else None
+
         attention_info = {
-            'beta': all_betas[-1] if all_betas else None,
-            'kl': all_kls[-1] if all_kls else None,
-            'all_betas': all_betas,
-            'all_kls': all_kls,
+            'beta': stacked_beta,
+            'kl': stacked_kl,
             'mu': mu_q,
             'sigma': sigma_q,
             'phi': phi,
