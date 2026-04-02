@@ -244,14 +244,14 @@ SWEEPS = {
     # --- Tier 1: Free energy weights ---
     'M_alpha': {
         'description': 'Self-consistency KL(q||p) weight in training loss',
-        'param': 'alpha',
+        'param': 'M_alpha',
         'values': [0, 0.001, 0.005, 0.01, 0.05, 0.1],
         'baseline_value': 0.00,
     },
 
     'E_alpha': {
         'description': 'Prior coupling weight inside VFE E-step iterations',
-        'param': 'ffn_alpha',
+        'param': 'E_alpha',
         'values': [0, 0.01, 0.1, 0.5, 1, 2.0],
         'baseline_value': 1.0,
     },
@@ -273,7 +273,7 @@ SWEEPS = {
 
     'M_beta': {
         'description': 'Belief alignment weight in outer training loss (lambda_beta)',
-        'param': 'beta',
+        'param': 'M_beta',
         'values': [0.0, 0.001, 0.005, 0.01, 0.1],
         'baseline_value': 0.0,
     },
@@ -397,7 +397,7 @@ SWEEPS = {
     # --- Tier 6: Alpha_phi (gauge prior) ---
     'mass_phi': {
         'description': 'Gauge frame L2 prior weight (α_φ/2)||φ||²',
-        'param': 'alpha_phi',
+        'param': 'mass_phi',
         'values': [0.0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5],
         'baseline_value': 0.1,
     },
@@ -405,42 +405,42 @@ SWEEPS = {
     # --- Tier 7: Learning rates ---
     'M_mu_p_lr': {
         'description': 'Belief mean (μ) learning rate',
-        'param': 'mu_lr',
+        'param': 'M_mu_p_lr',
         'values': [0.0025, 0.01, 0.05, 0.075, 0.1],
         'baseline_value': 0.05,
     },
 
     'M_sigma_p_lr': {
         'description': 'Belief precision (σ) learning rate',
-        'param': 'sigma_lr',
+        'param': 'M_sigma_p_lr',
         'values': [0.001, 0.005, 0.0075, 0.0125, 0.05, 0.1],
         'baseline_value': 0.005,
     },
 
     'M_phi_lr': {
         'description': 'Gauge frame (φ) learning rate',
-        'param': 'phi_lr',
+        'param': 'M_phi_lr',
         'values': [0.001, 0.005, 0.0125, 0.02, 0.05, 0.1],
         'baseline_value': 0.005,
     },
 
     'M_vfe_hyperparam_lr': {
         'description': 'FFN / VFE module learning rate',
-        'param': 'ffn_lr',
+        'param': 'M_vfe_hyperparam_lr',
         'values': [0.0025, 0.01, 0.05, 0.077, 0.15],
         'baseline_value': 0.05,
     },
 
     'M_attention_lr': {
         'description': 'Attention module learning rate',
-        'param': 'attention_lr',
+        'param': 'M_attention_lr',
         'values': [0.005, 0.006, 0.007, 0.008, 0.009],
         'baseline_value': 0.005,
     },
 
     'M_output_lr': {
         'description': 'Output projection learning rate',
-        'param': 'output_lr',
+        'param': 'M_output_lr',
         'values': [0.005, 0.01, 0.02, 0.05, 0.1, 0.2],
         'baseline_value': 0.05,
     },
@@ -448,21 +448,21 @@ SWEEPS = {
     # --- Tier 8: E-step learning rates ---
     'E_mu_q_lr': {
         'description': 'E-step μ natural gradient step size',
-        'param': 'e_step_mu_lr',
+        'param': 'E_mu_q_lr',
         'values': [0.01, 0.05, 0.1, 0.5, 2.0],
         'baseline_value': 0.1,
     },
 
     'E_sigma_q_lr': {
         'description': 'E-step σ trust region scale',
-        'param': 'e_step_sigma_lr',
+        'param': 'E_sigma_q_lr',
         'values': [0.005, 0.01, 0.05, 0.1, 0.2, 0.5],
         'baseline_value': 0.05,
     },
 
     'E_phi_lr': {
         'description': 'E-step φ gauge frame step size',
-        'param': 'e_step_phi_lr',
+        'param': 'E_phi_lr',
         'values': [0.01, 0.05, 0.1, 0.2, 0.5, 1.0],
         'baseline_value': 0.05,
     },

@@ -33,6 +33,7 @@ from transformer.core.gauge_utils import (
     fused_block_diagonal_kl_full,
 )
 
+import transformer.core.vfe_utils as _vfe_utils_mod
 from transformer.core.vfe_utils import (
     SIGMA_EPS,
     TRANSPORT_JITTER,
@@ -40,19 +41,12 @@ from transformer.core.vfe_utils import (
     KL_CEIL_SCALE,
     GRAD_CLIP_THRESHOLD,
     KAPPA_CLAMP_RANGE,
-    _VFE_GRAD_DEBUG,
     _grad_norm,
     _per_pos_stats,
     squeeze_trailing_singletons,
     _safe_spd_inv,
     _safe_eigh,
 )
-
-# Re-export the debug dict reference so callers can do:
-#   from transformer.core.vfe_gradients import _VFE_GRAD_DEBUG
-# Note: mutations to the dict must go through vfe_utils directly since the
-# dict object is shared by reference.
-import transformer.core.vfe_utils as _vfe_utils_mod
 
 # =============================================================================
 # Memory-Efficient VFE Gradient Helpers
@@ -149,24 +143,24 @@ def _compute_vfe_gradients_block_diagonal(
     grad_sigma = grad_sigma + grad_sigma_self
 
     # Debug: self-coupling component norms
-    if _VFE_GRAD_DEBUG is not None:
-        _VFE_GRAD_DEBUG['grad_mu_self'] = _grad_norm(grad_mu_self)
-        _VFE_GRAD_DEBUG['grad_sigma_self'] = _grad_norm(grad_sigma_self)
+    if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_mu_self'] = _grad_norm(grad_mu_self)
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_self'] = _grad_norm(grad_sigma_self)
         _ps = _per_pos_stats(grad_sigma_self)
-        _VFE_GRAD_DEBUG['grad_sigma_self_pos_mean'] = _ps[0]
-        _VFE_GRAD_DEBUG['grad_sigma_self_pos_max'] = _ps[1]
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_self_pos_mean'] = _ps[0]
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_self_pos_max'] = _ps[1]
         # sigma_p eigenvalue range (shows how tight priors are)
         sp_diag = torch.diagonal(sigma_p, dim1=-2, dim2=-1)
-        _VFE_GRAD_DEBUG['sigma_p_min'] = sp_diag.min().item()
-        _VFE_GRAD_DEBUG['sigma_p_max'] = sp_diag.max().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['sigma_p_min'] = sp_diag.min().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['sigma_p_max'] = sp_diag.max().item()
         # sigma_q eigenvalue range
         try:
             sq_eig = torch.linalg.eigvalsh(sigma_q)
-            _VFE_GRAD_DEBUG['sigma_q_eig_min'] = sq_eig.min().item()
-            _VFE_GRAD_DEBUG['sigma_q_eig_max'] = sq_eig.max().item()
+            _vfe_utils_mod._VFE_GRAD_DEBUG['sigma_q_eig_min'] = sq_eig.min().item()
+            _vfe_utils_mod._VFE_GRAD_DEBUG['sigma_q_eig_max'] = sq_eig.max().item()
         except (RuntimeError, torch.linalg.LinAlgError):
-            _VFE_GRAD_DEBUG['sigma_q_eig_min'] = float('nan')
-            _VFE_GRAD_DEBUG['sigma_q_eig_max'] = float('nan')
+            _vfe_utils_mod._VFE_GRAD_DEBUG['sigma_q_eig_min'] = float('nan')
+            _vfe_utils_mod._VFE_GRAD_DEBUG['sigma_q_eig_max'] = float('nan')
 
     # =================================================================
     # 2. Belief Alignment Gradient (block-diagonal + chunked processing)
@@ -315,25 +309,25 @@ def _compute_vfe_gradients_block_diagonal(
     grad_sigma = grad_sigma + grad_sigma_align
 
     # Debug: alignment component norms (before softmax coupling)
-    if _VFE_GRAD_DEBUG is not None:
-        _VFE_GRAD_DEBUG['grad_mu_direct'] = _grad_norm(grad_mu_direct)
-        _VFE_GRAD_DEBUG['grad_mu_softmax'] = _grad_norm(grad_mu_softmax)
-        _VFE_GRAD_DEBUG['grad_sigma_align_direct'] = _grad_norm(grad_sigma_align)
+    if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_mu_direct'] = _grad_norm(grad_mu_direct)
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_mu_softmax'] = _grad_norm(grad_mu_softmax)
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_align_direct'] = _grad_norm(grad_sigma_align)
         _ps = _per_pos_stats(grad_sigma_align)
-        _VFE_GRAD_DEBUG['grad_sigma_align_pos_mean'] = _ps[0]
-        _VFE_GRAD_DEBUG['grad_sigma_align_pos_max'] = _ps[1]
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_align_pos_mean'] = _ps[0]
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_align_pos_max'] = _ps[1]
         # KL pairwise stats (drives softmax coupling magnitude)
-        _VFE_GRAD_DEBUG['kl_pairwise_mean'] = kl_values.mean().item()
-        _VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
-        _VFE_GRAD_DEBUG['kappa_scaled'] = kappa_scaled
+        _vfe_utils_mod._VFE_GRAD_DEBUG['kl_pairwise_mean'] = kl_values.mean().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['kappa_scaled'] = kappa_scaled
         # Fraction of pairs near the KL ceiling (diagnoses clamp saturation)
         _kl_ceil = max(100.0, 20.0 * K)
-        _VFE_GRAD_DEBUG['kl_frac_above_90pct'] = (kl_values > 0.9 * _kl_ceil).float().mean().item()
-        _VFE_GRAD_DEBUG['kl_p95'] = kl_values.quantile(0.95).item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['kl_frac_above_90pct'] = (kl_values > 0.9 * _kl_ceil).float().mean().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['kl_p95'] = kl_values.quantile(0.95).item()
 
     # Sigma softmax coupling (Pass 2): ∂β/∂Σ term computed per-block.
     # Uses stored per-block per-pair sigma gradients to avoid (B, N, N, K, K) memory.
-    _grad_sigma_before_softmax = grad_sigma.clone() if (_VFE_GRAD_DEBUG is not None) else None
+    _grad_sigma_before_softmax = grad_sigma.clone() if (_vfe_utils_mod._VFE_GRAD_DEBUG is not None) else None
     if compute_sigma_align_grad and grad_sigma_per_pair_blocks is not None:
         kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
         block_start = 0
@@ -351,18 +345,18 @@ def _compute_vfe_gradients_block_diagonal(
         del grad_sigma_per_pair_blocks
 
     # Debug: softmax coupling contribution and final totals
-    if _VFE_GRAD_DEBUG is not None:
+    if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
         if _grad_sigma_before_softmax is not None:
             _sigma_softmax_contrib = grad_sigma - _grad_sigma_before_softmax
-            _VFE_GRAD_DEBUG['grad_sigma_softmax'] = _grad_norm(_sigma_softmax_contrib)
+            _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_softmax'] = _grad_norm(_sigma_softmax_contrib)
             _ps = _per_pos_stats(_sigma_softmax_contrib)
-            _VFE_GRAD_DEBUG['grad_sigma_softmax_pos_mean'] = _ps[0]
-            _VFE_GRAD_DEBUG['grad_sigma_softmax_pos_max'] = _ps[1]
-        _VFE_GRAD_DEBUG['grad_mu_total'] = _grad_norm(grad_mu)
-        _VFE_GRAD_DEBUG['grad_sigma_total'] = _grad_norm(grad_sigma)
+            _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_softmax_pos_mean'] = _ps[0]
+            _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_softmax_pos_max'] = _ps[1]
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_mu_total'] = _grad_norm(grad_mu)
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_total'] = _grad_norm(grad_sigma)
         _ps = _per_pos_stats(grad_sigma)
-        _VFE_GRAD_DEBUG['grad_sigma_total_pos_mean'] = _ps[0]
-        _VFE_GRAD_DEBUG['grad_sigma_total_pos_max'] = _ps[1]
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_total_pos_mean'] = _ps[0]
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_total_pos_max'] = _ps[1]
 
     return grad_mu, grad_sigma
 
@@ -451,16 +445,16 @@ def _compute_vfe_gradients_block_diagonal_diag(
         grad_sigma_self = grad_sigma_self - (alpha ** 2 / alpha_c0) * kl_k * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
 
     # Debug: self-coupling component norms
-    if _VFE_GRAD_DEBUG is not None:
-        _VFE_GRAD_DEBUG['grad_mu_self'] = _grad_norm(grad_mu_self)
-        _VFE_GRAD_DEBUG['grad_sigma_self'] = _grad_norm(grad_sigma_self)
+    if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_mu_self'] = _grad_norm(grad_mu_self)
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_self'] = _grad_norm(grad_sigma_self)
         _ps = _per_pos_stats(grad_sigma_self)
-        _VFE_GRAD_DEBUG['grad_sigma_self_pos_mean'] = _ps[0]
-        _VFE_GRAD_DEBUG['grad_sigma_self_pos_max'] = _ps[1]
-        _VFE_GRAD_DEBUG['sigma_p_min'] = sigma_p_safe.min().item()
-        _VFE_GRAD_DEBUG['sigma_p_max'] = sigma_p_safe.max().item()
-        _VFE_GRAD_DEBUG['sigma_q_eig_min'] = sigma_q_safe.min().item()
-        _VFE_GRAD_DEBUG['sigma_q_eig_max'] = sigma_q_safe.max().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_self_pos_mean'] = _ps[0]
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_self_pos_max'] = _ps[1]
+        _vfe_utils_mod._VFE_GRAD_DEBUG['sigma_p_min'] = sigma_p_safe.min().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['sigma_p_max'] = sigma_p_safe.max().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['sigma_q_eig_min'] = sigma_q_safe.min().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['sigma_q_eig_max'] = sigma_q_safe.max().item()
 
     # =================================================================
     # 2. Belief Alignment Gradient (block-diagonal + diagonal formulas)
@@ -564,20 +558,20 @@ def _compute_vfe_gradients_block_diagonal_diag(
     grad_mu = grad_mu_self + grad_mu_align
 
     # Debug: alignment component norms (before softmax coupling for sigma)
-    if _VFE_GRAD_DEBUG is not None:
-        _VFE_GRAD_DEBUG['grad_mu_direct'] = _grad_norm(grad_mu_direct)
-        _VFE_GRAD_DEBUG['grad_mu_softmax'] = _grad_norm(grad_mu_softmax)
-        _VFE_GRAD_DEBUG['grad_sigma_align_direct'] = _grad_norm(grad_sigma_align)
+    if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_mu_direct'] = _grad_norm(grad_mu_direct)
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_mu_softmax'] = _grad_norm(grad_mu_softmax)
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_align_direct'] = _grad_norm(grad_sigma_align)
         _ps = _per_pos_stats(grad_sigma_align)
-        _VFE_GRAD_DEBUG['grad_sigma_align_pos_mean'] = _ps[0]
-        _VFE_GRAD_DEBUG['grad_sigma_align_pos_max'] = _ps[1]
-        _VFE_GRAD_DEBUG['kl_pairwise_mean'] = kl_values.mean().item()
-        _VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
-        _VFE_GRAD_DEBUG['kappa_scaled'] = kappa_scaled
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_align_pos_mean'] = _ps[0]
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_align_pos_max'] = _ps[1]
+        _vfe_utils_mod._VFE_GRAD_DEBUG['kl_pairwise_mean'] = kl_values.mean().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['kappa_scaled'] = kappa_scaled
         # Fraction of pairs near the KL ceiling (diagnoses clamp saturation)
         _kl_ceil = max(100.0, 20.0 * K)
-        _VFE_GRAD_DEBUG['kl_frac_above_90pct'] = (kl_values > 0.9 * _kl_ceil).float().mean().item()
-        _VFE_GRAD_DEBUG['kl_p95'] = kl_values.quantile(0.95).item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['kl_frac_above_90pct'] = (kl_values > 0.9 * _kl_ceil).float().mean().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['kl_p95'] = kl_values.quantile(0.95).item()
 
     # Sigma softmax coupling: Σ_j KL_ij · ∂β_ij/∂σ_i
     grad_sigma_softmax_norm = 0.0
@@ -586,20 +580,20 @@ def _compute_vfe_gradients_block_diagonal_diag(
         sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair_full
         d_beta_d_sigma = beta.unsqueeze(-1) * sigma_grad_deviation / kappa_scaled
         grad_sigma_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_sigma)
-        if _VFE_GRAD_DEBUG is not None:
+        if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
             grad_sigma_softmax_norm = _grad_norm(grad_sigma_softmax)
         grad_sigma_align = grad_sigma_align + grad_sigma_softmax
 
     grad_sigma = grad_sigma_self + grad_sigma_align
 
     # Debug: final totals
-    if _VFE_GRAD_DEBUG is not None:
-        _VFE_GRAD_DEBUG['grad_sigma_softmax'] = grad_sigma_softmax_norm
-        _VFE_GRAD_DEBUG['grad_mu_total'] = _grad_norm(grad_mu)
-        _VFE_GRAD_DEBUG['grad_sigma_total'] = _grad_norm(grad_sigma)
+    if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_softmax'] = grad_sigma_softmax_norm
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_mu_total'] = _grad_norm(grad_mu)
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_total'] = _grad_norm(grad_sigma)
         _ps = _per_pos_stats(grad_sigma)
-        _VFE_GRAD_DEBUG['grad_sigma_total_pos_mean'] = _ps[0]
-        _VFE_GRAD_DEBUG['grad_sigma_total_pos_max'] = _ps[1]
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_total_pos_mean'] = _ps[0]
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_total_pos_max'] = _ps[1]
 
     return grad_mu.to(dtype), grad_sigma.to(dtype)
 
@@ -703,16 +697,16 @@ def _fused_attention_and_vfe_gradients_block_diag(
         grad_sigma_self = grad_sigma_self - (alpha ** 2 / alpha_c0) * kl_k * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
 
     # Debug: self-coupling component norms (fused path)
-    if _VFE_GRAD_DEBUG is not None:
-        _VFE_GRAD_DEBUG['grad_mu_self'] = _grad_norm(grad_mu_self)
-        _VFE_GRAD_DEBUG['grad_sigma_self'] = _grad_norm(grad_sigma_self)
+    if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_mu_self'] = _grad_norm(grad_mu_self)
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_self'] = _grad_norm(grad_sigma_self)
         _ps = _per_pos_stats(grad_sigma_self)
-        _VFE_GRAD_DEBUG['grad_sigma_self_pos_mean'] = _ps[0]
-        _VFE_GRAD_DEBUG['grad_sigma_self_pos_max'] = _ps[1]
-        _VFE_GRAD_DEBUG['sigma_p_min'] = sigma_p_safe.min().item()
-        _VFE_GRAD_DEBUG['sigma_p_max'] = sigma_p_safe.max().item()
-        _VFE_GRAD_DEBUG['sigma_q_eig_min'] = sigma_q_safe.min().item()
-        _VFE_GRAD_DEBUG['sigma_q_eig_max'] = sigma_q_safe.max().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_self_pos_mean'] = _ps[0]
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_self_pos_max'] = _ps[1]
+        _vfe_utils_mod._VFE_GRAD_DEBUG['sigma_p_min'] = sigma_p_safe.min().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['sigma_p_max'] = sigma_p_safe.max().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['sigma_q_eig_min'] = sigma_q_safe.min().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['sigma_q_eig_max'] = sigma_q_safe.max().item()
 
     # Precompute matrix exponentials
     if cached_block_exp_pairs is not None:
@@ -851,40 +845,40 @@ def _fused_attention_and_vfe_gradients_block_diag(
             block_start = block_end
 
         # Debug: capture direct alignment norm before softmax coupling
-        if _VFE_GRAD_DEBUG is not None:
-            _VFE_GRAD_DEBUG['grad_sigma_align_direct'] = _grad_norm(grad_sigma_align)
+        if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
+            _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_align_direct'] = _grad_norm(grad_sigma_align)
             _ps = _per_pos_stats(grad_sigma_align)
-            _VFE_GRAD_DEBUG['grad_sigma_align_pos_mean'] = _ps[0]
-            _VFE_GRAD_DEBUG['grad_sigma_align_pos_max'] = _ps[1]
+            _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_align_pos_mean'] = _ps[0]
+            _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_align_pos_max'] = _ps[1]
 
         # Sigma softmax coupling (use raw-mu KL for consistency, same as mu coupling)
         avg_sigma_grad = torch.einsum('bij,bijk->bik', beta, grad_sigma_per_pair_full)
         sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair_full
         d_beta_d_sigma = beta.unsqueeze(-1) * sigma_grad_deviation / kappa_scaled
         grad_sigma_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_for_coupling, d_beta_d_sigma)
-        if _VFE_GRAD_DEBUG is not None:
+        if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
             grad_sigma_softmax_norm = _grad_norm(grad_sigma_softmax)
         grad_sigma_align = grad_sigma_align + grad_sigma_softmax
 
     grad_sigma = grad_sigma_self + grad_sigma_align
 
     # Debug: final totals (fused path)
-    if _VFE_GRAD_DEBUG is not None:
-        _VFE_GRAD_DEBUG['grad_mu_direct'] = _grad_norm(grad_mu_direct)
-        _VFE_GRAD_DEBUG['grad_mu_softmax'] = _grad_norm(grad_mu_softmax)
-        _VFE_GRAD_DEBUG['grad_sigma_softmax'] = grad_sigma_softmax_norm
-        _VFE_GRAD_DEBUG['kl_pairwise_mean'] = kl_values.mean().item()
-        _VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
-        _VFE_GRAD_DEBUG['kappa_scaled'] = kappa_scaled
+    if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_mu_direct'] = _grad_norm(grad_mu_direct)
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_mu_softmax'] = _grad_norm(grad_mu_softmax)
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_softmax'] = grad_sigma_softmax_norm
+        _vfe_utils_mod._VFE_GRAD_DEBUG['kl_pairwise_mean'] = kl_values.mean().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['kappa_scaled'] = kappa_scaled
         # Fraction of pairs near the KL ceiling (diagnoses clamp saturation)
         _kl_ceil = max(100.0, 20.0 * K)
-        _VFE_GRAD_DEBUG['kl_frac_above_90pct'] = (kl_values > 0.9 * _kl_ceil).float().mean().item()
-        _VFE_GRAD_DEBUG['kl_p95'] = kl_values.quantile(0.95).item()
-        _VFE_GRAD_DEBUG['grad_mu_total'] = _grad_norm(grad_mu)
-        _VFE_GRAD_DEBUG['grad_sigma_total'] = _grad_norm(grad_sigma)
+        _vfe_utils_mod._VFE_GRAD_DEBUG['kl_frac_above_90pct'] = (kl_values > 0.9 * _kl_ceil).float().mean().item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['kl_p95'] = kl_values.quantile(0.95).item()
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_mu_total'] = _grad_norm(grad_mu)
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_total'] = _grad_norm(grad_sigma)
         _ps = _per_pos_stats(grad_sigma)
-        _VFE_GRAD_DEBUG['grad_sigma_total_pos_mean'] = _ps[0]
-        _VFE_GRAD_DEBUG['grad_sigma_total_pos_max'] = _ps[1]
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_total_pos_mean'] = _ps[0]
+        _vfe_utils_mod._VFE_GRAD_DEBUG['grad_sigma_total_pos_max'] = _ps[1]
 
     kl_out = kl_values if return_kl else None
     return beta.to(dtype), grad_mu.to(dtype), grad_sigma.to(dtype), kl_out
@@ -985,7 +979,7 @@ def compute_vfe_gradients_gpu(
         sigma_p_full = torch.diag_embed(sigma_p)
         grad_mu, grad_sigma_full = compute_vfe_gradients_gpu(
             mu_q, sigma_q_full, mu_p, sigma_p_full, beta, phi, generators,
-            alpha, lambda_belief, kappa, eps, alpha_c0,
+            alpha, lambda_belief, lambda_softmax, kappa, eps, alpha_c0,
             cached_transport, compute_sigma_align_grad, irrep_dims,
             enforce_orthogonal, cached_block_exp_pairs,
             exact_diagonal_transport=False,
