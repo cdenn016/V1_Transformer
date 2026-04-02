@@ -56,10 +56,10 @@ BASELINE_CONFIG = {
     # === Architecture ===
     'vocab_size':            50257,
     'embed_dim':             20,
-    'max_seq_len':           32,
+    'max_seq_len':           64,
     
-    'batch_size':            1024, 
-    'max_steps':             1875,
+    'batch_size':            256, 
+    'max_steps':             3750,
     
     'n_layers':              1,
     'ffn_n_iterations':      1,
@@ -69,14 +69,17 @@ BASELINE_CONFIG = {
 
     'use_prior_bank':           False,
     'learnable_pb_temperature': False,
-    'mask_self_attention':      False,  # Prevent attention collapse?
+    'mask_self_attention':      True,  # Prevent attention collapse?
+  
+    'kappa_warmup_steps':       5000,  # freeze kappa for first n steps
+    'learnable_head_kappa':     True, # If True, learn per-head κ_h via log_kappa_per_head    
   
     # === M-step: implicit differentiation ===
     'implicit_em':           False,
     'amortized_inference':   True,
     'use_obs_in_vfe':        False,  #cheats when true
        
-    'skip_attention':        True,   #skips ad hoc attention sublayer
+    'skip_attention':        False,   #skips ad hoc attention sublayer
     'closed_form_e_step':    False,  #closed form...ignores non-linear softmax gradient
     
     
@@ -103,7 +106,7 @@ BASELINE_CONFIG = {
 
     'E_alpha':               1,       # Prior coupling inside VFE E-step
     'E_lambda_belief':       1,       # Belief alignment inside VFE E-step
-    'E_lambda_softmax':      0,
+    'E_lambda_softmax':      1,
 
 
     'E_learnable_alpha':     True,   # when true Adaptive α_i = c0/(b0 + KL) per dimension
@@ -163,22 +166,23 @@ BASELINE_CONFIG = {
 
     'sigma_ce_scale':    0.1,
     'sigma_aggregation': 'mixture',
+    
     # === M-step learning rates (AdamW parameter groups) ===
     # These update nn.Parameter objects via backprop. The E-step (inner VFE
     # loop) uses e_step_mu_lr / e_step_sigma_lr / e_step_phi_lr above.
     # mu_embed and log_sigma_diag have dual roles: they initialize E-step
     # beliefs (q₀) AND serve as prior parameters (μ_p, σ_p), so these rates
     # indirectly affect E-step initialization speed.
-    'mu_lr':        0.05,   # Prior mean embeddings (μ_p)
-    'sigma_lr':     0.005, # Prior covariance embeddings (log σ_p)
-    'phi_lr':       0.0075, # Gauge frame embeddings (φ)
-    'ffn_lr':       0.05,   # FFN params (raw_c0, raw_b0, raw_lr)
-    'attention_lr': 0.005,  # Attention params (W_O, constant_omega)
-    'output_lr':    0.05,   # Output projection (vocab logits)
+    'M_mu_p_lr':           0.05,   # M-step prior mean embeddings (μ_p)
+    'M_sigma_p_lr':        0.005, # M-step prior covariance embeddings (log σ_p)
+    'M_phi_lr':            0.0075, # M-step gauge frame embeddings (φ)
+    'M_vfe_hyperparam_lr': 0.05, # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr)
+    'M_attention_lr':      0.005,  # M-step attention params (W_O, constant_omega)
+    'M_output_lr':         0.05,   # M-step output projection (vocab logits)
     
     # === Logging ===
     'log_interval':               100,
-    'eval_interval':              1500,
+    'eval_interval':              8500,
     'checkpoint_interval':        25000,
     'semantic_analysis_interval': 10000,
 
@@ -220,7 +224,7 @@ BASELINE_CONFIG = {
     
     # === Regularization ===
     'sigma_max':     10.0,
-    'grad_clip':     1.0,
+    'grad_clip':     5.0,
     'hidden_dim':    508,
     'warmup_steps':  100,
     'num_workers':   10,
@@ -238,49 +242,36 @@ BASELINE_CONFIG = {
 
 SWEEPS = {
     # --- Tier 1: Free energy weights ---
-    'alpha': {
+    'M_alpha': {
         'description': 'Self-consistency KL(q||p) weight in training loss',
         'param': 'alpha',
         'values': [0, 0.001, 0.005, 0.01, 0.05, 0.1],
         'baseline_value': 0.00,
     },
 
-    'ffn_alpha': {
+    'E_alpha': {
         'description': 'Prior coupling weight inside VFE E-step iterations',
         'param': 'ffn_alpha',
         'values': [0, 0.01, 0.1, 0.5, 1, 2.0],
         'baseline_value': 1.0,
     },
 
-    'ffn_lambda_belief': {
-        'description': 'Belief alignment weight inside VFE E-step iterations',
-        'param': 'ffn_lambda_belief',
-        'values': [0, 0.5, 1.0, 2.0, 5],
-        'baseline_value': 1.0,
-    },
-
-    'ffn_lambda_softmax': {
-        'description': 'Softmax coupling weight (GELU-like ∂β/∂θ·KL term) inside VFE E-step',
-        'param': 'ffn_lambda_softmax',
-        'values': [0, 0.5, 1.0, 2.0, 5.0],
-        'baseline_value': 0,
-    },
-
+    
     'E_lambda_belief': {
         'description': 'E-step belief alignment weight (VFE coupling term)',
         'param': 'E_lambda_belief',
-        'values': [0, 0.5, 1.0, 2.0, 5.0],
+        'values': [0.5, 1.0, 5.0, 25.0],
         'baseline_value': 1,
     },
 
     'E_lambda_softmax': {
         'description': 'E-step softmax coupling weight (∂β/∂θ·KL Boltzmann gate)',
         'param': 'E_lambda_softmax',
-        'values': [0, 0.5, 1.0, 2.0, 4.0],
+        'values': [0, 0.5, 1.0, 5.0, 25.0],
         'baseline_value': 0,
     },
 
-    'beta': {
+    'M_beta': {
         'description': 'Belief alignment weight in outer training loss (lambda_beta)',
         'param': 'beta',
         'values': [0.0, 0.001, 0.005, 0.01, 0.1],
@@ -290,7 +281,7 @@ SWEEPS = {
     'lambda_hyper': {
         'description': 'Hyper-prior coupling KL(s||h) weight in training loss',
         'param': 'lambda_hyper',
-        'values': [0.0, 0.001, 0.01, 0.05, 0.1, 0.5, 1.0],
+        'values': [0.0, 0.001, 0.01, 0.1],
         'baseline_value': 0.0,
     },
 
@@ -404,7 +395,7 @@ SWEEPS = {
     },
 
     # --- Tier 6: Alpha_phi (gauge prior) ---
-    'alpha_phi': {
+    'mass_phi': {
         'description': 'Gauge frame L2 prior weight (α_φ/2)||φ||²',
         'param': 'alpha_phi',
         'values': [0.0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5],
@@ -412,42 +403,42 @@ SWEEPS = {
     },
 
     # --- Tier 7: Learning rates ---
-    'mu_lr': {
+    'M_mu_p_lr': {
         'description': 'Belief mean (μ) learning rate',
         'param': 'mu_lr',
         'values': [0.0025, 0.01, 0.05, 0.075, 0.1],
         'baseline_value': 0.05,
     },
 
-    'sigma_lr': {
+    'M_sigma_p_lr': {
         'description': 'Belief precision (σ) learning rate',
         'param': 'sigma_lr',
         'values': [0.001, 0.005, 0.0075, 0.0125, 0.05, 0.1],
         'baseline_value': 0.005,
     },
 
-    'phi_lr': {
+    'M_phi_lr': {
         'description': 'Gauge frame (φ) learning rate',
         'param': 'phi_lr',
         'values': [0.001, 0.005, 0.0125, 0.02, 0.05, 0.1],
         'baseline_value': 0.005,
     },
 
-    'ffn_lr': {
+    'M_vfe_hyperparam_lr': {
         'description': 'FFN / VFE module learning rate',
         'param': 'ffn_lr',
         'values': [0.0025, 0.01, 0.05, 0.077, 0.15],
         'baseline_value': 0.05,
     },
 
-    'attention_lr': {
+    'M_attention_lr': {
         'description': 'Attention module learning rate',
         'param': 'attention_lr',
         'values': [0.005, 0.006, 0.007, 0.008, 0.009],
         'baseline_value': 0.005,
     },
 
-    'output_lr': {
+    'M_output_lr': {
         'description': 'Output projection learning rate',
         'param': 'output_lr',
         'values': [0.005, 0.01, 0.02, 0.05, 0.1, 0.2],
@@ -455,21 +446,21 @@ SWEEPS = {
     },
 
     # --- Tier 8: E-step learning rates ---
-    'e_step_mu_lr': {
+    'E_mu_q_lr': {
         'description': 'E-step μ natural gradient step size',
         'param': 'e_step_mu_lr',
         'values': [0.01, 0.05, 0.1, 0.5, 2.0],
         'baseline_value': 0.1,
     },
 
-    'e_step_sigma_lr': {
+    'E_sigma_q_lr': {
         'description': 'E-step σ trust region scale',
         'param': 'e_step_sigma_lr',
         'values': [0.005, 0.01, 0.05, 0.1, 0.2, 0.5],
         'baseline_value': 0.05,
     },
 
-    'e_step_phi_lr': {
+    'E_phi_lr': {
         'description': 'E-step φ gauge frame step size',
         'param': 'e_step_phi_lr',
         'values': [0.01, 0.05, 0.1, 0.2, 0.5, 1.0],
@@ -492,7 +483,7 @@ SWEEPS = {
         'baseline_value': 0.01,
     },
 
-    'weight_decay': {
+    'non_embed_weight_decay': {
         'description': 'Weight decay on non-embedding parameters',
         'param': 'weight_decay',
         'values': [0.0, 0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2],
@@ -511,15 +502,17 @@ SWEEP_ORDER = [
     #'M_beta', Done
     #'mass_phi', Done
 
-    'lambda_hyper',
+    
 
     #'embed_weight_decay',
-   # 'non_embed_weight_decay',
+    #'non_embed_weight_decay',
 
     'E_lambda_belief',
     'E_lambda_softmax',
-    'E_alpha',
-
+    
+    'sigma_ce_scale',
+    #'E_alpha',
+    'lambda_hyper',
     #'M_mu_p_lr',
     #'M_sigma_p_lr',
     #'M_phi_lr',
@@ -547,11 +540,7 @@ SWEEP_ORDER = [
     
     
     #'rope',
-
-    
    
-
-    #'sigma_ce_scale',
 
     #'n_layers',
     #'n_vfe_iterations',
@@ -843,6 +832,10 @@ def generate_plots(output_dir: Path):
         if valid.empty:
             continue
 
+        # Use test_ppl for plots, fall back to final_ppl (val) if unavailable
+        ppl_col = 'test_ppl' if 'test_ppl' in valid.columns and valid['test_ppl'].notna().any() else 'final_ppl'
+        ppl_label = 'Test Perplexity' if ppl_col == 'test_ppl' else 'Validation Perplexity'
+
         # Try to extract numeric parameter value from label
         numeric_values = []
         for label in valid['label']:
@@ -860,7 +853,7 @@ def generate_plots(output_dir: Path):
             valid = valid.copy()
             valid['param_value'] = numeric_values
             valid = valid.sort_values('param_value')
-            ax.plot(valid['param_value'], valid['final_ppl'], 'o-', linewidth=2, markersize=8)
+            ax.plot(valid['param_value'], valid[ppl_col], 'o-', linewidth=2, markersize=8)
             ax.set_xlabel(sweep_name)
 
             # Mark baseline
@@ -875,14 +868,14 @@ def generate_plots(output_dir: Path):
                     pass
         else:
             # Categorical sweep: bar plot
-            valid = valid.sort_values('final_ppl')
+            valid = valid.sort_values(ppl_col)
             colors = ['#2ecc71' if i == 0 else '#3498db' for i in range(len(valid))]
-            ax.barh(range(len(valid)), valid['final_ppl'], color=colors)
+            ax.barh(range(len(valid)), valid[ppl_col], color=colors)
             ax.set_yticks(range(len(valid)))
             ax.set_yticklabels(valid['label'])
             ax.invert_yaxis()
 
-        ax.set_ylabel('Validation Perplexity')
+        ax.set_ylabel(ppl_label)
         ax.set_title(f"Ablation: {meta.get('description', sweep_name)}")
         fig.tight_layout()
         fig.savefig(fig_dir / f'{sweep_name}.png', dpi=150)
@@ -898,13 +891,14 @@ def generate_plots(output_dir: Path):
         valid = df[df['final_ppl'] < float('inf')]
         if valid.empty:
             continue
-        best = valid.loc[valid['final_ppl'].idxmin()]
-        worst = valid.loc[valid['final_ppl'].idxmax()]
+        ppl_col = 'test_ppl' if 'test_ppl' in valid.columns and valid['test_ppl'].notna().any() else 'final_ppl'
+        best = valid.loc[valid[ppl_col].idxmin()]
+        worst = valid.loc[valid[ppl_col].idxmax()]
         all_bests.append({
             'sweep': meta.get('sweep_name', sweep_dir.name),
-            'best_ppl': best['final_ppl'],
-            'worst_ppl': worst['final_ppl'],
-            'range': worst['final_ppl'] - best['final_ppl'],
+            'best_ppl': best[ppl_col],
+            'worst_ppl': worst[ppl_col],
+            'range': worst[ppl_col] - best[ppl_col],
             'best_label': best['label'],
         })
 
@@ -915,8 +909,8 @@ def generate_plots(output_dir: Path):
         ax.barh(y_pos, bdf['range'], color='#e74c3c', alpha=0.7)
         ax.set_yticks(y_pos)
         ax.set_yticklabels([f"{r['sweep']}\n(best: {r['best_label']})" for _, r in bdf.iterrows()])
-        ax.set_xlabel('PPL Range (worst - best)')
-        ax.set_title('Hyperparameter Sensitivity (PPL range per sweep)')
+        ax.set_xlabel('Test PPL Range (worst - best)')
+        ax.set_title('Hyperparameter Sensitivity (Test PPL range per sweep)')
         ax.invert_yaxis()
         fig.tight_layout()
         fig.savefig(fig_dir / 'sensitivity_summary.png', dpi=150)
