@@ -64,6 +64,8 @@ $$(A[k] + S[k]) \cdot \mu_i[k] = b[k] - c[k]$$
 
 $$\boxed{\mu_i^*[k] = \frac{b[k] - c[k]}{A[k] + S[k]}}$$
 
+**Sign convention:** $c[k]$ is the constant part of $\nabla F_{\text{softmax}}$ (positive when it pushes toward closer neighbors). It enters with a minus sign because the stationarity condition is $(A+S)\mu = b - c$ (the softmax coupling opposes the information from distant neighbors).
+
 where:
 
 **Linear terms** (existing closed form):
@@ -178,7 +180,7 @@ S_sigma = -(lam_s / (2 * kappa_h_scaled)) * einsum('bij,bijk->bik', w_j, inv_sig
 
 # Enhanced fixed point
 total_prec_enhanced = prior_prec + align_prec + S_mu         # A + S
-total_info_enhanced = prior_info + align_info - c_mu         # b - c
+total_info_enhanced = prior_info + align_info - c_mu         # b - c  (softmax opposes distant-neighbor info)
 mu_star = total_info_enhanced / total_prec_enhanced.clamp(min=eps)
 
 sigma_total_prec = prior_prec + align_prec + 2 * S_sigma     # lam_total + 2*S_sigma
