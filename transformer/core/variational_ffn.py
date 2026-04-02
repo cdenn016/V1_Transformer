@@ -26,8 +26,8 @@ Mathematical Foundation:
 -----------------------
 Free Energy (E-STEP):
     F = alpha * Sum_i KL(q_i||p_i)                         # Prior consistency
-      + lambda_beta * Sum_{i,j} beta_ij * KL(q_i||Omega_{ij}q_j)  # Belief alignment
-      + lambda_gamma * Sum_{i,j} gamma_ij * KL(p_i||Omega_{ij}p_j)  # Prior alignment
+      + lambda_belief * Sum_{i,j} beta_ij * KL(q_i||Omega_{ij}q_j)  # Belief alignment
+      + lambda_softmax * Sum_{i,j} gamma_ij * KL(p_i||Omega_{ij}p_j)  # Prior alignment
       + CE(W_out * mu, targets)                             # Discrete observations
 
 E-step: Minimize F w.r.t. mu, Sigma (with W_out frozen)
