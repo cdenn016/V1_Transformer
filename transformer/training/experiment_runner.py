@@ -550,7 +550,6 @@ class IterationDiagnosticsTracker:
         'grad_mu_norm', 'grad_sigma_norm', 'nat_grad_mu_norm', 'nat_grad_mu_raw_norm',
         'delta_mu_norm', 'mu_norm', 'sigma_mean',
         'sigma_max', 'sigma_min', 'sigma_std',
-        'delta_mu_norm', 'mu_norm', 'sigma_mean',
         'effective_lr', 'scale_mean',
         'mu_diff_to_prior_norm', 'beta_entropy', 'mu_change_rel',
     ]
@@ -1000,6 +999,10 @@ class PublicationTrainer(FastTrainer):
                 aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
             )
 
+        # Scale loss for gradient accumulation (gradients accumulate across micro-batches)
+        accum_steps = getattr(self.config, 'grad_accumulation_steps', 1)
+        if accum_steps > 1:
+            loss = loss / accum_steps
         loss.backward()
 
         # Tied weights + delta rule: zero out W_out gradient component.
@@ -1246,30 +1249,35 @@ class PublicationTrainer(FastTrainer):
 
         # Per-group clipping for large gauge groups (SO(N>3)):
         # phi_embed gradients dominate global norm, starving mu/sigma.
-        _use_param_groups = getattr(self.config, 'use_param_groups', True)
-        if self.config.grad_clip > 0:
-            if _use_param_groups:
-                for group in self.optimizer.param_groups:
-                    if group['params']:
-                        torch.nn.utils.clip_grad_norm_(
-                            group['params'],
-                            self.config.grad_clip,
-                        )
-            else:
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    self.config.grad_clip,
-                )
-        self.optimizer.step()
+        # Only clip/step/zero on accumulation boundaries (every N micro-batches).
+        _accum_steps = getattr(self.config, 'grad_accumulation_steps', 1)
+        _is_accum_step = (self.global_step + 1) % _accum_steps == 0
 
-        # Collect M-step natural gradient norms (after optimizer.step populates them)
         mstep_natural_norms = None
-        if is_log_step and hasattr(self.optimizer, 'get_grad_norms'):
-            mstep_natural_norms = self.optimizer.get_grad_norms()
+        if _is_accum_step:
+            _use_param_groups = getattr(self.config, 'use_param_groups', True)
+            if self.config.grad_clip > 0:
+                if _use_param_groups:
+                    for group in self.optimizer.param_groups:
+                        if group['params']:
+                            torch.nn.utils.clip_grad_norm_(
+                                group['params'],
+                                self.config.grad_clip,
+                            )
+                else:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(),
+                        self.config.grad_clip,
+                    )
+            self.optimizer.step()
 
-        if self.scheduler is not None:
-            self.scheduler.step()
-        self.optimizer.zero_grad()
+            # Collect M-step natural gradient norms (after optimizer.step populates them)
+            if is_log_step and hasattr(self.optimizer, 'get_grad_norms'):
+                mstep_natural_norms = self.optimizer.get_grad_norms()
+
+            if self.scheduler is not None:
+                self.scheduler.step()
+            self.optimizer.zero_grad()
 
         # --- 2b. Post-optimizer geometry: kappa clamp + SL(K) projection ---
         self._apply_post_backward_projections()

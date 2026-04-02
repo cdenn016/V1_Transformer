@@ -461,7 +461,9 @@ def fused_block_diagonal_kl_full(
             kl_group = 0.5 * (trace_term + mahal_term - d + logdet_term)
 
         kl_group = kl_group.clamp(min=0.0, max=kl_max)
-        kl_group = kl_group.nan_to_num(nan=0.0, posinf=kl_max, neginf=0.0)
+        # NaN → kl_max (repulsive): match scalar path — NaN pairs should be
+        # IGNORED (β→0), not ATTENDED (β→1).
+        kl_group = kl_group.nan_to_num(nan=kl_max, posinf=kl_max, neginf=0.0)
 
         kl_total = kl_total + kl_group.sum(dim=0)
 
