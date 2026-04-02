@@ -400,7 +400,7 @@ class GaugeTransformerBlock(nn.Module):
                 if sigma_attn.shape != sigma_q.shape:
                     sigma_q = sigma_attn
                 elif self.sigma_residual:
-                    sigma_q = (sigma_q + sigma_attn).clamp(min=1e-4)
+                    sigma_q = (sigma_q + sigma_attn).clamp(min=1e-4, max=self.sigma_max)
                 else:
                     sigma_q = sigma_attn
 
@@ -432,7 +432,7 @@ class GaugeTransformerBlock(nn.Module):
         # Update covariances from FFN if evolving
         if self.evolve_sigma and sigma_ffn is not None:
             if self.sigma_residual:
-                sigma_q = (sigma_q + sigma_ffn).clamp(min=1e-4)
+                sigma_q = (sigma_q + sigma_ffn).clamp(min=1e-4, max=self.sigma_max)
             else:
                 sigma_q = sigma_ffn
 
