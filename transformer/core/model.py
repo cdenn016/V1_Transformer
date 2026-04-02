@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 # Import our components
 from transformer.core.embeddings import GaugeTokenEmbedding, GaugePositionalEncoding
-from transformer.core.blocks import GaugeTransformerStack
+from transformer.core.blocks import GaugeTransformerStack, RMSNorm
 from transformer.core.variational_ffn import ImplicitEMGradient, ImplicitEMGradientSigma
 from transformer.core.block_config import BlockConfig
 from transformer.core.attention import create_attention_mask
@@ -842,6 +842,8 @@ class GaugeTransformerLM(nn.Module):
         elif isinstance(module, nn.LayerNorm):
             torch.nn.init.ones_(module.weight)
             torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, RMSNorm):
+            torch.nn.init.ones_(module.weight)
 
     def forward(
         self,
