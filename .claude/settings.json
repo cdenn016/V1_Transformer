@@ -12,16 +12,5 @@
     ]
   },
   "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python -m pytest transformer/pure_vfe/tests/test_gradients.py -x --tb=short 2>&1 | tail -10"
-          }
-        ]
-      }
-    ]
   }
 }

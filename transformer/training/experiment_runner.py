@@ -2259,14 +2259,14 @@ def run_single_experiment(
         semantic_interval = config.get('semantic_analysis_interval',
                                        getattr(args, 'semantic_analysis_interval', 10000) if args else 10000)
         pub_metrics.set_semantic_analysis_interval(semantic_interval)
-        print(f"[Config] Gauge frame semantic analysis every { semantic_interval} steps")
+        logger.info(f"Gauge frame semantic analysis every {semantic_interval} steps")
 
         # Configure holonomy diagnostics interval
         holonomy_interval = config.get('holonomy_interval', 500)
         holonomy_sample_size = config.get('holonomy_sample_size', 500)
         pub_metrics.set_holonomy_interval(
             holonomy_interval, holonomy_sample_size)
-        print(f"[Config] Holonomy diagnostics every { holonomy_interval} steps (sample_size={holonomy_sample_size})")
+        logger.info(f"Holonomy diagnostics every {holonomy_interval} steps (sample_size={holonomy_sample_size})")
 
     trainer = PublicationTrainer(
         model=model,
@@ -2282,26 +2282,26 @@ def run_single_experiment(
     # Training (Standard Backprop)
     # =================================================================
 
-    print("\n" + "="*70)
-    print("STARTING TRAINING")
-    print("="*70)
-    print(f"Device: {device}")
-    print(f"FFN mode: {ffn_mode}")
+    logger.info("="*70)
+    logger.info("STARTING TRAINING")
+    logger.info("="*70)
+    logger.info(f"Device: {device}")
+    logger.info(f"FFN mode: {ffn_mode}")
     # Show epochs-based info if set
     if train_config.epochs is not None and train_config.epochs > 0:
         eff_steps = train_config.epochs * steps_per_epoch
-        print(f"Epochs: {train_config.epochs} ({ steps_per_epoch:,} steps/epoch = {eff_steps:,} total)")
+        logger.info(f"Epochs: {train_config.epochs} ({steps_per_epoch:,} steps/epoch = {eff_steps:,} total)")
     else:
-        print(f"Total steps: {train_config.max_steps:,}")
-    print("\nNOTE: First few batches may be slow (JIT compilation)")
-    print("="*70 + "\n")
+        logger.info(f"Total steps: {train_config.max_steps:,}")
+    logger.info("NOTE: First few batches may be slow (JIT compilation)")
+    logger.info("="*70)
 
     try:
         trainer.train()
 
-        print("\n" + "="*70)
-        print("✓ TRAINING COMPLETE!")
-        print("="*70)
+        logger.info("="*70)
+        logger.info("TRAINING COMPLETE!")
+        logger.info("="*70)
 
         # Final evaluation
         final_metrics = trainer.validate()
@@ -2312,21 +2312,21 @@ def run_single_experiment(
         if final_metrics['ce_loss'] < trainer.best_val_ce:
             trainer.best_val_ce = final_metrics['ce_loss']
 
-        print(f"\nFinal Validation Metrics:")
-        print(f"  Loss:       {final_metrics['loss']:.4f}")
-        print(f"  Perplexity: {final_metrics['perplexity']:.2f}")
+        logger.info("Final Validation Metrics:")
+        logger.info(f"  Loss:       {final_metrics['loss']:.4f}")
+        logger.info(f"  Perplexity: {final_metrics['perplexity']:.2f}")
 
         # vs random baseline
         random_ppl = actual_vocab_size
         improvement = random_ppl / final_metrics['perplexity']
-        print(f"\nValidation improvement over random:")
-        print(f"  Random:     {random_ppl:.0f}")
-        print(f"  Model:      {final_metrics['perplexity']:.2f}")
-        print(f"  Factor:     {improvement:.1f}x better!")
+        logger.info("Validation improvement over random:")
+        logger.info(f"  Random:     {random_ppl:.0f}")
+        logger.info(f"  Model:      {final_metrics['perplexity']:.2f}")
+        logger.info(f"  Factor:     {improvement:.1f}x better!")
 
         # Save final checkpoint
         final_ckpt = trainer.save_checkpoint(is_best=True)
-        print(f"\n✓ Saved: {final_ckpt}")
+        logger.info(f"Saved: {final_ckpt}")
 
         # Generate VFE dynamics figures from training metrics CSV
         try:
@@ -2336,9 +2336,9 @@ def run_single_experiment(
                 vfe_fig_dir = exp_checkpoint_dir / 'vfe_dynamics_figures'
                 saved_figs = generate_all_vfe_figures(metrics_csv, vfe_fig_dir)
                 if saved_figs:
-                    print(f"\n✓ Generated {len(saved_figs)} VFE dynamics figures in {vfe_fig_dir}")
+                    logger.info(f"Generated {len(saved_figs)} VFE dynamics figures in {vfe_fig_dir}")
         except Exception as e:
-            print(f"\n[WARN] VFE dynamics figure generation failed: {e}")
+            logger.warning(f"VFE dynamics figure generation failed: {e}")
 
         # Generate per-head kappa plot if learnable_head_kappa was enabled
         try:
@@ -2350,7 +2350,7 @@ def run_single_experiment(
                     kappa_fig_path = exp_checkpoint_dir / 'head_kappas.png'
                     plot_head_kappas(csv_metrics, kappa_fig_path)
         except Exception as e:
-            print(f"\n[WARN] Head kappa plot generation failed: {e}")
+            logger.warning(f"Head kappa plot generation failed: {e}")
 
         # Run test set evaluation if test loader is available
         test_metrics = None
@@ -2397,15 +2397,15 @@ def run_single_experiment(
         return result
 
     except KeyboardInterrupt:
-        print("\n\n" + "="*70)
-        print("TRAINING INTERRUPTED")
-        print("="*70)
+        logger.info("="*70)
+        logger.info("TRAINING INTERRUPTED")
+        logger.info("="*70)
         ckpt = trainer.save_checkpoint(is_best=False)
-        print(f"✓ Saved: {ckpt}")
+        logger.info(f"Saved: {ckpt}")
         return None
 
     except Exception as e:
-        print(f"\n\n❌ Error: {e}")
+        logger.error(f"Error: {e}")
         raise
 
 
@@ -2475,7 +2475,7 @@ def _plot_pure_vfe_attention(model, val_loader, device, step, attn_dir, prefix):
                 fig.savefig(attn_dir / f'{prefix}_head{h}.png', dpi=150)
                 plt.close(fig)
     except Exception as e:
-        print(f"  [WARN] Attention figure failed: {e}")
+        logger.warning(f"Attention figure failed: {e}")
 
 
 def _plot_pure_vfe_prior_stats(model, step, figures_dir, prefix):
@@ -2517,7 +2517,7 @@ def _plot_pure_vfe_prior_stats(model, step, figures_dir, prefix):
         fig.savefig(figures_dir / f'{prefix}_prior_stats.png', dpi=150)
         plt.close(fig)
     except Exception as e:
-        print(f"  [WARN] Prior stats figure failed: {e}")
+        logger.warning(f"Prior stats figure failed: {e}")
 
 
 def _plot_pure_vfe_gauge_health(model, step, figures_dir, prefix):
@@ -2549,7 +2549,7 @@ def _plot_pure_vfe_gauge_health(model, step, figures_dir, prefix):
         fig.savefig(figures_dir / f'{prefix}_gauge_health.png', dpi=150)
         plt.close(fig)
     except Exception as e:
-        print(f"  [WARN] Gauge health figure failed: {e}")
+        logger.warning(f"Gauge health figure failed: {e}")
 
 
 def _plot_pure_vfe_semantic_pca(model, figures_dir, prefix, tokenizer=None):
@@ -2591,7 +2591,7 @@ def _plot_pure_vfe_semantic_pca(model, figures_dir, prefix, tokenizer=None):
         fig.savefig(figures_dir / f'{prefix}_semantic_pca.png', dpi=150)
         plt.close(fig)
     except Exception as e:
-        print(f"  [WARN] Semantic PCA figure failed: {e}")
+        logger.warning(f"Semantic PCA figure failed: {e}")
 
 
 def _plot_pure_vfe_holonomy(model, val_loader, device, config):
@@ -2613,12 +2613,12 @@ def _plot_pure_vfe_holonomy(model, val_loader, device, config):
                 Omega_h, config.n_heads, config.head_dim
             )
 
-        print(f"\n  Holonomy Analysis (final):")
-        print(f"    Mean ||C - I||_F: {holonomy['mean_norm']:.6f}")
-        print(f"    Max  ||C - I||_F: {holonomy['max_norm']:.6f}")
-        print(f"    Triangles:        {holonomy['n_triangles']}")
+        logger.info("  Holonomy Analysis (final):")
+        logger.info(f"    Mean ||C - I||_F: {holonomy['mean_norm']:.6f}")
+        logger.info(f"    Max  ||C - I||_F: {holonomy['max_norm']:.6f}")
+        logger.info(f"    Triangles:        {holonomy['n_triangles']}")
     except Exception as e:
-        print(f"  [WARN] Holonomy analysis failed: {e}")
+        logger.warning(f"Holonomy analysis failed: {e}")
 
 
 def _save_pure_vfe_figures(model, val_loader, device, step, attn_dir,
@@ -2658,9 +2658,9 @@ def _save_pure_vfe_figures(model, val_loader, device, step, attn_dir,
         _plot_pure_vfe_holonomy(model, val_loader, device, config)
 
     if final:
-        print(f"\n[INFO] Final figures saved to: {figures_dir}")
+        logger.info(f"Final figures saved to: {figures_dir}")
     else:
-        print(f"  [INFO] Figures saved at step {step}")
+        logger.info(f"  Figures saved at step {step}")
 
 
 def run_pure_vfe_experiment(
@@ -2677,9 +2677,9 @@ def run_pure_vfe_experiment(
     Training happens via model.update() which internally runs E-step
     (VFE descent) + M-step (natural gradient on priors).
     """
-    print("\n" + "="*70)
-    print("EXPERIMENT: PURE VFE TRANSFORMER")
-    print("="*70)
+    logger.info("="*70)
+    logger.info("EXPERIMENT: PURE VFE TRANSFORMER")
+    logger.info("="*70)
 
     ffn_mode = 'pure_vfe'
     exp_checkpoint_dir = checkpoint_dir / f"ffn_{ffn_mode}"
@@ -2692,9 +2692,9 @@ def run_pure_vfe_experiment(
     # Data Loading (same pipeline as other modes)
     # =================================================================
     dataset_name = config.get('dataset', 'wikitext-103')
-    print("\n" + "="*70)
-    print(f"LOADING {dataset_name.upper()} DATA")
-    print("="*70)
+    logger.info("="*70)
+    logger.info(f"LOADING {dataset_name.upper()} DATA")
+    logger.info("="*70)
 
     train_loader, val_loader, test_loader, actual_vocab_size, tokenizer = _create_dataloaders(config)
     use_char = tokenizer is None  # Character-level tokenizer returns None
@@ -2704,9 +2704,9 @@ def run_pure_vfe_experiment(
     # =================================================================
     # Model Creation
     # =================================================================
-    print("\n" + "="*70)
-    print("CREATING PURE VFE MODEL")
-    print("="*70)
+    logger.info("="*70)
+    logger.info("CREATING PURE VFE MODEL")
+    logger.info("="*70)
 
     # Build PureVFEConfig from the config dict (only pass fields that PureVFEConfig accepts)
     import dataclasses
@@ -2719,22 +2719,22 @@ def run_pure_vfe_experiment(
     params = model.param_count()
     total_params = params['total']
 
-    print(f"  K (belief_dim): {pure_config.belief_dim}")
-    print(f"  H (n_heads):    {pure_config.n_heads}")
-    print(f"  K_h (head_dim): {pure_config.head_dim}")
-    print(f"  N (seq len):    {pure_config.max_seq_len}")
-    print(f"  E-steps:        {pure_config.n_esteps}")
-    print(f"  mu_q_lr:        {pure_config.mu_q_lr}")
-    print(f"  sigma_q_lr:     {pure_config.sigma_q_lr}")
-    print(f"  phi_lr:         {pure_config.phi_lr}")
-    print(f"  mu_p_lr:        {pure_config.mu_p_lr}")
-    print(f"  sigma_p_lr:     {pure_config.sigma_p_lr}")
-    print(f"  gauge_param:    {pure_config.gauge_param}")
-    print(f"  Vocab:          {actual_vocab_size}")
-    print(f"\nModel Parameters: {total_params:,}")
+    logger.info(f"  K (belief_dim): {pure_config.belief_dim}")
+    logger.info(f"  H (n_heads):    {pure_config.n_heads}")
+    logger.info(f"  K_h (head_dim): {pure_config.head_dim}")
+    logger.info(f"  N (seq len):    {pure_config.max_seq_len}")
+    logger.info(f"  E-steps:        {pure_config.n_esteps}")
+    logger.info(f"  mu_q_lr:        {pure_config.mu_q_lr}")
+    logger.info(f"  sigma_q_lr:     {pure_config.sigma_q_lr}")
+    logger.info(f"  phi_lr:         {pure_config.phi_lr}")
+    logger.info(f"  mu_p_lr:        {pure_config.mu_p_lr}")
+    logger.info(f"  sigma_p_lr:     {pure_config.sigma_p_lr}")
+    logger.info(f"  gauge_param:    {pure_config.gauge_param}")
+    logger.info(f"  Vocab:          {actual_vocab_size}")
+    logger.info(f"Model Parameters: {total_params:,}")
     for k, v in params.items():
         if k != 'total':
-            print(f"  {k}: {v:,}")
+            logger.info(f"  {k}: {v:,}")
 
     # Attempt to load CUDA kernels
     if pure_config.use_cuda_kernels and str(device) == 'cuda':
@@ -2742,11 +2742,11 @@ def run_pure_vfe_experiment(
             from transformer.pure_vfe.cuda_ext import get_cuda_ext
             cuda_ext = get_cuda_ext()
             if cuda_ext:
-                print("\n[CUDA kernels active]")
+                logger.info("[CUDA kernels active]")
             else:
-                print("\n[Falling back to PyTorch ops]")
+                logger.info("[Falling back to PyTorch ops]")
         except Exception:
-            print("\n[CUDA kernels not available, using PyTorch ops]")
+            logger.info("[CUDA kernels not available, using PyTorch ops]")
 
     # =================================================================
     # Training Configuration
@@ -2767,27 +2767,27 @@ def run_pure_vfe_experiment(
     except AttributeError:
         dataset_tokens = None
 
-    print("\n" + "="*70)
-    print("TRAINING CONFIGURATION")
-    print("="*70)
-    print(f"  Max steps:      {max_steps:,}")
-    print(f"  Steps/epoch:    {steps_per_epoch:,}")
+    logger.info("="*70)
+    logger.info("TRAINING CONFIGURATION")
+    logger.info("="*70)
+    logger.info(f"  Max steps:      {max_steps:,}")
+    logger.info(f"  Steps/epoch:    {steps_per_epoch:,}")
     equiv_epochs = max_steps / steps_per_epoch if steps_per_epoch > 0 else 0
-    print(f"  *** EPOCHS:     {equiv_epochs:.4f} ***")
-    print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
+    logger.info(f"  *** EPOCHS:     {equiv_epochs:.4f} ***")
+    logger.info(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
     if dataset_tokens:
         coverage = total_tokens / dataset_tokens * 100
-        print(f"  Dataset:        {dataset_tokens:,} ({ dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
-    print(f"  Batch size:     {batch_size}")
-    print(f"  Seq length:     {seq_len}")
-    print(f"  No optimizer (natural gradient only)")
+        logger.info(f"  Dataset:        {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
+    logger.info(f"  Batch size:     {batch_size}")
+    logger.info(f"  Seq length:     {seq_len}")
+    logger.info("  No optimizer (natural gradient only)")
 
     # =================================================================
     # Metrics Tracker
     # =================================================================
     metrics_path = exp_checkpoint_dir / 'metrics.csv'
     metrics_tracker = PublicationMetricsTracker(metrics_path)
-    print(f"\n[INFO] Logging metrics to: {metrics_path}")
+    logger.info(f"Logging metrics to: {metrics_path}")
 
     # =================================================================
     # Figure Directories
@@ -2801,26 +2801,26 @@ def run_pure_vfe_experiment(
     # Propagate max_steps to model config for LR scheduling
     pure_config.max_steps = max_steps
 
-    # Print new feature status
-    print(f"\n  Features enabled:")
-    print(f"    RoPE:          {pure_config.use_rope}")
-    print(f"    Adam M-step:   {pure_config.use_adam_m_step}")
-    print(f"    LR schedule:   {pure_config.lr_schedule} (warmup={pure_config.warmup_steps})")
-    print(f"    Grad accum:    {pure_config.grad_accum_steps}")
-    print(f"    Diagonal Σ:    {pure_config.diagonal_covariance}")
-    print(f"    LayerNorm:     {pure_config.use_layernorm}")
-    print(f"    Holonomy:      {pure_config.use_holonomy}")
-    print(f"    Figure save:   every {figure_interval} steps")
+    # Log new feature status
+    logger.info("  Features enabled:")
+    logger.info(f"    RoPE:          {pure_config.use_rope}")
+    logger.info(f"    Adam M-step:   {pure_config.use_adam_m_step}")
+    logger.info(f"    LR schedule:   {pure_config.lr_schedule} (warmup={pure_config.warmup_steps})")
+    logger.info(f"    Grad accum:    {pure_config.grad_accum_steps}")
+    logger.info(f"    Diagonal Sigma: {pure_config.diagonal_covariance}")
+    logger.info(f"    LayerNorm:     {pure_config.use_layernorm}")
+    logger.info(f"    Holonomy:      {pure_config.use_holonomy}")
+    logger.info(f"    Figure save:   every {figure_interval} steps")
 
     # =================================================================
     # Training Loop
     # =================================================================
-    print("\n" + "="*70)
-    print("STARTING PURE VFE TRAINING")
-    print("="*70)
-    print(f"  Device: {device}")
-    print(f"  No backprop — E-step VFE descent + M-step natural gradient")
-    print("="*70 + "\n")
+    logger.info("="*70)
+    logger.info("STARTING PURE VFE TRAINING")
+    logger.info("="*70)
+    logger.info(f"  Device: {device}")
+    logger.info("  No backprop -- E-step VFE descent + M-step natural gradient")
+    logger.info("="*70)
 
     best_val_ce = float('inf')
     train_iterator = iter(train_loader)
