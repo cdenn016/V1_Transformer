@@ -4,7 +4,7 @@ The model plateaus at test PPL ~71 on WikiText-103 with K=80-120, GL(10)/GL(15)/
 
 ---
 
-## 1. The M-Step Loss Is Pure Cross-Entropy
+## 1. The M-Step Loss Is Pure Cross-Entropy — And That's Correct
 
 Current EM_CONFIG loss weights:
 ```python
@@ -17,11 +17,55 @@ mass_phi = 0.01   # gauge prior (mild regularizer)
 
 The only M-step loss driving learning is CE + weight_decay + 0.01 phi regularization. The model is trained as **pure cross-entropy** through a VFE-constrained forward pass. The VFE structure (attention via KL, belief evolution) is implicit in the forward pass but the M-step doesn't explicitly optimize VFE quantities.
 
-This means: the E-step (VFE descent) determines the computational graph through which CE gradients flow, but the M-step loss has no term that rewards good VFE behavior (low self-coupling, good alignment, etc). The embeddings learn to minimize CE, not to be good priors for VFE inference.
+This is **the correct EM factorization**. In standard EM, the M-step maximizes the expected complete-data log-likelihood E_q[log p(o,z|θ)], not the full VFE. The KL terms (self-coupling, alignment, hyper-prior) are the E-step's responsibility. Adding them to the M-step conflates the two optimization stages.
 
-**Implication:** The model may learn embeddings that are good for CE but poor for VFE dynamics. For example, embeddings could converge to a state where the single VFE iteration makes only a small correction, and all the useful information comes from the attention sublayer's linear aggregation, not from the Boltzmann gate nonlinearity.
+## 1a. Why Non-Zero VFE Loss Weights Hurt Performance
 
-**Possible fix:** Small nonzero M_alpha (e.g., 0.01-0.1) would encourage embeddings that are good initializations for the E-step, because KL(q*||p) measures how far the converged beliefs moved from the prior.
+Ablations confirm that setting any of M_alpha, M_beta, lambda_gamma, lambda_hyper > 0 **diminishes test PPL**. The mechanism is gradient interference in the amortized-inference regime.
+
+### Critical config detail
+
+With `implicit_em: False` and `amortized_inference: True`, gradients flow **straight through the 1-iteration E-step graph** to embeddings. There is no IFT scaling (`_last_implicit_mu_scale` is None). This means M-step loss terms can directly modulate E-step dynamics via backprop.
+
+### M_alpha > 0: E-step correction penalty (primary failure mode)
+
+With 1 VFE iteration, the E-step computes:
+```
+mu_q = mu_embed + correction
+```
+where `correction` comes from alignment + Boltzmann gate terms (self-coupling is zero at init since mu = mu_p = mu_embed). The M_alpha KL term measures:
+```
+KL_mu ≈ (1/2) * correction^T * Σ_p^{-1} * correction
+```
+
+In amortized mode, the gradient of this flows back through the E-step graph and tells embeddings: **"make smaller corrections."** This directly penalizes the E-step correction magnitude — which IS the model's nonlinearity. The Boltzmann gate weakens, and the model degenerates toward linear attention + output projection.
+
+### M_alpha > 0: sigma gradient asymmetry
+
+sigma_p is detached in the E-step (variational_ffn.py:1739), and sigma_q is detached in the M-step KL (train.py:393). So sigma_embed receives only ∂KL/∂sigma_p, which pushes sigma_p toward a sigma_q that was computed from a detached copy of sigma_p. This one-sided gradient can push sigma_p toward degenerate values.
+
+### M_beta > 0: double-counting the E-step objective
+
+The E-step already minimizes Σ β_ij KL(q_i || Ω_ij q_j). Adding this to the M-step penalizes the same quantity twice. The M_beta gradient flows through KL terms to embeddings and says "start where transported beliefs are already close" — homogenizing the embedding space and reducing representational diversity.
+
+### lambda_hyper > 0: redundant regularization
+
+KL(s_i || h) with h = detached centroid is an L2 regularizer on embedding deviations from the batch mean, redundant with the existing embed_weight_decay = 0.05.
+
+### lambda_gamma > 0: gauge over-regularization
+
+Redundant with mass_phi = 0.01 (L2 on phi). With gauge_dim=10 and block-diagonal structure, the gauge frames have limited capacity already.
+
+### Why the "small M_alpha" suggestion was wrong
+
+The earlier suggestion (Section 8.4) assumed: (1) implicit EM mode with proper IFT scaling, (2) multiple VFE iterations where q* is far from p, (3) that KL(q*||p) measures initialization quality. With the actual config (amortized mode, 1 iteration), M_alpha directly suppresses the computational nonlinearity rather than improving it.
+
+### When VFE M-step terms might work
+
+1. **With ffn_n_iterations >= 3**: the E-step converges to a non-trivial fixed point, so KL(q*||p) is meaningful rather than just penalizing a small correction
+2. **With implicit_em=True**: the IFT scaling properly mediates between CE and VFE gradients
+3. **With fully detached mu_q in KL**: KL(q_det||p) avoids the E-step correction penalty, but provides weaker signal
+4. **As fine-tuning after CE convergence**: the E-step dynamics are established enough to survive mild penalization
 
 ---
 
@@ -154,12 +198,11 @@ Remove the attention sublayer. Use the freed compute for a second VFE iteration.
 
 This might technically violate the "1 VFE iteration" constraint depending on how strictly it is interpreted. But it preserves the "1 layer" constraint and has the same total compute.
 
-### 8.4 Small M_alpha > 0 (EASY, MEDIUM POTENTIAL)
+### 8.4 ~~Small M_alpha > 0~~ — HARMFUL in current config
 
-Try M_alpha = 0.01 to 0.1. This adds KL(q*||p) to the loss, which:
-- Provides sigma_p with gradient (the KL depends on both σ_q and σ_p)
-- Encourages embeddings that are good VFE initializations
-- Regularizes beliefs to stay near priors (prevents the E-step from making useless corrections)
+**Do NOT use non-zero M_alpha with amortized_inference=True and ffn_n_iterations=1.** See Section 1a for the detailed mechanism: M_alpha directly penalizes the E-step correction through the amortized gradient graph, killing the Boltzmann gate nonlinearity.
+
+If VFE M-step terms are desired, first switch to `implicit_em=True` (which applies IFT scaling to properly mediate VFE and CE gradients) AND increase `ffn_n_iterations >= 3` (so the E-step converges to a non-trivial fixed point where KL(q*||p) is meaningful).
 
 ### 8.5 RMSNorm Instead of LayerNorm (MEDIUM, MEDIUM POTENTIAL)
 
