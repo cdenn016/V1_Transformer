@@ -60,7 +60,7 @@ $$\frac{\partial F}{\partial \mu_i[k]} = \underbrace{\frac{\alpha}{\sigma_p[k]}(
 
 Collecting $\mu_i[k]$:
 
-$$(A[k] + S[k]) \cdot \mu_i[k] = b[k] + c[k]$$
+$$(A[k] + S[k]) \cdot \mu_i[k] = b[k] - c[k]$$
 
 $$\boxed{\mu_i^*[k] = \frac{b[k] - c[k]}{A[k] + S[k]}}$$
 
