@@ -438,7 +438,6 @@ class VariationalFFNDynamic(nn.Module):
                                    # prediction quality (CE only, α_M = 0).
         lambda_belief: float = 1.0,  # Belief alignment weight (direct: β·∇KL)
         lambda_softmax: float = 1.0,  # Softmax coupling weight (GELU-like ∂β/∂θ · KL)
-        attach_beta: bool = True,  # Attach beta gradients to phi/omega updates (nonlinear signal)
         kappa: float = 1.0,        # Attention temperature
         n_iterations: int = 1,    # VFE descent steps (more steps = deeper equilibration)
         learnable_lr: bool = True, # Learn step size?
@@ -652,7 +651,6 @@ class VariationalFFNDynamic(nn.Module):
         self.alpha = alpha
         self.lambda_belief = lambda_belief
         self.lambda_softmax = lambda_softmax
-        self.attach_beta = attach_beta
         self.kappa = kappa
         self.learnable_head_kappa = learnable_head_kappa
 
@@ -973,8 +971,7 @@ class VariationalFFNDynamic(nn.Module):
             else:
                 beta_h = beta_kl_h
                 kl_h = beta_h
-            beta_h_eff = beta_h if self.attach_beta else beta_h.detach()
-            alignment_loss = alignment_loss + self.lambda_belief * (beta_h_eff * kl_h).sum()
+            alignment_loss = alignment_loss + self.lambda_belief * (beta_h * kl_h).sum()
             block_start = block_end
 
         if alignment_loss.grad_fn is not None:
@@ -1118,8 +1115,7 @@ class VariationalFFNDynamic(nn.Module):
                 # Achieved via stop-gradient: detach the factor NOT being differentiated.
                 alignment_loss = alignment_loss + (
                     self.lambda_belief * (beta_phi_h.detach() * kl_h).sum()
-                    + (self.lambda_softmax * (beta_phi_h * kl_h.detach()).sum()
-                       if self.attach_beta else 0.0)
+                    + self.lambda_softmax * (beta_phi_h * kl_h.detach()).sum()
                 )
                 block_start = block_end
         else:
@@ -1145,8 +1141,7 @@ class VariationalFFNDynamic(nn.Module):
                 kl_matrix = beta_phi
             alignment_loss = (
                 self.lambda_belief * (beta_phi.detach() * kl_matrix).sum()
-                + (self.lambda_softmax * (beta_phi * kl_matrix.detach()).sum()
-                   if self.attach_beta else 0.0)
+                + self.lambda_softmax * (beta_phi * kl_matrix.detach()).sum()
             )
 
         if alignment_loss.grad_fn is not None:
@@ -1518,8 +1513,7 @@ class VariationalFFNDynamic(nn.Module):
                         exact_diagonal_transport=self.exact_diagonal_transport,
                     )
                     beta_phi_h, kl_h = beta_phi_h_result
-                    beta_eff_h = beta_phi_h if self.attach_beta else beta_phi_h.detach()
-                    alignment_loss = alignment_loss + self.lambda_belief * (beta_eff_h * kl_h).sum()
+                    alignment_loss = alignment_loss + self.lambda_belief * (beta_phi_h * kl_h).sum()
                     block_start = block_end
             else:
                 beta_for_phi_result = compute_attention_weights(
@@ -1538,8 +1532,7 @@ class VariationalFFNDynamic(nn.Module):
                 else:
                     beta_phi = beta_for_phi_result
                     kl_matrix = beta_phi
-                beta_phi_eff = beta_phi if self.attach_beta else beta_phi.detach()
-                alignment_loss = self.lambda_belief * (beta_phi_eff * kl_matrix).sum()
+                alignment_loss = self.lambda_belief * (beta_phi * kl_matrix).sum()
 
             # Differentiable Euclidean phi step (autograd tracks through alignment_loss)
             phi_lr_step = self.phi_lr
@@ -1921,7 +1914,7 @@ class VariationalFFNDynamic(nn.Module):
                 kappa_h_val = kappa_h.item() if isinstance(kappa_h, torch.Tensor) else kappa_h
                 kappa_h_scaled = max(kappa_h_val * math.sqrt(max(d_h, 1)), eps)
 
-                if self.attach_beta and self.lambda_softmax > 0 and kappa_h_scaled > 0:
+                if self.lambda_softmax > 0 and kappa_h_scaled > 0:
                     w_j_scalar = kl_h * beta_h  # (B, N, N)
                     w_bar = w_j_scalar.sum(dim=-1)  # (B, N)
 
@@ -2061,7 +2054,7 @@ class VariationalFFNDynamic(nn.Module):
         beta_current = beta_heads[-1] if beta_heads else None
 
         # ── Iterative re-solve: Picard steps ─────────────────────────────
-        if self.n_picard_steps > 0 and self.attach_beta and self.lambda_softmax > 0 and _cf_bep is not None:
+        if self.n_picard_steps > 0 and self.lambda_softmax > 0 and _cf_bep is not None:
             if is_diagonal:
                 for _resolve_iter in range(self.n_picard_steps):
                     mu_prev = mu_current.clone()
@@ -2132,7 +2125,7 @@ class VariationalFFNDynamic(nn.Module):
                         kappa_h_val = kappa_h.item() if isinstance(kappa_h, torch.Tensor) else kappa_h
                         kappa_h_scaled = max(kappa_h_val * math.sqrt(max(d_h, 1)), eps)
 
-                        if self.attach_beta and self.lambda_softmax > 0 and kappa_h_scaled > 0:
+                        if self.lambda_softmax > 0 and kappa_h_scaled > 0:
                             w_j_scalar = kl_h * beta_h
                             w_bar = w_j_scalar.sum(dim=-1)
                             kl_weighted_prec = torch.einsum('bij,bijk->bik', w_j_scalar, inv_sigma_j_t)

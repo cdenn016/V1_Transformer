@@ -194,7 +194,6 @@ EM_CONFIG = {
     'E_alpha':               1,      # E-step prior coupling weight
     'E_lambda_belief':       2,    # E-step belief alignment weight
     'E_lambda_softmax':      4,
-    'E_attach_beta':         True,   # Attach beta gradients (nonlinear Boltzmann gate signal)
     'E_learnable_alpha':     True,   # Adaptive α_i = c0/(b0 + KL) per dimension
 
     
