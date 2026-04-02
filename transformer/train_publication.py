@@ -177,8 +177,9 @@ EM_CONFIG = {
     'fisher_ema_decay':      0.95,            # for natural_gradient
     'fisher_damping':        1e-2,              # for natural_gradient
 
-    
+
     'use_layernorm':         True,
+    # 'norm_type':           'layernorm',  # 'layernorm' | 'rmsnorm' | 'none'
     'use_residual':          True,
     'use_output_projection': True,
     'multihead_vfe':         True,
@@ -359,6 +360,7 @@ HEBBIAN_CONFIG = {
     'tie_embeddings':        False,
 
     'use_layernorm':         True,
+    # 'norm_type':           'layernorm',  # 'layernorm' | 'rmsnorm' | 'none'
     'use_residual':          True,
     'use_output_projection': True,
     'E_learnable_lr':      True,

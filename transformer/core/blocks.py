@@ -5,7 +5,7 @@ Gauge-Theoretic Transformer Block (0D Architecture)
 Complete transformer block with:
 1. Gauge-theoretic multi-head attention (IrrepMultiHeadAttention, KL-based)
 2. Variational free energy FFN (VariationalFFNDynamic, E-step belief evolution)
-3. Optional LayerNorm and residual connections (toggled for pure VFE ablation)
+3. Optional normalization (LayerNorm/RMSNorm) and residual connections (toggled for pure VFE ablation)
 4. Optional non-flat gauge transport via edge-local GaugeConnection
 
 Data flow:
@@ -39,6 +39,49 @@ except ImportError:
     TRAJECTORY_TRACKING_AVAILABLE = False
     def get_global_recorder():
         return None
+
+
+class RMSNorm(nn.Module):
+    r"""Root Mean Square Layer Normalization.
+
+    .. math::
+        \mu_{\text{rms}} = \frac{\mu}{\text{RMS}(\mu)} \cdot \gamma
+
+    where :math:`\text{RMS}(\mu) = \sqrt{\frac{1}{K}\sum_k \mu_k^2 + \epsilon}`.
+
+    Unlike LayerNorm, RMSNorm does not subtract the mean, preserving the mean
+    of belief vectors while normalizing scale. This partially preserves the
+    GL(K) scaling component of gauge transport.
+    """
+
+    def __init__(self, normalized_shape: int, eps: float = 1e-5):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(normalized_shape))
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        rms = torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+        return x / rms * self.weight
+
+    def extra_repr(self) -> str:
+        return f"{self.weight.shape[0]}, eps={self.eps}"
+
+
+def _make_norm(norm_type: str, dim: int) -> nn.Module:
+    """Factory for normalization layers.
+
+    Args:
+        norm_type: 'layernorm', 'rmsnorm', or 'none'
+        dim: Normalized dimension (embed_dim).
+    """
+    if norm_type == 'layernorm':
+        return nn.LayerNorm(dim)
+    elif norm_type == 'rmsnorm':
+        return RMSNorm(dim)
+    elif norm_type == 'none':
+        return nn.Identity()
+    else:
+        raise ValueError(f"Unknown norm_type: {norm_type!r}. Expected 'layernorm', 'rmsnorm', or 'none'.")
 
 
 def _infer_gauge_group(generators):
@@ -103,6 +146,7 @@ class GaugeTransformerBlock(nn.Module):
 
         # Pure VFE mode flags
         self.use_layernorm = cfg.use_layernorm
+        self.norm_type = cfg.norm_type
         self.use_residual = cfg.use_residual
         self.sigma_residual = getattr(cfg, 'sigma_residual', False)
         self.sigma_max = cfg.sigma_max
@@ -138,8 +182,8 @@ class GaugeTransformerBlock(nn.Module):
             learnable_head_kappa=cfg.learnable_head_kappa,
         )
 
-        # Conditionally create LayerNorm (disabled for pure VFE)
-        self.norm1 = nn.LayerNorm(cfg.embed_dim) if cfg.use_layernorm else nn.Identity()
+        # Normalization (LayerNorm, RMSNorm, or Identity)
+        self.norm1 = _make_norm(cfg.norm_type, cfg.embed_dim)
 
         # =====================================================================
         # VFE_dynamic FFN Sublayer (VariationalFFNDynamic directly, no wrapper)
@@ -199,7 +243,7 @@ class GaugeTransformerBlock(nn.Module):
             picard_trust_region=cfg.picard_trust_region,
         )
 
-        self.norm2 = nn.LayerNorm(cfg.embed_dim) if cfg.use_layernorm else nn.Identity()
+        self.norm2 = _make_norm(cfg.norm_type, cfg.embed_dim)
 
         # =====================================================================
         # Non-Flat Gauge Transport (optional)
@@ -436,7 +480,7 @@ class GaugeTransformerBlock(nn.Module):
             f"evolve_phi={self.evolve_phi}",
             f"diagonal_covariance={self.diagonal_covariance}",
             f"ffn_mode={self.ffn_mode!r}",
-            f"use_layernorm={self.use_layernorm}",
+            f"norm_type={self.norm_type!r}",
             f"use_residual={self.use_residual}",
             f"skip_attention={self.skip_attention}",
             f"non_flat_transport={self.non_flat_transport}",
@@ -471,8 +515,8 @@ class GaugeTransformerStack(nn.Module):
             for _ in range(cfg.n_layers)
         ])
 
-        # Final layer norm (optional for pure VFE)
-        self.final_norm = nn.LayerNorm(cfg.embed_dim) if cfg.use_layernorm else nn.Identity()
+        # Final normalization (optional for pure VFE)
+        self.final_norm = _make_norm(cfg.norm_type, cfg.embed_dim)
 
     def forward(
         self,

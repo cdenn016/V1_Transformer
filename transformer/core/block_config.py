@@ -116,6 +116,9 @@ class BlockConfig:
         # Isotropic covariance requires diagonal representation
         if self.isotropic_covariance and not self.diagonal_covariance:
             self.diagonal_covariance = True
+        # Backward compat: use_layernorm=False with default norm_type → 'none'
+        if not self.use_layernorm and self.norm_type == 'layernorm':
+            self.norm_type = 'none'
 
     # === Non-flat gauge transport (flat bundle experiments) ===
     # When non_flat_transport=True, the transport becomes:
@@ -146,7 +149,8 @@ class BlockConfig:
     deq_include_phi: bool = False      # Include phi in DEQ fixed-point (joint mu, sigma, phi IFT)
 
     # === Pure VFE mode flags ===
-    use_layernorm: bool = True         # LayerNorm on means (False for pure VFE ablation)
+    use_layernorm: bool = True         # LayerNorm on means (False for pure VFE ablation). Legacy; prefer norm_type.
+    norm_type: str = 'layernorm'       # 'layernorm' | 'rmsnorm' | 'none'
     use_residual: bool = True          # Residual connections (False for pure VFE ablation)
     skip_attention: bool = False       # Skip attention sublayer; VFE E-step computes its own β
     closed_form_e_step: bool = False   # Use closed-form precision-weighted fixed point instead of gradient descent
@@ -252,6 +256,7 @@ class BlockConfig:
             deq_include_phi=config.get('deq_include_phi', False),
             # Pure VFE mode
             use_layernorm=config.get('use_layernorm', True),
+            norm_type=config.get('norm_type', 'layernorm' if config.get('use_layernorm', True) else 'none'),
             use_residual=config.get('use_residual', True),
             skip_attention=config.get('skip_attention', False),
             closed_form_e_step=config.get('closed_form_e_step', False),
