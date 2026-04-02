@@ -57,6 +57,8 @@ from transformer.core.gauge_utils import (
     fused_block_diagonal_kl_full,
 )
 
+import transformer.core.vfe_utils as _vfe_utils_mod
+
 from transformer.core.vfe_utils import (
     SIGMA_EPS,
     TRANSPORT_JITTER,
@@ -1550,6 +1552,251 @@ class VariationalFFNDynamic(nn.Module):
 
         return step_fn
 
+    # =================================================================
+    # Helper: Build block exp-pairs for transport operators
+    # =================================================================
+
+    def _build_block_exp_pairs(
+        self,
+        phi_current: torch.Tensor,        # (B, N, phi_dim)
+        omega_current: Optional[torch.Tensor],  # (B, N, K, K) or None
+        B: int,
+        N: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Optional[list]:
+        r"""Build per-head (exp_phi_h, exp_neg_phi_h) pairs for transport operators.
+
+        Returns a list of (Omega_h, Omega_h_inv) tuples, one per irrep block,
+        or None when irrep_dims is not set.
+
+        Branches:
+            gauge_param='omega': extract per-head blocks from omega_current, invert.
+            gauge_mode='trivial': return identity pairs for each block.
+            gauge_mode='constant' with constant_omega: use constant per-head Omega.
+            default (learned): call fused_block_matrix_exp_pairs on phi_current.
+        """
+        if self.irrep_dims is None:
+            return None
+
+        if omega_current is not None and self.gauge_param == 'omega':
+            bep = []
+            block_start = 0
+            for d_h in self.irrep_dims:
+                omega_h = omega_current[:, :, block_start:block_start + d_h,
+                                        block_start:block_start + d_h]
+                omega_h_inv = torch.linalg.inv(omega_h)
+                bep.append((omega_h, omega_h_inv))
+                block_start += d_h
+            return bep
+
+        if self.gauge_mode == 'trivial':
+            bep = []
+            for d_h in self.irrep_dims:
+                eye_h = (torch.eye(d_h, device=device, dtype=dtype)
+                         .unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous())
+                bep.append((eye_h, eye_h))
+            return bep
+
+        if self.gauge_mode == 'constant' and self.constant_omega is not None:
+            bep = []
+            for h, d_h in enumerate(self.irrep_dims):
+                omega_h = self.constant_omega[h].to(device=device, dtype=dtype)
+                if getattr(self, 'enforce_orthogonal', False) and d_h >= 2:
+                    omega_h = newton_schulz_orthogonalize(omega_h.unsqueeze(0)).squeeze(0)
+                eye_h = torch.eye(d_h, device=device, dtype=dtype)
+                exp_phi_h = omega_h.unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous()
+                exp_neg_phi_h = eye_h.unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous()
+                bep.append((exp_phi_h, exp_neg_phi_h))
+            return bep
+
+        if self.gauge_mode == 'constant':
+            # constant without constant_omega: fall back to identity (legacy)
+            bep = []
+            for d_h in self.irrep_dims:
+                eye_h = (torch.eye(d_h, device=device, dtype=dtype)
+                         .unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous())
+                bep.append((eye_h, eye_h))
+            return bep
+
+        # Default: learned phi
+        return fused_block_matrix_exp_pairs(
+            phi_current, self.generators, self.irrep_dims,
+            enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+        )
+
+    # =================================================================
+    # Helper: Finalize E-step (store state for M-step)
+    # =================================================================
+
+    def _finalize_e_step(
+        self,
+        alpha_effective,
+        sigma_p: torch.Tensor,
+        sigma_current: Optional[torch.Tensor],
+        beta_current: Optional[torch.Tensor],
+        beta_heads: list,
+        omega_current: Optional[torch.Tensor],
+        eps: float,
+    ) -> None:
+        r"""Store post-E-step state on ``self`` for the M-step.
+
+        Writes: ``_last_alpha_i``, ``_last_beta_for_implicit``,
+        ``_last_implicit_mu_scale``, ``_last_implicit_sigma_scale``,
+        ``_last_omega``.
+        """
+        # Alpha
+        if self.learnable_alpha:
+            self._last_alpha_i = alpha_effective.detach()
+        else:
+            self._last_alpha_i = None
+
+        # Beta for implicit EM
+        if self.implicit_em:
+            if self.multihead_vfe and beta_heads:
+                self._last_beta_for_implicit = torch.stack(beta_heads, dim=1).detach()
+            elif beta_current is not None:
+                self._last_beta_for_implicit = beta_current.detach()
+            else:
+                self._last_beta_for_implicit = None
+
+        # Implicit EM gradient scales
+        if self.implicit_em:
+            _beta_for_scale = getattr(self, '_last_beta_for_implicit', None)
+            if _beta_for_scale is not None:
+                _alpha_for_scale = self.alpha
+                mu_scale, sigma_scale = compute_implicit_em_scales(
+                    alpha_i=_alpha_for_scale,
+                    sigma_p=sigma_p,
+                    beta=_beta_for_scale,
+                    sigma_q=sigma_current if sigma_current is not None else sigma_p,
+                    eps=eps,
+                )
+                self._last_implicit_mu_scale = mu_scale
+                self._last_implicit_sigma_scale = sigma_scale
+            else:
+                self._last_implicit_mu_scale = None
+                self._last_implicit_sigma_scale = None
+        else:
+            self._last_implicit_mu_scale = None
+            self._last_implicit_sigma_scale = None
+
+        # Omega for multi-layer propagation
+        self._last_omega = omega_current
+
+    # =================================================================
+    # Helper: Prepare E-step inputs (sigma init, prior setup, alpha)
+    # =================================================================
+
+    def _prepare_e_step_inputs(
+        self,
+        mu: torch.Tensor,           # (B, N, K)
+        sigma: Optional[torch.Tensor],
+        mu_prior: torch.Tensor,     # (B, N, K)
+        phi: torch.Tensor,          # (B, N, phi_dim)
+        omega: Optional[torch.Tensor],
+        sigma_prior: Optional[torch.Tensor],
+        B: int,
+        N: int,
+        K: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        eps: float,
+    ) -> dict:
+        r"""Set up all inputs needed before E-step iterations begin.
+
+        Performs sigma initialisation, prior (mu_p, sigma_p) extraction,
+        sigma_p floor clamping, initial sigma clamping, phi/omega cloning,
+        and alpha computation.  Returns a dict with keys:
+
+            mu_p_current, sigma_p, mu_current, sigma_current,
+            phi_current, omega_current, alpha_effective, _alpha_c0,
+            is_diagonal, beta_history (empty list or None),
+            has_observations (bool sentinel)
+        """
+        # ── Sigma initialisation ────────────────────────────────────────
+        if sigma is None:
+            if self.diagonal_covariance:
+                sigma = torch.ones(B, N, K, device=device, dtype=dtype) * 0.1
+            else:
+                sigma = (0.1 * torch.eye(K, device=device, dtype=dtype)
+                         .unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous())
+
+        sigma = squeeze_trailing_singletons(sigma)
+        is_diagonal = sigma.dim() == 3
+
+        # ── Prior setup: mu_p, sigma_p ──────────────────────────────────
+        if self.amortized_inference and not self.implicit_em:
+            mu_p_current = mu_prior.clone()
+        else:
+            mu_p_current = mu_prior.detach().clone()
+
+        # sigma_p is ALWAYS detached in the E-step (M-step parameter)
+        if sigma_prior is not None:
+            sigma_p = sigma_prior.detach().clone()
+        else:
+            sigma_p = sigma.detach().clone()
+
+        # E-step sigma_p floor
+        _floor = self.e_step_sigma_floor
+        if sigma_p.dim() == 3:
+            sigma_p = sigma_p.clamp(min=_floor)
+        else:
+            diag_vals = torch.diagonal(sigma_p, dim1=-2, dim2=-1)
+            diag_clamped = diag_vals.clamp(min=_floor)
+            sigma_p = sigma_p + torch.diag_embed(diag_clamped - diag_vals)
+
+        # Convert diagonal sigma_p to full covariance if needed
+        if not is_diagonal and sigma_p.dim() == 3:
+            sigma_p = torch.diag_embed(sigma_p)
+
+        # ── Initial belief state ─────────────────────────────────────────
+        if self.implicit_em:
+            mu_current = mu.detach().clone()
+            sigma_current = sigma.detach().clone()
+        else:
+            mu_current = mu.clone()
+            sigma_current = sigma.clone()
+
+        # Clamp initial sigma to [eps, sigma_max]
+        if self.update_sigma:
+            _eps = 1e-6
+            if sigma_current.dim() == 3:
+                sigma_current = sigma_current.clamp(min=_eps, max=self.sigma_max)
+            else:
+                eigvals, eigvecs = _safe_eigh(sigma_current, jitter=_eps)
+                eigvals = eigvals.clamp(min=_eps, max=self.sigma_max * self.sigma_max)
+                sigma_current = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
+
+        # ── Phi / omega cloning ──────────────────────────────────────────
+        if not self.amortized_inference and self.detach_phi:
+            phi_current = phi.detach().clone()
+        else:
+            phi_current = phi.clone()
+        omega_current = omega.clone() if omega is not None else None
+
+        # ── Alpha computation ────────────────────────────────────────────
+        if self.learnable_alpha:
+            alpha_effective = self.get_bayesian_alpha(
+                mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
+            )
+            _alpha_c0 = F.softplus(self.raw_c0)
+        else:
+            alpha_effective = self.alpha
+            _alpha_c0 = None
+
+        return {
+            'mu_p_current': mu_p_current,
+            'sigma_p': sigma_p,
+            'mu_current': mu_current,
+            'sigma_current': sigma_current,
+            'phi_current': phi_current,
+            'omega_current': omega_current,
+            'alpha_effective': alpha_effective,
+            '_alpha_c0': _alpha_c0,
+            'is_diagonal': is_diagonal,
+        }
+
     def forward(
         self,
         mu: torch.Tensor,          # (B, N, K) - current beliefs
@@ -1625,135 +1872,27 @@ class VariationalFFNDynamic(nn.Module):
             if W_out is not None:
                 W_out = W_out.float()
 
-        # Initialize sigma if not provided
-        if sigma is None:
-            if self.diagonal_covariance:
-                sigma = torch.ones(B, N, K, device=device, dtype=dtype) * 0.1
-            else:
-                sigma = 0.1 * torch.eye(K, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous()
-
-        # Squeeze trailing singleton dimensions for robustness
-        sigma = squeeze_trailing_singletons(sigma)
-
-        is_diagonal = sigma.dim() == 3
-
-        # =====================================================================
-        # PriorBank: Use token-dependent priors for VFE dynamics
-        # =====================================================================
-        # =====================================================================
-        # Prior Setup: mu_p and sigma_p for VFE self-coupling
-        # =====================================================================
-        # Use mu_prior / sigma_prior passed from model.py for BOTH PriorBank
-        # and standard embedding paths.  These are already in the correct
-        # coordinate frame (cross_head_perm applied).  The FFN must NOT
-        # re-encode from PriorBank — that returns un-permuted priors which
-        # would misalign with the permuted beliefs in the VFE loop.
-        #
-        # mu_p: live when amortized (gradient is well-conditioned: -α/σ_p).
-        # Detached when non-amortized or implicit_em.
-        # sigma_p: ALWAYS detached (M-step parameter; 1/σ_p in E-step
-        # creates positive feedback).
-        if self.amortized_inference and not self.implicit_em:
-            # Amortized: gradient flows through mu_p → embeddings learn good E-step init.
-            # mu_p gradient is well-conditioned: d(grad)/d(mu_p) = -α/σ_p, no feedback loop.
-            #
-            # When implicit_em=True, the IFT scale factor is the sole gradient path
-            # to embeddings (via ImplicitEMGradient.apply after the E-step). Keeping
-            # mu_p live here would double-count: embeddings receive BOTH the IFT-scaled
-            # gradient AND the straight-through gradient through self-coupling.
-            mu_p_current = mu_prior.clone()
-        else:
-            # Non-amortized (or implicit_em): detach priors (fixed reference)
-            mu_p_current = mu_prior.detach().clone()
-
-        # sigma_p is ALWAYS detached in the E-step: it is an M-step parameter (Level 2).
-        # The E-step treats (μ_p, σ_p) as fixed while inferring q. Letting CE gradient
-        # flow through the E-step's 1/σ_p terms creates positive feedback: smaller σ_p
-        # → larger gradient → even smaller σ_p. The M-step loss (lambda_hyper · KL(s||h))
-        # provides the correct, bounded gradient for sigma learning.
-        if sigma_prior is not None:
-            sigma_p = sigma_prior.detach().clone()
-        else:
-            sigma_p = sigma.detach().clone()
-
-        # E-step sigma_p floor: prevent 1/σ_p blowup in self-coupling gradient.
-        # PriorBank allows σ_p down to 0.01 (for sharp decode logits), but
-        # the E-step gradient ∂KL(q||p)/∂σ = 0.5·(1/σ_p - 1/σ_q) needs a higher
-        # floor to prevent nat_grad_sigma explosion (at σ_p=0.01, 1/σ_p=100).
-        # Configurable via e_step_sigma_floor (default 0.1 caps 1/σ_p at 10.0).
-        _floor = self.e_step_sigma_floor
-        if sigma_p.dim() == 3:
-            sigma_p = sigma_p.clamp(min=_floor)
-        else:
-            # Full covariance: clamp diagonal elements
-            diag_vals = torch.diagonal(sigma_p, dim1=-2, dim2=-1)
-            diag_clamped = diag_vals.clamp(min=_floor)
-            sigma_p = sigma_p + torch.diag_embed(diag_clamped - diag_vals)
-
-        # Convert diagonal sigma_p to full covariance if needed (PriorBank returns diagonal)
-        if not is_diagonal and sigma_p.dim() == 3:
-            sigma_p = torch.diag_embed(sigma_p)
-
-
-        # Current state (will evolve)
-        # Implicit EM: detach beliefs at E-step start (proper EM boundary).
-        # The implicit gradient scale factor compensates for detachment with
-        # the info-geometrically correct CE→embedding gradient.
-        if self.implicit_em:
-            mu_current = mu.detach().clone()
-            sigma_current = sigma.detach().clone()
-        else:
-            mu_current = mu.clone()
-            sigma_current = sigma.clone()
-
-        # Clamp initial sigma to [eps, sigma_max] before E-step.
-        # Without this, embedding/prior sigma can far exceed sigma_max (e.g., σ=16
-        # vs sigma_max=5), causing nat_grad_sigma = 2σ²·∇σ to amplify by 2×16²=512
-        # on the first iteration. The retraction clamps AFTER the update, but the
-        # gradient was already computed on the un-clamped value.
-        if self.update_sigma:
-            _eps = 1e-6
-            if sigma_current.dim() == 3:
-                # Diagonal: element-wise clamp
-                sigma_current = sigma_current.clamp(min=_eps, max=self.sigma_max)
-            else:
-                # Full covariance: spectral clamp on eigenvalues
-                # Use _safe_eigh for robust decomposition — sigma from attention
-                # aggregate_messages can be ill-conditioned or near-indefinite
-                # early in training (wild transport operators, uncalibrated β).
-                eigvals, eigvecs = _safe_eigh(sigma_current, jitter=_eps)
-                eigvals = eigvals.clamp(min=_eps, max=self.sigma_max * self.sigma_max)
-                sigma_current = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
-
-        # Detach phi when detach_phi=True and non-amortized: enables fully backprop-free
-        # training where phi_embed learns via phi P-flow instead of backprop.
-        if not self.amortized_inference and self.detach_phi:
-            phi_current = phi.detach().clone()
-        else:
-            phi_current = phi.clone()
-        omega_current = omega.clone() if omega is not None else None  # Track omega for direct GL(K)
+        # ── Prepare all E-step inputs ────────────────────────────────────
+        _state = self._prepare_e_step_inputs(
+            mu, sigma, mu_prior, phi, omega, sigma_prior,
+            B, N, K, device, dtype, eps,
+        )
+        mu_current = _state['mu_current']
+        sigma_current = _state['sigma_current']
+        phi_current = _state['phi_current']
+        omega_current = _state['omega_current']
+        mu_p_current = _state['mu_p_current']
+        sigma_p = _state['sigma_p']
+        is_diagonal = _state['is_diagonal']
+        alpha_effective = _state['alpha_effective']
+        _alpha_c0 = _state['_alpha_c0']
 
         # Track β evolution if requested
         beta_history = [] if return_beta_history else None
-
-        # Store observation info for fresh gradient computation
         has_observations = targets is not None and W_out is not None
-        _detach_e_step = True  # Standard path detaches; DEQ step_fn sets False
-        beta_current = None  # Sentinel; set inside VFE loop for implicit EM scale computation
-        beta_heads = []      # Per-head betas (multihead); populated inside VFE loop
-
-        # =====================================================================
-        # Determine alpha: Bayesian precision or fixed scalar
-        # (needed by both closed-form and gradient descent paths)
-        # =====================================================================
-        if self.learnable_alpha:
-            alpha_effective = self.get_bayesian_alpha(
-                mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
-            )  # (B, N, K) - per-dim gauge-invariant, state-dependent
-            _alpha_c0 = F.softplus(self.raw_c0)
-        else:
-            alpha_effective = self.alpha  # scalar (backward compatible)
-            _alpha_c0 = None
+        _detach_e_step = True
+        beta_current = None
+        beta_heads = []
 
         # =====================================================================
         # CLOSED-FORM E-STEP: Precision-weighted fixed point (optional)
@@ -1767,38 +1906,9 @@ class VariationalFFNDynamic(nn.Module):
         # This naturally includes aggregation and replaces the gradient descent loop.
         if self.closed_form_e_step:
             # 1. Compute block exp pairs for transport
-            if self.irrep_dims is not None:
-                if omega_current is not None and self.gauge_param == 'omega':
-                    _cf_bep = []
-                    block_start = 0
-                    for d_h in self.irrep_dims:
-                        omega_h = omega_current[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
-                        omega_h_inv = torch.linalg.inv(omega_h)
-                        _cf_bep.append((omega_h, omega_h_inv))
-                        block_start += d_h
-                elif self.gauge_mode == 'trivial':
-                    _cf_bep = []
-                    for d_h in self.irrep_dims:
-                        eye_h = torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous()
-                        _cf_bep.append((eye_h, eye_h))
-                elif self.gauge_mode == 'constant' and self.constant_omega is not None:
-                    _cf_bep = []
-                    for h, d_h in enumerate(self.irrep_dims):
-                        omega_h = self.constant_omega[h].to(device=device, dtype=dtype)
-                        if getattr(self, 'enforce_orthogonal', False) and d_h >= 2:
-                            omega_h = newton_schulz_orthogonalize(omega_h.unsqueeze(0)).squeeze(0)
-                        eye_h = torch.eye(d_h, device=device, dtype=dtype)
-                        _cf_bep.append((
-                            omega_h.unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous(),
-                            eye_h.unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous(),
-                        ))
-                else:
-                    _cf_bep = fused_block_matrix_exp_pairs(
-                        phi_current, self.generators, self.irrep_dims,
-                        enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                    )
-            else:
-                _cf_bep = None
+            _cf_bep = self._build_block_exp_pairs(
+                phi_current, omega_current, B, N, device, dtype,
+            )
 
             # 2. Per-head: compute β_h, then closed-form fixed point
             beta_heads = []
@@ -2459,65 +2569,10 @@ class VariationalFFNDynamic(nn.Module):
                 beta_heads = []  # For history tracking
 
                 # Precompute block_exp_pairs ONCE for all heads.
-                # Without this, each head builds full Omega (B,N,N,d,d) twice
-                # (once in compute_attention_weights, once in compute_vfe_gradients_gpu),
-                # causing 2×n_heads redundant matrix_exp calls per VFE iteration.
-                _mh_cached_bep = None
-                if self.irrep_dims is not None:
-                    if omega_current is not None and self.gauge_param == 'omega':
-                        # Direct omega path: build (Omega_h, Omega_h_inv) per head
-                        # from the block-diagonal omega matrix. No matrix_exp needed.
-                        _mh_cached_bep = []
-                        block_start = 0
-                        for d_h in self.irrep_dims:
-                            omega_h = omega_current[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
-                            omega_h_inv = torch.linalg.inv(omega_h)
-                            _mh_cached_bep.append((omega_h, omega_h_inv))
-                            block_start += d_h
-                    elif self.gauge_mode == 'trivial':
-                        # No matrix exponentials needed: Ω = I for all blocks.
-                        # 'trivial': global frame (no transport).
-                        _mh_cached_bep = []
-                        for d_h in self.irrep_dims:
-                            eye_h = torch.eye(d_h, device=mu_current.device,
-                                              dtype=mu_current.dtype)
-                            eye_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
-                                B, N, -1, -1).contiguous()
-                            _mh_cached_bep.append((eye_h, eye_h))
-                    elif self.gauge_mode == 'constant' and self.constant_omega is not None:
-                        # Constant gauge: use per-head Ω from the attention module.
-                        # exp_phi = Ω (broadcast to all positions), exp_neg_phi = I.
-                        # This produces Ω_ij = Ω @ I = Ω for all pairs, consistent
-                        # with the attention module's transport.
-                        _mh_cached_bep = []
-                        for h, d_h in enumerate(self.irrep_dims):
-                            omega_h = self.constant_omega[h].to(
-                                device=mu_current.device, dtype=mu_current.dtype)
-                            if getattr(self, 'enforce_orthogonal', False) and d_h >= 2:
-                                omega_h = newton_schulz_orthogonalize(
-                                    omega_h.unsqueeze(0)).squeeze(0)
-                            eye_h = torch.eye(d_h, device=mu_current.device,
-                                              dtype=mu_current.dtype)
-                            exp_phi_h = omega_h.unsqueeze(0).unsqueeze(0).expand(
-                                B, N, -1, -1).contiguous()
-                            exp_neg_phi_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
-                                B, N, -1, -1).contiguous()
-                            _mh_cached_bep.append((exp_phi_h, exp_neg_phi_h))
-                    elif self.gauge_mode == 'constant':
-                        # Constant gauge without constant_omega: fall back to identity
-                        # (legacy behavior for backward compatibility)
-                        _mh_cached_bep = []
-                        for d_h in self.irrep_dims:
-                            eye_h = torch.eye(d_h, device=mu_current.device,
-                                              dtype=mu_current.dtype)
-                            eye_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
-                                B, N, -1, -1).contiguous()
-                            _mh_cached_bep.append((eye_h, eye_h))
-                    else:
-                        _mh_cached_bep = fused_block_matrix_exp_pairs(
-                            phi_current, self.generators, self.irrep_dims,
-                            enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                        )
+                _mh_cached_bep = self._build_block_exp_pairs(
+                    phi_current, omega_current, B, N,
+                    mu_current.device, mu_current.dtype,
+                )
 
                 # =============================================================
                 # FUSED MULTI-HEAD VFE: Compute β_h and gradients in single
@@ -2642,53 +2697,10 @@ class VariationalFFNDynamic(nn.Module):
                 # SINGLE-β VFE: All blocks share one β
                 # Use fused path when possible (diagonal + block-diagonal)
                 # =============================================================
-                _cached_bep = None
-                if self.irrep_dims is not None:
-                    if omega_current is not None and self.gauge_param == 'omega':
-                        # Direct omega path: build (Omega_h, Omega_h_inv) per head
-                        _cached_bep = []
-                        block_start = 0
-                        for d_h in self.irrep_dims:
-                            omega_h = omega_current[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
-                            omega_h_inv = torch.linalg.inv(omega_h)
-                            _cached_bep.append((omega_h, omega_h_inv))
-                            block_start += d_h
-                    elif self.gauge_mode == 'trivial':
-                        _cached_bep = []
-                        for d_h in self.irrep_dims:
-                            eye_h = torch.eye(d_h, device=mu_current.device,
-                                              dtype=mu_current.dtype)
-                            eye_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
-                                B, N, -1, -1).contiguous()
-                            _cached_bep.append((eye_h, eye_h))
-                    elif self.gauge_mode == 'constant' and self.constant_omega is not None:
-                        _cached_bep = []
-                        for h, d_h in enumerate(self.irrep_dims):
-                            omega_h = self.constant_omega[h].to(
-                                device=mu_current.device, dtype=mu_current.dtype)
-                            if getattr(self, 'enforce_orthogonal', False) and d_h >= 2:
-                                omega_h = newton_schulz_orthogonalize(
-                                    omega_h.unsqueeze(0)).squeeze(0)
-                            eye_h = torch.eye(d_h, device=mu_current.device,
-                                              dtype=mu_current.dtype)
-                            exp_phi_h = omega_h.unsqueeze(0).unsqueeze(0).expand(
-                                B, N, -1, -1).contiguous()
-                            exp_neg_phi_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
-                                B, N, -1, -1).contiguous()
-                            _cached_bep.append((exp_phi_h, exp_neg_phi_h))
-                    elif self.gauge_mode == 'constant':
-                        _cached_bep = []
-                        for d_h in self.irrep_dims:
-                            eye_h = torch.eye(d_h, device=mu_current.device,
-                                              dtype=mu_current.dtype)
-                            eye_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
-                                B, N, -1, -1).contiguous()
-                            _cached_bep.append((eye_h, eye_h))
-                    else:
-                        _cached_bep = fused_block_matrix_exp_pairs(
-                            phi_current, self.generators, self.irrep_dims,
-                            enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                        )
+                _cached_bep = self._build_block_exp_pairs(
+                    phi_current, omega_current, B, N,
+                    mu_current.device, mu_current.dtype,
+                )
 
                 # Use fused path for diagonal + block-diagonal
                 _use_fused_single = (is_diagonal and self.irrep_dims is not None
@@ -3307,57 +3319,11 @@ class VariationalFFNDynamic(nn.Module):
                 sigma_current = sigma_current.to(dtype)
             phi_current = phi_current.to(dtype)
 
-        # Store final alpha_i for M-step loss (avoids changing return signatures)
-        # alpha_effective is (B, N, K) if learnable_alpha, else scalar
-        if self.learnable_alpha:
-            self._last_alpha_i = alpha_effective.detach()  # (B, N, K)
-        else:
-            self._last_alpha_i = None
-
-        # Store final beta for implicit EM scale computation
-        # beta_current holds the last iteration's attention weights
-        # (multihead: last head's beta; single-head: full beta)
-        if self.implicit_em:
-            if self.multihead_vfe and beta_heads:
-                # Multihead: stack per-head betas into (B, H, N, N)
-                self._last_beta_for_implicit = torch.stack(beta_heads, dim=1).detach()
-            elif beta_current is not None:
-                self._last_beta_for_implicit = beta_current.detach()
-            else:
-                self._last_beta_for_implicit = None
-
-        # Compute and store implicit EM gradient scales (Phase 3/4)
-        if self.implicit_em:
-            # Get last beta — use _last_beta stored during the VFE loop
-            _beta_for_scale = getattr(self, '_last_beta_for_implicit', None)
-
-            if _beta_for_scale is not None:
-                # Always use fixed ffn_alpha for IFT scale, NOT adaptive alpha_i.
-                # Adaptive α_i gates E-step dynamics (shrinks as KL grows), but using
-                # it for IFT creates a death spiral: α_i↓ → scale↓ → weak CE signal
-                # → embeddings don't learn → more smoothing → KL↑ → α_i↓ further.
-                # The IFT scale should be a stable structural property.
-                _alpha_for_scale = self.alpha
-                mu_scale, sigma_scale = compute_implicit_em_scales(
-                    alpha_i=_alpha_for_scale,
-                    sigma_p=sigma_p,
-                    beta=_beta_for_scale,
-                    sigma_q=sigma_current if sigma_current is not None else sigma_p,
-                    eps=eps,
-                )
-                self._last_implicit_mu_scale = mu_scale      # (B, N, K)
-                self._last_implicit_sigma_scale = sigma_scale  # (B, N, K)
-            else:
-                self._last_implicit_mu_scale = None
-                self._last_implicit_sigma_scale = None
-        else:
-            self._last_implicit_mu_scale = None
-            self._last_implicit_sigma_scale = None
-
-        # Store evolved omega for multi-layer propagation (gauge_param='omega').
-        # Without this, omega evolution from E-step iterations is lost between
-        # layers — each layer would receive the original embedding omega.
-        self._last_omega = omega_current
+        # Store post-E-step state for M-step
+        self._finalize_e_step(
+            alpha_effective, sigma_p, sigma_current,
+            beta_current, beta_heads, omega_current, eps,
+        )
 
         # Return results
         # NOTE: Previously returned .detach() which BREAKS gradient flow!
