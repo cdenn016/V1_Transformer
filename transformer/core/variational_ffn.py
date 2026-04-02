@@ -3592,12 +3592,12 @@ class VariationalFFNDynamic(nn.Module):
                     alpha_h = alpha_effective[:, :, block_start:block_end] if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3 else alpha_effective
                     _head_bep = [_cf_bep[h]] if _cf_bep is not None else None
 
-                    # Compute β_h (attention weights for this head)
-                    beta_h = compute_attention_weights(
+                    # Compute β_h AND pairwise KL (need KL for softmax coupling)
+                    beta_kl_result = compute_attention_weights(
                         mu_q=mu_h, sigma_q=sigma_h,
                         phi=phi_current, generators=gen_h,
                         kappa=kappa_h, epsilon=eps, mask=mask,
-                        return_kl=False,
+                        return_kl=True,
                         diagonal_covariance=True,
                         irrep_dims=[d_h] if self.irrep_dims else None,
                         cached_block_exp_pairs=_head_bep,
@@ -3606,6 +3606,7 @@ class VariationalFFNDynamic(nn.Module):
                         use_rope=self._use_rope_vfe,
                         rope_base=self._rope_base_vfe,
                     )
+                    beta_h, kl_h = beta_kl_result
                     beta_heads.append(beta_h)
 
                     # Transport operators for this head
@@ -3622,7 +3623,6 @@ class VariationalFFNDynamic(nn.Module):
                     # Alignment: precision-weighted transported aggregation
                     # Transported diagonal covariance: sigma_j_t[k] = sum_l Omega[k,l]^2 * sigma_j[l]
                     # This is diag(Omega @ diag(sigma_j) @ Omega^T), the exact diagonal transport.
-                    # Previous code used untransported sigma_j, which is incorrect when Omega != I.
                     Omega_h_cf = torch.einsum('bikl,bjlm->bijkm', exp_phi_h, exp_neg_phi_h)  # (B, N, N, d_h, d_h)
                     sigma_j_t_diag = torch.einsum(
                         'bijkl,bijkl,bjl->bijk', Omega_h_cf, Omega_h_cf, sigma_h
@@ -3632,25 +3632,73 @@ class VariationalFFNDynamic(nn.Module):
                     # Transported means: Omega_ij @ mu_j
                     mu_j_t_cf = torch.einsum('bijkl,bjl->bijk', Omega_h_cf, mu_h)  # (B, N, N, d_h)
 
-                    # Information: sum_j beta_ij * Sigma_{j,t}^{-1} @ Omega_ij @ mu_j
-                    # = sum_j beta_ij * mu_j_t / sigma_j_t  (diagonal: element-wise)
+                    # Information per pair: (Omega mu_j) / sigma_j_transported
                     info_per_pair = mu_j_t_cf * inv_sigma_j_t  # (B, N, N, d_h)
-                    align_info_h = self.lambda_belief * torch.einsum('bij,bijk->bik', beta_h, info_per_pair)  # (B, N, d_h)
 
-                    # Alignment precision: λ · Σ_j β_ij / σ_j_transported
+                    # Linear terms: attention-weighted precision and information
+                    align_info_h = self.lambda_belief * torch.einsum('bij,bijk->bik', beta_h, info_per_pair)  # (B, N, d_h)
                     align_prec_h = self.lambda_belief * torch.einsum('bij,bijk->bik', beta_h, inv_sigma_j_t)  # (B, N, d_h)
+
+                    # =============================================================
+                    # ENHANCED CLOSED FORM: Include softmax coupling in fixed point
+                    # =============================================================
+                    # The softmax gradient ∂β/∂μ is LINEAR in μ_i (SymPy verified).
+                    # The σ_i terms CANCEL in ∂β/∂σ (SymPy verified).
+                    # This allows the full VFE fixed point (linear + softmax) to be
+                    # solved in one division per dimension. See derivation:
+                    # derivations/enhanced_closed_form_vfe.md
+                    #
+                    # mu*[k] = (b[k] - c[k]) / (A[k] + S[k])
+                    # sigma*[k] = (alpha + 1) / (lam_total[k] + 2*S_sigma[k])
+
+                    kappa_h_val = kappa_h.item() if isinstance(kappa_h, torch.Tensor) else kappa_h
+                    kappa_h_scaled = kappa_h_val * math.sqrt(max(d_h, 1))
+                    kappa_h_scaled = max(kappa_h_scaled, eps)
+
+                    if self.lambda_softmax > 0 and kappa_h_scaled > 0:
+                        # Per-pair softmax weights: w_j = KL_ij * beta_ij
+                        w_j = kl_h.unsqueeze(-1) * beta_h.unsqueeze(-1)  # (B, N, N, 1) for broadcasting
+                        # But we need (B, N, N) for scalar operations and (B, N, N, d_h) for per-dim
+                        w_j_scalar = kl_h * beta_h  # (B, N, N)
+                        w_bar = w_j_scalar.sum(dim=-1)  # (B, N) — expected KL
+
+                        # S[k]: softmax coupling's contribution to precision
+                        # S = -(lam_s/kappa)(sum_j w_j/sigma_jt - w_bar * avg_prec)
+                        kl_weighted_prec = torch.einsum('bij,bijk->bik', w_j_scalar, inv_sigma_j_t)  # (B, N, d_h)
+                        avg_prec_h = align_prec_h / max(self.lambda_belief, eps)  # = sum_m beta_im / sigma_mt
+                        S_mu_h = -(self.lambda_softmax / kappa_h_scaled) * (
+                            kl_weighted_prec - w_bar.unsqueeze(-1) * avg_prec_h
+                        )  # (B, N, d_h)
+
+                        # c[k]: softmax coupling's contribution to information
+                        # c = (lam_s/kappa)(sum_j w_j * nu_j - w_bar * avg_info)
+                        kl_weighted_info = torch.einsum('bij,bijk->bik', w_j_scalar, info_per_pair)  # (B, N, d_h)
+                        avg_info_h = align_info_h / max(self.lambda_belief, eps)  # = sum_m beta_im * nu_m
+                        c_mu_h = (self.lambda_softmax / kappa_h_scaled) * (
+                            kl_weighted_info - w_bar.unsqueeze(-1) * avg_info_h
+                        )  # (B, N, d_h)
+
+                        # S_sigma[k]: sigma softmax coupling (σ_i terms cancel — exact!)
+                        # S_sigma = -(lam_s/(2*kappa)) * sum_j w_j * (1/sigma_jt - p_bar)
+                        p_bar_h = avg_prec_h  # attention-weighted transported precision
+                        S_sigma_h = -(self.lambda_softmax / (2.0 * kappa_h_scaled)) * torch.einsum(
+                            'bij,bijk->bik', w_j_scalar, inv_sigma_j_t - p_bar_h[:, :, None, :]
+                        )  # (B, N, d_h)
+                    else:
+                        S_mu_h = 0.0
+                        c_mu_h = 0.0
+                        S_sigma_h = 0.0
 
                     del Omega_h_cf, sigma_j_t_diag, inv_sigma_j_t, mu_j_t_cf, info_per_pair
 
-                    # Fixed point: mu* = A^{-1} b, sigma* = c * A^{-1}
-                    # where c = alpha + lambda (entropy scaling from ∂F/∂Σ = 0).
-                    # Each KL contributes a -ln|Σ| entropy term; the total coefficient
-                    # is alpha + lambda * sum_j beta_ij = alpha + lambda (since sum beta = 1).
-                    # Without this factor, sigma is underestimated by (alpha + lambda).
-                    total_prec_h = prior_prec_h + align_prec_h             # (B, N, d_h)
-                    mu_star[:, :, block_start:block_end] = (prior_info_h + align_info_h) / total_prec_h.clamp(min=eps)
-                    entropy_scale = alpha_h + self.lambda_belief  # scalar or (B, N, d_h)
-                    sigma_star[:, :, block_start:block_end] = (entropy_scale / total_prec_h.clamp(min=eps)).clamp(max=self.sigma_max)
+                    # Enhanced fixed point: (b - c) / (A + S) for mu, (alpha+1) / (lam_total + 2*S_sigma) for sigma
+                    total_prec_h = prior_prec_h + align_prec_h + S_mu_h    # A + S  (B, N, d_h)
+                    total_info_h = prior_info_h + align_info_h - c_mu_h    # b - c  (B, N, d_h)
+                    mu_star[:, :, block_start:block_end] = total_info_h / total_prec_h.clamp(min=eps)
+
+                    entropy_scale = alpha_h + self.lambda_belief  # alpha + 1 (when lambda_belief=1)
+                    sigma_prec_h = prior_prec_h + align_prec_h + 2.0 * S_sigma_h  # lam_total + 2*S_sigma
+                    sigma_star[:, :, block_start:block_end] = (entropy_scale / sigma_prec_h.clamp(min=eps)).clamp(max=self.sigma_max)
 
                     block_start = block_end
 
