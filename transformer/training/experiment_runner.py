@@ -2842,8 +2842,8 @@ def run_pure_vfe_experiment(
         )
         from transformer.pure_vfe.inference import e_step as pure_e_step
         accum = model.create_accumulator()
-        print(f"  Grad accum:  {grad_accum_steps} micro-batches per M-step")
-        print(f"  Effective batch: {batch_size * grad_accum_steps} × {seq_len}")
+        logger.info(f"  Grad accum:  {grad_accum_steps} micro-batches per M-step")
+        logger.info(f"  Effective batch: {batch_size * grad_accum_steps} x {seq_len}")
 
     try:
         for step in pbar:
@@ -2937,7 +2937,7 @@ def run_pure_vfe_experiment(
                 if use_tqdm:
                     pbar.set_description(log_msg)
                 else:
-                    print(log_msg)
+                    logger.info(log_msg)
 
                 # Prior health diagnostics
                 with torch.no_grad():
@@ -2954,16 +2954,16 @@ def run_pure_vfe_experiment(
                         if use_tqdm:
                             tqdm.write(health_msg)
                         else:
-                            print(health_msg)
+                            logger.warning(health_msg)
 
                     health = monitor_omega_health(
                         model.prior_Omega[:100], "prior_Omega")
                     if health['prior_Omega/cond_max'] > 100:
-                        omega_msg = f"  [WARN] Omega cond number high: { health['prior_Omega/cond_max']:.1f}"
+                        omega_msg = f"  [WARN] Omega cond number high: {health['prior_Omega/cond_max']:.1f}"
                         if use_tqdm:
                             tqdm.write(omega_msg)
                         else:
-                            print(omega_msg)
+                            logger.warning(omega_msg)
 
                 # Flush numerical events
                 _num_events = _flush_numerical_events()
@@ -2974,24 +2974,24 @@ def run_pure_vfe_experiment(
                     if use_tqdm:
                         tqdm.write(_num_msg)
                     else:
-                        print(_num_msg)
+                        logger.info(_num_msg)
 
             # Validation
             if (step + 1) % eval_interval == 0:
                 val_metrics = _validate_pure_vfe(model, val_loader, device)
                 metrics_tracker.log_val(step + 1, val_metrics)
 
-                print(f"\n  Validation @ step {step+1}:")
-                print(f"    Loss: {val_metrics['loss']:.4f}")
-                print(f"    PPL: {val_metrics['perplexity']:.2f}")
-                print(f"    BPC: {val_metrics['ce_loss']/math.log(2):.3f}\n")
+                logger.info(f"  Validation @ step {step+1}:")
+                logger.info(f"    Loss: {val_metrics['loss']:.4f}")
+                logger.info(f"    PPL: {val_metrics['perplexity']:.2f}")
+                logger.info(f"    BPC: {val_metrics['ce_loss']/math.log(2):.3f}")
 
                 # Save best model
                 if val_metrics['ce_loss'] < best_val_ce:
                     best_val_ce = val_metrics['ce_loss']
                     best_path = exp_checkpoint_dir / 'best_model.pt'
                     model.save(best_path)
-                    print(f"    Saved best model (CE={best_val_ce:.4f})")
+                    logger.info(f"    Saved best model (CE={best_val_ce:.4f})")
 
             # Checkpointing
             if (step + 1) % checkpoint_interval == 0:
@@ -3011,7 +3011,7 @@ def run_pure_vfe_experiment(
 
         # Save final metrics
         metrics_tracker.save()
-        print(f"\n[INFO] Final metrics saved to: {metrics_path}")
+        logger.info(f"Final metrics saved to: {metrics_path}")
 
         # Save final figures
         _save_pure_vfe_figures(
@@ -3022,37 +3022,37 @@ def run_pure_vfe_experiment(
         )
 
         # Final evaluation
-        print("\n" + "="*70)
-        print("TRAINING COMPLETE!")
-        print("="*70)
+        logger.info("="*70)
+        logger.info("TRAINING COMPLETE!")
+        logger.info("="*70)
 
         elapsed = time.time() - start_time
-        print(f"Total time: { elapsed/60:.1f} minutes ({elapsed/3600:.2f} hours)")
+        logger.info(f"Total time: {elapsed/60:.1f} minutes ({elapsed/3600:.2f} hours)")
 
         final_metrics = _validate_pure_vfe(model, val_loader, device)
 
-        print(f"\nFinal Validation Metrics:")
-        print(f"  Loss:       {final_metrics['loss']:.4f}")
-        print(f"  Perplexity: {final_metrics['perplexity']:.2f}")
+        logger.info("Final Validation Metrics:")
+        logger.info(f"  Loss:       {final_metrics['loss']:.4f}")
+        logger.info(f"  Perplexity: {final_metrics['perplexity']:.2f}")
 
         random_ppl = actual_vocab_size
         improvement = random_ppl / final_metrics['perplexity']
-        print(f"\nValidation improvement over random:")
-        print(f"  Random:     {random_ppl:.0f}")
-        print(f"  Model:      {final_metrics['perplexity']:.2f}")
-        print(f"  Factor:     {improvement:.1f}x better!")
+        logger.info("Validation improvement over random:")
+        logger.info(f"  Random:     {random_ppl:.0f}")
+        logger.info(f"  Model:      {final_metrics['perplexity']:.2f}")
+        logger.info(f"  Factor:     {improvement:.1f}x better!")
 
         # Save final checkpoint
         final_path = exp_checkpoint_dir / 'best_model.pt'
         model.save(final_path)
-        print(f"\nSaved: {final_path}")
+        logger.info(f"Saved: {final_path}")
 
         # Test set evaluation
         test_metrics = None
         if test_loader is not None:
-            print("\n" + "="*70)
-            print("FINAL TEST SET EVALUATION")
-            print("="*70)
+            logger.info("="*70)
+            logger.info("FINAL TEST SET EVALUATION")
+            logger.info("="*70)
             test_val = _validate_pure_vfe(
                 model, test_loader, device, max_samples=128000)
             test_bpc = test_val['ce_loss'] / math.log(2)
@@ -3063,10 +3063,10 @@ def run_pure_vfe_experiment(
                 'test_bpc': test_bpc,
                 'improvement': test_improvement,
             }
-            print(f"  Test Loss: {test_val['loss']:.4f}")
-            print(f"  Test PPL:  {test_val['perplexity']:.2f}")
-            print(f"  Test BPC:  {test_bpc:.3f}")
-            print(f"  vs random: {test_improvement:.1f}x better")
+            logger.info(f"  Test Loss: {test_val['loss']:.4f}")
+            logger.info(f"  Test PPL:  {test_val['perplexity']:.2f}")
+            logger.info(f"  Test BPC:  {test_bpc:.3f}")
+            logger.info(f"  vs random: {test_improvement:.1f}x better")
 
         # Return result dict (same format as run_single_experiment)
         result = {
@@ -3105,15 +3105,15 @@ def run_pure_vfe_experiment(
         return result
 
     except KeyboardInterrupt:
-        print("\n\n" + "="*70)
-        print("TRAINING INTERRUPTED")
-        print("="*70)
+        logger.info("="*70)
+        logger.info("TRAINING INTERRUPTED")
+        logger.info("="*70)
         ckpt_path = exp_checkpoint_dir / 'interrupted_model.pt'
         model.save(ckpt_path)
-        print(f"Saved: {ckpt_path}")
+        logger.info(f"Saved: {ckpt_path}")
         metrics_tracker.save()
         return None
 
     except Exception as e:
-        print(f"\n\n Error: {e}")
+        logger.error(f"Error: {e}")
         raise
