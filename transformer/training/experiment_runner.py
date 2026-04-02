@@ -34,6 +34,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
 
 from transformer.core.model import GaugeTransformerLM
@@ -1493,6 +1494,8 @@ class PublicationTrainer(FastTrainer):
             pbar = range(start_step, total_steps)
             use_tqdm = False
 
+        _write = tqdm.write if use_tqdm else print
+
         # Run initial gauge frame semantic analysis (only if starting fresh)
         if start_step == 0 and self.pub_metrics:
             try:
@@ -1688,12 +1691,12 @@ class PublicationTrainer(FastTrainer):
                 attn_entropy = metrics.get('attention_entropy', 0)
                 attn_concentration = metrics.get('attention_concentration', 0)
 
-                logger.info(f"\n  Validation @ step {step+1}:")
-                logger.info(f"    Loss: {val_metrics['loss']:.4f}")
-                logger.info(f"    CE: {val_metrics['ce_loss']:.4f}")
-                logger.info(f"    PPL: {val_metrics['perplexity']:.2f}")
-                logger.info(f"    BPC: {val_metrics['ce_loss']/math.log(2):.3f}")
-                logger.info(f"    Attn entropy: {attn_entropy:.3f} | concentration: {attn_concentration:.3f}")
+                _write(f"\n  Validation @ step {step+1}:")
+                _write(f"    Loss: {val_metrics['loss']:.4f}")
+                _write(f"    CE: {val_metrics['ce_loss']:.4f}")
+                _write(f"    PPL: {val_metrics['perplexity']:.2f}")
+                _write(f"    BPC: {val_metrics['ce_loss']/math.log(2):.3f}")
+                _write(f"    Attn entropy: {attn_entropy:.3f} | concentration: {attn_concentration:.3f}")
 
                 # Generate sample text to verify learning (varied prompts for diversity)
                 try:
@@ -1711,10 +1714,10 @@ class PublicationTrainer(FastTrainer):
                     # Use temperature 0.9 and lower top_k for more diversity
                     sample = self.sample_text(
                         prompt=prompt, max_new_tokens=30, temperature=0.9, top_k=30)
-                    logger.info(f"    Sample: {sample[:100]}...")
+                    _write(f"    Sample: {sample[:100]}...")
                 except Exception as e:
                     import traceback
-                    logger.warning(f"    Sample generation failed: {e}")
+                    _write(f"    Sample generation failed: {e}")
                     traceback.print_exc()
 
                 # Save attention visualization periodically
