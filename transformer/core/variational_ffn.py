@@ -1797,6 +1797,504 @@ class VariationalFFNDynamic(nn.Module):
             'is_diagonal': is_diagonal,
         }
 
+    # =================================================================
+    # Helper: Closed-form E-step (precision-weighted fixed point)
+    # =================================================================
+
+    def _closed_form_e_step(
+        self,
+        mu_current: torch.Tensor,
+        sigma_current: Optional[torch.Tensor],
+        phi_current: torch.Tensor,
+        omega_current: Optional[torch.Tensor],
+        mu_p_current: torch.Tensor,
+        sigma_p: torch.Tensor,
+        alpha_effective,
+        _alpha_c0,
+        is_diagonal: bool,
+        B: int,
+        N: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        eps: float,
+        mask: Optional[torch.Tensor],
+        return_beta_history: bool,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor, Optional[torch.Tensor], list, Optional[list]]:
+        r"""Compute the precision-weighted closed-form VFE fixed point.
+
+        Implements:
+            μ_i* = [α·μ_p/σ_p + λ·Σ_j β_ij·(Ω_ij μ_j)/σ_j] / [α/σ_p + λ·Σ_j β_ij/σ_j]
+            σ_i* = 1 / [α/σ_p + λ·Σ_j β_ij/σ_j]
+
+        Also applies Picard re-solve (n_picard_steps) and optional phi evolution.
+
+        Returns:
+            (mu_current, sigma_current, phi_current, omega_current, beta_heads, beta_history_list)
+        """
+        # 1. Compute block exp pairs for transport
+        _cf_bep = self._build_block_exp_pairs(
+            phi_current, omega_current, B, N, device, dtype,
+        )
+
+        # 2. Per-head: compute β_h, then closed-form fixed point
+        beta_heads: list = []
+
+        if is_diagonal:
+            # ─────────────────────────────────────────────────────────────────
+            # DIAGONAL CLOSED-FORM: element-wise precision-weighted average
+            # ─────────────────────────────────────────────────────────────────
+            mu_star = torch.zeros_like(mu_current)
+            sigma_star = torch.zeros_like(sigma_current)
+            block_start = 0
+
+            for h, d_h in enumerate(self.irrep_dims or [self.embed_dim]):
+                block_end = block_start + d_h
+
+                mu_h = mu_current[:, :, block_start:block_end].detach().contiguous()
+                mu_p_h = mu_p_current[:, :, block_start:block_end].contiguous()
+                sigma_h = sigma_current[:, :, block_start:block_end].detach().contiguous()
+                sigma_p_h = sigma_p[:, :, block_start:block_end].contiguous()
+                gen_h = self.generators[:, block_start:block_end, block_start:block_end]
+
+                kappa_h = self._get_kappa_h(h, d_h) if self.irrep_dims else self.kappa
+                alpha_h = (alpha_effective[:, :, block_start:block_end]
+                           if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3
+                           else alpha_effective)
+                _head_bep = [_cf_bep[h]] if _cf_bep is not None else None
+
+                # Compute β_h AND pairwise KL (need KL for softmax coupling)
+                beta_kl_result = compute_attention_weights(
+                    mu_q=mu_h, sigma_q=sigma_h,
+                    phi=phi_current, generators=gen_h,
+                    kappa=kappa_h, epsilon=eps, mask=mask,
+                    return_kl=True,
+                    diagonal_covariance=True,
+                    irrep_dims=[d_h] if self.irrep_dims else None,
+                    cached_block_exp_pairs=_head_bep,
+                    mask_self_attention=self.mask_self_attention,
+                    gauge_mode=self.gauge_mode,
+                    use_rope=self._use_rope_vfe,
+                    rope_base=self._rope_base_vfe,
+                )
+                beta_h, kl_h = beta_kl_result
+                beta_heads.append(beta_h)
+
+                # Transport operators for this head
+                exp_phi_h, exp_neg_phi_h = (_cf_bep[h] if _cf_bep is not None else (
+                    torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1),
+                    torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1),
+                ))
+
+                # Prior precision and information vector
+                inv_sigma_p_h = 1.0 / sigma_p_h.clamp(min=eps)       # (B, N, d_h)
+                prior_prec_h = alpha_h * inv_sigma_p_h                # (B, N, d_h)
+                prior_info_h = alpha_h * mu_p_h * inv_sigma_p_h       # (B, N, d_h)
+
+                # Alignment: precision-weighted transported aggregation
+                Omega_h_cf = torch.einsum('bikl,bjlm->bijkm', exp_phi_h, exp_neg_phi_h)  # (B, N, N, d_h, d_h)
+                sigma_j_t_diag = torch.einsum(
+                    'bijkl,bijkl,bjl->bijk', Omega_h_cf, Omega_h_cf, sigma_h
+                ).clamp(min=eps)  # (B, N, N, d_h)
+                inv_sigma_j_t = 1.0 / sigma_j_t_diag  # (B, N, N, d_h)
+
+                # Transported means: Omega_ij @ mu_j
+                mu_j_t_cf = torch.einsum('bijkl,bjl->bijk', Omega_h_cf, mu_h)  # (B, N, N, d_h)
+
+                # Information per pair: (Omega mu_j) / sigma_j_transported
+                info_per_pair = mu_j_t_cf * inv_sigma_j_t  # (B, N, N, d_h)
+
+                # Linear terms: attention-weighted precision and information
+                align_info_h = self.lambda_belief * torch.einsum('bij,bijk->bik', beta_h, info_per_pair)  # (B, N, d_h)
+                align_prec_h = self.lambda_belief * torch.einsum('bij,bijk->bik', beta_h, inv_sigma_j_t)  # (B, N, d_h)
+
+                # ENHANCED CLOSED FORM: Include softmax coupling in fixed point
+                kappa_h_val = kappa_h.item() if isinstance(kappa_h, torch.Tensor) else kappa_h
+                kappa_h_scaled = max(kappa_h_val * math.sqrt(max(d_h, 1)), eps)
+
+                if self.lambda_softmax > 0 and kappa_h_scaled > 0:
+                    w_j_scalar = kl_h * beta_h  # (B, N, N)
+                    w_bar = w_j_scalar.sum(dim=-1)  # (B, N)
+
+                    kl_weighted_prec = torch.einsum('bij,bijk->bik', w_j_scalar, inv_sigma_j_t)  # (B, N, d_h)
+                    avg_prec_h = align_prec_h / max(self.lambda_belief, eps)
+                    S_mu_h = -(self.lambda_softmax / kappa_h_scaled) * (
+                        kl_weighted_prec - w_bar.unsqueeze(-1) * avg_prec_h
+                    )
+
+                    kl_weighted_info = torch.einsum('bij,bijk->bik', w_j_scalar, info_per_pair)  # (B, N, d_h)
+                    avg_info_h = align_info_h / max(self.lambda_belief, eps)
+                    c_mu_h = (self.lambda_softmax / kappa_h_scaled) * (
+                        kl_weighted_info - w_bar.unsqueeze(-1) * avg_info_h
+                    )
+
+                    p_bar_h = avg_prec_h
+                    S_sigma_h = -(self.lambda_softmax / (2.0 * kappa_h_scaled)) * torch.einsum(
+                        'bij,bijk->bik', w_j_scalar, inv_sigma_j_t - p_bar_h[:, :, None, :]
+                    )
+                else:
+                    S_mu_h = 0.0
+                    c_mu_h = 0.0
+                    S_sigma_h = 0.0
+
+                del Omega_h_cf, sigma_j_t_diag, inv_sigma_j_t, mu_j_t_cf, info_per_pair
+
+                # Enhanced fixed point
+                total_prec_h = prior_prec_h + align_prec_h + S_mu_h    # A + S
+                total_info_h = prior_info_h + align_info_h - c_mu_h    # b - c
+                mu_star[:, :, block_start:block_end] = total_info_h / total_prec_h.clamp(min=eps)
+
+                entropy_scale = alpha_h + self.lambda_belief
+                sigma_prec_h = prior_prec_h + align_prec_h + 2.0 * S_sigma_h
+                sigma_star[:, :, block_start:block_end] = (entropy_scale / sigma_prec_h.clamp(min=eps)).clamp(max=self.sigma_max)
+
+                block_start = block_end
+
+            mu_current = mu_star
+            if self.update_sigma:
+                sigma_current = sigma_star
+                if self.isotropic_covariance:
+                    scalar_var = sigma_current.mean(dim=-1, keepdim=True)
+                    sigma_current = scalar_var.expand_as(sigma_current)
+
+        else:
+            # ─────────────────────────────────────────────────────────────────
+            # FULL-COVARIANCE CLOSED-FORM: Q_j factorization + Cholesky solve
+            # ─────────────────────────────────────────────────────────────────
+            K_full = self.embed_dim
+            mu_star = torch.zeros_like(mu_current)
+            sigma_star_full = torch.zeros(B, N, K_full, K_full, device=device, dtype=dtype)
+            block_start = 0
+
+            for h, d_h in enumerate(self.irrep_dims or [self.embed_dim]):
+                block_end = block_start + d_h
+
+                mu_h = mu_current[:, :, block_start:block_end].detach().contiguous()
+                mu_p_h = mu_p_current[:, :, block_start:block_end].contiguous()
+                sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end].detach().contiguous()
+                sigma_p_h = sigma_p[:, :, block_start:block_end, block_start:block_end].contiguous()
+                gen_h = self.generators[:, block_start:block_end, block_start:block_end]
+
+                kappa_h = self._get_kappa_h(h, d_h) if self.irrep_dims else self.kappa
+                alpha_h = (alpha_effective[:, :, block_start:block_end]
+                           if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3
+                           else alpha_effective)
+                _head_bep = [_cf_bep[h]] if _cf_bep is not None else None
+
+                beta_h = compute_attention_weights(
+                    mu_q=mu_h, sigma_q=sigma_h,
+                    phi=phi_current, generators=gen_h,
+                    kappa=kappa_h, epsilon=eps, mask=mask,
+                    return_kl=False,
+                    diagonal_covariance=False,
+                    irrep_dims=[d_h] if self.irrep_dims else None,
+                    cached_block_exp_pairs=_head_bep,
+                    mask_self_attention=self.mask_self_attention,
+                    gauge_mode=self.gauge_mode,
+                    use_rope=self._use_rope_vfe,
+                    rope_base=self._rope_base_vfe,
+                )
+                beta_heads.append(beta_h)
+
+                exp_phi_h, exp_neg_phi_h = (_cf_bep[h] if _cf_bep is not None else (
+                    torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1),
+                    torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1),
+                ))
+                E_i = exp_neg_phi_h
+
+                sigma_p_h_safe = sigma_p_h + eps * torch.eye(d_h, device=device, dtype=dtype)
+                L_p = torch.linalg.cholesky(sigma_p_h_safe)
+                Sigma_p_inv_h = torch.cholesky_inverse(L_p)
+
+                if isinstance(alpha_h, torch.Tensor) and alpha_h.dim() == 3:
+                    A_prior_h = alpha_h.unsqueeze(-1) * Sigma_p_inv_h
+                    b_prior_h = torch.einsum('bijk,bik->bij', A_prior_h, mu_p_h)
+                else:
+                    A_prior_h = alpha_h * Sigma_p_inv_h
+                    b_prior_h = torch.einsum('bijk,bik->bij', A_prior_h, mu_p_h)
+
+                sigma_h_safe = sigma_h + eps * torch.eye(d_h, device=device, dtype=dtype)
+                L_j = torch.linalg.cholesky(sigma_h_safe)
+                Sigma_j_inv_h = torch.cholesky_inverse(L_j)
+
+                Q_j = torch.einsum('bjlk,bjlm,bjmn->bjkn', exp_phi_h, Sigma_j_inv_h, exp_phi_h)
+                r_j = torch.einsum('bjkl,bjl->bjk', exp_neg_phi_h, mu_h)
+                Q_agg = torch.einsum('bij,bjkl->bikl', beta_h, Q_j)
+                Qr_j = torch.einsum('bjkl,bjl->bjk', Q_j, r_j)
+                Qr_agg = torch.einsum('bij,bjk->bik', beta_h, Qr_j)
+
+                A_align_h = self.lambda_belief * torch.einsum('bikl,bikm,bimn->biln', E_i, Q_agg, E_i)
+                b_align_h = self.lambda_belief * torch.einsum('bikl,bik->bil', E_i, Qr_agg)
+
+                A_h = A_prior_h + A_align_h + eps * torch.eye(d_h, device=device, dtype=dtype)
+                b_h = b_prior_h + b_align_h
+
+                L_A = torch.linalg.cholesky(A_h)
+                mu_star_h = torch.cholesky_solve(b_h.unsqueeze(-1), L_A).squeeze(-1)
+                A_inv_h = torch.cholesky_inverse(L_A)
+
+                if isinstance(alpha_h, torch.Tensor) and alpha_h.dim() == 3:
+                    entropy_scale = (alpha_h + self.lambda_belief).unsqueeze(-1)
+                    Sigma_star_h = entropy_scale * A_inv_h
+                else:
+                    Sigma_star_h = (alpha_h + self.lambda_belief) * A_inv_h
+
+                Sigma_star_h = Sigma_star_h.clamp(max=self.sigma_max)
+                mu_star[:, :, block_start:block_end] = mu_star_h
+                sigma_star_full[:, :, block_start:block_end, block_start:block_end] = Sigma_star_h
+
+                block_start = block_end
+
+            mu_current = mu_star
+            if self.update_sigma:
+                sigma_current = sigma_star_full
+
+        beta_current = beta_heads[-1] if beta_heads else None
+
+        # ── Iterative re-solve: Picard steps ─────────────────────────────
+        if self.n_picard_steps > 0 and self.lambda_softmax > 0 and _cf_bep is not None:
+            if is_diagonal:
+                for _resolve_iter in range(self.n_picard_steps):
+                    mu_prev = mu_current.clone()
+                    mu_star = torch.zeros_like(mu_current)
+                    sigma_star = torch.zeros_like(sigma_current)
+                    beta_heads_new = []
+                    block_start = 0
+
+                    for h, d_h in enumerate(self.irrep_dims or [self.embed_dim]):
+                        block_end = block_start + d_h
+
+                        mu_h = mu_current[:, :, block_start:block_end].detach().contiguous()
+                        mu_p_h = mu_p_current[:, :, block_start:block_end].contiguous()
+                        sigma_h = sigma_current[:, :, block_start:block_end].detach().contiguous()
+                        sigma_p_h = sigma_p[:, :, block_start:block_end].contiguous()
+                        gen_h = self.generators[:, block_start:block_end, block_start:block_end]
+
+                        kappa_h = self._get_kappa_h(h, d_h) if self.irrep_dims else self.kappa
+                        alpha_h_iter = alpha_effective
+                        if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3:
+                            alpha_h_iter = alpha_effective[:, :, block_start:block_end]
+                        if self.learnable_alpha and hasattr(self, 'get_bayesian_alpha'):
+                            alpha_n = self.get_bayesian_alpha(
+                                mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
+                            )
+                            if isinstance(alpha_n, torch.Tensor) and alpha_n.dim() == 3:
+                                alpha_h_iter = alpha_n[:, :, block_start:block_end]
+                            else:
+                                alpha_h_iter = alpha_n
+
+                        _head_bep = [_cf_bep[h]] if _cf_bep is not None else None
+
+                        beta_h, kl_h = compute_attention_weights(
+                            mu_q=mu_h, sigma_q=sigma_h,
+                            phi=phi_current, generators=gen_h,
+                            kappa=kappa_h, epsilon=eps, mask=mask,
+                            return_kl=True,
+                            diagonal_covariance=True,
+                            irrep_dims=[d_h] if self.irrep_dims else None,
+                            cached_block_exp_pairs=_head_bep,
+                            mask_self_attention=self.mask_self_attention,
+                            gauge_mode=self.gauge_mode,
+                            use_rope=self._use_rope_vfe,
+                            rope_base=self._rope_base_vfe,
+                        )
+                        beta_heads_new.append(beta_h)
+
+                        exp_phi_h, exp_neg_phi_h = (_cf_bep[h] if _cf_bep is not None else (
+                            torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1),
+                            torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1),
+                        ))
+
+                        inv_sigma_p_h = 1.0 / sigma_p_h.clamp(min=eps)
+                        prior_prec_h = alpha_h_iter * inv_sigma_p_h
+                        prior_info_h = alpha_h_iter * mu_p_h * inv_sigma_p_h
+
+                        Omega_h_cf = torch.einsum('bikl,bjlm->bijkm', exp_phi_h, exp_neg_phi_h)
+                        sigma_j_t_diag = torch.einsum(
+                            'bijkl,bijkl,bjl->bijk', Omega_h_cf, Omega_h_cf, sigma_h
+                        ).clamp(min=eps)
+                        inv_sigma_j_t = 1.0 / sigma_j_t_diag
+                        mu_j_t_cf = torch.einsum('bijkl,bjl->bijk', Omega_h_cf, mu_h)
+                        info_per_pair = mu_j_t_cf * inv_sigma_j_t
+
+                        align_info_h = self.lambda_belief * torch.einsum('bij,bijk->bik', beta_h, info_per_pair)
+                        align_prec_h = self.lambda_belief * torch.einsum('bij,bijk->bik', beta_h, inv_sigma_j_t)
+
+                        kappa_h_val = kappa_h.item() if isinstance(kappa_h, torch.Tensor) else kappa_h
+                        kappa_h_scaled = max(kappa_h_val * math.sqrt(max(d_h, 1)), eps)
+
+                        if self.lambda_softmax > 0 and kappa_h_scaled > 0:
+                            w_j_scalar = kl_h * beta_h
+                            w_bar = w_j_scalar.sum(dim=-1)
+                            kl_weighted_prec = torch.einsum('bij,bijk->bik', w_j_scalar, inv_sigma_j_t)
+                            avg_prec_h = align_prec_h / max(self.lambda_belief, eps)
+                            S_mu_h = -(self.lambda_softmax / kappa_h_scaled) * (
+                                kl_weighted_prec - w_bar.unsqueeze(-1) * avg_prec_h
+                            )
+                            kl_weighted_info = torch.einsum('bij,bijk->bik', w_j_scalar, info_per_pair)
+                            avg_info_h = align_info_h / max(self.lambda_belief, eps)
+                            c_mu_h = (self.lambda_softmax / kappa_h_scaled) * (
+                                kl_weighted_info - w_bar.unsqueeze(-1) * avg_info_h
+                            )
+                            p_bar_h = avg_prec_h
+                            S_sigma_h = -(self.lambda_softmax / (2.0 * kappa_h_scaled)) * torch.einsum(
+                                'bij,bijk->bik', w_j_scalar, inv_sigma_j_t - p_bar_h[:, :, None, :]
+                            )
+                        else:
+                            S_mu_h = 0.0
+                            c_mu_h = 0.0
+                            S_sigma_h = 0.0
+
+                        del Omega_h_cf, sigma_j_t_diag, inv_sigma_j_t, mu_j_t_cf, info_per_pair
+
+                        total_prec_h = prior_prec_h + align_prec_h + S_mu_h
+                        total_info_h = prior_info_h + align_info_h - c_mu_h
+                        mu_star[:, :, block_start:block_end] = total_info_h / total_prec_h.clamp(min=eps)
+
+                        entropy_scale = alpha_h_iter + self.lambda_belief
+                        sigma_prec_h = prior_prec_h + align_prec_h + 2.0 * S_sigma_h
+                        sigma_star[:, :, block_start:block_end] = (
+                            entropy_scale / sigma_prec_h.clamp(min=eps)
+                        ).clamp(max=self.sigma_max)
+
+                        block_start = block_end
+
+                    mu_current = mu_star
+                    if self.update_sigma:
+                        sigma_current = sigma_star
+                        if self.isotropic_covariance:
+                            scalar_var = sigma_current.mean(dim=-1, keepdim=True)
+                            sigma_current = scalar_var.expand_as(sigma_current)
+
+                    beta_heads = beta_heads_new
+
+                    rel_change = (mu_current - mu_prev).norm() / mu_prev.norm().clamp(min=eps)
+                    if rel_change < 1e-4:
+                        break
+
+            else:
+                # FULL COVARIANCE: Original Picard (linear-only CF + grad)
+                mu_0 = mu_current.clone()
+                sigma_0 = sigma_current
+
+                for _picard_iter in range(self.n_picard_steps):
+                    grad_softmax_full = torch.zeros_like(mu_current)
+                    block_start = 0
+
+                    for h, d_h in enumerate(self.irrep_dims or [self.embed_dim]):
+                        block_end = block_start + d_h
+                        beta_h = beta_heads[h]
+                        exp_phi_h, exp_neg_phi_h = _cf_bep[h]
+
+                        mu_h = mu_current[:, :, block_start:block_end]
+
+                        Omega_h = torch.einsum('bikl,bjlm->bijkm', exp_phi_h, exp_neg_phi_h)
+                        mu_j_t = torch.einsum('bijkl,bjl->bijk', Omega_h, mu_h)
+                        delta = mu_h[:, :, None, :] - mu_j_t
+
+                        sigma_h_blk = sigma_0[:, :, block_start:block_end, block_start:block_end]
+
+                        Sigma_j_t = torch.einsum('bijkl,bjlm,bijnm->bijkn', Omega_h, sigma_h_blk, Omega_h)
+                        Sigma_j_t = Sigma_j_t + eps * torch.eye(d_h, device=device, dtype=dtype)
+                        Sigma_j_t_inv = torch.linalg.inv(Sigma_j_t)
+
+                        grad_kl_pair = torch.einsum('bijkl,bijl->bijk', Sigma_j_t_inv, delta)
+
+                        sigma_i_h = sigma_h_blk
+                        trace_h = torch.einsum('bijkl,bilk->bij', Sigma_j_t_inv, sigma_i_h)
+                        mahal_h = torch.einsum('bijk,bijk->bij', delta, grad_kl_pair)
+                        logdet_jt = torch.linalg.slogdet(Sigma_j_t)[1]
+                        logdet_i = torch.linalg.slogdet(
+                            sigma_i_h + eps * torch.eye(d_h, device=device, dtype=dtype)
+                        )[1]
+                        logdet_h = logdet_jt - logdet_i.unsqueeze(2)
+                        kl_h = (0.5 * (trace_h + mahal_h - d_h + logdet_h)).clamp(min=0.0)
+
+                        kappa_h = self._get_kappa_h(h, d_h) if self.irrep_dims else self.kappa
+                        kappa_h_scaled = max(kappa_h * math.sqrt(max(d_h, 1)), eps)
+                        avg_grad_h = torch.einsum('bij,bijk->bik', beta_h, grad_kl_pair)
+                        grad_dev = avg_grad_h.unsqueeze(2) - grad_kl_pair
+                        d_beta_d_mu_h = beta_h.unsqueeze(-1) * grad_dev / kappa_h_scaled
+                        grad_softmax_h = self.lambda_softmax * torch.einsum(
+                            'bij,bijk->bik', kl_h, d_beta_d_mu_h
+                        )
+                        grad_softmax_full[:, :, block_start:block_end] = grad_softmax_h
+
+                        block_start = block_end
+
+                    if self.learnable_alpha and _alpha_c0 is not None:
+                        alpha_n = self.get_bayesian_alpha(
+                            mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
+                        )
+                        sigma_p_diag = torch.diagonal(sigma_p, dim1=-2, dim2=-1).clamp(min=eps)
+                        sigma_q_diag = torch.diagonal(sigma_current, dim1=-2, dim2=-1).clamp(min=eps)
+                        delta_mu_p = mu_current - mu_p_current
+
+                        alpha_mismatch = (alpha_n - alpha_effective) * delta_mu_p / sigma_p_diag
+                        kl_k = 0.5 * (sigma_q_diag / sigma_p_diag + delta_mu_p ** 2 / sigma_p_diag
+                                      - 1.0 + torch.log(sigma_p_diag) - torch.log(sigma_q_diag))
+                        kl_k = kl_k.clamp(min=0.0)
+                        product_rule = -(alpha_n ** 2 / _alpha_c0) * kl_k * delta_mu_p / sigma_p_diag
+                        grad_softmax_full = grad_softmax_full + alpha_mismatch + product_rule
+
+                    correction = torch.zeros_like(mu_current)
+                    block_start = 0
+                    for h, d_h in enumerate(self.irrep_dims or [self.embed_dim]):
+                        block_end = block_start + d_h
+                        Sigma_0_h = sigma_0[:, :, block_start:block_end, block_start:block_end]
+                        grad_h = grad_softmax_full[:, :, block_start:block_end]
+                        correction[:, :, block_start:block_end] = torch.einsum(
+                            'bijk,bik->bij', Sigma_0_h, grad_h
+                        )
+                        block_start = block_end
+                    w_norm = (grad_softmax_full * correction).sum(
+                        dim=-1, keepdim=True
+                    ).clamp(min=0.0).sqrt()
+
+                    scale = (self.picard_trust_region / w_norm.clamp(min=eps)).clamp(max=1.0)
+                    mu_current = mu_0 - scale * correction
+
+        # ── Beta history for return ───────────────────────────────────────
+        beta_history_out: Optional[list] = None
+        if return_beta_history:
+            beta_stacked = (torch.stack(beta_heads, dim=1) if len(beta_heads) > 1
+                            else beta_heads[0].unsqueeze(1))
+            beta_history_out = [beta_stacked.detach().clone()]
+
+        # ── Phi evolution via gradient (phi enters nonlinearly) ───────────
+        if (self.update_phi and torch.is_grad_enabled()
+                and self.gauge_mode not in ('trivial', 'constant')):
+            _use_omega = omega_current is not None and self.gauge_param == 'omega'
+            if _use_omega:
+                grad_omega = self._compute_omega_grad_direct(
+                    omega_current, mu_current, sigma_current,
+                    is_diagonal, mask, eps,
+                )
+                if grad_omega is not None:
+                    omega_current = self._retract_omega(
+                        omega_current, grad_omega, self.phi_lr,
+                        trust_region=getattr(self, 'omega_trust_region', 0.3),
+                    )
+            else:
+                _phi_bep_cf = (fused_block_matrix_exp_pairs(
+                    phi_current, self.generators, self.irrep_dims,
+                    enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                ) if self.irrep_dims is not None and self.gauge_mode == 'learned' else None)
+                grad_phi = self._compute_phi_grad(
+                    phi_current, mu_current, sigma_current,
+                    is_diagonal, mask, eps,
+                    cached_block_exp_pairs=_phi_bep_cf,
+                )
+                if grad_phi is not None:
+                    phi_current = _retract_phi(
+                        phi=phi_current,
+                        delta_phi=-grad_phi,
+                        generators=self.generators,
+                        step_size=self.phi_lr,
+                        max_norm=self.phi_max_norm,
+                    )
+
+        return mu_current, sigma_current, phi_current, omega_current, beta_heads, beta_history_out
+
     def forward(
         self,
         mu: torch.Tensor,          # (B, N, K) - current beliefs
@@ -1897,585 +2395,26 @@ class VariationalFFNDynamic(nn.Module):
         # =====================================================================
         # CLOSED-FORM E-STEP: Precision-weighted fixed point (optional)
         # =====================================================================
-        # When closed_form_e_step=True, compute the exact fixed point of the
-        # VFE objective (dropping the softmax coupling term KL·∂β/∂μ):
-        #
-        #   μ_i* = [α·μ_p/σ_p + λ·Σ_j β_ij·(Ω_ij μ_j)/σ_j] / [α/σ_p + λ·Σ_j β_ij/σ_j]
-        #   σ_i* = 1 / [α/σ_p + λ·Σ_j β_ij/σ_j]
-        #
-        # This naturally includes aggregation and replaces the gradient descent loop.
         if self.closed_form_e_step:
-            # 1. Compute block exp pairs for transport
-            _cf_bep = self._build_block_exp_pairs(
-                phi_current, omega_current, B, N, device, dtype,
+            (mu_current, sigma_current, phi_current, omega_current,
+             beta_heads, _cf_beta_history) = self._closed_form_e_step(
+                mu_current=mu_current,
+                sigma_current=sigma_current,
+                phi_current=phi_current,
+                omega_current=omega_current,
+                mu_p_current=mu_p_current,
+                sigma_p=sigma_p,
+                alpha_effective=alpha_effective,
+                _alpha_c0=_alpha_c0,
+                is_diagonal=is_diagonal,
+                B=B, N=N,
+                device=device, dtype=dtype, eps=eps,
+                mask=mask,
+                return_beta_history=return_beta_history,
             )
-
-            # 2. Per-head: compute β_h, then closed-form fixed point
-            beta_heads = []
-
-            if is_diagonal:
-                # =============================================================
-                # DIAGONAL CLOSED-FORM: element-wise precision-weighted average
-                # =============================================================
-                mu_star = torch.zeros_like(mu_current)
-                sigma_star = torch.zeros_like(sigma_current)
-                block_start = 0
-
-                for h, d_h in enumerate(self.irrep_dims or [self.embed_dim]):
-                    block_end = block_start + d_h
-
-                    mu_h = mu_current[:, :, block_start:block_end].detach().contiguous()
-                    mu_p_h = mu_p_current[:, :, block_start:block_end].contiguous()
-                    sigma_h = sigma_current[:, :, block_start:block_end].detach().contiguous()
-                    sigma_p_h = sigma_p[:, :, block_start:block_end].contiguous()
-                    gen_h = self.generators[:, block_start:block_end, block_start:block_end]
-
-                    kappa_h = self._get_kappa_h(h, d_h) if self.irrep_dims else self.kappa
-                    alpha_h = alpha_effective[:, :, block_start:block_end] if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3 else alpha_effective
-                    _head_bep = [_cf_bep[h]] if _cf_bep is not None else None
-
-                    # Compute β_h AND pairwise KL (need KL for softmax coupling)
-                    beta_kl_result = compute_attention_weights(
-                        mu_q=mu_h, sigma_q=sigma_h,
-                        phi=phi_current, generators=gen_h,
-                        kappa=kappa_h, epsilon=eps, mask=mask,
-                        return_kl=True,
-                        diagonal_covariance=True,
-                        irrep_dims=[d_h] if self.irrep_dims else None,
-                        cached_block_exp_pairs=_head_bep,
-                        mask_self_attention=self.mask_self_attention,
-                        gauge_mode=self.gauge_mode,
-                        use_rope=self._use_rope_vfe,
-                        rope_base=self._rope_base_vfe,
-                    )
-                    beta_h, kl_h = beta_kl_result
-                    beta_heads.append(beta_h)
-
-                    # Transport operators for this head
-                    exp_phi_h, exp_neg_phi_h = _cf_bep[h] if _cf_bep is not None else (
-                        torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1),
-                        torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1),
-                    )
-
-                    # Prior precision and information vector
-                    inv_sigma_p_h = 1.0 / sigma_p_h.clamp(min=eps)       # (B, N, d_h)
-                    prior_prec_h = alpha_h * inv_sigma_p_h                # (B, N, d_h)
-                    prior_info_h = alpha_h * mu_p_h * inv_sigma_p_h       # (B, N, d_h)
-
-                    # Alignment: precision-weighted transported aggregation
-                    # Transported diagonal covariance: sigma_j_t[k] = sum_l Omega[k,l]^2 * sigma_j[l]
-                    # This is diag(Omega @ diag(sigma_j) @ Omega^T), the exact diagonal transport.
-                    Omega_h_cf = torch.einsum('bikl,bjlm->bijkm', exp_phi_h, exp_neg_phi_h)  # (B, N, N, d_h, d_h)
-                    sigma_j_t_diag = torch.einsum(
-                        'bijkl,bijkl,bjl->bijk', Omega_h_cf, Omega_h_cf, sigma_h
-                    ).clamp(min=eps)  # (B, N, N, d_h)
-                    inv_sigma_j_t = 1.0 / sigma_j_t_diag  # (B, N, N, d_h)
-
-                    # Transported means: Omega_ij @ mu_j
-                    mu_j_t_cf = torch.einsum('bijkl,bjl->bijk', Omega_h_cf, mu_h)  # (B, N, N, d_h)
-
-                    # Information per pair: (Omega mu_j) / sigma_j_transported
-                    info_per_pair = mu_j_t_cf * inv_sigma_j_t  # (B, N, N, d_h)
-
-                    # Linear terms: attention-weighted precision and information
-                    align_info_h = self.lambda_belief * torch.einsum('bij,bijk->bik', beta_h, info_per_pair)  # (B, N, d_h)
-                    align_prec_h = self.lambda_belief * torch.einsum('bij,bijk->bik', beta_h, inv_sigma_j_t)  # (B, N, d_h)
-
-                    # =============================================================
-                    # ENHANCED CLOSED FORM: Include softmax coupling in fixed point
-                    # =============================================================
-                    # The softmax gradient ∂β/∂μ is LINEAR in μ_i (SymPy verified).
-                    # The σ_i terms CANCEL in ∂β/∂σ (SymPy verified).
-                    # This allows the full VFE fixed point (linear + softmax) to be
-                    # solved in one division per dimension. See derivation:
-                    # derivations/enhanced_closed_form_vfe.md
-                    #
-                    # mu*[k] = (b[k] - c[k]) / (A[k] + S[k])
-                    # sigma*[k] = (alpha + 1) / (lam_total[k] + 2*S_sigma[k])
-
-                    kappa_h_val = kappa_h.item() if isinstance(kappa_h, torch.Tensor) else kappa_h
-                    kappa_h_scaled = kappa_h_val * math.sqrt(max(d_h, 1))
-                    kappa_h_scaled = max(kappa_h_scaled, eps)
-
-                    if self.lambda_softmax > 0 and kappa_h_scaled > 0:
-                        # Per-pair softmax weights: w_j = KL_ij * beta_ij
-                        w_j = kl_h.unsqueeze(-1) * beta_h.unsqueeze(-1)  # (B, N, N, 1) for broadcasting
-                        # But we need (B, N, N) for scalar operations and (B, N, N, d_h) for per-dim
-                        w_j_scalar = kl_h * beta_h  # (B, N, N)
-                        w_bar = w_j_scalar.sum(dim=-1)  # (B, N) — expected KL
-
-                        # S[k]: softmax coupling's contribution to precision
-                        # S = -(lam_s/kappa)(sum_j w_j/sigma_jt - w_bar * avg_prec)
-                        kl_weighted_prec = torch.einsum('bij,bijk->bik', w_j_scalar, inv_sigma_j_t)  # (B, N, d_h)
-                        avg_prec_h = align_prec_h / max(self.lambda_belief, eps)  # = sum_m beta_im / sigma_mt
-                        S_mu_h = -(self.lambda_softmax / kappa_h_scaled) * (
-                            kl_weighted_prec - w_bar.unsqueeze(-1) * avg_prec_h
-                        )  # (B, N, d_h)
-
-                        # c[k]: softmax coupling's contribution to information
-                        # c = (lam_s/kappa)(sum_j w_j * nu_j - w_bar * avg_info)
-                        kl_weighted_info = torch.einsum('bij,bijk->bik', w_j_scalar, info_per_pair)  # (B, N, d_h)
-                        avg_info_h = align_info_h / max(self.lambda_belief, eps)  # = sum_m beta_im * nu_m
-                        c_mu_h = (self.lambda_softmax / kappa_h_scaled) * (
-                            kl_weighted_info - w_bar.unsqueeze(-1) * avg_info_h
-                        )  # (B, N, d_h)
-
-                        # S_sigma[k]: sigma softmax coupling (σ_i terms cancel — exact!)
-                        # S_sigma = -(lam_s/(2*kappa)) * sum_j w_j * (1/sigma_jt - p_bar)
-                        p_bar_h = avg_prec_h  # attention-weighted transported precision
-                        S_sigma_h = -(self.lambda_softmax / (2.0 * kappa_h_scaled)) * torch.einsum(
-                            'bij,bijk->bik', w_j_scalar, inv_sigma_j_t - p_bar_h[:, :, None, :]
-                        )  # (B, N, d_h)
-                    else:
-                        S_mu_h = 0.0
-                        c_mu_h = 0.0
-                        S_sigma_h = 0.0
-
-                    del Omega_h_cf, sigma_j_t_diag, inv_sigma_j_t, mu_j_t_cf, info_per_pair
-
-                    # Enhanced fixed point: (b - c) / (A + S) for mu, (alpha+1) / (lam_total + 2*S_sigma) for sigma
-                    total_prec_h = prior_prec_h + align_prec_h + S_mu_h    # A + S  (B, N, d_h)
-                    total_info_h = prior_info_h + align_info_h - c_mu_h    # b - c  (B, N, d_h)
-                    mu_star[:, :, block_start:block_end] = total_info_h / total_prec_h.clamp(min=eps)
-
-                    entropy_scale = alpha_h + self.lambda_belief  # alpha + 1 (when lambda_belief=1)
-                    sigma_prec_h = prior_prec_h + align_prec_h + 2.0 * S_sigma_h  # lam_total + 2*S_sigma
-                    sigma_star[:, :, block_start:block_end] = (entropy_scale / sigma_prec_h.clamp(min=eps)).clamp(max=self.sigma_max)
-
-                    block_start = block_end
-
-                mu_current = mu_star
-                if self.update_sigma:
-                    sigma_current = sigma_star
-                    # Isotropic enforcement: closed-form produces per-dimension sigma,
-                    # must project back to σ²I to maintain Limit 1 constraint.
-                    if self.isotropic_covariance:
-                        scalar_var = sigma_current.mean(dim=-1, keepdim=True)
-                        sigma_current = scalar_var.expand_as(sigma_current)
-
-            else:
-                # =============================================================
-                # FULL-COVARIANCE CLOSED-FORM: Q_j factorization + Cholesky solve
-                # =============================================================
-                # Uses the transported precision factorization:
-                #   Sigma_{j,t}^{-1} = E_i^T @ Q_j @ E_i
-                # where Q_j = exp_phi_j^T @ Sigma_j^{-1} @ exp_phi_j (i-independent)
-                # See docs/closed_form_e_step_derivation.md for full derivation.
-                K_full = self.embed_dim
-                mu_star = torch.zeros_like(mu_current)
-                # Full covariance output: (B, N, K, K) block-diagonal
-                sigma_star_full = torch.zeros(B, N, K_full, K_full, device=device, dtype=dtype)
-                block_start = 0
-
-                for h, d_h in enumerate(self.irrep_dims or [self.embed_dim]):
-                    block_end = block_start + d_h
-
-                    mu_h = mu_current[:, :, block_start:block_end].detach().contiguous()
-                    mu_p_h = mu_p_current[:, :, block_start:block_end].contiguous()
-                    # Full covariance: (B, N, d_h, d_h)
-                    sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end].detach().contiguous()
-                    sigma_p_h = sigma_p[:, :, block_start:block_end, block_start:block_end].contiguous()
-                    gen_h = self.generators[:, block_start:block_end, block_start:block_end]
-
-                    kappa_h = self._get_kappa_h(h, d_h) if self.irrep_dims else self.kappa
-                    alpha_h = alpha_effective[:, :, block_start:block_end] if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3 else alpha_effective
-                    _head_bep = [_cf_bep[h]] if _cf_bep is not None else None
-
-                    # Compute β_h (attention weights for this head)
-                    beta_h = compute_attention_weights(
-                        mu_q=mu_h, sigma_q=sigma_h,
-                        phi=phi_current, generators=gen_h,
-                        kappa=kappa_h, epsilon=eps, mask=mask,
-                        return_kl=False,
-                        diagonal_covariance=False,
-                        irrep_dims=[d_h] if self.irrep_dims else None,
-                        cached_block_exp_pairs=_head_bep,
-                        mask_self_attention=self.mask_self_attention,
-                        gauge_mode=self.gauge_mode,
-                        use_rope=self._use_rope_vfe,
-                        rope_base=self._rope_base_vfe,
-                    )
-                    beta_heads.append(beta_h)
-
-                    # Transport operators for this head
-                    exp_phi_h, exp_neg_phi_h = _cf_bep[h] if _cf_bep is not None else (
-                        torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1),
-                        torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1),
-                    )
-                    E_i = exp_neg_phi_h  # (B, N, d_h, d_h)
-
-                    # --- Prior precision (matrix) ---
-                    # Sigma_p_h: (B, N, d_h, d_h) → Sigma_p_inv via Cholesky
-                    sigma_p_h_safe = sigma_p_h + eps * torch.eye(d_h, device=device, dtype=dtype)
-                    L_p = torch.linalg.cholesky(sigma_p_h_safe)           # (B, N, d_h, d_h)
-                    Sigma_p_inv_h = torch.cholesky_inverse(L_p)           # (B, N, d_h, d_h)
-
-                    # alpha_h may be scalar or (B, N, d_h) — handle both
-                    if isinstance(alpha_h, torch.Tensor) and alpha_h.dim() == 3:
-                        # Per-dimension alpha: expand to diagonal matrix for multiplication
-                        A_prior_h = alpha_h.unsqueeze(-1) * Sigma_p_inv_h  # broadcast (B,N,d,1)*(B,N,d,d)
-                        b_prior_h = torch.einsum('bijk,bik->bij', A_prior_h, mu_p_h)
-                    else:
-                        A_prior_h = alpha_h * Sigma_p_inv_h                # (B, N, d_h, d_h)
-                        b_prior_h = torch.einsum('bijk,bik->bij', A_prior_h, mu_p_h)  # (B, N, d_h)
-
-                    # --- Q_j factorization ---
-                    # Sigma_j^{-1} via Cholesky
-                    sigma_h_safe = sigma_h + eps * torch.eye(d_h, device=device, dtype=dtype)
-                    L_j = torch.linalg.cholesky(sigma_h_safe)             # (B, N, d_h, d_h)
-                    Sigma_j_inv_h = torch.cholesky_inverse(L_j)           # (B, N, d_h, d_h)
-
-                    # Q_j = exp_phi_j^T @ Sigma_j^{-1} @ exp_phi_j  (i-independent)
-                    Q_j = torch.einsum(
-                        'bjlk,bjlm,bjmn->bjkn', exp_phi_h, Sigma_j_inv_h, exp_phi_h
-                    )  # (B, N, d_h, d_h)
-
-                    # r_j = exp_neg_phi_j @ mu_j  (mean in flat frame)
-                    r_j = torch.einsum('bjkl,bjl->bjk', exp_neg_phi_h, mu_h)  # (B, N, d_h)
-
-                    # --- Beta-weighted aggregation ---
-                    # Q_agg_i = sum_j beta_ij * Q_j
-                    Q_agg = torch.einsum('bij,bjkl->bikl', beta_h, Q_j)  # (B, N, d_h, d_h)
-
-                    # Qr_j = Q_j @ r_j, then aggregate
-                    Qr_j = torch.einsum('bjkl,bjl->bjk', Q_j, r_j)      # (B, N, d_h)
-                    Qr_agg = torch.einsum('bij,bjk->bik', beta_h, Qr_j)  # (B, N, d_h)
-
-                    # --- Transform to position i's frame ---
-                    # A_align = lambda * E_i^T @ Q_agg @ E_i
-                    # CRITICAL: 'bikl' for E_i^T (transpose via swapped last indices)
-                    A_align_h = self.lambda_belief * torch.einsum(
-                        'bikl,bikm,bimn->biln', E_i, Q_agg, E_i
-                    )  # (B, N, d_h, d_h)
-
-                    # b_align = lambda * E_i^T @ Qr_agg
-                    b_align_h = self.lambda_belief * torch.einsum(
-                        'bikl,bik->bil', E_i, Qr_agg
-                    )  # (B, N, d_h)
-
-                    # --- Total precision and solve ---
-                    A_h = A_prior_h + A_align_h  # (B, N, d_h, d_h)
-                    b_h = b_prior_h + b_align_h  # (B, N, d_h)
-
-                    # Regularize A_h for numerical stability
-                    A_h = A_h + eps * torch.eye(d_h, device=device, dtype=dtype)
-
-                    # Cholesky solve: A_h @ mu* = b_h, Sigma* = c * A^{-1}
-                    # Entropy scaling: c = alpha + lambda (from ∂F/∂Σ = 0)
-                    L_A = torch.linalg.cholesky(A_h)                     # (B, N, d_h, d_h)
-                    mu_star_h = torch.cholesky_solve(
-                        b_h.unsqueeze(-1), L_A
-                    ).squeeze(-1)                                         # (B, N, d_h)
-                    A_inv_h = torch.cholesky_inverse(L_A)                # (B, N, d_h, d_h)
-
-                    # Exact posterior covariance: Sigma* = (alpha + lambda) * A^{-1}
-                    if isinstance(alpha_h, torch.Tensor) and alpha_h.dim() == 3:
-                        # Per-dimension alpha: c_k = alpha_k + lambda, scale each row/col
-                        entropy_scale = (alpha_h + self.lambda_belief).unsqueeze(-1)  # (B, N, d_h, 1)
-                        Sigma_star_h = entropy_scale * A_inv_h  # broadcast (B,N,d,1)*(B,N,d,d)
-                    else:
-                        entropy_scale = alpha_h + self.lambda_belief  # scalar
-                        Sigma_star_h = entropy_scale * A_inv_h       # (B, N, d_h, d_h)
-
-                    # Clamp Sigma eigenvalues to [eps, sigma_max]
-                    Sigma_star_h = Sigma_star_h.clamp(max=self.sigma_max)
-
-                    mu_star[:, :, block_start:block_end] = mu_star_h
-                    sigma_star_full[:, :, block_start:block_end, block_start:block_end] = Sigma_star_h
-
-                    block_start = block_end
-
-                mu_current = mu_star
-                if self.update_sigma:
-                    sigma_current = sigma_star_full
-
+            if return_beta_history and _cf_beta_history:
+                beta_history = _cf_beta_history
             beta_current = beta_heads[-1] if beta_heads else None
-
-            # =================================================================
-            # Iterative re-solve: converge the beta <-> (mu, sigma) loop
-            # =================================================================
-            # The enhanced closed form (diagonal path) absorbs softmax coupling
-            # into the precision-weighted solve: mu* = (b-c)/(A+S). But S, c,
-            # S_sigma depend on beta and KL computed from INITIAL beliefs.
-            # Re-solving with updated beta/KL converges the self-consistency.
-            #
-            # For full-covariance (which uses linear-only CF), we keep the
-            # original Picard correction: mu^(n+1) = mu_0 - Sigma_0 @ grad.
-            if self.n_picard_steps > 0 and self.lambda_softmax > 0 and _cf_bep is not None:
-                if is_diagonal:
-                    # ---------------------------------------------------------
-                    # DIAGONAL: Iterative re-solve with updated beta/KL
-                    # ---------------------------------------------------------
-                    # Each step recomputes beta, KL from current beliefs, then
-                    # re-solves the full enhanced CF. This correctly converges
-                    # the beta <-> (mu, sigma) loop without double-counting.
-                    for _resolve_iter in range(self.n_picard_steps):
-                        mu_prev = mu_current.clone()
-                        mu_star = torch.zeros_like(mu_current)
-                        sigma_star = torch.zeros_like(sigma_current)
-                        beta_heads_new = []
-                        block_start = 0
-
-                        for h, d_h in enumerate(self.irrep_dims or [self.embed_dim]):
-                            block_end = block_start + d_h
-
-                            mu_h = mu_current[:, :, block_start:block_end].detach().contiguous()
-                            mu_p_h = mu_p_current[:, :, block_start:block_end].contiguous()
-                            sigma_h = sigma_current[:, :, block_start:block_end].detach().contiguous()
-                            sigma_p_h = sigma_p[:, :, block_start:block_end].contiguous()
-                            gen_h = self.generators[:, block_start:block_end, block_start:block_end]
-
-                            kappa_h = self._get_kappa_h(h, d_h) if self.irrep_dims else self.kappa
-                            alpha_h_iter = alpha_effective
-                            if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3:
-                                alpha_h_iter = alpha_effective[:, :, block_start:block_end]
-                            # Recompute alpha from current beliefs if learnable
-                            if self.learnable_alpha and hasattr(self, 'get_bayesian_alpha'):
-                                alpha_n = self.get_bayesian_alpha(
-                                    mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
-                                )
-                                if isinstance(alpha_n, torch.Tensor) and alpha_n.dim() == 3:
-                                    alpha_h_iter = alpha_n[:, :, block_start:block_end]
-                                else:
-                                    alpha_h_iter = alpha_n
-
-                            _head_bep = [_cf_bep[h]] if _cf_bep is not None else None
-
-                            # Recompute beta and KL from current beliefs
-                            beta_h, kl_h = compute_attention_weights(
-                                mu_q=mu_h, sigma_q=sigma_h,
-                                phi=phi_current, generators=gen_h,
-                                kappa=kappa_h, epsilon=eps, mask=mask,
-                                return_kl=True,
-                                diagonal_covariance=True,
-                                irrep_dims=[d_h] if self.irrep_dims else None,
-                                cached_block_exp_pairs=_head_bep,
-                                mask_self_attention=self.mask_self_attention,
-                                gauge_mode=self.gauge_mode,
-                                use_rope=self._use_rope_vfe,
-                                rope_base=self._rope_base_vfe,
-                            )
-                            beta_heads_new.append(beta_h)
-
-                            # Transport operators
-                            exp_phi_h, exp_neg_phi_h = _cf_bep[h] if _cf_bep is not None else (
-                                torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1),
-                                torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1),
-                            )
-
-                            # Prior precision and information
-                            inv_sigma_p_h = 1.0 / sigma_p_h.clamp(min=eps)
-                            prior_prec_h = alpha_h_iter * inv_sigma_p_h
-                            prior_info_h = alpha_h_iter * mu_p_h * inv_sigma_p_h
-
-                            # Transport and alignment (same as initial CF)
-                            Omega_h_cf = torch.einsum('bikl,bjlm->bijkm', exp_phi_h, exp_neg_phi_h)
-                            sigma_j_t_diag = torch.einsum(
-                                'bijkl,bijkl,bjl->bijk', Omega_h_cf, Omega_h_cf, sigma_h
-                            ).clamp(min=eps)
-                            inv_sigma_j_t = 1.0 / sigma_j_t_diag
-                            mu_j_t_cf = torch.einsum('bijkl,bjl->bijk', Omega_h_cf, mu_h)
-                            info_per_pair = mu_j_t_cf * inv_sigma_j_t
-
-                            align_info_h = self.lambda_belief * torch.einsum('bij,bijk->bik', beta_h, info_per_pair)
-                            align_prec_h = self.lambda_belief * torch.einsum('bij,bijk->bik', beta_h, inv_sigma_j_t)
-
-                            # Enhanced softmax coupling with FRESH beta/KL
-                            kappa_h_val = kappa_h.item() if isinstance(kappa_h, torch.Tensor) else kappa_h
-                            kappa_h_scaled = max(kappa_h_val * math.sqrt(max(d_h, 1)), eps)
-
-                            if self.lambda_softmax > 0 and kappa_h_scaled > 0:
-                                w_j_scalar = kl_h * beta_h
-                                w_bar = w_j_scalar.sum(dim=-1)
-
-                                kl_weighted_prec = torch.einsum('bij,bijk->bik', w_j_scalar, inv_sigma_j_t)
-                                avg_prec_h = align_prec_h / max(self.lambda_belief, eps)
-                                S_mu_h = -(self.lambda_softmax / kappa_h_scaled) * (
-                                    kl_weighted_prec - w_bar.unsqueeze(-1) * avg_prec_h
-                                )
-
-                                kl_weighted_info = torch.einsum('bij,bijk->bik', w_j_scalar, info_per_pair)
-                                avg_info_h = align_info_h / max(self.lambda_belief, eps)
-                                c_mu_h = (self.lambda_softmax / kappa_h_scaled) * (
-                                    kl_weighted_info - w_bar.unsqueeze(-1) * avg_info_h
-                                )
-
-                                p_bar_h = avg_prec_h
-                                S_sigma_h = -(self.lambda_softmax / (2.0 * kappa_h_scaled)) * torch.einsum(
-                                    'bij,bijk->bik', w_j_scalar, inv_sigma_j_t - p_bar_h[:, :, None, :]
-                                )
-                            else:
-                                S_mu_h = 0.0
-                                c_mu_h = 0.0
-                                S_sigma_h = 0.0
-
-                            del Omega_h_cf, sigma_j_t_diag, inv_sigma_j_t, mu_j_t_cf, info_per_pair
-
-                            # Re-solve enhanced fixed point
-                            total_prec_h = prior_prec_h + align_prec_h + S_mu_h
-                            total_info_h = prior_info_h + align_info_h - c_mu_h
-                            mu_star[:, :, block_start:block_end] = total_info_h / total_prec_h.clamp(min=eps)
-
-                            entropy_scale = alpha_h_iter + self.lambda_belief
-                            sigma_prec_h = prior_prec_h + align_prec_h + 2.0 * S_sigma_h
-                            sigma_star[:, :, block_start:block_end] = (
-                                entropy_scale / sigma_prec_h.clamp(min=eps)
-                            ).clamp(max=self.sigma_max)
-
-                            block_start = block_end
-
-                        mu_current = mu_star
-                        if self.update_sigma:
-                            sigma_current = sigma_star
-                            if self.isotropic_covariance:
-                                scalar_var = sigma_current.mean(dim=-1, keepdim=True)
-                                sigma_current = scalar_var.expand_as(sigma_current)
-
-                        # Update beta_heads for downstream use
-                        beta_heads = beta_heads_new
-
-                        # Convergence check
-                        rel_change = (mu_current - mu_prev).norm() / mu_prev.norm().clamp(min=eps)
-                        if rel_change < 1e-4:
-                            break
-
-                else:
-                    # ---------------------------------------------------------
-                    # FULL COVARIANCE: Original Picard (linear-only CF + grad)
-                    # ---------------------------------------------------------
-                    # The full-cov path uses linear-only CF, so the softmax
-                    # gradient IS the full residual. Picard is correct here.
-                    mu_0 = mu_current.clone()
-                    sigma_0 = sigma_current
-
-                    for _picard_iter in range(self.n_picard_steps):
-                        grad_softmax_full = torch.zeros_like(mu_current)
-                        block_start = 0
-
-                        for h, d_h in enumerate(self.irrep_dims or [self.embed_dim]):
-                            block_end = block_start + d_h
-                            beta_h = beta_heads[h]
-                            exp_phi_h, exp_neg_phi_h = _cf_bep[h]
-
-                            mu_h = mu_current[:, :, block_start:block_end]
-
-                            Omega_h = torch.einsum(
-                                'bikl,bjlm->bijkm', exp_phi_h, exp_neg_phi_h
-                            )
-                            mu_j_t = torch.einsum(
-                                'bijkl,bjl->bijk', Omega_h, mu_h
-                            )
-                            delta = mu_h[:, :, None, :] - mu_j_t
-
-                            sigma_h_blk = sigma_0[:, :, block_start:block_end, block_start:block_end]
-
-                            Sigma_j_t = torch.einsum(
-                                'bijkl,bjlm,bijnm->bijkn', Omega_h, sigma_h_blk, Omega_h
-                            )
-                            Sigma_j_t = Sigma_j_t + eps * torch.eye(d_h, device=device, dtype=dtype)
-                            Sigma_j_t_inv = torch.linalg.inv(Sigma_j_t)
-
-                            grad_kl_pair = torch.einsum(
-                                'bijkl,bijl->bijk', Sigma_j_t_inv, delta
-                            )
-
-                            sigma_i_h = sigma_h_blk
-                            trace_h = torch.einsum(
-                                'bijkl,bilk->bij', Sigma_j_t_inv, sigma_i_h
-                            )
-                            mahal_h = torch.einsum(
-                                'bijk,bijk->bij', delta, grad_kl_pair
-                            )
-                            logdet_jt = torch.linalg.slogdet(Sigma_j_t)[1]
-                            logdet_i = torch.linalg.slogdet(sigma_i_h + eps * torch.eye(d_h, device=device, dtype=dtype))[1]
-                            logdet_h = logdet_jt - logdet_i.unsqueeze(2)
-
-                            kl_h = (0.5 * (trace_h + mahal_h - d_h + logdet_h)).clamp(min=0.0)
-
-                            kappa_h = self._get_kappa_h(h, d_h) if self.irrep_dims else self.kappa
-                            kappa_h_scaled = max(kappa_h * math.sqrt(max(d_h, 1)), eps)
-                            avg_grad_h = torch.einsum('bij,bijk->bik', beta_h, grad_kl_pair)
-                            grad_dev = avg_grad_h.unsqueeze(2) - grad_kl_pair
-                            d_beta_d_mu_h = beta_h.unsqueeze(-1) * grad_dev / kappa_h_scaled
-                            grad_softmax_h = self.lambda_softmax * torch.einsum(
-                                'bij,bijk->bik', kl_h, d_beta_d_mu_h
-                            )
-                            grad_softmax_full[:, :, block_start:block_end] = grad_softmax_h
-
-                            block_start = block_end
-
-                        # Alpha correction (full-cov path)
-                        if self.learnable_alpha and _alpha_c0 is not None:
-                            alpha_n = self.get_bayesian_alpha(
-                                mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
-                            )
-                            sigma_p_diag = torch.diagonal(sigma_p, dim1=-2, dim2=-1).clamp(min=eps)
-                            sigma_q_diag = torch.diagonal(sigma_current, dim1=-2, dim2=-1).clamp(min=eps)
-                            delta_mu_p = mu_current - mu_p_current
-
-                            alpha_mismatch = (alpha_n - alpha_effective) * delta_mu_p / sigma_p_diag
-                            kl_k = 0.5 * (sigma_q_diag / sigma_p_diag + delta_mu_p ** 2 / sigma_p_diag
-                                          - 1.0 + torch.log(sigma_p_diag) - torch.log(sigma_q_diag))
-                            kl_k = kl_k.clamp(min=0.0)
-                            product_rule = -(alpha_n ** 2 / _alpha_c0) * kl_k * delta_mu_p / sigma_p_diag
-                            grad_softmax_full = grad_softmax_full + alpha_mismatch + product_rule
-
-                        # Picard update: mu^(n+1) = mu_0 - Sigma_0 @ ∇F_softmax(mu^(n))
-                        correction = torch.zeros_like(mu_current)
-                        block_start = 0
-                        for h, d_h in enumerate(self.irrep_dims or [self.embed_dim]):
-                            block_end = block_start + d_h
-                            Sigma_0_h = sigma_0[:, :, block_start:block_end, block_start:block_end]
-                            grad_h = grad_softmax_full[:, :, block_start:block_end]
-                            correction[:, :, block_start:block_end] = torch.einsum(
-                                'bijk,bik->bij', Sigma_0_h, grad_h
-                            )
-                            block_start = block_end
-                        w_norm = (grad_softmax_full * correction).sum(
-                            dim=-1, keepdim=True
-                        ).clamp(min=0.0).sqrt()
-
-                        scale = (self.picard_trust_region / w_norm.clamp(min=eps)).clamp(max=1.0)
-                        mu_current = mu_0 - scale * correction
-
-            # Store beta for implicit EM (if needed)
-            if return_beta_history:
-                beta_stacked = torch.stack(beta_heads, dim=1) if len(beta_heads) > 1 else beta_heads[0].unsqueeze(1)
-                beta_history = [beta_stacked.detach().clone()]
-
-            # Phi evolution via gradient (phi enters nonlinearly, no closed form)
-            if (self.update_phi and torch.is_grad_enabled()
-                    and self.gauge_mode not in ('trivial', 'constant')):
-                _use_omega = omega_current is not None and self.gauge_param == 'omega'
-                if _use_omega:
-                    grad_omega = self._compute_omega_grad_direct(
-                        omega_current, mu_current, sigma_current,
-                        is_diagonal, mask, eps,
-                    )
-                    if grad_omega is not None:
-                        omega_current = self._retract_omega(
-                            omega_current, grad_omega, self.phi_lr,
-                            trust_region=getattr(self, 'omega_trust_region', 0.3),
-                        )
-                else:
-                    _phi_bep_cf = fused_block_matrix_exp_pairs(
-                        phi_current, self.generators, self.irrep_dims,
-                        enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                    ) if self.irrep_dims is not None and self.gauge_mode == 'learned' else None
-                    grad_phi = self._compute_phi_grad(
-                        phi_current, mu_current, sigma_current,
-                        is_diagonal, mask, eps,
-                        cached_block_exp_pairs=_phi_bep_cf,
-                    )
-                    if grad_phi is not None:
-                        phi_current = _retract_phi(
-                            phi=phi_current,
-                            delta_phi=-grad_phi,
-                            generators=self.generators,
-                            step_size=self.phi_lr,
-                            max_norm=self.phi_max_norm,
-                        )
-
         # =====================================================================
         # VFE Descent Loop with Dynamic β (runs outside AMP autocast)
         # =====================================================================
