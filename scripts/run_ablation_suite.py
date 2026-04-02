@@ -59,7 +59,7 @@ BASELINE_CONFIG = {
     'max_seq_len':           64,
     
     'batch_size':            256, 
-    'max_steps':             7500,
+    'max_steps':             3750,
     
     'n_layers':              1,
     'ffn_n_iterations':      1,
@@ -69,7 +69,7 @@ BASELINE_CONFIG = {
 
     'use_prior_bank':           False,
     'learnable_pb_temperature': False,
-    'mask_self_attention':      False,  # Prevent attention collapse?
+    'mask_self_attention':      True,  # Prevent attention collapse?
   
     'kappa_warmup_steps':       5000,  # freeze kappa for first n steps
     'learnable_head_kappa':     True, # If True, learn per-head κ_h via log_kappa_per_head    
