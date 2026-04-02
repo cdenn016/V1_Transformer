@@ -31,8 +31,8 @@ warnings.filterwarnings("ignore", message="Failed to find nvdisasm", module="tri
 
 from math_utils.numerical_monitor import record as _nr
 
+import logging
 import math
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -42,13 +42,8 @@ from transformer.core.gauge_utils import (
     stable_matrix_exp_pair,
     newton_schulz_orthogonalize,
     fused_block_matrix_exp_pairs,
-    fused_block_diagonal_kl_diag,
-    fused_block_diagonal_kl_full,
 )
 from transformer.core.kl_computation import (
-    KLMode,
-    safe_kl_clamp,
-    compute_kl_matrix as _unified_compute_kl_matrix,
     _kl_kernel_dense,
     _kl_kernel_diagonal,
 )
@@ -59,17 +54,16 @@ from transformer.core.transport_ops import (
     compute_transport_operators_direct,
     omega_to_block_exp_pairs,
     _apply_rope,
-    _build_rope_freqs,
 )
 
-# Import transport operators
+logger = logging.getLogger(__name__)
+
 try:
-    from math_utils.transport import compute_transport
     from math_utils.generators import generate_so3_generators
     TRANSPORT_AVAILABLE = True
 except ImportError:
     TRANSPORT_AVAILABLE = False
-    print("⚠️  Transport module not available")
+    logger.warning("Transport module not available")
 
 
 # =============================================================================
@@ -1319,7 +1313,7 @@ class IrrepMultiHeadAttention(nn.Module):
                 self.irrep_labels = ['full']
                 total_dim = embed_dim
                 self.glk_multihead = False
-                print(f"[GL(K) mode] Single-head attention: dim={embed_dim}, generators={embed_dim}²={embed_dim**2}")
+                logger.info(f"[GL(K) mode] Single-head attention: dim={embed_dim}, generators={embed_dim}²={embed_dim**2}")
             else:
                 # Multi-head GL(K): block-diagonal structure
                 # Parse irrep_spec as [(label, n_heads, d_head)]
@@ -1338,14 +1332,14 @@ class IrrepMultiHeadAttention(nn.Module):
                     self.irrep_labels = [f'glk_superblock_{i}' for i in range(len(irrep_dims_override))]
                     self.glk_multihead = True
                     self.glk_d_head = d_head
-                    print(f"[GL(K) cross-head] super-blocks={irrep_dims_override}, "
-                          f"d_head={d_head}")
+                    logger.info(f"[GL(K) cross-head] super-blocks={irrep_dims_override}, "
+                               f"d_head={d_head}")
                 else:
                     self.irrep_dims = [d_head] * n_heads
                     self.irrep_labels = [f'glk_head_{h}' for h in range(n_heads)]
                     self.glk_multihead = True
                     self.glk_d_head = d_head
-                    print(f"[GL(K) multi-head] {n_heads} heads × GL({d_head}), generators per head={d_head}²={d_head**2}")
+                    logger.info(f"[GL(K) multi-head] {n_heads} heads × GL({d_head}), generators per head={d_head}²={d_head**2}")
         else:
             # SO(3) / SO(N) mode: Use irrep decomposition
             for label, multiplicity, dim in irrep_spec:
@@ -1478,8 +1472,8 @@ class IrrepMultiHeadAttention(nn.Module):
                 omega = nn.Parameter(torch.eye(dim))  # Initialize to identity
                 self.constant_omega.append(omega)
                 total_omega_params += dim * dim
-            print(f"[Constant gauge] {self.n_heads} heads, per-head Ω ∈ GL(d_head)")
-            print(f"  → {total_omega_params} learnable transport parameters (initialized to I)")
+            logger.info(f"[Constant gauge] {self.n_heads} heads, per-head Ω ∈ GL(d_head)")
+            logger.info(f"  -> {total_omega_params} learnable transport parameters (initialized to I)")
         else:
             self.constant_omega = None
 
@@ -1489,7 +1483,7 @@ class IrrepMultiHeadAttention(nn.Module):
         self.use_output_projection = use_output_projection
         if use_output_projection:
             self.output_proj = nn.Linear(embed_dim, embed_dim, bias=False)
-            print(f"  W_O output projection: {embed_dim}×{embed_dim} = {embed_dim**2} params")
+            logger.info(f"  W_O output projection: {embed_dim}×{embed_dim} = {embed_dim**2} params")
         else:
             self.output_proj = None
 
@@ -1497,15 +1491,15 @@ class IrrepMultiHeadAttention(nn.Module):
         if gauge_group == 'GLK':
             # GL(K) mode: single head with full generators
             n_gen = global_generators.shape[0] if global_generators is not None else embed_dim**2
-            print(f"[GL(K) Attention] Single head, dim={embed_dim}, n_generators={n_gen}")
-            print(f"  → Full GL({embed_dim}) transport on entire embedding space")
+            logger.info(f"[GL(K) Attention] Single head, dim={embed_dim}, n_generators={n_gen}")
+            logger.info(f"  -> Full GL({embed_dim}) transport on entire embedding space")
         else:
             # SO(3) / SO(N) mode: count scalar vs non-scalar heads
             n_scalar_heads = sum(1 for d in self.irrep_dims if d == 1)
             n_gauge_active_heads = self.n_heads - n_scalar_heads
             scalar_channels = sum(d for d in self.irrep_dims if d == 1)
 
-            print(f"IrrepMultiHeadAttention: {self.n_heads} heads, dims={self.irrep_dims}")
+            logger.info(f"IrrepMultiHeadAttention: {self.n_heads} heads, dims={self.irrep_dims}")
 
             # Warn if a large fraction of channels are gauge-invariant
             if n_scalar_heads > 0:
@@ -1520,8 +1514,8 @@ class IrrepMultiHeadAttention(nn.Module):
                         f"Consider increasing non-scalar irreps (ℓ≥1) for gauge-sensitive representations.",
                         UserWarning
                     )
-                print(f"  → {n_scalar_heads} scalar (ℓ=0) heads: GAUGE-INVARIANT (Ω=I)")
-                print(f"  → {n_gauge_active_heads} non-scalar heads: gauge-active (transport via Wigner D)")
+                logger.info(f"  -> {n_scalar_heads} scalar (l=0) heads: GAUGE-INVARIANT (Omega=I)")
+                logger.info(f"  -> {n_gauge_active_heads} non-scalar heads: gauge-active (transport via Wigner D)")
 
     def forward(
         self,
@@ -1908,18 +1902,19 @@ class IrrepMultiHeadAttention(nn.Module):
 # =============================================================================
 
 if __name__ == '__main__':
-    print("="*70)
-    print("KL-BASED ATTENTION MECHANISM TEST")
-    print("="*70)
+    logging.basicConfig(level=logging.INFO)
+    logger.info("="*70)
+    logger.info("KL-BASED ATTENTION MECHANISM TEST")
+    logger.info("="*70)
 
     # Test config
     B, N, K = 2, 8, 16  # Small for testing
     kappa = 1.0
 
-    print(f"\n[1] Creating test data...")
-    print(f"    Batch size: {B}")
-    print(f"    Num agents: {N} (all at single point c*)")
-    print(f"    Embed dim:  {K}")
+    logger.info("[1] Creating test data...")
+    logger.info(f"    Batch size: {B}")
+    logger.info(f"    Num agents: {N} (all at single point c*)")
+    logger.info(f"    Embed dim:  {K}")
 
     # Create random beliefs
     mu_q = torch.randn(B, N, K)
@@ -1929,69 +1924,69 @@ if __name__ == '__main__':
     # Generate SO(3) generators (import from existing module)
     if TRANSPORT_AVAILABLE:
         G = torch.from_numpy(generate_so3_generators(K)).float()
-        print(f"    ✓ SO(3) generators created: {G.shape}")
+        logger.info(f"    SO(3) generators created: {G.shape}")
     else:
         # Fallback: random skew-symmetric matrices
         G = torch.randn(3, K, K)
         G = 0.5 * (G - G.transpose(-1, -2))  # Make skew-symmetric
-        print(f"    ⚠️  Using random generators (transport module unavailable)")
+        logger.warning("    Using random generators (transport module unavailable)")
 
     # Test attention weights
-    print(f"\n[2] Computing KL-based attention weights...")
+    logger.info("[2] Computing KL-based attention weights...")
     beta = compute_attention_weights(
         mu_q, sigma_q, phi, G, kappa  # Use PyTorch
     )
-    print(f"    β shape: {beta.shape}")
-    print(f"    β sum over keys: {beta.sum(dim=-1)[0, 0].item():.4f} (should ≈ 1)")
-    print(f"    β min: {beta.min().item():.6f}")
-    print(f"    β max: {beta.max().item():.6f}")
+    logger.info(f"    beta shape: {beta.shape}")
+    logger.info(f"    beta sum over keys: {beta.sum(dim=-1)[0, 0].item():.4f} (should approx 1)")
+    logger.info(f"    beta min: {beta.min().item():.6f}")
+    logger.info(f"    beta max: {beta.max().item():.6f}")
 
     # Test causal mask
-    print(f"\n[3] Testing causal mask...")
+    logger.info("[3] Testing causal mask...")
     mask = torch.tril(torch.ones(N, N)).unsqueeze(0).expand(B, -1, -1)
     beta_causal = compute_attention_weights(
         mu_q, sigma_q, phi, G, kappa, mask=mask
     )
-    print(f"    Causal β[0, 0, :5]: {beta_causal[0, 0, :5]}")
-    print(f"    Future positions should be ~0: {beta_causal[0, 0, 5:].sum().item():.6f}")
+    logger.info(f"    Causal beta[0, 0, :5]: {beta_causal[0, 0, :5]}")
+    logger.info(f"    Future positions should be ~0: {beta_causal[0, 0, 5:].sum().item():.6f}")
 
     # Test message aggregation
-    print(f"\n[4] Testing message aggregation...")
+    logger.info("[4] Testing message aggregation...")
     mu_agg, _ = aggregate_messages(
         mu_q, sigma_q, phi, beta, G, aggregate_mode='mean_only'
     )
-    print(f"    Aggregated means shape: {mu_agg.shape}")
-    print(f"    ✓ Messages aggregated via parallel transport")
+    logger.info(f"    Aggregated means shape: {mu_agg.shape}")
+    logger.info("    Messages aggregated via parallel transport")
 
     # Test multi-head attention
-    print(f"\n[5] Testing multi-head attention...")
+    logger.info("[5] Testing multi-head attention...")
     irrep_spec = [
         ('ℓ0', 4, 1),   # 4 scalars
         ('ℓ1', 2, 3),   # 2 vectors
         ('ℓ2', 1, 5),   # 1 rank-2 tensor
-    ]  # Total: 4 + 6 + 5 = 15 → pad to 16
+    ]  # Total: 4 + 6 + 5 = 15 -> pad to 16
 
     mha = IrrepMultiHeadAttention(
         embed_dim=K,
         irrep_spec=irrep_spec,
         kappa_beta=kappa,
     )
-    print(f"    {mha}")
+    logger.info(f"    {mha}")
 
     mu_out, sigma_out, attn_weights, kl_matrices = mha(
         mu_q, sigma_q, phi, G, return_attention=True
     )
-    print(f"    Output μ shape: {mu_out.shape}")
-    print(f"    Attention weights shape: {attn_weights.shape}")
-    print(f"    ✓ Multi-head attention complete")
+    logger.info(f"    Output mu shape: {mu_out.shape}")
+    logger.info(f"    Attention weights shape: {attn_weights.shape}")
+    logger.info("    Multi-head attention complete")
 
     # Parameter count
     total_params = sum(p.numel() for p in mha.parameters())
-    print(f"\n[6] Parameter count:")
-    print(f"    Multi-head attention: {total_params:,} parameters")
-    print(f"    (Compare to standard: 4×K² = {4*K*K:,} for Q,K,V,O projections)")
-    print(f"    Reduction: {4*K*K / max(total_params, 1):.1f}x fewer parameters!")
+    logger.info("[6] Parameter count:")
+    logger.info(f"    Multi-head attention: {total_params:,} parameters")
+    logger.info(f"    (Compare to standard: 4*K^2 = {4*K*K:,} for Q,K,V,O projections)")
+    logger.info(f"    Reduction: {4*K*K / max(total_params, 1):.1f}x fewer parameters!")
 
-    print("\n" + "="*70)
-    print("✓ All attention mechanism tests passed!")
-    print("="*70)
+    logger.info("="*70)
+    logger.info("All attention mechanism tests passed!")
+    logger.info("="*70)

@@ -23,12 +23,15 @@ warnings.filterwarnings("ignore", message="Failed to find cuobjdump", module="tr
 warnings.filterwarnings("ignore", message="Failed to find nvdisasm", module="triton")
 warnings.filterwarnings("ignore", message="CUDA path could not be detected", module="cupy")
 
+import logging
 import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Tuple, Dict, List, Union
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # Import our components
 from transformer.core.embeddings import GaugeTokenEmbedding, GaugePositionalEncoding
@@ -165,9 +168,9 @@ class GaugeTransformerLM(nn.Module):
         isotropic_covariance = config.get('isotropic_covariance', False)
         self.isotropic_covariance = isotropic_covariance
         if isotropic_covariance:
-            print(f"[INFO] Isotropic covariance mode: Σ = σ²I (Limit 1 — KL → squared Euclidean)")
+            logger.info("[INFO] Isotropic covariance mode: Sigma = sigma^2*I (Limit 1 -- KL -> squared Euclidean)")
             if not diagonal_covariance:
-                print(f"       (Forcing diagonal_covariance=True for isotropic mode)")
+                logger.info("       (Forcing diagonal_covariance=True for isotropic mode)")
                 diagonal_covariance = True
                 self.diagonal_covariance = True
 
@@ -215,7 +218,7 @@ class GaugeTransformerLM(nn.Module):
         self.cross_couplings = cross_couplings
 
         if cross_couplings and gauge_mode == 'trivial':
-            print("[WARN] cross_couplings have no effect with gauge_mode='trivial' (Ω=I, no mixing)")
+            logger.warning("cross_couplings have no effect with gauge_mode='trivial' (Omega=I, no mixing)")
 
         # Compute phi dimension and build Lie algebra generators
         self.phi_dim = self._compute_phi_dim(gauge_group, gauge_dim, embed_dim, irrep_spec, cross_couplings)
@@ -276,11 +279,11 @@ class GaugeTransformerLM(nn.Module):
         if use_prior_bank:
             # PriorBank is the unified encode/decode layer — no tying needed
             if tie_embeddings:
-                print("[INFO] tie_embeddings ignored: PriorBank serves as both encoder and decoder")
+                logger.info("tie_embeddings ignored: PriorBank serves as both encoder and decoder")
         elif tie_embeddings and not gauge_fixed_priors:
             self.out_proj.weight = self.token_embed.mu_embed.weight
         elif tie_embeddings and gauge_fixed_priors:
-            print("Warning: tie_embeddings disabled because gauge_fixed_priors=True")
+            logger.warning("tie_embeddings disabled because gauge_fixed_priors=True")
 
         # Per-layer diagnostics (set externally by trainer)
         self._collect_layer_diagnostics = False
@@ -291,7 +294,7 @@ class GaugeTransformerLM(nn.Module):
 
         # Count parameters
         n_params = sum(p.numel() for p in self.parameters())
-        print(f"GaugeTransformerLM initialized: {n_params/1e6:.2f}M parameters")
+        logger.info(f"GaugeTransformerLM initialized: {n_params/1e6:.2f}M parameters")
 
     # =========================================================================
     # Step 1: Extracted helper — cross-head permutation
@@ -540,8 +543,8 @@ class GaugeTransformerLM(nn.Module):
         if gauge_param == 'omega':
             irrep_spec = config['irrep_spec']
             omega_head_dims = [dim for _, mult, dim in irrep_spec for _ in range(mult)]
-            print(f"[INFO] Direct Omega parameterization: per-head dims {omega_head_dims}")
-            print(f"       No matrix_exp needed. Full GL(K) including reflections.")
+            logger.info(f"Direct Omega parameterization: per-head dims {omega_head_dims}")
+            logger.info("       No matrix_exp needed. Full GL(K) including reflections.")
 
         learnable_reflection = config.get('learnable_reflection', False)
         if learnable_reflection and use_prior_bank:
@@ -551,30 +554,30 @@ class GaugeTransformerLM(nn.Module):
                 "the sign vectors would never be applied. Disable one of these options."
             )
         if learnable_reflection:
-            print(f"[INFO] O(K) reflection enabled: per-token s_i ∈ {{±1}}^K sign vectors")
-            print(f"       Transport: Ω_ij = diag(s_i)·exp(φ_i)·exp(-φ_j)·diag(s_j) ∈ O(K)")
-            print(f"       Extends SO(K) gauge to full O(K) = SO(K) ⋊ (Z_2)^{{K-1}}")
+            logger.info("O(K) reflection enabled: per-token s_i in {+-1}^K sign vectors")
+            logger.info("       Transport: Omega_ij = diag(s_i)*exp(phi_i)*exp(-phi_j)*diag(s_j) in O(K)")
+            logger.info("       Extends SO(K) gauge to full O(K) = SO(K) semidirect (Z_2)^{K-1}")
             if isotropic_covariance:
-                print(f"       With isotropic Σ = σ²I: S(Ω) = 0, KL = (1/2σ²)||Q_i - M_ij K_j||²")
-                print(f"       where Q_i = s_i ⊙ μ_i, K_j = s_j ⊙ μ_j (sign-flipped embeddings)")
+                logger.info("       With isotropic Sigma = sigma^2*I: S(Omega) = 0, KL = (1/2sigma^2)||Q_i - M_ij K_j||^2")
+                logger.info("       where Q_i = s_i odot mu_i, K_j = s_j odot mu_j (sign-flipped embeddings)")
 
         if gauge_mode == 'constant':
             evolve_phi = False
             evolve_phi_e_step = False
-            print(f"[INFO] Constant gauge mode: Ω_ij = Ω ∈ GL(d_head) for all pairs (i,j)")
-            print(f"       Manuscript Limit 2: S(Ω) cancels under softmax, Ω⁻ᵀ → W_Q W_K^T")
-            print(f"       Per-head Ω initialized to I, learned via direct gradient descent")
+            logger.info("Constant gauge mode: Omega_ij = Omega in GL(d_head) for all pairs (i,j)")
+            logger.info("       Manuscript Limit 2: S(Omega) cancels under softmax, Omega^{-T} -> W_Q W_K^T")
+            logger.info("       Per-head Omega initialized to I, learned via direct gradient descent")
             if isotropic_covariance:
-                print(f"       With Σ = σ²I: attention ∝ exp(-||Ω⁻¹μ_i - μ_j||² / (2σ²))")
+                logger.info("       With Sigma = sigma^2*I: attention proportional to exp(-||Omega^{-1}mu_i - mu_j||^2 / (2sigma^2))")
 
         if gauge_mode == 'trivial':
             evolve_phi = False
             evolve_phi_e_step = False
-            print(f"[INFO] Trivial gauge mode: φ = 0, Ω = I (global frame / standard attention limit)")
-            print(f"       This recovers standard KL-attention: KL(q_i || q_j) with no transport.")
+            logger.info("Trivial gauge mode: phi = 0, Omega = I (global frame / standard attention limit)")
+            logger.info("       This recovers standard KL-attention: KL(q_i || q_j) with no transport.")
             if isotropic_covariance:
-                print(f"[INFO] Limits 1+2 active: Σ = σ²I + Ω = I → attention ∝ exp(-||μ_i - μ_j||² / (2σ²))")
-                print(f"       Equivalent to standard dot-product attention (up to absorbing σ⁻² into W_Q·W_K^T)")
+                logger.info("Limits 1+2 active: Sigma = sigma^2*I + Omega = I -> attention proportional to exp(-||mu_i - mu_j||^2 / (2sigma^2))")
+                logger.info("       Equivalent to standard dot-product attention (up to absorbing sigma^{-2} into W_Q*W_K^T)")
 
         return gauge_group, gauge_dim, gauge_mode, gauge_param, evolve_phi, evolve_phi_e_step
 
@@ -675,7 +678,7 @@ class GaugeTransformerLM(nn.Module):
             )
             if not is_multihead:
                 generators = generate_glK_generators(embed_dim)
-                print(f"[INFO] GL(K) single-head: {embed_dim}² = {embed_dim**2} generators")
+                logger.info(f"GL(K) single-head: {embed_dim}^2 = {embed_dim**2} generators")
                 return generators
 
             _, n_heads, d_head = irrep_spec[0]
@@ -694,19 +697,19 @@ class GaugeTransformerLM(nn.Module):
                 self._super_block_head_groups = super_block_head_groups
 
                 n_cross = len(cross_couplings) * d_head**2
-                print(f"[INFO] GL(K) cross-head: {n_heads} heads × GL({d_head}), "
-                      f"{n_heads * d_head**2} diag + {n_cross} cross generators = "
-                      f"{generators.shape[0]} total")
-                print(f"       Super-blocks: {super_block_dims} "
-                      f"(groups: {super_block_head_groups})")
+                logger.info(f"GL(K) cross-head: {n_heads} heads x GL({d_head}), "
+                            f"{n_heads * d_head**2} diag + {n_cross} cross generators = "
+                            f"{generators.shape[0]} total")
+                logger.info(f"       Super-blocks: {super_block_dims} "
+                            f"(groups: {super_block_head_groups})")
                 return generators
 
             generators = generate_glK_multihead_generators(embed_dim, n_heads)
             self._cross_head_perm = None
             self._super_block_dims = None
             self._super_block_head_groups = None
-            print(f"[INFO] GL(K) multi-head: {n_heads} heads × GL({d_head}), "
-                  f"{n_heads * d_head**2} generators (vs {embed_dim**2} single-head)")
+            logger.info(f"GL(K) multi-head: {n_heads} heads x GL({d_head}), "
+                        f"{n_heads * d_head**2} generators (vs {embed_dim**2} single-head)")
             return generators
 
         # SO(N)
@@ -814,10 +817,10 @@ class GaugeTransformerLM(nn.Module):
                 diagonal_covariance=diagonal_covariance,
                 sigma_max=config.get('sigma_max', 5.0),
             )
-            print(f"[GaugeTransformerLM] Created PriorBank with token-dependent priors "
-                  f"(vocab_size={vocab_size})")
-            print(f"                     gauge_fixed_priors={gauge_fixed_priors}, "
-                  f"tau={self.prior_bank_tau}")
+            logger.info(f"GaugeTransformerLM: Created PriorBank with token-dependent priors "
+                        f"(vocab_size={vocab_size})")
+            logger.info(f"                     gauge_fixed_priors={gauge_fixed_priors}, "
+                        f"tau={self.prior_bank_tau}")
 
             # Freeze token_embed: PriorBank replaces it for encode/decode.
             # Without this, token_embed parameters receive optimizer weight_decay
