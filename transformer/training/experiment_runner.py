@@ -2330,24 +2330,14 @@ def _validate_pure_vfe(model, loader, device, max_samples=12800):
     }
 
 
-def _save_pure_vfe_figures(model, val_loader, device, step, attn_dir,
-                           figures_dir, config, tokenizer=None, final=False):
-    """Save diagnostic figures for pure VFE training.
+def _plot_pure_vfe_attention(model, val_loader, device, step, attn_dir, prefix):
+    """Plot per-head attention heatmaps for one validation example.
 
-    Generates attention heatmaps, prior mu/sigma statistics, and optional
-    holonomy and semantic analyses.
+    Saves one PNG per attention head in log10 scale to ``attn_dir``.
     """
-    try:
-        import matplotlib
-        matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-        import numpy as np
-    except ImportError:
-        return  # matplotlib not available
+    import matplotlib.pyplot as plt
+    import numpy as np
 
-    prefix = "final" if final else f"step_{step:06d}"
-
-    # --- 1. Attention Patterns ---
     try:
         batch = next(iter(val_loader))
         input_ids = batch[0][:1].to(device)  # Single example for viz
@@ -2371,7 +2361,15 @@ def _save_pure_vfe_figures(model, val_loader, device, step, attn_dir,
     except Exception as e:
         print(f"  [WARN] Attention figure failed: {e}")
 
-    # --- 2. Prior Statistics ---
+
+def _plot_pure_vfe_prior_stats(model, step, figures_dir, prefix):
+    """Plot histograms of prior mean norms and covariance eigenvalues.
+
+    Saves a three-panel figure showing ||mu_v||, lambda_min(Sigma_v), and
+    lambda_max(Sigma_v) distributions across the first 500 vocabulary entries.
+    """
+    import matplotlib.pyplot as plt
+
     try:
         with torch.no_grad():
             mu_norms = model.prior_mu.norm(dim=-1).cpu().numpy()
@@ -2405,7 +2403,15 @@ def _save_pure_vfe_figures(model, val_loader, device, step, attn_dir,
     except Exception as e:
         print(f"  [WARN] Prior stats figure failed: {e}")
 
-    # --- 3. Gauge Frame Health ---
+
+def _plot_pure_vfe_gauge_health(model, step, figures_dir, prefix):
+    """Plot condition numbers and log-determinants of gauge frame matrices.
+
+    Saves a two-panel figure for the first 500 vocabulary frames, showing
+    conditioning and log|det Omega_v| distributions.
+    """
+    import matplotlib.pyplot as plt
+
     try:
         with torch.no_grad():
             Om = model.prior_Omega[:500]
@@ -2429,62 +2435,111 @@ def _save_pure_vfe_figures(model, val_loader, device, step, attn_dir,
     except Exception as e:
         print(f"  [WARN] Gauge health figure failed: {e}")
 
-    # --- 4. Semantic Clustering (final only) ---
+
+def _plot_pure_vfe_semantic_pca(model, figures_dir, prefix, tokenizer=None):
+    """Plot a 2-D PCA projection of the prior mean embedding space.
+
+    Uses the first 2000 vocabulary entries. When ``tokenizer`` is provided,
+    annotates a small set of representative token indices.
+    """
+    import matplotlib.pyplot as plt
+
+    try:
+        from sklearn.decomposition import PCA
+
+        with torch.no_grad():
+            mu_embed = model.prior_mu.cpu().numpy()
+
+        # PCA of prior means
+        pca = PCA(n_components=2)
+        mu_2d = pca.fit_transform(mu_embed[:2000])  # First 2000 tokens
+
+        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+        ax.scatter(mu_2d[:, 0], mu_2d[:, 1], s=1, alpha=0.3)
+        ax.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%})')
+        ax.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%})')
+        ax.set_title('Prior Mean Embedding Space (PCA)')
+
+        # Annotate a few tokens if tokenizer available
+        if tokenizer is not None:
+            for idx in [0, 1, 2, 3, 4, 5, 10, 100, 256, 500]:
+                if idx < len(mu_2d):
+                    try:
+                        token_str = tokenizer.decode([idx])
+                        ax.annotate(repr(token_str), (mu_2d[idx, 0], mu_2d[idx, 1]),
+                                   fontsize=6, alpha=0.7)
+                    except Exception:
+                        pass
+
+        fig.tight_layout()
+        fig.savefig(figures_dir / f'{prefix}_semantic_pca.png', dpi=150)
+        plt.close(fig)
+    except Exception as e:
+        print(f"  [WARN] Semantic PCA figure failed: {e}")
+
+
+def _plot_pure_vfe_holonomy(model, val_loader, device, config):
+    """Compute and print holonomy statistics for the final pure VFE model.
+
+    Only executed when ``config.use_holonomy`` is True. Prints mean/max
+    ||C - I||_F across triangles in the attention graph; does not save a
+    figure (holonomy plotting is handled by the analysis module).
+    """
+    try:
+        from transformer.pure_vfe.inference import _compute_holonomy
+
+        with torch.no_grad():
+            batch = next(iter(val_loader))
+            input_ids = batch[0][:4].to(device)
+            Omega_h = model.prior_Omega[input_ids].clone()
+
+            holonomy = _compute_holonomy(
+                Omega_h, config.n_heads, config.head_dim
+            )
+
+        print(f"\n  Holonomy Analysis (final):")
+        print(f"    Mean ||C - I||_F: {holonomy['mean_norm']:.6f}")
+        print(f"    Max  ||C - I||_F: {holonomy['max_norm']:.6f}")
+        print(f"    Triangles:        {holonomy['n_triangles']}")
+    except Exception as e:
+        print(f"  [WARN] Holonomy analysis failed: {e}")
+
+
+def _save_pure_vfe_figures(model, val_loader, device, step, attn_dir,
+                           figures_dir, config, tokenizer=None, final=False):
+    """Save diagnostic figures for pure VFE training.
+
+    Orchestrates five figure types in sequence: attention heatmaps, prior
+    mu/sigma statistics, gauge frame health, semantic PCA (final only), and
+    holonomy analysis (final only, when config.use_holonomy is True). Each
+    type is wrapped in its own try/except so a failure in one does not
+    suppress the others.
+    """
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt  # noqa: F401 — ensure backend is set
+    except ImportError:
+        return  # matplotlib not available
+
+    prefix = "final" if final else f"step_{step:06d}"
+
+    # 1. Attention heatmaps (every save)
+    _plot_pure_vfe_attention(model, val_loader, device, step, attn_dir, prefix)
+
+    # 2. Prior mu/Sigma statistics (every save)
+    _plot_pure_vfe_prior_stats(model, step, figures_dir, prefix)
+
+    # 3. Gauge frame condition numbers and log-determinants (every save)
+    _plot_pure_vfe_gauge_health(model, step, figures_dir, prefix)
+
+    # 4. Semantic PCA of prior mean embeddings (final save only)
     if final:
-        try:
-            from sklearn.decomposition import PCA
+        _plot_pure_vfe_semantic_pca(model, figures_dir, prefix, tokenizer=tokenizer)
 
-            with torch.no_grad():
-                mu_embed = model.prior_mu.cpu().numpy()
-
-            # PCA of prior means
-            pca = PCA(n_components=2)
-            mu_2d = pca.fit_transform(mu_embed[:2000])  # First 2000 tokens
-
-            fig, ax = plt.subplots(1, 1, figsize=(8, 6))
-            scatter = ax.scatter(mu_2d[:, 0], mu_2d[:, 1], s=1, alpha=0.3)
-            ax.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%})')
-            ax.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%})')
-            ax.set_title('Prior Mean Embedding Space (PCA)')
-
-            # Annotate a few tokens if tokenizer available
-            if tokenizer is not None:
-                for idx in [0, 1, 2, 3, 4, 5, 10, 100, 256, 500]:
-                    if idx < len(mu_2d):
-                        try:
-                            token_str = tokenizer.decode([idx])
-                            ax.annotate(repr(token_str), (mu_2d[idx, 0], mu_2d[idx, 1]),
-                                       fontsize=6, alpha=0.7)
-                        except Exception:
-                            pass
-
-            fig.tight_layout()
-            fig.savefig(figures_dir / f'{prefix}_semantic_pca.png', dpi=150)
-            plt.close(fig)
-        except Exception as e:
-            print(f"  [WARN] Semantic PCA figure failed: {e}")
-
-    # --- 5. Holonomy (if enabled and final) ---
+    # 5. Holonomy analysis (final save only, when enabled)
     if final and getattr(config, 'use_holonomy', False):
-        try:
-            from transformer.pure_vfe.inference import _compute_holonomy
-
-            with torch.no_grad():
-                batch = next(iter(val_loader))
-                input_ids = batch[0][:4].to(device)
-                B_h, N_h = input_ids.shape
-                Omega_h = model.prior_Omega[input_ids].clone()
-
-                holonomy = _compute_holonomy(
-                    Omega_h, config.n_heads, config.head_dim
-                )
-
-            print(f"\n  Holonomy Analysis (final):")
-            print(f"    Mean ||C - I||_F: {holonomy['mean_norm']:.6f}")
-            print(f"    Max  ||C - I||_F: {holonomy['max_norm']:.6f}")
-            print(f"    Triangles:        {holonomy['n_triangles']}")
-        except Exception as e:
-            print(f"  [WARN] Holonomy analysis failed: {e}")
+        _plot_pure_vfe_holonomy(model, val_loader, device, config)
 
     if final:
         print(f"\n[INFO] Final figures saved to: {figures_dir}")
