@@ -2435,10 +2435,8 @@ class VariationalFFNDynamic(nn.Module):
                 kappa * math.sqrt(d_h) for d_h in irrep_dims
             ])
             self.log_kappa_per_head = nn.Parameter(torch.log(init_kappas))
-            self.register_buffer('_kappa_init', init_kappas)
         else:
             self.log_kappa_per_head = None
-            self._kappa_init = None
 
         # =================================================================
         # Bayesian Precision: Log-barrier form (Eq. 882-884)
@@ -2531,10 +2529,7 @@ class VariationalFFNDynamic(nn.Module):
         When False: κ_h = self.kappa * √d_h (static scaling)
         """
         if self.learnable_head_kappa and self.log_kappa_per_head is not None:
-            kappa_h = torch.exp(self.log_kappa_per_head[head_idx])
-            # Clamp to [0.5, 1.5] × init, matching attention module (attention.py:2688)
-            k0 = self._kappa_init[head_idx]
-            return kappa_h.clamp(min=0.5 * k0, max=1.5 * k0)
+            return torch.exp(self.log_kappa_per_head[head_idx])
         return self.kappa * math.sqrt(d_h)
 
     def _get_sigma_trust(self, effective_lr: torch.Tensor) -> float:
@@ -3858,8 +3853,10 @@ class VariationalFFNDynamic(nn.Module):
                             sigma_h_blk = sigma_0[:, :, block_start:block_end, block_start:block_end]  # (B, N, d_h, d_h)
 
                             # Full transported covariance and its inverse
+                            # Sandwich product: Omega @ Sigma_j @ Omega^T
+                            # Third factor uses 'bijnm' (transposed indices) for Omega^T
                             Sigma_j_t = torch.einsum(
-                                'bijkl,bjlm,bijmn->bijkn', Omega_h, sigma_h_blk, Omega_h
+                                'bijkl,bjlm,bijnm->bijkn', Omega_h, sigma_h_blk, Omega_h
                             )  # (B, N, N, d_h, d_h) — Omega @ Sigma_j @ Omega^T
                             Sigma_j_t = Sigma_j_t + eps * torch.eye(d_h, device=device, dtype=dtype)
                             Sigma_j_t_inv = torch.linalg.inv(Sigma_j_t)  # (B, N, N, d_h, d_h)
