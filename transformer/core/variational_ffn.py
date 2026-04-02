@@ -3990,14 +3990,16 @@ class VariationalFFNDynamic(nn.Module):
                     scale = (self.picard_trust_region / w_norm.clamp(min=eps)).clamp(max=1.0)
                     mu_current = mu_0 - scale * correction
 
-                    # Sigma Picard correction (diagonal only)
+                    # Sigma Picard correction (diagonal only, base-relative)
                     # At sigma_0 the linear sigma gradient is zero. The residual is
                     # the sigma softmax coupling: Σ_j KL_ij · ∂β_ij/∂σ_i.
-                    # Natural gradient: nat_grad_sigma = 2σ² · grad_sigma_softmax
-                    # Applied via SPD exponential retraction for positivity.
+                    # Use sigma_0 (not sigma_current) as both the preconditioner and
+                    # retraction base, matching the mu Picard structure:
+                    #   mu^(n+1) = mu_0 - Sigma_0 @ grad(mu^(n))
+                    #   sigma^(n+1) = retract(sigma_0, -2*sigma_0^2 * grad(mu^(n), sigma_0))
                     if grad_sigma_softmax_full is not None and self.update_sigma:
-                        sigma_safe = sigma_current.clamp(min=eps)
-                        nat_grad_sigma = 2.0 * sigma_safe * sigma_safe * grad_sigma_softmax_full
+                        sigma_0_safe = sigma_0.clamp(min=eps)
+                        nat_grad_sigma = 2.0 * sigma_0_safe * sigma_0_safe * grad_sigma_softmax_full
                         # Clip natural gradient norm (matching iterative E-step)
                         nat_grad_sigma_norm = torch.linalg.norm(nat_grad_sigma, dim=-1, keepdim=True)
                         nat_grad_sigma = nat_grad_sigma * torch.clamp(
@@ -4005,7 +4007,7 @@ class VariationalFFNDynamic(nn.Module):
                         )
                         sigma_trust = self._get_sigma_trust(self.lr)
                         sigma_current = retract_spd_diagonal_torch(
-                            sigma_diag=sigma_current,
+                            sigma_diag=sigma_0,
                             delta_sigma=-nat_grad_sigma,
                             step_size=1.0,
                             trust_region=sigma_trust,
