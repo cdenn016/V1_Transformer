@@ -2361,7 +2361,6 @@ class VariationalFFNDynamic(nn.Module):
                 from transformer.core.transport_ops import compute_transport_operators_direct
                 cached_transport = compute_transport_operators_direct(
                     omega=omega_current,
-                    irrep_dims=self.irrep_dims if self.irrep_dims is not None else [self.embed_dim],
                 )
             elif self.gauge_mode == 'constant' and self.constant_omega is not None:
                 # Constant gauge with known Ω: build full-K transport from
