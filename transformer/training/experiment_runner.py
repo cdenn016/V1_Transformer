@@ -941,36 +941,34 @@ class PublicationTrainer(FastTrainer):
 
         self.model.train()
 
-    def train_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[Dict[str, float], Dict[str, float]]:
-        """Train step with comprehensive metrics."""
-        self.model.train()
+    def _run_forward_and_backward(
+        self,
+        input_ids: torch.Tensor,
+        target_ids: torch.Tensor,
+        is_standard: bool,
+        use_delta_rule: bool,
+        _tied_weights: bool,
+        effective_beta: float,
+    ) -> Tuple[Any, Dict]:
+        r"""Run the forward pass, compute the VFE/CE loss, and call backward.
 
-        input_ids, target_ids = batch
-        input_ids = input_ids.to(self.device)
-        target_ids = target_ids.to(self.device)
+        For the standard transformer, returns a scalar CE loss wrapped in a
+        minimal metrics dict. For gauge models, delegates to
+        ``compute_free_energy_loss`` which computes
 
-        # Check if using standard transformer (no VFE loss)
-        is_standard = isinstance(self.model, StandardTransformerLM)
+            F = CE + alpha*KL(q||p) + beta*KL(q||Omega*q) + ...
 
-        # Check if using delta rule for W_out (backprop-free)
-        use_delta_rule = getattr(
-            self.config, 'use_delta_rule_w_out', False) and not is_standard
+        When delta rule is active and embeddings are tied, the shared
+        ``out_proj.weight`` gradient is zeroed after backward so that the
+        delta rule is the sole W_out update.
 
-        # If delta rule is enabled, exclude W_out from backprop.
-        # When tie_embeddings=True, out_proj.weight IS mu_embed.weight (same tensor),
-        # so we must NOT disable requires_grad (it would kill embedding gradients too).
-        # Instead, we zero out the out_proj gradient after backward.
-        _tied_weights = (use_delta_rule and hasattr(self.model, 'out_proj')
-                         and hasattr(self.model, 'token_embed')
-                         and hasattr(self.model.token_embed, 'mu_embed')
-                         and self.model.out_proj.weight is self.model.token_embed.mu_embed.weight)
-        if use_delta_rule and hasattr(self.model, 'out_proj') and not _tied_weights:
-            self.model.out_proj.weight.requires_grad = False
-
-        effective_beta = self.config.M_beta
+        Returns:
+            (loss, full_metrics): the scalar loss tensor and the raw metrics
+            dict produced by ``compute_free_energy_loss`` (or the minimal
+            CE-only dict for the standard model).
+        """
         use_obs = getattr(self.config, 'use_obs_in_vfe', False)
 
-        # Forward pass
         if is_standard:
             output = self.model(input_ids, labels=target_ids)
             loss = output['loss']
@@ -993,6 +991,7 @@ class PublicationTrainer(FastTrainer):
                 mass_phi=self.config.mass_phi,
                 aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
             )
+
         loss.backward()
 
         # Tied weights + delta rule: zero out W_out gradient component.
@@ -1003,14 +1002,30 @@ class PublicationTrainer(FastTrainer):
         if _tied_weights and self.model.out_proj.weight.grad is not None:
             self.model.out_proj.weight.grad.zero_()
 
-        # =================================================================
-        # KILLING FORM PRECONDITIONING (Cartan decomposition)
-        # =================================================================
-        # Apply BEFORE gradient norm logging and clipping.
-        # Dampens the non-compact (symmetric) directions of gl(K) that cause
-        # gradient explosions through matrix_exp backward pass.
-        # This IS the natural gradient on GL(K) — the Killing form metric
-        # assigns higher cost to non-compact directions.
+        return loss, full_metrics
+
+    def _apply_post_backward_projections(self) -> None:
+        """Apply Killing form preconditioning, kappa clamping, and SL(K) projection.
+
+        All three operations are post-backward, pre/post-optimizer manipulations
+        that enforce gauge geometry constraints on model parameters.
+
+        Killing form preconditioning (Cartan decomposition):
+            Dampens the non-compact (symmetric) directions of gl(K) before
+            gradient norm logging and clipping. This is the natural gradient
+            on GL(K) — the Killing form metric assigns higher cost to
+            non-compact directions.
+
+        Kappa projection:
+            Clamps ``log_kappa_per_head`` to [0.5, 1.5] × init. Without this
+            the optimizer accumulates momentum in the dead zone above the
+            forward-pass clamp.
+
+        SL(K) projection:
+            Removes the trace component from ``phi_embed``, projecting phi to
+            the traceless subalgebra sl(K) so det(Omega_ij) = 1.
+        """
+        # --- Killing form preconditioning ---
         if self._cartan_preconditioner is not None:
             from transformer.core.gauge_preconditioner import apply_cartan_preconditioning
             for name, param in self.model.named_parameters():
@@ -1020,47 +1035,7 @@ class PublicationTrainer(FastTrainer):
                             param.grad.data, self._cartan_preconditioner
                         )
 
-        # Compute gradient norms BEFORE clipping
-        # Check if this is a log step (need to check global_step here)
-        is_log_step = (self.global_step + 1) % self.config.log_interval == 0
-        grad_norms = self._compute_gradient_norms() if is_log_step else None
-        e_step_norms = self._collect_e_step_grad_norms() if is_log_step else None
-
-        # Per-group clipping for large gauge groups (SO(N>3)):
-        # phi_embed gradients dominate global norm, starving mu/sigma.
-        _use_param_groups = getattr(self.config, 'use_param_groups', True)
-        if self.config.grad_clip > 0:
-            if _use_param_groups:
-                for group in self.optimizer.param_groups:
-                    if group['params']:
-                        torch.nn.utils.clip_grad_norm_(
-                            group['params'],
-                            self.config.grad_clip,
-                        )
-            else:
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    self.config.grad_clip,
-                )
-        self.optimizer.step()
-
-        # Collect M-step natural gradient norms (after optimizer.step populates them)
-        mstep_natural_norms = None
-        if is_log_step and hasattr(self.optimizer, 'get_grad_norms'):
-            mstep_natural_norms = self.optimizer.get_grad_norms()
-
-        if self.scheduler is not None:
-            self.scheduler.step()
-        self.optimizer.zero_grad()
-
-        # =================================================================
-        # KAPPA PROJECTION: Clamp log_kappa_per_head to [0.5, 1.5] × init
-        # =================================================================
-        # The clamp in _get_kappa_h/forward only affects the forward value,
-        # not the parameter itself. Without this projection, the optimizer
-        # pushes log_kappa unboundedly even though the forward value is
-        # clamped — the parameter accumulates momentum in a dead zone.
-        # Project the parameter directly so gradient signal stays meaningful.
+        # --- Kappa clamping (post-optimizer step) ---
         for block in self._model_blocks:
             for module in [getattr(block, 'attention', None), getattr(block, 'ffn', None)]:
                 if module is None:
@@ -1073,13 +1048,7 @@ class PublicationTrainer(FastTrainer):
                         hi = torch.log(1.5 * k0)
                         p.data.clamp_(min=lo, max=hi)
 
-        # =================================================================
-        # SL(K) PROJECTION: Remove trace component from phi_embed
-        # =================================================================
-        # Projects φ to the traceless subalgebra sl(K), ensuring
-        # det(Ω_ij) = exp(tr(M_i - M_j)) = exp(0) = 1.
-        # This removes the single most dangerous non-compact degree of
-        # freedom (uniform scaling) without restricting rotations or shears.
+        # --- SL(K) projection ---
         if self._slk_trace_vec is not None:
             from transformer.core.gauge_preconditioner import apply_slk_projection
             if hasattr(self.model, 'token_embed') and hasattr(self.model.token_embed, 'phi_embed'):
@@ -1097,23 +1066,34 @@ class PublicationTrainer(FastTrainer):
                             pb_phi.data, self._slk_trace_vec
                         )
 
-        # Re-enable requires_grad for W_out if it was disabled (non-tied case)
-        if use_delta_rule and hasattr(self.model, 'out_proj') and not _tied_weights:
-            self.model.out_proj.weight.requires_grad = True
+    def _apply_p_flow_and_delta_rule(
+        self,
+        input_ids: torch.Tensor,
+        target_ids: torch.Tensor,
+        full_metrics: Dict,
+        is_standard: bool,
+        use_delta_rule: bool,
+    ) -> None:
+        """Apply P-flow EMA update and delta rule W_out update.
 
-        # =================================================================
-        # P-FLOW: EMA update of token embeddings toward successful beliefs
-        # =================================================================
-        # This is the key learning mechanism from fep_transformer.py
-        # After backprop updates W_out, P-flow updates token embeddings
-        # toward beliefs that predicted successfully (low CE)
+        P-flow:
+            EMA update of token embeddings (mu, sigma, optionally phi) toward
+            beliefs that predicted successfully (low CE). Disabled for the
+            standard transformer.
+
+        Delta rule:
+            Backprop-free Hebbian update of W_out:
+                DeltaW = lr * (target - prediction) outer mu^T
+            Combined with P-flow + detach_phi this makes learning fully
+            backprop-free.
+        """
+        # --- P-FLOW ---
         use_p_flow = getattr(self.config, 'use_p_flow', False)
         if use_p_flow and not is_standard and 'p_flow/mu_q' in full_metrics:
             mu_beliefs = full_metrics['p_flow/mu_q']
             ce_per_position = full_metrics['p_flow/ce_per_position']
             ema_decay = getattr(self.config, 'p_flow_ema_decay', 0.99)
 
-            # Call P-flow update on the model (mu + sigma)
             sigma_beliefs = full_metrics.get('p_flow/sigma_q')
             if hasattr(self.model, 'p_flow_update'):
                 self.model.p_flow_update(
@@ -1138,16 +1118,10 @@ class PublicationTrainer(FastTrainer):
                     pad_token_id=self.pad_token_id,
                 )
 
-        # =================================================================
-        # DELTA RULE: Backprop-free update of W_out
-        # =================================================================
-        # Uses local learning rule: ΔW = η · (target - prediction) ⊗ μ^T
-        # Combined with P-flow + detach_phi, this makes learning fully backprop-free.
+        # --- DELTA RULE ---
         if use_delta_rule and 'p_flow/mu_q' in full_metrics:
             mu_beliefs = full_metrics['p_flow/mu_q']
             delta_lr = getattr(self.config, 'delta_rule_lr', 0.1)
-
-            # Call delta rule update on the model
             if hasattr(self.model, 'delta_rule_update_w_out'):
                 self.model.delta_rule_update_w_out(
                     mu_beliefs=mu_beliefs,
@@ -1156,7 +1130,14 @@ class PublicationTrainer(FastTrainer):
                     pad_token_id=self.pad_token_id,
                 )
 
-        # Format comprehensive metrics
+    def _format_train_metrics(self, full_metrics: Dict, effective_beta: float) -> Dict:
+        """Format the raw VFE metrics dict into the standard training metrics dict.
+
+        Assembles the top-level training metrics (losses, perplexity, attention
+        stats, scheduling) and carries over Bayesian alpha diagnostics, per-head
+        kappa values, VFE gradient decomposition, covariance health, and
+        transport/attention structure metrics.
+        """
         metrics = {
             'train_loss_total': full_metrics['loss/total'],
             'train_loss_ce': full_metrics['loss/ce'],
@@ -1167,7 +1148,7 @@ class PublicationTrainer(FastTrainer):
             # Clamp to prevent overflow
             'train_ppl': math.exp(min(full_metrics['loss/ce'], 20)),
             'beta_mean': full_metrics.get('attention/beta_mean', 0),
-            'beta_std': 0,  # Could compute if needed
+            'beta_std': 0,
             'kl_mean': full_metrics.get('attention/kl_mean', 0),
             'kl_std': 0,
             # Crucial attention interpretability metrics
@@ -1199,6 +1180,103 @@ class PublicationTrainer(FastTrainer):
         for key, val in full_metrics.items():
             if key.startswith(('vfe/', 'cov/', 'transport/')):
                 metrics[key] = val
+
+        return metrics
+
+    def train_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[Dict[str, float], Dict[str, float]]:
+        """Train step with comprehensive metrics.
+
+        Orchestrates four sub-operations in sequence:
+        1. Forward pass + loss + backward (``_run_forward_and_backward``).
+        2. Post-backward geometry projections (``_apply_post_backward_projections``).
+        3. P-flow EMA and delta rule W_out updates (``_apply_p_flow_and_delta_rule``).
+        4. Metrics formatting (``_format_train_metrics``).
+
+        Also manages optimizer step, gradient clipping, scheduler step, and the
+        optional layer/iteration diagnostic forward pass.
+        """
+        self.model.train()
+
+        input_ids, target_ids = batch
+        input_ids = input_ids.to(self.device)
+        target_ids = target_ids.to(self.device)
+
+        is_standard = isinstance(self.model, StandardTransformerLM)
+        use_delta_rule = getattr(
+            self.config, 'use_delta_rule_w_out', False) and not is_standard
+
+        # When tie_embeddings=True, out_proj.weight IS mu_embed.weight. Do not
+        # disable requires_grad on a tied tensor; zero the gradient post-backward.
+        _tied_weights = (use_delta_rule and hasattr(self.model, 'out_proj')
+                         and hasattr(self.model, 'token_embed')
+                         and hasattr(self.model.token_embed, 'mu_embed')
+                         and self.model.out_proj.weight is self.model.token_embed.mu_embed.weight)
+        if use_delta_rule and hasattr(self.model, 'out_proj') and not _tied_weights:
+            self.model.out_proj.weight.requires_grad = False
+
+        effective_beta = self.config.M_beta
+
+        # --- 1. Forward + backward ---
+        _loss, full_metrics = self._run_forward_and_backward(
+            input_ids, target_ids, is_standard, use_delta_rule, _tied_weights, effective_beta
+        )
+
+        # --- 2a. Pre-optimizer geometry: Killing form preconditioning ---
+        if self._cartan_preconditioner is not None:
+            from transformer.core.gauge_preconditioner import apply_cartan_preconditioning
+            for name, param in self.model.named_parameters():
+                if param.grad is not None and ('phi_embed' in name or 'phi' in name.lower()):
+                    if param.grad.shape[-1] == self._cartan_preconditioner.shape[0]:
+                        param.grad.data = apply_cartan_preconditioning(
+                            param.grad.data, self._cartan_preconditioner
+                        )
+
+        # Compute gradient norms BEFORE clipping
+        is_log_step = (self.global_step + 1) % self.config.log_interval == 0
+        grad_norms = self._compute_gradient_norms() if is_log_step else None
+        e_step_norms = self._collect_e_step_grad_norms() if is_log_step else None
+
+        # Per-group clipping for large gauge groups (SO(N>3)):
+        # phi_embed gradients dominate global norm, starving mu/sigma.
+        _use_param_groups = getattr(self.config, 'use_param_groups', True)
+        if self.config.grad_clip > 0:
+            if _use_param_groups:
+                for group in self.optimizer.param_groups:
+                    if group['params']:
+                        torch.nn.utils.clip_grad_norm_(
+                            group['params'],
+                            self.config.grad_clip,
+                        )
+            else:
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    self.config.grad_clip,
+                )
+        self.optimizer.step()
+
+        # Collect M-step natural gradient norms (after optimizer.step populates them)
+        mstep_natural_norms = None
+        if is_log_step and hasattr(self.optimizer, 'get_grad_norms'):
+            mstep_natural_norms = self.optimizer.get_grad_norms()
+
+        if self.scheduler is not None:
+            self.scheduler.step()
+        self.optimizer.zero_grad()
+
+        # --- 2b. Post-optimizer geometry: kappa clamp + SL(K) projection ---
+        self._apply_post_backward_projections()
+
+        # Re-enable requires_grad for W_out if it was disabled (non-tied case)
+        if use_delta_rule and hasattr(self.model, 'out_proj') and not _tied_weights:
+            self.model.out_proj.weight.requires_grad = True
+
+        # --- 3. P-flow + delta rule ---
+        self._apply_p_flow_and_delta_rule(
+            input_ids, target_ids, full_metrics, is_standard, use_delta_rule
+        )
+
+        # --- 4. Format metrics ---
+        metrics = self._format_train_metrics(full_metrics, effective_beta)
 
         # =================================================================
         # LAYER/ITERATION DIAGNOSTICS: Debug multi-layer/multi-iteration
@@ -1753,6 +1831,58 @@ class PublicationTrainer(FastTrainer):
         print(f"{'='*70}\n")
 
 
+def _create_dataloaders(config: dict):
+    """Create train/val/test dataloaders and resolve the actual vocabulary size.
+
+    Selects the tokenizer mode from ``config['tokenizer']`` ('char', 'bpe', or
+    'auto'). In 'auto' mode, character-level tokenization is used when
+    ``config['vocab_size'] <= 256``, BPE otherwise. Prints a one-line summary
+    of the chosen tokenizer.
+
+    Args:
+        config: Training configuration dict. Requires keys: 'vocab_size',
+            'max_seq_len', 'batch_size'. Optional keys: 'tokenizer',
+            'num_workers', 'dataset'.
+
+    Returns:
+        Tuple of (train_loader, val_loader, test_loader, actual_vocab_size,
+        tokenizer). For character-level tokenization, ``test_loader`` is None
+        and ``tokenizer`` is None (create_char_dataloaders does not yet expose
+        a test split or a tiktoken tokenizer object).
+    """
+    dataset_name = config.get('dataset', 'wikitext-2')
+
+    tokenizer_mode = config.get('tokenizer', 'auto')
+    if tokenizer_mode == 'auto':
+        use_char = config['vocab_size'] <= 256
+    else:
+        use_char = (tokenizer_mode == 'char')
+
+    if use_char:
+        print(f"Using CHARACTER-LEVEL tokenizer (vocab_size={config['vocab_size']})")
+        # Note: create_char_dataloaders doesn't support test set yet
+        train_loader, val_loader, actual_vocab_size = create_char_dataloaders(
+            max_seq_len=config['max_seq_len'],
+            batch_size=config['batch_size'],
+            num_workers=config.get('num_workers', 0),
+        )
+        test_loader = None
+        tokenizer = None
+    else:
+        print(f"Using BPE tokenizer (vocab_size={config['vocab_size']})")
+        train_loader, val_loader, test_loader, actual_vocab_size, tokenizer = create_dataloaders(
+            max_seq_len=config['max_seq_len'],
+            batch_size=config['batch_size'],
+            vocab_size=config['vocab_size'],
+            num_workers=config.get('num_workers', 0),
+            dataset=dataset_name,
+            include_test=True,
+            return_tokenizer=True,
+        )
+
+    return train_loader, val_loader, test_loader, actual_vocab_size, tokenizer
+
+
 def run_single_experiment(
     config: dict,
     ffn_mode: str,
@@ -1799,36 +1929,8 @@ def run_single_experiment(
     print(f"LOADING {dataset_name.upper()} DATA")
     print("="*70)
 
-    # Tokenizer selection: 'char', 'bpe', or 'auto' (default)
-    # 'auto' uses char for vocab_size <= 256, bpe otherwise
-    tokenizer_mode = config.get('tokenizer', 'auto')
-    if tokenizer_mode == 'auto':
-        use_char = config['vocab_size'] <= 256
-    else:
-        use_char = (tokenizer_mode == 'char')
-
-    test_loader = None  # Will be set if available
-    if use_char:
-        print(
-            f"Using CHARACTER-LEVEL tokenizer (vocab_size={config['vocab_size']})")
-        # Note: create_char_dataloaders doesn't support test set yet
-        train_loader, val_loader, actual_vocab_size = create_char_dataloaders(
-            max_seq_len=config['max_seq_len'],
-            batch_size=config['batch_size'],
-            num_workers=config.get('num_workers', 0),
-        )
-        tokenizer = None  # Character-level doesn't need tokenizer for decode
-    else:
-        print(f"Using BPE tokenizer (vocab_size={config['vocab_size']})")
-        train_loader, val_loader, test_loader, actual_vocab_size, tokenizer = create_dataloaders(
-            max_seq_len=config['max_seq_len'],
-            batch_size=config['batch_size'],
-            vocab_size=config['vocab_size'],  # Top K BPE tokens
-            num_workers=config.get('num_workers', 0),
-            dataset=dataset_name,
-            include_test=True,  # Include test set for final evaluation
-            return_tokenizer=True,  # Get tokenizer for interpretability outputs
-        )
+    train_loader, val_loader, test_loader, actual_vocab_size, tokenizer = _create_dataloaders(config)
+    use_char = tokenizer is None  # Character-level tokenizer returns None
 
     config['vocab_size'] = actual_vocab_size
 
@@ -2580,33 +2682,8 @@ def run_pure_vfe_experiment(
     print(f"LOADING {dataset_name.upper()} DATA")
     print("="*70)
 
-    tokenizer_mode = config.get('tokenizer', 'auto')
-    if tokenizer_mode == 'auto':
-        use_char = config['vocab_size'] <= 256
-    else:
-        use_char = (tokenizer_mode == 'char')
-
-    test_loader = None
-    tokenizer = None
-    if use_char:
-        print(
-            f"Using CHARACTER-LEVEL tokenizer (vocab_size={config['vocab_size']})")
-        train_loader, val_loader, actual_vocab_size = create_char_dataloaders(
-            max_seq_len=config['max_seq_len'],
-            batch_size=config['batch_size'],
-            num_workers=config.get('num_workers', 0),
-        )
-    else:
-        print(f"Using BPE tokenizer (vocab_size={config['vocab_size']})")
-        train_loader, val_loader, test_loader, actual_vocab_size, tokenizer = create_dataloaders(
-            max_seq_len=config['max_seq_len'],
-            batch_size=config['batch_size'],
-            vocab_size=config['vocab_size'],
-            num_workers=config.get('num_workers', 0),
-            dataset=dataset_name,
-            include_test=True,
-            return_tokenizer=True,
-        )
+    train_loader, val_loader, test_loader, actual_vocab_size, tokenizer = _create_dataloaders(config)
+    use_char = tokenizer is None  # Character-level tokenizer returns None
 
     config['vocab_size'] = actual_vocab_size
 

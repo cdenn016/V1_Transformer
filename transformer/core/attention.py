@@ -45,6 +45,13 @@ from transformer.core.gauge_utils import (
     fused_block_diagonal_kl_diag,
     fused_block_diagonal_kl_full,
 )
+from transformer.core.kl_computation import (
+    KLMode,
+    safe_kl_clamp,
+    compute_kl_matrix as _unified_compute_kl_matrix,
+    _kl_kernel_dense,
+    _kl_kernel_diagonal,
+)
 
 # Import transport operators (extracted to transport_ops.py)
 from transformer.core.transport_ops import (
@@ -287,66 +294,21 @@ def compute_attention_weights(
     # Helper functions return KL tensors (not in-place) to preserve autograd graph
     # =========================================================================
 
-    # CRITICAL: Never use Numba path on CUDA devices!
-    # Numba kernels are CPU-only and would cause GPU→CPU→GPU transfer bottleneck.
-    # The PyTorch path is fully vectorized and runs efficiently on GPU.
-    is_cuda = device.type == 'cuda'
-
-    # =========================================================================
-    # MEMORY-EFFICIENT PATHS (NEW!)
-    # Priority: block-diagonal > chunked > diagonal > full
-    # =========================================================================
-    if irrep_dims is not None and diagonal_covariance:
-        # BLOCK-DIAGONAL + DIAGONAL MODE: Best of both worlds!
-        # Block processing for small Omega + diagonal KL formulas (no inv/Cholesky)
-        kl_matrix = _compute_kl_matrix_block_diagonal_diag(
-            mu_q, sigma_q, phi, generators, irrep_dims,
-            enforce_orthogonal=enforce_orthogonal,
-            cached_block_exp_pairs=cached_block_exp_pairs,
-        )
-    elif irrep_dims is not None and not diagonal_covariance:
-        # BLOCK-DIAGONAL MODE: Principled + memory-efficient!
-        # Uses O(N² × Σᵢdᵢ²) instead of O(N² × K²) - massive savings!
-        if chunk_size is not None:
-            # Block-diagonal + chunked: maximum memory efficiency
-            kl_matrix = _compute_kl_matrix_block_diagonal_chunked(
-                mu_q, sigma_q, phi, generators, irrep_dims, chunk_size,
-                cached_block_exp_pairs=cached_block_exp_pairs,
-            )
-        else:
-            # Block-diagonal only (still big savings vs full K×K)
-            kl_matrix = _compute_kl_matrix_block_diagonal(
-                mu_q, sigma_q, phi, generators, irrep_dims,
-                cached_block_exp_pairs=cached_block_exp_pairs,
-            )
-    elif chunk_size is not None and not diagonal_covariance:
-        # CHUNKED MODE: Full covariance but memory-efficient
-        kl_matrix = _compute_kl_matrix_chunked(
-            mu_q, sigma_q, phi, generators, chunk_size
-        )
-    elif diagonal_covariance:
-        # DIAGONAL MODE: O(N²×K) memory instead of O(N²×K²)!
-        # sigma_q is (B, N, K) not (B, N, K, K)
-        if chunk_size is not None and cached_transport is None:
-            # Chunked path only supports phi-based transport (learned mode).
-            # When cached_transport is set (constant/trivial gauge mode),
-            # fall through to non-chunked diagonal path which handles it.
-            kl_matrix = _compute_kl_matrix_diagonal_chunked(
-                mu_q, sigma_q, phi, generators, chunk_size,
-                enforce_orthogonal=enforce_orthogonal
-            )
-        else:
-            kl_matrix = _compute_kl_matrix_diagonal(
-                mu_q, sigma_q, phi, generators, cached_transport,
-                enforce_orthogonal=enforce_orthogonal
-            )
-    else:
-        # GPU path OR CPU fallback: Pure PyTorch (fully vectorized, CUDA-compatible)
-        kl_matrix = _compute_kl_matrix_torch(
-            mu_q, sigma_q, phi, generators, cached_transport,
-            gauge_mode=gauge_mode,
-            enforce_orthogonal=enforce_orthogonal
-        )
+    # Dispatch to the unified KL computation helper.
+    # Priority: block-diagonal > chunked-diagonal > diagonal > chunked-full > full
+    kl_matrix = _dispatch_kl_matrix(
+        mu_q=mu_q,
+        sigma_q=sigma_q,
+        phi=phi,
+        generators=generators,
+        diagonal_covariance=diagonal_covariance,
+        irrep_dims=irrep_dims,
+        chunk_size=chunk_size,
+        cached_transport=cached_transport,
+        cached_block_exp_pairs=cached_block_exp_pairs,
+        gauge_mode=gauge_mode,
+        enforce_orthogonal=enforce_orthogonal,
+    )
 
     # =========================================================================
     # Convert KL distances to attention weights
@@ -495,49 +457,20 @@ def compute_kl_matrix(
     device = mu_q.device
     dtype = mu_q.dtype
 
-    # Select appropriate backend based on parameters
-    # Helper functions return KL tensors (not in-place) to preserve autograd graph
-    is_cuda = device.type == 'cuda'
-
-    if irrep_dims is not None and diagonal_covariance:
-        kl_matrix = _compute_kl_matrix_block_diagonal_diag(
-            mu_q, sigma_q, phi, generators, irrep_dims,
-            enforce_orthogonal=enforce_orthogonal
-        )
-    elif irrep_dims is not None and not diagonal_covariance:
-        if chunk_size is not None:
-            kl_matrix = _compute_kl_matrix_block_diagonal_chunked(
-                mu_q, sigma_q, phi, generators, irrep_dims, chunk_size
-            )
-        else:
-            kl_matrix = _compute_kl_matrix_block_diagonal(
-                mu_q, sigma_q, phi, generators, irrep_dims
-            )
-    elif chunk_size is not None and not diagonal_covariance:
-        kl_matrix = _compute_kl_matrix_chunked(
-            mu_q, sigma_q, phi, generators, chunk_size
-        )
-    elif diagonal_covariance:
-        if chunk_size is not None and gauge_mode == 'learned':
-            # Chunked diagonal path only supports phi-based transport.
-            # For constant/trivial modes, fall through to non-chunked path.
-            kl_matrix = _compute_kl_matrix_diagonal_chunked(
-                mu_q, sigma_q, phi, generators, chunk_size,
-                enforce_orthogonal=enforce_orthogonal
-            )
-        else:
-            kl_matrix = _compute_kl_matrix_diagonal(
-                mu_q, sigma_q, phi, generators, None,
-                enforce_orthogonal=enforce_orthogonal
-            )
-    else:
-        kl_matrix = _compute_kl_matrix_torch(
-            mu_q, sigma_q, phi, generators, None,
-            gauge_mode=gauge_mode,
-            enforce_orthogonal=enforce_orthogonal
-        )
-
-    return kl_matrix
+    # Delegate to the unified dispatch helper.
+    return _dispatch_kl_matrix(
+        mu_q=mu_q,
+        sigma_q=sigma_q,
+        phi=phi,
+        generators=generators,
+        diagonal_covariance=diagonal_covariance,
+        irrep_dims=irrep_dims,
+        chunk_size=chunk_size,
+        cached_transport=None,
+        cached_block_exp_pairs=None,
+        gauge_mode=gauge_mode,
+        enforce_orthogonal=enforce_orthogonal,
+    )
 
 
 def _compute_kl_matrix_torch(
