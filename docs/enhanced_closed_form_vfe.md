@@ -60,9 +60,9 @@ $$\frac{\partial F}{\partial \mu_i[k]} = \underbrace{\frac{\alpha}{\sigma_p[k]}(
 
 Collecting $\mu_i[k]$:
 
-$$(A[k] + S[k]) \cdot \mu_i[k] = b[k] + c[k]$$
+$$(A[k] + S[k]) \cdot \mu_i[k] = b[k] - c[k]$$
 
-$$\boxed{\mu_i^*[k] = \frac{b[k] + c[k]}{A[k] + S[k]}}$$
+$$\boxed{\mu_i^*[k] = \frac{b[k] - c[k]}{A[k] + S[k]}}$$
 
 where:
 
@@ -117,7 +117,7 @@ For k = 0, 1, ..., K_iter - 1:
       S_sigma[k] = -(lam_s/(2*kappa)) * sum_j w_j * (1/sigma_jt[k] - p_bar[k])
 
   Step 3: Solve enhanced fixed point (one division per dimension)
-    mu^{k+1}[k] = (b[k] + c[k]) / max(A[k] + S[k], eps)
+    mu^{k+1}[k] = (b[k] - c[k]) / max(A[k] + S[k], eps)
     sigma^{k+1}[k] = (alpha + 1) / max(lam_total[k] + 2*S_sigma[k], eps)
 
   Step 4: Convergence check
@@ -178,7 +178,7 @@ S_sigma = -(lam_s / (2 * kappa_h_scaled)) * einsum('bij,bijk->bik', w_j, inv_sig
 
 # Enhanced fixed point
 total_prec_enhanced = prior_prec + align_prec + S_mu         # A + S
-total_info_enhanced = prior_info + align_info + c_mu         # b + c
+total_info_enhanced = prior_info + align_info - c_mu         # b - c
 mu_star = total_info_enhanced / total_prec_enhanced.clamp(min=eps)
 
 sigma_total_prec = prior_prec + align_prec + 2 * S_sigma     # lam_total + 2*S_sigma
