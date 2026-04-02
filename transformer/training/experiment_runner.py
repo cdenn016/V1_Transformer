@@ -20,6 +20,7 @@ Public API:
     - IterationDiagnosticsTracker — Per-VFE-iteration diagnostics
 """
 
+import logging
 import torch
 import torch.nn.functional as F
 import argparse
@@ -32,6 +33,8 @@ import platform
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
+
+logger = logging.getLogger(__name__)
 
 from transformer.core.model import GaugeTransformerLM
 from transformer.baselines.standard_transformer import StandardTransformerLM
@@ -134,11 +137,11 @@ def run_test_evaluation(
             - random_ppl: Random baseline perplexity
             - improvement: Factor improvement over random
     """
-    print("\n" + "="*70)
-    print("FINAL TEST SET EVALUATION")
-    print("="*70)
+    logger.info("="*70)
+    logger.info("FINAL TEST SET EVALUATION")
+    logger.info("="*70)
 
-    print(f"  Evaluating up to {max_samples} samples...")
+    logger.info(f"  Evaluating up to {max_samples} samples...")
 
     # Pure CE evaluation — disable all VFE regularization terms for test.
     is_standard = isinstance(model, StandardTransformerLM)
@@ -191,7 +194,7 @@ def run_test_evaluation(
 
             # Progress indicator
             if (batch_idx + 1) % 100 == 0:
-                print(f"  Evaluated {total_samples}/{max_samples} samples ({num_batches} batches)...")
+                logger.info(f"  Evaluated {total_samples}/{max_samples} samples ({num_batches} batches)...")
 
     # Token-weighted CE average (proper averaging for variable batch sizes)
     test_ce = total_ce_tokens / max(1, total_tokens)
@@ -200,13 +203,13 @@ def run_test_evaluation(
     random_ppl = vocab_size
     improvement = random_ppl / test_ppl if test_ppl > 0 else 0
 
-    print(f"\nTest Set Results ({total_samples} samples across {num_batches} batches):")
-    print(f"  Cross-entropy loss: {test_ce:.4f}")
-    print(f"  Perplexity:         {test_ppl:.2f}")
-    print(f"  Bits per character: {test_bpc:.3f}")
-    print(f"  Random baseline:    {random_ppl:.0f}")
-    print(f"  Improvement:        {improvement:.1f}x better than random")
-    print("="*70 + "\n")
+    logger.info(f"Test Set Results ({total_samples} samples across {num_batches} batches):")
+    logger.info(f"  Cross-entropy loss: {test_ce:.4f}")
+    logger.info(f"  Perplexity:         {test_ppl:.2f}")
+    logger.info(f"  Bits per character: {test_bpc:.3f}")
+    logger.info(f"  Random baseline:    {random_ppl:.0f}")
+    logger.info(f"  Improvement:        {improvement:.1f}x better than random")
+    logger.info("="*70)
 
     model.train()
 
@@ -263,7 +266,7 @@ def save_experiment_config(
     with open(config_path, 'w') as f:
         json.dump(experiment_config, f, indent=2, default=str)
 
-    print(f"📋 Saved experiment config: {config_path}")
+    logger.info(f"Saved experiment config: {config_path}")
 
     return config_path
 
@@ -584,12 +587,12 @@ class PublicationTrainer(FastTrainer):
         # Basic CSV metrics tracker
         metrics_path = self.config.checkpoint_dir / 'metrics.csv'
         self.metrics_tracker = PublicationMetricsTracker(metrics_path)
-        print(f"[INFO] Logging publication metrics to: {metrics_path}")
+        logger.info(f"Logging publication metrics to: {metrics_path}")
 
         # Comprehensive publication metrics (optional)
         self.pub_metrics = publication_metrics
         if self.pub_metrics:
-            print(f"[INFO] Comprehensive metrics enabled: { self.pub_metrics.experiment_dir}")
+            logger.info(f"Comprehensive metrics enabled: {self.pub_metrics.experiment_dir}")
 
         # Tokenizer for decoding sequences in interpretability outputs
         self.tokenizer = tokenizer
@@ -603,11 +606,11 @@ class PublicationTrainer(FastTrainer):
         if getattr(self.config, 'track_layer_diagnostics', False):
             layer_path = self.config.checkpoint_dir / 'layer_diagnostics.csv'
             self.layer_tracker = LayerDiagnosticsTracker(layer_path)
-            print(f"[INFO] Layer diagnostics enabled: {layer_path}")
+            logger.info(f"Layer diagnostics enabled: {layer_path}")
         if getattr(self.config, 'track_iteration_diagnostics', False):
             iter_path = self.config.checkpoint_dir / 'iteration_diagnostics.csv'
             self.iter_tracker = IterationDiagnosticsTracker(iter_path)
-            print(f"[INFO] Iteration diagnostics enabled: {iter_path}")
+            logger.info(f"Iteration diagnostics enabled: {iter_path}")
 
         # Enable VFE dynamics metrics collection on model and FFN modules.
         # This populates vfe_debug, transport_metrics, covariance_metrics
@@ -617,7 +620,7 @@ class PublicationTrainer(FastTrainer):
         for module in self.model.modules():
             if hasattr(module, '_collect_vfe_metrics'):
                 module._collect_vfe_metrics = True
-        print("[INFO] VFE dynamics metrics collection enabled")
+        logger.info("VFE dynamics metrics collection enabled")
 
         # =================================================================
         # Gauge geometry: Cartan preconditioning & SL(K) projection
@@ -641,9 +644,11 @@ class PublicationTrainer(FastTrainer):
                 self._cartan_preconditioner = build_cartan_projector(
                     generators, sym_dampening=sym_dampening
                 ).to(self.device)
-                print(f"[INFO] Killing form preconditioning enabled (M-step): "
-                      f"sym_dampening={sym_dampening} "
-                      f"(non-compact directions dampened {1/sym_dampening:.0f}×)")
+                logger.info(
+                    f"Killing form preconditioning enabled (M-step): "
+                    f"sym_dampening={sym_dampening} "
+                    f"(non-compact directions dampened {1/sym_dampening:.0f}x)"
+                )
                 # Note: E-step phi preconditioning is now controlled by
                 # phi_natural_gradient config ('clip'|'cartan'|'killing'|'pullback')
                 # which flows through model → blocks → ffn → VariationalFFNDynamic.
@@ -652,9 +657,11 @@ class PublicationTrainer(FastTrainer):
                 self._slk_trace_vec = build_slk_projector(
                     generators).to(self.device)
                 trace_norm = self._slk_trace_vec.norm().item()
-                print(f"[INFO] SL(K) projection enabled: "
-                      f"removing trace component (||v||={trace_norm:.2f}, "
-                      f"n_gen={generators.shape[0]} → {generators.shape[0]-1} effective d.o.f.)")
+                logger.info(
+                    f"SL(K) projection enabled: "
+                    f"removing trace component (||v||={trace_norm:.2f}, "
+                    f"n_gen={generators.shape[0]} -> {generators.shape[0]-1} effective d.o.f.)"
+                )
 
     def _get_head_irrep_labels(self) -> list:
         """
@@ -935,9 +942,10 @@ class PublicationTrainer(FastTrainer):
                     # ============================================================
                     self._attention_viz_count += 1
                     if self._attention_viz_count == 1:
-                        print(f"\n[INFO] Attention patterns saved to: { save_dir}/")
-                        print(
-                            f"  Saving per-layer, per-head visualizations ({n_layers_actual} layers, {n_heads} heads)")
+                        logger.info(f"Attention patterns saved to: {save_dir}/")
+                        logger.info(
+                            f"  Saving per-layer, per-head visualizations ({n_layers_actual} layers, {n_heads} heads)"
+                        )
 
         self.model.train()
 
@@ -1334,7 +1342,7 @@ class PublicationTrainer(FastTrainer):
                 if _track_layers:
                     self.model._collect_layer_diagnostics = False
             except Exception as e:
-                print(f"[WARNING] Layer/iteration diagnostics failed: {e}")
+                logger.warning(f"Layer/iteration diagnostics failed: {e}")
 
         return metrics, grad_norms, e_step_norms, mstep_natural_norms
 
@@ -1440,14 +1448,14 @@ class PublicationTrainer(FastTrainer):
 
     def train(self):
         """Training loop with publication metrics."""
-        print(f"{'='*70}")
-        print("PUBLICATION-QUALITY TRAINING")
-        print(f"{'='*70}\n")
+        logger.info("="*70)
+        logger.info("PUBLICATION-QUALITY TRAINING")
+        logger.info("="*70)
 
         # Support resuming from a checkpoint
         start_step = self.global_step
         if start_step > 0:
-            print(f"  Resuming from step {start_step}")
+            logger.info(f"  Resuming from step {start_step}")
 
         start_time = time.time()
         train_iterator = iter(self.train_loader)
@@ -1457,12 +1465,12 @@ class PublicationTrainer(FastTrainer):
         if epochs is not None and epochs > 0:
             steps_per_epoch = len(self.train_loader)
             total_steps = epochs * steps_per_epoch
-            print(f"  Training for {epochs} epoch(s) ({ steps_per_epoch} steps/epoch = {total_steps:,} total steps)")
+            logger.info(f"  Training for {epochs} epoch(s) ({steps_per_epoch} steps/epoch = {total_steps:,} total steps)")
         else:
             total_steps = self.config.max_steps
             steps_per_epoch = len(self.train_loader)
             equiv_epochs = total_steps / steps_per_epoch if steps_per_epoch > 0 else 0
-            print(f"  Training for { total_steps:,} steps (~{equiv_epochs:.1f} epochs)")
+            logger.info(f"  Training for {total_steps:,} steps (~{equiv_epochs:.1f} epochs)")
 
         try:
             from tqdm import tqdm
@@ -1487,7 +1495,7 @@ class PublicationTrainer(FastTrainer):
                     verbose=False,
                 )
             except Exception as e:
-                print(f"[WARN] Initial semantic analysis failed: {e}")
+                logger.warning(f"Initial semantic analysis failed: {e}")
 
         # Kappa warmup: freeze log_kappa_per_head until embeddings differentiate.
         # Without this, early uniform-attention gradients push kappa toward
@@ -1497,7 +1505,7 @@ class PublicationTrainer(FastTrainer):
         if kappa_warmup > 0:
             self._set_kappa_frozen(True)
             _kappa_frozen = True
-            print(f"  [kappa warmup] Frozen log_kappa_per_head for first {kappa_warmup} steps")
+            logger.info(f"  [kappa warmup] Frozen log_kappa_per_head for first {kappa_warmup} steps")
 
         for step in pbar:
             self.global_step = step
@@ -1507,7 +1515,7 @@ class PublicationTrainer(FastTrainer):
             if _kappa_frozen and step >= kappa_warmup:
                 self._set_kappa_frozen(False)
                 _kappa_frozen = False
-                print(f"\n  [kappa warmup] Unfreezing log_kappa_per_head at step {step}")
+                logger.info(f"  [kappa warmup] Unfreezing log_kappa_per_head at step {step}")
 
             # Get batch
             try:
@@ -1613,21 +1621,25 @@ class PublicationTrainer(FastTrainer):
                         for _vl in _vfe_lines:
                             tqdm.write(_vl)
                 else:
-                    print(log_msg)
+                    logger.info(log_msg)
                     if _verbose and grad_norms:
-                        print(f"\n\n  [M-STEP] total: {grad_norms['total']:.3e} | "
-                              f"mu: {grad_norms['mu']:.3e} | sigma: { grad_norms['sigma']:.3e} | "
-                              f"phi: {grad_norms['phi']:.3e}")
+                        logger.info(
+                            f"\n\n  [M-STEP] total: {grad_norms['total']:.3e} | "
+                            f"mu: {grad_norms['mu']:.3e} | sigma: {grad_norms['sigma']:.3e} | "
+                            f"phi: {grad_norms['phi']:.3e}"
+                        )
                     if _verbose and e_step_norms:
                         _mu_cap = e_step_norms.get('mu_cap_frac', 0.0) * 100
                         _sig_cap = e_step_norms.get('sigma_cap_frac', 0.0) * 100
                         _mu_tr = e_step_norms.get('mu_trust_frac', 0.0) * 100
                         _wh_mean = e_step_norms.get('whitened_mu_mean', 0.0)
                         _wh_max = e_step_norms.get('whitened_mu_max', 0.0)
-                        print(f"\n  [E-STEP] nat_mu: {e_step_norms['nat_grad_mu']:.3e} (cap: {_mu_cap:.0f}%) | "
-                              f"nat_sig: {e_step_norms['nat_grad_sigma']:.3e} (cap: {_sig_cap:.0f}%) | "
-                              f"phi: {e_step_norms['grad_phi']:.3e} | "
-                              f"trust: {_mu_tr:.0f}% (wh: {_wh_mean:.3f}/{_wh_max:.3f})\n")
+                        logger.info(
+                            f"  [E-STEP] nat_mu: {e_step_norms['nat_grad_mu']:.3e} (cap: {_mu_cap:.0f}%) | "
+                            f"nat_sig: {e_step_norms['nat_grad_sigma']:.3e} (cap: {_sig_cap:.0f}%) | "
+                            f"phi: {e_step_norms['grad_phi']:.3e} | "
+                            f"trust: {_mu_tr:.0f}% (wh: {_wh_mean:.3f}/{_wh_max:.3f})"
+                        )
                     if _verbose and phi_diag:
                         _erank = phi_diag['phi/effective_rank']
                         _rratio = phi_diag['phi/rank_ratio']
@@ -1635,13 +1647,15 @@ class PublicationTrainer(FastTrainer):
                         _top5 = phi_diag['phi/top5_variance_fraction']
                         _sgap = phi_diag['phi/spectral_gap']
                         _mnorm = phi_diag['phi/mean_token_norm']
-                        print(f"  [PHI] eff_rank: {_erank:.1f} ({_rratio:.1%} of max) | "
-                              f"top1σ²: {_top1:.1%} top5σ²: {_top5:.1%} | "
-                              f"gap: {_sgap:.2f} | ||φ||: {_mnorm:.3f}")
+                        logger.info(
+                            f"  [PHI] eff_rank: {_erank:.1f} ({_rratio:.1%} of max) | "
+                            f"top1s^2: {_top1:.1%} top5s^2: {_top5:.1%} | "
+                            f"gap: {_sgap:.2f} | ||phi||: {_mnorm:.3f}"
+                        )
                     if _verbose:
                         _vfe_lines = self._format_vfe_dynamics(metrics)
                         for _vl in _vfe_lines:
-                            print(_vl)
+                            logger.info(_vl)
 
                 # Report numerical fallback counters if any fired
                 if _num_events:
@@ -1651,7 +1665,7 @@ class PublicationTrainer(FastTrainer):
                     if use_tqdm:
                         tqdm.write(_num_msg)
                     else:
-                        print(_num_msg)
+                        logger.info(_num_msg)
 
             # Validation
             if (step + 1) % self.config.eval_interval == 0:
@@ -1666,12 +1680,12 @@ class PublicationTrainer(FastTrainer):
                 attn_entropy = metrics.get('attention_entropy', 0)
                 attn_concentration = metrics.get('attention_concentration', 0)
 
-                print(f"\n  Validation @ step {step+1}:")
-                print(f"    Loss: {val_metrics['loss']:.4f}")
-                print(f"    CE: {val_metrics['ce_loss']:.4f}")
-                print(f"    PPL: {val_metrics['perplexity']:.2f}")
-                print(f"    BPC: {val_metrics['ce_loss']/math.log(2):.3f}")
-                print(f"    Attn entropy: {attn_entropy:.3f} | concentration: { attn_concentration:.3f}\n\n")
+                logger.info(f"\n  Validation @ step {step+1}:")
+                logger.info(f"    Loss: {val_metrics['loss']:.4f}")
+                logger.info(f"    CE: {val_metrics['ce_loss']:.4f}")
+                logger.info(f"    PPL: {val_metrics['perplexity']:.2f}")
+                logger.info(f"    BPC: {val_metrics['ce_loss']/math.log(2):.3f}")
+                logger.info(f"    Attn entropy: {attn_entropy:.3f} | concentration: {attn_concentration:.3f}")
 
                 # Generate sample text to verify learning (varied prompts for diversity)
                 try:
@@ -1689,12 +1703,11 @@ class PublicationTrainer(FastTrainer):
                     # Use temperature 0.9 and lower top_k for more diversity
                     sample = self.sample_text(
                         prompt=prompt, max_new_tokens=30, temperature=0.9, top_k=30)
-                    print(f"    Sample: {sample[:100]}...")
+                    logger.info(f"    Sample: {sample[:100]}...")
                 except Exception as e:
                     import traceback
-                    print(f"    Sample generation failed: {e}")
+                    logger.warning(f"    Sample generation failed: {e}")
                     traceback.print_exc()
-                print()
 
                 # Save attention visualization periodically
                 try:
@@ -1740,10 +1753,12 @@ class PublicationTrainer(FastTrainer):
                                 merged = True
                                 break
                         if not merged:
-                            print(f"[WARN] Holonomy at step {step+1}: no matching CSV entry "
-                                  f"(holonomy_interval may not be divisible by log_interval)")
+                            logger.warning(
+                                f"Holonomy at step {step+1}: no matching CSV entry "
+                                f"(holonomy_interval may not be divisible by log_interval)"
+                            )
                 except Exception as e:
-                    print(f"[WARN] Holonomy computation failed at step { step+1}: {e}")
+                    logger.warning(f"Holonomy computation failed at step {step+1}: {e}")
 
             # Lightweight semantic trajectory snapshot (higher frequency than full analysis)
             if self.pub_metrics:
@@ -1758,18 +1773,18 @@ class PublicationTrainer(FastTrainer):
                         verbose=False,  # Minimal output during training
                     )
                 except Exception as e:
-                    print(f"[WARN] Semantic analysis failed at step { step+1}: {e}")
+                    logger.warning(f"Semantic analysis failed at step {step+1}: {e}")
 
         # Flush any remaining numerical events accumulated after the last log step
         _final_num_events = _flush_numerical_events()
         if _final_num_events:
-            print("  [NUM] Final: " + " | ".join(
+            logger.info("  [NUM] Final: " + " | ".join(
                 f"{k}: {v}" for k, v in sorted(_final_num_events.items())
             ))
 
         # Save final metrics
         self.metrics_tracker.save()
-        print(f"\n[INFO] Final metrics saved to: { self.metrics_tracker.save_path}")
+        logger.info(f"Final metrics saved to: {self.metrics_tracker.save_path}")
 
         # Save comprehensive publication metrics
         if self.pub_metrics:
@@ -1783,19 +1798,18 @@ class PublicationTrainer(FastTrainer):
                     verbose=True,
                 )
             except Exception as e:
-                print(f"[WARN] Final semantic analysis failed: {e}")
+                logger.warning(f"Final semantic analysis failed: {e}")
 
             # Generate final holonomy figures (non-flat transport)
             if self.pub_metrics.holonomy_history:
                 try:
-                    print("\n[PublicationMetrics] Generating holonomy figures...")
+                    logger.info("Generating holonomy figures...")
                     self.pub_metrics.generate_holonomy_figures(
                         model=self.model,
                         save_prefix='holonomy',
                     )
                 except Exception as e:
-                    print(
-                        f"[WARN] Final holonomy figure generation failed: {e}")
+                    logger.warning(f"Final holonomy figure generation failed: {e}")
 
             # Generate interpretability outputs using a sample batch from validation
             try:
@@ -1808,9 +1822,8 @@ class PublicationTrainer(FastTrainer):
                 )
             except Exception as e:
                 import traceback
-                print(
-                    f"[WARNING] Could not generate interpretability outputs: {e}")
-                print(f"  Traceback: {traceback.format_exc()}")
+                logger.warning(f"Could not generate interpretability outputs: {e}")
+                logger.warning(f"  Traceback: {traceback.format_exc()}")
 
             self.pub_metrics.print_summary()
 
@@ -1823,12 +1836,12 @@ class PublicationTrainer(FastTrainer):
 
         # Summary
         elapsed = time.time() - start_time
-        print(f"\n{'='*70}")
-        print("TRAINING COMPLETE!")
-        print(f"{'='*70}")
-        print(f"Time: {elapsed/3600:.2f} hours")
-        print(f"Best val CE: {self.best_val_ce:.4f} (PPL: { math.exp(min(self.best_val_ce, 20.0)):.2f})")
-        print(f"{'='*70}\n")
+        logger.info("="*70)
+        logger.info("TRAINING COMPLETE!")
+        logger.info("="*70)
+        logger.info(f"Time: {elapsed/3600:.2f} hours")
+        logger.info(f"Best val CE: {self.best_val_ce:.4f} (PPL: {math.exp(min(self.best_val_ce, 20.0)):.2f})")
+        logger.info("="*70)
 
 
 def _create_dataloaders(config: dict):
@@ -1859,7 +1872,7 @@ def _create_dataloaders(config: dict):
         use_char = (tokenizer_mode == 'char')
 
     if use_char:
-        print(f"Using CHARACTER-LEVEL tokenizer (vocab_size={config['vocab_size']})")
+        logger.info(f"Using CHARACTER-LEVEL tokenizer (vocab_size={config['vocab_size']})")
         # Note: create_char_dataloaders doesn't support test set yet
         train_loader, val_loader, actual_vocab_size = create_char_dataloaders(
             max_seq_len=config['max_seq_len'],
@@ -1869,7 +1882,7 @@ def _create_dataloaders(config: dict):
         test_loader = None
         tokenizer = None
     else:
-        print(f"Using BPE tokenizer (vocab_size={config['vocab_size']})")
+        logger.info(f"Using BPE tokenizer (vocab_size={config['vocab_size']})")
         train_loader, val_loader, test_loader, actual_vocab_size, tokenizer = create_dataloaders(
             max_seq_len=config['max_seq_len'],
             batch_size=config['batch_size'],
@@ -1905,9 +1918,9 @@ def run_single_experiment(
     Returns:
         Dictionary with final metrics
     """
-    print("\n" + "="*70)
-    print(f"EXPERIMENT: FFN_MODE = {ffn_mode}")
-    print("="*70)
+    logger.info("="*70)
+    logger.info(f"EXPERIMENT: FFN_MODE = {ffn_mode}")
+    logger.info("="*70)
 
     # Override FFN mode in config
     config = config.copy()
@@ -1925,9 +1938,9 @@ def run_single_experiment(
     # =================================================================
 
     dataset_name = config.get('dataset', 'wikitext-2')
-    print("\n" + "="*70)
-    print(f"LOADING {dataset_name.upper()} DATA")
-    print("="*70)
+    logger.info("="*70)
+    logger.info(f"LOADING {dataset_name.upper()} DATA")
+    logger.info("="*70)
 
     train_loader, val_loader, test_loader, actual_vocab_size, tokenizer = _create_dataloaders(config)
     use_char = tokenizer is None  # Character-level tokenizer returns None
@@ -1938,23 +1951,23 @@ def run_single_experiment(
     # Model Creation - Three distinct modes
     # =================================================================
 
-    print("\n" + "="*70)
-    print("CREATING MODEL")
-    print("="*70)
-    print(f"  N (seq len): {config['max_seq_len']}")
-    print(f"  K (embed): {config['embed_dim']}")
-    print(f"  Layers: {config['n_layers']}")
-    print(f"  Vocab: {actual_vocab_size} ({'char' if use_char else 'BPE'})")
+    logger.info("="*70)
+    logger.info("CREATING MODEL")
+    logger.info("="*70)
+    logger.info(f"  N (seq len): {config['max_seq_len']}")
+    logger.info(f"  K (embed): {config['embed_dim']}")
+    logger.info(f"  Layers: {config['n_layers']}")
+    logger.info(f"  Vocab: {actual_vocab_size} ({'char' if use_char else 'BPE'})")
 
     # =====================================================================
     # MODE 1: STANDARD TRANSFORMER (baseline)
     # =====================================================================
     if ffn_mode == 'standard':
-        print("  Model type: STANDARD TRANSFORMER (dot-product attention)")
-        print("  - Attention: Q·K softmax")
-        print("  - FFN: Learned MLP (GELU)")
-        print("  - Output: Linear projection")
-        print("  - Learning: Backprop")
+        logger.info("  Model type: STANDARD TRANSFORMER (dot-product attention)")
+        logger.info("  - Attention: Q*K softmax")
+        logger.info("  - FFN: Learned MLP (GELU)")
+        logger.info("  - Output: Linear projection")
+        logger.info("  - Learning: Backprop")
         model_config = {
             'vocab_size': actual_vocab_size,
             'embed_dim': config['embed_dim'],
@@ -1980,15 +1993,15 @@ def run_single_experiment(
     elif ffn_mode == 'hybrid':
         from transformer.baselines.hybrid_gauge_transformer import HybridGaugeTransformerLM
         _pb = config.get('use_prior_bank', True)
-        print("  Model type: HYBRID GAUGE-ATTENTION TRANSFORMER")
-        print("  - Attention: KL-divergence based (gauge-theoretic)")
-        print("  - FFN: Standard GELU MLP")
-        print(f"  - Embeddings: {'PriorBank (KL encode/decode)' if _pb else 'nn.Embedding + nn.Linear'}")
-        print("  - Learning: Backprop")
+        logger.info("  Model type: HYBRID GAUGE-ATTENTION TRANSFORMER")
+        logger.info("  - Attention: KL-divergence based (gauge-theoretic)")
+        logger.info("  - FFN: Standard GELU MLP")
+        logger.info(f"  - Embeddings: {'PriorBank (KL encode/decode)' if _pb else 'nn.Embedding + nn.Linear'}")
+        logger.info("  - Learning: Backprop")
 
         if 'kappa_beta' not in config:
             config['kappa_beta'] = 1.0
-        print(f"  kappa_beta: {config['kappa_beta']}")
+        logger.info(f"  kappa_beta: {config['kappa_beta']}")
 
         model = HybridGaugeTransformerLM(config)
 
@@ -1996,17 +2009,17 @@ def run_single_experiment(
     # MODE 3: VFE_DYNAMIC TRANSFORMER (EM-step, uses backprop)
     # =====================================================================
     else:
-        print("  Model type: GAUGE VFE TRANSFORMER (KL-divergence attention)")
-        print("  - Attention: KL-divergence based")
-        print("  - FFN: VFE EM-step dynamics")
-        print("  - Output: Linear projection")
-        print("  - Learning: Backprop")
-        print("  - Position: None (emergent)")
+        logger.info("  Model type: GAUGE VFE TRANSFORMER (KL-divergence attention)")
+        logger.info("  - Attention: KL-divergence based")
+        logger.info("  - FFN: VFE EM-step dynamics")
+        logger.info("  - Output: Linear projection")
+        logger.info("  - Learning: Backprop")
+        logger.info("  - Position: None (emergent)")
 
-        # kappa_beta: scalar sharpness dial (dimension scaling τ=2√K is hardcoded in attention)
+        # kappa_beta: scalar sharpness dial (dimension scaling tau=2*sqrt(K) is hardcoded in attention)
         if 'kappa_beta' not in config:
             config['kappa_beta'] = 1.0
-        print(f"  kappa_beta: {config['kappa_beta']}")
+        logger.info(f"  kappa_beta: {config['kappa_beta']}")
 
         model = GaugeTransformerLM(config)
 
@@ -2019,7 +2032,7 @@ def run_single_experiment(
         for module in model.modules():
             if hasattr(module, '_debug_vfe_gradients'):
                 module._debug_vfe_gradients = True
-        print("[DEBUG] VFE gradient component debug ENABLED for all FFN layers")
+        logger.debug("VFE gradient component debug ENABLED for all FFN layers")
 
     # Get parameter counts
     if hasattr(model, 'get_num_params'):
@@ -2030,10 +2043,10 @@ def run_single_experiment(
         non_embed_params = sum(
             p.numel() for name, p in model.named_parameters() if 'embed' not in name)
 
-    print(f"\nModel Parameters:")
-    print(f"  Total:         {total_params:,}")
-    print(f"  Non-embedding: {non_embed_params:,}")
-    print(f"  Embedding:     {total_params - non_embed_params:,}")
+    logger.info("Model Parameters:")
+    logger.info(f"  Total:         {total_params:,}")
+    logger.info(f"  Non-embedding: {non_embed_params:,}")
+    logger.info(f"  Embedding:     {total_params - non_embed_params:,}")
 
     # =================================================================
     # FLOPs Estimation (Peer Review M2e)
