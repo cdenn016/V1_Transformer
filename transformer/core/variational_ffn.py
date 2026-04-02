@@ -2295,6 +2295,806 @@ class VariationalFFNDynamic(nn.Module):
 
         return mu_current, sigma_current, phi_current, omega_current, beta_heads, beta_history_out
 
+
+    # =================================================================
+    # Helper: Single VFE iteration (extracted from forward loop)
+    # =================================================================
+
+    def _vfe_iteration(
+        self,
+        iteration: int,
+        mu_current: torch.Tensor,
+        sigma_current: Optional[torch.Tensor],
+        phi_current: torch.Tensor,
+        omega_current: Optional[torch.Tensor],
+        mu_p_current: torch.Tensor,
+        sigma_p: torch.Tensor,
+        alpha_effective,
+        _alpha_c0,
+        is_diagonal: bool,
+        B: int,
+        N: int,
+        eps: float,
+        mask: Optional[torch.Tensor],
+        has_observations: bool,
+        targets: Optional[torch.Tensor],
+        W_out: Optional[torch.Tensor],
+        return_beta_history: bool,
+        _detach_e_step: bool = True,
+    ):
+        r"""Execute one VFE natural-gradient iteration.
+
+        Returns:
+            (mu_current, sigma_current, phi_current, omega_current,
+             beta_current, beta_heads, alpha_effective, beta_history_entry)
+            where beta_history_entry is a stacked beta (if return_beta_history)
+            or None.
+        """
+        beta_heads = []
+        beta_current = None
+        beta_history_entry = None
+
+        # Cosine decay: lr drops from 1.0 to 0.1 across iterations
+        # Steeper than linear 0.5 decay — stabilizes later iterations where
+        # natural gradients can amplify and cause oscillatory divergence
+        if self.n_iterations > 1:
+            progress = iteration / (self.n_iterations - 1)  # 0→1
+            decay_factor = 0.1 + 0.9 * 0.5 * (1.0 + math.cos(math.pi * progress))
+        else:
+            decay_factor = 1.0
+        effective_lr = self.lr * decay_factor
+
+        # =================================================================
+        # STEP 0: Precompute transport operators ONCE per iteration
+        # =================================================================
+        # Both compute_attention_weights and compute_vfe_gradients_gpu need
+        # the same Ω_ij = exp(φ_i)·exp(-φ_j). Computing once and passing
+        # cached_transport avoids redundant matrix exponentials.
+        # Skip caching when using block-diagonal or chunked paths (they
+        # compute transport internally in chunks to save memory).
+        if self.irrep_dims is None and not self.multihead_vfe:
+            if omega_current is not None and self.gauge_param == 'omega':
+                # Direct omega: build full-K transport from omega blocks
+                from transformer.core.transport_ops import compute_transport_operators_direct
+                cached_transport = compute_transport_operators_direct(
+                    omega=omega_current,
+                    irrep_dims=self.irrep_dims if self.irrep_dims is not None else [self.embed_dim],
+                )
+            elif self.gauge_mode == 'constant' and self.constant_omega is not None:
+                # Constant gauge with known Ω: build full-K transport from
+                # per-head constant_omega blocks (non-block-diagonal path).
+                K = mu_current.shape[-1]
+                omega_full = torch.eye(K, device=mu_current.device, dtype=mu_current.dtype)
+                _blk_start = 0
+                for h_idx in range(len(self.constant_omega)):
+                    omega_h = self.constant_omega[h_idx].to(
+                        device=mu_current.device, dtype=mu_current.dtype)
+                    d_h = omega_h.shape[0]
+                    if getattr(self, 'enforce_orthogonal', False) and d_h >= 2:
+                        omega_h = newton_schulz_orthogonalize(
+                            omega_h.unsqueeze(0)).squeeze(0)
+                    omega_full[_blk_start:_blk_start+d_h, _blk_start:_blk_start+d_h] = omega_h
+                    _blk_start += d_h
+                Omega = omega_full.unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(
+                    B, N, N, -1, -1).contiguous()
+                cached_transport = {'Omega': Omega}
+            else:
+                cached_transport = compute_transport_operators(
+                    phi=phi_current,
+                    generators=self.generators,
+                    enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                    gauge_mode=self.gauge_mode,
+                )
+        else:
+            cached_transport = None
+
+        # =================================================================
+        # Determine alpha: Bayesian precision or fixed scalar
+        # Recompute per-iteration for learnable alpha (state-dependent);
+        # for fixed alpha, alpha_effective was set before the loop.
+        # =================================================================
+        if self.learnable_alpha:
+            alpha_effective = self.get_bayesian_alpha(
+                mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
+            )  # (B, N, K) - per-dim gauge-invariant, state-dependent
+
+        # Initialize cached block exp pairs for phi gradient reuse
+        _mh_cached_bep = None
+        _cached_bep = None
+
+        # Enable/disable VFE gradient debug dict for this iteration
+        # _vfe_utils_mod._VFE_GRAD_DEBUG accessed via _vfe_utils_mod
+        if self._debug_vfe_gradients or self._collect_vfe_metrics:
+            _vfe_utils_mod._VFE_GRAD_DEBUG = {}
+        else:
+            _vfe_utils_mod._VFE_GRAD_DEBUG = None
+
+        if self.multihead_vfe:
+            # =============================================================
+            # MULTI-HEAD VFE: Per-block β_h through iterations
+            # =============================================================
+            # Each irrep block gets its own attention pattern.
+            # This maintains head diversity through all VFE iterations,
+            # enabling different heads to cluster at different scales.
+            grad_mu = torch.zeros_like(mu_current)
+            grad_sigma = torch.zeros_like(sigma_current)
+            beta_heads = []  # For history tracking
+
+            # Precompute block_exp_pairs ONCE for all heads.
+            _mh_cached_bep = self._build_block_exp_pairs(
+                phi_current, omega_current, B, N,
+                mu_current.device, mu_current.dtype,
+            )
+
+            # =============================================================
+            # FUSED MULTI-HEAD VFE: Compute β_h and gradients in single
+            # Omega pass per head (eliminates redundant Omega construction).
+            # Previously: compute_attention_weights + compute_vfe_gradients_gpu
+            # built Omega separately → 2× Omega per head. Now: 1× per head.
+            # =============================================================
+            _use_fused_mh = (is_diagonal and self.irrep_dims is not None
+                             and not self.exact_diagonal_transport)
+            block_start = 0
+            for h, d_h in enumerate(self.irrep_dims):
+                block_end = block_start + d_h
+
+                mu_h = mu_current[:, :, block_start:block_end]
+                if _detach_e_step:
+                    mu_h = mu_h.detach()
+                mu_h = mu_h.contiguous()
+                mu_p_h = mu_p_current[:, :, block_start:block_end].contiguous()
+                if is_diagonal:
+                    sigma_h = sigma_current[:, :, block_start:block_end]
+                    if _detach_e_step:
+                        sigma_h = sigma_h.detach()
+                    sigma_h = sigma_h.contiguous()
+                    sigma_p_h = sigma_p[:, :, block_start:block_end].contiguous()
+                else:
+                    sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end]
+                    if _detach_e_step:
+                        sigma_h = sigma_h.detach()
+                    sigma_h = sigma_h.contiguous()
+                    sigma_p_h = sigma_p[:, :, block_start:block_end, block_start:block_end].contiguous()
+                gen_h = self.generators[:, block_start:block_end, block_start:block_end]
+
+                # Scale kappa by sqrt(d_h) to normalize KL across different-dim
+                # super-blocks. Without this, larger blocks (e.g., 12-dim from
+                # cross-coupled heads) produce proportionally larger KL values,
+                # causing attention sharpness imbalance vs smaller blocks.
+                kappa_h = self._get_kappa_h(h, d_h)
+                _head_bep = [_mh_cached_bep[h]] if _mh_cached_bep is not None else None
+
+                alpha_h = alpha_effective[:, :, block_start:block_end] if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3 else alpha_effective
+                c0_h = _alpha_c0[block_start:block_end] if _alpha_c0 is not None else None
+
+                if _use_fused_mh:
+                    # FUSED: single pass computes β_h AND gradients (1× Omega)
+                    beta_h, grad_mu_h, grad_sigma_h, _ = _fused_attention_and_vfe_gradients_block_diag(
+                        mu_q=mu_h, sigma_q=sigma_h,
+                        mu_p=mu_p_h, sigma_p=sigma_p_h,
+                        phi=phi_current, generators=gen_h,
+                        alpha=alpha_h, lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax,
+                        kappa=kappa_h, eps=eps,
+                        irrep_dims=[d_h],
+                        compute_sigma_align_grad=self.compute_sigma_align_grad,
+                        enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                        alpha_c0=c0_h,
+                        cached_block_exp_pairs=_head_bep,
+                        mask=mask,
+                        mask_self_attention=self.mask_self_attention,
+                        use_rope=self._use_rope_vfe,
+                        rope_base=self._rope_base_vfe,
+                    )
+                else:
+                    # Fallback: separate attention + gradient (full covariance)
+                    beta_h = compute_attention_weights(
+                        mu_q=mu_h, sigma_q=sigma_h,
+                        phi=phi_current, generators=gen_h,
+                        kappa=kappa_h, epsilon=eps, mask=mask,
+                        return_kl=False,
+                        diagonal_covariance=is_diagonal,
+                        irrep_dims=[d_h],
+                        mask_self_attention=self.mask_self_attention,
+                        gauge_mode=self.gauge_mode,
+                        cached_block_exp_pairs=_head_bep,
+                        use_rope=self._use_rope_vfe,
+                        rope_base=self._rope_base_vfe,
+                        exact_diagonal_transport=self.exact_diagonal_transport,
+                    )
+                    grad_mu_h, grad_sigma_h = compute_vfe_gradients_gpu(
+                        mu_q=mu_h, sigma_q=sigma_h,
+                        mu_p=mu_p_h, sigma_p=sigma_p_h,
+                        beta=beta_h, phi=phi_current, generators=gen_h,
+                        alpha=alpha_h, lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax,
+                        kappa=kappa_h, eps=eps, alpha_c0=c0_h,
+                        compute_sigma_align_grad=self.compute_sigma_align_grad,
+                        irrep_dims=[d_h],
+                        cached_block_exp_pairs=_head_bep,
+                        exact_diagonal_transport=self.exact_diagonal_transport,
+                    )
+
+                beta_heads.append(beta_h)
+                grad_mu[:, :, block_start:block_end] = grad_mu_h
+                if is_diagonal:
+                    grad_sigma[:, :, block_start:block_end] = grad_sigma_h
+                else:
+                    # compute_vfe_gradients_gpu squeezes trailing singletons,
+                    # so d_h=1 heads return (B,N,1) instead of (B,N,1,1).
+                    # Restore full covariance shape for block assignment.
+                    if grad_sigma_h.dim() == 3 and d_h == 1:
+                        grad_sigma_h = grad_sigma_h.unsqueeze(-1)
+                    grad_sigma[:, :, block_start:block_end, block_start:block_end] = grad_sigma_h
+
+                # Accumulate per-head debug norms (sum of squares for proper norm aggregation)
+                if _vfe_utils_mod._VFE_GRAD_DEBUG is not None and _vfe_utils_mod._VFE_GRAD_DEBUG:
+                    _pfx = f'head{h}(d={d_h})'
+                    for _k, _v in list(_vfe_utils_mod._VFE_GRAD_DEBUG.items()):
+                        # Store per-head values with prefix, clear base keys
+                        _vfe_utils_mod._VFE_GRAD_DEBUG[f'{_pfx}/{_k}'] = _v
+                    # Reset base keys for next head
+                    for _k in [k for k in _vfe_utils_mod._VFE_GRAD_DEBUG if '/' not in k]:
+                        del _vfe_utils_mod._VFE_GRAD_DEBUG[_k]
+
+                block_start = block_end
+
+            if return_beta_history:
+                beta_stacked = torch.stack(beta_heads, dim=1)
+                beta_history_entry = beta_stacked.detach().clone()
+            beta_current = beta_heads[-1]
+
+        else:
+            # =============================================================
+            # SINGLE-β VFE: Original behavior (all blocks share one β)
+            # =============================================================
+            # SINGLE-β VFE: All blocks share one β
+            # Use fused path when possible (diagonal + block-diagonal)
+            # =============================================================
+            _cached_bep = self._build_block_exp_pairs(
+                phi_current, omega_current, B, N,
+                mu_current.device, mu_current.dtype,
+            )
+
+            # Use fused path for diagonal + block-diagonal
+            _use_fused_single = (is_diagonal and self.irrep_dims is not None
+                                 and not self.exact_diagonal_transport)
+
+            # Detach beliefs for gradient computation (consistent with multihead
+            # path at line 3667). Without this, analytical VFE gradients
+            # participate in autograd, giving the single-β path a different
+            # backward (I - lr*J) vs multihead's straight-through (I).
+            _mu_for_grad = mu_current.detach() if _detach_e_step else mu_current
+            _sigma_for_grad = sigma_current.detach() if _detach_e_step else sigma_current
+
+            if _use_fused_single:
+                beta_current, grad_mu, grad_sigma, _ = _fused_attention_and_vfe_gradients_block_diag(
+                    mu_q=_mu_for_grad, sigma_q=_sigma_for_grad,
+                    mu_p=mu_p_current, sigma_p=sigma_p,
+                    phi=phi_current, generators=self.generators,
+                    alpha=alpha_effective, lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax,
+                    kappa=self.kappa, eps=eps,
+                    irrep_dims=self.irrep_dims,
+                    compute_sigma_align_grad=self.compute_sigma_align_grad,
+                    enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                    alpha_c0=_alpha_c0,
+                    cached_block_exp_pairs=_cached_bep,
+                    mask=mask,
+                    mask_self_attention=self.mask_self_attention,
+                    use_rope=self._use_rope_vfe,
+                    rope_base=self._rope_base_vfe,
+                )
+            else:
+                # Fallback: separate attention + gradient
+                beta_current = compute_attention_weights(
+                    mu_q=_mu_for_grad, sigma_q=_sigma_for_grad,
+                    phi=phi_current, generators=self.generators,
+                    kappa=self.kappa, epsilon=eps, mask=mask,
+                    return_kl=False,
+                    diagonal_covariance=is_diagonal,
+                    cached_transport=cached_transport,
+                    irrep_dims=self.irrep_dims,
+                    mask_self_attention=self.mask_self_attention,
+                    gauge_mode=self.gauge_mode,
+                    cached_block_exp_pairs=_cached_bep,
+                    use_rope=self._use_rope_vfe,
+                    rope_base=self._rope_base_vfe,
+                    exact_diagonal_transport=self.exact_diagonal_transport,
+                )
+                grad_mu, grad_sigma = compute_vfe_gradients_gpu(
+                    mu_q=_mu_for_grad, sigma_q=_sigma_for_grad,
+                    mu_p=mu_p_current, sigma_p=sigma_p,
+                    beta=beta_current, phi=phi_current,
+                    generators=self.generators, alpha=alpha_effective,
+                    lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax, kappa=self.kappa,
+                    eps=eps, alpha_c0=_alpha_c0,
+                    cached_transport=cached_transport,
+                    compute_sigma_align_grad=self.compute_sigma_align_grad,
+                    irrep_dims=self.irrep_dims,
+                    cached_block_exp_pairs=_cached_bep,
+                    exact_diagonal_transport=self.exact_diagonal_transport,
+                )
+
+            if return_beta_history:
+                beta_history_entry = beta_current.detach().clone()
+
+        # Add FRESH observation gradient (recomputed from current beliefs)
+        # Use .detach() on mu_current to avoid second-order gradients through the
+        # observation gradient computation. Gradients still flow through VFE dynamics
+        # (the natural gradient update), just not through how the obs grad was computed.
+        # This is more stable than full gradient flow while still allowing embeddings
+        # to learn from VFE dynamics via the mu_current → mu_new update chain.
+        if has_observations:
+            logits = torch.matmul(mu_current.detach(), W_out.T)
+            probs = F.softmax(logits, dim=-1)
+            targets_valid = targets.clone()
+            targets_valid[targets == -1] = 0
+            one_hot = F.one_hot(targets_valid, num_classes=W_out.shape[0]).float()
+            mask_obs = (targets != -1).unsqueeze(-1).float()
+            one_hot = one_hot * mask_obs
+            grad_error = (probs - one_hot) * mask_obs
+            discrete_obs_grad = torch.matmul(grad_error, W_out)
+            # Scale observation gradient by obs_weight (for warmup ramp)
+            _obs_weight = getattr(self, '_obs_weight', 1.0)
+            if _obs_weight < 1.0:
+                discrete_obs_grad = discrete_obs_grad * _obs_weight
+            # Debug: observation mu gradient
+            if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
+                _vfe_utils_mod._VFE_GRAD_DEBUG['obs_mu_grad'] = _grad_norm(discrete_obs_grad)
+
+            grad_mu = grad_mu + discrete_obs_grad
+
+            # Observation gradient for sigma (exact via Stein's lemma):
+            #
+            #   ∂/∂σ_k E_q[CE(z)] = (1/2) · E_q[∂²CE/∂z_k²]
+            #
+            # This is EXACT for any smooth loss, not a Taylor approximation.
+            # For CE with softmax: ∂²CE/∂z_k² = Var_p[W[:,k]] ≥ 0.
+            # We approximate E_q[H_kk(z)] ≈ H_kk(μ) (zeroth-order in σ).
+            if self.obs_sigma_gradient:
+                W_out_sq = W_out ** 2                                # (V, K)
+                EW2 = torch.matmul(probs, W_out_sq)                  # (B, N, K)
+                EW  = torch.matmul(probs, W_out)                     # (B, N, K)
+                hessian_diag = EW2 - EW ** 2                         # (B, N, K)
+                # Clamp: FP rounding can violate Var ≥ 0
+                _neg_mask = hessian_diag < 0
+                if _neg_mask.any():
+                    _nr("obs_sigma_hessian_neg_clamp", count=int(_neg_mask.sum().item()))
+                    hessian_diag = hessian_diag.clamp(min=0.0)
+                _sigma_obs_scale = (0.5 * self.obs_sigma_weight) * _obs_weight
+                # Cap observation sigma gradient to prevent systematic upward bias
+                # from dominating. Var_p[W[:,k]] >= 0 always, so this term only
+                # pushes sigma upward; cap prevents runaway growth.
+                obs_sigma_grad = (_sigma_obs_scale * hessian_diag * mask_obs).clamp(max=10.0)
+                # Debug: observation sigma gradient (before diag_embed)
+                if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
+                    _vfe_utils_mod._VFE_GRAD_DEBUG['obs_sigma_grad'] = _grad_norm(obs_sigma_grad)
+                # For full covariance, obs gradient is diagonal-only: embed on diagonal
+                # to avoid broadcasting (B, N, K) into every row of (B, N, K, K).
+                if not is_diagonal:
+                    obs_sigma_grad = torch.diag_embed(obs_sigma_grad)
+                grad_sigma = grad_sigma + obs_sigma_grad
+
+        # Debug: Euclidean totals (after obs, before clip)
+        if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
+            _vfe_utils_mod._VFE_GRAD_DEBUG['euclidean_mu_total'] = _grad_norm(grad_mu)
+            _vfe_utils_mod._VFE_GRAD_DEBUG['euclidean_sigma_total'] = _grad_norm(grad_sigma)
+            _ps = _per_pos_stats(grad_mu)
+            _vfe_utils_mod._VFE_GRAD_DEBUG['euclidean_mu_pos_mean'] = _ps[0]
+            _vfe_utils_mod._VFE_GRAD_DEBUG['euclidean_mu_pos_max'] = _ps[1]
+            _ps = _per_pos_stats(grad_sigma)
+            _vfe_utils_mod._VFE_GRAD_DEBUG['euclidean_sigma_pos_mean'] = _ps[0]
+            _vfe_utils_mod._VFE_GRAD_DEBUG['euclidean_sigma_pos_max'] = _ps[1]
+
+        # Clip for stability
+        grad_mu = torch.clamp(grad_mu, min=-1e3, max=1e3)
+        grad_sigma = torch.clamp(grad_sigma, min=-1e3, max=1e3)
+
+        # =================================================================
+        # Isotropic gradient projection: average grad_sigma across dims
+        # =================================================================
+        # When isotropic, all dims share one scalar σ². Average the per-dim
+        # gradients so the natural gradient and retraction operate on the
+        # consensus direction, rather than K independent updates collapsed
+        # after the fact. This is the correct constrained gradient:
+        #   ∂F/∂(σ²) = (1/K) Σ_k ∂F/∂σ_k²
+        if self.isotropic_covariance:
+            if is_diagonal:
+                grad_sigma = grad_sigma.mean(dim=-1, keepdim=True).expand_as(grad_sigma)
+            else:
+                diag_grad = torch.diagonal(grad_sigma, dim1=-2, dim2=-1)
+                avg_grad = diag_grad.mean(dim=-1, keepdim=True)
+                K = grad_sigma.shape[-1]
+                grad_sigma = avg_grad.unsqueeze(-1) * torch.eye(
+                    K, device=grad_sigma.device, dtype=grad_sigma.dtype
+                )
+
+        # =================================================================
+        # STEP 3: Natural gradient projection
+        # =================================================================
+        nat_grad_mu, nat_grad_sigma = compute_natural_gradient_gpu(
+            grad_mu, grad_sigma, sigma_current, eps=eps,
+
+        )
+
+        # Clamp natural gradient norm to prevent oscillatory divergence
+        # in deeper layers where Sigma eigenvalues amplify gradients
+        nat_grad_mu_norm = torch.linalg.norm(nat_grad_mu, dim=-1, keepdim=True)
+        _raw_nat_grad_norm = nat_grad_mu.detach().norm().item()  # pre-clamp for diagnostics
+        max_nat_grad_norm = 500.0
+        nat_grad_scale = torch.clamp(
+            max_nat_grad_norm / (nat_grad_mu_norm + eps), max=1.0
+        )
+        nat_grad_mu = nat_grad_mu * nat_grad_scale
+
+        # Clamp nat_grad_sigma norm (analogous to nat_grad_mu clipping above).
+        # The natural gradient nat_grad_sigma = 2σ²·grad_sigma squares the
+        # covariance, amplifying gradients when sigma is large. Without clipping,
+        # the backward pass sees unclipped gradient magnitudes even though the
+        # forward retraction trust region clips the whitened step.
+        if is_diagonal:
+            nat_grad_sigma_norm = torch.linalg.norm(nat_grad_sigma, dim=-1, keepdim=True)
+        else:
+            nat_grad_sigma_norm = torch.linalg.norm(
+                nat_grad_sigma.flatten(-2), dim=-1, keepdim=True
+            ).unsqueeze(-1)
+        _raw_nat_grad_sigma_norm = nat_grad_sigma.detach().norm().item()
+        max_nat_grad_sigma_norm = 500.0
+        nat_grad_sigma_scale = torch.clamp(
+            max_nat_grad_sigma_norm / (nat_grad_sigma_norm + eps), max=1.0
+        )
+        nat_grad_sigma = nat_grad_sigma * nat_grad_sigma_scale
+
+        # Store E-step gradient norms (overwritten each iteration; final = last iter)
+        self._e_step_grad_norms['nat_grad_mu'] = _raw_nat_grad_norm
+        self._e_step_grad_norms['nat_grad_sigma'] = _raw_nat_grad_sigma_norm
+        self._e_step_grad_norms['nat_grad_mu_clipped'] = nat_grad_mu.detach().norm().item()
+        self._e_step_grad_norms['nat_grad_sigma_clipped'] = nat_grad_sigma.detach().norm().item()
+        # Per-position clip fraction for the 500-norm cap
+        self._e_step_grad_norms['mu_cap_frac'] = (
+            nat_grad_mu_norm.squeeze(-1) >= max_nat_grad_norm * 0.99
+        ).float().mean().item()
+        if is_diagonal:
+            self._e_step_grad_norms['sigma_cap_frac'] = (
+                nat_grad_sigma_norm.squeeze(-1) >= max_nat_grad_sigma_norm * 0.99
+            ).float().mean().item()
+        else:
+            self._e_step_grad_norms['sigma_cap_frac'] = (
+                nat_grad_sigma_norm.squeeze(-1).squeeze(-1) >= max_nat_grad_sigma_norm * 0.99
+            ).float().mean().item()
+
+        # =================================================================
+        # DEBUG: Print per-component gradient breakdown
+        # =================================================================
+        if _vfe_utils_mod._VFE_GRAD_DEBUG is not None and self._debug_vfe_gradients:
+            d = _vfe_utils_mod._VFE_GRAD_DEBUG
+
+            # Detect multihead mode: keys have 'headN(d=M)/' prefix
+            _is_multihead = any('/' in k for k in d)
+
+            # Euclidean totals computed on the full (already assembled) grad tensors
+            _eu_mu = _grad_norm(grad_mu)
+            _eu_sig = _grad_norm(grad_sigma)
+            _ps_mu = _per_pos_stats(grad_mu)
+            _ps_sig = _per_pos_stats(grad_sigma)
+
+            # Nat_grad amplification factors
+            _amp_mu = _raw_nat_grad_norm / max(_eu_mu, 1e-12)
+            _amp_sig = _raw_nat_grad_sigma_norm / max(_eu_sig, 1e-12)
+            # Fraction of positions hitting the 500 clip
+            _mu_clip_frac = (nat_grad_mu_norm.squeeze(-1) >= max_nat_grad_norm * 0.99).float().mean().item()
+            if is_diagonal:
+                _sig_clip_frac = (nat_grad_sigma_norm.squeeze(-1) >= max_nat_grad_sigma_norm * 0.99).float().mean().item()
+            else:
+                _sig_clip_frac = (nat_grad_sigma_norm.squeeze(-1).squeeze(-1) >= max_nat_grad_sigma_norm * 0.99).float().mean().item()
+
+            print(f"\n{'='*80}")
+            print(f"  [VFE GRAD DEBUG] iter {iteration}/{self.n_iterations}"
+                  f"  diag={is_diagonal}  K={mu_current.shape[-1]}"
+                  f"  B×N={mu_current.shape[0]}×{mu_current.shape[1]}"
+                  f"  multihead={_is_multihead}")
+            print(f"{'='*80}")
+
+            if _is_multihead:
+                # Extract unique head prefixes
+                _heads = sorted(set(k.split('/')[0] for k in d if '/' in k),
+                                key=lambda x: int(x.split('head')[1].split('(')[0]))
+                print(f"  --- Per-head breakdown ({len(_heads)} heads) ---")
+                print(f"  {'Head':<16} {'σ_self':>8} {'σ_align':>8} {'σ_smx':>8}"
+                      f" {'μ_self':>8} {'μ_dir':>8} {'μ_smx':>8}"
+                      f" {'KL_avg':>8} {'KL_max':>8} {'σ_p_min':>8} {'σ_q_max':>8}")
+                print(f"  {'─'*16} {'─'*8} {'─'*8} {'─'*8}"
+                      f" {'─'*8} {'─'*8} {'─'*8}"
+                      f" {'─'*8} {'─'*8} {'─'*8} {'─'*8}")
+                for hp in _heads:
+                    def _hget(key, default=0):
+                        return d.get(f'{hp}/{key}', default)
+                    print(f"  {hp:<16}"
+                          f" {_hget('grad_sigma_self'):>8.1f}"
+                          f" {_hget('grad_sigma_align_direct'):>8.1f}"
+                          f" {_hget('grad_sigma_softmax'):>8.1f}"
+                          f" {_hget('grad_mu_self'):>8.1f}"
+                          f" {_hget('grad_mu_direct'):>8.1f}"
+                          f" {_hget('grad_mu_softmax'):>8.1f}"
+                          f" {_hget('kl_pairwise_mean'):>8.2f}"
+                          f" {_hget('kl_pairwise_max'):>8.1f}"
+                          f" {_hget('sigma_p_min'):>8.4f}"
+                          f" {_hget('sigma_q_eig_max'):>8.4f}")
+            else:
+                # Single-β mode
+                print(f"  --- Covariance state ---")
+                print(f"  σ_p  range:  [{d.get('sigma_p_min', 0):.4f}, {d.get('sigma_p_max', 0):.4f}]"
+                      f"  →  1/σ_p range: [{1/max(d.get('sigma_p_max', 1), 1e-12):.2f},"
+                      f" {1/max(d.get('sigma_p_min', 1e-12), 1e-12):.2f}]")
+                print(f"  σ_q  eig range: [{d.get('sigma_q_eig_min', 0):.4f}, {d.get('sigma_q_eig_max', 0):.4f}]")
+                print()
+                print(f"  --- Euclidean gradient components (global norms) ---")
+                print(f"  {'Component':<30} {'μ':>12} {'σ':>12} {'σ pos_mean':>12} {'σ pos_max':>12}")
+                print(f"  {'─'*30} {'─'*12} {'─'*12} {'─'*12} {'─'*12}")
+                print(f"  {'self-coupling (α·∂KL/∂θ)':<30}"
+                      f" {d.get('grad_mu_self', 0):>12.1f}"
+                      f" {d.get('grad_sigma_self', 0):>12.1f}"
+                      f" {d.get('grad_sigma_self_pos_mean', 0):>12.2f}"
+                      f" {d.get('grad_sigma_self_pos_max', 0):>12.2f}")
+                print(f"  {'align direct (λ·β·∂KL/∂θ)':<30}"
+                      f" {d.get('grad_mu_direct', 0):>12.1f}"
+                      f" {d.get('grad_sigma_align_direct', 0):>12.1f}"
+                      f" {d.get('grad_sigma_align_pos_mean', 0):>12.2f}"
+                      f" {d.get('grad_sigma_align_pos_max', 0):>12.2f}")
+                print(f"  {'softmax (KL·∂β/∂θ)':<30}"
+                      f" {d.get('grad_mu_softmax', 0):>12.1f}"
+                      f" {d.get('grad_sigma_softmax', 0):>12.1f}"
+                      f" {d.get('grad_sigma_softmax_pos_mean', 0):>12.2f}"
+                      f" {d.get('grad_sigma_softmax_pos_max', 0):>12.2f}")
+
+            # Observation (shared between multihead and single-β, computed on full tensor)
+            if 'obs_mu_grad' in d:
+                print(f"  {'observation (CE)':<30}"
+                      f" {d.get('obs_mu_grad', 0):>12.1f}"
+                      f" {d.get('obs_sigma_grad', 0):>12.1f}")
+
+            print()
+            print(f"  --- Euclidean total (assembled, after obs) ---")
+            print(f"  grad_mu:    {_eu_mu:>10.1f}  (pos mean: {_ps_mu[0]:.2f}, max: {_ps_mu[1]:.2f})")
+            print(f"  grad_sigma: {_eu_sig:>10.1f}  (pos mean: {_ps_sig[0]:.2f}, max: {_ps_sig[1]:.2f})")
+            print()
+            print(f"  --- Natural gradient (Fisher projection) ---")
+            print(f"  nat_grad_mu:    {_raw_nat_grad_norm:>10.1f}  (amplification: {_amp_mu:.2f}x)"
+                  f"  clip: {self._e_step_grad_norms['nat_grad_mu_clipped']:.1f}"
+                  f"  ({_mu_clip_frac*100:.0f}% positions at cap)")
+            print(f"  nat_grad_sigma: {_raw_nat_grad_sigma_norm:>10.1f}  (amplification: {_amp_sig:.2f}x)"
+                  f"  clip: {self._e_step_grad_norms['nat_grad_sigma_clipped']:.1f}"
+                  f"  ({_sig_clip_frac*100:.0f}% positions at cap)")
+            print(f"{'='*80}\n")
+            # Store before resetting (debug mode may coexist with metrics collection)
+            if self._collect_vfe_metrics:
+                _aggregate_multihead_vfe_debug(_vfe_utils_mod._VFE_GRAD_DEBUG, self.irrep_dims)
+                self.last_vfe_debug = dict(_vfe_utils_mod._VFE_GRAD_DEBUG)
+            _vfe_utils_mod._VFE_GRAD_DEBUG = None  # Reset for next iteration
+
+        # Store lightweight copy for external consumption (no printing overhead)
+        elif self._collect_vfe_metrics and _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
+            _aggregate_multihead_vfe_debug(_vfe_utils_mod._VFE_GRAD_DEBUG, self.irrep_dims)
+            self.last_vfe_debug = dict(_vfe_utils_mod._VFE_GRAD_DEBUG)
+            _vfe_utils_mod._VFE_GRAD_DEBUG = None
+
+        # =================================================================
+        # STEP 4: Update beliefs (E-step) with WHITENED trust region
+        # =================================================================
+        # The natural gradient nat_grad_mu = Σ @ grad scales with σ
+        # Use whitened trust region: ||δμ / √σ|| instead of raw norm
+        delta_mu = -effective_lr * nat_grad_mu
+
+        # Whitened trust region for mu (float32 for sqrt/division stability under AMP)
+        if is_diagonal:
+            sigma_sqrt = torch.sqrt(sigma_current.float().clamp(min=eps)).to(sigma_current.dtype)
+            whitened_delta = delta_mu / sigma_sqrt
+        else:
+            # Use .clone() after diagonal to avoid view-related gradient issues
+            sigma_diag = torch.diagonal(sigma_current, dim1=-2, dim2=-1).clone().float().clamp(min=eps)
+            whitened_delta = delta_mu / torch.sqrt(sigma_diag).to(delta_mu.dtype)
+
+        whitened_norm = torch.linalg.norm(whitened_delta, dim=-1, keepdim=True)
+        mu_trust_region = 2.0  # Trust region on whitened norm
+        scale = torch.clamp(mu_trust_region / (whitened_norm + eps), max=1.0)
+        mu_current = mu_current + scale * delta_mu
+
+        # Track trust region clip fraction
+        self._e_step_grad_norms['mu_trust_frac'] = (
+            scale.squeeze(-1) < 0.99
+        ).float().mean().item()
+        self._e_step_grad_norms['whitened_mu_mean'] = whitened_norm.mean().item()
+        self._e_step_grad_norms['whitened_mu_max'] = whitened_norm.max().item()
+
+        if self.update_sigma:
+            # SPD-preserving retraction: sigma_new = sigma * exp(step * clip(delta/sigma, -trust, trust))
+            # step_size=1.0 so trust_region alone controls max relative change.
+            # nat_grad_sigma = 2σ²·grad → whitened = -2σ·grad, clipped by trust.
+            # With effective_lr≈0.1: max_exp = 0.001 → ~0.1% per iter, ~1% over 10 iters.
+            # Calibrated between frozen (pre-#768: 0.025%/iter) and overcorrected (0.5%/iter).
+            sigma_trust_base = self._get_sigma_trust(effective_lr)
+            sigma_trust_diag = sigma_trust_base
+            sigma_trust_full = sigma_trust_base * 0.5  # Full cov more sensitive
+            if is_diagonal:
+                sigma_current = retract_spd_diagonal_torch(
+                    sigma_diag=sigma_current,
+                    delta_sigma=-nat_grad_sigma,
+                    step_size=1.0,
+                    trust_region=sigma_trust_diag,
+                    eps=eps,
+                    sigma_max=self.sigma_max,
+                )
+            else:
+                sigma_current = retract_spd_torch(
+                    Sigma=sigma_current,
+                    delta_Sigma=-nat_grad_sigma,
+                    step_size=1.0,
+                    trust_region=sigma_trust_full,
+                    eps=eps,
+                    sigma_max=self.sigma_max,
+                )
+
+        # =============================================================
+        # STEP 4b2: Sigma condition clamping
+        # =============================================================
+        # Prevent sigma anisotropy from growing unbounded. When
+        # sigma_max / sigma_min > max_condition, clamp outlier
+        # dimensions toward the geometric mean. This keeps the
+        # natural gradient well-conditioned without forcing full
+        # isotropy.
+        if self.update_sigma:
+            max_condition = 10.0
+            if is_diagonal:
+                # sigma_current: (B, N, K)
+                s_min = sigma_current.min(dim=-1, keepdim=True).values.clamp(min=eps)
+                s_max = sigma_current.max(dim=-1, keepdim=True).values
+                condition = s_max / s_min  # (B, N, 1)
+                needs_clamp = condition > max_condition
+                if needs_clamp.any():
+                    # Geometric mean preserves det(Sigma) = product of eigenvalues
+                    geo_mean = sigma_current.log().mean(dim=-1, keepdim=True).exp()
+                    lower = geo_mean / (max_condition ** 0.5)
+                    upper = geo_mean * (max_condition ** 0.5)
+                    sigma_clamped = sigma_current.clamp(min=lower, max=upper)
+                    sigma_current = torch.where(
+                        needs_clamp.expand_as(sigma_current),
+                        sigma_clamped,
+                        sigma_current,
+                    )
+            else:
+                # Full covariance: clamp eigenvalue ratio
+                try:
+                    eigvals = torch.linalg.eigvalsh(sigma_current)  # (B, N, K)
+                except (RuntimeError, torch.linalg.LinAlgError):
+                    eigvals = None
+                if eigvals is not None:
+                    e_min = eigvals[..., 0:1].clamp(min=eps)
+                    e_max = eigvals[..., -1:]
+                    condition = e_max / e_min
+                    if (condition > max_condition).any():
+                        geo_mean = eigvals.log().mean(dim=-1, keepdim=True).exp()
+                        lower = geo_mean / (max_condition ** 0.5)
+                        # Regularize toward isotropic: Sigma → Sigma + ridge * I
+                        ridge = (lower - e_min).clamp(min=0.0).mean(dim=-1, keepdim=True)
+                        K = sigma_current.shape[-1]
+                        sigma_current = sigma_current + ridge.unsqueeze(-1) * torch.eye(
+                            K, device=sigma_current.device, dtype=sigma_current.dtype
+                        )
+
+        # =============================================================
+        # STEP 4c: Isotropic covariance enforcement (Limit 1)
+        # =============================================================
+        # After sigma update, collapse per-dimension variances to scalar σ²I.
+        # This maintains the isotropic constraint through VFE dynamics.
+        if self.update_sigma and self.isotropic_covariance:
+            if is_diagonal:
+                # sigma_current: (B, N, K) → average across K, expand back
+                scalar_var = sigma_current.mean(dim=-1, keepdim=True)
+                sigma_current = scalar_var.expand_as(sigma_current)
+            else:
+                # sigma_current: (B, N, K, K) → extract diag, average, rebuild σ²I
+                diag_vals = torch.diagonal(sigma_current, dim1=-2, dim2=-1)
+                scalar_var = diag_vals.mean(dim=-1, keepdim=True)  # (B, N, 1)
+                K = sigma_current.shape[-1]
+                sigma_current = scalar_var.unsqueeze(-1) * torch.eye(
+                    K, device=sigma_current.device, dtype=sigma_current.dtype
+                )
+
+        # =============================================================
+        # DIAGNOSTIC: Per-iteration convergence data
+        # =============================================================
+        if self._collect_iteration_diagnostics:
+            # Sigma condition number for diagnostics
+            if is_diagonal:
+                _s_det = sigma_current.detach()
+                _s_cond = (_s_det.max(dim=-1).values / _s_det.min(dim=-1).values.clamp(min=eps)).mean().item()
+            else:
+                _s_diag_det = torch.diagonal(sigma_current.detach(), dim1=-2, dim2=-1)
+                _s_cond = (_s_diag_det.max(dim=-1).values / _s_diag_det.min(dim=-1).values.clamp(min=eps)).mean().item()
+            _diag = {
+                'iteration': iteration,
+                'grad_mu_norm': grad_mu.detach().norm().item(),
+                'grad_sigma_norm': grad_sigma.detach().norm().item(),
+                'nat_grad_mu_norm': nat_grad_mu.detach().norm().item(),
+                'nat_grad_mu_raw_norm': _raw_nat_grad_norm,
+                'nat_grad_sigma_norm': nat_grad_sigma.detach().norm().item(),
+                'nat_grad_sigma_raw_norm': _raw_nat_grad_sigma_norm,
+                'nat_grad_sigma_max': nat_grad_sigma.detach().abs().max().item(),
+                'delta_mu_norm': delta_mu.detach().norm().item(),
+                'mu_norm': mu_current.detach().norm().item(),
+                'sigma_mean': sigma_current.detach().mean().item(),
+                'sigma_max': sigma_current.detach().max().item(),
+                'sigma_min': sigma_current.detach().min().item(),
+                'sigma_std': sigma_current.detach().std().item(),
+                'sigma_condition': _s_cond,
+                'effective_lr': effective_lr.detach().item() if isinstance(effective_lr, torch.Tensor) else float(effective_lr),
+                'scale_mean': scale.detach().mean().item(),
+            }
+            if mu_p_current is not None:
+                _diag['mu_diff_to_prior_norm'] = (mu_current - mu_p_current).detach().norm().item()
+            # Beta entropy from last computed beta
+            try:
+                if self.multihead_vfe and beta_heads:
+                    _b_diag = beta_heads[-1].detach().clamp(min=1e-10)
+                elif 'beta_current' in locals() and beta_current is not None:
+                    _b_diag = beta_current.detach().clamp(min=1e-10)
+                else:
+                    _b_diag = None
+                if _b_diag is not None:
+                    _diag['beta_entropy'] = -(_b_diag * _b_diag.log()).sum(dim=-1).mean().item()
+            except Exception:
+                pass
+            # Relative belief change from previous iteration
+            if iteration == 0:
+                self._diag_prev_mu = mu_current.detach().clone()
+            else:
+                _diag['mu_change_rel'] = (
+                    (mu_current - self._diag_prev_mu).detach().norm().item()
+                    / (mu_current.detach().norm().item() + 1e-8)
+                )
+                self._diag_prev_mu = mu_current.detach().clone()
+            self._iteration_diagnostics.append(_diag)
+
+        # =============================================================
+        # STEP 4b: Optional Gauge Frame Evolution DURING E-step
+        # =============================================================
+        _skip_phi_update = self.gauge_mode in ('trivial', 'constant')
+        _use_omega = omega_current is not None and getattr(self, 'gauge_param', 'phi') == 'omega'
+
+        if (self.update_phi_per_iteration and torch.is_grad_enabled()
+                and not _skip_phi_update):
+
+            if _use_omega:
+                # Direct Omega path: no matrix_exp, no dexp series
+                grad_omega = self._compute_omega_grad_direct(
+                    omega_current, mu_current, sigma_current,
+                    is_diagonal, mask, eps,
+                )
+                if grad_omega is not None:
+                    self._e_step_grad_norms['grad_phi'] = grad_omega.detach().norm().item()
+                    omega_current = self._retract_omega(
+                        omega_current, grad_omega, self.phi_lr,
+                        trust_region=getattr(self, 'omega_trust_region', 0.3),
+                    )
+            else:
+                # Phi path (existing): matrix_exp + dexp series
+                _phi_bep = _mh_cached_bep if self.multihead_vfe else _cached_bep
+                grad_phi = self._compute_phi_grad(
+                    phi_current, mu_current, sigma_current,
+                    is_diagonal, mask, eps,
+                    cached_block_exp_pairs=_phi_bep,
+                )
+                if grad_phi is not None:
+                    self._e_step_grad_norms['grad_phi'] = grad_phi.detach().norm().item()
+                    phi_current = _retract_phi(
+                        phi=phi_current,
+                        delta_phi=-grad_phi,
+                        generators=self.generators,
+                        step_size=self.phi_lr,
+                        max_norm=self.phi_max_norm,
+                    )
+
+        return (mu_current, sigma_current, phi_current, omega_current,
+                beta_current, beta_heads, alpha_effective, beta_history_entry)
+
     def forward(
         self,
         mu: torch.Tensor,          # (B, N, K) - current beliefs
@@ -2421,763 +3221,29 @@ class VariationalFFNDynamic(nn.Module):
         # Skip when closed_form_e_step handled the E-step above.
         _n_iters = 0 if self.closed_form_e_step else self.n_iterations
         for iteration in range(_n_iters):
-            # Cosine decay: lr drops from 1.0 to 0.1 across iterations
-            # Steeper than linear 0.5 decay — stabilizes later iterations where
-            # natural gradients can amplify and cause oscillatory divergence
-            if self.n_iterations > 1:
-                progress = iteration / (self.n_iterations - 1)  # 0→1
-                decay_factor = 0.1 + 0.9 * 0.5 * (1.0 + math.cos(math.pi * progress))
-            else:
-                decay_factor = 1.0
-            effective_lr = self.lr * decay_factor
-
-            # =================================================================
-            # STEP 0: Precompute transport operators ONCE per iteration
-            # =================================================================
-            # Both compute_attention_weights and compute_vfe_gradients_gpu need
-            # the same Ω_ij = exp(φ_i)·exp(-φ_j). Computing once and passing
-            # cached_transport avoids redundant matrix exponentials.
-            # Skip caching when using block-diagonal or chunked paths (they
-            # compute transport internally in chunks to save memory).
-            if self.irrep_dims is None and not self.multihead_vfe:
-                if omega_current is not None and self.gauge_param == 'omega':
-                    # Direct omega: build full-K transport from omega blocks
-                    from transformer.core.transport_ops import compute_transport_operators_direct
-                    cached_transport = compute_transport_operators_direct(
-                        omega=omega_current,
-                        irrep_dims=self.irrep_dims if self.irrep_dims is not None else [self.embed_dim],
-                    )
-                elif self.gauge_mode == 'constant' and self.constant_omega is not None:
-                    # Constant gauge with known Ω: build full-K transport from
-                    # per-head constant_omega blocks (non-block-diagonal path).
-                    K = mu_current.shape[-1]
-                    omega_full = torch.eye(K, device=mu_current.device, dtype=mu_current.dtype)
-                    _blk_start = 0
-                    for h_idx in range(len(self.constant_omega)):
-                        omega_h = self.constant_omega[h_idx].to(
-                            device=mu_current.device, dtype=mu_current.dtype)
-                        d_h = omega_h.shape[0]
-                        if getattr(self, 'enforce_orthogonal', False) and d_h >= 2:
-                            omega_h = newton_schulz_orthogonalize(
-                                omega_h.unsqueeze(0)).squeeze(0)
-                        omega_full[_blk_start:_blk_start+d_h, _blk_start:_blk_start+d_h] = omega_h
-                        _blk_start += d_h
-                    Omega = omega_full.unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(
-                        B, N, N, -1, -1).contiguous()
-                    cached_transport = {'Omega': Omega}
-                else:
-                    cached_transport = compute_transport_operators(
-                        phi=phi_current,
-                        generators=self.generators,
-                        enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                        gauge_mode=self.gauge_mode,
-                    )
-            else:
-                cached_transport = None
-
-            # =================================================================
-            # Determine alpha: Bayesian precision or fixed scalar
-            # Recompute per-iteration for learnable alpha (state-dependent);
-            # for fixed alpha, alpha_effective was set before the loop.
-            # =================================================================
-            if self.learnable_alpha:
-                alpha_effective = self.get_bayesian_alpha(
-                    mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
-                )  # (B, N, K) - per-dim gauge-invariant, state-dependent
-
-            # Initialize cached block exp pairs for phi gradient reuse
-            _mh_cached_bep = None
-            _cached_bep = None
-
-            # Enable/disable VFE gradient debug dict for this iteration
-            global _VFE_GRAD_DEBUG
-            if self._debug_vfe_gradients or self._collect_vfe_metrics:
-                _VFE_GRAD_DEBUG = {}
-            else:
-                _VFE_GRAD_DEBUG = None
-
-            if self.multihead_vfe:
-                # =============================================================
-                # MULTI-HEAD VFE: Per-block β_h through iterations
-                # =============================================================
-                # Each irrep block gets its own attention pattern.
-                # This maintains head diversity through all VFE iterations,
-                # enabling different heads to cluster at different scales.
-                grad_mu = torch.zeros_like(mu_current)
-                grad_sigma = torch.zeros_like(sigma_current)
-                beta_heads = []  # For history tracking
-
-                # Precompute block_exp_pairs ONCE for all heads.
-                _mh_cached_bep = self._build_block_exp_pairs(
-                    phi_current, omega_current, B, N,
-                    mu_current.device, mu_current.dtype,
-                )
-
-                # =============================================================
-                # FUSED MULTI-HEAD VFE: Compute β_h and gradients in single
-                # Omega pass per head (eliminates redundant Omega construction).
-                # Previously: compute_attention_weights + compute_vfe_gradients_gpu
-                # built Omega separately → 2× Omega per head. Now: 1× per head.
-                # =============================================================
-                _use_fused_mh = (is_diagonal and self.irrep_dims is not None
-                                 and not self.exact_diagonal_transport)
-                block_start = 0
-                for h, d_h in enumerate(self.irrep_dims):
-                    block_end = block_start + d_h
-
-                    mu_h = mu_current[:, :, block_start:block_end]
-                    if _detach_e_step:
-                        mu_h = mu_h.detach()
-                    mu_h = mu_h.contiguous()
-                    mu_p_h = mu_p_current[:, :, block_start:block_end].contiguous()
-                    if is_diagonal:
-                        sigma_h = sigma_current[:, :, block_start:block_end]
-                        if _detach_e_step:
-                            sigma_h = sigma_h.detach()
-                        sigma_h = sigma_h.contiguous()
-                        sigma_p_h = sigma_p[:, :, block_start:block_end].contiguous()
-                    else:
-                        sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end]
-                        if _detach_e_step:
-                            sigma_h = sigma_h.detach()
-                        sigma_h = sigma_h.contiguous()
-                        sigma_p_h = sigma_p[:, :, block_start:block_end, block_start:block_end].contiguous()
-                    gen_h = self.generators[:, block_start:block_end, block_start:block_end]
-
-                    # Scale kappa by sqrt(d_h) to normalize KL across different-dim
-                    # super-blocks. Without this, larger blocks (e.g., 12-dim from
-                    # cross-coupled heads) produce proportionally larger KL values,
-                    # causing attention sharpness imbalance vs smaller blocks.
-                    kappa_h = self._get_kappa_h(h, d_h)
-                    _head_bep = [_mh_cached_bep[h]] if _mh_cached_bep is not None else None
-
-                    alpha_h = alpha_effective[:, :, block_start:block_end] if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3 else alpha_effective
-                    c0_h = _alpha_c0[block_start:block_end] if _alpha_c0 is not None else None
-
-                    if _use_fused_mh:
-                        # FUSED: single pass computes β_h AND gradients (1× Omega)
-                        beta_h, grad_mu_h, grad_sigma_h, _ = _fused_attention_and_vfe_gradients_block_diag(
-                            mu_q=mu_h, sigma_q=sigma_h,
-                            mu_p=mu_p_h, sigma_p=sigma_p_h,
-                            phi=phi_current, generators=gen_h,
-                            alpha=alpha_h, lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax,
-                            kappa=kappa_h, eps=eps,
-                            irrep_dims=[d_h],
-                            compute_sigma_align_grad=self.compute_sigma_align_grad,
-                            enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                            alpha_c0=c0_h,
-                            cached_block_exp_pairs=_head_bep,
-                            mask=mask,
-                            mask_self_attention=self.mask_self_attention,
-                            use_rope=self._use_rope_vfe,
-                            rope_base=self._rope_base_vfe,
-                        )
-                    else:
-                        # Fallback: separate attention + gradient (full covariance)
-                        beta_h = compute_attention_weights(
-                            mu_q=mu_h, sigma_q=sigma_h,
-                            phi=phi_current, generators=gen_h,
-                            kappa=kappa_h, epsilon=eps, mask=mask,
-                            return_kl=False,
-                            diagonal_covariance=is_diagonal,
-                            irrep_dims=[d_h],
-                            mask_self_attention=self.mask_self_attention,
-                            gauge_mode=self.gauge_mode,
-                            cached_block_exp_pairs=_head_bep,
-                            use_rope=self._use_rope_vfe,
-                            rope_base=self._rope_base_vfe,
-                            exact_diagonal_transport=self.exact_diagonal_transport,
-                        )
-                        grad_mu_h, grad_sigma_h = compute_vfe_gradients_gpu(
-                            mu_q=mu_h, sigma_q=sigma_h,
-                            mu_p=mu_p_h, sigma_p=sigma_p_h,
-                            beta=beta_h, phi=phi_current, generators=gen_h,
-                            alpha=alpha_h, lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax,
-                            kappa=kappa_h, eps=eps, alpha_c0=c0_h,
-                            compute_sigma_align_grad=self.compute_sigma_align_grad,
-                            irrep_dims=[d_h],
-                            cached_block_exp_pairs=_head_bep,
-                            exact_diagonal_transport=self.exact_diagonal_transport,
-                        )
-
-                    beta_heads.append(beta_h)
-                    grad_mu[:, :, block_start:block_end] = grad_mu_h
-                    if is_diagonal:
-                        grad_sigma[:, :, block_start:block_end] = grad_sigma_h
-                    else:
-                        # compute_vfe_gradients_gpu squeezes trailing singletons,
-                        # so d_h=1 heads return (B,N,1) instead of (B,N,1,1).
-                        # Restore full covariance shape for block assignment.
-                        if grad_sigma_h.dim() == 3 and d_h == 1:
-                            grad_sigma_h = grad_sigma_h.unsqueeze(-1)
-                        grad_sigma[:, :, block_start:block_end, block_start:block_end] = grad_sigma_h
-
-                    # Accumulate per-head debug norms (sum of squares for proper norm aggregation)
-                    if _VFE_GRAD_DEBUG is not None and _VFE_GRAD_DEBUG:
-                        _pfx = f'head{h}(d={d_h})'
-                        for _k, _v in list(_VFE_GRAD_DEBUG.items()):
-                            # Store per-head values with prefix, clear base keys
-                            _VFE_GRAD_DEBUG[f'{_pfx}/{_k}'] = _v
-                        # Reset base keys for next head
-                        for _k in [k for k in _VFE_GRAD_DEBUG if '/' not in k]:
-                            del _VFE_GRAD_DEBUG[_k]
-
-                    block_start = block_end
-
-                if return_beta_history:
-                    beta_stacked = torch.stack(beta_heads, dim=1)
-                    beta_history.append(beta_stacked.detach().clone())
-                beta_current = beta_heads[-1]
-
-            else:
-                # =============================================================
-                # SINGLE-β VFE: Original behavior (all blocks share one β)
-                # =============================================================
-                # SINGLE-β VFE: All blocks share one β
-                # Use fused path when possible (diagonal + block-diagonal)
-                # =============================================================
-                _cached_bep = self._build_block_exp_pairs(
-                    phi_current, omega_current, B, N,
-                    mu_current.device, mu_current.dtype,
-                )
-
-                # Use fused path for diagonal + block-diagonal
-                _use_fused_single = (is_diagonal and self.irrep_dims is not None
-                                     and not self.exact_diagonal_transport)
-
-                # Detach beliefs for gradient computation (consistent with multihead
-                # path at line 3667). Without this, analytical VFE gradients
-                # participate in autograd, giving the single-β path a different
-                # backward (I - lr*J) vs multihead's straight-through (I).
-                _mu_for_grad = mu_current.detach() if _detach_e_step else mu_current
-                _sigma_for_grad = sigma_current.detach() if _detach_e_step else sigma_current
-
-                if _use_fused_single:
-                    beta_current, grad_mu, grad_sigma, _ = _fused_attention_and_vfe_gradients_block_diag(
-                        mu_q=_mu_for_grad, sigma_q=_sigma_for_grad,
-                        mu_p=mu_p_current, sigma_p=sigma_p,
-                        phi=phi_current, generators=self.generators,
-                        alpha=alpha_effective, lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax,
-                        kappa=self.kappa, eps=eps,
-                        irrep_dims=self.irrep_dims,
-                        compute_sigma_align_grad=self.compute_sigma_align_grad,
-                        enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                        alpha_c0=_alpha_c0,
-                        cached_block_exp_pairs=_cached_bep,
-                        mask=mask,
-                        mask_self_attention=self.mask_self_attention,
-                        use_rope=self._use_rope_vfe,
-                        rope_base=self._rope_base_vfe,
-                    )
-                else:
-                    # Fallback: separate attention + gradient
-                    beta_current = compute_attention_weights(
-                        mu_q=_mu_for_grad, sigma_q=_sigma_for_grad,
-                        phi=phi_current, generators=self.generators,
-                        kappa=self.kappa, epsilon=eps, mask=mask,
-                        return_kl=False,
-                        diagonal_covariance=is_diagonal,
-                        cached_transport=cached_transport,
-                        irrep_dims=self.irrep_dims,
-                        mask_self_attention=self.mask_self_attention,
-                        gauge_mode=self.gauge_mode,
-                        cached_block_exp_pairs=_cached_bep,
-                        use_rope=self._use_rope_vfe,
-                        rope_base=self._rope_base_vfe,
-                        exact_diagonal_transport=self.exact_diagonal_transport,
-                    )
-                    grad_mu, grad_sigma = compute_vfe_gradients_gpu(
-                        mu_q=_mu_for_grad, sigma_q=_sigma_for_grad,
-                        mu_p=mu_p_current, sigma_p=sigma_p,
-                        beta=beta_current, phi=phi_current,
-                        generators=self.generators, alpha=alpha_effective,
-                        lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax, kappa=self.kappa,
-                        eps=eps, alpha_c0=_alpha_c0,
-                        cached_transport=cached_transport,
-                        compute_sigma_align_grad=self.compute_sigma_align_grad,
-                        irrep_dims=self.irrep_dims,
-                        cached_block_exp_pairs=_cached_bep,
-                        exact_diagonal_transport=self.exact_diagonal_transport,
-                    )
-
-                if return_beta_history:
-                    beta_history.append(beta_current.detach().clone())
-
-            # Add FRESH observation gradient (recomputed from current beliefs)
-            # Use .detach() on mu_current to avoid second-order gradients through the
-            # observation gradient computation. Gradients still flow through VFE dynamics
-            # (the natural gradient update), just not through how the obs grad was computed.
-            # This is more stable than full gradient flow while still allowing embeddings
-            # to learn from VFE dynamics via the mu_current → mu_new update chain.
-            if has_observations:
-                logits = torch.matmul(mu_current.detach(), W_out.T)
-                probs = F.softmax(logits, dim=-1)
-                targets_valid = targets.clone()
-                targets_valid[targets == -1] = 0
-                one_hot = F.one_hot(targets_valid, num_classes=W_out.shape[0]).float()
-                mask_obs = (targets != -1).unsqueeze(-1).float()
-                one_hot = one_hot * mask_obs
-                grad_error = (probs - one_hot) * mask_obs
-                discrete_obs_grad = torch.matmul(grad_error, W_out)
-                # Scale observation gradient by obs_weight (for warmup ramp)
-                _obs_weight = getattr(self, '_obs_weight', 1.0)
-                if _obs_weight < 1.0:
-                    discrete_obs_grad = discrete_obs_grad * _obs_weight
-                # Debug: observation mu gradient
-                if _VFE_GRAD_DEBUG is not None:
-                    _VFE_GRAD_DEBUG['obs_mu_grad'] = _grad_norm(discrete_obs_grad)
-
-                grad_mu = grad_mu + discrete_obs_grad
-
-                # Observation gradient for sigma (exact via Stein's lemma):
-                #
-                #   ∂/∂σ_k E_q[CE(z)] = (1/2) · E_q[∂²CE/∂z_k²]
-                #
-                # This is EXACT for any smooth loss, not a Taylor approximation.
-                # For CE with softmax: ∂²CE/∂z_k² = Var_p[W[:,k]] ≥ 0.
-                # We approximate E_q[H_kk(z)] ≈ H_kk(μ) (zeroth-order in σ).
-                if self.obs_sigma_gradient:
-                    W_out_sq = W_out ** 2                                # (V, K)
-                    EW2 = torch.matmul(probs, W_out_sq)                  # (B, N, K)
-                    EW  = torch.matmul(probs, W_out)                     # (B, N, K)
-                    hessian_diag = EW2 - EW ** 2                         # (B, N, K)
-                    # Clamp: FP rounding can violate Var ≥ 0
-                    _neg_mask = hessian_diag < 0
-                    if _neg_mask.any():
-                        _nr("obs_sigma_hessian_neg_clamp", count=int(_neg_mask.sum().item()))
-                        hessian_diag = hessian_diag.clamp(min=0.0)
-                    _sigma_obs_scale = (0.5 * self.obs_sigma_weight) * _obs_weight
-                    # Cap observation sigma gradient to prevent systematic upward bias
-                    # from dominating. Var_p[W[:,k]] >= 0 always, so this term only
-                    # pushes sigma upward; cap prevents runaway growth.
-                    obs_sigma_grad = (_sigma_obs_scale * hessian_diag * mask_obs).clamp(max=10.0)
-                    # Debug: observation sigma gradient (before diag_embed)
-                    if _VFE_GRAD_DEBUG is not None:
-                        _VFE_GRAD_DEBUG['obs_sigma_grad'] = _grad_norm(obs_sigma_grad)
-                    # For full covariance, obs gradient is diagonal-only: embed on diagonal
-                    # to avoid broadcasting (B, N, K) into every row of (B, N, K, K).
-                    if not is_diagonal:
-                        obs_sigma_grad = torch.diag_embed(obs_sigma_grad)
-                    grad_sigma = grad_sigma + obs_sigma_grad
-
-            # Debug: Euclidean totals (after obs, before clip)
-            if _VFE_GRAD_DEBUG is not None:
-                _VFE_GRAD_DEBUG['euclidean_mu_total'] = _grad_norm(grad_mu)
-                _VFE_GRAD_DEBUG['euclidean_sigma_total'] = _grad_norm(grad_sigma)
-                _ps = _per_pos_stats(grad_mu)
-                _VFE_GRAD_DEBUG['euclidean_mu_pos_mean'] = _ps[0]
-                _VFE_GRAD_DEBUG['euclidean_mu_pos_max'] = _ps[1]
-                _ps = _per_pos_stats(grad_sigma)
-                _VFE_GRAD_DEBUG['euclidean_sigma_pos_mean'] = _ps[0]
-                _VFE_GRAD_DEBUG['euclidean_sigma_pos_max'] = _ps[1]
-
-            # Clip for stability
-            grad_mu = torch.clamp(grad_mu, min=-1e3, max=1e3)
-            grad_sigma = torch.clamp(grad_sigma, min=-1e3, max=1e3)
-
-            # =================================================================
-            # Isotropic gradient projection: average grad_sigma across dims
-            # =================================================================
-            # When isotropic, all dims share one scalar σ². Average the per-dim
-            # gradients so the natural gradient and retraction operate on the
-            # consensus direction, rather than K independent updates collapsed
-            # after the fact. This is the correct constrained gradient:
-            #   ∂F/∂(σ²) = (1/K) Σ_k ∂F/∂σ_k²
-            if self.isotropic_covariance:
-                if is_diagonal:
-                    grad_sigma = grad_sigma.mean(dim=-1, keepdim=True).expand_as(grad_sigma)
-                else:
-                    diag_grad = torch.diagonal(grad_sigma, dim1=-2, dim2=-1)
-                    avg_grad = diag_grad.mean(dim=-1, keepdim=True)
-                    K = grad_sigma.shape[-1]
-                    grad_sigma = avg_grad.unsqueeze(-1) * torch.eye(
-                        K, device=grad_sigma.device, dtype=grad_sigma.dtype
-                    )
-
-            # =================================================================
-            # STEP 3: Natural gradient projection
-            # =================================================================
-            nat_grad_mu, nat_grad_sigma = compute_natural_gradient_gpu(
-                grad_mu, grad_sigma, sigma_current, eps=eps,
-
+            (mu_current, sigma_current, phi_current, omega_current,
+             beta_current, beta_heads, alpha_effective,
+             _iter_beta) = self._vfe_iteration(
+                iteration=iteration,
+                mu_current=mu_current,
+                sigma_current=sigma_current,
+                phi_current=phi_current,
+                omega_current=omega_current,
+                mu_p_current=mu_p_current,
+                sigma_p=sigma_p,
+                alpha_effective=alpha_effective,
+                _alpha_c0=_alpha_c0,
+                is_diagonal=is_diagonal,
+                B=B, N=N, eps=eps,
+                mask=mask,
+                has_observations=has_observations,
+                targets=targets,
+                W_out=W_out,
+                return_beta_history=return_beta_history,
+                _detach_e_step=_detach_e_step,
             )
-
-            # Clamp natural gradient norm to prevent oscillatory divergence
-            # in deeper layers where Sigma eigenvalues amplify gradients
-            nat_grad_mu_norm = torch.linalg.norm(nat_grad_mu, dim=-1, keepdim=True)
-            _raw_nat_grad_norm = nat_grad_mu.detach().norm().item()  # pre-clamp for diagnostics
-            max_nat_grad_norm = 500.0
-            nat_grad_scale = torch.clamp(
-                max_nat_grad_norm / (nat_grad_mu_norm + eps), max=1.0
-            )
-            nat_grad_mu = nat_grad_mu * nat_grad_scale
-
-            # Clamp nat_grad_sigma norm (analogous to nat_grad_mu clipping above).
-            # The natural gradient nat_grad_sigma = 2σ²·grad_sigma squares the
-            # covariance, amplifying gradients when sigma is large. Without clipping,
-            # the backward pass sees unclipped gradient magnitudes even though the
-            # forward retraction trust region clips the whitened step.
-            if is_diagonal:
-                nat_grad_sigma_norm = torch.linalg.norm(nat_grad_sigma, dim=-1, keepdim=True)
-            else:
-                nat_grad_sigma_norm = torch.linalg.norm(
-                    nat_grad_sigma.flatten(-2), dim=-1, keepdim=True
-                ).unsqueeze(-1)
-            _raw_nat_grad_sigma_norm = nat_grad_sigma.detach().norm().item()
-            max_nat_grad_sigma_norm = 500.0
-            nat_grad_sigma_scale = torch.clamp(
-                max_nat_grad_sigma_norm / (nat_grad_sigma_norm + eps), max=1.0
-            )
-            nat_grad_sigma = nat_grad_sigma * nat_grad_sigma_scale
-
-            # Store E-step gradient norms (overwritten each iteration; final = last iter)
-            self._e_step_grad_norms['nat_grad_mu'] = _raw_nat_grad_norm
-            self._e_step_grad_norms['nat_grad_sigma'] = _raw_nat_grad_sigma_norm
-            self._e_step_grad_norms['nat_grad_mu_clipped'] = nat_grad_mu.detach().norm().item()
-            self._e_step_grad_norms['nat_grad_sigma_clipped'] = nat_grad_sigma.detach().norm().item()
-            # Per-position clip fraction for the 500-norm cap
-            self._e_step_grad_norms['mu_cap_frac'] = (
-                nat_grad_mu_norm.squeeze(-1) >= max_nat_grad_norm * 0.99
-            ).float().mean().item()
-            if is_diagonal:
-                self._e_step_grad_norms['sigma_cap_frac'] = (
-                    nat_grad_sigma_norm.squeeze(-1) >= max_nat_grad_sigma_norm * 0.99
-                ).float().mean().item()
-            else:
-                self._e_step_grad_norms['sigma_cap_frac'] = (
-                    nat_grad_sigma_norm.squeeze(-1).squeeze(-1) >= max_nat_grad_sigma_norm * 0.99
-                ).float().mean().item()
-
-            # =================================================================
-            # DEBUG: Print per-component gradient breakdown
-            # =================================================================
-            if _VFE_GRAD_DEBUG is not None and self._debug_vfe_gradients:
-                d = _VFE_GRAD_DEBUG
-
-                # Detect multihead mode: keys have 'headN(d=M)/' prefix
-                _is_multihead = any('/' in k for k in d)
-
-                # Euclidean totals computed on the full (already assembled) grad tensors
-                _eu_mu = _grad_norm(grad_mu)
-                _eu_sig = _grad_norm(grad_sigma)
-                _ps_mu = _per_pos_stats(grad_mu)
-                _ps_sig = _per_pos_stats(grad_sigma)
-
-                # Nat_grad amplification factors
-                _amp_mu = _raw_nat_grad_norm / max(_eu_mu, 1e-12)
-                _amp_sig = _raw_nat_grad_sigma_norm / max(_eu_sig, 1e-12)
-                # Fraction of positions hitting the 500 clip
-                _mu_clip_frac = (nat_grad_mu_norm.squeeze(-1) >= max_nat_grad_norm * 0.99).float().mean().item()
-                if is_diagonal:
-                    _sig_clip_frac = (nat_grad_sigma_norm.squeeze(-1) >= max_nat_grad_sigma_norm * 0.99).float().mean().item()
-                else:
-                    _sig_clip_frac = (nat_grad_sigma_norm.squeeze(-1).squeeze(-1) >= max_nat_grad_sigma_norm * 0.99).float().mean().item()
-
-                print(f"\n{'='*80}")
-                print(f"  [VFE GRAD DEBUG] iter {iteration}/{self.n_iterations}"
-                      f"  diag={is_diagonal}  K={mu_current.shape[-1]}"
-                      f"  B×N={mu_current.shape[0]}×{mu_current.shape[1]}"
-                      f"  multihead={_is_multihead}")
-                print(f"{'='*80}")
-
-                if _is_multihead:
-                    # Extract unique head prefixes
-                    _heads = sorted(set(k.split('/')[0] for k in d if '/' in k),
-                                    key=lambda x: int(x.split('head')[1].split('(')[0]))
-                    print(f"  --- Per-head breakdown ({len(_heads)} heads) ---")
-                    print(f"  {'Head':<16} {'σ_self':>8} {'σ_align':>8} {'σ_smx':>8}"
-                          f" {'μ_self':>8} {'μ_dir':>8} {'μ_smx':>8}"
-                          f" {'KL_avg':>8} {'KL_max':>8} {'σ_p_min':>8} {'σ_q_max':>8}")
-                    print(f"  {'─'*16} {'─'*8} {'─'*8} {'─'*8}"
-                          f" {'─'*8} {'─'*8} {'─'*8}"
-                          f" {'─'*8} {'─'*8} {'─'*8} {'─'*8}")
-                    for hp in _heads:
-                        def _hget(key, default=0):
-                            return d.get(f'{hp}/{key}', default)
-                        print(f"  {hp:<16}"
-                              f" {_hget('grad_sigma_self'):>8.1f}"
-                              f" {_hget('grad_sigma_align_direct'):>8.1f}"
-                              f" {_hget('grad_sigma_softmax'):>8.1f}"
-                              f" {_hget('grad_mu_self'):>8.1f}"
-                              f" {_hget('grad_mu_direct'):>8.1f}"
-                              f" {_hget('grad_mu_softmax'):>8.1f}"
-                              f" {_hget('kl_pairwise_mean'):>8.2f}"
-                              f" {_hget('kl_pairwise_max'):>8.1f}"
-                              f" {_hget('sigma_p_min'):>8.4f}"
-                              f" {_hget('sigma_q_eig_max'):>8.4f}")
-                else:
-                    # Single-β mode
-                    print(f"  --- Covariance state ---")
-                    print(f"  σ_p  range:  [{d.get('sigma_p_min', 0):.4f}, {d.get('sigma_p_max', 0):.4f}]"
-                          f"  →  1/σ_p range: [{1/max(d.get('sigma_p_max', 1), 1e-12):.2f},"
-                          f" {1/max(d.get('sigma_p_min', 1e-12), 1e-12):.2f}]")
-                    print(f"  σ_q  eig range: [{d.get('sigma_q_eig_min', 0):.4f}, {d.get('sigma_q_eig_max', 0):.4f}]")
-                    print()
-                    print(f"  --- Euclidean gradient components (global norms) ---")
-                    print(f"  {'Component':<30} {'μ':>12} {'σ':>12} {'σ pos_mean':>12} {'σ pos_max':>12}")
-                    print(f"  {'─'*30} {'─'*12} {'─'*12} {'─'*12} {'─'*12}")
-                    print(f"  {'self-coupling (α·∂KL/∂θ)':<30}"
-                          f" {d.get('grad_mu_self', 0):>12.1f}"
-                          f" {d.get('grad_sigma_self', 0):>12.1f}"
-                          f" {d.get('grad_sigma_self_pos_mean', 0):>12.2f}"
-                          f" {d.get('grad_sigma_self_pos_max', 0):>12.2f}")
-                    print(f"  {'align direct (λ·β·∂KL/∂θ)':<30}"
-                          f" {d.get('grad_mu_direct', 0):>12.1f}"
-                          f" {d.get('grad_sigma_align_direct', 0):>12.1f}"
-                          f" {d.get('grad_sigma_align_pos_mean', 0):>12.2f}"
-                          f" {d.get('grad_sigma_align_pos_max', 0):>12.2f}")
-                    print(f"  {'softmax (KL·∂β/∂θ)':<30}"
-                          f" {d.get('grad_mu_softmax', 0):>12.1f}"
-                          f" {d.get('grad_sigma_softmax', 0):>12.1f}"
-                          f" {d.get('grad_sigma_softmax_pos_mean', 0):>12.2f}"
-                          f" {d.get('grad_sigma_softmax_pos_max', 0):>12.2f}")
-
-                # Observation (shared between multihead and single-β, computed on full tensor)
-                if 'obs_mu_grad' in d:
-                    print(f"  {'observation (CE)':<30}"
-                          f" {d.get('obs_mu_grad', 0):>12.1f}"
-                          f" {d.get('obs_sigma_grad', 0):>12.1f}")
-
-                print()
-                print(f"  --- Euclidean total (assembled, after obs) ---")
-                print(f"  grad_mu:    {_eu_mu:>10.1f}  (pos mean: {_ps_mu[0]:.2f}, max: {_ps_mu[1]:.2f})")
-                print(f"  grad_sigma: {_eu_sig:>10.1f}  (pos mean: {_ps_sig[0]:.2f}, max: {_ps_sig[1]:.2f})")
-                print()
-                print(f"  --- Natural gradient (Fisher projection) ---")
-                print(f"  nat_grad_mu:    {_raw_nat_grad_norm:>10.1f}  (amplification: {_amp_mu:.2f}x)"
-                      f"  clip: {self._e_step_grad_norms['nat_grad_mu_clipped']:.1f}"
-                      f"  ({_mu_clip_frac*100:.0f}% positions at cap)")
-                print(f"  nat_grad_sigma: {_raw_nat_grad_sigma_norm:>10.1f}  (amplification: {_amp_sig:.2f}x)"
-                      f"  clip: {self._e_step_grad_norms['nat_grad_sigma_clipped']:.1f}"
-                      f"  ({_sig_clip_frac*100:.0f}% positions at cap)")
-                print(f"{'='*80}\n")
-                # Store before resetting (debug mode may coexist with metrics collection)
-                if self._collect_vfe_metrics:
-                    _aggregate_multihead_vfe_debug(_VFE_GRAD_DEBUG, self.irrep_dims)
-                    self.last_vfe_debug = dict(_VFE_GRAD_DEBUG)
-                _VFE_GRAD_DEBUG = None  # Reset for next iteration
-
-            # Store lightweight copy for external consumption (no printing overhead)
-            elif self._collect_vfe_metrics and _VFE_GRAD_DEBUG is not None:
-                _aggregate_multihead_vfe_debug(_VFE_GRAD_DEBUG, self.irrep_dims)
-                self.last_vfe_debug = dict(_VFE_GRAD_DEBUG)
-                _VFE_GRAD_DEBUG = None
-
-            # =================================================================
-            # STEP 4: Update beliefs (E-step) with WHITENED trust region
-            # =================================================================
-            # The natural gradient nat_grad_mu = Σ @ grad scales with σ
-            # Use whitened trust region: ||δμ / √σ|| instead of raw norm
-            delta_mu = -effective_lr * nat_grad_mu
-
-            # Whitened trust region for mu (float32 for sqrt/division stability under AMP)
-            if is_diagonal:
-                sigma_sqrt = torch.sqrt(sigma_current.float().clamp(min=eps)).to(sigma_current.dtype)
-                whitened_delta = delta_mu / sigma_sqrt
-            else:
-                # Use .clone() after diagonal to avoid view-related gradient issues
-                sigma_diag = torch.diagonal(sigma_current, dim1=-2, dim2=-1).clone().float().clamp(min=eps)
-                whitened_delta = delta_mu / torch.sqrt(sigma_diag).to(delta_mu.dtype)
-
-            whitened_norm = torch.linalg.norm(whitened_delta, dim=-1, keepdim=True)
-            mu_trust_region = 2.0  # Trust region on whitened norm
-            scale = torch.clamp(mu_trust_region / (whitened_norm + eps), max=1.0)
-            mu_current = mu_current + scale * delta_mu
-
-            # Track trust region clip fraction
-            self._e_step_grad_norms['mu_trust_frac'] = (
-                scale.squeeze(-1) < 0.99
-            ).float().mean().item()
-            self._e_step_grad_norms['whitened_mu_mean'] = whitened_norm.mean().item()
-            self._e_step_grad_norms['whitened_mu_max'] = whitened_norm.max().item()
-
-            if self.update_sigma:
-                # SPD-preserving retraction: sigma_new = sigma * exp(step * clip(delta/sigma, -trust, trust))
-                # step_size=1.0 so trust_region alone controls max relative change.
-                # nat_grad_sigma = 2σ²·grad → whitened = -2σ·grad, clipped by trust.
-                # With effective_lr≈0.1: max_exp = 0.001 → ~0.1% per iter, ~1% over 10 iters.
-                # Calibrated between frozen (pre-#768: 0.025%/iter) and overcorrected (0.5%/iter).
-                sigma_trust_base = self._get_sigma_trust(effective_lr)
-                sigma_trust_diag = sigma_trust_base
-                sigma_trust_full = sigma_trust_base * 0.5  # Full cov more sensitive
-                if is_diagonal:
-                    sigma_current = retract_spd_diagonal_torch(
-                        sigma_diag=sigma_current,
-                        delta_sigma=-nat_grad_sigma,
-                        step_size=1.0,
-                        trust_region=sigma_trust_diag,
-                        eps=eps,
-                        sigma_max=self.sigma_max,
-                    )
-                else:
-                    sigma_current = retract_spd_torch(
-                        Sigma=sigma_current,
-                        delta_Sigma=-nat_grad_sigma,
-                        step_size=1.0,
-                        trust_region=sigma_trust_full,
-                        eps=eps,
-                        sigma_max=self.sigma_max,
-                    )
-
-            # =============================================================
-            # STEP 4b2: Sigma condition clamping
-            # =============================================================
-            # Prevent sigma anisotropy from growing unbounded. When
-            # sigma_max / sigma_min > max_condition, clamp outlier
-            # dimensions toward the geometric mean. This keeps the
-            # natural gradient well-conditioned without forcing full
-            # isotropy.
-            if self.update_sigma:
-                max_condition = 10.0
-                if is_diagonal:
-                    # sigma_current: (B, N, K)
-                    s_min = sigma_current.min(dim=-1, keepdim=True).values.clamp(min=eps)
-                    s_max = sigma_current.max(dim=-1, keepdim=True).values
-                    condition = s_max / s_min  # (B, N, 1)
-                    needs_clamp = condition > max_condition
-                    if needs_clamp.any():
-                        # Geometric mean preserves det(Sigma) = product of eigenvalues
-                        geo_mean = sigma_current.log().mean(dim=-1, keepdim=True).exp()
-                        lower = geo_mean / (max_condition ** 0.5)
-                        upper = geo_mean * (max_condition ** 0.5)
-                        sigma_clamped = sigma_current.clamp(min=lower, max=upper)
-                        sigma_current = torch.where(
-                            needs_clamp.expand_as(sigma_current),
-                            sigma_clamped,
-                            sigma_current,
-                        )
-                else:
-                    # Full covariance: clamp eigenvalue ratio
-                    try:
-                        eigvals = torch.linalg.eigvalsh(sigma_current)  # (B, N, K)
-                    except (RuntimeError, torch.linalg.LinAlgError):
-                        eigvals = None
-                    if eigvals is not None:
-                        e_min = eigvals[..., 0:1].clamp(min=eps)
-                        e_max = eigvals[..., -1:]
-                        condition = e_max / e_min
-                        if (condition > max_condition).any():
-                            geo_mean = eigvals.log().mean(dim=-1, keepdim=True).exp()
-                            lower = geo_mean / (max_condition ** 0.5)
-                            # Regularize toward isotropic: Sigma → Sigma + ridge * I
-                            ridge = (lower - e_min).clamp(min=0.0).mean(dim=-1, keepdim=True)
-                            K = sigma_current.shape[-1]
-                            sigma_current = sigma_current + ridge.unsqueeze(-1) * torch.eye(
-                                K, device=sigma_current.device, dtype=sigma_current.dtype
-                            )
-
-            # =============================================================
-            # STEP 4c: Isotropic covariance enforcement (Limit 1)
-            # =============================================================
-            # After sigma update, collapse per-dimension variances to scalar σ²I.
-            # This maintains the isotropic constraint through VFE dynamics.
-            if self.update_sigma and self.isotropic_covariance:
-                if is_diagonal:
-                    # sigma_current: (B, N, K) → average across K, expand back
-                    scalar_var = sigma_current.mean(dim=-1, keepdim=True)
-                    sigma_current = scalar_var.expand_as(sigma_current)
-                else:
-                    # sigma_current: (B, N, K, K) → extract diag, average, rebuild σ²I
-                    diag_vals = torch.diagonal(sigma_current, dim1=-2, dim2=-1)
-                    scalar_var = diag_vals.mean(dim=-1, keepdim=True)  # (B, N, 1)
-                    K = sigma_current.shape[-1]
-                    sigma_current = scalar_var.unsqueeze(-1) * torch.eye(
-                        K, device=sigma_current.device, dtype=sigma_current.dtype
-                    )
-
-            # =============================================================
-            # DIAGNOSTIC: Per-iteration convergence data
-            # =============================================================
-            if self._collect_iteration_diagnostics:
-                # Sigma condition number for diagnostics
-                if is_diagonal:
-                    _s_det = sigma_current.detach()
-                    _s_cond = (_s_det.max(dim=-1).values / _s_det.min(dim=-1).values.clamp(min=eps)).mean().item()
-                else:
-                    _s_diag_det = torch.diagonal(sigma_current.detach(), dim1=-2, dim2=-1)
-                    _s_cond = (_s_diag_det.max(dim=-1).values / _s_diag_det.min(dim=-1).values.clamp(min=eps)).mean().item()
-                _diag = {
-                    'iteration': iteration,
-                    'grad_mu_norm': grad_mu.detach().norm().item(),
-                    'grad_sigma_norm': grad_sigma.detach().norm().item(),
-                    'nat_grad_mu_norm': nat_grad_mu.detach().norm().item(),
-                    'nat_grad_mu_raw_norm': _raw_nat_grad_norm,
-                    'nat_grad_sigma_norm': nat_grad_sigma.detach().norm().item(),
-                    'nat_grad_sigma_raw_norm': _raw_nat_grad_sigma_norm,
-                    'nat_grad_sigma_max': nat_grad_sigma.detach().abs().max().item(),
-                    'delta_mu_norm': delta_mu.detach().norm().item(),
-                    'mu_norm': mu_current.detach().norm().item(),
-                    'sigma_mean': sigma_current.detach().mean().item(),
-                    'sigma_max': sigma_current.detach().max().item(),
-                    'sigma_min': sigma_current.detach().min().item(),
-                    'sigma_std': sigma_current.detach().std().item(),
-                    'sigma_condition': _s_cond,
-                    'effective_lr': effective_lr.detach().item() if isinstance(effective_lr, torch.Tensor) else float(effective_lr),
-                    'scale_mean': scale.detach().mean().item(),
-                }
-                if mu_p_current is not None:
-                    _diag['mu_diff_to_prior_norm'] = (mu_current - mu_p_current).detach().norm().item()
-                # Beta entropy from last computed beta
-                try:
-                    if self.multihead_vfe and beta_heads:
-                        _b_diag = beta_heads[-1].detach().clamp(min=1e-10)
-                    elif 'beta_current' in locals() and beta_current is not None:
-                        _b_diag = beta_current.detach().clamp(min=1e-10)
-                    else:
-                        _b_diag = None
-                    if _b_diag is not None:
-                        _diag['beta_entropy'] = -(_b_diag * _b_diag.log()).sum(dim=-1).mean().item()
-                except Exception:
-                    pass
-                # Relative belief change from previous iteration
-                if iteration == 0:
-                    self._diag_prev_mu = mu_current.detach().clone()
-                else:
-                    _diag['mu_change_rel'] = (
-                        (mu_current - self._diag_prev_mu).detach().norm().item()
-                        / (mu_current.detach().norm().item() + 1e-8)
-                    )
-                    self._diag_prev_mu = mu_current.detach().clone()
-                self._iteration_diagnostics.append(_diag)
-
-            # =============================================================
-            # STEP 4b: Optional Gauge Frame Evolution DURING E-step
-            # =============================================================
-            _skip_phi_update = self.gauge_mode in ('trivial', 'constant')
-            _use_omega = omega_current is not None and getattr(self, 'gauge_param', 'phi') == 'omega'
-
-            if (self.update_phi_per_iteration and torch.is_grad_enabled()
-                    and not _skip_phi_update):
-
-                if _use_omega:
-                    # Direct Omega path: no matrix_exp, no dexp series
-                    grad_omega = self._compute_omega_grad_direct(
-                        omega_current, mu_current, sigma_current,
-                        is_diagonal, mask, eps,
-                    )
-                    if grad_omega is not None:
-                        self._e_step_grad_norms['grad_phi'] = grad_omega.detach().norm().item()
-                        omega_current = self._retract_omega(
-                            omega_current, grad_omega, self.phi_lr,
-                            trust_region=getattr(self, 'omega_trust_region', 0.3),
-                        )
-                else:
-                    # Phi path (existing): matrix_exp + dexp series
-                    _phi_bep = _mh_cached_bep if self.multihead_vfe else _cached_bep
-                    grad_phi = self._compute_phi_grad(
-                        phi_current, mu_current, sigma_current,
-                        is_diagonal, mask, eps,
-                        cached_block_exp_pairs=_phi_bep,
-                    )
-                    if grad_phi is not None:
-                        self._e_step_grad_norms['grad_phi'] = grad_phi.detach().norm().item()
-                        phi_current = _retract_phi(
-                            phi=phi_current,
-                            delta_phi=-grad_phi,
-                            generators=self.generators,
-                            step_size=self.phi_lr,
-                            max_norm=self.phi_max_norm,
-                        )
+            if return_beta_history and _iter_beta is not None:
+                beta_history.append(_iter_beta)
 
         # =================================================================
         # DEQ implicit differentiation: replace straight-through backward
