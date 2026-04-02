@@ -192,181 +192,34 @@ class GaugeTransformerLM(nn.Module):
         self.ffn_window = config.get('ffn_window', 64)
 
         # =================================================================
-        # Gauge Group and Mode (SO(3), SO(N), or GL(K))
+        # Gauge Group, Mode, and Parameterization
         # =================================================================
-        gauge_group = config.get('gauge_group', 'SO3')
-        gauge_dim = config.get('gauge_dim', 3)  # N for SO(N), K for GL(K)
-        # =================================================================
-        # Gauge Mode: Controls transport operator behavior
-        # =================================================================
-        # 'learned': Per-token gauge frames φ_i, transport Ω_ij = exp(φ_i)·exp(-φ_j)
-        #            This is the full gauge-theoretic attention.
-        # 'trivial': Global frame (φ = 0), transport Ω = I (identity)
-        #            This is the "trivial gauge fixing" that recovers standard
-        #            attention as a special case. Mathematically principled:
-        #            choosing a gauge where all tokens share one coordinate frame.
-        #            KL(q_i || Ω[q_j]) = KL(q_i || q_j) when Ω = I.
-        gauge_mode = config.get('gauge_mode', 'learned')
-        if gauge_mode not in ('learned', 'trivial', 'constant'):
-            raise ValueError(f"gauge_mode must be 'learned', 'trivial', or 'constant', got '{gauge_mode}'")
-
-        # Gauge parameterization: 'phi' (Lie algebra) or 'omega' (direct GL(K))
-        gauge_param = config.get('gauge_param', 'phi')
-        self.gauge_param = gauge_param
-        # Compute omega_head_dims from irrep_spec for direct omega path
-        if gauge_param == 'omega':
-            self.omega_head_dims = [dim for _, mult, dim in irrep_spec for _ in range(mult)]
-            print(f"[INFO] Direct Omega parameterization: per-head dims {self.omega_head_dims}")
-            print(f"       No matrix_exp needed. Full GL(K) including reflections.")
-        else:
-            self.omega_head_dims = None
-
-        # Store gauge group info for position encoding and other components
+        gauge_group, gauge_dim, gauge_mode, gauge_param, evolve_phi, evolve_phi_e_step = (
+            self._resolve_gauge_mode(config, evolve_phi, evolve_phi_e_step, use_prior_bank, isotropic_covariance)
+        )
         self.gauge_group = gauge_group
         self.gauge_dim = gauge_dim
         self.gauge_mode = gauge_mode
+        self.gauge_param = gauge_param
 
-        # Trivial gauge mode → Ω = I, no phi evolution
-        # This is the mathematically principled "gauge fixing" to a global frame
-        # O(K) reflection: per-token sign vectors extending SO(K) → O(K)
-        learnable_reflection = config.get('learnable_reflection', False)
-        if learnable_reflection and use_prior_bank:
-            raise ValueError(
-                "learnable_reflection=True is incompatible with use_prior_bank=True. "
-                "PriorBank bypasses GaugeTokenEmbedding (where sign_logit lives), so "
-                "the sign vectors would never be applied. Disable one of these options."
-            )
-        if learnable_reflection:
-            print(f"[INFO] O(K) reflection enabled: per-token s_i ∈ {{±1}}^K sign vectors")
-            print(f"       Transport: Ω_ij = diag(s_i)·exp(φ_i)·exp(-φ_j)·diag(s_j) ∈ O(K)")
-            print(f"       Extends SO(K) gauge to full O(K) = SO(K) ⋊ (Z_2)^{{K-1}}")
-            if isotropic_covariance:
-                print(f"       With isotropic Σ = σ²I: S(Ω) = 0, KL = (1/2σ²)||Q_i - M_ij K_j||²")
-                print(f"       where Q_i = s_i ⊙ μ_i, K_j = s_j ⊙ μ_j (sign-flipped embeddings)")
-
-        if gauge_mode == 'constant':
-            evolve_phi = False  # No Lie algebra φ; transport is a direct GL(K) parameter
-            evolve_phi_e_step = False
-            print(f"[INFO] Constant gauge mode: Ω_ij = Ω ∈ GL(d_head) for all pairs (i,j)")
-            print(f"       Manuscript Limit 2: S(Ω) cancels under softmax, Ω⁻ᵀ → W_Q W_K^T")
-            print(f"       Per-head Ω initialized to I, learned via direct gradient descent")
-            if isotropic_covariance:
-                print(f"       With Σ = σ²I: attention ∝ exp(-||Ω⁻¹μ_i - μ_j||² / (2σ²))")
-
-        if gauge_mode == 'trivial':
-            evolve_phi = False  # No point updating φ when transport is identity
-            evolve_phi_e_step = False
-            print(f"[INFO] Trivial gauge mode: φ = 0, Ω = I (global frame / standard attention limit)")
-            print(f"       This recovers standard KL-attention: KL(q_i || q_j) with no transport.")
-            if isotropic_covariance:
-                print(f"[INFO] Limits 1+2 active: Σ = σ²I + Ω = I → attention ∝ exp(-||μ_i - μ_j||² / (2σ²))")
-                print(f"       This is equivalent to standard dot-product attention (up to absorbing σ⁻² into W_Q·W_K^T)")
+        # Compute omega_head_dims from irrep_spec for direct omega path
+        if gauge_param == 'omega':
+            self.omega_head_dims = [dim for _, mult, dim in irrep_spec for _ in range(mult)]
+        else:
+            self.omega_head_dims = None
 
         # =================================================================
         # Cross-Head Coupling (sparse off-diagonal gauge mixing)
         # =================================================================
-        # cross_couplings: list of (head_a, head_b) pairs enabling gauge
-        # transport between those heads. Empty list = block-diagonal (default).
         cross_couplings = config.get('cross_couplings', [])
         self.cross_couplings = cross_couplings
 
         if cross_couplings and gauge_mode == 'trivial':
             print("[WARN] cross_couplings have no effect with gauge_mode='trivial' (Ω=I, no mixing)")
 
-        # Compute phi dimension (number of generators)
-        if gauge_group == 'SO3':
-            self.phi_dim = 3  # SO(3) has 3 generators
-        elif gauge_group == 'GLK':
-            # GL(K): Check if multi-head requested
-            is_glk_multihead = (
-                irrep_spec is not None and
-                len(irrep_spec) == 1 and
-                irrep_spec[0][0] != 'full' and
-                irrep_spec[0][1] > 1  # n_heads > 1
-            )
-            if is_glk_multihead:
-                # Multi-head GL(K): H × d_head² generators + cross-coupling generators
-                _, n_heads, d_head = irrep_spec[0]
-                n_cross_gen = len(cross_couplings) * d_head * d_head
-                self.phi_dim = n_heads * d_head * d_head + n_cross_gen
-            else:
-                # Single-head GL(K): K² generators (cross_couplings ignored)
-                self.phi_dim = embed_dim * embed_dim
-        else:  # SO(N)
-            self.phi_dim = gauge_dim * (gauge_dim - 1) // 2  # SO(N) has N(N-1)/2 generators
-
-        if GENERATORS_AVAILABLE:
-            if gauge_group == 'SO3':
-                generators = generate_multi_irrep_generators(irrep_spec)
-            elif gauge_group == 'GLK':
-                # GL(K): Check if multi-head requested via irrep_spec
-                # Multi-head: irrep_spec = [('fund', n_heads, d_head)] where n_heads * d_head = embed_dim
-                # Single-head: irrep_spec = [('full', 1, embed_dim)] or no special format
-                is_multihead = (
-                    irrep_spec is not None and
-                    len(irrep_spec) == 1 and
-                    irrep_spec[0][0] != 'full' and
-                    irrep_spec[0][1] > 1  # n_heads > 1
-                )
-
-                if is_multihead:
-                    _, n_heads, d_head = irrep_spec[0]
-
-                    if cross_couplings:
-                        # Cross-head coupling: sparse off-diagonal generators
-                        generators = generate_glK_cross_head_generators(
-                            embed_dim, n_heads, cross_couplings
-                        )
-                        # Compute super-block structure
-                        super_block_dims, super_block_head_groups = merge_coupled_heads(
-                            n_heads, d_head, cross_couplings
-                        )
-                        # Reorder so merged heads are contiguous
-                        generators, perm = reorder_cross_head_generators(
-                            generators, n_heads, d_head,
-                            cross_couplings, super_block_head_groups,
-                        )
-                        self._cross_head_perm = perm  # Stored for embedding reordering
-                        # Pre-cache torch tensors to avoid repeated numpy->torch on every forward
-                        self.register_buffer('_perm_tensor', torch.from_numpy(perm).long(), persistent=False)
-                        self.register_buffer('_inv_perm_tensor', torch.from_numpy(np.argsort(perm)).long(), persistent=False)
-                        self._super_block_dims = super_block_dims
-                        self._super_block_head_groups = super_block_head_groups
-
-                        n_cross = len(cross_couplings) * d_head**2
-                        print(f"[INFO] GL(K) cross-head: {n_heads} heads × GL({d_head}), "
-                              f"{n_heads * d_head**2} diag + {n_cross} cross generators = "
-                              f"{generators.shape[0]} total")
-                        print(f"       Super-blocks: {super_block_dims} "
-                              f"(groups: {super_block_head_groups})")
-                    else:
-                        # Standard multi-head GL(K): block-diagonal generators
-                        generators = generate_glK_multihead_generators(embed_dim, n_heads)
-                        self._cross_head_perm = None
-                        self._super_block_dims = None
-                        self._super_block_head_groups = None
-                        print(f"[INFO] GL(K) multi-head: {n_heads} heads × GL({d_head}), "
-                              f"{n_heads * d_head**2} generators (vs {embed_dim**2} single-head)")
-                else:
-                    # Single-head GL(K): full K² generators
-                    generators = generate_glK_generators(embed_dim)
-                    print(f"[INFO] GL(K) single-head: {embed_dim}² = {embed_dim**2} generators")
-            else:  # SO(N)
-                generators = generate_multi_irrep_soN_generators(irrep_spec, gauge_dim)
-        else:
-            # Fallback: random skew-symmetric matrices (should never happen!)
-            # math_utils/generators.py should always be available
-            import warnings
-            warnings.warn(
-                "GENERATORS_AVAILABLE=False: math_utils/generators.py import failed! "
-                "Using random fallback generators. This may indicate a broken installation.",
-                RuntimeWarning
-            )
-            n_generators = self.phi_dim
-            # Use a fixed seed for reproducibility even if global seed wasn't set
-            rng = np.random.RandomState(seed=42)
-            generators = rng.randn(n_generators, embed_dim, embed_dim)
-            generators = 0.5 * (generators - generators.transpose(0, 2, 1))
+        # Compute phi dimension and build Lie algebra generators
+        self.phi_dim = self._compute_phi_dim(gauge_group, gauge_dim, embed_dim, irrep_spec, cross_couplings)
+        generators = self._build_generators(gauge_group, gauge_dim, embed_dim, irrep_spec, cross_couplings)
 
         self.register_buffer(
             'generators',
@@ -374,94 +227,14 @@ class GaugeTransformerLM(nn.Module):
         )
 
         # =================================================================
-        # Embedding Layers
+        # Embedding Layers, Position Encoding, and PriorBank
         # =================================================================
-        self.token_embed = GaugeTokenEmbedding(
-            vocab_size=vocab_size,
-            embed_dim=embed_dim,
-            irrep_spec=irrep_spec,
-            init_std=config.get('mu_init_std', None),  # Embedding init std (None = default 2.0)
-            init_sigma_scale=1.0,  # Scaled to match init_std for O(1) KL
-            learnable_sigma=config.get('evolve_sigma', True),  # Learn per-token covariances
-            learnable_phi=config.get('learnable_phi', gauge_mode == 'learned'),  # Only learn φ in 'learned' mode
-            gauge_fixed_priors=gauge_fixed_priors,
-            generators=self.generators,  # Always pass generators for gauge transport
-            diagonal_covariance=diagonal_covariance,
-            isotropic_covariance=config.get('isotropic_covariance', False),
-            max_seq_len=max_seq_len,
-            use_positional_embedding=use_positional_embedding,
-            phi_dim=self.phi_dim,  # SO(3): 3, SO(N): N(N-1)/2, GL(K): K² or H×d²
-            phi_scale=config.get('phi_scale', 0.3),  # Gauge frame init scale (higher for clustering)
-            # Mean embedding normalization options
-            mu_normalize=config.get('mu_normalize', False),
-            mu_max_norm=config.get('mu_max_norm', None),
-            # O(K) reflection: per-token sign vectors extending SO(K) → O(K)
-            learnable_reflection=config.get('learnable_reflection', False),
-            # Prior covariance ceiling (matches VFE sigma_max)
-            sigma_max=config.get('sigma_max', 5.0),
-            # Direct Omega parameterization
-            gauge_param=gauge_param,
-            omega_head_dims=self.omega_head_dims,
+        self._build_embeddings(
+            config, vocab_size, embed_dim, irrep_spec, max_seq_len,
+            pos_mode, pos_encoding_scale, gauge_mode, gauge_param,
+            gauge_fixed_priors, diagonal_covariance, use_prior_bank,
+            use_positional_embedding,
         )
-
-        # =================================================================
-        # Position Encoding for φ (Gauge Frame) - RELATIVE POSITION
-        # =================================================================
-        # PRINCIPLED DESIGN: Position encodes RELATIVE frame differences.
-        # - φ (gauge frame) = φ_token + φ_pos(i) encodes token type + position
-        # - μ (belief mean) = pure semantic content (NO position)
-        # - Transport Ω_ij = exp(φ_i·G)·exp(-φ_j·G) encodes RELATIVE position
-        #
-        # This gives shift-invariant attention: tokens 3 apart always have
-        # the same transport relationship, regardless of absolute position.
-        #
-        # Key insight: KL(q_i || Ω_ij[q_j]) depends on relative position
-        # (through transport), not absolute position (which would bias
-        # attention toward nearby tokens regardless of content).
-        self.pos_encoding = GaugePositionalEncoding(
-            max_seq_len=max_seq_len,
-            mode=pos_mode,
-            scale=pos_encoding_scale,
-            phi_dim=self.phi_dim,  # SO(3): 3, SO(N): N(N-1)/2, GL(K): K²
-            generators=self.generators,  # Pass generators for BCH composition
-            gauge_group=gauge_group,  # SO3, SON, or GLK — controls Lie bracket dispatch
-        )
-
-        # =================================================================
-        # PriorBank (Token-Dependent Priors for Principled Encode/Decode)
-        # =================================================================
-        self.prior_bank = None
-        self.use_prior_bank = use_prior_bank
-        self.prior_bank_tau = config.get('prior_bank_tau', 1.0)
-        if use_prior_bank:
-            from transformer.core.prior_bank import PriorBank
-
-            self.prior_bank = PriorBank(
-                vocab_size=vocab_size,
-                embed_dim=embed_dim,
-                init_std=config.get('mu_init_std', None),
-                init_sigma_scale=1.0,
-                learnable_sigma=config.get('evolve_sigma', True),
-                gauge_fixed_priors=gauge_fixed_priors,
-                generators=self.generators if gauge_fixed_priors else None,
-                phi_dim=self.phi_dim,
-                phi_scale=config.get('phi_scale', 0.3),
-                gauge_param=gauge_param,
-                omega_head_dims=self.omega_head_dims,
-                sigma_ce_scale=config.get('sigma_ce_scale', 0.1),
-                learnable_temperature=config.get('learnable_pb_temperature',
-                                                  config.get('learnable_temperature', False)),
-                diagonal_covariance=diagonal_covariance,
-                sigma_max=config.get('sigma_max', 5.0),
-            )
-            print(f"[GaugeTransformerLM] Created PriorBank with token-dependent priors (vocab_size={vocab_size})")
-            print(f"                     gauge_fixed_priors={gauge_fixed_priors}, tau={self.prior_bank_tau}")
-
-            # Freeze token_embed: PriorBank replaces it for encode/decode.
-            # Without this, token_embed's parameters receive optimizer weight_decay
-            # updates every step despite never appearing in the computation graph.
-            # (sigma_target buffer is unaffected by requires_grad.)
-            self.token_embed.requires_grad_(False)
 
         # =================================================================
         # Transformer Stack
@@ -520,6 +293,185 @@ class GaugeTransformerLM(nn.Module):
         n_params = sum(p.numel() for p in self.parameters())
         print(f"GaugeTransformerLM initialized: {n_params/1e6:.2f}M parameters")
 
+    # =========================================================================
+    # Step 1: Extracted helper — cross-head permutation
+    # =========================================================================
+
+    def _apply_cross_head_perm(
+        self,
+        mu: torch.Tensor,
+        sigma: Optional[torch.Tensor],
+        device: torch.device,
+        inverse: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        r"""Apply (or invert) the cross-head dimension permutation.
+
+        When GL(K) cross-head coupling is active, coupled heads are reordered
+        so that their dimensions are contiguous in memory. This permutation must
+        be applied to mu and sigma after embedding lookup and reversed before the
+        vocabulary projection so that mu aligns with the generator block structure.
+
+        The permutation is a pure index reordering — no gauge-covariance concern.
+
+        Args:
+            mu:      (B, N, K) belief means.
+            sigma:   (B, N, K) diagonal or (B, N, K, K) full covariance, or None.
+            device:  Target device for the permutation tensor.
+            inverse: If True apply the inverse permutation (restore original order).
+
+        Returns:
+            (mu_permuted, sigma_permuted) with dimensions reordered.
+        """
+        if getattr(self, '_cross_head_perm', None) is None:
+            return mu, sigma
+
+        if inverse:
+            perm = self._inv_perm_tensor.to(device=device)
+        else:
+            perm = self._perm_tensor.to(device=device)
+
+        mu = mu[:, :, perm]
+        if sigma is not None:
+            if sigma.dim() == 3:
+                # Diagonal covariance: (B, N, K)
+                sigma = sigma[:, :, perm]
+            else:
+                # Full covariance: (B, N, K, K) — sandwich permutation
+                sigma = sigma[:, :, perm][:, :, :, perm]
+
+        return mu, sigma
+
+    # =========================================================================
+    # Step 2/3: Extracted helpers — embed_and_prepare, compute_logits
+    # =========================================================================
+
+    def _embed_and_prepare(
+        self,
+        token_ids: torch.Tensor,
+        device: torch.device,
+    ) -> Dict:
+        r"""Shared embedding and preparation prolog for both forward methods.
+
+        Performs:
+          1. Embedding lookup via PriorBank.encode or GaugeTokenEmbedding.
+          2. Forward cross-head permutation (when GL(K) cross-head coupling active).
+          3. Saving priors mu_prior / sigma_prior before positional encoding.
+          4. Position encoding composition onto phi.
+          5. Causal attention mask construction.
+          6. Optional cached transport operator precomputation.
+
+        Returns a dict with keys:
+            mu_q, sigma_q, phi, omega,
+            mu_prior, sigma_prior,
+            mask, cached_head_transports
+        """
+        batch_size, num_agents = token_ids.shape
+
+        # 1. Embedding lookup
+        omega = None
+        if self.use_prior_bank and self.prior_bank is not None:
+            embed_out = self.prior_bank.encode(token_ids)
+        else:
+            embed_out = self.token_embed(token_ids)
+
+        if len(embed_out) == 4:
+            mu_q, sigma_q, phi, omega = embed_out
+        else:
+            mu_q, sigma_q, phi = embed_out
+
+        # 2. Forward cross-head permutation
+        mu_q, sigma_q = self._apply_cross_head_perm(mu_q, sigma_q, device, inverse=False)
+
+        # 3. Save priors (position-independent semantics) and pre-encoding phi
+        mu_prior = mu_q.clone()
+        sigma_prior = sigma_q.clone() if sigma_q is not None else None
+        phi_prior = phi.clone()  # phi before positional encoding (for attention_info)
+
+        # 4. Position encoding — compose token phi with positional phi
+        phi = self.pos_encoding.compose(phi, num_agents, device=device)
+
+        # 5. Causal attention mask
+        mask = create_attention_mask(
+            num_agents=num_agents,
+            pattern=self.attention_pattern,
+            window=self.attention_window,
+            device=device,
+            causal=True,
+        )
+        mask = mask.unsqueeze(0).expand(batch_size, -1, -1)  # (B, N, N)
+
+        # 6. Precompute transport operators when phi does not evolve
+        if omega is not None and self.gauge_param == 'omega':
+            irrep_dims = self.transformer.blocks[0].attention.irrep_dims
+            cached_head_transports = []
+            block_start = 0
+            for d_h in irrep_dims:
+                omega_h = omega[:, :, block_start:block_start + d_h, block_start:block_start + d_h]
+                omega_h_inv = torch.linalg.inv(omega_h)
+                cached_head_transports.append({
+                    'exp_phi': omega_h,
+                    'exp_neg_phi': omega_h_inv,
+                })
+                block_start += d_h
+        elif not self.evolve_phi:
+            first_attention = self.transformer.blocks[0].attention
+            cached_head_transports = first_attention.precompute_head_transports(
+                phi, device, mu_q.dtype
+            )
+        else:
+            cached_head_transports = None
+
+        return {
+            'mu_q': mu_q,
+            'sigma_q': sigma_q,
+            'phi': phi,
+            'omega': omega,
+            'mu_prior': mu_prior,
+            'sigma_prior': sigma_prior,
+            'phi_prior': phi_prior,
+            'mask': mask,
+            'cached_head_transports': cached_head_transports,
+        }
+
+    def _compute_logits(
+        self,
+        mu_q: torch.Tensor,
+        sigma_q: Optional[torch.Tensor],
+        device: torch.device,
+    ) -> torch.Tensor:
+        r"""Project final belief means to vocabulary logits.
+
+        Dispatches between:
+          - PriorBank KL-decode: logits = -KL(q || π_v) / τ
+          - Standard linear projection with optional O(K) sign-vector correction
+            when learnable_reflection is active.
+
+        Args:
+            mu_q:    (B, N, K) final belief means (already in original dim order).
+            sigma_q: (B, N, K) or (B, N, K, K) covariance, or None.
+            device:  Device for index tensor construction.
+
+        Returns:
+            logits: (B, N, V)
+        """
+        if self.use_prior_bank and self.prior_bank is not None:
+            return self.prior_bank.decode(mu_q, sigma_q, tau=self.prior_bank_tau)
+
+        if getattr(self.token_embed, 'learnable_reflection', False):
+            # Apply per-token sign vectors: logits[b,n,v] = <μ_q[b,n], s_v ⊙ W[v]>
+            all_ids = torch.arange(self.out_proj.weight.shape[0], device=device)
+            z = self.token_embed.sign_logit(all_ids)  # (V, K)
+            signs = z.sign()
+            signs = z + (signs - z).detach()  # STE
+            W_signed = self.out_proj.weight * signs  # (V, K)
+            return torch.matmul(mu_q, W_signed.T)  # (B, N, V)
+
+        return self.out_proj(mu_q)  # (B, N, V)
+
+    # =========================================================================
+    # Original utility methods
+    # =========================================================================
+
     def _compute_irrep_dims(self, irrep_spec: List[Tuple[str, int, int]]) -> List[int]:
         """
         Compute flat list of block dimensions from irrep_spec.
@@ -548,6 +500,329 @@ class GaugeTransformerLM(nn.Module):
         if getattr(self, '_super_block_dims', None) is not None:
             return self._super_block_dims
         return self._compute_irrep_dims(irrep_spec)
+
+    # =========================================================================
+    # Step 4: __init__ factory methods
+    # =========================================================================
+
+    @staticmethod
+    def _resolve_gauge_mode(
+        config: Dict,
+        evolve_phi: bool,
+        evolve_phi_e_step: bool,
+        use_prior_bank: bool,
+        isotropic_covariance: bool,
+    ) -> Tuple:
+        r"""Resolve gauge group, mode, and parameterization from config.
+
+        Validates gauge_mode, prints informational messages for non-default
+        configurations, and enforces the flag invariants:
+
+            - ``gauge_mode='trivial'``: Ω = I; disables phi evolution.
+            - ``gauge_mode='constant'``: Ω is a learned global parameter; disables phi evolution.
+            - ``learnable_reflection`` is incompatible with ``use_prior_bank``.
+
+        Returns:
+            (gauge_group, gauge_dim, gauge_mode, gauge_param,
+             evolve_phi, evolve_phi_e_step)
+        """
+        gauge_group = config.get('gauge_group', 'SO3')
+        gauge_dim = config.get('gauge_dim', 3)
+        gauge_mode = config.get('gauge_mode', 'learned')
+
+        if gauge_mode not in ('learned', 'trivial', 'constant'):
+            raise ValueError(
+                f"gauge_mode must be 'learned', 'trivial', or 'constant', got '{gauge_mode}'"
+            )
+
+        gauge_param = config.get('gauge_param', 'phi')
+
+        if gauge_param == 'omega':
+            irrep_spec = config['irrep_spec']
+            omega_head_dims = [dim for _, mult, dim in irrep_spec for _ in range(mult)]
+            print(f"[INFO] Direct Omega parameterization: per-head dims {omega_head_dims}")
+            print(f"       No matrix_exp needed. Full GL(K) including reflections.")
+
+        learnable_reflection = config.get('learnable_reflection', False)
+        if learnable_reflection and use_prior_bank:
+            raise ValueError(
+                "learnable_reflection=True is incompatible with use_prior_bank=True. "
+                "PriorBank bypasses GaugeTokenEmbedding (where sign_logit lives), so "
+                "the sign vectors would never be applied. Disable one of these options."
+            )
+        if learnable_reflection:
+            print(f"[INFO] O(K) reflection enabled: per-token s_i ∈ {{±1}}^K sign vectors")
+            print(f"       Transport: Ω_ij = diag(s_i)·exp(φ_i)·exp(-φ_j)·diag(s_j) ∈ O(K)")
+            print(f"       Extends SO(K) gauge to full O(K) = SO(K) ⋊ (Z_2)^{{K-1}}")
+            if isotropic_covariance:
+                print(f"       With isotropic Σ = σ²I: S(Ω) = 0, KL = (1/2σ²)||Q_i - M_ij K_j||²")
+                print(f"       where Q_i = s_i ⊙ μ_i, K_j = s_j ⊙ μ_j (sign-flipped embeddings)")
+
+        if gauge_mode == 'constant':
+            evolve_phi = False
+            evolve_phi_e_step = False
+            print(f"[INFO] Constant gauge mode: Ω_ij = Ω ∈ GL(d_head) for all pairs (i,j)")
+            print(f"       Manuscript Limit 2: S(Ω) cancels under softmax, Ω⁻ᵀ → W_Q W_K^T")
+            print(f"       Per-head Ω initialized to I, learned via direct gradient descent")
+            if isotropic_covariance:
+                print(f"       With Σ = σ²I: attention ∝ exp(-||Ω⁻¹μ_i - μ_j||² / (2σ²))")
+
+        if gauge_mode == 'trivial':
+            evolve_phi = False
+            evolve_phi_e_step = False
+            print(f"[INFO] Trivial gauge mode: φ = 0, Ω = I (global frame / standard attention limit)")
+            print(f"       This recovers standard KL-attention: KL(q_i || q_j) with no transport.")
+            if isotropic_covariance:
+                print(f"[INFO] Limits 1+2 active: Σ = σ²I + Ω = I → attention ∝ exp(-||μ_i - μ_j||² / (2σ²))")
+                print(f"       Equivalent to standard dot-product attention (up to absorbing σ⁻² into W_Q·W_K^T)")
+
+        return gauge_group, gauge_dim, gauge_mode, gauge_param, evolve_phi, evolve_phi_e_step
+
+    def _compute_phi_dim(
+        self,
+        gauge_group: str,
+        gauge_dim: int,
+        embed_dim: int,
+        irrep_spec: List,
+        cross_couplings: List,
+    ) -> int:
+        r"""Compute the number of Lie algebra generators (phi dimension).
+
+        The dimension of the gauge frame parameter φ_i ∈ ℝ^{n_gen} equals:
+
+            SO(3):  3
+            SO(N):  N(N-1)/2
+            GL(K), single-head:  K²
+            GL(K), multi-head H×d:  H × d² + |cross_couplings| × d²
+
+        Args:
+            gauge_group:    'SO3', 'SON', or 'GLK'.
+            gauge_dim:      N for SO(N), K for GL(K).
+            embed_dim:      K = total embedding dimension.
+            irrep_spec:     List of (label, multiplicity, dim) triples.
+            cross_couplings: List of (head_a, head_b) pairs.
+
+        Returns:
+            phi_dim: int, number of Lie algebra generators.
+        """
+        if gauge_group == 'SO3':
+            return 3
+        if gauge_group == 'GLK':
+            is_multihead = (
+                irrep_spec is not None
+                and len(irrep_spec) == 1
+                and irrep_spec[0][0] != 'full'
+                and irrep_spec[0][1] > 1
+            )
+            if is_multihead:
+                _, n_heads, d_head = irrep_spec[0]
+                n_cross_gen = len(cross_couplings) * d_head * d_head
+                return n_heads * d_head * d_head + n_cross_gen
+            return embed_dim * embed_dim
+        # SO(N)
+        return gauge_dim * (gauge_dim - 1) // 2
+
+    def _build_generators(
+        self,
+        gauge_group: str,
+        gauge_dim: int,
+        embed_dim: int,
+        irrep_spec: List,
+        cross_couplings: List,
+    ) -> np.ndarray:
+        r"""Construct the Lie algebra generator matrices.
+
+        Returns a numpy array of shape (n_gen, K, K) where each slice
+        G_a is a K×K skew-symmetric (SO) or general (GL) matrix forming
+        a basis for the Lie algebra.  The generators are registered as a
+        buffer (``self.generators``) after this call returns.
+
+        For GL(K) multi-head with cross-couplings, also registers permutation
+        buffers ``_perm_tensor`` / ``_inv_perm_tensor`` and sets the
+        ``_cross_head_perm``, ``_super_block_dims``,
+        ``_super_block_head_groups`` attributes.
+
+        Args:
+            gauge_group:    'SO3', 'SON', or 'GLK'.
+            gauge_dim:      N for SO(N).
+            embed_dim:      K = total embedding dimension.
+            irrep_spec:     List of (label, multiplicity, dim) triples.
+            cross_couplings: List of (head_a, head_b) pairs.
+
+        Returns:
+            generators: np.ndarray of shape (n_gen, K, K).
+        """
+        if not GENERATORS_AVAILABLE:
+            warnings.warn(
+                "GENERATORS_AVAILABLE=False: math_utils/generators.py import failed! "
+                "Using random fallback generators. This may indicate a broken installation.",
+                RuntimeWarning,
+            )
+            rng = np.random.RandomState(seed=42)
+            generators = rng.randn(self.phi_dim, embed_dim, embed_dim)
+            generators = 0.5 * (generators - generators.transpose(0, 2, 1))
+            return generators
+
+        if gauge_group == 'SO3':
+            return generate_multi_irrep_generators(irrep_spec)
+
+        if gauge_group == 'GLK':
+            is_multihead = (
+                irrep_spec is not None
+                and len(irrep_spec) == 1
+                and irrep_spec[0][0] != 'full'
+                and irrep_spec[0][1] > 1
+            )
+            if not is_multihead:
+                generators = generate_glK_generators(embed_dim)
+                print(f"[INFO] GL(K) single-head: {embed_dim}² = {embed_dim**2} generators")
+                return generators
+
+            _, n_heads, d_head = irrep_spec[0]
+            if cross_couplings:
+                generators = generate_glK_cross_head_generators(embed_dim, n_heads, cross_couplings)
+                super_block_dims, super_block_head_groups = merge_coupled_heads(
+                    n_heads, d_head, cross_couplings
+                )
+                generators, perm = reorder_cross_head_generators(
+                    generators, n_heads, d_head, cross_couplings, super_block_head_groups,
+                )
+                self._cross_head_perm = perm
+                self.register_buffer('_perm_tensor', torch.from_numpy(perm).long(), persistent=False)
+                self.register_buffer('_inv_perm_tensor', torch.from_numpy(np.argsort(perm)).long(), persistent=False)
+                self._super_block_dims = super_block_dims
+                self._super_block_head_groups = super_block_head_groups
+
+                n_cross = len(cross_couplings) * d_head**2
+                print(f"[INFO] GL(K) cross-head: {n_heads} heads × GL({d_head}), "
+                      f"{n_heads * d_head**2} diag + {n_cross} cross generators = "
+                      f"{generators.shape[0]} total")
+                print(f"       Super-blocks: {super_block_dims} "
+                      f"(groups: {super_block_head_groups})")
+                return generators
+
+            generators = generate_glK_multihead_generators(embed_dim, n_heads)
+            self._cross_head_perm = None
+            self._super_block_dims = None
+            self._super_block_head_groups = None
+            print(f"[INFO] GL(K) multi-head: {n_heads} heads × GL({d_head}), "
+                  f"{n_heads * d_head**2} generators (vs {embed_dim**2} single-head)")
+            return generators
+
+        # SO(N)
+        return generate_multi_irrep_soN_generators(irrep_spec, gauge_dim)
+
+    def _build_embeddings(
+        self,
+        config: Dict,
+        vocab_size: int,
+        embed_dim: int,
+        irrep_spec: List,
+        max_seq_len: int,
+        pos_mode: str,
+        pos_encoding_scale: float,
+        gauge_mode: str,
+        gauge_param: str,
+        gauge_fixed_priors: bool,
+        diagonal_covariance: bool,
+        use_prior_bank: bool,
+        use_positional_embedding: bool,
+    ) -> None:
+        r"""Build GaugeTokenEmbedding, GaugePositionalEncoding, and PriorBank.
+
+        Sets ``self.token_embed``, ``self.pos_encoding``,
+        ``self.prior_bank``, ``self.use_prior_bank``, and ``self.prior_bank_tau``.
+
+        If ``use_prior_bank=True``, token_embed parameters are frozen
+        (they are never used in the computation graph when PriorBank is active).
+
+        Args:
+            config:                 Full config dict (for optional key fallback).
+            vocab_size:             Vocabulary size V.
+            embed_dim:              Belief dimension K.
+            irrep_spec:             Irrep spec list.
+            max_seq_len:            Maximum sequence length.
+            pos_mode:               Position encoding mode ('none', 'learned', 'sinusoidal').
+            pos_encoding_scale:     Scale for gauge-frame positional encoding.
+            gauge_mode:             'learned', 'trivial', or 'constant'.
+            gauge_param:            'phi' or 'omega'.
+            gauge_fixed_priors:     If True, priors are gauge-fixed (not per-token free).
+            diagonal_covariance:    If True, Σ stored as (B, N, K) diagonal vector.
+            use_prior_bank:         If True, create and use PriorBank.
+            use_positional_embedding: If True, add position to μ (standard transformer style).
+        """
+        self.token_embed = GaugeTokenEmbedding(
+            vocab_size=vocab_size,
+            embed_dim=embed_dim,
+            irrep_spec=irrep_spec,
+            init_std=config.get('mu_init_std', None),
+            init_sigma_scale=1.0,
+            learnable_sigma=config.get('evolve_sigma', True),
+            learnable_phi=config.get('learnable_phi', gauge_mode == 'learned'),
+            gauge_fixed_priors=gauge_fixed_priors,
+            generators=self.generators,
+            diagonal_covariance=diagonal_covariance,
+            isotropic_covariance=config.get('isotropic_covariance', False),
+            max_seq_len=max_seq_len,
+            use_positional_embedding=use_positional_embedding,
+            phi_dim=self.phi_dim,
+            phi_scale=config.get('phi_scale', 0.3),
+            mu_normalize=config.get('mu_normalize', False),
+            mu_max_norm=config.get('mu_max_norm', None),
+            learnable_reflection=config.get('learnable_reflection', False),
+            sigma_max=config.get('sigma_max', 5.0),
+            gauge_param=gauge_param,
+            omega_head_dims=self.omega_head_dims,
+        )
+
+        # Position encoding for φ (gauge frame) — encodes RELATIVE position via transport.
+        # φ_i = φ_token_i + φ_pos(i), transport Ω_ij = exp(φ_i·G)·exp(-φ_j·G)
+        # depends on relative position, giving shift-invariant attention.
+        self.pos_encoding = GaugePositionalEncoding(
+            max_seq_len=max_seq_len,
+            mode=pos_mode,
+            scale=pos_encoding_scale,
+            phi_dim=self.phi_dim,
+            generators=self.generators,
+            gauge_group=self.gauge_group,
+        )
+
+        self.use_prior_bank = use_prior_bank
+        self.prior_bank_tau = config.get('prior_bank_tau', 1.0)
+        self.prior_bank = None
+
+        if use_prior_bank:
+            from transformer.core.prior_bank import PriorBank
+
+            self.prior_bank = PriorBank(
+                vocab_size=vocab_size,
+                embed_dim=embed_dim,
+                init_std=config.get('mu_init_std', None),
+                init_sigma_scale=1.0,
+                learnable_sigma=config.get('evolve_sigma', True),
+                gauge_fixed_priors=gauge_fixed_priors,
+                generators=self.generators if gauge_fixed_priors else None,
+                phi_dim=self.phi_dim,
+                phi_scale=config.get('phi_scale', 0.3),
+                gauge_param=gauge_param,
+                omega_head_dims=self.omega_head_dims,
+                sigma_ce_scale=config.get('sigma_ce_scale', 0.1),
+                learnable_temperature=config.get(
+                    'learnable_pb_temperature',
+                    config.get('learnable_temperature', False),
+                ),
+                diagonal_covariance=diagonal_covariance,
+                sigma_max=config.get('sigma_max', 5.0),
+            )
+            print(f"[GaugeTransformerLM] Created PriorBank with token-dependent priors "
+                  f"(vocab_size={vocab_size})")
+            print(f"                     gauge_fixed_priors={gauge_fixed_priors}, "
+                  f"tau={self.prior_bank_tau}")
+
+            # Freeze token_embed: PriorBank replaces it for encode/decode.
+            # Without this, token_embed parameters receive optimizer weight_decay
+            # updates every step despite never appearing in the computation graph.
+            self.token_embed.requires_grad_(False)
 
     def _init_weights(self, module):
         """Initialize weights following best practices.
@@ -597,7 +872,6 @@ class GaugeTransformerLM(nn.Module):
         # re-attachment here.  Use forward_with_attention() for training.
         if (getattr(self.transformer.blocks[-1].ffn, 'implicit_em', False)
                 and self.training and torch.is_grad_enabled()):
-            import warnings
             warnings.warn(
                 "forward() called with implicit_em=True during training. "
                 "Gradient path to embeddings is broken — use "
@@ -614,101 +888,22 @@ class GaugeTransformerLM(nn.Module):
             recorder.start_forward(batch_size, num_agents, ffn_mode=ffn_mode)
 
         # =================================================================
-        # 1. Token Embeddings (0D: one per agent at c*, not per spatial point)
+        # 1-5. Embed, permute, save priors, position-encode, build mask,
+        #      precompute transport operators.
         # =================================================================
-        omega = None  # Direct omega matrices (set when gauge_param='omega')
-        if self.use_prior_bank and self.prior_bank is not None:
-            # PriorBank encode: token → (μ_v, σ_v, φ_v) prior belief
-            embed_out = self.prior_bank.encode(token_ids)
-            if len(embed_out) == 4:
-                mu_q, sigma_q, phi, omega = embed_out
-            else:
-                mu_q, sigma_q, phi = embed_out
-        else:
-            embed_out = self.token_embed(token_ids)
-            if len(embed_out) == 4:
-                mu_q, sigma_q, phi, omega = embed_out
-            else:
-                mu_q, sigma_q, phi = embed_out
+        prep = self._embed_and_prepare(token_ids, device)
+        mu_q = prep['mu_q']
+        sigma_q = prep['sigma_q']
+        phi = prep['phi']
+        omega = prep['omega']
+        mu_prior = prep['mu_prior']
+        sigma_prior = prep['sigma_prior']
+        mask = prep['mask']
+        cached_head_transports = prep['cached_head_transports']
 
-        # =================================================================
-        # 1b. Cross-Head Permutation (reorder dims for super-block contiguity)
-        # =================================================================
-        # When cross-head coupling is active, generators were reordered so that
-        # coupled heads are contiguous. We must apply the same permutation to
-        # the embedding dimensions so mu/sigma align with the generator blocks.
-        if getattr(self, '_cross_head_perm', None) is not None:
-            perm = self._perm_tensor.to(device=device)
-            mu_q = mu_q[:, :, perm]
-            if sigma_q is not None:
-                if sigma_q.dim() == 3:
-                    # Diagonal: (B, N, K)
-                    sigma_q = sigma_q[:, :, perm]
-                else:
-                    # Full: (B, N, K, K)
-                    sigma_q = sigma_q[:, :, perm][:, :, :, perm]
-
-        # =================================================================
-        # 2. Save Priors (position-independent semantics)
-        # =================================================================
-        # Priors represent "expected meaning of token" - independent of position.
-        # This is the correct VFE setup: prior = semantic, belief = contextualized.
-        mu_prior = mu_q.clone()
-        sigma_prior = sigma_q.clone() if sigma_q is not None else None
-
-        # =================================================================
-        # 3. Position Encoding - Compose with token phi
-        # =================================================================
-        # Position encoding adds position-dependent gauge rotation to token phi.
-        # This gives each position a unique frame even for identical tokens.
-        phi = self.pos_encoding.compose(phi, num_agents, device=device)
-
-        # Record embeddings for trajectory tracking
+        # Record embeddings for trajectory tracking (after positional encoding)
         if recorder is not None and recorder.enabled:
             recorder.record_embeddings(mu_q, sigma_q, phi)
-
-        # =================================================================
-        # 4. Attention Mask (causal + optional sparsity)
-        # =================================================================
-        # Create attention mask based on pattern (full, local, strided)
-        mask = create_attention_mask(
-            num_agents=num_agents,
-            pattern=self.attention_pattern,
-            window=self.attention_window,
-            device=device,
-            causal=True,  # Always use causal for autoregressive LM
-        )
-        mask = mask.unsqueeze(0).expand(batch_size, -1, -1)  # (B, N, N)
-
-        # =================================================================
-        # 5. Precompute Transport Operators (when evolve_phi=False)
-        # =================================================================
-        # When phi doesn't evolve, we can compute transport operators once
-        # and reuse across all layers, saving ~6× matrix exponential calls.
-        if omega is not None and self.gauge_param == 'omega':
-            # Direct omega: build per-head cached transports from omega blocks
-            irrep_dims = self.transformer.blocks[0].attention.irrep_dims
-            # Pass per-position (omega_h, omega_h_inv) pairs instead of
-            # materializing O(B×N×N×d²) pairwise Omega. The attention module
-            # converts these to block_exp_pairs for the fast block-diagonal KL path.
-            cached_head_transports = []
-            block_start = 0
-            for d_h in irrep_dims:
-                omega_h = omega[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
-                omega_h_inv = torch.linalg.inv(omega_h)
-                cached_head_transports.append({
-                    'exp_phi': omega_h,
-                    'exp_neg_phi': omega_h_inv,
-                })
-                block_start += d_h
-        elif not self.evolve_phi:
-            # Get the first block's attention layer to access head generators
-            first_attention = self.transformer.blocks[0].attention
-            cached_head_transports = first_attention.precompute_head_transports(
-                phi, device, mu_q.dtype
-            )
-        else:
-            cached_head_transports = None
 
         # =================================================================
         # 6. Forward Through Transformer Stack
@@ -719,10 +914,7 @@ class GaugeTransformerLM(nn.Module):
         vfe_targets = targets if use_obs else None
         # PriorBank decodes via KL (no linear output projection), so out_proj
         # is untrained when PriorBank is active — never pass it as W_out.
-        # The E-step observation gradient requires W_out for dCE/dmu = (softmax - onehot) @ W,
-        # which has no PriorBank analog (would need KL-based gradient over all V priors).
         if use_obs and self.use_prior_bank:
-            import warnings
             warnings.warn(
                 "use_obs_in_vfe=True has no effect when PriorBank is active: "
                 "E-step observation grounding requires W_out (linear projection), "
@@ -731,15 +923,11 @@ class GaugeTransformerLM(nn.Module):
             )
         if use_obs and not self.use_prior_bank and hasattr(self, 'out_proj'):
             vfe_W_out = self.out_proj.weight
+            # W_out must be permuted to match the permuted mu basis inside the stack
+            if getattr(self, '_cross_head_perm', None) is not None:
+                vfe_W_out = vfe_W_out[:, self._perm_tensor.to(device=device)]
         else:
             vfe_W_out = None
-
-        # When cross-head coupling is active, mu inside the transformer stack is in
-        # the permuted basis. W_out must be permuted to match, otherwise the
-        # observation gradient dCE/dmu is computed in the wrong coordinate system.
-        if vfe_W_out is not None and getattr(self, '_cross_head_perm', None) is not None:
-            perm = self._perm_tensor.to(device=device)
-            vfe_W_out = vfe_W_out[:, perm]
 
         # Set sigma_prior on each block's FFN so the E-step uses embedding
         # prior covariance (not the evolving belief sigma). This avoids
@@ -753,8 +941,8 @@ class GaugeTransformerLM(nn.Module):
             phi,
             self.generators,
             mask=mask,
-            mu_prior=mu_prior,  # Pass priors for variational FFN
-            token_ids=token_ids,  # Pass token IDs for PriorBank lookup
+            mu_prior=mu_prior,
+            token_ids=token_ids,
             return_intermediates=return_agents,
             cached_head_transports=cached_head_transports,
             targets=vfe_targets,
@@ -765,44 +953,12 @@ class GaugeTransformerLM(nn.Module):
         # =================================================================
         # 6b. Inverse Cross-Head Permutation (restore original dim order)
         # =================================================================
-        if getattr(self, '_cross_head_perm', None) is not None:
-            inv_perm = self._inv_perm_tensor.to(device=device)
-            mu_q = mu_q[:, :, inv_perm]
-            if sigma_q is not None:
-                if sigma_q.dim() == 3:
-                    # Diagonal: (B, N, K)
-                    sigma_q = sigma_q[:, :, inv_perm]
-                else:
-                    # Full: (B, N, K, K)
-                    sigma_q = sigma_q[:, :, inv_perm][:, :, :, inv_perm]
+        mu_q, sigma_q = self._apply_cross_head_perm(mu_q, sigma_q, device, inverse=True)
 
         # =================================================================
         # 7. Project to Vocabulary (one prediction per agent)
         # =================================================================
-        if self.use_prior_bank and self.prior_bank is not None:
-            # PriorBank decode: logits = -KL(q || π_v) / τ
-            # Need sigma_q for KL computation
-            logits = self.prior_bank.decode(mu_q, sigma_q, tau=self.prior_bank_tau)
-        else:
-            # When learnable_reflection is active, the evolved μ lives in
-            # the sign-flipped coordinate system (s_v ⊙ raw_μ_v). The tied
-            # out_proj.weight contains raw embeddings, so we must apply the
-            # per-token signs to the weight rows before the dot product.
-            # Equivalently: logits[b,n,v] = <μ_q[b,n], s_v ⊙ W[v]>
-            #             = <μ_q[b,n] ⊙ s_v, W[v]>  — but s_v is per-vocab,
-            # not per-query, so the correct formulation is:
-            # logits = μ_q @ (s ⊙ W)^T = μ_q @ diag(s_v) @ W^T per vocab row.
-            # Implemented as W_signed[v] = s_v ⊙ W[v], then matmul.
-            if getattr(self.token_embed, 'learnable_reflection', False):
-                all_ids = torch.arange(self.out_proj.weight.shape[0],
-                                       device=device)
-                z = self.token_embed.sign_logit(all_ids)  # (V, K)
-                signs = z.sign()
-                signs = z + (signs - z).detach()  # STE
-                W_signed = self.out_proj.weight * signs  # (V, K)
-                logits = torch.matmul(mu_q, W_signed.T)  # (B, N, V)
-            else:
-                logits = self.out_proj(mu_q)  # (B, N, V)
+        logits = self._compute_logits(mu_q, sigma_q, device)
 
         # =================================================================
         # Trajectory Recording: End forward pass
@@ -853,73 +1009,19 @@ class GaugeTransformerLM(nn.Module):
         batch_size, num_agents = token_ids.shape
         device = token_ids.device
 
-        # Embeddings
-        omega = None
-        if self.use_prior_bank and self.prior_bank is not None:
-            embed_out = self.prior_bank.encode(token_ids)
-            if len(embed_out) == 4:
-                mu_q, sigma_q, phi, omega = embed_out
-            else:
-                mu_q, sigma_q, phi = embed_out
-        else:
-            embed_out = self.token_embed(token_ids)
-            if len(embed_out) == 4:
-                mu_q, sigma_q, phi, omega = embed_out
-            else:
-                mu_q, sigma_q, phi = embed_out
-
-        # Cross-head permutation (same as in forward())
-        if getattr(self, '_cross_head_perm', None) is not None:
-            perm = self._perm_tensor.to(device=device)
-            mu_q = mu_q[:, :, perm]
-            if sigma_q is not None:
-                if sigma_q.dim() == 3:
-                    sigma_q = sigma_q[:, :, perm]
-                else:
-                    sigma_q = sigma_q[:, :, perm][:, :, :, perm]
-
-        # Save priors (position-independent semantics) before position encoding
-        mu_prior = mu_q.clone()
-        sigma_prior = sigma_q.clone() if sigma_q is not None else None
-        phi_prior = phi.clone()
-
-        # Position encoding - compose token phi with positional phi
-        phi = self.pos_encoding.compose(phi, num_agents, device=device)
-
-        # Attention mask (causal + optional sparsity)
-        mask = create_attention_mask(
-            num_agents=num_agents,
-            pattern=self.attention_pattern,
-            window=self.attention_window,
-            device=device,
-            causal=True,
-        )
-        mask = mask.unsqueeze(0).expand(batch_size, -1, -1)
-
-        # Precompute transport operators when evolve_phi=False (saves ~6× matrix exps)
-        if omega is not None and self.gauge_param == 'omega':
-            # Direct omega: build per-head cached transports from omega blocks
-            irrep_dims = self.transformer.blocks[0].attention.irrep_dims
-            # Pass per-position (omega_h, omega_h_inv) pairs instead of
-            # materializing O(B×N×N×d²) pairwise Omega. The attention module
-            # converts these to block_exp_pairs for the fast block-diagonal KL path.
-            cached_head_transports = []
-            block_start = 0
-            for d_h in irrep_dims:
-                omega_h = omega[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
-                omega_h_inv = torch.linalg.inv(omega_h)
-                cached_head_transports.append({
-                    'exp_phi': omega_h,
-                    'exp_neg_phi': omega_h_inv,
-                })
-                block_start += d_h
-        elif not self.evolve_phi:
-            first_attention = self.transformer.blocks[0].attention
-            cached_head_transports = first_attention.precompute_head_transports(
-                phi, device, mu_q.dtype
-            )
-        else:
-            cached_head_transports = None
+        # =================================================================
+        # 1-5. Shared embedding and preparation prolog
+        # =================================================================
+        prep = self._embed_and_prepare(token_ids, device)
+        mu_q = prep['mu_q']
+        sigma_q = prep['sigma_q']
+        phi = prep['phi']
+        omega = prep['omega']
+        mu_prior = prep['mu_prior']
+        sigma_prior = prep['sigma_prior']
+        phi_prior = prep['phi_prior']  # phi before positional encoding
+        mask = prep['mask']
+        cached_head_transports = prep['cached_head_transports']
 
         # Forward through ALL transformer blocks WITH attention tracking.
         # Each layer's beta/kl is captured for visualization.
@@ -1002,14 +1104,14 @@ class GaugeTransformerLM(nn.Module):
             # VFE E-step sublayer
             mu_normalized = block.norm2(mu_q) if not block.skip_attention else block.norm1(mu_q)
 
-            # Permute W_out to match cross-head reordered mu basis
+            # Permute W_out to match cross-head reordered mu basis.
             # PriorBank decodes via KL — out_proj is untrained, never use as W_out.
             if is_final and not self.use_prior_bank and hasattr(self, 'out_proj'):
                 _w_out_fwa = self.out_proj.weight
+                if getattr(self, '_cross_head_perm', None) is not None:
+                    _w_out_fwa = _w_out_fwa[:, self._perm_tensor.to(device=device)]
             else:
                 _w_out_fwa = None
-            if _w_out_fwa is not None and getattr(self, '_cross_head_perm', None) is not None:
-                _w_out_fwa = _w_out_fwa[:, self._perm_tensor.to(device=device)]
 
             mu_ffn, sigma_ffn, phi_ffn, _bh = block.ffn(
                 mu=mu_normalized,
@@ -1062,20 +1164,13 @@ class GaugeTransformerLM(nn.Module):
             if _aux_layer_loss and not is_final and targets is not None:
                 _aux_mu = self.transformer.final_norm(mu_q)
                 # Undo cross-head permutation before projecting to vocab
-                if getattr(self, '_cross_head_perm', None) is not None:
-                    _aux_mu = _aux_mu[:, :, self._inv_perm_tensor.to(device=_aux_mu.device)]
+                _aux_mu, _aux_sigma_tmp = self._apply_cross_head_perm(
+                    _aux_mu, sigma_q, _aux_mu.device, inverse=True
+                )
                 if self.use_prior_bank and self.prior_bank is not None:
-                    _aux_sigma = sigma_q if sigma_q is not None else None
-                    # Un-permute sigma to match un-permuted mu — PriorBank.decode()
-                    # computes per-dim KL(q||π_v) so mu and sigma must be aligned.
-                    if _aux_sigma is not None and getattr(self, '_cross_head_perm', None) is not None:
-                        _inv = self._inv_perm_tensor.to(device=_aux_sigma.device)
-                        if _aux_sigma.dim() == 3:
-                            _aux_sigma = _aux_sigma[:, :, _inv]
-                        else:
-                            _aux_sigma = _aux_sigma[:, :, _inv][:, :, :, _inv]
+                    # _aux_sigma_tmp is already inverse-permuted
                     _aux_logits = self.prior_bank.decode(
-                        _aux_mu, _aux_sigma, tau=self.prior_bank_tau
+                        _aux_mu, _aux_sigma_tmp, tau=self.prior_bank_tau
                     )
                 else:
                     # Detach out_proj weights from aux loss: gradient flows to
@@ -1125,19 +1220,13 @@ class GaugeTransformerLM(nn.Module):
                 if targets is not None:
                     with torch.no_grad():
                         _probe_mu = self.transformer.final_norm(mu_q.detach())
+                        _probe_sigma = sigma_q.detach() if sigma_q is not None else None
                         # Undo cross-head permutation before projecting to vocab
-                        if getattr(self, '_cross_head_perm', None) is not None:
-                            _probe_mu = _probe_mu[:, :, self._inv_perm_tensor.to(device=_probe_mu.device)]
+                        _probe_mu, _probe_sigma = self._apply_cross_head_perm(
+                            _probe_mu, _probe_sigma, _probe_mu.device, inverse=True
+                        )
                         # Use PriorBank decode when active (out_proj is untrained in that case)
                         if self.use_prior_bank and self.prior_bank is not None:
-                            _probe_sigma = sigma_q.detach() if sigma_q is not None else None
-                            # Un-permute sigma to match un-permuted mu for KL decode
-                            if _probe_sigma is not None and getattr(self, '_cross_head_perm', None) is not None:
-                                _inv = self._inv_perm_tensor.to(device=_probe_sigma.device)
-                                if _probe_sigma.dim() == 3:
-                                    _probe_sigma = _probe_sigma[:, :, _inv]
-                                else:
-                                    _probe_sigma = _probe_sigma[:, :, _inv][:, :, :, _inv]
                             _probe_logits = self.prior_bank.decode(
                                 _probe_mu, _probe_sigma, tau=self.prior_bank_tau
                             )
@@ -1181,32 +1270,11 @@ class GaugeTransformerLM(nn.Module):
         # Final norm
         mu_q = self.transformer.final_norm(mu_q)
 
-        # Inverse cross-head permutation
-        if getattr(self, '_cross_head_perm', None) is not None:
-            inv_perm = self._inv_perm_tensor.to(device=device)
-            mu_q = mu_q[:, :, inv_perm]
-            if sigma_q is not None:
-                if sigma_q.dim() == 3:
-                    sigma_q = sigma_q[:, :, inv_perm]
-                else:
-                    sigma_q = sigma_q[:, :, inv_perm][:, :, :, inv_perm]
+        # Inverse cross-head permutation (restore original dim order)
+        mu_q, sigma_q = self._apply_cross_head_perm(mu_q, sigma_q, device, inverse=True)
 
         # Project to vocabulary
-        if self.use_prior_bank and self.prior_bank is not None:
-            logits = self.prior_bank.decode(mu_q, sigma_q, tau=self.prior_bank_tau)
-        else:
-            # Apply sign vectors at decode when learnable_reflection is active
-            # (same logic as in forward() — see comment there for derivation)
-            if getattr(self.token_embed, 'learnable_reflection', False):
-                all_ids = torch.arange(self.out_proj.weight.shape[0],
-                                       device=device)
-                z = self.token_embed.sign_logit(all_ids)
-                signs = z.sign()
-                signs = z + (signs - z).detach()
-                W_signed = self.out_proj.weight * signs
-                logits = torch.matmul(mu_q, W_signed.T)
-            else:
-                logits = self.out_proj(mu_q)
+        logits = self._compute_logits(mu_q, sigma_q, device)
 
         # Stack per-layer attention into (n_layers, B, n_heads, N, N) tensors
         # Filter out None entries (shouldn't happen, but defensive)

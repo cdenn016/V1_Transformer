@@ -26,8 +26,8 @@ Mathematical Foundation:
 -----------------------
 Free Energy (E-STEP):
     F = alpha * Sum_i KL(q_i||p_i)                         # Prior consistency
-      + lambda_beta * Sum_{i,j} beta_ij * KL(q_i||Omega_{ij}q_j)  # Belief alignment
-      + lambda_gamma * Sum_{i,j} gamma_ij * KL(p_i||Omega_{ij}p_j)  # Prior alignment
+      + lambda_belief * Sum_{i,j} beta_ij * KL(q_i||Omega_{ij}q_j)  # Belief alignment
+      + lambda_softmax * Sum_{i,j} gamma_ij * KL(p_i||Omega_{ij}p_j)  # Prior alignment
       + CE(W_out * mu, targets)                             # Discrete observations
 
 E-step: Minimize F w.r.t. mu, Sigma (with W_out frozen)
@@ -57,75 +57,26 @@ from transformer.core.gauge_utils import (
     fused_block_diagonal_kl_full,
 )
 
-# =============================================================================
-# VFE Gradient Debug Infrastructure
-# =============================================================================
-# Module-level dict populated by gradient functions when _VFE_GRAD_DEBUG is not None.
-# The E-step loop sets this before calling gradient functions, then reads it after.
-_VFE_GRAD_DEBUG: Optional[Dict[str, float]] = None
+import transformer.core.vfe_utils as _vfe_utils_mod
 
-
-def _grad_norm(t: torch.Tensor) -> float:
-    """Global Frobenius norm as float, detached."""
-    return t.detach().norm().item()
-
-
-def _per_pos_stats(t: torch.Tensor) -> Tuple[float, float, float]:
-    """Per-position norm stats: (mean, max, frac_above_100).
-
-    For (B, N, K) or (B, N, K, K) tensors, computes norm over last dim(s).
-    """
-    if t.dim() == 3:
-        norms = torch.linalg.norm(t, dim=-1)  # (B, N)
-    else:
-        norms = torch.linalg.norm(t.flatten(-2), dim=-1)  # (B, N)
-    return (
-        norms.mean().item(),
-        norms.max().item(),
-        (norms > 100.0).float().mean().item(),
-    )
-
-
-def _aggregate_multihead_vfe_debug(d: Dict[str, float], irrep_dims) -> None:
-    r"""Aggregate per-head VFE debug metrics into base keys for plotting.
-
-    In multi-head VFE mode, gradient functions write base keys (e.g. ``grad_mu_self``)
-    which are then renamed to ``headN(d=M)/grad_mu_self`` per head.  Downstream CSV
-    logging and plotting expect the base keys.  This function adds them in-place:
-
-    - Gradient norms: :math:`\sqrt{\sum_h d_h \|\nabla_h\|^2 / K}` (RMS over
-      orthogonal blocks, weighted by head dimension :math:`d_h`).
-    - ``kl_pairwise_mean``, ``kappa_scaled``: dimension-weighted mean across heads.
-    - ``kl_pairwise_max``: max across heads.
-    """
-    head_keys = [k for k in d if '/' in k]
-    if not head_keys:
-        return
-    base_names = set(k.split('/', 1)[1] for k in head_keys)
-    heads = sorted(
-        set(k.split('/')[0] for k in head_keys),
-        key=lambda x: int(x.split('head')[1].split('(')[0]),
-    )
-    dims = list(irrep_dims) if irrep_dims else [1] * len(heads)
-    total_dim = sum(dims)
-    if total_dim == 0:
-        return
-    for base in base_names:
-        vals = []
-        for h, hp in enumerate(heads):
-            v = d.get(f'{hp}/{base}')
-            if v is not None and isinstance(v, (int, float)):
-                vals.append((v, dims[h] if h < len(dims) else 1))
-        if not vals:
-            continue
-        if 'grad_' in base:
-            # Gradient norms: RMS weighted by head dimension (orthogonal blocks)
-            d[base] = math.sqrt(sum(dim * v ** 2 for v, dim in vals) / total_dim)
-        elif base == 'kl_pairwise_max':
-            d[base] = max(v for v, _ in vals)
-        else:
-            # Dimension-weighted mean (kl_pairwise_mean, kappa_scaled, etc.)
-            d[base] = sum(dim * v for v, dim in vals) / total_dim
+from transformer.core.vfe_utils import (
+    SIGMA_EPS,
+    TRANSPORT_JITTER,
+    KL_CEIL_BASE,
+    KL_CEIL_SCALE,
+    GRAD_CLIP_THRESHOLD,
+    KAPPA_CLAMP_RANGE,
+    _VFE_GRAD_DEBUG,
+    _grad_norm,
+    _per_pos_stats,
+    _aggregate_multihead_vfe_debug,
+    squeeze_trailing_singletons,
+    _safe_spd_inv,
+    _safe_eigh,
+    retract_spd_torch,
+    retract_spd_diagonal_torch,
+    _retract_phi,
+)
 
 
 # =============================================================================
@@ -291,1746 +242,30 @@ def compute_implicit_em_scales(
     return mu_scale, sigma_scale
 
 
-def _safe_spd_inv(M: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """
-    Robust inversion for SPD (symmetric positive-definite) covariance matrices.
-
-    Uses adaptive regularization: max(eps, eps * ||M||_diag_max) to handle
-    both well-conditioned and ill-conditioned cases. Falls back to
-    pseudoinverse if Cholesky/inv still fails (e.g., from extreme GL(K)
-    transport operators corrupting covariance structure).
-
-    Runs in float32 to survive AMP autocast contexts.
-
-    Args:
-        M: (..., K, K) covariance matrices
-        eps: Base regularization floor
-
-    Returns:
-        M_inv: (..., K, K) inverse matrices
-    """
-    K = M.shape[-1]
-    device = M.device
-    orig_dtype = M.dtype
-
-    # Force float32 for numerical stability under AMP
-    with torch.amp.autocast('cuda', enabled=False):
-        M = M.float()
-
-        # Adaptive regularization: scale eps by matrix magnitude
-        # This ensures regularization is proportional to the matrix scale
-        diag_max = M.diagonal(dim1=-2, dim2=-1).abs().amax(dim=-1, keepdim=True).unsqueeze(-1)
-        reg_scale = torch.clamp(diag_max * eps, min=eps)  # (..., 1, 1)
-        M_reg = M + reg_scale * torch.eye(K, device=device, dtype=torch.float32)
-
-        try:
-            result = torch.linalg.inv(M_reg)
-        except (torch.linalg.LinAlgError, RuntimeError):
-            # LinAlgError for non-batched singular matrices
-            # RuntimeError for batched tensors with singular elements
-            # Fallback: pseudoinverse (always succeeds, handles rank-deficient)
-            result = torch.linalg.pinv(M_reg)
-
-    return result.to(orig_dtype)
-
-
-def _safe_eigh(
-    M: torch.Tensor,
-    jitter: float = 1e-6,
-    max_jitter: float = 1e-2,
-    symmetrize: bool = True,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    r"""
-    Robust eigendecomposition for symmetric matrices with escalating jitter.
-
-    Retries ``torch.linalg.eigh`` with geometrically increasing jitter
-    (×10 per retry) until ``max_jitter`` is reached. If all retries fail,
-    falls back to SVD which uses a different algorithm (gesdd vs syev) and
-    is more tolerant of ill-conditioning. For symmetric PSD matrices the
-    singular values equal the eigenvalues and U provides the eigenvectors.
-
-    Runs in float32 to survive AMP autocast contexts.
-
-    Args:
-        M: (..., K, K) symmetric matrices
-        jitter: Initial diagonal regularization
-        max_jitter: Maximum jitter before SVD fallback
-        symmetrize: Whether to symmetrize M before decomposition
-
-    Returns:
-        (eigenvalues, eigenvectors) — same shapes as ``torch.linalg.eigh``
-    """
-    K = M.shape[-1]
-    device = M.device
-    orig_dtype = M.dtype
-
-    with torch.amp.autocast('cuda', enabled=False):
-        M = M.float()
-
-        if symmetrize:
-            M = 0.5 * (M + M.transpose(-1, -2))
-
-        I_K = torch.eye(K, device=device, dtype=torch.float32)
-        current_jitter = jitter
-
-        while current_jitter <= max_jitter:
-            try:
-                M_reg = M + current_jitter * I_K
-                eigvals, eigvecs = torch.linalg.eigh(M_reg)
-                return eigvals.to(orig_dtype), eigvecs.to(orig_dtype)
-            except (RuntimeError, torch.linalg.LinAlgError):
-                current_jitter *= 10.0
-
-        # Ultimate fallback: SVD (gesdd algorithm, more numerically stable)
-        # For symmetric M: M = U @ diag(s) @ U^T, so s = eigenvalues, U = eigenvectors
-        M_reg = M + max_jitter * I_K
-        U, s, Vh = torch.linalg.svd(M_reg, full_matrices=False)
-        return s.to(orig_dtype), U.to(orig_dtype)
-
-
 # Import attention computation for dynamic β
-from transformer.core.attention import compute_attention_weights, compute_transport_operators
+from transformer.core.attention import compute_attention_weights
+from transformer.core.transport_ops import compute_transport_operators
 
 # Numerical event monitor (shared with attention.py)
 from math_utils.numerical_monitor import record as _nr
 
-# Import SO(N) and GL(K) retraction for proper phi updates
-try:
-    from math_utils.generators import (
-        retract_soN_torch,
-        retract_glK_torch,
-        is_soN_generators,
-        is_glK_generators,
-    )
-    RETRACTION_AVAILABLE = True
-except ImportError:
-    RETRACTION_AVAILABLE = False
-
-
-def _retract_phi(
-    phi: torch.Tensor,
-    delta_phi: torch.Tensor,
-    generators: torch.Tensor,
-    step_size: float,
-    trust_region: float = None,  # None = auto-select based on gauge group
-    max_norm: float = None,  # None = auto-select based on gauge group
-    bch_order: int = None,  # None = auto-select based on gauge group
-    eps: float = 1e-6,
-    gauge_group: str = None,  # Explicit: 'GLK', 'SON', or None for auto-detect
-) -> torch.Tensor:
-    """
-    Retract phi update using appropriate method for gauge group.
-
-    When gauge_group is provided, uses it directly. Otherwise auto-selects
-    based on n_gen:
-    - n_gen = N(N-1)/2 → SO(N): compact, uses trust_region=0.3, max_norm=π, bch_order=1
-    - n_gen = K²       → GL(K): non-compact, uses trust_region=0.1, max_norm=5.0, bch_order=2
-
-    Args:
-        phi: Current gauge frames (..., n_gen)
-        delta_phi: Update direction (..., n_gen)
-        generators: Lie algebra generators (n_gen, dim, dim)
-        step_size: Learning rate
-        trust_region: Maximum relative change per update (auto if None)
-        max_norm: Maximum norm for phi (auto if None)
-        bch_order: BCH expansion order (auto if None)
-        eps: Numerical stability
-        gauge_group: Explicit gauge group ('GLK' or 'SON'). Overrides
-            n_gen-based auto-detection. Required when n_gen doesn't match
-            standard formulas (e.g. cross-head coupled GL(K)).
-
-    Returns:
-        phi_new: Updated gauge frames
-    """
-    n_gen = generators.shape[0]
-    if gauge_group == 'GLK':
-        is_glk = RETRACTION_AVAILABLE
-        is_son = False
-    elif gauge_group == 'SON':
-        is_glk = False
-        is_son = RETRACTION_AVAILABLE
-    else:
-        # Auto-detect from n_gen (original heuristic).
-        # When n_gen doesn't match SO(N) or GL(K) exactly, default to GL(K)
-        # retraction (conservative settings). This covers cross-head coupled
-        # GL(K) where n_gen = H*d² + n_cross*d² > K².
-        is_son = RETRACTION_AVAILABLE and is_soN_generators(n_gen)
-        is_glk = RETRACTION_AVAILABLE and (is_glK_generators(n_gen) or not is_son)
-
-    # Auto-select defaults based on gauge group
-    if trust_region is None:
-        trust_region = 0.1 if is_glk else 0.3
-    if max_norm is None:
-        max_norm = 5.0 if is_glk else math.pi
-    if bch_order is None:
-        bch_order = 2 if is_glk else 1
-
-    if not RETRACTION_AVAILABLE:
-        # Fallback: gradient descent with constant trust region in Lie algebra norm
-        update = step_size * delta_phi
-        update_norm = torch.norm(update, dim=-1, keepdim=True)
-        scale = torch.clamp(trust_region / (update_norm + eps), max=1.0)
-        phi_new = phi + scale * update
-        # Clamp to max norm
-        phi_new_norm = torch.norm(phi_new, dim=-1, keepdim=True)
-        phi_new = torch.where(
-            phi_new_norm > max_norm,
-            phi_new * max_norm / (phi_new_norm + eps),
-            phi_new
-        )
-        return phi_new
-
-    # Check if this is GL(K) (n_gen = K²) or SO(N) (n_gen = N(N-1)/2)
-    if is_glk:
-        # GL(K) is non-compact - needs conservative settings
-        return retract_glK_torch(
-            phi=phi,
-            delta_phi=delta_phi,
-            generators=generators,
-            step_size=step_size,
-            trust_region=trust_region,
-            max_norm=max_norm,
-            bch_order=bch_order,
-            eps=eps,
-        )
-    elif is_son:
-        # SO(N) is compact - can use standard settings
-        return retract_soN_torch(
-            phi=phi,
-            delta_phi=delta_phi,
-            generators=generators,
-            step_size=step_size,
-            trust_region=trust_region,
-            max_norm=max_norm,
-            bch_order=bch_order,
-            eps=eps,
-        )
-    else:
-        # Unknown gauge group - conservative fallback with constant trust region
-        update = step_size * delta_phi
-        update_norm = torch.norm(update, dim=-1, keepdim=True)
-        scale = torch.clamp(trust_region / (update_norm + eps), max=1.0)
-        phi_new = phi + scale * update
-        phi_new_norm = torch.norm(phi_new, dim=-1, keepdim=True)
-        phi_new = torch.where(
-            phi_new_norm > max_norm,
-            phi_new * max_norm / (phi_new_norm + eps),
-            phi_new
-        )
-        return phi_new
 
 
 # =============================================================================
-# Memory-Efficient VFE Gradient Helpers
+# VFE Gradient Computation (moved to vfe_gradients.py)
 # =============================================================================
-
-def _compute_vfe_gradients_block_diagonal(
-    mu_q: torch.Tensor,        # (B, N, K) belief means
-    sigma_q: torch.Tensor,     # (B, N, K, K) full block-diagonal covariances
-    mu_p: torch.Tensor,        # (B, N, K) prior means
-    sigma_p: torch.Tensor,     # (B, N, K, K) prior covariances
-    beta: torch.Tensor,        # (B, N, N) attention weights
-    phi: torch.Tensor,         # (B, N, n_gen) gauge frames
-    generators: torch.Tensor,  # (n_gen, K, K) generators
-    alpha: 'float | torch.Tensor',
-    lambda_belief: float,
-    lambda_softmax: float,
-    kappa: float,
-    eps: float,
-    irrep_dims: List[int],
-    compute_sigma_align_grad: bool,
-    enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
-    alpha_c0: Optional[torch.Tensor] = None,  # (K,) for product-rule correction when alpha is learnable
-    cached_block_exp_pairs: Optional[list] = None,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Block-diagonal VFE gradient computation for full covariance mode.
-
-    Processes each irrep block separately to reduce memory from O(N^2 K^2) to
-    O(N^2 * max(d_i^2)). Includes sigma softmax coupling
-    (dBeta/dSigma) via per-block per-pair storage.
-
-    Args:
-        mu_q: Belief means (B, N, K).
-        sigma_q: Full block-diagonal covariances (B, N, K, K).
-        mu_p: Prior means (B, N, K).
-        sigma_p: Prior covariances (B, N, K, K).
-        beta: Attention weights (B, N, N).
-        phi: Gauge frames (B, N, phi_dim), phi_dim = n_gen.
-        generators: Lie algebra generators (n_gen, K, K).
-        alpha: Self-coupling weight, scalar or (B, N, K) Bayesian precision.
-        lambda_belief: Belief alignment weight.
-        kappa: Temperature for softmax coupling.
-        eps: Numerical stability floor.
-        irrep_dims: Block dimensions [d_1, d_2, ...] for block-diagonal KL.
-        compute_sigma_align_grad: Whether to compute dF/dSigma from alignment.
-        enforce_orthogonal: If True, enforce Omega in SO(K) via Newton-Schulz.
-        alpha_c0: (K,) softplus(raw_c0) for product-rule correction when alpha is learnable.
-        cached_block_exp_pairs: Precomputed (exp_phi, exp_neg_phi) per block.
-
-    Returns:
-        grad_mu: (B, N, K) gradient w.r.t. mu.
-        grad_sigma: (B, N, K, K) gradient w.r.t. Sigma.
-    """
-    B, N, K = mu_q.shape
-    device = mu_q.device
-    dtype = mu_q.dtype
-
-    # Initialize output gradients
-    grad_mu = torch.zeros(B, N, K, device=device, dtype=dtype)
-    grad_sigma = torch.zeros(B, N, K, K, device=device, dtype=dtype)
-
-    # =================================================================
-    # 1. Self-Coupling Gradient (block-wise but simpler)
-    # =================================================================
-    sigma_p_inv = _safe_spd_inv(sigma_p, eps=eps)
-    delta_mu = mu_q - mu_p
-    grad_mu_self = alpha * torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
-
-    sigma_q_inv = _safe_spd_inv(sigma_q, eps=eps)
-    # For full covariance (4D), alpha (B,N,1) needs extra dim to broadcast with (B,N,K,K)
-    alpha_4d = alpha.unsqueeze(-1) if isinstance(alpha, torch.Tensor) else alpha
-    grad_sigma_self = alpha_4d * 0.5 * (sigma_p_inv - sigma_q_inv)
-
-    # Product-rule correction for learnable alpha (full covariance):
-    # ∂(α·KL)/∂θ = α·∂KL/∂θ + (∂α/∂θ)·KL
-    # When α_k = c₀_k/(b₀_k + kl_k), ∂α_k/∂θ = -α_k²/c₀_k · ∂kl_k/∂θ
-    if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
-        # Per-dimension KL proxy from diagonal elements
-        prod_qp = torch.matmul(sigma_p_inv, sigma_q)  # (B, N, K, K)
-        trace_k = prod_qp.diagonal(dim1=-2, dim2=-1)  # (B, N, K)
-        sp_inv_delta = torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
-        mahal_k = delta_mu * sp_inv_delta  # (B, N, K)
-        logdet_p = torch.linalg.slogdet(sigma_p.float())[1]  # (B, N)
-        logdet_q = torch.linalg.slogdet(sigma_q.float())[1]  # (B, N)
-        logdet_k = ((logdet_p - logdet_q) / K).unsqueeze(-1).expand_as(delta_mu)  # (B, N, K)
-        kl_k = 0.5 * (trace_k + mahal_k - 1 + logdet_k).clamp(min=0.0)
-        # Correction to mu gradient
-        grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
-        # Correction to sigma gradient (4D broadcast)
-        correction_scale = ((alpha ** 2 / alpha_c0) * kl_k).unsqueeze(-1)  # (B, N, K, 1)
-        grad_sigma_self = grad_sigma_self - correction_scale * 0.5 * (sigma_p_inv - sigma_q_inv)
-
-    grad_mu = grad_mu + grad_mu_self
-    grad_sigma = grad_sigma + grad_sigma_self
-
-    # Debug: self-coupling component norms
-    if _VFE_GRAD_DEBUG is not None:
-        _VFE_GRAD_DEBUG['grad_mu_self'] = _grad_norm(grad_mu_self)
-        _VFE_GRAD_DEBUG['grad_sigma_self'] = _grad_norm(grad_sigma_self)
-        _ps = _per_pos_stats(grad_sigma_self)
-        _VFE_GRAD_DEBUG['grad_sigma_self_pos_mean'] = _ps[0]
-        _VFE_GRAD_DEBUG['grad_sigma_self_pos_max'] = _ps[1]
-        # sigma_p eigenvalue range (shows how tight priors are)
-        sp_diag = torch.diagonal(sigma_p, dim1=-2, dim2=-1)
-        _VFE_GRAD_DEBUG['sigma_p_min'] = sp_diag.min().item()
-        _VFE_GRAD_DEBUG['sigma_p_max'] = sp_diag.max().item()
-        # sigma_q eigenvalue range
-        try:
-            sq_eig = torch.linalg.eigvalsh(sigma_q)
-            _VFE_GRAD_DEBUG['sigma_q_eig_min'] = sq_eig.min().item()
-            _VFE_GRAD_DEBUG['sigma_q_eig_max'] = sq_eig.max().item()
-        except (RuntimeError, torch.linalg.LinAlgError):
-            _VFE_GRAD_DEBUG['sigma_q_eig_min'] = float('nan')
-            _VFE_GRAD_DEBUG['sigma_q_eig_max'] = float('nan')
-
-    # =================================================================
-    # 2. Belief Alignment Gradient (block-diagonal + chunked processing)
-    # =================================================================
-    # Precompute matrix exponentials — FUSED by dimension group
-    if cached_block_exp_pairs is not None:
-        _fused_pairs = cached_block_exp_pairs
-    else:
-        _fused_pairs = fused_block_matrix_exp_pairs(
-            phi, generators, irrep_dims, enforce_orthogonal=enforce_orthogonal
-        )
-    block_exp_phi = [p[0] for p in _fused_pairs]
-    block_exp_neg_phi = [p[1] for p in _fused_pairs]
-
-    # Accumulators for alignment gradients
-    grad_mu_align = torch.zeros_like(mu_q)
-    grad_sigma_align = torch.zeros_like(sigma_q)
-
-    # For KL values and gradients - accumulate per-pair data for softmax coupling.
-    # NOTE: Full (B, N, N) and (B, N, N, K) tensors are needed because the softmax
-    # coupling term requires all pairwise KL values and gradients simultaneously.
-    # Chunking over query positions (i) still saves memory on intermediate Omega,
-    # transported beliefs, and inverses - just not on the final accumulators.
-    kl_values = torch.zeros(B, N, N, device=device, dtype=dtype)
-    grad_kl_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=dtype)
-
-    # Per-block per-pair sigma gradients for softmax coupling (Pass 2).
-    # Memory: Σ_b B*N²*d_b² instead of B*N²*K² (~82× savings for typical irrep specs).
-    grad_sigma_per_pair_blocks = None
-    if compute_sigma_align_grad:
-        grad_sigma_per_pair_blocks = [
-            torch.zeros(B, N, N, d, d, device=device, dtype=dtype)
-            for d in irrep_dims
-        ]
-
-    # Process all query positions (no chunking)
-    C = N
-    for i_start in range(0, N, C):
-        i_end = min(i_start + C, N)
-        C_actual = i_end - i_start
-
-        # Process each irrep block for this chunk of query positions
-        block_start = 0
-        for block_idx, d in enumerate(irrep_dims):
-            block_end = block_start + d
-
-            # Extract block beliefs - use .contiguous() to create copies and avoid
-            # inplace modification errors during backward pass
-            mu_block = mu_q[:, :, block_start:block_end].contiguous()  # (B, N, d)
-            sigma_block = sigma_q[:, :, block_start:block_end, block_start:block_end].contiguous()  # (B, N, d, d)
-
-            # Get chunked exponentials for query positions - use .contiguous() for same reason
-            exp_phi_i = block_exp_phi[block_idx][:, i_start:i_end].contiguous()  # (B, C, d, d)
-            exp_neg_phi_j = block_exp_neg_phi[block_idx].contiguous()  # (B, N, d, d)
-
-            # Compute Omega for this chunk: (B, C, N, d, d)
-            Omega_chunk = torch.einsum(
-                'bikl,bjlm->bijkm',
-                exp_phi_i, exp_neg_phi_j
-            )  # (B, C, N, d, d)
-
-            # Transport means and covariances for this chunk
-            mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega_chunk, mu_block)  # (B, C, N, d)
-            sigma_j_transported = torch.einsum(
-                'bijkl,bjlm,bijmn->bijkn',
-                Omega_chunk, sigma_block, Omega_chunk.transpose(-1, -2)
-            )  # (B, C, N, d, d)
-
-            del Omega_chunk
-
-            # Regularize and invert (adaptive regularization for numerical stability)
-            # Use 1e-4 jitter (not eps=1e-6) — GL(K) transport can produce
-            # near-singular covariances that need stronger regularization.
-            I_d = torch.eye(d, device=device, dtype=dtype)
-            sigma_j_transported = 0.5 * (sigma_j_transported + sigma_j_transported.transpose(-1, -2))
-            sigma_j_reg = sigma_j_transported + 1e-4 * I_d
-            sigma_j_inv = _safe_spd_inv(sigma_j_reg, eps=1e-4)  # (B, C, N, d, d)
-
-            # Delta mu for this block (query chunk) - contiguous to avoid view issues
-            mu_block_i = mu_block[:, i_start:i_end].contiguous()  # (B, C, d)
-            delta_mu_block = mu_block_i[:, :, None, :] - mu_j_transported  # (B, C, N, d)
-
-            # ∂KL_ij/∂μ_i for this block
-            grad_kl_block = torch.einsum('bijkl,bijl->bijk', sigma_j_inv, delta_mu_block)  # (B, C, N, d)
-            grad_kl_per_pair_full[:, i_start:i_end, :, block_start:block_end] = grad_kl_block
-
-            # KL terms for this block
-            mahal_block = torch.einsum('bijk,bijk->bij', delta_mu_block, grad_kl_block)  # (B, C, N)
-
-            # Use contiguous slice and clone for expand to avoid view issues
-            sigma_i_block_slice = sigma_block[:, i_start:i_end].contiguous()  # (B, C, d, d)
-            sigma_i_block = sigma_i_block_slice[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()  # (B, C, N, d, d)
-            trace_block = torch.einsum('bijkk->bij', torch.einsum('bijkl,bijlm->bijkm', sigma_j_inv, sigma_i_block))
-
-            try:
-                L_j = torch.linalg.cholesky(sigma_j_reg)
-                logdet_j = 2.0 * torch.sum(torch.log(torch.diagonal(L_j, dim1=-2, dim2=-1) + eps), dim=-1)
-            except RuntimeError:
-                # Fallback: use slogdet instead of zeroing (which biases KL)
-                sign_j, logdet_j = torch.linalg.slogdet(sigma_j_reg)
-                logdet_j = torch.where(sign_j > 0, logdet_j, torch.zeros_like(logdet_j))
-
-            sigma_i_block_diag = sigma_i_block_slice + eps * I_d  # (B, C, d, d)
-            try:
-                L_i = torch.linalg.cholesky(sigma_i_block_diag)
-                logdet_i = 2.0 * torch.sum(torch.log(torch.diagonal(L_i, dim1=-2, dim2=-1) + eps), dim=-1)
-            except RuntimeError:
-                # Fallback: use slogdet instead of zeroing (which biases KL)
-                sign_i, logdet_i = torch.linalg.slogdet(sigma_i_block_diag)
-                logdet_i = torch.where(sign_i > 0, logdet_i, torch.zeros_like(logdet_i))
-
-            kl_block = 0.5 * (trace_block + mahal_block - d + logdet_j - logdet_i[:, :, None])
-            # Clamp KL to [0, max] for numerical stability (scale ceiling with block dim d)
-            kl_values[:, i_start:i_end, :] = kl_values[:, i_start:i_end, :] + kl_block.clamp(min=0.0, max=max(100.0, 20.0 * d))
-
-            # Sigma alignment gradient for this block
-            if compute_sigma_align_grad:
-                sigma_i_inv_block = _safe_spd_inv(sigma_i_block_diag, eps=1e-4)  # (B, C, d, d)
-                # Use .clone() after expand to ensure contiguous memory layout
-                sigma_i_inv_exp = sigma_i_inv_block[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()
-                grad_sigma_block = 0.5 * (sigma_j_inv - sigma_i_inv_exp)  # (B, C, N, d, d)
-                beta_chunk = beta[:, i_start:i_end, :].contiguous()  # (B, C, N)
-                grad_sigma_block_weighted = lambda_belief * torch.einsum('bij,bijkl->bikl', beta_chunk, grad_sigma_block)
-                grad_sigma_align[:, i_start:i_end, block_start:block_end, block_start:block_end] = (
-                    grad_sigma_align[:, i_start:i_end, block_start:block_end, block_start:block_end] + grad_sigma_block_weighted
-                )
-                # Store per-pair sigma gradients for softmax coupling (Pass 2)
-                grad_sigma_per_pair_blocks[block_idx][:, i_start:i_end, :, :, :] = grad_sigma_block
-
-            del sigma_j_transported, sigma_j_inv, mu_j_transported
-            block_start = block_end
-
-    # avg_grad = Σ_j β_ij · ∂KL_ij/∂μ_i (used for both direct and softmax terms)
-    avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
-    grad_mu_direct = lambda_belief * avg_grad
-
-    # Softmax coupling term
-    # Scale kappa by √K to match attention temperature τ = √K
-    kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
-    grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair_full
-    d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
-    grad_mu_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
-
-    grad_mu_align = grad_mu_direct + grad_mu_softmax
-    grad_mu = grad_mu + grad_mu_align
-    grad_sigma = grad_sigma + grad_sigma_align
-
-    # Debug: alignment component norms (before softmax coupling)
-    if _VFE_GRAD_DEBUG is not None:
-        _VFE_GRAD_DEBUG['grad_mu_direct'] = _grad_norm(grad_mu_direct)
-        _VFE_GRAD_DEBUG['grad_mu_softmax'] = _grad_norm(grad_mu_softmax)
-        _VFE_GRAD_DEBUG['grad_sigma_align_direct'] = _grad_norm(grad_sigma_align)
-        _ps = _per_pos_stats(grad_sigma_align)
-        _VFE_GRAD_DEBUG['grad_sigma_align_pos_mean'] = _ps[0]
-        _VFE_GRAD_DEBUG['grad_sigma_align_pos_max'] = _ps[1]
-        # KL pairwise stats (drives softmax coupling magnitude)
-        _VFE_GRAD_DEBUG['kl_pairwise_mean'] = kl_values.mean().item()
-        _VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
-        _VFE_GRAD_DEBUG['kappa_scaled'] = kappa_scaled
-        # Fraction of pairs near the KL ceiling (diagnoses clamp saturation)
-        _kl_ceil = max(100.0, 20.0 * K)
-        _VFE_GRAD_DEBUG['kl_frac_above_90pct'] = (kl_values > 0.9 * _kl_ceil).float().mean().item()
-        _VFE_GRAD_DEBUG['kl_p95'] = kl_values.quantile(0.95).item()
-
-    # Sigma softmax coupling (Pass 2): ∂β/∂Σ term computed per-block.
-    # Uses stored per-block per-pair sigma gradients to avoid (B, N, N, K, K) memory.
-    _grad_sigma_before_softmax = grad_sigma.clone() if (_VFE_GRAD_DEBUG is not None) else None
-    if compute_sigma_align_grad and grad_sigma_per_pair_blocks is not None:
-        kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
-        block_start = 0
-        for block_idx, d in enumerate(irrep_dims):
-            block_end = block_start + d
-            g_per_pair = grad_sigma_per_pair_blocks[block_idx]  # (B, N, N, d, d)
-            avg_g = torch.einsum('bij,bijkl->bikl', beta, g_per_pair)  # (B, N, d, d)
-            g_deviation = avg_g.unsqueeze(2) - g_per_pair  # (B, N, N, d, d)
-            d_beta_d_sigma = beta.unsqueeze(-1).unsqueeze(-1) * g_deviation / kappa_scaled  # (B, N, N, d, d)
-            grad_sigma_softmax_block = lambda_softmax * torch.einsum('bij,bijkl->bikl', kl_values, d_beta_d_sigma)  # (B, N, d, d)
-            grad_sigma[:, :, block_start:block_end, block_start:block_end] = (
-                grad_sigma[:, :, block_start:block_end, block_start:block_end] + grad_sigma_softmax_block
-            )
-            block_start = block_end
-        del grad_sigma_per_pair_blocks
-
-    # Debug: softmax coupling contribution and final totals
-    if _VFE_GRAD_DEBUG is not None:
-        if _grad_sigma_before_softmax is not None:
-            _sigma_softmax_contrib = grad_sigma - _grad_sigma_before_softmax
-            _VFE_GRAD_DEBUG['grad_sigma_softmax'] = _grad_norm(_sigma_softmax_contrib)
-            _ps = _per_pos_stats(_sigma_softmax_contrib)
-            _VFE_GRAD_DEBUG['grad_sigma_softmax_pos_mean'] = _ps[0]
-            _VFE_GRAD_DEBUG['grad_sigma_softmax_pos_max'] = _ps[1]
-        _VFE_GRAD_DEBUG['grad_mu_total'] = _grad_norm(grad_mu)
-        _VFE_GRAD_DEBUG['grad_sigma_total'] = _grad_norm(grad_sigma)
-        _ps = _per_pos_stats(grad_sigma)
-        _VFE_GRAD_DEBUG['grad_sigma_total_pos_mean'] = _ps[0]
-        _VFE_GRAD_DEBUG['grad_sigma_total_pos_max'] = _ps[1]
-
-    return grad_mu, grad_sigma
-
-
-def _compute_vfe_gradients_block_diagonal_diag(
-    mu_q: torch.Tensor,        # (B, N, K) belief means
-    sigma_q: torch.Tensor,     # (B, N, K) diagonal variances
-    mu_p: torch.Tensor,        # (B, N, K) prior means
-    sigma_p: torch.Tensor,     # (B, N, K) prior variances
-    beta: torch.Tensor,        # (B, N, N) attention weights
-    phi: torch.Tensor,         # (B, N, n_gen) gauge frames
-    generators: torch.Tensor,  # (n_gen, K, K) generators
-    alpha: 'float | torch.Tensor',
-    lambda_belief: float,
-    lambda_softmax: float,
-    kappa: float,
-    eps: float,
-    irrep_dims: List[int],
-    compute_sigma_align_grad: bool,
-    enforce_orthogonal: bool = False,
-    alpha_c0: Optional[torch.Tensor] = None,  # (K,) for product-rule correction
-    cached_block_exp_pairs: Optional[list] = None,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Block-diagonal VFE gradient computation for diagonal covariance mode.
-
-    Processes each irrep block separately with small d x d Omega tensors
-    and O(d) diagonal KL formulas. No matrix inverse or Cholesky needed.
-    Includes sigma softmax coupling (dBeta/dSigma term).
-
-    Memory: O(N^2 * max(d_i^2)) instead of O(N^2 * K^2).
-
-    Args:
-        mu_q: Belief means (B, N, K).
-        sigma_q: Diagonal variances (B, N, K).
-        mu_p: Prior means (B, N, K).
-        sigma_p: Prior diagonal variances (B, N, K).
-        beta: Attention weights (B, N, N).
-        phi: Gauge frames (B, N, phi_dim), phi_dim = n_gen.
-        generators: Lie algebra generators (n_gen, K, K).
-        alpha: Self-coupling weight, scalar or (B, N, K) Bayesian precision.
-        lambda_belief: Belief alignment weight.
-        kappa: Temperature for softmax coupling.
-        eps: Numerical stability floor.
-        irrep_dims: Block dimensions [d_1, d_2, ...] for block-diagonal KL.
-        compute_sigma_align_grad: Whether to compute dF/dSigma from alignment.
-        enforce_orthogonal: If True, enforce Omega in SO(K) via Newton-Schulz.
-        alpha_c0: (K,) softplus(raw_c0) for product-rule correction when alpha is learnable.
-        cached_block_exp_pairs: Precomputed (exp_phi, exp_neg_phi) per block.
-
-    Returns:
-        grad_mu: (B, N, K) gradient w.r.t. mu.
-        grad_sigma: (B, N, K) gradient w.r.t. diagonal sigma.
-    """
-    # Squeeze trailing singleton dimensions for robustness
-    while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
-        sigma_q = sigma_q.squeeze(-1)
-    while sigma_p.dim() > 3 and sigma_p.shape[-1] == 1:
-        sigma_p = sigma_p.squeeze(-1)
-
-    B, N, K = mu_q.shape
-    device = mu_q.device
-    dtype = mu_q.dtype
-
-    # Force float32 for all sigma divisions, logs, and KL computation under AMP
-    mu_q = mu_q.float()
-    mu_p = mu_p.float()
-    sigma_q = sigma_q.float()
-    sigma_p = sigma_p.float()
-    beta = beta.float()
-
-    sigma_q_safe = sigma_q.clamp(min=eps)
-    sigma_p_safe = sigma_p.clamp(min=eps)
-
-    # =================================================================
-    # 1. Self-Coupling Gradient (diagonal, no blocks needed)
-    # =================================================================
-    delta_mu = mu_q - mu_p
-    grad_mu_self = alpha * delta_mu / sigma_p_safe
-    grad_sigma_self = alpha * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
-
-    # Product-rule correction for learnable alpha
-    if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
-        kl_k = 0.5 * (sigma_q_safe / sigma_p_safe + delta_mu ** 2 / sigma_p_safe
-                      - 1.0 + torch.log(sigma_p_safe) - torch.log(sigma_q_safe))
-        kl_k = kl_k.clamp(min=0.0)
-        grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * delta_mu / sigma_p_safe
-        grad_sigma_self = grad_sigma_self - (alpha ** 2 / alpha_c0) * kl_k * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
-
-    # Debug: self-coupling component norms
-    if _VFE_GRAD_DEBUG is not None:
-        _VFE_GRAD_DEBUG['grad_mu_self'] = _grad_norm(grad_mu_self)
-        _VFE_GRAD_DEBUG['grad_sigma_self'] = _grad_norm(grad_sigma_self)
-        _ps = _per_pos_stats(grad_sigma_self)
-        _VFE_GRAD_DEBUG['grad_sigma_self_pos_mean'] = _ps[0]
-        _VFE_GRAD_DEBUG['grad_sigma_self_pos_max'] = _ps[1]
-        _VFE_GRAD_DEBUG['sigma_p_min'] = sigma_p_safe.min().item()
-        _VFE_GRAD_DEBUG['sigma_p_max'] = sigma_p_safe.max().item()
-        _VFE_GRAD_DEBUG['sigma_q_eig_min'] = sigma_q_safe.min().item()
-        _VFE_GRAD_DEBUG['sigma_q_eig_max'] = sigma_q_safe.max().item()
-
-    # =================================================================
-    # 2. Belief Alignment Gradient (block-diagonal + diagonal formulas)
-    # =================================================================
-    # Precompute matrix exponentials — FUSED by dimension group
-    if cached_block_exp_pairs is not None:
-        _fused_pairs = cached_block_exp_pairs
-    else:
-        _fused_pairs = fused_block_matrix_exp_pairs(
-            phi, generators, irrep_dims, enforce_orthogonal=enforce_orthogonal
-        )
-    block_exp_phi = [p[0] for p in _fused_pairs]
-    block_exp_neg_phi = [p[1] for p in _fused_pairs]
-
-    # Accumulators for per-pair KL values and gradients across all blocks
-    kl_values = torch.zeros(B, N, N, device=device, dtype=dtype)
-    grad_kl_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=dtype)
-    grad_sigma_align = torch.zeros_like(sigma_q)
-    # Accumulator for sigma softmax coupling (same memory cost as grad_kl_per_pair_full)
-    grad_sigma_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=dtype) if (
-        compute_sigma_align_grad) else None
-
-    # Process each irrep block sequentially with direct Omega construction.
-    # This avoids the factored transport approach (A @ (B diag(σ) B^T) @ A^T)
-    # which accumulates more float32 rounding error through intermediate matmuls.
-    block_start = 0
-    for block_idx, d in enumerate(irrep_dims):
-        block_end = block_start + d
-
-        mu_block = mu_q[:, :, block_start:block_end].contiguous()        # (B, N, d)
-        sigma_block = sigma_q_safe[:, :, block_start:block_end].contiguous()  # (B, N, d)
-
-        # Block Omega: (B, N, N, d, d) — direct construction for numerical precision
-        Omega_block = torch.einsum(
-            'bikl,bjlm->bijkm',
-            block_exp_phi[block_idx], block_exp_neg_phi[block_idx]
-        )
-
-        # Transport means
-        mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_block)  # (B, N, N, d)
-
-        # Diagonal covariance transport: σ_t[k] = Σ_l Ω_kl² * σ[l]
-        # This extracts diag(Ω @ diag(σ) @ Ω^T), discarding off-diagonal elements
-        # of the transported covariance. For non-identity Ω ∈ GL(K), the full
-        # transported covariance is NOT diagonal, so this is an approximation that
-        # breaks strict gauge equivariance. Use exact_diagonal_transport=True for
-        # exact transport (lifts to full covariance, applies sandwich product,
-        # extracts diagonal). The approximation quality depends on how far Ω is
-        # from identity within each irrep block.
-        sigma_j_transported = torch.einsum(
-            'bijkl,bijkl,bjl->bijk', Omega_block, Omega_block, sigma_block
-        ).clamp(min=eps)  # (B, N, N, d)
-
-        del Omega_block
-
-        # Delta mu (broadcast instead of expand+clone to avoid 59M-element copy)
-        mu_block_i = mu_block[:, :, None, :]  # (B, N, 1, d) - broadcasts with (B, N, N, d)
-        delta_mu = mu_block_i - mu_j_transported  # (B, N, N, d)
-
-        # ∂KL/∂μ_i = (μ_i - μ_j_t) / σ_j_t (element-wise)
-        grad_kl_block = delta_mu / sigma_j_transported  # (B, N, N, d)
-        grad_kl_per_pair_full[:, :, :, block_start:block_end] = grad_kl_block
-
-        # Diagonal KL for this block (broadcast, no clone)
-        sigma_i_block = sigma_block[:, :, None, :]  # (B, N, 1, d)
-        trace_block = (sigma_i_block / sigma_j_transported).sum(dim=-1)
-        mahal_block = (delta_mu ** 2 / sigma_j_transported).sum(dim=-1)
-        logdet_block = (torch.log(sigma_j_transported.clamp(min=eps))
-                        - torch.log(sigma_i_block.clamp(min=eps))).sum(dim=-1)
-
-        kl_block = 0.5 * (trace_block + mahal_block - d + logdet_block)
-        kl_block = kl_block.clamp(min=0.0, max=max(100.0, 20.0 * d))
-        kl_values = kl_values + kl_block
-
-        # Sigma alignment gradient for this block
-        if compute_sigma_align_grad:
-            sigma_j_inv_diag = 1.0 / sigma_j_transported  # (B, N, N, d)
-            sigma_i_inv = 1.0 / sigma_block  # (B, N, d)
-            grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv[:, :, None, :])  # broadcast
-            grad_sigma_align[:, :, block_start:block_end] = (
-                grad_sigma_align[:, :, block_start:block_end]
-                + lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_sigma_pair)
-            )
-            if grad_sigma_per_pair_full is not None:
-                grad_sigma_per_pair_full[:, :, :, block_start:block_end] = grad_sigma_pair
-
-        del sigma_j_transported, mu_j_transported, delta_mu
-        block_start = block_end
-
-    # avg_grad = Σ_j β_ij · ∂KL_ij/∂μ_i (used for both direct and softmax terms)
-    avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
-    grad_mu_direct = lambda_belief * avg_grad
-
-    # Softmax coupling term
-    kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
-    grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair_full
-    d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
-    grad_mu_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
-
-    grad_mu_align = grad_mu_direct + grad_mu_softmax
-    grad_mu = grad_mu_self + grad_mu_align
-
-    # Debug: alignment component norms (before softmax coupling for sigma)
-    if _VFE_GRAD_DEBUG is not None:
-        _VFE_GRAD_DEBUG['grad_mu_direct'] = _grad_norm(grad_mu_direct)
-        _VFE_GRAD_DEBUG['grad_mu_softmax'] = _grad_norm(grad_mu_softmax)
-        _VFE_GRAD_DEBUG['grad_sigma_align_direct'] = _grad_norm(grad_sigma_align)
-        _ps = _per_pos_stats(grad_sigma_align)
-        _VFE_GRAD_DEBUG['grad_sigma_align_pos_mean'] = _ps[0]
-        _VFE_GRAD_DEBUG['grad_sigma_align_pos_max'] = _ps[1]
-        _VFE_GRAD_DEBUG['kl_pairwise_mean'] = kl_values.mean().item()
-        _VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
-        _VFE_GRAD_DEBUG['kappa_scaled'] = kappa_scaled
-        # Fraction of pairs near the KL ceiling (diagnoses clamp saturation)
-        _kl_ceil = max(100.0, 20.0 * K)
-        _VFE_GRAD_DEBUG['kl_frac_above_90pct'] = (kl_values > 0.9 * _kl_ceil).float().mean().item()
-        _VFE_GRAD_DEBUG['kl_p95'] = kl_values.quantile(0.95).item()
-
-    # Sigma softmax coupling: Σ_j KL_ij · ∂β_ij/∂σ_i
-    grad_sigma_softmax_norm = 0.0
-    if grad_sigma_per_pair_full is not None:
-        avg_sigma_grad = torch.einsum('bij,bijk->bik', beta, grad_sigma_per_pair_full)
-        sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair_full
-        d_beta_d_sigma = beta.unsqueeze(-1) * sigma_grad_deviation / kappa_scaled
-        grad_sigma_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_sigma)
-        if _VFE_GRAD_DEBUG is not None:
-            grad_sigma_softmax_norm = _grad_norm(grad_sigma_softmax)
-        grad_sigma_align = grad_sigma_align + grad_sigma_softmax
-
-    grad_sigma = grad_sigma_self + grad_sigma_align
-
-    # Debug: final totals
-    if _VFE_GRAD_DEBUG is not None:
-        _VFE_GRAD_DEBUG['grad_sigma_softmax'] = grad_sigma_softmax_norm
-        _VFE_GRAD_DEBUG['grad_mu_total'] = _grad_norm(grad_mu)
-        _VFE_GRAD_DEBUG['grad_sigma_total'] = _grad_norm(grad_sigma)
-        _ps = _per_pos_stats(grad_sigma)
-        _VFE_GRAD_DEBUG['grad_sigma_total_pos_mean'] = _ps[0]
-        _VFE_GRAD_DEBUG['grad_sigma_total_pos_max'] = _ps[1]
-
-    return grad_mu.to(dtype), grad_sigma.to(dtype)
-
-
-def _fused_attention_and_vfe_gradients_block_diag(
-    mu_q: torch.Tensor,        # (B, N, K) belief means
-    sigma_q: torch.Tensor,     # (B, N, K) diagonal variances
-    mu_p: torch.Tensor,        # (B, N, K) prior means
-    sigma_p: torch.Tensor,     # (B, N, K) prior variances
-    phi: torch.Tensor,         # (B, N, n_gen) gauge frames
-    generators: torch.Tensor,  # (n_gen, K, K) generators
-    alpha: 'float | torch.Tensor',
-    lambda_belief: float,
-    lambda_softmax: float,
-    kappa: float,
-    eps: float,
-    irrep_dims: List[int],
-    compute_sigma_align_grad: bool,
-    enforce_orthogonal: bool = False,
-    alpha_c0: Optional[torch.Tensor] = None,
-    cached_block_exp_pairs: Optional[list] = None,
-    mask: Optional[torch.Tensor] = None,
-    mask_self_attention: bool = False,
-    use_rope: bool = False,
-    rope_base: float = 10000.0,
-    return_kl: bool = False,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
-    """
-    Fused attention + VFE gradient computation for block-diagonal diagonal mode.
-
-    Computes beta (attention weights) AND VFE gradients in a single pass over
-    irrep blocks, sharing the Omega construction. Eliminates the redundant Omega
-    computation that occurs when compute_attention_weights and
-    compute_vfe_gradients_gpu are called separately. Includes sigma softmax
-    coupling (dBeta/dSigma). Incompatible with exact_diagonal_transport (which
-    lifts to full covariance and disables fused diagonal paths).
-
-    For a config with 5 heads x d=15, this saves 5 x O(B*N^2*d^2) Omega
-    constructions per VFE iteration.
-
-    Args:
-        mu_q: Belief means (B, N, K).
-        sigma_q: Diagonal variances (B, N, K).
-        mu_p: Prior means (B, N, K).
-        sigma_p: Prior diagonal variances (B, N, K).
-        phi: Gauge frames (B, N, phi_dim), phi_dim = n_gen.
-        generators: Lie algebra generators (n_gen, K, K).
-        alpha: Self-coupling weight, scalar or (B, N, K) Bayesian precision.
-        lambda_belief: Belief alignment weight.
-        kappa: Temperature for softmax coupling.
-        eps: Numerical stability floor.
-        irrep_dims: Block dimensions [d_1, d_2, ...] for block-diagonal KL.
-        compute_sigma_align_grad: Whether to compute dF/dSigma from alignment.
-        enforce_orthogonal: If True, enforce Omega in SO(K) via Newton-Schulz.
-        alpha_c0: (K,) softplus(raw_c0) for product-rule correction.
-        cached_block_exp_pairs: Precomputed (exp_phi, exp_neg_phi) per block.
-        mask: Causal mask (B, N, N), 0 = cannot attend.
-        mask_self_attention: If True, mask diagonal (no self-attention).
-        use_rope: Apply rotary position embeddings to mu for KL computation.
-        rope_base: RoPE base frequency.
-        return_kl: If True, also return pairwise KL matrix.
-
-    Returns:
-        beta: (B, N, N) attention weights.
-        grad_mu: (B, N, K) gradient w.r.t. mu.
-        grad_sigma: (B, N, K) gradient w.r.t. diagonal sigma.
-        kl_matrix: (B, N, N) pairwise KL divergences, or None if return_kl=False.
-    """
-    while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
-        sigma_q = sigma_q.squeeze(-1)
-    while sigma_p.dim() > 3 and sigma_p.shape[-1] == 1:
-        sigma_p = sigma_p.squeeze(-1)
-
-    B, N, K = mu_q.shape
-    device = mu_q.device
-    dtype = mu_q.dtype
-
-    mu_q = mu_q.float()
-    mu_p = mu_p.float()
-    sigma_q = sigma_q.float()
-    sigma_p = sigma_p.float()
-
-    sigma_q_safe = sigma_q.clamp(min=eps)
-    sigma_p_safe = sigma_p.clamp(min=eps)
-
-    # Apply RoPE to a copy of mu for KL computation (not for gradients)
-    if use_rope:
-        from transformer.core.attention import _apply_rope
-        mu_q_rope = _apply_rope(mu_q, base=rope_base)
-    else:
-        mu_q_rope = mu_q
-
-    # Self-coupling gradient
-    delta_mu_sp = mu_q - mu_p
-    grad_mu_self = alpha * delta_mu_sp / sigma_p_safe
-    grad_sigma_self = alpha * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
-
-    if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
-        kl_k = 0.5 * (sigma_q_safe / sigma_p_safe + delta_mu_sp ** 2 / sigma_p_safe
-                      - 1.0 + torch.log(sigma_p_safe) - torch.log(sigma_q_safe))
-        kl_k = kl_k.clamp(min=0.0)
-        grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * delta_mu_sp / sigma_p_safe
-        grad_sigma_self = grad_sigma_self - (alpha ** 2 / alpha_c0) * kl_k * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
-
-    # Debug: self-coupling component norms (fused path)
-    if _VFE_GRAD_DEBUG is not None:
-        _VFE_GRAD_DEBUG['grad_mu_self'] = _grad_norm(grad_mu_self)
-        _VFE_GRAD_DEBUG['grad_sigma_self'] = _grad_norm(grad_sigma_self)
-        _ps = _per_pos_stats(grad_sigma_self)
-        _VFE_GRAD_DEBUG['grad_sigma_self_pos_mean'] = _ps[0]
-        _VFE_GRAD_DEBUG['grad_sigma_self_pos_max'] = _ps[1]
-        _VFE_GRAD_DEBUG['sigma_p_min'] = sigma_p_safe.min().item()
-        _VFE_GRAD_DEBUG['sigma_p_max'] = sigma_p_safe.max().item()
-        _VFE_GRAD_DEBUG['sigma_q_eig_min'] = sigma_q_safe.min().item()
-        _VFE_GRAD_DEBUG['sigma_q_eig_max'] = sigma_q_safe.max().item()
-
-    # Precompute matrix exponentials
-    if cached_block_exp_pairs is not None:
-        _fused_pairs = cached_block_exp_pairs
-    else:
-        _fused_pairs = fused_block_matrix_exp_pairs(
-            phi, generators, irrep_dims, enforce_orthogonal=enforce_orthogonal
-        )
-    block_exp_phi = [p[0] for p in _fused_pairs]
-    block_exp_neg_phi = [p[1] for p in _fused_pairs]
-
-    # Accumulators
-    kl_values = torch.zeros(B, N, N, device=device, dtype=torch.float32)
-    # When RoPE is active, kl_values uses RoPE-rotated mu (for attention β) but
-    # gradients use raw mu. The softmax coupling ∂β/∂μ requires KL values consistent
-    # with the gradient space, so we accumulate raw-mu KLs separately.
-    kl_values_raw = torch.zeros(B, N, N, device=device, dtype=torch.float32) if use_rope else None
-    grad_kl_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=torch.float32)
-    grad_sigma_align = torch.zeros_like(sigma_q)
-    grad_sigma_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=torch.float32) if (
-        compute_sigma_align_grad) else None
-    # Single pass over blocks: compute Omega, KL, and gradients together
-    block_start = 0
-    for block_idx, d in enumerate(irrep_dims):
-        block_end = block_start + d
-
-        # Use RoPE-rotated mu for KL/attention, raw mu for gradients
-        mu_block_rope = mu_q_rope[:, :, block_start:block_end].contiguous()
-        mu_block = mu_q[:, :, block_start:block_end].contiguous()
-        sigma_block = sigma_q_safe[:, :, block_start:block_end].contiguous()
-
-        # Build Omega ONCE for this block
-        Omega_block = torch.einsum(
-            'bikl,bjlm->bijkm',
-            block_exp_phi[block_idx], block_exp_neg_phi[block_idx]
-        )
-
-        # Transport (use RoPE mu for KL computation)
-        mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_block_rope)
-        sigma_j_transported = torch.einsum(
-            'bijkl,bijkl,bjl->bijk', Omega_block, Omega_block, sigma_block
-        ).clamp(min=1e-4)
-
-        # KL computation (for attention weights)
-        mu_block_i_rope = mu_block_rope[:, :, None, :]  # broadcast, no clone needed
-        delta_mu_kl = mu_block_i_rope - mu_j_transported
-
-        sigma_block_safe = sigma_block[:, :, None, :].clamp(min=1e-4)
-        trace_block = (sigma_block_safe / sigma_j_transported).sum(dim=-1)
-        mahal_block = (delta_mu_kl ** 2 / sigma_j_transported).sum(dim=-1)
-        logdet_block = (torch.log(sigma_j_transported) - torch.log(sigma_block_safe)).sum(dim=-1)
-
-        kl_block = 0.5 * (trace_block + mahal_block - d + logdet_block)
-        kl_block = kl_block.clamp(min=0.0, max=max(100.0, 20.0 * d))
-        kl_values = kl_values + kl_block
-
-        # Gradient computation (use raw mu, not RoPE)
-        # Re-transport with raw mu if RoPE is active
-        if use_rope:
-            mu_j_transported_raw = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_block)
-            delta_mu_grad = mu_block[:, :, None, :] - mu_j_transported_raw
-        else:
-            delta_mu_grad = mu_block[:, :, None, :] - mu_j_transported
-
-        grad_kl_block = delta_mu_grad / sigma_j_transported
-        grad_kl_per_pair_full[:, :, :, block_start:block_end] = grad_kl_block
-
-        # Accumulate raw-mu KL for softmax coupling consistency when RoPE is active
-        if kl_values_raw is not None:
-            mahal_raw = (delta_mu_grad ** 2 / sigma_j_transported).sum(dim=-1)
-            kl_block_raw = 0.5 * (trace_block + mahal_raw - d + logdet_block)
-            kl_values_raw = kl_values_raw + kl_block_raw.clamp(min=0.0, max=max(100.0, 20.0 * d))
-
-        if compute_sigma_align_grad:
-            sigma_j_inv_diag = 1.0 / sigma_j_transported
-            sigma_i_inv = 1.0 / sigma_block
-            grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv[:, :, None, :])
-            if grad_sigma_per_pair_full is not None:
-                grad_sigma_per_pair_full[:, :, :, block_start:block_end] = grad_sigma_pair
-
-        del Omega_block, sigma_j_transported, mu_j_transported
-        block_start = block_end
-
-    # Compute attention weights from KL values
-    dim_scale = math.sqrt(max(K, 1))
-    logits = -kl_values / (kappa * dim_scale)
-
-    if mask is not None:
-        logits = logits.masked_fill(mask == 0, float('-inf'))
-
-    if mask_self_attention:
-        diag_idx = torch.arange(N, device=device)
-        has_other_targets = (logits != float('-inf')).sum(dim=-1) > 1
-        logits = logits.clone()
-        diag_vals = logits[:, diag_idx, diag_idx]
-        masked_diag_vals = torch.where(
-            has_other_targets,
-            torch.full_like(diag_vals, float('-inf')),
-            diag_vals
-        )
-        logits[:, diag_idx, diag_idx] = masked_diag_vals
-
-    beta = torch.nn.functional.softmax(logits, dim=-1)
-    masked_positions = (logits == float('-inf'))
-    beta = torch.where(masked_positions, beta, beta.clamp(min=eps))
-    beta_sum = beta.sum(dim=-1, keepdim=True).clamp(min=eps)
-    beta = beta / beta_sum
-
-    # Compute VFE gradients using the beta we just computed
-    avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
-    grad_mu_direct = lambda_belief * avg_grad
-
-    kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
-    grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair_full
-    d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
-    # Use raw-mu KL values for the softmax coupling when RoPE is active,
-    # so the chain rule ∂(β·KL)/∂μ is consistent: both KL and ∂KL/∂μ
-    # are computed in the same (raw, non-rotated) space.
-    kl_for_coupling = kl_values_raw if kl_values_raw is not None else kl_values
-    grad_mu_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_for_coupling, d_beta_d_mu)
-
-    grad_mu = grad_mu_self + grad_mu_direct + grad_mu_softmax
-
-    # Sigma gradients
-    grad_sigma_softmax_norm = 0.0
-    if grad_sigma_per_pair_full is not None:
-        # Direct sigma gradient
-        block_start = 0
-        for block_idx, d in enumerate(irrep_dims):
-            block_end = block_start + d
-            grad_sigma_pair = grad_sigma_per_pair_full[:, :, :, block_start:block_end]
-            grad_sigma_align[:, :, block_start:block_end] = (
-                grad_sigma_align[:, :, block_start:block_end]
-                + lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_sigma_pair)
-            )
-            block_start = block_end
-
-        # Debug: capture direct alignment norm before softmax coupling
-        if _VFE_GRAD_DEBUG is not None:
-            _VFE_GRAD_DEBUG['grad_sigma_align_direct'] = _grad_norm(grad_sigma_align)
-            _ps = _per_pos_stats(grad_sigma_align)
-            _VFE_GRAD_DEBUG['grad_sigma_align_pos_mean'] = _ps[0]
-            _VFE_GRAD_DEBUG['grad_sigma_align_pos_max'] = _ps[1]
-
-        # Sigma softmax coupling (use raw-mu KL for consistency, same as mu coupling)
-        avg_sigma_grad = torch.einsum('bij,bijk->bik', beta, grad_sigma_per_pair_full)
-        sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair_full
-        d_beta_d_sigma = beta.unsqueeze(-1) * sigma_grad_deviation / kappa_scaled
-        grad_sigma_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_for_coupling, d_beta_d_sigma)
-        if _VFE_GRAD_DEBUG is not None:
-            grad_sigma_softmax_norm = _grad_norm(grad_sigma_softmax)
-        grad_sigma_align = grad_sigma_align + grad_sigma_softmax
-
-    grad_sigma = grad_sigma_self + grad_sigma_align
-
-    # Debug: final totals (fused path)
-    if _VFE_GRAD_DEBUG is not None:
-        _VFE_GRAD_DEBUG['grad_mu_direct'] = _grad_norm(grad_mu_direct)
-        _VFE_GRAD_DEBUG['grad_mu_softmax'] = _grad_norm(grad_mu_softmax)
-        _VFE_GRAD_DEBUG['grad_sigma_softmax'] = grad_sigma_softmax_norm
-        _VFE_GRAD_DEBUG['kl_pairwise_mean'] = kl_values.mean().item()
-        _VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
-        _VFE_GRAD_DEBUG['kappa_scaled'] = kappa_scaled
-        # Fraction of pairs near the KL ceiling (diagnoses clamp saturation)
-        _kl_ceil = max(100.0, 20.0 * K)
-        _VFE_GRAD_DEBUG['kl_frac_above_90pct'] = (kl_values > 0.9 * _kl_ceil).float().mean().item()
-        _VFE_GRAD_DEBUG['kl_p95'] = kl_values.quantile(0.95).item()
-        _VFE_GRAD_DEBUG['grad_mu_total'] = _grad_norm(grad_mu)
-        _VFE_GRAD_DEBUG['grad_sigma_total'] = _grad_norm(grad_sigma)
-        _ps = _per_pos_stats(grad_sigma)
-        _VFE_GRAD_DEBUG['grad_sigma_total_pos_mean'] = _ps[0]
-        _VFE_GRAD_DEBUG['grad_sigma_total_pos_max'] = _ps[1]
-
-    kl_out = kl_values if return_kl else None
-    return beta.to(dtype), grad_mu.to(dtype), grad_sigma.to(dtype), kl_out
-
-
-# Chunked VFE gradient path removed — block-diagonal path handles memory
-# efficiency via irrep decomposition (always enabled via use_block_diagonal_kl=True).
-# See _compute_vfe_gradients_block_diagonal_diag for the active path.
-# =============================================================================
-# GPU-Based Gradient Computation (PyTorch - FAST!)
-# =============================================================================
-
-def compute_vfe_gradients_gpu(
-    mu_q: torch.Tensor,        # (B, N, K) belief means
-    sigma_q: torch.Tensor,     # (B, N, K) diagonal variances or (B, N, K, K) full
-    mu_p: torch.Tensor,        # (B, N, K) prior means
-    sigma_p: torch.Tensor,     # (B, N, K) diagonal or (B, N, K, K) full
-    beta: torch.Tensor,        # (B, N, N) attention weights
-    phi: torch.Tensor,         # (B, N, n_gen) gauge frames where n_gen is # of generators
-    generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators
-    alpha: 'float | torch.Tensor' = 0.01,  # Self-coupling weight: scalar or (B, N, K) per-dim Bayesian precision
-    lambda_belief: float = 1.0,  # Belief alignment weight (direct: β·∇KL)
-    lambda_softmax: float = 1.0,  # Softmax coupling weight (GELU-like ∂β/∂θ · KL)
-    kappa: float = 1.0,        # Temperature (for normalization)
-    eps: float = 1e-6,
-    alpha_c0: Optional[torch.Tensor] = None,  # (K,) softplus(raw_c0) for product-rule correction when alpha is learnable
-    cached_transport: Optional[dict] = None,  # Precomputed transport operators
-    compute_sigma_align_grad: bool = True,  # Compute sigma gradient from alignment term
-    irrep_dims: Optional[List[int]] = None,  # Block dimensions for block-diagonal processing
-    enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
-    cached_block_exp_pairs: Optional[list] = None,  # Precomputed block exponential pairs
-    exact_diagonal_transport: bool = False,  # Lift diagonal σ for exact transport
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Compute VFE gradients entirely on GPU using PyTorch.
-
-    Fully vectorized. Supports SO(3), SO(N), and GL(K) gauge groups.
-    The number of generators (n_gen) determines the group: 3 for SO(3),
-    N(N-1)/2 for SO(N), K^2 for GL(K).
-
-    Gradients computed:
-    1. Self-coupling: d/d_mu_q [alpha * KL(q||p)]
-    2. Belief alignment: d/d_mu_q [lambda * Sum_j beta_ij * KL(q_i || Omega_ij q_j)]
-
-    The dBeta/dSigma softmax coupling term is always included:
-        dF/dSigma_i = Sum_j beta_ij * dKL_ij/dSigma_i + Sum_j KL_ij * dBeta_ij/dSigma_i
-
-    Dispatches to memory-efficient block-diagonal paths when irrep_dims is set:
-    - irrep_dims + full cov  -> _compute_vfe_gradients_block_diagonal
-    - irrep_dims + diagonal  -> _compute_vfe_gradients_block_diagonal_diag
-
-    Args:
-        mu_q: Belief means (B, N, K).
-        sigma_q: Belief variances - diagonal (B, N, K) or full (B, N, K, K).
-        mu_p: Prior means (B, N, K).
-        sigma_p: Prior variances - diagonal (B, N, K) or full (B, N, K, K).
-        beta: Attention weights (B, N, N), already normalized.
-        phi: Gauge frames (B, N, phi_dim) where phi_dim = n_gen.
-        generators: Lie algebra generators (n_gen, K, K).
-        alpha: Weight for KL(q||p) self-coupling. Scalar (uniform) or (B, N, K)
-            tensor from per-dimension Bayesian precision (learnable_alpha).
-        lambda_belief: Weight for belief alignment term.
-        kappa: Temperature parameter.
-        eps: Numerical stability floor.
-        alpha_c0: (K,) softplus(raw_c0) for product-rule correction when alpha
-            is a learnable (B, N, K) tensor.
-        cached_transport: Optional dict with precomputed 'Omega' (B, N, N, K, K)
-            from compute_transport_operators(). Avoids redundant matrix exponentials.
-        compute_sigma_align_grad: If True (default), include the sigma alignment
-            gradient dKL/dSigma_q = 0.5 * (Sigma_transported^{-1} - Sigma_q^{-1}).
-        irrep_dims: Block dimensions [d_1, ...] for block-diagonal KL decomposition.
-            Reduces memory from O(N^2 K^2) to O(N^2 * max(d_i^2)).
-        enforce_orthogonal: If True, enforce Omega in SO(K) via Newton-Schulz.
-        cached_block_exp_pairs: Precomputed (exp_phi, exp_neg_phi) per irrep block.
-        exact_diagonal_transport: When True and sigma is diagonal, lifts sigma to
-            full covariance via diag_embed for exact gauge transport, then extracts
-            the diagonal from the result. Disables fused diagonal paths.
-
-    Returns:
-        grad_mu: Gradient w.r.t. mu_q, shape (B, N, K).
-        grad_sigma: Gradient w.r.t. sigma_q, shape (B, N, K) diagonal or
-            (B, N, K, K) full, matching input.
-    """
-    # Squeeze trailing singleton dimensions for robustness
-    while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
-        sigma_q = sigma_q.squeeze(-1)
-    while sigma_p.dim() > 3 and sigma_p.shape[-1] == 1:
-        sigma_p = sigma_p.squeeze(-1)
-
-    B, N, K = mu_q.shape
-    device = mu_q.device
-    dtype = mu_q.dtype
-
-    # Detect diagonal vs full covariance
-    is_diagonal = sigma_q.dim() == 3
-
-    # Exact diagonal transport: lift to full, use full-cov path, extract diagonal
-    if exact_diagonal_transport and is_diagonal:
-        sigma_q_full = torch.diag_embed(sigma_q)
-        sigma_p_full = torch.diag_embed(sigma_p)
-        grad_mu, grad_sigma_full = compute_vfe_gradients_gpu(
-            mu_q, sigma_q_full, mu_p, sigma_p_full, beta, phi, generators,
-            alpha, lambda_belief, kappa, eps, alpha_c0,
-            cached_transport, compute_sigma_align_grad, irrep_dims,
-            enforce_orthogonal, cached_block_exp_pairs,
-            exact_diagonal_transport=False,
-        )
-        return grad_mu, torch.diagonal(grad_sigma_full, dim1=-2, dim2=-1)
-
-    # =================================================================
-    # MEMORY-EFFICIENT PATH: Block-diagonal processing
-    # =================================================================
-    if irrep_dims is not None and not is_diagonal:
-        return _compute_vfe_gradients_block_diagonal(
-            mu_q, sigma_q, mu_p, sigma_p, beta, phi, generators,
-            alpha, lambda_belief, lambda_softmax, kappa, eps, irrep_dims,
-            compute_sigma_align_grad, enforce_orthogonal,
-            alpha_c0=alpha_c0,
-            cached_block_exp_pairs=cached_block_exp_pairs,
-        )
-
-    # =================================================================
-    # MEMORY-EFFICIENT PATH: Block-diagonal for diagonal covariance
-    # =================================================================
-    if irrep_dims is not None and is_diagonal:
-        return _compute_vfe_gradients_block_diagonal_diag(
-            mu_q, sigma_q, mu_p, sigma_p, beta, phi, generators,
-            alpha, lambda_belief, lambda_softmax, kappa, eps, irrep_dims,
-            compute_sigma_align_grad, enforce_orthogonal,
-            alpha_c0=alpha_c0,
-            cached_block_exp_pairs=cached_block_exp_pairs,
-        )
-
-    # =================================================================
-    # 1. Self-Coupling Gradient: ∂/∂μ_q [α · KL(q||p)]
-    # =================================================================
-    # For diagonal Gaussians:
-    #   KL(q||p) = 0.5 * Σ_k [ σ_q[k]/σ_p[k] + (μ_p[k]-μ_q[k])²/σ_p[k] - 1 + log(σ_p[k]/σ_q[k]) ]
-    #   ∂KL/∂μ_q = (μ_q - μ_p) / σ_p
-    #   ∂KL/∂σ_q = 0.5 * (1/σ_p - 1/σ_q)
-
-    if is_diagonal:
-        # Force float32 for all sigma divisions, logs, and KL computation.
-        # The Omega einsum and mu transport can stay in AMP dtype for speed,
-        # but sigma ratios and log-det terms need float32 precision.
-        _orig_dtype = sigma_q.dtype
-        sigma_q = sigma_q.float()
-        sigma_p = sigma_p.float()
-        mu_q = mu_q.float()
-        mu_p = mu_p.float()
-        beta = beta.float()
-
-        # Clamp for stability
-        sigma_q_safe = sigma_q.clamp(min=eps)
-        sigma_p_safe = sigma_p.clamp(min=eps)
-
-        # Self-coupling gradient w.r.t. μ
-        delta_mu = mu_q - mu_p  # (B, N, K)
-        grad_mu_self = alpha * delta_mu / sigma_p_safe  # (B, N, K)
-
-        # Self-coupling gradient w.r.t. σ (diagonal)
-        grad_sigma_self = alpha * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)  # (B, N, K)
-
-        # Product-rule correction: ∂(α·KL)/∂θ = α·∂KL/∂θ + (∂α/∂θ)·KL
-        # When α_k = c₀_k/(b₀_k + kl_k), ∂α_k/∂θ = -α_k²/c₀_k · ∂kl_k/∂θ
-        if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
-            kl_k = 0.5 * (sigma_q_safe / sigma_p_safe + delta_mu ** 2 / sigma_p_safe
-                          - 1.0 + torch.log(sigma_p_safe) - torch.log(sigma_q_safe))
-            kl_k = kl_k.clamp(min=0.0)
-            # ∂α/∂μ · KL = -α²/c₀ · (δμ/σ_p) · kl_k
-            grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * delta_mu / sigma_p_safe
-            # ∂α/∂σ_q · KL = -α²/c₀ · 0.5·(1/σ_p - 1/σ_q) · kl_k
-            grad_sigma_self = grad_sigma_self - (alpha ** 2 / alpha_c0) * kl_k * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
-    else:
-        # Full covariance - use matrix operations
-        # ∂KL/∂μ_q = Σ_p^{-1} (μ_q - μ_p)
-        sigma_p_inv = _safe_spd_inv(sigma_p, eps=eps)
-
-        delta_mu = mu_q - mu_p  # (B, N, K)
-        grad_mu_self = alpha * torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
-
-        # ∂KL/∂Σ_q = 0.5 * (Σ_p^{-1} - Σ_q^{-1})
-        sigma_q_inv = _safe_spd_inv(sigma_q, eps=eps)
-        # For full covariance (4D), alpha (B,N,K) needs extra dim to broadcast with (B,N,K,K)
-        alpha_4d = alpha.unsqueeze(-1) if isinstance(alpha, torch.Tensor) else alpha
-        grad_sigma_self = alpha_4d * 0.5 * (sigma_p_inv - sigma_q_inv)
-
-        # Product-rule correction for learnable alpha (full covariance):
-        # ∂(α·KL)/∂θ = α·∂KL/∂θ + (∂α/∂θ)·KL
-        # Per-dimension KL via eigendecomposition of Σ_p^{-1/2} Σ_q Σ_p^{-1/2},
-        # which is symmetric with eigenvalues λ_k giving per-mode contributions
-        # kl_mode_k = 0.5(λ_k - 1 - log λ_k). Projected back to original basis
-        # via eigenvector magnitudes.
-        if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
-            sp_inv_delta = torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
-            mahal_k = delta_mu * sp_inv_delta  # (B, N, K) — per-dim Mahalanobis
-
-            # Per-mode KL from eigendecomposition of L^{-1} Σ_q L^{-T}
-            # where L = cholesky(Σ_p). Eigenvalues λ_k of this symmetric matrix
-            # equal eigenvalues of Σ_p^{-1} Σ_q.
-            try:
-                L_p = torch.linalg.cholesky(sigma_p.float())
-                # M = L^{-1} Σ_q L^{-T} (symmetric, same eigenvalues as Σ_p^{-1} Σ_q)
-                Lp_inv_Sq = torch.linalg.solve_triangular(L_p, sigma_q.float(), upper=False)
-                M = torch.linalg.solve_triangular(
-                    L_p, Lp_inv_Sq.transpose(-1, -2), upper=False
-                ).transpose(-1, -2)
-                eigvals, eigvecs = torch.linalg.eigh(M)  # (B,N,K), (B,N,K,K)
-                eigvals = eigvals.clamp(min=eps).to(sigma_q.dtype)
-                eigvecs = eigvecs.to(sigma_q.dtype)
-                # Per-eigenmode KL: kl_mode_k = 0.5(λ_k - 1 - log λ_k) ≥ 0
-                kl_mode = 0.5 * (eigvals - 1.0 - torch.log(eigvals))  # (B, N, K)
-                # Project to original basis via L^{-T} V: kl_orig_k = Σ_m |V_km|² kl_mode_m
-                # eigvecs are in the L^{-1} basis; |V_km|² distributes modes to original dims
-                V_sq = eigvecs ** 2  # (B, N, K, K) — squared eigenvector components
-                kl_k_trace_logdet = torch.einsum('bnkm,bnm->bnk', V_sq, kl_mode)
-                kl_k = (kl_k_trace_logdet + 0.5 * mahal_k).clamp(min=0.0)
-            except RuntimeError:
-                # Fallback: uniform logdet distribution (original approximation)
-                prod_qp = torch.matmul(sigma_p_inv, sigma_q)
-                trace_k = prod_qp.diagonal(dim1=-2, dim2=-1)
-                logdet_p = torch.linalg.slogdet(sigma_p.float())[1]
-                logdet_q = torch.linalg.slogdet(sigma_q.float())[1]
-                logdet_k = ((logdet_p - logdet_q) / K).unsqueeze(-1).expand_as(delta_mu)
-                kl_k = 0.5 * (trace_k + mahal_k - 1 + logdet_k).clamp(min=0.0)
-
-            grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * sp_inv_delta
-            correction_scale = ((alpha ** 2 / alpha_c0) * kl_k).unsqueeze(-1)  # (B, N, K, 1)
-            grad_sigma_self = grad_sigma_self - correction_scale * 0.5 * (sigma_p_inv - sigma_q_inv)
-
-    # =================================================================
-    # 2. Belief Alignment Gradient: ∂/∂μ_i [λ · Σ_j β_ij · KL(q_i || Ω_ij q_j)]
-    # =================================================================
-    # Full gradient via product rule:
-    #   ∂/∂μ_i [Σ_j β_ij · KL_ij] = Σ_j β_ij · ∂KL_ij/∂μ_i + Σ_j KL_ij · ∂β_ij/∂μ_i
-    #                                  ↑ direct term           ↑ SOFTMAX COUPLING (nonlinearity!)
-    #
-    # The softmax coupling gradient is the KEY nonlinearity (replaces GELU/ReLU):
-    #   ∂β_ij/∂μ_i = -β_ij · [∂KL_ij/∂μ_i - Σ_k β_ik · ∂KL_ik/∂μ_i] / κ
-
-    if is_diagonal:
-        # Get transport operators (use cached if available)
-        if cached_transport is not None and 'Omega' in cached_transport:
-            Omega = cached_transport['Omega']
-        else:
-            # Compute transport operators (vectorized)
-            phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
-            exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
-
-            # Re-orthogonalization for SO(K) if requested
-            if enforce_orthogonal and K >= 16:
-                exp_phi = newton_schulz_orthogonalize(exp_phi)
-                exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
-
-            # Transport: Ω_ij = exp(φ_i) @ exp(-φ_j)
-            # For all pairs: (B, N, N, K, K)
-            Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
-
-        # Transport all μ_j to frame i: μ_j_transported[i,j] = Ω_ij @ μ_j
-        mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)  # (B, N, N, K)
-
-        # Difference: μ_i - μ_j_transported (for each pair i,j)
-        delta_mu_ij = mu_q.unsqueeze(2) - mu_j_transported  # (B, N, N, K)
-
-        # =================================================================
-        # DIAGONAL COVARIANCE TRANSPORT: diag(Ω @ diag(σ_j) @ Ω^T)
-        # =================================================================
-        # For diagonal input, the diagonal of the transported covariance is:
-        #   σ_j_transported[k] = Σ_l Ω_kl² * σ_j[l]
-        # This avoids materializing any (B, N, N, K, K) covariance tensors.
-
-        sigma_q_safe = sigma_q.clamp(min=eps)  # (B, N, K)
-
-        # Transported diagonal covariance via 3-operand einsum (no Omega² intermediate)
-        sigma_j_transported_diag = torch.einsum(
-            'bijkl,bijkl,bjl->bijk', Omega, Omega, sigma_q_safe
-        ).clamp(min=eps)  # (B, N, N, K)
-
-        # ∂KL_ij/∂μ_i = (μ_i - μ_j_transported) / σ_j_transported (element-wise for diagonal)
-        grad_kl_per_pair = delta_mu_ij / sigma_j_transported_diag  # (B, N, N, K)
-
-        # Compute FULL KL values using diagonal formulas (no Cholesky/inv needed!)
-        # KL(N(μ_i,diag(σ_i)) || N(μ_j_t,diag(σ_j_t))) =
-        #   0.5 * (Σ_k σ_i[k]/σ_j_t[k] + Σ_k (μ_i-μ_j_t)²[k]/σ_j_t[k] - K + Σ_k log(σ_j_t[k]/σ_i[k]))
-
-        sigma_i_expanded = sigma_q_safe[:, :, None, :]  # (B, N, 1, K) - broadcasts
-
-        # Trace term: Σ_k σ_i[k] / σ_j_transported[k]
-        trace_term = (sigma_i_expanded / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
-
-        # Mahalanobis term: Σ_k (μ_i - μ_j_transported)² / σ_j_transported[k]
-        mahal_term = (delta_mu_ij ** 2 / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
-
-        # Log-determinant term: Σ_k log(σ_j_transported[k]) - Σ_k log(σ_i[k])
-        logdet_term = (torch.log(sigma_j_transported_diag.clamp(min=eps)) - torch.log(sigma_i_expanded.clamp(min=eps))).sum(dim=-1)  # (B, N, N)
-
-        # Full KL divergence
-        kl_values = 0.5 * (trace_term + mahal_term - K + logdet_term)
-        # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
-        kl_ceil = max(100.0, 20.0 * K)
-        kl_values = kl_values.clamp(min=0.0, max=kl_ceil)  # (B, N, N)
-
-        # =================================================================
-        # 2a. Direct term: Σ_j β_ij · ∂KL_ij/∂μ_i
-        # =================================================================
-        # avg_grad = Σ_k β_ik · ∂KL_ik/∂μ_i (used for both direct and softmax terms)
-        avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair)  # (B, N, K)
-        grad_mu_direct = lambda_belief * avg_grad
-
-        # =================================================================
-        # 2b. Softmax coupling term (THE NONLINEARITY!):
-        #     ∂β_ij/∂μ_i = -β_ij · [∂KL_ij/∂μ_i - Σ_k β_ik · ∂KL_ik/∂μ_i] / κ
-        #     grad_softmax = Σ_j KL_ij · ∂β_ij/∂μ_i
-        # =================================================================
-        # Deviation from average: avg_grad_i - ∂KL_ij/∂μ_i
-        # β_ij = softmax(-KL/κ), so ∂β_ij/∂μ_i = (β_ij/κ)(avg_grad - ∂KL_ij/∂μ_i)
-        # grad_kl_per_pair: (B, N, N, K), avg_grad: (B, N, K) -> expand to (B, N, 1, K)
-        grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair  # (B, N, N, K)
-
-        # Softmax coupling gradient: ∂β_ij/∂μ_i = β_ij · grad_deviation / κ
-        # Scale kappa by √K to match attention temperature scaling (τ = √K)
-        kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
-        d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled  # (B, N, N, K)
-
-        # Weight by KL values and sum: Σ_j KL_ij · ∂β_ij/∂μ_i
-        grad_mu_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
-
-        # Total alignment gradient (direct + softmax coupling)
-        grad_mu_align = grad_mu_direct + grad_mu_softmax
-
-        # =================================================================
-        # Sigma gradient from alignment term (diagonal case)
-        # ∂KL/∂σ_i[k] = 0.5 * (1/σ_j_transported[k] - 1/σ_i[k])
-        # Weighted by attention: Σ_j β_ij * ∂KL_ij/∂σ_i
-        # =================================================================
-        if compute_sigma_align_grad:
-            sigma_j_inv_diag = 1.0 / sigma_j_transported_diag  # (B, N, N, K)
-            sigma_i_inv = 1.0 / sigma_q_safe  # (B, N, K)
-            # Gradient per pair: 0.5 * (1/σ_j_transported[k] - 1/σ_i[k])
-            grad_sigma_per_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv[:, :, None, :])  # broadcast
-
-            # Direct term: Σ_j β_ij * ∂KL_ij/∂σ_i
-            grad_sigma_direct = lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_sigma_per_pair)  # (B, N, K)
-
-            # Softmax coupling: Σ_j KL_ij · ∂β_ij/∂σ_i (analogous to μ coupling)
-            # ∂β_ij/∂σ_i = -β_ij/κ · [∂KL_ij/∂σ_i - Σ_k β_ik · ∂KL_ik/∂σ_i]
-            #            = β_ij/κ · [avg_sigma_grad - ∂KL_ij/∂σ_i]
-            avg_sigma_grad = torch.einsum('bij,bijk->bik', beta, grad_sigma_per_pair)  # (B, N, K)
-            sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair  # (B, N, N, K)
-            d_beta_d_sigma = beta.unsqueeze(-1) * sigma_grad_deviation / kappa_scaled  # (B, N, N, K)
-            grad_sigma_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_sigma)  # (B, N, K)
-            grad_sigma_align = grad_sigma_direct + grad_sigma_softmax
-        else:
-            # Simplified: no sigma gradient from alignment (legacy behavior)
-            grad_sigma_align = torch.zeros_like(sigma_q)
-    else:
-        # Full covariance belief alignment
-        # Get transport operators (use cached if available)
-        if cached_transport is not None and 'Omega' in cached_transport:
-            Omega = cached_transport['Omega']
-        else:
-            phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
-            exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
-
-            # Re-orthogonalization for SO(K) if requested
-            if enforce_orthogonal and K >= 16:
-                exp_phi = newton_schulz_orthogonalize(exp_phi)
-                exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
-
-            Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
-
-        # Transport means
-        mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)
-        delta_mu_ij = mu_q.unsqueeze(2) - mu_j_transported
-
-        # Transport covariances: Σ_j_transported = Ω @ Σ_j @ Ω^T
-        sigma_j_transported = torch.einsum(
-            'bijkl,bjlm,bijmn->bijkn',
-            Omega, sigma_q, Omega.transpose(-1, -2)
-        )  # (B, N, N, K, K)
-
-        # Regularize and invert
-        sigma_j_reg = sigma_j_transported + max(eps, 1e-4) * torch.eye(K, device=device, dtype=dtype)
-        # NaN safety: if transport produced NaN, replace with identity covariance
-        if torch.isnan(sigma_j_reg).any():
-            nan_mask = torch.isnan(sigma_j_reg).any(dim=-1).any(dim=-1)  # (B, N, N)
-            eye_K = torch.eye(K, device=device, dtype=dtype)
-            sigma_j_reg = torch.where(
-                nan_mask.unsqueeze(-1).unsqueeze(-1),
-                eye_K.expand_as(sigma_j_reg),
-                sigma_j_reg,
-            )
-        sigma_j_inv = _safe_spd_inv(sigma_j_reg, eps=eps)  # (B, N, N, K, K)
-
-        # ∂KL_ij/∂μ_i
-        grad_kl_per_pair = torch.einsum('bijkl,bijl->bijk', sigma_j_inv, delta_mu_ij)
-
-        # Compute FULL KL values (not just Mahalanobis - include trace and logdet!)
-        # KL(q_i || Ω_ij[q_j]) = 0.5 * (tr(Σ_j_t^{-1} Σ_i) + mahal - K + log|Σ_j_t| - log|Σ_i|)
-
-        # Mahalanobis term: δμ^T @ Σ_j_transported^{-1} @ δμ
-        mahal_term = torch.einsum('bijk,bijk->bij', delta_mu_ij, grad_kl_per_pair)  # (B, N, N)
-
-        # Trace term: tr(Σ_j_transported^{-1} @ Σ_i)
-        # Use .clone() after expand for contiguous memory layout
-        sigma_i_expanded = sigma_q[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()  # (B, N, N, K, K)
-        trace_term = torch.einsum('bijkk->bij', torch.einsum('bijkl,bijlm->bijkm', sigma_j_inv, sigma_i_expanded))
-
-        # Log-determinant terms using Cholesky with fallback
-        try:
-            L_j_t = torch.linalg.cholesky(sigma_j_reg)  # (B, N, N, K, K)
-            logdet_j_t = 2.0 * torch.sum(torch.log(torch.diagonal(L_j_t, dim1=-2, dim2=-1) + eps), dim=-1)  # (B, N, N)
-        except RuntimeError:
-            eigvals = torch.linalg.eigvalsh(sigma_j_reg)
-            logdet_j_t = torch.sum(torch.log(eigvals.clamp(min=eps)), dim=-1)
-
-        sigma_i_reg = sigma_q + eps * torch.eye(K, device=device, dtype=dtype)
-        try:
-            L_i = torch.linalg.cholesky(sigma_i_reg)  # (B, N, K, K)
-            logdet_i = 2.0 * torch.sum(torch.log(torch.diagonal(L_i, dim1=-2, dim2=-1) + eps), dim=-1)  # (B, N)
-        except RuntimeError:
-            eigvals = torch.linalg.eigvalsh(sigma_i_reg)
-            logdet_i = torch.sum(torch.log(eigvals.clamp(min=eps)), dim=-1)
-        # Use .clone() after expand for contiguous memory layout
-        logdet_i_expanded = logdet_i[:, :, None].expand(-1, -1, N).clone()  # (B, N, N)
-
-        # Full KL divergence
-        kl_values = 0.5 * (trace_term + mahal_term - K + logdet_j_t - logdet_i_expanded)
-        # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
-        kl_ceil = max(100.0, 20.0 * K)
-        kl_values = kl_values.clamp(min=0.0, max=kl_ceil)  # (B, N, N)
-
-        # avg_grad = Σ_k β_ik · ∂KL_ik/∂μ_i (used for both direct and softmax terms)
-        avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair)
-        grad_mu_direct = lambda_belief * avg_grad
-
-        # Softmax coupling term
-        # Scale kappa by √K to match attention temperature scaling (τ = √K)
-        kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
-        grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair
-        d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
-        grad_mu_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
-
-        grad_mu_align = grad_mu_direct + grad_mu_softmax
-
-        # =================================================================
-        # Sigma gradient from alignment term (full covariance case)
-        # ∂KL/∂Σ_i = 0.5 * (Σ_j_transported^{-1} - Σ_i^{-1})
-        # Weighted by attention: Σ_j β_ij * ∂KL_ij/∂Σ_i
-        # =================================================================
-        if compute_sigma_align_grad:
-            # Use Σ_i^{-1} computed earlier in self-coupling section (sigma_q_inv)
-            # Use .clone() after expand for contiguous memory layout
-            sigma_i_inv_expanded = sigma_q_inv[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()  # (B, N, N, K, K)
-
-            # Gradient per pair: 0.5 * (Σ_j_transported^{-1} - Σ_i^{-1})
-            grad_sigma_per_pair = 0.5 * (sigma_j_inv - sigma_i_inv_expanded)  # (B, N, N, K, K)
-
-            # Direct term: Σ_j β_ij * ∂KL_ij/∂Σ_i
-            grad_sigma_direct = lambda_belief * torch.einsum('bij,bijkl->bikl', beta, grad_sigma_per_pair)  # (B, N, K, K)
-
-            # Softmax coupling for full covariance (always enabled)
-            avg_sigma_grad = torch.einsum('bij,bijkl->bikl', beta, grad_sigma_per_pair)  # (B, N, K, K)
-            sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair  # (B, N, N, K, K)
-            d_beta_d_sigma = beta.unsqueeze(-1).unsqueeze(-1) * sigma_grad_deviation / kappa_scaled  # (B, N, N, K, K)
-            grad_sigma_softmax = lambda_softmax * torch.einsum('bij,bijkl->bikl', kl_values, d_beta_d_sigma)  # (B, N, K, K)
-            grad_sigma_align = grad_sigma_direct + grad_sigma_softmax
-        else:
-            # Simplified: no sigma gradient from alignment (legacy behavior)
-            grad_sigma_align = torch.zeros_like(sigma_q)
-
-    # =================================================================
-    # 3. Combine Gradients
-    # =================================================================
-    grad_mu = grad_mu_self + grad_mu_align
-    grad_sigma = grad_sigma_self + grad_sigma_align
-
-    # Cast back from float32 (diagonal path upcasts for numerical safety under AMP)
-    return grad_mu.to(dtype), grad_sigma.to(dtype)
-
-
-def compute_natural_gradient_gpu(
-    grad_mu: torch.Tensor,     # (B, N, K) Euclidean gradient
-    grad_sigma: torch.Tensor,  # (B, N, K) or (B, N, K, K)
-    sigma_q: torch.Tensor,     # (B, N, K) or (B, N, K, K)
-    eps: float = 1e-6,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Project Euclidean gradients to natural gradients using Fisher metric.
-
-    For Gaussian distributions, the Fisher information metric is:
-        F_μ = Σ^{-1}  →  natural_grad_μ = Σ @ euclidean_grad_μ
-        F_σ = (1/2)Σ^{-2} →  natural_grad_σ = 2 * Σ² @ euclidean_grad_σ (diagonal approx)
-
-    Derivation: The Fisher metric on the covariance Σ of a Gaussian is
-    g(δΣ₁, δΣ₂) = (1/2) tr(Σ⁻¹ δΣ₁ Σ⁻¹ δΣ₂). For diagonal Σ = diag(σ),
-    this gives g_{kk} = 1/(2σ_k²), so g^{kk} = 2σ_k².
-
-    Args:
-        grad_mu: Euclidean gradient w.r.t. μ
-        grad_sigma: Euclidean gradient w.r.t. σ
-        sigma_q: Current covariance
-        eps: Numerical stability
-
-    Returns:
-        nat_grad_mu: Natural gradient for μ
-        nat_grad_sigma: Natural gradient for σ
-    """
-    # Squeeze trailing singleton dimensions for robustness
-    while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
-        sigma_q = sigma_q.squeeze(-1)
-
-    is_diagonal = sigma_q.dim() == 3
-    orig_dtype = sigma_q.dtype
-
-    # Force float32: sigma^2 products and small sigma divisions break in float16
-    with torch.amp.autocast('cuda', enabled=False):
-        sigma_q = sigma_q.float()
-        grad_mu = grad_mu.float()
-        grad_sigma = grad_sigma.float()
-
-        if is_diagonal:
-            # Diagonal case: simple element-wise multiplication
-            sigma_safe = sigma_q.clamp(min=eps)
-            nat_grad_mu = sigma_safe * grad_mu  # (B, N, K)
-            nat_grad_sigma = 2.0 * sigma_safe * sigma_safe * grad_sigma  # (B, N, K)
-        else:
-            # Full covariance: matrix multiplication
-            nat_grad_mu = torch.einsum('bnij,bnj->bni', sigma_q, grad_mu)
-            # Full Fisher natural gradient: δΣ = 2 * Σ @ ∇_Σ @ Σ
-            nat_grad_sigma = 2.0 * torch.einsum('bnij,bnjk,bnkl->bnil', sigma_q, grad_sigma, sigma_q)
-
-    return nat_grad_mu.to(orig_dtype), nat_grad_sigma.to(orig_dtype)
-
-
-# =============================================================================
-# SPD Retraction (PyTorch GPU version)
-# =============================================================================
-
-def retract_spd_torch(
-    Sigma: torch.Tensor,
-    delta_Sigma: torch.Tensor,
-    step_size: float = 1.0,
-    trust_region: float = 2.0,
-    eps: float = 1e-6,
-    sigma_max: float = 5.0,
-) -> torch.Tensor:
-    """
-    SPD-preserving retraction for covariance matrices (PyTorch GPU).
-
-    Uses affine-invariant exponential map on SPD manifold.
-
-    Args:
-        Sigma: SPD matrices, shape (B, N, K, K) or (B*N, K, K)
-        delta_Sigma: Symmetric tangent vectors, same shape as Sigma
-        step_size: Learning rate τ
-        trust_region: Max Frobenius norm of whitened tangent
-        eps: Regularization floor for numerical stability
-        sigma_max: Upper bound on eigenvalues (sigma_max² for covariance eigenvalues)
-
-    Returns:
-        Sigma_new: SPD matrices, same shape as Sigma
-    """
-    # Handle different input shapes
-    original_shape = Sigma.shape
-    orig_dtype = Sigma.dtype
-    if Sigma.dim() == 4:
-        B, N, K, _ = Sigma.shape
-        Sigma = Sigma.reshape(B * N, K, K)
-        delta_Sigma = delta_Sigma.reshape(B * N, K, K)
-
-    batch_size, K, _ = Sigma.shape
-    device = Sigma.device
-
-    # Force float32 for eigendecomposition, sqrt, exp — all break in float16
-    with torch.amp.autocast('cuda', enabled=False):
-        Sigma = Sigma.float()
-        delta_Sigma = delta_Sigma.float()
-
-        # Symmetrize inputs (numerical safety)
-        Sigma = 0.5 * (Sigma + Sigma.transpose(-1, -2))
-        delta_Sigma = 0.5 * (delta_Sigma + delta_Sigma.transpose(-1, -2))
-
-        # Exponential map retraction on SPD manifold
-        eigenvalues, eigenvectors = _safe_eigh(Sigma, jitter=eps, symmetrize=False)
-        eigenvalues = eigenvalues.clamp(min=eps)
-
-        sqrt_eig = torch.sqrt(eigenvalues)
-        inv_sqrt_eig = 1.0 / sqrt_eig
-
-        Sigma_sqrt = eigenvectors * sqrt_eig.unsqueeze(-2) @ eigenvectors.transpose(-1, -2)
-        Sigma_inv_sqrt = eigenvectors * inv_sqrt_eig.unsqueeze(-2) @ eigenvectors.transpose(-1, -2)
-
-        # Whitened tangent: R = Σ^{-1/2} (η · ΔΣ) Σ^{-1/2}
-        R = Sigma_inv_sqrt @ (step_size * delta_Sigma) @ Sigma_inv_sqrt
-        R = 0.5 * (R + R.transpose(-1, -2))
-
-        if trust_region is not None and trust_region > 0:
-            R_norm = torch.linalg.norm(R, ord='fro', dim=(-2, -1), keepdim=True)
-            scale = torch.clamp(trust_region / (R_norm + eps), max=1.0)
-            R = R * scale
-
-        # exp(R) via eigendecomposition
-        R_eigenvalues, R_eigenvectors = _safe_eigh(R, jitter=eps, symmetrize=False)
-        R_eigenvalues = R_eigenvalues.clamp(-50.0, 50.0)
-        exp_R = R_eigenvectors * torch.exp(R_eigenvalues).unsqueeze(-2) @ R_eigenvectors.transpose(-1, -2)
-
-        Sigma_new = Sigma_sqrt @ exp_R @ Sigma_sqrt
-        Sigma_new = 0.5 * (Sigma_new + Sigma_new.transpose(-1, -2))
-
-        # Spectral floor + ceiling: eigenvalues in [eps, sigma_max²]
-        # sigma_max bounds the standard deviation; covariance eigenvalues are σ².
-        eig_new, vec_new = _safe_eigh(Sigma_new, jitter=eps, symmetrize=False)
-        eig_new = eig_new.clamp(min=eps, max=sigma_max * sigma_max)
-        Sigma_new = vec_new * eig_new.unsqueeze(-2) @ vec_new.transpose(-1, -2)
-
-    Sigma_new = Sigma_new.to(orig_dtype)
-
-    # Restore original shape
-    if len(original_shape) == 4:
-        Sigma_new = Sigma_new.reshape(original_shape)
-
-    return Sigma_new
-
-
-def retract_spd_diagonal_torch(
-    sigma_diag: torch.Tensor,
-    delta_sigma: torch.Tensor,
-    step_size: float = 1.0,
-    trust_region: float = 5.0,
-    eps: float = 1e-6,
-    sigma_max: float = 5.0,
-) -> torch.Tensor:
-    """
-    SPD retraction for diagonal covariances (much simpler).
-
-    For diagonal matrices, the exponential map reduces to:
-        σ_new = σ * exp(τ * δσ / σ)
-
-    This ensures positivity: exp(x) > 0 for all x.
-
-    Args:
-        sigma_diag: Diagonal variances, shape (B, N, K)
-        delta_sigma: Tangent in diagonal form, shape (B, N, K)
-        step_size: Learning rate τ
-        trust_region: Max absolute value of exponent argument
-        eps: Floor for sigma values
-        sigma_max: Upper bound on σ. Posterior σ should not greatly exceed the prior.
-            Prevents nat_grad_sigma = 2σ²·∇σ blowup (amplification grows as σ⁴).
-
-    Returns:
-        sigma_new: Positive diagonal variances, shape (B, N, K)
-    """
-    orig_dtype = sigma_diag.dtype
-
-    # Force float32: exp(50) overflows float16 (max ~65504)
-    with torch.amp.autocast('cuda', enabled=False):
-        sigma_safe = sigma_diag.float().clamp(min=eps)
-        delta_sigma = delta_sigma.float()
-
-        # Whitened tangent: δσ / σ (element-wise for diagonal)
-        whitened = delta_sigma / sigma_safe
-
-        # Trust region on whitened tangent
-        if trust_region is not None and trust_region > 0:
-            whitened = whitened.clamp(-trust_region, trust_region)
-
-        # Exponential update: σ_new = σ * exp(τ * whitened)
-        # Clip exponent to prevent overflow
-        exp_arg = (step_size * whitened).clamp(-50.0, 50.0)
-        sigma_new = sigma_safe * torch.exp(exp_arg)
-
-    # Clamp to [eps, sigma_max] — posterior σ should not blow up past the prior.
-    # With sigma_max=5.0 and init_sigma_scale=1.0, allows 5× expansion before clamping.
-    # This bounds the natural gradient amplification: 2σ² ≤ 2·sigma_max² = 50.
-    return sigma_new.clamp(min=eps, max=sigma_max).to(orig_dtype)
+# These functions are defined in transformer.core.vfe_gradients and imported
+# here for backward compatibility.  Do not add gradient logic here.
+from transformer.core.vfe_gradients import (
+    _compute_vfe_gradients_block_diagonal,
+    _compute_vfe_gradients_block_diagonal_diag,
+    _fused_attention_and_vfe_gradients_block_diag,
+    compute_vfe_gradients_gpu,
+    compute_natural_gradient_gpu,
+)
+
+
+# retract_spd_torch and retract_spd_diagonal_torch are imported from vfe_utils above.
 
 
 # =============================================================================
@@ -3317,6 +1552,251 @@ class VariationalFFNDynamic(nn.Module):
 
         return step_fn
 
+    # =================================================================
+    # Helper: Build block exp-pairs for transport operators
+    # =================================================================
+
+    def _build_block_exp_pairs(
+        self,
+        phi_current: torch.Tensor,        # (B, N, phi_dim)
+        omega_current: Optional[torch.Tensor],  # (B, N, K, K) or None
+        B: int,
+        N: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Optional[list]:
+        r"""Build per-head (exp_phi_h, exp_neg_phi_h) pairs for transport operators.
+
+        Returns a list of (Omega_h, Omega_h_inv) tuples, one per irrep block,
+        or None when irrep_dims is not set.
+
+        Branches:
+            gauge_param='omega': extract per-head blocks from omega_current, invert.
+            gauge_mode='trivial': return identity pairs for each block.
+            gauge_mode='constant' with constant_omega: use constant per-head Omega.
+            default (learned): call fused_block_matrix_exp_pairs on phi_current.
+        """
+        if self.irrep_dims is None:
+            return None
+
+        if omega_current is not None and self.gauge_param == 'omega':
+            bep = []
+            block_start = 0
+            for d_h in self.irrep_dims:
+                omega_h = omega_current[:, :, block_start:block_start + d_h,
+                                        block_start:block_start + d_h]
+                omega_h_inv = torch.linalg.inv(omega_h)
+                bep.append((omega_h, omega_h_inv))
+                block_start += d_h
+            return bep
+
+        if self.gauge_mode == 'trivial':
+            bep = []
+            for d_h in self.irrep_dims:
+                eye_h = (torch.eye(d_h, device=device, dtype=dtype)
+                         .unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous())
+                bep.append((eye_h, eye_h))
+            return bep
+
+        if self.gauge_mode == 'constant' and self.constant_omega is not None:
+            bep = []
+            for h, d_h in enumerate(self.irrep_dims):
+                omega_h = self.constant_omega[h].to(device=device, dtype=dtype)
+                if getattr(self, 'enforce_orthogonal', False) and d_h >= 2:
+                    omega_h = newton_schulz_orthogonalize(omega_h.unsqueeze(0)).squeeze(0)
+                eye_h = torch.eye(d_h, device=device, dtype=dtype)
+                exp_phi_h = omega_h.unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous()
+                exp_neg_phi_h = eye_h.unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous()
+                bep.append((exp_phi_h, exp_neg_phi_h))
+            return bep
+
+        if self.gauge_mode == 'constant':
+            # constant without constant_omega: fall back to identity (legacy)
+            bep = []
+            for d_h in self.irrep_dims:
+                eye_h = (torch.eye(d_h, device=device, dtype=dtype)
+                         .unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous())
+                bep.append((eye_h, eye_h))
+            return bep
+
+        # Default: learned phi
+        return fused_block_matrix_exp_pairs(
+            phi_current, self.generators, self.irrep_dims,
+            enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+        )
+
+    # =================================================================
+    # Helper: Finalize E-step (store state for M-step)
+    # =================================================================
+
+    def _finalize_e_step(
+        self,
+        alpha_effective,
+        sigma_p: torch.Tensor,
+        sigma_current: Optional[torch.Tensor],
+        beta_current: Optional[torch.Tensor],
+        beta_heads: list,
+        omega_current: Optional[torch.Tensor],
+        eps: float,
+    ) -> None:
+        r"""Store post-E-step state on ``self`` for the M-step.
+
+        Writes: ``_last_alpha_i``, ``_last_beta_for_implicit``,
+        ``_last_implicit_mu_scale``, ``_last_implicit_sigma_scale``,
+        ``_last_omega``.
+        """
+        # Alpha
+        if self.learnable_alpha:
+            self._last_alpha_i = alpha_effective.detach()
+        else:
+            self._last_alpha_i = None
+
+        # Beta for implicit EM
+        if self.implicit_em:
+            if self.multihead_vfe and beta_heads:
+                self._last_beta_for_implicit = torch.stack(beta_heads, dim=1).detach()
+            elif beta_current is not None:
+                self._last_beta_for_implicit = beta_current.detach()
+            else:
+                self._last_beta_for_implicit = None
+
+        # Implicit EM gradient scales
+        if self.implicit_em:
+            _beta_for_scale = getattr(self, '_last_beta_for_implicit', None)
+            if _beta_for_scale is not None:
+                _alpha_for_scale = self.alpha
+                mu_scale, sigma_scale = compute_implicit_em_scales(
+                    alpha_i=_alpha_for_scale,
+                    sigma_p=sigma_p,
+                    beta=_beta_for_scale,
+                    sigma_q=sigma_current if sigma_current is not None else sigma_p,
+                    eps=eps,
+                )
+                self._last_implicit_mu_scale = mu_scale
+                self._last_implicit_sigma_scale = sigma_scale
+            else:
+                self._last_implicit_mu_scale = None
+                self._last_implicit_sigma_scale = None
+        else:
+            self._last_implicit_mu_scale = None
+            self._last_implicit_sigma_scale = None
+
+        # Omega for multi-layer propagation
+        self._last_omega = omega_current
+
+    # =================================================================
+    # Helper: Prepare E-step inputs (sigma init, prior setup, alpha)
+    # =================================================================
+
+    def _prepare_e_step_inputs(
+        self,
+        mu: torch.Tensor,           # (B, N, K)
+        sigma: Optional[torch.Tensor],
+        mu_prior: torch.Tensor,     # (B, N, K)
+        phi: torch.Tensor,          # (B, N, phi_dim)
+        omega: Optional[torch.Tensor],
+        sigma_prior: Optional[torch.Tensor],
+        B: int,
+        N: int,
+        K: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        eps: float,
+    ) -> dict:
+        r"""Set up all inputs needed before E-step iterations begin.
+
+        Performs sigma initialisation, prior (mu_p, sigma_p) extraction,
+        sigma_p floor clamping, initial sigma clamping, phi/omega cloning,
+        and alpha computation.  Returns a dict with keys:
+
+            mu_p_current, sigma_p, mu_current, sigma_current,
+            phi_current, omega_current, alpha_effective, _alpha_c0,
+            is_diagonal, beta_history (empty list or None),
+            has_observations (bool sentinel)
+        """
+        # ── Sigma initialisation ────────────────────────────────────────
+        if sigma is None:
+            if self.diagonal_covariance:
+                sigma = torch.ones(B, N, K, device=device, dtype=dtype) * 0.1
+            else:
+                sigma = (0.1 * torch.eye(K, device=device, dtype=dtype)
+                         .unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous())
+
+        sigma = squeeze_trailing_singletons(sigma)
+        is_diagonal = sigma.dim() == 3
+
+        # ── Prior setup: mu_p, sigma_p ──────────────────────────────────
+        if self.amortized_inference and not self.implicit_em:
+            mu_p_current = mu_prior.clone()
+        else:
+            mu_p_current = mu_prior.detach().clone()
+
+        # sigma_p is ALWAYS detached in the E-step (M-step parameter)
+        if sigma_prior is not None:
+            sigma_p = sigma_prior.detach().clone()
+        else:
+            sigma_p = sigma.detach().clone()
+
+        # E-step sigma_p floor
+        _floor = self.e_step_sigma_floor
+        if sigma_p.dim() == 3:
+            sigma_p = sigma_p.clamp(min=_floor)
+        else:
+            diag_vals = torch.diagonal(sigma_p, dim1=-2, dim2=-1)
+            diag_clamped = diag_vals.clamp(min=_floor)
+            sigma_p = sigma_p + torch.diag_embed(diag_clamped - diag_vals)
+
+        # Convert diagonal sigma_p to full covariance if needed
+        if not is_diagonal and sigma_p.dim() == 3:
+            sigma_p = torch.diag_embed(sigma_p)
+
+        # ── Initial belief state ─────────────────────────────────────────
+        if self.implicit_em:
+            mu_current = mu.detach().clone()
+            sigma_current = sigma.detach().clone()
+        else:
+            mu_current = mu.clone()
+            sigma_current = sigma.clone()
+
+        # Clamp initial sigma to [eps, sigma_max]
+        if self.update_sigma:
+            _eps = 1e-6
+            if sigma_current.dim() == 3:
+                sigma_current = sigma_current.clamp(min=_eps, max=self.sigma_max)
+            else:
+                eigvals, eigvecs = _safe_eigh(sigma_current, jitter=_eps)
+                eigvals = eigvals.clamp(min=_eps, max=self.sigma_max * self.sigma_max)
+                sigma_current = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
+
+        # ── Phi / omega cloning ──────────────────────────────────────────
+        if not self.amortized_inference and self.detach_phi:
+            phi_current = phi.detach().clone()
+        else:
+            phi_current = phi.clone()
+        omega_current = omega.clone() if omega is not None else None
+
+        # ── Alpha computation ────────────────────────────────────────────
+        if self.learnable_alpha:
+            alpha_effective = self.get_bayesian_alpha(
+                mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
+            )
+            _alpha_c0 = F.softplus(self.raw_c0)
+        else:
+            alpha_effective = self.alpha
+            _alpha_c0 = None
+
+        return {
+            'mu_p_current': mu_p_current,
+            'sigma_p': sigma_p,
+            'mu_current': mu_current,
+            'sigma_current': sigma_current,
+            'phi_current': phi_current,
+            'omega_current': omega_current,
+            'alpha_effective': alpha_effective,
+            '_alpha_c0': _alpha_c0,
+            'is_diagonal': is_diagonal,
+        }
+
     def forward(
         self,
         mu: torch.Tensor,          # (B, N, K) - current beliefs
@@ -3392,136 +1872,27 @@ class VariationalFFNDynamic(nn.Module):
             if W_out is not None:
                 W_out = W_out.float()
 
-        # Initialize sigma if not provided
-        if sigma is None:
-            if self.diagonal_covariance:
-                sigma = torch.ones(B, N, K, device=device, dtype=dtype) * 0.1
-            else:
-                sigma = 0.1 * torch.eye(K, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous()
-
-        # Squeeze trailing singleton dimensions for robustness
-        while sigma.dim() > 3 and sigma.shape[-1] == 1:
-            sigma = sigma.squeeze(-1)
-
-        is_diagonal = sigma.dim() == 3
-
-        # =====================================================================
-        # PriorBank: Use token-dependent priors for VFE dynamics
-        # =====================================================================
-        # =====================================================================
-        # Prior Setup: mu_p and sigma_p for VFE self-coupling
-        # =====================================================================
-        # Use mu_prior / sigma_prior passed from model.py for BOTH PriorBank
-        # and standard embedding paths.  These are already in the correct
-        # coordinate frame (cross_head_perm applied).  The FFN must NOT
-        # re-encode from PriorBank — that returns un-permuted priors which
-        # would misalign with the permuted beliefs in the VFE loop.
-        #
-        # mu_p: live when amortized (gradient is well-conditioned: -α/σ_p).
-        # Detached when non-amortized or implicit_em.
-        # sigma_p: ALWAYS detached (M-step parameter; 1/σ_p in E-step
-        # creates positive feedback).
-        if self.amortized_inference and not self.implicit_em:
-            # Amortized: gradient flows through mu_p → embeddings learn good E-step init.
-            # mu_p gradient is well-conditioned: d(grad)/d(mu_p) = -α/σ_p, no feedback loop.
-            #
-            # When implicit_em=True, the IFT scale factor is the sole gradient path
-            # to embeddings (via ImplicitEMGradient.apply after the E-step). Keeping
-            # mu_p live here would double-count: embeddings receive BOTH the IFT-scaled
-            # gradient AND the straight-through gradient through self-coupling.
-            mu_p_current = mu_prior.clone()
-        else:
-            # Non-amortized (or implicit_em): detach priors (fixed reference)
-            mu_p_current = mu_prior.detach().clone()
-
-        # sigma_p is ALWAYS detached in the E-step: it is an M-step parameter (Level 2).
-        # The E-step treats (μ_p, σ_p) as fixed while inferring q. Letting CE gradient
-        # flow through the E-step's 1/σ_p terms creates positive feedback: smaller σ_p
-        # → larger gradient → even smaller σ_p. The M-step loss (lambda_hyper · KL(s||h))
-        # provides the correct, bounded gradient for sigma learning.
-        if sigma_prior is not None:
-            sigma_p = sigma_prior.detach().clone()
-        else:
-            sigma_p = sigma.detach().clone()
-
-        # E-step sigma_p floor: prevent 1/σ_p blowup in self-coupling gradient.
-        # PriorBank allows σ_p down to 0.01 (for sharp decode logits), but
-        # the E-step gradient ∂KL(q||p)/∂σ = 0.5·(1/σ_p - 1/σ_q) needs a higher
-        # floor to prevent nat_grad_sigma explosion (at σ_p=0.01, 1/σ_p=100).
-        # Configurable via e_step_sigma_floor (default 0.1 caps 1/σ_p at 10.0).
-        _floor = self.e_step_sigma_floor
-        if sigma_p.dim() == 3:
-            sigma_p = sigma_p.clamp(min=_floor)
-        else:
-            # Full covariance: clamp diagonal elements
-            diag_vals = torch.diagonal(sigma_p, dim1=-2, dim2=-1)
-            diag_clamped = diag_vals.clamp(min=_floor)
-            sigma_p = sigma_p + torch.diag_embed(diag_clamped - diag_vals)
-
-        # Convert diagonal sigma_p to full covariance if needed (PriorBank returns diagonal)
-        if not is_diagonal and sigma_p.dim() == 3:
-            sigma_p = torch.diag_embed(sigma_p)
-
-
-        # Current state (will evolve)
-        # Implicit EM: detach beliefs at E-step start (proper EM boundary).
-        # The implicit gradient scale factor compensates for detachment with
-        # the info-geometrically correct CE→embedding gradient.
-        if self.implicit_em:
-            mu_current = mu.detach().clone()
-            sigma_current = sigma.detach().clone()
-        else:
-            mu_current = mu.clone()
-            sigma_current = sigma.clone()
-
-        # Clamp initial sigma to [eps, sigma_max] before E-step.
-        # Without this, embedding/prior sigma can far exceed sigma_max (e.g., σ=16
-        # vs sigma_max=5), causing nat_grad_sigma = 2σ²·∇σ to amplify by 2×16²=512
-        # on the first iteration. The retraction clamps AFTER the update, but the
-        # gradient was already computed on the un-clamped value.
-        if self.update_sigma:
-            _eps = 1e-6
-            if sigma_current.dim() == 3:
-                # Diagonal: element-wise clamp
-                sigma_current = sigma_current.clamp(min=_eps, max=self.sigma_max)
-            else:
-                # Full covariance: spectral clamp on eigenvalues
-                # Use _safe_eigh for robust decomposition — sigma from attention
-                # aggregate_messages can be ill-conditioned or near-indefinite
-                # early in training (wild transport operators, uncalibrated β).
-                eigvals, eigvecs = _safe_eigh(sigma_current, jitter=_eps)
-                eigvals = eigvals.clamp(min=_eps, max=self.sigma_max * self.sigma_max)
-                sigma_current = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
-
-        # Detach phi when detach_phi=True and non-amortized: enables fully backprop-free
-        # training where phi_embed learns via phi P-flow instead of backprop.
-        if not self.amortized_inference and self.detach_phi:
-            phi_current = phi.detach().clone()
-        else:
-            phi_current = phi.clone()
-        omega_current = omega.clone() if omega is not None else None  # Track omega for direct GL(K)
+        # ── Prepare all E-step inputs ────────────────────────────────────
+        _state = self._prepare_e_step_inputs(
+            mu, sigma, mu_prior, phi, omega, sigma_prior,
+            B, N, K, device, dtype, eps,
+        )
+        mu_current = _state['mu_current']
+        sigma_current = _state['sigma_current']
+        phi_current = _state['phi_current']
+        omega_current = _state['omega_current']
+        mu_p_current = _state['mu_p_current']
+        sigma_p = _state['sigma_p']
+        is_diagonal = _state['is_diagonal']
+        alpha_effective = _state['alpha_effective']
+        _alpha_c0 = _state['_alpha_c0']
 
         # Track β evolution if requested
         beta_history = [] if return_beta_history else None
-
-        # Store observation info for fresh gradient computation
         has_observations = targets is not None and W_out is not None
-        _detach_e_step = True  # Standard path detaches; DEQ step_fn sets False
-        beta_current = None  # Sentinel; set inside VFE loop for implicit EM scale computation
-        beta_heads = []      # Per-head betas (multihead); populated inside VFE loop
-
-        # =====================================================================
-        # Determine alpha: Bayesian precision or fixed scalar
-        # (needed by both closed-form and gradient descent paths)
-        # =====================================================================
-        if self.learnable_alpha:
-            alpha_effective = self.get_bayesian_alpha(
-                mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
-            )  # (B, N, K) - per-dim gauge-invariant, state-dependent
-            _alpha_c0 = F.softplus(self.raw_c0)
-        else:
-            alpha_effective = self.alpha  # scalar (backward compatible)
-            _alpha_c0 = None
+        _detach_e_step = True
+        beta_current = None
+        beta_heads = []
 
         # =====================================================================
         # CLOSED-FORM E-STEP: Precision-weighted fixed point (optional)
@@ -3535,38 +1906,9 @@ class VariationalFFNDynamic(nn.Module):
         # This naturally includes aggregation and replaces the gradient descent loop.
         if self.closed_form_e_step:
             # 1. Compute block exp pairs for transport
-            if self.irrep_dims is not None:
-                if omega_current is not None and self.gauge_param == 'omega':
-                    _cf_bep = []
-                    block_start = 0
-                    for d_h in self.irrep_dims:
-                        omega_h = omega_current[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
-                        omega_h_inv = torch.linalg.inv(omega_h)
-                        _cf_bep.append((omega_h, omega_h_inv))
-                        block_start += d_h
-                elif self.gauge_mode == 'trivial':
-                    _cf_bep = []
-                    for d_h in self.irrep_dims:
-                        eye_h = torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous()
-                        _cf_bep.append((eye_h, eye_h))
-                elif self.gauge_mode == 'constant' and self.constant_omega is not None:
-                    _cf_bep = []
-                    for h, d_h in enumerate(self.irrep_dims):
-                        omega_h = self.constant_omega[h].to(device=device, dtype=dtype)
-                        if getattr(self, 'enforce_orthogonal', False) and d_h >= 2:
-                            omega_h = newton_schulz_orthogonalize(omega_h.unsqueeze(0)).squeeze(0)
-                        eye_h = torch.eye(d_h, device=device, dtype=dtype)
-                        _cf_bep.append((
-                            omega_h.unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous(),
-                            eye_h.unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).contiguous(),
-                        ))
-                else:
-                    _cf_bep = fused_block_matrix_exp_pairs(
-                        phi_current, self.generators, self.irrep_dims,
-                        enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                    )
-            else:
-                _cf_bep = None
+            _cf_bep = self._build_block_exp_pairs(
+                phi_current, omega_current, B, N, device, dtype,
+            )
 
             # 2. Per-head: compute β_h, then closed-form fixed point
             beta_heads = []
@@ -4161,7 +2503,7 @@ class VariationalFFNDynamic(nn.Module):
             if self.irrep_dims is None and not self.multihead_vfe:
                 if omega_current is not None and self.gauge_param == 'omega':
                     # Direct omega: build full-K transport from omega blocks
-                    from transformer.core.attention import compute_transport_operators_direct
+                    from transformer.core.transport_ops import compute_transport_operators_direct
                     cached_transport = compute_transport_operators_direct(
                         omega=omega_current,
                         irrep_dims=self.irrep_dims if self.irrep_dims is not None else [self.embed_dim],
@@ -4227,65 +2569,10 @@ class VariationalFFNDynamic(nn.Module):
                 beta_heads = []  # For history tracking
 
                 # Precompute block_exp_pairs ONCE for all heads.
-                # Without this, each head builds full Omega (B,N,N,d,d) twice
-                # (once in compute_attention_weights, once in compute_vfe_gradients_gpu),
-                # causing 2×n_heads redundant matrix_exp calls per VFE iteration.
-                _mh_cached_bep = None
-                if self.irrep_dims is not None:
-                    if omega_current is not None and self.gauge_param == 'omega':
-                        # Direct omega path: build (Omega_h, Omega_h_inv) per head
-                        # from the block-diagonal omega matrix. No matrix_exp needed.
-                        _mh_cached_bep = []
-                        block_start = 0
-                        for d_h in self.irrep_dims:
-                            omega_h = omega_current[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
-                            omega_h_inv = torch.linalg.inv(omega_h)
-                            _mh_cached_bep.append((omega_h, omega_h_inv))
-                            block_start += d_h
-                    elif self.gauge_mode == 'trivial':
-                        # No matrix exponentials needed: Ω = I for all blocks.
-                        # 'trivial': global frame (no transport).
-                        _mh_cached_bep = []
-                        for d_h in self.irrep_dims:
-                            eye_h = torch.eye(d_h, device=mu_current.device,
-                                              dtype=mu_current.dtype)
-                            eye_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
-                                B, N, -1, -1).contiguous()
-                            _mh_cached_bep.append((eye_h, eye_h))
-                    elif self.gauge_mode == 'constant' and self.constant_omega is not None:
-                        # Constant gauge: use per-head Ω from the attention module.
-                        # exp_phi = Ω (broadcast to all positions), exp_neg_phi = I.
-                        # This produces Ω_ij = Ω @ I = Ω for all pairs, consistent
-                        # with the attention module's transport.
-                        _mh_cached_bep = []
-                        for h, d_h in enumerate(self.irrep_dims):
-                            omega_h = self.constant_omega[h].to(
-                                device=mu_current.device, dtype=mu_current.dtype)
-                            if getattr(self, 'enforce_orthogonal', False) and d_h >= 2:
-                                omega_h = newton_schulz_orthogonalize(
-                                    omega_h.unsqueeze(0)).squeeze(0)
-                            eye_h = torch.eye(d_h, device=mu_current.device,
-                                              dtype=mu_current.dtype)
-                            exp_phi_h = omega_h.unsqueeze(0).unsqueeze(0).expand(
-                                B, N, -1, -1).contiguous()
-                            exp_neg_phi_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
-                                B, N, -1, -1).contiguous()
-                            _mh_cached_bep.append((exp_phi_h, exp_neg_phi_h))
-                    elif self.gauge_mode == 'constant':
-                        # Constant gauge without constant_omega: fall back to identity
-                        # (legacy behavior for backward compatibility)
-                        _mh_cached_bep = []
-                        for d_h in self.irrep_dims:
-                            eye_h = torch.eye(d_h, device=mu_current.device,
-                                              dtype=mu_current.dtype)
-                            eye_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
-                                B, N, -1, -1).contiguous()
-                            _mh_cached_bep.append((eye_h, eye_h))
-                    else:
-                        _mh_cached_bep = fused_block_matrix_exp_pairs(
-                            phi_current, self.generators, self.irrep_dims,
-                            enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                        )
+                _mh_cached_bep = self._build_block_exp_pairs(
+                    phi_current, omega_current, B, N,
+                    mu_current.device, mu_current.dtype,
+                )
 
                 # =============================================================
                 # FUSED MULTI-HEAD VFE: Compute β_h and gradients in single
@@ -4410,53 +2697,10 @@ class VariationalFFNDynamic(nn.Module):
                 # SINGLE-β VFE: All blocks share one β
                 # Use fused path when possible (diagonal + block-diagonal)
                 # =============================================================
-                _cached_bep = None
-                if self.irrep_dims is not None:
-                    if omega_current is not None and self.gauge_param == 'omega':
-                        # Direct omega path: build (Omega_h, Omega_h_inv) per head
-                        _cached_bep = []
-                        block_start = 0
-                        for d_h in self.irrep_dims:
-                            omega_h = omega_current[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
-                            omega_h_inv = torch.linalg.inv(omega_h)
-                            _cached_bep.append((omega_h, omega_h_inv))
-                            block_start += d_h
-                    elif self.gauge_mode == 'trivial':
-                        _cached_bep = []
-                        for d_h in self.irrep_dims:
-                            eye_h = torch.eye(d_h, device=mu_current.device,
-                                              dtype=mu_current.dtype)
-                            eye_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
-                                B, N, -1, -1).contiguous()
-                            _cached_bep.append((eye_h, eye_h))
-                    elif self.gauge_mode == 'constant' and self.constant_omega is not None:
-                        _cached_bep = []
-                        for h, d_h in enumerate(self.irrep_dims):
-                            omega_h = self.constant_omega[h].to(
-                                device=mu_current.device, dtype=mu_current.dtype)
-                            if getattr(self, 'enforce_orthogonal', False) and d_h >= 2:
-                                omega_h = newton_schulz_orthogonalize(
-                                    omega_h.unsqueeze(0)).squeeze(0)
-                            eye_h = torch.eye(d_h, device=mu_current.device,
-                                              dtype=mu_current.dtype)
-                            exp_phi_h = omega_h.unsqueeze(0).unsqueeze(0).expand(
-                                B, N, -1, -1).contiguous()
-                            exp_neg_phi_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
-                                B, N, -1, -1).contiguous()
-                            _cached_bep.append((exp_phi_h, exp_neg_phi_h))
-                    elif self.gauge_mode == 'constant':
-                        _cached_bep = []
-                        for d_h in self.irrep_dims:
-                            eye_h = torch.eye(d_h, device=mu_current.device,
-                                              dtype=mu_current.dtype)
-                            eye_h = eye_h.unsqueeze(0).unsqueeze(0).expand(
-                                B, N, -1, -1).contiguous()
-                            _cached_bep.append((eye_h, eye_h))
-                    else:
-                        _cached_bep = fused_block_matrix_exp_pairs(
-                            phi_current, self.generators, self.irrep_dims,
-                            enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                        )
+                _cached_bep = self._build_block_exp_pairs(
+                    phi_current, omega_current, B, N,
+                    mu_current.device, mu_current.dtype,
+                )
 
                 # Use fused path for diagonal + block-diagonal
                 _use_fused_single = (is_diagonal and self.irrep_dims is not None
@@ -5075,57 +3319,11 @@ class VariationalFFNDynamic(nn.Module):
                 sigma_current = sigma_current.to(dtype)
             phi_current = phi_current.to(dtype)
 
-        # Store final alpha_i for M-step loss (avoids changing return signatures)
-        # alpha_effective is (B, N, K) if learnable_alpha, else scalar
-        if self.learnable_alpha:
-            self._last_alpha_i = alpha_effective.detach()  # (B, N, K)
-        else:
-            self._last_alpha_i = None
-
-        # Store final beta for implicit EM scale computation
-        # beta_current holds the last iteration's attention weights
-        # (multihead: last head's beta; single-head: full beta)
-        if self.implicit_em:
-            if self.multihead_vfe and beta_heads:
-                # Multihead: stack per-head betas into (B, H, N, N)
-                self._last_beta_for_implicit = torch.stack(beta_heads, dim=1).detach()
-            elif beta_current is not None:
-                self._last_beta_for_implicit = beta_current.detach()
-            else:
-                self._last_beta_for_implicit = None
-
-        # Compute and store implicit EM gradient scales (Phase 3/4)
-        if self.implicit_em:
-            # Get last beta — use _last_beta stored during the VFE loop
-            _beta_for_scale = getattr(self, '_last_beta_for_implicit', None)
-
-            if _beta_for_scale is not None:
-                # Always use fixed ffn_alpha for IFT scale, NOT adaptive alpha_i.
-                # Adaptive α_i gates E-step dynamics (shrinks as KL grows), but using
-                # it for IFT creates a death spiral: α_i↓ → scale↓ → weak CE signal
-                # → embeddings don't learn → more smoothing → KL↑ → α_i↓ further.
-                # The IFT scale should be a stable structural property.
-                _alpha_for_scale = self.alpha
-                mu_scale, sigma_scale = compute_implicit_em_scales(
-                    alpha_i=_alpha_for_scale,
-                    sigma_p=sigma_p,
-                    beta=_beta_for_scale,
-                    sigma_q=sigma_current if sigma_current is not None else sigma_p,
-                    eps=eps,
-                )
-                self._last_implicit_mu_scale = mu_scale      # (B, N, K)
-                self._last_implicit_sigma_scale = sigma_scale  # (B, N, K)
-            else:
-                self._last_implicit_mu_scale = None
-                self._last_implicit_sigma_scale = None
-        else:
-            self._last_implicit_mu_scale = None
-            self._last_implicit_sigma_scale = None
-
-        # Store evolved omega for multi-layer propagation (gauge_param='omega').
-        # Without this, omega evolution from E-step iterations is lost between
-        # layers — each layer would receive the original embedding omega.
-        self._last_omega = omega_current
+        # Store post-E-step state for M-step
+        self._finalize_e_step(
+            alpha_effective, sigma_p, sigma_current,
+            beta_current, beta_heads, omega_current, eps,
+        )
 
         # Return results
         # NOTE: Previously returned .detach() which BREAKS gradient flow!

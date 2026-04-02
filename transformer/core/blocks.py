@@ -285,7 +285,7 @@ class GaugeTransformerBlock(nn.Module):
             # Non-flat transport: compute edge-local connection δ_ij and inject
             # into cached transport so attention sees the modified Ω_ij.
             if self.non_flat_transport and self.gauge_connection is not None and cached_head_transports is None:
-                from transformer.core.attention import compute_transport_operators
+                from transformer.core.transport_ops import compute_transport_operators
                 delta_ij = self.gauge_connection(mu_normalized, mu_normalized)  # (B, N, N, n_gen)
                 transport = compute_transport_operators(
                     phi, generators,
