@@ -25,33 +25,7 @@ This means: the E-step (VFE descent) determines the computational graph through 
 
 ---
 
-## 2. sigma_p Is Barely Learning
 
-From TrainingConfig (not overridden in EM_CONFIG):
-```python
-sigma_ce_scale: float = 0.01  # 1% of CE gradient flows to sigma_p
-```
-
-The PriorBank decode computes:
-```
-logits_v = -0.5/τ * [(σ_q + μ_q²) @ (1/σ_p) - 2μ_q @ (μ_p/σ_p) + (μ_p²/σ_p + log σ_p)]
-```
-
-The gradient of this w.r.t. `log_sigma_p` flows through the `1/σ_p` terms. With sigma_ce_scale=0.01, this gradient is 100x dampened. sigma_p also receives:
-- Weight decay (0.05) pulling toward σ=1
-- M_alpha * ∂KL(q||p)/∂σ_p — but M_alpha=0.0
-- lambda_hyper * ∂KL(s||h)/∂σ_p — but lambda_hyper=0.0
-
-So sigma_p learns from **1% of CE gradient + weight decay only.** The per-token precision profiles σ_p (which control how sharply the decode discriminates between tokens) are essentially frozen near initialization.
-
-**Why this matters regardless of K:** Increasing K adds more dimensions to μ_p, giving more mean-based discrimination. But the precision structure (which dimensions matter for which tokens) doesn't improve because σ_p barely learns. At K=80, the mean capacity saturates — further K gives diminishing returns because the missing discrimination is in precision, not in means.
-
-**Possible fixes:**
-- Increase sigma_ce_scale to 0.05-0.1 (with gradient clipping to prevent explosion)
-- Add small M_alpha > 0 to provide VFE-based sigma gradient
-- Use a separate, larger learning rate for log_sigma_p (currently 0.005, same as sigma in general)
-
----
 
 ## 3. The Boltzmann Gate May Be Underpowered
 
