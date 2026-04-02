@@ -473,484 +473,11 @@ def compute_kl_matrix(
     )
 
 
-def _compute_kl_matrix_torch(
-    mu_q: torch.Tensor,
-    sigma_q: torch.Tensor,
-    phi: torch.Tensor,
-    generators: torch.Tensor,
-    cached_transport: Optional[dict] = None,  # Precomputed transport operators
-    gauge_mode: str = 'learned',  # 'learned', 'trivial', or 'constant'
-    enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
-) -> torch.Tensor:
-    """
-    VECTORIZED KL matrix computation using pure PyTorch.
-
-    Computes all pairwise KL divergences without Python loops.
-
-    Args:
-        mu_q: (B, N, K) belief means
-        sigma_q: (B, N, K, K) belief covariances
-        phi: (B, N, phi_dim) gauge frames in Lie algebra
-        generators: (n_gen, K, K) Lie algebra generators
-        cached_transport: Optional dict with precomputed 'Omega' from compute_transport_operators()
-        gauge_mode: 'learned' for full transport, 'trivial'/'constant' for Ω = I
-                   (raw KL). For 'constant', actual per-head Ω is injected via
-                   cached_transport by the attention module.
-        enforce_orthogonal: If True, apply Newton-Schulz to ensure Ω ∈ SO(K)
-
-    Returns:
-        kl_matrix: (B, N, N) KL divergence matrix with autograd graph intact
-    """
-    B, N, K = mu_q.shape
-    device = mu_q.device
-    dtype = mu_q.dtype
-    eps = 1e-6
-
-    # =========================================================================
-    # Step 1: Get transport operators (use cached if available)
-    # =========================================================================
-    if gauge_mode == 'trivial' or (gauge_mode == 'constant' and cached_transport is None):
-        # TRIVIAL / CONSTANT (without cached Ω): Ω_ij = I for all pairs
-        # For 'trivial': global frame, no transport.
-        # For 'constant' without cached_transport: fall back to identity;
-        #   the actual per-head Ω is injected via cached_transport by the
-        #   attention module. This path is hit when called from FFN VFE.
-        # μ_transported = μ_j (no rotation)
-        # Σ_transported = Σ_j (no rotation)
-        # Use .clone() after expand to avoid view-related gradient issues
-        mu_transported = mu_q[:, None, :, :].expand(-1, N, -1, -1).clone()  # (B, N, N, K)
-        Sigma_transported = sigma_q[:, None, :, :, :].expand(-1, N, -1, -1, -1).clone()  # (B, N, N, K, K)
-    else:
-        if cached_transport is not None and 'Omega' in cached_transport:
-            # Use precomputed transport operators (saves 2 matrix exponentials!)
-            Omega = cached_transport['Omega']
-        elif (cached_transport is not None
-              and 'exp_phi' in cached_transport
-              and 'exp_neg_phi' in cached_transport):
-            # Factored transport: construct Omega from exp_phi / exp_neg_phi
-            # This path is used by gauge_mode='constant' and the fused block exp approach
-            exp_phi = cached_transport['exp_phi']      # (B, N, K, K)
-            exp_neg_phi = cached_transport['exp_neg_phi']  # (B, N, K, K)
-            Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
-        else:
-            # Compute transport operators from phi and generators
-            # phi: (B, N, n_gen) -> phi_matrix: (B, N, K, K)
-            phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
-
-            exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
-
-            # Re-orthogonalization for SO(K) if requested
-            if enforce_orthogonal and K >= 16:
-                exp_phi = newton_schulz_orthogonalize(exp_phi)
-                exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
-
-            # Omega_ij = exp(φ_i) @ exp(-φ_j)
-            # Result: (B, N, N, K, K)
-            Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
-
-        # =========================================================================
-        # Step 2: Transport all means and covariances
-        # =========================================================================
-        # μ_j^{→i} = Ω_ij @ μ_j
-        mu_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)  # (B, N, N, K)
-
-        # Σ_j^{→i} = Ω_ij @ Σ_j @ Ω_ij^T
-        Sigma_transported = torch.einsum(
-            'bijkl,bjlm,bijmn->bijkn',
-            Omega, sigma_q, Omega.transpose(-1, -2)
-        )  # (B, N, N, K, K)
-
-        # Symmetrize to correct floating-point accumulation errors.
-        # Ω ∈ GL⁺(K), so Ω Σ Ω^T is theoretically symmetric but
-        # finite-precision einsum can introduce asymmetry, breaking Cholesky.
-        Sigma_transported = 0.5 * (Sigma_transported + Sigma_transported.transpose(-1, -2))
-
-    # =========================================================================
-    # Step 3: Expand mu_i and Sigma_i for pairwise comparison
-    # Use .clone() after expand to avoid view-related gradient issues
-    # =========================================================================
-    mu_i = mu_q[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
-    Sigma_i = sigma_q[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()  # (B, N, N, K, K)
-
-    # =========================================================================
-    # Step 4: Compute all KL divergences
-    # KL(q_i || Ω_ij[q_j]) = KL(N(μ_i, Σ_i) || N(μ_j^{→i}, Σ_j^{→i}))
-    # Force float32 for Cholesky, solve_triangular, log-det — all break in float16.
-    # =========================================================================
-    mu_i = mu_i.float()
-    Sigma_i = Sigma_i.float()
-    mu_transported = mu_transported.float()
-    Sigma_transported = Sigma_transported.float()
-    I = torch.eye(K, device=device, dtype=torch.float32)
-    Sigma_i_reg = Sigma_i + eps * I
-    Sigma_transported_reg = Sigma_transported + eps * I
-
-    # NaN guard: replace any NaN entries with identity covariance.
-    # NaNs propagate from matrix_exp overflow when phi grows very large.
-    nan_mask = torch.isnan(Sigma_transported_reg).any(dim=-1).any(dim=-1)  # (B, N, N)
-    if nan_mask.any():
-        _nr("nan_replace")
-        Sigma_transported_reg = torch.where(
-            nan_mask.unsqueeze(-1).unsqueeze(-1),
-            I.expand_as(Sigma_transported_reg),
-            Sigma_transported_reg,
-        )
-
-    try:
-        # Cholesky of transported covariances (prior in KL)
-        L_p = torch.linalg.cholesky(Sigma_transported_reg)
-    except RuntimeError:
-        # Cholesky failed (non-PD matrix from GL⁺(K) transport drift).
-        # Avoid eigh — cusolver's batched syevd can reject large batch sizes.
-        # Instead, add progressively larger diagonal regularization until
-        # Cholesky succeeds. Each doubling adds ~eps more, which is small
-        # relative to the matrix entries.
-        reg = eps
-        for attempt in range(5):
-            reg *= 10.0
-            Sigma_transported_reg = Sigma_transported + reg * I
-            # Also re-symmetrize
-            Sigma_transported_reg = 0.5 * (Sigma_transported_reg + Sigma_transported_reg.transpose(-1, -2))
-            try:
-                L_p = torch.linalg.cholesky(Sigma_transported_reg)
-                _nr("chol_recover")
-                break
-            except RuntimeError:
-                continue
-        else:
-            # Last resort: replace with identity (KL will be ~0 for these pairs)
-            _nr("chol_fail")
-            L_p = torch.linalg.cholesky(I.expand_as(Sigma_transported_reg) + eps * I)
-
-    try:
-        # Trace term: tr(Σ_p⁻¹ Σ_q) where Σ_p = Σ_j^{→i}, Σ_q = Σ_i
-        Y = torch.linalg.solve_triangular(L_p, Sigma_i_reg, upper=False)
-        Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
-        trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)  # (B, N, N)
-
-        # Mahalanobis term: (μ_p - μ_q)ᵀ Σ_p⁻¹ (μ_p - μ_q)
-        delta_mu = mu_transported - mu_i  # (B, N, N, K)
-        v = torch.linalg.solve_triangular(
-            L_p, delta_mu.unsqueeze(-1), upper=False
-        ).squeeze(-1)
-        mahal_term = torch.sum(v ** 2, dim=-1)  # (B, N, N)
-
-        # Log determinant terms
-        logdet_p = 2.0 * torch.sum(
-            torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1).clamp(min=1e-12)), dim=-1
-        )
-        # Cholesky of Sigma_i (query covariance) with progressive fallback
-        try:
-            L_q = torch.linalg.cholesky(Sigma_i_reg)
-        except RuntimeError:
-            reg = eps
-            for attempt in range(5):
-                reg *= 10.0
-                Sigma_i_fallback = Sigma_i + reg * I
-                Sigma_i_fallback = 0.5 * (Sigma_i_fallback + Sigma_i_fallback.transpose(-1, -2))
-                try:
-                    L_q = torch.linalg.cholesky(Sigma_i_fallback)
-                    _nr("chol_recover")
-                    break
-                except RuntimeError:
-                    continue
-            else:
-                _nr("chol_fail")
-                L_q = torch.linalg.cholesky(I.expand_as(Sigma_i_reg) + eps * I)
-        logdet_q = 2.0 * torch.sum(
-            torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1).clamp(min=1e-12)), dim=-1
-        )
-        logdet_term = logdet_p - logdet_q  # (B, N, N)
-
-        # KL divergence for all pairs
-        kl_all = 0.5 * (trace_term + mahal_term - K + logdet_term)  # (B, N, N)
-        # Clamp KL to [0, max] for numerical stability.
-        # Scale ceiling with K: each dimension contributes O(1) to KL,
-        # so max reasonable KL ≈ O(K). Use 5*K as generous ceiling.
-        kl_ceil = max(100.0, 20.0 * K)
-        kl_all = torch.clamp(kl_all, min=0.0, max=kl_ceil)
-
-        # NaN/Inf safety: replace any residual numerical failures with zero KL
-        bad_mask = torch.isnan(kl_all) | torch.isinf(kl_all)
-        if bad_mask.any():
-            bad_count = bad_mask.sum().item()
-            _nr("nan_replace")
-        # NaN → kl_ceil (repulsive): a NaN pair should be IGNORED (β→0),
-        # not ATTENDED (β→1). Using nan=0.0 makes NaN pairs maximally attractive.
-        kl_all = kl_all.nan_to_num(nan=kl_ceil, posinf=kl_ceil, neginf=0.0)
-
-        return kl_all.to(dtype)
-
-    except RuntimeError:
-        # Fallback to loop-based computation if solve_triangular fails
-        # Collect values in list to preserve autograd graph (no in-place ops)
-        kl_rows = []
-        for b in range(B):
-            batch_rows = []
-            for i in range(N):
-                row_vals = []
-                for j in range(N):
-                    mu_j_transported, sigma_j_transported = _transport_gaussian_torch(
-                        mu_q[b, j], sigma_q[b, j],
-                        phi[b, i], phi[b, j], generators
-                    )
-                    kl_ij = _kl_gaussian_torch(
-                        mu_q[b, i], sigma_q[b, i],
-                        mu_j_transported, sigma_j_transported
-                    )
-                    row_vals.append(kl_ij.unsqueeze(0))
-                batch_rows.append(torch.cat(row_vals, dim=0))  # (N,)
-            kl_rows.append(torch.stack(batch_rows, dim=0))  # (N, N)
-        return torch.stack(kl_rows, dim=0)  # (B, N, N)
-
-
-def _transport_gaussian_torch(
-    mu: torch.Tensor,         # (K,)
-    sigma: torch.Tensor,      # (K, K)
-    phi_dst: torch.Tensor,    # (phi_dim,)
-    phi_src: torch.Tensor,    # (phi_dim,)
-    generators: torch.Tensor, # (n_gen, K, K)
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Transport Gaussian via Ω = exp(φ_dst) · exp(-φ_src).
-
-    Returns:
-        mu_transported: Ω μ, shape (K,)
-        sigma_transported: Ω Σ Ω^T, shape (K, K)
-    """
-    # Build transport operator Ω
-    # X_dst = Σ_a φ_dst[a] * G_a
-    X_dst = torch.einsum('a,aij->ij', phi_dst, generators)  # (K, K)
-    X_src = torch.einsum('a,aij->ij', phi_src, generators)
-
-    # Matrix exponential (float64 for GL(K) stability)
-    exp_dst, _ = stable_matrix_exp_pair(X_dst)
-    _, exp_neg_src = stable_matrix_exp_pair(X_src)
-    Omega = exp_dst @ exp_neg_src
-
-    # Transport
-    # Use torch.mv for proper matrix-vector product: (K,K) @ (K,) → (K,)
-    mu_transported = torch.mv(Omega, mu)
-    sigma_transported = Omega @ sigma @ Omega.T
-
-    # Symmetrize
-    sigma_transported = 0.5 * (sigma_transported + sigma_transported.T)
-
-    return mu_transported, sigma_transported
-
-
-def _kl_gaussian_torch(
-    mu1: torch.Tensor,     # (K,)
-    sigma1: torch.Tensor,  # (K, K)
-    mu2: torch.Tensor,     # (K,)
-    sigma2: torch.Tensor,  # (K, K)
-    eps: float = 1e-8
-) -> torch.Tensor:
-    """
-    KL divergence between two Gaussians: KL(N(μ1,Σ1) || N(μ2,Σ2)).
-
-    Formula:
-        KL = 0.5 * [tr(Σ2^{-1} Σ1) + (μ2-μ1)^T Σ2^{-1} (μ2-μ1) - K + log|Σ2|/|Σ1|]
-    """
-    K = mu1.shape[0]
-    I_K = torch.eye(K, device=sigma1.device, dtype=sigma1.dtype)
-
-    # Symmetrize (transported covariances can drift from symmetry)
-    sigma1 = 0.5 * (sigma1 + sigma1.mT)
-    sigma2 = 0.5 * (sigma2 + sigma2.mT)
-
-    # Regularize: add eps*I, then clamp eigenvalues if still not PD.
-    # This handles numerical drift from matrix exponential transport.
-    sigma1_reg = sigma1 + eps * I_K
-    sigma2_reg = sigma2 + eps * I_K
-
-    # Cholesky decomposition for numerical stability
-    try:
-        L1 = torch.linalg.cholesky(sigma1_reg)
-        L2 = torch.linalg.cholesky(sigma2_reg)
-    except RuntimeError:
-        # Eigenvalue repair: clamp negative eigenvalues to eps
-        eig1, V1 = torch.linalg.eigh(sigma1_reg)
-        eig2, V2 = torch.linalg.eigh(sigma2_reg)
-        sigma1_reg = V1 @ torch.diag(eig1.clamp(min=eps)) @ V1.mT
-        sigma2_reg = V2 @ torch.diag(eig2.clamp(min=eps)) @ V2.mT
-        L1 = torch.linalg.cholesky(sigma1_reg)
-        L2 = torch.linalg.cholesky(sigma2_reg)
-
-    # Log determinants: log|Σ| = 2*sum(log(diag(L)))
-    logdet1 = 2.0 * torch.sum(torch.log(torch.diag(L1).clamp(min=1e-12)))
-    logdet2 = 2.0 * torch.sum(torch.log(torch.diag(L2).clamp(min=1e-12)))
-
-    # Trace term: tr(Σ2^{-1} Σ1)
-    # Solve L2 Y = Σ1 for Y, then solve L2^T Z = Y for Z
-    Y = torch.linalg.solve_triangular(L2, sigma1_reg, upper=False)
-    Z = torch.linalg.solve_triangular(L2.T, Y, upper=True)
-    trace_term = torch.trace(Z)
-
-    # Quadratic term: (μ2-μ1)^T Σ2^{-1} (μ2-μ1) = ||L2^{-1} (μ2-μ1)||^2
-    delta_mu = mu2 - mu1
-    # solve_triangular needs 2D input - reshape (K,) → (K, 1)
-    y = torch.linalg.solve_triangular(L2, delta_mu.unsqueeze(-1), upper=False).squeeze(-1)
-    quad_term = torch.dot(y, y)
-
-    # Combine
-    kl = 0.5 * (trace_term + quad_term - K + logdet2 - logdet1)
-
-    # Numerical safety: clamp to [0, ∞)
-    return torch.clamp(kl, min=0.0)
-
-
-def _compute_kl_matrix_diagonal(
-    mu_q: torch.Tensor,        # (B, N, K) belief means
-    sigma_q: torch.Tensor,     # (B, N, K) diagonal variances (NOT K×K!)
-    phi: torch.Tensor,         # (B, N, phi_dim) gauge frames
-    generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators
-    cached_transport: Optional[dict] = None,  # Precomputed transport operators
-    enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
-) -> torch.Tensor:
-    """
-    DIAGONAL covariance KL computation - O(N²×K) instead of O(N²×K²).
-
-    For diagonal Gaussians, KL simplifies to:
-        KL(N(μ_q, diag(σ_q)) || N(μ_p, diag(σ_p))) =
-        0.5 * (sum(σ_q/σ_p) + sum((μ_p - μ_q)²/σ_p) - K + sum(log(σ_p) - log(σ_q)))
-
-    Key simplifications:
-    - No Cholesky decomposition (O(K³) → O(K))
-    - No matrix inversion
-    - No N×N×K×K intermediate tensors!
-    - Transport still rotates μ, but σ stays diagonal (approximation)
-
-    Args:
-        mu_q: (B, N, K) belief means
-        sigma_q: (B, N, K) diagonal variances (positive)
-        phi: (B, N, phi_dim) gauge frames in Lie algebra
-        generators: (n_gen, K, K) Lie algebra generators
-        cached_transport: Optional dict with precomputed 'Omega' from compute_transport_operators()
-
-    Returns:
-        kl_matrix: (B, N, N) KL divergence matrix with autograd graph intact
-    """
-    # Squeeze trailing singleton dimensions for robustness
-    # (handles case where sigma_q comes in as (B, N, K, 1) instead of (B, N, K))
-    while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
-        sigma_q = sigma_q.squeeze(-1)
-
-    B, N, K = mu_q.shape
-    device = mu_q.device
-    dtype = mu_q.dtype
-    eps = 1e-6
-
-    # Ensure sigma is positive
-    sigma_q = sigma_q.clamp(min=eps)
-
-    # =========================================================================
-    # Step 1: Get transport operators (use cached if available)
-    # =========================================================================
-    if cached_transport is not None and 'Omega' in cached_transport:
-        # Use precomputed transport operators (saves 2 matrix exponentials!)
-        Omega = cached_transport['Omega']
-    elif (cached_transport is not None
-          and 'exp_phi' in cached_transport
-          and 'exp_neg_phi' in cached_transport):
-        # Factored transport (constant gauge or fused block exp)
-        exp_phi = cached_transport['exp_phi']
-        exp_neg_phi = cached_transport['exp_neg_phi']
-        Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
-    else:
-        # Compute transport operators
-        phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
-
-        # Clamp phi_matrix norm to prevent matrix_exp overflow → NaN
-        phi_norm = phi_matrix.norm(dim=(-2, -1), keepdim=True).clamp(min=1e-8)
-        max_norm = 10.0
-        scale = (max_norm / phi_norm).clamp(max=1.0)
-        phi_matrix = phi_matrix * scale
-
-        exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
-
-        # Re-orthogonalization for SO(K) if requested
-        if enforce_orthogonal and K >= 16:
-            exp_phi = newton_schulz_orthogonalize(exp_phi)
-            exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
-
-        # Omega_ij = exp(φ_i) @ exp(-φ_j)
-        Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)  # (B, N, N, K, K)
-
-    # =========================================================================
-    # Step 2: Transport means (still needed for accurate KL)
-    # =========================================================================
-    # μ_j^{→i} = Ω_ij @ μ_j
-    mu_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)  # (B, N, N, K)
-
-    # =========================================================================
-    # Step 3: Compute diagonal of transported covariance
-    # Σ_j_transported = Ω @ diag(σ_j) @ Ω^T
-    # diag(Σ_j_transported)_k = Σ_l Ω_kl² * σ_j[l]
-    # This is more accurate than just using σ_j, especially for non-identity Ω
-    # =========================================================================
-    # σ_j expanded for all pairs — .clone() ensures contiguous memory for CUDA kernels
-    sigma_j_orig = sigma_q[:, None, :, :].expand(-1, N, -1, -1).clone()  # (B, N, N, K)
-    sigma_i = sigma_q[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
-
-    # Compute diagonal of transported covariance: diag(Ω @ diag(σ_j) @ Ω^T)_k = Σ_l Ω_kl² * σ_j[l]
-    # Use 3-operand einsum to avoid materializing Omega**2 as a (B, N, N, K, K) tensor.
-    # Omega: (B, N, N, K, K), sigma_j_orig: (B, N, N, K)
-    # Result: (B, N, N, K)
-    sigma_j_transported_diag = torch.einsum('bijkl,bijkl,bijl->bijk', Omega, Omega, sigma_j_orig)  # (B, N, N, K)
-
-    # Clamp for numerical stability
-    sigma_j_transported_diag = sigma_j_transported_diag.clamp(min=eps)
-
-    # =========================================================================
-    # Step 4: Diagonal KL divergence (vectorized)
-    # KL(q_i || transported q_j) where q_i ~ N(μ_i, diag(σ_i))
-    # transported q_j ~ N(μ_j^{→i}, diag(σ_j_transported))
-    # Force float32 for sigma divisions and logs to survive AMP float16.
-    # =========================================================================
-    with torch.amp.autocast('cuda', enabled=False):
-        sigma_i = sigma_i.float()
-        sigma_j_transported_diag = sigma_j_transported_diag.float()
-        mu_transported = mu_transported.float()
-        mu_q_f32 = mu_q.float()
-
-        mu_i = mu_q_f32[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
-
-        # Clamp transported sigma to prevent NaN from 1/σ and log(σ)
-        # GL(K) transport can produce near-zero diagonals early in training
-        _kl_eps = 1e-4
-        sigma_j_transported_diag = sigma_j_transported_diag.clamp(min=_kl_eps)
-        sigma_i = sigma_i.clamp(min=_kl_eps)
-
-        # Trace term: sum(σ_i / σ_j_transported)
-        trace_term = (sigma_i / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
-
-        # Mahalanobis term: sum((μ_j^{→i} - μ_i)² / σ_j_transported)
-        delta_mu = mu_transported - mu_i  # (B, N, N, K)
-        mahal_term = ((delta_mu ** 2) / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
-
-        # Log determinant term: sum(log(σ_j_transported) - log(σ_i))
-        logdet_term = (torch.log(sigma_j_transported_diag) - torch.log(sigma_i)).sum(dim=-1)  # (B, N, N)
-
-        # Full KL
-        kl_all = 0.5 * (trace_term + mahal_term - K + logdet_term)
-        # Clamp KL to [0, max] for numerical stability.
-        # Scale ceiling with K: each dimension contributes O(1) to KL.
-        kl_ceil = max(100.0, 20.0 * K)
-        kl_all = torch.clamp(kl_all, min=0.0, max=kl_ceil)
-        kl_all = kl_all.nan_to_num(nan=kl_ceil, posinf=kl_ceil, neginf=0.0)
-
-    return kl_all.to(dtype)
-
-
-# _compute_kl_matrix_chunked has been consolidated into
-# transformer/core/kl_computation.py (_kl_kernel_dense + _compute_chunked).
-# The dispatch is now handled by _dispatch_kl_matrix below.
-
-
-# _compute_kl_matrix_diagonal_chunked has been consolidated into
-# transformer/core/kl_computation.py (_kl_kernel_diagonal + _compute_chunked).
-# The dispatch is now handled by _dispatch_kl_matrix below.
+# _compute_kl_matrix_torch, _transport_gaussian_torch, _kl_gaussian_torch,
+# _compute_kl_matrix_diagonal, _compute_kl_matrix_chunked, and
+# _compute_kl_matrix_diagonal_chunked have been consolidated into
+# transformer/core/kl_computation.py.
+# The unified dispatch for all modes lives in _dispatch_kl_matrix below.
 
 
 def estimate_chunk_size(
@@ -1005,9 +532,350 @@ def estimate_chunk_size(
     return chunk_size
 
 
-# Block-diagonal KL functions have been consolidated into
-# transformer/core/kl_computation.py (_kl_kernel_block_diagonal).
-# The dispatch is now handled by _dispatch_kl_matrix below.
+def _dispatch_kl_matrix(
+    mu_q: torch.Tensor,
+    sigma_q: torch.Tensor,
+    phi: torch.Tensor,
+    generators: torch.Tensor,
+    diagonal_covariance: bool,
+    irrep_dims: Optional[List[int]],
+    chunk_size: Optional[int],
+    cached_transport: Optional[dict],
+    cached_block_exp_pairs: Optional[list],
+    gauge_mode: str,
+    enforce_orthogonal: bool,
+) -> torch.Tensor:
+    r"""Unified KL matrix dispatcher for all covariance modes and gauge configurations.
+
+    Handles transport-operator construction then delegates to
+    ``transformer.core.kl_computation.compute_kl_matrix``.
+
+    Priority order:
+        1. BLOCK_DIAGONAL (diagonal sigma)
+        2. BLOCK_DIAGONAL (full sigma) — optionally chunked
+        3. DENSE or DIAGONAL — build Omega, call unified kernel
+
+    Covariance transport invariant: Sigma_transported = Omega @ Sigma @ Omega.T
+    (the sandwich product is never bypassed).
+
+    Args:
+        mu_q: (B, N, K) belief means.
+        sigma_q: (B, N, K) diagonal or (B, N, K, K) full covariance.
+        phi: (B, N, n_gen) gauge field coefficients.
+        generators: (n_gen, K, K) Lie algebra generators.
+        diagonal_covariance: If True, sigma_q is (B, N, K).
+        irrep_dims: Block dimensions for block-diagonal mode.
+        chunk_size: Chunk size for memory-bounded computation.
+        cached_transport: Optional precomputed transport dict.
+        cached_block_exp_pairs: Optional precomputed block exponentials.
+        gauge_mode: 'learned', 'trivial', or 'constant'.
+        enforce_orthogonal: If True, apply Newton-Schulz to exp pairs.
+
+    Returns:
+        kl_matrix: (B, N, N) pairwise KL divergences.
+    """
+    from transformer.core.kl_computation import (
+        KLMode,
+        compute_kl_matrix as _unified_kl,
+    )
+
+    B, N, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+    eps = 1e-6
+    kl_max = max(100.0, 20.0 * K)
+
+    # =========================================================================
+    # 1. BLOCK-DIAGONAL MODE
+    # Fused kernels in gauge_utils.py handle transport internally.
+    # =========================================================================
+    if irrep_dims is not None:
+        # Squeeze trailing singleton dimensions for diagonal sigma
+        if diagonal_covariance:
+            while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
+                sigma_q = sigma_q.squeeze(-1)
+            sigma_q = sigma_q.clamp(min=eps)
+
+        # Build or reuse block exponential pairs
+        if cached_block_exp_pairs is not None:
+            bep = cached_block_exp_pairs
+        else:
+            bep = fused_block_matrix_exp_pairs(
+                phi, generators, irrep_dims,
+                enforce_orthogonal=enforce_orthogonal,
+            )
+
+        if diagonal_covariance:
+            # Block-diagonal + diagonal sigma: fastest path
+            return _unified_kl(
+                mu_q=mu_q,
+                sigma_q=sigma_q,
+                mu_transported=None,  # not used in BLOCK_DIAGONAL mode
+                sigma_transported=None,
+                mode=KLMode.BLOCK_DIAGONAL,
+                block_exp_pairs=bep,
+                irrep_dims=irrep_dims,
+                kl_max=kl_max,
+                eps=eps,
+            )
+        else:
+            # Block-diagonal + full sigma
+            # chunk_size is handled inside fused_block_diagonal_kl_full's _tile_size.
+            # The chunked variant below is retained for cases where the caller
+            # explicitly requests chunking over position pairs (different from
+            # the internal Omega tile in fused_block_diagonal_kl_full).
+            if chunk_size is not None:
+                # Chunked block-diagonal: process position pairs in tiles.
+                # Build exp lists and loop manually (replicates old chunked path).
+                block_exp_phi = [p[0] for p in bep]
+                block_exp_neg_phi = [p[1] for p in bep]
+
+                row_chunks: list = []
+                for i_start in range(0, N, chunk_size):
+                    i_end = min(i_start + chunk_size, N)
+                    n_i = i_end - i_start
+                    col_chunks: list = []
+                    for j_start in range(0, N, chunk_size):
+                        j_end = min(j_start + chunk_size, N)
+                        n_j = j_end - j_start
+
+                        kl_chunk = torch.zeros(B, n_i, n_j, device=device, dtype=dtype)
+                        block_start = 0
+                        for block_idx, d in enumerate(irrep_dims):
+                            block_end = block_start + d
+                            I_d = torch.eye(d, device=device, dtype=dtype)
+
+                            ep_i = block_exp_phi[block_idx][:, i_start:i_end].contiguous()
+                            en_j = block_exp_neg_phi[block_idx][:, j_start:j_end].contiguous()
+                            Omega_b = torch.einsum('bikl,bjlm->bijkm', ep_i, en_j)
+
+                            mu_i = mu_q[:, i_start:i_end, block_start:block_end].contiguous()
+                            mu_j = mu_q[:, j_start:j_end, block_start:block_end].contiguous()
+                            sig_i = sigma_q[:, i_start:i_end, block_start:block_end,
+                                            block_start:block_end].contiguous()
+                            sig_j = sigma_q[:, j_start:j_end, block_start:block_end,
+                                            block_start:block_end].contiguous()
+
+                            mu_t = torch.einsum('bijkl,bjl->bijk', Omega_b, mu_j)
+                            sig_t = torch.einsum(
+                                'bijkl,bjlm,bijmn->bijkn',
+                                Omega_b, sig_j, Omega_b.transpose(-1, -2)
+                            )
+                            del Omega_b
+
+                            mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()
+                            sig_i_exp = sig_i[:, :, None, :, :].expand(-1, -1, n_j, -1, -1).clone()
+
+                            kl_b = _kl_kernel_dense(
+                                mu_i_exp, sig_i_exp + eps * I_d,
+                                mu_t, sig_t + eps * I_d,
+                                kl_max=max(100.0, 20.0 * d),
+                                eps=eps,
+                            )
+                            kl_chunk = kl_chunk + kl_b
+                            del sig_t, mu_t
+                            block_start = block_end
+
+                        col_chunks.append(kl_chunk)
+                    row_chunks.append(torch.cat(col_chunks, dim=2))
+                return torch.cat(row_chunks, dim=1)
+            else:
+                return _unified_kl(
+                    mu_q=mu_q,
+                    sigma_q=sigma_q,
+                    mu_transported=None,
+                    sigma_transported=None,
+                    mode=KLMode.BLOCK_DIAGONAL,
+                    block_exp_pairs=bep,
+                    irrep_dims=irrep_dims,
+                    kl_max=kl_max,
+                    eps=eps,
+                )
+
+    # =========================================================================
+    # 2. DENSE / DIAGONAL MODE: build Omega, transport, then call unified kernel
+    # =========================================================================
+
+    # --- Build Omega ---
+    if gauge_mode == 'trivial' or (gauge_mode == 'constant' and cached_transport is None):
+        # Identity transport: Omega_ij = I for all pairs
+        Omega = None  # signal to use identity below
+    elif cached_transport is not None and 'Omega' in cached_transport:
+        Omega = cached_transport['Omega']   # (B, N, N, K, K)
+    elif (cached_transport is not None
+          and 'exp_phi' in cached_transport
+          and 'exp_neg_phi' in cached_transport):
+        exp_phi = cached_transport['exp_phi']
+        exp_neg_phi = cached_transport['exp_neg_phi']
+        Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
+    else:
+        # Compute from phi and generators
+        phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
+        exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
+        if enforce_orthogonal and K >= 16:
+            exp_phi = newton_schulz_orthogonalize(exp_phi)
+            exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
+        Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
+
+    # --- Transport ---
+    if diagonal_covariance:
+        while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
+            sigma_q = sigma_q.squeeze(-1)
+        sigma_q = sigma_q.clamp(min=eps)
+
+        if Omega is None:
+            # Identity: mu_transported = mu_q broadcast, sigma transported = sigma_q broadcast
+            mu_t = mu_q[:, None, :, :].expand(-1, N, -1, -1).clone()
+            sig_t = sigma_q[:, None, :, :].expand(-1, N, -1, -1).clone()
+        else:
+            mu_t = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)
+            sigma_j = sigma_q[:, None, :, :].expand(-1, N, -1, -1).clone()
+            sig_t = torch.einsum(
+                'bijkl,bijkl,bijl->bijk', Omega, Omega, sigma_j
+            ).clamp(min=eps)
+
+        # Call unified kernel (with optional chunking)
+        if chunk_size is not None and cached_transport is None:
+            # Chunked diagonal: precompute exp pairs and loop
+            phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
+            exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
+            if enforce_orthogonal and K >= 16:
+                exp_phi = newton_schulz_orthogonalize(exp_phi)
+                exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
+
+            row_chunks = []
+            for i_start in range(0, N, chunk_size):
+                i_end = min(i_start + chunk_size, N)
+                n_i = i_end - i_start
+                ep_i = exp_phi[:, i_start:i_end].contiguous()
+                mu_i = mu_q[:, i_start:i_end].contiguous()
+                sig_i = sigma_q[:, i_start:i_end].contiguous()
+
+                col_chunks = []
+                for j_start in range(0, N, chunk_size):
+                    j_end = min(j_start + chunk_size, N)
+                    n_j = j_end - j_start
+                    en_j = exp_neg_phi[:, j_start:j_end].contiguous()
+                    mu_j = mu_q[:, j_start:j_end].contiguous()
+                    sig_j = sigma_q[:, j_start:j_end].contiguous()
+
+                    Omega_c = torch.einsum('bikl,bjlm->bijkm', ep_i, en_j)
+                    mu_tc = torch.einsum('bijkl,bjl->bijk', Omega_c, mu_j)
+                    sig_j_exp = sig_j[:, None, :, :].expand(-1, n_i, -1, -1).clone()
+                    sig_tc = torch.einsum(
+                        'bijkl,bijkl,bijl->bijk', Omega_c, Omega_c, sig_j_exp
+                    ).clamp(min=eps)
+                    del Omega_c
+
+                    mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()
+                    sig_i_exp = sig_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()
+                    kl_c = _kl_kernel_diagonal(
+                        mu_i_exp, sig_i_exp, mu_tc, sig_tc,
+                        kl_max=kl_max, eps=eps,
+                    )
+                    del sig_tc, mu_tc
+                    col_chunks.append(kl_c)
+                row_chunks.append(torch.cat(col_chunks, dim=2))
+            return torch.cat(row_chunks, dim=1)
+        else:
+            # Unchunked diagonal (includes chunked-with-cached-transport case)
+            return _unified_kl(
+                mu_q=mu_q,
+                sigma_q=sigma_q,
+                mu_transported=mu_t,
+                sigma_transported=sig_t,
+                mode=KLMode.DIAGONAL,
+                chunk_size=None,  # already pre-expanded; no extra chunking needed
+                kl_max=kl_max,
+                eps=eps,
+            )
+    else:
+        # Full covariance
+        if Omega is None:
+            mu_t = mu_q[:, None, :, :].expand(-1, N, -1, -1).clone()
+            sig_t = sigma_q[:, None, :, :, :].expand(-1, N, -1, -1, -1).clone()
+        else:
+            mu_t = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)
+            sig_t = torch.einsum(
+                'bijkl,bjlm,bijmn->bijkn',
+                Omega, sigma_q, Omega.transpose(-1, -2)
+            )
+            sig_t = 0.5 * (sig_t + sig_t.transpose(-1, -2))
+
+        if chunk_size is not None:
+            # Full-covariance chunked: pre-compute exp pairs and loop
+            if Omega is not None and cached_transport is None:
+                phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
+                exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
+            # else: use already-computed Omega; slice over it
+            # Determine if we have factored exp_phi / exp_neg_phi available
+            _have_factors = (
+                cached_transport is not None
+                and 'exp_phi' in cached_transport
+                and 'exp_neg_phi' in cached_transport
+            )
+            if _have_factors:
+                exp_phi = cached_transport['exp_phi']
+                exp_neg_phi = cached_transport['exp_neg_phi']
+                use_factored = True
+            elif Omega is None:
+                # Identity transport — no chunking savings, just use unchunked
+                use_factored = False
+            else:
+                # We computed Omega above; for chunked we need exp_phi/exp_neg_phi
+                # which we computed just above (if cached_transport is None)
+                use_factored = True
+
+            if use_factored and Omega is not None:
+                row_chunks = []
+                for i_start in range(0, N, chunk_size):
+                    i_end = min(i_start + chunk_size, N)
+                    n_i = i_end - i_start
+                    ep_i = exp_phi[:, i_start:i_end].contiguous()
+                    mu_i = mu_q[:, i_start:i_end].contiguous()
+                    sig_i = sigma_q[:, i_start:i_end].contiguous()
+
+                    col_chunks = []
+                    for j_start in range(0, N, chunk_size):
+                        j_end = min(j_start + chunk_size, N)
+                        n_j = j_end - j_start
+                        en_j = exp_neg_phi[:, j_start:j_end].contiguous()
+                        mu_j = mu_q[:, j_start:j_end].contiguous()
+                        sig_j = sigma_q[:, j_start:j_end].contiguous()
+
+                        Omega_c = torch.einsum('bikl,bjlm->bijkm', ep_i, en_j)
+                        mu_tc = torch.einsum('bijkl,bjl->bijk', Omega_c, mu_j)
+                        sig_tc = torch.einsum(
+                            'bijkl,bjlm,bijmn->bijkn',
+                            Omega_c, sig_j, Omega_c.transpose(-1, -2)
+                        )
+                        sig_tc = 0.5 * (sig_tc + sig_tc.transpose(-1, -2))
+                        del Omega_c
+
+                        mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()
+                        sig_i_exp = sig_i[:, :, None, :, :].expand(-1, -1, n_j, -1, -1).clone()
+                        I = torch.eye(K, device=device, dtype=dtype)
+                        kl_c = _kl_kernel_dense(
+                            mu_i_exp, sig_i_exp + eps * I,
+                            mu_tc, sig_tc + eps * I,
+                            kl_max=kl_max, eps=eps,
+                        )
+                        del sig_tc, mu_tc
+                        col_chunks.append(kl_c)
+                    row_chunks.append(torch.cat(col_chunks, dim=2))
+                return torch.cat(row_chunks, dim=1)
+
+        # Unchunked full covariance (or fallback when chunked not applicable)
+        return _unified_kl(
+            mu_q=mu_q,
+            sigma_q=sigma_q,
+            mu_transported=mu_t,
+            sigma_transported=sig_t,
+            mode=KLMode.DENSE,
+            chunk_size=None,
+            kl_max=kl_max,
+            eps=eps,
+        )
 
 
 # =============================================================================
