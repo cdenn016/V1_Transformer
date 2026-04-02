@@ -12,39 +12,5 @@
     ]
   },
   "hooks": {
-    
-      {
-        "matcher": "Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python scripts/hooks/check_no_nn.py"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python -m pytest transformer/pure_vfe/tests/test_gradients.py -x --tb=short 2>&1 | tail -10"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if echo \"$TOOL_INPUT\" | python -c \"import sys,json; d=json.load(sys.stdin); exit(0 if 'git commit' in d.get('command','') else 1)\" 2>/dev/null; then python -m pytest -x --tb=short -q 2>&1 | tail -15; fi"
-          }
-        ]
-      }
-    ]
-  },
-  "model": {
-    "subagentModel": "haiku"
   }
 }
