@@ -78,6 +78,11 @@ class BlockConfig:
     E_sigma_q_lr: float = 0.001        # E-step σ trust region scale
     E_lambda_belief: float = 1.0       # E-step belief alignment weight λ (direct: β·∇KL)
     E_lambda_softmax: float = 1.0      # E-step softmax coupling weight (GELU-like ∂β/∂θ · KL)
+    E_attach_beta: bool = True         # Attach beta gradients to phi/omega updates.
+                                        # When True (default), dBeta/dphi · KL flows through the
+                                        # Boltzmann gate, providing nonlinear (GELU-like) signal.
+                                        # When False, beta is detached in all phi/omega gradient
+                                        # paths, leaving only the direct beta · dKL/dphi term.
     ffn_update_sigma: bool = True       # Update covariances during E-step
     E_learnable_alpha: bool = False    # Bayesian precision via Gamma-Normal conjugacy
     obs_sigma_gradient: bool = True    # ∂E_q[CE]/∂σ Hessian-diagonal obs gradient for sigma
@@ -226,6 +231,7 @@ class BlockConfig:
             E_sigma_q_lr=config.get('E_sigma_q_lr', config.get('e_step_sigma_lr', 0.001)),
             E_lambda_belief=config.get('E_lambda_belief', config.get('ffn_lambda_belief', 1.0)),
             E_lambda_softmax=config.get('E_lambda_softmax', config.get('ffn_lambda_softmax', 1.0)),
+            E_attach_beta=config.get('E_attach_beta', True),
             ffn_update_sigma=config.get('ffn_update_sigma', True),
             E_learnable_alpha=config.get('E_learnable_alpha', config.get('ffn_learnable_alpha', config.get('learnable_alpha', False))),
             obs_sigma_gradient=config.get('obs_sigma_gradient', True),
