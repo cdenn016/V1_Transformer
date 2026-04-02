@@ -266,6 +266,20 @@ SWEEPS = {
         'baseline_value': 0,
     },
 
+    'E_lambda_belief': {
+        'description': 'E-step belief alignment weight (VFE coupling term)',
+        'param': 'E_lambda_belief',
+        'values': [0, 0.5, 1.0, 2.0, 5.0],
+        'baseline_value': 1,
+    },
+
+    'E_lambda_softmax': {
+        'description': 'E-step softmax coupling weight (∂β/∂θ·KL Boltzmann gate)',
+        'param': 'E_lambda_softmax',
+        'values': [0, 0.5, 1.0, 2.0, 4.0],
+        'baseline_value': 0,
+    },
+
     'beta': {
         'description': 'Belief alignment weight in outer training loss (lambda_beta)',
         'param': 'beta',
@@ -503,6 +517,7 @@ SWEEP_ORDER = [
    # 'non_embed_weight_decay',
 
     'E_lambda_belief',
+    'E_lambda_softmax',
     'E_alpha',
 
     #'M_mu_p_lr',
