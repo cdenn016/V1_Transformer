@@ -1803,14 +1803,13 @@ class PublicationTrainer(FastTrainer):
             # Generate final holonomy figures (non-flat transport)
             if self.pub_metrics.holonomy_history:
                 try:
-                    print("\n[PublicationMetrics] Generating holonomy figures...")
+                    logger.info("Generating holonomy figures...")
                     self.pub_metrics.generate_holonomy_figures(
                         model=self.model,
                         save_prefix='holonomy',
                     )
                 except Exception as e:
-                    print(
-                        f"[WARN] Final holonomy figure generation failed: {e}")
+                    logger.warning(f"Final holonomy figure generation failed: {e}")
 
             # Generate interpretability outputs using a sample batch from validation
             try:
@@ -1823,9 +1822,8 @@ class PublicationTrainer(FastTrainer):
                 )
             except Exception as e:
                 import traceback
-                print(
-                    f"[WARNING] Could not generate interpretability outputs: {e}")
-                print(f"  Traceback: {traceback.format_exc()}")
+                logger.warning(f"Could not generate interpretability outputs: {e}")
+                logger.warning(f"  Traceback: {traceback.format_exc()}")
 
             self.pub_metrics.print_summary()
 
@@ -1838,12 +1836,12 @@ class PublicationTrainer(FastTrainer):
 
         # Summary
         elapsed = time.time() - start_time
-        print(f"\n{'='*70}")
-        print("TRAINING COMPLETE!")
-        print(f"{'='*70}")
-        print(f"Time: {elapsed/3600:.2f} hours")
-        print(f"Best val CE: {self.best_val_ce:.4f} (PPL: { math.exp(min(self.best_val_ce, 20.0)):.2f})")
-        print(f"{'='*70}\n")
+        logger.info("="*70)
+        logger.info("TRAINING COMPLETE!")
+        logger.info("="*70)
+        logger.info(f"Time: {elapsed/3600:.2f} hours")
+        logger.info(f"Best val CE: {self.best_val_ce:.4f} (PPL: {math.exp(min(self.best_val_ce, 20.0)):.2f})")
+        logger.info("="*70)
 
 
 def _create_dataloaders(config: dict):
@@ -1874,7 +1872,7 @@ def _create_dataloaders(config: dict):
         use_char = (tokenizer_mode == 'char')
 
     if use_char:
-        print(f"Using CHARACTER-LEVEL tokenizer (vocab_size={config['vocab_size']})")
+        logger.info(f"Using CHARACTER-LEVEL tokenizer (vocab_size={config['vocab_size']})")
         # Note: create_char_dataloaders doesn't support test set yet
         train_loader, val_loader, actual_vocab_size = create_char_dataloaders(
             max_seq_len=config['max_seq_len'],
@@ -1884,7 +1882,7 @@ def _create_dataloaders(config: dict):
         test_loader = None
         tokenizer = None
     else:
-        print(f"Using BPE tokenizer (vocab_size={config['vocab_size']})")
+        logger.info(f"Using BPE tokenizer (vocab_size={config['vocab_size']})")
         train_loader, val_loader, test_loader, actual_vocab_size, tokenizer = create_dataloaders(
             max_seq_len=config['max_seq_len'],
             batch_size=config['batch_size'],
@@ -1920,9 +1918,9 @@ def run_single_experiment(
     Returns:
         Dictionary with final metrics
     """
-    print("\n" + "="*70)
-    print(f"EXPERIMENT: FFN_MODE = {ffn_mode}")
-    print("="*70)
+    logger.info("="*70)
+    logger.info(f"EXPERIMENT: FFN_MODE = {ffn_mode}")
+    logger.info("="*70)
 
     # Override FFN mode in config
     config = config.copy()
@@ -1940,9 +1938,9 @@ def run_single_experiment(
     # =================================================================
 
     dataset_name = config.get('dataset', 'wikitext-2')
-    print("\n" + "="*70)
-    print(f"LOADING {dataset_name.upper()} DATA")
-    print("="*70)
+    logger.info("="*70)
+    logger.info(f"LOADING {dataset_name.upper()} DATA")
+    logger.info("="*70)
 
     train_loader, val_loader, test_loader, actual_vocab_size, tokenizer = _create_dataloaders(config)
     use_char = tokenizer is None  # Character-level tokenizer returns None
@@ -1953,23 +1951,23 @@ def run_single_experiment(
     # Model Creation - Three distinct modes
     # =================================================================
 
-    print("\n" + "="*70)
-    print("CREATING MODEL")
-    print("="*70)
-    print(f"  N (seq len): {config['max_seq_len']}")
-    print(f"  K (embed): {config['embed_dim']}")
-    print(f"  Layers: {config['n_layers']}")
-    print(f"  Vocab: {actual_vocab_size} ({'char' if use_char else 'BPE'})")
+    logger.info("="*70)
+    logger.info("CREATING MODEL")
+    logger.info("="*70)
+    logger.info(f"  N (seq len): {config['max_seq_len']}")
+    logger.info(f"  K (embed): {config['embed_dim']}")
+    logger.info(f"  Layers: {config['n_layers']}")
+    logger.info(f"  Vocab: {actual_vocab_size} ({'char' if use_char else 'BPE'})")
 
     # =====================================================================
     # MODE 1: STANDARD TRANSFORMER (baseline)
     # =====================================================================
     if ffn_mode == 'standard':
-        print("  Model type: STANDARD TRANSFORMER (dot-product attention)")
-        print("  - Attention: Q·K softmax")
-        print("  - FFN: Learned MLP (GELU)")
-        print("  - Output: Linear projection")
-        print("  - Learning: Backprop")
+        logger.info("  Model type: STANDARD TRANSFORMER (dot-product attention)")
+        logger.info("  - Attention: Q*K softmax")
+        logger.info("  - FFN: Learned MLP (GELU)")
+        logger.info("  - Output: Linear projection")
+        logger.info("  - Learning: Backprop")
         model_config = {
             'vocab_size': actual_vocab_size,
             'embed_dim': config['embed_dim'],
@@ -1995,15 +1993,15 @@ def run_single_experiment(
     elif ffn_mode == 'hybrid':
         from transformer.baselines.hybrid_gauge_transformer import HybridGaugeTransformerLM
         _pb = config.get('use_prior_bank', True)
-        print("  Model type: HYBRID GAUGE-ATTENTION TRANSFORMER")
-        print("  - Attention: KL-divergence based (gauge-theoretic)")
-        print("  - FFN: Standard GELU MLP")
-        print(f"  - Embeddings: {'PriorBank (KL encode/decode)' if _pb else 'nn.Embedding + nn.Linear'}")
-        print("  - Learning: Backprop")
+        logger.info("  Model type: HYBRID GAUGE-ATTENTION TRANSFORMER")
+        logger.info("  - Attention: KL-divergence based (gauge-theoretic)")
+        logger.info("  - FFN: Standard GELU MLP")
+        logger.info(f"  - Embeddings: {'PriorBank (KL encode/decode)' if _pb else 'nn.Embedding + nn.Linear'}")
+        logger.info("  - Learning: Backprop")
 
         if 'kappa_beta' not in config:
             config['kappa_beta'] = 1.0
-        print(f"  kappa_beta: {config['kappa_beta']}")
+        logger.info(f"  kappa_beta: {config['kappa_beta']}")
 
         model = HybridGaugeTransformerLM(config)
 
@@ -2011,17 +2009,17 @@ def run_single_experiment(
     # MODE 3: VFE_DYNAMIC TRANSFORMER (EM-step, uses backprop)
     # =====================================================================
     else:
-        print("  Model type: GAUGE VFE TRANSFORMER (KL-divergence attention)")
-        print("  - Attention: KL-divergence based")
-        print("  - FFN: VFE EM-step dynamics")
-        print("  - Output: Linear projection")
-        print("  - Learning: Backprop")
-        print("  - Position: None (emergent)")
+        logger.info("  Model type: GAUGE VFE TRANSFORMER (KL-divergence attention)")
+        logger.info("  - Attention: KL-divergence based")
+        logger.info("  - FFN: VFE EM-step dynamics")
+        logger.info("  - Output: Linear projection")
+        logger.info("  - Learning: Backprop")
+        logger.info("  - Position: None (emergent)")
 
-        # kappa_beta: scalar sharpness dial (dimension scaling τ=2√K is hardcoded in attention)
+        # kappa_beta: scalar sharpness dial (dimension scaling tau=2*sqrt(K) is hardcoded in attention)
         if 'kappa_beta' not in config:
             config['kappa_beta'] = 1.0
-        print(f"  kappa_beta: {config['kappa_beta']}")
+        logger.info(f"  kappa_beta: {config['kappa_beta']}")
 
         model = GaugeTransformerLM(config)
 
@@ -2034,7 +2032,7 @@ def run_single_experiment(
         for module in model.modules():
             if hasattr(module, '_debug_vfe_gradients'):
                 module._debug_vfe_gradients = True
-        print("[DEBUG] VFE gradient component debug ENABLED for all FFN layers")
+        logger.debug("VFE gradient component debug ENABLED for all FFN layers")
 
     # Get parameter counts
     if hasattr(model, 'get_num_params'):
@@ -2045,10 +2043,10 @@ def run_single_experiment(
         non_embed_params = sum(
             p.numel() for name, p in model.named_parameters() if 'embed' not in name)
 
-    print(f"\nModel Parameters:")
-    print(f"  Total:         {total_params:,}")
-    print(f"  Non-embedding: {non_embed_params:,}")
-    print(f"  Embedding:     {total_params - non_embed_params:,}")
+    logger.info("Model Parameters:")
+    logger.info(f"  Total:         {total_params:,}")
+    logger.info(f"  Non-embedding: {non_embed_params:,}")
+    logger.info(f"  Embedding:     {total_params - non_embed_params:,}")
 
     # =================================================================
     # FLOPs Estimation (Peer Review M2e)
