@@ -2256,9 +2256,9 @@ class VariationalFFNDynamic(nn.Module):
                                            # exact M-step phi gradient instead of straight-through.
                                            # Requires use_deq=True and evolve_phi=True.
         closed_form_e_step: bool = False,  # Use closed-form precision-weighted fixed point
-                                           # instead of gradient descent. Approximation: drops
-                                           # the softmax coupling term KL·∂β/∂μ but naturally
-                                           # includes aggregation (Σ_j β_ij Ω_ij μ_j).
+                                           # instead of gradient descent. Diagonal path uses
+                                           # the enhanced form that absorbs softmax coupling
+                                           # (S, c terms); full-cov uses linear-only CF.
         implicit_em: bool = False,         # Principled M-step via implicit differentiation.
                                            # Detaches mu/sigma at E-step start (proper EM boundary)
                                            # then scales CE→embedding gradient by IFT factor
@@ -2266,7 +2266,7 @@ class VariationalFFNDynamic(nn.Module):
                                            # Replaces ad-hoc straight-through (s=1) and pure EM (s=0)
                                            # with info-geometrically correct value.
         learnable_head_kappa: bool = False,  # If True, learn per-head κ_h
-        n_picard_steps: int = 0,           # Picard corrections after closed-form E-step
+        n_picard_steps: int = 0,           # Re-solve iterations (diagonal) or Picard steps (full-cov)
         picard_trust_region: float = 5.0,  # Whitened trust region for Picard steps
     ):
         """
@@ -3850,157 +3850,225 @@ class VariationalFFNDynamic(nn.Module):
             beta_current = beta_heads[-1] if beta_heads else None
 
             # =================================================================
-            # Picard corrections: preconditioned iteration on softmax residual
+            # Iterative re-solve: converge the beta <-> (mu, sigma) loop
             # =================================================================
-            # At mu_0 (closed-form), the linear gradient is zero by construction.
-            # The full gradient equals the softmax coupling term alone:
-            #   ∇F(mu_0) = ∇F_softmax(mu_0)
-            # Picard iteration using closed-form covariance as preconditioner:
-            #   mu^(n+1) = mu_0 - Sigma_0 @ ∇F_softmax(mu^(n))
+            # The enhanced closed form (diagonal path) absorbs softmax coupling
+            # into the precision-weighted solve: mu* = (b-c)/(A+S). But S, c,
+            # S_sigma depend on beta and KL computed from INITIAL beliefs.
+            # Re-solving with updated beta/KL converges the self-consistency.
+            #
+            # For full-covariance (which uses linear-only CF), we keep the
+            # original Picard correction: mu^(n+1) = mu_0 - Sigma_0 @ grad.
             if self.n_picard_steps > 0 and self.lambda_softmax > 0 and _cf_bep is not None:
-                mu_0 = mu_current.clone()   # closed-form linear fixed point
-                sigma_0 = sigma_current     # closed-form covariance = A^{-1}
+                if is_diagonal:
+                    # ---------------------------------------------------------
+                    # DIAGONAL: Iterative re-solve with updated beta/KL
+                    # ---------------------------------------------------------
+                    # Each step recomputes beta, KL from current beliefs, then
+                    # re-solves the full enhanced CF. This correctly converges
+                    # the beta <-> (mu, sigma) loop without double-counting.
+                    for _resolve_iter in range(self.n_picard_steps):
+                        mu_prev = mu_current.clone()
+                        mu_star = torch.zeros_like(mu_current)
+                        sigma_star = torch.zeros_like(sigma_current)
+                        beta_heads_new = []
+                        block_start = 0
 
-                for _picard_iter in range(self.n_picard_steps):
-                    grad_softmax_full = torch.zeros_like(mu_current)
-                    # Sigma softmax gradient (diagonal only — see derivation doc Section 9)
-                    grad_sigma_softmax_full = torch.zeros_like(mu_current) if (is_diagonal and self.update_sigma) else None
-                    block_start = 0
+                        for h, d_h in enumerate(self.irrep_dims or [self.embed_dim]):
+                            block_end = block_start + d_h
 
-                    for h, d_h in enumerate(self.irrep_dims or [self.embed_dim]):
-                        block_end = block_start + d_h
-                        beta_h = beta_heads[h]
-                        exp_phi_h, exp_neg_phi_h = _cf_bep[h]
+                            mu_h = mu_current[:, :, block_start:block_end].detach().contiguous()
+                            mu_p_h = mu_p_current[:, :, block_start:block_end].contiguous()
+                            sigma_h = sigma_current[:, :, block_start:block_end].detach().contiguous()
+                            sigma_p_h = sigma_p[:, :, block_start:block_end].contiguous()
+                            gen_h = self.generators[:, block_start:block_end, block_start:block_end]
 
-                        mu_h = mu_current[:, :, block_start:block_end]  # (B, N, d_h)
+                            kappa_h = self._get_kappa_h(h, d_h) if self.irrep_dims else self.kappa
+                            alpha_h_iter = alpha_effective
+                            if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3:
+                                alpha_h_iter = alpha_effective[:, :, block_start:block_end]
+                            # Recompute alpha from current beliefs if learnable
+                            if self.learnable_alpha and hasattr(self, 'get_bayesian_alpha'):
+                                alpha_n = self.get_bayesian_alpha(
+                                    mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
+                                )
+                                if isinstance(alpha_n, torch.Tensor) and alpha_n.dim() == 3:
+                                    alpha_h_iter = alpha_n[:, :, block_start:block_end]
+                                else:
+                                    alpha_h_iter = alpha_n
 
-                        # Transport: Omega_h = exp_phi_i @ exp_neg_phi_j
-                        Omega_h = torch.einsum(
-                            'bikl,bjlm->bijkm', exp_phi_h, exp_neg_phi_h
-                        )  # (B, N, N, d_h, d_h)
+                            _head_bep = [_cf_bep[h]] if _cf_bep is not None else None
 
-                        # Transported means
-                        mu_j_t = torch.einsum(
-                            'bijkl,bjl->bijk', Omega_h, mu_h
-                        )  # (B, N, N, d_h)
-                        delta = mu_h[:, :, None, :] - mu_j_t  # (B, N, N, d_h)
+                            # Recompute beta and KL from current beliefs
+                            beta_h, kl_h = compute_attention_weights(
+                                mu_q=mu_h, sigma_q=sigma_h,
+                                phi=phi_current, generators=gen_h,
+                                kappa=kappa_h, epsilon=eps, mask=mask,
+                                return_kl=True,
+                                diagonal_covariance=True,
+                                irrep_dims=[d_h] if self.irrep_dims else None,
+                                cached_block_exp_pairs=_head_bep,
+                                mask_self_attention=self.mask_self_attention,
+                                gauge_mode=self.gauge_mode,
+                                use_rope=self._use_rope_vfe,
+                                rope_base=self._rope_base_vfe,
+                            )
+                            beta_heads_new.append(beta_h)
 
-                        if is_diagonal:
-                            sigma_h_blk = sigma_0[:, :, block_start:block_end]  # (B, N, d_h)
+                            # Transport operators
+                            exp_phi_h, exp_neg_phi_h = _cf_bep[h] if _cf_bep is not None else (
+                                torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1),
+                                torch.eye(d_h, device=device, dtype=dtype).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1),
+                            )
 
-                            # Diagonal transported covariance
-                            sigma_j_t = torch.einsum(
-                                'bijkl,bijkl,bjl->bijk', Omega_h, Omega_h, sigma_h_blk
-                            ).clamp(min=eps)  # (B, N, N, d_h)
+                            # Prior precision and information
+                            inv_sigma_p_h = 1.0 / sigma_p_h.clamp(min=eps)
+                            prior_prec_h = alpha_h_iter * inv_sigma_p_h
+                            prior_info_h = alpha_h_iter * mu_p_h * inv_sigma_p_h
 
-                            # Per-pair KL gradient (diagonal): (mu_i - Omega mu_j) / sigma_j_t
-                            grad_kl_pair = delta / sigma_j_t  # (B, N, N, d_h)
+                            # Transport and alignment (same as initial CF)
+                            Omega_h_cf = torch.einsum('bikl,bjlm->bijkm', exp_phi_h, exp_neg_phi_h)
+                            sigma_j_t_diag = torch.einsum(
+                                'bijkl,bijkl,bjl->bijk', Omega_h_cf, Omega_h_cf, sigma_h
+                            ).clamp(min=eps)
+                            inv_sigma_j_t = 1.0 / sigma_j_t_diag
+                            mu_j_t_cf = torch.einsum('bijkl,bjl->bijk', Omega_h_cf, mu_h)
+                            info_per_pair = mu_j_t_cf * inv_sigma_j_t
 
-                            # Per-pair KL values
-                            sigma_i_h = sigma_h_blk[:, :, None, :]
-                            trace_h = (sigma_i_h / sigma_j_t).sum(dim=-1)
-                            mahal_h = (delta ** 2 / sigma_j_t).sum(dim=-1)
-                            logdet_h = (torch.log(sigma_j_t.clamp(min=eps))
-                                        - torch.log(sigma_i_h.clamp(min=eps))).sum(dim=-1)
-                        else:
-                            sigma_h_blk = sigma_0[:, :, block_start:block_end, block_start:block_end]  # (B, N, d_h, d_h)
+                            align_info_h = self.lambda_belief * torch.einsum('bij,bijk->bik', beta_h, info_per_pair)
+                            align_prec_h = self.lambda_belief * torch.einsum('bij,bijk->bik', beta_h, inv_sigma_j_t)
 
-                            # Full transported covariance and its inverse
-                            # Sandwich product: Omega @ Sigma_j @ Omega^T
-                            # Third factor uses 'bijnm' (transposed indices) for Omega^T
+                            # Enhanced softmax coupling with FRESH beta/KL
+                            kappa_h_val = kappa_h.item() if isinstance(kappa_h, torch.Tensor) else kappa_h
+                            kappa_h_scaled = max(kappa_h_val * math.sqrt(max(d_h, 1)), eps)
+
+                            if self.lambda_softmax > 0 and kappa_h_scaled > 0:
+                                w_j_scalar = kl_h * beta_h
+                                w_bar = w_j_scalar.sum(dim=-1)
+
+                                kl_weighted_prec = torch.einsum('bij,bijk->bik', w_j_scalar, inv_sigma_j_t)
+                                avg_prec_h = align_prec_h / max(self.lambda_belief, eps)
+                                S_mu_h = -(self.lambda_softmax / kappa_h_scaled) * (
+                                    kl_weighted_prec - w_bar.unsqueeze(-1) * avg_prec_h
+                                )
+
+                                kl_weighted_info = torch.einsum('bij,bijk->bik', w_j_scalar, info_per_pair)
+                                avg_info_h = align_info_h / max(self.lambda_belief, eps)
+                                c_mu_h = (self.lambda_softmax / kappa_h_scaled) * (
+                                    kl_weighted_info - w_bar.unsqueeze(-1) * avg_info_h
+                                )
+
+                                p_bar_h = avg_prec_h
+                                S_sigma_h = -(self.lambda_softmax / (2.0 * kappa_h_scaled)) * torch.einsum(
+                                    'bij,bijk->bik', w_j_scalar, inv_sigma_j_t - p_bar_h[:, :, None, :]
+                                )
+                            else:
+                                S_mu_h = 0.0
+                                c_mu_h = 0.0
+                                S_sigma_h = 0.0
+
+                            del Omega_h_cf, sigma_j_t_diag, inv_sigma_j_t, mu_j_t_cf, info_per_pair
+
+                            # Re-solve enhanced fixed point
+                            total_prec_h = prior_prec_h + align_prec_h + S_mu_h
+                            total_info_h = prior_info_h + align_info_h - c_mu_h
+                            mu_star[:, :, block_start:block_end] = total_info_h / total_prec_h.clamp(min=eps)
+
+                            entropy_scale = alpha_h_iter + self.lambda_belief
+                            sigma_prec_h = prior_prec_h + align_prec_h + 2.0 * S_sigma_h
+                            sigma_star[:, :, block_start:block_end] = (
+                                entropy_scale / sigma_prec_h.clamp(min=eps)
+                            ).clamp(max=self.sigma_max)
+
+                            block_start = block_end
+
+                        mu_current = mu_star
+                        if self.update_sigma:
+                            sigma_current = sigma_star
+                            if self.isotropic_covariance:
+                                scalar_var = sigma_current.mean(dim=-1, keepdim=True)
+                                sigma_current = scalar_var.expand_as(sigma_current)
+
+                        # Update beta_heads for downstream use
+                        beta_heads = beta_heads_new
+
+                        # Convergence check
+                        rel_change = (mu_current - mu_prev).norm() / mu_prev.norm().clamp(min=eps)
+                        if rel_change < 1e-4:
+                            break
+
+                else:
+                    # ---------------------------------------------------------
+                    # FULL COVARIANCE: Original Picard (linear-only CF + grad)
+                    # ---------------------------------------------------------
+                    # The full-cov path uses linear-only CF, so the softmax
+                    # gradient IS the full residual. Picard is correct here.
+                    mu_0 = mu_current.clone()
+                    sigma_0 = sigma_current
+
+                    for _picard_iter in range(self.n_picard_steps):
+                        grad_softmax_full = torch.zeros_like(mu_current)
+                        block_start = 0
+
+                        for h, d_h in enumerate(self.irrep_dims or [self.embed_dim]):
+                            block_end = block_start + d_h
+                            beta_h = beta_heads[h]
+                            exp_phi_h, exp_neg_phi_h = _cf_bep[h]
+
+                            mu_h = mu_current[:, :, block_start:block_end]
+
+                            Omega_h = torch.einsum(
+                                'bikl,bjlm->bijkm', exp_phi_h, exp_neg_phi_h
+                            )
+                            mu_j_t = torch.einsum(
+                                'bijkl,bjl->bijk', Omega_h, mu_h
+                            )
+                            delta = mu_h[:, :, None, :] - mu_j_t
+
+                            sigma_h_blk = sigma_0[:, :, block_start:block_end, block_start:block_end]
+
                             Sigma_j_t = torch.einsum(
                                 'bijkl,bjlm,bijnm->bijkn', Omega_h, sigma_h_blk, Omega_h
-                            )  # (B, N, N, d_h, d_h) — Omega @ Sigma_j @ Omega^T
+                            )
                             Sigma_j_t = Sigma_j_t + eps * torch.eye(d_h, device=device, dtype=dtype)
-                            Sigma_j_t_inv = torch.linalg.inv(Sigma_j_t)  # (B, N, N, d_h, d_h)
+                            Sigma_j_t_inv = torch.linalg.inv(Sigma_j_t)
 
-                            # Per-pair KL gradient (full): Sigma_{j,t}^{-1} @ (mu_i - Omega mu_j)
                             grad_kl_pair = torch.einsum(
                                 'bijkl,bijl->bijk', Sigma_j_t_inv, delta
-                            )  # (B, N, N, d_h)
+                            )
 
-                            # Per-pair KL values (full covariance)
-                            sigma_i_h = sigma_h_blk  # (B, N, d_h, d_h)
-                            # tr(Sigma_{j,t}^{-1} @ Sigma_i)
+                            sigma_i_h = sigma_h_blk
                             trace_h = torch.einsum(
                                 'bijkl,bilk->bij', Sigma_j_t_inv, sigma_i_h
-                            )  # (B, N, N)
-                            # (mu_i - mu_t)^T Sigma_{j,t}^{-1} (mu_i - mu_t)
+                            )
                             mahal_h = torch.einsum(
                                 'bijk,bijk->bij', delta, grad_kl_pair
-                            )  # (B, N, N)
-                            # log|Sigma_{j,t}| - log|Sigma_i|
-                            logdet_jt = torch.linalg.slogdet(Sigma_j_t)[1]  # (B, N, N)
-                            logdet_i = torch.linalg.slogdet(sigma_i_h + eps * torch.eye(d_h, device=device, dtype=dtype))[1]  # (B, N)
-                            logdet_h = logdet_jt - logdet_i.unsqueeze(2)  # (B, N, N)
+                            )
+                            logdet_jt = torch.linalg.slogdet(Sigma_j_t)[1]
+                            logdet_i = torch.linalg.slogdet(sigma_i_h + eps * torch.eye(d_h, device=device, dtype=dtype))[1]
+                            logdet_h = logdet_jt - logdet_i.unsqueeze(2)
 
-                        kl_h = (0.5 * (trace_h + mahal_h - d_h + logdet_h)).clamp(min=0.0)
+                            kl_h = (0.5 * (trace_h + mahal_h - d_h + logdet_h)).clamp(min=0.0)
 
-                        # Softmax Jacobian (same formula for both diagonal and full)
-                        kappa_h = self._get_kappa_h(h, d_h) if self.irrep_dims else self.kappa
-                        kappa_h_scaled = max(kappa_h * math.sqrt(max(d_h, 1)), eps)
-                        avg_grad_h = torch.einsum('bij,bijk->bik', beta_h, grad_kl_pair)
-                        grad_dev = avg_grad_h.unsqueeze(2) - grad_kl_pair
-                        d_beta_d_mu_h = beta_h.unsqueeze(-1) * grad_dev / kappa_h_scaled
-                        grad_softmax_h = self.lambda_softmax * torch.einsum(
-                            'bij,bijk->bik', kl_h, d_beta_d_mu_h
-                        )  # (B, N, d_h)
+                            kappa_h = self._get_kappa_h(h, d_h) if self.irrep_dims else self.kappa
+                            kappa_h_scaled = max(kappa_h * math.sqrt(max(d_h, 1)), eps)
+                            avg_grad_h = torch.einsum('bij,bijk->bik', beta_h, grad_kl_pair)
+                            grad_dev = avg_grad_h.unsqueeze(2) - grad_kl_pair
+                            d_beta_d_mu_h = beta_h.unsqueeze(-1) * grad_dev / kappa_h_scaled
+                            grad_softmax_h = self.lambda_softmax * torch.einsum(
+                                'bij,bijk->bik', kl_h, d_beta_d_mu_h
+                            )
+                            grad_softmax_full[:, :, block_start:block_end] = grad_softmax_h
 
-                        grad_softmax_full[:, :, block_start:block_end] = grad_softmax_h
+                            block_start = block_end
 
-                        # Sigma softmax coupling: Σ_j KL_ij · ∂β_ij/∂σ_i (diagonal only)
-                        # ∂KL_ij/∂σ_i[k] = 0.5 * (1/σ_j_t[k] - 1/σ_i[k])
-                        if grad_sigma_softmax_full is not None and is_diagonal:
-                            sigma_i_inv_h = 1.0 / sigma_h_blk.clamp(min=eps)  # (B, N, d_h)
-                            sigma_jt_inv_h = 1.0 / sigma_j_t  # (B, N, N, d_h)
-                            grad_sigma_pair = 0.5 * (sigma_jt_inv_h - sigma_i_inv_h[:, :, None, :])
-                            # Softmax Jacobian for sigma (same pattern as mu)
-                            avg_sigma_grad_h = torch.einsum('bij,bijk->bik', beta_h, grad_sigma_pair)
-                            sigma_grad_dev = avg_sigma_grad_h.unsqueeze(2) - grad_sigma_pair
-                            d_beta_d_sigma_h = beta_h.unsqueeze(-1) * sigma_grad_dev / kappa_h_scaled
-                            grad_sigma_softmax_h = self.lambda_softmax * torch.einsum(
-                                'bij,bijk->bik', kl_h, d_beta_d_sigma_h
-                            )  # (B, N, d_h)
-                            grad_sigma_softmax_full[:, :, block_start:block_end] = grad_sigma_softmax_h
-
-                        block_start = block_end
-
-                    # -------------------------------------------------------
-                    # Alpha correction for learnable Bayesian precision
-                    # -------------------------------------------------------
-                    # Two nonlinear residuals from learnable alpha:
-                    # 1. Alpha-mismatch: closed-form used alpha_0 = alpha(mu_initial),
-                    #    but at mu^(n), alpha(mu^(n)) differs → linear gradient ≠ 0.
-                    # 2. Product-rule: d[alpha*KL]/dmu has a -(alpha^2/c0)*KL*(mu-mu_p)/sigma_p
-                    #    term that's nonlinear (KL depends on mu).
-                    if self.learnable_alpha and _alpha_c0 is not None:
-                        # Recompute alpha at current mu^(n)
-                        alpha_n = self.get_bayesian_alpha(
-                            mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
-                        )  # (B, N, K)
-
-                        if is_diagonal:
-                            sigma_p_safe = sigma_p.clamp(min=eps)  # (B, N, K)
-                            delta_mu_p = mu_current - mu_p_current  # (B, N, K)
-
-                            # 1. Alpha-mismatch residual:
-                            #    [alpha(mu^n) - alpha_0] * (mu^n - mu_p) / sigma_p
-                            alpha_mismatch = (alpha_n - alpha_effective) * delta_mu_p / sigma_p_safe
-
-                            # 2. Product-rule correction:
-                            #    -(alpha^2 / c0) * kl_k * (mu - mu_p) / sigma_p
-                            sigma_q_safe = sigma_current.clamp(min=eps) if is_diagonal else None
-                            kl_k = 0.5 * (sigma_q_safe / sigma_p_safe + delta_mu_p ** 2 / sigma_p_safe
-                                          - 1.0 + torch.log(sigma_p_safe) - torch.log(sigma_q_safe))
-                            kl_k = kl_k.clamp(min=0.0)
-                            product_rule = -(alpha_n ** 2 / _alpha_c0) * kl_k * delta_mu_p / sigma_p_safe
-
-                            grad_softmax_full = grad_softmax_full + alpha_mismatch + product_rule
-                        else:
-                            # Full covariance: use diagonal of Sigma_p for the correction
-                            # (the product-rule correction is defined per-dimension)
-                            sigma_p_diag = torch.diagonal(sigma_p, dim1=-2, dim2=-1).clamp(min=eps)  # (B, N, K)
-                            sigma_q_diag = torch.diagonal(sigma_current, dim1=-2, dim2=-1).clamp(min=eps)  # (B, N, K)
+                        # Alpha correction (full-cov path)
+                        if self.learnable_alpha and _alpha_c0 is not None:
+                            alpha_n = self.get_bayesian_alpha(
+                                mu_current, mu_p_current, sigma_p, sigma_current, eps=eps
+                            )
+                            sigma_p_diag = torch.diagonal(sigma_p, dim1=-2, dim2=-1).clamp(min=eps)
+                            sigma_q_diag = torch.diagonal(sigma_current, dim1=-2, dim2=-1).clamp(min=eps)
                             delta_mu_p = mu_current - mu_p_current
 
                             alpha_mismatch = (alpha_n - alpha_effective) * delta_mu_p / sigma_p_diag
@@ -4008,18 +4076,9 @@ class VariationalFFNDynamic(nn.Module):
                                           - 1.0 + torch.log(sigma_p_diag) - torch.log(sigma_q_diag))
                             kl_k = kl_k.clamp(min=0.0)
                             product_rule = -(alpha_n ** 2 / _alpha_c0) * kl_k * delta_mu_p / sigma_p_diag
-
                             grad_softmax_full = grad_softmax_full + alpha_mismatch + product_rule
 
-                    # Picard update: mu^(n+1) = mu_0 - Sigma_0 @ ∇F_nonlinear(mu^(n))
-                    if is_diagonal:
-                        correction = sigma_0 * grad_softmax_full
-                        # Whitened trust region (diagonal)
-                        w_norm = (correction / sigma_0.sqrt().clamp(min=eps)).norm(
-                            dim=-1, keepdim=True
-                        )
-                    else:
-                        # Full-covariance preconditioned step: Sigma_0 @ grad per head
+                        # Picard update: mu^(n+1) = mu_0 - Sigma_0 @ ∇F_softmax(mu^(n))
                         correction = torch.zeros_like(mu_current)
                         block_start = 0
                         for h, d_h in enumerate(self.irrep_dims or [self.embed_dim]):
@@ -4030,42 +4089,12 @@ class VariationalFFNDynamic(nn.Module):
                                 'bijk,bik->bij', Sigma_0_h, grad_h
                             )
                             block_start = block_end
-                        # Whitened trust region (Mahalanobis: sqrt(grad^T @ correction))
                         w_norm = (grad_softmax_full * correction).sum(
                             dim=-1, keepdim=True
                         ).clamp(min=0.0).sqrt()
 
-                    scale = (self.picard_trust_region / w_norm.clamp(min=eps)).clamp(max=1.0)
-                    mu_current = mu_0 - scale * correction
-
-                    # Sigma Picard correction (diagonal only, base-relative)
-                    # At sigma_0 the linear sigma gradient is zero. The residual is
-                    # the sigma softmax coupling: Σ_j KL_ij · ∂β_ij/∂σ_i.
-                    # Use sigma_0 (not sigma_current) as both the preconditioner and
-                    # retraction base, matching the mu Picard structure:
-                    #   mu^(n+1) = mu_0 - Sigma_0 @ grad(mu^(n))
-                    #   sigma^(n+1) = retract(sigma_0, -2*sigma_0^2 * grad(mu^(n), sigma_0))
-                    if grad_sigma_softmax_full is not None and self.update_sigma:
-                        sigma_0_safe = sigma_0.clamp(min=eps)
-                        nat_grad_sigma = 2.0 * sigma_0_safe * sigma_0_safe * grad_sigma_softmax_full
-                        # Clip natural gradient norm (matching iterative E-step)
-                        nat_grad_sigma_norm = torch.linalg.norm(nat_grad_sigma, dim=-1, keepdim=True)
-                        nat_grad_sigma = nat_grad_sigma * torch.clamp(
-                            500.0 / (nat_grad_sigma_norm + eps), max=1.0
-                        )
-                        sigma_trust = self._get_sigma_trust(self.lr)
-                        sigma_current = retract_spd_diagonal_torch(
-                            sigma_diag=sigma_0,
-                            delta_sigma=-nat_grad_sigma,
-                            step_size=1.0,
-                            trust_region=sigma_trust,
-                            eps=eps,
-                            sigma_max=self.sigma_max,
-                        )
-                        # Re-enforce isotropic constraint after sigma correction
-                        if self.isotropic_covariance:
-                            scalar_var = sigma_current.mean(dim=-1, keepdim=True)
-                            sigma_current = scalar_var.expand_as(sigma_current)
+                        scale = (self.picard_trust_region / w_norm.clamp(min=eps)).clamp(max=1.0)
+                        mu_current = mu_0 - scale * correction
 
             # Store beta for implicit EM (if needed)
             if return_beta_history:
