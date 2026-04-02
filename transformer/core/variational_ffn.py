@@ -2435,8 +2435,10 @@ class VariationalFFNDynamic(nn.Module):
                 kappa * math.sqrt(d_h) for d_h in irrep_dims
             ])
             self.log_kappa_per_head = nn.Parameter(torch.log(init_kappas))
+            self.register_buffer('_kappa_init', init_kappas)
         else:
             self.log_kappa_per_head = None
+            self._kappa_init = None
 
         # =================================================================
         # Bayesian Precision: Log-barrier form (Eq. 882-884)
@@ -2529,7 +2531,10 @@ class VariationalFFNDynamic(nn.Module):
         When False: κ_h = self.kappa * √d_h (static scaling)
         """
         if self.learnable_head_kappa and self.log_kappa_per_head is not None:
-            return torch.exp(self.log_kappa_per_head[head_idx])
+            kappa_h = torch.exp(self.log_kappa_per_head[head_idx])
+            # Clamp to [0.5, 1.5] × init, matching attention module (attention.py:2688)
+            k0 = self._kappa_init[head_idx]
+            return kappa_h.clamp(min=0.5 * k0, max=1.5 * k0)
         return self.kappa * math.sqrt(d_h)
 
     def _get_sigma_trust(self, effective_lr: torch.Tensor) -> float:
