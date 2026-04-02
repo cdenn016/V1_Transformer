@@ -2090,12 +2090,14 @@ def run_single_experiment(
 
     step_flops = flops_result['step_total']
     total_flops = step_flops * max_steps
-    print(f"\nFLOPs Estimation (Peer Review M2e):")
-    print(f"  FLOPs/step:     {format_flops(step_flops)}")
-    print(f"  Total training: {format_flops(total_flops)}")
+    logger.info("FLOPs Estimation (Peer Review M2e):")
+    logger.info(f"  FLOPs/step:     {format_flops(step_flops)}")
+    logger.info(f"  Total training: {format_flops(total_flops)}")
     if not is_standard:
-        print(f"  Key costs: mat_exp={format_flops(flops_result.get('transport_mat_exp', 0))}/layer, "
-              f"KL={format_flops(flops_result.get('kl_divergence', 0))}/layer")
+        logger.info(
+            f"  Key costs: mat_exp={format_flops(flops_result.get('transport_mat_exp', 0))}/layer, "
+            f"KL={format_flops(flops_result.get('kl_divergence', 0))}/layer"
+        )
 
     # =================================================================
     # Training Configuration
@@ -2175,9 +2177,9 @@ def run_single_experiment(
         kappa_warmup_steps=config.get('kappa_warmup_steps', 0),
     )
 
-    print("\n" + "="*70)
-    print("TRAINING CONFIGURATION")
-    print("="*70)
+    logger.info("="*70)
+    logger.info("TRAINING CONFIGURATION")
+    logger.info("="*70)
     # Calculate training duration metrics
     steps_per_epoch = len(train_loader)
     batch_size = config['batch_size']
@@ -2193,56 +2195,55 @@ def run_single_experiment(
     if train_config.epochs is not None and train_config.epochs > 0:
         effective_steps = train_config.epochs * steps_per_epoch
         total_tokens = effective_steps * tokens_per_step
-        print(f"  Epochs:         {train_config.epochs}")
-        print(f"  Steps/epoch:    {steps_per_epoch:,}")
-        print(f"  Total steps:    {effective_steps:,}")
-        print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
+        logger.info(f"  Epochs:         {train_config.epochs}")
+        logger.info(f"  Steps/epoch:    {steps_per_epoch:,}")
+        logger.info(f"  Total steps:    {effective_steps:,}")
+        logger.info(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
         if dataset_tokens:
             coverage = total_tokens / dataset_tokens * 100
-            print(f"  Dataset:        {dataset_tokens:,} ({ dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
+            logger.info(f"  Dataset:        {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
     else:
         equiv_epochs = train_config.max_steps / steps_per_epoch
         total_tokens = train_config.max_steps * tokens_per_step
-        print(f"  Max steps:      {train_config.max_steps:,}")
-        print(f"  Steps/epoch:    {steps_per_epoch:,}")
-        print(f"  *** EPOCHS:     {equiv_epochs:.4f} ***")
-        print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
+        logger.info(f"  Max steps:      {train_config.max_steps:,}")
+        logger.info(f"  Steps/epoch:    {steps_per_epoch:,}")
+        logger.info(f"  *** EPOCHS:     {equiv_epochs:.4f} ***")
+        logger.info(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
         if dataset_tokens:
             coverage = total_tokens / dataset_tokens * 100
-            print(f"  Dataset:        {dataset_tokens:,} ({ dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
-    print(f"  Warmup:         {train_config.warmup_steps}")
-    print(f"  Batch size:     {batch_size}")
-    print(f"  Seq length:     {seq_len}")
-    print(f"  Num workers:    {config.get('num_workers', 0)}")
-    print(f"\nFree Energy Weights:")
-    print(f"  α (self-consistency): {train_config.M_alpha}")
-    print(f"  β (belief align):     {train_config.M_beta}")
-    print(f"  γ (model align):      {train_config.lambda_gamma}")
+            logger.info(f"  Dataset:        {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
+    logger.info(f"  Warmup:         {train_config.warmup_steps}")
+    logger.info(f"  Batch size:     {batch_size}")
+    logger.info(f"  Seq length:     {seq_len}")
+    logger.info(f"  Num workers:    {config.get('num_workers', 0)}")
+    logger.info("Free Energy Weights:")
+    logger.info(f"  alpha (self-consistency): {train_config.M_alpha}")
+    logger.info(f"  beta (belief align):      {train_config.M_beta}")
+    logger.info(f"  gamma (model align):      {train_config.lambda_gamma}")
 
     # P-FLOW configuration
     if train_config.use_p_flow:
-        print(f"\nP-FLOW (EMA prior updates): ENABLED")
-        print(f"  EMA decay: {train_config.p_flow_ema_decay} ({ (1-train_config.p_flow_ema_decay)*100:.1f}% update per step)")
+        logger.info("P-FLOW (EMA prior updates): ENABLED")
+        logger.info(f"  EMA decay: {train_config.p_flow_ema_decay} ({(1-train_config.p_flow_ema_decay)*100:.1f}% update per step)")
     else:
-        print(f"\nP-FLOW: disabled")
+        logger.info("P-FLOW: disabled")
 
     # DELTA RULE configuration
     if train_config.use_delta_rule_w_out:
-        print(f"\nDELTA RULE (backprop-free W_out): ENABLED")
-        print(f"  Learning rate: {train_config.delta_rule_lr}")
+        logger.info("DELTA RULE (backprop-free W_out): ENABLED")
+        logger.info(f"  Learning rate: {train_config.delta_rule_lr}")
         if train_config.use_p_flow:
-            print(f"  ** FULLY BACKPROP-FREE MODE **")
+            logger.info("  ** FULLY BACKPROP-FREE MODE **")
     else:
-        print(f"\nDELTA RULE: disabled (using backprop for W_out)")
-
+        logger.info("DELTA RULE: disabled (using backprop for W_out)")
 
     # =================================================================
     # Create Trainer (Pure FEP or Standard)
     # =================================================================
 
-    print("\n" + "="*70)
-    print("INITIALIZING TRAINER")
-    print("="*70)
+    logger.info("="*70)
+    logger.info("INITIALIZING TRAINER")
+    logger.info("="*70)
 
     # Create comprehensive publication metrics tracker
     pub_metrics = None
