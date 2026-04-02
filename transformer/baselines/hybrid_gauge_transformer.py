@@ -672,7 +672,10 @@ class HybridGaugeTransformerLM(nn.Module):
         counts = {}
 
         # PriorBank parameters
-        pb_params = sum(p.numel() for p in self.prior_bank.parameters() if p.requires_grad)
+        if self.prior_bank is not None:
+            pb_params = sum(p.numel() for p in self.prior_bank.parameters() if p.requires_grad)
+        else:
+            pb_params = 0
         counts['prior_bank'] = pb_params
 
         # Attention parameters (across all blocks)

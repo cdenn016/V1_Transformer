@@ -155,6 +155,9 @@ class BlockConfig:
     skip_attention: bool = False       # Skip attention sublayer; VFE E-step computes its own β
     closed_form_e_step: bool = False   # Use closed-form precision-weighted fixed point instead of gradient descent
 
+    # === Memory efficiency ===
+    gradient_checkpointing: bool = False  # Checkpoint non-final layers (~60% memory savings, ~30% extra compute)
+
     # === Multi-layer depth signal ===
     aux_layer_loss: bool = False       # Per-layer auxiliary CE loss (M-step task signal for non-final layers)
     aux_loss_weight: float = 0.3       # Weight for auxiliary per-layer CE losses
@@ -260,6 +263,8 @@ class BlockConfig:
             use_residual=config.get('use_residual', True),
             skip_attention=config.get('skip_attention', False),
             closed_form_e_step=config.get('closed_form_e_step', False),
+            # Memory efficiency
+            gradient_checkpointing=config.get('gradient_checkpointing', False),
             # Multi-layer depth signal
             aux_layer_loss=config.get('aux_layer_loss', False),
             aux_loss_weight=config.get('aux_loss_weight', 0.3),
