@@ -1368,12 +1368,11 @@ class IrrepMultiHeadAttention(nn.Module):
         # Per-head learnable temperature κ_h
         # =================================================================
         # Manuscript: β_ij^(a) = softmax(-KL / (κ_a √d_h))
-        # Static:   κ_h = kappa_beta * √d_h  (normalizes KL across head dims)
+        # κ_h is the bare per-head kappa; compute_attention_weights applies √d_h.
         # Learnable: κ_h = clamp(exp(log_kappa[h]), 0.5×κ₀, 1.5×κ₀)
-        # Clamped to [0.5, 1.5] × init to prevent extreme drift.
         if learnable_head_kappa:
             init_kappas = torch.tensor([
-                kappa_beta * math.sqrt(d_h) for d_h in self.irrep_dims
+                kappa_beta for _d_h in self.irrep_dims
             ])
             self.log_kappa_per_head = nn.Parameter(torch.log(init_kappas))
             self.register_buffer('_kappa_init', init_kappas)
@@ -1614,7 +1613,7 @@ class IrrepMultiHeadAttention(nn.Module):
                 k0 = self._kappa_init[head_idx]
                 kappa_h = kappa_h.clamp(min=0.5 * k0, max=1.5 * k0)
             else:
-                kappa_h = self.kappa_beta * math.sqrt(dim_head)
+                kappa_h = self.kappa_beta
 
             if self.gauge_mode == 'constant':
                 # Constant gauge: Ω_ij = Ω for all pairs.
