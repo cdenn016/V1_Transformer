@@ -257,6 +257,7 @@ def compute_free_energy_loss(
     use_obs_in_vfe: bool = False, # Pass targets into VFE E-step (last layer only)
     mass_phi: float = 0.0,        # Gauge prior weight: (mass_φ/2) Σ_i ||φ_i||²
     aux_loss_weight: float = 0.0, # Weight for auxiliary per-layer CE losses (0 = disabled)
+    detach_beta_m_step: bool = True,  # True = correct EM (detach β). False = old behavior (grad through softmax)
     # Backward-compatible aliases (deprecated)
     alpha: float = None,
     lambda_beta: float = None,
@@ -360,7 +361,7 @@ def compute_free_energy_loss(
         #
         # Note: the non-detached softmax gradient (β_ij/κ)(E_β[KL] - KL_ij)
         # actually sharpens, not uniformizes. But it's not part of the M-step.
-        beta_final = beta[-1].detach()  # (B, n_heads, N, N) — E-step weights, fixed
+        beta_final = beta[-1].detach() if detach_beta_m_step else beta[-1]
         kl_final = kl[-1]               # (B, n_heads, N, N) — gradient flows through
         weighted_kl = beta_final * kl_final
         belief_align_loss = weighted_kl.sum(dim=(-2, -1)).mean()
