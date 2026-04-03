@@ -998,6 +998,7 @@ class PublicationTrainer(FastTrainer):
                 use_obs_in_vfe=use_obs,
                 mass_phi=self.config.mass_phi,
                 aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
+                detach_beta_m_step=getattr(self.config, 'detach_beta_m_step', True),
             )
 
         # Scale loss for gradient accumulation (gradients accumulate across micro-batches)
