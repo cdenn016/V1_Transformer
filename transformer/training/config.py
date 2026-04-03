@@ -44,22 +44,22 @@ class TrainingConfig:
     # ==========================================================================
     # Parameter Grouping Strategy
     # ==========================================================================
-    use_param_groups: bool = True  # If True, use multi-group learning rates
+    use_param_groups: bool =     True  # If True, use multi-group learning rates
 
     # Simple mode: Single learning rate (used when use_param_groups=False)
-    learning_rate: float = 3e-4
+    learning_rate: float =       3e-4
 
     # Multi-group mode: M-step learning rates for AdamW parameter groups.
     # These control how fast nn.Parameter objects update via backprop (M-step).
     # The E-step (inner VFE loop) has its own rates (E_mu_q_lr, etc.) in BlockConfig.
     # Note: mu_embed and log_sigma_diag serve dual roles (q₀ init AND prior μ_p/σ_p),
     # so these rates indirectly affect E-step initialization.
-    M_mu_p_lr: float = 0.1           # Prior mean embeddings (μ_p)
-    M_sigma_p_lr: float = 0.005      # Prior covariance embeddings (log σ_p)
-    M_phi_lr: float = 0.01           # Gauge frame embeddings (φ)
-    M_attention_lr: float = 0.01     # Attention params (W_O, constant_omega)
+    M_mu_p_lr: float =           0.1           # Prior mean embeddings (μ_p)
+    M_sigma_p_lr: float =        0.005      # Prior covariance embeddings (log σ_p)
+    M_phi_lr: float =            0.01           # Gauge frame embeddings (φ)
+    M_attention_lr: float =      0.01     # Attention params (W_O, constant_omega)
     M_vfe_hyperparam_lr: float = 0.001  # VFE hyperparams (raw_c0, raw_b0, raw_lr, norms, biases)
-    M_output_lr: float = 0.001       # Output projection (vocab logits)
+    M_output_lr: float =         0.001       # Output projection (vocab logits)
 
     # ==========================================================================
     # Optimizer Hyperparameters
@@ -68,35 +68,39 @@ class TrainingConfig:
     #   'adamw': Standard AdamW (default). Diagonal Fisher approximation via EMA.
     #   'riemannian_adam': AdamW + Killing-form metric for phi + Fisher metric for mu.
     #   'natural_gradient': Per-token block-diagonal empirical Fisher.
-    optimizer_type: str = 'adamw'
+    optimizer_type: str =   'adamw'
 
     # Natural gradient settings (only used when optimizer_type='natural_gradient')
     fisher_ema_decay: float = 0.95   # EMA decay for Fisher matrix estimation
-    fisher_damping: float = 1e-4     # Tikhonov regularization λI for invertibility
+    fisher_damping: float =   1e-4     # Tikhonov regularization λI for invertibility
 
     # non_embed_weight_decay: L2 on non-embedding params (attention, output projection).
     #   p(θ) = N(0, 1/(2·wd))  →  -log p(θ) = wd·||θ||²
-    non_embed_weight_decay: float = 0.1
+    
     # embed_weight_decay: L2 regularizer in AdamW on embedding parameters (μ_p, σ_p, φ).
     #   Implements implicit Gaussian hyper-prior N(0, 1/(2·wd)).
     #   Acts through optimizer weight decay — pulls parameters toward zero.
     #   Distinct from lambda_hyper (explicit KL loss pulling tokens toward centroid).
+    
+    non_embed_weight_decay: float =       0.1
     embed_weight_decay: Optional[float] = 0.05
-    beta1: float = 0.9
-    beta2: float = 0.999
-    eps: float = 1e-8
+    grad_accumulation_steps: int =        1
+    
+    beta1: float =     0.9
+    beta2: float =     0.999
+    eps: float =       1e-8
     grad_clip: float = 1.0
-    grad_accumulation_steps: int = 1
+    
 
     # ==========================================================================
     # Learning Rate Schedule
     # ==========================================================================
     epochs: Optional[int] = None  # If set, overrides max_steps
-    warmup_steps: int = 1000
-    max_steps: int = 50000
-    lr_decay: str = 'cosine'  # 'cosine', 'linear', 'constant'
-    min_lr: float = 3e-5           # Absolute minimum LR (used by presets)
-    min_lr_ratio: float = 0.1      # Min LR as fraction of peak (used by FastTrainer)
+    warmup_steps: int =     1000
+    max_steps: int =        50000
+    lr_decay: str =         'linear'  # 'cosine', 'linear', 'constant'
+    min_lr: float =         3e-5           # Absolute minimum LR (used by presets)
+    min_lr_ratio: float =   0.1      # Min LR as fraction of peak (used by FastTrainer)
 
     # Learnable per-head kappa warmup: freeze log_kappa_per_head for the
     # first N steps so embeddings differentiate before temperature adapts.
@@ -107,45 +111,45 @@ class TrainingConfig:
     # ==========================================================================
     # Free Energy Weights (M-step objective)
     # ==========================================================================
-    M_alpha: float = 0.0         # M-step KL(q||p) self-consistency weight
-    M_beta: float = 0.0          # M-step belief alignment: Σβ_ij·KL
+    M_alpha: float =      0.0         # M-step KL(q||p) self-consistency weight
+    M_beta: float =       0.0          # M-step belief alignment: Σβ_ij·KL
     lambda_gamma: float = 0.0    # Model alignment (disabled by default)
-    kappa_gamma: float = 1.0     # Temperature for γ_ij coupling weights
+    kappa_gamma: float =  1.0     # Temperature for γ_ij coupling weights
+    lambda_hyper: float = 0.0
     # lambda_hyper: Explicit KL loss term KL(s_i || h) in M-step objective.
     #   Pulls each token's embedding distribution toward the population centroid.
     #   Acts through backprop — gradient flows to both μ and σ.
     #   Orthogonal to embed_weight_decay (which regularizes magnitudes via AdamW).
-    lambda_hyper: float = 0.0
-    detach_beta_m_step: bool = True  # Detach β in M-step loss (correct EM). False = old behavior (gradient flows through softmax)
-    use_obs_in_vfe: bool = False  # Pass targets as observations into VFE E-step (last layer only)
-    obs_sigma_gradient: bool = True  # ∂E_q[CE]/∂σ Hessian-diagonal obs gradient for sigma
-    obs_sigma_weight: float = 1.0     # Weight for sigma observation gradient
+       
+    detach_beta_m_step: bool =  True  # Detach β in M-step loss (correct EM). False = old behavior (gradient flows through softmax)
+    use_obs_in_vfe: bool =      False  # Pass targets as observations into VFE E-step (last layer only)
+    obs_sigma_gradient: bool =  True  # ∂E_q[CE]/∂σ Hessian-diagonal obs gradient for sigma
+    obs_sigma_weight: float =   1.0     # Weight for sigma observation gradient
 
     # Multi-layer depth signal
-    aux_layer_loss: bool = False     # Per-layer auxiliary CE loss
+    aux_layer_loss: bool =   False     # Per-layer auxiliary CE loss
+    sigma_residual: bool =   False     # Additive σ residual across layers
     aux_loss_weight: float = 0.3     # Weight for auxiliary per-layer CE losses
-    sigma_residual: bool = False     # Additive σ residual across layers
-
+    
     # ==========================================================================
     # Training Loop
     # ==========================================================================
-    batch_size: int = 64
+    batch_size: int =  64
     max_seq_len: int = 64
 
     # ==========================================================================
     # Logging & Evaluation
     # ==========================================================================
-    log_interval: int = 100
-    eval_interval: int = 1000
+    log_interval: int =        100
+    eval_interval: int =       1000
     checkpoint_interval: int = 10000
 
     # ==========================================================================
     # Checkpointing
     # ==========================================================================
-    checkpoint_dir: Optional[Path] = None
-    save_total_limit: int = 3
-    resume_from: Optional[str] = None  # Path to checkpoint to resume from
-
+    checkpoint_dir: Optional[Path] = None  
+    resume_from: Optional[str] =     None  # Path to checkpoint to resume from
+    save_total_limit: int =          3
     # ==========================================================================
     # Hardware
     # ==========================================================================
@@ -154,50 +158,51 @@ class TrainingConfig:
     # ==========================================================================
     # Gauge Group
     # ==========================================================================
-    gauge_mode: str = 'learned'    # 'learned', 'trivial', 'constant'
-    gauge_param: str = 'phi'       # 'phi' or 'omega'
-    omega_lr: float = 0.01         # LR for direct Omega embeddings (gauge_param='omega')
-    omega_trust_region: float = 0.3
+    gauge_mode: str =           'learned'    # 'learned', 'trivial', 'constant'
+    gauge_param: str =           'phi'       # 'phi' or 'omega'
+    omega_lr: float =            0.01         # LR for direct Omega embeddings (gauge_param='omega')
+    omega_trust_region: float =  0.3
     isotropic_covariance: bool = False  # Force Σ = σ²I (Limit 1 from manuscript)
 
     # ==========================================================================
     # Positional Encoding
     # ==========================================================================
-    use_rope: bool = True       # RoPE: SO(2)^{K/2} position rotations on μ
+    use_rope: bool =   True       # RoPE: SO(2)^{K/2} position rotations on μ
     rope_base: float = 10000.0
 
     # ==========================================================================
     # Model Architecture (for creation, not training)
     # ==========================================================================
-    embed_dim: int = 128
-    n_layers: int = 4
+    embed_dim: int =  128
+    n_layers: int =   4
     vocab_size: int = 50257  # GPT-2 tokenizer size
 
     # ==========================================================================
     # Gauge Geometry: Phi gradient preconditioning (M-step)
     # ==========================================================================
-    mass_phi: float = 0.05                     # Gauge prior: (mass_φ/2)||φ||² loss term
-    use_slk_projection: bool = False           # Project phi to traceless sl(K) after each step
-    use_killing_form: bool = False             # Cartan decomposition preconditioning for phi grads
+    mass_phi: float =                   0.05                     # Gauge prior: (mass_φ/2)||φ||² loss term
+    use_slk_projection: bool =          False           # Project phi to traceless sl(K) after each step
+    use_killing_form: bool =            False             # Cartan decomposition preconditioning for phi grads
     killing_form_sym_dampening: float = 0.1    # Dampening for non-compact (symmetric) directions
 
     # ==========================================================================
     # P-Flow & Delta Rule (backprop-free learning)
     # ==========================================================================
-    use_p_flow: bool = False          # EMA update of token embeddings toward successful beliefs
-    p_flow_ema_decay: float = 0.99
-    sigma_ce_scale: float = 0.01      # Scale CE gradient to sigma_p (0=detach, 1=full)
-    detach_phi: bool = False           # Detach phi from backprop (enables backprop-free phi)
+    use_p_flow: bool =           False          # EMA update of token embeddings toward successful beliefs
+    p_flow_ema_decay: float =    0.99
+    sigma_ce_scale: float =      0.01      # Scale CE gradient to sigma_p (0=detach, 1=full)
+    detach_phi: bool =           False           # Detach phi from backprop (enables backprop-free phi)
     use_delta_rule_w_out: bool = False # Delta rule for W_out (backprop-free)
-    delta_rule_lr: float = 0.001
+    delta_rule_lr: float =       0.001
 
     # ==========================================================================
     # Diagnostics
     # ==========================================================================
-    track_layer_diagnostics: bool = False
+    track_layer_diagnostics: bool     = False
     track_iteration_diagnostics: bool = False
-    diagnostics_interval: int = 50
-    verbose_diagnostics: bool = True
+    verbose_diagnostics: bool         = False
+    diagnostics_interval: int         = 50
+    
 
     def __post_init__(self):
         """Convert checkpoint_dir to Path if string."""
