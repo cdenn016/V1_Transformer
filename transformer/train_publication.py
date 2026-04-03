@@ -148,9 +148,9 @@ EM_CONFIG = {
     # === Architecture ===
     'vocab_size':            50257,
     'embed_dim':             20,
-    'max_seq_len':           128,
+    'max_seq_len':           64,
     
-    'batch_size':            64, 
+    'batch_size':            128, 
     'max_steps':             15000,
     
     'n_layers':              1,
@@ -159,7 +159,7 @@ EM_CONFIG = {
     'gauge_dim':                          10,
     'irrep_spec':            [('fund', 2, 10)],
 
-    'use_prior_bank':           True,
+    'use_prior_bank':           False,
     'learnable_pb_temperature': True,
     'mask_self_attention':      True,  # Prevent attention collapse?
   
@@ -179,7 +179,7 @@ EM_CONFIG = {
 
 
     'use_layernorm':         True,
-    # 'norm_type':           'layernorm',  # 'layernorm' | 'rmsnorm' | 'none'
+    'norm_type':           'layernorm',  # 'layernorm' | 'rmsnorm' | 'none'
     'use_residual':          True,
     'use_output_projection': True,
     'multihead_vfe':         True,
@@ -192,21 +192,24 @@ EM_CONFIG = {
     
     
     'E_alpha':               1,      # E-step prior coupling weight
-    'E_lambda_belief':       2,    # E-step belief alignment weight
-    'E_lambda_softmax':      4,
+    'E_lambda_belief':       1,    # E-step belief alignment weight
+    'E_lambda_softmax':      1,
+    'detach_beta_m_step':    True, #if false need M_beta >0
+    
     'E_learnable_alpha':     True,   # Adaptive α_i = c0/(b0 + KL) per dimension
 
     
     'E_learnable_lr':        True,   # Learnable E-step LR
+    'lr_decay':              'linear',
     'E_mu_q_lr':             0.1,    # E-step μ step size (whitened, within trust=2.0)
     'E_sigma_q_lr':          0.05,   # E-step σ step size (conservative)
     
     'E_phi_lr':              0.05,   # E-step φ step size
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
-    'gauge_group':      'GLK',
-    'gauge_mode':       'learned',
-    'gauge_param':      'phi',
+    'gauge_group':           'GLK',
+    'gauge_mode':            'learned',
+    'gauge_param':           'phi',
 
     'skip_attention':           False,   #skips ad hoc attention sublayer
     'closed_form_e_step':       False,   #closed form...ignores non-linear softmax gradient
@@ -232,7 +235,7 @@ EM_CONFIG = {
     'lambda_gamma':        0.0,
     'kappa_gamma':         1.0,
 
-    'embed_weight_decay':  0.05,   # L2 hyper-prior on embeddings (μ_p, σ_p, φ) via AdamW
+    'embed_weight_decay':     0.05,   # L2 hyper-prior on embeddings (μ_p, σ_p, φ) via AdamW
     'non_embed_weight_decay': 0.01,  # L2 on non-embedding params (attention, output)
     
     # === Phi gradient geometry ===
@@ -259,12 +262,12 @@ EM_CONFIG = {
     # mu_embed and log_sigma_diag have dual roles: they initialize E-step
     # beliefs (q₀) AND serve as prior parameters (μ_p, σ_p), so these rates
     # indirectly affect E-step initialization speed.
-    'M_mu_p_lr':        0.05,   # M-step prior mean embeddings (μ_p)
-    'M_sigma_p_lr':     0.005, # M-step prior covariance embeddings (log σ_p)
-    'M_phi_lr':         0.0075, # M-step gauge frame embeddings (φ)
+    'M_mu_p_lr':           0.05,   # M-step prior mean embeddings (μ_p)
+    'M_sigma_p_lr':        0.005, # M-step prior covariance embeddings (log σ_p)
+    'M_phi_lr':            0.0075, # M-step gauge frame embeddings (φ)
     'M_vfe_hyperparam_lr': 0.05, # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr)
-    'M_attention_lr':   0.005,  # M-step attention params (W_O, constant_omega)
-    'M_output_lr':      0.05,   # M-step output projection (vocab logits)
+    'M_attention_lr':      0.005,  # M-step attention params (W_O, constant_omega)
+    'M_output_lr':         0.05,   # M-step output projection (vocab logits)
     
     # === Logging ===
     'log_interval':               100,
@@ -315,11 +318,11 @@ EM_CONFIG = {
 
     # === Regularization ===
     'sigma_ce_scale':  0.1,
-    'sigma_max':     10.0,
-    'grad_clip':     5.0,
-    'hidden_dim':    508,
-    'warmup_steps':  100,
-    'num_workers':   10,
+    'sigma_max':       12.0,
+    'grad_clip':       5.0,
+    'hidden_dim':      508,
+    'warmup_steps':    100,
+    'num_workers':     10,
 
 
 }
