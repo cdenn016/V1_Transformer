@@ -185,7 +185,7 @@ EM_CONFIG = {
     'multihead_vfe':         True,
     
     'evolve_sigma':          True,
-    'evolve_phi':            True,
+    'evolve_phi':            True,  #M-step phi evolution
     'evolve_phi_e_step':     True,
 
     # === E-step dynamics ===
