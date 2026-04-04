@@ -243,9 +243,9 @@ def _pairwise_kl_torch(Q, rho, P, nu, ldc_q, ldc_k, causal):
     # tr(P_j Q_i) = Σ_{a,b} P_j[a,b] Q_i[b,a] = vec(P_j) · vec(Q_iᵀ)
     P_flat = P.reshape(B, H, N, K * K)         # [B, H, N, K²]
     Qt_flat = Q.transpose(-2, -1).reshape(B, H, N, K * K)  # Q transposed, then flattened
-    # Contract over flattened K² dim: result[b,h,j,i] = Σ_k P_flat[j,k] * Qt_flat[i,k] = tr(P_j Q_i)
-    trace_term = torch.einsum('bhjk,bhik->bhij', P_flat, Qt_flat)  # [B, H, N_j, N_i]
-    trace_term = trace_term.transpose(-2, -1)  # [B, H, N_i, N_j]
+    # Einsum: output[b,h,i,j] = Σ_k P_flat[b,h,j,k] * Qt_flat[b,h,i,k] = tr(P_j Q_i)
+    # Already in [B, H, N_i, N_j] layout — no transpose needed.
+    trace_term = torch.einsum('bhjk,bhik->bhij', P_flat, Qt_flat)  # [B, H, N_i, N_j]
 
     # Mahalanobis term: (ρ_i - ν_j)ᵀ P_j (ρ_i - ν_j)
     # d_ij = ρ_i - ν_j: [B, H, N, 1, K] - [B, H, 1, N, K] = [B, H, N, N, K]
