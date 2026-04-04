@@ -1,14 +1,14 @@
 """
-KL Divergence Computation — Unified Module
+KL Divergence Computation -- Unified Module
 ===========================================
 
 Consolidates 9 previously scattered KL matrix computation variants into a
 single parametric entry point with three focused kernel functions.
 
 Three covariance modes:
-    DENSE          — full (B, N, K, K) covariance; Cholesky-based KL
-    DIAGONAL       — diagonal (B, N, K) covariance; closed-form, O(N²K)
-    BLOCK_DIAGONAL — block-diagonal structure; delegates to fused kernels
+    DENSE          -- full (B, N, K, K) covariance; Cholesky-based KL
+    DIAGONAL       -- diagonal (B, N, K) covariance; closed-form, O(N^2K)
+    BLOCK_DIAGONAL -- block-diagonal structure; delegates to fused kernels
                      in gauge_utils.py, reducing CUDA launches to O(unique dims)
 
 Chunking is handled entirely inside ``compute_kl_matrix``; the three kernel
@@ -16,7 +16,7 @@ functions contain only the core mathematics.
 
 Gauge equivariance invariant: transported covariance always uses the sandwich
 product ``Omega @ Sigma @ Omega.T``.  This module never touches that transport
-itself — the kernels receive already-transported tensors (mu_t, sigma_t).
+itself -- the kernels receive already-transported tensors (mu_t, sigma_t).
 
 Usage
 -----
@@ -81,7 +81,7 @@ def safe_kl_clamp(kl: torch.Tensor, kl_max: float = 100.0) -> torch.Tensor:
 
 
 # =============================================================================
-# Kernel Functions — pure math, no chunking logic
+# Kernel Functions -- pure math, no chunking logic
 # =============================================================================
 
 def _kl_kernel_dense(
@@ -142,7 +142,7 @@ def _kl_kernel_dense(
         L, info = torch.linalg.cholesky_ex(mat)
         if not info.any():
             return L
-        # Some matrices failed — apply progressive regularization
+        # Some matrices failed -- apply progressive regularization
         reg = eps
         for _ in range(5):
             reg *= 10.0
@@ -184,7 +184,7 @@ def _kl_kernel_dense(
         return kl.to(orig_dtype)
 
     except RuntimeError:
-        # Scalar fallback — preserves autograd graph
+        # Scalar fallback -- preserves autograd graph
         raise  # Let callers handle if needed; chunked path always has this try/except
 
 
@@ -247,7 +247,7 @@ def _kl_kernel_block_diagonal(
     kl_max: float,
     eps: float,
 ) -> torch.Tensor:
-    r"""Block-diagonal KL divergence — delegates to fused gauge_utils kernels.
+    r"""Block-diagonal KL divergence -- delegates to fused gauge_utils kernels.
 
     Exploits block-diagonal structure of the gauge group representation:
         KL(q || p) = sum_b KL(q_b || p_b)
@@ -384,7 +384,7 @@ def _compute_unchunked(
 ) -> torch.Tensor:
     """Compute full (B, N, N) KL matrix in one vectorised pass."""
     B, N, K = mu_q.shape
-    # Expand query beliefs over all key positions (views, no copy needed —
+    # Expand query beliefs over all key positions (views, no copy needed --
     # downstream kernels cast to float32 internally which creates contiguous copies)
     mu_i = mu_q[:, :, None, :].expand(-1, -1, N, -1)   # (B, N, N, K)
 
