@@ -63,23 +63,26 @@ class GaussianDistribution:
         Sigma_inv: Precision matrix (optional), shape (*S, K, K)
     
     Properties:
-        - All arrays are float32 for memory efficiency
         - Sigma guaranteed SPD (checked on construction)
+        - Respects input dtype (float32 or float64)
         - Immutable after creation
     """
     mu: np.ndarray
     Sigma: np.ndarray
     Sigma_inv: Optional[np.ndarray] = None
-    
+
     def __post_init__(self):
         """Validate and convert types."""
-        # Convert to float32
-        object.__setattr__(self, 'mu', np.asarray(self.mu, dtype=np.float32, order='C'))
-        object.__setattr__(self, 'Sigma', np.asarray(self.Sigma, dtype=np.float32, order='C'))
-        
+        # Respect input dtype instead of forcing float32, avoiding
+        # quantization noise when internal computation is float64.
+        _mu = np.asarray(self.mu)
+        _dtype = _mu.dtype if np.issubdtype(_mu.dtype, np.floating) else np.float32
+        object.__setattr__(self, 'mu', np.asarray(self.mu, dtype=_dtype, order='C'))
+        object.__setattr__(self, 'Sigma', np.asarray(self.Sigma, dtype=_dtype, order='C'))
+
         if self.Sigma_inv is not None:
-            object.__setattr__(self, 'Sigma_inv', 
-                             np.asarray(self.Sigma_inv, dtype=np.float32, order='C'))
+            object.__setattr__(self, 'Sigma_inv',
+                             np.asarray(self.Sigma_inv, dtype=_dtype, order='C'))
         
         # Validate shapes
         K = self.mu.shape[-1]
@@ -188,10 +191,10 @@ def push_gaussian(
     Sigma_pushed = 0.5 * (Sigma_pushed + np.swapaxes(Sigma_pushed, -1, -2))
     
     # Eigenvalue floor for numerical stability.
-    # Use eigh to selectively floor small eigenvalues instead of blanket +ε*I,
-    # but keep the floor at 1e-4 to prevent confidence explosion over iterations.
+    # Use eigh to selectively floor small eigenvalues instead of blanket +ε*I.
+    # Floor at 1e-6, matching the PyTorch path (gaussian_kl_divergence eps).
     w, V = np.linalg.eigh(Sigma_pushed)
-    w = np.maximum(w, 1e-4)
+    w = np.maximum(w, 1e-6)
     Sigma_pushed = np.einsum('...ij,...j,...kj->...ik', V, w, V, optimize=True)
     
     # ========== Compute precision if requested ==========

@@ -17,7 +17,7 @@ from typing import List, Optional, Tuple
 def stable_matrix_exp_pair(
     matrix: torch.Tensor,
     dim_threshold: int = 20,
-    max_norm: float = 10.0,
+    max_norm: float = 20.0,
     skew_symmetric: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Compute exp(M) and exp(-M) with norm clamping and float64 upcasting.
@@ -47,7 +47,7 @@ def stable_matrix_exp_pair(
     Args:
         matrix: (..., d, d) matrix to exponentiate.
         dim_threshold: Upcast to float64 when d >= this value. Default 8.
-        max_norm: Maximum Frobenius norm for input matrix. Default 10.0.
+        max_norm: Maximum Frobenius norm for input matrix. Default 20.0.
         skew_symmetric: If True, skip computing exp(-M) and use exp(M).mT
             instead. For skew-symmetric M, exp(-M) = exp(M)^T exactly.
             Cache this flag at init rather than checking every forward pass.
