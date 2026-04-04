@@ -10,14 +10,14 @@ Consolidates duplicated matrix exponential and KL divergence patterns.
 
 import torch
 from collections import defaultdict
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 
 def stable_matrix_exp_pair(
     matrix: torch.Tensor,
     dim_threshold: int = 20,
-    max_norm: float = 10.0,
+    max_norm: float = 20.0,
     skew_symmetric: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Compute exp(M) and exp(-M) with norm clamping and float64 upcasting.
@@ -47,7 +47,7 @@ def stable_matrix_exp_pair(
     Args:
         matrix: (..., d, d) matrix to exponentiate.
         dim_threshold: Upcast to float64 when d >= this value. Default 8.
-        max_norm: Maximum Frobenius norm for input matrix. Default 10.0.
+        max_norm: Maximum Frobenius norm for input matrix. Default 20.0.
         skew_symmetric: If True, skip computing exp(-M) and use exp(M).mT
             instead. For skew-symmetric M, exp(-M) = exp(M)^T exactly.
             Cache this flag at init rather than checking every forward pass.
@@ -106,11 +106,12 @@ def newton_schulz_orthogonalize(
     eye = torch.eye(K, device=X.device, dtype=X.dtype)
 
     # Rescale to bring singular values near 1 (convergence basin: (0, √3)).
-    # Frobenius norm / sqrt(K) estimates the RMS singular value.
+    # Use Frobenius norm / sqrt(K) as RMS singular value estimate, but with
+    # a tighter threshold (1.2 instead of 1.5) to catch outlier singular
+    # values that the RMS average might mask for high-condition-number matrices.
     frob = X.norm(dim=(-2, -1), keepdim=True).clamp(min=1e-8)
     rms_sv = frob / (K ** 0.5)
-    # Only rescale if RMS singular value > 1.5 (well inside basin if near 1)
-    needs_rescale = (rms_sv > 1.5).squeeze(-1).squeeze(-1)
+    needs_rescale = (rms_sv > 1.2).squeeze(-1).squeeze(-1)
     if needs_rescale.any():
         X = torch.where(
             needs_rescale[..., None, None],
@@ -136,6 +137,10 @@ def newton_schulz_orthogonalize(
 # launching separate matrix_exp + KL kernels per block.  For typical configs
 # (e.g. 75×ℓ₀ + 30×ℓ₁ + 18×ℓ₂ = 123 blocks, 3 unique dims), this reduces
 # CUDA kernel launches from O(num_blocks) to O(num_unique_dims).
+
+# Cache for generator sub-block stacks (Finding 24: avoids rebuilding
+# from fixed architectural constants on every forward pass).
+_gen_stack_cache: Dict[Tuple[int, Tuple[int, ...]], Dict[int, torch.Tensor]] = {}
 
 
 def fused_block_matrix_exp_pairs(
@@ -181,13 +186,23 @@ def fused_block_matrix_exp_pairs(
 
     results: List[Optional[Tuple[torch.Tensor, torch.Tensor]]] = [None] * len(irrep_dims)
 
+    # Cache key: (generator tensor id, irrep_dims tuple)
+    _cache_key = (id(generators), tuple(irrep_dims))
+
     for d, group in dim_groups.items():
         n_blocks = len(group)
 
-        # Stack generator sub-blocks: (n_blocks, n_gen, d, d)
-        gen_stack = torch.stack(
-            [generators[:, s:e, s:e] for _, s, e in group], dim=0
-        )
+        # Reuse cached generator stacks when possible (generators are fixed
+        # architectural constants registered as buffers).
+        if _cache_key in _gen_stack_cache and d in _gen_stack_cache[_cache_key]:
+            gen_stack = _gen_stack_cache[_cache_key][d]
+        else:
+            gen_stack = torch.stack(
+                [generators[:, s:e, s:e] for _, s, e in group], dim=0
+            )
+            if _cache_key not in _gen_stack_cache:
+                _gen_stack_cache[_cache_key] = {}
+            _gen_stack_cache[_cache_key][d] = gen_stack
 
         # Batched Lie-algebra element: phi · G per block
         # phi: (B, N, n_gen), gen_stack: (n_blocks, n_gen, d, d)

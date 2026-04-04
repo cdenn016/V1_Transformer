@@ -65,6 +65,9 @@ def load_checkpoint(checkpoint_path: str, device: str = 'cpu') -> Dict[str, Any]
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
+    # SECURITY: weights_only=False enables arbitrary code execution via pickle.
+    # Only load checkpoints from trusted sources. Untrusted checkpoints could
+    # execute arbitrary Python code during deserialization.
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     return checkpoint
 
@@ -116,7 +119,7 @@ def load_model(checkpoint_path: str) -> Tuple[GaugeTransformerLM, Dict[str, Any]
         'ffn_mode': 'VFE_dynamic',
     }
 
-    # Load checkpoint once (reused for config extraction and weight loading)
+    # SECURITY: weights_only=False — see load_checkpoint() docstring.
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 
     # Try loading from experiment_config.json first (more reliable)
@@ -164,11 +167,18 @@ def load_model(checkpoint_path: str) -> Tuple[GaugeTransformerLM, Dict[str, Any]
     # Create model
     model = GaugeTransformerLM(config)
 
-    # Load checkpoint weights
+    # Load checkpoint weights with strict=False for graceful handling of
+    # architecture mismatches (e.g., added/removed layers between versions).
     if 'model_state_dict' in checkpoint:
-        model.load_state_dict(checkpoint['model_state_dict'])
+        result = model.load_state_dict(checkpoint['model_state_dict'], strict=False)
     else:
-        model.load_state_dict(checkpoint)
+        result = model.load_state_dict(checkpoint, strict=False)
+    if result.missing_keys:
+        print(f"  Warning: missing keys in checkpoint: {result.missing_keys[:10]}"
+              + (f" ... ({len(result.missing_keys)} total)" if len(result.missing_keys) > 10 else ""))
+    if result.unexpected_keys:
+        print(f"  Warning: unexpected keys in checkpoint: {result.unexpected_keys[:10]}"
+              + (f" ... ({len(result.unexpected_keys)} total)" if len(result.unexpected_keys) > 10 else ""))
 
     print(f"Loaded checkpoint from {checkpoint_path}")
     model.eval()
@@ -252,6 +262,7 @@ def load_checkpoint_info(checkpoint_path: str) -> Dict[str, Any]:
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
+    # SECURITY: weights_only=False — see load_checkpoint() docstring.
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 
     info = {}

@@ -373,8 +373,9 @@ def e_step(token_ids, model, config, effective_lrs=None):
         # ================================================================
         # COVARIANCE GRADIENT: ∂F/∂Σ_i
         # ================================================================
-        # 1. Alignment: weighted transported precision
-        weighted_prec = vfe_grad_Sigma_alignment(precomp, beta)
+        # 1. Alignment: weighted transported precision (with softmax correction,
+        # matching the mu gradient which also uses kl_ij_raw and tau)
+        weighted_prec = vfe_grad_Sigma_alignment(precomp, beta, kl_ij_raw, config.tau)
         # Shape: [B, H, N, K_h, K_h] — permute to [B, N, H, K_h, K_h]
         weighted_prec = weighted_prec.permute(0, 2, 1, 3, 4)
 

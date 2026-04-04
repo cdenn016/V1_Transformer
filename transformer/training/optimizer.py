@@ -692,6 +692,12 @@ def create_scheduler(
     """
     Create learning rate scheduler.
 
+    .. deprecated::
+        This function computes min_ratio as min_lr / learning_rate, which
+        differs from FastTrainer._create_scheduler() that uses min_lr_ratio
+        directly. The FastTrainer version is preferred for new code.
+        (Finding 12: duplicate implementation with inconsistent semantics.)
+
     Args:
         optimizer: The optimizer to schedule
         config: Training configuration

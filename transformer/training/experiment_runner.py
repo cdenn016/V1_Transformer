@@ -1038,15 +1038,10 @@ class PublicationTrainer(FastTrainer):
             Removes the trace component from ``phi_embed``, projecting phi to
             the traceless subalgebra sl(K) so det(Omega_ij) = 1.
         """
-        # --- Killing form preconditioning ---
-        if self._cartan_preconditioner is not None:
-            from transformer.core.gauge_preconditioner import apply_cartan_preconditioning
-            for name, param in self.model.named_parameters():
-                if param.grad is not None and ('phi_embed' in name or 'phi' in name.lower()):
-                    if param.grad.shape[-1] == self._cartan_preconditioner.shape[0]:
-                        param.grad.data = apply_cartan_preconditioning(
-                            param.grad.data, self._cartan_preconditioner
-                        )
+        # NOTE: Cartan preconditioning is applied ONCE in train_step() (pre-optimizer,
+        # lines ~1237-1245). Do NOT duplicate it here — with grad_accumulation_steps > 1,
+        # non-accumulation steps skip zero_grad(), so a second application would square
+        # the preconditioning and corrupt phi updates.
 
         # --- Kappa clamping (post-optimizer step) ---
         for block in self._model_blocks:
@@ -1260,11 +1255,22 @@ class PublicationTrainer(FastTrainer):
             _use_param_groups = getattr(self.config, 'use_param_groups', True)
             if self.config.grad_clip > 0:
                 if _use_param_groups:
+                    # Scale clip threshold by sqrt(n_group / n_total) so that
+                    # per-parameter gradient magnitude is equalized across groups.
+                    # Without this, small groups (e.g., kappa) get a disproportionately
+                    # large per-parameter gradient budget vs. large groups (phi_embed).
+                    _total = sum(
+                        p.numel() for g in self.optimizer.param_groups
+                        for p in g['params'] if p.grad is not None
+                    )
                     for group in self.optimizer.param_groups:
-                        if group['params']:
+                        graded = [p for p in group['params'] if p.grad is not None]
+                        if graded:
+                            _n_group = sum(p.numel() for p in graded)
+                            _scale = (_n_group / max(_total, 1)) ** 0.5
                             torch.nn.utils.clip_grad_norm_(
-                                group['params'],
-                                self.config.grad_clip,
+                                graded,
+                                self.config.grad_clip * _scale,
                             )
                 else:
                     torch.nn.utils.clip_grad_norm_(

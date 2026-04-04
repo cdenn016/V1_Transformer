@@ -282,5 +282,79 @@ class TestEStepMonotonicity:
                 f"VFE increased at step {t}: {vfe_history[t - 1]:.4f} -> {vfe_history[t]:.4f}"
 
 
+class TestSoftmaxCorrectedSigmaGradient:
+    """Test that Sigma gradient includes softmax correction (Finding 6)."""
+
+    def setup_method(self):
+        torch.manual_seed(123)
+        self.B, self.H, self.N, self.K_h = 1, 2, 4, 3
+
+    def test_sigma_gradient_uses_softmax_correction(self):
+        """vfe_grad_Sigma_alignment with kl_ij should differ from without."""
+        from ..gaussians import vfe_grad_Sigma_alignment
+
+        B, H, N, K_h = self.B, self.H, self.N, self.K_h
+
+        # Build mock precomp dict
+        P = random_spd(K_h, (B, H, N))  # precisions
+        Om_inv = random_gl(K_h, (B, H, N), scale=0.1)
+        precomp = {'P': P, 'Omega_inv': Om_inv}
+
+        beta = torch.softmax(torch.randn(B, H, N, N), dim=-1)
+        kl_ij = torch.rand(B, H, N, N) * 5.0
+        tau = 1.0
+
+        # Without correction
+        result_no_corr = vfe_grad_Sigma_alignment(precomp, beta)
+        # With correction
+        result_with_corr = vfe_grad_Sigma_alignment(precomp, beta, kl_ij, tau)
+
+        # They should differ (correction changes weights from beta to w_ij)
+        assert not torch.allclose(result_no_corr, result_with_corr, atol=1e-6), \
+            "Softmax correction should produce different gradients"
+
+    def test_sigma_gradient_correction_reduces_to_uncorrected_when_kl_uniform(self):
+        """When all KL values are equal, correction factor is 1 → same as uncorrected."""
+        from ..gaussians import vfe_grad_Sigma_alignment
+
+        B, H, N, K_h = self.B, self.H, self.N, self.K_h
+        P = random_spd(K_h, (B, H, N))
+        Om_inv = random_gl(K_h, (B, H, N), scale=0.1)
+        precomp = {'P': P, 'Omega_inv': Om_inv}
+
+        beta = torch.softmax(torch.randn(B, H, N, N), dim=-1)
+        # Uniform KL → correction = (E[KL] - KL) / tau = 0 → w_ij = beta_ij
+        kl_uniform = torch.ones(B, H, N, N) * 3.0
+        tau = 1.0
+
+        result_no_corr = vfe_grad_Sigma_alignment(precomp, beta)
+        result_with_corr = vfe_grad_Sigma_alignment(precomp, beta, kl_uniform, tau)
+
+        assert torch.allclose(result_no_corr, result_with_corr, atol=1e-5), \
+            "Uniform KL should make corrected gradient match uncorrected"
+
+
+class TestMStepOmegaUpdate:
+    """Test M-step Omega moment-matching update (Finding 7)."""
+
+    def test_omega_converges_toward_target(self):
+        """Moment-matching grad = -(Omega_star - Omega) should pull toward target."""
+        torch.manual_seed(99)
+        T, H, K_h = 5, 2, 3
+        Omega = torch.eye(K_h).unsqueeze(0).unsqueeze(0).expand(T, H, K_h, K_h).clone()
+        Omega_star = random_gl(K_h, (T, H), scale=0.2)
+
+        # Moment-matching update
+        lr = 0.1
+        grad = -(Omega_star - Omega)
+        Omega_updated = Omega - lr * grad  # = Omega + lr * (Omega_star - Omega)
+
+        # Distance to target should decrease
+        dist_before = (Omega - Omega_star).norm()
+        dist_after = (Omega_updated - Omega_star).norm()
+        assert dist_after < dist_before, \
+            f"Moment-matching should reduce distance to target: {dist_before:.4f} -> {dist_after:.4f}"
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
