@@ -186,7 +186,7 @@ def run_test_evaluation(
                     mass_phi=0.0,
                     normalize_ce_by_dim=getattr(config, 'normalize_ce_by_dim', False),
                 )
-                ce_loss = metrics['loss/ce']
+                ce_loss = metrics.get('loss/ce_raw', metrics['loss/ce'])
 
             # Token-weighted accumulation (handles variable-size last batch)
             total_ce_tokens += ce_loss * non_pad
@@ -1155,8 +1155,8 @@ class PublicationTrainer(FastTrainer):
             'train_loss_self_consistency': full_metrics.get('loss/self_consistency', 0),
             'train_loss_model_coupling': full_metrics.get('loss/model_coupling', 0),
             'train_loss_aux_layer_ce': full_metrics.get('loss/aux_layer_ce', 0),
-            # Clamp to prevent overflow
-            'train_ppl': math.exp(min(full_metrics['loss/ce'], 20)),
+            # PPL from raw (un-normalized) CE to avoid bogus values when normalize_ce_by_dim=True
+            'train_ppl': math.exp(min(full_metrics.get('loss/ce_raw', full_metrics['loss/ce']), 20)),
             'beta_mean': full_metrics.get('attention/beta_mean', 0),
             'beta_std': 0,
             'kl_mean': full_metrics.get('attention/kl_mean', 0),
