@@ -353,7 +353,7 @@ def compute_free_energy_loss(
     # =================================================================
     # 1. Observation Likelihood: -E[log p(o|x)] = Cross-Entropy
     # =================================================================
-    ce_loss = F.cross_entropy(
+    ce_loss_raw = F.cross_entropy(
         logits.reshape(-1, logits.size(-1)),  # (B*N, V)
         targets.reshape(-1),                   # (B*N,)
         reduction='mean',
@@ -362,11 +362,11 @@ def compute_free_energy_loss(
     # VFE terms divide by sqrt(K) (dim_scale) but CE does not by default.
     # When normalize_ce_by_dim=True, apply the same normalization so relative
     # VFE-vs-CE weighting is independent of embed_dim.
+    # ce_loss is used for the loss; ce_loss_raw is preserved for PPL/BPC metrics.
+    ce_loss = ce_loss_raw
     if normalize_ce_by_dim:
-        K = logits.size(-1)  # vocab_size for logits, but we want embed_dim
-        # embed_dim is the belief dimension, not vocab_size — infer from mu_q
         embed_K = model.config.get('embed_dim', 128) if hasattr(model, 'config') else 128
-        ce_loss = ce_loss / (embed_K ** 0.5)
+        ce_loss = ce_loss_raw / (embed_K ** 0.5)
 
     # =================================================================
     # 2. Belief Coupling: λ_β · Σ_ij β_ij · KL(q_i || Ω_ij q_j)
@@ -593,6 +593,7 @@ def compute_free_energy_loss(
     metrics = {
         'loss/total': total_loss.item(),
         'loss/ce': ce_loss.item(),
+        'loss/ce_raw': ce_loss_raw.item(),
         'loss/belief_align': belief_align_loss.item(),
         'loss/self_consistency': self_consistency_loss.item() if M_alpha > 0 else 0.0,
         'loss/model_coupling': model_align_loss.item() if lambda_gamma > 0 else 0.0,
