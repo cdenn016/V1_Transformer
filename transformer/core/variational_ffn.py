@@ -562,6 +562,11 @@ class VariationalFFNDynamic(nn.Module):
 
         self.embed_dim = embed_dim
         self.register_buffer('generators', generators)
+        # Cache skew-symmetry flag: for SO(K), exp(-A) = exp(A)^T (saves one matrix_exp)
+        self._generators_are_skew = bool(torch.allclose(
+            generators + generators.transpose(-1, -2),
+            torch.zeros_like(generators), atol=1e-5
+        ))
         self.n_iterations = n_iterations
         self.gauge_param = gauge_param
         self.mask_self_attention = mask_self_attention
@@ -1080,6 +1085,7 @@ class VariationalFFNDynamic(nn.Module):
                 _phi_bep = fused_block_matrix_exp_pairs(
                     phi_for_grad, self.generators, self.irrep_dims,
                     enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                    skew_symmetric=self._generators_are_skew,
                 )
             block_start = 0
             for h, d_h in enumerate(self.irrep_dims):
@@ -1170,6 +1176,7 @@ class VariationalFFNDynamic(nn.Module):
                     generators=self.generators,
                     enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
                     gauge_mode=self.gauge_mode,
+                    generators_are_skew=self._generators_are_skew,
                 )
             else:
                 cached_transport = None
@@ -1342,6 +1349,7 @@ class VariationalFFNDynamic(nn.Module):
                     generators=self.generators,
                     enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
                     gauge_mode=self.gauge_mode,
+                    generators_are_skew=self._generators_are_skew,
                 )
             else:
                 cached_transport = None
@@ -1626,6 +1634,7 @@ class VariationalFFNDynamic(nn.Module):
         return fused_block_matrix_exp_pairs(
             phi_current, self.generators, self.irrep_dims,
             enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+            skew_symmetric=self._generators_are_skew,
         )
 
     # =================================================================
@@ -2281,6 +2290,7 @@ class VariationalFFNDynamic(nn.Module):
                 _phi_bep_cf = (fused_block_matrix_exp_pairs(
                     phi_current, self.generators, self.irrep_dims,
                     enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                    skew_symmetric=self._generators_are_skew,
                 ) if self.irrep_dims is not None and self.gauge_mode == 'learned' else None)
                 grad_phi = self._compute_phi_grad(
                     phi_current, mu_current, sigma_current,
@@ -2386,6 +2396,7 @@ class VariationalFFNDynamic(nn.Module):
                     generators=self.generators,
                     enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
                     gauge_mode=self.gauge_mode,
+                    generators_are_skew=self._generators_are_skew,
                 )
         else:
             cached_transport = None
@@ -3326,6 +3337,7 @@ class VariationalFFNDynamic(nn.Module):
                     _phi_bep_post = fused_block_matrix_exp_pairs(
                         phi_current, self.generators, self.irrep_dims,
                         enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                        skew_symmetric=self._generators_are_skew,
                     )
                 grad_phi = self._compute_phi_grad(
                     phi_current, mu_current, sigma_current,

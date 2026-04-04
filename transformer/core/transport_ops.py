@@ -64,6 +64,28 @@ def _build_rope_freqs(K: int, base: float = 10000.0,
     return freqs
 
 
+# RoPE cos/sin cache: keyed by (K, base, N, device) to avoid recomputation.
+# Cleared automatically when module is garbage collected.
+_rope_cache: dict = {}
+
+
+def _get_rope_cos_sin(
+    K: int, N: int, base: float,
+    device: torch.device, dtype: torch.dtype,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Get cached RoPE cos/sin tensors, recomputing only when args change."""
+    key = (K, N, base, device)
+    cached = _rope_cache.get(key)
+    if cached is not None and cached[0].dtype == dtype:
+        return cached
+    freqs = _build_rope_freqs(K, base, device=device, dtype=dtype)  # (K//2,)
+    positions = torch.arange(N, device=device, dtype=dtype)  # (N,)
+    angles = torch.outer(positions, freqs)  # (N, K//2)
+    cos_sin = (torch.cos(angles), torch.sin(angles))
+    _rope_cache[key] = cos_sin
+    return cos_sin
+
+
 def _apply_rope(mu: torch.Tensor, base: float = 10000.0) -> torch.Tensor:
     """Apply Rotary Position Embeddings to belief means.
 
@@ -80,13 +102,8 @@ def _apply_rope(mu: torch.Tensor, base: float = 10000.0) -> torch.Tensor:
     B, N, K = mu.shape
     half_K = K // 2
 
-    # Compute position-dependent angles: θ_n(pos) = pos * freq_n
-    freqs = _build_rope_freqs(K, base, device=mu.device, dtype=mu.dtype)  # (K//2,)
-    positions = torch.arange(N, device=mu.device, dtype=mu.dtype)  # (N,)
-    angles = torch.outer(positions, freqs)  # (N, K//2)
-
-    cos_angles = torch.cos(angles)  # (N, K//2)
-    sin_angles = torch.sin(angles)  # (N, K//2)
+    # Cached cos/sin (recomputed only when K, N, base, or device changes)
+    cos_angles, sin_angles = _get_rope_cos_sin(K, N, base, mu.device, mu.dtype)
 
     # Split μ into even/odd pairs and apply 2D rotation
     mu_even = mu[:, :, :2*half_K:2]   # (B, N, K//2) - dims 0,2,4,...
@@ -111,6 +128,7 @@ def compute_transport_operators(
     gauge_mode: str = 'learned',  # 'learned', 'trivial', or 'constant'
     connection_delta: Optional[torch.Tensor] = None,  # (B, N, N, n_gen) edge-local connection
     cocycle_relaxation: float = 0.0,  # Scale factor for connection_delta: 0=flat, 1=fully non-flat
+    **kwargs,  # generators_are_skew: Optional[bool] — pre-computed skew-symmetry flag
 ) -> dict:
     """
     Precompute transport operators for caching when phi is fixed.
@@ -195,17 +213,20 @@ def compute_transport_operators(
 
     # Check if generators are skew-symmetric (SO(K) gauge group).
     # For skew-symmetric A: exp(-A) = exp(A)^T, saving one matrix_exp call.
-    _is_skew = torch.allclose(
-        generators + generators.transpose(-1, -2),
-        torch.zeros_like(generators), atol=1e-5
-    )
+    # Accept pre-computed flag to avoid torch.allclose on every forward pass.
+    _is_skew = kwargs.get('generators_are_skew', None)
+    if _is_skew is None:
+        _is_skew = torch.allclose(
+            generators + generators.transpose(-1, -2),
+            torch.zeros_like(generators), atol=1e-5
+        )
 
     # Float64 matrix_exp for GL(K) numerical stability (prevents NaN
     # from Padé scaling-squaring overflow when phi values grow large).
-    exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
-    if _is_skew:
-        # SO(K): exp(-A) = exp(A)^T for skew-symmetric A
-        exp_neg_phi = exp_phi.transpose(-1, -2)
+    # When generators are skew-symmetric, skip computing exp(-M) (use transpose).
+    exp_phi, exp_neg_phi = stable_matrix_exp_pair(
+        phi_matrix, skew_symmetric=_is_skew
+    )
 
     # Re-orthogonalization for SO(K) gauge groups
     # NOTE: For GL⁺(K), this is NOT required - VFE is invariant under GL(K)!
