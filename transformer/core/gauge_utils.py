@@ -18,6 +18,7 @@ def stable_matrix_exp_pair(
     matrix: torch.Tensor,
     dim_threshold: int = 20,
     max_norm: float = 10.0,
+    skew_symmetric: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Compute exp(M) and exp(-M) with norm clamping and float64 upcasting.
 
@@ -47,6 +48,9 @@ def stable_matrix_exp_pair(
         matrix: (..., d, d) matrix to exponentiate.
         dim_threshold: Upcast to float64 when d >= this value. Default 8.
         max_norm: Maximum Frobenius norm for input matrix. Default 10.0.
+        skew_symmetric: If True, skip computing exp(-M) and use exp(M).mT
+            instead. For skew-symmetric M, exp(-M) = exp(M)^T exactly.
+            Cache this flag at init rather than checking every forward pass.
 
     Returns:
         (exp_pos, exp_neg): Tuple of exp(M) and exp(-M), both same dtype as input.
@@ -64,13 +68,15 @@ def stable_matrix_exp_pair(
     orig_dtype = matrix.dtype
     with torch.amp.autocast('cuda', enabled=False):
         if d >= dim_threshold:
-            matrix_f64 = matrix.double().contiguous()
-            exp_pos = torch.linalg.matrix_exp(matrix_f64).to(orig_dtype)
-            exp_neg = torch.linalg.matrix_exp(-matrix_f64).to(orig_dtype)
+            matrix_up = matrix.double().contiguous()
         else:
-            matrix_f32 = matrix.float().contiguous()
-            exp_pos = torch.linalg.matrix_exp(matrix_f32).to(orig_dtype)
-            exp_neg = torch.linalg.matrix_exp(-matrix_f32).to(orig_dtype)
+            matrix_up = matrix.float().contiguous()
+        exp_pos = torch.linalg.matrix_exp(matrix_up).to(orig_dtype)
+        if skew_symmetric:
+            # For skew-symmetric M: exp(-M) = exp(M)^T (free transpose)
+            exp_neg = exp_pos.transpose(-1, -2)
+        else:
+            exp_neg = torch.linalg.matrix_exp(-matrix_up).to(orig_dtype)
     return exp_pos, exp_neg
 
 
@@ -137,6 +143,7 @@ def fused_block_matrix_exp_pairs(
     generators: torch.Tensor,
     irrep_dims: List[int],
     enforce_orthogonal: bool = False,
+    skew_symmetric: bool = False,
 ) -> List[Tuple[torch.Tensor, torch.Tensor]]:
     """Compute matrix exponential pairs for all irrep blocks in fused batches.
 
@@ -189,7 +196,9 @@ def fused_block_matrix_exp_pairs(
 
         # Merge block-batch and batch dims for a single matrix_exp call
         phi_flat = phi_matrices.reshape(n_blocks * B, N, d, d)
-        exp_phi_flat, exp_neg_phi_flat = stable_matrix_exp_pair(phi_flat)
+        exp_phi_flat, exp_neg_phi_flat = stable_matrix_exp_pair(
+            phi_flat, skew_symmetric=skew_symmetric
+        )
 
         # Reshape back: (n_blocks, B, N, d, d)
         exp_phi_all = exp_phi_flat.reshape(n_blocks, B, N, d, d)
