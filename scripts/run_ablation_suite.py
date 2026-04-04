@@ -32,6 +32,7 @@ Usage:
 
 import argparse
 import copy
+import gc
 import json
 import os
 import sys
@@ -596,6 +597,13 @@ def make_run_configs(sweep_name: str, base_config: dict) -> list:
     return runs
 
 
+def _cleanup_after_experiment():
+    """Force memory reclamation between ablation runs."""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def run_sweep(
     sweep_name: str,
     base_config: dict,
@@ -703,6 +711,8 @@ def run_sweep(
                 'error': str(e),
                 'final_ppl': float('inf'),
             })
+        finally:
+            _cleanup_after_experiment()
 
     # Save sweep summary
     df = pd.DataFrame(results)
