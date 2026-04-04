@@ -184,6 +184,7 @@ def run_test_evaluation(
                     pad_token_id=pad_token_id,
                     use_obs_in_vfe=False,
                     mass_phi=0.0,
+                    normalize_ce_by_dim=getattr(config, 'normalize_ce_by_dim', False),
                 )
                 ce_loss = metrics['loss/ce']
 
@@ -999,6 +1000,7 @@ class PublicationTrainer(FastTrainer):
                 mass_phi=self.config.mass_phi,
                 aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
                 detach_beta_m_step=getattr(self.config, 'detach_beta_m_step', True),
+                normalize_ce_by_dim=getattr(self.config, 'normalize_ce_by_dim', False),
             )
 
         # Scale loss for gradient accumulation (gradients accumulate across micro-batches)

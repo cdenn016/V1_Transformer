@@ -50,13 +50,17 @@ def save_checkpoint(
     print(f"Saved checkpoint to {save_path}")
 
 
-def load_checkpoint(checkpoint_path: str, device: str = 'cpu') -> Dict[str, Any]:
+def load_checkpoint(checkpoint_path: str, device: str = 'cpu', trusted: bool = True) -> Dict[str, Any]:
     """
     Load a raw checkpoint dictionary.
 
     Args:
         checkpoint_path: Path to checkpoint file
         device: Device to load tensors to
+        trusted: If True (default), uses weights_only=False which permits
+            arbitrary code execution via pickle. Set to False for untrusted
+            checkpoints to use weights_only=True (safe but may fail on
+            checkpoints containing non-tensor objects like configs).
 
     Returns:
         checkpoint: Dictionary with model_state_dict, config, etc.
@@ -65,14 +69,11 @@ def load_checkpoint(checkpoint_path: str, device: str = 'cpu') -> Dict[str, Any]
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-    # SECURITY: weights_only=False enables arbitrary code execution via pickle.
-    # Only load checkpoints from trusted sources. Untrusted checkpoints could
-    # execute arbitrary Python code during deserialization.
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=not trusted)
     return checkpoint
 
 
-def load_model(checkpoint_path: str) -> Tuple[GaugeTransformerLM, Dict[str, Any]]:
+def load_model(checkpoint_path: str, trusted: bool = True) -> Tuple[GaugeTransformerLM, Dict[str, Any]]:
     """
     Load a trained GaugeTransformerLM from checkpoint.
 
@@ -119,8 +120,7 @@ def load_model(checkpoint_path: str) -> Tuple[GaugeTransformerLM, Dict[str, Any]
         'ffn_mode': 'VFE_dynamic',
     }
 
-    # SECURITY: weights_only=False — see load_checkpoint() docstring.
-    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=not trusted)
 
     # Try loading from experiment_config.json first (more reliable)
     if config_json_path.exists():
@@ -244,12 +244,14 @@ def get_tokenizer(config: Dict[str, Any], dataset_name: Optional[str] = None):
     return None
 
 
-def load_checkpoint_info(checkpoint_path: str) -> Dict[str, Any]:
+def load_checkpoint_info(checkpoint_path: str, trusted: bool = True) -> Dict[str, Any]:
     """
     Load metadata from a checkpoint without instantiating the model.
 
     Args:
         checkpoint_path: Path to checkpoint file.
+        trusted: If True (default), uses weights_only=False. Set to False
+            for untrusted checkpoints (see load_checkpoint docstring).
 
     Returns:
         Dict with keys: config, epoch, step, has_optimizer, n_parameters.
@@ -262,8 +264,7 @@ def load_checkpoint_info(checkpoint_path: str) -> Dict[str, Any]:
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-    # SECURITY: weights_only=False — see load_checkpoint() docstring.
-    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=not trusted)
 
     info = {}
 

@@ -934,15 +934,6 @@ class GaugeTransformerLM(nn.Module):
         else:
             vfe_W_out = None
 
-        # Set sigma_prior on each block's FFN so the E-step uses embedding
-        # prior covariance (not the evolving belief sigma). This avoids
-        # threading sigma_prior through Stack/Block forward() signatures.
-        # WARNING: This side-effect pattern is fragile under torch.compile
-        # or multi-process DataParallel. A full fix requires changing the
-        # Block.forward() signature through the entire stack.
-        for blk in self.transformer.blocks:
-            blk.ffn._sigma_prior_cache = sigma_prior
-
         mu_q, sigma_q, phi, intermediates = self.transformer(
             mu_q,
             sigma_q,
@@ -956,6 +947,7 @@ class GaugeTransformerLM(nn.Module):
             targets=vfe_targets,
             W_out=vfe_W_out,
             omega=omega,
+            sigma_prior=sigma_prior,
         )
 
         # =================================================================

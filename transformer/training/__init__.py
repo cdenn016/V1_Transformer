@@ -9,7 +9,6 @@ Components:
     - TrainingConfig: Unified configuration dataclass (all training modes)
     - create_optimizer: Parameter group-aware AdamW with natural gradient LRs
     - create_param_groups: Per-parameter-type grouping (mu, sigma, phi, attn, ffn)
-    - create_scheduler: Cosine/linear LR scheduling with warmup
     - MetricsTracker: CSV logging for training metrics
 
 The main training loop lives in train_publication.py (PublicationTrainer).

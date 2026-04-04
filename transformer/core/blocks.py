@@ -287,6 +287,7 @@ class GaugeTransformerBlock(nn.Module):
         W_out: Optional[torch.Tensor] = None,
         cached_head_transports: Optional[list] = None,
         omega: Optional[torch.Tensor] = None,
+        sigma_prior: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Forward pass through transformer block.
@@ -428,7 +429,7 @@ class GaugeTransformerBlock(nn.Module):
             targets=targets,
             W_out=W_out,
             omega=omega,
-            sigma_prior=getattr(self.ffn, '_sigma_prior_cache', None),
+            sigma_prior=sigma_prior,
         )
 
         # Update covariances from FFN if evolving
@@ -534,6 +535,7 @@ class GaugeTransformerStack(nn.Module):
         targets: Optional[torch.Tensor] = None,
         W_out: Optional[torch.Tensor] = None,
         omega: Optional[torch.Tensor] = None,
+        sigma_prior: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[List]]:
         """
         Forward through all transformer blocks sequentially.
@@ -585,6 +587,7 @@ class GaugeTransformerStack(nn.Module):
                             token_ids=token_ids,
                             cached_head_transports=cached_head_transports,
                             omega=omega,
+                            sigma_prior=sigma_prior,
                         )
                     return block_fn
 
@@ -601,6 +604,7 @@ class GaugeTransformerStack(nn.Module):
                     targets=targets if is_final else None,
                     W_out=W_out if is_final else None,
                     omega=omega,
+                    sigma_prior=sigma_prior,
                 )
 
             # Propagate evolved omega from E-step to next layer (gauge_param='omega').

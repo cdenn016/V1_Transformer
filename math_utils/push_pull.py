@@ -231,10 +231,11 @@ def push_gaussian(
         if Sigma_inv_pushed is not None:
             Sigma_inv_pushed = 0.5 * (Sigma_inv_pushed + np.swapaxes(Sigma_inv_pushed, -1, -2))
     
-    # ========== Cast to float32 and return ==========
-    mu_out = mu_pushed.astype(np.float32, copy=False)
-    Sigma_out = Sigma_pushed.astype(np.float32, copy=False)
-    Sigma_inv_out = Sigma_inv_pushed.astype(np.float32, copy=False) if Sigma_inv_pushed is not None else None
+    # ========== Cast to input dtype and return ==========
+    _out_dtype = gaussian.mu.dtype
+    mu_out = mu_pushed.astype(_out_dtype, copy=False)
+    Sigma_out = Sigma_pushed.astype(_out_dtype, copy=False)
+    Sigma_inv_out = Sigma_inv_pushed.astype(_out_dtype, copy=False) if Sigma_inv_pushed is not None else None
     
     return GaussianDistribution(mu_out, Sigma_out, Sigma_inv_out)
 

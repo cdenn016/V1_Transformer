@@ -217,6 +217,7 @@ class FastTrainer:
                 mass_phi=getattr(self.config, 'mass_phi', 0.05),
                 aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
                 detach_beta_m_step=getattr(self.config, 'detach_beta_m_step', True),
+                normalize_ce_by_dim=getattr(self.config, 'normalize_ce_by_dim', False),
             )
 
         # Backward pass (scaler handles float16; no-op for bfloat16)
@@ -305,6 +306,7 @@ class FastTrainer:
                         pad_token_id=self.pad_token_id,
                         use_obs_in_vfe=False,
                         mass_phi=0.0,
+                        normalize_ce_by_dim=getattr(self.config, 'normalize_ce_by_dim', False),
                     )
                     ce_loss = metrics['loss/ce']
 
