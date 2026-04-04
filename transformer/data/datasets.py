@@ -62,6 +62,16 @@ import hashlib
 import urllib.request
 import zipfile
 
+# Module-level verbosity flag.  Set to True by callers (e.g. ablation suite)
+# to suppress per-split loading/tokenization progress messages.
+QUIET: bool = False
+
+
+def _log(msg: str) -> None:
+    """Print unless QUIET mode is active."""
+    if not QUIET:
+        print(msg)
+
 # HuggingFace datasets (optional - has fallback)
 try:
     from datasets import load_dataset
@@ -282,27 +292,27 @@ def _download_wikitext2_fallback(cache_dir: Optional[str] = None) -> dict:
             continue
 
         # Try downloading from URLs
-        print(f"  Downloading {split} split...")
+        _log(f"  Downloading {split} split...")
         downloaded = False
         for url in WIKITEXT2_RAW_FILES.get(split, []):
-            print(f"    Trying: {url[:50]}...")
+            _log(f"    Trying: {url[:50]}...")
             if _download_file(url, filepath):
                 with open(filepath, 'r', encoding='utf-8') as f:
                     result[split] = f.read()
                 downloaded = True
-                print(f"    Success!")
+                _log(f"    Success!")
                 break
 
         # Ultimate fallback: use embedded sample
         if not downloaded:
-            print(f"    Using embedded sample data for {split}")
+            _log(f"    Using embedded sample data for {split}")
             # Use the sample data, duplicated to make it larger
             sample = WIKITEXT2_SAMPLE * (50 if split == 'train' else 10)
             result[split] = sample
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(sample)
 
-    print(f"WikiText-2 loaded from: {data_dir}")
+    _log(f"WikiText-2 loaded from: {data_dir}")
     return result
 
 
@@ -335,12 +345,12 @@ def _download_wikitext103_fallback(cache_dir: Optional[str] = None) -> dict:
     if not all_exist:
         # Download and extract
         if not zip_path.exists():
-            print(f"  Downloading WikiText-103 (~180MB)...")
+            _log(f"  Downloading WikiText-103 (~180MB)...")
             downloaded = False
             for url in WIKITEXT103_URLS:
-                print(f"    Trying: {url[:60]}...")
+                _log(f"    Trying: {url[:60]}...")
                 if _download_file(url, zip_path):
-                    print(f"    Download complete!")
+                    _log(f"    Download complete!")
                     downloaded = True
                     break
             if not downloaded:
@@ -357,7 +367,7 @@ def _download_wikitext103_fallback(cache_dir: Optional[str] = None) -> dict:
                 )
 
         # Extract
-        print(f"  Extracting WikiText-103...")
+        _log(f"  Extracting WikiText-103...")
         with zipfile.ZipFile(zip_path, 'r') as zf:
             zf.extractall(cache_dir)
 
@@ -376,7 +386,7 @@ def _download_wikitext103_fallback(cache_dir: Optional[str] = None) -> dict:
         else:
             raise RuntimeError(f"WikiText-103 file not found: {filepath}")
 
-    print(f"WikiText-103 loaded from: {data_dir}")
+    _log(f"WikiText-103 loaded from: {data_dir}")
     return result
 
 
@@ -405,14 +415,14 @@ def _load_openwebtext_split(
             "OpenWebText is too large (~8B tokens) for manual download fallback."
         )
 
-    print(f"  Loading OpenWebText from HuggingFace...")
+    _log(f"  Loading OpenWebText from HuggingFace...")
     # Load the full dataset (only has 'train' split)
     # HuggingFace datasets uses memory-mapped Arrow files, so this
     # doesn't load everything into RAM at once
     full_dataset = load_dataset('openwebtext', split='train', cache_dir=cache_dir)
 
     total_docs = len(full_dataset)
-    print(f"  Total documents: {total_docs:,}")
+    _log(f"  Total documents: {total_docs:,}")
 
     # Deterministic split using index ranges (no shuffling needed -
     # the dataset order is already arbitrary web text)
@@ -422,13 +432,13 @@ def _load_openwebtext_split(
 
     if split == 'train':
         subset = full_dataset.select(range(n_train))
-        print(f"  Train split: {n_train:,} documents")
+        _log(f"  Train split: {n_train:,} documents")
     elif split == 'validation':
         subset = full_dataset.select(range(n_train, n_train + n_val))
-        print(f"  Validation split: {n_val:,} documents")
+        _log(f"  Validation split: {n_val:,} documents")
     elif split == 'test':
         subset = full_dataset.select(range(n_train + n_val, total_docs))
-        print(f"  Test split: {n_test:,} documents")
+        _log(f"  Test split: {n_test:,} documents")
     else:
         raise ValueError(f"Unknown split: {split}")
 
@@ -443,14 +453,14 @@ def _load_openwebtext_split(
             batch_texts = [item['text'] for item in batch if len(item['text'].strip()) > 0]
             parts.append('\n\n'.join(batch_texts))
             if (i // BATCH_SIZE + 1) % 10 == 0:
-                print(f"  Loaded {min(i + BATCH_SIZE, n_docs):,}/{n_docs:,} documents...")
+                _log(f"  Loaded {min(i + BATCH_SIZE, n_docs):,}/{n_docs:,} documents...")
         full_text = '\n\n'.join(parts)
         del parts  # Free memory
     else:
         texts = [item['text'] for item in subset if len(item['text'].strip()) > 0]
         full_text = '\n\n'.join(texts)
 
-    print(f"  Total characters: {len(full_text):,}")
+    _log(f"  Total characters: {len(full_text):,}")
     return full_text
 
 
@@ -484,12 +494,12 @@ def _load_wiki_ja_split(
             "  pip install datasets\n"
         )
 
-    print(f"  Loading Japanese Wikipedia from HuggingFace...")
+    _log(f"  Loading Japanese Wikipedia from HuggingFace...")
     # Use wikimedia/wikipedia namespace (legacy 'wikipedia' scripts no longer supported)
     full_dataset = load_dataset('wikimedia/wikipedia', '20231101.ja', split='train', cache_dir=cache_dir)
 
     total_docs = len(full_dataset)
-    print(f"  Total articles: {total_docs:,}")
+    _log(f"  Total articles: {total_docs:,}")
 
     # Deterministic split: 99% train, 0.5% val, 0.5% test
     n_val = int(total_docs * 0.005)
@@ -500,15 +510,15 @@ def _load_wiki_ja_split(
         n_use = min(n_train, max_articles)
         subset = full_dataset.select(range(n_use))
         if n_use < n_train:
-            print(f"  Train split: {n_use:,} articles (capped from {n_train:,})")
+            _log(f"  Train split: {n_use:,} articles (capped from {n_train:,})")
         else:
-            print(f"  Train split: {n_use:,} articles")
+            _log(f"  Train split: {n_use:,} articles")
     elif split == 'validation':
         subset = full_dataset.select(range(n_train, n_train + n_val))
-        print(f"  Validation split: {n_val:,} articles")
+        _log(f"  Validation split: {n_val:,} articles")
     elif split == 'test':
         subset = full_dataset.select(range(n_train + n_val, total_docs))
-        print(f"  Test split: {n_test:,} articles")
+        _log(f"  Test split: {n_test:,} articles")
     else:
         raise ValueError(f"Unknown split: {split}")
 
@@ -522,14 +532,14 @@ def _load_wiki_ja_split(
             batch_texts = [item['text'] for item in batch if len(item['text'].strip()) > 0]
             parts.append('\n\n'.join(batch_texts))
             if (i // BATCH_SIZE + 1) % 10 == 0:
-                print(f"  Loaded {min(i + BATCH_SIZE, n_docs):,}/{n_docs:,} articles...")
+                _log(f"  Loaded {min(i + BATCH_SIZE, n_docs):,}/{n_docs:,} articles...")
         full_text = '\n\n'.join(parts)
         del parts
     else:
         texts = [item['text'] for item in subset if len(item['text'].strip()) > 0]
         full_text = '\n\n'.join(texts)
 
-    print(f"  Total characters: {len(full_text):,}")
+    _log(f"  Total characters: {len(full_text):,}")
     return full_text
 
 
@@ -595,13 +605,13 @@ class WikiText2Dataset(Dataset):
         # Try loading from token cache first
         token_cache_path = _get_token_cache_path('wikitext-2', split, f'transformers_{tokenizer_name}', cache_dir)
         if token_cache_path.exists():
-            print(f"Loading WikiText-2 ({split}) from token cache...")
-            print(f"  Cache: {token_cache_path}")
+            _log(f"Loading WikiText-2 ({split}) from token cache...")
+            _log(f"  Cache: {token_cache_path}")
             tokens = torch.load(token_cache_path, weights_only=True).tolist()
-            print(f"  Loaded {len(tokens):,} cached tokens")
+            _log(f"  Loaded {len(tokens):,} cached tokens")
         else:
             # Load dataset (with fallback if datasets package unavailable)
-            print(f"Loading WikiText-2 ({split}) for BPE tokenization...")
+            _log(f"Loading WikiText-2 ({split}) for BPE tokenization...")
 
             if DATASETS_AVAILABLE:
                 # Use HuggingFace datasets
@@ -610,7 +620,7 @@ class WikiText2Dataset(Dataset):
                 full_text = '\n\n'.join(texts)
             else:
                 # Fallback: download directly (same as character-level)
-                print("  (Using direct download fallback - datasets package not available)")
+                _log("  (Using direct download fallback - datasets package not available)")
                 wikitext_data = _download_wikitext2_fallback(cache_dir)
                 full_text = wikitext_data[split]
 
@@ -618,7 +628,7 @@ class WikiText2Dataset(Dataset):
             import re
             unk_count = full_text.count('<unk>')
             if unk_count > 0:
-                print(f"  Warning: Removing {unk_count} <unk> tokens from data (processed WikiText artifact)")
+                print(f"  Warning: Removing {unk_count} <unk> tokens from data (processed WikiText artifact)")  # keep: warning
                 # Replace <unk> with single space, preserve newlines
                 full_text = re.sub(r'<unk>', '', full_text)
                 # Only normalize multiple spaces (NOT newlines) - preserve paragraph structure!
@@ -629,38 +639,38 @@ class WikiText2Dataset(Dataset):
             full_text = full_text.replace(' @,@ ', ',')
             full_text = full_text.replace(' @.@ ', '.')
 
-            print(f"  Total characters: {len(full_text):,}")
+            _log(f"  Total characters: {len(full_text):,}")
 
             # Tokenize
-            print(f"Tokenizing...")
+            _log(f"Tokenizing...")
             tokens = self.tokenizer.encode(full_text, add_special_tokens=False)
 
             # Save to cache for next run
-            print(f"  Saving token cache to {token_cache_path}...")
+            _log(f"  Saving token cache to {token_cache_path}...")
             torch.save(torch.tensor(tokens, dtype=torch.long), token_cache_path)
-            print(f"  Token cache saved ({token_cache_path.stat().st_size / 1024 / 1024:.1f} MB)")
+            _log(f"  Token cache saved ({token_cache_path.stat().st_size / 1024 / 1024:.1f} MB)")
 
         # Restrict vocabulary if requested
         if vocab_size is not None and vocab_size < len(self.tokenizer):
             if vocab_mapping is not None:
                 # Use provided mapping (ensures train/val consistency)
-                print(f"  Using provided vocabulary mapping ({len(vocab_mapping)} tokens)...")
+                _log(f"  Using provided vocabulary mapping ({len(vocab_mapping)} tokens)...")
                 tokens = self._apply_vocab_mapping(tokens, vocab_mapping)
             else:
                 # Build mapping from this split's frequencies (only for train!)
-                print(f"  Restricting vocabulary to {vocab_size} most frequent tokens...")
+                _log(f"  Restricting vocabulary to {vocab_size} most frequent tokens...")
                 tokens = self._restrict_vocab(tokens, vocab_size)
 
         self.tokens = torch.tensor(tokens, dtype=torch.long)
 
-        print(f"  Tokenized: {len(self.tokens):,} tokens")
-        print(f"  Vocabulary size: {self.get_vocab_size()}")
+        _log(f"  Tokenized: {len(self.tokens):,} tokens")
+        _log(f"  Vocabulary size: {self.get_vocab_size()}")
 
         # Calculate number of complete sequences
         # Each sequence is [tok_0...tok_T-1] → [tok_1...tok_T]
         self.num_sequences = max(1, len(self.tokens) - self.max_seq_len)
 
-        print(f"  Number of sequences: {self.num_sequences:,}")
+        _log(f"  Number of sequences: {self.num_sequences:,}")
 
     def _restrict_vocab(self, tokens: List[int], target_vocab_size: int) -> List[int]:
         """
@@ -864,14 +874,14 @@ class WikiText2TiktokenDataset(Dataset):
         tokenizer_cache_key = 'tiktoken_cl100k' if dataset == 'wiki-ja' else 'tiktoken'
         token_cache_path = _get_token_cache_path(dataset, split, tokenizer_cache_key, cache_dir)
         if token_cache_path.exists():
-            print(f"Loading {dataset.upper()} ({split}) from token cache...")
-            print(f"  Cache: {token_cache_path}")
+            _log(f"Loading {dataset.upper()} ({split}) from token cache...")
+            _log(f"  Cache: {token_cache_path}")
             tokens = torch.load(token_cache_path, weights_only=True)
-            print(f"  Loaded {len(tokens):,} cached tokens")
+            _log(f"  Loaded {len(tokens):,} cached tokens")
         else:
             # Load dataset and tokenize from scratch
-            print(f"Loading {dataset.upper()} ({split}) for BPE tokenization (tiktoken)...")
-            print(f"  DATASETS_AVAILABLE={DATASETS_AVAILABLE}")
+            _log(f"Loading {dataset.upper()} ({split}) for BPE tokenization (tiktoken)...")
+            _log(f"  DATASETS_AVAILABLE={DATASETS_AVAILABLE}")
 
             if dataset == 'openwebtext':
                 # OpenWebText: ~8B tokens, loaded via HuggingFace datasets
@@ -885,7 +895,7 @@ class WikiText2TiktokenDataset(Dataset):
                 texts = [item['text'] for item in dataset_obj if len(item['text'].strip()) > 0]
                 full_text = '\n\n'.join(texts)
             else:
-                print("  (Using direct download fallback)")
+                _log("  (Using direct download fallback)")
                 if dataset == 'wikitext-103':
                     wikitext_data = _download_wikitext103_fallback(cache_dir)
                 else:
@@ -897,7 +907,7 @@ class WikiText2TiktokenDataset(Dataset):
                 import re
                 unk_count = full_text.count('<unk>')
                 if unk_count > 0:
-                    print(f"  Warning: Removing {unk_count} <unk> tokens from data (processed WikiText artifact)")
+                    print(f"  Warning: Removing {unk_count} <unk> tokens from data (processed WikiText artifact)")  # keep: warning
                     full_text = re.sub(r'<unk>', '', full_text)
                     full_text = re.sub(r'[ \t]+', ' ', full_text)
 
@@ -906,11 +916,11 @@ class WikiText2TiktokenDataset(Dataset):
                 full_text = full_text.replace(' @,@ ', ',')
                 full_text = full_text.replace(' @.@ ', '.')
 
-            print(f"  Total characters: {len(full_text):,}")
+            _log(f"  Total characters: {len(full_text):,}")
 
             # Tokenize (chunked for large datasets to manage memory)
             tokenizer_label = 'cl100k_base' if dataset == 'wiki-ja' else 'GPT-2'
-            print(f"Tokenizing with tiktoken ({tokenizer_label} BPE)...")
+            _log(f"Tokenizing with tiktoken ({tokenizer_label} BPE)...")
             CHUNK_CHARS = 50_000_000  # 50M chars per chunk (~15M tokens)
             if len(full_text) > CHUNK_CHARS * 2:
                 # Memory-efficient chunked tokenization using numpy arrays
@@ -926,9 +936,9 @@ class WikiText2TiktokenDataset(Dataset):
                     total_tokens += len(chunk_tokens)
                     del chunk_tokens
                     if chunk_idx % 10 == 0 or chunk_idx == n_chunks:
-                        print(f"  Tokenized chunk {chunk_idx}/{n_chunks} ({total_tokens:,} tokens so far)")
+                        _log(f"  Tokenized chunk {chunk_idx}/{n_chunks} ({total_tokens:,} tokens so far)")
                 del full_text  # Free the text string
-                print(f"  Concatenating {total_tokens:,} tokens...")
+                _log(f"  Concatenating {total_tokens:,} tokens...")
                 tokens_np = np.concatenate(chunk_arrays)
                 del chunk_arrays
                 # Convert to int64 numpy array (zero-copy torch conversion)
@@ -938,12 +948,12 @@ class WikiText2TiktokenDataset(Dataset):
                 tokens = self.tokenizer.encode(full_text)
 
             # Save to cache for next run
-            print(f"  Saving token cache to {token_cache_path}...")
+            _log(f"  Saving token cache to {token_cache_path}...")
             if isinstance(tokens, np.ndarray):
                 torch.save(torch.from_numpy(tokens), token_cache_path)
             else:
                 torch.save(torch.tensor(tokens, dtype=torch.long), token_cache_path)
-            print(f"  Token cache saved ({token_cache_path.stat().st_size / 1024 / 1024:.1f} MB)")
+            _log(f"  Token cache saved ({token_cache_path.stat().st_size / 1024 / 1024:.1f} MB)")
 
         # Restrict vocabulary if requested
         if vocab_size is not None and vocab_size < self._full_vocab_size:
@@ -952,11 +962,11 @@ class WikiText2TiktokenDataset(Dataset):
                 tokens = tokens.tolist()
             if vocab_mapping is not None:
                 # Use provided mapping (ensures train/val consistency)
-                print(f"  Using provided vocabulary mapping ({len(vocab_mapping)} tokens)...")
+                _log(f"  Using provided vocabulary mapping ({len(vocab_mapping)} tokens)...")
                 tokens = self._apply_vocab_mapping(tokens, vocab_mapping)
             else:
                 # Build mapping from this split's frequencies (only for train!)
-                print(f"  Restricting vocabulary to {vocab_size} most frequent tokens...")
+                _log(f"  Restricting vocabulary to {vocab_size} most frequent tokens...")
                 tokens = self._restrict_vocab(tokens, vocab_size)
 
         # Convert to tensor efficiently based on input type
@@ -967,11 +977,11 @@ class WikiText2TiktokenDataset(Dataset):
         else:
             self.tokens = torch.tensor(tokens, dtype=torch.long)
 
-        print(f"  Tokenized: {len(self.tokens):,} tokens")
-        print(f"  Vocabulary size: {self.get_vocab_size()}")
+        _log(f"  Tokenized: {len(self.tokens):,} tokens")
+        _log(f"  Vocabulary size: {self.get_vocab_size()}")
 
         self.num_sequences = max(1, len(self.tokens) - self.max_seq_len)
-        print(f"  Number of sequences: {self.num_sequences:,}")
+        _log(f"  Number of sequences: {self.num_sequences:,}")
 
     def _restrict_vocab(self, tokens: List[int], target_vocab_size: int) -> List[int]:
         """Restrict tokens to top K most frequent."""
@@ -1110,7 +1120,7 @@ class WikiText2CharDataset(Dataset):
         self.vocab_size = vocab_size
 
         # Load dataset (with fallback if datasets package unavailable)
-        print(f"Loading WikiText-2 ({split}) for character-level modeling...")
+        _log(f"Loading WikiText-2 ({split}) for character-level modeling...")
 
         if DATASETS_AVAILABLE:
             # Use HuggingFace datasets
@@ -1119,7 +1129,7 @@ class WikiText2CharDataset(Dataset):
             full_text = '\n\n'.join(texts)
         else:
             # Fallback: download directly
-            print("  (Using direct download fallback - datasets package not available)")
+            _log("  (Using direct download fallback - datasets package not available)")
             wikitext_data = _download_wikitext2_fallback(cache_dir)
             full_text = wikitext_data[split]
 
@@ -1127,7 +1137,7 @@ class WikiText2CharDataset(Dataset):
         import re
         unk_count = full_text.count('<unk>')
         if unk_count > 0:
-            print(f"  Warning: Removing {unk_count} <unk> tokens from data (processed WikiText artifact)")
+            print(f"  Warning: Removing {unk_count} <unk> tokens from data (processed WikiText artifact)")  # keep: warning
             # Replace <unk> with single space, preserve newlines
             full_text = re.sub(r'<unk>', '', full_text)
             # Only normalize multiple spaces (NOT newlines) - preserve paragraph structure!
@@ -1138,7 +1148,7 @@ class WikiText2CharDataset(Dataset):
         full_text = full_text.replace(' @,@ ', ',')
         full_text = full_text.replace(' @.@ ', '.')
 
-        print(f"  Total characters: {len(full_text):,}")
+        _log(f"  Total characters: {len(full_text):,}")
 
         # Build or use provided character vocabulary
         self.pad_token_id = 0
@@ -1146,11 +1156,11 @@ class WikiText2CharDataset(Dataset):
 
         if vocab_mapping is not None:
             # Use provided mapping (ensures train/val consistency)
-            print(f"  Using provided vocabulary mapping ({len(vocab_mapping)} chars)...")
+            _log(f"  Using provided vocabulary mapping ({len(vocab_mapping)} chars)...")
             self.char_to_id = vocab_mapping.copy()
         else:
             # Build vocabulary from this split's frequencies (only for train!)
-            print(f"  Building vocabulary from {split} frequencies...")
+            _log(f"  Building vocabulary from {split} frequencies...")
             # Count character frequencies
             char_counts = {}
             for char in full_text:
@@ -1183,9 +1193,9 @@ class WikiText2CharDataset(Dataset):
         # Calculate number of complete sequences
         self.num_sequences = max(1, len(self.tokens) - self.max_seq_len)
 
-        print(f"  Character vocab size: {len(self.char_to_id)}")
-        print(f"  Number of sequences: {self.num_sequences:,}")
-        print(f"  Total chars: {len(self.tokens):,}")
+        _log(f"  Character vocab size: {len(self.char_to_id)}")
+        _log(f"  Number of sequences: {self.num_sequences:,}")
+        _log(f"  Total chars: {len(self.tokens):,}")
 
     def get_vocab_size(self) -> int:
         """Return actual vocabulary size."""
@@ -1289,18 +1299,18 @@ class WikiText2ByteDataset(Dataset):
         self.vocab_size = min(vocab_size, 256)  # Cap at 256 bytes
 
         # Load dataset with fallback
-        print(f"Loading WikiText-2 ({split}) for byte-level modeling...")
+        _log(f"Loading WikiText-2 ({split}) for byte-level modeling...")
 
         if DATASETS_AVAILABLE:
             dataset = load_dataset('wikitext', 'wikitext-2-raw-v1', split=split, cache_dir=cache_dir)
             texts = [item['text'] for item in dataset if len(item['text'].strip()) > 0]
             full_text = '\n\n'.join(texts)
         else:
-            print("  (Using direct download fallback)")
+            _log("  (Using direct download fallback)")
             wikitext_data = _download_wikitext2_fallback(cache_dir)
             full_text = wikitext_data[split]
 
-        print(f"  Total characters: {len(full_text):,}")
+        _log(f"  Total characters: {len(full_text):,}")
 
         # Encode as bytes
         text_bytes = full_text.encode('utf-8', errors='replace')
@@ -1313,13 +1323,13 @@ class WikiText2ByteDataset(Dataset):
         if self.vocab_size < 256:
             if vocab_mapping is not None:
                 # Use provided mapping (ensures train/val consistency)
-                print(f"  Using provided vocabulary mapping ({len(vocab_mapping)} bytes)...")
+                _log(f"  Using provided vocabulary mapping ({len(vocab_mapping)} bytes)...")
                 self.byte_to_id = vocab_mapping.copy()
                 self.unk_id = self.vocab_size  # Last position for unknown
                 self._actual_vocab_size = self.vocab_size + 1  # +1 for UNK token
             else:
                 # Build mapping from this split's frequencies (only for train!)
-                print(f"  Building vocabulary from {split} frequencies...")
+                _log(f"  Building vocabulary from {split} frequencies...")
                 # Count byte frequencies
                 byte_counts = {}
                 for b in text_bytes:
@@ -1352,9 +1362,9 @@ class WikiText2ByteDataset(Dataset):
         # Calculate number of complete sequences
         self.num_sequences = max(1, len(self.tokens) - self.max_seq_len)
 
-        print(f"  Byte vocab size: {self._actual_vocab_size}")
-        print(f"  Number of sequences: {self.num_sequences:,}")
-        print(f"  Total bytes: {len(self.tokens):,}")
+        _log(f"  Byte vocab size: {self._actual_vocab_size}")
+        _log(f"  Number of sequences: {self.num_sequences:,}")
+        _log(f"  Total bytes: {len(self.tokens):,}")
 
     def get_vocab_size(self) -> int:
         """Return actual vocabulary size."""
@@ -1440,11 +1450,11 @@ def create_char_dataloaders(
     """
     # Note: No longer requires datasets package - has fallback download!
 
-    print("="*70)
-    print("CREATING CHARACTER-LEVEL WIKITEXT-2 DATALOADERS")
-    print("="*70)
+    _log("="*70)
+    _log("CREATING CHARACTER-LEVEL WIKITEXT-2 DATALOADERS")
+    _log("="*70)
     if not DATASETS_AVAILABLE:
-        print("(Using direct download fallback - datasets package not available)")
+        _log("(Using direct download fallback - datasets package not available)")
 
     # Create datasets
     # IMPORTANT: Train dataset builds vocab mapping, val dataset reuses it
@@ -1515,17 +1525,17 @@ def create_char_dataloaders(
             worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
         )
 
-    print(f"\n{'='*70}")
-    print(f"DATALOADERS CREATED")
-    print(f"{'='*70}")
-    print(f"Train batches: {len(train_loader):,}")
-    print(f"Val batches:   {len(val_loader):,}")
+    _log(f"\n{'='*70}")
+    _log(f"DATALOADERS CREATED")
+    _log(f"{'='*70}")
+    _log(f"Train batches: {len(train_loader):,}")
+    _log(f"Val batches:   {len(val_loader):,}")
     if include_test:
-        print(f"Test batches:  {len(test_loader):,}")
-    print(f"Vocabulary:    {actual_vocab_size} characters")
-    print(f"Batch size:    {batch_size}")
-    print(f"Sequence len:  {max_seq_len}")
-    print(f"{'='*70}\n")
+        _log(f"Test batches:  {len(test_loader):,}")
+    _log(f"Vocabulary:    {actual_vocab_size} characters")
+    _log(f"Batch size:    {batch_size}")
+    _log(f"Sequence len:  {max_seq_len}")
+    _log(f"{'='*70}\n")
 
     if include_test:
         return train_loader, val_loader, test_loader, actual_vocab_size
@@ -1604,14 +1614,14 @@ def create_dataloaders(
         )
 
     dataset_upper = dataset.upper()
-    print("="*70)
+    _log("="*70)
     if TIKTOKEN_AVAILABLE:
-        print(f"CREATING {dataset_upper} DATALOADERS (BPE via tiktoken)")
+        _log(f"CREATING {dataset_upper} DATALOADERS (BPE via tiktoken)")
     else:
-        print(f"CREATING {dataset_upper} DATALOADERS (BPE via transformers)")
-    print("="*70)
+        _log(f"CREATING {dataset_upper} DATALOADERS (BPE via transformers)")
+    _log("="*70)
     if not DATASETS_AVAILABLE:
-        print("(Using direct download fallback - datasets package not available)")
+        _log("(Using direct download fallback - datasets package not available)")
 
     # Create datasets - prefer tiktoken
     # IMPORTANT: Train dataset builds vocab mapping, val dataset reuses it
@@ -1717,17 +1727,17 @@ def create_dataloaders(
             worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
         )
 
-    print(f"\n{'='*70}")
-    print(f"DATALOADERS CREATED")
-    print(f"{'='*70}")
-    print(f"Train batches: {len(train_loader):,}")
-    print(f"Val batches:   {len(val_loader):,}")
+    _log(f"\n{'='*70}")
+    _log(f"DATALOADERS CREATED")
+    _log(f"{'='*70}")
+    _log(f"Train batches: {len(train_loader):,}")
+    _log(f"Val batches:   {len(val_loader):,}")
     if test_loader is not None:
-        print(f"Test batches:  {len(test_loader):,}")
-    print(f"Vocabulary:    {actual_vocab_size:,} tokens")
-    print(f"Batch size:    {batch_size}")
-    print(f"Sequence len:  {max_seq_len}")
-    print(f"{'='*70}\n")
+        _log(f"Test batches:  {len(test_loader):,}")
+    _log(f"Vocabulary:    {actual_vocab_size:,} tokens")
+    _log(f"Batch size:    {batch_size}")
+    _log(f"Sequence len:  {max_seq_len}")
+    _log(f"{'='*70}\n")
 
     if include_test:
         if return_tokenizer:
@@ -1762,9 +1772,9 @@ def collate_fn(batch: List[Tuple[torch.Tensor, torch.Tensor]]) -> Tuple[torch.Te
 # =============================================================================
 
 if __name__ == '__main__':
-    print("="*70)
-    print("DATA PIPELINE TEST")
-    print("="*70)
+    _log("="*70)
+    _log("DATA PIPELINE TEST")
+    _log("="*70)
 
     if not DATASETS_AVAILABLE:
         print("\n❌ datasets not installed!")
@@ -1776,10 +1786,10 @@ if __name__ == '__main__':
     batch_size = 4
     vocab_size = 1000  # Restrict to 1K tokens for testing
 
-    print(f"\n[1] Creating dataloaders...")
-    print(f"    Sequence length: {max_seq_len}")
-    print(f"    Batch size:      {batch_size}")
-    print(f"    Vocabulary:      {vocab_size} (restricted)")
+    _log(f"\n[1] Creating dataloaders...")
+    _log(f"    Sequence length: {max_seq_len}")
+    _log(f"    Batch size:      {batch_size}")
+    _log(f"    Vocabulary:      {vocab_size} (restricted)")
 
     try:
         train_loader, val_loader, actual_vocab_size = create_dataloaders(
@@ -1788,82 +1798,82 @@ if __name__ == '__main__':
             vocab_size=vocab_size,
             num_workers=0,
         )
-        print(f"    ✓ Dataloaders created")
+        _log(f"    ✓ Dataloaders created")
     except Exception as e:
         print(f"    ❌ Error creating dataloaders: {e}")
         raise
 
     # Test batch shapes
-    print(f"\n[2] Testing batch shapes...")
+    _log(f"\n[2] Testing batch shapes...")
     train_batch = next(iter(train_loader))
     input_ids, target_ids = train_batch
 
-    print(f"    Input shape:  {input_ids.shape}")
-    print(f"    Target shape: {target_ids.shape}")
+    _log(f"    Input shape:  {input_ids.shape}")
+    _log(f"    Target shape: {target_ids.shape}")
 
     assert input_ids.shape == (batch_size, max_seq_len), "Input shape mismatch!"
     assert target_ids.shape == (batch_size, max_seq_len), "Target shape mismatch!"
-    print(f"    ✓ Shapes correct")
+    _log(f"    ✓ Shapes correct")
 
     # Test target alignment (target[i] = input[i+1])
-    print(f"\n[3] Testing target alignment...")
+    _log(f"\n[3] Testing target alignment...")
     # First sequence
     seq_0_input = input_ids[0]
     seq_0_target = target_ids[0]
 
     # Show first 10 tokens
-    print(f"    Input[0]:  {seq_0_input[:10].tolist()}")
-    print(f"    Target[0]: {seq_0_target[:10].tolist()}")
-    print(f"    Expected:  {seq_0_input[1:11].tolist()}")
+    _log(f"    Input[0]:  {seq_0_input[:10].tolist()}")
+    _log(f"    Target[0]: {seq_0_target[:10].tolist()}")
+    _log(f"    Expected:  {seq_0_input[1:11].tolist()}")
 
     # Verify alignment (ignoring potential padding)
     non_pad_mask = seq_0_target != train_loader.dataset.pad_token_id
     if non_pad_mask.sum() > 0:
         aligned = torch.all(seq_0_target[:-1] == seq_0_input[1:])
         if aligned:
-            print(f"    ✓ Targets correctly shifted")
+            _log(f"    ✓ Targets correctly shifted")
         else:
-            print(f"    ⚠ Warning: Target alignment mismatch (may be due to padding)")
+            print(f"    ⚠ Warning: Target alignment mismatch (may be due to padding)")  # keep: warning
 
     # Test vocabulary range
-    print(f"\n[4] Testing vocabulary...")
+    _log(f"\n[4] Testing vocabulary...")
     max_token = input_ids.max().item()
     min_token = input_ids.min().item()
 
-    print(f"    Vocabulary size: {actual_vocab_size}")
-    print(f"    Token range:     [{min_token}, {max_token}]")
-    print(f"    Pad token ID:    {train_loader.dataset.pad_token_id}")
+    _log(f"    Vocabulary size: {actual_vocab_size}")
+    _log(f"    Token range:     [{min_token}, {max_token}]")
+    _log(f"    Pad token ID:    {train_loader.dataset.pad_token_id}")
 
     assert max_token < actual_vocab_size, f"Token {max_token} >= vocab size {actual_vocab_size}"
     assert min_token >= 0, f"Token {min_token} < 0"
-    print(f"    ✓ All tokens in valid range")
+    _log(f"    ✓ All tokens in valid range")
 
     # Test validation set
-    print(f"\n[5] Testing validation set...")
+    _log(f"\n[5] Testing validation set...")
     val_batch = next(iter(val_loader))
     val_input, val_target = val_batch
 
-    print(f"    Val input shape:  {val_input.shape}")
-    print(f"    Val target shape: {val_target.shape}")
-    print(f"    ✓ Validation batch works")
+    _log(f"    Val input shape:  {val_input.shape}")
+    _log(f"    Val target shape: {val_target.shape}")
+    _log(f"    ✓ Validation batch works")
 
     # Dataset statistics
-    print(f"\n[6] Dataset statistics:")
-    print(f"    Train sequences:      {len(train_loader.dataset):,}")
-    print(f"    Val sequences:        {len(val_loader.dataset):,}")
-    print(f"    Train batches:        {len(train_loader):,}")
-    print(f"    Val batches:          {len(val_loader):,}")
-    print(f"    Total train tokens:   {len(train_loader.dataset.tokens):,}")
-    print(f"    Total val tokens:     {len(val_loader.dataset.tokens):,}")
+    _log(f"\n[6] Dataset statistics:")
+    _log(f"    Train sequences:      {len(train_loader.dataset):,}")
+    _log(f"    Val sequences:        {len(val_loader.dataset):,}")
+    _log(f"    Train batches:        {len(train_loader):,}")
+    _log(f"    Val batches:          {len(val_loader):,}")
+    _log(f"    Total train tokens:   {len(train_loader.dataset.tokens):,}")
+    _log(f"    Total val tokens:     {len(val_loader.dataset.tokens):,}")
 
     # Estimate training time
     tokens_per_batch = batch_size * max_seq_len
     total_train_tokens = len(train_loader) * tokens_per_batch
 
-    print(f"\n[7] Training estimates:")
-    print(f"    Tokens per batch:     {tokens_per_batch:,}")
-    print(f"    Total tokens/epoch:   {total_train_tokens:,}")
-    print(f"    Batches per epoch:    {len(train_loader):,}")
+    _log(f"\n[7] Training estimates:")
+    _log(f"    Tokens per batch:     {tokens_per_batch:,}")
+    _log(f"    Total tokens/epoch:   {total_train_tokens:,}")
+    _log(f"    Batches per epoch:    {len(train_loader):,}")
 
     # Memory estimate
     # Rough estimate: embedding + activations + gradients
@@ -1871,17 +1881,17 @@ if __name__ == '__main__':
     model_size_mb = (actual_vocab_size * 96) * mem_per_token / 1e6  # Embedding only
     batch_mem_mb = tokens_per_batch * 96 * mem_per_token * 3 / 1e6  # Activations
 
-    print(f"\n[8] Memory estimates (very rough):")
-    print(f"    Model (embeddings):   ~{model_size_mb:.1f} MB")
-    print(f"    Batch activations:    ~{batch_mem_mb:.1f} MB")
-    print(f"    Estimated total:      ~{(model_size_mb + batch_mem_mb) * 2:.1f} MB (with overhead)")
+    _log(f"\n[8] Memory estimates (very rough):")
+    _log(f"    Model (embeddings):   ~{model_size_mb:.1f} MB")
+    _log(f"    Batch activations:    ~{batch_mem_mb:.1f} MB")
+    _log(f"    Estimated total:      ~{(model_size_mb + batch_mem_mb) * 2:.1f} MB (with overhead)")
 
-    print("\n" + "="*70)
-    print("✓ All data pipeline tests passed!")
-    print("="*70)
-    print("\nReady to train!")
-    print("Next: Integrate with Trainer class in train.py")
-    print("="*70)
+    _log("\n" + "="*70)
+    _log("✓ All data pipeline tests passed!")
+    _log("="*70)
+    _log("\nReady to train!")
+    _log("Next: Integrate with Trainer class in train.py")
+    _log("="*70)
 
 
 # =============================================================================

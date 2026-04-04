@@ -129,21 +129,22 @@ class FastTrainer:
         # Create checkpoint directory
         config.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        print(f"\n{'='*70}")
-        print("FAST TRAINER INITIALIZED")
-        print(f"{'='*70}")
-        print(f"  Device: {self.device}")
-        if self.use_amp:
-            print(f"  AMP: enabled (dtype={_amp_dtype_str})")
-        print(f"  Max steps: {self.config.max_steps:,}")
-        print(f"\n  Learning Rates (Natural Gradients!):")
-        print(f"    μ (means):        {config.M_mu_p_lr}")
-        print(f"    Σ (covariances):  {config.M_sigma_p_lr}")
-        print(f"    φ (gauge frames): {config.M_phi_lr}")
-        print(f"    Attention:        {config.M_attention_lr}")
-        print(f"    FFN:              {config.M_vfe_hyperparam_lr}")
-        print(f"    Output:           {config.M_output_lr}")
-        print(f"{'='*70}\n")
+        if not getattr(config, 'quiet', False):
+            print(f"\n{'='*70}")
+            print("FAST TRAINER INITIALIZED")
+            print(f"{'='*70}")
+            print(f"  Device: {self.device}")
+            if self.use_amp:
+                print(f"  AMP: enabled (dtype={_amp_dtype_str})")
+            print(f"  Max steps: {self.config.max_steps:,}")
+            print(f"\n  Learning Rates (Natural Gradients!):")
+            print(f"    μ (means):        {config.M_mu_p_lr}")
+            print(f"    Σ (covariances):  {config.M_sigma_p_lr}")
+            print(f"    φ (gauge frames): {config.M_phi_lr}")
+            print(f"    Attention:        {config.M_attention_lr}")
+            print(f"    FFN:              {config.M_vfe_hyperparam_lr}")
+            print(f"    Output:           {config.M_output_lr}")
+            print(f"{'='*70}\n")
 
         # Resume from checkpoint if specified
         if config.resume_from is not None:
@@ -153,7 +154,10 @@ class FastTrainer:
     def _create_optimizer(self) -> torch.optim.Optimizer:
         """Create optimizer — delegates to optimizer.py (single source of truth)."""
         from transformer.training.optimizer import create_optimizer
-        return create_optimizer(self.model, self.config)
+        return create_optimizer(
+            self.model, self.config,
+            verbose=not getattr(self.config, 'quiet', False),
+        )
 
     def _create_scheduler(self):
         """Create learning rate scheduler for all parameter groups."""
@@ -327,9 +331,10 @@ class FastTrainer:
 
     def train(self):
         """Main training loop with periodic validation, checkpointing, and early stopping."""
-        print(f"{'='*70}")
-        print("STARTING FAST TRAINING")
-        print(f"{'='*70}\n")
+        if not getattr(self.config, 'quiet', False):
+            print(f"{'='*70}")
+            print("STARTING FAST TRAINING")
+            print(f"{'='*70}\n")
 
         start_time = time.time()
         step_times = []

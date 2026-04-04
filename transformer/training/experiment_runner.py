@@ -585,16 +585,17 @@ class PublicationTrainer(FastTrainer):
 
     def __init__(self, *args, publication_metrics: PublicationMetrics = None, tokenizer=None, **kwargs):
         super().__init__(*args, **kwargs)
+        _log = logger.debug if getattr(self.config, 'quiet', False) else logger.info
 
         # Basic CSV metrics tracker
         metrics_path = self.config.checkpoint_dir / 'metrics.csv'
         self.metrics_tracker = PublicationMetricsTracker(metrics_path)
-        logger.info(f"Logging publication metrics to: {metrics_path}")
+        _log(f"Logging publication metrics to: {metrics_path}")
 
         # Comprehensive publication metrics (optional)
         self.pub_metrics = publication_metrics
         if self.pub_metrics:
-            logger.info(f"Comprehensive metrics enabled: {self.pub_metrics.experiment_dir}")
+            _log(f"Comprehensive metrics enabled: {self.pub_metrics.experiment_dir}")
 
         # Tokenizer for decoding sequences in interpretability outputs
         self.tokenizer = tokenizer
@@ -622,7 +623,7 @@ class PublicationTrainer(FastTrainer):
         for module in self.model.modules():
             if hasattr(module, '_collect_vfe_metrics'):
                 module._collect_vfe_metrics = True
-        logger.info("VFE dynamics metrics collection enabled")
+        _log("VFE dynamics metrics collection enabled")
 
         # =================================================================
         # Gauge geometry: Cartan preconditioning & SL(K) projection
@@ -646,7 +647,7 @@ class PublicationTrainer(FastTrainer):
                 self._cartan_preconditioner = build_cartan_projector(
                     generators, sym_dampening=sym_dampening
                 ).to(self.device)
-                logger.info(
+                _log(
                     f"Killing form preconditioning enabled (M-step): "
                     f"sym_dampening={sym_dampening} "
                     f"(non-compact directions dampened {1/sym_dampening:.0f}x)"
@@ -659,7 +660,7 @@ class PublicationTrainer(FastTrainer):
                 self._slk_trace_vec = build_slk_projector(
                     generators).to(self.device)
                 trace_norm = self._slk_trace_vec.norm().item()
-                logger.info(
+                _log(
                     f"SL(K) projection enabled: "
                     f"removing trace component (||v||={trace_norm:.2f}, "
                     f"n_gen={generators.shape[0]} -> {generators.shape[0]-1} effective d.o.f.)"
@@ -1467,9 +1468,10 @@ class PublicationTrainer(FastTrainer):
 
     def train(self):
         """Training loop with publication metrics."""
-        logger.info("="*70)
-        logger.info("PUBLICATION-QUALITY TRAINING")
-        logger.info("="*70)
+        _log = logger.debug if getattr(self.config, 'quiet', False) else logger.info
+        _log("="*70)
+        _log("PUBLICATION-QUALITY TRAINING")
+        _log("="*70)
 
         # Support resuming from a checkpoint
         start_step = self.global_step
@@ -1924,6 +1926,7 @@ def run_single_experiment(
     checkpoint_dir: Path,
     args: argparse.Namespace = None,
     enable_publication_metrics: bool = True,
+    quiet: bool = False,
 ) -> Dict:
     """
     Run a single training experiment.
@@ -1935,13 +1938,17 @@ def run_single_experiment(
         checkpoint_dir: Directory to save checkpoints
         args: Command-line arguments for logging
         enable_publication_metrics: Whether to enable comprehensive publication metrics
+        quiet: Suppress verbose banners/config dumps (for ablation sweeps)
 
     Returns:
         Dictionary with final metrics
     """
-    logger.info("="*70)
-    logger.info(f"EXPERIMENT: FFN_MODE = {ffn_mode}")
-    logger.info("="*70)
+    # Use logger.debug for verbose blocks when quiet
+    _info = logger.debug if quiet else logger.info
+
+    _info("="*70)
+    _info(f"EXPERIMENT: FFN_MODE = {ffn_mode}")
+    _info("="*70)
 
     # Override FFN mode in config
     config = config.copy()
@@ -1959,11 +1966,19 @@ def run_single_experiment(
     # =================================================================
 
     dataset_name = config.get('dataset', 'wikitext-2')
-    logger.info("="*70)
-    logger.info(f"LOADING {dataset_name.upper()} DATA")
-    logger.info("="*70)
+    _info("="*70)
+    _info(f"LOADING {dataset_name.upper()} DATA")
+    _info("="*70)
 
-    train_loader, val_loader, test_loader, actual_vocab_size, tokenizer = _create_dataloaders(config)
+    # Suppress dataset loading prints when quiet
+    from transformer.data import datasets as _datasets_mod
+    _prev_quiet = _datasets_mod.QUIET
+    if quiet:
+        _datasets_mod.QUIET = True
+    try:
+        train_loader, val_loader, test_loader, actual_vocab_size, tokenizer = _create_dataloaders(config)
+    finally:
+        _datasets_mod.QUIET = _prev_quiet
     use_char = tokenizer is None  # Character-level tokenizer returns None
 
     config['vocab_size'] = actual_vocab_size
@@ -1972,23 +1987,23 @@ def run_single_experiment(
     # Model Creation - Three distinct modes
     # =================================================================
 
-    logger.info("="*70)
-    logger.info("CREATING MODEL")
-    logger.info("="*70)
-    logger.info(f"  N (seq len): {config['max_seq_len']}")
-    logger.info(f"  K (embed): {config['embed_dim']}")
-    logger.info(f"  Layers: {config['n_layers']}")
-    logger.info(f"  Vocab: {actual_vocab_size} ({'char' if use_char else 'BPE'})")
+    _info("="*70)
+    _info("CREATING MODEL")
+    _info("="*70)
+    _info(f"  N (seq len): {config['max_seq_len']}")
+    _info(f"  K (embed): {config['embed_dim']}")
+    _info(f"  Layers: {config['n_layers']}")
+    _info(f"  Vocab: {actual_vocab_size} ({'char' if use_char else 'BPE'})")
 
     # =====================================================================
     # MODE 1: STANDARD TRANSFORMER (baseline)
     # =====================================================================
     if ffn_mode == 'standard':
-        logger.info("  Model type: STANDARD TRANSFORMER (dot-product attention)")
-        logger.info("  - Attention: Q*K softmax")
-        logger.info("  - FFN: Learned MLP (GELU)")
-        logger.info("  - Output: Linear projection")
-        logger.info("  - Learning: Backprop")
+        _info("  Model type: STANDARD TRANSFORMER (dot-product attention)")
+        _info("  - Attention: Q*K softmax")
+        _info("  - FFN: Learned MLP (GELU)")
+        _info("  - Output: Linear projection")
+        _info("  - Learning: Backprop")
         model_config = {
             'vocab_size': actual_vocab_size,
             'embed_dim': config['embed_dim'],
@@ -2014,15 +2029,15 @@ def run_single_experiment(
     elif ffn_mode == 'hybrid':
         from transformer.baselines.hybrid_gauge_transformer import HybridGaugeTransformerLM
         _pb = config.get('use_prior_bank', True)
-        logger.info("  Model type: HYBRID GAUGE-ATTENTION TRANSFORMER")
-        logger.info("  - Attention: KL-divergence based (gauge-theoretic)")
-        logger.info("  - FFN: Standard GELU MLP")
-        logger.info(f"  - Embeddings: {'PriorBank (KL encode/decode)' if _pb else 'nn.Embedding + nn.Linear'}")
-        logger.info("  - Learning: Backprop")
+        _info("  Model type: HYBRID GAUGE-ATTENTION TRANSFORMER")
+        _info("  - Attention: KL-divergence based (gauge-theoretic)")
+        _info("  - FFN: Standard GELU MLP")
+        _info(f"  - Embeddings: {'PriorBank (KL encode/decode)' if _pb else 'nn.Embedding + nn.Linear'}")
+        _info("  - Learning: Backprop")
 
         if 'kappa_beta' not in config:
             config['kappa_beta'] = 1.0
-        logger.info(f"  kappa_beta: {config['kappa_beta']}")
+        _info(f"  kappa_beta: {config['kappa_beta']}")
 
         model = HybridGaugeTransformerLM(config)
 
@@ -2030,17 +2045,17 @@ def run_single_experiment(
     # MODE 3: VFE_DYNAMIC TRANSFORMER (EM-step, uses backprop)
     # =====================================================================
     else:
-        logger.info("  Model type: GAUGE VFE TRANSFORMER (KL-divergence attention)")
-        logger.info("  - Attention: KL-divergence based")
-        logger.info("  - FFN: VFE EM-step dynamics")
-        logger.info("  - Output: Linear projection")
-        logger.info("  - Learning: Backprop")
-        logger.info("  - Position: None (emergent)")
+        _info("  Model type: GAUGE VFE TRANSFORMER (KL-divergence attention)")
+        _info("  - Attention: KL-divergence based")
+        _info("  - FFN: VFE EM-step dynamics")
+        _info("  - Output: Linear projection")
+        _info("  - Learning: Backprop")
+        _info("  - Position: None (emergent)")
 
         # kappa_beta: scalar sharpness dial (dimension scaling tau=2*sqrt(K) is hardcoded in attention)
         if 'kappa_beta' not in config:
             config['kappa_beta'] = 1.0
-        logger.info(f"  kappa_beta: {config['kappa_beta']}")
+        _info(f"  kappa_beta: {config['kappa_beta']}")
 
         model = GaugeTransformerLM(config)
 
@@ -2064,10 +2079,10 @@ def run_single_experiment(
         non_embed_params = sum(
             p.numel() for name, p in model.named_parameters() if 'embed' not in name)
 
-    logger.info("Model Parameters:")
-    logger.info(f"  Total:         {total_params:,}")
-    logger.info(f"  Non-embedding: {non_embed_params:,}")
-    logger.info(f"  Embedding:     {total_params - non_embed_params:,}")
+    _info("Model Parameters:")
+    _info(f"  Total:         {total_params:,}")
+    _info(f"  Non-embedding: {non_embed_params:,}")
+    _info(f"  Embedding:     {total_params - non_embed_params:,}")
 
     # =================================================================
     # FLOPs Estimation (Peer Review M2e)
@@ -2111,11 +2126,11 @@ def run_single_experiment(
 
     step_flops = flops_result['step_total']
     total_flops = step_flops * max_steps
-    logger.info("FLOPs Estimation (Peer Review M2e):")
-    logger.info(f"  FLOPs/step:     {format_flops(step_flops)}")
-    logger.info(f"  Total training: {format_flops(total_flops)}")
+    _info("FLOPs Estimation (Peer Review M2e):")
+    _info(f"  FLOPs/step:     {format_flops(step_flops)}")
+    _info(f"  Total training: {format_flops(total_flops)}")
     if not is_standard:
-        logger.info(
+        _info(
             f"  Key costs: mat_exp={format_flops(flops_result.get('transport_mat_exp', 0))}/layer, "
             f"KL={format_flops(flops_result.get('kl_divergence', 0))}/layer"
         )
@@ -2196,11 +2211,14 @@ def run_single_experiment(
 
         # Learnable per-head kappa warmup
         kappa_warmup_steps=config.get('kappa_warmup_steps', 0),
+
+        # Output verbosity
+        quiet=quiet,
     )
 
-    logger.info("="*70)
-    logger.info("TRAINING CONFIGURATION")
-    logger.info("="*70)
+    _info("="*70)
+    _info("TRAINING CONFIGURATION")
+    _info("="*70)
     # Calculate training duration metrics
     steps_per_epoch = len(train_loader)
     batch_size = config['batch_size']
@@ -2216,55 +2234,55 @@ def run_single_experiment(
     if train_config.epochs is not None and train_config.epochs > 0:
         effective_steps = train_config.epochs * steps_per_epoch
         total_tokens = effective_steps * tokens_per_step
-        logger.info(f"  Epochs:         {train_config.epochs}")
-        logger.info(f"  Steps/epoch:    {steps_per_epoch:,}")
-        logger.info(f"  Total steps:    {effective_steps:,}")
-        logger.info(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
+        _info(f"  Epochs:         {train_config.epochs}")
+        _info(f"  Steps/epoch:    {steps_per_epoch:,}")
+        _info(f"  Total steps:    {effective_steps:,}")
+        _info(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
         if dataset_tokens:
             coverage = total_tokens / dataset_tokens * 100
-            logger.info(f"  Dataset:        {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
+            _info(f"  Dataset:        {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
     else:
         equiv_epochs = train_config.max_steps / steps_per_epoch
         total_tokens = train_config.max_steps * tokens_per_step
-        logger.info(f"  Max steps:      {train_config.max_steps:,}")
-        logger.info(f"  Steps/epoch:    {steps_per_epoch:,}")
-        logger.info(f"  *** EPOCHS:     {equiv_epochs:.4f} ***")
-        logger.info(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
+        _info(f"  Max steps:      {train_config.max_steps:,}")
+        _info(f"  Steps/epoch:    {steps_per_epoch:,}")
+        _info(f"  *** EPOCHS:     {equiv_epochs:.4f} ***")
+        _info(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
         if dataset_tokens:
             coverage = total_tokens / dataset_tokens * 100
-            logger.info(f"  Dataset:        {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
-    logger.info(f"  Warmup:         {train_config.warmup_steps}")
-    logger.info(f"  Batch size:     {batch_size}")
-    logger.info(f"  Seq length:     {seq_len}")
-    logger.info(f"  Num workers:    {config.get('num_workers', 0)}")
-    logger.info("Free Energy Weights:")
-    logger.info(f"  alpha (self-consistency): {train_config.M_alpha}")
-    logger.info(f"  beta (belief align):      {train_config.M_beta}")
-    logger.info(f"  gamma (model align):      {train_config.lambda_gamma}")
+            _info(f"  Dataset:        {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
+    _info(f"  Warmup:         {train_config.warmup_steps}")
+    _info(f"  Batch size:     {batch_size}")
+    _info(f"  Seq length:     {seq_len}")
+    _info(f"  Num workers:    {config.get('num_workers', 0)}")
+    _info("Free Energy Weights:")
+    _info(f"  alpha (self-consistency): {train_config.M_alpha}")
+    _info(f"  beta (belief align):      {train_config.M_beta}")
+    _info(f"  gamma (model align):      {train_config.lambda_gamma}")
 
     # P-FLOW configuration
     if train_config.use_p_flow:
-        logger.info("P-FLOW (EMA prior updates): ENABLED")
-        logger.info(f"  EMA decay: {train_config.p_flow_ema_decay} ({(1-train_config.p_flow_ema_decay)*100:.1f}% update per step)")
+        _info("P-FLOW (EMA prior updates): ENABLED")
+        _info(f"  EMA decay: {train_config.p_flow_ema_decay} ({(1-train_config.p_flow_ema_decay)*100:.1f}% update per step)")
     else:
-        logger.info("P-FLOW: disabled")
+        _info("P-FLOW: disabled")
 
     # DELTA RULE configuration
     if train_config.use_delta_rule_w_out:
-        logger.info("DELTA RULE (backprop-free W_out): ENABLED")
-        logger.info(f"  Learning rate: {train_config.delta_rule_lr}")
+        _info("DELTA RULE (backprop-free W_out): ENABLED")
+        _info(f"  Learning rate: {train_config.delta_rule_lr}")
         if train_config.use_p_flow:
-            logger.info("  ** FULLY BACKPROP-FREE MODE **")
+            _info("  ** FULLY BACKPROP-FREE MODE **")
     else:
-        logger.info("DELTA RULE: disabled (using backprop for W_out)")
+        _info("DELTA RULE: disabled (using backprop for W_out)")
 
     # =================================================================
     # Create Trainer (Pure FEP or Standard)
     # =================================================================
 
-    logger.info("="*70)
-    logger.info("INITIALIZING TRAINER")
-    logger.info("="*70)
+    _info("="*70)
+    _info("INITIALIZING TRAINER")
+    _info("="*70)
 
     # Create comprehensive publication metrics tracker
     pub_metrics = None
@@ -2280,14 +2298,14 @@ def run_single_experiment(
         semantic_interval = config.get('semantic_analysis_interval',
                                        getattr(args, 'semantic_analysis_interval', 10000) if args else 10000)
         pub_metrics.set_semantic_analysis_interval(semantic_interval)
-        logger.info(f"Gauge frame semantic analysis every {semantic_interval} steps")
+        _info(f"Gauge frame semantic analysis every {semantic_interval} steps")
 
         # Configure holonomy diagnostics interval
         holonomy_interval = config.get('holonomy_interval', 500)
         holonomy_sample_size = config.get('holonomy_sample_size', 500)
         pub_metrics.set_holonomy_interval(
             holonomy_interval, holonomy_sample_size)
-        logger.info(f"Holonomy diagnostics every {holonomy_interval} steps (sample_size={holonomy_sample_size})")
+        _info(f"Holonomy diagnostics every {holonomy_interval} steps (sample_size={holonomy_sample_size})")
 
     trainer = PublicationTrainer(
         model=model,
@@ -2303,26 +2321,34 @@ def run_single_experiment(
     # Training (Standard Backprop)
     # =================================================================
 
-    logger.info("="*70)
-    logger.info("STARTING TRAINING")
-    logger.info("="*70)
-    logger.info(f"Device: {device}")
-    logger.info(f"FFN mode: {ffn_mode}")
-    # Show epochs-based info if set
-    if train_config.epochs is not None and train_config.epochs > 0:
-        eff_steps = train_config.epochs * steps_per_epoch
-        logger.info(f"Epochs: {train_config.epochs} ({steps_per_epoch:,} steps/epoch = {eff_steps:,} total)")
+    # Print compact summary when quiet, full banners otherwise
+    if quiet:
+        _params_str = f"{total_params/1e6:.2f}M" if total_params >= 1e6 else f"{total_params/1e3:.1f}K"
+        _steps = train_config.max_steps if (train_config.epochs is None or train_config.epochs <= 0) else train_config.epochs * steps_per_epoch
+        logger.info(f"  [Experiment] {ffn_mode} | {_params_str} params | "
+                     f"K={config['embed_dim']}, N={config['max_seq_len']}, L={config['n_layers']} | "
+                     f"{_steps:,} steps")
     else:
-        logger.info(f"Total steps: {train_config.max_steps:,}")
-    logger.info("NOTE: First few batches may be slow (JIT compilation)")
-    logger.info("="*70)
+        _info("="*70)
+        _info("STARTING TRAINING")
+        _info("="*70)
+        _info(f"Device: {device}")
+        _info(f"FFN mode: {ffn_mode}")
+        # Show epochs-based info if set
+        if train_config.epochs is not None and train_config.epochs > 0:
+            eff_steps = train_config.epochs * steps_per_epoch
+            _info(f"Epochs: {train_config.epochs} ({steps_per_epoch:,} steps/epoch = {eff_steps:,} total)")
+        else:
+            _info(f"Total steps: {train_config.max_steps:,}")
+        _info("NOTE: First few batches may be slow (JIT compilation)")
+        _info("="*70)
 
     try:
         trainer.train()
 
-        logger.info("="*70)
-        logger.info("TRAINING COMPLETE!")
-        logger.info("="*70)
+        _info("="*70)
+        _info("TRAINING COMPLETE!")
+        _info("="*70)
 
         # Final evaluation
         final_metrics = trainer.validate()
@@ -2333,21 +2359,21 @@ def run_single_experiment(
         if final_metrics['ce_loss'] < trainer.best_val_ce:
             trainer.best_val_ce = final_metrics['ce_loss']
 
-        logger.info("Final Validation Metrics:")
-        logger.info(f"  Loss:       {final_metrics['loss']:.4f}")
-        logger.info(f"  Perplexity: {final_metrics['perplexity']:.2f}")
+        _info("Final Validation Metrics:")
+        _info(f"  Loss:       {final_metrics['loss']:.4f}")
+        _info(f"  Perplexity: {final_metrics['perplexity']:.2f}")
 
         # vs random baseline
         random_ppl = actual_vocab_size
         improvement = random_ppl / final_metrics['perplexity']
-        logger.info("Validation improvement over random:")
-        logger.info(f"  Random:     {random_ppl:.0f}")
-        logger.info(f"  Model:      {final_metrics['perplexity']:.2f}")
-        logger.info(f"  Factor:     {improvement:.1f}x better!")
+        _info("Validation improvement over random:")
+        _info(f"  Random:     {random_ppl:.0f}")
+        _info(f"  Model:      {final_metrics['perplexity']:.2f}")
+        _info(f"  Factor:     {improvement:.1f}x better!")
 
         # Save final checkpoint
         final_ckpt = trainer.save_checkpoint(is_best=True)
-        logger.info(f"Saved: {final_ckpt}")
+        _info(f"Saved: {final_ckpt}")
 
         # Generate VFE dynamics figures from training metrics CSV
         try:
@@ -2357,7 +2383,7 @@ def run_single_experiment(
                 vfe_fig_dir = exp_checkpoint_dir / 'vfe_dynamics_figures'
                 saved_figs = generate_all_vfe_figures(metrics_csv, vfe_fig_dir)
                 if saved_figs:
-                    logger.info(f"Generated {len(saved_figs)} VFE dynamics figures in {vfe_fig_dir}")
+                    _info(f"Generated {len(saved_figs)} VFE dynamics figures in {vfe_fig_dir}")
         except Exception as e:
             logger.warning(f"VFE dynamics figure generation failed: {e}")
 

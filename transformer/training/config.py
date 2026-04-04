@@ -219,6 +219,11 @@ class TrainingConfig:
     track_iteration_diagnostics: bool = False
     verbose_diagnostics: bool         = False
     diagnostics_interval: int         = 50
+
+    # ==========================================================================
+    # Output verbosity
+    # ==========================================================================
+    quiet: bool = False  # Suppress verbose banners/config dumps (for ablation sweeps)
     
 
     def __post_init__(self):

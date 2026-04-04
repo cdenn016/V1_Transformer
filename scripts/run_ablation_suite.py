@@ -669,6 +669,7 @@ def run_sweep(
                 device=device,
                 checkpoint_dir=run_dir,
                 enable_publication_metrics=False,
+                quiet=True,
             )
             elapsed = time.time() - t0
 
