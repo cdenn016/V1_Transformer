@@ -56,10 +56,10 @@ BASELINE_CONFIG = {
     # === Architecture ===
     'vocab_size':            50257,
     'embed_dim':             10,
-    'max_seq_len':           28,
+    'max_seq_len':           32,
     
-    'batch_size':            612, 
-    'max_steps':             2500,
+    'batch_size':            712, 
+    'max_steps':             2000,
     
    'n_layers':              1,
    'ffn_n_iterations':      1,
@@ -105,7 +105,7 @@ BASELINE_CONFIG = {
    
    'E_alpha':               1,      # E-step prior coupling weight
    'E_lambda_belief':       1,      # E-step belief alignment weight
-   'E_lambda_softmax':      1,
+   'E_lambda_softmax':      5,
    
    
    'E_learnable_alpha':     True,   # Adaptive α_i = c0/(b0 + KL) per dimension
@@ -153,7 +153,7 @@ BASELINE_CONFIG = {
    # === Phi gradient geometry ===
    'phi_natural_gradient':       'killing',
    'use_killing_form':           True,
-   'killing_form_sym_dampening': 0.5,
+   'killing_form_sym_dampening': 1,
 
    # === Position encoding ===
    'use_rope':           True,
@@ -175,7 +175,7 @@ BASELINE_CONFIG = {
    # beliefs (q₀) AND serve as prior parameters (μ_p, σ_p), so these rates
    # indirectly affect E-step initialization speed.
    'M_mu_p_lr':           0.05,   # M-step prior mean embeddings (μ_p)
-   'M_sigma_p_lr':        0.005, # M-step prior covariance embeddings (log σ_p)
+   'M_sigma_p_lr':        0.015, # M-step prior covariance embeddings (log σ_p)
    'M_phi_lr':            0.0075, # M-step gauge frame embeddings (φ)
    'M_vfe_hyperparam_lr': 0.05, # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr)
    'M_attention_lr':      0.005,  # M-step attention params (W_O, constant_omega)
@@ -235,9 +235,10 @@ BASELINE_CONFIG = {
    'hidden_dim':      508,
    'warmup_steps':    100,
    'num_workers':     10,
-   'use_amp':         True, 
-   'use_compile':     True,
-   'compile_mode':    'max-autotune',  # 'default', 'reduce-overhead', 'max-autotune'
+   
+   'use_amp':         False, 
+   'use_compile':     False,
+   'compile_mode':    'reduce-overhead',  # 'default', 'reduce-overhead', 'max-autotune'
 
     'dataset': 'wikitext-103', #'wiki-2' for quick sweeps
 }
@@ -269,7 +270,7 @@ SWEEPS = {
     'E_lambda_belief': {
         'description': 'E-step belief alignment weight (VFE coupling term)',
         'param': 'E_lambda_belief',
-        'values': [0.5, 1, 15, 25, 50],
+        'values': [0, 0.5, 1, 2.5, 5],
         'baseline_value': 1,
     },
 
@@ -277,7 +278,7 @@ SWEEPS = {
         'description': 'E-step softmax coupling weight (∂β/∂θ·KL Boltzmann gate)',
         'param': 'E_lambda_softmax',
         'values': [0, 0.5, 1, 5.0, 10.0, 15],
-        'baseline_value': 0,
+        'baseline_value': 5,
     },
 
     'M_beta': {
@@ -298,8 +299,8 @@ SWEEPS = {
     'kappa_beta': {
         'description': 'Attention/VFE temperature τ: β_ij = softmax(-KL/κ√K). Higher = softer attention',
         'param': 'kappa_beta',
-        'values': [0.2, 1, 2, 3, 4, 5, 8],
-        'baseline_value': 1.0,
+        'values': [1, 2, 3.16, 4, 5, 8, 12, 18, 25, 40],
+        'baseline_value': 3.16,
     },
 
    
@@ -503,8 +504,8 @@ SWEEPS = {
     'killing_form_sym_dampening': {
         'description': 'killing form sym dampening',
         'param': 'killing_form_sym_dampening',
-        'values': [0, 0.1, 0.25, 0.5, 1],
-        'baseline_value': 0.1,
+        'values': [0.01, 0.1, 0.25, 0.5, 1],
+        'baseline_value': 0.5,
     },
 }
 
@@ -517,30 +518,30 @@ SWEEP_ORDER = [
     #'M_alpha',Done
     #'M_beta', Done
     #'mass_phi', Done
-
-    #'kappa_beta',
+    
     #'sigma_ce_scale',
     #'lambda_hyper',
-    
+    #'kappa_beta',
     
     #'non_embed_weight_decay',
-
-    'E_lambda_belief',
-    'E_lambda_softmax',
-    'embed_weight_decay',
-    'killing_form_sym_dampening',
+    #'killing_form_sym_dampening',
+    
+   # 'E_lambda_belief',
+    #'E_lambda_softmax',
+    #'embed_weight_decay',
+    
     
     #'E_alpha',
     
    # 'M_mu_p_lr',
    # 'M_sigma_p_lr',
-   # 'M_phi_lr',
-   # 'E_phi_lr',
+    'M_phi_lr',
+    'E_phi_lr',
     
-   # 'M_vfe_hyperparam_lr',
+    'M_vfe_hyperparam_lr',
 
-    #'E_mu_q_lr',
-    #'E_sigma_q_lr',
+    'E_mu_q_lr',
+    'E_sigma_q_lr',
 
     #'prior_bank_tau',
 
@@ -638,7 +639,7 @@ def run_sweep(
             print(f"\n--- Run {i+1}/{len(runs)}: {label} [CACHED] ---")
             continue
 
-        print(f"\n--- Run {i+1}/{len(runs)}: {label} ---")
+        print(f"\n--- Run {i+1}/{len(runs)}: {label} ---\n\n\n\n")
 
         # Override max_steps if requested
         if max_steps_override is not None:
@@ -893,9 +894,9 @@ def generate_plots(output_dir: Path):
         ax.set_title(f"Ablation: {meta.get('description', sweep_name)}")
         fig.tight_layout()
         fig.savefig(fig_dir / f'{sweep_name}.png', dpi=150)
-        fig.savefig(fig_dir / f'{sweep_name}.pdf')
+        
         plt.close(fig)
-        print(f"  Saved: {fig_dir / sweep_name}.{{png,pdf}}")
+       
 
     # Combined summary figure
     all_bests = []
@@ -928,9 +929,9 @@ def generate_plots(output_dir: Path):
         ax.invert_yaxis()
         fig.tight_layout()
         fig.savefig(fig_dir / 'sensitivity_summary.png', dpi=150)
-        fig.savefig(fig_dir / 'sensitivity_summary.pdf')
+       
         plt.close(fig)
-        print(f"  Saved: {fig_dir / 'sensitivity_summary'}.{{png,pdf}}")
+        print(f"  Saved: {fig_dir / 'sensitivity_summary'}.{{png}}")
 
     print(f"\nAll figures saved to: {fig_dir}")
 
