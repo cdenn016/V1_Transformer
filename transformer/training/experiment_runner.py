@@ -20,6 +20,7 @@ Public API:
     - IterationDiagnosticsTracker — Per-VFE-iteration diagnostics
 """
 
+import gc
 import logging
 import torch
 import torch.nn.functional as F
@@ -2414,6 +2415,12 @@ def run_single_experiment(
             result['test_bpc'] = test_metrics['test_bpc']
             result['test_improvement'] = test_metrics['improvement']
 
+        # Free large objects before returning to caller (critical for ablation sweeps)
+        del trainer, model, train_loader, val_loader, test_loader
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         return result
 
     except KeyboardInterrupt:
@@ -2422,10 +2429,18 @@ def run_single_experiment(
         logger.info("="*70)
         ckpt = trainer.save_checkpoint(is_best=False)
         logger.info(f"Saved: {ckpt}")
+        del trainer, model, train_loader, val_loader, test_loader
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         return None
 
     except Exception as e:
         logger.error(f"Error: {e}")
+        del trainer, model, train_loader, val_loader, test_loader
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         raise
 
 
