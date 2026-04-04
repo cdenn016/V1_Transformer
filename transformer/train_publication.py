@@ -163,6 +163,8 @@ EM_CONFIG = {
     'learnable_pb_temperature': True,
     'mask_self_attention':      True,  # Prevent attention collapse?
   
+    'gauge_fixed_priors':       True,    
+  
     'kappa_beta':               3.16,
     'kappa_warmup_steps':       7500,  # freeze kappa for first n steps
     'learnable_head_kappa':     True, # If True, learn per-head κ_h via log_kappa_per_head
@@ -304,7 +306,7 @@ EM_CONFIG = {
     'track_iteration_diagnostics': False,
     'diagnostics_interval':        25,
     
-    'gauge_fixed_priors':          False,
+    
     'tie_embeddings':              False,
     'ffn_mode':                    'VFE_dynamic',
     
