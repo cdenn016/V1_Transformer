@@ -146,6 +146,9 @@ class PriorBank(nn.Module):
                 raise ValueError("gauge_fixed_priors=True requires generators to be provided")
             self.register_buffer('generators', generators)
 
+            # Note: decode() uses gradient checkpointing for gauge_fixed_priors=True
+            # to avoid retaining V×K×K autograd intermediates in memory.
+
             # Single base prior mean μ_0 — all token priors are gauge transforms:
             #   μ_v = A_v @ μ_0  where A_v = exp(φ_v · G) ∈ GL⁺(K)
             self.base_prior_mu = nn.Parameter(torch.randn(embed_dim) * init_std)
@@ -408,20 +411,26 @@ class PriorBank(nn.Module):
         B, N, K = mu_q.shape
 
         # Full covariance (B, N, K, K) → extract diagonal variances (B, N, K).
-        # The fused KL only needs tr(Σ_q Σ_p⁻¹) = Σ_k σ_q[k]/σ_p[k] when
-        # priors are diagonal, so off-diagonal Σ_q entries don't contribute.
         if sigma_q.dim() == 4:
             sigma_q = torch.diagonal(sigma_q, dim1=-2, dim2=-1)  # (B, N, K)
         V = self.vocab_size
         device = mu_q.device
 
-        # Get all token priors: mu_p (V, K), sigma_p (V, K) or (V, K, K)
+        # Get all token priors: mu_p (V, K), sigma_p (V, K).
+        # When gauge_fixed_priors=True, use gradient checkpointing to avoid
+        # retaining V×K×K intermediates in the autograd graph (~480MB at K=20).
+        # Forward values are identical; intermediates recomputed during backward.
         all_token_ids = torch.arange(V, device=device)
-        _prior_out = self._get_prior_for_tokens(all_token_ids)
+        if self.gauge_fixed_priors and self.training:
+            _prior_out = torch.utils.checkpoint.checkpoint(
+                self._get_prior_for_tokens, all_token_ids,
+                use_reentrant=False,
+            )
+        else:
+            _prior_out = self._get_prior_for_tokens(all_token_ids)
         mu_p, sigma_p = _prior_out[0], _prior_out[1]
 
         # AMP guard: entire decode KL uses division, log, and 1/sigma — float32 required.
-        # Avoid .float() copy when already float32 to prevent OOM at large K.
         with torch.amp.autocast('cuda', enabled=False):
             if mu_q.dtype != torch.float32:
                 mu_q = mu_q.float()
