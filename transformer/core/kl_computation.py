@@ -153,6 +153,15 @@ def _kl_kernel_dense(
                 _nr("chol_recover")
                 return L
         _nr("chol_fail")
+        import warnings
+        warnings.warn(
+            f"Cholesky failed after 5 regularization rounds (max reg={reg:.1e}). "
+            f"Falling back to identity covariance — KL values and gradients from "
+            f"this batch element are unreliable. Check for extreme phi values or "
+            f"NaN in transported covariances.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
         return torch.linalg.cholesky(I.expand_as(mat) + eps * I)
 
     try:
