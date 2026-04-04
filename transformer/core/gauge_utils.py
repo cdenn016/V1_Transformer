@@ -285,71 +285,76 @@ def fused_block_diagonal_kl_diag(
 
         if d == 1:
             # ── Scalar fast path: element-wise, no matrix ops ───────────
-            # Squeeze out trivial 1×1 matrix dims → (n_blocks, B, N)
-            ep = exp_phi_stack.squeeze(-1).squeeze(-1)
-            en = exp_neg_phi_stack.squeeze(-1).squeeze(-1)
-            mu_s = mu_stack.squeeze(-1)
-            sig_s = sigma_stack.squeeze(-1)
+            # AMP guard: sigma division and log must stay float32
+            with torch.amp.autocast('cuda', enabled=False):
+                # Squeeze out trivial 1×1 matrix dims → (n_blocks, B, N)
+                ep = exp_phi_stack.float().squeeze(-1).squeeze(-1)
+                en = exp_neg_phi_stack.float().squeeze(-1).squeeze(-1)
+                mu_s = mu_stack.float().squeeze(-1)
+                sig_s = sigma_stack.float().squeeze(-1)
 
-            # Omega_ij = exp_phi_i * exp_neg_phi_j  (scalar product)
-            omega = ep[:, :, :, None] * en[:, :, None, :]  # (g, B, N, N)
+                # Omega_ij = exp_phi_i * exp_neg_phi_j  (scalar product)
+                omega = ep[:, :, :, None] * en[:, :, None, :]  # (g, B, N, N)
 
-            # Transport mean and variance
-            mu_t = omega * mu_s[:, :, None, :]
-            sig_t = (omega * omega * sig_s[:, :, None, :]).clamp(min=eps)
+                # Transport mean and variance
+                mu_t = omega * mu_s[:, :, None, :]
+                sig_t = (omega * omega * sig_s[:, :, None, :]).clamp(min=eps)
 
-            mu_i = mu_s[:, :, :, None]
-            sig_i = sig_s[:, :, :, None].clamp(min=eps)
-            delta = mu_i - mu_t
+                mu_i = mu_s[:, :, :, None]
+                sig_i = sig_s[:, :, :, None].clamp(min=eps)
+                delta = mu_i - mu_t
 
-            kl = 0.5 * (sig_i / sig_t + delta * delta / sig_t - 1.0
-                        + torch.log(sig_t) - torch.log(sig_i))
-            kl = kl.clamp(min=0.0, max=kl_max)
-            # NaN → kl_max (repulsive): a NaN pair should be IGNORED (β→0),
-            # not ATTENDED (β→1). Using nan=0.0 would make NaN pairs maximally
-            # attractive under softmax, which is the wrong default.
-            kl = kl.nan_to_num(nan=kl_max, posinf=kl_max, neginf=0.0)
+                kl = 0.5 * (sig_i / sig_t + delta * delta / sig_t - 1.0
+                            + torch.log(sig_t) - torch.log(sig_i))
+                kl = kl.clamp(min=0.0, max=kl_max)
+                kl = kl.nan_to_num(nan=kl_max, posinf=kl_max, neginf=0.0)
 
             kl_total = kl_total + kl.sum(dim=0)  # sum over blocks → (B,N,N)
 
         else:
             # ── Row-tiled path: peak memory reduced by N/_tile_size ─────
-            for i_start in range(0, N, _tile_size):
-                i_end = min(i_start + _tile_size, N)
+            # AMP guard: sigma transport, division, and log must stay float32
+            with torch.amp.autocast('cuda', enabled=False):
+                _mu_f32 = mu_stack.float()
+                _sig_f32 = sigma_stack.float()
+                _ep_f32 = exp_phi_stack.float()
+                _en_f32 = exp_neg_phi_stack.float()
+                for i_start in range(0, N, _tile_size):
+                    i_end = min(i_start + _tile_size, N)
 
-                # Omega tile: (n_blocks, B, tile, N, d, d)
-                ep_tile = exp_phi_stack[:, :, i_start:i_end]
-                Omega_tile = torch.einsum(
-                    'gbikl,gbjlm->gbijkm', ep_tile, exp_neg_phi_stack)
+                    # Omega tile: (n_blocks, B, tile, N, d, d)
+                    ep_tile = _ep_f32[:, :, i_start:i_end]
+                    Omega_tile = torch.einsum(
+                        'gbikl,gbjlm->gbijkm', ep_tile, _en_f32)
 
-                # Transport mean and diagonal variance
-                mu_t = torch.einsum(
-                    'gbijkl,gbjl->gbijk', Omega_tile, mu_stack)
-                sig_t = torch.einsum(
-                    'gbijkl,gbijkl,gbjl->gbijk',
-                    Omega_tile, Omega_tile, sigma_stack
-                ).clamp(min=eps)
-                del Omega_tile
+                    # Transport mean and diagonal variance
+                    mu_t = torch.einsum(
+                        'gbijkl,gbjl->gbijk', Omega_tile, _mu_f32)
+                    sig_t = torch.einsum(
+                        'gbijkl,gbijkl,gbjl->gbijk',
+                        Omega_tile, Omega_tile, _sig_f32
+                    ).clamp(min=eps)
+                    del Omega_tile
 
-                # KL for this tile of query rows
-                mu_i = mu_stack[:, :, i_start:i_end, None, :].expand(
-                    -1, -1, -1, N, -1)
-                sig_i = sigma_stack[:, :, i_start:i_end, None, :].expand(
-                    -1, -1, -1, N, -1)
-                delta = mu_t - mu_i
+                    # KL for this tile of query rows
+                    mu_i = _mu_f32[:, :, i_start:i_end, None, :].expand(
+                        -1, -1, -1, N, -1)
+                    sig_i = _sig_f32[:, :, i_start:i_end, None, :].expand(
+                        -1, -1, -1, N, -1)
+                    delta = mu_t - mu_i
 
-                trace = (sig_i / sig_t).sum(dim=-1)
-                mahal = (delta * delta / sig_t).sum(dim=-1)
-                logdet = (torch.log(sig_t) - torch.log(sig_i)).sum(dim=-1)
+                    trace = (sig_i / sig_t).sum(dim=-1)
+                    mahal = (delta * delta / sig_t).sum(dim=-1)
+                    logdet = (torch.log(sig_t) - torch.log(sig_i)).sum(dim=-1)
 
-                kl_tile = 0.5 * (trace + mahal - d + logdet)
-                kl_tile = kl_tile.clamp(min=0.0, max=kl_max)
-                kl_tile = kl_tile.nan_to_num(
-                    nan=kl_max, posinf=kl_max, neginf=0.0)
+                    kl_tile = 0.5 * (trace + mahal - d + logdet)
+                    kl_tile = kl_tile.clamp(min=0.0, max=kl_max)
+                    kl_tile = kl_tile.nan_to_num(
+                        nan=kl_max, posinf=kl_max, neginf=0.0)
 
-                # Sum over blocks and accumulate into output rows
-                kl_total[:, i_start:i_end, :] = (
-                    kl_total[:, i_start:i_end, :] + kl_tile.sum(dim=0))
+                    # Sum over blocks and accumulate into output rows
+                    kl_total[:, i_start:i_end, :] = (
+                        kl_total[:, i_start:i_end, :] + kl_tile.sum(dim=0))
 
     return kl_total
 
@@ -407,63 +412,68 @@ def fused_block_diagonal_kl_full(
         exp_phi_stack = torch.stack([block_exp_pairs[idx][0] for idx, _, _ in group], dim=0)
         exp_neg_phi_stack = torch.stack([block_exp_pairs[idx][1] for idx, _, _ in group], dim=0)
 
-        # Batched Omega: (n_blocks, B, N, N, d, d)
-        Omega = torch.einsum('gbikl,gbjlm->gbijkm', exp_phi_stack, exp_neg_phi_stack)
-        del exp_phi_stack, exp_neg_phi_stack
+        # AMP guard: sandwich product, Cholesky, solve, log-det must stay float32
+        with torch.amp.autocast('cuda', enabled=False):
+            _mu_f32 = mu_stack.float()
+            _sig_f32 = sigma_stack.float()
+            _ep_f32 = exp_phi_stack.float()
+            _en_f32 = exp_neg_phi_stack.float()
 
-        # Batched transport
-        mu_transported = torch.einsum('gbijkl,gbjl->gbijk', Omega, mu_stack)
-        sigma_transported = torch.einsum(
-            'gbijkl,gbjlm,gbijmn->gbijkn',
-            Omega, sigma_stack, Omega.transpose(-1, -2)
-        )
-        del Omega
+            # Batched Omega: (n_blocks, B, N, N, d, d)
+            Omega = torch.einsum('gbikl,gbjlm->gbijkm', _ep_f32, _en_f32)
+            del exp_phi_stack, exp_neg_phi_stack
 
-        I_d = torch.eye(d, device=device, dtype=dtype)
-        mu_i = mu_stack[:, :, :, None, :].expand(-1, -1, -1, N, -1).clone()
-        sigma_i = sigma_stack[:, :, :, None, :, :].expand(-1, -1, -1, N, -1, -1).clone()
-
-        sigma_i_reg = sigma_i + eps * I_d
-        sigma_t_reg = sigma_transported + eps * I_d
-
-        try:
-            L_p = torch.linalg.cholesky(sigma_t_reg)
-            L_q = torch.linalg.cholesky(sigma_i_reg)
-
-            Y = torch.linalg.solve_triangular(L_p, sigma_i_reg, upper=False)
-            Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
-            trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
-
-            delta_mu = mu_transported - mu_i
-            v = torch.linalg.solve_triangular(
-                L_p, delta_mu.unsqueeze(-1), upper=False
-            ).squeeze(-1)
-            mahal_term = torch.sum(v ** 2, dim=-1)
-
-            logdet_p = 2.0 * torch.sum(
-                torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+            # Batched transport
+            mu_transported = torch.einsum('gbijkl,gbjl->gbijk', Omega, _mu_f32)
+            sigma_transported = torch.einsum(
+                'gbijkl,gbjlm,gbijmn->gbijkn',
+                Omega, _sig_f32, Omega.transpose(-1, -2)
             )
-            logdet_q = 2.0 * torch.sum(
-                torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
-            )
+            del Omega
 
-            kl_group = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
-        except RuntimeError:
-            # Cholesky failed — fall back to diagonal approximation
-            sigma_diag_t = torch.diagonal(sigma_t_reg, dim1=-2, dim2=-1).clamp(min=eps)
-            sigma_diag_i = torch.diagonal(sigma_i_reg, dim1=-2, dim2=-1).clamp(min=eps)
-            delta_mu = mu_transported - mu_i
+            I_d = torch.eye(d, device=device, dtype=torch.float32)
+            mu_i = _mu_f32[:, :, :, None, :].expand(-1, -1, -1, N, -1).clone()
+            sigma_i = _sig_f32[:, :, :, None, :, :].expand(-1, -1, -1, N, -1, -1).clone()
 
-            trace_term = (sigma_diag_i / sigma_diag_t).sum(dim=-1)
-            mahal_term = ((delta_mu ** 2) / sigma_diag_t).sum(dim=-1)
-            logdet_term = (torch.log(sigma_diag_t) - torch.log(sigma_diag_i)).sum(dim=-1)
+            sigma_i_reg = sigma_i + eps * I_d
+            sigma_t_reg = sigma_transported + eps * I_d
 
-            kl_group = 0.5 * (trace_term + mahal_term - d + logdet_term)
+            try:
+                L_p = torch.linalg.cholesky(sigma_t_reg)
+                L_q = torch.linalg.cholesky(sigma_i_reg)
 
-        kl_group = kl_group.clamp(min=0.0, max=kl_max)
-        # NaN → kl_max (repulsive): match scalar path — NaN pairs should be
-        # IGNORED (β→0), not ATTENDED (β→1).
-        kl_group = kl_group.nan_to_num(nan=kl_max, posinf=kl_max, neginf=0.0)
+                Y = torch.linalg.solve_triangular(L_p, sigma_i_reg, upper=False)
+                Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
+                trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
+
+                delta_mu = mu_transported - mu_i
+                v = torch.linalg.solve_triangular(
+                    L_p, delta_mu.unsqueeze(-1), upper=False
+                ).squeeze(-1)
+                mahal_term = torch.sum(v ** 2, dim=-1)
+
+                logdet_p = 2.0 * torch.sum(
+                    torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+                )
+                logdet_q = 2.0 * torch.sum(
+                    torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
+                )
+
+                kl_group = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
+            except RuntimeError:
+                # Cholesky failed — fall back to diagonal approximation
+                sigma_diag_t = torch.diagonal(sigma_t_reg, dim1=-2, dim2=-1).clamp(min=eps)
+                sigma_diag_i = torch.diagonal(sigma_i_reg, dim1=-2, dim2=-1).clamp(min=eps)
+                delta_mu = mu_transported - mu_i
+
+                trace_term = (sigma_diag_i / sigma_diag_t).sum(dim=-1)
+                mahal_term = ((delta_mu ** 2) / sigma_diag_t).sum(dim=-1)
+                logdet_term = (torch.log(sigma_diag_t) - torch.log(sigma_diag_i)).sum(dim=-1)
+
+                kl_group = 0.5 * (trace_term + mahal_term - d + logdet_term)
+
+            kl_group = kl_group.clamp(min=0.0, max=kl_max)
+            kl_group = kl_group.nan_to_num(nan=kl_max, posinf=kl_max, neginf=0.0)
 
         kl_total = kl_total + kl_group.sum(dim=0)
 

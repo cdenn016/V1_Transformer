@@ -228,8 +228,10 @@ class PriorBank(nn.Module):
         from 1/σ_p terms; the embedding keeps [0.01, sigma_max] for sharp decode.
         """
         _SIGMA_MIN = 0.01
-        sigma = torch.exp(self.base_log_prior_sigma)
-        return sigma.clamp(_SIGMA_MIN, self.sigma_max)
+        # AMP guard: exp() on log-params needs float32
+        with torch.amp.autocast('cuda', enabled=False):
+            sigma = torch.exp(self.base_log_prior_sigma.float())
+            return sigma.clamp(_SIGMA_MIN, self.sigma_max)
 
     @property
     def prior_sigma(self) -> torch.Tensor:
@@ -243,8 +245,10 @@ class PriorBank(nn.Module):
         Hard clamp zeros gradient at boundaries, preventing log_sigma drift.
         """
         _SIGMA_MIN = 0.01
-        sigma = torch.exp(self.log_prior_sigma)
-        return sigma.clamp(_SIGMA_MIN, self.sigma_max)
+        # AMP guard: exp() on log-params needs float32
+        with torch.amp.autocast('cuda', enabled=False):
+            sigma = torch.exp(self.log_prior_sigma.float())
+            return sigma.clamp(_SIGMA_MIN, self.sigma_max)
 
     def _compute_gauge_transform(self, phi: torch.Tensor) -> torch.Tensor:
         r"""Compute gauge transform A = exp(φ · G) from gauge frame parameters.
@@ -298,20 +302,19 @@ class PriorBank(nn.Module):
             # This is the gauge-covariant sandwich product.
             # For GL(K), A_v is general invertible, so Σ_v is a full SPD matrix.
             # For SO(N), A_v is orthogonal, so Σ_v has same eigenvalues as Σ_0.
-            base_sigma = self.base_prior_sigma  # (K,)
-            if getattr(self, 'diagonal_covariance', True):
-                # Extract diagonal of A @ diag(σ) @ A^T:
-                #   diag(A Σ_0 A^T)_k = Σ_j A_kj² σ_j
-                # This is exact for the diagonal entries (not an approximation
-                # of the diagonal values), but discards off-diagonal correlations.
-                # Sufficient for decode (fused KL needs diagonal priors) and
-                # for the E-step when diagonal_covariance=True globally.
-                A_sq = A ** 2  # (..., K, K)
-                sigma_p = torch.einsum('...kl,l->...k', A_sq, base_sigma)  # (..., K)
-            else:
-                # Full covariance: Σ_v = A @ diag(σ_0) @ A^T (gauge-covariant)
-                Sigma_0 = torch.diag(base_sigma)  # (K, K)
-                sigma_p = torch.einsum('...ij,jk,...lk->...il', A, Sigma_0, A)  # (..., K, K)
+            # AMP guard: sandwich product must stay float32
+            with torch.amp.autocast('cuda', enabled=False):
+                base_sigma = self.base_prior_sigma  # (K,) — already float32 from property
+                A_f32 = A.float()
+                if getattr(self, 'diagonal_covariance', True):
+                    # Extract diagonal of A @ diag(σ) @ A^T:
+                    #   diag(A Σ_0 A^T)_k = Σ_j A_kj² σ_j
+                    A_sq = A_f32 ** 2  # (..., K, K)
+                    sigma_p = torch.einsum('...kl,l->...k', A_sq, base_sigma)  # (..., K)
+                else:
+                    # Full covariance: Σ_v = A @ diag(σ_0) @ A^T (gauge-covariant)
+                    Sigma_0 = torch.diag(base_sigma)  # (K, K)
+                    sigma_p = torch.einsum('...ij,jk,...lk->...il', A_f32, Sigma_0, A_f32)  # (..., K, K)
 
             return mu_p, sigma_p, phi
         else:
@@ -414,46 +417,37 @@ class PriorBank(nn.Module):
         _prior_out = self._get_prior_for_tokens(all_token_ids)
         mu_p, sigma_p = _prior_out[0], _prior_out[1]
 
-        # Decode always uses diagonal prior covariances for the fused KL matmul.
-        # When gauge_fixed_priors=True with diagonal_covariance=False,
-        # sigma_p is (V, K, K). Extract diagonal: exact values, just discarding
-        # off-diagonals which don't affect the fused KL (belief q is diagonal
-        # in the decode path, so tr(Σ_q Σ_p⁻¹) only needs diag(Σ_p)).
-        if sigma_p.dim() == 3:
-            sigma_p = torch.diagonal(sigma_p, dim1=-2, dim2=-1)  # (V, K)
+        # AMP guard: entire decode KL uses division, log, and 1/sigma — float32 required.
+        with torch.amp.autocast('cuda', enabled=False):
+            mu_q = mu_q.float()
+            mu_p = mu_p.float()
+            sigma_q = sigma_q.float()
+            sigma_p = sigma_p.float()
 
-        variance_floor = max(self.eps, 1e-4)
-        sigma_q_safe = sigma_q.clamp(min=variance_floor)    # (B, N, K)
-        sigma_p_clamped = sigma_p.clamp(min=variance_floor)  # (V, K)
+            # Decode always uses diagonal prior covariances for the fused KL matmul.
+            if sigma_p.dim() == 3:
+                sigma_p = torch.diagonal(sigma_p, dim1=-2, dim2=-1)  # (V, K)
 
-        # Scale sigma_p gradient from CE's precision (1/σ_p) terms.
-        # Gradient to log_sigma_p scales as (mu_q-mu_p)²/sigma_p, creating a
-        # positive feedback loop: CE shrinks sigma_p for discrimination →
-        # gradient grows as 1/sigma_p → sigma_p shrinks faster → explosion.
-        # Detach-scale trick: forward value unchanged, backward gets scale×gradient.
-        # sigma_q stays unscaled (its CE gradient flows back to E-step parameters).
-        _s = self.sigma_ce_scale
-        sigma_p_safe = sigma_p_clamped.detach() + _s * (sigma_p_clamped - sigma_p_clamped.detach())
+            variance_floor = max(self.eps, 1e-4)
+            sigma_q_safe = sigma_q.clamp(min=variance_floor)    # (B, N, K)
+            sigma_p_clamped = sigma_p.clamp(min=variance_floor)  # (V, K)
 
-        inv_sigma_p = 1.0 / sigma_p_safe                    # (V, K)
-        mu_p_inv_sigma_p = mu_p * inv_sigma_p               # (V, K)
+            # Scale sigma_p gradient from CE's precision (1/σ_p) terms.
+            _s = self.sigma_ce_scale
+            sigma_p_safe = sigma_p_clamped.detach() + _s * (sigma_p_clamped - sigma_p_clamped.detach())
 
-        # Fused matmul: trace + quad_q - cross in ONE operation
-        # LHS = [σ_q + μ_q², -2·μ_q]         → (B, N, 2K)
-        # RHS = [1/σ_p,  μ_p/σ_p]             → (V, 2K)
-        # LHS @ RHS.T = σ_q·(1/σ_p) + μ_q²·(1/σ_p) - 2·μ_q·(μ_p/σ_p)
-        #             = trace_term + quad_q - cross
-        lhs = torch.cat([sigma_q_safe + mu_q ** 2, -2.0 * mu_q], dim=-1)  # (B, N, 2K)
-        rhs = torch.cat([inv_sigma_p, mu_p_inv_sigma_p], dim=-1)           # (V, 2K)
+            inv_sigma_p = 1.0 / sigma_p_safe                    # (V, K)
+            mu_p_inv_sigma_p = mu_p * inv_sigma_p               # (V, K)
 
-        combined = torch.matmul(lhs, rhs.T)                 # (B, N, V) — single matmul
+            # Fused matmul: trace + quad_q - cross in ONE operation
+            lhs = torch.cat([sigma_q_safe + mu_q ** 2, -2.0 * mu_q], dim=-1)  # (B, N, 2K)
+            rhs = torch.cat([inv_sigma_p, mu_p_inv_sigma_p], dim=-1)           # (V, 2K)
 
-        # Prior-side bias (constant across batch): quad_p + log_det_p
-        # quad_p = Σ_k μ_p[v,k]² / σ_p[v,k]
-        # log_det_p = Σ_k log(σ_p[v,k])
-        # Note: -K and -log|Σ_q| are constant across V, cancel in softmax
-        prior_bias = ((mu_p ** 2 * inv_sigma_p).sum(dim=-1)
-                      + torch.log(sigma_p_safe).sum(dim=-1))  # (V,)
+            combined = torch.matmul(lhs, rhs.T)                 # (B, N, V) — single matmul
+
+            # Prior-side bias (constant across batch): quad_p + log_det_p
+            prior_bias = ((mu_p ** 2 * inv_sigma_p).sum(dim=-1)
+                          + torch.log(sigma_p_safe).sum(dim=-1))  # (V,)
 
         # logits = -KL/τ ≈ -0.5/τ * (combined + prior_bias)
         # (dropping softmax-invariant terms -K and log|Σ_q|)

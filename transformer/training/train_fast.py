@@ -102,6 +102,22 @@ class FastTrainer:
 
         self.model.to(self.device)
 
+        # ── Mixed precision setup ────────────────────────────────────────
+        self.use_amp = getattr(config, 'use_amp', False) and self.device.type == 'cuda'
+        _amp_dtype_str = getattr(config, 'amp_dtype', 'bfloat16')
+        self.amp_dtype = torch.bfloat16 if _amp_dtype_str == 'bfloat16' else torch.float16
+        # GradScaler only needed for float16 (bfloat16 has float32 exponent range)
+        self.scaler = torch.amp.GradScaler(
+            'cuda',
+            enabled=self.use_amp and self.amp_dtype == torch.float16,
+        )
+
+        # ── torch.compile ────────────────────────────────────────────────
+        if getattr(config, 'use_compile', False) and self.device.type == 'cuda':
+            _compile_mode = getattr(config, 'compile_mode', 'reduce-overhead')
+            print(f"  Compiling model with torch.compile(mode='{_compile_mode}')...")
+            self.model = torch.compile(self.model, mode=_compile_mode)
+
         # Create optimizer with parameter groups
         self.optimizer = self._create_optimizer()
         self.scheduler = self._create_scheduler()
@@ -117,6 +133,8 @@ class FastTrainer:
         print("FAST TRAINER INITIALIZED")
         print(f"{'='*70}")
         print(f"  Device: {self.device}")
+        if self.use_amp:
+            print(f"  AMP: enabled (dtype={_amp_dtype_str})")
         print(f"  Max steps: {self.config.max_steps:,}")
         print(f"\n  Learning Rates (Natural Gradients!):")
         print(f"    μ (means):        {config.M_mu_p_lr}")
@@ -183,29 +201,33 @@ class FastTrainer:
         input_ids = input_ids.to(self.device)
         target_ids = target_ids.to(self.device)
 
-        # Forward pass
-        loss, metrics = compute_free_energy_loss(
-            self.model,
-            input_ids,
-            target_ids,
-            M_alpha=self.config.M_alpha,
-            M_beta=self.config.M_beta,
-            lambda_gamma=self.config.lambda_gamma,
-            kappa_gamma=self.config.kappa_gamma,
-            lambda_hyper=self.config.lambda_hyper,
-            pad_token_id=self.pad_token_id,
-            use_obs_in_vfe=self.config.use_obs_in_vfe,
-            mass_phi=getattr(self.config, 'mass_phi', 0.05),
-            aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
-            detach_beta_m_step=getattr(self.config, 'detach_beta_m_step', True),
-        )
+        # Forward pass (AMP autocast wraps forward + loss; sigma ops self-guard)
+        with torch.amp.autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
+            loss, metrics = compute_free_energy_loss(
+                self.model,
+                input_ids,
+                target_ids,
+                M_alpha=self.config.M_alpha,
+                M_beta=self.config.M_beta,
+                lambda_gamma=self.config.lambda_gamma,
+                kappa_gamma=self.config.kappa_gamma,
+                lambda_hyper=self.config.lambda_hyper,
+                pad_token_id=self.pad_token_id,
+                use_obs_in_vfe=self.config.use_obs_in_vfe,
+                mass_phi=getattr(self.config, 'mass_phi', 0.05),
+                aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
+                detach_beta_m_step=getattr(self.config, 'detach_beta_m_step', True),
+            )
 
-        # Backward pass
+        # Backward pass (scaler handles float16; no-op for bfloat16)
         loss = loss / self.config.grad_accumulation_steps
-        loss.backward()
+        self.scaler.scale(loss).backward()
 
         # Gradient accumulation
         if (self.global_step + 1) % self.config.grad_accumulation_steps == 0:
+            # Unscale before clipping (required for correct grad norms)
+            self.scaler.unscale_(self.optimizer)
+
             # Gradient clipping
             if self.config.grad_clip > 0:
                 torch.nn.utils.clip_grad_norm_(
@@ -213,13 +235,14 @@ class FastTrainer:
                     self.config.grad_clip,
                 )
 
-            self.optimizer.step()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
 
             # Scheduler step
             if self.scheduler is not None:
                 self.scheduler.step()
 
-            self.optimizer.zero_grad()
+            self.optimizer.zero_grad(set_to_none=True)
 
         # Reformat metrics for logging.
         # Note: with grad_accumulation_steps > 1, this logs each micro-batch
@@ -252,7 +275,7 @@ class FastTrainer:
 
         is_standard = isinstance(self.model, StandardTransformerLM)
 
-        with torch.no_grad():
+        with torch.no_grad(), torch.amp.autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
             for batch in self.val_loader:
                 if total_samples >= max_samples:
                     break
@@ -426,6 +449,8 @@ class FastTrainer:
         }
         if self.scheduler is not None:
             checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
+        if self.scaler.is_enabled():
+            checkpoint['scaler_state_dict'] = self.scaler.state_dict()
 
         if is_best:
             path = self.config.checkpoint_dir / 'best_model.pt'
@@ -484,6 +509,13 @@ class FastTrainer:
                 self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
             except Exception as e:
                 print(f"  Warning: Could not restore scheduler state: {e}")
+
+        # Restore GradScaler state
+        if self.scaler.is_enabled() and 'scaler_state_dict' in checkpoint:
+            try:
+                self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+            except Exception as e:
+                print(f"  Warning: Could not restore scaler state: {e}")
 
         print(f"  ✓ Loaded checkpoint from step {self.global_step}")
 
