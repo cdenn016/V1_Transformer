@@ -69,6 +69,8 @@ class PureVFEConfig:
     omega_negative_det_fraction: float = 0.0  # Fraction of omega frames initialized in GL⁻(K) (det < 0)
     phi_max_norm: Optional[float] = None  # Max phi norm; None = auto (π for SO(N), 5.0 for GL(K))
 
+    # M-step Omega gradient mode
+    use_analytical_omega_grad: bool = True  # True: analytical dF/dΩ at prior values; False: moment-matching heuristic
 
     # Observation gradient options
     sigma_obs_grad: str = 'none'        # 'none' (match VFE dynamic), 'diagonal', 'full'

@@ -1,7 +1,9 @@
 r"""M-Step: Prior bank parameter updates via natural gradient on marginal VFE.
 
 Observation gradient enters HERE (not in E-step).
-No autograd — all gradients are analytic.
+No autograd for mu/Sigma priors — those gradients are analytic.
+The Omega prior gradient uses a single autograd pass through the coupling
+VFE to capture the full derivative including softmax correction terms.
 
 The M-step updates global parameters (the prior bank) using sufficient
 statistics from converged E-step beliefs. These statistics are additive
@@ -27,6 +29,9 @@ from .gaussians import (
     symmetrize,
     clip_norm,
     clip_matrix_norm,
+    precompute_tokens,
+    pairwise_kl,
+    kl_attention,
 )
 from .gauge import (
     natural_grad_omega,
@@ -34,7 +39,77 @@ from .gauge import (
     relative_trust_clip,
     regularize_omega_conditioning,
     retract_phi,
+    vfe_grad_Omega,
 )
+from .inference import extract_block_diag
+
+
+# =========================================================================
+# Analytical M-step Omega gradient
+# =========================================================================
+
+def _compute_m_step_omega_grad(
+    mu_star: torch.Tensor,
+    Sigma_star: torch.Tensor,
+    token_ids: torch.Tensor,
+    model,
+    config,
+) -> torch.Tensor:
+    r"""Compute :math:`\partial F_{\text{coupling}} / \partial \Omega_i`
+    at prior Omega values using converged beliefs.
+
+    The VFE coupling term is
+    :math:`F = \sum_{ij} \beta_{ij} \, \mathrm{KL}(q_i \| \Omega_{ij} q_j)`.
+    The M-step gradient for ``prior_Omega_v`` is
+    :math:`\sum_{i: \text{token}_i = v} \partial F / \partial \Omega_i`
+    evaluated at the initialization point :math:`\Omega_i = \text{prior\_Omega}_v`
+    (not the converged value, where the gradient vanishes by E-step optimality).
+
+    Uses a single autograd pass through the differentiable coupling VFE to get
+    the exact gradient, including the softmax correction
+    :math:`\partial \beta / \partial \Omega` terms.
+
+    Args:
+        mu_star: [B, N, K] converged belief means.
+        Sigma_star: [B, N, K, K] converged belief covariances.
+        token_ids: [B, N] input token indices.
+        model: PureVFETransformer (provides ``prior_Omega``).
+        config: PureVFEConfig (provides H, K_h, tau, causal).
+
+    Returns:
+        [B, N, H, K_h, K_h] per-position gradient (detached).
+    """
+    B, N, K = mu_star.shape
+    H = config.n_heads
+    K_h = config.head_dim
+
+    # Prior Omega (initialization point — where we evaluate the gradient)
+    prior_Omega = model.prior_Omega[token_ids].clone()  # [B, N, H, K_h, K_h]
+
+    # Build per-head quantities from converged full-K beliefs (detached)
+    mu_h = mu_star.detach().view(B, N, H, K_h)
+    Sigma_h = extract_block_diag(Sigma_star.detach(), H, K_h)
+
+    # Temporarily enable grad (M-step runs under @torch.no_grad)
+    with torch.enable_grad():
+        prior_Omega.requires_grad_(True)
+
+        # Forward: compute coupling VFE differentiably through prior_Omega
+        precomp = precompute_tokens(mu_h, Sigma_h, prior_Omega)
+        kl_ij = pairwise_kl(precomp, causal=config.causal)
+        tau = config.tau if config.tau is not None else K_h ** 0.5
+        beta = kl_attention(
+            kl_ij, tau, causal=config.causal,
+            mask_self=getattr(config, 'mask_self_attention', False),
+        )
+        F_coupling = (beta * kl_ij).sum()
+
+        # Single backward pass — cheap (one VFE evaluation, no E-step)
+        grad_Omega = torch.autograd.grad(
+            F_coupling, prior_Omega, create_graph=False,
+        )[0]
+
+    return grad_Omega.detach()
 
 
 # =========================================================================
@@ -73,6 +148,9 @@ class MStepAccumulator:
         self.Sigma_star_sum = torch.zeros(V, K, K, device=device)
         self.outer_sum = torch.zeros(V, K, K, device=device)
         self.Omega_star_sum = torch.zeros(V, H, K_h, K_h, device=device)
+
+        # Analytical Omega gradient (accumulated across micro-batches)
+        self.grad_Omega_sum = torch.zeros(V, H, K_h, K_h, device=device)
 
         # Observation gradient quantities
         self.obs_weighted_mu = torch.zeros(V, K, device=device)
@@ -174,11 +252,23 @@ class MStepAccumulator:
             0, flat_ids.unsqueeze(-1).unsqueeze(-1).expand(-1, K, K), outer,
         )
 
-        # Omega_star_sum
+        # Omega_star_sum (kept for fallback / diagnostics)
         self.Omega_star_sum.scatter_add_(
             0, flat_ids.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, H, K_h, K_h),
             Omega_star_flat,
         )
+
+        # Analytical Omega gradient at prior Omega values
+        if getattr(config, 'use_analytical_omega_grad', True):
+            grad_Omega_pos = _compute_m_step_omega_grad(
+                mu_star, Sigma_star, token_ids, model, config,
+            )  # [B, N, H, K_h, K_h]
+            grad_Omega_flat = grad_Omega_pos.reshape(BN, H, K_h, K_h)
+            self.grad_Omega_sum.scatter_add_(
+                0,
+                flat_ids.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, H, K_h, K_h),
+                grad_Omega_flat,
+            )
 
         # --- Monitoring ---
         self.ce_loss_sum += ce_loss.item()
@@ -193,6 +283,7 @@ class MStepAccumulator:
         self.Sigma_star_sum.zero_()
         self.outer_sum.zero_()
         self.Omega_star_sum.zero_()
+        self.grad_Omega_sum.zero_()
         self.obs_weighted_mu.zero_()
         self.obs_ce_sum.zero_()
         if self.obs_weighted_Sigma is not None:
@@ -376,8 +467,16 @@ def apply_m_step_from_accumulated(accum, model, config, effective_lrs=None):
     # ================================================================
     omega_grad_clamp = getattr(config, 'omega_grad_clamp', 10.0)
     Omega_all = model.prior_Omega[update_tokens]
-    Omega_star_avg = Omega_star_sum / n_safe.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
-    grad_Omega_all = -(Omega_star_avg - Omega_all)
+
+    if getattr(config, 'use_analytical_omega_grad', True):
+        # Analytical VFE coupling gradient accumulated during micro-batches
+        grad_Omega_sum = accum.grad_Omega_sum[update_tokens]   # [T, H, K_h, K_h]
+        grad_Omega_all = grad_Omega_sum / n_safe.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+    else:
+        # Fallback: moment-matching heuristic (pull toward mean E-step value)
+        Omega_star_avg = Omega_star_sum / n_safe.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+        grad_Omega_all = -(Omega_star_avg - Omega_all)
+
     grad_Omega_all[n_counts == 0] = 0.0
     grad_Omega_all = torch.clamp(grad_Omega_all, -omega_grad_clamp, omega_grad_clamp)
 
@@ -772,25 +871,33 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
 
     model.prior_Sigma[update_tokens] = Sigma_new
 
-    # ---- Prior gauge frame update (moment-matching heuristic) ----
-    # NOTE: This is NOT the analytical VFE gradient dF/dOmega. It is a
-    # moment-matching update that pulls Omega toward the mean converged
-    # E-step value: grad = -(E[Omega*] - Omega). This is an EM-style
-    # update, not a natural gradient on GL(K).
+    # ---- Prior gauge frame gradient ----
     omega_grad_clamp = getattr(config, 'omega_grad_clamp', 10.0)
-
     Omega_all = model.prior_Omega[update_tokens]       # [T, H, K_h, K_h]
-    Omega_star_avg = Omega_star_sum / n_safe.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
-    grad_Omega_all = -(Omega_star_avg - Omega_all)
-    grad_Omega_all[~has_input] = 0.0
 
-    # Element-wise safety clamp on Euclidean gradient
+    if getattr(config, 'use_analytical_omega_grad', True):
+        # Analytical VFE coupling gradient at prior Omega values
+        grad_Omega_pos = _compute_m_step_omega_grad(
+            mu_star, Sigma_star, token_ids, model, config,
+        )  # [B, N, H, K_h, K_h]
+        # Scatter-add per-position gradients to per-token [T, H, K_h, K_h]
+        grad_Omega_flat = grad_Omega_pos.reshape(BN, H, K_h, K_h)
+        grad_Omega_token = torch.zeros(T, H, K_h, K_h, device=dev, dtype=mu_star.dtype)
+        grad_Omega_token.scatter_add_(
+            0,
+            flat_idx.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, H, K_h, K_h),
+            grad_Omega_flat,
+        )
+        grad_Omega_all = grad_Omega_token / n_safe.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+    else:
+        # Fallback: moment-matching heuristic
+        Omega_star_avg = Omega_star_sum / n_safe.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+        grad_Omega_all = -(Omega_star_avg - Omega_all)
+
+    grad_Omega_all[~has_input] = 0.0
     grad_Omega_all = torch.clamp(grad_Omega_all, -omega_grad_clamp, omega_grad_clamp)
 
     if model.prior_phi is not None:
-        # Phi path: update phi coordinates, then recompute Omega
-        # Gradient in Lie algebra: ∂F/∂φ^a = tr(∂F/∂Ω · Ω · T_a)
-        # (first-order approximation; dexp correction negligible near identity)
         phi_all = model.prior_phi[update_tokens]  # [T, H, n_gen_h]
         grad_phi = torch.einsum(
             'thij,thik,akj->tha',
@@ -800,18 +907,14 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
         phi_new = retract_phi(phi_all, -effective_lrs['phi_lr'] * grad_phi, config.phi_max_norm)
         model.prior_phi[update_tokens] = phi_new
     else:
-        # Omega path: Lie algebra clip + conditioning regularization
         nat_Omega = lie_algebra_clip_grad(
             grad_Omega_all, Omega_all,
             trust_radius=config.trust_region_omega,
         )
-
-        # Momentum for Ω (first moment only)
         if use_adam and model.m1_Omega is not None:
             nat_Omega = _momentum_update(
                 nat_Omega, model.m1_Omega, update_tokens, config.adam_beta1
             )
-
         Omega_new = Omega_all - effective_lrs['phi_lr'] * nat_Omega
         Omega_new = regularize_omega_conditioning(Omega_new, config.omega_cond_max)
         model.prior_Omega[update_tokens] = Omega_new
