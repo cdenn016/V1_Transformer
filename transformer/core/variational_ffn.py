@@ -2341,8 +2341,14 @@ class VariationalFFNDynamic(nn.Module):
         return_beta_history: bool,
         _detach_e_step: bool = True,
         _obs_cache: Optional[dict] = None,
+        _precomputed_block_exp_pairs=None,
     ):
         r"""Execute one VFE natural-gradient iteration.
+
+        Args:
+            _precomputed_block_exp_pairs: If provided, reuse these block exp
+                pairs instead of recomputing. Used when update_phi_per_iteration
+                is False to avoid redundant matrix exponentials across iterations.
 
         Returns:
             (mu_current, sigma_current, phi_current, omega_current,
@@ -2442,10 +2448,15 @@ class VariationalFFNDynamic(nn.Module):
             beta_heads = []  # For history tracking
 
             # Precompute block_exp_pairs ONCE for all heads.
-            _mh_cached_bep = self._build_block_exp_pairs(
-                phi_current, omega_current, B, N,
-                mu_current.device, mu_current.dtype,
-            )
+            # When update_phi_per_iteration=False, the caller passes in
+            # precomputed pairs to avoid redundant matrix exp across iterations.
+            if _precomputed_block_exp_pairs is not None:
+                _mh_cached_bep = _precomputed_block_exp_pairs
+            else:
+                _mh_cached_bep = self._build_block_exp_pairs(
+                    phi_current, omega_current, B, N,
+                    mu_current.device, mu_current.dtype,
+                )
 
             # =============================================================
             # FUSED MULTI-HEAD VFE: Compute β_h and gradients in single
@@ -3286,6 +3297,23 @@ class VariationalFFNDynamic(nn.Module):
             if self.obs_sigma_gradient:
                 _obs_cache['W_out_sq'] = W_out ** 2  # (V, K)
 
+        # TODO(perf): Apply torch.compile to _vfe_iteration inner loop to fuse
+        # small element-wise ops and reduce kernel launch overhead (Finding 25).
+        # TODO(perf): Add gradient checkpointing for VFE iterations to trade
+        # ~2x compute for ~3x memory savings with 3 iterations (Finding 26).
+
+        # When phi is frozen across iterations, precompute block exp pairs
+        # once to avoid redundant matrix exponentials (Finding 23: ~2-3x speedup
+        # on matrix exp cost with 3 iterations).
+        _hoisted_bep = None
+        if _n_iters > 1 and not self.update_phi_per_iteration and self.multihead_vfe:
+            _hoisted_bep = self._build_block_exp_pairs(
+                phi_current if not (getattr(self, 'amortized_inference', False) is False and self.detach_phi)
+                else phi_current.detach(),
+                omega_current, B, N,
+                mu_current.device, mu_current.dtype,
+            )
+
         for iteration in range(_n_iters):
             (mu_current, sigma_current, phi_current, omega_current,
              beta_current, beta_heads, alpha_effective,
@@ -3308,6 +3336,7 @@ class VariationalFFNDynamic(nn.Module):
                 return_beta_history=return_beta_history,
                 _detach_e_step=_detach_e_step,
                 _obs_cache=_obs_cache,
+                _precomputed_block_exp_pairs=_hoisted_bep,
             )
             if return_beta_history and _iter_beta is not None:
                 beta_history.append(_iter_beta)

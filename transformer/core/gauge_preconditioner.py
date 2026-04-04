@@ -321,6 +321,11 @@ def build_structure_constants(
     For general generators:
         f^c_{ab} = Σ_d G^{cd} · tr(T_d^T · [T_a, T_b])
 
+    .. warning::
+        The structure constants tensor is O(n_gen² × K²) in memory.
+        For GL(K) with K>=15, this may exceed available GPU memory.
+        Pullback mode is unusable for production-scale K (Finding 27).
+
     Args:
         generators: Lie algebra generators (n_gen, K, K)
 
