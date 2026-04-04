@@ -168,7 +168,7 @@ def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
                 mass_phi=0.0,
             )
 
-            ce_loss = metrics['loss/ce']
+            ce_loss = metrics.get('loss/ce_raw', metrics['loss/ce'])
             # Token-weighted accumulation: ce_loss is per-token average,
             # multiply by non_pad to recover total, then divide by total_tokens
             total_ce_tokens += ce_loss * non_pad
