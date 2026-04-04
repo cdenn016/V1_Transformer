@@ -163,7 +163,7 @@ EM_CONFIG = {
     'learnable_pb_temperature': True,
     'mask_self_attention':      True,  # Prevent attention collapse?
   
-    
+    'kappa_beta':               3.16,
     'kappa_warmup_steps':       7500,  # freeze kappa for first n steps
     'learnable_head_kappa':     True, # If True, learn per-head κ_h via log_kappa_per_head
     
@@ -251,7 +251,7 @@ EM_CONFIG = {
     # === Embedding init ===
     'mu_init_std':     1.0,
     'phi_scale':       1.0,
-    'kappa_beta':      1.0,
+    
     'mu_normalize':    False,
     'mu_max_norm':     None,
 
@@ -323,9 +323,13 @@ EM_CONFIG = {
     'hidden_dim':      508,
     'warmup_steps':    100,
     'num_workers':     10,
-
+    
+    'use_amp':         False, 
+    'use_compile':     False,
+    'compile_mode':    'max-autotune'  # 'default', 'reduce-overhead', 'max-autotune'
 
 }
+
 
 
 
