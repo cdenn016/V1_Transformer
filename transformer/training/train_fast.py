@@ -446,6 +446,9 @@ class FastTrainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'best_val_ce': self.best_val_ce,
             'config': vars(self.config),
+            # Model architecture config for robust resume (Finding 11: previously
+            # resume had to infer architecture from tensor shapes, which is fragile)
+            'model_config': self.model.config if hasattr(self.model, 'config') else {},
         }
         if self.scheduler is not None:
             checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()

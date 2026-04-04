@@ -388,6 +388,11 @@ def resume_training():
     print(f"    diagonal_covariance: {config.get('diagonal_covariance', True)}")
 
     train_config = TrainingConfig(
+        # Training mode
+        training_mode=config.get('training_mode', 'vfe_dynamic'),
+        use_param_groups=config.get('use_param_groups', True),
+        learning_rate=config.get('learning_rate', 3e-4),
+
         max_steps=config['max_steps'],
         warmup_steps=config.get('warmup_steps', 1000),
 
@@ -399,14 +404,30 @@ def resume_training():
         M_vfe_hyperparam_lr=config.get('M_vfe_hyperparam_lr', config.get('ffn_lr', 0.001)),
         M_output_lr=config.get('M_output_lr', config.get('output_lr', 0.001)),
 
+        # Optimizer
+        optimizer_type=config.get('optimizer_type', 'adamw'),
         non_embed_weight_decay=config.get('non_embed_weight_decay', config.get('weight_decay', 0.01)),
+        embed_weight_decay=config.get('embed_weight_decay', 0.05),
+        beta1=config.get('beta1', 0.9),
+        beta2=config.get('beta2', 0.999),
+        eps=config.get('eps', 1e-8),
         grad_clip=config.get('grad_clip', 1.0),
         grad_accumulation_steps=GRAD_ACCUMULATION,
+
+        # LR schedule
+        lr_decay=config.get('lr_decay', 'linear'),
+        min_lr=config.get('min_lr', 3e-5),
+        min_lr_ratio=config.get('min_lr_ratio', 0.1),
+        kappa_warmup_steps=config.get('kappa_warmup_steps', 0),
 
         # Free energy weights
         M_alpha=config.get('M_alpha', config.get('alpha', 0.0)),
         M_beta=config.get('M_beta', config.get('beta', 0.0)),
         lambda_gamma=config.get('lambda_gamma', 0.0),
+        kappa_gamma=config.get('kappa_gamma', 1.0),
+        lambda_hyper=config.get('lambda_hyper', 0.0),
+        detach_beta_m_step=config.get('detach_beta_m_step', True),
+        use_obs_in_vfe=config.get('use_obs_in_vfe', False),
 
         # Intervals
         log_interval=config.get('log_interval', 100),
@@ -416,12 +437,30 @@ def resume_training():
         # Checkpointing
         checkpoint_dir=experiment_dir,
 
+        # Hardware / AMP / compile
+        use_amp=config.get('use_amp', False),
+        amp_dtype=config.get('amp_dtype', 'bfloat16'),
+        use_compile=config.get('use_compile', False),
+        compile_mode=config.get('compile_mode', 'reduce-overhead'),
+
+        # Gauge group
+        gauge_mode=config.get('gauge_mode', 'learned'),
+        gauge_param=config.get('gauge_param', 'phi'),
+        use_rope=config.get('use_rope', True),
+
         # P-FLOW and delta rule
         use_p_flow=config.get('use_p_flow', False),
         p_flow_ema_decay=config.get('p_flow_ema_decay', 0.99),
+        sigma_ce_scale=config.get('sigma_ce_scale', 0.01),
         detach_phi=config.get('detach_phi', False),
         use_delta_rule_w_out=config.get('use_delta_rule_w_out', False),
         delta_rule_lr=config.get('delta_rule_lr', 0.001),
+
+        # Phi preconditioning
+        mass_phi=config.get('mass_phi', 0.05),
+        use_slk_projection=config.get('use_slk_projection', False),
+        use_killing_form=config.get('use_killing_form', False),
+        killing_form_sym_dampening=config.get('killing_form_sym_dampening', 0.1),
     )
 
     # Create publication metrics tracker for figures

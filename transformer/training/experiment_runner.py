@@ -1255,11 +1255,22 @@ class PublicationTrainer(FastTrainer):
             _use_param_groups = getattr(self.config, 'use_param_groups', True)
             if self.config.grad_clip > 0:
                 if _use_param_groups:
+                    # Scale clip threshold by sqrt(n_group / n_total) so that
+                    # per-parameter gradient magnitude is equalized across groups.
+                    # Without this, small groups (e.g., kappa) get a disproportionately
+                    # large per-parameter gradient budget vs. large groups (phi_embed).
+                    _total = sum(
+                        p.numel() for g in self.optimizer.param_groups
+                        for p in g['params'] if p.grad is not None
+                    )
                     for group in self.optimizer.param_groups:
-                        if group['params']:
+                        graded = [p for p in group['params'] if p.grad is not None]
+                        if graded:
+                            _n_group = sum(p.numel() for p in graded)
+                            _scale = (_n_group / max(_total, 1)) ** 0.5
                             torch.nn.utils.clip_grad_norm_(
-                                group['params'],
-                                self.config.grad_clip,
+                                graded,
+                                self.config.grad_clip * _scale,
                             )
                 else:
                     torch.nn.utils.clip_grad_norm_(

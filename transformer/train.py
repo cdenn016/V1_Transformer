@@ -235,9 +235,18 @@ def _get_sigma_target(
             sigma_h = sigma_target.expand_as(sigma_s)
         return sigma_h.detach()
     else:
-        # Fallback: broadened centroid (old behavior, backward compatible)
-        sigma_h = sigma_s.mean(dim=1, keepdim=True).detach() * 2.0
-        return sigma_h.expand_as(sigma_s)
+        # Fallback: broadened centroid (old behavior, backward compatible).
+        # Cache on first call to avoid a moving hyper-prior target — the
+        # "frozen at init" contract requires sigma_h to be constant.
+        if not hasattr(_get_sigma_target, '_cached_sigma_h') or _get_sigma_target._cached_sigma_h is None:
+            import logging
+            logging.warning(
+                "_get_sigma_target: sigma_target buffer not found on model. "
+                "Falling back to broadened centroid (computed once and cached). "
+                "This happens with old checkpoints missing the sigma_target buffer."
+            )
+            _get_sigma_target._cached_sigma_h = sigma_s.mean(dim=1, keepdim=True).detach() * 2.0
+        return _get_sigma_target._cached_sigma_h.expand_as(sigma_s)
 
 
 # =============================================================================
@@ -258,6 +267,7 @@ def compute_free_energy_loss(
     mass_phi: float = 0.0,        # Gauge prior weight: (mass_φ/2) Σ_i ||φ_i||²
     aux_loss_weight: float = 0.0, # Weight for auxiliary per-layer CE losses (0 = disabled)
     detach_beta_m_step: bool = True,  # True = correct EM (detach β). False = old behavior (grad through softmax)
+    normalize_ce_by_dim: bool = False,  # Divide CE by sqrt(K) to match VFE dim_scale
     # Backward-compatible aliases (deprecated)
     alpha: float = None,
     lambda_beta: float = None,
@@ -349,6 +359,14 @@ def compute_free_energy_loss(
         reduction='mean',
         ignore_index=pad_token_id,
     )
+    # VFE terms divide by sqrt(K) (dim_scale) but CE does not by default.
+    # When normalize_ce_by_dim=True, apply the same normalization so relative
+    # VFE-vs-CE weighting is independent of embed_dim.
+    if normalize_ce_by_dim:
+        K = logits.size(-1)  # vocab_size for logits, but we want embed_dim
+        # embed_dim is the belief dimension, not vocab_size — infer from mu_q
+        embed_K = model.config.get('embed_dim', 128) if hasattr(model, 'config') else 128
+        ce_loss = ce_loss / (embed_K ** 0.5)
 
     # =================================================================
     # 2. Belief Coupling: λ_β · Σ_ij β_ij · KL(q_i || Ω_ij q_j)

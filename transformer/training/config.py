@@ -122,6 +122,7 @@ class TrainingConfig:
     #   Orthogonal to embed_weight_decay (which regularizes magnitudes via AdamW).
        
     detach_beta_m_step: bool =  True  # Detach β in M-step loss (correct EM). False = old behavior (gradient flows through softmax)
+    normalize_ce_by_dim: bool = False  # Divide CE loss by sqrt(K) to match VFE dim_scale normalization
     use_obs_in_vfe: bool =      False  # Pass targets as observations into VFE E-step (last layer only)
     obs_sigma_gradient: bool =  True  # ∂E_q[CE]/∂σ Hessian-diagonal obs gradient for sigma
     obs_sigma_weight: float =   1.0     # Weight for sigma observation gradient
