@@ -252,7 +252,7 @@ class FastTrainer:
         formatted_metrics = {
             'total_loss': metrics['loss/total'],
             'ce_loss': metrics['loss/ce'],
-            'perplexity': torch.exp(torch.tensor(metrics['loss/ce'])).item(),
+            'perplexity': torch.exp(torch.tensor(metrics.get('loss/ce_raw', metrics['loss/ce']))).item(),
         }
 
         return formatted_metrics
@@ -308,7 +308,7 @@ class FastTrainer:
                         mass_phi=0.0,
                         normalize_ce_by_dim=getattr(self.config, 'normalize_ce_by_dim', False),
                     )
-                    ce_loss = metrics['loss/ce']
+                    ce_loss = metrics.get('loss/ce_raw', metrics['loss/ce'])
 
                 # Token-weighted accumulation (handles variable-size last batch)
                 total_ce_tokens += ce_loss * non_pad
