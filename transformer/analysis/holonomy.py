@@ -12,7 +12,7 @@ the holonomy factorizes as:
     H_ijk = exp(φ_i) · C_ijk · exp(-φ_i)
 
 where C_ijk = exp(δ_ij·G) · exp(δ_jk·G) · exp(δ_ki·G) is the
-"connection holonomy" — the gauge-invariant (up to conjugation) part.
+"connection holonomy" -- the gauge-invariant (up to conjugation) part.
 
 ‖C_ijk - I‖_F measures the deviation from flatness for the triple (i,j,k).
 When the transport is flat (cocycle condition holds), C_ijk = I for all triples.
@@ -37,7 +37,7 @@ def compute_holonomy(
     3. Avoids requiring exp(φ_i) which may not be stored
 
     Args:
-        exp_delta: (B, N, N, K, K) — exp(δ_ij · G) per edge.
+        exp_delta: (B, N, N, K, K) -- exp(δ_ij · G) per edge.
             Output of the non-flat compute_transport_operators().
         triples: Optional (n_triples, 3) tensor of (i,j,k) indices.
             If None, samples random triples.
@@ -45,9 +45,9 @@ def compute_holonomy(
         seed: Random seed for reproducible triple sampling.
 
     Returns:
-        C: (B, n_triples, K, K) — connection holonomy matrices.
-        norms: (B, n_triples) — ‖C_ijk - I‖_F per triple.
-        triple_indices: (n_triples, 3) — the (i,j,k) indices used.
+        C: (B, n_triples, K, K) -- connection holonomy matrices.
+        norms: (B, n_triples) -- ‖C_ijk - I‖_F per triple.
+        triple_indices: (n_triples, 3) -- the (i,j,k) indices used.
     """
     B, N, _, K, _ = exp_delta.shape
     device = exp_delta.device
@@ -91,14 +91,14 @@ def holonomy_penalty_loss(
     sample_size: int = 500,
     seed: int = None,
 ) -> torch.Tensor:
-    """Regularizer pushing the model toward flatness: E[‖C_ijk - I‖²_F].
+    """Regularizer pushing the model toward flatness: E[‖C_ijk - I‖^2_F].
 
     Used for HF2.3 (holonomy penalty scaling) experiments.
     Adding λ_H · holonomy_penalty_loss to the total loss penalizes
     non-trivial holonomy, encouraging flat transport.
 
     Args:
-        exp_delta: (B, N, N, K, K) — exp(δ_ij · G) per edge.
+        exp_delta: (B, N, N, K, K) -- exp(δ_ij · G) per edge.
         sample_size: Number of random triples to average over.
         seed: Random seed. If None, uses current step for variation.
 
@@ -119,7 +119,7 @@ def holonomy_statistics(
     """Compute summary statistics of holonomy across sampled triples.
 
     Args:
-        exp_delta: (B, N, N, K, K) — exp(δ_ij · G) per edge.
+        exp_delta: (B, N, N, K, K) -- exp(δ_ij · G) per edge.
         sample_size: Number of random triples to sample.
         seed: Random seed for reproducibility.
 
@@ -153,13 +153,13 @@ def holonomy_by_token_pairs(
     in high-holonomy interactions (HF1.2, HF5.1).
 
     Args:
-        exp_delta: (B, N, N, K, K) — exp(δ_ij · G) per edge.
+        exp_delta: (B, N, N, K, K) -- exp(δ_ij · G) per edge.
         anchor_indices: List of token indices to anchor triples at.
         sample_size_per_anchor: Number of triples per anchor.
         seed: Random seed.
 
     Returns:
-        Dict mapping anchor_index → holonomy statistics dict.
+        Dict mapping anchor_index -> holonomy statistics dict.
     """
     B, N, _, K, _ = exp_delta.shape
     rng = np.random.RandomState(seed)

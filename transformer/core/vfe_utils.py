@@ -3,20 +3,20 @@ VFE Utility Functions
 =====================
 
 Utility functions and constants extracted from variational_ffn.py.  These are
-pure mathematical helpers — no nn.Module, no learned parameters.
+pure mathematical helpers -- no nn.Module, no learned parameters.
 
 Provides:
 - Module-level debug dict ``_VFE_GRAD_DEBUG``
-- Numerical constants (SIGMA_EPS, TRANSPORT_JITTER, …)
-- squeeze_trailing_singletons — collapse spurious trailing singleton dims
-- _safe_spd_inv  — robust SPD matrix inversion with adaptive regularization
-- _safe_eigh     — eigendecomposition with escalating jitter + SVD fallback
-- retract_spd_torch          — affine-invariant SPD exponential map (full matrix)
-- retract_spd_diagonal_torch — exponential retraction for diagonal covariances
-- _retract_phi   — phi retraction to Lie group (SO(N) or GL(K))
-- _grad_norm      — global Frobenius norm helper for debug logging
-- _per_pos_stats  — per-position norm statistics for debug logging
-- _aggregate_multihead_vfe_debug — aggregate per-head VFE debug metrics
+- Numerical constants (SIGMA_EPS, TRANSPORT_JITTER, ...)
+- squeeze_trailing_singletons -- collapse spurious trailing singleton dims
+- _safe_spd_inv  -- robust SPD matrix inversion with adaptive regularization
+- _safe_eigh     -- eigendecomposition with escalating jitter + SVD fallback
+- retract_spd_torch          -- affine-invariant SPD exponential map (full matrix)
+- retract_spd_diagonal_torch -- exponential retraction for diagonal covariances
+- _retract_phi   -- phi retraction to Lie group (SO(N) or GL(K))
+- _grad_norm      -- global Frobenius norm helper for debug logging
+- _per_pos_stats  -- per-position norm statistics for debug logging
+- _aggregate_multihead_vfe_debug -- aggregate per-head VFE debug metrics
 """
 
 import math
@@ -192,7 +192,7 @@ def _safe_eigh(
     Robust eigendecomposition for symmetric matrices with escalating jitter.
 
     Retries ``torch.linalg.eigh`` with geometrically increasing jitter
-    (×10 per retry) until ``max_jitter`` is reached. If all retries fail,
+    (x10 per retry) until ``max_jitter`` is reached. If all retries fail,
     falls back to SVD which uses a different algorithm (gesdd vs syev) and
     is more tolerant of ill-conditioning. For symmetric PSD matrices the
     singular values equal the eigenvalues and U provides the eigenvectors.
@@ -206,7 +206,7 @@ def _safe_eigh(
         symmetrize: Whether to symmetrize M before decomposition
 
     Returns:
-        (eigenvalues, eigenvectors) — same shapes as ``torch.linalg.eigh``
+        (eigenvalues, eigenvectors) -- same shapes as ``torch.linalg.eigh``
     """
     K = M.shape[-1]
     device = M.device
@@ -259,7 +259,7 @@ def retract_spd_torch(
         step_size: Learning rate τ
         trust_region: Max Frobenius norm of whitened tangent
         eps: Regularization floor for numerical stability
-        sigma_max: Upper bound on eigenvalues (sigma_max² for covariance eigenvalues)
+        sigma_max: Upper bound on eigenvalues (sigma_max^2 for covariance eigenvalues)
 
     Returns:
         Sigma_new: SPD matrices, same shape as Sigma
@@ -275,7 +275,7 @@ def retract_spd_torch(
     batch_size, K, _ = Sigma.shape
     device = Sigma.device
 
-    # Force float32 for eigendecomposition, sqrt, exp — all break in float16
+    # Force float32 for eigendecomposition, sqrt, exp -- all break in float16
     with torch.amp.autocast('cuda', enabled=False):
         Sigma = Sigma.float()
         delta_Sigma = delta_Sigma.float()
@@ -311,8 +311,8 @@ def retract_spd_torch(
         Sigma_new = Sigma_sqrt @ exp_R @ Sigma_sqrt
         Sigma_new = 0.5 * (Sigma_new + Sigma_new.transpose(-1, -2))
 
-        # Spectral floor + ceiling: eigenvalues in [eps, sigma_max²]
-        # sigma_max bounds the standard deviation; covariance eigenvalues are σ².
+        # Spectral floor + ceiling: eigenvalues in [eps, sigma_max^2]
+        # sigma_max bounds the standard deviation; covariance eigenvalues are σ^2.
         eig_new, vec_new = _safe_eigh(Sigma_new, jitter=eps, symmetrize=False)
         eig_new = eig_new.clamp(min=eps, max=sigma_max * sigma_max)
         Sigma_new = vec_new * eig_new.unsqueeze(-2) @ vec_new.transpose(-1, -2)
@@ -349,7 +349,7 @@ def retract_spd_diagonal_torch(
         trust_region: Max absolute value of exponent argument
         eps: Floor for sigma values
         sigma_max: Upper bound on σ. Posterior σ should not greatly exceed the prior.
-            Prevents nat_grad_sigma = 2σ²·∇σ blowup (amplification grows as σ⁴).
+            Prevents nat_grad_sigma = 2σ^2·∇σ blowup (amplification grows as σ⁴).
 
     Returns:
         sigma_new: Positive diagonal variances, shape (B, N, K)
@@ -373,9 +373,9 @@ def retract_spd_diagonal_torch(
         exp_arg = (step_size * whitened).clamp(-50.0, 50.0)
         sigma_new = sigma_safe * torch.exp(exp_arg)
 
-    # Clamp to [eps, sigma_max] — posterior σ should not blow up past the prior.
-    # With sigma_max=5.0 and init_sigma_scale=1.0, allows 5× expansion before clamping.
-    # This bounds the natural gradient amplification: 2σ² ≤ 2·sigma_max² = 50.
+    # Clamp to [eps, sigma_max] -- posterior σ should not blow up past the prior.
+    # With sigma_max=5.0 and init_sigma_scale=1.0, allows 5x expansion before clamping.
+    # This bounds the natural gradient amplification: 2σ^2 ≤ 2·sigma_max^2 = 50.
     return sigma_new.clamp(min=eps, max=sigma_max).to(orig_dtype)
 
 
@@ -412,8 +412,8 @@ def _retract_phi(
 
     When gauge_group is provided, uses it directly. Otherwise auto-selects
     based on n_gen:
-    - n_gen = N(N-1)/2 → SO(N): compact, uses trust_region=0.3, max_norm=π, bch_order=1
-    - n_gen = K²       → GL(K): non-compact, uses trust_region=0.1, max_norm=5.0, bch_order=2
+    - n_gen = N(N-1)/2 -> SO(N): compact, uses trust_region=0.3, max_norm=π, bch_order=1
+    - n_gen = K^2       -> GL(K): non-compact, uses trust_region=0.1, max_norm=5.0, bch_order=2
 
     Args:
         phi: Current gauge frames (..., n_gen)
@@ -442,7 +442,7 @@ def _retract_phi(
         # Auto-detect from n_gen (original heuristic).
         # When n_gen doesn't match SO(N) or GL(K) exactly, default to GL(K)
         # retraction (conservative settings). This covers cross-head coupled
-        # GL(K) where n_gen = H*d² + n_cross*d² > K².
+        # GL(K) where n_gen = H*d^2 + n_cross*d^2 > K^2.
         is_son = RETRACTION_AVAILABLE and is_soN_generators(n_gen)
         is_glk = RETRACTION_AVAILABLE and (is_glK_generators(n_gen) or not is_son)
 
@@ -469,7 +469,7 @@ def _retract_phi(
         )
         return phi_new
 
-    # Check if this is GL(K) (n_gen = K²) or SO(N) (n_gen = N(N-1)/2)
+    # Check if this is GL(K) (n_gen = K^2) or SO(N) (n_gen = N(N-1)/2)
     if is_glk:
         # GL(K) is non-compact - needs conservative settings
         return retract_glK_torch(

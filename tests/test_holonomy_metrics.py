@@ -20,7 +20,7 @@ import numpy as np
 
 @pytest.fixture
 def flat_exp_delta():
-    """Identity exp_delta (flat transport) — shape (B, N, N, K, K)."""
+    """Identity exp_delta (flat transport) -- shape (B, N, N, K, K)."""
     B, N, K = 2, 12, 3
     return torch.eye(K).unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(B, N, N, K, K).clone()
 

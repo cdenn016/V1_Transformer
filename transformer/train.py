@@ -48,8 +48,8 @@ def gaussian_kl_divergence(
     For full covariances:
         KL = 0.5 * [tr(Σ_p⁻¹ Σ_q) + (μ_p - μ_q)ᵀ Σ_p⁻¹ (μ_p - μ_q) - K + log(|Σ_p|/|Σ_q|)]
 
-    For diagonal covariances (O(K) instead of O(K³)):
-        KL = 0.5 * [Σ_k(σ_q[k]/σ_p[k]) + Σ_k((μ_p[k]-μ_q[k])²/σ_p[k]) - K + Σ_k(log(σ_p[k])-log(σ_q[k]))]
+    For diagonal covariances (O(K) instead of O(K^3)):
+        KL = 0.5 * [Σ_k(σ_q[k]/σ_p[k]) + Σ_k((μ_p[k]-μ_q[k])^2/σ_p[k]) - K + Σ_k(log(σ_p[k])-log(σ_q[k]))]
 
     Args:
         mu_q: Posterior means (B, N, K)
@@ -74,7 +74,7 @@ def gaussian_kl_divergence(
 
     if use_diagonal:
         # =================================================================
-        # DIAGONAL PATH: O(K) per agent instead of O(K³)
+        # DIAGONAL PATH: O(K) per agent instead of O(K^3)
         # =================================================================
         # Convert to diagonal variances if needed
         if sigma_q is None:
@@ -100,7 +100,7 @@ def gaussian_kl_divergence(
         # Trace term: Σ_k (σ_q[k] / σ_p[k])
         trace_term = (sigma_q_diag / sigma_p_diag).sum(dim=-1)  # (B, N)
 
-        # Mahalanobis term: Σ_k ((μ_p[k] - μ_q[k])² / σ_p[k])
+        # Mahalanobis term: Σ_k ((μ_p[k] - μ_q[k])^2 / σ_p[k])
         delta_mu = mu_p - mu_q  # (B, N, K)
         mahal_term = ((delta_mu ** 2) / sigma_p_diag).sum(dim=-1)  # (B, N)
 
@@ -112,7 +112,7 @@ def gaussian_kl_divergence(
 
     else:
         # =================================================================
-        # FULL COVARIANCE PATH: O(K³) via Cholesky
+        # FULL COVARIANCE PATH: O(K^3) via Cholesky
         # =================================================================
         # Default to identity covariances if not provided
         if sigma_q is None:
@@ -188,7 +188,7 @@ def gaussian_kl_divergence(
     bad_mask = torch.isnan(kl) | torch.isinf(kl)
     if bad_mask.any():
         _nr("nan_replace")
-    # NaN → kl_ceil (repulsive): a NaN KL should be treated as maximum distance,
+    # NaN -> kl_ceil (repulsive): a NaN KL should be treated as maximum distance,
     # not zero distance. Zero would make the pair maximally attractive in softmax.
     kl = kl.nan_to_num(nan=kl_ceil, posinf=kl_ceil, neginf=0.0)
     return kl
@@ -221,7 +221,7 @@ def _get_sigma_target(
         sigma_target = model.token_embed.sigma_target  # (K,)
 
     if sigma_target is not None:
-        # sigma_target is (K,) — expand to match sigma_s shape
+        # sigma_target is (K,) -- expand to match sigma_s shape
         if sigma_s.dim() == 3:
             # Diagonal: sigma_s is (B, N, K)
             sigma_h = sigma_target.unsqueeze(0).unsqueeze(0).expand_as(sigma_s)
@@ -248,14 +248,14 @@ def compute_free_energy_loss(
     model,
     token_ids: torch.Tensor,
     targets: torch.Tensor,
-    M_alpha: float = 0.0,         # Self-coupling: KL(q_i || p_i) — beliefs to priors
+    M_alpha: float = 0.0,         # Self-coupling: KL(q_i || p_i) -- beliefs to priors
     M_beta: float = 1.0,          # Belief coupling weight
     lambda_gamma: float = 0.0,    # Model coupling weight
     kappa_gamma: float = 1.0,     # Temperature for γ_ij coupling weights
-    lambda_hyper: float = 0.0,    # Hyper-prior: KL(s_i || h) — models to centroid
+    lambda_hyper: float = 0.0,    # Hyper-prior: KL(s_i || h) -- models to centroid
     pad_token_id: int = -100,     # Token ID to ignore in loss (padding)
     use_obs_in_vfe: bool = False, # Pass targets into VFE E-step (last layer only)
-    mass_phi: float = 0.0,        # Gauge prior weight: (mass_φ/2) Σ_i ||φ_i||²
+    mass_phi: float = 0.0,        # Gauge prior weight: (mass_φ/2) Σ_i ||φ_i||^2
     aux_loss_weight: float = 0.0, # Weight for auxiliary per-layer CE losses (0 = disabled)
     detach_beta_m_step: bool = True,  # True = correct EM (detach β). False = old behavior (grad through softmax)
     # Backward-compatible aliases (deprecated)
@@ -277,13 +277,13 @@ def compute_free_energy_loss(
 
         L = CE + α · Σ_i KL(q_i || p_i)
 
-    The α term (default 0.1) couples Level 1→2, pulling beliefs toward priors.
-    Weight decay on embedding parameters (Level 2→3) is applied by the optimizer.
+    The α term (default 0.1) couples Level 1->2, pulling beliefs toward priors.
+    Weight decay on embedding parameters (Level 2->3) is applied by the optimizer.
     Remaining auxiliary terms are off by default:
         + λ_β · Σ_{i,j} β_ij · KL(q_i || Ω_{ij}q_j)  [Belief coupling]
         + λ_γ · Σ_{i,j} γ_ij · KL(s_i || Ω_{ij}s_j)  [Model coupling]
         + λ_h · Σ_i KL(s_i || h)                      [Hyper-prior on models]
-        + (α_φ/2) Σ_i ||φ_i||²                        [Gauge prior on φ]
+        + (α_φ/2) Σ_i ||φ_i||^2                        [Gauge prior on φ]
 
     Args:
         model: GaugeTransformerLM with forward_with_attention() method
@@ -294,7 +294,7 @@ def compute_free_energy_loss(
         lambda_gamma: Weight for model coupling (default: 0.0)
         kappa_gamma: Temperature for γ_ij model coupling weights (default: 1.0)
         lambda_hyper: Weight for hyper-prior KL(s_i||h) (default: 0.0)
-        mass_phi: Gauge prior weight: (mass_φ/2) Σ_i ||φ_i||² (default: 0.0)
+        mass_phi: Gauge prior weight: (mass_φ/2) Σ_i ||φ_i||^2 (default: 0.0)
         pad_token_id: Token ID for padding (ignored in loss). Default -100.
 
     Returns:
@@ -324,7 +324,7 @@ def compute_free_energy_loss(
     # Extract models s_i and priors p_i from attention_info
     # =================================================================
     # Currently p_i = s_i = embedding output (before position encoding).
-    # The embedding parameters ARE the models — they're the slow variables
+    # The embedding parameters ARE the models -- they're the slow variables
     # that backprop updates. The priors are derived from models; in the
     # simplest case p = s (identity mapping).
     #
@@ -362,7 +362,7 @@ def compute_free_energy_loss(
         # Note: the non-detached softmax gradient (β_ij/κ)(E_β[KL] - KL_ij)
         # actually sharpens, not uniformizes. But it's not part of the M-step.
         beta_final = beta[-1].detach() if detach_beta_m_step else beta[-1]
-        kl_final = kl[-1]               # (B, n_heads, N, N) — gradient flows through
+        kl_final = kl[-1]               # (B, n_heads, N, N) -- gradient flows through
         weighted_kl = beta_final * kl_final
         belief_align_loss = weighted_kl.sum(dim=(-2, -1)).mean()
         K = mu_q.shape[-1]
@@ -372,10 +372,10 @@ def compute_free_energy_loss(
         belief_align_loss = torch.tensor(0.0, device=ce_loss.device)
 
     # =================================================================
-    # 3. Self-Coupling: α_i · KL(q_i || p_i) — beliefs toward PRIORS
+    # 3. Self-Coupling: α_i · KL(q_i || p_i) -- beliefs toward PRIORS
     # =================================================================
     # This pulls evolved beliefs (fast) back toward priors (derived from
-    # models). This is NOT KL(q||s) — it's KL(q||p) where p = f(s).
+    # models). This is NOT KL(q||s) -- it's KL(q||p) where p = f(s).
     # Currently p = s, so they're numerically identical, but the
     # conceptual distinction matters for the hierarchy.
     #
@@ -389,11 +389,11 @@ def compute_free_energy_loss(
         # Detach E-step covariances: backprop through the E-step sigma evolution
         # produces NaN from numerically unstable second derivatives (matrix_exp
         # backward through Omega @ Sigma @ Omega.T). Sigma learning is handled by
-        # the E-step dynamics and ImplicitEMGradient — same EM principle as beta/gamma.
+        # the E-step dynamics and ImplicitEMGradient -- same EM principle as beta/gamma.
         # mu_q keeps gradient (flows through ImplicitEMGradient to mu_embed).
         sigma_q_for_kl = sigma_q.detach() if sigma_q is not None else None
         # sigma_p kept LIVE: the M-step KL(q||p) is the correct gradient source
-        # for sigma_p when M_alpha > 0. The positive feedback concern (smaller σ_p →
+        # for sigma_p when M_alpha > 0. The positive feedback concern (smaller σ_p ->
         # larger ∂KL/∂σ_p) applies to the E-step's natural gradient (where 1/σ_p
         # amplifies), but in the M-step with AdamW the gradient is bounded by
         # adaptive learning rates and gradient clipping. Detaching here starves
@@ -423,7 +423,7 @@ def compute_free_energy_loss(
     # 4. Model Coupling: λ_γ · Σ_{i,j} γ_ij · KL(s_i || Ω_{ij} s_j)
     # =================================================================
     # Aligns generative MODELS across agents via gauge transport.
-    # This operates on the slow timescale — it's the M-step analog of
+    # This operates on the slow timescale -- it's the M-step analog of
     # belief coupling (β term, which operates on q in the E-step).
     #
     # γ_{ij} = softmax_j(-KL(s_i || Ω_{ij} s_j) / κ_γ)
@@ -462,7 +462,7 @@ def compute_free_energy_loss(
         model_align_loss = torch.tensor(0.0, device=ce_loss.device)
 
     # =================================================================
-    # 5. Hyper-Prior: λ_h · Σ_i KL(s_i || h) — models toward centroid
+    # 5. Hyper-Prior: λ_h · Σ_i KL(s_i || h) -- models toward centroid
     # =================================================================
     # h = (μ_h, Σ_h) is the Level 3 hyperprior target.
     #   μ_h = centroid of all models (detached, anti-memorization)
@@ -481,7 +481,7 @@ def compute_free_energy_loss(
 
         if sigma_s is not None:
             # Σ_h: frozen initial sigma from embedding buffer (fixed anchor).
-            # This replaces the old moving target (2×mean(sigma_s)) which
+            # This replaces the old moving target (2xmean(sigma_s)) which
             # inflated together with sigma_s, providing no downward pressure.
             sigma_target = _get_sigma_target(model, sigma_s)  # (B, N, K) or (B, N, K, K)
             sigma_h = sigma_target
@@ -506,7 +506,7 @@ def compute_free_energy_loss(
         hyper_prior_loss = torch.tensor(0.0, device=ce_loss.device)
 
     # =================================================================
-    # 6. Gauge Prior: (α_φ/2) Σ_i ||φ_i||² — mass term for gauge field
+    # 6. Gauge Prior: (α_φ/2) Σ_i ||φ_i||^2 -- mass term for gauge field
     # =================================================================
     if mass_phi > 0.0:
         K = mu_q.shape[-1]
@@ -560,7 +560,7 @@ def compute_free_energy_loss(
                 beta_avg = _vfe_beta.mean(dim=1) if _vfe_beta.dim() == 4 else _vfe_beta
                 _beta_mean = _vfe_beta.mean().item()
             else:
-                # No beta available at all — use uniform
+                # No beta available at all -- use uniform
                 N = logits.shape[1]
                 beta_avg = torch.ones(1, N, N, device=logits.device) / N
                 _beta_mean = 1.0 / N

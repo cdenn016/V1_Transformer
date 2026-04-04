@@ -27,14 +27,14 @@ class TestStandardFLOPs:
         assert result['step_total'] > 0
 
     def test_flops_scale_with_seq_len(self):
-        """2× seq_len → total FLOPs increase significantly (quadratic attention)."""
+        """2x seq_len -> total FLOPs increase significantly (quadratic attention)."""
         from transformer.baselines.flops_counter import count_standard_transformer_flops
         kwargs = dict(vocab_size=50000, embed_dim=256, n_layers=6,
                       n_heads=4, hidden_dim=512)
         r1 = count_standard_transformer_flops(seq_len=64, **kwargs)
         r2 = count_standard_transformer_flops(seq_len=128, **kwargs)
         ratio = r2['forward_total'] / r1['forward_total']
-        assert ratio > 1.5, f"FLOPs ratio {ratio:.2f} too low for 2× seq_len"
+        assert ratio > 1.5, f"FLOPs ratio {ratio:.2f} too low for 2x seq_len"
 
     def test_no_ffn_reduces_flops(self):
         """disable_ffn=True reduces total FLOPs."""
@@ -46,7 +46,7 @@ class TestStandardFLOPs:
         assert r_attn['forward_total'] < r_full['forward_total']
 
     def test_backward_is_2x_forward(self):
-        """Backward FLOPs ≈ 2× forward FLOPs."""
+        """Backward FLOPs ~= 2x forward FLOPs."""
         from transformer.baselines.flops_counter import count_standard_transformer_flops
         result = count_standard_transformer_flops(
             vocab_size=50000, embed_dim=256, n_layers=6,
@@ -73,7 +73,7 @@ class TestGaugeFLOPs:
         assert result['forward_total'] > 0
 
     def test_more_iterations_more_flops(self):
-        """More VFE iterations → more FLOPs."""
+        """More VFE iterations -> more FLOPs."""
         from transformer.baselines.flops_counter import count_gauge_transformer_flops
         kwargs = dict(vocab_size=50000, embed_dim=25, n_layers=2,
                       n_heads=6, head_dim=5, seq_len=64, phi_dim=100)

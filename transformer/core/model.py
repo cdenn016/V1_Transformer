@@ -5,16 +5,16 @@ Complete Gauge-Theoretic Language Model (0D Architecture)
 Full transformer language model using gauge theory and variational free energy.
 
 Architecture:
-    token_ids → GaugeTokenEmbedding → (μ, Σ, φ) → Positional Encoding
-    → N × GaugeTransformerBlock (KL-attention + VFE E-step FFN)
-    → LayerNorm(μ) → Output Projection → logits
+    token_ids -> GaugeTokenEmbedding -> (μ, Σ, φ) -> Positional Encoding
+    -> N x GaugeTransformerBlock (KL-attention + VFE E-step FFN)
+    -> LayerNorm(μ) -> Output Projection -> logits
 
 Key Innovation: Attention via KL divergence on statistical manifold with gauge
-    transport — no learned W_Q, W_K, W_V matrices. Beliefs (μ, Σ, φ) evolve
+    transport -- no learned W_Q, W_K, W_V matrices. Beliefs (μ, Σ, φ) evolve
     through variational inference rather than neural network layers.
 
-Gauge groups: SO(3), SO(N), GL(K) — determined by generator shape.
-Configuration: flat dict → BlockConfig (see block_config.py for all 60+ params).
+Gauge groups: SO(3), SO(N), GL(K) -- determined by generator shape.
+Configuration: flat dict -> BlockConfig (see block_config.py for all 60+ params).
 """
 
 # Suppress noisy warnings BEFORE torch import (torch may trigger imports)
@@ -72,18 +72,18 @@ class GaugeTransformerLM(nn.Module):
     Complete gauge-theoretic language model.
 
     Architecture Flow:
-        token_ids → (μ, Σ, φ) → Positional Encoding → N × Transformer Blocks
-        → LayerNorm(μ) → W_out @ μ → logits
+        token_ids -> (μ, Σ, φ) -> Positional Encoding -> N x Transformer Blocks
+        -> LayerNorm(μ) -> W_out @ μ -> logits
 
     Components:
-        1. GaugeTokenEmbedding: tokens → beliefs (μ, Σ, φ) with optional O(K) reflections
+        1. GaugeTokenEmbedding: tokens -> beliefs (μ, Σ, φ) with optional O(K) reflections
         2. GaugePositionalEncoding: agent-index encoding in Lie algebra (so(3)/so(N)/gl(K))
         3. GaugeTransformerStack: N layers of KL-attention + VFE E-step FFN
-        4. Output projection: μ → logits over vocabulary (optionally tied to embeddings)
+        4. Output projection: μ -> logits over vocabulary (optionally tied to embeddings)
 
-    Gauge groups: SO(3), SO(N), GL(K) — determined by generators shape.
+    Gauge groups: SO(3), SO(N), GL(K) -- determined by generators shape.
     Belief state: μ ∈ ℝ^K (means), Σ ∈ SPD(K) (covariances), φ ∈ g (gauge frames).
-    All configuration flows through a flat config dict → BlockConfig.
+    All configuration flows through a flat config dict -> BlockConfig.
     """
 
     def __init__(self, config: Dict):
@@ -93,7 +93,7 @@ class GaugeTransformerLM(nn.Module):
         Args:
             config: Flat dictionary with all hyperparameters. Required keys:
                 - vocab_size: Vocabulary size V
-                - embed_dim: Belief dimension K = Σ(mult_ℓ × dim_ℓ)
+                - embed_dim: Belief dimension K = Σ(mult_ℓ x dim_ℓ)
                 - n_layers: Number of transformer blocks
                 - irrep_spec: [(label, multiplicity, dim), ...] defining head structure
                 - hidden_dim: FFN hidden dimension (kept for config compat)
@@ -164,7 +164,7 @@ class GaugeTransformerLM(nn.Module):
         diagonal_covariance = config.get('diagonal_covariance', False)
         self.diagonal_covariance = diagonal_covariance
 
-        # Isotropic covariance: Σ = σ²I (Limit 1 → KL reduces to squared Euclidean)
+        # Isotropic covariance: Σ = σ^2I (Limit 1 -> KL reduces to squared Euclidean)
         isotropic_covariance = config.get('isotropic_covariance', False)
         self.isotropic_covariance = isotropic_covariance
         if isotropic_covariance:
@@ -277,7 +277,7 @@ class GaugeTransformerLM(nn.Module):
         # Note: Can't tie when PriorBank is active (it IS the shared encode/decode)
         # or when gauge_fixed_priors=True (no per-token embedding)
         if use_prior_bank:
-            # PriorBank is the unified encode/decode layer — no tying needed
+            # PriorBank is the unified encode/decode layer -- no tying needed
             if tie_embeddings:
                 logger.info("tie_embeddings ignored: PriorBank serves as both encoder and decoder")
         elif tie_embeddings and not gauge_fixed_priors:
@@ -297,7 +297,7 @@ class GaugeTransformerLM(nn.Module):
         logger.info(f"GaugeTransformerLM initialized: {n_params/1e6:.2f}M parameters")
 
     # =========================================================================
-    # Step 1: Extracted helper — cross-head permutation
+    # Step 1: Extracted helper -- cross-head permutation
     # =========================================================================
 
     def _apply_cross_head_perm(
@@ -314,7 +314,7 @@ class GaugeTransformerLM(nn.Module):
         be applied to mu and sigma after embedding lookup and reversed before the
         vocabulary projection so that mu aligns with the generator block structure.
 
-        The permutation is a pure index reordering — no gauge-covariance concern.
+        The permutation is a pure index reordering -- no gauge-covariance concern.
 
         Args:
             mu:      (B, N, K) belief means.
@@ -339,13 +339,13 @@ class GaugeTransformerLM(nn.Module):
                 # Diagonal covariance: (B, N, K)
                 sigma = sigma[:, :, perm]
             else:
-                # Full covariance: (B, N, K, K) — sandwich permutation
+                # Full covariance: (B, N, K, K) -- sandwich permutation
                 sigma = sigma[:, :, perm][:, :, :, perm]
 
         return mu, sigma
 
     # =========================================================================
-    # Step 2/3: Extracted helpers — embed_and_prepare, compute_logits
+    # Step 2/3: Extracted helpers -- embed_and_prepare, compute_logits
     # =========================================================================
 
     def _embed_and_prepare(
@@ -390,7 +390,7 @@ class GaugeTransformerLM(nn.Module):
         sigma_prior = sigma_q.clone() if sigma_q is not None else None
         phi_prior = phi.clone()  # phi before positional encoding (for attention_info)
 
-        # 4. Position encoding — compose token phi with positional phi
+        # 4. Position encoding -- compose token phi with positional phi
         phi = self.pos_encoding.compose(phi, num_agents, device=device)
 
         # 5. Causal attention mask
@@ -595,8 +595,8 @@ class GaugeTransformerLM(nn.Module):
 
             SO(3):  3
             SO(N):  N(N-1)/2
-            GL(K), single-head:  K²
-            GL(K), multi-head H×d:  H × d² + |cross_couplings| × d²
+            GL(K), single-head:  K^2
+            GL(K), multi-head Hxd:  H x d^2 + |cross_couplings| x d^2
 
         Args:
             gauge_group:    'SO3', 'SON', or 'GLK'.
@@ -636,7 +636,7 @@ class GaugeTransformerLM(nn.Module):
         r"""Construct the Lie algebra generator matrices.
 
         Returns a numpy array of shape (n_gen, K, K) where each slice
-        G_a is a K×K skew-symmetric (SO) or general (GL) matrix forming
+        G_a is a KxK skew-symmetric (SO) or general (GL) matrix forming
         a basis for the Lie algebra.  The generators are registered as a
         buffer (``self.generators``) after this call returns.
 
@@ -778,7 +778,7 @@ class GaugeTransformerLM(nn.Module):
             omega_head_dims=self.omega_head_dims,
         )
 
-        # Position encoding for φ (gauge frame) — encodes RELATIVE position via transport.
+        # Position encoding for φ (gauge frame) -- encodes RELATIVE position via transport.
         # φ_i = φ_token_i + φ_pos(i), transport Ω_ij = exp(φ_i·G)·exp(-φ_j·G)
         # depends on relative position, giving shift-invariant attention.
         self.pos_encoding = GaugePositionalEncoding(
@@ -830,7 +830,7 @@ class GaugeTransformerLM(nn.Module):
     def _init_weights(self, module):
         """Initialize weights following best practices.
 
-        Note: Skip nn.Embedding modules — their initialization is handled
+        Note: Skip nn.Embedding modules -- their initialization is handled
         by GaugeTokenEmbedding.__init__() with calibrated std values
         (e.g., init_std=2.0 for mu_embed, scaled phi_embed).
         Overwriting with std=0.02 would destroy the gauge-theoretic init.
@@ -873,13 +873,13 @@ class GaugeTransformerLM(nn.Module):
         batch_size, num_agents = token_ids.shape
         device = token_ids.device
 
-        # Warn if implicit_em is active in forward() — no ImplicitEMGradient
+        # Warn if implicit_em is active in forward() -- no ImplicitEMGradient
         # re-attachment here.  Use forward_with_attention() for training.
         if (getattr(self.transformer.blocks[-1].ffn, 'implicit_em', False)
                 and self.training and torch.is_grad_enabled()):
             warnings.warn(
                 "forward() called with implicit_em=True during training. "
-                "Gradient path to embeddings is broken — use "
+                "Gradient path to embeddings is broken -- use "
                 "forward_with_attention() for training.",
                 stacklevel=2,
             )
@@ -918,7 +918,7 @@ class GaugeTransformerLM(nn.Module):
         use_obs = self.config.get('use_obs_in_vfe', False) if hasattr(self, 'config') else False
         vfe_targets = targets if use_obs else None
         # PriorBank decodes via KL (no linear output projection), so out_proj
-        # is untrained when PriorBank is active — never pass it as W_out.
+        # is untrained when PriorBank is active -- never pass it as W_out.
         if use_obs and self.use_prior_bank:
             warnings.warn(
                 "use_obs_in_vfe=True has no effect when PriorBank is active: "
@@ -1094,7 +1094,7 @@ class GaugeTransformerLM(nn.Module):
 
                 if block.evolve_sigma and sigma_attn is not None:
                     if sigma_attn.shape != sigma_q.shape:
-                        # Shape mismatch (e.g., per-head vs full-K sigma) — skip residual,
+                        # Shape mismatch (e.g., per-head vs full-K sigma) -- skip residual,
                         # use attention output directly to avoid broadcast errors.
                         sigma_q = sigma_attn
                     elif block.sigma_residual:
@@ -1110,7 +1110,7 @@ class GaugeTransformerLM(nn.Module):
             mu_normalized = block.norm2(mu_q) if not block.skip_attention else block.norm1(mu_q)
 
             # Permute W_out to match cross-head reordered mu basis.
-            # PriorBank decodes via KL — out_proj is untrained, never use as W_out.
+            # PriorBank decodes via KL -- out_proj is untrained, never use as W_out.
             if is_final and not self.use_prior_bank and hasattr(self, 'out_proj'):
                 _w_out_fwa = self.out_proj.weight
                 if getattr(self, '_cross_head_perm', None) is not None:
@@ -1247,11 +1247,11 @@ class GaugeTransformerLM(nn.Module):
                 self._layer_diagnostics.append(_ld)
 
         # =================================================================
-        # Implicit EM: Re-establish gradient path from mu_q → mu_embed
+        # Implicit EM: Re-establish gradient path from mu_q -> mu_embed
         # =================================================================
         # Applied BEFORE final_norm and inv_perm so that:
         # (a) scale, mu_q, and mu_prior are all in the same (permuted) K space
-        #     — applying after inv_perm misaligns per-dimension scales
+        #     -- applying after inv_perm misaligns per-dimension scales
         # (b) the IFT scale was derived at the E-step fixed point (pre-norm),
         #     so J_norm should be part of the scaled gradient path
         #
@@ -1267,7 +1267,7 @@ class GaugeTransformerLM(nn.Module):
         if implicit_mu_scale is not None:
             # Detach mu_q to remove the residual+attention gradient path.
             # ImplicitEMGradient.apply then establishes the IFT-scaled path as
-            # the sole gradient to mu_prior (→ embeddings).
+            # the sole gradient to mu_prior (-> embeddings).
             mu_q = ImplicitEMGradient.apply(mu_q.detach(), mu_prior, implicit_mu_scale)
         if implicit_sigma_scale is not None and sigma_q is not None and sigma_prior is not None:
             sigma_q = ImplicitEMGradientSigma.apply(sigma_q.detach(), sigma_prior, implicit_sigma_scale)
@@ -1361,13 +1361,13 @@ class GaugeTransformerLM(nn.Module):
 
                 # --- Transport proxy: phi norm statistics ---
                 # ||φ_i - φ_j|| governs how far Ω_ij deviates from identity.
-                # Large phi norms → large transport deviations.
+                # Large phi norms -> large transport deviations.
                 _phi_final = (phi_ffn if phi_ffn is not None else phi).detach().float()
                 _phi_norms = _phi_final.norm(dim=-1)  # (B, N)
                 transport_metrics['phi_norm_mean'] = _phi_norms.mean().item()
                 transport_metrics['phi_norm_std'] = _phi_norms.std().item()
                 transport_metrics['phi_norm_max'] = _phi_norms.max().item()
-                # Pairwise phi distance (sample to avoid O(N²) cost)
+                # Pairwise phi distance (sample to avoid O(N^2) cost)
                 _N = _phi_final.shape[1]
                 _n_sample = min(32, _N)
                 _idx = torch.randperm(_N, device=_phi_final.device)[:_n_sample]
@@ -1406,7 +1406,7 @@ class GaugeTransformerLM(nn.Module):
             'sigma': sigma_q,  # (B, N, K, K) or None
             'phi': phi_ffn if phi_ffn is not None else phi,  # (B, N, gauge_dim) - post-FFN phi
             # Models s_i (saved before position encoding).
-            # In the FEP hierarchy h→s→p→q, these are the slow variables
+            # In the FEP hierarchy h->s->p->q, these are the slow variables
             # (embedding params = what backprop updates). Currently p_i = s_i.
             'mu_prior': mu_prior,        # (B, N, K) - model means s_i
             'sigma_prior': sigma_prior,  # (B, N, K, K) - model covariances
@@ -1591,7 +1591,7 @@ class GaugeTransformerLM(nn.Module):
             pad_token_id: Padding token ID
         """
         if self.use_prior_bank and self.prior_bank is not None:
-            # PriorBank owns phi_embed — update it directly via EMA
+            # PriorBank owns phi_embed -- update it directly via EMA
             phi_embed = self.prior_bank.phi_embed
             phi_dim = phi_evolved.shape[-1]
             lr = 1.0 - ema_decay
@@ -1652,7 +1652,7 @@ class GaugeTransformerLM(nn.Module):
             pad_token_id: Token ID for padding positions (excluded from update)
         """
         if self.use_prior_bank and self.prior_bank is not None:
-            # PriorBank has no W_out — decode is KL-based, priors update via backprop
+            # PriorBank has no W_out -- decode is KL-based, priors update via backprop
             return
 
         with torch.no_grad():
@@ -1668,7 +1668,7 @@ class GaugeTransformerLM(nn.Module):
             # Get current predictions: softmax(W_out @ mu)
             # NOTE: when learnable_reflection=True, this should apply sign
             # vectors to W_out rows (as in forward()). Currently unsupported
-            # in delta_rule_update_w_out — use standard backprop training instead.
+            # in delta_rule_update_w_out -- use standard backprop training instead.
             logits = self.out_proj(mu_beliefs)  # (B, N, V)
             predictions = F.softmax(logits, dim=-1)  # (B, N, V)
 

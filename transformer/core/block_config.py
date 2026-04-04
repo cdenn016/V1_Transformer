@@ -2,13 +2,13 @@
 BlockConfig: Single dataclass replacing the 40+ parameter waterfall.
 
 Instead of:
-    config dict → model.py (40 config.get calls) → Stack(40 kwargs) → Block(40 kwargs) → FFN(30 kwargs)
+    config dict -> model.py (40 config.get calls) -> Stack(40 kwargs) -> Block(40 kwargs) -> FFN(30 kwargs)
 
 Now:
-    config dict → BlockConfig.from_config(config) → Stack(cfg) → Block(cfg) → FFN(cfg)
+    config dict -> BlockConfig.from_config(config) -> Stack(cfg) -> Block(cfg) -> FFN(cfg)
 
 All block-level parameters live here. Embedding-level parameters (learnable_reflection,
-mu_normalize, mu_max_norm) are handled by model.py → GaugeTokenEmbedding directly.
+mu_normalize, mu_max_norm) are handled by model.py -> GaugeTokenEmbedding directly.
 """
 
 from dataclasses import dataclass, field
@@ -36,7 +36,7 @@ class BlockConfig:
         default_factory=lambda: [('ℓ0', 8, 1)]       #   e.g. [('ℓ0',75,1),('ℓ1',30,3),('ℓ2',18,5)]
     )
     
-    embed_dim: int =  64                 # Total belief dimension K = Σ (mult_ℓ × dim_ℓ)
+    embed_dim: int =  64                 # Total belief dimension K = Σ (mult_ℓ x dim_ℓ)
     hidden_dim: int = 256               # FFN hidden dimension (kept for config compat, not used by blocks)
     n_layers: int =   1                   # Number of stacked blocks (only used by Stack)
 
@@ -49,7 +49,7 @@ class BlockConfig:
     attention_window: int =       64          # Window size (unused, kept for API compat)
     
     mask_self_attention: bool =   True   # Prevent KL(q_i||q_i)=0 collapse
-    use_output_projection: bool = True # W_O ∈ R^{K×K} after multi-head concat
+    use_output_projection: bool = True # W_O ∈ R^{KxK} after multi-head concat
     multihead_vfe: bool =         True         # Per-head β_h through VFE iterations
 
     # === Belief evolution ===
@@ -78,7 +78,7 @@ class BlockConfig:
     
                                         # (enables fully backprop-free training with phi P-flow)
     implicit_em: bool =         False   # IFT-based M-step: detach beliefs at E-step start,
-                                        # apply info-geometric scale s_k = (α/σ²_p)/A_k
+                                        # apply info-geometric scale s_k = (α/σ^2_p)/A_k
 
     # === VFE dynamics (E-step) ===
     ffn_mode: str = 'VFE_dynamic'       # FFN mode (only 'VFE_dynamic' supported)
@@ -93,16 +93,16 @@ class BlockConfig:
     obs_sigma_weight: float =  1.0      # Weight for sigma observation gradient
     
     
-    isotropic_covariance: bool =     False  # Force Σ = σ²I (manuscript Limit 1)
+    isotropic_covariance: bool =     False  # Force Σ = σ^2I (manuscript Limit 1)
     diagonal_covariance: bool =      False   # σ as (B,N,K) diagonal instead of (B,N,K,K) full   
     exact_diagonal_transport: bool = False  # When True + diagonal_covariance, lift σ to full
                                             # for exact Ω@diag(σ)@Ω^T transport (slower but exact)
    
-    phi_dim: int =     3               # 3 for SO(3), N(N-1)/2 for SO(N), K² for GL(K)
+    phi_dim: int =     3               # 3 for SO(3), N(N-1)/2 for SO(N), K^2 for GL(K)
     sigma_max: float = 5.0             # Upper bound on σ (diagonal) or eigenvalues (full cov).
                                         # Posterior σ should not exceed prior σ by much.
-                                        # Default 5.0: with init_sigma_scale=1.0, allows 5× expansion
-                                        # before clamping. Prevents nat_grad_sigma = 2σ²·∇σ blowup.
+                                        # Default 5.0: with init_sigma_scale=1.0, allows 5x expansion
+                                        # before clamping. Prevents nat_grad_sigma = 2σ^2·∇σ blowup.
     e_step_sigma_floor: float = 0.1    # Floor on σ_p inside E-step (caps 1/σ_p gradient).
                                         # PriorBank allows σ_p ∈ [0.01, 5.0] for sharp decode,
                                         # but E-step needs a higher floor to prevent nat_grad blowup.
@@ -126,7 +126,7 @@ class BlockConfig:
     
    
     # NOTE: learnable_reflection is an embedding-level feature, handled by
-    # model.py → GaugeTokenEmbedding, not by blocks. Not stored here.
+    # model.py -> GaugeTokenEmbedding, not by blocks. Not stored here.
 
     def __post_init__(self):
         """Enforce mode invariants that must hold regardless of how BlockConfig is constructed."""
@@ -137,7 +137,7 @@ class BlockConfig:
         # Isotropic covariance requires diagonal representation
         if self.isotropic_covariance and not self.diagonal_covariance:
             self.diagonal_covariance = True
-        # Backward compat: use_layernorm=False with default norm_type → 'none'
+        # Backward compat: use_layernorm=False with default norm_type -> 'none'
         if not self.use_layernorm and self.norm_type == 'layernorm':
             self.norm_type = 'none'
 
@@ -154,7 +154,7 @@ class BlockConfig:
     connection_type: str = 'bilinear'      # 'bilinear' | 'mlp'
     connection_hidden_dim: int = 64        # Hidden dim for MLP connection
     connection_init_scale: float = 0.01    # W init scale (0=flat saddle, >0 breaks symmetry)
-    holonomy_penalty: float = 0.0          # λ_H · E[‖H_ijk - I‖²_F] added to loss
+    holonomy_penalty: float = 0.0          # λ_H · E[‖H_ijk - I‖^2_F] added to loss
 
     # === Positional encoding ===
     alibi_slope: Optional[float] = None    # ALiBi positional bias (negative = recency)
@@ -237,7 +237,7 @@ class BlockConfig:
             amortized_inference=config.get('amortized_inference', True),
             detach_phi=config.get('detach_phi', False),
             implicit_em=config.get('implicit_em', False),
-            # VFE dynamics (E-step) — new names with old-name fallbacks
+            # VFE dynamics (E-step) -- new names with old-name fallbacks
             ffn_mode=config.get('ffn_mode', 'VFE_dynamic'),
             E_alpha=config.get('E_alpha', config.get('ffn_alpha', 1.0)),
             ffn_kappa=kappa_beta,  # Unified temperature

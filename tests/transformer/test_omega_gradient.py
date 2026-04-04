@@ -27,7 +27,7 @@ def small_config():
     return {
         'B': 2,     # batch
         'N': 4,     # sequence length
-        'K': 6,     # belief dim (2 heads × 3)
+        'K': 6,     # belief dim (2 heads x 3)
         'H': 2,     # heads
         'K_h': 3,   # head dim
         'irrep_dims': [3, 3],
@@ -158,7 +158,7 @@ def test_reflection_coverage(device):
     omega = torch.eye(K, device=device)
     assert torch.linalg.det(omega) > 0
 
-    # Flip first column → det < 0
+    # Flip first column -> det < 0
     omega_reflected = omega.clone()
     omega_reflected[:, 0] *= -1
     det = torch.linalg.det(omega_reflected)
@@ -182,7 +182,7 @@ def test_natural_gradient_omega(device):
 
     nat_grad = natural_grad_omega(grad, omega)
 
-    # At identity, natural gradient should equal Ω·Ωᵀ·grad = grad (since Ω=I → ΩΩᵀ=I)
+    # At identity, natural gradient should equal Ω·Ωᵀ·grad = grad (since Ω=I -> ΩΩᵀ=I)
     omega_id = torch.eye(K, device=device)
     nat_grad_id = natural_grad_omega(grad, omega_id)
     assert torch.allclose(nat_grad_id, grad, atol=1e-5), \
@@ -234,7 +234,7 @@ def test_lie_algebra_clip_grad_identity_equivalence(device):
 
 
 def test_lie_algebra_clip_grad_prevents_spike(device):
-    """Large Omega no longer amplifies gradient — the key regression test."""
+    """Large Omega no longer amplifies gradient -- the key regression test."""
     from transformer.pure_vfe.gauge import lie_algebra_clip_grad, natural_grad_omega
 
     K = 4
@@ -335,7 +335,7 @@ def test_regularize_preserves_det_sign(device):
     base_pos = torch.eye(K, device=device) + 0.05 * torch.randn(5, K, K, device=device)
     omega_pos = base_pos @ D  # ill-conditioned, det > 0
 
-    # GL⁻(K) frames (negative det) — flip first column
+    # GL⁻(K) frames (negative det) -- flip first column
     omega_neg = omega_pos.clone()
     omega_neg[:, :, 0] *= -1
 
@@ -445,7 +445,7 @@ def test_non_flat_omega_reduces_to_flat_when_delta_zero(device, small_config):
             generators[idx, a, b] = 1.0
             idx += 1
 
-    # Zero connection → should match flat
+    # Zero connection -> should match flat
     connection_delta = torch.zeros(B, N, N, n_gen, device=device)
 
     result_nonflat = compute_transport_operators_direct(
@@ -463,7 +463,7 @@ def test_non_flat_omega_reduces_to_flat_when_delta_zero(device, small_config):
 
 
 def test_non_flat_omega_cocycle_relaxation_interpolates(device, small_config):
-    """cocycle_relaxation=0 → flat, cocycle_relaxation=1 → fully non-flat."""
+    """cocycle_relaxation=0 -> flat, cocycle_relaxation=1 -> fully non-flat."""
     from transformer.core.attention import compute_transport_operators_direct
 
     B, N, K = small_config['B'], small_config['N'], small_config['K']

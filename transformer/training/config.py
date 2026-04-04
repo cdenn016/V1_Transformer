@@ -75,11 +75,11 @@ class TrainingConfig:
     fisher_damping: float =   1e-4     # Tikhonov regularization λI for invertibility
 
     # non_embed_weight_decay: L2 on non-embedding params (attention, output projection).
-    #   p(θ) = N(0, 1/(2·wd))  →  -log p(θ) = wd·||θ||²
+    #   p(θ) = N(0, 1/(2·wd))  ->  -log p(θ) = wd·||θ||^2
     
     # embed_weight_decay: L2 regularizer in AdamW on embedding parameters (μ_p, σ_p, φ).
     #   Implements implicit Gaussian hyper-prior N(0, 1/(2·wd)).
-    #   Acts through optimizer weight decay — pulls parameters toward zero.
+    #   Acts through optimizer weight decay -- pulls parameters toward zero.
     #   Distinct from lambda_hyper (explicit KL loss pulling tokens toward centroid).
     
     non_embed_weight_decay: float =       0.1
@@ -118,7 +118,7 @@ class TrainingConfig:
     lambda_hyper: float = 0.0
     # lambda_hyper: Explicit KL loss term KL(s_i || h) in M-step objective.
     #   Pulls each token's embedding distribution toward the population centroid.
-    #   Acts through backprop — gradient flows to both μ and σ.
+    #   Acts through backprop -- gradient flows to both μ and σ.
     #   Orthogonal to embed_weight_decay (which regularizes magnitudes via AdamW).
        
     detach_beta_m_step: bool =  True  # Detach β in M-step loss (correct EM). False = old behavior (gradient flows through softmax)
@@ -178,7 +178,7 @@ class TrainingConfig:
     gauge_param: str =           'phi'       # 'phi' or 'omega'
     omega_lr: float =            0.01         # LR for direct Omega embeddings (gauge_param='omega')
     omega_trust_region: float =  0.3
-    isotropic_covariance: bool = False  # Force Σ = σ²I (Limit 1 from manuscript)
+    isotropic_covariance: bool = False  # Force Σ = σ^2I (Limit 1 from manuscript)
 
     # ==========================================================================
     # Positional Encoding
@@ -196,7 +196,7 @@ class TrainingConfig:
     # ==========================================================================
     # Gauge Geometry: Phi gradient preconditioning (M-step)
     # ==========================================================================
-    mass_phi: float =                   0.05                     # Gauge prior: (mass_φ/2)||φ||² loss term
+    mass_phi: float =                   0.05                     # Gauge prior: (mass_φ/2)||φ||^2 loss term
     use_slk_projection: bool =          False           # Project phi to traceless sl(K) after each step
     use_killing_form: bool =            False             # Cartan decomposition preconditioning for phi grads
     killing_form_sym_dampening: float = 0.1    # Dampening for non-compact (symmetric) directions

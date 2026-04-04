@@ -191,7 +191,7 @@ def count_gauge_transformer_flops(
     # We need exp(phi_i) and exp(-phi_j) for each (i,j) pair.
     # With caching: compute 2*N matrix exponentials per batch element per head.
     #   lin_comb: 2*N * phi_dim_per_head * d^2
-    #   mat_exp:  2*N * 30 * d^3  (Pade [6/6] ≈ 30 matrix multiplications of size d)
+    #   mat_exp:  2*N * 30 * d^3  (Pade [6/6] ~= 30 matrix multiplications of size d)
     phi_dim_per_head = phi_dim // H if H > 0 else phi_dim
     lin_comb_flops = 2 * B * N * phi_dim_per_head * d * d
     # Matrix exponential via scaling-and-squaring with Pade[6/6]:
@@ -211,7 +211,7 @@ def count_gauge_transformer_flops(
         # KL(N(mu_i, diag(sigma_i)) || Omega_ij * N(mu_j, diag(sigma_j)))
         # After transport: mu_j' = Omega_ij @ mu_j (matrix-vector: 2*d^2)
         #                  sigma_j' = Omega_ij @ diag(sigma_j) @ Omega_ij^T (2*d^3 + d^2)
-        # KL computation: trace + log det + quadratic form ≈ 10*d ops (diagonal)
+        # KL computation: trace + log det + quadratic form ~= 10*d ops (diagonal)
         # Total per pair: ~2*d^3 + 4*d^2 + 10*d
         # For N^2 pairs:
         kl_transport_flops = B * H * N * N * (2 * d * d * d + 4 * d * d + 10 * d)
@@ -235,7 +235,7 @@ def count_gauge_transformer_flops(
     #   2. beta_ij * result: scalar-vector multiply (d FLOPs)
     # Then sum over j: N additions of d-vectors per query i
     # Total mu: B*H*N*N*(2*d^2 + d) + B*H*N*d  (transport + scale + reduce)
-    # Sigma transport (diagonal): Omega @ diag(sigma) @ Omega^T per pair ≈ 2*d^3
+    # Sigma transport (diagonal): Omega @ diag(sigma) @ Omega^T per pair ~= 2*d^3
     #   but in practice sigma aggregation uses simpler weighted combination
     msg_transport_flops = B * H * N * N * 2 * d * d  # Omega_ij @ mu_j for all pairs
     msg_weighted_sum_flops = 2 * B * H * N * N * d    # beta_ij * transported_mu_j + accumulate

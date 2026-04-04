@@ -47,7 +47,7 @@ except ImportError:
 from transformer.train import compute_free_energy_loss
 from transformer.baselines.standard_transformer import StandardTransformerLM
 
-# Backward-compatible alias — old checkpoints and call sites may reference this name.
+# Backward-compatible alias -- old checkpoints and call sites may reference this name.
 FastTrainingConfig = TrainingConfig
 
 
@@ -97,7 +97,7 @@ class FastTrainer:
         self.device = device or torch.device('cpu')
 
         # Target padding uses -100 (PyTorch cross_entropy ignore_index default).
-        # Dataset.pad_token_id is for INPUT padding only — targets always use -100.
+        # Dataset.pad_token_id is for INPUT padding only -- targets always use -100.
         self.pad_token_id = -100
 
         self.model.to(self.device)
@@ -151,7 +151,7 @@ class FastTrainer:
             self.load_checkpoint(config.resume_from)
 
     def _create_optimizer(self) -> torch.optim.Optimizer:
-        """Create optimizer — delegates to optimizer.py (single source of truth)."""
+        """Create optimizer -- delegates to optimizer.py (single source of truth)."""
         from transformer.training.optimizer import create_optimizer
         return create_optimizer(self.model, self.config)
 
@@ -292,7 +292,7 @@ class FastTrainer:
                     output = self.model(input_ids, labels=target_ids)
                     ce_loss = output['loss'].item()
                 else:
-                    # Pure CE evaluation — disable all VFE regularization terms
+                    # Pure CE evaluation -- disable all VFE regularization terms
                     _, metrics = compute_free_energy_loss(
                         self.model,
                         input_ids,

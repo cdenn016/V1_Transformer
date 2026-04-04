@@ -39,7 +39,7 @@ def _make_block_test_setup(B=2, N=4):
     """Create minimal block-diagonal test setup.
 
     Returns phi, generators, irrep_dims, and derived quantities.
-    Uses irrep_spec: 2 scalar blocks (d=1) + 1 vector block (d=3) → K=5.
+    Uses irrep_spec: 2 scalar blocks (d=1) + 1 vector block (d=3) -> K=5.
     """
     irrep_dims = [1, 1, 3]
     K = sum(irrep_dims)
@@ -48,7 +48,7 @@ def _make_block_test_setup(B=2, N=4):
     # Build block-diagonal generators
     G = torch.zeros(n_gen, K, K)
     # scalar blocks: generators are zero (trivial representation)
-    # vector block: use SO(3) generators for the 3×3 sub-block
+    # vector block: use SO(3) generators for the 3x3 sub-block
     so3 = _make_so3_generators_torch(3)
     G[:, 2:5, 2:5] = so3
 
@@ -64,7 +64,7 @@ class TestStableMatrixExpPair:
     """Tests for stable_matrix_exp_pair()."""
 
     def test_exp_inverse_identity(self):
-        """exp(M) · exp(-M) ≈ I."""
+        """exp(M) · exp(-M) ~= I."""
         from transformer.core.gauge_utils import stable_matrix_exp_pair
         M = _random_gl_matrix(4, 3)
         exp_pos, exp_neg = stable_matrix_exp_pair(M)
@@ -82,7 +82,7 @@ class TestStableMatrixExpPair:
         assert (dets > 0).all(), f"Found non-positive dets: {dets[dets <= 0]}"
 
     def test_det_equals_exp_trace(self):
-        """det(exp(M)) ≈ exp(tr(M)) — Jacobi's formula."""
+        """det(exp(M)) ~= exp(tr(M)) -- Jacobi's formula."""
         from transformer.core.gauge_utils import stable_matrix_exp_pair
         M = _random_gl_matrix(4, 6)
         exp_pos, _ = stable_matrix_exp_pair(M)
@@ -137,7 +137,7 @@ class TestNewtonSchulzOrthogonalize:
     """Tests for newton_schulz_orthogonalize()."""
 
     def test_output_orthogonal(self):
-        """X^T X ≈ I after projection."""
+        """X^T X ~= I after projection."""
         from transformer.core.gauge_utils import newton_schulz_orthogonalize
         # Start close to orthogonal (small perturbation from I)
         X = torch.eye(4) + 0.1 * torch.randn(4, 4)
@@ -163,7 +163,7 @@ class TestNewtonSchulzOrthogonalize:
             f"Singular values: {svs}"
 
     def test_det_unit_magnitude(self):
-        """|det(NS(X))| ≈ 1 — projects to O(K)."""
+        """|det(NS(X))| ~= 1 -- projects to O(K)."""
         from transformer.core.gauge_utils import newton_schulz_orthogonalize
         # Start with det > 0 input close to identity
         X = torch.eye(4) + 0.1 * torch.randn(4, 4)
@@ -204,15 +204,15 @@ class TestFusedBlockMatrixExpPairs:
         from transformer.core.gauge_utils import fused_block_matrix_exp_pairs
         phi, G, irrep_dims, B, N, K = _make_block_test_setup()
         results = fused_block_matrix_exp_pairs(phi, G, irrep_dims)
-        # Scalar blocks (d=1) with zero generators → exp(0) = 1
+        # Scalar blocks (d=1) with zero generators -> exp(0) = 1
         for idx, d in enumerate(irrep_dims):
             if d == 1:
                 exp_pos, exp_neg = results[idx]
-                # Generators are zero for scalar blocks → identity
+                # Generators are zero for scalar blocks -> identity
                 assert torch.allclose(exp_pos, torch.ones_like(exp_pos), atol=1e-4)
 
     def test_inverse_property(self):
-        """exp_pos · exp_neg ≈ I per block."""
+        """exp_pos · exp_neg ~= I per block."""
         from transformer.core.gauge_utils import fused_block_matrix_exp_pairs
         phi, G, irrep_dims, B, N, K = _make_block_test_setup()
         results = fused_block_matrix_exp_pairs(phi, G, irrep_dims)
@@ -258,7 +258,7 @@ class TestFusedBlockDiagonalKLDiag:
         assert (kl >= -1e-5).all(), f"Found negative KL: {kl.min():.4e}"
 
     def test_kl_zero_self(self):
-        """KL(q_i || Ω_ii q_i) ≈ 0 on diagonal (identity transport)."""
+        """KL(q_i || Ω_ii q_i) ~= 0 on diagonal (identity transport)."""
         from transformer.core.gauge_utils import (
             fused_block_matrix_exp_pairs, fused_block_diagonal_kl_diag,
         )
@@ -269,7 +269,7 @@ class TestFusedBlockDiagonalKLDiag:
         G = torch.zeros(n_gen, K, K)
         so3 = _make_so3_generators_torch(3)
         G[:, 2:5, 2:5] = so3
-        # Use SAME phi for all positions → Ω_ii = I
+        # Use SAME phi for all positions -> Ω_ii = I
         phi_single = torch.randn(1, 1, n_gen) * 0.3
         phi = phi_single.expand(B, N, n_gen).contiguous()
         bep = fused_block_matrix_exp_pairs(phi, G, irrep_dims)
@@ -370,7 +370,7 @@ class TestDklDomegaDiag:
     """Tests for _compute_dkl_domega_diag()."""
 
     def test_gradient_matches_autograd(self):
-        """Manual ∂KL/∂Ω ≈ autograd gradient."""
+        """Manual ∂KL/∂Ω ~= autograd gradient."""
         from transformer.core.gauge_utils import _compute_dkl_domega_diag
         d = 3
         torch.manual_seed(42)

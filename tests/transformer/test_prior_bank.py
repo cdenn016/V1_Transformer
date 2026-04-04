@@ -55,7 +55,7 @@ def _make_glk_gauge_fixed_prior_bank(vocab_size=50, embed_dim=4):
     return PriorBank(
         vocab_size=vocab_size,
         embed_dim=embed_dim,
-        # phi_dim auto-inferred from generators (K²)
+        # phi_dim auto-inferred from generators (K^2)
         diagonal_covariance=True,
         learnable_sigma=True,
         gauge_fixed_priors=True,
@@ -95,7 +95,7 @@ class TestPriorBankEncode:
         assert torch.allclose(mu[0, 0], mu[0, 2])
 
     def test_different_tokens_different_priors(self):
-        """Distinct tokens → distinct μ (with high probability)."""
+        """Distinct tokens -> distinct μ (with high probability)."""
         pb = _make_prior_bank(vocab_size=100, embed_dim=6)
         token_ids = torch.tensor([[0, 1, 2, 3, 4]])
         mu, _, _ = pb.encode(token_ids)
@@ -138,13 +138,13 @@ class TestPriorBankDecode:
         assert torch.isfinite(logits).all()
 
     def test_temperature_scaling(self):
-        """Higher τ → flatter distribution (higher entropy)."""
+        """Higher τ -> flatter distribution (higher entropy)."""
         pb = _make_prior_bank(vocab_size=50, embed_dim=6)
         mu_q = torch.randn(1, 2, 6)
         sigma_q = torch.rand(1, 2, 6).clamp(min=0.1)
         logits_low = pb.decode(mu_q, sigma_q, tau=0.5)
         logits_high = pb.decode(mu_q, sigma_q, tau=2.0)
-        # Higher temp → logits closer to uniform → lower variance
+        # Higher temp -> logits closer to uniform -> lower variance
         var_low = logits_low.var(dim=-1).mean()
         var_high = logits_high.var(dim=-1).mean()
         assert var_low > var_high, \

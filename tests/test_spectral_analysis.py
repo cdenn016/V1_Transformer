@@ -73,7 +73,7 @@ class TestSpectralFeatures:
     def test_identity_matrix(self):
         M = np.eye(8)
         feat = compute_spectral_features(M)
-        # Identity has all eigenvalues = 1 → max entropy
+        # Identity has all eigenvalues = 1 -> max entropy
         assert feat["norm_spectral_entropy"] == pytest.approx(1.0, abs=1e-6)
         assert feat["effective_rank"] == pytest.approx(8.0, abs=0.1)
         assert feat["asymmetry"] == pytest.approx(0.0, abs=1e-10)

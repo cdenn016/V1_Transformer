@@ -225,7 +225,7 @@ def evaluate_on_test(
     )
 
     # Target padding uses -100 (PyTorch cross_entropy ignore_index default).
-    # Dataset.pad_token_id is for INPUT padding only — targets always use -100.
+    # Dataset.pad_token_id is for INPUT padding only -- targets always use -100.
     pad_token_id = -100
 
     # Evaluate

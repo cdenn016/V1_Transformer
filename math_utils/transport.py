@@ -8,7 +8,7 @@ active inference on spatial manifolds.
 Mathematical Framework:
 ----------------------
 **Transport Operator:**
-    Ω_ij: Fiber_i → Fiber_j
+    Ω_ij: Fiber_i -> Fiber_j
     Ω_ij(c) = g_i(c) · g_j(c)^{-1} where g = exp(φ) ∈ GL⁺(K)
 
 **Properties:**
@@ -18,14 +18,14 @@ Mathematical Framework:
 
 **Key Insight (GL(K) vs SO(K)):**
     All f-divergences (including KL) are invariant under the full GL(K) group.
-    This is because the action (μ, Σ) → (Ωμ, ΩΣΩᵀ) is the pushforward under
-    x → Ωx, and f-divergences are coordinate-invariant (Jacobians cancel in ratio).
+    This is because the action (μ, Σ) -> (Ωμ, ΩΣΩᵀ) is the pushforward under
+    x -> Ωx, and f-divergences are coordinate-invariant (Jacobians cancel in ratio).
 
     We do NOT need orthogonality constraints for the variational free energy
     to be gauge-invariant. The only requirement is invertibility: det(Ω) ≠ 0.
 
 **Surjectivity of exp (important caveat):**
-    The exponential map exp: gl(K, ℝ) → GL(K, ℝ) is NOT surjective for K > 1:
+    The exponential map exp: gl(K, ℝ) -> GL(K, ℝ) is NOT surjective for K > 1:
 
     1. det(exp(X)) = exp(tr(X)) > 0 always, so Im(exp) ⊂ GL⁺(K).
        Orientation-reversing transformations (det < 0) are unreachable.
@@ -37,16 +37,16 @@ Mathematical Framework:
 
        Concrete failures (all have det > 0, none have a real log):
          - diag(-2, -3): two negative eigenvalues, each with 1 Jordan
-           block of size 1 — odd count → no real log.
+           block of size 1 -- odd count -> no real log.
          - diag(-2, 1, 1, 1): one negative eigenvalue with 1 Jordan
-           block of size 1 — odd count → no real log.
+           block of size 1 -- odd count -> no real log.
        Concrete successes:
          - diag(-2, -2): one negative eigenvalue (-2) with 2 Jordan
-           blocks of size 1 — even count → has real log.
+           blocks of size 1 -- even count -> has real log.
            (Log uses paired complex eigenvalues: log(2)I + π·J₂.)
 
        These "unreachable" matrices are a measure-zero set but are NOT
-       topologically negligible — they disconnect components of GL⁺(K)
+       topologically negligible -- they disconnect components of GL⁺(K)
        in the log topology.
 
     3. However, every A ∈ GL⁺(K) can be written as a PRODUCT of two
@@ -58,7 +58,7 @@ Mathematical Framework:
        Since Ω_ij = exp(X_i) · exp(-X_j) is a free product of two
        exponentials, the transport operators cover ALL of GL⁺(K).
 
-    4. For SO(K) (compact, connected), exp: so(K) → SO(K) IS surjective.
+    4. For SO(K) (compact, connected), exp: so(K) -> SO(K) IS surjective.
        No issues there.
 
     5. The connection Ω_ij = g_i · g_j⁻¹ is always flat (zero curvature).
@@ -198,7 +198,7 @@ def _matrix_exponential_lie_algebra(
     # For GL(K) (enforce_skew_symmetry=False): clip to ~20.
     #   There is NO periodicity in the symmetric/trace directions of gl(K).
     #   Clipping to 2π would artificially restrict reachable eigenvalues to
-    #   [e^{-2π}, e^{2π}] ≈ [0.002, 535]. We use a larger threshold that
+    #   [e^{-2π}, e^{2π}] ~= [0.002, 535]. We use a larger threshold that
     #   keeps scipy.linalg.expm numerically stable (scaling-squaring handles
     #   norms up to ~50 comfortably in float64) while allowing the model to
     #   represent a much wider range of GL⁺(K) transformations.
@@ -263,7 +263,7 @@ def _project_to_orthogonal(M: np.ndarray) -> np.ndarray:
     """
     Project matrices to nearest orthogonal matrices via SVD.
 
-    For M ≈ rotation matrix with numerical errors,
+    For M ~= rotation matrix with numerical errors,
     finds Q = argmin_Q ||M - Q||_F subject to Q ∈ SO(K).
 
     Solution: Q = U V^T where M = U Σ V^T (SVD)
@@ -516,8 +516,8 @@ def _compute_dexp_generators(
 
     For 3x3 matrices (fundamental so(3) representation), uses the exact
     closed-form:
-        Q_a = G_a - c1(θ) ad_X(G_a) + c2(θ) ad_X²(G_a)
-    where c1 = (1-cosθ)/θ², c2 = (θ-sinθ)/θ³
+        Q_a = G_a - c1(θ) ad_X(G_a) + c2(θ) ad_X^2(G_a)
+    where c1 = (1-cosθ)/θ^2, c2 = (θ-sinθ)/θ^3
 
     For K>3 matrices (higher irreps or GL(K)), the 3-term Cayley-Hamilton
     truncation is inexact. Uses Frechet derivative of the matrix

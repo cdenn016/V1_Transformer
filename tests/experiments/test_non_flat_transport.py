@@ -100,7 +100,7 @@ class TestHolonomy:
     """
 
     def test_identity_exp_delta_gives_zero_holonomy(self):
-        """exp(δ_ij) = I for all edges → holonomy = 0."""
+        """exp(δ_ij) = I for all edges -> holonomy = 0."""
         B, N, K = 2, 10, 3
         # Identity transport on all edges
         exp_delta = torch.eye(K).unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(B, N, N, K, K).clone()
@@ -108,7 +108,7 @@ class TestHolonomy:
         assert torch.allclose(norms, torch.zeros_like(norms), atol=1e-6)
 
     def test_random_exp_delta_gives_nonzero_holonomy(self):
-        """Random non-flat transport → non-trivial holonomy."""
+        """Random non-flat transport -> non-trivial holonomy."""
         B, N, K = 2, 10, 3
         # Random transport (not satisfying cocycle condition)
         exp_delta = torch.eye(K).unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(B, N, N, K, K).clone()

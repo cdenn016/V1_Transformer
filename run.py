@@ -3,7 +3,7 @@
 Click-to-run Pure VFE Transformer.
 
 Usage: Just press Run (F5 / Shift+Enter / python run.py).
-Edit PURE_VFE_CONFIG below to change settings — no CLI needed.
+Edit PURE_VFE_CONFIG below to change settings -- no CLI needed.
 
 No nn.Module. No autograd. No loss.backward().
 Just variational free energy descent on a gauge-covariant prior bank.
@@ -21,7 +21,7 @@ from transformer.data.datasets import create_dataloaders
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  CONFIGURATION — edit this dict, then hit Run
+#  CONFIGURATION -- edit this dict, then hit Run
 # ═══════════════════════════════════════════════════════════════════
 
 PURE_VFE_CONFIG = {
@@ -37,7 +37,7 @@ PURE_VFE_CONFIG = {
 
     # ── VFE descent ─────────────────────────────────────────────────
     'n_esteps': 6,                    # VFE descent iterations (depth)
-    'tau': None,                      # Attention temperature (None → √head_dim)
+    'tau': None,                      # Attention temperature (None -> √head_dim)
 
     # ── Per-variable natural gradient learning rates ──────────────
     'mu_q_lr': 0.1,                   # Belief mean step size
@@ -90,7 +90,7 @@ PURE_VFE_CONFIG = {
 # ═══════════════════════════════════════════════════════════════════
 
 def build_config(cfg):
-    """Convert PURE_VFE_CONFIG dict → PureVFEConfig dataclass."""
+    """Convert PURE_VFE_CONFIG dict -> PureVFEConfig dataclass."""
     head_dim = cfg['belief_dim'] // cfg['n_heads']
 
     config_kwargs = {

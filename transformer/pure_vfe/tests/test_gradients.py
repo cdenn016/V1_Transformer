@@ -2,13 +2,13 @@
 Finite-difference gradient validation for all analytic gradients.
 
 Tests:
-  1. ∂KL/∂μ_i — mean gradient
-  2. ∂KL/∂Σ_i — covariance gradient
-  3. ∂KL/∂Ω_ij — gauge transport gradient
-  4. GL(K) invariance — KL(G·P || G·Ω·Q) = KL(P || Ω·Q)
-  5. E-step monotonicity — VFE decreases
-  6. SPD retraction — Σ stays SPD
-  7. Pairwise KL precomputation — matches direct computation
+  1. ∂KL/∂μ_i -- mean gradient
+  2. ∂KL/∂Σ_i -- covariance gradient
+  3. ∂KL/∂Ω_ij -- gauge transport gradient
+  4. GL(K) invariance -- KL(G·P || G·Ω·Q) = KL(P || Ω·Q)
+  5. E-step monotonicity -- VFE decreases
+  6. SPD retraction -- Σ stays SPD
+  7. Pairwise KL precomputation -- matches direct computation
 """
 
 import torch

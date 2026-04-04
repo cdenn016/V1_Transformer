@@ -13,7 +13,7 @@ Key mathematical objects:
     Covariance transport: Sigma_transported = Omega_ij @ Sigma_j @ Omega_ij.T
 
 The sandwich product for covariance transport is the single most critical
-correctness invariant — never transport covariance without the conjugation.
+correctness invariant -- never transport covariance without the conjugation.
 
 Rotary position encoding (RoPE) applies SO(2)^{K/2} rotations to belief
 means before KL divergence computation, making attention position-sensitive
@@ -128,15 +128,15 @@ def compute_transport_operators(
     gauge_mode: str = 'learned',  # 'learned', 'trivial', or 'constant'
     connection_delta: Optional[torch.Tensor] = None,  # (B, N, N, n_gen) edge-local connection
     cocycle_relaxation: float = 0.0,  # Scale factor for connection_delta: 0=flat, 1=fully non-flat
-    **kwargs,  # generators_are_skew: Optional[bool] — pre-computed skew-symmetry flag
+    **kwargs,  # generators_are_skew: Optional[bool] -- pre-computed skew-symmetry flag
 ) -> dict:
     """
     Precompute transport operators for caching when phi is fixed.
 
     Works for SO(3), SO(N), and GL⁺(K) gauge groups:
-    - SO(3): n_gen = 3, phi ∈ ℝ³, enforce_orthogonal=True
+    - SO(3): n_gen = 3, phi ∈ ℝ^3, enforce_orthogonal=True
     - SO(N): n_gen = N(N-1)/2, phi ∈ ℝ^{N(N-1)/2}, enforce_orthogonal=True
-    - GL⁺(K): n_gen = K², phi ∈ ℝ^{K²}, enforce_orthogonal=False
+    - GL⁺(K): n_gen = K^2, phi ∈ ℝ^{K^2}, enforce_orthogonal=False
       (exp parameterization reaches identity component GL⁺(K) only;
        det(exp(X)) = exp(tr(X)) > 0 always. The product Ω_ij =
        exp(X_i)·exp(-X_j) covers all of GL⁺(K).)
@@ -161,7 +161,7 @@ def compute_transport_operators(
         phi: Gauge frames (B, N, n_gen) in Lie algebra
              - For SO(3): shape (B, N, 3)
              - For SO(N): shape (B, N, N*(N-1)/2)
-             - For GL(K): shape (B, N, K²)
+             - For GL(K): shape (B, N, K^2)
         generators: Lie algebra generators (n_gen, K, K)
         enforce_orthogonal: If True, apply Newton-Schulz to ensure Ω ∈ SO(K).
                            If False, allow Ω ∈ GL⁺(K) (faster, still gauge-invariant).
@@ -292,9 +292,9 @@ def compute_transport_operators_direct(
 
     Returns:
         dict with:
-            'omega_i': (B, N, K, K) — per-token Ω_i
-            'omega_j_inv': (B, N, K, K) — per-token Ω_j⁻¹
-            'Omega': (B, N, N, K, K) — pairwise transport Ω_ij
+            'omega_i': (B, N, K, K) -- per-token Ω_i
+            'omega_j_inv': (B, N, K, K) -- per-token Ω_j⁻¹
+            'Omega': (B, N, N, K, K) -- pairwise transport Ω_ij
     """
     B, N, K, _ = omega.shape
     dtype = omega.dtype

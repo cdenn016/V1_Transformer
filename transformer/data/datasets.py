@@ -657,7 +657,7 @@ class WikiText2Dataset(Dataset):
         print(f"  Vocabulary size: {self.get_vocab_size()}")
 
         # Calculate number of complete sequences
-        # Each sequence is [tok_0...tok_T-1] → [tok_1...tok_T]
+        # Each sequence is [tok_0...tok_T-1] -> [tok_1...tok_T]
         self.num_sequences = max(1, len(self.tokens) - self.max_seq_len)
 
         print(f"  Number of sequences: {self.num_sequences:,}")
@@ -1709,7 +1709,7 @@ def create_dataloaders(
         test_loader = DataLoader(
             test_dataset,
             batch_size=batch_size,
-            shuffle=False,  # No shuffling for test — deterministic & reproducible
+            shuffle=False,  # No shuffling for test -- deterministic & reproducible
             num_workers=num_workers,
             persistent_workers=_persistent,
             pin_memory=True if torch.cuda.is_available() else False,
@@ -1885,7 +1885,7 @@ if __name__ == '__main__':
 
 
 # =============================================================================
-# Backward-compatible alias: WikiTextDataset → best available implementation
+# Backward-compatible alias: WikiTextDataset -> best available implementation
 # =============================================================================
 # Some modules import "WikiTextDataset" generically. Route to tiktoken-based
 # implementation when available, else fall back to transformers-based one.

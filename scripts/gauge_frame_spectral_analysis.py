@@ -5,17 +5,17 @@ T8: Gauge Frame Spectral Analysis Across Trained Transformers
 =============================================================
 
 Tests the gauge-theoretic prediction that standard transformer attention
-implements W_Q W_K^T = σ⁻² Ω⁻ᵀ (Limit 3 of the gauge-theoretic hierarchy).
+implements W_Q W_K^T = σ⁻^2 Ω⁻ᵀ (Limit 3 of the gauge-theoretic hierarchy).
 
 If true, the spectral structure of M^h = W_Q^h (W_K^h)^T should reveal:
 
-  (a) det(M^h) > 0 for all heads — GL⁺(K) prediction
+  (a) det(M^h) > 0 for all heads -- GL⁺(K) prediction
       (gauge transport lives in the identity component of GL(K))
 
-  (b) Eigenvalue spectra cluster by head function —
+  (b) Eigenvalue spectra cluster by head function --
       block-diagonal gauge algebra prediction
 
-  (c) Spectral entropy of M^h decreases with layer depth —
+  (c) Spectral entropy of M^h decreases with layer depth --
       Spectral entropy trend (coarse-graining concentrates spectral weight)
 
 Models analyzed: BERT-base, GPT-2, DistilBERT
@@ -101,7 +101,7 @@ def extract_qk_weights(model, model_name: str) -> List[Tuple[torch.Tensor, torch
     The attention logit is:
         a_{ij}^h = h_i^T (W_Q^h)^T W_K^h h_j / sqrt(d_h)
 
-    So M^h = W_Q^h @ (W_K^h)^T ∈ R^{d_h × d_h} is the per-head attention kernel.
+    So M^h = W_Q^h @ (W_K^h)^T ∈ R^{d_h x d_h} is the per-head attention kernel.
 
     Returns:
         List of (W_Q_full, W_K_full, num_heads, head_dim) per layer.
@@ -153,7 +153,7 @@ def compute_per_head_M(W_Q: torch.Tensor, W_K: torch.Tensor,
     Per head h: W_Q^h = W_Q[h*d_h : (h+1)*d_h, :], shape [d_h, hidden_dim].
     M^h = W_Q^h @ (W_K^h)^T, shape [d_h, d_h].
 
-    Returns list of d_h × d_h numpy arrays.
+    Returns list of d_h x d_h numpy arrays.
     """
     heads = []
     for h in range(num_heads):
@@ -172,9 +172,9 @@ def compute_per_head_M(W_Q: torch.Tensor, W_K: torch.Tensor,
 def analyze_determinants(all_M: Dict[str, List[List[np.ndarray]]]) -> Dict:
     """Test whether det(M^h) > 0 for all heads (GL⁺(K) prediction).
 
-    Under the gauge-theoretic identification W_Q W_K^T = σ⁻² Ω⁻ᵀ,
+    Under the gauge-theoretic identification W_Q W_K^T = σ⁻^2 Ω⁻ᵀ,
     since Ω ∈ GL⁺(K) (connected component containing identity),
-    det(Ω) > 0, hence det(M) = σ⁻²ᴷ det(Ω⁻ᵀ) > 0.
+    det(Ω) > 0, hence det(M) = σ⁻^2ᴷ det(Ω⁻ᵀ) > 0.
 
     Returns summary statistics and per-model results.
     """
@@ -578,7 +578,7 @@ def plot_spectral_clustering(
         dendrogram(Z, ax=ax_dendro, leaf_rotation=90, leaf_font_size=6,
                    color_threshold=Z[-3, 2] if len(Z) >= 3 else None)
         ax_dendro.set_title(f"{abbrev}: Head Clustering Dendrogram")
-        ax_dendro.set_xlabel("Head index (layer × n_heads + head)")
+        ax_dendro.set_xlabel("Head index (layer x n_heads + head)")
         ax_dendro.set_ylabel("Ward distance")
 
         # Heatmap: cluster labels by (layer, head)
@@ -764,7 +764,7 @@ def plot_summary_dashboard(
     ax.set_title("(d) Gauge Structure Asymmetry")
     ax.legend(frameon=False)
 
-    plt.suptitle("T8: Gauge Frame Spectral Analysis — Summary", fontsize=12, y=1.01)
+    plt.suptitle("T8: Gauge Frame Spectral Analysis -- Summary", fontsize=12, y=1.01)
     plt.tight_layout()
     fig.savefig(save_dir / "T8_summary_dashboard.png")
     fig.savefig(save_dir / "T8_summary_dashboard.pdf")
@@ -787,13 +787,13 @@ def generate_synthetic_gauge_weights(
 
     Creates three synthetic "models" to validate the analysis pipeline:
 
-    1. "synthetic_GL+" — M^h = σ⁻² Ω⁻ᵀ where Ω ∈ GL⁺(K), with spectral entropy
+    1. "synthetic_GL+" -- M^h = σ⁻^2 Ω⁻ᵀ where Ω ∈ GL⁺(K), with spectral entropy
        decreasing across layers. All det(M) > 0 by construction.
 
-    2. "synthetic_mixed" — Half heads GL⁺, half GL⁻ (det < 0). Tests T8a
+    2. "synthetic_mixed" -- Half heads GL⁺, half GL⁻ (det < 0). Tests T8a
        discrimination.
 
-    3. "synthetic_random" — Random Gaussian matrices (null model).
+    3. "synthetic_random" -- Random Gaussian matrices (null model).
        No gauge structure, no spectral trend expected.
 
     Args:
@@ -810,12 +810,12 @@ def generate_synthetic_gauge_weights(
         for h in range(n_heads):
             # Generate Ω ∈ GL⁺(K) via exponential map: Ω = exp(A)
             # spectral weight concentrates into fewer dominant modes
-            # at deeper layers (coarse-graining → simpler gauge structure).
+            # at deeper layers (coarse-graining -> simpler gauge structure).
             # Achieved by making the singular value decay steeper with depth.
             A = rng.randn(head_dim, head_dim) * 0.3
             np.fill_diagonal(A, A.diagonal() + 1.0 + 0.1 * h / n_heads)
             Omega = expm(A)
-            M_base = np.linalg.inv(Omega).T / 0.5  # σ⁻² Ω⁻ᵀ, det > 0
+            M_base = np.linalg.inv(Omega).T / 0.5  # σ⁻^2 Ω⁻ᵀ, det > 0
 
             # Apply spectral shaping: steepen singular value decay with depth
             U, s, Vt = np.linalg.svd(M_base)
@@ -861,7 +861,7 @@ def generate_synthetic_gauge_weights(
 
 SYNTHETIC_MODELS = {
     "synthetic_GL+": {"type": "synthetic", "abbrev": "GL⁺(K)"},
-    "synthetic_mixed": {"type": "synthetic", "abbrev": "Mixed±"},
+    "synthetic_mixed": {"type": "synthetic", "abbrev": "Mixed+/-"},
     "synthetic_random": {"type": "synthetic", "abbrev": "Random"},
 }
 
@@ -894,7 +894,7 @@ def run_synthetic_validation(save_dir: Path = SAVE_DIR) -> Dict:
         n_layers = len(layers_M)
         n_heads = len(layers_M[0])
         head_dim = layers_M[0][0].shape[0]
-        print(f"  Architecture: {n_layers} layers × {n_heads} heads, d_h = {head_dim}")
+        print(f"  Architecture: {n_layers} layers x {n_heads} heads, d_h = {head_dim}")
 
         # Spectral features
         layers_spectral = []
@@ -1035,7 +1035,7 @@ def run_analysis(model_names: Optional[List[str]] = None, save_dir: Path = SAVE_
         n_layers = len(layers_data)
         n_heads = layers_data[0][2]
         head_dim = layers_data[0][3]
-        print(f"  Architecture: {n_layers} layers × {n_heads} heads, d_h = {head_dim}")
+        print(f"  Architecture: {n_layers} layers x {n_heads} heads, d_h = {head_dim}")
 
         # Compute M^h per layer per head
         print("  Computing M^h = W_Q^h (W_K^h)^T ...")
@@ -1064,7 +1064,7 @@ def run_analysis(model_names: Optional[List[str]] = None, save_dir: Path = SAVE_
         print(f"    det > 0: {r['n_positive']}/{r['n_total']} ({r['fraction_positive']:.1%})")
         print(f"    det < 0: {r['n_negative']}/{r['n_total']}")
         print(f"    GL⁺(K) holds: {r['gl_plus_holds']}")
-        print(f"    log|det| = {r['log_abs_det_mean']:.2f} ± {r['log_abs_det_std']:.2f}")
+        print(f"    log|det| = {r['log_abs_det_mean']:.2f} +/- {r['log_abs_det_std']:.2f}")
 
         # T8b: Spectral clustering
         print("\n  [T8b] Spectral clustering...")
@@ -1153,14 +1153,14 @@ def run_analysis(model_names: Optional[List[str]] = None, save_dir: Path = SAVE_
     print("  SUMMARY OF FINDINGS")
     print(f"{'═' * 72}")
 
-    print("\n  T8a — GL⁺(K) Prediction (det > 0):")
+    print("\n  T8a -- GL⁺(K) Prediction (det > 0):")
     for model_name in model_names:
         abbrev = MODELS.get(model_name, {}).get("abbrev", model_name)
         r = det_results[model_name]
         status = "CONFIRMED" if r["gl_plus_holds"] else "PARTIAL"
         print(f"    {abbrev:12s}: {r['fraction_positive']:6.1%} positive  [{status}]")
 
-    print("\n  T8c — Spectral Entropy Trend (decreasing with depth):")
+    print("\n  T8c -- Spectral Entropy Trend (decreasing with depth):")
     for model_name in model_names:
         abbrev = MODELS.get(model_name, {}).get("abbrev", model_name)
         rg = all_spectral_trends[model_name]

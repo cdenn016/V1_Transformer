@@ -217,12 +217,12 @@ def compute_category_cohesion(mu_embeddings, token_categories):
     print(f"")
     if cohesion_ratio < 0.8:
         print(f"✓ STRONG clustering! Categories well-separated in belief space.")
-        print(f"  → Evidence FOR meta-agent hypothesis!")
+        print(f"  -> Evidence FOR meta-agent hypothesis!")
     elif cohesion_ratio < 1.0:
         print(f"⚠ MODERATE clustering. Some category structure exists.")
     else:
         print(f"❌ WEAK clustering. Categories NOT well-separated.")
-        print(f"  → Evidence AGAINST meta-agent hypothesis.")
+        print(f"  -> Evidence AGAINST meta-agent hypothesis.")
     print(f"{'='*70}\n")
 
     return cohesion_ratio

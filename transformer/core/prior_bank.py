@@ -42,13 +42,13 @@ class PriorBank(nn.Module):
         Under GL(K), A_v is a general invertible matrix (not just a rotation).
         The orbit of a full-rank (μ_0, Σ_0) under GL(K) covers all nonzero
         means and all SPD covariances, so this parameterization is NOT
-        restrictive — it reparameterizes the full space through (base + frame).
+        restrictive -- it reparameterizes the full space through (base + frame).
 
         This guarantees gauge covariance: π_i = Ω_ij[π_j] for all i,j
         The model learns:
         - base_prior_mu (K,): shared base prior mean
         - base_log_prior_sigma (K,): shared base prior log-variance
-        - phi_embed (V, phi_dim): per-token gauge frames (phi_dim = K² for GL(K))
+        - phi_embed (V, phi_dim): per-token gauge frames (phi_dim = K^2 for GL(K))
 
     NON-GAUGE-FIXED (default):
         Each token has independent μ_v, Σ_v plus learnable gauge frames φ_v.
@@ -75,7 +75,7 @@ class PriorBank(nn.Module):
         # Gauge-fixed priors (principled approach)
         gauge_fixed_priors: bool = False,  # Default False for pure FEP flexibility
         generators: Optional[torch.Tensor] = None,  # (n_gen, K, K) Lie algebra generators
-        phi_dim: int = None,  # Auto-inferred from generators; K² for GL(K), 3 for SO(3)
+        phi_dim: int = None,  # Auto-inferred from generators; K^2 for GL(K), 3 for SO(3)
         phi_scale: float = 1.0,  # Init scale for gauge frames (non-gauge-fixed mode)
         # Direct Omega parameterization
         gauge_param: str = 'phi',  # 'phi' or 'omega'
@@ -100,12 +100,12 @@ class PriorBank(nn.Module):
             eps: Numerical stability
             gauge_fixed_priors: If True, use single base prior with per-token gauge transforms
             generators: Lie algebra generators (required if gauge_fixed_priors=True).
-                For GL(K): K² generators spanning gl(K). For SO(N): N(N-1)/2 generators.
+                For GL(K): K^2 generators spanning gl(K). For SO(N): N(N-1)/2 generators.
             phi_dim: Dimension of gauge frame. Auto-inferred from generators.shape[0]
-                if not provided. K² for GL(K), 3 for SO(3), N(N-1)/2 for SO(N).
+                if not provided. K^2 for GL(K), 3 for SO(3), N(N-1)/2 for SO(N).
             sigma_ce_scale: Fraction of CE gradient passed to sigma_p (0.01 recommended)
             learnable_temperature: If True, learn a decode scale factor via backprop.
-                Starts at scale=1 (CE ≈ ln V at init). Gradient is self-regulating:
+                Starts at scale=1 (CE ~= ln V at init). Gradient is self-regulating:
                 dCE/d(log_scale) = scale·[E_p[KL] - KL_target], which decreases scale
                 when overconfident on wrong tokens and increases it as predictions improve.
         """
@@ -127,16 +127,16 @@ class PriorBank(nn.Module):
         self.diagonal_covariance = diagonal_covariance
 
         # Learnable inverse-temperature for decode logits.
-        # At init, scale = exp(0) = 1.0 → no amplification → CE ≈ ln(V).
+        # At init, scale = exp(0) = 1.0 -> no amplification -> CE ~= ln(V).
         # The model discovers the right K-dependent scale during training.
         if learnable_temperature:
             self.decode_log_scale = nn.Parameter(torch.tensor(0.0))
 
-        # Dimension-aware initialization: √(ln V / K) makes pairwise KL ≈ ln(V).
-        # Old 1/√K made KL = O(1), but attention divides by √K_h →
+        # Dimension-aware initialization: √(ln V / K) makes pairwise KL ~= ln(V).
+        # Old 1/√K made KL = O(1), but attention divides by √K_h ->
         # logit differences O(1/(H√K_h)) vanish for large K (e.g. K=90 GL(15)).
-        # With √(ln V / K): ||μ||² = ln(V) ≈ 10.8, KL ≈ ln(V), and attention
-        # logits ≈ -ln(V)/(H√K_h) which stays discriminative up to K ≈ ln²(V).
+        # With √(ln V / K): ||μ||^2 = ln(V) ~= 10.8, KL ~= ln(V), and attention
+        # logits ~= -ln(V)/(H√K_h) which stays discriminative up to K ~= ln^2(V).
         if init_std is None:
             init_std = math.sqrt(math.log(vocab_size) / embed_dim)
 
@@ -146,7 +146,7 @@ class PriorBank(nn.Module):
                 raise ValueError("gauge_fixed_priors=True requires generators to be provided")
             self.register_buffer('generators', generators)
 
-            # Single base prior mean μ_0 — all token priors are gauge transforms:
+            # Single base prior mean μ_0 -- all token priors are gauge transforms:
             #   μ_v = A_v @ μ_0  where A_v = exp(φ_v · G) ∈ GL⁺(K)
             self.base_prior_mu = nn.Parameter(torch.randn(embed_dim) * init_std)
 
@@ -166,8 +166,8 @@ class PriorBank(nn.Module):
             # For GL(K): φ_v ∈ gl(K), A_v = exp(φ_v · G) ∈ GL⁺(K)
             # For SO(N): φ_v ∈ so(N), A_v = exp(φ_v · G) ∈ SO(N)
             #
-            # MUST use random init — zero init makes ALL tokens identical
-            # (exp(0) = I → μ_v = μ_0 for all v). Scale inversely with
+            # MUST use random init -- zero init makes ALL tokens identical
+            # (exp(0) = I -> μ_v = μ_0 for all v). Scale inversely with
             # sqrt(phi_dim) to maintain consistent ||φ|| across gauge groups.
             self.phi_embed = nn.Embedding(vocab_size, phi_dim)
             phi_init_std = phi_scale / (phi_dim ** 0.5)
@@ -188,14 +188,14 @@ class PriorBank(nn.Module):
 
             # Fixed sigma target for hyper-prior KL(s||h). Frozen at init values
             # so _get_sigma_target() finds a proper anchor instead of falling back
-            # to the moving target (2×mean(sigma_s)) which collapses with sigma_s.
+            # to the moving target (2xmean(sigma_s)) which collapses with sigma_s.
             self.register_buffer(
                 'sigma_target',
                 torch.full((embed_dim,), init_sigma_scale)
             )
 
             if gauge_param == 'omega' and omega_head_dims is not None:
-                # Direct Omega parameterization: per-head K_h×K_h matrices
+                # Direct Omega parameterization: per-head K_hxK_h matrices
                 total_omega_params = sum(d * d for d in omega_head_dims)
                 self.omega_embed = nn.Embedding(vocab_size, total_omega_params)
                 with torch.no_grad():
@@ -211,7 +211,7 @@ class PriorBank(nn.Module):
                 self.phi_embed = nn.Embedding(vocab_size, phi_dim)
                 nn.init.zeros_(self.phi_embed.weight)
             else:
-                # Per-token gauge frames φ_v — needed for gauge transport even
+                # Per-token gauge frames φ_v -- needed for gauge transport even
                 # without gauge-fixed priors. Without this, phi has no gradient path.
                 # IMPORTANT: Scale std inversely with sqrt(phi_dim) to maintain consistent
                 # norm across different GL(K) dimensions, matching GaugeTokenEmbedding.
@@ -305,13 +305,13 @@ class PriorBank(nn.Module):
             # For GL(K), A_v is general invertible, so Σ_v is a full SPD matrix.
             # For SO(N), A_v is orthogonal, so Σ_v has same eigenvalues as Σ_0.
             # AMP guard: sandwich product must stay float32.
-            # Avoid .float() copy when already float32 (saves ~725MB for V×K×K at K=60).
+            # Avoid .float() copy when already float32 (saves ~725MB for VxKxK at K=60).
             with torch.amp.autocast('cuda', enabled=False):
-                base_sigma = self.base_prior_sigma  # (K,) — already float32 from property
+                base_sigma = self.base_prior_sigma  # (K,) -- already float32 from property
                 A_f = A if A.dtype == torch.float32 else A.float()
                 if getattr(self, 'diagonal_covariance', True):
                     # Extract diagonal of A @ diag(σ) @ A^T:
-                    #   diag(A Σ_0 A^T)_k = Σ_j A_kj² σ_j
+                    #   diag(A Σ_0 A^T)_k = Σ_j A_kj^2 σ_j
                     A_sq = A_f ** 2  # (..., K, K)
                     sigma_p = torch.einsum('...kl,l->...k', A_sq, base_sigma)  # (..., K)
                 else:
@@ -325,8 +325,8 @@ class PriorBank(nn.Module):
             mu_p = self.prior_mu[token_ids]  # Index by token ID
             sigma_p = self.prior_sigma[token_ids]  # Always (B, N, K) diagonal
             # PriorBank priors are inherently diagonal (per-dimension variances).
-            # Downstream modules handle diagonal→full conversion when needed:
-            #   - _split_irreps_sigma: converts (B,N,K) → (B,N,K,K) if diagonal_covariance=False
+            # Downstream modules handle diagonal->full conversion when needed:
+            #   - _split_irreps_sigma: converts (B,N,K) -> (B,N,K,K) if diagonal_covariance=False
             #   - FFN sigma_prior: converts via diag_embed at variational_ffn.py:3627
             # Learnable per-token gauge frames
             phi = self.phi_embed(token_ids)
@@ -388,7 +388,7 @@ class PriorBank(nn.Module):
 
         Key optimizations:
         1. Fuse trace + quad_q - cross into ONE matmul via concatenation:
-           [σ_q + μ_q², -2μ_q] @ [1/σ_p, μ_p/σ_p]ᵀ  → (B,N,2K) x (2K,V)
+           [σ_q + μ_q^2, -2μ_q] @ [1/σ_p, μ_p/σ_p]ᵀ  -> (B,N,2K) x (2K,V)
         2. Drop terms constant across V (cancel in softmax): -K, log|Σ_q|
         3. Combine prior-side constants into single (V,) bias
 
@@ -407,7 +407,7 @@ class PriorBank(nn.Module):
         """
         B, N, K = mu_q.shape
 
-        # Full covariance (B, N, K, K) → extract diagonal variances (B, N, K).
+        # Full covariance (B, N, K, K) -> extract diagonal variances (B, N, K).
         # The fused KL only needs tr(Σ_q Σ_p⁻¹) = Σ_k σ_q[k]/σ_p[k] when
         # priors are diagonal, so off-diagonal Σ_q entries don't contribute.
         if sigma_q.dim() == 4:
@@ -420,7 +420,7 @@ class PriorBank(nn.Module):
         _prior_out = self._get_prior_for_tokens(all_token_ids)
         mu_p, sigma_p = _prior_out[0], _prior_out[1]
 
-        # AMP guard: entire decode KL uses division, log, and 1/sigma — float32 required.
+        # AMP guard: entire decode KL uses division, log, and 1/sigma -- float32 required.
         # Avoid .float() copy when already float32 to prevent OOM at large K.
         with torch.amp.autocast('cuda', enabled=False):
             if mu_q.dtype != torch.float32:
@@ -448,20 +448,20 @@ class PriorBank(nn.Module):
             lhs = torch.cat([sigma_q_safe + mu_q ** 2, -2.0 * mu_q], dim=-1)  # (B, N, 2K)
             rhs = torch.cat([inv_sigma_p, mu_p_inv_sigma_p], dim=-1)           # (V, 2K)
 
-            combined = torch.matmul(lhs, rhs.T)                 # (B, N, V) — single matmul
+            combined = torch.matmul(lhs, rhs.T)                 # (B, N, V) -- single matmul
 
             # Prior-side bias (constant across batch): quad_p + log_det_p
             prior_bias = ((mu_p ** 2 * inv_sigma_p).sum(dim=-1)
                           + torch.log(sigma_p_safe).sum(dim=-1))  # (V,)
 
-        # logits = -KL/τ ≈ -0.5/τ * (combined + prior_bias)
+        # logits = -KL/τ ~= -0.5/τ * (combined + prior_bias)
         # (dropping softmax-invariant terms -K and log|Σ_q|)
         #
         # No dimension scaling here: init_std = √(ln V / K) already calibrates
         # the average KL to O(ln V) regardless of K. The 1/√K decay of logit
         # DIFFERENCES at high K is a convergence speed issue, not an init issue.
         # Scaling by √K would make the model catastrophically overconfident at
-        # init (logit differences ~√K × ln V ≈ 97 for K=80), causing CE >> ln V
+        # init (logit differences ~√K x ln V ~= 97 for K=80), causing CE >> ln V
         # when the E-step hasn't learned yet. Use learnable_temperature or tune
         # prior_bank_tau for large K instead.
         scale = torch.exp(self.decode_log_scale.clamp(-3.0, 3.0)) if self.learnable_temperature else 1.0
@@ -498,11 +498,11 @@ class PriorBank(nn.Module):
             # Gauge-fixed M-step: update base prior (μ_0, σ_0) via de-rotation.
             #
             # Each belief μ_q at token v was generated from prior μ_v = A_v @ μ_0.
-            # The "de-rotated" belief target is A_v⁻¹ @ μ_q, which should ≈ μ_0
+            # The "de-rotated" belief target is A_v⁻¹ @ μ_q, which should ~= μ_0
             # if the prior is well-calibrated. We EMA toward the weighted average
             # of de-rotated beliefs across the batch.
             #
-            # φ_v updates are handled by backprop through the VFE loss — the
+            # φ_v updates are handled by backprop through the VFE loss -- the
             # gradient ∂F/∂φ_v flows through A_v = exp(φ_v · G) in the forward
             # pass. The EMA update here handles the base prior only.
             self._update_gauge_fixed_base_prior(
@@ -511,7 +511,7 @@ class PriorBank(nn.Module):
             return
 
         with torch.no_grad():
-            # Full covariance (B, N, K, K) → diagonal variances (B, N, K)
+            # Full covariance (B, N, K, K) -> diagonal variances (B, N, K)
             if sigma_beliefs.dim() == 4:
                 sigma_beliefs = torch.diagonal(sigma_beliefs, dim1=-2, dim2=-1)
 
@@ -612,7 +612,7 @@ class PriorBank(nn.Module):
 
             # Similarly de-rotate sigma: diag(A⁻¹ diag(σ_q) A⁻ᵀ)
             # For diagonal sigma_q, the de-rotated diagonal is:
-            #   diag(A⁻¹ diag(σ_q) A⁻ᵀ)_k = Σ_j (A⁻¹)_kj² σ_q_j
+            #   diag(A⁻¹ diag(σ_q) A⁻ᵀ)_k = Σ_j (A⁻¹)_kj^2 σ_q_j
             A_inv = torch.linalg.solve(
                 A_flat, torch.eye(K, device=A_flat.device).expand_as(A_flat)
             )  # (B*N, K, K)

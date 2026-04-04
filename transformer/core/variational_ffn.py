@@ -89,10 +89,10 @@ from transformer.core.vfe_utils import (
 # E-step iterations, q* ≠ q_converged, so ∂F/∂q ≠ 0. The implicit function
 # theorem gives the exact gradient without requiring convergence:
 #
-#   dq*/dθ = -(∂²F/∂q²)⁻¹ · ∂²F/(∂q∂θ)
+#   dq*/dθ = -(∂^2F/∂q^2)⁻¹ · ∂^2F/(∂q∂θ)
 #
 # For diagonal Gaussians, this yields a per-dimension scale factor:
-#   s_k = (α/σ²_p,k) / (α/σ²_p,k + Σ_j β_ij/σ²_j,k)  ∈ [0, 1]
+#   s_k = (α/σ^2_p,k) / (α/σ^2_p,k + Σ_j β_ij/σ^2_j,k)  ∈ [0, 1]
 #
 # This interpolates between straight-through (s=1) and pure EM (s=0).
 
@@ -101,7 +101,7 @@ class ImplicitEMGradient(torch.autograd.Function):
 
     Forward: returns mu_final unchanged (identity).
     Backward: scales gradient flowing to mu_embed by the implicit
-    differentiation factor s_k = (α/σ²_p) / A_k, where A_k is the
+    differentiation factor s_k = (α/σ^2_p) / A_k, where A_k is the
     effective precision at the E-step fixed point.
 
     This replaces straight-through (s=1) with the information-geometrically
@@ -112,9 +112,9 @@ class ImplicitEMGradient(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        mu_final: torch.Tensor,       # (B, N, K) — evolved beliefs from E-step
-        mu_embed: torch.Tensor,        # (B, N, K) — embedding means (need grad)
-        implicit_scale: torch.Tensor,  # (B, N, K) — IFT scale factors ∈ [0, 1]
+        mu_final: torch.Tensor,       # (B, N, K) -- evolved beliefs from E-step
+        mu_embed: torch.Tensor,        # (B, N, K) -- embedding means (need grad)
+        implicit_scale: torch.Tensor,  # (B, N, K) -- IFT scale factors ∈ [0, 1]
     ) -> torch.Tensor:
         ctx.save_for_backward(implicit_scale)
         return mu_final  # forward is identity
@@ -163,24 +163,24 @@ class ImplicitEMGradientSigma(torch.autograd.Function):
 
 
 def compute_implicit_em_scales(
-    alpha_i: torch.Tensor,     # (B, N, K) or scalar — prior coupling strength
-    sigma_p: torch.Tensor,     # (B, N, K) diagonal or (B, N, K, K) full — prior sigma
-    beta: torch.Tensor,        # (B, H, N, N) or (B, N, N) — attention weights
-    sigma_q: torch.Tensor,     # (B, N, K) diagonal or (B, N, K, K) full — evolved sigma
+    alpha_i: torch.Tensor,     # (B, N, K) or scalar -- prior coupling strength
+    sigma_p: torch.Tensor,     # (B, N, K) diagonal or (B, N, K, K) full -- prior sigma
+    beta: torch.Tensor,        # (B, H, N, N) or (B, N, N) -- attention weights
+    sigma_q: torch.Tensor,     # (B, N, K) diagonal or (B, N, K, K) full -- evolved sigma
     eps: float = 1e-6,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     r"""Compute implicit differentiation scale factors for principled EM M-step.
 
     From the E-step fixed-point equation for μ:
-        A_k = α/σ²_{p,k} + Σ_j β_{ij}/σ²_{j,k}
-        s_k^{(μ)} = (α/σ²_{p,k}) / A_k
+        A_k = α/σ^2_{p,k} + Σ_j β_{ij}/σ^2_{j,k}
+        s_k^{(μ)} = (α/σ^2_{p,k}) / A_k
 
     For σ (from covariance fixed-point):
         s_k^{(σ)} = (α/σ⁴_{p,k}) / (α/σ⁴_{p,k} + Σ_j β_{ij}/σ⁴_{j,k})
 
-    The attention-weighted precision Σ_j β_{ij}/σ²_{j,k} uses per-position j
+    The attention-weighted precision Σ_j β_{ij}/σ^2_{j,k} uses per-position j
     covariances weighted by the actual attention weights, rather than
-    approximating all transported covariances as equal to σ²_{q,i,k}.
+    approximating all transported covariances as equal to σ^2_{q,i,k}.
 
     Args:
         alpha_i: Prior coupling. Scalar or (B, N, K) from adaptive α.
@@ -190,8 +190,8 @@ def compute_implicit_em_scales(
         eps: Numerical floor.
 
     Returns:
-        mu_scale: Same shape as sigma_p diagonal — per-dim scale for μ gradient
-        sigma_scale: Same shape as sigma_p diagonal — per-dim scale for σ gradient
+        mu_scale: Same shape as sigma_p diagonal -- per-dim scale for μ gradient
+        sigma_scale: Same shape as sigma_p diagonal -- per-dim scale for σ gradient
     """
     is_diagonal = sigma_p.dim() == 3
 
@@ -210,24 +210,24 @@ def compute_implicit_em_scales(
     elif alpha_i.dim() == 0:
         alpha_i = alpha_i.expand_as(sigma_p_safe)
     elif alpha_i.dim() < sigma_p_safe.dim():
-        # (B, N) → (B, N, K)
+        # (B, N) -> (B, N, K)
         alpha_i = alpha_i.unsqueeze(-1).expand_as(sigma_p_safe)
 
     # Reduce beta to (B, N, N) if multihead
     if beta.dim() == 4:  # (B, H, N, N)
-        beta_2d = beta.mean(dim=1)  # Average over heads → (B, N, N)
+        beta_2d = beta.mean(dim=1)  # Average over heads -> (B, N, N)
     else:
         beta_2d = beta  # Already (B, N, N)
 
     # === Mu scale ===
-    # Prior precision contribution: α_k / σ²_{p,k}
+    # Prior precision contribution: α_k / σ^2_{p,k}
     prior_prec_mu = alpha_i / sigma_p_safe  # (B, N, K)
 
-    # Attention-weighted precision: Σ_j β_{ij} / σ²_{q,j,k}
-    # Uses per-position j covariances rather than approximating with σ²_{q,i,k}.
-    # At the fixed point, σ²_{j,transported} ≈ σ²_{q,j} (transport ≈ identity near
+    # Attention-weighted precision: Σ_j β_{ij} / σ^2_{q,j,k}
+    # Uses per-position j covariances rather than approximating with σ^2_{q,i,k}.
+    # At the fixed point, σ^2_{j,transported} ~= σ^2_{q,j} (transport ~= identity near
     # convergence). This captures variance heterogeneity across positions.
-    inv_sigma_q = 1.0 / sigma_q_safe  # (B, N, K) — per-position precision
+    inv_sigma_q = 1.0 / sigma_q_safe  # (B, N, K) -- per-position precision
     attn_prec_mu = torch.einsum('bij,bjk->bik', beta_2d, inv_sigma_q)  # (B, N, K)
 
     effective_prec_mu = prior_prec_mu + attn_prec_mu
@@ -279,7 +279,7 @@ class DEQFixedPoint(torch.autograd.Function):
     """Implicit differentiation through E-step fixed point via Neumann series.
 
     Forward: identity (fixed point already computed by the E-step loop).
-    Backward: corrects gradients using (I - J)^{-1} ≈ I + J + J² + ... (K terms)
+    Backward: corrects gradients using (I - J)^{-1} ~= I + J + J^2 + ... (K terms)
     where J is the Jacobian of one E-step evaluated at the fixed point.
     """
 
@@ -296,7 +296,7 @@ class DEQFixedPoint(torch.autograd.Function):
         e_step_fn = ctx.e_step_fn
         K = ctx.neumann_terms
 
-        # Neumann series: (I - J^T)^{-1} v ≈ v + J^T v + (J^T)^2 v + ...
+        # Neumann series: (I - J^T)^{-1} v ~= v + J^T v + (J^T)^2 v + ...
         v_mu = grad_mu.clone()
         v_sigma = grad_sigma.clone()
         total_mu = grad_mu.clone()
@@ -331,16 +331,16 @@ class DEQFixedPointFull(torch.autograd.Function):
         ∂F/∂μ = 0,  ∂F/∂Σ = 0,  ∂F/∂φ = 0.
 
     The IFT gives the exact M-step gradient:
-        ∂z*/∂θ = −(∂²F/∂z²)⁻¹ · ∂²F/∂z∂θ
+        ∂z*/∂θ = −(∂^2F/∂z^2)⁻¹ · ∂^2F/∂z∂θ
     where z = (μ, Σ, φ) and θ are model parameters (embeddings, etc.).
 
     We approximate (I − J)⁻¹ via Neumann series:
-        (I − J^T)⁻¹ v ≈ v + J^T v + (J^T)² v + ⋯  (K terms)
-    where J is the Jacobian of one full E-step (μ, Σ, φ) → (μ', Σ', φ')
+        (I − J^T)⁻¹ v ~= v + J^T v + (J^T)^2 v + ⋯  (K terms)
+    where J is the Jacobian of one full E-step (μ, Σ, φ) -> (μ', Σ', φ')
     evaluated at the fixed point.
 
     This corrects the straight-through bias in the M-step φ gradient:
-    instead of ∂φ*/∂φ_init ≈ I, we get the IFT-corrected Jacobian that
+    instead of ∂φ*/∂φ_init ~= I, we get the IFT-corrected Jacobian that
     accounts for how the E-step trajectory depends on initial conditions.
     """
 
@@ -359,7 +359,7 @@ class DEQFixedPointFull(torch.autograd.Function):
         e_step_fn = ctx.e_step_fn
         K = ctx.neumann_terms
 
-        # Neumann series: (I - J^T)^{-1} v ≈ v + J^T v + (J^T)^2 v + ...
+        # Neumann series: (I - J^T)^{-1} v ~= v + J^T v + (J^T)^2 v + ...
         v_mu = grad_mu.clone()
         v_sigma = grad_sigma.clone()
         v_phi = grad_phi.clone()
@@ -474,17 +474,17 @@ class VariationalFFNDynamic(nn.Module):
         # instead of identity (which would be inconsistent with the attention module).
         constant_omega: Optional[nn.ParameterList] = None,
         # Isotropic covariance limit
-        isotropic_covariance: bool = False,   # If True, force Σ = σ²I after each E-step update
+        isotropic_covariance: bool = False,   # If True, force Σ = σ^2I after each E-step update
         # Amortized inference: gradient flow through priors for learned E-step init
         amortized_inference: bool = True,
-        # Rotary Position Embeddings (RoPE) — must match attention sublayer setting
+        # Rotary Position Embeddings (RoPE) -- must match attention sublayer setting
         use_rope: bool = True,
         rope_base: float = 10000.0,
         exact_diagonal_transport: bool = False,  # Lift diagonal σ for exact transport
         gauge_param: str = 'phi',  # 'phi' (Lie algebra) or 'omega' (direct GL(K))
         obs_sigma_gradient: bool = True,  # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
         obs_sigma_weight: float = 1.0,     # Weight for sigma observation gradient
-        sigma_max: float = 5.0,            # Upper bound on σ (prevents nat_grad blowup from 2σ²·∇σ)
+        sigma_max: float = 5.0,            # Upper bound on σ (prevents nat_grad blowup from 2σ^2·∇σ)
         e_step_sigma_floor: float = 0.1,  # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
         detach_phi: bool = False,          # Detach phi from backprop in non-amortized mode
                                            # (enables fully backprop-free training with phi P-flow)
@@ -499,8 +499,8 @@ class VariationalFFNDynamic(nn.Module):
                                            # (S, c terms); full-cov uses linear-only CF.
         implicit_em: bool = False,         # Principled M-step via implicit differentiation.
                                            # Detaches mu/sigma at E-step start (proper EM boundary)
-                                           # then scales CE→embedding gradient by IFT factor
-                                           # s_k = (α/σ²_p) / (α/σ²_p + Σβ/σ²_q) ∈ [0,1].
+                                           # then scales CE->embedding gradient by IFT factor
+                                           # s_k = (α/σ^2_p) / (α/σ^2_p + Σβ/σ^2_q) ∈ [0,1].
                                            # Replaces ad-hoc straight-through (s=1) and pure EM (s=0)
                                            # with info-geometrically correct value.
         learnable_head_kappa: bool = False,  # If True, learn per-head κ_h
@@ -590,7 +590,7 @@ class VariationalFFNDynamic(nn.Module):
         self._last_implicit_sigma_scale = None
         if implicit_em:
             logger.info(f"[VariationalFFNDynamic] Implicit EM enabled: IFT-based M-step gradient")
-            logger.info(f"  → Detaches mu/sigma at E-step start, applies s_k = (α/σ²_p)/A_k scaling")
+            logger.info(f"  -> Detaches mu/sigma at E-step start, applies s_k = (α/σ^2_p)/A_k scaling")
         # RoPE: DISABLED in VFE E-step iterations. The E-step is belief refinement
         # (analogous to V aggregation), not attention scoring (Q·K). Position
         # awareness enters via β_ij from the attention sublayer, which already
@@ -691,7 +691,7 @@ class VariationalFFNDynamic(nn.Module):
         # Log-barrier regulariser: α shrinks as the full KL divergence
         # between the variational posterior q and prior p grows.
         # Gauge-invariant (KL is a gauge scalar).
-        # Initialized so α ≈ alpha (the scalar value) when KL ≈ 0.
+        # Initialized so α ~= alpha (the scalar value) when KL ~= 0.
         self.learnable_alpha = learnable_alpha
         if learnable_alpha:
             # Initialize: c₀ = alpha * b₀, b₀ = 1
@@ -701,12 +701,12 @@ class VariationalFFNDynamic(nn.Module):
             alpha_init = max(alpha, 0.01)  # avoid division by zero
             b0_init = 1.0
             c0_init = alpha_init * b0_init
-            # Parameterize via softplus to ensure positivity — shape (K,)
+            # Parameterize via softplus to ensure positivity -- shape (K,)
             self.raw_c0 = nn.Parameter(torch.full((embed_dim,), self._softplus_inverse(c0_init)))
             self.raw_b0 = nn.Parameter(torch.full((embed_dim,), self._softplus_inverse(b0_init)))
             logger.info(f"[VariationalFFNDynamic] Bayesian precision enabled (per-dim): "
                         f"c₀={c0_init:.4f}, b₀={b0_init:.1f}, "
-                        f"initial α≈{alpha_init} (K={embed_dim})")
+                        f"initial α~={alpha_init} (K={embed_dim})")
 
         # PriorBank integration
         self.use_prior_bank = use_prior_bank
@@ -775,7 +775,7 @@ class VariationalFFNDynamic(nn.Module):
         """
         if self.learnable_head_kappa and self.log_kappa_per_head is not None:
             kappa_h = torch.exp(self.log_kappa_per_head[head_idx])
-            # Clamp to [0.5, 1.5] × init, matching attention module (attention.py:2688)
+            # Clamp to [0.5, 1.5] x init, matching attention module (attention.py:2688)
             k0 = self._kappa_init[head_idx]
             return kappa_h.clamp(min=0.5 * k0, max=1.5 * k0)
         return self.kappa
@@ -795,7 +795,7 @@ class VariationalFFNDynamic(nn.Module):
     def _softplus_inverse(x: float) -> float:
         """Compute inverse of softplus: log(exp(x) - 1)."""
         if x > 20.0:
-            return x  # softplus ≈ identity for large x
+            return x  # softplus ~= identity for large x
         return float(np.log(np.expm1(x)))
 
     def get_bayesian_alpha(
@@ -833,7 +833,7 @@ class VariationalFFNDynamic(nn.Module):
         if is_diagonal:
             sigma_p_safe = sigma_p.clamp(min=eps)
             sigma_q_safe = sigma_q.clamp(min=eps)
-            # Per-dimension KL contributions (no sum — keep (B, N, K))
+            # Per-dimension KL contributions (no sum -- keep (B, N, K))
             trace_term = sigma_q_safe / sigma_p_safe              # (B, N, K)
             mahal_term = delta_mu ** 2 / sigma_p_safe             # (B, N, K)
             logdet_term = torch.log(sigma_p_safe) - torch.log(sigma_q_safe)  # (B, N, K)
@@ -1003,13 +1003,13 @@ class VariationalFFNDynamic(nn.Module):
           ξ = Ωᵀ · ∂F/∂Ω           (pullback to Lie algebra)
           clip ||ξ||_F ≤ trust_region  (Riemannian trust region)
           ΔΩ = Ω · ξ_clipped        (push forward)
-          Ω_new = Ω - η · ΔΩ        (Euler retraction ≈ Ω·exp(-η·ξ))
+          Ω_new = Ω - η · ΔΩ        (Euler retraction ~= Ω·exp(-η·ξ))
 
         The Riemannian norm ||ξ||_F is invariant under left translation,
         so the trust region is constant in the intrinsic geometry.
 
-        When irrep_dims is set, works block-diagonally to avoid O(K³) matmuls
-        on the full K×K matrix (e.g., 5×10×10 instead of 50×50).
+        When irrep_dims is set, works block-diagonally to avoid O(K^3) matmuls
+        on the full KxK matrix (e.g., 5x10x10 instead of 50x50).
 
         Args:
             omega: Current group elements (B, N, K, K)
@@ -1047,7 +1047,7 @@ class VariationalFFNDynamic(nn.Module):
                 block_start = block_end
             return omega_new
 
-        # Fallback: full K×K retraction (no irrep structure)
+        # Fallback: full KxK retraction (no irrep structure)
         OmegaT = omega.transpose(-2, -1)
         xi = OmegaT @ grad_omega
 
@@ -1296,7 +1296,7 @@ class VariationalFFNDynamic(nn.Module):
             scale = torch.clamp(2.0 / (w_norm + eps), max=1.0)
             mu_out = mu_in + scale * delta_mu
 
-            # sigma update — calibrated step: ~0.1% max change per iter
+            # sigma update -- calibrated step: ~0.1% max change per iter
             if self.update_sigma:
                 sigma_trust = self._get_sigma_trust(self.lr)
                 if is_diagonal:
@@ -1336,7 +1336,7 @@ class VariationalFFNDynamic(nn.Module):
         The phi update is a differentiable Euclidean step:
             φ' = φ - η_φ · ∂F_align/∂φ
         rather than the Lie group retraction used in the forward E-step.
-        At the fixed point (where ∂F_align/∂φ ≈ 0), the Euclidean and
+        At the fixed point (where ∂F_align/∂φ ~= 0), the Euclidean and
         retraction steps coincide to first order, so the IFT Jacobian
         is correct regardless of which retraction is used forward.
         """
@@ -1472,7 +1472,7 @@ class VariationalFFNDynamic(nn.Module):
             scale = torch.clamp(2.0 / (w_norm + eps), max=1.0)
             mu_out = mu_in + scale * delta_mu
 
-            # sigma update — calibrated step: ~0.1% max change per iter
+            # sigma update -- calibrated step: ~0.1% max change per iter
             if self.update_sigma:
                 sigma_trust = self._get_sigma_trust(self.lr)
                 if is_diagonal:
@@ -1492,8 +1492,8 @@ class VariationalFFNDynamic(nn.Module):
 
             # --- phi update: differentiable Euclidean descent on F_align ---
             # Compute alignment loss with autograd tracking through phi_in.
-            # At the fixed point ∂F_align/∂φ ≈ 0, so the Euclidean step and
-            # Lie group retraction agree to first order (both give φ' ≈ φ).
+            # At the fixed point ∂F_align/∂φ ~= 0, so the Euclidean step and
+            # Lie group retraction agree to first order (both give φ' ~= φ).
             if self.multihead_vfe:
                 alignment_loss = torch.tensor(0.0, device=mu_in.device, dtype=mu_in.dtype)
                 block_start = 0
@@ -2348,10 +2348,10 @@ class VariationalFFNDynamic(nn.Module):
         beta_history_entry = None
 
         # Cosine decay: lr drops from 1.0 to 0.1 across iterations
-        # Steeper than linear 0.5 decay — stabilizes later iterations where
+        # Steeper than linear 0.5 decay -- stabilizes later iterations where
         # natural gradients can amplify and cause oscillatory divergence
         if self.n_iterations > 1:
-            progress = iteration / (self.n_iterations - 1)  # 0→1
+            progress = iteration / (self.n_iterations - 1)  # 0->1
             decay_factor = 0.1 + 0.9 * 0.5 * (1.0 + math.cos(math.pi * progress))
         else:
             decay_factor = 1.0
@@ -2443,7 +2443,7 @@ class VariationalFFNDynamic(nn.Module):
             # FUSED MULTI-HEAD VFE: Compute β_h and gradients in single
             # Omega pass per head (eliminates redundant Omega construction).
             # Previously: compute_attention_weights + compute_vfe_gradients_gpu
-            # built Omega separately → 2× Omega per head. Now: 1× per head.
+            # built Omega separately -> 2x Omega per head. Now: 1x per head.
             # =============================================================
             _use_fused_mh = (is_diagonal and self.irrep_dims is not None
                              and not self.exact_diagonal_transport)
@@ -2481,7 +2481,7 @@ class VariationalFFNDynamic(nn.Module):
                 c0_h = _alpha_c0[block_start:block_end] if _alpha_c0 is not None else None
 
                 if _use_fused_mh:
-                    # FUSED: single pass computes β_h AND gradients (1× Omega)
+                    # FUSED: single pass computes β_h AND gradients (1x Omega)
                     beta_h, grad_mu_h, grad_sigma_h, _ = _fused_attention_and_vfe_gradients_block_diag(
                         mu_q=mu_h, sigma_q=sigma_h,
                         mu_p=mu_p_h, sigma_p=sigma_p_h,
@@ -2634,7 +2634,7 @@ class VariationalFFNDynamic(nn.Module):
         # observation gradient computation. Gradients still flow through VFE dynamics
         # (the natural gradient update), just not through how the obs grad was computed.
         # This is more stable than full gradient flow while still allowing embeddings
-        # to learn from VFE dynamics via the mu_current → mu_new update chain.
+        # to learn from VFE dynamics via the mu_current -> mu_new update chain.
         if has_observations:
             logits = torch.matmul(mu_current.detach(), W_out.T)
             probs = F.softmax(logits, dim=-1)
@@ -2657,11 +2657,11 @@ class VariationalFFNDynamic(nn.Module):
 
             # Observation gradient for sigma (exact via Stein's lemma):
             #
-            #   ∂/∂σ_k E_q[CE(z)] = (1/2) · E_q[∂²CE/∂z_k²]
+            #   ∂/∂σ_k E_q[CE(z)] = (1/2) · E_q[∂^2CE/∂z_k^2]
             #
             # This is EXACT for any smooth loss, not a Taylor approximation.
-            # For CE with softmax: ∂²CE/∂z_k² = Var_p[W[:,k]] ≥ 0.
-            # We approximate E_q[H_kk(z)] ≈ H_kk(μ) (zeroth-order in σ).
+            # For CE with softmax: ∂^2CE/∂z_k^2 = Var_p[W[:,k]] ≥ 0.
+            # We approximate E_q[H_kk(z)] ~= H_kk(μ) (zeroth-order in σ).
             if self.obs_sigma_gradient:
                 W_out_sq = W_out ** 2                                # (V, K)
                 EW2 = torch.matmul(probs, W_out_sq)                  # (B, N, K)
@@ -2704,11 +2704,11 @@ class VariationalFFNDynamic(nn.Module):
         # =================================================================
         # Isotropic gradient projection: average grad_sigma across dims
         # =================================================================
-        # When isotropic, all dims share one scalar σ². Average the per-dim
+        # When isotropic, all dims share one scalar σ^2. Average the per-dim
         # gradients so the natural gradient and retraction operate on the
         # consensus direction, rather than K independent updates collapsed
         # after the fact. This is the correct constrained gradient:
-        #   ∂F/∂(σ²) = (1/K) Σ_k ∂F/∂σ_k²
+        #   ∂F/∂(σ^2) = (1/K) Σ_k ∂F/∂σ_k^2
         if self.isotropic_covariance:
             if is_diagonal:
                 grad_sigma = grad_sigma.mean(dim=-1, keepdim=True).expand_as(grad_sigma)
@@ -2739,7 +2739,7 @@ class VariationalFFNDynamic(nn.Module):
         nat_grad_mu = nat_grad_mu * nat_grad_scale
 
         # Clamp nat_grad_sigma norm (analogous to nat_grad_mu clipping above).
-        # The natural gradient nat_grad_sigma = 2σ²·grad_sigma squares the
+        # The natural gradient nat_grad_sigma = 2σ^2·grad_sigma squares the
         # covariance, amplifying gradients when sigma is large. Without clipping,
         # the backward pass sees unclipped gradient magnitudes even though the
         # forward retraction trust region clips the whitened step.
@@ -2803,7 +2803,7 @@ class VariationalFFNDynamic(nn.Module):
             logger.debug(
                 f"  [VFE GRAD DEBUG] iter {iteration}/{self.n_iterations}"
                 f"  diag={is_diagonal}  K={mu_current.shape[-1]}"
-                f"  B×N={mu_current.shape[0]}×{mu_current.shape[1]}"
+                f"  BxN={mu_current.shape[0]}x{mu_current.shape[1]}"
                 f"  multihead={_is_multihead}"
             )
             logger.debug(f"{'='*80}")
@@ -2943,8 +2943,8 @@ class VariationalFFNDynamic(nn.Module):
         if self.update_sigma:
             # SPD-preserving retraction: sigma_new = sigma * exp(step * clip(delta/sigma, -trust, trust))
             # step_size=1.0 so trust_region alone controls max relative change.
-            # nat_grad_sigma = 2σ²·grad → whitened = -2σ·grad, clipped by trust.
-            # With effective_lr≈0.1: max_exp = 0.001 → ~0.1% per iter, ~1% over 10 iters.
+            # nat_grad_sigma = 2σ^2·grad -> whitened = -2σ·grad, clipped by trust.
+            # With effective_lr~=0.1: max_exp = 0.001 -> ~0.1% per iter, ~1% over 10 iters.
             # Calibrated between frozen (pre-#768: 0.025%/iter) and overcorrected (0.5%/iter).
             sigma_trust_base = self._get_sigma_trust(effective_lr)
             sigma_trust_diag = sigma_trust_base
@@ -3008,7 +3008,7 @@ class VariationalFFNDynamic(nn.Module):
                     if (condition > max_condition).any():
                         geo_mean = eigvals.log().mean(dim=-1, keepdim=True).exp()
                         lower = geo_mean / (max_condition ** 0.5)
-                        # Regularize toward isotropic: Sigma → Sigma + ridge * I
+                        # Regularize toward isotropic: Sigma -> Sigma + ridge * I
                         ridge = (lower - e_min).clamp(min=0.0).mean(dim=-1, keepdim=True)
                         K = sigma_current.shape[-1]
                         sigma_current = sigma_current + ridge.unsqueeze(-1) * torch.eye(
@@ -3018,15 +3018,15 @@ class VariationalFFNDynamic(nn.Module):
         # =============================================================
         # STEP 4c: Isotropic covariance enforcement (Limit 1)
         # =============================================================
-        # After sigma update, collapse per-dimension variances to scalar σ²I.
+        # After sigma update, collapse per-dimension variances to scalar σ^2I.
         # This maintains the isotropic constraint through VFE dynamics.
         if self.update_sigma and self.isotropic_covariance:
             if is_diagonal:
-                # sigma_current: (B, N, K) → average across K, expand back
+                # sigma_current: (B, N, K) -> average across K, expand back
                 scalar_var = sigma_current.mean(dim=-1, keepdim=True)
                 sigma_current = scalar_var.expand_as(sigma_current)
             else:
-                # sigma_current: (B, N, K, K) → extract diag, average, rebuild σ²I
+                # sigma_current: (B, N, K, K) -> extract diag, average, rebuild σ^2I
                 diag_vals = torch.diagonal(sigma_current, dim1=-2, dim2=-1)
                 scalar_var = diag_vals.mean(dim=-1, keepdim=True)  # (B, N, 1)
                 K = sigma_current.shape[-1]
@@ -3190,7 +3190,7 @@ class VariationalFFNDynamic(nn.Module):
 
         # =================================================================
         # SAFETY: Disable autocast if active. The VFE inner loop uses
-        # analytical gradients with eigh, sqrt, log, exp, matrix inv —
+        # analytical gradients with eigh, sqrt, log, exp, matrix inv --
         # all of which need float32. If caller has autocast enabled,
         # disable it and upcast inputs.
         # =================================================================

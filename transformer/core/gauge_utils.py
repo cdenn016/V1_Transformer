@@ -42,7 +42,7 @@ def stable_matrix_exp_pair(
         This does not limit transport: Ω_ij = exp(M_i)·exp(-M_j) is a free
         product of two exponentials, which covers all of GL⁺(K) (by polar
         decomposition: A = exp(log P)·exp(log O) where P sym.pos.def., O ∈ SO).
-        For SO(K), exp: so(K) → SO(K) is surjective — no issues.
+        For SO(K), exp: so(K) -> SO(K) is surjective -- no issues.
 
     Args:
         matrix: (..., d, d) matrix to exponentiate.
@@ -134,7 +134,7 @@ def newton_schulz_orthogonalize(
 # =============================================================================
 # These functions process ALL irrep blocks in grouped batches instead of
 # launching separate matrix_exp + KL kernels per block.  For typical configs
-# (e.g. 75×ℓ₀ + 30×ℓ₁ + 18×ℓ₂ = 123 blocks, 3 unique dims), this reduces
+# (e.g. 75xℓ₀ + 30xℓ₁ + 18xℓ₂ = 123 blocks, 3 unique dims), this reduces
 # CUDA kernel launches from O(num_blocks) to O(num_unique_dims).
 
 
@@ -191,7 +191,7 @@ def fused_block_matrix_exp_pairs(
 
         # Batched Lie-algebra element: phi · G per block
         # phi: (B, N, n_gen), gen_stack: (n_blocks, n_gen, d, d)
-        #  → (n_blocks, B, N, d, d)
+        #  -> (n_blocks, B, N, d, d)
         phi_matrices = torch.einsum('bna,gaij->gbnij', phi, gen_stack)
 
         # Merge block-batch and batch dims for a single matrix_exp call
@@ -235,9 +235,9 @@ def fused_block_diagonal_kl_diag(
 
     Memory-efficient implementation with three dispatch paths:
 
-    1. **Triton kernels** (d=1,3,5 on CUDA): zero intermediate memory — the
+    1. **Triton kernels** (d=1,3,5 on CUDA): zero intermediate memory -- the
        entire matrix_exp product, transport, and KL computation stays in
-       GPU registers.  Eliminates ~400–600 MB of (n_blocks, B, N, N, d, d)
+       GPU registers.  Eliminates ~400-600 MB of (n_blocks, B, N, N, d, d)
        Omega intermediates.
 
     2. **Scalar fast path** (d=1 PyTorch fallback): pure element-wise ops
@@ -246,7 +246,7 @@ def fused_block_diagonal_kl_diag(
 
     3. **Row-tiled path** (d>1 PyTorch fallback): processes ``_tile_size``
        query rows at a time, reducing peak Omega memory by a factor of
-       ``N / _tile_size``.  For N=64, _tile_size=16 gives 4× memory
+       ``N / _tile_size``.  For N=64, _tile_size=16 gives 4x memory
        reduction.
 
     Args:
@@ -297,7 +297,7 @@ def fused_block_diagonal_kl_diag(
             # AMP guard: sigma division and log must stay float32
             with torch.amp.autocast('cuda', enabled=False):
                 _f32 = torch.float32
-                # Squeeze out trivial 1×1 matrix dims → (n_blocks, B, N)
+                # Squeeze out trivial 1x1 matrix dims -> (n_blocks, B, N)
                 _ep = exp_phi_stack if exp_phi_stack.dtype == _f32 else exp_phi_stack.float()
                 _en = exp_neg_phi_stack if exp_neg_phi_stack.dtype == _f32 else exp_neg_phi_stack.float()
                 ep = _ep.squeeze(-1).squeeze(-1)
@@ -321,7 +321,7 @@ def fused_block_diagonal_kl_diag(
                 kl = kl.clamp(min=0.0, max=kl_max)
                 kl = kl.nan_to_num(nan=kl_max, posinf=kl_max, neginf=0.0)
 
-            kl_total = kl_total + kl.sum(dim=0)  # sum over blocks → (B,N,N)
+            kl_total = kl_total + kl.sum(dim=0)  # sum over blocks -> (B,N,N)
 
         else:
             # ── Row-tiled path: peak memory reduced by N/_tile_size ─────
@@ -475,7 +475,7 @@ def fused_block_diagonal_kl_full(
 
                 kl_group = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
             except RuntimeError:
-                # Cholesky failed — fall back to diagonal approximation
+                # Cholesky failed -- fall back to diagonal approximation
                 sigma_diag_t = torch.diagonal(sigma_t_reg, dim1=-2, dim2=-1).clamp(min=eps)
                 sigma_diag_i = torch.diagonal(sigma_i_reg, dim1=-2, dim2=-1).clamp(min=eps)
                 delta_mu = mu_transported - mu_i
@@ -512,7 +512,7 @@ def _compute_dkl_domega_diag(
 
     Formula (sympy-verified):
         ∂KL/∂Ω[r,s] = c_r · Ω[r,s] · σ_j[s] / σ_t[r] - δ_r · μ_j[s] / σ_t[r]
-        where c_r = 1 - σ_i[r]/σ_t[r] - δ_r²/σ_t[r], δ_r = μ_i[r] - μ_t[r]
+        where c_r = 1 - σ_i[r]/σ_t[r] - δ_r^2/σ_t[r], δ_r = μ_i[r] - μ_t[r]
     """
     sig_t = sig_t.clamp(min=eps)
     delta = mu_i - mu_t                                         # (..., d)

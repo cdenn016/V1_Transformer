@@ -121,13 +121,13 @@ def identify_gauge_group(phi_dim: int) -> str:
     Prefer format_gauge_group_label() with model.gauge_group when possible.
     """
     # SO(2): 1 generator, SO(3): 3 generators, SO(N): N(N-1)/2 generators
-    # GL(K): K² generators
+    # GL(K): K^2 generators
     if phi_dim == 1:
         return "SO(2)"
     elif phi_dim == 3:
         return "SO(3)"
     else:
-        # Check if it's a perfect square (GL(K) has K² generators)
+        # Check if it's a perfect square (GL(K) has K^2 generators)
         k_sqrt = int(round(np.sqrt(phi_dim)))
         if k_sqrt * k_sqrt == phi_dim:
             return f"GL({k_sqrt})"
@@ -589,7 +589,7 @@ def _reconstruct_gauge_fixed_embeddings(
         phi_weight = phi_weight[:n_tokens]
 
     with torch.no_grad():
-        # φ_i · T_a  →  (n, K, K)
+        # φ_i · T_a  ->  (n, K, K)
         phi_matrix = torch.einsum('nc,ckl->nkl', phi_weight, generators)
         from transformer.core.gauge_utils import stable_matrix_exp_pair
         R, _ = stable_matrix_exp_pair(phi_matrix)   # (n, K, K)
@@ -1066,7 +1066,7 @@ def plot_gauge_frame_clustering(phi_embed, step=None, save_path=None, n_tokens=5
 # Key metrics for Ω_i:
 #   - Frobenius distance:  ‖Ω_i − Ω_j‖_F   (ambient)
 #   - Geodesic distance:   ‖log(Ω_i⁻¹ Ω_j)‖_F  (intrinsic, = ‖Ω_ij − I‖ at identity)
-#   - Determinant profile: det(Ω_i) ≈ 1 for SO(K), > 0 for GL⁺(K)
+#   - Determinant profile: det(Ω_i) ~= 1 for SO(K), > 0 for GL⁺(K)
 #   - Spectral spread:     eigenvalue distribution of Ω_i
 # =============================================================================
 
@@ -1105,7 +1105,7 @@ def extract_omega(
             break
 
     if omega_embed is not None:
-        # Direct omega path: reshape flat embedding to block-diagonal K×K
+        # Direct omega path: reshape flat embedding to block-diagonal KxK
         # Locate omega_head_dims from model
         for attr in ['omega_head_dims']:
             omega_head_dims = getattr(model, attr, None)
@@ -1226,7 +1226,7 @@ def compute_omega_clustering_metrics(
 ) -> Dict[str, Any]:
     """Compute clustering quality of Ω_i in matrix space.
 
-    Flattens each K×K matrix to a vector for sklearn metrics, but also
+    Flattens each KxK matrix to a vector for sklearn metrics, but also
     computes group-specific metrics (det profile, spectral spread).
 
     Args:
@@ -1238,7 +1238,7 @@ def compute_omega_clustering_metrics(
     """
     n = min(n_tokens, omega.shape[0])
     K = omega.shape[1]
-    omega_flat = omega[:n].reshape(n, -1).numpy()  # (n, K²)
+    omega_flat = omega[:n].reshape(n, -1).numpy()  # (n, K^2)
     results = {}
 
     # --- Frobenius-space clustering (same machinery as phi) ---
@@ -1294,7 +1294,7 @@ def compute_omega_clustering_metrics(
     results['omega_det_std'] = float(np.std(dets))
     results['omega_det_min'] = float(np.min(dets))
     results['omega_det_max'] = float(np.max(dets))
-    # For SO(K), det ≈ 1; deviation indicates GL drift
+    # For SO(K), det ~= 1; deviation indicates GL drift
     results['omega_det_deviation'] = float(np.mean(np.abs(dets - 1.0)))
 
     # --- Spectral spread: eigenvalue distribution ---
@@ -1342,7 +1342,7 @@ def analyze_omega_semantics(
     (geodesic) distances, plus group-specific diagnostics (determinant, spectrum).
 
     Args:
-        model: GaugeTransformerLM (extracts phi_embed + generators → Ω).
+        model: GaugeTransformerLM (extracts phi_embed + generators -> Ω).
         omega: Alternatively, provide pre-computed (n_tokens, K, K) tensor.
         step: Training step for plot titles.
         save_dir: Directory for saved figures.
@@ -1381,12 +1381,12 @@ def analyze_omega_semantics(
     results['omega_clustering'] = cluster_metrics
 
     # Token class analysis (using Frobenius distance on Ω)
-    omega_flat_embed = omega[:n].reshape(n, -1)  # (n, K²)
+    omega_flat_embed = omega[:n].reshape(n, -1)  # (n, K^2)
     class_results = analyze_token_classes(
         mu_embed=omega_flat_embed,  # reuse machinery with flattened Ω
         phi_embed=None,
     )
-    # Rename keys: mu_ → omega_ since we passed Ω as "mu"
+    # Rename keys: mu_ -> omega_ since we passed Ω as "mu"
     omega_class = {}
     for k, v in class_results.items():
         new_k = k.replace('mu_', 'omega_') if k.startswith('mu_') else k
@@ -1488,10 +1488,10 @@ def plot_omega_clustering(
     """Visualize per-token group elements Ω_i colored by token category.
 
     Layout (4 panels):
-      (a) PCA of flattened Ω_i (K² → 2D)  — cluster structure
-      (b) Determinant distribution by category  — group geometry
-      (c) Distance from identity ‖Ω_i − I‖_F by category  — magnitude
-      (d) Eigenvalue magnitude distribution   — spectral character
+      (a) PCA of flattened Ω_i (K^2 -> 2D)  -- cluster structure
+      (b) Determinant distribution by category  -- group geometry
+      (c) Distance from identity ‖Ω_i − I‖_F by category  -- magnitude
+      (d) Eigenvalue magnitude distribution   -- spectral character
 
     Args:
         omega: Group elements (n_tokens, K, K).
@@ -1517,11 +1517,11 @@ def plot_omega_clustering(
     group_str = gauge_group_label or f"K={K}"
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle(f'Group Element Ω_i Analysis — {group_str}{step_str}', fontsize=14, y=1.01)
+    fig.suptitle(f'Group Element Ω_i Analysis -- {group_str}{step_str}', fontsize=14, y=1.01)
 
     # ---- (a) PCA of flattened Omega ----
     ax = axes[0, 0]
-    omega_flat = omega_np.reshape(n, -1)  # (n, K²)
+    omega_flat = omega_np.reshape(n, -1)  # (n, K^2)
     pca = PCA(n_components=min(3, omega_flat.shape[1]))
     omega_pca = pca.fit_transform(omega_flat)
     var = pca.explained_variance_ratio_
@@ -1534,7 +1534,7 @@ def plot_omega_clustering(
                        c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
     ax.set_xlabel(f'PC1 ({var[0]:.1%})')
     ax.set_ylabel(f'PC2 ({var[1]:.1%})')
-    ax.set_title(f'(a) Ω_i PCA (from {K}×{K} matrices)')
+    ax.set_title(f'(a) Ω_i PCA (from {K}x{K} matrices)')
     ax.legend(loc='upper right', fontsize=7)
     ax.grid(True, alpha=0.3)
 
@@ -2029,7 +2029,7 @@ class SemanticTrajectoryTracker:
         """
         snapshot = {'step': step}
 
-        # Extract embeddings — prefer prior_bank (trained) over token_embed (dead)
+        # Extract embeddings -- prefer prior_bank (trained) over token_embed (dead)
         mu_embed = None
         phi_embed = None
         sigma_embed = None

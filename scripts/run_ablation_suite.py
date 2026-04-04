@@ -123,21 +123,21 @@ BASELINE_CONFIG = {
 
     'diagonal_covariance':      True,
     'exact_diagonal_transport': False,  # exact diagonal transport - more expensive
-                                        # If True, force Σ = σ²I (scalar variance × identity)
+                                        # If True, force Σ = σ^2I (scalar variance x identity)
     'isotropic_covariance':     False,
     'enforce_orthogonal':       False,    
-    'learnable_reflection':     False,# Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk
+    'learnable_reflection':     False,# Per-token s_i ∈ {+/-1}^K -> O(K)  - enforce orthogonal=true with glk
                                         # Set gauge-mode=constant and the above 3 = true for transf limit
  
     # === VFE loss weights (M-step objective) ===
     # E-step: prior + alignment (no observations with n_iterations=1).
-    # CE enters through M-step via IFT (s_k ≈ 0.5 from fixed E_alpha=1).
+    # CE enters through M-step via IFT (s_k ~= 0.5 from fixed E_alpha=1).
     # M_alpha=0: KL(q*||p) homogenizes (q* is smoothed, not data-grounded).
     # M_beta=0: alignment term is vacuum-seeking. E-step handles it internally.
     
     'M_alpha':             0.00,
     'M_beta':              0.0,
-    'mass_phi':            0.05,            # Gauge prior: (mass_φ/2)||φ||²
+    'mass_phi':            0.05,            # Gauge prior: (mass_φ/2)||φ||^2
     'lambda_hyper':        0.0,            # KL(s||h) with fixed Σ_h set if if using embed-weight-decay
     'lambda_gamma':        0.0,
     'kappa_gamma':         1.0,
@@ -205,11 +205,11 @@ BASELINE_CONFIG = {
     'connection_type':       'bilinear',  # 'bilinear' (δ_ij^a = μ_i^T W^a μ_j) | 'mlp'   
     'connection_hidden_dim': 64,   # Hidden dim for MLP connection (ignored for bilinear)   
     'connection_init_scale': 0.01,   # W init scale (0=flat saddle point, 0.01 recommended)    
-    'holonomy_penalty':      0.0,  # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
+    'holonomy_penalty':      0.0,  # λ_H · E[‖C_ijk - I‖^2_F] regularizer (0 = off)
 
     # Option A: couple just 0↔1, head 2 stays independent
     # 'cross_couplings': [(0, 1), (1, 0)],
-    # → super-blocks: [20, 10]  (heads 0,1 merged into GL(20), head 2 alone)
+    # -> super-blocks: [20, 10]  (heads 0,1 merged into GL(20), head 2 alone)
     # === Layer/iteration diagnostics ===
     'track_layer_diagnostics':     True,
     'track_iteration_diagnostics': True,
@@ -396,7 +396,7 @@ SWEEPS = {
 
     # --- Tier 6: Alpha_phi (gauge prior) ---
     'mass_phi': {
-        'description': 'Gauge frame L2 prior weight (α_φ/2)||φ||²',
+        'description': 'Gauge frame L2 prior weight (α_φ/2)||φ||^2',
         'param': 'mass_phi',
         'values': [0.0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5],
         'baseline_value': 0.1,
@@ -469,7 +469,7 @@ SWEEPS = {
 
     # --- Tier 9: M-step gradient scaling ---
     'sigma_ce_scale': {
-        'description': 'CE→σ_p gradient scale in PriorBank decode (0=detach, 1=full)',
+        'description': 'CE->σ_p gradient scale in PriorBank decode (0=detach, 1=full)',
         'param': 'sigma_ce_scale',
         'values': [0.0, 0.01, 0.05, 0.1, 0.2],
         'baseline_value': 0.1,
@@ -491,7 +491,7 @@ SWEEPS = {
     },
 }
 
-# Sweep execution order (cheapest → most expensive)
+# Sweep execution order (cheapest -> most expensive)
 SWEEP_ORDER = [
     
     #'gauge_dim', 

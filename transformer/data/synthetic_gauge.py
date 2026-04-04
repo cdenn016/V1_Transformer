@@ -1,5 +1,5 @@
 """
-Synthetic Gauge Language — Controlled Holonomy for Flat Bundle Experiments.
+Synthetic Gauge Language -- Controlled Holonomy for Flat Bundle Experiments.
 ===========================================================================
 
 Generates (sequence, label) pairs where the label depends on parallel transport
@@ -8,8 +8,8 @@ along the sequence through a discrete GL(K) gauge field.
 The gauge field assigns each token a local frame g_v in GL+(K) and defines
 connections A_{v->w} in gl(K) between token pairs. Holonomy strength epsilon
 controls path-dependence:
-    epsilon = 0: completely flat — transport depends only on endpoints (path-independent)
-    epsilon > 0: non-flat — transport depends on the full path through intermediate tokens
+    epsilon = 0: completely flat -- transport depends only on endpoints (path-independent)
+    epsilon > 0: non-flat -- transport depends on the full path through intermediate tokens
 
 This provides the cleanest falsification test for the flat bundle hypothesis:
     - Flat architecture should excel at epsilon ~ 0 and fail at epsilon >> 0
@@ -45,14 +45,14 @@ class SyntheticGaugeLanguage:
     """Discrete gauge field on a token vocabulary with controllable holonomy.
 
     Each token v ∈ {0, ..., V-1} has a hidden "local frame" g_v ∈ GL(K).
-    The connection field A_{v→w} ∈ gl(K) defines transport between tokens:
+    The connection field A_{v->w} ∈ gl(K) defines transport between tokens:
 
-        Flat part:     A_flat_{v→w} = log(g_v · g_w^{-1})
-        Non-flat noise: A_noise_{v→w} ~ N(0, I) in gl(K)
-        Total:         A_{v→w} = A_flat + ε · A_noise
+        Flat part:     A_flat_{v->w} = log(g_v · g_w^{-1})
+        Non-flat noise: A_noise_{v->w} ~ N(0, I) in gl(K)
+        Total:         A_{v->w} = A_flat + ε · A_noise
 
     Parallel transport along sequence [t_1, ..., t_n]:
-        T = exp(A_{t_1→t_2}) · exp(A_{t_2→t_3}) · ... · exp(A_{t_{n-1}→t_n})
+        T = exp(A_{t_1->t_2}) · exp(A_{t_2->t_3}) · ... · exp(A_{t_{n-1}->t_n})
 
     When ε=0: T = g_{t_1} · g_{t_n}^{-1} (depends only on endpoints!)
     When ε>0: T depends on the full path (intermediate tokens matter)
@@ -90,7 +90,7 @@ class SyntheticGaugeLanguage:
         self.frames = [random_gl_element(K, rng, scale=frame_scale) for _ in range(vocab_size)]
         self.frames_inv = [np.linalg.inv(g) for g in self.frames]
 
-        # Precompute flat connection: A_flat_{v→w} = log(g_v · g_w^{-1})
+        # Precompute flat connection: A_flat_{v->w} = log(g_v · g_w^{-1})
         self.A_flat = np.zeros((vocab_size, vocab_size, K, K))
         for v in range(vocab_size):
             for w in range(vocab_size):
@@ -118,13 +118,13 @@ class SyntheticGaugeLanguage:
         ]
 
     def get_connection(self, v: int, w: int) -> np.ndarray:
-        """Get the connection A_{v→w} = A_flat + ε · A_noise."""
+        """Get the connection A_{v->w} = A_flat + ε · A_noise."""
         return self.A_flat[v, w] + self.epsilon * self.A_noise[v, w]
 
     def compute_transport(self, sequence: np.ndarray) -> np.ndarray:
         """Parallel transport along a token sequence through the GL(K) gauge field.
 
-        Computes T = Π_{i=0}^{n-2} exp(A_{t_i → t_{i+1}}).
+        Computes T = Π_{i=0}^{n-2} exp(A_{t_i -> t_{i+1}}).
 
         Args:
             sequence: Array of token indices, shape (seq_len,).

@@ -6,8 +6,8 @@ Token Covariance Ranking
 Load a trained GaugeTransformerLM checkpoint and rank all vocabulary tokens
 by their prior covariance magnitude (trace of Σ_v or mean diagonal variance).
 
-Small Σ → high precision → the model is confident about this token's meaning.
-Large Σ → high uncertainty → the token's representation is diffuse / context-dependent.
+Small Σ -> high precision -> the model is confident about this token's meaning.
+Large Σ -> high uncertainty -> the token's representation is diffuse / context-dependent.
 
 Instructions:
     1. Set CHECKPOINT_PATH below
@@ -15,7 +15,7 @@ Instructions:
 """
 
 # =============================================================================
-# CONFIGURATION — EDIT THESE
+# CONFIGURATION -- EDIT THESE
 # =============================================================================
 
 CHECKPOINT_PATH = r"checkpoints_publication/ffn_VFE_dynamic/best_model.pt"
@@ -31,7 +31,7 @@ TOP_K = 50
 METRIC = 'trace'
 
 # =============================================================================
-# CODE — No need to edit below
+# CODE -- No need to edit below
 # =============================================================================
 
 import sys
@@ -69,7 +69,7 @@ def get_prior_covariances(model) -> torch.Tensor:
     elif hasattr(te, 'log_sigma_diag'):
         log_sigma = te.log_sigma_diag
         if log_sigma.dim() == 1:
-            # Shared across vocab — (K,)
+            # Shared across vocab -- (K,)
             return torch.exp(log_sigma).clamp(min=0.01, max=5.0).unsqueeze(0).expand(te.vocab_size, -1)
         else:
             return torch.exp(log_sigma).clamp(min=0.01, max=5.0)  # (V, K)

@@ -108,14 +108,14 @@ from math_utils.numerical_monitor import flush as _flush_numerical_events
 # SO(5) multi-irrep example:
 # ('scalar', 10, 1),   # 10 dims (invariant)
 # ('fund', 8, 5),      # 40 dims (vector)
-# ('wedge2', 4, 10),   # 40 dims (∧² - angular momentum)
-# ('sym2', 3, 14),     # 42 dims (Sym²₀ - quadrupolar)
+# ('wedge2', 4, 10),   # 40 dims (∧^2 - angular momentum)
+# ('sym2', 3, 14),     # 42 dims (Sym^2₀ - quadrupolar)
 #
 #      Supports multiple irrep types for representational diversity:
 #        - 'scalar': dim = 1              (gauge-invariant)
 #        - 'fund':   dim = N              (fundamental/vector)
-#        - 'wedge2': dim = N*(N-1)/2      (antisymmetric 2-tensor ∧²V)
-#        - 'sym2':   dim = N*(N+1)/2 - 1  (symmetric traceless Sym²₀V)
+#        - 'wedge2': dim = N*(N-1)/2      (antisymmetric 2-tensor ∧^2V)
+#        - 'sym2':   dim = N*(N+1)/2 - 1  (symmetric traceless Sym^2₀V)
 
 DEFAULT_MODE = 'em'               # Which mode to run
 SEED = 6
@@ -126,7 +126,7 @@ _DEBUG_VFE_GRADS = False
 # ============================================================================
 
 # =============================================================================
-# CONFIG: EM — Principled E/M with implicit differentiation (mode='em')
+# CONFIG: EM -- Principled E/M with implicit differentiation (mode='em')
 # =============================================================================
 # Gauge-covariant VFE transformer with proper E/M separation:
 #
@@ -134,13 +134,13 @@ _DEBUG_VFE_GRADS = False
 #           Fisher-preconditioned μ, SPD retraction for Σ, Killing-form for φ.
 #           Adaptive α_i = c0/(b0 + KL) gates prior coupling per agent.
 #
-#   M-step: Backprop through IFT-scaled gradient. Scale s_k = (α/σ²_p)/A_k
+#   M-step: Backprop through IFT-scaled gradient. Scale s_k = (α/σ^2_p)/A_k
 #           where A_k is the effective precision at the E-step fixed point.
 #           Replaces ad-hoc straight-through (s=1) with the info-geometrically
-#           correct value. CE → W_out directly; CE → embeddings via IFT scale.
-#           KL(q*||p) → embeddings directly. KL(s||h) → sigma with fixed Σ_h.
+#           correct value. CE -> W_out directly; CE -> embeddings via IFT scale.
+#           KL(q*||p) -> embeddings directly. KL(s||h) -> sigma with fixed Σ_h.
 #
-#   Hierarchy: h(fixed) → s(embed params) → p=s → q(E-step beliefs) → obs
+#   Hierarchy: h(fixed) -> s(embed params) -> p=s -> q(E-step beliefs) -> obs
 # =============================================================================
 
 
@@ -216,21 +216,21 @@ EM_CONFIG = {
 
     'diagonal_covariance':      True,
     'exact_diagonal_transport': False,  # exact diagonal transport - more expensive
-                                        # If True, force Σ = σ²I (scalar variance × identity)
+                                        # If True, force Σ = σ^2I (scalar variance x identity)
     'isotropic_covariance':     False,
     'enforce_orthogonal':       False,    
-    'learnable_reflection':     False,# Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk
+    'learnable_reflection':     False,# Per-token s_i ∈ {+/-1}^K -> O(K)  - enforce orthogonal=true with glk
                                         # Set gauge-mode=constant and the above 3 = true for transf limit
  
     # === VFE loss weights (M-step objective) ===
     # E-step: prior + alignment (no observations with n_iterations=1).
-    # CE enters through M-step via IFT (s_k ≈ 0.5 from fixed ffn_alpha=1).
+    # CE enters through M-step via IFT (s_k ~= 0.5 from fixed ffn_alpha=1).
     # alpha=0: KL(q*||p) homogenizes (q* is smoothed, not data-grounded).
     # beta=0: alignment term is vacuum-seeking. E-step handles it internally.
     
     'M_alpha':             0.00,   # M-step KL(q||p) self-consistency
     'M_beta':              0.0,    # M-step belief alignment
-    'mass_phi':            0.01,    # Gauge prior: (mass_φ/2)||φ||²
+    'mass_phi':            0.01,    # Gauge prior: (mass_φ/2)||φ||^2
     'lambda_hyper':        0.0,    # KL(s||h) explicit loss (pulls tokens toward centroid)
     'lambda_gamma':        0.0,
     'kappa_gamma':         1.0,
@@ -294,11 +294,11 @@ EM_CONFIG = {
     'connection_type':       'bilinear',  # 'bilinear' (δ_ij^a = μ_i^T W^a μ_j) | 'mlp'   
     'connection_hidden_dim': 64,   # Hidden dim for MLP connection (ignored for bilinear)   
     'connection_init_scale': 0.01,   # W init scale (0=flat saddle point, 0.01 recommended)    
-    'holonomy_penalty':      0.0,  # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
+    'holonomy_penalty':      0.0,  # λ_H · E[‖C_ijk - I‖^2_F] regularizer (0 = off)
 
     # Option A: couple just 0↔1, head 2 stays independent
     # 'cross_couplings': [(0, 1), (1, 0)],
-    # → super-blocks: [20, 10]  (heads 0,1 merged into GL(20), head 2 alone)
+    # -> super-blocks: [20, 10]  (heads 0,1 merged into GL(20), head 2 alone)
     # === Layer/iteration diagnostics ===
     'track_layer_diagnostics':     False,
     'track_iteration_diagnostics': False,
@@ -330,7 +330,7 @@ EM_CONFIG = {
 
 
 # =============================================================================
-# CONFIG: HEBBIAN — Backprop-free learning via P-flow + delta rule (mode='hebbian')
+# CONFIG: HEBBIAN -- Backprop-free learning via P-flow + delta rule (mode='hebbian')
 # =============================================================================
 # Same gauge-VFE model as EM, but ALL parameter learning is local/Hebbian:
 #
@@ -445,11 +445,11 @@ HEBBIAN_CONFIG = {
 
 
 # =============================================================================
-# CONFIG: PURE VFE — No backprop, natural gradient only (mode='pure_vfe')
+# CONFIG: PURE VFE -- No backprop, natural gradient only (mode='pure_vfe')
 # =============================================================================
 # The purest realization of the free energy principle for sequence modeling.
-# NO nn.Module, NO autograd, NO optimizer. The entire system — inference AND
-# learning — operates through natural gradient descent on the gauge-covariant
+# NO nn.Module, NO autograd, NO optimizer. The entire system -- inference AND
+# learning -- operates through natural gradient descent on the gauge-covariant
 # VFE with analytic closed-form gradients.
 #
 # Architecture:
@@ -457,7 +457,7 @@ HEBBIAN_CONFIG = {
 #   - Inference: E-step VFE descent (replaces forward pass)
 #   - Learning: M-step natural gradient on prior bank
 #   - Attention: KL-divergence based with gauge transport
-#   - No linear projections, no output head — logits = −KL(q||π_v)
+#   - No linear projections, no output head -- logits = −KL(q||π_v)
 # =============================================================================
 PURE_VFE_CONFIG = {
     # Belief geometry
@@ -576,14 +576,14 @@ PURE_VFE_CONFIG = {
 #
 # Architecture:
 #   - Attention: Q·K^T / √d (standard dot-product softmax)
-#   - FFN: Linear → GELU → Linear (learned MLP)
+#   - FFN: Linear -> GELU -> Linear (learned MLP)
 #   - Output: Linear projection to vocab
 #   - Learning: Backpropagation (standard)
 #   - Position: Learned positional embeddings
 # =============================================================================
 
 STANDARD_CONFIG = {
-    # Model architecture — param-matched to EM_CONFIG (1.52M)
+    # Model architecture -- param-matched to EM_CONFIG (1.52M)
     'vocab_size': 50257,
     'embed_dim': 10,              # Same as VFE for apples-to-apples comparison
     
@@ -592,7 +592,7 @@ STANDARD_CONFIG = {
     'hidden_dim': 24527,          # Absorbs params that VFE spends on σ table + VFE machinery
     'max_seq_len': 128,
 
-    # Training — match VFE config
+    # Training -- match VFE config
     'batch_size': 64,
     'num_workers': 10,
     'epochs': None,
@@ -629,7 +629,7 @@ STANDARD_CONFIG = {
     'dropout': 0.1,
     'grad_clip': 1.0,
 
-    # Logging — match VFE config
+    # Logging -- match VFE config
     'log_interval': 100,
     'eval_interval': 1000,
     'checkpoint_interval': 25000,
@@ -670,7 +670,7 @@ STANDARD_CONFIG = {
 # Config (b): Standard transformer at d_model=90, MLP disabled (attention-only)
 # Isolates the contribution of dot-product attention without FFN
 STANDARD_ATTN_ONLY_CONFIG = {
-    # Model architecture — match gauge model's embed_dim
+    # Model architecture -- match gauge model's embed_dim
     'vocab_size': 50257,
     'embed_dim': 90,              # Same as gauge model embed_dim
     'n_layers': 1,                # Same depth
@@ -681,7 +681,7 @@ STANDARD_ATTN_ONLY_CONFIG = {
     'max_seq_len': 128,
     'disable_ffn': True,          # KEY: no FFN, attention only
 
-    # Training — match VFE config
+    # Training -- match VFE config
     'batch_size': 64,
     'num_workers': 10,
     'epochs': None,
@@ -841,7 +841,7 @@ from transformer.training.experiment_runner import (
 
 
 # =============================================================================
-# MAIN — Select config based on mode, then run
+# MAIN -- Select config based on mode, then run
 # =============================================================================
 
 def main():

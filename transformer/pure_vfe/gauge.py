@@ -127,7 +127,7 @@ def grad_kl_Omega_ij(mu_i, Sigma_i, mu_j, Sigma_j, Omega_ij):
     term3 = Omega_ij_invT
 
     # The ½ from KL = ½[...] is already absorbed into each term's derivation.
-    # term1, term2, term3 ARE the full ∂KL/∂Ω — no additional factor needed.
+    # term1, term2, term3 ARE the full ∂KL/∂Ω -- no additional factor needed.
     return term1 + term2 + term3
 
 
@@ -228,7 +228,7 @@ def vfe_grad_Omega(mu_h, Sigma_h, Omega, beta, kl_ij, precomp):
         # The ½ from KL = ½[...] is already absorbed into each term's derivation.
         dKL_dOij = term1 + term2 + term3  # [B, N_i, N_j, K_h, K_h]
         # Clamp intermediate to prevent NaN propagation from cascading
-        # inversions through the chain rule (O(N²) matrices per head).
+        # inversions through the chain rule (O(N^2) matrices per head).
         dKL_dOij = torch.clamp(dKL_dOij, -1e6, 1e6)
 
         # Chain rule: ∂KL/∂Ω_i = ∂KL/∂Ω_ij @ Ω_j⁻ᵀ
@@ -276,7 +276,7 @@ def lie_algebra_clip_grad(grad_Omega, Omega, trust_radius=0.3):
     """
     Compute and clip the natural gradient via the Lie algebra of GL(K).
 
-    Instead of forming Ω·Ωᵀ·g in the ambient space (which amplifies by σ(Ω)²)
+    Instead of forming Ω·Ωᵀ·g in the ambient space (which amplifies by σ(Ω)^2)
     and then clipping in Euclidean norm (which depends on where Ω sits), we:
 
       1. Pull back to the Lie algebra: ξ = Ωᵀ · ∂F/∂Ω
@@ -285,13 +285,13 @@ def lie_algebra_clip_grad(grad_Omega, Omega, trust_radius=0.3):
 
     Why this works: ||ξ||_F = ||Ω⁻¹ΔΩ||_F is the Riemannian step size
     under the left-invariant metric. It is invariant under left translation
-    (Ω → A·Ω for any A ∈ GL(K)), so the trust region has the same intrinsic
+    (Ω -> A·Ω for any A ∈ GL(K)), so the trust region has the same intrinsic
     size everywhere on the manifold. No feedback loop is possible because
     the clip threshold is a *constant* in the Riemannian geometry.
 
     The subsequent Euler retraction Ω - η·ΔΩ = Ω·(I - η·ξ) approximates
     the geodesic retraction Ω·exp(-η·ξ) to first order, which is accurate
-    when η·||ξ|| is small — guaranteed by the trust region.
+    when η·||ξ|| is small -- guaranteed by the trust region.
 
     Args:
         grad_Omega: [..., K, K] Euclidean gradient ∂F/∂Ω
@@ -338,8 +338,8 @@ def regularize_omega_conditioning(Omega, cond_max=50.0):
     When condition number exceeds cond_max, blend Omega toward Q = U·Vᵀ
     (the nearest orthogonal matrix from polar decomposition) with strength
     proportional to the excess:
-      blend = clamp(0.1 × (cond/cond_max - 1), 0, 0.5)
-      Omega_new = (1 - blend) × Omega + blend × Q
+      blend = clamp(0.1 x (cond/cond_max - 1), 0, 0.5)
+      Omega_new = (1 - blend) x Omega + blend x Q
 
     Using the polar factor instead of the identity matrix is critical for
     GL(K) support: Q preserves the sign of det(Omega), so frames in GL⁻(K)
@@ -381,13 +381,13 @@ def regularize_omega_conditioning(Omega, cond_max=50.0):
 
 def make_gl_generators(K, device='cpu'):
     """
-    Construct GL(K) generators: K² basis matrices E_{ab} with (E_{ab})_{ij} = δ_{ai}δ_{bj}.
+    Construct GL(K) generators: K^2 basis matrices E_{ab} with (E_{ab})_{ij} = δ_{ai}δ_{bj}.
 
     Args:
         K: dimension
         device: torch device
 
-    Returns: (K², K, K) generators
+    Returns: (K^2, K, K) generators
     """
     n_gen = K * K
     generators = torch.zeros(n_gen, K, K, device=device)
@@ -464,11 +464,11 @@ def init_omega(shape, scale=0.01, device='cuda', negative_det_fraction=0.0):
     For the omega path (gauge_param='omega'), frames live in full GL(K).
     Setting negative_det_fraction > 0 seeds a fraction of frames in GL⁻(K)
     (det < 0) by flipping the first column. This is necessary because the
-    Lie algebra retraction preserves det sign — frames cannot cross between
+    Lie algebra retraction preserves det sign -- frames cannot cross between
     GL⁺(K) and GL⁻(K) during training.
 
     For the phi path (gauge_param='phi'), this function is not used (phi
-    uses init_phi + exp → GL⁺(K) automatically).
+    uses init_phi + exp -> GL⁺(K) automatically).
 
     Args:
         shape: tuple, e.g. (V, H, K_h, K_h) or (N, H, K_h, K_h)
@@ -480,7 +480,7 @@ def init_omega(shape, scale=0.01, device='cuda', negative_det_fraction=0.0):
 
     Returns: tensor of shape `shape`
     """
-    assert shape[-1] == shape[-2], "Last two dims must be K×K"
+    assert shape[-1] == shape[-2], "Last two dims must be KxK"
     K = shape[-1]
     eye = torch.eye(K, device=device)
     Omega = eye.expand(shape).clone()

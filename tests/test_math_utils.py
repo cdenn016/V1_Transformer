@@ -46,7 +46,7 @@ class TestSO3Generators:
                             err_msg=f"K={K}: [G_z, G_x] ≠ G_y")
 
     def test_casimir_eigenvalue(self):
-        """-Σ G_a² = ℓ(ℓ+1)·I where ℓ = (K-1)/2."""
+        """-Σ G_a^2 = ℓ(ℓ+1)·I where ℓ = (K-1)/2."""
         from math_utils.generators import generate_so3_generators
         for K in [3, 5, 7]:
             G = generate_so3_generators(K)
@@ -121,7 +121,7 @@ class TestTransportOperators:
         assert_allclose(Omega, np.eye(3), atol=1e-6)
 
     def test_det_positive(self):
-        """det(Ω_ij) > 0 — stays in GL⁺(K)."""
+        """det(Ω_ij) > 0 -- stays in GL⁺(K)."""
         from math_utils.transport import compute_transport
         G = self._get_generators(5)
         for _ in range(10):
@@ -143,7 +143,7 @@ class TestTransportOperators:
         assert_allclose(product, np.eye(3), atol=1e-5)
 
     def test_zero_phi_gives_identity(self):
-        """φ_i = φ_j = 0 → Ω = I."""
+        """φ_i = φ_j = 0 -> Ω = I."""
         from math_utils.transport import compute_transport
         G = self._get_generators(3)
         Omega = compute_transport(np.zeros(3), np.zeros(3), G)
@@ -231,7 +231,7 @@ class TestGaussianPushforward:
         assert (eigvals > 0).all(), f"Non-positive eigenvalues: {eigvals}"
 
     def test_identity_transport_unchanged(self):
-        """Ω = I → μ and Σ unchanged."""
+        """Ω = I -> μ and Σ unchanged."""
         from math_utils.push_pull import push_gaussian, GaussianDistribution
         K = 3
         mu = np.array([1.0, 2.0, 3.0])
@@ -294,7 +294,7 @@ class TestKLGaussianNumpy:
     def test_known_value_1d(self):
         """Known analytic KL for 1D Gaussians."""
         from math_utils.numerical_utils import kl_gaussian
-        # KL(N(0,1) || N(1,2)) = 0.5 * (1/2 + 1/2 - 1 + ln(2)) = 0.5 * ln(2) ≈ 0.3466
+        # KL(N(0,1) || N(1,2)) = 0.5 * (1/2 + 1/2 - 1 + ln(2)) = 0.5 * ln(2) ~= 0.3466
         mu_q = np.array([0.0])
         Sigma_q = np.array([[1.0]])
         mu_p = np.array([1.0])
@@ -312,7 +312,7 @@ class TestSafeInv:
     """Tests for safe_inv()."""
 
     def test_inverse_correctness(self):
-        """A @ A^{-1} ≈ I."""
+        """A @ A^{-1} ~= I."""
         from math_utils.numerical_utils import safe_inv
         K = 4
         A = np.random.randn(K, K)
@@ -390,10 +390,10 @@ class TestSanitizeSigma:
 # ===========================================================================
 
 class TestFrechetExpm:
-    """Tests for frechet_expm() — Fréchet derivative of matrix exponential."""
+    """Tests for frechet_expm() -- Fréchet derivative of matrix exponential."""
 
     def test_matches_finite_difference(self):
-        """Fréchet derivative ≈ (exp(X+εH) - exp(X)) / ε."""
+        """Fréchet derivative ~= (exp(X+εH) - exp(X)) / ε."""
         from math_utils.transport import frechet_expm
         from scipy.linalg import expm
         K = 3

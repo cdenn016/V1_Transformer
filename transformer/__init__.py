@@ -23,7 +23,7 @@ warnings.filterwarnings("ignore", message="Failed to find cuobjdump", category=U
 warnings.filterwarnings("ignore", message="Failed to find nvdisasm", category=UserWarning, module="triton")
 
 # =============================================================================
-# Core Model, Training, Data — wrapped in try/except so that lightweight
+# Core Model, Training, Data -- wrapped in try/except so that lightweight
 # subpackages (e.g. pure_vfe) can be imported without full deps like scipy.
 # =============================================================================
 try:

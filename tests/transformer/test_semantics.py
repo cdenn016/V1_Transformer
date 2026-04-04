@@ -73,7 +73,7 @@ def random_sigma_diag():
 
 @pytest.fixture
 def random_sigma_full():
-    """Random full Sigma (vocab=50, K=4, K=4) — SPD matrices."""
+    """Random full Sigma (vocab=50, K=4, K=4) -- SPD matrices."""
     torch.manual_seed(46)
     n, K = 50, 4
     # Generate SPD matrices: A @ A^T + eps*I
@@ -245,7 +245,7 @@ class TestGaugeGroupIdent:
 
     def test_glk(self):
         from transformer.analysis.semantics import identify_gauge_group
-        # 9 generators = GL(3) since 3² = 9
+        # 9 generators = GL(3) since 3^2 = 9
         assert identify_gauge_group(9) == "GL(3)"
 
     def test_son(self):

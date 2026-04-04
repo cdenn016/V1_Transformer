@@ -9,10 +9,10 @@ Complete transformer block with:
 4. Optional non-flat gauge transport via edge-local GaugeConnection
 
 Data flow:
-    (μ, Σ, φ) → LayerNorm(μ) → Attention(KL + transport) → Residual
-              → LayerNorm(μ) → VFE FFN(E-step iterations)  → Residual → (μ', Σ', φ')
+    (μ, Σ, φ) -> LayerNorm(μ) -> Attention(KL + transport) -> Residual
+              -> LayerNorm(μ) -> VFE FFN(E-step iterations)  -> Residual -> (μ', Σ', φ')
 
-All configuration flows through BlockConfig — no raw kwargs.
+All configuration flows through BlockConfig -- no raw kwargs.
 """
 
 import math
@@ -289,27 +289,27 @@ class GaugeTransformerBlock(nn.Module):
         """
         Forward pass through transformer block.
 
-        Flow: (μ, Σ, φ) → Attention sublayer → FFN sublayer → (μ', Σ', φ')
+        Flow: (μ, Σ, φ) -> Attention sublayer -> FFN sublayer -> (μ', Σ', φ')
 
         Args:
             mu_q: Belief means (B, N, K).
-            sigma_q: Belief covariances — (B, N, K, K) full or (B, N, K) diagonal
+            sigma_q: Belief covariances -- (B, N, K, K) full or (B, N, K) diagonal
                      when cfg.diagonal_covariance=True.
-            phi: Gauge frames (B, N, phi_dim) — phi_dim=3 for SO(3),
-                 N(N-1)/2 for SO(N), K² for GL(K).
-            generators: Lie algebra generators (n_gen, K, K) — n_gen matches phi_dim.
+            phi: Gauge frames (B, N, phi_dim) -- phi_dim=3 for SO(3),
+                 N(N-1)/2 for SO(N), K^2 for GL(K).
+            generators: Lie algebra generators (n_gen, K, K) -- n_gen matches phi_dim.
             mask: Optional causal mask (B, N, N) or (B, 1, N, N).
-            mu_prior: Embedding priors (B, N, K) — required, used as VFE prior means.
-            token_ids: Token IDs (B, N) — passed to PriorBank for token-dependent priors.
-            targets: Target token IDs (B, N) — for E-step discrete observation grounding.
-            W_out: Output projection weights (V, K) — for CE gradient in E-step.
-            cached_head_transports: Precomputed transport dicts per head — list of
+            mu_prior: Embedding priors (B, N, K) -- required, used as VFE prior means.
+            token_ids: Token IDs (B, N) -- passed to PriorBank for token-dependent priors.
+            targets: Target token IDs (B, N) -- for E-step discrete observation grounding.
+            W_out: Output projection weights (V, K) -- for CE gradient in E-step.
+            cached_head_transports: Precomputed transport dicts per head -- list of
                 {'Omega': (B, N, N, d_h, d_h)} per head. When evolve_phi=False,
-                these can be reused across layers for ~6× speedup.
+                these can be reused across layers for ~6x speedup.
 
         Returns:
             mu_q_out: Updated means (B, N, K).
-            sigma_q_out: Updated covariances — same shape as input sigma_q.
+            sigma_q_out: Updated covariances -- same shape as input sigma_q.
                          Unchanged when evolve_sigma=False.
             phi_out: Updated gauge frames (B, N, phi_dim).
                      Unchanged when evolve_phi=False.
@@ -355,7 +355,7 @@ class GaugeTransformerBlock(nn.Module):
             # so the attention sublayer uses Omega_h / Omega_h_inv instead of matrix_exp.
             if omega is not None and getattr(self.ffn, 'gauge_param', 'phi') == 'omega' and cached_head_transports is None:
                 # Build per-head (omega_h, omega_h_inv) pairs using per-block inv
-                # (avoids full K×K inv when omega is block-diagonal)
+                # (avoids full KxK inv when omega is block-diagonal)
                 irrep_dims = self.attention.irrep_dims
                 cached_head_transports = []
                 block_start = 0
@@ -496,7 +496,7 @@ class GaugeTransformerStack(nn.Module):
     """
     Stack of N identical GaugeTransformerBlock layers.
 
-    Each layer applies: Attention(KL + gauge transport) → VFE FFN(E-step iterations).
+    Each layer applies: Attention(KL + gauge transport) -> VFE FFN(E-step iterations).
     Beliefs (μ, Σ, φ) flow through all layers; targets/W_out are passed to the
     final layer only (observation grounding). A final LayerNorm is applied to μ.
 
@@ -538,21 +538,21 @@ class GaugeTransformerStack(nn.Module):
 
         Args:
             mu_q: Initial means (B, N, K).
-            sigma_q: Initial covariances — (B, N, K, K) or (B, N, K) diagonal.
+            sigma_q: Initial covariances -- (B, N, K, K) or (B, N, K) diagonal.
             phi: Initial gauge frames (B, N, phi_dim).
             generators: Lie algebra generators (n_gen, K, K).
             mask: Optional causal mask (B, N, N) or (B, 1, N, N).
-            mu_prior: Embedding priors (B, N, K) — for VFE prior means.
-            token_ids: Token IDs (B, N) — for PriorBank token-dependent priors.
+            mu_prior: Embedding priors (B, N, K) -- for VFE prior means.
+            token_ids: Token IDs (B, N) -- for PriorBank token-dependent priors.
             return_intermediates: If True, return list of per-layer state dicts.
             cached_head_transports: Precomputed per-head transport dicts.
-                When evolve_phi=False, reuse across all layers (~6× speedup).
-            targets: Target token IDs (B, N) — passed to final layer only.
-            W_out: Output projection (V, K) — passed to final layer only.
+                When evolve_phi=False, reuse across all layers (~6x speedup).
+            targets: Target token IDs (B, N) -- passed to final layer only.
+            W_out: Output projection (V, K) -- passed to final layer only.
 
         Returns:
             mu_q: Final means (B, N, K) after final LayerNorm.
-            sigma_q: Final covariances — same shape as input.
+            sigma_q: Final covariances -- same shape as input.
             phi: Final gauge frames (B, N, phi_dim).
             intermediates: List of {'layer', 'mu', 'sigma', 'phi'} dicts if
                 return_intermediates=True, else None.

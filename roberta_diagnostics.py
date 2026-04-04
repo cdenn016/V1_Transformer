@@ -360,7 +360,7 @@ def logit_variance_decomposition(
         "logit_var": logit_var_accum,      # [n_layers, n_heads]
         "angular_var": angular_var_accum,
         "norm_var": norm_var_accum,
-        "norm_frac_r2": norm_frac_accum,   # R² of logit ~ norm_prod
+        "norm_frac_r2": norm_frac_accum,   # R^2 of logit ~ norm_prod
         "mean_norm_frac": float(norm_frac_accum.mean()),
         "mean_angular_var": float(angular_var_accum.mean()),
         "mean_norm_var": float(norm_var_accum.mean()),
@@ -380,13 +380,13 @@ def compute_effective_temperatures(
     Measure the implicit per-head temperature in standard attention.
 
     In dot-product attention: score_ij = Q_i · K_j / √d.
-    In KL attention: score_ij = -||Q_i - K_j||² / τ.
+    In KL attention: score_ij = -||Q_i - K_j||^2 / τ.
 
-    Expanding: Q·K = (||Q||² + ||K||² - ||Q-K||²) / 2, so
-    Q·K/√d ≈ -||Q-K||²/(2√d) + (||Q||² + ||K||²)/(2√d).
+    Expanding: Q·K = (||Q||^2 + ||K||^2 - ||Q-K||^2) / 2, so
+    Q·K/√d ~= -||Q-K||^2/(2√d) + (||Q||^2 + ||K||^2)/(2√d).
 
     The effective temperature that makes the KL scores best match the
-    dot-product scores is τ_eff ≈ 2√d · (mean_norm_product / d), but
+    dot-product scores is τ_eff ~= 2√d · (mean_norm_product / d), but
     more directly, we fit τ per head by finding the τ that maximizes
     correlation between α and β for that specific head.
 
@@ -546,7 +546,7 @@ def plot_per_head_optimal_tau_distribution(all_tau_results: Dict[str, Dict]):
 
 
 def plot_norm_fraction_comparison(all_decomp_results: Dict[str, Dict]):
-    """Bar chart: mean norm-fraction R² per model."""
+    """Bar chart: mean norm-fraction R^2 per model."""
     models = sorted(all_decomp_results.keys(),
                     key=lambda m: all_decomp_results[m]["mean_norm_frac"])
     fracs = [all_decomp_results[m]["mean_norm_frac"] for m in models]
@@ -558,7 +558,7 @@ def plot_norm_fraction_comparison(all_decomp_results: Dict[str, Dict]):
     ax.set_xticks(range(len(models)))
     ax.set_xticklabels([m.split("/")[-1] for m in models],
                        rotation=30, ha="right")
-    ax.set_ylabel("Mean R²(logit ~ norm product)")
+    ax.set_ylabel("Mean R^2(logit ~ norm product)")
     ax.set_title("Fraction of logit variance explained by norms")
     fig.tight_layout()
     fig.savefig(SAVE_DIR / "norm_fraction_comparison.png")
@@ -568,7 +568,7 @@ def plot_norm_fraction_comparison(all_decomp_results: Dict[str, Dict]):
 
 def plot_cv_vs_correlation(all_cv_results: Dict[str, Dict],
                            all_tau_results: Dict[str, Dict]):
-    """Scatter: key-norm CV vs α–β correlation (the key diagnostic plot)."""
+    """Scatter: key-norm CV vs α-β correlation (the key diagnostic plot)."""
     fig, ax = plt.subplots(figsize=(4, 3.5))
     for mname in all_cv_results:
         if mname not in all_tau_results:
@@ -583,7 +583,7 @@ def plot_cv_vs_correlation(all_cv_results: Dict[str, Dict],
 
     ax.set_xlabel("Mean key-norm CV")
     ax.set_ylabel(f"Mean Pearson r at τ={TAU_PREDICTED:.0f}")
-    ax.set_title("Key-norm heterogeneity vs α–β correlation")
+    ax.set_title("Key-norm heterogeneity vs α-β correlation")
     fig.tight_layout()
     fig.savefig(SAVE_DIR / "cv_vs_correlation.png")
     plt.close(fig)
@@ -613,7 +613,7 @@ def plot_effective_temp_dispersion(all_eff_temp: Dict[str, Dict]):
 
 def plot_temp_dispersion_vs_correlation(all_eff_temp: Dict[str, Dict],
                                         all_tau_results: Dict[str, Dict]):
-    """Scatter: effective temperature dispersion vs α–β correlation."""
+    """Scatter: effective temperature dispersion vs α-β correlation."""
     fig, ax = plt.subplots(figsize=(4, 3.5))
     for mname in all_eff_temp:
         if mname not in all_tau_results:
@@ -628,7 +628,7 @@ def plot_temp_dispersion_vs_correlation(all_eff_temp: Dict[str, Dict],
 
     ax.set_xlabel("CV of per-head logit std (temp dispersion)")
     ax.set_ylabel(f"Mean Pearson r at τ={TAU_PREDICTED:.0f}")
-    ax.set_title("Temperature dispersion vs α–β correlation")
+    ax.set_title("Temperature dispersion vs α-β correlation")
     fig.tight_layout()
     fig.savefig(SAVE_DIR / "temp_dispersion_vs_correlation.png")
     plt.close(fig)
@@ -695,7 +695,7 @@ def main():
         decomp_res = logit_variance_decomposition(
             model, tokenizer, mname, CORPUS, N_PASSAGES, DEVICE)
         all_decomp[mname] = decomp_res
-        print(f"    Mean R²(logit ~ norm) = {decomp_res['mean_norm_frac']:.4f}")
+        print(f"    Mean R^2(logit ~ norm) = {decomp_res['mean_norm_frac']:.4f}")
         print(f"    Mean angular var = {decomp_res['mean_angular_var']:.6f}")
         print(f"    Mean norm var = {decomp_res['mean_norm_var']:.2f}")
 
@@ -736,7 +736,7 @@ def main():
     print("SUMMARY")
     print(f"{'=' * 60}")
     print(f"{'Model':<25} {'CV':>6} {'τ_opt':>6} {'r@τ*':>7} "
-          f"{'r@19':>7} {'R²_norm':>8} {'τ_disp':>7}")
+          f"{'r@19':>7} {'R^2_norm':>8} {'τ_disp':>7}")
     print("─" * 75)
     for mname in MULTI_MODEL_NAMES:
         if mname not in all_cv:

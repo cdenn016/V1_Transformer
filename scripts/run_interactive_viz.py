@@ -103,7 +103,7 @@ def get_model_and_config():
         model, config = load_model(str(ckpt))
         return model, config, ckpt
     else:
-        print("No checkpoint found — using fresh model with random weights.")
+        print("No checkpoint found -- using fresh model with random weights.")
         print("(Visualizations show embedding structure before training.)\n")
         model, config = build_fresh_model()
         return model, config, None
@@ -119,7 +119,7 @@ def extract_embeddings(model, config):
     Tries (in order):
     1. Semantic token sets via tokenizer + get_token_embeddings
     2. Raw embedding table with BPE-type category labels
-    Always succeeds — never crashes on missing tokenizer or network.
+    Always succeeds -- never crashes on missing tokenizer or network.
     """
     # Try the semantic token path first
     try:
@@ -148,7 +148,7 @@ def _extract_raw_embeddings(model, n_tokens=200):
     """Fallback: extract raw embedding weights for first N tokens.
 
     Assigns simple bin-based categories by token ID range. Completely
-    offline — no tokenizer or network access needed.
+    offline -- no tokenizer or network access needed.
     """
     token_ids = list(range(n_tokens))
     mu_list, sigma_list, phi_list = [], [], []
@@ -260,7 +260,7 @@ def run():
     umap_3d = compute_umap_embedding(mu, n_components=3, n_neighbors=15, min_dist=0.1)
     fig_3d = plot_belief_space_3d(
         umap_3d, tokens, categories,
-        title="Belief Space (μ) — UMAP 3D Interactive",
+        title="Belief Space (μ) -- UMAP 3D Interactive",
         color_map=color_map,
         save_html=output_dir / "belief_space_umap_3d.html",
         save_png=output_dir / "belief_space_umap_3d.png",
@@ -303,7 +303,7 @@ def run():
         print(f"  Silhouette score: {sil:.3f}")
         fig_sil = plot_silhouette_analysis(
             mu, categories,
-            title=f"Semantic Clustering — Silhouette Analysis (score={sil:.3f})",
+            title=f"Semantic Clustering -- Silhouette Analysis (score={sil:.3f})",
             save_path=output_dir / "silhouette_analysis.png",
         )
         if fig_sil is not None:
@@ -349,7 +349,7 @@ def run():
     # ---- Summary ----
     print()
     print("=" * 70)
-    print("DONE — All visualizations saved!")
+    print("DONE -- All visualizations saved!")
     print("=" * 70)
     print(f"\n  Output: {output_dir}/")
     print()

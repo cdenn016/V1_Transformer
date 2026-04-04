@@ -6,11 +6,11 @@ Shows that two coupled FIRST-ORDER ODEs (fast belief update + slow prior update)
 produce an effective SECOND-ORDER equation for the meta-agent belief.
 
 The inertial mass M_eff = 1/(epsilon * eta * Lambda_m) arises from the
-sluggishness of the prior in tracking the belief — NOT from the Hessian
+sluggishness of the prior in tracking the belief -- NOT from the Hessian
 of the free energy (which is the spring constant K, not the mass).
 
 Result:
-    M_eff * d²μ_α/dt² + Γ_eff * dμ_α/dt + V'(μ_α) = 0
+    M_eff * d^2μ_α/dt^2 + Γ_eff * dμ_α/dt + V'(μ_α) = 0
 
 where:
     M_eff   = 1 / (ε η Λ_m)
@@ -26,7 +26,7 @@ import sympy as sp
 
 def derive_two_agent():
     """
-    Two-agent Ouroboros system → effective second-order meta-agent dynamics.
+    Two-agent Ouroboros system -> effective second-order meta-agent dynamics.
 
     SETUP
     -----
@@ -109,7 +109,7 @@ def derive_two_agent():
     # =====================================================================
     print()
     print("=" * 70)
-    print("STEP 2: Eliminate ξ → second-order ODE for μ_α")
+    print("STEP 2: Eliminate ξ -> second-order ODE for μ_α")
     print("=" * 70)
     print()
 
@@ -154,7 +154,7 @@ def derive_two_agent():
     print(f"    f_coeff = {force_coeff}")
     print()
 
-    # Divide by force_coeff → M μ̈ + Γ μ̇ + V' = 0
+    # Divide by force_coeff -> M μ̈ + Γ μ̇ + V' = 0
     M_eff = sp.simplify(1 / force_coeff)
     Gamma_eff = sp.simplify(gamma_eff / force_coeff)
 
@@ -192,11 +192,11 @@ def derive_two_agent():
     MASS = 1/(ε η Λ_m): Inertia from prior sluggishness
     ─────────────────────────────────────────────────────
     M_eff increases when:
-      • ε → 0:   Stronger timescale separation (prior updates much slower
-                  than beliefs). The prior barely moves → large inertia.
-      • η → 0:   Slower overall dynamics → everything more sluggish.
-      • Λ_m → 0: Weaker meta-level coupling → prior weakly attracted to
-                  belief → drifts slowly → large inertia.
+      • ε -> 0:   Stronger timescale separation (prior updates much slower
+                  than beliefs). The prior barely moves -> large inertia.
+      • η -> 0:   Slower overall dynamics -> everything more sluggish.
+      • Λ_m -> 0: Weaker meta-level coupling -> prior weakly attracted to
+                  belief -> drifts slowly -> large inertia.
 
     DAMPING: Γ/M = ε η Λ_m + η α λ_p
     ──────────────────────────────────
@@ -204,9 +204,9 @@ def derive_two_agent():
       • ε η Λ_m:   Meta-level coupling (prior tracking)
       • η α λ_p:   Self-coupling (belief anchoring to prior)
 
-    ADIABATIC LIMIT (ε → 0):
+    ADIABATIC LIMIT (ε -> 0):
     ────────────────────────
-    M → ∞, Γ → ∞, but Γ/M → η α λ_p (FINITE).
+    M -> ∞, Γ -> ∞, but Γ/M -> η α λ_p (FINITE).
     The M μ̈ term becomes negligible: M μ̈ ≪ Γ μ̇.
     Equation degenerates to FIRST ORDER:
         (η α λ_p)⁻¹ · μ̇_α + V'(μ_α) = 0
@@ -216,10 +216,10 @@ def derive_two_agent():
     FINITE ε (partial separation):
     ──────────────────────────────
     Second-order inertial term survives.
-    → Overshoot when beliefs are pushed by sudden evidence
-    → Oscillation around equilibrium (belief ringing)
-    → Momentum transfer between coupled meta-agents
-    → Resonance when driven at natural frequency
+    -> Overshoot when beliefs are pushed by sudden evidence
+    -> Oscillation around equilibrium (belief ringing)
+    -> Momentum transfer between coupled meta-agents
+    -> Resonance when driven at natural frequency
     """)
 
     # =====================================================================
@@ -232,20 +232,20 @@ def derive_two_agent():
 
     K = sp.Symbol('K', positive=True)  # V'' at equilibrium
 
-    # Discriminant: Δ = Γ² - 4MK
+    # Discriminant: Δ = Γ^2 - 4MK
     disc = sp.expand(Gamma_lin**2 - 4 * M_lin * K)
-    print(f"    Discriminant Δ = Γ² - 4MK = {disc}")
+    print(f"    Discriminant Δ = Γ^2 - 4MK = {disc}")
     print()
     print(f"    Using ω_p = η α λ_p (self-coupling rate)")
     print(f"          ω_m = ε η Λ_m  (meta-coupling rate):")
     print()
-    print(f"    Δ = (ω_p + ω_m)² / ω_m² - 4K/ω_m")
+    print(f"    Δ = (ω_p + ω_m)^2 / ω_m^2 - 4K/ω_m")
     print()
     print(f"    Underdamped when Δ < 0:")
-    print(f"        4K · ω_m > (ω_p + ω_m)²")
+    print(f"        4K · ω_m > (ω_p + ω_m)^2")
     print()
     print(f"    Natural frequency (underdamped case):")
-    print(f"        ω² = K/M = K · ε η Λ_m")
+    print(f"        ω^2 = K/M = K · ε η Λ_m")
     print()
     print(f"    Decay time:")
     print(f"        τ = 2M/Γ = 2/(Γ/M) = 2/(ε η Λ_m + η α λ_p)")
@@ -259,7 +259,7 @@ def derive_two_agent():
     print("=" * 70)
     print("""
     The belief inertia manuscript identifies mass with the Hessian:
-        M_Hessian = ∂²S/∂μ² = Λ̄_p + Λ_o + Σβ Λ̃ + Σβ Λ = K
+        M_Hessian = ∂^2S/∂μ^2 = Λ̄_p + Λ_o + Σβ Λ̃ + Σβ Λ = K
 
     This derivation shows:
         M_dynamical = 1/(ε η Λ_m)    (from timescale separation)
@@ -272,7 +272,7 @@ def derive_two_agent():
     In real physics, K and M are independent. The Hessian-as-mass analogy
     conflated them. The Ouroboros derivation separates them:
 
-        ω² = K/M = (Λ̄_p + ...) · ε η Λ_m
+        ω^2 = K/M = (Λ̄_p + ...) · ε η Λ_m
 
     The natural frequency depends on BOTH the precision of the well (Hessian)
     AND the timescale separation (Ouroboros coupling).
@@ -315,11 +315,11 @@ def derive_n_agent():
 
     For heterogeneous agents (different λᵢ), the δᵢ modes couple to μ_α
     through the attention weights βᵢⱼ (which depend on the δᵢ's).
-    The effective equation acquires corrections of order δ²:
-        M_eff μ̈ + Γ_eff μ̇ + V' + O(⟨δ²⟩) = 0
+    The effective equation acquires corrections of order δ^2:
+        M_eff μ̈ + Γ_eff μ̇ + V' + O(⟨δ^2⟩) = 0
 
-    The O(⟨δ²⟩) corrections are the fluctuation contribution to the
-    effective potential — analogous to the Casimir effect or Coleman-Weinberg
+    The O(⟨δ^2⟩) corrections are the fluctuation contribution to the
+    effective potential -- analogous to the Casimir effect or Coleman-Weinberg
     potential in QFT, where integrating out fast modes renormalizes the
     slow-mode potential.
     """
@@ -332,17 +332,17 @@ def derive_n_agent():
         M_eff = 1/(ε η Λ_m),  same as N=2.
 
     N enters through the pooled precision Λ_α = Σᵢ wᵢ Λᵢ:
-    - More constituents → higher pooled precision → stiffer meta-agent
+    - More constituents -> higher pooled precision -> stiffer meta-agent
     - This affects K (spring constant), not M (inertia)
     - Unless Λ_m depends on Λ_α via the next Ouroboros level
 
-    For heterogeneous agents, fast-mode fluctuations ⟨δ²⟩ renormalize
+    For heterogeneous agents, fast-mode fluctuations ⟨δ^2⟩ renormalize
     the effective potential:
-        V_eff(μ_α) = V(μ_α) + (1/2) Σᵢ ∂²V/∂δᵢ² · ⟨δᵢ²⟩ + ...
+        V_eff(μ_α) = V(μ_α) + (1/2) Σᵢ ∂^2V/∂δᵢ^2 · ⟨δᵢ^2⟩ + ...
 
     This is the analog of the Coleman-Weinberg mechanism: integrating
     out fast internal modes generates corrections to the slow potential.
-    The δᵢ fluctuation amplitude ⟨δᵢ²⟩ ~ T/ω_fast² (thermal) or
+    The δᵢ fluctuation amplitude ⟨δᵢ^2⟩ ~ T/ω_fast^2 (thermal) or
     ~ 1/(2 ω_fast) (quantum/zero-point), depending on whether noise
     is included in the constituent dynamics.
     """)
@@ -364,13 +364,13 @@ def derive_multi_scale():
     ...
 
     This is a CHAIN OF COUPLED OSCILLATORS across scales, with:
-        Mᵢ = 1/(εᵢ ηᵢ Λ_m,ᵢ)   — mass increases with scale (εᵢ decreases)
-        Kᵢ = Hessian at scale i  — spring constant from VFE curvature
-        Γᵢ = damping at scale i  — increases with scale
+        Mᵢ = 1/(εᵢ ηᵢ Λ_m,ᵢ)   -- mass increases with scale (εᵢ decreases)
+        Kᵢ = Hessian at scale i  -- spring constant from VFE curvature
+        Γᵢ = damping at scale i  -- increases with scale
 
     The lowest scales are underdamped (fast, oscillatory).
     The highest scales are overdamped (slow, sluggish).
-    Somewhere in the middle is critical damping — the scale at which
+    Somewhere in the middle is critical damping -- the scale at which
     the system transitions from wave-like to diffusive behavior.
     """
     print()
@@ -388,9 +388,9 @@ def derive_multi_scale():
     With Mζ = 1/(εζ ηζ Λ_m,ζ) growing at each scale (εζ shrinks).
 
     Properties:
-    • Low scales: light, fast, possibly underdamped → oscillatory
-    • High scales: heavy, slow, overdamped → sluggish relaxation
-    • Critical scale ζ* where Δ = Γ² - 4MK = 0 → transition
+    • Low scales: light, fast, possibly underdamped -> oscillatory
+    • High scales: heavy, slow, overdamped -> sluggish relaxation
+    • Critical scale ζ* where Δ = Γ^2 - 4MK = 0 -> transition
     • Below ζ*: wave-like (phonon-like excitations of belief)
     • Above ζ*: diffusive (gradient-flow dynamics)
 
@@ -413,13 +413,13 @@ if __name__ == '__main__':
     print(f"""
     Starting from:
         • N first-order agents coupled through VFE (no momentum, no mass)
-        • Ouroboros loop: meta-agent belief → constituent prior (slow update)
+        • Ouroboros loop: meta-agent belief -> constituent prior (slow update)
 
     Derived:
         • Effective SECOND-ORDER dynamics for meta-agent belief
-        • M_eff = 1/(ε η Λ_m)  — mass from prior sluggishness
-        • K = Hessian of VFE   — spring constant from precision (NOT mass)
-        • Overdamped limit ε→0 recovers standard VFE / transformers
+        • M_eff = 1/(ε η Λ_m)  -- mass from prior sluggishness
+        • K = Hessian of VFE   -- spring constant from precision (NOT mass)
+        • Overdamped limit ε->0 recovers standard VFE / transformers
         • Multi-scale tower = chain of coupled oscillators
 
     Key distinction:

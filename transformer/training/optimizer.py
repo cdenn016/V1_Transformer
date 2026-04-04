@@ -13,15 +13,15 @@ Three optimizer types:
      on the Lie algebra. For SO(N) with Frobenius-orthonormal generators this is
      trivial (scalar); for GL(K) it couples the trace direction.
    - mu params: Fisher metric for Gaussian location parameters. Scales gradients
-     by the current variance σ²_v per token per dimension, giving the natural
+     by the current variance σ^2_v per token per dimension, giving the natural
      gradient ∇_nat μ = Σ_v · ∇_E μ. High-uncertainty dimensions move faster.
    - sigma params: Fisher metric for log-variance is constant (= 1/2), so the
-     natural gradient is 2× the Euclidean gradient. Handled via LR scaling.
+     natural gradient is 2x the Euclidean gradient. Handled via LR scaling.
 
 3. NaturalGradientOptimizer: Per-token block-diagonal empirical Fisher.
-   Maintains K×K Fisher blocks for each vocabulary token via EMA of gradient
+   Maintains KxK Fisher blocks for each vocabulary token via EMA of gradient
    outer products. The off-diagonal structure captures dimension correlations
-   that Adam misses. O(V·K³) per step; memory O(V·K²).
+   that Adam misses. O(V·K^3) per step; memory O(V·K^2).
 
 Embedding weight decay acts as a Gaussian hyper-prior N(0, 1/(2*wd))
 at the top of the VFE Bayesian hierarchy.
@@ -100,7 +100,7 @@ class RiemannianAdamW(torch.optim.AdamW):
         for p in group['params']:
             if p.grad is None:
                 continue
-            # grad: (V, n_gen) or (n_gen,) — metric: (n_gen, n_gen)
+            # grad: (V, n_gen) or (n_gen,) -- metric: (n_gen, n_gen)
             dev = p.grad.device
             K_inv = self._killing_inv.to(device=dev, dtype=p.grad.dtype)
             p.grad = p.grad @ K_inv
@@ -121,14 +121,14 @@ class RiemannianAdamW(torch.optim.AdamW):
         for p in group['params']:
             if p.grad is None:
                 continue
-            # p.grad: (V, K), sigma: (V, K) — elementwise multiply
+            # p.grad: (V, K), sigma: (V, K) -- elementwise multiply
             if p.grad.shape == sigma.shape:
                 p.grad = p.grad * sigma
 
     def _precondition_sigma(self, group: dict) -> None:
         r"""Apply Fisher metric for log-variance: ∇_nat η = 2 · ∇_E η.
 
-        For the log-variance parameterization η = log(σ²), the Fisher
+        For the log-variance parameterization η = log(σ^2), the Fisher
         information is F_ηη = 1/2 (constant). The natural gradient is
         F^{-1} g = 2g.
         """
@@ -153,7 +153,7 @@ class RiemannianAdamW(torch.optim.AdamW):
 class NaturalGradientOptimizer(torch.optim.Optimizer):
     r"""Natural gradient descent with per-token block-diagonal Fisher information.
 
-    For embedding parameters (V, K), maintains a K×K empirical Fisher block
+    For embedding parameters (V, K), maintains a KxK empirical Fisher block
     per vocabulary token, updated via EMA of gradient outer products:
 
         F̂_v^{(t)} = (1 - ρ) F̂_v^{(t-1)} + ρ · g_v g_v^T
@@ -166,18 +166,18 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
     (Adam) miss. The Fisher F̂_v converges to the true Fisher E[g_v g_v^T]
     under ergodic sampling.
 
-    Cost: O(K²) per token for outer product, O(K³) for solve. Total per step:
-    O(|batch_tokens| · K³) for the solve (only tokens in the batch are updated).
-    Memory: O(V · K²) for storing Fisher blocks — substantial for large V.
+    Cost: O(K^2) per token for outer product, O(K^3) for solve. Total per step:
+    O(|batch_tokens| · K^3) for the solve (only tokens in the batch are updated).
+    Memory: O(V · K^2) for storing Fisher blocks -- substantial for large V.
     For V=50K, K=64: ~819 MB. Use with small vocabularies or reduce K.
 
     For non-embedding parameters (1D, small 2D), falls back to standard
     gradient descent with weight decay (no Fisher tracking).
 
     WARNING on damping: For rarely-seen tokens, the Fisher is near-zero and
-    (F + λI)^{-1} ≈ (1/λ)I. Small λ (e.g., 1e-4) amplifies rare tokens'
-    gradients by up to 1/λ (clipped to max_ratio=10×), causing systematic
-    over-updating of rare embeddings → embedding homogenization → attention
+    (F + λI)^{-1} ~= (1/λ)I. Small λ (e.g., 1e-4) amplifies rare tokens'
+    gradients by up to 1/λ (clipped to max_ratio=10x), causing systematic
+    over-updating of rare embeddings -> embedding homogenization -> attention
     collapse. Use λ ≥ 1e-2 for stability.
 
     Args:
@@ -293,7 +293,7 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
         # Bias correction for early steps: use Adam-style correction factor
         # to compensate for cold-start (Fisher initialized at zero).
         # Without correction, the early Fisher is biased toward zero,
-        # making the natural gradient ≈ Euclidean gradient.
+        # making the natural gradient ~= Euclidean gradient.
         step = state['step']
         bias_correction = 1.0 - (1.0 - rho) ** step
         fisher[nz_idx] = (1.0 - rho) * fisher[nz_idx] + rho * outer
@@ -303,7 +303,7 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
         I_K = torch.eye(K, device=device, dtype=dtype)
         F_damped = F_active + self.damping * I_K
 
-        # Solve F_damped @ ng = g  (batched K×K linear solve)
+        # Solve F_damped @ ng = g  (batched KxK linear solve)
         ng = torch.linalg.solve(F_damped, g.unsqueeze(-1)).squeeze(-1)  # (n_active, K)
 
         # Record norms before clipping
@@ -325,7 +325,7 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
         r"""Return per-group gradient norms from the last step() call.
 
         Returns:
-            Dict mapping group name → {'euclidean': ‖g‖, 'natural': ‖F⁻¹g‖}.
+            Dict mapping group name -> {'euclidean': ‖g‖, 'natural': ‖F⁻¹g‖}.
             For non-embedding params (plain SGD fallback), both values are equal.
         """
         return dict(self._grad_norms)
@@ -348,7 +348,7 @@ def compute_killing_metric_inv(
     The center direction is regularized to prevent pathological amplification.
 
     For SO(N) with orthonormal generators (tr(G_a^T G_b) = δ_{ab}/2, tr(G_a) = 0):
-        g̃ = K · I  →  g̃^{-1} = (1/K) · I  (trivial scalar rescaling)
+        g̃ = K · I  ->  g̃^{-1} = (1/K) · I  (trivial scalar rescaling)
 
     For GL(K) with standard E_{ij} basis:
         Non-trivial coupling through the trace direction.
@@ -356,10 +356,10 @@ def compute_killing_metric_inv(
     Args:
         generators: (n_gen, K, K) Lie algebra basis
         center_reg: Regularization for the degenerate center direction.
-            Default None → 2K (matches non-center eigenvalues for isotropic
+            Default None -> 2K (matches non-center eigenvalues for isotropic
             conditioning). WARNING: Small values like 1e-4 create condition
-            numbers of 2K/center_reg (200,000× for K=10), amplifying the
-            trace direction and causing phi runaway → attention collapse.
+            numbers of 2K/center_reg (200,000x for K=10), amplifying the
+            trace direction and causing phi runaway -> attention collapse.
 
     Returns:
         inv_metric: (n_gen, n_gen) inverse metric tensor
@@ -425,7 +425,7 @@ def create_param_groups(
         # Positional encoding (treat as gauge frames)
         elif 'pos_encoding' in name or 'position' in name:
             phi_params.append(param)
-        # Learnable per-head kappa (temperature) — no weight decay.
+        # Learnable per-head kappa (temperature) -- no weight decay.
         # Must be checked BEFORE 'attention' to avoid false match on
         # attention.log_kappa_per_head being routed to attention_params.
         elif 'log_kappa' in name:
@@ -447,7 +447,7 @@ def create_param_groups(
     param_groups = []
 
     # Embedding weight decay = Level 3 hyper-prior: N(0, 1/(2·wd))
-    # None → inherit from weight_decay; 0.0 → uninformative hyper-prior
+    # None -> inherit from weight_decay; 0.0 -> uninformative hyper-prior
     non_embed_wd = getattr(config, 'non_embed_weight_decay', getattr(config, 'weight_decay', 0.01))
     embed_wd = config.embed_weight_decay if config.embed_weight_decay is not None else non_embed_wd
 
@@ -590,9 +590,9 @@ def create_optimizer(
     r"""Create optimizer with configurable type and parameter grouping.
 
     Optimizer types:
-        'adamw': Standard AdamW. Diagonal Fisher via EMA of g².
+        'adamw': Standard AdamW. Diagonal Fisher via EMA of g^2.
         'riemannian_adam': AdamW + Killing metric on phi + Fisher on mu.
-        'natural_gradient': Per-token K×K empirical Fisher blocks.
+        'natural_gradient': Per-token KxK empirical Fisher blocks.
 
     Args:
         model: The model to optimize
@@ -636,7 +636,7 @@ def create_optimizer(
                     print(f"  Killing metric: ~{scale:.4f}·I (SO-like, {n_gen} generators)")
                 else:
                     cond = torch.linalg.cond(killing_inv).item()
-                    print(f"  Killing metric: non-trivial ({n_gen}×{n_gen}), cond={cond:.1f}")
+                    print(f"  Killing metric: non-trivial ({n_gen}x{n_gen}), cond={cond:.1f}")
         else:
             if verbose:
                 print("  Warning: No generators found; phi preconditioning disabled")

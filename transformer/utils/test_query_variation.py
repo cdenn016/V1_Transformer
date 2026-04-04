@@ -66,13 +66,13 @@ def analyze_query_variation(beta, input_ids=None, tokenizer=None):
             print(f"    Range: [{min_dist:.6f}, {max_dist:.6f}]")
 
             if mean_dist < 0.001:
-                print(f"    → TRULY UNIFORM! All queries attend identically!")
+                print(f"    -> TRULY UNIFORM! All queries attend identically!")
             elif mean_dist < 0.01:
-                print(f"    → Very low variation (queries almost identical)")
+                print(f"    -> Very low variation (queries almost identical)")
             elif mean_dist < 0.05:
-                print(f"    → Low variation (weak differentiation)")
+                print(f"    -> Low variation (weak differentiation)")
             else:
-                print(f"    → Good variation (queries differ)")
+                print(f"    -> Good variation (queries differ)")
 
         # Show actual attention patterns for first few tokens
         if input_ids is not None and tokenizer is not None and h == 0:
@@ -106,7 +106,7 @@ def analyze_query_variation(beta, input_ids=None, tokenizer=None):
             print("\n❌ CRITICAL: Truly uniform attention!")
             print("   All queries attend identically to all keys.")
             print("   Model cannot differentiate context based on query token.")
-            print("   → How does this work?! Mystery!")
+            print("   -> How does this work?! Mystery!")
         elif overall_mean < 0.01:
             print("\n⚠️  Very weak query variation.")
             print("   Different tokens attend almost identically.")
@@ -152,11 +152,11 @@ def test_belief_similarity(model, input_ids):
         print(f"Average pairwise distance in μ space: {mean_dist:.4f}")
 
         if mean_dist < 0.5:
-            print("  → ❌ Embeddings COLLAPSED! All tokens very similar.")
+            print("  -> ❌ Embeddings COLLAPSED! All tokens very similar.")
         elif mean_dist < 1.0:
-            print("  → ⚠️  Embeddings compressed but distinct.")
+            print("  -> ⚠️  Embeddings compressed but distinct.")
         else:
-            print("  → ✓ Embeddings well-separated.")
+            print("  -> ✓ Embeddings well-separated.")
 
         # Show sample embeddings
         print(f"\nFirst 3 token embeddings (μ only, first 5 dims):")

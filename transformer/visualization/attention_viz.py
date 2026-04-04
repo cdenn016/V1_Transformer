@@ -194,7 +194,7 @@ def visualize_per_head_attention():
         kl_std = np.nanstd(kl_np_safe, axis=1).mean()
         print(f"\nKL Matrix: Avg row std = {kl_std:.4f}")
         if kl_std < 0.5:
-            print("  ⚠️  KL divergences are too uniform → uniform attention!")
+            print("  ⚠️  KL divergences are too uniform -> uniform attention!")
 
     print("="*80)
 

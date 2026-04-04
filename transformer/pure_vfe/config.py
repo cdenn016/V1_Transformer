@@ -19,7 +19,7 @@ class PureVFEConfig:
     tau: float = None           # Attention temperature (defaults to √K_h)
 
     # Per-variable natural gradient learning rates
-    # Single VFE objective F(mu_q, Sigma_q, phi, mu_p, Sigma_p) —
+    # Single VFE objective F(mu_q, Sigma_q, phi, mu_p, Sigma_p) --
     # no E/M distinction, just per-variable step sizes.
     mu_q_lr: float = 0.1       # Belief mean step size
     sigma_q_lr: float = 0.005  # Belief covariance step size (SPD-sensitive)
@@ -31,9 +31,9 @@ class PureVFEConfig:
     alpha_b0: float = 1.0      # Denominator offset
     alpha_c0: float = 1.0      # Numerator scale
 
-    # Hyper-prior regularization — must be large enough that the hyper-prior
+    # Hyper-prior regularization -- must be large enough that the hyper-prior
     # doesn't overpower the observation gradient.  At hyper_var=1 the pull-to-zero
-    # force (|μ_v|≈2.8) dwarfs the CE signal; 100 weakens it to ~0.03.
+    # force (|μ_v|~=2.8) dwarfs the CE signal; 100 weakens it to ~0.03.
     hyper_var: float = 100.0   # Variance of hyper-prior on prior means
 
     # Sequence
@@ -55,15 +55,15 @@ class PureVFEConfig:
     # SPD retraction safeguards
     spd_eps_min: float = 1e-3           # Spectral floor (tightened from 1e-4)
     spd_kappa_max: float = 1e4          # Condition number cap
-    spd_exp_clip: float = 5.0            # Eigenvalue exponent clip — exp(±5) ≈ [0.007, 148], max ratio ~2e4
+    spd_exp_clip: float = 5.0            # Eigenvalue exponent clip -- exp(+/-5) ~= [0.007, 148], max ratio ~2e4
 
     # Prior safeguards
     prior_sigma_floor: float = 0.5      # Min eigenvalue of prior Σ_v (prevents collapse)
-    prior_mu_max_norm: float = 10.0     # Max L2 norm of prior μ_v (was 3.0, too tight — init already ≈2.83)
+    prior_mu_max_norm: float = 10.0     # Max L2 norm of prior μ_v (was 3.0, too tight -- init already ~=2.83)
     m_step_trust_mu: float = 0.5        # Trust region for M-step μ updates
 
     # Gauge frame parameterization
-    gauge_param: str = 'omega'          # 'omega' (direct GL(K), both det signs) or 'phi' (Lie algebra → GL⁺(K))
+    gauge_param: str = 'omega'          # 'omega' (direct GL(K), both det signs) or 'phi' (Lie algebra -> GL⁺(K))
     omega_cond_max: float = 50.0        # Max condition number for Omega (regularize toward polar factor)
     omega_grad_clamp: float = 10.0      # Element-wise clamp for omega gradients (tighter than general grad_clamp)
     omega_negative_det_fraction: float = 0.0  # Fraction of omega frames initialized in GL⁻(K) (det < 0)
@@ -74,9 +74,9 @@ class PureVFEConfig:
     sigma_obs_grad: str = 'none'        # 'none' (match VFE dynamic), 'diagonal', 'full'
 
     # Covariance mode
-    diagonal_covariance: bool = False   # Use diagonal Σ (K,) instead of full (K, K) — faster, less expressive
+    diagonal_covariance: bool = False   # Use diagonal Σ (K,) instead of full (K, K) -- faster, less expressive
 
-    # LayerNorm (optional, for testing — this IS a neural-like component)
+    # LayerNorm (optional, for testing -- this IS a neural-like component)
     use_layernorm: bool = False         # Apply LayerNorm to μ between E-step iterations
 
     # Holonomy / non-flat transport
@@ -104,7 +104,7 @@ class PureVFEConfig:
 
     # M-step momentum (Adam-like natural gradient)
     # Tracks EMA of natural gradient first/second moments for variance reduction.
-    # No neural components — purely an optimization algorithm improvement.
+    # No neural components -- purely an optimization algorithm improvement.
     use_adam_m_step: bool = False        # Enable Adam-like momentum in M-step
     adam_beta1: float = 0.9             # First moment decay (momentum)
     adam_beta2: float = 0.999           # Second moment decay (adaptive scaling)
@@ -119,7 +119,7 @@ class PureVFEConfig:
     # Gradient accumulation
     # Accumulates M-step sufficient statistics over K micro-batches before
     # applying one M-step update. E-step runs per micro-batch (beliefs are
-    # sequence-local), but the M-step gradient is a sum over all data —
+    # sequence-local), but the M-step gradient is a sum over all data --
     # accumulation gives a K-times-lower-variance estimate of the true M-step.
     grad_accum_steps: int = 1           # Number of micro-batches per M-step (1 = no accumulation)
 

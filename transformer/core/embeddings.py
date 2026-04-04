@@ -9,11 +9,11 @@ Created on Thu Nov 13 12:34:45 2025
 Gauge-Theoretic Token Embeddings (0D Transformer)
 ==================================================
 
-Maps discrete tokens → agent beliefs (μ_i, Σ_i, φ_i) at single base manifold point c*.
+Maps discrete tokens -> agent beliefs (μ_i, Σ_i, φ_i) at single base manifold point c*.
 
 Key Insight from plan.py:
-    "0D Transformer: All N tokens → N agents at the SAME base point c*
-     Each token i → (μ_i, Σ_i, φ_i) where:
+    "0D Transformer: All N tokens -> N agents at the SAME base point c*
+     Each token i -> (μ_i, Σ_i, φ_i) where:
      - μ_i ∈ ℝ^K: mean belief vector (NO spatial dependence)
      - Σ_i ∈ SPD(K): covariance (scalar matrix per agent)
      - φ_i ∈ gl(K): gauge frame (Lie algebra element)"
@@ -26,7 +26,7 @@ GL(K) Gauge Structure (NEW):
     Parameterization options:
     - phi_dim=3: so(3) subalgebra (3 generators, rotation-only)
     - phi_dim=K(K-1)/2: so(K) subalgebra (skew-symmetric, orthogonal)
-    - phi_dim=K²: gl(K) full algebra (all K×K matrices, maximum flexibility)
+    - phi_dim=K^2: gl(K) full algebra (all KxK matrices, maximum flexibility)
 
 Author: Implementation from plan.py
 Date: November 2025
@@ -58,8 +58,8 @@ class GaugeTokenEmbedding(nn.Module):
     """
     Map discrete tokens to gauge-equivariant agent beliefs at single point.
 
-    0D Transformer: All N tokens → N agents at the SAME base point c*
-    Each token i → (μ_i, Σ_i, φ_i) where:
+    0D Transformer: All N tokens -> N agents at the SAME base point c*
+    Each token i -> (μ_i, Σ_i, φ_i) where:
     - μ_i ∈ ℝ^K: mean belief vector (NO spatial dependence)
     - Σ_i ∈ SPD(K): covariance (scalar matrix per agent)
     - φ_i ∈ gl(K): gauge frame (Lie algebra element)
@@ -72,14 +72,14 @@ class GaugeTokenEmbedding(nn.Module):
         Parameterization:
         - phi_dim=3: so(3) subalgebra (rotation-only, legacy)
         - phi_dim=K(K-1)/2: so(K) subalgebra (orthogonal transformations)
-        - phi_dim=K²: gl(K) full algebra (maximum flexibility)
+        - phi_dim=K^2: gl(K) full algebra (maximum flexibility)
 
     Architecture:
-        token_id → [Embedding Layer] → (μ, Σ, φ)
+        token_id -> [Embedding Layer] -> (μ, Σ, φ)
 
         where:
         - μ: Learnable embedding (standard)
-        - Σ: Initialized to small isotropic (σ²I), optionally learnable
+        - Σ: Initialized to small isotropic (σ^2I), optionally learnable
         - φ: Initialized near zero (near-identity gauge frame)
     """
 
@@ -95,8 +95,8 @@ class GaugeTokenEmbedding(nn.Module):
         gauge_fixed_priors: bool = False,
         generators: Optional[torch.Tensor] = None,
         diagonal_covariance: bool = False,
-        isotropic_covariance: bool = False,  # If True, force Σ = σ²I (scalar variance × identity)
-                                             # Note: the "KL → squared Euclidean" simplification
+        isotropic_covariance: bool = False,  # If True, force Σ = σ^2I (scalar variance x identity)
+                                             # Note: the "KL -> squared Euclidean" simplification
                                              # requires orthogonal transport (Ω ∈ O(K)) so that
                                              # transported Σ stays isotropic. Use enforce_orthogonal=True
                                              # or learnable_reflection=True with SO(K) generators.
@@ -112,10 +112,10 @@ class GaugeTokenEmbedding(nn.Module):
         mu_normalize: bool = False,  # If True, project μ to unit sphere
         mu_max_norm: Optional[float] = None,  # If set, clamp ||μ|| ≤ max_norm
         # O(K) reflection parameters
-        learnable_reflection: bool = False,  # If True, learn per-token sign vectors s_i ∈ {±1}^K
+        learnable_reflection: bool = False,  # If True, learn per-token sign vectors s_i ∈ {+/-1}^K
                                              # extending SO(K) gauge transport to full O(K).
                                              # Ω_ij = diag(s_i)·exp(φ_i)·exp(-φ_j)·diag(s_j)
-                                             # The reflection is applied as μ_i → s_i ⊙ μ_i
+                                             # The reflection is applied as μ_i -> s_i ⊙ μ_i
                                              # before the SO(K) rotation, so no changes needed
                                              # in attention or VFE code.
         sigma_max: float = 5.0,  # Upper bound for prior covariance clamp
@@ -128,7 +128,7 @@ class GaugeTokenEmbedding(nn.Module):
             embed_dim: Embedding dimension K (fiber dimension)
             irrep_spec: List of (label, multiplicity, dim) for SO(3)/SO(N) irreps
             init_std: Std dev for initializing mean embeddings
-            init_sigma_scale: Initial scale for covariance (σ in σ²I)
+            init_sigma_scale: Initial scale for covariance (σ in σ^2I)
             learnable_sigma: If True, Σ evolves during training
             learnable_phi: If True, φ evolves during training
             gauge_fixed_priors: If True, priors are defined as GL(K) transformations of a
@@ -145,16 +145,16 @@ class GaugeTokenEmbedding(nn.Module):
             phi_dim: Dimension of gauge frame φ. Options:
                     - 3: so(3) subalgebra (rotation-only, legacy)
                     - K(K-1)/2: so(K) subalgebra (orthogonal transformations)
-                    - K²: gl(K) full algebra (maximum flexibility for GL(K) gauge)
+                    - K^2: gl(K) full algebra (maximum flexibility for GL(K) gauge)
             phi_scale: Target ||φ|| norm for gauge frame initialization. Higher values
                       (e.g., 1.0-2.0) encourage semantic clustering in gauge frames.
-            isotropic_covariance: If True, force Σ = σ²I (scalar variance × identity).
+            isotropic_covariance: If True, force Σ = σ^2I (scalar variance x identity).
                 Simplifies KL to squared Euclidean but requires orthogonal transport
                 (Ω ∈ O(K)) to preserve isotropy. With GL(K), transported cov is NOT isotropic.
             mu_normalize: If True, project μ to unit sphere after embedding lookup.
             mu_max_norm: If set, clamp ||μ|| ≤ max_norm after embedding lookup.
-            learnable_reflection: If True, learn per-token sign vectors s_i ∈ {±1}^K
-                extending SO(K) gauge transport to full O(K). Applied as μ_i → s_i ⊙ μ_i
+            learnable_reflection: If True, learn per-token sign vectors s_i ∈ {+/-1}^K
+                extending SO(K) gauge transport to full O(K). Applied as μ_i -> s_i ⊙ μ_i
                 before rotation, so no changes needed in attention or VFE code.
         """
         super().__init__()
@@ -169,11 +169,11 @@ class GaugeTokenEmbedding(nn.Module):
         self.sigma_max = sigma_max
 
         # Embedding initialization scale
-        # OLD: 1/sqrt(K) keeps ||μ||² = O(1) but makes all embeddings equidistant!
+        # OLD: 1/sqrt(K) keeps ||μ||^2 = O(1) but makes all embeddings equidistant!
         # NEW: Larger init_std creates more variance in pairwise distances,
         #      enabling sharper KL-based attention from the start.
         if init_std is None:
-            init_std = 2.0  # Was: 1.0 / np.sqrt(embed_dim) ≈ 0.15 for K=40
+            init_std = 2.0  # Was: 1.0 / np.sqrt(embed_dim) ~= 0.15 for K=40
         self.init_std = init_std
 
         # Mean embedding normalization options
@@ -183,7 +183,7 @@ class GaugeTokenEmbedding(nn.Module):
         # Note on gauge_fixed_priors + diagonal_covariance:
         # When gauge_fixed_priors=True, Σ_v = A_v diag(σ_0) A_v^T is generally
         # a full matrix. With diagonal_covariance=True, we extract its diagonal:
-        #   diag(Σ_v)_k = Σ_j A_kj² σ_j
+        #   diag(Σ_v)_k = Σ_j A_kj^2 σ_j
         # This gives exact diagonal entries but discards off-diagonal correlations.
         # Under GL(K), this is a reasonable trade-off: the orbit covers all SPD
         # matrices, so the diagonal entries alone carry sufficient information
@@ -219,7 +219,7 @@ class GaugeTokenEmbedding(nn.Module):
             # Single base prior mean μ_0 - all token priors are rotations of this
             self.base_mu = nn.Parameter(torch.randn(embed_dim) * init_std)
         else:
-            # Standard learnable embedding: vocab_size × embed_dim
+            # Standard learnable embedding: vocab_size x embed_dim
             self.mu_embed = nn.Embedding(vocab_size, embed_dim)
             nn.init.normal_(self.mu_embed.weight, mean=0.0, std=init_std)
 
@@ -250,10 +250,10 @@ class GaugeTokenEmbedding(nn.Module):
             # nn.Parameter yields a dense zero-padded gradient tensor.  This
             # matters for AdamW: Adam's v_t (second moment) accumulates the
             # zeros for absent tokens, gradually lowering v_t and raising the
-            # effective LR when those tokens finally appear — an implicit
+            # effective LR when those tokens finally appear -- an implicit
             # exploration bias for rare tokens.  Weight decay still applies to
             # all rows every step, acting as the Level 3 hyper-prior N(0, 1/(2·wd))
-            # that pulls log_sigma toward 0 (i.e., σ² toward 1).
+            # that pulls log_sigma toward 0 (i.e., σ^2 toward 1).
             self.log_sigma_diag = nn.Parameter(
                 torch.full((vocab_size, embed_dim), math.log(init_sigma_scale))
             )
@@ -269,8 +269,8 @@ class GaugeTokenEmbedding(nn.Module):
         # =================================================================
         # Fixed reference Σ_h for the hyperprior KL(s||h). Provides bidirectional
         # gradient on sigma_embed: pulls sigma toward init if it inflates OR deflates.
-        # This is the "h" in the hierarchy h → s → p → q for covariance.
-        sigma_target_val = init_sigma_scale  # scalar — initial σ value
+        # This is the "h" in the hierarchy h -> s -> p -> q for covariance.
+        sigma_target_val = init_sigma_scale  # scalar -- initial σ value
         self.register_buffer(
             'sigma_target',
             torch.full((embed_dim,), sigma_target_val)
@@ -280,7 +280,7 @@ class GaugeTokenEmbedding(nn.Module):
         # Gauge Frame Embeddings
         # =================================================================
         if gauge_param == 'omega' and omega_head_dims is not None:
-            # Direct Omega parameterization: store K_h×K_h matrices per head.
+            # Direct Omega parameterization: store K_hxK_h matrices per head.
             # Covers full GL(K) including reflections. No matrix_exp needed.
             total_omega_params = sum(d * d for d in omega_head_dims)
             self.omega_embed = nn.Embedding(vocab_size, total_omega_params)
@@ -303,7 +303,7 @@ class GaugeTokenEmbedding(nn.Module):
             # Zero init would make ALL tokens identical - must use random init!
             self.phi_embed = nn.Embedding(vocab_size, phi_dim)
             # IMPORTANT: Scale std inversely with sqrt(phi_dim) to maintain consistent
-            # norm across different SO(N) dimensions. Target ||φ|| ≈ phi_scale regardless of N.
+            # norm across different SO(N) dimensions. Target ||φ|| ~= phi_scale regardless of N.
             phi_init_std = phi_scale / (phi_dim ** 0.5)
             nn.init.normal_(self.phi_embed.weight, mean=0.0, std=phi_init_std)
         else:
@@ -322,13 +322,13 @@ class GaugeTokenEmbedding(nn.Module):
             nn.init.normal_(self.pos_embed.weight, mean=0.0, std=init_std)
 
         # =================================================================
-        # Reflection Embedding: per-token sign vector s_i ∈ {±1}^K
+        # Reflection Embedding: per-token sign vector s_i ∈ {+/-1}^K
         # =================================================================
         # Adds discrete per-dimension sign flips to extend the continuous
         # gauge group to include reflections (det < 0 component):
         #
-        #   phi path:  extends SO(K) → O(K) = SO(K) ⋊ (Z_2)^{K-1}
-        #   omega path: extends GL⁺(K) → GL(K) via diag(s_i) · Ω_i
+        #   phi path:  extends SO(K) -> O(K) = SO(K) ⋊ (Z_2)^{K-1}
+        #   omega path: extends GL⁺(K) -> GL(K) via diag(s_i) · Ω_i
         #
         # The Lie algebra retraction preserves det sign, so continuous
         # gradient descent cannot cross between GL⁺ and GL⁻. The discrete
@@ -344,13 +344,13 @@ class GaugeTokenEmbedding(nn.Module):
         #   - Clean Q-K factorization: Q_i = s_i ⊙ μ_i  ✓
         #
         # Gradient flow uses the straight-through estimator (STE):
-        #   Forward:  sign(z)  (hard ±1)
+        #   Forward:  sign(z)  (hard +/-1)
         #   Backward: identity (grad flows through z)
         if learnable_reflection:
-            # Continuous latent z_k; sign(z_k) gives the discrete ±1
+            # Continuous latent z_k; sign(z_k) gives the discrete +/-1
             # Initialize with +1 (all positive) so model starts at SO(K)
             self.sign_logit = nn.Embedding(vocab_size, embed_dim)
-            nn.init.ones_(self.sign_logit.weight)  # start at all +1 → no reflection
+            nn.init.ones_(self.sign_logit.weight)  # start at all +1 -> no reflection
 
     def forward(
         self,
@@ -367,7 +367,7 @@ class GaugeTokenEmbedding(nn.Module):
             sigma: (batch, num_agents, K, K) covariances if diagonal_covariance=False
                    (batch, num_agents, K) diagonal variances if diagonal_covariance=True
             phi: (batch, num_agents, phi_dim) gauge frames (one per agent)
-                 phi_dim = 3 for SO(3), N(N-1)/2 for SO(N), K² for GL(K)
+                 phi_dim = 3 for SO(3), N(N-1)/2 for SO(N), K^2 for GL(K)
             omega: (batch, num_agents, K, K) direct group elements (only when gauge_param='omega')
                    Block-diagonal GL(K) matrices. Returned as 4th element of tuple.
 
@@ -385,9 +385,9 @@ class GaugeTokenEmbedding(nn.Module):
         # =================================================================
         omega = None  # Will be set if gauge_param='omega'
         if self.gauge_param == 'omega' and hasattr(self, 'omega_embed'):
-            # Direct Omega path: reshape flat embedding to per-head K_h×K_h matrices
+            # Direct Omega path: reshape flat embedding to per-head K_hxK_h matrices
             omega_flat = self.omega_embed(token_ids)  # (B, N, total_omega_params)
-            # Reshape into block-diagonal K×K matrix
+            # Reshape into block-diagonal KxK matrix
             K = self.embed_dim
             omega = torch.zeros(batch_size, num_agents, K, K,
                                 device=token_ids.device, dtype=omega_flat.dtype)
@@ -433,7 +433,7 @@ class GaugeTokenEmbedding(nn.Module):
                 # Avoid .float() copy when already float32 to prevent OOM at large K.
                 A_f = A if A.dtype == torch.float32 else A.float()
                 if self.diagonal_covariance:
-                    # Extract diagonal: diag(A Σ_0 A^T)_k = Σ_j A_kj² σ_j
+                    # Extract diagonal: diag(A Σ_0 A^T)_k = Σ_j A_kj^2 σ_j
                     A_sq = A_f ** 2  # (B, N, K, K)
                     sigma = torch.einsum('bnkl,l->bnk', A_sq, sigma_diag_base)  # (B, N, K)
                 else:
@@ -446,11 +446,11 @@ class GaugeTokenEmbedding(nn.Module):
 
             # Build diagonal covariances: Σ = diag(exp(log_σ))
             #
-            # Use exp() for the ℝ → ℝ⁺ map (standard log-parameterization of
+            # Use exp() for the ℝ -> ℝ⁺ map (standard log-parameterization of
             # SPD diagonals), then hard clamp for numerical safety.  Hard clamp
             # zeros gradient at the boundary, which is correct: it prevents
             # log_sigma from drifting out of range.  (The detach-clamp variant
-            # causes gradient explosion — see commit message.)
+            # causes gradient explosion -- see commit message.)
             _SIGMA_MIN = 0.01
             _SIGMA_MAX = self.sigma_max
             # AMP guard: exp() on log_sigma needs float32 precision.
@@ -477,7 +477,7 @@ class GaugeTokenEmbedding(nn.Module):
         # =================================================================
         # O(K) Reflection: apply per-token sign flip to μ
         # =================================================================
-        # This implements R_i · μ_i = s_i ⊙ μ_i where s_i ∈ {±1}^K.
+        # This implements R_i · μ_i = s_i ⊙ μ_i where s_i ∈ {+/-1}^K.
         # Combined with exp(φ) ∈ SO(K), this gives full O(K) transport.
         # Uses straight-through estimator: forward = sign(z), backward = identity.
         if self.learnable_reflection:
@@ -487,7 +487,7 @@ class GaugeTokenEmbedding(nn.Module):
             mu = mu * signs                            # R_i · μ_i = s_i ⊙ μ_i
 
         # =================================================================
-        # Isotropic covariance enforcement: Σ → σ²I
+        # Isotropic covariance enforcement: Σ -> σ^2I
         # =================================================================
         # When isotropic_covariance=True, collapse per-dimension variances to
         # a single scalar (mean across K), then expand back. This enforces
@@ -495,11 +495,11 @@ class GaugeTokenEmbedding(nn.Module):
         # so KL(q_i || q_j) reduces to scaled squared Euclidean distance.
         if self.isotropic_covariance:
             if self.diagonal_covariance:
-                # sigma shape: (B, N, K) — average across K to get scalar per agent
+                # sigma shape: (B, N, K) -- average across K to get scalar per agent
                 scalar_var = sigma.mean(dim=-1, keepdim=True)  # (B, N, 1)
                 sigma = scalar_var.expand_as(sigma)             # (B, N, K) all equal
             else:
-                # sigma shape: (B, N, K, K) — extract diagonal, average, rebuild
+                # sigma shape: (B, N, K, K) -- extract diagonal, average, rebuild
                 diag_vals = torch.diagonal(sigma, dim1=-2, dim2=-1)  # (B, N, K)
                 scalar_var = diag_vals.mean(dim=-1, keepdim=True)     # (B, N, 1)
                 K = sigma.shape[-1]
@@ -652,7 +652,7 @@ class GaugeTokenEmbedding(nn.Module):
 
             # Sigma P-flow: update log_sigma_diag if learnable
             if sigma_beliefs is not None and self.learnable_sigma and hasattr(self, 'log_sigma_diag'):
-                # Handle full covariance (B, N, K, K) → extract diagonal
+                # Handle full covariance (B, N, K, K) -> extract diagonal
                 if sigma_beliefs.dim() == 4:
                     sigma_beliefs_diag = sigma_beliefs.diagonal(dim1=-2, dim2=-1)  # (B, N, K)
                 else:
@@ -739,9 +739,9 @@ class GaugeTokenEmbedding(nn.Module):
 
 def so3_log_torch(R: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     """
-    Logarithm map from SO(3) → so(3) (PyTorch version).
+    Logarithm map from SO(3) -> so(3) (PyTorch version).
 
-    Given R ∈ SO(3), find φ ∈ ℝ³ such that exp([φ]_×) = R.
+    Given R ∈ SO(3), find φ ∈ ℝ^3 such that exp([φ]_x) = R.
 
     Formula:
         θ = arccos((tr(R) - 1) / 2)
@@ -757,7 +757,7 @@ def so3_log_torch(R: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     # Compute rotation angle from trace
     trace = R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2]  # (...)
     cos_theta = (trace - 1.0) / 2.0
-    # Upcast to float64 before acos to avoid precision loss near ±1 in float32
+    # Upcast to float64 before acos to avoid precision loss near +/-1 in float32
     cos_theta = torch.clamp(cos_theta.double(), -1.0 + eps, 1.0 - eps)
     theta = torch.acos(cos_theta).float()  # (...)
 
@@ -771,9 +771,9 @@ def so3_log_torch(R: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
 
     # Coefficient: θ / (2 sin θ), handle small angles and near-pi
     sin_theta = torch.sin(theta)
-    # For small θ: θ/(2sinθ) ≈ 1/2 + θ²/12
+    # For small θ: θ/(2sinθ) ~= 1/2 + θ^2/12
     small_angle = theta < eps
-    # For θ near π: sin(θ) → 0, vex(R - R^T) → 0, need special handling
+    # For θ near π: sin(θ) -> 0, vex(R - R^T) -> 0, need special handling
     near_pi = theta > (3.141592653589793 - 0.01)
 
     coeff = torch.where(
@@ -815,7 +815,7 @@ def so3_compose_bch(
 
     log(exp(φ₁)·exp(φ₂)) = φ₁ + φ₂ + ½[φ₁,φ₂] + (1/12)[φ₁,[φ₁,φ₂]] - ...
 
-    For so(3), the Lie bracket is: [X, Y] = X × Y (cross product)
+    For so(3), the Lie bracket is: [X, Y] = X x Y (cross product)
 
     Args:
         phi1: First so(3) element, shape (..., 3)
@@ -830,7 +830,7 @@ def so3_compose_bch(
         return phi1 + phi2
 
     # First-order BCH: φ₁ + φ₂ + ½[φ₁,φ₂]
-    # In so(3): [φ₁,φ₂] = φ₁ × φ₂ (cross product)
+    # In so(3): [φ₁,φ₂] = φ₁ x φ₂ (cross product)
     bracket_12 = torch.cross(phi1, phi2, dim=-1)
     result = phi1 + phi2 + 0.5 * bracket_12
 
@@ -862,7 +862,7 @@ class GaugePositionalEncoding(nn.Module):
         - 'add': φ_combined = φ_base + φ_pos (valid for small angles)
         - 'bch1': φ_combined = φ_base + φ_pos + ½[φ_base, φ_pos] (BCH order 1)
         - 'bch2': Higher-order BCH correction
-        - 'exact': Full SO(3) composition via exp → multiply → log [SO(3) only]
+        - 'exact': Full SO(3) composition via exp -> multiply -> log [SO(3) only]
 
     WARNING: Positional encoding in gauge space creates ABSOLUTE position-dependent
     transport operators. This can cause attention to be dominated by position rather
@@ -871,7 +871,7 @@ class GaugePositionalEncoding(nn.Module):
     Supported gauge groups:
         - 'SO3': SO(3) with 3 generators (cross-product bracket, exact composition)
         - 'SON': SO(N) with N(N-1)/2 generators (matrix commutator bracket)
-        - 'GLK': GL(K) with K² generators or multi-head GL(d_head)^H
+        - 'GLK': GL(K) with K^2 generators or multi-head GL(d_head)^H
                  Uses general Lie bracket via transport generators.
     """
 
@@ -881,7 +881,7 @@ class GaugePositionalEncoding(nn.Module):
         mode: str = 'none',  # Default: no positional encoding in gauge space
         scale: float = 0.1,
         composition: str = 'exact',  # Default: full SO(3) composition (most accurate)
-        phi_dim: int = 3,  # 3 for SO(3), N(N-1)/2 for SO(N), K² for GL(K)
+        phi_dim: int = 3,  # 3 for SO(3), N(N-1)/2 for SO(N), K^2 for GL(K)
         generators: Optional[torch.Tensor] = None,  # Transport generators for BCH composition
         gauge_group: str = 'SO3',  # 'SO3', 'SON', or 'GLK'
     ):
@@ -901,7 +901,7 @@ class GaugePositionalEncoding(nn.Module):
                 - 'bch2': BCH order 2 correction
                 - 'exact': Full SO(3) composition (SO(3) only)
             phi_dim: Dimension of gauge frame φ. 3 for SO(3), N(N-1)/2 for SO(N),
-                     K² for GL(K), H*d² for multi-head GL(K).
+                     K^2 for GL(K), H*d^2 for multi-head GL(K).
             generators: Transport generators (n_gen, K, K). Required for BCH composition
                         with SO(N) or GL(K) gauge groups.
             gauge_group: Gauge group type ('SO3', 'SON', or 'GLK').
@@ -1036,7 +1036,7 @@ class GaugePositionalEncoding(nn.Module):
 
         Dispatches to the correct bracket computation based on gauge_group:
         - SO(3): Cross product bracket (fast, specialized)
-        - SO(N): soN_compose_bch_torch (matrix commutator in N×N space)
+        - SO(N): soN_compose_bch_torch (matrix commutator in NxN space)
         - GL(K): lie_compose_bch_general_torch (general bracket via transport generators)
 
         Args:
@@ -1051,7 +1051,7 @@ class GaugePositionalEncoding(nn.Module):
             The correct composition is R_combined = exp(φ·G) · exp(φ_pos·G)
             In the Lie algebra, the BCH formula gives:
             log(exp(X)·exp(Y)) = X + Y + ½[X,Y] + (1/12)[X,[X,Y]] - (1/12)[Y,[X,Y]] + ...
-            For so(3): [X,Y] = X × Y (cross product)
+            For so(3): [X,Y] = X x Y (cross product)
             For so(N)/gl(K): [X,Y] = XY - YX (matrix commutator)
         """
         # Short-circuit: if mode='none', φ_pos is all zeros, so return unchanged φ
@@ -1077,10 +1077,10 @@ class GaugePositionalEncoding(nn.Module):
                     # Fallback to addition
                     return phi + pos_phi
             elif self.phi_dim == 3 and self.gauge_group == 'SO3':
-                # SO(3)-specific BCH (cross product — fastest)
+                # SO(3)-specific BCH (cross product -- fastest)
                 return so3_compose_bch(phi, pos_phi, order=order)
             elif SON_BCH_AVAILABLE and self.generators is not None:
-                # SO(N) BCH (matrix commutator in N×N gauge space)
+                # SO(N) BCH (matrix commutator in NxN gauge space)
                 return soN_compose_bch_torch(phi, pos_phi, self.generators, order=order)
             elif GENERAL_BCH_AVAILABLE and self.generators is not None:
                 # General fallback: works for any algebra
@@ -1092,7 +1092,7 @@ class GaugePositionalEncoding(nn.Module):
         elif self.composition == 'exact':
             # Full SO(3) composition: log(exp(φ) · exp(φ_pos))
             # Build skew-symmetric matrices and exponentiate
-            # [φ]_× for so(3) → SO(3)
+            # [φ]_x for so(3) -> SO(3)
             def skew_symmetric_batch(v):
                 """v: (..., 3) -> (..., 3, 3) skew-symmetric"""
                 zeros = torch.zeros_like(v[..., 0])

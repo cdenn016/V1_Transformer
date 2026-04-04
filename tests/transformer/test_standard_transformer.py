@@ -89,7 +89,7 @@ class TestStandardTransformerForward:
         with torch.no_grad():
             logits1 = model(x1)['logits']
             logits2 = model(x2)['logits']
-        # Positions 0,1,2 should be identical (causal → future doesn't affect past)
+        # Positions 0,1,2 should be identical (causal -> future doesn't affect past)
         assert torch.allclose(logits1[0, :3], logits2[0, :3], atol=1e-4), \
             f"Causal mask violated: max diff {(logits1[0, :3] - logits2[0, :3]).abs().max():.2e}"
 
@@ -133,7 +133,7 @@ class TestRoPE:
     """Tests for RoPE functions."""
 
     def test_rope_preserves_norm(self):
-        """||Q_rotated|| ≈ ||Q|| — RoPE is a rotation."""
+        """||Q_rotated|| ~= ||Q|| -- RoPE is a rotation."""
         from transformer.baselines.standard_transformer import apply_rope_to_qk
         B, H, N, D = 1, 1, 8, 16
         Q = torch.randn(B, H, N, D)
@@ -145,7 +145,7 @@ class TestRoPE:
             f"Norm changed: max diff {(q_norms_before - q_norms_after).abs().max():.4e}"
 
     def test_rope_position_dependent(self):
-        """Different positions → different rotations."""
+        """Different positions -> different rotations."""
         from transformer.baselines.standard_transformer import apply_rope_to_qk
         B, H, N, D = 1, 1, 8, 16
         Q = torch.ones(B, H, N, D)

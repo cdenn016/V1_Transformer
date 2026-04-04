@@ -8,14 +8,14 @@ update over Gaussian tuples (mu, Sigma, phi).
 
 Exported public API
 -------------------
-- compute_vfe_gradients_gpu    — dispatcher: routes to correct path by covariance type
-- compute_natural_gradient_gpu — Fisher-metric natural gradient projection
+- compute_vfe_gradients_gpu    -- dispatcher: routes to correct path by covariance type
+- compute_natural_gradient_gpu -- Fisher-metric natural gradient projection
 
 Private helpers (used internally and by compute_vfe_gradients_gpu)
 -------------------------------------------------------------------
-- _compute_vfe_gradients_block_diagonal       — full covariance, block-diagonal KL
-- _compute_vfe_gradients_block_diagonal_diag  — diagonal covariance, block-diagonal KL
-- _fused_attention_and_vfe_gradients_block_diag — fused beta+gradient, diagonal mode
+- _compute_vfe_gradients_block_diagonal       -- full covariance, block-diagonal KL
+- _compute_vfe_gradients_block_diagonal_diag  -- diagonal covariance, block-diagonal KL
+- _fused_attention_and_vfe_gradients_block_diag -- fused beta+gradient, diagonal mode
 
 The _VFE_GRAD_DEBUG module-level dict is re-exported from vfe_utils so that
 callers can inspect gradient component norms without importing vfe_utils directly.
@@ -122,7 +122,7 @@ def _compute_vfe_gradients_block_diagonal(
 
     # Product-rule correction for learnable alpha (full covariance):
     # ∂(α·KL)/∂θ = α·∂KL/∂θ + (∂α/∂θ)·KL
-    # When α_k = c₀_k/(b₀_k + kl_k), ∂α_k/∂θ = -α_k²/c₀_k · ∂kl_k/∂θ
+    # When α_k = c₀_k/(b₀_k + kl_k), ∂α_k/∂θ = -α_k^2/c₀_k · ∂kl_k/∂θ
     if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
         # Per-dimension KL proxy from diagonal elements
         prod_qp = torch.matmul(sigma_p_inv, sigma_q)  # (B, N, K, K)
@@ -165,7 +165,7 @@ def _compute_vfe_gradients_block_diagonal(
     # =================================================================
     # 2. Belief Alignment Gradient (block-diagonal + chunked processing)
     # =================================================================
-    # Precompute matrix exponentials — FUSED by dimension group
+    # Precompute matrix exponentials -- FUSED by dimension group
     if cached_block_exp_pairs is not None:
         _fused_pairs = cached_block_exp_pairs
     else:
@@ -188,7 +188,7 @@ def _compute_vfe_gradients_block_diagonal(
     grad_kl_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=dtype)
 
     # Per-block per-pair sigma gradients for softmax coupling (Pass 2).
-    # Memory: Σ_b B*N²*d_b² instead of B*N²*K² (~82× savings for typical irrep specs).
+    # Memory: Σ_b B*N^2*d_b^2 instead of B*N^2*K^2 (~82x savings for typical irrep specs).
     grad_sigma_per_pair_blocks = None
     if compute_sigma_align_grad:
         grad_sigma_per_pair_blocks = [
@@ -232,7 +232,7 @@ def _compute_vfe_gradients_block_diagonal(
             del Omega_chunk
 
             # Regularize and invert (adaptive regularization for numerical stability)
-            # Use 1e-4 jitter (not eps=1e-6) — GL(K) transport can produce
+            # Use 1e-4 jitter (not eps=1e-6) -- GL(K) transport can produce
             # near-singular covariances that need stronger regularization.
             I_d = torch.eye(d, device=device, dtype=dtype)
             sigma_j_transported = 0.5 * (sigma_j_transported + sigma_j_transported.transpose(-1, -2))
@@ -459,7 +459,7 @@ def _compute_vfe_gradients_block_diagonal_diag(
     # =================================================================
     # 2. Belief Alignment Gradient (block-diagonal + diagonal formulas)
     # =================================================================
-    # Precompute matrix exponentials — FUSED by dimension group
+    # Precompute matrix exponentials -- FUSED by dimension group
     if cached_block_exp_pairs is not None:
         _fused_pairs = cached_block_exp_pairs
     else:
@@ -487,7 +487,7 @@ def _compute_vfe_gradients_block_diagonal_diag(
         mu_block = mu_q[:, :, block_start:block_end].contiguous()        # (B, N, d)
         sigma_block = sigma_q_safe[:, :, block_start:block_end].contiguous()  # (B, N, d)
 
-        # Block Omega: (B, N, N, d, d) — direct construction for numerical precision
+        # Block Omega: (B, N, N, d, d) -- direct construction for numerical precision
         Omega_block = torch.einsum(
             'bikl,bjlm->bijkm',
             block_exp_phi[block_idx], block_exp_neg_phi[block_idx]
@@ -496,7 +496,7 @@ def _compute_vfe_gradients_block_diagonal_diag(
         # Transport means
         mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_block)  # (B, N, N, d)
 
-        # Diagonal covariance transport: σ_t[k] = Σ_l Ω_kl² * σ[l]
+        # Diagonal covariance transport: σ_t[k] = Σ_l Ω_kl^2 * σ[l]
         # This extracts diag(Ω @ diag(σ) @ Ω^T), discarding off-diagonal elements
         # of the transported covariance. For non-identity Ω ∈ GL(K), the full
         # transported covariance is NOT diagonal, so this is an approximation that
@@ -884,7 +884,7 @@ def _fused_attention_and_vfe_gradients_block_diag(
     return beta.to(dtype), grad_mu.to(dtype), grad_sigma.to(dtype), kl_out
 
 
-# Chunked VFE gradient path removed — block-diagonal path handles memory
+# Chunked VFE gradient path removed -- block-diagonal path handles memory
 # efficiency via irrep decomposition (always enabled via use_block_diagonal_kl=True).
 # See _compute_vfe_gradients_block_diagonal_diag for the active path.
 # =============================================================================
@@ -1014,7 +1014,7 @@ def compute_vfe_gradients_gpu(
     # 1. Self-Coupling Gradient: ∂/∂μ_q [α · KL(q||p)]
     # =================================================================
     # For diagonal Gaussians:
-    #   KL(q||p) = 0.5 * Σ_k [ σ_q[k]/σ_p[k] + (μ_p[k]-μ_q[k])²/σ_p[k] - 1 + log(σ_p[k]/σ_q[k]) ]
+    #   KL(q||p) = 0.5 * Σ_k [ σ_q[k]/σ_p[k] + (μ_p[k]-μ_q[k])^2/σ_p[k] - 1 + log(σ_p[k]/σ_q[k]) ]
     #   ∂KL/∂μ_q = (μ_q - μ_p) / σ_p
     #   ∂KL/∂σ_q = 0.5 * (1/σ_p - 1/σ_q)
 
@@ -1041,14 +1041,14 @@ def compute_vfe_gradients_gpu(
         grad_sigma_self = alpha * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)  # (B, N, K)
 
         # Product-rule correction: ∂(α·KL)/∂θ = α·∂KL/∂θ + (∂α/∂θ)·KL
-        # When α_k = c₀_k/(b₀_k + kl_k), ∂α_k/∂θ = -α_k²/c₀_k · ∂kl_k/∂θ
+        # When α_k = c₀_k/(b₀_k + kl_k), ∂α_k/∂θ = -α_k^2/c₀_k · ∂kl_k/∂θ
         if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
             kl_k = 0.5 * (sigma_q_safe / sigma_p_safe + delta_mu ** 2 / sigma_p_safe
                           - 1.0 + torch.log(sigma_p_safe) - torch.log(sigma_q_safe))
             kl_k = kl_k.clamp(min=0.0)
-            # ∂α/∂μ · KL = -α²/c₀ · (δμ/σ_p) · kl_k
+            # ∂α/∂μ · KL = -α^2/c₀ · (δμ/σ_p) · kl_k
             grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * delta_mu / sigma_p_safe
-            # ∂α/∂σ_q · KL = -α²/c₀ · 0.5·(1/σ_p - 1/σ_q) · kl_k
+            # ∂α/∂σ_q · KL = -α^2/c₀ · 0.5·(1/σ_p - 1/σ_q) · kl_k
             grad_sigma_self = grad_sigma_self - (alpha ** 2 / alpha_c0) * kl_k * 0.5 * (1.0 / sigma_p_safe - 1.0 / sigma_q_safe)
     else:
         # Full covariance - use matrix operations
@@ -1072,7 +1072,7 @@ def compute_vfe_gradients_gpu(
         # via eigenvector magnitudes.
         if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
             sp_inv_delta = torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
-            mahal_k = delta_mu * sp_inv_delta  # (B, N, K) — per-dim Mahalanobis
+            mahal_k = delta_mu * sp_inv_delta  # (B, N, K) -- per-dim Mahalanobis
 
             # Per-mode KL from eigendecomposition of L^{-1} Σ_q L^{-T}
             # where L = cholesky(Σ_p). Eigenvalues λ_k of this symmetric matrix
@@ -1089,9 +1089,9 @@ def compute_vfe_gradients_gpu(
                 eigvecs = eigvecs.to(sigma_q.dtype)
                 # Per-eigenmode KL: kl_mode_k = 0.5(λ_k - 1 - log λ_k) ≥ 0
                 kl_mode = 0.5 * (eigvals - 1.0 - torch.log(eigvals))  # (B, N, K)
-                # Project to original basis via L^{-T} V: kl_orig_k = Σ_m |V_km|² kl_mode_m
-                # eigvecs are in the L^{-1} basis; |V_km|² distributes modes to original dims
-                V_sq = eigvecs ** 2  # (B, N, K, K) — squared eigenvector components
+                # Project to original basis via L^{-T} V: kl_orig_k = Σ_m |V_km|^2 kl_mode_m
+                # eigvecs are in the L^{-1} basis; |V_km|^2 distributes modes to original dims
+                V_sq = eigvecs ** 2  # (B, N, K, K) -- squared eigenvector components
                 kl_k_trace_logdet = torch.einsum('bnkm,bnm->bnk', V_sq, kl_mode)
                 kl_k = (kl_k_trace_logdet + 0.5 * mahal_k).clamp(min=0.0)
             except RuntimeError:
@@ -1145,12 +1145,12 @@ def compute_vfe_gradients_gpu(
         # DIAGONAL COVARIANCE TRANSPORT: diag(Ω @ diag(σ_j) @ Ω^T)
         # =================================================================
         # For diagonal input, the diagonal of the transported covariance is:
-        #   σ_j_transported[k] = Σ_l Ω_kl² * σ_j[l]
+        #   σ_j_transported[k] = Σ_l Ω_kl^2 * σ_j[l]
         # This avoids materializing any (B, N, N, K, K) covariance tensors.
 
         sigma_q_safe = sigma_q.clamp(min=eps)  # (B, N, K)
 
-        # Transported diagonal covariance via 3-operand einsum (no Omega² intermediate)
+        # Transported diagonal covariance via 3-operand einsum (no Omega^2 intermediate)
         sigma_j_transported_diag = torch.einsum(
             'bijkl,bijkl,bjl->bijk', Omega, Omega, sigma_q_safe
         ).clamp(min=eps)  # (B, N, N, K)
@@ -1160,14 +1160,14 @@ def compute_vfe_gradients_gpu(
 
         # Compute FULL KL values using diagonal formulas (no Cholesky/inv needed!)
         # KL(N(μ_i,diag(σ_i)) || N(μ_j_t,diag(σ_j_t))) =
-        #   0.5 * (Σ_k σ_i[k]/σ_j_t[k] + Σ_k (μ_i-μ_j_t)²[k]/σ_j_t[k] - K + Σ_k log(σ_j_t[k]/σ_i[k]))
+        #   0.5 * (Σ_k σ_i[k]/σ_j_t[k] + Σ_k (μ_i-μ_j_t)^2[k]/σ_j_t[k] - K + Σ_k log(σ_j_t[k]/σ_i[k]))
 
         sigma_i_expanded = sigma_q_safe[:, :, None, :]  # (B, N, 1, K) - broadcasts
 
         # Trace term: Σ_k σ_i[k] / σ_j_transported[k]
         trace_term = (sigma_i_expanded / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
 
-        # Mahalanobis term: Σ_k (μ_i - μ_j_transported)² / σ_j_transported[k]
+        # Mahalanobis term: Σ_k (μ_i - μ_j_transported)^2 / σ_j_transported[k]
         mahal_term = (delta_mu_ij ** 2 / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
 
         # Log-determinant term: Σ_k log(σ_j_transported[k]) - Σ_k log(σ_i[k])
@@ -1368,12 +1368,12 @@ def compute_natural_gradient_gpu(
     Project Euclidean gradients to natural gradients using Fisher metric.
 
     For Gaussian distributions, the Fisher information metric is:
-        F_μ = Σ^{-1}  →  natural_grad_μ = Σ @ euclidean_grad_μ
-        F_σ = (1/2)Σ^{-2} →  natural_grad_σ = 2 * Σ² @ euclidean_grad_σ (diagonal approx)
+        F_μ = Σ^{-1}  ->  natural_grad_μ = Σ @ euclidean_grad_μ
+        F_σ = (1/2)Σ^{-2} ->  natural_grad_σ = 2 * Σ^2 @ euclidean_grad_σ (diagonal approx)
 
     Derivation: The Fisher metric on the covariance Σ of a Gaussian is
     g(δΣ₁, δΣ₂) = (1/2) tr(Σ⁻¹ δΣ₁ Σ⁻¹ δΣ₂). For diagonal Σ = diag(σ),
-    this gives g_{kk} = 1/(2σ_k²), so g^{kk} = 2σ_k².
+    this gives g_{kk} = 1/(2σ_k^2), so g^{kk} = 2σ_k^2.
 
     Args:
         grad_mu: Euclidean gradient w.r.t. μ

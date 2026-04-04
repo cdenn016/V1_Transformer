@@ -6,7 +6,7 @@ Uses PyMC to build independent Bayesian reference models that validate
 the manuscript's empirical claims with proper posterior uncertainty.
 
 Models:
-1. Hierarchical correlation model (144 heads × 105 passages)
+1. Hierarchical correlation model (144 heads x 105 passages)
 2. Temperature τ posterior with theoretical comparison
 3. Key-norm bias Bayesian effect sizes (α vs β)
 4. Multi-model comparison with partial pooling
@@ -54,14 +54,14 @@ except ImportError:
 class ValidationData:
     """Parsed validation results for Bayesian modeling."""
     # Per-head summaries (144 heads)
-    layers: np.ndarray          # (144,) int — layer index 0..11
-    heads: np.ndarray           # (144,) int — head index 0..11
-    mean_r: np.ndarray          # (144,) — mean correlation across passages
-    std_r: np.ndarray           # (144,) — std across passages
-    se_r: np.ndarray            # (144,) — standard error
+    layers: np.ndarray          # (144,) int -- layer index 0..11
+    heads: np.ndarray           # (144,) int -- head index 0..11
+    mean_r: np.ndarray          # (144,) -- mean correlation across passages
+    std_r: np.ndarray           # (144,) -- std across passages
+    se_r: np.ndarray            # (144,) -- standard error
     median_r: np.ndarray        # (144,)
-    keynorm_alpha: np.ndarray   # (144,) — dot-product key-norm correlation
-    keynorm_beta: np.ndarray    # (144,) — KL-distance key-norm correlation
+    keynorm_alpha: np.ndarray   # (144,) -- dot-product key-norm correlation
+    keynorm_beta: np.ndarray    # (144,) -- KL-distance key-norm correlation
 
     # Tau sweep
     tau_values: np.ndarray      # (n_tau,)
@@ -187,11 +187,11 @@ def build_hierarchical_correlation_model(
     Returns (model, idata).
     """
     # Fisher-z transform observed correlations
-    # Clip to avoid infinities at ±1
+    # Clip to avoid infinities at +/-1
     r_clipped = np.clip(vd.mean_r, -0.999, 0.999)
     z_obs = np.arctanh(r_clipped)
 
-    # SE in z-space: se_z ≈ se_r / (1 - r²)  (delta method)
+    # SE in z-space: se_z ~= se_r / (1 - r^2)  (delta method)
     se_z = vd.se_r / (1 - r_clipped**2)
 
     with pm.Model() as model:
@@ -256,7 +256,7 @@ def build_temperature_model(
     The theoretical prediction is τ = 2√d_k where d_k is head dimension.
     We directly parametrize the peak location and shape:
 
-        r(τ) = r_max - κ · (log(τ) - log(τ_opt))²
+        r(τ) = r_max - κ · (log(τ) - log(τ_opt))^2
 
     where κ controls curvature. This is a concave quadratic in log-space
     centered at τ_opt, which naturally captures the asymmetric shape in
@@ -332,8 +332,8 @@ def build_keynorm_model(
     Bayesian comparison of key-norm bias between α (dot-product) and β (KL).
 
     The theory predicts that KL-distance attention (β) shows stronger key-norm
-    bias than dot-product attention (α), because β ∝ exp(-||q-k||²/τ)
-    explicitly depends on ||k||².
+    bias than dot-product attention (α), because β ∝ exp(-||q-k||^2/τ)
+    explicitly depends on ||k||^2.
 
     Model:
         For each attention type t ∈ {α, β} and head h:
@@ -910,7 +910,7 @@ def run_all_validations(
     # ---- Model 1: Hierarchical Correlation ----
     if 'hierarchical' in all_models:
         print("\n" + "=" * 60)
-        print("Model 1: Hierarchical Correlation (144 heads × 105 passages)")
+        print("Model 1: Hierarchical Correlation (144 heads x 105 passages)")
         print("=" * 60)
 
         model, idata = build_hierarchical_correlation_model(vd, **sample_kwargs)

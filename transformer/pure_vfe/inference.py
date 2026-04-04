@@ -301,7 +301,7 @@ def e_step(token_ids, model, config, effective_lrs=None):
         # --- State-dependent prior precision ---
         _alpha_floor = getattr(config, 'alpha_floor', 0.01)
         # Warm start: stronger floor in early iterations to prevent initial drift.
-        # Decays linearly from 3× floor to 1× floor over E-step iterations.
+        # Decays linearly from 3x floor to 1x floor over E-step iterations.
         _alpha_floor_scaled = _alpha_floor * (1.0 + 2.0 * (1.0 - step / max(config.n_esteps - 1, 1)))
         alpha = state_dependent_alpha(
             mu, Sigma, prior_mu, prior_Sigma, config.alpha_b0, config.alpha_c0,
@@ -344,7 +344,7 @@ def e_step(token_ids, model, config, effective_lrs=None):
         # must use raw-mu KL for geometric consistency of the gradient direction.
         # See VFE_dynamic variational_ffn.py:1183-1187 for the same pattern.
         grad_mu_align = vfe_grad_mu_alignment(precomp, beta, kl_ij_raw, config.tau)
-        # Shape: [B, H, N, K_h] — transpose to [B, N, H, K_h] and reshape to [B, N, K]
+        # Shape: [B, H, N, K_h] -- transpose to [B, N, H, K_h] and reshape to [B, N, K]
         grad_mu_align = grad_mu_align.permute(0, 2, 1, 3).reshape(B, N, K)
 
         # 2. Prior gradient
@@ -375,7 +375,7 @@ def e_step(token_ids, model, config, effective_lrs=None):
         # ================================================================
         # 1. Alignment: weighted transported precision
         weighted_prec = vfe_grad_Sigma_alignment(precomp, beta)
-        # Shape: [B, H, N, K_h, K_h] — permute to [B, N, H, K_h, K_h]
+        # Shape: [B, H, N, K_h, K_h] -- permute to [B, N, H, K_h, K_h]
         weighted_prec = weighted_prec.permute(0, 2, 1, 3, 4)
 
         # 2. Prior precision

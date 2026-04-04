@@ -142,13 +142,13 @@ def kl_divergence(mu_p, Sigma_p, mu_q, Sigma_q):
 
 def precompute_tokens(mu_h, Sigma_h, Omega, Sigma_h_inv=None):
     """
-    Precompute per-token quantities for O(N² K²) pairwise KL.
+    Precompute per-token quantities for O(N^2 K^2) pairwise KL.
 
     For each token i:
       ρ_i = Ω_i⁻¹ μ_i           (pulled-back mean)
       Q_i = Ω_i⁻¹ Σ_i Ω_i⁻ᵀ    (pulled-back covariance)
       P_i = Ω_iᵀ Σ_i⁻¹ Ω_i      (rotated precision)
-      ν_i = Ω_i⁻¹ μ_i           (same as ρ — token is both query and key)
+      ν_i = Ω_i⁻¹ μ_i           (same as ρ -- token is both query and key)
       ldc_q_i = 2 ln|det Ω_i| - ln det Σ_i
       ldc_k_i = -2 ln|det Ω_i| + ln det Σ_i
 
@@ -241,9 +241,9 @@ def _pairwise_kl_torch(Q, rho, P, nu, ldc_q, ldc_k, causal):
 
     # Trace term: tr(P_j Q_i) for all (i, j)
     # tr(P_j Q_i) = Σ_{a,b} P_j[a,b] Q_i[b,a] = vec(P_j) · vec(Q_iᵀ)
-    P_flat = P.reshape(B, H, N, K * K)         # [B, H, N, K²]
+    P_flat = P.reshape(B, H, N, K * K)         # [B, H, N, K^2]
     Qt_flat = Q.transpose(-2, -1).reshape(B, H, N, K * K)  # Q transposed, then flattened
-    # Contract over flattened K² dim: result[b,h,j,i] = Σ_k P_flat[j,k] * Qt_flat[i,k] = tr(P_j Q_i)
+    # Contract over flattened K^2 dim: result[b,h,j,i] = Σ_k P_flat[j,k] * Qt_flat[i,k] = tr(P_j Q_i)
     trace_term = torch.einsum('bhjk,bhik->bhij', P_flat, Qt_flat)  # [B, H, N_j, N_i]
     trace_term = trace_term.transpose(-2, -1)  # [B, H, N_i, N_j]
 
@@ -523,10 +523,10 @@ def retract_spd(Sigma, nat_grad, step_size, eps_min=1e-4, kappa_max=1e4, exp_cli
 
     Algorithm (Appendix D):
       1. Eigendecompose Σ = V Λ Vᵀ
-      2. Whiten: B = Λ⁻¹/² Vᵀ (nat_grad) V Λ⁻¹/²
+      2. Whiten: B = Λ⁻¹/^2 Vᵀ (nat_grad) V Λ⁻¹/^2
       3. Clip ||B||_F (trust region)
       4. Diagonalize B = U Λ_B Uᵀ
-      5. Retract: Σ_new = V Λ¹/² U exp(τ·Λ_B) Uᵀ Λ¹/² Vᵀ
+      5. Retract: Σ_new = V Λ¹/^2 U exp(τ·Λ_B) Uᵀ Λ¹/^2 Vᵀ
       6. Enforce spectral floor and condition cap
 
     Args:
@@ -542,11 +542,11 @@ def retract_spd(Sigma, nat_grad, step_size, eps_min=1e-4, kappa_max=1e4, exp_cli
     Lambda, V = torch.linalg.eigh(Sigma)  # Lambda: [..., K], V: [..., K, K]
     Lambda = Lambda.clamp(min=eps_min)
 
-    # 2. Whiten: B = Λ⁻¹/² Vᵀ δ V Λ⁻¹/²
+    # 2. Whiten: B = Λ⁻¹/^2 Vᵀ δ V Λ⁻¹/^2
     Lambda_inv_sqrt = 1.0 / Lambda.sqrt()
     # Vᵀ @ nat_grad @ V
     VtdV = V.transpose(-2, -1) @ nat_grad @ V
-    # Scale: diag(Λ⁻¹/²) @ VtdV @ diag(Λ⁻¹/²)
+    # Scale: diag(Λ⁻¹/^2) @ VtdV @ diag(Λ⁻¹/^2)
     B = Lambda_inv_sqrt.unsqueeze(-1) * VtdV * Lambda_inv_sqrt.unsqueeze(-2)
     B = symmetrize(B)
 
@@ -559,9 +559,9 @@ def retract_spd(Sigma, nat_grad, step_size, eps_min=1e-4, kappa_max=1e4, exp_cli
 
     # 5. Retract
     exp_Lambda_B = torch.exp(scaled)
-    # Σ_new = V Λ¹/² U diag(exp(τ·λ_B)) Uᵀ Λ¹/² Vᵀ
+    # Σ_new = V Λ¹/^2 U diag(exp(τ·λ_B)) Uᵀ Λ¹/^2 Vᵀ
     Lambda_sqrt = Lambda.sqrt()
-    # VΛ¹/² U
+    # VΛ¹/^2 U
     VLU = V * Lambda_sqrt.unsqueeze(-2) @ U  # [..., K, K]
 
     Sigma_new = VLU * exp_Lambda_B.unsqueeze(-2) @ VLU.transpose(-2, -1)
@@ -665,7 +665,7 @@ def kl_decode_logits(mu, Sigma, prior_mu_bank, prior_Sigma_bank, decode_tau=1.0)
         # KL(q_i || π_v) for each (i, v) pair
         # = ½[tr(Σ_v⁻¹ Σ_i) + (μ_v - μ_i)ᵀ Σ_v⁻¹ (μ_v - μ_i) - K + ln det Σ_v - ln det Σ_i]
 
-        # Trace: tr(Σ_v⁻¹ Σ_i) — same for all v given i
+        # Trace: tr(Σ_v⁻¹ Σ_i) -- same for all v given i
         # [B, N, cV]: need Σ_v⁻¹[v] and Σ_i
         trace_term = torch.einsum('vpq,bnqp->bnv', Sig_v_inv, Sigma)  # [B, N, cV]
 

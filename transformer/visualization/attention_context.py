@@ -381,7 +381,7 @@ def visualize_attention_with_labels(model, token_ids, description, token_strs, s
         kl_std = kl_row_stds.mean()
         print(f"\n  KL Matrix: row_std = {kl_std:.4f}")
         if kl_std < 0.5:
-            print(f"    ⚠️  Root cause: KL divergences too uniform → uniform attention")
+            print(f"    ⚠️  Root cause: KL divergences too uniform -> uniform attention")
 
     print("="*80)
 

@@ -141,7 +141,7 @@ def create_attention_mask(
 def compute_attention_weights(
     mu_q: torch.Tensor,        # (B, N, K) belief means
     sigma_q: torch.Tensor,     # (B, N, K, K) or (B, N, K) if diagonal_covariance=True
-    phi: torch.Tensor,         # (B, N, phi_dim) gauge frames (phi_dim=3 for SO(3), N(N-1)/2 for SO(N), K² for GL(K))
+    phi: torch.Tensor,         # (B, N, phi_dim) gauge frames (phi_dim=3 for SO(3), N(N-1)/2 for SO(N), K^2 for GL(K))
     generators: torch.Tensor,  # (n_gen, K, K) Lie algebra generators
     kappa: float,              # Temperature
     epsilon: float = 1e-8,     # Numerical stability
@@ -182,29 +182,29 @@ def compute_attention_weights(
     0D Structure:
         - All agents at single point c*, so β_ij are SCALARS
         - No spatial fields β_ij(c), just one number per pair
-        - No spatial integration, just O(N²) agent-pair loop
+        - No spatial integration, just O(N^2) agent-pair loop
 
     Args:
         mu_q: Query belief means, shape (B, N, K)
               N = num_agents at single point c*
         sigma_q: Query covariances, shape (B, N, K, K) if full, (B, N, K) if diagonal
         phi: Gauge frames, shape (B, N, phi_dim) in Lie algebra
-             phi_dim = 3 for SO(3), N(N-1)/2 for SO(N), K² for GL(K)
+             phi_dim = 3 for SO(3), N(N-1)/2 for SO(N), K^2 for GL(K)
         generators: Lie algebra generators, shape (n_gen, K, K)
         kappa: Temperature parameter (higher = softer attention)
         epsilon: Softmax stability constant
         mask: Optional causal mask (B, N, N) - 0 masks out position
         diagonal_covariance: If True, sigma_q is (B,N,K) diagonal variances.
-                            Uses O(N²×K) memory instead of O(N²×K²)!
+                            Uses O(N^2xK) memory instead of O(N^2xK^2)!
         cached_transport: Optional precomputed transport operators from compute_transport_operators().
                          When evolve_phi=False, caching avoids redundant matrix exponentials.
         irrep_dims: Optional list of irrep block dimensions [d₁, d₂, ...].
                    When provided, uses block-diagonal KL computation which is:
                    1. Theoretically principled (respects gauge structure)
-                   2. Memory efficient: O(N² × Σᵢdᵢ²) vs O(N² × K²)
-                   For K=255 with 75×ℓ₀ + 30×ℓ₁ + 18×ℓ₂: ~82× memory savings!
+                   2. Memory efficient: O(N^2 x Σᵢdᵢ^2) vs O(N^2 x K^2)
+                   For K=255 with 75xℓ₀ + 30xℓ₁ + 18xℓ₂: ~82x memory savings!
         chunk_size: Optional chunk size for memory-efficient processing.
-                   When provided, processes N×N attention in C×C chunks.
+                   When provided, processes NxN attention in CxC chunks.
                    None = no chunking (fast but memory-hungry)
         alibi_slope: Optional ALiBi-style positional bias slope.
                     When set, adds slope * (i - j) to attention logits.
@@ -268,7 +268,7 @@ def compute_attention_weights(
     # KL output is (B,N,N) regardless, so no output conversion needed.
     # =========================================================================
     if exact_diagonal_transport and diagonal_covariance and sigma_q.dim() == 3:
-        sigma_q = torch.diag_embed(sigma_q)  # (B, N, K) → (B, N, K, K)
+        sigma_q = torch.diag_embed(sigma_q)  # (B, N, K) -> (B, N, K, K)
         diagonal_covariance = False
 
     batch_size, num_agents, K = mu_q.shape
@@ -314,7 +314,7 @@ def compute_attention_weights(
     # We divide by √K to normalize to O(1), analogous to 1/√d_k in standard attention.
     #
     # The parameter κ is related to the belief covariance: in the isotropic limit
-    # Σ = σ²I, κ ∝ σ² (the covariance IS the temperature). In the full theory,
+    # Σ = σ^2I, κ ∝ σ^2 (the covariance IS the temperature). In the full theory,
     # Σ provides per-head, per-token, per-direction temperature control; κ serves
     # as a convenient global scalar handle on attention sharpness.
     #
@@ -486,15 +486,15 @@ def estimate_chunk_size(
     Estimate optimal chunk size based on available GPU memory.
 
     Peak memory per chunk (full covariance):
-    - Omega: C² × K² × dtype_bytes
-    - Sigma_transported: C² × K² × dtype_bytes
-    - Intermediate: ~2-3 × C² × K² × dtype_bytes
-    Total: ~5 × C² × K² × dtype_bytes
+    - Omega: C^2 x K^2 x dtype_bytes
+    - Sigma_transported: C^2 x K^2 x dtype_bytes
+    - Intermediate: ~2-3 x C^2 x K^2 x dtype_bytes
+    Total: ~5 x C^2 x K^2 x dtype_bytes
 
     Peak memory per chunk (diagonal covariance):
-    - Omega: C² × K² × dtype_bytes
-    - sigma_transported: C² × K × dtype_bytes
-    Total: ~2 × C² × K² × dtype_bytes (Omega dominates)
+    - Omega: C^2 x K^2 x dtype_bytes
+    - sigma_transported: C^2 x K x dtype_bytes
+    Total: ~2 x C^2 x K^2 x dtype_bytes (Omega dominates)
 
     Args:
         N: Sequence length
@@ -509,11 +509,11 @@ def estimate_chunk_size(
     """
     available_bytes = available_memory_gb * 1e9 * safety_factor
 
-    # Memory per chunk: ~5 × C² × K² × dtype_bytes (full) or ~2 × C² × K² (diagonal)
+    # Memory per chunk: ~5 x C^2 x K^2 x dtype_bytes (full) or ~2 x C^2 x K^2 (diagonal)
     multiplier = 2.0 if diagonal_covariance else 5.0
     bytes_per_c_squared = multiplier * K * K * dtype_bytes
 
-    # Solve for C: C² ≤ available_bytes / bytes_per_c_squared
+    # Solve for C: C^2 ≤ available_bytes / bytes_per_c_squared
     max_c_squared = available_bytes / bytes_per_c_squared
     max_c = int(max_c_squared ** 0.5)
 
@@ -546,8 +546,8 @@ def _dispatch_kl_matrix(
 
     Priority order:
         1. BLOCK_DIAGONAL (diagonal sigma)
-        2. BLOCK_DIAGONAL (full sigma) — optionally chunked
-        3. DENSE or DIAGONAL — build Omega, call unified kernel
+        2. BLOCK_DIAGONAL (full sigma) -- optionally chunked
+        3. DENSE or DIAGONAL -- build Omega, call unified kernel
 
     Covariance transport invariant: Sigma_transported = Omega @ Sigma @ Omega.T
     (the sandwich product is never bypassed).
@@ -703,11 +703,11 @@ def _dispatch_kl_matrix(
           and 'exp_neg_phi' in cached_transport):
         exp_phi = cached_transport['exp_phi']
         exp_neg_phi = cached_transport['exp_neg_phi']
-        # Only materialize full Omega if we won't chunk (avoids O(BN²K²) allocation)
+        # Only materialize full Omega if we won't chunk (avoids O(BN^2K^2) allocation)
         if chunk_size is None:
             Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
     else:
-        # Compute exp pairs once — reused by both unchunked and chunked paths
+        # Compute exp pairs once -- reused by both unchunked and chunked paths
         phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
         exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
         if enforce_orthogonal and K >= 16:
@@ -725,7 +725,7 @@ def _dispatch_kl_matrix(
 
         if Omega is None:
             # Identity: mu_transported = mu_q broadcast, sigma transported = sigma_q broadcast
-            # Views suffice — downstream KL kernels cast to float32 internally (no in-place mutation)
+            # Views suffice -- downstream KL kernels cast to float32 internally (no in-place mutation)
             mu_t = mu_q[:, None, :, :].expand(-1, N, -1, -1)
             sig_t = sigma_q[:, None, :, :].expand(-1, N, -1, -1)
         else:
@@ -934,7 +934,7 @@ def aggregate_messages(
     # Exact diagonal transport: lift to full, aggregate, extract diagonal
     _exact_diag_lift = exact_diagonal_transport and diagonal_covariance and sigma_q.dim() == 3
     if _exact_diag_lift:
-        sigma_q = torch.diag_embed(sigma_q)  # (B, N, K) → (B, N, K, K)
+        sigma_q = torch.diag_embed(sigma_q)  # (B, N, K) -> (B, N, K, K)
         diagonal_covariance = False
 
     batch_size, num_agents, K = mu_q.shape
@@ -944,7 +944,7 @@ def aggregate_messages(
     # =========================================================================
     # FACTORED transport path: use per-position exp_phi/exp_neg_phi
     # instead of full pairwise Omega (B,N,N,K,K).
-    # Memory: O(BNK²) vs O(BN²K²) — massive savings for large N.
+    # Memory: O(BNK^2) vs O(BN^2K^2) -- massive savings for large N.
     # =========================================================================
     _has_exp_pairs = (cached_transport is not None
                       and 'exp_phi' in cached_transport
@@ -1106,7 +1106,7 @@ def aggregate_messages(
         return mu_aggregated, sigma_aggregated
 
     # =========================================================================
-    # LEGACY path: full Omega (B,N,N,K,K) — used when no exp pairs cached
+    # LEGACY path: full Omega (B,N,N,K,K) -- used when no exp pairs cached
     # =========================================================================
 
     # Step 1: Get transport operators (use cached if available)
@@ -1120,7 +1120,7 @@ def aggregate_messages(
     # Step 2: Transport all means (primal: m_i = Σ β_ij Ω_ij μ_j)
     mu_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)  # (B, N, N, K)
 
-    # Step 3: Weighted aggregation: m_i = Σ_j β_ij * μ_j^{→i}
+    # Step 3: Weighted aggregation: m_i = Σ_j β_ij * μ_j^{->i}
     mu_aggregated = torch.einsum('bij,bijk->bik', beta, mu_transported)  # (B, N, K)
 
     # Step 4: Covariance aggregation
@@ -1221,7 +1221,7 @@ class IrrepMultiHeadAttention(nn.Module):
         - Optional W_O output projection (use_output_projection)
 
     Irrep Decomposition (SO(3) example, 96-dim):
-        K = 12×1 + 7×3 + 5×5 + 2×7 = 96
+        K = 12x1 + 7x3 + 5x5 + 2x7 = 96
         ℓ0: 12 scalar channels (gauge-invariant)
         ℓ1: 7 vector channels (transform as vectors)
         ℓ2: 5 rank-2 tensor channels
@@ -1277,7 +1277,7 @@ class IrrepMultiHeadAttention(nn.Module):
             mask_self_attention: If True, mask out diagonal (no self-attention).
                                 Prevents attention collapse since KL(q_i||q_i)=0.
             enforce_orthogonal: If True, enforce Ω ∈ SO(K) via Newton-Schulz.
-            use_output_projection: If True, add learned W_O ∈ R^{K×K} after heads.
+            use_output_projection: If True, add learned W_O ∈ R^{KxK} after heads.
             irrep_dims_override: Override block dims (for cross-head coupling).
             use_rope: If True, apply RoPE rotations to μ before KL computation.
             rope_base: RoPE frequency base (default 10000.0).
@@ -1317,8 +1317,8 @@ class IrrepMultiHeadAttention(nn.Module):
         # where d_head = K/H and each head has its own GL(d_head) gauge.
         #
         # Determine number of GL(K) heads from irrep_spec:
-        #   - [('fund', H, d_head)] → H heads of dimension d_head
-        #   - [('full', 1, K)] → single head (original behavior)
+        #   - [('fund', H, d_head)] -> H heads of dimension d_head
+        #   - [('full', 1, K)] -> single head (original behavior)
         if gauge_group == 'GLK':
             # Check if multi-head is requested via irrep_spec
             if len(irrep_spec) == 1 and irrep_spec[0][0] == 'full':
@@ -1327,14 +1327,14 @@ class IrrepMultiHeadAttention(nn.Module):
                 self.irrep_labels = ['full']
                 total_dim = embed_dim
                 self.glk_multihead = False
-                logger.info(f"[GL(K) mode] Single-head attention: dim={embed_dim}, generators={embed_dim}²={embed_dim**2}")
+                logger.info(f"[GL(K) mode] Single-head attention: dim={embed_dim}, generators={embed_dim}^2={embed_dim**2}")
             else:
                 # Multi-head GL(K): block-diagonal structure
                 # Parse irrep_spec as [(label, n_heads, d_head)]
                 label, n_heads, d_head = irrep_spec[0]
                 if n_heads * d_head != embed_dim:
                     raise ValueError(
-                        f"GL(K) multi-head: n_heads({n_heads}) × d_head({d_head}) = {n_heads * d_head} "
+                        f"GL(K) multi-head: n_heads({n_heads}) x d_head({d_head}) = {n_heads * d_head} "
                         f"must equal embed_dim={embed_dim}"
                     )
 
@@ -1353,7 +1353,7 @@ class IrrepMultiHeadAttention(nn.Module):
                     self.irrep_labels = [f'glk_head_{h}' for h in range(n_heads)]
                     self.glk_multihead = True
                     self.glk_d_head = d_head
-                    logger.info(f"[GL(K) multi-head] {n_heads} heads × GL({d_head}), generators per head={d_head}²={d_head**2}")
+                    logger.info(f"[GL(K) multi-head] {n_heads} heads x GL({d_head}), generators per head={d_head}^2={d_head**2}")
         else:
             # SO(3) / SO(N) mode: Use irrep decomposition
             for label, multiplicity, dim in irrep_spec:
@@ -1383,7 +1383,7 @@ class IrrepMultiHeadAttention(nn.Module):
         # =================================================================
         # Manuscript: β_ij^(a) = softmax(-KL / (κ_a √d_h))
         # κ_h is the bare per-head kappa; compute_attention_weights applies √d_h.
-        # Learnable: κ_h = clamp(exp(log_kappa[h]), 0.5×κ₀, 1.5×κ₀)
+        # Learnable: κ_h = clamp(exp(log_kappa[h]), 0.5xκ₀, 1.5xκ₀)
         if learnable_head_kappa:
             init_kappas = torch.tensor([
                 kappa_beta for _d_h in self.irrep_dims
@@ -1441,15 +1441,15 @@ class IrrepMultiHeadAttention(nn.Module):
 
                 if hasattr(self, 'glk_multihead') and self.glk_multihead:
                     # Multi-head GL(K) (standard or cross-coupled):
-                    # Extract the dim×dim spatial block from ALL generators.
+                    # Extract the dimxdim spatial block from ALL generators.
                     # phi has coefficients for all n_gen generators, so we keep
                     # the full first axis to match phi's last dimension.
                     # Generators that are zero in this spatial block contribute
                     # nothing to the Lie algebra element Σ_a φ^a G_a[block].
                     gen = global_generators[:, cum_dim:cum_dim+dim, cum_dim:cum_dim+dim].clone()
                 else:
-                    # Single-head GL(K): Use full K² generators on entire space
-                    gen = global_generators.clone()  # (K², K, K)
+                    # Single-head GL(K): Use full K^2 generators on entire space
+                    gen = global_generators.clone()  # (K^2, K, K)
             else:
                 # SO(N) mode: Extract block from global generators
                 if global_generators is None:
@@ -1476,7 +1476,7 @@ class IrrepMultiHeadAttention(nn.Module):
         # When gauge_mode='constant', Ω_ij = Ω for all pairs (i,j).
         # This is the manuscript's Limit 2 (constant gauge specialization):
         # S(Ω) cancels under softmax, Ω⁻¹ absorbed into learned projections.
-        # Unlike the cocycle parameterization (which forces constant → I),
+        # Unlike the cocycle parameterization (which forces constant -> I),
         # this allows a free GL(K) matrix per head with direct gradient descent.
         if gauge_mode == 'constant':
             self.constant_omega = nn.ParameterList()
@@ -1496,7 +1496,7 @@ class IrrepMultiHeadAttention(nn.Module):
         self.use_output_projection = use_output_projection
         if use_output_projection:
             self.output_proj = nn.Linear(embed_dim, embed_dim, bias=False)
-            logger.info(f"  W_O output projection: {embed_dim}×{embed_dim} = {embed_dim**2} params")
+            logger.info(f"  W_O output projection: {embed_dim}x{embed_dim} = {embed_dim**2} params")
         else:
             self.output_proj = None
 
@@ -1582,7 +1582,7 @@ class IrrepMultiHeadAttention(nn.Module):
         # Precompute per-position exp_phi/exp_neg_phi for ALL heads in one
         # batched matrix_exp call (via fused_block_matrix_exp_pairs).
         # This replaces per-head compute_transport_operators which builds
-        # full Omega (B,N,N,d,d) — an O(N²d²) memory hog.
+        # full Omega (B,N,N,d,d) -- an O(N^2d^2) memory hog.
         if self.gauge_mode == 'constant':
             # Constant gauge: skip matrix exponentials entirely.
             # Per-head Ω is a direct nn.Parameter; transport constructed in per-head loop.
@@ -1620,7 +1620,7 @@ class IrrepMultiHeadAttention(nn.Module):
             )
 
             # Per-head temperature κ_h for attention softmax.
-            # Learnable: κ_h = clamp(exp(log_kappa[h]), 0.5×κ₀, 1.5×κ₀).
+            # Learnable: κ_h = clamp(exp(log_kappa[h]), 0.5xκ₀, 1.5xκ₀).
             # Static: κ_h = kappa_beta * √d_h, normalizes KL across head dims.
             if self.learnable_head_kappa:
                 kappa_h = torch.exp(self.log_kappa_per_head[head_idx])
@@ -1824,7 +1824,7 @@ class IrrepMultiHeadAttention(nn.Module):
     def _block_diag_sigma(self, sigma_blocks: List[torch.Tensor]) -> torch.Tensor:
         """Construct covariance from irrep blocks.
 
-        For diagonal mode: concatenates (B, N, dim) slices → (B, N, K)
+        For diagonal mode: concatenates (B, N, dim) slices -> (B, N, K)
         For full mode: builds block-diagonal (B, N, K, K)
         """
         batch_size, num_agents = sigma_blocks[0].shape[:2]

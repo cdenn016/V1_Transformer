@@ -1,5 +1,5 @@
 """
-Amortized Inference Mode — Architecture Flow Diagram
+Amortized Inference Mode -- Architecture Flow Diagram
 
 Publication-quality "Attention is All You Need" style flow diagram for the
 amortized_inference mode of the Gauge-Transformer.
@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
 
 # ══════════════════════════════════════════════════════════════════════
-# Config — edit here, then press Run
+# Config -- edit here, then press Run
 # ══════════════════════════════════════════════════════════════════════
 CONFIG = {
     'output_dir': 'figures/flow_diagrams',
@@ -191,7 +191,7 @@ def create_diagram():
     _, y_top = box(ax, CX, attn_cy, W_SUB, H_ATTN,
                    'KL-Divergence\nMulti-Head Attention',
                    C['attn'], fs=9.5, fw='bold')
-    # Math annotations — left side
+    # Math annotations -- left side
     side_text(ax, CX - W_SUB / 2, attn_cy + 0.10,
               r'$\beta_{ij} = \mathrm{softmax}\left(\frac{-\mathrm{KL}(q_i \| \Omega_{ij} q_j)}{\kappa\sqrt{K}}\right)$',
               side='left', offset=0.15, fs=6.5, c=C['math'])
@@ -359,7 +359,7 @@ def create_diagram():
             bbox=dict(boxstyle='round,pad=0.25', fc='white', ec='#AAAAAA', lw=0.6))
 
     # ════════════════════════════════════════════════════════════
-    # Gradient flow annotation — right margin
+    # Gradient flow annotation -- right margin
     # ════════════════════════════════════════════════════════════
     grad_x = CX + block_w / 2 + 0.85
     grad_y_bot = y_embed_center - 0.1
@@ -387,7 +387,7 @@ def create_diagram():
             family='monospace')
 
     # ════════════════════════════════════════════════════════════
-    # Legend — top left
+    # Legend -- top left
     # ════════════════════════════════════════════════════════════
     lx, ly = 0.45, 14.35
     items = [

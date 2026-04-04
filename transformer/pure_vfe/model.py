@@ -38,7 +38,7 @@ class PureVFETransformer:
         dev = config.device
 
         # -----------------------------------------------------------
-        # Prior bank (THE model — raw tensors, not nn.Parameters)
+        # Prior bank (THE model -- raw tensors, not nn.Parameters)
         # -----------------------------------------------------------
 
         # Prior means: spread must be O(√(ln V / K)) so KL differences
@@ -46,21 +46,21 @@ class PureVFETransformer:
         # softmax fixed point.  0.02 is far too small (see issue analysis).
         self.prior_mu = torch.randn(V, K, device=dev) * 0.5
 
-        # Prior covariances: σ²I (SPD, stored directly)
+        # Prior covariances: σ^2I (SPD, stored directly)
         self.prior_Sigma = (
             config.sigma_init * torch.eye(K, device=dev)
             .unsqueeze(0).expand(V, -1, -1).clone()
         )
 
         # Gauge frames: two parameterizations togglable via config.gauge_param
-        # Position encoding handled by RoPE — no positional gauge offsets.
+        # Position encoding handled by RoPE -- no positional gauge offsets.
         if config.gauge_param == 'phi':
             # Lie algebra path: φ ∈ gl(K_h), Ω = exp(φ)
             n_gen_h = K_h * K_h
             self.prior_phi = init_phi(
                 (V, H, n_gen_h), scale=config.omega_init_scale, device=dev
             )
-            self.gl_generators = make_gl_generators(K_h, device=dev)  # [K_h², K_h, K_h]
+            self.gl_generators = make_gl_generators(K_h, device=dev)  # [K_h^2, K_h, K_h]
 
             # Compute Omega from phi for use in E-step
             self.prior_Omega = phi_to_omega(self.prior_phi, self.gl_generators)
@@ -241,7 +241,7 @@ class PureVFETransformer:
         """Load model from disk.
 
         Legacy checkpoints with pos_Omega/pos_phi/m1_pos_Omega keys are
-        loaded without error — those keys are silently ignored.
+        loaded without error -- those keys are silently ignored.
         """
         data = torch.load(path, weights_only=False)
         config = data['config']

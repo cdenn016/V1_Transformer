@@ -23,7 +23,7 @@ Three preconditioning modes (controlled by phi_natural_gradient config):
 
 2. 'cartan': Approximate Cartan decomposition preconditioning.
     Projects gradient into so(K) ⊕ sym(K) and dampens sym(K) by a fixed
-    factor (sym_dampening=0.1 → 10× dampening). Uses a free parameter.
+    factor (sym_dampening=0.1 -> 10x dampening). Uses a free parameter.
 
 3. 'killing': Killing form natural gradient (position-independent).
     Uses the Cartan-involution-modified Killing form as metric:
@@ -38,7 +38,7 @@ Three preconditioning modes (controlled by phi_natural_gradient config):
     This is the theoretically exact natural gradient on the Lie group.
     It captures the exponential amplification in non-compact directions
     that the position-independent metrics miss.
-    Cost: O(n_gen³) per token per step (expensive but principled).
+    Cost: O(n_gen^3) per token per step (expensive but principled).
 
 Also implements:
     - SL(K) projection: projects φ to the traceless subalgebra sl(K),
@@ -76,12 +76,12 @@ def build_cartan_projector(
     where c ∈ (0, 1] dampens the symmetric directions:
         c = 1.0: no preconditioning (Euclidean gradient)
         c = 0.0: project out symmetric components entirely (restrict to so(K))
-        c = 0.1: dampen symmetric by 10× (recommended for GL(K))
+        c = 0.1: dampen symmetric by 10x (recommended for GL(K))
 
     Args:
         generators: Lie algebra generators (n_gen, K, K)
         sym_dampening: Dampening factor for symmetric directions.
-                      0.1 means sym directions get 10× smaller steps.
+                      0.1 means sym directions get 10x smaller steps.
 
     Returns:
         preconditioner: (n_gen, n_gen) matrix to left-multiply phi gradients
@@ -92,11 +92,11 @@ def build_cartan_projector(
 
     # Gram matrix: G_ab = tr(T_a^T T_b) = Σ_{ij} T_a[i,j] T_b[i,j] (Frobenius inner product)
     # For standard E_ij basis this is the identity.
-    # NOTE: No transpose in the einsum — see build_killing_form_preconditioner (line 251)
+    # NOTE: No transpose in the einsum -- see build_killing_form_preconditioner (line 251)
     # for why generators.transpose(-2,-1) gives tr(T_a T_b) instead.
     gram = torch.einsum('aij,bij->ab', generators, generators)
 
-    # Trace product: tr(T_a T_b) — captures symmetric/antisymmetric structure
+    # Trace product: tr(T_a T_b) -- captures symmetric/antisymmetric structure
     # For antisymmetric T: tr(T^2) < 0. For symmetric T: tr(T^2) > 0.
     trace_prod = torch.einsum('aij,bji->ab', generators, generators)
 
@@ -127,8 +127,8 @@ def build_slk_projector(
         tr(M) = Σ_a φ_a tr(T_a) = v^T φ
 
     where v_a = tr(T_a). The SL(K) projection removes this component:
-        φ_sl = φ - (v^T φ / ||v||²) v
-        φ_sl = (I - v v^T / ||v||²) φ
+        φ_sl = φ - (v^T φ / ||v||^2) v
+        φ_sl = (I - v v^T / ||v||^2) φ
 
     This ensures det(exp(M)) = exp(tr(M)) = exp(0) = 1, so Ω_ij ∈ SL(K).
 
@@ -145,8 +145,8 @@ def build_slk_projector(
 
 
 def apply_slk_projection(
-    phi: torch.Tensor,           # (..., n_gen) — phi embedding weights
-    trace_vec: torch.Tensor,     # (n_gen,) — from build_slk_projector
+    phi: torch.Tensor,           # (..., n_gen) -- phi embedding weights
+    trace_vec: torch.Tensor,     # (n_gen,) -- from build_slk_projector
 ) -> torch.Tensor:
     """
     Project phi to the traceless subalgebra sl(K) in-place.
@@ -169,8 +169,8 @@ def apply_slk_projection(
 
 
 def apply_cartan_preconditioning(
-    grad_phi: torch.Tensor,         # (..., n_gen) — gradient w.r.t. phi
-    preconditioner: torch.Tensor,   # (n_gen, n_gen) — from build_cartan_projector
+    grad_phi: torch.Tensor,         # (..., n_gen) -- gradient w.r.t. phi
+    preconditioner: torch.Tensor,   # (n_gen, n_gen) -- from build_cartan_projector
 ) -> torch.Tensor:
     """
     Apply Cartan decomposition preconditioning to phi gradients.
@@ -178,7 +178,7 @@ def apply_cartan_preconditioning(
     Dampens the non-compact (symmetric) gradient components while
     preserving the compact (antisymmetric) components at full strength.
 
-    This is the "Killing form natural gradient" — using the Lie algebra
+    This is the "Killing form natural gradient" -- using the Lie algebra
     structure to define the proper metric for gradient descent on GL(K).
 
     Args:
@@ -216,12 +216,12 @@ def build_killing_form_preconditioner(
         - so(K) directions: eigenvalue 2K (compact rotations)
         - sym₀(K) directions: eigenvalue 2K (non-compact, traceless)
         - Diagonal traceless: eigenvalue 2(K-1) to 2K
-        - Center (trace): eigenvalue 0 → regularized
+        - Center (trace): eigenvalue 0 -> regularized
 
     The center (trace) direction of gl(K) = sl(K) ⊕ ℝ·I has zero Killing
     eigenvalue.  With center_reg ≪ 2K, the inverse metric amplifies this
     direction by 1/center_reg, creating a condition number of
-    2K/center_reg.  For K=10 and center_reg=1e-4 this is 200,000×,
+    2K/center_reg.  For K=10 and center_reg=1e-4 this is 200,000x,
     which makes the preconditioned gradient dominated by center noise
     and defeats the purpose of the natural gradient.
 
@@ -232,7 +232,7 @@ def build_killing_form_preconditioner(
     Args:
         generators: Lie algebra generators (n_gen, K, K)
         center_reg: Regularization for the degenerate center direction.
-            Default None → 2K (isotropic conditioning).
+            Default None -> 2K (isotropic conditioning).
 
     Returns:
         inv_metric: (n_gen, n_gen) inverse metric for natural gradient
@@ -245,11 +245,11 @@ def build_killing_form_preconditioner(
         center_reg = 2.0 * K
 
     # Gram matrix: G_ab = tr(T_a^T T_b) = Σ_{ij} T_a[i,j] T_b[i,j] (Frobenius inner product)
-    # NOTE: No transpose in the einsum — the Frobenius inner product is Σ_{ij} A_{ij} B_{ij}.
+    # NOTE: No transpose in the einsum -- the Frobenius inner product is Σ_{ij} A_{ij} B_{ij}.
     # Previously used generators.transpose(-2,-1) which computed tr(T_a T_b) instead,
-    # giving a permutation matrix (E_{ij} ↦ E_{ji}) with eigenvalues ±1 — making the
+    # giving a permutation matrix (E_{ij} ↦ E_{ji}) with eigenvalues +/-1 -- making the
     # metric indefinite for non-symmetric generators (antisymmetric directions got
-    # negative eigenvalues ≈ -2K).
+    # negative eigenvalues ~= -2K).
     gram = torch.einsum('aij,bij->ab', generators, generators)
 
     # Trace vector: v_a = tr(T_a)
@@ -299,7 +299,7 @@ def build_structure_constants(
     """
     Precompute structure constants f^c_{ab} defined by [T_a, T_b] = Σ_c f^c_{ab} T_c.
 
-    For orthonormal generators (gram ≈ I):
+    For orthonormal generators (gram ~= I):
         f^c_{ab} = tr(T_c^T · [T_a, T_b])
 
     For general generators:
@@ -316,7 +316,7 @@ def build_structure_constants(
     dtype = generators.dtype
 
     # Gram matrix (Frobenius inner product) and its pseudoinverse
-    # NOTE: No transpose — Frobenius is Σ_{ij} T_a[i,j] T_b[i,j], consistent
+    # NOTE: No transpose -- Frobenius is Σ_{ij} T_a[i,j] T_b[i,j], consistent
     # with build_killing_form_preconditioner and build_cartan_projector.
     gram = torch.einsum('aij,bij->ab', generators, generators)
     gram_inv = torch.linalg.pinv(gram)
@@ -361,7 +361,7 @@ def apply_pullback_natural_gradient(
 
     At φ = 0: Ψ = I, so G = gram (Frobenius inner product).
     At large ||φ|| in symmetric directions: G grows exponentially,
-    so the natural gradient (G^{-1} · ∂F/∂φ) automatically shrinks —
+    so the natural gradient (G^{-1} · ∂F/∂φ) automatically shrinks --
     exactly compensating the exponential amplification through matrix_exp.
 
     Args:
@@ -391,7 +391,7 @@ def apply_pullback_natural_gradient(
 
     # Compute Ψ(ad_X) via Taylor series:
     # Ψ(z) = (e^z - 1)/z = Σ_{k=0}^∞ z^k/(k+1)!
-    # Ψ(ad_X) = I + ad_X/2! + ad_X²/3! + ad_X³/4! + ...
+    # Ψ(ad_X) = I + ad_X/2! + ad_X^2/3! + ad_X^3/4! + ...
     I_gen = torch.eye(n_gen, device=device, dtype=dtype)
     I_expanded = I_gen.expand(*batch_shape, n_gen, n_gen)
 

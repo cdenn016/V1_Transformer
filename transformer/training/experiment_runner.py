@@ -11,13 +11,13 @@ execution (this module).. The entry point sets configs and calls
 run_single_experiment() or run_pure_vfe_experiment() from here.
 
 Public API:
-    - run_single_experiment()    — Run EM/standard/hebbian experiment
-    - run_pure_vfe_experiment()  — Run pure VFE (no autograd) experiment
-    - PublicationTrainer         — FastTrainer subclass with metrics/diagnostics
-    - run_test_evaluation()      — Evaluate model on test set
-    - PublicationMetricsTracker  — Step-level metrics collection
-    - LayerDiagnosticsTracker    — Per-layer diagnostics
-    - IterationDiagnosticsTracker — Per-VFE-iteration diagnostics
+    - run_single_experiment()    -- Run EM/standard/hebbian experiment
+    - run_pure_vfe_experiment()  -- Run pure VFE (no autograd) experiment
+    - PublicationTrainer         -- FastTrainer subclass with metrics/diagnostics
+    - run_test_evaluation()      -- Evaluate model on test set
+    - PublicationMetricsTracker  -- Step-level metrics collection
+    - LayerDiagnosticsTracker    -- Per-layer diagnostics
+    - IterationDiagnosticsTracker -- Per-VFE-iteration diagnostics
 """
 
 import logging
@@ -144,7 +144,7 @@ def run_test_evaluation(
 
     logger.info(f"  Evaluating up to {max_samples} samples...")
 
-    # Pure CE evaluation — disable all VFE regularization terms for test.
+    # Pure CE evaluation -- disable all VFE regularization terms for test.
     is_standard = isinstance(model, StandardTransformerLM)
 
     # Target padding uses -100 (PyTorch cross_entropy ignore_index default).
@@ -651,7 +651,7 @@ class PublicationTrainer(FastTrainer):
                 )
                 # Note: E-step phi preconditioning is now controlled by
                 # phi_natural_gradient config ('clip'|'cartan'|'killing'|'pullback')
-                # which flows through model → blocks → ffn → VariationalFFNDynamic.
+                # which flows through model -> blocks -> ffn -> VariationalFFNDynamic.
 
             if use_slk:
                 self._slk_trace_vec = build_slk_projector(
@@ -703,7 +703,7 @@ class PublicationTrainer(FastTrainer):
         """
         # Find the phi embedding weight
         # PriorBank takes priority: when active, token_embed is frozen but its
-        # phi_embed attribute still exists — reading it gives stale values.
+        # phi_embed attribute still exists -- reading it gives stale values.
         phi_weight = None
         if hasattr(self.model, 'prior_bank') and self.model.prior_bank is not None:
             if hasattr(self.model.prior_bank, 'phi_embed'):
@@ -714,7 +714,7 @@ class PublicationTrainer(FastTrainer):
         if phi_weight is None:
             return {}
 
-        # (V, phi_dim) — work in float32 for numerical stability
+        # (V, phi_dim) -- work in float32 for numerical stability
         W = phi_weight.detach().float()
         V, d = W.shape
 
@@ -861,13 +861,13 @@ class PublicationTrainer(FastTrainer):
                     # beta shape: (n_layers, B, n_heads, N, N)
                     # Handle legacy single-layer format for backward compatibility
                     if beta.dim() == 4:
-                        # Old format: (B, n_heads, N, N) — wrap in layer dim
+                        # Old format: (B, n_heads, N, N) -- wrap in layer dim
                         beta = beta.unsqueeze(0)
                         if kl is not None:
                             kl = kl.unsqueeze(0)
                         n_layers = 1
                     elif beta.dim() == 3:
-                        # Very old format: (B, N, N) — no heads, no layers
+                        # Very old format: (B, N, N) -- no heads, no layers
                         beta = beta.unsqueeze(0).unsqueeze(
                             2)  # (1, B, 1, N, N)
                         if kl is not None:
@@ -1026,11 +1026,11 @@ class PublicationTrainer(FastTrainer):
         Killing form preconditioning (Cartan decomposition):
             Dampens the non-compact (symmetric) directions of gl(K) before
             gradient norm logging and clipping. This is the natural gradient
-            on GL(K) — the Killing form metric assigns higher cost to
+            on GL(K) -- the Killing form metric assigns higher cost to
             non-compact directions.
 
         Kappa projection:
-            Clamps ``log_kappa_per_head`` to [0.5, 1.5] × init. Without this
+            Clamps ``log_kappa_per_head`` to [0.5, 1.5] x init. Without this
             the optimizer accumulates momentum in the dead zone above the
             forward-pass clamp.
 
@@ -1626,7 +1626,7 @@ class PublicationTrainer(FastTrainer):
                         _sgap = phi_diag['phi/spectral_gap']
                         _mnorm = phi_diag['phi/mean_token_norm']
                         tqdm.write(f"  [PHI] eff_rank: {_erank:.1f} ({_rratio:.1%} of max) | "
-                                   f"top1σ²: {_top1:.1%} top5σ²: {_top5:.1%} | "
+                                   f"top1σ^2: {_top1:.1%} top5σ^2: {_top5:.1%} | "
                                    f"gap: {_sgap:.2f} | ||φ||: {_mnorm:.3f}")
                     if _verbose:
                         _vfe_lines = self._format_vfe_dynamics(metrics)
@@ -2145,7 +2145,7 @@ def run_single_experiment(
 
         # Free energy loss weights
         M_alpha=config.get('M_alpha', config.get('alpha', 0.0)),
-        # → M_beta in compute_free_energy_loss
+        # -> M_beta in compute_free_energy_loss
         M_beta=config.get('M_beta', config.get('beta', 0.0)),
 
         lambda_gamma=config['lambda_gamma'],
@@ -2422,7 +2422,7 @@ def run_single_experiment(
 
 
 # =============================================================================
-# PURE VFE EXPERIMENT (dedicated loop — no nn.Module, no optimizer)
+# PURE VFE EXPERIMENT (dedicated loop -- no nn.Module, no optimizer)
 # =============================================================================
 
 def _validate_pure_vfe(model, loader, device, max_samples=12800):
@@ -2481,7 +2481,7 @@ def _plot_pure_vfe_attention(model, val_loader, device, step, attn_dir, prefix):
                 im = ax.imshow(attn_log, aspect='auto', cmap='viridis')
                 ax.set_xlabel('Key position (j)')
                 ax.set_ylabel('Query position (i)')
-                ax.set_title(f'Attention head {h} (log10) — step {step}')
+                ax.set_title(f'Attention head {h} (log10) -- step {step}')
                 plt.colorbar(im, ax=ax)
                 fig.tight_layout()
                 fig.savefig(attn_dir / f'{prefix}_head{h}.png', dpi=150)
@@ -2646,7 +2646,7 @@ def _save_pure_vfe_figures(model, val_loader, device, step, attn_dir,
     try:
         import matplotlib
         matplotlib.use('Agg')
-        import matplotlib.pyplot as plt  # noqa: F401 — ensure backend is set
+        import matplotlib.pyplot as plt  # noqa: F401 -- ensure backend is set
     except ImportError:
         return  # matplotlib not available
 
@@ -2685,7 +2685,7 @@ def run_pure_vfe_experiment(
     Run a training experiment with the Pure VFE Transformer.
 
     This is a dedicated training loop since PureVFETransformer is NOT an
-    nn.Module — it has no parameters(), no backward(), no optimizer.
+    nn.Module -- it has no parameters(), no backward(), no optimizer.
     Training happens via model.update() which internally runs E-step
     (VFE descent) + M-step (natural gradient on priors).
     """

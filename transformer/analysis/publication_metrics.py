@@ -202,7 +202,7 @@ class TrainingTracker:
 
         Args:
             mstep_natural_norms: Per-group dict from NaturalGradientOptimizer.get_grad_norms().
-                Maps group name → {'euclidean': float, 'natural': float}.
+                Maps group name -> {'euclidean': float, 'natural': float}.
         """
         tokens_per_sec = (batch_size * seq_len) / step_time if step_time > 0 else 0
 
@@ -476,7 +476,7 @@ class PublicationFigures:
                 ax_m.semilogy(steps, vals, style, label=label, alpha=alpha, linewidth=lw)
         ax_m.set_xlabel('Training Step')
         ax_m.set_ylabel('Gradient Norm')
-        ax_m.set_title(r'M-step ($p$) Gradient Norms — Embedding Parameters')
+        ax_m.set_title(r'M-step ($p$) Gradient Norms -- Embedding Parameters')
         ax_m.legend(loc='upper right', ncol=2)
         ax_m.grid(True, alpha=0.3)
         format_step_axis(ax_m)
@@ -500,7 +500,7 @@ class PublicationFigures:
                     ax_d.semilogy(steps, vals, style, label=label, alpha=alpha, linewidth=lw)
         ax_d.set_xlabel('Training Step')
         ax_d.set_ylabel('Gradient Norm')
-        ax_d.set_title(r'M-step ($p$) Gradient Norms — Decoder / Other')
+        ax_d.set_title(r'M-step ($p$) Gradient Norms -- Decoder / Other')
         ax_d.legend(loc='upper right')
         ax_d.grid(True, alpha=0.3)
         format_step_axis(ax_d)
@@ -526,14 +526,14 @@ class PublicationFigures:
                     ax_e.semilogy(steps, vals, style, label=label, alpha=alpha, linewidth=lw)
             ax_e.set_xlabel('Training Step')
             ax_e.set_ylabel('Gradient Norm')
-            ax_e.set_title('E-step (q) Gradient Norms — Natural Gradients in VFE Iterations')
+            ax_e.set_title('E-step (q) Gradient Norms -- Natural Gradients in VFE Iterations')
             ax_e.legend(loc='upper right', ncol=2)
             ax_e.grid(True, alpha=0.3)
         else:
             ax_e.text(0.5, 0.5, 'No E-step gradient data recorded',
                      transform=ax_e.transAxes, ha='center', va='center',
                      fontsize=14, color='gray')
-            ax_e.set_title('E-step (q) Gradient Norms — No Data')
+            ax_e.set_title('E-step (q) Gradient Norms -- No Data')
         format_step_axis(ax_e)
         fig_e.tight_layout()
         fig_e.savefig(self.save_dir / f"{save_name}_estep.png", dpi=300)
@@ -1150,7 +1150,7 @@ class PublicationMetrics:
             try:
                 self.semantic_tracker.record(model, step)
             except Exception:
-                pass  # Silent — trajectory is diagnostic, not critical
+                pass  # Silent -- trajectory is diagnostic, not critical
 
     def run_final_semantic_analysis(self, model: Any, verbose: bool = True) -> Dict[str, Any]:
         """
@@ -1390,7 +1390,7 @@ class PublicationMetrics:
         # Figure: Evolution over training
         if len(trajectory['steps']) > 1:
             try:
-                # Convert per_layer_mean dict → 2D ndarray for plot function
+                # Convert per_layer_mean dict -> 2D ndarray for plot function
                 plm_dict = trajectory['per_layer_mean']
                 layer_indices = trajectory.get('layer_indices', [])
                 if plm_dict and layer_indices:
@@ -1510,14 +1510,14 @@ class PublicationMetrics:
 
         Uses the raw connection delta (without cocycle_relaxation scaling)
         so that holonomy diagnostics measure the connection's intrinsic
-        curvature even when cocycle_relaxation is scheduled from 0→1.
+        curvature even when cocycle_relaxation is scheduled from 0->1.
 
         When use_prior_bank=True, uses PriorBank embeddings (which are the
         actual inputs to gauge_connection during training) instead of the
         unused token_embed.mu_embed weights.
         """
         try:
-            # Prefer PriorBank embeddings when available — these are the actual
+            # Prefer PriorBank embeddings when available -- these are the actual
             # inputs to gauge_connection during training. Using token_embed when
             # prior_bank is active would show frozen diagnostics because
             # token_embed.mu_embed never receives gradients in that mode.
@@ -1552,7 +1552,7 @@ class PublicationMetrics:
                 return None
 
             delta = block.gauge_connection(mu, mu)  # (1, N, N, n_gen)
-            # Use raw delta for diagnostics — cocycle_relaxation=0 would
+            # Use raw delta for diagnostics -- cocycle_relaxation=0 would
             # zero out the connection and produce trivially flat holonomy,
             # hiding the learned curvature structure.
             delta_matrix = torch.einsum('bija,akl->bijkl', delta, generators)

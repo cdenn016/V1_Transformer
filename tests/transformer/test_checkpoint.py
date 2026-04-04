@@ -46,7 +46,7 @@ class TestCheckpointRoundtrip:
     """Tests for save_checkpoint + load_checkpoint roundtrip."""
 
     def test_save_load_roundtrip(self):
-        """save → load → model produces same output."""
+        """save -> load -> model produces same output."""
         from transformer.utils.checkpoint import save_checkpoint, load_checkpoint
         model, config = _make_model_and_config()
         model.eval()

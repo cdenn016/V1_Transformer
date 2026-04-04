@@ -96,7 +96,7 @@ def load_wikitext103_splits():
 
 
 # ===================================================================
-# 2. BPE tokenization — GPT-2 via tiktoken (same as gauge VFE)
+# 2. BPE tokenization -- GPT-2 via tiktoken (same as gauge VFE)
 # ===================================================================
 
 def tokenize_splits(splits: dict) -> dict:
@@ -334,7 +334,7 @@ class ModifiedKneserNey:
                 c_ctx = self._context_total.get(context, 0)
 
         if c_ctx == 0:
-            # Context never seen — back off entirely
+            # Context never seen -- back off entirely
             return self._interp_mkn(word, context[1:], n - 1)
 
         # Discounted probability
@@ -372,7 +372,7 @@ class ModifiedKneserNey:
 
         for si, sent in enumerate(sentences):
             tokens = [self.BOS] + [str(t) for t in sent] + [self.EOS]
-            # Predict each token given context (skip BOS — it's given)
+            # Predict each token given context (skip BOS -- it's given)
             for i in range(1, len(tokens)):
                 word = tokens[i]
                 # Context: up to (order-1) preceding tokens

@@ -5,13 +5,13 @@ Holonomy Visualization: Publication-quality figures for curvature analysis.
 Produces figures for the key question: "Does language have curvature?"
 
 Figures:
-    1. Holonomy norm distribution — histogram + KDE of ‖C_ijk - I‖_F
-    2. Holonomy evolution — mean/max norm over training steps
-    3. Per-layer holonomy profile — bar chart across layers
-    4. Curvature vs distance — holonomy as function of triangle size
-    5. Wilson loop spectrum — eigenvalue distribution of C_ijk
-    6. Flat vs non-flat comparison — side-by-side PPL curves with holonomy overlay
-    7. Per-head holonomy heatmap — which heads learn curvature?
+    1. Holonomy norm distribution -- histogram + KDE of ‖C_ijk - I‖_F
+    2. Holonomy evolution -- mean/max norm over training steps
+    3. Per-layer holonomy profile -- bar chart across layers
+    4. Curvature vs distance -- holonomy as function of triangle size
+    5. Wilson loop spectrum -- eigenvalue distribution of C_ijk
+    6. Flat vs non-flat comparison -- side-by-side PPL curves with holonomy overlay
+    7. Per-head holonomy heatmap -- which heads learn curvature?
 """
 
 import numpy as np
@@ -231,13 +231,13 @@ def plot_layer_holonomy_profile(
     ax1.set_title(title)
     ax1.set_xticks(range(n_layers))
 
-    # Heatmap: per-layer × per-head
+    # Heatmap: per-layer x per-head
     if head_means is not None:
         im = ax2.imshow(head_means.T, aspect='auto', cmap='YlOrRd',
                         interpolation='nearest')
         ax2.set_xlabel('Layer')
         ax2.set_ylabel('Head')
-        ax2.set_title('Holonomy by Layer × Head')
+        ax2.set_title('Holonomy by Layer x Head')
         ax2.set_xticks(range(n_layers))
         ax2.set_yticks(range(head_means.shape[1]))
         fig.colorbar(im, ax=ax2, label=r'$\|C - I\|_F$', shrink=0.8)

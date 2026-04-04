@@ -116,10 +116,10 @@ def push_gaussian(
     Push Gaussian forward via transport operator Ω.
     
     Transformation:
-        N(μ, Σ) → N(Ω μ, Ω Σ Ωᵀ)
+        N(μ, Σ) -> N(Ω μ, Ω Σ Ωᵀ)
     
     Precision matrix transforms as:
-        Λ = Σ⁻¹ → Λ' = Ω⁻ᵀ Λ Ω⁻¹ (general GL(K))
+        Λ = Σ⁻¹ -> Λ' = Ω⁻ᵀ Λ Ω⁻¹ (general GL(K))
         For orthogonal Ω: Λ' = Ω Λ Ωᵀ (since Ω⁻¹ = Ωᵀ)
     
     Args:
@@ -243,7 +243,7 @@ def push_gaussian(
 
 
 def _is_orthogonal(M: np.ndarray, tol: float = 1e-4) -> bool:
-    """Check if matrix is orthogonal: Mᵀ M ≈ I."""
+    """Check if matrix is orthogonal: Mᵀ M ~= I."""
     K = M.shape[0]
     deviation = np.linalg.norm(M.T @ M - np.eye(K), ord='fro') / K
     return deviation < tol
@@ -307,7 +307,7 @@ def pull_gaussian(
     Pull Gaussian back via inverse transport Ω⁻¹.
 
     Transformation:
-        N(μ, Σ) → N(Ω⁻¹ μ, Ω⁻¹ Σ Ω⁻ᵀ)
+        N(μ, Σ) -> N(Ω⁻¹ μ, Ω⁻¹ Σ Ω⁻ᵀ)
 
     Args:
         gaussian: Pushed distribution
@@ -435,7 +435,7 @@ def compute_kl_transported(
     
     
     
-    # Push j → i
+    # Push j -> i
     q_j_transported = push_gaussian(gaussian_j, Omega_ij, eps=eps)
     
     # Compute KL(i || transported_j)

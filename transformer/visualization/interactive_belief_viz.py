@@ -152,7 +152,7 @@ def plot_belief_space_3d(
     embeddings: np.ndarray,
     labels: List[str],
     categories: List[str],
-    title: str = "Belief Space (μ) — UMAP 3D",
+    title: str = "Belief Space (μ) -- UMAP 3D",
     color_map: Optional[Dict[str, str]] = None,
     marker_sizes: Optional[np.ndarray] = None,
     save_html: Optional[Path] = None,
@@ -365,7 +365,7 @@ def plot_umap_multiscale(
 
     fig.update_layout(
         title=dict(
-            text="UMAP Multi-Scale View (Local → Global)",
+            text="UMAP Multi-Scale View (Local -> Global)",
             font=dict(size=16),
         ),
         height=450,
@@ -388,7 +388,7 @@ def plot_umap_multiscale(
 def plot_silhouette_analysis(
     embeddings: np.ndarray,
     categories: List[str],
-    title: str = "Silhouette Analysis — Semantic Clustering Quality",
+    title: str = "Silhouette Analysis -- Semantic Clustering Quality",
     save_path: Optional[Path] = None,
 ) -> Optional["plt.Figure"]:
     """Per-category silhouette plot showing clustering quality.
@@ -866,12 +866,12 @@ def run_full_visualization(
     """Run the full enhanced visualization pipeline.
 
     Produces:
-    1. 3D interactive UMAP of belief space (mu) — HTML + PNG
-    2. Multi-space comparison: mu vs sigma vs phi — HTML + PNG
-    3. Multi-scale UMAP — HTML + PNG
-    4. Silhouette analysis of semantic clustering — PNG
-    5. HDBSCAN discovered clusters — HTML + PNG
-    6. SHAP feature attribution — PNG
+    1. 3D interactive UMAP of belief space (mu) -- HTML + PNG
+    2. Multi-space comparison: mu vs sigma vs phi -- HTML + PNG
+    3. Multi-scale UMAP -- HTML + PNG
+    4. Silhouette analysis of semantic clustering -- PNG
+    5. HDBSCAN discovered clusters -- HTML + PNG
+    6. SHAP feature attribution -- PNG
 
     Args:
         model: GaugeTransformerLM instance (or None to load from checkpoint).
@@ -962,7 +962,7 @@ def run_full_visualization(
 
     fig_3d = plot_belief_space_3d(
         mu_umap_3d, valid_tokens, valid_categories,
-        title="Belief Space (μ) — UMAP 3D Interactive",
+        title="Belief Space (μ) -- UMAP 3D Interactive",
         save_html=output_dir / "belief_space_umap_3d.html",
         save_png=output_dir / "belief_space_umap_3d.png",
     )
@@ -1023,7 +1023,7 @@ def run_full_visualization(
 
     fig_sil = plot_silhouette_analysis(
         mu_emb, valid_categories,
-        title="Semantic Clustering Quality — Silhouette Analysis (Full-D)",
+        title="Semantic Clustering Quality -- Silhouette Analysis (Full-D)",
         save_path=output_dir / "silhouette_analysis.png",
     )
     if fig_sil is not None:

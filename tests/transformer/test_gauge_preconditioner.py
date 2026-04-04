@@ -17,7 +17,7 @@ import math
 # ---------------------------------------------------------------------------
 
 def _make_glk_generators(K):
-    """Standard E_{ij} basis for gl(K): K² generators."""
+    """Standard E_{ij} basis for gl(K): K^2 generators."""
     n_gen = K * K
     G = torch.zeros(n_gen, K, K)
     idx = 0
@@ -63,7 +63,7 @@ class TestBuildCartanProjector:
         assert torch.allclose(C, C.T, atol=1e-5)
 
     def test_dampening_one_is_identity(self):
-        """sym_dampening=1 → C = I (no preconditioning)."""
+        """sym_dampening=1 -> C = I (no preconditioning)."""
         from transformer.core.gauge_preconditioner import build_cartan_projector
         G = _make_glk_generators(3)
         C = build_cartan_projector(G, sym_dampening=1.0)
@@ -264,7 +264,7 @@ class TestSLKProjection:
         assert torch.allclose(phi_once, phi_twice, atol=1e-6)
 
     def test_det_exp_equals_one(self):
-        """det(exp(projected_phi · G)) ≈ 1 since tr(M)=0 → det(exp(M))=exp(0)=1."""
+        """det(exp(projected_phi · G)) ~= 1 since tr(M)=0 -> det(exp(M))=exp(0)=1."""
         from transformer.core.gauge_preconditioner import (
             build_slk_projector, apply_slk_projection,
         )
@@ -285,5 +285,5 @@ class TestSLKProjection:
         )
         G = _make_so_generators(4)
         trace_vec = build_slk_projector(G)
-        # All so(K) generators are traceless → trace_vec = 0
+        # All so(K) generators are traceless -> trace_vec = 0
         assert torch.allclose(trace_vec, torch.zeros_like(trace_vec), atol=1e-6)

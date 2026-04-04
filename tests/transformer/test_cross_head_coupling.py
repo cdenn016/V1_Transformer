@@ -59,7 +59,7 @@ class TestGeneratorConstruction:
     def test_cross_generators_correct_block(self):
         """Cross generators should have non-zero entries only in the target block."""
         K, H, d = 24, 4, 6
-        couplings = [(1, 3)]  # head 1 → head 3
+        couplings = [(1, 3)]  # head 1 -> head 3
         G = generate_glK_cross_head_generators(K, H, couplings)
 
         n_diag = H * d * d
@@ -203,7 +203,7 @@ class TestModelIntegration:
         assert attn.irrep_dims == [12, 12]
 
     def test_asymmetric_coupling(self, base_config):
-        """Asymmetric coupling: only head 0→2."""
+        """Asymmetric coupling: only head 0->2."""
         from transformer.core.model import GaugeTransformerLM
         base_config['cross_couplings'] = [(0, 2)]
         model = GaugeTransformerLM(base_config)

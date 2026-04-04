@@ -9,7 +9,7 @@ SO(3) / SO(K) Generators (Default):
 ----------------------------------
 For SO(3), we use the spin-ℓ irreducible representations:
 - Dimension: K = 2ℓ + 1 (always odd)
-- Generators: Real skew-symmetric K×K matrices
+- Generators: Real skew-symmetric KxK matrices
 - Commutation: [G_x, G_y] = G_z (cyclic)
 - Casimir eigenvalue: ℓ(ℓ+1)
 
@@ -21,13 +21,13 @@ The VFE is invariant under GL(K) gauge transformations, not just SO(K)!
 This means:
 - Transport operators Ω = exp(φ·G) only need to be INVERTIBLE, not orthogonal
 - The current SO(K) generators define a subalgebra of gl(K)
-- For full GL(K) flexibility, you can extend to K² generators (full gl(K) basis)
+- For full GL(K) flexibility, you can extend to K^2 generators (full gl(K) basis)
 
-Important: exp: gl(K,ℝ) → GL(K,ℝ) is NOT surjective.
+Important: exp: gl(K,ℝ) -> GL(K,ℝ) is NOT surjective.
 - det(exp(X)) = exp(tr(X)) > 0, so exp only reaches GL⁺(K) (identity component)
 - Even within GL⁺(K), not every matrix is a single exponential (Culver 1966)
 - The product Ω_ij = exp(X_i)·exp(-X_j) does cover all of GL⁺(K)
-- For SO(K), exp IS surjective (compact connected group) — no issues
+- For SO(K), exp IS surjective (compact connected group) -- no issues
 
 For most applications, the SO(K) subalgebra generators suffice:
 - They provide a natural parameterization with K(K-1)/2 or 3 parameters
@@ -35,8 +35,8 @@ For most applications, the SO(K) subalgebra generators suffice:
 - exp(skew-symmetric) is always orthogonal (and surjects onto SO(K))
 
 To use full GL(K), you would need to:
-1. Generate K² generators spanning gl(K) (e.g., E_ij basis)
-2. Use K² parameters in phi instead of 3 or K(K-1)/2
+1. Generate K^2 generators spanning gl(K) (e.g., E_ij basis)
+2. Use K^2 parameters in phi instead of 3 or K(K-1)/2
 3. Remove any skew-symmetry constraints in transport.py
 """
 
@@ -74,7 +74,7 @@ def generate_so3_generators(
     Properties:
         - G[a] is real skew-symmetric: G[a]ᵀ = -G[a]
         - Commutation: [G_x, G_y] = G_z (cyclic)
-        - Casimir: -Σ_a G_a² = ℓ(ℓ+1) I where ℓ = (K-1)/2
+        - Casimir: -Σ_a G_a^2 = ℓ(ℓ+1) I where ℓ = (K-1)/2
 
     Examples:
         >>> # Spin-1 (3D, ℓ=1)
@@ -142,7 +142,7 @@ def _build_so3_irrep_generators(ell: int) -> np.ndarray:
     Algorithm:
     ---------
     1. Construct complex spherical harmonic operators J_x, J_y, J_z
-    2. Build unitary transformation S: spherical → tesseral
+    2. Build unitary transformation S: spherical -> tesseral
     3. Transform: G_a = Re(S J_a S†) and enforce skew-symmetry
 
     Args:
@@ -160,7 +160,7 @@ def _build_so3_irrep_generators(ell: int) -> np.ndarray:
     J_z = np.zeros((K, K), dtype=np.complex128)
 
     for m in range(-ell, ell + 1):
-        i = m + ell  # Index: m ∈ [-ℓ, ℓ] → i ∈ [0, K-1]
+        i = m + ell  # Index: m ∈ [-ℓ, ℓ] -> i ∈ [0, K-1]
 
         # J_z is diagonal
         J_z[i, i] = m
@@ -179,8 +179,8 @@ def _build_so3_irrep_generators(ell: int) -> np.ndarray:
     J_x = (J_plus + J_minus) / 2.0
     J_y = (J_plus - J_minus) / (2.0j)
 
-    # ========== Step 2: Spherical → Tesseral transformation ==========
-    # S is unitary, transforms |ℓ,m⟩ → tesseral basis
+    # ========== Step 2: Spherical -> Tesseral transformation ==========
+    # S is unitary, transforms |ℓ,m⟩ -> tesseral basis
     S = _build_tesseral_transform(ell)
     S_inv = S.conj().T
 
@@ -262,7 +262,7 @@ def _validate_so3_generators(
     ------
     1. Skew-symmetry: G[a]ᵀ = -G[a]
     2. Commutation: [G_x, G_y] = G_z (cyclic)
-    3. Casimir: C_2 = -Σ G_a² = ℓ(ℓ+1) I
+    3. Casimir: C_2 = -Σ G_a^2 = ℓ(ℓ+1) I
 
     Args:
         G: (3, K, K) generators
@@ -308,7 +308,7 @@ def _validate_so3_generators(
     max_error = max(error_xy, error_yz, error_zx)
 
     # Scale tolerance by generator norm squared for commutator checks
-    # (matrix products accumulate errors proportional to scale²)
+    # (matrix products accumulate errors proportional to scale^2)
     scale = max(np.linalg.norm(G64[a], ord='fro') for a in range(3))
     threshold = eps * max(scale * scale, 1.0)
 
@@ -342,7 +342,7 @@ def _validate_so3_generators(
         raise RuntimeError(
             "Casimir operator check failed:\n"
             f"  Expected: {casimir_expected}\n"
-            f"  Got: {casimir_value:.6f} ± {casimir_spread:.3e}\n"
+            f"  Got: {casimir_value:.6f} +/- {casimir_spread:.3e}\n"
             f"  Error: {casimir_error:.3e}"
         )
 
@@ -383,11 +383,11 @@ def generate_multi_irrep_generators(
         eps: Tolerance for validation
 
     Returns:
-        G: Block-diagonal generators, shape (3, K, K), where K = Σ mult × dim
+        G: Block-diagonal generators, shape (3, K, K), where K = Σ mult x dim
            Each G[a] has blocks corresponding to each irrep copy
 
     Example:
-        >>> # K = 32×1 + 15×3 + 10×5 = 32 + 45 + 50 = 127
+        >>> # K = 32x1 + 15x3 + 10x5 = 32 + 45 + 50 = 127
         >>> spec = [('ℓ0', 32, 1), ('ℓ1', 15, 3), ('ℓ2', 10, 5)]
         >>> G = generate_multi_irrep_generators(spec)
         >>> G.shape
@@ -422,7 +422,7 @@ def generate_multi_irrep_generators(
     for label, mult, dim in irrep_spec:
         if dim == 1:
             # Scalars (ℓ=0): generator is zero
-            # Skip mult×1 dimensions
+            # Skip multx1 dimensions
             idx += mult * dim
         else:
             # Higher spin: get generators for this irrep
@@ -488,7 +488,7 @@ def _validate_block_diagonal_generators(
     max_error = max(error_xy, error_yz, error_zx)
 
     # Scale tolerance by generator norm squared for commutator checks
-    # (matrix products accumulate errors proportional to scale²)
+    # (matrix products accumulate errors proportional to scale^2)
     scale = max(np.linalg.norm(G64[a], ord='fro') for a in range(3))
     threshold = eps * max(scale * scale, 1.0)
 
@@ -536,8 +536,8 @@ def generate_soN_generators(
     """
     Generate SO(N) Lie algebra generators in the fundamental (N-dimensional) representation.
 
-    SO(N) is the group of N×N orthogonal matrices with determinant 1.
-    Its Lie algebra so(N) consists of N×N skew-symmetric matrices.
+    SO(N) is the group of NxN orthogonal matrices with determinant 1.
+    Its Lie algebra so(N) consists of NxN skew-symmetric matrices.
 
     The Lie algebra has dimension N(N-1)/2, with basis elements L_{ij} for i < j:
         (L_{ij})_{kl} = δ_{ik}δ_{jl} - δ_{il}δ_{jk}
@@ -555,17 +555,17 @@ def generate_soN_generators(
            G[a] is the a-th generator, indexed by pairs (i,j) with i < j
 
     Examples:
-        >>> # SO(3) - 3 generators, 3×3 matrices
+        >>> # SO(3) - 3 generators, 3x3 matrices
         >>> G = generate_soN_generators(3)
         >>> G.shape
         (3, 3, 3)
 
-        >>> # SO(5) - 10 generators, 5×5 matrices
+        >>> # SO(5) - 10 generators, 5x5 matrices
         >>> G = generate_soN_generators(5)
         >>> G.shape
         (10, 5, 5)
 
-        >>> # SO(8) - 28 generators, 8×8 matrices
+        >>> # SO(8) - 28 generators, 8x8 matrices
         >>> G = generate_soN_generators(8)
         >>> G.shape
         (28, 8, 8)
@@ -670,10 +670,10 @@ def generate_glK_generators(
     include_identity: bool = True,
 ) -> np.ndarray:
     """
-    Generate gl(K) Lie algebra generators (full K² basis).
+    Generate gl(K) Lie algebra generators (full K^2 basis).
 
-    gl(K) is the Lie algebra of all K×K matrices. Unlike so(K) which has
-    K(K-1)/2 skew-symmetric generators, gl(K) has K² generators spanning
+    gl(K) is the Lie algebra of all KxK matrices. Unlike so(K) which has
+    K(K-1)/2 skew-symmetric generators, gl(K) has K^2 generators spanning
     all matrices.
 
     The standard basis is E_ij (matrix with 1 at position (i,j), 0 elsewhere).
@@ -684,21 +684,21 @@ def generate_glK_generators(
 
     Args:
         K: Matrix dimension
-        include_identity: If True, include trace component (K² generators).
-                         If False, use sl(K) traceless basis (K²-1 generators).
+        include_identity: If True, include trace component (K^2 generators).
+                         If False, use sl(K) traceless basis (K^2-1 generators).
                          Default True for full gl(K).
 
     Returns:
-        G: Generators array, shape (K², K, K) or (K²-1, K, K), float32
+        G: Generators array, shape (K^2, K, K) or (K^2-1, K, K), float32
            G[a] is the a-th generator
 
     Examples:
-        >>> # gl(3) - 9 generators, 3×3 matrices
+        >>> # gl(3) - 9 generators, 3x3 matrices
         >>> G = generate_glK_generators(3)
         >>> G.shape
         (9, 3, 3)
 
-        >>> # gl(5) - 25 generators, 5×5 matrices
+        >>> # gl(5) - 25 generators, 5x5 matrices
         >>> G = generate_glK_generators(5)
         >>> G.shape
         (25, 5, 5)
@@ -709,17 +709,17 @@ def generate_glK_generators(
         >>> Omega = scipy.linalg.expm(X)  # GL(5) matrix
 
     Properties:
-        - G[a] spans all K×K matrices (not just skew-symmetric)
+        - G[a] spans all KxK matrices (not just skew-symmetric)
         - exp(φ·G) ∈ GL⁺(K) for all φ (det > 0, not necessarily orthogonal)
         - Includes both symmetric and antisymmetric directions
-        - More parameters than so(K): K² vs K(K-1)/2
+        - More parameters than so(K): K^2 vs K(K-1)/2
 
     Comparison:
         | Algebra | Generators | K=10 params | Constraint on exp(X)          |
         |---------|------------|-------------|-------------------------------|
         | so(K)   | K(K-1)/2   | 45          | Orthogonal (Ωᵀ Ω = I)        |
-        | sl(K)   | K²-1       | 99          | det = 1                       |
-        | gl(K)   | K²         | 100         | det > 0 (identity component)  |
+        | sl(K)   | K^2-1       | 99          | det = 1                       |
+        | gl(K)   | K^2         | 100         | det > 0 (identity component)  |
 
     Note on exp surjectivity:
         The VFE is invariant under the full GL(K) (including det < 0), but
@@ -774,8 +774,8 @@ def generate_glK_generators_split(
     Generate gl(K) generators split into symmetric and antisymmetric parts.
 
     This is useful for understanding the structure:
-    - Antisymmetric part (K(K-1)/2 generators) → so(K) subalgebra → orthogonal
-    - Symmetric part (K(K+1)/2 generators) → scaling/shearing directions
+    - Antisymmetric part (K(K-1)/2 generators) -> so(K) subalgebra -> orthogonal
+    - Symmetric part (K(K+1)/2 generators) -> scaling/shearing directions
 
     Args:
         K: Matrix dimension
@@ -791,7 +791,7 @@ def generate_glK_generators_split(
         (10, 5, 5)
         >>> G_sym.shape  # symmetric part
         (15, 5, 5)
-        >>> # Combined: 10 + 15 = 25 = 5²
+        >>> # Combined: 10 + 15 = 25 = 5^2
     """
     n_antisym = K * (K - 1) // 2
     n_sym = K * (K + 1) // 2
@@ -853,15 +853,15 @@ def generate_glK_multihead_generators(
         include_identity: If True, include trace component per head
 
     Returns:
-        G: Block-diagonal generators, shape (n_heads * d_head², K, K)
-           Each block G[h*d_head²:(h+1)*d_head², ...] contains the gl(d_head)
-           generators for head h, embedded in the full K×K space.
+        G: Block-diagonal generators, shape (n_heads * d_head^2, K, K)
+           Each block G[h*d_head^2:(h+1)*d_head^2, ...] contains the gl(d_head)
+           generators for head h, embedded in the full KxK space.
 
     Example:
-        >>> # 30-dim embedding with 5 heads → each head has GL(6) structure
+        >>> # 30-dim embedding with 5 heads -> each head has GL(6) structure
         >>> G = generate_glK_multihead_generators(30, n_heads=5)
         >>> G.shape
-        (180, 30, 30)  # 5 heads × 6² generators = 180 total
+        (180, 30, 30)  # 5 heads x 6^2 generators = 180 total
 
         >>> # Each head's generators are block-diagonal
         >>> # Head 0 acts on dims [0:6], Head 1 on [6:12], etc.
@@ -869,11 +869,11 @@ def generate_glK_multihead_generators(
     Comparison with single-head GL(K):
         | Mode        | Generators | K=30, H=5 | Parameters (φ) |
         |-------------|------------|-----------|----------------|
-        | GL(K)       | K²         | 900       | 900            |
-        | GL(K) MH    | H × d²     | 180       | 180            |
+        | GL(K)       | K^2         | 900       | 900            |
+        | GL(K) MH    | H x d^2     | 180       | 180            |
 
     Note:
-        Multi-head reduces parameters from K² to H×(K/H)² = K²/H while
+        Multi-head reduces parameters from K^2 to Hx(K/H)^2 = K^2/H while
         preserving the key property: each head learns its optimal gauge.
         The block-diagonal structure means heads don't interfere.
     """
@@ -902,7 +902,7 @@ def generate_glK_multihead_generators(
         idx = 0
         for i in range(d_head):
             for j in range(d_head):
-                # E_ij in the full K×K space, restricted to this head's block
+                # E_ij in the full KxK space, restricted to this head's block
                 G[gen_offset + idx, start + i, start + j] = 1.0
                 idx += 1
 
@@ -922,20 +922,20 @@ def generate_glK_cross_head_generators(
 
     The generator set consists of:
       1. Diagonal blocks: gl(d_head) per head  (same as multihead)
-      2. Off-diagonal blocks: E_ij spanning (head_a → head_b) for each (a,b) pair
+      2. Off-diagonal blocks: E_ij spanning (head_a -> head_b) for each (a,b) pair
 
-    For a coupling pair (a, b), we add d_head² generators:
+    For a coupling pair (a, b), we add d_head^2 generators:
       G[start + i*d_head + j]_{a_start+i, b_start+j} = 1
 
     These are the elementary matrices that connect head a's subspace to head b's.
     The resulting transport Ω = exp(φ·G) will have non-zero blocks at (a,a), (b,b),
-    AND (a,b), (b,a) — heads a and b can now exchange information through gauge
+    AND (a,b), (b,a) -- heads a and b can now exchange information through gauge
     transport.
 
     For the KL computation we merge coupled heads into super-blocks:
       - Heads {a, b} that appear in any coupling pair are grouped together
       - Their combined subspace becomes a single block of dimension Σ d_head
-      - The existing block-diagonal KL code handles this with no changes —
+      - The existing block-diagonal KL code handles this with no changes --
         the super-block's generators are simply larger
 
     Args:
@@ -943,12 +943,12 @@ def generate_glK_cross_head_generators(
         n_heads: Number of attention heads
         cross_couplings: List of (head_a, head_b) pairs to couple.
             Must have a != b and 0 <= a, b < n_heads.
-            Pairs are treated as directed: (a,b) adds generators a→b.
+            Pairs are treated as directed: (a,b) adds generators a->b.
             For symmetric coupling, include both (a,b) and (b,a).
 
     Returns:
         G: Generators, shape (n_total_gen, K, K) where
-           n_total_gen = n_heads * d_head² + len(cross_couplings) * d_head²
+           n_total_gen = n_heads * d_head^2 + len(cross_couplings) * d_head^2
 
     Example:
         >>> # 24-dim embedding, 4 heads of dim 6, couple heads 0↔1 and 2↔3
@@ -979,7 +979,7 @@ def generate_glK_cross_head_generators(
     # 2. Off-diagonal blocks for each coupling pair
     for pair_idx, (a, b) in enumerate(cross_couplings):
         if a == b:
-            raise ValueError(f"Self-coupling ({a},{a}) not allowed — already in diagonal")
+            raise ValueError(f"Self-coupling ({a},{a}) not allowed -- already in diagonal")
         if not (0 <= a < n_heads and 0 <= b < n_heads):
             raise ValueError(f"Head indices ({a},{b}) out of range [0, {n_heads})")
 
@@ -1020,7 +1020,7 @@ def merge_coupled_heads(
         super_block_dims: List of block dimensions for the merged structure.
             Sum equals n_heads * d_head = K.
             Example: n_heads=4, d_head=6, couplings=[(0,1),(1,0)]
-                     → [12, 6, 6] (heads 0,1 merged; heads 2,3 separate)
+                     -> [12, 6, 6] (heads 0,1 merged; heads 2,3 separate)
         super_block_head_groups: List of lists, each containing the head
             indices in that super-block, in order.
             Example: [[0, 1], [2], [3]]
@@ -1120,20 +1120,20 @@ def generate_multi_irrep_soN_generators(
     Supported irrep types:
         - 'scalar' (dim=1): Invariant, generators act as zero
         - 'fund' (dim=N): Fundamental/vector representation
-        - 'wedge2' (dim=N(N-1)/2): Antisymmetric 2-tensor ∧²V
-        - 'sym2' (dim=N(N+1)/2-1): Symmetric traceless 2-tensor Sym²₀V
+        - 'wedge2' (dim=N(N-1)/2): Antisymmetric 2-tensor ∧^2V
+        - 'sym2' (dim=N(N+1)/2-1): Symmetric traceless 2-tensor Sym^2₀V
 
     Args:
         irrep_spec: List of (label, multiplicity, dim) tuples.
             Example: [('scalar', 10, 1), ('fund', 8, N), ('wedge2', 4, N*(N-1)//2)]
-            Total dimension K = Σ mult × dim
+            Total dimension K = Σ mult x dim
         N: The gauge group dimension (SO(N))
         validate: If True, verify the resulting generators
         eps: Tolerance for validation
 
     Returns:
         G: Block-diagonal generators, shape (N(N-1)/2, K, K)
-           where K = Σ mult × dim
+           where K = Σ mult x dim
 
     Example:
         >>> # SO(5) with mixed irreps
@@ -1185,9 +1185,9 @@ def generate_multi_irrep_soN_generators(
             elif dim == N:
                 pass  # Fundamental
             elif dim == N * (N - 1) // 2:
-                pass  # ∧²V
+                pass  # ∧^2V
             elif dim == N * (N + 1) // 2 - 1:
-                pass  # Sym²₀V
+                pass  # Sym^2₀V
             else:
                 raise ValueError(
                     f"Irrep '{label}' has dimension {dim}, which doesn't match any "
@@ -1228,7 +1228,7 @@ def generate_multi_irrep_soN_generators(
                 idx += dim
 
         elif dim == N * (N - 1) // 2:
-            # ∧²V (antisymmetric 2-tensor)
+            # ∧^2V (antisymmetric 2-tensor)
             if G_wedge2 is None:
                 G_wedge2 = generate_wedge2_generators(N, validate=False)
             for _ in range(mult):
@@ -1236,7 +1236,7 @@ def generate_multi_irrep_soN_generators(
                 idx += dim
 
         elif dim == N * (N + 1) // 2 - 1:
-            # Sym²₀V (symmetric traceless 2-tensor)
+            # Sym^2₀V (symmetric traceless 2-tensor)
             if G_sym2 is None:
                 G_sym2 = generate_sym2_traceless_generators(N, validate=False)
             for _ in range(mult):
@@ -1259,7 +1259,7 @@ def generate_multi_irrep_soN_generators(
 # =============================================================================
 
 def _wedge2_index_to_pair(idx: int, N: int) -> tuple:
-    """Map linear index to (i,j) pair with i < j for ∧²V basis."""
+    """Map linear index to (i,j) pair with i < j for ∧^2V basis."""
     i = 0
     count = 0
     while count + (N - 1 - i) <= idx:
@@ -1270,7 +1270,7 @@ def _wedge2_index_to_pair(idx: int, N: int) -> tuple:
 
 
 def _wedge2_pair_to_index(i: int, j: int, N: int) -> int:
-    """Map (i,j) pair with i < j to linear index for ∧²V basis."""
+    """Map (i,j) pair with i < j to linear index for ∧^2V basis."""
     # Sum of (N-1) + (N-2) + ... + (N-i) = i*N - i*(i+1)/2
     return i * N - i * (i + 1) // 2 + (j - i - 1)
 
@@ -1282,9 +1282,9 @@ def generate_wedge2_generators(
     eps: float = 1e-6,
 ) -> np.ndarray:
     """
-    Generate SO(N) generators for ∧²V (antisymmetric 2-tensor representation).
+    Generate SO(N) generators for ∧^2V (antisymmetric 2-tensor representation).
 
-    The exterior square ∧²V is the space of antisymmetric N×N matrices.
+    The exterior square ∧^2V is the space of antisymmetric NxN matrices.
     Elements can be thought of as "bivectors" or "angular momentum" components.
 
     Dimension: N(N-1)/2
@@ -1307,7 +1307,7 @@ def generate_wedge2_generators(
     Example:
         >>> G = generate_wedge2_generators(5)
         >>> G.shape
-        (10, 10, 10)  # SO(5) has 10 generators, ∧²(R^5) has dim 10
+        (10, 10, 10)  # SO(5) has 10 generators, ∧^2(R^5) has dim 10
 
     Properties:
         - Different Casimir eigenvalue than fundamental
@@ -1323,8 +1323,8 @@ def generate_wedge2_generators(
     # Get fundamental generators
     G_fund = generate_soN_generators(N, validate=False)  # (n_gen, N, N)
 
-    # Build generators for ∧²V representation
-    # Action: X → [G_a, X] where X is antisymmetric N×N matrix
+    # Build generators for ∧^2V representation
+    # Action: X -> [G_a, X] where X is antisymmetric NxN matrix
     G_wedge2 = np.zeros((n_gen, dim, dim), dtype=np.float32)
 
     for a in range(n_gen):
@@ -1341,7 +1341,7 @@ def generate_wedge2_generators(
             # Commutator [G_a, X] = G_a @ X - X @ G_a
             comm = G_a @ X - X @ G_a  # Still antisymmetric
 
-            # Express result in ∧² basis
+            # Express result in ∧^2 basis
             for q in range(dim):
                 k, l = _wedge2_index_to_pair(q, N)
                 # The coefficient is the (k,l) entry (upper triangle)
@@ -1359,7 +1359,7 @@ def _validate_wedge2_generators(
     *,
     eps: float = 1e-6,
 ) -> None:
-    """Validate ∧²V generators."""
+    """Validate ∧^2V generators."""
     n_gen, dim, _ = G.shape
 
     expected_n_gen = N * (N - 1) // 2
@@ -1375,18 +1375,18 @@ def _validate_wedge2_generators(
         skew_error = np.linalg.norm(G[a] + G[a].T, ord='fro')
         if skew_error > eps:
             raise RuntimeError(
-                f"∧² generator G[{a}] not skew-symmetric: ||G + Gᵀ|| = {skew_error:.3e}"
+                f"∧^2 generator G[{a}] not skew-symmetric: ||G + Gᵀ|| = {skew_error:.3e}"
             )
 
     # Check sample commutation relations (they should form so(N) algebra)
     if n_gen >= 3:
         comm_01 = G[0] @ G[1] - G[1] @ G[0]
         if np.linalg.norm(comm_01 + comm_01.T, ord='fro') > eps:
-            raise RuntimeError("Commutator [G_0, G_1] in ∧² rep not skew-symmetric")
+            raise RuntimeError("Commutator [G_0, G_1] in ∧^2 rep not skew-symmetric")
 
 
 def _sym2_traceless_basis_size(N: int) -> int:
-    """Dimension of Sym²₀V (symmetric traceless 2-tensors)."""
+    """Dimension of Sym^2₀V (symmetric traceless 2-tensors)."""
     return N * (N + 1) // 2 - 1
 
 
@@ -1417,7 +1417,7 @@ def _sym2_traceless_index_to_components(idx: int, N: int) -> tuple:
 
 def _build_sym2_traceless_basis_element(idx: int, N: int) -> np.ndarray:
     """
-    Build the idx-th basis element of Sym²₀V as an N×N matrix.
+    Build the idx-th basis element of Sym^2₀V as an NxN matrix.
 
     The basis is orthonormal under the Frobenius inner product.
     """
@@ -1448,9 +1448,9 @@ def generate_sym2_traceless_generators(
     eps: float = 1e-6,
 ) -> np.ndarray:
     """
-    Generate SO(N) generators for Sym²₀V (symmetric traceless 2-tensor representation).
+    Generate SO(N) generators for Sym^2₀V (symmetric traceless 2-tensor representation).
 
-    The symmetric traceless square Sym²₀V is the space of symmetric N×N matrices
+    The symmetric traceless square Sym^2₀V is the space of symmetric NxN matrices
     with trace zero. These represent "quadrupolar" or "strain-like" degrees of freedom.
 
     Dimension: N(N+1)/2 - 1
@@ -1473,10 +1473,10 @@ def generate_sym2_traceless_generators(
     Example:
         >>> G = generate_sym2_traceless_generators(5)
         >>> G.shape
-        (10, 14, 14)  # SO(5) has 10 generators, Sym²₀(R^5) has dim 14
+        (10, 14, 14)  # SO(5) has 10 generators, Sym^2₀(R^5) has dim 14
 
     Properties:
-        - Different Casimir eigenvalue than fundamental and ∧²
+        - Different Casimir eigenvalue than fundamental and ∧^2
         - Transforms as X' = O X Oᵀ under O ∈ SO(N)
         - Captures "quadrupolar" or "deformation" degrees of freedom
     """
@@ -1492,8 +1492,8 @@ def generate_sym2_traceless_generators(
     # Pre-build basis elements
     basis = [_build_sym2_traceless_basis_element(p, N) for p in range(dim)]
 
-    # Build generators for Sym²₀V representation
-    # Action: X → [G_a, X] where X is symmetric traceless N×N matrix
+    # Build generators for Sym^2₀V representation
+    # Action: X -> [G_a, X] where X is symmetric traceless NxN matrix
     G_sym2 = np.zeros((n_gen, dim, dim), dtype=np.float32)
 
     for a in range(n_gen):
@@ -1506,7 +1506,7 @@ def generate_sym2_traceless_generators(
             # This is symmetric (and traceless) when G is skew and X is symmetric
             comm = G_a @ X - X @ G_a
 
-            # Express result in Sym²₀ basis via inner product
+            # Express result in Sym^2₀ basis via inner product
             for q in range(dim):
                 Y = basis[q]
                 # Inner product: tr(Yᵀ comm) = tr(Y comm) since both symmetric
@@ -1524,7 +1524,7 @@ def _validate_sym2_traceless_generators(
     *,
     eps: float = 1e-6,
 ) -> None:
-    """Validate Sym²₀V generators."""
+    """Validate Sym^2₀V generators."""
     n_gen, dim, _ = G.shape
 
     expected_n_gen = N * (N - 1) // 2
@@ -1540,14 +1540,14 @@ def _validate_sym2_traceless_generators(
         skew_error = np.linalg.norm(G[a] + G[a].T, ord='fro')
         if skew_error > eps:
             raise RuntimeError(
-                f"Sym²₀ generator G[{a}] not skew-symmetric: ||G + Gᵀ|| = {skew_error:.3e}"
+                f"Sym^2₀ generator G[{a}] not skew-symmetric: ||G + Gᵀ|| = {skew_error:.3e}"
             )
 
     # Check sample commutation
     if n_gen >= 3:
         comm_01 = G[0] @ G[1] - G[1] @ G[0]
         if np.linalg.norm(comm_01 + comm_01.T, ord='fro') > eps:
-            raise RuntimeError("Commutator [G_0, G_1] in Sym²₀ rep not skew-symmetric")
+            raise RuntimeError("Commutator [G_0, G_1] in Sym^2₀ rep not skew-symmetric")
 
 
 def _validate_block_diagonal_soN_generators(
@@ -1623,9 +1623,9 @@ def _validate_block_diagonal_soN_generators(
 
 def _get_soN_gauge_generators(n_gen: int, device, dtype) -> 'torch.Tensor':
     """
-    Get N×N generators for SO(N) gauge group based on n_gen.
+    Get NxN generators for SO(N) gauge group based on n_gen.
 
-    These are the canonical so(N) basis elements L_{ij}, NOT the K×K transport generators.
+    These are the canonical so(N) basis elements L_{ij}, NOT the KxK transport generators.
     Used internally for BCH composition.
     """
     import torch
@@ -1666,7 +1666,7 @@ def soN_bracket_torch(
         phi1: First Lie algebra element coordinates (..., n_gen)
         phi2: Second Lie algebra element coordinates (..., n_gen)
         generators: Lie algebra generators (n_gen, K, K) - used only for n_gen count
-                   The actual N×N generators are computed internally.
+                   The actual NxN generators are computed internally.
 
     Returns:
         bracket_coords: Coordinates of [φ₁·G, φ₂·G] in generator basis (..., n_gen)
@@ -1675,10 +1675,10 @@ def soN_bracket_torch(
 
     n_gen = generators.shape[0]
 
-    # Get proper N×N generators for the gauge group (not K×K transport generators!)
+    # Get proper NxN generators for the gauge group (not KxK transport generators!)
     gauge_gens = _get_soN_gauge_generators(n_gen, phi1.device, phi1.dtype)
 
-    # Build skew-symmetric matrices using N×N gauge generators
+    # Build skew-symmetric matrices using NxN gauge generators
     A1 = torch.einsum('...a,aij->...ij', phi1, gauge_gens)  # (..., N, N)
     A2 = torch.einsum('...a,aij->...ij', phi2, gauge_gens)  # (..., N, N)
 
@@ -1827,9 +1827,9 @@ def retract_soN_torch(
 
     # Trust region: clip ||update|| to constant trust_radius.
     # The Lie algebra so(N) is a flat vector space with the Killing-form
-    # metric, so the Frobenius norm IS the intrinsic metric — the correct
+    # metric, so the Frobenius norm IS the intrinsic metric -- the correct
     # trust region is a constant-radius ball, not phi-relative. A phi-relative
-    # radius creates an unprincipled feedback loop (small phi → small trust →
+    # radius creates an unprincipled feedback loop (small phi -> small trust ->
     # slow escape from identity) and has no Riemannian justification. This
     # matches the GL(K) retraction which already uses constant trust radius.
     update_norm = torch.norm(update, dim=-1, keepdim=True)
@@ -1856,8 +1856,8 @@ def retract_soN_torch(
 # GL(K) Lie Algebra Operations (full general linear group)
 # =============================================================================
 #
-# GL(K) is the group of invertible K×K matrices with Lie algebra gl(K).
-# gl(K) = all K×K matrices with Lie bracket [A,B] = AB - BA.
+# GL(K) is the group of invertible KxK matrices with Lie algebra gl(K).
+# gl(K) = all KxK matrices with Lie bracket [A,B] = AB - BA.
 #
 # Key difference from so(K): gl(K) includes non-skew-symmetric matrices,
 # so exp(φ·G) produces general invertible matrices, not just orthogonal ones.
@@ -1872,22 +1872,22 @@ def _get_glK_gauge_generators(
     dtype: 'torch.dtype',
 ) -> 'torch.Tensor':
     """
-    Get K×K generators for GL(K) gauge group based on n_gen = K².
+    Get KxK generators for GL(K) gauge group based on n_gen = K^2.
 
     Uses elementary matrices E_ij (1 at position (i,j), 0 elsewhere).
 
     Args:
-        n_gen: Number of generators (must be a perfect square K²)
+        n_gen: Number of generators (must be a perfect square K^2)
         device: PyTorch device
         dtype: PyTorch dtype
 
     Returns:
-        generators: (K², K, K) tensor of elementary matrices
+        generators: (K^2, K, K) tensor of elementary matrices
     """
     import torch
     import math
 
-    # Infer K from n_gen = K²
+    # Infer K from n_gen = K^2
     K = int(math.sqrt(n_gen))
 
     if K * K != n_gen:
@@ -1912,11 +1912,11 @@ def lie_bracket_general_torch(
     """
     General Lie bracket [φ₁·G, φ₂·G] for ANY Lie algebra with given generators.
 
-    Works for SO(3), SO(N), GL(K), and multi-head GL(K) — no structural
+    Works for SO(3), SO(N), GL(K), and multi-head GL(K) -- no structural
     assumptions about the generators. Uses the matrix commutator in the
     transport representation and projects back to generator coordinates.
 
-    The projection uses: φ_a = tr(G_a^T · bracket) / ||G_a||²_F
+    The projection uses: φ_a = tr(G_a^T · bracket) / ||G_a||^2_F
     which is exact for orthogonal generators (all standard bases).
 
     Args:
@@ -1929,7 +1929,7 @@ def lie_bracket_general_torch(
     """
     import torch
 
-    # Build K×K matrices using transport generators
+    # Build KxK matrices using transport generators
     A1 = torch.einsum('...a,aij->...ij', phi1, generators)  # (..., K, K)
     A2 = torch.einsum('...a,aij->...ij', phi2, generators)  # (..., K, K)
 
@@ -1937,7 +1937,7 @@ def lie_bracket_general_torch(
     bracket = A1 @ A2 - A2 @ A1  # (..., K, K)
 
     # Project back to generator coordinates
-    # For orthogonal generators: φ_a = <G_a, bracket>_F / ||G_a||²_F
+    # For orthogonal generators: φ_a = <G_a, bracket>_F / ||G_a||^2_F
     inner = torch.einsum('aij,...ij->...a', generators, bracket)  # (..., n_gen)
     gen_norms_sq = (generators * generators).sum(dim=(-2, -1))   # (n_gen,)
     bracket_coords = inner / gen_norms_sq.clamp(min=1e-12)
@@ -1997,7 +1997,7 @@ def glK_bracket_torch(
         phi2: Second Lie algebra element coordinates (..., n_gen)
         generators: Transport generators (n_gen, K, K). Used directly to build
             matrices and extract coordinates (supports cross-head coupling where
-            n_gen ≠ K²).
+            n_gen ≠ K^2).
 
     Returns:
         bracket_coords: Coordinates of [φ₁·G, φ₂·G] in generator basis (..., n_gen)
@@ -2028,7 +2028,7 @@ def extract_glK_coords_torch(
     for each generator G_a. When generators are orthonormal elementary matrices
     (standard GL(K)), this reduces to reading off matrix elements.
 
-    For cross-head coupling generators (n_gen ≠ K²), uses inner product
+    For cross-head coupling generators (n_gen ≠ K^2), uses inner product
     projection onto the generator basis.
 
     Args:
@@ -2043,7 +2043,7 @@ def extract_glK_coords_torch(
     K = A.shape[-1]
     n_gen = generators.shape[0]
 
-    # Fast path: standard GL(K) with n_gen = K² elementary matrices
+    # Fast path: standard GL(K) with n_gen = K^2 elementary matrices
     if n_gen == K * K:
         batch_shape = A.shape[:-2]
         return A.reshape(batch_shape + (K * K,))
@@ -2052,13 +2052,13 @@ def extract_glK_coords_torch(
     # φ_a = tr(G_a^T · A) / tr(G_a^T · G_a)
     # generators: (n_gen, K, K), A: (..., K, K)
     A_flat = A.reshape(-1, K, K)  # (B, K, K)
-    G_flat = generators.reshape(n_gen, K * K)  # (n_gen, K²)
-    A_flat2 = A_flat.reshape(-1, K * K)  # (B, K²)
+    G_flat = generators.reshape(n_gen, K * K)  # (n_gen, K^2)
+    A_flat2 = A_flat.reshape(-1, K * K)  # (B, K^2)
 
     # Numerator: tr(G_a^T A) = sum_{ij} G_a[i,j] * A[i,j]
     coords = A_flat2 @ G_flat.T  # (B, n_gen)
 
-    # Denominator: tr(G_a^T G_a) = ||G_a||²_F
+    # Denominator: tr(G_a^T G_a) = ||G_a||^2_F
     norms_sq = (G_flat * G_flat).sum(dim=-1)  # (n_gen,)
     coords = coords / norms_sq.unsqueeze(0).clamp(min=1e-12)
 
@@ -2079,7 +2079,7 @@ def glK_compose_bch_torch(
     For gl(K), the Lie bracket is: [A, B] = AB - BA (matrix commutator)
 
     Args:
-        phi1: First gl(K) element (..., n_gen) where n_gen = K²
+        phi1: First gl(K) element (..., n_gen) where n_gen = K^2
         phi2: Second gl(K) element (..., n_gen)
         generators: Transport generators (n_gen, K, K); only n_gen is used
         order: BCH expansion order (0=addition, 1=first correction, 2=second)
@@ -2110,7 +2110,7 @@ def retract_glK_torch(
     generators: 'torch.Tensor',
     step_size: float = 1.0,
     trust_region: float = 0.1,  # Tighter than SO(N) for stability
-    max_norm: float = 5.0,  # GL(K) is non-compact; 5.0 → singular values in [e⁻⁵, e⁵] ≈ [0.007, 148]
+    max_norm: float = 5.0,  # GL(K) is non-compact; 5.0 -> singular values in [e⁻⁵, e⁵] ~= [0.007, 148]
     bch_order: int = 2,  # Second-order BCH for proper Lie group composition
     eps: float = 1e-6,
     **kwargs,  # Accept but ignore legacy grad_clip parameter
@@ -2134,12 +2134,12 @@ def retract_glK_torch(
     4. Clamp final norm
 
     Args:
-        phi: Current gauge frames (..., n_gen) where n_gen = K²
+        phi: Current gauge frames (..., n_gen) where n_gen = K^2
         delta_phi: Update direction (typically -grad_phi) (..., n_gen)
         generators: Transport generators (n_gen, K, K); only n_gen is used
         step_size: Learning rate for the update
         trust_region: Max step size ||update||_F in Lie algebra norm
-        max_norm: Maximum allowed norm for phi; 5.0 → singular values in [e⁻⁵, e⁵]
+        max_norm: Maximum allowed norm for phi; 5.0 -> singular values in [e⁻⁵, e⁵]
         bch_order: Order of BCH expansion (0=add, 1=first correction, 2=second order)
         eps: Numerical stability constant
 
@@ -2153,7 +2153,7 @@ def retract_glK_torch(
 
     # Trust region: clip ||update|| to constant trust_radius.
     # Since phi lives in the Lie algebra gl(K) (a flat vector space),
-    # the Frobenius norm IS the intrinsic metric — no need to scale
+    # the Frobenius norm IS the intrinsic metric -- no need to scale
     # with ||phi|| (which would create a feedback loop).
     update_norm = torch.norm(update, dim=-1, keepdim=True)
     scale = torch.clamp(trust_region / (update_norm + eps), max=1.0)
@@ -2187,7 +2187,7 @@ def is_glK_generators(n_gen: int) -> bool:
 def is_soN_generators(n_gen: int) -> bool:
     """Check if n_gen corresponds to SO(N) (triangular number)."""
     import math
-    # n_gen = N(N-1)/2 => 8*n_gen + 1 = (2N-1)² is a perfect odd square
+    # n_gen = N(N-1)/2 => 8*n_gen + 1 = (2N-1)^2 is a perfect odd square
     discriminant = 1 + 8 * n_gen
     sqrt_disc = int(math.sqrt(discriminant))
     if sqrt_disc * sqrt_disc != discriminant:

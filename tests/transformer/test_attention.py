@@ -411,7 +411,7 @@ class TestGLKMetricCorrection:
 
     @staticmethod
     def _make_glk_generators(K, device):
-        """Create GL(K) generators: K² elementary matrices (not skew-symmetric)."""
+        """Create GL(K) generators: K^2 elementary matrices (not skew-symmetric)."""
         n_gen = K * K
         generators = torch.zeros(n_gen, K, K, device=device)
         idx = 0

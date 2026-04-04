@@ -143,7 +143,7 @@ CORPUS = [
     "The principles of thermodynamics govern energy transfer in all physical and chemical processes. The second law states that entropy in an isolated system tends to increase over time.",
     "Convolutional neural networks use learnable filters to detect spatial patterns in input data. They have become the standard architecture for image classification, object detection, and visual recognition tasks.",
     "Load balancing distributes incoming network traffic across multiple servers to ensure no single server becomes overwhelmed. This improves application responsiveness, availability, and fault tolerance.",
-    "The fast Fourier transform algorithm reduces the computational complexity of computing discrete Fourier transforms from O(n²) to O(n log n), making spectral analysis practical for large datasets.",
+    "The fast Fourier transform algorithm reduces the computational complexity of computing discrete Fourier transforms from O(n^2) to O(n log n), making spectral analysis practical for large datasets.",
 
     # ---- Literature & Culture ----
     "Shakespeare's plays have been translated into every major living language and are performed more often than those of any other playwright. His works explore themes of love, power, jealousy, and human nature.",
@@ -461,7 +461,7 @@ def _compute_fast_metrics(alpha: torch.Tensor, beta: torch.Tensor,
 
 
 def _get_all_qkv_for_layer(model, hidden_states, layer_idx: int):
-    """Return Q, K, V for ALL heads at once — avoids repeated linear projections."""
+    """Return Q, K, V for ALL heads at once -- avoids repeated linear projections."""
     h = hidden_states[layer_idx][0]  # [seq_len, hidden_dim]
     attn_self = model.encoder.layer[layer_idx].attention.self
     Q_all = attn_self.query(h)
@@ -867,7 +867,7 @@ def plot_key_norm_bias(all_head_results: List[Dict], save_path: Path):
     ax = axes[0, 2]
     ax.hist(r_keynorm_alpha_all, bins=30, alpha=0.7, label='α (dot-product)', edgecolor='black')
     ax.hist(r_keynorm_beta_all, bins=30, alpha=0.7, label='β (KL)', edgecolor='black')
-    ax.set_xlabel('Correlation: ||K||² vs attention')
+    ax.set_xlabel('Correlation: ||K||^2 vs attention')
     ax.set_ylabel('Number of heads')
     ax.set_title('Key-norm bias distribution')
     ax.legend()
@@ -986,14 +986,14 @@ def plot_ablation_comparison(all_head_results: List[Dict], save_path: Path):
     summary_text = (
         f"Ablation Study Results:\n\n"
         f"Forward KL (our method):\n"
-        f"  Mean r: {np.mean(corrs_fwd):.4f} ± {np.std(corrs_fwd):.4f}\n"
+        f"  Mean r: {np.mean(corrs_fwd):.4f} +/- {np.std(corrs_fwd):.4f}\n"
         f"  Median r: {np.median(corrs_fwd):.4f}\n\n"
         f"Reverse KL:\n"
-        f"  Mean r: {np.mean(corrs_rev):.4f} ± {np.std(corrs_rev):.4f}\n"
+        f"  Mean r: {np.mean(corrs_rev):.4f} +/- {np.std(corrs_rev):.4f}\n"
         f"  Paired t-test vs forward:\n"
         f"    t = {t_stat_rev:.4f}, p = {p_val_rev:.4e}\n\n"
         f"Symmetric KL:\n"
-        f"  Mean r: {np.mean(corrs_sym):.4f} ± {np.std(corrs_sym):.4f}\n"
+        f"  Mean r: {np.mean(corrs_sym):.4f} +/- {np.std(corrs_sym):.4f}\n"
         f"  Paired t-test vs forward:\n"
         f"    t = {t_stat_sym:.4f}, p = {p_val_sym:.4e}\n\n"
         f"Conclusion:\n"
@@ -1185,7 +1185,7 @@ def plot_cross_passage_stability(agg: Dict, save_path: Path):
     for layer in range(num_layers):
         for head in range(num_heads):
             ax.text(head, layer,
-                    f'{mean_matrix[layer, head]:.2f}\n±{se_matrix[layer, head]:.2f}',
+                    f'{mean_matrix[layer, head]:.2f}\n+/-{se_matrix[layer, head]:.2f}',
                     ha='center', va='center', fontsize=5, color='black')
 
     # --- (0,1) Distribution of standard errors ---
@@ -1374,7 +1374,7 @@ def plot_keynorm_cross_passage(agg: Dict, save_path: Path):
     ax = axes[0]
     ax.hist(kn_alpha, bins=30, alpha=0.6, edgecolor='black', label='α (dot-product)')
     ax.hist(kn_beta, bins=30, alpha=0.6, edgecolor='black', label='β (KL)')
-    ax.set_xlabel('Mean r(||K||², attn) across passages')
+    ax.set_xlabel('Mean r(||K||^2, attn) across passages')
     ax.set_ylabel('Number of heads')
     ax.set_title('Key-norm bias: cross-passage mean')
     ax.legend()
@@ -1387,7 +1387,7 @@ def plot_keynorm_cross_passage(agg: Dict, save_path: Path):
     ax = axes[1]
     ax.hist(kn_alpha_se, bins=30, alpha=0.6, edgecolor='black', label='α std')
     ax.hist(kn_beta_se, bins=30, alpha=0.6, edgecolor='black', label='β std')
-    ax.set_xlabel('Std of r(||K||², attn) across passages')
+    ax.set_xlabel('Std of r(||K||^2, attn) across passages')
     ax.set_ylabel('Number of heads')
     ax.set_title('Key-norm bias variability across passages')
     ax.legend()
@@ -1537,7 +1537,7 @@ def run_multi_model_validation(
             test_out = mdl(**test_inp)
         _, _, _, n_heads, head_dim = _get_qkv_generic(mdl, test_out.hidden_states, 0, mname)
 
-        print(f"    {n_layers}L × {n_heads}H, head_dim={head_dim}, "
+        print(f"    {n_layers}L x {n_heads}H, head_dim={head_dim}, "
               f"params={n_params/1e6:.1f}M")
 
         per_head_corrs = []  # collect grand mean r per passage per head
@@ -1684,9 +1684,9 @@ def run_identity_decomposition(
             Qi = Qh.unsqueeze(1)  # [seq, 1, d]
             Kj = Kh.unsqueeze(0)  # [1, seq, d]
             diff = Qi - Kj
-            sqdist = torch.sum(diff * diff, dim=-1)        # ||Q_i - K_j||²
-            q_norms_sq = torch.sum(Qh * Qh, dim=-1)        # ||Q_i||²  [seq]
-            k_norms_sq = torch.sum(Kh * Kh, dim=-1)        # ||K_j||²  [seq]
+            sqdist = torch.sum(diff * diff, dim=-1)        # ||Q_i - K_j||^2
+            q_norms_sq = torch.sum(Qh * Qh, dim=-1)        # ||Q_i||^2  [seq]
+            k_norms_sq = torch.sum(Kh * Kh, dim=-1)        # ||K_j||^2  [seq]
 
             # Expand norms for broadcasting
             q_norms_mat = q_norms_sq.unsqueeze(1).expand_as(sqdist)
@@ -1776,15 +1776,15 @@ def plot_identity_decomposition(decomp_results: List[Dict], save_path: Path):
     summary_text = (
         f"Mathematical Identity Verification\n"
         f"{'='*38}\n\n"
-        f"Q·K/√d = (-||Q-K||² + ||Q||² + ||K||²) / 2√d\n\n"
+        f"Q·K/√d = (-||Q-K||^2 + ||Q||^2 + ||K||^2) / 2√d\n\n"
         f"Numerical verification:\n"
         f"  Max residual: {np.max(residuals):.2e}\n"
         f"  Mean residual: {np.mean(residuals):.2e}\n"
         f"  (machine precision: ~1e-7 for float32)\n\n"
         f"Score decomposition (mean across heads):\n"
-        f"  Distance term  -||Q-K||²: {np.mean(frac_sq):.1%}\n"
-        f"  Query norm     +||Q||²:   {np.mean(frac_q):.1%}\n"
-        f"  Key norm       +||K||²:   {np.mean(frac_k):.1%}\n\n"
+        f"  Distance term  -||Q-K||^2: {np.mean(frac_sq):.1%}\n"
+        f"  Query norm     +||Q||^2:   {np.mean(frac_q):.1%}\n"
+        f"  Key norm       +||K||^2:   {np.mean(frac_k):.1%}\n\n"
         f"Implication:\n"
         f"  The identity is EXACT, not approximate.\n"
         f"  Dot-product attention IS distance-\n"
@@ -1923,7 +1923,7 @@ def plot_attention_entropy(entropy_results: Dict, save_path: Path):
     # Max uniform entropy for reference
     # For a typical sequence length, uniform entropy = log(seq_len)
     ax.axhline(np.log(50), color='red', linestyle=':', alpha=0.4,
-               label='log(50) ≈ uniform for N=50')
+               label='log(50) ~= uniform for N=50')
 
     # (1,1): Summary
     ax = axes[1, 1]
@@ -1939,7 +1939,7 @@ def plot_attention_entropy(entropy_results: Dict, save_path: Path):
         f"Attention Entropy Analysis\n"
         f"{'='*32}\n\n"
         f"Passages: {entropy_results['n_passages']}\n"
-        f"Architecture: {n_layers}L × {n_heads}H\n\n"
+        f"Architecture: {n_layers}L x {n_heads}H\n\n"
         f"Mean H(α): {e_alpha.mean():.3f} nats\n"
         f"Mean H(β): {e_beta.mean():.3f} nats\n"
         f"Mean ratio H(β)/H(α): {e_ratio.mean():.3f}\n\n"
@@ -2037,7 +2037,7 @@ def run_seqlen_sensitivity(
             'max_r': float(np.max(head_corrs)),
         })
         print(f"    seq_len={actual_len:4d}: mean r={results[-1]['mean_r']:.4f} "
-              f"± {results[-1]['std_r']:.4f}")
+              f"+/- {results[-1]['std_r']:.4f}")
 
     return results
 
@@ -2086,7 +2086,7 @@ def plot_seqlen_sensitivity(seqlen_results: List[Dict], save_path: Path):
 def main():
     print("="*80)
     print("COMPREHENSIVE TRANSFORMER VALIDATION")
-    print("Addressing B- grade issues → A grade")
+    print("Addressing B- grade issues -> A grade")
     print("="*80)
 
     # Load model and tokenizer
@@ -2121,7 +2121,7 @@ def main():
     num_heads = model.encoder.layer[0].attention.self.num_attention_heads
     total_heads = num_layers * num_heads
 
-    print(f"Model architecture: {num_layers} layers × {num_heads} heads = {total_heads} total")
+    print(f"Model architecture: {num_layers} layers x {num_heads} heads = {total_heads} total")
     print(f"Bootstrap samples: {N_BOOTSTRAP}")
     print("\nAnalyzing all heads (single passage)...")
 
@@ -2172,7 +2172,7 @@ def main():
     p_vals_fwd = [r['metrics_forward']['global_p'] for r in all_head_results]
 
     print(f"\nForward KL (our method) - α vs β:")
-    print(f"  Mean correlation: {np.mean(corrs_fwd):.4f} ± {np.std(corrs_fwd):.4f}")
+    print(f"  Mean correlation: {np.mean(corrs_fwd):.4f} +/- {np.std(corrs_fwd):.4f}")
     print(f"  Median correlation: {np.median(corrs_fwd):.4f}")
     print(f"  Range: [{np.min(corrs_fwd):.4f}, {np.max(corrs_fwd):.4f}]")
     print(f"  Heads with r > 0.8: {np.sum(np.array(corrs_fwd) > 0.8)}/{len(corrs_fwd)} "
@@ -2185,7 +2185,7 @@ def main():
     r_keynorm_alpha = [r['metrics_forward']['r_keynorm_alpha'] for r in all_head_results]
     r_keynorm_beta = [r['metrics_forward']['r_keynorm_beta'] for r in all_head_results]
 
-    print(f"\nKey-norm bias (‖K_j‖² vs attention weight):")
+    print(f"\nKey-norm bias (‖K_j‖^2 vs attention weight):")
     print(f"  Dot-product (α): mean |r| = {np.mean(np.abs(r_keynorm_alpha)):.4f}")
     print(f"  KL-based (β):    mean |r| = {np.mean(np.abs(r_keynorm_beta)):.4f}")
 
@@ -2234,7 +2234,7 @@ def main():
     print("-"*60)
     print(f"  Passages analyzed: {cs['n_passages']}")
     print(f"  Heads analyzed:    {cs['n_heads']}")
-    print(f"  Grand mean r:      {cs['grand_mean_r']:.4f} ± {cs['grand_std_r']:.4f}")
+    print(f"  Grand mean r:      {cs['grand_mean_r']:.4f} +/- {cs['grand_std_r']:.4f}")
     print(f"  Grand median r:    {cs['grand_median_r']:.4f}")
     print(f"  Range of head means: [{cs['grand_min_r']:.4f}, {cs['grand_max_r']:.4f}]")
     print(f"  Heads with mean r > 0.8: {cs['heads_mean_r_gt_08']}/{cs['n_heads']}")
@@ -2315,9 +2315,9 @@ def main():
     print("PHASE 4 RESULTS (multi-model)")
     print("-"*60)
     for mname, mresults in multi_model_results.items():
-        print(f"  {mname:30s}  r={mresults['grand_mean_r']:.4f} ± {mresults['grand_std_r']:.4f}"
+        print(f"  {mname:30s}  r={mresults['grand_mean_r']:.4f} +/- {mresults['grand_std_r']:.4f}"
               f"  ({mresults['n_params']/1e6:.1f}M params, "
-              f"{mresults['n_layers']}L×{mresults['n_heads']}H)")
+              f"{mresults['n_layers']}Lx{mresults['n_heads']}H)")
 
     print("\n  10. Multi-model comparison plot...")
     if multi_model_results:
@@ -2328,7 +2328,7 @@ def main():
     # =====================================================================
     print("\n" + "="*80)
     print("PHASE 5: MATHEMATICAL IDENTITY DECOMPOSITION")
-    print("Q·K/√d = (-||Q-K||² + ||Q||² + ||K||²) / 2√d")
+    print("Q·K/√d = (-||Q-K||^2 + ||Q||^2 + ||K||^2) / 2√d")
     print("="*80)
 
     decomp_results = run_identity_decomposition(model, tokenizer, TEXT, device=DEVICE)
@@ -2342,9 +2342,9 @@ def main():
     print(f"  Mean residual: {np.mean(residuals_all):.2e}")
     print(f"  Identity verified to machine precision: "
           f"{'YES' if np.max(residuals_all) < 1e-5 else 'NO'}")
-    print(f"\n  Mean score fraction from -||Q-K||² term: {np.mean(frac_sq_all):.1%}")
-    print(f"  Mean score fraction from ||Q||² term:    {np.mean([r['frac_qnorm'] for r in decomp_results]):.1%}")
-    print(f"  Mean score fraction from ||K||² term:    {np.mean([r['frac_knorm'] for r in decomp_results]):.1%}")
+    print(f"\n  Mean score fraction from -||Q-K||^2 term: {np.mean(frac_sq_all):.1%}")
+    print(f"  Mean score fraction from ||Q||^2 term:    {np.mean([r['frac_qnorm'] for r in decomp_results]):.1%}")
+    print(f"  Mean score fraction from ||K||^2 term:    {np.mean([r['frac_knorm'] for r in decomp_results]):.1%}")
 
     print("\n  11. Identity decomposition plot...")
     plot_identity_decomposition(decomp_results, SAVE_DIR)
@@ -2387,7 +2387,7 @@ def main():
     print("PHASE 7 RESULTS (sequence length)")
     print("-"*60)
     for sr in seqlen_results:
-        print(f"  N={sr['actual_len']:4d}: r={sr['mean_r']:.4f} ± {sr['std_r']:.4f}"
+        print(f"  N={sr['actual_len']:4d}: r={sr['mean_r']:.4f} +/- {sr['std_r']:.4f}"
               f"  [{sr['min_r']:.4f}, {sr['max_r']:.4f}]")
 
     print("\n  13. Sequence-length sensitivity plot...")

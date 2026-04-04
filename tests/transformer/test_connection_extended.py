@@ -103,10 +103,10 @@ class TestGradientFlow:
 # ===========================================================================
 
 class TestConnectionProperties:
-    """Tests for connection→holonomy relationship."""
+    """Tests for connection->holonomy relationship."""
 
     def test_zero_init_gives_zero_output(self):
-        """init_scale=0 → δ = 0 at initialization."""
+        """init_scale=0 -> δ = 0 at initialization."""
         conn = _make_connection(d_head=6, n_gen=3, connection_type='bilinear')
         mu = torch.randn(1, 4, 6)
         with torch.no_grad():
@@ -115,7 +115,7 @@ class TestConnectionProperties:
             f"Zero-init should give zero output, got max {delta.abs().max():.2e}"
 
     def test_larger_weights_larger_delta(self):
-        """Larger connection weights → larger ||δ||."""
+        """Larger connection weights -> larger ||δ||."""
         conn_small = _make_connection(d_head=6, n_gen=3, connection_type='bilinear')
         conn_large = _make_connection(d_head=6, n_gen=3, connection_type='bilinear')
 

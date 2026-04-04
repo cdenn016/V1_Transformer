@@ -5,7 +5,7 @@ fixed point (mu*, Sigma*, phi*)?
 Uses SymPy to prove:
   1. The FULL system (mu, Sigma, phi) with dynamic beta is transcendental
   2. For FIXED beta/KL, the softmax coupling gradient is LINEAR in mu_i
-     and INDEPENDENT of sigma_i — so the full VFE (including softmax
+     and INDEPENDENT of sigma_i -- so the full VFE (including softmax
      coupling) admits a closed-form solution for (mu*, Sigma*)
   3. phi* remains transcendental even with everything else fixed
   4. Picard iteration over (beta, KL) <-> (mu, Sigma) converges
@@ -67,7 +67,7 @@ def header(title):
 # =====================================================================
 # Analysis 1: Full VFE and stationarity (K=1, N=2)
 # =====================================================================
-header("ANALYSIS 1: Full VFE (K=1, N=2) — Stationarity Equations")
+header("ANALYSIS 1: Full VFE (K=1, N=2) -- Stationarity Equations")
 
 # KL terms
 KL_self = scalar_kl(mu1, sig1, mu_p, sig_p)
@@ -98,7 +98,7 @@ print("where beta_12 = softmax(-KL_12/kappa) = exp(-KL_12/kappa) / Z")
 print("  Z = 1 + exp(-KL_12/kappa),  KL_11 = 0 (self-transport is identity)")
 
 # Stationarity: dF/dmu1, dF/dsig1, dF/dphi1
-# NOTE: avoid simplify() on the full VFE derivatives — they contain nested
+# NOTE: avoid simplify() on the full VFE derivatives -- they contain nested
 # exp(exp(...)) from beta*KL and are extremely slow to simplify.
 # Use cancel() for rational simplification only.
 dF_dmu1 = diff(F_vfe, mu1)
@@ -116,7 +116,7 @@ print(f"\n--- dF/dphi_1 ---")
 print(f"  Contains exp: {dF_dphi1.has(exp)}")
 print(f"  => Transcendental in phi_1 (through Omega = exp(phi))")
 
-# Skip full system solve — it would hang on transcendental system.
+# Skip full system solve -- it would hang on transcendental system.
 # Instead, demonstrate transcendence structurally.
 print("\nThe full system dF/d(mu,sig,phi) = 0 contains:")
 print("  - exp(-KL_12/kappa) where KL_12 is quadratic in mu_1")
@@ -129,7 +129,7 @@ print("No algebraic closed-form exists for the simultaneous solution.")
 # =====================================================================
 # Analysis 2: Softmax Jacobian structure
 # =====================================================================
-header("ANALYSIS 2: Softmax Jacobian — Structure and Linearity in mu_i")
+header("ANALYSIS 2: Softmax Jacobian -- Structure and Linearity in mu_i")
 
 dbeta_dmu = diff(beta_12, mu1)
 dKL12_dmu1 = diff(KL_12, mu1)
@@ -171,7 +171,7 @@ print("  => It can be absorbed into the closed-form precision-weighted solve!")
 # =====================================================================
 # Analysis 3: Enhanced closed form with softmax coupling absorbed
 # =====================================================================
-header("ANALYSIS 3: Enhanced Closed Form — Softmax Absorbed")
+header("ANALYSIS 3: Enhanced Closed Form -- Softmax Absorbed")
 
 # Fixed external quantities (from current beliefs, held constant)
 b12_fixed = symbols('beta_{12}', positive=True)
@@ -277,7 +277,7 @@ print(f"  = 1/(2*sig_t) - 1/(2*sig_1)")
 S_sigma = -lam_s * KL12_fixed * b12_fixed * (1 - b12_fixed) / (2 * kappa * sig_t)
 
 print(f"\nS_sigma (softmax sigma coupling, N=2) = {S_sigma}")
-print("  Does not contain sigma_i — confirmed.")
+print("  Does not contain sigma_i -- confirmed.")
 
 # Enhanced sigma fixed point
 # From dF/dsig = 0:
@@ -290,9 +290,9 @@ print(f"  = {simplify(sigma_star_enhanced)}")
 
 
 # =====================================================================
-# Analysis 4: Phi equation — transcendental even for fixed beta
+# Analysis 4: Phi equation -- transcendental even for fixed beta
 # =====================================================================
-header("ANALYSIS 4: Phi Stationarity — Transcendental Even for Fixed Beta")
+header("ANALYSIS 4: Phi Stationarity -- Transcendental Even for Fixed Beta")
 
 # VFE with fixed beta (for phi analysis)
 KL_12_phi = scalar_kl(mu1, sig1, Omega_12 * mu2, Omega_12**2 * sig2)
@@ -303,11 +303,11 @@ print("dF/dphi_1 (fixed beta, K=1):")
 print(f"  Contains exp(phi_1): {dF_dphi1_lin.has(exp(phi1))}")
 print(f"  Contains exp(-phi_2): {dF_dphi1_lin.has(exp(-phi2))}")
 print(f"  => Transcendental in phi_1 (exponential terms from Omega = exp(phi))")
-print(f"\n  No sympy.solve attempted — exp(phi) makes this unsolvable algebraically.")
+print(f"\n  No sympy.solve attempted -- exp(phi) makes this unsolvable algebraically.")
 
 print("\nFor K=1: Omega = exp(phi_1 - phi_2), dOmega/dphi_1 = Omega.")
 print("  dF/dphi involves Omega*(mu_1 - Omega*mu_2)*mu_2 and Omega^2*sig terms.")
-print("  These are exponential in phi — no algebraic closed form.")
+print("  These are exponential in phi -- no algebraic closed form.")
 print("  For K>1: matrix exponential Frechet derivative (adjoint action).")
 print("  => phi* requires iterative methods regardless of (mu, Sigma) treatment.")
 
@@ -325,7 +325,7 @@ print("ln|Sigma|        | Sigma             | YES          | Cancelled by dF/dSi
 print("")
 print("* YES when beta and KL are held fixed at current values (Picard iterate).")
 print("  The softmax coupling gradient is LINEAR in mu_i (coefficient depends on")
-print("  beta, KL, transported precisions — not on mu_i itself).")
+print("  beta, KL, transported precisions -- not on mu_i itself).")
 print("  The sigma softmax Jacobian is INDEPENDENT of sigma_i (1/sigma_i cancels")
 print("  under normalized attention).")
 print("")
@@ -338,7 +338,7 @@ print("CONCLUSION:")
 print("  The system (mu*, Sigma*, phi*) with self-consistent beta has NO closed-form.")
 print("  The OPTIMAL decomposition is:")
 print("    1. Fix beta, KL from current beliefs")
-print("    2. Solve FULL VFE for (mu*, Sigma*) in closed form — one division/dim")
+print("    2. Solve FULL VFE for (mu*, Sigma*) in closed form -- one division/dim")
 print("       (softmax coupling absorbed via linearity in mu, cancellation in sigma)")
 print("    3. Update beta, KL; repeat 1-2 until convergence")
 print("    4. Phi by gradient descent (irreducible transcendence)")
@@ -388,18 +388,18 @@ header("SUMMARY")
 
 print("Q: Can the E-step VFE be solved in closed form for (mu*, Sigma*, phi*)?")
 print("")
-print("A: PARTIALLY YES — more than previously thought.")
+print("A: PARTIALLY YES -- more than previously thought.")
 print("")
 print("  For the FULL self-consistent fixed point (beta depends on mu,Sigma,phi):")
-print("    NO — the softmax creates a transcendental self-consistency loop.")
+print("    NO -- the softmax creates a transcendental self-consistency loop.")
 print("    The exp(phi) in Omega adds an independent transcendental obstruction.")
 print("")
 print("  For FIXED beta and KL (one Picard iterate):")
-print("    mu*  — YES, closed form. Softmax coupling is linear in mu_i.")
+print("    mu*  -- YES, closed form. Softmax coupling is linear in mu_i.")
 print("           mu* = (b - c) / (A + S), one division per dimension.")
-print("    Sigma* — YES, closed form. 1/sigma_i cancels in softmax Jacobian.")
+print("    Sigma* -- YES, closed form. 1/sigma_i cancels in softmax Jacobian.")
 print("           sigma* = (alpha+lambda) / (A + 2*S_sigma), one division.")
-print("    phi*  — NO. exp(phi*G) is irreducibly transcendental.")
+print("    phi*  -- NO. exp(phi*G) is irreducibly transcendental.")
 print("")
 print("  The enhanced closed form (docs/enhanced_closed_form_vfe.md) absorbs the")
 print("  softmax coupling into the precision-weighted solve. The Picard iteration")

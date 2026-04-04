@@ -1,7 +1,7 @@
 r"""M-Step: Prior bank parameter updates via natural gradient on marginal VFE.
 
 Observation gradient enters HERE (not in E-step).
-No autograd — all gradients are analytic.
+No autograd -- all gradients are analytic.
 
 The M-step updates global parameters (the prior bank) using sufficient
 statistics from converged E-step beliefs. These statistics are additive
@@ -50,9 +50,9 @@ class MStepAccumulator:
         \nabla_\theta F = \sum_{n=1}^N \nabla_\theta F_n
 
     A single-batch M-step uses a noisy estimate of this sum. This class
-    collects the per-token sufficient statistics — ``n_counts``,
+    collects the per-token sufficient statistics -- ``n_counts``,
     ``mu_star_sum``, ``Sigma_star_sum``, ``outer_sum``, ``Omega_star_sum``,
-    and observation gradient quantities — into vocabulary-sized buffers.
+    and observation gradient quantities -- into vocabulary-sized buffers.
     After K micro-batches, ``apply_m_step_from_accumulated`` applies one
     M-step using the accumulated (lower-variance) gradient.
 
@@ -432,10 +432,10 @@ def _precompute_obs_gradient(ce_grad, mu_star, Sigma_star, update_tokens):
 
     Returns:
         dict with:
-          obs_weighted_mu: [T, K] — Σ_{b,n} ce_grad[b,n,v] · μ*_{b,n}
-          obs_ce_sum: [T] — Σ_{b,n} ce_grad[b,n,v]
-          obs_weighted_Sigma: [T, K, K] — Σ_{b,n} ce_grad[b,n,v] · Σ*_{b,n}
-          obs_weighted_outer: [T, K, K] — Σ_{b,n} ce_grad[b,n,v] · μ*μ*ᵀ
+          obs_weighted_mu: [T, K] -- Σ_{b,n} ce_grad[b,n,v] · μ*_{b,n}
+          obs_ce_sum: [T] -- Σ_{b,n} ce_grad[b,n,v]
+          obs_weighted_Sigma: [T, K, K] -- Σ_{b,n} ce_grad[b,n,v] · Σ*_{b,n}
+          obs_weighted_outer: [T, K, K] -- Σ_{b,n} ce_grad[b,n,v] · μ*μ*ᵀ
     """
     B, N, K = mu_star.shape
     BN = B * N
@@ -468,7 +468,7 @@ def _adam_update_mu(nat_mu, update_tokens, model, config):
     r"""Apply Adam-like momentum to prior_mu natural gradient.
 
     Tracks EMA of first moment (momentum) and second moment (adaptive scaling)
-    for variance reduction across batches. No neural components — purely an
+    for variance reduction across batches. No neural components -- purely an
     optimization algorithm on natural gradient outputs.
 
     Args:
@@ -651,12 +651,12 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     # Hyper-prior (frequency-adaptive: stronger for rare tokens)
     _rare_reg = getattr(config, 'rare_token_reg', 0.0)
     if _rare_reg > 0:
-        _freq_weight = 1.0 + _rare_reg / n_safe  # [T] — larger for rare tokens
+        _freq_weight = 1.0 + _rare_reg / n_safe  # [T] -- larger for rare tokens
         grad_mu = grad_mu_vfe + _freq_weight.unsqueeze(-1) * mu_all / config.hyper_var
     else:
         grad_mu = grad_mu_vfe + mu_all / config.hyper_var
 
-    # Observation gradient — normalize per-token with a floor to prevent
+    # Observation gradient -- normalize per-token with a floor to prevent
     # rare tokens (n_v=1) from getting disproportionately large updates.
     # Without floor: a single-occurrence token gets gradient / 1 vs / BN,
     # causing 4096x amplification that overfits rare token priors.
@@ -685,7 +685,7 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
 
     mu_new = mu_all - effective_lrs['mu_p_lr'] * nat_mu
 
-    # Enforce prior mean norm constraint (prevents mean spread → logit explosion)
+    # Enforce prior mean norm constraint (prevents mean spread -> logit explosion)
     if config.prior_mu_max_norm > 0:
         mu_norms = mu_new.norm(dim=-1, keepdim=True).clamp(min=1e-8)
         scale = torch.clamp(config.prior_mu_max_norm / mu_norms, max=1.0)
@@ -703,8 +703,8 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     )
     grad_Sigma_vfe[~has_input] = 0.0
 
-    # Hyper-prior: ∂KL(p_v || h)/∂Σ_v where h = N(0, σ²_h I)
-    # = ½[(1/σ²_h)I - Σ_v⁻¹]  (pulls Σ_v toward σ²_h·I, not always-shrink)
+    # Hyper-prior: ∂KL(p_v || h)/∂Σ_v where h = N(0, σ^2_h I)
+    # = ½[(1/σ^2_h)I - Σ_v⁻¹]  (pulls Σ_v toward σ^2_h·I, not always-shrink)
     _eye = torch.eye(K, device=dev, dtype=mu_star.dtype)
     grad_Sigma = grad_Sigma_vfe + 0.5 * (_eye / config.hyper_var - Sigma_all_inv)
 
@@ -741,7 +741,7 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
         if _decode_tau != 1.0:
             obs_diag = obs_diag / _decode_tau
         grad_Sigma = grad_Sigma + torch.diag_embed(obs_diag)
-    # else: sigma_obs_mode == 'none' — match VFE dynamic, no obs gradient for Sigma
+    # else: sigma_obs_mode == 'none' -- match VFE dynamic, no obs gradient for Sigma
 
     # Gradient clamping
     grad_Sigma = torch.clamp(grad_Sigma, -grad_clamp, grad_clamp)
@@ -750,7 +750,7 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
     nat_Sigma = natural_grad_sigma(grad_Sigma, Sigma_all)
     nat_Sigma = clip_matrix_norm(nat_Sigma, config.trust_region_sigma)
 
-    # Momentum for Σ (first moment only — adaptive scaling conflicts with SPD geometry)
+    # Momentum for Σ (first moment only -- adaptive scaling conflicts with SPD geometry)
     if use_adam and model.m1_Sigma is not None:
         nat_Sigma = _momentum_update(
             nat_Sigma, model.m1_Sigma, update_tokens, config.adam_beta1
@@ -761,7 +761,7 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
         eps_min=config.spd_eps_min, kappa_max=config.spd_kappa_max,
     )
 
-    # Enforce prior covariance spectral floor (prevents collapse → divergence)
+    # Enforce prior covariance spectral floor (prevents collapse -> divergence)
     floor = config.prior_sigma_floor
     if floor > 0:
         eigs, V = torch.linalg.eigh(Sigma_new)
