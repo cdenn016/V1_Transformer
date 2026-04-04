@@ -4,10 +4,11 @@
       "Read",
       "Glob",
       "Grep",
+      "Agent",
       "Bash(python *)",
       "Bash(pytest *)",
       "Bash(git status*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
       "Bash(git diff*)",
       "Bash(git log*)"
     ]
