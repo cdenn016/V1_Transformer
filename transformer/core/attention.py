@@ -657,8 +657,8 @@ def _dispatch_kl_matrix(
                             )
                             del Omega_b
 
-                            mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()
-                            sig_i_exp = sig_i[:, :, None, :, :].expand(-1, -1, n_j, -1, -1).clone()
+                            mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1)
+                            sig_i_exp = sig_i[:, :, None, :, :].expand(-1, -1, n_j, -1, -1)
 
                             kl_b = _kl_kernel_dense(
                                 mu_i_exp, sig_i_exp + eps * I_d,
@@ -690,10 +690,12 @@ def _dispatch_kl_matrix(
     # 2. DENSE / DIAGONAL MODE: build Omega, transport, then call unified kernel
     # =========================================================================
 
-    # --- Build Omega ---
+    # --- Build / cache exp pairs and optionally Omega ---
+    # Hoist matrix_exp computation above dispatch branches so it's never redundant.
+    exp_phi = exp_neg_phi = Omega = None
+
     if gauge_mode == 'trivial' or (gauge_mode == 'constant' and cached_transport is None):
-        # Identity transport: Omega_ij = I for all pairs
-        Omega = None  # signal to use identity below
+        pass  # Identity transport: Omega stays None
     elif cached_transport is not None and 'Omega' in cached_transport:
         Omega = cached_transport['Omega']   # (B, N, N, K, K)
     elif (cached_transport is not None
@@ -701,15 +703,19 @@ def _dispatch_kl_matrix(
           and 'exp_neg_phi' in cached_transport):
         exp_phi = cached_transport['exp_phi']
         exp_neg_phi = cached_transport['exp_neg_phi']
-        Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
+        # Only materialize full Omega if we won't chunk (avoids O(BN²K²) allocation)
+        if chunk_size is None:
+            Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
     else:
-        # Compute from phi and generators
+        # Compute exp pairs once — reused by both unchunked and chunked paths
         phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
         exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
         if enforce_orthogonal and K >= 16:
             exp_phi = newton_schulz_orthogonalize(exp_phi)
             exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
-        Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
+        # Only materialize full Omega if we won't chunk
+        if chunk_size is None:
+            Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
 
     # --- Transport ---
     if diagonal_covariance:
@@ -719,28 +725,23 @@ def _dispatch_kl_matrix(
 
         if Omega is None:
             # Identity: mu_transported = mu_q broadcast, sigma transported = sigma_q broadcast
-            mu_t = mu_q[:, None, :, :].expand(-1, N, -1, -1).clone()
-            sig_t = sigma_q[:, None, :, :].expand(-1, N, -1, -1).clone()
+            # Views suffice — downstream KL kernels cast to float32 internally (no in-place mutation)
+            mu_t = mu_q[:, None, :, :].expand(-1, N, -1, -1)
+            sig_t = sigma_q[:, None, :, :].expand(-1, N, -1, -1)
         else:
             mu_t = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)
             # AMP guard: covariance sandwich product must stay float32
             with torch.amp.autocast('cuda', enabled=False):
                 _sq = sigma_q if sigma_q.dtype == torch.float32 else sigma_q.float()
                 _Om = Omega if Omega.dtype == torch.float32 else Omega.float()
-                sigma_j = _sq[:, None, :, :].expand(-1, N, -1, -1).clone()
+                sigma_j = _sq[:, None, :, :].expand(-1, N, -1, -1)
                 sig_t = torch.einsum(
                     'bijkl,bijkl,bijl->bijk', _Om, _Om, sigma_j
                 ).clamp(min=eps)
 
         # Call unified kernel (with optional chunking)
-        if chunk_size is not None and cached_transport is None:
-            # Chunked diagonal: precompute exp pairs and loop
-            phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
-            exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
-            if enforce_orthogonal and K >= 16:
-                exp_phi = newton_schulz_orthogonalize(exp_phi)
-                exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
-
+        if chunk_size is not None and exp_phi is not None:
+            # Chunked diagonal: use pre-computed exp pairs (hoisted above)
             row_chunks = []
             for i_start in range(0, N, chunk_size):
                 i_end = min(i_start + chunk_size, N)
@@ -763,14 +764,14 @@ def _dispatch_kl_matrix(
                     with torch.amp.autocast('cuda', enabled=False):
                         _sj = sig_j if sig_j.dtype == torch.float32 else sig_j.float()
                         _Oc = Omega_c if Omega_c.dtype == torch.float32 else Omega_c.float()
-                        sig_j_exp = _sj[:, None, :, :].expand(-1, n_i, -1, -1).clone()
+                        sig_j_exp = _sj[:, None, :, :].expand(-1, n_i, -1, -1)
                         sig_tc = torch.einsum(
                             'bijkl,bijkl,bijl->bijk', _Oc, _Oc, sig_j_exp
                         ).clamp(min=eps)
                     del Omega_c
 
-                    mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()
-                    sig_i_exp = sig_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()
+                    mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1)
+                    sig_i_exp = sig_i[:, :, None, :].expand(-1, -1, n_j, -1)
                     kl_c = _kl_kernel_diagonal(
                         mu_i_exp, sig_i_exp, mu_tc, sig_tc,
                         kl_max=kl_max, eps=eps,
@@ -794,8 +795,8 @@ def _dispatch_kl_matrix(
     else:
         # Full covariance
         if Omega is None:
-            mu_t = mu_q[:, None, :, :].expand(-1, N, -1, -1).clone()
-            sig_t = sigma_q[:, None, :, :, :].expand(-1, N, -1, -1, -1).clone()
+            mu_t = mu_q[:, None, :, :].expand(-1, N, -1, -1)
+            sig_t = sigma_q[:, None, :, :, :].expand(-1, N, -1, -1, -1)
         else:
             mu_t = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)
             # AMP guard: covariance sandwich product must stay float32
@@ -808,72 +809,49 @@ def _dispatch_kl_matrix(
                 )
                 sig_t = 0.5 * (sig_t + sig_t.transpose(-1, -2))
 
-        if chunk_size is not None:
-            # Full-covariance chunked: pre-compute exp pairs and loop
-            if Omega is not None and cached_transport is None:
-                phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
-                exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
-            # else: use already-computed Omega; slice over it
-            # Determine if we have factored exp_phi / exp_neg_phi available
-            _have_factors = (
-                cached_transport is not None
-                and 'exp_phi' in cached_transport
-                and 'exp_neg_phi' in cached_transport
-            )
-            if _have_factors:
-                exp_phi = cached_transport['exp_phi']
-                exp_neg_phi = cached_transport['exp_neg_phi']
-                use_factored = True
-            elif Omega is None:
-                # Identity transport — no chunking savings, just use unchunked
-                use_factored = False
-            else:
-                # We computed Omega above; for chunked we need exp_phi/exp_neg_phi
-                # which we computed just above (if cached_transport is None)
-                use_factored = True
+        if chunk_size is not None and exp_phi is not None:
+            # Full-covariance chunked: use pre-computed exp pairs (hoisted above)
+            row_chunks = []
+            for i_start in range(0, N, chunk_size):
+                i_end = min(i_start + chunk_size, N)
+                n_i = i_end - i_start
+                ep_i = exp_phi[:, i_start:i_end].contiguous()
+                mu_i = mu_q[:, i_start:i_end].contiguous()
+                sig_i = sigma_q[:, i_start:i_end].contiguous()
 
-            if use_factored and Omega is not None:
-                row_chunks = []
-                for i_start in range(0, N, chunk_size):
-                    i_end = min(i_start + chunk_size, N)
-                    n_i = i_end - i_start
-                    ep_i = exp_phi[:, i_start:i_end].contiguous()
-                    mu_i = mu_q[:, i_start:i_end].contiguous()
-                    sig_i = sigma_q[:, i_start:i_end].contiguous()
+                col_chunks = []
+                for j_start in range(0, N, chunk_size):
+                    j_end = min(j_start + chunk_size, N)
+                    n_j = j_end - j_start
+                    en_j = exp_neg_phi[:, j_start:j_end].contiguous()
+                    mu_j = mu_q[:, j_start:j_end].contiguous()
+                    sig_j = sigma_q[:, j_start:j_end].contiguous()
 
-                    col_chunks = []
-                    for j_start in range(0, N, chunk_size):
-                        j_end = min(j_start + chunk_size, N)
-                        n_j = j_end - j_start
-                        en_j = exp_neg_phi[:, j_start:j_end].contiguous()
-                        mu_j = mu_q[:, j_start:j_end].contiguous()
-                        sig_j = sigma_q[:, j_start:j_end].contiguous()
-
-                        Omega_c = torch.einsum('bikl,bjlm->bijkm', ep_i, en_j)
-                        mu_tc = torch.einsum('bijkl,bjl->bijk', Omega_c, mu_j)
-                        # AMP guard: covariance sandwich product must stay float32
-                        with torch.amp.autocast('cuda', enabled=False):
-                            _Oc = Omega_c if Omega_c.dtype == torch.float32 else Omega_c.float()
-                            _sj = sig_j if sig_j.dtype == torch.float32 else sig_j.float()
-                            sig_tc = torch.einsum(
-                                'bijkl,bjlm,bijmn->bijkn',
-                                _Oc, _sj, _Oc.transpose(-1, -2)
-                            )
-                            sig_tc = 0.5 * (sig_tc + sig_tc.transpose(-1, -2))
-                        del Omega_c
-
-                        mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()
-                        sig_i_exp = sig_i[:, :, None, :, :].expand(-1, -1, n_j, -1, -1).clone()
-                        I = torch.eye(K, device=device, dtype=dtype)
-                        kl_c = _kl_kernel_dense(
-                            mu_i_exp, sig_i_exp + eps * I,
-                            mu_tc, sig_tc + eps * I,
-                            kl_max=kl_max, eps=eps,
+                    Omega_c = torch.einsum('bikl,bjlm->bijkm', ep_i, en_j)
+                    mu_tc = torch.einsum('bijkl,bjl->bijk', Omega_c, mu_j)
+                    # AMP guard: covariance sandwich product must stay float32
+                    with torch.amp.autocast('cuda', enabled=False):
+                        _Oc = Omega_c if Omega_c.dtype == torch.float32 else Omega_c.float()
+                        _sj = sig_j if sig_j.dtype == torch.float32 else sig_j.float()
+                        sig_tc = torch.einsum(
+                            'bijkl,bjlm,bijmn->bijkn',
+                            _Oc, _sj, _Oc.transpose(-1, -2)
                         )
-                        del sig_tc, mu_tc
-                        col_chunks.append(kl_c)
-                    row_chunks.append(torch.cat(col_chunks, dim=2))
-                return torch.cat(row_chunks, dim=1)
+                        sig_tc = 0.5 * (sig_tc + sig_tc.transpose(-1, -2))
+                    del Omega_c
+
+                    mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1)
+                    sig_i_exp = sig_i[:, :, None, :, :].expand(-1, -1, n_j, -1, -1)
+                    I = torch.eye(K, device=device, dtype=dtype)
+                    kl_c = _kl_kernel_dense(
+                        mu_i_exp, sig_i_exp + eps * I,
+                        mu_tc, sig_tc + eps * I,
+                        kl_max=kl_max, eps=eps,
+                    )
+                    del sig_tc, mu_tc
+                    col_chunks.append(kl_c)
+                row_chunks.append(torch.cat(col_chunks, dim=2))
+            return torch.cat(row_chunks, dim=1)
 
         # Unchunked full covariance (or fallback when chunked not applicable)
         return _unified_kl(
