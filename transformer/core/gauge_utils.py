@@ -138,9 +138,26 @@ def newton_schulz_orthogonalize(
 # (e.g. 75×ℓ₀ + 30×ℓ₁ + 18×ℓ₂ = 123 blocks, 3 unique dims), this reduces
 # CUDA kernel launches from O(num_blocks) to O(num_unique_dims).
 
-# Cache for generator sub-block stacks (Finding 24: avoids rebuilding
-# from fixed architectural constants on every forward pass).
-_gen_stack_cache: Dict[Tuple[int, Tuple[int, ...]], Dict[int, torch.Tensor]] = {}
+# Cache for generator sub-block stacks.  Keyed by (data_ptr, shape, irrep_dims)
+# for stability across forward passes within a process.  data_ptr() is stable
+# for registered buffers (they don't move unless .to() is called).  Bounded to
+# _GEN_STACK_CACHE_MAX entries to prevent unbounded growth in multi-model runs.
+_gen_stack_cache: Dict[Tuple, Dict[int, torch.Tensor]] = {}
+_GEN_STACK_CACHE_MAX: int = 8
+
+
+def _gen_cache_key(generators: torch.Tensor, irrep_dims: List[int]) -> Tuple:
+    """Content-stable cache key for generator sub-block stacks.
+
+    Uses data_ptr + shape + device as a fast proxy for content identity.
+    Falls back to full content hash if data_ptr is 0 (e.g., meta tensors).
+    """
+    ptr = generators.data_ptr()
+    if ptr == 0:
+        # Meta tensor or unusual case — hash content
+        return (generators.shape, generators.device, tuple(irrep_dims),
+                hash(generators.cpu().numpy().tobytes()))
+    return (ptr, generators.shape, generators.device, tuple(irrep_dims))
 
 
 def fused_block_matrix_exp_pairs(
@@ -186,8 +203,8 @@ def fused_block_matrix_exp_pairs(
 
     results: List[Optional[Tuple[torch.Tensor, torch.Tensor]]] = [None] * len(irrep_dims)
 
-    # Cache key: (generator tensor id, irrep_dims tuple)
-    _cache_key = (id(generators), tuple(irrep_dims))
+    # Content-stable cache key (survives checkpoint reload, multiprocessing)
+    _cache_key = _gen_cache_key(generators, irrep_dims)
 
     for d, group in dim_groups.items():
         n_blocks = len(group)
@@ -200,6 +217,9 @@ def fused_block_matrix_exp_pairs(
             gen_stack = torch.stack(
                 [generators[:, s:e, s:e] for _, s, e in group], dim=0
             )
+            # Evict oldest entry if cache is full
+            if len(_gen_stack_cache) >= _GEN_STACK_CACHE_MAX:
+                _gen_stack_cache.pop(next(iter(_gen_stack_cache)))
             if _cache_key not in _gen_stack_cache:
                 _gen_stack_cache[_cache_key] = {}
             _gen_stack_cache[_cache_key][d] = gen_stack
