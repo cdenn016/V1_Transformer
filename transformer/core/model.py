@@ -872,15 +872,16 @@ class GaugeTransformerLM(nn.Module):
         batch_size, num_agents = token_ids.shape
         device = token_ids.device
 
-        # Warn if implicit_em is active in forward() — no ImplicitEMGradient
-        # re-attachment here.  Use forward_with_attention() for training.
+        # Block forward() when implicit_em is active during training.
+        # Without ImplicitEMGradient re-attachment (only in forward_with_attention),
+        # embedding gradients are silently broken while loss still decreases from
+        # other parameters — making the failure invisible.
         if (getattr(self.transformer.blocks[-1].ffn, 'implicit_em', False)
                 and self.training and torch.is_grad_enabled()):
-            warnings.warn(
+            raise RuntimeError(
                 "forward() called with implicit_em=True during training. "
                 "Gradient path to embeddings is broken — use "
-                "forward_with_attention() for training.",
-                stacklevel=2,
+                "forward_with_attention() for training."
             )
 
         # =================================================================

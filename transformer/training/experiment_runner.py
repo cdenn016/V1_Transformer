@@ -1038,15 +1038,10 @@ class PublicationTrainer(FastTrainer):
             Removes the trace component from ``phi_embed``, projecting phi to
             the traceless subalgebra sl(K) so det(Omega_ij) = 1.
         """
-        # --- Killing form preconditioning ---
-        if self._cartan_preconditioner is not None:
-            from transformer.core.gauge_preconditioner import apply_cartan_preconditioning
-            for name, param in self.model.named_parameters():
-                if param.grad is not None and ('phi_embed' in name or 'phi' in name.lower()):
-                    if param.grad.shape[-1] == self._cartan_preconditioner.shape[0]:
-                        param.grad.data = apply_cartan_preconditioning(
-                            param.grad.data, self._cartan_preconditioner
-                        )
+        # NOTE: Cartan preconditioning is applied ONCE in train_step() (pre-optimizer,
+        # lines ~1237-1245). Do NOT duplicate it here — with grad_accumulation_steps > 1,
+        # non-accumulation steps skip zero_grad(), so a second application would square
+        # the preconditioning and corrupt phi updates.
 
         # --- Kappa clamping (post-optimizer step) ---
         for block in self._model_blocks:
