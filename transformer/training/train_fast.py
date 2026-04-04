@@ -459,7 +459,7 @@ class FastTrainer:
 
         if is_best:
             path = self.config.checkpoint_dir / 'best_model.pt'
-            print(f"  💾 Saving best model: {path}")
+            print(f"  💾 Saving best model: {path}\n")
         else:
             path = self.config.checkpoint_dir / f'checkpoint_step_{self.global_step}.pt'
 
