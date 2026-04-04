@@ -270,7 +270,7 @@ def evaluate_on_test(
             # metrics['loss/ce'] is mean over non-padding tokens (from ignore_index)
             non_pad = (target_ids != pad_token_id).sum().item()
             total_loss += loss.item() * non_pad
-            total_ce += metrics['loss/ce'] * non_pad
+            total_ce += metrics.get('loss/ce_raw', metrics['loss/ce']) * non_pad
             total_tokens += non_pad
             num_batches += 1
             total_samples += input_ids.size(0)
