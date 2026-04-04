@@ -154,6 +154,22 @@ class TrainingConfig:
     # Hardware
     # ==========================================================================
     device: str = 'cuda'
+    num_workers: int = 4            # DataLoader worker processes (0 = main thread only)
+
+    # ==========================================================================
+    # Mixed Precision (AMP)
+    # ==========================================================================
+    # Selective AMP: only mu-path and output projection run in reduced precision.
+    # ALL sigma/covariance operations stay float32 (sandwich products, KL, decode,
+    # eigendecompositions, Cholesky). The VFE E-step already has autocast guards.
+    use_amp: bool = False           # Enable automatic mixed precision
+    amp_dtype: str = 'bfloat16'    # 'bfloat16' (no scaler needed) or 'float16'
+
+    # ==========================================================================
+    # torch.compile
+    # ==========================================================================
+    use_compile: bool = False       # Compile model with torch.compile
+    compile_mode: str = 'reduce-overhead'  # 'default', 'reduce-overhead', 'max-autotune'
 
     # ==========================================================================
     # Gauge Group

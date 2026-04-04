@@ -723,10 +723,12 @@ def _dispatch_kl_matrix(
             sig_t = sigma_q[:, None, :, :].expand(-1, N, -1, -1).clone()
         else:
             mu_t = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)
-            sigma_j = sigma_q[:, None, :, :].expand(-1, N, -1, -1).clone()
-            sig_t = torch.einsum(
-                'bijkl,bijkl,bijl->bijk', Omega, Omega, sigma_j
-            ).clamp(min=eps)
+            # AMP guard: covariance sandwich product must stay float32
+            with torch.amp.autocast('cuda', enabled=False):
+                sigma_j = sigma_q.float()[:, None, :, :].expand(-1, N, -1, -1).clone()
+                sig_t = torch.einsum(
+                    'bijkl,bijkl,bijl->bijk', Omega.float(), Omega.float(), sigma_j
+                ).clamp(min=eps)
 
         # Call unified kernel (with optional chunking)
         if chunk_size is not None and cached_transport is None:
@@ -755,10 +757,12 @@ def _dispatch_kl_matrix(
 
                     Omega_c = torch.einsum('bikl,bjlm->bijkm', ep_i, en_j)
                     mu_tc = torch.einsum('bijkl,bjl->bijk', Omega_c, mu_j)
-                    sig_j_exp = sig_j[:, None, :, :].expand(-1, n_i, -1, -1).clone()
-                    sig_tc = torch.einsum(
-                        'bijkl,bijkl,bijl->bijk', Omega_c, Omega_c, sig_j_exp
-                    ).clamp(min=eps)
+                    # AMP guard: covariance sandwich product must stay float32
+                    with torch.amp.autocast('cuda', enabled=False):
+                        sig_j_exp = sig_j.float()[:, None, :, :].expand(-1, n_i, -1, -1).clone()
+                        sig_tc = torch.einsum(
+                            'bijkl,bijkl,bijl->bijk', Omega_c.float(), Omega_c.float(), sig_j_exp
+                        ).clamp(min=eps)
                     del Omega_c
 
                     mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()
@@ -790,11 +794,13 @@ def _dispatch_kl_matrix(
             sig_t = sigma_q[:, None, :, :, :].expand(-1, N, -1, -1, -1).clone()
         else:
             mu_t = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)
-            sig_t = torch.einsum(
-                'bijkl,bjlm,bijmn->bijkn',
-                Omega, sigma_q, Omega.transpose(-1, -2)
-            )
-            sig_t = 0.5 * (sig_t + sig_t.transpose(-1, -2))
+            # AMP guard: covariance sandwich product must stay float32
+            with torch.amp.autocast('cuda', enabled=False):
+                sig_t = torch.einsum(
+                    'bijkl,bjlm,bijmn->bijkn',
+                    Omega.float(), sigma_q.float(), Omega.float().transpose(-1, -2)
+                )
+                sig_t = 0.5 * (sig_t + sig_t.transpose(-1, -2))
 
         if chunk_size is not None:
             # Full-covariance chunked: pre-compute exp pairs and loop
@@ -839,11 +845,13 @@ def _dispatch_kl_matrix(
 
                         Omega_c = torch.einsum('bikl,bjlm->bijkm', ep_i, en_j)
                         mu_tc = torch.einsum('bijkl,bjl->bijk', Omega_c, mu_j)
-                        sig_tc = torch.einsum(
-                            'bijkl,bjlm,bijmn->bijkn',
-                            Omega_c, sig_j, Omega_c.transpose(-1, -2)
-                        )
-                        sig_tc = 0.5 * (sig_tc + sig_tc.transpose(-1, -2))
+                        # AMP guard: covariance sandwich product must stay float32
+                        with torch.amp.autocast('cuda', enabled=False):
+                            sig_tc = torch.einsum(
+                                'bijkl,bjlm,bijmn->bijkn',
+                                Omega_c.float(), sig_j.float(), Omega_c.float().transpose(-1, -2)
+                            )
+                            sig_tc = 0.5 * (sig_tc + sig_tc.transpose(-1, -2))
                         del Omega_c
 
                         mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1).clone()
@@ -977,113 +985,130 @@ def aggregate_messages(
 
                 if sigma_aggregation == 'precision':
                     # Precision aggregation: 1/σ_agg = Σ_j β_ij / σ_t_j
-                    precision_agg = torch.zeros(batch_size, num_agents, K,
-                                                device=device, dtype=dtype)
-                    for i_start in range(0, num_agents, _tile_size):
-                        i_end = min(i_start + _tile_size, num_agents)
-                        ep_tile = _exp_phi[:, i_start:i_end]
-                        Omega_tile = torch.einsum(
-                            'bikl,bjlm->bijkm', ep_tile, _exp_neg_phi
-                        )
-                        sigma_t_tile = torch.einsum(
-                            'bijkl,bijkl,bjl->bijk',
-                            Omega_tile, Omega_tile, sigma_q_diag
-                        ).clamp(min=_eps)
-                        precision_agg[:, i_start:i_end] = torch.einsum(
-                            'bij,bijk->bik', beta[:, i_start:i_end], 1.0 / sigma_t_tile
-                        )
-                        del Omega_tile
-                    sigma_aggregated = (1.0 / precision_agg.clamp(min=_eps)).clamp(min=_eps)
+                    # AMP guard: sigma transport + division must stay float32
+                    with torch.amp.autocast('cuda', enabled=False):
+                        precision_agg = torch.zeros(batch_size, num_agents, K,
+                                                    device=device, dtype=torch.float32)
+                        _sq_diag_f32 = sigma_q_diag.float()
+                        _ep_f32 = _exp_phi.float()
+                        _en_f32 = _exp_neg_phi.float()
+                        for i_start in range(0, num_agents, _tile_size):
+                            i_end = min(i_start + _tile_size, num_agents)
+                            ep_tile = _ep_f32[:, i_start:i_end]
+                            Omega_tile = torch.einsum(
+                                'bikl,bjlm->bijkm', ep_tile, _en_f32
+                            )
+                            sigma_t_tile = torch.einsum(
+                                'bijkl,bijkl,bjl->bijk',
+                                Omega_tile, Omega_tile, _sq_diag_f32
+                            ).clamp(min=_eps)
+                            precision_agg[:, i_start:i_end] = torch.einsum(
+                                'bij,bijk->bik', beta[:, i_start:i_end].float(), 1.0 / sigma_t_tile
+                            )
+                            del Omega_tile
+                        sigma_aggregated = (1.0 / precision_agg.clamp(min=_eps)).clamp(min=_eps)
                 else:
                     # Mixture moment matching: Cov = E[Var] + Var[E]
-                    sigma_agg_accum = torch.zeros(batch_size, num_agents, K,
-                                                  device=device, dtype=dtype)
-                    for i_start in range(0, num_agents, _tile_size):
-                        i_end = min(i_start + _tile_size, num_agents)
-                        ep_tile = _exp_phi[:, i_start:i_end]
-                        Omega_tile = torch.einsum(
-                            'bikl,bjlm->bijkm', ep_tile, _exp_neg_phi
-                        )
-                        sigma_t_tile = torch.einsum(
-                            'bijkl,bijkl,bjl->bijk',
-                            Omega_tile, Omega_tile, sigma_q_diag
-                        ).clamp(min=_eps)
-                        mu_t_tile = torch.einsum(
-                            'bijkl,bjl->bijk', Omega_tile, mu_q
-                        )
-                        second_moment_tile = sigma_t_tile + mu_t_tile ** 2
-                        sigma_agg_accum[:, i_start:i_end] = torch.einsum(
-                            'bij,bijk->bik', beta[:, i_start:i_end], second_moment_tile
-                        )
-                        del Omega_tile
-                    sigma_aggregated = (sigma_agg_accum - mu_aggregated ** 2).clamp(min=_eps)
+                    # AMP guard: sigma transport must stay float32
+                    with torch.amp.autocast('cuda', enabled=False):
+                        sigma_agg_accum = torch.zeros(batch_size, num_agents, K,
+                                                      device=device, dtype=torch.float32)
+                        _sq_diag_f32 = sigma_q_diag.float()
+                        _ep_f32 = _exp_phi.float()
+                        _en_f32 = _exp_neg_phi.float()
+                        _mu_f32 = mu_q.float()
+                        for i_start in range(0, num_agents, _tile_size):
+                            i_end = min(i_start + _tile_size, num_agents)
+                            ep_tile = _ep_f32[:, i_start:i_end]
+                            Omega_tile = torch.einsum(
+                                'bikl,bjlm->bijkm', ep_tile, _en_f32
+                            )
+                            sigma_t_tile = torch.einsum(
+                                'bijkl,bijkl,bjl->bijk',
+                                Omega_tile, Omega_tile, _sq_diag_f32
+                            ).clamp(min=_eps)
+                            mu_t_tile = torch.einsum(
+                                'bijkl,bjl->bijk', Omega_tile, _mu_f32
+                            )
+                            second_moment_tile = sigma_t_tile + mu_t_tile ** 2
+                            sigma_agg_accum[:, i_start:i_end] = torch.einsum(
+                                'bij,bijk->bik', beta[:, i_start:i_end].float(), second_moment_tile
+                            )
+                            del Omega_tile
+                        sigma_aggregated = (sigma_agg_accum - mu_aggregated.float() ** 2).clamp(min=_eps)
             else:
-                if sigma_aggregation == 'precision':
-                    # Full covariance precision aggregation
-                    precision_agg = torch.zeros(batch_size, num_agents, K, K,
-                                                device=device, dtype=dtype)
-                    I_K = torch.eye(K, device=device, dtype=dtype)
-                    for i_start in range(0, num_agents, _tile_size):
-                        i_end = min(i_start + _tile_size, num_agents)
-                        ep_tile = _exp_phi[:, i_start:i_end]
-                        Omega_tile = torch.einsum(
-                            'bikl,bjlm->bijkm', ep_tile, _exp_neg_phi
-                        )
-                        Sigma_t = torch.einsum(
-                            'bijkl,bjlm,bijmn->bijkn',
-                            Omega_tile, sigma_q, Omega_tile.transpose(-1, -2)
-                        )
-                        Sigma_t = 0.5 * (Sigma_t + Sigma_t.transpose(-1, -2)) + _eps * I_K
+                # AMP guard: full covariance transport, inv, eigh must stay float32
+                with torch.amp.autocast('cuda', enabled=False):
+                    _ep_f32 = _exp_phi.float()
+                    _en_f32 = _exp_neg_phi.float()
+                    _sq_f32 = sigma_q.float()
+                    _mu_f32 = mu_q.float()
+                    if sigma_aggregation == 'precision':
+                        # Full covariance precision aggregation
+                        precision_agg = torch.zeros(batch_size, num_agents, K, K,
+                                                    device=device, dtype=torch.float32)
+                        I_K = torch.eye(K, device=device, dtype=torch.float32)
+                        for i_start in range(0, num_agents, _tile_size):
+                            i_end = min(i_start + _tile_size, num_agents)
+                            ep_tile = _ep_f32[:, i_start:i_end]
+                            Omega_tile = torch.einsum(
+                                'bikl,bjlm->bijkm', ep_tile, _en_f32
+                            )
+                            Sigma_t = torch.einsum(
+                                'bijkl,bjlm,bijmn->bijkn',
+                                Omega_tile, _sq_f32, Omega_tile.transpose(-1, -2)
+                            )
+                            Sigma_t = 0.5 * (Sigma_t + Sigma_t.transpose(-1, -2)) + _eps * I_K
+                            try:
+                                Sigma_t_inv = torch.linalg.inv(Sigma_t)
+                            except (RuntimeError, torch.linalg.LinAlgError):
+                                Sigma_t_inv = torch.linalg.pinv(Sigma_t)
+                            precision_agg[:, i_start:i_end] = torch.einsum(
+                                'bij,bijkl->bikl', beta[:, i_start:i_end].float(), Sigma_t_inv
+                            )
+                            del Omega_tile
+                        precision_agg = 0.5 * (precision_agg + precision_agg.transpose(-1, -2)) + _eps * I_K
                         try:
-                            Sigma_t_inv = torch.linalg.inv(Sigma_t)
+                            sigma_aggregated = torch.linalg.inv(precision_agg)
                         except (RuntimeError, torch.linalg.LinAlgError):
-                            Sigma_t_inv = torch.linalg.pinv(Sigma_t)
-                        precision_agg[:, i_start:i_end] = torch.einsum(
-                            'bij,bijkl->bikl', beta[:, i_start:i_end], Sigma_t_inv
+                            sigma_aggregated = torch.linalg.pinv(precision_agg)
+                        sigma_aggregated = 0.5 * (sigma_aggregated + sigma_aggregated.transpose(-1, -2))
+                    else:
+                        # Full covariance mixture moment matching with SPD protection
+                        sigma_agg_accum = torch.zeros(batch_size, num_agents, K, K,
+                                                      device=device, dtype=torch.float32)
+                        for i_start in range(0, num_agents, _tile_size):
+                            i_end = min(i_start + _tile_size, num_agents)
+                            ep_tile = _ep_f32[:, i_start:i_end]
+                            Omega_tile = torch.einsum(
+                                'bikl,bjlm->bijkm', ep_tile, _en_f32
+                            )
+                            Sigma_t = torch.einsum(
+                                'bijkl,bjlm,bijmn->bijkn',
+                                Omega_tile, _sq_f32, Omega_tile.transpose(-1, -2)
+                            )
+                            mu_t_tile = torch.einsum(
+                                'bijkl,bjl->bijk', Omega_tile, _mu_f32
+                            )
+                            second_moment = Sigma_t + torch.einsum(
+                                'bijk,bijl->bijkl', mu_t_tile, mu_t_tile
+                            )
+                            sigma_agg_accum[:, i_start:i_end] = torch.einsum(
+                                'bij,bijkl->bikl', beta[:, i_start:i_end].float(), second_moment
+                            )
+                            del Omega_tile
+                        sigma_aggregated = sigma_agg_accum - torch.einsum(
+                            'bik,bil->bikl', mu_aggregated.float(), mu_aggregated.float()
                         )
-                        del Omega_tile
-                    precision_agg = 0.5 * (precision_agg + precision_agg.transpose(-1, -2)) + _eps * I_K
-                    try:
-                        sigma_aggregated = torch.linalg.inv(precision_agg)
-                    except (RuntimeError, torch.linalg.LinAlgError):
-                        sigma_aggregated = torch.linalg.pinv(precision_agg)
-                    sigma_aggregated = 0.5 * (sigma_aggregated + sigma_aggregated.transpose(-1, -2))
-                else:
-                    # Full covariance mixture moment matching with SPD protection
-                    sigma_agg_accum = torch.zeros(batch_size, num_agents, K, K,
-                                                  device=device, dtype=dtype)
-                    for i_start in range(0, num_agents, _tile_size):
-                        i_end = min(i_start + _tile_size, num_agents)
-                        ep_tile = _exp_phi[:, i_start:i_end]
-                        Omega_tile = torch.einsum(
-                            'bikl,bjlm->bijkm', ep_tile, _exp_neg_phi
-                        )
-                        Sigma_t = torch.einsum(
-                            'bijkl,bjlm,bijmn->bijkn',
-                            Omega_tile, sigma_q, Omega_tile.transpose(-1, -2)
-                        )
-                        mu_t_tile = torch.einsum(
-                            'bijkl,bjl->bijk', Omega_tile, mu_q
-                        )
-                        second_moment = Sigma_t + torch.einsum(
-                            'bijk,bijl->bijkl', mu_t_tile, mu_t_tile
-                        )
-                        sigma_agg_accum[:, i_start:i_end] = torch.einsum(
-                            'bij,bijkl->bikl', beta[:, i_start:i_end], second_moment
-                        )
-                        del Omega_tile
-                    sigma_aggregated = sigma_agg_accum - torch.einsum(
-                        'bik,bil->bikl', mu_aggregated, mu_aggregated
-                    )
-                    # SPD protection: symmetrize + eigenvalue floor
-                    sigma_aggregated = 0.5 * (sigma_aggregated + sigma_aggregated.transpose(-1, -2))
-                    try:
-                        eigvals, eigvecs = torch.linalg.eigh(sigma_aggregated)
-                        eigvals = eigvals.clamp(min=1e-4)
-                        sigma_aggregated = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
-                    except (RuntimeError, torch.linalg.LinAlgError):
-                        sigma_aggregated = sigma_aggregated + 1e-3 * torch.eye(
-                            K, device=device, dtype=dtype)
+                        # SPD protection: symmetrize + eigenvalue floor
+                        sigma_aggregated = 0.5 * (sigma_aggregated + sigma_aggregated.transpose(-1, -2))
+                        try:
+                            eigvals, eigvecs = torch.linalg.eigh(sigma_aggregated)
+                            eigvals = eigvals.clamp(min=1e-4)
+                            sigma_aggregated = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
+                        except (RuntimeError, torch.linalg.LinAlgError):
+                            sigma_aggregated = sigma_aggregated + 1e-3 * torch.eye(
+                                K, device=device, dtype=torch.float32)
         else:
             sigma_aggregated = None
 

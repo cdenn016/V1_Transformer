@@ -1471,11 +1471,13 @@ def create_char_dataloaders(
     actual_vocab_size = train_dataset.get_vocab_size()
 
     # Create dataloaders
+    _persistent = num_workers > 0
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
+        persistent_workers=_persistent,
         pin_memory=True if torch.cuda.is_available() else False,
         drop_last=True,
         worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
@@ -1486,6 +1488,7 @@ def create_char_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
+        persistent_workers=_persistent,
         pin_memory=True if torch.cuda.is_available() else False,
         drop_last=False,
         worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
@@ -1506,6 +1509,7 @@ def create_char_dataloaders(
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
+            persistent_workers=_persistent,
             pin_memory=True if torch.cuda.is_available() else False,
             drop_last=False,
             worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
@@ -1657,11 +1661,13 @@ def create_dataloaders(
     actual_vocab_size = train_dataset.get_vocab_size()
 
     # Create dataloaders
+    _persistent = num_workers > 0
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
+        persistent_workers=_persistent,
         pin_memory=True if torch.cuda.is_available() else False,
         drop_last=True,  # Drop incomplete batches for consistent shapes
         worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
@@ -1672,6 +1678,7 @@ def create_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
+        persistent_workers=_persistent,
         pin_memory=True if torch.cuda.is_available() else False,
         drop_last=False,
         worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
@@ -1704,6 +1711,7 @@ def create_dataloaders(
             batch_size=batch_size,
             shuffle=False,  # No shuffling for test — deterministic & reproducible
             num_workers=num_workers,
+            persistent_workers=_persistent,
             pin_memory=True if torch.cuda.is_available() else False,
             drop_last=False,
             worker_init_fn=_worker_init_fn,  # Reproducibility: seed workers
