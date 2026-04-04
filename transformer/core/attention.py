@@ -364,8 +364,8 @@ def compute_attention_weights(
         # Check which positions have at least one other valid target
         # A position has other targets if any off-diagonal element is not -inf
         has_other_targets = (logits != float('-inf')).sum(dim=-1) > 1  # (B, N)
-        # Clone to avoid inplace modification (needed for gradient computation)
-        logits = logits.clone()
+        # No clone needed — logits is already a fresh tensor from the division/
+        # masked_fill above, not a view into the autograd graph.
         # Apply masking only where safe (where there are other targets)
         diag_vals = logits[:, diag_idx, diag_idx]  # (B, N)
         masked_diag_vals = torch.where(
