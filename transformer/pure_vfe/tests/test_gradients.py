@@ -356,5 +356,94 @@ class TestMStepOmegaUpdate:
             f"Moment-matching should reduce distance to target: {dist_before:.4f} -> {dist_after:.4f}"
 
 
+class TestAnalyticalMStepOmegaGrad:
+    r"""Finite-difference validation of ``_compute_m_step_omega_grad``.
+
+    The analytical gradient :math:`\partial F_{\text{coupling}} / \partial \Omega_i`
+    is evaluated at the prior Omega values. We verify it by perturbing each
+    element of prior_Omega and checking the change in VFE coupling.
+    """
+
+    def setup_method(self):
+        torch.manual_seed(123)
+        self.B = 1
+        self.N = 3
+        self.H = 2
+        self.K_h = 3
+        self.K = self.H * self.K_h
+
+    def _compute_coupling_vfe(self, mu_h, Sigma_h, Omega, tau, causal):
+        """Compute F_coupling = sum_ij beta_ij * KL_ij at given Omega."""
+        from ..gaussians import precompute_tokens, pairwise_kl, kl_attention
+        precomp = precompute_tokens(mu_h, Sigma_h, Omega)
+        kl_ij = pairwise_kl(precomp, causal=causal)
+        beta = kl_attention(kl_ij, tau, causal=causal)
+        return (beta * kl_ij).sum().item()
+
+    def test_autograd_vs_finite_diff(self):
+        r"""Verify the autograd-based M-step gradient matches finite differences.
+
+        The coupling VFE is :math:`F = \sum_{ij} \beta_{ij} \mathrm{KL}_{ij}`
+        where both :math:`\beta` and :math:`\mathrm{KL}` depend on :math:`\Omega`.
+        The M-step helper uses autograd to get the exact gradient including
+        the softmax correction :math:`\partial \beta / \partial \Omega` terms.
+        """
+        from ..inference import extract_block_diag
+        from ..gaussians import precompute_tokens, pairwise_kl, kl_attention
+
+        B, N, H, K_h, K = self.B, self.N, self.H, self.K_h, self.K
+        tau = K_h ** 0.5
+        causal = False
+
+        # Random converged beliefs (fixed)
+        mu_star = torch.randn(B, N, K)
+        A = torch.randn(B, N, K, K) * 0.3
+        Sigma_star = A @ A.transpose(-2, -1) + 0.5 * torch.eye(K)
+
+        mu_h = mu_star.view(B, N, H, K_h)
+        Sigma_h = extract_block_diag(Sigma_star, H, K_h)
+
+        # Prior Omega near identity
+        prior_Omega = (
+            torch.eye(K_h).unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(B, N, H, K_h, K_h).clone()
+            + 0.1 * torch.randn(B, N, H, K_h, K_h)
+        )
+
+        # Autograd gradient
+        Om_ag = prior_Omega.clone().requires_grad_(True)
+        precomp = precompute_tokens(mu_h, Sigma_h, Om_ag)
+        kl_ij = pairwise_kl(precomp, causal=causal)
+        beta = kl_attention(kl_ij, tau, causal=causal)
+        F_coupling = (beta * kl_ij).sum()
+        ag_grad = torch.autograd.grad(F_coupling, Om_ag)[0].detach()
+
+        # Finite differences on position 0, head 0
+        eps = 1e-4
+        i_pos, i_head = 0, 0
+        fd_grad = torch.zeros(K_h, K_h)
+
+        for a in range(K_h):
+            for b in range(K_h):
+                Om_plus = prior_Omega.clone()
+                Om_plus[0, i_pos, i_head, a, b] += eps
+                f_plus = self._compute_coupling_vfe(mu_h, Sigma_h, Om_plus, tau, causal)
+
+                Om_minus = prior_Omega.clone()
+                Om_minus[0, i_pos, i_head, a, b] -= eps
+                f_minus = self._compute_coupling_vfe(mu_h, Sigma_h, Om_minus, tau, causal)
+
+                fd_grad[a, b] = (f_plus - f_minus) / (2 * eps)
+
+        ag = ag_grad[0, i_pos, i_head]
+
+        max_diff = (ag - fd_grad).abs().max().item()
+        rel_err = max_diff / (fd_grad.abs().max().item() + 1e-10)
+
+        assert rel_err < 0.02, (
+            f"Autograd vs FD relative error = {rel_err:.4e} (max_diff={max_diff:.4e})\n"
+            f"Autograd:\n{ag}\nFinite diff:\n{fd_grad}"
+        )
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

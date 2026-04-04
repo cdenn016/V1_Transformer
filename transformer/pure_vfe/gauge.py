@@ -243,6 +243,102 @@ def vfe_grad_Omega(mu_h, Sigma_h, Omega, beta, kl_ij, precomp):
     return grad_Omega
 
 
+def vfe_grad_Omega_full(mu_h, Sigma_h, Omega, beta, kl_ij, precomp):
+    r"""Full VFE gradient :math:`\partial F / \partial \Omega_i` including both
+    forward (i as query) and backward (i as key) contributions.
+
+    .. math::
+        \frac{\partial F}{\partial \Omega_i}
+        = \underbrace{\sum_j \beta_{ij} \frac{\partial \mathrm{KL}_{ij}}{\partial \Omega_i}}_{\text{forward}}
+        + \underbrace{\sum_j \beta_{ji} \frac{\partial \mathrm{KL}_{ji}}{\partial \Omega_i}}_{\text{backward}}
+
+    The forward term is :math:`(\partial \mathrm{KL}/\partial \Omega_{ij}) \Omega_j^{-\top}`.
+    The backward term uses :math:`\Omega_{ji} = \Omega_j \Omega_i^{-1}`, giving
+    :math:`\partial \mathrm{KL}_{ji}/\partial \Omega_i = -\Omega_{ji}^\top
+    (\partial \mathrm{KL}/\partial \Omega_{ji}) \Omega_i^{-\top}`.
+
+    This is needed for the M-step, where ``Omega_i`` changes affect ALL pairs
+    involving position i. The E-step uses the forward-only version since each
+    position updates independently.
+
+    Args:
+        mu_h: [B, N, H, K_h] per-head means
+        Sigma_h: [B, N, H, K_h, K_h] per-head covariances
+        Omega: [B, N, H, K_h, K_h] gauge frames
+        beta: [B, H, N, N] attention weights
+        kl_ij: [B, H, N, N] pairwise KL
+        precomp: precomputed quantities dict
+
+    Returns: [B, N, H, K_h, K_h] full gradient ∂F/∂Ω_i
+    """
+    B, N, H, K_h = mu_h.shape
+    device = mu_h.device
+    dtype = mu_h.dtype
+
+    grad_Omega = torch.zeros(B, N, H, K_h, K_h, device=device, dtype=dtype)
+
+    mu = mu_h.permute(0, 2, 1, 3)          # [B, H, N, K_h]
+    Sig = Sigma_h.permute(0, 2, 1, 3, 4)   # [B, H, N, K_h, K_h]
+    Om = Omega.permute(0, 2, 1, 3, 4)      # [B, H, N, K_h, K_h]
+
+    for h in range(H):
+        mu_h_s = mu[:, h]           # [B, N, K_h]
+        Sig_h_s = Sig[:, h]         # [B, N, K_h, K_h]
+        Om_h_s = Om[:, h]           # [B, N, K_h, K_h]
+        beta_h = beta[:, h]         # [B, N, N]
+
+        Om_inv = torch.linalg.inv(Om_h_s)  # [B, N, K_h, K_h]
+
+        # Ω_ij = Ω_i @ Ω_j⁻¹
+        Om_ij = Om_h_s[:, :, None] @ Om_inv[:, None, :]  # [B, N, N, K_h, K_h]
+        Om_ij_inv = torch.linalg.inv(Om_ij)
+        Om_ij_invT = Om_ij_inv.transpose(-2, -1)
+
+        Sig_j_inv = safe_inverse(Sig_h_s)
+
+        # Λ_ij, δ_ij
+        Lambda_ij = Om_ij_invT @ Sig_j_inv[:, None, :] @ Om_ij_inv
+        Om_ij_mu_j = torch.einsum('bijnk,bjk->bijn', Om_ij, mu_h_s)
+        delta_ij = mu_h_s[:, :, None] - Om_ij_mu_j
+
+        # ∂KL/∂Ω_ij (three terms)
+        Lam_delta = torch.einsum('bijpq,bijq->bijp', Lambda_ij, delta_ij)
+        term1 = -Lam_delta.unsqueeze(-1) * mu_h_s[:, None, :].unsqueeze(-2)
+        outer_ij = delta_ij.unsqueeze(-1) * delta_ij.unsqueeze(-2)
+        inner_ij = Sig_h_s[:, :, None] + outer_ij
+        term2 = -(Lambda_ij @ inner_ij @ Om_ij_invT)
+        term3 = Om_ij_invT
+
+        dKL_dOij = term1 + term2 + term3  # [B, N_i, N_j, K_h, K_h]
+        dKL_dOij = torch.clamp(dKL_dOij, -1e6, 1e6)
+
+        # --- Forward: ∂KL_ij/∂Ω_i = ∂KL/∂Ω_ij @ Ω_j⁻ᵀ ---
+        Om_j_invT = Om_inv.transpose(-2, -1)  # [B, N, K_h, K_h]
+        dKL_dOi_fwd = dKL_dOij @ Om_j_invT[:, None, :]
+        grad_fwd = torch.einsum('bij,bijpq->bipq', beta_h, dKL_dOi_fwd)
+
+        # --- Backward: ∂KL_ji/∂Ω_i = -Ω_jiᵀ @ ∂KL/∂Ω_ji @ Ω_i⁻ᵀ ---
+        # dKL_dOij[j, i] = ∂KL_ji/∂Ω_ji
+        dKL_dOji = dKL_dOij.transpose(1, 2)  # [B, N_j, N_i, K_h, K_h] → swap i↔j
+        Om_ji = Om_ij.transpose(1, 2)        # [B, N_j, N_i, K_h, K_h]
+        Om_jiT = Om_ji.transpose(-2, -1)
+        Om_i_invT = Om_inv.transpose(-2, -1)  # [B, N_i, K_h, K_h]
+        # dKL_ji/dΩ_i = -Ω_jiᵀ @ dKL/dΩ_ji @ Ω_i⁻ᵀ
+        # Shape: [B, N_j, N_i, K_h, K_h] with i in dim 2
+        dKL_dOi_bwd = -(Om_jiT @ dKL_dOji @ Om_i_invT[:, None, :])
+        dKL_dOi_bwd = torch.clamp(dKL_dOi_bwd, -1e6, 1e6)
+        # beta_ji is beta_h[:, j, i] → sum over j (dim 1)
+        # We need sum_j beta_ji * dKL_ji/dOmega_i, with j in dim 1, i in dim 2
+        beta_ji = beta_h.transpose(1, 2)  # [B, N_i, N_j] → swap to [B, j, i]? No.
+        # beta_h[b, j, i] with j in dim1, i in dim2
+        # dKL_dOi_bwd[b, j, i, p, q] — sum over j
+        grad_bwd = torch.einsum('bji,bjipq->bipq', beta_h, dKL_dOi_bwd)
+
+        grad_Omega[:, :, h] = grad_fwd + grad_bwd
+
+    return grad_Omega
+
+
 # ---------------------------------------------------------------------------
 # Natural gradient on GL(K)
 # ---------------------------------------------------------------------------
