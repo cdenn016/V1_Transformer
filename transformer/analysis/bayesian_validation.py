@@ -187,8 +187,10 @@ def build_hierarchical_correlation_model(
     Returns (model, idata).
     """
     # Fisher-z transform observed correlations
-    # Clip to avoid infinities at ±1
-    r_clipped = np.clip(vd.mean_r, -0.999, 0.999)
+    # Clip to avoid infinities at ±1. Use 0.99 (not 0.999) because
+    # se_z ≈ se_r / (1 - r²) inflates ~500x near |r|=0.999, which
+    # destabilizes MCMC. At 0.99 the max inflation is ~50x.
+    r_clipped = np.clip(vd.mean_r, -0.99, 0.99)
     z_obs = np.arctanh(r_clipped)
 
     # SE in z-space: se_z ≈ se_r / (1 - r²)  (delta method)
