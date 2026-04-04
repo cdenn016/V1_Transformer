@@ -384,6 +384,7 @@ def compute_free_energy_loss(
     # M-step loss for consistency: same α weights the self-coupling
     # in both E-step gradient and M-step loss.
     # =================================================================
+    kl_per_agent = None  # Computed below when M_alpha > 0; reused in diagnostics
     if M_alpha > 0.0:
         K = mu_q.shape[-1]
         # Detach E-step covariances: backprop through the E-step sigma evolution
@@ -597,8 +598,15 @@ def compute_free_energy_loss(
                 alpha_vals = vffn.get_bayesian_alpha(mu_q, mu_p, sigma_p, sigma_q)
                 c0 = _F.softplus(vffn.raw_c0)
                 b0 = _F.softplus(vffn.raw_b0)
-                # Reuse kl_per_agent from line 402 instead of recomputing
-                kl_qp = kl_per_agent.detach()  # (B, N)
+                # Reuse kl_per_agent if available (computed when M_alpha > 0),
+                # otherwise compute for diagnostics only.
+                if kl_per_agent is not None:
+                    kl_qp = kl_per_agent.detach()
+                else:
+                    kl_qp = gaussian_kl_divergence(
+                        mu_q=mu_q, sigma_q=sigma_q,
+                        mu_p=mu_p, sigma_p=sigma_p,
+                    ).detach()  # (B, N)
                 # Mahalanobis term only (cheap: just the quadratic part)
                 delta = mu_q - mu_p
                 if sigma_p.dim() == 3:
