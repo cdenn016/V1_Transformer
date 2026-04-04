@@ -1723,7 +1723,7 @@ class PublicationTrainer(FastTrainer):
                     # Use temperature 0.9 and lower top_k for more diversity
                     sample = self.sample_text(
                         prompt=prompt, max_new_tokens=30, temperature=0.9, top_k=30)
-                    _write(f"    Sample: {sample[:100]}...")
+                    _write(f"\n    Sample: {sample[:100]}...\n")
                 except Exception as e:
                     import traceback
                     _write(f"    Sample generation failed: {e}")
