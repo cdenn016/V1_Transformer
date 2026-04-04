@@ -430,11 +430,14 @@ def vfe_grad_mu_alignment(precomp, beta, kl_ij, tau):
     return grad
 
 
-def vfe_grad_Sigma_alignment(precomp, beta):
-    """
-    Alignment contribution to ∂F/∂Σ_i (Eq. B.1, ignoring softmax correction).
+def vfe_grad_Sigma_alignment(precomp, beta, kl_ij=None, tau=1.0):
+    r"""
+    Alignment contribution to ∂F/∂Σ_i (Eq. B.1, with softmax correction).
 
-    ∂F_align/∂Σ_i = ½[Σ_j β_ij (Ω_i⁻ᵀ P_j Ω_i⁻¹) - Σ_i⁻¹]
+    ∂F_align/∂Σ_i = ½[Σ_j w_ij (Ω_i⁻ᵀ P_j Ω_i⁻¹) - Σ_i⁻¹]
+
+    where w_ij = β_ij [1 + (E_β[KL] - KL_ij) / τ] when kl_ij is provided,
+    or w_ij = β_ij when kl_ij is None (backward-compatible, no correction).
 
     Returns the attention-weighted transported precision: [B, H, N, K, K]
     (The -Σ_i⁻¹ part and the ½ factor are applied in the caller.)
@@ -442,15 +445,23 @@ def vfe_grad_Sigma_alignment(precomp, beta):
     P = precomp['P']
     Om_inv = precomp['Omega_inv']
 
+    # Compute softmax-corrected weights if kl_ij is provided
+    if kl_ij is not None:
+        e_kl = (beta * kl_ij).sum(-1, keepdim=True)  # [B, H, N, 1]
+        correction = ((e_kl - kl_ij) / tau).clamp(-1.0, 2.0)
+        w = beta * (1.0 + correction)  # [B, H, N, N]
+    else:
+        w = beta
+
     cuda_ext = get_cuda_ext()
-    if cuda_ext is not None and P.is_cuda:
+    if cuda_ext is not None and P.is_cuda and kl_ij is None:
         return cuda_ext.grad_sigma_alignment(P, Om_inv, beta)
 
-    # PyTorch fallback: Σ_j β_ij · Ω_i⁻ᵀ P_j Ω_i⁻¹
+    # PyTorch fallback: Σ_j w_ij · Ω_i⁻ᵀ P_j Ω_i⁻¹
     B, H, N, K, _ = P.shape
 
-    # Weighted sum of P_j: [B, H, N_i, K, K] = Σ_j β_ij P_j
-    wP = torch.einsum('bhij,bhjpq->bhipq', beta, P)  # [B, H, N, K, K]
+    # Weighted sum of P_j: [B, H, N_i, K, K] = Σ_j w_ij P_j
+    wP = torch.einsum('bhij,bhjpq->bhipq', w, P)  # [B, H, N, K, K]
 
     # Transform: Ω_i⁻ᵀ wP Ω_i⁻¹
     Om_invT = Om_inv.transpose(-2, -1)

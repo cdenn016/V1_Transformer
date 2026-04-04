@@ -1781,7 +1781,7 @@ class VariationalFFNDynamic(nn.Module):
                 sigma_current = sigma_current.clamp(min=_eps, max=self.sigma_max)
             else:
                 eigvals, eigvecs = _safe_eigh(sigma_current, jitter=_eps)
-                eigvals = eigvals.clamp(min=_eps, max=self.sigma_max * self.sigma_max)
+                eigvals = eigvals.clamp(min=_eps, max=self.sigma_max)
                 sigma_current = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
 
         # ── Phi / omega setup ────────────────────────────────────────────

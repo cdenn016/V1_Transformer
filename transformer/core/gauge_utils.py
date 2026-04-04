@@ -106,11 +106,12 @@ def newton_schulz_orthogonalize(
     eye = torch.eye(K, device=X.device, dtype=X.dtype)
 
     # Rescale to bring singular values near 1 (convergence basin: (0, √3)).
-    # Frobenius norm / sqrt(K) estimates the RMS singular value.
+    # Use Frobenius norm / sqrt(K) as RMS singular value estimate, but with
+    # a tighter threshold (1.2 instead of 1.5) to catch outlier singular
+    # values that the RMS average might mask for high-condition-number matrices.
     frob = X.norm(dim=(-2, -1), keepdim=True).clamp(min=1e-8)
     rms_sv = frob / (K ** 0.5)
-    # Only rescale if RMS singular value > 1.5 (well inside basin if near 1)
-    needs_rescale = (rms_sv > 1.5).squeeze(-1).squeeze(-1)
+    needs_rescale = (rms_sv > 1.2).squeeze(-1).squeeze(-1)
     if needs_rescale.any():
         X = torch.where(
             needs_rescale[..., None, None],

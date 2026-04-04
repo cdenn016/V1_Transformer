@@ -198,6 +198,7 @@ def apply_cartan_preconditioning(
 def build_killing_form_preconditioner(
     generators: torch.Tensor,  # (n_gen, K, K)
     center_reg: float = None,
+    center_only: bool = True,
 ) -> torch.Tensor:
     r"""
     Build the Killing form natural gradient preconditioner for gl(K).
@@ -259,8 +260,23 @@ def build_killing_form_preconditioner(
     # Modified Killing form metric: g̃_ab = 2K · gram_ab - 2 · trace_outer_ab
     metric = 2.0 * K * gram - 2.0 * trace_outer
 
-    # Regularize the center direction (kernel of Killing form on gl(K))
-    metric = metric + center_reg * torch.eye(n_gen, device=device, dtype=dtype)
+    # Regularize the center direction (kernel of Killing form on gl(K)).
+    # center_only=True: project onto the 1D center subspace so only the
+    # degenerate trace direction is lifted, preserving the Killing form's
+    # geometry on sl(K).  center_only=False: old behavior (adds center_reg*I
+    # to the full metric, which uniformly shifts all eigenvalues and makes
+    # the natural gradient equivalent to scaled Euclidean).
+    if center_only:
+        trace_norm = traces.norm()
+        if trace_norm > 1e-12:
+            center_dir = traces / trace_norm
+            center_proj = torch.outer(center_dir, center_dir)
+            metric = metric + center_reg * center_proj
+        else:
+            # No trace direction (e.g., pure so(K)) — no regularization needed
+            pass
+    else:
+        metric = metric + center_reg * torch.eye(n_gen, device=device, dtype=dtype)
 
     # Invert to get natural gradient metric
     inv_metric = torch.linalg.inv(metric)

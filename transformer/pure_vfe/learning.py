@@ -772,7 +772,11 @@ def m_step(token_ids, targets, mu_star, Sigma_star, Omega_star, model, config,
 
     model.prior_Sigma[update_tokens] = Sigma_new
 
-    # ---- Prior gauge frame gradient (vectorized) ----
+    # ---- Prior gauge frame update (moment-matching heuristic) ----
+    # NOTE: This is NOT the analytical VFE gradient dF/dOmega. It is a
+    # moment-matching update that pulls Omega toward the mean converged
+    # E-step value: grad = -(E[Omega*] - Omega). This is an EM-style
+    # update, not a natural gradient on GL(K).
     omega_grad_clamp = getattr(config, 'omega_grad_clamp', 10.0)
 
     Omega_all = model.prior_Omega[update_tokens]       # [T, H, K_h, K_h]
