@@ -116,6 +116,13 @@ class BlockConfig:
                                         # More permissive than iterative E-step (2.0) since the
                                         # closed-form base point is already at the linear optimum.
 
+    # === Performance ===
+    compile_vfe: bool = False           # torch.compile the VFE iteration inner loop.
+                                        # Fuses element-wise ops, reduces kernel launch overhead.
+                                        # Adds compilation latency on first forward pass.
+    gradient_checkpoint_vfe: bool = False  # Activation checkpointing for VFE iterations.
+                                        # Trades ~2x compute for ~3x memory savings with 3 iters.
+
     # === Gauge geometry ===
     gauge_mode: str =          'learned'         # 'learned' | 'trivial' (Ω=I) | 'constant' (per-head Ω)
     gauge_param: str =         'phi'            # 'phi' (Lie algebra) | 'omega' (direct GL(K) matrices)
@@ -255,6 +262,9 @@ class BlockConfig:
             e_step_sigma_floor=config.get('e_step_sigma_floor', 0.1),
             n_picard_steps=config.get('n_picard_steps', 0),
             picard_trust_region=config.get('picard_trust_region', 5.0),
+            # Performance
+            compile_vfe=config.get('compile_vfe', False),
+            gradient_checkpoint_vfe=config.get('gradient_checkpoint_vfe', False),
             # Gauge geometry
             gauge_mode=config.get('gauge_mode', 'learned'),
             gauge_param=config.get('gauge_param', 'phi'),

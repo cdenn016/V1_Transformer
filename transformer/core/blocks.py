@@ -241,6 +241,8 @@ class GaugeTransformerBlock(nn.Module):
             learnable_head_kappa=cfg.learnable_head_kappa,
             n_picard_steps=cfg.n_picard_steps,
             picard_trust_region=cfg.picard_trust_region,
+            compile_vfe=cfg.compile_vfe,
+            gradient_checkpoint_vfe=cfg.gradient_checkpoint_vfe,
         )
 
         self.norm2 = _make_norm(cfg.norm_type, cfg.embed_dim)

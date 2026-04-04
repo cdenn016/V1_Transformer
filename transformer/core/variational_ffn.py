@@ -506,6 +506,8 @@ class VariationalFFNDynamic(nn.Module):
         learnable_head_kappa: bool = False,  # If True, learn per-head κ_h
         n_picard_steps: int = 0,           # Re-solve iterations (diagonal) or Picard steps (full-cov)
         picard_trust_region: float = 5.0,  # Whitened trust region for Picard steps
+        compile_vfe: bool = False,         # torch.compile the VFE iteration (Finding 25)
+        gradient_checkpoint_vfe: bool = False,  # Activation checkpointing for VFE loop (Finding 26)
     ):
         """
         Initialize dynamic-beta VFE FFN.
@@ -585,6 +587,7 @@ class VariationalFFNDynamic(nn.Module):
         self.closed_form_e_step = closed_form_e_step
         self.n_picard_steps = n_picard_steps
         self.picard_trust_region = picard_trust_region
+        self.gradient_checkpoint_vfe = gradient_checkpoint_vfe
         self.implicit_em = implicit_em
         self._last_implicit_mu_scale = None   # (B, N, K) stored after E-step for model.py
         self._last_implicit_sigma_scale = None
@@ -761,6 +764,19 @@ class VariationalFFNDynamic(nn.Module):
             # Fixed per-variable E-step rates from config
             self.register_buffer('raw_lr', torch.tensor(self._softplus_inverse(mu_lr)))
             self._fixed_sigma_lr = sigma_lr
+
+        # torch.compile the VFE iteration inner loop (Finding 25).
+        # Fuses small element-wise ops and reduces kernel launch overhead.
+        # Disabled by default because torch.compile adds compilation latency
+        # on the first forward pass and may interact with dynamic shapes.
+        if compile_vfe:
+            self._vfe_iteration = torch.compile(
+                self._vfe_iteration,
+                mode='reduce-overhead',
+                # fullgraph=False allows Python-level control flow in _vfe_iteration
+                fullgraph=False,
+            )
+            logger.info("[VariationalFFNDynamic] torch.compile applied to _vfe_iteration")
 
     @property
     def lr(self) -> torch.Tensor:
@@ -3297,11 +3313,6 @@ class VariationalFFNDynamic(nn.Module):
             if self.obs_sigma_gradient:
                 _obs_cache['W_out_sq'] = W_out ** 2  # (V, K)
 
-        # TODO(perf): Apply torch.compile to _vfe_iteration inner loop to fuse
-        # small element-wise ops and reduce kernel launch overhead (Finding 25).
-        # TODO(perf): Add gradient checkpointing for VFE iterations to trade
-        # ~2x compute for ~3x memory savings with 3 iterations (Finding 26).
-
         # When phi is frozen across iterations, precompute block exp pairs
         # once to avoid redundant matrix exponentials (Finding 23: ~2-3x speedup
         # on matrix exp cost with 3 iterations).
@@ -3314,10 +3325,15 @@ class VariationalFFNDynamic(nn.Module):
                 mu_current.device, mu_current.dtype,
             )
 
+        # Gradient checkpointing (Finding 26): trade ~2x compute for ~3x
+        # memory savings with 3 iterations. Only checkpoint non-final
+        # iterations — the final iteration's activations are needed for the
+        # backward pass regardless.
+        _use_ckpt = (self.gradient_checkpoint_vfe and self.training
+                     and _n_iters > 1 and torch.is_grad_enabled())
+
         for iteration in range(_n_iters):
-            (mu_current, sigma_current, phi_current, omega_current,
-             beta_current, beta_heads, alpha_effective,
-             _iter_beta) = self._vfe_iteration(
+            _iter_kwargs = dict(
                 iteration=iteration,
                 mu_current=mu_current,
                 sigma_current=sigma_current,
@@ -3338,6 +3354,19 @@ class VariationalFFNDynamic(nn.Module):
                 _obs_cache=_obs_cache,
                 _precomputed_block_exp_pairs=_hoisted_bep,
             )
+            _is_final = (iteration == _n_iters - 1)
+            if _use_ckpt and not _is_final:
+                (mu_current, sigma_current, phi_current, omega_current,
+                 beta_current, beta_heads, alpha_effective,
+                 _iter_beta) = torch.utils.checkpoint.checkpoint(
+                    self._vfe_iteration,
+                    use_reentrant=False,
+                    **_iter_kwargs,
+                )
+            else:
+                (mu_current, sigma_current, phi_current, omega_current,
+                 beta_current, beta_heads, alpha_effective,
+                 _iter_beta) = self._vfe_iteration(**_iter_kwargs)
             if return_beta_history and _iter_beta is not None:
                 beta_history.append(_iter_beta)
 

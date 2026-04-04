@@ -227,3 +227,53 @@ class TestVariationalFFNDynamic:
         assert alpha.shape == (B, N, K), f"Expected (B,N,K) shape, got {alpha.shape}"
         assert (alpha > 0).all(), "Bayesian alpha must be positive"
         assert torch.isfinite(alpha).all(), "Bayesian alpha has NaN/Inf"
+
+    def test_gradient_checkpoint_vfe(self, generators, cpu_device):
+        """Gradient checkpointing produces same output as non-checkpointed."""
+        from transformer.core.variational_ffn import VariationalFFNDynamic
+
+        K = generators.shape[1]
+        B, N = 2, 4
+
+        # Create two identical FFNs — one with checkpointing, one without
+        torch.manual_seed(0)
+        ffn_base = VariationalFFNDynamic(
+            embed_dim=K, generators=generators, alpha=0.001, kappa=1.0,
+            n_iterations=3, diagonal_covariance=True,
+            gradient_checkpoint_vfe=False,
+        ).to(cpu_device)
+
+        torch.manual_seed(0)
+        ffn_ckpt = VariationalFFNDynamic(
+            embed_dim=K, generators=generators, alpha=0.001, kappa=1.0,
+            n_iterations=3, diagonal_covariance=True,
+            gradient_checkpoint_vfe=True,
+        ).to(cpu_device)
+
+        # Copy weights
+        ffn_ckpt.load_state_dict(ffn_base.state_dict())
+
+        torch.manual_seed(42)
+        mu = torch.randn(B, N, K)
+        mu_prior = torch.randn(B, N, K)
+        phi = torch.randn(B, N, 3) * 0.1
+        sigma = torch.abs(torch.randn(B, N, K)) + 0.1
+        mask = torch.tril(torch.ones(N, N)).unsqueeze(0).expand(B, -1, -1)
+        beta = torch.softmax(torch.randn(B, N, N), dim=-1)
+
+        ffn_base.train()
+        ffn_ckpt.train()
+
+        mu_out_base, sigma_out_base, _, _ = ffn_base(
+            mu=mu.clone(), beta=beta.clone(), mu_prior=mu_prior.clone(),
+            phi=phi.clone(), sigma=sigma.clone(), mask=mask.clone(),
+        )
+        mu_out_ckpt, sigma_out_ckpt, _, _ = ffn_ckpt(
+            mu=mu.clone(), beta=beta.clone(), mu_prior=mu_prior.clone(),
+            phi=phi.clone(), sigma=sigma.clone(), mask=mask.clone(),
+        )
+
+        assert torch.allclose(mu_out_base, mu_out_ckpt, atol=1e-5), \
+            f"Checkpointed mu differs: max diff {(mu_out_base - mu_out_ckpt).abs().max():.2e}"
+        assert torch.allclose(sigma_out_base, sigma_out_ckpt, atol=1e-5), \
+            f"Checkpointed sigma differs: max diff {(sigma_out_base - sigma_out_ckpt).abs().max():.2e}"
