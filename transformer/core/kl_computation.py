@@ -139,22 +139,21 @@ def _kl_kernel_dense(
         )
 
     def _cholesky_with_fallback(mat: torch.Tensor) -> torch.Tensor:
-        try:
-            return torch.linalg.cholesky(mat)
-        except RuntimeError:
-            reg = eps
-            for _ in range(5):
-                reg *= 10.0
-                mat_reg = mat + (reg - eps) * I
-                mat_reg = 0.5 * (mat_reg + mat_reg.transpose(-1, -2))
-                try:
-                    L = torch.linalg.cholesky(mat_reg)
-                    _nr("chol_recover")
-                    return L
-                except RuntimeError:
-                    continue
-            _nr("chol_fail")
-            return torch.linalg.cholesky(I.expand_as(mat) + eps * I)
+        L, info = torch.linalg.cholesky_ex(mat)
+        if not info.any():
+            return L
+        # Some matrices failed — apply progressive regularization
+        reg = eps
+        for _ in range(5):
+            reg *= 10.0
+            mat_reg = mat + (reg - eps) * I
+            mat_reg = 0.5 * (mat_reg + mat_reg.transpose(-1, -2))
+            L, info = torch.linalg.cholesky_ex(mat_reg)
+            if not info.any():
+                _nr("chol_recover")
+                return L
+        _nr("chol_fail")
+        return torch.linalg.cholesky(I.expand_as(mat) + eps * I)
 
     try:
         L_p = _cholesky_with_fallback(sigma_t_reg)
@@ -385,16 +384,17 @@ def _compute_unchunked(
 ) -> torch.Tensor:
     """Compute full (B, N, N) KL matrix in one vectorised pass."""
     B, N, K = mu_q.shape
-    # Expand query beliefs over all key positions
-    mu_i = mu_q[:, :, None, :].expand(-1, -1, N, -1).clone()   # (B, N, N, K)
+    # Expand query beliefs over all key positions (views, no copy needed —
+    # downstream kernels cast to float32 internally which creates contiguous copies)
+    mu_i = mu_q[:, :, None, :].expand(-1, -1, N, -1)   # (B, N, N, K)
 
     if mode is KLMode.DIAGONAL:
-        sigma_i = sigma_q[:, :, None, :].expand(-1, -1, N, -1).clone()
+        sigma_i = sigma_q[:, :, None, :].expand(-1, -1, N, -1)
         return _kl_kernel_diagonal(mu_i, sigma_i, mu_transported, sigma_transported,
                                    kl_max=kl_max, eps=eps)
     else:
         # DENSE
-        sigma_i = sigma_q[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()
+        sigma_i = sigma_q[:, :, None, :, :].expand(-1, -1, N, -1, -1)
         return _kl_kernel_dense(mu_i, sigma_i, mu_transported, sigma_transported,
                                 kl_max=kl_max, eps=eps)
 
@@ -431,8 +431,8 @@ def _compute_chunked(
             # Expand query beliefs to match chunk shape
             if mode is KLMode.DIAGONAL:
                 sigma_i_chunk = sigma_q[:, i_start:i_end].contiguous()
-                mu_i_exp = mu_i_chunk[:, :, None, :].expand(-1, -1, n_j, -1).clone()
-                sigma_i_exp = sigma_i_chunk[:, :, None, :].expand(-1, -1, n_j, -1).clone()
+                mu_i_exp = mu_i_chunk[:, :, None, :].expand(-1, -1, n_j, -1)
+                sigma_i_exp = sigma_i_chunk[:, :, None, :].expand(-1, -1, n_j, -1)
                 kl_chunk = _kl_kernel_diagonal(
                     mu_i_exp, sigma_i_exp, mu_t_chunk, sigma_t_chunk,
                     kl_max=kl_max, eps=eps,
@@ -440,8 +440,8 @@ def _compute_chunked(
             else:
                 # DENSE
                 sigma_i_chunk = sigma_q[:, i_start:i_end].contiguous()
-                mu_i_exp = mu_i_chunk[:, :, None, :].expand(-1, -1, n_j, -1).clone()
-                sigma_i_exp = sigma_i_chunk[:, :, None, :, :].expand(-1, -1, n_j, -1, -1).clone()
+                mu_i_exp = mu_i_chunk[:, :, None, :].expand(-1, -1, n_j, -1)
+                sigma_i_exp = sigma_i_chunk[:, :, None, :, :].expand(-1, -1, n_j, -1, -1)
                 kl_chunk = _kl_kernel_dense(
                     mu_i_exp, sigma_i_exp, mu_t_chunk, sigma_t_chunk,
                     kl_max=kl_max, eps=eps,

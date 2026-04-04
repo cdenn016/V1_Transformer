@@ -430,14 +430,15 @@ class GaugeTokenEmbedding(nn.Module):
                 sigma_diag_base = torch.exp(self.base_log_sigma_diag.float()).clamp(min=0.01, max=self.sigma_max)  # (K,)
 
                 # Transport covariance: Σ_i = A_i @ Σ_0 @ A_i^T (sandwich product)
-                A_f32 = A.float()
+                # Avoid .float() copy when already float32 to prevent OOM at large K.
+                A_f = A if A.dtype == torch.float32 else A.float()
                 if self.diagonal_covariance:
                     # Extract diagonal: diag(A Σ_0 A^T)_k = Σ_j A_kj² σ_j
-                    A_sq = A_f32 ** 2  # (B, N, K, K)
+                    A_sq = A_f ** 2  # (B, N, K, K)
                     sigma = torch.einsum('bnkl,l->bnk', A_sq, sigma_diag_base)  # (B, N, K)
                 else:
                     Sigma_0 = torch.diag(sigma_diag_base)  # (K, K)
-                    sigma = torch.einsum('bnij,jk,bnlk->bnil', A_f32, Sigma_0, A_f32)  # (B, N, K, K)
+                    sigma = torch.einsum('bnij,jk,bnlk->bnil', A_f, Sigma_0, A_f)  # (B, N, K, K)
         else:
             # Standard per-token embeddings
             # μ(token_i) for each agent i at c*
@@ -452,14 +453,17 @@ class GaugeTokenEmbedding(nn.Module):
             # causes gradient explosion — see commit message.)
             _SIGMA_MIN = 0.01
             _SIGMA_MAX = self.sigma_max
-            # AMP guard: exp() on log_sigma needs float32 precision
+            # AMP guard: exp() on log_sigma needs float32 precision.
+            # Avoid .float() copy when already float32 to prevent OOM at large K.
             with torch.amp.autocast('cuda', enabled=False):
                 if self.learnable_sigma:
                     log_sigma = self.log_sigma_diag[token_ids]  # (B, N, K)
-                    sigma_diag = torch.exp(log_sigma.float()).clamp(_SIGMA_MIN, _SIGMA_MAX)  # (B, N, K)
+                    _ls = log_sigma if log_sigma.dtype == torch.float32 else log_sigma.float()
+                    sigma_diag = torch.exp(_ls).clamp(_SIGMA_MIN, _SIGMA_MAX)  # (B, N, K)
                 else:
                     # Shared covariance
-                    sigma_diag = torch.exp(self.log_sigma_diag.float()).clamp(_SIGMA_MIN, _SIGMA_MAX)  # (K,)
+                    _ls = self.log_sigma_diag if self.log_sigma_diag.dtype == torch.float32 else self.log_sigma_diag.float()
+                    sigma_diag = torch.exp(_ls).clamp(_SIGMA_MIN, _SIGMA_MAX)  # (K,)
                     sigma_diag = sigma_diag.unsqueeze(0).unsqueeze(0)  # (1, 1, K)
                     sigma_diag = sigma_diag.expand(batch_size, num_agents, -1)  # (B, N, K)
 

@@ -296,11 +296,14 @@ def fused_block_diagonal_kl_diag(
             # ── Scalar fast path: element-wise, no matrix ops ───────────
             # AMP guard: sigma division and log must stay float32
             with torch.amp.autocast('cuda', enabled=False):
+                _f32 = torch.float32
                 # Squeeze out trivial 1×1 matrix dims → (n_blocks, B, N)
-                ep = exp_phi_stack.float().squeeze(-1).squeeze(-1)
-                en = exp_neg_phi_stack.float().squeeze(-1).squeeze(-1)
-                mu_s = mu_stack.float().squeeze(-1)
-                sig_s = sigma_stack.float().squeeze(-1)
+                _ep = exp_phi_stack if exp_phi_stack.dtype == _f32 else exp_phi_stack.float()
+                _en = exp_neg_phi_stack if exp_neg_phi_stack.dtype == _f32 else exp_neg_phi_stack.float()
+                ep = _ep.squeeze(-1).squeeze(-1)
+                en = _en.squeeze(-1).squeeze(-1)
+                mu_s = (mu_stack if mu_stack.dtype == _f32 else mu_stack.float()).squeeze(-1)
+                sig_s = (sigma_stack if sigma_stack.dtype == _f32 else sigma_stack.float()).squeeze(-1)
 
                 # Omega_ij = exp_phi_i * exp_neg_phi_j  (scalar product)
                 omega = ep[:, :, :, None] * en[:, :, None, :]  # (g, B, N, N)
@@ -324,10 +327,11 @@ def fused_block_diagonal_kl_diag(
             # ── Row-tiled path: peak memory reduced by N/_tile_size ─────
             # AMP guard: sigma transport, division, and log must stay float32
             with torch.amp.autocast('cuda', enabled=False):
-                _mu_f32 = mu_stack.float()
-                _sig_f32 = sigma_stack.float()
-                _ep_f32 = exp_phi_stack.float()
-                _en_f32 = exp_neg_phi_stack.float()
+                _f32 = torch.float32
+                _mu_f32 = mu_stack if mu_stack.dtype == _f32 else mu_stack.float()
+                _sig_f32 = sigma_stack if sigma_stack.dtype == _f32 else sigma_stack.float()
+                _ep_f32 = exp_phi_stack if exp_phi_stack.dtype == _f32 else exp_phi_stack.float()
+                _en_f32 = exp_neg_phi_stack if exp_neg_phi_stack.dtype == _f32 else exp_neg_phi_stack.float()
                 for i_start in range(0, N, _tile_size):
                     i_end = min(i_start + _tile_size, N)
 
@@ -423,10 +427,11 @@ def fused_block_diagonal_kl_full(
 
         # AMP guard: sandwich product, Cholesky, solve, log-det must stay float32
         with torch.amp.autocast('cuda', enabled=False):
-            _mu_f32 = mu_stack.float()
-            _sig_f32 = sigma_stack.float()
-            _ep_f32 = exp_phi_stack.float()
-            _en_f32 = exp_neg_phi_stack.float()
+            _f32 = torch.float32
+            _mu_f32 = mu_stack if mu_stack.dtype == _f32 else mu_stack.float()
+            _sig_f32 = sigma_stack if sigma_stack.dtype == _f32 else sigma_stack.float()
+            _ep_f32 = exp_phi_stack if exp_phi_stack.dtype == _f32 else exp_phi_stack.float()
+            _en_f32 = exp_neg_phi_stack if exp_neg_phi_stack.dtype == _f32 else exp_neg_phi_stack.float()
 
             # Batched Omega: (n_blocks, B, N, N, d, d)
             Omega = torch.einsum('gbikl,gbjlm->gbijkm', _ep_f32, _en_f32)
@@ -441,8 +446,8 @@ def fused_block_diagonal_kl_full(
             del Omega
 
             I_d = torch.eye(d, device=device, dtype=torch.float32)
-            mu_i = _mu_f32[:, :, :, None, :].expand(-1, -1, -1, N, -1).clone()
-            sigma_i = _sig_f32[:, :, :, None, :, :].expand(-1, -1, -1, N, -1, -1).clone()
+            mu_i = _mu_f32[:, :, :, None, :].expand(-1, -1, -1, N, -1)
+            sigma_i = _sig_f32[:, :, :, None, :, :].expand(-1, -1, -1, N, -1, -1)
 
             sigma_i_reg = sigma_i + eps * I_d
             sigma_t_reg = sigma_transported + eps * I_d
