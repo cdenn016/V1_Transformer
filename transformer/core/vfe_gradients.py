@@ -419,12 +419,16 @@ def _compute_vfe_gradients_block_diagonal_diag(
     device = mu_q.device
     dtype = mu_q.dtype
 
-    # Force float32 for all sigma divisions, logs, and KL computation under AMP
-    mu_q = mu_q.float()
-    mu_p = mu_p.float()
-    sigma_q = sigma_q.float()
-    sigma_p = sigma_p.float()
-    beta = beta.float()
+    # Ensure float32 for sigma divisions, logs, and KL computation.
+    # Caller (variational_ffn.py) already upcasts when AMP is active;
+    # skip redundant .float() copies when already float32.
+    _f32 = torch.float32
+    if mu_q.dtype != _f32:
+        mu_q = mu_q.float()
+        mu_p = mu_p.float()
+        sigma_q = sigma_q.float()
+        sigma_p = sigma_p.float()
+        beta = beta.float()
 
     sigma_q_safe = sigma_q.clamp(min=eps)
     sigma_p_safe = sigma_p.clamp(min=eps)
@@ -669,10 +673,13 @@ def _fused_attention_and_vfe_gradients_block_diag(
     device = mu_q.device
     dtype = mu_q.dtype
 
-    mu_q = mu_q.float()
-    mu_p = mu_p.float()
-    sigma_q = sigma_q.float()
-    sigma_p = sigma_p.float()
+    # Ensure float32 (caller already upcasts under AMP; skip copy when already f32)
+    _f32 = torch.float32
+    if mu_q.dtype != _f32:
+        mu_q = mu_q.float()
+        mu_p = mu_p.float()
+        sigma_q = sigma_q.float()
+        sigma_p = sigma_p.float()
 
     sigma_q_safe = sigma_q.clamp(min=eps)
     sigma_p_safe = sigma_p.clamp(min=eps)

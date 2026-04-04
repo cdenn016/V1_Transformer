@@ -1738,16 +1738,18 @@ class VariationalFFNDynamic(nn.Module):
         is_diagonal = sigma.dim() == 3
 
         # ── Prior setup: mu_p, sigma_p ──────────────────────────────────
+        # No .clone() needed: downstream ops (clamp, +, =) create new tensors,
+        # never mutating the original. .detach() suffices for graph separation.
         if self.amortized_inference and not self.implicit_em:
-            mu_p_current = mu_prior.clone()
+            mu_p_current = mu_prior
         else:
-            mu_p_current = mu_prior.detach().clone()
+            mu_p_current = mu_prior.detach()
 
         # sigma_p is ALWAYS detached in the E-step (M-step parameter)
         if sigma_prior is not None:
-            sigma_p = sigma_prior.detach().clone()
+            sigma_p = sigma_prior.detach()
         else:
-            sigma_p = sigma.detach().clone()
+            sigma_p = sigma.detach()
 
         # E-step sigma_p floor
         _floor = self.e_step_sigma_floor
@@ -1763,12 +1765,14 @@ class VariationalFFNDynamic(nn.Module):
             sigma_p = torch.diag_embed(sigma_p)
 
         # ── Initial belief state ─────────────────────────────────────────
+        # No .clone() needed: the E-step loop reassigns mu_current/sigma_current
+        # (mu_current = mu_current + delta), never mutating in-place.
         if self.implicit_em:
-            mu_current = mu.detach().clone()
-            sigma_current = sigma.detach().clone()
+            mu_current = mu.detach()
+            sigma_current = sigma.detach()
         else:
-            mu_current = mu.clone()
-            sigma_current = sigma.clone()
+            mu_current = mu
+            sigma_current = sigma
 
         # Clamp initial sigma to [eps, sigma_max]
         if self.update_sigma:
@@ -1780,12 +1784,14 @@ class VariationalFFNDynamic(nn.Module):
                 eigvals = eigvals.clamp(min=_eps, max=self.sigma_max * self.sigma_max)
                 sigma_current = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
 
-        # ── Phi / omega cloning ──────────────────────────────────────────
+        # ── Phi / omega setup ────────────────────────────────────────────
+        # No .clone() needed: phi_current is reassigned (not mutated in-place)
+        # in _retract_phi calls within the iteration loop.
         if not self.amortized_inference and self.detach_phi:
-            phi_current = phi.detach().clone()
+            phi_current = phi.detach()
         else:
-            phi_current = phi.clone()
-        omega_current = omega.clone() if omega is not None else None
+            phi_current = phi
+        omega_current = omega
 
         # ── Alpha computation ────────────────────────────────────────────
         if self.learnable_alpha:
@@ -2334,6 +2340,7 @@ class VariationalFFNDynamic(nn.Module):
         W_out: Optional[torch.Tensor],
         return_beta_history: bool,
         _detach_e_step: bool = True,
+        _obs_cache: Optional[dict] = None,
     ):
         r"""Execute one VFE natural-gradient iteration.
 
@@ -2346,6 +2353,7 @@ class VariationalFFNDynamic(nn.Module):
         beta_heads = []
         beta_current = None
         beta_history_entry = None
+        _is_final_iter = (iteration == self.n_iterations - 1)
 
         # Cosine decay: lr drops from 1.0 to 0.1 across iterations
         # Steeper than linear 0.5 decay — stabilizes later iterations where
@@ -2638,11 +2646,10 @@ class VariationalFFNDynamic(nn.Module):
         if has_observations:
             logits = torch.matmul(mu_current.detach(), W_out.T)
             probs = F.softmax(logits, dim=-1)
-            targets_valid = targets.clone()
-            targets_valid[targets == -1] = 0
-            one_hot = F.one_hot(targets_valid, num_classes=W_out.shape[0]).float()
-            mask_obs = (targets != -1).unsqueeze(-1).float()
-            one_hot = one_hot * mask_obs
+            # Use pre-computed targets/mask/one_hot from _obs_cache (avoids
+            # redundant targets.clone(), F.one_hot, and mask creation per iter)
+            mask_obs = _obs_cache['mask_obs']
+            one_hot = _obs_cache['one_hot']
             grad_error = (probs - one_hot) * mask_obs
             discrete_obs_grad = torch.matmul(grad_error, W_out)
             # Scale observation gradient by obs_weight (for warmup ramp)
@@ -2663,14 +2670,15 @@ class VariationalFFNDynamic(nn.Module):
             # For CE with softmax: ∂²CE/∂z_k² = Var_p[W[:,k]] ≥ 0.
             # We approximate E_q[H_kk(z)] ≈ H_kk(μ) (zeroth-order in σ).
             if self.obs_sigma_gradient:
-                W_out_sq = W_out ** 2                                # (V, K)
+                W_out_sq = _obs_cache['W_out_sq']                    # (V, K)
                 EW2 = torch.matmul(probs, W_out_sq)                  # (B, N, K)
                 EW  = torch.matmul(probs, W_out)                     # (B, N, K)
                 hessian_diag = EW2 - EW ** 2                         # (B, N, K)
                 # Clamp: FP rounding can violate Var ≥ 0
                 _neg_mask = hessian_diag < 0
                 if _neg_mask.any():
-                    _nr("obs_sigma_hessian_neg_clamp", count=int(_neg_mask.sum().item()))
+                    if _is_final_iter:
+                        _nr("obs_sigma_hessian_neg_clamp", count=int(_neg_mask.sum().item()))
                     hessian_diag = hessian_diag.clamp(min=0.0)
                 _sigma_obs_scale = (0.5 * self.obs_sigma_weight) * _obs_weight
                 # Cap observation sigma gradient to prevent systematic upward bias
@@ -2731,7 +2739,6 @@ class VariationalFFNDynamic(nn.Module):
         # Clamp natural gradient norm to prevent oscillatory divergence
         # in deeper layers where Sigma eigenvalues amplify gradients
         nat_grad_mu_norm = torch.linalg.norm(nat_grad_mu, dim=-1, keepdim=True)
-        _raw_nat_grad_norm = nat_grad_mu.detach().norm().item()  # pre-clamp for diagnostics
         max_nat_grad_norm = 500.0
         nat_grad_scale = torch.clamp(
             max_nat_grad_norm / (nat_grad_mu_norm + eps), max=1.0
@@ -2749,30 +2756,32 @@ class VariationalFFNDynamic(nn.Module):
             nat_grad_sigma_norm = torch.linalg.norm(
                 nat_grad_sigma.flatten(-2), dim=-1, keepdim=True
             ).unsqueeze(-1)
-        _raw_nat_grad_sigma_norm = nat_grad_sigma.detach().norm().item()
         max_nat_grad_sigma_norm = 500.0
         nat_grad_sigma_scale = torch.clamp(
             max_nat_grad_sigma_norm / (nat_grad_sigma_norm + eps), max=1.0
         )
         nat_grad_sigma = nat_grad_sigma * nat_grad_sigma_scale
 
-        # Store E-step gradient norms (overwritten each iteration; final = last iter)
-        self._e_step_grad_norms['nat_grad_mu'] = _raw_nat_grad_norm
-        self._e_step_grad_norms['nat_grad_sigma'] = _raw_nat_grad_sigma_norm
-        self._e_step_grad_norms['nat_grad_mu_clipped'] = nat_grad_mu.detach().norm().item()
-        self._e_step_grad_norms['nat_grad_sigma_clipped'] = nat_grad_sigma.detach().norm().item()
-        # Per-position clip fraction for the 500-norm cap
-        self._e_step_grad_norms['mu_cap_frac'] = (
-            nat_grad_mu_norm.squeeze(-1) >= max_nat_grad_norm * 0.99
-        ).float().mean().item()
-        if is_diagonal:
-            self._e_step_grad_norms['sigma_cap_frac'] = (
-                nat_grad_sigma_norm.squeeze(-1) >= max_nat_grad_sigma_norm * 0.99
+        # Store E-step gradient norms — defer .item() to final iteration only
+        # to avoid CUDA synchronization stalls on every VFE iteration.
+        if _is_final_iter:
+            _raw_nat_grad_norm = nat_grad_mu.detach().norm().item()
+            _raw_nat_grad_sigma_norm = nat_grad_sigma.detach().norm().item()
+            self._e_step_grad_norms['nat_grad_mu'] = _raw_nat_grad_norm
+            self._e_step_grad_norms['nat_grad_sigma'] = _raw_nat_grad_sigma_norm
+            self._e_step_grad_norms['nat_grad_mu_clipped'] = nat_grad_mu.detach().norm().item()
+            self._e_step_grad_norms['nat_grad_sigma_clipped'] = nat_grad_sigma.detach().norm().item()
+            self._e_step_grad_norms['mu_cap_frac'] = (
+                nat_grad_mu_norm.squeeze(-1) >= max_nat_grad_norm * 0.99
             ).float().mean().item()
-        else:
-            self._e_step_grad_norms['sigma_cap_frac'] = (
-                nat_grad_sigma_norm.squeeze(-1).squeeze(-1) >= max_nat_grad_sigma_norm * 0.99
-            ).float().mean().item()
+            if is_diagonal:
+                self._e_step_grad_norms['sigma_cap_frac'] = (
+                    nat_grad_sigma_norm.squeeze(-1) >= max_nat_grad_sigma_norm * 0.99
+                ).float().mean().item()
+            else:
+                self._e_step_grad_norms['sigma_cap_frac'] = (
+                    nat_grad_sigma_norm.squeeze(-1).squeeze(-1) >= max_nat_grad_sigma_norm * 0.99
+                ).float().mean().item()
 
         # =================================================================
         # DEBUG: Print per-component gradient breakdown
@@ -2789,9 +2798,11 @@ class VariationalFFNDynamic(nn.Module):
             _ps_mu = _per_pos_stats(grad_mu)
             _ps_sig = _per_pos_stats(grad_sigma)
 
-            # Nat_grad amplification factors
-            _amp_mu = _raw_nat_grad_norm / max(_eu_mu, 1e-12)
-            _amp_sig = _raw_nat_grad_sigma_norm / max(_eu_sig, 1e-12)
+            # Nat_grad amplification factors (compute .item() here since debug is active)
+            _raw_ng_mu = nat_grad_mu.detach().norm().item()
+            _raw_ng_sig = nat_grad_sigma.detach().norm().item()
+            _amp_mu = _raw_ng_mu / max(_eu_mu, 1e-12)
+            _amp_sig = _raw_ng_sig / max(_eu_sig, 1e-12)
             # Fraction of positions hitting the 500 clip
             _mu_clip_frac = (nat_grad_mu_norm.squeeze(-1) >= max_nat_grad_norm * 0.99).float().mean().item()
             if is_diagonal:
@@ -2933,12 +2944,13 @@ class VariationalFFNDynamic(nn.Module):
         scale = torch.clamp(mu_trust_region / (whitened_norm + eps), max=1.0)
         mu_current = mu_current + scale * delta_mu
 
-        # Track trust region clip fraction
-        self._e_step_grad_norms['mu_trust_frac'] = (
-            scale.squeeze(-1) < 0.99
-        ).float().mean().item()
-        self._e_step_grad_norms['whitened_mu_mean'] = whitened_norm.mean().item()
-        self._e_step_grad_norms['whitened_mu_max'] = whitened_norm.max().item()
+        # Track trust region clip fraction (final iteration only to avoid CUDA sync)
+        if _is_final_iter:
+            self._e_step_grad_norms['mu_trust_frac'] = (
+                scale.squeeze(-1) < 0.99
+            ).float().mean().item()
+            self._e_step_grad_norms['whitened_mu_mean'] = whitened_norm.mean().item()
+            self._e_step_grad_norms['whitened_mu_max'] = whitened_norm.max().item()
 
         if self.update_sigma:
             # SPD-preserving retraction: sigma_new = sigma * exp(step * clip(delta/sigma, -trust, trust))
@@ -2980,21 +2992,22 @@ class VariationalFFNDynamic(nn.Module):
             max_condition = 10.0
             if is_diagonal:
                 # sigma_current: (B, N, K)
+                # Apply unconditionally — torch.where handles the no-clamp case
+                # without a CUDA-syncing .any() check.
                 s_min = sigma_current.min(dim=-1, keepdim=True).values.clamp(min=eps)
                 s_max = sigma_current.max(dim=-1, keepdim=True).values
                 condition = s_max / s_min  # (B, N, 1)
                 needs_clamp = condition > max_condition
-                if needs_clamp.any():
-                    # Geometric mean preserves det(Sigma) = product of eigenvalues
-                    geo_mean = sigma_current.log().mean(dim=-1, keepdim=True).exp()
-                    lower = geo_mean / (max_condition ** 0.5)
-                    upper = geo_mean * (max_condition ** 0.5)
-                    sigma_clamped = sigma_current.clamp(min=lower, max=upper)
-                    sigma_current = torch.where(
-                        needs_clamp.expand_as(sigma_current),
-                        sigma_clamped,
-                        sigma_current,
-                    )
+                # Geometric mean preserves det(Sigma) = product of eigenvalues
+                geo_mean = sigma_current.log().mean(dim=-1, keepdim=True).exp()
+                lower = geo_mean / (max_condition ** 0.5)
+                upper = geo_mean * (max_condition ** 0.5)
+                sigma_clamped = sigma_current.clamp(min=lower, max=upper)
+                sigma_current = torch.where(
+                    needs_clamp.expand_as(sigma_current),
+                    sigma_clamped,
+                    sigma_current,
+                )
             else:
                 # Full covariance: clamp eigenvalue ratio
                 try:
@@ -3005,15 +3018,16 @@ class VariationalFFNDynamic(nn.Module):
                     e_min = eigvals[..., 0:1].clamp(min=eps)
                     e_max = eigvals[..., -1:]
                     condition = e_max / e_min
-                    if (condition > max_condition).any():
-                        geo_mean = eigvals.log().mean(dim=-1, keepdim=True).exp()
-                        lower = geo_mean / (max_condition ** 0.5)
-                        # Regularize toward isotropic: Sigma → Sigma + ridge * I
-                        ridge = (lower - e_min).clamp(min=0.0).mean(dim=-1, keepdim=True)
-                        K = sigma_current.shape[-1]
-                        sigma_current = sigma_current + ridge.unsqueeze(-1) * torch.eye(
-                            K, device=sigma_current.device, dtype=sigma_current.dtype
-                        )
+                    # Apply unconditionally — ridge is 0 when condition is fine
+                    geo_mean = eigvals.log().mean(dim=-1, keepdim=True).exp()
+                    lower = geo_mean / (max_condition ** 0.5)
+                    # Regularize toward isotropic: Sigma → Sigma + ridge * I
+                    # ridge = 0 when all eigenvalues already satisfy condition
+                    ridge = (lower - e_min).clamp(min=0.0).mean(dim=-1, keepdim=True)
+                    K = sigma_current.shape[-1]
+                    sigma_current = sigma_current + ridge.unsqueeze(-1) * torch.eye(
+                        K, device=sigma_current.device, dtype=sigma_current.dtype
+                    )
 
         # =============================================================
         # STEP 4c: Isotropic covariance enforcement (Limit 1)
@@ -3050,9 +3064,9 @@ class VariationalFFNDynamic(nn.Module):
                 'grad_mu_norm': grad_mu.detach().norm().item(),
                 'grad_sigma_norm': grad_sigma.detach().norm().item(),
                 'nat_grad_mu_norm': nat_grad_mu.detach().norm().item(),
-                'nat_grad_mu_raw_norm': _raw_nat_grad_norm,
+                'nat_grad_mu_raw_norm': self._e_step_grad_norms.get('nat_grad_mu', 0.0),
                 'nat_grad_sigma_norm': nat_grad_sigma.detach().norm().item(),
-                'nat_grad_sigma_raw_norm': _raw_nat_grad_sigma_norm,
+                'nat_grad_sigma_raw_norm': self._e_step_grad_norms.get('nat_grad_sigma', 0.0),
                 'nat_grad_sigma_max': nat_grad_sigma.detach().abs().max().item(),
                 'delta_mu_norm': delta_mu.detach().norm().item(),
                 'mu_norm': mu_current.detach().norm().item(),
@@ -3256,6 +3270,22 @@ class VariationalFFNDynamic(nn.Module):
         # =====================================================================
         # Skip when closed_form_e_step handled the E-step above.
         _n_iters = 0 if self.closed_form_e_step else self.n_iterations
+
+        # Pre-compute observation constants (invariant across VFE iterations).
+        # Avoids redundant targets.clone(), F.one_hot(V), and W_out**2 per iter.
+        _obs_cache = None
+        if has_observations and _n_iters > 0:
+            _tv = targets.clone()
+            _tv[_tv == -1] = 0
+            _mask_obs = (targets != -1).unsqueeze(-1).float()
+            _one_hot = F.one_hot(_tv, num_classes=W_out.shape[0]).float() * _mask_obs
+            _obs_cache = {
+                'mask_obs': _mask_obs,
+                'one_hot': _one_hot,
+            }
+            if self.obs_sigma_gradient:
+                _obs_cache['W_out_sq'] = W_out ** 2  # (V, K)
+
         for iteration in range(_n_iters):
             (mu_current, sigma_current, phi_current, omega_current,
              beta_current, beta_heads, alpha_effective,
@@ -3277,6 +3307,7 @@ class VariationalFFNDynamic(nn.Module):
                 W_out=W_out,
                 return_beta_history=return_beta_history,
                 _detach_e_step=_detach_e_step,
+                _obs_cache=_obs_cache,
             )
             if return_beta_history and _iter_beta is not None:
                 beta_history.append(_iter_beta)
