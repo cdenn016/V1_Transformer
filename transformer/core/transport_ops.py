@@ -65,8 +65,10 @@ def _build_rope_freqs(K: int, base: float = 10000.0,
 
 
 # RoPE cos/sin cache: keyed by (K, base, N, device) to avoid recomputation.
-# Cleared automatically when module is garbage collected.
+# Bounded to _ROPE_CACHE_MAX entries to prevent unbounded growth with
+# varying sequence lengths.
 _rope_cache: dict = {}
+_ROPE_CACHE_MAX: int = 16
 
 
 def _get_rope_cos_sin(
@@ -82,6 +84,8 @@ def _get_rope_cos_sin(
     positions = torch.arange(N, device=device, dtype=dtype)  # (N,)
     angles = torch.outer(positions, freqs)  # (N, K//2)
     cos_sin = (torch.cos(angles), torch.sin(angles))
+    if len(_rope_cache) >= _ROPE_CACHE_MAX:
+        _rope_cache.pop(next(iter(_rope_cache)))
     _rope_cache[key] = cos_sin
     return cos_sin
 
