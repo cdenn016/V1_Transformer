@@ -725,9 +725,11 @@ def _dispatch_kl_matrix(
             mu_t = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)
             # AMP guard: covariance sandwich product must stay float32
             with torch.amp.autocast('cuda', enabled=False):
-                sigma_j = sigma_q.float()[:, None, :, :].expand(-1, N, -1, -1).clone()
+                _sq = sigma_q if sigma_q.dtype == torch.float32 else sigma_q.float()
+                _Om = Omega if Omega.dtype == torch.float32 else Omega.float()
+                sigma_j = _sq[:, None, :, :].expand(-1, N, -1, -1).clone()
                 sig_t = torch.einsum(
-                    'bijkl,bijkl,bijl->bijk', Omega.float(), Omega.float(), sigma_j
+                    'bijkl,bijkl,bijl->bijk', _Om, _Om, sigma_j
                 ).clamp(min=eps)
 
         # Call unified kernel (with optional chunking)
@@ -759,9 +761,11 @@ def _dispatch_kl_matrix(
                     mu_tc = torch.einsum('bijkl,bjl->bijk', Omega_c, mu_j)
                     # AMP guard: covariance sandwich product must stay float32
                     with torch.amp.autocast('cuda', enabled=False):
-                        sig_j_exp = sig_j.float()[:, None, :, :].expand(-1, n_i, -1, -1).clone()
+                        _sj = sig_j if sig_j.dtype == torch.float32 else sig_j.float()
+                        _Oc = Omega_c if Omega_c.dtype == torch.float32 else Omega_c.float()
+                        sig_j_exp = _sj[:, None, :, :].expand(-1, n_i, -1, -1).clone()
                         sig_tc = torch.einsum(
-                            'bijkl,bijkl,bijl->bijk', Omega_c.float(), Omega_c.float(), sig_j_exp
+                            'bijkl,bijkl,bijl->bijk', _Oc, _Oc, sig_j_exp
                         ).clamp(min=eps)
                     del Omega_c
 
@@ -796,9 +800,11 @@ def _dispatch_kl_matrix(
             mu_t = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)
             # AMP guard: covariance sandwich product must stay float32
             with torch.amp.autocast('cuda', enabled=False):
+                _Om = Omega if Omega.dtype == torch.float32 else Omega.float()
+                _sq = sigma_q if sigma_q.dtype == torch.float32 else sigma_q.float()
                 sig_t = torch.einsum(
                     'bijkl,bjlm,bijmn->bijkn',
-                    Omega.float(), sigma_q.float(), Omega.float().transpose(-1, -2)
+                    _Om, _sq, _Om.transpose(-1, -2)
                 )
                 sig_t = 0.5 * (sig_t + sig_t.transpose(-1, -2))
 
@@ -847,9 +853,11 @@ def _dispatch_kl_matrix(
                         mu_tc = torch.einsum('bijkl,bjl->bijk', Omega_c, mu_j)
                         # AMP guard: covariance sandwich product must stay float32
                         with torch.amp.autocast('cuda', enabled=False):
+                            _Oc = Omega_c if Omega_c.dtype == torch.float32 else Omega_c.float()
+                            _sj = sig_j if sig_j.dtype == torch.float32 else sig_j.float()
                             sig_tc = torch.einsum(
                                 'bijkl,bjlm,bijmn->bijkn',
-                                Omega_c.float(), sig_j.float(), Omega_c.float().transpose(-1, -2)
+                                _Oc, _sj, _Oc.transpose(-1, -2)
                             )
                             sig_tc = 0.5 * (sig_tc + sig_tc.transpose(-1, -2))
                         del Omega_c
@@ -987,11 +995,12 @@ def aggregate_messages(
                     # Precision aggregation: 1/σ_agg = Σ_j β_ij / σ_t_j
                     # AMP guard: sigma transport + division must stay float32
                     with torch.amp.autocast('cuda', enabled=False):
+                        _f32 = torch.float32
                         precision_agg = torch.zeros(batch_size, num_agents, K,
-                                                    device=device, dtype=torch.float32)
-                        _sq_diag_f32 = sigma_q_diag.float()
-                        _ep_f32 = _exp_phi.float()
-                        _en_f32 = _exp_neg_phi.float()
+                                                    device=device, dtype=_f32)
+                        _sq_diag_f32 = sigma_q_diag if sigma_q_diag.dtype == _f32 else sigma_q_diag.float()
+                        _ep_f32 = _exp_phi if _exp_phi.dtype == _f32 else _exp_phi.float()
+                        _en_f32 = _exp_neg_phi if _exp_neg_phi.dtype == _f32 else _exp_neg_phi.float()
                         for i_start in range(0, num_agents, _tile_size):
                             i_end = min(i_start + _tile_size, num_agents)
                             ep_tile = _ep_f32[:, i_start:i_end]
@@ -1011,12 +1020,13 @@ def aggregate_messages(
                     # Mixture moment matching: Cov = E[Var] + Var[E]
                     # AMP guard: sigma transport must stay float32
                     with torch.amp.autocast('cuda', enabled=False):
+                        _f32 = torch.float32
                         sigma_agg_accum = torch.zeros(batch_size, num_agents, K,
-                                                      device=device, dtype=torch.float32)
-                        _sq_diag_f32 = sigma_q_diag.float()
-                        _ep_f32 = _exp_phi.float()
-                        _en_f32 = _exp_neg_phi.float()
-                        _mu_f32 = mu_q.float()
+                                                      device=device, dtype=_f32)
+                        _sq_diag_f32 = sigma_q_diag if sigma_q_diag.dtype == _f32 else sigma_q_diag.float()
+                        _ep_f32 = _exp_phi if _exp_phi.dtype == _f32 else _exp_phi.float()
+                        _en_f32 = _exp_neg_phi if _exp_neg_phi.dtype == _f32 else _exp_neg_phi.float()
+                        _mu_f32 = mu_q if mu_q.dtype == _f32 else mu_q.float()
                         for i_start in range(0, num_agents, _tile_size):
                             i_end = min(i_start + _tile_size, num_agents)
                             ep_tile = _ep_f32[:, i_start:i_end]
@@ -1039,10 +1049,11 @@ def aggregate_messages(
             else:
                 # AMP guard: full covariance transport, inv, eigh must stay float32
                 with torch.amp.autocast('cuda', enabled=False):
-                    _ep_f32 = _exp_phi.float()
-                    _en_f32 = _exp_neg_phi.float()
-                    _sq_f32 = sigma_q.float()
-                    _mu_f32 = mu_q.float()
+                    _f32 = torch.float32
+                    _ep_f32 = _exp_phi if _exp_phi.dtype == _f32 else _exp_phi.float()
+                    _en_f32 = _exp_neg_phi if _exp_neg_phi.dtype == _f32 else _exp_neg_phi.float()
+                    _sq_f32 = sigma_q if sigma_q.dtype == _f32 else sigma_q.float()
+                    _mu_f32 = mu_q if mu_q.dtype == _f32 else mu_q.float()
                     if sigma_aggregation == 'precision':
                         # Full covariance precision aggregation
                         precision_agg = torch.zeros(batch_size, num_agents, K, K,

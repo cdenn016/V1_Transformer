@@ -230,7 +230,8 @@ class PriorBank(nn.Module):
         _SIGMA_MIN = 0.01
         # AMP guard: exp() on log-params needs float32
         with torch.amp.autocast('cuda', enabled=False):
-            sigma = torch.exp(self.base_log_prior_sigma.float())
+            _p = self.base_log_prior_sigma
+            sigma = torch.exp(_p if _p.dtype == torch.float32 else _p.float())
             return sigma.clamp(_SIGMA_MIN, self.sigma_max)
 
     @property
@@ -247,7 +248,8 @@ class PriorBank(nn.Module):
         _SIGMA_MIN = 0.01
         # AMP guard: exp() on log-params needs float32
         with torch.amp.autocast('cuda', enabled=False):
-            sigma = torch.exp(self.log_prior_sigma.float())
+            _p = self.log_prior_sigma
+            sigma = torch.exp(_p if _p.dtype == torch.float32 else _p.float())
             return sigma.clamp(_SIGMA_MIN, self.sigma_max)
 
     def _compute_gauge_transform(self, phi: torch.Tensor) -> torch.Tensor:
@@ -302,19 +304,20 @@ class PriorBank(nn.Module):
             # This is the gauge-covariant sandwich product.
             # For GL(K), A_v is general invertible, so Σ_v is a full SPD matrix.
             # For SO(N), A_v is orthogonal, so Σ_v has same eigenvalues as Σ_0.
-            # AMP guard: sandwich product must stay float32
+            # AMP guard: sandwich product must stay float32.
+            # Avoid .float() copy when already float32 (saves ~725MB for V×K×K at K=60).
             with torch.amp.autocast('cuda', enabled=False):
                 base_sigma = self.base_prior_sigma  # (K,) — already float32 from property
-                A_f32 = A.float()
+                A_f = A if A.dtype == torch.float32 else A.float()
                 if getattr(self, 'diagonal_covariance', True):
                     # Extract diagonal of A @ diag(σ) @ A^T:
                     #   diag(A Σ_0 A^T)_k = Σ_j A_kj² σ_j
-                    A_sq = A_f32 ** 2  # (..., K, K)
+                    A_sq = A_f ** 2  # (..., K, K)
                     sigma_p = torch.einsum('...kl,l->...k', A_sq, base_sigma)  # (..., K)
                 else:
                     # Full covariance: Σ_v = A @ diag(σ_0) @ A^T (gauge-covariant)
                     Sigma_0 = torch.diag(base_sigma)  # (K, K)
-                    sigma_p = torch.einsum('...ij,jk,...lk->...il', A_f32, Sigma_0, A_f32)  # (..., K, K)
+                    sigma_p = torch.einsum('...ij,jk,...lk->...il', A_f, Sigma_0, A_f)  # (..., K, K)
 
             return mu_p, sigma_p, phi
         else:
@@ -418,11 +421,13 @@ class PriorBank(nn.Module):
         mu_p, sigma_p = _prior_out[0], _prior_out[1]
 
         # AMP guard: entire decode KL uses division, log, and 1/sigma — float32 required.
+        # Avoid .float() copy when already float32 to prevent OOM at large K.
         with torch.amp.autocast('cuda', enabled=False):
-            mu_q = mu_q.float()
-            mu_p = mu_p.float()
-            sigma_q = sigma_q.float()
-            sigma_p = sigma_p.float()
+            if mu_q.dtype != torch.float32:
+                mu_q = mu_q.float()
+                mu_p = mu_p.float()
+                sigma_q = sigma_q.float()
+                sigma_p = sigma_p.float()
 
             # Decode always uses diagonal prior covariances for the fused KL matmul.
             if sigma_p.dim() == 3:
