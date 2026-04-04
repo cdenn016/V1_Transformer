@@ -292,6 +292,10 @@ class GaugeTransformerLM(nn.Module):
         # VFE dynamics metrics collection (set externally by trainer)
         self._collect_dynamics_metrics = False
 
+        # Cached causal mask (avoids torch.ones + torch.tril every forward pass)
+        _causal = torch.tril(torch.ones(max_seq_len, max_seq_len))
+        self.register_buffer('_causal_mask', _causal, persistent=False)
+
         # Count parameters
         n_params = sum(p.numel() for p in self.parameters())
         logger.info(f"GaugeTransformerLM initialized: {n_params/1e6:.2f}M parameters")
@@ -393,15 +397,10 @@ class GaugeTransformerLM(nn.Module):
         # 4. Position encoding — compose token phi with positional phi
         phi = self.pos_encoding.compose(phi, num_agents, device=device)
 
-        # 5. Causal attention mask
-        mask = create_attention_mask(
-            num_agents=num_agents,
-            pattern=self.attention_pattern,
-            window=self.attention_window,
-            device=device,
-            causal=True,
-        )
-        mask = mask.unsqueeze(0).expand(batch_size, -1, -1)  # (B, N, N)
+        # 5. Causal attention mask (cached at __init__, sliced by seq length)
+        mask = self._causal_mask[:num_agents, :num_agents].unsqueeze(0).expand(
+            batch_size, -1, -1
+        )  # (B, N, N)
 
         # 6. Precompute transport operators when phi does not evolve
         if omega is not None and self.gauge_param == 'omega':
