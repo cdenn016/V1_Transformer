@@ -232,12 +232,12 @@ def _compute_vfe_gradients_block_diagonal(
             del Omega_chunk
 
             # Regularize and invert (adaptive regularization for numerical stability)
-            # Use 1e-4 jitter (not eps=1e-6) — GL(K) transport can produce
+            # Use TRANSPORT_JITTER (not eps=1e-6) — GL(K) transport can produce
             # near-singular covariances that need stronger regularization.
             I_d = torch.eye(d, device=device, dtype=dtype)
             sigma_j_transported = 0.5 * (sigma_j_transported + sigma_j_transported.transpose(-1, -2))
-            sigma_j_reg = sigma_j_transported + 1e-4 * I_d
-            sigma_j_inv = _safe_spd_inv(sigma_j_reg, eps=1e-4)  # (B, C, N, d, d)
+            sigma_j_reg = sigma_j_transported + TRANSPORT_JITTER * I_d
+            sigma_j_inv = _safe_spd_inv(sigma_j_reg, eps=TRANSPORT_JITTER)  # (B, C, N, d, d)
 
             # Delta mu for this block (query chunk) - contiguous to avoid view issues
             mu_block_i = mu_block[:, i_start:i_end].contiguous()  # (B, C, d)
@@ -278,7 +278,7 @@ def _compute_vfe_gradients_block_diagonal(
 
             # Sigma alignment gradient for this block
             if compute_sigma_align_grad:
-                sigma_i_inv_block = _safe_spd_inv(sigma_i_block_diag, eps=1e-4)  # (B, C, d, d)
+                sigma_i_inv_block = _safe_spd_inv(sigma_i_block_diag, eps=TRANSPORT_JITTER)  # (B, C, d, d)
                 # Use .clone() after expand to ensure contiguous memory layout
                 sigma_i_inv_exp = sigma_i_inv_block[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()
                 grad_sigma_block = 0.5 * (sigma_j_inv - sigma_i_inv_exp)  # (B, C, N, d, d)
@@ -1266,7 +1266,7 @@ def compute_vfe_gradients_gpu(
         )  # (B, N, N, K, K)
 
         # Regularize and invert
-        sigma_j_reg = sigma_j_transported + max(eps, 1e-4) * torch.eye(K, device=device, dtype=dtype)
+        sigma_j_reg = sigma_j_transported + max(eps, TRANSPORT_JITTER) * torch.eye(K, device=device, dtype=dtype)
         # NaN safety: if transport produced NaN, replace with identity covariance
         if torch.isnan(sigma_j_reg).any():
             nan_mask = torch.isnan(sigma_j_reg).any(dim=-1).any(dim=-1)  # (B, N, N)
