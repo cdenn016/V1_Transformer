@@ -609,7 +609,7 @@ class VariationalFFNDynamic(nn.Module):
         # on content-only alignment. With ffn_n_iterations=1, the E-step β is
         # what drives belief evolution; the attention sublayer β drives mu/sigma
         # aggregation (the "value" path).
-        self._use_rope_vfe = False
+        self._use_rope_vfe = True
         self._rope_base_vfe = rope_base
         # Constant gauge: store reference to attention module's per-head Ω parameters.
         # When gauge_mode='constant', these are used to build transport operators
@@ -2368,6 +2368,8 @@ class VariationalFFNDynamic(nn.Module):
         _detach_e_step: bool = True,
         _obs_cache: Optional[dict] = None,
         _precomputed_block_exp_pairs=None,
+        connection_delta: Optional[torch.Tensor] = None,
+        cocycle_relaxation: float = 0.0,
     ):
         r"""Execute one VFE natural-gradient iteration.
 
@@ -2375,6 +2377,9 @@ class VariationalFFNDynamic(nn.Module):
             _precomputed_block_exp_pairs: If provided, reuse these block exp
                 pairs instead of recomputing. Used when update_phi_per_iteration
                 is False to avoid redundant matrix exponentials across iterations.
+            connection_delta: Frozen non-flat connection δ_ij (B, N, N, n_gen).
+                When provided, transport becomes Ω = exp(φ_i)·exp(α·δ·G)·exp(−φ_j).
+            cocycle_relaxation: Scale factor for connection_delta.
 
         Returns:
             (mu_current, sigma_current, phi_current, omega_current,
@@ -2405,12 +2410,16 @@ class VariationalFFNDynamic(nn.Module):
         # cached_transport avoids redundant matrix exponentials.
         # Skip caching when using block-diagonal or chunked paths (they
         # compute transport internally in chunks to save memory).
+        _nonflat_omega = None  # Per-head sliceable non-flat Omega (multihead path)
         if self.irrep_dims is None and not self.multihead_vfe:
             if omega_current is not None and self.gauge_param == 'omega':
                 # Direct omega: build full-K transport from omega blocks
                 from transformer.core.transport_ops import compute_transport_operators_direct
                 cached_transport = compute_transport_operators_direct(
                     omega=omega_current,
+                    connection_delta=connection_delta,
+                    generators=self.generators if connection_delta is not None else None,
+                    cocycle_relaxation=cocycle_relaxation,
                 )
             elif self.gauge_mode == 'constant' and self.constant_omega is not None:
                 # Constant gauge with known Ω: build full-K transport from
@@ -2437,8 +2446,25 @@ class VariationalFFNDynamic(nn.Module):
                     enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
                     gauge_mode=self.gauge_mode,
                     generators_are_skew=self._generators_are_skew,
+                    connection_delta=connection_delta,
+                    cocycle_relaxation=cocycle_relaxation,
                 )
         else:
+            if connection_delta is not None and cocycle_relaxation > 0:
+                # Non-flat multihead: compute full-K Omega once, slice per head.
+                # The fused block-diagonal path doesn't support non-flat transport,
+                # so we pre-compute the full Omega and inject per-head slices via
+                # cached_transport in the per-head loop below.
+                _nonflat_transport = compute_transport_operators(
+                    phi=phi_current,
+                    generators=self.generators,
+                    enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                    gauge_mode=self.gauge_mode,
+                    generators_are_skew=self._generators_are_skew,
+                    connection_delta=connection_delta,
+                    cocycle_relaxation=cocycle_relaxation,
+                )
+                _nonflat_omega = _nonflat_transport['Omega']  # (B, N, N, K, K)
             cached_transport = None
 
         # =================================================================
@@ -2525,8 +2551,15 @@ class VariationalFFNDynamic(nn.Module):
                 alpha_h = alpha_effective[:, :, block_start:block_end] if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3 else alpha_effective
                 c0_h = _alpha_c0[block_start:block_end] if _alpha_c0 is not None else None
 
-                if _use_fused_mh:
+                # Non-flat transport: extract per-head Omega slice for this block
+                _head_ct = None
+                if _nonflat_omega is not None:
+                    _head_ct = {'Omega': _nonflat_omega[:, :, :, block_start:block_end, block_start:block_end]}
+
+                if _use_fused_mh and _nonflat_omega is None:
                     # FUSED: single pass computes β_h AND gradients (1× Omega)
+                    # Not compatible with non-flat transport (fused path builds
+                    # Omega from block exp pairs internally).
                     beta_h, grad_mu_h, grad_sigma_h, _ = _fused_attention_and_vfe_gradients_block_diag(
                         mu_q=mu_h, sigma_q=sigma_h,
                         mu_p=mu_p_h, sigma_p=sigma_p_h,
@@ -2545,6 +2578,8 @@ class VariationalFFNDynamic(nn.Module):
                     )
                 else:
                     # Fallback: separate attention + gradient (full covariance)
+                    # When _head_ct has non-flat Omega, it takes priority over
+                    # cached_block_exp_pairs in both functions.
                     beta_h = compute_attention_weights(
                         mu_q=mu_h, sigma_q=sigma_h,
                         phi=phi_current, generators=gen_h,
@@ -2555,6 +2590,7 @@ class VariationalFFNDynamic(nn.Module):
                         mask_self_attention=self.mask_self_attention,
                         gauge_mode=self.gauge_mode,
                         cached_block_exp_pairs=_head_bep,
+                        cached_transport=_head_ct,
                         use_rope=self._use_rope_vfe,
                         rope_base=self._rope_base_vfe,
                         exact_diagonal_transport=self.exact_diagonal_transport,
@@ -2568,6 +2604,7 @@ class VariationalFFNDynamic(nn.Module):
                         compute_sigma_align_grad=self.compute_sigma_align_grad,
                         irrep_dims=[d_h],
                         cached_block_exp_pairs=_head_bep,
+                        cached_transport=_head_ct,
                         exact_diagonal_transport=self.exact_diagonal_transport,
                     )
 
@@ -2612,9 +2649,15 @@ class VariationalFFNDynamic(nn.Module):
                 mu_current.device, mu_current.dtype,
             )
 
-            # Use fused path for diagonal + block-diagonal
+            # Use fused path for diagonal + block-diagonal.
+            # Fused path builds Omega from block exp pairs (flat only).
+            # When non-flat cached_transport is available, fall back to non-fused.
+            _has_nonflat_ct = (cached_transport is not None
+                               and 'Omega' in cached_transport
+                               and connection_delta is not None)
             _use_fused_single = (is_diagonal and self.irrep_dims is not None
-                                 and not self.exact_diagonal_transport)
+                                 and not self.exact_diagonal_transport
+                                 and not _has_nonflat_ct)
 
             # Detach beliefs for gradient computation (consistent with multihead
             # path at line 3667). Without this, analytical VFE gradients
@@ -3196,6 +3239,8 @@ class VariationalFFNDynamic(nn.Module):
         return_beta_history: bool = False,  # Return β evolution for analysis
         omega: Optional[torch.Tensor] = None,  # (B, N, K, K) direct group elements (gauge_param='omega')
         sigma_prior: Optional[torch.Tensor] = None,  # (B, N, K, K) or (B, N, K) - embedding prior covariance
+        connection_delta: Optional[torch.Tensor] = None,  # (B, N, N, n_gen) frozen non-flat connection
+        cocycle_relaxation: float = 0.0,  # Scale for connection_delta: 0=flat, 1=fully non-flat
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor, Optional[list]]:
         """
         Dynamic VFE E-step descent with beta recomputation at each iteration.
@@ -3227,6 +3272,10 @@ class VariationalFFNDynamic(nn.Module):
             sigma_prior: Embedding prior covariance (B, N, K, K) or (B, N, K).
                 When provided, used as sigma_p in the E-step (proper prior
                 reference). When None, falls back to sigma.detach() (legacy).
+            connection_delta: Frozen non-flat connection δ_ij (B, N, N, n_gen).
+                Computed once from initial μ by GaugeConnection in blocks.py.
+                Treated as an E-step constant (like σ_p).
+            cocycle_relaxation: Scale factor for connection_delta (0=flat, 1=non-flat).
 
         Returns:
             mu_new: Updated beliefs (B, N, K).
@@ -3363,6 +3412,8 @@ class VariationalFFNDynamic(nn.Module):
                 _detach_e_step=_detach_e_step,
                 _obs_cache=_obs_cache,
                 _precomputed_block_exp_pairs=_hoisted_bep,
+                connection_delta=connection_delta,
+                cocycle_relaxation=cocycle_relaxation,
             )
             _is_final = (iteration == _n_iters - 1)
             if _use_ckpt and not _is_final:
