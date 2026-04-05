@@ -76,9 +76,9 @@ def _get_rope_cos_sin(
     device: torch.device, dtype: torch.dtype,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Get cached RoPE cos/sin tensors, recomputing only when args change."""
-    key = (K, N, base, device)
+    key = (K, N, base, device, dtype)
     cached = _rope_cache.get(key)
-    if cached is not None and cached[0].dtype == dtype:
+    if cached is not None:
         return cached
     freqs = _build_rope_freqs(K, base, device=device, dtype=dtype)  # (K//2,)
     positions = torch.arange(N, device=device, dtype=dtype)  # (N,)
@@ -91,10 +91,13 @@ def _get_rope_cos_sin(
 
 
 def _apply_rope(mu: torch.Tensor, base: float = 10000.0) -> torch.Tensor:
-    """Apply Rotary Position Embeddings to belief means.
+    r"""Apply Rotary Position Embeddings to belief means.
 
     Rotates consecutive pairs of dimensions by position-dependent angles,
-    making KL divergences sensitive to relative position.
+    making KL divergences sensitive to relative position via SO(2)^{K//2}.
+
+    When K is odd, the last dimension is left unrotated (standard RoPE
+    convention — only K//2 pairs are formed from K dimensions).
 
     Args:
         mu: (B, N, K) belief means
