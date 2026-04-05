@@ -1566,9 +1566,29 @@ class IrrepMultiHeadAttention(nn.Module):
         batch_size, num_agents, K = mu_q.shape
 
         # =====================================================================
+        # RoPE: Apply to FULL mu_q BEFORE splitting into heads
+        # =====================================================================
+        # RoPE frequency bands are computed as freq_i = 1/base^(2i/K).
+        # Applying RoPE per-head (after split) gives each head identical
+        # frequencies scaled by 1/d_h instead of non-overlapping bands from
+        # the global 1/K spectrum. By applying to the full K-dimensional mu
+        # first, each head's slice inherits the correct frequency band:
+        #   head 0 → low frequencies (slow rotations)
+        #   head H-1 → high frequencies (fast rotations)
+        # This matches standard transformer RoPE which applies to full Q/K
+        # before the head split.
+        if self.use_rope:
+            mu_q_for_attn = _apply_rope(mu_q, base=self.rope_base)
+        else:
+            mu_q_for_attn = mu_q
+
+        # =====================================================================
         # Split into irrep blocks
         # =====================================================================
-        mu_blocks = self._split_irreps(mu_q)       # List of (B, N, dim_ℓ)
+        # Split RoPE-rotated mu for attention scoring
+        mu_blocks = self._split_irreps(mu_q_for_attn)  # List of (B, N, dim_ℓ)
+        # Split raw mu for message aggregation (values — no RoPE)
+        mu_blocks_raw = self._split_irreps(mu_q)        # List of (B, N, dim_ℓ)
         sigma_blocks = self._split_irreps_sigma(sigma_q)  # List of (B, N, dim_ℓ, dim_ℓ)
 
         # =====================================================================
@@ -1612,8 +1632,8 @@ class IrrepMultiHeadAttention(nn.Module):
                 enforce_orthogonal=self.enforce_orthogonal,
             )
 
-        for head_idx, (mu_head, sigma_head, dim_head, label) in enumerate(
-            zip(mu_blocks, sigma_blocks, self.irrep_dims, self.irrep_labels)
+        for head_idx, (mu_head, mu_head_raw, sigma_head, dim_head, label) in enumerate(
+            zip(mu_blocks, mu_blocks_raw, sigma_blocks, self.irrep_dims, self.irrep_labels)
         ):
             gen_head = self.head_generators[head_idx].gen.to(
                 device=generators.device, dtype=generators.dtype
@@ -1670,6 +1690,10 @@ class IrrepMultiHeadAttention(nn.Module):
                 _head_bep = [_attn_block_exp_pairs[head_idx]]
 
             # Compute attention for this head
+            # NOTE: use_rope=False here because RoPE was already applied to the
+            # full mu_q BEFORE splitting into heads (see above). This ensures
+            # each head inherits the correct frequency band from the global
+            # spectrum rather than all heads getting identical d_h-based freqs.
             if return_attention:
                 beta_head, kl_head = compute_attention_weights(
                     mu_head,
@@ -1688,8 +1712,7 @@ class IrrepMultiHeadAttention(nn.Module):
                     gauge_mode=self.gauge_mode,
                     mask_self_attention=self.mask_self_attention,
                     enforce_orthogonal=self.enforce_orthogonal,
-                    use_rope=self.use_rope,
-                    rope_base=self.rope_base,
+                    use_rope=False,
                     exact_diagonal_transport=self.exact_diagonal_transport,
                 )  # (B, N, N), (B, N, N)
                 all_attention_weights.append(beta_head)
@@ -1712,15 +1735,15 @@ class IrrepMultiHeadAttention(nn.Module):
                     gauge_mode=self.gauge_mode,
                     mask_self_attention=self.mask_self_attention,
                     enforce_orthogonal=self.enforce_orthogonal,
-                    use_rope=self.use_rope,
-                    rope_base=self.rope_base,
+                    use_rope=False,
                     exact_diagonal_transport=self.exact_diagonal_transport,
                 )  # (B, N, N)
                 kl_head = None
 
-            # Aggregate messages using factored transport (no full Omega!)
+            # Aggregate messages using raw (un-rotated) mu — RoPE affects
+            # attention scores only (the "Q·K" analog), not values.
             mu_agg, sigma_agg = aggregate_messages(
-                mu_head,
+                mu_head_raw,
                 sigma_head,
                 phi,
                 beta_head,

@@ -599,6 +599,16 @@ class VariationalFFNDynamic(nn.Module):
         # awareness enters via β_ij from the attention sublayer, which already
         # applies RoPE. Applying RoPE inside the E-step double-counts position,
         # breaks KL geometry (rotates μ but not Σ), and distorts the VFE fixed point.
+        #
+        # DESIGN NOTE: This means the attention sublayer's β (position-aware via
+        # RoPE) and the E-step's internally-recomputed β (position-blind) are
+        # INCONSISTENT. The attention sublayer uses RoPE-rotated KL for routing
+        # and aggregation, while the E-step uses raw KL for belief refinement.
+        # This is intentional: position information enters through the attention
+        # sublayer's message aggregation, and the E-step refines beliefs based
+        # on content-only alignment. With ffn_n_iterations=1, the E-step β is
+        # what drives belief evolution; the attention sublayer β drives mu/sigma
+        # aggregation (the "value" path).
         self._use_rope_vfe = False
         self._rope_base_vfe = rope_base
         # Constant gauge: store reference to attention module's per-head Ω parameters.
