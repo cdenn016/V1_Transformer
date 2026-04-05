@@ -2235,7 +2235,11 @@ def run_single_experiment(
     logger.info(f"  {_mode_label} | {_params_str} params | {device}")
     logger.info(f"  K={config['embed_dim']}, N={config['max_seq_len']}, L={config['n_layers']}, "
                 f"heads={_n_heads} | {_dataset_name} ({total_tokens/1e6:.0f}M tokens)")
-    logger.info(f"  {total_steps_eff:,} steps | B={batch_size} | "
+    _coverage_str = ""
+    if dataset_tokens and dataset_tokens > 0:
+        _coverage_pct = total_tokens / dataset_tokens * 100
+        _coverage_str = f" ~ {_coverage_pct:.0f}% {_dataset_name.lower()}"
+    logger.info(f"  {total_steps_eff:,} steps | B={batch_size}{_coverage_str} | "
                 f"FLOPs/step: {format_flops(step_flops)} | Total: {format_flops(total_flops)}")
     logger.info(f"  LR: mu={train_config.M_mu_p_lr}, sigma={train_config.M_sigma_p_lr}, "
                 f"phi={train_config.M_phi_lr}, out={train_config.M_output_lr}")
