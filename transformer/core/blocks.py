@@ -325,6 +325,7 @@ class GaugeTransformerBlock(nn.Module):
         # is redundant. Skip it and go straight to VFE gradients.
 
         beta = None
+        delta_ij = None  # Non-flat connection (frozen E-step constant when passed to FFN)
         if not self.skip_attention:
             # Pre-layer normalization on means
             mu_normalized = self.norm1(mu_q)
@@ -430,6 +431,8 @@ class GaugeTransformerBlock(nn.Module):
             W_out=W_out,
             omega=omega,
             sigma_prior=sigma_prior,
+            connection_delta=delta_ij,
+            cocycle_relaxation=self.cocycle_relaxation,
         )
 
         # Update covariances from FFN if evolving
