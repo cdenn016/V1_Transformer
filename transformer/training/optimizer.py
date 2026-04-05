@@ -60,10 +60,22 @@ class RiemannianAdamW(torch.optim.AdamW):
           gradient = 2 · ∇_E η. Applied as a fixed factor-of-2 rescaling.
         - All others: standard AdamW (no preconditioning).
 
+    After preconditioning, per-group Riemannian trust region clipping is
+    applied (when grad_clip > 0). Each group is clipped in its native metric:
+        - phi: ||ξ||_K = sqrt(ξ^T K ξ) where K is the Killing form
+        - mu: ||ξ||_F = sqrt(ξ^T Σ^{-1} ξ) (Fisher-Rao norm)
+        - sigma: ||ξ||_F = ||∇f||_2 (constant Fisher metric)
+        - others: Euclidean norm (standard clip_grad_norm_)
+    This bounds the geodesic step size on each factor of the product manifold,
+    making the trust radius geometrically meaningful regardless of coordinate chart.
+
     Args:
         params: Parameter groups from create_param_groups()
         model: Reference to GaugeTransformerLM for accessing sigma values
         killing_inv: Precomputed inverse Killing metric (n_gen, n_gen) or None
+        killing_metric: Precomputed Killing metric (n_gen, n_gen) or None,
+            needed for Riemannian norm computation on phi
+        grad_clip: Trust radius δ for per-group Riemannian clipping (0 = disabled)
         **kwargs: Forwarded to torch.optim.AdamW (lr, betas, eps, weight_decay)
     """
 
@@ -72,15 +84,19 @@ class RiemannianAdamW(torch.optim.AdamW):
         params,
         model: nn.Module = None,
         killing_inv: Optional[torch.Tensor] = None,
+        killing_metric: Optional[torch.Tensor] = None,
+        grad_clip: float = 0.0,
         **kwargs,
     ):
         super().__init__(params, **kwargs)
         self._model = model
         self._killing_inv = killing_inv
+        self._killing_metric = killing_metric
+        self._grad_clip = grad_clip
 
     @torch.no_grad()
     def step(self, closure=None):
-        # Precondition gradients before AdamW processes them
+        # 1. Precondition: Euclidean → natural gradient
         for group in self.param_groups:
             name = group.get('name', '')
 
@@ -90,6 +106,10 @@ class RiemannianAdamW(torch.optim.AdamW):
                 self._precondition_mu(group)
             elif 'sigma' in name:
                 self._precondition_sigma(group)
+
+        # 2. Per-group Riemannian trust region clipping
+        if self._grad_clip > 0:
+            self._riemannian_clip()
 
         return super().step(closure)
 
@@ -144,6 +164,81 @@ class RiemannianAdamW(torch.optim.AdamW):
         if hasattr(embed, 'log_sigma_diag') and isinstance(embed.log_sigma_diag, nn.Parameter):
             return torch.exp(embed.log_sigma_diag.data).clamp(min=1e-6, max=10.0)
         return None
+
+    def _riemannian_clip(self) -> None:
+        r"""Per-group Riemannian trust region clipping.
+
+        Clips the natural gradient ξ = G^{-1} ∇f in the Riemannian norm
+        ||ξ||_G = sqrt(ξ^T G ξ), separately for each parameter group.
+        This bounds the geodesic step size on each factor of the product
+        manifold M_mu × M_sigma × M_phi × R^n.
+
+        For phi (Killing metric K):
+            ||ξ||_K^2 = Σ_v ξ_v^T K ξ_v  where ξ = K^{-1} g
+            Equivalently = Σ_v g_v^T K^{-1} g_v (Mahalanobis norm of Euclidean grad)
+
+        For mu (Fisher metric Σ^{-1}):
+            ||ξ||_F^2 = Σ_v ξ_v^T Σ_v^{-1} ξ_v  where ξ = Σ g
+            = Σ_v g_v^T Σ_v g_v (variance-weighted Euclidean norm)
+            Since ξ_v = σ_v * g_v (elementwise), this is Σ_v (ξ_v / σ_v)^2
+
+        For sigma (constant Fisher F = (1/2)I):
+            ||ξ||_F^2 = Σ_v ξ_v^T (I/2) ξ_v = (1/2)||ξ||_2^2
+            Since ξ = 2g: ||ξ||_F = sqrt(2) ||g||_2
+
+        For Euclidean params: standard L2 norm.
+        """
+        sigma = self._get_sigma()
+
+        for group in self.param_groups:
+            name = group.get('name', '')
+            graded = [p for p in group['params'] if p.grad is not None]
+            if not graded:
+                continue
+
+            if ('phi' in name or 'omega' in name) and self._killing_metric is not None:
+                # Riemannian norm: ||ξ||_K = sqrt(Σ_v ξ_v^T K ξ_v)
+                K = self._killing_metric.to(graded[0].device, graded[0].dtype)
+                sq_norm = 0.0
+                for p in graded:
+                    xi = p.grad  # already preconditioned: ξ = K^{-1} g
+                    # ξ^T K ξ per token, summed: (V, n_gen) @ (n_gen, n_gen) → (V, n_gen)
+                    sq_norm += (xi @ K * xi).sum().item()
+                riem_norm = sq_norm ** 0.5
+                if riem_norm > self._grad_clip:
+                    scale = self._grad_clip / (riem_norm + 1e-8)
+                    for p in graded:
+                        p.grad.mul_(scale)
+
+            elif 'mu' in name and sigma is not None:
+                # Riemannian norm: ||ξ||_{Σ^{-1}} = sqrt(Σ_v ξ_v^T Σ_v^{-1} ξ_v)
+                # ξ = Σ g is stored in p.grad. So ξ_v / σ_v = g_v (original grad).
+                sq_norm = 0.0
+                for p in graded:
+                    if p.grad.shape == sigma.shape:
+                        # ξ_v^T Σ^{-1} ξ_v = (ξ_v / σ_v)^2 (diagonal Σ)
+                        sq_norm += ((p.grad / sigma.clamp(min=1e-6)) ** 2).sum().item()
+                    else:
+                        sq_norm += (p.grad ** 2).sum().item()
+                riem_norm = sq_norm ** 0.5
+                if riem_norm > self._grad_clip:
+                    scale = self._grad_clip / (riem_norm + 1e-8)
+                    for p in graded:
+                        p.grad.mul_(scale)
+
+            elif 'sigma' in name:
+                # Fisher = (1/2)I. ξ = 2g. ||ξ||_F^2 = (1/2)||ξ||_2^2 = 2||g||_2^2.
+                # Since ξ is stored in p.grad: ||ξ||_F = ||p.grad||_2 / sqrt(2).
+                sq_norm = sum((p.grad ** 2).sum().item() for p in graded)
+                riem_norm = (sq_norm / 2.0) ** 0.5  # ||ξ||_F = ||ξ||_2 / sqrt(2)
+                if riem_norm > self._grad_clip:
+                    scale = self._grad_clip / (riem_norm + 1e-8)
+                    for p in graded:
+                        p.grad.mul_(scale)
+
+            else:
+                # Euclidean params (attention, output, ffn, no_decay)
+                torch.nn.utils.clip_grad_norm_(graded, self._grad_clip)
 
 
 # =============================================================================
@@ -620,11 +715,14 @@ def create_optimizer(
     )
 
     if optimizer_type == 'riemannian_adam':
-        # Precompute Killing metric inverse from model generators
+        # Precompute Killing metric and its inverse from model generators
         killing_inv = None
+        killing_metric = None
         generators = getattr(model, 'generators', None)
         if generators is not None:
-            killing_inv = compute_killing_metric_inv(generators)
+            from transformer.core.gauge_preconditioner import build_killing_form_preconditioner
+            killing_inv, killing_metric = build_killing_form_preconditioner(
+                generators, return_both=True)
             if verbose:
                 n_gen = generators.shape[0]
                 K = generators.shape[1]
@@ -641,12 +739,17 @@ def create_optimizer(
             if verbose:
                 print("  Warning: No generators found; phi preconditioning disabled")
 
+        grad_clip = getattr(config, 'grad_clip', 0.0)
         optimizer = RiemannianAdamW(
             param_groups,
             model=model,
             killing_inv=killing_inv,
+            killing_metric=killing_metric,
+            grad_clip=grad_clip,
             **base_kwargs,
         )
+        if verbose and grad_clip > 0:
+            print(f"  Riemannian trust region clipping: δ={grad_clip}")
 
     elif optimizer_type == 'natural_gradient':
         ema_decay = getattr(config, 'fisher_ema_decay', 0.95)
