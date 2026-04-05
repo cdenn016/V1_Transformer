@@ -199,6 +199,7 @@ def build_killing_form_preconditioner(
     generators: torch.Tensor,  # (n_gen, K, K)
     center_reg: float = None,
     center_only: bool = True,
+    return_both: bool = False,
 ) -> torch.Tensor:
     r"""
     Build the Killing form natural gradient preconditioner for gl(K).
@@ -234,9 +235,11 @@ def build_killing_form_preconditioner(
         generators: Lie algebra generators (n_gen, K, K)
         center_reg: Regularization for the degenerate center direction.
             Default None → 2K (isotropic conditioning).
+        return_both: If True, return (inv_metric, metric) tuple.
 
     Returns:
-        inv_metric: (n_gen, n_gen) inverse metric for natural gradient
+        inv_metric: (n_gen, n_gen) inverse metric for natural gradient.
+        If return_both=True, returns (inv_metric, metric) tuple.
     """
     n_gen, K, _ = generators.shape
     device = generators.device
@@ -280,6 +283,9 @@ def build_killing_form_preconditioner(
 
     # Invert to get natural gradient metric
     inv_metric = torch.linalg.inv(metric)
+
+    if return_both:
+        return inv_metric, metric
 
     return inv_metric
 

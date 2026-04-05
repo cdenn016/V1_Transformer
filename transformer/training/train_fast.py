@@ -233,8 +233,10 @@ class FastTrainer:
             # Unscale before clipping (required for correct grad norms)
             self.scaler.unscale_(self.optimizer)
 
-            # Gradient clipping
-            if self.config.grad_clip > 0:
+            # Gradient clipping — skip if optimizer handles Riemannian clipping internally
+            from transformer.training.optimizer import RiemannianAdamW as _RAdamW
+            _optimizer_handles_clip = isinstance(self.optimizer, _RAdamW) and self.optimizer._grad_clip > 0
+            if self.config.grad_clip > 0 and not _optimizer_handles_clip:
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(),
                     self.config.grad_clip,

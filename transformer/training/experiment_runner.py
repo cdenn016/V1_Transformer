@@ -1257,7 +1257,12 @@ class PublicationTrainer(FastTrainer):
         mstep_natural_norms = None
         if _is_accum_step:
             _use_param_groups = getattr(self.config, 'use_param_groups', True)
-            if self.config.grad_clip > 0:
+            # RiemannianAdamW handles per-group Riemannian trust region clipping
+            # internally (after preconditioning, in the correct metric). Skip
+            # external Euclidean clipping to avoid double-clipping in the wrong geometry.
+            from transformer.training.optimizer import RiemannianAdamW as _RAdamW
+            _optimizer_handles_clip = isinstance(self.optimizer, _RAdamW) and self.optimizer._grad_clip > 0
+            if self.config.grad_clip > 0 and not _optimizer_handles_clip:
                 if _use_param_groups:
                     # Scale clip threshold by sqrt(n_group / n_total) so that
                     # per-parameter gradient magnitude is equalized across groups.
