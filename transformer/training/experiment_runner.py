@@ -1926,6 +1926,7 @@ def run_single_experiment(
     args: argparse.Namespace = None,
     enable_publication_metrics: bool = True,
     quiet: bool = False,
+    skip_test_eval: bool = False,
 ) -> Dict:
     """
     Run a single training experiment.
@@ -1938,6 +1939,8 @@ def run_single_experiment(
         args: Command-line arguments for logging
         enable_publication_metrics: Whether to enable comprehensive publication metrics
         quiet: Suppress verbose banners/config dumps (for ablation sweeps)
+        skip_test_eval: Skip test set evaluation (use for sweeps — compare on val,
+            reserve test for final reporting only)
 
     Returns:
         Dictionary with final metrics
@@ -2317,9 +2320,9 @@ def run_single_experiment(
         except Exception as e:
             logger.warning(f"Head kappa plot generation failed: {e}")
 
-        # Run test set evaluation if test loader is available
+        # Run test set evaluation (skip during sweeps — compare on val only)
         test_metrics = None
-        if test_loader is not None:
+        if test_loader is not None and not skip_test_eval:
             test_metrics = run_test_evaluation(
                 model=model,
                 test_loader=test_loader,
