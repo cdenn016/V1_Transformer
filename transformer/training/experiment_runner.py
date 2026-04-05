@@ -1613,8 +1613,6 @@ class PublicationTrainer(FastTrainer):
                 _verbose = self.config.verbose_diagnostics
                 if use_tqdm:
                     pbar.set_description(log_msg)
-                    if not _verbose:
-                        tqdm.write(log_msg)
                     if _verbose and grad_norms:
                         tqdm.write(f"\n\n  [M-STEP] total: {grad_norms['total']:.3e} | "
                                    f"mu: {grad_norms['mu']:.3e} | sigma: { grad_norms['sigma']:.3e} | "
@@ -1703,12 +1701,12 @@ class PublicationTrainer(FastTrainer):
                 attn_entropy = metrics.get('attention_entropy', 0)
                 attn_concentration = metrics.get('attention_concentration', 0)
 
-                _write(f"\n  Validation @ step {step+1}:")
+                _write(f"\n\n  Validation @ step {step+1}:")
                 _write(f"    Loss: {val_metrics['loss']:.4f}")
                 _write(f"    CE: {val_metrics['ce_loss']:.4f}")
                 _write(f"    PPL: {val_metrics['perplexity']:.2f}")
                 _write(f"    BPC: {val_metrics['ce_loss']/math.log(2):.3f}")
-                _write(f"    Attn entropy: {attn_entropy:.3f} | concentration: {attn_concentration:.3f}")
+                _write(f"    Attn entropy: {attn_entropy:.3f} | concentration: {attn_concentration:.3f}\n\n")
 
                 # Generate sample text to verify learning (varied prompts for diversity)
                 try:
@@ -1720,13 +1718,13 @@ class PublicationTrainer(FastTrainer):
                         prompts = ["日本", "東京", "世界", "歴史", "文化", "科学", "政治", "経済", "教育", "自然",
                                    "社会", "技術", "音楽", "映画", "大学"]
                     else:
-                        prompts = ["The", "In", "A", "It", "This", "As", "One", "When", "For",
+                        prompts = ["The", "In", "A", "It", "This", "As", "Fuck", "When", "For",
                                    "After", "Before", "During", "While", "Although", "However"]
                     prompt = random.choice(prompts)
                     # Use temperature 0.9 and lower top_k for more diversity
                     sample = self.sample_text(
                         prompt=prompt, max_new_tokens=30, temperature=0.9, top_k=30)
-                    _write(f"\n    Sample: {sample[:100]}...\n")
+                    _write(f"\n\n    Sample: {sample[:100]}...\n")
                 except Exception as e:
                     import traceback
                     _write(f"    Sample generation failed: {e}")
@@ -3037,7 +3035,7 @@ def run_pure_vfe_experiment(
                 val_metrics = _validate_pure_vfe(model, val_loader, device)
                 metrics_tracker.log_val(step + 1, val_metrics)
 
-                logger.info(f"  Validation @ step {step+1}:")
+                logger.info(f"\n  Validation @ step {step+1}:")
                 logger.info(f"    Loss: {val_metrics['loss']:.4f}")
                 logger.info(f"    PPL: {val_metrics['perplexity']:.2f}")
                 logger.info(f"    BPC: {val_metrics['ce_loss']/math.log(2):.3f}")
