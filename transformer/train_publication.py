@@ -148,9 +148,9 @@ EM_CONFIG = {
     # === Architecture ===
     'vocab_size':            50257,
     'embed_dim':             20,
-    'max_seq_len':           64,
+    'max_seq_len':           32,
     
-    'batch_size':            128, 
+    'batch_size':            256, 
     'max_steps':             15000,
     
     'n_layers':              1,
@@ -264,12 +264,12 @@ EM_CONFIG = {
     # mu_embed and log_sigma_diag have dual roles: they initialize E-step
     # beliefs (q₀) AND serve as prior parameters (μ_p, σ_p), so these rates
     # indirectly affect E-step initialization speed.
-    'M_mu_p_lr':           0.05,   # M-step prior mean embeddings (μ_p)
-    'M_sigma_p_lr':        0.005, # M-step prior covariance embeddings (log σ_p)
-    'M_phi_lr':            0.0075, # M-step gauge frame embeddings (φ)
-    'M_vfe_hyperparam_lr': 0.05, # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr)
-    'M_attention_lr':      0.005,  # M-step attention params (W_O, constant_omega)
-    'M_output_lr':         0.05,   # M-step output projection (vocab logits)
+    'M_mu_p_lr':           0.05,   # M-step prior mean embeddings (μ_p) 0.05
+    'M_sigma_p_lr':        0.015, # M-step prior covariance embeddings (log σ_p)
+    'M_phi_lr':            0.0075, # M-step gauge frame embeddings (φ) 0.0075
+    'M_vfe_hyperparam_lr': 0.075, # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
+    'M_attention_lr':      0.005,  # M-step attention params (W_O, constant_omega)0.005
+    'M_output_lr':         0.05,   # M-step output projection (vocab logits) 0.05
     
     # === Logging ===
     'log_interval':               100,
@@ -301,6 +301,7 @@ EM_CONFIG = {
     # Option A: couple just 0↔1, head 2 stays independent
     # 'cross_couplings': [(0, 1), (1, 0)],
     # → super-blocks: [20, 10]  (heads 0,1 merged into GL(20), head 2 alone)
+    
     # === Layer/iteration diagnostics ===
     'track_layer_diagnostics':     False,
     'track_iteration_diagnostics': False,
@@ -328,7 +329,7 @@ EM_CONFIG = {
     
     'use_amp':         False, 
     'use_compile':     False,
-    'compile_mode':    'max-autotune'  # 'default', 'reduce-overhead', 'max-autotune'
+    'compile_mode':    'reduce-overhead'  # 'default', 'reduce-overhead', 'max-autotune'
 
 }
 
@@ -914,18 +915,11 @@ def main():
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-    print(f"Random seed set to: {seed}")
-
     # Device
     if args.device == 'auto':
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     else:
         device = torch.device(args.device)
-
-    print("="*70)
-    print("PUBLICATION PROOF-OF-PRINCIPLE TRAINING")
-    print("="*70)
-    print(f"\nDevice: {device}")
 
     checkpoint_dir = Path(args.checkpoint_dir)
 
@@ -935,44 +929,26 @@ def main():
     mode = args.mode
 
     if mode == 'standard':
-        print("\n" + "="*70)
-        print("MODE: STANDARD TRANSFORMER (Baseline)")
-        print("="*70)
         config = STANDARD_CONFIG.copy()
         ffn_mode = 'standard'
 
     elif mode == 'em':
-        print("\n" + "="*70)
-        print("MODE: EM (Gauge VFE + implicit differentiation M-step)")
-        print("="*70)
         config = EM_CONFIG.copy()
         ffn_mode = 'VFE_dynamic'
 
     elif mode == 'hebbian':
-        print("\n" + "="*70)
-        print("MODE: HEBBIAN (Gauge VFE + P-flow/delta-rule, no backprop)")
-        print("="*70)
         config = HEBBIAN_CONFIG.copy()
         ffn_mode = 'VFE_dynamic'
 
     elif mode == 'standard_attn_only':
-        print("\n" + "="*70)
-        print("MODE: STANDARD ATTENTION-ONLY (Peer Review M2b)")
-        print("="*70)
         config = STANDARD_ATTN_ONLY_CONFIG.copy()
         ffn_mode = 'standard'
 
     elif mode == 'hybrid':
-        print("\n" + "="*70)
-        print("MODE: HYBRID (Gauge KL-Attention + PriorBank + Standard GELU FFN)")
-        print("="*70)
         config = HYBRID_CONFIG.copy()
         ffn_mode = 'hybrid'
 
     elif mode == 'pure_vfe':
-        print("\n" + "="*70)
-        print("MODE: PURE VFE TRANSFORMER (No backprop)")
-        print("="*70)
         config = PURE_VFE_CONFIG.copy()
         config['dataset'] = args.dataset
 
