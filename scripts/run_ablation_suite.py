@@ -56,190 +56,190 @@ from transformer.training.experiment_runner import run_single_experiment
 BASELINE_CONFIG = {
     # === Architecture ===
     'vocab_size':            50257,
-    'embed_dim':             10,
-    'max_seq_len':           32,
+    'embed_dim':             20,
+    'max_seq_len':           64,
     
-    'batch_size':            712, 
-    'max_steps':             2000,
+    'batch_size':            128, 
+    'max_steps':             7500,
     
-   'n_layers':              1,
-   'ffn_n_iterations':      1,
-   
-   'gauge_dim':                          10,
-   'irrep_spec':            [('fund', 1, 10)],
-               # SO(3), e.g.  ('ℓ0', 50, 1),
+    'n_layers':              1,
+    'ffn_n_iterations':      1,
+    
+    'gauge_dim':                          10,
+    'irrep_spec':            [('fund', 2, 10)],
 
-   'gauge_fixed_priors':       False,
-   'use_prior_bank':           False,
-   'learnable_pb_temperature': True,
-   'mask_self_attention':      True,  
+    'use_prior_bank':           False,
+    'learnable_pb_temperature': True,
+    'mask_self_attention':      True,  # Prevent attention collapse?
+  
+    'gauge_fixed_priors':       True,    
+  
+    'kappa_beta':               3.16,
+    'kappa_warmup_steps':       7500,  # freeze kappa for first n steps
+    'learnable_head_kappa':     True, # If True, learn per-head κ_h via log_kappa_per_head
+    
+    # === M-step: implicit differentiation ===
+    'implicit_em':           False,
+    'amortized_inference':   True,
+    'use_obs_in_vfe':        False,  #cheats when true
+       
+    # === M-step: Optimizer ===  
+    'optimizer_type':        'riemannian_adam',# or 'natural_gradient' or 'adamw' or 'riemannian_adam'
+    'fisher_ema_decay':      0.95,            # for natural_gradient
+    'fisher_damping':        1e-2,              # for natural_gradient
+
+
+    'use_layernorm':         True,
+    'norm_type':           'layernorm',  # 'layernorm' | 'rmsnorm' | 'none'
+    'use_residual':          True,
+    'use_output_projection': True,
+    'multihead_vfe':         True,
+    
+    'evolve_sigma':          True,
+    'evolve_phi':            True,  #M-step phi evolution
+    'evolve_phi_e_step':     True,
+
+    # === E-step dynamics ===
+    
+    
+    'E_alpha':               1,      # E-step prior coupling weight
+    'E_lambda_belief':       1,    # E-step belief alignment weight
+    'E_lambda_softmax':      1,
+    'detach_beta_m_step':    True, #if false need M_beta >0
+    
+    'E_learnable_alpha':     True,   # Adaptive α_i = c0/(b0 + KL) per dimension
+
+    
+    'E_learnable_lr':        True,   # Learnable E-step LR
+    'lr_decay':              'linear',
+    'E_mu_q_lr':             0.1,    # E-step μ step size (whitened, within trust=2.0)
+    'E_sigma_q_lr':          0.05,   # E-step σ step size (conservative)
+    
+    'E_phi_lr':              0.05,   # E-step φ step size
+
+    # === Gauge group: GL(K) with multi-head block-diagonal structure ===
+    'gauge_group':           'GLK',
+    'gauge_mode':            'learned',
+    'gauge_param':           'phi',
+
+    'skip_attention':           False,   #skips ad hoc attention sublayer
+    'closed_form_e_step':       False,   #closed form...ignores non-linear softmax gradient
+
+    'diagonal_covariance':      True,
+    'exact_diagonal_transport': False,  # exact diagonal transport - more expensive
+                                        # If True, force Σ = σ²I (scalar variance × identity)
+    'isotropic_covariance':     False,
+    'enforce_orthogonal':       False,    
+    'learnable_reflection':     False,# Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk
+                                        # Set gauge-mode=constant and the above 3 = true for transf limit
  
-   
-   'kappa_warmup_steps':       7500,  # freeze kappa for first n steps
-   'learnable_head_kappa':     False, # If True, learn per-head κ_h via log_kappa_per_head
-   'kappa_gamma':              1.0,
-   'kappa_beta':               1,   #1+sqrt(gauge-dim) seems to work well
-   
-   # === M-step: implicit differentiation ===
-   'implicit_em':           False,
-   'amortized_inference':   True,
-   'use_obs_in_vfe':        False,  #cheats when true
-      
-   # === M-step: Optimizer ===  
-   'optimizer_type':        'riemannian_adam',# or 'natural_gradient' or 'adamw' or 'riemannian_adam'
-   'fisher_ema_decay':      0.95,            # for natural_gradient
-   'fisher_damping':        1e-2,              # for natural_gradient
+    # === VFE loss weights (M-step objective) ===
+    # E-step: prior + alignment (no observations with n_iterations=1).
+    # CE enters through M-step via IFT (s_k ≈ 0.5 from fixed ffn_alpha=1).
+    # alpha=0: KL(q*||p) homogenizes (q* is smoothed, not data-grounded).
+    # beta=0: alignment term is vacuum-seeking. E-step handles it internally.
+    
+    'M_alpha':             0.00,   # M-step KL(q||p) self-consistency
+    'M_beta':              0.0,    # M-step belief alignment
+    'mass_phi':            0.01,    # Gauge prior: (mass_φ/2)||φ||²
+    'lambda_hyper':        0.0,    # KL(s||h) explicit loss (pulls tokens toward centroid)
+    'lambda_gamma':        0.0,
+    'kappa_gamma':         1.0,
+
+    'embed_weight_decay':     0.05,   # L2 hyper-prior on embeddings (μ_p, σ_p, φ) via AdamW
+    'non_embed_weight_decay': 0.01,  # L2 on non-embedding params (attention, output)
+    
+    # === Phi gradient geometry ===
+    'phi_natural_gradient':       'killing',
+    'use_killing_form':           True,
+    'killing_form_sym_dampening': 0.5,
+
+    # === Position encoding ===
+    'use_rope':           True,
+    'rope_base':          5000, 
+    'pos_encoding_mode': 'none',
+
+    # === Embedding init ===
+    'mu_init_std':     1.0,
+    'phi_scale':       1.0,
+    
+    'mu_normalize':    False,
+    'mu_max_norm':     None,
 
 
-   'use_layernorm':         True,
-   'norm_type':             'layernorm',  # 'layernorm' | 'rmsnorm' | 'none'
-   'use_residual':          True,
-   'use_output_projection': True,
-   'multihead_vfe':         True,
-   
-   'evolve_sigma':          True,
-   'evolve_phi':            True,  #M-step phi evolution
-   'evolve_phi_e_step':     True,
+    # === M-step learning rates (AdamW parameter groups) ===
+    # These update nn.Parameter objects via backprop. The E-step (inner VFE
+    # loop) uses e_step_mu_lr / e_step_sigma_lr / e_step_phi_lr above.
+    # mu_embed and log_sigma_diag have dual roles: they initialize E-step
+    # beliefs (q₀) AND serve as prior parameters (μ_p, σ_p), so these rates
+    # indirectly affect E-step initialization speed.
+    'M_mu_p_lr':           0.05,   # M-step prior mean embeddings (μ_p) 0.05
+    'M_sigma_p_lr':        0.015, # M-step prior covariance embeddings (log σ_p)
+    'M_phi_lr':            0.0075, # M-step gauge frame embeddings (φ) 0.0075
+    'M_vfe_hyperparam_lr': 0.075, # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
+    'M_attention_lr':      0.005,  # M-step attention params (W_O, constant_omega)0.005
+    'M_output_lr':         0.05,   # M-step output projection (vocab logits) 0.05
+    
+    # === Logging ===
+    'log_interval':               100,
+    'eval_interval':              1000,
+    'checkpoint_interval':        25000,
+    'semantic_analysis_interval': 10000,
 
-   # === E-step dynamics ===
-   
-   
-   'E_alpha':               1,      # E-step prior coupling weight
-   'E_lambda_belief':       1,      # E-step belief alignment weight
-   'E_lambda_softmax':      5,
-   
-   
-   'E_learnable_alpha':     True,   # Adaptive α_i = c0/(b0 + KL) per dimension
+    'use_deq':           False,
+    'deq_include_phi':   True,    # Corrects M-step phi gradient
+    'deq_neumann_terms': 0,
 
-   
-   'E_learnable_lr':        True,   # Learnable E-step LR
-   'lr_decay':              'linear',
-   'E_mu_q_lr':             0.1,    # E-step μ step size (whitened, within trust=2.0)
-   'E_sigma_q_lr':          0.05,   # E-step σ step size (conservative)
-   
-   'E_phi_lr':              0.05,   # E-step φ step size
+    # =================================================================
+    # NON-FLAT GAUGE TRANSPORT (holonomy)
+    # =================================================================
+    # When enabled, transport acquires an edge-local connection δ_ij:
+    #   phi path:  Ω_ij = exp(φ_i·G) · exp(α·δ_ij·G) · exp(-φ_j·G)
+    #   omega path: Ω_ij = Ω_i · exp(α·δ_ij·G) · Ω_j⁻¹
+    # δ_ij is zero-initialized so the model starts flat and learns
+    # curvature only where the data warrants it.
+    # Holonomy H_ijk = Ω_ij·Ω_jk·Ω_ki ≠ I when δ ≠ 0.
+    
+    'non_flat_transport':    False,        # Enable edge-dependent connection δ_ij
+    'cocycle_relaxation':    0.5,          # Scale for δ_ij: 0=flat, 1=fully non-flat    
+    'connection_type':       'bilinear',  # 'bilinear' (δ_ij^a = μ_i^T W^a μ_j) | 'mlp'   
+    'connection_hidden_dim': 64,   # Hidden dim for MLP connection (ignored for bilinear)   
+    'connection_init_scale': 0.01,   # W init scale (0=flat saddle point, 0.01 recommended)    
+    'holonomy_penalty':      0.0,  # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
 
-   # === Gauge group: GL(K) with multi-head block-diagonal structure ===
-   'gauge_group':           'GLK',
-   'gauge_mode':            'learned',
-   'gauge_param':           'phi',
+    # Option A: couple just 0↔1, head 2 stays independent
+    # 'cross_couplings': [(0, 1), (1, 0)],
+    # → super-blocks: [20, 10]  (heads 0,1 merged into GL(20), head 2 alone)
+    
+    # === Layer/iteration diagnostics ===
+    'track_layer_diagnostics':     False,
+    'track_iteration_diagnostics': False,
+    'diagnostics_interval':        25,
+    
+    
+    'tie_embeddings':              False,
+    'ffn_mode':                    'VFE_dynamic',
+    
+    'debug_vfe_grads':             False,
+    'verbose_diagnostics':         False,
+    
+    # === Multi-layer depth signal ===
+    'aux_layer_loss':  False,   # Enable for multi-layer: per-layer M-step CE loss
+    'aux_loss_weight': 0.3,     # Weight for auxiliary per-layer CE losses
+    'sigma_residual':  False,   # Additive σ residual across layers
 
-   'skip_attention':           False,   #skips ad hoc attention sublayer
-   'closed_form_e_step':       False,   #closed form...ignores non-linear softmax gradient
+    # === Regularization ===
+    'sigma_ce_scale':  0.1,
+    'sigma_max':       12.0,
+    'grad_clip':       5.0,
+    'hidden_dim':      508,
+    'warmup_steps':    100,
+    'num_workers':     10,
+    
+    'use_amp':         False, 
+    'use_compile':     False,
+    'compile_mode':    'reduce-overhead',  # 'default', 'reduce-overhead', 'max-autotune'
 
-   'diagonal_covariance':      True,
-   'exact_diagonal_transport': False,  # exact diagonal transport - more expensive
-                                       # If True, force Σ = σ²I (scalar variance × identity)
-   'isotropic_covariance':     False,
-   'enforce_orthogonal':       False,    
-   'learnable_reflection':     False,  # Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk
-                                       # Set gauge-mode=constant and the above 3 = true for transf limit
-
-   # === VFE loss weights (M-step objective) ===
-   # E-step: prior + alignment (no observations with n_iterations=1).
-   # CE enters through M-step via IFT (s_k ≈ 0.5 from fixed ffn_alpha=1).
-   # alpha=0: KL(q*||p) homogenizes (q* is smoothed, not data-grounded).
-   # beta=0: alignment term is vacuum-seeking. E-step handles it internally.
-   
-   'M_alpha':             0.00,   # M-step KL(q||p) self-consistency
-   'M_beta':              0.0,    # M-step belief alignment
-   'mass_phi':            0.01,    # Gauge prior: (mass_φ/2)||φ||²
-   'lambda_hyper':        0.0,    # KL(s||h) explicit loss (pulls tokens toward centroid)
-   'lambda_gamma':        0.0,
-   
-     
-   'embed_weight_decay':     0.05,   # L2 hyper-prior on embeddings (μ_p, σ_p, φ) via AdamW
-   'non_embed_weight_decay': 0.01,  # L2 on non-embedding params (attention, output)
-   
-   # === Phi gradient geometry ===
-   'phi_natural_gradient':       'killing',
-   'use_killing_form':           True,
-   'killing_form_sym_dampening': 1,
-
-   # === Position encoding ===
-   'use_rope':           True,
-   'rope_base':          5000, 
-   'pos_encoding_mode': 'none',
-
-   # === Embedding init ===
-   'mu_init_std':     1.0,
-   'phi_scale':       1.0,
-   
-   'mu_normalize':    False,
-   'mu_max_norm':     None,
-
-
-   # === M-step learning rates (AdamW parameter groups) ===
-   # These update nn.Parameter objects via backprop. The E-step (inner VFE
-   # loop) uses e_step_mu_lr / e_step_sigma_lr / e_step_phi_lr above.
-   # mu_embed and log_sigma_diag have dual roles: they initialize E-step
-   # beliefs (q₀) AND serve as prior parameters (μ_p, σ_p), so these rates
-   # indirectly affect E-step initialization speed.
-   'M_mu_p_lr':           0.05,   # M-step prior mean embeddings (μ_p)
-   'M_sigma_p_lr':        0.015, # M-step prior covariance embeddings (log σ_p)
-   'M_phi_lr':            0.0075, # M-step gauge frame embeddings (φ)
-   'M_vfe_hyperparam_lr': 0.05, # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr)
-   'M_attention_lr':      0.005,  # M-step attention params (W_O, constant_omega)
-   'M_output_lr':         0.05,   # M-step output projection (vocab logits)
-   
-   # === Logging ===
-   'log_interval':               100,
-   'eval_interval':              5000,
-   'checkpoint_interval':        25000,
-   'semantic_analysis_interval': 10000,
-
-   'use_deq':           False,
-   'deq_include_phi':   True,    # Corrects M-step phi gradient
-   'deq_neumann_terms': 0,
-
-   # =================================================================
-   # NON-FLAT GAUGE TRANSPORT (holonomy)
-   # =================================================================
-   # When enabled, transport acquires an edge-local connection δ_ij:
-   #   phi path:  Ω_ij = exp(φ_i·G) · exp(α·δ_ij·G) · exp(-φ_j·G)
-   #   omega path: Ω_ij = Ω_i · exp(α·δ_ij·G) · Ω_j⁻¹
-   # δ_ij is zero-initialized so the model starts flat and learns
-   # curvature only where the data warrants it.
-   # Holonomy H_ijk = Ω_ij·Ω_jk·Ω_ki ≠ I when δ ≠ 0.
-   
-   'non_flat_transport':    False,        # Enable edge-dependent connection δ_ij
-   'cocycle_relaxation':    0.5,          # Scale for δ_ij: 0=flat, 1=fully non-flat    
-   'connection_type':       'bilinear',  # 'bilinear' (δ_ij^a = μ_i^T W^a μ_j) | 'mlp'   
-   'connection_hidden_dim': 64,   # Hidden dim for MLP connection (ignored for bilinear)   
-   'connection_init_scale': 0.01,   # W init scale (0=flat saddle point, 0.01 recommended)    
-   'holonomy_penalty':      0.0,  # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
-
-   # Option A: couple just 0↔1, head 2 stays independent
-   # 'cross_couplings': [(0, 1), (1, 0)],
-   # → super-blocks: [20, 10]  (heads 0,1 merged into GL(20), head 2 alone)
-   # === Layer/iteration diagnostics ===
-   'track_layer_diagnostics':     False,
-   'track_iteration_diagnostics': False,
-   'diagnostics_interval':        25,
-   
-   
-   'tie_embeddings':              False,
-   'ffn_mode':                    'VFE_dynamic',
-   
-   'debug_vfe_grads':             False,
-   'verbose_diagnostics':         False,
-   
-   # === Multi-layer depth signal ===
-   'aux_layer_loss':  False,   # Enable for multi-layer: per-layer M-step CE loss
-   'aux_loss_weight': 0.3,     # Weight for auxiliary per-layer CE losses
-   'sigma_residual':  False,   # Additive σ residual across layers
-
-   # === Regularization ===
-   'sigma_ce_scale':  0.5,
-   'sigma_max':       12.0,
-   'grad_clip':       5.0,
-   'hidden_dim':      508,
-   'warmup_steps':    100,
-   'num_workers':     10,
-   
-   'use_amp':         False, 
-   'use_compile':     False,
-   'compile_mode':    'reduce-overhead',  # 'default', 'reduce-overhead', 'max-autotune'
 
     'dataset': 'wikitext-103', #'wiki-2' for quick sweeps
 }
@@ -424,35 +424,35 @@ SWEEPS = {
     'M_sigma_p_lr': {
         'description': 'Belief precision (σ) learning rate',
         'param': 'M_sigma_p_lr',
-        'values': [0.001, 0.005, 0.0075, 0.0125, 0.05, 0.1],
-        'baseline_value': 0.005,
+        'values': [0.001, 0.005, 0.015, 0.05, 0.1],
+        'baseline_value': 0.015,
     },
 
     'M_phi_lr': {
         'description': 'Gauge frame (φ) learning rate',
         'param': 'M_phi_lr',
-        'values': [0.001, 0.005, 0.0125, 0.02, 0.05, 0.1],
+        'values': [0.001, 0.005, 0.0075, 0.01, 0.05, 0.1],
         'baseline_value': 0.005,
     },
 
     'M_vfe_hyperparam_lr': {
         'description': 'FFN / VFE module learning rate',
         'param': 'M_vfe_hyperparam_lr',
-        'values': [0.0025, 0.01, 0.05, 0.077, 0.15],
+        'values': [0.001, 0.005, 0.01, 0.05, 0.1],
         'baseline_value': 0.05,
     },
 
     'M_attention_lr': {
         'description': 'Attention module learning rate',
         'param': 'M_attention_lr',
-        'values': [0.005, 0.006, 0.007, 0.008, 0.009],
+        'values': [0.001, 0.005, 0.01, 0.02, 0.1],
         'baseline_value': 0.005,
     },
 
     'M_output_lr': {
         'description': 'Output projection learning rate',
         'param': 'M_output_lr',
-        'values': [0.005, 0.01, 0.02, 0.05, 0.1, 0.2],
+        'values': [0.005, 0.01, 0.05, 0.1],
         'baseline_value': 0.05,
     },
 
@@ -490,7 +490,7 @@ SWEEPS = {
     'embed_weight_decay': {
         'description': 'Weight decay on embedding parameters (hyper-prior precision)',
         'param': 'embed_weight_decay',
-        'values': [0.04, 0.05, 0.06, 0.07],
+        'values': [0.04, 0.06, 0.08, 0.1, 0.15],
         'baseline_value': 0.01,
     },
 
@@ -525,7 +525,7 @@ SWEEP_ORDER = [
     #'kappa_beta',
     
     #'non_embed_weight_decay',
-    #'killing_form_sym_dampening',
+    'killing_form_sym_dampening',
     
    # 'E_lambda_belief',
     #'E_lambda_softmax',
@@ -534,22 +534,22 @@ SWEEP_ORDER = [
     
     #'E_alpha',
     
-   # 'M_mu_p_lr',
-   # 'M_sigma_p_lr',
+    'M_mu_p_lr',
+    'M_sigma_p_lr',
     'M_phi_lr',
-    'E_phi_lr',
+   # 'E_phi_lr',
     
     'M_vfe_hyperparam_lr',
 
-    'E_mu_q_lr',
-    'E_sigma_q_lr',
+    #'E_mu_q_lr',
+   # 'E_sigma_q_lr',
 
     #'prior_bank_tau',
 
     #'rope_base', Done
 
-    #'M_attention_lr',
-    #'M_output_lr',
+    'M_attention_lr',
+    'M_output_lr',
     
     #'covariance', 
     
@@ -670,6 +670,7 @@ def run_sweep(
                 checkpoint_dir=run_dir,
                 enable_publication_metrics=False,
                 quiet=True,
+                skip_test_eval=True,
             )
             elapsed = time.time() - t0
 
@@ -697,7 +698,6 @@ def run_sweep(
                 )
 
                 print(f"  -> Val PPL: {result['final_ppl']:.2f}, "
-                      f"Test PPL: {result.get('test_ppl', 'N/A')}, "
                       f"Time: {elapsed:.0f}s")
             else:
                 print(f"  -> FAILED (returned None)")
@@ -739,8 +739,6 @@ def run_sweep(
         if not valid.empty:
             best = valid.loc[valid['final_ppl'].idxmin()]
             print(f"  Best: {best.get('label', '?')} -> Val PPL {best['final_ppl']:.2f}")
-            if 'test_ppl' in best and pd.notna(best.get('test_ppl')):
-                print(f"                          Test PPL {best['test_ppl']:.2f}")
     print()
 
     return df
@@ -770,13 +768,12 @@ def analyze_sweep(sweep_dir: Path) -> dict:
     valid = df[df['final_ppl'] < float('inf')].copy()
     valid = valid.sort_values('final_ppl')
 
-    print(f"{'Label':<30} {'Val PPL':>10} {'Test PPL':>10} {'Params':>12} {'Time':>8}")
-    print('-' * 75)
+    print(f"{'Label':<30} {'Val PPL':>10} {'Params':>12} {'Time':>8}")
+    print('-' * 65)
     for _, row in valid.iterrows():
-        test_ppl = f"{row['test_ppl']:.2f}" if pd.notna(row.get('test_ppl')) else 'N/A'
         params = f"{row.get('total_params', 0):,}" if pd.notna(row.get('total_params')) else 'N/A'
         elapsed = f"{row.get('elapsed_sec', 0):.0f}s" if pd.notna(row.get('elapsed_sec')) else 'N/A'
-        print(f"{row['label']:<30} {row['final_ppl']:>10.2f} {test_ppl:>10} {params:>12} {elapsed:>8}")
+        print(f"{row['label']:<30} {row['final_ppl']:>10.2f} {params:>12} {elapsed:>8}")
 
     # Compute relative improvements
     if len(valid) > 1:
@@ -811,8 +808,8 @@ def analyze_all(output_dir: Path):
     print(f"\n{'='*70}")
     print(f"CROSS-SWEEP SUMMARY (best per sweep)")
     print(f"{'='*70}\n")
-    print(f"{'Sweep':<25} {'Best Config':<30} {'Val PPL':>10} {'Test PPL':>10}")
-    print('-' * 80)
+    print(f"{'Sweep':<25} {'Best Config':<30} {'Val PPL':>10}")
+    print('-' * 70)
 
     for r in all_results:
         df = r['df']
@@ -821,8 +818,7 @@ def analyze_all(output_dir: Path):
             continue
         best = valid.loc[valid['final_ppl'].idxmin()]
         sweep = r['meta'].get('sweep_name', '?')
-        test_ppl = f"{best['test_ppl']:.2f}" if pd.notna(best.get('test_ppl')) else 'N/A'
-        print(f"{sweep:<25} {best['label']:<30} {best['final_ppl']:>10.2f} {test_ppl:>10}")
+        print(f"{sweep:<25} {best['label']:<30} {best['final_ppl']:>10.2f}")
 
 
 def generate_plots(output_dir: Path):
@@ -858,9 +854,9 @@ def generate_plots(output_dir: Path):
         if valid.empty:
             continue
 
-        # Use test_ppl for plots, fall back to final_ppl (val) if unavailable
-        ppl_col = 'test_ppl' if 'test_ppl' in valid.columns and valid['test_ppl'].notna().any() else 'final_ppl'
-        ppl_label = 'Test Perplexity' if ppl_col == 'test_ppl' else 'Validation Perplexity'
+        # Always use val PPL for sweep comparisons (test reserved for final reporting)
+        ppl_col = 'final_ppl'
+        ppl_label = 'Validation Perplexity'
 
         # Try to extract numeric parameter value from label
         numeric_values = []
@@ -917,14 +913,13 @@ def generate_plots(output_dir: Path):
         valid = df[df['final_ppl'] < float('inf')]
         if valid.empty:
             continue
-        ppl_col = 'test_ppl' if 'test_ppl' in valid.columns and valid['test_ppl'].notna().any() else 'final_ppl'
-        best = valid.loc[valid[ppl_col].idxmin()]
-        worst = valid.loc[valid[ppl_col].idxmax()]
+        best = valid.loc[valid['final_ppl'].idxmin()]
+        worst = valid.loc[valid['final_ppl'].idxmax()]
         all_bests.append({
             'sweep': meta.get('sweep_name', sweep_dir.name),
-            'best_ppl': best[ppl_col],
-            'worst_ppl': worst[ppl_col],
-            'range': worst[ppl_col] - best[ppl_col],
+            'best_ppl': best['final_ppl'],
+            'worst_ppl': worst['final_ppl'],
+            'range': worst['final_ppl'] - best['final_ppl'],
             'best_label': best['label'],
         })
 
@@ -935,8 +930,8 @@ def generate_plots(output_dir: Path):
         ax.barh(y_pos, bdf['range'], color='#e74c3c', alpha=0.7)
         ax.set_yticks(y_pos)
         ax.set_yticklabels([f"{r['sweep']}\n(best: {r['best_label']})" for _, r in bdf.iterrows()])
-        ax.set_xlabel('Test PPL Range (worst - best)')
-        ax.set_title('Hyperparameter Sensitivity (Test PPL range per sweep)')
+        ax.set_xlabel('Val PPL Range (worst - best)')
+        ax.set_title('Hyperparameter Sensitivity (Val PPL range per sweep)')
         ax.invert_yaxis()
         fig.tight_layout()
         fig.savefig(fig_dir / 'sensitivity_summary.png', dpi=150)
