@@ -21,6 +21,7 @@ Date: December 2025
 import os
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
+import logging
 import torch
 import numpy as np
 import json
@@ -1030,7 +1031,7 @@ class PublicationMetrics:
         self.holonomy_interval: int = 500  # Default: compute every 500 steps
         self.holonomy_sample_size: int = 500  # Triples per computation
 
-        print(f"[PublicationMetrics] Initialized: {self.experiment_dir}")
+        logging.getLogger(__name__).debug(f"[PublicationMetrics] Initialized: {self.experiment_dir}")
 
     def record_step(
         self,
