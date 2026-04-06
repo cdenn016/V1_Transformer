@@ -379,6 +379,8 @@ def _compute_vfe_gradients_block_diagonal_diag(
     enforce_orthogonal: bool = False,
     alpha_c0: Optional[torch.Tensor] = None,  # (K,) for product-rule correction
     cached_block_exp_pairs: Optional[list] = None,
+    use_rope: bool = False,
+    rope_base: float = 10000.0,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Block-diagonal VFE gradient computation for diagonal covariance mode.
@@ -463,6 +465,17 @@ def _compute_vfe_gradients_block_diagonal_diag(
     # =================================================================
     # 2. Belief Alignment Gradient (block-diagonal + diagonal formulas)
     # =================================================================
+    # When use_rope is active, the externally-supplied β was softmaxed from
+    # KL_RoPE (computed via compute_attention_weights with use_rope=True).
+    # The chain rule for ∂β/∂μ_raw must therefore go through ∂KL_RoPE/∂μ_raw
+    # (= R(θ)^T · ∂KL_RoPE/∂(R μ)), NOT ∂KL_raw/∂μ.  We compute the rope-space
+    # gradient in parallel and un-rotate it after the loop for the chain rule.
+    if use_rope:
+        from transformer.core.transport_ops import _apply_rope, _un_apply_rope_pair_outer
+        mu_q_rope = _apply_rope(mu_q, base=rope_base)
+    else:
+        mu_q_rope = mu_q
+
     # Precompute matrix exponentials — FUSED by dimension group
     if cached_block_exp_pairs is not None:
         _fused_pairs = cached_block_exp_pairs
@@ -475,7 +488,10 @@ def _compute_vfe_gradients_block_diagonal_diag(
 
     # Accumulators for per-pair KL values and gradients across all blocks
     kl_values = torch.zeros(B, N, N, device=device, dtype=dtype)
+    kl_values_raw = torch.zeros(B, N, N, device=device, dtype=dtype) if use_rope else None
     grad_kl_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=dtype)
+    # ∂KL_RoPE/∂(R μ_i): un-rotated per i (after the loop) for chain rule.
+    grad_kl_rope_per_pair = torch.zeros(B, N, N, K, device=device, dtype=dtype) if use_rope else None
     grad_sigma_align = torch.zeros_like(sigma_q)
     # Accumulator for sigma softmax coupling (same memory cost as grad_kl_per_pair_full)
     grad_sigma_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=dtype) if (
@@ -488,7 +504,8 @@ def _compute_vfe_gradients_block_diagonal_diag(
     for block_idx, d in enumerate(irrep_dims):
         block_end = block_start + d
 
-        mu_block = mu_q[:, :, block_start:block_end].contiguous()        # (B, N, d)
+        mu_block = mu_q[:, :, block_start:block_end].contiguous()        # (B, N, d) raw
+        mu_block_rope = mu_q_rope[:, :, block_start:block_end].contiguous() if use_rope else mu_block
         sigma_block = sigma_q_safe[:, :, block_start:block_end].contiguous()  # (B, N, d)
 
         # Block Omega: (B, N, N, d, d) — direct construction for numerical precision
@@ -497,8 +514,13 @@ def _compute_vfe_gradients_block_diagonal_diag(
             block_exp_phi[block_idx], block_exp_neg_phi[block_idx]
         )
 
-        # Transport means
-        mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_block)  # (B, N, N, d)
+        # Transport means: for the alignment objective (raw KL), use raw mu;
+        # for β-side KL (rope KL), use rope-rotated mu.
+        mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_block)  # raw, (B, N, N, d)
+        if use_rope:
+            mu_j_transported_rope = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_block_rope)
+        else:
+            mu_j_transported_rope = mu_j_transported
 
         # Diagonal covariance transport: σ_t[k] = Σ_l Ω_kl² * σ[l]
         # This extracts diag(Ω @ diag(σ) @ Ω^T), discarding off-diagonal elements
@@ -516,13 +538,23 @@ def _compute_vfe_gradients_block_diagonal_diag(
 
         # Delta mu (broadcast instead of expand+clone to avoid 59M-element copy)
         mu_block_i = mu_block[:, :, None, :]  # (B, N, 1, d) - broadcasts with (B, N, N, d)
-        delta_mu = mu_block_i - mu_j_transported  # (B, N, N, d)
+        delta_mu = mu_block_i - mu_j_transported  # raw, (B, N, N, d)
 
-        # ∂KL/∂μ_i = (μ_i - μ_j_t) / σ_j_t (element-wise)
+        # ∂KL_raw/∂μ_i = (μ_i - μ_j_t) / σ_j_t (element-wise) — for direct term
         grad_kl_block = delta_mu / sigma_j_transported  # (B, N, N, d)
         grad_kl_per_pair_full[:, :, :, block_start:block_end] = grad_kl_block
 
-        # Diagonal KL for this block (broadcast, no clone)
+        # ∂KL_RoPE/∂(R μ_i) = (R μ_i - Ω R μ_j) / σ_j_t — for chain rule (un-rotated below)
+        if grad_kl_rope_per_pair is not None:
+            mu_block_i_rope = mu_block_rope[:, :, None, :]
+            delta_mu_rope = mu_block_i_rope - mu_j_transported_rope
+            grad_kl_rope_per_pair[:, :, :, block_start:block_end] = delta_mu_rope / sigma_j_transported
+
+        # Diagonal KL for this block — used for SOFTMAX-coupling MULTIPLIER (KL_raw)
+        # Note: kl_values is the externally-consistent KL.  Since β was already
+        # computed externally (rope-space when use_rope=True), kl_values here is
+        # only used as the chain-rule multiplier.  Use raw KL when use_rope=True
+        # to match the alignment objective.
         sigma_i_block = sigma_block[:, :, None, :]  # (B, N, 1, d)
         trace_block = (sigma_i_block / sigma_j_transported).sum(dim=-1)
         mahal_block = (delta_mu ** 2 / sigma_j_transported).sum(dim=-1)
@@ -532,6 +564,11 @@ def _compute_vfe_gradients_block_diagonal_diag(
         kl_block = 0.5 * (trace_block + mahal_block - d + logdet_block)
         kl_block = kl_block.clamp(min=0.0, max=max(100.0, KL_CEIL_SCALE * d))
         kl_values = kl_values + kl_block
+
+        # When RoPE is active, kl_values_raw collects the raw-mu KL; when RoPE
+        # is inactive, kl_values already IS the raw KL so no separate accumulator.
+        if kl_values_raw is not None:
+            kl_values_raw = kl_values_raw + kl_block  # mahal_block already used raw delta
 
         # Sigma alignment gradient for this block
         if compute_sigma_align_grad:
@@ -548,15 +585,27 @@ def _compute_vfe_gradients_block_diagonal_diag(
         del sigma_j_transported, mu_j_transported, delta_mu
         block_start = block_end
 
-    # avg_grad = Σ_j β_ij · ∂KL_ij/∂μ_i (used for both direct and softmax terms)
+    # Direct alignment term: β · ∂KL_raw/∂μ (objective is raw KL).
     avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
     grad_mu_direct = lambda_belief * avg_grad
 
-    # Softmax coupling term
+    # Softmax coupling: ∂β/∂μ_raw · KL_raw with chain rule through ∂KL_RoPE.
+    # When use_rope=False, the rope and raw gradients are equal and the
+    # un-rotation is a no-op so we fall through to the cheap path.
     kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
-    grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair_full
+    if grad_kl_rope_per_pair is not None:
+        grad_kl_for_coupling = _un_apply_rope_pair_outer(
+            grad_kl_rope_per_pair, base=rope_base
+        )
+    else:
+        grad_kl_for_coupling = grad_kl_per_pair_full
+
+    avg_grad_for_coupling = torch.einsum('bij,bijk->bik', beta, grad_kl_for_coupling)
+    grad_deviation = avg_grad_for_coupling.unsqueeze(2) - grad_kl_for_coupling
     d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
-    grad_mu_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
+    # Multiplier in ∂(β·KL_raw)/∂μ is KL_raw, not the externally-supplied β-side KL.
+    kl_for_coupling = kl_values_raw if kl_values_raw is not None else kl_values
+    grad_mu_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_for_coupling, d_beta_d_mu)
 
     grad_mu_align = grad_mu_direct + grad_mu_softmax
     grad_mu = grad_mu_self + grad_mu_align
@@ -577,13 +626,17 @@ def _compute_vfe_gradients_block_diagonal_diag(
         _vfe_utils_mod._VFE_GRAD_DEBUG['kl_frac_above_90pct'] = (kl_values > 0.9 * _kl_ceil).float().mean().item()
         _vfe_utils_mod._VFE_GRAD_DEBUG['kl_p95'] = kl_values.quantile(0.95).item()
 
-    # Sigma softmax coupling: Σ_j KL_ij · ∂β_ij/∂σ_i
+    # Sigma softmax coupling: Σ_j KL_raw_ij · ∂β_ij/∂σ_i
+    # σ derivatives don't depend on RoPE rotation (only μ does), so the
+    # σ chain rule grad_sigma_per_pair_full is unchanged.  However the
+    # multiplier should still be the alignment-objective KL (raw) for
+    # consistency with the μ coupling above.
     grad_sigma_softmax_norm = 0.0
     if grad_sigma_per_pair_full is not None:
         avg_sigma_grad = torch.einsum('bij,bijk->bik', beta, grad_sigma_per_pair_full)
         sigma_grad_deviation = avg_sigma_grad.unsqueeze(2) - grad_sigma_per_pair_full
         d_beta_d_sigma = beta.unsqueeze(-1) * sigma_grad_deviation / kappa_scaled
-        grad_sigma_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_sigma)
+        grad_sigma_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_for_coupling, d_beta_d_sigma)
         if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
             grad_sigma_softmax_norm = _grad_norm(grad_sigma_softmax)
         grad_sigma_align = grad_sigma_align + grad_sigma_softmax
@@ -684,9 +737,13 @@ def _fused_attention_and_vfe_gradients_block_diag(
     sigma_q_safe = sigma_q.clamp(min=eps)
     sigma_p_safe = sigma_p.clamp(min=eps)
 
-    # Apply RoPE to a copy of mu for KL computation (not for gradients)
+    # Apply RoPE to a copy of mu for KL computation (not for gradients).
+    # When use_rope=True, β is softmaxed from KL_RoPE while the alignment
+    # objective uses raw-space KL.  The chain rule for ∂β/∂μ must therefore
+    # go through ∂KL_RoPE/∂μ_raw, NOT ∂KL_raw/∂μ_raw — see the rope-space
+    # gradient accumulator and un-rotation below.
     if use_rope:
-        from transformer.core.transport_ops import _apply_rope
+        from transformer.core.transport_ops import _apply_rope, _un_apply_rope_pair_outer
         mu_q_rope = _apply_rope(mu_q, base=rope_base)
     else:
         mu_q_rope = mu_q
@@ -728,10 +785,16 @@ def _fused_attention_and_vfe_gradients_block_diag(
     # Accumulators
     kl_values = torch.zeros(B, N, N, device=device, dtype=torch.float32)
     # When RoPE is active, kl_values uses RoPE-rotated mu (for attention β) but
-    # gradients use raw mu. The softmax coupling ∂β/∂μ requires KL values consistent
-    # with the gradient space, so we accumulate raw-mu KLs separately.
+    # the alignment objective uses raw mu. The softmax-coupling chain rule
+    # requires KL VALUES from the alignment objective (raw KL multiplier) AND
+    # KL GRADIENTS from the function β was softmaxed from (RoPE KL).  We
+    # accumulate raw-mu KLs separately for the multiplier, and rope-space
+    # gradients separately so we can un-rotate them per-i for the chain rule.
     kl_values_raw = torch.zeros(B, N, N, device=device, dtype=torch.float32) if use_rope else None
     grad_kl_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=torch.float32)
+    # ∂KL_RoPE/∂(R μ_i): used (after R^T un-rotation per i) in the softmax
+    # coupling chain rule.  Only allocated when RoPE is active.
+    grad_kl_rope_per_pair = torch.zeros(B, N, N, K, device=device, dtype=torch.float32) if use_rope else None
     grad_sigma_align = torch.zeros_like(sigma_q)
     grad_sigma_per_pair_full = torch.zeros(B, N, N, K, device=device, dtype=torch.float32) if (
         compute_sigma_align_grad) else None
@@ -770,8 +833,9 @@ def _fused_attention_and_vfe_gradients_block_diag(
         kl_block = kl_block.clamp(min=0.0, max=max(100.0, KL_CEIL_SCALE * d))
         kl_values = kl_values + kl_block
 
-        # Gradient computation (use raw mu, not RoPE)
-        # Re-transport with raw mu if RoPE is active
+        # Gradient computation for the DIRECT alignment term (use raw mu).
+        # The alignment objective is the raw-space KL: F_align = Σ_ij β_ij KL_raw_ij,
+        # so the direct term β · ∂KL_raw/∂μ uses the raw-mu gradient.
         if use_rope:
             mu_j_transported_raw = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_block)
             delta_mu_grad = mu_block[:, :, None, :] - mu_j_transported_raw
@@ -781,11 +845,22 @@ def _fused_attention_and_vfe_gradients_block_diag(
         grad_kl_block = delta_mu_grad / sigma_j_transported
         grad_kl_per_pair_full[:, :, :, block_start:block_end] = grad_kl_block
 
-        # Accumulate raw-mu KL for softmax coupling consistency when RoPE is active
+        # Accumulate raw-mu KL for softmax-coupling MULTIPLIER consistency.
+        # The chain rule ∂(β·KL_raw)/∂μ has multiplier KL_raw (this) and gradient
+        # ∂KL_RoPE/∂μ (computed from grad_kl_rope_per_pair below).
         if kl_values_raw is not None:
             mahal_raw = (delta_mu_grad ** 2 / sigma_j_transported).sum(dim=-1)
             kl_block_raw = 0.5 * (trace_block + mahal_raw - d + logdet_block)
             kl_values_raw = kl_values_raw + kl_block_raw.clamp(min=0.0, max=max(100.0, KL_CEIL_SCALE * d))
+
+        # Gradient of KL_RoPE with respect to (R(θ_i)·μ_i) — the rope-space
+        # gradient.  Used (after R^T un-rotation per i, applied after the loop)
+        # in the softmax-coupling chain rule because β = softmax(-KL_RoPE/κ),
+        # so ∂β/∂μ_raw = -(β/κ)(δ-β) · R(θ_i)^T · ∂KL_RoPE/∂(R μ_i).
+        # delta_mu_kl is already in rope space (mu_block_i_rope - mu_j_transported).
+        if grad_kl_rope_per_pair is not None:
+            grad_kl_rope_block = delta_mu_kl / sigma_j_transported
+            grad_kl_rope_per_pair[:, :, :, block_start:block_end] = grad_kl_rope_block
 
         if compute_sigma_align_grad:
             sigma_j_inv_diag = 1.0 / sigma_j_transported
@@ -822,16 +897,30 @@ def _fused_attention_and_vfe_gradients_block_diag(
     beta_sum = beta.sum(dim=-1, keepdim=True).clamp(min=eps)
     beta = beta / beta_sum
 
-    # Compute VFE gradients using the beta we just computed
+    # Direct alignment term: β_RoPE · ∂KL_raw/∂μ_raw  (objective is raw KL).
     avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
     grad_mu_direct = lambda_belief * avg_grad
 
     kappa_scaled = max(kappa * math.sqrt(max(K, 1)), eps)
-    grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair_full
+
+    # Softmax coupling term: ∂β/∂μ_raw · KL_raw.
+    # ∂β_ij/∂μ_raw_i = -(β_ij/κ)(δ_ij - β_ij) · ∂KL_RoPE_ij/∂μ_raw_i
+    # where ∂KL_RoPE/∂μ_raw_i = R(θ_i)^T · ∂KL_RoPE/∂(R(θ_i)μ_i).
+    # Without RoPE the rope gradient equals the raw gradient and the
+    # un-rotation is a no-op, so we fall through to the existing path.
+    if grad_kl_rope_per_pair is not None:
+        # Un-rotate the rope-space gradient per i: applies R(θ_i)^T to the
+        # K dimension while broadcasting over the j-key dimension.
+        grad_kl_for_coupling = _un_apply_rope_pair_outer(
+            grad_kl_rope_per_pair, base=rope_base
+        )
+    else:
+        grad_kl_for_coupling = grad_kl_per_pair_full
+
+    avg_grad_for_coupling = torch.einsum('bij,bijk->bik', beta, grad_kl_for_coupling)
+    grad_deviation = avg_grad_for_coupling.unsqueeze(2) - grad_kl_for_coupling
     d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
-    # Use raw-mu KL values for the softmax coupling when RoPE is active,
-    # so the chain rule ∂(β·KL)/∂μ is consistent: both KL and ∂KL/∂μ
-    # are computed in the same (raw, non-rotated) space.
+    # Multiplier in ∂(β·KL_raw)/∂μ is KL_raw, not KL_RoPE.
     kl_for_coupling = kl_values_raw if kl_values_raw is not None else kl_values
     grad_mu_softmax = lambda_softmax * torch.einsum('bij,bijk->bik', kl_for_coupling, d_beta_d_mu)
 
@@ -918,6 +1007,8 @@ def compute_vfe_gradients_gpu(
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
     cached_block_exp_pairs: Optional[list] = None,  # Precomputed block exponential pairs
     exact_diagonal_transport: bool = False,  # Lift diagonal σ for exact transport
+    use_rope: bool = False,    # When True, β was softmaxed from KL_RoPE → fix chain rule
+    rope_base: float = 10000.0,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Compute VFE gradients entirely on GPU using PyTorch.
@@ -997,6 +1088,15 @@ def compute_vfe_gradients_gpu(
     # MEMORY-EFFICIENT PATH: Block-diagonal processing
     # =================================================================
     if irrep_dims is not None and not is_diagonal:
+        if use_rope:
+            import warnings
+            warnings.warn(
+                "use_rope=True is not yet implemented for the full-covariance "
+                "block-diagonal gradient path; falling back to raw chain rule "
+                "(introduces a bias in the softmax coupling term).  Use the "
+                "diagonal-covariance block-diagonal path for rope-correct gradients.",
+                stacklevel=2,
+            )
         return _compute_vfe_gradients_block_diagonal(
             mu_q, sigma_q, mu_p, sigma_p, beta, phi, generators,
             alpha, lambda_belief, lambda_softmax, kappa, eps, irrep_dims,
@@ -1015,6 +1115,19 @@ def compute_vfe_gradients_gpu(
             compute_sigma_align_grad, enforce_orthogonal,
             alpha_c0=alpha_c0,
             cached_block_exp_pairs=cached_block_exp_pairs,
+            use_rope=use_rope,
+            rope_base=rope_base,
+        )
+
+    # The remaining in-line paths (no irrep_dims) do not yet implement the
+    # rope chain-rule fix.  Warn so the caller knows the gradient is biased.
+    if use_rope:
+        import warnings
+        warnings.warn(
+            "use_rope=True without irrep_dims falls through to a path that "
+            "does not implement the rope chain-rule fix.  The softmax coupling "
+            "term will use raw-mu gradients instead of R^T·∂KL_RoPE/∂(R μ).",
+            stacklevel=2,
         )
 
     # =================================================================
