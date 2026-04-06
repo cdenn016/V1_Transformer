@@ -1623,125 +1623,132 @@ def _compute_rope_full_gauge_gradient_per_head(
     B, N, _ = mu_h.shape
     device = mu_h.device
 
-    # Cast to float32 for stability and detach + require grad for autograd-based path.
-    _f32 = torch.float32
-    mu_var = mu_h.detach().to(_f32).requires_grad_(True)
-    sigma_var = sigma_h.detach().to(_f32).requires_grad_(True)
-    mu_p_h_d = mu_p_h.detach().to(_f32)
-    sigma_p_h_d = sigma_p_h.detach().to(_f32)
-    phi_d = phi.detach().to(_f32)
+    # IMPORTANT: this path uses torch.autograd.grad internally.  When the
+    # caller is inside torch.no_grad() (e.g. during validation), autograd is
+    # globally disabled and `requires_grad_(True)` is silently ignored — the
+    # subsequent autograd.grad call would fail with "element 0 of tensors does
+    # not require grad and does not have a grad_fn".  We force-enable grad
+    # tracking for the duration of this function via torch.enable_grad().
+    with torch.enable_grad():
+        # Cast to float32 for stability and detach + require grad for autograd-based path.
+        _f32 = torch.float32
+        mu_var = mu_h.detach().to(_f32).requires_grad_(True)
+        sigma_var = sigma_h.detach().to(_f32).requires_grad_(True)
+        mu_p_h_d = mu_p_h.detach().to(_f32)
+        sigma_p_h_d = sigma_p_h.detach().to(_f32)
+        phi_d = phi.detach().to(_f32)
 
-    # Lift diagonal sigma to full covariance for the rope rotation
-    sigma_full = torch.diag_embed(sigma_var)  # (B, N, d_h, d_h), autograd-tracked
+        # Lift diagonal sigma to full covariance for the rope rotation
+        sigma_full = torch.diag_embed(sigma_var)  # (B, N, d_h, d_h), autograd-tracked
 
-    # Apply rope rotation to both means and (lifted) covariances
-    mu_rope = _apply_rope(mu_var, base=rope_base)             # (B, N, d_h)
-    sigma_rope = _apply_rope_to_covariance(sigma_full, base=rope_base)  # (B, N, d_h, d_h)
+        # Apply rope rotation to both means and (lifted) covariances
+        mu_rope = _apply_rope(mu_var, base=rope_base)             # (B, N, d_h)
+        sigma_rope = _apply_rope_to_covariance(sigma_full, base=rope_base)  # (B, N, d_h, d_h)
 
-    # Compute per-head Ω^learned via fused matrix exp pairs
-    if cached_block_exp_pairs is not None:
-        exp_phi_h, exp_neg_phi_h = cached_block_exp_pairs[0]
-        # If the cached values were detached at creation, they will not
-        # carry gradients — that's OK because phi is treated as a constant
-        # within the E-step gradient computation anyway.
-    else:
-        bep = fused_block_matrix_exp_pairs(
-            phi_d, gen_h, [d_h],
-            enforce_orthogonal=enforce_orthogonal,
+        # Compute per-head Ω^learned via fused matrix exp pairs
+        if cached_block_exp_pairs is not None:
+            exp_phi_h, exp_neg_phi_h = cached_block_exp_pairs[0]
+            # If the cached values were detached at creation, they will not
+            # carry gradients — that's OK because phi is treated as a constant
+            # within the E-step gradient computation anyway.
+        else:
+            bep = fused_block_matrix_exp_pairs(
+                phi_d, gen_h, [d_h],
+                enforce_orthogonal=enforce_orthogonal,
+            )
+            exp_phi_h, exp_neg_phi_h = bep[0]
+
+        # Build pairwise transport: Ω_ij = exp(φ_i) · exp(-φ_j)
+        Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi_h, exp_neg_phi_h)  # (B, N, N, d_h, d_h)
+
+        # Transport rope-rotated j-belief to i's frame:
+        #   μ_t = Ω · μ_j_rope
+        #   Σ_t = Ω · Σ_j_rope · Ω^T
+        mu_t = torch.einsum('bijkl,bjl->bijk', Omega, mu_rope)  # (B, N, N, d_h)
+        sigma_t = torch.einsum(
+            'bijkl,bjlm,bijnm->bijkn',
+            Omega, sigma_rope, Omega
+        )  # (B, N, N, d_h, d_h)
+        # Numerical stability: symmetrize and add eps to diagonal
+        sigma_t = 0.5 * (sigma_t + sigma_t.transpose(-1, -2))
+        eye_dh = torch.eye(d_h, device=device, dtype=_f32)
+        sigma_t = sigma_t + eps * eye_dh
+
+        # Source-side rope-rotated covariance, broadcast across j
+        sigma_i_rope = sigma_rope.unsqueeze(2).expand(-1, -1, N, -1, -1)  # (B, N, N, d_h, d_h)
+        sigma_i_rope = 0.5 * (sigma_i_rope + sigma_i_rope.transpose(-1, -2)) + eps * eye_dh
+
+        # Full-covariance KL between two Gaussians:
+        # KL(p || q) = 0.5 [tr(Σ_q^{-1} Σ_p) + (μ_q - μ_p)^T Σ_q^{-1} (μ_q - μ_p)
+        #                   - d + log|Σ_q| - log|Σ_p|]
+        # Here p = q_i_rope, q = transported_q_j_rope
+        sigma_t_inv = torch.linalg.inv(sigma_t)
+
+        # Trace term: tr(Σ_t^{-1} Σ_i_rope) per (i, j)
+        trace_term = torch.einsum('bijkl,bijlk->bij', sigma_t_inv, sigma_i_rope)
+
+        # Mahalanobis: (μ_t - μ_i_rope)^T Σ_t^{-1} (μ_t - μ_i_rope)
+        delta = mu_t - mu_rope[:, :, None, :]   # (B, N, N, d_h)
+        mahal_term = torch.einsum('bijk,bijkl,bijl->bij', delta, sigma_t_inv, delta)
+
+        # Log-determinants
+        sign_t, logdet_t = torch.linalg.slogdet(sigma_t)
+        sign_i, logdet_i = torch.linalg.slogdet(sigma_i_rope)
+
+        kl = 0.5 * (trace_term + mahal_term - d_h + logdet_t - logdet_i)
+        kl = kl.clamp(min=0.0, max=max(100.0, KL_CEIL_SCALE * d_h))
+
+        # Apply mask before softmax
+        if isinstance(kappa, torch.Tensor):
+            kappa_val = kappa
+        else:
+            kappa_val = float(kappa)
+        dim_scale = math.sqrt(max(d_h, 1))
+        logits = -kl / (kappa_val * dim_scale)
+        if mask is not None:
+            logits = logits.masked_fill(mask == 0, float('-inf'))
+        if mask_self_attention:
+            diag_idx = torch.arange(N, device=device)
+            has_other = (logits != float('-inf')).sum(dim=-1) > 1
+            logits = logits.clone()
+            diag_vals = logits[:, diag_idx, diag_idx]
+            masked_diag = torch.where(
+                has_other, torch.full_like(diag_vals, float('-inf')), diag_vals
+            )
+            logits[:, diag_idx, diag_idx] = masked_diag
+
+        beta = torch.nn.functional.softmax(logits, dim=-1)
+
+        # Build the alignment loss with separate weights for the direct (β·∂KL/∂μ)
+        # and softmax-coupling (∂β/∂μ·KL) terms.  This is the standard trick for
+        # decoupling lambda_belief and lambda_softmax in an autograd-based loss.
+        F_align_direct = lambda_belief * (beta.detach() * kl).sum()
+        F_align_softmax = lambda_softmax * (beta * kl.detach()).sum()
+        F_align = F_align_direct + F_align_softmax
+
+        # Self-coupling KL(q_i || p_i) — diagonal case
+        delta_p = mu_var - mu_p_h_d
+        sigma_p_safe = sigma_p_h_d.clamp(min=eps)
+        sigma_q_safe = sigma_var.clamp(min=eps)
+        kl_self = 0.5 * (
+            sigma_q_safe / sigma_p_safe
+            + delta_p ** 2 / sigma_p_safe
+            - 1.0
+            + torch.log(sigma_p_safe)
+            - torch.log(sigma_q_safe)
         )
-        exp_phi_h, exp_neg_phi_h = bep[0]
+        if isinstance(alpha, torch.Tensor):
+            F_self = (alpha * kl_self).sum()
+        else:
+            F_self = alpha * kl_self.sum()
 
-    # Build pairwise transport: Ω_ij = exp(φ_i) · exp(-φ_j)
-    Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi_h, exp_neg_phi_h)  # (B, N, N, d_h, d_h)
+        F_total = F_self + F_align
 
-    # Transport rope-rotated j-belief to i's frame:
-    #   μ_t = Ω · μ_j_rope
-    #   Σ_t = Ω · Σ_j_rope · Ω^T
-    mu_t = torch.einsum('bijkl,bjl->bijk', Omega, mu_rope)  # (B, N, N, d_h)
-    sigma_t = torch.einsum(
-        'bijkl,bjlm,bijnm->bijkn',
-        Omega, sigma_rope, Omega
-    )  # (B, N, N, d_h, d_h)
-    # Numerical stability: symmetrize and add eps to diagonal
-    sigma_t = 0.5 * (sigma_t + sigma_t.transpose(-1, -2))
-    eye_dh = torch.eye(d_h, device=device, dtype=_f32)
-    sigma_t = sigma_t + eps * eye_dh
-
-    # Source-side rope-rotated covariance, broadcast across j
-    sigma_i_rope = sigma_rope.unsqueeze(2).expand(-1, -1, N, -1, -1)  # (B, N, N, d_h, d_h)
-    sigma_i_rope = 0.5 * (sigma_i_rope + sigma_i_rope.transpose(-1, -2)) + eps * eye_dh
-
-    # Full-covariance KL between two Gaussians:
-    # KL(p || q) = 0.5 [tr(Σ_q^{-1} Σ_p) + (μ_q - μ_p)^T Σ_q^{-1} (μ_q - μ_p)
-    #                   - d + log|Σ_q| - log|Σ_p|]
-    # Here p = q_i_rope, q = transported_q_j_rope
-    sigma_t_inv = torch.linalg.inv(sigma_t)
-
-    # Trace term: tr(Σ_t^{-1} Σ_i_rope) per (i, j)
-    trace_term = torch.einsum('bijkl,bijlk->bij', sigma_t_inv, sigma_i_rope)
-
-    # Mahalanobis: (μ_t - μ_i_rope)^T Σ_t^{-1} (μ_t - μ_i_rope)
-    delta = mu_t - mu_rope[:, :, None, :]   # (B, N, N, d_h)
-    mahal_term = torch.einsum('bijk,bijkl,bijl->bij', delta, sigma_t_inv, delta)
-
-    # Log-determinants
-    sign_t, logdet_t = torch.linalg.slogdet(sigma_t)
-    sign_i, logdet_i = torch.linalg.slogdet(sigma_i_rope)
-
-    kl = 0.5 * (trace_term + mahal_term - d_h + logdet_t - logdet_i)
-    kl = kl.clamp(min=0.0, max=max(100.0, KL_CEIL_SCALE * d_h))
-
-    # Apply mask before softmax
-    if isinstance(kappa, torch.Tensor):
-        kappa_val = kappa
-    else:
-        kappa_val = float(kappa)
-    dim_scale = math.sqrt(max(d_h, 1))
-    logits = -kl / (kappa_val * dim_scale)
-    if mask is not None:
-        logits = logits.masked_fill(mask == 0, float('-inf'))
-    if mask_self_attention:
-        diag_idx = torch.arange(N, device=device)
-        has_other = (logits != float('-inf')).sum(dim=-1) > 1
-        logits = logits.clone()
-        diag_vals = logits[:, diag_idx, diag_idx]
-        masked_diag = torch.where(
-            has_other, torch.full_like(diag_vals, float('-inf')), diag_vals
+        # Autograd through F_total to get gradients w.r.t. raw mu and raw diagonal sigma.
+        # This handles the chain rule through R Σ R^T automatically.
+        grad_mu_h, grad_sigma_h = torch.autograd.grad(
+            F_total, [mu_var, sigma_var], create_graph=False, retain_graph=False
         )
-        logits[:, diag_idx, diag_idx] = masked_diag
-
-    beta = torch.nn.functional.softmax(logits, dim=-1)
-
-    # Build the alignment loss with separate weights for the direct (β·∂KL/∂μ)
-    # and softmax-coupling (∂β/∂μ·KL) terms.  This is the standard trick for
-    # decoupling lambda_belief and lambda_softmax in an autograd-based loss.
-    F_align_direct = lambda_belief * (beta.detach() * kl).sum()
-    F_align_softmax = lambda_softmax * (beta * kl.detach()).sum()
-    F_align = F_align_direct + F_align_softmax
-
-    # Self-coupling KL(q_i || p_i) — diagonal case
-    delta_p = mu_var - mu_p_h_d
-    sigma_p_safe = sigma_p_h_d.clamp(min=eps)
-    sigma_q_safe = sigma_var.clamp(min=eps)
-    kl_self = 0.5 * (
-        sigma_q_safe / sigma_p_safe
-        + delta_p ** 2 / sigma_p_safe
-        - 1.0
-        + torch.log(sigma_p_safe)
-        - torch.log(sigma_q_safe)
-    )
-    if isinstance(alpha, torch.Tensor):
-        F_self = (alpha * kl_self).sum()
-    else:
-        F_self = alpha * kl_self.sum()
-
-    F_total = F_self + F_align
-
-    # Autograd through F_total to get gradients w.r.t. raw mu and raw diagonal sigma.
-    # This handles the chain rule through R Σ R^T automatically.
-    grad_mu_h, grad_sigma_h = torch.autograd.grad(
-        F_total, [mu_var, sigma_var], create_graph=False, retain_graph=False
-    )
 
     return beta.detach(), grad_mu_h.detach(), grad_sigma_h.detach()
 
