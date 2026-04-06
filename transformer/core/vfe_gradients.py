@@ -274,7 +274,7 @@ def _compute_vfe_gradients_block_diagonal(
 
             kl_block = 0.5 * (trace_block + mahal_block - d + logdet_j - logdet_i[:, :, None])
             # Clamp KL to [0, max] for numerical stability (scale ceiling with block dim d)
-            kl_values[:, i_start:i_end, :] = kl_values[:, i_start:i_end, :] + kl_block.clamp(min=0.0, max=max(100.0, 20.0 * d))
+            kl_values[:, i_start:i_end, :] = kl_values[:, i_start:i_end, :] + kl_block.clamp(min=0.0, max=max(100.0, KL_CEIL_SCALE * d))
 
             # Sigma alignment gradient for this block
             if compute_sigma_align_grad:
@@ -321,7 +321,7 @@ def _compute_vfe_gradients_block_diagonal(
         _vfe_utils_mod._VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
         _vfe_utils_mod._VFE_GRAD_DEBUG['kappa_scaled'] = kappa_scaled
         # Fraction of pairs near the KL ceiling (diagnoses clamp saturation)
-        _kl_ceil = max(100.0, 20.0 * K)
+        _kl_ceil = max(100.0, KL_CEIL_SCALE * K)
         _vfe_utils_mod._VFE_GRAD_DEBUG['kl_frac_above_90pct'] = (kl_values > 0.9 * _kl_ceil).float().mean().item()
         _vfe_utils_mod._VFE_GRAD_DEBUG['kl_p95'] = kl_values.quantile(0.95).item()
 
@@ -530,7 +530,7 @@ def _compute_vfe_gradients_block_diagonal_diag(
                         - torch.log(sigma_i_block.clamp(min=eps))).sum(dim=-1)
 
         kl_block = 0.5 * (trace_block + mahal_block - d + logdet_block)
-        kl_block = kl_block.clamp(min=0.0, max=max(100.0, 20.0 * d))
+        kl_block = kl_block.clamp(min=0.0, max=max(100.0, KL_CEIL_SCALE * d))
         kl_values = kl_values + kl_block
 
         # Sigma alignment gradient for this block
@@ -573,7 +573,7 @@ def _compute_vfe_gradients_block_diagonal_diag(
         _vfe_utils_mod._VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
         _vfe_utils_mod._VFE_GRAD_DEBUG['kappa_scaled'] = kappa_scaled
         # Fraction of pairs near the KL ceiling (diagnoses clamp saturation)
-        _kl_ceil = max(100.0, 20.0 * K)
+        _kl_ceil = max(100.0, KL_CEIL_SCALE * K)
         _vfe_utils_mod._VFE_GRAD_DEBUG['kl_frac_above_90pct'] = (kl_values > 0.9 * _kl_ceil).float().mean().item()
         _vfe_utils_mod._VFE_GRAD_DEBUG['kl_p95'] = kl_values.quantile(0.95).item()
 
@@ -767,7 +767,7 @@ def _fused_attention_and_vfe_gradients_block_diag(
         logdet_block = (torch.log(sigma_j_transported) - torch.log(sigma_block_safe)).sum(dim=-1)
 
         kl_block = 0.5 * (trace_block + mahal_block - d + logdet_block)
-        kl_block = kl_block.clamp(min=0.0, max=max(100.0, 20.0 * d))
+        kl_block = kl_block.clamp(min=0.0, max=max(100.0, KL_CEIL_SCALE * d))
         kl_values = kl_values + kl_block
 
         # Gradient computation (use raw mu, not RoPE)
@@ -785,7 +785,7 @@ def _fused_attention_and_vfe_gradients_block_diag(
         if kl_values_raw is not None:
             mahal_raw = (delta_mu_grad ** 2 / sigma_j_transported).sum(dim=-1)
             kl_block_raw = 0.5 * (trace_block + mahal_raw - d + logdet_block)
-            kl_values_raw = kl_values_raw + kl_block_raw.clamp(min=0.0, max=max(100.0, 20.0 * d))
+            kl_values_raw = kl_values_raw + kl_block_raw.clamp(min=0.0, max=max(100.0, KL_CEIL_SCALE * d))
 
         if compute_sigma_align_grad:
             sigma_j_inv_diag = 1.0 / sigma_j_transported
@@ -878,7 +878,7 @@ def _fused_attention_and_vfe_gradients_block_diag(
         _vfe_utils_mod._VFE_GRAD_DEBUG['kl_pairwise_max'] = kl_values.max().item()
         _vfe_utils_mod._VFE_GRAD_DEBUG['kappa_scaled'] = kappa_scaled
         # Fraction of pairs near the KL ceiling (diagnoses clamp saturation)
-        _kl_ceil = max(100.0, 20.0 * K)
+        _kl_ceil = max(100.0, KL_CEIL_SCALE * K)
         _vfe_utils_mod._VFE_GRAD_DEBUG['kl_frac_above_90pct'] = (kl_values > 0.9 * _kl_ceil).float().mean().item()
         _vfe_utils_mod._VFE_GRAD_DEBUG['kl_p95'] = kl_values.quantile(0.95).item()
         _vfe_utils_mod._VFE_GRAD_DEBUG['grad_mu_total'] = _grad_norm(grad_mu)
@@ -1183,7 +1183,7 @@ def compute_vfe_gradients_gpu(
         # Full KL divergence
         kl_values = 0.5 * (trace_term + mahal_term - K + logdet_term)
         # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
-        kl_ceil = max(100.0, 20.0 * K)
+        kl_ceil = max(100.0, KL_CEIL_SCALE * K)
         kl_values = kl_values.clamp(min=0.0, max=kl_ceil)  # (B, N, N)
 
         # =================================================================
@@ -1313,7 +1313,7 @@ def compute_vfe_gradients_gpu(
         # Full KL divergence
         kl_values = 0.5 * (trace_term + mahal_term - K + logdet_j_t - logdet_i_expanded)
         # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
-        kl_ceil = max(100.0, 20.0 * K)
+        kl_ceil = max(100.0, KL_CEIL_SCALE * K)
         kl_values = kl_values.clamp(min=0.0, max=kl_ceil)  # (B, N, N)
 
         # avg_grad = Σ_k β_ik · ∂KL_ik/∂μ_i (used for both direct and softmax terms)
