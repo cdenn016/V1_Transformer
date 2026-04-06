@@ -264,6 +264,25 @@ The gauge frame φ ∈ gl(K) requires geometric preconditioning because the back
 
 For GL(K): `'pullback'` is the theoretically exact natural gradient; `'killing'` is a cheap principled approximation; `'cartan'` is the pragmatic engineering choice. For SO(N) all modes are roughly equivalent (compact group).
 
+### RoPE Base Frequency Calibration
+
+Rotary position embeddings (RoPE) apply SO(2)^{K/2} rotations to belief means before KL computation, encoding relative position into the attention geometry. The standard `rope_base=10000` was designed for standard transformers with K=128 and sequence lengths in the thousands. For the gauge transformer's smaller belief dimensions and shorter sequences, this default wastes most frequency bands.
+
+The RoPE frequency spectrum is `freq_i = 1 / base^{i / (K/2)}` for `i = 0, ..., K/2 - 1`. The slowest band always has wavelength `2π · base` positions, regardless of K. A frequency band is useful only if it completes an appreciable fraction of a cycle across the sequence length; bands whose wavelength far exceeds N contribute negligible positional signal because adjacent positions differ by less than ~1 degree of rotation.
+
+For K=20 (two GL(10) heads) and N=128:
+
+| `rope_base` | Useful bands (of 10) | Slowest wavelength | Slowest adj. diff |
+|-------------|---------------------|--------------------|-------------------|
+| 50 | 10/10 | 212 positions | 1.7° |
+| 500 | 8/10 | 1,688 positions | 0.2° |
+| 5,000 | 6/10 | 13,405 positions | 0.03° |
+| 10,000 | 6/10 | 25,015 positions | 0.01° |
+
+With `rope_base=5000`, the four slowest frequency bands (40% of positional capacity) have wavelengths exceeding 1,000 positions and contribute effectively zero positional information at N=128. With `rope_base=50`, all ten bands produce measurable rotation across the sequence, from wavelength ~6 positions (fine-grained local) to ~212 positions (coarse global).
+
+The calibration rule is simple: **`rope_base ≈ N`** (the sequence length). This is K-independent because the slowest band's wavelength is `2π · base`, which depends only on base, not on how many bands exist between freq=1 and freq=1/base. K controls how densely the frequency range is sampled, but not its endpoints. With small K the penalty for an oversized base is more severe (fewer bands means a larger fraction wasted), but the optimal base does not change.
+
 ### DEQ Implicit Differentiation (E-Step Backward)
 
 The E-step iterates natural gradient VFE descent to a fixed point μ*, Σ*. **Deep Equilibrium (DEQ) implicit differentiation** replaces unrolled backprop with a single backward pass through the fixed-point equation using the implicit function theorem:
