@@ -391,6 +391,136 @@ class DEQFixedPointFull(torch.autograd.Function):
 
 
 # =============================================================================
+# Active inference / Expected Free Energy gradient helper
+# =============================================================================
+#
+# Augments the VFE E-step with the two terms that active inference prescribes
+# when the agent does not have direct access to the observation:
+#
+#   F_AI = λ_prag · H[p_pred(v|μ_i)]                            (pragmatic)
+#        − λ_epi  · MI(v; μ | q_i)                               (epistemic)
+#
+# Pragmatic term:
+#   p_pred(v|μ_i) is the PriorBank readout (KL-based softmax over vocab).
+#   Minimizing its entropy makes the belief commit to a confident prediction
+#   without target leak.  This is the "self-observation" component: the agent
+#   conditions on what its own current belief most strongly predicts.
+#
+# Epistemic term (BALD-style mutual information):
+#   MI(v; μ | q_i) = H[E_{μ ~ q_i} p(v|μ)] − E_{μ ~ q_i}[H[p(v|μ)]]
+#   Estimated by Monte Carlo: sample S values μ_s ~ N(μ_i, Σ_i), evaluate the
+#   readout at each, then compute the predictive-distribution disagreement.
+#   High MI ⇔ the predictive distribution depends meaningfully on which
+#   element of q_i you sample ⇔ belief uncertainty carries decision-relevant
+#   information ⇔ updating the belief is epistemically valuable.
+#   The negative sign in F_AI means we *maximize* MI in the E-step, which
+#   counter-balances the pragmatic term's tendency toward self-reinforcement.
+#
+# Both terms are differentiable in μ_i.  We compute the gradient via
+# torch.autograd.grad on a freshly-detached μ leaf, so the autograd graph is
+# local to this function and does not perturb the rest of the E-step graph.
+#
+# CRITICAL: torch.inference_mode() (used by model.generate) marks tensors as
+# inference tensors that cannot be promoted to require_grad even inside
+# enable_grad().  Detect and skip the EFE term in inference-mode contexts —
+# the rest of the E-step still runs normally and produces correct samples,
+# the EFE bonus just isn't applied during pure decoding.
+
+def _compute_active_inference_gradient(
+    mu_current: torch.Tensor,
+    sigma_current: torch.Tensor,
+    prior_bank,
+    pragmatic_weight: float,
+    epistemic_weight: float,
+    epistemic_samples: int,
+    decode_tau: float,
+) -> Optional[torch.Tensor]:
+    r"""Compute ∂F_AI/∂μ via autograd through the PriorBank readout.
+
+    Args:
+        mu_current: (B, N, K) current belief mean (will be detached internally).
+        sigma_current: (B, N, K) diagonal or (B, N, K, K) full covariance.
+        prior_bank: PriorBank instance providing decode(mu, sigma, tau) → logits.
+        pragmatic_weight: λ_prag.  0.0 disables the pragmatic term.
+        epistemic_weight: λ_epi.  0.0 disables the epistemic term.
+        epistemic_samples: S, number of MC samples for BALD MI estimate.
+        decode_tau: temperature for PriorBank.decode (1.0 = standard).
+
+    Returns:
+        (B, N, K) gradient of F_AI with respect to μ_current, or None if
+        both weights are zero, prior_bank is None, or we are inside an
+        inference-mode context.
+    """
+    if prior_bank is None:
+        return None
+    if pragmatic_weight <= 0.0 and epistemic_weight <= 0.0:
+        return None
+    if torch.is_inference_mode_enabled():
+        return None
+
+    # Diagonal vs full covariance
+    is_diagonal = (sigma_current.dim() == mu_current.dim())
+
+    with torch.enable_grad():
+        mu_var = mu_current.detach().to(torch.float32).requires_grad_(True)
+        # σ is held fixed for the AI gradient (we only update μ); pass detached.
+        sigma_arg = sigma_current.detach().to(torch.float32)
+
+        total_efe = mu_var.new_zeros(())
+
+        # ---- Pragmatic: minimize H[p_pred(v|μ)] ----
+        if pragmatic_weight > 0.0:
+            logits = prior_bank.decode(mu_var, sigma_arg, tau=decode_tau)  # (B, N, V)
+            log_probs = F.log_softmax(logits, dim=-1)
+            probs = log_probs.exp()
+            # H[p] = -Σ_v p log p, averaged over (B, N) positions.
+            entropy = -(probs * log_probs).sum(dim=-1)  # (B, N)
+            pragmatic_term = pragmatic_weight * entropy.mean()
+            total_efe = total_efe + pragmatic_term
+
+        # ---- Epistemic: -MI(v; μ | q_i) via Monte Carlo BALD estimate ----
+        if epistemic_weight > 0.0 and epistemic_samples > 0:
+            # Diagonal std for sampling.  For full covariance, use the diagonal
+            # (cheap, gives per-coordinate noise; full reparam would need a
+            # Cholesky which is overkill for this MC bonus term).
+            if is_diagonal:
+                sigma_diag = sigma_arg
+            else:
+                sigma_diag = torch.diagonal(sigma_arg, dim1=-2, dim2=-1)
+            std = sigma_diag.clamp(min=1e-6).sqrt()
+
+            probs_samples = []
+            for _s in range(epistemic_samples):
+                eps_noise = torch.randn_like(mu_var)
+                mu_s = mu_var + eps_noise * std
+                logits_s = prior_bank.decode(mu_s, sigma_arg, tau=decode_tau)
+                probs_s = F.softmax(logits_s, dim=-1)  # (B, N, V)
+                probs_samples.append(probs_s)
+            probs_stack = torch.stack(probs_samples, dim=0)  # (S, B, N, V)
+
+            # H[E_q p(v|μ)] : entropy of the average predictive distribution
+            probs_avg = probs_stack.mean(dim=0)  # (B, N, V)
+            log_probs_avg = (probs_avg.clamp(min=1e-12)).log()
+            H_avg = -(probs_avg * log_probs_avg).sum(dim=-1)  # (B, N)
+
+            # E_q[H[p(v|μ)]] : average entropy across samples
+            log_probs_stack = (probs_stack.clamp(min=1e-12)).log()
+            H_each = -(probs_stack * log_probs_stack).sum(dim=-1)  # (S, B, N)
+            avg_H = H_each.mean(dim=0)  # (B, N)
+
+            mi = H_avg - avg_H  # (B, N) ≥ 0 in expectation
+            # Maximize MI ⇔ subtract λ_epi · MI from F.
+            epistemic_term = -epistemic_weight * mi.mean()
+            total_efe = total_efe + epistemic_term
+
+        grad_efe = torch.autograd.grad(total_efe, mu_var, create_graph=False, retain_graph=False)[0]
+
+    # Cast back to original dtype, detach so it does not entangle with the
+    # surrounding analytic-gradient graph.
+    return grad_efe.detach().to(mu_current.dtype)
+
+
+# =============================================================================
 # Dynamic-β VFE: Full Active Inference with Evolving Attention (RECOMMENDED!)
 # =============================================================================
 
@@ -2833,6 +2963,43 @@ class VariationalFFNDynamic(nn.Module):
                 if not is_diagonal:
                     obs_sigma_grad = torch.diag_embed(obs_sigma_grad)
                 grad_sigma = grad_sigma + obs_sigma_grad
+
+        # =====================================================================
+        # Active inference / EFE gradient (pragmatic + epistemic via PriorBank)
+        # =====================================================================
+        # When either active_inference weight is > 0 and a PriorBank reference
+        # has been plumbed in (model.__init__ sets ffn._prior_bank_ref), add
+        # the EFE gradient to grad_mu.  This is the "self-observation" /
+        # active-inference extension: tokens treated as agents whose belief
+        # update minimizes both pragmatic value (own-prediction confidence)
+        # and epistemic value (information gain about own prediction).
+        #
+        # Cost: O(B·N·V·K) per iteration for the pragmatic term (single
+        # PriorBank.decode call) and O(S·B·N·V·K) for epistemic with S
+        # MC samples.  Default S=4.  All gated on weights > 0 so off
+        # configurations have zero impact.
+        _ai_prag = getattr(self, '_ai_pragmatic_weight', 0.0)
+        _ai_epi  = getattr(self, '_ai_epistemic_weight', 0.0)
+        _ai_bank = getattr(self, '_prior_bank_ref', None)
+        if (_ai_prag > 0.0 or _ai_epi > 0.0) and _ai_bank is not None:
+            _ai_samples = getattr(self, '_ai_epistemic_samples', 4)
+            _ai_tau = getattr(self, '_ai_decode_tau', 1.0)
+            # _ai_bank may be wrapped in a list to bypass nn.Module sub-module
+            # auto-registration.  Unwrap if needed.
+            _bank = _ai_bank[0] if isinstance(_ai_bank, list) else _ai_bank
+            grad_efe_mu = _compute_active_inference_gradient(
+                mu_current=mu_current,
+                sigma_current=sigma_current,
+                prior_bank=_bank,
+                pragmatic_weight=_ai_prag,
+                epistemic_weight=_ai_epi,
+                epistemic_samples=_ai_samples,
+                decode_tau=_ai_tau,
+            )
+            if grad_efe_mu is not None:
+                grad_mu = grad_mu + grad_efe_mu
+                if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
+                    _vfe_utils_mod._VFE_GRAD_DEBUG['ai_efe_mu_grad'] = _grad_norm(grad_efe_mu)
 
         # Debug: Euclidean totals (after obs, before clip)
         if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
