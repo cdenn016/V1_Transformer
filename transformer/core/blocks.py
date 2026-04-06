@@ -247,6 +247,9 @@ class GaugeTransformerBlock(nn.Module):
             compile_vfe=cfg.compile_vfe,
             gradient_checkpoint_vfe=cfg.gradient_checkpoint_vfe,
         )
+        # EXPERIMENTAL: rope_full_gauge enables the framework-consistent
+        # interpretation of RoPE (rotates Σ as well as μ in the KL).
+        self.ffn._rope_full_gauge_vfe = getattr(cfg, 'rope_full_gauge', False)
 
         self.norm2 = _make_norm(cfg.norm_type, cfg.embed_dim)
 
