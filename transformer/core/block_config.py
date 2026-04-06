@@ -201,6 +201,29 @@ class BlockConfig:
     hierarchical_priors: bool = True   # Each layer's posterior μ becomes the next layer's prior μ
                                         # (sigma_prior stays at embedding value to prevent cascade).
                                         # When False (default), all layers share the embedding prior.
+    # === Active inference / Expected Free Energy (E-step extension) ===
+    # When pragmatic_weight > 0, the E-step adds a term −H[p_pred(v|μ_i)] to F:
+    # this is the pragmatic component of EFE under self-observation, computed
+    # via PriorBank.decode (KL-based readout).  It pushes beliefs toward
+    # confident predictions without target leak.
+    #
+    # When epistemic_weight > 0, the E-step adds the BALD-style mutual
+    # information term I(v; μ | q_i) ≈ H[E_q p(v|μ)] − E_q[H[p(v|μ)]], computed
+    # by Monte Carlo sampling S values from N(μ_i, Σ_i).  This is the
+    # canonical epistemic value in active inference: it rewards beliefs whose
+    # predictive distribution depends meaningfully on the parameter, and
+    # counter-balances the pragmatic term's self-reinforcement tendency.
+    #
+    # Both terms require the FFN to have access to the PriorBank instance.
+    # The reference is plumbed in model.__init__ via __dict__ assignment to
+    # avoid nn.Module sub-module registration of an already-owned module.
+    #
+    # Default: both weights 0.0 (zero impact on existing configurations).
+    active_inference_pragmatic_weight: float = 0.0   # λ_prag · H[p(v|μ)]
+    active_inference_epistemic_weight: float = 0.0   # −λ_epi · MI(v; μ | q)
+    active_inference_epistemic_samples: int =  4      # MC samples for BALD MI
+    active_inference_decode_tau: float =       1.0         # Temperature for PriorBank.decode
+
     rope_full_gauge: bool = False      # EXPERIMENTAL.  When True (and use_rope=True),
                                         # implements the framework-consistent interpretation
                                         # of RoPE as a position-dependent gauge transport that
@@ -328,6 +351,11 @@ class BlockConfig:
             sigma_residual=config.get('sigma_residual', False),
             hierarchical_priors=config.get('hierarchical_priors', False),
             rope_full_gauge=config.get('rope_full_gauge', False),
+            # Active inference / EFE
+            active_inference_pragmatic_weight=config.get('active_inference_pragmatic_weight', 0.0),
+            active_inference_epistemic_weight=config.get('active_inference_epistemic_weight', 0.0),
+            active_inference_epistemic_samples=config.get('active_inference_epistemic_samples', 4),
+            active_inference_decode_tau=config.get('active_inference_decode_tau', 1.0),
             # Non-serializable
             generators=generators,
             ffn_prior_bank=prior_bank,
