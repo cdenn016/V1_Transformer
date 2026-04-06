@@ -470,6 +470,12 @@ def _compute_vfe_gradients_block_diagonal_diag(
     # The chain rule for ∂β/∂μ_raw must therefore go through ∂KL_RoPE/∂μ_raw
     # (= R(θ)^T · ∂KL_RoPE/∂(R μ)), NOT ∂KL_raw/∂μ.  We compute the rope-space
     # gradient in parallel and un-rotate it after the loop for the chain rule.
+    #
+    # IMPORTANT (RoPE σ asymmetry).  This path follows the standard-transformer
+    # convention: only μ is rope-rotated; Σ is left raw.  The framework's
+    # gauge-transport rule would prescribe Σ → RΣR^T as well, breaking
+    # diagonal σ structure.  See `BlockConfig.rope_full_gauge` for the
+    # experimental opt-in that implements the full rotation.
     if use_rope:
         from transformer.core.transport_ops import _apply_rope, _un_apply_rope_pair_outer
         mu_q_rope = _apply_rope(mu_q, base=rope_base)
@@ -742,6 +748,16 @@ def _fused_attention_and_vfe_gradients_block_diag(
     # objective uses raw-space KL.  The chain rule for ∂β/∂μ must therefore
     # go through ∂KL_RoPE/∂μ_raw, NOT ∂KL_raw/∂μ_raw — see the rope-space
     # gradient accumulator and un-rotation below.
+    #
+    # IMPORTANT (RoPE σ asymmetry).  This path rotates only μ via _apply_rope.
+    # Σ is left raw — both Σ_i (the source covariance) and Σ_t (the
+    # transported covariance, computed only with the LEARNED Ω, not with R).
+    # Under the GL(K) framework's gauge-transport rule (μ → Rμ, Σ → RΣR^T),
+    # this is incomplete: a fully framework-consistent rope KL would also
+    # rotate the covariances by R.  The current implementation matches the
+    # standard-transformer Q/K rotation pattern and preserves diagonal σ.
+    # See `BlockConfig.rope_full_gauge` for the experimental flag enabling
+    # the full Σ rotation.
     if use_rope:
         from transformer.core.transport_ops import _apply_rope, _un_apply_rope_pair_outer
         mu_q_rope = _apply_rope(mu_q, base=rope_base)
@@ -1529,4 +1545,203 @@ def compute_natural_gradient_gpu(
             nat_grad_sigma = 2.0 * torch.einsum('bnij,bnjk,bnkl->bnil', sigma_q, grad_sigma, sigma_q)
 
     return nat_grad_mu.to(orig_dtype), nat_grad_sigma.to(orig_dtype)
+
+
+# =============================================================================
+# Experimental: rope_full_gauge gradient path
+# =============================================================================
+
+def _compute_rope_full_gauge_gradient_per_head(
+    mu_h: torch.Tensor,         # (B, N, d_h) per-head means
+    sigma_h: torch.Tensor,      # (B, N, d_h) diagonal variances (only diagonal supported)
+    mu_p_h: torch.Tensor,       # (B, N, d_h) per-head prior means
+    sigma_p_h: torch.Tensor,    # (B, N, d_h) diagonal prior variances
+    phi: torch.Tensor,          # (B, N, n_gen) gauge frames (per-head, after slicing)
+    gen_h: torch.Tensor,        # (n_gen, d_h, d_h) per-head generators
+    alpha: 'float | torch.Tensor',
+    lambda_belief: float,
+    lambda_softmax: float,
+    kappa: 'float | torch.Tensor',
+    eps: float,
+    rope_base: float,
+    d_h: int,
+    cached_block_exp_pairs: Optional[list] = None,
+    enforce_orthogonal: bool = False,
+    mask: Optional[torch.Tensor] = None,
+    mask_self_attention: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    r"""EXPERIMENTAL: per-head VFE gradient under the rope_full_gauge interpretation.
+
+    Implements the framework-consistent interpretation of RoPE: the
+    position-dependent gauge transport R(θ_i) acts on Gaussian beliefs by
+    BOTH μ → R μ AND Σ → R Σ R^T (the standard sandwich product).  This
+    matches the GL(K) manuscript's derivation of RoPE as Ω restricted to
+    SO(2)^{d_k/2} ⊂ GL(K).
+
+    The default rope path (rope_full_gauge=False) follows the standard-
+    transformer pattern: rotate only μ, leave Σ raw.  This function provides
+    the alternative for empirical comparison.
+
+    Implementation: lifts the diagonal Σ to full covariance, applies the
+    rope rotation to both μ and Σ, transports the source belief by Ω^learned,
+    computes the full-covariance KL, and uses torch.autograd.grad to obtain
+    ∂F/∂μ_raw and ∂F/∂σ_raw_diagonal.  Slower than the analytical path but
+    avoids hand-deriving the chain rule through R Σ R^T.
+
+    Args:
+        mu_h: per-head belief means (B, N, d_h).
+        sigma_h: per-head DIAGONAL belief variances (B, N, d_h).  Full
+            covariance not supported in this experimental path.
+        mu_p_h, sigma_p_h: per-head prior mean / diagonal variance.
+        phi: gauge frames (B, N, n_gen) — pre-sliced to per-head if needed.
+        gen_h: per-head generators (n_gen, d_h, d_h).
+        alpha: self-coupling weight (scalar or per-dim Bayesian precision).
+        lambda_belief, lambda_softmax: alignment direct/coupling weights.
+        kappa: per-head temperature.
+        eps: numerical stability floor.
+        rope_base: RoPE frequency base (must match _apply_rope's base).
+        d_h: head dimension.
+        cached_block_exp_pairs: optional precomputed (exp_phi, exp_neg_phi) per
+            head — single-element list with the per-head pair.
+        enforce_orthogonal: passed to fused_block_matrix_exp_pairs if needed.
+        mask: optional causal mask.
+        mask_self_attention: if True, mask the diagonal of the attention matrix.
+
+    Returns:
+        beta_h: per-head attention weights (B, N, N) computed from rope-full KL.
+        grad_mu_h: ∂F_total/∂μ_h, shape (B, N, d_h).
+        grad_sigma_h: ∂F_total/∂σ_h_diag, shape (B, N, d_h).
+    """
+    from transformer.core.transport_ops import _apply_rope, _apply_rope_to_covariance
+
+    if sigma_h.dim() != 3:
+        raise NotImplementedError(
+            "rope_full_gauge currently supports only diagonal covariance "
+            "(sigma_h must be (B, N, d_h)).  Full covariance support is a TODO."
+        )
+
+    B, N, _ = mu_h.shape
+    device = mu_h.device
+
+    # Cast to float32 for stability and detach + require grad for autograd-based path.
+    _f32 = torch.float32
+    mu_var = mu_h.detach().to(_f32).requires_grad_(True)
+    sigma_var = sigma_h.detach().to(_f32).requires_grad_(True)
+    mu_p_h_d = mu_p_h.detach().to(_f32)
+    sigma_p_h_d = sigma_p_h.detach().to(_f32)
+    phi_d = phi.detach().to(_f32)
+
+    # Lift diagonal sigma to full covariance for the rope rotation
+    sigma_full = torch.diag_embed(sigma_var)  # (B, N, d_h, d_h), autograd-tracked
+
+    # Apply rope rotation to both means and (lifted) covariances
+    mu_rope = _apply_rope(mu_var, base=rope_base)             # (B, N, d_h)
+    sigma_rope = _apply_rope_to_covariance(sigma_full, base=rope_base)  # (B, N, d_h, d_h)
+
+    # Compute per-head Ω^learned via fused matrix exp pairs
+    if cached_block_exp_pairs is not None:
+        exp_phi_h, exp_neg_phi_h = cached_block_exp_pairs[0]
+        # If the cached values were detached at creation, they will not
+        # carry gradients — that's OK because phi is treated as a constant
+        # within the E-step gradient computation anyway.
+    else:
+        bep = fused_block_matrix_exp_pairs(
+            phi_d, gen_h, [d_h],
+            enforce_orthogonal=enforce_orthogonal,
+        )
+        exp_phi_h, exp_neg_phi_h = bep[0]
+
+    # Build pairwise transport: Ω_ij = exp(φ_i) · exp(-φ_j)
+    Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi_h, exp_neg_phi_h)  # (B, N, N, d_h, d_h)
+
+    # Transport rope-rotated j-belief to i's frame:
+    #   μ_t = Ω · μ_j_rope
+    #   Σ_t = Ω · Σ_j_rope · Ω^T
+    mu_t = torch.einsum('bijkl,bjl->bijk', Omega, mu_rope)  # (B, N, N, d_h)
+    sigma_t = torch.einsum(
+        'bijkl,bjlm,bijnm->bijkn',
+        Omega, sigma_rope, Omega
+    )  # (B, N, N, d_h, d_h)
+    # Numerical stability: symmetrize and add eps to diagonal
+    sigma_t = 0.5 * (sigma_t + sigma_t.transpose(-1, -2))
+    eye_dh = torch.eye(d_h, device=device, dtype=_f32)
+    sigma_t = sigma_t + eps * eye_dh
+
+    # Source-side rope-rotated covariance, broadcast across j
+    sigma_i_rope = sigma_rope.unsqueeze(2).expand(-1, -1, N, -1, -1)  # (B, N, N, d_h, d_h)
+    sigma_i_rope = 0.5 * (sigma_i_rope + sigma_i_rope.transpose(-1, -2)) + eps * eye_dh
+
+    # Full-covariance KL between two Gaussians:
+    # KL(p || q) = 0.5 [tr(Σ_q^{-1} Σ_p) + (μ_q - μ_p)^T Σ_q^{-1} (μ_q - μ_p)
+    #                   - d + log|Σ_q| - log|Σ_p|]
+    # Here p = q_i_rope, q = transported_q_j_rope
+    sigma_t_inv = torch.linalg.inv(sigma_t)
+
+    # Trace term: tr(Σ_t^{-1} Σ_i_rope) per (i, j)
+    trace_term = torch.einsum('bijkl,bijlk->bij', sigma_t_inv, sigma_i_rope)
+
+    # Mahalanobis: (μ_t - μ_i_rope)^T Σ_t^{-1} (μ_t - μ_i_rope)
+    delta = mu_t - mu_rope[:, :, None, :]   # (B, N, N, d_h)
+    mahal_term = torch.einsum('bijk,bijkl,bijl->bij', delta, sigma_t_inv, delta)
+
+    # Log-determinants
+    sign_t, logdet_t = torch.linalg.slogdet(sigma_t)
+    sign_i, logdet_i = torch.linalg.slogdet(sigma_i_rope)
+
+    kl = 0.5 * (trace_term + mahal_term - d_h + logdet_t - logdet_i)
+    kl = kl.clamp(min=0.0, max=max(100.0, KL_CEIL_SCALE * d_h))
+
+    # Apply mask before softmax
+    if isinstance(kappa, torch.Tensor):
+        kappa_val = kappa
+    else:
+        kappa_val = float(kappa)
+    dim_scale = math.sqrt(max(d_h, 1))
+    logits = -kl / (kappa_val * dim_scale)
+    if mask is not None:
+        logits = logits.masked_fill(mask == 0, float('-inf'))
+    if mask_self_attention:
+        diag_idx = torch.arange(N, device=device)
+        has_other = (logits != float('-inf')).sum(dim=-1) > 1
+        logits = logits.clone()
+        diag_vals = logits[:, diag_idx, diag_idx]
+        masked_diag = torch.where(
+            has_other, torch.full_like(diag_vals, float('-inf')), diag_vals
+        )
+        logits[:, diag_idx, diag_idx] = masked_diag
+
+    beta = torch.nn.functional.softmax(logits, dim=-1)
+
+    # Build the alignment loss with separate weights for the direct (β·∂KL/∂μ)
+    # and softmax-coupling (∂β/∂μ·KL) terms.  This is the standard trick for
+    # decoupling lambda_belief and lambda_softmax in an autograd-based loss.
+    F_align_direct = lambda_belief * (beta.detach() * kl).sum()
+    F_align_softmax = lambda_softmax * (beta * kl.detach()).sum()
+    F_align = F_align_direct + F_align_softmax
+
+    # Self-coupling KL(q_i || p_i) — diagonal case
+    delta_p = mu_var - mu_p_h_d
+    sigma_p_safe = sigma_p_h_d.clamp(min=eps)
+    sigma_q_safe = sigma_var.clamp(min=eps)
+    kl_self = 0.5 * (
+        sigma_q_safe / sigma_p_safe
+        + delta_p ** 2 / sigma_p_safe
+        - 1.0
+        + torch.log(sigma_p_safe)
+        - torch.log(sigma_q_safe)
+    )
+    if isinstance(alpha, torch.Tensor):
+        F_self = (alpha * kl_self).sum()
+    else:
+        F_self = alpha * kl_self.sum()
+
+    F_total = F_self + F_align
+
+    # Autograd through F_total to get gradients w.r.t. raw mu and raw diagonal sigma.
+    # This handles the chain rule through R Σ R^T automatically.
+    grad_mu_h, grad_sigma_h = torch.autograd.grad(
+        F_total, [mu_var, sigma_var], create_graph=False, retain_graph=False
+    )
+
+    return beta.detach(), grad_mu_h.detach(), grad_sigma_h.detach()
 
