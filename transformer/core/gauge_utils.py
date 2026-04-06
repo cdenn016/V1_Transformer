@@ -12,6 +12,10 @@ import torch
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
+# KL divergence ceiling multiplier: kl_max = max(100, KL_CEIL_MULT * dim).
+# Old code used 5.0; current default is 20.0.
+KL_CEIL_MULT = 20.0
+
 
 
 def stable_matrix_exp_pair(
@@ -298,7 +302,7 @@ def fused_block_diagonal_kl_diag(
     B, N, K = mu_q.shape
     device = mu_q.device
     dtype = mu_q.dtype
-    kl_max = max(100.0, 20.0 * K)
+    kl_max = max(100.0, KL_CEIL_MULT * K)
 
     kl_total = torch.zeros(B, N, N, device=device, dtype=dtype)
 
@@ -432,7 +436,7 @@ def fused_block_diagonal_kl_full(
     B, N, K = mu_q.shape
     device = mu_q.device
     dtype = mu_q.dtype
-    kl_max = max(100.0, 20.0 * K)
+    kl_max = max(100.0, KL_CEIL_MULT * K)
 
     kl_total = torch.zeros(B, N, N, device=device, dtype=dtype)
 
