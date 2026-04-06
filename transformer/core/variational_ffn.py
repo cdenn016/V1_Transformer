@@ -2619,6 +2619,8 @@ class VariationalFFNDynamic(nn.Module):
                         cached_block_exp_pairs=_head_bep,
                         cached_transport=_head_ct,
                         exact_diagonal_transport=self.exact_diagonal_transport,
+                        use_rope=self._use_rope_vfe,
+                        rope_base=self._rope_base_vfe,
                     )
 
                 beta_heads.append(beta_h)
@@ -2725,6 +2727,8 @@ class VariationalFFNDynamic(nn.Module):
                     irrep_dims=self.irrep_dims,
                     cached_block_exp_pairs=_cached_bep,
                     exact_diagonal_transport=self.exact_diagonal_transport,
+                    use_rope=self._use_rope_vfe,
+                    rope_base=self._rope_base_vfe,
                 )
 
             if return_beta_history:
