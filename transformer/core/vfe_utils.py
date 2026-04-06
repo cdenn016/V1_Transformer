@@ -29,7 +29,7 @@ from typing import Dict, Optional, Tuple
 SIGMA_EPS: float = 1e-6
 TRANSPORT_JITTER: float = 1e-4
 KL_CEIL_BASE: float = 100.0
-KL_CEIL_SCALE: float = 20.0
+KL_CEIL_SCALE: float = 5.0
 GRAD_CLIP_THRESHOLD: float = 10.0
 KAPPA_CLAMP_RANGE: Tuple[float, float] = (0.5, 1.5)
 
