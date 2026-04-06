@@ -156,6 +156,7 @@ EM_CONFIG = {
     'n_layers':              1,
     'ffn_n_iterations':      1,
     
+       
     'gauge_dim':                          10,
     'irrep_spec':            [('fund', 2, 10)],
 
@@ -166,7 +167,7 @@ EM_CONFIG = {
     'hierarchical_priors':      True,
     'gauge_fixed_priors':       True,    
   
-    
+    'active_inference':       False,
     
     'kappa_beta':               1,
     'kappa_warmup_steps':       7500,  # freeze kappa for first n steps
@@ -307,6 +308,12 @@ EM_CONFIG = {
     'connection_hidden_dim': 64,   # Hidden dim for MLP connection (ignored for bilinear)   
     'connection_init_scale': 0.01,   # W init scale (0=flat saddle point, 0.01 recommended)    
     'holonomy_penalty':      0.0,  # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
+
+    'active_inference_pragmatic_weight': 0.05,   # start small
+    'active_inference_epistemic_weight': 0.05,   # keep both ON to avoid feedback loop
+    'active_inference_epistemic_samples': 4,     # MC samples for BALD
+
+
 
     # Option A: couple just 0↔1, head 2 stays independent
     # 'cross_couplings': [(0, 1), (1, 0)],
