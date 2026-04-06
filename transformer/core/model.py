@@ -232,11 +232,18 @@ class GaugeTransformerLM(nn.Module):
         # =================================================================
         # Embedding Layers, Position Encoding, and PriorBank
         # =================================================================
+        # Compute irrep_dims early for embedding block-diagonal matrix_exp optimization
+        _embed_irrep_dims = (
+            self._get_effective_irrep_dims(irrep_spec)
+            if config.get('use_block_diagonal_kl', True) and gauge_fixed_priors
+            else None
+        )
         self._build_embeddings(
             config, vocab_size, embed_dim, irrep_spec, max_seq_len,
             pos_mode, pos_encoding_scale, gauge_mode, gauge_param,
             gauge_fixed_priors, diagonal_covariance, use_prior_bank,
             use_positional_embedding,
+            irrep_dims=_embed_irrep_dims,
         )
 
         # =================================================================
@@ -421,6 +428,11 @@ class GaugeTransformerLM(nn.Module):
                 phi, device, mu_q.dtype
             )
         else:
+            # evolve_phi=True: phi changes between blocks, so we CANNOT cache
+            # transport across layers. Leave cached_head_transports=None.
+            # Each block computes shared BEP internally (blocks.py shared
+            # transport logic) — this eliminates attention↔FFN redundancy
+            # within each block without risking stale cache across layers.
             cached_head_transports = None
 
         return {
@@ -729,6 +741,7 @@ class GaugeTransformerLM(nn.Module):
         diagonal_covariance: bool,
         use_prior_bank: bool,
         use_positional_embedding: bool,
+        irrep_dims: Optional[List[int]] = None,
     ) -> None:
         r"""Build GaugeTokenEmbedding, GaugePositionalEncoding, and PriorBank.
 
@@ -775,6 +788,7 @@ class GaugeTransformerLM(nn.Module):
             sigma_max=config.get('sigma_max', 5.0),
             gauge_param=gauge_param,
             omega_head_dims=self.omega_head_dims,
+            irrep_dims=irrep_dims,
         )
 
         # Position encoding for φ (gauge frame) — encodes RELATIVE position via transport.
@@ -815,6 +829,7 @@ class GaugeTransformerLM(nn.Module):
                 ),
                 diagonal_covariance=diagonal_covariance,
                 sigma_max=config.get('sigma_max', 5.0),
+                irrep_dims=irrep_dims,
             )
             logger.info(f"GaugeTransformerLM: Created PriorBank with token-dependent priors "
                         f"(vocab_size={vocab_size})")
@@ -1044,6 +1059,8 @@ class GaugeTransformerLM(nn.Module):
             # the separate attention sublayer is skipped.
             beta = None
             kl = None
+            delta_ij = None  # Non-flat connection (frozen E-step constant for FFN)
+            _fwa_shared_bep = None  # Shared block exp pairs for FFN
             if not block.skip_attention:
                 mu_normalized = block.norm1(mu_q)
 
@@ -1052,7 +1069,7 @@ class GaugeTransformerLM(nn.Module):
                 _layer_cached_ht = cached_head_transports
                 if (block.non_flat_transport and block.gauge_connection is not None
                         and cached_head_transports is None):
-                    from transformer.core.attention import compute_transport_operators
+                    from transformer.core.transport_ops import compute_transport_operators
                     delta_ij = block.gauge_connection(mu_normalized, mu_normalized)
                     transport = compute_transport_operators(
                         phi, self.generators,
@@ -1070,6 +1087,36 @@ class GaugeTransformerLM(nn.Module):
                             'Omega': Omega_full[:, :, :, dim_start:dim_start+d, dim_start:dim_start+d],
                         })
                         dim_start += d
+
+                # Shared transport: compute BEP once for attention + FFN
+                # (mirrors GaugeTransformerBlock.forward shared BEP logic).
+                if (_layer_cached_ht is None
+                        and block.attention.gauge_mode not in ('trivial', 'constant')
+                        and block.attention.irrep_dims is not None):
+                    from transformer.core.gauge_utils import fused_block_matrix_exp_pairs
+                    _skew = getattr(block.attention, '_generators_are_skew', False)
+                    _fwa_shared_bep = fused_block_matrix_exp_pairs(
+                        phi, self.generators, block.attention.irrep_dims,
+                        enforce_orthogonal=block.attention.enforce_orthogonal,
+                        skew_symmetric=_skew,
+                    )
+                    _layer_cached_ht = [
+                        {'exp_phi': bep[0], 'exp_neg_phi': bep[1]}
+                        for bep in _fwa_shared_bep
+                    ]
+                elif (_layer_cached_ht is not None
+                      and block.attention.gauge_mode not in ('trivial', 'constant')):
+                    # Extract BEP from incoming cached_head_transports
+                    _try_bep = []
+                    _bep_ok = True
+                    for cht in _layer_cached_ht:
+                        if 'exp_phi' in cht and 'exp_neg_phi' in cht and 'Omega' not in cht:
+                            _try_bep.append((cht['exp_phi'], cht['exp_neg_phi']))
+                        else:
+                            _bep_ok = False
+                            break
+                    if _bep_ok and _try_bep:
+                        _fwa_shared_bep = _try_bep
 
                 mu_attn, sigma_attn, beta, kl = block.attention(
                     mu_normalized,
@@ -1125,6 +1172,9 @@ class GaugeTransformerLM(nn.Module):
                 token_ids=token_ids,  # Required for PriorBank lookup
                 omega=omega,
                 sigma_prior=sigma_prior,  # Embedding prior covariance for proper E-step reference
+                connection_delta=delta_ij,
+                cocycle_relaxation=block.cocycle_relaxation,
+                precomputed_block_exp_pairs=_fwa_shared_bep,
             )
 
             if block.evolve_sigma and sigma_ffn is not None:
@@ -1687,5 +1737,4 @@ class GaugeTransformerLM(nn.Module):
 
             # Apply update to W_out
             self.out_proj.weight.add_(lr * delta_W)
-
 
