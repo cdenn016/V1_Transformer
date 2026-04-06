@@ -148,9 +148,9 @@ EM_CONFIG = {
     # === Architecture ===
     'vocab_size':            50257,
     'embed_dim':             20,
-    'max_seq_len':           32,
+    'max_seq_len':           64,
     
-    'batch_size':            256, 
+    'batch_size':            128, 
     'max_steps':             15000,
     
     'n_layers':              1,
@@ -161,11 +161,14 @@ EM_CONFIG = {
 
     'use_prior_bank':           False,
     'learnable_pb_temperature': True,
-    'mask_self_attention':      True,  # Prevent attention collapse?
+    'mask_self_attention':      True,  #Prevent attention collapse?
   
+    'hierarchical_priors':      True,
     'gauge_fixed_priors':       True,    
   
-    'kappa_beta':               3.16,
+    
+    
+    'kappa_beta':               1,
     'kappa_warmup_steps':       7500,  # freeze kappa for first n steps
     'learnable_head_kappa':     True, # If True, learn per-head κ_h via log_kappa_per_head
     
@@ -181,7 +184,7 @@ EM_CONFIG = {
 
 
     'use_layernorm':         True,
-    'norm_type':           'layernorm',  # 'layernorm' | 'rmsnorm' | 'none'
+    'norm_type':             'layernorm',  # 'layernorm' | 'rmsnorm' | 'none'
     'use_residual':          True,
     'use_output_projection': True,
     'multihead_vfe':         True,
@@ -189,13 +192,16 @@ EM_CONFIG = {
     'evolve_sigma':          True,
     'evolve_phi':            True,  #M-step phi evolution
     'evolve_phi_e_step':     True,
-
+    
+    'obs_sigma_gradient':    True, # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
+    'e_step_sigma_floor':    0.01,   # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
     # === E-step dynamics ===
     
     
     'E_alpha':               1,      # E-step prior coupling weight
     'E_lambda_belief':       1,    # E-step belief alignment weight
     'E_lambda_softmax':      1,
+    
     'detach_beta_m_step':    True, #if false need M_beta >0
     
     'E_learnable_alpha':     True,   # Adaptive α_i = c0/(b0 + KL) per dimension
@@ -203,25 +209,28 @@ EM_CONFIG = {
     
     'E_learnable_lr':        True,   # Learnable E-step LR
     'lr_decay':              'linear',
+    
     'E_mu_q_lr':             0.1,    # E-step μ step size (whitened, within trust=2.0)
     'E_sigma_q_lr':          0.05,   # E-step σ step size (conservative)
     
     'E_phi_lr':              0.05,   # E-step φ step size
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
-    'gauge_group':           'GLK',
-    'gauge_mode':            'learned',
-    'gauge_param':           'phi',
+    'gauge_group':              'GLK',
+    'gauge_mode':               'learned',
+    'gauge_param':              'phi',
 
     'skip_attention':           False,   #skips ad hoc attention sublayer
     'closed_form_e_step':       False,   #closed form...ignores non-linear softmax gradient
 
+
+    
     'diagonal_covariance':      True,
     'exact_diagonal_transport': False,  # exact diagonal transport - more expensive
                                         # If True, force Σ = σ²I (scalar variance × identity)
     'isotropic_covariance':     False,
     'enforce_orthogonal':       False,    
-    'learnable_reflection':     False,# Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk
+    'learnable_reflection':     False,  # Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk
                                         # Set gauge-mode=constant and the above 3 = true for transf limit
  
     # === VFE loss weights (M-step objective) ===
@@ -246,8 +255,9 @@ EM_CONFIG = {
     'killing_form_sym_dampening': 0.5,
 
     # === Position encoding ===
+    'rope_full_gauge':    True,
     'use_rope':           True,
-    'rope_base':          5000, 
+    'rope_base':          50, 
     'pos_encoding_mode': 'none',
 
     # === Embedding init ===
@@ -265,11 +275,11 @@ EM_CONFIG = {
     # beliefs (q₀) AND serve as prior parameters (μ_p, σ_p), so these rates
     # indirectly affect E-step initialization speed.
     'M_mu_p_lr':           0.05,   # M-step prior mean embeddings (μ_p) 0.05
-    'M_sigma_p_lr':        0.015, # M-step prior covariance embeddings (log σ_p)
+    'M_sigma_p_lr':        0.015,  # M-step prior covariance embeddings (log σ_p) 0.015
     'M_phi_lr':            0.0075, # M-step gauge frame embeddings (φ) 0.0075
-    'M_vfe_hyperparam_lr': 0.075, # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
+    'M_vfe_hyperparam_lr': 0.075,  # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
     'M_attention_lr':      0.005,  # M-step attention params (W_O, constant_omega)0.005
-    'M_output_lr':         0.05,   # M-step output projection (vocab logits) 0.05
+    'M_output_lr':         0.05,  # M-step output projection (vocab logits) 0.05
     
     # === Logging ===
     'log_interval':               100,
@@ -315,14 +325,14 @@ EM_CONFIG = {
     'verbose_diagnostics':         False,
     
     # === Multi-layer depth signal ===
-    'aux_layer_loss':  False,   # Enable for multi-layer: per-layer M-step CE loss
+    'aux_layer_loss':  True,   # Enable for multi-layer: per-layer M-step CE loss
     'aux_loss_weight': 0.3,     # Weight for auxiliary per-layer CE losses
-    'sigma_residual':  False,   # Additive σ residual across layers
-
+    'sigma_residual':  True,   # Additive σ residual across layers
+    
     # === Regularization ===
-    'sigma_ce_scale':  0.1,
+    'sigma_ce_scale':  1,
     'sigma_max':       12.0,
-    'grad_clip':       5.0,
+    'grad_clip':       5,
     'hidden_dim':      508,
     'warmup_steps':    100,
     'num_workers':     10,
@@ -332,8 +342,6 @@ EM_CONFIG = {
     'compile_mode':    'reduce-overhead'  # 'default', 'reduce-overhead', 'max-autotune'
 
 }
-
-
 
 
 # =============================================================================
