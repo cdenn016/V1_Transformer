@@ -624,6 +624,11 @@ class VariationalFFNDynamic(nn.Module):
         # aggregation (the "value" path).
         self._use_rope_vfe = True
         self._rope_base_vfe = rope_base
+        # EXPERIMENTAL: when True, the rope KL also rotates Σ (R Σ R^T sandwich),
+        # implementing the framework-consistent gauge-transport interpretation
+        # of RoPE.  Default False uses the standard-transformer pattern (rotate
+        # only μ).  Plumbed through from BlockConfig.rope_full_gauge.
+        self._rope_full_gauge_vfe = False  # set externally by VariationalFFNDynamic.__init__
         # Constant gauge: store reference to attention module's per-head Ω parameters.
         # When gauge_mode='constant', these are used to build transport operators
         # in VFE iterations, ensuring consistency with the attention module.
@@ -2569,7 +2574,37 @@ class VariationalFFNDynamic(nn.Module):
                 if _nonflat_omega is not None:
                     _head_ct = {'Omega': _nonflat_omega[:, :, :, block_start:block_end, block_start:block_end]}
 
-                if _use_fused_mh and _nonflat_omega is None:
+                # EXPERIMENTAL: rope_full_gauge path uses an autograd-based
+                # gradient computation that lifts σ to full covariance and
+                # rotates BOTH μ and Σ by R(θ).  Slower than the fused path.
+                # Only diagonal σ is supported.  See vfe_gradients.py for the
+                # implementation.
+                _use_rope_full = (
+                    getattr(self, '_rope_full_gauge_vfe', False)
+                    and self._use_rope_vfe
+                    and is_diagonal
+                    and _nonflat_omega is None
+                )
+                if _use_rope_full:
+                    from transformer.core.vfe_gradients import (
+                        _compute_rope_full_gauge_gradient_per_head,
+                    )
+                    beta_h, grad_mu_h, grad_sigma_h = _compute_rope_full_gauge_gradient_per_head(
+                        mu_h=mu_h, sigma_h=sigma_h,
+                        mu_p_h=mu_p_h, sigma_p_h=sigma_p_h,
+                        phi=phi_current, gen_h=gen_h,
+                        alpha=alpha_h,
+                        lambda_belief=self.lambda_belief,
+                        lambda_softmax=self.lambda_softmax,
+                        kappa=kappa_h, eps=eps,
+                        rope_base=self._rope_base_vfe,
+                        d_h=d_h,
+                        cached_block_exp_pairs=_head_bep,
+                        enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
+                        mask=mask,
+                        mask_self_attention=self.mask_self_attention,
+                    )
+                elif _use_fused_mh and _nonflat_omega is None:
                     # FUSED: single pass computes β_h AND gradients (1× Omega)
                     # Not compatible with non-flat transport (fused path builds
                     # Omega from block exp pairs internally).
