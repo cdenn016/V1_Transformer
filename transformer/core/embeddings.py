@@ -38,7 +38,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from typing import List, Tuple, Optional
-from transformer.core.gauge_utils import stable_matrix_exp_pair
+from transformer.core.gauge_utils import stable_matrix_exp_pair, fused_block_matrix_exp_pairs
 
 # Import Lie algebra composition functions
 try:
@@ -119,6 +119,7 @@ class GaugeTokenEmbedding(nn.Module):
                                              # before the SO(K) rotation, so no changes needed
                                              # in attention or VFE code.
         sigma_max: float = 5.0,  # Upper bound for prior covariance clamp
+        irrep_dims: Optional[List[int]] = None,  # Per-head block dimensions for block-diagonal matrix_exp
     ):
         """
         Initialize gauge token embedding.
@@ -205,12 +206,18 @@ class GaugeTokenEmbedding(nn.Module):
         self.phi_dim = phi_dim
         self.gauge_param = gauge_param
         self.omega_head_dims = omega_head_dims
+        self.irrep_dims = irrep_dims
 
         if gauge_fixed_priors and generators is None:
             raise ValueError("gauge_fixed_priors=True requires generators to be provided")
 
         if generators is not None:
             self.register_buffer('generators', generators)
+            # Cache skew-symmetry flag for block_exp_pairs (SO(K): exp(-M)=exp(M)^T)
+            self._generators_are_skew = torch.allclose(
+                generators + generators.transpose(-1, -2),
+                torch.zeros_like(generators), atol=1e-5,
+            )
 
         # =================================================================
         # Mean Embeddings μ_i (or base prior μ_0 if gauge_fixed_priors)
@@ -380,6 +387,10 @@ class GaugeTokenEmbedding(nn.Module):
         """
         batch_size, num_agents = token_ids.shape
 
+        # Clear stale cache from prior forward pass
+        self._cached_block_exp_pairs = None
+        self._cached_full_exp_pair = None
+
         # =================================================================
         # Gauge Frame Embeddings (computed first for gauge_fixed_priors)
         # =================================================================
@@ -415,30 +426,83 @@ class GaugeTokenEmbedding(nn.Module):
         if self.gauge_fixed_priors:
             # Compute gauge transforms A_i = exp(φ_i · G) ∈ GL⁺(K)
             # phi: (B, N, phi_dim), generators: (n_gen, K, K)
-            phi_matrix = torch.einsum('bnc,ckl->bnkl', phi, self.generators)  # (B, N, K, K)
-            # Use stable_matrix_exp_pair with norm clamping to prevent overflow
-            # in non-compact (symmetric) directions of GL(K)
-            A, _ = stable_matrix_exp_pair(phi_matrix)  # (B, N, K, K)
-
-            # Transport base prior mean: μ_i = A_i @ μ_0
-            # base_mu: (K,), A: (B, N, K, K)
-            mu = torch.einsum('bnkl,l->bnk', A, self.base_mu)  # (B, N, K)
+            K = self.embed_dim
 
             # Build base covariance Σ_0 = diag(exp(log_σ_0))
             # AMP guard: exp/clamp and sandwich product must stay float32
             with torch.amp.autocast('cuda', enabled=False):
                 sigma_diag_base = torch.exp(self.base_log_sigma_diag.float()).clamp(min=0.01, max=self.sigma_max)  # (K,)
 
-                # Transport covariance: Σ_i = A_i @ Σ_0 @ A_i^T (sandwich product)
-                # Avoid .float() copy when already float32 to prevent OOM at large K.
-                A_f = A if A.dtype == torch.float32 else A.float()
+            if self.irrep_dims is not None:
+                # BLOCK-DIAGONAL PATH: Exploit generator structure for O(d_h³)
+                # instead of O(K³) per matrix_exp. Also drops below float64
+                # threshold when d_h < 20.
+                _skew = getattr(self, '_generators_are_skew', False)
+                block_exp_pairs = fused_block_matrix_exp_pairs(
+                    phi, self.generators, self.irrep_dims,
+                    skew_symmetric=_skew,
+                )  # List of (exp_h, exp_neg_h), each (B, N, d_h, d_h)
+
+                # Cache for reuse by attention/FFN transport (avoids redundant
+                # matrix_exp when pos_encoding='none' keeps phi unchanged).
+                self._cached_block_exp_pairs = block_exp_pairs
+
+                # Compute mu and sigma per-block (avoids materializing full K×K A)
+                mu_parts = []
+                sigma_parts = []
+                block_start = 0
+                for h, d_h in enumerate(self.irrep_dims):
+                    block_end = block_start + d_h
+                    exp_h = block_exp_pairs[h][0]  # (B, N, d_h, d_h)
+                    base_mu_h = self.base_mu[block_start:block_end]  # (d_h,)
+                    mu_h = torch.einsum('bnij,j->bni', exp_h, base_mu_h)  # (B, N, d_h)
+                    mu_parts.append(mu_h)
+
+                    with torch.amp.autocast('cuda', enabled=False):
+                        base_sigma_h = sigma_diag_base[block_start:block_end]  # (d_h,)
+                        exp_h_f = exp_h if exp_h.dtype == torch.float32 else exp_h.float()
+                        if self.diagonal_covariance:
+                            # diag(A_h Σ_0h A_h^T)_k = Σ_j (A_h)_kj² σ_j
+                            sigma_h = torch.einsum('bnkl,l->bnk', exp_h_f ** 2, base_sigma_h)
+                        else:
+                            Sigma_0h = torch.diag(base_sigma_h)
+                            sigma_h = torch.einsum('bnij,jk,bnlk->bnil', exp_h_f, Sigma_0h, exp_h_f)
+                    sigma_parts.append(sigma_h)
+                    block_start = block_end
+
+                mu = torch.cat(mu_parts, dim=-1)  # (B, N, K)
                 if self.diagonal_covariance:
-                    # Extract diagonal: diag(A Σ_0 A^T)_k = Σ_j A_kj² σ_j
-                    A_sq = A_f ** 2  # (B, N, K, K)
-                    sigma = torch.einsum('bnkl,l->bnk', A_sq, sigma_diag_base)  # (B, N, K)
+                    sigma = torch.cat(sigma_parts, dim=-1)  # (B, N, K)
                 else:
-                    Sigma_0 = torch.diag(sigma_diag_base)  # (K, K)
-                    sigma = torch.einsum('bnij,jk,bnlk->bnil', A_f, Sigma_0, A_f)  # (B, N, K, K)
+                    # Assemble block-diagonal full covariance
+                    sigma = torch.zeros(batch_size, num_agents, K, K,
+                                        device=phi.device, dtype=sigma_parts[0].dtype)
+                    block_start = 0
+                    for h, d_h in enumerate(self.irrep_dims):
+                        block_end = block_start + d_h
+                        sigma[:, :, block_start:block_end, block_start:block_end] = sigma_parts[h]
+                        block_start = block_end
+            else:
+                # FULL K×K FALLBACK: no block structure available
+                phi_matrix = torch.einsum('bnc,ckl->bnkl', phi, self.generators)  # (B, N, K, K)
+                A, A_inv = stable_matrix_exp_pair(phi_matrix)  # (B, N, K, K)
+
+                # Cache for transport reuse (full-K path)
+                self._cached_block_exp_pairs = None
+                self._cached_full_exp_pair = (A, A_inv)
+
+                # Transport base prior mean: μ_i = A_i @ μ_0
+                mu = torch.einsum('bnkl,l->bnk', A, self.base_mu)  # (B, N, K)
+
+                # Transport covariance: Σ_i = A_i @ Σ_0 @ A_i^T (sandwich product)
+                with torch.amp.autocast('cuda', enabled=False):
+                    A_f = A if A.dtype == torch.float32 else A.float()
+                    if self.diagonal_covariance:
+                        A_sq = A_f ** 2  # (B, N, K, K)
+                        sigma = torch.einsum('bnkl,l->bnk', A_sq, sigma_diag_base)  # (B, N, K)
+                    else:
+                        Sigma_0 = torch.diag(sigma_diag_base)  # (K, K)
+                        sigma = torch.einsum('bnij,jk,bnlk->bnil', A_f, Sigma_0, A_f)  # (B, N, K, K)
         else:
             # Standard per-token embeddings
             # μ(token_i) for each agent i at c*
