@@ -198,9 +198,24 @@ class BlockConfig:
                                         # this flag, since σ has no normalization step (unlike μ)
                                         # so delta = σ_out - σ_in and σ_in + delta = σ_out.
                                         # Retained only for config-file backward compat.
-    hierarchical_priors: bool = False   # Each layer's posterior μ becomes the next layer's prior μ
+    hierarchical_priors: bool = True   # Each layer's posterior μ becomes the next layer's prior μ
                                         # (sigma_prior stays at embedding value to prevent cascade).
                                         # When False (default), all layers share the embedding prior.
+    rope_full_gauge: bool = False      # EXPERIMENTAL.  When True (and use_rope=True),
+                                        # implements the framework-consistent interpretation
+                                        # of RoPE as a position-dependent gauge transport that
+                                        # acts on Gaussian beliefs by both μ → Rμ AND Σ → RΣR^T
+                                        # (the standard sandwich product), as derived in the
+                                        # GL(K) manuscript Section "RoPE as Position-Dependent
+                                        # Gauge Frames".  The default (False) follows the
+                                        # standard-transformer Q/K rotation pattern: only μ
+                                        # is rope-rotated, Σ stays raw.  Both implementations
+                                        # are valid choices in the framework (see manuscript
+                                        # ~line 1760 on attention-vs-value gauge factorization),
+                                        # but they produce different β values and gradients.
+                                        # rope_full_gauge=True is SLOWER (lifts diagonal Σ to
+                                        # full covariance and uses autograd for gradients) and
+                                        # is intended for empirical comparison only.
 
     # === Non-serializable objects (set after construction) ===
     # These are torch tensors / nn.Modules that can't be part of a plain dataclass default.
@@ -312,6 +327,7 @@ class BlockConfig:
             aux_loss_weight=config.get('aux_loss_weight', 0.3),
             sigma_residual=config.get('sigma_residual', False),
             hierarchical_priors=config.get('hierarchical_priors', False),
+            rope_full_gauge=config.get('rope_full_gauge', False),
             # Non-serializable
             generators=generators,
             ffn_prior_bank=prior_bank,
