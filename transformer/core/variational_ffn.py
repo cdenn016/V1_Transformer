@@ -2579,11 +2579,19 @@ class VariationalFFNDynamic(nn.Module):
                 # rotates BOTH μ and Σ by R(θ).  Slower than the fused path.
                 # Only diagonal σ is supported.  See vfe_gradients.py for the
                 # implementation.
+                #
+                # CRITICAL: torch.inference_mode() (used by model.generate)
+                # marks tensors as inference tensors that cannot be promoted
+                # to require_grad even inside enable_grad().  Detect this and
+                # fall back to the standard fused path for generation.  The
+                # fallback path still has the rope chain-rule fix (Option C),
+                # so it's correct, just not the experimental Option-B.
                 _use_rope_full = (
                     getattr(self, '_rope_full_gauge_vfe', False)
                     and self._use_rope_vfe
                     and is_diagonal
                     and _nonflat_omega is None
+                    and not torch.is_inference_mode_enabled()
                 )
                 if _use_rope_full:
                     from transformer.core.vfe_gradients import (
