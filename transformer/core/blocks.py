@@ -31,6 +31,9 @@ from transformer.core.variational_ffn import VariationalFFNDynamic
 # Import gauge connection for non-flat transport
 from transformer.core.connection import GaugeConnection
 
+# Import block-diagonal matrix exp for shared transport caching
+from transformer.core.gauge_utils import fused_block_matrix_exp_pairs
+
 # Trajectory tracking (optional)
 try:
     from transformer.analysis.trajectory import get_global_recorder
@@ -326,6 +329,7 @@ class GaugeTransformerBlock(nn.Module):
 
         beta = None
         delta_ij = None  # Non-flat connection (frozen E-step constant when passed to FFN)
+        _shared_bep = None  # Shared block exp pairs for attention + FFN
         if not self.skip_attention:
             # Pre-layer normalization on means
             mu_normalized = self.norm1(mu_q)
@@ -371,6 +375,41 @@ class GaugeTransformerBlock(nn.Module):
                         'exp_neg_phi': omega_h_inv,
                     })
                     block_start += d_h
+
+            # SHARED TRANSPORT: Compute block exp pairs ONCE for both attention
+            # and FFN. Both sublayers use the same phi, so computing independently
+            # wastes 2× matrix_exp per block. Compute here, convert to
+            # cached_head_transports for attention and pass directly to FFN.
+            if (cached_head_transports is None
+                    and self.attention.gauge_mode not in ('trivial', 'constant')
+                    and self.attention.irrep_dims is not None):
+                _skew = getattr(self.attention, '_generators_are_skew', False)
+                _shared_bep = fused_block_matrix_exp_pairs(
+                    phi, generators, self.attention.irrep_dims,
+                    enforce_orthogonal=self.attention.enforce_orthogonal,
+                    skew_symmetric=_skew,
+                )
+                # Build cached_head_transports for attention from shared pairs
+                cached_head_transports = [
+                    {'exp_phi': bep[0], 'exp_neg_phi': bep[1]}
+                    for bep in _shared_bep
+                ]
+            elif (cached_head_transports is not None
+                  and _shared_bep is None
+                  and self.attention.gauge_mode not in ('trivial', 'constant')):
+                # Extract BEP from incoming cached_head_transports (e.g., from
+                # embedding cache in model._embed_and_prepare). The FFN needs
+                # the (exp_phi, exp_neg_phi) tuple format, not the dict format.
+                _try_bep = []
+                _bep_ok = True
+                for cht in cached_head_transports:
+                    if 'exp_phi' in cht and 'exp_neg_phi' in cht and 'Omega' not in cht:
+                        _try_bep.append((cht['exp_phi'], cht['exp_neg_phi']))
+                    else:
+                        _bep_ok = False
+                        break
+                if _bep_ok and _try_bep:
+                    _shared_bep = _try_bep
 
             recorder = get_global_recorder() if TRAJECTORY_TRACKING_AVAILABLE else None
             recording_attention = recorder is not None and recorder.enabled and recorder.record_attention
@@ -433,6 +472,7 @@ class GaugeTransformerBlock(nn.Module):
             sigma_prior=sigma_prior,
             connection_delta=delta_ij,
             cocycle_relaxation=self.cocycle_relaxation,
+            precomputed_block_exp_pairs=_shared_bep,
         )
 
         # Update covariances from FFN if evolving
