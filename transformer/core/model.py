@@ -269,6 +269,19 @@ class GaugeTransformerLM(nn.Module):
         self.transformer = GaugeTransformerStack(block_cfg)
 
         # =================================================================
+        # Active inference / EFE: plumb PriorBank reference into each FFN
+        # =================================================================
+        # The EFE pragmatic and epistemic terms in variational_ffn.py call
+        # prior_bank.decode() to compute the predictive distribution over
+        # the vocabulary inside the E-step.  We store the reference via
+        # __dict__ assignment to bypass nn.Module's __setattr__ — otherwise
+        # PriorBank would be re-registered as a sub-module of every FFN,
+        # double-counting parameters and breaking checkpoint loading.
+        if self.prior_bank is not None:
+            for _block in self.transformer.blocks:
+                _block.ffn.__dict__['_prior_bank_ref'] = self.prior_bank
+
+        # =================================================================
         # Output Projection
         # =================================================================
         self.out_proj = nn.Linear(embed_dim, vocab_size, bias=False)
