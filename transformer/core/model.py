@@ -1134,15 +1134,13 @@ class GaugeTransformerLM(nn.Module):
                 else:
                     mu_q = mu_attn
 
+                # Delta extraction (mirrors blocks.py): sigma_attn is the
+                # aggregated transformation of sigma_q, so delta = sigma_attn -
+                # sigma_q and sigma_q + delta = sigma_attn.  The old additive
+                # path (sigma_q + sigma_attn) caused sigma to grow each layer
+                # and peg at sigma_max with multi-layer configs.
                 if block.evolve_sigma and sigma_attn is not None:
-                    if sigma_attn.shape != sigma_q.shape:
-                        # Shape mismatch (e.g., per-head vs full-K sigma) — skip residual,
-                        # use attention output directly to avoid broadcast errors.
-                        sigma_q = sigma_attn
-                    elif block.sigma_residual:
-                        sigma_q = (sigma_q + sigma_attn).clamp(min=1e-4, max=block.sigma_max)
-                    else:
-                        sigma_q = sigma_attn
+                    sigma_q = sigma_attn.clamp(min=1e-4, max=block.sigma_max)
 
             # Store per-layer attention (keep gradients for loss computation)
             all_betas.append(beta)
@@ -1177,11 +1175,12 @@ class GaugeTransformerLM(nn.Module):
                 precomputed_block_exp_pairs=_fwa_shared_bep,
             )
 
+            # Delta extraction for FFN sigma (mirrors blocks.py fix):
+            # The FFN receives sigma_q directly (no normalization), so the delta
+            # is sigma_ffn - sigma_q, and adding it yields sigma_ffn.  This
+            # prevents the additive inflation that pegs sigma at sigma_max.
             if block.evolve_sigma and sigma_ffn is not None:
-                if block.sigma_residual:
-                    sigma_q = (sigma_q + sigma_ffn).clamp(min=1e-4, max=block.sigma_max)
-                else:
-                    sigma_q = sigma_ffn
+                sigma_q = sigma_ffn.clamp(min=1e-4, max=block.sigma_max)
 
             # Extract VFE correction delta: the FFN returns the full evolved state
             # (mu_normalized + delta), not just the correction. Must subtract
@@ -1202,6 +1201,12 @@ class GaugeTransformerLM(nn.Module):
             evolved_omega = getattr(block.ffn, '_last_omega', None)
             if evolved_omega is not None:
                 omega = evolved_omega
+
+            # Hierarchical priors: each layer's posterior μ becomes the next
+            # layer's prior μ.  sigma_prior stays at the embedding value to
+            # prevent progressive tightening (sigma cascade).
+            if self.transformer.hierarchical_priors and not is_final:
+                mu_prior = mu_q.detach()
 
             # =============================================================
             # Auxiliary per-layer CE loss (M-step task signal for non-final layers)
