@@ -99,6 +99,29 @@ def _apply_rope(mu: torch.Tensor, base: float = 10000.0) -> torch.Tensor:
     When K is odd, the last dimension is left unrotated (standard RoPE
     convention — only K//2 pairs are formed from K dimensions).
 
+    INTERPRETATION (important).  This implementation rotates only μ, not
+    the covariance Σ.  Under the GL(K) manuscript (Section "Rotary Position
+    Embeddings as Position-Dependent Gauge Frames"), RoPE is derived as a
+    gauge transport operator restricted to SO(2)^{K/2} ⊂ GL(K), with
+    R(θ_{j-i}) = exp(-φ_i^pos)·exp(φ_j^pos) playing the role of the
+    inter-position transport.  By the framework's gauge-transport rule,
+    such an operator should act on Σ via the sandwich product
+    Σ → R Σ R^T.  This function does *not* implement that — it follows the
+    standard-transformer Q/K rotation pattern (rotate the means used for
+    scoring, leave the covariance untouched).  The result is that the
+    forward-pass KL is computed with rotated μ but raw Σ, which is neither
+    the manuscript's full gauge interpretation nor a textbook KL between
+    rotated Gaussians.
+
+    The framework supports this factorization (manuscript line ~1760: "the
+    asymmetry in RoPE — with position-dependent attention but
+    position-independent values — corresponds to factoring the gauge
+    transport into an attention gauge and a value gauge that need not
+    coincide"), but the in-attention-gauge σ omission is a separate
+    pragmatic choice tied to the cost of breaking diagonal Σ.  See
+    `BlockConfig.rope_full_gauge` for an experimental flag that enables
+    the full Σ rotation.
+
     Args:
         mu: (B, N, K) belief means
         base: RoPE frequency base (default 10000.0)
@@ -122,6 +145,60 @@ def _apply_rope(mu: torch.Tensor, base: float = 10000.0) -> torch.Tensor:
     mu_rotated[:, :, 1:2*half_K:2] = mu_even * sin_angles + mu_odd * cos_angles
 
     return mu_rotated
+
+
+def _apply_rope_to_covariance(
+    sigma_full: torch.Tensor, base: float = 10000.0
+) -> torch.Tensor:
+    r"""Apply R(θ_i) Σ_i R(θ_i)^T per position to a full covariance tensor.
+
+    Used for the experimental `rope_full_gauge` flag, which implements the
+    framework-consistent interpretation of RoPE as a position-dependent
+    gauge transport that acts on Gaussian beliefs by both μ → Rμ AND
+    Σ → RΣR^T (the standard sandwich product for covariance transport).
+
+    Args:
+        sigma_full: (B, N, K, K) full covariance tensor (must be lifted
+                    from diagonal beforehand if needed).
+        base: RoPE frequency base (must match the value used by _apply_rope).
+
+    Returns:
+        (B, N, K, K) covariance tensor with R(θ_i) sandwich applied per i.
+        For diagonal input with σ_a, σ_b on a (2k, 2k+1) pair, the result
+        has 2x2 block structure
+            [c² σ_a + s² σ_b,    sc(σ_a − σ_b) ]
+            [sc(σ_a − σ_b),     s² σ_a + c² σ_b]
+        where c=cos(i·ω_k), s=sin(i·ω_k), ω_k = base^{-2k/K}.  The
+        determinant is preserved (R is orthogonal).
+    """
+    B, N, K, K2 = sigma_full.shape
+    assert K == K2, f"sigma_full must be square in last two dims, got {sigma_full.shape}"
+    half_K = K // 2
+
+    # cos/sin of size (N, K//2) — angles per position per frequency band
+    cos_angles, sin_angles = _get_rope_cos_sin(K, N, base, sigma_full.device, sigma_full.dtype)
+
+    # Build R(θ_i) ∈ R^{N, K, K} as a sparse block-diagonal rotation:
+    # for each i, R has 2x2 blocks on the (2k, 2k+1) pairs and identity
+    # elsewhere (last dim untouched if K is odd).
+    R = torch.zeros(N, K, K, device=sigma_full.device, dtype=sigma_full.dtype)
+    # Identity on the last dim if K is odd
+    if K % 2 == 1:
+        R[:, K - 1, K - 1] = 1.0
+    for k in range(half_K):
+        c = cos_angles[:, k]   # (N,)
+        s = sin_angles[:, k]   # (N,)
+        R[:, 2 * k,     2 * k    ] =  c
+        R[:, 2 * k,     2 * k + 1] = -s
+        R[:, 2 * k + 1, 2 * k    ] =  s
+        R[:, 2 * k + 1, 2 * k + 1] =  c
+
+    # R Σ R^T per position: (N, K, K) acts on (B, N, K, K) along the
+    # trailing two dims, broadcasting over batch.
+    R_b = R.unsqueeze(0)  # (1, N, K, K)
+    sigma_rot = torch.einsum('bnkl,bnlm,bnpm->bnkp', R_b, sigma_full, R_b)
+    # Symmetrize for numerical stability
+    return 0.5 * (sigma_rot + sigma_rot.transpose(-1, -2))
 
 
 def _un_apply_rope_pair_outer(
