@@ -251,6 +251,19 @@ class GaugeTransformerBlock(nn.Module):
         # interpretation of RoPE (rotates Σ as well as μ in the KL).
         self.ffn._rope_full_gauge_vfe = getattr(cfg, 'rope_full_gauge', False)
 
+        # Active inference / EFE plumbing.  When either weight is > 0, the
+        # E-step adds the pragmatic and/or epistemic terms via PriorBank.
+        # The PriorBank reference itself is set later by the model in
+        # __init__ via __dict__ assignment (avoids nn.Module sub-module
+        # auto-registration of an already-owned module).
+        self.ffn._ai_pragmatic_weight = getattr(cfg, 'active_inference_pragmatic_weight', 0.0)
+        self.ffn._ai_epistemic_weight = getattr(cfg, 'active_inference_epistemic_weight', 0.0)
+        self.ffn._ai_epistemic_samples = getattr(cfg, 'active_inference_epistemic_samples', 4)
+        self.ffn._ai_decode_tau = getattr(cfg, 'active_inference_decode_tau', 1.0)
+        # _prior_bank_ref defaults to None; the model wires it in after the
+        # full module hierarchy is constructed.
+        self.ffn.__dict__.setdefault('_prior_bank_ref', None)
+
         self.norm2 = _make_norm(cfg.norm_type, cfg.embed_dim)
 
         # =====================================================================
