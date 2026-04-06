@@ -438,14 +438,16 @@ class GaugeTransformerBlock(nn.Module):
             else:
                 mu_q = mu_attn
 
-            # Update covariances if evolving
+            # Update covariances if evolving.
+            # Delta extraction: sigma_attn is computed by aggregate_messages
+            # from sigma_q (transport + weighted aggregation), so the delta is
+            # sigma_attn - sigma_q.  Adding delta to sigma_q yields sigma_attn —
+            # the same replacement semantics applied symmetrically to both
+            # attention and FFN sublayers.  Old additive behavior (sigma_q +
+            # sigma_attn) compounded multiplicatively across layers and pegged
+            # sigma at sigma_max within the first forward pass.
             if self.evolve_sigma and sigma_attn is not None:
-                if sigma_attn.shape != sigma_q.shape:
-                    sigma_q = sigma_attn
-                elif self.sigma_residual:
-                    sigma_q = (sigma_q + sigma_attn).clamp(min=1e-4, max=self.sigma_max)
-                else:
-                    sigma_q = sigma_attn
+                sigma_q = sigma_attn.clamp(min=1e-4, max=self.sigma_max)
 
         # =====================================================================
         # 2. VFE E-step (with optional Pre-Norm + Residual)
@@ -475,12 +477,15 @@ class GaugeTransformerBlock(nn.Module):
             precomputed_block_exp_pairs=_shared_bep,
         )
 
-        # Update covariances from FFN if evolving
+        # Update covariances from FFN if evolving.
+        # Delta extraction (analogous to mu residual at line 516):
+        # The FFN receives sigma_q directly (no normalization), so delta =
+        # sigma_ffn - sigma_q.  Adding delta to the residual stream yields
+        # sigma_ffn — preventing the double-counting inflation where the old
+        # additive path (sigma_q + sigma_ffn ≈ 2σ) pegged sigma at sigma_max
+        # within the first forward pass for multi-layer configs.
         if self.evolve_sigma and sigma_ffn is not None:
-            if self.sigma_residual:
-                sigma_q = (sigma_q + sigma_ffn).clamp(min=1e-4, max=self.sigma_max)
-            else:
-                sigma_q = sigma_ffn
+            sigma_q = sigma_ffn.clamp(min=1e-4, max=self.sigma_max)
 
         # Per-layer sigma diagnostics (opt-in via model._debug_sigma = True)
         if getattr(self, '_debug_sigma', False) and sigma_q is not None:
@@ -555,6 +560,7 @@ class GaugeTransformerStack(nn.Module):
         super().__init__()
         self.n_layers = cfg.n_layers
         self.gradient_checkpointing = getattr(cfg, 'gradient_checkpointing', False)
+        self.hierarchical_priors = getattr(cfg, 'hierarchical_priors', False)
 
         self.blocks = nn.ModuleList([
             GaugeTransformerBlock(cfg)
@@ -622,14 +628,17 @@ class GaugeTransformerStack(nn.Module):
 
             if self.gradient_checkpointing and self.training and not is_final:
                 # Gradient checkpointing: trade ~30% compute for ~60% memory savings
-                # Skip final layer to preserve targets/W_out gradient flow
-                def create_block_fn(blk):
+                # Skip final layer to preserve targets/W_out gradient flow.
+                # Capture mu_prior/omega by value (default arg) so that
+                # backward recomputation uses the correct per-layer values
+                # when hierarchical_priors or omega evolution mutate them.
+                def create_block_fn(blk, _mu_prior=mu_prior, _omega=omega):
                     def block_fn(mu, sigma, phi_arg):
                         return blk(
-                            mu, sigma, phi_arg, generators, mask, mu_prior,
+                            mu, sigma, phi_arg, generators, mask, _mu_prior,
                             token_ids=token_ids,
                             cached_head_transports=cached_head_transports,
-                            omega=omega,
+                            omega=_omega,
                             sigma_prior=sigma_prior,
                         )
                     return block_fn
@@ -656,6 +665,13 @@ class GaugeTransformerStack(nn.Module):
             evolved_omega = getattr(block, '_last_evolved_omega', None)
             if evolved_omega is not None:
                 omega = evolved_omega
+
+            # Hierarchical priors: each layer's posterior μ becomes the next
+            # layer's prior μ.  sigma_prior stays at the embedding value to
+            # prevent progressive tightening (sigma cascade).  The .detach()
+            # preserves proper EM: the prior is an E-step constant.
+            if self.hierarchical_priors and not is_final:
+                mu_prior = mu_q.detach()
 
             # Trajectory recording: record output
             if recording_enabled:
