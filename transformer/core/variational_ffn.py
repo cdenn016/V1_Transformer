@@ -436,76 +436,89 @@ class VariationalFFNDynamic(nn.Module):
                                    # loss double-counts the coupling. Correct separation: E-step
                                    # handles belief regularization (α_E > 0), M-step handles
                                    # prediction quality (CE only, α_M = 0).
-        lambda_belief: float = 1.0,  # Belief alignment weight (direct: β·∇KL)
+        lambda_belief: float =  1.0,  # Belief alignment weight (direct: β·∇KL)
         lambda_softmax: float = 1.0,  # Softmax coupling weight (GELU-like ∂β/∂θ · KL)
-        kappa: float = 1.0,        # Attention temperature
-        n_iterations: int = 1,    # VFE descent steps (more steps = deeper equilibration)
-        learnable_lr: bool = True, # Learn step size?
-        mu_lr: float = 0.1,           # E-step μ step size (used when learnable_lr=False)
-        sigma_lr: float = 0.001,      # E-step σ trust region scale (used when learnable_lr=False)
-        update_sigma: bool = True, # Update covariances?
-        diagonal_covariance: bool = False,  # Use diagonal Σ for efficiency
-        compute_sigma_align_grad: bool = True,  # Compute sigma gradient from alignment term
+        kappa: float =          1.0,        # Attention temperature
+        n_iterations: int =     1,    # VFE descent steps (more steps = deeper equilibration)
+        
+        mu_lr: float =          0.1,           # E-step μ step size (used when learnable_lr=False)
+        sigma_lr: float =       0.001,      # E-step σ trust region scale (used when learnable_lr=False)
+        phi_lr: float =         0.05,      # Learning rate for phi updates
+        
+        learnable_lr: bool =              True, # Learn step size?
+        update_sigma: bool =              True, # Update covariances?
+        diagonal_covariance: bool =       False,  # Use diagonal Σ for efficiency
+        exact_diagonal_transport: bool =  False,  # Lift diagonal σ for exact transport
+        compute_sigma_align_grad: bool =  True,  # Compute sigma gradient from alignment term
+        
         # Phi (gauge frame) evolution via VFE gradients
         update_phi: bool = True,  # If True, update phi via ∂F/∂φ (after E-step loop)
-        update_phi_per_iteration: bool = True,  # If True, update phi during EACH E-step iteration
-        phi_lr: float = 0.05,      # Learning rate for phi updates
-        phi_max_norm: Optional[float] = None,  # Max phi norm; None = auto (π for SO(N), 5.0 for GL(K))
+        update_phi_per_iteration: bool =  True,  # If True, update phi during EACH E-step iteration
+        
+        phi_max_norm: Optional[float] =   None,  # Max phi norm; None = auto (π for SO(N), 5.0 for GL(K))
         prior_bank: Optional[nn.Module] = None,  # Token-dependent PriorBank (if provided)
-        use_prior_bank: bool = False,  # If True, use PriorBank (token-dependent) instead of position-dependent priors
+        use_prior_bank: bool =            False,  # If True, use PriorBank (token-dependent) instead of position-dependent priors
+        
         # Memory-efficient options (NEW!)
         irrep_dims: Optional[List[int]] = None,  # Block dimensions for principled KL decomposition
+        
         # Self-attention masking (prevents attention collapse)
-        mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
+        mask_self_attention: bool =       False,  # If True, mask out diagonal (no self-attention)
+        
         # Bayesian precision (learned prior self-coupling)
-        learnable_alpha: bool = False,  # If True, use Gamma-Normal conjugate precision
+        learnable_alpha: bool =           False,  # If True, use Gamma-Normal conjugate precision
         # Multi-head VFE: maintain per-head β through iterations
-        multihead_vfe: bool = True,  # If True, compute separate β_h per irrep block
+        multihead_vfe: bool =             True,  # If True, compute separate β_h per irrep block
         # Phi gradient preconditioning mode
-        phi_natural_gradient: str = 'killing',  # 'clip'|'cartan'|'killing'|'pullback'
+        phi_natural_gradient: str =          'killing',  # 'clip'|'cartan'|'killing'|'pullback'
         killing_center_reg: Optional[float] = None,  # Killing form center regularization (None=2K)
+        
         # DEQ implicit differentiation
-        use_deq: bool = False,                # Use DEQ backward for E-step fixed point
+        use_deq: bool =          False,                # Use DEQ backward for E-step fixed point
         deq_neumann_terms: int = 5,           # Neumann series terms for DEQ backward
+        
         # Gauge mode
         gauge_mode: str = 'learned',          # 'learned', 'trivial' (Ω = I), or 'constant'
         # Constant gauge: per-head learnable Ω from the attention module.
         # When gauge_mode='constant', these are used for transport in VFE iterations
         # instead of identity (which would be inconsistent with the attention module).
         constant_omega: Optional[nn.ParameterList] = None,
+        
         # Isotropic covariance limit
         isotropic_covariance: bool = False,   # If True, force Σ = σ²I after each E-step update
         # Amortized inference: gradient flow through priors for learned E-step init
-        amortized_inference: bool = True,
+        amortized_inference: bool =  True,
+        
         # Rotary Position Embeddings (RoPE) — must match attention sublayer setting
-        use_rope: bool = True,
-        rope_base: float = 10000.0,
-        exact_diagonal_transport: bool = False,  # Lift diagonal σ for exact transport
-        gauge_param: str = 'phi',  # 'phi' (Lie algebra) or 'omega' (direct GL(K))
-        obs_sigma_gradient: bool = True,  # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
-        obs_sigma_weight: float = 1.0,     # Weight for sigma observation gradient
-        sigma_max: float = 5.0,            # Upper bound on σ (prevents nat_grad blowup from 2σ²·∇σ)
-        e_step_sigma_floor: float = 0.1,  # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
-        detach_phi: bool = False,          # Detach phi from backprop in non-amortized mode
+        use_rope: bool =             True,
+        rope_base: float =           10000.0,
+        
+        gauge_param: str =           'phi',# 'phi' (Lie algebra) or 'omega' (direct GL(K))
+        obs_sigma_gradient: bool =   True, # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
+        obs_sigma_weight: float =    1.0,  # Weight for sigma observation gradient
+        sigma_max: float =           5.0,  # Upper bound on σ (prevents nat_grad blowup from 2σ²·∇σ)
+        
+        e_step_sigma_floor: float =  0.1,  # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
+        detach_phi: bool =           False,# Detach phi from backprop in non-amortized mode
                                            # (enables fully backprop-free training with phi P-flow)
-        deq_include_phi: bool = False,     # Include phi in DEQ fixed-point variables.
+        deq_include_phi: bool =      False,# Include phi in DEQ fixed-point variables.
                                            # When True, the Neumann-series IFT correction applies
                                            # to the joint (mu, sigma, phi) fixed point, giving the
                                            # exact M-step phi gradient instead of straight-through.
                                            # Requires use_deq=True and evolve_phi=True.
-        closed_form_e_step: bool = False,  # Use closed-form precision-weighted fixed point
+        closed_form_e_step: bool =   False,# Use closed-form precision-weighted fixed point
                                            # instead of gradient descent. Diagonal path uses
                                            # the enhanced form that absorbs softmax coupling
                                            # (S, c terms); full-cov uses linear-only CF.
-        implicit_em: bool = False,         # Principled M-step via implicit differentiation.
+        implicit_em: bool =          False,# Principled M-step via implicit differentiation.
                                            # Detaches mu/sigma at E-step start (proper EM boundary)
                                            # then scales CE→embedding gradient by IFT factor
                                            # s_k = (α/σ²_p) / (α/σ²_p + Σβ/σ²_q) ∈ [0,1].
                                            # Replaces ad-hoc straight-through (s=1) and pure EM (s=0)
                                            # with info-geometrically correct value.
-        learnable_head_kappa: bool = False,  # If True, learn per-head κ_h
-        n_picard_steps: int = 0,           # Re-solve iterations (diagonal) or Picard steps (full-cov)
-        picard_trust_region: float = 5.0,  # Whitened trust region for Picard steps
+        learnable_head_kappa: bool =    False,# If True, learn per-head κ_h
+        n_picard_steps: int =           0,  # Re-solve iterations (diagonal) or Picard steps (full-cov)
+        picard_trust_region: float =    5.0,# Whitened trust region for Picard steps
         compile_vfe: bool = False,         # torch.compile the VFE iteration (Finding 25)
         gradient_checkpoint_vfe: bool = False,  # Activation checkpointing for VFE loop (Finding 26)
     ):
@@ -3241,6 +3254,7 @@ class VariationalFFNDynamic(nn.Module):
         sigma_prior: Optional[torch.Tensor] = None,  # (B, N, K, K) or (B, N, K) - embedding prior covariance
         connection_delta: Optional[torch.Tensor] = None,  # (B, N, N, n_gen) frozen non-flat connection
         cocycle_relaxation: float = 0.0,  # Scale for connection_delta: 0=flat, 1=fully non-flat
+        precomputed_block_exp_pairs: Optional[list] = None,  # Shared block exp pairs from blocks.py
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor, Optional[list]]:
         """
         Dynamic VFE E-step descent with beta recomputation at each iteration.
@@ -3375,8 +3389,10 @@ class VariationalFFNDynamic(nn.Module):
         # When phi is frozen across iterations, precompute block exp pairs
         # once to avoid redundant matrix exponentials (Finding 23: ~2-3x speedup
         # on matrix exp cost with 3 iterations).
-        _hoisted_bep = None
-        if _n_iters > 1 and not self.update_phi_per_iteration and self.multihead_vfe:
+        # precomputed_block_exp_pairs from blocks.py: shared with attention sublayer,
+        # avoids redundant fused_block_matrix_exp_pairs (same phi, same generators).
+        _hoisted_bep = precomputed_block_exp_pairs
+        if _hoisted_bep is None and _n_iters > 1 and not self.update_phi_per_iteration and self.multihead_vfe:
             _hoisted_bep = self._build_block_exp_pairs(
                 phi_current if not (getattr(self, 'amortized_inference', False) is False and self.detach_phi)
                 else phi_current.detach(),
