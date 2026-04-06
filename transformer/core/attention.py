@@ -61,7 +61,7 @@ logger = logging.getLogger(__name__)
 # KL divergence ceiling multiplier: kl_max = max(100, KL_CEIL_MULT * dim).
 # Old code used 5.0; current default is 20.0. Lower values act as implicit
 # regularization by clamping outlier KL divergences.
-KL_CEIL_MULT = 20.0
+KL_CEIL_MULT = 5.0
 
 try:
     from math_utils.generators import generate_so3_generators
@@ -281,9 +281,40 @@ def compute_attention_weights(
     dtype = mu_q.dtype
 
     # =========================================================================
-    # RoPE: Apply position-dependent SO(2)^{K/2} rotations to belief means
-    # This makes KL(q_i || Ω_ij[q_j]) sensitive to relative position (j-i).
-    # Applied ONLY to attention scores, NOT to message aggregation values.
+    # RoPE: Apply position-dependent SO(2)^{K/2} rotations to belief means.
+    #
+    # This makes KL(q_i || Ω_ij[q_j]) sensitive to relative position (j-i)
+    # by injecting a position-dependent SO(2)^{K/2} rotation into the
+    # transport operator (mirroring the standard-transformer Q/K rotation).
+    #
+    # Two scopes of "applied only to scoring" matter here:
+    #
+    # 1. Attention vs. value path (handled by the caller).  RoPE is applied
+    #    to μ used for attention scoring, NOT to μ used for message
+    #    aggregation.  IrrepMultiHeadAttention.forward separates
+    #    `mu_q_for_attn` (rope-rotated, for KL/scoring) from `mu_blocks_raw`
+    #    (raw, for aggregate_messages).  See attention.py:1594-1605.  This
+    #    factorization corresponds to the manuscript's "attention gauge ≠
+    #    value gauge" decomposition (Section on RoPE, ~line 1760).
+    #
+    # 2. μ vs. Σ within the KL itself (handled here).  The current code
+    #    rotates only μ; Σ is left raw.  Under the GL(K) framework, RoPE
+    #    is a gauge transport restricted to SO(2)^{K/2}, and gauge transport
+    #    acts on Gaussian beliefs by μ → Rμ, Σ → RΣR^T (sandwich product).
+    #    The implementation here departs from that prescription: the
+    #    Mahalanobis term is computed in rope-rotated mean coordinates with
+    #    a raw covariance, which is neither a textbook KL between rotated
+    #    Gaussians nor the manuscript's full gauge interpretation.  It
+    #    matches the standard-transformer pattern (rotate Q/K, leave
+    #    covariance untouched) and preserves the diagonal-σ optimization.
+    #
+    # The local `mu_q = _apply_rope(...)` reassignment is a Python local-
+    # variable rebinding only; `_apply_rope` clones internally so the
+    # caller's input tensor is not mutated.
+    #
+    # See `BlockConfig.rope_full_gauge` for the experimental flag that
+    # enables the framework-consistent Σ rotation (at the cost of breaking
+    # diagonal σ structure).
     # =========================================================================
     if use_rope:
         mu_q = _apply_rope(mu_q, base=rope_base)
@@ -1535,6 +1566,15 @@ class IrrepMultiHeadAttention(nn.Module):
                 logger.info(f"  -> {n_scalar_heads} scalar (l=0) heads: GAUGE-INVARIANT (Omega=I)")
                 logger.info(f"  -> {n_gauge_active_heads} non-scalar heads: gauge-active (transport via Wigner D)")
 
+        # Cache skew-symmetry for fused_block_matrix_exp_pairs (SO(K): exp(-M)=exp(M)^T)
+        if global_generators is not None:
+            self._generators_are_skew = torch.allclose(
+                global_generators + global_generators.transpose(-1, -2),
+                torch.zeros_like(global_generators), atol=1e-5,
+            )
+        else:
+            self._generators_are_skew = False
+
     def forward(
         self,
         mu_q: torch.Tensor,
@@ -1635,6 +1675,7 @@ class IrrepMultiHeadAttention(nn.Module):
             _attn_block_exp_pairs = fused_block_matrix_exp_pairs(
                 phi, _combined_gens, self.irrep_dims,
                 enforce_orthogonal=self.enforce_orthogonal,
+                skew_symmetric=getattr(self, '_generators_are_skew', False),
             )
 
         for head_idx, (mu_head, mu_head_raw, sigma_head, dim_head, label) in enumerate(
