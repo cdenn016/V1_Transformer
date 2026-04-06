@@ -124,6 +124,47 @@ def _apply_rope(mu: torch.Tensor, base: float = 10000.0) -> torch.Tensor:
     return mu_rotated
 
 
+def _un_apply_rope_pair_outer(
+    grad: torch.Tensor, base: float = 10000.0
+) -> torch.Tensor:
+    r"""Apply R(θ_i)^T to a (B, N_i, N_j, K) gradient tensor along the last dim.
+
+    Used for chain-rule consistency when the KL is computed from RoPE-rotated μ
+    but the gradient must be expressed in raw-μ space:
+
+        ∂KL_RoPE/∂μ_raw_i = R(θ_i)^T · ∂KL_RoPE/∂(R(θ_i)·μ_i)
+
+    The rotation R(θ_i) acts only on the i-th query position (the second
+    dimension of the input tensor); the j-th key position (third dimension)
+    is broadcast over.  Since R is orthogonal, R^T = R(-θ), implemented by
+    negating sin while keeping cos.
+
+    Args:
+        grad: (B, N_i, N_j, K) gradient tensor in RoPE coordinates.
+        base: RoPE frequency base (must match the value used by _apply_rope).
+
+    Returns:
+        (B, N_i, N_j, K) gradient tensor expressed in raw-μ coordinates.
+    """
+    B, N_i, N_j, K = grad.shape
+    half_K = K // 2
+
+    cos_angles, sin_angles = _get_rope_cos_sin(K, N_i, base, grad.device, grad.dtype)
+    # Broadcast (N_i, K//2) over (B, N_i, N_j, K//2) so the rotation depends only on i.
+    cos_b = cos_angles[None, :, None, :]
+    sin_b = sin_angles[None, :, None, :]
+
+    g_even = grad[:, :, :, :2*half_K:2]   # (B, N_i, N_j, K//2)
+    g_odd  = grad[:, :, :, 1:2*half_K:2]
+
+    # R(θ) [x, y] = [x cos - y sin, x sin + y cos]
+    # R^T(θ) = R(-θ) [x, y] = [x cos + y sin, -x sin + y cos]
+    out = grad.clone()
+    out[:, :, :, :2*half_K:2] = g_even * cos_b + g_odd * sin_b
+    out[:, :, :, 1:2*half_K:2] = -g_even * sin_b + g_odd * cos_b
+    return out
+
+
 # =============================================================================
 # Transport Operator Caching (for evolve_phi=False optimization)
 # =============================================================================
