@@ -58,6 +58,11 @@ from transformer.core.transport_ops import (
 
 logger = logging.getLogger(__name__)
 
+# KL divergence ceiling multiplier: kl_max = max(100, KL_CEIL_MULT * dim).
+# Old code used 5.0; current default is 20.0. Lower values act as implicit
+# regularization by clamping outlier KL divergences.
+KL_CEIL_MULT = 20.0
+
 try:
     from math_utils.generators import generate_so3_generators
     TRANSPORT_AVAILABLE = True
@@ -577,7 +582,7 @@ def _dispatch_kl_matrix(
     device = mu_q.device
     dtype = mu_q.dtype
     eps = 1e-6
-    kl_max = max(100.0, 20.0 * K)
+    kl_max = max(100.0, KL_CEIL_MULT * K)
 
     # =========================================================================
     # 1. BLOCK-DIAGONAL MODE
@@ -663,7 +668,7 @@ def _dispatch_kl_matrix(
                             kl_b = _kl_kernel_dense(
                                 mu_i_exp, sig_i_exp + eps * I_d,
                                 mu_t, sig_t + eps * I_d,
-                                kl_max=max(100.0, 20.0 * d),
+                                kl_max=max(100.0, KL_CEIL_MULT * d),
                                 eps=eps,
                             )
                             kl_chunk = kl_chunk + kl_b
