@@ -2967,21 +2967,22 @@ class VariationalFFNDynamic(nn.Module):
         # =====================================================================
         # Active inference / EFE gradient (pragmatic + epistemic via PriorBank)
         # =====================================================================
-        # When either active_inference weight is > 0 and a PriorBank reference
-        # has been plumbed in (model.__init__ sets ffn._prior_bank_ref), add
-        # the EFE gradient to grad_mu.  This is the "self-observation" /
-        # active-inference extension: tokens treated as agents whose belief
-        # update minimizes both pragmatic value (own-prediction confidence)
-        # and epistemic value (information gain about own prediction).
+        # Gated on the master toggle ffn._ai_enabled (set from
+        # BlockConfig.active_inference).  When enabled and a PriorBank
+        # reference has been plumbed in, add the EFE gradient to grad_mu.
+        # This is the "self-observation" / active-inference extension:
+        # tokens treated as agents whose belief update minimizes both
+        # pragmatic value (own-prediction confidence) and epistemic value
+        # (information gain about own prediction).
         #
         # Cost: O(B·N·V·K) per iteration for the pragmatic term (single
         # PriorBank.decode call) and O(S·B·N·V·K) for epistemic with S
-        # MC samples.  Default S=4.  All gated on weights > 0 so off
-        # configurations have zero impact.
+        # MC samples.  Default S=4.  Master toggle off → zero impact.
+        _ai_enabled = getattr(self, '_ai_enabled', False)
         _ai_prag = getattr(self, '_ai_pragmatic_weight', 0.0)
         _ai_epi  = getattr(self, '_ai_epistemic_weight', 0.0)
         _ai_bank = getattr(self, '_prior_bank_ref', None)
-        if (_ai_prag > 0.0 or _ai_epi > 0.0) and _ai_bank is not None:
+        if _ai_enabled and (_ai_prag > 0.0 or _ai_epi > 0.0) and _ai_bank is not None:
             _ai_samples = getattr(self, '_ai_epistemic_samples', 4)
             _ai_tau = getattr(self, '_ai_decode_tau', 1.0)
             # _ai_bank may be wrapped in a list to bypass nn.Module sub-module
