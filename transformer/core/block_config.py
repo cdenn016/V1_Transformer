@@ -218,11 +218,15 @@ class BlockConfig:
     # The reference is plumbed in model.__init__ via __dict__ assignment to
     # avoid nn.Module sub-module registration of an already-owned module.
     #
-    # Default: both weights 0.0 (zero impact on existing configurations).
-    active_inference_pragmatic_weight: float = 0.0   # λ_prag · H[p(v|μ)]
-    active_inference_epistemic_weight: float = 0.0   # −λ_epi · MI(v; μ | q)
-    active_inference_epistemic_samples: int =  4      # MC samples for BALD MI
-    active_inference_decode_tau: float =       1.0         # Temperature for PriorBank.decode
+    # Master toggle: when False (default), the entire EFE path is bypassed
+    # regardless of weight values.  When True, the pragmatic and epistemic
+    # weights below take effect.  Matches the project convention used by
+    # non_flat_transport, rope_full_gauge, and hierarchical_priors.
+    active_inference: bool = False                   # Master EFE on/off toggle
+    active_inference_pragmatic_weight: float = 0.05  # λ_prag · H[p(v|μ)]
+    active_inference_epistemic_weight: float = 0.05  # −λ_epi · MI(v; μ | q)
+    active_inference_epistemic_samples: int =  4     # MC samples for BALD MI
+    active_inference_decode_tau: float =       1.0   # Temperature for PriorBank.decode
 
     rope_full_gauge: bool = False      # EXPERIMENTAL.  When True (and use_rope=True),
                                         # implements the framework-consistent interpretation
@@ -352,8 +356,9 @@ class BlockConfig:
             hierarchical_priors=config.get('hierarchical_priors', False),
             rope_full_gauge=config.get('rope_full_gauge', False),
             # Active inference / EFE
-            active_inference_pragmatic_weight=config.get('active_inference_pragmatic_weight', 0.0),
-            active_inference_epistemic_weight=config.get('active_inference_epistemic_weight', 0.0),
+            active_inference=config.get('active_inference', False),
+            active_inference_pragmatic_weight=config.get('active_inference_pragmatic_weight', 0.05),
+            active_inference_epistemic_weight=config.get('active_inference_epistemic_weight', 0.05),
             active_inference_epistemic_samples=config.get('active_inference_epistemic_samples', 4),
             active_inference_decode_tau=config.get('active_inference_decode_tau', 1.0),
             # Non-serializable
