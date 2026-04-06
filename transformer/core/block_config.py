@@ -68,7 +68,7 @@ class BlockConfig:
     E_sigma_q_lr: float =      0.001        # E-step σ trust region scale
 
               
-    phi_max_norm: Optional[float] = None  # Max phi norm; None = auto (π for SO(N), 5.0 for GL(K))
+    phi_max_norm: Optional[float] = None # Max phi norm; None = auto (π for SO(N), 5.0 for GL(K))
     
     
     
@@ -99,7 +99,7 @@ class BlockConfig:
                                             # for exact Ω@diag(σ)@Ω^T transport (slower but exact)
    
     phi_dim: int =     3               # 3 for SO(3), N(N-1)/2 for SO(N), K² for GL(K)
-    sigma_max: float = 5.0             # Upper bound on σ (diagonal) or eigenvalues (full cov).
+    sigma_max: float = 10.0             # Upper bound on σ (diagonal) or eigenvalues (full cov).
                                         # Posterior σ should not exceed prior σ by much.
                                         # Default 5.0: with init_sigma_scale=1.0, allows 5× expansion
                                         # before clamping. Prevents nat_grad_sigma = 2σ²·∇σ blowup.
@@ -166,7 +166,7 @@ class BlockConfig:
     # === Positional encoding ===
     alibi_slope: Optional[float] = None    # ALiBi positional bias (negative = recency)
     use_rope: bool = True                 # Rotary position embeddings on μ before KL
-    rope_base: float = 10000.0             # RoPE frequency base
+    rope_base: float = 1000.0             # RoPE frequency base
 
     # === Memory efficiency ===
     ffn_irrep_dims: Optional[List[int]] = None  # Block dims for block-diagonal KL decomposition
@@ -189,7 +189,18 @@ class BlockConfig:
     # === Multi-layer depth signal ===
     aux_layer_loss: bool = False       # Per-layer auxiliary CE loss (M-step task signal for non-final layers)
     aux_loss_weight: float = 0.3       # Weight for auxiliary per-layer CE losses
-    sigma_residual: bool = False       # Additive σ residual across layers (instead of replacement)
+    sigma_residual: bool = False       # DEPRECATED no-op.  Was: additive σ residual.
+                                        # The old additive path (sigma_q + sigma_attn / sigma_q +
+                                        # sigma_ffn) double-counted absolute σ values across
+                                        # sublayers and pegged σ at sigma_max within the first
+                                        # forward pass for multi-layer configs.  Both sublayers
+                                        # now use delta extraction (= replacement) regardless of
+                                        # this flag, since σ has no normalization step (unlike μ)
+                                        # so delta = σ_out - σ_in and σ_in + delta = σ_out.
+                                        # Retained only for config-file backward compat.
+    hierarchical_priors: bool = False   # Each layer's posterior μ becomes the next layer's prior μ
+                                        # (sigma_prior stays at embedding value to prevent cascade).
+                                        # When False (default), all layers share the embedding prior.
 
     # === Non-serializable objects (set after construction) ===
     # These are torch tensors / nn.Modules that can't be part of a plain dataclass default.
@@ -300,6 +311,7 @@ class BlockConfig:
             aux_layer_loss=config.get('aux_layer_loss', False),
             aux_loss_weight=config.get('aux_loss_weight', 0.3),
             sigma_residual=config.get('sigma_residual', False),
+            hierarchical_priors=config.get('hierarchical_priors', False),
             # Non-serializable
             generators=generators,
             ffn_prior_bank=prior_bank,
