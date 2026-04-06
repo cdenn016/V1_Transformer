@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Tuple
 
 # KL divergence ceiling multiplier: kl_max = max(100, KL_CEIL_MULT * dim).
 # Old code used 5.0; current default is 20.0.
-KL_CEIL_MULT = 20.0
+KL_CEIL_MULT = 5.0
 
 
 
@@ -23,8 +23,9 @@ def stable_matrix_exp_pair(
     dim_threshold: int = 20,
     max_norm: float = 20.0,
     skew_symmetric: bool = False,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Compute exp(M) and exp(-M) with norm clamping and float64 upcasting.
+    only_forward: bool = False,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    """Compute exp(M) and optionally exp(-M) with norm clamping and float64 upcasting.
 
     Two stability measures:
     1. Frobenius norm clamping: caps ‖M‖_F at max_norm to prevent the
@@ -55,9 +56,14 @@ def stable_matrix_exp_pair(
         skew_symmetric: If True, skip computing exp(-M) and use exp(M).mT
             instead. For skew-symmetric M, exp(-M) = exp(M)^T exactly.
             Cache this flag at init rather than checking every forward pass.
+        only_forward: If True, only compute exp(M) and return None for exp(-M).
+            Use when only the forward exponential is needed (e.g., PriorBank
+            decode where μ_v = A_v @ μ_0 doesn't require A_v⁻¹). Saves one
+            full matrix_exp call for GL(K) where exp(-M) ≠ exp(M)^T.
 
     Returns:
-        (exp_pos, exp_neg): Tuple of exp(M) and exp(-M), both same dtype as input.
+        (exp_pos, exp_neg): Tuple of exp(M) and exp(-M). exp_neg is None
+        when only_forward=True. Both same dtype as input.
     """
     # Clamp Frobenius norm to prevent overflow in matrix_exp.
     # Gradient flows through the scaling factor, so φ still gets
@@ -76,7 +82,9 @@ def stable_matrix_exp_pair(
         else:
             matrix_up = matrix.float().contiguous()
         exp_pos = torch.linalg.matrix_exp(matrix_up).to(orig_dtype)
-        if skew_symmetric:
+        if only_forward:
+            exp_neg = None
+        elif skew_symmetric:
             # For skew-symmetric M: exp(-M) = exp(M)^T (free transpose)
             exp_neg = exp_pos.transpose(-1, -2)
         else:
@@ -170,7 +178,8 @@ def fused_block_matrix_exp_pairs(
     irrep_dims: List[int],
     enforce_orthogonal: bool = False,
     skew_symmetric: bool = False,
-) -> List[Tuple[torch.Tensor, torch.Tensor]]:
+    only_forward: bool = False,
+) -> List[Tuple[torch.Tensor, Optional[torch.Tensor]]]:
     """Compute matrix exponential pairs for all irrep blocks in fused batches.
 
     Groups blocks by dimension and computes all blocks of each size via a
@@ -186,10 +195,14 @@ def fused_block_matrix_exp_pairs(
         generators: (n_gen, K, K) block-diagonal Lie algebra generators.
         irrep_dims: list of block dimensions [d₁, d₂, ...].
         enforce_orthogonal: if True, apply Newton-Schulz for blocks with d >= 16.
+        only_forward: if True, skip computing exp(-M) per block. Use for
+            PriorBank decode where only A (not A⁻¹) is needed. Saves one
+            matrix_exp call per unique block dim and halves memory.
 
     Returns:
         List of (exp_phi_block, exp_neg_phi_block) tuples, one per block in
         the same order as *irrep_dims*.  Each tensor has shape (B, N, d, d).
+        exp_neg_phi_block is None when only_forward=True.
     """
     B, N, _ = phi.shape
 
@@ -236,27 +249,31 @@ def fused_block_matrix_exp_pairs(
         # Merge block-batch and batch dims for a single matrix_exp call
         phi_flat = phi_matrices.reshape(n_blocks * B, N, d, d)
         exp_phi_flat, exp_neg_phi_flat = stable_matrix_exp_pair(
-            phi_flat, skew_symmetric=skew_symmetric
+            phi_flat, skew_symmetric=skew_symmetric, only_forward=only_forward,
         )
 
         # Reshape back: (n_blocks, B, N, d, d)
         exp_phi_all = exp_phi_flat.reshape(n_blocks, B, N, d, d)
-        exp_neg_phi_all = exp_neg_phi_flat.reshape(n_blocks, B, N, d, d)
+        exp_neg_phi_all = (
+            exp_neg_phi_flat.reshape(n_blocks, B, N, d, d)
+            if exp_neg_phi_flat is not None else None
+        )
 
         if enforce_orthogonal and d >= 16:
             shape = exp_phi_all.shape
             exp_phi_all = newton_schulz_orthogonalize(
                 exp_phi_all.reshape(-1, d, d)
             ).reshape(shape)
-            exp_neg_phi_all = newton_schulz_orthogonalize(
-                exp_neg_phi_all.reshape(-1, d, d)
-            ).reshape(shape)
+            if exp_neg_phi_all is not None:
+                exp_neg_phi_all = newton_schulz_orthogonalize(
+                    exp_neg_phi_all.reshape(-1, d, d)
+                ).reshape(shape)
 
         # Scatter results back to per-block list
         for local_idx, (global_idx, _, _) in enumerate(group):
             results[global_idx] = (
                 exp_phi_all[local_idx].contiguous(),
-                exp_neg_phi_all[local_idx].contiguous(),
+                exp_neg_phi_all[local_idx].contiguous() if exp_neg_phi_all is not None else None,
             )
 
     return results  # type: ignore[return-value]
