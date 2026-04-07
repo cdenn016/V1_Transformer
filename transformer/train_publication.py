@@ -162,7 +162,7 @@ EM_CONFIG = {
 
     'use_prior_bank':           False,
     'learnable_pb_temperature': True,
-    'mask_self_attention':      True,  #Prevent attention collapse?
+    'mask_self_attention':      False,  #Prevent attention collapse?
   
     'hierarchical_priors':      True,
     'gauge_fixed_priors':       True,    
@@ -256,9 +256,9 @@ EM_CONFIG = {
     'killing_form_sym_dampening': 0.5,
 
     # === Position encoding ===
-    'rope_full_gauge':    True,    #requires diagonal cov
+    'rope_full_gauge':    False,    #requires diagonal cov
     'use_rope':           True,
-    'rope_base':          50, 
+    'rope_base':          150, 
     'pos_encoding_mode': 'none',
 
     # === Embedding init ===
@@ -309,11 +309,16 @@ EM_CONFIG = {
     'connection_init_scale': 0.01,   # W init scale (0=flat saddle point, 0.01 recommended)    
     'holonomy_penalty':      0.0,  # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
 
-    'active_inference_pragmatic_weight': 1,   # start small
+    'active_inference_pragmatic_weight': 0,   # start small
     'active_inference_epistemic_weight': 1,   # keep both ON to avoid feedback loop
     'active_inference_epistemic_samples': 4,     # MC samples for BALD
 
+    #DO NOT USE PRAGMATIC WEIGHT WITH DISTILLATION
 
+    'active_inference_distill_weight':    0.05,        # λ_distill — start small
+    'active_inference_distill_lr':        1.0,         # Euclidean step size for the distill update
+    'active_inference_distill_normalize': True,        # divide CE by log(V) so weight is V-agnostic
+    'active_inference_distill_mode':      'aggregated',# 'aggregated' (default) or 'per_pair'
 
     # Option A: couple just 0↔1, head 2 stays independent
     # 'cross_couplings': [(0, 1), (1, 0)],
@@ -334,7 +339,7 @@ EM_CONFIG = {
     # === Multi-layer depth signal ===
     'aux_layer_loss':  True,   # Enable for multi-layer: per-layer M-step CE loss
     'aux_loss_weight': 0.3,     # Weight for auxiliary per-layer CE losses
-    'sigma_residual':  True,   # Additive σ residual across layers
+    
     
     # === Regularization ===
     'sigma_ce_scale':  1,
