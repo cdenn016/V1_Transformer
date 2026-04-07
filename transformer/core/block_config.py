@@ -268,6 +268,24 @@ class BlockConfig:
                                                      # than KL coupling gradients — a
                                                      # larger lr is needed to make EFE
                                                      # move μ meaningfully.
+
+    # === Bootstrap self-distillation (BYOL-style E-step term) ===
+    # Third active-inference term that does not collapse at initialization
+    # and does not need an epistemic counterweight.  Adds a cross-entropy
+    # loss against a stop-gradient target constructed from attention-weighted
+    # transported neighbour readouts:
+    #     L_distill,i = CE( sg[p_pred(μ̃_i)],  p_pred(μ_i) )
+    # where μ̃_i = Σ_j sg[β_ij] · sg[Ω_ij μ_j] is the attention-aggregated
+    # transported belief.  BOTH stop-gradients are essential: sg on the
+    # target prevents BYOL-style collapse, sg on β prevents the separate
+    # "attend-to-twins" collapse (SymPy-verified in docs/).
+    # See docs/bootstrap_self_distillation.md for the full derivation.
+    # Gated by weight > 0 (master toggle active_inference does NOT gate
+    # this — distillation is a standalone term that can be enabled alone).
+    active_inference_distill_weight: float =   0.0   # λ_distill · normalized CE
+    active_inference_distill_lr: float =       1.0   # Euclidean step size
+    active_inference_distill_normalize: bool = True  # Divide CE by log(V)
+    active_inference_distill_mode: str = 'aggregated'  # 'aggregated' | 'per_pair'
     
     active_inference: bool = False 
     rope_full_gauge: bool =  False      # EXPERIMENTAL.  When True (and use_rope=True),
@@ -415,6 +433,11 @@ class BlockConfig:
             active_inference_decode_tau=config.get('active_inference_decode_tau', 1.0),
             active_inference_trust_region=config.get('active_inference_trust_region', 0.5),
             active_inference_lr=config.get('active_inference_lr', 1.0),
+            # Bootstrap self-distillation
+            active_inference_distill_weight=config.get('active_inference_distill_weight', 0.0),
+            active_inference_distill_lr=config.get('active_inference_distill_lr', 1.0),
+            active_inference_distill_normalize=config.get('active_inference_distill_normalize', True),
+            active_inference_distill_mode=config.get('active_inference_distill_mode', 'aggregated'),
             # Non-serializable
             generators=generators,
             ffn_prior_bank=prior_bank,
