@@ -150,8 +150,8 @@ EM_CONFIG = {
     'embed_dim':             20,
     'max_seq_len':           64,
     
-    'batch_size':            128, 
-    'max_steps':             15000,
+    'batch_size':            64, 
+    'max_steps':             30000,
     
     'n_layers':              1,
     'ffn_n_iterations':      1,
@@ -167,7 +167,7 @@ EM_CONFIG = {
     'hierarchical_priors':      True,
     'gauge_fixed_priors':       True,    
   
-    'active_inference':       False,
+    'active_inference':         True,    #requires priorbank true
     
     'kappa_beta':               1,
     'kappa_warmup_steps':       7500,  # freeze kappa for first n steps
@@ -256,7 +256,7 @@ EM_CONFIG = {
     'killing_form_sym_dampening': 0.5,
 
     # === Position encoding ===
-    'rope_full_gauge':    True,
+    'rope_full_gauge':    True,    #requires diagonal cov
     'use_rope':           True,
     'rope_base':          50, 
     'pos_encoding_mode': 'none',
@@ -309,8 +309,8 @@ EM_CONFIG = {
     'connection_init_scale': 0.01,   # W init scale (0=flat saddle point, 0.01 recommended)    
     'holonomy_penalty':      0.0,  # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
 
-    'active_inference_pragmatic_weight': 0.05,   # start small
-    'active_inference_epistemic_weight': 0.05,   # keep both ON to avoid feedback loop
+    'active_inference_pragmatic_weight': 1,   # start small
+    'active_inference_epistemic_weight': 1,   # keep both ON to avoid feedback loop
     'active_inference_epistemic_samples': 4,     # MC samples for BALD
 
 
