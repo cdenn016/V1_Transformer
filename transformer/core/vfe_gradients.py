@@ -1645,18 +1645,34 @@ def _compute_rope_full_gauge_gradient_per_head(
         mu_rope = _apply_rope(mu_var, base=rope_base)             # (B, N, d_h)
         sigma_rope = _apply_rope_to_covariance(sigma_full, base=rope_base)  # (B, N, d_h, d_h)
 
-        # Compute per-head Ω^learned via fused matrix exp pairs
+        # Compute per-head Ω^learned via fused matrix exp pairs.
+        #
+        # CRITICAL: we MUST detach the cached exp_phi/exp_neg_phi tensors.
+        # When update_phi_per_iteration=False and amortized_inference=True,
+        # the outer caller passes cached pairs that are STILL connected to
+        # the phi autograd graph (phi was NOT detached before caching).  If
+        # we use them as-is in the autograd-traced einsum below, the
+        # torch.autograd.grad(retain_graph=False) call at the bottom of
+        # this function will traverse and FREE the phi → exp_phi → Omega
+        # subgraph.  The subsequent M-step loss.backward() would then fail
+        # with "Trying to backward through the graph a second time" or
+        # "saved tensors freed" when it encounters the same exp_phi tensor
+        # from any other downstream path (e.g., the attention sublayer).
+        # Detaching here is semantically correct: phi is treated as a
+        # constant within the E-step gradient computation (the grad is
+        # w.r.t. mu and sigma only).
         if cached_block_exp_pairs is not None:
             exp_phi_h, exp_neg_phi_h = cached_block_exp_pairs[0]
-            # If the cached values were detached at creation, they will not
-            # carry gradients — that's OK because phi is treated as a constant
-            # within the E-step gradient computation anyway.
+            exp_phi_h = exp_phi_h.detach()
+            exp_neg_phi_h = exp_neg_phi_h.detach()
         else:
             bep = fused_block_matrix_exp_pairs(
                 phi_d, gen_h, [d_h],
                 enforce_orthogonal=enforce_orthogonal,
             )
             exp_phi_h, exp_neg_phi_h = bep[0]
+            exp_phi_h = exp_phi_h.detach()
+            exp_neg_phi_h = exp_neg_phi_h.detach()
 
         # Build pairwise transport: Ω_ij = exp(φ_i) · exp(-φ_j)
         Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi_h, exp_neg_phi_h)  # (B, N, N, d_h, d_h)
