@@ -14,9 +14,38 @@ mu_normalize, mu_max_norm) are handled by model.py → GaugeTokenEmbedding direc
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
 import math
+import logging
+import warnings
 
 import torch
 import torch.nn as nn
+
+logger = logging.getLogger(__name__)
+
+
+def _warn_sigma_residual_deprecated(value: bool) -> bool:
+    """Emit a deprecation warning if the user explicitly set sigma_residual.
+
+    sigma_residual was the flag controlling additive σ accumulation across
+    sublayers.  The additive path double-counted absolute σ values and
+    pegged σ at sigma_max within the first forward pass for multi-layer
+    configs.  Both sublayers now use delta extraction (replacement)
+    regardless of this flag.  Users who explicitly set sigma_residual=True
+    are likely expecting the old behavior — warn loudly so the change is
+    visible.
+    """
+    if value:
+        msg = (
+            "sigma_residual=True is DEPRECATED and is now a no-op.  The old "
+            "additive σ update (sigma_q + sigma_sub) has been replaced with "
+            "delta extraction (sigma_q = sigma_sub).  If you relied on the "
+            "additive behavior for an empirical result, those results cannot "
+            "be reproduced with the current code.  Remove sigma_residual from "
+            "your config to silence this warning."
+        )
+        warnings.warn(msg, DeprecationWarning, stacklevel=3)
+        logger.warning("[BlockConfig] " + msg)
+    return value
 
 
 @dataclass
@@ -365,8 +394,18 @@ class BlockConfig:
             # Multi-layer depth signal
             aux_layer_loss=config.get('aux_layer_loss', False),
             aux_loss_weight=config.get('aux_loss_weight', 0.3),
-            sigma_residual=config.get('sigma_residual', False),
-            hierarchical_priors=config.get('hierarchical_priors', False),
+            sigma_residual=(
+                # Loud deprecation warning: sigma_residual is now a no-op.
+                # If a user explicitly sets it True, they are likely expecting
+                # the old additive behavior that compounded sigma across
+                # sublayers — which was the source of the ceiling-saturation
+                # bug fixed this session.  Emit a warning so the behavioral
+                # change is visible.
+                _warn_sigma_residual_deprecated(config.get('sigma_residual', False))
+                if 'sigma_residual' in config
+                else False
+            ),
+            hierarchical_priors=config.get('hierarchical_priors', True),
             rope_full_gauge=config.get('rope_full_gauge', False),
             # Active inference / EFE
             active_inference=config.get('active_inference', False),
