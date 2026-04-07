@@ -307,6 +307,32 @@ class GaugeTransformerLM(nn.Module):
                     "Enable use_prior_bank=True for the principled KL-based decode."
                 )
 
+            # Loud warnings for configurations where EFE silently does nothing
+            # or interacts incorrectly with other code paths.  These were
+            # identified in the session audit as latent silent-skip bugs.
+            _closed_form = any(
+                getattr(_b.ffn, 'closed_form_e_step', False)
+                for _b in self.transformer.blocks
+            )
+            if _closed_form:
+                logger.warning(
+                    "[GaugeTransformerLM] active_inference=True is INCOMPATIBLE with "
+                    "closed_form_e_step=True — the closed-form E-step bypasses the "
+                    "iterative VFE loop where the EFE gradient is applied, so the EFE "
+                    "pragmatic and epistemic terms will have NO EFFECT.  Disable one "
+                    "of the two flags."
+                )
+            _deq_on = any(getattr(_b.ffn, 'use_deq', False) for _b in self.transformer.blocks)
+            if _deq_on:
+                logger.warning(
+                    "[GaugeTransformerLM] active_inference=True with use_deq=True — "
+                    "the DEQ implicit-differentiation backward pass uses a Jacobian "
+                    "built from the VFE-only step operator, NOT the VFE+EFE composite.  "
+                    "Forward pass will include EFE, but the M-step gradient will be "
+                    "based on the wrong fixed-point operator.  Either disable DEQ or "
+                    "disable active_inference."
+                )
+
         # =================================================================
         # Initialize Weights (BEFORE tying embeddings, so that the
         # embedding's calibrated init_std is not overwritten by out_proj's
