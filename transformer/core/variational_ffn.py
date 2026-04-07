@@ -470,12 +470,17 @@ def _compute_active_inference_gradient(
     is_diagonal = (sigma_current.dim() == mu_current.dim())
     use_prior_bank = (prior_bank is not None)
 
+    # Guard against decode_tau=0 for BOTH readout paths.  PriorBank.decode
+    # internally divides by tau; the W_out fallback does too.  Without the
+    # guard, tau=0 produces NaN logits and corrupts μ via the EFE gradient.
+    _tau_safe = max(float(decode_tau), 1e-8)
+
     def _readout(mu_input: torch.Tensor, sigma_arg: torch.Tensor) -> torch.Tensor:
         """Return (B, N, V) logits from either PriorBank or W_out."""
         if use_prior_bank:
-            return prior_bank.decode(mu_input, sigma_arg, tau=decode_tau)
+            return prior_bank.decode(mu_input, sigma_arg, tau=_tau_safe)
         else:
-            return torch.matmul(mu_input, w_out.T) / max(decode_tau, 1e-8)
+            return torch.matmul(mu_input, w_out.T) / _tau_safe
 
     with torch.enable_grad():
         mu_var = mu_current.detach().to(torch.float32).requires_grad_(True)
@@ -496,14 +501,30 @@ def _compute_active_inference_gradient(
         if epistemic_weight > 0.0 and epistemic_samples > 0:
             if is_diagonal:
                 sigma_diag = sigma_arg
+                std = sigma_diag.clamp(min=1e-6).sqrt()
+                _sample_noise = lambda: torch.randn_like(mu_var) * std
             else:
-                sigma_diag = torch.diagonal(sigma_arg, dim1=-2, dim2=-1)
-            std = sigma_diag.clamp(min=1e-6).sqrt()
+                # Full covariance: use Cholesky for correct correlated sampling.
+                # Falls back to diagonal std on numerical failure (non-SPD Σ).
+                sigma_spd = 0.5 * (sigma_arg + sigma_arg.transpose(-1, -2))
+                # Add jitter for numerical stability
+                K_dim = sigma_spd.shape[-1]
+                eye_k = torch.eye(K_dim, device=sigma_spd.device, dtype=sigma_spd.dtype)
+                sigma_spd = sigma_spd + 1e-6 * eye_k
+                try:
+                    L_chol = torch.linalg.cholesky(sigma_spd)  # (B, N, K, K)
+                    def _sample_noise():
+                        z = torch.randn_like(mu_var)  # (B, N, K)
+                        # (B, N, K, K) @ (B, N, K, 1) → (B, N, K, 1) → (B, N, K)
+                        return torch.einsum('bnkj,bnj->bnk', L_chol, z)
+                except Exception:
+                    sigma_diag = torch.diagonal(sigma_spd, dim1=-2, dim2=-1)
+                    std = sigma_diag.clamp(min=1e-6).sqrt()
+                    _sample_noise = lambda: torch.randn_like(mu_var) * std
 
             probs_samples = []
             for _s in range(epistemic_samples):
-                eps_noise = torch.randn_like(mu_var)
-                mu_s = mu_var + eps_noise * std
+                mu_s = mu_var + _sample_noise()
                 logits_s = _readout(mu_s, sigma_arg)
                 probs_s = F.softmax(logits_s, dim=-1)
                 probs_samples.append(probs_s)
