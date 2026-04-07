@@ -58,9 +58,6 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 - 'train_publication.py' - primary training entrypoint.  
 - `config.py` — `TrainingConfig` dataclass (single source of truth for hyperparameters)
 - `optimizer.py` — Parameter-group-aware AdamW with per-type learning rates
-- `lightning_module.py` — `GaugeTransformerLitModule` (PyTorch Lightning wrapper)
-- `lightning_data.py` — `GaugeDataModule` (Lightning data pipeline)
-- `lightning_pure_vfe.py` — Lightning module for pure VFE variant
 - `metrics.py` — Loss, perplexity, BPC, VFE term breakdown
 - `train_fast.py` — Optimized training loop with gradient accumulation
 
