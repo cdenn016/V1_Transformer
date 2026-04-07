@@ -222,13 +222,26 @@ class BlockConfig:
     # regardless of weight values.  When True, the pragmatic and epistemic
     # weights below take effect.  Matches the project convention used by
     # non_flat_transport, rope_full_gauge, and hierarchical_priors.
-    active_inference: bool = False                   # Master EFE on/off toggle
-    active_inference_pragmatic_weight: float = 0.05  # λ_prag · H[p(v|μ)]
-    active_inference_epistemic_weight: float = 0.05  # −λ_epi · MI(v; μ | q)
+                      # Master EFE on/off toggle
+    active_inference_pragmatic_weight: float = 1.0   # λ_prag · H[p(v|μ)]
+    active_inference_epistemic_weight: float = 0.5   # −λ_epi · MI(v; μ | q)
     active_inference_epistemic_samples: int =  4     # MC samples for BALD MI
     active_inference_decode_tau: float =       1.0   # Temperature for PriorBank.decode
-
-    rope_full_gauge: bool = False      # EXPERIMENTAL.  When True (and use_rope=True),
+    active_inference_trust_region: float =     0.5   # Whitened trust region for the
+                                                     # separate EFE μ-update (applied
+                                                     # AFTER the VFE trust region so EFE
+                                                     # contribution is not diluted when
+                                                     # VFE saturates its own budget).
+    active_inference_lr: float =               1.0   # Step size for the Euclidean EFE
+                                                     # μ-update.  Separate from E_mu_q_lr
+                                                     # (typically 0.1) because entropy
+                                                     # and MI gradients are much smaller
+                                                     # than KL coupling gradients — a
+                                                     # larger lr is needed to make EFE
+                                                     # move μ meaningfully.
+    
+    active_inference: bool = False 
+    rope_full_gauge: bool =  False      # EXPERIMENTAL.  When True (and use_rope=True),
                                         # implements the framework-consistent interpretation
                                         # of RoPE as a position-dependent gauge transport that
                                         # acts on Gaussian beliefs by both μ → Rμ AND Σ → RΣR^T
@@ -357,10 +370,12 @@ class BlockConfig:
             rope_full_gauge=config.get('rope_full_gauge', False),
             # Active inference / EFE
             active_inference=config.get('active_inference', False),
-            active_inference_pragmatic_weight=config.get('active_inference_pragmatic_weight', 0.05),
-            active_inference_epistemic_weight=config.get('active_inference_epistemic_weight', 0.05),
+            active_inference_pragmatic_weight=config.get('active_inference_pragmatic_weight', 1.0),
+            active_inference_epistemic_weight=config.get('active_inference_epistemic_weight', 0.5),
             active_inference_epistemic_samples=config.get('active_inference_epistemic_samples', 4),
             active_inference_decode_tau=config.get('active_inference_decode_tau', 1.0),
+            active_inference_trust_region=config.get('active_inference_trust_region', 0.5),
+            active_inference_lr=config.get('active_inference_lr', 1.0),
             # Non-serializable
             generators=generators,
             ffn_prior_bank=prior_bank,
