@@ -740,3 +740,75 @@ def wire_readout_references(transformer_stack, prior_bank, out_proj_module, logg
                 "based on the wrong fixed-point operator.  Either disable DEQ or "
                 "disable active_inference."
             )
+
+    # Bootstrap self-distillation diagnostics (standalone toggle, separate
+    # from the active_inference master gate).  The distillation term can
+    # be enabled without the pragmatic+epistemic EFE terms, but its
+    # interaction with the pragmatic term in particular is a stability
+    # concern, not just a tuning question.  See
+    # docs/bootstrap_self_distillation.md Section 12 for the full argument.
+    _distill_on = any(
+        getattr(_b.ffn, '_ai_distill_weight', 0.0) > 0.0
+        for _b in transformer_stack.blocks
+    )
+    if _distill_on:
+        # Resolve W_out fallback for distillation too, even if master
+        # active_inference toggle is off.  The distillation term uses the
+        # same readout resolution path as the EFE helpers.
+        if prior_bank is None:
+            for _block in transformer_stack.blocks:
+                _block.ffn.__dict__.setdefault('_ai_w_out_ref', [out_proj_module])
+
+        _log.info(
+            "[GaugeTransformerLM] active_inference_distill_weight > 0 -- "
+            "bootstrap self-distillation active in the E-step "
+            "(see docs/bootstrap_self_distillation.md)."
+        )
+
+        # Pragmatic + distillation = mutual reinforcement of uniform collapse.
+        # This is a stability issue, not a tuning question.  The pragmatic term
+        # sharpens p_pred(mu_i) toward its local argmax; distillation
+        # propagates that argmax across positions via the attention-aggregated
+        # transported readout; pragmatic then sharpens the propagated peak
+        # further at the neighbour; the cycle reinforces a collapsed state
+        # that the epistemic MI term was originally introduced to prevent but
+        # which it cannot address when the target is frozen by stop-gradient.
+        _prag_on = any(
+            getattr(_b.ffn, '_ai_enabled', False) and
+            getattr(_b.ffn, '_ai_pragmatic_weight', 0.0) > 0.0
+            for _b in transformer_stack.blocks
+        )
+        if _prag_on:
+            _log.warning(
+                "[GaugeTransformerLM] active_inference_pragmatic_weight > 0 "
+                "simultaneously with active_inference_distill_weight > 0 is a "
+                "STABILITY HAZARD, not a tuning question.  The two terms "
+                "mutually reinforce uniform collapse: pragmatic sharpens toward "
+                "the local argmax, distillation propagates the argmax across "
+                "positions via transported neighbour readouts, and the cycle "
+                "amplifies a collapsed prediction that the epistemic term "
+                "cannot break (its target is frozen by stop-gradient).  "
+                "Recommended: set active_inference_pragmatic_weight=0.0 when "
+                "distillation is enabled, and rely on the distillation term's "
+                "own data-dependent fixed-point structure for the E-step "
+                "augmentation.  See docs/bootstrap_self_distillation.md "
+                "Section 12."
+            )
+
+        # Pure-VFE / supervised-signal guard.  The distillation term has a
+        # uniform-collapse attractor that is held off only by the M-step CE
+        # signal against actual token targets.  If there is no such signal,
+        # the term drives the model into the collapsed state rather than
+        # toward a meaningful representation.  We cannot detect the absence
+        # of a supervised signal at model construction time (it depends on
+        # how forward() is called), so we log an informational reminder
+        # that the user must ensure the term is only active in the joint
+        # E-step + M-step training regime.
+        _log.info(
+            "[GaugeTransformerLM] Reminder: bootstrap self-distillation has a "
+            "uniform-collapse attractor that is only counteracted by the "
+            "M-step cross-entropy loss against actual token targets.  Do NOT "
+            "enable this term in pure-VFE configurations, pretraining warmup "
+            "without a supervised loss, or any E-step-only analysis path.  "
+            "See docs/bootstrap_self_distillation.md Section 5."
+        )
