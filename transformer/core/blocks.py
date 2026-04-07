@@ -249,7 +249,23 @@ class GaugeTransformerBlock(nn.Module):
         )
         # EXPERIMENTAL: rope_full_gauge enables the framework-consistent
         # interpretation of RoPE (rotates Σ as well as μ in the KL).
+        # NOTE: the rope_full_gauge dispatch lives in the MULTI-HEAD loop
+        # only.  When multihead_vfe=False, the flag is silently ignored by
+        # the single-β branch which dispatches straight to the analytic
+        # fused path.  Warn the user so the silent fallback is visible.
         self.ffn._rope_full_gauge_vfe = getattr(cfg, 'rope_full_gauge', False)
+        if self.ffn._rope_full_gauge_vfe and not getattr(cfg, 'multihead_vfe', True):
+            import warnings as _w
+            _w.warn(
+                "rope_full_gauge=True has no effect when multihead_vfe=False — "
+                "the rope_full_gauge dispatch is only implemented in the "
+                "per-head VFE loop.  The single-β path will fall back to the "
+                "standard analytical fused gradient (which has the RoPE chain "
+                "rule fix but rotates only μ, not Σ).  Enable multihead_vfe=True "
+                "to use the experimental rope_full_gauge path.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Active inference / EFE plumbing.  Master toggle (active_inference)
         # gates the entire path; weights only take effect when toggle is True.
@@ -580,7 +596,7 @@ class GaugeTransformerStack(nn.Module):
         super().__init__()
         self.n_layers = cfg.n_layers
         self.gradient_checkpointing = getattr(cfg, 'gradient_checkpointing', False)
-        self.hierarchical_priors = getattr(cfg, 'hierarchical_priors', False)
+        self.hierarchical_priors = getattr(cfg, 'hierarchical_priors', True)
 
         self.blocks = nn.ModuleList([
             GaugeTransformerBlock(cfg)
