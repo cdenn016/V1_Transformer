@@ -715,30 +715,32 @@ def wire_readout_references(transformer_stack, prior_bank, out_proj_module, logg
                 "Enable use_prior_bank=True for the principled KL-based decode."
             )
 
-        # Loud warnings for configurations where EFE silently does nothing
-        # or interacts incorrectly with other code paths.  These were
-        # identified in the session audit as latent silent-skip bugs.
+        # Hard errors for configurations where EFE silently does nothing or
+        # produces a biased M-step gradient.  These were previously logged
+        # as warnings but the audit confirmed that the forward/backward
+        # mismatch is a correctness bug, not a performance hint — raise so
+        # misconfigurations fail fast instead of training incorrectly.
         _closed_form = any(
             getattr(_b.ffn, 'closed_form_e_step', False)
             for _b in transformer_stack.blocks
         )
         if _closed_form:
-            _log.warning(
+            raise ValueError(
                 "[GaugeTransformerLM] active_inference=True is INCOMPATIBLE with "
-                "closed_form_e_step=True -- the closed-form E-step bypasses the "
+                "closed_form_e_step=True. The closed-form E-step bypasses the "
                 "iterative VFE loop where the EFE gradient is applied, so the EFE "
-                "pragmatic and epistemic terms will have NO EFFECT.  Disable one "
-                "of the two flags."
+                "pragmatic/epistemic terms would have NO EFFECT. Disable one of "
+                "the two flags before constructing the model."
             )
         _deq_on = any(getattr(_b.ffn, 'use_deq', False) for _b in transformer_stack.blocks)
         if _deq_on:
-            _log.warning(
-                "[GaugeTransformerLM] active_inference=True with use_deq=True -- "
-                "the DEQ implicit-differentiation backward pass uses a Jacobian "
-                "built from the VFE-only step operator, NOT the VFE+EFE composite.  "
-                "Forward pass will include EFE, but the M-step gradient will be "
-                "based on the wrong fixed-point operator.  Either disable DEQ or "
-                "disable active_inference."
+            raise ValueError(
+                "[GaugeTransformerLM] active_inference=True with use_deq=True "
+                "produces a biased M-step gradient: the DEQ implicit-differentiation "
+                "backward pass builds its Jacobian from the VFE-only step operator, "
+                "NOT the VFE+EFE composite. The forward pass includes EFE but the "
+                "backward fixed-point correction is applied to the wrong operator. "
+                "Disable one of the two flags before constructing the model."
             )
 
     # Bootstrap self-distillation diagnostics (standalone toggle, separate
@@ -759,7 +761,7 @@ def wire_readout_references(transformer_stack, prior_bank, out_proj_module, logg
             for _block in transformer_stack.blocks:
                 _block.ffn.__dict__.setdefault('_ai_w_out_ref', [out_proj_module])
 
-        _log.info(
+        _log.warning(
             "[GaugeTransformerLM] active_inference_distill_weight > 0 -- "
             "bootstrap self-distillation active in the E-step "
             "(see docs/bootstrap_self_distillation.md)."
@@ -804,7 +806,7 @@ def wire_readout_references(transformer_stack, prior_bank, out_proj_module, logg
         # how forward() is called), so we log an informational reminder
         # that the user must ensure the term is only active in the joint
         # E-step + M-step training regime.
-        _log.info(
+        _log.warning(
             "[GaugeTransformerLM] Reminder: bootstrap self-distillation has a "
             "uniform-collapse attractor that is only counteracted by the "
             "M-step cross-entropy loss against actual token targets.  Do NOT "
