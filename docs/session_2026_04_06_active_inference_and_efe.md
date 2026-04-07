@@ -448,12 +448,3 @@ The third is the DINO-style centering mitigation for bootstrap distillation. The
 | $\varepsilon_v$ | Probability-space perturbation around uniform, $p_v = 1/V + \varepsilon_v$ |
 | $\sigma_\ell$ | Empirical standard deviation of the softmax logits at initialization |
 
-## Appendix B: Hard Constraints That Shaped the Work
-
-Three constraints from `CLAUDE.md` shaped which solutions were implementable in this session.
-
-The no-neural-networks constraint forbids `nn.Linear`, MLPs, and activation functions. This rules out the sigmoid-gated residual proposed in §8.1 and any other learned-gating mechanism. The retained exceptions are the linear $K \to V$ output projection and (when enabled) the `connection.py` MLP mode for non-flat transport experiments.
-
-The no-CLI-arguments constraint requires all entry points to use the click-to-run pattern with config dicts edited directly in source files. No new CLI flags were added during the session; every new feature is reached by editing `EM_CONFIG` in `train_publication.py` (or the equivalent `BlockConfig` constructor for direct-instantiation code paths).
-
-The preserve-gauge-equivariance constraint requires covariance transport to always use the sandwich product $\Sigma \to \Omega \Sigma \Omega^\top$. This shaped the RoPE full-gauge implementation in §3.2 (the experimental variant lifts diagonal $\Sigma$ to a full covariance specifically so that the rotation can be applied as a sandwich product rather than as an asymmetric $\mu$-only operation) and shaped the §5.4 revision of the distillation document (gauge equivariance is a requirement on the PriorBank implementation, not an automatic consequence of the Gaussian KL invariance theorem).
