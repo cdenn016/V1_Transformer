@@ -81,6 +81,11 @@ from transformer.core.vfe_utils import (
     _retract_phi,
 )
 
+from transformer.core.active_inference import (
+    compute_ai_gradients,
+    apply_ai_mu_updates,
+)
+
 
 # =============================================================================
 # Implicit EM Gradient (IFT-based M-step)
@@ -388,168 +393,6 @@ class DEQFixedPointFull(torch.autograd.Function):
             total_phi = total_phi + v_phi
 
         return total_mu, total_sigma, total_phi, None, None, None
-
-
-# =============================================================================
-# Active inference / Expected Free Energy gradient helper
-# =============================================================================
-#
-# Augments the VFE E-step with the two terms that active inference prescribes
-# when the agent does not have direct access to the observation:
-#
-#   F_AI = λ_prag · H[p_pred(v|μ_i)]                            (pragmatic)
-#        − λ_epi  · MI(v; μ | q_i)                               (epistemic)
-#
-# Pragmatic term:
-#   p_pred(v|μ_i) is the PriorBank readout (KL-based softmax over vocab).
-#   Minimizing its entropy makes the belief commit to a confident prediction
-#   without target leak.  This is the "self-observation" component: the agent
-#   conditions on what its own current belief most strongly predicts.
-#
-# Epistemic term (BALD-style mutual information):
-#   MI(v; μ | q_i) = H[E_{μ ~ q_i} p(v|μ)] − E_{μ ~ q_i}[H[p(v|μ)]]
-#   Estimated by Monte Carlo: sample S values μ_s ~ N(μ_i, Σ_i), evaluate the
-#   readout at each, then compute the predictive-distribution disagreement.
-#   High MI ⇔ the predictive distribution depends meaningfully on which
-#   element of q_i you sample ⇔ belief uncertainty carries decision-relevant
-#   information ⇔ updating the belief is epistemically valuable.
-#   The negative sign in F_AI means we *maximize* MI in the E-step, which
-#   counter-balances the pragmatic term's tendency toward self-reinforcement.
-#
-# Both terms are differentiable in μ_i.  We compute the gradient via
-# torch.autograd.grad on a freshly-detached μ leaf, so the autograd graph is
-# local to this function and does not perturb the rest of the E-step graph.
-#
-# CRITICAL: torch.inference_mode() (used by model.generate) marks tensors as
-# inference tensors that cannot be promoted to require_grad even inside
-# enable_grad().  Detect and skip the EFE term in inference-mode contexts —
-# the rest of the E-step still runs normally and produces correct samples,
-# the EFE bonus just isn't applied during pure decoding.
-
-def _compute_active_inference_gradient(
-    mu_current: torch.Tensor,
-    sigma_current: torch.Tensor,
-    prior_bank,
-    pragmatic_weight: float,
-    epistemic_weight: float,
-    epistemic_samples: int,
-    decode_tau: float,
-    w_out: Optional[torch.Tensor] = None,
-) -> Optional[torch.Tensor]:
-    r"""Compute ∂F_AI/∂μ via autograd through the readout.
-
-    Uses PriorBank.decode when prior_bank is provided (principled KL-based
-    readout).  Falls back to a linear W_out projection followed by softmax
-    when prior_bank is None.  The linear fallback is less principled (it
-    ignores σ and uses Euclidean-not-KL distance) but keeps the EFE path
-    functional for configurations that don't use PriorBank.
-
-    Args:
-        mu_current: (B, N, K) current belief mean (will be detached internally).
-        sigma_current: (B, N, K) diagonal or (B, N, K, K) full covariance.
-        prior_bank: PriorBank instance providing decode(mu, sigma, tau) → logits.
-        pragmatic_weight: λ_prag.  0.0 disables the pragmatic term.
-        epistemic_weight: λ_epi.  0.0 disables the epistemic term.
-        epistemic_samples: S, number of MC samples for BALD MI estimate.
-        decode_tau: temperature for PriorBank.decode (1.0 = standard).
-        w_out: optional (V, K) linear projection tensor used as fallback
-               readout when prior_bank is None.
-
-    Returns:
-        (B, N, K) gradient of F_AI with respect to μ_current, or None if
-        both weights are zero, both readout paths are unavailable, or we
-        are inside an inference-mode context.
-    """
-    if prior_bank is None and w_out is None:
-        return None
-    if pragmatic_weight <= 0.0 and epistemic_weight <= 0.0:
-        return None
-    if torch.is_inference_mode_enabled():
-        return None
-
-    is_diagonal = (sigma_current.dim() == mu_current.dim())
-    use_prior_bank = (prior_bank is not None)
-
-    # Guard against decode_tau=0 for BOTH readout paths.  PriorBank.decode
-    # internally divides by tau; the W_out fallback does too.  Without the
-    # guard, tau=0 produces NaN logits and corrupts μ via the EFE gradient.
-    _tau_safe = max(float(decode_tau), 1e-8)
-
-    def _readout(mu_input: torch.Tensor, sigma_arg: torch.Tensor) -> torch.Tensor:
-        """Return (B, N, V) logits from either PriorBank or W_out."""
-        if use_prior_bank:
-            return prior_bank.decode(mu_input, sigma_arg, tau=_tau_safe)
-        else:
-            return torch.matmul(mu_input, w_out.T) / _tau_safe
-
-    with torch.enable_grad():
-        mu_var = mu_current.detach().to(torch.float32).requires_grad_(True)
-        sigma_arg = sigma_current.detach().to(torch.float32)
-
-        total_efe = mu_var.new_zeros(())
-
-        # ---- Pragmatic: minimize H[p_pred(v|μ)] ----
-        if pragmatic_weight > 0.0:
-            logits = _readout(mu_var, sigma_arg)  # (B, N, V)
-            log_probs = F.log_softmax(logits, dim=-1)
-            probs = log_probs.exp()
-            entropy = -(probs * log_probs).sum(dim=-1)  # (B, N)
-            pragmatic_term = pragmatic_weight * entropy.mean()
-            total_efe = total_efe + pragmatic_term
-
-        # ---- Epistemic: -MI(v; μ | q_i) via Monte Carlo BALD estimate ----
-        if epistemic_weight > 0.0 and epistemic_samples > 0:
-            if is_diagonal:
-                sigma_diag = sigma_arg
-                std = sigma_diag.clamp(min=1e-6).sqrt()
-                _sample_noise = lambda: torch.randn_like(mu_var) * std
-            else:
-                # Full covariance: use Cholesky for correct correlated sampling.
-                # Falls back to diagonal std on numerical failure (non-SPD Σ).
-                sigma_spd = 0.5 * (sigma_arg + sigma_arg.transpose(-1, -2))
-                # Add jitter for numerical stability
-                K_dim = sigma_spd.shape[-1]
-                eye_k = torch.eye(K_dim, device=sigma_spd.device, dtype=sigma_spd.dtype)
-                sigma_spd = sigma_spd + 1e-6 * eye_k
-                try:
-                    L_chol = torch.linalg.cholesky(sigma_spd)  # (B, N, K, K)
-                    def _sample_noise():
-                        z = torch.randn_like(mu_var)  # (B, N, K)
-                        # (B, N, K, K) @ (B, N, K, 1) → (B, N, K, 1) → (B, N, K)
-                        return torch.einsum('bnkj,bnj->bnk', L_chol, z)
-                except Exception:
-                    sigma_diag = torch.diagonal(sigma_spd, dim1=-2, dim2=-1)
-                    std = sigma_diag.clamp(min=1e-6).sqrt()
-                    _sample_noise = lambda: torch.randn_like(mu_var) * std
-
-            probs_samples = []
-            for _s in range(epistemic_samples):
-                mu_s = mu_var + _sample_noise()
-                logits_s = _readout(mu_s, sigma_arg)
-                probs_s = F.softmax(logits_s, dim=-1)
-                probs_samples.append(probs_s)
-            probs_stack = torch.stack(probs_samples, dim=0)  # (S, B, N, V)
-
-            # H[E_q p(v|μ)] : entropy of the average predictive distribution
-            probs_avg = probs_stack.mean(dim=0)  # (B, N, V)
-            log_probs_avg = (probs_avg.clamp(min=1e-12)).log()
-            H_avg = -(probs_avg * log_probs_avg).sum(dim=-1)  # (B, N)
-
-            # E_q[H[p(v|μ)]] : average entropy across samples
-            log_probs_stack = (probs_stack.clamp(min=1e-12)).log()
-            H_each = -(probs_stack * log_probs_stack).sum(dim=-1)  # (S, B, N)
-            avg_H = H_each.mean(dim=0)  # (B, N)
-
-            mi = H_avg - avg_H  # (B, N) ≥ 0 in expectation
-            # Maximize MI ⇔ subtract λ_epi · MI from F.
-            epistemic_term = -epistemic_weight * mi.mean()
-            total_efe = total_efe + epistemic_term
-
-        grad_efe = torch.autograd.grad(total_efe, mu_var, create_graph=False, retain_graph=False)[0]
-
-    # Cast back to original dtype, detach so it does not entangle with the
-    # surrounding analytic-gradient graph.
-    return grad_efe.detach().to(mu_current.dtype)
 
 
 # =============================================================================
@@ -2660,6 +2503,8 @@ class VariationalFFNDynamic(nn.Module):
         # Initialize cached block exp pairs for phi gradient reuse
         _mh_cached_bep = None
         _cached_bep = None
+        # Hoisted so the distillation helper can access after branch merge
+        beta_heads = None
 
         # Enable/disable VFE gradient debug dict for this iteration
         # _vfe_utils_mod._VFE_GRAD_DEBUG accessed via _vfe_utils_mod
@@ -2997,62 +2842,23 @@ class VariationalFFNDynamic(nn.Module):
                 grad_sigma = grad_sigma + obs_sigma_grad
 
         # =====================================================================
-        # Active inference / EFE gradient (pragmatic + epistemic via PriorBank)
+        # Active inference / EFE + distillation gradients (delegated)
         # =====================================================================
-        # Gated on the master toggle ffn._ai_enabled (set from
-        # BlockConfig.active_inference).  When enabled and a readout path
-        # is available, compute the EFE Euclidean gradient and STASH it on
-        # self._ai_pending_grad_mu for use by the retraction step below.
-        # We do NOT add it to grad_mu here, because:
-        #   1. The main VFE grad_mu passes through a whitened trust region
-        #      (||δμ/√σ|| ≤ 2) that is frequently saturated by the VFE
-        #      terms alone.  Adding EFE to the sum means EFE gets clipped
-        #      proportionally and its effective contribution collapses to
-        #      a rounding-level perturbation (see session diagnostic).
-        #   2. The VFE trust region is calibrated for KL-geometry terms;
-        #      the EFE pragmatic+epistemic terms are not KLs and deserve
-        #      their own budget.
-        # Instead, we apply EFE as a SEPARATE whitened-trust-region update
-        # after the VFE step below.  This gives EFE a fixed contribution
-        # independent of how close the VFE gradient is to its trust region.
-        #
-        # Cost: O(B·N·V·K) per iteration for the pragmatic term (single
-        # PriorBank.decode call) and O(S·B·N·V·K) for epistemic with S
-        # MC samples.  Default S=4.  Master toggle off → zero impact.
-        _ai_enabled = getattr(self, '_ai_enabled', False)
-        _ai_prag = getattr(self, '_ai_pragmatic_weight', 0.0)
-        _ai_epi  = getattr(self, '_ai_epistemic_weight', 0.0)
-        _ai_bank = self.__dict__.get('_prior_bank_ref', None)
-        _ai_wout_ref = self.__dict__.get('_ai_w_out_ref', None)
-        _ai_pending_grad_mu = None  # separate EFE grad, applied after VFE step
-        if _ai_enabled and (_ai_prag > 0.0 or _ai_epi > 0.0):
-            _ai_samples = getattr(self, '_ai_epistemic_samples', 4)
-            _ai_tau = getattr(self, '_ai_decode_tau', 1.0)
-            # Unwrap list-wrapped refs (used to bypass nn.Module registration)
-            _bank = _ai_bank[0] if isinstance(_ai_bank, list) else _ai_bank
-            # Prefer explicit W_out arg from the current forward pass, fall
-            # back to the stored out_proj reference if the caller didn't pass
-            # W_out through (happens in eval/decode paths).
-            if W_out is not None:
-                _w_out_tensor = W_out
-            elif _ai_wout_ref is not None:
-                _proj = _ai_wout_ref[0] if isinstance(_ai_wout_ref, list) else _ai_wout_ref
-                _w_out_tensor = _proj.weight  # (V, K)
-            else:
-                _w_out_tensor = None
-            if _bank is not None or _w_out_tensor is not None:
-                _ai_pending_grad_mu = _compute_active_inference_gradient(
-                    mu_current=mu_current,
-                    sigma_current=sigma_current,
-                    prior_bank=_bank,
-                    pragmatic_weight=_ai_prag,
-                    epistemic_weight=_ai_epi,
-                    epistemic_samples=_ai_samples,
-                    decode_tau=_ai_tau,
-                    w_out=_w_out_tensor,
-                )
-                if _ai_pending_grad_mu is not None and _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
-                    _vfe_utils_mod._VFE_GRAD_DEBUG['ai_efe_mu_grad'] = _grad_norm(_ai_pending_grad_mu)
+        # compute_ai_gradients handles the master toggle, weight gates, ref
+        # resolution, and debug dict writes — see active_inference.py.
+        # Returns (None, None) when all AI terms are off (the default).
+        _bep_for_ai = _mh_cached_bep if _mh_cached_bep is not None else _cached_bep
+        _ai_pending_grad_mu, _ai_distill_pending_grad_mu = compute_ai_gradients(
+            ffn=self,
+            mu_current=mu_current,
+            sigma_current=sigma_current,
+            W_out=W_out,
+            beta_current=beta_current,
+            beta_heads=beta_heads,
+            cached_block_exp_pairs=_bep_for_ai,
+            irrep_dims=self.irrep_dims,
+            multihead_vfe=self.multihead_vfe,
+        )
 
         # Debug: Euclidean totals (after obs, before clip)
         if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
@@ -3313,63 +3119,21 @@ class VariationalFFNDynamic(nn.Module):
             self._e_step_grad_norms['whitened_mu_max'] = whitened_norm.max().item()
 
         # =================================================================
-        # Active inference / EFE μ-update (separate budget, Euclidean)
+        # Active inference / EFE + distillation μ-updates (delegated)
         # =================================================================
-        # Applied AFTER the VFE whitened trust region so that the EFE
-        # contribution is not diluted when the VFE gradient saturates its
-        # own trust region.  Design choices:
-        #
-        # 1. EUCLIDEAN gradient, NOT natural gradient.  The VFE terms are
-        #    KL divergences with a Fisher metric = 1/σ², so their natural
-        #    gradient multiplies by σ² (Fisher^{-1}).  The EFE pragmatic
-        #    and epistemic terms are entropies / mutual informations of a
-        #    softmax readout, which do not have a Fisher-metric
-        #    justification w.r.t. μ.  We use ∇_μ F_AI directly.
-        #
-        # 2. SEPARATE step size (_ai_lr, default 1.0, vs VFE's
-        #    E_mu_q_lr ~ 0.1).  The EFE gradient magnitudes are much
-        #    smaller than the VFE coupling gradients because the softmax
-        #    readout saturates the entropy gradient near uniform init.
-        #    A larger step size is needed for EFE to move μ meaningfully
-        #    in the same number of iterations.
-        #
-        # 3. SEPARATE whitened trust region (_ai_trust_region, default 0.5)
-        #    so total update stays bounded: VFE budget (2.0) + EFE budget
-        #    (0.5) in whitened norm.
-        #
-        # 4. Applied OUTSIDE the natural-gradient / trust-region chain for
-        #    VFE, so VFE's step is not modified and the two updates
-        #    compose additively.
-        if _ai_pending_grad_mu is not None:
-            _ai_lr = getattr(self, '_ai_lr', 1.0)
-            delta_efe = -_ai_lr * _ai_pending_grad_mu  # Euclidean, no σ² scaling
-
-            # Whitened trust region: ||δμ/√σ|| ≤ _ai_trust_region
-            if is_diagonal:
-                sigma_sqrt_efe = torch.sqrt(
-                    sigma_current.float().clamp(min=eps)
-                ).to(sigma_current.dtype)
-            else:
-                sigma_diag_efe = torch.diagonal(
-                    sigma_current, dim1=-2, dim2=-1
-                ).float().clamp(min=eps)
-                sigma_sqrt_efe = torch.sqrt(sigma_diag_efe).to(sigma_current.dtype)
-
-            whitened_efe = delta_efe / sigma_sqrt_efe
-            whitened_efe_norm = torch.linalg.norm(whitened_efe, dim=-1, keepdim=True)
-            efe_trust_region = getattr(self, '_ai_trust_region', 0.5)
-            efe_scale = torch.clamp(
-                efe_trust_region / (whitened_efe_norm + eps), max=1.0
-            )
-            mu_current = mu_current + efe_scale * delta_efe
-
-            if _is_final_iter:
-                self._e_step_grad_norms['ai_efe_raw_grad_norm'] = _ai_pending_grad_mu.detach().norm().item()
-                self._e_step_grad_norms['ai_efe_whitened_mean'] = whitened_efe_norm.mean().item()
-                self._e_step_grad_norms['ai_efe_whitened_max'] = whitened_efe_norm.max().item()
-                self._e_step_grad_norms['ai_efe_trust_frac'] = (
-                    efe_scale.squeeze(-1) < 0.99
-                ).float().mean().item()
+        # apply_ai_mu_updates handles both the EFE and distillation Euclidean
+        # updates with their own whitened trust regions.  No-op when both
+        # gradients are None (the default when AI terms are off).
+        mu_current = apply_ai_mu_updates(
+            ffn=self,
+            mu_current=mu_current,
+            sigma_current=sigma_current,
+            grad_efe_mu=_ai_pending_grad_mu,
+            grad_distill_mu=_ai_distill_pending_grad_mu,
+            is_diagonal=is_diagonal,
+            eps=eps,
+            is_final_iter=_is_final_iter,
+        )
 
         if self.update_sigma:
             # SPD-preserving retraction: sigma_new = sigma * exp(step * clip(delta/sigma, -trust, trust))
