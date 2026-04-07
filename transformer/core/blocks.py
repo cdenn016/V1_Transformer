@@ -258,10 +258,12 @@ class GaugeTransformerBlock(nn.Module):
         # by the model in __init__ via __dict__ assignment (avoids nn.Module
         # sub-module auto-registration of an already-owned module).
         self.ffn._ai_enabled = getattr(cfg, 'active_inference', False)
-        self.ffn._ai_pragmatic_weight = getattr(cfg, 'active_inference_pragmatic_weight', 0.05)
-        self.ffn._ai_epistemic_weight = getattr(cfg, 'active_inference_epistemic_weight', 0.05)
+        self.ffn._ai_pragmatic_weight = getattr(cfg, 'active_inference_pragmatic_weight', 1.0)
+        self.ffn._ai_epistemic_weight = getattr(cfg, 'active_inference_epistemic_weight', 0.5)
         self.ffn._ai_epistemic_samples = getattr(cfg, 'active_inference_epistemic_samples', 4)
         self.ffn._ai_decode_tau = getattr(cfg, 'active_inference_decode_tau', 1.0)
+        self.ffn._ai_trust_region = getattr(cfg, 'active_inference_trust_region', 0.5)
+        self.ffn._ai_lr = getattr(cfg, 'active_inference_lr', 1.0)
         # _prior_bank_ref defaults to None; the model wires it in after the
         # full module hierarchy is constructed.
         self.ffn.__dict__.setdefault('_prior_bank_ref', None)
