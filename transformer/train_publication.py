@@ -150,8 +150,8 @@ EM_CONFIG = {
     'embed_dim':             20,
     'max_seq_len':           64,
     
-    'batch_size':            64, 
-    'max_steps':             30000,
+    'batch_size':            128, 
+    'max_steps':             60000,
     
     'n_layers':              1,
     'ffn_n_iterations':      1,
@@ -160,14 +160,14 @@ EM_CONFIG = {
     'gauge_dim':                          10,
     'irrep_spec':            [('fund', 2, 10)],
 
-    'use_prior_bank':           False,
+    'use_prior_bank':           True,
     'learnable_pb_temperature': True,
     'mask_self_attention':      False,  #Prevent attention collapse?
   
     'hierarchical_priors':      True,
     'gauge_fixed_priors':       True,    
   
-    'active_inference':         True,    #requires priorbank true
+    'active_inference':         False,    #requires priorbank true
     
     'kappa_beta':               1,
     'kappa_warmup_steps':       7500,  # freeze kappa for first n steps
@@ -258,7 +258,7 @@ EM_CONFIG = {
     # === Position encoding ===
     'rope_full_gauge':    False,    #requires diagonal cov
     'use_rope':           True,
-    'rope_base':          150, 
+    'rope_base':          50, 
     'pos_encoding_mode': 'none',
 
     # === Embedding init ===
@@ -309,13 +309,13 @@ EM_CONFIG = {
     'connection_init_scale': 0.01,   # W init scale (0=flat saddle point, 0.01 recommended)    
     'holonomy_penalty':      0.0,  # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
 
-    'active_inference_pragmatic_weight': 0,   # start small
+    'active_inference_pragmatic_weight': 1,   # start small
     'active_inference_epistemic_weight': 1,   # keep both ON to avoid feedback loop
     'active_inference_epistemic_samples': 4,     # MC samples for BALD
 
     #DO NOT USE PRAGMATIC WEIGHT WITH DISTILLATION
 
-    'active_inference_distill_weight':    0.05,        # λ_distill — start small
+    'active_inference_distill_weight':    0,        # λ_distill — start small
     'active_inference_distill_lr':        1.0,         # Euclidean step size for the distill update
     'active_inference_distill_normalize': True,        # divide CE by log(V) so weight is V-agnostic
     'active_inference_distill_mode':      'aggregated',# 'aggregated' (default) or 'per_pair'
