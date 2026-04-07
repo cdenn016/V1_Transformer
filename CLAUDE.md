@@ -6,13 +6,15 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 **NO NEURAL NETWORKS**: No `nn.Linear`, no MLPs, no learned W_Q/W_K/W_V projections, no activation functions (GELU, ReLU, etc.). The only retained neural component is a linear output projection from K dimensions to vocabulary size. If you are tempted to add an MLP or activation function, you are violating the core thesis. **Documented exceptions**: `connection.py` MLP mode (optional non-flat transport research variant, bilinear default is constraint-compliant), `attention.py` `use_output_projection` (off by default, ablation-only option).
 
-**NO CLI ARGUMENTS**: Entry points use the click-to-run pattern. Edit config dicts directly in the file, then press Run. Do not add `argparse`, `click`, `typer`, or any CLI flag parsing.
+**NO CLI ARGUMENTS (with one documented exception)**: Entry points use the click-to-run pattern. Edit config dicts directly in the file, then press Run. Do not add `argparse`, `click`, `typer`, or any CLI flag parsing to *new* entry points. **Exception**: `transformer/train_publication.py` uses `argparse` for `--mode` / `--ffn_mode` / `--device` / `--checkpoint_dir` / `--seed` / `--dataset` / `--semantic_analysis_interval` because it dispatches between many preset configurations defined as dicts inside the same file. The CLI here selects which config dict to run, it does not expose tunable hyperparameters — those still live in the file-level dicts. Do not extend this exception to other entry points, and do not add new `add_argument` calls that bypass the dict-based config contract.
 
 **PRESERVE GAUGE EQUIVARIANCE**: Covariance transport must always use the sandwich product: `Sigma_transported = Omega @ Sigma @ Omega.T`. Never transport covariance without the conjugation. This is the single most common correctness bug.
 
 **Figures**: ALL Figures should be publication quality by default.
 
 **LOCALLY DEFINED CONFIGS**: User may not be running the config values which match the repo.  always double check what values the user is using!
+
+**Post Edit Policy**:  Always write a post-edit description of all changes made to the codebase as a .md.  The date the edits were made should be in the naming convention of the document
 
 ## Codebase Map
 
@@ -30,7 +32,12 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 - `model.py` — `GaugeTransformerLM` (main language model)
 - `attention.py` — `IrrepMultiHeadAttention` (KL-divergence attention, no W_Q/W_K)
 - `blocks.py` — `GaugeTransformerBlock` (attention + VFE FFN + residual)
-- `variational_ffn.py` — `VariationalFFNDynamic` (VFE E-step belief evolution)
+- `variational_ffn.py` — `VariationalFFNDynamic` (VFE E-step belief evolution, ~3.6k lines — the central active inference orchestrator; `_vfe_iteration` and `_closed_form_e_step` are the hot path)
+- `active_inference.py` — EFE pragmatic + epistemic (BALD MI) E-step terms, BYOL-style bootstrap self-distillation, `compute_ai_gradients` / `apply_ai_mu_updates` / `configure_ffn_active_inference` / `wire_readout_references`. All terms gated by weights and default to no-ops
+- `kl_computation.py` — Unified KL matrix entry point (`compute_kl_matrix`) with dense / diagonal / block-diagonal kernels; `safe_kl_clamp`
+- `transport_ops.py` — Transport operator construction (`compute_transport_operators`, `compute_transport_operators_direct`), RoPE rotation and un-rotation helpers (`_apply_rope`, `_un_apply_rope_pair_outer`)
+- `vfe_gradients.py` — Analytic VFE gradient kernels: `compute_vfe_gradients_gpu`, `compute_natural_gradient_gpu` (Fisher projection), `_compute_vfe_gradients_block_diagonal_diag` (production hot path), `_fused_attention_and_vfe_gradients_block_diag` (fused attention + gradient for multi-head VFE), experimental RoPE full-gauge path
+- `vfe_utils.py` — SPD primitives: `_safe_spd_inv`, `_safe_eigh`, `retract_spd_torch`, `retract_spd_diagonal_torch`, `_retract_phi`; numerical constants; module-level `_VFE_GRAD_DEBUG` dict
 - `embeddings.py` — `GaugeTokenEmbedding`, `GaugePositionalEncoding`
 - `gauge_utils.py` — Matrix exp pairs, Newton-Schulz orthogonalization, block-diagonal KL
 - `gauge_preconditioner.py` — Phi gradient preconditioning (4 modes: clip, cartan, killing, pullback)
