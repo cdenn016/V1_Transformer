@@ -268,15 +268,10 @@ class GaugeTransformerLM(nn.Module):
 
         self.transformer = GaugeTransformerStack(block_cfg)
 
-        # =================================================================
-        # Active inference / EFE: plumb PriorBank reference into each FFN
-        # =================================================================
-        # The EFE pragmatic and epistemic terms in variational_ffn.py call
-        # prior_bank.decode() to compute the predictive distribution over
-        # the vocabulary inside the E-step.  We store the reference via
-        # __dict__ assignment to bypass nn.Module's __setattr__ — otherwise
-        # PriorBank would be re-registered as a sub-module of every FFN,
-        # double-counting parameters and breaking checkpoint loading.
+        # Plumb PriorBank reference to each FFN for EFE pragmatic/epistemic
+        # terms.  Use __dict__ assignment to bypass nn.Module sub-module
+        # auto-registration (PriorBank is owned by the model, not the FFN;
+        # re-registering would double-count parameters).
         if self.prior_bank is not None:
             for _block in self.transformer.blocks:
                 _block.ffn.__dict__['_prior_bank_ref'] = self.prior_bank
@@ -285,6 +280,32 @@ class GaugeTransformerLM(nn.Module):
         # Output Projection
         # =================================================================
         self.out_proj = nn.Linear(embed_dim, vocab_size, bias=False)
+
+        # =================================================================
+        # Active inference diagnostics + W_out fallback wiring.
+        # Runs AFTER self.out_proj is created so the fallback can grab it.
+        # Emits a loud log line so silent skips cannot happen: if the user
+        # sets active_inference=True but has no readout plumbed in, we
+        # either fall back to W_out or raise a clear warning.
+        # =================================================================
+        _ai_on = any(getattr(_b.ffn, '_ai_enabled', False) for _b in self.transformer.blocks)
+        if _ai_on:
+            if self.prior_bank is not None:
+                logger.info(
+                    "[GaugeTransformerLM] active_inference=True with PriorBank readout — "
+                    "EFE E-step augmentation is active (pragmatic + epistemic terms via PriorBank.decode)"
+                )
+            else:
+                # Fallback: wire out_proj reference so the EFE helper can use
+                # the linear projection readout instead of PriorBank.  List
+                # wrapper bypasses nn.Module sub-module auto-registration.
+                for _block in self.transformer.blocks:
+                    _block.ffn.__dict__['_ai_w_out_ref'] = [self.out_proj]
+                logger.warning(
+                    "[GaugeTransformerLM] active_inference=True but PriorBank is disabled — "
+                    "falling back to W_out linear readout for EFE pragmatic/epistemic terms. "
+                    "Enable use_prior_bank=True for the principled KL-based decode."
+                )
 
         # =================================================================
         # Initialize Weights (BEFORE tying embeddings, so that the
