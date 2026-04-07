@@ -429,10 +429,14 @@ def compute_free_energy_loss(
         # Use adaptive α_i from E-step if available (learnable_alpha mode)
         alpha_i = attn_info.get('alpha_i', None)
         if alpha_i is not None:
-            # alpha_i is (B, N, K) per-dimension; kl_per_agent is (B, N) scalar
-            # Use mean over dimensions for scalar KL weighting
+            # alpha_i is (B, N, K) per-dimension; kl_per_agent is (B, N) scalar.
+            # Use mean over dimensions for scalar KL weighting, then scale by
+            # M_alpha as an overall loss weight.  This gives consistent
+            # semantics with the fixed-α branch below: setting M_alpha=0
+            # disables the term in both modes, and M_alpha acts as a
+            # multiplicative scale on top of the learnable per-position α.
             alpha_scalar = alpha_i.mean(dim=-1)  # (B, N)
-            self_consistency_loss = (alpha_scalar * kl_per_agent).mean() / dim_scale
+            self_consistency_loss = M_alpha * (alpha_scalar * kl_per_agent).mean() / dim_scale
         else:
             self_consistency_loss = M_alpha * kl_per_agent.mean() / dim_scale
     else:
@@ -550,11 +554,38 @@ def compute_free_energy_loss(
         aux_loss = torch.tensor(0.0, device=ce_loss.device)
 
     # =================================================================
+    # 8. Holonomy Penalty: λ_H · E[‖C_ijk − I‖²_F]
+    # =================================================================
+    # Non-flat transport regulariser.  When any block has non_flat_transport
+    # enabled with holonomy_penalty > 0, compute the mean squared connection
+    # holonomy across sampled triples and add to the loss.  Previously this
+    # value was stored per-block but never read by the loss function — users
+    # who set holonomy_penalty > 0 got zero regularisation.
+    #
+    # The per-block attribute `_last_exp_delta` is populated by
+    # GaugeTransformerBlock.forward (blocks.py:378) and
+    # GaugeTransformerLM.forward_with_attention (model.py:1090) when
+    # non_flat_transport=True.  We compute the penalty on each block that
+    # has a non-None exp_delta and a positive weight, and sum across blocks.
+    holonomy_loss = torch.tensor(0.0, device=ce_loss.device)
+    if hasattr(model, 'transformer') and hasattr(model.transformer, 'blocks'):
+        from transformer.analysis.holonomy import holonomy_penalty_loss as _h_pen
+        for _block in model.transformer.blocks:
+            _weight = getattr(_block, 'holonomy_penalty', 0.0)
+            _exp_delta = getattr(_block, '_last_exp_delta', None)
+            if _weight > 0.0 and _exp_delta is not None:
+                # Sample-based average of ‖C_ijk − I‖²_F; gradient flows back
+                # to the GaugeConnection weights via _exp_delta.  Clear the
+                # attribute after use so the next forward pass starts fresh.
+                holonomy_loss = holonomy_loss + _weight * _h_pen(_exp_delta)
+                _block._last_exp_delta = None
+
+    # =================================================================
     # Total Training Loss (CE + optional auxiliary VFE regularizers)
     # =================================================================
     total_loss = (ce_loss + belief_align_loss + self_consistency_loss
                   + model_align_loss + hyper_prior_loss + gauge_prior_loss
-                  + aux_loss)
+                  + aux_loss + holonomy_loss)
 
     # Compute attention metrics outside the computation graph
     # When skip_attention=True, beta/kl from the attention sublayer are None.
@@ -600,6 +631,7 @@ def compute_free_energy_loss(
         'loss/hyper_prior': hyper_prior_loss.item() if lambda_hyper > 0 else 0.0,
         'loss/gauge_prior': gauge_prior_loss.item() if mass_phi > 0 else 0.0,
         'loss/aux_layer_ce': aux_loss.item() if aux_losses else 0.0,
+        'loss/holonomy': holonomy_loss.item() if isinstance(holonomy_loss, torch.Tensor) else float(holonomy_loss),
         'attention/beta_mean': _beta_mean,
         'attention/kl_mean': _kl_mean,
         'attention/entropy': attn_entropy.item(),
