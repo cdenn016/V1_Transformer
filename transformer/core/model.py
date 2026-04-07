@@ -39,6 +39,7 @@ from transformer.core.blocks import GaugeTransformerStack, RMSNorm
 from transformer.core.variational_ffn import ImplicitEMGradient, ImplicitEMGradientSigma
 from transformer.core.block_config import BlockConfig
 from transformer.core.attention import create_attention_mask
+from transformer.core.active_inference import wire_readout_references
 
 # Trajectory tracking (optional)
 try:
@@ -268,70 +269,18 @@ class GaugeTransformerLM(nn.Module):
 
         self.transformer = GaugeTransformerStack(block_cfg)
 
-        # Plumb PriorBank reference to each FFN for EFE pragmatic/epistemic
-        # terms.  Use __dict__ assignment to bypass nn.Module sub-module
-        # auto-registration (PriorBank is owned by the model, not the FFN;
-        # re-registering would double-count parameters).
-        if self.prior_bank is not None:
-            for _block in self.transformer.blocks:
-                _block.ffn.__dict__['_prior_bank_ref'] = self.prior_bank
-
         # =================================================================
         # Output Projection
         # =================================================================
         self.out_proj = nn.Linear(embed_dim, vocab_size, bias=False)
 
         # =================================================================
-        # Active inference diagnostics + W_out fallback wiring.
-        # Runs AFTER self.out_proj is created so the fallback can grab it.
-        # Emits a loud log line so silent skips cannot happen: if the user
-        # sets active_inference=True but has no readout plumbed in, we
-        # either fall back to W_out or raise a clear warning.
+        # Active inference readout wiring — delegated to active_inference.py.
+        # Must run AFTER both self.transformer and self.out_proj are created.
+        # Plumbs PriorBank (or W_out fallback) into each block's FFN and
+        # emits diagnostic warnings for incompatible configurations.
         # =================================================================
-        _ai_on = any(getattr(_b.ffn, '_ai_enabled', False) for _b in self.transformer.blocks)
-        if _ai_on:
-            if self.prior_bank is not None:
-                logger.info(
-                    "[GaugeTransformerLM] active_inference=True with PriorBank readout — "
-                    "EFE E-step augmentation is active (pragmatic + epistemic terms via PriorBank.decode)"
-                )
-            else:
-                # Fallback: wire out_proj reference so the EFE helper can use
-                # the linear projection readout instead of PriorBank.  List
-                # wrapper bypasses nn.Module sub-module auto-registration.
-                for _block in self.transformer.blocks:
-                    _block.ffn.__dict__['_ai_w_out_ref'] = [self.out_proj]
-                logger.warning(
-                    "[GaugeTransformerLM] active_inference=True but PriorBank is disabled — "
-                    "falling back to W_out linear readout for EFE pragmatic/epistemic terms. "
-                    "Enable use_prior_bank=True for the principled KL-based decode."
-                )
-
-            # Loud warnings for configurations where EFE silently does nothing
-            # or interacts incorrectly with other code paths.  These were
-            # identified in the session audit as latent silent-skip bugs.
-            _closed_form = any(
-                getattr(_b.ffn, 'closed_form_e_step', False)
-                for _b in self.transformer.blocks
-            )
-            if _closed_form:
-                logger.warning(
-                    "[GaugeTransformerLM] active_inference=True is INCOMPATIBLE with "
-                    "closed_form_e_step=True — the closed-form E-step bypasses the "
-                    "iterative VFE loop where the EFE gradient is applied, so the EFE "
-                    "pragmatic and epistemic terms will have NO EFFECT.  Disable one "
-                    "of the two flags."
-                )
-            _deq_on = any(getattr(_b.ffn, 'use_deq', False) for _b in self.transformer.blocks)
-            if _deq_on:
-                logger.warning(
-                    "[GaugeTransformerLM] active_inference=True with use_deq=True — "
-                    "the DEQ implicit-differentiation backward pass uses a Jacobian "
-                    "built from the VFE-only step operator, NOT the VFE+EFE composite.  "
-                    "Forward pass will include EFE, but the M-step gradient will be "
-                    "based on the wrong fixed-point operator.  Either disable DEQ or "
-                    "disable active_inference."
-                )
+        wire_readout_references(self.transformer, self.prior_bank, self.out_proj, logger=logger)
 
         # =================================================================
         # Initialize Weights (BEFORE tying embeddings, so that the
