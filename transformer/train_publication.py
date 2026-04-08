@@ -147,36 +147,36 @@ _DEBUG_VFE_GRADS = False
 EM_CONFIG = {
     # === Architecture ===
     'vocab_size':            50257,
-    'embed_dim':             20,
-    'max_seq_len':           64,
+    'embed_dim':             90,
+    'max_seq_len':           128,
     
-    'batch_size':            128, 
-    'max_steps':             60000,
+    'batch_size':            16, 
+    'max_steps':             120000,
     
     'n_layers':              1,
     'ffn_n_iterations':      1,
-    
+    #'grad_accumulation_steps': 4,
        
-    'gauge_dim':                          10,
-    'irrep_spec':            [('fund', 2, 10)],
+    'gauge_dim':                          15,
+    'irrep_spec':            [('fund', 6, 15)],
 
-    'use_prior_bank':           True,
+    'use_prior_bank':           False,
     'learnable_pb_temperature': True,
     'mask_self_attention':      False,  #Prevent attention collapse?
   
     'hierarchical_priors':      True,
-    'gauge_fixed_priors':       True,    
-  
+    'gauge_fixed_priors':       False,    
+    'cache_decode_priors':      True,
     'active_inference':         False,    #requires priorbank true
     
     'kappa_beta':               1,
-    'kappa_warmup_steps':       7500,  # freeze kappa for first n steps
+    'kappa_warmup_steps':       60000,  # freeze kappa for first n steps
     'learnable_head_kappa':     True, # If True, learn per-head κ_h via log_kappa_per_head
     
     # === M-step: implicit differentiation ===
     'implicit_em':           False,
     'amortized_inference':   True,
-    'use_obs_in_vfe':        False,  #cheats when true
+    
        
     # === M-step: Optimizer ===  
     'optimizer_type':        'riemannian_adam',# or 'natural_gradient' or 'adamw' or 'riemannian_adam'
@@ -284,9 +284,9 @@ EM_CONFIG = {
     
     # === Logging ===
     'log_interval':               100,
-    'eval_interval':              1000,
-    'checkpoint_interval':        25000,
-    'semantic_analysis_interval': 10000,
+    'eval_interval':              5000,
+    'checkpoint_interval':        100000,
+    'semantic_analysis_interval': 25000,
 
     'use_deq':           False,
     'deq_include_phi':   True,    # Corrects M-step phi gradient
@@ -309,14 +309,14 @@ EM_CONFIG = {
     'connection_init_scale': 0.01,   # W init scale (0=flat saddle point, 0.01 recommended)    
     'holonomy_penalty':      0.0,  # λ_H · E[‖C_ijk - I‖²_F] regularizer (0 = off)
 
-    'active_inference_pragmatic_weight': 1,   # start small
+    'active_inference_pragmatic_weight': 0,   # start small
     'active_inference_epistemic_weight': 1,   # keep both ON to avoid feedback loop
-    'active_inference_epistemic_samples': 4,     # MC samples for BALD
+    'active_inference_epistemic_samples': 2,     # MC samples for BALD
 
     #DO NOT USE PRAGMATIC WEIGHT WITH DISTILLATION
 
-    'active_inference_distill_weight':    0,        # λ_distill — start small
-    'active_inference_distill_lr':        1.0,         # Euclidean step size for the distill update
+    'active_inference_distill_weight':    0.5,        # λ_distill — start small
+    'active_inference_distill_lr':        2.0,         # Euclidean step size for the distill update
     'active_inference_distill_normalize': True,        # divide CE by log(V) so weight is V-agnostic
     'active_inference_distill_mode':      'aggregated',# 'aggregated' (default) or 'per_pair'
 
@@ -330,8 +330,7 @@ EM_CONFIG = {
     'diagnostics_interval':        25,
     
     
-    'tie_embeddings':              False,
-    'ffn_mode':                    'VFE_dynamic',
+    
     
     'debug_vfe_grads':             False,
     'verbose_diagnostics':         False,
@@ -340,7 +339,8 @@ EM_CONFIG = {
     'aux_layer_loss':  True,   # Enable for multi-layer: per-layer M-step CE loss
     'aux_loss_weight': 0.3,     # Weight for auxiliary per-layer CE losses
     
-    
+    'tie_embeddings':              False,
+    'ffn_mode':                    'VFE_dynamic',
     # === Regularization ===
     'sigma_ce_scale':  1,
     'sigma_max':       12.0,
@@ -468,6 +468,14 @@ HEBBIAN_CONFIG = {
     'log_interval':        100,
     'eval_interval':       1000,
     'checkpoint_interval': 25000,
+    
+    # === Layer/iteration diagnostics ===
+    'track_layer_diagnostics':     False,
+    'track_iteration_diagnostics': False,
+    'diagnostics_interval':        25,
+  
+    'debug_vfe_grads':             False,
+    'verbose_diagnostics':         False,
 }
 
 
