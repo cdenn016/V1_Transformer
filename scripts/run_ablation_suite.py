@@ -56,31 +56,34 @@ from transformer.training.experiment_runner import run_single_experiment
 BASELINE_CONFIG = {
     # === Architecture ===
     'vocab_size':            50257,
-    'embed_dim':             20,
+    'embed_dim':             10,
     'max_seq_len':           64,
     
-    'batch_size':            128, 
-    'max_steps':             7500,
+    'batch_size':            256, 
+    'max_steps':             200,
     
     'n_layers':              1,
     'ffn_n_iterations':      1,
     
-    'gauge_dim':                          10,
-    'irrep_spec':            [('fund', 2, 10)],
+    #'grad_accumulation_steps': 1,
+    #'gradient_checkpoint_vfe': False,
+    
+    'gauge_dim':                          5,
+    'irrep_spec':            [('fund', 2, 5)],
 
     'use_prior_bank':           False,
     'learnable_pb_temperature': True,
-    'mask_self_attention':      True,  # Prevent attention collapse?
+    'mask_self_attention':      False,  # Prevent attention collapse?
   
     'gauge_fixed_priors':       True,    
   
-    'kappa_beta':               3.16,
+    'kappa_beta':               1,
     'kappa_warmup_steps':       7500,  # freeze kappa for first n steps
-    'learnable_head_kappa':     True, # If True, learn per-head κ_h via log_kappa_per_head
+    'learnable_head_kappa':     False, # If True, learn per-head κ_h via log_kappa_per_head
     
     # === M-step: implicit differentiation ===
     'implicit_em':           False,
-    'amortized_inference':   True,
+    'amortized_inference':   False,
     'use_obs_in_vfe':        False,  #cheats when true
        
     # === M-step: Optimizer ===  
@@ -146,7 +149,7 @@ BASELINE_CONFIG = {
     'lambda_gamma':        0.0,
     'kappa_gamma':         1.0,
 
-    'embed_weight_decay':     0.05,   # L2 hyper-prior on embeddings (μ_p, σ_p, φ) via AdamW
+    'embed_weight_decay':     0.07,   # L2 hyper-prior on embeddings (μ_p, σ_p, φ) via AdamW
     'non_embed_weight_decay': 0.01,  # L2 on non-embedding params (attention, output)
     
     # === Phi gradient geometry ===
@@ -156,7 +159,7 @@ BASELINE_CONFIG = {
 
     # === Position encoding ===
     'use_rope':           True,
-    'rope_base':          5000, 
+    'rope_base':          100, 
     'pos_encoding_mode': 'none',
 
     # === Embedding init ===
@@ -174,15 +177,15 @@ BASELINE_CONFIG = {
     # beliefs (q₀) AND serve as prior parameters (μ_p, σ_p), so these rates
     # indirectly affect E-step initialization speed.
     'M_mu_p_lr':           0.05,   # M-step prior mean embeddings (μ_p) 0.05
-    'M_sigma_p_lr':        0.015, # M-step prior covariance embeddings (log σ_p)
-    'M_phi_lr':            0.0075, # M-step gauge frame embeddings (φ) 0.0075
-    'M_vfe_hyperparam_lr': 0.075, # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
+    'M_sigma_p_lr':        0.005, # M-step prior covariance embeddings (log σ_p) 0.015
+    'M_phi_lr':            0.005, # M-step gauge frame embeddings (φ) 0.0075
+    'M_vfe_hyperparam_lr': 0.05, # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
     'M_attention_lr':      0.005,  # M-step attention params (W_O, constant_omega)0.005
     'M_output_lr':         0.05,   # M-step output projection (vocab logits) 0.05
     
     # === Logging ===
     'log_interval':               100,
-    'eval_interval':              1000,
+    'eval_interval':              15000,
     'checkpoint_interval':        25000,
     'semantic_analysis_interval': 10000,
 
@@ -231,7 +234,7 @@ BASELINE_CONFIG = {
     # === Regularization ===
     'sigma_ce_scale':  0.1,
     'sigma_max':       12.0,
-    'grad_clip':       5.0,
+    'grad_clip':       10.0,
     'hidden_dim':      508,
     'warmup_steps':    100,
     'num_workers':     10,
@@ -239,6 +242,19 @@ BASELINE_CONFIG = {
     'use_amp':         False, 
     'use_compile':     False,
     'compile_mode':    'reduce-overhead',  # 'default', 'reduce-overhead', 'max-autotune'
+
+    'active_inference_pragmatic_weight': 0,   # start small
+    'active_inference_epistemic_weight': 1,   # keep both ON to avoid feedback loop
+    'active_inference_epistemic_samples': 2,     # MC samples for BALD
+
+    #DO NOT USE PRAGMATIC WEIGHT WITH DISTILLATION
+    'cache_decode_priors':      False,
+    'active_inference':         False,    #requires priorbank true
+
+    'active_inference_distill_weight':    0.0,        # λ_distill — start small
+    'active_inference_distill_lr':        2.0,         # Euclidean step size for the distill update
+    'active_inference_distill_normalize': True,        # divide CE by log(V) so weight is V-agnostic
+    'active_inference_distill_mode':      'aggregated',# 'aggregated' (default) or 'per_pair'
 
 
     'dataset': 'wikitext-103', #'wiki-2' for quick sweeps
@@ -278,7 +294,7 @@ SWEEPS = {
     'E_lambda_softmax': {
         'description': 'E-step softmax coupling weight (∂β/∂θ·KL Boltzmann gate)',
         'param': 'E_lambda_softmax',
-        'values': [0, 0.5, 1, 5.0, 10.0, 15],
+        'values': [0, 0.5, 1, 5.0, 10.0],
         'baseline_value': 5,
     },
 
@@ -300,7 +316,7 @@ SWEEPS = {
     'kappa_beta': {
         'description': 'Attention/VFE temperature τ: β_ij = softmax(-KL/κ√K). Higher = softer attention',
         'param': 'kappa_beta',
-        'values': [1, 2, 3.16, 4, 5, 8, 12, 18, 25, 40],
+        'values': [1, 3, 5, 8, 12, 25],
         'baseline_value': 3.16,
     },
 
@@ -316,8 +332,8 @@ SWEEPS = {
     'rope_base': {
         'description': 'RoPE frequency base: θ_n = 1/base^(2n/K). Lower = faster position decay',
         'param': 'rope_base',
-        'values': [100, 500, 1000, 5000, 10000, 50000],
-        'baseline_value': 1000,
+        'values': [10, 15, 25, 35, 45, 60, 100, 1000],
+        'baseline_value': 100,
     },
 
     # --- Tier 2: Architecture ---
@@ -417,7 +433,7 @@ SWEEPS = {
     'M_mu_p_lr': {
         'description': 'Belief mean (μ) learning rate',
         'param': 'M_mu_p_lr',
-        'values': [0.0025, 0.01, 0.05, 0.075, 0.1],
+        'values': [0.001, 0.005, 0.01, 0.05, 0.075, 0.1],
         'baseline_value': 0.05,
     },
 
@@ -490,7 +506,7 @@ SWEEPS = {
     'embed_weight_decay': {
         'description': 'Weight decay on embedding parameters (hyper-prior precision)',
         'param': 'embed_weight_decay',
-        'values': [0.04, 0.06, 0.08, 0.1, 0.15],
+        'values': [0.001,0.01, 0.03, 0.05, 0.07, 0.1],
         'baseline_value': 0.01,
     },
 
@@ -516,21 +532,21 @@ SWEEP_ORDER = [
     #'gauge_dim', 
     #'K', 
          
-    #'M_alpha',Done
-    #'M_beta', Done
-    #'mass_phi', Done
+    'M_alpha',
+    #'M_beta',
+    'mass_phi', 
     
     #'sigma_ce_scale',
     #'lambda_hyper',
-    #'kappa_beta',
+    
     
     #'non_embed_weight_decay',
     'killing_form_sym_dampening',
     
    # 'E_lambda_belief',
-    #'E_lambda_softmax',
-    #'embed_weight_decay',
-    
+   # 'E_lambda_softmax',
+    'embed_weight_decay',
+   # 'kappa_beta',
     
     #'E_alpha',
     
@@ -546,10 +562,10 @@ SWEEP_ORDER = [
 
     #'prior_bank_tau',
 
-    #'rope_base', Done
+    'rope_base', 
 
-    'M_attention_lr',
-    'M_output_lr',
+   # 'M_attention_lr',
+   # 'M_output_lr',
     
     #'covariance', 
     
@@ -618,8 +634,10 @@ def run_sweep(
     sweep_dir = output_dir / sweep_name
     sweep_dir.mkdir(parents=True, exist_ok=True)
 
+    runs = make_run_configs(sweep_name, base_config)
+
     print(f"\n{'='*70}")
-    print(f"SWEEP: {sweep_name}")
+    print(f"SWEEP: {sweep_name} ({len(runs)} configs)")
     print(f"  {sweep['description']}")
     print(f"  Baseline: {sweep['baseline_value']}")
     print(f"  Output: {sweep_dir}")
@@ -627,7 +645,6 @@ def run_sweep(
         print(f"  Resume: ON (skipping completed runs)")
     print(f"{'='*70}\n")
 
-    runs = make_run_configs(sweep_name, base_config)
     results = []
 
     # In resume mode, load any previously completed results
@@ -697,8 +714,23 @@ def run_sweep(
                     index=False,
                 )
 
-                print(f"  -> Val PPL: {result['final_ppl']:.2f}, "
-                      f"Time: {elapsed:.0f}s")
+                # Count remaining runs (exclude cached)
+                _completed = i + 1
+                _remaining = len(runs) - _completed
+                _cached = sum(1 for lbl, _ in runs[:i] if resume and (sweep_dir / lbl.replace('=', '_').replace(' ', '_') / 'ablation_result.json').exists())
+                _remaining -= _cached if resume else 0
+
+                if _completed == 1 and _remaining > 0:
+                    # After first run: project total sweep time
+                    _est_total = elapsed * (_remaining + 1)
+                    _est_remain = elapsed * _remaining
+                    print(f"  -> Val PPL: {result['final_ppl']:.2f}, "
+                          f"Time: {elapsed:.0f}s")
+                    print(f"  ** Estimated sweep total: {_est_total/60:.0f} min "
+                          f"({_remaining} remaining x {elapsed:.0f}s = ~{_est_remain/60:.0f} min left)")
+                else:
+                    print(f"  -> Val PPL: {result['final_ppl']:.2f}, "
+                          f"Time: {elapsed:.0f}s")
             else:
                 print(f"  -> FAILED (returned None)")
 
@@ -956,7 +988,7 @@ def main():
                         help='Run a specific sweep (e.g., "alpha", "K"). '
                              'If not set, runs all sweeps in order.')
     parser.add_argument('--device', type=str, default='auto')
-    parser.add_argument('--dataset', type=str, default='wikitext-103',
+    parser.add_argument('--dataset', type=str, default='wikitext-2',
                         choices=['wikitext-2', 'wikitext-103'])
     parser.add_argument('--output_dir', type=str, default='ablation_results')
     parser.add_argument('--max_steps', type=int, default=None,
