@@ -101,6 +101,15 @@ BASELINE_CONFIG = {
     'use_output_projection': True,
     'multihead_vfe':         True,
     
+    'residual_type':         'additive',    # 'additive': mu_q = mu_q + mu_sub (matches the 71-PPL
+                                        # baseline in TransformerOld/).  Default.
+                                        # 'delta':    mu_q = mu_q + (mu_sub - mu_normalized),
+                                        # the 2026-04-07 audit Fix #1 / Fix #20 form.  Correct
+                                        # for deep unnormalised stacks but empirically worse
+                                        # for single-layer LayerNorm'd configs (see
+                                        # edits_2026-04-08.md Round 3).
+    
+    
     'evolve_sigma':          True,
     'evolve_phi':            True,  #M-step phi evolution
     'evolve_phi_e_step':     True,
@@ -147,18 +156,18 @@ BASELINE_CONFIG = {
     
     'M_alpha':             0.00,   # M-step KL(q||p) self-consistency
     'M_beta':              0.0,    # M-step belief alignment
-    'mass_phi':            0.01,    # Gauge prior: (mass_φ/2)||φ||²
+    'mass_phi':            0.00,    # Gauge prior: (mass_φ/2)||φ||²
     'lambda_hyper':        0.0,    # KL(s||h) explicit loss (pulls tokens toward centroid)
     'lambda_gamma':        0.0,
     'kappa_gamma':         1.0,
 
-    'embed_weight_decay':     0.07,   # L2 hyper-prior on embeddings (μ_p, σ_p, φ) via AdamW
+    'embed_weight_decay':     0.01,   # L2 hyper-prior on embeddings (μ_p, σ_p, φ) via AdamW
     'non_embed_weight_decay': 0.01,  # L2 on non-embedding params (attention, output)
     
     # === Phi gradient geometry ===
     'phi_natural_gradient':       'killing',
     'use_killing_form':           True,
-    'killing_form_sym_dampening': 0.5,
+    'killing_form_sym_dampening': 0.1,
 
     # === Position encoding ===
     'use_rope':           True,
@@ -279,7 +288,7 @@ SWEEPS = {
     'M_alpha': {
         'description': 'Self-consistency KL(q||p) weight in training loss',
         'param': 'M_alpha',
-        'values': [0, 0.001, 0.005, 0.01, 0.05, 0.1],
+        'range': [0.0, 0.1, 0.02],
         'baseline_value': 0.00,
     },
 
@@ -308,7 +317,7 @@ SWEEPS = {
     'M_beta': {
         'description': 'Belief alignment weight in outer training loss (lambda_beta)',
         'param': 'M_beta',
-        'values': [0.0, 0.001, 0.005, 0.01, 0.1],
+        'range': [0.0, 0.1, 0.02],
         'baseline_value': 0.0,
     },
 
@@ -432,7 +441,7 @@ SWEEPS = {
     'mass_phi': {
         'description': 'Gauge frame L2 prior weight (α_φ/2)||φ||²',
         'param': 'mass_phi',
-        'values': [0.0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5],
+        'range': [0.0, 0.5, 0.02],
         'baseline_value': 0.1,
     },
 
@@ -440,21 +449,21 @@ SWEEPS = {
     'M_mu_p_lr': {
         'description': 'Belief mean (μ) learning rate',
         'param': 'M_mu_p_lr',
-        'values': [0.001, 0.005, 0.01, 0.05, 0.075, 0.1],
+        'range': [0.0, 0.1, 0.002],
         'baseline_value': 0.05,
     },
 
     'M_sigma_p_lr': {
         'description': 'Belief precision (σ) learning rate',
         'param': 'M_sigma_p_lr',
-        'values': [0.001, 0.005, 0.015, 0.05, 0.1],
+        'range': [0.0, 0.1, 0.002],
         'baseline_value': 0.015,
     },
 
     'M_phi_lr': {
         'description': 'Gauge frame (φ) learning rate',
         'param': 'M_phi_lr',
-        'values': [0.001, 0.005, 0.0075, 0.01, 0.05, 0.1],
+        'range': [0.0, 0.1, 0.002],
         'baseline_value': 0.005,
     },
 
@@ -513,7 +522,7 @@ SWEEPS = {
     'embed_weight_decay': {
         'description': 'Weight decay on embedding parameters (hyper-prior precision)',
         'param': 'embed_weight_decay',
-        'values': [0.001,0.01, 0.03, 0.05, 0.07, 0.1],
+        'range': [0.0, 0.1, 0.002],
         'baseline_value': 0.01,
     },
 
@@ -528,7 +537,7 @@ SWEEPS = {
     'killing_form_sym_dampening': {
         'description': 'killing form sym dampening',
         'param': 'killing_form_sym_dampening',
-        'values': [0.01, 0.1, 0.25, 0.5, 1],
+        'range': [0.0, 1, 0.1],
         'baseline_value': 0.5,
     },
 }
