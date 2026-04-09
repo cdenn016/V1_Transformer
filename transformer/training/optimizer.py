@@ -157,12 +157,25 @@ class RiemannianAdamW(torch.optim.AdamW):
                 p.grad = p.grad * 2.0
 
     def _get_sigma(self) -> Optional[torch.Tensor]:
-        """Retrieve current variance values from model embeddings."""
+        """Retrieve current variance values from model embeddings.
+
+        Two supported attribute layouts on ``token_embed``:
+
+        - ``log_sigma_diag`` (V, K): per-token learnable log-variance
+          (``learnable_sigma=True``, ``gauge_fixed_priors=False``).
+        - ``base_log_sigma_diag`` (K,): single shared base prior log-variance
+          (``gauge_fixed_priors=True``).  Without this fallback the mu
+          Fisher preconditioner is a no-op whenever the baseline prior mean
+          is ``token_embed.base_mu`` — the natural-gradient rescaling
+          ``∇_nat μ = Σ · ∇_E μ`` is then never applied.
+        """
         embed = getattr(self._model, 'token_embed', None)
         if embed is None:
             return None
         if hasattr(embed, 'log_sigma_diag') and isinstance(embed.log_sigma_diag, nn.Parameter):
             return torch.exp(embed.log_sigma_diag.data).clamp(min=1e-6, max=10.0)
+        if hasattr(embed, 'base_log_sigma_diag') and isinstance(embed.base_log_sigma_diag, nn.Parameter):
+            return torch.exp(embed.base_log_sigma_diag.data).clamp(min=1e-6, max=10.0)
         return None
 
     def _riemannian_clip(self) -> None:
@@ -505,8 +518,18 @@ def create_param_groups(
         # Must be checked BEFORE mu_embed to avoid false match on 'embed'
         if 'sign_logit' in name:
             sign_params.append(param)
-        # Mean embeddings (matches both mu_prior and prior_mu naming conventions)
-        elif 'mu_embed' in name or 'mu_prior' in name or 'prior_mu' in name:
+        # Mean embeddings (matches both mu_prior and prior_mu naming conventions).
+        # `name.endswith('base_mu')` catches `token_embed.base_mu`, the
+        # single-tensor prior mean used when `gauge_fixed_priors=True`
+        # (embeddings.py:227).  Without this anchor the parameter falls
+        # through every subsequent branch and lands in the `ffn` group at
+        # `M_vfe_hyperparam_lr`, silently dropping `M_mu_p_lr`.
+        elif (
+            'mu_embed' in name
+            or 'mu_prior' in name
+            or 'prior_mu' in name
+            or name.endswith('base_mu')
+        ):
             mu_params.append(param)
         # Covariance embeddings (matches log_sigma, sigma_prior, log_prior_sigma, etc.)
         elif 'sigma_embed' in name or 'log_sigma' in name or 'sigma_prior' in name or 'prior_sigma' in name or 'log_prior' in name:
