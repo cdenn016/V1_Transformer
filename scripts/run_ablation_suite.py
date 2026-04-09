@@ -248,6 +248,7 @@ BASELINE_CONFIG = {
     'sigma_max':       12.0,
     'grad_clip':       10.0,
     'hidden_dim':      508,
+    'min_lr_ratio':    0.1,
     'warmup_steps':    100,
     'num_workers':     10,
     
@@ -541,6 +542,14 @@ SWEEPS = {
         'range': [0.01, 1, 0.2],
         'baseline_value': 0.5,
     },
+
+    # --- Tier 11: LR schedule ---
+    'min_lr_ratio': {
+        'description': 'Minimum LR as fraction of peak (scheduler floor): effective_min = base_lr × ratio',
+        'param': 'min_lr_ratio',
+        'range': [0.0, 0.5, 0.05],
+        'baseline_value': 0.1,
+    },
 }
 
 # Sweep execution order (cheapest → most expensive)
@@ -555,6 +564,7 @@ SWEEP_ORDER = [
     
     'M_attention_lr',
     'M_sigma_p_lr',
+    'min_lr_ratio',
     
     
     
