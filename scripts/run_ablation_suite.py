@@ -59,11 +59,11 @@ from transformer.training.experiment_runner import (
 BASELINE_CONFIG = {
     # === Architecture ===
     'vocab_size':            50257,
-    'embed_dim':             10,
+    'embed_dim':             20,
     'max_seq_len':           64,
     
-    'batch_size':            256, 
-    'max_steps':             200,
+    'batch_size':            128, 
+    'max_steps':             5000,
     
     'n_layers':              1,
     'ffn_n_iterations':      1,
@@ -71,8 +71,8 @@ BASELINE_CONFIG = {
     #'grad_accumulation_steps': 1,
     #'gradient_checkpoint_vfe': False,
     
-    'gauge_dim':                          5,
-    'irrep_spec':            [('fund', 2, 5)],
+    'gauge_dim':                          10,
+    'irrep_spec':            [('fund', 2, 10)],
 
     'use_prior_bank':           False,
     'learnable_pb_temperature': True,
@@ -86,8 +86,8 @@ BASELINE_CONFIG = {
     
     # === M-step: implicit differentiation ===
     'implicit_em':           False,
-    'amortized_inference':   False,
-    'use_obs_in_vfe':        False,  #cheats when true
+    'amortized_inference':   True,
+    
        
     # === M-step: Optimizer ===  
     'optimizer_type':        'riemannian_adam',# or 'natural_gradient' or 'adamw' or 'riemannian_adam'
@@ -101,7 +101,7 @@ BASELINE_CONFIG = {
     'use_output_projection': True,
     'multihead_vfe':         True,
     
-    'residual_type':         'additive',    # 'additive': mu_q = mu_q + mu_sub (matches the 71-PPL
+    'residual_type':         'delta',    # 'additive': mu_q = mu_q + mu_sub (matches the 71-PPL
                                         # baseline in TransformerOld/).  Default.
                                         # 'delta':    mu_q = mu_q + (mu_sub - mu_normalized),
                                         # the 2026-04-07 audit Fix #1 / Fix #20 form.  Correct
@@ -167,11 +167,11 @@ BASELINE_CONFIG = {
     # === Phi gradient geometry ===
     'phi_natural_gradient':       'killing',
     'use_killing_form':           True,
-    'killing_form_sym_dampening': 0.1,
+    'killing_form_sym_dampening': 0.4,
 
     # === Position encoding ===
     'use_rope':           True,
-    'rope_base':          100, 
+    'rope_base':          10, 
     'pos_encoding_mode': 'none',
 
     # === Embedding init ===
@@ -188,12 +188,12 @@ BASELINE_CONFIG = {
     # mu_embed and log_sigma_diag have dual roles: they initialize E-step
     # beliefs (q₀) AND serve as prior parameters (μ_p, σ_p), so these rates
     # indirectly affect E-step initialization speed.
-    'M_mu_p_lr':           0.08,   # M-step prior mean embeddings (μ_p) 0.05
-    'M_sigma_p_lr':        0.025, # M-step prior covariance embeddings (log σ_p) 0.015
-    'M_phi_lr':            0.1, # M-step gauge frame embeddings (φ) 0.0075
-    'M_vfe_hyperparam_lr': 0.005, # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
+    'M_mu_p_lr':           0.05,   # M-step prior mean embeddings (μ_p) 0.05
+    'M_sigma_p_lr':        0.02,  # M-step prior covariance embeddings (log σ_p) 0.015
+    'M_phi_lr':            0.02,    # M-step gauge frame embeddings (φ) 0.0075
+    'M_vfe_hyperparam_lr': 0.06,  # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
     'M_attention_lr':      0.005,  # M-step attention params (W_O, constant_omega)0.005
-    'M_output_lr':         0.005,   # M-step output projection (vocab logits) 0.05
+    'M_output_lr':         0.005,  # M-step output projection (vocab logits) 0.05
     
     # === Logging ===
     'log_interval':               100,
@@ -244,7 +244,7 @@ BASELINE_CONFIG = {
     'sigma_residual':  False,   # Additive σ residual across layers
 
     # === Regularization ===
-    'sigma_ce_scale':  0.1,
+    'sigma_ce_scale':  0.8,
     'sigma_max':       12.0,
     'grad_clip':       10.0,
     'hidden_dim':      508,
@@ -288,14 +288,14 @@ SWEEPS = {
     'M_alpha': {
         'description': 'Self-consistency KL(q||p) weight in training loss',
         'param': 'M_alpha',
-        'range': [0.0, 0.1, 0.02],
+        'range': [0.0, 0.2, 0.005],
         'baseline_value': 0.00,
     },
 
     'E_alpha': {
         'description': 'Prior coupling weight inside VFE E-step iterations',
         'param': 'E_alpha',
-        'values': [0, 0.01, 0.1, 0.5, 1, 2.0],
+        'range': [0.0, 10, 0.2],
         'baseline_value': 1.0,
     },
 
@@ -303,28 +303,28 @@ SWEEPS = {
     'E_lambda_belief': {
         'description': 'E-step belief alignment weight (VFE coupling term)',
         'param': 'E_lambda_belief',
-        'values': [0, 0.5, 1, 2.5, 5],
+        'range': [0.0, 10, 0.2],
         'baseline_value': 1,
     },
 
     'E_lambda_softmax': {
         'description': 'E-step softmax coupling weight (∂β/∂θ·KL Boltzmann gate)',
         'param': 'E_lambda_softmax',
-        'values': [0, 0.5, 1, 5.0, 10.0],
+        'range': [0.0, 10, 0.2],
         'baseline_value': 5,
     },
 
     'M_beta': {
         'description': 'Belief alignment weight in outer training loss (lambda_beta)',
         'param': 'M_beta',
-        'range': [0.0, 0.1, 0.02],
+        'range': [0.0, 1, 0.05],
         'baseline_value': 0.0,
     },
 
     'lambda_hyper': {
         'description': 'Hyper-prior coupling KL(s||h) weight in training loss',
         'param': 'lambda_hyper',
-        'values': [0, 0.1, 0.15, 0.2],
+        'range': [0.0, 1, 0.05],
         'baseline_value': 0.0,
     },
 
@@ -332,7 +332,7 @@ SWEEPS = {
     'kappa_beta': {
         'description': 'Attention/VFE temperature τ: β_ij = softmax(-KL/κ√K). Higher = softer attention',
         'param': 'kappa_beta',
-        'values': [1, 3, 5, 8, 12, 25],
+        'range': [0.0, 10, 0.25],
         'baseline_value': 3.16,
     },
 
@@ -341,14 +341,14 @@ SWEEPS = {
     'prior_bank_tau': {
         'description': 'PriorBank decode temperature: logits = -KL(q||π_v)/τ. Lower = sharper decode',
         'param': 'prior_bank_tau',
-        'values': [0.1, 0.25, 0.5, 1.0, 2.0],
+        'range': [0.0, 5, 0.1],
         'baseline_value': 1.0,
     },
 
     'rope_base': {
         'description': 'RoPE frequency base: θ_n = 1/base^(2n/K). Lower = faster position decay',
         'param': 'rope_base',
-        'values': [10, 15, 25, 35, 45, 60, 100, 1000],
+        'values': [10, 25, 50, 75, 100, 1000],
         'baseline_value': 100,
     },
 
@@ -441,7 +441,7 @@ SWEEPS = {
     'mass_phi': {
         'description': 'Gauge frame L2 prior weight (α_φ/2)||φ||²',
         'param': 'mass_phi',
-        'range': [0.0, 0.5, 0.05],
+        'range': [0.0, 0.2, 0.001],
         'baseline_value': 0.1,
     },
 
@@ -449,42 +449,42 @@ SWEEPS = {
     'M_mu_p_lr': {
         'description': 'Belief mean (μ) learning rate',
         'param': 'M_mu_p_lr',
-        'range': [0.0, 0.1, 0.01],
+        'range': [0.001, 0.1, 0.01],
         'baseline_value': 0.05,
     },
 
     'M_sigma_p_lr': {
         'description': 'Belief precision (σ) learning rate',
         'param': 'M_sigma_p_lr',
-        'range': [0.0, 0.025, 0.002],
+        'range': [0.0000001, 0.1, 0.005],
         'baseline_value': 0.015,
     },
 
     'M_phi_lr': {
         'description': 'Gauge frame (φ) learning rate',
         'param': 'M_phi_lr',
-        'range': [0.02, 0.1, 0.01],
+        'range': [0.0025, 0.04, 0.005],
         'baseline_value': 0.005,
     },
 
     'M_vfe_hyperparam_lr': {
         'description': 'FFN / VFE module learning rate',
         'param': 'M_vfe_hyperparam_lr',
-        'range': [0, 0.1, 0.005],
+        'range': [0, 0.1, 0.02],
         'baseline_value': 0.05,
     },
 
     'M_attention_lr': {
         'description': 'Attention module learning rate',
         'param': 'M_attention_lr',
-        'values': [0.001, 0.005, 0.01, 0.02, 0.1],
+        'range': [0.001, 0.05, 0.01],
         'baseline_value': 0.005,
     },
 
     'M_output_lr': {
         'description': 'Output projection learning rate',
         'param': 'M_output_lr',
-        'values': [0.005, 0.01, 0.05, 0.1],
+        'range': [0.001, 0.1, 0.02],
         'baseline_value': 0.05,
     },
 
@@ -492,21 +492,21 @@ SWEEPS = {
     'E_mu_q_lr': {
         'description': 'E-step μ natural gradient step size',
         'param': 'E_mu_q_lr',
-        'values': [0.01, 0.05, 0.1, 0.5, 2.0],
+        'range': [0.0, 0.5, 0.02],
         'baseline_value': 0.1,
     },
 
     'E_sigma_q_lr': {
         'description': 'E-step σ trust region scale',
         'param': 'E_sigma_q_lr',
-        'values': [0.005, 0.01, 0.05, 0.1, 0.2, 0.5],
+        'range': [0.0, 0.5, 0.02],
         'baseline_value': 0.05,
     },
 
     'E_phi_lr': {
         'description': 'E-step φ gauge frame step size',
         'param': 'E_phi_lr',
-        'values': [0.01, 0.05, 0.1, 0.2, 0.5, 1.0],
+        'range': [0.0, 1, 0.05],
         'baseline_value': 0.05,
     },
 
@@ -514,7 +514,7 @@ SWEEPS = {
     'sigma_ce_scale': {
         'description': 'CE→σ_p gradient scale in PriorBank decode (0=detach, 1=full)',
         'param': 'sigma_ce_scale',
-        'values': [0.2, 0.5, 1, 2],
+        'range': [0.0, 2, 0.1],
         'baseline_value': 0.1,
     },
 
@@ -522,14 +522,15 @@ SWEEPS = {
     'embed_weight_decay': {
         'description': 'Weight decay on embedding parameters (hyper-prior precision)',
         'param': 'embed_weight_decay',
-        'range': [0.1, 2, 0.1],
+        'range': [0.001, 0.5, 0.1],
         'baseline_value': 0.01,
     },
 
     'non_embed_weight_decay': {
         'description': 'Weight decay on non-embedding parameters',
-        'param': 'weight_decay',
-        'values': [0.0, 0.005, 0.01, 0.1, 0.2],
+        
+        'param': 'non_embed_weight_decay',
+        'range': [0.0001, 0.04, 0.005],
         'baseline_value': 0.01,
     },
     
@@ -537,7 +538,7 @@ SWEEPS = {
     'killing_form_sym_dampening': {
         'description': 'killing form sym dampening',
         'param': 'killing_form_sym_dampening',
-        'range': [0.0, 1, 0.1],
+        'range': [0.01, 1, 0.2],
         'baseline_value': 0.5,
     },
 }
@@ -545,50 +546,58 @@ SWEEPS = {
 # Sweep execution order (cheapest → most expensive)
 SWEEP_ORDER = [
     
-    #'gauge_dim', 
-    #'K', 
-         
-    #'M_alpha',
-    #'M_beta',
-    #'mass_phi', 
+    #'M_vfe_hyperparam_lr',    
+    'M_phi_lr',
+     
+    'embed_weight_decay',
+    'M_mu_p_lr',
+    'killing_form_sym_dampening',
     
-    #'sigma_ce_scale',
-    #'lambda_hyper',
+    'M_attention_lr',
+    'M_sigma_p_lr',
     
     
-    #'non_embed_weight_decay',
-   # 'killing_form_sym_dampening',
     
-   # 'E_lambda_belief',
-   # 'E_lambda_softmax',
-    #'embed_weight_decay',
-   # 'kappa_beta',
     
+     # 'mass_phi', 
+    # 'M_alpha',
+    
+    #'E_phi_lr',
+    #'E_mu_q_lr',
+    #'E_sigma_q_lr',
+    #'E_lambda_belief',
+    #'E_lambda_softmax',
     #'E_alpha',
     
-    #'M_mu_p_lr',
-    #'M_sigma_p_lr',
-    #'M_phi_lr',
-   # 'E_phi_lr',
     
-    'M_vfe_hyperparam_lr',
+    # 'rope_base',
+    
+   # 'non_embed_weight_decay',
+     #'gauge_dim', 
+    #'K', 
+    
+   
 
-    #'E_mu_q_lr',
-   # 'E_sigma_q_lr',
+  # 'M_beta',
+  
+   # 'sigma_ce_scale',
+  #  'lambda_hyper',
+   
+  #  'kappa_beta',
+    
+   # 'prior_bank_tau',
 
-    #'prior_bank_tau',
+     
 
-    'rope_base', 
-
-   # 'M_attention_lr',
+    
    # 'M_output_lr',
+  #  
+  #  'covariance', 
     
-    #'covariance', 
+  #  'gauge_mode', 
+  #  'phi_preconditioner',
     
-    #'gauge_mode', 
-    #'phi_preconditioner',
-    
-    #'rope',
+  #  'rope',
 
     #'n_layers',
     #'n_vfe_iterations',
@@ -596,6 +605,16 @@ SWEEP_ORDER = [
    
     
 ]
+
+
+#best values for gauge-fixed, no priorbank, no amortized, no implicit-em
+# indirectly affect E-step initialization speed.
+#'M_mu_p_lr':           0.08,   # M-step prior mean embeddings (μ_p) 0.05
+#'M_sigma_p_lr':        0.025,  # M-step prior covariance embeddings (log σ_p) 0.015
+#'M_phi_lr':            0.1, # M-step gauge frame embeddings (φ) 0.0075
+#'M_vfe_hyperparam_lr': 0.03,  # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
+#'M_attention_lr':      0.005,  # M-step attention params (W_O, constant_omega)0.005
+#'M_output_lr':         0.05,  # M-step output projection (vocab logits) 0.05
 
 
 
@@ -1082,7 +1101,7 @@ def main():
                         help='Run a specific sweep (e.g., "alpha", "K"). '
                              'If not set, runs all sweeps in order.')
     parser.add_argument('--device', type=str, default='auto')
-    parser.add_argument('--dataset', type=str, default='wikitext-2',
+    parser.add_argument('--dataset', type=str, default='wikitext-103',
                         choices=['wikitext-2', 'wikitext-103'])
     parser.add_argument('--output_dir', type=str, default='ablation_results')
     parser.add_argument('--max_steps', type=int, default=None,
