@@ -1805,11 +1805,15 @@ class PublicationTrainer(FastTrainer):
             self.pub_metrics.print_summary()
 
         # Final validation (ensures best_val_ce is updated even when
-        # eval_interval > max_steps, e.g. in ablation sweeps)
+        # eval_interval > max_steps, e.g. in ablation sweeps).  Stash the
+        # result on the trainer so callers (e.g. run_single_experiment) can
+        # reuse it instead of running a second full val pass.
         final_val = self.validate()
+        self.final_val_metrics = final_val
         if final_val['ce_loss'] < self.best_val_ce:
             self.best_val_ce = final_val['ce_loss']
-            self.save_checkpoint(is_best=True)
+            if not getattr(self.config, 'skip_best_checkpoint', False):
+                self.save_checkpoint(is_best=True)
 
         # Summary
         elapsed = time.time() - start_time
@@ -1882,6 +1886,7 @@ def run_single_experiment(
     enable_publication_metrics: bool = True,
     quiet: bool = False,
     skip_test_eval: bool = False,
+    skip_post_training_viz: bool = False,
 ) -> Dict:
     """
     Run a single training experiment.
@@ -1896,6 +1901,10 @@ def run_single_experiment(
         quiet: Suppress verbose banners/config dumps (for ablation sweeps)
         skip_test_eval: Skip test set evaluation (use for sweeps — compare on val,
             reserve test for final reporting only)
+        skip_post_training_viz: Skip end-of-run visualization + checkpoint work
+            (VFE dynamics figures, head kappa plot, ``best_model.pt`` resave,
+            and the duplicate final validation pass). Use for ablation sweeps
+            where only the returned metric matters.
 
     Returns:
         Dictionary with final metrics
@@ -2164,6 +2173,11 @@ def run_single_experiment(
         pub_metrics.set_holonomy_interval(
             holonomy_interval, holonomy_sample_size)
 
+    # Ablation-mode hint: when we're skipping post-training viz, also suppress
+    # the final best_model.pt save inside trainer.train().  Stashed as a plain
+    # attribute so TrainingConfig stays untouched for everyone else.
+    train_config.skip_best_checkpoint = skip_post_training_viz
+
     trainer = PublicationTrainer(
         model=model,
         train_loader=train_loader,
@@ -2226,8 +2240,13 @@ def run_single_experiment(
         _info("TRAINING COMPLETE!")
         _info("="*70)
 
-        # Final evaluation
-        final_metrics = trainer.validate()
+        # Final evaluation — reuse the validation that trainer.train() already
+        # ran at its end (stashed on trainer.final_val_metrics).  Falling back
+        # to a fresh validate() keeps behavior correct for any caller that
+        # bypasses trainer.train().
+        final_metrics = getattr(trainer, 'final_val_metrics', None)
+        if final_metrics is None:
+            final_metrics = trainer.validate()
 
         # Update best_val_ce so the checkpoint (and summary) reflect the final result.
         # Periodic validation may not have run (eval_interval > max_steps in ablations),
@@ -2247,33 +2266,42 @@ def run_single_experiment(
         _info(f"  Model:      {final_metrics['perplexity']:.2f}")
         _info(f"  Factor:     {improvement:.1f}x better!")
 
-        # Save final checkpoint
-        final_ckpt = trainer.save_checkpoint(is_best=True)
-        _info(f"Saved: {final_ckpt}")
+        # Save final checkpoint (skipped in ablation sweeps — the suite only
+        # consumes final_ppl and never re-opens these files).
+        if skip_post_training_viz:
+            final_ckpt = exp_checkpoint_dir / 'best_model.pt'
+        else:
+            final_ckpt = trainer.save_checkpoint(is_best=True)
+            _info(f"Saved: {final_ckpt}")
 
-        # Generate VFE dynamics figures from training metrics CSV
-        try:
-            from transformer.visualization.vfe_dynamics_plots import generate_all_vfe_figures
-            metrics_csv = exp_checkpoint_dir / 'metrics.csv'
-            if metrics_csv.exists():
-                vfe_fig_dir = exp_checkpoint_dir / 'vfe_dynamics_figures'
-                saved_figs = generate_all_vfe_figures(metrics_csv, vfe_fig_dir)
-                if saved_figs:
-                    _info(f"Generated {len(saved_figs)} VFE dynamics figures in {vfe_fig_dir}")
-        except Exception as e:
-            logger.warning(f"VFE dynamics figure generation failed: {e}")
+        # Post-training visualizations (VFE dynamics figures + head kappa
+        # plot).  Generating 10+ matplotlib renders after every ablation run
+        # is the single biggest between-run delay, so this whole block is
+        # gated on skip_post_training_viz.
+        if not skip_post_training_viz:
+            # Generate VFE dynamics figures from training metrics CSV
+            try:
+                from transformer.visualization.vfe_dynamics_plots import generate_all_vfe_figures
+                metrics_csv = exp_checkpoint_dir / 'metrics.csv'
+                if metrics_csv.exists():
+                    vfe_fig_dir = exp_checkpoint_dir / 'vfe_dynamics_figures'
+                    saved_figs = generate_all_vfe_figures(metrics_csv, vfe_fig_dir)
+                    if saved_figs:
+                        _info(f"Generated {len(saved_figs)} VFE dynamics figures in {vfe_fig_dir}")
+            except Exception as e:
+                logger.warning(f"VFE dynamics figure generation failed: {e}")
 
-        # Generate per-head kappa plot if learnable_head_kappa was enabled
-        try:
-            from transformer.visualization.training_plots import plot_head_kappas, load_metrics_csv
-            metrics_csv = exp_checkpoint_dir / 'metrics.csv'
-            if metrics_csv.exists():
-                csv_metrics = load_metrics_csv(metrics_csv)
-                if csv_metrics.get('kappa_mean'):
-                    kappa_fig_path = exp_checkpoint_dir / 'head_kappas.png'
-                    plot_head_kappas(csv_metrics, kappa_fig_path)
-        except Exception as e:
-            logger.warning(f"Head kappa plot generation failed: {e}")
+            # Generate per-head kappa plot if learnable_head_kappa was enabled
+            try:
+                from transformer.visualization.training_plots import plot_head_kappas, load_metrics_csv
+                metrics_csv = exp_checkpoint_dir / 'metrics.csv'
+                if metrics_csv.exists():
+                    csv_metrics = load_metrics_csv(metrics_csv)
+                    if csv_metrics.get('kappa_mean'):
+                        kappa_fig_path = exp_checkpoint_dir / 'head_kappas.png'
+                        plot_head_kappas(csv_metrics, kappa_fig_path)
+            except Exception as e:
+                logger.warning(f"Head kappa plot generation failed: {e}")
 
         # Run test set evaluation (skip during sweeps — compare on val only)
         test_metrics = None

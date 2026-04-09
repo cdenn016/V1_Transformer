@@ -688,6 +688,7 @@ def run_sweep(
                 enable_publication_metrics=False,
                 quiet=True,
                 skip_test_eval=True,
+                skip_post_training_viz=True,
             )
             elapsed = time.time() - t0
 
