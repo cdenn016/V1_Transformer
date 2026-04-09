@@ -46,7 +46,10 @@ import torch
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from transformer.training.experiment_runner import run_single_experiment
+from transformer.training.experiment_runner import (
+    run_single_experiment,
+    _create_dataloaders,
+)
 
 
 # =============================================================================
@@ -264,8 +267,12 @@ BASELINE_CONFIG = {
 # =============================================================================
 # SWEEP DEFINITIONS
 # =============================================================================
-# Each sweep is: { param_name: [values] } or { (p1, p2, ...): [(v1, v2, ...), ...] }
-# For categorical ablations, we override multiple params at once.
+# Single-parameter sweeps support two value-source formats:
+#   'values': [v1, v2, ...]            — explicit list
+#   'range':  [start, stop, step]      — inclusive arithmetic range
+#                                         e.g. [0.0, 0.1, 0.025] ->
+#                                         [0.0, 0.025, 0.05, 0.075, 0.1]
+# Multi-parameter categorical sweeps use 'configs': [ {param: value, ..., 'label': ...}, ... ]
 
 SWEEPS = {
     # --- Tier 1: Free energy weights ---
@@ -587,6 +594,66 @@ SWEEP_ORDER = [
 # RUNNER
 # =============================================================================
 
+def _expand_range(range_spec) -> list:
+    """Expand a ``'range': [start, stop, step]`` spec into an explicit value list.
+
+    Inclusive of ``stop`` when it lands on the grid (up to float tolerance).
+    Values are rounded to 10 decimals so labels stay clean (``0.05`` not
+    ``0.05000000000000001``).  Integer ``start/stop/step`` produce ints.
+    """
+    if isinstance(range_spec, dict):
+        start = range_spec['start']
+        stop = range_spec['stop']
+        step = range_spec['step']
+    else:
+        if len(range_spec) != 3:
+            raise ValueError(
+                f"'range' spec must be [start, stop, step], got {range_spec!r}"
+            )
+        start, stop, step = range_spec
+    if step == 0:
+        raise ValueError("'range' step must be non-zero")
+
+    all_int = all(isinstance(v, int) and not isinstance(v, bool)
+                  for v in (start, stop, step))
+    values = []
+    n_steps = int(round((stop - start) / step))
+    tol = abs(step) * 1e-9
+    for i in range(n_steps + 2):  # +2 for float safety, break below
+        v = start + i * step
+        if step > 0 and v > stop + tol:
+            break
+        if step < 0 and v < stop - tol:
+            break
+        values.append(v if all_int else round(v, 10))
+    return values
+
+
+def _sweep_values(sweep: dict) -> list:
+    """Return the explicit value list for a single-param sweep.
+
+    Accepts either ``sweep['values']`` or ``sweep['range']``; returns ``[]``
+    for categorical (``'configs'``) sweeps where values are not meaningful.
+    """
+    if 'configs' in sweep:
+        return []
+    if 'values' in sweep:
+        return list(sweep['values'])
+    if 'range' in sweep:
+        return _expand_range(sweep['range'])
+    raise KeyError(
+        "Single-param sweep must define 'values' or 'range' "
+        f"(sweep: {sweep!r})"
+    )
+
+
+def _sweep_num_runs(sweep: dict) -> int:
+    """Number of (label, config) pairs this sweep will generate."""
+    if 'configs' in sweep:
+        return len(sweep['configs'])
+    return len(_sweep_values(sweep))
+
+
 def make_run_configs(sweep_name: str, base_config: dict) -> list:
     """Generate (label, config) pairs for a sweep."""
     sweep = SWEEPS[sweep_name]
@@ -602,9 +669,9 @@ def make_run_configs(sweep_name: str, base_config: dict) -> list:
             entry['label'] = label
             runs.append((label, cfg))
     else:
-        # Single-param sweep
+        # Single-param sweep — supports 'values' and 'range'
         param = sweep['param']
-        for val in sweep['values']:
+        for val in _sweep_values(sweep):
             cfg = copy.deepcopy(base_config)
             cfg[param] = val
             label = f"{param}={val}"
@@ -656,6 +723,22 @@ def run_sweep(
                 with open(result_file) as f:
                     results.append(json.load(f))
 
+    # Pre-build dataloaders once per sweep and reuse them across every
+    # parameter value.  All current SWEEPS only vary training/architecture
+    # hyperparameters — none touch 'dataset', 'vocab_size', 'max_seq_len',
+    # 'batch_size', 'num_workers', or 'tokenizer' — so the loaders are
+    # identical across runs.  This avoids re-loading the (multi-hundred-MB)
+    # token cache and respawning DataLoader workers on every single run,
+    # which on Windows was the dominant between-run delay.
+    print("  Building shared dataloaders for sweep (one-time cost)...")
+    from transformer.data import datasets as _datasets_mod
+    _prev_quiet = _datasets_mod.QUIET
+    _datasets_mod.QUIET = True
+    try:
+        shared_loaders = _create_dataloaders(base_config)
+    finally:
+        _datasets_mod.QUIET = _prev_quiet
+
     for i, (label, cfg) in enumerate(runs):
         run_dir = sweep_dir / label.replace('=', '_').replace(' ', '_')
 
@@ -689,6 +772,7 @@ def run_sweep(
                 quiet=True,
                 skip_test_eval=True,
                 skip_post_training_viz=True,
+                preloaded_data=shared_loaders,
             )
             elapsed = time.time() - t0
 
@@ -1014,9 +1098,9 @@ def main():
         print('-' * 80)
         for name in SWEEP_ORDER:
             s = SWEEPS[name]
-            n = len(s.get('configs', s.get('values', [])))
+            n = _sweep_num_runs(s)
             print(f"{name:<25} {n:>10} {s['description']}")
-        total = sum(len(SWEEPS[n].get('configs', SWEEPS[n].get('values', []))) for n in SWEEP_ORDER)
+        total = sum(_sweep_num_runs(SWEEPS[n]) for n in SWEEP_ORDER)
         print(f"\nTotal runs: {total}")
         return
 

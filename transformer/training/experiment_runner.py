@@ -33,7 +33,7 @@ import subprocess
 import platform
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
@@ -1887,6 +1887,7 @@ def run_single_experiment(
     quiet: bool = False,
     skip_test_eval: bool = False,
     skip_post_training_viz: bool = False,
+    preloaded_data: Optional[Tuple] = None,
 ) -> Dict:
     """
     Run a single training experiment.
@@ -1905,6 +1906,11 @@ def run_single_experiment(
             (VFE dynamics figures, head kappa plot, ``best_model.pt`` resave,
             and the duplicate final validation pass). Use for ablation sweeps
             where only the returned metric matters.
+        preloaded_data: Optional pre-built dataloader bundle
+            ``(train_loader, val_loader, test_loader, actual_vocab_size, tokenizer)``.
+            When provided, bypasses ``_create_dataloaders(config)`` entirely —
+            use from ablation sweeps to avoid re-loading the token cache and
+            respawning DataLoader workers on every parameter value.
 
     Returns:
         Dictionary with final metrics
@@ -1927,13 +1933,19 @@ def run_single_experiment(
     # Data Loading — suppress verbose per-split prints
     # =================================================================
 
-    from transformer.data import datasets as _datasets_mod
-    _prev_quiet = _datasets_mod.QUIET
-    _datasets_mod.QUIET = True
-    try:
-        train_loader, val_loader, test_loader, actual_vocab_size, tokenizer = _create_dataloaders(config)
-    finally:
-        _datasets_mod.QUIET = _prev_quiet
+    if preloaded_data is not None:
+        # Reuse loaders built once at the sweep level — avoids re-loading the
+        # token cache and (on Windows) respawning DataLoader workers on every
+        # parameter value.
+        train_loader, val_loader, test_loader, actual_vocab_size, tokenizer = preloaded_data
+    else:
+        from transformer.data import datasets as _datasets_mod
+        _prev_quiet = _datasets_mod.QUIET
+        _datasets_mod.QUIET = True
+        try:
+            train_loader, val_loader, test_loader, actual_vocab_size, tokenizer = _create_dataloaders(config)
+        finally:
+            _datasets_mod.QUIET = _prev_quiet
     use_char = tokenizer is None  # Character-level tokenizer returns None
 
     config['vocab_size'] = actual_vocab_size
