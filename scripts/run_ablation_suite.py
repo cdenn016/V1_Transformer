@@ -188,12 +188,12 @@ BASELINE_CONFIG = {
     # mu_embed and log_sigma_diag have dual roles: they initialize E-step
     # beliefs (q₀) AND serve as prior parameters (μ_p, σ_p), so these rates
     # indirectly affect E-step initialization speed.
-    'M_mu_p_lr':           0.05,   # M-step prior mean embeddings (μ_p) 0.05
-    'M_sigma_p_lr':        0.005, # M-step prior covariance embeddings (log σ_p) 0.015
-    'M_phi_lr':            0.005, # M-step gauge frame embeddings (φ) 0.0075
-    'M_vfe_hyperparam_lr': 0.05, # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
+    'M_mu_p_lr':           0.08,   # M-step prior mean embeddings (μ_p) 0.05
+    'M_sigma_p_lr':        0.025, # M-step prior covariance embeddings (log σ_p) 0.015
+    'M_phi_lr':            0.1, # M-step gauge frame embeddings (φ) 0.0075
+    'M_vfe_hyperparam_lr': 0.005, # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
     'M_attention_lr':      0.005,  # M-step attention params (W_O, constant_omega)0.005
-    'M_output_lr':         0.05,   # M-step output projection (vocab logits) 0.05
+    'M_output_lr':         0.005,   # M-step output projection (vocab logits) 0.05
     
     # === Logging ===
     'log_interval':               100,
@@ -441,7 +441,7 @@ SWEEPS = {
     'mass_phi': {
         'description': 'Gauge frame L2 prior weight (α_φ/2)||φ||²',
         'param': 'mass_phi',
-        'range': [0.0, 0.5, 0.02],
+        'range': [0.0, 0.5, 0.05],
         'baseline_value': 0.1,
     },
 
@@ -449,28 +449,28 @@ SWEEPS = {
     'M_mu_p_lr': {
         'description': 'Belief mean (μ) learning rate',
         'param': 'M_mu_p_lr',
-        'range': [0.0, 0.1, 0.002],
+        'range': [0.0, 0.1, 0.01],
         'baseline_value': 0.05,
     },
 
     'M_sigma_p_lr': {
         'description': 'Belief precision (σ) learning rate',
         'param': 'M_sigma_p_lr',
-        'range': [0.0, 0.1, 0.002],
+        'range': [0.0, 0.025, 0.002],
         'baseline_value': 0.015,
     },
 
     'M_phi_lr': {
         'description': 'Gauge frame (φ) learning rate',
         'param': 'M_phi_lr',
-        'range': [0.0, 0.1, 0.002],
+        'range': [0.02, 0.1, 0.01],
         'baseline_value': 0.005,
     },
 
     'M_vfe_hyperparam_lr': {
         'description': 'FFN / VFE module learning rate',
         'param': 'M_vfe_hyperparam_lr',
-        'values': [0.001, 0.005, 0.01, 0.05, 0.1],
+        'range': [0, 0.1, 0.005],
         'baseline_value': 0.05,
     },
 
@@ -522,7 +522,7 @@ SWEEPS = {
     'embed_weight_decay': {
         'description': 'Weight decay on embedding parameters (hyper-prior precision)',
         'param': 'embed_weight_decay',
-        'range': [0.0, 0.1, 0.002],
+        'range': [0.1, 2, 0.1],
         'baseline_value': 0.01,
     },
 
@@ -548,27 +548,27 @@ SWEEP_ORDER = [
     #'gauge_dim', 
     #'K', 
          
-    'M_alpha',
+    #'M_alpha',
     #'M_beta',
-    'mass_phi', 
+    #'mass_phi', 
     
     #'sigma_ce_scale',
     #'lambda_hyper',
     
     
     #'non_embed_weight_decay',
-    'killing_form_sym_dampening',
+   # 'killing_form_sym_dampening',
     
    # 'E_lambda_belief',
    # 'E_lambda_softmax',
-    'embed_weight_decay',
+    #'embed_weight_decay',
    # 'kappa_beta',
     
     #'E_alpha',
     
-    'M_mu_p_lr',
-    'M_sigma_p_lr',
-    'M_phi_lr',
+    #'M_mu_p_lr',
+    #'M_sigma_p_lr',
+    #'M_phi_lr',
    # 'E_phi_lr',
     
     'M_vfe_hyperparam_lr',
