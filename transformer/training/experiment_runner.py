@@ -673,7 +673,9 @@ class PublicationTrainer(FastTrainer):
         Returns:
             List of strings like "ℓ0", "ℓ1", "ℓ2" for each head.
         """
-        irrep_spec = self.config.irrep_spec
+        irrep_spec = self.model.config.get('irrep_spec', getattr(self.config, 'irrep_spec', None))
+        if irrep_spec is None:
+            raise AttributeError("irrep_spec not found on model or training config")
         labels = []
         for irrep_name, num_heads, dim in irrep_spec:
             for _ in range(num_heads):
@@ -2105,6 +2107,7 @@ def run_single_experiment(
         M_beta=config.get('M_beta', config.get('beta', 0.0)),
 
         lambda_gamma=config['lambda_gamma'],
+        kappa_gamma=config.get('kappa_gamma', 1.0),
         lambda_hyper=config.get('lambda_hyper', 0.0),
         use_obs_in_vfe=config.get('use_obs_in_vfe', False),
 
@@ -2139,10 +2142,21 @@ def run_single_experiment(
         track_iteration_diagnostics=config.get(
             'track_iteration_diagnostics', False),
         diagnostics_interval=config.get('diagnostics_interval', 50),
-        verbose_diagnostics=config.get('verbose_diagnostics', True),
+        verbose_diagnostics=config.get('verbose_diagnostics', False),
 
         # Learnable per-head kappa warmup
         kappa_warmup_steps=config.get('kappa_warmup_steps', 0),
+
+        # LR schedule (previously missing — lr_decay/min_lr_ratio were silently
+        # dropped, causing TrainingConfig defaults to override config values)
+        lr_decay=config.get('lr_decay', 'linear'),
+        min_lr_ratio=config.get('min_lr_ratio', 0.1),
+        sigma_ce_scale=config.get('sigma_ce_scale', 0.01),
+
+        # AMP / torch.compile
+        use_amp=config.get('use_amp', False),
+        use_compile=config.get('use_compile', False),
+        compile_mode=config.get('compile_mode', 'reduce-overhead'),
 
         # Suppress FastTrainer init banner — compact summary below covers it
         quiet=True,
