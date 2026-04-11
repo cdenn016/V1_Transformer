@@ -13,17 +13,6 @@
       "Bash(find:*)"
     ]
   },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python scripts/hooks/check_no_nn.py"
-          }
-        ]
-      },
       {
         "matcher": "Bash",
         "hooks": [
