@@ -65,7 +65,7 @@ transformer/checkpoints_publication/
 tmp/
 
 # Data files (downloaded datasets, embeddings, etc.)
-data/
+ # NOTE: do NOT use bare "data/" — it would match transformer/data/ (Python source)     
 *.bin
 *.npy
 *.npz
