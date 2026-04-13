@@ -1,0 +1,86 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+.venv/
+
+# Lockfiles (auto-generated)
+uv.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+
+# PyTorch
+*.pt
+*.pth
+
+# Logs
+*.log
+logs/
+
+# Results (regenerated locally)
+results/
+outputs/
+
+# Bayesian MCMC traces (large, regenerable)
+*_trace.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+fig_roberta_diagnostics/
+
+# Large generated directories
+hpo_results/
+transformer/checkpoints_publication/
+tmp/
+
+# Data files (downloaded datasets, embeddings, etc.)
+data/
+*.bin
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.parquet
+*.arrow
+*.csv
+
+# Checkpoint files (safetensors)
+*.safetensors
+*.ckpt
+
+# Claude Code local state
+.claude/
+
+# Environment files
+.env

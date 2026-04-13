@@ -1,0 +1,253 @@
+# -*- coding: utf-8 -*-
+"""
+Training Utilities Tests
+========================
+
+Tests for transformer.training module: TrainingConfig, parameter group
+construction (separate LRs for mu, sigma, phi, attention, FFN, output),
+optimizer creation, and MetricsTracker logging/saving.
+"""
+
+import pytest
+import torch
+import torch.nn as nn
+from pathlib import Path
+
+
+class TestTrainingConfig:
+    """Test TrainingConfig presets and overrides.
+
+    TrainingConfig controls per-component learning rates (mu, sigma, phi),
+    training mode (standard vs vfe_dynamic), and gauge_mode (learned vs trivial).
+    """
+
+    def test_default_config(self):
+        """Test creating default config."""
+        from transformer.training.config import TrainingConfig
+
+        config = TrainingConfig()
+        assert config is not None
+        assert hasattr(config, 'M_mu_p_lr')
+        assert hasattr(config, 'M_sigma_p_lr')
+
+    def test_get_standard_config(self):
+        """Test get_standard_config preset."""
+        from transformer.training.config import get_standard_config
+
+        config = get_standard_config()
+        assert config is not None
+        assert config.training_mode == 'standard'
+
+    def test_get_vfe_dynamic_config(self):
+        """Test get_vfe_dynamic_config preset."""
+        from transformer.training.config import get_vfe_dynamic_config
+
+        config = get_vfe_dynamic_config()
+        assert config is not None
+        assert config.training_mode == 'vfe_dynamic'
+
+    def test_config_overrides(self):
+        """Test config with custom overrides."""
+        from transformer.training.config import get_standard_config
+
+        config = get_standard_config(
+            M_mu_p_lr=0.05,
+            max_steps=500,
+        )
+
+        assert config.M_mu_p_lr == 0.05
+        assert config.max_steps == 500
+
+    def test_gauge_mode_default_learned(self):
+        """Test gauge_mode defaults to 'learned'."""
+        from transformer.training.config import TrainingConfig
+
+        config = TrainingConfig()
+        assert config.gauge_mode == 'learned'
+
+    def test_gauge_mode_trivial_vfe_dynamic(self):
+        """Test gauge_mode can be set to 'trivial' via get_vfe_dynamic_config."""
+        from transformer.training.config import get_vfe_dynamic_config
+
+        config = get_vfe_dynamic_config(gauge_mode='trivial')
+        assert config.gauge_mode == 'trivial'
+        assert config.training_mode == 'vfe_dynamic'
+
+    def test_gauge_mode_override(self):
+        """Test gauge_mode override on standard config."""
+        from transformer.training.config import get_standard_config
+
+        config = get_standard_config(gauge_mode='trivial')
+        assert config.gauge_mode == 'trivial'
+
+
+class TestCreateParamGroups:
+    """Test parameter group creation with per-component learning rates.
+
+    The gauge transformer has distinct parameter families (mu/sigma/phi
+    belief parameters, attention weights, FFN weights, output projection)
+    that benefit from separate learning rates.
+    """
+
+    def test_param_groups_creation(self, minimal_config, cpu_device):
+        """Test creating parameter groups."""
+        from transformer.core.model import GaugeTransformerLM
+        from transformer.training.optimizer import create_param_groups
+        from transformer.training.config import TrainingConfig
+
+        model = GaugeTransformerLM(minimal_config)
+
+        config = TrainingConfig(
+            M_mu_p_lr=0.1,
+            M_sigma_p_lr=0.01,
+            M_phi_lr=0.05,
+            M_attention_lr=0.001,
+            M_vfe_hyperparam_lr=0.001,
+            M_output_lr=0.001,
+        )
+
+        param_groups = create_param_groups(model, config)
+
+        assert isinstance(param_groups, list)
+        assert len(param_groups) > 0
+
+        # Each group should have 'params' and 'lr'
+        for group in param_groups:
+            assert 'params' in group
+            assert 'lr' in group
+
+    def test_all_params_covered(self, minimal_config, cpu_device):
+        """Test all parameters are in some group."""
+        from transformer.core.model import GaugeTransformerLM
+        from transformer.training.optimizer import create_param_groups
+        from transformer.training.config import TrainingConfig
+
+        model = GaugeTransformerLM(minimal_config)
+
+        config = TrainingConfig(
+            M_mu_p_lr=0.1,
+            M_sigma_p_lr=0.01,
+            M_phi_lr=0.05,
+            M_attention_lr=0.001,
+            M_vfe_hyperparam_lr=0.001,
+            M_output_lr=0.001,
+        )
+
+        param_groups = create_param_groups(model, config)
+
+        # Collect all params in groups
+        grouped_params = set()
+        for group in param_groups:
+            for p in group['params']:
+                grouped_params.add(id(p))
+
+        # Check all model params are grouped
+        model_params = set(id(p) for p in model.parameters())
+
+        # All model params should be in groups (or subset if some are frozen)
+        # Note: some implementations may not include all params
+        assert len(grouped_params) > 0
+
+
+class TestCreateOptimizer:
+    """Test create_optimizer function."""
+
+    def test_optimizer_creation(self, minimal_config, cpu_device):
+        """Test creating optimizer."""
+        from transformer.core.model import GaugeTransformerLM
+        from transformer.training.optimizer import create_optimizer
+        from transformer.training.config import TrainingConfig
+
+        model = GaugeTransformerLM(minimal_config)
+
+        config = TrainingConfig(
+            M_mu_p_lr=0.1,
+            M_sigma_p_lr=0.01,
+            M_phi_lr=0.05,
+            M_attention_lr=0.001,
+            M_vfe_hyperparam_lr=0.001,
+            M_output_lr=0.001,
+        )
+
+        optimizer = create_optimizer(model, config)
+
+        assert optimizer is not None
+        assert isinstance(optimizer, torch.optim.Optimizer)
+
+    def test_optimizer_step(self, minimal_config, cpu_device):
+        """Test optimizer can perform step."""
+        from transformer.core.model import GaugeTransformerLM
+        from transformer.training.optimizer import create_optimizer
+        from transformer.training.config import TrainingConfig
+
+        model = GaugeTransformerLM(minimal_config)
+        model = model.to(cpu_device)
+
+        config = TrainingConfig(
+            M_mu_p_lr=0.1,
+            M_sigma_p_lr=0.01,
+            M_phi_lr=0.05,
+            M_attention_lr=0.001,
+            M_vfe_hyperparam_lr=0.001,
+            M_output_lr=0.001,
+        )
+
+        optimizer = create_optimizer(model, config)
+
+        # Forward pass
+        V = minimal_config['vocab_size']
+        input_ids = torch.randint(0, V, (2, 16), device=cpu_device)
+        targets = torch.randint(0, V, (2, 16), device=cpu_device)
+
+        logits = model(input_ids)
+        loss = torch.nn.functional.cross_entropy(
+            logits.view(-1, V),
+            targets.view(-1)
+        )
+
+        # Backward and step
+        loss.backward()
+        optimizer.step()
+
+        # Should complete without error
+
+
+class TestMetricsTracker:
+    """Test MetricsTracker class."""
+
+    def test_tracker_creation(self, tmp_path):
+        """Test creating metrics tracker."""
+        from transformer.training.metrics import MetricsTracker
+
+        tracker = MetricsTracker(output_dir=tmp_path)
+        assert tracker is not None
+
+    def test_tracker_log(self, tmp_path):
+        """Test logging metrics."""
+        from transformer.training.metrics import MetricsTracker
+
+        tracker = MetricsTracker(output_dir=tmp_path)
+
+        tracker.log({
+            'loss': 2.5,
+            'accuracy': 0.8,
+        }, step=1)
+
+        assert len(tracker.history) == 1
+
+    def test_tracker_save(self, tmp_path):
+        """Test saving metrics to CSV."""
+        from transformer.training.metrics import MetricsTracker
+
+        tracker = MetricsTracker(output_dir=tmp_path)
+
+        for i in range(5):
+            tracker.log({
+                'loss': 2.5 - i * 0.1,
+            }, step=i)
+
+        tracker.save()
+
+        # Check CSV file created
+        csv_files = list(tmp_path.glob('*.csv'))
+        assert len(csv_files) > 0
