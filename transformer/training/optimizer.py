@@ -279,8 +279,12 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
     Memory: O(V · K²) for storing Fisher blocks — substantial for large V.
     For V=50K, K=64: ~819 MB. Use with small vocabularies or reduce K.
 
-    For non-embedding parameters (1D, small 2D), falls back to standard
-    gradient descent with weight decay (no Fisher tracking).
+    Fisher blocks are only allocated for named embedding parameter groups
+    (mu_embed, sigma_embed, phi_embed, omega_embed, sign_embed). Non-embedding
+    groups (attention, ffn, output, no_decay) and unnamed groups fall back to
+    standard gradient descent with weight decay (no Fisher tracking).
+    Fisher blocks are always stored in fp32 regardless of model precision,
+    for numerical stability of the outer product and linear solve.
 
     WARNING on damping: For rarely-seen tokens, the Fisher is near-zero and
     (F + λI)^{-1} ≈ (1/λ)I. Small λ (e.g., 1e-4) amplifies rare tokens'
@@ -295,6 +299,12 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
         ema_decay: EMA decay for Fisher estimation (default 0.95)
         damping: Tikhonov regularization λ for Fisher inversion (default 1e-2)
     """
+
+    # Parameter groups that receive per-token Fisher treatment.
+    # All other groups (attention, ffn, output, no_decay, unnamed) get plain SGD.
+    _EMBEDDING_GROUPS = frozenset({
+        'mu_embed', 'sigma_embed', 'phi_embed', 'omega_embed', 'sign_embed',
+    })
 
     def __init__(
         self,
@@ -321,6 +331,9 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
         # Reset per-step norm accumulators
         group_euclidean_sq: Dict[str, float] = {}
         group_natural_sq: Dict[str, float] = {}
+        group_natural_clipped_sq: Dict[str, float] = {}
+        group_clip_frac_sum: Dict[str, float] = {}
+        group_clip_count: Dict[str, int] = {}
 
         for group in self.param_groups:
             lr = group['lr']
@@ -338,24 +351,34 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
                 if wd > 0:
                     p.mul_(1.0 - lr * wd)
 
-                # For 2D embedding-like parameters: per-row Fisher blocks
-                if grad.dim() == 2 and grad.shape[-1] >= 4:
-                    eucl_sq, nat_sq = self._natural_step_embedding(p, grad, state, lr)
+                # For named embedding groups with 2D parameters: per-row Fisher blocks
+                is_embedding_group = gname in self._EMBEDDING_GROUPS
+                if is_embedding_group and grad.dim() == 2 and grad.shape[-1] >= 4:
+                    eucl_sq, nat_sq, nat_clip_sq, clip_frac = self._natural_step_embedding(
+                        p, grad, state, lr)
                     group_euclidean_sq[gname] = group_euclidean_sq.get(gname, 0.0) + eucl_sq
                     group_natural_sq[gname] = group_natural_sq.get(gname, 0.0) + nat_sq
+                    group_natural_clipped_sq[gname] = group_natural_clipped_sq.get(gname, 0.0) + nat_clip_sq
+                    group_clip_frac_sum[gname] = group_clip_frac_sum.get(gname, 0.0) + clip_frac
+                    group_clip_count[gname] = group_clip_count.get(gname, 0) + 1
                 else:
                     # Fallback: plain gradient descent for 1D / small params
                     p.add_(grad, alpha=-lr)
                     g_sq = grad.norm().item() ** 2
                     group_euclidean_sq[gname] = group_euclidean_sq.get(gname, 0.0) + g_sq
                     group_natural_sq[gname] = group_natural_sq.get(gname, 0.0) + g_sq
+                    group_natural_clipped_sq[gname] = group_natural_clipped_sq.get(gname, 0.0) + g_sq
 
         # Store L2 norms per group
+        all_gnames = set(list(group_euclidean_sq.keys()) + list(group_natural_sq.keys()))
         self._grad_norms = {}
-        for gname in set(list(group_euclidean_sq.keys()) + list(group_natural_sq.keys())):
+        for gname in all_gnames:
+            count = group_clip_count.get(gname, 0)
             self._grad_norms[gname] = {
                 'euclidean': math.sqrt(group_euclidean_sq.get(gname, 0.0)),
                 'natural': math.sqrt(group_natural_sq.get(gname, 0.0)),
+                'natural_clipped': math.sqrt(group_natural_clipped_sq.get(gname, 0.0)),
+                'clip_fraction': group_clip_frac_sum.get(gname, 0.0) / count if count > 0 else 0.0,
             }
 
         return loss
@@ -366,21 +389,27 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
         grad: torch.Tensor,     # (V, K)
         state: dict,
         lr: float,
-    ) -> Tuple[float, float]:
+    ) -> Tuple[float, float, float, float]:
         """Per-token natural gradient step with block-diagonal Fisher.
 
         Returns:
-            (euclidean_norm_sq, natural_norm_sq): Squared L2 norms of the
-            raw gradient and the Fisher-preconditioned gradient for this param.
+            (euclidean_norm_sq, natural_norm_sq, natural_clipped_norm_sq, clip_fraction):
+            Squared L2 norms of the raw gradient, the Fisher-preconditioned
+            gradient (pre-clip), the clipped natural gradient (post-clip), and
+            the fraction of active tokens where max_ratio clipping fired.
         """
         V, K = grad.shape
         device = grad.device
         dtype = grad.dtype
 
-        # Initialize Fisher blocks on first call
+        # Initialize Fisher blocks on first call (always fp32 for numerical
+        # stability of outer product and linear solve under AMP)
         if 'fisher' not in state:
-            state['fisher'] = torch.zeros(V, K, K, device=device, dtype=dtype)
+            state['fisher'] = torch.zeros(V, K, K, device=device, dtype=torch.float32)
             state['step'] = 0
+        elif state['fisher'].dtype != torch.float32:
+            # Handle checkpoint loaded with non-fp32 Fisher
+            state['fisher'] = state['fisher'].float()
         state['step'] += 1
 
         fisher = state['fisher']
@@ -390,13 +419,16 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
         nz_mask = grad_norm > 0
         if not nz_mask.any():
             eucl_sq = grad.norm().item() ** 2
-            return eucl_sq, eucl_sq
+            return eucl_sq, eucl_sq, eucl_sq, 0.0
 
         nz_idx = nz_mask.nonzero(as_tuple=True)[0]  # (n_active,)
         g = grad[nz_idx]  # (n_active, K)
 
+        # Upcast to fp32 for numerical stability of outer product and solve
+        g_f32 = g.float()  # (n_active, K) in fp32
+
         # Update Fisher EMA: F = (1-ρ)F + ρ g gᵀ
-        outer = g.unsqueeze(-1) * g.unsqueeze(-2)  # (n_active, K, K)
+        outer = g_f32.unsqueeze(-1) * g_f32.unsqueeze(-2)  # (n_active, K, K)
         rho = self.ema_decay
         # Bias correction for early steps: use Adam-style correction factor
         # to compensate for cold-start (Fisher initialized at zero).
@@ -407,34 +439,46 @@ class NaturalGradientOptimizer(torch.optim.Optimizer):
         fisher[nz_idx] = (1.0 - rho) * fisher[nz_idx] + rho * outer
 
         # Natural gradient: ng = (F̂ + λI)⁻¹ g  where F̂ = F / bias_correction
-        F_active = fisher[nz_idx] / bias_correction  # Bias-corrected Fisher
-        I_K = torch.eye(K, device=device, dtype=dtype)
+        F_active = fisher[nz_idx] / bias_correction  # Bias-corrected Fisher (fp32)
+        I_K = torch.eye(K, device=device, dtype=torch.float32)
         F_damped = F_active + self.damping * I_K
 
-        # Solve F_damped @ ng = g  (batched K×K linear solve)
-        ng = torch.linalg.solve(F_damped, g.unsqueeze(-1)).squeeze(-1)  # (n_active, K)
+        # Solve F_damped @ ng = g  (batched K×K linear solve, fp32)
+        ng = torch.linalg.solve(F_damped, g_f32.unsqueeze(-1)).squeeze(-1)  # (n_active, K)
 
         # Record norms before clipping
-        eucl_sq = g.norm().item() ** 2
+        eucl_sq = g_f32.norm().item() ** 2
         nat_sq = ng.norm().item() ** 2
 
         # Clip natural gradient to prevent explosion from ill-conditioned Fisher
         ng_norm = ng.norm(dim=-1, keepdim=True).clamp(min=1e-8)
-        g_norm = g.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        g_norm = g_f32.norm(dim=-1, keepdim=True).clamp(min=1e-8)
         max_ratio = 10.0  # Natural gradient shouldn't be >10x the Euclidean gradient
         scale = torch.clamp(max_ratio * g_norm / ng_norm, max=1.0)
         ng = ng * scale
 
-        param[nz_idx] -= lr * ng
+        # Post-clip diagnostics
+        nat_clipped_sq = ng.norm().item() ** 2
+        n_clipped = (scale.squeeze(-1) < 1.0).sum().item()
+        clip_frac = n_clipped / g.shape[0]
 
-        return eucl_sq, nat_sq
+        # Cast back to param dtype before applying update
+        param[nz_idx] -= lr * ng.to(dtype=dtype)
+
+        return eucl_sq, nat_sq, nat_clipped_sq, clip_frac
 
     def get_grad_norms(self) -> Dict[str, Dict[str, float]]:
         r"""Return per-group gradient norms from the last step() call.
 
         Returns:
-            Dict mapping group name → {'euclidean': ‖g‖, 'natural': ‖F⁻¹g‖}.
-            For non-embedding params (plain SGD fallback), both values are equal.
+            Dict mapping group name → {
+                'euclidean': ‖g‖ (raw Euclidean gradient norm),
+                'natural': ‖F⁻¹g‖ (pre-clip natural gradient norm),
+                'natural_clipped': ‖clip(F⁻¹g)‖ (post-clip, the actual applied step),
+                'clip_fraction': fraction of active tokens where max_ratio clipping fired.
+            }.
+            For non-embedding params (plain SGD fallback), euclidean == natural == natural_clipped
+            and clip_fraction == 0.
         """
         return dict(self._grad_norms)
 
@@ -778,15 +822,18 @@ def create_optimizer(
         ema_decay = getattr(config, 'fisher_ema_decay', 0.95)
         damping = getattr(config, 'fisher_damping', 1e-2)
 
-        # Estimate memory cost
+        # Estimate memory cost (only embedding groups get Fisher blocks)
         if verbose:
+            embed_groups = NaturalGradientOptimizer._EMBEDDING_GROUPS
             total_fisher_params = 0
             for group in param_groups:
+                if group.get('name', 'unnamed') not in embed_groups:
+                    continue
                 for p in group['params']:
                     if p.dim() == 2 and p.shape[-1] >= 4:
                         V, K = p.shape
                         total_fisher_params += V * K * K
-            mem_mb = total_fisher_params * 4 / (1024 ** 2)
+            mem_mb = total_fisher_params * 4 / (1024 ** 2)  # Always fp32
             print(f"  Fisher memory: {mem_mb:.0f} MB ({total_fisher_params:,} floats)")
             print(f"  EMA decay: {ema_decay}, damping: {damping}")
             if mem_mb > 500:

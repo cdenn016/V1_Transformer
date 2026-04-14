@@ -502,6 +502,29 @@ def resume_training():
         except Exception as e:
             print(f"  Warning: Could not restore optimizer state: {e}")
 
+    # Restore LR scheduler state if available
+    if 'scheduler_state_dict' in checkpoint and trainer.scheduler is not None:
+        try:
+            trainer.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            print("  Restored LR scheduler state")
+        except Exception as e:
+            print(f"  Warning: Could not restore scheduler state: {e}")
+            print("  LR schedule will restart from current step")
+    else:
+        # Manually advance scheduler to match global_step so LR is correct
+        if trainer.scheduler is not None and start_step > 0:
+            for _ in range(start_step):
+                trainer.scheduler.step()
+            print(f"  Advanced scheduler to step {start_step}")
+
+    # Restore GradScaler state if available (AMP training)
+    if 'scaler_state_dict' in checkpoint and hasattr(trainer, 'scaler') and trainer.scaler is not None:
+        try:
+            trainer.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+            print("  Restored GradScaler state")
+        except Exception as e:
+            print(f"  Warning: Could not restore scaler state: {e}")
+
     print(f"\nResuming from step {start_step} -> {config['max_steps']}")
     print("=" * 70)
 

@@ -292,7 +292,10 @@ def run_closed_form_e_step(
             Sigma_p_inv_h = torch.cholesky_inverse(L_p)
 
             if isinstance(alpha_h, torch.Tensor) and alpha_h.dim() == 3:
-                A_prior_h = alpha_h.unsqueeze(-1) * Sigma_p_inv_h
+                # Per-dimension alpha: use sandwich product to preserve SPD structure
+                # A = diag(√α) Σ_p^{-1} diag(√α) — symmetric when Σ_p^{-1} is symmetric
+                sqrt_alpha_h = alpha_h.sqrt().unsqueeze(-1)  # (B, N, d_h, 1)
+                A_prior_h = sqrt_alpha_h * Sigma_p_inv_h * sqrt_alpha_h.transpose(-1, -2)
                 b_prior_h = torch.einsum('bijk,bik->bij', A_prior_h, mu_p_h)
             else:
                 A_prior_h = alpha_h * Sigma_p_inv_h
@@ -319,8 +322,10 @@ def run_closed_form_e_step(
             A_inv_h = torch.cholesky_inverse(L_A)
 
             if isinstance(alpha_h, torch.Tensor) and alpha_h.dim() == 3:
-                entropy_scale = (alpha_h + ffn.lambda_belief).unsqueeze(-1)
-                Sigma_star_h = entropy_scale * A_inv_h
+                # Per-dimension entropy scale: sandwich product preserves SPD
+                # Σ* = diag(√s) A^{-1} diag(√s) where s = α + λ
+                sqrt_entropy = (alpha_h + ffn.lambda_belief).sqrt().unsqueeze(-1)  # (B, N, d_h, 1)
+                Sigma_star_h = sqrt_entropy * A_inv_h * sqrt_entropy.transpose(-1, -2)
             else:
                 Sigma_star_h = (alpha_h + ffn.lambda_belief) * A_inv_h
 

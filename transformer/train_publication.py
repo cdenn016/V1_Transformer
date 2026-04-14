@@ -52,37 +52,12 @@ Date: December 2025
 """
 
 import torch
-import torch.nn.functional as F
 import argparse
 import json
 import csv
 import time
-import math
-import subprocess
-import platform
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
-
-
-from transformer.core.model import GaugeTransformerLM
-from transformer.baselines.standard_transformer import StandardTransformerLM
-from transformer.pure_vfe.model import PureVFETransformer
-from transformer.pure_vfe.config import PureVFEConfig
-from transformer.pure_vfe.gauge import monitor_omega_health
-from transformer.baselines.flops_counter import (
-    count_standard_transformer_flops,
-    count_gauge_transformer_flops,
-    format_flops,
-    compare_flops,
-    print_flops_comparison,
-)
-from transformer.data import create_dataloaders, create_char_dataloaders
-from transformer.train import compute_free_energy_loss
-from transformer.training.train_fast import FastTrainer
-from transformer.training.config import TrainingConfig
-from transformer.analysis.publication_metrics import PublicationMetrics, ExperimentResult
-from math_utils.numerical_monitor import flush as _flush_numerical_events
 
 
 # ============================================================================
@@ -156,14 +131,14 @@ EM_CONFIG = {
     'n_layers':                   1,
     'ffn_n_iterations':           1,
     
-    'alpha_divergence':           0.8,
+    'alpha_divergence':           0.75,
     #'grad_accumulation_steps': 1,
     #'gradient_checkpoint_vfe': False,
     
     'gauge_dim':                   10,
     'irrep_spec':       [('fund', 2, 10)],
 
-    'use_prior_bank':             True,
+    'use_prior_bank':             False,
     'gauge_fixed_priors':         True,    
     'hierarchical_priors':        True,
     
@@ -172,8 +147,8 @@ EM_CONFIG = {
   
 
     'kappa_beta':                 1,
-    'kappa_warmup_steps':         7500,  # freeze kappa for first n steps
-    'learnable_head_kappa':       True, # If True, learn per-head κ_h via log_kappa_per_head
+    'kappa_warmup_steps':         250000,  # freeze kappa for first n steps
+    'learnable_head_kappa':       False, # If True, learn per-head κ_h via log_kappa_per_head
     'obs_sigma_gradient':         True, # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
     'e_step_sigma_floor':         0.01,   # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
     
@@ -187,7 +162,7 @@ EM_CONFIG = {
     
     # === M-step: Optimizer ===  
     'optimizer_type':             'riemannian_adam',# or 'natural_gradient' or 'adamw' or 'riemannian_adam'
-    'fisher_ema_decay':           0.95,            # for natural_gradient
+    'fisher_ema_decay':           0.90,            # for natural_gradient
     'fisher_damping':             1e-2,              # for natural_gradient
 
 
@@ -198,6 +173,7 @@ EM_CONFIG = {
     'evolve_sigma':               True,
     'evolve_phi':                 True,  #M-step phi evolution
     'evolve_phi_e_step':          True,
+    'normalize_ce_by_dim':        True, 
     
     'E_learnable_alpha':          True,   # Adaptive α_i = c0/(b0 + KL) per dimension   
     'E_learnable_lr':             True,   # Learnable E-step LR
@@ -208,7 +184,7 @@ EM_CONFIG = {
     'norm_type':                  'layernorm',  # 'layernorm' | 'rmsnorm' | 'mahalnorm' | 'none'
     'residual_type':              'additive',    # 'additive': mu_q = mu_q + mu_sub 
                                          # 'delta':    mu_q = mu_q + (mu_sub - mu_normalized),
-
+    
     # === E-step Weights ===
  
     'E_alpha':                    1,      # E-step prior coupling weight
@@ -261,7 +237,7 @@ EM_CONFIG = {
 
     # === Position encoding ===
     'use_rope':                   True,
-    'rope_base':                  75,   #75 for N=64, 128
+    'rope_base':                  60,   #75 for N=64, 128
     'rope_full_gauge':            False,
     'pos_encoding_mode':          'none',
 
@@ -275,7 +251,7 @@ EM_CONFIG = {
 
     # === Logging ===
     'log_interval':               100,
-    'eval_interval':              5000,
+    'eval_interval':              1000,
     'checkpoint_interval':        25000,
     'semantic_analysis_interval': 10000,
     'gauge_geometry_interval':    5000,   # Gauge field Dirichlet energy + invariants
@@ -892,12 +868,6 @@ def main():
                             # Peer review ablations
                             # (M2b) attention-only at d_model=90
                             'standard_attn_only',
-                            # (M2b\') param-equalized wider FFN
-                            'standard_param_equalized',
-                            # (M2c) standard + RoPE at d=10
-                            'standard_rope',
-                            # (M2c\') standard + RoPE at d=90
-                            'standard_rope_d90',
                             # Hybrid: gauge KL-attention + PriorBank + standard GELU FFN
                             'hybrid',
                         ],
@@ -924,7 +894,8 @@ def main():
     # Handle legacy --ffn_mode argument
     if args.ffn_mode is not None:
         print("WARNING: --ffn_mode is deprecated. Use --mode instead.")
-        args.mode = args.ffn_mode
+        # Map legacy names to current mode names
+        args.mode = 'em' if args.ffn_mode == 'VFE_dynamic' else args.ffn_mode
 
     # Set random seed for reproducibility
     seed = args.seed if args.seed is not None else SEED
@@ -1000,8 +971,7 @@ def main():
 
     else:
         print(f"\nError: Unknown mode \'{mode}\'")
-        print("Valid modes: standard, em, hebbian, hybrid, pure_vfe, "
-              "standard_attn_only, standard_param_equalized, standard_rope, standard_rope_d90")
+        print("Valid modes: standard, em, hebbian, hybrid, pure_vfe, standard_attn_only")
         return
 
     config['dataset'] = args.dataset

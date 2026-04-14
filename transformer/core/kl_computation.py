@@ -34,8 +34,6 @@ from transformer.core.gauge_utils import (
     fused_block_diagonal_kl_diag,
     fused_block_diagonal_kl_full,
     fused_block_matrix_exp_pairs,
-    stable_matrix_exp_pair,
-    newton_schulz_orthogonalize,
 )
 
 

@@ -23,14 +23,12 @@ callers can inspect gradient component norms without importing vfe_utils directl
 
 import math
 import torch
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from transformer.core.gauge_utils import (
     stable_matrix_exp_pair,
     newton_schulz_orthogonalize,
     fused_block_matrix_exp_pairs,
-    fused_block_diagonal_kl_diag,
-    fused_block_diagonal_kl_full,
 )
 from math_utils.numerical_monitor import record as _nr
 from transformer.core.transport_ops import _apply_rope, _un_apply_rope_pair_outer, _apply_rope_to_covariance
@@ -41,13 +39,10 @@ from transformer.core.vfe_utils import (
     TRANSPORT_JITTER,
     KL_CEIL_BASE,
     KL_CEIL_SCALE,
-    GRAD_CLIP_THRESHOLD,
-    KAPPA_CLAMP_RANGE,
     _grad_norm,
     _per_pos_stats,
     squeeze_trailing_singletons,
     _safe_spd_inv,
-    _safe_eigh,
 )
 
 # =============================================================================

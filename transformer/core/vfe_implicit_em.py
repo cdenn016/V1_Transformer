@@ -105,11 +105,14 @@ class ImplicitEMGradientSigma(torch.autograd.Function):
     def backward(ctx, grad_output: torch.Tensor):
         implicit_scale, = ctx.saved_tensors
         # Scale is (B, N, K) from diagonal approx; grad_output may be
-        # (B, N, K, K) for full covariance.  Unsqueeze to broadcast.
-        scale = implicit_scale
-        if grad_output.dim() > scale.dim():
-            scale = scale.unsqueeze(-1)
-        return grad_output, scale * grad_output, None
+        # (B, N, K, K) for full covariance.
+        if grad_output.dim() > implicit_scale.dim():
+            # Full covariance: sandwich product preserves symmetry/SPD
+            # diag(√s) @ grad @ diag(√s) where s is per-dimension scale
+            sqrt_s = implicit_scale.sqrt().unsqueeze(-1)  # (B, N, K, 1)
+            scaled_grad = sqrt_s * grad_output * sqrt_s.transpose(-1, -2)
+            return grad_output, scaled_grad, None
+        return grad_output, implicit_scale * grad_output, None
 
 
 def compute_implicit_em_scales(

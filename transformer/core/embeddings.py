@@ -387,10 +387,6 @@ class GaugeTokenEmbedding(nn.Module):
         """
         batch_size, num_agents = token_ids.shape
 
-        # Clear stale cache from prior forward pass
-        self._cached_block_exp_pairs = None
-        self._cached_full_exp_pair = None
-
         # =================================================================
         # Gauge Frame Embeddings (computed first for gauge_fixed_priors)
         # =================================================================
@@ -443,10 +439,6 @@ class GaugeTokenEmbedding(nn.Module):
                     skew_symmetric=_skew,
                 )  # List of (exp_h, exp_neg_h), each (B, N, d_h, d_h)
 
-                # Cache for reuse by attention/FFN transport (avoids redundant
-                # matrix_exp when pos_encoding='none' keeps phi unchanged).
-                self._cached_block_exp_pairs = block_exp_pairs
-
                 # Compute mu and sigma per-block (avoids materializing full K×K A)
                 mu_parts = []
                 sigma_parts = []
@@ -486,10 +478,6 @@ class GaugeTokenEmbedding(nn.Module):
                 # FULL K×K FALLBACK: no block structure available
                 phi_matrix = torch.einsum('bnc,ckl->bnkl', phi, self.generators)  # (B, N, K, K)
                 A, A_inv = stable_matrix_exp_pair(phi_matrix)  # (B, N, K, K)
-
-                # Cache for transport reuse (full-K path)
-                self._cached_block_exp_pairs = None
-                self._cached_full_exp_pair = (A, A_inv)
 
                 # Transport base prior mean: μ_i = A_i @ μ_0
                 mu = torch.einsum('bnkl,l->bnk', A, self.base_mu)  # (B, N, K)
@@ -1064,89 +1052,3 @@ class GaugePositionalEncoding(nn.Module):
     def extra_repr(self) -> str:
         return f"max_seq_len={self.max_seq_len}, mode={self.mode}, scale={self.scale}, composition={self.composition}"
 
-
-# =============================================================================
-# Testing & Visualization
-# =============================================================================
-
-if __name__ == '__main__':
-    print("="*70)
-    print("GAUGE TOKEN EMBEDDING TEST (0D Transformer)")
-    print("="*70)
-
-    # Test configuration
-    vocab_size = 100
-    embed_dim = 32
-    batch_size = 4
-    seq_len = 10
-
-    # Create embedding layer
-    print("\n[1] Creating GaugeTokenEmbedding...")
-    embedder = GaugeTokenEmbedding(
-        vocab_size=vocab_size,
-        embed_dim=embed_dim,
-        init_std=0.02,
-        init_sigma_scale=0.1,
-        learnable_sigma=False,  # Start simple
-        learnable_phi=False,
-    )
-    print(embedder)
-
-    # Create random tokens
-    print(f"\n[2] Embedding random tokens...")
-    token_ids = torch.randint(0, vocab_size, (batch_size, seq_len))
-    print(f"    Token IDs shape: {token_ids.shape}")
-
-    # Forward pass
-    mu, sigma, phi = embedder(token_ids)
-
-    print(f"\n[3] Output shapes:")
-    print(f"    μ (means):      {mu.shape}     # (B, N, K) where N=num_agents at c*")
-    print(f"    Σ (covariances): {sigma.shape}   # (B, N, K, K)")
-    print(f"    φ (gauge frames): {phi.shape}      # (B, N, 3) in so(3)")
-
-    # Validate covariance is SPD
-    print(f"\n[4] Validating covariances...")
-    eigenvalues = torch.linalg.eigvalsh(sigma[0, 0])  # Check first agent
-    print(f"    Eigenvalues of Σ[0,0]: {eigenvalues.numpy()}")
-    assert torch.all(eigenvalues > 0), "Covariance not positive definite!"
-    print("    ✓ All eigenvalues positive (SPD verified)")
-
-    # Test positional encoding
-    print(f"\n{'='*70}")
-    print("GAUGE POSITIONAL ENCODING TEST")
-    print('='*70)
-
-    max_seq_len = 64
-
-    # Test learned encoding
-    print("\n[5] Testing learned positional encoding...")
-    pos_enc_learned = GaugePositionalEncoding(max_seq_len, mode='learned', scale=0.1)
-    pos_phi_learned = pos_enc_learned(seq_len)
-    print(f"    Learned φ_pos shape: {pos_phi_learned.shape}  # (N, 3)")
-    print(f"    φ_pos[0]: {pos_phi_learned[0].detach().numpy()}")
-    print(f"    φ_pos[9]: {pos_phi_learned[9].detach().numpy()}")
-
-    # Test sinusoidal encoding
-    print("\n[6] Testing sinusoidal positional encoding...")
-    pos_enc_sin = GaugePositionalEncoding(max_seq_len, mode='sinusoidal', scale=0.1)
-    pos_phi_sin = pos_enc_sin(seq_len)
-    print(f"    Sinusoidal φ_pos shape: {pos_phi_sin.shape}")
-    print(f"    φ_pos[0]: {pos_phi_sin[0].numpy()}")
-    print(f"    φ_pos[9]: {pos_phi_sin[9].numpy()}")
-
-    # Combined: Embedding + Position
-    print(f"\n[7] Combined embedding with positional encoding...")
-    phi_combined = phi + pos_phi_learned.unsqueeze(0)  # (B, N, 3)
-    print(f"    φ_total = φ_base + φ_pos: {phi_combined.shape}")
-
-    # Parameter count
-    total_params = sum(p.numel() for p in embedder.parameters())
-    print(f"\n[8] Parameter count:")
-    print(f"    Token embedder: {total_params:,} parameters")
-    pos_params = sum(p.numel() for p in pos_enc_learned.parameters())
-    print(f"    Position encoder (learned): {pos_params:,} parameters")
-
-    print("\n" + "="*70)
-    print("✓ All tests passed!")
-    print("="*70)

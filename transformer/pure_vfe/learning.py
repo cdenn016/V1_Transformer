@@ -23,7 +23,6 @@ from .gaussians import (
     kl_decode_logits,
     softmax_ce_gradient,
     safe_inverse,
-    safe_logdet,
     natural_grad_sigma,
     retract_spd,
     symmetrize,
@@ -34,12 +33,9 @@ from .gaussians import (
     kl_attention,
 )
 from .gauge import (
-    natural_grad_omega,
     lie_algebra_clip_grad,
-    relative_trust_clip,
     regularize_omega_conditioning,
     retract_phi,
-    vfe_grad_Omega,
 )
 from .inference import extract_block_diag
 
@@ -140,7 +136,6 @@ class MStepAccumulator:
         K = config.belief_dim
         H = config.n_heads
         K_h = config.head_dim
-        N = config.max_seq_len
 
         # Per-token E-step statistics (VFE gradient)
         self.n_counts = torch.zeros(V, device=device)

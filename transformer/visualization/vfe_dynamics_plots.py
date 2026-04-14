@@ -21,7 +21,6 @@ Usage:
 """
 
 import csv
-import math
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 

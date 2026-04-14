@@ -27,9 +27,8 @@ warnings.filterwarnings("ignore", message="Failed to find nvdisasm", module="tri
 
 import math
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Tuple
 from pathlib import Path
 import time
 
@@ -620,44 +619,3 @@ class FastTrainer:
         print(f"  ✓ Loaded checkpoint from step {self.global_step}")
 
 
-# =============================================================================
-# Testing
-# =============================================================================
-
-if __name__ == '__main__':
-    print("="*70)
-    print("FAST TRAINER TEST")
-    print("="*70)
-
-    # This file just defines the trainer
-    # See train_example.py for full integration
-
-    print("\n✓ FastTrainer class defined")
-    print("✓ Supports per-parameter group learning rates")
-    print("\nExample usage:")
-    print("""
-from transformer.model import GaugeTransformerLM, VFEConfig
-from transformer.data import create_dataloaders
-from transformer.training.train_fast import FastTrainer
-from transformer.training.config import TrainingConfig
-
-# Create model & data
-config = VFEConfig()  # Use default config
-model = GaugeTransformerLM(config)
-train_loader, val_loader, vocab_size = create_dataloaders(...)
-
-# Training config
-config = TrainingConfig(
-    max_steps=1000,
-    M_mu_p_lr=0.1,
-    M_sigma_p_lr=0.005,
-    M_phi_lr=0.01,
-    M_vfe_hyperparam_lr=0.001,
-)
-
-# Train!
-trainer = FastTrainer(model, train_loader, val_loader, config)
-trainer.train()
-""")
-
-    print("="*70)

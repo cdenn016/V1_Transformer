@@ -46,7 +46,6 @@ that adds zero overhead to the forward pass.
 
 import math
 import logging
-import warnings
 import torch
 import torch.nn.functional as F
 from typing import List, Optional, Tuple

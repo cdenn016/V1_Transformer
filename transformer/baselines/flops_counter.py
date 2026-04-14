@@ -18,7 +18,7 @@ FLOPs are reported as multiply-accumulate operations (MACs) * 2 = FLOPs.
 """
 
 import math
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 
 def count_standard_transformer_flops(
@@ -193,7 +193,7 @@ def count_gauge_transformer_flops(
     #   lin_comb: 2*N * phi_dim_per_head * d^2
     #   mat_exp:  2*N * 30 * d^3  (Pade [6/6] ≈ 30 matrix multiplications of size d)
     phi_dim_per_head = phi_dim // H if H > 0 else phi_dim
-    lin_comb_flops = 2 * B * N * phi_dim_per_head * d * d
+    lin_comb_flops = 2 * B * N * H * phi_dim_per_head * d * d
     # Matrix exponential via scaling-and-squaring with Pade[6/6]:
     # ~13 matrix multiplications of (d,d), each 2*d^3 FLOPs, plus scaling
     mat_exp_flops = 2 * B * N * H * 13 * 2 * d * d * d

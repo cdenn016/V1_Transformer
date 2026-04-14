@@ -334,6 +334,7 @@ class GaugeTransformerBlock(nn.Module):
             compile_vfe=cfg.compile_vfe,
             gradient_checkpoint_vfe=cfg.gradient_checkpoint_vfe,
             alpha_divergence=getattr(cfg, 'alpha_divergence', 1.0),
+            enforce_orthogonal=cfg.enforce_orthogonal,
         )
         # EXPERIMENTAL: rope_full_gauge enables the framework-consistent
         # interpretation of RoPE (rotates Σ as well as μ in the KL).

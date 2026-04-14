@@ -182,7 +182,7 @@ where $r_\text{max} = 10$. This ensures the natural gradient is at most $10\time
 
 ### Non-Embedding Parameters
 
-For non-embedding parameters (1D tensors or small 2D tensors with last dimension $< 4$), the optimizer falls back to plain gradient descent with decoupled weight decay:
+Fisher blocks are only allocated for named embedding parameter groups (`mu_embed`, `sigma_embed`, `phi_embed`, `omega_embed`, `sign_embed`). For all other parameter groups (attention, ffn, output, no_decay, unnamed) and for parameters that are 1D or have last dimension $< 4$, the optimizer falls back to plain gradient descent with decoupled weight decay:
 
 $$\theta \leftarrow (1 - \eta \lambda) \, \theta - \eta \, g$$
 
@@ -228,7 +228,16 @@ For large vocabularies or large $K$, the memory cost of storing $V$ blocks of si
 
 ### Diagnostic Output
 
-The optimizer exposes `get_grad_norms() -> Dict[str, Dict[str, float]]`, returning per-group Euclidean and natural gradient norms from the last step. The ratio $\|\tilde{g}\| / \|g\|$ indicates how much the Fisher preconditioning modifies the gradient direction. A ratio near 1.0 means the Fisher is approximately identity (unhelpful); a large ratio means significant preconditioning is occurring.
+The optimizer exposes `get_grad_norms() -> Dict[str, Dict[str, float]]`, returning per-group gradient diagnostics from the last step:
+
+- `'euclidean'`: $\|g\|$ — raw Euclidean gradient norm
+- `'natural'`: $\|\tilde{g}\|$ — pre-clip natural gradient norm ($\tilde{g} = \hat{F}^{-1} g$)
+- `'natural_clipped'`: $\|\text{clip}(\tilde{g})\|$ — post-clip natural gradient norm (the actual applied step)
+- `'clip_fraction'`: fraction of active tokens where `max_ratio` clipping fired
+
+The ratio $\|\tilde{g}\| / \|g\|$ indicates how much the Fisher preconditioning modifies the gradient direction. A ratio near 1.0 means the Fisher is approximately identity (unhelpful); a large ratio means significant preconditioning is occurring. The gap between `'natural'` and `'natural_clipped'` reveals how much the safety clipping attenuates the natural gradient. A high `'clip_fraction'` with small damping indicates rare-token amplification — increase `fisher_damping`.
+
+Fisher blocks are always stored in fp32 regardless of model precision, for numerical stability of the outer product and `torch.linalg.solve`.
 
 ### When to Use
 

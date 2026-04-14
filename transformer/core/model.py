@@ -39,7 +39,6 @@ from transformer.core.embeddings import GaugeTokenEmbedding, GaugePositionalEnco
 from transformer.core.blocks import GaugeTransformerStack, RMSNorm, MahalanobisNorm
 from transformer.core.variational_ffn import ImplicitEMGradient, ImplicitEMGradientSigma
 from transformer.core.block_config import BlockConfig
-from transformer.core.attention import create_attention_mask
 from transformer.core.active_inference import wire_readout_references
 
 # Trajectory tracking (optional)
@@ -139,7 +138,6 @@ class GaugeTransformerLM(nn.Module):
         embed_dim = config['embed_dim']
         n_layers = config['n_layers']
         irrep_spec = config['irrep_spec']
-        hidden_dim = config.get('hidden_dim', 256)
         max_seq_len = config['max_seq_len']
         kappa_beta = config['kappa_beta']
         pos_mode = config.get('pos_encoding_mode', 'none')  # Default: no position in gauge space
@@ -173,17 +171,14 @@ class GaugeTransformerLM(nn.Module):
 
         # Diagonal covariance mode (memory optimization)
         diagonal_covariance = config.get('diagonal_covariance', False)
-        self.diagonal_covariance = diagonal_covariance
 
         # Isotropic covariance: Σ = σ²I (Limit 1 → KL reduces to squared Euclidean)
         isotropic_covariance = config.get('isotropic_covariance', False)
-        self.isotropic_covariance = isotropic_covariance
         if isotropic_covariance:
             logger.info("[INFO] Isotropic covariance mode: Sigma = sigma^2*I (Limit 1 -- KL -> squared Euclidean)")
             if not diagonal_covariance:
                 logger.info("       (Forcing diagonal_covariance=True for isotropic mode)")
                 diagonal_covariance = True
-                self.diagonal_covariance = True
 
         # Positional embedding added to μ (like standard transformers)
         # DEFAULT: True - position in μ, not gauge frame φ. 
@@ -199,11 +194,9 @@ class GaugeTransformerLM(nn.Module):
         # Store evolve_phi for cross-layer transport caching optimization
         self.evolve_phi = evolve_phi
 
-        # Sparse attention/FFN config
+        # Sparse attention config
         self.attention_pattern = config.get('attention_pattern', 'full')
         self.attention_window = config.get('attention_window', 64)
-        self.ffn_pattern = config.get('ffn_pattern', 'full')
-        self.ffn_window = config.get('ffn_window', 64)
 
         # =================================================================
         # Gauge Group, Mode, and Parameterization
@@ -213,7 +206,6 @@ class GaugeTransformerLM(nn.Module):
         )
         self.gauge_group = gauge_group
         self.gauge_dim = gauge_dim
-        self.gauge_mode = gauge_mode
         self.gauge_param = gauge_param
 
         # Compute omega_head_dims from irrep_spec for direct omega path
@@ -226,7 +218,6 @@ class GaugeTransformerLM(nn.Module):
         # Cross-Head Coupling (sparse off-diagonal gauge mixing)
         # =================================================================
         cross_couplings = config.get('cross_couplings', [])
-        self.cross_couplings = cross_couplings
 
         if cross_couplings and gauge_mode == 'trivial':
             logger.warning("cross_couplings have no effect with gauge_mode='trivial' (Omega=I, no mixing)")

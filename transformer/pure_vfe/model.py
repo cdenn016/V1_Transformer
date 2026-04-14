@@ -34,7 +34,6 @@ class PureVFETransformer:
         H = config.n_heads
         K_h = config.head_dim
         V = config.vocab_size
-        N_max = config.max_seq_len
         dev = config.device
 
         # -----------------------------------------------------------

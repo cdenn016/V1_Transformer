@@ -47,14 +47,12 @@ from transformer.baselines.flops_counter import (
     count_standard_transformer_flops,
     count_gauge_transformer_flops,
     format_flops,
-    compare_flops,
-    print_flops_comparison,
 )
 from transformer.data import create_dataloaders, create_char_dataloaders
 from transformer.train import compute_free_energy_loss
 from transformer.training.train_fast import FastTrainer
 from transformer.training.config import TrainingConfig
-from transformer.analysis.publication_metrics import PublicationMetrics, ExperimentResult
+from transformer.analysis.publication_metrics import PublicationMetrics
 from math_utils.numerical_monitor import record as _nr, flush as _flush_numerical_events
 
 
@@ -1137,6 +1135,7 @@ class PublicationTrainer(FastTrainer):
         metrics = {
             'train_loss_total': full_metrics['loss/total'],
             'train_loss_ce': full_metrics['loss/ce'],
+            'train_loss_ce_raw': full_metrics.get('loss/ce_raw', full_metrics['loss/ce']),
             'train_loss_belief_align': full_metrics.get('loss/belief_align', 0),
             'train_loss_self_consistency': full_metrics.get('loss/self_consistency', 0),
             'train_loss_model_coupling': full_metrics.get('loss/model_coupling', 0),
@@ -1610,6 +1609,7 @@ class PublicationTrainer(FastTrainer):
                         train_metrics={
                             'loss': metrics['train_loss_total'],
                             'ce_loss': metrics['train_loss_ce'],
+                            'ce_loss_raw': metrics.get('train_loss_ce_raw', metrics['train_loss_ce']),
                             'attention_entropy': metrics.get('attention_entropy', 0),
                             'attention_concentration': metrics.get('attention_concentration', 0),
                         },

@@ -23,7 +23,6 @@ Date: December 2025
 import math
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from typing import List, Tuple, Optional, Union
 from transformer.core.gauge_utils import stable_matrix_exp_pair, fused_block_matrix_exp_pairs
 
@@ -377,10 +376,6 @@ class PriorBank(nn.Module):
                         (bep[0].squeeze(0), bep[1].squeeze(0) if bep[1] is not None else None)
                         for bep in block_exp_pairs
                     ]
-                # Cache for transport reuse (encode only — decode has only_forward=True)
-                if not only_forward:
-                    self._cached_block_exp_pairs = block_exp_pairs
-
                 # Compute mu_p and sigma_p per-block
                 mu_parts = []
                 sigma_parts = []

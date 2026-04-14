@@ -53,23 +53,13 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 from transformer.core.gauge_utils import (
-    stable_matrix_exp_pair,
     newton_schulz_orthogonalize,
     fused_block_matrix_exp_pairs,
-    fused_block_diagonal_kl_diag,
-    fused_block_diagonal_kl_full,
 )
 
 import transformer.core.vfe_utils as _vfe_utils_mod
 
 from transformer.core.vfe_utils import (
-    SIGMA_EPS,
-    TRANSPORT_JITTER,
-    KL_CEIL_BASE,
-    KL_CEIL_SCALE,
-    GRAD_CLIP_THRESHOLD,
-    KAPPA_CLAMP_RANGE,
-    _VFE_GRAD_DEBUG,
     _grad_norm,
     _per_pos_stats,
     _aggregate_multihead_vfe_debug,
@@ -300,6 +290,7 @@ class VariationalFFNDynamic(nn.Module):
         compile_vfe: bool = False,         # torch.compile the VFE iteration (Finding 25)
         gradient_checkpoint_vfe: bool = False,  # Activation checkpointing for VFE loop (Finding 26)
         alpha_divergence: float = 1.0,   # Renyi alpha-divergence parameter (1.0 = KL)
+        enforce_orthogonal: bool = False,  # If True, project Omega to SO(K) via Newton-Schulz
     ):
         """
         Initialize dynamic-beta VFE FFN.
@@ -375,6 +366,7 @@ class VariationalFFNDynamic(nn.Module):
         self.obs_sigma_weight = obs_sigma_weight
         self.sigma_max = sigma_max
         self.e_step_sigma_floor = e_step_sigma_floor
+        self.enforce_orthogonal = enforce_orthogonal
         self.detach_phi = detach_phi
         self.closed_form_e_step = closed_form_e_step
         self.n_picard_steps = n_picard_steps
@@ -1338,7 +1330,7 @@ class VariationalFFNDynamic(nn.Module):
         if self.implicit_em:
             _beta_for_scale = getattr(self, '_last_beta_for_implicit', None)
             if _beta_for_scale is not None:
-                _alpha_for_scale = self.alpha
+                _alpha_for_scale = alpha_effective if alpha_effective is not None else self.alpha
                 mu_scale, sigma_scale = compute_implicit_em_scales(
                     alpha_i=_alpha_for_scale,
                     sigma_p=sigma_p,
@@ -1987,10 +1979,6 @@ class VariationalFFNDynamic(nn.Module):
             one_hot = _obs_cache['one_hot']
             grad_error = (probs - one_hot) * mask_obs
             discrete_obs_grad = torch.matmul(grad_error, W_out)
-            # Scale observation gradient by obs_weight (for warmup ramp)
-            _obs_weight = getattr(self, '_obs_weight', 1.0)
-            if _obs_weight < 1.0:
-                discrete_obs_grad = discrete_obs_grad * _obs_weight
             # Debug: observation mu gradient
             if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
                 _vfe_utils_mod._VFE_GRAD_DEBUG['obs_mu_grad'] = _grad_norm(discrete_obs_grad)
@@ -2015,7 +2003,7 @@ class VariationalFFNDynamic(nn.Module):
                     if _is_final_iter:
                         _nr("obs_sigma_hessian_neg_clamp", count=int(_neg_mask.sum().item()))
                     hessian_diag = hessian_diag.clamp(min=0.0)
-                _sigma_obs_scale = (0.5 * self.obs_sigma_weight) * _obs_weight
+                _sigma_obs_scale = 0.5 * self.obs_sigma_weight
                 # Cap observation sigma gradient magnitude. Var_p[W[:,k]] >= 0
                 # always, so this Hessian term adds positive precision, which
                 # under descent pushes sigma downward (tightens the posterior).

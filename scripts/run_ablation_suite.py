@@ -68,7 +68,7 @@ BASELINE_CONFIG = {
     'n_layers':                   1,
     'ffn_n_iterations':           1,
     
-    'alpha_divergence':           0.8,
+    'alpha_divergence':           0.75,
     #'grad_accumulation_steps': 1,
     #'gradient_checkpoint_vfe': False,
     
@@ -332,7 +332,7 @@ SWEEPS = {
     'rope_base': {
         'description': 'RoPE frequency base: θ_n = 1/base^(2n/K). Lower = faster position decay',
         'param': 'rope_base',
-        'values': [60, 70, 80, 90],
+        'values': [25, 50, 75, 100],
         'baseline_value': 10,
     },
 
@@ -564,8 +564,8 @@ SWEEPS = {
     'alpha_divergence': {
         'description': 'Renyi alpha-divergence order (1.0=KL, 0.5=Bhattacharyya)',
         'param': 'alpha_divergence',
-        'values': [0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.75, 1],
-        'baseline_value': 0.275,
+        'values': [0.75, 1, 1.25, 1.5, 1.75, 2],
+        'baseline_value': 0.75,
     },
 
 
@@ -574,9 +574,10 @@ SWEEPS = {
 # Sweep execution order (cheapest → most expensive)
 SWEEP_ORDER = [
     
-   # 'phi_scale',
-    'mu_init_std',
-    'sigma_ce_scale',
+    #'rope_base',
+   #'phi_scale',
+  # 'mu_init_std',
+  # 'sigma_ce_scale',   #0.7
     'alpha_divergence',     #0.275
     'M_phi_lr', #0.00325   #0.0031
     'M_vfe_hyperparam_lr', #0.1
@@ -591,18 +592,18 @@ SWEEP_ORDER = [
     'M_output_lr',       #0.065
     'non_embed_weight_decay', #0.005
     
- #   'E_phi_lr',
-  #  'E_mu_q_lr',
-  #  'E_sigma_q_lr',
+ #  'E_phi_lr',
+  # 'E_mu_q_lr',
+  # 'E_sigma_q_lr',
     
-      #'rope_base',
+     
     'E_lambda_belief',
     'E_lambda_softmax',
     'E_alpha',
    #
     #'kappa_beta',
     'lambda_hyper',
-   'mass_phi',
+    'mass_phi',
     'M_alpha',
     
   #  'M_beta',

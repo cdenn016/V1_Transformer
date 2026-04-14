@@ -20,7 +20,6 @@ means before KL divergence computation, making attention position-sensitive
 without affecting gauge transport.
 """
 
-import math
 import torch
 from typing import List, Optional, Tuple
 

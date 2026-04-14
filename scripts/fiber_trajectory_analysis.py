@@ -36,7 +36,7 @@ CONFIG = {
     'checkpoint_dir':       None,  # e.g. 'checkpoints/run_42'
 
     # Dataset
-    'dataset':              'wikitext2',
+    'dataset':              'wikitext-2',
     'seq_len':              128,
     'batch_size':           1,      # single batch element for analysis
 
@@ -55,9 +55,8 @@ CONFIG = {
 FRESH_CONFIG = {
     'n_layers':                   2,
     'embed_dim':                  20,
-    'n_heads':                    2,
     'vocab_size':                 50257,
-    'seq_len':                    128,
+    'max_seq_len':                128,
     'batch_size':                 4,
     'gauge_group':                'GLK',
     'gauge_mode':                 'learned',
@@ -103,8 +102,8 @@ def main() -> None:
         else:
             raise FileNotFoundError(f"No config.json in {ckpt_dir}")
 
-        from transformer.core.model import GaugeTransformer
-        model = GaugeTransformer.from_config(model_config).to(device)
+        from transformer.core.model import GaugeTransformerLM
+        model = GaugeTransformerLM(model_config).to(device)
 
         # Load weights
         ckpt_files = sorted(ckpt_dir.glob('*.pt'))
@@ -115,8 +114,8 @@ def main() -> None:
             print(f"Loaded checkpoint: {ckpt_files[-1].name}")
     else:
         print("Building fresh model from FRESH_CONFIG...")
-        from transformer.core.model import GaugeTransformer
-        model = GaugeTransformer.from_config(FRESH_CONFIG).to(device)
+        from transformer.core.model import GaugeTransformerLM
+        model = GaugeTransformerLM(FRESH_CONFIG).to(device)
 
     model.eval()
     n_layers = len(model.blocks)
@@ -128,10 +127,10 @@ def main() -> None:
     # ═══════════════════════════════════════════════════════════════════
     seq_len = CONFIG['seq_len']
     try:
-        from transformer.data.datasets import get_dataloader
-        train_loader = get_dataloader(
-            CONFIG['dataset'], batch_size=CONFIG['batch_size'],
-            seq_len=seq_len, split='train',
+        from transformer.data.datasets import create_dataloaders
+        train_loader, _, _ = create_dataloaders(
+            dataset_name=CONFIG['dataset'], batch_size=CONFIG['batch_size'],
+            seq_len=seq_len,
         )
         batch = next(iter(train_loader))
         if isinstance(batch, (list, tuple)):

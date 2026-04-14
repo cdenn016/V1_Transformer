@@ -50,8 +50,7 @@ Date: March 2026
 
 import math
 import torch
-import torch.nn as nn
-from typing import Optional, Tuple
+from typing import Optional
 
 from transformer.core.vfe_utils import _safe_spd_inv
 

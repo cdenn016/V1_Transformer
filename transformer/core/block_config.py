@@ -13,12 +13,8 @@ mu_normalize, mu_max_norm) are handled by model.py → GaugeTokenEmbedding direc
 
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
-import math
-import logging
 import torch
 import torch.nn as nn
-
-logger = logging.getLogger(__name__)
 
 
 
@@ -56,11 +52,11 @@ class BlockConfig:
     multihead_vfe: bool =         True         # Per-head β_h through VFE iterations
 
     # === Belief evolution ===
-    E_learnable_lr: bool =     True        # Learn step size η for variational descent
-    evolve_sigma: bool =       True           # Update covariances Σ via natural gradient
-    evolve_phi: bool =         True             # Update gauge frames φ (M-step, after E-step loop)
+    E_learnable_lr: bool =     True    # Learn step size η for variational descent
+    evolve_sigma: bool =       True    # Update covariances Σ via natural gradient
+    evolve_phi: bool =         True    # Update gauge frames φ (M-step, after E-step loop)
     evolve_phi_e_step: bool =  True    # Update φ during EACH E-step iteration
-    ffn_update_sigma: bool =   True       # Update covariances during E-step
+    ffn_update_sigma: bool =   True    # Update covariances during E-step
     E_learnable_alpha: bool =  True    # Bayesian precision via Gamma-Normal conjugacy
     obs_sigma_gradient: bool = True    # ∂E_q[CE]/∂σ Hessian-diagonal obs gradient for sigma
     sigma_aggregation: str =   'mixture'  # 'mixture' (moment matching) or 'precision' (VFE equilibrium)

@@ -20,7 +20,7 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 import json
 import csv
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
 

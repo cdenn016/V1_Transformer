@@ -14,7 +14,6 @@ import math
 import warnings
 
 import torch
-import torch.nn.functional as F
 
 from .cuda_ext import get_cuda_ext
 

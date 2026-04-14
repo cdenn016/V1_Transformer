@@ -18,9 +18,7 @@ of the holonomy: $F_{ijk} = \log(C_{ijk})$.
 
 from __future__ import annotations
 
-import math
 import torch
-import torch.nn.functional as F_nn
 from torch import Tensor
 from typing import Dict, List, Optional, Tuple
 
@@ -476,7 +474,13 @@ def gauge_fix_axial(
         # Use eigendecomposition for matrix log: log(V diag(λ) V^{-1}) = V diag(log λ) V^{-1}
         eigvals, eigvecs = torch.linalg.eig(composed_flat)
         log_eigvals = torch.log(eigvals.abs().clamp(min=1e-12)) + 1j * eigvals.angle()
-        log_matrix = eigvecs @ torch.diag_embed(log_eigvals) @ torch.linalg.inv(eigvecs)
+        try:
+            eigvecs_inv = torch.linalg.solve(eigvecs.transpose(-2, -1).conj(), torch.eye(
+                eigvecs.shape[-1], device=eigvecs.device, dtype=eigvecs.dtype
+            ).expand_as(eigvecs)).transpose(-2, -1).conj()
+        except (torch.linalg.LinAlgError, RuntimeError):
+            eigvecs_inv = torch.linalg.pinv(eigvecs)
+        log_matrix = eigvecs @ torch.diag_embed(log_eigvals) @ eigvecs_inv
         log_matrix = log_matrix.real.reshape(B_size, N_size, K, K)  # (B, N, K, K)
 
         # Extract coordinates: φ_a = tr(G_a^T · log_matrix) / ||G_a||²_F

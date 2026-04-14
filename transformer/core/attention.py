@@ -1344,8 +1344,6 @@ class IrrepMultiHeadAttention(nn.Module):
         self.kappa_beta = kappa_beta
         self.epsilon = epsilon
         self.aggregate_mode = aggregate_mode
-        self.attention_pattern = attention_pattern
-        self.attention_window = attention_window
         self.alibi_slope = alibi_slope
         self.gauge_mode = gauge_mode
         self.mask_self_attention = mask_self_attention
@@ -1994,98 +1992,3 @@ class IrrepMultiHeadAttention(nn.Module):
             f"irrep_dims={self.irrep_dims[:3]}..., "
             f"kappa={self.kappa_beta}"
         )
-
-
-# =============================================================================
-# Testing
-# =============================================================================
-
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    logger.info("="*70)
-    logger.info("KL-BASED ATTENTION MECHANISM TEST")
-    logger.info("="*70)
-
-    # Test config
-    B, N, K = 2, 8, 16  # Small for testing
-    kappa = 1.0
-
-    logger.info("[1] Creating test data...")
-    logger.info(f"    Batch size: {B}")
-    logger.info(f"    Num agents: {N} (all at single point c*)")
-    logger.info(f"    Embed dim:  {K}")
-
-    # Create random beliefs
-    mu_q = torch.randn(B, N, K)
-    sigma_q = torch.eye(K).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1) * 0.5
-    phi = torch.randn(B, N, 3) * 0.1
-
-    # Generate SO(3) generators (import from existing module)
-    if TRANSPORT_AVAILABLE:
-        G = torch.from_numpy(generate_so3_generators(K)).float()
-        logger.info(f"    SO(3) generators created: {G.shape}")
-    else:
-        # Fallback: random skew-symmetric matrices
-        G = torch.randn(3, K, K)
-        G = 0.5 * (G - G.transpose(-1, -2))  # Make skew-symmetric
-        logger.warning("    Using random generators (transport module unavailable)")
-
-    # Test attention weights
-    logger.info("[2] Computing KL-based attention weights...")
-    beta = compute_attention_weights(
-        mu_q, sigma_q, phi, G, kappa  # Use PyTorch
-    )
-    logger.info(f"    beta shape: {beta.shape}")
-    logger.info(f"    beta sum over keys: {beta.sum(dim=-1)[0, 0].item():.4f} (should approx 1)")
-    logger.info(f"    beta min: {beta.min().item():.6f}")
-    logger.info(f"    beta max: {beta.max().item():.6f}")
-
-    # Test causal mask
-    logger.info("[3] Testing causal mask...")
-    mask = torch.tril(torch.ones(N, N)).unsqueeze(0).expand(B, -1, -1)
-    beta_causal = compute_attention_weights(
-        mu_q, sigma_q, phi, G, kappa, mask=mask
-    )
-    logger.info(f"    Causal beta[0, 0, :5]: {beta_causal[0, 0, :5]}")
-    logger.info(f"    Future positions should be ~0: {beta_causal[0, 0, 5:].sum().item():.6f}")
-
-    # Test message aggregation
-    logger.info("[4] Testing message aggregation...")
-    mu_agg, _ = aggregate_messages(
-        mu_q, sigma_q, phi, beta, G, aggregate_mode='mean_only'
-    )
-    logger.info(f"    Aggregated means shape: {mu_agg.shape}")
-    logger.info("    Messages aggregated via parallel transport")
-
-    # Test multi-head attention
-    logger.info("[5] Testing multi-head attention...")
-    irrep_spec = [
-        ('ℓ0', 4, 1),   # 4 scalars
-        ('ℓ1', 2, 3),   # 2 vectors
-        ('ℓ2', 1, 5),   # 1 rank-2 tensor
-    ]  # Total: 4 + 6 + 5 = 15 -> pad to 16
-
-    mha = IrrepMultiHeadAttention(
-        embed_dim=K,
-        irrep_spec=irrep_spec,
-        kappa_beta=kappa,
-    )
-    logger.info(f"    {mha}")
-
-    mu_out, sigma_out, attn_weights, kl_matrices = mha(
-        mu_q, sigma_q, phi, G, return_attention=True
-    )
-    logger.info(f"    Output mu shape: {mu_out.shape}")
-    logger.info(f"    Attention weights shape: {attn_weights.shape}")
-    logger.info("    Multi-head attention complete")
-
-    # Parameter count
-    total_params = sum(p.numel() for p in mha.parameters())
-    logger.info("[6] Parameter count:")
-    logger.info(f"    Multi-head attention: {total_params:,} parameters")
-    logger.info(f"    (Compare to standard: 4*K^2 = {4*K*K:,} for Q,K,V,O projections)")
-    logger.info(f"    Reduction: {4*K*K / max(total_params, 1):.1f}x fewer parameters!")
-
-    logger.info("="*70)
-    logger.info("All attention mechanism tests passed!")
-    logger.info("="*70)

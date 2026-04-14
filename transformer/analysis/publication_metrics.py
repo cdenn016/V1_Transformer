@@ -137,6 +137,13 @@ class TrainingSnapshot:
     mstep_nat_grad_sigma: float = 0.0
     mstep_nat_grad_phi: float = 0.0
     mstep_nat_grad_other: float = 0.0
+    # M-step post-clip natural gradient norms and clip fractions
+    mstep_nat_grad_mu_clipped: float = 0.0
+    mstep_nat_grad_sigma_clipped: float = 0.0
+    mstep_nat_grad_phi_clipped: float = 0.0
+    mstep_clip_frac_mu: float = 0.0
+    mstep_clip_frac_sigma: float = 0.0
+    mstep_clip_frac_phi: float = 0.0
     lr_current: float = 0.0
     tokens_per_sec: float = 0.0
     step_time: float = 0.0
@@ -203,13 +210,17 @@ class TrainingTracker:
 
         Args:
             mstep_natural_norms: Per-group dict from NaturalGradientOptimizer.get_grad_norms().
-                Maps group name → {'euclidean': float, 'natural': float}.
+                Maps group name → {'euclidean': float, 'natural': float,
+                'natural_clipped': float, 'clip_fraction': float}.
         """
         tokens_per_sec = (batch_size * seq_len) / step_time if step_time > 0 else 0
 
         train_ce = train_metrics.get('ce_loss', train_metrics.get('ce', 0))
-        train_bpc = train_ce / math.log(2) if train_ce > 0 else 0
-        train_ppl = math.exp(min(train_ce, 20)) if train_ce > 0 else float('inf')
+        # Use raw (un-normalized) CE for PPL/BPC to avoid bogus values
+        # when normalize_ce_by_dim=True divides CE by sqrt(K)
+        train_ce_raw = train_metrics.get('ce_loss_raw', train_ce)
+        train_bpc = train_ce_raw / math.log(2) if train_ce_raw > 0 else 0
+        train_ppl = math.exp(min(train_ce_raw, 20)) if train_ce_raw > 0 else float('inf')
 
         # Extract M-step natural gradient norms per group
         def _mstep_nat(group_name: str) -> float:
@@ -219,6 +230,22 @@ class TrainingTracker:
             if entry is None:
                 return 0.0
             return entry.get('natural', 0.0)
+
+        def _mstep_nat_clipped(group_name: str) -> float:
+            if mstep_natural_norms is None:
+                return 0.0
+            entry = mstep_natural_norms.get(group_name, None)
+            if entry is None:
+                return 0.0
+            return entry.get('natural_clipped', 0.0)
+
+        def _mstep_clip_frac(group_name: str) -> float:
+            if mstep_natural_norms is None:
+                return 0.0
+            entry = mstep_natural_norms.get(group_name, None)
+            if entry is None:
+                return 0.0
+            return entry.get('clip_fraction', 0.0)
 
         snapshot = TrainingSnapshot(
             step=step,
@@ -243,6 +270,12 @@ class TrainingTracker:
             mstep_nat_grad_sigma=_mstep_nat('sigma_embed'),
             mstep_nat_grad_phi=_mstep_nat('phi_embed'),
             mstep_nat_grad_other=_mstep_nat('output'),
+            mstep_nat_grad_mu_clipped=_mstep_nat_clipped('mu_embed'),
+            mstep_nat_grad_sigma_clipped=_mstep_nat_clipped('sigma_embed'),
+            mstep_nat_grad_phi_clipped=_mstep_nat_clipped('phi_embed'),
+            mstep_clip_frac_mu=_mstep_clip_frac('mu_embed'),
+            mstep_clip_frac_sigma=_mstep_clip_frac('sigma_embed'),
+            mstep_clip_frac_phi=_mstep_clip_frac('phi_embed'),
             lr_current=lr,
             tokens_per_sec=tokens_per_sec,
             step_time=step_time,

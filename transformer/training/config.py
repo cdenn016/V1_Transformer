@@ -122,7 +122,7 @@ class TrainingConfig:
     #   Orthogonal to embed_weight_decay (which regularizes magnitudes via AdamW).
        
     detach_beta_m_step: bool =  True  # Detach β in M-step loss (correct EM). False = old behavior (gradient flows through softmax)
-    normalize_ce_by_dim: bool = False  # Divide CE loss by sqrt(K) to match VFE dim_scale normalization
+    normalize_ce_by_dim: bool = True  # Divide CE loss by sqrt(K) to match VFE dim_scale normalization
     use_obs_in_vfe: bool =      False  # Pass targets as observations into VFE E-step (last layer only)
     obs_sigma_gradient: bool =  True  # ∂E_q[CE]/∂σ Hessian-diagonal obs gradient for sigma
     obs_sigma_weight: float =   1.0     # Weight for sigma observation gradient
@@ -154,7 +154,7 @@ class TrainingConfig:
     # Hardware
     # ==========================================================================
     device: str = 'cuda'
-    num_workers: int = 0            # DataLoader worker processes (0 = main thread; faster on Windows)
+    num_workers: int = 0     # DataLoader worker processes (0 = main thread; faster on Windows)
 
     # ==========================================================================
     # Mixed Precision (AMP)
@@ -186,7 +186,7 @@ class TrainingConfig:
     # Positional Encoding
     # ==========================================================================
     use_rope: bool =   True       # RoPE: SO(2)^{K/2} position rotations on μ
-    rope_base: float = 10000.0
+    rope_base: float = 75
 
     # ==========================================================================
     # Model Architecture (for creation, not training)
@@ -199,7 +199,7 @@ class TrainingConfig:
     # Gauge Geometry: Phi gradient preconditioning (M-step)
     # ==========================================================================
     mass_phi: float =                   0.05                     # Gauge prior: (mass_φ/2)||φ||² loss term
-    use_slk_projection: bool =          False           # Project phi to traceless sl(K) after each step
+    use_slk_projection: bool =          False  # Project phi to traceless sl(K) after each step
     use_killing_form: bool =            False             # Cartan decomposition preconditioning for phi grads
     killing_form_sym_dampening: float = 0.1    # Dampening for non-compact (symmetric) directions
 
@@ -208,7 +208,7 @@ class TrainingConfig:
     # ==========================================================================
     use_p_flow: bool =           False          # EMA update of token embeddings toward successful beliefs
     p_flow_ema_decay: float =    0.99
-    sigma_ce_scale: float =      0.01      # Scale CE gradient to sigma_p (0=detach, 1=full)
+    sigma_ce_scale: float =      0.7      # Scale CE gradient to sigma_p (0=detach, 1=full)
     detach_phi: bool =           False           # Detach phi from backprop (enables backprop-free phi)
     use_delta_rule_w_out: bool = False # Delta rule for W_out (backprop-free)
     delta_rule_lr: float =       0.001

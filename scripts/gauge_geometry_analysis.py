@@ -38,7 +38,7 @@ CONFIG = {
     'checkpoint_dir':       None,  # e.g. 'checkpoints/run_42'
 
     # Dataset
-    'dataset':              'wikitext2',
+    'dataset':              'wikitext-2',
     'seq_len':              64,
     'batch_size':           1,      # single batch element for analysis
 
@@ -128,10 +128,10 @@ def main() -> None:
     # ═══════════════════════════════════════════════════════════════════
     seq_len = CONFIG['seq_len']
     try:
-        from transformer.data.datasets import get_dataloader
-        train_loader = get_dataloader(
-            CONFIG['dataset'], batch_size=CONFIG['batch_size'],
-            seq_len=seq_len, split='train',
+        from transformer.data.datasets import create_dataloaders
+        train_loader, _, _ = create_dataloaders(
+            dataset_name=CONFIG['dataset'], batch_size=CONFIG['batch_size'],
+            seq_len=seq_len,
         )
         batch = next(iter(train_loader))
         if isinstance(batch, (list, tuple)):

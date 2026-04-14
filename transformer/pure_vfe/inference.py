@@ -30,10 +30,8 @@ from .gaussians import (
     state_dependent_alpha,
     natural_grad_sigma,
     retract_spd,
-    clip_norm,
     clip_matrix_norm,
     safe_inverse,
-    symmetrize,
 )
 from .gauge import (
     vfe_grad_Omega,
@@ -211,7 +209,7 @@ def e_step(token_ids, model, config, effective_lrs=None):
     omega_cond_max = getattr(config, 'omega_cond_max', 50.0)
     use_rope = getattr(config, 'use_rope', False)
     rope_base = getattr(config, 'rope_base', 10000.0)
-    use_layernorm = getattr(config, 'use_layernorm', True)
+    use_layernorm = getattr(config, 'use_layernorm', False)
     diagonal_cov = getattr(config, 'diagonal_covariance', False)
     use_holonomy = getattr(config, 'use_holonomy', False)
 
@@ -320,13 +318,16 @@ def e_step(token_ids, model, config, effective_lrs=None):
 
         # --- VFE divergence early stopping ---
         if len(vfe_history) >= 2:
-            _prev_vfe = abs(vfe_history[-2]) + 1e-10
-            _vfe_ratio = vfe_history[-1] / _prev_vfe
-            if _vfe_ratio > 1.1:  # 10% increase (was 1.5x)
+            _curr_vfe = vfe_history[-1]
+            _prev_vfe_val = vfe_history[-2]
+            # Detect divergence: VFE increased by more than 10% (works for both signs)
+            _vfe_increase = _curr_vfe - _prev_vfe_val
+            _vfe_scale = abs(_prev_vfe_val) + 1e-10
+            if _vfe_increase > 0.1 * _vfe_scale:  # 10% increase
                 warnings.warn(
                     f"E-step VFE divergence at step {step}: "
                     f"{vfe_history[-2]:.2f} -> {vfe_history[-1]:.2f} "
-                    f"(ratio {_vfe_ratio:.3f}), stopping early",
+                    f"(increase {_vfe_increase:.3f}, scale {_vfe_scale:.3f}), stopping early",
                     RuntimeWarning, stacklevel=2,
                 )
                 break

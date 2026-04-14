@@ -1213,7 +1213,11 @@ def _safe_logm(M: torch.Tensor) -> torch.Tensor:
     """Matrix logarithm via eigendecomposition, handling complex eigenvalues."""
     evals, evecs = torch.linalg.eig(M)
     log_evals = torch.log(evals)  # complex log
-    return (evecs @ torch.diag(log_evals) @ torch.linalg.inv(evecs)).real.float()
+    try:
+        evecs_inv = torch.linalg.inv(evecs)
+    except (torch.linalg.LinAlgError, RuntimeError):
+        evecs_inv = torch.linalg.pinv(evecs)
+    return (evecs @ torch.diag(log_evals) @ evecs_inv).real.float()
 
 
 # =============================================================================
