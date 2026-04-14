@@ -246,7 +246,7 @@ D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)
 \right].
 \end{align}
 
-The observation term contributes an $O(\Sigma_i^{-1})$ correction that we neglect in the high-precision / strong-alignment regime. The alignment term $\sum_j \beta_{ij} D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ requires the product rule, since $\beta_{ij} = \mathrm{softmax}_j(-D_{\mathrm{KL}}/\tau)$ depends on $\Sigma_i$ through the KL divergence. Thus
+The observation term contributes a model-dependent correction to the covariance gradient (e.g., $\frac{1}{2}R^{-1}$ for Gaussian observations with noise covariance $R$). In the high-precision regime where $\Sigma_i^{-1} \gg R^{-1}$, this $O(1)$ correction is negligible compared to the $O(\Sigma_i^{-1})$ alignment and prior terms. The alignment term $\sum_j \beta_{ij} D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ requires the product rule when differentiating the attention-weighted energy (the autograd objective), since $\beta_{ij} = \mathrm{softmax}_j(-D_{\mathrm{KL}}/\tau)$ depends on $\Sigma_i$ through the KL divergence. Thus
 
 \begin{equation}
 \boxed{
@@ -266,9 +266,9 @@ D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j).
 \label{eq:Sigma_gradient_final}
 \end{equation}
 
-The first line contains the ``direct'' gradient terms (differentiating each $K_{ij}$ at fixed $\beta_{ij}$). The second line is the attention weight gradient, analogous to the $\partial \beta_{ij}/\partial \mu_i$ term in the mean gradient. From the softmax structure, $\sum_j \partial \beta_{ij}/\partial \Sigma_i = 0$, so this correction vanishes when the KL divergences are uniform across neighbors, and also in both the $\tau \to 0$ and $\tau \to \infty$ limits.
+The first line contains the ``direct'' gradient terms (differentiating each $K_{ij}$ at fixed $\beta_{ij}$). The second line is the attention weight gradient, analogous to the $\partial \beta_{ij}/\partial \mu_i$ term in the mean gradient. This $\partial\beta/\partial\Sigma$ term arises from differentiating the attention-weighted energy $\sum_j \beta_{ij} E_{ij}$ via the product rule; it is absent from the gradient of the reduced free energy $\mathcal{F}_{\mathrm{red}} = -\tau\log Z_i + \cdots$ by the envelope theorem (see main text, Section~3.5). From the softmax structure, $\sum_j \partial \beta_{ij}/\partial \Sigma_i = 0$, so this correction vanishes when the KL divergences are uniform across neighbors, and also in both the $\tau \to 0$ and $\tau \to \infty$ limits.
 
-Because $\sum_j \beta_{ij} = 1$, there is no $(1 + \sum_j \beta_{ij})$ prefactor in front of $\Sigma_i^{-1}$.
+The coefficient of $\Sigma_i^{-1}$ is $-(1 + \sum_j \beta_{ij}) = -2$, since the entropy of $q_i$ contributes $-\frac{1}{2}\Sigma_i^{-1}$ to both the prior KL (once, with unit coefficient $\alpha_i = 1$) and the attention-weighted alignment KL (once, weighted by $\sum_j \beta_{ij} = 1$).
 
 \subsection{Fixed-Point Equation and Symmetric Solution}
 
@@ -330,7 +330,7 @@ D_{\mathrm{KL}}\!\big(q_i \,\|\, \Omega_{ik} q_k\big)
 \right]}.
 \end{equation}
 
-As $\tau \to 0$, $\beta_{ij}$ becomes sharply peaked on whichever neighbor $j$ best agrees (after transport). In that low-$\tau$ limit, the prior precision $\Sigma_{p,i}^{-1}$ becomes negligible relative to the socially enforced alignment term, and
+As $\tau \to 0$, $\beta_{ij}$ becomes sharply peaked on whichever neighbor $j$ best agrees (after transport). Small $\tau$ alone sharpens the $\beta$ distribution but does not change the coefficient on $\Sigma_i^{-1}$ in the fixed-point equation \eqref{eq:sigma_fixed_point_beta}, which remains $\frac{1}{2}$. To obtain a coefficient of $1$ on the alignment term, one requires the state-dependent prior coupling $\alpha_i \ll 1$ (cf.\ main text, Section~3.6), which changes the coefficient from $-(1+\alpha_i)$ to approximately $-1$. In the alignment-dominated regime where both $\alpha_i \ll 1$ and $\tau$ is small, the fixed point becomes:
 
 \begin{equation}
 \boxed{
@@ -345,7 +345,7 @@ As $\tau \to 0$, $\beta_{ij}$ becomes sharply peaked on whichever neighbor $j$ b
 
 Here $\langle \cdot \rangle_{\beta}$ denotes a $\beta$-weighted expectation over neighbors.
 
-Therefore, in the strong-alignment (i.e. small $\tau$) regime, agent $i$'s precision matrix becomes the $\beta$-weighted average of its neighbors' transported precisions.
+In this regime, agent $i$'s precision matrix becomes the $\beta$-weighted average of its neighbors' transported precisions. The two conditions play complementary roles: small $\alpha_i$ suppresses the prior term and changes the coefficient to unity, while small $\tau$ concentrates $\beta$ on the most aligned neighbors.
 
 When, additionally, all agents already have approximately equal covariances and the transports are near-identity, i.e. $\Sigma_i \approx \Sigma_j$ and $\Omega_{ij} \approx I$, then \eqref{eq:beta_weighted_precision} implies
 
@@ -391,7 +391,7 @@ We derive the gradient of the variational free energy $\mathcal{F}$ with respect
 
 \subsection{Structure of the Gauge Frame Gradient}
 
-The gauge frames enter the free energy exclusively through the parallel transport operators $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$. Since neither the belief-prior term $D_{\mathrm{KL}}(q_i \| p_i)$ nor the observation likelihood $-\mathbb{E}_{q_i}[\log p(o_i | k_i)]$ depends on $\phi_i$, the complete gradient is:
+The gauge frames enter the free energy exclusively through the parallel transport operators $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$. Since neither the belief-prior term $D_{\mathrm{KL}}(q_i \| p_i)$ nor the observation likelihood $-\mathbb{E}_{q_i}[\log p(o_i | k_i)]$ depends on $\phi_i$, the complete autograd gradient (differentiating the attention-weighted energy $\sum_j \beta_{ij} K_{ij}$ via the product rule; see main text Section~3.5 for the distinction between autograd and reduced-free-energy gradients) is:
 
 \begin{equation}
 \frac{\partial \mathcal{F}}{\partial \phi_i}
@@ -432,7 +432,7 @@ All KL gradient terms require the derivative of the transport operator with resp
 
 \begin{align}
 \frac{\partial \Omega_{ij}}{\partial \phi_i} &= \mathrm{dexp}_{\phi_i}(\cdot) \cdot \exp(-\phi_j), \label{eq:dOmega_dphi_i} \\
-\frac{\partial \Omega_{ij}}{\partial \phi_j} &= -\exp(\phi_i) \cdot \mathrm{dexp}_{\phi_j}(\cdot) \cdot \exp(-\phi_j), \label{eq:dOmega_dphi_j}
+\frac{\partial \Omega_{ij}}{\partial \phi_j} &= -\exp(\phi_i) \cdot \mathrm{dexp}_{-\phi_j}(\cdot) \cdot \exp(-\phi_j), \label{eq:dOmega_dphi_j}
 \end{align}
 
 where $\mathrm{dexp}_\phi: \mathfrak{g} \to \mathfrak{g}$ denotes the differential of the exponential map at $\phi$. For a direction $\xi \in \mathfrak{g}$, the differential is given by \citep{gallier2020differential,rossmann2002lie}:
@@ -442,7 +442,7 @@ where $\mathrm{dexp}_\phi: \mathfrak{g} \to \mathfrak{g}$ denotes the differenti
 \label{eq:dexp_series}
 \end{equation}
 
-where $\mathrm{ad}_\phi(\xi) = [\phi, \xi] = \phi\xi - \xi\phi$ is the adjoint representation.
+where $\mathrm{ad}_\phi(\xi) = [\phi, \xi] = \phi\xi - \xi\phi$ is the adjoint representation. Equation \eqref{eq:dexp_series} defines the right-trivialized differential, related to the Fr\'{e}chet derivative (directional derivative in matrix space) by $D_\phi(\exp)[\xi] = \mathrm{dexp}_\phi(\xi) \cdot e^\phi$. The $\mathrm{GL}(K)$ specialization below uses the Fr\'{e}chet derivative directly via its integral representation.
 
 \subsubsection{$\mathrm{SO}(N)$ specialization.}
 
@@ -463,7 +463,7 @@ For $\theta < \epsilon$ (numerically $\epsilon \sim 10^{-4}$), Taylor expansions
 
 \subsubsection{$\mathrm{GL}(K)$ specialization.}
 
-For $\mathrm{GL}(K)$, the gauge frame $\phi \in \mathfrak{gl}(K) \cong \mathbb{R}^{K \times K}$ is a general $K \times K$ matrix. The differential of the matrix exponential does not simplify to a Rodrigues-like formula, and is instead computed via the integral representation:
+For $\mathrm{GL}(K)$, the gauge frame $\phi \in \mathfrak{gl}(K) \cong \mathbb{R}^{K \times K}$ is a general $K \times K$ matrix. The differential of the matrix exponential does not simplify to a Rodrigues-like formula, and is instead computed via the integral representation of the Fr\'{e}chet derivative $D_\phi(\exp)[\xi]$:
 
 \begin{equation}
 \mathrm{dexp}_\phi(\xi) = \int_0^1 e^{t\phi} \, \xi \, e^{(1-t)\phi} \, dt,
