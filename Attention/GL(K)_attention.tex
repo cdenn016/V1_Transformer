@@ -824,35 +824,32 @@ This recovers relative position biases used in T5 \citep{raffel2020exploring} an
 \subsection{Full Variational Free Energy}
 \label{sec:final_free_energy}
 
-By combining the single-agent free energy \eqref{eq:single_agent_fep} with the alignment terms derived above and summing over all agents, we obtain the global gauge-covariant variational free energy at $c^* \in \mathcal{C}$:
+By combining the single-agent free energy \eqref{eq:single_agent_fep} with the alignment terms derived above and summing over all agents, we obtain the global gauge-covariant variational free energy at $c^* \in \mathcal{C}$. Substituting the optimal attention weights $\beta_{ij}^* = \softmax_j(-E_{ij}/\tau + \log\pi_j)$ from \eqref{eq:mixture_softmax_general} into the full alignment free energy $\mathcal{F}_{\text{align}}$ \eqref{eq:mixture_energy_entropy} yields the reduced alignment energy $-\tau\log Z_i$, where $Z_i = \sum_j \pi_j\exp(-E_{ij}/\tau)$ is the partition function. The reduced (partially minimized) free energy is therefore:
 
 \begin{equation}
 \boxed{
 \begin{aligned}
-\mathcal{F}[\{q_i\}]
+\mathcal{F}_{\mathrm{red}}[\{q_i\}]
 &=\sum_i D_{\mathrm{KL}}(q_i\,\|\,p_i)
-+\sum_{i,j}\beta_{ij}^*\,D_{\mathrm{KL}}(q_i\,\|\,\Omega_{ij}q_j)
--\mathbb{E}_q[\log p(o\,|\{k_i\})].
+-\tau\sum_i \log Z_i
+-\mathbb{E}_q[\log p(o\,|\{k_i\})],
 \end{aligned}
 }
 \label{eq:free_energy_final}
 \end{equation}
 
-We note that this is the partially minimized free energy: the attention weights $\beta_{ij}^*$ have already been set to their optimal softmax values \eqref{eq:mixture_softmax_general} by minimizing the full alignment free energy $\mathcal{F}_{\text{align}}$ \eqref{eq:mixture_energy_entropy} with respect to $\beta$. The full (un-minimized) alignment energy includes an attention entropy/prior term $\tau\sum_{i,j}\beta_{ij}\log(\beta_{ij}/\pi_j)$ (cf.\ Eq.~\ref{eq:mixture_energy_entropy}), which is essential for it is this term that makes the $\beta$-optimization yield the softmax rather than an arg-min. When $\beta_{ij}$ is set to its optimal value $\beta_{ij}^* = \softmax_j(-E_{ij}/\tau + \log\pi_j)$, the entropy term evaluates to $-\tau\sum_i\log Z_i$ (where $Z_i = \sum_j \pi_j\exp(-E_{ij}/\tau)$ is the partition function), which is absorbed into $\mathcal{F}[\{q_i\}]$ as a function of beliefs alone. This absorbed log-partition function does not appear as an explicit loss term in the implementation, but it contributes to the gradients $\partial\mathcal{F}/\partial\mu_i$ through the chain rule via $\partial\beta^*/\partial\mu_i$ representing a fundamental non-linearity in the theory as we discuss further below.
+where $E_{ij} = D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ and $Z_i = \sum_j \pi_j \exp(-E_{ij}/\tau)$. The log-partition function $-\tau\log Z_i$ is the result of substituting $\beta_{ij}^*$ into both the energy term $\sum_j \beta_{ij} E_{ij}$ and the entropy term $\tau\sum_j \beta_{ij}\log(\beta_{ij}/\pi_j)$ of $\mathcal{F}_{\text{align}}$. The full (un-minimized) alignment energy includes the attention entropy/prior term, which is essential: it is this term that makes the $\beta$-optimization yield the softmax rather than an arg-min.
 
-The envelope theorem implies consistency since:
-
-$$
-\partial\mathcal{F}/\partial\mu_i\big|_{\beta=\beta^*} =\frac{d}{d\mu_i}\mathcal{F}[\{q_i\}, \beta^*(q)]
-$$ 
-
-since the cross-term
+The envelope theorem guarantees that the gradient of $\mathcal{F}_{\mathrm{red}}$ with respect to any belief parameter $x \in \{\mu_i, \Sigma_i, \phi_i\}$ takes the form:
 
 $$
-\sum_j(\partial\mathcal{F}/\partial\beta_{ij})(\partial\beta^*_{ij}/\partial\mu_i)
+\frac{d\mathcal{F}_{\mathrm{red}}}{dx} = \frac{\partial\mathcal{F}}{\partial x}\bigg|_{\beta=\beta^*}
+= \text{(prior terms)} + \sum_j \beta_{ij}^*\,\frac{\partial E_{ij}}{\partial x} - \text{(observation terms)},
 $$
 
-vanishes at the optimal attention. The gradient expressions in Section~4.3, which include $\partial\beta_{ij}/\partial\mu_i$ terms, are therefore correct as written under this partially minimized convention (similarly for $\Sigma$ and $\phi$) .
+with no explicit $\partial\beta^*/\partial x$ terms, since the cross-term $\sum_j(\partial\mathcal{F}/\partial\beta_{ij})(\partial\beta^*_{ij}/\partial x)$ vanishes at the optimal attention where $\partial\mathcal{F}/\partial\beta_{ij} = 0$.
+
+\paragraph{Autograd versus reduced-free-energy gradients.} In practice, implementations differentiate the composition $\sum_j \beta_{ij}^*(x)\,E_{ij}(x)$ via automatic differentiation, which applies the product rule and produces additional $(\partial\beta_{ij}^*/\partial x)\,E_{ij}$ terms. This computes the gradient of the attention-weighted energy $\langle E \rangle_\beta = \sum_j \beta_{ij}^* E_{ij}$, which differs from the reduced free energy $-\tau\log Z_i$ by the entropy term $\tau\sum_j \beta_{ij}^* \log(\beta_{ij}^*/\pi_j)$. These two objectives share the same critical points but have different gradient fields away from equilibrium. The $\partial\beta/\partial x$ terms, which vanish in the reduced-free-energy gradient by the envelope theorem, are present in the autograd gradient and provide a softmax-gradient nonlinearity (Section~\ref{sec:ffn_nonlinearity}). Standard transformer training follows the autograd convention (differentiating through the softmax), and we adopt the same convention in the gradient expressions and algorithm below. The gradient expressions below are therefore gradients of the attention-weighted energy $\sum_j\beta_{ij}^* E_{ij}$ (equivalently, derivatives of $\mathcal{F}$ before the $\beta$-minimization is performed, evaluated at $\beta = \beta^*$), not of the reduced free energy $\mathcal{F}_{\mathrm{red}}$.
 
 
 \subsection{Interpretation}
@@ -1047,11 +1044,11 @@ The condition $S(\Omega_{ij}) = 0$ is equivalent to $\Omega_{ij} \in \mathrm{O}(
 However, the matrix exponential parameterization $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j) \in \mathrm{GL}^+(K)$ (Eq.~\ref{eq:gauge_frame_rotation}) restricts transport to the identity component.  Under orthogonal projection (e.g., Newton--Schulz iteration), $\mathrm{GL}^+(K)$ maps to $\mathrm{SO}(K)$, the special orthogonal group with $\det = +1$.  The full orthogonal group $\mathrm{O}(K) = \mathrm{SO}(K) \rtimes \mathbb{Z}_2$ includes a second connected component of orientation-reversing transformations ($\det = -1$) that is topologically inaccessible to the exponential map.  To extend to full $\mathrm{O}(K)$, one introduces per-agent diagonal reflection matrices $R_i = \mathrm{diag}(s_i)$ with $s_i \in \{-1,+1\}^K$, yielding the combined transport
 %
 \begin{equation}
-\Omega_{ij} = R_i \, M_{ij} \, R_j, \qquad M_{ij} = \exp(\phi_i)\exp(-\phi_j) \in \mathrm{SO}(K),
+\Omega_{ij} = R_i \, M_{ij} \, R_j, \qquad M_{ij} = \exp(\phi_i)\exp(-\phi_j) \in \mathrm{GL}^+(K),
 \label{eq:ok_transport}
 \end{equation}
 %
-which covers both components of $\mathrm{O}(K)$ since $\det(\Omega_{ij}) = (\prod_k s_i^{(k)})(\prod_k s_j^{(k)})\det(M_{ij})$ ranges over $\pm 1$.  Orthogonality $\Omega_{ij}\Omega_{ij}^\top = R_i M_{ij} \underbrace{R_j R_j}_{I} M_{ij}^\top R_i = R_i \underbrace{M_{ij}M_{ij}^\top}_{I} R_i = \underbrace{R_i^2}_{I} = I$ follows from the fact that each factor is independently orthogonal, ensuring $S(\Omega_{ij}) = 0$ and preservation of isotropic covariance under transport.  The Mahalanobis distance decomposes cleanly: since $\Omega_{ij}^{-1} = R_j M_{ij}^\top R_i$ and each $R$ is its own inverse,
+When $\phi_i$ is restricted to $\mathfrak{so}(K)$ (skew-symmetric matrices), $M_{ij} \in \mathrm{SO}(K)$ automatically; for general $\phi_i \in \mathfrak{gl}(K)$, orthogonal projection (e.g., Newton--Schulz iteration, as described above) maps $M_{ij}$ to $\mathrm{SO}(K)$. With $M_{ij} \in \mathrm{SO}(K)$, the combined transport covers both components of $\mathrm{O}(K)$ since $\det(\Omega_{ij}) = (\prod_k s_i^{(k)})(\prod_k s_j^{(k)})\det(M_{ij})$ ranges over $\pm 1$.  Orthogonality $\Omega_{ij}\Omega_{ij}^\top = R_i M_{ij} \underbrace{R_j R_j}_{I} M_{ij}^\top R_i = R_i \underbrace{M_{ij}M_{ij}^\top}_{I} R_i = \underbrace{R_i^2}_{I} = I$ follows from the fact that each factor is independently orthogonal, ensuring $S(\Omega_{ij}) = 0$ and preservation of isotropic covariance under transport.  The Mahalanobis distance decomposes cleanly: since $\Omega_{ij}^{-1} = R_j M_{ij}^\top R_i$ and each $R$ is its own inverse,
 %
 \begin{equation}
 \|\Omega_{ij}^{-1}\mu_i - \mu_j\|^2 = \|M_{ij}^\top(s_i \odot \mu_i) - (s_j \odot \mu_j)\|^2,
@@ -1191,7 +1188,7 @@ Combining all simplifications we have:
 \boxed{\beta_{ij} = \mathrm{softmax}_j\left(\frac{Q_i K_j^\top}{\sqrt{d_k}}\right)},
 \end{equation}
 
-exactly recovering the standard transformer attention weighting rule.
+recovering the standard transformer attention weighting rule, up to the key-norm bias term that cancels under the layer normalization or high-dimensional concentration conditions established above.
 
 \subsubsection{Value Aggregation}
 
@@ -1247,16 +1244,16 @@ Our $GL(K)$ experiments (Section~\ref{sec:glk_lm}) utilize the full generality (
 
 \subsection{Training as Variational Free Energy Minimization}
 
-Having established that attention emerges from the variational free energy, we now show that gradient descent on this free energy recovers standard transformer training dynamics, providing a variational interpretation of each component.
+Having established that attention emerges from the variational free energy, we now show that, in the deterministic constant-gauge limit, gradient descent on this free energy recovers structures analogous to standard transformer training dynamics, providing a variational interpretation of each component.
 
 An important distinction must be maintained between two operations that the free energy framework treats uniformly but that standard transformers implement differently. In variational inference, minimizing $\mathcal{F}$ with respect to the variational density $q$ constitutes inference (the E-step), while updating generative model parameters constitutes learning (the M-step). In a standard transformer, the forward pass computes per-token hidden states via deterministic layer maps (analogous to amortized inference whereby a single learned function replaces iterative optimization of $q$), while gradient descent on weights across data batches constitutes learning. The gradient expressions below describe the structure of both operations since they share the same functional form. However, what differs is in which variables are updated and on what timescale. The forward pass corresponds to a single step of belief inference with frozen parameters, and weight training corresponds to slow parameter updates that reduce the expected free energy across data.
 
 \subsubsection{Observation Likelihood as Loss Function.}
 
-In our gauge theory, observations by agents act as a source term that breaks the vacuum degeneracy. The vacuum free energy (without observations), written in partially minimized form with $\beta_{ij}$ at its optimal softmax value (cf.\ Eq.~\ref{eq:free_energy_final}), is:
+In our gauge theory, observations by agents act as a source term that breaks the vacuum degeneracy. The vacuum free energy (without observations), written with $\beta_{ij}$ at its optimal softmax value, takes the reduced form (cf.\ Eq.~\ref{eq:free_energy_final}):
 
 \begin{equation}
-\mathcal{F}_{\text{vacuum}}[\{q_i\}] = \sum_i \alpha_iD_{\mathrm{KL}}(q_i \| p_i) + \sum_{i,j} \beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j).
+\mathcal{F}_{\text{vacuum}}[\{q_i\}] = \sum_i \alpha_iD_{\mathrm{KL}}(q_i \| p_i) - \tau\sum_i\log Z_i.
 \end{equation}
 
 Introducing per-agent observations $o_i$ adds the likelihood term:
@@ -1292,14 +1289,14 @@ These are standard loss functions in machine learning.
 
 \paragraph{Deterministic Free Energy.}
 
-In the deterministic limit with flat bundle ($\Omega_{ij} = \Omega$), each belief becomes a point $q_i \to \delta(k_i - \mu_i)$ and each prior is isotropic: $p_i = \mathcal{N}(\mu_{\text{prior}}, \sigma_p^2 I)$. The self-coupling term from the adaptive free energy \eqref{eq:free_energy_adaptive} becomes:
+In the deterministic limit with flat bundle ($\Omega_{ij} = \Omega$), each belief becomes a narrow Gaussian $q_i = \mathcal{N}(\mu_i, \epsilon I)$ with $\epsilon \to 0^+$, and each prior is isotropic: $p_i = \mathcal{N}(\mu_{\text{prior}}, \sigma_p^2 I)$. The self-coupling term from the adaptive free energy \eqref{eq:free_energy_adaptive} decomposes as:
 
 \begin{equation}
-\alpha_i \,D_{\mathrm{KL}}(\delta(\mu_i) \,\|\, \mathcal{N}(\mu_{\text{prior}}, \sigma_p^2 I))
-= \frac{\alpha_i}{2\sigma_p^2}\,\|\mu_i - \mu_{\text{prior}}\|^2,
+\alpha_i \,D_{\mathrm{KL}}(\mathcal{N}(\mu_i, \epsilon I) \,\|\, \mathcal{N}(\mu_{\text{prior}}, \sigma_p^2 I))
+= \frac{\alpha_i}{2\sigma_p^2}\,\|\mu_i - \mu_{\text{prior}}\|^2 + C(\epsilon),
 \end{equation}
 
-where the state-dependent precision \eqref{eq:state_dependent_alpha} simplifies in the deterministic limit (with $D_{\mathrm{KL}}(\delta(\mu_i) \| \mathcal{N}(\mu_{\text{prior}}, \sigma_p^2 I)) = \frac{1}{2\sigma_p^2}\|\mu_i - \mu_{\text{prior}}\|^2$ and absorbing constants) to:
+where $C(\epsilon)$ collects $\mu_i$-independent terms (involving $\epsilon/\sigma_p^2$ and $\log(\sigma_p^2/\epsilon)$) that diverge as $\epsilon \to 0$ but do not contribute to gradients with respect to the belief parameters. The effective gradient contribution of the prior KL is therefore determined by the $\mu_i$-dependent part $\frac{\alpha_i}{2\sigma_p^2}\|\mu_i - \mu_{\text{prior}}\|^2$. Using this $\mu_i$-dependent part in the state-dependent precision \eqref{eq:state_dependent_alpha} gives:
 
 \begin{equation}
 \alpha_i = \frac{c_0}{\displaystyle b_0 + \frac{1}{2\sigma_p^2}\|\mu_i - \mu_{\text{prior}}\|^2}.
@@ -1344,7 +1341,7 @@ In the limit $\lambda_{p,i} = \lambda_p$ the gradient of the free energy with re
 }
 \end{equation}
 
-The first term, $\lambda_p(\mu_i - \mu_{\text{prior}})$, as discussed, matches weight decay or L2 regularization. The second term, $\sum_j \frac{\beta_{ij}}{\sigma^2}(\Omega\Omega^\top)^{-1}(\mu_i - \Omega\mu_j)$, is attention-weighted message aggregation that pulls $\mu_i$ toward gauge-transported neighbors. The third term, $\sum_j \frac{\partial \beta_{ij}}{\partial \mu_i}\|\Omega^{-1}\mu_i - \mu_j\|^2/(2\sigma^2)$, represents gradient flow through the attention weights themselves - a manifestly non-linear "activation". The fourth term, $-\frac{\partial \log p(o_i \mid \mu_i)}{\partial \mu_i}$, is the gradient of the loss function (i.e. the supervised learning signal).
+The first term, $\lambda_p(\mu_i - \mu_{\text{prior}})$, as discussed, matches weight decay or L2 regularization. The second term, $\sum_j \frac{\beta_{ij}}{\sigma^2}(\Omega\Omega^\top)^{-1}(\mu_i - \Omega\mu_j)$, is attention-weighted message aggregation that pulls $\mu_i$ toward gauge-transported neighbors. The third term, $\sum_j \frac{\partial \beta_{ij}}{\partial \mu_i}\|\Omega^{-1}\mu_i - \mu_j\|^2/(2\sigma^2)$, represents gradient flow through the attention weights themselves---a manifestly non-linear ``activation'' that arises from differentiating the attention-weighted energy $\sum_j \beta_{ij} E_{ij}$ via the product rule (the autograd gradient). This term is absent from the gradient of the reduced free energy $\mathcal{F}_{\mathrm{red}}$ by the envelope theorem (Section~\ref{sec:final_free_energy}), but is present in standard autograd-based implementations that differentiate through the softmax. The fourth term, $-\frac{\partial \log p(o_i \mid \mu_i)}{\partial \mu_i}$, is the gradient of the loss function (i.e.\ the supervised learning signal).
 
 Since beliefs $q_i$ live on the Gaussian statistical manifold, the geometrically correct dynamics uses the natural gradient. The Euclidean gradient must be pre-conditioned by the inverse Fisher information metric which, for MVGs is $G_\mu^{-1} = \Sigma_i$ (see Supplementary Appendix~D for derivation). The natural gradient flow is:
 
@@ -1379,7 +1376,7 @@ The natural gradient recovers the standard transformer update rule. The alignmen
 \paragraph{General (non-isotropic) mean gradient.}
 The preceding expressions assumed isotropic covariances $\Sigma_i = \sigma^2 I$ and a shared gauge connection $\Omega$. We now state the fully general gradient, valid for arbitrary covariances $\Sigma_i$, edge-dependent gauge connections $\Omega_{ij}$, general prior precision $\Sigma_{p,i}^{-1}$, and state-dependent prior coupling $\alpha_i$ (Section~\ref{sec:state_dependent_precision}).
 
-Differentiating the full free energy \eqref{eq:free_energy_final} with respect to $\mu_i$ and applying the product rule through both the attention weights $\beta_{ij}(\mu_i)$ and the adaptive prior coupling $\alpha_i(\mu_i)$ gives:
+Differentiating the attention-weighted energy $\sum_j \beta_{ij} E_{ij}$ (the autograd objective; cf.\ Section~\ref{sec:final_free_energy}) with respect to $\mu_i$ and applying the product rule through both the attention weights $\beta_{ij}(\mu_i)$ and the adaptive prior coupling $\alpha_i(\mu_i)$ gives:
 
 \begin{equation}
 \boxed{
@@ -1401,7 +1398,7 @@ Differentiating the full free energy \eqref{eq:free_energy_final} with respect t
 \label{eq:mu_gradient_general}
 \end{equation}
 
-The structure parallels the isotropic case term-by-term, with four generalizations: (i) the prior precision $\lambda_p I$ is replaced by the full matrix $\alpha_i\,\Sigma_{p,i}^{-1}$, where $\alpha_i$ is the state-dependent prior coupling; (ii) the term $(\partial\alpha_i/\partial\mu_i)\,D_{\mathrm{KL}}(q_i \,\|\, p_i)$ represents gradient flow through the adaptive gate whereby agents far from their prior (large $\|\mu_i - \mu_{\text{prior}}\|$) have $\partial\alpha_i/\partial\mu_i < 0$, which reduces the effective regularization and allows beliefs to drift further, reinforcing the gating behavior described in Section~\ref{sec:state_dependent_precision}; (iii) the isotropic transported precision $\sigma^{-2}(\Omega\Omega^\top)^{-1}$ is replaced by the edge-dependent transported precision $(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$, which accounts for both the neighbor's covariance structure and the geometry of the gauge transport along each edge; and (iv) the quadratic mean-mismatch $\frac{1}{2\sigma^2}\|\Omega^{-1}\mu_i - \mu_j\|^2$ is replaced by the full KL divergence $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij}q_j)$, which additionally couples to the covariance mismatch between $\Sigma_i$ and the transported covariance $\Omega_{ij}\Sigma_j\Omega_{ij}^\top$. The full KL cannot be reduced to a purely mean-dependent expression because the covariance contributions (trace and log-determinant terms) are $j$-dependent through $\Omega_{ij}$ and $\Sigma_j$, and therefore do not cancel under the constraint $\sum_j \partial\beta_{ij}/\partial\mu_i = 0$.
+The structure parallels the isotropic case term-by-term, with four generalizations: (i) the prior precision $\lambda_p I$ is replaced by the full matrix $\alpha_i\,\Sigma_{p,i}^{-1}$, where $\alpha_i$ is the state-dependent prior coupling; (ii) the term $(\partial\alpha_i/\partial\mu_i)\,D_{\mathrm{KL}}(q_i \,\|\, p_i)$ represents gradient flow through the adaptive gate whereby agents far from their prior (large $\|\mu_i - \mu_{\text{prior}}\|$) have $\partial\alpha_i/\partial\mu_i < 0$, which reduces the effective regularization and allows beliefs to drift further, reinforcing the gating behavior described in Section~\ref{sec:state_dependent_precision}; (iii) the isotropic transported precision $\sigma^{-2}(\Omega\Omega^\top)^{-1}$ is replaced by the edge-dependent transported precision $(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$, which accounts for both the neighbor's covariance structure and the geometry of the gauge transport along each edge; and (iv) the quadratic mean-mismatch $\frac{1}{2\sigma^2}\|\Omega^{-1}\mu_i - \mu_j\|^2$ is replaced by the full KL divergence $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij}q_j)$, which additionally couples to the covariance mismatch between $\Sigma_i$ and the transported covariance $\Omega_{ij}\Sigma_j\Omega_{ij}^\top$. The full KL cannot be reduced to a purely mean-dependent expression because the covariance contributions (trace and log-determinant terms) are $j$-dependent through $\Omega_{ij}$ and $\Sigma_j$, and therefore do not cancel under the constraint $\sum_j \partial\beta_{ij}/\partial\mu_i = 0$. As noted in Section~\ref{sec:final_free_energy}, the $(\partial\beta_{ij}/\partial\mu_i)\,D_{\mathrm{KL}}$ terms arise from differentiating the attention-weighted energy and are absent from the gradient of the reduced free energy $\mathcal{F}_{\mathrm{red}}$ by the envelope theorem.
 
 When $\alpha_i = \alpha = \text{const}$, the gate gradient vanishes ($\partial\alpha_i/\partial\mu_i = 0$) and the prior term reduces to $\alpha\,\Sigma_{p,i}^{-1}(\mu_i - \mu_{\text{prior}})$, recovering the uniform regularization case.
 
@@ -1434,7 +1431,7 @@ When the covariance alignment condition $\Sigma_i \approx \Omega_{ij}\Sigma_j\Om
 
 \paragraph{Covariance gradient.}
 
-Similarly, the complete theory also includes gradient dynamics for the covariance $\Sigma_i$ and gauge frame $\phi_i$. The covariance gradient reveals a novel uncertainty channel absent in standard transformers.  Differentiating the free energy with respect to $\Sigma_i$ and applying the product rule through both the attention weights and the adaptive prior coupling $\alpha_i(\Sigma_i)$ (neglecting the observation term, which contributes an $O(\Sigma_i^{-1})$ correction in the high-precision regime; see Supplementary Appendix~B for the full derivation) yields:
+Similarly, the complete theory also includes gradient dynamics for the covariance $\Sigma_i$ and gauge frame $\phi_i$. The covariance gradient reveals a novel uncertainty channel absent in standard transformers.  Differentiating the attention-weighted energy with respect to $\Sigma_i$ and applying the product rule through both the attention weights and the adaptive prior coupling $\alpha_i(\Sigma_i)$ (neglecting the observation term, which contributes an $O(1)$ correction that is small compared to the $O(\Sigma_i^{-1})$ alignment terms in the high-precision regime; see Supplementary Appendix~B for the full derivation) yields:
 
 \begin{equation}
 \boxed{
@@ -1456,7 +1453,7 @@ D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j).
 \label{eq:Sigma_gradient_main}
 \end{equation}
 
-This parallels the mean gradient term-by-term: $\alpha_i\,\Sigma_{p,i}^{-1}$ is the prior precision scaled by the adaptive coupling (analogous to weight decay for $\mu$); the $(\partial\alpha_i/\partial\Sigma_i)\,D_{\mathrm{KL}}(q_i \,\|\, p_i)$ term is gradient flow through the adaptive gate (the covariance analogue of the $(\partial\alpha_i/\partial\mu_i)\,D_{\mathrm{KL}}$ term in Eq.~\ref{eq:mu_gradient_general}); $\sum_j \beta_{ij}(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$ is attention-weighted precision aggregation that pulls agent $i$'s precision toward its gauge-transported neighbors; and $\sum_j (\partial \beta_{ij}/\partial \Sigma_i)\, D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ is gradient flow through the attention weights. In the general case (Eq.~\ref{eq:state_dependent_alpha}), $\alpha_i = c_0/(b_0 + D_{\mathrm{KL}}(q_i \| p_i))$ depends on $\Sigma_i$ through the trace and log-determinant terms of the full KL divergence, so $\partial\alpha_i/\partial\Sigma_i \neq 0$. This gate gradient term vanishes only in the deterministic limit (Eq.~\ref{eq:alpha_i_deterministic}), where $\alpha_i$ reduces to a function of $\mu_i$ alone. The coefficient $-(1+\alpha_i)$ on $\Sigma_i^{-1}$ arises because the entropy of $q_i$ enters both the prior KL (weighted by $\alpha_i$) and each neighbor KL (weighted by $\beta_{ij}$, summing to $1$).
+This parallels the mean gradient term-by-term: $\alpha_i\,\Sigma_{p,i}^{-1}$ is the prior precision scaled by the adaptive coupling (analogous to weight decay for $\mu$); the $(\partial\alpha_i/\partial\Sigma_i)\,D_{\mathrm{KL}}(q_i \,\|\, p_i)$ term is gradient flow through the adaptive gate (the covariance analogue of the $(\partial\alpha_i/\partial\mu_i)\,D_{\mathrm{KL}}$ term in Eq.~\ref{eq:mu_gradient_general}); $\sum_j \beta_{ij}(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$ is attention-weighted precision aggregation that pulls agent $i$'s precision toward its gauge-transported neighbors; and $\sum_j (\partial \beta_{ij}/\partial \Sigma_i)\, D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ is gradient flow through the attention weights (present in the autograd gradient but absent from the gradient of $\mathcal{F}_{\mathrm{red}}$ by the envelope theorem; cf.\ Section~\ref{sec:final_free_energy}). In the general case (Eq.~\ref{eq:state_dependent_alpha}), $\alpha_i = c_0/(b_0 + D_{\mathrm{KL}}(q_i \| p_i))$ depends on $\Sigma_i$ through the trace and log-determinant terms of the full KL divergence, so $\partial\alpha_i/\partial\Sigma_i \neq 0$. This gate gradient term vanishes only in the deterministic limit (Eq.~\ref{eq:alpha_i_deterministic}), where $\alpha_i$ reduces to a function of $\mu_i$ alone. The coefficient $-(1+\alpha_i)$ on $\Sigma_i^{-1}$ arises because the entropy of $q_i$ enters both the prior KL (weighted by $\alpha_i$) and each neighbor KL (weighted by $\beta_{ij}$, summing to $1$).
 
 Since $\sum_j \partial \beta_{ij}/\partial \Sigma_i = 0$ (the attention weights sum to unity), the attention weight correction vanishes whenever the KL divergences $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij}q_j)$ are uniform across neighbors. It also vanishes in both the hard-attention ($\tau \to 0$, where $\beta_{ij}$ concentrates on a single neighbor) and uniform-attention ($\tau \to \infty$, where $\partial\beta_{ij}/\partial\Sigma_i \propto 1/\tau \to 0$) limits. Setting this correction aside, the equilibrium condition $\partial \mathcal{F}_i / \partial \Sigma_i = 0$ yields the fixed-point equation:
 
@@ -1825,7 +1822,7 @@ In the binary case ($n_s = 2$), ReLU is the zero-temperature ($\tau \to 0$) limi
 
 \paragraph{Softmax-gradient correction.}
 
-Beyond the GLU structure of the message-passing term itself, the full VFE gradient contains an additional nonlinear correction from differentiating $\beta_{ij}$ with respect to $\mu_i$:
+Beyond the GLU structure of the message-passing term itself, the autograd gradient of the attention-weighted energy $\sum_j \beta_{ij} E_{ij}$ contains an additional nonlinear correction from differentiating $\beta_{ij}$ with respect to $\mu_i$ (this term is absent from the gradient of the reduced free energy $\mathcal{F}_{\mathrm{red}}$ by the envelope theorem, but present in standard autograd implementations; cf.\ Section~\ref{sec:final_free_energy}):
 
 \begin{equation}
 \frac{\partial \beta_{ij}}{\partial \mu_i} = -\frac{\beta_{ij}}{\tau}\left[\frac{\partial D_{\mathrm{KL},ij}}{\partial \mu_i} - \sum_k \beta_{ik} \frac{\partial D_{\mathrm{KL},ik}}{\partial \mu_i}\right],
@@ -1866,7 +1863,7 @@ and recovers the standard training update:
 
 under the identifications: $\mathcal{F}$ (free energy) $\leftrightarrow$ $\mathcal{L}$ (loss + regularization); attention weights $\beta_{ij}$ $\leftrightarrow$ transformer attention $\alpha_{ij}$; observations $-\log p(o \mid \mu)$ $\leftrightarrow$ loss function; and symmetry breaking $\leftrightarrow$ training.
 
-Beyond the core attention formula, the gauge-theoretic framework provides a unified account of the full transformer architecture (Table~\ref{tab:fep_nn_correspondence}). Causal masking, ALiBi, relative position biases, and sliding window attention all emerge as special cases of the non-uniform attention prior $\pi_k$ in the mixture-of-sources model (Section~\ref{sec:nonuniform_priors}). Rotary position embeddings correspond to position-dependent gauge frames restricted to $\mathrm{SO}(2)^{d_k/2}$, partially relaxing the flat-bundle limit while retaining the learned constant gauge (Section~\ref{sec:rope}). Layer normalization is a projection onto the $\mathfrak{sl}(K)$ subalgebra that eliminates key-norm bias at its algebraic origin. Residual connections are the inherent structure of iterative variational gradient descent (Section~\ref{sec:residual_connections}), with the state-dependent precision $\alpha_i$ generalizing the fixed skip connection to a context-dependent gate. The FFN sublayer corresponds to multiple VFE iterations with recomputed attention weights, and the message-passing term derives a Boltzmann-gated linear unit (Eq.~\ref{eq:vfe_glu}) in the same exponential family as GELU and SiLU (Section~\ref{sec:ffn_nonlinearity}). Weight decay is the prior coupling $\alpha D_{\mathrm{KL}}(q_i \| p_i)$ in the deterministic limit.
+Beyond the core attention formula, the gauge-theoretic framework provides a unified account of key transformer architectural choices (Table~\ref{tab:fep_nn_correspondence}), each recovered under specific limits or identifications. Causal masking, ALiBi, relative position biases, and sliding window attention all emerge as special cases of the non-uniform attention prior $\pi_k$ in the mixture-of-sources model (Section~\ref{sec:nonuniform_priors}). Rotary position embeddings correspond to position-dependent gauge frames restricted to $\mathrm{SO}(2)^{d_k/2}$, partially relaxing the flat-bundle limit while retaining the learned constant gauge (Section~\ref{sec:rope}). Layer normalization is a projection onto the $\mathfrak{sl}(K)$ subalgebra that eliminates key-norm bias at its algebraic origin. Residual connections are the inherent structure of iterative variational gradient descent (Section~\ref{sec:residual_connections}), with the state-dependent precision $\alpha_i$ generalizing the fixed skip connection to a context-dependent gate. The FFN sublayer corresponds to multiple VFE iterations with recomputed attention weights, and the message-passing term derives a Boltzmann-gated linear unit (Eq.~\ref{eq:vfe_glu}) in the same exponential family as GELU and SiLU (Section~\ref{sec:ffn_nonlinearity}). Weight decay is the prior coupling $\alpha D_{\mathrm{KL}}(q_i \| p_i)$ in the deterministic limit.
 
 The $\mathrm{GL}(K)$ gauge invariance theorem (Theorem~\ref{thm:glk_invariance}) is essential as it guarantees that the learned projections $W_Q, W_K$ are valid gauge transformations, explaining why transformers can learn arbitrary (invertible) attention patterns. Each row of Table~\ref{tab:fep_nn_correspondence} represents a degree of freedom that the full gauge-theoretic framework retains and that standard transformers collapse into a simpler form. The framework thus provides not only an explanatory account of existing architectures but a taxonomy of generalizations, indexed by which simplifying limits are relaxed.
 
@@ -1926,7 +1923,7 @@ where $\theta = \{\mu_{\text{embed}}, \Sigma_{\text{embed}}, \phi_{\text{embed}}
         \STATE $D_{ij}^{(h)} \leftarrow D_{\KL}(q_i^{(h)} \,\|\, \Omega_{ij}^{(h)} q_j^{(h)})$ \hfill $\triangleright$ Pairwise KL divergences
         \STATE $\beta_{ij}^{(h)} \leftarrow \softmax_j\!\Big(-D_{ij}^{(h)} \,/\, \kappa_h\Big)$ \hfill $\triangleright$ KL attention weights
     \ENDFOR
-    \STATE \textit{--- Mean gradient (direct + softmax nonlinearity, Eq.~\ref{eq:softmax_gradient_nonlinearity}):}
+    \STATE \textit{--- Mean gradient (autograd: direct + softmax nonlinearity, Eq.~\ref{eq:softmax_gradient_nonlinearity}):}
     \STATE $\nabla_{\mu} \mathcal{F} \leftarrow \underbrace{\alpha\,\Sigma_p^{-1}(\mu_i - \mu_p)}_{\text{prior}}
       + \sum_h \Big[\underbrace{\sum_j \beta_{ij}^{(h)}\, \nabla_\mu D_{ij}^{(h)}}_{\text{direct alignment}}
       + \underbrace{\sum_j D_{ij}^{(h)} \, \frac{\partial \beta_{ij}^{(h)}}{\partial \mu_i}}_{\text{softmax nonlinearity}}\Big]
