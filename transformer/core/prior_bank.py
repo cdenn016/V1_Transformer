@@ -93,6 +93,11 @@ class PriorBank(nn.Module):
         # distillation).  Replaces the gradient checkpoint used previously.
         # See decode() for the trade-off discussion.
         cache_decode_priors: bool = False,
+        # Full-covariance decode: when True, decode uses the exact
+        # KL(q || π_v) with full Σ_q and Σ_p matrices instead of extracting
+        # diagonals.  Cost is O(B·N·V·K²) vs O(B·N·V·K) for diagonal.
+        # For testing and theoretical purity; not recommended for large V.
+        full_cov_decode: bool = False,
     ):
         """
         Initialize the prior bank.
@@ -114,6 +119,8 @@ class PriorBank(nn.Module):
                 Starts at scale=1 (CE ≈ ln V at init). Gradient is self-regulating:
                 dCE/d(log_scale) = scale·[E_p[KL] - KL_target], which decreases scale
                 when overconfident on wrong tokens and increases it as predictions improve.
+            full_cov_decode: If True, decode uses exact full-covariance KL when
+                sigma_q is (B,N,K,K). O(B·N·V·K²) vs O(B·N·V·K) diagonal.
         """
         super().__init__()
         self.vocab_size = vocab_size
@@ -141,6 +148,7 @@ class PriorBank(nn.Module):
         self.diagonal_covariance = diagonal_covariance
         self.irrep_dims = irrep_dims
         self.cache_decode_priors = cache_decode_priors
+        self.full_cov_decode = full_cov_decode
 
         # Per-forward-pass cache for the all-vocab decode prior result.
         # Cleared by the model at the start of each forward via
@@ -520,7 +528,11 @@ class PriorBank(nn.Module):
         """
         B, N, K = mu_q.shape
 
-        # Full covariance (B, N, K, K) → extract diagonal variances (B, N, K).
+        # Full-cov decode: exact KL with full Σ_q and Σ_p matrices
+        if self.full_cov_decode and sigma_q.dim() == 4:
+            return self._decode_full_cov(mu_q, sigma_q, tau)
+
+        # Diagonal path: extract diagonal variances if full covariance provided
         if sigma_q.dim() == 4:
             sigma_q = torch.diagonal(sigma_q, dim1=-2, dim2=-1)  # (B, N, K)
         V = self.vocab_size
@@ -623,6 +635,116 @@ class PriorBank(nn.Module):
         # prior_bank_tau for large K instead.
         scale = torch.exp(self.decode_log_scale.clamp(-3.0, 3.0)) if self.learnable_temperature else 1.0
         logits = -0.5 * scale / tau * (combined + prior_bias.unsqueeze(0).unsqueeze(0))
+
+        return logits
+
+    def _decode_full_cov(
+        self,
+        mu_q: torch.Tensor,      # (B, N, K) belief means
+        sigma_q: torch.Tensor,   # (B, N, K, K) full belief covariance
+        tau: float = 1.0,
+    ) -> torch.Tensor:
+        r"""Exact full-covariance KL decode.
+
+        Computes logits ∝ -KL(q || π_v) / τ using the full Gaussian KL:
+
+            KL(q || π_v) = 0.5 [tr(Σ_p^{-1} Σ_q)
+                               + (μ_q - μ_p)^T Σ_p^{-1} (μ_q - μ_p)
+                               - K + log|Σ_p| - log|Σ_q|]
+
+        Key identity: tr(Σ_p^{-1} Σ_q) + μ_q^T Σ_p^{-1} μ_q = tr(Σ_p^{-1} M)
+        where M = Σ_q + μ_q μ_q^T is the second moment. This fuses the trace
+        and quadratic-in-μ_q terms into a single (B·N, K²) × (K², V) matmul.
+
+        Cost: O(B·N·V·K²) for the second-moment matmul, vs O(B·N·V·K) for
+        the diagonal path. The K²/K slowdown is the price of off-diagonal
+        fidelity.
+
+        Args:
+            mu_q: (B, N, K) belief means
+            sigma_q: (B, N, K, K) full belief covariance
+            tau: Temperature for softmax
+
+        Returns:
+            logits: (B, N, vocab_size) unnormalized log-probabilities
+        """
+        B, N, K = mu_q.shape
+        V = self.vocab_size
+        device = mu_q.device
+
+        # Retrieve priors (same caching logic as diagonal path)
+        all_token_ids = torch.arange(V, device=device)
+        if (self.cache_decode_priors
+                and self._decode_cache is not None
+                and self.gauge_fixed_priors):
+            mu_p, sigma_p = self._decode_cache
+        elif (self.gauge_fixed_priors
+              and self.training
+              and not self.cache_decode_priors):
+            _prior_out = torch.utils.checkpoint.checkpoint(
+                lambda ids: self._get_prior_for_tokens(ids, only_forward=True),
+                all_token_ids,
+                use_reentrant=False,
+            )
+            mu_p, sigma_p = _prior_out[0], _prior_out[1]
+        else:
+            _prior_out = self._get_prior_for_tokens(all_token_ids, only_forward=True)
+            mu_p, sigma_p = _prior_out[0], _prior_out[1]
+            if self.cache_decode_priors and self.gauge_fixed_priors:
+                self._decode_cache = (mu_p, sigma_p)
+
+        # AMP guard: all KL arithmetic in float32
+        with torch.amp.autocast('cuda', enabled=False):
+            if mu_q.dtype != torch.float32:
+                mu_q = mu_q.float()
+                mu_p = mu_p.float()
+                sigma_q = sigma_q.float()
+                sigma_p = sigma_p.float()
+
+            variance_floor = max(self.eps, 1e-4)
+
+            # Build Σ_p^{-1} and log|Σ_p| for all V tokens
+            if sigma_p.dim() == 2:
+                # Diagonal prior (V, K) → promote to full for uniform codepath
+                sigma_p_safe = sigma_p.clamp(min=variance_floor)
+                _s = self.sigma_ce_scale
+                sigma_p_safe = sigma_p_safe.detach() + _s * (sigma_p_safe - sigma_p_safe.detach())
+                Sigma_p_inv = torch.diag_embed(1.0 / sigma_p_safe)    # (V, K, K)
+                log_det_p = torch.log(sigma_p_safe).sum(dim=-1)        # (V,)
+            else:
+                # Full prior (V, K, K) — Cholesky inversion
+                sigma_p_clamped = sigma_p + variance_floor * torch.eye(K, device=device, dtype=sigma_p.dtype)
+                _s = self.sigma_ce_scale
+                sigma_p_safe = sigma_p_clamped.detach() + _s * (sigma_p_clamped - sigma_p_clamped.detach())
+                L_p = torch.linalg.cholesky(sigma_p_safe)              # (V, K, K)
+                Sigma_p_inv = torch.cholesky_inverse(L_p)              # (V, K, K)
+                log_det_p = 2.0 * L_p.diagonal(dim1=-2, dim2=-1).log().sum(dim=-1)  # (V,)
+
+            # Second moment M = Σ_q + μ_q μ_q^T  →  (B, N, K, K)
+            M = sigma_q + mu_q.unsqueeze(-1) * mu_q.unsqueeze(-2)
+
+            # Fused matmul: tr(Σ_p^{-1} M) for all (b,n,v) pairs
+            # Reshape to 2D and use a single BLAS call: (B*N, K²) @ (K², V) → (B*N, V)
+            M_flat = M.reshape(B * N, K * K)                           # (B*N, K²)
+            Sigma_p_inv_flat = Sigma_p_inv.reshape(V, K * K)           # (V, K²)
+            combined = torch.matmul(M_flat, Sigma_p_inv_flat.T).reshape(B, N, V)
+
+            # Cross term: -2 μ_q^T (Σ_p^{-1} μ_p)
+            Sigma_p_inv_mu_p = torch.einsum('vkl,vl->vk', Sigma_p_inv, mu_p)  # (V, K)
+            cross = torch.matmul(
+                mu_q.reshape(B * N, K), Sigma_p_inv_mu_p.T
+            ).reshape(B, N, V)                                         # (B, N, V)
+
+            # Prior quadratic: μ_p^T Σ_p^{-1} μ_p  →  (V,)
+            quad_p = (mu_p * Sigma_p_inv_mu_p).sum(dim=-1)
+
+            # Prior-side bias: quad_p + log_det_p  →  (V,)
+            prior_bias = quad_p + log_det_p
+
+        # logits = -KL/τ = -0.5/τ * (tr(Σ_p^{-1} M) - 2 cross + quad_p + log_det_p)
+        # Drops softmax-invariant terms: -K and -log|Σ_q|
+        scale = torch.exp(self.decode_log_scale.clamp(-3.0, 3.0)) if self.learnable_temperature else 1.0
+        logits = -0.5 * scale / tau * (combined - 2.0 * cross + prior_bias.unsqueeze(0).unsqueeze(0))
 
         return logits
 
