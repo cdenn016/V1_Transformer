@@ -73,6 +73,8 @@ class BlockConfig:
     
     
     amortized_inference: bool = True    # Gradient flow through priors for learned E-step init
+    amortize_sigma: bool =      False   # When True + amortized_inference, sigma_p stays attached in E-step
+    exact_phi_grad: bool =      False   # When True, _compute_phi_grad keeps beliefs attached (full IFT derivative)
     detach_phi: bool =          False   # Detach phi from backprop in non-amortized mode
     
                                         # (enables fully backprop-free training with phi P-flow)
@@ -368,6 +370,8 @@ class BlockConfig:
             exact_diagonal_transport=config.get('exact_diagonal_transport', False),
             sigma_aggregation=config.get('sigma_aggregation', 'mixture'),
             amortized_inference=config.get('amortized_inference', True),
+            amortize_sigma=config.get('amortize_sigma', False),
+            exact_phi_grad=config.get('exact_phi_grad', False),
             detach_phi=config.get('detach_phi', False),
             implicit_em=config.get('implicit_em', False),
             # VFE dynamics (E-step) — new names with old-name fallbacks

@@ -255,6 +255,8 @@ class VariationalFFNDynamic(nn.Module):
         isotropic_covariance: bool = False,   # If True, force Σ = σ²I after each E-step update
         # Amortized inference: gradient flow through priors for learned E-step init
         amortized_inference: bool =  True,
+        amortize_sigma: bool =       False,  # When True + amortized, sigma_p stays attached in E-step
+        exact_phi_grad: bool =       False,  # When True, _compute_phi_grad keeps beliefs attached
         
         # Rotary Position Embeddings (RoPE) — must match attention sublayer setting
         use_rope: bool =             True,
@@ -362,6 +364,8 @@ class VariationalFFNDynamic(nn.Module):
         self.gauge_mode = gauge_mode
         self.isotropic_covariance = isotropic_covariance
         self.amortized_inference = amortized_inference
+        self.amortize_sigma = amortize_sigma
+        self.exact_phi_grad = exact_phi_grad
         self.obs_sigma_gradient = obs_sigma_gradient
         self.obs_sigma_weight = obs_sigma_weight
         self.sigma_max = sigma_max
@@ -1081,7 +1085,13 @@ class VariationalFFNDynamic(nn.Module):
         eps: float,
         cached_block_exp_pairs: Optional[list] = None,
     ) -> Optional[torch.Tensor]:
-        """Compute ∂F_align/∂φ via autograd.
+        r"""Compute ∂F_align/∂φ via autograd.
+
+        By default, beliefs (mu_current, sigma_current) are detached, giving the
+        partial derivative ∂F/∂φ|_{q fixed} — a semi-gradient that treats beliefs
+        as constants. When ``exact_phi_grad=True`` and ``amortized_inference=True``,
+        beliefs stay attached, giving the full total derivative dF/dφ through
+        the E-step iteration graph (IFT-correct).
 
         Returns the preconditioned gradient, or None if no gradient could be computed.
         """
@@ -1097,16 +1107,23 @@ class VariationalFFNDynamic(nn.Module):
                     enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
                     skew_symmetric=self._generators_are_skew,
                 )
+            _detach_beliefs = not (self.amortized_inference and self.exact_phi_grad)
             block_start = 0
             for h, d_h in enumerate(self.irrep_dims):
                 block_end = block_start + d_h
-                mu_h = mu_current[:, :, block_start:block_end].detach()
+                mu_h = mu_current[:, :, block_start:block_end]
+                if _detach_beliefs:
+                    mu_h = mu_h.detach()
                 if sigma_current is None:
                     sigma_h = None
                 elif is_diagonal:
-                    sigma_h = sigma_current[:, :, block_start:block_end].detach()
+                    sigma_h = sigma_current[:, :, block_start:block_end]
+                    if _detach_beliefs:
+                        sigma_h = sigma_h.detach()
                 else:
-                    sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end].detach()
+                    sigma_h = sigma_current[:, :, block_start:block_end, block_start:block_end]
+                    if _detach_beliefs:
+                        sigma_h = sigma_h.detach()
                 gen_h = self.generators[:, block_start:block_end, block_start:block_end]
                 kappa_h = self._get_kappa_h(h, d_h)  # Normalize for block dimension
                 _phi_head_bep = [_phi_bep[h]] if _phi_bep is not None else None
@@ -1135,9 +1152,10 @@ class VariationalFFNDynamic(nn.Module):
                 )
                 block_start = block_end
         else:
+            _detach_beliefs = not (self.amortized_inference and self.exact_phi_grad)
             beta_for_phi_result = compute_attention_weights(
-                mu_q=mu_current.detach(),
-                sigma_q=sigma_current.detach() if sigma_current is not None else None,
+                mu_q=mu_current.detach() if _detach_beliefs else mu_current,
+                sigma_q=(sigma_current.detach() if _detach_beliefs else sigma_current) if sigma_current is not None else None,
                 phi=phi_for_grad,
                 generators=self.generators,
                 kappa=self.kappa,
@@ -1399,11 +1417,14 @@ class VariationalFFNDynamic(nn.Module):
         else:
             mu_p_current = mu_prior.detach()
 
-        # sigma_p is ALWAYS detached in the E-step (M-step parameter)
+        # sigma_p: detached by default (M-step parameter). When amortize_sigma=True
+        # and amortized_inference=True, kept attached so E-step gradients flow
+        # back through prior covariances — enables learned prior uncertainty.
+        _attach_sigma = self.amortized_inference and self.amortize_sigma and not self.implicit_em
         if sigma_prior is not None:
-            sigma_p = sigma_prior.detach()
+            sigma_p = sigma_prior if _attach_sigma else sigma_prior.detach()
         else:
-            sigma_p = sigma.detach()
+            sigma_p = sigma if _attach_sigma else sigma.detach()
 
         # E-step sigma_p floor
         _floor = self.e_step_sigma_floor

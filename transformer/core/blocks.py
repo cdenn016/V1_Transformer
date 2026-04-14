@@ -316,6 +316,8 @@ class GaugeTransformerBlock(nn.Module):
             # attention patterns relative to the attention sublayer.
             constant_omega=self.attention.constant_omega,
             amortized_inference=cfg.amortized_inference,
+            amortize_sigma=cfg.amortize_sigma,
+            exact_phi_grad=cfg.exact_phi_grad,
             isotropic_covariance=cfg.isotropic_covariance,
             obs_sigma_gradient=cfg.obs_sigma_gradient,
             obs_sigma_weight=cfg.obs_sigma_weight,

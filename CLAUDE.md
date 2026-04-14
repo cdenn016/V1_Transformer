@@ -20,6 +20,8 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 **ignore DEQ, closed-form, and hebbian paths unless otherwise instructed**
 
+**LOCAL CODEBASE IS THE SOURCE OF TRUTH UNLESS OTHERWISE INSTRUCTED**
+
 ## Codebase Map
 
 
@@ -57,6 +59,8 @@ F = alpha * KL(q_i || p_i)                    # self-coupling: beliefs to priors
 **Phi preconditioning**: clip (default, O(n_gen)), cartan (O(n_gen²)), killing (O(n_gen²)), pullback (O(n_gen³)) — see `transformer/core/gauge_preconditioner.py`
 
 **Timescales**: Fast E-step (belief q inference per forward pass) / Slow M-step (prior/model s,p parameter learning via backprop) / Static hyper-prior h (frozen at init, never learned). sigma_p is an M-step parameter — the E-step reads it but must not write gradients to it (detached in VFE iterations). sigma_ce_scale controls the residual CE→sigma_p gradient in decode (0.0 = fully detached).
+
+**Amortization scope**: `amortized_inference=True` flows gradients through prior means (mu_p) only by default. Prior covariances (sigma_p) are detached (`amortize_sigma=False`). The post-loop phi gradient (`_compute_phi_grad`) detaches beliefs (`exact_phi_grad=False`), producing a semi-gradient. Cross-layer cascade is also mean-only: mu_q flows to next layer's mu_prior; sigma_prior stays at embedding value. Set `amortize_sigma=True` for full prior amortization through covariances. Set `exact_phi_grad=True` for the IFT-correct total derivative dF/dphi through the E-step iteration graph.
 
 ## Communication Style
 
