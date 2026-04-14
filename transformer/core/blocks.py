@@ -36,14 +36,8 @@ from transformer.core.connection import GaugeConnection
 # Import block-diagonal matrix exp for shared transport caching
 from transformer.core.gauge_utils import fused_block_matrix_exp_pairs
 
-# Trajectory tracking (optional)
-try:
-    from transformer.analysis.trajectory import get_global_recorder
-    TRAJECTORY_TRACKING_AVAILABLE = True
-except ImportError:
-    TRAJECTORY_TRACKING_AVAILABLE = False
-    def get_global_recorder():
-        return None
+# Trajectory tracking (core-side protocol — analysis layer registers via set_global_recorder)
+from transformer.core.vfe_utils import get_global_recorder
 
 
 class RMSNorm(nn.Module):
@@ -318,9 +312,7 @@ class GaugeTransformerBlock(nn.Module):
             # Without this, the FFN would use Ω=I, computing inconsistent
             # attention patterns relative to the attention sublayer.
             constant_omega=self.attention.constant_omega,
-            amortized_inference=cfg.amortized_inference,
-            amortize_sigma=cfg.amortize_sigma,
-            exact_phi_grad=cfg.exact_phi_grad,
+            em_mode=cfg.em_mode,
             isotropic_covariance=cfg.isotropic_covariance,
             obs_sigma_gradient=cfg.obs_sigma_gradient,
             obs_sigma_exact_stein=getattr(cfg, 'obs_sigma_exact_stein', False),
@@ -331,8 +323,6 @@ class GaugeTransformerBlock(nn.Module):
             rope_base=cfg.rope_base,
             gauge_param=cfg.gauge_param,
             detach_phi=cfg.detach_phi,
-            implicit_em=cfg.implicit_em,
-            em_phi_mode=getattr(cfg, 'em_phi_mode', 'amortized'),
             closed_form_e_step=getattr(cfg, 'closed_form_e_step', False),
             learnable_head_kappa=cfg.learnable_head_kappa,
             n_picard_steps=cfg.n_picard_steps,
@@ -607,7 +597,7 @@ class GaugeTransformerBlock(nn.Module):
                 if _bep_ok and _try_bep:
                     _shared_bep = _try_bep
 
-            recorder = get_global_recorder() if TRAJECTORY_TRACKING_AVAILABLE else None
+            recorder = get_global_recorder()
             recording_attention = recorder is not None and recorder.enabled and recorder.record_attention
             # Request attention weights for trajectory recording or when the caller
             # requests them via return_attention=True (training path).
@@ -817,8 +807,9 @@ class GaugeTransformerStack(nn.Module):
         # layer l becomes the prior μ of layer l+1 WITHOUT detach, so
         # cross-layer gradients reach early-layer embeddings.  See the
         # comment on the detach site below in forward().
-        self.amortized_inference = getattr(cfg, 'amortized_inference', True)
-        self.em_phi_mode = getattr(cfg, 'em_phi_mode', 'amortized')
+        self.em_mode = cfg.em_mode
+        self.amortized_inference = cfg.amortized_inference  # property, from em_mode
+        self.em_phi_mode = cfg.em_phi_mode  # property, from em_mode
 
         self.blocks =nn.ModuleList([
             GaugeTransformerBlock(cfg)
@@ -871,7 +862,7 @@ class GaugeTransformerStack(nn.Module):
         intermediates = [] if return_intermediates else None
 
         # Get trajectory recorder
-        recorder = get_global_recorder() if TRAJECTORY_TRACKING_AVAILABLE else None
+        recorder = get_global_recorder()
         recording_enabled = recorder is not None and recorder.enabled
 
         n_blocks = len(self.blocks)

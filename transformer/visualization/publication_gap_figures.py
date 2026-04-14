@@ -37,7 +37,7 @@ try:
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-    from transformer.visualization.pub_style import set_pub_style, PUB_COLORS, PUB_CYCLE
+    from transformer.visualization.pub_style import set_pub_style, PUB_COLORS
     MPL_AVAILABLE = True
 except ImportError:
     MPL_AVAILABLE = False

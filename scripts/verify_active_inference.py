@@ -59,9 +59,8 @@ TRAIN_CONFIG = {
     'kappa_warmup_steps':       7500,  # freeze kappa for first n steps
     'learnable_head_kappa':     True, # If True, learn per-head κ_h via log_kappa_per_head
     
-    # === M-step: implicit differentiation ===
-    'implicit_em':           False,
-    'amortized_inference':   True,
+    # === EM gradient-flow mode ===
+    'em_mode':               'straight_through',
     'use_obs_in_vfe':        False,  #cheats when true
        
     # === M-step: Optimizer ===  

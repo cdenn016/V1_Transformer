@@ -21,7 +21,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from scipy.linalg import expm, logm
-from typing import Optional, Tuple
+from typing import Tuple
 
 
 def random_gl_element(K: int, rng: np.random.RandomState, scale: float = 1.0) -> np.ndarray:

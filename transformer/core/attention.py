@@ -29,7 +29,6 @@ warnings.filterwarnings("ignore", message="CUDA path could not be detected", mod
 warnings.filterwarnings("ignore", message="Failed to find cuobjdump", module="triton")
 warnings.filterwarnings("ignore", message="Failed to find nvdisasm", module="triton")
 
-from math_utils.numerical_monitor import record as _nr
 
 import logging
 import math
@@ -82,7 +81,7 @@ __all__ = [
     'aggregate_messages',
 
     # KL divergence computation
-    'compute_kl_matrix',
+    'compute_kl_matrix_from_phi',
 
     # Multi-head attention class
     'IrrepMultiHeadAttention',
@@ -90,7 +89,6 @@ __all__ = [
     # Utilities
     'create_attention_mask',
     'compute_transport_operators',
-    'estimate_chunk_size',
 
     # Constants for checking availability
     'TRANSPORT_AVAILABLE',
@@ -432,7 +430,7 @@ def compute_attention_weights(
         return beta
 
 
-def compute_kl_matrix(
+def compute_kl_matrix_from_phi(
     mu_q: torch.Tensor,        # (B, N, K) belief means
     sigma_q: torch.Tensor,     # (B, N, K, K) or (B, N, K) if diagonal_covariance=True
     phi: torch.Tensor,         # (B, N, n_gen) gauge frames
@@ -478,7 +476,7 @@ def compute_kl_matrix(
         >>> n_gen = 3  # SO(3); use N*(N-1)//2 for SO(N), K**2 for GL(K)
         >>> phi = torch.randn(B, N, n_gen) * 0.1
         >>> G = generate_so3_generators(K)  # (n_gen, K, K)
-        >>> kl = compute_kl_matrix(mu, sigma, phi, G, diagonal_covariance=True)
+        >>> kl = compute_kl_matrix_from_phi(mu, sigma, phi, G, diagonal_covariance=True)
         >>> kl.shape
         torch.Size([2, 10, 10])
     """
@@ -513,58 +511,6 @@ def compute_kl_matrix(
 # _compute_kl_matrix_diagonal_chunked have been consolidated into
 # transformer/core/kl_computation.py.
 # The unified dispatch for all modes lives in _dispatch_kl_matrix below.
-
-
-def estimate_chunk_size(
-    N: int,
-    K: int,
-    available_memory_gb: float = 8.0,
-    dtype_bytes: int = 4,
-    safety_factor: float = 0.5,
-    diagonal_covariance: bool = False,
-) -> int:
-    """
-    Estimate optimal chunk size based on available GPU memory.
-
-    Peak memory per chunk (full covariance):
-    - Omega: C² × K² × dtype_bytes
-    - Sigma_transported: C² × K² × dtype_bytes
-    - Intermediate: ~2-3 × C² × K² × dtype_bytes
-    Total: ~5 × C² × K² × dtype_bytes
-
-    Peak memory per chunk (diagonal covariance):
-    - Omega: C² × K² × dtype_bytes
-    - sigma_transported: C² × K × dtype_bytes
-    Total: ~2 × C² × K² × dtype_bytes (Omega dominates)
-
-    Args:
-        N: Sequence length
-        K: Embedding dimension
-        available_memory_gb: Available GPU memory in GB
-        dtype_bytes: Bytes per element (4 for float32)
-        safety_factor: Fraction of memory to use (0.5 = use 50%)
-        diagonal_covariance: Whether using diagonal mode
-
-    Returns:
-        Recommended chunk size C
-    """
-    available_bytes = available_memory_gb * 1e9 * safety_factor
-
-    # Memory per chunk: ~5 × C² × K² × dtype_bytes (full) or ~2 × C² × K² (diagonal)
-    multiplier = 2.0 if diagonal_covariance else 5.0
-    bytes_per_c_squared = multiplier * K * K * dtype_bytes
-
-    # Solve for C: C² ≤ available_bytes / bytes_per_c_squared
-    max_c_squared = available_bytes / bytes_per_c_squared
-    max_c = int(max_c_squared ** 0.5)
-
-    # Round down to power of 2 for efficiency (optional)
-    # chunk_size = 2 ** int(np.log2(max_c)) if max_c >= 2 else 1
-
-    # Clamp to reasonable range
-    chunk_size = max(4, min(max_c, N))
-
-    return chunk_size
 
 
 def _dispatch_kl_matrix(
@@ -1340,7 +1286,6 @@ class IrrepMultiHeadAttention(nn.Module):
         self.exact_diagonal_transport = exact_diagonal_transport
         self.sigma_aggregation = sigma_aggregation
         self.embed_dim = embed_dim
-        self.irrep_spec = irrep_spec
         self.kappa_beta = kappa_beta
         self.epsilon = epsilon
         self.aggregate_mode = aggregate_mode
@@ -1394,14 +1339,12 @@ class IrrepMultiHeadAttention(nn.Module):
                     self.irrep_dims = list(irrep_dims_override)
                     self.irrep_labels = [f'glk_superblock_{i}' for i in range(len(irrep_dims_override))]
                     self.glk_multihead = True
-                    self.glk_d_head = d_head
                     logger.info(f"[GL(K) cross-head] super-blocks={irrep_dims_override}, "
                                f"d_head={d_head}")
                 else:
                     self.irrep_dims = [d_head] * n_heads
                     self.irrep_labels = [f'glk_head_{h}' for h in range(n_heads)]
                     self.glk_multihead = True
-                    self.glk_d_head = d_head
                     logger.info(f"[GL(K) multi-head] {n_heads} heads × GL({d_head}), generators per head={d_head}²={d_head**2}")
         else:
             # SO(3) / SO(N) mode: Use irrep decomposition
@@ -1424,7 +1367,6 @@ class IrrepMultiHeadAttention(nn.Module):
                 )
 
         self.n_heads = len(self.irrep_dims)
-        self.total_dim = total_dim
         self.learnable_head_kappa = learnable_head_kappa
 
         # =================================================================
@@ -1443,9 +1385,6 @@ class IrrepMultiHeadAttention(nn.Module):
             self.log_kappa_per_head = None
             self._kappa_init = None
 
-        # Store gauge group info
-        self.gauge_group = gauge_group
-        self.gauge_dim = gauge_dim
 
         # =================================================================
         # Create generators for each head dimension
@@ -1542,7 +1481,6 @@ class IrrepMultiHeadAttention(nn.Module):
         # =================================================================
         # W_O output projection (optional cross-head mixing)
         # =================================================================
-        self.use_output_projection = use_output_projection
         if use_output_projection:
             self.output_proj = nn.Linear(embed_dim, embed_dim, bias=False)
             logger.info(f"  W_O output projection: {embed_dim}×{embed_dim} = {embed_dim**2} params")

@@ -28,7 +28,7 @@ except ImportError:
     LineCollection = None
     MATPLOTLIB_AVAILABLE = False
 
-from transformer.visualization.pub_style import set_pub_style, PUB_COLORS, PUB_CYCLE
+from transformer.visualization.pub_style import set_pub_style, PUB_COLORS, PUB_CYCLE, _safe_legend
 
 
 # ---------------------------------------------------------------------------
@@ -248,16 +248,6 @@ def _fit_log_linear(
     lam = max(-neg_lam, 0.0)
     fit_vals = np.exp(log_a) * np.exp(-lam * t)
     return fit_vals, lam, float(log_a)
-
-
-def _safe_legend(ax: "plt.Axes", *args, **kwargs) -> None:
-    """Call ax.legend() only if labeled artists exist."""
-    if args:
-        ax.legend(*args, **kwargs)
-        return
-    handles, labels = ax.get_legend_handles_labels()
-    if labels:
-        ax.legend(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -508,7 +498,7 @@ def plot_convergence_curves(
                 ax.plot(t_plot, fit_vals, color=color, linewidth=1.0,
                         linestyle="--", alpha=0.7,
                         label=rf"$\lambda={lam:.2f}$ (fit)")
-        except Exception:
+        except (ValueError, np.linalg.LinAlgError):
             pass
 
     if not any_data:
@@ -750,7 +740,7 @@ def plot_fiber_trajectory_dashboard(
             if np.any(np.isfinite(fit_vals)):
                 ax02.plot(t_plot, fit_vals, color=color, linewidth=0.9,
                           linestyle="--", alpha=0.7)
-        except Exception:
+        except (ValueError, np.linalg.LinAlgError):
             pass
     if any_conv:
         ax02.set_yscale("log")
@@ -1009,7 +999,7 @@ def generate_all_fiber_figures(
                         plt.close(fig)
                         key = name if ext == "png" else f"{name}_pdf"
                         saved[key] = path
-                except Exception:
+                except (ValueError, TypeError, OSError, np.linalg.LinAlgError):
                     pass
 
     return saved

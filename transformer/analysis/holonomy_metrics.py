@@ -12,7 +12,7 @@ Depends on the low-level ``compute_holonomy`` from ``.holonomy``.
 import torch
 import numpy as np
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import List, Dict
 
 from .holonomy import compute_holonomy
 

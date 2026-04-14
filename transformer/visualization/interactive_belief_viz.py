@@ -66,7 +66,7 @@ def _safe_write_image(fig, path, scale=2):
     """Write Plotly figure to PNG, silently skipping if Chrome is unavailable."""
     try:
         fig.write_image(str(path), scale=scale)
-    except Exception:
+    except (ImportError, OSError, ValueError):
         # Kaleido v1+ requires Chrome; skip PNG if not available
         pass
 

@@ -17,7 +17,6 @@ Two estimation modes:
 FLOPs are reported as multiply-accumulate operations (MACs) * 2 = FLOPs.
 """
 
-import math
 from typing import Any, Dict
 
 

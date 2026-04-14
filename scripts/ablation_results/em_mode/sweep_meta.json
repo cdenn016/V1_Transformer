@@ -1,0 +1,8 @@
+{
+  "sweep_name": "em_mode",
+  "description": "EM inference mode: amortization scope and phi treatment",
+  "baseline_value": "amortized",
+  "n_runs": 6,
+  "seed": 6,
+  "timestamp": "2026-04-14 06:08:09"
+}

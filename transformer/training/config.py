@@ -11,9 +11,9 @@ parameter grouping strategy (use_param_groups). Gauge transport can be
 trivialized (gauge_mode='trivial') to recover standard KL-attention.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 
 
 @dataclass

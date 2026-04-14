@@ -50,7 +50,7 @@ except ImportError:
     Patch = None        # type: ignore[assignment]
     MATPLOTLIB_AVAILABLE = False
 
-from transformer.visualization.pub_style import set_pub_style, PUB_COLORS, PUB_CYCLE
+from transformer.visualization.pub_style import set_pub_style, PUB_COLORS, PUB_CYCLE, _safe_legend
 
 
 # =============================================================================
@@ -84,16 +84,6 @@ def _unit_circle(ax) -> None:
     ax.plot(np.cos(theta), np.sin(theta),
             color=PUB_COLORS['gray'], linewidth=0.8, linestyle='--',
             alpha=0.6, zorder=1, label='Unit circle')
-
-
-def _safe_legend(ax, *args, **kwargs) -> None:
-    """Call ax.legend() only when there are labelled artists."""
-    if args:
-        ax.legend(*args, **kwargs)
-        return
-    handles, labels = ax.get_legend_handles_labels()
-    if labels:
-        ax.legend(**kwargs)
 
 
 # =============================================================================
@@ -836,7 +826,7 @@ def generate_all_gauge_geometry_figures(
                     if fig is not None:
                         plt.close(fig)
                         saved[key] = out_path
-                except Exception:
+                except (ValueError, TypeError, np.linalg.LinAlgError):
                     pass  # Missing data is expected; silently skip
 
     return saved

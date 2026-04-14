@@ -18,6 +18,39 @@ import torch.nn as nn
 
 
 
+_EM_MODE_TABLE = {
+    'straight_through': dict(amortized_inference=True,  amortize_sigma=True,  exact_phi_grad=False, implicit_em=False, em_phi_mode='amortized'),
+    'ift_phi':          dict(amortized_inference=True,  amortize_sigma=True,  exact_phi_grad=True,  implicit_em=False, em_phi_mode='amortized'),
+    'em_phi_q':         dict(amortized_inference=True,  amortize_sigma=False, exact_phi_grad=False, implicit_em=False, em_phi_mode='E_phi_q'),
+    'em_phi_p':         dict(amortized_inference=True,  amortize_sigma=False, exact_phi_grad=False, implicit_em=False, em_phi_mode='M_phi_p'),
+    'implicit_ift':     dict(amortized_inference=False, amortize_sigma=False, exact_phi_grad=False, implicit_em=True,  em_phi_mode='amortized'),
+}
+
+
+def _infer_em_mode(config: dict) -> str:
+    """Resolve em_mode from config dict, with backward compatibility for old flags."""
+    if 'em_mode' in config:
+        return config['em_mode']
+    # Legacy flag inference
+    implicit_em = config.get('implicit_em', False)
+    amortized = config.get('amortized_inference', True)
+    if implicit_em:
+        return 'implicit_ift'
+    # Legacy non-amortized path (Hebbian) — detaches beliefs like implicit_ift
+    # but without the IFT scaling. Kept for backward compatibility only.
+    if not amortized:
+        return 'implicit_ift'
+    em_phi_mode = config.get('em_phi_mode', 'amortized')
+    if em_phi_mode == 'E_phi_q':
+        return 'em_phi_q'
+    if em_phi_mode == 'M_phi_p':
+        return 'em_phi_p'
+    exact = config.get('exact_phi_grad', False)
+    if exact:
+        return 'ift_phi'
+    return 'straight_through'
+
+
 @dataclass
 class BlockConfig:
     """All parameters needed to construct a GaugeTransformerBlock (and its sub-modules).
@@ -73,17 +106,13 @@ class BlockConfig:
     
     
     
-    amortized_inference: bool = True    # Gradient flow through priors for learned E-step init
-    amortize_sigma: bool =      False   # When True + amortized_inference, sigma_p stays attached in E-step
-    exact_phi_grad: bool =      False   # When True, _compute_phi_grad keeps beliefs attached (full IFT derivative)
-    detach_phi: bool =          False   # Detach phi from backprop in non-amortized mode
-    
-                                        # (enables fully backprop-free training with phi P-flow)
-    implicit_em: bool =         False   # IFT-based M-step: detach beliefs at E-step start,
-                                        # apply info-geometric scale s_k = (α/σ²_p)/A_k
-    em_phi_mode: str =          'amortized'  # 'amortized' (default straight-through),
-                                        # 'E_phi_q' (φ∈q: E-step optimizes μ,Σ,φ; all detached at EM boundary),
-                                        # 'M_phi_p' (φ∈θ: E-step optimizes μ,Σ only; φ frozen, M-step optimizes φ)
+    em_mode: str = 'straight_through'   # EM gradient-flow mode. Options:
+                                        #   'straight_through' — μ_p,σ_p attached, semi-gradient φ (default)
+                                        #   'ift_phi'          — μ_p,σ_p attached, full IFT φ gradient
+                                        #   'em_phi_q'         — φ∈q: E-step optimizes μ,Σ,φ; all detached at EM boundary
+                                        #   'em_phi_p'         — φ∈θ: φ frozen in E-step; M-step only
+                                        #   'implicit_ift'     — (experimental) IFT-scaled M-step, beliefs detached
+    detach_phi: bool =          False   # Detach phi from backprop (Hebbian/P-flow only)
 
     # === VFE dynamics (E-step) ===
     ffn_mode: str = 'VFE_dynamic'       # FFN mode (only 'VFE_dynamic' supported)
@@ -153,14 +182,20 @@ class BlockConfig:
 
     def __post_init__(self):
         """Enforce mode invariants that must hold regardless of how BlockConfig is constructed."""
-        # EM mode validation
-        _valid_em = ('amortized', 'E_phi_q', 'M_phi_p')
-        if self.em_phi_mode not in _valid_em:
+        # EM mode validation and flag resolution
+        if self.em_mode not in _EM_MODE_TABLE:
             raise ValueError(
-                f"em_phi_mode must be one of {_valid_em}, got '{self.em_phi_mode}'"
+                f"em_mode must be one of {list(_EM_MODE_TABLE.keys())}, got '{self.em_mode}'"
             )
+        _flags = _EM_MODE_TABLE[self.em_mode]
+        self._amortized_inference = _flags['amortized_inference']
+        self._amortize_sigma = _flags['amortize_sigma']
+        self._exact_phi_grad = _flags['exact_phi_grad']
+        self._implicit_em = _flags['implicit_em']
+        self._em_phi_mode = _flags['em_phi_mode']
+
         # M_phi_p: phi is an M-step parameter — must not evolve during E-step
-        if self.em_phi_mode == 'M_phi_p':
+        if self._em_phi_mode == 'M_phi_p':
             self.evolve_phi = False
             self.evolve_phi_e_step = False
         # Constant/trivial gauge: phi is not used for transport
@@ -187,6 +222,26 @@ class BlockConfig:
                 f"this field is silently ignored). Either set "
                 f"closed_form_e_step=True or set n_picard_steps=0."
             )
+
+    @property
+    def amortized_inference(self) -> bool:
+        return self._amortized_inference
+
+    @property
+    def amortize_sigma(self) -> bool:
+        return self._amortize_sigma
+
+    @property
+    def exact_phi_grad(self) -> bool:
+        return self._exact_phi_grad
+
+    @property
+    def implicit_em(self) -> bool:
+        return self._implicit_em
+
+    @property
+    def em_phi_mode(self) -> str:
+        return self._em_phi_mode
 
     # === Non-flat gauge transport (flat bundle experiments) ===
     # When non_flat_transport=True, the transport becomes:
@@ -274,18 +329,6 @@ class BlockConfig:
     active_inference_epistemic_weight: float = 0.5   # −λ_epi · MI(v; μ | q)
     active_inference_epistemic_samples: int =  4     # MC samples for BALD MI
     active_inference_decode_tau: float =       1.0   # Temperature for PriorBank.decode
-    active_inference_trust_region: float =     0.5   # Whitened trust region for the
-                                                     # separate EFE μ-update (applied
-                                                     # AFTER the VFE trust region so EFE
-                                                     # contribution is not diluted when
-                                                     # VFE saturates its own budget).
-    active_inference_lr: float =               1.0   # Step size for the Euclidean EFE
-                                                     # μ-update.  Separate from E_mu_q_lr
-                                                     # (typically 0.1) because entropy
-                                                     # and MI gradients are much smaller
-                                                     # than KL coupling gradients — a
-                                                     # larger lr is needed to make EFE
-                                                     # move μ meaningfully.
 
     # === Bootstrap self-distillation (BYOL-style E-step term) ===
     # Third active-inference term that does not collapse at initialization
@@ -301,11 +344,10 @@ class BlockConfig:
     # Gated by weight > 0 (master toggle active_inference does NOT gate
     # this — distillation is a standalone term that can be enabled alone).
     active_inference_distill_weight: float =   0.0   # λ_distill · normalized CE
-    active_inference_distill_lr: float =       1.0   # Euclidean step size
     active_inference_distill_normalize: bool = True  # Divide CE by log(V)
     active_inference_distill_mode: str = 'aggregated'  # 'aggregated' | 'per_pair'
-    
-    active_inference: bool = False 
+
+    active_inference: bool = False
     
     rope_full_gauge: bool =  False      # EXPERIMENTAL.  When True (and use_rope=True),
                                         # implements the framework-consistent interpretation
@@ -383,12 +425,8 @@ class BlockConfig:
             diagonal_covariance=config.get('diagonal_covariance', False),
             exact_diagonal_transport=config.get('exact_diagonal_transport', False),
             sigma_aggregation=config.get('sigma_aggregation', 'mixture'),
-            amortized_inference=config.get('amortized_inference', True),
-            amortize_sigma=config.get('amortize_sigma', False),
-            exact_phi_grad=config.get('exact_phi_grad', False),
+            em_mode=_infer_em_mode(config),
             detach_phi=config.get('detach_phi', False),
-            implicit_em=config.get('implicit_em', False),
-            em_phi_mode=config.get('em_phi_mode', 'amortized'),
             # VFE dynamics (E-step) — new names with old-name fallbacks
             ffn_mode=config.get('ffn_mode', 'VFE_dynamic'),
             E_alpha=config.get('E_alpha', config.get('ffn_alpha', 1.0)),
@@ -462,11 +500,8 @@ class BlockConfig:
             active_inference_epistemic_weight=config.get('active_inference_epistemic_weight', 0.5),
             active_inference_epistemic_samples=config.get('active_inference_epistemic_samples', 4),
             active_inference_decode_tau=config.get('active_inference_decode_tau', 1.0),
-            active_inference_trust_region=config.get('active_inference_trust_region', 0.5),
-            active_inference_lr=config.get('active_inference_lr', 1.0),
             # Bootstrap self-distillation
             active_inference_distill_weight=config.get('active_inference_distill_weight', 0.0),
-            active_inference_distill_lr=config.get('active_inference_distill_lr', 1.0),
             active_inference_distill_normalize=config.get('active_inference_distill_normalize', True),
             active_inference_distill_mode=config.get('active_inference_distill_mode', 'aggregated'),
             # Non-serializable

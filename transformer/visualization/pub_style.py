@@ -13,6 +13,8 @@ Usage:
 
 from __future__ import annotations
 
+import warnings
+
 try:
     from matplotlib import rcParams
     MATPLOTLIB_AVAILABLE = True
@@ -104,3 +106,13 @@ def set_pub_style() -> None:
         'xtick.major.width': 0.8,
         'ytick.major.width': 0.8,
     })
+
+
+def _safe_legend(ax: "plt.Axes", *args, **kwargs) -> None:
+    """Call ax.legend() only if labeled artists exist, suppressing UserWarning on empty legend."""
+    if args:
+        ax.legend(*args, **kwargs)
+        return
+    handles, labels = ax.get_legend_handles_labels()
+    if labels:
+        ax.legend(**kwargs)

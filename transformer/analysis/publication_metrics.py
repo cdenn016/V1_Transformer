@@ -54,7 +54,7 @@ from .semantics import (
 )
 
 # Import holonomy analysis
-from .holonomy import compute_holonomy, holonomy_statistics
+from .holonomy import compute_holonomy
 from .holonomy_metrics import (
     HolonomySnapshot,
     HolonomyProfile,

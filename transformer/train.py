@@ -22,7 +22,7 @@ from math_utils.numerical_monitor import record as _nr
 import math
 import torch
 import torch.nn.functional as F
-from typing import Dict, Optional, Tuple, Any
+from typing import Dict, Tuple
 
 from transformer.core.vfe_utils import KL_CEIL_BASE, KL_CEIL_SCALE
 

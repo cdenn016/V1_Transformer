@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import torch
 from torch import Tensor
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from transformer.analysis.holonomy import compute_holonomy
 from transformer.core.gauge_utils import stable_matrix_exp_pair

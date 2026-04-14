@@ -19,10 +19,16 @@ Provides:
 - _aggregate_multihead_vfe_debug — aggregate per-head VFE debug metrics
 """
 
+import logging
 import math
+import numpy as np
 import torch
-from typing import Dict, Optional, Tuple
+import torch.nn.functional as F
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Tuple
 from math_utils.numerical_monitor import record as _nr
+
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # Module-level constants
@@ -598,3 +604,337 @@ def _retract_phi(
             phi_new
         )
         return phi_new
+
+
+# =============================================================================
+# Trajectory recording protocol (core-side)
+# =============================================================================
+# These live in core/ so that blocks.py, model.py, and variational_ffn.py
+# can record trajectories without importing from analysis/.  The analysis
+# layer registers its TrajectoryRecorder via set_global_recorder().
+
+@dataclass
+class IterationSnapshot:
+    r"""Per-iteration belief state within a single layer's VFE E-step.
+
+    Records the state of beliefs at one VFE iteration for a subset of
+    token positions. Used for intra-fiber trajectory analysis: tracking
+    how $(\mu, \Sigma)$ evolve through the Gaussian belief manifold
+    $\mathcal{G}_K$ equipped with the Fisher-Rao metric.
+
+    Attributes:
+        iteration: E-step iteration index (0-based).
+        mu: Belief means for recorded tokens, shape ``(N_recorded, K)``.
+        sigma_diag: Diagonal covariance for recorded tokens, shape ``(N_recorded, K)``.
+        beta_entropy: Mean attention entropy (scalar) at this iteration.
+        grad_mu_norm: L2 norm of the Euclidean mu gradient (scalar).
+        grad_sigma_norm: L2 norm of the Euclidean sigma gradient (scalar).
+    """
+    iteration: int
+    mu: np.ndarray                      # (N_recorded, K)
+    sigma_diag: np.ndarray              # (N_recorded, K)
+    beta_entropy: float = 0.0
+    grad_mu_norm: float = 0.0
+    grad_sigma_norm: float = 0.0
+
+
+_global_recorder: Optional[Any] = None
+
+
+def get_global_recorder() -> Optional[Any]:
+    """Return the global trajectory recorder, or None if not set."""
+    return _global_recorder
+
+
+def set_global_recorder(recorder: Any) -> None:
+    """Register a trajectory recorder from the analysis layer."""
+    global _global_recorder
+    _global_recorder = recorder
+
+
+# =============================================================================
+# Observation gradient computation (extracted from VariationalFFNDynamic)
+# =============================================================================
+
+def compute_observation_gradients(
+    mu_current: torch.Tensor,
+    W_out: torch.Tensor,
+    obs_cache: dict,
+    sigma_current: Optional[torch.Tensor],
+    is_diagonal: bool,
+    is_final_iter: bool,
+    eps: float,
+    obs_sigma_gradient: bool,
+    obs_sigma_exact_stein: bool,
+    obs_sigma_weight: float,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    r"""Compute observation gradients for mu and sigma.
+
+    Returns ``(obs_grad_mu, obs_grad_sigma)`` where ``obs_grad_sigma`` is
+    ``None`` when ``obs_sigma_gradient`` is ``False``.
+
+    **mu gradient** — CE cross-entropy:
+
+    .. math::
+
+        \nabla_\mu \mathbb{E}_q[\mathrm{CE}] = W_{\rm out}^T (\hat{p} - e_y)
+
+    where :math:`\hat{p} = \mathrm{softmax}(W_{\rm out}\,\mu)`.
+
+    **sigma gradient** — Stein's lemma:
+
+    .. math::
+
+        \frac{\partial}{\partial \sigma_k} \mathbb{E}_q[\mathrm{CE}(z)]
+            = \tfrac{1}{2} \mathbb{E}_q[H_{kk}(z)]
+
+    where :math:`H_{kk}(z) = \mathrm{Var}_{\mathrm{softmax}(z)}[W_{:,k}]`.
+    """
+    logits = torch.matmul(mu_current.detach(), W_out.T)
+    probs = F.softmax(logits, dim=-1)
+    mask_obs = obs_cache['mask_obs']
+    one_hot = obs_cache['one_hot']
+    grad_error = (probs - one_hot) * mask_obs
+    discrete_obs_grad = torch.matmul(grad_error, W_out)
+    if _VFE_GRAD_DEBUG is not None:
+        _VFE_GRAD_DEBUG['obs_mu_grad'] = _grad_norm(discrete_obs_grad)
+
+    obs_grad_mu = discrete_obs_grad
+
+    obs_grad_sigma = None
+    if obs_sigma_gradient:
+        if (obs_sigma_exact_stein
+                and sigma_current is not None and is_diagonal):
+            _eps_sample = torch.randn_like(mu_current.detach())
+            _sigma_safe = sigma_current.detach().clamp(min=1e-6)
+            _z_sample = mu_current.detach() + _sigma_safe.sqrt() * _eps_sample
+            _logits_z = torch.matmul(_z_sample, W_out.T)
+            probs_z = F.softmax(_logits_z, dim=-1)
+        else:
+            probs_z = probs
+
+        W_out_sq = obs_cache['W_out_sq']                    # (V, K)
+        EW2 = torch.matmul(probs_z, W_out_sq)                # (B, N, K)
+        EW  = torch.matmul(probs_z, W_out)                   # (B, N, K)
+        hessian_diag = EW2 - EW ** 2                         # (B, N, K)
+        _neg_mask = hessian_diag < 0
+        if _neg_mask.any():
+            if is_final_iter:
+                _nr("obs_sigma_hessian_neg_clamp", count=int(_neg_mask.sum().item()))
+            hessian_diag = hessian_diag.clamp(min=0.0)
+        _sigma_obs_scale = 0.5 * obs_sigma_weight
+        obs_sigma_grad = (_sigma_obs_scale * hessian_diag * mask_obs).clamp(max=10.0)
+        if _VFE_GRAD_DEBUG is not None:
+            _VFE_GRAD_DEBUG['obs_sigma_grad'] = _grad_norm(obs_sigma_grad)
+        if not is_diagonal:
+            obs_sigma_grad = torch.diag_embed(obs_sigma_grad)
+        obs_grad_sigma = obs_sigma_grad
+
+    return obs_grad_mu, obs_grad_sigma
+
+
+# =============================================================================
+# Sigma SPD retraction (extracted from VariationalFFNDynamic)
+# =============================================================================
+
+def apply_natural_gradient_step(
+    grad_mu: torch.Tensor,
+    grad_sigma: torch.Tensor,
+    sigma_current: torch.Tensor,
+    is_diagonal: bool,
+    eps: float,
+    effective_lr: float,
+    isotropic_covariance: bool,
+    compute_natural_gradient_fn,
+) -> dict:
+    r"""Compute natural gradients, clamp, apply trust region, and return update.
+
+    This is the core STEP 3 + STEP 4 of the VFE E-step: Fisher projection,
+    norm clamping, whitened trust-region mu update, and diagnostic scalars.
+
+    Args:
+        grad_mu: Euclidean mu gradient, ``(B, N, K)``.
+        grad_sigma: Euclidean sigma gradient, ``(B, N, K)`` or ``(B, N, K, K)``.
+        sigma_current: Current covariance, ``(B, N, K)`` or ``(B, N, K, K)``.
+        is_diagonal: Whether covariance is diagonal.
+        eps: Numerical stability epsilon.
+        effective_lr: Decayed learning rate for this iteration.
+        isotropic_covariance: Whether to project gradients isotropically.
+        compute_natural_gradient_fn: Callable for Fisher projection.
+
+    Returns:
+        dict with keys:
+            ``mu_new``, ``nat_grad_mu``, ``nat_grad_sigma``,
+            ``nat_grad_mu_norm``, ``nat_grad_sigma_norm``,
+            ``max_nat_grad_norm``, ``max_nat_grad_sigma_norm``,
+            ``delta_mu``, ``scale``, ``whitened_norm``.
+    """
+    # Clip for stability
+    grad_mu = torch.clamp(grad_mu, min=-1e3, max=1e3)
+    grad_sigma = torch.clamp(grad_sigma, min=-1e3, max=1e3)
+
+    # Isotropic gradient projection: average grad_sigma across dims
+    if isotropic_covariance:
+        if is_diagonal:
+            grad_sigma = grad_sigma.mean(dim=-1, keepdim=True).expand_as(grad_sigma)
+        else:
+            diag_grad = torch.diagonal(grad_sigma, dim1=-2, dim2=-1)
+            avg_grad = diag_grad.mean(dim=-1, keepdim=True)
+            K = grad_sigma.shape[-1]
+            grad_sigma = avg_grad.unsqueeze(-1) * torch.eye(
+                K, device=grad_sigma.device, dtype=grad_sigma.dtype
+            )
+
+    # Natural gradient projection
+    nat_grad_mu, nat_grad_sigma = compute_natural_gradient_fn(
+        grad_mu, grad_sigma, sigma_current, eps=eps,
+    )
+
+    # Clamp mu natural gradient norm
+    nat_grad_mu_norm = torch.linalg.norm(nat_grad_mu, dim=-1, keepdim=True)
+    max_nat_grad_norm = 500.0
+    nat_grad_scale = torch.clamp(
+        max_nat_grad_norm / (nat_grad_mu_norm + eps), max=1.0
+    )
+    nat_grad_mu = nat_grad_mu * nat_grad_scale
+
+    # Clamp sigma natural gradient norm
+    if is_diagonal:
+        nat_grad_sigma_norm = torch.linalg.norm(nat_grad_sigma, dim=-1, keepdim=True)
+    else:
+        nat_grad_sigma_norm = torch.linalg.norm(
+            nat_grad_sigma.flatten(-2), dim=-1, keepdim=True
+        ).unsqueeze(-1)
+    max_nat_grad_sigma_norm = 500.0
+    nat_grad_sigma_scale = torch.clamp(
+        max_nat_grad_sigma_norm / (nat_grad_sigma_norm + eps), max=1.0
+    )
+    nat_grad_sigma = nat_grad_sigma * nat_grad_sigma_scale
+
+    # Trust region mu update
+    delta_mu = -effective_lr * nat_grad_mu
+    if is_diagonal:
+        sigma_sqrt = torch.sqrt(sigma_current.float().clamp(min=eps)).to(sigma_current.dtype)
+        whitened_delta = delta_mu / sigma_sqrt
+    else:
+        sigma_diag = torch.diagonal(sigma_current, dim1=-2, dim2=-1).clone().float().clamp(min=eps)
+        whitened_delta = delta_mu / torch.sqrt(sigma_diag).to(delta_mu.dtype)
+
+    whitened_norm = torch.linalg.norm(whitened_delta, dim=-1, keepdim=True)
+    mu_trust_region = 2.0
+    scale = torch.clamp(mu_trust_region / (whitened_norm + eps), max=1.0)
+    mu_new = scale * delta_mu  # Caller adds to mu_current
+
+    return {
+        'mu_delta': mu_new,
+        'nat_grad_mu': nat_grad_mu,
+        'nat_grad_sigma': nat_grad_sigma,
+        'nat_grad_mu_norm': nat_grad_mu_norm,
+        'nat_grad_sigma_norm': nat_grad_sigma_norm,
+        'max_nat_grad_norm': max_nat_grad_norm,
+        'max_nat_grad_sigma_norm': max_nat_grad_sigma_norm,
+        'delta_mu': delta_mu,
+        'scale': scale,
+        'whitened_norm': whitened_norm,
+        'grad_mu_clipped': grad_mu,
+        'grad_sigma_clipped': grad_sigma,
+    }
+
+
+def retract_sigma_e_step(
+    sigma_current: torch.Tensor,
+    nat_grad_sigma: torch.Tensor,
+    effective_lr: float,
+    is_diagonal: bool,
+    eps: float,
+    update_sigma: bool,
+    sigma_trust: float,
+    sigma_max: float,
+    isotropic_covariance: bool,
+) -> torch.Tensor:
+    r"""Apply the SPD-preserving retraction to ``sigma_current``.
+
+    Three sequential operations:
+
+    1. **Retraction** — ``retract_spd_diagonal_torch`` (diagonal) or
+       ``retract_spd_torch`` (full), with trust region ``sigma_trust``.
+    2. **Condition clamping** — prevent anisotropy ratio
+       ``sigma_max / sigma_min > 10`` by nudging extreme dimensions
+       toward the geometric mean.
+    3. **Isotropic enforcement** (when ``isotropic_covariance``) —
+       collapse to :math:`\sigma^2 I` after each update.
+
+    Only runs when ``update_sigma`` is ``True``.
+
+    Returns the (possibly unchanged) ``sigma_current``.
+    """
+    if update_sigma:
+        sigma_trust_diag = sigma_trust
+        sigma_trust_full = sigma_trust * 0.5  # Full cov more sensitive
+        if is_diagonal:
+            sigma_current = retract_spd_diagonal_torch(
+                sigma_diag=sigma_current,
+                delta_sigma=-nat_grad_sigma,
+                step_size=1.0,
+                trust_region=sigma_trust_diag,
+                eps=eps,
+                sigma_max=sigma_max,
+            )
+        else:
+            sigma_current = retract_spd_torch(
+                Sigma=sigma_current,
+                delta_Sigma=-nat_grad_sigma,
+                step_size=1.0,
+                trust_region=sigma_trust_full,
+                eps=eps,
+                sigma_max=sigma_max,
+            )
+
+    # Sigma condition clamping
+    if update_sigma:
+        max_condition = 10.0
+        if is_diagonal:
+            s_min = sigma_current.min(dim=-1, keepdim=True).values.clamp(min=eps)
+            s_max = sigma_current.max(dim=-1, keepdim=True).values
+            condition = s_max / s_min
+            needs_clamp = condition > max_condition
+            geo_mean = sigma_current.log().mean(dim=-1, keepdim=True).exp()
+            lower = geo_mean / (max_condition ** 0.5)
+            upper = geo_mean * (max_condition ** 0.5)
+            sigma_clamped = sigma_current.clamp(min=lower, max=upper)
+            sigma_current = torch.where(
+                needs_clamp.expand_as(sigma_current),
+                sigma_clamped,
+                sigma_current,
+            )
+        else:
+            try:
+                eigvals = torch.linalg.eigvalsh(sigma_current)
+            except (RuntimeError, torch.linalg.LinAlgError):
+                eigvals = None
+            if eigvals is not None:
+                e_min = eigvals[..., 0:1].clamp(min=eps)
+                e_max = eigvals[..., -1:]
+                condition = e_max / e_min
+                geo_mean = eigvals.log().mean(dim=-1, keepdim=True).exp()
+                lower = geo_mean / (max_condition ** 0.5)
+                ridge = (lower - e_min).clamp(min=0.0).mean(dim=-1, keepdim=True)
+                K = sigma_current.shape[-1]
+                sigma_current = sigma_current + ridge.unsqueeze(-1) * torch.eye(
+                    K, device=sigma_current.device, dtype=sigma_current.dtype
+                )
+
+    # Isotropic covariance enforcement
+    if update_sigma and isotropic_covariance:
+        if is_diagonal:
+            scalar_var = sigma_current.mean(dim=-1, keepdim=True)
+            sigma_current = scalar_var.expand_as(sigma_current)
+        else:
+            diag_vals = torch.diagonal(sigma_current, dim1=-2, dim2=-1)
+            scalar_var = diag_vals.mean(dim=-1, keepdim=True)
+            K = sigma_current.shape[-1]
+            sigma_current = scalar_var.unsqueeze(-1) * torch.eye(
+                K, device=sigma_current.device, dtype=sigma_current.dtype
+            )
+
+    return sigma_current

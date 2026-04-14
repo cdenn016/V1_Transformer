@@ -54,10 +54,7 @@ Date: December 2025
 import torch
 import argparse
 import json
-import csv
-import time
 from pathlib import Path
-from typing import Dict, List, Tuple, Any
 
 
 # ============================================================================
@@ -149,16 +146,20 @@ EM_CONFIG = {
     'kappa_beta':                 1,
     'kappa_warmup_steps':         7500,  # freeze kappa for first n steps
     'learnable_head_kappa':       True, # If True, learn per-head κ_h via log_kappa_per_head
+    
     'obs_sigma_gradient':         True, # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
+    'obs_sigma_exact_stein':      True,  # Single-sample E_q[H(z)] instead of H(μ) for obs sigma grad
+    
     'e_step_sigma_floor':         0.01,   # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
     
-    # === M-step: implicit differentiation ===
-    'implicit_em':                False,
-    
-    'amortized_inference':        True,
-    'amortize_sigma':             False,   # When True + amortized_inference, sigma_p stays attached in E-step
-    'exact_phi_grad':             True,   # When True, _compute_phi_grad keeps beliefs attached (full IFT derivative)
-    'em_phi_mode':                'E_phi_q',  # 'amortized' | 'E_phi_q' (φ∈q) | 'M_phi_p' (φ∈θ)
+    # === EM gradient-flow mode ===
+    'em_mode':                    'ift_phi',  # φ∈q: E-step optimizes μ,Σ,φ; all detached at EM boundary
+                                                # - 'straight_through' (default) — mu_p, sigma_p attached, semi-gradient phi
+                                                # - 'ift_phi' — same + full IFT phi gradient
+                                                # - 'em_phi_q' — clean EM, phi in q, all detached at boundary
+                                                # - 'em_phi_p' — clean EM, phi frozen in E-step
+                                                # - 'implicit_ift' — experimental IFT-scaled M-step
+
 
     'active_inference':           False,   #requires priorbank true
     
@@ -231,7 +232,7 @@ EM_CONFIG = {
      
     'exact_diagonal_transport':   False,  # exact diagonal transport - more expensive                                        
     'isotropic_covariance':       False, # If True, force Σ = σ²I (scalar variance × identity)
-    'enforce_orthogonal':         False,    
+    'enforce_orthogonal':         True,    
     'learnable_reflection':       False,# Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk
                                         # Set gauge-mode=constant and the above 3 = true for transf limit
 
@@ -242,7 +243,7 @@ EM_CONFIG = {
 
     # === Position encoding ===
     'use_rope':                   True,
-    'rope_base':                  60,   #75 for N=64, 128
+    'rope_base':                  100,   
     'rope_full_gauge':            False,
     'pos_encoding_mode':          'none',
 
@@ -323,7 +324,6 @@ EM_CONFIG = {
     #DO NOT USE PRAGMATIC WEIGHT WITH DISTILLATION
 
     'active_inference_distill_weight':    0.0,        # λ_distill — start small
-    'active_inference_distill_lr':        2.0,         # Euclidean step size for the distill update
     'active_inference_distill_normalize': True,        # divide CE by log(V) so weight is V-agnostic
     'active_inference_distill_mode':      'aggregated',# 'aggregated' (default) or 'per_pair'
 
@@ -389,7 +389,7 @@ HEBBIAN_CONFIG = {
     'diagonal_covariance': True,
 
     # === Hebbian M-step: no backprop ===
-    'amortized_inference':  False,
+    'em_mode':              'implicit_ift',  # Detach beliefs; Hebbian path uses P-flow instead of IFT scaling
 
     # EMA update of embeddings toward successful beliefs
     'use_p_flow':           True,
@@ -678,70 +678,15 @@ STANDARD_CONFIG = {
 
 
 # Config (b): Standard transformer at d_model=90, MLP disabled (attention-only)
-# Isolates the contribution of dot-product attention without FFN
+# Isolates the contribution of dot-product attention without FFN.
+# Derived from STANDARD_CONFIG — overrides embed_dim, n_heads, hidden_dim,
+# and adds disable_ffn=True.
 STANDARD_ATTN_ONLY_CONFIG = {
-    # Model architecture — match gauge model's embed_dim
-    'vocab_size': 50257,
+    **STANDARD_CONFIG,
     'embed_dim': 90,              # Same as gauge model embed_dim
-    'n_layers': 1,                # Same depth
-    # 9 heads * 10 = 90 (head_dim=10, matching gauge d_head)
-    'n_heads': 9,
-    # Not used (FFN disabled), but needed for config
-    'hidden_dim': 360,
-    'max_seq_len': 128,
+    'n_heads': 9,                 # 9 heads * 10 = 90 (head_dim=10, matching gauge d_head)
+    'hidden_dim': 360,            # Not used (FFN disabled), but needed for config
     'disable_ffn': True,          # KEY: no FFN, attention only
-
-    # Training — match VFE config
-    'batch_size': 64,
-    'num_workers': 0,
-    'epochs': None,
-    'max_steps': 15000,
-    'warmup_steps': 100,
-
-    # Standard transformer settings
-    'ffn_mode': 'standard',
-    'attention_type': 'standard',
-    'pos_encoding_mode': 'learned',
-    'tie_embeddings': False,
-
-    # Disable gauge features
-    'evolve_sigma': False,
-    'evolve_phi': False,
-    'diagonal_covariance': True,
-    'isotropic_covariance': False,
-    'use_positional_embedding': True,
-
-    # Learning rates
-    'M_mu_p_lr': 3e-4,
-    'M_sigma_p_lr': 0.0001,
-    'M_phi_lr': 0.0001,
-    'M_vfe_hyperparam_lr': 3e-4,
-
-    # Free energy weights (not used in standard mode)
-    'M_alpha': 0,
-    'M_beta': 0,
-    'lambda_gamma': 0,
-    'kappa_gamma': 1.0,
-
-    # Regularization
-    'non_embed_weight_decay': 0.01,
-    'dropout': 0.1,
-    'grad_clip': 1.0,
-
-    # Logging
-    'log_interval': 100,
-    'eval_interval': 1000,
-    'checkpoint_interval': 25000,
-
-    # Unused in standard mode
-    'kappa_beta': 1.0,
-    'attention_pattern': 'full',
-    'attention_window': 24,
-    'gauge_group': 'SO3',
-    'gauge_dim': 3,
-    'gauge_mode': 'learned',
-    'gauge_fixed_priors': False,
-    'irrep_spec': [('ℓ0', 5, 1)],
 }
 
 # =============================================================================
@@ -904,15 +849,8 @@ def main():
 
     # Set random seed for reproducibility
     seed = args.seed if args.seed is not None else SEED
-    import random
-    import numpy as np
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+    from transformer.training.utils import set_all_seeds
+    set_all_seeds(seed)
     # Device
     if args.device == 'auto':
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

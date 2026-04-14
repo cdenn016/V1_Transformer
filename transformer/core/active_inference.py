@@ -13,11 +13,9 @@ This file contains:
 2. ``_compute_distillation_gradient`` — Bootstrap self-distillation (BYOL-style).
 3. ``compute_ai_gradients`` — Dispatch wrapper that resolves refs from the FFN
    instance and calls both helpers.
-4. ``apply_ai_mu_updates`` — Applies the two pending gradients as separate
-   Euclidean updates with their own whitened trust regions.
-5. ``configure_ffn_active_inference`` — Called from ``blocks.py`` to set the 13
+4. ``configure_ffn_active_inference`` — Called from ``blocks.py`` to set the 9
    AI instance attributes on a freshly-constructed FFN.
-6. ``wire_readout_references`` — Called from ``model.py`` after the full module
+5. ``wire_readout_references`` — Called from ``model.py`` after the full module
    hierarchy is built to plumb PriorBank / W_out fallback references.
 
 Mathematical background
@@ -98,8 +96,15 @@ def _compute_active_inference_gradient(
     epistemic_samples: int,
     decode_tau: float,
     w_out: Optional[torch.Tensor] = None,
-) -> Optional[torch.Tensor]:
-    r"""Compute dF_AI/dmu via autograd through the readout.
+) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    r"""Compute dF_AI/d(mu, sigma) via autograd through the readout.
+
+    Returns Euclidean gradients for BOTH μ and Σ.  When
+    ``unified_natgrad=True`` these are folded into the VFE gradient sum
+    before the Fisher natural-gradient projection, so all terms share the
+    same information-geometric descent on the belief manifold (Amari 1998:
+    the Fisher metric is a property of the belief parameterization, not the
+    loss function).
 
     Uses PriorBank.decode when prior_bank is provided (principled KL-based
     readout).  Falls back to a linear W_out projection followed by softmax
@@ -124,13 +129,19 @@ def _compute_active_inference_gradient(
     backwards / frees the autograd graph for one sample at a time.  Peak
     retained graph drops to a single sample (~5 U), saving (3S - 3) * U.
 
-    Correctness: with log p̄ frozen, the per-sample loss
-        L_s = -(ε / S) · KL(p_s || sg(p̄))
-    has gradient
-        ∂L_s/∂μ = (ε / S) Σ_v ∂p_s/∂μ · (log p̄ - log p_s),
-    and Σ_s ∂L_s/∂μ matches the joint gradient term-for-term.  The
-    "log p̄ + 1" term that the chain rule produces vanishes because
-    Σ_v ∂p_s(v)/∂μ = ∂(1)/∂μ = 0.
+    Sigma gradient
+    --------------
+    Σ enters two paths:
+
+    1. **Readout** — PriorBank.decode uses Σ in the KL-based logits
+       (trace(Σ_q/Σ_p) terms).  Linear W_out ignores Σ, giving zero sigma
+       gradient for the pragmatic term.
+
+    2. **Reparameterization** (epistemic only) — samples are drawn via
+       z_s = μ + √Σ · ε (diagonal) or z_s = μ + L·ε (Cholesky).  The
+       diagonal case tracks Σ through √Σ for the explore-exploit gradient
+       ∂MI/∂Σ.  Full covariance tracks Σ through the readout only (Cholesky
+       differentiation is expensive; diagonal captures the main effect).
 
     Args:
         mu_current: (B, N, K) current belief mean (will be detached internally).
@@ -144,16 +155,17 @@ def _compute_active_inference_gradient(
                readout when prior_bank is None.
 
     Returns:
-        (B, N, K) gradient of F_AI with respect to mu_current, or None if
-        both weights are zero, both readout paths are unavailable, or we
-        are inside an inference-mode context.
+        (grad_mu, grad_sigma) — each (B, N, K) for diagonal or appropriate
+        shape for full covariance.  Either may be None if all terms are
+        disabled, readout is unavailable, or we are in inference-mode.
     """
+    _none_pair = (None, None)
     if prior_bank is None and w_out is None:
-        return None
+        return _none_pair
     if pragmatic_weight <= 0.0 and epistemic_weight <= 0.0:
-        return None
+        return _none_pair
     if torch.is_inference_mode_enabled():
-        return None
+        return _none_pair
 
     is_diagonal = (sigma_current.dim() == mu_current.dim())
     use_prior_bank = (prior_bank is not None)
@@ -173,37 +185,52 @@ def _compute_active_inference_gradient(
     # Detached float32 copies shared across pragmatic + per-sample epistemic.
     # Both autograd passes use the same mu_f32 leaf seed, so per-sample
     # gradients are gradients w.r.t. the same mu_current point.
+    # sigma_f32 is the base value; fresh sigma_var leaves are created per
+    # autograd context to track ∂G/∂Σ.
     mu_f32 = mu_current.detach().to(torch.float32)
     sigma_f32 = sigma_current.detach().to(torch.float32)
-    grad_accum: Optional[torch.Tensor] = None
+    grad_mu_accum: Optional[torch.Tensor] = None
+    grad_sigma_accum: Optional[torch.Tensor] = None
 
-    # ----- Pragmatic: minimize H[p_pred(v|mu)] -----------------------
+    # ----- Pragmatic: minimize H[p_pred(v|mu, sigma)] -----------------
     # Single decode + autograd.grad call.  retain_graph=False frees the
     # graph before the epistemic loop runs, so the two terms do not
-    # coexist in memory.
+    # coexist in memory.  Sigma is tracked through the readout: with
+    # PriorBank.decode the KL-based logits depend on Σ; with linear W_out
+    # the dependence is zero and autograd returns a zero gradient.
     if pragmatic_weight > 0.0:
         with torch.enable_grad():
             mu_var = mu_f32.clone().requires_grad_(True)
-            logits = _readout(mu_var, sigma_f32)  # (B, N, V)
+            sigma_var = sigma_f32.clone().requires_grad_(True)
+            logits = _readout(mu_var, sigma_var)  # (B, N, V)
             log_probs = F.log_softmax(logits, dim=-1)
             probs = log_probs.exp()
             entropy = -(probs * log_probs).sum(dim=-1)  # (B, N)
             pragmatic_term = pragmatic_weight * entropy.mean()
-            grad_prag = torch.autograd.grad(
-                pragmatic_term, mu_var,
+            grad_prag_mu, grad_prag_sigma = torch.autograd.grad(
+                pragmatic_term, [mu_var, sigma_var],
                 create_graph=False, retain_graph=False,
-            )[0]
-        grad_accum = grad_prag.detach()
-        del logits, log_probs, probs, entropy, pragmatic_term, mu_var, grad_prag
+            )
+        grad_mu_accum = grad_prag_mu.detach()
+        grad_sigma_accum = grad_prag_sigma.detach()
+        del logits, log_probs, probs, entropy, pragmatic_term
+        del mu_var, sigma_var, grad_prag_mu, grad_prag_sigma
 
     # ----- Epistemic: -MI(v; mu | q_i) via Welford-style 2-pass backward -----
+    # Sigma enters two paths: (1) the readout _readout(mu_s, sigma_var) and
+    # (2) the reparameterization mu_s = mu + sqrt(sigma) * noise (diagonal).
+    # For full covariance, path (2) would require differentiating through
+    # Cholesky — expensive.  We track sigma through the readout in all cases
+    # and additionally through the reparameterization in the diagonal case.
+    _full_cov_epi = not is_diagonal  # full-cov: readout-only sigma gradient
     if epistemic_weight > 0.0 and epistemic_samples > 0:
-        # ---- Build the noise sampler (no autograd dependency on mu) ----
+        # ---- Build the noise sampler (detached, for Pass 1) ----
+        # Store RAW noise ε ~ N(0,I) so Pass 2 can apply tracked sigma.
         if is_diagonal:
-            std = sigma_f32.clamp(min=1e-6).sqrt()
+            std_detached = sigma_f32.clamp(min=1e-6).sqrt()
 
-            def _sample_noise(template: torch.Tensor) -> torch.Tensor:
-                return torch.randn_like(template) * std
+            def _sample_scaled_noise(template: torch.Tensor) -> torch.Tensor:
+                return torch.randn_like(template) * std_detached
         else:
             # Full covariance: use Cholesky for correct correlated sampling.
             # Falls back to diagonal std on numerical failure (non-SPD Sigma).
@@ -211,28 +238,38 @@ def _compute_active_inference_gradient(
             K_dim = sigma_spd.shape[-1]
             eye_k = torch.eye(K_dim, device=sigma_spd.device, dtype=sigma_spd.dtype)
             sigma_spd = sigma_spd + 1e-6 * eye_k
+            _cholesky_ok = True
             try:
                 L_chol = torch.linalg.cholesky(sigma_spd)  # (B, N, K, K)
 
-                def _sample_noise(template: torch.Tensor) -> torch.Tensor:
+                def _sample_scaled_noise(template: torch.Tensor) -> torch.Tensor:
                     z = torch.randn_like(template)  # (B, N, K)
                     return torch.einsum('bnkj,bnj->bnk', L_chol, z)
             except Exception:
+                _cholesky_ok = False
                 sigma_diag = torch.diagonal(sigma_spd, dim1=-2, dim2=-1)
-                std = sigma_diag.clamp(min=1e-6).sqrt()
+                std_detached = sigma_diag.clamp(min=1e-6).sqrt()
 
-                def _sample_noise(template: torch.Tensor) -> torch.Tensor:
-                    return torch.randn_like(template) * std
+                def _sample_scaled_noise(template: torch.Tensor) -> torch.Tensor:
+                    return torch.randn_like(template) * std_detached
 
         # ---- Pass 1: streaming p̄ accumulation, no autograd graph ----
-        # Save noise tensors so pass 2 reproduces identical mu_s values.
-        # Each noise tensor is (B, N, K) — kilobytes, not gigabytes.
-        noise_list: List[torch.Tensor] = []
+        # Save RAW noise ε for diagonal (so Pass 2 can apply tracked sigma)
+        # or pre-scaled noise for full-cov (sigma gradient via readout only).
+        raw_noise_list: List[torch.Tensor] = []
+        scaled_noise_list: List[torch.Tensor] = []
         with torch.no_grad():
             probs_avg: Optional[torch.Tensor] = None
             for _s in range(epistemic_samples):
-                noise = _sample_noise(mu_f32)
-                noise_list.append(noise)
+                if is_diagonal:
+                    # Store raw ε, compute scaled noise for Pass 1
+                    raw_z = torch.randn_like(mu_f32)
+                    raw_noise_list.append(raw_z)
+                    noise = raw_z * std_detached
+                else:
+                    # Store pre-scaled noise (sigma gradient via readout only)
+                    noise = _sample_scaled_noise(mu_f32)
+                    scaled_noise_list.append(noise)
                 mu_s = mu_f32 + noise
                 logits_s = _readout(mu_s, sigma_f32)
                 # Streaming mean: avoid materializing (S, B, N, V) probs_stack.
@@ -246,32 +283,49 @@ def _compute_active_inference_gradient(
         # ---- Pass 2: per-sample autograd, accumulate gradient manually ----
         # Each iteration: rebuild the sample's decode graph, compute
         # L_s = -(ε / S) · KL(p_s || sg(p̄_const)), backward, free.
+        # Sigma is tracked through: (a) readout (always) and (b)
+        # reparameterization mu_s = mu + sqrt(sigma_var) * raw_z (diagonal).
         epi_per_sample_weight = -epistemic_weight / epistemic_samples
         for _s in range(epistemic_samples):
             with torch.enable_grad():
                 mu_var_s = mu_f32.clone().requires_grad_(True)
-                mu_s_grad = mu_var_s + noise_list[_s]
-                logits_s_grad = _readout(mu_s_grad, sigma_f32)
+                sigma_var_s = sigma_f32.clone().requires_grad_(True)
+                if is_diagonal:
+                    # Reparameterization with tracked sigma
+                    std_tracked = sigma_var_s.clamp(min=1e-6).sqrt()
+                    mu_s_grad = mu_var_s + raw_noise_list[_s] * std_tracked
+                else:
+                    # Full-cov: use pre-scaled noise (sigma via readout only)
+                    mu_s_grad = mu_var_s + scaled_noise_list[_s]
+                logits_s_grad = _readout(mu_s_grad, sigma_var_s)
                 log_probs_s_grad = F.log_softmax(logits_s_grad, dim=-1)
                 probs_s_grad = log_probs_s_grad.exp()
                 # KL(p_s || p̄) = Σ_v p_s · (log p_s - log p̄)
                 kl_s = (probs_s_grad
                         * (log_probs_s_grad - log_probs_avg_const)).sum(dim=-1)
                 F_s = epi_per_sample_weight * kl_s.mean()
-                grad_s = torch.autograd.grad(
-                    F_s, mu_var_s,
+                grad_s_mu, grad_s_sigma = torch.autograd.grad(
+                    F_s, [mu_var_s, sigma_var_s],
                     create_graph=False, retain_graph=False,
-                )[0]
-            grad_accum = (grad_s.detach() if grad_accum is None
-                          else grad_accum + grad_s.detach())
+                )
+            _gs_mu = grad_s_mu.detach()
+            _gs_sigma = grad_s_sigma.detach()
+            grad_mu_accum = (_gs_mu if grad_mu_accum is None
+                             else grad_mu_accum + _gs_mu)
+            grad_sigma_accum = (_gs_sigma if grad_sigma_accum is None
+                                else grad_sigma_accum + _gs_sigma)
             # Drop Python refs so the storage can be reclaimed before the
             # next sample's decode allocates.
-            del mu_var_s, mu_s_grad, logits_s_grad, log_probs_s_grad
-            del probs_s_grad, kl_s, F_s, grad_s
+            del mu_var_s, sigma_var_s, mu_s_grad, logits_s_grad
+            del log_probs_s_grad, probs_s_grad, kl_s, F_s
+            del grad_s_mu, grad_s_sigma, _gs_mu, _gs_sigma
 
-    if grad_accum is None:
-        return None
-    return grad_accum.to(mu_current.dtype)
+    if grad_mu_accum is None:
+        return (None, None)
+    _out_dtype = mu_current.dtype
+    _grad_mu = grad_mu_accum.to(_out_dtype)
+    _grad_sigma = grad_sigma_accum.to(_out_dtype) if grad_sigma_accum is not None else None
+    return (_grad_mu, _grad_sigma)
 
 
 # =============================================================================
@@ -309,13 +363,14 @@ def _compute_distillation_gradient(
     decode_tau: float,
     w_out: Optional[torch.Tensor] = None,
     mode: str = 'aggregated',
-) -> Optional[torch.Tensor]:
-    r"""Compute dL_distill/dmu via autograd through the readout.
+) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    r"""Compute dL_distill/d(mu, sigma) via autograd through the readout.
 
     Builds the aggregated transported belief mu_tilde using per-head
     block-diagonal einsums, runs the PriorBank (or W_out fallback) decode at
     both mu and mu_tilde, and computes the cross-entropy with a stop-gradient
-    on the target.
+    on the target.  Sigma is tracked through the local readout so PriorBank
+    configurations get a ∂L_distill/∂Σ contribution.
 
     Args:
         mu_current: (B, N, K) current belief mean.
@@ -336,15 +391,16 @@ def _compute_distillation_gradient(
               'per_pair' not yet implemented.
 
     Returns:
-        (B, N, K) gradient w.r.t. mu_current, or None if the term is
-        disabled, no readout is wired, or we are inside inference_mode.
+        (grad_mu, grad_sigma) — each (B, N, K) or appropriate shape.
+        Either may be None if disabled / unavailable / inference_mode.
     """
+    _none_pair = (None, None)
     if weight <= 0.0:
-        return None
+        return _none_pair
     if prior_bank is None and w_out is None:
-        return None
+        return _none_pair
     if torch.is_inference_mode_enabled():
-        return None
+        return _none_pair
     if mode != 'aggregated':
         # Per-pair mode reserved for future work -- fall back to aggregated.
         mode = 'aggregated'
@@ -384,29 +440,34 @@ def _compute_distillation_gradient(
         block_start = block_end
 
     # ----- CE loss and autograd through mu_current's readout -----
+    # Sigma is tracked through the local decode so PriorBank configurations
+    # get ∂L_distill/∂Σ.  With linear W_out, sigma doesn't appear in the
+    # readout and autograd returns a zero gradient.
     _tau_safe = max(float(decode_tau), 1e-8)
     use_prior_bank = (prior_bank is not None)
 
     with torch.enable_grad():
         mu_var = mu_current.detach().to(_f32).requires_grad_(True)
-        sigma_arg = sigma_current.detach().to(_f32)
+        sigma_var = sigma_current.detach().to(_f32).requires_grad_(True)
 
-        def _decode(mu_in: torch.Tensor) -> torch.Tensor:
+        def _decode(mu_in: torch.Tensor,
+                    sigma_in: torch.Tensor) -> torch.Tensor:
             if use_prior_bank:
-                return prior_bank.decode(mu_in, sigma_arg, tau=_tau_safe)
+                return prior_bank.decode(mu_in, sigma_in, tau=_tau_safe)
             else:
                 return torch.matmul(mu_in, w_out.T) / _tau_safe
 
         # Target: decode at mu_tilde (fully detached, but run inside enable_grad
         # so inference_mode tensors don't cause issues)
         with torch.no_grad():
-            target_logits = _decode(mu_tilde)
+            sigma_detached = sigma_current.detach().to(_f32)
+            target_logits = _decode(mu_tilde, sigma_detached)
             target_probs = F.softmax(target_logits, dim=-1)
         # Belt-and-suspenders: ensure target_probs has no grad_fn
         target_probs = target_probs.detach()
 
-        # Local: decode at mu_var (grad tracked through mu)
-        local_logits = _decode(mu_var)
+        # Local: decode at mu_var (grad tracked through mu AND sigma)
+        local_logits = _decode(mu_var, sigma_var)
         local_log_probs = F.log_softmax(local_logits, dim=-1)
 
         # Cross-entropy: -sum_v target_v * log local_v  per position
@@ -418,11 +479,14 @@ def _compute_distillation_gradient(
 
         total_loss = weight * ce_per_pos.mean()
 
-        grad_distill = torch.autograd.grad(
-            total_loss, mu_var, create_graph=False, retain_graph=False
-        )[0]
+        grad_distill_mu, grad_distill_sigma = torch.autograd.grad(
+            total_loss, [mu_var, sigma_var],
+            create_graph=False, retain_graph=False,
+        )
 
-    return grad_distill.detach().to(mu_current.dtype)
+    _out_dtype = mu_current.dtype
+    return (grad_distill_mu.detach().to(_out_dtype),
+            grad_distill_sigma.detach().to(_out_dtype))
 
 
 # =============================================================================
@@ -439,30 +503,18 @@ def compute_ai_gradients(
     cached_block_exp_pairs,
     irrep_dims,
     multihead_vfe: bool,
-) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor],
+           Optional[torch.Tensor], Optional[torch.Tensor]]:
     """Compute both the EFE and distillation gradients in one call.
 
     Reads ``ffn._ai_*`` attributes (set by ``configure_ffn_active_inference``)
     and resolves ``_prior_bank_ref`` / ``_ai_w_out_ref`` from ``ffn.__dict__``
     using the same list-unwrapping pattern as the original inlined code.
 
-    Args:
-        ffn: The VariationalFFNDynamic instance (duck-typed to avoid a circular
-            import).
-        mu_current: (B, N, K) current belief mean.
-        sigma_current: (B, N, K) or (B, N, K, K) current covariance.
-        W_out: Optional (V, K) weight matrix passed through the forward call.
-        beta_current: Shared attention weight tensor (B, N, N) used when
-            multihead_vfe is False or beta_heads is None.
-        beta_heads: List of per-head (B, N, N) tensors, or None.
-        cached_block_exp_pairs: The resolved _mh_cached_bep or _cached_bep list
-            from the caller.  Each element is (exp_phi_h, exp_neg_phi_h).
-        irrep_dims: List of per-head block dimensions (from ffn.irrep_dims).
-        multihead_vfe: Whether multi-head VFE is active.
-
     Returns:
-        (grad_efe_mu, grad_distill_mu) — either may be None if its term is
-        disabled, no readout is wired, or we are in inference_mode.
+        (grad_efe_mu, grad_efe_sigma, grad_distill_mu, grad_distill_sigma)
+        — any element may be None if its term is disabled, no readout is
+        wired, or we are in inference_mode.
     """
     # ----- Resolve shared readout references -----
     _ai_bank_raw = ffn.__dict__.get('_prior_bank_ref', None)
@@ -479,6 +531,7 @@ def compute_ai_gradients(
 
     # ----- EFE gradient (pragmatic + epistemic) -----
     grad_efe_mu: Optional[torch.Tensor] = None
+    grad_efe_sigma: Optional[torch.Tensor] = None
     _ai_enabled = getattr(ffn, '_ai_enabled', False)
     _ai_prag = getattr(ffn, '_ai_pragmatic_weight', 0.0)
     _ai_epi = getattr(ffn, '_ai_epistemic_weight', 0.0)
@@ -486,7 +539,7 @@ def compute_ai_gradients(
         _ai_samples = getattr(ffn, '_ai_epistemic_samples', 4)
         _ai_tau = getattr(ffn, '_ai_decode_tau', 1.0)
         if _ai_bank is not None or _w_out_tensor is not None:
-            grad_efe_mu = _compute_active_inference_gradient(
+            grad_efe_mu, grad_efe_sigma = _compute_active_inference_gradient(
                 mu_current=mu_current,
                 sigma_current=sigma_current,
                 prior_bank=_ai_bank,
@@ -499,13 +552,19 @@ def compute_ai_gradients(
             # Write to VFE debug dict if present
             try:
                 import transformer.core.vfe_utils as _vfe_utils_mod
-                if grad_efe_mu is not None and _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
-                    _vfe_utils_mod._VFE_GRAD_DEBUG['ai_efe_mu_grad'] = _vfe_utils_mod._grad_norm(grad_efe_mu)
+                if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
+                    if grad_efe_mu is not None:
+                        _vfe_utils_mod._VFE_GRAD_DEBUG['ai_efe_mu_grad'] = (
+                            _vfe_utils_mod._grad_norm(grad_efe_mu))
+                    if grad_efe_sigma is not None:
+                        _vfe_utils_mod._VFE_GRAD_DEBUG['ai_efe_sigma_grad'] = (
+                            _vfe_utils_mod._grad_norm(grad_efe_sigma))
             except Exception:
                 pass
 
     # ----- Distillation gradient -----
     grad_distill_mu: Optional[torch.Tensor] = None
+    grad_distill_sigma: Optional[torch.Tensor] = None
     _ai_distill_weight = getattr(ffn, '_ai_distill_weight', 0.0)
     if _ai_distill_weight > 0.0 and irrep_dims is not None:
         _bep_list = cached_block_exp_pairs
@@ -519,7 +578,7 @@ def compute_ai_gradients(
                 _head_beta_bep = [
                     (beta_current, _bep_list[h]) for h in range(len(irrep_dims))
                 ]
-            grad_distill_mu = _compute_distillation_gradient(
+            grad_distill_mu, grad_distill_sigma = _compute_distillation_gradient(
                 mu_current=mu_current,
                 sigma_current=sigma_current,
                 head_beta_bep=_head_beta_bep,
@@ -534,153 +593,17 @@ def compute_ai_gradients(
             # Write to VFE debug dict if present
             try:
                 import transformer.core.vfe_utils as _vfe_utils_mod
-                if grad_distill_mu is not None and _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
-                    _vfe_utils_mod._VFE_GRAD_DEBUG['ai_distill_mu_grad'] = _vfe_utils_mod._grad_norm(grad_distill_mu)
+                if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
+                    if grad_distill_mu is not None:
+                        _vfe_utils_mod._VFE_GRAD_DEBUG['ai_distill_mu_grad'] = (
+                            _vfe_utils_mod._grad_norm(grad_distill_mu))
+                    if grad_distill_sigma is not None:
+                        _vfe_utils_mod._VFE_GRAD_DEBUG['ai_distill_sigma_grad'] = (
+                            _vfe_utils_mod._grad_norm(grad_distill_sigma))
             except Exception:
                 pass
 
-    return grad_efe_mu, grad_distill_mu
-
-
-def apply_ai_mu_updates(
-    ffn,
-    mu_current: torch.Tensor,
-    sigma_current: torch.Tensor,
-    grad_efe_mu: Optional[torch.Tensor],
-    grad_distill_mu: Optional[torch.Tensor],
-    is_diagonal: bool,
-    eps: float,
-    is_final_iter: bool,
-) -> torch.Tensor:
-    """Apply the EFE and distillation gradients as separate Euclidean updates.
-
-    Each gradient is applied with its own whitened trust region, independent
-    of the main VFE update budget.  Both updates are no-ops when their
-    corresponding gradient is None (i.e., the term is disabled).
-
-    The VFE gradient budget (||delta_mu / sqrt(sigma)|| <= 2.0) is NOT shared
-    here: EFE uses ``_ai_trust_region`` (default 0.5) and distillation reuses
-    the same field.  Total whitened bound: VFE(2.0) + EFE(0.5) + distill(0.5).
-
-    Args:
-        ffn: The VariationalFFNDynamic instance.
-        mu_current: (B, N, K) current belief mean (will be updated in-place
-            conceptually; the new value is returned).
-        sigma_current: (B, N, K) diagonal or (B, N, K, K) full covariance.
-        grad_efe_mu: EFE gradient from ``compute_ai_gradients``, or None.
-        grad_distill_mu: Distillation gradient from ``compute_ai_gradients``,
-            or None.
-        is_diagonal: True when sigma_current has shape (B, N, K).
-        eps: Small constant for numerical stability.
-        is_final_iter: When True, write debug norms to ffn._e_step_grad_norms.
-
-    Returns:
-        Updated mu_current tensor.
-    """
-    # =================================================================
-    # Active inference / EFE mu-update (separate budget, Euclidean)
-    # =================================================================
-    # Applied AFTER the VFE whitened trust region so that the EFE
-    # contribution is not diluted when the VFE gradient saturates its
-    # own trust region.  Design choices:
-    #
-    # 1. EUCLIDEAN gradient, NOT natural gradient.  The VFE terms are
-    #    KL divergences with a Fisher metric = 1/sigma^2, so their natural
-    #    gradient multiplies by sigma^2 (Fisher^{-1}).  The EFE pragmatic
-    #    and epistemic terms are entropies / mutual informations of a
-    #    softmax readout, which do not have a Fisher-metric
-    #    justification w.r.t. mu.  We use grad_mu F_AI directly.
-    #
-    # 2. SEPARATE step size (_ai_lr, default 1.0, vs VFE's
-    #      ~ 0.1).  The EFE gradient magnitudes are much
-    #    smaller than the VFE coupling gradients because the softmax
-    #    readout saturates the entropy gradient near uniform init.
-    #    A larger step size is needed for EFE to move mu meaningfully
-    #    in the same number of iterations.
-    #
-    # 3. SEPARATE whitened trust region (_ai_trust_region, default 0.5)
-    #    so total update stays bounded: VFE budget (2.0) + EFE budget
-    #    (0.5) in whitened norm.
-    #
-    # 4. Applied OUTSIDE the natural-gradient / trust-region chain for
-    #    VFE, so VFE's step is not modified and the two updates
-    #    compose additively.
-    if grad_efe_mu is not None:
-        _ai_lr = getattr(ffn, '_ai_lr', 1.0)
-        delta_efe = -_ai_lr * grad_efe_mu  # Euclidean, no sigma^2 scaling
-
-        # Whitened trust region: ||delta_mu / sqrt(sigma)|| <= _ai_trust_region
-        if is_diagonal:
-            sigma_sqrt_efe = torch.sqrt(
-                sigma_current.float().clamp(min=eps)
-            ).to(sigma_current.dtype)
-        else:
-            sigma_diag_efe = torch.diagonal(
-                sigma_current, dim1=-2, dim2=-1
-            ).float().clamp(min=eps)
-            sigma_sqrt_efe = torch.sqrt(sigma_diag_efe).to(sigma_current.dtype)
-
-        whitened_efe = delta_efe / sigma_sqrt_efe
-        whitened_efe_norm = torch.linalg.norm(whitened_efe, dim=-1, keepdim=True)
-        efe_trust_region = getattr(ffn, '_ai_trust_region', 0.5)
-        efe_scale = torch.clamp(
-            efe_trust_region / (whitened_efe_norm + eps), max=1.0
-        )
-        mu_current = mu_current + efe_scale * delta_efe
-
-        if is_final_iter:
-            ffn._e_step_grad_norms['ai_efe_raw_grad_norm'] = grad_efe_mu.detach().norm().item()
-            ffn._e_step_grad_norms['ai_efe_whitened_mean'] = whitened_efe_norm.mean().item()
-            ffn._e_step_grad_norms['ai_efe_whitened_max'] = whitened_efe_norm.max().item()
-            ffn._e_step_grad_norms['ai_efe_trust_frac'] = (
-                efe_scale.squeeze(-1) < 0.99
-            ).float().mean().item()
-
-    # =================================================================
-    # Bootstrap self-distillation mu-update (own budget)
-    # =================================================================
-    # Applied after the VFE and EFE updates as an independent Euclidean
-    # step with its own step size (_ai_distill_lr) and its own whitened
-    # trust region (reuses _ai_trust_region for simplicity; can be
-    # separated later if empirically needed).  Stability bound: total
-    # whitened mu update <= VFE(2.0) + EFE(0.5) + distill(0.5) = 3.0.
-    if grad_distill_mu is not None:
-        _distill_lr = getattr(ffn, '_ai_distill_lr', 1.0)
-        delta_distill = -_distill_lr * grad_distill_mu
-
-        if is_diagonal:
-            sigma_sqrt_d = torch.sqrt(
-                sigma_current.float().clamp(min=eps)
-            ).to(sigma_current.dtype)
-        else:
-            sigma_diag_d = torch.diagonal(
-                sigma_current, dim1=-2, dim2=-1
-            ).float().clamp(min=eps)
-            sigma_sqrt_d = torch.sqrt(sigma_diag_d).to(sigma_current.dtype)
-
-        whitened_d = delta_distill / sigma_sqrt_d
-        whitened_d_norm = torch.linalg.norm(whitened_d, dim=-1, keepdim=True)
-        distill_trust = getattr(ffn, '_ai_trust_region', 0.5)
-        distill_scale = torch.clamp(
-            distill_trust / (whitened_d_norm + eps), max=1.0
-        )
-        mu_current = mu_current + distill_scale * delta_distill
-
-        if is_final_iter:
-            ffn._e_step_grad_norms['ai_distill_raw_grad_norm'] = (
-                grad_distill_mu.detach().norm().item()
-            )
-            ffn._e_step_grad_norms['ai_distill_whitened_mean'] = (
-                whitened_d_norm.mean().item()
-            )
-            ffn._e_step_grad_norms['ai_distill_whitened_max'] = (
-                whitened_d_norm.max().item()
-            )
-            ffn._e_step_grad_norms['ai_distill_trust_frac'] = (
-                distill_scale.squeeze(-1) < 0.99
-            ).float().mean().item()
-
-    return mu_current
+    return grad_efe_mu, grad_efe_sigma, grad_distill_mu, grad_distill_sigma
 
 
 # =============================================================================
@@ -690,7 +613,7 @@ def apply_ai_mu_updates(
 def configure_ffn_active_inference(ffn, cfg) -> None:
     """Read active-inference fields from BlockConfig and set as instance attributes on ffn.
 
-    Replaces the 13-attribute assignment block in ``GaugeTransformerBlock.__init__``
+    Replaces the 9-attribute assignment block in ``GaugeTransformerBlock.__init__``
     (blocks.py lines 276-291).  Also initializes ``_prior_bank_ref = None`` in
     ``ffn.__dict__`` so the later model-side wiring can bypass nn.Module
     sub-module registration.
@@ -706,12 +629,9 @@ def configure_ffn_active_inference(ffn, cfg) -> None:
     ffn._ai_epistemic_weight = getattr(cfg, 'active_inference_epistemic_weight', 0.5)
     ffn._ai_epistemic_samples = getattr(cfg, 'active_inference_epistemic_samples', 4)
     ffn._ai_decode_tau = getattr(cfg, 'active_inference_decode_tau', 1.0)
-    ffn._ai_trust_region = getattr(cfg, 'active_inference_trust_region', 0.5)
-    ffn._ai_lr = getattr(cfg, 'active_inference_lr', 1.0)
     # Bootstrap self-distillation (can be enabled independently of the
     # master active_inference toggle -- this is a standalone term).
     ffn._ai_distill_weight = getattr(cfg, 'active_inference_distill_weight', 0.0)
-    ffn._ai_distill_lr = getattr(cfg, 'active_inference_distill_lr', 1.0)
     ffn._ai_distill_normalize = getattr(cfg, 'active_inference_distill_normalize', True)
     ffn._ai_distill_mode = getattr(cfg, 'active_inference_distill_mode', 'aggregated')
     # _prior_bank_ref defaults to None; the model wires it in after the
@@ -812,10 +732,10 @@ def wire_readout_references(transformer_stack, prior_bank, out_proj_module, logg
         for _b in transformer_stack.blocks
     )
     if _distill_on:
-        # Distillation is applied inside the iterative E-step loop
-        # (apply_ai_mu_updates), so it is incompatible with paths that
-        # bypass the loop.  Check even when the master _ai_on toggle is
-        # off, since distillation can be enabled independently.
+        # Distillation gradients are folded into the VFE gradient sum
+        # inside the iterative E-step loop, so it is incompatible with
+        # paths that bypass the loop.  Check even when the master _ai_on
+        # toggle is off, since distillation can be enabled independently.
         _closed_form_distill = any(
             getattr(_b.ffn, 'closed_form_e_step', False)
             for _b in transformer_stack.blocks

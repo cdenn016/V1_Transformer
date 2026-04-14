@@ -169,7 +169,7 @@ class TestComputeKLMatrix:
 
     def test_basic_computation(self, cpu_device):
         """Test basic KL matrix computation."""
-        from transformer.core.attention import compute_kl_matrix
+        from transformer.core.attention import compute_kl_matrix_from_phi
 
         B, N, K = 2, 8, 16
         mu = torch.randn(B, N, K, device=cpu_device)
@@ -177,7 +177,7 @@ class TestComputeKLMatrix:
         phi = torch.zeros(B, N, 3, device=cpu_device)
         generators = torch.zeros(3, K, K, device=cpu_device)
 
-        kl_matrix = compute_kl_matrix(
+        kl_matrix = compute_kl_matrix_from_phi(
             mu, sigma, phi, generators,
             diagonal_covariance=True, gauge_mode='trivial',
         )
@@ -187,7 +187,7 @@ class TestComputeKLMatrix:
 
     def test_self_kl_is_zero(self, cpu_device):
         """Test KL(p||p) = 0 on diagonal."""
-        from transformer.core.attention import compute_kl_matrix
+        from transformer.core.attention import compute_kl_matrix_from_phi
 
         B, N, K = 2, 8, 16
         mu = torch.randn(B, N, K, device=cpu_device)
@@ -195,7 +195,7 @@ class TestComputeKLMatrix:
         phi = torch.zeros(B, N, 3, device=cpu_device)
         generators = torch.zeros(3, K, K, device=cpu_device)
 
-        kl_matrix = compute_kl_matrix(
+        kl_matrix = compute_kl_matrix_from_phi(
             mu, sigma, phi, generators,
             diagonal_covariance=True, gauge_mode='trivial',
         )
@@ -207,7 +207,7 @@ class TestComputeKLMatrix:
 
     def test_kl_non_negative(self, cpu_device):
         """Test KL divergence is non-negative."""
-        from transformer.core.attention import compute_kl_matrix
+        from transformer.core.attention import compute_kl_matrix_from_phi
 
         B, N, K = 2, 8, 16
         mu = torch.randn(B, N, K, device=cpu_device)
@@ -215,7 +215,7 @@ class TestComputeKLMatrix:
         phi = torch.zeros(B, N, 3, device=cpu_device)
         generators = torch.zeros(3, K, K, device=cpu_device)
 
-        kl_matrix = compute_kl_matrix(
+        kl_matrix = compute_kl_matrix_from_phi(
             mu, sigma, phi, generators,
             diagonal_covariance=True, gauge_mode='trivial',
         )

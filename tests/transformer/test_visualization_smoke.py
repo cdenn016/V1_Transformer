@@ -31,15 +31,11 @@ class TestVisualizationImports:
         """Import every visualization module."""
         modules = [
             'transformer.visualization.ablation_plots',
-            'transformer.visualization.attention_context',
-            'transformer.visualization.attention_viz',
-            'transformer.visualization.belief_space_frequent',
             'transformer.visualization.belief_space_viz',
             'transformer.visualization.holonomy_plots',
             'transformer.visualization.interactive_belief_viz',
             'transformer.visualization.pub_style',
             'transformer.visualization.training_plots',
-            'transformer.visualization.trajectory_plots',
             'transformer.visualization.vfe_dynamics_plots',
         ]
         import importlib

@@ -24,7 +24,7 @@ from typing import Dict, List, Optional
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
 
-from transformer.visualization.pub_style import set_pub_style, PUB_COLORS
+from transformer.visualization.pub_style import set_pub_style
 
 
 # =============================================================================

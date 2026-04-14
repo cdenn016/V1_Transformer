@@ -139,7 +139,6 @@ class PriorBank(nn.Module):
                     "PriorBank: phi_dim not provided and no generators available. "
                     "Defaulting to phi_dim=3 (SO(3)). Pass phi_dim explicitly to suppress."
                 )
-        self.phi_dim = phi_dim
         self.gauge_param = gauge_param
         self.omega_head_dims = omega_head_dims
         self.sigma_ce_scale = sigma_ce_scale

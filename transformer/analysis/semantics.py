@@ -1608,11 +1608,6 @@ def plot_omega_clustering(
     return fig
 
 
-def plot_omega_group_clustering(omega, step=None, save_path=None, n_tokens=500, gauge_group_label=None):
-    """Alias for plot_omega_clustering (matches plot_gauge_frame_clustering pattern)."""
-    return plot_omega_clustering(omega, step=step, save_path=save_path, n_tokens=n_tokens, gauge_group_label=gauge_group_label)
-
-
 # =============================================================================
 # Sigma Covariance Semantic Analysis
 # =============================================================================
@@ -1728,109 +1723,6 @@ def analyze_sigma_semantics(
 
     return results
 
-
-# =============================================================================
-# Per-Layer Belief Evolution Analysis
-# =============================================================================
-
-def analyze_per_layer_semantics(
-    model: "Any",
-    token_ids: torch.Tensor,
-    targets: Optional[torch.Tensor] = None,
-    verbose: bool = True,
-) -> Dict[str, Any]:
-    r"""Analyze how semantic structure evolves through transformer layers.
-
-    Runs a forward pass with attention tracking and extracts per-layer beliefs
-    (mu, sigma, phi). For each layer, computes:
-      - Token class inter/intra distance ratio on mu
-      - Semantic field coherence on mu
-      - Sigma effective rank (if full covariance)
-      - Delta norms (how much each layer changes beliefs)
-
-    This reveals whether semantic structure emerges gradually across layers
-    or appears suddenly, and whether deeper layers refine or diffuse clusters.
-
-    Args:
-        model: GaugeTransformerLM with forward_with_attention method.
-        token_ids: (batch, seq_len) input tokens.
-        targets: Optional (batch, seq_len) target tokens.
-        verbose: Print per-layer summary.
-
-    Returns:
-        Dict with per-layer semantic metrics and evolution summary.
-    """
-    if not hasattr(model, 'forward_with_attention'):
-        return {'error': 'Model lacks forward_with_attention method'}
-
-    device = next(model.parameters()).device
-    token_ids = token_ids.to(device)
-    if targets is not None:
-        targets = targets.to(device)
-
-    # Enable layer diagnostics to capture per-layer states
-    model._collect_layer_diagnostics = True
-    model._layer_diagnostics = []
-
-    with torch.no_grad():
-        logits, attn_info = model.forward_with_attention(token_ids, targets)
-
-    layer_diags = model._layer_diagnostics
-    model._collect_layer_diagnostics = False
-
-    results = {
-        'n_layers': attn_info.get('n_layers', len(layer_diags)),
-        'layers': [],
-    }
-
-    # Analyze final-layer beliefs using attention_info
-    mu_final = attn_info.get('mu')
-    sigma_final = attn_info.get('sigma')
-    phi_final = attn_info.get('phi')
-    mu_prior = attn_info.get('mu_prior')
-
-    if mu_final is not None and mu_prior is not None:
-        # Compute per-position belief drift from embedding to final
-        delta = (mu_final - mu_prior).detach().cpu()
-        results['total_belief_drift_norm'] = float(delta.norm().item())
-        results['per_position_drift_mean'] = float(delta.norm(dim=-1).mean().item())
-
-    # Per-layer diagnostics from the model's collection
-    for ld in layer_diags:
-        layer_info = {
-            'layer': ld['layer'],
-            'delta_mu_norm': ld.get('delta_mu_norm', 0),
-            'delta_mu_relative': ld.get('delta_mu_relative', 0),
-            'sigma_mean_diag': ld.get('sigma_mean_diag', 0),
-            'attention_entropy': ld.get('attention_entropy', None),
-            'kl_mean': ld.get('kl_mean', None),
-        }
-        if 'ce_loss' in ld:
-            layer_info['ce_loss'] = ld['ce_loss']
-            layer_info['perplexity'] = ld.get('perplexity')
-        results['layers'].append(layer_info)
-
-    # Summarize evolution pattern
-    if len(layer_diags) >= 2:
-        deltas = [ld.get('delta_mu_relative', 0) for ld in layer_diags]
-        results['delta_mu_trend'] = 'decreasing' if deltas[-1] < deltas[0] else 'increasing'
-        results['max_delta_layer'] = int(np.argmax(deltas))
-
-        if all('ce_loss' in ld for ld in layer_diags):
-            ce_losses = [ld['ce_loss'] for ld in layer_diags]
-            results['ce_improvement_per_layer'] = [
-                ce_losses[i] - ce_losses[i + 1] for i in range(len(ce_losses) - 1)
-            ]
-
-    if verbose:
-        print(f"\n  Per-Layer Belief Evolution ({len(layer_diags)} layers):")
-        for ld in layer_diags:
-            ce_str = f", CE={ld.get('ce_loss', 0):.3f}" if 'ce_loss' in ld else ""
-            ent_str = f", H_attn={ld.get('attention_entropy', 0):.2f}" if ld.get('attention_entropy') else ""
-            print(f"    L{ld['layer']}: Δμ_rel={ld.get('delta_mu_relative', 0):.4f}, "
-                  f"σ_mean={ld.get('sigma_mean_diag', 0):.4f}{ent_str}{ce_str}")
-
-    return results
 
 
 # =============================================================================

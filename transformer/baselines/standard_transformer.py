@@ -15,7 +15,6 @@ Supports multiple configurations for ablation studies:
     - Parameter-equalized via wider layers
 """
 
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

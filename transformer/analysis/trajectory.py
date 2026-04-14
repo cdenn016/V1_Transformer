@@ -28,7 +28,7 @@ Date: December 2025
 
 import torch
 import numpy as np
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Union
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
@@ -38,29 +38,9 @@ from pathlib import Path
 # Trajectory Data Structures
 # =============================================================================
 
-@dataclass
-class IterationSnapshot:
-    r"""Per-iteration belief state within a single layer's VFE E-step.
-
-    Records the state of beliefs at one VFE iteration for a subset of
-    token positions. Used for intra-fiber trajectory analysis: tracking
-    how $(\mu, \Sigma)$ evolve through the Gaussian belief manifold
-    $\mathcal{G}_K$ equipped with the Fisher-Rao metric.
-
-    Attributes:
-        iteration: E-step iteration index (0-based).
-        mu: Belief means for recorded tokens, shape ``(N_recorded, K)``.
-        sigma_diag: Diagonal covariance for recorded tokens, shape ``(N_recorded, K)``.
-        beta_entropy: Mean attention entropy (scalar) at this iteration.
-        grad_mu_norm: L2 norm of the Euclidean mu gradient (scalar).
-        grad_sigma_norm: L2 norm of the Euclidean sigma gradient (scalar).
-    """
-    iteration: int
-    mu: np.ndarray                      # (N_recorded, K)
-    sigma_diag: np.ndarray              # (N_recorded, K)
-    beta_entropy: float = 0.0
-    grad_mu_norm: float = 0.0
-    grad_sigma_norm: float = 0.0
+# IterationSnapshot lives in core/vfe_utils.py to avoid core → analysis imports.
+# Re-exported here for backward compatibility.
+from transformer.core.vfe_utils import IterationSnapshot
 
 
 @dataclass
@@ -421,6 +401,9 @@ def set_global_recorder(recorder: TrajectoryRecorder) -> None:
     """Set the global trajectory recorder instance."""
     global _global_recorder
     _global_recorder = recorder
+    # Also register with core-side protocol so core/ modules can access it
+    from transformer.core.vfe_utils import set_global_recorder as _set_core_recorder
+    _set_core_recorder(recorder)
 
 
 def enable_trajectory_tracking(
@@ -451,6 +434,8 @@ def disable_trajectory_tracking() -> None:
     global _global_recorder
     if _global_recorder is not None:
         _global_recorder.enabled = False
+    from transformer.core.vfe_utils import set_global_recorder as _set_core_recorder
+    _set_core_recorder(None)
 
 
 # =============================================================================

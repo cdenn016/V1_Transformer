@@ -13,10 +13,6 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from pathlib import Path
-import sys
-
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from transformer.utils.checkpoint import load_model, get_tokenizer
 from transformer.visualization.pub_style import set_pub_style

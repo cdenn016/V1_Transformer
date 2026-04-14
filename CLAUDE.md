@@ -22,6 +22,10 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 **LOCAL CODEBASE IS THE SOURCE OF TRUTH UNLESS OTHERWISE INSTRUCTED**
 
+**Check for sub-agents, skills, and plug-ins before deploying your own**
+
+**check claude-mem for prior session context when resuming work on a topic**
+
 ## Codebase Map
 
 
@@ -60,9 +64,15 @@ F = alpha * KL(q_i || p_i)                    # self-coupling: beliefs to priors
 
 **Timescales**: Fast E-step (belief q inference per forward pass) / Slow M-step (prior/model s,p parameter learning via backprop) / Static hyper-prior h (frozen at init, never learned). sigma_p is an M-step parameter — the E-step reads it but must not write gradients to it (detached in VFE iterations). sigma_ce_scale controls the residual CE→sigma_p gradient in decode (0.0 = fully detached).
 
-**Amortization scope**: `amortized_inference=True` flows gradients through prior means (mu_p) only by default. Prior covariances (sigma_p) are detached (`amortize_sigma=False`). The post-loop phi gradient (`_compute_phi_grad`) detaches beliefs (`exact_phi_grad=False`), producing a semi-gradient. Cross-layer cascade is also mean-only: mu_q flows to next layer's mu_prior; sigma_prior stays at embedding value. Set `amortize_sigma=True` for full prior amortization through covariances. Set `exact_phi_grad=True` for the IFT-correct total derivative dF/dphi through the E-step iteration graph.
+**EM modes** (`em_mode`): Single string selector controlling gradient flow at the EM boundary. Replaces the old 5-flag system (`amortized_inference`, `amortize_sigma`, `exact_phi_grad`, `implicit_em`, `em_phi_mode`). Prior covariance sigma_p is always attached in amortized modes. Cross-layer cascade: mu_q flows to next layer's mu_prior; sigma_prior stays at embedding value.
 
-**EM modes** (`em_phi_mode`): `'amortized'` (default) is a straight-through estimator — gradients flow through the E-step update map. `'E_phi_q'` treats phi as a belief variable: E-step optimizes (mu_q, Sigma_q, phi_q), all detached at the EM boundary. `'M_phi_p'` treats phi as a model parameter: E-step optimizes (mu_q, Sigma_q) only with phi frozen; M-step optimizes phi alongside priors/readout via backprop through the attention coupling term.
+| `em_mode` | mu_p | sigma_p | phi | At EM exit |
+|-----------|------|---------|-----|------------|
+| `'straight_through'` (default) | attached | attached | semi-gradient | attached |
+| `'ift_phi'` | attached | attached | full IFT | attached |
+| `'em_phi_q'` | detached | detached | evolves in E-step | all detached |
+| `'em_phi_p'` | detached | detached | frozen in E-step | mu,sigma detached |
+| `'implicit_ift'` (experimental) | detached | detached | attached | detached + IFT scale |
 
 ## Communication Style
 

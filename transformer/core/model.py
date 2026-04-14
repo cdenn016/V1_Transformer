@@ -41,14 +41,8 @@ from transformer.core.variational_ffn import ImplicitEMGradient, ImplicitEMGradi
 from transformer.core.block_config import BlockConfig
 from transformer.core.active_inference import wire_readout_references
 
-# Trajectory tracking (optional)
-try:
-    from transformer.analysis.trajectory import get_global_recorder
-    TRAJECTORY_TRACKING_AVAILABLE = True
-except ImportError:
-    TRAJECTORY_TRACKING_AVAILABLE = False
-    def get_global_recorder():
-        return None
+# Trajectory tracking (core-side protocol — analysis layer registers via set_global_recorder)
+from transformer.core.vfe_utils import get_global_recorder
 
 # Try to import generators (fallback to random if unavailable)
 try:
@@ -131,7 +125,6 @@ class GaugeTransformerLM(nn.Module):
         # Initialize cross-head coupling attributes (may be set later in gauge setup)
         self._cross_head_perm = None
         self._super_block_dims = None
-        self._super_block_head_groups = None
 
         # Extract config
         vocab_size = config['vocab_size']
@@ -732,7 +725,6 @@ class GaugeTransformerLM(nn.Module):
                 self.register_buffer('_perm_tensor', torch.from_numpy(perm).long(), persistent=False)
                 self.register_buffer('_inv_perm_tensor', torch.from_numpy(np.argsort(perm)).long(), persistent=False)
                 self._super_block_dims = super_block_dims
-                self._super_block_head_groups = super_block_head_groups
 
                 n_cross = len(cross_couplings) * d_head**2
                 logger.info(f"GL(K) cross-head: {n_heads} heads x GL({d_head}), "
@@ -745,7 +737,6 @@ class GaugeTransformerLM(nn.Module):
             generators = generate_glK_multihead_generators(embed_dim, n_heads)
             self._cross_head_perm = None
             self._super_block_dims = None
-            self._super_block_head_groups = None
             logger.info(f"GL(K) multi-head: {n_heads} heads x GL({d_head}), "
                         f"{n_heads * d_head**2} generators (vs {embed_dim**2} single-head)")
             return generators
@@ -936,7 +927,7 @@ class GaugeTransformerLM(nn.Module):
         # =================================================================
         # Trajectory Recording: Start forward pass
         # =================================================================
-        recorder = get_global_recorder() if TRAJECTORY_TRACKING_AVAILABLE else None
+        recorder = get_global_recorder()
         if recorder is not None and recorder.enabled:
             ffn_mode = self.config.get('ffn_mode', 'VFE_dynamic')
             recorder.start_forward(batch_size, num_agents, ffn_mode=ffn_mode)
@@ -1515,6 +1506,44 @@ class GaugeTransformerLM(nn.Module):
         finally:
             if was_training:
                 self.train()
+
+    def generate_active_inference(
+        self,
+        prompt_ids: torch.Tensor,
+        max_new_tokens: int,
+        gamma: float = 1.0,
+        top_k: int = 50,
+        preference_mode: str = 'current_belief',
+        include_epistemic: bool = False,
+        epistemic_samples: int = 4,
+        temperature: float = 1.0,
+        verbose: bool = False,
+    ) -> torch.Tensor:
+        """Autoregressive generation using canonical active inference.
+
+        Selects tokens by minimizing expected free energy (EFE) over a
+        top-K candidate set, rather than sampling from temperature-scaled
+        logits.  See ``expected_free_energy.generate_active_inference`` for
+        full documentation.
+
+        NOT decorated with @torch.inference_mode() — uses torch.no_grad()
+        internally.
+        """
+        from transformer.core.expected_free_energy import (
+            generate_active_inference as _gen_ai,
+        )
+        return _gen_ai(
+            model=self,
+            prompt_ids=prompt_ids,
+            max_new_tokens=max_new_tokens,
+            gamma=gamma,
+            top_k=top_k,
+            preference_mode=preference_mode,
+            include_epistemic=include_epistemic,
+            epistemic_samples=epistemic_samples,
+            temperature=temperature,
+            verbose=verbose,
+        )
 
     def get_num_params(self, non_embedding: bool = True) -> int:
         """

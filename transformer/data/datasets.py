@@ -58,7 +58,6 @@ from typing import Tuple, Optional, Dict, List
 import numpy as np
 from pathlib import Path
 import os
-import hashlib
 import urllib.request
 import zipfile
 

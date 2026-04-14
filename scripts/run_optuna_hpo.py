@@ -97,9 +97,8 @@ BASE_CONFIG = {
    'obs_sigma_gradient':         True, # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
    'e_step_sigma_floor':         0.01,   # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
    
-   # === M-step: implicit differentiation ===
-   'implicit_em':                False,
-   'amortized_inference':        True,    
+   # === EM gradient-flow mode ===
+   'em_mode':                    'straight_through',
    'active_inference':           False,    #requires priorbank true
    
    'cache_decode_priors':        True,
@@ -262,7 +261,6 @@ BASE_CONFIG = {
    #DO NOT USE PRAGMATIC WEIGHT WITH DISTILLATION
 
    'active_inference_distill_weight':    0.0,        # λ_distill — start small
-   'active_inference_distill_lr':        2.0,         # Euclidean step size for the distill update
    'active_inference_distill_normalize': True,        # divide CE by log(V) so weight is V-agnostic
    'active_inference_distill_mode':      'aggregated',# 'aggregated' (default) or 'per_pair'
 

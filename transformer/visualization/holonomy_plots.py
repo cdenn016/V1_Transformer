@@ -15,7 +15,7 @@ Figures:
 """
 
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 from pathlib import Path
 
 try:
@@ -24,7 +24,6 @@ try:
     import matplotlib.pyplot as plt
     from matplotlib.gridspec import GridSpec
     import matplotlib.ticker as ticker
-    from matplotlib.colors import Normalize
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     plt = None
@@ -35,7 +34,7 @@ try:
 except ImportError:
     torch = None
 
-from transformer.visualization.pub_style import set_pub_style, PUB_COLORS
+from transformer.visualization.pub_style import set_pub_style
 
 
 # =============================================================================

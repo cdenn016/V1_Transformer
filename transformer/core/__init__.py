@@ -16,7 +16,7 @@ from transformer.core.block_config import BlockConfig
 from transformer.core.blocks import GaugeTransformerBlock, GaugeTransformerStack
 from transformer.core.attention import (
     compute_attention_weights,
-    compute_kl_matrix,
+    compute_kl_matrix_from_phi,
     aggregate_messages,
     IrrepMultiHeadAttention,
     create_attention_mask,
@@ -42,7 +42,7 @@ __all__ = [
 
     # Attention
     'compute_attention_weights',
-    'compute_kl_matrix',
+    'compute_kl_matrix_from_phi',
     'aggregate_messages',
     'IrrepMultiHeadAttention',
     'create_attention_mask',
