@@ -1338,7 +1338,7 @@ class VariationalFFNDynamic(nn.Module):
         if self.implicit_em:
             _beta_for_scale = getattr(self, '_last_beta_for_implicit', None)
             if _beta_for_scale is not None:
-                _alpha_for_scale = self.alpha
+                _alpha_for_scale = alpha_effective
                 mu_scale, sigma_scale = compute_implicit_em_scales(
                     alpha_i=_alpha_for_scale,
                     sigma_p=sigma_p,

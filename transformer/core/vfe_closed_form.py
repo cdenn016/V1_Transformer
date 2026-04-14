@@ -292,7 +292,11 @@ def run_closed_form_e_step(
             Sigma_p_inv_h = torch.cholesky_inverse(L_p)
 
             if isinstance(alpha_h, torch.Tensor) and alpha_h.dim() == 3:
-                A_prior_h = alpha_h.unsqueeze(-1) * Sigma_p_inv_h
+                # Per-dimension alpha: symmetric sandwich product to preserve SPD.
+                # diag(sqrt(α)) @ Σ_p⁻¹ @ diag(sqrt(α)) is SPD when Σ_p⁻¹ is.
+                # Row-scaling (α.unsqueeze(-1) * Σ_p⁻¹) would break symmetry.
+                sqrt_alpha_h = alpha_h.unsqueeze(-1).sqrt()        # (B, N, d_h, 1)
+                A_prior_h = sqrt_alpha_h * Sigma_p_inv_h * sqrt_alpha_h.transpose(-1, -2)
                 b_prior_h = torch.einsum('bijk,bik->bij', A_prior_h, mu_p_h)
             else:
                 A_prior_h = alpha_h * Sigma_p_inv_h
@@ -319,8 +323,9 @@ def run_closed_form_e_step(
             A_inv_h = torch.cholesky_inverse(L_A)
 
             if isinstance(alpha_h, torch.Tensor) and alpha_h.dim() == 3:
-                entropy_scale = (alpha_h + ffn.lambda_belief).unsqueeze(-1)
-                Sigma_star_h = entropy_scale * A_inv_h
+                # Symmetric sandwich: diag(sqrt(α+λ)) @ A⁻¹ @ diag(sqrt(α+λ))
+                sqrt_es_h = (alpha_h + ffn.lambda_belief).unsqueeze(-1).sqrt()
+                Sigma_star_h = sqrt_es_h * A_inv_h * sqrt_es_h.transpose(-1, -2)
             else:
                 Sigma_star_h = (alpha_h + ffn.lambda_belief) * A_inv_h
 
