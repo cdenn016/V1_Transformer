@@ -77,7 +77,7 @@ class GaugeTransformerLM(nn.Module):
         → LayerNorm(μ) → W_out @ μ → logits
 
     Components:
-        1. GaugeTokenEmbedding: tokens → beliefs (μ, Σ, φ) with optional O(K) reflections
+        1. GaugeTokenEmbedding: tokens → beliefs (μ, Σ, φ) with optional sign-flip reflections
         2. GaugePositionalEncoding: agent-index encoding in Lie algebra (so(3)/so(N)/gl(K))
         3. GaugeTransformerStack: N layers of KL-attention + VFE E-step FFN
         4. Output projection: μ → logits over vocabulary (optionally tied to embeddings)
@@ -586,12 +586,11 @@ class GaugeTransformerLM(nn.Module):
                 "the sign vectors would never be applied. Disable one of these options."
             )
         if learnable_reflection:
-            logger.info("O(K) reflection enabled: per-token s_i in {+-1}^K sign vectors")
-            logger.info("       Transport: Omega_ij = diag(s_i)*exp(phi_i)*exp(-phi_j)*diag(s_j) in O(K)")
-            logger.info("       Extends SO(K) gauge to full O(K) = SO(K) semidirect (Z_2)^{K-1}")
+            logger.info("Reflection enabled: per-token s_i in {+-1}^K sign vectors")
+            logger.info("       Content-level sign flip only: mu_i -> s_i odot mu_i")
+            logger.info("       Transport Omega_ij and Sigma are NOT modified by signs")
             if isotropic_covariance:
-                logger.info("       With isotropic Sigma = sigma^2*I: S(Omega) = 0, KL = (1/2sigma^2)||Q_i - M_ij K_j||^2")
-                logger.info("       where Q_i = s_i odot mu_i, K_j = s_j odot mu_j (sign-flipped embeddings)")
+                logger.info("       With isotropic Sigma: KL uses sign-flipped means Q_i = s_i odot mu_i")
 
         if gauge_mode == 'constant':
             evolve_phi = False

@@ -157,8 +157,8 @@ EM_CONFIG = {
     
     'amortized_inference':        True,
     'amortize_sigma':             False,   # When True + amortized_inference, sigma_p stays attached in E-step
-    'exact_phi_grad':             False,   # When True, _compute_phi_grad keeps beliefs attached (full IFT derivative)
-    'em_phi_mode':                'amortized',  # 'amortized' | 'E_phi_q' (φ∈q) | 'M_phi_p' (φ∈θ)
+    'exact_phi_grad':             True,   # When True, _compute_phi_grad keeps beliefs attached (full IFT derivative)
+    'em_phi_mode':                'E_phi_q',  # 'amortized' | 'E_phi_q' (φ∈q) | 'M_phi_p' (φ∈θ)
 
     'active_inference':           False,   #requires priorbank true
     
@@ -194,7 +194,7 @@ EM_CONFIG = {
  
     'E_alpha':                    1,      # E-step prior coupling weight
     'E_lambda_belief':            5,    # E-step belief alignment weight
-    'E_lambda_softmax':           4,
+    'E_lambda_softmax':           0,
        
     # === E-step Learning Rates ===
     

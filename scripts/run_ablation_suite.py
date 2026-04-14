@@ -568,6 +568,70 @@ SWEEPS = {
         'baseline_value': 0.75,
     },
 
+    # --- Tier 13: EM inference mode ---
+    'em_mode': {
+        'description': 'EM inference mode: amortization scope and phi treatment',
+        'param': None,
+        'configs': [
+            # 1. Baseline: straight-through amortized (current default)
+            {
+                'amortized_inference': True,
+                'implicit_em': False,
+                'em_phi_mode': 'amortized',
+                'amortize_sigma': False,
+                'exact_phi_grad': False,
+                'label': 'amortized',
+            },
+            # 2. Amortized + sigma flow through prior covariances
+            {
+                'amortized_inference': True,
+                'implicit_em': False,
+                'em_phi_mode': 'amortized',
+                'amortize_sigma': True,
+                'exact_phi_grad': False,
+                'label': 'amort+sigma',
+            },
+            # 3. Amortized + exact phi grad (IFT-correct total derivative)
+            {
+                'amortized_inference': True,
+                'implicit_em': False,
+                'em_phi_mode': 'amortized',
+                'amortize_sigma': False,
+                'exact_phi_grad': True,
+                'label': 'amort+exact_phi',
+            },
+            # 4. Amortized + both sigma flow and exact phi grad
+            {
+                'amortized_inference': True,
+                'implicit_em': False,
+                'em_phi_mode': 'amortized',
+                'amortize_sigma': True,
+                'exact_phi_grad': True,
+                'label': 'amort+sigma+phi',
+            },
+            # 5. Clean EM: phi in q (E-step optimizes mu, sigma, phi; all detached at boundary)
+            {
+                'amortized_inference': True,
+                'implicit_em': False,
+                'em_phi_mode': 'E_phi_q',
+                'amortize_sigma': False,
+                'exact_phi_grad': False,
+                'evolve_phi': True,
+                'evolve_phi_e_step': True,
+                'label': 'EM_phi_q',
+            },
+            # 6. Clean EM: phi in theta (E-step optimizes mu, sigma only; phi via M-step backprop)
+            {
+                'amortized_inference': True,
+                'implicit_em': False,
+                'em_phi_mode': 'M_phi_p',
+                'amortize_sigma': False,
+                'exact_phi_grad': False,
+                'label': 'EM_phi_p',
+            },
+        ],
+        'baseline_value': 'amortized',
+    },
 
 }
 
@@ -622,9 +686,11 @@ SWEEP_ORDER = [
     
     'rope',
 
+    'em_mode',
+
     #'n_layers',
     #'n_vfe_iterations',
-   
+
 ]
 
 

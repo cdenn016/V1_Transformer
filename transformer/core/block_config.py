@@ -59,6 +59,7 @@ class BlockConfig:
     ffn_update_sigma: bool =   True    # Update covariances during E-step
     E_learnable_alpha: bool =  True    # Bayesian precision via Gamma-Normal conjugacy
     obs_sigma_gradient: bool = True    # ∂E_q[CE]/∂σ Hessian-diagonal obs gradient for sigma
+    obs_sigma_exact_stein: bool = False  # Single-sample E_q[H(z)] instead of H(μ) for obs sigma grad
     sigma_aggregation: str =   'mixture'  # 'mixture' (moment matching) or 'precision' (VFE equilibrium)
     
     
@@ -406,6 +407,7 @@ class BlockConfig:
             # BlockConfig.from_config(config_dict_without_key) disabled it.
             E_learnable_alpha=config.get('E_learnable_alpha', config.get('ffn_learnable_alpha', config.get('learnable_alpha', True))),
             obs_sigma_gradient=config.get('obs_sigma_gradient', True),
+            obs_sigma_exact_stein=config.get('obs_sigma_exact_stein', False),
             obs_sigma_weight=config.get('obs_sigma_weight', 1.0),
             alpha_divergence=config.get('alpha_divergence', 1.0),
             sigma_max=config.get('sigma_max', 5.0),

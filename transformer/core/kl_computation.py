@@ -443,11 +443,15 @@ def compute_kl_matrix(
     preserving full backward compatibility.
 
     For ``alpha_divergence != 1.0``, the Rényi :math:`\alpha`-divergence is
-    used instead.  This is currently only supported for ``KLMode.DIAGONAL``
-    (see :func:`_kl_kernel_diagonal` for the closed-form expression);
-    ``KLMode.DENSE`` will raise :class:`NotImplementedError`, and
-    ``KLMode.BLOCK_DIAGONAL`` does not yet pass :math:`\alpha` to the fused
-    kernels (they always compute the standard KL).
+    used instead.  Support status by mode:
+
+    - ``KLMode.DIAGONAL``: full support (closed-form expression in
+      :func:`_kl_kernel_diagonal`).
+    - ``KLMode.BLOCK_DIAGONAL`` with diagonal sigma: full support
+      (``alpha_div`` passed to :func:`fused_block_diagonal_kl_diag`).
+    - ``KLMode.BLOCK_DIAGONAL`` with full covariance: NOT supported;
+      falls back to standard KL with a warning.
+    - ``KLMode.DENSE``: raises :class:`NotImplementedError`.
 
     This is the single parametric entry point for all KL matrix computations.
     Callers are responsible for:

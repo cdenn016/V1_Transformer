@@ -153,9 +153,9 @@ class GaugeTokenEmbedding(nn.Module):
                 (Ω ∈ O(K)) to preserve isotropy. With GL(K), transported cov is NOT isotropic.
             mu_normalize: If True, project μ to unit sphere after embedding lookup.
             mu_max_norm: If set, clamp ||μ|| ≤ max_norm after embedding lookup.
-            learnable_reflection: If True, learn per-token sign vectors s_i ∈ {±1}^K
-                extending SO(K) gauge transport to full O(K). Applied as μ_i → s_i ⊙ μ_i
-                before rotation, so no changes needed in attention or VFE code.
+            learnable_reflection: If True, learn per-token sign vectors s_i ∈ {±1}^K.
+                Content-level sign flip only: μ_i → s_i ⊙ μ_i. Transport and
+                covariance are not modified. Not a full O(K) gauge transport.
         """
         super().__init__()
         self.phi_scale = phi_scale
@@ -184,11 +184,11 @@ class GaugeTokenEmbedding(nn.Module):
         # When gauge_fixed_priors=True, Σ_v = A_v diag(σ_0) A_v^T is generally
         # a full matrix. With diagonal_covariance=True, we extract its diagonal:
         #   diag(Σ_v)_k = Σ_j A_kj² σ_j
-        # This gives exact diagonal entries but discards off-diagonal correlations.
-        # Under GL(K), this is a reasonable trade-off: the orbit covers all SPD
-        # matrices, so the diagonal entries alone carry sufficient information
-        # for decode and for diagonal-mode E-step. For exact gauge-covariant
-        # transport in the VFE iterations, use diagonal_covariance=False.
+        # This gives exact diagonal entries but discards off-diagonal correlations
+        # (lossy approximation, NOT a sufficient statistic for Gaussian KL/transport).
+        # The diagonal entries allow approximate decode and diagonal-mode E-step,
+        # but the off-diagonal structure affects KL distances and gauge transport.
+        # For exact gauge-covariant transport, use diagonal_covariance=False.
         if gauge_fixed_priors and diagonal_covariance:
             import warnings
             warnings.warn(
@@ -287,7 +287,8 @@ class GaugeTokenEmbedding(nn.Module):
         # =================================================================
         if gauge_param == 'omega' and omega_head_dims is not None:
             # Direct Omega parameterization: store K_h×K_h matrices per head.
-            # Covers full GL(K) including reflections. No matrix_exp needed.
+            # Initialized near identity. Not constrained to GL(K) during training —
+            # may become singular without external regularization. No matrix_exp needed.
             total_omega_params = sum(d * d for d in omega_head_dims)
             self.omega_embed = nn.Embedding(vocab_size, total_omega_params)
             # Initialize near identity: I + scale * randn per head block
@@ -330,24 +331,19 @@ class GaugeTokenEmbedding(nn.Module):
         # =================================================================
         # Reflection Embedding: per-token sign vector s_i ∈ {±1}^K
         # =================================================================
-        # Adds discrete per-dimension sign flips to extend the continuous
-        # gauge group to include reflections (det < 0 component):
+        # Adds discrete per-dimension sign flips as a content-level
+        # representation — only μ is sign-flipped: μ_i → s_i ⊙ μ_i.
+        # Transport Ω_ij and covariance Σ are NOT modified by signs.
         #
-        #   phi path:  extends SO(K) → O(K) = SO(K) ⋊ (Z_2)^{K-1}
-        #   omega path: extends GL⁺(K) → GL(K) via diag(s_i) · Ω_i
+        # This is NOT a full O(K) gauge transport law. A true O(K) transport
+        # would require Ω_ij^eff = diag(s_i) · Ω_i · Ω_j⁻¹ · diag(s_j) with
+        # the sandwich product applied to Σ as well. The current implementation
+        # is a simpler content-level sign flip that gives the model access to
+        # reflections in the mean space without modifying the transport geometry.
         #
         # The Lie algebra retraction preserves det sign, so continuous
         # gradient descent cannot cross between GL⁺ and GL⁻. The discrete
-        # sign vectors provide the missing degree of freedom.
-        #
-        # Transport becomes: Ω_ij = diag(s_i) · Ω_i · Ω_j⁻¹ · diag(s_j)
-        # which is implemented by applying s_i ⊙ μ_i before gauge transport.
-        #
-        # Properties (verified symbolically):
-        #   - det(Ω_eff) covers both signs  ✓
-        #   - S(Ω) = 0 (geometric bias vanishes)  ✓
-        #   - Isotropic covariance preserved under transport  ✓
-        #   - Clean Q-K factorization: Q_i = s_i ⊙ μ_i  ✓
+        # sign vectors provide a complementary degree of freedom for μ.
         #
         # Gradient flow uses the straight-through estimator (STE):
         #   Forward:  sign(z)  (hard ±1)

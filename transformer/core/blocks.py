@@ -88,10 +88,13 @@ class MahalanobisNorm(nn.Module):
     product transforms as a vector: the normalization commutes with gauge
     transport.
 
-    **Key-norm bias cancellation**: After normalization,
-    :math:`\|\mu_{\text{norm}}\|_M^2 = K` for all tokens, so the
-    key-dependent bias :math:`-\|\mu_j\|^2/(2\sigma^2)` becomes constant
-    across keys and cancels under softmax.
+    **Key-norm bias cancellation** (isotropic/shared-metric regime):
+    After normalization, :math:`\|\mu_{\text{norm}}\|_M^2 = K` for all
+    tokens. When all keys share the same metric (isotropic
+    :math:`\Sigma = \sigma^2 I` or shared :math:`\Sigma_j`), the
+    key-dependent bias becomes constant and cancels under softmax.
+    With token-dependent :math:`\Sigma_j`, non-orthogonal :math:`\Omega`,
+    or transported key covariances, the cancellation is approximate.
 
     **Isotropic limit**: When :math:`\Sigma = \sigma^2 I`, reduces to
     :math:`\mu / \text{RMS}(\mu) \cdot \sigma`, recovering standard
@@ -320,6 +323,7 @@ class GaugeTransformerBlock(nn.Module):
             exact_phi_grad=cfg.exact_phi_grad,
             isotropic_covariance=cfg.isotropic_covariance,
             obs_sigma_gradient=cfg.obs_sigma_gradient,
+            obs_sigma_exact_stein=getattr(cfg, 'obs_sigma_exact_stein', False),
             obs_sigma_weight=cfg.obs_sigma_weight,
             sigma_max=cfg.sigma_max,
             e_step_sigma_floor=cfg.e_step_sigma_floor,

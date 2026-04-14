@@ -425,14 +425,22 @@ def compute_transport_operators_direct(
     or worse. These fallbacks fire only when the raw matrix is ill-conditioned.
 
     Unlike compute_transport_operators (phi-based), this:
-    - Stores Ω_i ∈ GL(K) directly (no Lie algebra coefficients)
+    - Stores Ω_i ∈ R^{K×K} directly (no Lie algebra coefficients)
     - No matrix_exp for per-token frames (only for edge-local connection if non-flat)
-    - Covers full GL(K) including reflections (det < 0)
+    - Initialized near identity but NOT constrained to GL(K) during training —
+      gradient updates can push Ω toward singular matrices, at which point
+      fallbacks degrade transport quality (see fallback notes below)
     - Simpler gradient: ∂KL/∂Ω_i via chain rule, no dexp series
 
+    Note: the phi-based path (gauge_param='phi') guarantees Ω = exp(φ·G) ∈ GL(K)
+    by construction (matrix exponentials are always invertible). This direct path
+    trades that guarantee for simpler gradients and the ability to represent
+    reflections (det < 0), but requires external regularization (e.g. weight
+    decay, det penalty) to prevent Ω from approaching singularity.
+
     Args:
-        omega: (B, N, K, K) per-token group elements Ω_i ∈ GL(K).
-               Can have any determinant sign (reflections allowed).
+        omega: (B, N, K, K) per-token matrices Ω_i, initialized near identity.
+               Not constrained to GL(K) — may become singular during training.
         gauge_mode: 'learned' for per-token frames, 'trivial' for Ω = I.
         connection_delta: Optional (B, N, N, n_gen) edge-local Lie algebra elements.
                          Only used when cocycle_relaxation > 0.

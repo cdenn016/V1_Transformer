@@ -25,9 +25,9 @@ Key features:
 Mathematical Foundation:
 -----------------------
 Free Energy (E-STEP):
-    F = alpha * Sum_i KL(q_i||p_i)                         # Prior consistency
-      + lambda_belief * Sum_{i,j} beta_ij * KL(q_i||Omega_{ij}q_j)  # Belief alignment
-      + lambda_softmax * Sum_{i,j} gamma_ij * KL(p_i||Omega_{ij}p_j)  # Prior alignment
+    F = alpha * Sum_i KL(q_i||p_i)                         # Prior consistency (self-coupling)
+      + lambda_belief * Sum_{i,j} beta_ij * KL(q_i||Omega_{ij}q_j)  # Belief alignment (direct: beta * dKL/dtheta)
+      + lambda_softmax * Sum_{i,j} KL_ij * d(beta_ij)/dtheta        # Attention-variance coupling (dbeta/dtheta * KL)
       + CE(W_out * mu, targets)                             # Discrete observations
 
 E-step: Minimize F w.r.t. mu, Sigma (with W_out frozen)
@@ -264,6 +264,7 @@ class VariationalFFNDynamic(nn.Module):
         
         gauge_param: str =           'phi',# 'phi' (Lie algebra) or 'omega' (direct GL(K))
         obs_sigma_gradient: bool =   True, # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
+        obs_sigma_exact_stein: bool = False, # Sample z = μ+σε for unbiased E_q[H(z)] (exact Stein)
         obs_sigma_weight: float =    1.0,  # Weight for sigma observation gradient
         sigma_max: float =           5.0,  # Upper bound on σ (prevents nat_grad blowup from 2σ²·∇σ)
         
@@ -368,6 +369,7 @@ class VariationalFFNDynamic(nn.Module):
         self.amortize_sigma = amortize_sigma
         self.exact_phi_grad = exact_phi_grad
         self.obs_sigma_gradient = obs_sigma_gradient
+        self.obs_sigma_exact_stein = obs_sigma_exact_stein
         self.obs_sigma_weight = obs_sigma_weight
         self.sigma_max = sigma_max
         self.e_step_sigma_floor = e_step_sigma_floor
@@ -1801,7 +1803,6 @@ class VariationalFFNDynamic(nn.Module):
                 _use_rope_full = (
                     getattr(self, '_rope_full_gauge_vfe', False)
                     and self._use_rope_vfe
-                    and is_diagonal
                     and _nonflat_omega is None
                     and not torch.is_inference_mode_enabled()
                 )
@@ -2016,17 +2017,33 @@ class VariationalFFNDynamic(nn.Module):
 
             grad_mu = grad_mu + discrete_obs_grad
 
-            # Observation gradient for sigma (exact via Stein's lemma):
+            # Observation gradient for sigma (Stein's lemma):
             #
-            #   ∂/∂σ_k E_q[CE(z)] = (1/2) · E_q[∂²CE/∂z_k²]
+            #   ∂/∂σ_k E_q[CE(z)] = (1/2) · E_q[H_kk(z)]   (exact Stein identity)
             #
-            # This is EXACT for any smooth loss, not a Taylor approximation.
-            # For CE with softmax: ∂²CE/∂z_k² = Var_p[W[:,k]] ≥ 0.
-            # We approximate E_q[H_kk(z)] ≈ H_kk(μ) (zeroth-order in σ).
+            # where H_kk(z) = Var_{softmax(z)}[W[:,k]] is the CE Hessian diagonal.
+            #
+            # Two modes:
+            #   obs_sigma_exact_stein=False (default): H_kk(μ) — zeroth-order,
+            #       free (reuses probs from CE grad). Exact as σ → 0.
+            #   obs_sigma_exact_stein=True: sample z = μ + σ⊙ε, compute H_kk(z).
+            #       Unbiased single-sample estimator of E_q[H_kk(z)]. One extra
+            #       (B, N, V) matmul + softmax per iteration.
             if self.obs_sigma_gradient:
+                # Select evaluation point: μ (default) or sampled z (exact Stein)
+                if (self.obs_sigma_exact_stein
+                        and sigma_current is not None and is_diagonal):
+                    _eps_sample = torch.randn_like(mu_current.detach())
+                    _sigma_safe = sigma_current.detach().clamp(min=1e-6)
+                    _z_sample = mu_current.detach() + _sigma_safe.sqrt() * _eps_sample
+                    _logits_z = torch.matmul(_z_sample, W_out.T)
+                    probs_z = F.softmax(_logits_z, dim=-1)
+                else:
+                    probs_z = probs  # zeroth-order: H(μ)
+
                 W_out_sq = _obs_cache['W_out_sq']                    # (V, K)
-                EW2 = torch.matmul(probs, W_out_sq)                  # (B, N, K)
-                EW  = torch.matmul(probs, W_out)                     # (B, N, K)
+                EW2 = torch.matmul(probs_z, W_out_sq)                # (B, N, K)
+                EW  = torch.matmul(probs_z, W_out)                   # (B, N, K)
                 hessian_diag = EW2 - EW ** 2                         # (B, N, K)
                 # Clamp: FP rounding can violate Var ≥ 0
                 _neg_mask = hessian_diag < 0
