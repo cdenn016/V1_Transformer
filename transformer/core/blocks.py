@@ -507,8 +507,12 @@ class GaugeTransformerBlock(nn.Module):
             # MahalanobisNorm requires sigma; LayerNorm/RMSNorm ignore it.
             mu_normalized = self.norm1(mu_q, sigma_q) if isinstance(self.norm1, MahalanobisNorm) else self.norm1(mu_q)
 
-            # Non-flat transport: compute edge-local connection δ_ij and inject
-            # into cached transport so attention sees the modified Ω_ij.
+            # Non-flat transport: compute edge-local connection δ_ij from the
+            # pre-iteration μ and hold it fixed for the entire E-step.
+            # This is intentional: re-computing δ(μ) per VFE iteration would
+            # create a coupled fixed-point (δ depends on μ, μ depends on δ)
+            # that complicates convergence. The frozen snapshot is a standard
+            # first-order approximation analogous to expectation-propagation.
             if self.non_flat_transport and self.gauge_connection is not None and cached_head_transports is None:
                 from transformer.core.transport_ops import compute_transport_operators
                 delta_ij = self.gauge_connection(mu_normalized, mu_normalized)  # (B, N, N, n_gen)

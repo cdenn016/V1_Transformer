@@ -157,18 +157,35 @@ class RiemannianAdamW(torch.optim.AdamW):
                 p.grad = p.grad * 2.0
 
     def _get_sigma(self) -> Optional[torch.Tensor]:
-        """Retrieve current variance values from model embeddings.
+        r"""Retrieve current variance values for the mu Fisher preconditioner.
 
-        Two supported attribute layouts on ``token_embed``:
+        Checks ``prior_bank`` first (active source when ``use_prior_bank=True``),
+        then falls back to ``token_embed``. When ``use_prior_bank=True``,
+        ``token_embed`` is frozen, so its sigma values are stale — the live
+        sigma lives in ``prior_bank.log_prior_sigma`` or
+        ``prior_bank.base_log_prior_sigma``.
 
-        - ``log_sigma_diag`` (V, K): per-token learnable log-variance
-          (``learnable_sigma=True``, ``gauge_fixed_priors=False``).
-        - ``base_log_sigma_diag`` (K,): single shared base prior log-variance
-          (``gauge_fixed_priors=True``).  Without this fallback the mu
-          Fisher preconditioner is a no-op whenever the baseline prior mean
-          is ``token_embed.base_mu`` — the natural-gradient rescaling
-          ``∇_nat μ = Σ · ∇_E μ`` is then never applied.
+        Supported layouts:
+
+        **PriorBank** (checked first):
+        - ``log_prior_sigma`` (V, K): per-token log-variance
+          (``gauge_fixed_priors=False``).
+        - ``base_log_prior_sigma`` (K,): shared base log-variance
+          (``gauge_fixed_priors=True``).
+
+        **TokenEmbedding** (fallback):
+        - ``log_sigma_diag`` (V, K): per-token log-variance.
+        - ``base_log_sigma_diag`` (K,): shared base log-variance.
         """
+        # Check prior_bank first — it is the active sigma source when present
+        pb = getattr(self._model, 'prior_bank', None)
+        if pb is not None:
+            if hasattr(pb, 'log_prior_sigma') and isinstance(pb.log_prior_sigma, nn.Parameter):
+                return torch.exp(pb.log_prior_sigma.data).clamp(min=1e-6, max=10.0)
+            if hasattr(pb, 'base_log_prior_sigma') and isinstance(pb.base_log_prior_sigma, nn.Parameter):
+                return torch.exp(pb.base_log_prior_sigma.data).clamp(min=1e-6, max=10.0)
+
+        # Fallback to token_embed (used when prior_bank is absent)
         embed = getattr(self._model, 'token_embed', None)
         if embed is None:
             return None

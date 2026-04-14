@@ -486,11 +486,15 @@ class PriorBank(nn.Module):
         tau: float = 1.0,        # Temperature
     ) -> torch.Tensor:
         """
-        Compute observation likelihood via KL to all token priors.
+        Compute observation likelihood via diagonal-KL to all token priors.
 
-        p(y = v | q) ∝ exp(-KL(q || π_v) / τ)
+        p(y = v | q) ∝ exp(-KL_diag(q || π_v) / τ)
 
-        Fused single-matmul implementation. The full diagonal KL is:
+        Uses a diagonal approximation: when sigma_q or sigma_p are full
+        covariance matrices, only their diagonals are used. This is an
+        O(B·N·V·K) fused matmul, versus O(B·N·V·K²) for full-cov KL.
+
+        Fused single-matmul implementation. The diagonal KL is:
 
             KL(q || π_v) = 0.5 * [tr(Σ_q/Σ_p) + (μ_q-μ_p)ᵀΣ_p⁻¹(μ_q-μ_p)
                                    - K + log|Σ_p|/|Σ_q|]

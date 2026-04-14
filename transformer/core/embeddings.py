@@ -112,12 +112,11 @@ class GaugeTokenEmbedding(nn.Module):
         mu_normalize: bool = False,  # If True, project μ to unit sphere
         mu_max_norm: Optional[float] = None,  # If set, clamp ||μ|| ≤ max_norm
         # O(K) reflection parameters
-        learnable_reflection: bool = False,  # If True, learn per-token sign vectors s_i ∈ {±1}^K
-                                             # extending SO(K) gauge transport to full O(K).
-                                             # Ω_ij = diag(s_i)·exp(φ_i)·exp(-φ_j)·diag(s_j)
-                                             # The reflection is applied as μ_i → s_i ⊙ μ_i
-                                             # before the SO(K) rotation, so no changes needed
-                                             # in attention or VFE code.
+        learnable_reflection: bool = False,  # If True, learn per-token sign vectors s_i ∈ {±1}^K.
+                                             # Only the mean is sign-flipped: μ_i → s_i ⊙ μ_i.
+                                             # Transport Ω_ij and covariance are NOT modified by signs.
+                                             # This is a content-level sign representation, not the full
+                                             # O(K) conjugated transport diag(s_i)·Ω·diag(s_j).
         sigma_max: float = 5.0,  # Upper bound for prior covariance clamp
         irrep_dims: Optional[List[int]] = None,  # Per-head block dimensions for block-diagonal matrix_exp
     ):
@@ -527,10 +526,11 @@ class GaugeTokenEmbedding(nn.Module):
                 sigma = torch.diag_embed(sigma_diag)  # (B, N, K, K)
 
         # =================================================================
-        # O(K) Reflection: apply per-token sign flip to μ
+        # Reflection: apply per-token sign flip to μ only
         # =================================================================
-        # This implements R_i · μ_i = s_i ⊙ μ_i where s_i ∈ {±1}^K.
-        # Combined with exp(φ) ∈ SO(K), this gives full O(K) transport.
+        # Implements R_i · μ_i = s_i ⊙ μ_i where s_i ∈ {±1}^K.
+        # This is a content-level sign representation — the transport operator
+        # Ω_ij and covariance Σ are NOT modified by signs.
         # Uses straight-through estimator: forward = sign(z), backward = identity.
         if self.learnable_reflection:
             z = self.sign_logit(token_ids)           # (B, N, K) continuous latent
