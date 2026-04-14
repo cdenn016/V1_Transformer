@@ -80,7 +80,7 @@ tmp/
 *.ckpt
 
 # Claude Code local state
-.claude/
+.claude/settings.local.json
 
 # Environment files
 .env
