@@ -62,6 +62,8 @@ F = alpha * KL(q_i || p_i)                    # self-coupling: beliefs to priors
 
 **Amortization scope**: `amortized_inference=True` flows gradients through prior means (mu_p) only by default. Prior covariances (sigma_p) are detached (`amortize_sigma=False`). The post-loop phi gradient (`_compute_phi_grad`) detaches beliefs (`exact_phi_grad=False`), producing a semi-gradient. Cross-layer cascade is also mean-only: mu_q flows to next layer's mu_prior; sigma_prior stays at embedding value. Set `amortize_sigma=True` for full prior amortization through covariances. Set `exact_phi_grad=True` for the IFT-correct total derivative dF/dphi through the E-step iteration graph.
 
+**EM modes** (`em_phi_mode`): `'amortized'` (default) is a straight-through estimator — gradients flow through the E-step update map. `'E_phi_q'` treats phi as a belief variable: E-step optimizes (mu_q, Sigma_q, phi_q), all detached at the EM boundary. `'M_phi_p'` treats phi as a model parameter: E-step optimizes (mu_q, Sigma_q) only with phi frozen; M-step optimizes phi alongside priors/readout via backprop through the attention coupling term.
+
 ## Communication Style
 
 **Humility** You are free to say "i don't know" whenever you are unsure about a response.

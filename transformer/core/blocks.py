@@ -328,6 +328,7 @@ class GaugeTransformerBlock(nn.Module):
             gauge_param=cfg.gauge_param,
             detach_phi=cfg.detach_phi,
             implicit_em=cfg.implicit_em,
+            em_phi_mode=getattr(cfg, 'em_phi_mode', 'amortized'),
             closed_form_e_step=getattr(cfg, 'closed_form_e_step', False),
             learnable_head_kappa=cfg.learnable_head_kappa,
             n_picard_steps=cfg.n_picard_steps,
@@ -813,6 +814,7 @@ class GaugeTransformerStack(nn.Module):
         # cross-layer gradients reach early-layer embeddings.  See the
         # comment on the detach site below in forward().
         self.amortized_inference = getattr(cfg, 'amortized_inference', True)
+        self.em_phi_mode = getattr(cfg, 'em_phi_mode', 'amortized')
 
         self.blocks =nn.ModuleList([
             GaugeTransformerBlock(cfg)
@@ -922,16 +924,18 @@ class GaugeTransformerStack(nn.Module):
             # layer's prior μ.  sigma_prior stays at the embedding value to
             # prevent progressive tightening (sigma cascade).
             #
-            # Amortized inference policy: when self.amortized_inference=True,
-            # keep mu_q ATTACHED so the next layer's E-step propagates
-            # gradients backward through the hierarchical cascade — the whole
-            # point of amortized inference is that gradients flow through
-            # priors for learned E-step initialization (CLAUDE.md).
-            # When amortized_inference=False (classical EM), detach mu_q so
-            # the next layer sees it as a frozen E-step constant per standard
-            # EM semantics.
+            # EM modes: mu_q is already detached by the FFN EM boundary,
+            # but the residual mu_q = mu_q_pre_ffn + mu_ffn still carries
+            # gradients from the attention sublayer.  For principled EM,
+            # fully detach so each layer's q* is frozen for the next layer.
+            #
+            # Amortized (default): keep mu_q ATTACHED so cross-layer
+            # gradients reach early-layer embeddings (CLAUDE.md).
             if self.hierarchical_priors and not is_final:
-                if self.amortized_inference:
+                _em_active = self.em_phi_mode in ('E_phi_q', 'M_phi_p')
+                if _em_active:
+                    mu_prior = mu_q.detach()
+                elif self.amortized_inference:
                     mu_prior = mu_q
                 else:
                     mu_prior = mu_q.detach()

@@ -293,6 +293,7 @@ class VariationalFFNDynamic(nn.Module):
         gradient_checkpoint_vfe: bool = False,  # Activation checkpointing for VFE loop (Finding 26)
         alpha_divergence: float = 1.0,   # Renyi alpha-divergence parameter (1.0 = KL)
         enforce_orthogonal: bool = False,  # If True, project Omega to SO(K) via Newton-Schulz
+        em_phi_mode: str = 'amortized',  # 'amortized' | 'E_phi_q' (φ∈q) | 'M_phi_p' (φ∈θ)
     ):
         """
         Initialize dynamic-beta VFE FFN.
@@ -371,6 +372,7 @@ class VariationalFFNDynamic(nn.Module):
         self.sigma_max = sigma_max
         self.e_step_sigma_floor = e_step_sigma_floor
         self.enforce_orthogonal = enforce_orthogonal
+        self.em_phi_mode = em_phi_mode
         self.detach_phi = detach_phi
         self.closed_form_e_step = closed_form_e_step
         self.n_picard_steps = n_picard_steps
@@ -1412,7 +1414,10 @@ class VariationalFFNDynamic(nn.Module):
         # ── Prior setup: mu_p, sigma_p ──────────────────────────────────
         # No .clone() needed: downstream ops (clamp, +, =) create new tensors,
         # never mutating the original. .detach() suffices for graph separation.
-        if self.amortized_inference and not self.implicit_em:
+        #
+        # EM modes: mu_p is always an M-step variable from E-step's perspective.
+        _em_active = self.em_phi_mode in ('E_phi_q', 'M_phi_p')
+        if (self.amortized_inference and not self.implicit_em) and not _em_active:
             mu_p_current = mu_prior
         else:
             mu_p_current = mu_prior.detach()
@@ -1481,7 +1486,12 @@ class VariationalFFNDynamic(nn.Module):
         # ── Phi / omega setup ────────────────────────────────────────────
         # No .clone() needed: phi_current is reassigned (not mutated in-place)
         # in _retract_phi calls within the iteration loop.
-        if not self.amortized_inference and self.detach_phi:
+        #
+        # M_phi_p: phi is θ (model parameter), frozen during E-step.
+        # E_phi_q: phi is q (belief), stays attached for E-step optimization.
+        if self.em_phi_mode == 'M_phi_p':
+            phi_current = phi.detach()
+        elif not self.amortized_inference and self.detach_phi:
             phi_current = phi.detach()
         else:
             phi_current = phi
@@ -2907,13 +2917,27 @@ class VariationalFFNDynamic(nn.Module):
             beta_current, beta_heads, omega_current, eps,
         )
 
-        # Return results
-        # NOTE: Previously returned .detach() which BREAKS gradient flow!
-        # The VFE descent is an "inner loop" optimization, but we still need
-        # gradients to flow through the final result to train the embeddings.
-        # The detach was likely added to prevent backprop through all iterations,
-        # but it completely breaks learning. If memory is an issue, consider
-        # gradient checkpointing instead.
+        # ── EM boundary ──────────────────────────────────────────────────
+        # In principled EM modes, q* is held fixed during the M-step.
+        # Detach E-step outputs so no gradient flows back through the
+        # E-step update map.  The M-step receives F(q*; θ) where q* is
+        # a frozen constant.
+        #
+        # 'amortized' (default): outputs stay attached — straight-through
+        # estimator where gradients flow through the E-step iteration graph
+        # back to embeddings.  NOT proper EM, but enables amortized learning.
+        #
+        # 'E_phi_q': φ∈q — detach (μ, Σ, φ) at the boundary.
+        # 'M_phi_p': φ∈θ — detach (μ, Σ); φ was already detached at E-step
+        #            start and never evolved, so no additional detach needed.
+        _em_active = self.em_phi_mode in ('E_phi_q', 'M_phi_p')
+        if _em_active:
+            mu_current = mu_current.detach()
+            if sigma_current is not None:
+                sigma_current = sigma_current.detach()
+            if self.em_phi_mode == 'E_phi_q':
+                phi_current = phi_current.detach()
+
         if self.update_sigma:
             return mu_current, sigma_current, phi_current, beta_history
         else:

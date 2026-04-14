@@ -80,6 +80,9 @@ class BlockConfig:
                                         # (enables fully backprop-free training with phi P-flow)
     implicit_em: bool =         False   # IFT-based M-step: detach beliefs at E-step start,
                                         # apply info-geometric scale s_k = (α/σ²_p)/A_k
+    em_phi_mode: str =          'amortized'  # 'amortized' (default straight-through),
+                                        # 'E_phi_q' (φ∈q: E-step optimizes μ,Σ,φ; all detached at EM boundary),
+                                        # 'M_phi_p' (φ∈θ: E-step optimizes μ,Σ only; φ frozen, M-step optimizes φ)
 
     # === VFE dynamics (E-step) ===
     ffn_mode: str = 'VFE_dynamic'       # FFN mode (only 'VFE_dynamic' supported)
@@ -149,6 +152,16 @@ class BlockConfig:
 
     def __post_init__(self):
         """Enforce mode invariants that must hold regardless of how BlockConfig is constructed."""
+        # EM mode validation
+        _valid_em = ('amortized', 'E_phi_q', 'M_phi_p')
+        if self.em_phi_mode not in _valid_em:
+            raise ValueError(
+                f"em_phi_mode must be one of {_valid_em}, got '{self.em_phi_mode}'"
+            )
+        # M_phi_p: phi is an M-step parameter — must not evolve during E-step
+        if self.em_phi_mode == 'M_phi_p':
+            self.evolve_phi = False
+            self.evolve_phi_e_step = False
         # Constant/trivial gauge: phi is not used for transport
         if self.gauge_mode in ('constant', 'trivial'):
             self.evolve_phi = False
@@ -374,6 +387,7 @@ class BlockConfig:
             exact_phi_grad=config.get('exact_phi_grad', False),
             detach_phi=config.get('detach_phi', False),
             implicit_em=config.get('implicit_em', False),
+            em_phi_mode=config.get('em_phi_mode', 'amortized'),
             # VFE dynamics (E-step) — new names with old-name fallbacks
             ffn_mode=config.get('ffn_mode', 'VFE_dynamic'),
             E_alpha=config.get('E_alpha', config.get('ffn_alpha', 1.0)),

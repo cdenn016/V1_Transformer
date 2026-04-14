@@ -147,14 +147,19 @@ EM_CONFIG = {
   
 
     'kappa_beta':                 1,
-    'kappa_warmup_steps':         250000,  # freeze kappa for first n steps
-    'learnable_head_kappa':       False, # If True, learn per-head κ_h via log_kappa_per_head
+    'kappa_warmup_steps':         7500,  # freeze kappa for first n steps
+    'learnable_head_kappa':       True, # If True, learn per-head κ_h via log_kappa_per_head
     'obs_sigma_gradient':         True, # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
     'e_step_sigma_floor':         0.01,   # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
     
     # === M-step: implicit differentiation ===
     'implicit_em':                False,
-    'amortized_inference':        True,    
+    
+    'amortized_inference':        True,
+    'amortize_sigma':             False,   # When True + amortized_inference, sigma_p stays attached in E-step
+    'exact_phi_grad':             False,   # When True, _compute_phi_grad keeps beliefs attached (full IFT derivative)
+    'em_phi_mode':                'amortized',  # 'amortized' | 'E_phi_q' (φ∈q) | 'M_phi_p' (φ∈θ)
+
     'active_inference':           False,   #requires priorbank true
     
     'cache_decode_priors':        True,
