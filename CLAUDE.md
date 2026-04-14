@@ -22,6 +22,8 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 **LOCAL CODEBASE IS THE SOURCE OF TRUTH UNLESS OTHERWISE INSTRUCTED**
 
+**Check for sub-agents, skills, and plug-ins before deploying your own**
+
 ## Codebase Map
 
 
