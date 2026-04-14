@@ -549,7 +549,7 @@ where $\eta_\phi$ is the gauge frame learning rate. No metric correction (Fisher
 
 \paragraph{$\mathrm{SO}(N)$ retraction.} For compact groups such as $\mathrm{SO}(N)$, the exponential map is periodic. To ensure unique parameterization and avoid branch cuts, we retract to the principal ball $\|\phi\| < \pi - \epsilon$ (with $\epsilon \sim 10^{-2}$) after each update. If $\|\phi\| \geq \pi$, the angle is wrapped modulo $2\pi$ and, if necessary, the axis is flipped via antipodal identification ($\phi \to -\phi$ when $\theta > \pi$), exploiting the fact that $\exp(\phi) = \exp(\phi - 2\pi \hat{n})$ for $\mathrm{SO}(3)$.
 
-\paragraph{$\mathrm{GL}(K)$ updates.} For $\mathrm{GL}(K)$, the matrix exponential is surjective onto $\mathrm{GL}^+(K)$ (the identity component), and no retraction is required beyond standard gradient clipping for numerical stability. In our implementation, automatic differentiation through PyTorch's \texttt{matrix\_exp} handles the $\mathrm{GL}(K)$ differential implicitly.
+\paragraph{$\mathrm{GL}(K)$ updates.} For $\mathrm{GL}(K)$, a single matrix exponential $\exp: \mathfrak{gl}(K) \to \mathrm{GL}^+(K)$ is not surjective onto the identity component \citep{culver1966existence}, but the pairwise transport $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ covers all of $\mathrm{GL}^+(K)$ via polar decomposition (see main text, Section~\ref{sec:glk_lm}). No retraction is required beyond standard gradient clipping for numerical stability. In our implementation, automatic differentiation through PyTorch's \texttt{matrix\_exp} handles the $\mathrm{GL}(K)$ differential implicitly.
 
 \subsection{Gauge Frame Preconditioning for $\mathrm{GL}(K)$}
 \label{sec:glk_preconditioning}
