@@ -416,8 +416,13 @@ def compute_transport_operators_direct(
     """
     Compute transport operators from direct GL(K) group elements (no matrix_exp).
 
-    Flat:      Ω_ij = Ω_i · Ω_j⁻¹  (cocycle condition automatic)
+    Flat:      Ω_ij = Ω_i · Ω_j⁻¹  (cocycle condition exact to float precision)
     Non-flat:  Ω_ij = Ω_i · exp(α·δ_ij·G) · Ω_j⁻¹
+
+    The cocycle identity Ω_ij @ Ω_jk = Ω_ik is exact when the LU-based
+    solve succeeds (primary path). If omega is near-singular, fallbacks
+    (ridge regularization, then pseudoinverse) break the cocycle by O(ε)
+    or worse. These fallbacks fire only when the raw matrix is ill-conditioned.
 
     Unlike compute_transport_operators (phi-based), this:
     - Stores Ω_i ∈ GL(K) directly (no Lie algebra coefficients)
@@ -455,21 +460,31 @@ def compute_transport_operators_direct(
             'Omega': Omega,
         }
 
-    # Per-token inverse (needed for transport and gradients).
+    # Per-token inverse Ω_j⁻¹ (needed for transport Ω_ij = Ω_i Ω_j⁻¹).
     #
-    # Safe inverse: during training, omega can drift toward low rank (the
-    # GL(K) parameterisation allows any determinant sign) and a raw
-    # torch.linalg.inv on a near-singular matrix produces NaN that poisons
-    # the entire attention graph.  Add a small diagonal ridge and fall back
-    # to pinv if the ridged solve still fails.  The ridge biases the
-    # transport infinitesimally but keeps the pipeline finite.
-    _ridge = 1e-6
+    # The cocycle identity Ω_ij @ Ω_jk = Ω_ik holds exactly when the
+    # inverse is exact.  We use torch.linalg.solve (LU with pivoting)
+    # as the primary path — more stable than inv() and ridge-free, so
+    # the cocycle is exact to floating-point precision.
+    #
+    # Fallback 1: ridge 1e-6 + solve (if omega is near-singular).
+    #   Breaks cocycle by O(ε), but keeps the pipeline finite.
+    # Fallback 2: pinv (if ridge + solve also fails).
+    #   Destroys GL(K) structure; transport is rank-deficient.
     eye_K = torch.eye(K, device=device, dtype=dtype)
-    omega_reg = omega + _ridge * eye_K
     try:
-        omega_j_inv = torch.linalg.inv(omega_reg)  # (B, N, K, K)
+        omega_j_inv = torch.linalg.solve(omega, eye_K.expand_as(omega))  # (B, N, K, K)
     except (torch.linalg.LinAlgError, RuntimeError):
-        omega_j_inv = torch.linalg.pinv(omega_reg)
+        try:
+            from math_utils.numerical_monitor import record as _nr
+            _nr("omega_inv_ridge_fallback")
+            _ridge = 1e-6
+            omega_j_inv = torch.linalg.solve(
+                omega + _ridge * eye_K, eye_K.expand_as(omega))
+        except (torch.linalg.LinAlgError, RuntimeError):
+            from math_utils.numerical_monitor import record as _nr
+            _nr("omega_inv_pinv_fallback")
+            omega_j_inv = torch.linalg.pinv(omega)
 
     if connection_delta is not None and cocycle_relaxation > 0 and generators is not None:
         # Non-flat: Ω_ij = Ω_i · exp(α·δ_ij·G) · Ω_j⁻¹
@@ -481,7 +496,7 @@ def compute_transport_operators_direct(
             'bikl,bijlm,bjmn->bijkn', omega, exp_delta, omega_j_inv
         )
     else:
-        # Flat: Ω_ij = Ω_i · Ω_j⁻¹ (cocycle condition automatic)
+        # Flat: Ω_ij = Ω_i · Ω_j⁻¹ (cocycle exact when solve succeeds)
         Omega = torch.einsum('bikl,bjlm->bijkm', omega, omega_j_inv)
 
     return {
@@ -517,21 +532,26 @@ def omega_to_block_exp_pairs(
             f"equal K={K}. irrep_dims={irrep_dims}, omega.shape={tuple(omega.shape)}."
         )
 
-    # Safe per-block inverse with ridge + pinv fallback (same rationale as
-    # compute_transport_operators_direct: omega can drift toward low rank
-    # during training).
-    _ridge = 1e-6
+    # Per-block inverse via solve (LU with pivoting) — ridge-free primary
+    # path preserves exact cocycle.  Fallback: ridge + solve, then pinv.
     results = []
     start = 0
     for d in irrep_dims:
         end = start + d
         omega_blk = omega[:, :, start:end, start:end].contiguous()
         eye_d = torch.eye(d, device=omega_blk.device, dtype=omega_blk.dtype)
-        omega_blk_reg = omega_blk + _ridge * eye_d
         try:
-            omega_blk_inv = torch.linalg.inv(omega_blk_reg)
+            omega_blk_inv = torch.linalg.solve(omega_blk, eye_d.expand_as(omega_blk))
         except (torch.linalg.LinAlgError, RuntimeError):
-            omega_blk_inv = torch.linalg.pinv(omega_blk_reg)
+            try:
+                from math_utils.numerical_monitor import record as _nr
+                _nr("omega_blk_inv_ridge_fallback")
+                omega_blk_inv = torch.linalg.solve(
+                    omega_blk + 1e-6 * eye_d, eye_d.expand_as(omega_blk))
+            except (torch.linalg.LinAlgError, RuntimeError):
+                from math_utils.numerical_monitor import record as _nr
+                _nr("omega_blk_inv_pinv_fallback")
+                omega_blk_inv = torch.linalg.pinv(omega_blk)
         results.append((omega_blk, omega_blk_inv))
         start = end
     return results
