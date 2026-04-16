@@ -10,10 +10,15 @@ generation-time action selection, not target-conditioned E-step inference.
 See VFE_Transformer_Idea.md Section 11.
 """
 
-from typing import Optional, Dict
+from __future__ import annotations
+
+from typing import Optional, Dict, TYPE_CHECKING
 
 import torch
 import torch.nn.functional as F
+
+if TYPE_CHECKING:
+    from transformer.vfe.model import VFEModel
 
 from transformer.core.expected_free_energy import (
     compute_risk,

@@ -14,10 +14,15 @@ Sigma freezing is architecturally enforced — priors.sigma is never
 reassigned from the posterior.
 """
 
-from typing import Optional, Callable, List
+from __future__ import annotations
+
+from typing import Optional, Callable, List, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+
+if TYPE_CHECKING:
+    from transformer.vfe.config import VFEConfig
 
 from transformer.core.types import BeliefState
 from transformer.vfe.block import VFEBlock

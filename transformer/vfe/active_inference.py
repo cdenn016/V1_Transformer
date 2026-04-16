@@ -10,10 +10,16 @@ Usage:
     beliefs = stack(beliefs, priors, mask, active_inference_fn=ai_fn)
 """
 
-from typing import Optional, Tuple
+from __future__ import annotations
+
+from typing import Optional, Tuple, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+
+if TYPE_CHECKING:
+    from transformer.vfe.config import VFEConfig
+    from transformer.vfe.prior_bank import VFEPriorBank
 
 from transformer.core.active_inference import _compute_active_inference_gradient
 

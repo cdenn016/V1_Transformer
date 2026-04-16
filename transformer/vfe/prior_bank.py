@@ -10,10 +10,15 @@ Decode: BeliefState -> logits = -KL(q* || pi_v) / tau
 Law 3 enforced: same Gaussian manifold for encode, infer, and decode.
 """
 
+from __future__ import annotations
+
 import math
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, TYPE_CHECKING
 
 import torch
+
+if TYPE_CHECKING:
+    from transformer.vfe.config import VFEConfig
 import torch.nn as nn
 import torch.nn.functional as F
 

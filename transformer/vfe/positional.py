@@ -8,10 +8,16 @@ For bch_order=1 (abelian approximation): phi + p (simple addition).
 For bch_order>=2: full BCH series via lie_compose_bch_general_torch.
 """
 
+from __future__ import annotations
+
 import math
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+
+if TYPE_CHECKING:
+    from transformer.vfe.config import VFEConfig
 
 
 class VFEPositionalEncoding(nn.Module):

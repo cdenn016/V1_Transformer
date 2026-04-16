@@ -11,11 +11,16 @@ Law 2 enforced: all transport goes through fused block-diagonal kernels
 which internally compute Omega @ Sigma @ Omega^T.
 """
 
+from __future__ import annotations
+
 import math
-from typing import Optional, Callable, List, Tuple
+from typing import Optional, Callable, List, Tuple, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+
+if TYPE_CHECKING:
+    from transformer.vfe.config import VFEConfig
 
 from transformer.core.types import BeliefState
 from transformer.core.vfe_gradients import (

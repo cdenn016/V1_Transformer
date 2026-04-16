@@ -6,10 +6,15 @@ sublayer — the E-step internally computes and updates attention at each
 iteration (dynamic beta).
 """
 
-from typing import Optional, Callable
+from __future__ import annotations
+
+from typing import Optional, Callable, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+
+if TYPE_CHECKING:
+    from transformer.vfe.config import VFEConfig
 
 from transformer.core.types import BeliefState
 from transformer.core.blocks import MahalanobisNorm, RMSNorm
