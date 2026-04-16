@@ -270,7 +270,7 @@ def record_iteration_diagnostics(
             _diag['mu_diff_to_prior_norm'] = (mu_current - mu_p_current).detach().norm().item()
         # Beta entropy from last computed beta
         try:
-            if ffn.multihead_vfe and beta_heads:
+            if beta_heads:
                 _b_diag = beta_heads[-1].detach().clamp(min=1e-10)
             elif beta_current is not None:
                 _b_diag = beta_current.detach().clamp(min=1e-10)

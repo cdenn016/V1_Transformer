@@ -18,7 +18,7 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 **ALWAYS PLAN MODE FIRST**
 
-**ignore DEQ, closed-form, and hebbian paths unless otherwise instructed**
+**There should ALWAYS exist a theoretically/mathematically "pure" path under appropriate toggles.**  Computationally extreme paths should be 'opt in' toggles and clearly documented.
 
 **LOCAL CODEBASE IS THE SOURCE OF TRUTH UNLESS OTHERWISE INSTRUCTED**
 
@@ -60,7 +60,6 @@ F = alpha * KL(q_i || p_i)                    # self-coupling: beliefs to priors
 
 **Covariance transport**: `Sigma_transported = Omega @ Sigma @ Omega.T` — the sandwich product
 
-**Phi preconditioning**: clip (default, O(n_gen)), cartan (O(n_gen²)), killing (O(n_gen²)), pullback (O(n_gen³)) — see `transformer/core/gauge_preconditioner.py`
 
 **Timescales**: Fast E-step (belief q inference per forward pass) / Slow M-step (prior/model s,p parameter learning via backprop) / Static hyper-prior h (frozen at init, never learned). sigma_p is an M-step parameter — the E-step reads it but must not write gradients to it (detached in VFE iterations). sigma_ce_scale controls the residual CE→sigma_p gradient in decode (0.0 = fully detached).
 

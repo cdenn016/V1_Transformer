@@ -32,7 +32,8 @@ class PublicationMetricsTracker:
             'step', 'timestamp',
 
             # Losses
-            'train_loss_total', 'train_loss_ce', 'train_loss_belief_align',
+            'train_loss_total', 'train_loss_ce', 'train_loss_ce_raw',
+            'train_loss_belief_align',
             'train_loss_self_consistency', 'train_loss_model_coupling',
             'train_loss_aux_layer_ce',
             'val_loss', 'val_ce',
@@ -107,8 +108,9 @@ class PublicationMetricsTracker:
         tokens_per_sec = (batch_size * seq_len) / \
             step_time if step_time > 0 else 0
 
-        # Bits per character (convert from nats)
-        train_bpc = metrics.get('train_loss_ce', 0) / math.log(2)
+        # Use raw (un-normalized) CE for BPC — normalized CE / log(2) is meaningless
+        train_ce_raw = metrics.get('train_loss_ce_raw', metrics.get('train_loss_ce', 0))
+        train_bpc = train_ce_raw / math.log(2)
 
         entry = {
             'step': step,
@@ -117,6 +119,7 @@ class PublicationMetricsTracker:
             # Losses
             'train_loss_total': metrics.get('train_loss_total'),
             'train_loss_ce': metrics.get('train_loss_ce'),
+            'train_loss_ce_raw': train_ce_raw,
             'train_loss_belief_align': metrics.get('train_loss_belief_align', 0),
             'train_loss_self_consistency': metrics.get('train_loss_self_consistency', 0),
             'train_loss_model_coupling': metrics.get('train_loss_model_coupling', 0),

@@ -266,7 +266,6 @@ class TestModelIntegration:
         """Multi-head VFE with cross-coupling (tests kappa normalization)."""
         from transformer.core.model import GaugeTransformerLM
         base_config['cross_couplings'] = [(0, 1), (1, 0)]
-        base_config['multihead_vfe'] = True
         model = GaugeTransformerLM(base_config)
         x = torch.randint(0, 50, (2, 8))
         logits = model(x)

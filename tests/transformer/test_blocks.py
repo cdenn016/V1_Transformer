@@ -34,6 +34,7 @@ def _make_block_config(K=16, hidden_dim=32, n_layers=1, **overrides):
         diagonal_covariance=True,
         generators=generators,
         ffn_mode='VFE_dynamic',
+        ffn_irrep_dims=[1] * K,  # required: multihead VFE is the only path
     )
     for k, v in overrides.items():
         setattr(cfg, k, v)

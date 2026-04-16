@@ -272,7 +272,7 @@ def get_vfe_dynamic_config(**overrides) -> TrainingConfig:
         M_alpha=0.1,
         M_beta=1.0,
         lambda_gamma=0.0,
-        use_obs_in_vfe=True,
+        use_obs_in_vfe=False,
     )
     for key, value in overrides.items():
         setattr(config, key, value)

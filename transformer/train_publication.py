@@ -136,10 +136,10 @@ EM_CONFIG = {
     'irrep_spec':       [('fund', 2, 10)],
 
     'use_prior_bank':             False,
-    'gauge_fixed_priors':         True,    
+    'gauge_fixed_priors':         False,    
     'hierarchical_priors':        True,
     
-    'learnable_pb_temperature':   True,    #prior bank temperature
+    'learnable_pb_temperature':   False,    #prior bank temperature
     'mask_self_attention':        False,  # Prevent attention collapse?
   
 
@@ -153,7 +153,7 @@ EM_CONFIG = {
     'e_step_sigma_floor':         0.01,   # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
     
     # === EM gradient-flow mode ===
-    'em_mode':                    'ift_phi',  # φ∈q: E-step optimizes μ,Σ,φ; all detached at EM boundary
+    'em_mode':                    'em_phi_p',  # φ∈q: E-step optimizes μ,Σ,φ; all detached at EM boundary
                                                 # - 'straight_through' (default) — mu_p, sigma_p attached, semi-gradient phi
                                                 # - 'ift_phi' — same + full IFT phi gradient
                                                 # - 'em_phi_q' — clean EM, phi in q, all detached at boundary
@@ -175,7 +175,6 @@ EM_CONFIG = {
     'use_layernorm':              True,   #breaks gauge equivariance
     'use_residual':               True,  #set False if skip-attention=True
     'use_output_projection':      True,
-    'multihead_vfe':              True,
     'evolve_sigma':               True,
     'evolve_phi':                 True,  #M-step phi evolution
     'evolve_phi_e_step':          True,
@@ -185,7 +184,7 @@ EM_CONFIG = {
     'E_learnable_lr':             True,   # Learnable E-step LR
     
     'min_lr_ratio':               0.1,
-    'lr_decay':                   'linear',   #'linear', 'cosine', 'constant'
+    'lr_decay':                   'cosine',   #'linear', 'cosine', 'constant'
     
     'norm_type':                  'layernorm',  # 'layernorm' | 'rmsnorm' | 'mahalnorm' | 'none'
     'residual_type':              'additive',    # 'additive': mu_q = mu_q + mu_sub 
@@ -248,8 +247,8 @@ EM_CONFIG = {
     'pos_encoding_mode':          'none',
 
     # === Embedding init ===
-    'mu_init_std':                1.6,
-    'phi_scale':                  0.4,
+    'mu_init_std':                0.5,
+    'phi_scale':                  0.05,
     
     'mu_normalize':               False,
     'mu_max_norm':                None,
@@ -257,7 +256,7 @@ EM_CONFIG = {
 
     # === Logging ===
     'log_interval':               100,
-    'eval_interval':              1000,
+    'eval_interval':              3000,
     'checkpoint_interval':        25000,
     'semantic_analysis_interval': 10000,
     'gauge_geometry_interval':    5000,   # Gauge field Dirichlet energy + invariants
@@ -317,17 +316,9 @@ EM_CONFIG = {
 
 
     # ===== Active Inference =======
-    'active_inference_pragmatic_weight':  0,   # start small
+    'active_inference_pragmatic_weight':  0.25,   # start small
     'active_inference_epistemic_weight':  1,   # keep both ON to avoid feedback loop
     'active_inference_epistemic_samples': 2,     # MC samples for BALD
-
-    #DO NOT USE PRAGMATIC WEIGHT WITH DISTILLATION
-
-    'active_inference_distill_weight':    0.0,        # λ_distill — start small
-    'active_inference_distill_normalize': True,        # divide CE by log(V) so weight is V-agnostic
-    'active_inference_distill_mode':      'aggregated',# 'aggregated' (default) or 'per_pair'
-
-
 }
 
 
@@ -375,7 +366,6 @@ HEBBIAN_CONFIG = {
     'gauge_mode':    'learned',
     'gauge_param':   'phi',
     'irrep_spec':    [('fund', 1, 10)],
-    'multihead_vfe': True,
 
     # === E-step dynamics (same as EM) ===
     'ffn_n_iterations': 1,

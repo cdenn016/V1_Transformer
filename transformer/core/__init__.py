@@ -13,6 +13,7 @@ This module contains the core transformer model components:
 
 from transformer.core.model import GaugeTransformerLM
 from transformer.core.block_config import BlockConfig
+from transformer.core.types import BeliefState
 from transformer.core.blocks import GaugeTransformerBlock, GaugeTransformerStack
 from transformer.core.attention import (
     compute_attention_weights,
@@ -35,6 +36,9 @@ __all__ = [
 
     # Config
     'BlockConfig',
+
+    # Types
+    'BeliefState',
 
     # Blocks
     'GaugeTransformerBlock',

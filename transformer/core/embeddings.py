@@ -524,9 +524,21 @@ class GaugeTokenEmbedding(nn.Module):
         # =================================================================
         # Reflection: apply per-token sign flip to μ only
         # =================================================================
+        # TODO(Fix3): Upgrade to full O(K) gauge law (Option A — signs as
+        # part of the local frame).  Design:
+        #   - Do NOT pre-flip μ here.  Keep raw μ, raw Σ.
+        #   - Return signs from forward() and absorb into the local transport
+        #     law: g_i^eff = S_i · g_i, Ω_ij^eff = S_i · Ω_ij · S_j.
+        #     Since S_j^{-1} = S_j for signs, inversion is free.
+        #   - Propagate signs into: attention (transport conjugation),
+        #     VFE gradients (KL uses conjugated Ω), PriorBank.encode(),
+        #     PriorBank.decode(), and anywhere priors are transported/compared.
+        #   - Without this, reflections remain a scoring-side patch, not a
+        #     true O(K) extension of the gauge structure.
+        #
+        # Current implementation: content-level sign flip only.
         # Implements R_i · μ_i = s_i ⊙ μ_i where s_i ∈ {±1}^K.
-        # This is a content-level sign representation — the transport operator
-        # Ω_ij and covariance Σ are NOT modified by signs.
+        # Transport Ω_ij and covariance Σ are NOT modified by signs.
         # Uses straight-through estimator: forward = sign(z), backward = identity.
         if self.learnable_reflection:
             z = self.sign_logit(token_ids)           # (B, N, K) continuous latent

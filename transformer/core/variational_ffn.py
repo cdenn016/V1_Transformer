@@ -246,8 +246,6 @@ class VariationalFFNDynamic(nn.Module):
         
         # Bayesian precision (learned prior self-coupling)
         learnable_alpha: bool =           False,  # If True, use Gamma-Normal conjugate precision
-        # Multi-head VFE: maintain per-head β through iterations
-        multihead_vfe: bool =             True,  # If True, compute separate β_h per irrep block
         # Phi gradient preconditioning mode
         phi_natural_gradient: str =          'killing',  # 'clip'|'cartan'|'killing'|'pullback'
         killing_center_reg: Optional[float] = None,  # Killing form center regularization (None=2K)
@@ -498,7 +496,7 @@ class VariationalFFNDynamic(nn.Module):
         # =================================================================
         # Multi-head VFE: per-block β through iterations
         # =================================================================
-        self.multihead_vfe = multihead_vfe and irrep_dims is not None
+        self.multihead_vfe = irrep_dims is not None
         if self.multihead_vfe:
             n_heads = len(irrep_dims)
             if learnable_head_kappa:
@@ -1066,18 +1064,13 @@ class VariationalFFNDynamic(nn.Module):
         beta_current: Optional[torch.Tensor] = None,
         beta_heads: Optional[list] = None,
     ) -> Optional[torch.Tensor]:
-        r"""Compute ∂F/∂φ via autograd (alignment + distillation when unified).
+        r"""Compute ∂F/∂φ via autograd (alignment term).
 
         By default, beliefs (mu_current, sigma_current) are detached, giving the
         partial derivative ∂F/∂φ|_{q fixed} — a semi-gradient that treats beliefs
         as constants. When ``exact_phi_grad=True`` and ``amortized_inference=True``,
         beliefs stay attached, giving the full total derivative dF/dφ through
         the E-step iteration graph (IFT-correct).
-
-        When ``_ai_distill_weight > 0``, the distillation term ∂L_distill/∂φ
-        is added to the alignment loss.  The
-        transport Ω_ij(φ) is tracked through phi_for_grad while β and μ remain
-        stop-gradiented (BYOL-style collapse prevention).
 
         Returns the preconditioned gradient, or None if no gradient could be computed.
         """
@@ -1163,89 +1156,6 @@ class VariationalFFNDynamic(nn.Module):
                 self.lambda_belief * (beta_phi.detach() * kl_matrix).sum()
                 + self.lambda_softmax * (beta_phi * kl_matrix.detach()).sum()
             )
-
-        # =============================================================
-        # Distillation φ contribution (unified natgrad only)
-        # =============================================================
-        # When unified_natgrad=True and distillation is active, add
-        # ∂L_distill/∂φ through the transport operators Ω_ij(φ).
-        #
-        # The μ-distillation loss is CE(sg[p(μ̃)], p(μ)) — local μ
-        # adapts to match the transported readout ("learn from neighbors").
-        # The φ-distillation loss uses the REVERSE direction:
-        #   CE(p(μ̃(φ)), sg[p(μ)]) — the transport adapts so the
-        #   transported prediction matches the local truth.
-        #
-        # Stop-gradients: β (attention weights) and μ (source beliefs)
-        # are detached. Only Ω_ij = exp(φ_i)·exp(-φ_j) tracks phi_for_grad.
-        # This preserves BYOL-style collapse prevention while giving φ the
-        # correct active-inference signal: route information so that the
-        # transported readout is predictively useful.
-        _distill_weight_phi = getattr(self, '_ai_distill_weight', 0.0)
-        if (_distill_weight_phi > 0.0
-                and self.irrep_dims is not None and _phi_bep is not None):
-            # Resolve readout references
-            _pb_raw = self.__dict__.get('_prior_bank_ref', None)
-            _pb = _pb_raw[0] if isinstance(_pb_raw, list) else _pb_raw
-            _wout_ref = self.__dict__.get('_ai_w_out_ref', None)
-            _wout = None
-            if _wout_ref is not None:
-                _p = _wout_ref[0] if isinstance(_wout_ref, list) else _wout_ref
-                _wout = _p.weight if _p is not None else None
-
-            if _pb is not None or _wout is not None:
-                _tau = max(float(getattr(self, '_ai_decode_tau', 1.0)), 1e-8)
-                _f32 = torch.float32
-                mu_det = mu_current.detach().to(_f32)
-                sigma_det = (sigma_current.detach().to(_f32)
-                             if sigma_current is not None else None)
-
-                # Build μ̃ with tracked Ω (gradient to phi_for_grad)
-                mu_tilde_phi = torch.zeros_like(mu_det)
-                block_start = 0
-                for h, d_h in enumerate(self.irrep_dims):
-                    block_end = block_start + d_h
-                    mu_h = mu_det[:, :, block_start:block_end]
-                    # Use _phi_bep from phi_for_grad — gradient flows to φ
-                    exp_phi_h, exp_neg_phi_h = _phi_bep[h]
-                    # β is detached (prevent attend-to-twins collapse)
-                    # mu is detached (beliefs fixed for this computation)
-                    # ONLY Ω tracks phi_for_grad
-                    beta_h_det = beta_heads[h].detach().to(_f32) if (
-                        hasattr(self, 'multihead_vfe') and self.multihead_vfe
-                        and beta_heads is not None and h < len(beta_heads)
-                    ) else beta_current.detach().to(_f32) if beta_current is not None else None
-                    if beta_h_det is not None:
-                        mu_tilde_h = torch.einsum(
-                            'bij,bikl,bjlm,bjm->bik',
-                            beta_h_det,
-                            exp_phi_h.to(_f32),
-                            exp_neg_phi_h.to(_f32),
-                            mu_h,
-                        )
-                        mu_tilde_phi[:, :, block_start:block_end] = mu_tilde_h
-                    block_start = block_end
-
-                # Readout: source = μ̃(φ) [tracked], target = μ [detached]
-                def _phi_decode(mu_in, sigma_in):
-                    if _pb is not None:
-                        return _pb.decode(mu_in, sigma_in, tau=_tau)
-                    return torch.matmul(mu_in, _wout.T) / _tau
-
-                with torch.no_grad():
-                    target_logits = _phi_decode(mu_det, sigma_det)
-                    target_probs = F.softmax(target_logits, dim=-1).detach()
-
-                source_logits = _phi_decode(mu_tilde_phi, sigma_det)
-                source_log_probs = F.log_softmax(source_logits, dim=-1)
-                ce = -(target_probs * source_log_probs).sum(dim=-1)
-
-                if getattr(self, '_ai_distill_normalize', True):
-                    V = source_log_probs.shape[-1]
-                    ce = ce / math.log(max(V, 2))
-
-                distill_phi_loss = _distill_weight_phi * ce.mean()
-                alignment_loss = alignment_loss + distill_phi_loss
 
         if alignment_loss.grad_fn is not None:
             grad_phi = torch.autograd.grad(
@@ -1406,7 +1316,7 @@ class VariationalFFNDynamic(nn.Module):
 
         # Beta for implicit EM
         if self.implicit_em:
-            if self.multihead_vfe and beta_heads:
+            if beta_heads:
                 self._last_beta_for_implicit = torch.stack(beta_heads, dim=1).detach()
             elif beta_current is not None:
                 self._last_beta_for_implicit = beta_current.detach()
@@ -1976,131 +1886,6 @@ class VariationalFFNDynamic(nn.Module):
         return grad_mu, grad_sigma, beta_heads, beta_current, beta_history_entry, _mh_cached_bep
 
     # =================================================================
-    # Helper: Single-beta VFE gradient computation (all blocks share β)
-    # =================================================================
-
-    def _compute_single_beta_vfe_gradients(
-        self,
-        mu_current: torch.Tensor,
-        sigma_current: torch.Tensor,
-        phi_current: torch.Tensor,
-        mu_p_current: torch.Tensor,
-        sigma_p: torch.Tensor,
-        alpha_effective,
-        _alpha_c0,
-        is_diagonal: bool,
-        eps: float,
-        mask: Optional[torch.Tensor],
-        _detach_e_step: bool,
-        cached_transport: Optional[dict],
-        connection_delta: Optional[torch.Tensor],
-        B: int,
-        N: int,
-        return_beta_history: bool,
-        omega_current: Optional[torch.Tensor] = None,
-        _precomputed_block_exp_pairs=None,
-    ):
-        r"""Compute VFE gradients for the single-beta path.
-
-        All irrep blocks share a single attention weight β (the original
-        non-multihead mode).
-
-        Returns a 5-tuple:
-            ``(grad_mu, grad_sigma, beta_current, beta_history_entry, _cached_bep)``
-
-        where ``_cached_bep`` is needed by the phi gradient helper.
-        """
-        # =============================================================
-        # SINGLE-β VFE: Original behavior (all blocks share one β)
-        # =============================================================
-        # SINGLE-β VFE: All blocks share one β
-        # Use fused path when possible (diagonal + block-diagonal)
-        # =============================================================
-        if _precomputed_block_exp_pairs is not None:
-            _cached_bep = _precomputed_block_exp_pairs
-        else:
-            _cached_bep = self._build_block_exp_pairs(
-                phi_current, omega_current, B, N,
-                mu_current.device, mu_current.dtype,
-            )
-
-        # Use fused path for diagonal + block-diagonal.
-        # Fused path builds Omega from block exp pairs (flat only).
-        # When non-flat cached_transport is available, fall back to non-fused.
-        _has_nonflat_ct = (cached_transport is not None
-                           and 'Omega' in cached_transport
-                           and connection_delta is not None)
-        _use_fused_single = (is_diagonal and self.irrep_dims is not None
-                             and not self.exact_diagonal_transport
-                             and not _has_nonflat_ct)
-
-        # Detach beliefs for gradient computation (consistent with multihead
-        # path at line 3667). Without this, analytical VFE gradients
-        # participate in autograd, giving the single-β path a different
-        # backward (I - lr*J) vs multihead's straight-through (I).
-        _mu_for_grad = mu_current.detach() if _detach_e_step else mu_current
-        _sigma_for_grad = sigma_current.detach() if _detach_e_step else sigma_current
-
-        if _use_fused_single:
-            beta_current, grad_mu, grad_sigma, _ = _fused_attention_and_vfe_gradients_block_diag(
-                mu_q=_mu_for_grad, sigma_q=_sigma_for_grad,
-                mu_p=mu_p_current, sigma_p=sigma_p,
-                phi=phi_current, generators=self.generators,
-                alpha=alpha_effective, lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax,
-                kappa=self.kappa, eps=eps,
-                irrep_dims=self.irrep_dims,
-                compute_sigma_align_grad=self.compute_sigma_align_grad,
-                enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                alpha_c0=_alpha_c0,
-                cached_block_exp_pairs=_cached_bep,
-                mask=mask,
-                mask_self_attention=self.mask_self_attention,
-                use_rope=self._use_rope_vfe,
-                rope_base=self._rope_base_vfe,
-                alpha_div=self.alpha_divergence,
-            )
-        else:
-            # Fallback: separate attention + gradient
-            beta_current = compute_attention_weights(
-                mu_q=_mu_for_grad, sigma_q=_sigma_for_grad,
-                phi=phi_current, generators=self.generators,
-                kappa=self.kappa, epsilon=eps, mask=mask,
-                return_kl=False,
-                diagonal_covariance=is_diagonal,
-                cached_transport=cached_transport,
-                irrep_dims=self.irrep_dims,
-                mask_self_attention=self.mask_self_attention,
-                gauge_mode=self.gauge_mode,
-                cached_block_exp_pairs=_cached_bep,
-                use_rope=self._use_rope_vfe,
-                rope_base=self._rope_base_vfe,
-                exact_diagonal_transport=self.exact_diagonal_transport,
-                alpha_divergence=self.alpha_divergence,
-            )
-            grad_mu, grad_sigma = compute_vfe_gradients_gpu(
-                mu_q=_mu_for_grad, sigma_q=_sigma_for_grad,
-                mu_p=mu_p_current, sigma_p=sigma_p,
-                beta=beta_current, phi=phi_current,
-                generators=self.generators, alpha=alpha_effective,
-                lambda_belief=self.lambda_belief, lambda_softmax=self.lambda_softmax, kappa=self.kappa,
-                eps=eps, alpha_c0=_alpha_c0,
-                cached_transport=cached_transport,
-                compute_sigma_align_grad=self.compute_sigma_align_grad,
-                irrep_dims=self.irrep_dims,
-                cached_block_exp_pairs=_cached_bep,
-                exact_diagonal_transport=self.exact_diagonal_transport,
-                use_rope=self._use_rope_vfe,
-                rope_base=self._rope_base_vfe,
-                alpha_div=self.alpha_divergence,
-            )
-
-        beta_history_entry = None
-        if return_beta_history:
-            beta_history_entry = beta_current.detach()
-
-        return grad_mu, grad_sigma, beta_current, beta_history_entry, _cached_bep
-
-    # =================================================================
     # Helper: Single VFE iteration (extracted from forward loop)
     # =================================================================
 
@@ -2169,61 +1954,8 @@ class VariationalFFNDynamic(nn.Module):
         # cached_transport avoids redundant matrix exponentials.
         # Skip caching when using block-diagonal or chunked paths (they
         # compute transport internally in chunks to save memory).
+        cached_transport = None
         _nonflat_omega = None  # Per-head sliceable non-flat Omega (multihead path)
-        if self.irrep_dims is None and not self.multihead_vfe:
-            if omega_current is not None and self.gauge_param == 'omega':
-                # Direct omega: build full-K transport from omega blocks
-                cached_transport = compute_transport_operators_direct(
-                    omega=omega_current,
-                    connection_delta=connection_delta,
-                    generators=self.generators if connection_delta is not None else None,
-                    cocycle_relaxation=cocycle_relaxation,
-                )
-            elif self.gauge_mode == 'constant' and self.constant_omega is not None:
-                # Constant gauge with known Ω: build full-K transport from
-                # per-head constant_omega blocks (non-block-diagonal path).
-                K = mu_current.shape[-1]
-                omega_full = torch.eye(K, device=mu_current.device, dtype=mu_current.dtype)
-                _blk_start = 0
-                for h_idx in range(len(self.constant_omega)):
-                    omega_h = self.constant_omega[h_idx].to(
-                        device=mu_current.device, dtype=mu_current.dtype)
-                    d_h = omega_h.shape[0]
-                    if getattr(self, 'enforce_orthogonal', False) and d_h >= 2:
-                        omega_h = newton_schulz_orthogonalize(
-                            omega_h.unsqueeze(0)).squeeze(0)
-                    omega_full[_blk_start:_blk_start+d_h, _blk_start:_blk_start+d_h] = omega_h
-                    _blk_start += d_h
-                Omega = omega_full.unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(
-                    B, N, N, -1, -1).contiguous()
-                cached_transport = {'Omega': Omega}
-            else:
-                cached_transport = compute_transport_operators(
-                    phi=phi_current,
-                    generators=self.generators,
-                    enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                    gauge_mode=self.gauge_mode,
-                    generators_are_skew=self._generators_are_skew,
-                    connection_delta=connection_delta,
-                    cocycle_relaxation=cocycle_relaxation,
-                )
-        else:
-            if connection_delta is not None and cocycle_relaxation > 0:
-                # Non-flat multihead: compute full-K Omega once, slice per head.
-                # The fused block-diagonal path doesn't support non-flat transport,
-                # so we pre-compute the full Omega and inject per-head slices via
-                # cached_transport in the per-head loop below.
-                _nonflat_transport = compute_transport_operators(
-                    phi=phi_current,
-                    generators=self.generators,
-                    enforce_orthogonal=getattr(self, 'enforce_orthogonal', False),
-                    gauge_mode=self.gauge_mode,
-                    generators_are_skew=self._generators_are_skew,
-                    connection_delta=connection_delta,
-                    cocycle_relaxation=cocycle_relaxation,
-                )
-                _nonflat_omega = _nonflat_transport['Omega']  # (B, N, N, K, K)
-            cached_transport = None
 
         # =================================================================
         # Determine alpha: Bayesian precision or fixed scalar
@@ -2237,8 +1969,6 @@ class VariationalFFNDynamic(nn.Module):
 
         # Initialize cached block exp pairs for phi gradient reuse
         _mh_cached_bep = None
-        _cached_bep = None
-        # Hoisted so the distillation helper can access after branch merge
         beta_heads = None
 
         # Enable/disable VFE gradient debug dict for this iteration
@@ -2268,27 +1998,11 @@ class VariationalFFNDynamic(nn.Module):
                 return_beta_history=return_beta_history,
             )
         else:
-            (grad_mu, grad_sigma, beta_current,
-             beta_history_entry, _cached_bep) = self._compute_single_beta_vfe_gradients(
-                mu_current=mu_current,
-                sigma_current=sigma_current,
-                phi_current=phi_current,
-                mu_p_current=mu_p_current,
-                sigma_p=sigma_p,
-                alpha_effective=alpha_effective,
-                _alpha_c0=_alpha_c0,
-                is_diagonal=is_diagonal,
-                eps=eps,
-                mask=mask,
-                _detach_e_step=_detach_e_step,
-                cached_transport=cached_transport,
-                connection_delta=connection_delta,
-                B=B, N=N,
-                return_beta_history=return_beta_history,
-                omega_current=omega_current,
-                _precomputed_block_exp_pairs=_precomputed_block_exp_pairs,
+            raise RuntimeError(
+                "VariationalFFNDynamic requires irrep_dims to be set. "
+                "The single-beta (irrep_dims=None) path has been removed. "
+                "Set ffn_irrep_dims in BlockConfig or pass irrep_dims to the constructor."
             )
-
         # Add FRESH observation gradient (recomputed from current beliefs)
         if has_observations:
             _obs_grad_mu, _obs_grad_sigma = self._compute_observation_gradients(
@@ -2305,15 +2019,13 @@ class VariationalFFNDynamic(nn.Module):
                 grad_sigma = grad_sigma + _obs_grad_sigma
 
         # =====================================================================
-        # Active inference / EFE + distillation gradients (delegated)
+        # Active inference / EFE gradients (delegated)
         # =====================================================================
         # compute_ai_gradients handles the master toggle, weight gates, ref
         # resolution, and debug dict writes — see active_inference.py.
-        # Returns (None, None, None, None) when all AI terms are off (default).
-        _bep_for_ai = _mh_cached_bep if _mh_cached_bep is not None else _cached_bep
-        (_ai_pending_grad_mu, _ai_pending_grad_sigma,
-         _ai_distill_pending_grad_mu,
-         _ai_distill_pending_grad_sigma) = compute_ai_gradients(
+        # Returns (None, None) when all AI terms are off (default).
+        _bep_for_ai = _mh_cached_bep
+        (_ai_pending_grad_mu, _ai_pending_grad_sigma) = compute_ai_gradients(
             ffn=self,
             mu_current=mu_current,
             sigma_current=sigma_current,
@@ -2322,17 +2034,16 @@ class VariationalFFNDynamic(nn.Module):
             beta_heads=beta_heads,
             cached_block_exp_pairs=_bep_for_ai,
             irrep_dims=self.irrep_dims,
-            multihead_vfe=self.multihead_vfe,
         )
 
         # =====================================================================
-        # Unified natural gradient: fold EFE + distillation into grad_mu/sigma
+        # Unified natural gradient: fold EFE into grad_mu/sigma
         # =====================================================================
-        # Fold EFE + distillation Euclidean grads into grad_mu / grad_sigma
-        # BEFORE the Fisher natural-gradient projection.  The Fisher metric
-        # F(θ) is a property of the belief parameterization q_θ = N(μ, Σ),
-        # not the loss function (Amari 1998).  All scalar functionals of the
-        # belief parameters — KL, entropy, MI — get the same natural gradient:
+        # Fold EFE Euclidean grads into grad_mu / grad_sigma BEFORE the
+        # Fisher natural-gradient projection.  The Fisher metric F(θ) is a
+        # property of the belief parameterization q_θ = N(μ, Σ), not the
+        # loss function (Amari 1998).  All scalar functionals of the belief
+        # parameters — KL, entropy, MI — get the same natural gradient:
         # ∇̃f = F⁻¹·∇f.  The observation CE gradient (discrete_obs_grad,
         # added above) already gets this treatment; EFE is structurally
         # identical and must not be treated differently.
@@ -2343,22 +2054,10 @@ class VariationalFFNDynamic(nn.Module):
             if _ai_pending_grad_sigma is not None:
                 self._e_step_grad_norms['ai_efe_sigma_raw_grad_norm'] = (
                     _ai_pending_grad_sigma.detach().norm().item())
-            if _ai_distill_pending_grad_mu is not None:
-                self._e_step_grad_norms['ai_distill_raw_grad_norm'] = (
-                    _ai_distill_pending_grad_mu.detach().norm().item())
-            if _ai_distill_pending_grad_sigma is not None:
-                self._e_step_grad_norms['ai_distill_sigma_raw_grad_norm'] = (
-                    _ai_distill_pending_grad_sigma.detach().norm().item())
-        # Fold EFE into grad_mu
         if _ai_pending_grad_mu is not None:
             grad_mu = grad_mu + _ai_pending_grad_mu
-        if _ai_distill_pending_grad_mu is not None:
-            grad_mu = grad_mu + _ai_distill_pending_grad_mu
-        # Fold EFE into grad_sigma
         if _ai_pending_grad_sigma is not None:
             grad_sigma = grad_sigma + _ai_pending_grad_sigma
-        if _ai_distill_pending_grad_sigma is not None:
-            grad_sigma = grad_sigma + _ai_distill_pending_grad_sigma
 
         # Debug: Euclidean totals (after obs + EFE folding, before clip)
         if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
@@ -2488,7 +2187,7 @@ class VariationalFFNDynamic(nn.Module):
                     )
             else:
                 # Phi path (existing): matrix_exp + dexp series
-                _phi_bep = _mh_cached_bep if self.multihead_vfe else _cached_bep
+                _phi_bep = _mh_cached_bep
                 grad_phi = self._compute_phi_grad(
                     phi_current, mu_current, sigma_current,
                     is_diagonal, mask, eps,

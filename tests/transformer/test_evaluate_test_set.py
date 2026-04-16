@@ -1,5 +1,5 @@
 """
-Tests for transformer.utils.evaluate_test_set and transformer.utils.evaluation
+Tests for transformer.utils.evaluation
 ===============================================================================
 
 Validates the evaluation pipeline: checkpoint loading, config extraction,

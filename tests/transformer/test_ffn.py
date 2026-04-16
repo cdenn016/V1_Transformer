@@ -44,6 +44,7 @@ class TestVariationalFFNDynamic:
             kappa=1.0,
             n_iterations=1,
             diagonal_covariance=True,
+            irrep_dims=[K],  # required: multihead VFE is the only path
         )
         return ffn.to(cpu_device)
 
@@ -55,6 +56,7 @@ class TestVariationalFFNDynamic:
         ffn = VariationalFFNDynamic(
             embed_dim=K,
             generators=generators,
+            irrep_dims=[K],  # required: multihead VFE is the only path
         )
         assert ffn is not None
 
@@ -129,6 +131,7 @@ class TestVariationalFFNDynamic:
             generators=generators,
             n_iterations=3,
             diagonal_covariance=True,
+            irrep_dims=[K],  # required: multihead VFE is the only path
         ).to(cpu_device)
 
         B, N = 1, 4
@@ -157,6 +160,7 @@ class TestVariationalFFNDynamic:
             alpha=1.0,
             learnable_alpha=True,
             diagonal_covariance=True,
+            irrep_dims=[K],  # required: multihead VFE is the only path
         ).to(cpu_device)
 
         assert hasattr(ffn, 'raw_c0')
@@ -177,6 +181,7 @@ class TestVariationalFFNDynamic:
             alpha=1.0,
             learnable_alpha=True,
             diagonal_covariance=True,
+            irrep_dims=[K],  # required: multihead VFE is the only path
         ).to(cpu_device)
 
         B, N = 2, 4
@@ -214,6 +219,7 @@ class TestVariationalFFNDynamic:
             alpha=1.0,
             learnable_alpha=True,
             diagonal_covariance=True,
+            irrep_dims=[K],  # required: multihead VFE is the only path
         ).to(cpu_device)
 
         B, N = 2, 4
@@ -241,6 +247,7 @@ class TestVariationalFFNDynamic:
             embed_dim=K, generators=generators, alpha=0.001, kappa=1.0,
             n_iterations=3, diagonal_covariance=True,
             gradient_checkpoint_vfe=False,
+            irrep_dims=[K],  # required: multihead VFE is the only path
         ).to(cpu_device)
 
         torch.manual_seed(0)
@@ -248,6 +255,7 @@ class TestVariationalFFNDynamic:
             embed_dim=K, generators=generators, alpha=0.001, kappa=1.0,
             n_iterations=3, diagonal_covariance=True,
             gradient_checkpoint_vfe=True,
+            irrep_dims=[K],  # required: multihead VFE is the only path
         ).to(cpu_device)
 
         # Copy weights

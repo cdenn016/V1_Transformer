@@ -104,11 +104,20 @@ def _kl_kernel_dense(
     Implemented via Cholesky for numerical stability.  Falls back to
     progressive diagonal regularisation on near-singular inputs.
 
-    When ``alpha_div != 1.0``, raises :class:`NotImplementedError` because the
-    Rényi :math:`\alpha`-divergence for full covariance matrices requires
-    evaluating :math:`\log\det((1-\alpha)\Sigma_q + \alpha\Sigma_t)`, which
-    is not yet implemented here.  Use ``diagonal_covariance=True`` together
-    with :func:`_kl_kernel_diagonal` for :math:`\alpha`-divergence support.
+    When ``alpha_div != 1.0``, computes the Rényi :math:`\alpha`-divergence
+    using the blended covariance :math:`\tilde{\Sigma} = (1-\alpha)\Sigma_q +
+    \alpha\Sigma_t`:
+
+    .. math::
+        D_\alpha(q \| p) = \tfrac{1}{2}\Bigl[
+            \alpha \cdot \delta\mu^\top \tilde{\Sigma}^{-1} \delta\mu
+            + \tfrac{1}{\alpha-1}\bigl(
+                (1-\alpha)\log|\Sigma_q| + \alpha\log|\Sigma_t|
+                - \log|\tilde{\Sigma}|
+            \bigr)
+        \Bigr]
+
+    The limit :math:`\alpha \to 1` recovers the standard KL divergence.
 
     Args:
         mu_q: (..., K) query means.
@@ -117,22 +126,11 @@ def _kl_kernel_dense(
         sigma_t: (..., K, K) transported key covariances.
         kl_max: Clamp ceiling (typically ``max(100, 20*K)``).
         eps: Regularisation floor.
-        alpha_div: Order of the Rényi divergence.  Must be 1.0 for this
-            kernel; any other value raises :class:`NotImplementedError`.
+        alpha_div: Order of the Rényi divergence.  1.0 gives standard KL.
 
     Returns:
         kl: (...,) non-negative divergence values.
-
-    Raises:
-        NotImplementedError: If ``alpha_div != 1.0``.  Use
-            ``diagonal_covariance=True`` for :math:`\alpha`-divergence.
     """
-    if abs(alpha_div - 1.0) >= 1e-6:
-        raise NotImplementedError(
-            "alpha-divergence for full covariance is not yet implemented. "
-            "Use diagonal_covariance=True (KLMode.DIAGONAL) for Rényi "
-            "alpha-divergence support."
-        )
     K = mu_q.shape[-1]
     device = mu_q.device
     orig_dtype = mu_q.dtype
@@ -194,30 +192,67 @@ def _kl_kernel_dense(
         )
 
     try:
-        L_p = _cholesky_with_fallback(sigma_t_reg)
+        if abs(alpha_div - 1.0) < 1e-6:
+            # Standard KL divergence.
+            L_p = _cholesky_with_fallback(sigma_t_reg)
 
-        # Trace term: tr(Sigma_t^{-1} Sigma_q)
-        Y = torch.linalg.solve_triangular(L_p, sigma_q_reg, upper=False)
-        Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
-        trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
+            # Trace term: tr(Sigma_t^{-1} Sigma_q)
+            Y = torch.linalg.solve_triangular(L_p, sigma_q_reg, upper=False)
+            Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
+            trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
 
-        # Mahalanobis term
-        delta_mu = mu_t - mu_q
-        v = torch.linalg.solve_triangular(
-            L_p, delta_mu.unsqueeze(-1), upper=False
-        ).squeeze(-1)
-        mahal_term = torch.sum(v ** 2, dim=-1)
+            # Mahalanobis term
+            delta_mu = mu_t - mu_q
+            v = torch.linalg.solve_triangular(
+                L_p, delta_mu.unsqueeze(-1), upper=False
+            ).squeeze(-1)
+            mahal_term = torch.sum(v ** 2, dim=-1)
 
-        # Log-det terms
-        logdet_p = 2.0 * torch.sum(
-            torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1).clamp(min=1e-12)), dim=-1
-        )
-        L_q = _cholesky_with_fallback(sigma_q_reg)
-        logdet_q = 2.0 * torch.sum(
-            torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1).clamp(min=1e-12)), dim=-1
-        )
+            # Log-det terms
+            logdet_p = 2.0 * torch.sum(
+                torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1).clamp(min=1e-12)), dim=-1
+            )
+            L_q = _cholesky_with_fallback(sigma_q_reg)
+            logdet_q = 2.0 * torch.sum(
+                torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1).clamp(min=1e-12)), dim=-1
+            )
 
-        kl = 0.5 * (trace_term + mahal_term - K + logdet_p - logdet_q)
+            kl = 0.5 * (trace_term + mahal_term - K + logdet_p - logdet_q)
+        else:
+            # Rényi α-divergence for full covariance.
+            # Blended covariance: Σ̃ = (1-α)Σ_q + α·Σ_t
+            sigma_blend = (1.0 - alpha_div) * sigma_q_reg + alpha_div * sigma_t_reg
+            sigma_blend = 0.5 * (sigma_blend + sigma_blend.transpose(-1, -2))  # symmetrize
+
+            L_blend = _cholesky_with_fallback(sigma_blend)
+
+            # Mahalanobis: α · δμᵀ Σ̃⁻¹ δμ, where δμ = μ_t - μ_q
+            delta_mu = mu_t - mu_q  # (..., K)
+            v = torch.linalg.solve_triangular(
+                L_blend, delta_mu.unsqueeze(-1), upper=False
+            ).squeeze(-1)  # (..., K)
+            mahal_term = alpha_div * torch.sum(v ** 2, dim=-1)  # (...,)
+
+            # Log-det term: ((1-α)log|Σ_q| + α·log|Σ_t| - log|Σ̃|) / (α-1)
+            L_q = _cholesky_with_fallback(sigma_q_reg)
+            L_t = _cholesky_with_fallback(sigma_t_reg)
+
+            logdet_q = 2.0 * torch.sum(
+                torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1).clamp(min=1e-12)), dim=-1
+            )
+            logdet_t = 2.0 * torch.sum(
+                torch.log(torch.diagonal(L_t, dim1=-2, dim2=-1).clamp(min=1e-12)), dim=-1
+            )
+            logdet_blend = 2.0 * torch.sum(
+                torch.log(torch.diagonal(L_blend, dim1=-2, dim2=-1).clamp(min=1e-12)), dim=-1
+            )
+
+            logdet_term = (
+                (1.0 - alpha_div) * logdet_q + alpha_div * logdet_t - logdet_blend
+            ) / (alpha_div - 1.0)
+
+            kl = 0.5 * (mahal_term + logdet_term)
+
         kl = safe_kl_clamp(kl, kl_max)
         # Enforce NaN-flagged pairs → kl_max (consistent with safe_kl_clamp's
         # NaN→kl_max policy, overriding the identity-replacement workaround)
@@ -389,8 +424,8 @@ def _kl_kernel_block_diagonal(
         kl_max: Not used directly; the fused kernels use their own internal ceiling
             derived from K.  Kept for API symmetry.
         eps: Numerical stability floor passed to the fused kernels.
-        alpha_div: Rényi divergence order (default 1.0 = KL).  Only supported
-            for ``diagonal_sigma=True``; full covariance always uses KL.
+        alpha_div: Rényi divergence order (default 1.0 = KL).  Supported for
+            both ``diagonal_sigma=True`` and ``diagonal_sigma=False``.
 
     Returns:
         kl: (B, N, N) total divergence across all blocks.
@@ -401,16 +436,9 @@ def _kl_kernel_block_diagonal(
             alpha_div=alpha_div,
         )
     else:
-        if abs(alpha_div - 1.0) > 1e-6:
-            import warnings
-            warnings.warn(
-                f"alpha_divergence={alpha_div} requested but full-covariance "
-                f"block-diagonal KL does not support Rényi divergence; "
-                f"falling back to standard KL (alpha=1.0).",
-                stacklevel=2,
-            )
         return fused_block_diagonal_kl_full(
-            mu_q, sigma_q, block_exp_pairs, irrep_dims, eps=eps
+            mu_q, sigma_q, block_exp_pairs, irrep_dims, eps=eps,
+            alpha_div=alpha_div,
         )
 
 
@@ -449,9 +477,9 @@ def compute_kl_matrix(
       :func:`_kl_kernel_diagonal`).
     - ``KLMode.BLOCK_DIAGONAL`` with diagonal sigma: full support
       (``alpha_div`` passed to :func:`fused_block_diagonal_kl_diag`).
-    - ``KLMode.BLOCK_DIAGONAL`` with full covariance: NOT supported;
-      falls back to standard KL with a warning.
-    - ``KLMode.DENSE``: raises :class:`NotImplementedError`.
+    - ``KLMode.BLOCK_DIAGONAL`` with full covariance: full support
+      (``alpha_div`` passed to :func:`fused_block_diagonal_kl_full`).
+    - ``KLMode.DENSE``: full support via blended covariance Cholesky.
 
     This is the single parametric entry point for all KL matrix computations.
     Callers are responsible for:
@@ -494,8 +522,8 @@ def compute_kl_matrix(
             fused block-diagonal kernels; passed through for DENSE/DIAGONAL.
         eps: Numerical stability floor.
         alpha_divergence: Order :math:`\alpha` of the Rényi divergence.
-            Default ``1.0`` gives the standard KL divergence.  Values other
-            than ``1.0`` require ``mode=KLMode.DIAGONAL``.
+            Default ``1.0`` gives the standard KL divergence.  Supported
+            for all modes and covariance shapes.
 
     Returns:
         kl_matrix: (B, N, N) pairwise divergence matrix.
@@ -503,8 +531,7 @@ def compute_kl_matrix(
     Raises:
         ValueError: If BLOCK_DIAGONAL mode is requested without
             ``block_exp_pairs`` or ``irrep_dims``.
-        NotImplementedError: If ``alpha_divergence != 1.0`` is requested with
-            ``KLMode.DENSE``.
+        NotImplementedError: If an unsupported mode combination is requested.
     """
     if mode is KLMode.BLOCK_DIAGONAL:
         if block_exp_pairs is None or irrep_dims is None:

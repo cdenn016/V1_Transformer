@@ -16,39 +16,11 @@ from typing import Optional, List, Tuple
 import torch
 import torch.nn as nn
 
+from transformer.core.em_modes import EM_MODE_TABLE, infer_em_mode
 
-
-_EM_MODE_TABLE = {
-    'straight_through': dict(amortized_inference=True,  amortize_sigma=True,  exact_phi_grad=False, implicit_em=False, em_phi_mode='amortized'),
-    'ift_phi':          dict(amortized_inference=True,  amortize_sigma=True,  exact_phi_grad=True,  implicit_em=False, em_phi_mode='amortized'),
-    'em_phi_q':         dict(amortized_inference=True,  amortize_sigma=False, exact_phi_grad=False, implicit_em=False, em_phi_mode='E_phi_q'),
-    'em_phi_p':         dict(amortized_inference=True,  amortize_sigma=False, exact_phi_grad=False, implicit_em=False, em_phi_mode='M_phi_p'),
-    'implicit_ift':     dict(amortized_inference=False, amortize_sigma=False, exact_phi_grad=False, implicit_em=True,  em_phi_mode='amortized'),
-}
-
-
-def _infer_em_mode(config: dict) -> str:
-    """Resolve em_mode from config dict, with backward compatibility for old flags."""
-    if 'em_mode' in config:
-        return config['em_mode']
-    # Legacy flag inference
-    implicit_em = config.get('implicit_em', False)
-    amortized = config.get('amortized_inference', True)
-    if implicit_em:
-        return 'implicit_ift'
-    # Legacy non-amortized path (Hebbian) — detaches beliefs like implicit_ift
-    # but without the IFT scaling. Kept for backward compatibility only.
-    if not amortized:
-        return 'implicit_ift'
-    em_phi_mode = config.get('em_phi_mode', 'amortized')
-    if em_phi_mode == 'E_phi_q':
-        return 'em_phi_q'
-    if em_phi_mode == 'M_phi_p':
-        return 'em_phi_p'
-    exact = config.get('exact_phi_grad', False)
-    if exact:
-        return 'ift_phi'
-    return 'straight_through'
+# Backward-compatible aliases (external code may import these underscore-prefixed names)
+_EM_MODE_TABLE = EM_MODE_TABLE
+_infer_em_mode = infer_em_mode
 
 
 @dataclass
@@ -62,8 +34,20 @@ class BlockConfig:
         - VariationalFFNDynamic: uses VFE dynamics, belief evolution, gauge geometry fields
     """
 
-    # === Structural ===
-    
+    # ╔═══════════════════════════════════════════════════════════════╗
+    # ║  FIELD GROUPS (5 semantic domains, ~87 fields total)        ║
+    # ║                                                             ║
+    # ║  1. STRUCTURE      — dims, layers, irreps (~5 fields)       ║
+    # ║  2. ATTENTION       — kappa, mask, heads, RoPE (~12 fields) ║
+    # ║  3. E-STEP DYNAMICS — lr, alpha, lambda, iters (~20 fields) ║
+    # ║  4. GAUGE GEOMETRY  — group, phi, omega modes (~10 fields)  ║
+    # ║  5. COVARIANCE      — diag, sigma bounds (~8 fields)        ║
+    # ║  + EM mode, non-flat transport, normalization, perf,        ║
+    # ║    active inference, runtime objects                         ║
+    # ╚═══════════════════════════════════════════════════════════════╝
+
+    # === 1. STRUCTURE ===
+
     irrep_spec: List[Tuple[str, int, int]] = field(  # [(label, multiplicity, dim), ...]
         default_factory=lambda: [('ℓ0', 8, 1)]       #   e.g. [('ℓ0',75,1),('ℓ1',30,3),('ℓ2',18,5)]
     )
@@ -72,7 +56,7 @@ class BlockConfig:
     hidden_dim: int = 256               # FFN hidden dimension (kept for config compat, not used by blocks)
     n_layers: int =   1                   # Number of stacked blocks (only used by Stack)
 
-    # === Attention ===
+    # === 2. ATTENTION ===
     kappa_beta: float =          1.0             # Temperature τ for KL-based attention softmax
     learnable_head_kappa: bool = False  # If True, learn per-head κ_h via log_kappa_per_head
                                         # Initialized to kappa_beta (bare); compute_attention_weights
@@ -82,9 +66,7 @@ class BlockConfig:
     
     mask_self_attention: bool =   True   # Prevent KL(q_i||q_i)=0 collapse
     use_output_projection: bool = True # W_O ∈ R^{K×K} after multi-head concat
-    multihead_vfe: bool =         True         # Per-head β_h through VFE iterations
-
-    # === Belief evolution ===
+    # === 3. E-STEP DYNAMICS (belief evolution) ===
     E_learnable_lr: bool =     True    # Learn step size η for variational descent
     evolve_sigma: bool =       True    # Update covariances Σ via natural gradient
     evolve_phi: bool =         True    # Update gauge frames φ (M-step, after E-step loop)
@@ -114,7 +96,7 @@ class BlockConfig:
                                         #   'implicit_ift'     — (experimental) IFT-scaled M-step, beliefs detached
     detach_phi: bool =          False   # Detach phi from backprop (Hebbian/P-flow only)
 
-    # === VFE dynamics (E-step) ===
+    # === 3b. E-STEP DYNAMICS (VFE weights and iterations) ===
     ffn_mode: str = 'VFE_dynamic'       # FFN mode (only 'VFE_dynamic' supported)
     
     ffn_kappa: float =         1.0              # Softmax temperature (unified with kappa_beta)
@@ -168,7 +150,7 @@ class BlockConfig:
     gradient_checkpoint_vfe: bool = False  # Activation checkpointing for VFE iterations.
                                         # Trades ~2x compute for ~3x memory savings with 3 iters.
 
-    # === Gauge geometry ===
+    # === 4. GAUGE GEOMETRY ===
     gauge_mode: str =          'learned'         # 'learned' | 'trivial' (Ω=I) | 'constant' (per-head Ω)
     gauge_param: str =         'phi'            # 'phi' (Lie algebra) | 'omega' (direct GL(K) matrices)
     enforce_orthogonal: bool = False    # Enforce Ω ∈ SO(K) via Newton-Schulz iteration
@@ -330,23 +312,6 @@ class BlockConfig:
     active_inference_epistemic_samples: int =  4     # MC samples for BALD MI
     active_inference_decode_tau: float =       1.0   # Temperature for PriorBank.decode
 
-    # === Bootstrap self-distillation (BYOL-style E-step term) ===
-    # Third active-inference term that does not collapse at initialization
-    # and does not need an epistemic counterweight.  Adds a cross-entropy
-    # loss against a stop-gradient target constructed from attention-weighted
-    # transported neighbour readouts:
-    #     L_distill,i = CE( sg[p_pred(μ̃_i)],  p_pred(μ_i) )
-    # where μ̃_i = Σ_j sg[β_ij] · sg[Ω_ij μ_j] is the attention-aggregated
-    # transported belief.  BOTH stop-gradients are essential: sg on the
-    # target prevents BYOL-style collapse, sg on β prevents the separate
-    # "attend-to-twins" collapse (SymPy-verified in docs/).
-    # See docs/bootstrap_self_distillation.md for the full derivation.
-    # Gated by weight > 0 (master toggle active_inference does NOT gate
-    # this — distillation is a standalone term that can be enabled alone).
-    active_inference_distill_weight: float =   0.0   # λ_distill · normalized CE
-    active_inference_distill_normalize: bool = True  # Divide CE by log(V)
-    active_inference_distill_mode: str = 'aggregated'  # 'aggregated' | 'per_pair'
-
     active_inference: bool = False
     
     rope_full_gauge: bool =  False      # EXPERIMENTAL.  When True (and use_rope=True),
@@ -408,7 +373,6 @@ class BlockConfig:
             # want the unmasked behavior should set this explicitly.
             mask_self_attention=config.get('mask_self_attention', True),
             use_output_projection=config.get('use_output_projection', True),
-            multihead_vfe=config.get('multihead_vfe', True),
             # Belief evolution
             evolve_sigma=config.get('evolve_sigma', True),
             evolve_phi=config.get('evolve_phi', True),
@@ -500,10 +464,6 @@ class BlockConfig:
             active_inference_epistemic_weight=config.get('active_inference_epistemic_weight', 0.5),
             active_inference_epistemic_samples=config.get('active_inference_epistemic_samples', 4),
             active_inference_decode_tau=config.get('active_inference_decode_tau', 1.0),
-            # Bootstrap self-distillation
-            active_inference_distill_weight=config.get('active_inference_distill_weight', 0.0),
-            active_inference_distill_normalize=config.get('active_inference_distill_normalize', True),
-            active_inference_distill_mode=config.get('active_inference_distill_mode', 'aggregated'),
             # Non-serializable
             generators=generators,
             ffn_prior_bank=prior_bank,

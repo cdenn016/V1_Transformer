@@ -875,7 +875,7 @@ def retract_sigma_e_step(
             sigma_current = retract_spd_diagonal_torch(
                 sigma_diag=sigma_current,
                 delta_sigma=-nat_grad_sigma,
-                step_size=1.0,
+                step_size=effective_lr,
                 trust_region=sigma_trust_diag,
                 eps=eps,
                 sigma_max=sigma_max,
@@ -884,7 +884,7 @@ def retract_sigma_e_step(
             sigma_current = retract_spd_torch(
                 Sigma=sigma_current,
                 delta_Sigma=-nat_grad_sigma,
-                step_size=1.0,
+                step_size=effective_lr,
                 trust_region=sigma_trust_full,
                 eps=eps,
                 sigma_max=sigma_max,

@@ -102,23 +102,14 @@ def _compute_vfe_gradients_block_diagonal(
             raw to preserve the diagonal helper's σ asymmetry convention.
         rope_base: RoPE base frequency, must match compute_attention_weights.
 
-        alpha_div: Rényi divergence order (default 1.0 = KL). Currently only
-            alpha_div=1.0 is implemented for full covariance. Non-1.0 values
-            log a warning and fall back to KL.
+        alpha_div: Rényi divergence order (default 1.0 = KL).  Fully supported
+            for full covariance; uses blended covariance
+            :math:`\\tilde{\\Sigma} = (1-\\alpha_d)\\Sigma_q + \\alpha_d\\Sigma_p`.
 
     Returns:
         grad_mu: (B, N, K) gradient w.r.t. mu.
         grad_sigma: (B, N, K, K) gradient w.r.t. Sigma.
     """
-    if alpha_div != 1.0:
-        import warnings
-        warnings.warn(
-            f"alpha_div={alpha_div} requested but full-covariance block-diagonal "
-            f"gradient path only implements KL (alpha_div=1.0). Falling back to KL. "
-            f"Use diagonal_covariance=True for Rényi support.",
-            stacklevel=2,
-        )
-
     B, N, K = mu_q.shape
     device = mu_q.device
     dtype = mu_q.dtype
@@ -130,33 +121,70 @@ def _compute_vfe_gradients_block_diagonal(
     # =================================================================
     # 1. Self-Coupling Gradient (block-wise but simpler)
     # =================================================================
-    sigma_p_inv = _safe_spd_inv(sigma_p, eps=eps)
-    delta_mu = mu_q - mu_p
-    grad_mu_self = alpha * torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
-
+    delta_mu = mu_q - mu_p  # (B, N, K)
     sigma_q_inv = _safe_spd_inv(sigma_q, eps=eps)
     # For full covariance (4D), alpha (B,N,1) needs extra dim to broadcast with (B,N,K,K)
     alpha_4d = alpha.unsqueeze(-1) if isinstance(alpha, torch.Tensor) else alpha
-    grad_sigma_self = alpha_4d * 0.5 * (sigma_p_inv - sigma_q_inv)
 
-    # Product-rule correction for learnable alpha (full covariance):
-    # ∂(α·KL)/∂θ = α·∂KL/∂θ + (∂α/∂θ)·KL
-    # When α_k = c₀_k/(b₀_k + kl_k), ∂α_k/∂θ = -α_k²/c₀_k · ∂kl_k/∂θ
-    if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
-        # Per-dimension KL proxy from diagonal elements
-        prod_qp = torch.matmul(sigma_p_inv, sigma_q)  # (B, N, K, K)
-        trace_k = prod_qp.diagonal(dim1=-2, dim2=-1)  # (B, N, K)
-        sp_inv_delta = torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
-        mahal_k = delta_mu * sp_inv_delta  # (B, N, K)
-        logdet_p = torch.linalg.slogdet(sigma_p.float())[1]  # (B, N)
-        logdet_q = torch.linalg.slogdet(sigma_q.float())[1]  # (B, N)
-        logdet_k = ((logdet_p - logdet_q) / K).unsqueeze(-1).expand_as(delta_mu)  # (B, N, K)
-        kl_k = 0.5 * (trace_k + mahal_k - 1 + logdet_k).clamp(min=0.0)
-        # Correction to mu gradient
-        grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
-        # Correction to sigma gradient (4D broadcast)
-        correction_scale = ((alpha ** 2 / alpha_c0) * kl_k).unsqueeze(-1)  # (B, N, K, 1)
-        grad_sigma_self = grad_sigma_self - correction_scale * 0.5 * (sigma_p_inv - sigma_q_inv)
+    if abs(alpha_div - 1.0) < 1e-6:
+        # Standard KL self-coupling gradient.
+        # ∂KL(q||p)/∂μ_q = Σ_p⁻¹ (μ_q - μ_p)
+        # ∂KL(q||p)/∂Σ_q = ½(Σ_p⁻¹ - Σ_q⁻¹)
+        sigma_p_inv = _safe_spd_inv(sigma_p, eps=eps)
+        grad_mu_self = alpha * torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
+        grad_sigma_self = alpha_4d * 0.5 * (sigma_p_inv - sigma_q_inv)
+
+        # Product-rule correction for learnable alpha (full covariance):
+        # ∂(α·KL)/∂θ = α·∂KL/∂θ + (∂α/∂θ)·KL
+        # When α_k = c₀_k/(b₀_k + kl_k), ∂α_k/∂θ = -α_k²/c₀_k · ∂kl_k/∂θ
+        if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
+            # Per-dimension KL proxy from diagonal elements
+            prod_qp = torch.matmul(sigma_p_inv, sigma_q)  # (B, N, K, K)
+            trace_k = prod_qp.diagonal(dim1=-2, dim2=-1)  # (B, N, K)
+            sp_inv_delta = torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
+            mahal_k = delta_mu * sp_inv_delta  # (B, N, K)
+            logdet_p = torch.linalg.slogdet(sigma_p.float())[1]  # (B, N)
+            logdet_q = torch.linalg.slogdet(sigma_q.float())[1]  # (B, N)
+            logdet_k = ((logdet_p - logdet_q) / K).unsqueeze(-1).expand_as(delta_mu)  # (B, N, K)
+            kl_k = 0.5 * (trace_k + mahal_k - 1 + logdet_k).clamp(min=0.0)
+            # Correction to mu gradient
+            grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * kl_k * torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
+            # Correction to sigma gradient (4D broadcast)
+            correction_scale = ((alpha ** 2 / alpha_c0) * kl_k).unsqueeze(-1)  # (B, N, K, 1)
+            grad_sigma_self = grad_sigma_self - correction_scale * 0.5 * (sigma_p_inv - sigma_q_inv)
+    else:
+        # Rényi α-divergence self-coupling gradient for full covariance.
+        # Blended covariance: Σ̃ = (1-α_d)Σ_q + α_d·Σ_p
+        #
+        # ∂D_α/∂μ_q = α_d · Σ̃⁻¹ · (μ_q - μ_p)
+        # ∂D_α/∂Σ_q = ½(Σ̃⁻¹ - Σ_q⁻¹) - ½·α_d·(1-α_d)·Σ̃⁻¹·ΔμΔμᵀ·Σ̃⁻¹
+        sigma_blend = (1.0 - alpha_div) * sigma_q + alpha_div * sigma_p  # (B, N, K, K)
+        I_K = torch.eye(K, device=device, dtype=dtype)
+        sigma_blend = sigma_blend + eps * I_K
+        sigma_blend = 0.5 * (sigma_blend + sigma_blend.transpose(-1, -2))  # symmetrize
+        sigma_blend_inv = _safe_spd_inv(sigma_blend, eps=eps)  # (B, N, K, K)
+
+        # ∂D_α/∂μ_q = α_d · Σ̃⁻¹ · Δμ
+        grad_mu_self = alpha * alpha_div * torch.einsum(
+            'bnij,bnj->bni', sigma_blend_inv, delta_mu
+        )  # (B, N, K)
+
+        # ∂D_α/∂Σ_q = ½(Σ̃⁻¹ - Σ_q⁻¹) - ½·α_d·(1-α_d)·Σ̃⁻¹·ΔμΔμᵀ·Σ̃⁻¹
+        grad_sigma_self = alpha_4d * 0.5 * (sigma_blend_inv - sigma_q_inv)
+
+        # Outer product term: Σ̃⁻¹ Δμ Δμᵀ Σ̃⁻¹
+        blend_inv_delta = torch.einsum(
+            'bnij,bnj->bni', sigma_blend_inv, delta_mu
+        )  # (B, N, K)
+        outer_term = torch.einsum(
+            'bni,bnj->bnij', blend_inv_delta, blend_inv_delta
+        )  # (B, N, K, K)
+        grad_sigma_self = (
+            grad_sigma_self
+            - alpha_4d * 0.5 * alpha_div * (1.0 - alpha_div) * outer_term
+        )
+        # Product-rule correction is not applied for alpha_div != 1.0 because
+        # the KL used to define the learnable alpha schedule is not D_alpha.
 
     grad_mu = grad_mu + grad_mu_self
     grad_sigma = grad_sigma + grad_sigma_self

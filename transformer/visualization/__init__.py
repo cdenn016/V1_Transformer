@@ -7,7 +7,7 @@ Plotting and visualization tools for the gauge-theoretic transformer.
 - Training plots: VFE loss curves, free energy components, learning rate schedules
 - Ablation plots: Gauge VFE vs standard transformer comparisons
 - Trajectory plots: Belief (mu, sigma, phi) evolution through layers
-- Attention visualization: KL-divergence-based attention pattern analysis
+- Attention context: KL-divergence-based attention pattern analysis
 - Belief space visualization: Token embedding structure in belief space (mu, sigma, phi)
 - Interactive visualization: UMAP + Plotly 3D + SHAP attribution (interactive_belief_viz)
 """

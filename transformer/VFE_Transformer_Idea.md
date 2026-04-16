@@ -1,3568 +1,431 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Tue Apr 14 18:34:43 2026
+# A Principled Gauge-VFE Transformer
 
-@author: chris and christine
-"""
-A Principled Gauge–VFE Transformer / LLM
-Executive summary
+## Executive Summary
 
-The clean version of a gauge–VFE language model is:
+A gauge-VFE language model replaces single hidden vectors with Gaussian beliefs at each token position:
 
-Each token position carries a belief, not a single hidden vector:
+$$q_i(z) = \mathcal{N}(z;\, \mu_i, \Sigma_i), \quad g_i = \exp(\phi_i \cdot G) \in \mathcal{G}.$$
 
-𝑞
-𝑖
-(
-𝑧
-)
-=
-𝑁
-(
-𝜇
-𝑖
-,
-Σ
-𝑖
-)
-,
-𝑔
-𝑖
-=
-exp
-⁡
-(
-𝜙
-𝑖
- ⁣
-⋅
- ⁣
-𝐺
-)
-∈
-𝐺
-.
-q
-i
-	​
+Attention is geometric: $\beta_{ij} \propto \exp\bigl(-\tfrac{1}{\kappa}\, D(q_i \,\|\, \Omega_{ij}[q_j])\bigr)$, where $\Omega_{ij} = g_i g_j^{-1}$ is the gauge transport.
 
-(z)=N(μ
-i
-	​
+Each block performs an E-step on $(\mu, \Sigma, \phi)$ by minimizing a variational free energy built from prior consistency and gauge-transported alignment. The M-step is ordinary supervised language modeling: solve for $q^\star$ from the context alone, then minimize cross-entropy of the next-token prediction produced from $q^\star$. Do not feed the target token into the E-step during LM training.
 
-,Σ
-i
-	​
+Use the same statistical manifold for encode, inference, and decode. The cleanest implementation is a PriorBank that serves as both encoder and decoder: tokens map to priors $\pi_v$, and final logits are produced by KL-to-prior decoding.
 
-),g
-i
-	​
+---
 
-=exp(ϕ
-i
-	​
+## 1. Latent State and Gauge Action
 
-⋅G)∈G.
+At sequence position $i$, let the latent token state be
 
-Attention is geometric:
-
-𝛽
-𝑖
-𝑗
-∝
-exp
-⁡
- ⁣
-(
-−
-1
-𝜅
- 
-𝐷
- ⁣
-(
-𝑞
-𝑖
- 
-∥
- 
-Ω
-𝑖
-𝑗
-[
-𝑞
-𝑗
-]
-)
-)
-,
-Ω
-𝑖
-𝑗
-=
-𝑔
-𝑖
-𝑔
-𝑗
-−
-1
-.
-β
-ij
-	​
-
-∝exp(−
-κ
-1
-	​
-
-D(q
-i
-	​
-
-∥Ω
-ij
-	​
-
-[q
-j
-	​
-
-])),Ω
-ij
-	​
-
-=g
-i
-	​
-
-g
-j
-−1
-	​
-
-.
-Each block performs an E-step on 
-(
-𝜇
-,
-Σ
-,
-𝜙
-)
-(μ,Σ,ϕ) by minimizing a variational free energy built from prior consistency and gauge-transported alignment.
-The M-step is ordinary supervised language modeling:
-solve for 
-𝑞
-⋆
-q
-⋆
- from the context only, then minimize cross-entropy of the next-token prediction produced from 
-𝑞
-⋆
-q
-⋆
-.
-Do not feed the target token into the E-step during LM training.
-In the current code, use_obs_in_vfe=True literally passes targets into the E-step path, which is target leakage and creates a train/test mismatch.
-Use the same statistical manifold for encode, inference, and decode.
-The cleanest implementation is a PriorBank that serves as both encoder and decoder: tokens map to priors 
-𝜋
-𝑣
-π
-v
-	​
-
-, and final logits are produced by KL-to-prior decoding. The current code already supports this design.
-1. Latent state and gauge action
-
-At sequence position 
-𝑖
-i, let the latent token state be
-
-𝑞
-𝑖
-(
-𝑧
-)
-=
-𝑁
-(
-𝑧
-;
-𝜇
-𝑖
-,
-Σ
-𝑖
-)
-,
-𝜇
-𝑖
-∈
-𝑅
-𝐾
-,
-  
-Σ
-𝑖
-∈
-S
-P
-D
-(
-𝐾
-)
-,
-q
-i
-	​
-
-(z)=N(z;μ
-i
-	​
-
-,Σ
-i
-	​
-
-),μ
-i
-	​
-
-∈R
-K
-,Σ
-i
-	​
-
-∈SPD(K),
+$$q_i(z) = \mathcal{N}(z;\, \mu_i, \Sigma_i), \quad \mu_i \in \mathbb{R}^K, \quad \Sigma_i \in \mathrm{SPD}(K),$$
 
 together with a gauge frame coordinate
 
-𝜙
-𝑖
-∈
-𝑔
-,
-𝑔
-𝑖
-=
-exp
-⁡
-(
-𝜙
-𝑖
-⋅
-𝐺
-)
-∈
-𝐺
-.
-ϕ
-i
-	​
+$$\phi_i \in \mathfrak{g}, \quad g_i = \exp(\phi_i \cdot G) \in \mathcal{G}.$$
 
-∈g,g
-i
-	​
+A local gauge transformation $h_i \in \mathcal{G}$ acts by
 
-=exp(ϕ
-i
-	​
+$$\mu_i \mapsto h_i \mu_i, \quad \Sigma_i \mapsto h_i \Sigma_i h_i^\top, \quad g_i \mapsto h_i g_i.$$
 
-⋅G)∈G.
+The induced parallel transport from $j$ to $i$ is $\Omega_{ij} = g_i g_j^{-1}$, and the transported Gaussian is
 
-A local gauge transformation 
-ℎ
-𝑖
-∈
-𝐺
-h
-i
-	​
+$$\Omega_{ij}[q_j] = \mathcal{N}\!\bigl(\Omega_{ij} \mu_j,\; \Omega_{ij} \Sigma_j \Omega_{ij}^\top\bigr).$$
 
-∈G acts by
+The covariance sandwich product $\Sigma \mapsto \Omega \Sigma \Omega^\top$ is the central correctness invariant of the framework.
 
-𝜇
-𝑖
-↦
-ℎ
-𝑖
-𝜇
-𝑖
-,
-Σ
-𝑖
-↦
-ℎ
-𝑖
-Σ
-𝑖
-ℎ
-𝑖
-⊤
-,
-𝑔
-𝑖
-↦
-ℎ
-𝑖
-𝑔
-𝑖
-.
-μ
-i
-	​
+**Gauge invariance of KL.** Under the gauge action $h_i$, the transport becomes $\Omega_{ij} \mapsto h_i \Omega_{ij}$, so both $q_i$ and $\Omega_{ij}[q_j]$ receive the same conjugation by $h_i$. Each of the three terms in the KL divergence is independently invariant: the trace term by cyclic invariance of trace, the Mahalanobis term by cancellation of $h_i^\top (h_i \cdot h_i^\top)^{-1} h_i = I$, and the log-determinant ratio by cancellation of $\det(h_i)^2$. The resulting attention weights $\beta_{ij}$ are therefore gauge-invariant.
 
-↦h
-i
-	​
+---
 
-μ
-i
-	​
-
-,Σ
-i
-	​
-
-↦h
-i
-	​
-
-Σ
-i
-	​
-
-h
-i
-⊤
-	​
-
-,g
-i
-	​
-
-↦h
-i
-	​
-
-g
-i
-	​
-
-.
-
-The induced transport from 
-𝑗
-j to 
-𝑖
-i is
-
-Ω
-𝑖
-𝑗
-=
-𝑔
-𝑖
-𝑔
-𝑗
-−
-1
-.
-Ω
-ij
-	​
-
-=g
-i
-	​
-
-g
-j
-−1
-	​
-
-.
-
-The transported Gaussian is therefore
-
-Ω
-𝑖
-𝑗
-[
-𝑞
-𝑗
-]
-=
-𝑁
- ⁣
-(
-Ω
-𝑖
-𝑗
-𝜇
-𝑗
-,
-  
-Ω
-𝑖
-𝑗
-Σ
-𝑗
-Ω
-𝑖
-𝑗
-⊤
-)
-.
-Ω
-ij
-	​
-
-[q
-j
-	​
-
-]=N(Ω
-ij
-	​
-
-μ
-j
-	​
-
-,Ω
-ij
-	​
-
-Σ
-j
-	​
-
-Ω
-ij
-⊤
-	​
-
-).
-
-That covariance sandwich product is the central correctness invariant for the whole framework and is explicitly treated that way in the transport code.
-
-2. Vocabulary as a prior bank
+## 2. Vocabulary as a Prior Bank
 
 Let the vocabulary define a family of token priors
 
-Π
-=
-{
-𝜋
-𝑣
-}
-𝑣
-=
-1
-𝑉
-,
-𝜋
-𝑣
-(
-𝑧
-)
-=
-𝑁
-(
-𝑧
-;
-𝜇
-𝑣
-𝜋
-,
-Σ
-𝑣
-𝜋
-)
-.
-Π={π
-v
-	​
+$$\Pi = \{\pi_v\}_{v=1}^{V}, \quad \pi_v(z) = \mathcal{N}(z;\, \mu_v^\pi, \Sigma_v^\pi).$$
 
-}
-v=1
-V
-	​
+The gauge-fixed orbit parameterization is
 
-,π
-v
-	​
+$$\pi_v = A_v \triangleright \pi_0, \quad A_v = \exp(\psi_v \cdot G),$$
 
-(z)=N(z;μ
-v
-π
-	​
+so that $\mu_v^\pi = A_v \mu_0$ and $\Sigma_v^\pi = A_v \Sigma_0 A_v^\top$.
 
-,Σ
-v
-π
-	​
+**Encoding.** For input token $x_i$, initialize beliefs from the token prior:
 
-).
+$$\mu_i^{(0)} = \mu_{x_i}^\pi, \quad \Sigma_i^{(0)} = \Sigma_{x_i}^\pi, \quad \phi_i^{(0)} = \psi_{x_i}.$$
 
-The most principled parameterization is the gauge-fixed orbit form
+**Decoding.** Given a final latent belief $q_i^\star$, define token logits by KL-to-prior:
 
-𝜋
-𝑣
-=
-𝐴
-𝑣
-▹
-𝜋
-0
-,
-𝐴
-𝑣
-=
-exp
-⁡
-(
-𝜓
-𝑣
-⋅
-𝐺
-)
-,
-π
-v
-	​
+$$\ell_{i,v} = -\frac{1}{\tau}\, \mathrm{KL}(q_i^\star \,\|\, \pi_v), \quad p_\theta(y_i = v \mid x_{<i}) = \mathrm{softmax}_v(\ell_{i,v}).$$
 
-=A
-v
-	​
+This is the correct readout when hidden states, priors, and the observation model all live on the same Gaussian statistical manifold.
 
-▹π
-0
-	​
+---
 
-,A
-v
-	​
+## 3. Positional Structure as Gauge Composition
 
-=exp(ψ
-v
-	​
+Position enters as a contribution to the gauge frame, not as an additive Euclidean feature. Let $p_i \in \mathfrak{g}$ be a learned or fixed positional Lie-algebra element. Then
 
-⋅G),
+$$\phi_i^{(0)} = \mathrm{BCH}(\phi_i^{\mathrm{token}},\, p_i), \quad \text{equivalently} \quad g_i^{(0)} = \exp(\phi_i^{\mathrm{token}} \cdot G)\, \exp(p_i \cdot G).$$
 
-so that
+This makes transport $\Omega_{ij} = g_i g_j^{-1}$ depend on relative position in a gauge-covariant way.
 
-𝜇
-𝑣
-𝜋
-=
-𝐴
-𝑣
-𝜇
-0
-,
-Σ
-𝑣
-𝜋
-=
-𝐴
-𝑣
-Σ
-0
-𝐴
-𝑣
-⊤
-.
-μ
-v
-π
-	​
+**BCH truncation.** The Baker-Campbell-Hausdorff formula gives $\log(\exp X \exp Y) = X + Y + \tfrac{1}{2}[X,Y] + \cdots$. First-order truncation $\mathrm{BCH}_1(X,Y) = X + Y$ is exact for abelian groups and a reasonable approximation for non-abelian groups when $\|X\|, \|Y\| \ll 1$ (the commutator $[X,Y]$ is $O(\|X\|\,\|Y\|)$). For large gauge fields, second-order BCH or exact group multiplication should be used; both are available in the codebase.
 
-=A
-v
-	​
+---
 
-μ
-0
-	​
+## 4. Gauge-KL Attention
 
-,Σ
-v
-π
-	​
+Define the pairwise geometric divergence at layer $\ell$:
 
-=A
-v
-	​
+$$D_{ij}^{(\ell)} = \mathrm{KL}\!\bigl(q_i^{(\ell)} \,\big\|\, \Omega_{ij}^{(\ell)}[q_j^{(\ell)}]\bigr).$$
 
-Σ
-0
-	​
+Attention weights are
 
-A
-v
-⊤
-	​
+$$\beta_{ij}^{(\ell)} = \frac{\exp\!\bigl(-D_{ij}^{(\ell)} / \kappa_\ell\bigr)\, m_{ij}}{\sum_k \exp\!\bigl(-D_{ik}^{(\ell)} / \kappa_\ell\bigr)\, m_{ik}},$$
 
-.
+where $m_{ij}$ is the causal mask. This is the core architectural thesis: attention is a Gibbs kernel on the statistical manifold with gauge transport, not produced by learned $W_Q, W_K$ projections.
 
-This is already the intended meaning of the current PriorBank: it is a unified token-dependent prior bank that can serve as both embedding and output projection, with encode by prior lookup and decode by KL-to-prior logits.
+The transported message mean is
 
-Encoding
+$$\bar{\mu}_i^{(\ell)} = \sum_j \beta_{ij}^{(\ell)}\, \Omega_{ij}^{(\ell)} \mu_j^{(\ell)}.$$
 
-For input token 
-𝑥
-𝑖
-x
-i
-	​
+For covariance aggregation, there are two principled choices.
 
-,
+**4.1 Mixture (moment-matching).** Treat the attention-weighted transported beliefs as a Gaussian mixture and match the first two moments:
 
-(
-𝜇
-𝑖
-(
-0
-)
-,
-Σ
-𝑖
-(
-0
-)
-,
-𝜙
-𝑖
-(
-0
-)
-)
-=
-E
-n
-c
-o
-d
-e
-(
-𝑥
-𝑖
-)
-.
-(μ
-i
-(0)
-	​
+$$\bar{\Sigma}_i = \sum_j \beta_{ij} \bigl(\Omega_{ij} \Sigma_j \Omega_{ij}^\top + (\Omega_{ij} \mu_j - \bar{\mu}_i)(\Omega_{ij} \mu_j - \bar{\mu}_i)^\top\bigr).$$
 
-,Σ
-i
-(0)
-	​
+This has the interpretation: total uncertainty = average within-component uncertainty + between-component spread.
 
-,ϕ
-i
-(0)
-	​
+**4.2 Precision (product-of-experts).** Aggregate in natural (precision) coordinates:
 
-)=Encode(x
-i
-	​
+$$\bar{\Lambda}_i = \sum_j \beta_{ij}\, \Lambda_{ij}, \quad \bar{\eta}_i = \sum_j \beta_{ij}\, \eta_{ij},$$
 
-).
+where $\Lambda_{ij} = (\Omega_{ij} \Sigma_j \Omega_{ij}^\top)^{-1}$ and $\eta_{ij} = \Lambda_{ij}\, \Omega_{ij} \mu_j$. Then $\bar{\Sigma}_i = \bar{\Lambda}_i^{-1}$ and $\bar{\mu}_i = \bar{\Sigma}_i\, \bar{\eta}_i$.
 
-A natural implementation is
+Precision aggregation produces tighter posteriors (intersection of evidence), while mixture aggregation produces broader posteriors (union of evidence). For attention-based message passing, mixture is the safer default — precision aggregation can cause pathological contraction when many sources agree.
 
-𝜇
-𝑖
-(
-0
-)
-=
-𝜇
-𝑥
-𝑖
-𝜋
-,
-Σ
-𝑖
-(
-0
-)
-=
-Σ
-𝑥
-𝑖
-𝜋
-,
-𝜙
-𝑖
-(
-0
-)
-=
-𝜓
-𝑥
-𝑖
-.
-μ
-i
-(0)
-	​
+---
 
-=μ
-x
-i
-	​
+## 5. The Per-Layer E-Step Free Energy
 
-π
-	​
+At layer $\ell$, let $p_i^{(\ell)}$ denote the layer prior and $q_i^{(\ell)}$ the current belief. The E-step free energy is
 
-,Σ
-i
-(0)
-	​
+$$F(q, \phi) = \alpha \sum_i \mathrm{KL}(q_i^{(\ell)} \,\|\, p_i^{(\ell)}) + \lambda_{\mathrm{align}} \sum_{i,j} \beta_{ij}^{(\ell)}\, \mathrm{KL}(q_i^{(\ell)} \,\|\, \Omega_{ij}^{(\ell)}[q_j^{(\ell)}]) + \lambda_{\mathrm{soft}}\, C(q, \phi) + \lambda_{\mathrm{reg}}\, R(q, \phi).$$
 
-=Σ
-x
-i
-	​
+The first term is prior consistency, the second is belief alignment through gauge transport, $C$ is the softmax-coupling correction (the $\partial\beta/\partial\theta \cdot \mathrm{KL}$ term arising from differentiating through the softmax), and $R$ collects target-free regularizers.
 
-π
-	​
+The alignment gradient decomposes as
 
-,ϕ
-i
-(0)
-	​
+$$\frac{\partial}{\partial\theta} \sum_j \beta_{ij}\, \mathrm{KL}_{ij} = \sum_j \beta_{ij}\, \frac{\partial \mathrm{KL}_{ij}}{\partial\theta} + \sum_j \mathrm{KL}_{ij}\, \frac{\partial \beta_{ij}}{\partial\theta},$$
 
-=ψ
-x
-i
-	​
+where the first term is the direct (Boltzmann-gated) coupling and the second is the softmax-coupling correction. These are controlled independently by $\lambda_{\mathrm{align}}$ and $\lambda_{\mathrm{soft}}$.
 
-	​
+**Exclusion of targets from the E-step.** For autoregressive language modeling, this free energy must not contain the supervised next-token target as an observation. The E-step infers beliefs from context and priors only. When targets are injected into the E-step (via the `use_obs_in_vfe` flag), the model can shortcut the representation by reading the answer directly, creating a train/test mismatch: training PPL is artificially low while validation PPL degrades. Evaluation already forces `use_obs_in_vfe=False`, confirming the asymmetry.
 
-.
-Decoding
+---
 
-Given a final latent belief 
-𝑞
-𝑖
-⋆
-q
-i
-⋆
-	​
+## 6. E-Step Updates
 
-, define token logits by
+Let $t$ index the inner-loop iterations.
 
-ℓ
-𝑖
-,
-𝑣
-=
-−
-1
-𝜏
-d
-e
-c
- 
-𝐷
- ⁣
-(
-𝑞
-𝑖
-⋆
- 
-∥
- 
-𝜋
-𝑣
-)
-,
-ℓ
-i,v
-	​
+**Mean update (natural gradient).**
 
-=−
-τ
-dec
-	​
+$$\mu_i^{(t+1)} = \mu_i^{(t)} - \eta_\mu\, \Sigma_i^{(t)}\, \nabla_{\mu_i} F.$$
 
-1
-	​
+This is the Gaussian-location natural gradient: the Fisher information for the mean parameter of $\mathcal{N}(\mu, \Sigma)$ with fixed $\Sigma$ is $F_\mu = \Sigma^{-1}$, so the natural gradient is $\tilde{\nabla}_\mu F = F_\mu^{-1} \nabla_\mu F = \Sigma \nabla_\mu F$ (Amari, 1998).
 
-D(q
-i
-⋆
-	​
+**Covariance update (SPD retraction).**
 
-∥π
-v
-	​
+$$\Sigma_i^{(t+1)} = \Sigma_i^{(t)} \exp\!\bigl(-\eta_\Sigma\, \Sigma_i^{(t)}\, \nabla_{\Sigma_i} F\, \Sigma_i^{(t)}\bigr).$$
 
-),
+This is an affine-invariant retraction on $\mathrm{SPD}(K)$. The natural gradient for the covariance parameter of a Gaussian is $\tilde{\nabla}_\Sigma F = 2\,\Sigma\, \nabla_\Sigma F\, \Sigma$ (from the Fisher metric on the covariance manifold), and the matrix exponential ensures the result remains SPD.
 
-and
+**Gauge-frame update (Lie-algebra descent).**
 
-𝑝
-𝜃
-(
-𝑦
-𝑖
-=
-𝑣
-∣
-𝑥
-<
-𝑖
-)
-=
-exp
-⁡
-(
-ℓ
-𝑖
-,
-𝑣
-)
-∑
-𝑢
-=
-1
-𝑉
-exp
-⁡
-(
-ℓ
-𝑖
-,
-𝑢
-)
-.
-p
-θ
-	​
+$$\phi_i^{(t+1)} = \phi_i^{(t)} - \eta_\phi\, M_\phi^{-1}(\phi_i^{(t)})\, \nabla_{\phi_i} F,$$
 
-(y
-i
-	​
+where $M_\phi$ is a natural metric on the Lie algebra: the Killing form (for semisimple groups) or a pullback metric.
 
-=v∣x
-<i
-	​
+---
 
-)=
-∑
-u=1
-V
-	​
+## 7. Cross-Layer Hierarchical Prior Handoff
 
-exp(ℓ
-i,u
-	​
+A deep model requires a rule that turns layer $\ell$'s posterior into layer $(\ell+1)$'s prior. The exact version is
 
-)
-exp(ℓ
-i,v
-	​
+$$\mu_p^{(\ell+1)} = \mu^{(\ell)\star}, \quad \Sigma_p^{(\ell+1)} = \Sigma^{(\ell)\star}.$$
 
-)
-	​
+The current implementation uses a stabilized variant: $\mu_p$ is propagated from the previous layer's posterior, but $\Sigma_p$ is frozen at the embedding value to prevent progressive tightening (sigma cascade). A damped interpolation
 
-.
+$$\mu_p^{(\ell+1)} = (1 - \rho_\mu)\, \mu_p^{(\ell)} + \rho_\mu\, \mu^{(\ell)\star}$$
 
-This is exactly the right readout if you want the model’s hidden state, priors, and observation model to all live on the same Gaussian statistical manifold. The current PriorBank.decode() does this, though by default it uses a diagonal approximation unless full_cov_decode=True.
+is not currently implemented but would be a safer practical choice. The sigma-freezing strategy is a pragmatic stabilization, not a theoretically principled choice — it prevents cascade at the cost of limiting the depth of the hierarchical Bayesian structure.
 
-3. Positional structure as gauge composition
+---
 
-Position should enter as a contribution to the gauge frame, not merely as an additive Euclidean feature.
-
-Let 
-𝑝
-𝑖
-∈
-𝑔
-p
-i
-	​
-
-∈g be a learned or fixed positional Lie-algebra element. Then set
-
-𝜙
-𝑖
-(
-0
-)
-=
-B
-C
-H
- ⁣
-(
-𝜙
-𝑖
-token
-,
- 
-𝑝
-𝑖
-)
-,
-ϕ
-i
-(0)
-	​
-
-=BCH(ϕ
-i
-token
-	​
-
-,p
-i
-	​
-
-),
-
-equivalently
-
-𝑔
-𝑖
-(
-0
-)
-=
-exp
-⁡
-(
-𝜙
-𝑖
-token
- ⁣
-⋅
- ⁣
-𝐺
-)
- 
-exp
-⁡
-(
-𝑝
-𝑖
- ⁣
-⋅
- ⁣
-𝐺
-)
-.
-g
-i
-(0)
-	​
-
-=exp(ϕ
-i
-token
-	​
-
-⋅G)exp(p
-i
-	​
-
-⋅G).
-
-This makes transport
-
-Ω
-𝑖
-𝑗
-=
-𝑔
-𝑖
-𝑔
-𝑗
-−
-1
-Ω
-ij
-	​
-
-=g
-i
-	​
-
-g
-j
-−1
-	​
-
-
-depend on relative position in a gauge-covariant way. The current model is already designed around this interpretation: positional gauge frames compose with token gauge frames using BCH/Lie-algebra composition, and transport then inherits relative position.
-
-4. Gauge-KL attention
-
-Define the pairwise geometric divergence at layer 
-ℓ
-ℓ:
-
-𝐷
-𝑖
-𝑗
-(
-ℓ
-)
-=
-𝐷
- ⁣
-(
-𝑞
-𝑖
-(
-ℓ
-)
- 
-∥
- 
-Ω
-𝑖
-𝑗
-(
-ℓ
-)
-[
-𝑞
-𝑗
-(
-ℓ
-)
-]
-)
-.
-D
-ij
-(ℓ)
-	​
-
-=D(q
-i
-(ℓ)
-	​
-
-	​
-
-Ω
-ij
-(ℓ)
-	​
-
-[q
-j
-(ℓ)
-	​
-
-]).
-
-Then attention is
-
-𝛽
-𝑖
-𝑗
-(
-ℓ
-)
-=
-exp
-⁡
- ⁣
-(
-−
-𝐷
-𝑖
-𝑗
-(
-ℓ
-)
-/
-𝜅
-ℓ
-)
- 
-𝑚
-𝑖
-𝑗
-∑
-𝑘
-exp
-⁡
- ⁣
-(
-−
-𝐷
-𝑖
-𝑘
-(
-ℓ
-)
-/
-𝜅
-ℓ
-)
- 
-𝑚
-𝑖
-𝑘
-,
-β
-ij
-(ℓ)
-	​
-
-=
-∑
-k
-	​
-
-exp(−D
-ik
-(ℓ)
-	​
-
-/κ
-ℓ
-	​
-
-)m
-ik
-	​
-
-exp(−D
-ij
-(ℓ)
-	​
-
-/κ
-ℓ
-	​
-
-)m
-ij
-	​
-
-	​
-
-,
-
-where 
-𝑚
-𝑖
-𝑗
-m
-ij
-	​
-
- is the causal mask.
-
-This is the core architectural thesis of the current model: attention is KL-based on the statistical manifold with gauge transport, not produced by learned 
-𝑊
-𝑄
-,
-𝑊
-𝐾
-W
-Q
-	​
-
-,W
-K
-	​
-
- projections.
-
-A natural transported message mean is
-
-𝜇
-ˉ
-𝑖
-(
-ℓ
-)
-=
-∑
-𝑗
-𝛽
-𝑖
-𝑗
-(
-ℓ
-)
- 
-Ω
-𝑖
-𝑗
-(
-ℓ
-)
-𝜇
-𝑗
-(
-ℓ
-)
-.
-μ
-ˉ
-	​
-
-i
-(ℓ)
-	​
-
-=
-j
-∑
-	​
-
-β
-ij
-(ℓ)
-	​
-
-Ω
-ij
-(ℓ)
-	​
-
-μ
-j
-(ℓ)
-	​
-
-.
-
-For covariance, there are two principled choices.
-
-4.1 Mixture / moment-matching aggregator
-Σ
-ˉ
-𝑖
-(
-ℓ
-)
-=
-∑
-𝑗
-𝛽
-𝑖
-𝑗
-(
-ℓ
-)
-[
-Ω
-𝑖
-𝑗
-Σ
-𝑗
-(
-ℓ
-)
-Ω
-𝑖
-𝑗
-⊤
-+
-(
-Ω
-𝑖
-𝑗
-𝜇
-𝑗
-(
-ℓ
-)
-−
-𝜇
-ˉ
-𝑖
-(
-ℓ
-)
-)
-(
-Ω
-𝑖
-𝑗
-𝜇
-𝑗
-(
-ℓ
-)
-−
-𝜇
-ˉ
-𝑖
-(
-ℓ
-)
-)
-⊤
-]
-.
-Σ
-ˉ
-i
-(ℓ)
-	​
-
-=
-j
-∑
-	​
-
-β
-ij
-(ℓ)
-	​
-
-[Ω
-ij
-	​
-
-Σ
-j
-(ℓ)
-	​
-
-Ω
-ij
-⊤
-	​
-
-+(Ω
-ij
-	​
-
-μ
-j
-(ℓ)
-	​
-
-−
-μ
-ˉ
-	​
-
-i
-(ℓ)
-	​
-
-)(Ω
-ij
-	​
-
-μ
-j
-(ℓ)
-	​
-
-−
-μ
-ˉ
-	​
-
-i
-(ℓ)
-	​
-
-)
-⊤
-].
-4.2 Precision / product-of-experts aggregator
-
-Define natural parameters
-
-Λ
-𝑖
-𝑗
-(
-ℓ
-)
-=
-(
-Ω
-𝑖
-𝑗
-Σ
-𝑗
-(
-ℓ
-)
-Ω
-𝑖
-𝑗
-⊤
-)
-−
-1
-,
-𝜂
-𝑖
-𝑗
-(
-ℓ
-)
-=
-Λ
-𝑖
-𝑗
-(
-ℓ
-)
- 
-Ω
-𝑖
-𝑗
-𝜇
-𝑗
-(
-ℓ
-)
-.
-Λ
-ij
-(ℓ)
-	​
-
-=(Ω
-ij
-	​
-
-Σ
-j
-(ℓ)
-	​
-
-Ω
-ij
-⊤
-	​
-
-)
-−1
-,η
-ij
-(ℓ)
-	​
-
-=Λ
-ij
-(ℓ)
-	​
-
-Ω
-ij
-	​
-
-μ
-j
-(ℓ)
-	​
-
-.
-
-Then
-
-Λ
-ˉ
-𝑖
-(
-ℓ
-)
-=
-∑
-𝑗
-𝛽
-𝑖
-𝑗
-(
-ℓ
-)
-Λ
-𝑖
-𝑗
-(
-ℓ
-)
-,
-𝜂
-ˉ
-𝑖
-(
-ℓ
-)
-=
-∑
-𝑗
-𝛽
-𝑖
-𝑗
-(
-ℓ
-)
-𝜂
-𝑖
-𝑗
-(
-ℓ
-)
-,
-Λ
-ˉ
-i
-(ℓ)
-	​
-
-=
-j
-∑
-	​
-
-β
-ij
-(ℓ)
-	​
-
-Λ
-ij
-(ℓ)
-	​
-
-,
-η
-ˉ
-	​
-
-i
-(ℓ)
-	​
-
-=
-j
-∑
-	​
-
-β
-ij
-(ℓ)
-	​
-
-η
-ij
-(ℓ)
-	​
-
-,
-Σ
-ˉ
-𝑖
-(
-ℓ
-)
-=
-(
-Λ
-ˉ
-𝑖
-(
-ℓ
-)
-)
-−
-1
-,
-𝜇
-ˉ
-𝑖
-(
-ℓ
-)
-=
-Σ
-ˉ
-𝑖
-(
-ℓ
-)
-𝜂
-ˉ
-𝑖
-(
-ℓ
-)
-.
-Σ
-ˉ
-i
-(ℓ)
-	​
-
-=(
-Λ
-ˉ
-i
-(ℓ)
-	​
-
-)
-−1
-,
-μ
-ˉ
-	​
-
-i
-(ℓ)
-	​
-
-=
-Σ
-ˉ
-i
-(ℓ)
-	​
-
-η
-ˉ
-	​
-
-i
-(ℓ)
-	​
-
-.
-
-If one wants “precision aggregation,” this is the mathematically coherent version: mean and covariance must both be fused in natural coordinates.
-
-5. The per-layer E-step free energy
-
-At layer 
-ℓ
-ℓ, let 
-𝑝
-𝑖
-(
-ℓ
-)
-p
-i
-(ℓ)
-	​
-
- denote the layer prior and 
-𝑞
-𝑖
-(
-ℓ
-)
-q
-i
-(ℓ)
-	​
-
- the current belief. A cleaned-up E-step free energy is
-
-	
-𝐹
-ℓ
-(
-𝑞
-,
-𝜙
-)
-=
-𝛼
-ℓ
-∑
-𝑖
-𝐷
- ⁣
-(
-𝑞
-𝑖
-(
-ℓ
-)
- 
-∥
- 
-𝑝
-𝑖
-(
-ℓ
-)
-)
-+
-𝜆
-a
-l
-i
-g
-n
-,
-ℓ
-∑
-𝑖
-,
-𝑗
-𝛽
-𝑖
-𝑗
-(
-ℓ
-)
-𝐷
- ⁣
-(
-𝑞
-𝑖
-(
-ℓ
-)
- 
-∥
- 
-Ω
-𝑖
-𝑗
-(
-ℓ
-)
-[
-𝑞
-𝑗
-(
-ℓ
-)
-]
-)
-+
-𝜆
-s
-o
-f
-t
-,
-ℓ
- 
-𝐶
-ℓ
-(
-𝑞
-,
-𝜙
-)
-+
-𝜆
-r
-e
-g
-,
-ℓ
- 
-𝑅
-ℓ
-(
-𝑞
-,
-𝜙
-)
-.
-		
-(1)
-F
-ℓ
-	​
-
-(q,ϕ)=α
-ℓ
-	​
-
-i
-∑
-	​
-
-D(q
-i
-(ℓ)
-	​
-
-∥p
-i
-(ℓ)
-	​
-
-)+λ
-align,ℓ
-	​
-
-i,j
-∑
-	​
-
-β
-ij
-(ℓ)
-	​
-
-D(q
-i
-(ℓ)
-	​
-
-∥Ω
-ij
-(ℓ)
-	​
-
-[q
-j
-(ℓ)
-	​
-
-])+λ
-soft,ℓ
-	​
-
-C
-ℓ
-	​
-
-(q,ϕ)+λ
-reg,ℓ
-	​
-
-R
-ℓ
-	​
-
-(q,ϕ).
-(1)
-
-Here:
-
-the first term is prior consistency,
-the second is belief alignment through gauge transport,
-𝐶
-ℓ
-C
-ℓ
-	​
-
- is the softmax-coupling correction,
-𝑅
-ℓ
-R
-ℓ
-	​
-
- collects target-free regularizers.
-
-The current VFE FFN already implements the essential two-term decomposition of the alignment gradient:
-
-∂
-𝜃
-∑
-𝑗
-𝛽
-𝑖
-𝑗
-𝐾
-𝐿
-𝑖
-𝑗
-=
-∑
-𝑗
-𝛽
-𝑖
-𝑗
- 
-∂
-𝜃
-𝐾
-𝐿
-𝑖
-𝑗
-+
-∑
-𝑗
-𝐾
-𝐿
-𝑖
-𝑗
- 
-∂
-𝜃
-𝛽
-𝑖
-𝑗
-,
-∂
-θ
-	​
-
-j
-∑
-	​
-
-β
-ij
-	​
-
-KL
-ij
-	​
-
-=
-j
-∑
-	​
-
-β
-ij
-	​
-
-∂
-θ
-	​
-
-KL
-ij
-	​
-
-+
-j
-∑
-	​
-
-KL
-ij
-	​
-
-∂
-θ
-	​
-
-β
-ij
-	​
-
-,
-
-with the direct term interpreted as a Boltzmann-style gating and the second as a softmax-coupling correction.
-
-Crucial exclusion for LM training
-
-For ordinary autoregressive language modeling, Equation (1) must not contain the supervised next-token target as an observation inside the E-step.
-
-The current implementation does exactly that when use_obs_in_vfe=True: compute_free_energy_loss() has a flag explicitly described as “Pass targets into VFE E-step,” and model.forward_with_attention() documents targets as “used as observations in E-step.”
-
-That is label leakage, not principled predictive inference.
-
-6. E-step updates
-
-Let 
-𝑡
-t index the inner-loop iterations. Then:
-
-Mean update
-	
-𝜇
-𝑖
-(
-ℓ
-,
-𝑡
-+
-1
-)
-=
-𝜇
-𝑖
-(
-ℓ
-,
-𝑡
-)
-−
-𝜂
-𝜇
- 
-Σ
-𝑖
-(
-ℓ
-,
-𝑡
-)
-∇
-𝜇
-𝑖
-𝐹
-ℓ
-.
-		
-(2)
-μ
-i
-(ℓ,t+1)
-	​
-
-=μ
-i
-(ℓ,t)
-	​
-
-−η
-μ
-	​
-
-Σ
-i
-(ℓ,t)
-	​
-
-∇
-μ
-i
-	​
-
-	​
-
-F
-ℓ
-	​
-
-.
-(2)
-
-This is the Gaussian-location natural gradient.
-
-Covariance update
-
-For full covariance, use an SPD retraction:
-
-	
-Σ
-𝑖
-(
-ℓ
-,
-𝑡
-+
-1
-)
-=
-Exp
-⁡
-Σ
-𝑖
-(
-ℓ
-,
-𝑡
-)
-(
-−
-𝜂
-Σ
- 
-grad
-⁡
-Σ
-𝑖
-𝐹
-ℓ
-)
-.
-		
-(3)
-Σ
-i
-(ℓ,t+1)
-	​
-
-=Exp
-Σ
-i
-(ℓ,t)
-	​
-
-	​
-
-(−η
-Σ
-	​
-
-grad
-Σ
-i
-	​
-
-	​
-
-F
-ℓ
-	​
-
-).
-(3)
-
-A practical affine-invariant form is
-
-Σ
-𝑖
-(
-ℓ
-,
-𝑡
-+
-1
-)
-=
-Σ
-𝑖
-1
-/
-2
-exp
-⁡
- ⁣
-(
-−
-𝜂
-Σ
- 
-Σ
-𝑖
-1
-/
-2
-∇
-Σ
-𝑖
-𝐹
-ℓ
-Σ
-𝑖
-1
-/
-2
-)
-Σ
-𝑖
-1
-/
-2
-.
-Σ
-i
-(ℓ,t+1)
-	​
-
-=Σ
-i
-1/2
-	​
-
-exp(−η
-Σ
-	​
-
-Σ
-i
-1/2
-	​
-
-∇
-Σ
-i
-	​
-
-	​
-
-F
-ℓ
-	​
-
-Σ
-i
-1/2
-	​
-
-)Σ
-i
-1/2
-	​
-
-.
-Gauge-frame update
-
-For Lie-algebra coordinates,
-
-	
-𝜙
-𝑖
-(
-ℓ
-,
-𝑡
-+
-1
-)
-=
-𝜙
-𝑖
-(
-ℓ
-,
-𝑡
-)
-−
-𝜂
-𝜙
- 
-𝑀
-𝜙
-−
-1
-(
-𝜙
-𝑖
-(
-ℓ
-,
-𝑡
-)
-)
-∇
-𝜙
-𝑖
-𝐹
-ℓ
-,
-		
-(4)
-ϕ
-i
-(ℓ,t+1)
-	​
-
-=ϕ
-i
-(ℓ,t)
-	​
-
-−η
-ϕ
-	​
-
-M
-ϕ
-−1
-	​
-
-(ϕ
-i
-(ℓ,t)
-	​
-
-)∇
-ϕ
-i
-	​
-
-	​
-
-F
-ℓ
-	​
-
-,
-(4)
-
-where 
-𝑀
-𝜙
-M
-ϕ
-	​
-
- is a natural metric on the Lie algebra, such as a Killing-form or pullback metric.
-
-The current optimizer / preconditioner stack is already built around this viewpoint: 
-𝜙
-ϕ-updates are treated geometrically via Killing/pullback-style preconditioning, while 
-𝜇
-μ and 
-𝜎
-σ have Gaussian Fisher-based preconditioning.
-
-7. Cross-layer hierarchical prior handoff
-
-A deep model requires a rule that turns layer 
-ℓ
-ℓ’s posterior into layer 
-ℓ
-+
-1
-ℓ+1’s prior.
-
-The cleanest exact version is
-
-	
-𝜇
-𝑝
-,
-𝑖
-(
-ℓ
-+
-1
-)
-=
-𝜇
-𝑖
-(
-ℓ
-)
-⋆
-,
-Σ
-𝑝
-,
-𝑖
-(
-ℓ
-+
-1
-)
-=
-Σ
-𝑖
-(
-ℓ
-)
-⋆
-.
-		
-(5)
-μ
-p,i
-(ℓ+1)
-	​
-
-=μ
-i
-(ℓ)⋆
-	​
-
-,Σ
-p,i
-(ℓ+1)
-	​
-
-=Σ
-i
-(ℓ)⋆
-	​
-
-.
-(5)
-
-A damped version is safer in practice:
-
-𝜇
-𝑝
-,
-𝑖
-(
-ℓ
-+
-1
-)
-=
-(
-1
-−
-𝜌
-𝜇
-)
- 
-𝜇
-𝑝
-,
-𝑖
-(
-ℓ
-)
-+
-𝜌
-𝜇
- 
-𝜇
-𝑖
-(
-ℓ
-)
-⋆
-,
-μ
-p,i
-(ℓ+1)
-	​
-
-=(1−ρ
-μ
-	​
-
-)μ
-p,i
-(ℓ)
-	​
-
-+ρ
-μ
-	​
-
-μ
-i
-(ℓ)⋆
-	​
-
-,
-	
-Σ
-𝑝
-,
-𝑖
-(
-ℓ
-+
-1
-)
-=
-(
-1
-−
-𝜌
-Σ
-)
- 
-Σ
-𝑝
-,
-𝑖
-(
-ℓ
-)
-+
-𝜌
-Σ
- 
-Σ
-𝑖
-(
-ℓ
-)
-⋆
-,
-0
-<
-𝜌
-𝜇
-,
-𝜌
-Σ
-≤
-1.
-		
-(6)
-Σ
-p,i
-(ℓ+1)
-	​
-
-=(1−ρ
-Σ
-	​
-
-)Σ
-p,i
-(ℓ)
-	​
-
-+ρ
-Σ
-	​
-
-Σ
-i
-(ℓ)⋆
-	​
-
-,0<ρ
-μ
-	​
-
-,ρ
-Σ
-	​
-
-≤1.
-(6)
-
-This is deliberately stricter than the current stack, which propagates posterior 
-𝜇
-μ upward but keeps sigma_prior frozen at the embedding value to prevent sigma cascade. That is a stabilization trick, not a full hierarchical posterior-to-prior update.
-
-8. Gauge-equivariant normalization
+## 8. Gauge-Equivariant Normalization
 
 After the final layer, normalize with the Mahalanobis norm:
 
-	
-𝜇
-~
-𝑖
-=
-𝜇
-𝑖
-⋆
-𝐾
-𝜇
-𝑖
-⋆
-⊤
-Σ
-𝑖
-⋆
-−
-1
-𝜇
-𝑖
-⋆
-+
-𝜀
-.
-		
-(7)
-μ
-~
-	​
-
-i
-	​
-
-=μ
-i
-⋆
-	​
-
-μ
-i
-⋆⊤
-	​
-
-Σ
-i
-⋆−1
-	​
-
-μ
-i
-⋆
-	​
-
-+ε
-K
-	​
-
-	​
-
-.
-(7)
-
-This is the correct gauge-equivariant analogue of RMS-style normalization, because
-
-𝜇
-⊤
-Σ
-−
-1
-𝜇
-μ
-⊤
-Σ
-−1
-μ
-
-is a gauge scalar. The current MahalanobisNorm implements exactly this idea and explicitly states the approximate key-norm-bias cancellation property in isotropic / shared-metric regimes.
-
-9. Decode and language-model objective
-
-Given final normalized belief 
-𝑞
-𝑖
-⋆
-=
-𝑁
-(
-𝜇
-~
-𝑖
-,
-Σ
-𝑖
-⋆
-)
-q
-i
-⋆
-	​
-
-=N(
-μ
-~
-	​
-
-i
-	​
-
-,Σ
-i
-⋆
-	​
-
-), define logits by KL decode:
-
-ℓ
-𝑖
-,
-𝑣
-=
-−
-1
-𝜏
-d
-e
-c
-𝐷
- ⁣
-(
-𝑞
-𝑖
-⋆
- 
-∥
- 
-𝜋
-𝑣
-)
-,
-ℓ
-i,v
-	​
-
-=−
-τ
-dec
-	​
-
-1
-	​
-
-D(q
-i
-⋆
-	​
-
-∥π
-v
-	​
-
-),
-	
-𝑝
-𝜃
-(
-𝑦
-𝑖
-=
-𝑣
-∣
-𝑥
-<
-𝑖
-)
-=
-softmax
-⁡
-𝑣
-(
-ℓ
-𝑖
-,
-𝑣
-)
-.
-		
-(8)
-p
-θ
-	​
-
-(y
-i
-	​
-
-=v∣x
-<i
-	​
-
-)=softmax
-v
-	​
-
-(ℓ
-i,v
-	​
-
-).
-(8)
-
-Then the training objective is
-
-	
-𝐿
-L
-M
-(
-𝜃
-)
-=
-∑
-𝑖
-−
-log
-⁡
-𝑝
-𝜃
-(
-𝑦
-𝑖
-∣
-𝑞
-𝑖
-⋆
-(
-𝑥
-<
-𝑖
-)
-)
-+
-𝜆
-h
-y
-p
-e
-r
-𝐻
-(
-𝜃
-)
-,
-		
-(9)
-L
-LM
-	​
-
-(θ)=
-i
-∑
-	​
-
-−logp
-θ
-	​
-
-(y
-i
-	​
-
-∣q
-i
-⋆
-	​
-
-(x
-<i
-	​
-
-))+λ
-hyper
-	​
-
-H(θ),
-(9)
-
-where 
-𝑞
-𝑖
-⋆
-(
-𝑥
-<
-𝑖
-)
-q
-i
-⋆
-	​
-
-(x
-<i
-	​
-
-) is obtained from context-only inference.
-
-This is the clean variational split:
-
-E-step: infer 
-𝑞
-⋆
-q
-⋆
- from the context only,
-M-step: update slow parameters to improve next-token prediction from 
-𝑞
-⋆
-q
-⋆
-.
-
-In contrast, the current use_obs_in_vfe=True path passes targets into the E-step, while test evaluation explicitly forces use_obs_in_vfe=False. That is precisely why train PPL can collapse while validation/test blows up.
-
-10. Optional no-target active inference inside the E-step
-
-If one wants active-inference flavor during training-time inference, only use target-free terms.
-
-Let
-
-𝑝
-𝑖
-(
-𝑣
-)
-=
-𝑝
-𝜃
-(
-𝑣
-∣
-𝑞
-𝑖
-)
-p
-i
-	​
-
-(v)=p
-θ
-	​
-
-(v∣q
-i
-	​
-
-)
-
-be the model’s own predictive distribution from its current latent belief.
-
-Then one may add:
-
-Pragmatic confidence
-𝐹
-p
-r
-a
-g
-=
-𝜆
-p
-r
-a
-g
-∑
-𝑖
-𝐻
-[
-𝑝
-𝑖
-]
-.
-F
-prag
-	​
-
-=λ
-prag
-	​
-
-i
-∑
-	​
-
-H[p
-i
-	​
-
-].
-Epistemic value
-𝐹
-e
-p
-i
-=
-−
-𝜆
-e
-p
-i
-∑
-𝑖
-𝐼
-(
-𝑧
-𝑖
-;
-𝑦
-𝑖
-∣
-𝑞
-𝑖
-)
-.
-F
-epi
-	​
-
-=−λ
-epi
-	​
-
-i
-∑
-	​
-
-I(z
-i
-	​
-
-;y
-i
-	​
-
-∣q
-i
-	​
-
-).
-
-Then the E-step objective becomes
-
-	
-𝐹
-ℓ
-A
-I
-=
-𝐹
-ℓ
-+
-𝐹
-p
-r
-a
-g
-+
-𝐹
-e
-p
-i
-.
-		
-(10)
-F
-ℓ
-AI
-	​
-
-=F
-ℓ
-	​
-
-+F
-prag
-	​
-
-+F
-epi
-	​
-
-.
-(10)
-
-This is close to the intended use of the current active_inference.py module, which explicitly describes the pragmatic term as entropy minimization of the model’s own prediction “without target leak,” and the epistemic term as BALD-like mutual information over the belief.
-
-11. Generation-time expected free energy
-
-For genuine Friston-style active inference in an LLM, the action is the next token.
-
-For each candidate next token 
-𝑎
-a, define
-
-	
-𝐺
-𝑡
-(
-𝑎
-)
-=
-𝐸
-𝑞
-(
-𝑜
-∣
-𝑎
-)
-[
-−
-log
-⁡
-𝑝
-\*
-(
-𝑜
-)
-]
-⏟
-risk
-+
-𝐸
-𝑞
-(
-𝑧
-∣
-𝑎
-)
-[
-𝐻
-[
-𝑝
-(
-𝑜
-∣
-𝑧
-)
-]
-]
-⏟
-ambiguity
-−
-𝐼
-𝑞
-(
-𝑧
-;
-𝑜
-∣
-𝑎
-)
-⏟
-epistemic value
-.
-		
-(11)
-G
-t
-	​
-
-(a)=
-risk
-E
-q(o∣a)
-	​
-
-[−logp
-\*
-(o)]
-	​
-
-	​
-
-+
-ambiguity
-E
-q(z∣a)
-	​
-
-[H[p(o∣z)]]
-	​
-
-	​
-
-−
-epistemic value
-I
-q
-	​
-
-(z;o∣a)
-	​
-
-	​
-
-.
-(11)
-
-Then choose actions via the policy posterior
-
-	
-𝑞
-𝑡
-(
-𝑎
-)
-∝
-exp
-⁡
-(
-−
-𝛾
- 
-𝐺
-𝑡
-(
-𝑎
-)
-)
-.
-		
-(12)
-q
-t
-	​
-
-(a)∝exp(−γG
-t
-	​
-
-(a)).
-(12)
-
-That is the correct place for active inference in a language model: generation-time action selection, not target-conditioned E-step inference during supervised training. The current expected_free_energy.py module already adopts exactly this interpretation and even states that its teacher-forced training loss is only a surrogate, not genuine active inference.
-
-12. The cleaned-up architecture
-
-The principled architecture is therefore
-
-𝑥
-1
-:
-𝑁
-  
-→
-PriorBank encode
-  
-{
-(
-𝜇
-𝑖
-(
-0
-)
-,
-Σ
-𝑖
-(
-0
-)
-,
-𝜙
-𝑖
-(
-0
-)
-)
-}
-𝑖
-=
-1
-𝑁
-  
-→
-positional BCH
-  
-{
-(
-𝜇
-𝑖
-(
-0
-)
-,
-Σ
-𝑖
-(
-0
-)
-,
-𝜙
-𝑖
-(
-0
-)
-)
-}
-𝑖
-=
-1
-𝑁
-x
-1:N
-	​
-
-PriorBank encode
-	​
-
-{(μ
-i
-(0)
-	​
-
-,Σ
-i
-(0)
-	​
-
-,ϕ
-i
-(0)
-	​
-
-)}
-i=1
-N
-	​
-
-positional BCH
-	​
-
-{(μ
-i
-(0)
-	​
-
-,Σ
-i
-(0)
-	​
-
-,ϕ
-i
-(0)
-	​
-
-)}
-i=1
-N
-	​
-
-  
-→
-𝐿
- gauge–VFE blocks
-  
-{
-(
-𝜇
-𝑖
-(
-𝐿
-)
-⋆
-,
-Σ
-𝑖
-(
-𝐿
-)
-⋆
-,
-𝜙
-𝑖
-(
-𝐿
-)
-⋆
-)
-}
-𝑖
-=
-1
-𝑁
-  
-→
-MahalanobisNorm
-  
-{
-(
-𝜇
-~
-𝑖
-,
-Σ
-𝑖
-(
-𝐿
-)
-⋆
-)
-}
-𝑖
-=
-1
-𝑁
-  
-→
-PriorBank decode
-  
-𝑝
-𝜃
-(
-𝑦
-𝑖
-∣
-𝑥
-<
-𝑖
-)
-.
-L gauge–VFE blocks
-	​
-
-{(μ
-i
-(L)⋆
-	​
-
-,Σ
-i
-(L)⋆
-	​
-
-,ϕ
-i
-(L)⋆
-	​
-
-)}
-i=1
-N
-	​
-
-MahalanobisNorm
-	​
-
-{(
-μ
-~
-	​
-
-i
-	​
-
-,Σ
-i
-(L)⋆
-	​
-
-)}
-i=1
-N
-	​
-
-PriorBank decode
-	​
-
-p
-θ
-	​
-
-(y
-i
-	​
-
-∣x
-<i
-	​
-
-).
-
-Each block performs:
-
-compute 
-𝛽
-𝑖
-𝑗
-β
-ij
-	​
-
- from gauge-transported KL,
-compute the E-step gradients of 
-𝐹
-ℓ
-F
-ℓ
-	​
-
-,
-update 
-(
-𝜇
-,
-Σ
-,
-𝜙
-)
-(μ,Σ,ϕ),
-pass the posterior onward as the next layer’s prior.
-13. Three design laws
-Law 1: inference must not see the answer key
-
-For ordinary language-model training, the E-step may depend on the context and the model’s own predictions, but not on the supervised next token.
-
-Law 2: transport must act on covariance by conjugation
-
-Any gauge transport of Gaussians must satisfy
-
-Σ
-↦
-Ω
-Σ
-Ω
-⊤
-.
-Σ↦ΩΣΩ
-⊤
-.
-
-This is non-negotiable. The transport code treats it as the central invariant.
-
-Law 3: encode, infer, and decode on the same manifold
-
-If tokens are represented as Gaussian priors, then inference should evolve Gaussian beliefs, and decoding should compare the final belief against Gaussian token priors by KL. The current PriorBank is already set up to support exactly that.
-
-14. Practical implementation choices
-Recommended first version
-
-Use:
-
-flat transport,
-Lie-algebra 
-𝜙
-ϕ parameterization rather than free 
-Ω
-Ω,
-block-diagonal full covariance per head,
-PriorBank encode/decode,
-Mahalanobis normalization,
-context-only E-step,
-CE-only M-step,
-no target-conditioned observation term.
-Recommended second version
-
-Add:
-
-damped posterior-to-prior transfer across layers,
-no-target pragmatic / epistemic active-inference terms inside the E-step,
-learned per-layer temperatures 
-𝜅
-ℓ
-κ
-ℓ
-	​
-
-, 
-𝜏
-d
-e
-c
-τ
-dec
-	​
-
-.
-Recommended third version
-
-Only then add:
-
-non-flat edge connections,
-generation-time EFE policy over candidate next tokens.
-15. Relationship to the current code
-
-The cleaned-up specification above is not a fantasy rewrite; it is a principled consolidation of mechanisms the current code already contains in partial form:
-
-KL-based gauge-transport attention is already the attention mechanism.
-The VFE block already performs iterative E-step belief evolution.
-The model already supports positional gauge composition via 
-𝜙
-ϕ-space encoding.
-PriorBank already provides the right encode/decode abstraction.
-MahalanobisNorm already provides the right gauge-equivariant normalization.
-The active-inference modules already distinguish between target-free E-step shaping and generation-time EFE policy.
-
-What must be removed for principled LM training is the target-conditioned E-step path. The code currently exposes that path directly, and evaluation already disables it, which is why it causes catastrophic train/test inconsistency.
-
-16. Final distilled statement
-
-A principled gauge–VFE transformer is a deep amortized variational model in which:
-
-token states are local Gaussian beliefs,
-gauge frames define transport between token beliefs,
-attention is the Gibbs kernel of gauge-transported divergence,
-each layer performs an inner variational E-step on 
-(
-𝜇
-,
-Σ
-,
-𝜙
-)
-(μ,Σ,ϕ),
-the vocabulary is a bank of Gaussian priors,
-decoding is KL-to-prior softmax,
-the M-step is ordinary next-token learning from context-only inferred beliefs,
-active inference, when used canonically, operates at generation time over candidate next-token actions.
-
-That is the version that is mathematically clean, architecturally coherent, and compatible with language-model training without leakage.
+$$\hat{\mu}_i = \mu_i^\star \cdot \sqrt{\frac{K}{\mu_i^{\star\top}\, \Sigma_i^{\star -1}\, \mu_i^\star + \varepsilon}}.$$
+
+The Mahalanobis form $\mu^\top \Sigma^{-1} \mu$ is a gauge scalar: under $\mu \to g\mu$, $\Sigma \to g\Sigma g^\top$, one has
+
+$$(g\mu)^\top (g\Sigma g^\top)^{-1} (g\mu) = \mu^\top g^\top g^{-\top} \Sigma^{-1} g^{-1} g\, \mu = \mu^\top \Sigma^{-1} \mu.$$
+
+The scaling factor is therefore gauge-invariant, making this the correct gauge-equivariant analogue of RMS-style normalization.
+
+---
+
+## 9. Decode and Language-Model Objective
+
+Given the final normalized belief $q_i^\star = \mathcal{N}(\hat{\mu}_i, \Sigma_i^\star)$, define logits by KL decode:
+
+$$\ell_{i,v} = -\frac{1}{\tau}\, \mathrm{KL}(q_i^\star \,\|\, \pi_v), \quad p_\theta(y_i = v \mid x_{<i}) = \mathrm{softmax}_v(\ell_{i,v}).$$
+
+The training objective is
+
+$$\mathcal{L}(\theta) = \sum_i \bigl(-\log p_\theta(y_i \mid q_i^\star(x_{<i}))\bigr) + \lambda_{\mathrm{hyper}} H(\theta),$$
+
+where $q_i^\star(x_{<i})$ is obtained from context-only inference and $H(\theta)$ collects hyper-prior regularizers.
+
+This is the clean variational split: the E-step infers $q^\star$ from context only; the M-step updates slow parameters to improve next-token prediction from $q^\star$.
+
+---
+
+## 10. Target-Free Active Inference in the E-Step
+
+If active-inference shaping is desired during training-time inference, only target-free terms are permissible. Let $\hat{p}_i(v) = p_\theta(v \mid q_i)$ be the model's own predictive distribution from its current belief. Then:
+
+**Pragmatic (entropy minimization):**
+
+$$F_{\mathrm{prag}} = \lambda_{\mathrm{prag}} \sum_i H[\hat{p}_i].$$
+
+**Epistemic (BALD mutual information):**
+
+$$F_{\mathrm{epi}} = -\lambda_{\mathrm{epi}} \sum_i I(z_i;\, y_i \mid q_i).$$
+
+These gradients are folded into $\nabla_\mu F$ and $\nabla_\Sigma F$ before the Fisher natural-gradient projection, so all terms share the same information-geometric descent. The pragmatic term alone is a self-reinforcing attractor toward entropy collapse; the epistemic term provides the necessary counterpressure. When distillation is active, the pragmatic term should be disabled to avoid a mutual-reinforcement instability.
+
+---
+
+## 11. Generation-Time Expected Free Energy
+
+For genuine active inference in an LLM, the action is the next token. For each candidate next token $a$:
+
+$$G_t(a) = \underbrace{\mathbb{E}_{q(o \mid a)}[-\log p^\star(o)]}_{\text{risk}} + \underbrace{\mathbb{E}_{q(z \mid a)}[H[p(o \mid z)]]}_{\text{ambiguity}} - \underbrace{I_q(z;\, o \mid a)}_{\text{epistemic value}}.$$
+
+The policy posterior is $q_t(a) \propto \exp(-\gamma\, G_t(a))$.
+
+This is the correct place for active inference in a language model: generation-time action selection, not target-conditioned E-step inference during supervised training. The epistemic term is structurally weaker for self-generated text (no exogenous observations) and should be downweighted or disabled in pure autoregressive generation.
+
+---
+
+## 12. The Cleaned-Up Architecture
+
+$$\{x_i\}_{i=1}^N \xrightarrow{\text{PriorBank encode}} \{(\mu_i, \Sigma_i, \phi_i)\}_{i=1}^N \xrightarrow{\text{positional BCH}} \{(\mu_i, \Sigma_i, \phi_i)\}_{i=1}^N$$
+
+$$\xrightarrow{L \text{ gauge-VFE blocks}} \{(\mu_i^{(L)\star}, \Sigma_i^{(L)\star}, \phi_i^{(L)\star})\}_{i=1}^N \xrightarrow{\text{MahalanobisNorm}} \{(\hat{\mu}_i, \Sigma_i^{(L)\star})\}_{i=1}^N$$
+
+$$\xrightarrow{\text{PriorBank decode}} p_\theta(y_i \mid x_{<i}).$$
+
+Each block performs: compute $\beta_{ij}$ from gauge-transported KL; compute the E-step gradients of $F$; update $(\mu, \Sigma, \phi)$ via natural gradient on the belief manifold; pass the posterior onward as the next layer's prior.
+
+---
+
+## 13. Three Design Laws
+
+**Law 1: Inference must not see the answer key.** For ordinary language-model training, the E-step may depend on the context and the model's own predictions, but not on the supervised next token.
+
+**Law 2: Transport must act on covariance by conjugation.** Any gauge transport of Gaussians must satisfy $\Sigma \mapsto \Omega\, \Sigma\, \Omega^\top$. This is the non-negotiable correctness invariant.
+
+**Law 3: Encode, infer, and decode on the same manifold.** If tokens are represented as Gaussian priors, then inference should evolve Gaussian beliefs, and decoding should compare the final belief against Gaussian token priors by KL.
+
+---
+
+## 14. Practical Implementation Choices
+
+**Recommended first version.** Flat transport; Lie-algebra $\phi$ parameterization; block-diagonal full covariance per head; PriorBank encode/decode; Mahalanobis normalization; context-only E-step; CE-only M-step; no observation term in E-step.
+
+**Recommended second version.** Add: damped posterior-to-prior transfer across layers; target-free pragmatic/epistemic active-inference terms inside the E-step; learned per-layer temperatures $\kappa_\ell$ and $\tau$.
+
+**Recommended third version.** Add: non-flat edge connections; generation-time EFE policy over candidate next tokens.
+
+---
+
+## 15. Relationship to the Current Codebase
+
+The specification above is a principled consolidation of mechanisms the current code already contains:
+
+- KL-based gauge-transport attention is already the attention mechanism (`transformer/core/attention.py`).
+- The VFE block already performs iterative E-step belief evolution (`transformer/core/variational_ffn.py`).
+- Positional gauge composition via $\phi$-space is implemented with multiple BCH modes (`transformer/core/embeddings.py`).
+- PriorBank provides the unified encode/decode abstraction (`transformer/core/prior_bank.py`).
+- MahalanobisNorm provides gauge-equivariant normalization (`transformer/core/blocks.py`).
+- Active-inference modules distinguish between target-free E-step shaping and generation-time EFE policy (`transformer/core/active_inference.py`, `transformer/core/expected_free_energy.py`).
+
+The `use_obs_in_vfe` flag (default `False`) controls whether targets enter the E-step. The design laws above require it to remain off for principled LM training. Evaluation already hardcodes it to `False`.
+
+---
+
+## 16. Final Statement
+
+A principled gauge-VFE transformer is a deep amortized variational model in which: token states are local Gaussian beliefs; gauge frames define transport between token beliefs; attention is the Gibbs kernel of gauge-transported divergence; each layer performs an inner variational E-step on $(\mu, \Sigma, \phi)$; the vocabulary is a bank of Gaussian priors; decoding is KL-to-prior softmax; the M-step is ordinary next-token learning from context-only inferred beliefs; and active inference, when used canonically, operates at generation time over candidate next-token actions.
+
+---
+
+## 17. Clean Implementation Plan: `transformer/vfe/`
+
+### Motivation
+
+The existing `transformer/core/` implementation (~19k LOC, 22 files) contains all the mechanisms described above but is heavily entangled. `BlockConfig` has 60+ fields. `variational_ffn.py` alone is 2,893 lines with five EM modes, DEQ, closed-form, hebbian, and implicit EM paths interleaved. Every module depends on `BlockConfig`. A separate `transformer/pure_vfe/` package (~3.3k LOC) takes the opposite approach — no autograd, no backprop, no `nn.Module` — but lacks active inference, cross-layer handoff, and BCH composition.
+
+The `transformer/vfe/` package bridges these two worlds. It uses PyTorch autograd for the M-step (backprop through the E-step to update priors and embeddings) but has a single clean E-step path: iterative natural gradient with `straight_through` gradient flow. It imports stateless math utilities from `core/` without inheriting the entanglement. Target: ~2,400 LOC with all features from Sections 1--16.
+
+Excluded by design: DEQ, closed-form E-step, hebbian paths. Only the iterative natural-gradient E-step with `straight_through` gradient flow is implemented. No EM mode branching.
+
+### File Structure
+
+```
+transformer/vfe/
+├── __init__.py           (~30 LOC)   Public API
+├── config.py             (~120 LOC)  VFEConfig dataclass (~25 fields)
+├── types.py              (~40 LOC)   BeliefState NamedTuple
+├── prior_bank.py         (~250 LOC)  Encode tokens→Gaussians, decode beliefs→logits
+├── positional.py         (~80 LOC)   BCH positional composition
+├── attention.py          (~200 LOC)  KL-based gauge-covariant attention (stateless functions)
+├── e_step.py             (~350 LOC)  Iterative VFE minimization inner loop
+├── block.py              (~180 LOC)  Single VFE layer: E-step + normalization
+├── stack.py              (~100 LOC)  L layers + cross-layer prior handoff
+├── model.py              (~250 LOC)  Full model: embed → stack → decode → loss
+├── active_inference.py   (~150 LOC)  Target-free E-step terms (callback)
+├── efe.py                (~150 LOC)  Generation-time EFE policy
+├── trainer.py            (~300 LOC)  Training loop with E/M-step separation
+└── train_vfe.py          (~150 LOC)  Click-to-run training script
+```
+
+### VFEConfig
+
+A clean dataclass with ~25 fields organized in five semantic groups (structure, E-step dynamics, covariance mode, gauge geometry, training), compared to the 60+ fields in `BlockConfig`. No `em_mode` selector, no DEQ/hebbian/closed-form/implicit-EM fields. The flag `use_obs_in_vfe` does not exist because the E-step has no observation term — Law 1 is architecturally enforced.
+
+### BeliefState
+
+A `NamedTuple` carrying the Gaussian belief triple:
+
+```python
+class BeliefState(NamedTuple):
+    mu: torch.Tensor       # (B, N, K)
+    sigma: torch.Tensor    # (B, N, K) diagonal or (B, N, K, K) full
+    phi: torch.Tensor      # (B, N, n_gen)
+```
+
+This flows through the entire pipeline as the single data type.
+
+### VFEPriorBank
+
+Gauge-fixed orbit parameterization (Section 2). Learnable parameters: `base_mu` $(K)$, `base_log_sigma` $(K)$, `phi_embed` $(V, n_{\mathrm{gen}})$. Encode maps token IDs to initial beliefs via $A_v = \exp(\psi_v \cdot G)$. Decode produces logits $-\mathrm{KL}(q^\star \| \pi_v)/\tau$ for all $V$ tokens using fused block-diagonal KL kernels. No separate `nn.Linear` output projection — Law 3 is enforced by using the same PriorBank for both ends.
+
+### VFEPositionalEncoding
+
+Learnable `pos_phi` $(N_{\max}, n_{\mathrm{gen}})$. At `bch_order=1`: simple addition $\phi + p$. At `bch_order \geq 2$: full BCH via `lie_compose_bch_general_torch`.
+
+### Attention Module
+
+Stateless functions, no class. `compute_kl_attention` produces $\beta_{ij}$ from current beliefs via fused block-diagonal KL. `aggregate_beliefs` computes transported message means and covariances in either mixture or precision mode. RoPE is applied to $\mu$ when enabled.
+
+### VFEEStep — The Critical Module
+
+Replaces the 2,893-line `variational_ffn.py` with a single clear inner loop (~350 LOC):
+
+```
+for t in range(n_e_steps):
+    1. Compute transport and KL attention (beta recomputed each iteration)
+    2. Compute VFE gradients: F = α·KL(q||p) + λ_align·Σβ·KL + λ_soft·C(q,φ)
+    3. Optional: add active inference gradients (injected callback)
+    4. Natural gradient projection: nat_grad_mu = Σ @ grad_mu
+    5. Mean update: mu -= η_μ · nat_grad_mu
+    6. SPD retraction for sigma
+    7. Phi update with Killing form preconditioning
+return BeliefState(mu, sigma, phi)
+```
+
+Law 1 enforcement: the `forward` signature takes `(beliefs, priors, mask, active_inference_fn)` — there is no `targets` parameter, no `W_out`, no observation gradient. Target leakage is structurally impossible.
+
+### VFEBlock, VFEStack, VFEModel
+
+Each `VFEBlock` runs the E-step and applies normalization (MahalanobisNorm or RMSNorm). The `VFEStack` chains $L$ blocks with cross-layer prior handoff: $\mu_p^{(\ell+1)} = \mu^{(\ell)\star}$ (attached for straight-through gradient flow), $\Sigma_p^{(\ell+1)} = \Sigma_{\mathrm{embedding}}$ (frozen). The `VFEModel` wires everything together:
+
+$$\texttt{token\_ids} \xrightarrow{\texttt{prior\_bank.encode}} \texttt{beliefs} \xrightarrow{\texttt{pos\_enc}} \texttt{beliefs} \xrightarrow{\texttt{stack}} \texttt{beliefs} \xrightarrow{\texttt{norm}} \texttt{beliefs} \xrightarrow{\texttt{prior\_bank.decode}} \texttt{logits}$$
+
+### Active Inference Integration
+
+Active inference does not contaminate the E-step code. It is injected as a callback function:
+
+```python
+ai_fn = VFEActiveInference(cfg, prior_bank) if cfg.active_inference else None
+beliefs = self.stack(beliefs, priors, mask, active_inference_fn=ai_fn)
+```
+
+The callback computes pragmatic (entropy minimization) and epistemic (BALD MI) gradients, which are added to `grad_mu` and `grad_sigma` before Fisher projection — all terms share one information-geometric descent per Amari 1998.
+
+Generation-time EFE (Section 11) lives in a separate `efe.py` module, accessed only during autoregressive decoding.
+
+### Training
+
+The trainer implements the clean E-step/M-step split:
+
+```python
+logits = model(token_ids)                              # E-step: context-only inference
+loss = F.cross_entropy(logits.view(-1, V), targets)    # M-step objective
+loss.backward()                                         # Gradients flow through E-step
+optimizer.step()
+```
+
+Parameter groups with per-type learning rates: prior means ($3\times$), prior covariances ($0.15\times$), gauge frames ($0.3\times$), E-step learnable params ($0.03\times$).
+
+---
+
+## 18. Import Architecture
+
+The `transformer/vfe/` package has a strict one-way dependency: it imports stateless math functions from `transformer/core/` and `math_utils/`, but nothing in `core/` imports from `vfe/`.
+
+**Imported from `core/`** (all stateless, no `BlockConfig` dependency):
+
+| Source | Functions | Used by |
+|--------|-----------|---------|
+| `core.gauge_utils` | `stable_matrix_exp_pair`, `fused_block_matrix_exp_pairs`, `fused_block_diagonal_kl_diag`, `fused_block_diagonal_kl_full` | prior_bank, attention |
+| `core.vfe_gradients` | `compute_vfe_gradients_gpu`, `compute_natural_gradient_gpu` | e_step |
+| `core.vfe_utils` | `retract_sigma_e_step`, `_retract_phi` | e_step |
+| `core.gauge_preconditioner` | `build_killing_form_preconditioner`, `apply_killing_form_natural_gradient` | e_step |
+| `core.transport_ops` | RoPE helpers | attention |
+| `core.blocks` | `MahalanobisNorm`, `RMSNorm` | block |
+| `core.expected_free_energy` | `compute_risk`, `compute_ambiguity` | efe |
+| `math_utils.generators` | `generate_so3_generators`, `generate_soN_generators`, `generate_glK_generators`, `lie_compose_bch_general_torch` | model, positional |
+
+**Re-implemented cleanly** (not imported from `core/`): `BlockConfig`, `GaugeTransformerLM`, `GaugeTransformerBlock/Stack`, `VariationalFFNDynamic`, `PriorBank`, `IrrepMultiHeadAttention`, and all EM mode machinery.
+
+---
+
+## 19. Implementation Sequence and Verification
+
+### Phases
+
+| Phase | Files | Depends on |
+|-------|-------|-----------|
+| 1. Foundation | `config.py`, `types.py`, `__init__.py` | nothing |
+| 2. Embedding | `prior_bank.py`, `positional.py` | Phase 1 + `core.gauge_utils` |
+| 3. Core | `attention.py`, `e_step.py` | Phase 1 + `core.{vfe_gradients, vfe_utils, gauge_preconditioner}` |
+| 4. Assembly | `block.py`, `stack.py`, `model.py` | Phases 1--3 |
+| 5. Extensions | `active_inference.py`, `efe.py` | Phase 4 + `core.expected_free_energy` |
+| 6. Training | `trainer.py`, `train_vfe.py` | Phases 4--5 |
+
+### Verification Checklist
+
+1. Model constructs and forward pass runs without error on random token IDs.
+2. `loss.backward()` produces non-zero gradients on all `prior_bank` parameters.
+3. Gauge invariance: apply random $h$ to all beliefs at one position, verify $\beta_{ij}$ unchanged.
+4. Sandwich product: assert `sigma_transported == Omega @ sigma @ Omega.T` in attention transport.
+5. Law 1 enforcement: verify `VFEEStep.forward` signature has no `targets` parameter (static check).
+6. Training smoke test: 100 steps on synthetic gauge data, verify loss decreases.
+7. Comparison: same config on both `VFEModel` and `GaugeTransformerLM` produces similar loss curves.

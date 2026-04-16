@@ -518,11 +518,24 @@ def fused_block_diagonal_kl_full(
     block_exp_pairs: List[Tuple[torch.Tensor, torch.Tensor]],
     irrep_dims: List[int],
     eps: float = 1e-6,
+    alpha_div: float = 1.0,
 ) -> torch.Tensor:
-    """Fused block-diagonal KL divergence for full covariance mode.
+    r"""Fused block-diagonal KL or Rényi :math:`\alpha`-divergence for full covariance.
 
-    Groups same-sized irrep blocks and computes transport + KL in batched
-    passes.  Falls back to diagonal approximation on Cholesky failure.
+    Groups same-sized irrep blocks and computes transport + divergence in
+    batched passes.  Falls back to diagonal approximation on Cholesky failure.
+
+    When ``alpha_div != 1.0``, uses the blended covariance
+    :math:`\tilde{\Sigma} = (1-\alpha)\Sigma_q + \alpha\Sigma_t` and computes:
+
+    .. math::
+        D_\alpha(q \| p) = \tfrac{1}{2}\Bigl[
+            \alpha \cdot \delta\mu^\top \tilde{\Sigma}^{-1} \delta\mu
+            + \tfrac{1}{\alpha-1}\bigl(
+                (1-\alpha)\log|\Sigma_q| + \alpha\log|\Sigma_t|
+                - \log|\tilde{\Sigma}|
+            \bigr)
+        \Bigr]
 
     Args:
         mu_q: (B, N, K) belief means.
@@ -530,9 +543,10 @@ def fused_block_diagonal_kl_full(
         block_exp_pairs: list of (exp_phi, exp_neg_phi) per block.
         irrep_dims: block dimensions [d₁, d₂, ...].
         eps: numerical stability floor.
+        alpha_div: Rényi divergence order (default 1.0 = standard KL).
 
     Returns:
-        kl_total: (B, N, N) total KL divergence across all blocks.
+        kl_total: (B, N, N) total divergence across all blocks.
     """
     B, N, K = mu_q.shape
     device = mu_q.device
@@ -607,27 +621,63 @@ def fused_block_diagonal_kl_full(
             sigma_t_reg = sigma_transported + eps * I_d
 
             try:
-                L_p = torch.linalg.cholesky(sigma_t_reg)
-                L_q = torch.linalg.cholesky(sigma_i_reg)
+                if abs(alpha_div - 1.0) < 1e-6:
+                    # Standard KL divergence.
+                    L_p = torch.linalg.cholesky(sigma_t_reg)
+                    L_q = torch.linalg.cholesky(sigma_i_reg)
 
-                Y = torch.linalg.solve_triangular(L_p, sigma_i_reg, upper=False)
-                Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
-                trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
+                    Y = torch.linalg.solve_triangular(L_p, sigma_i_reg, upper=False)
+                    Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
+                    trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
 
-                delta_mu = mu_transported - mu_i
-                v = torch.linalg.solve_triangular(
-                    L_p, delta_mu.unsqueeze(-1), upper=False
-                ).squeeze(-1)
-                mahal_term = torch.sum(v ** 2, dim=-1)
+                    delta_mu = mu_transported - mu_i
+                    v = torch.linalg.solve_triangular(
+                        L_p, delta_mu.unsqueeze(-1), upper=False
+                    ).squeeze(-1)
+                    mahal_term = torch.sum(v ** 2, dim=-1)
 
-                logdet_p = 2.0 * torch.sum(
-                    torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
-                )
-                logdet_q = 2.0 * torch.sum(
-                    torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
-                )
+                    logdet_p = 2.0 * torch.sum(
+                        torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+                    )
+                    logdet_q = 2.0 * torch.sum(
+                        torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
+                    )
 
-                kl_group = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
+                    kl_group = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
+                else:
+                    # Rényi α-divergence for full covariance.
+                    # Blended covariance: Σ̃ = (1-α)Σ_q + α·Σ_t
+                    sigma_blend = (1.0 - alpha_div) * sigma_i_reg + alpha_div * sigma_t_reg
+                    sigma_blend = 0.5 * (sigma_blend + sigma_blend.transpose(-1, -2))
+
+                    L_blend = torch.linalg.cholesky(sigma_blend)
+                    L_q = torch.linalg.cholesky(sigma_i_reg)
+                    L_t = torch.linalg.cholesky(sigma_t_reg)
+
+                    # Mahalanobis: α · δμᵀ Σ̃⁻¹ δμ
+                    delta_mu = mu_transported - mu_i
+                    v = torch.linalg.solve_triangular(
+                        L_blend, delta_mu.unsqueeze(-1), upper=False
+                    ).squeeze(-1)
+                    mahal_term = alpha_div * torch.sum(v ** 2, dim=-1)
+
+                    # Log-det terms
+                    logdet_q = 2.0 * torch.sum(
+                        torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
+                    )
+                    logdet_t = 2.0 * torch.sum(
+                        torch.log(torch.diagonal(L_t, dim1=-2, dim2=-1) + eps), dim=-1
+                    )
+                    logdet_blend = 2.0 * torch.sum(
+                        torch.log(torch.diagonal(L_blend, dim1=-2, dim2=-1) + eps), dim=-1
+                    )
+
+                    logdet_term = (
+                        (1.0 - alpha_div) * logdet_q + alpha_div * logdet_t - logdet_blend
+                    ) / (alpha_div - 1.0)
+
+                    kl_group = 0.5 * (mahal_term + logdet_term)
+
             except RuntimeError:
                 # Cholesky failed — fall back to diagonal approximation
                 _nr("gauge_kl_full_chol_fallback_diag")
@@ -635,11 +685,24 @@ def fused_block_diagonal_kl_full(
                 sigma_diag_i = torch.diagonal(sigma_i_reg, dim1=-2, dim2=-1).clamp(min=eps)
                 delta_mu = mu_transported - mu_i
 
-                trace_term = (sigma_diag_i / sigma_diag_t).sum(dim=-1)
-                mahal_term = ((delta_mu ** 2) / sigma_diag_t).sum(dim=-1)
-                logdet_term = (torch.log(sigma_diag_t) - torch.log(sigma_diag_i)).sum(dim=-1)
-
-                kl_group = 0.5 * (trace_term + mahal_term - d + logdet_term)
+                if abs(alpha_div - 1.0) < 1e-6:
+                    trace_term = (sigma_diag_i / sigma_diag_t).sum(dim=-1)
+                    mahal_term = ((delta_mu ** 2) / sigma_diag_t).sum(dim=-1)
+                    logdet_term = (torch.log(sigma_diag_t) - torch.log(sigma_diag_i)).sum(dim=-1)
+                    kl_group = 0.5 * (trace_term + mahal_term - d + logdet_term)
+                else:
+                    # Diagonal α-divergence fallback
+                    sigma_blend_diag = (
+                        (1.0 - alpha_div) * sigma_diag_i + alpha_div * sigma_diag_t
+                    ).clamp(min=eps)
+                    mahal_term = (alpha_div * (delta_mu ** 2) / sigma_blend_diag).sum(dim=-1)
+                    logdet_per_dim = (
+                        (1.0 - alpha_div) * torch.log(sigma_diag_i)
+                        + alpha_div * torch.log(sigma_diag_t)
+                        - torch.log(sigma_blend_diag)
+                    )
+                    logdet_term = logdet_per_dim.sum(dim=-1) / (alpha_div - 1.0)
+                    kl_group = 0.5 * (mahal_term + logdet_term)
 
             kl_group = kl_group.clamp(min=0.0, max=kl_max)
             if torch.isnan(kl_group).any():

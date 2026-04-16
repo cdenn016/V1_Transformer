@@ -849,6 +849,7 @@ class GaugeTransformerLM(nn.Module):
                 sigma_max=config.get('sigma_max', 5.0),
                 irrep_dims=irrep_dims,
                 cache_decode_priors=config.get('cache_decode_priors', False),
+                exact_diagonal_transport=config.get('exact_diagonal_transport', False),
             )
             logger.info(f"GaugeTransformerLM: Created PriorBank with token-dependent priors "
                         f"(vocab_size={vocab_size})")

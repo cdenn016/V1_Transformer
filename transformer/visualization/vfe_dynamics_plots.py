@@ -22,7 +22,7 @@ Usage:
 
 import csv
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 from typing import TYPE_CHECKING
@@ -42,7 +42,7 @@ try:
 except ImportError:
     SCIPY_AVAILABLE = False
 
-from transformer.visualization.pub_style import set_pub_style, PUB_COLORS, MATPLOTLIB_AVAILABLE
+from transformer.visualization.pub_style import set_pub_style, MATPLOTLIB_AVAILABLE, _safe_legend
 
 
 def _smooth(data: list, window: int = 15) -> np.ndarray:
@@ -55,16 +55,6 @@ def _smooth(data: list, window: int = 15) -> np.ndarray:
         if w >= 3:
             return savgol_filter(arr, w, min(3, w - 1))
     return arr
-
-
-def _safe_legend(ax, *args, **kwargs):
-    """Call ax.legend() only if there are labeled artists, suppressing warnings."""
-    if args:
-        ax.legend(*args, **kwargs)
-        return
-    handles, labels = ax.get_legend_handles_labels()
-    if labels:
-        ax.legend(**kwargs)
 
 
 # =============================================================================
@@ -457,12 +447,15 @@ def plot_vfe_dynamics_dashboard(
     gs = gridspec.GridSpec(3, 2, hspace=0.35, wspace=0.3)
 
     # --- (a) Training loss + PPL ---
+    # Prefer raw CE (un-normalized) when available; fall back to total loss
     ax = fig.add_subplot(gs[0, 0])
-    for col, label, color in [
-        ('train_loss_total', 'Train loss', '#1976D2'),
-        ('val_loss', 'Val loss', '#D32F2F'),
+    for col, fallback, label, color in [
+        ('train_loss_ce_raw', 'train_loss_total', 'Train loss', '#1976D2'),
+        ('val_loss', 'val_loss', 'Val loss', '#D32F2F'),
     ]:
         steps, vals = _get_valid(data, col)
+        if len(vals) == 0:
+            steps, vals = _get_valid(data, fallback)
         if len(vals) > 0:
             ax.plot(steps, _smooth(vals, smooth_window), label=label, color=color, linewidth=1.5)
             ax.plot(steps, vals, color=color, alpha=0.12, linewidth=0.5)
@@ -622,7 +615,7 @@ def generate_all_vfe_figures(
                 if fig is not None:
                     plt.close(fig)
                     saved[name] = path
-            except Exception:
+            except (KeyError, ValueError, TypeError):
                 pass  # Skip silently; missing columns are expected for old CSVs
 
         # Also save PDF versions for publication
@@ -633,7 +626,7 @@ def generate_all_vfe_figures(
                 if fig is not None:
                     plt.close(fig)
                     saved[f'{name}_pdf'] = pdf_path
-            except Exception:
+            except (KeyError, ValueError, TypeError):
                 pass
 
     return saved

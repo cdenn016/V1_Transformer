@@ -300,7 +300,6 @@ class GaugeTransformerBlock(nn.Module):
             irrep_dims=cfg.ffn_irrep_dims,
             mask_self_attention=cfg.mask_self_attention,
             learnable_alpha=cfg.E_learnable_alpha,
-            multihead_vfe=cfg.multihead_vfe,
             phi_natural_gradient=cfg.phi_natural_gradient,
             killing_center_reg=cfg.killing_center_reg,
             use_deq=cfg.use_deq,
@@ -333,25 +332,9 @@ class GaugeTransformerBlock(nn.Module):
             alpha_divergence=getattr(cfg, 'alpha_divergence', 1.0),
             enforce_orthogonal=cfg.enforce_orthogonal,
         )
-        # EXPERIMENTAL: rope_full_gauge enables the framework-consistent
-        # interpretation of RoPE (rotates Σ as well as μ in the KL).
-        # NOTE: the rope_full_gauge dispatch lives in the MULTI-HEAD loop
-        # only.  When multihead_vfe=False, the flag is silently ignored by
-        # the single-β branch which dispatches straight to the analytic
-        # fused path.  Warn the user so the silent fallback is visible.
+        # EXPERIMENTAL: rope_full_gauge rotates Σ as well as μ in the KL.
+        # Dispatch lives in the per-head VFE loop (_compute_multihead_vfe_gradients).
         self.ffn._rope_full_gauge_vfe = getattr(cfg, 'rope_full_gauge', False)
-        if self.ffn._rope_full_gauge_vfe and not getattr(cfg, 'multihead_vfe', True):
-            import warnings as _w
-            _w.warn(
-                "rope_full_gauge=True has no effect when multihead_vfe=False — "
-                "the rope_full_gauge dispatch is only implemented in the "
-                "per-head VFE loop.  The single-β path will fall back to the "
-                "standard analytical fused gradient (which has the RoPE chain "
-                "rule fix but rotates only μ, not Σ).  Enable multihead_vfe=True "
-                "to use the experimental rope_full_gauge path.",
-                UserWarning,
-                stacklevel=2,
-            )
 
         # Active inference / EFE plumbing — delegated to active_inference.py.
         # Sets the 13 _ai_* instance attributes and initialises _prior_bank_ref.
@@ -651,7 +634,7 @@ class GaugeTransformerBlock(nn.Module):
             if self.use_residual:
                 if self.residual_type == 'delta':
                     mu_q = mu_q + (mu_attn - mu_normalized)
-                else:  # 'additive' (default, matches 71-PPL baseline)
+                else:  # 'additive' 
                     mu_q = mu_q + mu_attn
             else:
                 mu_q = mu_attn
@@ -738,13 +721,6 @@ class GaugeTransformerBlock(nn.Module):
         self._last_mu_ffn = mu_ffn
 
         # Residual connection (optional for pure VFE).
-        #
-        # As of edits_2026-04-08.md Round 3, the residual form is
-        # selected by self.residual_type.  The default is 'additive'
-        # (plain mu_q + mu_ffn, matching the 71-PPL TransformerOld
-        # baseline).  The 'delta' form below was introduced by
-        # 2026-04-07 audit Fix #1 / Fix #20 and is kept as an opt-in.
-        #
         # Delta-extraction rationale (retained for the 'delta' branch):
         # the VFE FFN returns the full evolved state
         # (mu_normalized + correction), not just the correction.

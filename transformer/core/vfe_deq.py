@@ -318,16 +318,7 @@ def make_deq_step_fn(
     """
     def step_fn(mu_in, sigma_in):
         # Compute transport
-        if ffn.irrep_dims is None and not ffn.multihead_vfe:
-            cached_transport = compute_transport_operators(
-                phi=phi_current,
-                generators=ffn.generators,
-                enforce_orthogonal=getattr(ffn, 'enforce_orthogonal', False),
-                gauge_mode=ffn.gauge_mode,
-                generators_are_skew=ffn._generators_are_skew,
-            )
-        else:
-            cached_transport = None
+        cached_transport = None
 
         alpha_eff = ffn.get_bayesian_alpha(mu_in, mu_p_current, sigma_p, sigma_in, eps=eps) if ffn.learnable_alpha else ffn.alpha
         _alpha_c0 = F.softplus(ffn.raw_c0) if ffn.learnable_alpha else None
@@ -381,32 +372,6 @@ def make_deq_step_fn(
                         grad_sigma_h = grad_sigma_h.unsqueeze(-1)
                     grad_sigma[:, :, block_start:block_end, block_start:block_end] = grad_sigma_h
                 block_start = block_end
-        else:
-            beta = compute_attention_weights(
-                mu_q=mu_in, sigma_q=sigma_in,
-                phi=phi_current, generators=ffn.generators,
-                kappa=ffn.kappa, epsilon=eps, mask=mask,
-                return_kl=False,
-                diagonal_covariance=is_diagonal,
-                cached_transport=cached_transport,
-                irrep_dims=ffn.irrep_dims,
-                mask_self_attention=ffn.mask_self_attention,
-                gauge_mode=ffn.gauge_mode,
-                exact_diagonal_transport=ffn.exact_diagonal_transport,
-            )
-            grad_mu, grad_sigma = compute_vfe_gradients_gpu(
-                mu_q=mu_in, sigma_q=sigma_in,
-                mu_p=mu_p_current, sigma_p=sigma_p,
-                beta=beta, phi=phi_current, generators=ffn.generators,
-                alpha=alpha_eff, lambda_belief=ffn.lambda_belief, lambda_softmax=ffn.lambda_softmax,
-                kappa=ffn.kappa, eps=eps,
-                alpha_c0=_alpha_c0,
-                cached_transport=cached_transport,
-                compute_sigma_align_grad=ffn.compute_sigma_align_grad,
-                irrep_dims=ffn.irrep_dims,
-                exact_diagonal_transport=ffn.exact_diagonal_transport,
-            )
-
         grad_mu = torch.clamp(grad_mu, min=-1e3, max=1e3)
         grad_sigma = torch.clamp(grad_sigma, min=-1e3, max=1e3)
 
@@ -493,16 +458,7 @@ def make_deq_step_fn_with_phi(
     def step_fn(mu_in: torch.Tensor, sigma_in: torch.Tensor,
                  phi_in: torch.Tensor) -> tuple:
         # --- mu/sigma update (same as make_deq_step_fn) ---
-        if ffn.irrep_dims is None and not ffn.multihead_vfe:
-            cached_transport = compute_transport_operators(
-                phi=phi_in,
-                generators=ffn.generators,
-                enforce_orthogonal=getattr(ffn, 'enforce_orthogonal', False),
-                gauge_mode=ffn.gauge_mode,
-                generators_are_skew=ffn._generators_are_skew,
-            )
-        else:
-            cached_transport = None
+        cached_transport = None
 
         alpha_eff = (
             ffn.get_bayesian_alpha(mu_in, mu_p_current, sigma_p, sigma_in, eps=eps)
@@ -561,31 +517,6 @@ def make_deq_step_fn_with_phi(
                         grad_sigma_h = grad_sigma_h.unsqueeze(-1)
                     grad_sigma[:, :, block_start:block_end, block_start:block_end] = grad_sigma_h
                 block_start = block_end
-        else:
-            beta = compute_attention_weights(
-                mu_q=mu_in, sigma_q=sigma_in,
-                phi=phi_in, generators=ffn.generators,
-                kappa=ffn.kappa, epsilon=eps, mask=mask,
-                return_kl=False,
-                diagonal_covariance=is_diagonal,
-                cached_transport=cached_transport,
-                irrep_dims=ffn.irrep_dims,
-                mask_self_attention=ffn.mask_self_attention,
-                gauge_mode=ffn.gauge_mode,
-                exact_diagonal_transport=ffn.exact_diagonal_transport,
-            )
-            grad_mu, grad_sigma = compute_vfe_gradients_gpu(
-                mu_q=mu_in, sigma_q=sigma_in,
-                mu_p=mu_p_current, sigma_p=sigma_p,
-                beta=beta, phi=phi_in, generators=ffn.generators,
-                alpha=alpha_eff, lambda_belief=ffn.lambda_belief, lambda_softmax=ffn.lambda_softmax,
-                kappa=ffn.kappa, eps=eps,
-                alpha_c0=_alpha_c0,
-                cached_transport=cached_transport,
-                compute_sigma_align_grad=ffn.compute_sigma_align_grad,
-                irrep_dims=ffn.irrep_dims,
-                exact_diagonal_transport=ffn.exact_diagonal_transport,
-            )
 
         grad_mu = torch.clamp(grad_mu, min=-1e3, max=1e3)
         grad_sigma = torch.clamp(grad_sigma, min=-1e3, max=1e3)
@@ -683,27 +614,6 @@ def make_deq_step_fn_with_phi(
                     + ffn.lambda_softmax * (beta_phi_h * kl_h.detach()).sum()
                 )
                 block_start = block_end
-        else:
-            beta_for_phi_result = compute_attention_weights(
-                mu_q=mu_in.detach(), sigma_q=sigma_in.detach() if sigma_in is not None else None,
-                phi=phi_in, generators=ffn.generators,
-                kappa=ffn.kappa, epsilon=eps, mask=mask,
-                return_kl=True,
-                diagonal_covariance=is_diagonal,
-                irrep_dims=ffn.irrep_dims,
-                mask_self_attention=ffn.mask_self_attention,
-                gauge_mode=ffn.gauge_mode,
-                exact_diagonal_transport=ffn.exact_diagonal_transport,
-            )
-            if isinstance(beta_for_phi_result, tuple):
-                beta_phi, kl_matrix = beta_for_phi_result
-            else:
-                beta_phi = beta_for_phi_result
-                kl_matrix = beta_phi
-            alignment_loss = (
-                ffn.lambda_belief * (beta_phi.detach() * kl_matrix).sum()
-                + ffn.lambda_softmax * (beta_phi * kl_matrix.detach()).sum()
-            )
 
         # Differentiable Euclidean phi step (autograd tracks through alignment_loss).
         #

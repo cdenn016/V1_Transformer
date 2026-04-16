@@ -438,6 +438,13 @@ def compute_transport_operators_direct(
     reflections (det < 0), but requires external regularization (e.g. weight
     decay, det penalty) to prevent Ω from approaching singularity.
 
+    TODO(Fix4): Add log|det(Ω)| penalty to the training loss to keep Ω
+    invertible via gradient pressure rather than relying solely on the
+    fallback chain.  Proposed: loss += λ_det · (log|det(Ω)| - target)²
+    where target ≈ 0 (det ≈ ±1).  Add omega_det_penalty hyperparameter
+    to TrainingConfig.  With the penalty active, the ridge/pinv fallbacks
+    should fire rarely (< 1% of steps).
+
     Args:
         omega: (B, N, K, K) per-token matrices Ω_i, initialized near identity.
                Not constrained to GL(K) — may become singular during training.

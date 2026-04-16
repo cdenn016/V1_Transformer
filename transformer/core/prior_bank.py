@@ -93,10 +93,13 @@ class PriorBank(nn.Module):
         # distillation).  Replaces the gradient checkpoint used previously.
         # See decode() for the trade-off discussion.
         cache_decode_priors: bool = False,
-        # Full-covariance decode: when True, decode uses the exact
-        # KL(q || π_v) with full Σ_q and Σ_p matrices instead of extracting
-        # diagonals.  Cost is O(B·N·V·K²) vs O(B·N·V·K) for diagonal.
-        # For testing and theoretical purity; not recommended for large V.
+        # Exact diagonal transport: when True + diagonal_covariance, lift
+        # diagonal σ to full (B,N,K,K) for decode, matching the exact
+        # transport used in attention and E-step.
+        exact_diagonal_transport: bool = False,
+        # Full-covariance decode: explicit override. When True, always use
+        # exact full-cov KL in decode regardless of other flags.
+        # O(B·N·V·K²) vs O(B·N·V·K) diagonal.
         full_cov_decode: bool = False,
     ):
         """
@@ -147,6 +150,7 @@ class PriorBank(nn.Module):
         self.diagonal_covariance = diagonal_covariance
         self.irrep_dims = irrep_dims
         self.cache_decode_priors = cache_decode_priors
+        self.exact_diagonal_transport = exact_diagonal_transport
         self.full_cov_decode = full_cov_decode
 
         # Per-forward-pass cache for the all-vocab decode prior result.
@@ -492,14 +496,16 @@ class PriorBank(nn.Module):
         sigma_q: torch.Tensor,   # (B, N, K) or (B, N, K, K) belief covariances
         tau: float = 1.0,        # Temperature
     ) -> torch.Tensor:
-        """
-        Compute observation likelihood via diagonal-KL to all token priors.
+        r"""Compute observation likelihood via KL to all token priors.
 
-        p(y = v | q) ∝ exp(-KL_diag(q || π_v) / τ)
+        p(y = v | q) \propto \exp(-\mathrm{KL}(q \| \pi_v) / \tau)
 
-        Uses a diagonal approximation: when sigma_q or sigma_p are full
-        covariance matrices, only their diagonals are used. This is an
-        O(B·N·V·K) fused matmul, versus O(B·N·V·K²) for full-cov KL.
+        Auto-dispatches between diagonal-KL and full-cov KL based on the
+        model's covariance configuration:
+
+        - ``diagonal_covariance=False``: exact full-cov KL, O(B·N·V·K²)
+        - ``exact_diagonal_transport=True``: lifts diagonal to full, O(B·N·V·K²)
+        - Otherwise: diagonal-KL via fused matmul, O(B·N·V·K)
 
         Fused single-matmul implementation. The diagonal KL is:
 
@@ -527,8 +533,20 @@ class PriorBank(nn.Module):
         """
         B, N, K = mu_q.shape
 
-        # Full-cov decode: exact KL with full Σ_q and Σ_p matrices
-        if self.full_cov_decode and sigma_q.dim() == 4:
+        # Auto-dispatch: use full-cov decode when the pipeline uses full
+        # covariance geometry.  This ensures the observation term matches
+        # the KL geometry used in attention and the E-step.
+        _use_full_cov = (
+            self.full_cov_decode                          # explicit override
+            or (not self.diagonal_covariance              # full-cov model
+                and sigma_q.dim() == 4)
+            or (self.exact_diagonal_transport             # exact diag transport
+                and self.diagonal_covariance
+                and sigma_q.dim() == 3)
+        )
+        if _use_full_cov:
+            if sigma_q.dim() == 3:
+                sigma_q = torch.diag_embed(sigma_q)       # (B,N,K) → (B,N,K,K)
             return self._decode_full_cov(mu_q, sigma_q, tau)
 
         # Diagonal path: extract diagonal variances if full covariance provided
