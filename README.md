@@ -117,9 +117,9 @@ The framework supports three training modes that span the spectrum from standard
 
 | Mode | Architecture | Learning | Entry Point |
 |------|-------------|----------|-------------|
-| `VFE_dynamic` (default) | GaugeTransformerLM | Autograd + EM dynamics | `scripts/train_lightning.py` |
-| `standard` | StandardTransformerLM | Standard backprop baseline | `scripts/train_lightning.py` |
-| `pure_fep` | PureVFETransformer | No autograd; analytic natural gradient | `run.py` |
+| `VFE_dynamic` (default) | GaugeTransformerLM | Autograd + EM dynamics | 
+| `standard` | StandardTransformerLM | Standard backprop baseline | 
+| `pure_fep` | PureVFETransformer | No autograd; analytic natural gradient |
 
 **VFE_dynamic** is the default gauge-covariant mode: attention weights β recompute at each VFE iteration, and belief updates follow natural gradient descent on the full free energy. **Standard** provides a dot-product attention + MLP baseline for controlled comparison. **Pure FEP** is the most radical: no `nn.Module`, no `loss.backward()`, no optimizer---the model is a bank of Gaussian priors updated by analytic natural gradient M-steps.
 
