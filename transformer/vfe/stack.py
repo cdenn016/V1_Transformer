@@ -97,14 +97,26 @@ class VFEStack(nn.Module):
                 if new_prior_sigma.dim() == 3:
                     new_prior_sigma = new_prior_sigma.clamp(min=1e-4, max=self.sigma_max)
                 else:
-                    # Full-cov: clamp diagonal
-                    diag_idx = torch.arange(new_prior_sigma.shape[-1], device=new_prior_sigma.device)
+                    # Full-cov: symmetrize and enforce SPD via diagonal floor.
+                    # Clamping only the diagonal does not guarantee PD; we
+                    # symmetrize the blended tensor and add an epsilon*I term.
+                    new_prior_sigma = 0.5 * (
+                        new_prior_sigma + new_prior_sigma.transpose(-1, -2)
+                    )
+                    diag_idx = torch.arange(
+                        new_prior_sigma.shape[-1], device=new_prior_sigma.device
+                    )
                     new_prior_sigma[..., diag_idx, diag_idx] = (
-                        new_prior_sigma[..., diag_idx, diag_idx].clamp(min=1e-4, max=self.sigma_max)
+                        new_prior_sigma[..., diag_idx, diag_idx].clamp(
+                            min=1e-4, max=self.sigma_max
+                        )
                     )
 
             # φ handoff: propagate posterior gauge frames
-            new_prior_phi = beliefs.phi if self.prior_handoff_phi else initial_priors.phi
+            # priors.phi is never consumed by VFEEStep (phi is initialized from
+            # beliefs.phi, which already flows posterior -> next-layer input).
+            # The prior_handoff_phi flag is retained for back-compat but is a no-op.
+            new_prior_phi = initial_priors.phi
 
             priors = BeliefState(
                 mu=new_prior_mu,

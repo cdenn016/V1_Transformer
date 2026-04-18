@@ -17,11 +17,18 @@ from transformer.core.gauge_utils import fused_block_matrix_exp_pairs
 from transformer.core.attention import compute_attention_weights
 
 
+# Cache keyed by generator tensor identity (id) — avoids per-call GPU sync.
+# `generators` is a registered buffer set once at module construction; its
+# skew-symmetry property never changes after init.
+_SKEW_CACHE: dict = {}
+
+
 def compute_gauge_transport(
     phi: torch.Tensor,
     generators: torch.Tensor,
     irrep_dims: List[int],
     enforce_orthogonal: bool = False,
+    skew_symmetric: Optional[bool] = None,
 ) -> List[Tuple[torch.Tensor, Optional[torch.Tensor]]]:
     r"""Compute block-diagonal matrix exponential pairs from phi.
 
@@ -39,7 +46,16 @@ def compute_gauge_transport(
     """
     # Detect skew-symmetric generators (SO(N)) across ALL generators
     # (previously checked only generators[0], which mis-classifies mixed sets).
-    _skew = bool(torch.allclose(generators, -generators.transpose(-1, -2), atol=1e-6))
+    if skew_symmetric is None:
+        _key = id(generators)
+        _skew = _SKEW_CACHE.get(_key)
+        if _skew is None:
+            _skew = bool(torch.allclose(
+                generators, -generators.transpose(-1, -2), atol=1e-6
+            ))
+            _SKEW_CACHE[_key] = _skew
+    else:
+        _skew = skew_symmetric
     return fused_block_matrix_exp_pairs(
         phi, generators, irrep_dims,
         enforce_orthogonal=enforce_orthogonal,

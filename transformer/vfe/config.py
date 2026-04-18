@@ -43,7 +43,7 @@ class VFEConfig:
     kappa: float = 1.0                   # Attention temperature
     prior_handoff_rho: float = 1.0       # μ cross-layer damping (1.0 = no damping, <1 = smoother)
     prior_handoff_sigma: float = 0.0    # σ cross-layer handoff (0.0 = frozen at embedding, >0 = blends posterior)
-    prior_handoff_phi: bool = False     # If True, phi_prior propagates from posterior across layers
+    prior_handoff_phi: bool = False     # Deprecated no-op: priors.phi is never consumed by VFEEStep (phi flows via beliefs)
     learnable_kappa: bool = False        # Learn per-layer kappa via log-space parameter
 
     # === Covariance ===
@@ -139,14 +139,30 @@ class VFEConfig:
                 f"irrep_spec gives K={computed_dim} but embed_dim={self.embed_dim}. "
                 f"These must match."
             )
+        if self.prior_handoff_phi:
+            import warnings
+            warnings.warn(
+                "VFEConfig.prior_handoff_phi is a deprecated no-op: priors.phi "
+                "is not consumed by VFEEStep; phi already flows across layers "
+                "via the belief state. Setting this flag has no effect.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         if self.rope_full_gauge and self.diagonal_covariance:
             raise ValueError(
                 "rope_full_gauge=True requires diagonal_covariance=False. "
                 "RoPE gauge transport acts on Σ via RΣR^T, which needs full covariance."
             )
-        # Default rope_full_gauge=True for full-cov mode (gauge-consistent RΣR^T)
+        # Full-cov + RoPE without rope_full_gauge is a gauge-inconsistent
+        # configuration (μ rotated, Σ not). We reject it explicitly rather
+        # than silently promoting the flag, which would be a checkpoint
+        # round-trip hazard.
         if not self.diagonal_covariance and self.use_rope and not self.rope_full_gauge:
-            self.rope_full_gauge = True
+            raise ValueError(
+                "diagonal_covariance=False + use_rope=True requires "
+                "rope_full_gauge=True (or rope_full_gauge='both' / 'vfe_only'). "
+                "Silent promotion was removed; set the flag explicitly."
+            )
 
     @property
     def irrep_dims(self) -> List[int]:

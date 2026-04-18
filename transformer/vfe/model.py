@@ -67,8 +67,13 @@ class VFEModel(nn.Module):
             self.final_norm = MahalanobisNorm(cfg.embed_dim)
         elif cfg.norm_type == 'rmsnorm':
             self.final_norm = RMSNorm(cfg.embed_dim)
-        else:
+        elif cfg.norm_type == 'none':
             self.final_norm = None
+        else:
+            raise ValueError(
+                f"VFEConfig.norm_type={cfg.norm_type!r} not recognized; "
+                "expected 'mahalnorm', 'rmsnorm', or 'none'."
+            )
 
         # Active inference callback (Section 10)
         self._active_inference_fn = None
@@ -109,8 +114,14 @@ class VFEModel(nn.Module):
             phi=self.pos_enc(beliefs.phi, N)
         )
 
-        # 3. Store initial beliefs as priors for cross-layer handoff
-        initial_priors = beliefs
+        # 3. Store initial beliefs as priors for cross-layer handoff.
+        # Clone sigma/phi to defend against any downstream in-place mutation
+        # (e.g., stack.py's diag clamp) writing through the posterior path.
+        initial_priors = BeliefState(
+            mu=beliefs.mu,
+            sigma=beliefs.sigma.clone(),
+            phi=beliefs.phi.clone(),
+        )
 
         # 4. Causal mask
         mask = torch.tril(torch.ones(N, N, device=token_ids.device))
@@ -134,7 +145,7 @@ class VFEModel(nn.Module):
             ce_loss = F.cross_entropy(
                 logits.view(-1, self.cfg.vocab_size),
                 targets.view(-1),
-                ignore_index=-1,
+                ignore_index=-100,
             )
             # Normalize CE by sqrt(K) to match VFE dim_scale normalization
             if self.cfg.normalize_ce_by_dim:
@@ -203,7 +214,10 @@ class VFEModel(nn.Module):
                 next_id = efe_policy.select_action(
                     ids_cond, top_k=top_k, temperature=temperature,
                 )
-                ids = torch.cat([ids, torch.tensor([[next_id]], device=ids.device)], dim=1)
+                ids = torch.cat(
+                    [ids, torch.tensor([[next_id]], device=ids.device, dtype=ids.dtype)],
+                    dim=1,
+                )
             else:
                 logits = self.forward(ids_cond)
                 logits_next = logits[:, -1, :] / temperature  # (1, V)

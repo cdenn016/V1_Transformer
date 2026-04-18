@@ -43,8 +43,13 @@ class VFEBlock(nn.Module):
             self.norm = MahalanobisNorm(cfg.embed_dim)
         elif cfg.norm_type == 'rmsnorm':
             self.norm = RMSNorm(cfg.embed_dim)
-        else:
+        elif cfg.norm_type == 'none':
             self.norm = None
+        else:
+            raise ValueError(
+                f"VFEConfig.norm_type={cfg.norm_type!r} not recognized; "
+                "expected 'mahalnorm', 'rmsnorm', or 'none'."
+            )
 
     def forward(
         self,

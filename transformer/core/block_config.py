@@ -118,6 +118,7 @@ class BlockConfig:
 
               
     phi_max_norm: Optional[float] = None # Max phi norm; None = auto (π for SO(N), 5.0 for GL(K))
+    omega_trust_region: float =  0.3     # Trust-region step clamp for direct Omega retraction (gauge_param='omega')
     # === Determinant control for GL(K) (off by default; both ignored for SO(N)) ===
     # GL(K) has an unbounded "trace" direction (the determinant) that L2-norm
     # clamping does not constrain — det(Ω_ij) = exp(tr(φ_i − φ_j)) can blow up
@@ -452,6 +453,7 @@ class BlockConfig:
             evolve_phi_e_step=config.get('evolve_phi_e_step', True),
             phi_lr=config.get('E_phi_lr', config.get('e_step_phi_lr', config.get('phi_lr', 0.05))),
             phi_max_norm=config.get('phi_max_norm', None),
+            omega_trust_region=config.get('omega_trust_region', 0.3),
             phi_project_slk=config.get('phi_project_slk', False),
             phi_trace_clamp=config.get('phi_trace_clamp', None),
             phi_dim=config.get('phi_dim', 3),

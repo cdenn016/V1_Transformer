@@ -153,14 +153,31 @@ class VFETrainer:
         return {k: math.sqrt(v) for k, v in norms.items()}
 
     def _collect_e_step_diagnostics(self) -> Dict[str, float]:
-        """Collect E-step diagnostics from the last layer's VFEEStep."""
-        diag = {}
-        # Aggregate from all layers
-        for i, block in enumerate(self.model.stack.blocks):
-            layer_diag = getattr(block.e_step, '_last_diagnostics', {})
-            if i == len(self.model.stack.blocks) - 1:
-                # Last layer: use directly
-                diag.update(layer_diag)
+        """Collect E-step diagnostics aggregated across all layers.
+
+        Numeric scalar metrics are averaged across layers; the final layer's
+        values are also exposed under the suffix ``_final`` for comparison.
+        """
+        blocks = list(self.model.stack.blocks)
+        per_layer = [
+            getattr(b.e_step, '_last_diagnostics', {}) or {} for b in blocks
+        ]
+        diag: Dict[str, float] = {}
+        if not per_layer:
+            return diag
+        # Mean over layers for every numeric key present in any layer.
+        all_keys = set().union(*per_layer)
+        for k in all_keys:
+            vals = [
+                float(ld[k]) for ld in per_layer
+                if k in ld and isinstance(ld[k], (int, float))
+            ]
+            if vals:
+                diag[k] = sum(vals) / len(vals)
+        # Also surface the final layer's values under `_final` suffix.
+        for k, v in per_layer[-1].items():
+            if isinstance(v, (int, float)):
+                diag[f'{k}_final'] = float(v)
         return diag
 
     def _get_learning_rates(self) -> Dict[str, float]:
@@ -323,7 +340,7 @@ class VFETrainer:
                 target_ids = batch['target_ids'].to(self.device)
 
             _, loss = self.model(input_ids, targets=target_ids)
-            n_tokens = (target_ids != -1).sum().item()
+            n_tokens = (target_ids != -100).sum().item()
             total_loss += loss.item() * n_tokens
             total_tokens += n_tokens
             total_samples += input_ids.shape[0]
@@ -359,21 +376,20 @@ class VFETrainer:
         if self._metrics_tracker is None:
             return
 
-        # Map VFE metrics to legacy CSV column names
+        # VFE decomposed loss components (belief_align, self_consistency,
+        # model_coupling, aux_layer_ce) are not recovered in this training
+        # path — the VFE objective is minimized implicitly via the E-step
+        # inner loop, so those columns are omitted rather than logged as
+        # misleading zeros.
         csv_metrics = {
             'train_loss_total': metrics['loss'],
             'train_loss_ce': metrics['loss'],
             'train_loss_ce_raw': metrics['loss'],
-            'train_loss_belief_align': 0,
-            'train_loss_self_consistency': 0,
-            'train_loss_model_coupling': 0,
-            'train_loss_aux_layer_ce': 0,
             'train_ppl': metrics['ppl'],
             'train_bpc': metrics['bpc'],
             'beta_mean': metrics.get('beta_mean', 0),
             'beta_std': metrics.get('beta_std', 0),
             'kl_mean': metrics.get('kl_mean', 0),
-            'kl_std': 0,
             'attention_entropy': metrics.get('attention_entropy', 0),
             'attention_concentration': metrics.get('attention_concentration', 0),
         }
@@ -523,9 +539,21 @@ class VFETrainer:
         for k in ('kappa_mean', 'kappa_min', 'kappa_max'):
             vfe_row[k] = metrics.get(k, '')
 
-        # Append extra columns to CSV (metrics_tracker stores as extra dict)
+        # Append extra columns to CSV. Supports either a dedicated method
+        # (`_append_extra`) or the standard `log_step(step, **extra)` path.
         if hasattr(self._metrics_tracker, '_append_extra'):
             self._metrics_tracker._append_extra(step, vfe_row)
+        elif hasattr(self._metrics_tracker, 'log_step'):
+            try:
+                self._metrics_tracker.log_step(step, **vfe_row)
+            except Exception as exc:
+                if not getattr(self, '_vfe_csv_warned', False):
+                    logger.warning(
+                        "VFE dynamics columns could not be written to CSV "
+                        "(log_step rejected extra kwargs: %s). Subsequent "
+                        "warnings suppressed.", exc,
+                    )
+                    self._vfe_csv_warned = True
 
     def train(self, num_steps: Optional[int] = None, log_interval: Optional[int] = None) -> None:
         """Main training loop with full metrics, checkpoints, and figure generation.

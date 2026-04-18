@@ -1,8 +1,0 @@
-{
-  "sweep_name": "M_vfe_hyperparam_lr",
-  "description": "FFN / VFE module learning rate",
-  "baseline_value": "0.1",
-  "n_runs": 11,
-  "seed": 6,
-  "timestamp": "2026-04-17 06:53:37"
-}

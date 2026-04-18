@@ -588,9 +588,12 @@ def run_closed_form_e_step(
                         else beta_heads[0].unsqueeze(1))
         beta_history_out = [beta_stacked.detach().clone()]
 
-    # ── Phi evolution via gradient (phi enters nonlinearly) ───────────
+    # ── Phi/Omega evolution via gradient (gauge enters nonlinearly) ──
+    # em_phi_mode == 'M_phi_p' forbids any E-step evolution of the gauge
+    # parameter; this guard matches the iterative path in variational_ffn.py.
     if (ffn.update_phi and torch.is_grad_enabled()
-            and ffn.gauge_mode not in ('trivial', 'constant')):
+            and ffn.gauge_mode not in ('trivial', 'constant')
+            and ffn.em_phi_mode != 'M_phi_p'):
         _use_omega = omega_current is not None and ffn.gauge_param == 'omega'
         if _use_omega:
             grad_omega = ffn._compute_omega_grad_direct(

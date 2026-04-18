@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import torch
 from torch import Tensor
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from transformer.analysis.holonomy import compute_holonomy
 from transformer.core.gauge_utils import stable_matrix_exp_pair, newton_schulz_orthogonalize
@@ -567,6 +567,7 @@ def compute_gauge_invariants(
     generators: Tensor,
     beta: Tensor,
     enforce_orthogonal: bool = False,
+    omega: Optional[Tensor] = None,
 ) -> Dict[str, Tensor]:
     r"""Compute gauge-invariant quantities under $\mathrm{GL}^+(K)$.
 
@@ -603,6 +604,18 @@ def compute_gauge_invariants(
         gen_f32 = _to_float32(generators)
         B, N, n_gen = phi_f32.shape
         K = gen_f32.shape[-1]
+
+        # Direct-Omega branch (gauge_param='omega'): det comes straight from Ω,
+        # not from tr(φ). Without this the phi-based formula below reports
+        # det(Ω)=exp(tr(dummy_phi_base))=1 uniformly for omega-path models.
+        if omega is not None:
+            omega_f64 = omega.double()
+            det_per_token = torch.linalg.det(omega_f64)            # (B, N) f64
+            det_omega_direct = (det_per_token.unsqueeze(2)
+                                / det_per_token.unsqueeze(1).clamp(min=1e-30)
+                                ).float()                          # (B, N, N)
+        else:
+            det_omega_direct = None
 
         # -- det(Omega_ij) = exp(tr(phi_i - phi_j))
         # tr(phi_i · G) = phi_i · tr(G)  — linearity of trace
@@ -681,6 +694,11 @@ def compute_gauge_invariants(
             kl_values = kl_matrix
         except Exception:
             pass  # KL computation is optional; fail silently
+
+        # When an explicit Omega is supplied (gauge_param='omega' models),
+        # the direct determinant supersedes the phi-based formula.
+        if det_omega_direct is not None:
+            det_omega = det_omega_direct
 
         return {
             "beta": beta,

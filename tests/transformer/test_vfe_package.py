@@ -320,10 +320,17 @@ class TestV2Config:
         assert cfg.learnable_kappa is False
 
     def test_full_cov_allowed(self):
-        """diagonal_covariance=False is now supported."""
+        """diagonal_covariance=False is now supported.
+
+        When RoPE is also active, rope_full_gauge must be set explicitly —
+        silent auto-promotion was removed because it breaks checkpoint
+        round-trip (the saved config would have the flag as False while the
+        live runtime had it as True).
+        """
         cfg = VFEConfig(embed_dim=16, irrep_spec=[('l0', 2, 8)],
-                        diagonal_covariance=False)
+                        diagonal_covariance=False, rope_full_gauge=True)
         assert cfg.diagonal_covariance is False
+        assert cfg.rope_full_gauge is True
 
     def test_rope_full_gauge_requires_full_cov(self):
         """rope_full_gauge=True with diagonal_covariance=True raises ValueError."""

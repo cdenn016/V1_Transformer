@@ -310,6 +310,7 @@ class GaugeTransformerBlock(nn.Module):
             update_phi_per_iteration=cfg.evolve_phi_e_step,
             phi_lr=cfg.phi_lr,
             phi_max_norm=cfg.phi_max_norm,
+            omega_trust_region=cfg.omega_trust_region,
             phi_project_slk=cfg.phi_project_slk,
             phi_trace_clamp=cfg.phi_trace_clamp,
             prior_bank=cfg.ffn_prior_bank,

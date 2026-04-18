@@ -30,7 +30,7 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 **check claude-mem for prior session context when resuming work on a topic**
 
-## Codebase Map
+Before you say the fix is done: (1) open my active config file, (2) trace every relevant key through the config loader and any override logic, (3) confirm the exact line you changed is reached at runtime under my config, (4) only then run tests and report.
 
 
 ## Code Conventions
@@ -82,11 +82,10 @@ F = alpha * KL(q_i || p_i)                    # self-coupling: beliefs to priors
 
 ## Communication Style
 
-**Humility** You are free to say "i don't know" whenever you are unsure about a response.
+**Humility** say "i don't know" whenever you are unsure about anything.
 
 **Verify** Use citations to verify theoretical and mathematical suggestions and responses
 
-**quote** use direct quotes for factual grounding
 
 **Be direct.** State errors and concerns plainly. "This is wrong because X" not "This might potentially be slightly off." Always ultra-think and double check.
 
@@ -100,7 +99,11 @@ F = alpha * KL(q_i || p_i)                    # self-coupling: beliefs to priors
 
 **No bullshit.** If a correspondence is interpretive rather than mathematically exact, say so explicitly. If something doesn't connect, admit the gap. Remove content that doesn't earn its place through rigorous derivation. Never dress up hand-waving as theorem. When asked "what does X have to do with anything?" — if the answer is "not much", say that.
 
-## Manuscript Style
+## Style
+
+Add under an existing ## Documentation or ## Writing Style section, or create one\n\n## Scientific Writing Rules
+- Do NOT use LaTeX spacing macros like `\;`, `\,`, `\!` in equations — these are banned in this project's docs.
+- Apply standard equation punctuation (comma/period at end of display equations) as part of any doc cleanup pass.
 
 Write in academic prose, not bullet points. Use flowing paragraphs with clear logical progression. Use /literature-review, /scientific-writing, /sympy, and other relavent skills
 
@@ -162,7 +165,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ## Contributing
 
 1. **Preserve gauge equivariance** — covariance transport is always `Omega @ Sigma @ Omega.T`
-2. **Use natural gradients** for phi parameters — never raw Euclidean gradients on Lie algebra without preconditioning
+2. **Use natural gradients**  never raw Euclidean gradients on Lie algebra without preconditioning
 3. **Test spectral behavior** — new features should maintain or improve spectral trends (effective rank, entropy)
 4. **Document math** — include LaTeX notation in docstrings for any non-trivial formula
 5. **Domain expertise areas**: differential geometry (SPD manifolds, Lie theory), variational inference (KL, ELBO, information geometry), gauge theory (equivariance, parallel transport, irreps), matrix algebra (eigendecomposition, matrix exponentials)

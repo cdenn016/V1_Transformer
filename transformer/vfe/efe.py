@@ -190,7 +190,8 @@ class VFEExpectedFreeEnergy:
                 ep = self._compute_epistemic_value(beliefs.mu, beliefs.sigma)
                 epistemics.append(ep)
             else:
-                epistemics.append(torch.tensor(0.0, device=device))
+                _dtype = risks[0].dtype if risks else torch.float32
+                epistemics.append(torch.tensor(0.0, device=device, dtype=_dtype))
 
         risk_tensor = torch.stack(risks)       # (C,)
         ambiguity_tensor = torch.stack(ambiguities)  # (C,)

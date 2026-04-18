@@ -234,6 +234,7 @@ class VariationalFFNDynamic(nn.Module):
         update_phi_per_iteration: bool =  True,  # If True, update phi during EACH E-step iteration
         
         phi_max_norm: Optional[float] =   None,  # Max phi norm; None = auto (π for SO(N), 5.0 for GL(K))
+        omega_trust_region: float =       0.3,   # Trust-region clamp for direct Omega retraction (gauge_param='omega')
         phi_project_slk: bool =           False, # GL(K) only: project φ → sl(K) after retraction (det Ω = 1)
         phi_trace_clamp: Optional[float] = None, # GL(K) only: soft cap |tr(φ·G)| ≤ T per token
         prior_bank: Optional[nn.Module] = None,  # Token-dependent PriorBank (if provided)
@@ -454,6 +455,7 @@ class VariationalFFNDynamic(nn.Module):
             logger.info(f"[VariationalFFNDynamic] φ will evolve DURING E-step iterations (dynamical gauge frames)")
         self.phi_lr = phi_lr
         self.phi_max_norm = phi_max_norm
+        self.omega_trust_region = omega_trust_region
         self.phi_project_slk = phi_project_slk
         self.phi_trace_clamp = phi_trace_clamp
 
@@ -1533,7 +1535,14 @@ class VariationalFFNDynamic(nn.Module):
             phi_current = phi.detach()
         else:
             phi_current = phi
-        omega_current = omega
+        # Omega analog of phi detach: under M_phi_p the gauge element is an
+        # M-step parameter and must be frozen (graph severed) during the E-step.
+        # Without this, KL expressions inside the E-step accumulate semi-gradient
+        # into omega_embed through β/transport, turning em_phi_p into a hybrid.
+        if self.em_phi_mode == 'M_phi_p' and omega is not None:
+            omega_current = omega.detach()
+        else:
+            omega_current = omega
 
         # ── Alpha computation ────────────────────────────────────────────
         if self.learnable_alpha:
@@ -2525,9 +2534,14 @@ class VariationalFFNDynamic(nn.Module):
         # Skip when closed_form_e_step already handled phi evolution above.
         _use_omega = omega_current is not None and getattr(self, 'gauge_param', 'phi') == 'omega'
         _skip_phi_post = self.closed_form_e_step and is_diagonal  # Already done in closed-form path
+        # em_phi_mode == 'M_phi_p' forbids any in-E-step evolution of phi/omega.
+        # The per-iter block at ~line 2214 already honors this; the post-loop
+        # block used to run unconditionally and silently violated the contract
+        # when update_phi_per_iteration=False.
         if (self.update_phi and not self.update_phi_per_iteration
                 and torch.is_grad_enabled()
                 and self.gauge_mode not in ('trivial', 'constant')
+                and self.em_phi_mode != 'M_phi_p'
                 and not _skip_phi_post):
 
             if _use_omega:
@@ -2602,6 +2616,13 @@ class VariationalFFNDynamic(nn.Module):
                 sigma_current = sigma_current.detach()
             if self.em_phi_mode == 'E_phi_q':
                 phi_current = phi_current.detach()
+            # Omega symmetry: when gauge_param='omega', the evolved omega carries
+            # the E-step autograd graph (transport/β consumers) to the next layer
+            # via _last_evolved_omega unless detached here. Under both EM modes
+            # the gauge frame exits the E-step as a constant.
+            if (getattr(self, 'gauge_param', 'phi') == 'omega'
+                    and omega_current is not None):
+                omega_current = omega_current.detach()
 
         if self.update_sigma:
             return mu_current, sigma_current, phi_current, beta_history

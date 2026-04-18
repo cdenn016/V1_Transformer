@@ -1616,9 +1616,14 @@ class PublicationMetrics:
             # Compute metrics
             field_energy = compute_gauge_field_energy(phi, beta, generators)
             _enforce_orth = model.config.get('enforce_orthogonal', False)
+            # Omega path: feed the direct gauge frames so det(Ω) is computed
+            # from Ω itself instead of from the phi dummy that the omega path
+            # leaves at zero.
+            _omega_direct = attn_info.get('omega', None) if isinstance(attn_info, dict) else None
             invariants = compute_gauge_invariants(
                 mu, sigma, phi, generators, beta,
                 enforce_orthogonal=_enforce_orth,
+                omega=_omega_direct,
             )
             orbit_dim = compute_gauge_orbit_dimension(phi, generators)
 

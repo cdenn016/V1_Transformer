@@ -63,6 +63,11 @@ class VFEEStep(nn.Module):
 
     def __init__(self, cfg: 'VFEConfig', generators: torch.Tensor) -> None:
         super().__init__()
+        if cfg.n_e_steps < 1:
+            raise ValueError(
+                f"VFEConfig.n_e_steps must be >= 1 (got {cfg.n_e_steps}); "
+                "a zero-iteration E-step turns every layer into an identity."
+            )
         self.n_e_steps = cfg.n_e_steps
         self.alpha = cfg.alpha
         self.E_learnable_alpha = cfg.E_learnable_alpha
@@ -210,6 +215,12 @@ class VFEEStep(nn.Module):
         # E-step iteration (plus once inside _update_phi).
         _kappa = self.effective_kappa
 
+        # Hoist iter-independent softplus(raw_c0) out of the loop.
+        alpha_c0_full_hoisted: Optional[torch.Tensor] = None
+        if self.E_learnable_alpha:
+            import torch.nn.functional as F_fn
+            alpha_c0_full_hoisted = F_fn.softplus(self.raw_c0)
+
         for t in range(self.n_e_steps):
             # 1. Compute transport and KL attention
             block_exp_pairs = compute_gauge_transport(
@@ -224,14 +235,17 @@ class VFEEStep(nn.Module):
             # gradient of α·KL wrt (μ,σ) carries a product-rule term −(α²/c0)·KL·(dKL/dθ);
             # compute_vfe_gradients_gpu and the rope helper apply this correction iff
             # alpha_c0 is passed in. Without it, the descent direction is biased.
-            alpha_c0_full = None
+            alpha_c0_full = alpha_c0_full_hoisted
             if self.E_learnable_alpha:
-                import torch.nn.functional as F_fn
                 alpha_eff = self.get_bayesian_alpha(mu, mu_p, sigma, sigma_p)
-                alpha_c0_full = F_fn.softplus(self.raw_c0)
 
             # rope_full_gauge: per-head autograd path that rotates BOTH μ and Σ
-            if self.rope_full_gauge and self.use_rope and not torch.is_inference_mode_enabled():
+            if (
+                self.rope_full_gauge
+                and self.use_rope
+                and not torch.is_inference_mode_enabled()
+                and torch.is_grad_enabled()
+            ):
                 grad_mu_parts = []
                 grad_sigma_parts = []
                 beta = None
@@ -421,6 +435,7 @@ class VFEEStep(nn.Module):
             rope_base=self.rope_base,
             enforce_orthogonal=self.enforce_orthogonal,
             mask_self_attention=self.mask_self_attention,
+            exact_diagonal_transport=self.exact_diagonal_transport,
         )
 
         # Product rule: d/dphi [sum(beta * KL)] = beta * dKL/dphi + KL * dbeta/dphi

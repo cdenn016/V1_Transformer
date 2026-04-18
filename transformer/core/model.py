@@ -1490,6 +1490,10 @@ class GaugeTransformerLM(nn.Module):
             # Transport & covariance health
             'transport_metrics': transport_metrics,
             'covariance_metrics': covariance_metrics,
+            # Last-layer evolved gauge frame when gauge_param='omega'; None for
+            # the phi path. Diagnostics (det_omega, spectrum) use this to
+            # bypass the dummy phi tensor that the omega path carries.
+            'omega': omega if getattr(self, 'gauge_param', 'phi') == 'omega' else None,
         }
 
         return logits, attention_info

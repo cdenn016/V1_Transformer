@@ -47,15 +47,15 @@ config = {
     
     'E_learnable_alpha':        True,     # Bayesian adaptive α_i = c0/(b0+KL)
     'lambda_align':             1.0,       # Direct attention coupling (β · ∂KL/∂θ)
-    'lambda_soft':              0,         # Softmax coupling (∂β/∂θ · KL)
+    'lambda_soft':              1.0,       # Softmax coupling (∂β/∂θ · KL) — matches VFEConfig default
     'kappa':                    1.0,       # Attention temperature
     'learnable_kappa':          False,     # Learn per-layer kappa
 
 
     # === Cross-layer prior handoff ===
     'prior_handoff_rho':        1.0,       # μ damping (1.0 = full flow, <1 = smoother)
-    'prior_handoff_sigma':      0.01,      # Σ handoff (0.0 = frozen, >0 = blends posterior)
-    'prior_handoff_phi':        True,      # Propagate φ across layers
+    'prior_handoff_sigma':      0.0,       # Σ handoff (0.0 = frozen, >0 = blends posterior)
+    'prior_handoff_phi':        False,     # Deprecated/no-op — phi flows via beliefs, not priors
 
 
     # === Covariance ===
@@ -98,7 +98,7 @@ config = {
 
 
     # === Normalization ===
-    'norm_type':                'layernorm',# 'mahalnorm', 'rmsnorm', 'layernorm','none'
+    'norm_type':                'rmsnorm',  # 'mahalnorm', 'rmsnorm', 'none'
     'normalize_ce_by_dim':      False,      # Divide CE by sqrt(K)
 
 
@@ -122,6 +122,8 @@ config = {
 # DATASET — select one: 'wikitext-2', 'wikitext-103', 'wiki-ja'
 # ============================================================================
 
+SEED = 1234                   # Reproducibility seed for torch / numpy / dataloader workers
+
 DATASET = 'wikitext-103'      # ~103M tokens, full-scale training
 # DATASET = 'wikitext-2'      # ~2M tokens, fast iteration
 # DATASET = 'wiki-ja'         # Japanese Wikipedia, ~1B chars
@@ -134,6 +136,15 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 # ============================================================================
 
 if __name__ == '__main__':
+    import random
+    import numpy as np
+    random.seed(SEED)
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(SEED)
+    logging.info(f"Seed set to {SEED}")
+
     # Build dataloaders
     logging.info(f"Loading dataset: {DATASET}")
     train_loader, val_loader, vocab_size = create_dataloaders(

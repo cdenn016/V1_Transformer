@@ -250,9 +250,17 @@ class PriorBank(nn.Module):
                         weight[:, offset:offset + d * d] = eye_flat.unsqueeze(0) + omega_scale * torch.randn(vocab_size, d * d)
                         offset += d * d
                     self.omega_embed.weight.copy_(weight)
-                # Dummy phi_embed for compatibility
+                # Dummy phi_embed for API compatibility (omega path returns
+                # zero phi alongside its direct gauge frames). FROZEN: a prior
+                # version was a learnable nn.Embedding whose zero weights
+                # drifted under AdamW momentum + weight-decay, wasting
+                # parameters and poisoning any analysis code that still
+                # consulted phi. requires_grad_(False) makes the optimizer's
+                # named_parameters() loop (see training/optimizer.py:672-673)
+                # skip it entirely.
                 self.phi_embed = nn.Embedding(vocab_size, phi_dim)
                 nn.init.zeros_(self.phi_embed.weight)
+                self.phi_embed.weight.requires_grad_(False)
             else:
                 # Per-token gauge frames φ_v — needed for gauge transport even
                 # without gauge-fixed priors. Without this, phi has no gradient path.

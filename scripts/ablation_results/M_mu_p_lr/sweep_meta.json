@@ -1,8 +1,0 @@
-{
-  "sweep_name": "M_mu_p_lr",
-  "description": "Belief mean (\u03bc) learning rate",
-  "baseline_value": "0.078",
-  "n_runs": 26,
-  "seed": 6,
-  "timestamp": "2026-04-17 08:57:01"
-}
