@@ -187,6 +187,7 @@ class TrainingConfig:
     gauge_param: str =           'phi'       # 'phi' or 'omega'
     omega_lr: float =            0.01         # LR for direct Omega embeddings (gauge_param='omega')
     omega_trust_region: float =  0.3
+    omega_det_penalty: float =   0.0          # λ · mean (log|det Ω_h|)² regularizer (keeps Ω invertible under gauge_param='omega'; unused for 'phi')
     isotropic_covariance: bool = False  # Force Σ = σ²I (Limit 1 from manuscript)
 
     # ==========================================================================

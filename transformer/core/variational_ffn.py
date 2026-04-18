@@ -933,8 +933,8 @@ class VariationalFFNDynamic(nn.Module):
         Returns:
             grad_omega: (B, N, K, K) gradient ∂F_align/∂Ω_i, or None if no gradient computed.
         """
-        if sigma_current is None or not is_diagonal:
-            return None  # Full covariance path not yet implemented
+        if sigma_current is None:
+            return None  # No covariance → no KL alignment term → no ∂F_align/∂Ω
 
         B, N, K = mu_current.shape
         device = mu_current.device
@@ -982,7 +982,15 @@ class VariationalFFNDynamic(nn.Module):
         for h, d_h in enumerate(irrep_dims):
             block_end = block_start + d_h
             mu_h = mu_current[:, :, block_start:block_end].detach()
-            sigma_h = sigma_current[:, :, block_start:block_end].detach() if is_diagonal else None
+            # Per-block covariance slice. Diagonal path: (B, N, d_h) vector of
+            # variances. Full-cov path: (B, N, d_h, d_h) per-block submatrix —
+            # mirrors the phi-grad slicing at _compute_phi_grad lines 1166-1169.
+            if is_diagonal:
+                sigma_h = sigma_current[:, :, block_start:block_end].detach()
+            else:
+                sigma_h = sigma_current[:, :,
+                                       block_start:block_end,
+                                       block_start:block_end].detach()
             gen_h = self.generators[:, block_start:block_end, block_start:block_end]
 
             kappa_h = self._get_kappa_h(h, d_h)  # Match main multihead path scaling

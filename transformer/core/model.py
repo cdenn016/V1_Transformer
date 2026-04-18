@@ -1494,6 +1494,15 @@ class GaugeTransformerLM(nn.Module):
             # the phi path. Diagnostics (det_omega, spectrum) use this to
             # bypass the dummy phi tensor that the omega path carries.
             'omega': omega if getattr(self, 'gauge_param', 'phi') == 'omega' else None,
+            # Initial per-token Omega (embedding lookup, attached to omega_embed)
+            # for the omega path. Exposed separately because the evolved omega
+            # above is detached at the EM boundary under em_phi_p and so
+            # cannot deliver an M-step gradient to omega_embed; the penalty
+            # term (log|det Ω|)² in compute_free_energy_loss consumes this
+            # attached tensor instead.
+            'omega_initial': (prep['omega']
+                              if getattr(self, 'gauge_param', 'phi') == 'omega'
+                              else None),
         }
 
         return logits, attention_info

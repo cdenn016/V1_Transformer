@@ -503,5 +503,92 @@ def test_non_flat_omega_cocycle_relaxation_interpolates(device, small_config):
     assert diff > 1e-3, f"α=1 should differ from flat, but diff = {diff:.6f}"
 
 
+# ── Full-covariance omega gradient (no longer returns None) ────────────────
+
+def test_compute_omega_grad_direct_full_covariance(device, small_config):
+    """_compute_omega_grad_direct returns a finite grad when is_diagonal=False.
+
+    Previously the function early-returned None on the full-covariance path;
+    the fix mirrors the phi-path per-block sigma slicing at
+    variational_ffn.py:_compute_phi_grad lines 1166-1169.
+    """
+    from transformer.core.variational_ffn import VariationalFFNDynamic
+    from math_utils.generators import generate_so3_generators
+
+    B, N, K = small_config['B'], small_config['N'], small_config['K']
+    irrep_dims = small_config['irrep_dims']
+    # SO(3) block generators per 3-dim head.
+    gen_block = torch.from_numpy(generate_so3_generators(3)).float().to(device)
+    n_gen = gen_block.shape[0]
+    generators = torch.zeros(n_gen, K, K, device=device)
+    generators[:, :3, :3] = gen_block
+    generators[:, 3:6, 3:6] = gen_block  # same block twice; test only needs GL(3)×GL(3)
+
+    ffn = VariationalFFNDynamic(
+        embed_dim=K, generators=generators, alpha=0.001, kappa=1.0,
+        n_iterations=1, diagonal_covariance=False, irrep_dims=irrep_dims,
+        gauge_param='omega',
+    ).to(device)
+
+    torch.manual_seed(0)
+    mu = torch.randn(B, N, K, device=device)
+    # Full-cov sigma: SPD per token.
+    A = torch.randn(B, N, K, K, device=device) * 0.1
+    sigma_full = torch.einsum('bnij,bnkj->bnik', A, A) + 0.5 * torch.eye(K, device=device)
+    eye_k = torch.eye(K, device=device).expand(B, N, -1, -1).clone()
+    omega = eye_k + 0.05 * torch.randn(B, N, K, K, device=device)
+
+    grad_omega = ffn._compute_omega_grad_direct(
+        omega_current=omega, mu_current=mu, sigma_current=sigma_full,
+        is_diagonal=False, mask=None, eps=1e-8,
+    )
+    assert grad_omega is not None, "Full-cov omega grad must not return None"
+    assert grad_omega.shape == omega.shape
+    assert torch.isfinite(grad_omega).all(), "Full-cov omega grad has NaN/Inf"
+    assert grad_omega.abs().max() > 1e-10, "Full-cov omega grad is trivially zero"
+
+
+# ── log|det(Omega)| penalty arithmetic ─────────────────────────────────────
+
+def test_omega_det_penalty_zero_at_identity(device, small_config):
+    """(log|det Ω|)² penalty vanishes when Ω = I."""
+    B, N = small_config['B'], small_config['N']
+    K_h = small_config['K_h']
+    identity = torch.eye(K_h, device=device).expand(B, N, -1, -1).clone()
+    _, logabsdet = torch.linalg.slogdet(identity)     # (B, N)
+    penalty = (logabsdet ** 2).mean()
+    assert penalty.abs().item() < 1e-10, f"Penalty at Ω=I should be ≈0, got {penalty.item():.3e}"
+
+
+def test_omega_det_penalty_positive_off_identity(device, small_config):
+    """Penalty is strictly positive when det|Ω| ≠ 1."""
+    B, N = small_config['B'], small_config['N']
+    K_h = small_config['K_h']
+    # Scale identity by 2 → det = 2^K_h, logabsdet = K_h·log 2 > 0.
+    omega = 2.0 * torch.eye(K_h, device=device).expand(B, N, -1, -1).clone()
+    _, logabsdet = torch.linalg.slogdet(omega)
+    penalty = (logabsdet ** 2).mean()
+    expected = (K_h * math.log(2.0)) ** 2
+    assert penalty.item() > 0, "Penalty should be positive for det|Ω| ≠ 1"
+    assert abs(penalty.item() - expected) < 1e-4, (
+        f"Penalty {penalty.item():.4f} != expected {expected:.4f}"
+    )
+
+
+def test_omega_det_penalty_invariant_to_reflection(device, small_config):
+    """Penalty treats det<0 and det>0 symmetrically (reflections allowed)."""
+    B, N = small_config['B'], small_config['N']
+    K_h = small_config['K_h']
+    omega_pos = torch.eye(K_h, device=device).expand(B, N, -1, -1).clone() * 1.5
+    omega_neg = omega_pos.clone()
+    omega_neg[..., :, 0] *= -1  # flip first column → det sign flip, |det| unchanged
+    _, lad_pos = torch.linalg.slogdet(omega_pos)
+    _, lad_neg = torch.linalg.slogdet(omega_neg)
+    # log|det| identical up to sign convention; slogdet returns log of absolute value
+    assert torch.allclose(lad_pos, lad_neg, atol=1e-6), (
+        "log|det Ω| should be sign-invariant; penalty must allow reflections"
+    )
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

@@ -268,6 +268,7 @@ def compute_free_energy_loss(
     lambda_hyper: float = 0.0,    # Hyper-prior: KL(s_i || h) — models to centroid
     pad_token_id: int = -100,     # Token ID to ignore in loss (padding)
     mass_phi: float = 0.0,        # Gauge prior weight: (mass_φ/2) Σ_i ||φ_i||²
+    omega_det_penalty: float = 0.0,  # λ · mean_{i,h}(log|det Ω_{i,h}|)² regularizer (gauge_param='omega' only)
     aux_loss_weight: float = 0.0, # Weight for auxiliary per-layer CE losses (0 = disabled)
     detach_beta_m_step: bool = True,  # True = correct EM (detach β). False = old behavior (grad through softmax)
     normalize_ce_by_dim: bool = False,  # Divide CE by sqrt(K) to match VFE dim_scale
@@ -599,11 +600,37 @@ def compute_free_energy_loss(
                 _block._last_exp_delta = None
 
     # =================================================================
+    # Omega determinant regularizer (gauge_param='omega' only)
+    # =================================================================
+    # Direct-Omega parameterization has no exp-map guarantee that Ω ∈ GL(K).
+    # Without regularization, Ω can drift toward singular (det→0) or blow up
+    # (det→∞), breaking the sandwich transport and the cocycle identity.
+    # Penalize (log|det Ω_h|)² per block per token. The minimum is |det|=1,
+    # so this drives |det Ω_h| toward unity while allowing det<0 (reflections).
+    omega_det_loss = torch.tensor(0.0, device=ce_loss.device)
+    _omega_init = attn_info.get('omega_initial', None) if isinstance(attn_info, dict) else None
+    if omega_det_penalty > 0.0 and _omega_init is not None:
+        _irrep_dims = getattr(model, 'irrep_dims', None)
+        if _irrep_dims is None:
+            _irrep_dims = [_omega_init.shape[-1]]
+        _det_acc = torch.tensor(0.0, device=ce_loss.device, dtype=_omega_init.dtype)
+        _block_start = 0
+        for _d in _irrep_dims:
+            _block_end = _block_start + _d
+            _omega_h = _omega_init[:, :,
+                                   _block_start:_block_end,
+                                   _block_start:_block_end]
+            _, _logabsdet = torch.linalg.slogdet(_omega_h)  # (B, N)
+            _det_acc = _det_acc + (_logabsdet ** 2).mean()
+            _block_start = _block_end
+        omega_det_loss = omega_det_penalty * _det_acc
+
+    # =================================================================
     # Total Training Loss (CE + optional auxiliary VFE regularizers)
     # =================================================================
     total_loss = (ce_loss + belief_align_loss + self_consistency_loss
                   + model_align_loss + hyper_prior_loss + gauge_prior_loss
-                  + aux_loss + holonomy_loss)
+                  + aux_loss + holonomy_loss + omega_det_loss)
 
     # Compute attention metrics outside the computation graph
     # When skip_attention=True, beta/kl from the attention sublayer are None.
@@ -650,6 +677,7 @@ def compute_free_energy_loss(
         'loss/gauge_prior': gauge_prior_loss.item() if mass_phi > 0 else 0.0,
         'loss/aux_layer_ce': aux_loss.item() if aux_losses else 0.0,
         'loss/holonomy': holonomy_loss.item() if isinstance(holonomy_loss, torch.Tensor) else float(holonomy_loss),
+        'loss/omega_det': omega_det_loss.item() if omega_det_penalty > 0 else 0.0,
         'attention/beta_mean': _beta_mean,
         'attention/kl_mean': _kl_mean,
         'attention/entropy': attn_entropy.item(),

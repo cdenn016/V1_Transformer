@@ -457,6 +457,7 @@ def resume_training():
 
         # Phi preconditioning
         mass_phi=config.get('mass_phi', 0.05),
+        omega_det_penalty=config.get('omega_det_penalty', 0.0),
         use_slk_projection=config.get('use_slk_projection', False),
         use_killing_form=config.get('use_killing_form', False),
         killing_form_sym_dampening=config.get('killing_form_sym_dampening', 0.1),
