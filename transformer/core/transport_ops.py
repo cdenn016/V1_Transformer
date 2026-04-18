@@ -435,15 +435,11 @@ def compute_transport_operators_direct(
     Note: the phi-based path (gauge_param='phi') guarantees Ω = exp(φ·G) ∈ GL(K)
     by construction (matrix exponentials are always invertible). This direct path
     trades that guarantee for simpler gradients and the ability to represent
-    reflections (det < 0), but requires external regularization (e.g. weight
-    decay, det penalty) to prevent Ω from approaching singularity.
+    reflections (det < 0), but requires external regularization to prevent
+    Ω from approaching singularity. See TrainingConfig.omega_det_penalty
+    for the (log|det Ω|)² regularizer that supplies this gradient pressure.
 
-    TODO(Fix4): Add log|det(Ω)| penalty to the training loss to keep Ω
-    invertible via gradient pressure rather than relying solely on the
-    fallback chain.  Proposed: loss += λ_det · (log|det(Ω)| - target)²
-    where target ≈ 0 (det ≈ ±1).  Add omega_det_penalty hyperparameter
-    to TrainingConfig.  With the penalty active, the ridge/pinv fallbacks
-    should fire rarely (< 1% of steps).
+
 
     Args:
         omega: (B, N, K, K) per-token matrices Ω_i, initialized near identity.

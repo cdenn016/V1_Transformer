@@ -610,12 +610,18 @@ def compute_free_energy_loss(
     omega_det_loss = torch.tensor(0.0, device=ce_loss.device)
     _omega_init = attn_info.get('omega_initial', None) if isinstance(attn_info, dict) else None
     if omega_det_penalty > 0.0 and _omega_init is not None:
-        _irrep_dims = getattr(model, 'irrep_dims', None)
-        if _irrep_dims is None:
-            _irrep_dims = [_omega_init.shape[-1]]
+        # Block structure lives on model.omega_head_dims (set by
+        # GaugeTransformerLM.__init__ when gauge_param='omega'). Falling back
+        # to a single full-K block would compute (sum_h log|det Ω_h|)² — a
+        # looser penalty that lets positive- and negative-log|det| blocks
+        # cancel. Prefer per-block Σ_h (log|det Ω_h|)² so each block is
+        # regularized independently.
+        _head_dims = getattr(model, 'omega_head_dims', None)
+        if _head_dims is None:
+            _head_dims = [_omega_init.shape[-1]]
         _det_acc = torch.tensor(0.0, device=ce_loss.device, dtype=_omega_init.dtype)
         _block_start = 0
-        for _d in _irrep_dims:
+        for _d in _head_dims:
             _block_end = _block_start + _d
             _omega_h = _omega_init[:, :,
                                    _block_start:_block_end,
