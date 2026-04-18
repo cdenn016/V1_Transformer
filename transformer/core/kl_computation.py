@@ -90,6 +90,8 @@ def _kl_kernel_dense(
     kl_max: float,
     eps: float,
     alpha_div: float = 1.0,
+    exp_phi_q: torch.Tensor = None,   # (..., K, K) local frame at q (optional)
+    exp_phi_t: torch.Tensor = None,   # (..., K, K) local frame at t (optional)
 ) -> torch.Tensor:
     r"""Full-covariance KL or Rényi :math:`\alpha`-divergence.
 
@@ -142,8 +144,20 @@ def _kl_kernel_dense(
     sigma_t = sigma_t.float()
 
     I = torch.eye(K, device=device, dtype=torch.float32)
-    sigma_q_reg = sigma_q + eps * I
-    sigma_t_reg = sigma_t + eps * I
+    # Optional gauge-covariant ridge: use eps * (g g^T) so regularized Σ
+    # transforms exactly as Σ under h Σ h^T. Falls back to eps * I.
+    if exp_phi_q is not None:
+        _gq = exp_phi_q.to(dtype=torch.float32)
+        R_q = _gq @ _gq.transpose(-1, -2)
+    else:
+        R_q = I
+    if exp_phi_t is not None:
+        _gt = exp_phi_t.to(dtype=torch.float32)
+        R_t = _gt @ _gt.transpose(-1, -2)
+    else:
+        R_t = I
+    sigma_q_reg = sigma_q + eps * R_q
+    sigma_t_reg = sigma_t + eps * R_t
 
     # NaN guard: transported covariances can contain NaN when phi is very large.
     # We track which pairs have NaN and set their KL to kl_max after

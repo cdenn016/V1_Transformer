@@ -536,12 +536,32 @@ def run_closed_form_e_step(
                     sigma_p_diag = torch.diagonal(sigma_p, dim1=-2, dim2=-1).clamp(min=eps)
                     sigma_q_diag = torch.diagonal(sigma_current, dim1=-2, dim2=-1).clamp(min=eps)
                     delta_mu_p = mu_current - mu_p_current
+                    alpha_div = getattr(ffn, 'alpha_divergence', 1.0)
 
-                    alpha_mismatch = (alpha_n - alpha_effective) * delta_mu_p / sigma_p_diag
-                    kl_k = 0.5 * (sigma_q_diag / sigma_p_diag + delta_mu_p ** 2 / sigma_p_diag
-                                  - 1.0 + torch.log(sigma_p_diag) - torch.log(sigma_q_diag))
-                    kl_k = kl_k.clamp(min=0.0)
-                    product_rule = -(alpha_n ** 2 / _alpha_c0) * kl_k * delta_mu_p / sigma_p_diag
+                    # α_mismatch term uses per-dim ∂KL/∂μ proxy: δμ/σ_p for KL,
+                    # α_d·δμ/σ_blend for Rényi.  The divergence value (kl_k or
+                    # D_α,k) is the same one feeding both α_effective and α_n
+                    # via get_bayesian_alpha — now consistent under D_α.
+                    if abs(alpha_div - 1.0) < 1e-6:
+                        div_grad_mu = delta_mu_p / sigma_p_diag
+                        div_k = 0.5 * (sigma_q_diag / sigma_p_diag + delta_mu_p ** 2 / sigma_p_diag
+                                       - 1.0 + torch.log(sigma_p_diag) - torch.log(sigma_q_diag))
+                    else:
+                        sigma_blend = (
+                            (1.0 - alpha_div) * sigma_q_diag + alpha_div * sigma_p_diag
+                        ).clamp(min=eps)
+                        div_grad_mu = alpha_div * delta_mu_p / sigma_blend
+                        mahal_k = alpha_div * delta_mu_p ** 2 / sigma_blend
+                        logdet_k = (
+                            (1.0 - alpha_div) * torch.log(sigma_q_diag)
+                            + alpha_div * torch.log(sigma_p_diag)
+                            - torch.log(sigma_blend)
+                        ) / (alpha_div - 1.0)
+                        div_k = 0.5 * (mahal_k + logdet_k)
+                    div_k = div_k.clamp(min=0.0)
+
+                    alpha_mismatch = (alpha_n - alpha_effective) * div_grad_mu
+                    product_rule = -(alpha_n ** 2 / _alpha_c0) * div_k * div_grad_mu
                     grad_softmax_full = grad_softmax_full + alpha_mismatch + product_rule
 
                 correction = torch.zeros_like(mu_current)
@@ -600,6 +620,9 @@ def run_closed_form_e_step(
                     generators=ffn.generators,
                     step_size=ffn.phi_lr,
                     max_norm=ffn.phi_max_norm,
+                    project_slk=getattr(ffn, 'phi_project_slk', False),
+                    trace_clamp=getattr(ffn, 'phi_trace_clamp', None),
+                    irrep_dims=getattr(ffn, 'irrep_dims', None),
                 )
 
     return mu_current, sigma_current, phi_current, omega_current, beta_heads, beta_history_out

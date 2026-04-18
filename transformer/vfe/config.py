@@ -61,9 +61,18 @@ class VFEConfig:
     # === Gauge geometry ===
     gauge_group: str = 'GLK'             # 'SO3', 'SON', 'GLK'
     phi_preconditioner: str = 'killing'  # 'clip', 'cartan', 'killing', 'pullback'
+    # GL(K) determinant control (no-op for SO(N), tr(G)=0 already). Pick at most one:
+    phi_project_slk: bool = False        # Hard project φ → sl(K) ⇒ det(Ω) ≡ 1
+    phi_trace_clamp: Optional[float] = None  # Soft cap |tr(φ·G)| ≤ T ⇒ det(Ω_ij) ∈ [exp(-2T), exp(2T)]
     enforce_orthogonal: bool = False     # Project Omega to SO(K)
     mask_self_attention: bool = True     # Mask diagonal in attention (prevents KL=0 collapse)
     mass_phi: float = 0.0               # Gauge prior: (mass_φ/2)||φ||²
+
+    # Gauge-covariant numerical ridge. When True, ε·I regularizers on
+    # sandwich-transforming covariances Σ are replaced by ε·(gg^T) built from
+    # the local frame g = exp(φ), preserving Σ → hΣh^T covariance exactly.
+    # Default False preserves bitwise numerics.
+    gauge_covariant_ridge: bool = False
 
     # === Positional encoding ===
     # NOTE: RoPE currently rotates only μ, not Σ. The framework-consistent gauge

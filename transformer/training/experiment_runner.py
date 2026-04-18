@@ -181,7 +181,6 @@ def run_test_evaluation(
                     kappa_gamma=1.0,
                     lambda_hyper=0.0,
                     pad_token_id=pad_token_id,
-                    use_obs_in_vfe=False,
                     mass_phi=0.0,
                     normalize_ce_by_dim=config.get('normalize_ce_by_dim', False) if isinstance(config, dict) else getattr(config, 'normalize_ce_by_dim', False),
                 )
@@ -343,6 +342,22 @@ class PublicationTrainer(FastTrainer):
         use_killing_form = getattr(self.config, 'use_killing_form', False)
         use_slk = getattr(self.config, 'use_slk_projection', False)
 
+        # RiemannianAdamW applies the Killing-form inverse to phi/omega grads
+        # internally (optimizer.py:_precondition_phi) and keeps its own Killing
+        # metric for the Riemannian trust-region clip.  The external Cartan
+        # projector + killing_metric_for_clip at the apply site below
+        # (_run_optimizer_step) is dedup-skipped whenever the optimizer is
+        # RAdamW, so building either here is wasted setup.  Skip the build.
+        from transformer.training.optimizer import RiemannianAdamW as _RAdamW
+        _optimizer_is_radamw = isinstance(self.optimizer, _RAdamW)
+
+        if use_killing_form and _optimizer_is_radamw:
+            _log(
+                "use_killing_form=True is redundant under optimizer_type="
+                "'riemannian_adam' (RAdamW applies Killing inverse internally). "
+                "Skipping external Cartan projector build."
+            )
+
         if (use_killing_form or use_slk) and hasattr(self.model, 'generators'):
             from transformer.core.gauge_preconditioner import (
                 build_cartan_projector,
@@ -350,7 +365,7 @@ class PublicationTrainer(FastTrainer):
             )
             generators = self.model.generators  # (n_gen, K, K)
 
-            if use_killing_form:
+            if use_killing_form and not _optimizer_is_radamw:
                 sym_dampening = getattr(
                     self.config, 'killing_form_sym_dampening', 0.1)
                 self._cartan_preconditioner = build_cartan_projector(
@@ -365,7 +380,7 @@ class PublicationTrainer(FastTrainer):
                 )
                 self._killing_metric_for_clip = self._killing_metric_for_clip.to(self.device)
                 _log(
-                    f"Killing form preconditioning enabled (M-step): "
+                    f"Killing form preconditioning enabled (M-step, non-RAdamW path): "
                     f"sym_dampening={sym_dampening} "
                     f"(non-compact directions dampened {1/sym_dampening:.0f}x)"
                 )
@@ -697,8 +712,6 @@ class PublicationTrainer(FastTrainer):
             dict produced by ``compute_free_energy_loss`` (or the minimal
             CE-only dict for the standard model).
         """
-        use_obs = getattr(self.config, 'use_obs_in_vfe', False)
-
         if is_standard:
             output = self.model(input_ids, labels=target_ids)
             loss = output['loss']
@@ -717,7 +730,6 @@ class PublicationTrainer(FastTrainer):
                 kappa_gamma=self.config.kappa_gamma,
                 lambda_hyper=self.config.lambda_hyper,
                 pad_token_id=self.pad_token_id,
-                use_obs_in_vfe=use_obs,
                 mass_phi=self.config.mass_phi,
                 aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
                 detach_beta_m_step=getattr(self.config, 'detach_beta_m_step', True),
@@ -1044,11 +1056,10 @@ class PublicationTrainer(FastTrainer):
                 # Diagnostic forward pass WITH grad enabled so phi evolves
                 # across layers (phi update is gated by torch.is_grad_enabled()).
                 # Zero grads afterward to avoid polluting the next train step.
-                # Respect use_obs_in_vfe: only pass targets if training uses them,
-                # so diagnostics measure the same E-step path as training.
-                _diag_targets = target_ids if getattr(self.config, 'use_obs_in_vfe', False) else None
+                # `targets` is forwarded only for the outer auxiliary CE loss;
+                # the E-step never sees targets.
                 self.model.forward_with_attention(
-                    input_ids, targets=_diag_targets)
+                    input_ids, targets=target_ids)
 
                 # Zero any gradients accumulated during diagnostic pass
                 self.model.zero_grad(set_to_none=True)
@@ -1937,6 +1948,8 @@ def run_single_experiment(
 
         # M-step optimizer type
         optimizer_type=config.get('optimizer_type', 'adamw'),
+        phi_optimizer_metric=config.get('phi_optimizer_metric', 'killing'),
+        pullback_series_order=config.get('pullback_series_order', 6),
         fisher_ema_decay=config.get('fisher_ema_decay', 0.95),
         fisher_damping=config.get('fisher_damping', 1e-4),
 
@@ -1947,7 +1960,6 @@ def run_single_experiment(
         lambda_gamma=config['lambda_gamma'],
         kappa_gamma=config.get('kappa_gamma', 1.0),
         lambda_hyper=config.get('lambda_hyper', 0.0),
-        use_obs_in_vfe=config.get('use_obs_in_vfe', False),
 
         # Multi-layer depth signal
         aux_layer_loss=config.get('aux_layer_loss', False),

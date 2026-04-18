@@ -37,8 +37,9 @@ def compute_gauge_transport(
     Returns:
         List of ``(exp_h, exp_neg_h)`` pairs, one per irrep block.
     """
-    # Detect skew-symmetric generators (SO(N))
-    _skew = bool(torch.allclose(generators[0], -generators[0].T, atol=1e-6))
+    # Detect skew-symmetric generators (SO(N)) across ALL generators
+    # (previously checked only generators[0], which mis-classifies mixed sets).
+    _skew = bool(torch.allclose(generators, -generators.transpose(-1, -2), atol=1e-6))
     return fused_block_matrix_exp_pairs(
         phi, generators, irrep_dims,
         enforce_orthogonal=enforce_orthogonal,
@@ -110,8 +111,15 @@ def compute_kl_attention(
     if isinstance(result, tuple):
         beta, kl_matrix = result
     else:
-        beta = result
-        kl_matrix = beta  # fallback
+        # compute_attention_weights should always return (beta, kl_matrix).
+        # A non-tuple result indicates an upstream signature mismatch — fail
+        # loudly rather than silently aliasing kl_matrix to beta (which
+        # would corrupt any diagnostic that consumes kl_matrix).
+        raise RuntimeError(
+            "compute_attention_weights returned non-tuple result of type "
+            f"{type(result).__name__}. Expected (beta, kl_matrix) tuple. "
+            "Check transformer/core/attention.py:compute_attention_weights."
+        )
 
     return beta, kl_matrix
 

@@ -94,7 +94,6 @@ BASE_CONFIG = {
    'kappa_beta':                 1,
    'kappa_warmup_steps':         7500,  # freeze kappa for first n steps
    'learnable_head_kappa':       True, # If True, learn per-head κ_h via log_kappa_per_head
-   'obs_sigma_gradient':         True, # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
    'e_step_sigma_floor':         0.01,   # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
    
    # === EM gradient-flow mode ===
@@ -113,7 +112,6 @@ BASE_CONFIG = {
    'use_layernorm':              True,   #breaks gauge equivariance
    'use_residual':               True,
    'use_output_projection':      True,
-   'multihead_vfe':              True,
    'evolve_sigma':               True,
    'evolve_phi':                 True,  #M-step phi evolution
    'evolve_phi_e_step':          True,
@@ -257,13 +255,6 @@ BASE_CONFIG = {
    'active_inference_pragmatic_weight':  0,   # start small
    'active_inference_epistemic_weight':  1,   # keep both ON to avoid feedback loop
    'active_inference_epistemic_samples': 2,     # MC samples for BALD
-
-   #DO NOT USE PRAGMATIC WEIGHT WITH DISTILLATION
-
-   'active_inference_distill_weight':    0.0,        # λ_distill — start small
-   'active_inference_distill_normalize': True,        # divide CE by log(V) so weight is V-agnostic
-   'active_inference_distill_mode':      'aggregated',# 'aggregated' (default) or 'per_pair'
-
 
     'dataset': 'wikitext-103', #'wiki-2' for quick sweeps
 }

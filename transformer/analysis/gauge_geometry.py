@@ -23,7 +23,7 @@ from torch import Tensor
 from typing import Dict, List, Tuple
 
 from transformer.analysis.holonomy import compute_holonomy
-from transformer.core.gauge_utils import stable_matrix_exp_pair
+from transformer.core.gauge_utils import stable_matrix_exp_pair, newton_schulz_orthogonalize
 
 
 # ---------------------------------------------------------------------------
@@ -566,6 +566,7 @@ def compute_gauge_invariants(
     phi: Tensor,
     generators: Tensor,
     beta: Tensor,
+    enforce_orthogonal: bool = False,
 ) -> Dict[str, Tensor]:
     r"""Compute gauge-invariant quantities under $\mathrm{GL}^+(K)$.
 
@@ -606,17 +607,47 @@ def compute_gauge_invariants(
         # -- det(Omega_ij) = exp(tr(phi_i - phi_j))
         # tr(phi_i · G) = phi_i · tr(G)  — linearity of trace
         # tr_gen[a] = tr(T_a)
-        tr_gen = torch.diagonal(gen_f32, dim1=-2, dim2=-1).sum(dim=-1)  # (n_gen,)
+        # Compute in fp64: torch.exp overflows fp32 at argument ≈ 88.7, which
+        # maps to |tr Δφ| ≈ 88. With H-block GL(K) + per-block trace clamp T,
+        # the worst-case |tr Δφ| is 2·H·T — exceedable for H=6, T>7.3. fp64
+        # overflows at ≈ 709, giving enough headroom that finite-value guard
+        # below is rarely triggered.
+        tr_gen = torch.diagonal(gen_f32, dim1=-2, dim2=-1).sum(dim=-1).double()  # (n_gen,)
         # tr(phi_i · G) = sum_a phi^a_i * tr(T_a): (B, N)
-        trace_phi = torch.einsum("bna,a->bn", phi_f32, tr_gen)          # (B, N)
+        trace_phi = torch.einsum("bna,a->bn", phi_f32.double(), tr_gen)  # (B, N) f64
         # tr(phi_i - phi_j): (B, N, N)
-        trace_diff = trace_phi.unsqueeze(2) - trace_phi.unsqueeze(1)    # (B, N, N)
-        det_omega = torch.exp(trace_diff)                                # (B, N, N)
+        trace_diff = trace_phi.unsqueeze(2) - trace_phi.unsqueeze(1)     # (B, N, N) f64
+        det_omega = torch.exp(trace_diff).float()                         # back to f32
+        # Finite-value guard: if any det overflowed even in fp64, zero them
+        # and warn — downstream aggregators (mean/std/max in publication_metrics)
+        # would otherwise silently propagate inf.
+        if not torch.isfinite(det_omega).all():
+            import warnings as _warnings
+            _n_bad = int((~torch.isfinite(det_omega)).sum().item())
+            _max_abs = float(trace_diff.abs().max().item())
+            _warnings.warn(
+                f"gauge_geometry.compute_gauge_invariants: {_n_bad} non-finite "
+                f"det(Omega) values (max |tr Δφ|={_max_abs:.1f}); zeroed. "
+                f"Consider phi_project_slk=True or a tighter phi_trace_clamp.",
+                RuntimeWarning,
+            )
+            det_omega = torch.where(
+                torch.isfinite(det_omega), det_omega, torch.zeros_like(det_omega)
+            )
 
         # -- Gauge frame spectrum: eigenvalues of exp(phi_i · G) for each token
         phi_matrix = _build_phi_matrix(phi_f32, gen_f32)  # (B, N, K, K)
         phi_flat = phi_matrix.reshape(B * N, K, K)
         exp_phi_flat, _ = stable_matrix_exp_pair(phi_flat, only_forward=True)  # (B*N, K, K)
+
+        # When enforce_orthogonal is active, project to O(K) and recompute
+        # det(Omega) from the actual orthogonalized matrices (det ≈ ±1).
+        if enforce_orthogonal and K >= 2:
+            exp_phi_flat = newton_schulz_orthogonalize(exp_phi_flat)
+            det_per_token = torch.linalg.det(exp_phi_flat).reshape(B, N)  # (B, N)
+            # det(Omega_ij) = det(exp_phi_i) / det(exp_phi_j)
+            det_omega = det_per_token.unsqueeze(2) / det_per_token.unsqueeze(1).clamp(min=1e-30)
+
         # Eigenvalues (complex) → modulus as a gauge-invariant spectral quantity
         eigvals_complex = torch.linalg.eigvals(exp_phi_flat.float())   # (B*N, K) complex
         gauge_frame_spectrum = eigvals_complex.abs().reshape(B, N, K)  # (B, N, K) real
@@ -639,6 +670,7 @@ def compute_gauge_invariants(
             irrep_dims = [K]  # single block
             bep = fused_block_matrix_exp_pairs(
                 phi_f32, gen_f32, irrep_dims,
+                enforce_orthogonal=enforce_orthogonal,
             )
             kl_matrix = compute_kl_matrix(
                 mu_f32, sigma_f32, None, None,

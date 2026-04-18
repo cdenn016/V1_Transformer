@@ -61,9 +61,8 @@ TRAIN_CONFIG = {
     
     # === EM gradient-flow mode ===
     'em_mode':               'straight_through',
-    'use_obs_in_vfe':        False,  #cheats when true
-       
-    # === M-step: Optimizer ===  
+
+    # === M-step: Optimizer ===
     'optimizer_type':        'riemannian_adam',# or 'natural_gradient' or 'adamw' or 'riemannian_adam'
     'fisher_ema_decay':      0.95,            # for natural_gradient
     'fisher_damping':        1e-2,              # for natural_gradient
@@ -73,13 +72,11 @@ TRAIN_CONFIG = {
     'norm_type':             'layernorm',  # 'layernorm' | 'rmsnorm' | 'none'
     'use_residual':          True,
     'use_output_projection': True,
-    'multihead_vfe':         True,
-    
+
     'evolve_sigma':          True,
     'evolve_phi':            True,  #M-step phi evolution
     'evolve_phi_e_step':     True,
-    
-    'obs_sigma_gradient':    True, # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
+
     'e_step_sigma_floor':    0.01,   # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
     # === E-step dynamics ===
     

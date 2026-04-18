@@ -364,7 +364,7 @@ def compute_transport_operators(
     # Re-orthogonalization for SO(K) gauge groups
     # NOTE: For GL⁺(K), this is NOT required - VFE is invariant under GL(K)!
     # Only enable if you explicitly want SO(K) (e.g., for Haar measure averaging)
-    if enforce_orthogonal and K >= 16:
+    if enforce_orthogonal and K >= 2:
         exp_phi = newton_schulz_orthogonalize(exp_phi)
         exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
 

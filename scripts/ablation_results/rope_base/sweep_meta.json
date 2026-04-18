@@ -1,8 +1,0 @@
-{
-  "sweep_name": "rope_base",
-  "description": "RoPE frequency base: \u03b8_n = 1/base^(2n/K). Lower = faster position decay",
-  "baseline_value": "10",
-  "n_runs": 4,
-  "seed": 6,
-  "timestamp": "2026-04-14 09:03:16"
-}

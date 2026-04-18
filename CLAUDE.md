@@ -10,6 +10,10 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 **PRESERVE GAUGE EQUIVARIANCE**: Covariance transport must always use the sandwich product: `Sigma_transported = Omega @ Sigma @ Omega.T`. Never transport covariance without the conjugation. This is the single most common correctness bug. diagonal approximation is allowable for speed
 
+**E-STEP MUST NOT SEE TARGETS**: No `use_obs_in_vfe` or equivalent path that feeds target tokens into the E-step belief inference. Target tokens enter the training objective only via the outer CE loss in `compute_free_energy_loss` (the observation-likelihood term of the free energy). The E-step is pure belief inference (prior + alignment only). The flag was removed 2026-04-16 after training runs with it enabled were found to let the model see its predictions before emitting them.
+
+**KNOWN GAP — RoPE × MahalanobisNorm**: When `diagonal_covariance=True` AND `use_rope=True` AND `rope_full_gauge=False` (the diagonal-σ path forbids `rope_full_gauge=True` per `vfe/config.py:133-135`), RoPE rotates μ but not σ. Downstream `MahalanobisNorm(μ, σ)` in `vfe/block.py` then divides rotated μ by un-rotated σ, breaking strict SE(K) covariance for that combination. Acceptable as documented research limitation; track in `VFE_Transformer_Idea.md`.
+
 **Figures**: ALL Figures should be publication quality by default.
 
 **LOCALLY DEFINED CONFIGS**: User may not be running the config values which match the repo.  always double check what values the user is using!
@@ -22,7 +26,7 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 **LOCAL CODEBASE IS THE SOURCE OF TRUTH UNLESS OTHERWISE INSTRUCTED**
 
-**Check for sub-agents, skills, and plug-ins before deploying your own**
+**Check for sub-agents, skills, and plug-ins before deploying your own. additionally you should deploy a 'verifier' agent indepentently to verify any issues/discoveries/etc**
 
 **check claude-mem for prior session context when resuming work on a topic**
 
@@ -54,7 +58,7 @@ F = alpha * KL(q_i || p_i)                    # self-coupling: beliefs to priors
   - E_q[log p(o | x)]                         # observation likelihood
 ```
 
-**Attention**: `beta_ij = softmax(-KL(q_i || Omega_ij * q_j) / kappa)`
+**Attention**: `beta_ij = softmax(-KL(q_i || Omega_ij * q_j) / (kappa * sqrt(K)))` — `kappa` is a learnable hyperparameter; the `sqrt(K)` factor is intentional dimension scaling on top of `kappa` (analogous to scaled dot-product attention).
 
 **Transport**: `Omega_ij = exp(phi_i) * exp(-phi_j)` — covers GL+(K) via product of two exponentials
 
@@ -72,6 +76,9 @@ F = alpha * KL(q_i || p_i)                    # self-coupling: beliefs to priors
 | `'em_phi_q'` | detached | detached | evolves in E-step | all detached |
 | `'em_phi_p'` | detached | detached | frozen in E-step | mu,sigma detached |
 | `'implicit_ift'` (experimental) | detached | detached | attached | detached + IFT scale |
+| `'vfe_default'` (transformer/vfe/) | attached | frozen at embedding¹ | full autograd | attached |
+
+¹ The `transformer/vfe/` package operates in a sixth gradient profile that does not correspond to any of the five `em_mode` values above. `mu_p` is attached (the previous layer's posterior `mu_q` becomes the next layer's `mu_p` via `vfe/stack.py`); `sigma_p` is structurally frozen at the embedding value when `prior_handoff_sigma=0` (the default); `phi` is cloned with `requires_grad_(True)` at every E-step iteration in `vfe/e_step.py`, giving full autograd through the whole iteration sequence (not the semi-gradient that `straight_through` documents). Closest 5-mode neighbor is `straight_through`, but `straight_through` keeps `sigma_p` attached. The `vfe/` package does not currently honor `em_mode` switching — it is hardwired to this profile. Selecting any other `em_mode` requires routing through the legacy `transformer/core/variational_ffn.py` path.
 
 ## Communication Style
 

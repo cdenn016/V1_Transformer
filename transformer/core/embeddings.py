@@ -119,6 +119,9 @@ class GaugeTokenEmbedding(nn.Module):
                                              # O(K) conjugated transport diag(s_i)·Ω·diag(s_j).
         sigma_max: float = 5.0,  # Upper bound for prior covariance clamp
         irrep_dims: Optional[List[int]] = None,  # Per-head block dimensions for block-diagonal matrix_exp
+        # GL(K) determinant control (no-op for SO(N), tr(G)=0 already; pick at most one)
+        phi_project_slk: bool = False,            # Hard project φ → sl(K) per block ⇒ det(Ω_h) ≡ 1
+        phi_trace_clamp: Optional[float] = None,  # Soft per-block cap |tr(φ·G_h)| ≤ T
     ):
         """
         Initialize gauge token embedding.
@@ -206,6 +209,37 @@ class GaugeTokenEmbedding(nn.Module):
         self.gauge_param = gauge_param
         self.omega_head_dims = omega_head_dims
         self.irrep_dims = irrep_dims
+        self.phi_project_slk = phi_project_slk
+        self.phi_trace_clamp = phi_trace_clamp
+
+        # Per-block determinant-control trace vectors (cached). For block-diagonal
+        # GL(K_1) ⊕ ... ⊕ GL(K_H), each block has an independent trace functional;
+        # killing only the summed direction is insufficient (compensating signs
+        # across blocks defeat the constraint). For SO(N), tr(G)=0 → V ≡ 0 (no-op).
+        # Derive irrep_dims from irrep_spec when caller did not pass it (e.g.
+        # GaugeTransformerLM only sets irrep_dims when gauge_fixed_priors=True).
+        if (phi_project_slk or phi_trace_clamp is not None) and irrep_dims is None and irrep_spec is not None:
+            irrep_dims = [d for (_, mult, d) in irrep_spec for _ in range(mult)]
+        if (phi_project_slk or phi_trace_clamp is not None) and generators is not None and irrep_dims is not None:
+            with torch.no_grad():
+                n_gen = generators.shape[0]
+                H = len(irrep_dims)
+                V_blocks = torch.zeros(H, n_gen, dtype=generators.dtype, device=generators.device)
+                start = 0
+                for h, d_h in enumerate(irrep_dims):
+                    end = start + d_h
+                    V_blocks[h] = generators[:, start:end, start:end].diagonal(
+                        dim1=-2, dim2=-1
+                    ).sum(dim=-1)
+                    start = end
+            self.register_buffer('_phi_trace_vec_blocks', V_blocks)
+            self.register_buffer(
+                '_phi_trace_vec_norm_sq',
+                (V_blocks * V_blocks).sum(dim=-1).clamp(min=1e-12),
+            )
+        else:
+            self.register_buffer('_phi_trace_vec_blocks', None)
+            self.register_buffer('_phi_trace_vec_norm_sq', None)
 
         if gauge_fixed_priors and generators is None:
             raise ValueError("gauge_fixed_priors=True requires generators to be provided")
@@ -354,6 +388,35 @@ class GaugeTokenEmbedding(nn.Module):
             self.sign_logit = nn.Embedding(vocab_size, embed_dim)
             nn.init.ones_(self.sign_logit.weight)  # start at all +1 → no reflection
 
+    def _apply_phi_det_control(self, phi: torch.Tensor) -> torch.Tensor:
+        r"""Project or clamp the per-block trace direction(s) of φ ∈ gl(K).
+
+        For block-diagonal gauge groups GL(K_1) ⊕ ... ⊕ GL(K_H), each block
+        carries an independent trace functional s_h = tr(φ · G^(h)) and an
+        independent determinant det(Ω_h) = exp(s_h^(i) - s_h^(j)). L2-norm
+        clamping does not bound any of them. Killing only the summed direction
+        is insufficient — compensating signs across blocks defeat it.
+
+        Per-block constraint: enforce s_h ≡ 0 for every h (project_slk) or
+        |s_h| ≤ T for every h (trace_clamp). Block-diagonal generators have
+        disjoint per-block trace supports so the per-block trace vectors are
+        mutually orthogonal — projection collapses to one matmul.
+
+        No-op when the cache is None (toggles off, generators missing, or SO(N)).
+        """
+        if self._phi_trace_vec_blocks is None:
+            return phi
+        V = self._phi_trace_vec_blocks               # (H, n_gen)
+        v_norm_sq = self._phi_trace_vec_norm_sq      # (H,)
+        s = phi @ V.transpose(-2, -1)                # (..., H)
+        if self.phi_project_slk:
+            coeffs = s / v_norm_sq                   # (..., H)
+            return phi - torch.einsum('...h,hg->...g', coeffs, V)
+        T = float(self.phi_trace_clamp)
+        s_clamped = s.clamp(min=-T, max=T)
+        delta_coeffs = (s_clamped - s) / v_norm_sq   # (..., H)
+        return phi + torch.einsum('...h,hg->...g', delta_coeffs, V)
+
     def forward(
         self,
         token_ids: torch.Tensor
@@ -406,6 +469,7 @@ class GaugeTokenEmbedding(nn.Module):
         elif self.learnable_phi or self.gauge_fixed_priors:
             # Per-token gauge frame (Lie algebra path)
             phi = self.phi_embed(token_ids)  # (B, N, phi_dim)
+            phi = self._apply_phi_det_control(phi)
         else:
             # All agents at identity frame
             phi = self.phi_base.unsqueeze(0).unsqueeze(0)  # (1, 1, phi_dim)

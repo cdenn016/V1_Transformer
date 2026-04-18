@@ -56,6 +56,9 @@ try:
         generate_glK_cross_head_generators,
         merge_coupled_heads,
         reorder_cross_head_generators,
+        _dedup_cross_couplings,
+        validate_generator_closure,
+        close_under_brackets,
     )
     GENERATORS_AVAILABLE = True
 except ImportError:
@@ -107,7 +110,6 @@ class GaugeTransformerLM(nn.Module):
                 - use_rope: Rotary position embeddings (default False)
                 - non_flat_transport: Edge-local connection (default False)
                 - use_prior_bank: Token-dependent priors (default False)
-                - use_obs_in_vfe: Ground E-step in observations (default False)
                 See BlockConfig for the full list of 60+ parameters.
         """
         super().__init__()
@@ -139,22 +141,10 @@ class GaugeTransformerLM(nn.Module):
         evolve_phi_e_step = config.get('evolve_phi_e_step', False)  # Update φ during E-step iterations
         tie_embeddings = config.get('tie_embeddings', True)
 
-        # VFE FFN config
+        # VFE FFN config (ffn_alpha / ffn_kappa / ffn_n_iterations / ffn_learnable_lr /
+        # ffn_lambda_belief / ffn_update_sigma were previously unpacked here but are
+        # now read directly by BlockConfig.from_config from the same config dict.)
         ffn_mode = config.get('ffn_mode', 'VFE_dynamic')
-        # Allow separate alpha for FFN E-step vs external loss
-        # ffn_alpha controls the self-coupling strength INSIDE the VFE loop
-        # config['alpha'] controls the external KL(q||p) loss term
-        # By default they're the same (backward compatible), but decoupling
-        # enables proper EM: VFE handles self-coupling internally, external loss is pure CE
-        ffn_alpha = config.get('ffn_alpha', 0.001)  # E-step prior weight (decoupled from external loss alpha)
-        ffn_kappa = kappa_beta  # Unified: use same temperature for attention and FFN
-        ffn_n_iterations = config.get('ffn_n_iterations', 1)
-        ffn_learnable_lr = config.get('ffn_learnable_lr', True)
-        ffn_lambda_belief = config.get('ffn_lambda_belief', 1.0)
-        ffn_update_sigma = config.get('ffn_update_sigma', True)
-
-        # Bayesian precision: Gamma-Normal conjugate prior for α
-        ffn_learnable_alpha = config.get('learnable_alpha', False)
 
         # PriorBank: token-dependent priors for principled encode/decode
         use_prior_bank = config.get('use_prior_bank', False)
@@ -212,12 +202,97 @@ class GaugeTransformerLM(nn.Module):
         # =================================================================
         cross_couplings = config.get('cross_couplings', [])
 
+        # Canonicalize: drop exact (a,b) duplicates so a duplicated entry does
+        # not silently inflate phi_dim and produce a rank-deficient basis.
+        # Distinct orientations (a,b) vs (b,a) are preserved (directional).
+        if cross_couplings:
+            cross_couplings, _n_dropped = _dedup_cross_couplings(list(cross_couplings))
+
         if cross_couplings and gauge_mode == 'trivial':
             logger.warning("cross_couplings have no effect with gauge_mode='trivial' (Omega=I, no mixing)")
+
+        # Hard-error on the silent coordinate-frame mismatch combination.
+        # When use_block_diagonal_kl=False, _build_generators still reorders
+        # generators into super-block coordinates (via reorder_cross_head_generators),
+        # but BlockConfig.ffn_irrep_dims is set to None and attention.py then
+        # falls back to [d_head] * n_heads. The two coordinate frames disagree
+        # silently; the only safe combinations are (a) cross_couplings empty,
+        # or (b) use_block_diagonal_kl=True.
+        if cross_couplings and not config.get('use_block_diagonal_kl', True):
+            raise ValueError(
+                "cross_couplings is non-empty but use_block_diagonal_kl=False. "
+                "These options are incompatible: the cross-head builder reorders "
+                "generators into super-block coordinates that the per-head KL "
+                "fallback path cannot honor, producing a silent coordinate-frame "
+                "mismatch between the gauge basis and attention's block layout. "
+                "Either set use_block_diagonal_kl=True or remove cross_couplings."
+            )
 
         # Compute phi dimension and build Lie algebra generators
         self.phi_dim = self._compute_phi_dim(gauge_group, gauge_dim, embed_dim, irrep_spec, cross_couplings)
         generators = self._build_generators(gauge_group, gauge_dim, embed_dim, irrep_spec, cross_couplings)
+
+        # Optional Lie-closure handling for cross-head coupling.
+        # Default: validate post-reorder basis and warn (non-fatal) if the basis
+        #          is not closed under the matrix commutator. The bracket /
+        #          BCH machinery in math_utils.generators silently projects
+        #          onto the basis; if the user is unaware their basis is open,
+        #          downstream BCH composition becomes a projected approximation.
+        # Opt-in:  auto_close_cross_head_basis=True replaces the basis with
+        #          its bracket closure, yielding a true Lie subalgebra. This
+        #          changes phi_dim and breaks checkpoint compatibility, hence
+        #          off by default.
+        if (
+            cross_couplings
+            and gauge_group == 'GLK'
+            and gauge_mode != 'trivial'
+        ):
+            auto_close = bool(config.get('auto_close_cross_head_basis', False))
+            do_validate = bool(config.get('validate_cross_head_closure', True))
+            if auto_close:
+                import numpy as _np
+                G_closed, close_info = close_under_brackets(
+                    _np.asarray(generators)
+                )
+                logger.info(
+                    "auto_close_cross_head_basis=True: closed basis %d -> %d "
+                    "generators in %d iter(s) (converged=%s, hit_max_dim=%s).",
+                    close_info['initial_dim'], close_info['final_dim'],
+                    close_info['n_iters'], close_info['converged'],
+                    close_info['hit_max_dim'],
+                )
+                if close_info['n_added'] > 0:
+                    logger.warning(
+                        "auto_close_cross_head_basis added %d new generators. "
+                        "These can span across the user-supplied super-block "
+                        "partition (e.g. closing [(0,1),(1,2)] introduces an "
+                        "E^{02} block that mixes the original super-blocks). "
+                        "self._super_block_dims and _cross_head_perm still "
+                        "reflect the pre-closure partition; downstream code that "
+                        "assumes block-diagonal structure inside super-blocks may "
+                        "now see non-zero off-block components. Use this flag "
+                        "only when you have verified that the closed basis is "
+                        "compatible with your block-diagonal KL configuration.",
+                        close_info['n_added'],
+                    )
+                generators = G_closed
+                self.phi_dim = int(generators.shape[0])
+            elif do_validate:
+                report = validate_generator_closure(generators)
+                if not report['closed']:
+                    logger.warning(
+                        "cross-head generator basis is NOT closed under [.,.] "
+                        "(max relative residual %.3e across %d/%d unordered pairs). "
+                        "BCH/bracket composition on this basis silently projects "
+                        "onto the span, producing an approximation rather than the "
+                        "exact Lie composition. Worst offenders (a, b, residual): %s. "
+                        "Set auto_close_cross_head_basis=True to obtain a true "
+                        "Lie subalgebra (changes phi_dim and breaks checkpoint "
+                        "compatibility), or set validate_cross_head_closure=False "
+                        "to suppress this warning.",
+                        report['max_residual'], report['n_offending_pairs'],
+                        report['n_pairs'], report['offending_pairs'][:5],
+                    )
 
         self.register_buffer(
             'generators',
@@ -807,6 +882,8 @@ class GaugeTransformerLM(nn.Module):
             gauge_param=gauge_param,
             omega_head_dims=self.omega_head_dims,
             irrep_dims=irrep_dims,
+            phi_project_slk=config.get('phi_project_slk', False),
+            phi_trace_clamp=config.get('phi_trace_clamp', None),
         )
 
         # Position encoding for φ (gauge frame) — encodes RELATIVE position via transport.
@@ -883,7 +960,6 @@ class GaugeTransformerLM(nn.Module):
         self,
         token_ids: torch.Tensor,
         return_agents: bool = False,
-        targets: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict]]:
         """
         Forward pass through 0D gauge transformer.
@@ -892,8 +968,6 @@ class GaugeTransformerLM(nn.Module):
             token_ids: (batch, seq_len) token indices
                        seq_len = number of agents at the single point c*
             return_agents: If True, return intermediate agent states
-            targets: (batch, seq_len) target tokens - passed to final layer E-step
-                     when use_obs_in_vfe=True (default off, toggle in VFE_EM_CONFIG)
 
         Returns:
             logits: (batch, num_agents, vocab_size) next-token predictions
@@ -913,14 +987,16 @@ class GaugeTransformerLM(nn.Module):
         if self.use_prior_bank and self.prior_bank is not None:
             self.prior_bank.clear_decode_cache()
 
-        # Block forward() when implicit_em is active during training.
+        # Block forward() when em_mode='implicit_ift' is active during training.
         # Without ImplicitEMGradient re-attachment (only in forward_with_attention),
         # embedding gradients are silently broken while loss still decreases from
         # other parameters — making the failure invisible.
+        # (The `implicit_em` attribute is set on the FFN from em_mode='implicit_ift';
+        # the getattr default keeps this safe if the attribute is ever renamed.)
         if (getattr(self.transformer.blocks[-1].ffn, 'implicit_em', False)
                 and self.training and torch.is_grad_enabled()):
             raise RuntimeError(
-                "forward() called with implicit_em=True during training. "
+                "forward() called with em_mode='implicit_ift' during training. "
                 "Gradient path to embeddings is broken — use "
                 "forward_with_attention() for training."
             )
@@ -954,27 +1030,8 @@ class GaugeTransformerLM(nn.Module):
         # =================================================================
         # 6. Forward Through Transformer Stack
         # =================================================================
-        # Pass targets/W_out for VFE observation coupling (default off).
-        # Controlled by use_obs_in_vfe in config; only final layer receives them.
-        use_obs = self.config.get('use_obs_in_vfe', False) if hasattr(self, 'config') else False
-        vfe_targets = targets if use_obs else None
-        # PriorBank decodes via KL (no linear output projection), so out_proj
-        # is untrained when PriorBank is active — never pass it as W_out.
-        if use_obs and self.use_prior_bank:
-            warnings.warn(
-                "use_obs_in_vfe=True has no effect when PriorBank is active: "
-                "E-step observation grounding requires W_out (linear projection), "
-                "but PriorBank decodes via KL. The E-step will have no observation term.",
-                stacklevel=2,
-            )
-        if use_obs and not self.use_prior_bank and hasattr(self, 'out_proj'):
-            vfe_W_out = self.out_proj.weight
-            # W_out must be permuted to match the permuted mu basis inside the stack
-            if getattr(self, '_cross_head_perm', None) is not None:
-                vfe_W_out = vfe_W_out[:, self._perm_tensor.to(device=device)]
-        else:
-            vfe_W_out = None
-
+        # The E-step does not see target tokens — the observation likelihood
+        # is provided by the outer CE loss in compute_free_energy_loss.
         mu_q, sigma_q, phi, intermediates = self.transformer(
             mu_q,
             sigma_q,
@@ -985,8 +1042,6 @@ class GaugeTransformerLM(nn.Module):
             token_ids=token_ids,
             return_intermediates=return_agents,
             cached_head_transports=cached_head_transports,
-            targets=vfe_targets,
-            W_out=vfe_W_out,
             omega=omega,
             sigma_prior=sigma_prior,
         )
@@ -1028,11 +1083,17 @@ class GaugeTransformerLM(nn.Module):
 
         This is used during training to compute the attention-weighted free energy:
             F = Σ_ij β_ij · KL(q_i || Ω_ij[q_j]) - E[log p(o|x)]
-                                                     ↑ Observations!
+
+        The E-step does not see target tokens. `targets` here is forwarded only
+        to the per-layer auxiliary CE loss (aux_layer_loss) and the final-layer
+        CE in compute_free_energy_loss; it is never passed into the belief
+        inference loop.
 
         Args:
             token_ids: (batch, seq_len) token indices
-            targets: (batch, seq_len) target tokens - used as observations in E-step
+            targets: (batch, seq_len) target tokens — used only for the outer
+                per-layer auxiliary CE loss (aux_layer_loss). Not available to
+                the E-step.
 
         Returns:
             logits: (batch, num_agents, vocab_size) predictions
@@ -1071,7 +1132,8 @@ class GaugeTransformerLM(nn.Module):
 
         # Forward through ALL transformer blocks WITH attention tracking.
         # Each layer's beta/kl is captured for visualization.
-        # Only the final layer gets targets so its E-step can ground beliefs in observations.
+        # The E-step does not see target tokens — the observation likelihood
+        # is provided by the outer CE loss in compute_free_energy_loss.
         all_betas = []
         all_kls = []
         aux_losses = []  # Per-layer auxiliary CE losses (M-step signal for non-final layers)
@@ -1085,15 +1147,6 @@ class GaugeTransformerLM(nn.Module):
             if self._collect_layer_diagnostics:
                 _mu_before_layer = mu_q.detach().clone()
 
-            # Permute W_out to match cross-head reordered mu basis.
-            # PriorBank decodes via KL — out_proj is untrained, never use as W_out.
-            if is_final and not self.use_prior_bank and hasattr(self, 'out_proj'):
-                _w_out_fwa = self.out_proj.weight
-                if getattr(self, '_cross_head_perm', None) is not None:
-                    _w_out_fwa = _w_out_fwa[:, self._perm_tensor.to(device=device)]
-            else:
-                _w_out_fwa = None
-
             # Delegate the full per-layer block computation to GaugeTransformerBlock.forward.
             # return_attention=True yields the 5-tuple (mu_q, sigma_q, phi, beta, kl)
             # so we can collect per-layer attention weights for the loss function
@@ -1103,8 +1156,6 @@ class GaugeTransformerLM(nn.Module):
                 mask=mask,
                 mu_prior=mu_prior,
                 token_ids=token_ids,
-                targets=targets if is_final else None,
-                W_out=_w_out_fwa,
                 cached_head_transports=cached_head_transports,
                 omega=omega,
                 sigma_prior=sigma_prior,
@@ -1182,9 +1233,13 @@ class GaugeTransformerLM(nn.Module):
                 _delta_mu = (mu_q.detach() - _mu_before_layer)
                 _delta_norm = _delta_mu.norm()
                 _phi_norm = phi.detach().norm()
-                _mu_attn_norm = _mu_attn.detach().norm() if _mu_attn is not None else torch.tensor(0.0)
-                _mu_ffn_norm = _mu_ffn.detach().norm() if _mu_ffn is not None else torch.tensor(0.0)
-                _sigma_mean = sigma_q.detach().mean() if sigma_q is not None else torch.tensor(0.0)
+                # torch.stack requires all tensors on the same device; pin
+                # the None-fallback scalars to mu_q's device so this probe
+                # works under CUDA when _mu_attn / _mu_ffn / sigma_q are absent.
+                _zero = torch.zeros((), device=mu_q.device, dtype=mu_q.dtype)
+                _mu_attn_norm = _mu_attn.detach().norm() if _mu_attn is not None else _zero
+                _mu_ffn_norm = _mu_ffn.detach().norm() if _mu_ffn is not None else _zero
+                _sigma_mean = sigma_q.detach().mean() if sigma_q is not None else _zero
                 _mu_pos_std = mu_q.detach().std(dim=1).mean()
                 _norms = torch.stack([
                     _mu_in_norm, _mu_out_norm, _delta_norm, _phi_norm,
@@ -1252,6 +1307,29 @@ class GaugeTransformerLM(nn.Module):
         last_block = self.transformer.blocks[-1]
         implicit_mu_scale = getattr(last_block.ffn, '_last_implicit_mu_scale', None)
         implicit_sigma_scale = getattr(last_block.ffn, '_last_implicit_sigma_scale', None)
+
+        # implicit_em / 'implicit_ift' currently re-attaches the IFT-corrected
+        # gradient only at the embedding boundary using the LAST block's
+        # fixed-point scale. For depth > 1, intermediate blocks compute
+        # _last_implicit_*_scale but those corrections are not propagated
+        # (their cross-layer mu handoff already detached). The math is exact
+        # for single-layer models; multi-layer use is research-only and the
+        # gradient is missing the intermediate IFT terms.
+        if implicit_mu_scale is not None and len(self.transformer.blocks) > 1:
+            if not getattr(self, '_implicit_em_depth_warned', False):
+                import warnings
+                warnings.warn(
+                    f"implicit_em / em_mode='implicit_ift' is being used with "
+                    f"n_layers={len(self.transformer.blocks)} > 1. The IFT scale "
+                    "is applied only at the embedding boundary using the last "
+                    "block's fixed-point scale; intermediate layers' IFT "
+                    "corrections are not propagated. Prefer "
+                    "em_mode='straight_through' or 'ift_phi' for multi-layer "
+                    "training, or restrict implicit_ift to single-layer models.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                self._implicit_em_depth_warned = True
 
         if implicit_mu_scale is not None:
             # Detach mu_q to remove the residual+attention gradient path.

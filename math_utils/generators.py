@@ -40,8 +40,52 @@ To use full GL(K), you would need to:
 3. Remove any skew-symmetry constraints in transport.py
 """
 
+import logging
+
 import numpy as np
-from typing import Dict
+from typing import Dict, List, Tuple
+
+logger = logging.getLogger(__name__)
+
+
+def _dedup_cross_couplings(
+    pairs: 'List[Tuple[int, int]]',
+) -> 'Tuple[List[Tuple[int, int]], int]':
+    """
+    Remove exact ``(a, b)`` duplicates from a cross-head coupling list.
+
+    Pairs are directional: ``(a, b)`` adds generators that map head ``a``'s
+    row subspace into head ``b``'s column subspace, while ``(b, a)`` adds the
+    transpose block. Exact duplicates produce redundant generators and an
+    ill-conditioned basis, so we drop them and warn. Distinct orientations
+    (``(a, b)`` vs ``(b, a)``) are preserved.
+
+    Args:
+        pairs: User-supplied list of head-pair tuples.
+
+    Returns:
+        deduped: List of pairs with exact duplicates removed, original order.
+        n_dropped: Number of duplicate entries removed.
+    """
+    seen = set()
+    deduped = []
+    dropped_indices = []
+    for idx, p in enumerate(pairs):
+        key = tuple(p)
+        if key in seen:
+            dropped_indices.append(idx)
+            continue
+        seen.add(key)
+        deduped.append(p)
+    n_dropped = len(dropped_indices)
+    if n_dropped > 0:
+        logger.warning(
+            "cross_couplings: dropped %d duplicate pair(s) at index/indices %s; "
+            "kept %d unique pair(s) %s. Distinct orientations (a,b) vs (b,a) "
+            "are preserved; only exact duplicates were removed.",
+            n_dropped, dropped_indices, len(deduped), deduped,
+        )
+    return deduped, n_dropped
 
 
 # =============================================================================
@@ -959,6 +1003,8 @@ def generate_glK_cross_head_generators(
     if K % n_heads != 0:
         raise ValueError(f"K={K} not divisible by n_heads={n_heads}")
 
+    cross_couplings, _ = _dedup_cross_couplings(list(cross_couplings))
+
     d_head = K // n_heads
     n_gen_diag = n_heads * d_head * d_head
     n_gen_cross = len(cross_couplings) * d_head * d_head
@@ -1025,6 +1071,8 @@ def merge_coupled_heads(
             indices in that super-block, in order.
             Example: [[0, 1], [2], [3]]
     """
+    cross_couplings, _ = _dedup_cross_couplings(list(cross_couplings))
+
     # Union-find
     parent = list(range(n_heads))
 
@@ -2064,6 +2112,16 @@ def glK_bracket_torch(
 
     For gl(K), the Lie bracket is the matrix commutator: [A, B] = AB - BA
 
+    .. warning::
+        When ``n_gen != K**2`` (e.g. multi-head + cross-head coupling), the
+        generator span is a strict subspace of ``gl(K)``. The matrix commutator
+        ``A1 @ A2 - A2 @ A1`` may have components outside that subspace; this
+        function then re-expresses the result in the generator basis via
+        Frobenius-inner-product **projection** (see ``extract_glK_coords_torch``).
+        That projection is exact only when the basis is closed under ``[.,.]``.
+        Use :func:`validate_generator_closure` to check, and
+        :func:`close_under_brackets` to obtain a commutator-closed basis.
+
     Args:
         phi1: First Lie algebra element coordinates (..., n_gen)
         phi2: Second Lie algebra element coordinates (..., n_gen)
@@ -2102,6 +2160,14 @@ def extract_glK_coords_torch(
 
     For cross-head coupling generators (n_gen ≠ K²), uses inner product
     projection onto the generator basis.
+
+    .. warning::
+        When the generator span is a strict subspace of ``gl(K)`` and the matrix
+        ``A`` has components outside that span, those components are silently
+        discarded by the projection. The reconstruction
+        ``A_hat = Σ_a φ_a G_a`` then satisfies ``||A - A_hat||_F > 0``.
+        This is exact only when ``A`` lies in the span (e.g. when the basis is
+        closed under brackets and ``A`` is a bracket of basis elements).
 
     Args:
         A: Matrix (..., K, K)
@@ -2149,6 +2215,17 @@ def glK_compose_bch_torch(
     log(exp(φ₁·G)·exp(φ₂·G)) = φ₁ + φ₂ + ½[φ₁,φ₂] + (1/12)[φ₁,[φ₁,φ₂]] - ...
 
     For gl(K), the Lie bracket is: [A, B] = AB - BA (matrix commutator)
+
+    .. warning::
+        Each nested bracket is computed by :func:`glK_bracket_torch`, which
+        projects matrix commutators onto the generator basis. When ``n_gen != K**2``
+        and the basis is **not closed under** ``[.,.]``, every bracket level
+        introduces a projection error, and these errors compound across BCH
+        orders. The composition is then a **projected approximation**, not the
+        exact log of the product of exponentials. Use
+        :func:`validate_generator_closure` to detect non-closure and
+        :func:`close_under_brackets` to obtain a closed basis (the
+        ``auto_close_cross_head_basis`` model flag exposes this as a toggle).
 
     Args:
         phi1: First gl(K) element (..., n_gen) where n_gen = K²
@@ -2206,6 +2283,221 @@ def glK_compose_bch_torch(
                   )
 
     return result
+
+
+def validate_generator_closure(
+    generators: np.ndarray,
+    tol: float = 1e-6,
+    max_offending_to_record: int = 10,
+) -> Dict:
+    r"""
+    Test whether a generator basis is closed under the matrix commutator.
+
+    For a basis :math:`\{G_a\}_{a=1}^{n}` of a candidate Lie subalgebra of
+    :math:`\mathfrak{gl}(K)` to be a true subalgebra, every commutator
+    :math:`[G_a, G_b] = G_a G_b - G_b G_a` must lie in the span of the basis.
+    This function checks closure by, for each unordered pair ``(a, b)`` with
+    ``a < b``, computing the commutator, projecting it onto the basis via the
+    Frobenius inner product, and measuring the residual norm
+    ``||C - reconstructed||_F`` (in units of ``||C||_F``, when nonzero).
+
+    Args:
+        generators: Generators of shape ``(n_gen, K, K)``.
+        tol: Relative residual threshold below which a pair is considered
+            closed.
+        max_offending_to_record: Cap on the number of offending pairs returned
+            in the report (full counts are always returned).
+
+    Returns:
+        Dict with keys:
+          - ``closed`` (bool): True iff every pair satisfies ``residual <= tol``.
+          - ``max_residual`` (float): Largest relative residual across pairs.
+          - ``n_pairs`` (int): Number of unordered pairs tested.
+          - ``n_offending_pairs`` (int): Pairs whose residual exceeded ``tol``.
+          - ``offending_pairs`` (list of (a, b, residual)): Up to
+            ``max_offending_to_record`` of the worst offenders, sorted by
+            descending residual.
+
+    Notes:
+        - Cost is :math:`O(n_{\mathrm{gen}}^{2} K^{3})`. For typical
+          configurations (K ≲ 1024, ``n_gen`` ≲ a few thousand) this is a
+          one-shot startup check.
+        - Residuals are normalized by ``||C||_F`` to make ``tol`` scale-free;
+          when ``||C||_F`` is below machine epsilon the absolute residual is
+          used instead.
+    """
+    G = np.asarray(generators)
+    if G.ndim != 3 or G.shape[1] != G.shape[2]:
+        raise ValueError(f"generators must have shape (n_gen, K, K); got {G.shape}")
+    n_gen, K, _ = G.shape
+
+    # Frobenius inner product machinery (same convention as
+    # extract_glK_coords_torch): coefficients are
+    # phi_a = <G_a, A>_F / <G_a, G_a>_F.
+    G_flat = G.reshape(n_gen, K * K)  # (n_gen, K²)
+    norms_sq = (G_flat * G_flat).sum(axis=-1)  # (n_gen,)
+    safe_norms_sq = np.where(norms_sq > 1e-30, norms_sq, 1.0)
+
+    max_residual = 0.0
+    n_offending = 0
+    offenders: List[Tuple[int, int, float]] = []
+
+    for a in range(n_gen):
+        for b in range(a + 1, n_gen):
+            C = G[a] @ G[b] - G[b] @ G[a]
+            C_flat = C.reshape(K * K)
+            c_norm = float(np.linalg.norm(C_flat))
+            if c_norm < 1e-30:
+                # Trivial bracket; closure holds by definition.
+                continue
+            coords = (G_flat @ C_flat) / safe_norms_sq  # (n_gen,)
+            recon_flat = coords @ G_flat  # (K²,)
+            residual = float(np.linalg.norm(C_flat - recon_flat))
+            rel_residual = residual / c_norm
+            if rel_residual > max_residual:
+                max_residual = rel_residual
+            if rel_residual > tol:
+                n_offending += 1
+                offenders.append((a, b, rel_residual))
+
+    offenders.sort(key=lambda t: -t[2])
+    offenders = offenders[:max_offending_to_record]
+
+    return {
+        'closed': n_offending == 0,
+        'max_residual': max_residual,
+        'n_pairs': n_gen * (n_gen - 1) // 2,
+        'n_offending_pairs': n_offending,
+        'offending_pairs': offenders,
+    }
+
+
+def close_under_brackets(
+    generators: np.ndarray,
+    max_iter: int = 10,
+    max_dim: int = None,
+    tol: float = 1e-6,
+) -> 'Tuple[np.ndarray, Dict]':
+    r"""
+    Iteratively extend a generator basis until it is closed under ``[.,.]``.
+
+    Implements the standard Lie-closure construction: at each iteration,
+    compute the commutator of every pair of current basis elements, project
+    out the span of the current basis, and append any residual directions
+    whose Frobenius norm exceeds ``tol``. New directions are extracted via a
+    **thin SVD** of the stacked residual matrices (rather than classical
+    Gram-Schmidt) for numerical stability when residuals are nearly but not
+    exactly mutually orthogonal.
+
+    The procedure terminates in a finite number of steps because every
+    iteration enlarges the span by at least one dimension and the ambient
+    space ``gl(K)`` has dimension :math:`K^{2}`.
+
+    Args:
+        generators: Initial generators ``(n_gen, K, K)``. The returned basis
+            includes these as its first ``n_gen`` rows (orientation preserved).
+        max_iter: Maximum closure iterations. The default suffices for the
+            sparse cross-head patterns the V13 transformer constructs; raise it
+            if the warning ``"closure did not converge"`` fires.
+        max_dim: Cap on the final basis size. Defaults to ``K**2``. When the
+            closure walks into "essentially full ``gl(K)``" territory a warning
+            is emitted because the user's sparsity intent is being defeated.
+        tol: Singular-value threshold for accepting a residual direction as a
+            new basis element.
+
+    Returns:
+        closed_generators: ``(n_closed, K, K)`` array, with
+            ``closed_generators[:n_gen] == generators``.
+        info: Dict with keys ``n_iters`` (iterations actually run),
+            ``n_added`` (number of new generators), ``final_dim`` (total),
+            ``converged`` (bool), and ``hit_max_dim`` (bool).
+    """
+    G = np.asarray(generators, dtype=np.float64).copy()
+    if G.ndim != 3 or G.shape[1] != G.shape[2]:
+        raise ValueError(f"generators must have shape (n_gen, K, K); got {G.shape}")
+    n_gen0, K, _ = G.shape
+    if max_dim is None:
+        max_dim = K * K
+
+    n_added = 0
+    converged = False
+    hit_max_dim = False
+    iters = 0
+
+    for it in range(max_iter):
+        iters = it + 1
+        n_cur = G.shape[0]
+        G_flat = G.reshape(n_cur, K * K)
+        # Orthonormal basis for current span (for projection-out via QR).
+        # Use SVD-based orthonormalization to handle nearly-dependent inputs.
+        U_basis, S_basis, _ = np.linalg.svd(G_flat.T, full_matrices=False)
+        keep_basis = S_basis > tol * (S_basis[0] if S_basis.size > 0 else 1.0)
+        Q_basis = U_basis[:, keep_basis]  # (K², r)
+
+        # Compute all commutators C_ab = [G_a, G_b] for a < b.
+        residuals = []
+        for a in range(n_cur):
+            for b in range(a + 1, n_cur):
+                C = G[a] @ G[b] - G[b] @ G[a]
+                C_flat = C.reshape(K * K)
+                if np.linalg.norm(C_flat) < 1e-30:
+                    continue
+                # Project out current span.
+                C_perp = C_flat - Q_basis @ (Q_basis.T @ C_flat)
+                if np.linalg.norm(C_perp) > tol:
+                    residuals.append(C_perp)
+
+        if not residuals:
+            converged = True
+            break
+
+        R = np.stack(residuals, axis=0)  # (n_res, K²)
+        # Thin SVD on residuals; left singular vectors give an orthonormal
+        # basis for the residual span. Keep directions above tol.
+        U_res, S_res, _ = np.linalg.svd(R.T, full_matrices=False)
+        keep_res = S_res > tol * S_res[0]
+        new_dirs_flat = U_res[:, keep_res].T  # (k_new, K²)
+        n_new = new_dirs_flat.shape[0]
+        if n_new == 0:
+            converged = True
+            break
+
+        # Cap at max_dim.
+        room = max_dim - G.shape[0]
+        if room <= 0:
+            hit_max_dim = True
+            logger.warning(
+                "close_under_brackets: hit max_dim=%d before convergence; "
+                "basis at iteration %d has %d generators with %d residual directions. "
+                "Closure walking toward full gl(K) defeats the sparsity intent — "
+                "consider redesigning the cross-head coupling pattern.",
+                max_dim, iters, G.shape[0], n_new,
+            )
+            break
+        if n_new > room:
+            new_dirs_flat = new_dirs_flat[:room]
+            hit_max_dim = True
+
+        new_blocks = new_dirs_flat.reshape(-1, K, K)
+        G = np.concatenate([G, new_blocks], axis=0)
+        n_added += new_blocks.shape[0]
+
+    if not converged and not hit_max_dim:
+        logger.warning(
+            "close_under_brackets: did not converge in %d iterations; "
+            "current dim=%d. Increase max_iter or inspect generator structure.",
+            max_iter, G.shape[0],
+        )
+
+    info = {
+        'n_iters': iters,
+        'n_added': n_added,
+        'final_dim': G.shape[0],
+        'initial_dim': n_gen0,
+        'converged': converged,
+        'hit_max_dim': hit_max_dim,
+    }
+    return G.astype(generators.dtype), info
 
 
 def retract_glK_torch(

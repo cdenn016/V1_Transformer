@@ -200,7 +200,7 @@ def fused_block_matrix_exp_pairs(
         phi: (B, N, n_gen) gauge field coefficients.
         generators: (n_gen, K, K) block-diagonal Lie algebra generators.
         irrep_dims: list of block dimensions [d₁, d₂, ...].
-        enforce_orthogonal: if True, apply Newton-Schulz for blocks with d >= 16.
+        enforce_orthogonal: if True, apply Newton-Schulz for blocks with d >= 2.
         only_forward: if True, skip computing exp(-M) per block. Use for
             PriorBank decode where only A (not A⁻¹) is needed. Saves one
             matrix_exp call per unique block dim and halves memory.
@@ -286,7 +286,7 @@ def fused_block_matrix_exp_pairs(
             if exp_neg_phi_flat is not None else None
         )
 
-        if enforce_orthogonal and d >= 16:
+        if enforce_orthogonal and d >= 2:
             shape = exp_phi_all.shape
             exp_phi_all = newton_schulz_orthogonalize(
                 exp_phi_all.reshape(-1, d, d)

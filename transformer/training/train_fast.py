@@ -234,7 +234,6 @@ class FastTrainer:
                 kappa_gamma=self.config.kappa_gamma,
                 lambda_hyper=self.config.lambda_hyper,
                 pad_token_id=self.pad_token_id,
-                use_obs_in_vfe=self.config.use_obs_in_vfe,
                 mass_phi=getattr(self.config, 'mass_phi', 0.05),
                 aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
                 detach_beta_m_step=getattr(self.config, 'detach_beta_m_step', True),
@@ -336,7 +335,6 @@ class FastTrainer:
                         kappa_gamma=1.0,
                         lambda_hyper=0.0,
                         pad_token_id=self.pad_token_id,
-                        use_obs_in_vfe=False,
                         mass_phi=0.0,
                         normalize_ce_by_dim=getattr(self.config, 'normalize_ce_by_dim', False),
                     )

@@ -66,9 +66,19 @@ class TrainingConfig:
     # ==========================================================================
     # Optimizer type:
     #   'adamw': Standard AdamW (default). Diagonal Fisher approximation via EMA.
-    #   'riemannian_adam': AdamW + Killing-form metric for phi + Fisher metric for mu.
+    #   'riemannian_adam': AdamW + gauge metric for phi + Fisher metric for mu.
     #   'natural_gradient': Per-token block-diagonal empirical Fisher.
     optimizer_type: str =   'adamw'
+
+    # RiemannianAdamW phi/omega metric (only used when optimizer_type='riemannian_adam'):
+    #   'killing' (default): Position-independent Cartan-modified Killing form.
+    #       Cheap — one fixed (n_gen, n_gen) matmul per step. Exact on so(K),
+    #       approximate on symmetric part.
+    #   'pullback': Position-dependent pullback of the Frobenius inner product
+    #       through exp. Gauge-natural, mathematically exact. Expensive —
+    #       one (n_gen, n_gen) build and solve per token per step.
+    phi_optimizer_metric: str = 'killing'
+    pullback_series_order: int = 6   # Taylor order for Ψ(ad_φ) when metric='pullback'
 
     # Natural gradient settings (only used when optimizer_type='natural_gradient')
     fisher_ema_decay: float = 0.95   # EMA decay for Fisher matrix estimation
@@ -123,9 +133,6 @@ class TrainingConfig:
        
     detach_beta_m_step: bool =  True  # Detach β in M-step loss (correct EM). False = old behavior (gradient flows through softmax)
     normalize_ce_by_dim: bool = True  # Divide CE loss by sqrt(K) to match VFE dim_scale normalization
-    use_obs_in_vfe: bool =      False  # Pass targets as observations into VFE E-step (last layer only)
-    obs_sigma_gradient: bool =  True  # ∂E_q[CE]/∂σ Hessian-diagonal obs gradient for sigma
-    obs_sigma_weight: float =   1.0     # Weight for sigma observation gradient
 
     # Multi-layer depth signal
     aux_layer_loss: bool =   False     # Per-layer auxiliary CE loss
@@ -272,7 +279,6 @@ def get_vfe_dynamic_config(**overrides) -> TrainingConfig:
         M_alpha=0.1,
         M_beta=1.0,
         lambda_gamma=0.0,
-        use_obs_in_vfe=False,
     )
     for key, value in overrides.items():
         setattr(config, key, value)

@@ -22,22 +22,33 @@ from .cuda_ext import get_cuda_ext
 # Safe linear algebra helpers
 # ---------------------------------------------------------------------------
 
-def safe_inverse(M, eps=1e-6):
+def safe_inverse(M, eps=1e-6, exp_phi=None):
     """
     Robust matrix inverse with escalating regularization.
 
     Mirrors math_utils.numerical_utils.safe_inv pattern:
     try bare inv, then eps*I, 100*eps*I, 10000*eps*I.
     CUDA raises RuntimeError (not LinAlgError) for singular matrices.
+
+    When ``exp_phi`` is provided (local gauge frame ``g = exp(phi)``),
+    the regularization ladder uses ``eps * (g g^T)`` instead of ``eps * I``,
+    making the regularized matrix transform exactly as ``h M h^T`` under
+    a gauge change ``g -> h g``.  Falls back to ``eps * I`` when ``None``.
     """
     try:
         return torch.linalg.inv(M)
     except (torch.linalg.LinAlgError, RuntimeError):
-        eye = torch.eye(M.shape[-1], device=M.device, dtype=M.dtype)
+        if exp_phi is not None:
+            _gf = exp_phi.to(dtype=M.dtype)
+            R_unit = _gf @ _gf.transpose(-1, -2)
+            R_expanded = R_unit.expand_as(M)
+        else:
+            eye = torch.eye(M.shape[-1], device=M.device, dtype=M.dtype)
+            R_expanded = eye.expand_as(M)
         for scale in (1, 100, 10000):
             reg = eps * scale
             try:
-                result = torch.linalg.inv(M + reg * eye.expand_as(M))
+                result = torch.linalg.inv(M + reg * R_expanded)
                 warnings.warn(
                     f"safe_inverse: singular matrix, regularized with "
                     f"eps={reg:.1e} (shape {list(M.shape)}, "
@@ -55,7 +66,7 @@ def safe_inverse(M, eps=1e-6):
             RuntimeWarning,
             stacklevel=2,
         )
-        return torch.linalg.inv(M + (eps * 100000) * eye.expand_as(M))
+        return torch.linalg.inv(M + (eps * 100000) * R_expanded)
 
 
 def safe_logdet(M):

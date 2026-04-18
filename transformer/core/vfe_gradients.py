@@ -70,6 +70,7 @@ def _compute_vfe_gradients_block_diagonal(
     use_rope: bool = False,
     rope_base: float = 10000.0,
     alpha_div: float = 1.0,
+    gauge_covariant_ridge: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Block-diagonal VFE gradient computation for full covariance mode.
@@ -118,11 +119,24 @@ def _compute_vfe_gradients_block_diagonal(
     grad_mu = torch.zeros(B, N, K, device=device, dtype=dtype)
     grad_sigma = torch.zeros(B, N, K, K, device=device, dtype=dtype)
 
+    # Build full-K block-diagonal local frame once when the covariant ridge
+    # is enabled. exp_phi_full[:, n] = block_diag(exp_phi_h[:, n] for h).
+    # Under a gauge change g → h g, this transforms as exp_phi_full → h exp_phi_full,
+    # and ε · exp_phi_full exp_phi_full^T → h · (that) · h^T — gauge covariant.
+    exp_phi_full = None
+    if gauge_covariant_ridge and cached_block_exp_pairs is not None:
+        exp_phi_full = torch.zeros(B, N, K, K, device=device, dtype=dtype)
+        _bs = 0
+        for _h, _d_h in enumerate(irrep_dims):
+            _be = _bs + _d_h
+            exp_phi_full[:, :, _bs:_be, _bs:_be] = cached_block_exp_pairs[_h][0].to(dtype=dtype)
+            _bs = _be
+
     # =================================================================
     # 1. Self-Coupling Gradient (block-wise but simpler)
     # =================================================================
     delta_mu = mu_q - mu_p  # (B, N, K)
-    sigma_q_inv = _safe_spd_inv(sigma_q, eps=eps)
+    sigma_q_inv = _safe_spd_inv(sigma_q, eps=eps, exp_phi=exp_phi_full)
     # For full covariance (4D), alpha (B,N,1) needs extra dim to broadcast with (B,N,K,K)
     alpha_4d = alpha.unsqueeze(-1) if isinstance(alpha, torch.Tensor) else alpha
 
@@ -130,7 +144,7 @@ def _compute_vfe_gradients_block_diagonal(
         # Standard KL self-coupling gradient.
         # ∂KL(q||p)/∂μ_q = Σ_p⁻¹ (μ_q - μ_p)
         # ∂KL(q||p)/∂Σ_q = ½(Σ_p⁻¹ - Σ_q⁻¹)
-        sigma_p_inv = _safe_spd_inv(sigma_p, eps=eps)
+        sigma_p_inv = _safe_spd_inv(sigma_p, eps=eps, exp_phi=exp_phi_full)
         grad_mu_self = alpha * torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
         grad_sigma_self = alpha_4d * 0.5 * (sigma_p_inv - sigma_q_inv)
 
@@ -160,9 +174,13 @@ def _compute_vfe_gradients_block_diagonal(
         # ∂D_α/∂Σ_q = ½(Σ̃⁻¹ - Σ_q⁻¹) - ½·α_d·(1-α_d)·Σ̃⁻¹·ΔμΔμᵀ·Σ̃⁻¹
         sigma_blend = (1.0 - alpha_div) * sigma_q + alpha_div * sigma_p  # (B, N, K, K)
         I_K = torch.eye(K, device=device, dtype=dtype)
-        sigma_blend = sigma_blend + eps * I_K
+        if exp_phi_full is not None:
+            _R_K_blend = exp_phi_full @ exp_phi_full.transpose(-1, -2)
+        else:
+            _R_K_blend = I_K
+        sigma_blend = sigma_blend + eps * _R_K_blend
         sigma_blend = 0.5 * (sigma_blend + sigma_blend.transpose(-1, -2))  # symmetrize
-        sigma_blend_inv = _safe_spd_inv(sigma_blend, eps=eps)  # (B, N, K, K)
+        sigma_blend_inv = _safe_spd_inv(sigma_blend, eps=eps, exp_phi=exp_phi_full)  # (B, N, K, K)
 
         # ∂D_α/∂μ_q = α_d · Σ̃⁻¹ · Δμ
         grad_mu_self = alpha * alpha_div * torch.einsum(
@@ -183,8 +201,34 @@ def _compute_vfe_gradients_block_diagonal(
             grad_sigma_self
             - alpha_4d * 0.5 * alpha_div * (1.0 - alpha_div) * outer_term
         )
-        # Product-rule correction is not applied for alpha_div != 1.0 because
-        # the KL used to define the learnable alpha schedule is not D_alpha.
+
+        # Product-rule correction for learnable alpha (Rényi branch):
+        # ∂(α·D_α)/∂θ = α·∂D_α/∂θ + (∂α/∂θ)·D_α.  With the now-consistent
+        # schedule α_k = c₀_k / (b₀_k + D_α,k), ∂α_k/∂θ = -α_k²/c₀_k · ∂D_α,k/∂θ,
+        # giving an additional self-coupling term -(α²/c₀)·D_α,k·∂D_α,k/∂θ.
+        # Per-dim proxy for D_α,k uses the diagonal of blend / Σ_q / Σ_p
+        # (matches the full-cov proxy in VariationalFFNDynamic.get_bayesian_alpha).
+        if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
+            sigma_blend_diag = sigma_blend.diagonal(dim1=-2, dim2=-1).clamp(min=eps)  # (B, N, K)
+            sigma_p_diag = sigma_p.diagonal(dim1=-2, dim2=-1).clamp(min=eps)          # (B, N, K)
+            sigma_q_diag = sigma_q.diagonal(dim1=-2, dim2=-1).clamp(min=eps)          # (B, N, K)
+            mahal_k = alpha_div * (delta_mu ** 2) / sigma_blend_diag                  # (B, N, K)
+            logdet_k = (
+                (1.0 - alpha_div) * torch.log(sigma_q_diag)
+                + alpha_div * torch.log(sigma_p_diag)
+                - torch.log(sigma_blend_diag)
+            ) / (alpha_div - 1.0)
+            d_alpha_k = 0.5 * (mahal_k + logdet_k).clamp(min=0.0)                    # (B, N, K)
+            # Correction to mu gradient: -(α²/c₀) · D_α,k · α_d · Σ̃⁻¹·Δμ
+            grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * d_alpha_k * (
+                alpha_div * torch.einsum('bnij,bnj->bni', sigma_blend_inv, delta_mu)
+            )
+            # Correction to sigma gradient (4D broadcast over the matrix axes)
+            correction_scale = ((alpha ** 2 / alpha_c0) * d_alpha_k).unsqueeze(-1)   # (B, N, K, 1)
+            grad_sigma_self = grad_sigma_self - correction_scale * 0.5 * (
+                sigma_blend_inv - sigma_q_inv
+                - alpha_div * (1.0 - alpha_div) * outer_term
+            )
 
     grad_mu = grad_mu + grad_mu_self
     grad_sigma = grad_sigma + grad_sigma_self
@@ -367,8 +411,18 @@ def _compute_vfe_gradients_block_diagonal(
             # Use TRANSPORT_JITTER (not eps=1e-6) — GL(K) transport can produce
             # near-singular covariances that need stronger regularization.
             sigma_j_transported = 0.5 * (sigma_j_transported + sigma_j_transported.transpose(-1, -2))
-            sigma_j_reg = sigma_j_transported + TRANSPORT_JITTER * I_d
-            sigma_j_inv = _safe_spd_inv(sigma_j_reg, eps=TRANSPORT_JITTER)  # (B, C, N, d, d)
+            # Σ_j_transported lives at position i (post Ω sandwich), so its
+            # local frame is exp_phi_i broadcast over j.
+            if gauge_covariant_ridge:
+                _ep_i_bcast_d = exp_phi_i[:, :, None, :, :].expand(-1, -1, N, -1, -1)
+                _R_d_pair = _ep_i_bcast_d @ _ep_i_bcast_d.transpose(-1, -2)
+            else:
+                _ep_i_bcast_d = None
+                _R_d_pair = I_d
+            sigma_j_reg = sigma_j_transported + TRANSPORT_JITTER * _R_d_pair
+            sigma_j_inv = _safe_spd_inv(
+                sigma_j_reg, eps=TRANSPORT_JITTER, exp_phi=_ep_i_bcast_d,
+            )  # (B, C, N, d, d)
 
             # Delta mu for this block (query chunk) - contiguous to avoid view issues
             mu_block_i = mu_block[:, i_start:i_end].contiguous()  # (B, C, d) raw
@@ -406,7 +460,11 @@ def _compute_vfe_gradients_block_diagonal(
                 sign_j, logdet_j = torch.linalg.slogdet(sigma_j_reg)
                 logdet_j = torch.where(sign_j > 0, logdet_j, torch.zeros_like(logdet_j))
 
-            sigma_i_block_diag = sigma_i_block_slice + eps * I_d  # (B, C, d, d)
+            if gauge_covariant_ridge:
+                _R_d_self = exp_phi_i @ exp_phi_i.transpose(-1, -2)
+            else:
+                _R_d_self = I_d
+            sigma_i_block_diag = sigma_i_block_slice + eps * _R_d_self  # (B, C, d, d)
             try:
                 L_i = torch.linalg.cholesky(sigma_i_block_diag)
                 logdet_i = 2.0 * torch.sum(torch.log(torch.diagonal(L_i, dim1=-2, dim2=-1) + eps), dim=-1)
@@ -636,8 +694,23 @@ def _compute_vfe_gradients_block_diagonal_diag(
             -alpha_div * (sigma_p_safe - sigma_q_safe) / (2.0 * sigma_q_safe * sigma_blend_self)
             - alpha_div * (1.0 - alpha_div) * delta_mu ** 2 / (2.0 * sigma_blend_self ** 2)
         )
-        # Product-rule correction is not applied for alpha_div != 1.0 because
-        # the KL used to define the learnable alpha schedule is not D_alpha.
+        # Product-rule correction (Rényi branch): schedule α_k = c₀_k/(b₀_k + D_α,k)
+        # makes ∂α/∂θ = -α²/c₀ · ∂D_α,k/∂θ, so the product rule adds -(α²/c₀)·D_α,k·∂D_α,k/∂θ.
+        if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
+            mahal_k = alpha_div * delta_mu ** 2 / sigma_blend_self
+            logdet_k = (
+                (1.0 - alpha_div) * torch.log(sigma_q_safe)
+                + alpha_div * torch.log(sigma_p_safe)
+                - torch.log(sigma_blend_self)
+            ) / (alpha_div - 1.0)
+            d_alpha_k = 0.5 * (mahal_k + logdet_k).clamp(min=0.0)
+            grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * d_alpha_k * (
+                alpha_div * delta_mu / sigma_blend_self
+            )
+            grad_sigma_self = grad_sigma_self - (alpha ** 2 / alpha_c0) * d_alpha_k * (
+                -alpha_div * (sigma_p_safe - sigma_q_safe) / (2.0 * sigma_q_safe * sigma_blend_self)
+                - alpha_div * (1.0 - alpha_div) * delta_mu ** 2 / (2.0 * sigma_blend_self ** 2)
+            )
 
     # Debug: self-coupling component norms
     if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
@@ -1015,7 +1088,23 @@ def _fused_attention_and_vfe_gradients_block_diag(
             -alpha_div * (sigma_p_safe - sigma_q_safe) / (2.0 * sigma_q_safe * sigma_blend_self)
             - alpha_div * (1.0 - alpha_div) * delta_mu_sp ** 2 / (2.0 * sigma_blend_self ** 2)
         )
-        # Product-rule correction not applied for alpha_div != 1.0.
+        # Product-rule correction (Rényi branch): α_k = c₀_k/(b₀_k + D_α,k) ⇒
+        # ∂α_k/∂θ = -α_k²/c₀ · ∂D_α,k/∂θ.
+        if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
+            mahal_k = alpha_div * delta_mu_sp ** 2 / sigma_blend_self
+            logdet_k = (
+                (1.0 - alpha_div) * torch.log(sigma_q_safe)
+                + alpha_div * torch.log(sigma_p_safe)
+                - torch.log(sigma_blend_self)
+            ) / (alpha_div - 1.0)
+            d_alpha_k = 0.5 * (mahal_k + logdet_k).clamp(min=0.0)
+            grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * d_alpha_k * (
+                alpha_div * delta_mu_sp / sigma_blend_self
+            )
+            grad_sigma_self = grad_sigma_self - (alpha ** 2 / alpha_c0) * d_alpha_k * (
+                -alpha_div * (sigma_p_safe - sigma_q_safe) / (2.0 * sigma_q_safe * sigma_blend_self)
+                - alpha_div * (1.0 - alpha_div) * delta_mu_sp ** 2 / (2.0 * sigma_blend_self ** 2)
+            )
 
     # Debug: self-coupling component norms (fused path)
     if _vfe_utils_mod._VFE_GRAD_DEBUG is not None:
@@ -1361,6 +1450,7 @@ def compute_vfe_gradients_gpu(
     use_rope: bool = False,    # When True, β was softmaxed from KL_RoPE → fix chain rule
     rope_base: float = 10000.0,
     alpha_div: float = 1.0,    # Rényi divergence order (1.0 = KL)
+    gauge_covariant_ridge: bool = False,  # If True, ε·I ridges on Σ become ε·(gg^T)
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Compute VFE gradients entirely on GPU using PyTorch.
@@ -1440,6 +1530,7 @@ def compute_vfe_gradients_gpu(
             use_rope=use_rope,
             rope_base=rope_base,
             alpha_div=alpha_div,
+            gauge_covariant_ridge=gauge_covariant_ridge,
         )
         return grad_mu, torch.diagonal(grad_sigma_full, dim1=-2, dim2=-1)
 
@@ -1456,6 +1547,7 @@ def compute_vfe_gradients_gpu(
             use_rope=use_rope,
             rope_base=rope_base,
             alpha_div=alpha_div,
+            gauge_covariant_ridge=gauge_covariant_ridge,
         )
 
     # =================================================================
@@ -1473,15 +1565,19 @@ def compute_vfe_gradients_gpu(
             alpha_div=alpha_div,
         )
 
-    # The remaining in-line paths (no irrep_dims) do not yet implement the
-    # rope chain-rule fix.  Warn so the caller knows the gradient is biased.
+    # The remaining in-line paths (no irrep_dims) do not implement the rope
+    # chain-rule fix. Previously this was a warning; now we hard-error because
+    # the resulting gradient is biased and the warn-and-continue policy let
+    # users silently train models with wrong descent directions. Callers must
+    # provide irrep_dims (the per-head block decomposition) to use RoPE.
     if use_rope:
-        import warnings
-        warnings.warn(
-            "use_rope=True without irrep_dims falls through to a path that "
-            "does not implement the rope chain-rule fix.  The softmax coupling "
-            "term will use raw-mu gradients instead of R^T·∂KL_RoPE/∂(R μ).",
-            stacklevel=2,
+        raise ValueError(
+            "use_rope=True without irrep_dims is not supported: this code path "
+            "does not implement the rope chain-rule fix, and the softmax-coupling "
+            "term would use raw-μ gradients instead of R^T·∂KL_RoPE/∂(R μ), "
+            "biasing the descent direction. Pass irrep_dims (per-head block "
+            "decomposition) so the per-head loop's chain-rule fix applies, or "
+            "set use_rope=False."
         )
 
     # =================================================================
@@ -1531,7 +1627,23 @@ def compute_vfe_gradients_gpu(
                 -alpha_div * (sigma_p_safe - sigma_q_safe) / (2.0 * sigma_q_safe * sigma_blend_self)
                 - alpha_div * (1.0 - alpha_div) * delta_mu ** 2 / (2.0 * sigma_blend_self ** 2)
             )
-            # Product-rule correction not applied for alpha_div != 1.0.
+            # Product-rule correction (Rényi branch): α_k = c₀_k/(b₀_k + D_α,k) ⇒
+            # ∂α_k/∂θ = -α_k²/c₀ · ∂D_α,k/∂θ.
+            if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
+                mahal_k = alpha_div * delta_mu ** 2 / sigma_blend_self
+                logdet_k = (
+                    (1.0 - alpha_div) * torch.log(sigma_q_safe)
+                    + alpha_div * torch.log(sigma_p_safe)
+                    - torch.log(sigma_blend_self)
+                ) / (alpha_div - 1.0)
+                d_alpha_k = 0.5 * (mahal_k + logdet_k).clamp(min=0.0)
+                grad_mu_self = grad_mu_self - (alpha ** 2 / alpha_c0) * d_alpha_k * (
+                    alpha_div * delta_mu / sigma_blend_self
+                )
+                grad_sigma_self = grad_sigma_self - (alpha ** 2 / alpha_c0) * d_alpha_k * (
+                    -alpha_div * (sigma_p_safe - sigma_q_safe) / (2.0 * sigma_q_safe * sigma_blend_self)
+                    - alpha_div * (1.0 - alpha_div) * delta_mu ** 2 / (2.0 * sigma_blend_self ** 2)
+                )
     else:
         # Full covariance - use matrix operations
         # ∂KL/∂μ_q = Σ_p^{-1} (μ_q - μ_p)
@@ -1611,7 +1723,7 @@ def compute_vfe_gradients_gpu(
             exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
 
             # Re-orthogonalization for SO(K) if requested
-            if enforce_orthogonal and K >= 16:
+            if enforce_orthogonal and K >= 2:
                 exp_phi = newton_schulz_orthogonalize(exp_phi)
                 exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
 
@@ -1729,7 +1841,7 @@ def compute_vfe_gradients_gpu(
             exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
 
             # Re-orthogonalization for SO(K) if requested
-            if enforce_orthogonal and K >= 16:
+            if enforce_orthogonal and K >= 2:
                 exp_phi = newton_schulz_orthogonalize(exp_phi)
                 exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
 
@@ -1932,6 +2044,8 @@ def _compute_rope_full_gauge_gradient_per_head(
     enforce_orthogonal: bool = False,
     mask: Optional[torch.Tensor] = None,
     mask_self_attention: bool = False,
+    gauge_covariant_ridge: bool = False,
+    alpha_c0: Optional[torch.Tensor] = None,  # (d_h,) per-head softplus(raw_c0) for product-rule correction when alpha is learnable
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     r"""EXPERIMENTAL: per-head VFE gradient under the rope_full_gauge interpretation.
 
@@ -2052,11 +2166,20 @@ def _compute_rope_full_gauge_gradient_per_head(
         # Numerical stability: symmetrize and add eps to diagonal
         sigma_t = 0.5 * (sigma_t + sigma_t.transpose(-1, -2))
         eye_dh = torch.eye(d_h, device=device, dtype=_f32)
-        sigma_t = sigma_t + eps * eye_dh
+        # Gauge-covariant ridge: Σ_t and Σ_i_rope both live in position-i's
+        # frame (Σ_t after Ω Σ_j Ω^T transport, Σ_i_rope is Σ_i rotated by RoPE
+        # which does not change the gauge-transport frame at position i).
+        if gauge_covariant_ridge:
+            _ep_h_f32 = exp_phi_h.to(dtype=_f32)
+            _ep_bcast_dh = _ep_h_f32[:, :, None, :, :].expand(-1, -1, N, -1, -1)
+            _R_dh_per_pair = _ep_bcast_dh @ _ep_bcast_dh.transpose(-1, -2)
+        else:
+            _R_dh_per_pair = eye_dh
+        sigma_t = sigma_t + eps * _R_dh_per_pair
 
         # Source-side rope-rotated covariance, broadcast across j
         sigma_i_rope = sigma_rope.unsqueeze(2).expand(-1, -1, N, -1, -1)  # (B, N, N, d_h, d_h)
-        sigma_i_rope = 0.5 * (sigma_i_rope + sigma_i_rope.transpose(-1, -2)) + eps * eye_dh
+        sigma_i_rope = 0.5 * (sigma_i_rope + sigma_i_rope.transpose(-1, -2)) + eps * _R_dh_per_pair
 
         # Full-covariance KL between two Gaussians:
         # KL(p || q) = 0.5 [tr(Σ_q^{-1} Σ_p) + (μ_q - μ_p)^T Σ_q^{-1} (μ_q - μ_p)
@@ -2127,12 +2250,34 @@ def _compute_rope_full_gauge_gradient_per_head(
                 F_self = (alpha * kl_self).sum()
             else:
                 F_self = alpha * kl_self.sum()
+            # Product-rule correction for learnable alpha = c0/(b0+KL).
+            # The autograd above treats `alpha` as a constant w.r.t. (μ,σ) since
+            # alpha was computed from pre-iteration (μ,σ) tensors that are NOT
+            # the autograd-traced mu_var/sigma_var here. Without correction,
+            # autograd produces α·dKL/dθ but misses the −(α²/c0)·KL·(dKL/dθ)
+            # term from dα/dθ. Adding a phantom term −0.5·(α²/c0)·KL² (with α
+            # and c0 detached) makes autograd produce exactly the missing term:
+            # d/dθ[−0.5·(α²/c0)·KL²] = −(α²/c0)·KL·(dKL/dθ).
+            if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
+                _alpha_det = alpha.detach()
+                _c0_det = alpha_c0.detach().clamp(min=eps)
+                F_self = F_self - 0.5 * (_alpha_det.pow(2) / _c0_det * kl_self.pow(2)).sum()
         else:
             # Full covariance: KL(q||p) = 0.5[tr(Sp^{-1} Sq) + delta^T Sp^{-1} delta - d + log|Sp| - log|Sq|]
             eye_dh_self = torch.eye(d_h, device=device, dtype=_f32)
-            sigma_p_reg = sigma_p_h_d + eps * eye_dh_self
-            sigma_q_reg = sigma_var + eps * eye_dh_self
-            sigma_p_inv = _safe_spd_inv(sigma_p_reg, eps=eps)
+            # Gauge-covariant ridge for the self-KL: Σ_p and Σ_q both live at
+            # position i with local frame exp_phi_h (per-head, per-position).
+            if gauge_covariant_ridge:
+                _ep_h_self = exp_phi_h.to(dtype=_f32)
+                _R_dh_self = _ep_h_self @ _ep_h_self.transpose(-1, -2)
+            else:
+                _R_dh_self = eye_dh_self
+            sigma_p_reg = sigma_p_h_d + eps * _R_dh_self
+            sigma_q_reg = sigma_var + eps * _R_dh_self
+            sigma_p_inv = _safe_spd_inv(
+                sigma_p_reg, eps=eps,
+                exp_phi=(_ep_h_self if gauge_covariant_ridge else None),
+            )
             trace_self = torch.einsum('bnij,bnji->bn', sigma_p_inv, sigma_q_reg)
             mahal_self = torch.einsum('bni,bnij,bnj->bn', delta_p, sigma_p_inv, delta_p)
             _, logdet_p = torch.linalg.slogdet(sigma_p_reg)
@@ -2145,6 +2290,14 @@ def _compute_rope_full_gauge_gradient_per_head(
                 F_self = (alpha.mean(dim=-1) * kl_self_per_token).sum()
             else:
                 F_self = alpha * kl_self_per_token.sum()
+            # Product-rule correction for learnable alpha (full-cov path).
+            # The full-cov KL is dimension-summed, so we use scalar reductions of
+            # alpha and c0; this mirrors the alpha.mean(dim=-1) used above and
+            # restores the descent direction the diagonal path enjoys.
+            if alpha_c0 is not None and isinstance(alpha, torch.Tensor):
+                _alpha_scalar = alpha.mean(dim=-1).detach()                 # (B, N)
+                _c0_scalar = alpha_c0.detach().mean().clamp(min=eps)        # ()
+                F_self = F_self - 0.5 * (_alpha_scalar.pow(2) / _c0_scalar * kl_self_per_token.pow(2)).sum()
 
         F_total = F_self + F_align
 

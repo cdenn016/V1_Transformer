@@ -162,14 +162,6 @@ def print_vfe_grad_debug(
                 f" {d.get('grad_sigma_softmax_pos_max', 0):>12.2f}"
             )
 
-        # Observation (shared between multihead and single-beta, computed on full tensor)
-        if 'obs_mu_grad' in d:
-            logger.debug(
-                f"  {'observation (CE)':<30}"
-                f" {d.get('obs_mu_grad', 0):>12.1f}"
-                f" {d.get('obs_sigma_grad', 0):>12.1f}"
-            )
-
         logger.debug("  --- Euclidean total (assembled, after obs) ---")
         logger.debug(f"  grad_mu:    {_eu_mu:>10.1f}  (pos mean: {_ps_mu[0]:.2f}, max: {_ps_mu[1]:.2f})")
         logger.debug(f"  grad_sigma: {_eu_sig:>10.1f}  (pos mean: {_ps_sig[0]:.2f}, max: {_ps_sig[1]:.2f})")

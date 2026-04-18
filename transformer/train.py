@@ -267,7 +267,6 @@ def compute_free_energy_loss(
     kappa_gamma: float = 1.0,     # Temperature for γ_ij coupling weights
     lambda_hyper: float = 0.0,    # Hyper-prior: KL(s_i || h) — models to centroid
     pad_token_id: int = -100,     # Token ID to ignore in loss (padding)
-    use_obs_in_vfe: bool = False, # Pass targets into VFE E-step (last layer only)
     mass_phi: float = 0.0,        # Gauge prior weight: (mass_φ/2) Σ_i ||φ_i||²
     aux_loss_weight: float = 0.0, # Weight for auxiliary per-layer CE losses (0 = disabled)
     detach_beta_m_step: bool = True,  # True = correct EM (detach β). False = old behavior (grad through softmax)
@@ -326,8 +325,11 @@ def compute_free_energy_loss(
     # =================================================================
     # Forward pass with attention weights and KL matrices
     # =================================================================
-    vfe_targets = targets if use_obs_in_vfe else None
-    logits, attn_info = model.forward_with_attention(token_ids, targets=vfe_targets)
+    # The E-step does not see target tokens — CE below is the outer M-step
+    # observation likelihood term of the free energy. `targets=` here is only
+    # forwarded for the outer auxiliary per-layer CE loss (aux_layer_loss),
+    # which is computed after the E-step and never enters the belief inference.
+    logits, attn_info = model.forward_with_attention(token_ids, targets=targets)
 
     beta = attn_info['beta']    # (n_layers, B, n_heads, N, N)
     kl = attn_info['kl']        # (n_layers, B, n_heads, N, N)

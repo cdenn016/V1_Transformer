@@ -265,7 +265,7 @@ The specification above is a principled consolidation of mechanisms the current 
 - MahalanobisNorm provides gauge-equivariant normalization (`transformer/core/blocks.py`).
 - Active-inference modules distinguish between target-free E-step shaping and generation-time EFE policy (`transformer/core/active_inference.py`, `transformer/core/expected_free_energy.py`).
 
-The `use_obs_in_vfe` flag (default `False`) controls whether targets enter the E-step. The design laws above require it to remain off for principled LM training. Evaluation already hardcodes it to `False`.
+The previously-present `use_obs_in_vfe` flag was removed 2026-04-16: the E-step never sees target tokens. Target tokens enter the objective only through the outer CE loss term in `compute_free_energy_loss` (the observation-likelihood term of $F$).
 
 ---
 

@@ -164,7 +164,6 @@ def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
                 kappa_gamma=1.0,
                 lambda_hyper=0.0,
                 pad_token_id=pad_token_id,
-                use_obs_in_vfe=False,
                 mass_phi=0.0,
             )
 

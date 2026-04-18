@@ -100,10 +100,14 @@ class VFEExpectedFreeEnergy:
         p_bar = None
         H_samples = []
 
+        # MC sample z_s already absorbs σ via z_s = μ + √σ · ε.
+        # Pass σ=0 to decode so the predictive treats z_s as a point estimate
+        # — otherwise σ enters BALD MI twice and inflates predictive entropy.
+        zero_sigma = torch.zeros_like(sigma[:, -1:, :])
         for s in range(S):
             noise = torch.randn_like(mu_last)
             z_s = mu_last + std_last * noise  # (1, 1, K)
-            logits_s = prior_bank.decode(z_s, sigma[:, -1:, :])  # (1, 1, V)
+            logits_s = prior_bank.decode(z_s, zero_sigma)  # (1, 1, V)
             p_s = F.softmax(logits_s[:, 0, :], dim=-1)  # (1, V)
 
             H_s = -(p_s * (p_s + eps).log()).sum(dim=-1)  # (1,)

@@ -73,6 +73,18 @@ class VFEPositionalEncoding(nn.Module):
             from math_utils.generators import lie_compose_bch_general_torch
         except ImportError:
             # Fallback to additive if BCH not available
+            if not getattr(self, '_bch_fallback_warned', False):
+                import warnings
+                warnings.warn(
+                    f"bch_order={self.bch_order} requested but "
+                    "math_utils.generators.lie_compose_bch_general_torch is "
+                    "unavailable; falling back to first-order additive composition. "
+                    "Non-abelian generators (e.g. GL(K), SO(N>2)) will lose BCH "
+                    "correction terms.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                self._bch_fallback_warned = True
             return phi + pos.unsqueeze(0)
 
         return lie_compose_bch_general_torch(

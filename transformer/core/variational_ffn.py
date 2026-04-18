@@ -28,10 +28,10 @@ Free Energy (E-STEP):
     F = alpha * Sum_i KL(q_i||p_i)                         # Prior consistency (self-coupling)
       + lambda_belief * Sum_{i,j} beta_ij * KL(q_i||Omega_{ij}q_j)  # Belief alignment (direct: beta * dKL/dtheta)
       + lambda_softmax * Sum_{i,j} KL_ij * d(beta_ij)/dtheta        # Attention-variance coupling (dbeta/dtheta * KL)
-      + CE(W_out * mu, targets)                             # Discrete observations
 
-E-step: Minimize F w.r.t. mu, Sigma (with W_out frozen)
-M-step: Minimize F w.r.t. W_out, embeddings (with mu frozen)
+E-step: Minimize F w.r.t. mu, Sigma (does not see targets — outer CE loss
+    in compute_free_energy_loss provides the likelihood term).
+M-step: Minimize outer (F + CE) w.r.t. embeddings, W_out.
 
 Gradient computation:
     dF/dtheta for theta = {mu_q, Sigma_q, mu_p, Sigma_p, phi}
@@ -65,7 +65,6 @@ from transformer.core.vfe_diagnostics import (
 )
 from transformer.core.vfe_utils import (
     apply_natural_gradient_step as _apply_natgrad_step,
-    compute_observation_gradients as _compute_obs_grad_impl,
     retract_sigma_e_step as _retract_sigma_impl,
 )
 from transformer.core.vfe_utils import (
@@ -235,6 +234,8 @@ class VariationalFFNDynamic(nn.Module):
         update_phi_per_iteration: bool =  True,  # If True, update phi during EACH E-step iteration
         
         phi_max_norm: Optional[float] =   None,  # Max phi norm; None = auto (π for SO(N), 5.0 for GL(K))
+        phi_project_slk: bool =           False, # GL(K) only: project φ → sl(K) after retraction (det Ω = 1)
+        phi_trace_clamp: Optional[float] = None, # GL(K) only: soft cap |tr(φ·G)| ≤ T per token
         prior_bank: Optional[nn.Module] = None,  # Token-dependent PriorBank (if provided)
         use_prior_bank: bool =            False,  # If True, use PriorBank (token-dependent) instead of position-dependent priors
         
@@ -272,9 +273,6 @@ class VariationalFFNDynamic(nn.Module):
         rope_base: float =           10000.0,
         
         gauge_param: str =           'phi',# 'phi' (Lie algebra) or 'omega' (direct GL(K))
-        obs_sigma_gradient: bool =   True, # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
-        obs_sigma_exact_stein: bool = False, # Sample z = μ+σε for unbiased E_q[H(z)] (exact Stein)
-        obs_sigma_weight: float =    1.0,  # Weight for sigma observation gradient
         sigma_max: float =           5.0,  # Upper bound on σ (prevents nat_grad blowup from 2σ²·∇σ)
         
         e_step_sigma_floor: float =  0.1,  # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
@@ -375,9 +373,6 @@ class VariationalFFNDynamic(nn.Module):
         self.exact_phi_grad = _flags['exact_phi_grad']
         self.implicit_em = _flags['implicit_em']
         self.em_phi_mode = _flags['em_phi_mode']
-        self.obs_sigma_gradient = obs_sigma_gradient
-        self.obs_sigma_exact_stein = obs_sigma_exact_stein
-        self.obs_sigma_weight = obs_sigma_weight
         self.sigma_max = sigma_max
         self.e_step_sigma_floor = e_step_sigma_floor
         self.enforce_orthogonal = enforce_orthogonal
@@ -427,7 +422,12 @@ class VariationalFFNDynamic(nn.Module):
         # implementing the framework-consistent gauge-transport interpretation
         # of RoPE.  Default False uses the standard-transformer pattern (rotate
         # only μ).  Plumbed through from BlockConfig.rope_full_gauge.
-        self._rope_full_gauge_vfe = False  # set externally by VariationalFFNDynamic.__init__
+        # Tri-state mode in {'off', 'vfe_only', 'both'} (legacy bool also accepted via
+        # block_config._coerce_rope_full_gauge upstream). The FFN VFE-gradient helper
+        # fires for {'vfe_only', 'both'}; the attention-side σ rotation is gated by
+        # the parallel attention.rope_full_gauge_mode attribute and is independent of
+        # this flag (set externally by VariationalFFNDynamic.__init__).
+        self._rope_full_gauge_vfe = 'off'
         # Constant gauge: store reference to attention module's per-head Ω parameters.
         # When gauge_mode='constant', these are used to build transport operators
         # in VFE iterations, ensuring consistency with the attention module.
@@ -454,6 +454,8 @@ class VariationalFFNDynamic(nn.Module):
             logger.info(f"[VariationalFFNDynamic] φ will evolve DURING E-step iterations (dynamical gauge frames)")
         self.phi_lr = phi_lr
         self.phi_max_norm = phi_max_norm
+        self.phi_project_slk = phi_project_slk
+        self.phi_trace_clamp = phi_trace_clamp
 
         # Phi gradient preconditioning mode
         self.phi_natural_gradient = phi_natural_gradient
@@ -611,12 +613,13 @@ class VariationalFFNDynamic(nn.Module):
         self.use_deq = use_deq
         self.deq_neumann_terms = deq_neumann_terms
         self.deq_include_phi = deq_include_phi
-        if use_deq and implicit_em:
+        if use_deq and self.implicit_em:
             raise ValueError(
-                "use_deq=True and implicit_em=True are mutually exclusive. "
-                "Both correct the M-step gradient for E-step dynamics: DEQ via "
-                "Neumann-series (I-J)^{-1}, implicit_em via per-dimension IFT "
-                "scale s_k. Using both double-counts the correction."
+                "use_deq=True and implicit_em (via em_mode='implicit_ift') "
+                "are mutually exclusive. Both correct the M-step gradient for "
+                "E-step dynamics: DEQ via Neumann-series (I-J)^{-1}, "
+                "implicit_em via per-dimension IFT scale s_k. Using both "
+                "double-counts the correction."
             )
 
         # Learnable step size (stored in unconstrained space, apply softplus for positive LR)
@@ -752,55 +755,114 @@ class VariationalFFNDynamic(nn.Module):
         sigma_q: torch.Tensor,   # (B, N, K) diagonal or (B, N, K, K) full
         eps: float = 1e-6,
     ) -> torch.Tensor:
-        """
+        r"""
         Compute per-dimension Bayesian precision via log-barrier form.
 
-        α_k = c₀_k / (b₀_k + kl_k)
+        :math:`\alpha_k = c_{0,k} / (b_{0,k} + D_k(q \| p))`
 
-        where kl_k is the per-dimension KL contribution. Each belief
-        dimension k gets its own precision, so different irrep blocks
-        (compact vs non-compact) can learn different regularization curves.
+        where :math:`D_k` is the per-dimension divergence contribution.  The
+        divergence family is selected by ``self.alpha_divergence``:
 
-        Diagonal covariance: kl_k decomposes exactly per dimension.
-        Full covariance: uses diagonal elements of (Σ_p⁻¹ Σ_q) and
-            per-dim Mahalanobis as proxy contributions, with the logdet
-            spread uniformly across dimensions.
+        - ``alpha_divergence == 1.0`` (default): KL divergence, per-dim
+          :math:`\mathrm{KL}_k = \tfrac{1}{2}(s_k/t_k + \delta\mu_k^2/t_k
+          - 1 + \log(t_k/s_k))` where :math:`s_k = \sigma_q^k`,
+          :math:`t_k = \sigma_p^k`.
+        - ``alpha_divergence != 1.0``: Rényi :math:`\alpha`-divergence, per-dim
+          :math:`D_{\alpha,k} = \tfrac{1}{2}\bigl(\alpha\,\delta\mu_k^2/
+          \tilde\sigma_k + ((1-\alpha)\log s_k + \alpha\log t_k
+          - \log\tilde\sigma_k)/(\alpha-1)\bigr)` with
+          :math:`\tilde\sigma_k = (1-\alpha)s_k + \alpha t_k`.
+
+        This matches the Rényi kernel in ``kl_computation._kl_kernel_diagonal``
+        at the per-dimension level — the summed form recovers the same
+        divergence used in the self-coupling gradient in
+        ``vfe_gradients.py``.  Using a single divergence family for both the
+        schedule and the gradient keeps the product-rule correction valid:
+        :math:`\partial\alpha_k/\partial\theta
+        = -\alpha_k^2/c_{0,k}\cdot\partial D_k/\partial\theta`.
+
+        Diagonal covariance: :math:`D_k` decomposes exactly per dimension.
+        Full covariance: uses diagonal elements as per-dim proxy (matches the
+        existing KL-branch full-cov heuristic).
 
         Returns:
-            alpha: (B, N, K) per-dimension-per-agent precision
+            alpha: ``(B, N, K)`` per-dimension-per-agent precision.
         """
         c0 = F.softplus(self.raw_c0)  # (K,)
         b0 = F.softplus(self.raw_b0)  # (K,)
 
         delta_mu = mu_q - mu_p  # (B, N, K)
         K = mu_q.shape[-1]
-        is_diagonal = (sigma_p.dim() == 3)
+        alpha_div = self.alpha_divergence
 
-        if is_diagonal:
-            sigma_p_safe = sigma_p.clamp(min=eps)
-            sigma_q_safe = sigma_q.clamp(min=eps)
-            # Per-dimension KL contributions (no sum — keep (B, N, K))
-            trace_term = sigma_q_safe / sigma_p_safe              # (B, N, K)
-            mahal_term = delta_mu ** 2 / sigma_p_safe             # (B, N, K)
-            logdet_term = torch.log(sigma_p_safe) - torch.log(sigma_q_safe)  # (B, N, K)
+        # Extract per-dim variances, robust to mixed shapes.  In full-cov
+        # mode the prior sigma_p may still be diagonal (B, N, K) from
+        # PriorBank while the posterior sigma_q evolves to full (B, N, K, K)
+        # during the E-step.  We compute per-dim proxies independently for
+        # each tensor: diagonal → clamp, full → extract matrix diagonal.
+        # The full-cov KL formula (with Σ_p⁻¹ Σ_q matmul) is only used when
+        # BOTH tensors are full, so its off-diagonal correlation signal is
+        # preserved where available.
+        is_p_diag = (sigma_p.dim() == 3)
+        is_q_diag = (sigma_q.dim() == 3)
+
+        sigma_p_diag = (
+            sigma_p if is_p_diag else sigma_p.diagonal(dim1=-2, dim2=-1)
+        ).clamp(min=eps)
+        sigma_q_diag = (
+            sigma_q if is_q_diag else sigma_q.diagonal(dim1=-2, dim2=-1)
+        ).clamp(min=eps)
+
+        if abs(alpha_div - 1.0) < 1e-6:
+            # === KL branch (alpha_div == 1) ===
+            if is_p_diag and is_q_diag:
+                # Pure diagonal path: closed-form per-dim KL.
+                trace_term = sigma_q_diag / sigma_p_diag              # (B, N, K)
+                mahal_term = delta_mu ** 2 / sigma_p_diag             # (B, N, K)
+                logdet_term = torch.log(sigma_p_diag) - torch.log(sigma_q_diag)
+            elif (not is_p_diag) and (not is_q_diag):
+                # Pure full-cov path: diagonal proxy of (Σ_p⁻¹ Σ_q) plus
+                # exact per-dim Mahalanobis.
+                sigma_p_inv = _safe_spd_inv(sigma_p, eps=eps)
+                prod = torch.matmul(sigma_p_inv, sigma_q)
+                trace_term = prod.diagonal(dim1=-2, dim2=-1)          # (B, N, K)
+                sp_inv_delta = torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
+                mahal_term = delta_mu * sp_inv_delta                  # (B, N, K)
+                logdet_p = torch.linalg.slogdet(sigma_p.float())[1]
+                logdet_q = torch.linalg.slogdet(sigma_q.float())[1]
+                logdet_term = ((logdet_p - logdet_q) / K).unsqueeze(-1).expand_as(delta_mu)
+            else:
+                # Mixed path: diagonal proxy on both (cannot do matrix inverse
+                # or slogdet without lifting one side; the diagonal proxy is
+                # consistent with the Rényi branch below).
+                trace_term = sigma_q_diag / sigma_p_diag
+                mahal_term = delta_mu ** 2 / sigma_p_diag
+                logdet_term = torch.log(sigma_p_diag) - torch.log(sigma_q_diag)
+
+            divergence_k = 0.5 * (trace_term + mahal_term - 1 + logdet_term)
         else:
-            sigma_p_inv = _safe_spd_inv(sigma_p, eps=eps)  # (B, N, K, K)
-            # Per-dim proxy: diagonal of (Σ_p⁻¹ Σ_q)
-            prod = torch.matmul(sigma_p_inv, sigma_q)  # (B, N, K, K)
-            trace_term = prod.diagonal(dim1=-2, dim2=-1)          # (B, N, K)
-            # Per-dim Mahalanobis: δμ_k * (Σ_p⁻¹ δμ)_k
-            sp_inv_delta = torch.einsum('bnij,bnj->bni', sigma_p_inv, delta_mu)
-            mahal_term = delta_mu * sp_inv_delta                  # (B, N, K)
-            # logdet can't decompose per-dim; spread uniformly
-            logdet_p = torch.linalg.slogdet(sigma_p.float())[1]  # (B, N)
-            logdet_q = torch.linalg.slogdet(sigma_q.float())[1]  # (B, N)
-            logdet_term = ((logdet_p - logdet_q) / K).unsqueeze(-1).expand_as(delta_mu)  # (B, N, K)
+            # === Rényi α-divergence branch ===
+            # Blended per-dim variance: σ̃_k = (1-α)·σ_q,k + α·σ_p,k.
+            # Clamped to eps: for α ∈ (0,1) the blend is strictly positive
+            # (convex combination of positives); for α outside (0,1) it can
+            # still be positive but the clamp protects against edge cases
+            # when σ_q >> σ_p or vice versa.
+            sigma_blend = (
+                (1.0 - alpha_div) * sigma_q_diag + alpha_div * sigma_p_diag
+            ).clamp(min=eps)
+            # Mahalanobis: α · (δμ_k)² / σ̃_k
+            mahal_term = alpha_div * (delta_mu ** 2) / sigma_blend
+            # Log-det per-dim: [(1-α)log σ_q,k + α log σ_p,k - log σ̃_k] / (α-1)
+            logdet_term = (
+                (1.0 - alpha_div) * torch.log(sigma_q_diag)
+                + alpha_div * torch.log(sigma_p_diag)
+                - torch.log(sigma_blend)
+            ) / (alpha_div - 1.0)
+            divergence_k = 0.5 * (mahal_term + logdet_term)
 
-        # Per-dimension KL contribution
-        kl_k = 0.5 * (trace_term + mahal_term - 1 + logdet_term)  # (B, N, K)
-        kl_k = kl_k.clamp(min=0.0)
+        divergence_k = divergence_k.clamp(min=0.0)
 
-        alpha = c0 / (b0 + kl_k)  # (B, N, K)
+        alpha = c0 / (b0 + divergence_k)  # (B, N, K)
 
         return alpha
 
@@ -1374,8 +1436,7 @@ class VariationalFFNDynamic(nn.Module):
 
             mu_p_current, sigma_p, mu_current, sigma_current,
             phi_current, omega_current, alpha_effective, _alpha_c0,
-            is_diagonal, beta_history (empty list or None),
-            has_observations (bool sentinel)
+            is_diagonal, beta_history (empty list or None)
         """
         # ── Sigma initialisation ────────────────────────────────────────
         if sigma is None:
@@ -1576,31 +1637,6 @@ class VariationalFFNDynamic(nn.Module):
         )
 
     # =================================================================
-    # Helper: Observation gradient computation (CE + Stein's lemma)
-    # =================================================================
-
-    def _compute_observation_gradients(
-        self,
-        mu_current: torch.Tensor,
-        W_out: torch.Tensor,
-        _obs_cache: dict,
-        sigma_current: Optional[torch.Tensor],
-        is_diagonal: bool,
-        _is_final_iter: bool,
-        eps: float,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        r"""Compute observation gradients for mu and sigma.
-
-        Delegates to :func:`vfe_utils.compute_observation_gradients`.
-        """
-        return _compute_obs_grad_impl(
-            mu_current, W_out, _obs_cache, sigma_current,
-            is_diagonal, _is_final_iter, eps,
-            self.obs_sigma_gradient, self.obs_sigma_exact_stein,
-            self.obs_sigma_weight,
-        )
-
-    # =================================================================
     # Helper: Sigma SPD retraction + condition clamping + isotropy
     # =================================================================
 
@@ -1681,7 +1717,8 @@ class VariationalFFNDynamic(nn.Module):
         _detach_e_step: bool,
         _precomputed_block_exp_pairs,
         _nonflat_omega: Optional[torch.Tensor],
-        return_beta_history: bool,
+        _nonflat_exp_phi: Optional[torch.Tensor] = None,  # (B, N, K, K) per-token exp(φ); paired with _nonflat_omega so gauge_covariant_ridge does not silently degrade to eps*I
+        return_beta_history: bool = False,
     ):
         r"""Compute per-head β_h and VFE gradients for the multihead path.
 
@@ -1757,10 +1794,27 @@ class VariationalFFNDynamic(nn.Module):
             alpha_h = alpha_effective[:, :, block_start:block_end] if isinstance(alpha_effective, torch.Tensor) and alpha_effective.dim() == 3 else alpha_effective
             c0_h = _alpha_c0[block_start:block_end] if _alpha_c0 is not None else None
 
-            # Non-flat transport: extract per-head Omega slice for this block
+            # Non-flat transport: extract per-head Omega slice for this block.
+            # IMPORTANT: include 'exp_phi' alongside 'Omega' so the downstream
+            # gauge_covariant_ridge branches in attention.aggregate_messages can
+            # build the covariant ridge eps*(g·g^T). Omitting 'exp_phi' makes
+            # those branches silently fall back to eps*I, turning the opt-in
+            # flag into a no-op under non-flat transport.
             _head_ct = None
             if _nonflat_omega is not None:
-                _head_ct = {'Omega': _nonflat_omega[:, :, :, block_start:block_end, block_start:block_end]}
+                if _nonflat_exp_phi is None:
+                    raise ValueError(
+                        "_nonflat_omega is set but _nonflat_exp_phi is None. "
+                        "Both must be provided together so the cached transport "
+                        "carries enough information to honor gauge_covariant_ridge "
+                        "(which builds eps*(g·g^T) from exp_phi). The caller that "
+                        "produced _nonflat_omega must also pass the matching "
+                        "_nonflat_exp_phi tensor."
+                    )
+                _head_ct = {
+                    'Omega': _nonflat_omega[:, :, :, block_start:block_end, block_start:block_end],
+                    'exp_phi': _nonflat_exp_phi[:, :, block_start:block_end, block_start:block_end],
+                }
 
             # EXPERIMENTAL: rope_full_gauge path uses an autograd-based
             # gradient computation that lifts σ to full covariance and
@@ -1775,7 +1829,7 @@ class VariationalFFNDynamic(nn.Module):
             # fallback path still has the rope chain-rule fix (Option C),
             # so it's correct, just not the experimental Option-B.
             _use_rope_full = (
-                getattr(self, '_rope_full_gauge_vfe', False)
+                getattr(self, '_rope_full_gauge_vfe', 'off') in ('vfe_only', 'both')
                 and self._use_rope_vfe
                 and _nonflat_omega is None
                 and not torch.is_inference_mode_enabled()
@@ -1905,12 +1959,8 @@ class VariationalFFNDynamic(nn.Module):
         N: int,
         eps: float,
         mask: Optional[torch.Tensor],
-        has_observations: bool,
-        targets: Optional[torch.Tensor],
-        W_out: Optional[torch.Tensor],
         return_beta_history: bool,
         _detach_e_step: bool = True,
-        _obs_cache: Optional[dict] = None,
         _precomputed_block_exp_pairs=None,
         connection_delta: Optional[torch.Tensor] = None,
         cocycle_relaxation: float = 0.0,
@@ -2003,33 +2053,20 @@ class VariationalFFNDynamic(nn.Module):
                 "The single-beta (irrep_dims=None) path has been removed. "
                 "Set ffn_irrep_dims in BlockConfig or pass irrep_dims to the constructor."
             )
-        # Add FRESH observation gradient (recomputed from current beliefs)
-        if has_observations:
-            _obs_grad_mu, _obs_grad_sigma = self._compute_observation_gradients(
-                mu_current=mu_current,
-                W_out=W_out,
-                _obs_cache=_obs_cache,
-                sigma_current=sigma_current,
-                is_diagonal=is_diagonal,
-                _is_final_iter=_is_final_iter,
-                eps=eps,
-            )
-            grad_mu = grad_mu + _obs_grad_mu
-            if _obs_grad_sigma is not None:
-                grad_sigma = grad_sigma + _obs_grad_sigma
-
         # =====================================================================
         # Active inference / EFE gradients (delegated)
         # =====================================================================
         # compute_ai_gradients handles the master toggle, weight gates, ref
         # resolution, and debug dict writes — see active_inference.py.
         # Returns (None, None) when all AI terms are off (default).
+        # W_out readout is resolved inside compute_ai_gradients from the
+        # _ai_w_out_ref wired by wire_readout_references.
         _bep_for_ai = _mh_cached_bep
         (_ai_pending_grad_mu, _ai_pending_grad_sigma) = compute_ai_gradients(
             ffn=self,
             mu_current=mu_current,
             sigma_current=sigma_current,
-            W_out=W_out,
+            W_out=None,
             beta_current=beta_current,
             beta_heads=beta_heads,
             cached_block_exp_pairs=_bep_for_ai,
@@ -2170,8 +2207,13 @@ class VariationalFFNDynamic(nn.Module):
         _skip_phi_update = self.gauge_mode in ('trivial', 'constant')
         _use_omega = omega_current is not None and getattr(self, 'gauge_param', 'phi') == 'omega'
 
+        # M_phi_p contract: φ is a model (M-step) parameter and must remain
+        # frozen in value during E-step iterations. Earlier code allowed
+        # _retract_phi to evolve phi_current here even when em_phi_mode='M_phi_p'
+        # (silently violating the contract); excluded explicitly now.
         if (self.update_phi_per_iteration and torch.is_grad_enabled()
-                and not _skip_phi_update):
+                and not _skip_phi_update
+                and self.em_phi_mode != 'M_phi_p'):
 
             if _use_omega:
                 # Direct Omega path: no matrix_exp, no dexp series
@@ -2203,6 +2245,9 @@ class VariationalFFNDynamic(nn.Module):
                         generators=self.generators,
                         step_size=self.phi_lr,
                         max_norm=self.phi_max_norm,
+                        project_slk=self.phi_project_slk,
+                        trace_clamp=self.phi_trace_clamp,
+                        irrep_dims=self.irrep_dims,
                     )
 
         return (mu_current, sigma_current, phi_current, omega_current,
@@ -2216,8 +2261,6 @@ class VariationalFFNDynamic(nn.Module):
         phi: torch.Tensor = None,         # (B, N, phi_dim) - gauge frames
         sigma: Optional[torch.Tensor] = None,  # (B, N, K, K) or (B, N, K) if diagonal
         mask: Optional[torch.Tensor] = None,   # (B, N, N) - causal mask
-        targets: Optional[torch.Tensor] = None,  # (B, N) - target token IDs
-        W_out: Optional[torch.Tensor] = None,    # (V, K) - output projection
         token_ids: Optional[torch.Tensor] = None,  # (B, N) - token IDs for PriorBank lookup
         return_beta_history: bool = False,  # Return β evolution for analysis
         omega: Optional[torch.Tensor] = None,  # (B, N, K, K) direct group elements (gauge_param='omega')
@@ -2248,8 +2291,6 @@ class VariationalFFNDynamic(nn.Module):
             sigma: Belief covariances - (B, N, K, K) full or (B, N, K) diagonal.
                 When diagonal_covariance=True, shape is (B, N, K).
             mask: Causal mask (B, N, N) where 0 = cannot attend.
-            targets: Target token IDs for observation term (B, N).
-            W_out: Output projection (V, K) for dCE/dmu computation.
             token_ids: Token IDs (B, N) for PriorBank lookup. Required when
                 use_prior_bank=True.
             return_beta_history: If True, return list of beta at each step.
@@ -2287,8 +2328,6 @@ class VariationalFFNDynamic(nn.Module):
                 sigma = sigma.float()
             mu_prior = mu_prior.float()
             phi = phi.float()
-            if W_out is not None:
-                W_out = W_out.float()
             if sigma_prior is not None:
                 sigma_prior = sigma_prior.float()
             if omega is not None:
@@ -2299,7 +2338,7 @@ class VariationalFFNDynamic(nn.Module):
         try:
             return self._forward_vfe_body(
                 mu, sigma, mu_prior, phi, omega, sigma_prior,
-                mask, targets, W_out, token_ids, return_beta_history,
+                mask, token_ids, return_beta_history,
                 connection_delta, cocycle_relaxation, precomputed_block_exp_pairs,
                 B, N, K, device, dtype, eps,
             )
@@ -2310,7 +2349,7 @@ class VariationalFFNDynamic(nn.Module):
     def _forward_vfe_body(
         self,
         mu, sigma, mu_prior, phi, omega, sigma_prior,
-        mask, targets, W_out, token_ids, return_beta_history,
+        mask, token_ids, return_beta_history,
         connection_delta, cocycle_relaxation, precomputed_block_exp_pairs,
         B, N, K, device, dtype, eps,
     ):
@@ -2332,7 +2371,6 @@ class VariationalFFNDynamic(nn.Module):
 
         # Track β evolution if requested
         beta_history = [] if return_beta_history else None
-        has_observations = targets is not None and W_out is not None
         # Detach belief inputs to the analytical VFE gradient kernels ONLY
         # when amortized_inference=False.  In amortized mode, keeping
         # mu_current / sigma_current attached preserves the full
@@ -2374,21 +2412,6 @@ class VariationalFFNDynamic(nn.Module):
         # =====================================================================
         # Skip when closed_form_e_step handled the E-step above.
         _n_iters = 0 if self.closed_form_e_step else self.n_iterations
-
-        # Pre-compute observation constants (invariant across VFE iterations).
-        # Avoids redundant targets.clone(), F.one_hot(V), and W_out**2 per iter.
-        _obs_cache = None
-        if has_observations and _n_iters > 0:
-            _tv = targets.clone()
-            _tv[_tv == -1] = 0
-            _mask_obs = (targets != -1).unsqueeze(-1).float()
-            _one_hot = F.one_hot(_tv, num_classes=W_out.shape[0]).float() * _mask_obs
-            _obs_cache = {
-                'mask_obs': _mask_obs,
-                'one_hot': _one_hot,
-            }
-            if self.obs_sigma_gradient:
-                _obs_cache['W_out_sq'] = W_out ** 2  # (V, K)
 
         # When phi is frozen across iterations, precompute block exp pairs
         # once to avoid redundant matrix exponentials (Finding 23: ~2-3x speedup
@@ -2437,12 +2460,8 @@ class VariationalFFNDynamic(nn.Module):
                 is_diagonal=is_diagonal,
                 B=B, N=N, eps=eps,
                 mask=mask,
-                has_observations=has_observations,
-                targets=targets,
-                W_out=W_out,
                 return_beta_history=return_beta_history,
                 _detach_e_step=_detach_e_step,
-                _obs_cache=_obs_cache,
                 _precomputed_block_exp_pairs=_hoisted_bep,
                 connection_delta=connection_delta,
                 cocycle_relaxation=cocycle_relaxation,
@@ -2545,6 +2564,9 @@ class VariationalFFNDynamic(nn.Module):
                         generators=self.generators,
                         step_size=self.phi_lr,
                         max_norm=self.phi_max_norm,
+                        project_slk=self.phi_project_slk,
+                        trace_clamp=self.phi_trace_clamp,
+                        irrep_dims=self.irrep_dims,
                     )
 
         # Cast results back to original dtype when AMP upcasted inputs

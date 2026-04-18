@@ -119,21 +119,21 @@ _DEBUG_VFE_GRADS = False
 EM_CONFIG = {
     # === Architecture ===
     'vocab_size':                 50257,
-    'embed_dim':                  20,
-    'max_seq_len':                64,
+    'embed_dim':                  80,
+    'max_seq_len':                128,
     
-    'batch_size':                 128, 
-    'max_steps':                  15000,
+    'batch_size':                 16, 
+    'max_steps':                  200000,
     
     'n_layers':                   1,
     'ffn_n_iterations':           1,
     
-    'alpha_divergence':           0.75,
+    'alpha_divergence':           0.2,
     #'grad_accumulation_steps': 1,
     #'gradient_checkpoint_vfe': False,
     
-    'gauge_dim':                   10,
-    'irrep_spec':       [('fund', 2, 10)],
+    'gauge_dim':                   20,
+    'irrep_spec':       [('fund', 4, 20)],
 
     'use_prior_bank':             False,
     'gauge_fixed_priors':         False,    
@@ -144,12 +144,9 @@ EM_CONFIG = {
   
 
     'kappa_beta':                 1,
-    'kappa_warmup_steps':         7500,  # freeze kappa for first n steps
-    'learnable_head_kappa':       True, # If True, learn per-head κ_h via log_kappa_per_head
-    
-    'obs_sigma_gradient':         True, # ∂E_q[CE]/∂σ via Hessian diagonal of expected CE
-    'obs_sigma_exact_stein':      True,  # Single-sample E_q[H(z)] instead of H(μ) for obs sigma grad
-    
+    'kappa_warmup_steps':         45000,  # freeze kappa for first n steps
+    'learnable_head_kappa':       False, # If True, learn per-head κ_h via log_kappa_per_head
+
     'e_step_sigma_floor':         0.01,   # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
     
     # === EM gradient-flow mode ===
@@ -160,14 +157,22 @@ EM_CONFIG = {
                                                 # - 'em_phi_p' — clean EM, phi frozen in E-step
                                                 # - 'implicit_ift' — experimental IFT-scaled M-step
 
+    # === GL(K) determinant control (off by default; pick at most one) ===
+    # GL(K) has an unbounded trace direction that L2-norm clamping does not
+    # constrain — det(Ω_ij) = exp(tr(φ_i − φ_j)) blows up on outlier tokens.
+    # Recommended for gauge_group='GLK' with phi_max_norm > ~3.
+    'phi_project_slk':            False,   # Hard project φ → sl(K): det(Ω) ≡ 1 always
+    'phi_trace_clamp':            0.75,    # Soft cap |tr(φ·G)| ≤ T (e.g., 0.35 → det ∈ [0.5, 2])
+
 
     'active_inference':           False,   #requires priorbank true
     
-    'cache_decode_priors':        True,
+    'cache_decode_priors':        False,
     'skip_attention':             False,   #skips ad hoc attention sublayer
     
     # === M-step: Optimizer ===  
     'optimizer_type':             'riemannian_adam',# or 'natural_gradient' or 'adamw' or 'riemannian_adam'
+    'phi_optimizer_metric':       'killing',
     'fisher_ema_decay':           0.90,            # for natural_gradient
     'fisher_damping':             1e-2,              # for natural_gradient
 
@@ -193,13 +198,13 @@ EM_CONFIG = {
     # === E-step Weights ===
  
     'E_alpha':                    1,      # E-step prior coupling weight
-    'E_lambda_belief':            5,    # E-step belief alignment weight
+    'E_lambda_belief':            10,    # E-step belief alignment weight
     'E_lambda_softmax':           0,
        
     # === E-step Learning Rates ===
     
     'E_mu_q_lr':                  0.3,    # E-step μ step size (whitened, within trust=2.0)
-    'E_sigma_q_lr':               0.05,   # E-step σ step size (conservative)    
+    'E_sigma_q_lr':               0.015,   # E-step σ step size (conservative)    
     'E_phi_lr':                   0.05,   # E-step φ step size
 
     # === M-step Weights ===        
@@ -227,18 +232,18 @@ EM_CONFIG = {
     'gauge_mode':                 'learned',
     'gauge_param':                'phi',
 
+    
+
     'diagonal_covariance':        True,
      
     'exact_diagonal_transport':   False,  # exact diagonal transport - more expensive                                        
     'isotropic_covariance':       False, # If True, force Σ = σ²I (scalar variance × identity)
-    'enforce_orthogonal':         True,    
+    'enforce_orthogonal':         False,    
     'learnable_reflection':       False,# Per-token s_i ∈ {±1}^K → O(K)  - enforce orthogonal=true with glk
                                         # Set gauge-mode=constant and the above 3 = true for transf limit
 
     # === Phi gradient geometry ===
     'phi_natural_gradient':       'killing',
-    'use_killing_form':           False,
-    'killing_form_sym_dampening': 0.4,
 
     # === Position encoding ===
     'use_rope':                   True,
@@ -247,7 +252,7 @@ EM_CONFIG = {
     'pos_encoding_mode':          'none',
 
     # === Embedding init ===
-    'mu_init_std':                0.5,
+    'mu_init_std':                0.4,
     'phi_scale':                  0.05,
     
     'mu_normalize':               False,
@@ -255,12 +260,12 @@ EM_CONFIG = {
 
 
     # === Logging ===
-    'log_interval':               100,
-    'eval_interval':              3000,
+    'log_interval':               500,
+    'eval_interval':              5000,
     'checkpoint_interval':        25000,
     'semantic_analysis_interval': 10000,
-    'gauge_geometry_interval':    5000,   # Gauge field Dirichlet energy + invariants
-    'fiber_trajectory_interval':  5000,   # Fisher-Rao E-step trajectory (requires ffn_n_iterations > 1)
+    'gauge_geometry_interval':    10000,   # Gauge field Dirichlet energy + invariants
+    'fiber_trajectory_interval':  10000,   # Fisher-Rao E-step trajectory (requires ffn_n_iterations > 1)
 
     # =================================================================
     # NON-FLAT GAUGE TRANSPORT (holonomy)
@@ -285,7 +290,7 @@ EM_CONFIG = {
     # → super-blocks: [20, 10]  (heads 0,1 merged into GL(20), head 2 alone)
     
     # === Layer/iteration diagnostics ===
-    'track_layer_diagnostics':     False,
+    'track_layer_diagnostics':     True,
     'track_iteration_diagnostics': False,
     'diagnostics_interval':        25,
     

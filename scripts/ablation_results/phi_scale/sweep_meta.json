@@ -1,8 +1,0 @@
-{
-  "sweep_name": "phi_scale",
-  "description": "phi init scale",
-  "baseline_value": "0.5",
-  "n_runs": 10,
-  "seed": 6,
-  "timestamp": "2026-04-13 11:36:46"
-}

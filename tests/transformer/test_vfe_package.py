@@ -450,3 +450,104 @@ class TestFullCrossLayerHandoff:
         mask = torch.ones(N, N)
         out = stack(beliefs, initial_priors, mask)
         assert out.mu.shape == (B, N, K)
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the 2026-04-17 ultrareview Phase M fixes.
+# bug_003: VFEEStep dropped alpha_c0 when E_learnable_alpha=True, omitting
+# the product-rule correction -(α²/c0)·KL·(dKL/dθ) from the gradient.
+# ---------------------------------------------------------------------------
+
+class TestAlphaC0CorrectionWired:
+
+    def _make_e_step(self, learnable_alpha):
+        cfg_lk = VFEConfig(
+            vocab_size=50,
+            embed_dim=16,
+            irrep_spec=[('l0', 2, 8)],
+            n_layers=1,
+            max_seq_len=16,
+            n_e_steps=1,
+            diagonal_covariance=True,
+            gauge_group='GLK',
+            E_learnable_alpha=learnable_alpha,
+        )
+        from transformer.vfe.model import VFEModel
+        m = VFEModel(cfg_lk)
+        return cfg_lk, m
+
+    def test_alpha_c0_is_passed_when_learnable(self, monkeypatch):
+        """When E_learnable_alpha=True, compute_vfe_gradients_gpu must receive
+        alpha_c0 != None so the product-rule correction fires."""
+        import torch
+        cfg_lk, m = self._make_e_step(learnable_alpha=True)
+        e_step = m.stack.blocks[0].e_step
+
+        captured = {'alpha_c0': 'NOT_CALLED'}
+
+        import transformer.vfe.e_step as estep_mod
+        original = estep_mod.compute_vfe_gradients_gpu
+
+        def spy(*args, **kwargs):
+            captured['alpha_c0'] = kwargs.get('alpha_c0', 'MISSING_KEY')
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(estep_mod, 'compute_vfe_gradients_gpu', spy)
+
+        B, N, K = 2, 4, cfg_lk.embed_dim
+        beliefs = BeliefState(
+            mu=torch.randn(B, N, K),
+            sigma=torch.ones(B, N, K) * 0.1,
+            phi=torch.zeros(B, N, m.generators.shape[0]),
+        )
+        priors = BeliefState(
+            mu=torch.zeros(B, N, K),
+            sigma=torch.ones(B, N, K),
+            phi=torch.zeros(B, N, m.generators.shape[0]),
+        )
+        e_step(beliefs, priors)
+
+        assert captured['alpha_c0'] != 'NOT_CALLED', 'compute_vfe_gradients_gpu was never invoked'
+        assert captured['alpha_c0'] != 'MISSING_KEY', 'alpha_c0 keyword missing entirely'
+        assert captured['alpha_c0'] is not None, (
+            'alpha_c0 was None despite E_learnable_alpha=True — '
+            'product-rule correction will not fire and gradients will be biased.'
+        )
+        assert captured['alpha_c0'].shape == (K,), (
+            f'alpha_c0 must be shape (K,) = ({K},); got {captured["alpha_c0"].shape}'
+        )
+
+    def test_alpha_c0_is_none_when_fixed_alpha(self, monkeypatch):
+        """When E_learnable_alpha=False, alpha is a constant; alpha_c0 must be
+        None so compute_vfe_gradients_gpu skips the (now spurious) correction."""
+        import torch
+        cfg_lk, m = self._make_e_step(learnable_alpha=False)
+        e_step = m.stack.blocks[0].e_step
+
+        captured = {'alpha_c0': 'NOT_CALLED'}
+
+        import transformer.vfe.e_step as estep_mod
+        original = estep_mod.compute_vfe_gradients_gpu
+
+        def spy(*args, **kwargs):
+            captured['alpha_c0'] = kwargs.get('alpha_c0', 'MISSING_KEY')
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(estep_mod, 'compute_vfe_gradients_gpu', spy)
+
+        B, N, K = 2, 4, cfg_lk.embed_dim
+        beliefs = BeliefState(
+            mu=torch.randn(B, N, K),
+            sigma=torch.ones(B, N, K) * 0.1,
+            phi=torch.zeros(B, N, m.generators.shape[0]),
+        )
+        priors = BeliefState(
+            mu=torch.zeros(B, N, K),
+            sigma=torch.ones(B, N, K),
+            phi=torch.zeros(B, N, m.generators.shape[0]),
+        )
+        e_step(beliefs, priors)
+
+        assert captured['alpha_c0'] is None, (
+            f'alpha_c0 should be None for fixed alpha; got {captured["alpha_c0"]!r}'
+        )

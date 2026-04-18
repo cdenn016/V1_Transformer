@@ -95,8 +95,11 @@ class VFEEStep(nn.Module):
         self.rope_full_gauge = cfg.rope_full_gauge
         self.enforce_orthogonal = cfg.enforce_orthogonal
         self.mask_self_attention = cfg.mask_self_attention
+        self.gauge_covariant_ridge = getattr(cfg, 'gauge_covariant_ridge', False)
         self.gauge_group = cfg.gauge_group
         self.phi_preconditioner_mode = cfg.phi_preconditioner
+        self.phi_project_slk = cfg.phi_project_slk
+        self.phi_trace_clamp = cfg.phi_trace_clamp
 
         if not isinstance(generators, torch.Tensor):
             generators = torch.from_numpy(generators).float()
@@ -202,6 +205,11 @@ class VFEEStep(nn.Module):
         # Diagnostics buffer: populated on last iteration for the trainer to read
         self._last_diagnostics = {}
 
+        # Cache effective_kappa once per forward — the property runs
+        # torch.exp(log_kappa).clamp(...) and was previously called 4× per
+        # E-step iteration (plus once inside _update_phi).
+        _kappa = self.effective_kappa
+
         for t in range(self.n_e_steps):
             # 1. Compute transport and KL attention
             block_exp_pairs = compute_gauge_transport(
@@ -211,8 +219,16 @@ class VFEEStep(nn.Module):
 
             # Bayesian adaptive alpha: α_k = c0/(b0 + KL_k) per dimension
             alpha_eff = self.alpha
+            # alpha_c0_full is the per-dim concentration parameter c0 = softplus(raw_c0).
+            # When E_learnable_alpha=True, alpha is a function of (μ,σ) via KL, so the
+            # gradient of α·KL wrt (μ,σ) carries a product-rule term −(α²/c0)·KL·(dKL/dθ);
+            # compute_vfe_gradients_gpu and the rope helper apply this correction iff
+            # alpha_c0 is passed in. Without it, the descent direction is biased.
+            alpha_c0_full = None
             if self.E_learnable_alpha:
+                import torch.nn.functional as F_fn
                 alpha_eff = self.get_bayesian_alpha(mu, mu_p, sigma, sigma_p)
+                alpha_c0_full = F_fn.softplus(self.raw_c0)
 
             # rope_full_gauge: per-head autograd path that rotates BOTH μ and Σ
             if self.rope_full_gauge and self.use_rope and not torch.is_inference_mode_enabled():
@@ -235,7 +251,7 @@ class VFEEStep(nn.Module):
                         alpha=alpha_eff if not isinstance(alpha_eff, torch.Tensor) else alpha_eff[:, :, block_start:block_end],
                         lambda_belief=self.lambda_align,
                         lambda_softmax=self.lambda_soft,
-                        kappa=self.effective_kappa,
+                        kappa=_kappa,
                         eps=eps,
                         rope_base=self.rope_base,
                         d_h=d_h,
@@ -243,6 +259,9 @@ class VFEEStep(nn.Module):
                         enforce_orthogonal=self.enforce_orthogonal,
                         mask=mask,
                         mask_self_attention=self.mask_self_attention,
+                        gauge_covariant_ridge=self.gauge_covariant_ridge,
+                        alpha_c0=(alpha_c0_full[block_start:block_end]
+                                  if alpha_c0_full is not None else None),
                     )
                     grad_mu_parts.append(gm_h)
                     grad_sigma_parts.append(gs_h)
@@ -266,7 +285,7 @@ class VFEEStep(nn.Module):
                 # Standard path: fused attention + gradient computation
                 beta, kl_matrix = compute_kl_attention(
                     mu, sigma, phi, self.generators,
-                    self.irrep_dims, self.effective_kappa, mask,
+                    self.irrep_dims, _kappa, mask,
                     use_rope=self.use_rope,
                     rope_base=self.rope_base,
                     cached_block_exp_pairs=block_exp_pairs,
@@ -284,10 +303,11 @@ class VFEEStep(nn.Module):
                     phi=phi,
                     generators=self.generators,
                     alpha=alpha_eff,
+                    alpha_c0=alpha_c0_full,
                     alpha_div=self.alpha_divergence,
                     lambda_belief=self.lambda_align,
                     lambda_softmax=self.lambda_soft,
-                    kappa=self.effective_kappa,
+                    kappa=_kappa,
                     eps=eps,
                     compute_sigma_align_grad=True,
                     irrep_dims=self.irrep_dims,
@@ -296,6 +316,7 @@ class VFEEStep(nn.Module):
                     use_rope=self.use_rope,
                     rope_base=self.rope_base,
                     exact_diagonal_transport=self.exact_diagonal_transport,
+                    gauge_covariant_ridge=self.gauge_covariant_ridge,
                 )
 
             # 3. Optional: add active inference gradients
@@ -364,7 +385,7 @@ class VFEEStep(nn.Module):
             )
 
             # 7. Phi update with preconditioning
-            phi = self._update_phi(phi, mu, sigma, is_diagonal, mask, eps, block_exp_pairs)
+            phi = self._update_phi(phi, mu, sigma, is_diagonal, mask, eps, block_exp_pairs, _kappa)
 
         return BeliefState(mu=mu, sigma=sigma, phi=phi)
 
@@ -377,6 +398,7 @@ class VFEEStep(nn.Module):
         mask: Optional[torch.Tensor],
         eps: float,
         cached_block_exp_pairs: Optional[list] = None,
+        kappa: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         r"""Compute phi gradient via autograd and retract.
 
@@ -386,22 +408,15 @@ class VFEEStep(nn.Module):
         """
         phi_for_grad = phi.clone().requires_grad_(True)
 
-        # Build alignment loss through phi_for_grad
-        _, kl_h = compute_kl_attention(
+        # Single forward through compute_kl_attention; both beta and kl_matrix
+        # share the same autograd subgraph through phi_for_grad. The product
+        # rule decomposition below uses .detach() to route gradients along
+        # exactly one of the two paths per term.
+        _kappa = kappa if kappa is not None else self.effective_kappa
+        beta_phi, kl_h = compute_kl_attention(
             mu.detach(), sigma.detach() if sigma is not None else None,
             phi_for_grad, self.generators,
-            self.irrep_dims, self.effective_kappa, mask,
-            use_rope=self.use_rope,
-            rope_base=self.rope_base,
-            enforce_orthogonal=self.enforce_orthogonal,
-            mask_self_attention=self.mask_self_attention,
-        )
-
-        # Recompute beta with tracked phi for softmax coupling
-        beta_phi, _ = compute_kl_attention(
-            mu.detach(), sigma.detach() if sigma is not None else None,
-            phi_for_grad, self.generators,
-            self.irrep_dims, self.effective_kappa, mask,
+            self.irrep_dims, _kappa, mask,
             use_rope=self.use_rope,
             rope_base=self.rope_base,
             enforce_orthogonal=self.enforce_orthogonal,
@@ -433,6 +448,9 @@ class VFEEStep(nn.Module):
                 phi, grad_phi, self.generators,
                 step_size=self.e_phi_lr,
                 gauge_group=self.gauge_group,
+                project_slk=self.phi_project_slk,
+                trace_clamp=self.phi_trace_clamp,
+                irrep_dims=self.irrep_dims,
             )
 
         return phi

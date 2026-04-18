@@ -86,6 +86,11 @@ class RiemannianAdamW(torch.optim.AdamW):
         killing_inv: Optional[torch.Tensor] = None,
         killing_metric: Optional[torch.Tensor] = None,
         grad_clip: float = 0.0,
+        metric: str = 'killing',
+        generators: Optional[torch.Tensor] = None,
+        structure_constants: Optional[torch.Tensor] = None,
+        gram: Optional[torch.Tensor] = None,
+        pullback_series_order: int = 6,
         **kwargs,
     ):
         super().__init__(params, **kwargs)
@@ -93,6 +98,31 @@ class RiemannianAdamW(torch.optim.AdamW):
         self._killing_inv = killing_inv
         self._killing_metric = killing_metric
         self._grad_clip = grad_clip
+
+        if metric not in ('killing', 'pullback'):
+            raise ValueError(
+                f"metric must be 'killing' or 'pullback', got {metric!r}"
+            )
+        self._metric = metric
+        self._pullback_series_order = pullback_series_order
+
+        # Pullback path: store generators + structure constants + gram for
+        # per-token metric builds.  Required if metric='pullback'; optional
+        # otherwise (constructor accepts but ignores).
+        self._generators = generators
+        self._structure_constants = structure_constants
+        self._gram = gram
+        if metric == 'pullback':
+            if generators is None:
+                raise ValueError(
+                    "metric='pullback' requires `generators` to be passed to "
+                    "RiemannianAdamW.__init__."
+                )
+            if structure_constants is None:
+                from transformer.core.gauge_preconditioner import build_structure_constants
+                self._structure_constants = build_structure_constants(generators)
+            if gram is None:
+                self._gram = torch.einsum('aij,bij->ab', generators, generators)
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -114,16 +144,51 @@ class RiemannianAdamW(torch.optim.AdamW):
         return super().step(closure)
 
     def _precondition_phi(self, group: dict) -> None:
-        """Apply inverse Killing metric to phi/omega gradients."""
-        if self._killing_inv is None:
+        r"""Apply the inverse gauge metric to phi/omega gradients.
+
+        Two metric options:
+
+        - ``metric='killing'`` (default): ``grad ← grad @ killing_inv``.
+          Position-independent; cheap fixed ``(n_gen, n_gen)`` matmul.
+          Exact for the so(K) part of gl(K); approximate for the symmetric
+          part.
+
+        - ``metric='pullback'``: ``grad ← G(φ)^{-1} · grad`` per token.
+          Gauge-natural: exact inverse of the metric pulled back from the
+          Frobenius inner product on GL(K) through the exponential map.
+          Expensive (one ``(n_gen, n_gen)`` solve per token per step) but
+          theoretically correct — the M-step mirror of
+          ``phi_natural_gradient='pullback'`` on the E-step.
+        """
+        if self._metric == 'killing':
+            if self._killing_inv is None:
+                return
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                dev = p.grad.device
+                K_inv = self._killing_inv.to(device=dev, dtype=p.grad.dtype)
+                p.grad = p.grad @ K_inv
             return
+
+        # Pullback path: solve G(φ) · nat_grad = grad per token.
+        from transformer.core.gauge_preconditioner import apply_pullback_natural_gradient
         for p in group['params']:
             if p.grad is None:
                 continue
-            # grad: (V, n_gen) or (n_gen,) — metric: (n_gen, n_gen)
             dev = p.grad.device
-            K_inv = self._killing_inv.to(device=dev, dtype=p.grad.dtype)
-            p.grad = p.grad @ K_inv
+            dtype = p.grad.dtype
+            gens = self._generators.to(device=dev, dtype=dtype)
+            struct = self._structure_constants.to(device=dev, dtype=dtype)
+            gram = self._gram.to(device=dev, dtype=dtype)
+            p.grad = apply_pullback_natural_gradient(
+                grad_phi=p.grad,
+                phi=p.data,
+                generators=gens,
+                structure_constants=struct,
+                gram=gram,
+                series_order=self._pullback_series_order,
+            )
 
     def _precondition_mu(self, group: dict) -> None:
         r"""Apply Fisher metric for Gaussian location: ∇_nat μ = Σ · ∇_E μ.
@@ -226,19 +291,52 @@ class RiemannianAdamW(torch.optim.AdamW):
             if not graded:
                 continue
 
-            if ('phi' in name or 'omega' in name) and self._killing_metric is not None:
-                # Riemannian norm: ||ξ||_K = sqrt(Σ_v ξ_v^T K ξ_v)
-                K = self._killing_metric.to(graded[0].device, graded[0].dtype)
-                sq_norm = 0.0
-                for p in graded:
-                    xi = p.grad  # already preconditioned: ξ = K^{-1} g
-                    # ξ^T K ξ per token, summed: (V, n_gen) @ (n_gen, n_gen) → (V, n_gen)
-                    sq_norm += (xi @ K * xi).sum().item()
-                riem_norm = sq_norm ** 0.5
-                if riem_norm > self._grad_clip:
-                    scale = self._grad_clip / (riem_norm + 1e-8)
+            if ('phi' in name or 'omega' in name):
+                # Riemannian norm selection.
+                # metric='killing': ||ξ||_K = sqrt(Σ_v ξ_v^T K ξ_v) with the
+                # fixed Killing metric K. One matmul over the group.
+                # metric='pullback': ||ξ||_G(φ) = sqrt(Σ_v ξ_v^T G(φ_v) ξ_v)
+                # with the per-token pullback metric G(φ_v). Theoretically
+                # exact; pays one (n_gen, n_gen) build per token per step.
+                if self._metric == 'killing' and self._killing_metric is not None:
+                    K = self._killing_metric.to(graded[0].device, graded[0].dtype)
+                    sq_norm = 0.0
                     for p in graded:
-                        p.grad.mul_(scale)
+                        xi = p.grad  # already preconditioned: ξ = K^{-1} g
+                        sq_norm += (xi @ K * xi).sum().item()
+                    riem_norm = sq_norm ** 0.5
+                    if riem_norm > self._grad_clip:
+                        scale = self._grad_clip / (riem_norm + 1e-8)
+                        for p in graded:
+                            p.grad.mul_(scale)
+                elif self._metric == 'pullback':
+                    from transformer.core.gauge_preconditioner import build_pullback_metric_tensor
+                    for p in graded:
+                        if p.grad is None:
+                            continue
+                        dev = p.grad.device
+                        dtype = p.grad.dtype
+                        gens = self._generators.to(device=dev, dtype=dtype)
+                        struct = self._structure_constants.to(device=dev, dtype=dtype)
+                        gram = self._gram.to(device=dev, dtype=dtype)
+                        # Build per-token metric G(φ_v): (..., n_gen, n_gen)
+                        G_phi = build_pullback_metric_tensor(
+                            phi=p.data,
+                            generators=gens,
+                            structure_constants=struct,
+                            gram=gram,
+                            series_order=self._pullback_series_order,
+                        )
+                        xi = p.grad
+                        # Per-token Riemannian norm-squared ξ^T G(φ) ξ.
+                        norm_sq_per = torch.einsum(
+                            '...i,...ij,...j->...', xi, G_phi, xi,
+                        )
+                        norm_per = norm_sq_per.clamp(min=0.0).sqrt()
+                        # Clip each row independently in its native metric.
+                        scale = (self._grad_clip / (norm_per + 1e-8)).clamp(max=1.0)
+                        # Broadcast scale over the n_gen axis.
+                        p.grad.mul_(scale.unsqueeze(-1))
 
             elif 'mu' in name and sigma is not None:
                 # Riemannian norm: ||ξ||_{Σ^{-1}} = sqrt(Σ_v ξ_v^T Σ_v^{-1} ξ_v)
@@ -824,16 +922,49 @@ def create_optimizer(
                 print("  Warning: No generators found; phi preconditioning disabled")
 
         grad_clip = getattr(config, 'grad_clip', 0.0)
+        metric = getattr(config, 'phi_optimizer_metric', 'killing')
+        if metric not in ('killing', 'pullback'):
+            raise ValueError(
+                f"phi_optimizer_metric must be 'killing' or 'pullback', "
+                f"got {metric!r}"
+            )
+
+        # Pullback path precomputes structure constants and gram from
+        # generators; theoretically exact gauge-natural metric, position-
+        # dependent, expensive per-token build.  Killing path uses the
+        # precomputed fixed (n_gen, n_gen) metric — cheap and default.
+        structure_constants = None
+        gram = None
+        if metric == 'pullback':
+            if generators is None:
+                raise ValueError(
+                    "phi_optimizer_metric='pullback' requires model.generators "
+                    "to be populated."
+                )
+            from transformer.core.gauge_preconditioner import build_structure_constants
+            structure_constants = build_structure_constants(generators)
+            gram = torch.einsum('aij,bij->ab', generators, generators)
+            if verbose:
+                print(
+                    f"  RAdamW metric: 'pullback' (per-token (n_gen,n_gen) "
+                    f"build + solve; gauge-natural, expensive)"
+                )
+
         optimizer = RiemannianAdamW(
             param_groups,
             model=model,
             killing_inv=killing_inv,
             killing_metric=killing_metric,
             grad_clip=grad_clip,
+            metric=metric,
+            generators=generators,
+            structure_constants=structure_constants,
+            gram=gram,
+            pullback_series_order=getattr(config, 'pullback_series_order', 6),
             **base_kwargs,
         )
         if verbose and grad_clip > 0:
-            print(f"  Riemannian trust region clipping: δ={grad_clip}")
+            print(f"  Riemannian trust region clipping: δ={grad_clip} (metric={metric})")
 
     elif optimizer_type == 'natural_gradient':
         ema_decay = getattr(config, 'fisher_ema_decay', 0.95)

@@ -407,43 +407,89 @@ def apply_pullback_natural_gradient(
     Returns:
         Natural gradient G(φ)^{-1} · ∂F/∂φ, same shape as grad_phi
     """
+    G = build_pullback_metric_tensor(
+        phi=phi,
+        generators=generators,
+        structure_constants=structure_constants,
+        gram=gram,
+        series_order=series_order,
+    )
+
+    # Solve G @ nat_grad = grad_phi for nat_grad
+    nat_grad = torch.linalg.solve(G, grad_phi.unsqueeze(-1)).squeeze(-1)
+
+    return nat_grad
+
+
+def build_pullback_metric_tensor(
+    phi: torch.Tensor,                       # (..., n_gen)
+    generators: torch.Tensor,                # (n_gen, K, K)
+    structure_constants: torch.Tensor,       # (n_gen, n_gen, n_gen)
+    gram: Optional[torch.Tensor] = None,     # (n_gen, n_gen) precomputed gram
+    series_order: int = 6,
+) -> torch.Tensor:
+    r"""Build the per-token pullback metric tensor G(φ) on the Lie algebra.
+
+    Constructs the metric
+        G_{ab}(φ) = ⟨ Ψ(ad_φ) T_a, Ψ(ad_φ) T_b ⟩_gram
+                  = (Ψ T)^T · gram · (Ψ T) in generator coordinates
+    via the Taylor expansion Ψ(z) = (e^z − 1)/z = Σ_{k≥0} z^k/(k+1)!.
+
+    This is the pullback of the bi-invariant Frobenius metric on GL(K)
+    through the exponential map, restricted to the Lie algebra at the
+    identity and left-translated back.  It is the same tensor whose
+    inverse :func:`apply_pullback_natural_gradient` applies to a gradient;
+    exposed as a standalone helper so both the natural-gradient path and
+    the Riemannian norm-for-clipping path share one implementation.
+
+    At φ = 0: Ψ = I, so G = gram (Frobenius inner product).
+    At large ‖φ‖ in symmetric directions: G grows exponentially, so the
+    natural norm ``sqrt(ξᵀ G ξ)`` grows correspondingly — exactly the
+    factor by which a fixed Euclidean step of ``ξ`` maps to a larger
+    geodesic step on the group.
+
+    Args:
+        phi: ``(..., n_gen)`` current gauge coordinates.
+        generators: ``(n_gen, K, K)`` Lie algebra generators.
+        structure_constants: ``(n_gen, n_gen, n_gen)`` constants
+            :math:`f^c_{ab}` from :func:`build_structure_constants`.
+        gram: Optional precomputed Frobenius Gram matrix.  If None,
+            computed from ``generators`` on the fly.
+        series_order: Number of Taylor terms in the Ψ(ad_φ) expansion.
+            Default ``6`` matches :func:`apply_pullback_natural_gradient`.
+
+    Returns:
+        ``(..., n_gen, n_gen)`` positive-definite metric tensor, batched
+        over the same leading axes as ``phi``.
+    """
     n_gen = generators.shape[0]
     batch_shape = phi.shape[:-1]
     device = phi.device
     dtype = phi.dtype
 
     if gram is None:
-        # Frobenius inner product: <T_a, T_b> = tr(T_a^T T_b) = sum_{ij} T_a[i,j] T_b[i,j]
+        # Frobenius inner product: <T_a, T_b> = tr(T_a^T T_b)
         gram = torch.einsum('aij,bij->ab', generators, generators)
 
     # Compute ad_X: [ad_X]_bc = Σ_a φ^a f^c_{ab}
-    # phi: (..., n_gen), structure_constants: (n_gen, n_gen, n_gen)
-    # ad_X: (..., n_gen, n_gen)
     ad_X = torch.einsum('...a,abc->...bc', phi, structure_constants)
 
-    # Compute Ψ(ad_X) via Taylor series:
-    # Ψ(z) = (e^z - 1)/z = Σ_{k=0}^∞ z^k/(k+1)!
-    # Ψ(ad_X) = I + ad_X/2! + ad_X²/3! + ad_X³/4! + ...
+    # Ψ(ad_X) = I + ad_X/2! + ad_X²/3! + ...
     I_gen = torch.eye(n_gen, device=device, dtype=dtype)
     I_expanded = I_gen.expand(*batch_shape, n_gen, n_gen)
 
-    psi = I_expanded.clone()         # k=0 term: I
-    ad_power = ad_X.clone()          # ad_X^1
-
+    psi = I_expanded.clone()
+    ad_power = ad_X.clone()
     for k in range(1, series_order):
         coeff = 1.0 / math.factorial(k + 1)
         psi = psi + coeff * ad_power
         if k < series_order - 1:
             ad_power = torch.matmul(ad_power, ad_X)
 
-    # Metric: G = Ψ^T @ gram @ Ψ  (positive definite by construction)
+    # Metric: G = Ψ^T @ gram @ Ψ (positive definite by construction)
     gram_expanded = gram.expand(*batch_shape, n_gen, n_gen)
     G = torch.matmul(psi.transpose(-2, -1), torch.matmul(gram_expanded, psi))
 
     # Regularize for numerical stability
     G = G + 1e-6 * I_expanded
-
-    # Solve G @ nat_grad = grad_phi for nat_grad
-    nat_grad = torch.linalg.solve(G, grad_phi.unsqueeze(-1)).squeeze(-1)
-
-    return nat_grad
+    return G

@@ -215,12 +215,13 @@ class TrainingTracker:
         """
         tokens_per_sec = (batch_size * seq_len) / step_time if step_time > 0 else 0
 
-        train_ce = train_metrics.get('ce_loss', train_metrics.get('ce', 0))
-        # Use raw (un-normalized) CE for PPL/BPC to avoid bogus values
-        # when normalize_ce_by_dim=True divides CE by sqrt(K)
-        train_ce_raw = train_metrics.get('ce_loss_raw', train_ce)
-        train_bpc = train_ce_raw / math.log(2) if train_ce_raw > 0 else 0
-        train_ppl = math.exp(min(train_ce_raw, 20)) if train_ce_raw > 0 else float('inf')
+        # Always use raw (un-normalized) CE for all metrics and plots.
+        # When normalize_ce_by_dim=True, 'ce_loss' is divided by sqrt(K)
+        # which is useful for the optimizer but meaningless on plots.
+        train_ce_normalized = train_metrics.get('ce_loss', train_metrics.get('ce', 0))
+        train_ce = train_metrics.get('ce_loss_raw', train_ce_normalized)
+        train_bpc = train_ce / math.log(2) if train_ce > 0 else 0
+        train_ppl = math.exp(min(train_ce, 20)) if train_ce > 0 else float('inf')
 
         # Extract M-step natural gradient norms per group
         def _mstep_nat(group_name: str) -> float:
@@ -1614,14 +1615,22 @@ class PublicationMetrics:
 
             # Compute metrics
             field_energy = compute_gauge_field_energy(phi, beta, generators)
-            invariants = compute_gauge_invariants(mu, sigma, phi, generators, beta)
+            _enforce_orth = model.config.get('enforce_orthogonal', False)
+            invariants = compute_gauge_invariants(
+                mu, sigma, phi, generators, beta,
+                enforce_orthogonal=_enforce_orth,
+            )
             orbit_dim = compute_gauge_orbit_dimension(phi, generators)
 
+            _det = invariants['det_omega']
             snapshot = {
                 'step': step,
                 'gauge/field_energy': float(field_energy.mean().item()),
-                'gauge/det_omega_mean': float(invariants['det_omega'].mean().item()),
-                'gauge/det_omega_std': float(invariants['det_omega'].std().item()),
+                'gauge/det_omega_mean': float(_det.mean().item()),
+                'gauge/det_omega_std': float(_det.std().item()),
+                'gauge/det_omega_median': float(_det.median().item()),
+                'gauge/det_omega_max': float(_det.max().item()),
+                'gauge/det_omega_min': float(_det.min().item()),
                 'gauge/spectrum_mean': float(invariants['gauge_frame_spectrum'].mean().item()),
                 'gauge/orbit_dim': orbit_dim,
             }
@@ -1640,8 +1649,12 @@ class PublicationMetrics:
 
             if verbose:
                 print(f"  [Step {step}] Gauge: E_D={snapshot['gauge/field_energy']:.4f}, "
-                      f"det(Omega)={snapshot['gauge/det_omega_mean']:.4f}, "
                       f"orbit_dim={orbit_dim}")
+                print(f"    det(Omega): mean={snapshot['gauge/det_omega_mean']:.4f}, "
+                      f"median={snapshot['gauge/det_omega_median']:.4f}, "
+                      f"std={snapshot['gauge/det_omega_std']:.4f}, "
+                      f"min={snapshot['gauge/det_omega_min']:.4f}, "
+                      f"max={snapshot['gauge/det_omega_max']:.4f}")
 
             if was_training:
                 model.train()

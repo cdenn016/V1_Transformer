@@ -427,7 +427,6 @@ def resume_training():
         kappa_gamma=config.get('kappa_gamma', 1.0),
         lambda_hyper=config.get('lambda_hyper', 0.0),
         detach_beta_m_step=config.get('detach_beta_m_step', True),
-        use_obs_in_vfe=config.get('use_obs_in_vfe', False),
 
         # Intervals
         log_interval=config.get('log_interval', 100),

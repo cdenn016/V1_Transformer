@@ -54,6 +54,7 @@ from transformer.core.transport_ops import (
     compute_transport_operators_direct,
     omega_to_block_exp_pairs,
     _apply_rope,
+    _apply_rope_to_covariance,
 )
 
 logger = logging.getLogger(__name__)
@@ -173,6 +174,8 @@ def compute_attention_weights(
     exact_diagonal_transport: bool = False,
     # Direct Omega parameterization (gauge_param='omega')
     gauge_param: str = 'phi',  # 'phi' (Lie algebra) or 'omega' (direct GL(K))
+    # Gauge-covariant numerical ridge: use eps * (g g^T) instead of eps * I.
+    gauge_covariant_ridge: bool = False,
     omega: Optional[torch.Tensor] = None,  # (B, N, K, K) direct group elements (when gauge_param='omega')
     alpha_divergence: float = 1.0,  # Renyi alpha-divergence parameter (1.0 = KL)
 ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
@@ -339,6 +342,7 @@ def compute_attention_weights(
         gauge_mode=gauge_mode,
         enforce_orthogonal=enforce_orthogonal,
         alpha_divergence=alpha_divergence,
+        gauge_covariant_ridge=gauge_covariant_ridge,
     )
 
     # =========================================================================
@@ -526,6 +530,7 @@ def _dispatch_kl_matrix(
     gauge_mode: str,
     enforce_orthogonal: bool,
     alpha_divergence: float = 1.0,
+    gauge_covariant_ridge: bool = False,
 ) -> torch.Tensor:
     r"""Unified KL matrix dispatcher for all covariance modes and gauge configurations.
 
@@ -649,11 +654,23 @@ def _dispatch_kl_matrix(
                             mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1)
                             sig_i_exp = sig_i[:, :, None, :, :].expand(-1, -1, n_j, -1, -1)
 
+                            # Gauge-covariant ridge at position i (covers both
+                            # Σ_i and the transport-sandwich Σ_t, since Σ_t
+                            # lives in position-i's frame ep_i after Ω_ij Σ_j Ω_ij^T).
+                            if gauge_covariant_ridge:
+                                _ep_i_bcast = ep_i[:, :, None, :, :].expand(-1, -1, n_j, -1, -1)
+                                _R_d = _ep_i_bcast @ _ep_i_bcast.transpose(-1, -2)
+                            else:
+                                _R_d = I_d
+                            _exp_phi_kw = _ep_i_bcast if gauge_covariant_ridge else None
+
                             kl_b = _kl_kernel_dense(
-                                mu_i_exp, sig_i_exp + eps * I_d,
-                                mu_t, sig_t + eps * I_d,
+                                mu_i_exp, sig_i_exp + eps * _R_d,
+                                mu_t, sig_t + eps * _R_d,
                                 kl_max=max(KL_CEIL_BASE, KL_CEIL_MULT * d),
                                 eps=eps,
+                                exp_phi_q=_exp_phi_kw,
+                                exp_phi_t=_exp_phi_kw,
                                 alpha_div=alpha_divergence,
                             )
                             kl_chunk = kl_chunk + kl_b
@@ -701,7 +718,7 @@ def _dispatch_kl_matrix(
         # Compute exp pairs once — reused by both unchunked and chunked paths
         phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
         exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
-        if enforce_orthogonal and K >= 16:
+        if enforce_orthogonal and K >= 2:
             exp_phi = newton_schulz_orthogonalize(exp_phi)
             exp_neg_phi = newton_schulz_orthogonalize(exp_neg_phi)
         # Only materialize full Omega if we won't chunk
@@ -836,11 +853,22 @@ def _dispatch_kl_matrix(
                     mu_i_exp = mu_i[:, :, None, :].expand(-1, -1, n_j, -1)
                     sig_i_exp = sig_i[:, :, None, :, :].expand(-1, -1, n_j, -1, -1)
                     I = torch.eye(K, device=device, dtype=dtype)
+                    # Gauge-covariant ridge: ep_i here is the full-K per-position
+                    # frame (exp_phi[:, i_start:i_end]). Σ_tc lives at position i
+                    # after the Ω sandwich, so it also transforms with ep_i.
+                    if gauge_covariant_ridge:
+                        _ep_i_bcast_K = ep_i[:, :, None, :, :].expand(-1, -1, n_j, -1, -1)
+                        _R_K = _ep_i_bcast_K @ _ep_i_bcast_K.transpose(-1, -2)
+                    else:
+                        _R_K = I
+                    _exp_phi_kw_K = _ep_i_bcast_K if gauge_covariant_ridge else None
                     kl_c = _kl_kernel_dense(
-                        mu_i_exp, sig_i_exp + eps * I,
-                        mu_tc, sig_tc + eps * I,
+                        mu_i_exp, sig_i_exp + eps * _R_K,
+                        mu_tc, sig_tc + eps * _R_K,
                         kl_max=kl_max, eps=eps,
                         alpha_div=alpha_divergence,
+                        exp_phi_q=_exp_phi_kw_K,
+                        exp_phi_t=_exp_phi_kw_K,
                     )
                     del sig_tc, mu_tc
                     col_chunks.append(kl_c)
@@ -876,6 +904,7 @@ def aggregate_messages(
     cached_transport: Optional[dict] = None,  # Precomputed transport operators
     exact_diagonal_transport: bool = False,
     sigma_aggregation: str = 'mixture',  # 'mixture' or 'precision'
+    gauge_covariant_ridge: bool = False,  # If True, ε·I ridges become ε·(gg^T)
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
     r"""
     Aggregate messages with gauge transport.
@@ -1042,7 +1071,12 @@ def aggregate_messages(
                                 'bijkl,bjlm,bijmn->bijkn',
                                 Omega_tile, _sq_f32, Omega_tile.transpose(-1, -2)
                             )
-                            Sigma_t = 0.5 * (Sigma_t + Sigma_t.transpose(-1, -2)) + _eps * I_K
+                            if gauge_covariant_ridge:
+                                _ep_bcast_t = ep_tile[:, :, None, :, :].expand(-1, -1, _sq_f32.shape[1], -1, -1)
+                                _R_K_tile = _ep_bcast_t @ _ep_bcast_t.transpose(-1, -2)
+                            else:
+                                _R_K_tile = I_K
+                            Sigma_t = 0.5 * (Sigma_t + Sigma_t.transpose(-1, -2)) + _eps * _R_K_tile
                             # Cholesky-backed SPD inverse via _safe_spd_inv:
                             # Sigma_t is a symmetrized, eps-regularized sandwich
                             # product, so it is SPD by construction.  The
@@ -1051,15 +1085,25 @@ def aggregate_messages(
                             # transports, and gauge-covariant as a precision:
                             # under g, Sigma_t → g Sigma_t g.T implies
                             # Sigma_t_inv → g^{-T} Sigma_t_inv g^{-1}.
-                            Sigma_t_inv = _safe_spd_inv(Sigma_t, eps=_eps)
+                            Sigma_t_inv = _safe_spd_inv(
+                                Sigma_t, eps=_eps,
+                                exp_phi=(_ep_bcast_t if gauge_covariant_ridge else None),
+                            )
                             precision_agg[:, i_start:i_end] = torch.einsum(
                                 'bij,bijkl->bikl', beta[:, i_start:i_end].float(), Sigma_t_inv
                             )
                             del Omega_tile
-                        precision_agg = 0.5 * (precision_agg + precision_agg.transpose(-1, -2)) + _eps * I_K
+                        if gauge_covariant_ridge:
+                            _R_K_agg = _ep_f32 @ _ep_f32.transpose(-1, -2)
+                        else:
+                            _R_K_agg = I_K
+                        precision_agg = 0.5 * (precision_agg + precision_agg.transpose(-1, -2)) + _eps * _R_K_agg
                         # Same Cholesky-backed inverse for the aggregated
                         # precision → covariance conversion.
-                        sigma_aggregated = _safe_spd_inv(precision_agg, eps=_eps)
+                        sigma_aggregated = _safe_spd_inv(
+                            precision_agg, eps=_eps,
+                            exp_phi=(_ep_f32 if gauge_covariant_ridge else None),
+                        )
                         sigma_aggregated = 0.5 * (sigma_aggregated + sigma_aggregated.transpose(-1, -2))
                     else:
                         # Full covariance mixture moment matching with SPD protection
@@ -1095,8 +1139,12 @@ def aggregate_messages(
                             eigvals = eigvals.clamp(min=1e-4)
                             sigma_aggregated = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
                         except (RuntimeError, torch.linalg.LinAlgError):
-                            sigma_aggregated = sigma_aggregated + 1e-3 * torch.eye(
-                                K, device=device, dtype=torch.float32)
+                            if gauge_covariant_ridge:
+                                _R_fallback = _ep_f32 @ _ep_f32.transpose(-1, -2)
+                            else:
+                                _R_fallback = torch.eye(
+                                    K, device=device, dtype=torch.float32)
+                            sigma_aggregated = sigma_aggregated + 1e-3 * _R_fallback
         else:
             sigma_aggregated = None
 
@@ -1109,12 +1157,17 @@ def aggregate_messages(
     # =========================================================================
 
     # Step 1: Get transport operators (use cached if available)
+    exp_phi_legacy = None  # Per-position local frame (B, N, K, K); used only by covariant ridge path.
     if cached_transport is not None and 'Omega' in cached_transport:
         Omega = cached_transport['Omega']
+        if gauge_covariant_ridge and 'exp_phi' in cached_transport:
+            exp_phi_legacy = cached_transport['exp_phi']
     else:
         phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)
         exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
         Omega = torch.einsum('bikl,bjlm->bijkm', exp_phi, exp_neg_phi)
+        if gauge_covariant_ridge:
+            exp_phi_legacy = exp_phi
 
     # Step 2: Transport all means (primal: m_i = Σ β_ij Ω_ij μ_j)
     mu_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu_q)  # (B, N, N, K)
@@ -1153,13 +1206,30 @@ def aggregate_messages(
             if sigma_aggregation == 'precision':
                 Sigma_transported = 0.5 * (Sigma_transported + Sigma_transported.transpose(-1, -2))
                 I_K = torch.eye(K, device=Sigma_transported.device, dtype=Sigma_transported.dtype)
-                Sigma_transported = Sigma_transported + _eps * I_K
+                # Sigma_transported is (B, N, N, K, K); local frame at position i
+                # broadcast over j is exp_phi_legacy[:, :, None, :, :].
+                if gauge_covariant_ridge and exp_phi_legacy is not None:
+                    _ep_legacy_bcast = exp_phi_legacy[:, :, None, :, :].expand(
+                        -1, -1, Sigma_transported.shape[2], -1, -1
+                    )
+                    _R_legacy_t = _ep_legacy_bcast @ _ep_legacy_bcast.transpose(-1, -2)
+                    _R_legacy_agg = exp_phi_legacy @ exp_phi_legacy.transpose(-1, -2)
+                else:
+                    _ep_legacy_bcast = None
+                    _R_legacy_t = I_K
+                    _R_legacy_agg = I_K
+                Sigma_transported = Sigma_transported + _eps * _R_legacy_t
                 # Cholesky-backed SPD inverse via _safe_spd_inv.  See the
                 # tiled path above for the gauge-covariance argument.
-                Sigma_t_inv = _safe_spd_inv(Sigma_transported, eps=_eps)
+                Sigma_t_inv = _safe_spd_inv(
+                    Sigma_transported, eps=_eps, exp_phi=_ep_legacy_bcast,
+                )
                 precision_agg = torch.einsum('bij,bijkl->bikl', beta, Sigma_t_inv)
-                precision_agg = 0.5 * (precision_agg + precision_agg.transpose(-1, -2)) + _eps * I_K
-                sigma_aggregated = _safe_spd_inv(precision_agg, eps=_eps)
+                precision_agg = 0.5 * (precision_agg + precision_agg.transpose(-1, -2)) + _eps * _R_legacy_agg
+                sigma_aggregated = _safe_spd_inv(
+                    precision_agg, eps=_eps,
+                    exp_phi=(exp_phi_legacy if gauge_covariant_ridge else None),
+                )
                 sigma_aggregated = 0.5 * (sigma_aggregated + sigma_aggregated.transpose(-1, -2))
             else:
                 second_moment = Sigma_transported + torch.einsum(
@@ -1176,8 +1246,13 @@ def aggregate_messages(
                     eigvals = eigvals.clamp(min=1e-4)
                     sigma_aggregated = eigvecs * eigvals.unsqueeze(-2) @ eigvecs.transpose(-1, -2)
                 except (RuntimeError, torch.linalg.LinAlgError):
-                    sigma_aggregated = sigma_aggregated + 1e-3 * torch.eye(
-                        K, device=sigma_aggregated.device, dtype=sigma_aggregated.dtype)
+                    if gauge_covariant_ridge and exp_phi_legacy is not None:
+                        _gf_leg = exp_phi_legacy.to(dtype=sigma_aggregated.dtype)
+                        _R_eigh_fallback = _gf_leg @ _gf_leg.transpose(-1, -2)
+                    else:
+                        _R_eigh_fallback = torch.eye(
+                            K, device=sigma_aggregated.device, dtype=sigma_aggregated.dtype)
+                    sigma_aggregated = sigma_aggregated + 1e-3 * _R_eigh_fallback
     else:
         sigma_aggregated = None
 
@@ -1248,6 +1323,7 @@ class IrrepMultiHeadAttention(nn.Module):
         sigma_aggregation: str = 'mixture',  # 'mixture' or 'precision'
         learnable_head_kappa: bool = False,  # If True, learn per-head κ_h
         alpha_divergence: float = 1.0,  # Renyi alpha-divergence parameter (1.0 = KL)
+        gauge_covariant_ridge: bool = False,  # If True, ε·I ridges become ε·(gg^T)
     ):
         """
         Initialize irrep-structured multi-head attention.
@@ -1295,7 +1371,15 @@ class IrrepMultiHeadAttention(nn.Module):
         self.enforce_orthogonal = enforce_orthogonal
         self.use_rope = use_rope
         self.rope_base = rope_base
+        # Tri-state RoPE σ-rotation mode in {'off', 'vfe_only', 'both'}.
+        # The attention sublayer applies σ → R Σ Rᵀ (alongside μ → R μ) only
+        # when set to 'both'. Set externally by GaugeTransformerBlock.__init__
+        # so attention's rotation policy mirrors the FFN's. Requires
+        # diagonal_covariance=False (the lifted-σ path is the only one with
+        # well-defined R Σ Rᵀ semantics; diagonal σ is lifted upstream).
+        self.rope_full_gauge_mode = 'off'
         self.alpha_divergence = alpha_divergence
+        self.gauge_covariant_ridge = gauge_covariant_ridge
 
         # Build irrep block structure
         self.irrep_dims = []
@@ -1336,11 +1420,19 @@ class IrrepMultiHeadAttention(nn.Module):
                 if irrep_dims_override is not None:
                     # Cross-head coupling: use super-block dims from merge_coupled_heads.
                     # Generators have been reordered so super-blocks are contiguous.
+                    # NOTE: each super-block represents one or more *original* heads
+                    # that were transitively connected by cross_couplings; per-block
+                    # quantities downstream (e.g. learnable kappa) are therefore
+                    # per-super-block, not per-original-head.
                     self.irrep_dims = list(irrep_dims_override)
                     self.irrep_labels = [f'glk_superblock_{i}' for i in range(len(irrep_dims_override))]
                     self.glk_multihead = True
-                    logger.info(f"[GL(K) cross-head] super-blocks={irrep_dims_override}, "
-                               f"d_head={d_head}")
+                    logger.info(
+                        "[GL(K) cross-head] super-blocks=%s d_head=%d "
+                        "(merged from %d original heads; per-block params are "
+                        "per-super-block, not per-original-head).",
+                        irrep_dims_override, d_head, n_heads,
+                    )
                 else:
                     self.irrep_dims = [d_head] * n_heads
                     self.irrep_labels = [f'glk_head_{h}' for h in range(n_heads)]
@@ -1379,6 +1471,14 @@ class IrrepMultiHeadAttention(nn.Module):
             init_kappas = torch.tensor([
                 kappa_beta for _d_h in self.irrep_dims
             ])
+            # Length is len(self.irrep_dims), the number of *effective blocks*.
+            # In the cross-head-coupled path this equals the number of
+            # super-blocks (after merge_coupled_heads), NOT the original head
+            # count — so a learnable kappa is per-super-block in that path,
+            # shared across the original heads merged into the super-block.
+            # The parameter name "log_kappa_per_head" is preserved for state-dict
+            # compatibility; see the kappa_per_super_block read-only property
+            # below for the post-coupling-aware accessor.
             self.log_kappa_per_head = nn.Parameter(torch.log(init_kappas))
             self.register_buffer('_kappa_init', init_kappas)
         else:
@@ -1578,6 +1678,29 @@ class IrrepMultiHeadAttention(nn.Module):
         else:
             mu_q_for_attn = mu_q
 
+        # rope_full_gauge='both': also rotate Σ via the sandwich product
+        # Σ → R Σ Rᵀ, matching the FFN VFE-helper's full-gauge convention.
+        # This makes the attention β values consistent with the GL(K)-restricted-
+        # to-SO(2)^{K/2} interpretation of RoPE through the WHOLE stack rather
+        # than only inside the FFN VFE loop. Requires non-diagonal σ because
+        # R Σ Rᵀ has off-diagonal terms in general; users opting into 'both'
+        # accept the O(K) memory blow-up of full covariance.
+        sigma_q_for_attn = sigma_q
+        if self.use_rope and self.rope_full_gauge_mode == 'both':
+            if self.diagonal_covariance:
+                raise ValueError(
+                    "rope_full_gauge='both' requires diagonal_covariance=False. "
+                    "The R Σ Rᵀ rotation produces off-diagonal terms that "
+                    "cannot be represented in diagonal form, so the attention "
+                    "sublayer's σ rotation is undefined under diagonal covariance. "
+                    "Either set rope_full_gauge='vfe_only' (FFN-only full-gauge), "
+                    "or switch to diagonal_covariance=False."
+                )
+            # Lift if shape is (B, N, K); _apply_rope_to_covariance expects (..., K, K).
+            if sigma_q.dim() == 3:
+                sigma_q_for_attn = torch.diag_embed(sigma_q)
+            sigma_q_for_attn = _apply_rope_to_covariance(sigma_q_for_attn, base=self.rope_base)
+
         # =====================================================================
         # Split into irrep blocks
         # =====================================================================
@@ -1585,7 +1708,7 @@ class IrrepMultiHeadAttention(nn.Module):
         mu_blocks = self._split_irreps(mu_q_for_attn)  # List of (B, N, dim_ℓ)
         # Split raw mu for message aggregation (values — no RoPE)
         mu_blocks_raw = self._split_irreps(mu_q)        # List of (B, N, dim_ℓ)
-        sigma_blocks = self._split_irreps_sigma(sigma_q)  # List of (B, N, dim_ℓ, dim_ℓ)
+        sigma_blocks = self._split_irreps_sigma(sigma_q_for_attn)  # List of (B, N, dim_ℓ, dim_ℓ)
 
         # =====================================================================
         # Process each head (irrep block)
@@ -1712,6 +1835,7 @@ class IrrepMultiHeadAttention(nn.Module):
                     use_rope=False,
                     exact_diagonal_transport=self.exact_diagonal_transport,
                     alpha_divergence=self.alpha_divergence,
+                    gauge_covariant_ridge=self.gauge_covariant_ridge,
                 )  # (B, N, N), (B, N, N)
                 all_attention_weights.append(beta_head)
                 all_kl_matrices.append(kl_head)
@@ -1736,6 +1860,7 @@ class IrrepMultiHeadAttention(nn.Module):
                     use_rope=False,
                     exact_diagonal_transport=self.exact_diagonal_transport,
                     alpha_divergence=self.alpha_divergence,
+                    gauge_covariant_ridge=self.gauge_covariant_ridge,
                 )  # (B, N, N)
                 kl_head = None
 
@@ -1752,6 +1877,7 @@ class IrrepMultiHeadAttention(nn.Module):
                 cached_transport=head_cached_transport,
                 exact_diagonal_transport=self.exact_diagonal_transport,
                 sigma_aggregation=self.sigma_aggregation,
+                gauge_covariant_ridge=self.gauge_covariant_ridge,
             )
 
             head_outputs_mu.append(mu_agg)

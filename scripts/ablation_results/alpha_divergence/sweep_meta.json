@@ -1,8 +1,8 @@
 {
   "sweep_name": "alpha_divergence",
   "description": "Renyi alpha-divergence order (1.0=KL, 0.5=Bhattacharyya)",
-  "baseline_value": "0.275",
-  "n_runs": 8,
+  "baseline_value": "0.75",
+  "n_runs": 10,
   "seed": 6,
-  "timestamp": "2026-04-13 16:04:27"
+  "timestamp": "2026-04-16 20:22:21"
 }

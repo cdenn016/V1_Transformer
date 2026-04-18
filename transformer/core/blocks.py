@@ -31,13 +31,18 @@ from transformer.core.variational_ffn import VariationalFFNDynamic
 from transformer.core.active_inference import configure_ffn_active_inference
 
 # Import gauge connection for non-flat transport
-from transformer.core.connection import GaugeConnection
+from transformer.core.connection import (
+    GaugeConnection,
+    PerHeadGaugeConnection,
+    partition_generators_by_block,
+)
 
 # Import block-diagonal matrix exp for shared transport caching
 from transformer.core.gauge_utils import fused_block_matrix_exp_pairs
 
 # Trajectory tracking (core-side protocol — analysis layer registers via set_global_recorder)
 from transformer.core.vfe_utils import get_global_recorder
+from transformer.core.gauge_ridge import make_ridge
 
 
 class RMSNorm(nn.Module):
@@ -104,13 +109,19 @@ class MahalanobisNorm(nn.Module):
         self.K = normalized_shape
         self.eps = eps
 
-    def forward(self, x: torch.Tensor, sigma: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, sigma: torch.Tensor = None,
+                exp_phi: torch.Tensor = None) -> torch.Tensor:
         r"""Normalize mu using the Mahalanobis norm with covariance sigma.
 
         Args:
             x: (..., K) belief means.
             sigma: (..., K) diagonal variances or (..., K, K) full covariance.
                 If None, falls back to standard RMSNorm (Euclidean).
+            exp_phi: Optional (..., K, K) local gauge frame g = exp(phi).
+                When provided (and sigma is full-cov), the numerical ridge
+                uses ``eps * (g g^T)`` instead of ``eps * I``, preserving
+                ``Sigma -> h Sigma h^T`` covariance exactly. When ``None``,
+                falls back to ``eps * I`` (bitwise identical to prior behavior).
 
         Returns:
             Normalized means with :math:`\|\mu\|_M^2 = K`.
@@ -130,9 +141,12 @@ class MahalanobisNorm(nn.Module):
             # stable than Cholesky for gauge equivariance)
             with torch.amp.autocast('cuda', enabled=False):
                 x_f32 = x.float()
-                sigma_f32 = sigma.float() + self.eps * torch.eye(
-                    self.K, device=sigma.device, dtype=torch.float32
+                ridge = make_ridge(
+                    self.K, self.eps,
+                    exp_phi=exp_phi.float() if exp_phi is not None else None,
+                    device=sigma.device, dtype=torch.float32,
                 )
+                sigma_f32 = sigma.float() + ridge
                 # Sigma^{-1} mu via solve: avoids explicit inverse
                 sig_inv_mu = torch.linalg.solve(
                     sigma_f32, x_f32.unsqueeze(-1)
@@ -260,12 +274,13 @@ class GaugeTransformerBlock(nn.Module):
             mask_self_attention=cfg.mask_self_attention,
             enforce_orthogonal=cfg.enforce_orthogonal,
             use_output_projection=cfg.use_output_projection,
-            irrep_dims_override=cfg.ffn_irrep_dims if (gauge_group == 'GLK' and cfg.cross_head_perm is not None) else None,
+            irrep_dims_override=cfg.ffn_irrep_dims if (gauge_group == 'GLK' and cfg.ffn_irrep_dims is not None) else None,
             use_rope=cfg.use_rope,
             rope_base=cfg.rope_base,
             sigma_aggregation=cfg.sigma_aggregation,
             learnable_head_kappa=cfg.learnable_head_kappa,
             alpha_divergence=getattr(cfg, 'alpha_divergence', 1.0),
+            gauge_covariant_ridge=getattr(cfg, 'gauge_covariant_ridge', False),
         )
 
         # Normalization (LayerNorm, RMSNorm, or Identity)
@@ -295,6 +310,8 @@ class GaugeTransformerBlock(nn.Module):
             update_phi_per_iteration=cfg.evolve_phi_e_step,
             phi_lr=cfg.phi_lr,
             phi_max_norm=cfg.phi_max_norm,
+            phi_project_slk=cfg.phi_project_slk,
+            phi_trace_clamp=cfg.phi_trace_clamp,
             prior_bank=cfg.ffn_prior_bank,
             use_prior_bank=cfg.ffn_use_prior_bank,
             irrep_dims=cfg.ffn_irrep_dims,
@@ -313,9 +330,6 @@ class GaugeTransformerBlock(nn.Module):
             constant_omega=self.attention.constant_omega,
             em_mode=cfg.em_mode,
             isotropic_covariance=cfg.isotropic_covariance,
-            obs_sigma_gradient=cfg.obs_sigma_gradient,
-            obs_sigma_exact_stein=getattr(cfg, 'obs_sigma_exact_stein', False),
-            obs_sigma_weight=cfg.obs_sigma_weight,
             sigma_max=cfg.sigma_max,
             e_step_sigma_floor=cfg.e_step_sigma_floor,
             use_rope=cfg.use_rope,
@@ -334,7 +348,12 @@ class GaugeTransformerBlock(nn.Module):
         )
         # EXPERIMENTAL: rope_full_gauge rotates Σ as well as μ in the KL.
         # Dispatch lives in the per-head VFE loop (_compute_multihead_vfe_gradients).
-        self.ffn._rope_full_gauge_vfe = getattr(cfg, 'rope_full_gauge', False)
+        # Tri-state mode {'off', 'vfe_only', 'both'} — see block_config.RopeFullGaugeMode.
+        # FFN VFE-gradient helper fires for {'vfe_only', 'both'}.
+        # Attention-side σ rotation fires only for 'both' (gated inside attention).
+        _rope_mode = getattr(cfg, 'rope_full_gauge', 'off')
+        self.ffn._rope_full_gauge_vfe = _rope_mode
+        self.attention.rope_full_gauge_mode = _rope_mode
 
         # Active inference / EFE plumbing — delegated to active_inference.py.
         # Sets the 13 _ai_* instance attributes and initialises _prior_bank_ref.
@@ -403,17 +422,60 @@ class GaugeTransformerBlock(nn.Module):
         self.cocycle_relaxation = cfg.cocycle_relaxation
         self.holonomy_penalty = cfg.holonomy_penalty
         if cfg.non_flat_transport:
-            n_gen = cfg.generators.shape[0] if cfg.generators is not None else 3
-            self.gauge_connection = GaugeConnection(
-                d_head=cfg.embed_dim,
-                n_gen=n_gen,
-                connection_type=cfg.connection_type,
-                hidden_dim=cfg.connection_hidden_dim,
-                init_scale=cfg.connection_init_scale,
-            )
-            if cfg.per_head_flatness_gate:
-                n_heads = len(cfg.irrep_spec)
-                self.flatness_gate_logit = nn.Parameter(torch.zeros(n_heads))
+            if cfg.generators is None:
+                raise ValueError(
+                    "non_flat_transport=True requires cfg.generators to be "
+                    "populated; got None."
+                )
+            # Per-head construction: partition the global (n_gen_total, K, K)
+            # generator tensor by irrep block, then build one GaugeConnection
+            # per head sized for that head's sub-fiber.  This matches the
+            # block-diagonal structure of the transport operator — head-h's
+            # connection sees head-h's μ features only and produces
+            # coefficients for head-h's generators only.
+            try:
+                per_head_gens = partition_generators_by_block(
+                    cfg.generators, self.attention.irrep_dims,
+                )
+                self.gauge_connection = PerHeadGaugeConnection(
+                    irrep_dims=self.attention.irrep_dims,
+                    per_head_generators=per_head_gens,
+                    connection_type=cfg.connection_type,
+                    hidden_dim=cfg.connection_hidden_dim,
+                    init_scale=cfg.connection_init_scale,
+                )
+                self._connection_mode = 'per_head'
+            except ValueError as exc:
+                # Shared multi-irrep generators (e.g. SO(N) with mult >= 2 on a
+                # non-scalar irrep, where one G_fund is replicated across every
+                # multiplicity copy) cannot localize to a single irrep block —
+                # per-block Frobenius mass is at most 1/mult, below
+                # localization_threshold=0.999. Fall back to a single global
+                # GaugeConnection over the full embed_dim, matching the
+                # pre-per-head-split behaviour. The block-diagonal output shape
+                # (B, N, N, n_gen_total) is identical between the per-head and
+                # global paths, so downstream compute_transport_operators is
+                # unchanged.
+                import warnings
+                warnings.warn(
+                    f"PerHeadGaugeConnection: generators do not partition into "
+                    f"block-localized supports ({exc}). Falling back to a single "
+                    f"global GaugeConnection over embed_dim={cfg.embed_dim}. "
+                    f"This typically happens with SO(N) multi-irrep specs where "
+                    f"the same N(N-1)/2 generators are replicated across every "
+                    f"irrep multiplicity.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                n_gen_total = cfg.generators.shape[0]
+                self.gauge_connection = GaugeConnection(
+                    d_head=cfg.embed_dim,
+                    n_gen=n_gen_total,
+                    connection_type=cfg.connection_type,
+                    hidden_dim=cfg.connection_hidden_dim,
+                    init_scale=cfg.connection_init_scale,
+                )
+                self._connection_mode = 'global'
         else:
             self.gauge_connection = None
 
@@ -432,8 +494,6 @@ class GaugeTransformerBlock(nn.Module):
         mask: Optional[torch.Tensor] = None,
         mu_prior: Optional[torch.Tensor] = None,
         token_ids: Optional[torch.Tensor] = None,
-        targets: Optional[torch.Tensor] = None,
-        W_out: Optional[torch.Tensor] = None,
         cached_head_transports: Optional[list] = None,
         omega: Optional[torch.Tensor] = None,
         sigma_prior: Optional[torch.Tensor] = None,
@@ -458,8 +518,6 @@ class GaugeTransformerBlock(nn.Module):
             mask: Optional causal mask (B, N, N) or (B, 1, N, N).
             mu_prior: Embedding priors (B, N, K) — required, used as VFE prior means.
             token_ids: Token IDs (B, N) — passed to PriorBank for token-dependent priors.
-            targets: Target token IDs (B, N) — for E-step discrete observation grounding.
-            W_out: Output projection weights (V, K) — for CE gradient in E-step.
             cached_head_transports: Precomputed transport dicts per head — list of
                 {'Omega': (B, N, N, d_h, d_h)} per head. When evolve_phi=False,
                 these can be reused across layers for ~6× speedup.
@@ -504,14 +562,21 @@ class GaugeTransformerBlock(nn.Module):
                 )
                 # Split full Omega into per-head cached transports
                 Omega_full = transport['Omega']  # (B, N, N, K, K)
+                exp_phi_full = transport['exp_phi']  # (B, N, K, K)
                 # Store exp_delta for holonomy penalty (if configured)
                 self._last_exp_delta = transport.get('exp_delta')
                 irrep_dims = self.attention.irrep_dims
                 cached_head_transports = []
                 dim_start = 0
                 for d in irrep_dims:
+                    # Include 'exp_phi' so downstream consumers (notably the
+                    # gauge_covariant_ridge branches in attention.aggregate_messages)
+                    # can build the covariant ridge eps*(g·g^T). Without it, those
+                    # branches silently fall back to eps*I and the opt-in becomes
+                    # a no-op under non_flat_transport=True.
                     cached_head_transports.append({
                         'Omega': Omega_full[:, :, :, dim_start:dim_start+d, dim_start:dim_start+d],
+                        'exp_phi': exp_phi_full[:, :, dim_start:dim_start+d, dim_start:dim_start+d],
                     })
                     dim_start += d
 
@@ -672,8 +737,6 @@ class GaugeTransformerBlock(nn.Module):
             sigma=sigma_q,
             mask=mask,
             token_ids=token_ids,
-            targets=targets,
-            W_out=W_out,
             omega=omega,
             sigma_prior=sigma_prior,
             connection_delta=delta_ij,
@@ -766,12 +829,12 @@ class GaugeTransformerStack(nn.Module):
     Stack of N identical GaugeTransformerBlock layers.
 
     Each layer applies: Attention(KL + gauge transport) → VFE FFN(E-step iterations).
-    Beliefs (μ, Σ, φ) flow through all layers; targets/W_out are passed to the
-    final layer only (observation grounding). A final LayerNorm is applied to μ.
+    Beliefs (μ, Σ, φ) flow through all layers. A final LayerNorm is applied to μ.
+    The E-step does not see target tokens — the observation likelihood is
+    provided by the outer CE loss in compute_free_energy_loss.
 
     Supports gradient checkpointing (cfg.gradient_checkpointing) for ~60% memory
-    savings at ~30% extra compute. The final layer is never checkpointed to
-    preserve targets/W_out gradient flow.
+    savings at ~30% extra compute.
     """
 
     def __init__(self, cfg: BlockConfig):
@@ -806,8 +869,6 @@ class GaugeTransformerStack(nn.Module):
         token_ids: Optional[torch.Tensor] = None,
         return_intermediates: bool = False,
         cached_head_transports: Optional[list] = None,
-        targets: Optional[torch.Tensor] = None,
-        W_out: Optional[torch.Tensor] = None,
         omega: Optional[torch.Tensor] = None,
         sigma_prior: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[List]]:
@@ -825,8 +886,6 @@ class GaugeTransformerStack(nn.Module):
             return_intermediates: If True, return list of per-layer state dicts.
             cached_head_transports: Precomputed per-head transport dicts.
                 When evolve_phi=False, reuse across all layers (~6× speedup).
-            targets: Target token IDs (B, N) — passed to final layer only.
-            W_out: Output projection (V, K) — passed to final layer only.
 
         Returns:
             mu_q: Final means (B, N, K) after final LayerNorm.
@@ -843,17 +902,15 @@ class GaugeTransformerStack(nn.Module):
 
         n_blocks = len(self.blocks)
         for layer_idx, block in enumerate(self.blocks):
+            is_final = (layer_idx == n_blocks - 1)
+
             # Trajectory recording: start layer
             if recording_enabled:
                 recorder.start_layer(layer_idx)
                 recorder.record_layer_input(mu_q, sigma_q, phi)
 
-            # Only pass targets/W_out to the final layer (observation grounding)
-            is_final = (layer_idx == n_blocks - 1)
-
-            if self.gradient_checkpointing and self.training and not is_final:
-                # Gradient checkpointing: trade ~30% compute for ~60% memory savings
-                # Skip final layer to preserve targets/W_out gradient flow.
+            if self.gradient_checkpointing and self.training:
+                # Gradient checkpointing: trade ~30% compute for ~60% memory savings.
                 # Capture mu_prior/omega by value (default arg) so that
                 # backward recomputation uses the correct per-layer values
                 # when hierarchical_priors or omega evolution mutate them.
@@ -878,8 +935,6 @@ class GaugeTransformerStack(nn.Module):
                     mu_q, sigma_q, phi, generators, mask, mu_prior,
                     token_ids=token_ids,
                     cached_head_transports=cached_head_transports,
-                    targets=targets if is_final else None,
-                    W_out=W_out if is_final else None,
                     omega=omega,
                     sigma_prior=sigma_prior,
                 )

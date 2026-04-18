@@ -29,13 +29,13 @@ config = {
     'irrep_spec':     [('fund', 2, 10)],   # 2 heads x dim 10 = K=20
     
     
-    'batch_size':               8,    
+    'batch_size':               16,    
     'max_seq_len':              32,
     'max_steps':                20000,
  
     
     # === E-step dynamics ===
-    'n_e_steps':                3,         # Inner-loop iterations per layer
+    'n_e_steps':                2,         # Inner-loop iterations per layer
     'n_layers':                 2,
     
     'e_mu_lr':                  0.1,       # Mean natural gradient step size
@@ -45,7 +45,7 @@ config = {
     'alpha':                    1.0,       # KL(q||p) prior self-coupling weight
     'alpha_divergence':         1.0,       # Rényi α (1.0=KL, 0.5=Bhattacharyya)
     
-    'E_learnable_alpha':        False,     # Bayesian adaptive α_i = c0/(b0+KL)
+    'E_learnable_alpha':        True,     # Bayesian adaptive α_i = c0/(b0+KL)
     'lambda_align':             1.0,       # Direct attention coupling (β · ∂KL/∂θ)
     'lambda_soft':              0,         # Softmax coupling (∂β/∂θ · KL)
     'kappa':                    1.0,       # Attention temperature
@@ -68,6 +68,8 @@ config = {
 
     # === Gauge geometry ===
     'gauge_group':              'GLK',      # 'SO3', 'SON', 'GLK'
+    'phi_project_slk':          False,      # GL(K) only: hard project φ → sl(K) ⇒ det(Ω) ≡ 1
+    'phi_trace_clamp':          None,       # GL(K) only: soft cap |tr(φ·G)| ≤ T (e.g., 0.35)
     'phi_preconditioner':       'killing',  # 'clip', 'cartan', 'killing', 'pullback'
     'enforce_orthogonal':       False,      # Project Ω to SO(K)
     'mask_self_attention':      False,      # Mask diagonal (prevents KL=0 self-attention)
@@ -96,12 +98,12 @@ config = {
 
 
     # === Normalization ===
-    'norm_type':                'mahalnorm',# 'mahalnorm', 'rmsnorm', 'layernorm','none'
+    'norm_type':                'layernorm',# 'mahalnorm', 'rmsnorm', 'layernorm','none'
     'normalize_ce_by_dim':      False,      # Divide CE by sqrt(K)
 
 
     # === Training ===
-    'learning_rate':            0.002,
+    'learning_rate':            0.02,
     'weight_decay':             0.001,
     'warmup_steps':             100,
     
@@ -112,7 +114,7 @@ config = {
     
     # === Logging / evaluation ===
     'log_interval':             100,
-    'eval_interval':            3000,
+    'eval_interval':            1000,
     'checkpoint_interval':      25000,
 }
 

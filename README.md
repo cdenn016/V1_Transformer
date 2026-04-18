@@ -207,15 +207,39 @@ The free energy naturally separates into:
 
 Standard transformers operate in the adiabatic limit: slow variables frozen during inference, updated between passes.
 
-### Multi-Head Attention as Block-Diagonal GL(K)
+### Block-Diagonal Multi-Head (Default)
 
-Multi-head attention restricts the full GL(d_k) to a block-diagonal subgroup:
+Standard multi-head attention restricts the full GL(d_k) to a block-diagonal subgroup:
 
 ```
 G_multi-head = GL(d_head)^H  subset  GL(d_k)
 ```
 
-Each head learns an independent GL(d_head) gauge transformation. For compact groups like SO(3), irreducible representations yield non-uniform head dimensions (1, 3, 5, 7, ...) with intrinsic geometric meaning.
+Each head learns an independent GL(d_head) gauge transformation, and the H factors commute. For compact groups like SO(3), irreducible representations yield non-uniform head dimensions (1, 3, 5, 7, ...) with intrinsic geometric meaning. The block-diagonal KL decomposition (`use_block_diagonal_kl=True`) exploits this structure for an O(K · d_head) reduction in transport memory.
+
+### Cross-Head Coupling (Sparse gl(K) Subspace)
+
+Setting `cross_couplings = [(a₁, b₁), (a₂, b₂), ...]` enables sparse off-diagonal gauge mixing between selected head pairs. The basis is no longer GL(d_head)^H but a sparse matrix subspace of gl(K):
+
+```
+g_coupled = ⨁_h gl(d_head)_h  ⊕  span{ E_{ij}^{(a,b)} : (a,b) in cross_couplings }
+```
+
+where E_{ij}^{(a,b)} is the elementary matrix that maps head a's row subspace into head b's column subspace. Pairs are directional; include both (a,b) and (b,a) for symmetric coupling.
+
+Mathematical caveats users should know:
+
+* **The basis is generically not closed under the matrix commutator.** With couplings `[(0,1),(1,2)]`, the commutator [E^{(0,1)}, E^{(1,2)}] lives in an E^{(0,2)} block that is absent from the basis. The bracket and Baker-Campbell-Hausdorff routines in `math_utils/generators.py` (`glK_bracket_torch`, `glK_compose_bch_torch`) silently project commutators back onto the basis via Frobenius inner product, so composition on a non-closed basis is a projected approximation rather than an exact Lie composition. Use `validate_generator_closure(generators)` to detect this; the model emits a startup warning by default (suppress via `validate_cross_head_closure=False`).
+
+* **Opt-in pure path.** Setting `auto_close_cross_head_basis=True` calls `close_under_brackets`, which iteratively appends the bracket residuals (via thin-SVD deflation) to obtain a true Lie subalgebra. This changes `phi_dim`, breaks checkpoint compatibility, and may add generators that span across the user-supplied super-block partition; see the in-line warning emitted at model init.
+
+* **Super-block factorization for the KL.** Heads that are transitively connected by `cross_couplings` are merged into super-blocks (`merge_coupled_heads`) and contiguousized (`reorder_cross_head_generators`). The block-diagonal KL machinery then operates on these super-blocks. As a consequence, per-block parameters in attention — including the learnable κ_h (`log_kappa_per_head`) — are per-super-block in the coupled path, not per original head.
+
+* **Validation cost.** `validate_generator_closure` runs in O(n_gen² · K³) once at startup. For K ≲ 128 this is sub-second; for large K it can take tens of seconds. Set `validate_cross_head_closure=False` to skip the check on production runs whose coupling pattern you have already verified.
+
+* **Hard incompatibility.** `cross_couplings` non-empty with `use_block_diagonal_kl=False` raises at construction: the cross-head builder reorders generators into super-block coordinates that the per-head fallback path cannot honor.
+
+* **Duplicates are dropped, orientation preserved.** Exact duplicate pairs are removed with a warning; (a,b) and (b,a) are treated as distinct (different generator blocks).
 
 ### O(K) Gauge Transport
 
@@ -250,6 +274,32 @@ C_ijk = exp(δ_ij · G) · exp(δ_jk · G) · exp(δ_ki · G)
 When the connection is flat, `C_ijk = I` for all triples. The Frobenius norm `‖C_ijk - I‖_F` quantifies deviation from flatness. A `holonomy_penalty_loss()` regularizer pushes the model toward flatness, controlled by `holonomy_penalty` in the config.
 
 Holonomy analysis tools include per-snapshot statistics (`transformer/analysis/holonomy_metrics.py`), curvature-by-distance profiles, flatness trajectories over training, and visualization (`transformer/visualization/holonomy_plots.py`). A synthetic gauge language generator (`transformer/data/synthetic_gauge.py`) produces data with controlled holonomy for testing.
+
+When the gauge group is SO(N) and the irrep specification contains a non-scalar irrep with multiplicity ≥ 2 (for example, `irrep_spec=[('fund', 2, 3)]`), the per-head connection cannot localize the shared generators to a single head block. The block-init path detects this via `partition_generators_by_block` and falls back to a single global `GaugeConnection` over the full embedding dimension, emitting a `RuntimeWarning` to record the choice. The output shape is identical to the per-head path so downstream transport is unaffected; the diagnostic attribute `block._connection_mode` is set to `'global'` rather than `'per_head'`.
+
+### Gauge-Covariant Ridge Conditioning
+
+Numerical regularization of small SPD matrices in attention defaults to a uniform Tikhonov ridge ε·I. This breaks gauge covariance because the identity does not transform as Σ → h Σ hᵀ under a local gauge change h ∈ GL(K). The flag `gauge_covariant_ridge=True` replaces the offending sites with ε·(g·gᵀ), where g = exp(φ) is the per-token gauge frame. The covariant ridge transforms correctly under all admissible local gauge changes and restores Σ_t → h Σ_t hᵀ exactness in the aggregate-messages and Cholesky-fallback paths. The flag is off by default to preserve checkpoint comparability for ablations; non-flat transport configurations correctly honor the flag because the producer caches now carry both `'Omega'` and `'exp_phi'` keys end-to-end.
+
+### RoPE as Gauge Transport (Tri-State σ Rotation)
+
+Rotary position embeddings restrict the GL(K) gauge group to SO(2)^{K/2}: a position-dependent rotation R(θ_i) acts on each pair of consecutive coordinates. The gauge interpretation prescribes that R must act on Gaussian beliefs by both μ → R μ AND Σ → R Σ Rᵀ, which is the standard sandwich product for covariance transport. The standard-transformer convention rotates only μ and leaves Σ raw, which preserves the diagonal-σ optimization at the cost of breaking strict GL(K) covariance.
+
+The `rope_full_gauge` flag is a tri-state selector that lets the user trade off cost against geometric consistency:
+
+| Mode | Attention σ | FFN VFE σ | Notes |
+|------|-------------|-----------|-------|
+| `'off'` (default) | raw | raw | Standard-transformer pattern; fastest |
+| `'vfe_only'` | raw | R Σ Rᵀ | Full-gauge inside the FFN VFE iteration only; attention β values still come from the μ-only KL. Equivalent to the legacy `True` setting. |
+| `'both'` | R Σ Rᵀ | R Σ Rᵀ | Strict GL(K) covariance through both sublayers. Requires `diagonal_covariance=False`; rejected at attention forward otherwise. |
+
+Backwards compatibility is preserved: legacy boolean values are coerced (`True → 'vfe_only'`, `False → 'off'`) by `_coerce_rope_full_gauge` in `block_config.py`. Invalid strings or types raise at `BlockConfig` construction time. The `'both'` mode lifts diagonal σ to full covariance and applies `_apply_rope_to_covariance` before the per-head KL dispatch; the lifted full-cov σ flows through the existing per-head machinery without further changes.
+
+Independently, the legacy code path that handled `use_rope=True` without a per-head `irrep_dims` decomposition has been replaced with a hard `ValueError`. That path skipped the rope chain-rule fix (using raw-μ gradients instead of R^T·∂KL_RoPE/∂(R μ)) and silently produced biased descent directions; users now receive an actionable error message pointing to either `irrep_dims` or `use_rope=False`.
+
+### E-Step Concentration Correction
+
+When `E_learnable_alpha=True`, the effective self-coupling weight α = c₀/(b₀ + KL) is itself a function of the belief parameters via the per-dimension KL. Differentiating α·KL with respect to (μ, σ) therefore carries a product-rule contribution −(α²/c₀)·KL_k·(dKL/dθ) in addition to the obvious α·dKL/dθ term. The VFE gradient kernel `compute_vfe_gradients_gpu` applies this correction whenever its `alpha_c0` argument is provided, and the `VFEEStep` module now passes `softplus(self.raw_c0)` through both the standard and rope-full-gauge per-head call sites. The same correction is injected into the autograd-based rope helper via a phantom term −0.5·(α²/c₀)·KL² on the self-energy whose autograd derivative reproduces the missing analytic contribution. Without these wirings the descent direction was biased by the omitted product-rule term whenever the Bayesian adaptive α was active.
 
 ### Phi Gradient Preconditioning
 

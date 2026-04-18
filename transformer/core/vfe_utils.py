@@ -25,7 +25,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from math_utils.numerical_monitor import record as _nr
 
 logger = logging.getLogger(__name__)
@@ -146,7 +146,8 @@ def squeeze_trailing_singletons(tensor: torch.Tensor, max_dim: int = 3) -> torch
 # Robust SPD linear-algebra primitives
 # =============================================================================
 
-def _safe_spd_inv(M: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+def _safe_spd_inv(M: torch.Tensor, eps: float = 1e-6,
+                  exp_phi: Optional[torch.Tensor] = None) -> torch.Tensor:
     r"""
     Robust inversion for SPD (symmetric positive-definite) covariance matrices.
 
@@ -192,7 +193,13 @@ def _safe_spd_inv(M: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
         diag_max = M_sym.diagonal(dim1=-2, dim2=-1).abs().amax(dim=-1, keepdim=True).unsqueeze(-1)
         reg_scale = torch.clamp(diag_max * eps, min=eps)  # (..., 1, 1)
         I_K = torch.eye(K, device=device, dtype=torch.float32)
-        M_reg = M_sym + reg_scale * I_K
+        if exp_phi is not None:
+            # Gauge-covariant ridge: transforms as Σ under h·Σ·h^T.
+            _gf = exp_phi.to(dtype=torch.float32)
+            R_unit = _gf @ _gf.transpose(-1, -2)
+        else:
+            R_unit = I_K
+        M_reg = M_sym + reg_scale * R_unit
 
         # Primary path: Cholesky.  cholesky_ex returns (L, info) where
         # info[b] != 0 indicates batch element b failed.  We do not let
@@ -214,7 +221,7 @@ def _safe_spd_inv(M: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
             success = False
             for _ in range(3):
                 current_reg = current_reg * 10.0
-                M_reg_more = M_sym + current_reg * I_K
+                M_reg_more = M_sym + current_reg * R_unit
                 L_retry, info_retry = torch.linalg.cholesky_ex(M_reg_more)
                 # Only overwrite elements that were still failing
                 still_failed = failed & (info_retry != 0)
@@ -252,6 +259,7 @@ def _safe_eigh(
     jitter: float = 1e-6,
     max_jitter: float = 1e-2,
     symmetrize: bool = True,
+    exp_phi: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     r"""
     Robust eigendecomposition for symmetric matrices with escalating jitter.
@@ -289,6 +297,11 @@ def _safe_eigh(
             M = 0.5 * (M + M.transpose(-1, -2))
 
         I_K = torch.eye(K, device=device, dtype=torch.float32)
+        if exp_phi is not None:
+            _gf = exp_phi.to(dtype=torch.float32)
+            R_unit = _gf @ _gf.transpose(-1, -2)
+        else:
+            R_unit = I_K
         # Break eigenvalue degeneracy: add linearly-spaced diagonal perturbation
         # so that eigenvalues of identical magnitude are separated by ~jitter/K.
         # This prevents NaN in the eigh backward pass (1/(λ_i - λ_j) terms).
@@ -299,7 +312,7 @@ def _safe_eigh(
 
         while current_jitter <= max_jitter:
             try:
-                M_reg = M + current_jitter * I_K + degeneracy_breaker
+                M_reg = M + current_jitter * R_unit + degeneracy_breaker
                 eigvals, eigvecs = torch.linalg.eigh(M_reg)
                 return eigvals.to(orig_dtype), eigvecs.to(orig_dtype)
             except (RuntimeError, torch.linalg.LinAlgError):
@@ -316,7 +329,7 @@ def _safe_eigh(
         # For symmetric indefinite M (after insufficient jitter): SVD returns
         # |λ_i| not λ_i.  We recover signs from the diagonal of U^T M U,
         # which equals diag(λ_i) for eigenvectors U of a symmetric matrix.
-        M_reg = M + max_jitter * I_K + degeneracy_breaker
+        M_reg = M + max_jitter * R_unit + degeneracy_breaker
         U, s, Vh = torch.linalg.svd(M_reg, full_matrices=False)
         # Recover eigenvalue signs: diag(U^T M_reg U) = eigenvalues
         diag_check = torch.einsum('...ki,...kj,...ij->...i', U, M_reg, U)
@@ -503,6 +516,9 @@ def _retract_phi(
     bch_order: int = None,  # None = auto-select based on gauge group
     eps: float = 1e-6,
     gauge_group: str = None,  # Explicit: 'GLK', 'SON', or None for auto-detect
+    project_slk: bool = False,  # Hard project φ → sl(K) per block (det Ω_h = 1)
+    trace_clamp: Optional[float] = None,  # Soft per-block cap |tr(φ·G_h)| ≤ T
+    irrep_dims: Optional[List[int]] = None,  # Required for project_slk/trace_clamp on multi-block GL(K)
 ) -> torch.Tensor:
     """
     Retract phi update using appropriate method for gauge group.
@@ -564,12 +580,12 @@ def _retract_phi(
             phi_new * max_norm / (phi_new_norm + eps),
             phi_new
         )
-        return phi_new
+        return _apply_det_control(phi_new, generators, is_glk, project_slk, trace_clamp, irrep_dims, eps)
 
     # Check if this is GL(K) (n_gen = K²) or SO(N) (n_gen = N(N-1)/2)
     if is_glk:
         # GL(K) is non-compact - needs conservative settings
-        return retract_glK_torch(
+        phi_new = retract_glK_torch(
             phi=phi,
             delta_phi=delta_phi,
             generators=generators,
@@ -579,8 +595,10 @@ def _retract_phi(
             bch_order=bch_order,
             eps=eps,
         )
+        return _apply_det_control(phi_new, generators, True, project_slk, trace_clamp, irrep_dims, eps)
     elif is_son:
-        # SO(N) is compact - can use standard settings
+        # SO(N) is compact - can use standard settings; tr(G_a)=0 already so
+        # no determinant control needed (det=1 automatically).
         return retract_soN_torch(
             phi=phi,
             delta_phi=delta_phi,
@@ -603,7 +621,71 @@ def _retract_phi(
             phi_new * max_norm / (phi_new_norm + eps),
             phi_new
         )
-        return phi_new
+        return _apply_det_control(phi_new, generators, is_glk, project_slk, trace_clamp, irrep_dims, eps)
+
+
+def _apply_det_control(
+    phi: torch.Tensor,
+    generators: torch.Tensor,
+    is_glk: bool,
+    project_slk: bool,
+    trace_clamp: Optional[float],
+    irrep_dims: Optional[List[int]] = None,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    r"""Constrain the per-block determinant direction(s) of φ for GL(K) groups.
+
+    For a block-diagonal gauge group :math:`GL(K_1) \oplus \cdots \oplus GL(K_H)`,
+    each block carries an independent trace functional
+    :math:`s_h = \operatorname{tr}(\phi \cdot G^{(h)})` and an independent
+    determinant. L2-norm clamping does not bound any of them, so
+    :math:`\det(\Omega_h)` can blow up per block. Killing only the summed
+    direction :math:`\sum_h s_h` is **insufficient** — compensating signs
+    across blocks defeat the constraint.
+
+    Behavior:
+      * No-op if not is_glk (SO(N) generators are skew, tr=0 by construction).
+      * No-op if both ``project_slk=False`` and ``trace_clamp is None``.
+      * If ``project_slk`` set: per-block projection so :math:`s_h \equiv 0`
+        for every block ⇒ :math:`\det(\Omega_h) \equiv 1`. Drops one DOF per
+        block. Block-diagonal trace vectors are mutually orthogonal so the
+        projection collapses to one matmul.
+      * Else (``trace_clamp=T``): rescale only the trace component per block
+        so :math:`|s_h| \le T`. Soft cap; preserves trace direction within bounds.
+      * If both set, ``project_slk`` wins.
+      * If ``irrep_dims is None``, falls back to single-block treatment
+        (entire K-dim space treated as one GL(K) block).
+    """
+    if not is_glk:
+        return phi
+    if not project_slk and trace_clamp is None:
+        return phi
+    # Build per-block trace vectors V[h, a] = tr(G_a restricted to block h).
+    # For block-diagonal generators these vectors have disjoint supports, so
+    # they are automatically orthogonal and a single matmul handles all blocks.
+    n_gen = generators.shape[0]
+    K = generators.shape[-1]
+    if irrep_dims is None:
+        irrep_dims = [K]  # treat as single GL(K) block
+    H = len(irrep_dims)
+    V_blocks = torch.zeros(H, n_gen, dtype=phi.dtype, device=phi.device)
+    start = 0
+    for h, d_h in enumerate(irrep_dims):
+        end = start + d_h
+        V_blocks[h] = generators[:, start:end, start:end].diagonal(
+            dim1=-2, dim2=-1
+        ).sum(dim=-1).to(phi.dtype)
+        start = end
+    v_norm_sq = (V_blocks * V_blocks).sum(dim=-1).clamp(min=eps)  # (H,)
+    s = phi @ V_blocks.transpose(-2, -1)                          # (..., H)
+    if project_slk:
+        coeffs = s / v_norm_sq                                    # (..., H)
+        return phi - torch.einsum('...h,hg->...g', coeffs, V_blocks)
+    # Soft per-block clamp on s_h
+    T = float(trace_clamp)
+    s_clamped = s.clamp(min=-T, max=T)
+    delta_coeffs = (s_clamped - s) / v_norm_sq                    # (..., H)
+    return phi + torch.einsum('...h,hg->...g', delta_coeffs, V_blocks)
 
 
 # =============================================================================
@@ -655,83 +737,6 @@ def set_global_recorder(recorder: Any) -> None:
 # =============================================================================
 # Observation gradient computation (extracted from VariationalFFNDynamic)
 # =============================================================================
-
-def compute_observation_gradients(
-    mu_current: torch.Tensor,
-    W_out: torch.Tensor,
-    obs_cache: dict,
-    sigma_current: Optional[torch.Tensor],
-    is_diagonal: bool,
-    is_final_iter: bool,
-    eps: float,
-    obs_sigma_gradient: bool,
-    obs_sigma_exact_stein: bool,
-    obs_sigma_weight: float,
-) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-    r"""Compute observation gradients for mu and sigma.
-
-    Returns ``(obs_grad_mu, obs_grad_sigma)`` where ``obs_grad_sigma`` is
-    ``None`` when ``obs_sigma_gradient`` is ``False``.
-
-    **mu gradient** — CE cross-entropy:
-
-    .. math::
-
-        \nabla_\mu \mathbb{E}_q[\mathrm{CE}] = W_{\rm out}^T (\hat{p} - e_y)
-
-    where :math:`\hat{p} = \mathrm{softmax}(W_{\rm out}\,\mu)`.
-
-    **sigma gradient** — Stein's lemma:
-
-    .. math::
-
-        \frac{\partial}{\partial \sigma_k} \mathbb{E}_q[\mathrm{CE}(z)]
-            = \tfrac{1}{2} \mathbb{E}_q[H_{kk}(z)]
-
-    where :math:`H_{kk}(z) = \mathrm{Var}_{\mathrm{softmax}(z)}[W_{:,k}]`.
-    """
-    logits = torch.matmul(mu_current.detach(), W_out.T)
-    probs = F.softmax(logits, dim=-1)
-    mask_obs = obs_cache['mask_obs']
-    one_hot = obs_cache['one_hot']
-    grad_error = (probs - one_hot) * mask_obs
-    discrete_obs_grad = torch.matmul(grad_error, W_out)
-    if _VFE_GRAD_DEBUG is not None:
-        _VFE_GRAD_DEBUG['obs_mu_grad'] = _grad_norm(discrete_obs_grad)
-
-    obs_grad_mu = discrete_obs_grad
-
-    obs_grad_sigma = None
-    if obs_sigma_gradient:
-        if (obs_sigma_exact_stein
-                and sigma_current is not None and is_diagonal):
-            _eps_sample = torch.randn_like(mu_current.detach())
-            _sigma_safe = sigma_current.detach().clamp(min=1e-6)
-            _z_sample = mu_current.detach() + _sigma_safe.sqrt() * _eps_sample
-            _logits_z = torch.matmul(_z_sample, W_out.T)
-            probs_z = F.softmax(_logits_z, dim=-1)
-        else:
-            probs_z = probs
-
-        W_out_sq = obs_cache['W_out_sq']                    # (V, K)
-        EW2 = torch.matmul(probs_z, W_out_sq)                # (B, N, K)
-        EW  = torch.matmul(probs_z, W_out)                   # (B, N, K)
-        hessian_diag = EW2 - EW ** 2                         # (B, N, K)
-        _neg_mask = hessian_diag < 0
-        if _neg_mask.any():
-            if is_final_iter:
-                _nr("obs_sigma_hessian_neg_clamp", count=int(_neg_mask.sum().item()))
-            hessian_diag = hessian_diag.clamp(min=0.0)
-        _sigma_obs_scale = 0.5 * obs_sigma_weight
-        obs_sigma_grad = (_sigma_obs_scale * hessian_diag * mask_obs).clamp(max=10.0)
-        if _VFE_GRAD_DEBUG is not None:
-            _VFE_GRAD_DEBUG['obs_sigma_grad'] = _grad_norm(obs_sigma_grad)
-        if not is_diagonal:
-            obs_sigma_grad = torch.diag_embed(obs_sigma_grad)
-        obs_grad_sigma = obs_sigma_grad
-
-    return obs_grad_mu, obs_grad_sigma
-
 
 # =============================================================================
 # Sigma SPD retraction (extracted from VariationalFFNDynamic)

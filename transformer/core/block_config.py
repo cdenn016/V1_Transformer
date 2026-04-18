@@ -12,7 +12,43 @@ mu_normalize, mu_max_norm) are handled by model.py → GaugeTokenEmbedding direc
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Literal, Union
+
+
+# Allowed values for rope_full_gauge:
+#   'off'      — rotate neither μ nor Σ in attention/FFN; default RoPE on μ only is the
+#                standard-transformer pattern preserved here.
+#   'vfe_only' — apply the framework-consistent μ→Rμ AND Σ→RΣR^T transform inside the
+#                FFN's per-head VFE gradient helper only. Attention still rotates μ only.
+#                This is today's behavior of the legacy `True` value.
+#   'both'     — additionally apply Σ→RΣR^T in the attention sublayer, lifting diagonal
+#                σ to full covariance before KL dispatch. Strict GL(K) covariance through
+#                both sublayers; substantially more expensive (O(K) memory blow-up).
+RopeFullGaugeMode = Literal['off', 'vfe_only', 'both']
+
+
+def _coerce_rope_full_gauge(value: 'Union[bool, str, None]') -> RopeFullGaugeMode:
+    """Backwards-compatible coercion to the tri-state mode.
+
+    True  → 'vfe_only' (preserves prior semantics: full-gauge in FFN VFE only).
+    False → 'off'.
+    None  → 'off'.
+    str   → must be one of {'off', 'vfe_only', 'both'}; otherwise ValueError.
+    """
+    if value is None or value is False:
+        return 'off'
+    if value is True:
+        return 'vfe_only'
+    if isinstance(value, str):
+        if value not in ('off', 'vfe_only', 'both'):
+            raise ValueError(
+                f"rope_full_gauge must be one of 'off', 'vfe_only', 'both' "
+                f"(or legacy bool); got {value!r}."
+            )
+        return value
+    raise TypeError(
+        f"rope_full_gauge must be bool, str, or None; got {type(value).__name__}."
+    )
 import torch
 import torch.nn as nn
 
@@ -73,8 +109,6 @@ class BlockConfig:
     evolve_phi_e_step: bool =  True    # Update φ during EACH E-step iteration
     ffn_update_sigma: bool =   True    # Update covariances during E-step
     E_learnable_alpha: bool =  True    # Bayesian precision via Gamma-Normal conjugacy
-    obs_sigma_gradient: bool = True    # ∂E_q[CE]/∂σ Hessian-diagonal obs gradient for sigma
-    obs_sigma_exact_stein: bool = False  # Single-sample E_q[H(z)] instead of H(μ) for obs sigma grad
     sigma_aggregation: str =   'mixture'  # 'mixture' (moment matching) or 'precision' (VFE equilibrium)
     
     
@@ -84,6 +118,17 @@ class BlockConfig:
 
               
     phi_max_norm: Optional[float] = None # Max phi norm; None = auto (π for SO(N), 5.0 for GL(K))
+    # === Determinant control for GL(K) (off by default; both ignored for SO(N)) ===
+    # GL(K) has an unbounded "trace" direction (the determinant) that L2-norm
+    # clamping does not constrain — det(Ω_ij) = exp(tr(φ_i − φ_j)) can blow up
+    # on outlier tokens even when ‖φ‖ is bounded. Enable ONE of:
+    #   phi_project_slk=True : project φ onto sl(K) after each retraction so
+    #                          tr(φ·G) ≡ 0 ⇒ det(Ω) ≡ 1 (geometric, principled).
+    #   phi_trace_clamp=T    : clamp |tr(φ·G)| ≤ T per token after retraction
+    #                          (soft cap; det(Ω_ij) ∈ [exp(-2T), exp(2T)]).
+    # If both are set, phi_project_slk takes precedence.
+    phi_project_slk: bool = False
+    phi_trace_clamp: Optional[float] = None
     
     
     
@@ -106,7 +151,6 @@ class BlockConfig:
     E_alpha: float =           1.0               # E-step prior self-coupling weight α
     E_lambda_belief: float =   1.0       # E-step belief alignment weight λ (direct: β·∇KL)
     E_lambda_softmax: float =  1.0      # E-step attention-variance coupling weight (∂β/∂θ · KL)
-    obs_sigma_weight: float =  1.0      # Weight for sigma observation gradient
     alpha_divergence: float =  1.0      # Renyi alpha-divergence parameter for attention
                                         # 1.0 = KL divergence (default, backward-compatible)
                                         # 0.5 = Bhattacharyya distance (symmetric, bounded)
@@ -126,6 +170,11 @@ class BlockConfig:
                                         # before clamping. Prevents nat_grad_sigma = 2σ²·∇σ blowup.
                                         # Matches VariationalFFNDynamic.__init__ default and the
                                         # from_config() dict default.
+    # Gauge-covariant numerical ridge. When True, ε·I regularizers on
+    # sandwich-transforming covariances Σ are replaced by ε·(gg^T) built from
+    # the local frame g = exp(φ), preserving Σ → hΣh^T covariance exactly.
+    # Default False preserves bitwise numerics. See transformer/core/gauge_ridge.py.
+    gauge_covariant_ridge: bool = False
     e_step_sigma_floor: float = 0.1     # Floor on σ_p inside E-step (caps 1/σ_p gradient).
                                         # PriorBank allows σ_p ∈ [0.01, 5.0] for sharp decode,
                                         # but E-step needs a higher floor to prevent nat_grad blowup.
@@ -187,6 +236,27 @@ class BlockConfig:
         # Isotropic covariance requires diagonal representation
         if self.isotropic_covariance and not self.diagonal_covariance:
             self.diagonal_covariance = True
+        # rope_full_gauge under diagonal/isotropic is wasteful. The legacy
+        # _compute_rope_full_gauge_gradient_per_head lifts diagonal σ to
+        # (d_h, d_h) full covariance inside the rope rotation path — O(K²)
+        # memory per token for no benefit in the isotropic case (R·(σ²I)·R^T
+        # = σ²I is invariant) and no correctness gain over rope_full_gauge=False
+        # in the diagonal-non-isotropic case (the default path already handles
+        # RoPE-on-μ with σ left raw, which is a deliberate design choice).
+        # Warn loudly but permit (vfe/ is stricter — ValueError).
+        # Coerce legacy bool/str input to the canonical tri-state mode string.
+        self.rope_full_gauge = _coerce_rope_full_gauge(self.rope_full_gauge)
+        if self.rope_full_gauge != 'off' and (self.diagonal_covariance or self.isotropic_covariance):
+            import warnings as _warnings
+            _which = "isotropic" if self.isotropic_covariance else "diagonal"
+            _warnings.warn(
+                f"rope_full_gauge={self.rope_full_gauge!r} under {_which} covariance: the rope "
+                f"path will lift σ to full (B, N, K, K) and apply R Σ Rᵀ — "
+                f"{'mathematically a no-op (R·(σ²I)·R^T = σ²I) with O(K²) cost' if self.isotropic_covariance else 'expensive vs. rope_full_gauge=off which leaves σ raw'}. "
+                f"Consider rope_full_gauge='off'.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
         # Backward compat: use_layernorm=False with default norm_type → 'none'
         if not self.use_layernorm and self.norm_type == 'layernorm':
             self.norm_type = 'none'
@@ -234,7 +304,6 @@ class BlockConfig:
     # and the standard flat transport is used (cocycle condition holds, holonomy trivial).
     non_flat_transport: bool = False       # Enable edge-dependent connection δ_ij
     cocycle_relaxation: float = 0.5        # Scale factor for δ_ij: 0=flat, 1=fully non-flat
-    per_head_flatness_gate: bool = False   # Learnable per-head g_h ∈ [0,1]
     connection_type: str = 'bilinear'      # 'bilinear' | 'mlp'
     connection_hidden_dim: int = 64        # Hidden dim for MLP connection
     connection_init_scale: float = 0.01    # W init scale (0=flat saddle, >0 breaks symmetry)
@@ -314,7 +383,7 @@ class BlockConfig:
 
     active_inference: bool = False
     
-    rope_full_gauge: bool =  False      # EXPERIMENTAL.  When True (and use_rope=True),
+    rope_full_gauge: 'Union[bool, RopeFullGaugeMode]' = 'off'  # EXPERIMENTAL tri-state. {'off', 'vfe_only', 'both'} (legacy bool: True→'vfe_only', False→'off'). When != 'off' (and use_rope=True),
                                         # implements the framework-consistent interpretation
                                         # of RoPE as a position-dependent gauge transport that
                                         # acts on Gaussian beliefs by both μ → Rμ AND Σ → RΣR^T
@@ -383,6 +452,8 @@ class BlockConfig:
             evolve_phi_e_step=config.get('evolve_phi_e_step', True),
             phi_lr=config.get('E_phi_lr', config.get('e_step_phi_lr', config.get('phi_lr', 0.05))),
             phi_max_norm=config.get('phi_max_norm', None),
+            phi_project_slk=config.get('phi_project_slk', False),
+            phi_trace_clamp=config.get('phi_trace_clamp', None),
             phi_dim=config.get('phi_dim', 3),
             phi_natural_gradient=config.get('phi_natural_gradient', 'killing'),
             killing_center_reg=config.get('killing_center_reg', None),
@@ -408,11 +479,9 @@ class BlockConfig:
             # BlockConfig() construction enabled Bayesian precision, but
             # BlockConfig.from_config(config_dict_without_key) disabled it.
             E_learnable_alpha=config.get('E_learnable_alpha', config.get('ffn_learnable_alpha', config.get('learnable_alpha', True))),
-            obs_sigma_gradient=config.get('obs_sigma_gradient', True),
-            obs_sigma_exact_stein=config.get('obs_sigma_exact_stein', False),
-            obs_sigma_weight=config.get('obs_sigma_weight', 1.0),
             alpha_divergence=config.get('alpha_divergence', 1.0),
             sigma_max=config.get('sigma_max', 5.0),
+            gauge_covariant_ridge=config.get('gauge_covariant_ridge', False),
             e_step_sigma_floor=config.get('e_step_sigma_floor', 0.1),
             n_picard_steps=config.get('n_picard_steps', 0),
             picard_trust_region=config.get('picard_trust_region', 5.0),
@@ -428,7 +497,6 @@ class BlockConfig:
             # Non-flat gauge transport
             non_flat_transport=config.get('non_flat_transport', False),
             cocycle_relaxation=config.get('cocycle_relaxation', 0.5),
-            per_head_flatness_gate=config.get('per_head_flatness_gate', False),
             connection_type=config.get('connection_type', 'bilinear'),
             connection_hidden_dim=config.get('connection_hidden_dim', 64),
             connection_init_scale=config.get('connection_init_scale', 0.01),
@@ -457,7 +525,7 @@ class BlockConfig:
             aux_layer_loss=config.get('aux_layer_loss', False),
             aux_loss_weight=config.get('aux_loss_weight', 0.3),
             hierarchical_priors=config.get('hierarchical_priors', True),
-            rope_full_gauge=config.get('rope_full_gauge', False),
+            rope_full_gauge=_coerce_rope_full_gauge(config.get('rope_full_gauge', 'off')),
             # Active inference / EFE
             active_inference=config.get('active_inference', False),
             active_inference_pragmatic_weight=config.get('active_inference_pragmatic_weight', 1.0),

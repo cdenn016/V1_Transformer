@@ -240,28 +240,6 @@ class TestModelIntegration:
         model_cross = GaugeTransformerLM(base_config)
         assert model_cross.phi_dim == n_heads * d_head**2 + 2 * d_head**2
 
-    def test_non_adjacent_coupling_with_obs(self, base_config):
-        """Non-adjacent coupling with observation gradient (tests W_out permutation).
-
-        When heads are non-adjacent (e.g., 0 and 2), the reorder permutation
-        is non-trivial. W_out must be permuted to match the reordered mu basis
-        inside the transformer stack, otherwise the observation gradient
-        dCE/dmu is computed in the wrong coordinate system.
-        """
-        from transformer.core.model import GaugeTransformerLM
-        base_config['cross_couplings'] = [(0, 2), (2, 0)]
-        base_config['use_obs_in_vfe'] = True
-        base_config['ffn_n_iterations'] = 1
-        model = GaugeTransformerLM(base_config)
-        x = torch.randint(0, 50, (2, 8))
-        targets = torch.randint(0, 50, (2, 8))
-        logits = model(x, targets=targets)
-        assert logits.shape == (2, 8, 50)
-        logits.sum().backward()
-        # Verify non-trivial permutation was applied
-        assert model._cross_head_perm is not None
-        assert not np.array_equal(model._cross_head_perm, np.arange(24))
-
     def test_multihead_vfe_with_coupling(self, base_config):
         """Multi-head VFE with cross-coupling (tests kappa normalization)."""
         from transformer.core.model import GaugeTransformerLM
@@ -282,4 +260,152 @@ class TestModelIntegration:
         logits, info = model.forward_with_attention(x)
         assert logits.shape == (2, 8, 50)
         assert 'beta' in info
+        logits.sum().backward()
+
+
+class TestDedupAndClosure:
+    """Tests for the cross_couplings dedup helper and the Lie-closure utilities
+    added in the 2026-04-17 cross-head audit."""
+
+    def test_dedup_drops_exact_duplicates(self, caplog):
+        from math_utils.generators import _dedup_cross_couplings
+        with caplog.at_level('WARNING'):
+            deduped, n = _dedup_cross_couplings([(0, 1), (0, 1), (2, 3)])
+        assert deduped == [(0, 1), (2, 3)]
+        assert n == 1
+        assert any('duplicate' in rec.message for rec in caplog.records)
+
+    def test_dedup_preserves_distinct_orientations(self):
+        from math_utils.generators import _dedup_cross_couplings
+        deduped, n = _dedup_cross_couplings([(0, 1), (1, 0), (2, 3), (3, 2)])
+        assert deduped == [(0, 1), (1, 0), (2, 3), (3, 2)]
+        assert n == 0
+
+    def test_validate_closure_detects_open_basis(self):
+        """Chain (0,1)-(1,2): bracket [E^{01}, E^{12}] lives in absent (0,2)."""
+        from math_utils.generators import (
+            generate_glK_cross_head_generators,
+            validate_generator_closure,
+        )
+        G = generate_glK_cross_head_generators(K=6, n_heads=3, cross_couplings=[(0, 1), (1, 2)])
+        report = validate_generator_closure(G)
+        assert report['closed'] is False
+        assert report['n_offending_pairs'] > 0
+        assert report['max_residual'] > 1e-3
+
+    def test_validate_closure_accepts_diag_only_basis(self):
+        from math_utils.generators import (
+            generate_glK_multihead_generators,
+            validate_generator_closure,
+        )
+        G = generate_glK_multihead_generators(K=6, n_heads=3)
+        report = validate_generator_closure(G)
+        assert report['closed'] is True
+        assert report['n_offending_pairs'] == 0
+
+    def test_close_under_brackets_terminates_and_closes(self):
+        from math_utils.generators import (
+            generate_glK_cross_head_generators,
+            close_under_brackets,
+            validate_generator_closure,
+        )
+        G = generate_glK_cross_head_generators(K=6, n_heads=3, cross_couplings=[(0, 1), (1, 2)])
+        G_closed, info = close_under_brackets(G, max_iter=10)
+        assert info['converged'] is True
+        assert info['final_dim'] >= info['initial_dim']
+        report = validate_generator_closure(G_closed, tol=1e-4)
+        assert report['closed'] is True
+
+    def test_close_preserves_diag_only_basis(self):
+        from math_utils.generators import (
+            generate_glK_multihead_generators,
+            close_under_brackets,
+        )
+        G = generate_glK_multihead_generators(K=6, n_heads=3)
+        G_closed, info = close_under_brackets(G, max_iter=5)
+        assert info['converged'] is True
+        assert info['n_added'] == 0
+        assert G_closed.shape == G.shape
+
+
+class TestModelGuardsAndConfig:
+    """Tests for the new model.py guards added in the 2026-04-17 audit."""
+
+    @pytest.fixture
+    def base_config(self):
+        return {
+            'vocab_size': 50,
+            'embed_dim': 24,
+            'n_layers': 1,
+            'irrep_spec': [('fund', 4, 6)],
+            'hidden_dim': 48,
+            'max_seq_len': 32,
+            'kappa_beta': 1.0,
+            'evolve_sigma': False,
+            'evolve_phi': True,
+            'gauge_group': 'GLK',
+            'use_block_diagonal_kl': True,
+            'diagonal_covariance': True,
+            'use_layernorm': True,
+            'use_residual': True,
+        }
+
+    def test_hard_error_when_block_diagonal_kl_off(self, base_config):
+        """cross_couplings + use_block_diagonal_kl=False must raise ValueError."""
+        from transformer.core.model import GaugeTransformerLM
+        base_config['cross_couplings'] = [(0, 1)]
+        base_config['use_block_diagonal_kl'] = False
+        with pytest.raises(ValueError, match='use_block_diagonal_kl'):
+            GaugeTransformerLM(base_config)
+
+    def test_dedup_at_model_init(self, base_config, caplog):
+        """Duplicate cross_couplings should be dropped at model init with a warning."""
+        from transformer.core.model import GaugeTransformerLM
+        base_config['cross_couplings'] = [(0, 1), (0, 1)]
+        with caplog.at_level('WARNING'):
+            model = GaugeTransformerLM(base_config)
+        assert any('duplicate' in rec.message for rec in caplog.records)
+        # Only one (0,1) coupling effective: phi_dim = 4*36 + 1*36 = 180
+        assert model.phi_dim == 4 * 36 + 1 * 36
+
+    def test_irrep_dims_override_forwarded_without_coupling(self, base_config):
+        """blocks.py:277 fix: ffn_irrep_dims must reach attention even when
+        cross_couplings is empty (use_block_diagonal_kl=True path)."""
+        from transformer.core.model import GaugeTransformerLM
+        model = GaugeTransformerLM(base_config)
+        attn = model.transformer.blocks[0].attention
+        # Without cross-coupling, irrep_dims should match per-head: [6, 6, 6, 6].
+        assert attn.irrep_dims == [6, 6, 6, 6]
+
+    def test_warning_emitted_for_open_chain_basis(self, base_config, caplog):
+        """A chain coupling [(0,1),(1,2)] produces a non-closed basis: the
+        model should emit a single 'NOT closed under [.,.]' warning at init."""
+        from transformer.core.model import GaugeTransformerLM
+        # Need >=3 heads for a non-trivial chain. Reconfigure for n_heads=4
+        # with chain (0,1)-(1,2) (head 3 uncoupled); the basis is open because
+        # [E^{(0,1)}, E^{(1,2)}] -> E^{(0,2)} which is not in the basis.
+        base_config['cross_couplings'] = [(0, 1), (1, 2)]
+        with caplog.at_level('WARNING'):
+            GaugeTransformerLM(base_config)
+        assert any('NOT closed' in rec.message for rec in caplog.records), (
+            'Expected a non-closure warning at model init for chain coupling.'
+        )
+
+    def test_auto_close_cross_head_basis_forward_pass(self, base_config):
+        """Opt-in auto-close: model with chain coupling + auto_close should
+        construct, run forward+backward, and grow phi_dim past the open basis."""
+        from transformer.core.model import GaugeTransformerLM
+        base_config['cross_couplings'] = [(0, 1), (1, 2)]
+        base_config['auto_close_cross_head_basis'] = True
+        # Suppress the non-closure warning that would otherwise fire pre-close.
+        base_config['validate_cross_head_closure'] = False
+        model = GaugeTransformerLM(base_config)
+        # Initial open basis = 4 diag blocks of 36 + 2 cross blocks of 36 = 216.
+        # Closure must add at least one direction (the (0,2) bracket residual).
+        assert model.phi_dim > 4 * 36 + 2 * 36, (
+            f'auto_close should grow phi_dim past 216; got {model.phi_dim}'
+        )
+        x = torch.randint(0, 50, (2, 8))
+        logits = model(x)
+        assert logits.shape == (2, 8, 50)
         logits.sum().backward()

@@ -18,7 +18,24 @@ Two parameterizations:
     - MLP:       δ_ij = MLP([μ_i; μ_j])   (more expressive, higher memory)
 
 Both are zero-initialized so the model starts in the flat regime.
+
+This module exposes two classes:
+    - ``GaugeConnection``: a single per-head connection on one sub-fiber.
+    - ``PerHeadGaugeConnection``: a container of per-head connections that
+      slices ``μ`` per irrep block, dispatches each slice to its own
+      ``GaugeConnection``, and concatenates the per-head δ outputs into a
+      single ``(B, N, N, n_gen_total)`` tensor.  This preserves the
+      block-diagonal structure of the transport operator: head-h's δ
+      coefficients are a function of head-h's μ features only, matching the
+      block-diagonal generator support.
+
+Generator partitioning: ``partition_generators_by_block`` splits a global
+``(n_gen, K, K)`` generator tensor into per-head tensors of shape
+``(n_gen_h, d_h, d_h)`` based on Frobenius-mass localization in the
+corresponding irrep block.
 """
+
+from typing import List
 
 import math
 import torch
@@ -124,4 +141,187 @@ class GaugeConnection(nn.Module):
         return (
             f"d_head={self.d_head}, n_gen={self.n_gen}, "
             f"type={self.connection_type}, antisym={self.antisymmetrize}"
+        )
+
+
+def partition_generators_by_block(
+    generators: torch.Tensor,      # (n_gen, K, K)
+    irrep_dims: List[int],         # [d_1, d_2, ..., d_H] summing to K
+    localization_threshold: float = 0.999,
+) -> List[torch.Tensor]:
+    """Split a global block-diagonal generator tensor into per-head tensors.
+
+    For block-diagonal gauge groups (GL(K) as H copies of GL(d_h), SO(K) as
+    H copies of SO(d_h), mixed irrep_spec variants), each generator T_a has
+    Frobenius support localized in exactly one irrep block.  This helper
+    partitions the ``(n_gen_total, K, K)`` generator stack into a list of
+    per-head ``(n_gen_h, d_h, d_h)`` stacks.
+
+    Args:
+        generators: ``(n_gen, K, K)`` Lie algebra generators.
+        irrep_dims: Per-head dimensions ``[d_1, ..., d_H]``; ``sum(d_h) = K``.
+        localization_threshold: Minimum fraction of Frobenius mass a
+            generator must have inside a candidate block before it is
+            assigned there.  Default ``0.999`` — block-diagonal generators
+            should have ≥99.9% of their mass in one block; the slack
+            tolerates floating-point noise in constructed generators.
+
+    Returns:
+        List of ``H`` tensors; entry ``h`` has shape ``(n_gen_h, d_h, d_h)``
+        and contains the ``d_h × d_h`` diagonal block of each generator
+        that localizes to head ``h``.
+
+    Raises:
+        ValueError: If ``sum(irrep_dims) != generators.shape[-1]``, or if
+            any generator fails to localize in a single block above the
+            threshold (indicates non-block-diagonal support, which this
+            helper does not handle).
+    """
+    n_gen, K, K2 = generators.shape
+    if K != K2:
+        raise ValueError(f"generators must be square; got shape {generators.shape}")
+    if sum(irrep_dims) != K:
+        raise ValueError(
+            f"sum(irrep_dims)={sum(irrep_dims)} does not match K={K}"
+        )
+
+    # Precompute block boundaries and per-block masks.
+    bounds = []
+    start = 0
+    for d_h in irrep_dims:
+        bounds.append((start, start + d_h))
+        start += d_h
+
+    # Full-matrix Frobenius mass per generator, plus per-block masses.
+    gens_sq = generators.pow(2)                       # (n_gen, K, K)
+    total_mass = gens_sq.sum(dim=(-2, -1))            # (n_gen,)
+    # Guard against all-zero generators (degenerate; assign to head 0 by fiat).
+    total_mass_safe = total_mass.clamp(min=1e-30)
+
+    per_head_blocks: List[List[torch.Tensor]] = [[] for _ in irrep_dims]
+    for a in range(n_gen):
+        G_a = generators[a]                            # (K, K)
+        assigned = False
+        for h, (s, e) in enumerate(bounds):
+            block_mass = gens_sq[a, s:e, s:e].sum()
+            if total_mass[a].item() < 1e-30:
+                # Zero generator — assign to head 0 deterministically.
+                per_head_blocks[0].append(torch.zeros(
+                    irrep_dims[0], irrep_dims[0],
+                    dtype=generators.dtype, device=generators.device,
+                ))
+                assigned = True
+                break
+            if (block_mass / total_mass_safe[a]).item() >= localization_threshold:
+                per_head_blocks[h].append(G_a[s:e, s:e].clone())
+                assigned = True
+                break
+        if not assigned:
+            # Find the closest block for a diagnostic message.
+            masses = [
+                (gens_sq[a, s:e, s:e].sum() / total_mass_safe[a]).item()
+                for s, e in bounds
+            ]
+            raise ValueError(
+                f"generator {a} does not localize to any single irrep block "
+                f"above {localization_threshold}. Per-block mass fractions: "
+                f"{masses}. partition_generators_by_block requires "
+                f"block-diagonal generator support."
+            )
+
+    # Stack each head's generators (may be empty for padding-only heads).
+    return [
+        torch.stack(blocks) if blocks
+        else torch.empty(0, d_h, d_h, dtype=generators.dtype, device=generators.device)
+        for blocks, d_h in zip(per_head_blocks, irrep_dims)
+    ]
+
+
+class PerHeadGaugeConnection(nn.Module):
+    r"""Container of per-head :class:`GaugeConnection` instances.
+
+    Slices the input ``μ`` tensor along the last dim according to
+    ``irrep_dims``, dispatches each ``(B, N, d_h)`` slice to its own
+    per-head ``GaugeConnection``, and concatenates the per-head
+    ``(B, N, N, n_gen_h)`` δ outputs along the last axis into a single
+    ``(B, N, N, n_gen_total)`` tensor.
+
+    This matches the block-diagonal structure of the gauge group: head-h's
+    connection is a function of head-h's μ features only, and produces
+    coefficients for head-h's generators only.  Contrast with a global
+    (full-fiber) connection whose bilinear form ``W: (n_gen_total, K, K)``
+    would mix μ features across heads.
+
+    Args:
+        irrep_dims: Per-head dimensions ``[d_1, ..., d_H]`` summing to
+            the full fiber dimension ``K``.
+        per_head_generators: List of ``(n_gen_h, d_h, d_h)`` tensors
+            produced by :func:`partition_generators_by_block`.  Only the
+            length and per-head dimensions are used for sizing the
+            bilinear forms / MLPs; the generator values themselves enter
+            elsewhere (``compute_transport_operators``).
+        connection_type: ``'bilinear'`` or ``'mlp'``.
+        hidden_dim: Hidden dim for MLP connections.
+        antisymmetrize: Apply ``W → (W - Wᵀ)/2`` per head (bilinear only).
+        init_scale: Small random init on bilinear W to break the flat
+            saddle point.  Default ``0.0`` (pure zero init).
+    """
+
+    def __init__(
+        self,
+        irrep_dims: List[int],
+        per_head_generators: List[torch.Tensor],
+        connection_type: str = 'bilinear',
+        hidden_dim: int = 64,
+        antisymmetrize: bool = True,
+        init_scale: float = 0.0,
+    ):
+        super().__init__()
+        if len(irrep_dims) != len(per_head_generators):
+            raise ValueError(
+                f"irrep_dims length {len(irrep_dims)} does not match "
+                f"per_head_generators length {len(per_head_generators)}"
+            )
+        self.irrep_dims = list(irrep_dims)
+        self.n_gen_per_head = [int(g.shape[0]) for g in per_head_generators]
+        self.n_gen_total = sum(self.n_gen_per_head)
+
+        self.heads = nn.ModuleList([
+            GaugeConnection(
+                d_head=d_h,
+                n_gen=n_gen_h,
+                connection_type=connection_type,
+                hidden_dim=hidden_dim,
+                antisymmetrize=antisymmetrize,
+                init_scale=init_scale,
+            )
+            for d_h, n_gen_h in zip(self.irrep_dims, self.n_gen_per_head)
+        ])
+
+    def forward(self, mu_i: torch.Tensor, mu_j: torch.Tensor) -> torch.Tensor:
+        """Compute per-head δ_ij and concatenate along the generator axis.
+
+        Args:
+            mu_i: ``(B, N, K)`` full-fiber query means.
+            mu_j: ``(B, N, K)`` full-fiber key means.
+
+        Returns:
+            ``(B, N, N, n_gen_total)`` — per-head δ blocks concatenated.
+        """
+        delta_blocks = []
+        start = 0
+        for head, d_h in zip(self.heads, self.irrep_dims):
+            end = start + d_h
+            mu_i_h = mu_i[..., start:end]
+            mu_j_h = mu_j[..., start:end]
+            delta_h = head(mu_i_h, mu_j_h)               # (B, N, N, n_gen_h)
+            delta_blocks.append(delta_h)
+            start = end
+        return torch.cat(delta_blocks, dim=-1)           # (B, N, N, n_gen_total)
+
+    def extra_repr(self) -> str:
+        return (
+            f"n_heads={len(self.heads)}, irrep_dims={self.irrep_dims}, "
+            f"n_gen_per_head={self.n_gen_per_head}, "
+            f"n_gen_total={self.n_gen_total}"
         )
