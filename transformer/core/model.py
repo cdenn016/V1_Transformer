@@ -397,7 +397,8 @@ class GaugeTransformerLM(nn.Module):
         sigma: Optional[torch.Tensor],
         device: torch.device,
         inverse: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        omega: Optional[torch.Tensor] = None,
+    ):
         r"""Apply (or invert) the cross-head dimension permutation.
 
         When GL(K) cross-head coupling is active, coupled heads are reordered
@@ -412,12 +413,19 @@ class GaugeTransformerLM(nn.Module):
             sigma:   (B, N, K) diagonal or (B, N, K, K) full covariance, or None.
             device:  Target device for the permutation tensor.
             inverse: If True apply the inverse permutation (restore original order).
+            omega:   Optional (B, N, K, K) direct gauge frames (gauge_param='omega').
+                     When provided, the function returns a 3-tuple and applies the
+                     sandwich permutation omega[..., perm, :][..., :, perm] so the
+                     K-axes stay consistent with the permuted mu/sigma.
 
         Returns:
-            (mu_permuted, sigma_permuted) with dimensions reordered.
+            (mu_permuted, sigma_permuted) if ``omega`` is None, else
+            (mu_permuted, sigma_permuted, omega_permuted).
         """
         if getattr(self, '_cross_head_perm', None) is None:
-            return mu, sigma
+            if omega is None:
+                return mu, sigma
+            return mu, sigma, omega
 
         if inverse:
             perm = self._inv_perm_tensor.to(device=device)
@@ -433,7 +441,15 @@ class GaugeTransformerLM(nn.Module):
                 # Full covariance: (B, N, K, K) — sandwich permutation
                 sigma = sigma[:, :, perm][:, :, :, perm]
 
-        return mu, sigma
+        if omega is None:
+            return mu, sigma
+        # Sandwich permutation on omega so downstream per-head block slicing
+        # (omega[..., block_start:block_end, block_start:block_end]) aligns with
+        # the permuted mu/sigma block structure. Without this, the attention
+        # sublayer consumes un-permuted omega blocks while the VFE sublayer
+        # operates on permuted mu/sigma — a silent coordinate mismatch.
+        omega_permuted = omega[:, :, perm][:, :, :, perm]
+        return mu, sigma, omega_permuted
 
     # =========================================================================
     # Step 2/3: Extracted helpers — embed_and_prepare, compute_logits
@@ -474,7 +490,15 @@ class GaugeTransformerLM(nn.Module):
             mu_q, sigma_q, phi = embed_out
 
         # 2. Forward cross-head permutation
-        mu_q, sigma_q = self._apply_cross_head_perm(mu_q, sigma_q, device, inverse=False)
+        # Under gauge_param='omega' we also permute the omega tensor via the
+        # sandwich product so downstream per-head block slicing aligns with the
+        # permuted mu/sigma block structure.
+        if omega is not None and getattr(self, 'gauge_param', 'phi') == 'omega':
+            mu_q, sigma_q, omega = self._apply_cross_head_perm(
+                mu_q, sigma_q, device, inverse=False, omega=omega,
+            )
+        else:
+            mu_q, sigma_q = self._apply_cross_head_perm(mu_q, sigma_q, device, inverse=False)
 
         # 3. Save priors (position-independent semantics) and pre-encoding phi
         mu_prior = mu_q.clone()
@@ -482,7 +506,15 @@ class GaugeTransformerLM(nn.Module):
         phi_prior = phi.clone()  # phi before positional encoding (for attention_info)
 
         # 4. Position encoding — compose token phi with positional phi
+        # Phi path: phi ← BCH(phi_token, phi_pos). Omega path: compose_omega
+        # right-multiplies omega by exp(phi_pos · G), giving the shift-invariant
+        # positional dependence on the gauge transport without relying on a
+        # dummy phi tensor. compose(phi, ...) still runs so the dummy phi
+        # carries positional info for any downstream diagnostic that inspects
+        # it, but the actual gauge transport picks up position via omega.
         phi = self.pos_encoding.compose(phi, num_agents, device=device)
+        if omega is not None and getattr(self, 'gauge_param', 'phi') == 'omega':
+            omega = self.pos_encoding.compose_omega(omega, num_agents, device=device)
 
         # 5. Causal attention mask (cached at __init__, sliced by seq length)
         mask = self._causal_mask[:num_agents, :num_agents].unsqueeze(0).expand(
@@ -1172,6 +1204,12 @@ class GaugeTransformerLM(nn.Module):
             evolved_omega = getattr(block, '_last_evolved_omega', None)
             if evolved_omega is not None:
                 omega = evolved_omega
+                # The precomputed cached_head_transports reflect the INITIAL
+                # embedding omega. Once a block has evolved omega via retract
+                # (em_modes other than em_phi_p), the cache is stale and must
+                # be invalidated so the next block rebuilds from fresh omega.
+                # blocks.py:586-611 handles the rebuild when this is None.
+                cached_head_transports = None
 
             # Hierarchical priors: each layer's posterior μ becomes the next
             # layer's prior μ.  sigma_prior stays at the embedding value to

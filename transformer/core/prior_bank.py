@@ -205,16 +205,40 @@ class PriorBank(nn.Module):
                     torch.full((embed_dim,), math.log(init_sigma_scale))
                 )
 
-            # Per-token gauge frames φ_v ∈ g (Lie algebra)
-            # For GL(K): φ_v ∈ gl(K), A_v = exp(φ_v · G) ∈ GL⁺(K)
-            # For SO(N): φ_v ∈ so(N), A_v = exp(φ_v · G) ∈ SO(N)
+            # Per-token gauge frames.
+            # Phi path:   φ_v ∈ g (Lie algebra), A_v = exp(φ_v · G) ∈ GL⁺(K)
+            # Omega path: Ω_v ∈ GL(K) directly (block-diagonal), no exp map.
             #
-            # MUST use random init — zero init makes ALL tokens identical
+            # Phi MUST use random init — zero init makes ALL tokens identical
             # (exp(0) = I → μ_v = μ_0 for all v). Scale inversely with
             # sqrt(phi_dim) to maintain consistent ||φ|| across gauge groups.
-            self.phi_embed = nn.Embedding(vocab_size, phi_dim)
-            phi_init_std = phi_scale / (phi_dim ** 0.5)
-            nn.init.normal_(self.phi_embed.weight, mean=0.0, std=phi_init_std)
+            # Omega uses near-identity init (I + ε·randn) for the same reason.
+            if gauge_param == 'omega' and omega_head_dims is not None:
+                total_omega_params = sum(d * d for d in omega_head_dims)
+                self.omega_embed = nn.Embedding(vocab_size, total_omega_params)
+                with torch.no_grad():
+                    omega_scale = phi_scale * 0.1
+                    weight = torch.zeros(vocab_size, total_omega_params)
+                    offset = 0
+                    for d in omega_head_dims:
+                        eye_flat = torch.eye(d).reshape(-1)
+                        weight[:, offset:offset + d * d] = (
+                            eye_flat.unsqueeze(0)
+                            + omega_scale * torch.randn(vocab_size, d * d)
+                        )
+                        offset += d * d
+                    self.omega_embed.weight.copy_(weight)
+                # Frozen zero phi_embed purely for API return-shape stability
+                # (_get_prior_for_tokens returns (mu_p, sigma_p, phi, omega)
+                # and callers unpack by arity). Must be frozen; a learnable
+                # zero-init nn.Embedding drifts under AdamW momentum/wd.
+                self.phi_embed = nn.Embedding(vocab_size, phi_dim)
+                nn.init.zeros_(self.phi_embed.weight)
+                self.phi_embed.weight.requires_grad_(False)
+            else:
+                self.phi_embed = nn.Embedding(vocab_size, phi_dim)
+                phi_init_std = phi_scale / (phi_dim ** 0.5)
+                nn.init.normal_(self.phi_embed.weight, mean=0.0, std=phi_init_std)
         else:
             # Standard per-token priors (TOKEN-DEPENDENT, not position-dependent!)
             self.prior_mu = nn.Parameter(torch.randn(vocab_size, embed_dim) * init_std)
@@ -367,6 +391,78 @@ class PriorBank(nn.Module):
             phi_p: gauge frames
         """
         if self.gauge_fixed_priors:
+            # ── Omega-parameterized gauge-fixed priors ────────────────────
+            # Per-token Ω_v is stored directly (no exp map). Transport the
+            # shared base prior as μ_v = Ω_v @ μ_0 and Σ_v = Ω_v Σ_0 Ω_v^T
+            # per-block. Mirrors the phi-path logic below but substitutes
+            # Ω_v blocks for exp(φ_v · G) blocks.
+            if (self.gauge_param == 'omega'
+                    and self.omega_head_dims is not None
+                    and hasattr(self, 'omega_embed')):
+                K_omega = self.embed_dim
+                omega_flat = self.omega_embed(token_ids)
+                # Build (B?, N, K, K) block-diagonal omega
+                omega = torch.zeros(*token_ids.shape, K_omega, K_omega,
+                                    device=token_ids.device,
+                                    dtype=omega_flat.dtype)
+                offset = 0
+                block_start = 0
+                for d in self.omega_head_dims:
+                    omega_blk = omega_flat[..., offset:offset + d * d].reshape(
+                        *token_ids.shape, d, d)
+                    omega[..., block_start:block_start + d,
+                          block_start:block_start + d] = omega_blk
+                    offset += d * d
+                    block_start += d
+
+                # AMP guard: sandwich must stay float32.
+                with torch.amp.autocast('cuda', enabled=False):
+                    base_sigma = self.base_prior_sigma  # (K,) float32
+
+                # Transport μ_0 and Σ_0 per-block using Ω_v_h directly.
+                mu_parts = []
+                sigma_parts = []
+                block_start = 0
+                for d_h in self.omega_head_dims:
+                    block_end = block_start + d_h
+                    Omega_h = omega[..., block_start:block_end,
+                                    block_start:block_end]
+                    base_mu_h = self.base_prior_mu[block_start:block_end]
+                    mu_parts.append(torch.einsum('...ij,j->...i', Omega_h, base_mu_h))
+
+                    with torch.amp.autocast('cuda', enabled=False):
+                        base_sigma_h = base_sigma[block_start:block_end]
+                        Omega_h_f = (Omega_h if Omega_h.dtype == torch.float32
+                                     else Omega_h.float())
+                        if getattr(self, 'diagonal_covariance', True):
+                            sigma_parts.append(
+                                torch.einsum('...kl,l->...k', Omega_h_f ** 2, base_sigma_h)
+                            )
+                        else:
+                            Sigma_0h = torch.diag(base_sigma_h)
+                            sigma_parts.append(
+                                torch.einsum('...ij,jk,...lk->...il',
+                                             Omega_h_f, Sigma_0h, Omega_h_f)
+                            )
+                    block_start = block_end
+
+                mu_p = torch.cat(mu_parts, dim=-1)
+                if getattr(self, 'diagonal_covariance', True):
+                    sigma_p = torch.cat(sigma_parts, dim=-1)
+                else:
+                    sigma_p = torch.zeros(*token_ids.shape, K_omega, K_omega,
+                                          device=token_ids.device,
+                                          dtype=sigma_parts[0].dtype)
+                    block_start = 0
+                    for h, d_h in enumerate(self.omega_head_dims):
+                        block_end = block_start + d_h
+                        sigma_p[..., block_start:block_end,
+                                block_start:block_end] = sigma_parts[h]
+                        block_start = block_end
+
+                phi = self.phi_embed(token_ids)  # frozen dummy zeros
+                return mu_p, sigma_p, phi, omega
+
             # Get per-token gauge frames
             phi = self.phi_embed(token_ids)  # (..., phi_dim)
             K = self.embed_dim

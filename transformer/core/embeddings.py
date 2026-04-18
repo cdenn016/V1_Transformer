@@ -488,7 +488,57 @@ class GaugeTokenEmbedding(nn.Module):
             with torch.amp.autocast('cuda', enabled=False):
                 sigma_diag_base = torch.exp(self.base_log_sigma_diag.float()).clamp(min=0.01, max=self.sigma_max)  # (K,)
 
-            if self.irrep_dims is not None:
+            # Omega path: use per-token Ω_v directly for transport. Without
+            # this branch the code below would use the dummy zero phi and
+            # every token would map to the shared base_mu (silent collapse).
+            if (self.gauge_param == 'omega'
+                    and self.omega_head_dims is not None
+                    and omega is not None):
+                mu_parts = []
+                sigma_parts = []
+                block_start = 0
+                for d_h in self.omega_head_dims:
+                    block_end = block_start + d_h
+                    Omega_h = omega[:, :, block_start:block_end, block_start:block_end]
+                    base_mu_h = self.base_mu[block_start:block_end]
+                    mu_parts.append(torch.einsum('bnij,j->bni', Omega_h, base_mu_h))
+                    with torch.amp.autocast('cuda', enabled=False):
+                        base_sigma_h = sigma_diag_base[block_start:block_end]
+                        Omega_h_f = (Omega_h if Omega_h.dtype == torch.float32
+                                     else Omega_h.float())
+                        if self.diagonal_covariance:
+                            sigma_parts.append(
+                                torch.einsum('bnkl,l->bnk', Omega_h_f ** 2, base_sigma_h)
+                            )
+                        else:
+                            Sigma_0h = torch.diag(base_sigma_h)
+                            sigma_parts.append(
+                                torch.einsum('bnij,jk,bnlk->bnil',
+                                             Omega_h_f, Sigma_0h, Omega_h_f)
+                            )
+                    block_start = block_end
+                mu = torch.cat(mu_parts, dim=-1)
+                if self.diagonal_covariance:
+                    sigma = torch.cat(sigma_parts, dim=-1)
+                else:
+                    sigma = torch.zeros(batch_size, num_agents, K, K,
+                                        device=omega.device,
+                                        dtype=sigma_parts[0].dtype)
+                    block_start = 0
+                    for h, d_h in enumerate(self.omega_head_dims):
+                        block_end = block_start + d_h
+                        sigma[:, :, block_start:block_end,
+                              block_start:block_end] = sigma_parts[h]
+                        block_start = block_end
+                # Skip the phi-path computation below.
+                _skip_phi_gauge_transport = True
+            else:
+                _skip_phi_gauge_transport = False
+
+            if _skip_phi_gauge_transport:
+                # Omega branch above already populated mu and sigma.
+                pass
+            elif self.irrep_dims is not None:
                 # BLOCK-DIAGONAL PATH: Exploit generator structure for O(d_h³)
                 # instead of O(K³) per matrix_exp. Also drops below float64
                 # threshold when d_h < 20.
@@ -1120,6 +1170,61 @@ class GaugePositionalEncoding(nn.Module):
 
         else:
             raise ValueError(f"Unknown composition mode: {self.composition}")
+
+    def compose_omega(
+        self,
+        omega: torch.Tensor,
+        num_agents: int,
+        device: Optional[torch.device] = None,
+    ) -> torch.Tensor:
+        r"""Compose direct gauge frames with positional rotation (omega path).
+
+        The phi path obtains positional information through
+        :meth:`compose`, which combines token-phi with pos-phi via BCH so
+        that :math:`\Omega_i = \exp((\phi_i^{\mathrm{tok}} + \phi_i^{\mathrm{pos}})
+        \cdot G)`. On the omega path :math:`\Omega_i` is stored directly as a
+        GL(K) matrix with no Lie algebra element available, so we
+        right-multiply by the positional rotation instead:
+
+        .. math::
+
+            \Omega_i^{\mathrm{combined}} = \Omega_i^{\mathrm{tok}}
+            \cdot \exp(\phi_i^{\mathrm{pos}} \cdot G).
+
+        Under this definition the pairwise transport factorises as
+
+        .. math::
+
+            \Omega_{ij} = \Omega_i^{\mathrm{tok}} R(i) R(-j)
+                          (\Omega_j^{\mathrm{tok}})^{-1},
+
+        so the positional contribution depends on relative position only
+        — the same shift-invariance property the phi path provides.
+
+        Args:
+            omega: Token gauge frames, shape ``(B, N, K, K)``.
+            num_agents: Sequence length.
+            device: Device for the positional rotation.
+
+        Returns:
+            Composed gauge frames, shape ``(B, N, K, K)``.
+        """
+        # Short-circuit when positional signal is off.
+        if self.mode == 'none':
+            return omega
+        if self.generators is None:
+            # Without generators we cannot map the Lie algebra pos_phi to
+            # an ambient-space rotation. Leave omega unchanged — the user
+            # is relying on RoPE-on-mu for positional information.
+            return omega
+
+        pos_phi = self.forward(num_agents, device)             # (N, phi_dim)
+        # A(i) = pos_phi(i) · G  in gl(K)
+        A = torch.einsum("nc,ckl->nkl", pos_phi, self.generators)  # (N, K, K)
+        R_pos = torch.linalg.matrix_exp(A)                      # (N, K, K)
+        # Right-multiply: omega_combined[i] = omega[i] @ R_pos[i]
+        omega_combined = torch.einsum("bnij,njk->bnik", omega, R_pos)
+        return omega_combined
 
     def extra_repr(self) -> str:
         return f"max_seq_len={self.max_seq_len}, mode={self.mode}, scale={self.scale}, composition={self.composition}"

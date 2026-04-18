@@ -946,6 +946,10 @@ class GaugeTransformerStack(nn.Module):
             evolved_omega = getattr(block, '_last_evolved_omega', None)
             if evolved_omega is not None:
                 omega = evolved_omega
+                # Invalidate stale cached head transports; the next block will
+                # rebuild from the fresh (evolved) omega. See model.py for the
+                # matching invalidation in forward_with_attention.
+                cached_head_transports = None
 
             # Hierarchical priors: each layer's posterior μ becomes the next
             # layer's prior μ.  sigma_prior stays at the embedding value to

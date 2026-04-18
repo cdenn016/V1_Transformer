@@ -760,14 +760,19 @@ def create_param_groups(
 
     if omega_params:
         omega_lr = getattr(config, 'omega_lr', config.M_phi_lr)
+        # omega_embed is initialized near identity (I + eps·randn). The generic
+        # embed_wd decays toward zero, which is the SINGULAR matrix — exactly
+        # the direction we need to avoid. Decay-to-identity would require a
+        # custom optimizer step; for now use wd=0 and rely on
+        # TrainingConfig.omega_det_penalty (V9) for determinant control.
         param_groups.append({
             'params': omega_params,
             'lr': omega_lr,
-            'weight_decay': embed_wd,
+            'weight_decay': 0.0,
             'name': 'omega_embed',
         })
         if verbose:
-            print(f"  Parameter group 'omega_embed': {len(omega_params)} tensors @ lr={omega_lr}, wd={embed_wd}")
+            print(f"  Parameter group 'omega_embed': {len(omega_params)} tensors @ lr={omega_lr}, wd=0.0 (avoid decay-to-singular)")
 
     if sign_params:
         param_groups.append({

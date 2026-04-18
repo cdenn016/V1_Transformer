@@ -590,5 +590,106 @@ def test_omega_det_penalty_invariant_to_reflection(device, small_config):
     )
 
 
+# ── End-to-end: gauge_param='omega' × em_mode='em_phi_p' ───────────────────
+
+def _omega_minimal_config(em_mode='em_phi_p', gauge_fixed_priors=False):
+    """Minimal model config for the omega path."""
+    return {
+        'vocab_size': 64,
+        'embed_dim': 12,
+        'n_layers': 2,
+        'irrep_spec': [('l0', 4, 1), ('l1', 1, 3), ('l2', 1, 5)],
+        'hidden_dim': 24,
+        'max_seq_len': 16,
+        'kappa_beta': 1.0,
+        'dropout': 0.0,
+        'pos_encoding_mode': 'learned',
+        'evolve_sigma': True,
+        'evolve_phi': False,
+        'tie_embeddings': True,
+        'diagonal_covariance': True,
+        'ffn_mode': 'VFE_dynamic',
+        'gauge_param': 'omega',
+        'gauge_fixed_priors': gauge_fixed_priors,
+        'em_mode': em_mode,
+    }
+
+
+def test_omega_em_phi_p_end_to_end_forward_backward(device):
+    """Full model forward+backward under gauge_param='omega' × em_mode='em_phi_p'.
+
+    Verifies:
+      1. Forward pass produces finite logits of the right shape.
+      2. Backward through free-energy loss produces a non-None, finite
+         gradient on omega_embed.
+      3. em_phi_p value-freeze: omega_current at E-step exit equals the
+         initial embedding lookup (no retract during E-step).
+    """
+    from transformer.core.model import GaugeTransformerLM
+    from transformer.train import compute_free_energy_loss
+
+    cfg = _omega_minimal_config(em_mode='em_phi_p')
+    model = GaugeTransformerLM(cfg).to(device)
+    B, N = 2, 8
+    token_ids = torch.randint(0, cfg['vocab_size'], (B, N), device=device)
+    targets = torch.randint(0, cfg['vocab_size'], (B, N), device=device)
+
+    # 1. Forward
+    logits, attn_info = model.forward_with_attention(token_ids, targets=targets)
+    assert logits.shape == (B, N, cfg['vocab_size'])
+    assert torch.isfinite(logits).all(), "Non-finite logits under omega+em_phi_p"
+
+    # omega_initial must be present and attached; evolved omega must be detached
+    assert attn_info['omega_initial'] is not None, "omega_initial missing from attn_info"
+    assert attn_info['omega_initial'].requires_grad, "omega_initial must be attached for M-step"
+    evolved = attn_info['omega']
+    assert evolved is not None
+    assert not evolved.requires_grad, "Evolved omega must be detached at EM boundary under em_phi_p"
+
+    # 2. Loss + backward
+    loss, metrics = compute_free_energy_loss(
+        model, token_ids, targets,
+        M_alpha=0.1, M_beta=0.1, mass_phi=0.0,
+        omega_det_penalty=1e-3,  # exercise the V9 penalty branch
+        pad_token_id=-100,
+    )
+    assert torch.isfinite(loss), f"Non-finite loss: {loss.item()}"
+    loss.backward()
+
+    # 3. omega_embed gradient reached
+    omega_embed_weight = model.token_embed.omega_embed.weight
+    assert omega_embed_weight.grad is not None, "omega_embed received no gradient"
+    assert torch.isfinite(omega_embed_weight.grad).all(), "omega_embed grad has NaN/Inf"
+    assert omega_embed_weight.grad.abs().max() > 0, "omega_embed grad is trivially zero"
+
+    # 4. Penalty metric is recorded
+    assert 'loss/omega_det' in metrics
+    assert metrics['loss/omega_det'] >= 0.0
+
+
+def test_omega_em_phi_p_with_gauge_fixed_priors(device):
+    """gauge_fixed_priors=True × gauge_param='omega' produces distinct token priors."""
+    from transformer.core.model import GaugeTransformerLM
+
+    cfg = _omega_minimal_config(em_mode='em_phi_p', gauge_fixed_priors=True)
+    model = GaugeTransformerLM(cfg).to(device)
+
+    # Two different token IDs → two distinct prior mu (via Omega_v @ base_mu).
+    # Before the fix, both tokens would hit exp(dummy_zero_phi) = I → mu = base_mu.
+    B, N = 1, 4
+    tok_a = torch.zeros(B, N, dtype=torch.long, device=device)
+    tok_b = torch.ones(B, N, dtype=torch.long, device=device)
+    with torch.no_grad():
+        _, info_a = model.forward_with_attention(tok_a, targets=tok_a)
+        _, info_b = model.forward_with_attention(tok_b, targets=tok_b)
+    mu_a = info_a['mu_prior']
+    mu_b = info_b['mu_prior']
+    diff = (mu_a - mu_b).abs().max().item()
+    assert diff > 1e-4, (
+        f"gauge_fixed_priors+omega collapsed all tokens to identical mu (max |diff| = {diff:.2e}); "
+        "the Omega-v transport branch is not active"
+    )
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
