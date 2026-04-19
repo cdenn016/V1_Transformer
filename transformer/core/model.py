@@ -302,10 +302,20 @@ class GaugeTransformerLM(nn.Module):
         # =================================================================
         # Embedding Layers, Position Encoding, and PriorBank
         # =================================================================
-        # Compute irrep_dims early for embedding block-diagonal matrix_exp optimization
+        # Compute irrep_dims early for (a) embedding block-diagonal matrix_exp
+        # optimization under gauge_fixed_priors, and (b) per-block sl(K)
+        # projection / trace clamp — which needs the block structure even
+        # when gauge_fixed_priors=False so the traceless projection targets
+        # each head's trace independently instead of collapsing to the full-K
+        # trace.
+        _need_block_dims_for_det_ctrl = (
+            config.get('phi_project_slk', False)
+            or config.get('phi_trace_clamp', None) is not None
+        )
         _embed_irrep_dims = (
             self._get_effective_irrep_dims(irrep_spec)
-            if config.get('use_block_diagonal_kl', True) and gauge_fixed_priors
+            if (config.get('use_block_diagonal_kl', True) and gauge_fixed_priors)
+               or _need_block_dims_for_det_ctrl
             else None
         )
         self._build_embeddings(
@@ -928,6 +938,8 @@ class GaugeTransformerLM(nn.Module):
             phi_dim=self.phi_dim,
             generators=self.generators,
             gauge_group=self.gauge_group,
+            irrep_dims=irrep_dims,
+            phi_project_slk=config.get('phi_project_slk', False),
         )
 
         self.use_prior_bank = use_prior_bank
@@ -944,7 +956,10 @@ class GaugeTransformerLM(nn.Module):
                 init_sigma_scale=1.0,
                 learnable_sigma=config.get('evolve_sigma', True),
                 gauge_fixed_priors=gauge_fixed_priors,
-                generators=self.generators if gauge_fixed_priors else None,
+                # Always pass generators so PriorBank can build _phi_trace_vec
+                # for sl(K) projection / trace clamp even when the standard
+                # (non-gauge-fixed) per-token phi_embed path is active.
+                generators=self.generators,
                 phi_dim=self.phi_dim,
                 phi_scale=config.get('phi_scale', 0.3),
                 gauge_param=gauge_param,
@@ -959,6 +974,8 @@ class GaugeTransformerLM(nn.Module):
                 irrep_dims=irrep_dims,
                 cache_decode_priors=config.get('cache_decode_priors', False),
                 exact_diagonal_transport=config.get('exact_diagonal_transport', False),
+                phi_project_slk=config.get('phi_project_slk', False),
+                phi_trace_clamp=config.get('phi_trace_clamp', None),
             )
             logger.info(f"GaugeTransformerLM: Created PriorBank with token-dependent priors "
                         f"(vocab_size={vocab_size})")

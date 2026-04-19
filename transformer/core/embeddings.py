@@ -926,6 +926,8 @@ class GaugePositionalEncoding(nn.Module):
         phi_dim: int = 3,  # 3 for SO(3), N(N-1)/2 for SO(N), K² for GL(K)
         generators: Optional[torch.Tensor] = None,  # Transport generators for BCH composition
         gauge_group: str = 'SO3',  # 'SO3', 'SON', or 'GLK'
+        irrep_dims: Optional[List[int]] = None,  # Block sizes for sl(K) re-parameterization
+        phi_project_slk: bool = False,           # Structurally enforce tr(pos_phi)=0 per block
     ):
         """
         Initialize positional encoding in gauge space.
@@ -955,12 +957,34 @@ class GaugePositionalEncoding(nn.Module):
         self.scale = scale
         self.phi_dim = phi_dim
         self.gauge_group = gauge_group
+        self.phi_project_slk = bool(phi_project_slk) and gauge_group == 'GLK'
 
         # Store generators for BCH composition
         if generators is not None:
             self.register_buffer('generators', generators)
         else:
             self.generators = None
+
+        # Build sl(K) basis when the traceless constraint is requested on the
+        # positional parameter. tr(BCH(X,Y)) = tr(X)+tr(Y) exactly, so if the
+        # token phi is traceless (projected by the prior bank / embedding) and
+        # pos_phi is structurally traceless, the composed phi is traceless at
+        # every BCH order.
+        self._pos_phi_basis: Optional[torch.Tensor] = None
+        if self.phi_project_slk:
+            if generators is None:
+                raise ValueError(
+                    "GaugePositionalEncoding: phi_project_slk=True requires "
+                    "transport generators to build the sl(K) basis."
+                )
+            if irrep_dims is None:
+                irrep_dims = [generators.shape[-1]]
+            from transformer.core.vfe_utils import build_slk_basis
+            _, P = build_slk_basis(generators, list(irrep_dims))
+            self.register_buffer('pos_phi_basis', P)   # (phi_dim, phi_dim - H)
+            self._pos_phi_basis = self.pos_phi_basis
+        else:
+            self.pos_phi_basis = None
 
         # Validate composition mode for each gauge group
         if gauge_group == 'GLK':
@@ -989,16 +1013,34 @@ class GaugePositionalEncoding(nn.Module):
             # Use this when position info comes from μ (use_positional_embedding)
             # or when you want purely content-based transport operators
             self.register_buffer('pos_phi', torch.zeros(max_seq_len, phi_dim))
+            # Zero is already traceless; no re-parameterization needed.
+            self.pos_phi_free = None
 
         elif mode == 'learned':
             # Learnable agent-index-specific gauge biases
             # Each agent index i gets a unique φ_pos(i) ∈ so(n)
-            self.pos_phi = nn.Parameter(torch.randn(max_seq_len, phi_dim) * scale)
+            if self.phi_project_slk:
+                free_dim = self.pos_phi_basis.shape[-1]
+                self.pos_phi_free = nn.Parameter(torch.randn(max_seq_len, free_dim) * scale)
+                # Compatibility placeholder; real storage is pos_phi_free.
+                self.pos_phi = None
+            else:
+                self.pos_phi = nn.Parameter(torch.randn(max_seq_len, phi_dim) * scale)
+                self.pos_phi_free = None
 
         elif mode == 'sinusoidal':
             # Sinusoidal encoding projected to so(n)
             # Fixed (not learnable)
-            self.register_buffer('pos_phi', self._make_sinusoidal(max_seq_len, scale, phi_dim))
+            sinus = self._make_sinusoidal(max_seq_len, scale, phi_dim)
+            if self.phi_project_slk:
+                # One-time projection onto sl(K) so the buffer is structurally traceless.
+                from transformer.core.vfe_utils import _apply_det_control
+                sinus = _apply_det_control(
+                    sinus, generators, is_glk=(gauge_group == 'GLK'),
+                    project_slk=True, trace_clamp=None, irrep_dims=irrep_dims,
+                )
+            self.register_buffer('pos_phi', sinus)
+            self.pos_phi_free = None
 
         else:
             raise ValueError(f"Unknown mode: {mode}. Use 'none', 'learned', or 'sinusoidal'.")
@@ -1058,7 +1100,11 @@ class GaugePositionalEncoding(nn.Module):
                 f"Increase max_seq_len in config."
             )
 
-        pos_phi = self.pos_phi[:num_agents]  # (N, phi_dim)
+        if self.mode == 'learned' and self.phi_project_slk:
+            # sl(K) free coords → full phi_dim via orthonormal basis of traceless complement.
+            pos_phi = self.pos_phi_free[:num_agents] @ self.pos_phi_basis.T  # (N, phi_dim)
+        else:
+            pos_phi = self.pos_phi[:num_agents]  # (N, phi_dim)
 
         if device is not None:
             pos_phi = pos_phi.to(device)

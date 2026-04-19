@@ -688,6 +688,57 @@ def _apply_det_control(
     return phi + torch.einsum('...h,hg->...g', delta_coeffs, V_blocks)
 
 
+def build_slk_basis(
+    generators: torch.Tensor,
+    irrep_dims: Optional[List[int]] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    r"""Construct per-block trace vectors and an orthonormal basis of the
+    traceless subalgebra for a block-diagonal gauge group.
+
+    For :math:`GL(K_1) \oplus \cdots \oplus GL(K_H)` with ``n_gen`` generators,
+    each block contributes a trace functional :math:`V_h[a] = \operatorname{tr}
+    (G_a|_{\text{block }h})`. The traceless subalgebra
+    :math:`sl(K_1) \oplus \cdots \oplus sl(K_H)` is the orthogonal complement of
+    :math:`\operatorname{span}\{V_h\}`, dimension :math:`n_{\text{gen}} - H`.
+
+    Returns:
+        V_blocks: ``(H, n_gen)`` per-block trace vectors (disjoint supports,
+            mutually orthogonal for block-diagonal generators).
+        P: ``(n_gen, n_gen - H)`` orthonormal basis whose columns span the
+            traceless complement. ``c @ P.T`` maps free coordinates of length
+            ``n_gen - H`` to a traceless element of the full algebra.
+    """
+    n_gen = generators.shape[0]
+    K = generators.shape[-1]
+    if irrep_dims is None:
+        irrep_dims = [K]
+    H = len(irrep_dims)
+
+    V_blocks = torch.zeros(H, n_gen, dtype=generators.dtype, device=generators.device)
+    start = 0
+    for h, d_h in enumerate(irrep_dims):
+        end = start + d_h
+        V_blocks[h] = generators[:, start:end, start:end].diagonal(
+            dim1=-2, dim2=-1
+        ).sum(dim=-1)
+        start = end
+
+    # Project out span{V_h} and pick an orthonormal basis of the complement.
+    # Compute numerically in float32 for stability, then cast back.
+    V32 = V_blocks.to(torch.float32)
+    v_norm_sq = (V32 * V32).sum(dim=-1).clamp(min=1e-12)           # (H,)
+    # I - Σ_h V_h V_h^T / ||V_h||²  ∈ R^{n_gen × n_gen}
+    I = torch.eye(n_gen, dtype=torch.float32, device=generators.device)
+    proj = I - (V32.T * (1.0 / v_norm_sq)) @ V32                   # (n_gen, n_gen)
+    # Eigendecompose the projector; eigenvectors with eigenvalue ≈ 1 span sl.
+    eigvals, eigvecs = torch.linalg.eigh(proj)
+    # Sort descending so the first n_gen - H columns are the sl basis.
+    order = torch.argsort(eigvals, descending=True)
+    P32 = eigvecs[:, order[: n_gen - H]].contiguous()              # (n_gen, n_gen - H)
+    P = P32.to(generators.dtype)
+    return V_blocks, P
+
+
 # =============================================================================
 # Trajectory recording protocol (core-side)
 # =============================================================================

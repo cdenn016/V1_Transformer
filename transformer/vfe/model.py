@@ -59,7 +59,9 @@ class VFEModel(nn.Module):
 
         # Modules
         self.prior_bank = VFEPriorBank(cfg, generators)
-        self.pos_enc = VFEPositionalEncoding(cfg, generators.shape[0], generators)
+        self.pos_enc = VFEPositionalEncoding(
+            cfg, generators.shape[0], generators, irrep_dims=cfg.irrep_dims,
+        )
         self.stack = VFEStack(cfg, generators)
 
         # Final normalization (applied after last layer, before decode)

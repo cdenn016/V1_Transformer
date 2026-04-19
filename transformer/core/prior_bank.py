@@ -101,6 +101,13 @@ class PriorBank(nn.Module):
         # exact full-cov KL in decode regardless of other flags.
         # O(B·N·V·K²) vs O(B·N·V·K) diagonal.
         full_cov_decode: bool = False,
+        # GL(K) per-block determinant control on the token gauge frames.
+        # Matches the VFE prior bank: project φ → sl(K) so det(Ω) ≡ 1 per
+        # block (``phi_project_slk``) or soft-cap the per-block trace
+        # (``phi_trace_clamp``).  No-op for SO(N) (generators are skew, tr=0
+        # already) and for the omega-path dummy phi (frozen zeros).
+        phi_project_slk: bool = False,
+        phi_trace_clamp: Optional[float] = None,
     ):
         """
         Initialize the prior bank.
@@ -152,6 +159,8 @@ class PriorBank(nn.Module):
         self.cache_decode_priors = cache_decode_priors
         self.exact_diagonal_transport = exact_diagonal_transport
         self.full_cov_decode = full_cov_decode
+        self.phi_project_slk = bool(phi_project_slk)
+        self.phi_trace_clamp = phi_trace_clamp
 
         # Per-forward-pass cache for the all-vocab decode prior result.
         # Cleared by the model at the start of each forward via
@@ -293,6 +302,74 @@ class PriorBank(nn.Module):
                 self.phi_embed = nn.Embedding(vocab_size, phi_dim)
                 phi_init_std = phi_scale / (phi_dim ** 0.5)
                 nn.init.normal_(self.phi_embed.weight, std=phi_init_std)
+
+        # Per-block trace vectors for sl(K) projection / trace clamp.  Built
+        # only when determinant control is requested.  Skew-symmetric
+        # generators (SO(N)) have tr=0 by construction, so we leave the
+        # buffers unregistered and short-circuit _apply_phi_det_control.
+        #
+        # gauge_fixed_priors=False skips the earlier block that computes
+        # self._generators_are_skew, so detect it inline if not set yet.
+        if (self.phi_project_slk or self.phi_trace_clamp is not None) and generators is not None:
+            if not hasattr(self, '_generators_are_skew'):
+                with torch.no_grad():
+                    self._generators_are_skew = bool(
+                        torch.allclose(
+                            generators + generators.transpose(-1, -2),
+                            torch.zeros_like(generators), atol=1e-5,
+                        )
+                    )
+            _need_det_ctrl = not self._generators_are_skew
+        else:
+            _need_det_ctrl = False
+        if _need_det_ctrl:
+            if not hasattr(self, 'generators'):
+                self.register_buffer('generators', generators)
+            _dims = irrep_dims if irrep_dims is not None else [embed_dim]
+            H = len(_dims)
+            n_gen_eff = generators.shape[0]
+            V_blocks = torch.zeros(
+                H, n_gen_eff,
+                dtype=generators.dtype, device=generators.device,
+            )
+            start = 0
+            for h, d_h in enumerate(_dims):
+                end = start + d_h
+                V_blocks[h] = generators[:, start:end, start:end].diagonal(
+                    dim1=-2, dim2=-1
+                ).sum(dim=-1)
+                start = end
+            self.register_buffer('_phi_trace_vec', V_blocks)
+            self.register_buffer(
+                '_phi_trace_vec_norm_sq',
+                (V_blocks * V_blocks).sum(dim=-1).clamp(min=1e-12),
+            )
+        else:
+            self.register_buffer('_phi_trace_vec', None)
+            self.register_buffer('_phi_trace_vec_norm_sq', None)
+
+    def _apply_phi_det_control(self, phi: torch.Tensor) -> torch.Tensor:
+        r"""Per-block sl(K) projection / soft trace clamp on the token gauge
+        frames :math:`\phi`.
+
+        Mirrors :meth:`transformer.vfe.prior_bank.VFEPriorBank._apply_phi_det_control`.
+        Called on every non-dummy ``phi_embed(token_ids)`` lookup so that the
+        token phi entering pos-encoding and downstream attention/transport is
+        already traceless per block.  A no-op when neither toggle is enabled,
+        or when generators are skew-symmetric (SO(N)).
+        """
+        if self._phi_trace_vec is None:
+            return phi
+        V = self._phi_trace_vec                   # (H, n_gen)
+        v_norm_sq = self._phi_trace_vec_norm_sq   # (H,)
+        s = phi @ V.transpose(-2, -1)             # (..., H)
+        if self.phi_project_slk:
+            coeffs = s / v_norm_sq                # (..., H)
+            return phi - torch.einsum('...h,hg->...g', coeffs, V)
+        T = float(self.phi_trace_clamp)
+        s_clamped = s.clamp(min=-T, max=T)
+        delta_coeffs = (s_clamped - s) / v_norm_sq
+        return phi + torch.einsum('...h,hg->...g', delta_coeffs, V)
 
     def clear_decode_cache(self) -> None:
         """Drop the cached all-vocab decode priors.
@@ -465,6 +542,7 @@ class PriorBank(nn.Module):
 
             # Get per-token gauge frames
             phi = self.phi_embed(token_ids)  # (..., phi_dim)
+            phi = self._apply_phi_det_control(phi)
             K = self.embed_dim
 
             # AMP guard: sandwich product must stay float32.
@@ -554,6 +632,7 @@ class PriorBank(nn.Module):
             #   - FFN sigma_prior: converts via diag_embed at variational_ffn.py:3627
             # Learnable per-token gauge frames
             phi = self.phi_embed(token_ids)
+            phi = self._apply_phi_det_control(phi)
 
             if self.gauge_param == 'omega' and hasattr(self, 'omega_embed'):
                 # Return omega matrices alongside phi (phi is dummy zeros)
