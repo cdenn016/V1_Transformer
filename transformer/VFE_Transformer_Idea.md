@@ -176,6 +176,43 @@ $$(g\mu)^\top (g\Sigma g^\top)^{-1} (g\mu) = \mu^\top g^\top g^{-\top} \Sigma^{-
 
 The scaling factor is therefore gauge-invariant, making this the correct gauge-equivariant analogue of RMS-style normalization.
 
+### 8.1 The sl(K) Theorem: Normalisation as the gl(K) = sl(K) ⊕ R·I Quotient
+
+MahalanobisNorm is the gauge-equivariant analogue of RMSNorm; no standalone norm layer plays the analogous role for LayerNorm. The reason is structural, and the correct gauge-theoretic realisation of LayerNorm is not a new feature-space construction but the combination of MahalanobisNorm with a Lie-algebra constraint on the gauge field. This subsection states the correspondence formally and proves it.
+
+**Setup**. The gauge group acts on the belief tuple by $\mu \to h\mu$, $\Sigma \to h\Sigma h^\top$, $\phi \to \mathrm{Ad}_h\phi = h\phi h^{-1}$ for $h \in GL(K)$, with the transport generator $\phi \in \mathfrak{gl}(K)$ producing $A = \exp(\phi) \in GL^+(K)$. The Lie algebra admits the direct-sum decomposition
+
+$$\mathfrak{gl}(K) = \mathfrak{sl}(K) \oplus \mathbb{R} \cdot I,$$
+
+into the traceless subalgebra and the one-dimensional centre. Any $\phi$ decomposes uniquely as $\phi = \phi_{\mathfrak{sl}} + c \cdot I$ with $c = \mathrm{tr}(\phi)/K$ and $\phi_{\mathfrak{sl}} \in \mathfrak{sl}(K)$. Because $\phi_{\mathfrak{sl}}$ and $I$ commute, the transport factorises:
+
+$$\exp(\phi) = \exp(c) \cdot \exp(\phi_{\mathfrak{sl}}),$$
+
+where $\exp(c) \in \mathbb{R}_{>0}$ is a uniform isotropic dilation and $\exp(\phi_{\mathfrak{sl}}) \in SL(K)$ is volume-preserving ($\det = 1$).
+
+**Theorem (sl(K) correspondence).** Under the identification above,
+
+- the variance-normalisation half of classical LayerNorm ($x / \mathrm{std}(x)$) corresponds to MahalanobisNorm, which is the feature-level quotient by the $\mathbb{R} \cdot I$ direction;
+- the mean-centering half ($x - \langle x, \mathbf{1}\rangle \mathbf{1}/K$) admits no gauge-equivariant realisation on the feature space $\mathbb{R}^K$; its gauge-theoretic realisation is the $\mathfrak{sl}(K)$ projection of the gauge field $\phi$, which restricts the transport group from $GL(K)$ to $SL(K)$ and eliminates the scalar-dilation mode.
+
+Therefore, under $\phi$ constrained to $\mathfrak{sl}(K)$, the composition MahalanobisNorm $\circ$ $\mathfrak{sl}(K)$-projected transport is the gauge-equivariant analogue of LayerNorm. No new norm layer is required; the construction is realised by a feature-space layer and a Lie-algebra constraint acting together.
+
+**Proof of (i)**. MahalanobisNorm computes $\mu \mapsto \mu \cdot \sqrt{K/(\mu^\top\Sigma^{-1}\mu + \varepsilon)}$. The quadratic form $\mu^\top\Sigma^{-1}\mu$ is a gauge scalar by the calculation in the preamble to this section. Writing the outer product $\mu\mu^\top$ in the decomposition $\mathrm{Sym}(K) = \mathrm{Sym}_0(K) \oplus \mathbb{R} \cdot I$ of symmetric $K \times K$ matrices into traceless and scalar parts,
+
+$$\mu\mu^\top = \bigl(\mu\mu^\top - \tfrac{\|\mu\|^2}{K} I\bigr) + \tfrac{\|\mu\|^2}{K} I,$$
+
+the trace component $\|\mu\|^2 / K \cdot I$ carries the overall magnitude; the traceless component carries the angular or directional content. Contracting with $\Sigma^{-1}$ gives the gauge-invariant scalar $\mathrm{tr}(\mu\mu^\top \Sigma^{-1}) = \mu^\top\Sigma^{-1}\mu$, and normalising $\mu$ so this scalar equals $K$ projects the belief onto the unit-Mahalanobis sphere. This is the feature-space realisation of the $\mathbb{R} \cdot I$ quotient.
+
+**Proof of (ii)**. Let $\phi = \phi_{\mathfrak{sl}} + c \cdot I$ as above. Under the transport $A = \exp(\phi) = \exp(c) \exp(\phi_{\mathfrak{sl}})$, both the feature and its covariance transform jointly as $(\mu, \Sigma) \to (A\mu, A\Sigma A^\top)$. By the scalar-invariance calculation preceding this subsection, $\mu^\top \Sigma^{-1}\mu$ is preserved for any $A \in GL(K)$, so the post-transport MahalanobisNorm scaling factor $\sqrt{K/(\mu^\top\Sigma^{-1}\mu + \varepsilon)}$ is identical to its pre-transport value. The scalar $\exp(c)$ is therefore absorbed into the $A$-rotation of the output: the full-gauge transport moves the normalised belief along an orbit on the unit-Mahalanobis sphere, and the $\exp(c)$ component of that orbit has no effect on the quotient. Projecting $\phi$ onto $\mathfrak{sl}(K)$ before transport sets $c = 0$ identically, removing the scalar-dilation mode at the gauge-field level rather than cancelling it post hoc at the feature level. The two operations are dual realisations of the same quotient, and applying both is idempotent in the $\mathbb{R} \cdot I$ direction — the redundancy is harmless but not zero-cost numerically.
+
+**Obstruction for mean-centering on vectors**. On $\mathbb{R}^K$, $GL(K)$ acts irreducibly: there are no proper invariant subspaces (this is standard; see Fulton and Harris, *Representation Theory*, Lecture 15, or Humphreys, *Introduction to Lie Algebras and Representation Theory*, §7). Consequently no constant vector $c \in \mathbb{R}^K$ produces a gauge-equivariant centering $\mu \to \mu - \langle\mu, c\rangle c$; under $h \in GL(K)$, $\langle h\mu, c\rangle = (h^\top c)^\top \mu \neq c^\top \mu$ unless $h^\top c = c$, which defines a proper subgroup (the stabiliser of $c$). The canonical direction $\mathbf{1}$ used in LayerNorm sits in this non-covariant class. The equivariant-network literature reaches the same conclusion by different routes: Vector Neurons (Deng et al. 2021, arXiv:2104.12229) explicitly argues that mean-centering fails for $SO(3)$-equivariant features because averaging rotated inputs is not meaningful; EquiformerV2 SLN (Liao et al. 2024, arXiv:2306.12059) centers only the degree-0 (invariant) sub-representation; e3nn's BatchNorm documentation notes that norm invariance holds only for orthonormal representations. Reductive Lie Neurons (arXiv:2510.22984) uses the $GL(n)$ Killing form $B(X,Y) = 2n \mathrm{tr}(XY) - \mathrm{tr}(X)\mathrm{tr}(Y)$ as the gauge-invariant quadratic for nonlinearities but introduces no centered LayerNorm. Zhang and Sennrich (RMSNorm, arXiv:1910.07467) show empirically that mean-centering is the dispensable half of LayerNorm in large models, so the absence of a gauge-equivariant centering primitive is consistent with practical results even outside the gauge framework.
+
+**CenteredMahalanobisNorm** (the research-variant alternative). A distinct construction, $\mathrm{CMN}(\mu, \mu_p, \Sigma) = \mu_p + (\mu - \mu_p) \sqrt{K/((\mu-\mu_p)^\top \Sigma^{-1}(\mu-\mu_p) + \varepsilon)}$, is gauge-covariant because $\mu_p$ transforms as a vector in the same frame as $\mu$. This is not the gauge-theoretic analogue of LayerNorm: it replaces the constant canonical-basis centre with the VFE prior mean, which is a covariant object but not a canonical one. In the VFE objective the prior mean already acts as a centre via the $\alpha \cdot \mathrm{KL}(q \| p)$ self-coupling term, which penalises $(\mu_q - \mu_p)^\top \Sigma^{-1}(\mu_q - \mu_p)$. Adding an architectural centering norm duplicates this pressure and may interfere with the variational gradient, so this variant is provided as an opt-in research knob rather than a default.
+
+**Isotropic and trivial-gauge limit**. When $\Sigma = I$ and $\phi \to 0$, the transport is the identity and MahalanobisNorm reduces to RMSNorm. The sl(K) projection is vacuous in this limit. This does not reduce to standard LayerNorm: recovering classical mean-centering requires an additional choice of distinguished direction $\mathbf{1}$, which the obstruction above forbids inside the gauge framework. Standard LayerNorm is recovered only in the doubly gauge-fixed regime where the basis is chosen canonically and mean-centering is accepted as a pre-framework reference-frame operation.
+
+**Implementation summary**. In this codebase the theorem is realised by the combination `norm_type='mahalnorm'` (invokes `MahalanobisNorm` in `transformer/core/blocks.py`) with `use_slk_projection=True` (invokes `build_slk_basis` in `transformer/core/gauge_preconditioner.py` to project $\phi$ onto the traceless subalgebra at every M-step update). Under these two settings the framework quotients out the full $\mathbb{R} \cdot I$ direction at both the gauge-field and feature levels simultaneously, giving the constructive equivalent of LayerNorm under GL(K) equivariance. The `'centered_mahalnorm'` norm type selects `CenteredMahalanobisNorm` instead and is reserved for research ablations.
+
 ---
 
 ## 9. Decode and Language-Model Objective

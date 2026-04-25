@@ -22,6 +22,8 @@ _project_root = os.path.dirname(_script_dir)
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
+import gc
+
 import torch
 import json
 from pathlib import Path
@@ -39,7 +41,7 @@ from transformer.analysis.publication_metrics import PublicationMetrics
 # =============================================================================
 
 # Path to checkpoint file (e.g., checkpoint_step_179999.pt)
-CHECKPOINT_PATH = "checkpoints_publication/ffn_VFE_dynamic/checkpoint_step_179999.pt"
+CHECKPOINT_PATH = "checkpoints_publication/ffn_VFE_dynamic/checkpoint_step_149999.pt"
 
 # Experiment directory (contains experiment_config.json)
 # If None, will use checkpoint's parent directory
@@ -47,7 +49,7 @@ EXPERIMENT_DIR = None
 
 # Target total steps (set higher than checkpoint step to continue training)
 # If None, will use original max_steps from config
-TARGET_STEPS = None
+TARGET_STEPS = 250000
 
 # Override batch size (set to reduce memory usage if needed)
 # If None, will use original batch_size from config
@@ -142,11 +144,12 @@ def infer_config_from_state_dict(state_dict: dict) -> dict:
     if n_layers > 0:
         config['n_layers'] = n_layers
 
-    # Infer irrep_spec from attention head generators
+    # Infer irrep_spec from attention head generators (from block 0 only —
+    # all blocks share the same head structure).
     # Keys like: transformer.blocks.0.attention.head_generators.0.gen
     head_dims = []
     for key in state_dict.keys():
-        if 'attention.head_generators.' in key and key.endswith('.gen'):
+        if 'blocks.0.attention.head_generators.' in key and key.endswith('.gen'):
             # Shape: (n_gen, head_dim, head_dim)
             head_dim = state_dict[key].shape[1]
             # Extract head index
@@ -160,13 +163,56 @@ def infer_config_from_state_dict(state_dict: dict) -> dict:
                 pass
 
     if head_dims and all(d is not None for d in head_dims):
-        # Convert to irrep_spec format
-        # head_dim = 2*ell + 1 for SO(3)
-        irrep_spec = []
-        for i, dim in enumerate(head_dims):
-            ell = (dim - 1) // 2
-            irrep_spec.append([f'ℓ{ell}', 1, dim])
-        config['irrep_spec'] = irrep_spec
+        n_heads = len(head_dims)
+        all_equal = len(set(head_dims)) == 1
+        all_so3_valid = all(d == 1 or (d >= 3 and d % 2 == 1) for d in head_dims)
+
+        # Cross-check against the global generator count to distinguish
+        # GL(K) block-diagonal multi-head from an SO(3) irrep decomposition.
+        # SO(3): n_gen = 3 * n_heads (3 generators per irrep head).
+        # GL(K) block-diag multi-head: n_gen = n_heads * d_head^2.
+        n_gen_global = state_dict['generators'].shape[0] if 'generators' in state_dict else None
+        so3_expected = 3 * n_heads
+        glk_expected = n_heads * head_dims[0] ** 2 if all_equal else None
+
+        is_glk = False
+        if not all_so3_valid:
+            # Even dims are not valid SO(3) irreps → must be GL(K).
+            is_glk = True
+        elif n_gen_global is not None and all_equal:
+            if n_gen_global == glk_expected and n_gen_global != so3_expected:
+                is_glk = True
+            elif n_gen_global == so3_expected:
+                is_glk = False
+            else:
+                # Generator count matches neither pattern exactly; fall back
+                # to head-dim heuristic (all_so3_valid already true here).
+                is_glk = False
+
+        if is_glk:
+            if not all_equal:
+                # Cross-head coupled GL(K) with non-uniform super-blocks.
+                # Resuming this requires cross_couplings from the original
+                # config — cannot safely reconstruct from state_dict alone.
+                raise ValueError(
+                    f"Detected GL(K) with non-uniform head dims {head_dims}. "
+                    f"This indicates cross-head coupling; cannot infer "
+                    f"cross_couplings from state_dict. Provide "
+                    f"experiment_config.json with the original irrep_spec "
+                    f"and cross_couplings."
+                )
+            d_head = head_dims[0]
+            config['irrep_spec'] = [['fund', n_heads, d_head]]
+            config['gauge_group'] = 'GLK'
+            config['gauge_dim'] = d_head
+        else:
+            # SO(3) irrep decomposition: head_dim = 2*ell + 1
+            irrep_spec = []
+            for dim in head_dims:
+                ell = (dim - 1) // 2
+                irrep_spec.append([f'ℓ{ell}', 1, dim])
+            config['irrep_spec'] = irrep_spec
+            config['gauge_group'] = 'SO3'
 
     # Infer diagonal_covariance from sigma storage format
     # log_sigma_embed/log_sigma_diag = diagonal mode, log_sigma or sigma_embed = full mode
@@ -204,7 +250,11 @@ def resume_training():
 
     # Load checkpoint
     print("\nLoading checkpoint...")
-    checkpoint = torch.load(checkpoint_path, map_location=DEVICE, weights_only=False)
+    # Stage on CPU: avoids duplicating the checkpoint onto GPU while the
+    # fresh model and optimizer are also being allocated. load_state_dict
+    # copies per-parameter into the already-on-device target, so the full
+    # state dict never needs to be GPU-resident.
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 
     start_step = checkpoint.get('step', 0)
     best_val_ce = checkpoint.get('best_val_ce', float('inf'))
@@ -303,6 +353,10 @@ def resume_training():
             max_seq_len=config.get('max_seq_len', 256),
             batch_size=config.get('batch_size', 32),
             num_workers=config.get('num_workers', 0),
+            stride=config.get('stride', None),
+            random_offset_per_epoch=config.get('random_offset_per_epoch', False),
+            eval_stride=config.get('eval_stride', None),
+            base_epoch_seed=config.get('stride_base_seed', 0),
         )
         test_loader = None
     else:
@@ -314,6 +368,10 @@ def resume_training():
             num_workers=config.get('num_workers', 0),
             dataset=dataset_name,
             include_test=True,
+            stride=config.get('stride', None),
+            random_offset_per_epoch=config.get('random_offset_per_epoch', False),
+            eval_stride=config.get('eval_stride', None),
+            base_epoch_seed=config.get('stride_base_seed', 0),
         )
 
     config['vocab_size'] = actual_vocab_size
@@ -374,6 +432,15 @@ def resume_training():
     else:
         # Try loading directly (checkpoint might be just state dict)
         model.load_state_dict(checkpoint)
+
+    # Free the source model state dict now that params have been copied
+    # into the live model. Otherwise the CPU-resident copy lingers for the
+    # entire remaining setup.
+    checkpoint.pop('model_state_dict', None)
+    checkpoint.pop('model_state', None)
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"  Total parameters: {total_params:,}")
@@ -461,6 +528,12 @@ def resume_training():
         use_slk_projection=config.get('use_slk_projection', False),
         use_killing_form=config.get('use_killing_form', False),
         killing_form_sym_dampening=config.get('killing_form_sym_dampening', 0.1),
+
+        # Stride windowing (threaded through for introspection / forward-compat).
+        stride=config.get('stride', None),
+        random_offset_per_epoch=config.get('random_offset_per_epoch', False),
+        eval_stride=config.get('eval_stride', None),
+        stride_base_seed=config.get('stride_base_seed', 0),
     )
 
     # Create publication metrics tracker for figures
@@ -488,9 +561,11 @@ def resume_training():
     trainer.best_val_ce = best_val_ce
 
     # Restore optimizer state if available
+    optimizer_restored = False
     if 'optimizer_state_dict' in checkpoint:
         try:
             trainer.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            optimizer_restored = True
             print("  Restored optimizer state")
         except Exception as e:
             print(f"  Warning: Could not restore optimizer state: {e}")
@@ -498,9 +573,27 @@ def resume_training():
     elif 'optimizer_state' in checkpoint:
         try:
             trainer.optimizer.load_state_dict(checkpoint['optimizer_state'])
+            optimizer_restored = True
             print("  Restored optimizer state")
         except Exception as e:
             print(f"  Warning: Could not restore optimizer state: {e}")
+
+    # Because the checkpoint was staged on CPU, optimizer moment tensors
+    # land on CPU. Move them onto the training device once, so the first
+    # optimizer.step() doesn't silently fall back or device-mismatch.
+    if optimizer_restored:
+        for state in trainer.optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(device, non_blocking=True)
+
+    # Free the source optimizer state dict now that moments have been
+    # copied into the live optimizer. Adam moments are ~2x model size.
+    checkpoint.pop('optimizer_state_dict', None)
+    checkpoint.pop('optimizer_state', None)
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     # Restore LR scheduler state if available
     if 'scheduler_state_dict' in checkpoint and trainer.scheduler is not None:
@@ -531,6 +624,31 @@ def resume_training():
     # Train! (PublicationTrainer handles metrics logging and figure generation)
     trainer.train()
 
+    # Post-training figures that live outside PublicationTrainer.train()
+    # (mirrors experiment_runner.run_single_experiment).
+    try:
+        from transformer.visualization.vfe_dynamics_plots import generate_all_vfe_figures
+        metrics_csv = experiment_dir / 'metrics.csv'
+        if metrics_csv.exists():
+            vfe_fig_dir = experiment_dir / 'vfe_dynamics_figures'
+            saved_figs = generate_all_vfe_figures(metrics_csv, vfe_fig_dir)
+            if saved_figs:
+                print(f"Generated {len(saved_figs)} VFE dynamics figures in {vfe_fig_dir}")
+    except Exception as e:
+        print(f"Warning: VFE dynamics figure generation failed: {e}")
+
+    try:
+        from transformer.visualization.training_plots import plot_head_kappas, load_metrics_csv
+        metrics_csv = experiment_dir / 'metrics.csv'
+        if metrics_csv.exists():
+            csv_metrics = load_metrics_csv(metrics_csv)
+            if csv_metrics.get('kappa_mean'):
+                kappa_fig_path = experiment_dir / 'head_kappas.png'
+                plot_head_kappas(csv_metrics, kappa_fig_path)
+                print(f"Generated head kappa plot: {kappa_fig_path}")
+    except Exception as e:
+        print(f"Warning: Head kappa plot generation failed: {e}")
+
     # Run test set evaluation (not done by PublicationTrainer)
     if test_loader is not None:
         test_metrics = run_test_evaluation(
@@ -538,6 +656,7 @@ def resume_training():
             test_loader=test_loader,
             device=device,
             vocab_size=config['vocab_size'],
+            config=config,
         )
         # Save test metrics
         test_metrics_path = experiment_dir / 'test_metrics.json'

@@ -12,7 +12,7 @@ mu_normalize, mu_max_norm) are handled by model.py → GaugeTokenEmbedding direc
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Tuple, Literal, Union
+from typing import Optional, List, Tuple, Literal
 
 
 # Allowed values for rope_full_gauge:
@@ -20,35 +20,13 @@ from typing import Optional, List, Tuple, Literal, Union
 #                standard-transformer pattern preserved here.
 #   'vfe_only' — apply the framework-consistent μ→Rμ AND Σ→RΣR^T transform inside the
 #                FFN's per-head VFE gradient helper only. Attention still rotates μ only.
-#                This is today's behavior of the legacy `True` value.
 #   'both'     — additionally apply Σ→RΣR^T in the attention sublayer, lifting diagonal
 #                σ to full covariance before KL dispatch. Strict GL(K) covariance through
 #                both sublayers; substantially more expensive (O(K) memory blow-up).
 RopeFullGaugeMode = Literal['off', 'vfe_only', 'both']
+_ROPE_FULL_GAUGE_VALUES = ('off', 'vfe_only', 'both')
 
 
-def _coerce_rope_full_gauge(value: 'Union[bool, str, None]') -> RopeFullGaugeMode:
-    """Backwards-compatible coercion to the tri-state mode.
-
-    True  → 'vfe_only' (preserves prior semantics: full-gauge in FFN VFE only).
-    False → 'off'.
-    None  → 'off'.
-    str   → must be one of {'off', 'vfe_only', 'both'}; otherwise ValueError.
-    """
-    if value is None or value is False:
-        return 'off'
-    if value is True:
-        return 'vfe_only'
-    if isinstance(value, str):
-        if value not in ('off', 'vfe_only', 'both'):
-            raise ValueError(
-                f"rope_full_gauge must be one of 'off', 'vfe_only', 'both' "
-                f"(or legacy bool); got {value!r}."
-            )
-        return value
-    raise TypeError(
-        f"rope_full_gauge must be bool, str, or None; got {type(value).__name__}."
-    )
 import torch
 import torch.nn as nn
 
@@ -101,7 +79,19 @@ class BlockConfig:
     attention_window: int =       64          # Window size (unused, kept for API compat)
     
     mask_self_attention: bool =   True   # Prevent KL(q_i||q_i)=0 collapse
-    use_output_projection: bool = True # W_O ∈ R^{K×K} after multi-head concat
+    use_output_projection: bool = False  # W_O ∈ R^{K×K} after multi-head concat.
+                                         # Default False: the PriorBank decode
+                                         # expects a gauge-covariant belief, and
+                                         # a generic learned K×K linear applied
+                                         # to μ only (Σ unchanged) breaks that
+                                         # invariance. See VFE_Transformer_Idea.md
+                                         # §18.2. Set True only for ablation.
+    use_equivariant_head_mixer: bool = False  # Opt-in principled replacement for
+                                              # W_O: n² scalars forming the
+                                              # commutant of the irrep decomp,
+                                              # applied symmetrically to μ and Σ
+                                              # (Σ → M·Σ·Mᵀ). Preserves gauge
+                                              # equivariance by Schur's lemma.
     # === 3. E-STEP DYNAMICS (belief evolution) ===
     E_learnable_lr: bool =     True    # Learn step size η for variational descent
     evolve_sigma: bool =       True    # Update covariances Σ via natural gradient
@@ -179,6 +169,20 @@ class BlockConfig:
     e_step_sigma_floor: float = 0.1     # Floor on σ_p inside E-step (caps 1/σ_p gradient).
                                         # PriorBank allows σ_p ∈ [0.01, 5.0] for sharp decode,
                                         # but E-step needs a higher floor to prevent nat_grad blowup.
+    propagate_kl_nonfinite: bool = False  # If True, safe_kl_clamp lets NaN/±inf propagate
+                                           # through the softmax so divergence is visible.
+                                           # Diagnostic use; default preserves masking.
+    spd_floor_mode: str = 'eigclamp'   # How the full-cov σ_p floor is enforced:
+                                        #   'eigclamp' — λ_min(Σ_p) clamped via eigendecomposition
+                                        #                (bounds the condition number; the
+                                        #                mathematically pure path under CLAUDE.md).
+                                        #   'ridge'    — Σ_p + floor·I (legacy; shifts eigvals by
+                                        #                +floor but does NOT bound cond(Σ), so
+                                        #                Σ_p^{-1} can still amplify gradients under
+                                        #                high off-diagonal correlation).
+                                        #   'none'     — no floor (diagonal-only path or research).
+                                        # Diagonal covariance always uses elementwise clamp(min=floor)
+                                        # regardless of this flag — it is already per-dim bounded.
     n_picard_steps: int = 0            # Picard corrections after closed-form E-step.
                                         # Preconditioned Picard iteration on the nonlinear VFE
                                         # residual: mu^(n+1) = mu_0 - sigma_0 * ∇F_softmax(mu^(n))
@@ -241,12 +245,15 @@ class BlockConfig:
         # _compute_rope_full_gauge_gradient_per_head lifts diagonal σ to
         # (d_h, d_h) full covariance inside the rope rotation path — O(K²)
         # memory per token for no benefit in the isotropic case (R·(σ²I)·R^T
-        # = σ²I is invariant) and no correctness gain over rope_full_gauge=False
+        # = σ²I is invariant) and no correctness gain over rope_full_gauge='off'
         # in the diagonal-non-isotropic case (the default path already handles
         # RoPE-on-μ with σ left raw, which is a deliberate design choice).
         # Warn loudly but permit (vfe/ is stricter — ValueError).
-        # Coerce legacy bool/str input to the canonical tri-state mode string.
-        self.rope_full_gauge = _coerce_rope_full_gauge(self.rope_full_gauge)
+        if self.rope_full_gauge not in _ROPE_FULL_GAUGE_VALUES:
+            raise ValueError(
+                f"rope_full_gauge must be one of {_ROPE_FULL_GAUGE_VALUES}; "
+                f"got {self.rope_full_gauge!r}."
+            )
         if self.rope_full_gauge != 'off' and (self.diagonal_covariance or self.isotropic_covariance):
             import warnings as _warnings
             _which = "isotropic" if self.isotropic_covariance else "diagonal"
@@ -384,21 +391,22 @@ class BlockConfig:
 
     active_inference: bool = False
     
-    rope_full_gauge: 'Union[bool, RopeFullGaugeMode]' = 'off'  # EXPERIMENTAL tri-state. {'off', 'vfe_only', 'both'} (legacy bool: True→'vfe_only', False→'off'). When != 'off' (and use_rope=True),
-                                        # implements the framework-consistent interpretation
-                                        # of RoPE as a position-dependent gauge transport that
-                                        # acts on Gaussian beliefs by both μ → Rμ AND Σ → RΣR^T
-                                        # (the standard sandwich product), as derived in the
-                                        # GL(K) manuscript Section "RoPE as Position-Dependent
-                                        # Gauge Frames".  The default (False) follows the
-                                        # standard-transformer Q/K rotation pattern: only μ
-                                        # is rope-rotated, Σ stays raw.  Both implementations
-                                        # are valid choices in the framework (see manuscript
+    rope_full_gauge: RopeFullGaugeMode = 'off'  # EXPERIMENTAL tri-state {'off', 'vfe_only', 'both'}.
+                                        # When != 'off' (and use_rope=True), implements the
+                                        # framework-consistent interpretation of RoPE as a
+                                        # position-dependent gauge transport that acts on
+                                        # Gaussian beliefs by both μ → Rμ AND Σ → RΣR^T (the
+                                        # standard sandwich product), as derived in the GL(K)
+                                        # manuscript Section "RoPE as Position-Dependent Gauge
+                                        # Frames".  The default ('off') follows the standard-
+                                        # transformer Q/K rotation pattern: only μ is rope-
+                                        # rotated, Σ stays raw.  Both implementations are
+                                        # valid choices in the framework (see manuscript
                                         # ~line 1760 on attention-vs-value gauge factorization),
                                         # but they produce different β values and gradients.
-                                        # rope_full_gauge=True is SLOWER (lifts diagonal Σ to
-                                        # full covariance and uses autograd for gradients) and
-                                        # is intended for empirical comparison only.
+                                        # 'vfe_only' and 'both' are SLOWER (lifts diagonal Σ
+                                        # to full covariance and uses autograd for gradients)
+                                        # and are intended for empirical comparison only.
 
     # === Non-serializable objects (set after construction) ===
     # These are torch tensors / nn.Modules that can't be part of a plain dataclass default.
@@ -442,7 +450,8 @@ class BlockConfig:
             # into the residual stream each layer.  Training configs that
             # want the unmasked behavior should set this explicitly.
             mask_self_attention=config.get('mask_self_attention', True),
-            use_output_projection=config.get('use_output_projection', True),
+            use_output_projection=config.get('use_output_projection', False),
+            use_equivariant_head_mixer=config.get('use_equivariant_head_mixer', False),
             # Belief evolution
             evolve_sigma=config.get('evolve_sigma', True),
             evolve_phi=config.get('evolve_phi', True),
@@ -485,6 +494,8 @@ class BlockConfig:
             sigma_max=config.get('sigma_max', 5.0),
             gauge_covariant_ridge=config.get('gauge_covariant_ridge', False),
             e_step_sigma_floor=config.get('e_step_sigma_floor', 0.1),
+            spd_floor_mode=config.get('spd_floor_mode', 'eigclamp'),
+            propagate_kl_nonfinite=config.get('propagate_kl_nonfinite', False),
             n_picard_steps=config.get('n_picard_steps', 0),
             picard_trust_region=config.get('picard_trust_region', 5.0),
             e_step_early_exit_tol=config.get('e_step_early_exit_tol', None),
@@ -527,7 +538,7 @@ class BlockConfig:
             aux_layer_loss=config.get('aux_layer_loss', False),
             aux_loss_weight=config.get('aux_loss_weight', 0.3),
             hierarchical_priors=config.get('hierarchical_priors', True),
-            rope_full_gauge=_coerce_rope_full_gauge(config.get('rope_full_gauge', 'off')),
+            rope_full_gauge=config.get('rope_full_gauge', 'off'),
             # Active inference / EFE
             active_inference=config.get('active_inference', False),
             active_inference_pragmatic_weight=config.get('active_inference_pragmatic_weight', 1.0),

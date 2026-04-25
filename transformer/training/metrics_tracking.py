@@ -62,9 +62,8 @@ class PublicationMetricsTracker:
             # Performance
             'step_time', 'tokens_per_sec',
 
-            # Holonomy (non-flat transport curvature)
-            'holonomy_mean_norm', 'holonomy_max_norm',
-            'holonomy_frac_gt_01', 'holonomy_spectral_gap', 'holonomy_wilson_trace',
+            # Holonomy columns moved to a dedicated CSV
+            # (PublicationMetrics.holonomy_csv_path).
 
             # Numerical fallback counters
             'num_chol_recover', 'num_chol_fail', 'num_nan_replace', 'num_inv_pinv',
@@ -174,12 +173,8 @@ class PublicationMetricsTracker:
             'step_time': step_time,
             'tokens_per_sec': tokens_per_sec,
 
-            # Holonomy
-            'holonomy_mean_norm': metrics.get('holonomy/mean_norm'),
-            'holonomy_max_norm': metrics.get('holonomy/max_norm'),
-            'holonomy_frac_gt_01': metrics.get('holonomy/frac_gt_0.1'),
-            'holonomy_spectral_gap': metrics.get('holonomy/spectral_gap'),
-            'holonomy_wilson_trace': metrics.get('holonomy/wilson_trace'),
+            # Holonomy is written to a dedicated CSV (see
+            # PublicationMetrics.holonomy_csv_path) — not merged here.
 
             # Numerical fallback counters
             'num_chol_recover': metrics.get('num/chol_recover', 0),

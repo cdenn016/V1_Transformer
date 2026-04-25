@@ -566,6 +566,10 @@ class VFETrainer:
         log_interval = log_interval or self.cfg.log_interval
         eval_interval = self.cfg.eval_interval
         checkpoint_interval = self.cfg.checkpoint_interval
+        _epoch_idx = 0
+        _fn = getattr(self.train_loader.dataset, "set_epoch", None)
+        if callable(_fn):
+            _fn(_epoch_idx)
         data_iter = iter(self.train_loader)
         t0 = time.time()
 
@@ -582,6 +586,10 @@ class VFETrainer:
             try:
                 batch = next(data_iter)
             except StopIteration:
+                _epoch_idx += 1
+                _fn = getattr(self.train_loader.dataset, "set_epoch", None)
+                if callable(_fn):
+                    _fn(_epoch_idx)
                 data_iter = iter(self.train_loader)
                 batch = next(data_iter)
 

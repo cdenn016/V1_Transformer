@@ -62,10 +62,14 @@ BASELINE_CONFIG = {
    # === Architecture ===
    'vocab_size':                 50257,
    'embed_dim':                  20,
-   'max_seq_len':                64,
+   'max_seq_len':                32,
    
-   'batch_size':                 256, 
+   'batch_size':                 316, 
    'max_steps':                  5000,
+    
+   'stride':                     32,                                                                                                
+   'random_offset_per_epoch':    True,
+   'stride_base_seed':           6,
    
    'n_layers':                   1,
    'ffn_n_iterations':           1,
@@ -86,25 +90,25 @@ BASELINE_CONFIG = {
  
 
    'kappa_beta':                 1,
-   'kappa_warmup_steps':         45000,  # freeze kappa for first n steps
+   'kappa_warmup_steps':         7500,  # freeze kappa for first n steps
    'learnable_head_kappa':       False, # If True, learn per-head κ_h via log_kappa_per_head
 
    'e_step_sigma_floor':         0.01,   # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
    
    # === EM gradient-flow mode ===
    'em_mode':                    'em_phi_p',  # φ∈q: E-step optimizes μ,Σ,φ; all detached at EM boundary
-                                               # - 'straight_through' (default) — mu_p, sigma_p attached, semi-gradient phi
-                                               # - 'ift_phi' — same + full IFT phi gradient
-                                               # - 'em_phi_q' — clean EM, phi in q, all detached at boundary
-                                               # - 'em_phi_p' — clean EM, phi frozen in E-step
-                                               # - 'implicit_ift' — experimental IFT-scaled M-step
+                                              # - 'straight_through' (default) — mu_p, sigma_p attached, semi-gradient phi
+                                              # - 'ift_phi' — same + full IFT phi gradient
+                                              # - 'em_phi_q' — clean EM, phi in q, all detached at boundary
+                                              # - 'em_phi_p' — clean EM, phi frozen in E-step
+                                              # - 'implicit_ift' — experimental IFT-scaled M-step
 
    # === GL(K) determinant control (off by default; pick at most one) ===
    # GL(K) has an unbounded trace direction that L2-norm clamping does not
    # constrain — det(Ω_ij) = exp(tr(φ_i − φ_j)) blows up on outlier tokens.
    # Recommended for gauge_group='GLK' with phi_max_norm > ~3.
    'phi_project_slk':            False,   # Hard project φ → sl(K): det(Ω) ≡ 1 always
-   'phi_trace_clamp':            2.75,    # Soft cap |tr(φ·G)| ≤ T (e.g., 0.35 → det ∈ [0.5, 2])
+   'phi_trace_clamp':            0.75,    # Soft cap |tr(φ·G)| ≤ T (e.g., 0.35 → det ∈ [0.5, 2])
 
 
    'active_inference':           False,   #requires priorbank true
@@ -114,6 +118,7 @@ BASELINE_CONFIG = {
    
    # === M-step: Optimizer ===  
    'optimizer_type':             'riemannian_adam',# or 'natural_gradient' or 'adamw' or 'riemannian_adam'
+   'phi_optimizer_metric':       'killing',
    'fisher_ema_decay':           0.90,            # for natural_gradient
    'fisher_damping':             1e-2,              # for natural_gradient
 
@@ -135,7 +140,7 @@ BASELINE_CONFIG = {
    'norm_type':                  'layernorm',  # 'layernorm' | 'rmsnorm' | 'mahalnorm' | 'none'
    'residual_type':              'additive',    # 'additive': mu_q = mu_q + mu_sub 
                                         # 'delta':    mu_q = mu_q + (mu_sub - mu_normalized),
-   
+   #'centered_mahalnorm'
    # === E-step Weights ===
 
    'E_alpha':                    1,      # E-step prior coupling weight
@@ -145,7 +150,7 @@ BASELINE_CONFIG = {
    # === E-step Learning Rates ===
    
    'E_mu_q_lr':                  0.3,    # E-step μ step size (whitened, within trust=2.0)
-   'E_sigma_q_lr':               0.05,   # E-step σ step size (conservative)    
+   'E_sigma_q_lr':               0.015,   # E-step σ step size (conservative)    
    'E_phi_lr':                   0.05,   # E-step φ step size
 
    # === M-step Weights ===        
@@ -185,13 +190,11 @@ BASELINE_CONFIG = {
 
    # === Phi gradient geometry ===
    'phi_natural_gradient':       'killing',
-   'use_killing_form':           False,
-   'killing_form_sym_dampening': 0.4,
 
    # === Position encoding ===
    'use_rope':                   True,
    'rope_base':                  100,   
-   'rope_full_gauge':            False,
+   'rope_full_gauge':            'off', # 'off', 'both', 'vfe_only'
    'pos_encoding_mode':          'none',
 
    # === Embedding init ===
@@ -203,12 +206,12 @@ BASELINE_CONFIG = {
 
 
    # === Logging ===
-   'log_interval':               100,
-   'eval_interval':              10000,
+   'log_interval':               200,
+   'eval_interval':              2000,
    'checkpoint_interval':        25000,
-   'semantic_analysis_interval': 10000,
-   'gauge_geometry_interval':    50000,   # Gauge field Dirichlet energy + invariants
-   'fiber_trajectory_interval':  50000,   # Fisher-Rao E-step trajectory (requires ffn_n_iterations > 1)
+   'semantic_analysis_interval': 4000,
+   'gauge_geometry_interval':    4000,   # Gauge field Dirichlet energy + invariants
+   'fiber_trajectory_interval':  4000,   # Fisher-Rao E-step trajectory (requires ffn_n_iterations > 1)
 
    # =================================================================
    # NON-FLAT GAUGE TRANSPORT (holonomy)
@@ -254,6 +257,9 @@ BASELINE_CONFIG = {
    'grad_clip':                   50.0,
    'hidden_dim':                  508,
    
+   'spd_floor_mode':             'eigclamp',      # new default, can omit
+   'enable_spd_diagnostics':     True,    # shows spd_eig_min_t/q and cond
+   'assert_finite_loss':         True,        # raise instead of silent skip
    
    'warmup_steps':                100,
    'num_workers':                 0,   # 0 is faster on Windows (spawn multiprocessing overhead)
@@ -264,10 +270,13 @@ BASELINE_CONFIG = {
 
 
    # ===== Active Inference =======
-   'active_inference_pragmatic_weight':  0.25,   # start small
-   'active_inference_epistemic_weight':  1,   # keep both ON to avoid feedback loop
-   'active_inference_epistemic_samples': 2,     # MC samples for BALD
-    # dataset: not present in EM_CONFIG (injected from CLI there); set explicitly here
+   'active_inference_pragmatic_weight':  2,   # start small
+   'active_inference_epistemic_weight':  5,   # keep both ON to avoid feedback loop
+   'active_inference_epistemic_samples': 6,     # MC samples for BALD
+   
+   
+   
+   
     'dataset':                    'wikitext-103',
 }
 
@@ -295,7 +304,7 @@ SWEEPS = {
     'E_sigma_q_lr': {
         'description': 'E-step σ trust region scale',
         'param': 'E_sigma_q_lr',
-        'range': [0.0, 0.25, 0.025],
+        'range': [0.0, 0.1, 0.005],
         'baseline_value': 0.05,
     },
 
@@ -420,12 +429,14 @@ SWEEPS = {
         'description': 'GL(K) gauge group dimension (d_head)',
         'param': None,
         'configs': [
-            {'gauge_dim': 2, 'irrep_spec': [('fund', 24, 2)], 'embed_dim': 48, 'label': 'GL(2)_h24'},
-            {'gauge_dim': 4, 'irrep_spec': [('fund', 12, 4)], 'embed_dim': 48, 'label': 'GL(4)_h12'},
+            #{'gauge_dim': 2, 'irrep_spec': [('fund', 24, 2)], 'embed_dim': 48, 'label': 'GL(2)_h24'},
+           # {'gauge_dim': 4, 'irrep_spec': [('fund', 12, 4)], 'embed_dim': 48, 'label': 'GL(4)_h12'},
             {'gauge_dim': 6, 'irrep_spec': [('fund', 8, 6)], 'embed_dim': 48, 'label': 'GL(6)_h8'},
             {'gauge_dim': 8, 'irrep_spec': [('fund', 6, 8)], 'embed_dim': 48, 'label': 'GL(8)_h6'},
             {'gauge_dim': 12, 'irrep_spec': [('fund', 4, 12)], 'embed_dim': 48, 'label': 'GL(12)_h4'},
             {'gauge_dim': 16, 'irrep_spec': [('fund', 3, 16)], 'embed_dim': 48, 'label': 'GL(16)_h3'},
+            {'gauge_dim': 24, 'irrep_spec': [('fund', 2, 24)], 'embed_dim': 48, 'label': 'GL(24)_h2'},
+            {'gauge_dim': 48, 'irrep_spec': [('fund', 1, 48)], 'embed_dim': 48, 'label': 'GL(48)_h1'},
         ],
         'baseline_value': 'GL(10)_h2',
     },
@@ -468,7 +479,7 @@ SWEEPS = {
     'M_alpha': {
             'description': 'Self-consistency KL(q||p) weight in training loss',
             'param': 'M_alpha',
-            'range': [0, 5, 1],
+            'range': [0, 0.01, 0.00025],
             'baseline_value': 0.00,
         },
 
@@ -479,7 +490,7 @@ SWEEPS = {
     'mass_phi': {
         'description': 'Gauge frame L2 prior weight (α_φ/2)||φ||²',
         'param': 'mass_phi',
-        'range': [0.0, 0.1, 0.005],
+        'range': [0.0, 0.01, 0.00025],
         'baseline_value': 0.0,
     },
 
@@ -487,21 +498,21 @@ SWEEPS = {
     'M_mu_p_lr': {
         'description': 'Belief mean (μ) learning rate',
         'param': 'M_mu_p_lr',
-        'range': [0.0, 0.05, 0.002],
+        'range': [0.0, 0.1, 0.002],
         'baseline_value': 0.078,
     },
 
     'M_sigma_p_lr': {
         'description': 'Belief precision (σ) learning rate',
         'param': 'M_sigma_p_lr',
-        'range': [0.0, 0.05, 0.002],
+        'range': [0.00044, 0.001, 0.00005],
         'baseline_value': 0.015,
     },
 
     'M_phi_lr': {
         'description': 'Gauge frame (φ) learning rate',
         'param': 'M_phi_lr',
-        'range': [0.0000, 0.007, 0.00025],
+        'range': [0.0000, 0.1, 0.005],
         'baseline_value': 0.00325,
     },
 
@@ -533,7 +544,7 @@ SWEEPS = {
     'sigma_ce_scale': {
         'description': 'CE→σ_p gradient scale in PriorBank decode (0=detach, 1=full)',
         'param': 'sigma_ce_scale',
-        'range': [0.0, 2, 0.1],
+        'range': [0.0, 1, 0.1],
         'baseline_value': 0.01,
     },
 
@@ -541,7 +552,7 @@ SWEEPS = {
     'embed_weight_decay': {
         'description': 'Weight decay on embedding parameters (hyper-prior precision)',
         'param': 'embed_weight_decay',
-        'range': [0.00, 0.1, 0.0005],
+        'range': [0.00, 0.05, 0.0005],
         'baseline_value': 0.002,
     },
 
@@ -565,7 +576,7 @@ SWEEPS = {
     'mu_init_std': {
         'description': 'mu-init-scale',
         'param': 'mu_init_std',
-        'range': [0.25, 0.75, 0.025],
+        'range': [0.0001, 0.5, 0.005],
         'baseline_value': 0.01,
     },
 
@@ -575,6 +586,14 @@ SWEEPS = {
         'param': 'alpha_divergence',
         'range': [0.1, 1, 0.1],
         'baseline_value': 0.75,
+    },
+
+    # --- E-step σ_p floor (caps E-step precision at 1/floor) ---
+    'e_step_sigma_floor': {
+        'description': 'Floor on σ_p inside E-step (caps 1/σ_p at 1/floor); 0.01 → precision ≤ 100',
+        'param': 'e_step_sigma_floor',
+        'values': [0.01, 0.2, 0.3, 0.4, 0.5],
+        'baseline_value': 0.01,
     },
 
     # --- Tier 13: EM inference mode ---
@@ -599,43 +618,47 @@ SWEEPS = {
 # Sweep execution order (cheapest → most expensive)
 SWEEP_ORDER = [
     
-   # 'M_alpha',
+   
+    #'em_mode',
+   
+   # 'M_sigma_p_lr',  #0.015
+     
+  #  
+  #  'M_mu_p_lr',     #0.0825
+   # 'sigma_ce_scale',   #0.7
+   # 'alpha_divergence',     #0.275
+   # 'M_phi_lr', #0.00325 
+   # 'phi_scale',
+   # 'mu_init_std',
+    
+     
+  #  'M_vfe_hyperparam_lr', #0.1
+  
+    
+  # 'rope_base',
+  #  'E_sigma_q_lr',
+  #  'embed_weight_decay',   #0.002
    # 'E_alpha',
    # 'E_lambda_belief',
-    #'em_mode',
-    
-    #'E_lambda_softmax',
-    'rope_base',
-    #'phi_scale',
-   # 'mu_init_std',
-  # 'sigma_ce_scale',   #0.7
-    'alpha_divergence',     #0.275
-    'M_phi_lr', #0.00325  
-    'M_vfe_hyperparam_lr', #0.1
-  
-    'M_mu_p_lr',     #0.0825
-    'M_sigma_p_lr',  #0.015
-    
-    'embed_weight_decay',   #0.002
-    
-        
-    'M_attention_lr',    #0.06
-    'M_output_lr',       #0.065
-    'non_embed_weight_decay', #0.005
+   # 'E_lambda_softmax',
+   # 'M_attention_lr',    #0.06
+   # 'M_output_lr',       #0.065
+  #  'non_embed_weight_decay', #0.005
     
  #  'E_phi_lr',
   # 'E_mu_q_lr',
-  # 'E_sigma_q_lr',
+  
     
-     
+     'e_step_sigma_floor',
     
     
    #
     #'kappa_beta',
   #  'lambda_hyper',
     'mass_phi',
-   # 'M_alpha',
+    'M_alpha',
     
+  
   #  'M_beta',
     
    # 'min_lr_ratio',  
@@ -654,7 +677,7 @@ SWEEP_ORDER = [
 
     
 
-    'n_layers',
+   # 'n_layers',
     #'n_vfe_iterations',
 
 ]

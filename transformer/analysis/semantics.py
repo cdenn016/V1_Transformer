@@ -11,6 +11,7 @@ Can be used as a standalone script or imported for use during training.
 """
 
 import json
+import warnings
 import torch
 import numpy as np
 from pathlib import Path
@@ -19,10 +20,13 @@ try:
     import matplotlib
     matplotlib.use('Agg')  # Non-interactive backend for training
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Ellipse, Polygon
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     matplotlib = None
     plt = None
+    Ellipse = None
+    Polygon = None
     MATPLOTLIB_AVAILABLE = False
 
 try:
@@ -31,6 +35,32 @@ try:
 except ImportError:
     PCA = None
     SKLEARN_AVAILABLE = False
+
+try:
+    from scipy.spatial import ConvexHull
+    from scipy.stats import gaussian_kde
+    SCIPY_AVAILABLE = True
+except ImportError:
+    ConvexHull = None
+    gaussian_kde = None
+    SCIPY_AVAILABLE = False
+
+try:
+    from transformer.visualization.pub_style import set_pub_style, PUB_COLORS, PUB_CYCLE
+    PUB_STYLE_AVAILABLE = True
+except ImportError:
+    # Fallback palette if pub_style is unavailable
+    PUB_COLORS = {
+        'blue': '#0072B2', 'orange': '#E69F00', 'green': '#009E73',
+        'red': '#D55E00', 'purple': '#CC79A7', 'cyan': '#56B4E9',
+        'yellow': '#F0E442', 'black': '#000000', 'gray': '#999999',
+    }
+    PUB_CYCLE = [PUB_COLORS['blue'], PUB_COLORS['orange'], PUB_COLORS['green'],
+                 PUB_COLORS['red'], PUB_COLORS['purple'], PUB_COLORS['cyan'],
+                 PUB_COLORS['yellow'], PUB_COLORS['black']]
+    def set_pub_style():
+        pass
+    PUB_STYLE_AVAILABLE = False
 
 # =============================================================================
 # Tokenizer Setup
@@ -737,7 +767,19 @@ def analyze_gauge_semantics(
                     sigma_embed = torch.exp(obj.detach().cpu()).clamp(min=1e-6)
                     break
     if sigma_embed is not None:
-        sigma_results = analyze_sigma_semantics(sigma_embed, n_tokens=500, verbose=verbose)
+        # When plots are requested, build a save_path that lives alongside
+        # the existing omega/phi/mu clustering figures.
+        sigma_save_path = None
+        if save_plots:
+            _sd = Path(save_dir) if save_dir else Path("./outputs/figures")
+            _sd.mkdir(parents=True, exist_ok=True)
+            _suffix = f"_step{step}" if step is not None else ""
+            sigma_save_path = _sd / f"sigma_clustering{_suffix}.png"
+        sigma_results = analyze_sigma_semantics(
+            sigma_embed, n_tokens=500, verbose=verbose,
+            step=step, save_path=sigma_save_path,
+            gauge_group_label=gauge_group_label,
+        )
         results['sigma_analysis'] = sigma_results
 
     if verbose:
@@ -850,6 +892,63 @@ def analyze_gauge_semantics(
                     print(f"  [WARN] Could not generate mu plot: {e}")
                 results['mu_plot_saved'] = False
 
+        # Cross-representation comparison figure (μ, φ, Ω, Σ side-by-side)
+        omega_tensor = None
+        try:
+            # Recover omega for the comparison if a model was provided.
+            # extract_omega returns (omega_tensor, group_label) or None.
+            if model is not None:
+                try:
+                    _extract_result = extract_omega(model, n_tokens=500)
+                    if _extract_result is not None:
+                        omega_tensor = _extract_result[0]
+                except Exception:
+                    omega_tensor = None
+
+            fig = plot_representation_comparison(
+                mu=mu_embed,
+                phi=phi_embed,
+                omega=omega_tensor,
+                sigma=sigma_embed,
+                step=step,
+                save_path=save_dir / f"representation_comparison{'_step'+str(step) if step is not None else ''}.png",
+                gauge_group_label=gauge_group_label,
+            )
+            if fig is not None:
+                plt.close(fig)
+                results['representation_comparison_saved'] = True
+        except Exception as e:
+            if verbose:
+                print(f"  [WARN] Could not generate representation comparison: {e}")
+            results['representation_comparison_saved'] = False
+
+        # Bhattacharyya-MDS figure (needs both μ and Σ)
+        if mu_embed is not None and sigma_embed is not None:
+            # Default to 300 tokens; drop to 150 if full-cov Σ to keep O(n²K³)
+            # tractable during periodic training runs.
+            _is_full_sigma = (
+                isinstance(sigma_embed, torch.Tensor) and sigma_embed.dim() == 3
+            ) or (
+                hasattr(sigma_embed, 'ndim') and sigma_embed.ndim == 3
+            )
+            bhat_n = 150 if _is_full_sigma else 300
+            try:
+                fig = plot_sigma_bhattacharyya_mds(
+                    mu=mu_embed,
+                    sigma=sigma_embed,
+                    step=step,
+                    save_path=save_dir / f"sigma_bhattacharyya{'_step'+str(step) if step is not None else ''}.png",
+                    n_tokens=bhat_n,
+                    gauge_group_label=gauge_group_label,
+                )
+                if fig is not None:
+                    plt.close(fig)
+                    results['sigma_bhattacharyya_saved'] = True
+            except Exception as e:
+                if verbose:
+                    print(f"  [WARN] Could not generate Bhattacharyya MDS figure: {e}")
+                results['sigma_bhattacharyya_saved'] = False
+
     return results
 
 
@@ -858,13 +957,316 @@ def analyze_gauge_semantics(
 # =============================================================================
 
 CATEGORY_COLORS = {
-    'letter': '#E74C3C',    # red
-    'digit': '#3498DB',     # blue
-    'punct': '#2ECC71',     # green
-    'function': '#9B59B6',  # purple
-    'content': '#F39C12',   # orange
-    'other': '#95A5A6',     # gray
+    'letter':   PUB_COLORS['red'],       # was '#E74C3C'
+    'digit':    PUB_COLORS['blue'],      # was '#3498DB'
+    'punct':    PUB_COLORS['green'],     # was '#2ECC71'
+    'function': PUB_COLORS['purple'],    # was '#9B59B6'
+    'content':  PUB_COLORS['orange'],    # was '#F39C12'
+    'other':    PUB_COLORS['gray'],      # was '#95A5A6'
 }
+
+# POS tag → compact label map (Penn Treebank). Used in label_mode='pos'.
+_POS_TAG_MAP = {
+    'NN': 'noun', 'NNS': 'noun', 'NNP': 'noun', 'NNPS': 'noun',
+    'VB': 'verb', 'VBD': 'verb', 'VBG': 'verb', 'VBN': 'verb',
+    'VBP': 'verb', 'VBZ': 'verb',
+    'JJ': 'adj', 'JJR': 'adj', 'JJS': 'adj',
+    'RB': 'adv', 'RBR': 'adv', 'RBS': 'adv',
+    'DT': 'det', 'WDT': 'det', 'PDT': 'det',
+    'IN': 'prep', 'TO': 'prep',
+}
+
+_POS_COLORS = {
+    'noun':  PUB_COLORS['blue'],
+    'verb':  PUB_COLORS['red'],
+    'adj':   PUB_COLORS['green'],
+    'adv':   PUB_COLORS['purple'],
+    'det':   PUB_COLORS['orange'],
+    'prep':  PUB_COLORS['cyan'],
+    'other': PUB_COLORS['gray'],
+}
+
+
+def _resolve_token_colors(
+    n_tokens: int,
+    label_mode: str = 'category',
+) -> Tuple[List[str], Dict[str, str]]:
+    """Return (per-token labels, palette) for figure coloring.
+
+    Supports three schemes:
+      'category'       — orthographic (letter/digit/punct/function/content/other).
+      'semantic_field' — color by membership in SEMANTIC_FIELDS; unmatched → 'other'.
+      'pos'            — POS-tag via NLTK, mapped to {noun, verb, adj, adv, det, prep, other}.
+                         Falls back to 'category' if nltk is unavailable.
+
+    Args:
+        n_tokens: Number of leading token IDs to label (covers [0, n_tokens)).
+        label_mode: Labeling scheme (see above).
+
+    Returns:
+        (categories, palette):
+            categories — list of length n_tokens with a string label per token.
+            palette    — dict mapping each label that appears to a hex color.
+    """
+    if label_mode == 'category':
+        categories = [categorize_token(tid) for tid in range(n_tokens)]
+        return categories, dict(CATEGORY_COLORS)
+
+    if label_mode == 'semantic_field':
+        word_to_field: Dict[str, str] = {}
+        for field, members in SEMANTIC_FIELDS.items():
+            for m in members:
+                w = m[0] if isinstance(m, tuple) else m
+                word_to_field[w.strip().lower()] = field
+        tokenizer = get_tokenizer()
+        categories: List[str] = []
+        for tid in range(n_tokens):
+            label = 'other'
+            if tokenizer is not None:
+                try:
+                    word = tokenizer.decode([tid]).strip().lower()
+                    if word in word_to_field:
+                        label = word_to_field[word]
+                except Exception:
+                    pass
+            categories.append(label)
+        fields_seen = sorted({c for c in categories if c != 'other'})
+        palette: Dict[str, str] = {'other': PUB_COLORS['gray']}
+        for i, field in enumerate(fields_seen):
+            palette[field] = PUB_CYCLE[i % len(PUB_CYCLE)]
+        return categories, palette
+
+    if label_mode == 'pos':
+        try:
+            import nltk
+            from nltk import pos_tag
+        except ImportError:
+            warnings.warn(
+                "nltk not available; falling back to label_mode='category'.",
+                RuntimeWarning, stacklevel=2,
+            )
+            return _resolve_token_colors(n_tokens, label_mode='category')
+        tokenizer = get_tokenizer()
+        words: List[str] = []
+        valid: List[bool] = []
+        for tid in range(n_tokens):
+            word = None
+            if tokenizer is not None:
+                try:
+                    s = tokenizer.decode([tid]).strip()
+                    if s.isalpha() and len(s) > 0:
+                        word = s
+                except Exception:
+                    pass
+            words.append(word if word is not None else 'x')
+            valid.append(word is not None)
+        try:
+            tagged = pos_tag(words)
+        except LookupError:
+            # Try to auto-download the tagger model
+            try:
+                nltk.download('averaged_perceptron_tagger', quiet=True)
+                tagged = pos_tag(words)
+            except Exception:
+                warnings.warn(
+                    "nltk POS tagger unavailable; falling back to label_mode='category'.",
+                    RuntimeWarning, stacklevel=2,
+                )
+                return _resolve_token_colors(n_tokens, label_mode='category')
+        except Exception:
+            warnings.warn(
+                "nltk POS tagging failed; falling back to label_mode='category'.",
+                RuntimeWarning, stacklevel=2,
+            )
+            return _resolve_token_colors(n_tokens, label_mode='category')
+        categories = []
+        for i, (_, tag) in enumerate(tagged):
+            if not valid[i]:
+                categories.append('other')
+            else:
+                categories.append(_POS_TAG_MAP.get(tag, 'other'))
+        return categories, dict(_POS_COLORS)
+
+    raise ValueError(
+        f"Unknown label_mode: {label_mode!r}. "
+        f"Expected 'category', 'semantic_field', or 'pos'."
+    )
+
+
+def _safe_pca_2d(
+    arr: np.ndarray,
+    n_components: int = 2,
+    var_eps: float = 1e-12,
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], str]:
+    """PCA wrapper tolerant of degenerate inputs.
+
+    sklearn's PCA divides by total_var to compute explained_variance_ratio_,
+    which emits a RuntimeWarning (invalid value encountered in divide) when
+    the input has zero total variance. This happens in practice when:
+      - An embedding hasn't diverged from initialization (step 0).
+      - Σ is shared (all tokens have the same covariance) and gets broadcast
+        to (V, K) with identical rows.
+      - Ω is identically the identity under gauge_mode='trivial'.
+
+    Args:
+        arr: (n, d) array to reduce.
+        n_components: Desired output dims (1 or 2). Output is padded with
+                      zeros if PCA returns fewer components than requested.
+        var_eps: Total-variance threshold below which PCA is skipped.
+
+    Returns:
+        (coords, variance_ratio, status). When degenerate, coords is None
+        and status names the failure mode for placeholder annotation.
+    """
+    if not SKLEARN_AVAILABLE:
+        return None, None, "sklearn unavailable"
+    if arr is None or arr.ndim != 2:
+        return None, None, "invalid shape"
+    if arr.shape[0] < 2 or arr.shape[1] < 1:
+        return None, None, "too few samples"
+    if not np.isfinite(arr).all():
+        return None, None, "non-finite values"
+    total_var = float(np.var(arr, axis=0, ddof=0).sum())
+    if total_var < var_eps:
+        return None, None, "zero variance"
+    n_comp = min(n_components, arr.shape[1], arr.shape[0] - 1)
+    if n_comp < 1:
+        return None, None, "too few dimensions"
+    with warnings.catch_warnings():
+        # Guard against residual numerical warnings from sklearn internals
+        warnings.filterwarnings('ignore', category=RuntimeWarning)
+        pca = PCA(n_components=n_comp)
+        coords = pca.fit_transform(arr)
+        ratio = np.asarray(pca.explained_variance_ratio_, dtype=float)
+    # Replace any NaN ratios (still possible for pathological inputs) with 0
+    ratio = np.nan_to_num(ratio, nan=0.0, posinf=0.0, neginf=0.0)
+    # Pad output to the requested n_components width
+    if coords.shape[1] < n_components:
+        pad_c = np.zeros((coords.shape[0], n_components - coords.shape[1]))
+        coords = np.concatenate([coords, pad_c], axis=1)
+    if ratio.size < n_components:
+        ratio = np.concatenate([ratio, np.zeros(n_components - ratio.size)])
+    return coords, ratio, "ok"
+
+
+def _add_cluster_envelopes(
+    ax: "Any",
+    points_2d: np.ndarray,
+    categories: List[str],
+    palette: Dict[str, str],
+    mode: str = 'ellipse',
+    n_sigma: float = 2.0,
+    alpha_fill: float = 0.15,
+    min_points: int = 5,
+) -> None:
+    r"""Overlay per-category cluster envelopes on a 2D scatter plot.
+
+    Draws a semi-transparent "blob" per category over the existing scatter,
+    preserving individual point visibility while communicating cluster
+    structure. Called by the four PCA scatter plots (mu, phi, Omega, Sigma).
+
+    Modes:
+        'ellipse'  — 2x2 covariance per category, n_sigma Gaussian ellipse.
+                     (Default; parametric, outlier-robust.)
+        'hull'     — ConvexHull polygon per category.
+                     (Exact extent; sensitive to outliers.)
+        'kde'      — gaussian_kde contours at 50/75/95% density.
+                     (Shows density gradient; can be visually dense.)
+        'centroid' — Only a large "x" marker at each category mean.
+        'none'     — No-op.
+
+    Also draws an "x" marker at each category centroid in all modes except
+    'none' so the cluster center is always readable.
+
+    Args:
+        ax: matplotlib Axes to draw onto.
+        points_2d: (n, 2) projected coordinates.
+        categories: List of length n with per-point category label.
+        palette: Mapping label -> hex color.
+        mode: Envelope mode (see above).
+        n_sigma: Scale factor for 'ellipse' axes (2.0 ≈ 95% Gaussian mass).
+        alpha_fill: Fill alpha for the envelope patches.
+        min_points: Categories with fewer points are skipped for parametric
+                    envelopes (avoids degenerate 2x2 covariance fits).
+    """
+    if mode == 'none' or not MATPLOTLIB_AVAILABLE:
+        return
+    if points_2d.ndim != 2 or points_2d.shape[1] < 2:
+        return
+
+    pts = np.asarray(points_2d[:, :2], dtype=np.float64)
+
+    for cat, color in palette.items():
+        idx = np.array([i for i, c in enumerate(categories) if c == cat], dtype=int)
+        if idx.size == 0:
+            continue
+
+        sub = pts[idx]
+        centroid = sub.mean(axis=0)
+
+        # Envelope (skipped for categories with too few points in parametric modes)
+        if mode == 'ellipse' and idx.size >= min_points:
+            cov = np.cov(sub, rowvar=False)
+            # Eigendecompose 2x2 covariance
+            evals, evecs = np.linalg.eigh(cov)
+            evals = np.maximum(evals, 1e-12)
+            order = np.argsort(evals)[::-1]
+            evals = evals[order]
+            evecs = evecs[:, order]
+            angle = float(np.degrees(np.arctan2(evecs[1, 0], evecs[0, 0])))
+            width = 2.0 * n_sigma * float(np.sqrt(evals[0]))
+            height = 2.0 * n_sigma * float(np.sqrt(evals[1]))
+            ell = Ellipse(
+                xy=centroid, width=width, height=height, angle=angle,
+                facecolor=color, edgecolor=color, alpha=alpha_fill,
+                linewidth=1.2, linestyle='--', zorder=1,
+            )
+            ax.add_patch(ell)
+        elif mode == 'hull' and idx.size >= min_points and SCIPY_AVAILABLE:
+            try:
+                hull = ConvexHull(sub)
+                poly = Polygon(
+                    sub[hull.vertices], closed=True,
+                    facecolor=color, edgecolor=color, alpha=alpha_fill,
+                    linewidth=1.2, linestyle='--', zorder=1,
+                )
+                ax.add_patch(poly)
+            except Exception:
+                pass  # degenerate hull → skip
+        elif mode == 'kde' and idx.size >= min_points and SCIPY_AVAILABLE:
+            try:
+                kde = gaussian_kde(sub.T)
+                x_min, y_min = sub.min(axis=0)
+                x_max, y_max = sub.max(axis=0)
+                pad_x = 0.2 * (x_max - x_min + 1e-12)
+                pad_y = 0.2 * (y_max - y_min + 1e-12)
+                xx, yy = np.meshgrid(
+                    np.linspace(x_min - pad_x, x_max + pad_x, 60),
+                    np.linspace(y_min - pad_y, y_max + pad_y, 60),
+                )
+                zz = kde(np.vstack([xx.ravel(), yy.ravel()])).reshape(xx.shape)
+                z_sorted = np.sort(zz.ravel())[::-1]
+                cdf = np.cumsum(z_sorted) / z_sorted.sum()
+                levels = [z_sorted[np.searchsorted(cdf, q)] for q in (0.5, 0.75, 0.95)]
+                levels = sorted(set(float(L) for L in levels if L > 0))
+                if levels:
+                    ax.contour(xx, yy, zz, levels=levels, colors=[color],
+                               linewidths=0.8, linestyles='--', alpha=0.8, zorder=1)
+            except Exception:
+                pass
+
+        # Always draw centroid marker (except 'none' which returned above)
+        if mode != 'centroid':
+            ax.scatter(
+                [centroid[0]], [centroid[1]],
+                c=color, marker='x', s=60, linewidths=1.5, zorder=3,
+            )
+        else:
+            ax.scatter(
+                [centroid[0]], [centroid[1]],
+                c=color, marker='x', s=80, linewidths=2.0, zorder=3,
+                label=f'{cat} centroid',
+            )
 
 
 def plot_embedding_clustering(
@@ -874,6 +1276,8 @@ def plot_embedding_clustering(
     save_path: Optional[Path] = None,
     n_tokens: int = 500,
     gauge_group_label: Optional[str] = None,
+    envelope_mode: str = 'ellipse',
+    label_mode: str = 'category',
 ) -> "Any":
     """
     Visualize embeddings (mu or phi) colored by token category.
@@ -886,10 +1290,18 @@ def plot_embedding_clustering(
         n_tokens: Number of tokens to plot
         gauge_group_label: Override gauge group label (e.g. 'GL(30)').
                           If None and embed_type='phi', inferred from dimension.
+        envelope_mode: Cluster envelope overlay on 2D scatters:
+                       'ellipse' (default), 'hull', 'kde', 'centroid', 'none'.
+        label_mode: Coloring scheme: 'category' (default, orthographic),
+                    'semantic_field' (SEMANTIC_FIELDS membership),
+                    'pos' (NLTK POS tag; falls back to 'category').
 
     Returns:
         matplotlib Figure
     """
+    if MATPLOTLIB_AVAILABLE:
+        set_pub_style()
+
     embed_np = embed[:n_tokens].numpy() if isinstance(embed, torch.Tensor) else embed[:n_tokens]
     embed_dim = embed_np.shape[1]
 
@@ -900,9 +1312,10 @@ def plot_embedding_clustering(
         type_str = f"{embed_dim}D"
         title_prefix = f"Belief Embeddings (μ)"
 
-    # Categorize tokens
-    categories = [categorize_token(tid) for tid in range(len(embed_np))]
-    colors = [CATEGORY_COLORS.get(c, '#95A5A6') for c in categories]
+    categories, palette = _resolve_token_colors(len(embed_np), label_mode=label_mode)
+
+    # Scatter alpha: fade dots when an envelope is overlaid
+    dot_alpha = 0.35 if envelope_mode not in ('none', 'centroid') else 0.6
 
     step_str = f" (Step {step})" if step is not None else ""
 
@@ -910,30 +1323,30 @@ def plot_embedding_clustering(
         # SO(2): 1D gauge frames - histogram and jittered scatter
         fig = plt.figure(figsize=(14, 6))
 
-        # Histogram
+        # Histogram (no envelope on 1D)
         ax1 = fig.add_subplot(121)
-        for cat in CATEGORY_COLORS:
+        for cat, color in palette.items():
             mask = [c == cat for c in categories]
             if any(mask):
                 idx = [i for i, m in enumerate(mask) if m]
                 vals = embed_np[idx, 0]
-                ax1.hist(vals, bins=30, alpha=0.5, label=cat, color=CATEGORY_COLORS[cat])
+                ax1.hist(vals, bins=30, alpha=0.5, label=cat, color=color)
 
         ax1.set_xlabel('φ (SO(2) angle)')
         ax1.set_ylabel('Count')
         ax1.set_title(f'SO(2) Gauge Frame Distribution{step_str}')
         ax1.legend(loc='upper right', fontsize=8)
 
-        # Jittered scatter
+        # Jittered scatter — y-axis is random jitter, so envelopes are not meaningful here
         ax2 = fig.add_subplot(122)
         np.random.seed(42)
-        for cat in CATEGORY_COLORS:
+        for cat, color in palette.items():
             mask = [c == cat for c in categories]
             if any(mask):
                 idx = [i for i, m in enumerate(mask) if m]
                 x_vals = embed_np[idx, 0]
                 y_jitter = np.random.uniform(-0.4, 0.4, len(idx))
-                ax2.scatter(x_vals, y_jitter, c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
+                ax2.scatter(x_vals, y_jitter, c=color, label=cat, alpha=0.6, s=20)
 
         ax2.set_xlabel('φ (SO(2) angle)')
         ax2.set_ylabel('(jittered for visibility)')
@@ -951,7 +1364,7 @@ def plot_embedding_clustering(
         embed_norms = np.clip(embed_norms, 1e-8, None)
         embed_unit = embed_np / embed_norms
 
-        # 3D sphere plot
+        # 3D sphere plot (no 2D envelope — 3D)
         ax1 = fig.add_subplot(121, projection='3d')
 
         # Draw unit sphere wireframe
@@ -962,13 +1375,12 @@ def plot_embedding_clustering(
         z_sphere = np.outer(np.ones(np.size(u)), np.cos(v))
         ax1.plot_wireframe(x_sphere, y_sphere, z_sphere, alpha=0.1, color='gray')
 
-        # Plot points
-        for cat in CATEGORY_COLORS:
+        for cat, color in palette.items():
             mask = [c == cat for c in categories]
             if any(mask):
                 idx = [i for i, m in enumerate(mask) if m]
                 ax1.scatter(embed_unit[idx, 0], embed_unit[idx, 1], embed_unit[idx, 2],
-                           c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
+                           c=color, label=cat, alpha=0.6, s=20)
 
         ax1.set_xlabel('φ₁')
         ax1.set_ylabel('φ₂')
@@ -976,14 +1388,18 @@ def plot_embedding_clustering(
         ax1.set_title(f'SO(3) Gauge Frames on Unit Sphere{step_str}')
         ax1.legend(loc='upper left', fontsize=8)
 
-        # 2D projection
+        # 2D projection — envelope applies here
         ax2 = fig.add_subplot(122)
-        for cat in CATEGORY_COLORS:
+        for cat, color in palette.items():
             mask = [c == cat for c in categories]
             if any(mask):
                 idx = [i for i, m in enumerate(mask) if m]
                 ax2.scatter(embed_np[idx, 0], embed_np[idx, 1],
-                           c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
+                           c=color, label=cat, alpha=dot_alpha, s=20)
+
+        _add_cluster_envelopes(
+            ax2, embed_np[:, :2], categories, palette, mode=envelope_mode,
+        )
 
         ax2.set_xlabel('φ₁')
         ax2.set_ylabel('φ₂')
@@ -993,65 +1409,81 @@ def plot_embedding_clustering(
         ax2.set_aspect('equal')
 
     else:
-        # High-dimensional: Use PCA
+        # High-dimensional: Use PCA (guarded against zero-variance inputs)
         if not SKLEARN_AVAILABLE:
             print("Warning: sklearn not available for PCA visualization")
             return None
         n_components = min(3, embed_dim)
-        pca = PCA(n_components=n_components)
-        embed_pca = pca.fit_transform(embed_np)
-
-        var_explained = pca.explained_variance_ratio_
-        var_str = " + ".join([f"{v:.1%}" for v in var_explained])
+        embed_pca, var_explained, status = _safe_pca_2d(embed_np, n_components=n_components)
 
         fig = plt.figure(figsize=(14, 6))
 
-        if n_components >= 3:
-            # 3D PCA plot
-            ax1 = fig.add_subplot(121, projection='3d')
-            for cat in CATEGORY_COLORS:
-                mask = [c == cat for c in categories]
-                if any(mask):
-                    idx = [i for i, m in enumerate(mask) if m]
-                    ax1.scatter(embed_pca[idx, 0], embed_pca[idx, 1], embed_pca[idx, 2],
-                               c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
-
-            ax1.set_xlabel(f'PC1 ({var_explained[0]:.1%})')
-            ax1.set_ylabel(f'PC2 ({var_explained[1]:.1%})')
-            ax1.set_zlabel(f'PC3 ({var_explained[2]:.1%})')
-            ax1.set_title(f'{title_prefix} (PCA){step_str}')
-            ax1.legend(loc='upper left', fontsize=8)
-
-            # 2D PCA plot
-            ax2 = fig.add_subplot(122)
-        else:
+        if embed_pca is None:
+            # Degenerate PCA — render an annotated placeholder
             ax2 = fig.add_subplot(111)
+            ax2.text(0.5, 0.5, f'PCA unavailable: {status}',
+                     transform=ax2.transAxes, ha='center', va='center',
+                     fontsize=12, color='gray')
+            ax2.set_title(f'{title_prefix} (PCA){step_str}')
+            ax2.set_xticks([])
+            ax2.set_yticks([])
+        else:
+            if n_components >= 3:
+                # 3D PCA plot (no envelope — 3D)
+                ax1 = fig.add_subplot(121, projection='3d')
+                for cat, color in palette.items():
+                    mask = [c == cat for c in categories]
+                    if any(mask):
+                        idx = [i for i, m in enumerate(mask) if m]
+                        ax1.scatter(embed_pca[idx, 0], embed_pca[idx, 1], embed_pca[idx, 2],
+                                   c=color, label=cat, alpha=0.6, s=20)
 
-        if n_components >= 2:
-            for cat in CATEGORY_COLORS:
-                mask = [c == cat for c in categories]
-                if any(mask):
-                    idx = [i for i, m in enumerate(mask) if m]
-                    ax2.scatter(embed_pca[idx, 0], embed_pca[idx, 1],
-                               c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
+                ax1.set_xlabel(f'PC1 ({var_explained[0]:.1%})')
+                ax1.set_ylabel(f'PC2 ({var_explained[1]:.1%})')
+                ax1.set_zlabel(f'PC3 ({var_explained[2]:.1%})')
+                ax1.set_title(f'{title_prefix} (PCA){step_str}')
+                ax1.legend(loc='upper left', fontsize=8)
 
-            ax2.set_xlabel(f'PC1 ({var_explained[0]:.1%})')
-            ax2.set_ylabel(f'PC2 ({var_explained[1]:.1%})')
-            ax2.set_title(f'{title_prefix} (PCA from {embed_dim}D){step_str}')
-            ax2.legend(loc='upper left', fontsize=8)
-            ax2.grid(True, alpha=0.3)
+                # 2D PCA plot
+                ax2 = fig.add_subplot(122)
+            else:
+                ax2 = fig.add_subplot(111)
+
+            if n_components >= 2:
+                for cat, color in palette.items():
+                    mask = [c == cat for c in categories]
+                    if any(mask):
+                        idx = [i for i, m in enumerate(mask) if m]
+                        ax2.scatter(embed_pca[idx, 0], embed_pca[idx, 1],
+                                   c=color, label=cat, alpha=dot_alpha, s=20)
+
+                _add_cluster_envelopes(
+                    ax2, embed_pca[:, :2], categories, palette, mode=envelope_mode,
+                )
+
+                ax2.set_xlabel(f'PC1 ({var_explained[0]:.1%})')
+                ax2.set_ylabel(f'PC2 ({var_explained[1]:.1%})')
+                ax2.set_title(f'{title_prefix} (PCA from {embed_dim}D){step_str}')
+                ax2.legend(loc='upper left', fontsize=8)
+                ax2.grid(True, alpha=0.3)
 
     plt.tight_layout()
 
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        fig.savefig(save_path, bbox_inches='tight')
 
     return fig
 
 
-def plot_gauge_frame_clustering(phi_embed, step=None, save_path=None, n_tokens=500, gauge_group_label=None):
+def plot_gauge_frame_clustering(phi_embed, step=None, save_path=None, n_tokens=500,
+                                gauge_group_label=None, envelope_mode='ellipse',
+                                label_mode='category'):
     """Alias for plot_embedding_clustering with embed_type='phi'."""
-    return plot_embedding_clustering(phi_embed, embed_type='phi', step=step, save_path=save_path, n_tokens=n_tokens, gauge_group_label=gauge_group_label)
+    return plot_embedding_clustering(
+        phi_embed, embed_type='phi', step=step, save_path=save_path,
+        n_tokens=n_tokens, gauge_group_label=gauge_group_label,
+        envelope_mode=envelope_mode, label_mode=label_mode,
+    )
 
 
 # =============================================================================
@@ -1488,11 +1920,13 @@ def plot_omega_clustering(
     save_path: Optional[Path] = None,
     n_tokens: int = 500,
     gauge_group_label: Optional[str] = None,
+    envelope_mode: str = 'ellipse',
+    label_mode: str = 'category',
 ) -> Optional["Any"]:
     """Visualize per-token group elements Ω_i colored by token category.
 
     Layout (4 panels):
-      (a) PCA of flattened Ω_i (K² → 2D)  — cluster structure
+      (a) PCA of flattened Ω_i (K² → 2D)  — cluster structure, with envelope
       (b) Determinant distribution by category  — group geometry
       (c) Distance from identity ‖Ω_i − I‖_F by category  — magnitude
       (d) Eigenvalue magnitude distribution   — spectral character
@@ -1503,19 +1937,22 @@ def plot_omega_clustering(
         save_path: Output file path.
         n_tokens: Tokens to visualize.
         gauge_group_label: e.g. 'SO(3)' or 'GL(30)'.
+        envelope_mode: Envelope overlay in panel (a). See _add_cluster_envelopes.
+        label_mode: Coloring scheme: 'category' | 'semantic_field' | 'pos'.
 
     Returns:
         matplotlib Figure (or None if matplotlib unavailable).
     """
     if not MATPLOTLIB_AVAILABLE or not SKLEARN_AVAILABLE:
         return None
+    set_pub_style()
 
     n = min(n_tokens, omega.shape[0])
     K = omega.shape[1]
     omega_np = omega[:n].numpy() if isinstance(omega, torch.Tensor) else omega[:n]
 
-    categories = [categorize_token(tid) for tid in range(n)]
-    colors = [CATEGORY_COLORS.get(c, '#95A5A6') for c in categories]
+    categories, palette = _resolve_token_colors(n, label_mode=label_mode)
+    dot_alpha = 0.35 if envelope_mode not in ('none', 'centroid') else 0.6
 
     step_str = f" (Step {step})" if step is not None else ""
     group_str = gauge_group_label or f"K={K}"
@@ -1526,31 +1963,37 @@ def plot_omega_clustering(
     # ---- (a) PCA of flattened Omega ----
     ax = axes[0, 0]
     omega_flat = omega_np.reshape(n, -1)  # (n, K²)
-    pca = PCA(n_components=min(3, omega_flat.shape[1]))
-    omega_pca = pca.fit_transform(omega_flat)
-    var = pca.explained_variance_ratio_
-
-    for cat in CATEGORY_COLORS:
-        mask = [c == cat for c in categories]
-        if any(mask):
-            idx = [i for i, m in enumerate(mask) if m]
-            ax.scatter(omega_pca[idx, 0], omega_pca[idx, 1],
-                       c=CATEGORY_COLORS[cat], label=cat, alpha=0.6, s=20)
-    ax.set_xlabel(f'PC1 ({var[0]:.1%})')
-    ax.set_ylabel(f'PC2 ({var[1]:.1%})')
-    ax.set_title(f'(a) Ω_i PCA (from {K}×{K} matrices)')
-    ax.legend(loc='upper right', fontsize=7)
-    ax.grid(True, alpha=0.3)
+    omega_pca, var, status = _safe_pca_2d(omega_flat, n_components=2)
+    if omega_pca is None:
+        ax.text(0.5, 0.5, f'PCA unavailable: {status}\n(Ω may be near-identity)',
+                transform=ax.transAxes, ha='center', va='center',
+                fontsize=11, color='gray')
+        ax.set_title(f'(a) Ω_i PCA (from {K}×{K} matrices)')
+        ax.set_xticks([])
+        ax.set_yticks([])
+    else:
+        for cat, color in palette.items():
+            mask = [c == cat for c in categories]
+            if any(mask):
+                idx = [i for i, m in enumerate(mask) if m]
+                ax.scatter(omega_pca[idx, 0], omega_pca[idx, 1],
+                           c=color, label=cat, alpha=dot_alpha, s=20)
+        _add_cluster_envelopes(ax, omega_pca[:, :2], categories, palette, mode=envelope_mode)
+        ax.set_xlabel(f'PC1 ({var[0]:.1%})')
+        ax.set_ylabel(f'PC2 ({var[1]:.1%})')
+        ax.set_title(f'(a) Ω_i PCA (from {K}×{K} matrices)')
+        ax.legend(loc='upper right', fontsize=7)
+        ax.grid(True, alpha=0.3)
 
     # ---- (b) Determinant distribution by category ----
     ax = axes[0, 1]
     dets = np.linalg.det(omega_np.astype(np.float64)).astype(np.float32)
-    for cat in CATEGORY_COLORS:
+    for cat, color in palette.items():
         mask = [c == cat for c in categories]
         if any(mask):
             idx = [i for i, m in enumerate(mask) if m]
             vals = dets[idx]
-            ax.hist(vals, bins=30, alpha=0.5, label=cat, color=CATEGORY_COLORS[cat])
+            ax.hist(vals, bins=30, alpha=0.5, label=cat, color=color)
     ax.axvline(x=1.0, color='k', linestyle='--', linewidth=1, label='det=1')
     ax.set_xlabel('det(Ω_i)')
     ax.set_ylabel('Count')
@@ -1561,16 +2004,16 @@ def plot_omega_clustering(
     ax = axes[1, 0]
     eye = np.eye(K, dtype=np.float32)
     dist_id = np.linalg.norm((omega_np - eye).reshape(n, -1), axis=1)
-    cat_list = sorted(set(categories), key=lambda c: list(CATEGORY_COLORS.keys()).index(c) if c in CATEGORY_COLORS else 99)
-    cat_data = []
-    cat_labels = []
-    cat_colors_bp = []
+    palette_order = list(palette.keys())
+    cat_list = sorted(set(categories),
+                      key=lambda c: palette_order.index(c) if c in palette_order else 99)
+    cat_data, cat_labels, cat_colors_bp = [], [], []
     for cat in cat_list:
         idx = [i for i, c in enumerate(categories) if c == cat]
         if idx:
             cat_data.append(dist_id[idx])
             cat_labels.append(cat)
-            cat_colors_bp.append(CATEGORY_COLORS.get(cat, '#95A5A6'))
+            cat_colors_bp.append(palette.get(cat, PUB_COLORS['gray']))
 
     bp = ax.boxplot(cat_data, labels=cat_labels, patch_artist=True, showfliers=False)
     for patch, color in zip(bp['boxes'], cat_colors_bp):
@@ -1584,13 +2027,12 @@ def plot_omega_clustering(
     ax = axes[1, 1]
     try:
         evals = np.abs(np.linalg.eigvals(omega_np.astype(np.float64))).astype(np.float32)
-        # Histogram of all eigenvalue magnitudes
-        for cat in CATEGORY_COLORS:
+        for cat, color in palette.items():
             mask = [c == cat for c in categories]
             if any(mask):
                 idx = [i for i, m in enumerate(mask) if m]
                 ax.hist(evals[idx].flatten(), bins=40, alpha=0.4,
-                        label=cat, color=CATEGORY_COLORS[cat], density=True)
+                        label=cat, color=color, density=True)
         ax.axvline(x=1.0, color='k', linestyle='--', linewidth=1, label='|λ|=1')
         ax.set_xlabel('|λ|  (eigenvalue magnitude)')
         ax.set_ylabel('Density')
@@ -1603,7 +2045,600 @@ def plot_omega_clustering(
     plt.tight_layout()
 
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        fig.savefig(save_path, bbox_inches='tight')
+
+    return fig
+
+
+# =============================================================================
+# Sigma Covariance Visualization
+# =============================================================================
+
+def plot_sigma_clustering(
+    sigma: torch.Tensor,
+    step: Optional[int] = None,
+    save_path: Optional[Path] = None,
+    n_tokens: int = 500,
+    gauge_group_label: Optional[str] = None,
+    envelope_mode: str = 'ellipse',
+    label_mode: str = 'category',
+) -> Optional["Any"]:
+    r"""Visualize per-token covariance beliefs Σ_i colored by token category.
+
+    Layout (4 panels, analogous to plot_omega_clustering):
+      (a) PCA of flattened Σ_i (K² for full, K for diagonal) — cluster structure
+      (b) Volume: histogram of log|det(Σ_i)| (full) or log(trace(Σ_i)) (diag)
+      (c) Anisotropy: boxplot of λ_max/λ_min (full) or max(σ)/min(σ) (diag)
+      (d) Spectrum: eigenvalue magnitudes (full) or diagonal variances (diag)
+
+    Args:
+        sigma: Covariance tensor, (n, K) diagonal or (n, K, K) full.
+        step: Training step for title.
+        save_path: Output file path.
+        n_tokens: Tokens to visualize.
+        gauge_group_label: e.g. 'SO(3)' or 'GL(30)'.
+        envelope_mode: Envelope overlay in panel (a). See _add_cluster_envelopes.
+        label_mode: Coloring scheme: 'category' | 'semantic_field' | 'pos'.
+
+    Returns:
+        matplotlib Figure, or None if matplotlib/sklearn unavailable.
+    """
+    if not MATPLOTLIB_AVAILABLE or not SKLEARN_AVAILABLE:
+        return None
+    set_pub_style()
+
+    n = min(n_tokens, sigma.shape[0])
+    sigma_sub = sigma[:n].detach().cpu().float() if isinstance(sigma, torch.Tensor) else torch.as_tensor(sigma[:n]).float()
+    is_full = sigma_sub.dim() == 3  # (n, K, K) vs (n, K)
+    K = sigma_sub.shape[1] if is_full else sigma_sub.shape[-1]
+
+    categories, palette = _resolve_token_colors(n, label_mode=label_mode)
+    dot_alpha = 0.35 if envelope_mode not in ('none', 'centroid') else 0.6
+
+    step_str = f" (Step {step})" if step is not None else ""
+    group_str = gauge_group_label or f"K={K}"
+    mode_str = "full" if is_full else "diagonal"
+
+    # Hoist eigen/diag computations up front for reuse in panels (b)-(d).
+    if is_full:
+        # Symmetrize before eigvalsh to guard against numerical asymmetry.
+        sym = 0.5 * (sigma_sub + sigma_sub.transpose(-2, -1))
+        try:
+            evals = torch.linalg.eigvalsh(sym).clamp(min=1e-12)  # (n, K), ascending
+        except Exception:
+            # Degenerate fallback — fill with diagonal values
+            evals = torch.diagonal(sym, dim1=-2, dim2=-1).clamp(min=1e-12)
+        evals_np = evals.numpy()                                 # (n, K)
+        sigma_flat_np = sigma_sub.numpy().reshape(n, -1)         # (n, K²)
+        diag_np = torch.diagonal(sym, dim1=-2, dim2=-1).numpy()  # (n, K)
+    else:
+        diag_np = sigma_sub.clamp(min=1e-12).numpy()             # (n, K)
+        evals_np = np.sort(diag_np, axis=-1)                     # (n, K), ascending
+        sigma_flat_np = diag_np                                  # (n, K)
+
+    # (b) volume: logdet for full, log-trace for diag
+    if is_full:
+        logvol = np.sum(np.log(evals_np), axis=-1)                # log|det|
+        vol_label = r'$\log\,|\det\,\Sigma_i|$'
+        vol_title = '(b) Log-Determinant Distribution'
+    else:
+        logvol = np.log(diag_np.sum(axis=-1) + 1e-12)             # log-trace
+        vol_label = r'$\log\,\mathrm{tr}\,\Sigma_i$'
+        vol_title = '(b) Log-Trace Distribution'
+
+    # (c) anisotropy: condition number
+    if is_full:
+        cond = evals_np[:, -1] / np.maximum(evals_np[:, 0], 1e-12)
+    else:
+        cond = diag_np.max(axis=-1) / np.maximum(diag_np.min(axis=-1), 1e-12)
+    log_cond = np.log10(np.maximum(cond, 1.0))
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle(
+        f'Belief Covariance Σ_i Analysis — {group_str} ({mode_str}){step_str}',
+        fontsize=14, y=1.01,
+    )
+
+    # ---- (a) PCA of flattened Sigma ----
+    ax = axes[0, 0]
+    dim_note = f'{K}×{K}' if is_full else f'{K}-dim'
+    sigma_pca, var, status = _safe_pca_2d(sigma_flat_np, n_components=2)
+    if sigma_pca is None:
+        ax.text(0.5, 0.5, f'PCA unavailable: {status}\n(Σ may be shared/frozen)',
+                transform=ax.transAxes, ha='center', va='center',
+                fontsize=11, color='gray')
+        ax.set_title(f'(a) Σ_i PCA (from {dim_note})')
+        ax.set_xticks([])
+        ax.set_yticks([])
+    else:
+        for cat, color in palette.items():
+            mask = [c == cat for c in categories]
+            if any(mask):
+                idx = [i for i, m in enumerate(mask) if m]
+                ax.scatter(sigma_pca[idx, 0], sigma_pca[idx, 1],
+                           c=color, label=cat, alpha=dot_alpha, s=20)
+        _add_cluster_envelopes(
+            ax, sigma_pca[:, :2], categories, palette, mode=envelope_mode,
+        )
+        ax.set_xlabel(f'PC1 ({var[0]:.1%})')
+        ax.set_ylabel(f'PC2 ({var[1]:.1%})')
+        ax.set_title(f'(a) Σ_i PCA (from {dim_note})')
+        ax.legend(loc='upper right', fontsize=7)
+        ax.grid(True, alpha=0.3)
+
+    # ---- (b) Volume (log-det or log-trace) by category ----
+    ax = axes[0, 1]
+    for cat, color in palette.items():
+        mask = [c == cat for c in categories]
+        if any(mask):
+            idx = [i for i, m in enumerate(mask) if m]
+            vals = logvol[idx]
+            if np.all(np.isfinite(vals)) and vals.size > 0:
+                ax.hist(vals, bins=30, alpha=0.5, label=cat, color=color)
+    ax.set_xlabel(vol_label)
+    ax.set_ylabel('Count')
+    ax.set_title(vol_title)
+    ax.legend(loc='upper right', fontsize=7)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    # ---- (c) Anisotropy by category ----
+    ax = axes[1, 0]
+    palette_order = list(palette.keys())
+    cat_list = sorted(set(categories),
+                      key=lambda c: palette_order.index(c) if c in palette_order else 99)
+    cat_data, cat_labels, cat_colors_bp = [], [], []
+    for cat in cat_list:
+        idx = [i for i, c in enumerate(categories) if c == cat]
+        if idx:
+            cat_data.append(log_cond[idx])
+            cat_labels.append(cat)
+            cat_colors_bp.append(palette.get(cat, PUB_COLORS['gray']))
+    if cat_data:
+        bp = ax.boxplot(cat_data, labels=cat_labels, patch_artist=True, showfliers=False)
+        for patch, color in zip(bp['boxes'], cat_colors_bp):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.5)
+    ax.set_ylabel(r'$\log_{10}(\lambda_{\max}/\lambda_{\min})$')
+    anisotropy_src = 'eigenvalues' if is_full else 'diagonal entries'
+    ax.set_title(f'(c) Anisotropy by Category (from {anisotropy_src})')
+    ax.grid(True, alpha=0.3, axis='y')
+
+    # ---- (d) Eigenvalue magnitude / diagonal variance spectrum ----
+    ax = axes[1, 1]
+    for cat, color in palette.items():
+        mask = [c == cat for c in categories]
+        if any(mask):
+            idx = [i for i, m in enumerate(mask) if m]
+            flat = evals_np[idx].flatten() if is_full else diag_np[idx].flatten()
+            # Log-scale bins to handle wide dynamic range in covariance magnitudes
+            flat = flat[flat > 0]
+            if flat.size > 0:
+                ax.hist(np.log10(flat), bins=40, alpha=0.4,
+                        label=cat, color=color, density=True)
+    ax.set_xlabel(r'$\log_{10}(\lambda)$' if is_full else r'$\log_{10}(\sigma^2_k)$')
+    ax.set_ylabel('Density')
+    spec_title = '(d) Eigenvalue Spectrum' if is_full else '(d) Diagonal-Variance Spectrum'
+    ax.set_title(spec_title)
+    ax.legend(loc='upper right', fontsize=7)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, bbox_inches='tight')
+
+    return fig
+
+
+# =============================================================================
+# Cross-Representation Comparison
+# =============================================================================
+
+def _plot_representation_panel(
+    ax: "Any",
+    tensor: np.ndarray,
+    title: str,
+    categories: List[str],
+    palette: Dict[str, str],
+    envelope_mode: str,
+    dot_alpha: float,
+) -> None:
+    """Render one 2D PCA panel of plot_representation_comparison.
+
+    Handles flattening of full-cov (N, K, K) → (N, K²) before PCA.
+    """
+    arr = tensor
+    if arr.ndim == 3:
+        arr = arr.reshape(arr.shape[0], -1)
+    proj, var, status = _safe_pca_2d(arr, n_components=2)
+    if proj is None:
+        ax.text(0.5, 0.5, f'PCA unavailable: {status}',
+                transform=ax.transAxes, ha='center', va='center',
+                fontsize=11, color='gray')
+        ax.set_title(title)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        return
+    for cat, color in palette.items():
+        mask = [c == cat for c in categories]
+        if any(mask):
+            idx = [i for i, m in enumerate(mask) if m]
+            ax.scatter(proj[idx, 0], proj[idx, 1],
+                       c=color, alpha=dot_alpha, s=20, label=cat)
+    _add_cluster_envelopes(ax, proj, categories, palette, mode=envelope_mode)
+    ax.set_xlabel(f'PC1 ({var[0]:.1%})')
+    ax.set_ylabel(f'PC2 ({var[1]:.1%})')
+    ax.set_title(title)
+    ax.grid(True, alpha=0.3)
+
+
+def plot_representation_comparison(
+    mu: Optional[torch.Tensor] = None,
+    phi: Optional[torch.Tensor] = None,
+    omega: Optional[torch.Tensor] = None,
+    sigma: Optional[torch.Tensor] = None,
+    step: Optional[int] = None,
+    save_path: Optional[Path] = None,
+    n_tokens: int = 500,
+    gauge_group_label: Optional[str] = None,
+    envelope_mode: str = 'ellipse',
+    label_mode: str = 'category',
+) -> Optional["Any"]:
+    r"""Side-by-side 2×2 PCA comparison of the four token representations.
+
+    Lets a reader see at a glance whether category structure is visible in
+    μ, φ, Ω, and Σ — and if only in some. All four panels use the same token
+    sample and coloring scheme with a single shared legend.
+
+    Any representation passed as None renders a placeholder panel so the
+    layout stays consistent (e.g., Ω will be None for gauge_mode='trivial').
+
+    Args:
+        mu: Belief-mean embeddings (V, K).
+        phi: Gauge-frame embeddings (V, phi_dim).
+        omega: Group elements (V, K, K). Pass None if unavailable.
+        sigma: Covariance beliefs (V, K) or (V, K, K).
+        step: Training step for title.
+        save_path: Output file path.
+        n_tokens: Tokens to visualize (each representation sliced to [:n]).
+        gauge_group_label: e.g. 'SO(3)' or 'GL(30)'.
+        envelope_mode: Envelope overlay. See _add_cluster_envelopes.
+        label_mode: Coloring scheme: 'category' | 'semantic_field' | 'pos'.
+
+    Returns:
+        matplotlib Figure, or None if matplotlib/sklearn unavailable.
+    """
+    if not MATPLOTLIB_AVAILABLE or not SKLEARN_AVAILABLE:
+        return None
+    set_pub_style()
+
+    def _prep(x: Optional[torch.Tensor]) -> Optional[np.ndarray]:
+        if x is None:
+            return None
+        x = x[:n_tokens]
+        if isinstance(x, torch.Tensor):
+            x = x.detach().cpu().float().numpy()
+        else:
+            x = np.asarray(x)
+        return x
+
+    mu_np = _prep(mu)
+    phi_np = _prep(phi)
+    omega_np = _prep(omega)
+    sigma_np = _prep(sigma)
+
+    # Determine n from whatever tensor is available (smallest among provided)
+    lengths = [t.shape[0] for t in (mu_np, phi_np, omega_np, sigma_np) if t is not None]
+    if not lengths:
+        return None
+    n = min(lengths)
+    categories, palette = _resolve_token_colors(n, label_mode=label_mode)
+    dot_alpha = 0.35 if envelope_mode not in ('none', 'centroid') else 0.6
+
+    # Slice everything to the common n
+    def _slice(x):
+        return None if x is None else x[:n]
+    mu_np, phi_np, omega_np, sigma_np = map(_slice, (mu_np, phi_np, omega_np, sigma_np))
+
+    step_str = f" (Step {step})" if step is not None else ""
+    group_str = gauge_group_label or ""
+    group_suffix = f" — {group_str}" if group_str else ""
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 11))
+    fig.suptitle(
+        f'Representation Comparison: μ, φ, Ω, Σ (PCA){group_suffix}{step_str}',
+        fontsize=14, y=1.01,
+    )
+
+    panels = [
+        (axes[0, 0], mu_np,    '(a) μ  (belief means)'),
+        (axes[0, 1], phi_np,   '(b) φ  (gauge frames)'),
+        (axes[1, 0], omega_np, '(c) Ω  (group elements)'),
+        (axes[1, 1], sigma_np, '(d) Σ  (covariance beliefs)'),
+    ]
+    for ax, arr, title in panels:
+        if arr is None:
+            ax.text(0.5, 0.5, '(not available)', transform=ax.transAxes,
+                    ha='center', va='center', fontsize=12, color='gray')
+            ax.set_title(title)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            continue
+        _plot_representation_panel(
+            ax, arr, title, categories, palette, envelope_mode, dot_alpha,
+        )
+
+    # One shared legend: gather handles from the first panel that has any
+    handles, labels = [], []
+    for ax, arr, _ in panels:
+        if arr is None:
+            continue
+        h, l = ax.get_legend_handles_labels()
+        if h:
+            handles, labels = h, l
+            break
+    if handles:
+        fig.legend(handles, labels, loc='lower center', ncol=min(8, len(labels)),
+                   bbox_to_anchor=(0.5, -0.02), fontsize=9, frameon=True)
+
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, bbox_inches='tight')
+
+    return fig
+
+
+# =============================================================================
+# Bhattacharyya MDS — Gaussian-aware Σ embedding
+# =============================================================================
+
+def bhattacharyya_distance_matrix(
+    mu: torch.Tensor,
+    sigma: torch.Tensor,
+    jitter: float = 1e-6,
+) -> torch.Tensor:
+    r"""Pairwise Bhattacharyya distance between token Gaussians.
+
+    For two Gaussians p_i = N(μ_i, Σ_i) and p_j = N(μ_j, Σ_j),
+
+        D_B(i, j) = 1/8 · (μ_i - μ_j)^T Σ̄^{-1} (μ_i - μ_j)
+                  + 1/2 · ln( |Σ̄| / sqrt(|Σ_i|·|Σ_j|) )
+
+    where Σ̄ = (Σ_i + Σ_j) / 2. Symmetric, non-negative, zero iff p_i = p_j.
+
+    Handles both diagonal Σ (vectorized, closed form) and full Σ (batched
+    Cholesky per row). Falls back to jitter + diagonal when Cholesky fails.
+
+    Args:
+        mu: (n, K) belief means.
+        sigma: (n, K) diagonal variances or (n, K, K) full SPD covariance.
+        jitter: Small diagonal added to Σ̄ before Cholesky for stability.
+
+    Returns:
+        (n, n) symmetric non-negative distance matrix with zero diagonal.
+    """
+    if not isinstance(mu, torch.Tensor):
+        mu = torch.as_tensor(mu)
+    if not isinstance(sigma, torch.Tensor):
+        sigma = torch.as_tensor(sigma)
+    mu = mu.detach().cpu().float()
+    sigma = sigma.detach().cpu().float()
+
+    n = mu.shape[0]
+    K = mu.shape[1]
+    assert sigma.shape[0] == n, "mu and sigma must share batch dim"
+    is_full = sigma.dim() == 3
+
+    if not is_full:
+        # Diagonal path — fully vectorized.
+        var = sigma.clamp(min=jitter)  # (n, K)
+        var_i = var.unsqueeze(1)               # (n, 1, K)
+        var_j = var.unsqueeze(0)               # (1, n, K)
+        var_bar = 0.5 * (var_i + var_j)        # (n, n, K)
+
+        mu_i = mu.unsqueeze(1)                 # (n, 1, K)
+        mu_j = mu.unsqueeze(0)                 # (1, n, K)
+        mu_diff = mu_i - mu_j                  # (n, n, K)
+
+        term1 = 0.125 * (mu_diff.pow(2) / var_bar).sum(dim=-1)       # (n, n)
+        log_var = torch.log(var)                                      # (n, K)
+        log_var_bar = torch.log(var_bar)                              # (n, n, K)
+        # 0.5 * (sum log σ̄² - 0.5 sum log σ²_i - 0.5 sum log σ²_j)
+        term2 = 0.5 * (
+            log_var_bar.sum(dim=-1)
+            - 0.5 * log_var.sum(dim=-1).unsqueeze(1)
+            - 0.5 * log_var.sum(dim=-1).unsqueeze(0)
+        )
+        D = term1 + term2
+    else:
+        # Full-covariance path — row-wise batched Cholesky (O(n² K³) total).
+        # Symmetrize first and hoist per-token log|Σ|.
+        sigma = 0.5 * (sigma + sigma.transpose(-2, -1))
+        eye_jitter = jitter * torch.eye(K).unsqueeze(0)               # (1, K, K)
+
+        # Per-token log|Σ_i|: robust via cholesky when possible.
+        try:
+            L_diag = torch.linalg.cholesky(sigma + eye_jitter)        # (n, K, K)
+            logdet_per = 2.0 * torch.log(
+                torch.diagonal(L_diag, dim1=-2, dim2=-1).clamp(min=jitter)
+            ).sum(dim=-1)                                             # (n,)
+        except Exception:
+            # Fallback: slogdet on the (possibly non-PD) input
+            sign, logabs = torch.linalg.slogdet(sigma + eye_jitter)
+            logdet_per = logabs
+
+        D = torch.zeros(n, n, dtype=torch.float32)
+        for i in range(n):
+            sigma_bar = 0.5 * (sigma[i:i + 1] + sigma) + eye_jitter    # (n, K, K)
+            mu_diff = (mu[i:i + 1] - mu).unsqueeze(-1)                 # (n, K, 1)
+            try:
+                L = torch.linalg.cholesky(sigma_bar)                   # (n, K, K)
+                sol = torch.cholesky_solve(mu_diff, L)                 # (n, K, 1)
+                quad = (mu_diff.squeeze(-1) * sol.squeeze(-1)).sum(dim=-1)  # (n,)
+                logdet_bar = 2.0 * torch.log(
+                    torch.diagonal(L, dim1=-2, dim2=-1).clamp(min=jitter)
+                ).sum(dim=-1)                                          # (n,)
+            except Exception:
+                # Degenerate pair — fall back to slogdet + lstsq-solve
+                sign, logdet_bar = torch.linalg.slogdet(sigma_bar)
+                sol = torch.linalg.solve(sigma_bar, mu_diff)
+                quad = (mu_diff.squeeze(-1) * sol.squeeze(-1)).sum(dim=-1)
+            term1 = 0.125 * quad
+            term2 = 0.5 * (logdet_bar - 0.5 * logdet_per[i] - 0.5 * logdet_per)
+            D[i] = (term1 + term2).to(torch.float32)
+
+    # Symmetrize (accumulated floating error), clamp to non-negative, zero diag
+    D = 0.5 * (D + D.transpose(0, 1))
+    D = D.clamp(min=0.0)
+    D.fill_diagonal_(0.0)
+    return D
+
+
+def plot_sigma_bhattacharyya_mds(
+    mu: torch.Tensor,
+    sigma: torch.Tensor,
+    step: Optional[int] = None,
+    save_path: Optional[Path] = None,
+    n_tokens: int = 300,
+    gauge_group_label: Optional[str] = None,
+    envelope_mode: str = 'ellipse',
+    label_mode: str = 'category',
+    mds_random_state: int = 42,
+) -> Optional["Any"]:
+    r"""Gaussian-aware Σ visualization via Bhattacharyya distance + metric MDS.
+
+    Unlike plot_sigma_clustering's panel (a) (flat PCA on reshaped Σ), this
+    figure uses a metric that respects the Gaussian geometry — two tokens
+    are close iff their *distributions* p(x | token) overlap substantially.
+    Uses both μ and Σ, not just Σ.
+
+    Layout (2 panels):
+      (a) Metric MDS embedding from pairwise Bhattacharyya distances, with
+          per-category envelope overlay.
+      (b) Distribution of pairwise distances, split by within-category vs
+          between-category. Separation between the two distributions is a
+          direct diagnostic of whether token categories cluster under the
+          Bhattacharyya metric.
+
+    Cost: O(n²) Gaussian Bhattacharyya evaluations (O(n²K) diagonal,
+    O(n²K³) full). Default n_tokens=300 keeps full-cov runs tractable;
+    raise it for diagonal-covariance models where the per-pair cost is tiny.
+
+    Args:
+        mu: (V, K) belief means.
+        sigma: (V, K) diagonal or (V, K, K) full covariance.
+        step: Training step for title.
+        save_path: Output path.
+        n_tokens: Tokens to embed (sliced to first `n_tokens` rows).
+        gauge_group_label: e.g. 'SO(3)'.
+        envelope_mode: See _add_cluster_envelopes.
+        label_mode: 'category' | 'semantic_field' | 'pos'.
+        mds_random_state: Seed for MDS (stochastic SMACOF init).
+
+    Returns:
+        matplotlib Figure, or None if matplotlib/sklearn unavailable.
+    """
+    if not MATPLOTLIB_AVAILABLE or not SKLEARN_AVAILABLE:
+        return None
+    set_pub_style()
+
+    try:
+        from sklearn.manifold import MDS
+    except ImportError:
+        return None
+
+    n = min(n_tokens, mu.shape[0], sigma.shape[0])
+    mu_sub = mu[:n]
+    sigma_sub = sigma[:n]
+    K = mu_sub.shape[1]
+    is_full = (sigma_sub.dim() == 3) if isinstance(sigma_sub, torch.Tensor) else (sigma_sub.ndim == 3)
+
+    # Pairwise Bhattacharyya distance matrix
+    D = bhattacharyya_distance_matrix(mu_sub, sigma_sub)
+    D_np = D.numpy()
+
+    # Metric MDS to 2D. Precomputed dissimilarity + deterministic seed.
+    # Suppress sklearn's FutureWarnings about `dissimilarity`/`init` rename —
+    # current API still works; updating when sklearn 1.10 lands is a separate
+    # maintenance pass.
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', category=FutureWarning, module='sklearn')
+        mds = MDS(
+            n_components=2, dissimilarity='precomputed', random_state=mds_random_state,
+            n_init=4, max_iter=300, normalized_stress='auto',
+        )
+        coords = mds.fit_transform(D_np)
+    stress = float(mds.stress_) if hasattr(mds, 'stress_') else float('nan')
+
+    categories, palette = _resolve_token_colors(n, label_mode=label_mode)
+    dot_alpha = 0.35 if envelope_mode not in ('none', 'centroid') else 0.6
+
+    step_str = f" (Step {step})" if step is not None else ""
+    group_str = gauge_group_label or f"K={K}"
+    mode_str = "full" if is_full else "diagonal"
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    fig.suptitle(
+        f'Bhattacharyya-MDS on token Gaussians — {group_str} ({mode_str}){step_str}',
+        fontsize=14, y=1.02,
+    )
+
+    # ---- (a) MDS scatter ----
+    ax = axes[0]
+    for cat, color in palette.items():
+        mask = [c == cat for c in categories]
+        if any(mask):
+            idx = [i for i, m in enumerate(mask) if m]
+            ax.scatter(coords[idx, 0], coords[idx, 1],
+                       c=color, label=cat, alpha=dot_alpha, s=20)
+    _add_cluster_envelopes(ax, coords, categories, palette, mode=envelope_mode)
+    ax.set_xlabel('MDS-1')
+    ax.set_ylabel('MDS-2')
+    ax.set_title(f'(a) Metric MDS from D_B  (stress={stress:.2f})')
+    ax.legend(loc='upper right', fontsize=7)
+    ax.grid(True, alpha=0.3)
+
+    # ---- (b) Within vs between category distances ----
+    ax = axes[1]
+    iu = np.triu_indices(n, k=1)
+    pair_d = D_np[iu]
+    cat_i = np.array(categories)[iu[0]]
+    cat_j = np.array(categories)[iu[1]]
+    within_mask = (cat_i == cat_j)
+    within = pair_d[within_mask]
+    between = pair_d[~within_mask]
+
+    if within.size > 0 and between.size > 0:
+        # Use percentile-based range to avoid one outlier stretching bins
+        lo = float(np.percentile(pair_d, 1))
+        hi = float(np.percentile(pair_d, 99))
+        bins = np.linspace(lo, hi, 50)
+        ax.hist(within, bins=bins, alpha=0.5, density=True,
+                label=f'within-category (n={within.size})', color=PUB_COLORS['blue'])
+        ax.hist(between, bins=bins, alpha=0.5, density=True,
+                label=f'between-category (n={between.size})', color=PUB_COLORS['red'])
+        # Mean markers
+        ax.axvline(float(np.mean(within)), color=PUB_COLORS['blue'],
+                   linestyle='--', linewidth=1)
+        ax.axvline(float(np.mean(between)), color=PUB_COLORS['red'],
+                   linestyle='--', linewidth=1)
+        ratio = float(np.mean(between) / max(np.mean(within), 1e-12))
+        ax.set_title(f'(b) Pairwise D_B Distribution  (between/within = {ratio:.2f}x)')
+    else:
+        ax.text(0.5, 0.5, 'insufficient categories', transform=ax.transAxes,
+                ha='center', va='center')
+        ax.set_title('(b) Pairwise D_B Distribution')
+
+    ax.set_xlabel('Bhattacharyya distance  D_B(i, j)')
+    ax.set_ylabel('Density')
+    ax.legend(loc='upper right', fontsize=8)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, bbox_inches='tight')
 
     return fig
 
@@ -1616,6 +2651,11 @@ def analyze_sigma_semantics(
     sigma: torch.Tensor,
     n_tokens: int = 500,
     verbose: bool = True,
+    step: Optional[int] = None,
+    save_path: Optional[Path] = None,
+    gauge_group_label: Optional[str] = None,
+    envelope_mode: str = 'ellipse',
+    label_mode: str = 'category',
 ) -> Dict[str, Any]:
     r"""Analyze semantic structure in covariance embeddings Sigma.
 
@@ -1720,6 +2760,27 @@ def analyze_sigma_semantics(
         f_stat = results.get('sigma_trace_anova_f')
         if f_stat is not None:
             print(f"    Trace ANOVA F={f_stat:.1f}, p={results.get('sigma_trace_anova_p', 1):.2e}")
+
+    # Generate the 4-panel sigma clustering figure when a save path is given
+    if save_path is not None:
+        try:
+            fig = plot_sigma_clustering(
+                sigma_sub,
+                step=step,
+                save_path=save_path,
+                n_tokens=n,
+                gauge_group_label=gauge_group_label,
+                envelope_mode=envelope_mode,
+                label_mode=label_mode,
+            )
+            if fig is not None and MATPLOTLIB_AVAILABLE:
+                plt.close(fig)
+            results['sigma_plot_saved'] = True
+        except Exception as e:
+            if verbose:
+                print(f"  [WARN] Could not generate sigma plot: {e}")
+            results['sigma_plot_saved'] = False
+            results['sigma_plot_error'] = str(e)
 
     return results
 

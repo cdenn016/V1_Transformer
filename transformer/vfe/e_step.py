@@ -14,6 +14,7 @@ which internally compute Omega @ Sigma @ Omega^T.
 from __future__ import annotations
 
 import math
+import warnings
 from typing import Optional, Callable, List, Tuple, TYPE_CHECKING
 
 import torch
@@ -221,6 +222,20 @@ class VFEEStep(nn.Module):
             import torch.nn.functional as F_fn
             alpha_c0_full_hoisted = F_fn.softplus(self.raw_c0)
 
+        # Bogacz 2017 invariant: F(t+1) <= F(t) for correct E-step descent.
+        # Track the per-iteration scalar free energy so silent divergence is
+        # surfaced as a warning instead of corrupting training without signal.
+        # Diagonal covariance only — full-cov KL(q||p) requires log|det| and
+        # is skipped here (monotonicity still holds, just not monitored).
+        # Tolerance is (rel, abs) combined: warn only on violations that
+        # exceed BOTH relative and absolute floors.  Finite-step natural
+        # gradient can overshoot in a single step without implying
+        # divergence; we flag only persistent or large excursions.
+        f_history: List[float] = []
+        f_prev: Optional[float] = None
+        f_monotone_rel_tol = 0.05   # 5% of current |F|
+        f_monotone_abs_tol = 1e-2
+
         for t in range(self.n_e_steps):
             # 1. Compute transport and KL attention
             block_exp_pairs = compute_gauge_transport(
@@ -239,9 +254,11 @@ class VFEEStep(nn.Module):
             if self.E_learnable_alpha:
                 alpha_eff = self.get_bayesian_alpha(mu, mu_p, sigma, sigma_p)
 
-            # rope_full_gauge: per-head autograd path that rotates BOTH μ and Σ
+            # rope_full_gauge: per-head autograd path that rotates BOTH μ and Σ.
+            # NOTE: vfe currently treats 'vfe_only' and 'both' identically;
+            # differentiating them requires splitting this branch.
             if (
-                self.rope_full_gauge
+                self.rope_full_gauge != 'off'
                 and self.use_rope
                 and not torch.is_inference_mode_enabled()
                 and torch.is_grad_enabled()
@@ -333,6 +350,50 @@ class VFEEStep(nn.Module):
                     gauge_covariant_ridge=self.gauge_covariant_ridge,
                 )
 
+            # 2b. Monotone free-energy check (diagonal covariance only).
+            # F(t) is measured at the belief state AT THE START of this
+            # iteration, before any update. Compared against F(t-1) measured
+            # at the previous iteration's entry state.  Off-manifold detour:
+            # alpha_eff may be a Tensor (E_learnable_alpha), so we reduce it
+            # to a scalar via .mean() for the bookkeeping.
+            if is_diagonal:
+                with torch.no_grad():
+                    _sp = sigma_p.clamp(min=eps)
+                    _sq = sigma.clamp(min=eps)
+                    kl_qp_sum = 0.5 * (
+                        _sq / _sp
+                        + (mu - mu_p) ** 2 / _sp
+                        - 1.0
+                        + _sp.log()
+                        - _sq.log()
+                    ).sum()
+                    if isinstance(alpha_eff, torch.Tensor):
+                        _alpha_scalar = float(alpha_eff.detach().mean().item())
+                    else:
+                        _alpha_scalar = float(alpha_eff)
+                    f_align_sum = (beta.detach() * kl_matrix.detach()).sum()
+                    f_t = (
+                        _alpha_scalar * float(kl_qp_sum.item())
+                        + float(self.lambda_align) * float(f_align_sum.item())
+                    )
+                    f_history.append(f_t)
+                    if f_prev is not None:
+                        _tol = max(
+                            f_monotone_abs_tol,
+                            f_monotone_rel_tol * abs(f_prev),
+                        )
+                        if f_t > f_prev + _tol:
+                            warnings.warn(
+                                f"E-step iter {t}: F increased "
+                                f"{f_prev:.6f} -> {f_t:.6f} "
+                                f"(delta={f_t - f_prev:.2e}). Monotone "
+                                f"descent violated; check e_*_lr or "
+                                f"conditioning.",
+                                RuntimeWarning,
+                                stacklevel=2,
+                            )
+                    f_prev = f_t
+
             # 3. Optional: add active inference gradients
             if active_inference_fn is not None:
                 ai_grad_mu, ai_grad_sigma = active_inference_fn(mu, sigma)
@@ -382,6 +443,23 @@ class VFEEStep(nn.Module):
                         self._last_diagnostics['prior_belief_kl_max'] = kl_qp.sum(-1).max().item()
                         self._last_diagnostics['prior_belief_kl_std'] = kl_qp.sum(-1).std().item()
 
+                    # Free-energy trajectory (diagonal covariance only; empty
+                    # list on full-cov paths).  Downstream can assert
+                    # monotonicity as a hard correctness gate in unit tests.
+                    if f_history:
+                        self._last_diagnostics['f_history'] = list(f_history)
+                        self._last_diagnostics['f_final'] = f_history[-1]
+                        def _ok(i: int) -> bool:
+                            prev = f_history[i - 1]
+                            tol = max(
+                                f_monotone_abs_tol,
+                                f_monotone_rel_tol * abs(prev),
+                            )
+                            return f_history[i] <= prev + tol
+                        self._last_diagnostics['f_monotone'] = all(
+                            _ok(i) for i in range(1, len(f_history))
+                        )
+
             # 5. Mean update: mu -= eta_mu * nat_grad_mu
             mu = mu - self.e_mu_lr * nat_grad_mu
 
@@ -420,52 +498,60 @@ class VFEEStep(nn.Module):
         :math:`\partial F_{\text{align}} / \partial\phi`, then applies
         Killing form preconditioning and retracts on the Lie algebra.
         """
-        phi_for_grad = phi.clone().requires_grad_(True)
+        # IMPORTANT: this path uses torch.autograd.grad internally.  When the
+        # caller is inside torch.no_grad() (e.g. during validation), autograd
+        # is globally disabled and `requires_grad_(True)` is silently ignored
+        # — the ``if alignment_loss.grad_fn is not None`` guard below would
+        # then skip the update rather than raise, masking the failure.  We
+        # force-enable grad tracking here to match the defensive pattern in
+        # _compute_rope_full_gauge_gradient_per_head (vfe_gradients.py:2106).
+        with torch.enable_grad():
+            phi_for_grad = phi.clone().requires_grad_(True)
 
-        # Single forward through compute_kl_attention; both beta and kl_matrix
-        # share the same autograd subgraph through phi_for_grad. The product
-        # rule decomposition below uses .detach() to route gradients along
-        # exactly one of the two paths per term.
-        _kappa = kappa if kappa is not None else self.effective_kappa
-        beta_phi, kl_h = compute_kl_attention(
-            mu.detach(), sigma.detach() if sigma is not None else None,
-            phi_for_grad, self.generators,
-            self.irrep_dims, _kappa, mask,
-            use_rope=self.use_rope,
-            rope_base=self.rope_base,
-            enforce_orthogonal=self.enforce_orthogonal,
-            mask_self_attention=self.mask_self_attention,
-            exact_diagonal_transport=self.exact_diagonal_transport,
-        )
-
-        # Product rule: d/dphi [sum(beta * KL)] = beta * dKL/dphi + KL * dbeta/dphi
-        alignment_loss = (
-            self.lambda_align * (beta_phi.detach() * kl_h).sum()
-            + self.lambda_soft * (beta_phi * kl_h.detach()).sum()
-        )
-
-        if alignment_loss.grad_fn is not None:
-            grad_phi = torch.autograd.grad(
-                alignment_loss, phi_for_grad,
-                create_graph=False, retain_graph=False,
-            )[0]
-
-            # Precondition
-            grad_phi = precondition_phi_gradient(
-                grad_phi, phi,
-                mode=self.phi_preconditioner_mode,
-                preconditioner=self._phi_preconditioner,
-                generators=self.generators,
+            # Single forward through compute_kl_attention; both beta and
+            # kl_matrix share the same autograd subgraph through phi_for_grad.
+            # The product rule decomposition below uses .detach() to route
+            # gradients along exactly one of the two paths per term.
+            _kappa = kappa if kappa is not None else self.effective_kappa
+            beta_phi, kl_h = compute_kl_attention(
+                mu.detach(), sigma.detach() if sigma is not None else None,
+                phi_for_grad, self.generators,
+                self.irrep_dims, _kappa, mask,
+                use_rope=self.use_rope,
+                rope_base=self.rope_base,
+                enforce_orthogonal=self.enforce_orthogonal,
+                mask_self_attention=self.mask_self_attention,
+                exact_diagonal_transport=self.exact_diagonal_transport,
             )
 
-            # Retract
-            phi = _retract_phi(
-                phi, grad_phi, self.generators,
-                step_size=self.e_phi_lr,
-                gauge_group=self.gauge_group,
-                project_slk=self.phi_project_slk,
-                trace_clamp=self.phi_trace_clamp,
-                irrep_dims=self.irrep_dims,
+            # Product rule: d/dphi [sum(beta * KL)] = beta * dKL/dphi + KL * dbeta/dphi
+            alignment_loss = (
+                self.lambda_align * (beta_phi.detach() * kl_h).sum()
+                + self.lambda_soft * (beta_phi * kl_h.detach()).sum()
             )
+
+            if alignment_loss.grad_fn is not None:
+                grad_phi = torch.autograd.grad(
+                    alignment_loss, phi_for_grad,
+                    create_graph=False, retain_graph=False,
+                )[0]
+
+                # Precondition
+                grad_phi = precondition_phi_gradient(
+                    grad_phi, phi,
+                    mode=self.phi_preconditioner_mode,
+                    preconditioner=self._phi_preconditioner,
+                    generators=self.generators,
+                )
+
+                # Retract
+                phi = _retract_phi(
+                    phi, grad_phi, self.generators,
+                    step_size=self.e_phi_lr,
+                    gauge_group=self.gauge_group,
+                    project_slk=self.phi_project_slk,
+                    trace_clamp=self.phi_trace_clamp,
+                    irrep_dims=self.irrep_dims,
+                )
 
         return phi

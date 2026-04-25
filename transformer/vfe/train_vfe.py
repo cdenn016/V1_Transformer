@@ -78,7 +78,7 @@ config = {
 
     # === Positional encoding ===
     'use_rope':                 True,
-    'rope_full_gauge':          False,      # RoPE on Σ as well as μ (auto-enabled for full-cov)    
+    'rope_full_gauge':          'off',      # 'off' | 'vfe_only' | 'both'. Requires diagonal_covariance=False when != 'off'.
     'rope_base':                100.0,
     
     

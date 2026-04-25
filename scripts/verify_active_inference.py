@@ -138,7 +138,7 @@ TRAIN_CONFIG = {
     'killing_form_sym_dampening': 0.5,
 
     # === Position encoding ===
-    'rope_full_gauge':    True,    #requires diagonal cov
+    'rope_full_gauge':    'vfe_only',    # one of {'off', 'vfe_only', 'both'}
     'use_rope':           True,
     'rope_base':          50, 
     'pos_encoding_mode': 'none',

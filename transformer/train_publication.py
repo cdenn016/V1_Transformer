@@ -90,7 +90,7 @@ from pathlib import Path
 #        - 'sym2':   dim = N*(N+1)/2 - 1  (symmetric traceless Sym²₀V)
 
 DEFAULT_MODE = 'em'               # Which mode to run
-SEED = 6
+SEED = 111         #6,23,111
 # Dataset
 DEFAULT_DATASET = 'wikitext-103'  
 # 'wikitext-2' (~2M tokens) or 'wikitext-103' (~103M tokens), 'wiki-ja' japanese (~1B tokens, 100k vocab)
@@ -119,11 +119,15 @@ _DEBUG_VFE_GRADS = False
 EM_CONFIG = {
     # === Architecture ===
     'vocab_size':                 50257,
-    'embed_dim':                  80,
+    'embed_dim':                  30,
     'max_seq_len':                128,
     
-    'batch_size':                 16, 
-    'max_steps':                  200000,
+    'batch_size':                 32, 
+    'max_steps':                  30000,
+     
+    'stride':                     128,                                                                                                
+    'random_offset_per_epoch':    True,
+    'stride_base_seed':           6,
     
     'n_layers':                   1,
     'ffn_n_iterations':           1,
@@ -132,8 +136,8 @@ EM_CONFIG = {
     #'grad_accumulation_steps': 1,
     #'gradient_checkpoint_vfe': False,
     
-    'gauge_dim':                   20,
-    'irrep_spec':       [('fund', 4, 20)],
+    'gauge_dim':                   10,
+    'irrep_spec':       [('fund', 3, 10)],
 
     'use_prior_bank':             False,
     'gauge_fixed_priors':         False,    
@@ -144,18 +148,18 @@ EM_CONFIG = {
   
 
     'kappa_beta':                 1,
-    'kappa_warmup_steps':         45000,  # freeze kappa for first n steps
+    'kappa_warmup_steps':         7500,  # freeze kappa for first n steps
     'learnable_head_kappa':       False, # If True, learn per-head κ_h via log_kappa_per_head
 
     'e_step_sigma_floor':         0.01,   # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
     
     # === EM gradient-flow mode ===
     'em_mode':                    'em_phi_p',  # φ∈q: E-step optimizes μ,Σ,φ; all detached at EM boundary
-                                                # - 'straight_through' (default) — mu_p, sigma_p attached, semi-gradient phi
-                                                # - 'ift_phi' — same + full IFT phi gradient
-                                                # - 'em_phi_q' — clean EM, phi in q, all detached at boundary
-                                                # - 'em_phi_p' — clean EM, phi frozen in E-step
-                                                # - 'implicit_ift' — experimental IFT-scaled M-step
+                                               # - 'straight_through' (default) — mu_p, sigma_p attached, semi-gradient phi
+                                               # - 'ift_phi' — same + full IFT phi gradient
+                                               # - 'em_phi_q' — clean EM, phi in q, all detached at boundary
+                                               # - 'em_phi_p' — clean EM, phi frozen in E-step
+                                               # - 'implicit_ift' — experimental IFT-scaled M-step
 
     # === GL(K) determinant control (off by default; pick at most one) ===
     # GL(K) has an unbounded trace direction that L2-norm clamping does not
@@ -194,7 +198,7 @@ EM_CONFIG = {
     'norm_type':                  'layernorm',  # 'layernorm' | 'rmsnorm' | 'mahalnorm' | 'none'
     'residual_type':              'additive',    # 'additive': mu_q = mu_q + mu_sub 
                                          # 'delta':    mu_q = mu_q + (mu_sub - mu_normalized),
-    
+    #'centered_mahalnorm'
     # === E-step Weights ===
  
     'E_alpha':                    1,      # E-step prior coupling weight
@@ -248,7 +252,7 @@ EM_CONFIG = {
     # === Position encoding ===
     'use_rope':                   True,
     'rope_base':                  100,   
-    'rope_full_gauge':            False,
+    'rope_full_gauge':            'off', # 'off', 'both', 'vfe_only'
     'pos_encoding_mode':          'none',
 
     # === Embedding init ===
@@ -260,12 +264,12 @@ EM_CONFIG = {
 
 
     # === Logging ===
-    'log_interval':               500,
-    'eval_interval':              5000,
+    'log_interval':               200,
+    'eval_interval':              2000,
     'checkpoint_interval':        25000,
-    'semantic_analysis_interval': 10000,
-    'gauge_geometry_interval':    10000,   # Gauge field Dirichlet energy + invariants
-    'fiber_trajectory_interval':  10000,   # Fisher-Rao E-step trajectory (requires ffn_n_iterations > 1)
+    'semantic_analysis_interval': 4000,
+    'gauge_geometry_interval':    4000,   # Gauge field Dirichlet energy + invariants
+    'fiber_trajectory_interval':  4000,   # Fisher-Rao E-step trajectory (requires ffn_n_iterations > 1)
 
     # =================================================================
     # NON-FLAT GAUGE TRANSPORT (holonomy)
@@ -290,7 +294,7 @@ EM_CONFIG = {
     # → super-blocks: [20, 10]  (heads 0,1 merged into GL(20), head 2 alone)
     
     # === Layer/iteration diagnostics ===
-    'track_layer_diagnostics':     True,
+    'track_layer_diagnostics':     False,
     'track_iteration_diagnostics': False,
     'diagnostics_interval':        25,
     
@@ -311,6 +315,9 @@ EM_CONFIG = {
     'grad_clip':                   50.0,
     'hidden_dim':                  508,
     
+    'spd_floor_mode':             'eigclamp',      # new default, can omit
+    'enable_spd_diagnostics':     True,    # shows spd_eig_min_t/q and cond
+    'assert_finite_loss':         True,        # raise instead of silent skip
     
     'warmup_steps':                100,
     'num_workers':                 0,   # 0 is faster on Windows (spawn multiprocessing overhead)
@@ -321,9 +328,9 @@ EM_CONFIG = {
 
 
     # ===== Active Inference =======
-    'active_inference_pragmatic_weight':  0.25,   # start small
-    'active_inference_epistemic_weight':  1,   # keep both ON to avoid feedback loop
-    'active_inference_epistemic_samples': 2,     # MC samples for BALD
+    'active_inference_pragmatic_weight':  2,   # start small
+    'active_inference_epistemic_weight':  5,   # keep both ON to avoid feedback loop
+    'active_inference_epistemic_samples': 6,     # MC samples for BALD
 }
 
 

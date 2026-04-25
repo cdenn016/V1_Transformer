@@ -4,15 +4,15 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 ## Hard Constraints
 
-**NO NEURAL NETWORKS**: No `nn.Linear`, no MLPs, no learned W_Q/W_K/W_V projections, no activation functions (GELU, ReLU, etc.). The only retained neural component is a linear output projection from K dimensions to vocabulary size. If you are tempted to add an MLP or activation function, you are violating the core thesis. **Documented exceptions**: `connection.py` MLP mode (optional non-flat transport research variant, bilinear default is constraint-compliant), `attention.py` `use_output_projection` (off by default, ablation-only option).
+**NO NEURAL NETWORKS**: No `nn.Linear`, no MLPs, no learned W_Q/W_K/W_V projections, no activation functions (GELU, ReLU, etc.). The only retained neural component is a linear output projection from K dimensions to vocabulary size (subsumed by the PriorBank decode, `logits = -KL(q || π_v)/τ`, when `use_prior_bank=True`). If you are tempted to add an MLP or activation function, you are violating the core thesis. **Documented exceptions**: `connection.py` MLP mode (optional non-flat transport research variant; bilinear default is constraint-compliant), `attention.py` `use_output_projection` (default False as of 2026-04-20 per `VFE_Transformer_Idea.md` §18.2 — "No separate nn.Linear output projection; Law 3 is enforced by using the same PriorBank for both ends"; ablation-only option, breaks gauge covariance because W_O acts on μ but not Σ). The opt-in `use_equivariant_head_mixer` provides a principled replacement (Schur-commutant mixer with n² scalar params per irrep type, applied symmetrically to μ and `M·Σ·Mᵀ`), strictly equivariant only under tied gauges — warns at construction when gauges are per-head independent.
 
 **NO CLI ARGUMENTS (with one documented exception)**: Entry points use the click-to-run pattern. Edit config dicts directly in the file, then press Run. Do not add `argparse`, `click`, `typer`, or any CLI flag parsing to *new* entry points. **Exception**: `transformer/train_publication.py` uses `argparse` for `--mode` / `--ffn_mode` / `--device` / `--checkpoint_dir` / `--seed` / `--dataset` / `--semantic_analysis_interval` because it dispatches between many preset configurations defined as dicts inside the same file. The CLI here selects which config dict to run, it does not expose tunable hyperparameters — those still live in the file-level dicts. Do not extend this exception to other entry points, and do not add new `add_argument` calls that bypass the dict-based config contract.
 
 **PRESERVE GAUGE EQUIVARIANCE**: Covariance transport must always use the sandwich product: `Sigma_transported = Omega @ Sigma @ Omega.T`. Never transport covariance without the conjugation. This is the single most common correctness bug. diagonal approximation is allowable for speed
 
-**E-STEP MUST NOT SEE TARGETS**: No `use_obs_in_vfe` or equivalent path that feeds target tokens into the E-step belief inference. Target tokens enter the training objective only via the outer CE loss in `compute_free_energy_loss` (the observation-likelihood term of the free energy). The E-step is pure belief inference (prior + alignment only). The flag was removed 2026-04-16 after training runs with it enabled were found to let the model see its predictions before emitting them.
+**E-STEP MUST NOT SEE TARGETS**
 
-**KNOWN GAP — RoPE × MahalanobisNorm**: When `diagonal_covariance=True` AND `use_rope=True` AND `rope_full_gauge=False` (the diagonal-σ path forbids `rope_full_gauge=True` per `vfe/config.py:133-135`), RoPE rotates μ but not σ. Downstream `MahalanobisNorm(μ, σ)` in `vfe/block.py` then divides rotated μ by un-rotated σ, breaking strict SE(K) covariance for that combination. Acceptable as documented research limitation; track in `VFE_Transformer_Idea.md`.
+**KNOWN GAP — RoPE × MahalanobisNorm**: When `diagonal_covariance=True` AND `use_rope=True` AND `rope_full_gauge='off'` (the diagonal-σ path forbids non-`'off'` values in `vfe/config.py::__post_init__`), RoPE rotates μ but not σ. Downstream `MahalanobisNorm(μ, σ)` in `vfe/block.py` then divides rotated μ by un-rotated σ, breaking strict SE(K) covariance for that combination. Acceptable as documented research limitation; track in `VFE_Transformer_Idea.md`.
 
 **Figures**: ALL Figures should be publication quality by default.
 
@@ -24,14 +24,16 @@ Gauge-covariant variational free energy transformer for language modeling. No ne
 
 **There should ALWAYS exist a theoretically/mathematically "pure" path under appropriate toggles.**  Computationally extreme paths should be 'opt in' toggles and clearly documented.
 
-**LOCAL CODEBASE IS THE SOURCE OF TRUTH UNLESS OTHERWISE INSTRUCTED**
-
-**Check for sub-agents, skills, and plug-ins before deploying your own. additionally you should deploy a 'verifier' agent indepentently to verify any issues/discoveries/etc**
+**Check for sub-agents, skills, and plug-ins before deploying your own. 
 
 **check claude-mem for prior session context when resuming work on a topic**
 
 Before you say the fix is done: (1) open my active config file, (2) trace every relevant key through the config loader and any override logic, (3) confirm the exact line you changed is reached at runtime under my config, (4) only then run tests and report.
 
+
+##Agent policy
+
+-always deploy parallel investigation agents first and then a separate 'verifier' agent. The verifier will check the discoveries of the investigators  
 
 ## Code Conventions
 
@@ -85,7 +87,6 @@ F = alpha * KL(q_i || p_i)                    # self-coupling: beliefs to priors
 **Humility** say "i don't know" whenever you are unsure about anything.
 
 **Verify** Use citations to verify theoretical and mathematical suggestions and responses
-
 
 **Be direct.** State errors and concerns plainly. "This is wrong because X" not "This might potentially be slightly off." Always ultra-think and double check.
 

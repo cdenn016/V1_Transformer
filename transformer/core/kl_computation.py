@@ -59,21 +59,47 @@ class KLMode(Enum):
 # Utility
 # =============================================================================
 
-def safe_kl_clamp(kl: torch.Tensor, kl_max: float = 100.0) -> torch.Tensor:
+def safe_kl_clamp(
+    kl: torch.Tensor,
+    kl_max: float = 100.0,
+    propagate_nonfinite: bool = False,
+) -> torch.Tensor:
     r"""Clamp a KL tensor to a finite, non-negative range.
 
-    Applies ``clamp(0, kl_max)`` then replaces NaN/+inf with *kl_max* and
-    -inf with 0.  Using ``nan=kl_max`` (repulsive) rather than ``nan=0.0``
-    (attractive) ensures that numerically degenerate pairs are ignored by
-    the downstream softmax rather than attended to.
+    Default behaviour (``propagate_nonfinite=False``): applies
+    ``clamp(0, kl_max)`` then replaces NaN/+inf with ``kl_max`` and -inf
+    with 0.  Using ``nan=kl_max`` (repulsive) rather than ``nan=0.0``
+    (attractive) ensures that numerically degenerate pairs are ignored
+    by the downstream softmax rather than attended to.
+
+    When ``propagate_nonfinite=True``: preserves NaN/±inf in the output
+    (still applies the upper ``kl_max`` clamp on finite entries and
+    zeros negatives).  Use this in diagnostic runs to make divergence
+    loud instead of masking it — any non-finite KL will poison the
+    softmax and trip the training loop's ``assert_finite_loss`` guard
+    rather than saturating silently.
 
     Args:
         kl: Tensor of (possibly un-clamped) KL values.
         kl_max: Upper bound.  Default 100.0.
+        propagate_nonfinite: If True, do NOT replace NaN/inf with
+            ``kl_max``; let them propagate.  Default False.
 
     Returns:
         Clamped tensor, same shape and device as *kl*.
     """
+    # Saturation counter: how many entries hit the NaN/inf → kl_max path,
+    # or the upper clamp ceiling. Observational only.
+    _nonfinite = ~torch.isfinite(kl)
+    if _nonfinite.any():
+        _nr("kl_nonfinite", count=int(_nonfinite.sum().item()))
+    _at_ceiling = kl >= kl_max
+    if _at_ceiling.any():
+        _nr("kl_saturated", count=int(_at_ceiling.sum().item()))
+    if propagate_nonfinite:
+        # Preserve NaN/±inf; only clamp finite entries to [0, kl_max].
+        finite_clamped = kl.clamp(min=0.0, max=kl_max)
+        return torch.where(_nonfinite, kl, finite_clamped)
     kl = kl.clamp(min=0.0, max=kl_max)
     return kl.nan_to_num(nan=kl_max, posinf=kl_max, neginf=0.0)
 
@@ -92,6 +118,10 @@ def _kl_kernel_dense(
     alpha_div: float = 1.0,
     exp_phi_q: torch.Tensor = None,   # (..., K, K) local frame at q (optional)
     exp_phi_t: torch.Tensor = None,   # (..., K, K) local frame at t (optional)
+    sigma_floor: Optional[float] = None,
+    spd_floor_mode: str = 'eigclamp',
+    enable_spd_diagnostics: bool = False,
+    propagate_nonfinite: bool = False,
 ) -> torch.Tensor:
     r"""Full-covariance KL or Rényi :math:`\alpha`-divergence.
 
@@ -159,6 +189,26 @@ def _kl_kernel_dense(
     sigma_q_reg = sigma_q + eps * R_q
     sigma_t_reg = sigma_t + eps * R_t
 
+    # Eigenvalue floor in the transported (post-sandwich) frame. This bounds
+    # κ(Σ_t) before the Cholesky, which otherwise relies on 5-round jitter
+    # escalation starting at eps and is unaware of the E-step σ_p floor.
+    if sigma_floor is not None and spd_floor_mode == 'eigclamp':
+        from transformer.core.vfe_utils import spd_eigfloor as _spd_eigfloor
+        sigma_q_reg = _spd_eigfloor(sigma_q_reg, sigma_floor, exp_phi=exp_phi_q)
+        sigma_t_reg = _spd_eigfloor(sigma_t_reg, sigma_floor, exp_phi=exp_phi_t)
+
+    if enable_spd_diagnostics:
+        # O(B·N·N·K³) per call — guarded behind flag.
+        try:
+            with torch.no_grad():
+                eig_t = torch.linalg.eigvalsh(sigma_t_reg)
+                eig_q = torch.linalg.eigvalsh(sigma_q_reg)
+                _nr("spd_eig_min_t", value=float(eig_t.min().item()))
+                _nr("spd_eig_min_q", value=float(eig_q.min().item()))
+                _nr("spd_cond_t", value=float((eig_t.max() / eig_t.clamp(min=1e-30).min()).item()))
+        except RuntimeError:
+            _nr("spd_diagnostic_eigh_fail")
+
     # NaN guard: transported covariances can contain NaN when phi is very large.
     # We track which pairs have NaN and set their KL to kl_max after
     # computation, rather than replacing sigma_t with identity (which
@@ -176,6 +226,12 @@ def _kl_kernel_dense(
         )
 
     def _cholesky_with_fallback(mat: torch.Tensor) -> torch.Tensor:
+        # TODO: when spd_floor_mode='eigclamp' with sigma_floor set, the
+        #       pre-clamp above guarantees κ(mat) ≤ σ_max²/floor, and this
+        #       5-round ridge escalation becomes dead code. Retained as a
+        #       safety net for callers that do not thread sigma_floor.
+        #       Audit call sites and remove the escalation path once every
+        #       production caller is eigclamp-gated.
         L, info = torch.linalg.cholesky_ex(mat)
         if not info.any():
             return L
@@ -267,11 +323,15 @@ def _kl_kernel_dense(
 
             kl = 0.5 * (mahal_term + logdet_term)
 
-        kl = safe_kl_clamp(kl, kl_max)
-        # Enforce NaN-flagged pairs → kl_max (consistent with safe_kl_clamp's
-        # NaN→kl_max policy, overriding the identity-replacement workaround)
+        kl = safe_kl_clamp(kl, kl_max, propagate_nonfinite=propagate_nonfinite)
+        # Enforce NaN-flagged pairs: either mask to kl_max (default) or let
+        # them propagate for loud divergence under diagnostic mode.
         if nan_mask.any():
-            kl = torch.where(nan_mask, torch.tensor(kl_max, device=kl.device, dtype=kl.dtype), kl)
+            if propagate_nonfinite:
+                _nan_val = torch.tensor(float('nan'), device=kl.device, dtype=kl.dtype)
+                kl = torch.where(nan_mask, _nan_val, kl)
+            else:
+                kl = torch.where(nan_mask, torch.tensor(kl_max, device=kl.device, dtype=kl.dtype), kl)
         return kl.to(orig_dtype)
 
     except RuntimeError as exc:
@@ -418,6 +478,7 @@ def _kl_kernel_block_diagonal(
     kl_max: float,
     eps: float,
     alpha_div: float = 1.0,
+    sigma_floor: Optional[float] = None,
 ) -> torch.Tensor:
     r"""Block-diagonal KL or Rényi :math:`\alpha`-divergence -- delegates to fused kernels.
 
@@ -452,7 +513,7 @@ def _kl_kernel_block_diagonal(
     else:
         return fused_block_diagonal_kl_full(
             mu_q, sigma_q, block_exp_pairs, irrep_dims, eps=eps,
-            alpha_div=alpha_div,
+            alpha_div=alpha_div, sigma_floor=sigma_floor,
         )
 
 
@@ -474,6 +535,11 @@ def compute_kl_matrix(
     kl_max: float = 100.0,
     eps: float = 1e-6,
     alpha_divergence: float = 1.0,
+    # Full-covariance SPD floor (only consumed by DENSE mode)
+    sigma_floor: Optional[float] = None,
+    spd_floor_mode: str = 'eigclamp',
+    enable_spd_diagnostics: bool = False,
+    propagate_nonfinite: bool = False,
 ) -> torch.Tensor:
     r"""Compute pairwise KL or Rényi :math:`\alpha`-divergence matrix.
 
@@ -559,6 +625,7 @@ def compute_kl_matrix(
             kl_max=kl_max,
             eps=eps,
             alpha_div=alpha_divergence,
+            sigma_floor=sigma_floor,
         )
 
     # DENSE and DIAGONAL modes: select kernel, optionally chunk.
@@ -566,11 +633,19 @@ def compute_kl_matrix(
         return _compute_unchunked(
             mu_q, sigma_q, mu_transported, sigma_transported,
             mode, kl_max, eps, alpha_div=alpha_divergence,
+            sigma_floor=sigma_floor,
+            spd_floor_mode=spd_floor_mode,
+            enable_spd_diagnostics=enable_spd_diagnostics,
+            propagate_nonfinite=propagate_nonfinite,
         )
     else:
         return _compute_chunked(
             mu_q, sigma_q, mu_transported, sigma_transported,
             mode, chunk_size, kl_max, eps, alpha_div=alpha_divergence,
+            sigma_floor=sigma_floor,
+            spd_floor_mode=spd_floor_mode,
+            enable_spd_diagnostics=enable_spd_diagnostics,
+            propagate_nonfinite=propagate_nonfinite,
         )
 
 
@@ -587,6 +662,10 @@ def _compute_unchunked(
     kl_max: float,
     eps: float,
     alpha_div: float = 1.0,
+    sigma_floor: Optional[float] = None,
+    spd_floor_mode: str = 'eigclamp',
+    enable_spd_diagnostics: bool = False,
+    propagate_nonfinite: bool = False,
 ) -> torch.Tensor:
     """Compute full (B, N, N) divergence matrix in one vectorised pass."""
     B, N, K = mu_q.shape
@@ -602,7 +681,11 @@ def _compute_unchunked(
         # DENSE
         sigma_i = sigma_q[:, :, None, :, :].expand(-1, -1, N, -1, -1)
         return _kl_kernel_dense(mu_i, sigma_i, mu_transported, sigma_transported,
-                                kl_max=kl_max, eps=eps, alpha_div=alpha_div)
+                                kl_max=kl_max, eps=eps, alpha_div=alpha_div,
+                                sigma_floor=sigma_floor,
+                                spd_floor_mode=spd_floor_mode,
+                                enable_spd_diagnostics=enable_spd_diagnostics,
+                                propagate_nonfinite=propagate_nonfinite)
 
 
 def _compute_chunked(
@@ -615,6 +698,10 @@ def _compute_chunked(
     kl_max: float,
     eps: float,
     alpha_div: float = 1.0,
+    sigma_floor: Optional[float] = None,
+    spd_floor_mode: str = 'eigclamp',
+    enable_spd_diagnostics: bool = False,
+    propagate_nonfinite: bool = False,
 ) -> torch.Tensor:
     """Assemble (B, N, N) divergence matrix by processing chunk_size x chunk_size tiles."""
     B, N, K = mu_q.shape
@@ -652,6 +739,10 @@ def _compute_chunked(
                 kl_chunk = _kl_kernel_dense(
                     mu_i_exp, sigma_i_exp, mu_t_chunk, sigma_t_chunk,
                     kl_max=kl_max, eps=eps, alpha_div=alpha_div,
+                    sigma_floor=sigma_floor,
+                    spd_floor_mode=spd_floor_mode,
+                    enable_spd_diagnostics=enable_spd_diagnostics,
+                    propagate_nonfinite=propagate_nonfinite,
                 )
 
             col_chunks.append(kl_chunk)

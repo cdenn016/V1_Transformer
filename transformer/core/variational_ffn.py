@@ -74,6 +74,7 @@ from transformer.core.vfe_utils import (
     squeeze_trailing_singletons,
     _safe_spd_inv,
     _safe_eigh,
+    spd_eigfloor,
     retract_spd_torch,
     retract_spd_diagonal_torch,
     _retract_phi,
@@ -277,6 +278,9 @@ class VariationalFFNDynamic(nn.Module):
         sigma_max: float =           5.0,  # Upper bound on σ (prevents nat_grad blowup from 2σ²·∇σ)
         
         e_step_sigma_floor: float =  0.1,  # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
+        spd_floor_mode: str =        'eigclamp',  # 'eigclamp' | 'ridge' | 'none' — see BlockConfig.
+        propagate_kl_nonfinite: bool = False,  # If True, safe_kl_clamp lets NaN/±inf propagate
+                                               # (diagnostic runs; default preserves masking).
         detach_phi: bool =           False,# Detach phi from backprop in non-amortized mode
                                            # (enables fully backprop-free training with phi P-flow)
         deq_include_phi: bool =      False,# Include phi in DEQ fixed-point variables.
@@ -376,6 +380,12 @@ class VariationalFFNDynamic(nn.Module):
         self.em_phi_mode = _flags['em_phi_mode']
         self.sigma_max = sigma_max
         self.e_step_sigma_floor = e_step_sigma_floor
+        if spd_floor_mode not in ('eigclamp', 'ridge', 'none'):
+            raise ValueError(
+                f"spd_floor_mode must be 'eigclamp', 'ridge', or 'none'; got {spd_floor_mode!r}"
+            )
+        self.spd_floor_mode = spd_floor_mode
+        self.propagate_kl_nonfinite = propagate_kl_nonfinite
         self.enforce_orthogonal = enforce_orthogonal
         self.detach_phi = detach_phi
         self.closed_form_e_step = closed_form_e_step
@@ -419,15 +429,15 @@ class VariationalFFNDynamic(nn.Module):
         self._use_rope_vfe = use_rope
         self._rope_base_vfe = rope_base
         self.alpha_divergence = alpha_divergence
-        # EXPERIMENTAL: when True, the rope KL also rotates Σ (R Σ R^T sandwich),
-        # implementing the framework-consistent gauge-transport interpretation
-        # of RoPE.  Default False uses the standard-transformer pattern (rotate
-        # only μ).  Plumbed through from BlockConfig.rope_full_gauge.
-        # Tri-state mode in {'off', 'vfe_only', 'both'} (legacy bool also accepted via
-        # block_config._coerce_rope_full_gauge upstream). The FFN VFE-gradient helper
-        # fires for {'vfe_only', 'both'}; the attention-side σ rotation is gated by
-        # the parallel attention.rope_full_gauge_mode attribute and is independent of
-        # this flag (set externally by VariationalFFNDynamic.__init__).
+        # EXPERIMENTAL: when != 'off', the rope KL also rotates Σ (R Σ R^T
+        # sandwich), implementing the framework-consistent gauge-transport
+        # interpretation of RoPE.  Default 'off' uses the standard-transformer
+        # pattern (rotate only μ).  Plumbed through from
+        # BlockConfig.rope_full_gauge.  Tri-state mode in
+        # {'off', 'vfe_only', 'both'}.  The FFN VFE-gradient helper fires for
+        # {'vfe_only', 'both'}; the attention-side σ rotation is gated by the
+        # parallel attention.rope_full_gauge_mode attribute and is independent
+        # of this flag (set externally by VariationalFFNDynamic.__init__).
         self._rope_full_gauge_vfe = 'off'
         # Constant gauge: store reference to attention module's per-head Ω parameters.
         # When gauge_mode='constant', these are used to build transport operators
@@ -1006,6 +1016,11 @@ class VariationalFFNDynamic(nn.Module):
                 irrep_dims=[d_h],
                 mask_self_attention=self.mask_self_attention,
                 cached_block_exp_pairs=[_block_exp_pairs[h]],
+                sigma_floor=(self.e_step_sigma_floor
+                             if self.spd_floor_mode == 'eigclamp' and not is_diagonal
+                             else None),
+                spd_floor_mode=self.spd_floor_mode,
+                propagate_nonfinite=self.propagate_kl_nonfinite,
             )
             if isinstance(beta_kl_h, tuple):
                 beta_h, kl_h = beta_kl_h
@@ -1190,6 +1205,11 @@ class VariationalFFNDynamic(nn.Module):
                     gauge_mode=self.gauge_mode,
                     cached_block_exp_pairs=_phi_head_bep,
                     exact_diagonal_transport=self.exact_diagonal_transport,
+                    sigma_floor=(self.e_step_sigma_floor
+                                 if self.spd_floor_mode == 'eigclamp' and not is_diagonal
+                                 else None),
+                    spd_floor_mode=self.spd_floor_mode,
+                    propagate_nonfinite=self.propagate_kl_nonfinite,
                 )
                 beta_phi_h, kl_h = beta_phi_h_result
                 # Separate direct and softmax coupling weights for phi gradient.
@@ -1212,12 +1232,17 @@ class VariationalFFNDynamic(nn.Module):
                 kappa=self.kappa,
                 epsilon=eps,
                 mask=mask,
-                                return_kl=True,
+                return_kl=True,
                 diagonal_covariance=is_diagonal,
                 irrep_dims=self.irrep_dims,
                 mask_self_attention=self.mask_self_attention,
                 gauge_mode=self.gauge_mode,
                 exact_diagonal_transport=self.exact_diagonal_transport,
+                sigma_floor=(self.e_step_sigma_floor
+                             if self.spd_floor_mode == 'eigclamp' and not is_diagonal
+                             else None),
+                spd_floor_mode=self.spd_floor_mode,
+                propagate_nonfinite=self.propagate_kl_nonfinite,
             )
             if isinstance(beta_for_phi_result, tuple):
                 beta_phi, kl_matrix = beta_for_phi_result
@@ -1482,30 +1507,38 @@ class VariationalFFNDynamic(nn.Module):
         # E-step sigma_p floor
         _floor = self.e_step_sigma_floor
         if sigma_p.dim() == 3:
+            # Diagonal covariance: elementwise clamp bounds every 1/σ_p_k
+            # individually by 1/_floor. Already condition-number safe.
             sigma_p = sigma_p.clamp(min=_floor)
-        else:
-            # Full covariance: enforce λ_min(Σ_p) ≥ _floor.
+        elif self.spd_floor_mode == 'eigclamp':
+            # Full covariance: enforce λ_min(Σ_p) ≥ _floor via spectral clamp.
+            # This bounds the condition number κ(Σ_p) ≤ σ_max² / _floor, so
+            # Σ_p^{-1} in the E-step natural gradient is bounded independently
+            # of any off-diagonal correlation pattern. The previous 'ridge'
+            # path (Σ_p + _floor·I) shifts every eigenvalue but does NOT bound
+            # κ(Σ_p): a matrix [[1, 0.999], [0.999, 1]] has λ_min = 0.001,
+            # ridge with _floor=0.01 gives λ_min = 0.011 — cond ≈ 180 — and
+            # after GL(K) transport cond compounds as cond(Ω)²·cond(Σ_p).
             #
-            # The previous code only clamped the diagonal entries, which is
-            # NOT sufficient for the matrix inverse: a full-cov Σ_p with
-            # diagonals = 1 but high off-diagonal correlation
-            # (e.g. [[1, 0.999], [0.999, 1]]) has λ_min = 0.001 ≪ _floor,
-            # and Σ_p⁻¹ then amplifies grad_mu_self = α·Σ_p⁻¹·(μ_q-μ_p) by
-            # ~1/λ_min, blowing up the E-step natural gradient.  This is
-            # the asymmetry between full-cov and diagonal-cov: diagonal
-            # 1/σ_p is bounded per-element by 1/_floor, but full-cov
-            # eigenvalues are not.
-            #
-            # Adding _floor·I shifts every eigenvalue by _floor, so
-            # λ_min(new) = λ_min(old) + _floor ≥ _floor for any PSD input.
-            # This is O(K²) per token and avoids an eigendecomposition.
-            # The cost is a uniform ~_floor / λ_max perturbation of well-
-            # conditioned priors (≈ 1% for the typical _floor = 0.01,
-            # λ_max ≈ 1), which is negligible compared to the diagonal
-            # clamp itself.
+            # Gauge-covariance caveat: the clamp is applied in the stored
+            # frame of Σ_p (the coordinate frame of prior_bank's sandwich
+            # Σ_v = A_v·diag(exp(base_log_prior_sigma))·A_v^T). The
+            # spd_eigfloor primitive has a strict GL(K)-covariant path
+            # activated by passing exp_phi=A_v — see vfe_utils.spd_eigfloor.
+            # At this site A_v is not exposed by prior_bank's current API;
+            # the frame-dependent path is used, which still bounds
+            # κ(Σ_p) ≤ σ_max²/_floor (a frame-independent invariant even
+            # though the exact values are frame-dependent).
+            # TODO: expose A_v from prior_bank and pass exp_phi=A_v_source
+            #       here for strict GL(K) covariance at this site. The
+            #       primitive is ready; only the plumbing is missing.
+            sigma_p = spd_eigfloor(sigma_p, _floor, sigma_max=self.sigma_max)
+        elif self.spd_floor_mode == 'ridge':
+            # Legacy path for bit-identity with pre-2026-04-19 runs.
             K_sigma = sigma_p.shape[-1]
             I_K = torch.eye(K_sigma, device=sigma_p.device, dtype=sigma_p.dtype)
             sigma_p = sigma_p + _floor * I_K
+        # spd_floor_mode == 'none' → no floor applied.
 
         # Convert diagonal sigma_p to full covariance if needed
         if not is_diagonal and sigma_p.dim() == 3:
@@ -1669,9 +1702,16 @@ class VariationalFFNDynamic(nn.Module):
 
         Delegates to :func:`vfe_utils.retract_sigma_e_step`.
         """
+        # F4: thread e_step_sigma_floor as the retraction eps for full-cov
+        # so the Σ_q eigenvalue floor matches the Σ_p floor in magnitude.
+        # Diagonal path keeps the caller-supplied eps (typically 1e-6) since
+        # the elementwise clamp downstream already handles the per-dim floor.
+        _retract_eps = self.e_step_sigma_floor if (
+            not is_diagonal and self.spd_floor_mode == 'eigclamp'
+        ) else eps
         return _retract_sigma_impl(
             sigma_current, nat_grad_sigma, effective_lr,
-            is_diagonal, eps,
+            is_diagonal, _retract_eps,
             update_sigma=self.update_sigma,
             sigma_trust=self._get_sigma_trust(effective_lr),
             sigma_max=self.sigma_max,
@@ -1907,6 +1947,11 @@ class VariationalFFNDynamic(nn.Module):
                     rope_base=self._rope_base_vfe,
                     exact_diagonal_transport=self.exact_diagonal_transport,
                     alpha_divergence=self.alpha_divergence,
+                    sigma_floor=(self.e_step_sigma_floor
+                                 if self.spd_floor_mode == 'eigclamp' and not is_diagonal
+                                 else None),
+                    spd_floor_mode=self.spd_floor_mode,
+                    propagate_nonfinite=self.propagate_kl_nonfinite,
                 )
                 grad_mu_h, grad_sigma_h = compute_vfe_gradients_gpu(
                     mu_q=mu_h, sigma_q=sigma_h,

@@ -228,6 +228,202 @@ def compute_yang_mills_energy_from_holonomy(
 
 
 # ---------------------------------------------------------------------------
+# 3b. Yang-Mills energy from per-token gauge frames (bilinear transport path)
+# ---------------------------------------------------------------------------
+
+def compute_yang_mills_energy_from_omega(
+    omega_per_tok: Tensor,
+    omega_inv_per_tok: Optional[Tensor] = None,
+    sample_size: int = 256,
+    seed: int = 42,
+    method: str = "wilson",
+    ridge: float = 1e-6,
+    batch_limit: Optional[int] = 1,
+) -> Tuple[Tensor, Dict[str, float]]:
+    r"""Yang-Mills energy for bilinear transport :math:`\Omega_{ij} = \omega_i\,\omega_j^{-1}`.
+
+    Edge transports are reconstructed directly from per-token gauge frames
+    and the holonomy is computed on sampled token triples:
+
+    .. math::
+
+        C_{ijk} \;=\; \Omega_{ij}\,\Omega_{jk}\,\Omega_{ki}
+                  \;=\; \omega_i\,\omega_j^{-1}\,\omega_j\,\omega_k^{-1}\,
+                        \omega_k\,\omega_i^{-1}
+                  \;=\; I,
+
+    so the holonomy deviation :math:`\|C_{ijk}-I\|_F` vanishes exactly for
+    bilinear (pure-gauge, cocycle) connections. Non-trivial YM energy
+    requires a genuinely non-flat edge correction
+    :math:`\Omega_{ij} = \omega_i\,\exp(\delta_{ij}\,G)\,\omega_j^{-1}` which
+    can also be fed through :func:`compute_yang_mills_energy_from_holonomy`.
+
+    The base manifold here is zero-dimensional: tokens are discrete points
+    and the "curvature" is discrete loop holonomy on the token graph, not a
+    continuous 2-form. Two action choices agree to leading order in
+    :math:`\|C-I\|`:
+
+    **Wilson action** (``method='wilson'``, default): the standard lattice
+    gauge-theory definition
+
+    .. math::
+
+        E_{\text{YM}}^{\text{W}} = \tfrac{1}{2} \sum_{t} \|C_t - I\|_F^2.
+
+    :math:`O(T K^2)` work, no eigendecomposition required.
+
+    **Continuum action** (``method='logm'``): extracts
+    :math:`F_t = \log C_t` via eigendecomposition and reports
+    :math:`\tfrac{1}{2}\sum_t \|F_t\|_F^2`. Mathematically the principal
+    choice when the connection lies in a well-defined log chart; costs
+    :math:`O(T K^3)` with a complex :func:`torch.linalg.eig` and dominates
+    runtime at publication scales (``K`` = O(100), ``T`` = O(1000)).
+
+    Args:
+        omega_per_tok: ``(B, N, K, K)`` per-token gauge frames
+            :math:`\omega_i = \exp(\phi_i \cdot G)` (phi path) or the directly
+            stored frames from ``attn_info['omega']`` (omega path).
+        omega_inv_per_tok: Optional ``(B, N, K, K)`` exact inverses
+            :math:`\omega_i^{-1} = \exp(-\phi_i \cdot G)`. When supplied,
+            bypasses :func:`torch.linalg.solve` — this matters because the
+            solve-based inverse accumulates roundoff at large :math:`K`
+            that sits above the physical noise floor of the cocycle
+            identity. Recommended to pass in the phi path where both
+            forward and backward exponentials are available for free from
+            :func:`stable_matrix_exp_pair`.
+        sample_size: Upper bound on the number of sampled triples.
+        seed: RNG seed for reproducible triple sampling.
+        method: ``'wilson'`` (fast, default) or ``'logm'`` (slow, exact).
+        ridge: Tikhonov ridge used only when ``omega_inv_per_tok`` is
+            ``None`` (solve-based inversion fallback for the omega path).
+        batch_limit: If not None, only the first ``batch_limit`` elements of
+            the batch are used (matches :func:`compute_gauge_orbit_dimension`).
+            Default 1; pass ``None`` to process the full batch.
+
+    Returns:
+        Tuple ``(energy, diagnostics)`` with
+
+        - ``energy`` : ``(b,)`` YM energy per used batch element
+          (``b = batch_limit`` or ``B``).
+        - ``diagnostics`` : :class:`dict` with ``mean_F_norm``, ``max_F_norm``,
+          ``mean_holonomy_norm``, ``abelian_fraction``, ``method`` (all
+          floats except ``method`` which is a string).
+    """
+    import numpy as np
+
+    with torch.no_grad():
+        omega = _to_float32(omega_per_tok)
+        omega_inv = (
+            _to_float32(omega_inv_per_tok)
+            if omega_inv_per_tok is not None
+            else None
+        )
+        if batch_limit is not None:
+            omega = omega[:batch_limit]
+            if omega_inv is not None:
+                omega_inv = omega_inv[:batch_limit]
+        B, N, K, _ = omega.shape
+        device = omega.device
+
+        _empty_diag: Dict[str, float] = {
+            "mean_F_norm": 0.0,
+            "max_F_norm": 0.0,
+            "mean_holonomy_norm": 0.0,
+            "abelian_fraction": 0.0,
+            "method": method,
+        }
+        if N < 3:
+            return torch.zeros(B, device=device, dtype=omega.dtype), _empty_diag
+
+        max_triples = (N * (N - 1) * (N - 2)) // 6
+        n_samp = min(int(sample_size), int(max_triples))
+        if n_samp <= 0:
+            return torch.zeros(B, device=device, dtype=omega.dtype), _empty_diag
+
+        rng = np.random.RandomState(seed)
+        triple_list: List[np.ndarray] = []
+        attempts = 0
+        while len(triple_list) < n_samp and attempts < n_samp * 10:
+            ijk = rng.choice(N, size=3, replace=False)
+            triple_list.append(ijk)
+            attempts += 1
+        if len(triple_list) == 0:
+            return torch.zeros(B, device=device, dtype=omega.dtype), _empty_diag
+
+        triples = torch.tensor(
+            np.array(triple_list), device=device, dtype=torch.long,
+        )
+        T = triples.shape[0]
+        i_idx = triples[:, 0]
+        j_idx = triples[:, 1]
+        k_idx = triples[:, 2]
+
+        omega_i = omega[:, i_idx]
+        omega_j = omega[:, j_idx]
+        omega_k = omega[:, k_idx]
+
+        I_K = torch.eye(K, device=device, dtype=omega.dtype)
+
+        if omega_inv is not None:
+            # Exact analytical inverses via paired matrix exponentials.
+            inv_i = omega_inv[:, i_idx]
+            inv_j = omega_inv[:, j_idx]
+            inv_k = omega_inv[:, k_idx]
+        else:
+            # Fallback: solve-based inversion with a small ridge.
+            I_KT = I_K.expand(B, T, K, K).contiguous()
+            try:
+                inv_i = torch.linalg.solve(omega_i + ridge * I_KT, I_KT)
+                inv_j = torch.linalg.solve(omega_j + ridge * I_KT, I_KT)
+                inv_k = torch.linalg.solve(omega_k + ridge * I_KT, I_KT)
+            except (torch.linalg.LinAlgError, RuntimeError):
+                return torch.zeros(B, device=device, dtype=omega.dtype), _empty_diag
+
+        Omega_ij = torch.matmul(omega_i, inv_j)
+        Omega_jk = torch.matmul(omega_j, inv_k)
+        Omega_ki = torch.matmul(omega_k, inv_i)
+
+        C = torch.matmul(torch.matmul(Omega_ij, Omega_jk), Omega_ki)  # (B,T,K,K)
+        delta = C - I_K.unsqueeze(0).unsqueeze(0)                     # (B,T,K,K)
+        norms_C = torch.norm(delta, p='fro', dim=(-2, -1))            # (B,T)
+
+        # Abelian/non-abelian split works off the holonomy deviation directly
+        # in the Wilson path (same trace decomposition as on F; matches logm
+        # path to leading order). Trace of delta = tr(C) - K.
+        trace_delta = torch.diagonal(delta, dim1=-2, dim2=-1).sum(dim=-1)  # (B,T)
+        ab_sq = (trace_delta * trace_delta) / float(K)                    # ||(tr d / K) I||_F^2 = (tr d)^2 / K
+        total_sq = (delta * delta).sum(dim=(-2, -1))                       # ||delta||_F^2
+        nab_sq = (total_sq - ab_sq).clamp(min=0.0)
+        ab_frac = (ab_sq / total_sq.clamp(min=1e-30)).clamp(0.0, 1.0)
+
+        if method == "wilson":
+            # Lattice / Wilson action: E = (1/2) sum_t ||C_t - I||_F^2
+            energy = 0.5 * total_sq.sum(dim=-1)  # (B,)
+            F_like_norm = norms_C
+        elif method == "logm":
+            F = extract_curvature_tensor(C, method="logm")  # O(T K^3) eig — slow
+            energy = compute_yang_mills_energy(F)
+            F_like_norm = (F * F).sum(dim=(-2, -1)).sqrt()
+            # Recompute abelian fraction on the logm curvature for consistency.
+            _decomp = decompose_curvature(F)
+            ab_frac = _decomp["abelian_fraction"].unsqueeze(-1).expand_as(norms_C)
+        else:
+            raise ValueError(
+                f"compute_yang_mills_energy_from_omega: unknown method "
+                f"'{method}'. Choose 'wilson' or 'logm'."
+            )
+
+        diagnostics: Dict[str, float] = {
+            "mean_F_norm": float(F_like_norm.mean().item()),
+            "max_F_norm": float(F_like_norm.max().item()),
+            "mean_holonomy_norm": float(norms_C.mean().item()),
+            "abelian_fraction": float(ab_frac.mean().item()),
+            "method": method,
+        }
+        return energy, diagnostics
+
+
+# ---------------------------------------------------------------------------
 # 4. Gauge field Dirichlet energy
 # ---------------------------------------------------------------------------
 

@@ -98,6 +98,11 @@ class RiemannianAdamW(torch.optim.AdamW):
         self._killing_inv = killing_inv
         self._killing_metric = killing_metric
         self._grad_clip = grad_clip
+        # NaN-grad guard telemetry
+        self._nan_step_count = 0
+        self._last_nan_param = None
+        self._last_nan_step = None
+        self._step_index = 0
 
         if metric not in ('killing', 'pullback'):
             raise ValueError(
@@ -126,6 +131,40 @@ class RiemannianAdamW(torch.optim.AdamW):
 
     @torch.no_grad()
     def step(self, closure=None):
+        self._step_index += 1
+
+        # 0. NaN/Inf grad guard: skip the entire AdamW step when any parameter
+        #    has a non-finite gradient.  Preconditioning and AdamW's second-
+        #    moment EMA (exp_avg_sq) blindly propagate NaN, so a single bad
+        #    backward silently corrupts the optimizer state for every finite
+        #    step that follows.  Skipping the whole step preserves AdamW
+        #    step-count coherence (bias correction, scheduler).  Zeroing
+        #    individual NaN grads is unsafe because exp_avg_sq then sees a
+        #    "0 grad" sample and the bias-corrected LR explodes on the next
+        #    finite step.
+        _first_bad_name = None
+        for group in self.param_groups:
+            _gname = group.get('name', '')
+            for i, p in enumerate(group['params']):
+                if p.grad is None:
+                    continue
+                if not torch.isfinite(p.grad).all():
+                    _first_bad_name = f"{_gname}[{i}]"
+                    break
+            if _first_bad_name is not None:
+                break
+        if _first_bad_name is not None:
+            self._nan_step_count += 1
+            self._last_nan_param = _first_bad_name
+            self._last_nan_step = self._step_index
+            # Zero all grads so downstream state stays clean; do NOT call
+            # super().step() -- AdamW would advance its per-param state.
+            for group in self.param_groups:
+                for p in group['params']:
+                    if p.grad is not None:
+                        p.grad = None
+            return None
+
         # 1. Precondition: Euclidean → natural gradient
         for group in self.param_groups:
             name = group.get('name', '')

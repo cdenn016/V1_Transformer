@@ -13,7 +13,7 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
 from math_utils.numerical_monitor import record as _nr
-from transformer.core.vfe_utils import KL_CEIL_BASE, KL_CEIL_SCALE
+from transformer.core.vfe_utils import KL_CEIL_BASE, KL_CEIL_SCALE, spd_eigfloor
 
 # KL divergence ceiling: kl_max = max(KL_CEIL_BASE, KL_CEIL_SCALE * dim).
 # Single source of truth is vfe_utils.py.
@@ -24,7 +24,7 @@ KL_CEIL_MULT = KL_CEIL_SCALE  # alias for backward compat within this module
 def stable_matrix_exp_pair(
     matrix: torch.Tensor,
     dim_threshold: int = 20,
-    max_norm: float = 20.0,
+    max_norm: float = 10.0,
     skew_symmetric: bool = False,
     only_forward: bool = False,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
@@ -519,6 +519,7 @@ def fused_block_diagonal_kl_full(
     irrep_dims: List[int],
     eps: float = 1e-6,
     alpha_div: float = 1.0,
+    sigma_floor: Optional[float] = None,
 ) -> torch.Tensor:
     r"""Fused block-diagonal KL or Rényi :math:`\alpha`-divergence for full covariance.
 
@@ -544,6 +545,11 @@ def fused_block_diagonal_kl_full(
         irrep_dims: block dimensions [d₁, d₂, ...].
         eps: numerical stability floor.
         alpha_div: Rényi divergence order (default 1.0 = standard KL).
+        sigma_floor: If set, use ``spd_eigfloor(Σ, floor=sigma_floor)`` to
+            regularize Σ_q and Σ_t before Cholesky. Bounds the condition
+            number and matches the E-step floor. When ``None`` falls back to
+            the legacy ``+ eps · I_d`` jitter (may fail Cholesky on
+            block-diagonal Σ with collapsing per-block eigenvalues).
 
     Returns:
         kl_total: (B, N, N) total divergence across all blocks.
@@ -617,8 +623,17 @@ def fused_block_diagonal_kl_full(
             mu_i = _mu_f32[:, :, :, None, :].expand(-1, -1, -1, N, -1)
             sigma_i = _sig_f32[:, :, :, None, :, :].expand(-1, -1, -1, N, -1, -1)
 
-            sigma_i_reg = sigma_i + eps * I_d
-            sigma_t_reg = sigma_transported + eps * I_d
+            if sigma_floor is not None:
+                # Bound λ_min(Σ) ≥ sigma_floor via spectral clamp. Respects
+                # the E-step floor, prevents Cholesky failure on block-diagonal
+                # Σ with collapsing per-block eigenvalues (see
+                # `gauge_kl_full_chol_fallback_diag` pathology under
+                # `use_output_projection=False`).
+                sigma_i_reg = spd_eigfloor(sigma_i, floor=sigma_floor)
+                sigma_t_reg = spd_eigfloor(sigma_transported, floor=sigma_floor)
+            else:
+                sigma_i_reg = sigma_i + eps * I_d
+                sigma_t_reg = sigma_transported + eps * I_d
 
             try:
                 if abs(alpha_div - 1.0) < 1e-6:
@@ -679,10 +694,13 @@ def fused_block_diagonal_kl_full(
                     kl_group = 0.5 * (mahal_term + logdet_term)
 
             except RuntimeError:
-                # Cholesky failed — fall back to diagonal approximation
+                # Cholesky failed — fall back to diagonal approximation.
+                # Clamp diagonals at sigma_floor when provided so fallback
+                # gradients (∂logdet/∂σ = 1/σ) stay bounded; otherwise use eps.
                 _nr("gauge_kl_full_chol_fallback_diag")
-                sigma_diag_t = torch.diagonal(sigma_t_reg, dim1=-2, dim2=-1).clamp(min=eps)
-                sigma_diag_i = torch.diagonal(sigma_i_reg, dim1=-2, dim2=-1).clamp(min=eps)
+                _fallback_floor = sigma_floor if sigma_floor is not None else eps
+                sigma_diag_t = torch.diagonal(sigma_t_reg, dim1=-2, dim2=-1).clamp(min=_fallback_floor)
+                sigma_diag_i = torch.diagonal(sigma_i_reg, dim1=-2, dim2=-1).clamp(min=_fallback_floor)
                 delta_mu = mu_transported - mu_i
 
                 if abs(alpha_div - 1.0) < 1e-6:

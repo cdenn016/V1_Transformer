@@ -183,26 +183,43 @@ class FastTrainer:
         else:
             _effective_total = self.config.max_steps
 
-        def lr_lambda(step):
-            # Warmup
-            if step < self.config.warmup_steps:
-                return step / max(1, self.config.warmup_steps)
+        def _make_lr_lambda(warmup_mult: float):
+            # Per-group warmup: scales the warmup horizon by `warmup_mult`
+            # so prior-embedding groups can warm slower than attention/output.
+            # warmup_mult=1.0 preserves the global schedule.
+            group_warmup = max(1, int(round(self.config.warmup_steps * warmup_mult)))
 
-            # Decay with min_lr floor
-            progress = (step - self.config.warmup_steps) / max(1, _effective_total - self.config.warmup_steps)
-            progress = min(progress, 1.0)  # Clamp for steps beyond total
+            def _lambda(step):
+                if step < group_warmup:
+                    return step / group_warmup
+                progress = (step - group_warmup) / max(1, _effective_total - group_warmup)
+                progress = min(progress, 1.0)
+                if self.config.lr_decay == 'cosine':
+                    decay = 0.5 * (1.0 + math.cos(progress * math.pi))
+                    return max(min_ratio, decay)
+                elif self.config.lr_decay == 'linear':
+                    return max(min_ratio, 1.0 - progress)
+                else:
+                    return 1.0
 
-            if self.config.lr_decay == 'cosine':
-                decay = 0.5 * (1.0 + math.cos(progress * math.pi))
-                return max(min_ratio, decay)
-            elif self.config.lr_decay == 'linear':
-                return max(min_ratio, 1.0 - progress)
-            else:
-                return 1.0
+            return _lambda
+
+        # TODO: evaluate sensible default multipliers for prior param groups
+        #       (mu_embed, sigma_embed, phi_embed). Current default {} keeps
+        #       the cliff-at-step-100 behaviour; recommended starting point
+        #       for experimentation: {'mu_embed': 3.0, 'phi_embed': 3.0,
+        #       'sigma_embed': 3.0} once the full-cov fixes are validated.
+        # Build one lambda per param group; default multiplier 1.0.
+        multipliers = getattr(self.config, 'per_group_warmup_multipliers', {}) or {}
+        lambdas = []
+        for group in self.optimizer.param_groups:
+            _gname = group.get('name', '')
+            _mult = float(multipliers.get(_gname, 1.0))
+            lambdas.append(_make_lr_lambda(_mult))
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(
             self.optimizer,
-            lr_lambda=[lr_lambda] * len(self.optimizer.param_groups),
+            lr_lambda=lambdas,
         )
 
         return scheduler
@@ -241,10 +258,22 @@ class FastTrainer:
                 normalize_ce_by_dim=getattr(self.config, 'normalize_ce_by_dim', False),
             )
 
-        # NaN/Inf guard: skip backward to prevent poisoning optimizer momentum
+        # NaN/Inf guard: skip backward to prevent poisoning optimizer momentum.
+        # When assert_finite_loss=True, raise instead of silent skip and dump
+        # the set of non-finite parameters so the root cause is visible.
         if torch.isnan(loss) or torch.isinf(loss):
             _nr("loss_nan_skip")
             import logging
+            if getattr(self.config, 'assert_finite_loss', False):
+                nonfinite_params = []
+                for _name, _p in self.model.named_parameters():
+                    if not torch.isfinite(_p).all():
+                        nonfinite_params.append(_name)
+                raise RuntimeError(
+                    f"Step {self.global_step}: loss is {loss.item()} "
+                    f"(assert_finite_loss=True). "
+                    f"Non-finite parameters: {nonfinite_params or '<none>'}."
+                )
             logging.getLogger(__name__).warning(
                 f"Step {self.global_step}: loss is {loss.item()}, skipping backward")
             self.optimizer.zero_grad(set_to_none=True)
@@ -371,6 +400,10 @@ class FastTrainer:
         if start_step > 0:
             print(f"Resuming from step {start_step}")
 
+        _epoch_idx = 0
+        _fn = getattr(self.train_loader.dataset, "set_epoch", None)
+        if callable(_fn):
+            _fn(_epoch_idx)
         train_iterator = iter(self.train_loader)
 
         if TQDM_AVAILABLE:
@@ -391,6 +424,10 @@ class FastTrainer:
             try:
                 batch = next(train_iterator)
             except StopIteration:
+                _epoch_idx += 1
+                _fn = getattr(self.train_loader.dataset, "set_epoch", None)
+                if callable(_fn):
+                    _fn(_epoch_idx)
                 train_iterator = iter(self.train_loader)
                 batch = next(train_iterator)
 

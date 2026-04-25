@@ -35,7 +35,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, Tuple, List, Union
+from typing import Dict, Optional, Tuple, List, Union
 
 from transformer.core.gauge_utils import (
     stable_matrix_exp_pair,
@@ -178,6 +178,11 @@ def compute_attention_weights(
     gauge_covariant_ridge: bool = False,
     omega: Optional[torch.Tensor] = None,  # (B, N, K, K) direct group elements (when gauge_param='omega')
     alpha_divergence: float = 1.0,  # Renyi alpha-divergence parameter (1.0 = KL)
+    # Full-covariance SPD floor (forwarded to _kl_kernel_dense). None = no clamp.
+    sigma_floor: Optional[float] = None,
+    spd_floor_mode: str = 'eigclamp',
+    enable_spd_diagnostics: bool = False,
+    propagate_nonfinite: bool = False,
 ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
     """
     Compute attention weights from KL divergences (0D version).
@@ -343,6 +348,10 @@ def compute_attention_weights(
         enforce_orthogonal=enforce_orthogonal,
         alpha_divergence=alpha_divergence,
         gauge_covariant_ridge=gauge_covariant_ridge,
+        sigma_floor=sigma_floor,
+        spd_floor_mode=spd_floor_mode,
+        enable_spd_diagnostics=enable_spd_diagnostics,
+        propagate_nonfinite=propagate_nonfinite,
     )
 
     # =========================================================================
@@ -531,6 +540,10 @@ def _dispatch_kl_matrix(
     enforce_orthogonal: bool,
     alpha_divergence: float = 1.0,
     gauge_covariant_ridge: bool = False,
+    sigma_floor: Optional[float] = None,
+    spd_floor_mode: str = 'eigclamp',
+    enable_spd_diagnostics: bool = False,
+    propagate_nonfinite: bool = False,
 ) -> torch.Tensor:
     r"""Unified KL matrix dispatcher for all covariance modes and gauge configurations.
 
@@ -605,6 +618,7 @@ def _dispatch_kl_matrix(
                 kl_max=kl_max,
                 eps=eps,
                 alpha_divergence=alpha_divergence,
+                sigma_floor=sigma_floor,
             )
         else:
             # Block-diagonal + full sigma
@@ -671,6 +685,10 @@ def _dispatch_kl_matrix(
                                 eps=eps,
                                 exp_phi_q=_exp_phi_kw,
                                 exp_phi_t=_exp_phi_kw,
+                                sigma_floor=sigma_floor,
+                                spd_floor_mode=spd_floor_mode,
+                                enable_spd_diagnostics=enable_spd_diagnostics,
+                                propagate_nonfinite=propagate_nonfinite,
                                 alpha_div=alpha_divergence,
                             )
                             kl_chunk = kl_chunk + kl_b
@@ -692,6 +710,7 @@ def _dispatch_kl_matrix(
                     kl_max=kl_max,
                     eps=eps,
                     alpha_divergence=alpha_divergence,
+                    sigma_floor=sigma_floor,
                 )
 
     # =========================================================================
@@ -869,6 +888,10 @@ def _dispatch_kl_matrix(
                         alpha_div=alpha_divergence,
                         exp_phi_q=_exp_phi_kw_K,
                         exp_phi_t=_exp_phi_kw_K,
+                        sigma_floor=sigma_floor,
+                        spd_floor_mode=spd_floor_mode,
+                        enable_spd_diagnostics=enable_spd_diagnostics,
+                        propagate_nonfinite=propagate_nonfinite,
                     )
                     del sig_tc, mu_tc
                     col_chunks.append(kl_c)
@@ -886,6 +909,10 @@ def _dispatch_kl_matrix(
             kl_max=kl_max,
             eps=eps,
             alpha_divergence=alpha_divergence,
+            sigma_floor=sigma_floor,
+            spd_floor_mode=spd_floor_mode,
+            enable_spd_diagnostics=enable_spd_diagnostics,
+            propagate_nonfinite=propagate_nonfinite,
         )
 
 
@@ -1316,6 +1343,11 @@ class IrrepMultiHeadAttention(nn.Module):
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
         enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
         use_output_projection: bool = False,  # If True, add W_O linear projection after heads
+        use_equivariant_head_mixer: bool = False,  # Commutant mixer (n² scalars) applied to μ and M·Σ·Mᵀ.
+                                                   # Gauge-equivariant only under TIED gauges across heads
+                                                   # (shared Ω factor on each irrep copy). Warns when the
+                                                   # effective gauge is per-head independent (e.g. default GLK
+                                                   # multi-head). Zero cost when disabled.
         irrep_dims_override: Optional[List[int]] = None,  # Override block dims (for cross-head coupling)
         use_rope: bool = False,  # If True, apply RoPE rotations to μ before KL computation
         rope_base: float = 10000.0,  # RoPE frequency base
@@ -1586,6 +1618,69 @@ class IrrepMultiHeadAttention(nn.Module):
             logger.info(f"  W_O output projection: {embed_dim}×{embed_dim} = {embed_dim**2} params")
         else:
             self.output_proj = None
+
+        # =================================================================
+        # Gauge-equivariant head mixer (principled W_O replacement)
+        # =================================================================
+        # Under tied gauges (same Ω acting on every copy of an irrep), the
+        # Schur commutant of the rep decomposition is a block sum ⊕_type M_n_t(ℝ)
+        # where n_t is the multiplicity of irrep type t. We parameterize that
+        # commutant as n_t × n_t scalar matrices per type; the mixer matrix
+        # M ∈ R^{K×K} is built as kron(a_t, I_{d_t}) blocks placed at the head
+        # slots of type t. Applied symmetrically: μ ↦ Mμ, Σ ↦ MΣM^T. At init
+        # a_t = I_n_t so the mixer is the identity.
+        #
+        # IMPORTANT — gauge compatibility: this is strictly equivariant only
+        # when every head assigned to the same irrep type shares the same Ω.
+        # Under independent per-head gauges (default GLK multi-head with
+        # cross_couplings=[]), Ω differs across heads and the mixer breaks
+        # equivariance exactly as W_O does. We emit a warning in that case so
+        # users opt in knowingly.
+        if use_equivariant_head_mixer:
+            from collections import defaultdict
+            groups: Dict[Tuple[str, int], List[int]] = defaultdict(list)
+            for h, (lbl, d_h) in enumerate(zip(self.irrep_labels, self.irrep_dims)):
+                # Collapse 'glk_head_i' → 'glk_fund' so all GL(d) heads cluster.
+                key = 'glk_fund' if lbl.startswith('glk_head_') else lbl
+                groups[(key, d_h)].append(h)
+            self._mixer_groups: List[Tuple[str, int, List[int]]] = [
+                (key, dim, heads) for (key, dim), heads in groups.items()
+            ]
+            # Per-group n × n scalar parameter, identity-initialized.
+            self.mixer_params = nn.ParameterList([
+                nn.Parameter(torch.eye(len(heads)))
+                for _, _, heads in self._mixer_groups
+            ])
+            total_params = sum(len(h) ** 2 for _, _, h in self._mixer_groups)
+            logger.info(
+                f"  equivariant head mixer: {len(self._mixer_groups)} irrep type(s), "
+                f"{total_params} scalar parameter(s) (commutant of irrep decomp)"
+            )
+            # Check for independent per-head gauge and warn.
+            _independent_glk = (
+                gauge_group == 'GLK'
+                and getattr(self, 'glk_multihead', False)
+                and irrep_dims_override is None
+                and any(len(h) > 1 for _, _, h in self._mixer_groups)
+            )
+            if _independent_glk:
+                import warnings
+                warnings.warn(
+                    "use_equivariant_head_mixer=True with GL(K) multi-head and "
+                    "cross_couplings=[]: the effective gauge is (GL(d_head))^n_heads "
+                    "(independent per-head). The commutant mixer is strictly "
+                    "equivariant only under a TIED gauge (same Ω on every head). "
+                    "The mixer will train, but it breaks gauge equivariance in "
+                    "this configuration — no better than use_output_projection. "
+                    "For principled cross-head mixing under GL(K) heads, enable "
+                    "cross_couplings in your config instead.",
+                    RuntimeWarning, stacklevel=2,
+                )
+            self._mixer_active = True
+        else:
+            self._mixer_groups = []
+            self.mixer_params = None
+            self._mixer_active = False
 
         # Print attention configuration
         if gauge_group == 'GLK':
@@ -1896,12 +1991,15 @@ class IrrepMultiHeadAttention(nn.Module):
             sigma_concat = None
 
         # =====================================================================
-        # Optional W_O output projection (cross-head mixing)
+        # Optional W_O output projection (cross-head mixing, gauge-breaking)
         # =====================================================================
         if self.output_proj is not None:
             mu_out = self.output_proj(mu_concat)  # (B, N, K) - learned cross-head mixing
+        elif self._mixer_active:
+            # Gauge-equivariant (under tied gauge) mixer: μ ↦ M·μ, Σ ↦ M·Σ·M^T.
+            mu_out, sigma_concat = self._apply_equivariant_mixer(mu_concat, sigma_concat)
         else:
-            mu_out = mu_concat  # (B, N, K) - pure VFE, no mixing
+            mu_out = mu_concat  # (B, N, K) - pristine VFE, no mixing
 
         # Stack attention weights and KL matrices for loss computation
         if return_attention:
@@ -1912,6 +2010,55 @@ class IrrepMultiHeadAttention(nn.Module):
             kl_matrices = None
 
         return mu_out, sigma_concat, attention_weights, kl_matrices
+
+    def _build_mixer_matrix(self, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        r"""Assemble the K×K commutant mixer M from per-group scalar matrices.
+
+        For each irrep group g with multiplicity n_g and dim d_g, the learned
+        scalar matrix a_g ∈ R^{n_g×n_g} is expanded via kron(a_g, I_{d_g}) and
+        placed at the head slots of that group. The resulting M lies in the
+        Schur commutant under tied gauge action.
+        """
+        K = self.embed_dim
+        M = torch.zeros(K, K, device=device, dtype=dtype)
+        # Precompute head start offsets once.
+        offsets = [0]
+        for d_h in self.irrep_dims:
+            offsets.append(offsets[-1] + d_h)
+        for (_, dim, heads), a_param in zip(self._mixer_groups, self.mixer_params):
+            a = a_param.to(device=device, dtype=dtype)
+            I_d = torch.eye(dim, device=device, dtype=dtype)
+            for i_out, h_out in enumerate(heads):
+                r0, r1 = offsets[h_out], offsets[h_out] + dim
+                for j_in, h_in in enumerate(heads):
+                    c0, c1 = offsets[h_in], offsets[h_in] + dim
+                    M[r0:r1, c0:c1] = a[i_out, j_in] * I_d
+        return M
+
+    def _apply_equivariant_mixer(
+        self, mu: torch.Tensor, sigma: Optional[torch.Tensor]
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        r"""Apply the commutant mixer symmetrically to μ and Σ.
+
+        μ' = M·μ, Σ' = M·Σ·M^T (symmetrized). For diagonal Σ, the transformed
+        full covariance is projected back to diagonal (lossy approximation —
+        full-covariance mode preserves the exact commutant action).
+        """
+        M = self._build_mixer_matrix(mu.device, mu.dtype)
+        # Row-vector form: (B, N, K) @ M^T computes M @ μ in column-vector sense.
+        mu_out = mu @ M.transpose(-1, -2)
+        if sigma is None:
+            return mu_out, None
+        if sigma.dim() == 4:  # (B, N, K, K) full covariance
+            sig_out = M @ sigma @ M.transpose(-1, -2)
+            sig_out = 0.5 * (sig_out + sig_out.transpose(-1, -2))
+            return mu_out, sig_out
+        # Diagonal Σ: full transformation is non-diagonal in general; collapse
+        # to the diagonal of M·diag(σ)·M^T so downstream (B, N, K) shape holds.
+        sig_full = torch.diag_embed(sigma)
+        sig_out_full = M @ sig_full @ M.transpose(-1, -2)
+        sig_out = torch.diagonal(sig_out_full, dim1=-2, dim2=-1)
+        return mu_out, sig_out
 
     def _split_irreps(self, mu: torch.Tensor) -> List[torch.Tensor]:
         """Split embedding into irrep blocks.

@@ -204,6 +204,12 @@ class PriorBank(nn.Module):
 
             # Single base prior variance (diagonal of Σ_0)
             # Covariance transport: Σ_v = A_v @ diag(σ_0) @ A_v^T
+            # TODO: research — Cholesky parameterisation Σ_p = L·Lᵀ with
+            #       learnable lower-triangular L (positive diagonal via
+            #       softplus) eliminates the E-step eigenvalue floor by
+            #       construction. Requires re-init path and careful grad
+            #       handling through the triangular structure; see F3 in
+            #       2026-04-19_edits.md change set 9.
             if learnable_sigma:
                 self.base_log_prior_sigma = nn.Parameter(
                     torch.full((embed_dim,), math.log(init_sigma_scale))
@@ -901,7 +907,12 @@ class PriorBank(nn.Module):
                 sigma_q = sigma_q.float()
                 sigma_p = sigma_p.float()
 
-            variance_floor = max(self.eps, 1e-4)
+            # Floor raised from 1e-4 to 0.01 to align with the E-step floor
+            # (e_step_sigma_floor default 0.01 in variational_ffn.py). The old
+            # 1e-4 ridge let the decode Cholesky see matrices sharper than the
+            # E-step ever produced, creating a 100x conditioning gap on the
+            # only gradient path to sigma_p under em_mode='em_phi_p'.
+            variance_floor = max(self.eps, 0.01)
 
             # Build Σ_p^{-1} and log|Σ_p| for all V tokens
             if sigma_p.dim() == 2:
@@ -912,13 +923,36 @@ class PriorBank(nn.Module):
                 Sigma_p_inv = torch.diag_embed(1.0 / sigma_p_safe)    # (V, K, K)
                 log_det_p = torch.log(sigma_p_safe).sum(dim=-1)        # (V,)
             else:
-                # Full prior (V, K, K) — Cholesky inversion
+                # Full prior (V, K, K) — Cholesky inversion with escalation.
+                # cholesky_ex returns an info tensor instead of raising; if any
+                # vocab entry fails under the initial ridge, escalate up to 5
+                # times at 10x per round. Mirrors kl_computation.py:228-262.
                 sigma_p_clamped = sigma_p + variance_floor * torch.eye(K, device=device, dtype=sigma_p.dtype)
                 _s = self.sigma_ce_scale
                 sigma_p_safe = sigma_p_clamped.detach() + _s * (sigma_p_clamped - sigma_p_clamped.detach())
-                L_p = torch.linalg.cholesky(sigma_p_safe)              # (V, K, K)
+
+                I_K = torch.eye(K, device=device, dtype=sigma_p.dtype)
+                L_p, info = torch.linalg.cholesky_ex(sigma_p_safe)
+                if info.any():
+                    reg = variance_floor
+                    for _ in range(5):
+                        reg *= 10.0
+                        mat_reg = sigma_p_safe + (reg - variance_floor) * I_K
+                        mat_reg = 0.5 * (mat_reg + mat_reg.transpose(-1, -2))
+                        L_p, info = torch.linalg.cholesky_ex(mat_reg)
+                        if not info.any():
+                            break
+                    if info.any():
+                        raise RuntimeError(
+                            f"PriorBank._decode_full_cov: Cholesky failed after 5 "
+                            f"regularization rounds (max reg={reg:.1e}). Likely cause: "
+                            f"a vocab entry's sigma_p has collapsed below the E-step floor, "
+                            f"or phi has driven transported sigma_p to non-PSD. Check "
+                            f"e_step_sigma_floor and spd_floor_mode in variational_ffn."
+                        )
+
                 Sigma_p_inv = torch.cholesky_inverse(L_p)              # (V, K, K)
-                log_det_p = 2.0 * L_p.diagonal(dim1=-2, dim2=-1).log().sum(dim=-1)  # (V,)
+                log_det_p = 2.0 * L_p.diagonal(dim1=-2, dim2=-1).log().clamp(min=-30.0).sum(dim=-1)  # (V,)
 
             # Second moment M = Σ_q + μ_q μ_q^T  →  (B, N, K, K)
             M = sigma_q + mu_q.unsqueeze(-1) * mu_q.unsqueeze(-2)

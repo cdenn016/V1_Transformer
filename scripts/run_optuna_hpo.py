@@ -179,7 +179,7 @@ BASE_CONFIG = {
    # === Position encoding ===
    'use_rope':                   True,
    'rope_base':                  75,   #75 for N=64, 128
-   'rope_full_gauge':            False,
+   'rope_full_gauge':            'off',
    'pos_encoding_mode':          'none',
 
    # === Embedding init ===

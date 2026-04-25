@@ -11,9 +11,9 @@ parameter grouping strategy (use_param_groups). Gauge transport can be
 trivialized (gauge_mode='trivial') to recover standard KL-attention.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 
 @dataclass
@@ -145,6 +145,30 @@ class TrainingConfig:
     max_seq_len: int = 64
 
     # ==========================================================================
+    # Stride-based windowing (optional, default disabled)
+    # ==========================================================================
+    # stride=None preserves the literal legacy formula:
+    #   num_sequences = max(1, len(tokens) - max_seq_len)
+    # stride=int N: windows start at offset + k*stride for k=0,1,...
+    #   stride=max_seq_len => one corpus pass per DataLoader epoch.
+    # NOTE: stride=1 is numerically equivalent to stride=None in coverage, but
+    # goes through the strided branch; trajectory may differ slightly. Use
+    # stride=None for bit-identity with pre-feature behavior.
+    # NOTE: these fields are threaded through TrainingConfig for introspection
+    # and forward-compat. Actual windowing logic lives in the dataset classes
+    # (transformer/data/datasets.py); FastTrainer does not branch on them.
+    stride: Optional[int] = None
+    # Per-epoch random offset in [0, stride). Draws from an ISOLATED
+    # torch.Generator seeded by (stride_base_seed + epoch); does NOT consume
+    # global torch RNG. Auto-forced False when stride is None or stride == 1.
+    random_offset_per_epoch: bool = False
+    # Separate stride for val/test loaders. Default None preserves dense
+    # eval-time coverage regardless of train stride.
+    eval_stride: Optional[int] = None
+    # Seed for the isolated Generator used to draw per-epoch offsets.
+    stride_base_seed: int = 0
+
+    # ==========================================================================
     # Logging & Evaluation
     # ==========================================================================
     log_interval: int =        100
@@ -228,6 +252,26 @@ class TrainingConfig:
     track_iteration_diagnostics: bool = False
     verbose_diagnostics: bool         = False
     diagnostics_interval: int         = 50
+
+    # Raise on non-finite loss instead of silent skip. Also dumps the set of
+    # parameters whose values have gone non-finite at raise-time.
+    assert_finite_loss: bool = False
+
+    # Emit per-batch SPD eigenvalue/cond/logdet counters from _kl_kernel_dense
+    # through the _nr numerical monitor. Default off (observational only).
+    enable_spd_diagnostics: bool = False
+
+    # When True, `safe_kl_clamp` does NOT replace NaN/±inf with kl_max —
+    # non-finite KL values propagate through the softmax into the loss so
+    # divergence trips `assert_finite_loss` instead of saturating silently.
+    # Intended for diagnostic runs; leave off for normal training.
+    propagate_kl_nonfinite: bool = False
+
+    # Per-param-group warmup multipliers for _create_scheduler. Keys match
+    # param-group 'name' entries (e.g. 'mu_embed', 'phi_embed', 'sigma_embed').
+    # A multiplier of 3.0 triples the warmup horizon for that group; 1.0 (or
+    # absent) preserves the global warmup_steps. Default {} => no change.
+    per_group_warmup_multipliers: Dict[str, float] = field(default_factory=dict)
 
     # ==========================================================================
     # Output verbosity

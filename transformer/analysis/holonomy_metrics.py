@@ -28,15 +28,27 @@ class HolonomySnapshot:
         step: Training step at which this snapshot was taken.
         layer: Layer index.
         head: Head index (0 for head-averaged).
-        mean_norm: Mean :math:`\|C_{ijk} - I\|_F` over sampled triples.
-        std_norm: Standard deviation of holonomy norms.
-        median_norm: Median holonomy norm.
-        max_norm: Maximum holonomy norm observed.
-        frac_gt_001: Fraction of triples with norm > 0.01.
-        frac_gt_01: Fraction of triples with norm > 0.1.
+        variant: Which transport operator was measured — 'raw' applies the
+            bare δ from gauge_connection (hypothetical curvature at
+            cocycle_relaxation=1); 'scaled' applies the block's actual
+            cocycle_relaxation factor and measures what training sees.
+        mean_norm: Mean :math:`\|C_{ijk} - I\|_F` over sampled triples
+            (computed over non-NaN entries only).
+        std_norm: Standard deviation of holonomy norms (non-NaN only).
+        median_norm: Median holonomy norm (non-NaN only).
+        max_norm: Maximum holonomy norm observed (non-NaN only).
+        frac_gt_001: Fraction of triples with norm > 0.01 (NaN counted as False).
+        frac_gt_01: Fraction of triples with norm > 0.1 (NaN counted as False).
         mean_spectral_gap: Mean gap between largest and second-largest
-            singular values of :math:`C_{ijk}`.
-        mean_wilson_trace: Mean :math:`|\mathrm{tr}(C_{ijk})| / K`.
+            singular values of :math:`C_{ijk}`. Returns 0.0 if SVD fails.
+        mean_wilson_trace: Mean :math:`|\mathrm{tr}(C_{ijk})| / K` (non-NaN only).
+        nan_fraction: Fraction of sampled triples whose C contained NaN —
+            typically from matrix_exp instability on outlier (i,j,k) whose
+            delta spectral radius exceeds the float precision threshold.
+        delta_max_spec: Max spectral norm of delta_matrix across ALL N²
+            (i,j) edges — the quantity that governs matrix_exp stability.
+        delta_p95_spec: 95th percentile of delta_matrix spectral norm.
+        delta_mean_spec: Mean delta_matrix spectral norm.
         sample_size: Number of triples used.
     """
     step: int
@@ -50,11 +62,21 @@ class HolonomySnapshot:
     frac_gt_01: float
     mean_spectral_gap: float
     mean_wilson_trace: float
+    nan_fraction: float
     sample_size: int
+    variant: str = 'raw'
+    delta_max_spec: float = 0.0
+    delta_p95_spec: float = 0.0
+    delta_mean_spec: float = 0.0
 
     def to_log_dict(self, prefix: str = 'holonomy') -> Dict[str, float]:
-        """Return a flat dictionary of metrics for logging."""
-        key = f"{prefix}/L{self.layer}_H{self.head}"
+        """Return a flat dictionary of metrics for logging.
+
+        Key format: ``{prefix}/L{layer}_H{head}_{variant}/{metric}``.  The
+        variant is embedded in the key so the raw and cocycle-scaled
+        diagnostics share the same CSV row without collision.
+        """
+        key = f"{prefix}/L{self.layer}_H{self.head}_{self.variant}"
         return {
             f"{key}/mean_norm": self.mean_norm,
             f"{key}/std_norm": self.std_norm,
@@ -64,6 +86,10 @@ class HolonomySnapshot:
             f"{key}/frac_gt_01": self.frac_gt_01,
             f"{key}/spectral_gap": self.mean_spectral_gap,
             f"{key}/wilson_trace": self.mean_wilson_trace,
+            f"{key}/nan_fraction": self.nan_fraction,
+            f"{key}/delta_max_spec": self.delta_max_spec,
+            f"{key}/delta_p95_spec": self.delta_p95_spec,
+            f"{key}/delta_mean_spec": self.delta_mean_spec,
             f"{key}/sample_size": float(self.sample_size),
         }
 
@@ -101,6 +127,8 @@ def compute_holonomy_snapshot(
     head: int = 0,
     sample_size: int = 500,
     seed: int = 42,
+    variant: str = 'raw',
+    delta_stats: Dict[str, float] = None,
 ) -> HolonomySnapshot:
     r"""Compute a single holonomy snapshot for one layer.
 
@@ -120,33 +148,61 @@ def compute_holonomy_snapshot(
     """
     C, norms, _ = compute_holonomy(exp_delta, sample_size=sample_size, seed=seed)
     # C: (B, n_triples, K, K), norms: (B, n_triples)
-    norms_flat = norms.detach().cpu().float()
+    norms_flat = norms.detach().cpu().float().reshape(-1)
     K = C.shape[-1]
 
-    mean_norm = float(norms_flat.mean().item())
-    std_norm = float(norms_flat.std().item())
-    median_norm = float(norms_flat.median().item())
-    max_norm = float(norms_flat.max().item())
+    # A NaN in C (typically from float32 matrix_exp on outlier triples)
+    # propagates to norms.  Compute reductions over the non-NaN subset only,
+    # and expose nan_fraction as a first-class diagnostic so the failure
+    # rate is visible rather than hidden behind NaN outputs.
+    nan_mask = torch.isnan(norms_flat)
+    nan_fraction = float(nan_mask.float().mean().item())
+    valid = norms_flat[~nan_mask]
+    if valid.numel() == 0:
+        mean_norm = float('nan')
+        std_norm = float('nan')
+        median_norm = float('nan')
+        max_norm = float('nan')
+    else:
+        mean_norm = float(valid.mean().item())
+        std_norm = float(valid.std(unbiased=False).item()) if valid.numel() > 1 else 0.0
+        median_norm = float(valid.median().item())
+        max_norm = float(valid.max().item())
+    # frac_gt_* treat NaN as False (survives the reduction); denominator
+    # is the total triple count, matching the "fraction of all sampled
+    # triples that exceeded the threshold" semantics.
     frac_gt_001 = float((norms_flat > 0.01).float().mean().item())
     frac_gt_01 = float((norms_flat > 0.1).float().mean().item())
 
-    # Spectral gap: gap between top-2 singular values of C
-    # Reshape to (B*n_triples, K, K)
+    # Spectral gap: gap between top-2 singular values of C.  SVD on a NaN
+    # matrix raises; on a well-conditioned matrix it returns singular
+    # values.  We filter NaN-bearing C-slices out before calling svdvals
+    # so a single bad triple does not zero the mean_spectral_gap via the
+    # except-fallback.
     C_flat = C.detach().cpu().float().reshape(-1, K, K)
+    C_nan_mask = torch.isnan(C_flat).any(dim=(-2, -1))
+    C_clean = C_flat[~C_nan_mask]
     try:
-        svs = torch.linalg.svdvals(C_flat)  # (B*n_triples, K)
-        if svs.shape[-1] >= 2:
-            gaps = svs[:, 0] - svs[:, 1]
-            mean_spectral_gap = float(gaps.mean().item())
+        if C_clean.shape[0] == 0:
+            mean_spectral_gap = float('nan')
         else:
-            mean_spectral_gap = 0.0
+            svs = torch.linalg.svdvals(C_clean)  # (n_clean, K)
+            if svs.shape[-1] >= 2:
+                gaps = svs[:, 0] - svs[:, 1]
+                mean_spectral_gap = float(gaps.mean().item())
+            else:
+                mean_spectral_gap = 0.0
     except Exception:
         mean_spectral_gap = 0.0
 
-    # Wilson trace: |tr(C)| / K
-    traces = torch.diagonal(C_flat, dim1=-2, dim2=-1).sum(dim=-1).abs() / K
-    mean_wilson_trace = float(traces.mean().item())
+    # Wilson trace: |tr(C)| / K, over non-NaN slices only.
+    if C_clean.shape[0] == 0:
+        mean_wilson_trace = float('nan')
+    else:
+        traces = torch.diagonal(C_clean, dim1=-2, dim2=-1).sum(dim=-1).abs() / K
+        mean_wilson_trace = float(traces.mean().item())
 
+    _ds = delta_stats or {}
     return HolonomySnapshot(
         step=step,
         layer=layer,
@@ -159,7 +215,12 @@ def compute_holonomy_snapshot(
         frac_gt_01=frac_gt_01,
         mean_spectral_gap=mean_spectral_gap,
         mean_wilson_trace=mean_wilson_trace,
+        nan_fraction=nan_fraction,
         sample_size=sample_size,
+        variant=variant,
+        delta_max_spec=float(_ds.get('delta_max_spec', 0.0)),
+        delta_p95_spec=float(_ds.get('delta_p95_spec', 0.0)),
+        delta_mean_spec=float(_ds.get('delta_mean_spec', 0.0)),
     )
 
 

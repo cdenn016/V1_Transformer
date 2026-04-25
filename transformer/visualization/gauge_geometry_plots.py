@@ -135,51 +135,100 @@ def plot_yang_mills_evolution(
     steps_arr = np.asarray(steps, dtype=float)
     energies_arr = np.asarray(energies, dtype=float)
 
+    # Flat (bilinear / cocycle) transport gives E_YM = 0 exactly; in
+    # fp32 the reported value is bounded by matrix-log roundoff, which
+    # empirically sits near 1e-8 at K=8 and scales mildly with K.
+    # 1e-4 leaves two orders of magnitude of headroom above that noise
+    # floor while still admitting any physically meaningful non-flat
+    # signal, which tracks O(phi_scale^2) = O(1e-3) or larger.
+    ym_tol = 1e-4
+    finite_ym = energies_arr[np.isfinite(energies_arr)]
+    ym_has_signal = finite_ym.size > 0 and float(np.max(finite_ym)) > ym_tol
+
+    dir_arr: Optional[np.ndarray] = None
+    dir_valid = np.zeros(0, dtype=bool)
+    if dirichlet_energies is not None:
+        dir_arr = np.asarray(dirichlet_energies, dtype=float)
+        dir_valid = np.isfinite(dir_arr)
+
+    # --------------------------------------------------------------
+    # Case 1: YM has no signal (flat transport). Collapse to a single
+    # Dirichlet-only axis with an annotation documenting E_YM ≡ 0.
+    # --------------------------------------------------------------
+    if not ym_has_signal:
+        fig, ax = plt.subplots(figsize=figsize)
+        if dir_arr is not None and dir_valid.any():
+            ax.plot(
+                steps_arr[dir_valid], dir_arr[dir_valid],
+                color=PUB_COLORS['orange'], linewidth=1.8,
+                label=r'$E_D$', zorder=3,
+            )
+            ax.fill_between(
+                steps_arr[dir_valid], 0, dir_arr[dir_valid],
+                color=PUB_COLORS['orange'], alpha=0.08,
+            )
+            ax.set_ylabel(
+                r'Dirichlet energy $E_D = \overline{\|\phi_i - \phi_j\|^2}$'
+            )
+            dir_min = float(dir_arr[dir_valid].min())
+            if dir_min > 0.0:
+                ax.set_yscale('log')
+            ax.text(
+                0.02, 0.02,
+                r'$E_{\mathrm{YM}} \equiv 0$ (flat bilinear transport)',
+                transform=ax.transAxes, ha='left', va='bottom',
+                fontsize=8, color=PUB_COLORS['gray'],
+                bbox=dict(facecolor='white', edgecolor='none', alpha=0.75),
+            )
+            _safe_legend(ax, loc='upper right', framealpha=0.9)
+        else:
+            _no_data_axes(ax, 'No Yang-Mills or Dirichlet data')
+        ax.set_xlabel('Training step')
+        ax.set_title('Gauge-Field Energy Evolution')
+        fig.tight_layout()
+        _save(fig, save_path)
+        return fig
+
+    # --------------------------------------------------------------
+    # Case 2: YM has signal. Two-axis plot with guarded log scales.
+    # --------------------------------------------------------------
     fig, ax = plt.subplots(figsize=figsize)
-
     valid = np.isfinite(energies_arr)
-    if valid.any():
-        ax.plot(
-            steps_arr[valid], energies_arr[valid],
-            color=PUB_COLORS['blue'], linewidth=1.8,
-            label=r'$E_{\mathrm{YM}}$', zorder=3,
-        )
-        # Light raw behind smoothed is not applicable here — energies are already
-        # scalar summaries — but we shade the area under the curve subtly.
-        ax.fill_between(
-            steps_arr[valid], 0, energies_arr[valid],
-            color=PUB_COLORS['blue'], alpha=0.08,
-        )
-    else:
-        _no_data_axes(ax, 'No Yang-Mills energy data')
-
+    ax.plot(
+        steps_arr[valid], energies_arr[valid],
+        color=PUB_COLORS['blue'], linewidth=1.8,
+        label=r'$E_{\mathrm{YM}}$', zorder=3,
+    )
+    ax.fill_between(
+        steps_arr[valid], 0, energies_arr[valid],
+        color=PUB_COLORS['blue'], alpha=0.08,
+    )
     ax.set_xlabel('Training step')
     ax.set_ylabel(r'$E_{\mathrm{YM}}$')
-    ax.set_yscale('log')
+    ym_min = float(energies_arr[valid].min())
+    if ym_min > 0.0:
+        ax.set_yscale('log')
     ax.set_title('Yang-Mills Energy Evolution')
     _safe_legend(ax, loc='upper right', framealpha=0.9)
 
-    # Optional secondary axis: Dirichlet energy
-    if dirichlet_energies is not None:
-        dir_arr = np.asarray(dirichlet_energies, dtype=float)
-        valid_d = np.isfinite(dir_arr)
-        if valid_d.any():
-            ax2 = ax.twinx()
-            ax2.plot(
-                steps_arr[valid_d], dir_arr[valid_d],
-                color=PUB_COLORS['orange'], linewidth=1.5,
-                linestyle='--', label=r'$E_D$', zorder=2,
-            )
-            ax2.set_ylabel(
-                r'Dirichlet energy $E_D = \overline{\|\phi_i - \phi_j\|^2}$',
-                color=PUB_COLORS['orange'],
-            )
-            ax2.tick_params(axis='y', labelcolor=PUB_COLORS['orange'])
+    if dir_arr is not None and dir_valid.any():
+        ax2 = ax.twinx()
+        ax2.plot(
+            steps_arr[dir_valid], dir_arr[dir_valid],
+            color=PUB_COLORS['orange'], linewidth=1.5,
+            linestyle='--', label=r'$E_D$', zorder=2,
+        )
+        ax2.set_ylabel(
+            r'Dirichlet energy $E_D = \overline{\|\phi_i - \phi_j\|^2}$',
+            color=PUB_COLORS['orange'],
+        )
+        ax2.tick_params(axis='y', labelcolor=PUB_COLORS['orange'])
+        dir_min = float(dir_arr[dir_valid].min())
+        if dir_min > 0.0:
             ax2.set_yscale('log')
-            # Merge legends
-            h1, l1 = ax.get_legend_handles_labels()
-            h2, l2 = ax2.get_legend_handles_labels()
-            _safe_legend(ax, h1 + h2, l1 + l2, loc='upper right', framealpha=0.9)
+        h1, l1 = ax.get_legend_handles_labels()
+        h2, l2 = ax2.get_legend_handles_labels()
+        _safe_legend(ax, h1 + h2, l1 + l2, loc='upper right', framealpha=0.9)
 
     fig.tight_layout()
     _save(fig, save_path)

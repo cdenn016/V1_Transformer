@@ -322,21 +322,30 @@ class TestV2Config:
     def test_full_cov_allowed(self):
         """diagonal_covariance=False is now supported.
 
-        When RoPE is also active, rope_full_gauge must be set explicitly —
-        silent auto-promotion was removed because it breaks checkpoint
-        round-trip (the saved config would have the flag as False while the
-        live runtime had it as True).
+        When RoPE is also active, rope_full_gauge must be set to a non-'off'
+        mode explicitly — silent auto-promotion was removed because it breaks
+        checkpoint round-trip (the saved config would differ from the live
+        runtime).
         """
         cfg = VFEConfig(embed_dim=16, irrep_spec=[('l0', 2, 8)],
-                        diagonal_covariance=False, rope_full_gauge=True)
+                        diagonal_covariance=False, rope_full_gauge='vfe_only')
         assert cfg.diagonal_covariance is False
-        assert cfg.rope_full_gauge is True
+        assert cfg.rope_full_gauge == 'vfe_only'
 
     def test_rope_full_gauge_requires_full_cov(self):
-        """rope_full_gauge=True with diagonal_covariance=True raises ValueError."""
+        """Non-'off' rope_full_gauge with diagonal_covariance=True raises."""
         with pytest.raises(ValueError):
             VFEConfig(embed_dim=16, irrep_spec=[('l0', 2, 8)],
-                      rope_full_gauge=True, diagonal_covariance=True)
+                      rope_full_gauge='vfe_only', diagonal_covariance=True)
+
+    def test_legacy_bool_rejected(self):
+        """Bool values no longer silently coerce — must raise."""
+        with pytest.raises(ValueError, match='must be one of'):
+            VFEConfig(embed_dim=16, irrep_spec=[('l0', 2, 8)],
+                      rope_full_gauge=True, diagonal_covariance=False)
+        with pytest.raises(ValueError, match='must be one of'):
+            VFEConfig(embed_dim=16, irrep_spec=[('l0', 2, 8)],
+                      rope_full_gauge=False)
 
 
 class TestDampedHandoff:

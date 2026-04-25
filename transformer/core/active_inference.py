@@ -210,12 +210,20 @@ def _compute_active_inference_gradient(
         del mu_var, sigma_var, grad_prag_mu, grad_prag_sigma
 
     # ----- Epistemic: -MI(v; mu | q_i) via Welford-style 2-pass backward -----
-    # Sigma enters two paths: (1) the readout _readout(mu_s, sigma_var) and
-    # (2) the reparameterization mu_s = mu + sqrt(sigma) * noise (diagonal).
-    # For full covariance, path (2) would require differentiating through
-    # Cholesky — expensive.  We track sigma through the readout in all cases
-    # and additionally through the reparameterization in the diagonal case.
-    _full_cov_epi = not is_diagonal  # full-cov: readout-only sigma gradient
+    # Canonical BALD MI: the MC sample z_s = mu + sqrt(sigma) * eps already
+    # absorbs sigma, so the readout must treat z_s as a point estimate.
+    # We pass sigma=0 to _readout in BOTH passes so p_bar (pass-1) and p_s
+    # (pass-2) use the same point-conditional decoder — otherwise the KL
+    # trace term in decode() counts sigma twice (once via reparameterization,
+    # once via the direct Gaussian-decode path) and inflates predictive
+    # entropy. See transformer/vfe/efe.py:103-110 for the reference pattern.
+    #
+    # Consequence for full-covariance: path-2 reparameterization uses
+    # pre-scaled noise (no Cholesky differentiation), so with sigma=0 in the
+    # readout, the epistemic term contributes zero gradient to Sigma in the
+    # full-cov case.  This matches efe.py semantics (diagonal-only BALD) and
+    # is an accepted limitation documented here rather than a silent bias.
+    _full_cov_epi = not is_diagonal
     if epistemic_weight > 0.0 and epistemic_samples > 0:
         # ---- Build the noise sampler (detached, for Pass 1) ----
         # Store RAW noise ε ~ N(0,I) so Pass 2 can apply tracked sigma.
@@ -248,7 +256,10 @@ def _compute_active_inference_gradient(
 
         # ---- Pass 1: streaming p̄ accumulation, no autograd graph ----
         # Save RAW noise ε for diagonal (so Pass 2 can apply tracked sigma)
-        # or pre-scaled noise for full-cov (sigma gradient via readout only).
+        # or pre-scaled noise for full-cov (reparameterization-only path).
+        # Cache zero-sigma tensor used for the point-conditional readout in
+        # both passes (see BALD MI discussion above).
+        zero_sigma_f32 = torch.zeros_like(sigma_f32)
         raw_noise_list: List[torch.Tensor] = []
         scaled_noise_list: List[torch.Tensor] = []
         with torch.no_grad():
@@ -260,11 +271,11 @@ def _compute_active_inference_gradient(
                     raw_noise_list.append(raw_z)
                     noise = raw_z * std_detached
                 else:
-                    # Store pre-scaled noise (sigma gradient via readout only)
+                    # Store pre-scaled noise (no sigma path for full-cov)
                     noise = _sample_scaled_noise(mu_f32)
                     scaled_noise_list.append(noise)
                 mu_s = mu_f32 + noise
-                logits_s = _readout(mu_s, sigma_f32)
+                logits_s = _readout(mu_s, zero_sigma_f32)
                 # Streaming mean: avoid materializing (S, B, N, V) probs_stack.
                 _contrib = F.softmax(logits_s, dim=-1) / epistemic_samples
                 probs_avg = _contrib if probs_avg is None else probs_avg + _contrib
@@ -276,8 +287,10 @@ def _compute_active_inference_gradient(
         # ---- Pass 2: per-sample autograd, accumulate gradient manually ----
         # Each iteration: rebuild the sample's decode graph, compute
         # L_s = -(ε / S) · KL(p_s || sg(p̄_const)), backward, free.
-        # Sigma is tracked through: (a) readout (always) and (b)
-        # reparameterization mu_s = mu + sqrt(sigma_var) * raw_z (diagonal).
+        # Sigma is tracked ONLY through reparameterization
+        # mu_s = mu + sqrt(sigma_var) * raw_z (diagonal case).  The readout
+        # receives sigma=0 so p_s matches p̄'s point-conditional decoder.
+        # Full-cov: no Sigma path (pre-scaled noise is detached).
         epi_per_sample_weight = -epistemic_weight / epistemic_samples
         for _s in range(epistemic_samples):
             with torch.enable_grad():
@@ -288,9 +301,11 @@ def _compute_active_inference_gradient(
                     std_tracked = sigma_var_s.clamp(min=1e-6).sqrt()
                     mu_s_grad = mu_var_s + raw_noise_list[_s] * std_tracked
                 else:
-                    # Full-cov: use pre-scaled noise (sigma via readout only)
+                    # Full-cov: pre-scaled noise; no Sigma gradient path
                     mu_s_grad = mu_var_s + scaled_noise_list[_s]
-                logits_s_grad = _readout(mu_s_grad, sigma_var_s)
+                # sigma=0 so z_s is treated as a point estimate (canonical
+                # BALD).  Avoids double-counting via decode's KL trace term.
+                logits_s_grad = _readout(mu_s_grad, torch.zeros_like(sigma_var_s))
                 log_probs_s_grad = F.log_softmax(logits_s_grad, dim=-1)
                 probs_s_grad = log_probs_s_grad.exp()
                 # KL(p_s || p̄) = Σ_v p_s · (log p_s - log p̄)

@@ -9,6 +9,11 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
 import torch
 
+from transformer.core.block_config import (
+    RopeFullGaugeMode,
+    _ROPE_FULL_GAUGE_VALUES,
+)
+
 
 @dataclass
 class VFEConfig:
@@ -76,12 +81,14 @@ class VFEConfig:
 
     # === Positional encoding ===
     # NOTE: RoPE currently rotates only μ, not Σ. The framework-consistent gauge
-    # action would also rotate Σ via RΣRᵀ (rope_full_gauge). This is a known
-    # theory gap documented in VFE_Transformer_Idea.md. rope_full_gauge requires
-    # full covariance and is guarded with NotImplementedError.
+    # action also rotates Σ via RΣRᵀ (rope_full_gauge != 'off'). This is a known
+    # theory gap documented in VFE_Transformer_Idea.md. Non-'off' values require
+    # full covariance and are rejected at __post_init__ under diagonal σ.
     use_rope: bool = True
     rope_base: float = 10000.0
-    rope_full_gauge: bool = False        # RoPE on Σ as well as μ (requires full covariance)
+    rope_full_gauge: RopeFullGaugeMode = 'off'  # 'off' | 'vfe_only' | 'both'. vfe/ currently
+                                                # treats any non-'off' value identically; tri-state
+                                                # differentiation is reserved for a future change.
     bch_order: int = 1                   # BCH truncation order (1=additive)
 
     # === Embedding init ===
@@ -148,19 +155,25 @@ class VFEConfig:
                 DeprecationWarning,
                 stacklevel=2,
             )
-        if self.rope_full_gauge and self.diagonal_covariance:
+        if self.rope_full_gauge not in _ROPE_FULL_GAUGE_VALUES:
             raise ValueError(
-                "rope_full_gauge=True requires diagonal_covariance=False. "
-                "RoPE gauge transport acts on Σ via RΣR^T, which needs full covariance."
+                f"rope_full_gauge must be one of {_ROPE_FULL_GAUGE_VALUES}; "
+                f"got {self.rope_full_gauge!r}."
+            )
+        if self.rope_full_gauge != 'off' and self.diagonal_covariance:
+            raise ValueError(
+                f"rope_full_gauge={self.rope_full_gauge!r} requires "
+                f"diagonal_covariance=False. RoPE gauge transport acts on Σ "
+                f"via RΣR^T, which needs full covariance."
             )
         # Full-cov + RoPE without rope_full_gauge is a gauge-inconsistent
         # configuration (μ rotated, Σ not). We reject it explicitly rather
         # than silently promoting the flag, which would be a checkpoint
         # round-trip hazard.
-        if not self.diagonal_covariance and self.use_rope and not self.rope_full_gauge:
+        if not self.diagonal_covariance and self.use_rope and self.rope_full_gauge == 'off':
             raise ValueError(
                 "diagonal_covariance=False + use_rope=True requires "
-                "rope_full_gauge=True (or rope_full_gauge='both' / 'vfe_only'). "
+                "rope_full_gauge='vfe_only' or 'both'. "
                 "Silent promotion was removed; set the flag explicitly."
             )
 

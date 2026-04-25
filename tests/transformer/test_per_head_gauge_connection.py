@@ -336,34 +336,26 @@ class TestGaugeCovariantRidgeUnderNonFlat:
 
 class TestRopeFullGaugeTriState:
 
-    def test_coerce_legacy_bool_true(self):
-        from transformer.core.block_config import _coerce_rope_full_gauge
-        assert _coerce_rope_full_gauge(True) == 'vfe_only'
-
-    def test_coerce_legacy_bool_false(self):
-        from transformer.core.block_config import _coerce_rope_full_gauge
-        assert _coerce_rope_full_gauge(False) == 'off'
-
-    def test_coerce_none(self):
-        from transformer.core.block_config import _coerce_rope_full_gauge
-        assert _coerce_rope_full_gauge(None) == 'off'
-
-    def test_coerce_canonical_strings(self):
-        from transformer.core.block_config import _coerce_rope_full_gauge
-        for s in ('off', 'vfe_only', 'both'):
-            assert _coerce_rope_full_gauge(s) == s
-
-    def test_coerce_invalid_string_raises(self):
+    def test_invalid_string_raises(self):
         import pytest
-        from transformer.core.block_config import _coerce_rope_full_gauge
+        from transformer.core.block_config import BlockConfig
         with pytest.raises(ValueError, match='must be one of'):
-            _coerce_rope_full_gauge('full')
+            BlockConfig(rope_full_gauge='full')
 
-    def test_coerce_invalid_type_raises(self):
+    def test_invalid_type_raises(self):
         import pytest
-        from transformer.core.block_config import _coerce_rope_full_gauge
-        with pytest.raises(TypeError):
-            _coerce_rope_full_gauge(1.5)
+        from transformer.core.block_config import BlockConfig
+        with pytest.raises(ValueError, match='must be one of'):
+            BlockConfig(rope_full_gauge=1.5)
+
+    def test_legacy_bool_rejected(self):
+        """Bool values no longer silently coerce — must raise."""
+        import pytest
+        from transformer.core.block_config import BlockConfig
+        with pytest.raises(ValueError, match='must be one of'):
+            BlockConfig(rope_full_gauge=True)
+        with pytest.raises(ValueError, match='must be one of'):
+            BlockConfig(rope_full_gauge=False)
 
     def _base_config(self, **overrides):
         cfg = {
@@ -386,11 +378,11 @@ class TestRopeFullGaugeTriState:
         cfg.update(overrides)
         return cfg
 
-    def test_legacy_bool_true_maps_to_vfe_only(self):
-        """rope_full_gauge=True (legacy) must coerce to 'vfe_only' end-to-end."""
+    def test_string_vfe_only(self):
+        """rope_full_gauge='vfe_only' wires the FFN path but leaves attention in μ-only mode."""
         from transformer.core.model import GaugeTransformerLM
         cfg = self._base_config(
-            rope_full_gauge=True,
+            rope_full_gauge='vfe_only',
             diagonal_covariance=False,  # avoid the diagonal-cov warning collision
         )
         model = GaugeTransformerLM(cfg)
@@ -398,9 +390,9 @@ class TestRopeFullGaugeTriState:
         assert block.attention.rope_full_gauge_mode == 'vfe_only'
         assert block.ffn._rope_full_gauge_vfe == 'vfe_only'
 
-    def test_legacy_bool_false_maps_to_off(self):
+    def test_string_off_explicit(self):
         from transformer.core.model import GaugeTransformerLM
-        cfg = self._base_config(rope_full_gauge=False)
+        cfg = self._base_config(rope_full_gauge='off')
         model = GaugeTransformerLM(cfg)
         block = model.transformer.blocks[0]
         assert block.attention.rope_full_gauge_mode == 'off'

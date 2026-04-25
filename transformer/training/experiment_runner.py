@@ -38,6 +38,19 @@ from typing import Dict, List, Optional, Tuple, Any
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
 
+
+def _maybe_set_epoch(dataset, epoch: int) -> None:
+    """Call dataset.set_epoch(epoch) when present. No-op otherwise.
+
+    Used at the start of the training loop and at each StopIteration epoch
+    boundary to update per-epoch window offsets when stride-based windowing
+    is active. Silently skipped for datasets that don't implement the method
+    or when random_offset_per_epoch is False (internal no-op inside set_epoch).
+    """
+    fn = getattr(dataset, "set_epoch", None)
+    if callable(fn):
+        fn(int(epoch))
+
 from transformer.core.model import GaugeTransformerLM
 from transformer.baselines.standard_transformer import StandardTransformerLM
 from transformer.pure_vfe.model import PureVFETransformer
@@ -1205,6 +1218,8 @@ class PublicationTrainer(FastTrainer):
             logger.info(f"  Resuming from step {start_step}")
 
         start_time = time.time()
+        _epoch_idx = 0
+        _maybe_set_epoch(self.train_loader.dataset, _epoch_idx)
         train_iterator = iter(self.train_loader)
 
         # Calculate total steps: epochs takes precedence over max_steps
@@ -1278,6 +1293,8 @@ class PublicationTrainer(FastTrainer):
             try:
                 batch = next(train_iterator)
             except StopIteration:
+                _epoch_idx += 1
+                _maybe_set_epoch(self.train_loader.dataset, _epoch_idx)
                 train_iterator = iter(self.train_loader)
                 batch = next(train_iterator)
 
@@ -1486,36 +1503,16 @@ class PublicationTrainer(FastTrainer):
                 self.save_checkpoint(is_best=False)
                 self.metrics_tracker.save()
 
-            # Periodic holonomy diagnostics (non-flat transport curvature)
+            # Periodic holonomy diagnostics (non-flat transport curvature).
+            # Writes its own CSV inside compute_holonomy_diagnostics ->
+            # _append_holonomy_csv_row; no merge into the training CSV.
             if self.pub_metrics and self.pub_metrics.should_compute_holonomy(step + 1):
                 try:
-                    holonomy_dict = self.pub_metrics.compute_holonomy_diagnostics(
+                    self.pub_metrics.compute_holonomy_diagnostics(
                         model=self.model,
                         step=step + 1,
                         verbose=True,
                     )
-                    if holonomy_dict:
-                        # Merge holonomy metrics into the current step's CSV entry
-                        merged = False
-                        for entry in reversed(self.metrics_tracker.history):
-                            if entry['step'] == step + 1:
-                                entry['holonomy_mean_norm'] = holonomy_dict.get(
-                                    'holonomy/mean_norm')
-                                entry['holonomy_max_norm'] = holonomy_dict.get(
-                                    'holonomy/max_norm')
-                                entry['holonomy_frac_gt_01'] = holonomy_dict.get(
-                                    'holonomy/frac_gt_0.1')
-                                entry['holonomy_spectral_gap'] = holonomy_dict.get(
-                                    'holonomy/spectral_gap')
-                                entry['holonomy_wilson_trace'] = holonomy_dict.get(
-                                    'holonomy/wilson_trace')
-                                merged = True
-                                break
-                        if not merged:
-                            logger.warning(
-                                f"Holonomy at step {step+1}: no matching CSV entry "
-                                f"(holonomy_interval may not be divisible by log_interval)"
-                            )
                 except Exception as e:
                     logger.warning(f"Holonomy computation failed at step {step+1}: {e}")
 
@@ -1711,6 +1708,10 @@ def _create_dataloaders(config: dict):
             max_seq_len=config['max_seq_len'],
             batch_size=config['batch_size'],
             num_workers=config.get('num_workers', 0),
+            stride=config.get('stride', None),
+            random_offset_per_epoch=config.get('random_offset_per_epoch', False),
+            eval_stride=config.get('eval_stride', None),
+            base_epoch_seed=config.get('stride_base_seed', 0),
         )
         test_loader = None
         tokenizer = None
@@ -1724,6 +1725,10 @@ def _create_dataloaders(config: dict):
             dataset=dataset_name,
             include_test=True,
             return_tokenizer=True,
+            stride=config.get('stride', None),
+            random_offset_per_epoch=config.get('random_offset_per_epoch', False),
+            eval_stride=config.get('eval_stride', None),
+            base_epoch_seed=config.get('stride_base_seed', 0),
         )
 
     return train_loader, val_loader, test_loader, actual_vocab_size, tokenizer
@@ -2014,6 +2019,13 @@ def run_single_experiment(
 
         # Suppress FastTrainer init banner — compact summary below covers it
         quiet=True,
+
+        # Stride windowing (threaded through for introspection / forward-compat;
+        # actual logic lives in transformer/data/datasets.py).
+        stride=config.get('stride', None),
+        random_offset_per_epoch=config.get('random_offset_per_epoch', False),
+        eval_stride=config.get('eval_stride', None),
+        stride_base_seed=config.get('stride_base_seed', 0),
     )
 
     # Calculate training duration metrics for summary
@@ -2669,6 +2681,8 @@ def run_pure_vfe_experiment(
     logger.info("="*70)
 
     best_val_ce = float('inf')
+    _epoch_idx = 0
+    _maybe_set_epoch(train_loader.dataset, _epoch_idx)
     train_iterator = iter(train_loader)
     start_time = time.time()
 
@@ -2703,6 +2717,8 @@ def run_pure_vfe_experiment(
                     try:
                         batch = next(train_iterator)
                     except StopIteration:
+                        _epoch_idx += 1
+                        _maybe_set_epoch(train_loader.dataset, _epoch_idx)
                         train_iterator = iter(train_loader)
                         batch = next(train_iterator)
 
@@ -2730,6 +2746,8 @@ def run_pure_vfe_experiment(
                 try:
                     batch = next(train_iterator)
                 except StopIteration:
+                    _epoch_idx += 1
+                    _maybe_set_epoch(train_loader.dataset, _epoch_idx)
                     train_iterator = iter(train_loader)
                     batch = next(train_iterator)
 

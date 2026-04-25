@@ -150,12 +150,10 @@ class TrainingSnapshot:
     beta_loss: float = 0.0  # Belief alignment term
     attention_entropy: float = 0.0  # Entropy of attention weights (higher = more uniform)
     attention_concentration: float = 0.0  # Concentration of attention (higher = more peaked)
-    # Holonomy diagnostics (non-flat transport curvature)
-    holonomy_mean_norm: float = 0.0       # Mean ‖C_ijk - I‖_F across sampled triples
-    holonomy_max_norm: float = 0.0        # Max ‖C_ijk - I‖_F
-    holonomy_frac_gt_01: float = 0.0      # Fraction of triples with ‖C-I‖ > 0.1
-    holonomy_spectral_gap: float = 0.0    # Mean eigenvalue spread of C_ijk
-    holonomy_wilson_trace: float = 0.0    # Mean |tr(C)/K - 1| (Wilson loop deviation)
+    # Holonomy diagnostics are written to a dedicated CSV
+    # (PublicationMetrics.holonomy_csv_path) keyed by step and no longer
+    # merged into this training snapshot — the two streams run on
+    # independent cadences and the prior exact-match join was fragile.
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -282,11 +280,6 @@ class TrainingTracker:
             step_time=step_time,
             attention_entropy=train_metrics.get('attention_entropy', 0),
             attention_concentration=train_metrics.get('attention_concentration', 0),
-            holonomy_mean_norm=train_metrics.get('holonomy/mean_norm', 0),
-            holonomy_max_norm=train_metrics.get('holonomy/max_norm', 0),
-            holonomy_frac_gt_01=train_metrics.get('holonomy/frac_gt_0.1', 0),
-            holonomy_spectral_gap=train_metrics.get('holonomy/spectral_gap', 0),
-            holonomy_wilson_trace=train_metrics.get('holonomy/wilson_trace', 0),
         )
 
         self.history.append(snapshot)
@@ -1064,6 +1057,11 @@ class PublicationMetrics:
         self.holonomy_history: List[HolonomyProfile] = []
         self.holonomy_interval: int = 500  # Default: compute every 500 steps
         self.holonomy_sample_size: int = 500  # Triples per computation
+        # Independent holonomy CSV, decoupled from the main training-metrics
+        # CSV so the logging cadence of the two streams can differ freely.
+        # One row per holonomy invocation, keyed by step.
+        self.holonomy_csv_path: Path = self.experiment_dir / "holonomy_metrics.csv"
+        self._holonomy_csv_header_written: bool = False
 
         # Gauge geometry tracking (Dirichlet energy, invariants, orbit dimension)
         self.gauge_geometry_history: List[Dict[str, Any]] = []
@@ -1316,45 +1314,89 @@ class PublicationMetrics:
 
         with torch.no_grad():
             for layer_idx, block in blocks:
-                exp_delta = self._extract_exp_delta(model, block)
-                if exp_delta is None:
-                    if verbose:
-                        print(f"  [HOLONOMY] Skipping layer {layer_idx}: could not extract exp_delta")
-                    continue
-
-                snap = compute_holonomy_snapshot(
-                    exp_delta,
-                    step=step,
-                    layer=layer_idx,
-                    head=0,
-                    sample_size=self.holonomy_sample_size,
-                    seed=42,
-                )
-                snapshots.append(snap)
-                all_norms.append(snap.mean_norm)
+                block_cocycle = float(getattr(block, 'cocycle_relaxation', 1.0))
+                # Two variants per block: 'raw' is the bare connection
+                # curvature (hypothetical at cocycle_relaxation=1), 'scaled'
+                # is what training's transport actually uses.  When
+                # block_cocycle == 1.0 the two are identical, skip the
+                # duplicate.
+                variants: List[Tuple[str, float]] = [('raw', 1.0)]
+                if block_cocycle != 1.0:
+                    variants.append(('scaled', block_cocycle))
+                for variant_name, scale in variants:
+                    result = self._extract_exp_delta(
+                        model, block, cocycle_scale=scale, return_stats=True,
+                    )
+                    if result is None:
+                        if verbose:
+                            print(
+                                f"  [HOLONOMY] Skipping layer {layer_idx} "
+                                f"variant={variant_name}: could not extract exp_delta"
+                            )
+                        continue
+                    exp_delta, delta_stats = result
+                    snap = compute_holonomy_snapshot(
+                        exp_delta,
+                        step=step,
+                        layer=layer_idx,
+                        head=0,
+                        sample_size=self.holonomy_sample_size,
+                        seed=42,
+                        variant=variant_name,
+                        delta_stats=delta_stats,
+                    )
+                    snapshots.append(snap)
+                    if variant_name == 'raw':
+                        # Globals use 'raw' only so the aggregate retains
+                        # the original semantic of intrinsic curvature.
+                        all_norms.append(snap.mean_norm)
 
         if not snapshots:
             return None
 
+        # Aggregate global stats over non-NaN per-layer means.  np.nanmean
+        # matches the NaN-aware reductions inside HolonomySnapshot; if all
+        # layers are NaN (shouldn't happen after the float64 upgrade but
+        # possible in pathological runs), the globals become NaN too.
+        _all_norms_arr = np.array(all_norms, dtype=float)
+        if np.all(np.isnan(_all_norms_arr)):
+            global_mean = float('nan')
+            global_max = float('nan')
+        else:
+            global_mean = float(np.nanmean(_all_norms_arr))
+            global_max = float(np.nanmax(_all_norms_arr))
         profile = HolonomyProfile(
             step=step,
             snapshots=snapshots,
-            global_mean_norm=float(np.mean(all_norms)),
-            global_max_norm=float(np.max(all_norms)),
+            global_mean_norm=global_mean,
+            global_max_norm=global_max,
         )
         self.holonomy_history.append(profile)
+        self._append_holonomy_csv_row(profile)
 
-        # Build flat logging dict
+        # Build flat logging dict.  Aggregate backward-compat keys from the
+        # 'raw' variant only, so the scalar summary matches the pre-dual-
+        # variant semantic (intrinsic curvature).  The 'scaled' variant
+        # surfaces via the per-snapshot `to_log_dict` fan-out below.
         log_dict = {
             'holonomy/mean_norm': profile.global_mean_norm,
             'holonomy/max_norm': profile.global_max_norm,
         }
-        # Aggregate detailed metrics across all layers
-        if snapshots:
+        raw_snaps = [s for s in snapshots if s.variant == 'raw']
+        if raw_snaps:
             log_dict.update({
-                'holonomy/frac_gt_0.1': float(np.mean([s.frac_gt_01 for s in snapshots])),
-                'holonomy/spectral_gap': float(np.mean([s.mean_spectral_gap for s in snapshots])),
-                'holonomy/wilson_trace': float(np.mean([s.mean_wilson_trace for s in snapshots])),
+                'holonomy/frac_gt_0.1': float(np.nanmean([s.frac_gt_01 for s in raw_snaps])),
+                'holonomy/spectral_gap': float(np.nanmean([s.mean_spectral_gap for s in raw_snaps])),
+                'holonomy/wilson_trace': float(np.nanmean([s.mean_wilson_trace for s in raw_snaps])),
+                'holonomy/delta_max_spec': float(np.nanmax([s.delta_max_spec for s in raw_snaps])),
+                'holonomy/nan_fraction': float(np.nanmean([s.nan_fraction for s in raw_snaps])),
+            })
+        scaled_snaps = [s for s in snapshots if s.variant == 'scaled']
+        if scaled_snaps:
+            log_dict.update({
+                'holonomy/scaled/mean_norm': float(np.nanmean([s.mean_norm for s in scaled_snaps])),
+                'holonomy/scaled/delta_max_spec': float(np.nanmax([s.delta_max_spec for s in scaled_snaps])),
+                'holonomy/scaled/nan_fraction': float(np.nanmean([s.nan_fraction for s in scaled_snaps])),
             })
 
         # Track connection weight norms to verify W is actually evolving
@@ -1375,24 +1417,70 @@ class PublicationMetrics:
 
         if verbose:
             w_info = f" | ‖W‖={np.mean(w_norms):.6f}" if w_norms else ""
-            # Per-snapshot detail: show the actual within-layer distribution
+            # Per-snapshot detail, now tagged by variant.  The `delta_max_spec`
+            # is the headline quantity for diagnosing matrix_exp blowups.
             for s in snapshots:
-                print(f"\n  [HOLONOMY] L{s.layer}H{s.head} "
+                print(f"\n  [HOLONOMY] L{s.layer}H{s.head} variant={s.variant} "
                       f"mean ‖C-I‖={s.mean_norm:.6f} | "
                       f"max={s.max_norm:.6f} | "
                       f"std={s.std_norm:.6f} | "
                       f"median={s.median_norm:.6f} | "
                       f"frac>0.1={s.frac_gt_01:.3f} | "
-                      f"spectral_gap={s.mean_spectral_gap:.6f}"
+                      f"spectral_gap={s.mean_spectral_gap:.6f} | "
+                      f"nan_frac={s.nan_fraction:.3f} | "
+                      f"delta_spec[max/p95/mean]="
+                      f"{s.delta_max_spec:.3f}/{s.delta_p95_spec:.3f}/"
+                      f"{s.delta_mean_spec:.3f}"
                       f"{w_info}\n\n")
-            # Summary line when multiple layers/heads
-            if len(snapshots) > 1:
-                print(f"\n  [HOLONOMY] global: "
+            # Summary line when multiple layers/heads (raw variants only).
+            raw_only = [s for s in snapshots if s.variant == 'raw']
+            if len(raw_only) > 1:
+                _finite_means = [s.mean_norm for s in raw_only
+                                 if not np.isnan(s.mean_norm)]
+                _xstd = float(np.std(_finite_means)) if _finite_means else float('nan')
+                print(f"\n  [HOLONOMY] global (raw): "
                       f"mean={profile.global_mean_norm:.6f} | "
                       f"max={profile.global_max_norm:.6f} | "
-                      f"cross-layer std={np.std([s.mean_norm for s in snapshots]):.6f}\n\n")
+                      f"cross-layer std={_xstd:.6f}\n\n")
 
         return log_dict
+
+    def _append_holonomy_csv_row(self, profile: HolonomyProfile) -> None:
+        """Append one row per holonomy invocation to the dedicated CSV.
+
+        Columns: step, global_mean_norm, global_max_norm, then
+        per-layer-per-head fields from each snapshot (prefixed with the
+        layer/head key so multi-layer runs produce wide rows).  The header
+        is written on the first call using the union of keys produced by
+        the CURRENT profile; subsequent rows use DictWriter with
+        extrasaction='ignore' so later profiles with different layer sets
+        do not crash the write (missing columns come through as blank).
+        """
+        row: Dict[str, Any] = {
+            'step': profile.step,
+            'global_mean_norm': profile.global_mean_norm,
+            'global_max_norm': profile.global_max_norm,
+        }
+        for snap in profile.snapshots:
+            for k, v in snap.to_log_dict(prefix='holonomy').items():
+                # Flatten the nested key into a flat column name.
+                # 'holonomy/L0_H0/mean_norm' -> 'L0_H0_mean_norm'
+                flat = k.replace('holonomy/', '').replace('/', '_')
+                row[flat] = v
+        try:
+            write_header = not self._holonomy_csv_header_written
+            with open(self.holonomy_csv_path, 'a', newline='') as f:
+                writer = csv.DictWriter(
+                    f, fieldnames=list(row.keys()), extrasaction='ignore',
+                )
+                if write_header:
+                    writer.writeheader()
+                    self._holonomy_csv_header_written = True
+                writer.writerow(row)
+        except OSError as exc:
+            logging.getLogger(__name__).warning(
+                f"Could not append to {self.holonomy_csv_path}: {exc}"
+            )
 
     def generate_holonomy_figures(
         self,
@@ -1589,7 +1677,10 @@ class PublicationMetrics:
                 compute_gauge_field_energy,
                 compute_gauge_invariants,
                 compute_gauge_orbit_dimension,
+                compute_yang_mills_energy_from_omega,
+                _build_phi_matrix,
             )
+            from transformer.core.gauge_utils import stable_matrix_exp_pair
 
             was_training = model.training
             model.eval()
@@ -1627,10 +1718,51 @@ class PublicationMetrics:
             )
             orbit_dim = compute_gauge_orbit_dimension(phi, generators)
 
+            # Yang-Mills energy via discrete loop holonomy on sampled triples.
+            # Zero-dimensional base manifold: tokens are points, "curvature"
+            # is holonomy on the token graph. For bilinear transport
+            # Omega_ij = omega_i · omega_j^{-1} the cocycle identity gives
+            # C_ijk = I exactly, so E_YM vanishes up to float noise. A non-zero
+            # value indicates a genuinely non-flat connection (opt-in paths
+            # such as connection.py MLP mode).
+            ym_energy_val = 0.0
+            ym_mean_F_norm = 0.0
+            ym_abelian_frac = 0.0
+            try:
+                omega_inv_per_tok = None
+                if _omega_direct is not None:
+                    omega_per_tok = _omega_direct.float()
+                else:
+                    phi_matrix = _build_phi_matrix(phi.float(), generators.float())
+                    Bp, Np, Kp, _ = phi_matrix.shape
+                    # Compute exp(phi·G) and exp(-phi·G) together so the YM
+                    # routine can use the analytical inverse and avoid the
+                    # solve-based roundoff that dominates cocycle noise at
+                    # publication K.
+                    exp_phi_flat, exp_neg_phi_flat = stable_matrix_exp_pair(
+                        phi_matrix.reshape(Bp * Np, Kp, Kp), only_forward=False,
+                    )
+                    omega_per_tok = exp_phi_flat.reshape(Bp, Np, Kp, Kp)
+                    omega_inv_per_tok = exp_neg_phi_flat.reshape(Bp, Np, Kp, Kp)
+                ym_energy, ym_diag = compute_yang_mills_energy_from_omega(
+                    omega_per_tok,
+                    omega_inv_per_tok=omega_inv_per_tok,
+                    sample_size=256,
+                )
+                ym_energy_val = float(ym_energy.mean().item())
+                ym_mean_F_norm = ym_diag["mean_F_norm"]
+                ym_abelian_frac = ym_diag["abelian_fraction"]
+            except Exception as _ym_e:
+                logging.getLogger(__name__).warning(
+                    f"Yang-Mills computation failed at step {step}: {_ym_e}")
+
             _det = invariants['det_omega']
             snapshot = {
                 'step': step,
                 'gauge/field_energy': float(field_energy.mean().item()),
+                'gauge/yang_mills_energy': ym_energy_val,
+                'gauge/mean_F_norm': ym_mean_F_norm,
+                'gauge/abelian_fraction': ym_abelian_frac,
                 'gauge/det_omega_mean': float(_det.mean().item()),
                 'gauge/det_omega_std': float(_det.std().item()),
                 'gauge/det_omega_median': float(_det.median().item()),
@@ -1696,9 +1828,13 @@ class PublicationMetrics:
                 steps = [h['step'] for h in self.gauge_geometry_history]
                 energies = [h['gauge/field_energy'] for h in self.gauge_geometry_history]
 
+                ym_energies = [
+                    float(h.get('gauge/yang_mills_energy', 0.0))
+                    for h in self.gauge_geometry_history
+                ]
                 fig = plot_yang_mills_evolution(
                     steps=steps,
-                    energies=[0.0] * len(steps),  # YM=0 for flat transport
+                    energies=ym_energies,
                     dirichlet_energies=energies,
                     save_path=figures_dir / f'{save_prefix}_energy_evolution.png',
                 )
@@ -1964,12 +2100,25 @@ class PublicationMetrics:
                         blocks.append((i, block))
         return blocks
 
-    def _extract_exp_delta(self, model: Any, block: Any) -> Optional[torch.Tensor]:
+    def _extract_exp_delta(
+        self,
+        model: Any,
+        block: Any,
+        cocycle_scale: float = 1.0,
+        return_stats: bool = False,
+    ) -> Optional[Any]:
         """Recompute exp(δ_ij · G) from current model state.
 
-        Uses the raw connection delta (without cocycle_relaxation scaling)
-        so that holonomy diagnostics measure the connection's intrinsic
-        curvature even when cocycle_relaxation is scheduled from 0→1.
+        Args:
+            cocycle_scale: Multiplier applied to delta_matrix BEFORE
+                matrix_exp. ``1.0`` (default) measures the raw connection's
+                intrinsic curvature — the hypothetical at
+                cocycle_relaxation=1. Pass ``block.cocycle_relaxation`` to
+                measure the transport training actually uses.
+            return_stats: If True, return ``(exp_delta, delta_stats)`` where
+                delta_stats includes per-edge spectral-norm statistics of
+                delta_matrix (max, p95, mean). These are the quantities
+                that govern matrix_exp numerical stability.
 
         When use_prior_bank=True, uses PriorBank embeddings (which are the
         actual inputs to gauge_connection during training) instead of the
@@ -2011,12 +2160,38 @@ class PublicationMetrics:
                 return None
 
             delta = block.gauge_connection(mu, mu)  # (1, N, N, n_gen)
-            # Use raw delta for diagnostics — cocycle_relaxation=0 would
-            # zero out the connection and produce trivially flat holonomy,
-            # hiding the learned curvature structure.
             delta_matrix = torch.einsum('bija,akl->bijkl', delta, generators)
-            exp_delta = torch.linalg.matrix_exp(delta_matrix.float())
-            return exp_delta
+            if cocycle_scale != 1.0:
+                # Match what compute_transport_operators (transport_ops.py:375)
+                # does in training: scale the connection before exponentiating.
+                delta_matrix = delta_matrix * float(cocycle_scale)
+            # matrix_exp in float64: stable to spectral radius > 1000 vs.
+            # ~150 for float32.  The holonomy diagnostic runs every 500
+            # steps on a small (1, N, N, K, K) tensor, so the 2x cost is
+            # negligible and it eliminates the dominant source of spurious
+            # NaNs on outlier (i,j,k) triples.  Residual NaNs after this
+            # upgrade are genuine connection pathology and surface via
+            # HolonomySnapshot.nan_fraction.
+            _orig_dtype = delta_matrix.dtype
+            exp_delta = torch.linalg.matrix_exp(delta_matrix.double()).to(_orig_dtype)
+            if not return_stats:
+                return exp_delta
+            # Spectral-norm statistics per (i,j) edge.  This is what
+            # governs matrix_exp stability — the float32 Padé approximant
+            # diverges above spectral radius ~150; float64 above ~1000.
+            # Surfacing these lets the user see whether NaNs come from a
+            # handful of outlier edges or from globally elevated norms.
+            spec_norms = torch.linalg.matrix_norm(
+                delta_matrix.double(), ord=2,
+            ).reshape(-1)
+            delta_stats = {
+                'delta_max_spec': float(spec_norms.max().item()),
+                'delta_mean_spec': float(spec_norms.mean().item()),
+                'delta_p95_spec': float(
+                    torch.quantile(spec_norms, 0.95).item()
+                ),
+            }
+            return exp_delta, delta_stats
         except Exception:
             return None
 

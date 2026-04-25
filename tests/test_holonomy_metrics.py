@@ -83,8 +83,9 @@ class TestHolonomySnapshot:
 
         snap = compute_holonomy_snapshot(flat_exp_delta, step=0, layer=2, head=1, sample_size=50)
         log_dict = snap.to_log_dict(prefix='test')
-        assert 'test/L2_H1/mean_norm' in log_dict
-        assert 'test/L2_H1/spectral_gap' in log_dict
+        # Key format: {prefix}/L{layer}_H{head}_{variant}/{metric}. Default variant='raw'.
+        assert f'test/L2_H1_{snap.variant}/mean_norm' in log_dict
+        assert f'test/L2_H1_{snap.variant}/spectral_gap' in log_dict
         assert all(isinstance(v, float) for v in log_dict.values())
 
 
@@ -114,7 +115,7 @@ class TestHolonomyProfile:
 
         log_dict = profile.to_log_dict()
         assert 'holonomy/global_mean_norm' in log_dict
-        assert len(log_dict) == 2 + 3 * 9  # 2 global + 3 layers * 9 metrics each
+        assert len(log_dict) == 2 + 3 * 13  # 2 global + 3 layers * 13 metrics each (mean, std, median, max, frac_gt_001, frac_gt_01, spectral_gap, wilson_trace, nan_fraction, delta_max_spec, delta_p95_spec, delta_mean_spec, sample_size)
 
 
 # =============================================================================

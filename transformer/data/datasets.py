@@ -569,6 +569,9 @@ class WikiText2Dataset(Dataset):
         tokenizer_name: str = 'gpt2',
         cache_dir: Optional[str] = None,
         vocab_mapping: Optional[Dict[int, int]] = None,
+        stride: Optional[int] = None,
+        random_offset_per_epoch: bool = False,
+        base_epoch_seed: int = 0,
     ):
         """
         Initialize WikiText-2 dataset.
@@ -583,6 +586,11 @@ class WikiText2Dataset(Dataset):
                           If provided, uses this mapping instead of building from
                           this split's frequencies. Essential for ensuring train/val
                           consistency when vocab restriction is used.
+            stride: Optional window stride (see TrainingConfig.stride for semantics).
+                    None => verbatim legacy formula, bit-identical behavior.
+            random_offset_per_epoch: When stride>1, draw a per-epoch offset in
+                    [0, stride) from an isolated Generator. Default False.
+            base_epoch_seed: Seed for the isolated offset Generator.
         """
         # Only transformers is required - datasets has fallback
         assert TRANSFORMERS_AVAILABLE, "transformers required for BPE tokenization! pip install transformers"
@@ -590,6 +598,14 @@ class WikiText2Dataset(Dataset):
         self.split = split
         self.max_seq_len = max_seq_len
         self.vocab_size_limit = vocab_size
+
+        # Stride-based windowing state (no branching yet; see num_sequences below).
+        self.stride = stride
+        self.random_offset_per_epoch = (
+            bool(random_offset_per_epoch) and (stride is not None) and (stride > 1)
+        )
+        self.base_epoch_seed = int(base_epoch_seed)
+        self._epoch_offset = 0
 
         # Load tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -667,7 +683,17 @@ class WikiText2Dataset(Dataset):
 
         # Calculate number of complete sequences
         # Each sequence is [tok_0...tok_T-1] → [tok_1...tok_T]
-        self.num_sequences = max(1, len(self.tokens) - self.max_seq_len)
+        if self.stride is None:
+            # LEGACY PATH — DO NOT MODIFY. Bit-identical to pre-stride behavior.
+            self.num_sequences = max(1, len(self.tokens) - self.max_seq_len)
+        else:
+            N = len(self.tokens)
+            T = self.max_seq_len
+            S = int(self.stride)
+            assert S >= 1, f"stride must be >= 1, got {S}"
+            # Reserve (S-1) tail tokens so every offset in [0,S) fits a full window.
+            k_max = max(0, (N - T - S) // S)
+            self.num_sequences = max(1, k_max + 1)
 
         _log(f"  Number of sequences: {self.num_sequences:,}")
 
@@ -763,6 +789,19 @@ class WikiText2Dataset(Dataset):
         else:
             return self.tokenizer.decode(ids)
 
+    def set_epoch(self, epoch: int) -> None:
+        """Update per-epoch window offset. No-op when random_offset_per_epoch
+        is False (which is the default, and is force-disabled when stride is
+        None or stride == 1). Consumes ZERO global-torch RNG; draws from an
+        isolated torch.Generator seeded by (base_epoch_seed + epoch)."""
+        if not self.random_offset_per_epoch:
+            return
+        g = torch.Generator()
+        g.manual_seed(int(self.base_epoch_seed) + int(epoch))
+        self._epoch_offset = int(torch.randint(
+            low=0, high=int(self.stride), size=(1,), generator=g
+        ).item())
+
     def __len__(self) -> int:
         """Number of sequences in dataset."""
         return self.num_sequences
@@ -779,7 +818,11 @@ class WikiText2Dataset(Dataset):
             target_ids: (max_seq_len,) next-token targets
         """
         # Extract sequence starting at idx
-        start_idx = idx
+        if self.stride is None:
+            # LEGACY PATH — DO NOT MODIFY. Bit-identical to pre-stride behavior.
+            start_idx = idx
+        else:
+            start_idx = self._epoch_offset + idx * int(self.stride)
         end_idx = start_idx + self.max_seq_len
 
         # Input: tokens[start:end]
@@ -827,6 +870,9 @@ class WikiText2TiktokenDataset(Dataset):
         cache_dir: Optional[str] = None,
         vocab_mapping: Optional[Dict[int, int]] = None,
         dataset: str = 'wikitext-2',
+        stride: Optional[int] = None,
+        random_offset_per_epoch: bool = False,
+        base_epoch_seed: int = 0,
     ):
         """
         Initialize WikiText dataset with tiktoken.
@@ -842,6 +888,11 @@ class WikiText2TiktokenDataset(Dataset):
                           consistency when vocab restriction is used.
             dataset: 'wikitext-2' (~2M tokens), 'wikitext-103' (~103M tokens),
                      'openwebtext' (~8B tokens), or 'wiki-ja' (Japanese Wikipedia)
+            stride: Optional window stride (see TrainingConfig.stride for semantics).
+                    None => verbatim legacy formula, bit-identical behavior.
+            random_offset_per_epoch: When stride>1, draw a per-epoch offset in
+                    [0, stride) from an isolated Generator. Default False.
+            base_epoch_seed: Seed for the isolated offset Generator.
         """
         assert TIKTOKEN_AVAILABLE, "tiktoken required! pip install tiktoken"
         assert dataset in DATASET_CONFIGS, f"Unknown dataset: {dataset}. Use 'wikitext-2', 'wikitext-103', 'openwebtext', or 'wiki-ja'"
@@ -850,6 +901,14 @@ class WikiText2TiktokenDataset(Dataset):
         self.max_seq_len = max_seq_len
         self.vocab_size_limit = vocab_size
         self.dataset_name = dataset
+
+        # Stride-based windowing state (no branching yet; see num_sequences below).
+        self.stride = stride
+        self.random_offset_per_epoch = (
+            bool(random_offset_per_epoch) and (stride is not None) and (stride > 1)
+        )
+        self.base_epoch_seed = int(base_epoch_seed)
+        self._epoch_offset = 0
 
         # Load tokenizer via tiktoken
         # Use cl100k_base (GPT-4) for Japanese - much better CJK tokenization
@@ -979,7 +1038,17 @@ class WikiText2TiktokenDataset(Dataset):
         _log(f"  Tokenized: {len(self.tokens):,} tokens")
         _log(f"  Vocabulary size: {self.get_vocab_size()}")
 
-        self.num_sequences = max(1, len(self.tokens) - self.max_seq_len)
+        if self.stride is None:
+            # LEGACY PATH — DO NOT MODIFY. Bit-identical to pre-stride behavior.
+            self.num_sequences = max(1, len(self.tokens) - self.max_seq_len)
+        else:
+            N = len(self.tokens)
+            T = self.max_seq_len
+            S = int(self.stride)
+            assert S >= 1, f"stride must be >= 1, got {S}"
+            # Reserve (S-1) tail tokens so every offset in [0,S) fits a full window.
+            k_max = max(0, (N - T - S) // S)
+            self.num_sequences = max(1, k_max + 1)
         _log(f"  Number of sequences: {self.num_sequences:,}")
 
     def _restrict_vocab(self, tokens: List[int], target_vocab_size: int) -> List[int]:
@@ -1053,11 +1122,26 @@ class WikiText2TiktokenDataset(Dataset):
             return self._restricted_vocab_size
         return self._full_vocab_size
 
+    def set_epoch(self, epoch: int) -> None:
+        """Update per-epoch window offset. No-op when random_offset_per_epoch
+        is False. See WikiText2Dataset.set_epoch for full semantics."""
+        if not self.random_offset_per_epoch:
+            return
+        g = torch.Generator()
+        g.manual_seed(int(self.base_epoch_seed) + int(epoch))
+        self._epoch_offset = int(torch.randint(
+            low=0, high=int(self.stride), size=(1,), generator=g
+        ).item())
+
     def __len__(self) -> int:
         return self.num_sequences
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        start_idx = idx
+        if self.stride is None:
+            # LEGACY PATH — DO NOT MODIFY. Bit-identical to pre-stride behavior.
+            start_idx = idx
+        else:
+            start_idx = self._epoch_offset + idx * int(self.stride)
         end_idx = start_idx + self.max_seq_len
 
         input_ids = self.tokens[start_idx:end_idx]
@@ -1100,6 +1184,9 @@ class WikiText2CharDataset(Dataset):
         vocab_size: int = 256,
         cache_dir: Optional[str] = None,
         vocab_mapping: Optional[Dict[str, int]] = None,
+        stride: Optional[int] = None,
+        random_offset_per_epoch: bool = False,
+        base_epoch_seed: int = 0,
     ):
         """
         Initialize character-level WikiText-2 dataset.
@@ -1113,10 +1200,21 @@ class WikiText2CharDataset(Dataset):
                           If provided, uses this mapping instead of building from
                           this split's frequencies. Essential for ensuring train/val
                           consistency.
+            stride: Optional window stride (see TrainingConfig.stride for semantics).
+            random_offset_per_epoch: When stride>1, draw a per-epoch offset.
+            base_epoch_seed: Seed for the isolated offset Generator.
         """
         self.split = split
         self.max_seq_len = max_seq_len
         self.vocab_size = vocab_size
+
+        # Stride-based windowing state (no branching yet; see num_sequences below).
+        self.stride = stride
+        self.random_offset_per_epoch = (
+            bool(random_offset_per_epoch) and (stride is not None) and (stride > 1)
+        )
+        self.base_epoch_seed = int(base_epoch_seed)
+        self._epoch_offset = 0
 
         # Load dataset (with fallback if datasets package unavailable)
         _log(f"Loading WikiText-2 ({split}) for character-level modeling...")
@@ -1190,7 +1288,17 @@ class WikiText2CharDataset(Dataset):
         self.tokens = torch.tensor(char_indices, dtype=torch.long)
 
         # Calculate number of complete sequences
-        self.num_sequences = max(1, len(self.tokens) - self.max_seq_len)
+        if self.stride is None:
+            # LEGACY PATH — DO NOT MODIFY. Bit-identical to pre-stride behavior.
+            self.num_sequences = max(1, len(self.tokens) - self.max_seq_len)
+        else:
+            N = len(self.tokens)
+            T = self.max_seq_len
+            S = int(self.stride)
+            assert S >= 1, f"stride must be >= 1, got {S}"
+            # Reserve (S-1) tail tokens so every offset in [0,S) fits a full window.
+            k_max = max(0, (N - T - S) // S)
+            self.num_sequences = max(1, k_max + 1)
 
         _log(f"  Character vocab size: {len(self.char_to_id)}")
         _log(f"  Number of sequences: {self.num_sequences:,}")
@@ -1217,6 +1325,17 @@ class WikiText2CharDataset(Dataset):
             chars.append(self.id_to_char.get(idx, '<UNK>'))
         return ''.join(chars)
 
+    def set_epoch(self, epoch: int) -> None:
+        """Update per-epoch window offset. No-op when random_offset_per_epoch
+        is False. See WikiText2Dataset.set_epoch for full semantics."""
+        if not self.random_offset_per_epoch:
+            return
+        g = torch.Generator()
+        g.manual_seed(int(self.base_epoch_seed) + int(epoch))
+        self._epoch_offset = int(torch.randint(
+            low=0, high=int(self.stride), size=(1,), generator=g
+        ).item())
+
     def __len__(self) -> int:
         """Number of sequences in dataset."""
         return self.num_sequences
@@ -1233,7 +1352,11 @@ class WikiText2CharDataset(Dataset):
             target_ids: (max_seq_len,) next-character targets
         """
         # Extract sequence starting at idx
-        start_idx = idx
+        if self.stride is None:
+            # LEGACY PATH — DO NOT MODIFY. Bit-identical to pre-stride behavior.
+            start_idx = idx
+        else:
+            start_idx = self._epoch_offset + idx * int(self.stride)
         end_idx = start_idx + self.max_seq_len
 
         # Input: chars[start:end]
@@ -1279,6 +1402,9 @@ class WikiText2ByteDataset(Dataset):
         vocab_size: int = 256,
         cache_dir: Optional[str] = None,
         vocab_mapping: Optional[Dict[int, int]] = None,
+        stride: Optional[int] = None,
+        random_offset_per_epoch: bool = False,
+        base_epoch_seed: int = 0,
     ):
         """
         Initialize byte-level WikiText-2 dataset.
@@ -1292,10 +1418,21 @@ class WikiText2ByteDataset(Dataset):
                           If provided, uses this mapping instead of building from
                           this split's frequencies. Essential for ensuring train/val
                           consistency when vocab restriction is used.
+            stride: Optional window stride (see TrainingConfig.stride for semantics).
+            random_offset_per_epoch: When stride>1, draw a per-epoch offset.
+            base_epoch_seed: Seed for the isolated offset Generator.
         """
         self.split = split
         self.max_seq_len = max_seq_len
         self.vocab_size = min(vocab_size, 256)  # Cap at 256 bytes
+
+        # Stride-based windowing state (no branching yet; see num_sequences below).
+        self.stride = stride
+        self.random_offset_per_epoch = (
+            bool(random_offset_per_epoch) and (stride is not None) and (stride > 1)
+        )
+        self.base_epoch_seed = int(base_epoch_seed)
+        self._epoch_offset = 0
 
         # Load dataset with fallback
         _log(f"Loading WikiText-2 ({split}) for byte-level modeling...")
@@ -1359,7 +1496,17 @@ class WikiText2ByteDataset(Dataset):
         self.tokens = torch.tensor(byte_indices, dtype=torch.long)
 
         # Calculate number of complete sequences
-        self.num_sequences = max(1, len(self.tokens) - self.max_seq_len)
+        if self.stride is None:
+            # LEGACY PATH — DO NOT MODIFY. Bit-identical to pre-stride behavior.
+            self.num_sequences = max(1, len(self.tokens) - self.max_seq_len)
+        else:
+            N = len(self.tokens)
+            T = self.max_seq_len
+            S = int(self.stride)
+            assert S >= 1, f"stride must be >= 1, got {S}"
+            # Reserve (S-1) tail tokens so every offset in [0,S) fits a full window.
+            k_max = max(0, (N - T - S) // S)
+            self.num_sequences = max(1, k_max + 1)
 
         _log(f"  Byte vocab size: {self._actual_vocab_size}")
         _log(f"  Number of sequences: {self.num_sequences:,}")
@@ -1375,11 +1522,26 @@ class WikiText2ByteDataset(Dataset):
             return self.byte_to_id.copy()
         return None
 
+    def set_epoch(self, epoch: int) -> None:
+        """Update per-epoch window offset. No-op when random_offset_per_epoch
+        is False. See WikiText2Dataset.set_epoch for full semantics."""
+        if not self.random_offset_per_epoch:
+            return
+        g = torch.Generator()
+        g.manual_seed(int(self.base_epoch_seed) + int(epoch))
+        self._epoch_offset = int(torch.randint(
+            low=0, high=int(self.stride), size=(1,), generator=g
+        ).item())
+
     def __len__(self) -> int:
         return self.num_sequences
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        start_idx = idx
+        if self.stride is None:
+            # LEGACY PATH — DO NOT MODIFY. Bit-identical to pre-stride behavior.
+            start_idx = idx
+        else:
+            start_idx = self._epoch_offset + idx * int(self.stride)
         end_idx = start_idx + self.max_seq_len
 
         input_ids = self.tokens[start_idx:end_idx]
@@ -1411,6 +1573,10 @@ def create_char_dataloaders(
     num_workers: int = 0,
     cache_dir: Optional[str] = None,
     include_test: bool = False,
+    stride: Optional[int] = None,
+    random_offset_per_epoch: bool = False,
+    eval_stride: Optional[int] = None,
+    base_epoch_seed: int = 0,
 ) -> Tuple[DataLoader, DataLoader, int] | Tuple[DataLoader, DataLoader, DataLoader, int]:
     """
     Create train, validation, and optionally test dataloaders for character-level WikiText-2.
@@ -1455,6 +1621,18 @@ def create_char_dataloaders(
     if not DATASETS_AVAILABLE:
         _log("(Using direct download fallback - datasets package not available)")
 
+    # Stride-feature activation check. set_epoch() mutates the main-process
+    # dataset instance; PyTorch pickles datasets to workers once (see
+    # persistent_workers semantics), so per-epoch offset updates would not
+    # reach worker copies. Require num_workers=0 when any stride path is on.
+    _stride_active = (stride is not None) or (eval_stride is not None)
+    if _stride_active and int(num_workers) > 0:
+        raise ValueError(
+            f"stride-based windowing requires num_workers=0, got num_workers={num_workers}. "
+            "set_epoch() updates on the main-process dataset instance do not propagate "
+            "to worker copies under persistent_workers+num_workers>0."
+        )
+
     # Create datasets
     # IMPORTANT: Train dataset builds vocab mapping, val dataset reuses it
     # This ensures consistent char->id mapping across splits
@@ -1463,6 +1641,9 @@ def create_char_dataloaders(
         max_seq_len=max_seq_len,
         vocab_size=vocab_size,
         cache_dir=cache_dir,
+        stride=stride,
+        random_offset_per_epoch=random_offset_per_epoch,
+        base_epoch_seed=base_epoch_seed,
     )
 
     # Get vocab mapping from train to ensure consistency
@@ -1474,13 +1655,17 @@ def create_char_dataloaders(
         vocab_size=vocab_size,
         cache_dir=cache_dir,
         vocab_mapping=train_vocab_mapping,  # Use train's mapping!
+        stride=eval_stride,
+        random_offset_per_epoch=False,
+        base_epoch_seed=0,
     )
 
     # Get actual vocabulary size
     actual_vocab_size = train_dataset.get_vocab_size()
 
-    # Create dataloaders
-    _persistent = num_workers > 0
+    # Create dataloaders. When stride is active, force persistent_workers=False
+    # as a belt-and-suspenders guard against the worker-propagation footgun.
+    _persistent = (num_workers > 0) and (not _stride_active)
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -1512,6 +1697,9 @@ def create_char_dataloaders(
             vocab_size=vocab_size,
             cache_dir=cache_dir,
             vocab_mapping=train_vocab_mapping,  # Use train's mapping!
+            stride=eval_stride,
+            random_offset_per_epoch=False,
+            base_epoch_seed=0,
         )
         test_loader = DataLoader(
             test_dataset,
@@ -1551,6 +1739,10 @@ def create_dataloaders(
     dataset: str = 'wikitext-103',
     include_test: bool = False,
     return_tokenizer: bool = False,
+    stride: Optional[int] = None,
+    random_offset_per_epoch: bool = False,
+    eval_stride: Optional[int] = None,
+    base_epoch_seed: int = 0,
 ) -> Tuple[DataLoader, DataLoader, int] | Tuple[DataLoader, DataLoader, DataLoader, int]:
     """
     Create train, validation, and optionally test dataloaders.
@@ -1622,6 +1814,16 @@ def create_dataloaders(
     if not DATASETS_AVAILABLE:
         _log("(Using direct download fallback - datasets package not available)")
 
+    # Stride-feature activation check. See create_char_dataloaders for
+    # rationale (worker-propagation footgun).
+    _stride_active = (stride is not None) or (eval_stride is not None)
+    if _stride_active and int(num_workers) > 0:
+        raise ValueError(
+            f"stride-based windowing requires num_workers=0, got num_workers={num_workers}. "
+            "set_epoch() updates on the main-process dataset instance do not propagate "
+            "to worker copies under persistent_workers+num_workers>0."
+        )
+
     # Create datasets - prefer tiktoken
     # IMPORTANT: Train dataset builds vocab mapping, val dataset reuses it
     # This ensures consistent token->id mapping across splits
@@ -1632,6 +1834,9 @@ def create_dataloaders(
             vocab_size=vocab_size,
             cache_dir=cache_dir,
             dataset=dataset,
+            stride=stride,
+            random_offset_per_epoch=random_offset_per_epoch,
+            base_epoch_seed=base_epoch_seed,
         )
 
         # Get vocab mapping from train to ensure consistency
@@ -1644,6 +1849,9 @@ def create_dataloaders(
             cache_dir=cache_dir,
             vocab_mapping=train_vocab_mapping,  # Use train's mapping!
             dataset=dataset,
+            stride=eval_stride,
+            random_offset_per_epoch=False,
+            base_epoch_seed=0,
         )
     else:
         train_dataset = WikiText2Dataset(
@@ -1652,6 +1860,9 @@ def create_dataloaders(
             vocab_size=vocab_size,
             tokenizer_name=tokenizer_name,
             cache_dir=cache_dir,
+            stride=stride,
+            random_offset_per_epoch=random_offset_per_epoch,
+            base_epoch_seed=base_epoch_seed,
         )
 
         # Get vocab mapping from train to ensure consistency
@@ -1664,13 +1875,17 @@ def create_dataloaders(
             tokenizer_name=tokenizer_name,
             cache_dir=cache_dir,
             vocab_mapping=train_vocab_mapping,  # Use train's mapping!
+            stride=eval_stride,
+            random_offset_per_epoch=False,
+            base_epoch_seed=0,
         )
 
     # Get actual vocabulary size (may differ from requested if restricted)
     actual_vocab_size = train_dataset.get_vocab_size()
 
-    # Create dataloaders
-    _persistent = num_workers > 0
+    # Create dataloaders. When stride is active, force persistent_workers=False
+    # as a belt-and-suspenders guard against the worker-propagation footgun.
+    _persistent = (num_workers > 0) and (not _stride_active)
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -1704,6 +1919,9 @@ def create_dataloaders(
                 cache_dir=cache_dir,
                 vocab_mapping=train_vocab_mapping,  # Use train's mapping!
                 dataset=dataset,
+                stride=eval_stride,
+                random_offset_per_epoch=False,
+                base_epoch_seed=0,
             )
         else:
             test_dataset = WikiText2Dataset(
@@ -1713,6 +1931,9 @@ def create_dataloaders(
                 tokenizer_name=tokenizer_name,
                 cache_dir=cache_dir,
                 vocab_mapping=train_vocab_mapping,  # Use train's mapping!
+                stride=eval_stride,
+                random_offset_per_epoch=False,
+                base_epoch_seed=0,
             )
 
         test_loader = DataLoader(

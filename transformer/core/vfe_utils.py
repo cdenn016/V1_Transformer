@@ -339,6 +339,99 @@ def _safe_eigh(
 
 
 # =============================================================================
+# SPD eigenvalue floor
+# =============================================================================
+
+def spd_eigfloor(
+    Sigma: torch.Tensor,
+    floor: float,
+    sigma_max: Optional[float] = None,
+    exp_phi: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    r"""Enforce :math:`\lambda_{\min}(\Sigma) \geq \mathrm{floor}` via spectral clamp.
+
+    Two paths:
+
+    **Frame-dependent (default, ``exp_phi=None``).**
+    Computes :math:`\Sigma = V \Lambda V^\top` via ``_safe_eigh`` and returns
+    :math:`V \, \mathrm{clamp}(\Lambda, \mathrm{floor}, \sigma_{\max}^2) \, V^\top`.
+    Bounds the condition number
+    :math:`\kappa(\Sigma) \leq \sigma_{\max}^2 / \mathrm{floor}`.
+    Not gauge-covariant under GL(K): a transported :math:`h \Sigma h^\top`
+    has eigenvectors that differ from :math:`h V`, so the clamp produces
+    numerically different matrices in different frames.
+
+    **Gauge-covariant (``exp_phi=A`` provided).**
+    Whitens via :math:`W = A^{-1} \Sigma A^{-\top}`, clamps eigenvalues of
+    :math:`W`, then de-whitens: :math:`\Sigma' = A W_{\mathrm{clamped}} A^\top`.
+    Under the transformation
+    :math:`\Sigma \mapsto h \Sigma h^\top, \; A \mapsto h A`,
+    :math:`A^{-1} \to A^{-1} h^{-1}`, so
+    :math:`W \to A^{-1} h^{-1} (h \Sigma h^\top) h^{-\top} A^{-\top} = W`
+    is invariant; the clamp preserves this invariance, and de-whitening
+    with :math:`hA` reintroduces the correct scaling. Therefore
+    :math:`\mathrm{spd\_eigfloor}(h \Sigma h^\top, \mathrm{exp\_phi}=hA)
+    = h \cdot \mathrm{spd\_eigfloor}(\Sigma, \mathrm{exp\_phi}=A) \cdot h^\top`
+    holds exactly (up to numerical roundoff in the matrix inverse).
+
+    Args:
+        Sigma: (..., K, K) symmetric matrices.
+        floor: Minimum eigenvalue; must be positive.
+        sigma_max: If set, also clamp eigenvalues to
+            :math:`\lambda \leq \sigma_{\max}^2` (upper bound on variance).
+        exp_phi: Optional (..., K, K) local frame :math:`A \in GL(K)`.
+            Must be invertible; for :math:`A = \exp(\phi \cdot G)` this is
+            automatic. When provided, the strict gauge-covariant path is
+            taken (one matrix inverse + two matmuls on top of the eigh cost).
+
+    Returns:
+        Clamped SPD matrix with same shape and dtype as ``Sigma``.
+    """
+    orig_dtype = Sigma.dtype
+
+    if exp_phi is None:
+        # Frame-dependent path — cheap, frame-anchored clamp.
+        eig, vec = _safe_eigh(Sigma, jitter=floor)
+        if sigma_max is not None:
+            eig = eig.clamp(min=floor, max=sigma_max * sigma_max)
+        else:
+            eig = eig.clamp(min=floor)
+        out = (vec * eig.unsqueeze(-2)) @ vec.transpose(-1, -2)
+        out = 0.5 * (out + out.transpose(-1, -2))
+        return out.to(orig_dtype)
+
+    # Gauge-covariant path: whiten via A^{-1}, clamp in the whitened frame,
+    # de-whiten via A. Force float32: inverting near-singular A is the
+    # critical numerical step and breaks under fp16.
+    with torch.amp.autocast('cuda', enabled=False):
+        A = exp_phi.to(dtype=torch.float32)
+        Sigma_f = Sigma.to(dtype=torch.float32)
+        # Compute W = A^{-1} Σ A^{-T} via two lu_solves against a shared
+        # factorization. Avoids materializing A^{-1} explicitly, which
+        # would lose precision in fp32 when cond(A) is large under
+        # compounded matrix_exp factors.
+        LU, pivots = torch.linalg.lu_factor(A)
+        left = torch.linalg.lu_solve(LU, pivots, Sigma_f)              # A^{-1} Σ
+        W = torch.linalg.lu_solve(LU, pivots, left.transpose(-1, -2))  # A^{-1} (A^{-1} Σ)^T
+        W = W.transpose(-1, -2)                                        # = A^{-1} Σ A^{-T}
+        W = 0.5 * (W + W.transpose(-1, -2))
+
+        # Eigh in the whitened frame: W is SPD under gauge action, so the
+        # standard jitter·I perturbation is already frame-covariant here.
+        eig, vec = _safe_eigh(W, jitter=floor)
+        if sigma_max is not None:
+            eig = eig.clamp(min=floor, max=sigma_max * sigma_max)
+        else:
+            eig = eig.clamp(min=floor)
+        W_clamped = (vec * eig.unsqueeze(-2)) @ vec.transpose(-1, -2)
+        W_clamped = 0.5 * (W_clamped + W_clamped.transpose(-1, -2))
+
+        out = A @ W_clamped @ A.transpose(-1, -2)
+        out = 0.5 * (out + out.transpose(-1, -2))
+    return out.to(orig_dtype)
+
+
+# =============================================================================
 # SPD retraction (PyTorch GPU versions)
 # =============================================================================
 
