@@ -543,11 +543,19 @@ class PublicationTrainer(FastTrainer):
         return lines
 
     def _setup_cjk_fonts(self, plt):
-        """Configure matplotlib to render CJK (Japanese/Chinese/Korean) characters."""
-        if getattr(self, '_cjk_fonts_configured', False):
-            return
+        """Configure matplotlib for per-glyph CJK fallback in figure text.
+
+        Uses matplotlib 3.6+ per-glyph fallback by setting font.family to a list
+        ['serif', cjk_font] so ASCII renders via DejaVu Serif (publication
+        quality) and CJK glyphs fall back to the first available CJK font.
+
+        Re-applies on every call (no cache) because pub_style.set_pub_style()
+        and analysis/semantics.py periodically run rcParams.update({'font.family':
+        'serif'}) — a single-string family with no fallback path. A one-shot
+        cached setup silently strands CJK rendering after the first
+        semantic_analysis_interval tick.
+        """
         import matplotlib.font_manager as fm
-        # Try common CJK fonts available on Windows, Linux, and macOS
         cjk_fonts = [
             'MS Gothic', 'Yu Gothic', 'Meiryo',          # Windows Japanese
             'Microsoft YaHei', 'SimHei',                   # Windows Chinese
@@ -556,19 +564,16 @@ class PublicationTrainer(FastTrainer):
             'Hiragino Sans', 'Hiragino Kaku Gothic Pro',   # macOS Japanese
         ]
         available = {f.name for f in fm.fontManager.ttflist}
-        for font_name in cjk_fonts:
-            if font_name in available:
-                plt.rcParams['font.family'] = 'sans-serif'
-                plt.rcParams['font.sans-serif'] = [font_name] + \
-                    plt.rcParams.get('font.sans-serif', [])
-                plt.rcParams['axes.unicode_minus'] = False
-                self._cjk_fonts_configured = True
-                return
-        # No CJK font found - titles with Japanese text will show boxes
-        # but at least suppress the per-glyph warnings
-        import warnings
-        warnings.filterwarnings('ignore', message='Glyph .* missing from font')
-        self._cjk_fonts_configured = True
+        cjk = next((f for f in cjk_fonts if f in available), None)
+        if cjk is None:
+            if not getattr(self, '_cjk_warnings_silenced', False):
+                import warnings
+                warnings.filterwarnings(
+                    'ignore', message='Glyph .* missing from font')
+                self._cjk_warnings_silenced = True
+            return
+        plt.rcParams['font.family'] = ['serif', cjk]
+        plt.rcParams['axes.unicode_minus'] = False
 
     def save_attention_visualization(self, step: int, batch: Tuple[torch.Tensor, torch.Tensor]):
         """
@@ -748,6 +753,7 @@ class PublicationTrainer(FastTrainer):
                 aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
                 detach_beta_m_step=getattr(self.config, 'detach_beta_m_step', True),
                 normalize_ce_by_dim=getattr(self.config, 'normalize_ce_by_dim', False),
+                ce_label_smoothing=getattr(self.config, 'ce_label_smoothing', 0.0),
             )
 
         # NaN/Inf guard: skip backward to prevent poisoning optimizer momentum
@@ -2008,6 +2014,12 @@ def run_single_experiment(
         min_lr_ratio=config.get('min_lr_ratio', 0.1),
         sigma_ce_scale=config.get('sigma_ce_scale', 0.01),
 
+        # CE loss handling (previously missing — values from config dict were silently
+        # dropped at the dict→TrainingConfig boundary, falling back to dataclass defaults)
+        normalize_ce_by_dim=config.get('normalize_ce_by_dim', True),
+        ce_label_smoothing=config.get('ce_label_smoothing', 0.0),
+        detach_beta_m_step=config.get('detach_beta_m_step', True),
+
         # Gradient accumulation
         grad_accumulation_steps=config.get('grad_accumulation_steps', 1),
 
@@ -2271,8 +2283,13 @@ def run_single_experiment(
 # PURE VFE EXPERIMENT (dedicated loop — no nn.Module, no optimizer)
 # =============================================================================
 
-def _validate_pure_vfe(model, loader, device, max_samples=12800):
-    """Validation for PureVFETransformer: forward-only, compute CE manually."""
+def _validate_pure_vfe(model, loader, device, max_samples=128000):
+    """Validation for PureVFETransformer: forward-only, compute CE manually.
+
+    Default bumped from 12800 to 128000 to match run_test_evaluation. Old default
+    pinned val_ppl on a non-representative prefix when the val_loader walked
+    stride-1 sliding windows over the tail-sliced wiki-ja val split.
+    """
     total_ce_tokens = 0.0
     total_tokens = 0
     total_samples = 0

@@ -90,9 +90,9 @@ from pathlib import Path
 #        - 'sym2':   dim = N*(N+1)/2 - 1  (symmetric traceless Sym²₀V)
 
 DEFAULT_MODE = 'em'               # Which mode to run
-SEED = 111         #6,23,111
+SEED = 23         #6,23,111
 # Dataset
-DEFAULT_DATASET = 'wikitext-103'  
+DEFAULT_DATASET = 'wiki-ja'  
 # 'wikitext-2' (~2M tokens) or 'wikitext-103' (~103M tokens), 'wiki-ja' japanese (~1B tokens, 100k vocab)
 _DEBUG_VFE_GRADS = False
 # ============================================================================
@@ -119,11 +119,11 @@ _DEBUG_VFE_GRADS = False
 EM_CONFIG = {
     # === Architecture ===
     'vocab_size':                 50257,
-    'embed_dim':                  30,
+    'embed_dim':                  20,
     'max_seq_len':                128,
     
-    'batch_size':                 32, 
-    'max_steps':                  30000,
+    'batch_size':                 64, 
+    'max_steps':                  60000,
      
     'stride':                     128,                                                                                                
     'random_offset_per_epoch':    True,
@@ -132,12 +132,12 @@ EM_CONFIG = {
     'n_layers':                   1,
     'ffn_n_iterations':           1,
     
-    'alpha_divergence':           0.2,
+    'alpha_divergence':           0.5,
     #'grad_accumulation_steps': 1,
     #'gradient_checkpoint_vfe': False,
     
     'gauge_dim':                   10,
-    'irrep_spec':       [('fund', 3, 10)],
+    'irrep_spec':       [('fund', 2, 10)],
 
     'use_prior_bank':             False,
     'gauge_fixed_priors':         False,    
@@ -187,9 +187,10 @@ EM_CONFIG = {
     'evolve_sigma':               True,
     'evolve_phi':                 True,  #M-step phi evolution
     'evolve_phi_e_step':          True,
-    'normalize_ce_by_dim':        True, 
-    
-    'E_learnable_alpha':          True,   # Adaptive α_i = c0/(b0 + KL) per dimension   
+    'normalize_ce_by_dim':        True,
+    'ce_label_smoothing':         0.0,    # Label smoothing on CE loss only; PPL stays un-smoothed
+
+    'E_learnable_alpha':          True,   # Adaptive α_i = c0/(b0 + KL) per dimension
     'E_learnable_lr':             True,   # Learnable E-step LR
     
     'min_lr_ratio':               0.1,
@@ -228,7 +229,7 @@ EM_CONFIG = {
     'M_vfe_hyperparam_lr':        0.095,  # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
     'M_attention_lr':             0.013,  # M-step attention params (W_O, constant_omega) was0.06
     'M_output_lr':                0.05,  # M-step output projection (vocab logits) 0.05
-    'embed_weight_decay':         0.0016,   # L2 hyper-prior on embeddings (μ_p, σ_p, φ) via AdamW
+    'embed_weight_decay':         0.01,   # L2 hyper-prior on embeddings (μ_p, σ_p, φ) via AdamW
     'non_embed_weight_decay':     0.0043,  # L2 on non-embedding params (attention, output)
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
@@ -251,13 +252,13 @@ EM_CONFIG = {
 
     # === Position encoding ===
     'use_rope':                   True,
-    'rope_base':                  100,   
+    'rope_base':                  75,   
     'rope_full_gauge':            'off', # 'off', 'both', 'vfe_only'
     'pos_encoding_mode':          'none',
 
     # === Embedding init ===
     'mu_init_std':                0.4,
-    'phi_scale':                  0.05,
+    'phi_scale':                  0.01,
     
     'mu_normalize':               False,
     'mu_max_norm':                None,
@@ -266,10 +267,10 @@ EM_CONFIG = {
     # === Logging ===
     'log_interval':               200,
     'eval_interval':              2000,
-    'checkpoint_interval':        25000,
-    'semantic_analysis_interval': 4000,
-    'gauge_geometry_interval':    4000,   # Gauge field Dirichlet energy + invariants
-    'fiber_trajectory_interval':  4000,   # Fisher-Rao E-step trajectory (requires ffn_n_iterations > 1)
+    'checkpoint_interval':        50000,
+    'semantic_analysis_interval': 6000,
+    'gauge_geometry_interval':    6000,   # Gauge field Dirichlet energy + invariants
+    'fiber_trajectory_interval':  6000,   # Fisher-Rao E-step trajectory (requires ffn_n_iterations > 1)
 
     # =================================================================
     # NON-FLAT GAUGE TRANSPORT (holonomy)
@@ -484,7 +485,7 @@ PURE_VFE_CONFIG = {
     'max_steps':   30000,
 
     # VFE descent
-    'n_esteps': 12,                  # Iterations of VFE descent (replaces "depth")
+    'n_esteps': 24,                  # Iterations of VFE descent (replaces "depth")
     'tau':      None,                # Attention temperature (defaults to √K_h)
 
     # Per-variable natural gradient learning rates
@@ -542,7 +543,7 @@ PURE_VFE_CONFIG = {
 
     # RoPE: SO(2)^{K/2} position rotations on μ before KL scoring
     'use_rope':         True,
-    'rope_base':        10000.0,
+    'rope_base':        75.0,
 
     # Adam momentum in M-step (variance reduction across batches)
     'use_adam_m_step':  True,
@@ -556,7 +557,7 @@ PURE_VFE_CONFIG = {
     'min_lr_ratio':     0.1,
 
     # Diagonal covariance (faster, optional)
-    'diagonal_covariance': False,
+    'diagonal_covariance': True,
 
     # LayerNorm (optional, for testing)
     'use_layernorm':    False,
@@ -926,6 +927,14 @@ def main():
         config['vocab_size'] = 100277
         print(
             f"\n[wiki-ja] Auto-adjusted vocab_size: 50257 -> 100277 (cl100k_base full vocab)")
+
+    if args.dataset == 'wiki-ja' and config.get('eval_stride') is None:
+        config['eval_stride'] = config.get('stride', 128)
+        print(
+            f"\n[wiki-ja] Auto-set eval_stride={config['eval_stride']} to match training stride. "
+            f"Default eval_stride=None (stride-1 sliding) gives only ~13k unique tokens of "
+            f"validation coverage at max_samples=12800, which pins val_ppl on a tiny "
+            f"non-representative prefix of the tail-sliced wiki-ja val split.")
 
     result = run_single_experiment(
         config=config,

@@ -64,17 +64,17 @@ BASELINE_CONFIG = {
    'embed_dim':                  20,
    'max_seq_len':                32,
    
-   'batch_size':                 316, 
-   'max_steps':                  5000,
+   'batch_size':                 128, 
+   'max_steps':                  10000,
     
    'stride':                     32,                                                                                                
    'random_offset_per_epoch':    True,
    'stride_base_seed':           6,
    
    'n_layers':                   1,
-   'ffn_n_iterations':           1,
+   'ffn_n_iterations':           3,
    
-   'alpha_divergence':           0.2,
+   'alpha_divergence':           0.5,
    #'grad_accumulation_steps': 1,
    #'gradient_checkpoint_vfe': False,
    
@@ -93,10 +93,10 @@ BASELINE_CONFIG = {
    'kappa_warmup_steps':         7500,  # freeze kappa for first n steps
    'learnable_head_kappa':       False, # If True, learn per-head κ_h via log_kappa_per_head
 
-   'e_step_sigma_floor':         0.01,   # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
+   'e_step_sigma_floor':         0.1,   # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
    
    # === EM gradient-flow mode ===
-   'em_mode':                    'em_phi_p',  # φ∈q: E-step optimizes μ,Σ,φ; all detached at EM boundary
+   'em_mode':                    'straight_through',  # φ∈q: E-step optimizes μ,Σ,φ; all detached at EM boundary
                                               # - 'straight_through' (default) — mu_p, sigma_p attached, semi-gradient phi
                                               # - 'ift_phi' — same + full IFT phi gradient
                                               # - 'em_phi_q' — clean EM, phi in q, all detached at boundary
@@ -129,9 +129,10 @@ BASELINE_CONFIG = {
    'evolve_sigma':               True,
    'evolve_phi':                 True,  #M-step phi evolution
    'evolve_phi_e_step':          True,
-   'normalize_ce_by_dim':        True, 
-   
-   'E_learnable_alpha':          True,   # Adaptive α_i = c0/(b0 + KL) per dimension   
+   'normalize_ce_by_dim':        True,
+   'ce_label_smoothing':         0.0,    # Label smoothing on CE loss only; ce_loss_raw preserved for PPL
+
+   'E_learnable_alpha':          True,   # Adaptive α_i = c0/(b0 + KL) per dimension
    'E_learnable_lr':             True,   # Learnable E-step LR
    
    'min_lr_ratio':               0.1,
@@ -144,7 +145,7 @@ BASELINE_CONFIG = {
    # === E-step Weights ===
 
    'E_alpha':                    1,      # E-step prior coupling weight
-   'E_lambda_belief':            10,    # E-step belief alignment weight
+   'E_lambda_belief':            15,    # E-step belief alignment weight
    'E_lambda_softmax':           0,
       
    # === E-step Learning Rates ===
@@ -155,7 +156,7 @@ BASELINE_CONFIG = {
 
    # === M-step Weights ===        
    
-   'M_alpha':                    0.00,   # M-step KL(q||p) self-consistency
+   'M_alpha':                    0.0,   # M-step KL(q||p) self-consistency
    'M_beta':                     0.0,    # M-step belief alignment
    'mass_phi':                   0.00,    # Gauge prior: (mass_φ/2)||φ||²
    'lambda_hyper':               0.0,    # KL(s||h) explicit loss (pulls tokens toward centroid)
@@ -164,14 +165,14 @@ BASELINE_CONFIG = {
    
    'M_mu_p_lr':                  0.07,   # M-step prior mean embeddings (μ_p) 0.05
    'M_sigma_p_lr':               0.015,     # M-step prior covariance embeddings (log σ_p) 0.015
-   'M_phi_lr':                   0.0036,    # M-step gauge frame embeddings (φ) 0.0075
+   'M_phi_lr':                   0.005,    # M-step gauge frame embeddings (φ) 0.0075
    
    # === M-step Other LR's (AdamW parameter groups) ===
-   'M_vfe_hyperparam_lr':        0.095,  # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
+   'M_vfe_hyperparam_lr':        0.05,  # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
    'M_attention_lr':             0.013,  # M-step attention params (W_O, constant_omega) was0.06
-   'M_output_lr':                0.05,  # M-step output projection (vocab logits) 0.05
-   'embed_weight_decay':         0.0016,   # L2 hyper-prior on embeddings (μ_p, σ_p, φ) via AdamW
-   'non_embed_weight_decay':     0.0043,  # L2 on non-embedding params (attention, output)
+   'M_output_lr':                0.1,  # M-step output projection (vocab logits) 0.05
+   'embed_weight_decay':         0.01,   # L2 hyper-prior on embeddings (μ_p, σ_p, φ) via AdamW
+   'non_embed_weight_decay':     0.0005,  # L2 on non-embedding params (attention, output)
 
    # === Gauge group: GL(K) with multi-head block-diagonal structure ===
    'gauge_group':                'GLK',
@@ -193,25 +194,25 @@ BASELINE_CONFIG = {
 
    # === Position encoding ===
    'use_rope':                   True,
-   'rope_base':                  100,   
+   'rope_base':                  75,   
    'rope_full_gauge':            'off', # 'off', 'both', 'vfe_only'
    'pos_encoding_mode':          'none',
 
    # === Embedding init ===
-   'mu_init_std':                0.4,
-   'phi_scale':                  0.05,
+   'mu_init_std':                0.1,
+   'phi_scale':                  0.01,
    
    'mu_normalize':               False,
    'mu_max_norm':                None,
 
 
    # === Logging ===
-   'log_interval':               200,
-   'eval_interval':              2000,
+   'log_interval':               100,
+   'eval_interval':              20000,
    'checkpoint_interval':        25000,
-   'semantic_analysis_interval': 4000,
-   'gauge_geometry_interval':    4000,   # Gauge field Dirichlet energy + invariants
-   'fiber_trajectory_interval':  4000,   # Fisher-Rao E-step trajectory (requires ffn_n_iterations > 1)
+   'semantic_analysis_interval': 40000,
+   'gauge_geometry_interval':    40000,   # Gauge field Dirichlet energy + invariants
+   'fiber_trajectory_interval':  40000,   # Fisher-Rao E-step trajectory (requires ffn_n_iterations > 1)
 
    # =================================================================
    # NON-FLAT GAUGE TRANSPORT (holonomy)
@@ -372,7 +373,7 @@ SWEEPS = {
     'n_vfe_iterations': {
         'description': 'Number of E-step fixed-point iterations per forward pass',
         'param': 'ffn_n_iterations',
-        'values': [1, 3, 5, 7, 10],
+        'values': [1, 3, 5, 7],
         'baseline_value': 1,
     },
 
@@ -454,7 +455,7 @@ SWEEPS = {
     'E_alpha': {
         'description': 'Prior coupling weight inside VFE E-step iterations',
         'param': 'E_alpha',
-        'range': [0.1, 1, 0.1],
+        'range': [0.0, 1, 0.1],
         'baseline_value': 1.0,
     },
 
@@ -462,14 +463,14 @@ SWEEPS = {
     'E_lambda_belief': {
         'description': 'E-step belief alignment weight (VFE coupling term)',
         'param': 'E_lambda_belief',
-        'range': [5, 25, 5],
+        'range': [0, 25, 5],
         'baseline_value': 1,
     },
 
     'E_lambda_softmax': {
         'description': 'E-step softmax coupling weight (∂β/∂θ·KL Boltzmann gate)',
         'param': 'E_lambda_softmax',
-        'range': [1, 19, 2],
+        'range': [0, 19, 2],
         'baseline_value': 1,
     },
     
@@ -479,61 +480,62 @@ SWEEPS = {
     'M_alpha': {
             'description': 'Self-consistency KL(q||p) weight in training loss',
             'param': 'M_alpha',
-            'range': [0, 0.01, 0.00025],
+            'values': [0.0, 0.025, 0.05, 0.1],
             'baseline_value': 0.00,
         },
 
 
-
-
-    # --- Tier 6: Alpha_phi (gauge prior) ---
     'mass_phi': {
         'description': 'Gauge frame L2 prior weight (α_φ/2)||φ||²',
         'param': 'mass_phi',
-        'range': [0.0, 0.01, 0.00025],
+        'values': [0, 1e-4, 2e-4, 3e-4, 4e-4, 5e-4],
         'baseline_value': 0.0,
     },
+
+
+
+
 
     # --- Tier 7: Learning rates ---
     'M_mu_p_lr': {
         'description': 'Belief mean (μ) learning rate',
         'param': 'M_mu_p_lr',
-        'range': [0.0, 0.1, 0.002],
+        'values': [0.02, 0.04, 0.06, 0.07, 0.08, 0.1],
         'baseline_value': 0.078,
     },
 
     'M_sigma_p_lr': {
         'description': 'Belief precision (σ) learning rate',
         'param': 'M_sigma_p_lr',
-        'range': [0.00044, 0.001, 0.00005],
+        'values': [0.0025, 0.005, 0.0075, 0.01, 0.0125, 0.015, 0.0175, 0.02],
         'baseline_value': 0.015,
     },
 
     'M_phi_lr': {
         'description': 'Gauge frame (φ) learning rate',
         'param': 'M_phi_lr',
-        'range': [0.0000, 0.1, 0.005],
+        'values': [0.001, 0.002, 0.003, 0.004, 0.005, 0.006, 0.007],
         'baseline_value': 0.00325,
     },
 
     'M_vfe_hyperparam_lr': {
         'description': 'FFN / VFE module learning rate',
         'param': 'M_vfe_hyperparam_lr',
-        'range': [0, 0.2, 0.02],
+        'values': [0,0.0001, 0.0005, 0.001, 0.005,  0.01, 0.05, 0.1, 0.5,  1],
         'baseline_value': 0.1,
     },
 
     'M_attention_lr': {
         'description': 'Attention module learning rate',
         'param': 'M_attention_lr',
-        'range': [0.0, 0.1, 0.005],
+        'values': [0,0.0001, 0.0005, 0.001, 0.005,  0.01, 0.05, 0.1, 0.5,  1],
         'baseline_value': 0.06,
     },
 
     'M_output_lr': {
         'description': 'Output projection learning rate',
         'param': 'M_output_lr',
-        'range': [0, 0.1, 0.005],
+        'values': [0,0.0001,0.0005,  0.001,0.005,  0.01, 0.05, 0.1,0.5,  1],
         'baseline_value': 0.065,
     },
 
@@ -552,7 +554,7 @@ SWEEPS = {
     'embed_weight_decay': {
         'description': 'Weight decay on embedding parameters (hyper-prior precision)',
         'param': 'embed_weight_decay',
-        'range': [0.00, 0.05, 0.0005],
+        'values': [0,0.0001,0.0005,  0.001,0.005,  0.01, 0.05, 0.1,0.5,  1],
         'baseline_value': 0.002,
     },
 
@@ -560,7 +562,7 @@ SWEEPS = {
         'description': 'Weight decay on non-embedding parameters',
 
         'param': 'non_embed_weight_decay',
-        'range': [0.0000, 0.1, 0.001],
+        'values': [0,0.0001,0.0005,  0.001,0.005,  0.01, 0.05, 0.1,0.5,  1],
         'baseline_value': 0.005,
     },
     
@@ -568,7 +570,7 @@ SWEEPS = {
     'phi_scale': {
         'description': 'phi init scale',
         'param': 'phi_scale',
-        'range': [0.0001, 0.101, 0.01],
+        'values': [0, 1e-5, 1e-4, 1e-3, 1e-2],
         'baseline_value': 0.5,
     },
 
@@ -576,7 +578,7 @@ SWEEPS = {
     'mu_init_std': {
         'description': 'mu-init-scale',
         'param': 'mu_init_std',
-        'range': [0.0001, 0.5, 0.005],
+        'values': [0, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1],
         'baseline_value': 0.01,
     },
 
@@ -584,7 +586,7 @@ SWEEPS = {
     'alpha_divergence': {
         'description': 'Renyi alpha-divergence order (1.0=KL, 0.5=Bhattacharyya)',
         'param': 'alpha_divergence',
-        'range': [0.1, 1, 0.1],
+        'range': [0.4, 0.6, 0.02],
         'baseline_value': 0.75,
     },
 
@@ -594,6 +596,14 @@ SWEEPS = {
         'param': 'e_step_sigma_floor',
         'values': [0.01, 0.2, 0.3, 0.4, 0.5],
         'baseline_value': 0.01,
+    },
+
+    # --- CE label smoothing (loss path only; raw CE preserved for PPL) ---
+    'ce_label_smoothing': {
+        'description': 'Label smoothing ε on CE loss term only (raw CE/PPL un-smoothed)',
+        'param': 'ce_label_smoothing',
+        'values': [0.0, 0.05, 0.1, 0.2],
+        'baseline_value': 0.0,
     },
 
     # --- Tier 13: EM inference mode ---
@@ -618,7 +628,8 @@ SWEEPS = {
 # Sweep execution order (cheapest → most expensive)
 SWEEP_ORDER = [
     
-   
+  #  'mass_phi',
+    'M_alpha',
     #'em_mode',
    
    # 'M_sigma_p_lr',  #0.015
@@ -626,10 +637,10 @@ SWEEP_ORDER = [
   #  
   #  'M_mu_p_lr',     #0.0825
    # 'sigma_ce_scale',   #0.7
-   # 'alpha_divergence',     #0.275
-   # 'M_phi_lr', #0.00325 
-   # 'phi_scale',
-   # 'mu_init_std',
+  #  'alpha_divergence',     #0.275
+  #  'M_phi_lr', #0.00325 
+  #  'phi_scale',
+  #  'mu_init_std',
     
      
   #  'M_vfe_hyperparam_lr', #0.1
@@ -640,23 +651,23 @@ SWEEP_ORDER = [
   #  'embed_weight_decay',   #0.002
    # 'E_alpha',
    # 'E_lambda_belief',
-   # 'E_lambda_softmax',
-   # 'M_attention_lr',    #0.06
+  #  'E_lambda_softmax',
+  #  'M_attention_lr',    #0.06
    # 'M_output_lr',       #0.065
-  #  'non_embed_weight_decay', #0.005
+   # 'non_embed_weight_decay', #0.005
     
  #  'E_phi_lr',
   # 'E_mu_q_lr',
   
     
-     'e_step_sigma_floor',
+   #  'e_step_sigma_floor',
+   #  'ce_label_smoothing',
     
     
    #
     #'kappa_beta',
-  #  'lambda_hyper',
-    'mass_phi',
-    'M_alpha',
+   # 'lambda_hyper',
+    
     
   
   #  'M_beta',

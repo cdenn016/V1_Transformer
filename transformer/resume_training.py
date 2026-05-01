@@ -494,6 +494,8 @@ def resume_training():
         kappa_gamma=config.get('kappa_gamma', 1.0),
         lambda_hyper=config.get('lambda_hyper', 0.0),
         detach_beta_m_step=config.get('detach_beta_m_step', True),
+        normalize_ce_by_dim=config.get('normalize_ce_by_dim', True),
+        ce_label_smoothing=config.get('ce_label_smoothing', 0.0),
 
         # Intervals
         log_interval=config.get('log_interval', 100),

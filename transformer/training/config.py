@@ -133,6 +133,7 @@ class TrainingConfig:
        
     detach_beta_m_step: bool =  True  # Detach β in M-step loss (correct EM). False = old behavior (gradient flows through softmax)
     normalize_ce_by_dim: bool = True  # Divide CE loss by sqrt(K) to match VFE dim_scale normalization
+    ce_label_smoothing: float = 0.0   # Label smoothing on CE loss only; ce_loss_raw stays un-smoothed for PPL
 
     # Multi-layer depth signal
     aux_layer_loss: bool =   False     # Per-layer auxiliary CE loss

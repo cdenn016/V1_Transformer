@@ -256,6 +256,7 @@ class FastTrainer:
                 aux_loss_weight=getattr(self.config, 'aux_loss_weight', 0.0) if getattr(self.config, 'aux_layer_loss', False) else 0.0,
                 detach_beta_m_step=getattr(self.config, 'detach_beta_m_step', True),
                 normalize_ce_by_dim=getattr(self.config, 'normalize_ce_by_dim', False),
+                ce_label_smoothing=getattr(self.config, 'ce_label_smoothing', 0.0),
             )
 
         # NaN/Inf guard: skip backward to prevent poisoning optimizer momentum.
@@ -318,12 +319,17 @@ class FastTrainer:
 
         return formatted_metrics
 
-    def validate(self, max_samples: int = 12800) -> Dict[str, float]:
+    def validate(self, max_samples: int = 128000) -> Dict[str, float]:
         """Validation loop with token-weighted CE averaging (no VFE regularizers).
 
         Args:
-            max_samples: Maximum number of samples to evaluate (default: 12800).
-                Ensures consistent evaluation across configs with different batch sizes.
+            max_samples: Maximum number of samples to evaluate (default: 128000,
+                matching run_test_evaluation in experiment_runner.py). Old default
+                was 12800, which produced misleading val numbers on datasets where
+                the val_loader's prefix is non-representative — notably wiki-ja,
+                whose tail-sliced val split has no curation guarantee that early
+                articles are typical of the split. Bumped to 128000 so val and
+                test eval geometry are byte-identical.
 
         Returns:
             Dict with 'loss' (pure CE), 'ce_loss', and 'perplexity'.

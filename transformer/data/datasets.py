@@ -479,6 +479,17 @@ def _load_wiki_ja_split(
     tokenization (full dataset is ~2.6B tokens which exceeds typical
     RAM). Default 100K articles gives ~190M tokens (~2x WikiText-103).
 
+    Source ordering: by default the index ranges are taken from the raw
+    HuggingFace order, which is *not* randomized. The train range
+    [0, max_articles) and the val/test ranges at the tail of the dump
+    can therefore land in different article-popularity regimes and
+    distort val PPL. Set environment variable WIKI_JA_SHUFFLE_ARTICLES=1
+    to deterministically shuffle the source index space (seed 42 by
+    default, override via WIKI_JA_SHUFFLE_SEED) before slicing. This
+    changes which articles end up in each split, so existing checkpoint
+    val/test numbers become non-comparable across the toggle — leave it
+    off for runs that need to compare to a pre-2026-05-01 baseline.
+
     Args:
         split: 'train', 'validation', or 'test'
         cache_dir: Optional cache directory for HuggingFace datasets
@@ -499,6 +510,13 @@ def _load_wiki_ja_split(
 
     total_docs = len(full_dataset)
     _log(f"  Total articles: {total_docs:,}")
+
+    import os as _os
+    shuffle_articles = _os.environ.get('WIKI_JA_SHUFFLE_ARTICLES', '0') in ('1', 'true', 'True')
+    shuffle_seed = int(_os.environ.get('WIKI_JA_SHUFFLE_SEED', '42'))
+    if shuffle_articles:
+        full_dataset = full_dataset.shuffle(seed=shuffle_seed)
+        _log(f"  Shuffled article order with seed={shuffle_seed} (WIKI_JA_SHUFFLE_ARTICLES=1)")
 
     # Deterministic split: 99% train, 0.5% val, 0.5% test
     n_val = int(total_docs * 0.005)
@@ -930,6 +948,14 @@ class WikiText2TiktokenDataset(Dataset):
         # Try loading from token cache first
         # Use different cache key for cl100k_base vs gpt2 tokenizer
         tokenizer_cache_key = 'tiktoken_cl100k' if dataset == 'wiki-ja' else 'tiktoken'
+        # Include WIKI_JA_SHUFFLE_ARTICLES in the cache key so toggling the env
+        # var on a machine with a stale unshuffled cache forces re-tokenization
+        # of the new shuffled split rather than silently reusing old tokens.
+        if dataset == 'wiki-ja':
+            import os as _os
+            if _os.environ.get('WIKI_JA_SHUFFLE_ARTICLES', '0') in ('1', 'true', 'True'):
+                _seed = _os.environ.get('WIKI_JA_SHUFFLE_SEED', '42')
+                tokenizer_cache_key = f'tiktoken_cl100k_shuffled_s{_seed}'
         token_cache_path = _get_token_cache_path(dataset, split, tokenizer_cache_key, cache_dir)
         if token_cache_path.exists():
             _log(f"Loading {dataset.upper()} ({split}) from token cache...")

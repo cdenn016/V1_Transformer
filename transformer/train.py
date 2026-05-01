@@ -272,6 +272,7 @@ def compute_free_energy_loss(
     aux_loss_weight: float = 0.0, # Weight for auxiliary per-layer CE losses (0 = disabled)
     detach_beta_m_step: bool = True,  # True = correct EM (detach β). False = old behavior (grad through softmax)
     normalize_ce_by_dim: bool = False,  # Divide CE by sqrt(K) to match VFE dim_scale
+    ce_label_smoothing: float = 0.0,  # Label smoothing on loss-path CE only; ce_loss_raw stays un-smoothed for PPL
     # Backward-compatible aliases (deprecated)
     alpha: float = None,
     lambda_beta: float = None,
@@ -366,14 +367,24 @@ def compute_free_energy_loss(
         reduction='mean',
         ignore_index=pad_token_id,
     )
+    # Label smoothing applied to the LOSS path only; ce_loss_raw stays un-smoothed
+    # for PPL/BPC metrics so reported PPL stays directly comparable across runs.
+    if ce_label_smoothing > 0.0:
+        ce_loss = F.cross_entropy(
+            logits.reshape(-1, logits.size(-1)),
+            targets.reshape(-1),
+            reduction='mean',
+            ignore_index=pad_token_id,
+            label_smoothing=ce_label_smoothing,
+        )
+    else:
+        ce_loss = ce_loss_raw  # zero-overhead bit-identical fast path when smoothing is off
     # VFE terms divide by sqrt(K) (dim_scale) but CE does not by default.
     # When normalize_ce_by_dim=True, apply the same normalization so relative
     # VFE-vs-CE weighting is independent of embed_dim.
-    # ce_loss is used for the loss; ce_loss_raw is preserved for PPL/BPC metrics.
-    ce_loss = ce_loss_raw
     if normalize_ce_by_dim:
         embed_K = model.config.get('embed_dim', 128) if hasattr(model, 'config') else 128
-        ce_loss = ce_loss_raw / (embed_K ** 0.5)
+        ce_loss = ce_loss / (embed_K ** 0.5)
 
     # =================================================================
     # 2. Belief Coupling: λ_β · Σ_ij β_ij · KL(q_i || Ω_ij q_j)
