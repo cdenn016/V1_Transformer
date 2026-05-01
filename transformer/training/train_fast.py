@@ -319,7 +319,7 @@ class FastTrainer:
 
         return formatted_metrics
 
-    def validate(self, max_samples: int = 128000) -> Dict[str, float]:
+    def validate(self, max_samples: int = 12800) -> Dict[str, float]:
         """Validation loop with token-weighted CE averaging (no VFE regularizers).
 
         Args:
