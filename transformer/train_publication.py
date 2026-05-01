@@ -119,11 +119,11 @@ _DEBUG_VFE_GRADS = False
 EM_CONFIG = {
     # === Architecture ===
     'vocab_size':                 50257,
-    'embed_dim':                  20,
+    'embed_dim':                  90,
     'max_seq_len':                128,
     
-    'batch_size':                 64, 
-    'max_steps':                  60000,
+    'batch_size':                 16, 
+    'max_steps':                  240000,
      
     'stride':                     128,                                                                                                
     'random_offset_per_epoch':    True,
@@ -136,8 +136,8 @@ EM_CONFIG = {
     #'grad_accumulation_steps': 1,
     #'gradient_checkpoint_vfe': False,
     
-    'gauge_dim':                   10,
-    'irrep_spec':       [('fund', 2, 10)],
+    'gauge_dim':                   15,
+    'irrep_spec':       [('fund', 6, 15)],
 
     'use_prior_bank':             False,
     'gauge_fixed_priors':         False,    
@@ -221,7 +221,7 @@ EM_CONFIG = {
     'lambda_gamma':               0,
     # === M-step Learning Rates (AdamW parameter groups) ===
     
-    'M_mu_p_lr':                  0.07,   # M-step prior mean embeddings (μ_p) 0.05
+    'M_mu_p_lr':                  0.05,   # M-step prior mean embeddings (μ_p) 0.05
     'M_sigma_p_lr':               0.015,     # M-step prior covariance embeddings (log σ_p) 0.015
     'M_phi_lr':                   0.0036,    # M-step gauge frame embeddings (φ) 0.0075
     

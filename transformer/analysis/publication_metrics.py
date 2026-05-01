@@ -186,9 +186,18 @@ class TrainingTracker:
     Records loss, PPL, BPC, gradients over training steps.
     """
 
-    def __init__(self, save_dir: Optional[Path] = None):
+    def __init__(self, save_dir: Optional[Path] = None, tokens_per_char: Optional[float] = None):
+        """
+        Args:
+            save_dir: Directory to save figures.
+            tokens_per_char: Average BPE tokens per source character. Used to
+                convert per-token CE to true bits-per-character. When None,
+                BPC is reported as bits-per-token with a one-time warning
+                (see transformer/training/bpc.py).
+        """
         self.save_dir = Path(save_dir) if save_dir else Path("./outputs/figures")
         self.save_dir.mkdir(parents=True, exist_ok=True)
+        self.tokens_per_char = tokens_per_char
         self.history: List[TrainingSnapshot] = []
 
     def record(
@@ -218,7 +227,13 @@ class TrainingTracker:
         # which is useful for the optimizer but meaningless on plots.
         train_ce_normalized = train_metrics.get('ce_loss', train_metrics.get('ce', 0))
         train_ce = train_metrics.get('ce_loss_raw', train_ce_normalized)
-        train_bpc = train_ce / math.log(2) if train_ce > 0 else 0
+        # BPC = (CE_nats / ln 2) * tokens_per_char. tokens_per_char is set on
+        # the tracker at construction; falls back to bits-per-token with one-
+        # time warning when unavailable.
+        from transformer.training.bpc import compute_bpc
+        train_bpc = compute_bpc(
+            train_ce, self.tokens_per_char, fallback_key='training_tracker_train',
+        ) if train_ce > 0 else 0
         train_ppl = math.exp(min(train_ce, 20)) if train_ce > 0 else float('inf')
 
         # Extract M-step natural gradient norms per group
@@ -293,7 +308,10 @@ class TrainingTracker:
                 snapshot.val_ce = val_ce
                 snapshot.val_ppl = val_metrics.get('perplexity',
                     math.exp(min(val_ce, 20)) if val_ce > 0 else float('inf'))
-                snapshot.val_bpc = val_ce / math.log(2) if val_ce > 0 else None
+                from transformer.training.bpc import compute_bpc
+                snapshot.val_bpc = compute_bpc(
+                    val_ce, self.tokens_per_char, fallback_key='training_tracker_val',
+                ) if val_ce > 0 else None
                 break
 
     def get_summary(self) -> Dict[str, Any]:
@@ -1034,13 +1052,16 @@ class PublicationMetrics:
         metrics.generate_figures()
     """
 
-    def __init__(self, experiment_name: str, base_dir: Optional[Path] = None):
+    def __init__(
+        self, experiment_name: str, base_dir: Optional[Path] = None,
+        tokens_per_char: Optional[float] = None,
+    ):
         self.experiment_name = experiment_name
         self.base_dir = Path(base_dir) if base_dir else Path("./outputs")
         self.experiment_dir = self.base_dir / experiment_name
         self.experiment_dir.mkdir(parents=True, exist_ok=True)
 
-        self.tracker = TrainingTracker(self.experiment_dir)
+        self.tracker = TrainingTracker(self.experiment_dir, tokens_per_char=tokens_per_char)
         self.figures = PublicationFigures(self.experiment_dir / "figures")
 
         self.comparison_results: List[ExperimentResult] = []

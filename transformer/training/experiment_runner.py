@@ -212,7 +212,12 @@ def run_test_evaluation(
     # Token-weighted CE average (proper averaging for variable batch sizes)
     test_ce = total_ce_tokens / max(1, total_tokens)
     test_ppl = math.exp(min(test_ce, 20))  # Clamp to prevent overflow
-    test_bpc = test_ce / math.log(2)
+    # BPC = (CE_nats / ln 2) * tokens_per_char. The tokens-per-char ratio
+    # comes from the test loader's dataset; without it the reported value is
+    # bits-per-token, off by ~4x for GPT-2 BPE on English and ~10% for
+    # cl100k_base on Japanese.
+    from transformer.training.bpc import bpc_from_dataset
+    test_bpc = bpc_from_dataset(test_ce, test_loader, fallback_key='run_test_evaluation')
     random_ppl = vocab_size
     improvement = random_ppl / test_ppl if test_ppl > 0 else 0
 
@@ -309,7 +314,11 @@ class PublicationTrainer(FastTrainer):
 
         # Basic CSV metrics tracker
         metrics_path = self.config.checkpoint_dir / 'metrics.csv'
-        self.metrics_tracker = PublicationMetricsTracker(metrics_path)
+        from transformer.training.bpc import tokens_per_char_from_dataset
+        self.metrics_tracker = PublicationMetricsTracker(
+            metrics_path,
+            tokens_per_char=tokens_per_char_from_dataset(self.train_loader),
+        )
         _log(f"Logging publication metrics to: {metrics_path}")
 
         # Comprehensive publication metrics (optional)
@@ -1466,7 +1475,11 @@ class PublicationTrainer(FastTrainer):
                 _write(f"    Loss: {val_metrics['loss']:.4f}")
                 _write(f"    CE: {val_metrics['ce_loss']:.4f}")
                 _write(f"    PPL: {val_metrics['perplexity']:.2f}")
-                _write(f"    BPC: {val_metrics['ce_loss']/math.log(2):.3f}")
+                from transformer.training.bpc import bpc_from_dataset
+                _write(
+                    f"    BPC: "
+                    f"{bpc_from_dataset(val_metrics['ce_loss'], self.val_loader, fallback_key='val_log'):.3f}"
+                )
                 _write(f"    Attn entropy: {attn_entropy:.3f} | concentration: {attn_concentration:.3f}\n\n")
 
                 # Generate sample text to verify learning (varied prompts for diversity)
@@ -2063,9 +2076,11 @@ def run_single_experiment(
     pub_metrics = None
     if enable_publication_metrics:
         experiment_name = f"{ffn_mode}_{time.strftime('%Y%m%d_%H%M%S')}"
+        from transformer.training.bpc import tokens_per_char_from_dataset
         pub_metrics = PublicationMetrics(
             experiment_name=experiment_name,
-            base_dir=exp_checkpoint_dir / "publication_outputs"
+            base_dir=exp_checkpoint_dir / "publication_outputs",
+            tokens_per_char=tokens_per_char_from_dataset(train_loader),
         )
 
         semantic_interval = config.get('semantic_analysis_interval',
@@ -2661,7 +2676,11 @@ def run_pure_vfe_experiment(
     # Metrics Tracker
     # =================================================================
     metrics_path = exp_checkpoint_dir / 'metrics.csv'
-    metrics_tracker = PublicationMetricsTracker(metrics_path)
+    from transformer.training.bpc import tokens_per_char_from_dataset
+    metrics_tracker = PublicationMetricsTracker(
+        metrics_path,
+        tokens_per_char=tokens_per_char_from_dataset(train_loader),
+    )
     logger.info(f"Logging metrics to: {metrics_path}")
 
     # =================================================================
@@ -2779,8 +2798,9 @@ def run_pure_vfe_experiment(
 
             # Logging
             if (step + 1) % log_interval == 0:
+                from transformer.training.bpc import bpc_from_dataset
                 ppl = math.exp(min(ce_loss, 20))
-                bpc = ce_loss / math.log(2)
+                bpc = bpc_from_dataset(ce_loss, train_loader, fallback_key='pure_vfe_train')
                 vfe_0 = vfe_history[0] if vfe_history else 0.0
                 vfe_f = vfe_history[-1] if vfe_history else 0.0
 
@@ -2865,7 +2885,11 @@ def run_pure_vfe_experiment(
                 logger.info(f"\n  Validation @ step {step+1}:")
                 logger.info(f"    Loss: {val_metrics['loss']:.4f}")
                 logger.info(f"    PPL: {val_metrics['perplexity']:.2f}")
-                logger.info(f"    BPC: {val_metrics['ce_loss']/math.log(2):.3f}")
+                from transformer.training.bpc import bpc_from_dataset
+                logger.info(
+                    f"    BPC: "
+                    f"{bpc_from_dataset(val_metrics['ce_loss'], val_loader, fallback_key='pure_vfe_val'):.3f}"
+                )
 
                 # Save best model
                 if val_metrics['ce_loss'] < best_val_ce:
@@ -2936,7 +2960,10 @@ def run_pure_vfe_experiment(
             logger.info("="*70)
             test_val = _validate_pure_vfe(
                 model, test_loader, device, max_samples=128000)
-            test_bpc = test_val['ce_loss'] / math.log(2)
+            from transformer.training.bpc import bpc_from_dataset
+            test_bpc = bpc_from_dataset(
+                test_val['ce_loss'], test_loader, fallback_key='pure_vfe_test',
+            )
             test_improvement = random_ppl / test_val['perplexity']
             test_metrics = {
                 'test_loss': test_val['loss'],

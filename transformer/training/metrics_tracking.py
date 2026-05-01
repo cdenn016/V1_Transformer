@@ -20,8 +20,20 @@ from typing import Dict
 class PublicationMetricsTracker:
     """Track ALL metrics needed for publication."""
 
-    def __init__(self, save_path: Path):
+    def __init__(self, save_path: Path, tokens_per_char: float = None):
+        """
+        Args:
+            save_path: Path to write the metrics CSV.
+            tokens_per_char: Average BPE tokens per source character. Used to
+                convert per-token CE to true bits-per-character via
+                ``BPC = (CE_nats / ln 2) * tokens_per_char``. When ``None``,
+                BPC is reported as bits-per-token (off by ~4x for GPT-2 BPE
+                on English; ~10% for cl100k_base on Japanese) and a one-time
+                warning is logged. Read off the train_loader's dataset:
+                ``train_loader.dataset.tokens_per_char``.
+        """
         self.save_path = save_path
+        self.tokens_per_char = tokens_per_char
         self.history = []
 
         # Create CSV with comprehensive headers
@@ -109,7 +121,13 @@ class PublicationMetricsTracker:
 
         # Use raw (un-normalized) CE for BPC — normalized CE / log(2) is meaningless
         train_ce_raw = metrics.get('train_loss_ce_raw', metrics.get('train_loss_ce', 0))
-        train_bpc = train_ce_raw / math.log(2)
+        # BPC = (CE_nats / ln 2) * tokens_per_char. tokens_per_char comes from
+        # the dataset; when unavailable we fall back to bits-per-token with a
+        # one-time warning (see transformer/training/bpc.py).
+        from transformer.training.bpc import compute_bpc
+        train_bpc = compute_bpc(
+            train_ce_raw, self.tokens_per_char, fallback_key='metrics_tracker_train',
+        )
 
         entry = {
             'step': step,
@@ -244,8 +262,12 @@ class PublicationMetricsTracker:
                 entry['val_ce'] = val_metrics.get(
                     'ce_loss', val_metrics.get('loss'))
                 entry['val_ppl'] = val_metrics.get('perplexity')
-                entry['val_bpc'] = entry['val_ce'] / \
-                    math.log(2) if entry['val_ce'] else None
+                from transformer.training.bpc import compute_bpc
+                entry['val_bpc'] = (
+                    compute_bpc(entry['val_ce'], self.tokens_per_char,
+                                fallback_key='metrics_tracker_val')
+                    if entry['val_ce'] else None
+                )
                 break
 
     def save(self):

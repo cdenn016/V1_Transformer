@@ -541,9 +541,11 @@ def resume_training():
     # Create publication metrics tracker for figures
     import time
     experiment_name = f"resumed_{time.strftime('%Y%m%d_%H%M%S')}"
+    from transformer.training.bpc import tokens_per_char_from_dataset
     pub_metrics = PublicationMetrics(
         experiment_name=experiment_name,
-        base_dir=experiment_dir / "publication_outputs"
+        base_dir=experiment_dir / "publication_outputs",
+        tokens_per_char=tokens_per_char_from_dataset(train_loader),
     )
 
     # Create trainer (PublicationTrainer for metrics logging)

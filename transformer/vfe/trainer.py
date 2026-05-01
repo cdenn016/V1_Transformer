@@ -358,15 +358,26 @@ class VFETrainer:
             return
         try:
             from transformer.training.metrics_tracking import PublicationMetricsTracker
+            from transformer.training.bpc import tokens_per_char_from_dataset
             csv_path = self.output_dir / 'metrics.csv'
-            self._metrics_tracker = PublicationMetricsTracker(csv_path)
+            self._metrics_tracker = PublicationMetricsTracker(
+                csv_path,
+                tokens_per_char=tokens_per_char_from_dataset(
+                    getattr(self, 'train_loader', None),
+                ),
+            )
             logger.info(f"Metrics CSV: {csv_path}")
         except ImportError:
             logger.warning("PublicationMetricsTracker not available — CSV logging disabled")
 
         try:
             from transformer.analysis.publication_metrics import TrainingTracker
-            self._pub_tracker = TrainingTracker()
+            from transformer.training.bpc import tokens_per_char_from_dataset
+            self._pub_tracker = TrainingTracker(
+                tokens_per_char=tokens_per_char_from_dataset(
+                    getattr(self, 'train_loader', None),
+                ),
+            )
             logger.info("Publication metrics tracker initialized")
         except ImportError:
             logger.warning("TrainingTracker not available — publication metrics disabled")

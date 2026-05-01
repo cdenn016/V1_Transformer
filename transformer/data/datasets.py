@@ -957,11 +957,34 @@ class WikiText2TiktokenDataset(Dataset):
                 _seed = _os.environ.get('WIKI_JA_SHUFFLE_SEED', '42')
                 tokenizer_cache_key = f'tiktoken_cl100k_shuffled_s{_seed}'
         token_cache_path = _get_token_cache_path(dataset, split, tokenizer_cache_key, cache_dir)
+        # Sidecar JSON next to the token cache stores `n_chars_source` (the raw
+        # character count BEFORE tokenization). This is the denominator for
+        # bits-per-character: BPC = (CE_nats / ln 2) * (n_tokens / n_chars).
+        # Without it, "BPC" is actually bits-per-token, which differs by ~4x for
+        # GPT-2 BPE on English (~0.23 tok/char) and ~10% for cl100k_base on
+        # Japanese (~1.1 tok/char).
+        meta_cache_path = token_cache_path.with_suffix(token_cache_path.suffix + '.meta.json')
+        self._n_chars_source: Optional[int] = None
         if token_cache_path.exists():
             _log(f"Loading {dataset.upper()} ({split}) from token cache...")
             _log(f"  Cache: {token_cache_path}")
             tokens = torch.load(token_cache_path, weights_only=True)
             _log(f"  Loaded {len(tokens):,} cached tokens")
+            if meta_cache_path.exists():
+                try:
+                    import json as _json
+                    with open(meta_cache_path, 'r', encoding='utf-8') as _f:
+                        _meta = _json.load(_f)
+                    self._n_chars_source = int(_meta.get('n_chars_source')) if _meta.get('n_chars_source') is not None else None
+                    if self._n_chars_source is not None:
+                        _log(f"  Source character count (from sidecar): {self._n_chars_source:,}")
+                except (OSError, ValueError) as _exc:
+                    _log(f"  Sidecar metadata unreadable ({_exc}); BPC will fall back to bits-per-token")
+            else:
+                _log(
+                    f"  No sidecar metadata for token cache; BPC will fall back to bits-per-token. "
+                    f"Delete {token_cache_path.name} to rebuild with sidecar."
+                )
         else:
             # Load dataset and tokenize from scratch
             _log(f"Loading {dataset.upper()} ({split}) for BPE tokenization (tiktoken)...")
@@ -1001,6 +1024,8 @@ class WikiText2TiktokenDataset(Dataset):
                 full_text = full_text.replace(' @.@ ', '.')
 
             _log(f"  Total characters: {len(full_text):,}")
+            # Capture for the bits-per-character correction (see sidecar logic above).
+            self._n_chars_source = len(full_text)
 
             # Tokenize (chunked for large datasets to manage memory)
             tokenizer_label = 'cl100k_base' if dataset == 'wiki-ja' else 'GPT-2'
@@ -1038,6 +1063,20 @@ class WikiText2TiktokenDataset(Dataset):
             else:
                 torch.save(torch.tensor(tokens, dtype=torch.long), token_cache_path)
             _log(f"  Token cache saved ({token_cache_path.stat().st_size / 1024 / 1024:.1f} MB)")
+            # Persist source-character count alongside the cache so future loads
+            # can compute true bits-per-character without re-loading the text.
+            try:
+                import json as _json
+                with open(meta_cache_path, 'w', encoding='utf-8') as _f:
+                    _json.dump({
+                        'n_chars_source': int(self._n_chars_source),
+                        'n_tokens': int(len(tokens)),
+                        'tokens_per_char': float(len(tokens)) / max(1, int(self._n_chars_source)),
+                        'tokenizer': tokenizer_cache_key,
+                    }, _f)
+                _log(f"  Sidecar metadata saved: {meta_cache_path.name}")
+            except OSError as _exc:
+                _log(f"  Failed to save sidecar metadata: {_exc}")
 
         # Restrict vocabulary if requested
         if vocab_size is not None and vocab_size < self._full_vocab_size:
@@ -1063,6 +1102,14 @@ class WikiText2TiktokenDataset(Dataset):
 
         _log(f"  Tokenized: {len(self.tokens):,} tokens")
         _log(f"  Vocabulary size: {self.get_vocab_size()}")
+        if self._n_chars_source is not None and self._n_chars_source > 0:
+            self._tokens_per_char = float(len(self.tokens)) / float(self._n_chars_source)
+            _log(
+                f"  tokens_per_char: {self._tokens_per_char:.4f} "
+                f"(used to convert bits-per-token to bits-per-character)"
+            )
+        else:
+            self._tokens_per_char = None
 
         if self.stride is None:
             # LEGACY PATH — DO NOT MODIFY. Bit-identical to pre-stride behavior.
@@ -1076,6 +1123,20 @@ class WikiText2TiktokenDataset(Dataset):
             k_max = max(0, (N - T - S) // S)
             self.num_sequences = max(1, k_max + 1)
         _log(f"  Number of sequences: {self.num_sequences:,}")
+
+    @property
+    def tokens_per_char(self) -> Optional[float]:
+        """Average BPE tokens per source character.
+
+        Used by the metrics layer to convert bits-per-token to true
+        bits-per-character: ``BPC = (CE_nats / ln 2) * tokens_per_char``.
+        Returns None when the source-character count is unavailable (e.g.
+        loading from a token cache produced before the sidecar metadata
+        was introduced). Downstream code should treat None as a signal to
+        either skip BPC reporting or fall back to bits-per-token with a
+        warning.
+        """
+        return getattr(self, '_tokens_per_char', None)
 
     def _restrict_vocab(self, tokens: List[int], target_vocab_size: int) -> List[int]:
         """Restrict tokens to top K most frequent."""
