@@ -93,12 +93,14 @@ def write_methods_paragraph(
     dataset: str = 'WikiText-103',
     seq_len: Optional[int] = None,
     tokens_seen: Optional[int] = None,
+    discussion: Optional[str] = None,
 ) -> Path:
     """Render and write the methods paragraph; lint before write.
 
     Pulls protocol facts (seq_len, tokens_seen) from the terminal_df when not
-    explicitly provided. Runs the banned-word linter on the rendered text and
-    raises if any offender appears, so Claude-isms cannot reach the manuscript.
+    explicitly provided. When ``discussion`` is given, appends it as a second
+    paragraph after a blank line so the file becomes a methods + discussion
+    document rather than methods alone — the lint runs on the combined text.
     """
     df = terminal_df.copy()
     axis_values = sorted(df[axis_name].dropna().unique().astype(int).tolist())
@@ -158,6 +160,9 @@ def write_methods_paragraph(
         f"experiment_config.json and result_em.json."
     )
 
+    if discussion is not None and discussion.strip():
+        text = text + "\n\n" + discussion.strip()
+
     _lint(text)
 
     output_path = Path(output_path)
@@ -165,6 +170,9 @@ def write_methods_paragraph(
     output_path.write_text(text + "\n", encoding='utf-8')
     word_count = len(text.split())
     logger.info("Wrote methods paragraph: %s (%d words)", output_path, word_count)
-    if word_count > 250:
-        logger.warning("Methods paragraph exceeds 250 words: %d", word_count)
+    # 250-word soft cap applies to methods paragraph alone; with a discussion
+    # paragraph appended, target ~500 words total.
+    cap = 500 if (discussion and discussion.strip()) else 250
+    if word_count > cap:
+        logger.warning("Methods+discussion text exceeds %d words: %d", cap, word_count)
     return output_path

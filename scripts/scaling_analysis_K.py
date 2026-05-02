@@ -68,6 +68,37 @@ CONFIG = {
     'fit_method': 'nonlinear',  # 'nonlinear' or 'loglog'
     'smoothing_window': 50,
     'rng_seed': 0,
+    # Optional second paragraph appended to methods.md as 'discussion'. Edit
+    # this string in place; lint applies to the combined methods + discussion.
+    'discussion': (
+        "The fitted floor c is not an architectural ceiling for this model "
+        "class. The same single-layer gauge-theoretic transformer trained on "
+        "the larger Japanese Wikipedia corpus (about one billion tokens, "
+        "roughly an order of magnitude more data than the iso-token budget "
+        "used here) reaches test perplexities in the 15 to 30 range across "
+        "comparable embedding dimensions, indicating that the WikiText-103 "
+        "floor reflects an undertrained-convergence regime at 1.2 epochs "
+        "rather than a structural limit of the architecture. Direct cross-"
+        "dataset comparison is qualified: WikiText-103 and Japanese "
+        "Wikipedia differ in tokenizer (gpt2 BPE 50,257 vocabulary versus "
+        "cl100k_base 100,277 vocabulary) and in language, both of which "
+        "shift the absolute perplexity even before model-quality differences "
+        "enter. With those caveats in place, the order-of-magnitude gap "
+        "between the WikiText-103 floor and the Japanese Wikipedia results "
+        "is large enough that data quantity dominates the difference, "
+        "leaving the b approximately -1 exponent as the primary "
+        "architectural fingerprint that survives across both regimes. The b "
+        "exponent contrasts with the Chinchilla-style cross-entropy "
+        "exponent of approximately 0.34 against total parameter count "
+        "(Hoffmann et al., 2022), which corresponds to roughly 0.7 nats per "
+        "decade of N at typical excess-loss values; the gauge-theoretic "
+        "model loses about 2.4 nats per decade of K. Two structural facts "
+        "make the comparison non-head-to-head: K is embedding dimension "
+        "rather than total parameter count, and the gauge model has no "
+        "learned attention projections (W_Q, W_K, W_V are absent), so the "
+        "K-to-N map is approximately linear here while in a standard "
+        "transformer it is approximately quadratic."
+    ),
 }
 
 
@@ -121,6 +152,7 @@ def main(cfg: dict) -> None:
         axis_name=cfg['sweep_axis_name'],
         axis_symbol=cfg['axis_symbol'],
         dataset=cfg['dataset_name'],
+        discussion=cfg.get('discussion'),
     )
 
     logger.info('Done.')

@@ -125,7 +125,8 @@ EM_CONFIG = {
     'batch_size':                 16, 
     'max_steps':                  240000,
      
-    'stride':                     128,                                                                                                
+    'stride':                     128,  
+    'eval_stride':                128,                                                                                              
     'random_offset_per_epoch':    True,
     'stride_base_seed':           6,
     
