@@ -493,12 +493,49 @@ Gaussians are the maximum entropy distribution for given mean and covariance, ma
 \subsubsection{Gauge Group: $\mathrm{GL}(K)$ as Natural Symmetry, $\mathrm{SO}(3)$ as Computational Choice}
 \label{sec:gauge_group_choice}
 
-The natural gauge group for KL-based variational inference is $G = \mathrm{GL}(K)$, the general linear group of invertible $K \times K$ matrices. The KL divergence between multivariate Gaussians---and indeed all $f$-divergences---is invariant under simultaneous push-forward by any $\Omega \in \mathrm{GL}(K)$:
+The natural gauge group for KL-based variational inference is $G = \mathrm{GL}(K)$, the general linear group of invertible $K \times K$ matrices. The KL divergence (and indeed all $f$-divergences) is invariant under any common bijective change of variables, since the Jacobian factors cancel in the density ratio. By restricting to transformations that preserve the multivariate Gaussian family and act linearly on the sufficient statistics $(\mu, \Sigma)$, we find $\mathrm{GL}(K)$ as the symmetry group. This is a standard result in information geometry~\cite{amari2016information}; we state it formally with proof, reproduced verbatim from the gauge-theoretic transformer companion paper~\cite{Dennis2025trans}.
+
+\begin{theorem}[$\mathrm{GL}(K)$ Gauge Invariance]
+\label{thm:glk_invariance}
+For any two Gaussian distributions $P = \mathcal{N}(\mu_P, \Sigma_P)$ and $Q = \mathcal{N}(\mu_Q, \Sigma_Q)$ on $\mathbb{R}^K$, and any invertible linear transformation $\Omega \in \mathrm{GL}(K)$, the KL divergence is invariant under simultaneous push-forward:
 \begin{equation}
-D_{\mathrm{KL}}(\Omega_* P \,\|\, \Omega_* Q) = D_{\mathrm{KL}}(P \,\|\, Q), \quad \forall\, \Omega \in \mathrm{GL}(K),
+D_{\mathrm{KL}}(\Omega_* P \,\|\, \Omega_* Q) = D_{\mathrm{KL}}(P \,\|\, Q),
 \label{eq:glk_invariance}
 \end{equation}
-where $\Omega_* \mathcal{N}(\mu, \Sigma) = \mathcal{N}(\Omega\mu, \Omega\Sigma\Omega^\top)$. The only requirement is invertibility ($\det \Omega \neq 0$), not orthogonality. This result extends to general exponential family distributions, since the Jacobian factors cancel in the density ratio for any bijective linear change of variables. We emphasize that while we use multivariate Gaussians throughout for computational tractability, the gauge-theoretic framework applies to arbitrary exponential family distributions; Gaussians are a simplifying choice, not a theoretical limitation.
+where $\Omega_* P = \mathcal{N}(\Omega\mu_P, \Omega\Sigma_P\Omega^\top)$ denotes the pushforward of $P$ under $\Omega$.
+\end{theorem}
+
+\begin{proof}
+The KL divergence between Gaussians consists of three terms:
+\begin{equation}
+D_{\mathrm{KL}}(P \| Q) = \frac{1}{2}\left[\mathrm{Tr}(\Sigma_Q^{-1}\Sigma_P) + (\mu_P - \mu_Q)^\top \Sigma_Q^{-1}(\mu_P - \mu_Q) - K + \log\frac{\det\Sigma_Q}{\det\Sigma_P}\right].
+\end{equation}
+Under the pushforward $\Omega_* P = \mathcal{N}(\Omega\mu_P, \Omega\Sigma_P\Omega^\top)$ and $\Omega_* Q = \mathcal{N}(\Omega\mu_Q, \Omega\Sigma_Q\Omega^\top)$:
+
+\textbf{Trace term:}
+\begin{equation}
+\mathrm{Tr}\big[(\Omega\Sigma_Q\Omega^\top)^{-1}(\Omega\Sigma_P\Omega^\top)\big] = \mathrm{Tr}\big[\Omega^{-\top}\Sigma_Q^{-1}\Omega^{-1}\Omega\Sigma_P\Omega^\top\big] = \mathrm{Tr}(\Sigma_Q^{-1}\Sigma_P).
+\end{equation}
+
+\textbf{Quadratic term:}
+\begin{align}
+&(\Omega\mu_P - \Omega\mu_Q)^\top (\Omega\Sigma_Q\Omega^\top)^{-1} (\Omega\mu_P - \Omega\mu_Q) \nonumber\\
+&= (\mu_P - \mu_Q)^\top \Omega^\top \Omega^{-\top}\Sigma_Q^{-1}\Omega^{-1}\Omega (\mu_P - \mu_Q) = (\mu_P - \mu_Q)^\top \Sigma_Q^{-1}(\mu_P - \mu_Q).
+\end{align}
+
+\textbf{Log-determinant term:}
+\begin{equation}
+\log\frac{\det(\Omega\Sigma_Q\Omega^\top)}{\det(\Omega\Sigma_P\Omega^\top)} = \log\frac{(\det\Omega)^2 \det\Sigma_Q}{(\det\Omega)^2 \det\Sigma_P} = \log\frac{\det\Sigma_Q}{\det\Sigma_P}.
+\end{equation}
+
+The $(\det\Omega)^2$ factors cancel identically. Since all three components are invariant, $D_{\mathrm{KL}}(\Omega_* P \| \Omega_* Q) = D_{\mathrm{KL}}(P \| Q)$.
+\end{proof}
+
+The proof extends to all $f$-divergences: for any convex function $f$ such that $f(1) = 0$,
+\begin{equation}
+D_f(\Omega_* P \| \Omega_* Q) = D_f(P \| Q), \quad \forall\, \Omega \in \mathrm{GL}(K),
+\end{equation}
+since the factors $|\det\Omega|$ from the density transformation cancel in the ratio $p(x)/q(x)$. From a practical standpoint, this implies that transport operators need only satisfy $\det(\Omega_{ij}) \neq 0$ (invertibility), and the full $\mathrm{GL}(K)$ acts as a gauge symmetry. The exponential parameterization $e^{\phi}$ used throughout this paper restricts to $\det > 0$ (since $\det(\exp(\phi)) = \exp(\mathrm{tr}(\phi)) > 0$), but this is merely the identity component; disconnected transformations are reserved for future study.
 
 The gauge action on Gaussian states is $\rho(\Omega) \cdot (\mu, \Sigma) = (\Omega\mu, \Omega\Sigma\Omega^\top)$ where $\Omega \in \mathrm{GL}(K)$ acts linearly on mean vectors and by congruence on covariance matrices.
 
@@ -558,70 +595,151 @@ A naive approach would define pairwise potentials ad hoc: $S_{\text{naive}} \pro
 \subsubsection{Deriving Attention from a Mixture-of-Sources Generative Model}
 \label{sec:mixture_derivation}
 
-We derive the inter-agent coupling terms and their softmax attention weights from a single variational principle by formulating each agent's inference as source selection over gauge-transported neighbors. This derivation, in its 0-dimensional (single-point) limit recovering standard transformer attention (Section~\ref{sec:transformers}), here extends naturally to arbitrary base manifolds $\mathcal{C}$.
+We derive the inter-agent coupling terms and their softmax attention weights from a single variational principle by formulating each agent's inference as source selection over gauge-transported neighbors. We present the derivation pointwise at a single base-manifold point $c \in \mathcal{C}$; the extension to functionals over $\mathcal{C}$ is obtained by integrating the resulting pointwise free energy against agent supports, as developed in Section~\ref{sec:complete_free_energy}. The derivation that follows is reproduced verbatim from the gauge-theoretic transformer companion paper~\cite{Dennis2025trans}, with only the implicit understanding that all distributions and group elements are evaluated at $c$.
 
-At each point $c \in \mathcal{C}$, agent $i$ (the ``query'') seeks to update its belief $q_i(k; c)$ by attending to a set of source agents $j$ (the ``keys'') whose support domains overlap with agent $i$'s at $c$. Agent $i$'s generative model posits that its latent state $k \in \mathbb{R}^{K}$ was drawn from one of its neighbors, selected by a categorical latent variable $z(c) \in \{1, \ldots, N\}$:
+\paragraph{Mixture-of-sources generative model.}
+Agent $i$ (the query) seeks to update its belief $q_i(k)$ by attending to a set of source agents $j$ (the keys). Agent $i$'s generative model assumes its latent state $k$ was drawn from one of the neighboring agents, selected by a categorical latent variable $z \in \{1, \ldots, N\}$:
 
 \begin{equation}
-P(k, z; c) = P(k \mid z; c) \, P(z; c),
+P(k, z) = P(k \mid z)\, P(z),
 \label{eq:mixture_joint}
 \end{equation}
 
-where $P(z{=}j; c) = \pi_j(c)$ is the prior probability of attending to agent $j$ at point $c$ (the \emph{attention prior}), and the conditional is agent $j$'s belief transported into agent $i$'s gauge frame via $\Omega_{ij}(c)$:
+where $P(z = j) = \pi_j$ is the prior probability of attending to agent $j$ (the attention prior), and $P(k \mid z = j) = \mathcal{N}(k;\, \Omega_{ij}\mu_j,\, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$ is agent $j$'s belief transported into agent $i$'s gauge frame via $\Omega_{ij}$.
+
+This construction leads to a generative model consistent with the required gauge structure. Agent $j$'s belief $q_j(k_j)$ lives in $j$'s local frame, and $\Omega_{ij}q_j(k_j)$ is agent $i$'s representation of what agent $j$ believes, as seen by agent $i$. The categorical variable $z$ endows the model with probabilistic source selection whereby attention is considered as posterior inference over which neighbor generated agent $i$'s state.
+
+To clarify, the component distributions $P(k \mid z{=}j) = \Omega_{ij}q_j$ depend on the variational posteriors $q_j$ of other agents, making the generative model itself a function of variational quantities. This construction can be understood via two complementary points. First, as an augmented model whereby the full system has a joint generative model over all agents' latent states, and the pairwise KL terms emerge as variational couplings in the mean-field decomposition of the joint ELBO. Second, as a consensus energy whereby the alignment free energy $\sum_j \beta_{ij} D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ can be viewed as an engineered energy functional that penalizes belief disagreement after gauge transport, motivated by the KL term of a fixed generative model. In either framing, the resulting update equations are the same. At the fixed point of the joint optimization (over all $\{q_i\}$ simultaneously), the pairwise objectives are mutually consistent.
+
+\paragraph{Variational posterior.}
+Next, we approximate the true posterior $P(k, z \mid \text{data})$ using mean-field factorization:
 
 \begin{equation}
-P(k \mid z{=}j; c) = \mathcal{N}\!\big(k;\, \Omega_{ij}(c)\,\mu_j(c),\, \Omega_{ij}(c)\,\Sigma_j(c)\,\Omega_{ij}(c)^\top\big).
+Q(k, z) = q_i(k) \cdot \beta(z),
+\label{eq:mixture_posterior}
 \end{equation}
 
-This construction is gauge-covariant by design: agent $j$'s belief $q_j(k_j; c)$ lives in $j$'s local frame, and $\Omega_{ij}(c)\,q_j$ is agent $i$'s representation of what agent $j$ believes, as seen from agent $i$'s frame. The categorical variable $z$ endows the model with probabilistic source selection, whereby attention is posterior inference over which neighbor generated agent $i$'s state. As discussed below, the gauge transport operator $\Omega_{ij}(c) = \exp[\phi_i(c)]\exp[-\phi_j(c)] \in \mathrm{GL}^+(K)$ is constructed from the agents' gauge frame fields $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$, with the full $\mathrm{GL}(K)$ invariance of KL divergence (Section~\ref{sec:gauge_group_choice}) ensuring the resulting attention weights are gauge-covariant.
+where $\beta(z = j) \equiv \beta_{ij} \geq 0$ are variational attention weights satisfying $\sum_j \beta_{ij} = 1$.
 
-\subsubsection{Variational Posterior and Alignment Free Energy}
-
-We approximate the true posterior $P(k, z \mid \text{data}; c)$ via mean-field factorization:
+\paragraph{Alignment free energy.}
+The free energy for the alignment component is the KL divergence between the variational posterior and the generative model:
 
 \begin{equation}
-Q(k, z; c) = q_i(k; c) \cdot \beta(z; c),
+\mathcal{F}_{\text{align}} = D_{\mathrm{KL}}[Q(k,z) \| P(k,z)] = \sum_j \beta_{ij} \int dk\, q_i(k) \log \frac{q_i(k)\, \beta_{ij}}{P(k \mid z{=}j)\, \pi_j}.
 \end{equation}
 
-where $\beta(z{=}j; c) \equiv \beta_{ij}(c) \geq 0$ are variational attention weights satisfying $\sum_j \beta_{ij}(c) = 1$. The alignment free energy at point $c$ is the KL divergence between variational posterior and generative model:
+Decomposing the logarithm yields:
 
 \begin{equation}
-\mathcal{F}_{\text{align}}(c) = D_{\mathrm{KL}}[Q(k,z; c) \| P(k,z; c)] = \sum_j \beta_{ij}(c) \left[ E_{ij}(c) + \log \beta_{ij}(c) - \log \pi_j(c) \right],
-\label{eq:alignment_free_energy}
+\mathcal{F}_{\text{align}} = \sum_j \beta_{ij} \left[ \underbrace{\int dk\, q_i(k) \log \frac{q_i(k)}{P(k \mid z{=}j)}}_{= \, D_{\mathrm{KL}}[q_i \,\|\, \Omega_{ij} q_j]} + \log \beta_{ij} - \log \pi_j \right].
+\label{eq:mixture_free_energy}
 \end{equation}
 
-where we define the \emph{alignment energy}
+The identification of the integral with $D_{\mathrm{KL}}[q_i \| \Omega_{ij} q_j]$ follows directly from the definition of KL divergence and the generative model $P(k \mid z{=}j) = (\Omega_{ij} q_j)(k)$, with no approximation.
+
+Therefore, we may define an alignment energy $E_{ij} \equiv D_{\mathrm{KL}}[q_i \| \Omega_{ij} q_j]$ such that:
 
 \begin{equation}
-E_{ij}(c) \equiv D_{\mathrm{KL}}\!\big[q_i(c) \,\big\|\, \Omega_{ij}(c)\,q_j(c)\big].
-\label{eq:alignment_energy}
+\mathcal{F}_{\text{align}} = \sum_j \beta_{ij} \big( E_{ij} + \log \beta_{ij} - \log \pi_j \big).
+\label{eq:mixture_energy_entropy}
 \end{equation}
 
-The identification of the integral $\int dk\, q_i(k;c) \log [q_i(k;c) / (\Omega_{ij}q_j)(k;c)]$ with $D_{\mathrm{KL}}[q_i \| \Omega_{ij}q_j]$ follows directly from the definition of KL divergence and the generative model, with no approximation. The alignment free energy~\eqref{eq:alignment_free_energy} has the standard ``energy minus entropy'' form $\mathcal{F}_{\text{align}} = \langle E \rangle_\beta - H(\beta) + \text{const}$, where $H(\beta) = -\sum_j \beta_{ij} \log \beta_{ij}$ is the entropy of the attention distribution.
+This has the usual ``energy minus entropy'' form $\mathcal{F}_{\text{align}} = \langle E \rangle_\beta - H(\beta) + \text{const}$, where $H(\beta) = -\sum_j \beta_{ij} \log \beta_{ij}$ is the entropy of the attention distribution.
 
-\subsubsection{Minimization and the Softmax Solution}
-
-We minimize $\mathcal{F}_{\text{align}}(c)$ with respect to $\beta_{ij}(c)$ subject to the constraint $\sum_j \beta_{ij}(c) = 1$, pointwise at each $c \in \mathcal{C}$. The Lagrangian is
+\paragraph{Minimization and the softmax solution.}
+Next, we minimize $\mathcal{F}_{\text{align}}$ with respect to $\beta_{ij}$ subject to the constraint $\sum_j \beta_{ij} = 1$ using Lagrange multipliers:
 
 \begin{equation}
-\mathcal{L} = \sum_j \beta_{ij}(c)\big(E_{ij}(c) + \log \beta_{ij}(c) - \log \pi_j(c)\big) - \lambda\!\left(\sum_j \beta_{ij}(c) - 1\right).
+\mathcal{L} = \sum_j \beta_{ij}(E_{ij} + \log \beta_{ij} - \log \pi_j) - \lambda\left(\sum_j \beta_{ij} - 1\right).
 \end{equation}
 
-Setting $\partial \mathcal{L} / \partial \beta_{ik} = 0$ yields $E_{ik}(c) + \log \beta_{ik}(c) + 1 - \log \pi_k(c) - \lambda = 0$. Solving for $\beta_{ik}$ and enforcing normalization produces the softmax form, weighted by the attention priors $\pi_k(c)$:
+Requiring $\partial \mathcal{L} / \partial \beta_{ik} = 0$ produces:
 
 \begin{equation}
-\boxed{\beta_{ik}(c) = \frac{\pi_k(c) \exp\!\big(-E_{ik}(c)/\tau\big)}{\sum_m \pi_m(c) \exp\!\big(-E_{im}(c)/\tau\big)},}
+E_{ik} + \log \beta_{ik} + 1 - \log \pi_k - \lambda = 0.
+\end{equation}
+
+Solving and normalizing we find the softmax form, weighted by attention priors $\pi_k$:
+
+\begin{equation}
+\beta_{ik} = \frac{\pi_k \exp(-E_{ik})}{\sum_m \pi_m \exp(-E_{im})}.
 \label{eq:softmax_attention_general}
 \end{equation}
 
-where we have introduced a temperature parameter $\tau > 0$ by rescaling the alignment energy $E_{ik} \to E_{ik}/\tau$. For a uniform attention prior $\pi_k(c) = 1/N$, the prior factors cancel, yielding
+For a uniform attention prior $\pi_k = 1/N$, the prior factors cancel, yielding:
 
 \begin{equation}
-\beta_{ik}(c) = \operatorname{softmax}_k\!\big(-D_{\mathrm{KL}}[q_i(c) \| \Omega_{ik}(c)\,q_k(c)] / \tau\big).
-\label{eq:softmax_attention_uniform}
+\boxed{\beta_{ik} = \operatorname{softmax}_k(-E_{ik}) = \operatorname{softmax}_k\!\big(-D_{\mathrm{KL}}[q_i \| \Omega_{ik} q_k]\big).}
+\label{eq:mixture_softmax}
 \end{equation}
 
-This result is exact: no approximation has been made beyond the mean-field factorization of $Q(k,z)$. The softmax arises from constrained optimization of a well-defined variational objective, not from ad hoc construction. Non-uniform attention priors $\pi_j(c)$ can encode causal masking (setting $\pi_j = 0$ for future tokens in the 0D limit), sliding window attention ($\pi_j \propto \mathbf{1}[|i-j| \leq w]$), linear positional biases ($\pi_j \propto \exp(-m|i-j|)$, recovering ALiBi~\cite{press2022train}), and general relative position biases ($\pi_j \propto \exp(b_{i-j})$, recovering T5-style offsets~\cite{raffel2020exploring}). Each of these mechanisms, historically introduced as empirical design choices, emerges as a special case of~\eqref{eq:softmax_attention_general} through the attention prior alone.
+Without loss of generality we may include a temperature parameter $\tau > 0$ by rescaling the alignment energy $E_{ik} \to E_{ik}/\tau$. Additionally, the forward KL divergence is the unique $f$-divergence that preserves exponential-family closure under this linear coupling structure and yields a consistent dual interpretation for the attention weights; the conditional uniqueness theorem and full proof are reproduced in Appendix~\ref{app:conditional_uniqueness}.
+
+\subsubsection{Non-Uniform Attention Priors: Masking and Positional Biases}
+\label{sec:nonuniform_priors}
+
+The general solution \eqref{eq:softmax_attention_general} with non-uniform priors $\pi_k$ provides a unified derivation of several architectural features historically introduced empirically into transformers.
+
+\paragraph{Causal masking.}
+In auto-regressive language modeling, token $i$ should not attend to future tokens $j > i$. Within our generative model, this constraint is a prior restriction on the availability of a source. Formally, setting the attention prior to
+
+\begin{equation}
+\pi_j^{(\text{causal})} = \begin{cases} \frac{1}{i} & \text{if } j \leq i, \\ 0 & \text{if } j > i, \end{cases}
+\label{eq:causal_prior}
+\end{equation}
+
+and substituting into \eqref{eq:softmax_attention_general} produces
+
+\begin{equation}
+\beta_{ij} = \frac{\mathbf{1}[j \leq i] \cdot \exp(-E_{ij}/\tau)}{\sum_{k \leq i} \exp(-E_{ik}/\tau)},
+\label{eq:causal_attention}
+\end{equation}
+
+which is precisely the masked attention used in GPT-family models~\cite{radford2019language}.
+
+\paragraph{Sliding window attention.}
+Similarly, choosing the prior as a local window of size $w$ around position $i$,
+
+\begin{equation}
+\pi_j^{(\text{window})} \propto \mathbf{1}[|i - j| \leq w],
+\label{eq:window_prior}
+\end{equation}
+
+produces the sliding window attention used in architectures such as Longformer~\cite{beltagy2020longformer} and Mistral~\cite{jiang2023mistral}. In the gauge-theoretic framework, this encodes the prior belief that an agent's state was generated by a source within its ``local neighborhood'', a natural assumption for data with locality structure.
+
+\paragraph{ALiBi: linear positional bias.}
+A distance-decaying attention prior of the form
+
+\begin{equation}
+\pi_j \propto \exp(-m|i - j|),
+\label{eq:alibi_prior}
+\end{equation}
+
+where $m > 0$ is a slope parameter, contributes an additive bias to the logits. Substituting into \eqref{eq:softmax_attention_general} we have:
+
+\begin{equation}
+\beta_{ij} = \frac{\exp(-E_{ij}/\tau - m|i-j|)}{\sum_k \exp(-E_{ik}/\tau - m|i-k|)} = \operatorname{softmax}_j\!\left(-\frac{E_{ij}}{\tau} - m|i - j|\right).
+\label{eq:alibi_attention}
+\end{equation}
+
+This is exactly the ``Attention with Linear Biases'' (ALiBi) mechanism of~\cite{press2022train}. The slope $m$ is typically set to a head-dependent constant (e.g., $m = 2^{-8/H} \cdot 2^{-h}$ for head $h$ of $H$ total heads). In the gauge-theoretic framework, ALiBi arises from a prior belief that nearby sources are exponentially more likely to have generated the agent's state.
+
+\paragraph{Relative position biases.}
+More generally, we can make the attention prior a learnable function of relative position,
+
+\begin{equation}
+\pi_j \propto \exp(b_{i-j}),
+\label{eq:relative_bias_prior}
+\end{equation}
+
+where $b_\delta \in \mathbb{R}$ is a (learnable) bias for relative offset $\delta = i - j$, leading to an additive bias $b_{i-j}$ in the logits as:
+
+\begin{equation}
+\beta_{ij} = \operatorname{softmax}_j\!\left(-\frac{E_{ij}}{\tau} + b_{i-j}\right).
+\label{eq:relative_bias_attention}
+\end{equation}
+
+This recovers relative position biases used in T5~\cite{raffel2020exploring} and other architectures that parameterize attention with learnable position-dependent offsets. In a straightforward manner, each positioning architecture emerges as a special case of \eqref{eq:softmax_attention_general} operating via the same mathematical object. Although the choice of attention priors may be ad-hoc, their fundamental source and structure is determined from first principles within this framework.
 
 \subsubsection{Gauge Transport on Arbitrary Base Manifolds}
 \label{sec:gauge_transport_arbitrary}
@@ -649,7 +767,25 @@ For connections derived from a single-valued gauge function $\phi_i(c)$, the con
 \label{eq:parallel_transport}
 \end{equation}
 
-and the holonomy around a closed loop $\mathcal{C}$ is $H_{\mathcal{C}} = \mathcal{P}\exp(-\oint_{\mathcal{C}} A_\mu \, dx^\mu)$. For vertex-local transport operators of the form $\Omega_{ij} = g_i g_j^{-1}$, the cocycle condition $\Omega_{ij}\Omega_{jk} = \Omega_{ik}$ holds and the holonomy vanishes for every closed loop: $\Omega_{ij}\Omega_{jk}\Omega_{ki} = I$. Non-trivial curvature and holonomy require promoting $\Omega_{ij}$ to independent edge variables unconstrained by the cocycle condition; such architectures would exhibit \emph{path-dependent meaning transport}, where the route through intermediate agents affects the result.
+and the holonomy around a closed loop $\mathcal{C}$ is $H_{\mathcal{C}} = \mathcal{P}\exp(-\oint_{\mathcal{C}} A_\mu \, dx^\mu)$. For our vertex-local transport operators of the form $\Omega_{ij} = g_i g_j^{-1}$, an immediate cocycle theorem (reproduced verbatim from~\cite{Dennis2025trans}) holds.
+
+\begin{theorem}[Vanishing Holonomy]
+\label{thm:vanishing_holonomy}
+For gauge transport of the form $\Omega_{ij} = g_i\,g_j^{-1}$ with vertex-local group elements $g_i \in G$, the holonomy around any closed loop vanishes:
+\begin{equation}
+H_{ijk} \;=\; \Omega_{ij}\,\Omega_{jk}\,\Omega_{ki}
+\;=\; g_i\,g_j^{-1}\;g_j\,g_k^{-1}\;g_k\,g_i^{-1}
+\;=\; I.
+\label{eq:holonomy}
+\end{equation}
+Equivalently, the cocycle condition $\Omega_{ij}\,\Omega_{jk} = \Omega_{ik}$ holds for all triples $(i,j,k)$.
+\end{theorem}
+
+\begin{proof}
+Direct computation. The consecutive inverse--exponential pairs cancel identically: $g_j^{-1} g_j = I$ and $g_k^{-1} g_k = I$.
+\end{proof}
+
+This result is a theorem of the architecture, not an approximation. For our parameterisation $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$, the holonomy vanishes for every closed loop regardless of the learned gauge frames $\phi_i$. The gauge bundle is automatically flat: semantic transport from agent $i$ to agent $k$ is path-independent, in the sense that the direct route via $\Omega_{ik}$ and the indirect route via $\Omega_{ij}\,\Omega_{jk}$ yield identical results. Architectures with non-trivial curvature and holonomy would require promoting $\Omega_{ij}$ to independent edge variables unconstrained by the cocycle condition; such architectures would exhibit \emph{path-dependent meaning transport}, where the route through intermediate agents affects the result.
 
 The critical gauge covariance property is preserved on arbitrary manifolds: under simultaneous gauge transformation $\phi_i(c) \to \phi_i(c) + \xi(c)$ for all $i$ with arbitrary $\xi: \mathcal{C} \to \mathfrak{gl}(K)$, the transport operators satisfy $\Omega_{ij}(c) \to \exp(\phi_i + \xi)\exp(-(\phi_j + \xi)) = \Omega_{ij}(c)$, remaining invariant. This is the information-theoretic analog of general covariance.
 
@@ -725,6 +861,38 @@ $$
 
 and similarly for the $\gamma_{ij}(c)$ model-alignment attention weight (with $\tilde{\Omega}_{ij}$ in place of $\Omega_{ij}$ and $s_j$ in place of $q_j$), derived from the same mixture-of-sources principle (Section~\ref{sec:mixture_derivation}).
 Here $\chi_i(c)$ represents agent $i$'s support (one where agent exists, zero elsewhere), $\chi_{ij}(c) = \chi_i(c) \chi_j(c)$ is the overlap region, $\beta_{ij}(c)$ and $\gamma_{ij}(c)$ are the belief-alignment and model-alignment weights computed via softmax over KL divergences (Eq.~\ref{eq:softmax_attention_general}), and $\Omega_{ij}(c) = \exp(\phi_i(c))\exp(-\phi_j(c)) \in \mathrm{GL}^+(K)$ is the gauge transport operator. In the simulations of this paper $\gamma_{ij} = 0$; the model-alignment term is retained in the canonical functional because it is the formal content of meta-cognitive consensus exercised in Section~\ref{sec:participatory}. On base manifolds of dimension $\geq 1$, the gauge frame fields additionally induce a connection one-form $A_\mu^{(i)}(c) = U_i^{-1}\partial_\mu U_i$ (Eq.~\ref{eq:connection_form}) and gauge curvature $F_{\mu\nu}^{(i)}$ (Eq.~\ref{eq:field_strength}). Optional regularizers include gauge field smoothness $\lambda_\phi \int \|\nabla \phi_i\|^2 \, \sqrt{g}\, dc$, Fisher metric mass terms $\int \mathrm{tr}(G_{ij}) \, \sqrt{g}\, dc$, and Yang-Mills curvature penalties $\int \mathrm{tr}(F_{\mu\nu} F^{\mu\nu}) \, \sqrt{g}\, dc$.
+
+\subsubsection{The Envelope Theorem and the Reduced Free Energy}
+\label{sec:envelope_theorem}
+
+The boxed functional~\eqref{eq:free_energy_functional_final} is the \emph{full} (un-minimized) free energy: $\beta_{ij}$ and $\gamma_{ij}$ appear as variational attention parameters that are optimized jointly with the belief and model fields. Substituting the optimal weights $\beta_{ij}^* = \softmax_j(-E_{ij}/\tau + \log\pi_j)$ from~\eqref{eq:softmax_attention_general} into the alignment free energy $\mathcal{F}_{\text{align}}$~\eqref{eq:mixture_energy_entropy} yields the reduced alignment energy $-\tau\log Z_i$, where $Z_i = \sum_j \pi_j\exp(-E_{ij}/\tau)$ is the partition function. Setting aside model-channel terms (which carry an analogous structure in $s_i$ and $\gamma_{ij}$), the \emph{reduced} (partially minimized) free energy at point $c$ is therefore
+
+\begin{equation}
+\boxed{
+\begin{aligned}
+\mathcal{F}_{\mathrm{red}}[\{q_i\}]
+&=\sum_i D_{\mathrm{KL}}(q_i\,\|\,p_i)
+-\tau\sum_i \log Z_i
+-\mathbb{E}_q[\log p(o\,|\,\{k_i\})],
+\end{aligned}
+}
+\label{eq:free_energy_reduced}
+\end{equation}
+
+where $E_{ij} = D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ and $Z_i = \sum_j \pi_j \exp(-E_{ij}/\tau)$. The log-partition function $-\tau\log Z_i$ is the result of substituting $\beta_{ij}^*$ into both the energy term $\sum_j \beta_{ij} E_{ij}$ and the entropy term $\tau\sum_j \beta_{ij}\log(\beta_{ij}/\pi_j)$ of $\mathcal{F}_{\text{align}}$. The full (un-minimized) alignment energy includes the attention entropy/prior term, which is essential: it is this term that makes the $\beta$-optimization yield the softmax rather than an arg-min.
+
+The envelope theorem guarantees that the gradient of $\mathcal{F}_{\mathrm{red}}$ with respect to any belief parameter $x \in \{\mu_i, \Sigma_i, \phi_i\}$ takes the form
+
+\begin{equation}
+\frac{d\mathcal{F}_{\mathrm{red}}}{dx} = \frac{\partial\mathcal{F}}{\partial x}\bigg|_{\beta=\beta^*}
+= \text{(prior terms)} + \sum_j \beta_{ij}^*\,\frac{\partial E_{ij}}{\partial x} - \text{(observation terms)},
+\label{eq:envelope_gradient}
+\end{equation}
+
+with no explicit $\partial\beta^*/\partial x$ terms, since the cross-term $\sum_j(\partial\mathcal{F}/\partial\beta_{ij})(\partial\beta^*_{ij}/\partial x)$ vanishes at the optimal attention where $\partial\mathcal{F}/\partial\beta_{ij} = 0$.
+
+\paragraph{Autograd versus reduced-free-energy gradients.}
+In practice, implementations differentiate the composition $\sum_j \beta_{ij}^*(x)\,E_{ij}(x)$ via automatic differentiation, which applies the product rule and produces additional $(\partial\beta_{ij}^*/\partial x)\,E_{ij}$ terms. This computes the gradient of the attention-weighted energy $\langle E \rangle_\beta = \sum_j \beta_{ij}^* E_{ij}$, which differs from the reduced free energy $-\tau\log Z_i$ by the entropy term $\tau\sum_j \beta_{ij}^* \log(\beta_{ij}^*/\pi_j)$. These two objectives share the same critical points but have different gradient fields away from equilibrium. The $\partial\beta/\partial x$ terms, which vanish in the reduced-free-energy gradient by the envelope theorem, are present in the autograd gradient and provide a softmax-gradient nonlinearity (Section~\ref{sec:transformers}). Standard transformer training follows the autograd convention (differentiating through the softmax), and we adopt the same convention in the gradient expressions below.
 
 The attention field $\beta_{ij}(c)$ is not a hand-crafted kernel but emerges from variational free energy minimization. Figure~\ref{fig:attention_field} shows a typical belief attention field between agents $i=0$ and $j=1$ across the two-dimensional base manifold. The field exhibits spatial structure reflecting both geometric proximity in the base space and informational coherence in the statistical manifold. Regions where agent $i$'s transported beliefs align strongly with agent $j$ show high attention values (warm colors), enabling strong information exchange. Regions of divergence show low attention (cool colors), indicating informational independence. The spatial dependence arises because beliefs $q_i(c)$ and $q_j(c)$ vary smoothly across the base manifold, and the KL divergence $\mathrm{KL}(q_i(c) \| \Omega_{ij}(c)[q_j(c)])$ captures this variation after accounting for gauge frame differences through the transport operator. This demonstrates that familiar machine learning constructs like attention weights are not arbitrary design choices but necessary consequences of information-geometric principles combined with gauge-covariant transport on statistical manifolds.
 
@@ -2184,42 +2352,198 @@ We now establish a crucial connection between our gauge-theoretic framework and 
 The success of transformers in natural language processing is not coincidental but reveals that human language exhibits information-geometric structure compatible with gauge-theoretic coordination. The r=0.821 correlation with BERT attention patterns shows that learned statistical structure in language data matches our information-theoretic predictions. This is evidence that the framework captures something real about physical linguistic behavior.
 
 
-Consider the degenerate case where all agents exist at a single point $x_0 \in \mathcal{C}$ of the noumenal manifold, with $\mathrm{supp}(\sigma_i) = \{x_0\}$ for all agents $i$. In this limit, the base manifold effectively becomes zero-dimensional: $\dim(\mathcal{C}) = 0$. All spatial structure collapses, and agents interact purely through information-theoretic coupling at the single point. This is precisely the topology of standard transformers, where tokens (agents) are treated as an unordered set with no intrinsic spatial structure beyond sequence position.
+Consider the degenerate case where all agents exist at a single point $x_0 \in \mathcal{C}$ of the noumenal manifold, with $\mathrm{supp}(\sigma_i) = \{x_0\}$ for all agents $i$. The base manifold effectively becomes zero-dimensional, all spatial structure collapses, and agents interact purely through information-theoretic coupling at the single point. This is precisely the topology of standard transformers, where tokens (agents) are treated as an unordered set with no intrinsic spatial structure beyond sequence position.
 
-At a single base point, the transport operators simplify dramatically. While gauge frames $\phi_i(x_0)$ may still differ between agents, there is no longer any need to transport beliefs across different locations in $\mathcal{C}$. The transport operator reduces to $\Omega_{ij}(x_0) = \exp(\phi_i(x_0)) \cdot \exp(-\phi_j(x_0)) \in G$. For computational convenience in the 0D limit, we work in a gauge where all agents share a common frame at $x_0$, yielding $\Omega_{ij}(x_0) \to \mathbb{I}$. This gauge-fixing eliminates transport - all beliefs become directly comparable at $x_0$ without geometric transformation.
+The remainder of this subsection is reproduced verbatim from the gauge-theoretic transformer companion paper~\cite{Dennis2025trans}. There, the reduction to standard dot-product attention is established as a sequence of explicit limits: isotropic covariances (separating the KL into a geometric bias and a Mahalanobis distance), $\mathrm{O}(K)$ transport (eliminating the bias), and constant gauge (yielding the familiar $QK^\top/\sqrt{d_k}$ form). The empirical experiments in Section~\ref{sec:empirical_validation} implement the general gauge model without these limits.
 
-The free energy functional involves integrals over $\mathcal{C}$ which collapse to evaluation at the single point. For notational simplicity, we absorb normalization constants and write $S_{\mathrm{0D}} = \sum_i \alpha_i \mathrm{KL}(q_i \| p_i) + \sum_{ij} \beta_{ij} \mathrm{KL}(q_i \| q_j) + \cdots$ where all distributions $q_i, p_i$ are evaluated at $x_0$ and spatial dependence is suppressed. This is the effective free energy for a system of agents at a single point interacting purely through information-theoretic coupling.
+\subsubsection{Setup: Agents as Gaussian Beliefs in Local Frames}
 
-\subsubsection{Emergence of Attention Mechanisms from Information Geometry}
-
-In the 0D limit, the coupling weights become:
-
+In the general formulation, each agent $i$ (token) maintains a local MVG belief
 \begin{equation}
-\beta_{ij} = \frac{\exp\left[-\frac{1}{\kappa_\beta}\mathrm{KL}(q_i \| q_j)\right]}{\sum_k \exp\left[-\frac{1}{\kappa_\beta}\mathrm{KL}(q_i \| q_k)\right]}
+q_i = \mathcal{N}(\mu_i, \Sigma_i),
+\end{equation}
+where $\mu_i \in \mathbb{R}^{d_k}$ is the agent's mean representation in its local gauge frame, and $\Sigma_i \in \mathbb{R}^{d_k\times d_k}$ is its belief covariance (symmetric positive definite). Note that we are embedding in $K=d_k$ dimensions in order to make contact with standard notation and, for now, the gauge group will be the fundamental $\mathrm{GL}(K=d_k)$.
+
+Communication between agents $i$ and $j$ is mediated by a gauge frame transport operator
+\begin{equation}
+\Omega_{ij} \in \mathrm{GL}(d_k),
+\end{equation}
+which maps representations from agent $j$'s local frame into agent $i$'s frame. The message (update) received by agent $i$ is
+\begin{equation}
+m_i = \sum_j \beta_{ij} \,\Omega_{ij}\mu_j,
+\end{equation}
+which is the gauge-theoretic analog of the attention aggregation $\sum_j \alpha_{ij} V_j$ in standard transformers.
+
+\subsubsection{Connection to Standard Transformers}
+
+The gauge-covariant attention $\beta_{ij} = \operatorname{softmax}(-D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)/\tau)$ derived in Section~\ref{sec:mixture_derivation} is already a complete attention mechanism. Standard transformer attention is a special case, obtained by taking two successive limits: isotropic covariances (which separates the KL into a geometric bias and a Mahalanobis distance) and constant gauge transport (which eliminates the bias and yields the familiar $QK^\top / \sqrt{d_k}$ form).
+
+\paragraph{Deterministic beliefs via scaled limit.}
+
+We consider a single-point base space $\mathcal{C}$ with a finite set of agents $\{1,\dots,N\}$ (tokens) with no particular ordering.
+
+The deterministic limit requires nuance. Naively setting $\Sigma_i \to 0$ yields Dirac delta beliefs $q_i(k_i) \to \delta(k_i - \mu_i)$, but the KL divergence between distinct Diracs is infinite:
+\begin{equation}
+D_{\mathrm{KL}}(\delta(k - \mu_i) \| \delta(k - \mu_j)) = +\infty \quad \text{for } \mu_i \neq \mu_j.
+\end{equation}
+This divergence reflects the absolute continuity requirement in the definition of KL: $D_{\mathrm{KL}}(P \| Q)$ is finite only when $P$ is absolutely continuous with respect to $Q$ (i.e., $P(A) > 0$ implies $Q(A) > 0$ for all measurable $A$). Distinct Dirac measures have disjoint support and therefore violate this condition. We may remedy this by taking a joint scaling limit where the belief variance $\sigma^2$ remains finite but is absorbed into learned parameters.
+
+Next, we assume isotropic covariances $\Sigma_i = \Sigma_j = \sigma^2 I$ with $\sigma^2 > 0$. This implies that the log-determinant terms cancel ($\log\frac{|\Sigma_j|}{|\Sigma_i|} = 0$) and the trace term simplifies to $\mathrm{Tr}(\Sigma_j^{-1}\Sigma_i) = \mathrm{Tr}(I) = d_k$.
+
+With gauge transport $\Omega_{ij} \in \mathrm{GL}(d_k)$, the transported Gaussian $\Omega_{ij}q_j$ has mean $\Omega_{ij}\mu_j$ and covariance $\Omega_{ij}\Sigma_j\Omega_{ij}^\top = \sigma^2(\Omega_{ij}\Omega_{ij}^\top)$. Therefore the full KL divergence is
+\begin{equation}
+D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) = \frac{1}{2}\Big[\log\det(\Omega_{ij}\Omega_{ij}^\top) + \mathrm{Tr}\big((\Omega_{ij}\Omega_{ij}^\top)^{-1}\big) - d_k\Big] + \frac{1}{2\sigma^2}(\mu_i - \Omega_{ij}\mu_j)^\top(\Omega_{ij}\Omega_{ij}^\top)^{-1}(\mu_i - \Omega_{ij}\mu_j).
 \end{equation}
 
-This is precisely a softmax attention weight: agent $i$ attends to agent $j$ with strength proportional to their informational similarity (small KL divergence). Standard transformers decompose attention into query, key, and value matrices through learned linear projections. In our framework, this structure emerges naturally without learned weights.
-
-Representing each agent's Gaussian belief $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ by its parameters, we identify the query as the precision-weighted mean $Q_i = \Sigma_i^{-1}\mu_i$, the key as the mean vector $K_j = \mu_j$, and the value as the full distribution $V_j = q_j$. For Gaussian distributions with small covariances, the KL divergence can be approximated as $\mathrm{KL}(q_i \| q_j) \approx \frac{1}{2}(\mu_i - \mu_j)^T \Sigma^{-1} (\mu_i - \mu_j) \approx -Q_i \cdot K_j + \text{const}$. The attention weight thus becomes:
+The Mahalanobis quadratic form simplifies via the identity $(\Omega_{ij}\Omega_{ij}^\top)^{-1} = \Omega_{ij}^{-\top}\Omega_{ij}^{-1}$:
 \begin{equation}
-\beta_{ij} \propto \exp\left(\frac{Q_i \cdot K_j}{\sqrt{d_k}}\right)
+(\mu_i - \Omega_{ij}\mu_j)^\top(\Omega_{ij}\Omega_{ij}^\top)^{-1}(\mu_i - \Omega_{ij}\mu_j) = \|\Omega_{ij}^{-1}(\mu_i - \Omega_{ij}\mu_j)\|^2 = \|\Omega_{ij}^{-1}\mu_i - \mu_j\|^2.
+\label{eq:mahalanobis_identity}
 \end{equation}
 
-where we identify the temperature parameter $\kappa_\beta = \sqrt{d_k}$, exactly matching the standard transformer scaling factor. The belief update in the 0D limit is then $q_i^{\mathrm{new}} = \sum_j \beta_{ij} \, q_j$, which is precisely the transformer attention operation: agent $i$'s updated belief is a weighted average of all agents' beliefs, with weights determined by information-theoretic similarity.
+Rather than transporting the key belief into the query's frame via $\Omega_{ij}$ and measuring with the induced metric, the KL divergence equivalently transports the query into the key's frame via $\Omega_{ij}^{-1}$ and measures the Euclidean distance there. Either perspective is appropriate; the Mahalanobis metric automatically accounts for the distortion introduced by gauge transport.
 
-Multi-head attention in standard transformers corresponds naturally to multiple gauge frames $\{\phi_i^{(h)}\}_{h=1}^H$ for each agent. Each head operates in a different gauge, computing attention weights via transported beliefs: $\beta_{ij}^{(h)} = \mathrm{softmax}[-\kappa_\beta^{-1} \mathrm{KL}(q_i^{(h)} \| \Omega_h[q_j^{(h)}])]$ where $\Omega_h$ represents transport in the $h$-th gauge frame. Different heads capture different geometric relationships because they operate in different internal coordinate systems - this is not an ad-hoc design choice but a consequence of gauge freedom enabling exploration of multiple perspectives simultaneously.
+\paragraph{Isotropic attention with general gauge transport.}
 
-\subsubsection{Why Transformers Work: An Information-Theoretic Explanation}
+The structural terms $\log\det(\Omega_{ij}\Omega_{ij}^\top)$, $\mathrm{Tr}((\Omega_{ij}\Omega_{ij}^\top)^{-1})$, and $d_k$ depend on the gauge transport but not on the belief means. Defining the geometric bias
+\begin{equation}
+S(\Omega_{ij}) \;:=\; \frac{1}{2}\Big[\log\det(\Omega_{ij}\Omega_{ij}^\top) + \mathrm{Tr}\big((\Omega_{ij}\Omega_{ij}^\top)^{-1}\big) - d_k\Big],
+\label{eq:geometric_bias}
+\end{equation}
+the KL divergence under isotropic beliefs with general transport takes the form
+\begin{equation}
+D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j) \;=\; S(\Omega_{ij}) \;+\; \frac{1}{2\sigma^2}\|\Omega_{ij}^{-1}\mu_i - \mu_j\|^2.
+\label{eq:isotropic_general_omega}
+\end{equation}
 
-While various theoretical analyses of transformers exist (including universal approximation properties and optimization dynamics), the specific question of why softmax attention over dot products constitutes an optimal coordination mechanism has lacked a principled derivation from first principles. Our framework provides such a derivation: attention emerges as the optimal coupling mechanism for agents minimizing variational free energy under information-theoretic constraints. Various explanations have been proposed, but they remain largely descriptive rather than principled. Some researchers emphasize that attention selects relevant information, though this describes mechanism rather than explaining principle. Others note that softmax operations approximate sparse selection, but this is operational characterization rather than derivation. Multi-head attention is often described as capturing multiple relationship types simultaneously, yet this merely describes what the architecture does without explaining why this particular design succeeds. None of these accounts explain why softmax normalization over dot products specifically constitutes the right mechanism.
+The attention weight
+\begin{equation}
+\beta_{ij} = \operatorname{softmax}_j\!\left(-\frac{S(\Omega_{ij}) + \frac{1}{2\sigma^2}\|\Omega_{ij}^{-1}\mu_i - \mu_j\|^2}{\tau}\right)
+\end{equation}
+combines a content-dependent term (the Mahalanobis distance between belief means, measured in the key's frame) with a pair-dependent geometric bias $S(\Omega_{ij})$ that encodes the distortion introduced by gauge transport. When $\Omega_{ij}$ is orthogonal, $S(\Omega_{ij}) = 0$; for general $\mathrm{GL}(K)$ transport, $S(\Omega_{ij}) \geq 0$ with equality iff $\Omega_{ij} \in \mathrm{O}(K)$. The geometric bias therefore penalises transport operators that distort volume or stretch directions, providing a geometric regulariser intrinsic to the KL divergence. This is the natural form of attention under a single simplifying limit (isotropic covariances); standard transformer attention requires a further specialisation.
 
-Our framework provides a principled answer: attention is the optimal coupling mechanism for agents minimizing variational free energy. When agents minimize the free energy functional with information-theoretic coupling terms, the optimal coupling weights in the zero-dimensional limit necessarily take the form $\beta_{ij} = \mathrm{softmax}[-\kappa_\beta^{-1}\mathrm{KL}(q_i \| \Omega_{ij}q_j)]$. For Gaussian beliefs with appropriate approximations, this reduces precisely to softmax over dot products.
+The rescaled KL divergence $\widetilde{D}_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) := \sigma^2 \cdot D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) \to \frac{1}{2}\|\Omega_{ij}^{-1}\mu_i - \mu_j\|^2$ as $\sigma \to 0$ remains finite and equals half the squared distance between means as measured in the key's reference frame.
 
-The underlying logic is straightforward. Free energy is minimized when beliefs align across agents, reducing the total information-theoretic disagreement in the system. The KL divergence measures statistical distinguishability between beliefs - agents with similar beliefs have small KL divergence and should couple strongly. The softmax operation ensures proper normalization (weights sum to unity) while exponentially weighting by similarity. The temperature parameter $\kappa_\beta$ controls the trade-off between exploration (attending broadly) and exploitation (attending narrowly to most similar agents). This derivation establishes that transformer attention is not an arbitrary engineering choice but the unique mechanism that minimizes free energy for distributed probabilistic agents under information-theoretic coupling, providing a principled explanation for its extraordinary effectiveness across diverse domains.
+\paragraph{Constant gauge specialization ($\Omega_{ij} = \Omega$).}
 
-Our gauge-theoretic construction provides the mathematical justification for why this aggregation mechanism works: it minimizes variational free energy by aligning beliefs across agents. What appears as an empirical design choice in standard transformers (dot-product attention with softmax normalization) emerges as a mathematical necessity from variational inference on statistical manifolds.
+Standard transformer attention emerges when we further assume a single global frame shared by all agents, $\Omega_{ij} = \Omega$ for all $i,j$, corresponding to a flat connection with no position-dependent frame misalignment. The geometric bias $S(\Omega)$ becomes constant across all agent pairs and cancels under softmax, while $\Omega^{-1}$ is absorbed into learned projections.
+
+\subsubsection{Derivation of Dot-Product Attention}
+\label{sec:dot_product_derivation}
+
+\paragraph{Expanding the KL Divergence.}
+Under constant gauge, the KL divergence reduces to
+\begin{equation}
+s_{ij} = D_{\mathrm{KL}}(q_i \| \Omega q_j) = \frac{1}{2\sigma^2}\|\Omega^{-1}\mu_i - \mu_j\|^2 + C,
+\end{equation}
+where $C = S(\Omega)$ is independent of the belief means and cancels under softmax. Expanding the squared norm:
+\begin{equation}
+s_{ij} = \frac{1}{2\sigma^2}\|\Omega^{-1}\mu_i\|^2 + \frac{1}{2\sigma^2}\|\mu_j\|^2 - \frac{1}{\sigma^2}\mu_i^\top \Omega^{-\top}\mu_j + C.
+\end{equation}
+
+\paragraph{Softmax cancellations.}
+For a fixed query agent $i$, the softmax over keys $j$ is
+\begin{equation}
+\beta_{ij} = \frac{\exp(-s_{ij}/\tau)}{\sum_k \exp(-s_{ik}/\tau)}.
+\end{equation}
+The $i$-terms $\frac{1}{2\sigma^2}\|\Omega^{-1}\mu_i\|^2 + C$ are independent of $j$ and cancel between numerator and denominator of the softmax, yielding
+\begin{equation}
+\beta_{ij} \propto \exp\left(\frac{1}{\tau}\left[\frac{1}{\sigma^2}\mu_i^\top\Omega^{-\top}\mu_j - \frac{1}{2\sigma^2}\|\mu_j\|^2\right]\right).
+\end{equation}
+Thus, the effective logit is
+\begin{equation}
+\tilde{s}_{ij} = \frac{1}{\sigma^2}\mu_i^\top\Omega^{-\top}\mu_j - \frac{1}{2\sigma^2}\|\mu_j\|^2.
+\end{equation}
+
+\paragraph{Key bias cancellation.}
+The second term $-\frac{1}{2\sigma^2}\|\mu_j\|^2$ depends on key $j$ and is a key-dependent bias on the raw embedding norms. This bias involves $\|\mu_j\|^2$ rather than $\|\Omega\mu_j\|^2$ since the Mahalanobis metric \eqref{eq:mahalanobis_identity} already accounts for the gauge transport's effect on norms via the $(\Omega\Omega^\top)^{-1}$ factor in the distance measure. Two well-trodden mechanisms ensure approximate cancellation:
+
+\textbf{(1) High-Dimensional Concentration:}
+For embeddings in $\mathbb{R}^{d_k}$ with approximately independent components of per-component variance $\sigma_0^2$ (e.g., $\mu_j^{(i)} \sim \mathcal{N}(0, \sigma_0^2)$), concentration of measure implies
+\begin{equation}
+\|\mu_j\|^2 = \sum_{i=1}^{d_k} (\mu_j^{(i)})^2 = d_k\sigma_0^2 \pm O(\sigma_0^2\sqrt{d_k}),
+\end{equation}
+with relative fluctuations $O(1/\sqrt{d_k}) \to 0$ as $d_k$ increases.
+
+\textbf{(2) Layer Normalization:}
+Modern transformer architectures enforce constant key-norms explicitly via layer normalisation, which normalises $\|\mu_j\|$ to be constant across tokens. This makes the key bias
+\begin{equation}
+-\frac{1}{2\sigma^2}\|\mu_j\|^2 \approx \text{(constant in } j\text{)},
+\end{equation}
+which cancels under softmax.
+
+\paragraph{Factorization into query-key dot product.}
+The leading term in $\tilde{s}_{ij}$ is
+\begin{equation}
+\frac{1}{\sigma^2}\mu_i^\top \Omega^{-\top} \mu_j.
+\end{equation}
+We identify the product of $W_Q, W_K$ with the gauge transport:
+\begin{equation}
+W_Q W_K^\top = \frac{1}{\sigma^2} \Omega^{-\top} \in \mathrm{GL}(d_k).
+\end{equation}
+Such a factorisation always exists for any invertible $\Omega$: any $M \in \mathrm{GL}(d_k)$ can be written as $M = AB^\top$ for suitable $A, B \in \mathrm{GL}(d_k)$ (e.g., via SVD: $M = U\Lambda V^\top = (U\Lambda^{1/2})(V\Lambda^{1/2})^\top$, where invertibility of $M$ ensures all singular values are positive, so $A$ and $B$ are themselves invertible).
+
+Define query and key vectors as
+\begin{equation}
+Q_i \equiv \mu_i^\top W_Q \in \mathbb{R}^{1\times d_k}, \qquad K_j \equiv \mu_j^\top W_K \in \mathbb{R}^{1\times d_k}.
+\end{equation}
+Then
+\begin{equation}
+Q_i K_j^\top = \mu_i^\top W_Q W_K^\top \mu_j = \frac{1}{\sigma^2}\mu_i^\top \Omega^{-\top} \mu_j.
+\end{equation}
+Thus the logit term reduces to a standard dot product:
+\begin{equation}
+\tilde{s}_{ij} = Q_i K_j^\top + O(1),
+\end{equation}
+where $O(1)$ represents the approximately constant key bias (controlled by layer normalisation).
+
+\paragraph{Temperature scaling.}
+Since $\sigma^{-2}$ is absorbed into the learned projections $W_Q, W_K$, the effective logit $\tilde{s}_{ij} = Q_i K_j^\top$ carries no residual dependence on $\sigma$. The softmax $\beta_{ij} = \mathrm{softmax}_j(\tilde{s}_{ij}/\tau)$ must therefore set $\tau$ to account only for the dimensional scaling of the dot product.
+
+In high-dimensional spaces, dot products $Q_iK_j^\top$ have standard deviation $O(\sqrt{d_k})$ (for unit-variance components), while key-bias fluctuations are $O(1)$ after layer normalisation. Normalising pre-softmax logits to $O(1)$ variance therefore requires
+\begin{equation}
+\tau = \sqrt{d_k}.
+\end{equation}
+
+Combining all simplifications:
+\begin{equation}
+\boxed{\beta_{ij} = \mathrm{softmax}_j\left(\frac{Q_i K_j^\top}{\sqrt{d_k}}\right)},
+\end{equation}
+recovering the standard transformer attention weighting rule, up to the key-norm bias term that cancels under the layer-normalisation or high-dimensional-concentration conditions established above.
+
+\subsubsection{Value Aggregation}
+
+The mixture-of-sources generative model (Section~\ref{sec:mixture_derivation}) specifies that the component distribution for source $j$ in agent $i$'s frame has mean $\Omega_{ij}\mu_j$. The posterior mean under mixture responsibilities $\beta_{ij}$ is therefore
+\begin{equation}
+m_i = \sum_j \beta_{ij}\, \Omega_{ij}\mu_j,
+\label{eq:glk_mixture_aggregation}
+\end{equation}
+which is the standard mixture-of-Gaussians expectation. Defining the value projection
+\begin{equation}
+V_j \equiv W_V^{\top}\mu_j, \qquad W_V \in \mathbb{R}^{d_k \times d_k},
+\end{equation}
+where we absorb the gauge transport $\Omega$ into the learned matrix $W_V$, we obtain
+\begin{equation}
+\boxed{m_i = \sum_j \beta_{ij} V_j},
+\end{equation}
+identical to the standard transformer attention update $z_i = \sum_j \alpha_{ij} V_j$.
+
+\subsubsection{Complete Attention Formula}
+
+Under the assumptions above, the gauge-theoretic message-passing
+\begin{equation}
+\beta_{ij} \propto \exp\left(-\frac{1}{\tau}D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)\right), \quad m_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j
+\end{equation}
+reduces to
+\begin{equation}
+\boxed{\mathrm{Attention}(Q,K,V) = \mathrm{softmax}\left(\frac{QK^\top}{\sqrt{d_k}}\right)V}.
+\end{equation}
+This is the canonical dot-product attention mechanism in transformers.
+
+The limits are deliberately aggressive: they collapse the statistical manifold into a basic Euclidean space and absorb the gauge parameters into the learned matrices. Each limit discards a specific geometric degree of freedom and each can be independently relaxed to produce a generalisation of standard attention. The gauge-theoretic framework provides a taxonomy of design choices, with standard attention as the three-limit simplification and richer architectures (non-isotropic beliefs, learned gauge transport, position-dependent connections) occupying intermediate points. Multi-head attention as a block-diagonal restriction $\bigoplus_a \mathfrak{gl}(d_{\text{head}}) \subset \mathfrak{gl}(K)$, RoPE as a position-dependent gauge subgroup, and feed-forward networks as gated linear units arising from the softmax-gradient nonlinearity are derived in detail in~\cite{Dennis2025trans}.
 
 \subsection{Empirical Validation}
+\label{sec:empirical_validation}
 
 We implemented three architectures of increasing theoretical fidelity to validate different aspects of the framework~\cite{Dennis2025transformer}. The standard baseline uses dot-product attention with learned feed-forward networks. The gauge attention architecture replaces dot-products with KL divergence-based attention while retaining standard feed-forward layers and backpropagation. The full gauge VFE architecture implements complete gauge-theoretic inference using natural gradient descent on statistical manifolds, with no learned weight matrices, no multi-layer perceptrons, and no activation functions - all computation is variational.
 
@@ -3742,13 +4066,200 @@ $$
       \Omega_{ik}q_k(c)
     \big)
   \right]
-  \, 
+  \,
 }
 $$
 
 
 
-\bibliographystyle{unsrt} 
+\section*{Conditional Uniqueness of the Forward KL Divergence via Variational Duality}
+\label{app:conditional_uniqueness}
+
+This appendix is reproduced verbatim from the supplementary treatment of the gauge-theoretic transformer companion paper~\cite{Dennis2025trans}. It establishes that, within a clearly delimited class of $f$-divergences, the forward KL divergence used throughout the main text is the unique divergence consistent with three jointly required properties: closed-form Gibbs-type belief updates, dual interpretation of the attention weights via the envelope theorem, and linear coupling preserving the softmax form.
+
+\paragraph{Intuition.}
+Why must the divergence measuring inter-agent communication cost be the forward KL, and not some other statistical distance? The answer emerges from the interplay of three requirements that any well-behaved multi-agent variational system must satisfy simultaneously. First, we want each agent's updated belief $q_i^*$ to remain a tractable exponential-family distribution (i.e.\ a Gaussian), so that the belief update has a closed-form Boltzmann/Gibbs structure. Second, the attention weights $\beta_{ij}$ should act as proper dual variables: the marginal cost of attending to neighbor $j$ should equal the divergence between the agent's belief and that neighbor's signal, consistent with the envelope theorem. Third, the divergence should be local and enter the free energy linearly in $\beta_{ij}$, preserving the softmax form of attention.
+
+These three conditions, each individually nonrestrictive, are jointly restrictive. Alternative divergences violate at least one of the conditions. For example, the reverse KL introduces $1/q_i$ terms that break exponential-family closure, forcing transcendental equations solvable only via the Lambert $W$ function. The $\chi^2$-divergence produces algebraic (polynomial-ratio) rather than exponential solutions. Symmetric divergences like Jensen--Shannon mix logarithmic and reciprocal terms, destroying log-linearity. Only the forward KL (with generator $f(t) = t\log t - t + 1$ yields $f'(t) = \log t$) produces a stationarity condition that is linear in $\log q_i$, which is the condition for the solution to remain in the exponential family.
+
+Within a broad, but well-defined, class, the forward KL divergence $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ is the only divergence that yields a closed-form Gibbs-type solution for the belief update and a consistent dual interpretation for the attention weights. Agents locally minimize their agent-specific variational free energy and the system of agents minimize their collective global free energies. This local-global coordination gives rise to the expected forward KL attention term.
+
+In what follows we restrict to the ``matched-fiber'' framework, where all agents share the same fiber dimension $K$ and representation $\rho$, so that gauge transport acts within a single vector space. The full generalization follows by applying the appropriate bundle morphisms/intertwiners.
+
+The uniqueness of the term is conditional and follows from three assumptions: (i) $\mathcal{D}$ is local in $c$, of f-divergence form $\displaystyle \int q_i(c)\, f\!\left(\frac{q_i(c)}{\Omega_{ij}(c) q_j(c)}\right) dc$; (ii) the coupling is linear; and (iii) the minimizing belief $q_i^*$ remains in the exponential-family (log-linear).
+
+\subsection*{The Coupled Variational Problem}
+
+Each agent $i$ minimizes a local free-energy functional:
+\begin{equation}
+F_i[\beta_i]
+=\min_{q_i}
+\Big\{
+D_{\mathrm{KL}}(q_i \,\|\, p_i)
++ \sum_{j\neq i} \beta_{ij}\,\mathcal{D}(q_i,q_j)
+\Big\},
+\label{eq:F_i_app}
+\end{equation}
+
+For convenience, we can decompose the KL as
+\begin{equation}
+D_{\mathrm{KL}}(q_i \,\|\, p_i) = \langle H_i \rangle_{q_i} + S(q_i) + \text{const},
+\end{equation}
+where
+\begin{align}
+H_i(c) &:= -\log p_i(c) \quad \text{(local ``energy'')}, \\
+S(q_i) &:= -\int q_i(c) \log q_i(c)\,dc \quad \text{(Shannon entropy)}, \\
+\langle H_i \rangle_{q_i} &:= \int q_i(c) H_i(c)\,dc \quad \text{(expected energy)}.
+\end{align}
+This yields $D_{\mathrm{KL}}(q_i \,\|\, p_i) = \int q_i(c)[\log q_i(c) - \log p_i(c)]\,dc$.
+
+The attention weights $\beta_{ij}\ge 0$ (with $\sum_j \beta_{ij}=1$) are then chosen by optimizing
+\begin{equation}
+\mathcal{J}_i(\beta_i)
+=\sum_{j\neq i}\beta_{ij} C_{ij}
++ \tau \sum_{j\neq i}\beta_{ij}\log\beta_{ij},
+\label{eq:J_i_app}
+\end{equation}
+where $C_{ij}$ denotes the marginal cost of attending to agent $j$ as discussed above. Later we will identify this as
+\begin{equation}
+C_{ij} := \frac{\partial F_i}{\partial \beta_{ij}},
+\end{equation}
+such that attention weights allocate in proportion to marginal coordination penalties.
+
+\subsection*{The Forward KL and the Geometric-Mean Solution}
+
+Let $\mathcal{D}(q_i,q_j) = D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$, where
+\[
+\frac{\delta D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)}{\delta q_i(c)}
+= \log\frac{q_i(c)}{\Omega_{ij}(c) q_j(c)} + 1.
+\]
+
+The stationarity condition for \eqref{eq:F_i_app} is
+\begin{equation}
+H_i(c)
++ \log q_i(c)
++ \sum_j \beta_{ij}
+\!\left[
+\log\frac{q_i(c)}{\Omega_{ij}(c)q_j(c)}+1
+\right]
+= \lambda_i,
+\end{equation}
+with $\lambda_i$ enforcing normalization. Solving for $q_i(c)$ then yields a Boltzmann distribution whose mean field is the geometric average of the transported neighbour beliefs:
+\begin{equation}
+q_i^*(c)
+= \frac{1}{Z_i}
+e^{-H_i(c)/2}
+\prod_j
+[\Omega_{ij}(c) q_j(c)]^{\beta_{ij}/2}.
+\label{eq:q_i_star_app}
+\end{equation}
+This structure is preserved only for the forward KL divergence; alternative divergences destroy the log-linearity of the exponent as previously discussed.
+
+\subsection*{Dual Relation via the Envelope Theorem}
+
+At the stationary value $q_i^*$, the envelope theorem implies
+\begin{equation}
+\frac{\partial F_i}{\partial \beta_{ij}}
+= \mathcal{D}(q_i^*, q_j)
+= D_{\mathrm{KL}}(q_i^* \,\|\, \Omega_{ij} q_j),
+\label{eq:envelope_app}
+\end{equation}
+such that the cost of increasing attention to $j$ equals the forward KL divergence between the updated belief $q_i^*$ and the transported neighbour $\Omega_{ij} q_j$. This identifies the attention cost with the KL.
+
+\subsection*{Conditional Uniqueness Theorem}
+\label{thm:uniqueness_app}
+
+\textbf{Theorem.} \textit{Let\/ $\mathcal{D}(q,p)$ be a convex $f$-divergence of the form
+\[
+\mathcal{D}(q,p)
+= \int p(c)\,f\!\!\left(\frac{q(c)}{p(c)}\right)dc,
+\]
+with $f$ convex, $f(1)=0$, and, without loss of generality\footnote{Any $f$-divergence is invariant under $f(t)\mapsto f(t)+c(t-1)$ when $q$ and $p$ are normalized, so we may always choose the representative with $f'(1)=0$.}, $f'(1)=0$. Suppose $\mathcal{D}$ is linear inside the free energy \eqref{eq:F_i_app} and that the attention weights satisfy $\sum_j\beta_{ij}=1$. Then the stationary solution $q_i^*$ assumes the geometric-mean Boltzmann form}
+\begin{equation}
+q_i^*(c) \;\propto\; p_i(c)^{1/2}\,\prod_{j}\bigl[\Omega_{ij}(c)\,q_j(c)\bigr]^{\beta_{ij}/2}
+\label{eq:geometric_mean_target_app}
+\end{equation}
+\textit{for all choices of prior $p_i$ and neighbour beliefs $\{q_j\}$, if, and only if, $\mathcal{D}$ is the forward Kullback--Leibler divergence (up to the affine equivalence above):}
+\[
+\mathcal{D}(q,p) = D_{\mathrm{KL}}(q\,\|\,p).
+\]
+
+\paragraph{Proof.}
+
+\textbf{Step 1. The variational derivative of a general $f$-divergence.}
+
+With $\mathcal{D}(q_i,\Omega_{ij}q_j)=\int (\Omega_{ij}q_j)\,f\!\bigl(q_i/(\Omega_{ij}q_j)\bigr)\,dc$ and ratio $r(c)=q_i(c)/\bigl[\Omega_{ij}(c)\,q_j(c)\bigr]$, the functional derivative is
+\begin{equation}
+\frac{\delta\mathcal{D}}{\delta q_i(c)} = f'(r(c)).
+\end{equation}
+The stationarity condition $\delta F_i/\delta q_i(c)=\lambda$ (with Lagrange multiplier $\lambda$) is then
+\begin{equation}
+\log\frac{q_i(c)}{p_i(c)} + 1
++ \sum_j \beta_{ij}\,f'\!\!\left(\frac{q_i(c)}{\Omega_{ij}(c)\,q_j(c)}\right) = \lambda.
+\label{eq:general_stationarity_app}
+\end{equation}
+
+\textbf{Step 2. Forward implication ($D_{\mathrm{KL}}\Rightarrow$ geometric mean).}
+
+For $\mathcal{D}=D_{\mathrm{KL}}$, the generator is $f(t)=t\log t - t + 1$, yielding $f'(t)=\log t$. Substituting into \eqref{eq:general_stationarity_app}:
+\[
+\log q_i - \log p_i + 1 + \sum_j \beta_{ij}\bigl(\log q_i - \log\Omega_{ij}q_j\bigr) = \lambda.
+\]
+Since $\sum_j\beta_{ij}=1$, the $\log q_i$ terms become $2\log q_i$:
+\[
+2\log q_i = \log p_i + \sum_j\beta_{ij}\log(\Omega_{ij}q_j) + (\lambda - 1).
+\]
+Exponentiating gives the geometric-mean form \eqref{eq:geometric_mean_target_app}.
+
+\textbf{Step 3. Reverse implication (geometric mean $\Rightarrow D_{\mathrm{KL}}$).}
+
+Assume the minimizer has the geometric mean form \eqref{eq:geometric_mean_target_app} for all priors $p_i$ and neighbour beliefs $\{q_j\}$. Taking logarithms yields
+\begin{equation}
+2\log q_i^*(c) = \log p_i(c) + \sum_j\beta_{ij}\log\bigl(\Omega_{ij}(c)\,q_j(c)\bigr) + C.
+\label{eq:log_target_app}
+\end{equation}
+Rearranging and using $\sum_j\beta_{ij}=1$:
+\begin{equation}
+\log\frac{q_i^*}{p_i} + \sum_j\beta_{ij}\log\frac{q_i^*}{\Omega_{ij}q_j} = C'.
+\label{eq:rearranged_target_app}
+\end{equation}
+Comparing \eqref{eq:rearranged_target_app} with the general stationarity condition \eqref{eq:general_stationarity_app} term-by-term, we then require
+\begin{equation}
+f'\!\!\left(\frac{q_i}{\Omega_{ij}q_j}\right) = \log\frac{q_i}{\Omega_{ij}q_j} + k
+\label{eq:ode_app}
+\end{equation}
+for some constant $k$, and for all values of the ratio $t = q_i(c)/[\Omega_{ij}(c)\,q_j(c)]$. Since the geometric-mean form holds for all choices of $p_i$ and $\{q_j\}$, the ratio $t$ ranges over all of $\mathbb{R}^+$, therefore \eqref{eq:ode_app} must hold globally: $f'(t)=\log t + k$ for all $t>0$. Integrating:
+\[
+f(t) = t\log t - t + kt + C_0.
+\]
+Imposing $f'(1)=0$ gives $k=0$; imposing $f(1)=0$ gives $C_0 = 1$. Therefore
+\[
+f(t) = t\log t - t + 1,
+\]
+which is the generator of $D_{\mathrm{KL}}(q\,\|\,p)$. \hfill $\square$
+
+\subsection*{Dual Cost Identification}
+Having established $D_{\mathrm{KL}}$ is the unique divergence, the envelope theorem applied to the $\beta_{ij}$ optimization confirms that the marginal attention cost is
+\begin{equation}
+C_{ij} \;\equiv\; \frac{\partial F_i}{\partial\beta_{ij}}\bigg|_{q_i^*}
+= D_{\mathrm{KL}}(q_i^*\,\|\,\Omega_{ij}q_j),
+\end{equation}
+identifying the cost of attention with the information divergence between the agent's updated belief and the neighbour's transported signal.
+
+\subsection*{Interpretations}
+From the perspective of gauge invariance, the comparison is made between $q_i$ and the transported $\Omega_{ij}q_j$ within the same frame (and similarly for $j \rightarrow i$); gauge covariance fixes \emph{what} is compared, while variational duality fixes \emph{how} it is compared. From the perspective of duality, the forward KL is the only divergence that simultaneously yields a closed-form Boltzmann solution for $q_i$ and a consistent dual cost $C_{ij} = \partial F_i/\partial\beta_{ij}$. From the perspective of information geometry, the forward KL is the Bregman divergence generated by the negative entropy potential, whose Hessian induces the Fisher--Rao metric and yields the mixed/exponential family-projection Pythagorean theorem. These global properties are not shared by generic $f$-divergences.
+
+\subsection*{Summary}
+Under the natural assumptions of locality, linear coupling, and exponential-family closure, the forward KL divergence
+\[
+\boxed{
+C_{ij}=D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)}
+\]
+is a necessary consequence of the variational and geometric structure underlying agent-agent coordination. By the $\mathrm{GL}(K)$ invariance theorem (Theorem~\ref{thm:glk_invariance}), the KL divergence is invariant under the full general linear group $\mathrm{GL}(K)$, which includes compact subgroups such as $\mathrm{SO}(N)$ and $\mathrm{SU}(N)$ and more.
+
+
+
+\bibliographystyle{unsrt}
 \bibliography{references}
 
 \end{document}
