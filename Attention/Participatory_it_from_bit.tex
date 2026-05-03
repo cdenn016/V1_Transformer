@@ -83,7 +83,7 @@ More recently, the ER=EPR conjecture~\cite{MaldacenaSusskind2013} and tensor net
 
 \subsection{The Unspoken Tension}
 
-Due to these discoveries and realizations there exists an implicit, unspoken tension in our contemporary understanding of reality. Neuroscientists and philosophers, following Kant and Helmholtz through to Friston, argue that reality is a perceptual construction.  It can be viewed as a "controlled hallucination" that humans have evolved to share in order to maximize species survival~\cite{Clark2016,Hoffman2019}. Each observation we make, whether of a particle detector or a loved one, is manifestly a statistical approximation of an inaccessible underlying noumenal reality. Despite this, there exists predictable and repeatable patterns we form consensus about.
+Due to these discoveries and realisations there exists an implicit, unspoken tension in our contemporary understanding of reality. Neuroscientists and philosophers, following Kant and Helmholtz through to Friston, argue that reality is a perceptual construction. The weaker version of this claim is the predictive-processing view of perception as a ``controlled hallucination'' that nevertheless approximately tracks action-relevant external structure~\cite{Clark2016,Seth2021}. The stronger version, Hoffman's Interface Theory of Perception~\cite{Hoffman2019}, argues that evolved perception is selected for fitness rather than veridicality and need bear no faithful relation to the noumenal substrate at all. The framework developed below is closer to the stronger reading: different agents pull back different geometries from the same noumenal substrate, with no agent-independent ``correct'' geometry. Despite this, predictable and repeatable patterns emerge about which agents form consensus.
 
 Physicists, meanwhile, have long argued and hoped to find a physical explanation for consciousness, perception, and life, with limited success. The hard problem of consciousness~\cite{Chalmers1995} remains intractable when approached from a purely physical substrate. Attempts to derive experience from neuronal dynamics, quantum coherence in microtubules~\cite{HameroffPenrose1996}, or integrated information~\cite{Tononi2008} have not resolved the explanatory gap between objective description and subjective experience.
 
@@ -130,7 +130,7 @@ The reader should hold the claims that follow to a clearly delimited scope. The 
 
 \textbf{No quantum extension.} A rigorous quantum version of the framework does not currently exist; the structural parallels with QBism and other relational interpretations are suggestive rather than derived.
 
-\textbf{Conceptual reframing, not derivation.} The discussion of consciousness (Section~\ref{sec:consciousness_section}) and the connection to Lahav and Neemeh (Section~\ref{sec:lahav_convergence}) propose a dissolution of the hard problem rather than a solution. The framework provides mathematical vocabulary for treating phenomenal experience as gauge-frame-dependent, but it does not explain why gauge frames have phenomenal character at all. We have formalized the structure of experience without explaining felt quality.
+\textbf{Conceptual reframing, not derivation.} The discussion of consciousness (Section~\ref{sec:consciousness_section}) and the connection to Lahav and Neemeh (Section~\ref{sec:lahav_convergence}) propose a relocation of the hard problem rather than a solution or a dissolution. The framework provides mathematical vocabulary for treating phenomenal experience as gauge-frame-dependent, but it does not explain why gauge frames have phenomenal character at all. We have formalised the structure of experience without explaining felt quality. Where earlier drafts described this as ``dissolving'' the hard problem, the more accurate description is that the question is moved from ``why does neural computation have felt character?'' to ``why does information-geometric structure have felt character?'' --- the explanandum is shifted, not eliminated.
 
 \textbf{Validated predictions.} Transformer attention patterns (validated), hierarchical information processing in neural systems (testable), linguistic coordination mechanisms (explorable), and metric decomposition signatures (speculative).
 
@@ -812,6 +812,7 @@ The complete variational free energy at a single point $c \in \mathcal{C}$ is ob
 where $\beta^*_{ij}(c)$ and $\gamma^*_{ij}(c)$ are the optimal softmax attention weights from~\eqref{eq:softmax_attention_general}, and the alignment terms emerge directly from the mixture-of-sources derivation with no ad hoc construction. The forward KL divergence $D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ is the unique $f$-divergence that preserves exponential-family closure under this linear coupling structure and yields a consistent dual interpretation for the attention weights (see Appendix for proof of conditional uniqueness).
 
 \subsection{The Complete Free Energy Functional}
+\label{sec:complete_free_energy}
 
 Extending to continuous fields over the base manifold $\mathcal{C}$ and including spatial support functions $\chi_i(c)$ indicating where agent $i$ maintains beliefs, we obtain:
 
@@ -1437,15 +1438,15 @@ If one bit is the minimum distinguishable information update, then $\Delta \tau_
 
 Could this arise from a minimum information update in physical systems? If physical dynamics are at root information-processing, then $t_P \sim \hbar/E_P \sim \text{(action quantum)}/\text{(energy quantum)} \sim 1 \text{ bit}/\text{(max info rate)}$. This is highly speculative and requires substantial development to make rigorous. But it suggests an avenue for connecting our information-geometric framework to quantum gravity, where the Planck scale emerges from fundamental limits on information processing rather than being imposed as external parameter.
 
-\subsubsection{Proper Time Along Belief Trajectories}
+\subsubsection{Fisher Arc Length Along Belief Trajectories}
 
-An agent following a belief trajectory $q(\tau)$ through the statistical manifold experiences proper time
+An agent following a belief trajectory $q(\tau)$ through the statistical manifold accumulates the Fisher-Rao arc length
 
 \begin{equation}
 \Delta \tau = \int_{\tau_1}^{\tau_2} \sqrt{g_{\mathcal{B}}(\dot{q}, \dot{q})} \, d\tau
 \end{equation}
 
-where $g_{\mathcal{B}}$ is the Fisher-Rao metric. This is the "information distance" traveled along the trajectory. Different agents with different trajectories experience different proper times suggesting information-theoretic time dilation analogous to relativistic time dilation but arising from information geometry rather than spacetime curvature.
+where $g_{\mathcal{B}}$ is the Fisher-Rao metric. This is the ``information distance'' traversed along the trajectory and is a positive-definite Riemannian length. Different agents following different trajectories accumulate different Fisher arc lengths, which we use as an internal information-geometric clock. We do not identify this quantity with relativistic proper time: as discussed in detail in Section~\ref{sec:fisher_arc_length}, Fisher arc length and special-relativistic proper time have opposite character (positive-definite Riemannian versus indefinite Lorentzian) and run in opposite directions with motion. The connection to physical time dilation, if there is one, requires the indefinite-metric extension of Section~\ref{sec:signature_resolution} and is not established here.
 
 The formalism thus provides a natural notion of observer-dependent time arising from information geometry, consistent with relational and emergent approaches to time in quantum gravity and foundations of physics. Time is not absolute background but rather emerges from the accumulated information updates each agent performs. This perspective, while speculative in its connection to physical time, provides rigorous mathematical structure for exploring how temporal flow might emerge from more fundamental information-theoretic dynamics.\subsection{Natural Gradient Dynamics on Statistical Manifolds}
 
@@ -1526,7 +1527,7 @@ The prior pullback $G_i^{(p)}$ encodes ontological geometry. It reflects the str
 
 We conjecture that the prior-induced metric $G_i^{(p)}$ represents the agent's perceived geometry of reality. What the agent experiences as "spatial distance" or "spatial structure" is the information-geometric distance in its prior $p_i$ (and, indirectly, in the slower-timescale generative model $s_i$ that shapes $p_i$). This has a profound implication: different agents with different priors perceive different geometries on the same underlying noumenal base $\mathcal{C}$. There is no "true" metric on $\mathcal{C}$ independent of agents, only agent-dependent induced metrics arising from their information processing.
 
-This perspective aligns with Kant's phenomenal/noumenal distinction, where space is a form of intuition rather than a property of things-in-themselves. It resonates with Wheeler's observer-participatory universe, where reality cannot be separated from the act of observation. Modern cognitive science's "controlled hallucination" view of perception~\cite{Clark2016,Hoffman2019} provides empirical support in that what we perceive as external space may indeed be an internal construction optimized for prediction and action.
+This perspective aligns with Kant's phenomenal/noumenal distinction, where space is a form of intuition rather than a property of things-in-themselves. It resonates with Wheeler's observer-participatory universe, where reality cannot be separated from the act of observation. The stronger reading also resonates with Hoffman's Interface Theory of Perception~\cite{Hoffman2019}, in which perceived space is an evolved interface optimised for fitness rather than a faithful depiction of any agent-independent geometry. The weaker predictive-processing reading~\cite{Clark2016,Seth2021} is also compatible with the construction below, but the framework's pullback structure --- different agents inducing different metrics on the same noumenal substrate --- is naturally closer to the stronger Interface-Theory reading.
 
 \subsubsection{Example: Gaussian Agents on $\mathbb{R}^2$}
 
@@ -1907,7 +1908,7 @@ The fully self-contained framework consists of agents at all scales (particles, 
 
 Several consequences follow. The observer/observed distinction is conventional rather than fundamental; all agents are ontologically equal, differing only in their states, couplings, and hierarchical positions. A photon observing a human is the same type of process as a human observing a photon, merely viewed from different agent perspectives. Physical reality becomes the dynamical network of agents with nodes representing states and edges representing coupling strengths. The network structure, with its patterns of strong and weak coupling, might constitute the emergent spacetime structure. There is no pre-existing spacetime manifold; what we perceive as space and time emerges from information-geometric relationships among agents. As this is determined by the $\beta_{ij}, \gamma_{ij}$ attention couplings then attention really might just be "all you need".
 
-Time becomes plural. There is no single universal time coordinate but rather individual proper times $\tau_i$ measuring information distance traveled by each agent. Coupling timescales characterize alignment dynamics between pairs. Consensus time emerges from network synchronization when large clusters achieve coherent dynamics. Special relativity's proper time and time dilation find natural interpretations in this framework, though we have not derived the specific Lorentz transformation structure.
+Time becomes plural. There is no single universal time coordinate but rather individual Fisher arc lengths $\tau_i$ measuring information distance traversed by each agent. Coupling timescales characterise alignment dynamics between pairs. Consensus time emerges from network synchronisation when large clusters achieve coherent dynamics. We do not claim that special-relativistic proper time and time dilation find natural interpretations in this framework: Fisher arc length is Riemannian and positive-definite, whereas relativistic proper time is Lorentzian and the two run in opposite directions with motion (see Section~\ref{sec:fisher_arc_length}). Whether any quantity here reproduces relativistic proper time requires the indefinite-metric extension of Section~\ref{sec:signature_resolution} and remains open.
 
 What does not exist in this ontology are external observations from reality outside the agent network, privileged observer versus observed distinction with fundamental ontological status, measurement apparatus outside the agent system, or pre-existing physical laws independent of agent dynamics. What emerges instead are observations as high-coupling events where $\beta_{ij}$ becomes large, physical laws as consensus priors at meta-agent scales, spacetime structure from network topology plus fiber geometry, and reality itself as collective belief alignment across coupled agents.
 
@@ -2195,40 +2196,36 @@ The distance-to-target comparison (Figure~2, bottom) quantifies this qualitative
 
 This comparison highlights why the Fisher metric as mass matters for understanding belief dynamics. The standard Free Energy Principle literature employs overdamped approximations that discard all inertial terms, effectively assuming infinite friction. While this simplification is mathematically convenient, it eliminates rich dynamical phenomena including resonances, ringing behavior, and momentum-driven exploration that may be relevant for understanding neural dynamics, decision-making under uncertainty, and the temporal structure of inference. The full second-order theory presented here captures these inertial effects as fundamental consequences of the information geometry.
 
-\subsection{Proper Time Dilation from Information Geometry}
+\subsection{Fisher Arc Length Along Belief Trajectories}
+\label{sec:fisher_arc_length}
 
-The Fisher-Rao metric tensor $M = \Sigma_p^{-1}$ not only determines inertial dynamics but also defines a natural notion of proper time along belief trajectories. Just as proper time in general relativity measures the arc length along world-lines in spacetime, we define proper time in belief space via the differential
-
+The Fisher-Rao metric tensor $\Sigma_p^{-1}$ defines a Riemannian length on belief space. For a trajectory $\mu(t)$ in $\mathbb{R}^K$, the accumulated Fisher arc length is
 \begin{equation}
-d\tau = \sqrt{d\mu^T \Sigma_p^{-1} d\mu},
+\tau = \int \sqrt{d\mu^T \Sigma_p^{-1} d\mu},
+\label{eq:fisher_arc_length}
 \end{equation}
-
-which accumulates the Fisher-Rao distance traversed by an agent's beliefs. This geometric quantity is coordinate-independent and represents the "internal clock" experienced by the agent as it evolves through belief space.
-
+which is coordinate-independent on the statistical manifold and depends only on the path through belief space, not on its parameterisation by external time $t$. We deliberately do not call $\tau$ a ``proper time'' in the special-relativistic sense, for reasons made explicit below.
 
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=\textwidth]{Fig_3.png}
-\caption{\textbf{Proper time dilation from Fisher-Rao metric geometry.} 
-Four agents with identical dynamics but different prior covariances $\Sigma_p = \sigma^2 \mathbb{I}$ ($\sigma^2 = 0.5, 2.0, 8.0, 32.0$) accumulate different proper times $\tau = \int \sqrt{d\mu^T \Sigma_p^{-1} d\mu}$ along their trajectories in $K=13$ dimensional belief space.
-\textbf{(A)} Proper time versus coordinate time. All trajectories lie above the light cone diagonal ($\tau = t$, dashed gray), indicating that oscillatory dynamics cause proper time to advance faster than coordinate time. heavier agents (red) accumulate substantially more proper time than lighter agents (blue): $\tau_{\text{heavy}}/\tau_{\text{light}} \approx 1.5$ after 30 time units, constituting a genuine relativistic time dilation effect from information geometry.
-\textbf{(B)} Time dilation factor versus mass scale on logarithmic axes shows monotonic power-law increase: agents with 64× larger prior variance experience 50\% more subjective proper time over the same coordinate time interval.
+\caption{\textbf{Fisher arc length accumulated along oscillatory belief trajectories.}
+Four agents with identical dynamics but different prior covariances $\Sigma_p = \sigma^2 \mathbb{I}$ ($\sigma^2 = 0.5, 2.0, 8.0, 32.0$) accumulate different Fisher arc lengths $\tau = \int \sqrt{d\mu^T \Sigma_p^{-1} d\mu}$ along their trajectories in $K=13$ dimensional belief space.
+\textbf{(A)} Fisher arc length $\tau$ versus external time $t$. All trajectories satisfy $\tau \geq t$ (above the diagonal), as is required of any positive-definite Riemannian length on a non-trivial path. Heavier agents (red, large $\sigma^2$) accumulate more Fisher arc length than lighter agents (blue), with $\tau_{\text{heavy}}/\tau_{\text{light}} \approx 1.5$ after 30 external time units.
+\textbf{(B)} Fisher length ratio $\tau/\tau_{\text{light}}$ versus mass scale on logarithmic axes shows monotonic power-law increase: agents with $64\times$ larger prior variance accumulate $\sim 50\%$ more Fisher arc length over the same external time interval.
 \textbf{(C)} Belief trajectories showing distance to target $\|\mu(t) - \mu^*\|$ on logarithmic scale. Heavier agents exhibit larger-amplitude oscillations due to reduced restoring forces $M\ddot{\mu} = -\nabla V$, traversing longer paths in belief space.
-\textbf{(D)} Proper velocity $d\tau/dt$ oscillates with mass-dependent amplitude. Heavy agents (red) show large proper velocity swings ($0.5$ to $2.2$) while light agents (blue) show smaller variations ($0.2$ to $1.5$), reflecting their different oscillation dynamics.
-\textbf{(E)} Accumulated coordinate distance $\int \|d\mu\|$ reveals the mechanism: heavier agents traverse $\sim 7\times$ longer paths in coordinate space (350 vs 50 units), more than compensating for their reduced metric weighting $\Sigma_p^{-1}$ and resulting in net proper time dilation.}
+\textbf{(D)} Fisher rate $d\tau/dt$ oscillates with mass-dependent amplitude. Heavy agents (red) show large swings ($0.5$ to $2.2$) while light agents (blue) show smaller variations ($0.2$ to $1.5$), reflecting their different oscillation dynamics.
+\textbf{(E)} Accumulated coordinate distance $\int \|d\mu\|$ reveals the mechanism: heavier agents traverse $\sim 7\times$ longer paths in coordinate space (350 vs 50 units), more than compensating for their reduced metric weighting $\Sigma_p^{-1}$ and resulting in net Fisher arc-length excess.}
 \label{fig:proper_time}
 \end{figure}
 
+\textbf{Mass-dependent Fisher length (Panels A--B).} We evolved four agents with identical initial conditions and target $\mu^*$ but different prior covariances $\Sigma_p = \sigma^2 \mathbb{I}$ with scales $\sigma^2 = 0.5, 2.0, 8.0, 32.0$ (labeled Very Light through Very Heavy). Panel A shows the accumulated Fisher arc length $\tau(t)$ versus external time $t$. All trajectories satisfy $\tau \geq t$ and accumulate above the diagonal, which is the generic behaviour of any Riemannian arc length along a non-trivial trajectory: arc length on a positive-definite manifold can never be less than the rectified path length. Heavier agents accumulate more Fisher arc length than lighter agents over the same external time interval: after $t=30$, the Very Heavy agent has accumulated $\tau \approx 62$ while the Very Light agent has accumulated only $\tau \approx 42$. Panel B quantifies this dependence: the Fisher length ratio $\tau/\tau_{\text{light}}$ increases monotonically from 1.0 to approximately 1.5 over a factor of 64 in $\sigma^2$, following an approximate power law.
 
-\textbf{Mass-dependent time dilation (Panels A--B).} We evolved four agents with identical initial conditions and target $\mu^*$ but different prior covariances $\Sigma_p = \sigma^2 \mathbb{I}$ with scales $\sigma^2 = 0.5, 2.0, 8.0, 32.0$ (labeled Very Light through Very Heavy). Panel A shows the accumulated proper time $\tau(t)$ versus coordinate time $t$. Remarkably, all trajectories lie above the light cone diagonal $\tau = t$, indicating that proper time advances faster than coordinate time due to the oscillatory dynamics in belief space. More strikingly, heavier agents accumulate significantly more proper time than lighter agents over the same coordinate time interval: after $t=30$ time units, the Very Heavy agent has experienced $\tau \approx 62$ while the Very Light agent has experienced only $\tau \approx 42$.
+\textbf{Mechanism (Panels C, E).} The Fisher length excess arises from the interplay between oscillation amplitude and metric structure. Heavier agents exhibit larger-amplitude oscillations in belief space because of reduced restoring forces $M\ddot{\mu} = -\nabla V$ (Panel C). Although the Fisher-Rao metric weights each infinitesimal displacement $d\mu$ by the precision $\Sigma_p^{-1}$ (making individual steps ``count less'' for heavy agents whose $\Sigma_p^{-1}$ is small), the heavier agents traverse much longer coordinate paths, and the integrated coordinate distance dominates. Panel E confirms this: the accumulated coordinate distance $\int \|d\mu\|$ is dramatically larger for heavier agents (350 units for Very Heavy versus 50 units for Very Light), more than compensating for the reduced metric weighting.
 
-Panel B quantifies this time dilation effect by plotting the proper time ratio $\tau/\tau_{\text{light}}$ versus mass scale $\Sigma_p$ on logarithmic axes. The ratio increases monotonically from 1.0 to approximately 1.5 over a factor of 64 in mass, following a power-law relationship. This constitutes a genuine relativistic effect emerging purely from the information geometry: agents with different statistical precision (mass) experience different proper times along their trajectories, even when evolving under identical potentials and coordinate time durations.
+\textbf{Relation to relativistic proper time --- explicit disclaimer.} The notation $\tau$ and the suggestive title of this subsection invite a comparison to special-relativistic proper time, but we caution against the comparison without qualification. The Fisher arc length~\eqref{eq:fisher_arc_length} is a positive-definite Riemannian length: it satisfies $\tau \geq t$ for any non-trivial trajectory, and it grows with motion. Special-relativistic proper time, by contrast, is defined by the indefinite Lorentzian line element $d\tau^2 = dt^2 - dx^2/c^2$, which gives $\tau \leq t$ with equality only at rest in the chosen frame: an accelerated or moving clock accumulates \emph{less} proper time, not more. Furthermore, in general relativity an observer in a deeper gravitational well (the closest analogue to a ``heavier'' configuration) experiences \emph{slower} proper time relative to a distant observer, again the opposite of what Fig.~\ref{fig:proper_time} shows for ``heavy'' agents in this framework. The two quantities therefore have opposite character: Fisher arc length is a Riemannian invariant, special-relativistic proper time is a Lorentzian invariant, and their qualitative dependences on motion and on ``heaviness'' run in opposite directions.
 
-\textbf{Physical mechanism.} The proper time dilation arises from the interplay between oscillation amplitude and metric structure. Panel C shows that heavier agents exhibit larger-amplitude oscillations in belief space. They overshoot the target more dramatically due to reduced restoring forces $M\ddot{\mu} = -\nabla V$. Although the Fisher-Rao metric weights each infinitesimal displacement $d\mu$ by the precision $\Sigma_p^{-1}$ (making individual steps "count less" for heavy agents), the heavier agents traverse much longer coordinate paths, ultimately accumulating more proper time. Panel E confirms this: the accumulated coordinate distance $\int \|d\mu\|$ is dramatically larger for heavier agents (350 units for Very Heavy versus 50 units for Very Light), more than compensating for the reduced metric weighting.
-
-\textbf{Proper velocity oscillations (Panel D).} The proper velocity $d\tau/dt$ exhibits rich oscillatory structure. For the Very Light agent (blue), proper velocity oscillates between $\sim 0.2$ and $\sim 1.5$, reflecting the rapid, small-amplitude oscillations in belief space. The Very Heavy agent (red) shows larger-amplitude proper velocity oscillations between $\sim 0.5$ and $\sim 2.2$, corresponding to its slow, large-amplitude sweeps through belief space. The proper velocity never drops to zero because even at turning points where $\dot{\mu} = 0$ in coordinate velocity, the system is still traversing the statistical manifold.
-
-This proper time dilation effect is a genuine geometric property of inference on statistical manifolds, not merely an analogy to relativistic time dilation. Within the framework's ontology, where information is primal and physical quantities are emergent labels (Section~\ref{sec:phenomenological_interpretation}), this \emph{is} time dilation---the Fisher-Rao arc length accumulated along belief trajectories constitutes the agent's experienced duration. Agents with different epistemic precision (prior variances) experience different subjective time flows while interacting in the same environment. A high-precision agent (small $\Sigma_p$, light mass) experiences time more slowly, completing many rapid belief updates in the time a low-precision agent (large $\Sigma_p$, heavy mass) completes a single ponderous swing through belief space. Whether this information-geometric time dilation corresponds quantitatively to the relativistic time dilation measured by physical clocks remains an open question that depends on the GL$(K, \mathbb{C})$ extension (Section~\ref{sec:signature_resolution}) and the emergence of Lorentzian structure. What we demonstrate here is that time dilation is a necessary consequence of information geometry, not a uniquely relativistic phenomenon---it arises whenever agents with different statistical structures traverse the same variational landscape.
+What this section demonstrates, then, is the more modest claim that Fisher-Rao length along belief trajectories is a coordinate-independent geometric quantity that depends in a non-trivial way on the prior precision (``mass'') of the agent. Whether any quantity in this framework reproduces special-relativistic proper time in sign and structure is an open question that depends on extending the gauge group from compact $\mathrm{SO}(3)$ to $\mathrm{GL}(K, \mathbb{C})$ (Section~\ref{sec:signature_resolution}) so that the underlying metric becomes indefinite; the worked example in 2D shows the indefinite-metric mechanism but does not derive a Lorentzian time-dilation formula. We do not claim Fig.~\ref{fig:proper_time} is a relativistic effect; we claim it is a Riemannian geometric effect on the statistical manifold whose superficial similarity to time dilation should not be over-read.
 
 
 
@@ -2720,31 +2717,7 @@ John Wheeler proposed that physics might ultimately rest on information-theoreti
 
 In tandem Wheeler's "participatory universe" holds that observers constitute reality rather than merely measuring a pre-existing world. In our framework, spacetime structure is not ontologically prior to agents but emerges from their consensus. The coupling terms in the variational functional drive agents toward aligned beliefs; the geometry they collectively experience is this alignment made manifest.
 
-Finally, "law without law" suggests that physical regularities emerge from deeper principles rather than being axiomatic. Here, the laws of mechanics emerge from variational free energy minimization on a principal bundle. No dynamical laws are assumed; they arise from the geometry of inference. Furthermore, gauge invariance of physical law is manifestly a consequence of agent-agent alignment and consensus.  Any agents which agree on reality must be gauge equivalent.  Our theory produces this as a consequence, rather than an assumption.
-
-
-\subsection{A Falsifiable Prediction}
-
-\subsubsection{Mass Deficit in Quantum Superpositions}
-
-A particle in a spatial superposition $|\psi\rangle = \frac{1}{\sqrt{2}}(|x_1\rangle + |x_2\rangle)$ has an uncertain position with variance $\sigma^2 \sim (x_2-x_1)^2/4$. Standard quantum mechanics assigns a fixed rest mass $m_0$ independent of the state. Our framework predicts the effective inertial mass depends on localization precision by observers
-
-\begin{equation}
-M_{\text{superposition}} = \frac{1}{\sigma^2} \ll M_{\text{localized}} = \frac{1}{\sigma_0^2}
-\end{equation}
-
-where $\sigma_0 \to 0$ for a collapsed state.
-
-If our framework is extensible to quantum phenomena (which we have not shown) we can test these ideas by preparing a massive particle (such as fullerene C$_{60}$) in a spatial superposition with separation $\Delta x \sim 100$ nm using near-field interferometry \cite{Arndt2014}. We may measure the effective mass through gravitational coupling if mass sources curvature. The superposed state should exhibit reduced gravitational self-energy compared to the localized states, i.e.  
-$E_g^{\text{super}} < E_g^{\text{local}}$. This could be detected via precision interferometry measuring the phase shift $\phi \propto M \cdot g$ in a gravitational field.
-
-Alternatively the dynamical phase accumulated in an interferometer depends on kinetic energy $\phi_{\text{dyn}} \propto M v^2 t/\hbar$. Reduced mass in superposition should produce measurable phase shifts.
-
-\textbf{Critical distinction from Penrose-Diósi:} Their gravitational decoherence predicts massive superpositions are \emph{unstable} and collapse faster. Our framework predicts they have \emph{reduced mass} and should be more stable (lower inertia resists environmental perturbations). 
-
-Current levitated optomechanics experiments with nanoparticles approach the required sensitivity \cite{Bateman2014, Millen2020}. A null result (no mass deficit in superposition) would falsify the central claim that $M = \mathrm{tr}(\Sigma_p^{-1})$.
-
-
+Finally, "law without law" suggests that physical regularities emerge from deeper principles rather than being axiomatic. Here, the laws of mechanics emerge from variational free energy minimization on a principal bundle. No dynamical laws are assumed; they arise from the geometry of inference. Furthermore, gauge invariance of physical law is manifestly a consequence of agent-agent alignment and consensus. Any agents which agree on reality must be gauge equivalent.  Our theory produces this as a consequence, rather than an assumption.
 
 
 \subsection{Implications of Gauge-VFE Transformer}
@@ -2845,7 +2818,7 @@ Suppose human cognitive architecture underwent evolutionary change, perhaps thro
 
 What we currently perceive as gauge-invariant, Lorentz-invariant physics might give way to alternative phenomenologies with different symmetries, different causal structures, different conservation laws. The "laws of physics" would change not because the noumenal substrate $\mathcal{C}$ changed but because human information processing architecture changed, inducing different geometric and causal structure through the pullback mechanism.
 
-This scenario connects to the "controlled hallucination" view of perception prominent in neuroscience~\cite{Clark2016,Hoffman2019}. On this view, perception is not passive reception of external truth but active construction of useful models. What we experience as "objective reality" is already a collective hallucination - an inference to the best explanation generated by our neural networks, constrained by sensory input but not directly depicting an external world. Different neural architectures would construct different controlled hallucinations while remaining internally consistent and empirically adequate relative to their own sensory evidence.
+This scenario connects to predictive-processing views of perception in cognitive neuroscience, of which there are two distinct strands. The weaker ``controlled hallucination'' reading~\cite{Clark2016,Seth2021} holds that perception is active construction of useful models that nevertheless approximately track external structure. The stronger Interface-Theory reading~\cite{Hoffman2019} holds that evolved perception is selected for fitness rather than veridicality and need bear no faithful relation to a noumenal substrate. Different neural architectures would, under either reading, construct different perceptual models that remain internally consistent and empirically adequate relative to their own sensory evidence; the framework here makes this geometrically explicit through agent-dependent pullback metrics.
 
 If humanity evolved toward alternative neural architectures with different inferential biases, our collective physics would shift accordingly. We would still build gauge theories, but the gauge groups might differ. We might still discover conservation laws, but conserve different quantities. We would still seek mathematical elegance and empirical adequacy, but judge these criteria differently. The physics we construct reflects not just external constraints but the structure of our information-processing architecture.
 
@@ -2894,13 +2867,13 @@ This approach parallels inverted spectrum thought experiments in philosophy of m
 
 Chalmers' hard problem of consciousness~\cite{Chalmers1995,Chalmers1996} asks why physical information processing should be accompanied by subjective experience at all. Why doesn't all this neural computation occur "in the dark," without any felt quality? This explanatory gap between objective physical process and subjective phenomenal experience has motivated dualist and mysterian positions claiming consciousness resists scientific explanation.
 
-Our framework suggests a dissolution rather than solution of the hard problem. If we begin with physics as fundamental and try to derive experience from it, an explanatory gap indeed appears. No amount of physical description seems to capture subjective quality. But in our framework, physics emerges from information geometry through observer-dependent pullbacks. Experience is not derived from physics but constitutes the intrinsic nature of information geometry as accessed from within a particular gauge frame.
+Our framework offers a \emph{relocation} of the hard problem rather than a solution. We are deliberate about that word. If one begins with physics as fundamental and tries to derive experience from it, an explanatory gap appears: no amount of physical description seems to capture subjective quality. In the present framework, physics is not the starting point; it is itself an observer-dependent pullback from the information geometry on the underlying bundle. Experience is identified, conjecturally, with the intrinsic structure of that information geometry as accessed from within a particular gauge frame. The hard problem then reappears, in a moved location: why does information-geometric structure have phenomenal character at all? The framework relocates the question from ``why does neural computation feel like anything?'' to ``why does the geometry of inference feel like anything?''---an honest reframing, not an elimination.
 
-There is something it's like to occupy gauge frame $\phi_i$ because that frame induces a specific metric $G_i$ defining the agent's phenomenal space. All agents appear to themselves to be "gauge fixed" - they choose a particular gauge with which to compare themselves with their world.  It is the relative difference in gauge frames which enable and drive alignment. The metric, meanwhile, is not merely formal mathematical structure but the actual geometric character of experience. The explanatory gap dissolves because we're not crossing from objective physics to subjective experience - rather, what we call objective physics is already phenomenal structure (induced metrics) arising from information-geometric dynamics viewed through consensus gauge frames.
+There is, in this reading, something it is like to occupy gauge frame $\phi_i$ because that frame induces a specific metric $G_i$ defining the agent's phenomenal space. The metric is not merely formal mathematical structure but, on the conjecture this section explores, the geometric character of experience. We do not claim this resolves the explanatory gap; it shifts it.
 
-This resembles Russell's neutral monism~\cite{Russell1927} and Chalmers' own later explorations of panpsychism~\cite{Chalmers2013consciousness}, where physical and experiential properties constitute different aspects of a common underlying reality. In our framework, that underlying reality is information geometry on principal bundles, with physics and experience representing different perspectives on (or different gauge-frame-dependent pullbacks from) this fundamental structure.
+This position is closest in spirit to information-geometric structuralism: the underlying reality of which both physics and experience are aspects is the gauge-theoretic information geometry of the framework. It has affinities with Russell's neutral monism~\cite{Russell1927} and with Chalmers' later explorations of panpsychism~\cite{Chalmers2013consciousness}, but it does not require either: it commits only to taking information geometry as the substrate from which both physical and phenomenal description are observer-dependent pullbacks.
 
-However, critical limitations must be acknowledged. This "solution" to the hard problem may simply relocate the mystery rather than resolving it. Why should information geometry have phenomenal character at all? Why is there "something it's like" to be a section of a bundle rather than nothing? We have formalized the structure of experience but not explained why that structure produces felt quality. The framework provides mathematical vocabulary for discussing consciousness without necessarily explaining consciousness.
+The explanatory limits of this move must be stated plainly. The relocation does not explain why the information-geometric substrate has phenomenal character; it does not predict which gauge frame produces which qualitative experience (gauge invariance forbids any such pinning); and it does not constrain the inverted-spectrum or absent-qualia thought experiments any more tightly than other identity-based proposals do. The framework provides mathematical vocabulary for discussing consciousness without explaining consciousness. We flag this prominently: a reader who finds the hard problem compelling will find the relocation interesting but not satisfying.
 
 \subsubsection{Empirical Connections and Testable Predictions}
 
@@ -2915,7 +2888,7 @@ Altered states of consciousness provide particularly interesting test cases. As 
 \subsection{Independent Convergence with Lahav and Neemeh's Relativistic Theory of Consciousness}
 \label{sec:lahav_convergence}
 
-The conclusions reached in the preceding subsection share a striking structural overlap with the Relativistic Theory of Consciousness developed independently by Lahav and Neemeh~\cite{LahavNeemeh2022,LahavNeemeh2025}. Their starting point is that both dualism and illusionism tacitly assume phenomenal consciousness is an absolute property, frame-independent in the way Newtonian time was once held to be. They argue that consciousness should instead be treated as relativistic: a system has phenomenal consciousness with respect to a \emph{cognitive frame of reference}, and the question whether some external system is conscious has no observer-independent answer, much as the question whether an object is at rest has no observer-independent answer in special relativity. In their Alice/Bob thought experiment, each observer measures the other as ``mere brain activity'' from their own cognitive frame; both measurements are correct, and the two perspectives are claimed to be related by an isomorphism between phenomenal structures (first-person side) and phenomenal-judgement representations (third-person side). The hard problem dissolves, on their account, once the absolutist assumption is dropped.
+The conclusions reached in the preceding subsection share a striking structural overlap with the Relativistic Theory of Consciousness developed independently by Lahav and Neemeh~\cite{LahavNeemeh2022,LahavNeemeh2025}. Their starting point is that both dualism and illusionism tacitly assume phenomenal consciousness is an absolute property, frame-independent in the way Newtonian time was once held to be. They argue that consciousness should instead be treated as relativistic: a system has phenomenal consciousness with respect to a \emph{cognitive frame of reference}, and the question whether some external system is conscious has no observer-independent answer, much as the question whether an object is at rest has no observer-independent answer in special relativity. In their Alice/Bob thought experiment, each observer measures the other as ``mere brain activity'' from their own cognitive frame; both measurements are correct, and the two perspectives are claimed to be related by an isomorphism between phenomenal structures (first-person side) and phenomenal-judgement representations (third-person side). The hard problem is taken to dissolve, on their account, once the absolutist assumption is dropped --- a stronger move than the relocation we adopt in Section~\ref{sec:consciousness_section}, and one of two honest divergences between the two frameworks discussed below.
 
 The framework presented here arrives at the same conclusion by a different route. The cognitive frame of reference of agent $i$ is, in our construction, the gauge frame $\phi_i \in \mathfrak{gl}(K)$, and the section $\sigma_i: \mathcal{C} \to E$ that this frame determines. The first-person/third-person split is the difference between (a) the metric $G_i = \sigma_i^* g_{\mathcal{B}}$ that agent $i$ pulls back from the noumenal substrate, which constitutes its phenomenal geometry, and (b) the description of agent $i$ available to a different agent $j$, which is the same section read through $\Omega_{ji} = e^{\phi_j} e^{-\phi_i}$. The two readings are not equal; they are related by the gauge-covariant transport operator. This is precisely the kind of structure-preserving map between perspectives that Lahav and Neemeh assert exists but, from what is publicly available of their formalization, do not write down explicitly.
 
@@ -2997,7 +2970,7 @@ Several fundamental problems must be resolved before this framework can claim to
 
 \textbf{Remaining Work:} The worked example (Section~\ref{sec:worked_signature}) demonstrates the mechanism for $K=2$ on a 2D base in the linearized (weak-field) regime. Key open questions include: whether imaginary gauge frame components emerge dynamically from free energy minimization (rather than being imposed), whether the $(1,3)$ signature is naturally selected when the observable sector has four large eigenvalues, and whether the result extends beyond the linearized regime to the full non-linear Yang-Mills theory. Computational implementation of the $\mathrm{GL}(K, \mathbb{C})$ gauge transformer on a higher-dimensional base manifold would test these questions directly.
 
-\textbf{Status:} Upgraded from ``most critical unsolved problem'' to ``mechanism demonstrated in worked example, dynamic emergence pending.'' The signature problem no longer represents a fundamental obstruction to the framework.
+\textbf{Status:} A candidate mechanism has been identified in a 2D linearised worked example. The signature problem is not yet resolved. The construction imposes the imaginary temporal component $\phi_\tau = i\psi_\tau \cdot T$ by hand, and the diagonal-metric outcome depends on a coincidence of generator choice ($T_\tau = T_x = T$). Whether the imaginary component emerges dynamically from free energy minimisation, whether the construction generalises to four nonlinear dimensions, and whether independent generator choices preserve the Lorentzian signature, all remain open. This worked example demonstrates that an indefinite signature is at least compatible with the framework's gauge structure; it does not show that the framework derives it.
 
 \subsection{Dimensional Structure and Physical Constants}
 \label{sec:dimensional_structure}
@@ -3047,7 +3020,7 @@ Beyond transformers, the framework suggests - but does not yet establish - poten
 
 The framework makes contact with diverse domains - linguistics as multi-agent coordination, consciousness as hierarchical information integration, scientific knowledge as collective free energy minimization, gauge invariance as cognitive consensus requirement. These applications range from rigorously developed (transformers) to suggestive analogies (consciousness, cosmology) to philosophical interpretation (epistemology, constructivism). We have attempted to clearly distinguish validated results from speculative extensions throughout.
 
-Important limitations and open problems persist. The Lorentzian signature problem---previously the most critical gap---is now resolved in principle: the worked example of Section~\ref{sec:worked_signature} demonstrates that imaginary components of $\mathrm{GL}(K, \mathbb{C})$ gauge frames produce indefinite (Lorentzian) signature on the base manifold through the Yang-Mills kinetic metric, with $\mathrm{SO}(1,1) \subset \mathrm{GL}(2, \mathbb{C})$ emerging as the signature-preserving Lorentz group. Whether this mechanism arises dynamically from free energy minimization (rather than being imposed) remains the central open question. Dimensional analysis connecting information-theoretic quantities to physical units is incomplete. We make no quantitative predictions for physical constants, particle masses, or coupling strengths. Matter fields and fundamental interactions lack representation. The framework may be unfalsifiable in crucial domains, compatible with any observation through appropriate interpretive choices. Many claims function as philosophical interpretation rather than scientific hypothesis.
+Important limitations and open problems persist. The Lorentzian signature problem remains open. A candidate mechanism is exhibited in the worked example of Section~\ref{sec:worked_signature}: imaginary components of $\mathrm{GL}(K, \mathbb{C})$ gauge frames can produce indefinite (Lorentzian) signature on the base manifold through the Yang-Mills kinetic metric, with $\mathrm{SO}(1,1) \subset \mathrm{GL}(2, \mathbb{C})$ as the signature-preserving subgroup. The construction is 2D and linearised, the imaginary component is imposed by hand, and the diagonal-metric outcome depends on a coincidence of generator choice. Whether the mechanism arises dynamically from free energy minimisation, generalises to four nonlinear dimensions, and survives independent generator choices, all remain open. Dimensional analysis connecting information-theoretic quantities to physical units is incomplete. We make no quantitative predictions for physical constants, particle masses, or coupling strengths. Matter fields and fundamental interactions lack representation. The framework may be unfalsifiable in crucial domains, compatible with any observation through appropriate interpretive choices. Many claims function as philosophical interpretation rather than scientific hypothesis.
 
 Nevertheless, the framework offers several contributions. It demonstrates that transformer architectures have deep theoretical foundations in gauge theory and variational inference, not merely empirical success. It provides mathematical precision to Wheeler's participatory universe vision, showing such ideas are not inherently mystical but can be formulated rigorously. It suggests novel perspectives on perennial problems in philosophy of science, consciousness studies, and quantum foundations. It generates concrete testable predictions in machine learning and neuroscience while offering interpretive schemas for phenomena spanning cognition to cosmology.
 
@@ -3692,383 +3665,6 @@ These weights have a clear interpretation: $\beta_{ij}$ measures the strength of
 
 
 
-
-
-
-\section{Conditional Uniqueness of the Forward KL Divergence via Variational Duality}
-
-We now show that, within a broad but well-defined class of variational games, the forward KL divergence $D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$ is the only divergence that yields a closed-form Gibbs-type solution for the belief update and a consistent dual interpretation for the attention weights.  Agents locally minimize their agent-specific variational free energy and the system of agents minimize their collective global free energies.  This local-global coordination gives rise to the expected forward KL attention term.
-
-Here we are restricting the the matched-fiber case.  The full generalization follows by applying the appropriate bundle morphisms/intertwiners.
-
-The uniqueness of this term is conditional and follows from three assumptions:
-
-\begin{enumerate}
-  \item $\mathcal{D}$ is local in $c$, of f-divergence form $\displaystyle \int q_i(c)\, f\!\left(\frac{q_i(c)}{\Omega_{ij}(c) q_j(c)}\right) dc$,
-  \item the coupling is linear
-  \item the minimizing belief, $q_i^*$, remains in the exponential-family (log-linear) class.
-\end{enumerate}
-
-\subsubsection{The Coupled Variational Problem}
-Each agent $i$ minimizes a local free-energy functional:
-
-\begin{equation}
-F_i[\beta_i]
-=\min_{q_i}
-\Big\{
-D_{\mathrm{KL}}(q_i \,\|\, p_i)
-+ \sum_{j\neq i} \beta_{ij}\,\mathcal{D}(q_i,q_j)
-\Big\},
-\label{eq:F_i}
-\end{equation}
-
-For notational convenience, we can decompose the KL divergence as:
-
-\begin{equation}
-D_{\mathrm{KL}}(q_i \,\|\, p_i) = \langle H_i \rangle_{q_i} + S(q_i) + \text{const},
-\end{equation}
-
-where
-
-\begin{align}
-H_i(c) &:= -\log p_i(c) \quad \text{(local "energy")}, \\
-S(q_i) &:= -\int q_i(c) \log q_i(c)\,dc \quad \text{(Shannon entropy)}, \\
-\langle H_i \rangle_{q_i} &:= \int q_i(c) H_i(c)\,dc \quad \text{(expected energy)}.
-\end{align}
-
-This gives $D_{\mathrm{KL}}(q_i \,\|\, p_i) = \int q_i(c)[\log q_i(c) - \log p_i(c)]\,dc$.
-
-The attention weights $\beta_{ij}\ge 0$ (with $\sum_j \beta_{ij}=1$) are subsequently chosen by optimizing
-
-\begin{equation}
-\mathcal{J}_i(\beta_i)
-=\sum_{j\neq i}\beta_{ij} C_{ij}
-+ \tau \sum_{j\neq i}\beta_{ij}\log\beta_{ij},
-\label{eq:J_i}
-\end{equation}
-
-where $C_{ij}$ denotes the marginal cost of attending to agent $j$ as we've described above.
-
-We shall later identify
-
-\begin{equation}
-C_{ij} := \frac{\partial S_i}{\partial \beta_{ij}},
-\end{equation}
-
-so that attention weights allocate resources in proportion to marginal coordination penalties.
-
-\subsubsection{Forward KL and the Geometric-Mean Solution}
-Let $\mathcal{D}(q_i,q_j) = D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$, where
-
-\[
-\frac{\delta D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)}{\delta q_i(c)} 
-= \log\frac{q_i(c)}{\Omega_{ij}(c) q_j(c)} + 1.
-\]
-
-The stationary condition for \eqref{eq:F_i} is
-
-\begin{equation}
-H_i(c)
-+ \log q_i(c)
-+ \sum_j \beta_{ij}
-\!\left[
-\log\frac{q_i(c)}{\Omega_{ij}(c)q_j(c)}+1
-\right]
-= \lambda_i,
-\end{equation}
-
-with $\lambda_i$ enforcing normalization.
-
-Rearranging and solving for $q_i(c)$ gives a Boltzmann distribution whose mean field is a geometric average of transported neighbor beliefs.
-
-\begin{equation}
-q_i^*(c)
-= \frac{1}{Z_i}
-e^{-H_i(c)/2}
-\prod_j
-[\Omega_{ij}(c) q_j(c)]^{\beta_{ij}/2},
-\label{eq:q_i_star}
-\end{equation}
-
-This structure is preserved only for the forward KL divergence; alternative divergences destroy the log-linearity of the exponent.
-
-\subsubsection{Dual Relation via the Envelope Theorem}
-At the stationary value $q_i^*$, the envelope theorem implies
-
-\begin{equation}
-\frac{\partial F_i}{\partial \beta_{ij}}
-= \mathcal{D}(q_i^*, q_j)
-= D_{\mathrm{KL}}(q_i^* \,\|\, \Omega_{ij} q_j),
-\label{eq:envelope}
-\end{equation}
-
-such that the marginal cost of increasing attention to $j$ equals the forward KL divergence between the updated belief $q_i^*$ and the transported neighbor $\Omega_{ij} q_j$ into $i$'s frame.
-
-This identifies the attention cost with the KL.
-
-\subsubsection{Reverse and Symmetric KL Forms}
-If instead $\mathcal{D}(q_i,q_j) = D_{\mathrm{KL}}(\Omega_{ij}q_j \,\|\, q_i)$, the stationary condition becomes
-
-\begin{equation}
-H_i(c)
-+ \log q_i(c)
-- \sum_j \beta_{ij}
-\frac{\Omega_{ij}(c) q_j(c)}{q_i(c)}
-= \text{const},
-\end{equation}
-
-introducing terms as $1/q_i$ and leading to a transcendental stationary equation without a closed-form solution destroying the exponential family requirement above.
-
-Likewise, the symmetrized divergence
-
-\[
-\mathcal{D}_{\mathrm{sym}}(q_i,q_j)
-= \tfrac{1}{2}\!\left[
-D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)
-+ D_{\mathrm{KL}}(\Omega_{ij} q_j \,\|\, q_i)
-\right]
-\]
-
-mixes $\log q_i$ and $1/q_i$ terms, again breaking log-linearity.\\
-Hence, among local f-divergences, only the forward KL preserves exponential-family closure.
-
-\subsubsection{Conditional Uniqueness Theorem}
-Let $\mathcal{D}(q_i,q_j)$ be any local $f$-divergence
-
-\[
-\mathcal{D}(q_i,q_j)
-= \int q_i(c)\,
-f\!\left(\frac{q_i(c)}{\Omega_{ij}(c) q_j(c)}\right)
-dc,
-\]
-
-that enters linearly in \eqref{eq:F_i}, and further suppose that the stationary distribution $q_i^*$ is log-linear in $\{H_i,\Omega_{ij}q_j\}$.
-
-Then the following are equivalent:
-
-\begin{enumerate}
-  \item $q_i^*$ has the geometric-mean Boltzmann form \eqref{eq:q_i_star};
-  \item $\mathcal{D}(q_i,q_j)=D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)$;
-  \item $C_{ij}=\dfrac{\partial F_i}{\partial\beta_{ij}}
-=D_{\mathrm{KL}}(q_i^* \,\|\, \Omega_{ij}q_j).$
-\end{enumerate}
-
-Proof sketch
-
-(2) $\Rightarrow$ (1) follows from direct solution of the stationary condition.
-
-(1) $\Rightarrow$ (2):
-
-Assume the solution is log-linear \eqref{eq:q_i_star}.\\
-Substituting this into the stationarity condition gives
-
-\[
-\frac{\delta \mathcal{D}}{\delta q_i(c)}
-\Big|_{q_i^*}
-= \log\frac{q_i^*(c)}{\Omega_{ij}(c) q_j(c)} + 1.
-\]
-
-Next, integrating, we find
-
-\[
-\mathcal{D}(q_i^*,q_j)
-= \int q_i^*(c)
-\log\frac{q_i^*(c)}{\Omega_{ij}(c) q_j(c)}\,dc
-+ \text{const}.
-\]
-
-We require that $\mathcal{D}(q,q)=0$ thereby fixing the constant to be zero thus producing the forward KL form.
-
-(3) $\Rightarrow$ (2):
-
-By the envelope theorem \eqref{eq:envelope}, the only divergence consistent with a linear $\beta_{ij}$-coupling and this derivative structure is the forward KL.
-
-\subsubsection{Interpretations}
-\begin{enumerate}
-  \item \textbf{Gauge invariance}\\
-The comparison is made between $q_i$ and the transported $\Omega_{ij}q_j$ in the same frame (and similarly for $j \rightarrow i$). Gauge covariance fixes what is compared, while variational duality fixes how it is compared.
-  \item \textbf{Variational duality}\\
-\\
-The forward KL is the only divergence that simultaneously yields:
-  \begin{itemize}
-    \item a closed-form Boltzmann solution for $q_i$, and
-    \item a consistent dual cost $C_{ij} = \partial F_i / 
-\partial \beta_{ij}$.
-  \end{itemize}
-  \item \textbf{Information geometry}\\
-\\
-The forward KL is the Bregman divergence generated by the negative entropy potential, whose Hessian induces the Fisher-Rao metric and yields the m/e-projection (mixed/exponential family) Pythagorean theorem. These global properties are not shared by generic f-divergences.
-\end{enumerate}
-
-\subsubsection{Summary}
-Under the natural assumptions of locality, linear coupling, and exponential-family closure, the forward KL divergence
-
-\[
-\boxed{
-C_{ij}=D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j)}
-\]
-
-is not merely a modeling choice but a necessary consequence\\
-of the variational and geometric structure underlying agent coordination.  It is furthermore rotationally invariant under $SO(N)$ and $SU(N)$.
-
-\subsubsection{Connection to the Gauge-Covariant Free Energy}
-The conditional uniqueness result above justifies the specific form of the alignment terms appearing in the generalized variational free energy:
-
-$$
-\mathcal{S}
-=\sum_i D_{\mathrm{KL}}(q_i \,\|\, p_i)
-+ \sum_i D_{\mathrm{KL}}(s_i \,\|\, r_i)
-+ \sum_{i,j}\beta_{ij}\,D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j) 
-$$
-
-$$
-+ \sum_{i,j}\gamma_{ij}\,D_{\mathrm{KL}}(s_i \,\|\, \tilde{\Omega}_{ij}s_j)- \mathbb{E}_q[\log p(o|\{k_i,m_i\})].
-$$
-
-Each coupling term, such as
-
-$$
-\beta_{ij}\,D_{\mathrm{KL}}(q_i \,\|\, \Omega_{ij} q_j),
-$$
-
-is therefore not arbitrary: it arises uniquely from the requirement that
-
-\begin{enumerate}
-  \item belief updates $q_i$ admit an exponential-family form consistent with local free energy minimization,
-  \item attention weights $\beta_{ij}$ act as variational dual variables conjugate to those divergences, and
-  \item comparisons between agents are made in gauge-aligned coordinates through the transport operators $\Omega_{ij}$.
-\end{enumerate}
-
-Therefore, the forward KL plays the role of the canonical gauge-covariant coupling between agents' beliefs/models, unifying variational and geometric principles.
-
-Reverse or symmetric divergences would violate at least one of these constraints: they either destroy exponential-family closure, break dual consistency $\big(C_{ij} = \partial F_i / \partial \beta_{ij}\big)$, or fail to respect the gauge-covariant comparison structure. Thus, the gauge-covariant free energy \eqref{eq:generalized_F} naturally inherits the unique forward-KL alignment form as a direct consequence of its underlying variational geometry.
-
-
-
-\subsection{Softmax Attention via Maximum Entropy Principle}
-Given alignment cost $C_{ij} = D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ above, we seek attention weights $\beta_{ij}$ that:
-
-\begin{enumerate}
-  \item Minimize expected disagreement: $\sum_j \beta_{ij} C_{ij}$
-  \item Maximize uncertainty (entropy): $-\sum_j \beta_{ij}\log\beta_{ij}$
-  \item Satisfy normalization: $\sum_j \beta_{ij} = 1$
-\end{enumerate}
-
-Following Jaynes' maximum entropy principle, we maximize entropy subject to the constraint that expected cost equals some target $\langle C \rangle$:
-
-\begin{equation}
-\max_{\{\beta_{ij}\}} \left\{-\sum_j \beta_{ij}\log\beta_{ij}\right\}
-\end{equation}
-
-subject to:\\
-\begin{align}
-\sum_j \beta_{ij} &= 1, \\
-\sum_j \beta_{ij} C_{ij} &= \langle C \rangle.
-\end{align}
-
-\textbf{Lagrangian:}
-
-\begin{equation}
-\mathcal{J} = -\sum_j \beta_{ij}\log\beta_{ij} + \lambda\left(\sum_j \beta_{ij} - 1\right) + \mu\left(\sum_j \beta_{ij} C_{ij} - \langle C \rangle\right).
-\end{equation}
-
-\textbf{First-order condition:}
-
-\begin{equation}
-\frac{\partial \mathcal{J}}{\partial \beta_{ij}} = -\log\beta_{ij} - 1 + \lambda + \mu C_{ij} = 0.
-\end{equation}
-
-\textbf{Solution:}
-
-\begin{equation}
-\log\beta_{ij} = \lambda - 1 + \mu C_{ij}
-\quad \Rightarrow \quad
-\beta_{ij} = K \exp(\mu C_{ij}),
-\end{equation}
-
-where $K = \exp(\lambda - 1)$.
-
-Normalization $\sum_j \beta_{ij} = 1$ gives:
-
-\begin{equation}
-\beta_{ij} = \frac{\exp(\mu C_{ij})}{\sum_k \exp(\mu C_{ik})}.
-\end{equation}
-
-Since we want to \textbackslash emph\{minimize\} expected cost (not maximize), we choose $\mu = -1/\tau < 0$:
-
-\begin{equation}
-\boxed{\beta_{ij} = \frac{\exp(-C_{ij}/\tau)}{\sum_k \exp(-C_{ik}/\tau)} = \operatorname{softmax}_j\left(-\frac{C_{ij}}{\tau}\right)}.
-\end{equation}
-
-\textbf{Interpretation:}
-
-\begin{itemize}
-  \item $\tau \to 0$: Hard attention (argmin over $j$)
-  \item $\tau \to \infty$: Uniform attention (maximum uncertainty)
-  \item Intermediate $\tau$: Soft attention balancing cost minimization and entropy maximization
-\end{itemize}
-
-\textbf{Alternative Derivation (Unconstrained):}\\
-Equivalently, minimize the free energy functional:
-
-\begin{equation}
-F[\beta_i] = \sum_j \beta_{ij} C_{ij} + \tau \sum_j \beta_{ij}\log\beta_{ij},
-\end{equation}
-
-subject only to $\sum_j \beta_{ij} = 1$.
-
-Lagrangian:
-
-\begin{equation}
-\mathcal{J} = \sum_j \beta_{ij} C_{ij} + \tau \sum_j \beta_{ij}\log\beta_{ij} + \lambda\left(\sum_j \beta_{ij} - 1\right).
-\end{equation}
-
-First-order condition:
-
-\begin{equation}
-C_{ij} + \tau(\log\beta_{ij} + 1) + \lambda = 0
-\quad \Rightarrow \quad
-\tau\log\beta_{ij} = -C_{ij} - \tau - \lambda.
-\end{equation}
-
-This immediately gives:
-
-\begin{equation}
-\beta_{ij} = \frac{\exp(-C_{ij}/\tau)}{\sum_k \exp(-C_{ik}/\tau)}.
-\end{equation}
-
-This is the unique maximum-entropy distribution consistent with the constraint $\langle C \rangle = \sum_j \beta_{ij} C_{ij}$.
-
-Hence, each agent assigns weights $\beta_{ij}$ according to their relative consistency where $\tau$ controls the sharpness of selection. In the limit $\tau \rightarrow 0$ the $\beta_{ij}$ weights collapse to hard-attention whereas for large $\tau$ we approach uniform weighting.
-
-Therefore, given agents as local open sections over the base space our complete attention weights (similarly for prior alignments) are given as
-
-$$
-\beta_{ij}(c) =
-\frac{
-  \exp\!\left[
-    -\tfrac{1}{\tau}\,
-    \mathrm{KL}\!\big(
-      q_i(c)
-      \,\big\|\,
-      \Omega_{ij}q_j(c)
-    \big)
-  \right]
-  \, 
-}{
-  \displaystyle
-  \sum_{k}
-  \exp\!\left[
-    -\tfrac{1}{\tau}\,
-    \mathrm{KL}\!\big(
-      q_i(c)
-      \,\big\|\,
-      \Omega_{ik}q_k(c)
-    \big)
-  \right]
-  \,
-}
-$$
 
 
 
