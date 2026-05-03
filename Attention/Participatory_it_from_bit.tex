@@ -91,7 +91,7 @@ This dichotomy suggests two radical possibilities: either \emph{physics produces
 
 \subsection{A Cognitive-First Framework}
 
-We present a mathematical framework for multi-agent interaction that takes cognitive construction seriously. Building on gauge theory, information geometry, and variational free energy, we model agents as smooth sections of principal bundles carrying beliefs $q(x)$, models $s(x)$, and gauge frames $\phi(x)$. These agents interact through information-theoretic couplings that minimize variational free energy.
+We present a mathematical framework for multi-agent interaction that takes cognitive construction seriously. Building on gauge theory, information geometry, and variational free energy, we model agents as smooth sections of principal bundles carrying beliefs $q(x)$, priors $p(x)$, and gauge frames $\phi(x)$, together with a slow subsystem of generative models $s(x)$ and model hyper-priors $r(x)$ developed in Section~\ref{sec:framework}. These agents interact through information-theoretic couplings that minimize variational free energy.
 
 This framework produces several emergent phenomena:
 \begin{enumerate}
@@ -191,7 +191,7 @@ We use local coordinates $c = (c^1, \ldots, c^n)$ on $\mathcal{C}$, though the m
 
 \subsection{Statistical Manifolds: Beliefs and Models}
 
-At each point $c \in \mathcal{C}$, agents maintain probability distributions representing their beliefs and generative models. These distributions don't live in ordinary Euclidean space but rather on statistical manifolds equipped with information-geometric structure.
+At each point $c \in \mathcal{C}$, agents maintain probability distributions representing their beliefs $q_i$, priors $p_i$, and (on a slower timescale) generative models $s_i$ together with their hyper-priors $r_i$. These distributions don't live in ordinary Euclidean space but rather on statistical manifolds equipped with information-geometric structure.
 
 \begin{definition}[Statistical Manifolds]
 Let $\mathcal{B}_q$ denote the manifold of belief distributions and $\mathcal{B}_p$ the manifold of prior distributions. Each is equipped with the Fisher-Rao metric:
@@ -273,13 +273,19 @@ This ensures that changing reference frame transforms probability distributions 
 We can now define agents precisely as smooth sections of these associated bundles.
 
 \begin{definition}[Agent]
-An agent $\mathcal{A}^i$ with support domain $\mathcal{U}_i \subseteq \mathcal{C}$ consists of three smooth fields:
+An agent $\mathcal{A}^i$ with support domain $\mathcal{U}_i \subseteq \mathcal{C}$ consists of five smooth fields organized into a fast subsystem (beliefs and priors) and a slow subsystem (generative model and model hyper-prior):
 \begin{align}
 q_i &: \mathcal{U}_i \to \mathcal{E}_q|_{\mathcal{U}_i}, \quad \text{(belief section)} \\
 p_i &: \mathcal{U}_i \to \mathcal{E}_p|_{\mathcal{U}_i}, \quad \text{(prior section)} \\
+s_i &: \mathcal{U}_i \to \mathcal{E}_s|_{\mathcal{U}_i}, \quad \text{(generative-model section)} \\
+r_i &: \mathcal{U}_i \to \mathcal{E}_r|_{\mathcal{U}_i}, \quad \text{(model hyper-prior section)} \\
 \phi_i &: \mathcal{U}_i \to \mathfrak{g}, \quad \text{(gauge frame field)}
 \end{align}
-where $\mathfrak{g} = \mathrm{Lie}(G)$ is the Lie algebra of the gauge group.
+where $\mathfrak{g} = \mathrm{Lie}(G)$ is the Lie algebra of the gauge group. The four statistical sections are organized as the variational hierarchy
+\[
+r_i \;\to\; s_i \;\to\; p_i \;\to\; q_i \;\to\; \text{observations},
+\]
+with $q_i$ updated on the fastest timescale (the E-step), $p_i$ acting as the slow regulariser whose role is realised concretely by the per-token PriorBank in the transformer limit (Section~\ref{sec:transformers}), $s_i$ encoding the agent's distribution over generative-model parameters $m_i$ (the M-step), and $r_i$ providing the hyper-prior that regularises $s_i$. We follow the convention of the gauge-theoretic transformer companion paper~\cite{Dennis2025trans}: in the empirical simulations of this paper the slow subsystem $(s_i, r_i)$ is held fixed (model coupling $\gamma_{ij} = 0$), and only the fast subsystem $(q_i, p_i)$ is updated. The slow subsystem is retained in the free energy because it is required for the meta-agent / Ouroboros dynamics of Section~\ref{sec:participatory}, where consensus on generative models is the conceptual content of the $\gamma_{ij}\,\mathrm{KL}(s_i\|\tilde{\Omega}_{ij}s_j)$ term.
 \end{definition}
 
 The notation requires unpacking. Each agent maintains smooth probability distributions $q_i(c)$ and $p_i(c)$ at every point $c$ in their domain of operation $\mathcal{U}_i$. These are not single distributions but entire fields - functions mapping base manifold points to probability distributions. The gauge frame $\phi_i(c) \in \mathfrak{g}$ specifies which reference frame the agent uses at location $c$, encoded as a Lie algebra element generating local gauge transformations.
@@ -288,10 +294,12 @@ For Gaussian agents, this specializes to:
 \begin{align}
 q_i(c) &= \mathcal{N}(\mu_i(c), \Sigma_i(c)) \\
 p_i(c) &= \mathcal{N}(\mu_i^p(c), \Sigma_i^p(c)) \\
+s_i(c) &= \mathcal{N}(\mu_i^s(c), \Sigma_i^s(c)) \\
+r_i(c) &= \mathcal{N}(\mu_i^r(c), \Sigma_i^r(c)) \\
 \phi_i(c) &= \phi_i^a(c) G_a
 \end{align}
 
-where $\mu_i: \mathcal{U}_i \to \mathbb{R}^K$ and $\Sigma_i: \mathcal{U}_i \to \mathbb{S}^K_{++}$ are smooth functions into the space of positive-definite symmetric matrices, while $\phi_i^a(c)$ are scalar fields and $\{G_a\}$ are basis generators of $\mathfrak{so}(N)$.
+where $\mu_i: \mathcal{U}_i \to \mathbb{R}^K$ and $\Sigma_i: \mathcal{U}_i \to \mathbb{S}^K_{++}$ are smooth functions into the space of positive-definite symmetric matrices, the model-fiber means $\mu_i^s$ and hyper-prior means $\mu_i^r$ live in the corresponding generative-model parameter space, $\phi_i^a(c)$ are scalar fields, and $\{G_a\}$ are basis generators of $\mathfrak{so}(N)$.
 
 This formulation provides complete flexibility. Agents can maintain different beliefs at different locations (spatial variation in $q_i(c)$). They can use different reference frames at different locations (spatially varying gauge $\phi_i(c)$). Multiple agents can overlap spatially, each maintaining their own beliefs about the same region of $\mathcal{C}$. This generality will prove essential for modeling everything from transformer attention mechanisms to multi-agent coordination to emergent spacetime structure.
 
@@ -306,9 +314,9 @@ Reality in this framework emerges not from a single observer but from collective
 \begin{definition}[Multi-Agent System]
 A multi-agent system $\mathcal{M}$ over base manifold $\mathcal{C}$ consists of a finite collection of agents:
 \begin{equation}
-\mathcal{M} = \left\{\mathcal{A}^i = (q_i, p_i, \phi_i)\right\}_{i \in \mathcal{I}}
+\mathcal{M} = \left\{\mathcal{A}^i = (q_i, p_i, s_i, r_i, \phi_i)\right\}_{i \in \mathcal{I}}
 \end{equation}
-where $\mathcal{I}$ is an index set (typically $\mathcal{I} = \{1, 2, \ldots, N\}$), and each agent $\mathcal{A}^i$ operates over domain $\mathcal{U}_i \subseteq \mathcal{C}$.
+where $\mathcal{I}$ is an index set (typically $\mathcal{I} = \{1, 2, \ldots, N\}$), and each agent $\mathcal{A}^i$ operates over domain $\mathcal{U}_i \subseteq \mathcal{C}$. When the slow subsystem is held fixed, as in the simulations below, an agent is referred to by the abbreviated tuple $(q_i, p_i, \phi_i)$ without ambiguity.
 \end{definition}
 
 The domains $\mathcal{U}_i$ generally overlap, with $\mathcal{U}_i \cap \mathcal{U}_j \neq \emptyset$ for many agent pairs. This overlap is not incidental but fundamental - agents must share common ground to exchange information and coordinate beliefs. The intersection $\mathcal{U}_i \cap \mathcal{U}_j$ represents the region where both agents maintain explicit beliefs, enabling comparison and information exchange despite their potentially different gauge frames.
@@ -322,9 +330,9 @@ When agents achieve sufficient alignment in their beliefs and models over shared
 \begin{definition}[Perfect Consensus]
 Agents $\{i, j, \ldots\} \subseteq \mathcal{I}$ are in perfect consensus over region $\mathcal{R} \subseteq \bigcap_k \mathcal{U}_k$ if, after gauge transport to a common frame:
 \begin{equation}
-\Omega_{ij}[q_j](c) = q_i(c), \quad \Omega_{ij}[p_j](c) = p_i(c) \quad \forall c \in \mathcal{R}
+\Omega_{ij}[q_j](c) = q_i(c), \quad \Omega_{ij}[p_j](c) = p_i(c), \quad \tilde{\Omega}_{ij}[s_j](c) = s_i(c) \quad \forall c \in \mathcal{R}
 \end{equation}
-where $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ is the gauge transport operator connecting their frames.
+where $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ is the gauge transport operator connecting their frames and $\tilde{\Omega}_{ij}$ is the corresponding transport on the model fiber. Agreement of the per-agent hyper-priors $r_i$ is not required for consensus, since $r_i$ is fixed and shared structurally.
 \end{definition}
 
 The gauge transport $\Omega_{ij}$ is essential here. Agents may describe the same beliefs using different internal coordinates (gauge frames), just as physicists in different laboratories describe the same spin state using rotated basis vectors. Perfect consensus means that after accounting for these frame differences through transport operations, the agents hold identical probabilistic beliefs and models about the shared region. They have achieved informational alignment despite maintaining distinct perspectives.
@@ -332,7 +340,7 @@ The gauge transport $\Omega_{ij}$ is essential here. Agents may describe the sam
 Perfect consensus is an idealization rarely achieved exactly. More realistically, agents achieve approximate consensus characterized by small KL divergences between transported beliefs. When this approximate consensus is sufficiently strong and stable across a cluster of agents, meta-agent formation becomes possible.
 
 \begin{definition}[Meta-Agent]
-A meta-agent $\mathcal{A}^{(s+1)}$ at hierarchical scale $(s+1)$ forms from a cluster $\{i, j, \ldots\} \subseteq \mathcal{I}^{(s)}$ of scale-$s$ agents satisfying: (1) sufficient coherence $C_{\text{belief}} \cdot C_{\text{model}} > \Gamma_{\min}$ above some threshold, (2) overlapping support $\bigcap_k \mathcal{U}_k \neq \emptyset$, and (3) minimum cluster size $|\{i, j, \ldots\}| \geq N_{\min}$ (typically $N_{\min} = 2$). The meta-agent is itself a smooth section $(q^{(s+1)}, p^{(s+1)}, \phi^{(s+1)})$ constructed via gauge-covariant averaging of constituent beliefs.
+A meta-agent $\mathcal{A}^{(s+1)}$ at hierarchical scale $(s+1)$ forms from a cluster $\{i, j, \ldots\} \subseteq \mathcal{I}^{(s)}$ of scale-$s$ agents satisfying: (1) sufficient coherence $C_{\text{belief}} \cdot C_{\text{model}} > \Gamma_{\min}$ above some threshold, (2) overlapping support $\bigcap_k \mathcal{U}_k \neq \emptyset$, and (3) minimum cluster size $|\{i, j, \ldots\}| \geq N_{\min}$ (typically $N_{\min} = 2$). The meta-agent is itself a smooth section $(q^{(s+1)}, p^{(s+1)}, s^{(s+1)}, r^{(s+1)}, \phi^{(s+1)})$ constructed via gauge-covariant averaging of constituent fields. Belief coherence $C_{\text{belief}}$ measures alignment of $q$-fields and model coherence $C_{\text{model}}$ measures alignment of $s$-fields, the latter being the substantive content of meta-cognitive consensus.
 \end{definition}
 
 Meta-agents represent emergent collective entities arising from coherent subsystems. A family forms a household meta-agent, neurons form brain modules, individuals form communities, communities form societies. meta-agents are not mere abstractions or statistical summaries. They are dynamical agents in their own right with beliefs evolving according to the same free energy minimization principles governing base agents. The meta-agent can influence its constituents through top-down feedback, realizing Wheeler's participatory loop where higher-level structure affects lower-level dynamics.
@@ -436,7 +444,7 @@ The cognitive interpretation: non-zero field strength indicates the agent's inte
 
 The full multi-agent, multi-scale structure requires several distinct types of information transport, each serving different organizational purposes.
 
-Intra-scale belief transport $\Omega^{(q)}_{ij}: \mathcal{B}_q \to \mathcal{B}_q$ is the primary operator already discussed, transporting agent $j$'s beliefs into agent $i$'s gauge frame within the same hierarchical level. The analogous prior-to-prior transport $\Omega^{(p)}_{ij}: \mathcal{B}_p \to \mathcal{B}_p$ handles generative model transport between agents. In general $\Omega^{(q)}_{ij} = \Omega^{(p)}_{ij}$ (same gauge transformation), though we distinguish them notationally because they act on different bundle fibers.
+Intra-scale belief transport $\Omega^{(q)}_{ij}: \mathcal{B}_q \to \mathcal{B}_q$ is the primary operator already discussed, transporting agent $j$'s beliefs into agent $i$'s gauge frame within the same hierarchical level. Two further transport operators act at the slower levels: $\Omega^{(p)}_{ij}: \mathcal{B}_p \to \mathcal{B}_p$ moves the per-agent prior between frames, and $\tilde{\Omega}^{(s)}_{ij}: \mathcal{B}_s \to \mathcal{B}_s$ moves the generative model between frames (this is the operator that appears in the model-coupling term $\gamma_{ij}\,\mathrm{KL}(s_i\|\tilde{\Omega}_{ij}s_j)$ of the canonical free energy). In general $\Omega^{(q)}_{ij} = \Omega^{(p)}_{ij} = \tilde{\Omega}^{(s)}_{ij}$ as group elements (the same gauge transformation), though we distinguish them notationally because they act on different bundle fibers and on different timescales.
 
 Cross-scale transport requires additional operators connecting hierarchical levels. Bottom-up transport $\Lambda^{s \to s+1}: \Gamma^{(s)}(\mathcal{B}_q) \to \Gamma^{(s+1)}(\mathcal{B}_q)$ aggregates constituent beliefs upward when forming meta-agent $I$ at scale $(s+1)$ from constituents $\{i,j,\ldots\}$ at scale $s$,\\ giving $q_I^{(s+1)} = \Lambda^{s \to s+1}[\{q_i^{(s)}, q_j^{(s)}, \ldots\}]$ through gauge-covariant averaging (detailed Section~\ref{sec:participatory}). Top-down transport $\Lambda^{s+1 \to s}: \Gamma^{(s+1)}(\mathcal{B}_q) \to \Gamma^{(s)}(\mathcal{B}_q)$ propagates meta-level information back to constituents, updating prior expectations as $p_i^{(s),\text{new}} = (1-\eta)\,p_i^{(s),\text{old}} + \eta\,\Lambda^{s+1 \to s}[q_I^{(s+1)}]$, realizing top-down participatory feedback.
 
@@ -471,7 +479,7 @@ These choices are motivated by computational feasibility (closed-form KL diverge
 
 We set $\mathcal{B}_q = \mathcal{B}_p =: \mathcal{B}$ and $\rho_q = \rho_p =: \rho$, giving a single associated bundle $\mathcal{E}_q = \mathcal{E}_p =: \mathcal{E}$. The cross-bundle morphisms become identities $\Phi = \tilde{\Phi} = \mathrm{id}_{\mathcal{E}}$. Each agent $i$ is now represented by a single section $\sigma^i: \mathcal{U}_i \to \mathcal{E}$ carrying both belief and prior as fiber coordinates: $\sigma^i(c) = (q_i(c), p_i(c)) \in \mathcal{B} \times \mathcal{B}$.
 
-This simplification is reasonable because beliefs and priors are both probability distributions over the same underlying space. While they play different functional roles (posterior versus generative model), representing them in the same statistical manifold is natural. The distinction is maintained through separate components rather than separate bundle structure. What we sacrifice is the ability to model agents with qualitatively different types of beliefs versus priors - for example, beliefs as Gaussians and priors as categorical distributions. This heterogeneity may be important for certain cognitive architectures but is not essential for demonstrating emergent structure in this initial study.
+This simplification is reasonable because beliefs and priors are both probability distributions over the same underlying space. While they play different functional roles (posterior versus regulariser), representing them in the same statistical manifold is natural. The distinction is maintained through separate components rather than separate bundle structure. What we sacrifice is the ability to model agents with qualitatively different types of beliefs versus priors - for example, beliefs as Gaussians and priors as categorical distributions. This heterogeneity may be important for certain cognitive architectures but is not essential for demonstrating emergent structure in this initial study.
 
 \subsubsection{Gaussian Probability Manifold}
 
@@ -541,7 +549,7 @@ The free energy decomposes into competing pressures: $F[q] = \mathrm{KL}(q(x) \|
 
 A single agent minimizing $F[q]$ performs standard variational inference. Our framework extends this to multiple interacting agents with different reference frames. The extension introduces several new ingredients: each agent $i$ maintains beliefs $q_i(c)$ and priors $p_i(c)$ as fields over base manifold $\mathcal{C}$, agents have gauge frames $\phi_i(c) \in \mathfrak{gl}(K)$ encoding their internal coordinate systems (Section~\ref{sec:gauge_group_choice}), transport operators $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j) \in \mathrm{GL}^+(K)$ translate between frames, and support functions $\chi_i(c)$ indicate where agents maintain beliefs.
 
-The multi-agent free energy must incorporate several distinct contributions. Self-terms capture each agent's belief-prior alignment through $\mathrm{KL}(q_i \| p_i)$. Belief coupling ensures agents' beliefs agree after gauge transport. Model coupling aligns agents' generative models. Observation terms ensure beliefs explain sensory data. The challenge lies in defining these couplings in a principled, gauge-covariant manner.
+The multi-agent free energy must incorporate several distinct contributions. Self-terms capture each agent's belief-prior alignment through $\mathrm{KL}(q_i \| p_i)$ and the model hyper-prior alignment through $\mathrm{KL}(s_i \| r_i)$. Belief coupling $\beta_{ij}\,\mathrm{KL}(q_i\|\Omega_{ij}q_j)$ ensures agents' beliefs agree after gauge transport. Model coupling $\gamma_{ij}\,\mathrm{KL}(s_i\|\tilde{\Omega}_{ij}s_j)$ aligns agents' generative models. Observation terms ensure beliefs explain sensory data. The challenge lies in defining these couplings in a principled, gauge-covariant manner.
 
 \subsubsection{Challenge: Defining Gauge-Covariant Pairwise Couplings}
 
@@ -647,7 +655,7 @@ The critical gauge covariance property is preserved on arbitrary manifolds: unde
 
 \subsubsection{Base Priors and the Full Generative Model}
 
-Each agent has independent Gaussian priors encoding its expectations: $p_i(k_i; c) = \mathcal{N}(k_i; \mu_{0,i}^{(q)}(c), \Sigma_{0,i}^{(q)}(c))$ for beliefs and $r_i(m_i; c) = \mathcal{N}(m_i; \mu_{0,i}^{(p)}(c), \Sigma_{0,i}^{(p)}(c))$ for models. These are local fields living in each agent's own gauge frame. Different agents can have completely different priors reflecting different inductive biases, training histories, or evolutionary backgrounds. There is no assumption of shared priors---diversity is built into the framework from the ground up.
+Each agent has independent Gaussian priors encoding its expectations: a belief prior $p_i(k_i; c) = \mathcal{N}(k_i; \mu_{0,i}^{(q)}(c), \Sigma_{0,i}^{(q)}(c))$ regularising the latent state $k_i$, and a model hyper-prior $r_i(m_i; c) = \mathcal{N}(m_i; \mu_{0,i}^{(s)}(c), \Sigma_{0,i}^{(s)}(c))$ regularising the generative-model parameters $m_i$. These are local fields living in each agent's own gauge frame. Different agents can have completely different priors reflecting different inductive biases, training histories, or evolutionary backgrounds. There is no assumption of shared priors---diversity is built into the framework from the ground up.
 
 The full generative model at each point $c$ combines the single-agent free energy~\cite{Friston2010,Parr2022} with the mixture-of-sources alignment derived above. The belief channel posits that agent $i$'s latent state was generated by one of its neighbors according to the mixture model~\eqref{eq:mixture_joint}; the model channel has an identical structure with coupling weights $\gamma_{ij}(c)$ replacing $\beta_{ij}(c)$ and model-fiber transport $\tilde{\Omega}_{ij}(c)$ replacing belief-fiber transport $\Omega_{ij}(c)$.
 
@@ -674,11 +682,12 @@ Extending to continuous fields over the base manifold $\mathcal{C}$ and includin
 \begin{equation}
 \boxed{
 \begin{aligned}
-S[\{q_i\}, \{p_i\}, \{\phi_i\}] 
+S[\{q_i\}, \{p_i\}, \{s_i\}, \{r_i\}, \{\phi_i\}]
 &= \sum_i \int_{\mathcal{C}} \chi_i(c) \, \mathrm{KL}(q_i(c) \| p_i(c)) \, dc \\
+&\quad + \sum_i \int_{\mathcal{C}} \chi_i(c) \, \mathrm{KL}(s_i(c) \| r_i(c)) \, dc \\
 &\quad + \sum_{ij} \int_{\mathcal{C}} \chi_{ij}(c) \, \beta_{ij}(c) \, \mathrm{KL}(q_i(c) \| \Omega_{ij}(c)[q_j(c)]) \, dc \\
-&\quad + \sum_{ij} \int_{\mathcal{C}} \chi_{ij}(c) \, \gamma_{ij}(c) \, \mathrm{KL}(p_i(c) \| \tilde{\Omega}_{ij}(c)[p_j(c)]) \, dc \\
-&\quad - \sum_i \int_{\mathcal{C}} \chi_i(c) \, \mathbb{E}_{q_i(c)}[\log p(o(c) \mid q_i(c))] \, dc \\
+&\quad + \sum_{ij} \int_{\mathcal{C}} \chi_{ij}(c) \, \gamma_{ij}(c) \, \mathrm{KL}(s_i(c) \| \tilde{\Omega}_{ij}(c)[s_j(c)]) \, dc \\
+&\quad - \sum_i \int_{\mathcal{C}} \chi_i(c) \, \mathbb{E}_{q_i(c)}[\log p(o(c) \mid k_i, m_i)] \, dc \\
 \end{aligned}
 }
 \label{eq:free_energy_functional_final}
@@ -714,8 +723,8 @@ $$
 $$
 
 
-and similarly for the $\gamma_{ij}(c)$ prior/model attention weight, derived from the same mixture-of-sources principle (Section~\ref{sec:mixture_derivation}).
-Here $\chi_i(c)$ represents agent $i$'s support (one where agent exists, zero elsewhere), $\chi_{ij}(c) = \chi_i(c) \chi_j(c)$ is the overlap region, $\beta_{ij}(c)$ and $\gamma_{ij}(c)$ are belief and model alignment weights computed via softmax over KL divergences (Eq.~\ref{eq:softmax_attention_general}), and $\Omega_{ij}(c) = \exp(\phi_i(c))\exp(-\phi_j(c)) \in \mathrm{GL}^+(K)$ is the gauge transport operator. On base manifolds of dimension $\geq 1$, the gauge frame fields additionally induce a connection one-form $A_\mu^{(i)}(c) = U_i^{-1}\partial_\mu U_i$ (Eq.~\ref{eq:connection_form}) and gauge curvature $F_{\mu\nu}^{(i)}$ (Eq.~\ref{eq:field_strength}). Optional regularizers include gauge field smoothness $\lambda_\phi \int \|\nabla \phi_i\|^2 \, \sqrt{g}\, dc$, Fisher metric mass terms $\int \mathrm{tr}(G_{ij}) \, \sqrt{g}\, dc$, and Yang-Mills curvature penalties $\int \mathrm{tr}(F_{\mu\nu} F^{\mu\nu}) \, \sqrt{g}\, dc$.
+and similarly for the $\gamma_{ij}(c)$ model-alignment attention weight (with $\tilde{\Omega}_{ij}$ in place of $\Omega_{ij}$ and $s_j$ in place of $q_j$), derived from the same mixture-of-sources principle (Section~\ref{sec:mixture_derivation}).
+Here $\chi_i(c)$ represents agent $i$'s support (one where agent exists, zero elsewhere), $\chi_{ij}(c) = \chi_i(c) \chi_j(c)$ is the overlap region, $\beta_{ij}(c)$ and $\gamma_{ij}(c)$ are the belief-alignment and model-alignment weights computed via softmax over KL divergences (Eq.~\ref{eq:softmax_attention_general}), and $\Omega_{ij}(c) = \exp(\phi_i(c))\exp(-\phi_j(c)) \in \mathrm{GL}^+(K)$ is the gauge transport operator. In the simulations of this paper $\gamma_{ij} = 0$; the model-alignment term is retained in the canonical functional because it is the formal content of meta-cognitive consensus exercised in Section~\ref{sec:participatory}. On base manifolds of dimension $\geq 1$, the gauge frame fields additionally induce a connection one-form $A_\mu^{(i)}(c) = U_i^{-1}\partial_\mu U_i$ (Eq.~\ref{eq:connection_form}) and gauge curvature $F_{\mu\nu}^{(i)}$ (Eq.~\ref{eq:field_strength}). Optional regularizers include gauge field smoothness $\lambda_\phi \int \|\nabla \phi_i\|^2 \, \sqrt{g}\, dc$, Fisher metric mass terms $\int \mathrm{tr}(G_{ij}) \, \sqrt{g}\, dc$, and Yang-Mills curvature penalties $\int \mathrm{tr}(F_{\mu\nu} F^{\mu\nu}) \, \sqrt{g}\, dc$.
 
 The attention field $\beta_{ij}(c)$ is not a hand-crafted kernel but emerges from variational free energy minimization. Figure~\ref{fig:attention_field} shows a typical belief attention field between agents $i=0$ and $j=1$ across the two-dimensional base manifold. The field exhibits spatial structure reflecting both geometric proximity in the base space and informational coherence in the statistical manifold. Regions where agent $i$'s transported beliefs align strongly with agent $j$ show high attention values (warm colors), enabling strong information exchange. Regions of divergence show low attention (cool colors), indicating informational independence. The spatial dependence arises because beliefs $q_i(c)$ and $q_j(c)$ vary smoothly across the base manifold, and the KL divergence $\mathrm{KL}(q_i(c) \| \Omega_{ij}(c)[q_j(c)])$ captures this variation after accounting for gauge frame differences through the transport operator. This demonstrates that familiar machine learning constructs like attention weights are not arbitrary design choices but necessary consequences of information-geometric principles combined with gauge-covariant transport on statistical manifolds.
 
@@ -731,11 +740,11 @@ The attention field $\beta_{ij}(c)$ is not a hand-crafted kernel but emerges fro
 
 \subsubsection{Interpretation of Each Term}
 
-The self-consistency term $\sum_i \int \chi_i(c) \, \mathrm{KL}(q_i \| p_i) \, dc$ encodes that each agent pays an energetic cost for beliefs deviating from priors. This enforces internal coherence - beliefs should align with the agent's generative model of reality. An agent maintaining beliefs wildly inconsistent with its prior expectations accumulates high free energy, driving belief updates toward internal consistency.
+The self-consistency term $\sum_i \int \chi_i(c) \, \mathrm{KL}(q_i \| p_i) \, dc$ encodes that each agent pays an energetic cost for beliefs deviating from priors. This enforces internal coherence: beliefs should align with the agent's prior expectations, which are themselves fixed by the slow-subsystem generative model $s_i$ acting through the prior $p_i$. An agent maintaining beliefs wildly inconsistent with its prior expectations accumulates high free energy, driving belief updates toward internal consistency.
 
 The belief alignment term $\sum_{ij} \int \chi_{ij}(c) \, \beta_{ij}(c) \, \mathrm{KL}(q_i \| \Omega_{ij}[q_j]) \, dc$ captures that on overlapping regions, agents pay costs for disagreeing about beliefs after accounting for frame differences. The weight $\beta_{ij}(c)$ allocates attention dynamically - it is higher when $\mathrm{KL}(q_i \| \Omega_{ij}[q_j])$ is small, meaning agents already nearly agree. This creates a positive feedback loop: agreement increases attention, which further increases agreement, driving consensus formation.
 
-The model alignment term $\sum_{ij} \int \chi_{ij}(c) \, \gamma_{ij}(c) \, \mathrm{KL}(p_i \| \tilde{\Omega}_{ij}[p_j]) \, dc$ ensures agents align not just current beliefs but also generative models - their expectations about how the world works. This creates shared ontologies and common conceptual frameworks. Agents developing divergent models accumulate alignment costs, driving toward consensus about basic structure even when beliefs about specific observations differ.
+The model alignment term $\sum_{ij} \int \chi_{ij}(c) \, \gamma_{ij}(c) \, \mathrm{KL}(s_i \| \tilde{\Omega}_{ij}[s_j]) \, dc$ ensures agents align not just current beliefs but also generative models---their expectations about how the world works. This creates shared ontologies and common conceptual frameworks. Agents developing divergent models accumulate alignment costs, driving toward consensus about basic structure even when beliefs about specific observations differ. The per-agent priors $p_i$ are not coupled across agents in this formulation: the per-token PriorBank role of $p_i$ in the transformer limit (Section~\ref{sec:transformers}) is local to each agent, and inter-agent agreement at the slow level is carried by the model coupling on $s_i$.
 
 The observation likelihood term $\sum_i \int \chi_i(c) \, \mathbb{E}_{q_i}[\log p(o \mid q_i)] \, dc$ grounds the system in empirical reality. Beliefs must explain observations, preventing agents from drifting into self-consistent but false consensus. This term breaks symmetry - without observations, agents might achieve perfect internal coherence while being completely disconnected from external reality. Observations provide the crucial anchor tethering informational dynamics to the noumenal substrate.
 
@@ -855,7 +864,7 @@ The emergence of specialized agents enables hierarchical structure formation. As
 
 Physical systems often exhibit multiple characteristic timescales. Electrons orbit atoms in femtoseconds while continental drift occurs over millions of years. This time-scale separation enables hierarchical descriptions where fast variables equilibrate on the frozen background of slow variables. Our free energy functional naturally exhibits analogous structure.
 
-The full system contains fast variables (beliefs $\{q_i(c)\}$ responding to observations), slow variables (priors or models $\{p_i(c)\}$ encoding long-term structure), and very slow variables (gauge frames $\{\phi_i(c)\}$ defining reference systems). This separation is not imposed by hand but emerges from the functional form and the different roles these fields play in information processing. Fast variables track rapidly changing sensory input. Slow variables encode accumulated statistical regularities. Very slow variables represent fundamental reference frame choices rarely reconsidered.
+The full system contains fast variables (beliefs $\{q_i(c)\}$ responding to observations on the perceptual timescale), medium variables (priors $\{p_i(c)\}$ that initialise beliefs and absorb per-token statistics), slow variables (generative models $\{s_i(c)\}$ that encode long-term structure and carry meta-cognitive consensus), and very slow variables (gauge frames $\{\phi_i(c)\}$ defining reference systems). The hyper-priors $\{r_i(c)\}$ are fixed structural inputs at the slowest timescale. This separation is not imposed by hand but emerges from the functional form and the different roles these fields play in information processing. Fast variables track rapidly changing sensory input. Slow variables encode accumulated statistical regularities. Very slow variables represent reference frame choices rarely reconsidered.
 
 \subsubsection{Fast Subsystem: Belief Dynamics}
 
@@ -873,14 +882,14 @@ Natural gradient descent on beliefs follows $\partial q_i/\partial \tau = -\eta_
 
 \subsubsection{Slow Subsystem: Model Learning}
 
-On longer timescales, agents update their generative models or priors $p_i$ to reflect long-term statistical structure. The relevant free energy is
+On longer timescales, agents update their generative models $s_i$ to reflect long-term statistical structure, regularised by the model hyper-priors $r_i$ and coupled to neighbours through the model-alignment term. The relevant free energy is
 
 \begin{equation}
-S_{\text{slow}}[\{p_i\}] = \sum_i \int \chi_i(c) \, \mathrm{KL}(p_i(c) \| p_{0,i}(c)) \, dc
-+ \sum_{ij} \int \chi_{ij}(c) \, \gamma_{ij}(c) \, \mathrm{KL}(p_i(c) \| \tilde{\Omega}_{ij}[p_j(c)]) \, dc
+S_{\text{slow}}[\{s_i\}] = \sum_i \int \chi_i(c) \, \mathrm{KL}(s_i(c) \| r_i(c)) \, dc
++ \sum_{ij} \int \chi_{ij}(c) \, \gamma_{ij}(c) \, \mathrm{KL}(s_i(c) \| \tilde{\Omega}_{ij}[s_j(c)]) \, dc
 \end{equation}
 
-where $p_{0,i}$ are base priors representing evolutionary or training-time defaults. In the transformer implementation, for example, the priors are the initial token embeddings.  Natural gradient descent on priors follows $\partial p_i/\partial \tau = -\eta_p \, \tilde{\nabla}_{p_i} S_{\text{slow}}$ with learning rate $\eta_p \ll \eta_q$, much slower than belief updates. This corresponds to learning and adaptation timescales where agents slowly adjust expectations about how the world works, coordinating with other agents to develop shared ontologies and common conceptual frameworks.
+where $r_i$ are the per-agent model hyper-priors representing evolutionary or training-time structural defaults. Natural gradient descent on models follows $\partial s_i/\partial \tau = -\eta_s \, \tilde{\nabla}_{s_i} S_{\text{slow}}$ with learning rate $\eta_s \ll \eta_q$, much slower than belief updates. This corresponds to learning and adaptation timescales where agents slowly adjust expectations about how the world works, coordinating with other agents to develop shared ontologies and common conceptual frameworks. Per-token priors $p_i$ also evolve on a learning timescale (in the transformer limit they appear as the PriorBank entries, updated by gradient descent over training data; Section~\ref{sec:transformers}), but their update is local to each agent and is not coupled across agents at this level.
 
 \subsubsection{Gauge Frame Evolution}
 
@@ -1122,7 +1131,7 @@ Meta-agents emerge when scale-$s$ agents exhibit sufficient coherence and spatia
 C_{\mathrm{belief}}(\{i\}, x) = 1 - \frac{1}{|\{i\}|^2}\sum_{i,j \in \{i\}} \mathrm{KL}\big(q_i^{(s)}(x) \,\|\, \Omega_{ij}[q_j^{(s)}](x)\big)
 \end{equation}
 
-Model coherence similarly measures alignment of generative models through $C_{\mathrm{model}}(\{i\}, x) = 1 - \frac{1}{|\{i\}|^2}\sum_{i,j \in \{i\}} \mathrm{KL}\big(p_i^{(s)}(x) \,\|\, \tilde{\Omega}_{ij}[p_j^{(s)}](x)\big)$. Presence measures spatial overlap via $P(\{i\}, x) = \frac{1}{|\{i\}|}\sum_{i \in \{i\}} \chi_i(x)$ where $\chi_i(x)$ is agent $i$'s support function indicating where it maintains beliefs.
+Model coherence similarly measures alignment of generative models through $C_{\mathrm{model}}(\{i\}, x) = 1 - \frac{1}{|\{i\}|^2}\sum_{i,j \in \{i\}} \mathrm{KL}\big(s_i^{(s)}(x) \,\|\, \tilde{\Omega}_{ij}[s_j^{(s)}](x)\big)$, where $s_i^{(s)}$ denotes the generative model of agent $i$ at hierarchical scale $s$ (the superscript indexes scale, the subscript indexes agent). Presence measures spatial overlap via $P(\{i\}, x) = \frac{1}{|\{i\}|}\sum_{i \in \{i\}} \chi_i(x)$ where $\chi_i(x)$ is agent $i$'s support function indicating where it maintains beliefs.
 
 The consensus score combines these factors multiplicatively as $\Gamma(\{i\}, x) = C_{\mathrm{belief}} \cdot C_{\mathrm{model}} \cdot P(\{i\}, x)$. A meta-agent forms when both $\Gamma(\{i\}, x) > \Gamma_{\min}$ (sufficient consensus) and $|\{i\}| \geq N_{\min}$ (sufficient cluster size). We use $\Gamma_{\min} = 0.5$ and $N_{\min} = 2$ in our simulations. These are ad-hoc thresholds chosen for computational convenience; the theoretical framework does not prescribe specific values. Lower thresholds produce more meta-agents from weaker coherence, higher thresholds require stronger consensus before formation occurs.
 
@@ -1345,9 +1354,9 @@ This is the precise mathematical realization of Wheeler's vision. Geometric stru
 
 The two induced metrics carry qualitatively different interpretations. The belief pullback $G_i^{(q)}$ encodes epistemic geometry. It reflects agent $i$'s current posterior beliefs at each point in the base manifold. This geometry is highly dynamical, changing rapidly as new observations arrive and beliefs update. It encodes where the agent is uncertain, with regions of high belief gradient corresponding to short information distances. This epistemic metric is analogous to the instantaneous state of a system in phase space representing a snapshot of current knowledge that fluctuates on fast timescales.
 
-The prior pullback $G_i^{(p)}$ encodes ontological geometry. It reflects the agent's generative model of how reality is structured. This geometry evolves quasi-statically, changing only as the agent learns and refines its world model. Rather than representing momentary belief states, it captures the agent's long-term expectations about the statistical structure of the environment. This ontological metric is analogous to a potential energy landscape or background geometry that shapes but does not directly constitute the dynamical state.
+The prior pullback $G_i^{(p)}$ encodes ontological geometry. It reflects the structure of agent $i$'s prior expectations $p_i$, which are themselves shaped on a slower timescale by the generative model $s_i$. This geometry evolves quasi-statically, changing only as the agent learns and refines its prior. Rather than representing momentary belief states, it captures the agent's long-term expectations about the statistical structure of the environment. This ontological metric is analogous to a potential energy landscape or background geometry that shapes but does not directly constitute the dynamical state.
 
-We conjecture that the prior-induced metric $G_i^{(p)}$ represents the agent's perceived geometry of reality. What the agent experiences as "spatial distance" or "spatial structure" is the information-geometric distance in its generative model. This has a profound implication: different agents with different priors perceive different geometries on the same underlying noumenal base $\mathcal{C}$. There is no "true" metric on $\mathcal{C}$ independent of agents, only agent-dependent induced metrics arising from their information processing.
+We conjecture that the prior-induced metric $G_i^{(p)}$ represents the agent's perceived geometry of reality. What the agent experiences as "spatial distance" or "spatial structure" is the information-geometric distance in its prior $p_i$ (and, indirectly, in the slower-timescale generative model $s_i$ that shapes $p_i$). This has a profound implication: different agents with different priors perceive different geometries on the same underlying noumenal base $\mathcal{C}$. There is no "true" metric on $\mathcal{C}$ independent of agents, only agent-dependent induced metrics arising from their information processing.
 
 This perspective aligns with Kant's phenomenal/noumenal distinction, where space is a form of intuition rather than a property of things-in-themselves. It resonates with Wheeler's observer-participatory universe, where reality cannot be separated from the act of observation. Modern cognitive science's "controlled hallucination" view of perception~\cite{Clark2016,Hoffman2019} provides empirical support in that what we perceive as external space may indeed be an internal construction optimized for prediction and action.
 
@@ -1698,7 +1707,7 @@ $c$ & Information propagation speed & Unmeasured \\
 
 We have shown rigorously that smooth sections of statistical bundles induce Riemannian metrics on base manifolds via Fisher-Rao pullback. These induced metrics are observer-dependent---different agents with different beliefs and gauge frames perceive different geometric structures on the same underlying noumenal substrate. Gauge-invariant collective metrics can be constructed through gauge averaging, providing a framework for consensus geometry. The eigenvalue hierarchies of these induced metrics naturally produce multi-sector dimensional structure, separating observable, dark, and internal components.
 
-Several speculative extensions suggest themselves. The prior-induced metric $G^{(p)}$ may represent the phenomenal space perceived by agents (what we experience as "physical space" could be the information-geometric structure of our collective generative models). The temporal direction may emerge from belief trajectory tangent vectors, with proper time measuring information distance traveled. The connection to physical gauge invariance may arise from multi-agent consensus requirements such that gauge invariance in physics could be a consequence of agents requiring frame-independent descriptions of shared reality. The $(1+3)$ dimensional structure of observed spacetime may reflect an eigenvalue hierarchy in human cognitive systems.
+Several speculative extensions suggest themselves. The prior-induced metric $G^{(p)}$ may represent the phenomenal space perceived by agents (what we experience as "physical space" could be the information-geometric structure of our collective priors $p_i$, themselves shaped at the slower timescale by the generative models $s_i$). The temporal direction may emerge from belief trajectory tangent vectors, with proper time measuring information distance traveled. The connection to physical gauge invariance may arise from multi-agent consensus requirements such that gauge invariance in physics could be a consequence of agents requiring frame-independent descriptions of shared reality. The $(1+3)$ dimensional structure of observed spacetime may reflect an eigenvalue hierarchy in human cognitive systems.
 
 Critical open problems remain. We have not derived the Lorentzian signature. The assignment of opposite signs to temporal and spatial metric components remains a phenomenological postulate. No quantitative connection has been established to measured physical spacetime, nor do we predict specific physical constants or observables. The framework lacks matter fields and interaction mechanisms that would be necessary for a complete physical theory. These limitations notwithstanding, the construction provides a proof of concept that spacetime-like geometric structure and physics can emerge from pure information geometry without assuming it as fundamental input.
 
@@ -2320,7 +2329,7 @@ The biggest challenge is reproducing the Lorentz signature $(-,+,+,+)$ since the
 Objectivity therefore is an emergent aspect of inter-subjective consensus. What we call "universal physical laws," "shared spacetime," and "objective mass" are the gauge-invariant structures that persist at equilibrium when agents minimize their collective free energy.  Incidentally, this mechanism (if true) offers a straightforward explanation of gauge invariance in physics: we must have gauge invariance in order to agree on our observations.
 
 This framework naturally accounts for why human observers largely agree 
-on physical reality. We have evolved similar generative models and converged on consensus priors through shared sensory channels and cultural transmission. It also explains perceptual variations: altered states (psychedelics, sensory deprivation, meditation, neurological conditions) temporarily shift an individual's priors away from consensus, leading to experiences of modified spacetime structure, altered causal relations, or anomalous physics. These are not pathological "hallucinations" in the sense of perceiving non-existent entities, but rather genuine differences in the pullback geometry experienced by an agent operating with non-consensus priors.
+on physical reality. We have evolved similar generative models $s_i$ and, through them, converged on consensus priors $p_i$ via shared sensory channels and cultural transmission. It also explains perceptual variations: altered states (psychedelics, sensory deprivation, meditation, neurological conditions) temporarily shift an individual's priors away from consensus, leading to experiences of modified spacetime structure, altered causal relations, or anomalous physics. These are not pathological "hallucinations" in the sense of perceiving non-existent entities, but rather genuine differences in the pullback geometry experienced by an agent operating with non-consensus priors.
 
 The theory thus dissolves the hard boundary between "veridical perception" and "altered states". Both are valid geometries on the statistical manifold, differing only in their degree of alignment with the consensus equilibrium.
 
@@ -2424,7 +2433,7 @@ The gauge-theoretic framework provides structure beyond what standard transforme
 
 Standard transformers represent the zero-dimensional, gauge-fixed, single-scale limit of this richer geometric structure. They succeed because they capture the essential information-theoretic core, but they omit the geometric content that could enable more sophisticated spatial reasoning, hierarchical abstraction, and emergent geometric structure. The framework suggests that neural architectures are computational approximations to deeper information-geometric principles. Standard transformers succeed not because of clever engineering tricks but because they approximate variational free energy minimization on statistical manifolds using the attention mechanism of agent-coordination. This reframes deep learning as the discovery of efficient algorithms for information-theoretic inference rather than the design of novel computational primitives.
 
-Several directions for extending transformers emerge naturally. Activating gauge structure with $G \neq \{e\}$ yields gauge-theoretic transformers with explicit frame transformations between agents, potentially enabling better handling of perspective-dependent or coordinate-system-dependent representations.  Enabling hierarchical meta-agent formation may produce transformers with emergent abstraction levels determined dynamically through consensus detection rather than fixed architectural choices. Incorporating the model alignment term $\gamma_{ij} \mathrm{KL}(p_i \| \tilde{\Omega}_{ij}[p_j])$ encourages agents to align not just beliefs but underlying ontologies, potentially useful for multi-agent systems or continual learning. We have considered only the 0-dimensional transformer limit here; yet our framework allows the possibility of "fields" of transformers wired together via innate gauge fields or induced connections on the base manifold.
+Several directions for extending transformers emerge naturally. Activating gauge structure with $G \neq \{e\}$ yields gauge-theoretic transformers with explicit frame transformations between agents, potentially enabling better handling of perspective-dependent or coordinate-system-dependent representations.  Enabling hierarchical meta-agent formation may produce transformers with emergent abstraction levels determined dynamically through consensus detection rather than fixed architectural choices. Incorporating the model alignment term $\gamma_{ij} \mathrm{KL}(s_i \| \tilde{\Omega}_{ij}[s_j])$ encourages agents to align not just beliefs but underlying generative models, potentially useful for multi-agent systems or continual learning. We have considered only the 0-dimensional transformer limit here; yet our framework allows the possibility of "fields" of transformers wired together via innate gauge fields or induced connections on the base manifold.
 
 These extensions may prove relevant for several emerging research directions. Multi-agent AI systems requiring ontological alignment could benefit from explicit model coupling. Hierarchical world models with emergent abstraction arise naturally from consensus detection. Embodied AI with spatial and geometric structure connects naturally to the gauge-theoretic formalism. Cognitive architectures with multiple timescales align with the framework's natural separation between fast beliefs, slow priors, and very slow frame adjustments. The validation of transformers as a special case provides justification that extensions of the framework may yield practical architectures rather than merely theoretical and philosophical constructions.
 
@@ -2465,19 +2474,19 @@ Modern fundamental physics is formulated as gauge theories. Electromagnetism eme
 The standard answer treats gauge symmetry as a fundamental feature of physical reality - the universe simply is gauge-symmetric, and our theories reflect this objective fact. Our framework suggests a radically different explanation that inverts the traditional ontology. Gauge invariance may not be imposed by nature but rather by human cognitive architecture and the requirements of intersubjective consensus. We discover gauge theories not because the noumenal substrate possesses gauge structure but because gauge-covariant theories are the only ones that can achieve stable agreement across human observers with diverse internal reference frames.
 
 
-\subsubsection{Prior Alignment and Gauge Covariance}
+\subsubsection{Model Alignment and Gauge Covariance}
 
-Recall the model alignment term in our free energy functional
+Recall the model alignment term in the free energy functional
 
 \begin{equation}
-S_{\text{model}} = \sum_{ij} \int_{\mathcal{C}} \gamma_{ij}(x) \, \mathrm{KL}\big(p_i(x) \,\|\, \tilde{\Omega}_{ij}[p_j](x)\big) \, dx
+S_{\text{model}} = \sum_{ij} \int_{\mathcal{C}} \gamma_{ij}(x) \, \mathrm{KL}\big(s_i(x) \,\|\, \tilde{\Omega}_{ij}[s_j](x)\big) \, dx
 \end{equation}
 
-This term drives alignment of priors (generative models) across agents. When humans construct scientific theories, they are collectively building shared models $p_{\text{human}}(x)$ that multiple agents - different scientists with different backgrounds, conceptual frameworks, and measurement conventions - must agree upon. The success of science depends on achieving this consensus: theories must make predictions that all qualified observers agree upon, regardless of their individual perspectives.
+This term drives alignment of generative models $s_i$ across agents. When humans construct scientific theories, they are collectively building shared models $s_{\text{human}}(x)$ that multiple agents---different scientists with different backgrounds, conceptual frameworks, and measurement conventions---must agree upon. The success of science depends on achieving this consensus: theories must make predictions that all qualified observers agree upon, regardless of their individual perspectives.
 
 For model alignment to succeed, we require:
 \begin{equation}
-\mathrm{KL}\big(p_i \,\|\, \tilde{\Omega}_{ij}[p_j]\big) \to 0
+\mathrm{KL}\big(s_i \,\|\, \tilde{\Omega}_{ij}[s_j]\big) \to 0
 \end{equation}
 
 This demands that models transform covariantly under transport operators $\tilde{\Omega}_{ij} = \exp(\phi_i)\exp(-\phi_j)$ connecting different gauge frames. In other words, scientific models must be gauge-covariant to achieve human consensus. A theory formulated in a way that depends essentially on one researcher's arbitrary internal coordinates cannot be reliably communicated to and verified by other researchers with different internal coordinates.
@@ -2494,7 +2503,7 @@ Newtonian mechanics achieved consensus by formulating laws independent of coordi
 
 We propose that this progression reveals not just mathematical elegance but cognitive necessity. Gauge invariance appears repeatedly in successful physics because only gauge-invariant theories can achieve stable consensus among human physicists operating with different internal reference frames. The selection pressure for gauge structure comes not from nature but from the requirements of human collaborative knowledge construction.
 
-This suggests a revolutionary reinterpretation that gauge invariance is not a property of the noumenal substrate $\mathcal{C}$ but an emergent property of human collective cognition. We discover gauge theories because our priors $p_{\text{human}}$ must align across individuals, and this alignment enforces gauge covariance. The noumenal reality may possess no intrinsic gauge structure whatsoever. Gauge structure appears in our scientific theories because it constitutes the mathematical form that our distributed cognitive architecture can construct and maintain consistently.
+This suggests a revolutionary reinterpretation that gauge invariance is not a property of the noumenal substrate $\mathcal{C}$ but an emergent property of human collective cognition. We discover gauge theories because our generative models $s_{\text{human}}$ must align across individuals, and this alignment enforces gauge covariance. The noumenal reality may possess no intrinsic gauge structure whatsoever. Gauge structure appears in our scientific theories because it constitutes the mathematical form that our distributed cognitive architecture can construct and maintain consistently.
 
 \subsubsection{Altered States and Non-Gauge-Invariant Perception}
 
@@ -2598,7 +2607,7 @@ Two honest divergences should be noted. Lahav and Neemeh's account is positioned
 
 Our framework suggests a reconceptualization of scientific progress and theory development. The traditional view holds that science discovers objective truths about nature through hypothesis formulation and empirical testing. Better theories correspond more accurately to external reality, with scientific progress constituting asymptotic approach to truth.
 
-Our framework offers an alternative interpretation. Science constructs shareable models $p_{\text{scientific}}$ that optimize a multi-objective function. First, models must minimize KL divergence from empirical observations.  This is the conventional empirical adequacy criterion. Second, models must achieve intersubjective consensus across diverse researchers, minimizing $\sum_{ij} \mathrm{KL}(p_i \| \Omega_{ij}[p_j])$ through model alignment. Different scientists with different backgrounds and perspectives must converge on shared models. Third, as discussed earlier, models must exhibit gauge invariance to enable cognitive shareability across different internal reference frames.
+Our framework offers an alternative interpretation. Science constructs shareable generative models $s_{\text{scientific}}$ that optimize a multi-objective function. First, models must minimize KL divergence from empirical observations; this is the conventional empirical adequacy criterion. Second, models must achieve intersubjective consensus across diverse researchers, minimizing $\sum_{ij} \gamma_{ij}\,\mathrm{KL}(s_i \| \tilde{\Omega}_{ij}[s_j])$ through the model-alignment term. Different scientists with different backgrounds and perspectives must converge on shared models. Third, as discussed earlier, models must exhibit gauge invariance to enable cognitive shareability across different internal reference frames.
 
 Scientific "truth" in this view is not correspondence with the unknowable noumenal manifold $\mathcal{C}$ but optimal collective free energy minimization satisfying these multiple constraints. Better theories are those that simultaneously fit observations, achieve consensus, and maintain gauge covariance. This is a pragmatic, instrumentalist reconception of scientific knowledge~\cite{vanFraassen1980,Laudan1984}.
 
@@ -2606,9 +2615,9 @@ Scientific "truth" in this view is not correspondence with the unknowable noumen
 
 Kuhn's analysis of scientific revolutions~\cite{Kuhn1962} describes periods of normal science punctuated by revolutionary paradigm shifts. Normal science operates within an established paradigm, solving puzzles using accepted methods and concepts. Revolutions occur when accumulated anomalies undermine the paradigm, leading to adoption of a qualitatively new framework. Kuhn controversially argued that successive paradigms are incommensurable, i.e. they cannot be directly compared or translated into each other's terms.
 
-Our framework provides formal structure for Kuhn's informal analysis. Normal science corresponds to a period where the scientific community shares gauge frame $\phi_{\text{old}}$ with associated model $p_{\text{old}}$. Research proceeds through incremental refinement of this model, minimizing free energy within the established gauge structure. Anomalies accumulate when observations $o$ increasingly conflict with $p_{\text{old}}$, raising collective free energy despite ongoing efforts at accommodation.
+Our framework provides formal structure for Kuhn's informal analysis. Normal science corresponds to a period where the scientific community shares gauge frame $\phi_{\text{old}}$ with associated generative model $s_{\text{old}}$. Research proceeds through incremental refinement of this model, minimizing free energy within the established gauge structure. Anomalies accumulate when observations $o$ increasingly conflict with $s_{\text{old}}$, raising collective free energy despite ongoing efforts at accommodation.
 
-A scientific revolution occurs as collective gauge transformation $\phi_{\text{old}} \to \phi_{\text{new}}$ with accompanying model shift $p_{\text{old}} \to p_{\text{new}}$. Early adopters develop the new framework, demonstrating that $p_{\text{new}}$ better explains observations. If successful, model alignment pressure drives transformation through the community. Scientists adopt $\phi_{\text{new}}$ because it enables lower free energy states than maintaining $\phi_{\text{old}}$ against mounting empirical tension.
+A scientific revolution occurs as collective gauge transformation $\phi_{\text{old}} \to \phi_{\text{new}}$ with accompanying model shift $s_{\text{old}} \to s_{\text{new}}$. Early adopters develop the new framework, demonstrating that $s_{\text{new}}$ better explains observations. If successful, model-alignment pressure drives transformation through the community. Scientists adopt $\phi_{\text{new}}$ because it enables lower free energy states than maintaining $\phi_{\text{old}}$ against mounting empirical tension.
 
 Kuhn's incommensurability thesis corresponds to weak transport between distant gauge frames. When $\phi_{\text{old}}$ and $\phi_{\text{new}}$ are sufficiently different, the transport operator $\Omega_{\text{old,new}}$ approaches zero such that meaningful translation becomes nearly impossible. Concepts natural in one paradigm lack direct counterparts in the other. This is not mere linguistic difficulty but reflects genuine structural differences in how the frameworks organize information. Scientists on opposite sides of a revolution literally inhabit different phenomenal realities despite observing the same noumenal substrate.
 
@@ -2706,7 +2715,7 @@ Several fundamental problems must be resolved before this framework can claim to
 
 In 1990, John Archibald Wheeler asked: "How come existence?" He proposed that the answer lay in information, articulating his vision through "it from bit" and the participatory universe - the idea that observers play an active role in bringing reality into being. For over three decades, this vision remained largely philosophical, inspiring but lacking mathematical precision and empirical grounding.
 
-We have developed a gauge-theoretic active inference framework that provides mathematical structure for exploring Wheeler's ideas. Agents are represented as smooth sections of principal bundles, maintaining probabilistic beliefs $q_i(c)$ and generative models $p_i(c)$ over a base manifold $\mathcal{C}$. These agents couple through information-theoretic interactions mediated by gauge-covariant transport operators $\Omega_{ij}$, minimizing collective variational free energy. The framework naturally generates hierarchical structure through consensus-driven meta-agent formation, creating bidirectional information flow between scales.
+We have developed a gauge-theoretic active inference framework that provides mathematical structure for exploring Wheeler's ideas. Agents are represented as smooth sections of principal bundles, maintaining probabilistic beliefs $q_i(c)$, priors $p_i(c)$, and generative models $s_i(c)$ over a base manifold $\mathcal{C}$. These agents couple through information-theoretic interactions mediated by gauge-covariant transport operators $\Omega_{ij}$, minimizing collective variational free energy. The framework naturally generates hierarchical structure through consensus-driven meta-agent formation, creating bidirectional information flow between scales.
 
 The framework's most concrete achievement is demonstrating that transformer attention mechanisms emerge rigorously as the zero-dimensional limit of gauge-theoretic variational inference. We have implemented working gauge-theoretic transformers achieving competitive performance with standard architectures on language modeling tasks, with strong empirical correlation (r=0.821) between our information-theoretic attention weights and learned BERT patterns. This validates the framework's core mathematical structure in at least one domain and establishes that practical machine learning can be understood through sophisticated gauge theory.
 
