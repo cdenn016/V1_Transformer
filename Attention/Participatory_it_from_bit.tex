@@ -47,7 +47,7 @@
 
 
 \begin{abstract}
-We construct a gauge theory of variational inference on a principal $G$-bundle and use it to give mathematical content to several proposals that have circulated as informal philosophy: Wheeler's ``it from bit'', Kant's phenomenal/noumenal distinction, and Lahav and Neemeh's recent argument that phenomenal consciousness is a frame-relative quantity. Agents are smooth sections of an associated bundle carrying beliefs $q(c)$, priors $p(c)$, and gauge frames $\phi(c)$ over a base manifold. Inter-agent interaction is mediated by gauge-covariant transport operators $\Omega_{ij} = e^{\phi_i}e^{-\phi_j}$, with coupling strengths given by a softmax over Kullback-Leibler divergences. Dynamics arise from natural-gradient descent on a global variational free energy. The construction yields four results. First, in the 0-dimensional limit it recovers standard transformer attention, and the resulting architecture is a working language model when trained without learned attention projections, MLPs, or pointwise activation functions. Second, agent gauge frames provide an explicit transformation law between cognitive reference frames in the sense of Lahav and Neemeh, supplying the group action and frame-invariant quantity their account requires but does not write down. Third, multi-scale meta-agent dynamics with bidirectional consensus run in working simulations. Fourth, in a linearized 2D worked example, imaginary $\mathrm{GL}(K, \mathbb{C})$ gauge frames produce indefinite pullback metrics with Lorentz subgroup $\mathrm{SO}(1,1)$ emerging without ad hoc signature assignment; the four-dimensional, fully nonlinear extension is left open. The framework does not yet predict physical constants, does not yet contain a rigorous quantum extension, and does not solve the hard problem of consciousness so much as relocate it; these limitations are stated explicitly in Section~\ref{sec:scope_limitations}. What it does provide is a mathematical setting in which observer-dependent reality, frame-relative experience, and information-theoretic emergence of geometric structure can be studied without leaving rigorous ground.
+We construct a gauge theory of variational inference on a principal $G$-bundle and use it to give mathematical content to several proposals that have circulated as informal philosophy: Wheeler's ``it from bit'', Kant's phenomenal/noumenal distinction, and Lahav and Neemeh's recent argument that phenomenal consciousness is a frame-relative quantity. Agents are smooth sections of an associated bundle carrying beliefs $q(c)$, priors $p(c)$, and gauge frames $\phi(c)$ over a base manifold. Inter-agent interaction is mediated by gauge-covariant transport operators $\Omega_{ij} = e^{\phi_i}e^{-\phi_j}$, with coupling strengths given by a softmax over Kullback-Leibler divergences. Dynamics arise from natural-gradient descent on a global variational free energy. The construction yields four results. First, in the 0-dimensional limit it recovers standard transformer attention, and the resulting architecture is a working language model when trained without learned attention projections, MLPs, or pointwise activation functions; multi-seed validation on WikiText-103 across embedding dimensions $K \in [10, 120]$ and three independent seeds, at an iso-token budget of $122.9$M tokens, exhibits clean power-law scaling $\mathrm{PPL} = aK^b + c$ with $b = -1.05$ (95\% bootstrap CI $[-1.10, -1.00]$) and $R^2 = 1.000$ on the per-$K$ seed means. Second, agent gauge frames provide an explicit transformation law between cognitive reference frames in the sense of Lahav and Neemeh, supplying the group action and frame-invariant quantity their account requires but does not write down. Third, multi-scale meta-agent dynamics with bidirectional consensus run in working simulations. Fourth, in a linearized 2D worked example, imaginary $\mathrm{GL}(K, \mathbb{C})$ gauge frames produce indefinite pullback metrics with Lorentz subgroup $\mathrm{SO}(1,1)$ emerging without ad hoc signature assignment; the four-dimensional, fully nonlinear extension is left open. The framework does not yet predict physical constants, does not yet contain a rigorous quantum extension, and does not solve the hard problem of consciousness so much as relocate it; these limitations are stated explicitly in Section~\ref{sec:scope_limitations}. What it does provide is a mathematical setting in which observer-dependent reality, frame-relative experience, and information-theoretic emergence of geometric structure can be studied without leaving rigorous ground.
 \end{abstract}
 
 \noindent\textbf{Keywords:} Gauge theory $\cdot$ Active inference $\cdot$ Free energy principle $\cdot$ Information geometry $\cdot$ Emergent spacetime $\cdot$ Transformer architectures
@@ -95,7 +95,7 @@ We present a mathematical framework for multi-agent interaction that takes cogni
 
 This framework produces several emergent phenomena:
 \begin{enumerate}
-\item Spacetime-like structure emerges from pullbacks of agent beliefs to a noumenal base manifold, inducing Fisher information metrics that decompose into observable, dark, and internal sectors
+\item Spacetime-like structure emerges from pullbacks of agent beliefs to a noumenal base manifold, inducing Fisher information metrics that decompose into observable, subthreshold informational, and internal sectors
 
 \item Causality emerges from gauge-covariant transport operators defining information flow between agents
 \item Physical laws emerge as information-theoretic necessities (e.g., the second law from non-negative KL divergence)
@@ -109,7 +109,7 @@ The framework realizes Wheeler's "it from bit" vision mathematically. It bridges
 
 This work operates at three distinct epistemic levels:
 
-\textbf{Level 1: Validated Results.} Transformer attention mechanisms emerge as the zero-dimensional limit of our gauge-theoretic variational inference (Section~\ref{sec:transformers}). We have implemented gauge-theoretic transformers achieving competitive performance: r=0.821 correlation with BERT attention patterns, 20\% lower perplexity on WikiText-2 despite 25\% fewer parameters. This constitutes falsifiable, empirically confirmed prediction.
+\textbf{Level 1: Validated Results.} Transformer attention mechanisms emerge as the zero-dimensional limit of the gauge-theoretic variational inference (Section~\ref{sec:transformers}). Two empirical layers support the derivation. (a) A small-scale single-seed study on WikiText-2 (character-level, embedding dimension 11, context length 32) achieves $r = 0.821$ correlation with BERT attention patterns and $20\%$ lower perplexity than baseline despite $25\%$ fewer parameters; this is a proof-of-principle, not a statistical claim, and seed/CI/test-split details are deferred to the companion paper~\cite{Dennis2025trans}. (b) A controlled multi-seed scaling study on WikiText-103 (Section~\ref{sec:scaling_validation}) sweeps embedding dimension $K$ over eleven values in $[10, 120]$ with three seeds at iso-token budget $122.9$M tokens and fits $\mathrm{PPL} = aK^b + c$ with $b = -1.049$ (95\% bootstrap CI $[-1.103, -0.998]$), $R^2 = 1.000$. The scaling exponent is the architectural fingerprint of the gauge-theoretic model and is robust across datasets (Japanese Wikipedia at $\sim$1B tokens reaches PPL 15--30 at comparable $K$, indicating the WikiText-103 floor reflects undertrained convergence rather than a structural ceiling).
 
 \textbf{Level 2: Mathematical Implementation.} We have constructed and computationally implemented participatory dynamics (Sections~\ref{sec:framework}--\ref{sec:participatory}). Our Ouroboros Tower demonstrates bidirectional information flow: agents form meta-agents through consensus (bottom-up), while meta-agents propagate priors downward (top-down). This runs in working code for systems of 200 agents across 25 hierarchical scales. 
 
@@ -132,7 +132,11 @@ The reader should hold the claims that follow to a clearly delimited scope. The 
 
 \textbf{Conceptual reframing, not derivation.} The discussion of consciousness (Section~\ref{sec:consciousness_section}) and the connection to Lahav and Neemeh (Section~\ref{sec:lahav_convergence}) propose a relocation of the hard problem rather than a solution or a dissolution. The framework provides mathematical vocabulary for treating phenomenal experience as gauge-frame-dependent, but it does not explain why gauge frames have phenomenal character at all. We have formalised the structure of experience without explaining felt quality. Where earlier drafts described this as ``dissolving'' the hard problem, the more accurate description is that the question is moved from ``why does neural computation have felt character?'' to ``why does information-geometric structure have felt character?'' --- the explanandum is shifted, not eliminated.
 
+\textbf{Three philosophical traditions, one mathematical framework.} The introduction invokes Wheeler's ``it from bit'', Kant's phenomenal/noumenal distinction, and Lahav and Neemeh's relativistic theory of consciousness. These are not jointly consistent positions: Wheeler is a quantum-measurement participatory realist, Kant is a transcendental idealist whose noumenon is structurally inaccessible, and Lahav and Neemeh are relational physicalists whose underlying physical reality is unproblematic. The framework here gives mathematical content to a single position --- information-geometric structuralism with gauge-frame-dependent pullback (defined formally in Section~\ref{sec:consciousness_section}) --- which is consistent with elements of all three traditions but unifies none of them. Where the three positions disagree, the framework sides with Lahav and Neemeh while borrowing the noumenal/phenomenal vocabulary from Kant and the slogan ``it from bit'' from Wheeler. The borrowings should be read as borrowings of vocabulary and motivation, not of philosophical commitment.
+
 \textbf{Validated predictions.} Transformer attention patterns (validated), hierarchical information processing in neural systems (testable), linguistic coordination mechanisms (explorable), and metric decomposition signatures (speculative).
+
+\textbf{Scaling-study scope.} The WikiText-103 multi-seed validation (Section~\ref{sec:scaling_validation}) covers $K \in [10, 120]$ with three seeds at a $122.9$M iso-token budget for $1.2$ epochs. The fitted floor $c \approx 61$ reflects this undertrained-convergence regime, not architectural limits (Japanese Wikipedia experiments at roughly $10\times$ more data reach PPL 15--30 at comparable $K$). The $K$-scaling exponent $b \approx -1.0$ is robust to data quantity within the tested range; generalisation to longer training, larger vocabularies, or multi-layer stacks is unexplored. The comparison to Chinchilla-style exponents is qualitative: $K$ is embedding dimension rather than total parameter count, and the gauge model lacks learned attention projections, making the $K$-to-$N$ scaling map approximately linear rather than quadratic.
 
 Critical open problems are identified throughout and summarized in Section~\ref{sec:open_problems}.
 
@@ -560,7 +564,7 @@ An important special case occurs when the base manifold collapses to a single po
 
 \subsubsection{Summary: What This Framework Enables}
 
-Even with these simplifications, our implementation supports non-trivial gauge transport between agents, information-geometric dynamics on curved statistical manifolds, multi-scale meta-agent emergence through consensus detection, top-down participatory feedback loops, induced metric structures on the base manifold (Section~\ref{sec:pullback}), hierarchical dimensional decomposition (observable versus dark sectors), and explicit computational validation of all theoretical predictions.
+Even with these simplifications, our implementation supports non-trivial gauge transport between agents, information-geometric dynamics on curved statistical manifolds, multi-scale meta-agent emergence through consensus detection, top-down participatory feedback loops, induced metric structures on the base manifold (Section~\ref{sec:pullback}), hierarchical dimensional decomposition (observable versus subthreshold informational sectors), and explicit computational validation of all theoretical predictions.
 
 The full general framework enables exploration of several important extensions. Holonomy and path dependence arise from non-zero field strength $F_{\mu\nu}$, enabling Wilson loops and topological phases. Curved base manifolds (hyperbolic, spherical, or Riemannian $\mathcal{C}$ with intrinsic curvature) provide richer geometric substrate. Heterogeneous fibers with different statistical manifolds for beliefs versus priors ($\mathcal{B}_q \neq \mathcal{B}_p$) enable more flexible agent architectures. Non-Gaussian distributions including exponential families, mixture models, and heavy-tailed distributions expand the probability structures. Higher gauge groups such as $\mathrm{SO}(N)$, $\mathrm{SU}(N)$, or non-compact groups provide richer symmetry. Bundle morphisms with non-trivial $\Phi: \mathcal{E}_p \to \mathcal{E}_q$ represent belief realization processes. Epistemic monopoles as singular gauge field configurations with topological charge create non-perturbative effects. Quantum extensions replacing classical probability distributions with density matrices connect to quantum information theory.
 
@@ -1172,12 +1176,15 @@ where $\tilde{\mu}_i^{(j)} = \Omega_{ji}\mu_i$ is agent $i$'s mean transported i
 
 \subsection{Second Variations: The Mass Matrix}
 
-The Fisher-Rao metric $M = \partial^2 \mathcal{F}/\partial\xi\partial\xi$ serves as the mass matrix. The full state vector is $\xi = (\mu_1, \ldots, \mu_N, \Sigma_1, \ldots, \Sigma_N)$, yielding a block structure:
+The Hessian of the free energy $M = \partial^2 \mathcal{F}/\partial\xi\partial\xi$ defines a configuration-space metric on belief space, which we refer to as the \emph{mass matrix} when (and only when) it admits a kinetic interpretation. The full state vector is $\xi = (\mu_1, \ldots, \mu_N, \Sigma_1, \ldots, \Sigma_N)$, yielding the block structure
 \begin{equation}
 M = \begin{pmatrix} M_{\mu\mu} & C^{\mu\Sigma} \\ (C^{\mu\Sigma})^T & M_{\Sigma\Sigma} \end{pmatrix}
 \label{eq:mass_block_structure}
 \end{equation}
 where each block is itself an $N \times N$ matrix of sub-blocks.
+
+\paragraph{Notation hierarchy.}
+We use three related but distinct objects throughout: (i) $M_{\mu\mu}$ (a matrix), the full Hessian of the mean sector defined in \eqref{eq:mass_block_structure}; (ii) $\Sigma_{p,i}^{-1}$ (a matrix), the prior precision of agent $i$, which is the leading isolated-agent term of $[M_{\mu\mu}]_{ii}$ when inter-agent coupling and observation likelihoods are absent ($\beta_{ij}=0$, $\Lambda_{o_i}=0$); and (iii) the scalar effective mass $m_{\text{eff},i} := \mathrm{tr}([M_{\mu\mu}]_{ii})/K$ used when a one-number summary is needed (e.g., for the Newtonian-analogy $\omega^2 \propto 1/m$ scaling validated in Section~\ref{sec:empirical_mass}). When unqualified, ``the mass matrix'' refers to (i); ``mass'' as a scalar refers to (iii).
 
 \subsubsection{Mean Sector}
 
@@ -1200,7 +1207,7 @@ The sensory term does not couple different agents. Therefore:
 \boxed{[M_{\mu\mu}]_{ik} = -\beta_{ik}\Omega_{ik}\Lambda_{q_k} - \beta_{ki}\Lambda_{q_i}\Omega_{ki}^T \quad (i \neq k)}
 \label{eq:mass_mu_offdiagonal}
 \end{equation}
-The mass matrix is symmetric only when $\beta_{ik} = \beta_{ki}$ and $\Omega_{ik} = \Omega_{ki}^T$.
+The mass matrix $M_{\mu\mu}$ is symmetric only when $\beta_{ik} = \beta_{ki}$ (reciprocal attention) and $\Omega_{ik} = \Omega_{ki}^\top$ (reciprocal gauge transport). For asymmetric attention --- the generic case for directed inter-agent influence --- $M_{\mu\mu}$ is non-symmetric, the antisymmetric part generates velocity-dependent forces, and the kinetic-energy interpretation $\mathcal{T} = \tfrac12 \dot\mu^\top M_{\mu\mu} \dot\mu$ does not yield a conservative Hamiltonian. In that regime the second variation is best read as a Lyapunov / dissipative metric on configuration space rather than as an inertial tensor in the Newtonian sense; the Newtonian reading is recovered cleanly only in the symmetric-attention or isolated-agent limits where the empirical validation of Section~\ref{sec:empirical_mass} operates. Whether a non-conservative Lagrangian extension can recover the full asymmetric case is an open question we do not address here.
 
 \subsubsection{Covariance Sector}
 
@@ -1693,9 +1700,9 @@ G_i(c) = \sum_{a=1}^n \lambda_a(c) \, (e_a(c) \otimes e_a(c))
 
 where $\lambda_1 \geq \lambda_2 \geq \cdots \geq \lambda_n \geq 0$ are eigenvalues and $\{e_a\}$ are orthonormal eigenvectors.
 
-Each eigenvalue $\lambda_a$ measures information flux in the corresponding direction $e_a$. Large eigenvalues indicate directions where beliefs or priors vary rapidly such that these become observable dimensions. Small eigenvalues approaching zero indicate directions where the statistical fields remain nearly constant such that these constitute dark or unobservable dimensions carrying negligible information flux.
+Each eigenvalue $\lambda_a$ measures information flux in the corresponding direction $e_a$. Large eigenvalues indicate directions where beliefs or priors vary rapidly such that these become observable dimensions. Small eigenvalues approaching zero indicate directions where the statistical fields remain nearly constant such that these constitute subthreshold or unobservable dimensions carrying negligible information flux.
 
-\subsubsection{Observable vs. Dark vs. Internal Sectors}
+\subsubsection{Observable vs. Subthreshold Informational vs. Internal Sectors}
 
 The statistical manifold $\mathcal{B}$ is potentially very high-dimensional. For $K$-dimensional Gaussian distributions, the dimensionality is
 
@@ -1713,10 +1720,10 @@ For $K=768$ (for example, a typical transformer embedding dimension), this gives
 
 These are directions where beliefs vary significantly - the perceived spacetime. For human agents, we conjecture this comprises approximately 4 dimensions (1 temporal + 3 spatial).
 
-\textbf{Dark sector.} Intermediate eigenvalue directions
+\textbf{Subthreshold informational sector.} Intermediate-eigenvalue directions
 
 \begin{equation}
-\mathcal{D}_{\text{dark}} = \{e_a : \Lambda_{\text{dark}} < \lambda_a \leq \Lambda_{\text{obs}}\}
+\mathcal{D}_{\text{subthresh}} = \{e_a : \Lambda_{\text{subthresh}} < \lambda_a \leq \Lambda_{\text{obs}}\}
 \end{equation}
 
 These carry information but below the threshold of direct perception. This sector may comprise a large number of dimensions, depending on the complexity of the agent's information processing. While these directions may have non-negligible information flux, they may not generally manifest as perceptual spatial or temporal structure.
@@ -1724,7 +1731,7 @@ These carry information but below the threshold of direct perception. This secto
 \textbf{Internal sector.} Directions with negligible eigenvalues
 
 \begin{equation}
-\mathcal{D}_{\text{internal}} = \{e_a : \lambda_a \leq \Lambda_{\text{dark}}\}
+\mathcal{D}_{\text{internal}} = \{e_a : \lambda_a \leq \Lambda_{\text{subthresh}}\}
 \end{equation}
 
 These represent internal degrees of freedom with essentially no information flux.  The belief field remains nearly constant along these directions. For high-dimensional representations, this sector contains the vast majority of dimensions (approximately $10^5$ for $K=768$).
@@ -1733,21 +1740,21 @@ The full induced metric invites the decomposition
 
 \begin{equation}
 G_i = \sum_{a \in \mathcal{D}_{\text{obs}}} \lambda_a (e_a \otimes e_a)
-+ \sum_{a \in \mathcal{D}_{\text{dark}}} \lambda_a (e_a \otimes e_a)
++ \sum_{a \in \mathcal{D}_{\text{subthresh}}} \lambda_a (e_a \otimes e_a)
 + \sum_{a \in \mathcal{D}_{\text{internal}}} \lambda_a (e_a \otimes e_a)
 \end{equation}
 
 The dimensional and eigenvalue hierarchies satisfy
 
 \begin{equation}
-|\mathcal{D}_{\text{obs}}| \ll |\mathcal{D}_{\text{dark}}| \ll |\mathcal{D}_{\text{internal}}|
+|\mathcal{D}_{\text{obs}}| \ll |\mathcal{D}_{\text{subthresh}}| \ll |\mathcal{D}_{\text{internal}}|
 \end{equation}
 
 \begin{equation}
-\lambda_{\text{obs}} \gg \lambda_{\text{dark}} \gg \lambda_{\text{internal}} \approx 0
+\lambda_{\text{obs}} \gg \lambda_{\text{subthresh}} \gg \lambda_{\text{internal}} \approx 0
 \end{equation}
 
-We may suppose that the observable sector corresponds to the $(1+3)$ dimensions we perceive as spacetime. The dark sector carries additional informational structure that remains below the threshold of direct perception (this may provide a toy model analog for physical dark matter or dark energy, though such connections remain highly speculative). The internal sector represents the vast internal structure of the belief state with no spatial or temporal manifestation whatsoever. These are pure internal degrees of freedom that don't project onto an agent's phenomenal experience.
+We may suppose that the observable sector corresponds to the $(1+3)$ dimensions we perceive as spacetime. The subthreshold informational sector carries additional informational structure that remains below the threshold of direct perception, bearing non-negligible information flux yet not manifesting as direct phenomenal structure. The internal sector represents the vast internal structure of the belief state with no spatial or temporal manifestation whatsoever. These are pure internal degrees of freedom that don't project onto an agent's phenomenal experience.
 
 \subsubsection{Why Exactly $(3+1)$ Dimensions?}
 
@@ -1874,7 +1881,7 @@ $c$ & Information propagation speed & Unmeasured \\
 
 \subsubsection{Mathematical Results}
 
-We have shown rigorously that smooth sections of statistical bundles induce Riemannian metrics on base manifolds via Fisher-Rao pullback. These induced metrics are observer-dependent---different agents with different beliefs and gauge frames perceive different geometric structures on the same underlying noumenal substrate. Gauge-invariant collective metrics can be constructed through gauge averaging, providing a framework for consensus geometry. The eigenvalue hierarchies of these induced metrics naturally produce multi-sector dimensional structure, separating observable, dark, and internal components.
+We have shown rigorously that smooth sections of statistical bundles induce Riemannian metrics on base manifolds via Fisher-Rao pullback. These induced metrics are observer-dependent---different agents with different beliefs and gauge frames perceive different geometric structures on the same underlying noumenal substrate. Gauge-invariant collective metrics can be constructed through gauge averaging, providing a framework for consensus geometry. The eigenvalue hierarchies of these induced metrics naturally produce multi-sector dimensional structure, separating observable, subthreshold informational, and internal components.
 
 Several speculative extensions suggest themselves. The prior-induced metric $G^{(p)}$ may represent the phenomenal space perceived by agents (what we experience as "physical space" could be the information-geometric structure of our collective priors $p_i$, themselves shaped at the slower timescale by the generative models $s_i$). The temporal direction may emerge from belief trajectory tangent vectors, with proper time measuring information distance traveled. The connection to physical gauge invariance may arise from multi-agent consensus requirements such that gauge invariance in physics could be a consequence of agents requiring frame-independent descriptions of shared reality. The $(1+3)$ dimensional structure of observed spacetime may reflect an eigenvalue hierarchy in human cognitive systems.
 
@@ -1889,14 +1896,14 @@ Belief trajectory $q(\tau)$ through fiber $\mathcal{B}$ has tangent $\dot{q} \in
 \[
 T_q\mathcal{B} = \underbrace{\mathbb{R}\dot{q}}_{\substack{\text{temporal} \\ \text{1 dim}}} 
 \oplus \underbrace{V_{\text{obs}}}_{\substack{\text{obs spatial} \\ \text{3 dim}}} 
-\oplus \underbrace{V_{\text{dark}}}_{\substack{\text{dark} \\ }} 
+\oplus \underbrace{V_{\text{subthresh}}}_{\substack{\text{subthresh.} \\ }}
 \oplus \underbrace{V_{\text{internal}}}_{\substack{\text{internal} \\ }}
 \]
-Eigenvalue hierarchy in $\dot{q}^\perp = V_{\text{obs}} \oplus V_{\text{dark}} \oplus V_{\text{internal}}$: $\lambda_{\text{obs}} \gg \lambda_{\text{dark}} \gg \lambda_{\text{internal}} \approx 0$.
+Eigenvalue hierarchy in $\dot{q}^\perp = V_{\text{obs}} \oplus V_{\text{subthresh}} \oplus V_{\text{internal}}$: $\lambda_{\text{obs}} \gg \lambda_{\text{subthresh}} \gg \lambda_{\text{internal}} \approx 0$.
 
 \textbf{What we postulate:} Under the $\mathrm{SO}(3)$ restriction, Lorentzian signature $(-,+,+,+)$ for $\mathbb{R}\dot{q} \oplus V_{\text{obs}}$ must be postulated. Under the $\mathrm{GL}(K, \mathbb{C})$ extension (Section~\ref{sec:signature_resolution}), this signature can in principle be derived from the non-compact group structure. We postulate that the observable sector has exactly 3 large spatial eigenvalues.
 
-\textbf{Three-sector structure:} (1) Spacetime $(1+3)$: temporal + observable spatial, (2) Dark: moderate information flux, present but unperceived, (3) Internal: negligible flux, pure internal degrees of freedom.
+\textbf{Three-sector structure:} (1) Spacetime $(1+3)$: temporal + observable spatial, (2) Subthreshold informational: moderate information flux, present but unperceived, (3) Internal: negligible flux, pure internal degrees of freedom.
 
 \textbf{The radical claim:} The statistical manifold $\mathcal{B}$ is enormous ($\dim(\mathcal{B}) \sim 10^5$ for $K=768$). Phenomenal spacetime is a tiny 4D subspace selected by eigenvalue magnitude. The vast majority of $\mathcal{B}$'s structure never manifests spatiotemporally. The base manifold $\mathcal{C}$ is merely an index space (noumena); all geometric structure comes from Fisher metric on $\mathcal{B}$.
 \end{minipage}}
@@ -2137,6 +2144,7 @@ The edge weights (gray lines) in Fig.~\ref{fig:hierarchy} indicate the strength 
 
 
 \subsection{Computational Validation of Mass as Statistical Precision}
+\label{sec:empirical_mass}
 
 We conducted systematic computational validation of the theoretical prediction that the Fisher-Rao metric tensor $M = \Sigma_p^{-1}$ provides the natural inertial mass for belief dynamics on statistical manifolds. All experiments employed $K = 13$ dimensional latent spaces with isotropic prior covariances $\Sigma_p = \sigma^2 \mathbb{I}$, integrated using our symplectic ProductManifoldVerlet integrator (available in repository) that preserves the geometric structure of the product manifold $\mathbb{R}^K \times \text{SPD}(K) \times \mathfrak{so}(3)$. The system evolves under the full Hamiltonian
 
@@ -2149,8 +2157,8 @@ where the first term implements the Fisher-Rao metric with per-component mass $M
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=\textwidth]{Fig_1.png}
-\caption{\textbf{Inertial mass as statistical precision: $M = \Sigma_p^{-1}$.} 
-Computational validation that the Fisher-Rao metric provides the natural mass tensor for belief dynamics on statistical manifolds ($K=13$ dimensions). 
+\caption{\textbf{Isolated-agent mass scaling: $M_{\text{eff}} \propto \Sigma_p^{-1}$ in the absence of inter-agent coupling and observations.}
+Computational validation that, in the limit $\beta_{ij}=0$ (no inter-agent alignment) and $\Lambda_{o_i}=0$ (no sensory coupling), the diagonal of the mass Hessian $[M_{\mu\mu}]_{ii}$ reduces to the prior precision matrix $\Sigma_p^{-1}$ and the scalar effective mass scales inversely with prior variance ($K=13$ dimensions, isotropic prior $\Sigma_p = \sigma^2 \mathbb{I}$). When inter-agent coupling or observations are active, $[M_{\mu\mu}]_{ii}$ acquires additional terms (Eq.~\ref{eq:effective_mass}) and the figure's $M_{\text{eff}} \propto \Sigma_p^{-1}$ scaling holds only as the leading isolated-agent term. 
 \textbf{(A)} Effective mass $M_{\text{eff}}$ measured from oscillation dynamics exhibits precise linear relationship with inverse prior variance: $M_{\text{eff}} = (0.23/\sigma^2) + 0.02$ with $R^2 = 0.9998$, validating the theoretical prediction $M \propto \Sigma_p^{-1}$. 
 \textbf{(B)} Three systems with identical potential but different masses ($M = 26.0, 6.5, 1.6$) show mass-dependent oscillation frequencies under Newton's second law $M\ddot{\mu} = -\nabla V$. Distance to target plotted on logarithmic scale reveals factor-of-4 frequency variation consistent with $\omega \propto M^{-1/2}$. 
 \textbf{(C)} Phase space trajectories in $(\mu_0, \mu_1)$ plane demonstrate mass-dependent curvature: lighter systems (blue) execute tight orbits with small radii, heavier systems (red) follow broader paths, all remaining on a constant energy trajectory. 
@@ -2555,6 +2563,27 @@ The slowdown arises from: (i)~matrix exponentials for SO(3) transport operators,
 Future optimization might reduce overhead through: learned transport operators (amortizing exponentials), structured covariances (block-diagonal covariances reducing KL cost), and approximate natural gradients (Kronecker-factored approximations). However, our goal here is demonstrating first-principles derivation, not engineering optimization. The framework explains \emph{why} transformers work rather than claiming to improve upon highly optimized implementations.
 
 
+\subsection{Multi-Seed Scaling Validation on WikiText-103}
+\label{sec:scaling_validation}
+
+The character-level WikiText-2 results above are a single-seed proof of principle on a small model and should be read as such. To address reproducibility and report a falsifiable scaling claim, we conducted a controlled multi-seed scaling study on WikiText-103. The full methodology is recorded in \texttt{publication\_outputs/scaling\_analysis/methods.md} in the public repository; we summarise it here.
+
+We swept the embedding dimension $K$ over eleven values $\{10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 120\}$ with three independent random seeds ($6, 23, 111$), training every configuration with sequence length $128$ for an iso-token budget matched at $122.9$M tokens, with batch size adjusted across $K$ to satisfy memory limits while preserving the budget exactly. For each run we record the final-checkpoint test perplexity on the held-out split. Multi-seed summaries report the per-$K$ mean and standard deviation across the three seeds.
+
+We fit the scaling form $\mathrm{PPL} = aK^b + c$ to the per-$K$ seed means by nonlinear least squares (\texttt{scipy.optimize.curve\_fit}) with parameter constraints $b \in (-2, 0)$ and $c \geq 1$ to enforce a monotonically decreasing perplexity curve and a non-negative irreducible-loss floor. Confidence intervals are 95\% percentile intervals from $2000$ successful bootstrap resamples (of $2000$ requested), drawing seeds with replacement within each $K$ value to keep the sweep design intact. The fitted parameters are
+\[
+b = -1.049\ \,(95\%\ \text{CI}\ [-1.103,\, -0.998]),\quad c = 61.17\ ([59.01,\, 63.16]),\quad a = 1805.55\ ([1598.56,\, 2063.99]),
+\]
+with $R^2 = 1.000$ on the per-$K$ seed-mean perplexity. The exponent $b \approx -1$ is the empirical signature we report.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.75\linewidth]{fig_scaling_main.pdf}
+\caption{\textbf{Multi-seed scaling law on WikiText-103.} Test perplexity versus embedding dimension $K$ for three seeds (coloured points), with per-$K$ mean and 95\% bootstrap confidence band, and fitted power law $\mathrm{PPL} = 1805.55\,K^{-1.049} + 61.17$ (curve). Bootstrap exponent CI $[-1.103, -0.998]$; $R^2 = 1.000$ on per-$K$ seed means; iso-token budget $122.9$M tokens, $1.2$ epochs. Reproduced from \texttt{publication\_outputs/scaling\_analysis/}.}
+\label{fig:scaling_main}
+\end{figure}
+
+The fitted floor $c = 61.17$ is not an architectural ceiling for this model class: the same single-layer gauge-theoretic transformer trained on the larger Japanese Wikipedia corpus (about one billion tokens, roughly an order of magnitude more data than the iso-token budget used here) reaches test perplexities in the $15$ to $30$ range across comparable embedding dimensions, indicating that the WikiText-103 floor reflects an undertrained-convergence regime at $1.2$ epochs rather than a structural limit of the architecture. Direct cross-dataset comparison is qualified by tokeniser and language differences (gpt2 BPE 50,257-vocabulary versus cl100k\_base 100,277-vocabulary; English versus Japanese), but the order-of-magnitude data gap is large enough that data quantity dominates the comparison, leaving the $b \approx -1$ exponent as the primary architectural fingerprint that survives across regimes. The $b = -1.049$ exponent corresponds to losing roughly $2.4$ nats per decade of $K$; for context, Chinchilla-style cross-entropy scaling against total parameter count $N$ has exponent $\approx -0.34$~\cite{HoffmannChinchilla2022} corresponding to roughly $0.7$ nats per decade of $N$ at typical excess-loss values. The two exponents are not directly comparable because $K$ is embedding dimension rather than total parameter count and the gauge model has no learned attention projections (no $W_Q, W_K, W_V$); the $K$-to-$N$ map is therefore approximately linear here while in a standard transformer it is approximately quadratic.
 
 \subsection{Training Dynamics and Convergence}
 
@@ -2637,11 +2666,11 @@ If gravitational effects emerge, they would manifest as curvature in this pullba
 R_{\mu\nu\rho\sigma}^{(i)}[g^{(i)}] \propto \text{functions of } \Sigma_{p,i}^{-1}
 \end{equation}
 
-This would automatically satisfy the equivalence principle: inertial and gravitational mass share a single origin in prior precision because both are properties of the agent's experienced geometry, not of some external "true" spacetime.
+Under this identification, the equivalence principle would, if it could be derived, be consistent with the framework: inertial and gravitational mass would share a single origin in prior precision because both would be properties of the agent's experienced geometry, not of some external ``true'' spacetime. The conditional mood is deliberate. The argument requires (i) that gravitational effects emerge from pullback curvature (not yet shown), (ii) that this curvature couples to $\Sigma_p^{-1}$ rather than to some other functional of the section (an assumption, not a derivation), and (iii) that the scalar mass $m_{\text{eff}} = \mathrm{tr}(M_{\mu\mu})/K$ used in Newtonian analogies coincides with the gravitational coupling in the same way (also assumed). The equivalence principle is therefore a possible consequence of the framework, not an automatic one.
 
 Before consensus, different agents with different priors $\Sigma_{p,i} \neq \Sigma_{p,j}$ would experience different pullback geometries $g^{(i)}_{\mu\nu} \neq g^{(j)}_{\mu\nu}$ and thus different gravitational fields. Consensus formation via the $\gamma_{ij}$ coupling drives prior alignment, causing the pullback metrics to converge: $g^{(i)}_{\mu\nu} \to g^{(j)}_{\mu\nu}$. Objective spacetime geometry emerges as the shared pullback metric at equilibrium.
 
-Demonstrating this rigorously requires computing the induced curvature tensors in the pullback metrics; work that remains to be done. However, the mathematical structure strongly suggests this pathway since agents' experienced geometry is entirely determined by their statistical structures, and those structures have a single mass scale $\Sigma_p^{-1}$, the equivalence principle follows as a consequence rather than a postulate.
+Demonstrating this rigorously requires computing the induced curvature tensors in the pullback metrics; work that remains to be done. The mathematical structure is consistent with this pathway --- agents' experienced geometry is determined by their statistical structures, and $\Sigma_p^{-1}$ sets a characteristic scale --- but consistency is not derivation. We do not claim the equivalence principle follows as a consequence of the present framework; we claim that no obvious obstruction within the framework prevents its derivation, and that the dependence of both inertial and metric structure on the same prior precision provides a candidate route worth investigating.
 
 The biggest challenge is reproducing the Lorentz signature $(-,+,+,+)$ since the Fisher-Rao metric under the $\mathrm{SO}(3)$ restriction is manifestly positive-definite. However, as detailed in Section~\ref{sec:signature_resolution}, this problem is an artifact of the compact gauge group restriction, not of information geometry itself. The natural gauge group $\mathrm{GL}(K)$---the full gauge symmetry of KL-based variational inference---and its complexification $\mathrm{GL}(K, \mathbb{C})$ contain the Lorentz group $\mathrm{SO}(1,3)$ as a subgroup. Moreover, the framework is not restricted to multivariate Gaussians; extending to complex-valued exponential families or other distribution families under $\mathrm{GL}(K, \mathbb{C})$ gauge structure naturally introduces the indefinite metric signatures required for Lorentzian geometry.
 
@@ -2687,7 +2716,7 @@ Quantum systems, however, represent the opposite regime where agents have not ye
       $p_C(x) = \mathcal{N}(x_{\text{avg}}, \sigma_C^2)$ with $\sigma_C \gg \sigma_A, \sigma_B$
 \end{itemize}
 
-Each observer assigns a different inertial mass via $M = \mathrm{tr}(\Sigma_p^{-1})$. 
+Each observer assigns a different scalar effective mass via $m_{\text{eff}} = \mathrm{tr}(\Sigma_{p,i}^{-1})/K$ (proportional to the trace of their prior precision in the isolated-agent limit).
 The particle has no observer-independent mass prior to consensus formation.
 
 Measurement is the dynamical process by which an apparatus (itself a 
@@ -2871,7 +2900,8 @@ Our framework offers a \emph{relocation} of the hard problem rather than a solut
 
 There is, in this reading, something it is like to occupy gauge frame $\phi_i$ because that frame induces a specific metric $G_i$ defining the agent's phenomenal space. The metric is not merely formal mathematical structure but, on the conjecture this section explores, the geometric character of experience. We do not claim this resolves the explanatory gap; it shifts it.
 
-This position is closest in spirit to information-geometric structuralism: the underlying reality of which both physics and experience are aspects is the gauge-theoretic information geometry of the framework. It has affinities with Russell's neutral monism~\cite{Russell1927} and with Chalmers' later explorations of panpsychism~\cite{Chalmers2013consciousness}, but it does not require either: it commits only to taking information geometry as the substrate from which both physical and phenomenal description are observer-dependent pullbacks.
+\paragraph{Information-geometric structuralism, defined.}
+The framework's ontological commitment is to \emph{information-geometric structuralism}: the substrate is the gauge-theoretic information geometry on principal bundles formalised in Section~\ref{sec:framework}, and both physical description (spacetime, fields, particles) and phenomenal description (qualia, conscious experience) are observer-dependent pullbacks from this substrate, induced by different cognitive agents acting on it through different gauge frames over the same noumenal base manifold $\mathcal{C}$. This is distinct from Russellian neutral monism~\cite{Russell1927}, which posits phenomenal intrinsic natures and treats physical structure as extrinsic; from standard physicalism, which would deny experience any privileged status in the substrate; and from panpsychism in Chalmers' later sense~\cite{Chalmers2013consciousness}, which makes phenomenal properties fundamental in their own right. Information-geometric structuralism instead grants neither physics nor experience metaphysical primacy: both are gauge-frame-dependent aspects of the same gauge-theoretic geometric structure.
 
 The explanatory limits of this move must be stated plainly. The relocation does not explain why the information-geometric substrate has phenomenal character; it does not predict which gauge frame produces which qualitative experience (gauge invariance forbids any such pinning); and it does not constrain the inverted-spectrum or absent-qualia thought experiments any more tightly than other identity-based proposals do. The framework provides mathematical vocabulary for discussing consciousness without explaining consciousness. We flag this prominently: a reader who finds the hard problem compelling will find the relocation interesting but not satisfying.
 
@@ -2896,7 +2926,7 @@ Three points of mathematical contact are worth stating directly. First, the tran
 
 We do not claim our gauge frames \emph{are} Lahav and Neemeh's cognitive frames in any stronger sense than that the two notions play the same conceptual role. Their cognitive frame is a measurement perspective taken as primitive; our gauge frame is a particular element of $\mathfrak{gl}(K)$ that determines a section of an associated bundle of belief tuples. The match is at the level of structural function, not ontological identity. Where we can offer mathematical content beyond what their published formalization provides --- an explicit non-compact transformation group, an explicit invariant scalar, an explicit covariance transport law, and an explicit account of why first-person and third-person measurements relate the way they do --- we view this as complementary to rather than competitive with their proposal. The intellectual debt runs in the opposite direction: their reframing of phenomenal consciousness as a frame-relative quantity is the philosophical move that licenses the construction in this paper.
 
-Two honest divergences should be noted. Lahav and Neemeh's account is positioned as physicalist with relational/measurement-theoretic flavour, with the underlying reality of which the two perspectives are ``two sides'' left ontologically thin. The construction here makes a stronger commitment: the underlying reality is information geometry on principal bundles, with both phenomenal experience and what we call physical structure arising as observer-dependent pullbacks from this substrate. This is closer to neutral monism than to physicalism, and the resulting account of qualia in the preceding subsection differs accordingly. Likewise, the relativistic analogy in Lahav and Neemeh proceeds without an analogue of the speed of light --- without the second postulate that uniquely fixes the Lorentz group in special relativity. The present framework does not supply such a second postulate either; what it offers instead is a mechanism, the Yang-Mills kinetic term acting on $\mathrm{GL}(K, \mathbb{C})$ gauge frames, by which Lorentz signature might emerge dynamically rather than be assumed. Whether either route reaches a fully Einsteinian rather than Galilean theory of cognitive frames remains open.
+Two honest divergences should be noted. Lahav and Neemeh's account is positioned as physicalist with relational/measurement-theoretic flavour, with the underlying reality of which the two perspectives are ``two sides'' left ontologically thin. The construction here commits to information-geometric structuralism (defined in the preceding subsection): the underlying reality is the gauge-theoretic information geometry of the framework, and both phenomenal experience and what we call physical structure arise as observer-dependent pullbacks from this substrate. This is a stronger ontological commitment than Lahav and Neemeh make, but it is in the same broad neighbourhood as their relational/measurement-theoretic physicalism --- both deny that physical reality is independent of cognitive frame --- rather than a sharp opposition. The resulting account of qualia in the preceding subsection follows from the structuralist commitment. Likewise, the relativistic analogy in Lahav and Neemeh proceeds without an analogue of the speed of light --- without the second postulate that uniquely fixes the Lorentz group in special relativity. The present framework does not supply such a second postulate either; what it offers instead is a mechanism, the Yang-Mills kinetic term acting on $\mathrm{GL}(K, \mathbb{C})$ gauge frames, by which Lorentz signature might emerge dynamically rather than be assumed. Whether either route reaches a fully Einsteinian rather than Galilean theory of cognitive frames remains open.
 
 \subsection{Philosophy of Science: Knowledge as Collective Free Energy Minimization}
 
@@ -3035,11 +3065,13 @@ Wheeler opened a door in 1990 with "it from bit." We have constructed a mathemat
 In this sense, we participate in answering Wheeler's question not by providing final solutions but by developing precise mathematical structures that transform vague ideas into testable hypotheses. The framework represents one possible formalization of participatory reality - coherent, implementable, and partially validated. Its ultimate significance will be determined not by philosophical arguments but by whether it generates novel predictions, explains previously mysterious phenomena, or enables technological applications beyond what existing frameworks provide. That assessment must await future work, but the foundations are now established for rigorous investigation of whether reality might indeed be information all the way down.
 
 \section{Methods}
-\subsubsection{Computational Details}
-All simulations were implemented in Python.
+\label{sec:methods}
+
+\subsection{Computational Details}
+All simulations were implemented in Python with PyTorch automatic differentiation; gradient correctness against analytic expressions was verified by finite differences and by autograd cross-check to relative error $<10^{-8}$ (see appendix on numerical stability and verification). Hamiltonian belief dynamics for the mass-precision experiments use a velocity-Verlet symplectic integrator with energy drift $<0.001\%$ over $25$ time units. Multi-agent simulations of the Ouroboros Tower were run on a single AMD Ryzen 9 9900X CPU; large-scale gauge-transformer training (Section~\ref{sec:scaling_validation}) was run on the same machine, hence the iso-token rather than iso-FLOP budget choice. Random seeds are fixed deterministically for reproducibility: PyTorch, NumPy, and CUDA cuDNN seeds are synchronised per run. Seed values for the WikiText-103 scaling sweep ($6, 23, 111$) are recorded in the experiment-configuration JSON files in the repository (\texttt{publication\_outputs/scaling\_analysis/}). Library versions, exact hyperparameters, optimiser choice, and per-step training metrics are stored in \texttt{experiment\_config.json} and \texttt{result\_em.json} for each run; figures in this manuscript are reproducible from these stored configurations together with the training scripts in \texttt{transformer/training/}.
 
 \subsection{Large Language Model Assistance}
-Claude Sonnet 4.5 was utilized as a programming and typesetting assistant.
+Claude Sonnet 4.5 was used as a programming and typesetting assistant. Concretely: it generated and refactored Python implementations of the gauge-transformer architecture (verified against analytic gradient expressions and against the \texttt{transformer/} test suite), drafted and edited LaTeX prose under author direction, and performed bibliographic lookups. It was not used to generate numerical experimental results, was not used to perform statistical analyses, and was not relied upon for mathematical correctness: every derivation in the main text and appendix was verified by hand by the author (with selected steps cross-checked by symbolic computation). All citations were manually verified to exist and to be appropriately attributed.
 
 
 \section*{Statements and Declarations}
