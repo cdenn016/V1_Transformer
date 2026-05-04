@@ -152,7 +152,7 @@ Several research programs explore connections between information and spacetime 
 
 \textbf{Quantum Information Approaches.} Constructor theory~\cite{Deutsch2015} and quantum information approaches~\cite{Cao2017} explore geometry emerging from quantum structures. Our framework shares information-first philosophy but implements through gauge theory and active inference with classical distributions.
 
-\textbf{Observer-Relative and Cognitive-Frame Approaches.} A second cluster of related programs takes the observer rather than the horizon as primary. Lahav and Neemeh~\cite{LahavNeemeh2022,LahavNeemeh2025} propose a relativistic theory of consciousness in which phenomenal experience is a property of a system as observed from its own cognitive frame of reference, by analogy with the observer-dependence of simultaneity in special relativity. Their account asserts that a transformation law between cognitive frames exists but does not write one down; the gauge-frame fields $\phi_i \in \mathfrak{g}$ and transport operators $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ developed in Section~\ref{sec:cognitive_reference_frames} supply such a law, with $\mathrm{KL}(q_i \| \Omega_{ij}[q_j])$ as the frame-invariant scalar; the explicit correspondence is laid out in Section~\ref{sec:lahav_convergence}. Rovelli's relational quantum mechanics~\cite{Rovelli1996} treats physical quantities as relations between observers and systems rather than absolute properties, and is the closest physics-side antecedent for the construction here. QBism~\cite{Fuchs2014} treats quantum probabilities as agent-personal degrees of belief and reads measurement outcomes as updates of an observer's information state; the present framework shares the agent-personal commitment but extends it to a multi-agent gauge-theoretic structure with explicit inter-agent transport. Friston's free-energy principle and active inference~\cite{Friston2010,Friston2017,Parr2022} provide the variational backbone we adopt; Lahav and Neemeh cite predictive-processing and active-inference work approvingly without committing to a gauge-theoretic formalisation, and the present framework can be read as one such formalisation. Tononi's integrated information theory~\cite{Tononi2008,Tononi2016} is observer-independent and therefore inhabits a different metaphysical position; we register the contrast rather than enter the IIT debate.
+\textbf{Observer-Relative and Cognitive-Frame Approaches.} A second cluster of related programs takes the observer rather than the horizon as primary. Lahav and Neemeh~\cite{LahavNeemeh2022,LahavNeemeh2025} propose a relativistic theory of consciousness in which phenomenal experience is a property of a system as observed from its own cognitive frame of reference, by analogy with the observer-dependence of simultaneity in special relativity. Their account asserts that a transformation law between cognitive frames exists but does not write one down; the gauge-frame fields $\phi_i \in \mathfrak{g}$ and transport operators $\Omega_{ij}$ defined in~\eqref{eq:transport_def} and developed in Section~\ref{sec:cognitive_reference_frames} supply such a law, with $\mathrm{KL}(q_i \| \Omega_{ij}[q_j])$ as the frame-invariant scalar; the explicit correspondence is laid out in Section~\ref{sec:lahav_convergence}. Rovelli's relational quantum mechanics~\cite{Rovelli1996} treats physical quantities as relations between observers and systems rather than absolute properties, and is the closest physics-side antecedent for the construction here. QBism~\cite{Fuchs2014} treats quantum probabilities as agent-personal degrees of belief and reads measurement outcomes as updates of an observer's information state; the present framework shares the agent-personal commitment but extends it to a multi-agent gauge-theoretic structure with explicit inter-agent transport. Friston's free-energy principle and active inference~\cite{Friston2010,Friston2017,Parr2022} provide the variational backbone we adopt; Lahav and Neemeh cite predictive-processing and active-inference work approvingly without committing to a gauge-theoretic formalisation, and the present framework can be read as one such formalisation. Tononi's integrated information theory~\cite{Tononi2008,Tononi2016} is observer-independent and therefore inhabits a different metaphysical position; we register the contrast rather than enter the IIT debate.
 
 \textbf{Distinguishing Features.} Our approach uniquely combines: (i) explicit gauge structure enabling agent-dependent phenomenology with global gauge invariance, (ii) hierarchical multi-scale organization through consensus and meta-agent formation, (iii) computational implementation demonstrating participatory bootstrap, (iv) empirical validation through transformer emergence. We provide mathematical tools for cognitive-first ontology complementing existing information-theoretic physics.
 
@@ -202,7 +202,7 @@ At each point $c \in \mathcal{C}$, agents maintain probability distributions rep
 \begin{definition}[Statistical Manifolds]
 Let $\mathcal{B}_q$ denote the manifold of belief distributions and $\mathcal{B}_p$ the manifold of prior distributions. Each is equipped with the Fisher-Rao metric:
 \begin{equation}
-g_{\mathcal{B}}(\partial_i, \partial_j) = \mathbb{E}_{q}\left[(\partial_i \log q)(\partial_j \log q)\right]
+g_{\mathcal{B}}(\partial_i, \partial_j) = \mathbb{E}_{q}\left[(\partial_i \log q)(\partial_j \log q)\right],
 \end{equation}
 defining distances between probability distributions.
 \end{definition}
@@ -211,14 +211,14 @@ The Fisher-Rao metric provides natural Riemannian geometry on probability spaces
 
 Throughout this work, we primarily use Gaussian statistical manifolds:
 \begin{equation}
-\mathcal{B}_q = \mathcal{B}_p = \{\mathcal{N}(\mu, \Sigma) : \mu \in \mathbb{R}^K, \Sigma \succ 0\}
+\mathcal{B}_q = \mathcal{B}_p = \{\mathcal{N}(\mu, \Sigma) : \mu \in \mathbb{R}^K, \Sigma \succ 0\},
 \end{equation}
 the space of $K$-dimensional multivariate Gaussian distributions. These are parametrized by mean vectors $\mu$ and positive-definite covariance matrices $\Sigma$, forming a $(K + K(K+1)/2)$-dimensional manifold.
 
 The Fisher-Rao metric naturally induces several information-theoretic quantities. The Kullback-Leibler divergence between distributions $q$ and $p$ measures their relative entropy
 
 \begin{equation}
-\mathrm{KL}(q \| p) = \int q(x) \log\frac{q(x)}{p(x)} dx \geq 0
+\mathrm{KL}(q \| p) = \int q(x) \log\frac{q(x)}{p(x)} dx \geq 0.
 \end{equation}
 
 This divergence is not symmetric ($\mathrm{KL}(q \| p) \neq \mathrm{KL}(p \| q)$) but it generates the Fisher metric through its Hessian structure. The natural gradient, defined as $\tilde{\nabla}_q f = g^{-1}_{\mathcal{B}} \nabla_q f$, provides the steepest descent direction in this curved probability space.
@@ -226,6 +226,7 @@ This divergence is not symmetric ($\mathrm{KL}(q \| p) \neq \mathrm{KL}(p \| q)$
 For Gaussian distributions specifically, the KL divergence has closed form:
 \begin{equation}
 \mathrm{KL}(\mathcal{N}(\mu_1, \Sigma_1) \| \mathcal{N}(\mu_2, \Sigma_2)) = \frac{1}{2}\left[\log\frac{|\Sigma_2|}{|\Sigma_1|} + \mathrm{tr}(\Sigma_2^{-1}\Sigma_1) + (\mu_2 - \mu_1)^\top\Sigma_2^{-1}(\mu_2 - \mu_1) - K\right]
+\label{eq:gaussian_kl}
 \end{equation}
 
 This formula will be used extensively for computing belief and prior alignment terms.
@@ -269,7 +270,7 @@ where $(n \cdot g, b) \sim (n, \rho(g)b)$ identifies gauge-transformed pairs.
 
 For Gaussian distributions with $G = \mathrm{GL}(K)$ (or any subgroup such as $\mathrm{SO}(N)$), the representation acts by linear transformation of means and congruence of covariances:
 \begin{equation}
-\rho_q(g) \cdot \mathcal{N}(\mu, \Sigma) = \mathcal{N}(g\mu, g\Sigma g^\top)
+\rho_q(g) \cdot \mathcal{N}(\mu, \Sigma) = \mathcal{N}(g\mu, g\Sigma g^\top).
 \end{equation}
 
 This ensures that changing reference frame transforms probability distributions consistently. When $g \in \mathrm{SO}(N)$, this reduces to rotation; for general $g \in \mathrm{GL}(K)$, it includes scaling, shearing, and reflection. The associated bundles $\mathcal{E}_q$ and $\mathcal{E}_p$ are fiber bundles over $\mathcal{C}$ with fibers isomorphic to $\mathcal{B}_q$ and $\mathcal{B}_p$ respectively, carrying the gauge-covariant structure of beliefs and priors.
@@ -320,7 +321,7 @@ Reality in this framework emerges not from a single observer but from collective
 \begin{definition}[Multi-Agent System]
 A multi-agent system $\mathcal{M}$ over base manifold $\mathcal{C}$ consists of a finite collection of agents:
 \begin{equation}
-\mathcal{M} = \left\{\mathcal{A}^i = (q_i, p_i, s_i, r_i, \phi_i)\right\}_{i \in \mathcal{I}}
+\mathcal{M} = \left\{\mathcal{A}^i = (q_i, p_i, s_i, r_i, \phi_i)\right\}_{i \in \mathcal{I}},
 \end{equation}
 where $\mathcal{I}$ is an index set (typically $\mathcal{I} = \{1, 2, \ldots, N\}$), and each agent $\mathcal{A}^i$ operates over domain $\mathcal{U}_i \subseteq \mathcal{C}$. When the slow subsystem is held fixed, as in the simulations below, an agent is referred to by the abbreviated tuple $(q_i, p_i, \phi_i)$ without ambiguity.
 \end{definition}
@@ -336,9 +337,9 @@ When agents achieve sufficient alignment in their beliefs and models over shared
 \begin{definition}[Perfect Consensus]
 Agents $\{i, j, \ldots\} \subseteq \mathcal{I}$ are in perfect consensus over region $\mathcal{R} \subseteq \bigcap_k \mathcal{U}_k$ if, after gauge transport to a common frame:
 \begin{equation}
-\Omega_{ij}[q_j](c) = q_i(c), \quad \Omega_{ij}[p_j](c) = p_i(c), \quad \tilde{\Omega}_{ij}[s_j](c) = s_i(c) \quad \forall c \in \mathcal{R}
+\Omega_{ij}[q_j](c) = q_i(c), \quad \Omega_{ij}[p_j](c) = p_i(c), \quad \tilde{\Omega}_{ij}[s_j](c) = s_i(c) \quad \forall c \in \mathcal{R},
 \end{equation}
-where $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ is the gauge transport operator connecting their frames and $\tilde{\Omega}_{ij}$ is the corresponding transport on the model fiber. Agreement of the per-agent hyper-priors $r_i$ is not required for consensus, since $r_i$ is fixed and shared structurally.
+where $\Omega_{ij}$ is the gauge transport operator connecting their frames (see~\eqref{eq:transport_def}) and $\tilde{\Omega}_{ij}$ is the corresponding transport on the model fiber. Agreement of the per-agent hyper-priors $r_i$ is not required for consensus, since $r_i$ is fixed and shared structurally.
 \end{definition}
 
 The gauge transport $\Omega_{ij}$ is essential here. Agents may describe the same beliefs using different internal coordinates (gauge frames), just as physicists in different laboratories describe the same spin state using rotated basis vectors. Perfect consensus means that after accounting for these frame differences through transport operations, the agents hold identical probabilistic beliefs and models about the shared region. They have achieved informational alignment despite maintaining distinct perspectives.
@@ -367,7 +368,7 @@ for all $c \in \mathcal{U}_i \cap \mathcal{U}_j$ and all pairs $(i,j)$.
 \end{definition}
 
 \begin{remark}
-Epistemic death represents complete informational consensus, not geometric identity. Agents may maintain distinct gauge frames $\phi_i \neq \phi_j$ (different internal coordinates or perspectives) while agreeing perfectly on informational content after accounting for these perspective differences through transport operators $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$. 
+Epistemic death represents complete informational consensus, not geometric identity. Agents may maintain distinct gauge frames $\phi_i \neq \phi_j$ (different internal coordinates or perspectives) while agreeing perfectly on informational content after accounting for these perspective differences through the transport operators $\Omega_{ij}$ defined in~\eqref{eq:transport_def}.
 
 In this state, no information gradients exist between agents, eliminating the driving force for learning or evolution. The free energy functional achieves a minimum with respect to inter-agent coupling terms. This is the informational analog of thermal equilibrium: maximum entropy configuration given constraints, with no further evolution possible.
 
@@ -390,7 +391,7 @@ This balance is maintained through several mechanisms. Observations from the nou
 
 Meta-agents at scale $(s+1)$ can themselves cohere into meta-meta-agents at scale $(s+2)$, continuing upward to some maximum scale $s_{\max}$. This creates hierarchical architecture where individuals form groups, groups form communities, communities form societies, and so forth:
 \begin{equation}
-\text{Scale 0 (individuals)} \to \text{Scale 1 (groups)} \to \text{Scale 2 (communities)} \to \cdots \to s_{\max}
+\text{Scale 0 (individuals)} \to \text{Scale 1 (groups)} \to \text{Scale 2 (communities)} \to \cdots \to s_{\max}.
 \end{equation}
 
 Information flows bidirectionally through this hierarchy. Bottom-up flow occurs through consensus formation and averaging - when agents at scale $s$ achieve coherence, their collective belief propagates upward to form scale $(s+1)$ meta-agent beliefs. Top-down flow occurs through prior propagation - meta-agents influence their constituents by providing high-level expectations that constrain lower-level beliefs. This bidirectional coupling realizes Wheeler's participatory loop: higher levels emerge from lower levels through coherence, then feed back to shape lower-level dynamics through expectation.
@@ -418,7 +419,8 @@ A concrete example. Consider two agents perceiving the same coloured surface. Ag
 
 When agents $i$ and $j$ overlap at point $c \in \mathcal{U}_i \cap \mathcal{U}_j$, the inter-agent transport operator is defined as:
 \begin{equation}
-\Omega_{ij}(c) = \exp[\phi_i(c)] \exp[-\phi_j(c)] \in G
+\Omega_{ij}(c) = \exp[\phi_i(c)] \exp[-\phi_j(c)] \in G.
+\label{eq:transport_def}
 \end{equation}
 
 This group element transforms agent $j$'s representations into agent $i$'s frame. The transport operator acts on probability distributions through the representation $\rho: G \to \mathrm{Aut}(\mathcal{B})$, giving $\Omega_{ij}[q_j](c) := \rho(\Omega_{ij}(c))  q_j(c)$.
@@ -441,7 +443,7 @@ On overlapping regions $\mathcal{U}_i \cap \mathcal{U}_j$, the connections trans
 
 The field strength (curvature two-form) measures path-dependence of parallel transport:
 \begin{equation}
-F^{(i)}_{\mu\nu}(c) = \partial_\mu A^{(i)}_\nu - \partial_\nu A^{(i)}_\mu + [A^{(i)}_\mu, A^{(i)}_\nu] \in \mathfrak{g}
+F^{(i)}_{\mu\nu}(c) = \partial_\mu A^{(i)}_\nu - \partial_\nu A^{(i)}_\mu + [A^{(i)}_\mu, A^{(i)}_\nu] \in \mathfrak{g}.
 \end{equation}
 
 When $F^{(i)}_{\mu\nu} = 0$ (flat connection), parallel transporting a belief around any closed loop returns it unchanged - information transport is path-independent. When $F^{(i)}_{\mu\nu} \neq 0$ (curved connection), beliefs accumulate holonomy around closed loops - net transformations depending on the enclosed area. Information transport becomes path-dependent.
@@ -495,10 +497,7 @@ This simplification is reasonable because beliefs and priors are both probabilit
 
 \subsubsection{Gaussian Probability Manifold}
 
-The fiber is the manifold of $K$-dimensional Gaussian distributions: $\mathcal{B} = \{\mathcal{N}(\mu, \Sigma) : \mu \in \mathbb{R}^K, \Sigma \in \mathbb{S}^+_K\}$ where $\mathbb{S}^+_K$ denotes the space of $K \times K$ symmetric positive-definite matrices. The Gaussian manifold has constant negative sectional curvature under the Fisher-Rao metric~\cite{Amari2016}, dimension $\dim(\mathcal{B}) = K + K(K+1)/2 = K(K+3)/2$, and KL divergence between Gaussians has closed form:
-\begin{equation}
-\mathrm{KL}\big(\mathcal{N}(\mu_1,\Sigma_1) \| \mathcal{N}(\mu_2,\Sigma_2)\big) = \frac{1}{2}\left[\log\frac{|\Sigma_2|}{|\Sigma_1|} - K + \mathrm{tr}(\Sigma_2^{-1}\Sigma_1) + (\mu_2-\mu_1)^\top\Sigma_2^{-1}(\mu_2-\mu_1)\right]
-\end{equation}
+The fiber is the manifold of $K$-dimensional Gaussian distributions: $\mathcal{B} = \{\mathcal{N}(\mu, \Sigma) : \mu \in \mathbb{R}^K, \Sigma \in \mathbb{S}^+_K\}$ where $\mathbb{S}^+_K$ denotes the space of $K \times K$ symmetric positive-definite matrices. The Gaussian manifold has constant negative sectional curvature under the Fisher-Rao metric~\cite{Amari2016}, dimension $\dim(\mathcal{B}) = K + K(K+1)/2 = K(K+3)/2$, and KL divergence between Gaussians has the closed form recorded in Eq.~\eqref{eq:gaussian_kl}.
 
 Gaussians are the maximum entropy distribution for given mean and covariance, making them natural for representing uncertainty in continuous spaces. The closed-form expressions enable efficient computation, and their information geometry is well-studied. We emphasize that multivariate Gaussians are a \emph{simplifying choice}, not a theoretical requirement: the gauge-theoretic framework applies to any exponential family distribution, since the $\mathrm{GL}(K)$ invariance of $f$-divergences holds for arbitrary bijective linear transformations of exponential family sufficient statistics. Extending to mixture models, heavy-tailed distributions, or complex-valued amplitudes (Section~\ref{sec:signature_resolution}) is straightforward in principle but computationally expensive, and is deferred to future work. The choice of distribution family has important consequences for the emergent geometry, as discussed in Section~\ref{sec:signature_resolution}.
 
@@ -564,7 +563,7 @@ What we sacrifice includes intrinsic curvature of the noumenal substrate (spheri
 
 \subsubsection{Gauge-Covariant KL Divergence}
 
-With the above simplifications, the gauge-aligned KL divergence between agents $i$ and $j$ at point $c$ is $D_{\mathrm{KL}}[q_i(c) \| \Omega_{ij}(c)q_j(c)]$. For Gaussian beliefs $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ and $q_j = \mathcal{N}(\mu_j, \Sigma_j)$, the transported belief is $\Omega_{ij}(c)q_j(c) = \mathcal{N}(\Omega_{ij}\mu_j, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$ where $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j) \in \mathrm{GL}^+(K)$ (restricted to $\mathrm{SO}(3)$ in our simulations). By the $\mathrm{GL}(K)$ invariance theorem (Eq.~\ref{eq:glk_invariance}), this divergence is invariant under simultaneous gauge transformation of both arguments, ensuring that belief comparisons are meaningful---we first transport agent $j$'s belief into agent $i$'s reference frame before computing disagreement.
+With the above simplifications, the gauge-aligned KL divergence between agents $i$ and $j$ at point $c$ is $D_{\mathrm{KL}}[q_i(c) \| \Omega_{ij}(c)q_j(c)]$. For Gaussian beliefs $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ and $q_j = \mathcal{N}(\mu_j, \Sigma_j)$, the transported belief is $\Omega_{ij}(c)q_j(c) = \mathcal{N}(\Omega_{ij}\mu_j, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$ where $\Omega_{ij}$ is the transport operator of~\eqref{eq:transport_def}, taking values in $\mathrm{GL}^+(K)$ (restricted to $\mathrm{SO}(3)$ in our simulations). By the $\mathrm{GL}(K)$ invariance theorem (Eq.~\ref{eq:glk_invariance}), this divergence is invariant under simultaneous gauge transformation of both arguments, ensuring that belief comparisons are meaningful---we first transport agent $j$'s belief into agent $i$'s reference frame before computing disagreement.
 
 \subsubsection{The Zero-Dimensional (Transformer) Limit}
 
@@ -596,7 +595,7 @@ The free energy decomposes into competing pressures: $F[q] = \mathrm{KL}(q(x) \|
 
 \subsubsection{Multi-Agent Extension: From Single Inference to Collective Dynamics}
 
-A single agent minimizing $F[q]$ performs standard variational inference. Our framework extends this to multiple interacting agents with different reference frames. The extension introduces several new ingredients: each agent $i$ maintains beliefs $q_i(c)$ and priors $p_i(c)$ as fields over base manifold $\mathcal{C}$, agents have gauge frames $\phi_i(c) \in \mathfrak{gl}(K)$ encoding their internal coordinate systems (Section~\ref{sec:gauge_group_choice}), transport operators $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j) \in \mathrm{GL}^+(K)$ translate between frames, and support functions $\chi_i(c)$ indicate where agents maintain beliefs.
+A single agent minimizing $F[q]$ performs standard variational inference. Our framework extends this to multiple interacting agents with different reference frames. The extension introduces several new ingredients: each agent $i$ maintains beliefs $q_i(c)$ and priors $p_i(c)$ as fields over base manifold $\mathcal{C}$, agents have gauge frames $\phi_i(c) \in \mathfrak{gl}(K)$ encoding their internal coordinate systems (Section~\ref{sec:gauge_group_choice}), transport operators $\Omega_{ij} \in \mathrm{GL}^+(K)$ defined as in~\eqref{eq:transport_def} translate between frames, and support functions $\chi_i(c)$ indicate where agents maintain beliefs.
 
 The multi-agent free energy must incorporate several distinct contributions. Self-terms capture each agent's belief-prior alignment through $\mathrm{KL}(q_i \| p_i)$ and the model hyper-prior alignment through $\mathrm{KL}(s_i \| r_i)$. Belief coupling $\beta_{ij}\mathrm{KL}(q_i\|\Omega_{ij}q_j)$ ensures agents' beliefs agree after gauge transport. Model coupling $\gamma_{ij}\mathrm{KL}(s_i\|\tilde{\Omega}_{ij}s_j)$ aligns agents' generative models. Observation terms ensure beliefs explain sensory data. The challenge lies in defining these couplings in a principled, gauge-covariant manner.
 
@@ -756,7 +755,7 @@ This recovers relative position biases used in T5~\cite{raffel2020exploring} and
 \subsubsection{Gauge Transport on Arbitrary Base Manifolds}
 \label{sec:gauge_transport_arbitrary}
 
-The transport operators are pointwise gauge frame transformations defined by $\Omega_{ij}(c) = \exp[\phi_i(c)] \exp[-\phi_j(c)] \in \mathrm{GL}^+(K)$ where $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ is agent $i$'s gauge frame field. These operators act on latent vectors through the representation $\rho: \mathrm{GL}(K) \to \mathrm{GL}(V)$ giving $\Omega_{ij}[k_j] := \rho(\Omega_{ij})  k_j \in \mathbb{R}^{K}$ and $\tilde{\Omega}_{ij}[m_j] := \rho(\tilde{\Omega}_{ij})  m_j \in \mathbb{R}^{K_p}$. For the fundamental representation, this is matrix multiplication by an invertible matrix.
+The transport operators are pointwise gauge frame transformations defined as in~\eqref{eq:transport_def}, with $\Omega_{ij}(c) \in \mathrm{GL}^+(K)$ and $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ agent $i$'s gauge frame field. These operators act on latent vectors through the representation $\rho: \mathrm{GL}(K) \to \mathrm{GL}(V)$ giving $\Omega_{ij}[k_j] := \rho(\Omega_{ij})  k_j \in \mathbb{R}^{K}$ and $\tilde{\Omega}_{ij}[m_j] := \rho(\tilde{\Omega}_{ij})  m_j \in \mathbb{R}^{K_p}$. For the fundamental representation, this is matrix multiplication by an invertible matrix.
 
 On base manifolds of dimension $\dim(\mathcal{C}) \geq 1$, the gauge frame fields induce additional geometric structure absent in the 0-dimensional (transformer) limit. Each agent's frame field defines a local connection one-form
 
@@ -797,7 +796,7 @@ Equivalently, the cocycle condition $\Omega_{ij}\Omega_{jk} = \Omega_{ik}$ holds
 Direct computation. The consecutive inverse--exponential pairs cancel identically: $g_j^{-1} g_j = I$ and $g_k^{-1} g_k = I$.
 \end{proof}
 
-This result is a theorem of the architecture, not an approximation. For our parameterisation $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$, the holonomy vanishes for every closed loop regardless of the learned gauge frames $\phi_i$. The gauge bundle is automatically flat: semantic transport from agent $i$ to agent $k$ is path-independent, in the sense that the direct route via $\Omega_{ik}$ and the indirect route via $\Omega_{ij}\Omega_{jk}$ yield identical results. Architectures with non-trivial curvature and holonomy would require promoting $\Omega_{ij}$ to independent edge variables unconstrained by the cocycle condition; such architectures would exhibit \emph{path-dependent meaning transport}, where the route through intermediate agents affects the result. Equivalently, the cocycle structure is what makes the framework gauge covariant under simultaneous transformations $\phi_i \to \phi_i + \xi$: edge-variable transport unconstrained by $\Omega_{ij} = g_i g_j^{-1}$ would require its own transformation law and would no longer be automatically gauge invariant.
+This result is a theorem of the architecture, not an approximation. For our parameterisation~\eqref{eq:transport_def}, the holonomy vanishes for every closed loop regardless of the learned gauge frames $\phi_i$. The gauge bundle is automatically flat: semantic transport from agent $i$ to agent $k$ is path-independent, in the sense that the direct route via $\Omega_{ik}$ and the indirect route via $\Omega_{ij}\Omega_{jk}$ yield identical results. Architectures with non-trivial curvature and holonomy would require promoting $\Omega_{ij}$ to independent edge variables unconstrained by the cocycle condition; such architectures would exhibit \emph{path-dependent meaning transport}, where the route through intermediate agents affects the result. Equivalently, the cocycle structure is what makes the framework gauge covariant under simultaneous transformations $\phi_i \to \phi_i + \xi$: edge-variable transport unconstrained by $\Omega_{ij} = g_i g_j^{-1}$ would require its own transformation law and would no longer be automatically gauge invariant.
 
 The critical gauge covariance property is preserved on arbitrary manifolds: under simultaneous gauge transformation $\phi_i(c) \to \phi_i(c) + \xi(c)$ for all $i$ with arbitrary $\xi: \mathcal{C} \to \mathfrak{gl}(K)$, the transport operators satisfy $\Omega_{ij}(c) \to \exp(\phi_i + \xi)\exp(-(\phi_j + \xi)) = \Omega_{ij}(c)$, remaining invariant. This is the information-theoretic analog of general covariance.
 
@@ -836,7 +835,7 @@ S[\{q_i\}, \{p_i\}, \{s_i\}, \{r_i\}, \{\phi_i\}]
 &\quad + \sum_i \int_{\mathcal{C}} \chi_i(c)  \mathrm{KL}(s_i(c) \| r_i(c))  dc \\
 &\quad + \sum_{ij} \int_{\mathcal{C}} \chi_{ij}(c)  \beta_{ij}(c)  \mathrm{KL}(q_i(c) \| \Omega_{ij}(c)[q_j(c)])  dc \\
 &\quad + \sum_{ij} \int_{\mathcal{C}} \chi_{ij}(c)  \gamma_{ij}(c)  \mathrm{KL}(s_i(c) \| \tilde{\Omega}_{ij}(c)[s_j(c)])  dc \\
-&\quad - \sum_i \int_{\mathcal{C}} \chi_i(c)  \mathbb{E}_{q_i(c)}[\log p(o(c) \mid k_i, m_i)]  dc \\
+&\quad - \sum_i \int_{\mathcal{C}} \chi_i(c)  \mathbb{E}_{q_i(c)}[\log p(o(c) \mid k_i, m_i)]  dc,
 \end{aligned}
 }
 \label{eq:free_energy_functional_final}
@@ -873,7 +872,7 @@ $$
 
 
 and similarly for the $\gamma_{ij}(c)$ model-alignment attention weight (with $\tilde{\Omega}_{ij}$ in place of $\Omega_{ij}$ and $s_j$ in place of $q_j$), derived from the same mixture-of-sources principle (Section~\ref{sec:mixture_derivation}).
-Here $\chi_i(c)$ represents agent $i$'s support (one where agent exists, zero elsewhere), $\chi_{ij}(c) = \chi_i(c) \chi_j(c)$ is the overlap region, $\beta_{ij}(c)$ and $\gamma_{ij}(c)$ are the belief-alignment and model-alignment weights computed via softmax over KL divergences (Eq.~\ref{eq:softmax_attention_general}), and $\Omega_{ij}(c) = \exp(\phi_i(c))\exp(-\phi_j(c)) \in \mathrm{GL}^+(K)$ is the gauge transport operator. In the simulations of this paper $\gamma_{ij} = 0$; the model-alignment term is retained in the canonical functional because it is the formal content of meta-cognitive consensus exercised in Section~\ref{sec:participatory}. On base manifolds of dimension $\geq 1$, the gauge frame fields additionally induce a connection one-form $A_\mu^{(i)}(c) = U_i^{-1}\partial_\mu U_i$ (Eq.~\ref{eq:connection_form}) and gauge curvature $F_{\mu\nu}^{(i)}$ (Eq.~\ref{eq:field_strength}). Optional regularizers include gauge field smoothness $\lambda_\phi \int \|\nabla \phi_i\|^2  \sqrt{g} dc$, Fisher metric mass terms $\int \mathrm{tr}(G_{ij})  \sqrt{g} dc$, and Yang-Mills curvature penalties $\int \mathrm{tr}(F_{\mu\nu} F^{\mu\nu})  \sqrt{g} dc$.
+Here $\chi_i(c)$ represents agent $i$'s support (one where agent exists, zero elsewhere), $\chi_{ij}(c) = \chi_i(c) \chi_j(c)$ is the overlap region, $\beta_{ij}(c)$ and $\gamma_{ij}(c)$ are the belief-alignment and model-alignment weights computed via softmax over KL divergences (Eq.~\ref{eq:softmax_attention_general}), and $\Omega_{ij}(c) \in \mathrm{GL}^+(K)$ is the gauge transport operator defined in~\eqref{eq:transport_def}. In the simulations of this paper $\gamma_{ij} = 0$; the model-alignment term is retained in the canonical functional because it is the formal content of meta-cognitive consensus exercised in Section~\ref{sec:participatory}. On base manifolds of dimension $\geq 1$, the gauge frame fields additionally induce a connection one-form $A_\mu^{(i)}(c) = U_i^{-1}\partial_\mu U_i$ (Eq.~\ref{eq:connection_form}) and gauge curvature $F_{\mu\nu}^{(i)}$ (Eq.~\ref{eq:field_strength}). Optional regularizers include gauge field smoothness $\lambda_\phi \int \|\nabla \phi_i\|^2  \sqrt{g} dc$, Fisher metric mass terms $\int \mathrm{tr}(G_{ij})  \sqrt{g} dc$, and Yang-Mills curvature penalties $\int \mathrm{tr}(F_{\mu\nu} F^{\mu\nu})  \sqrt{g} dc$.
 
 \subsubsection{The Envelope Theorem and the Reduced Free Energy}
 \label{sec:envelope_theorem}
@@ -942,7 +941,7 @@ Consider a system where agent $i$ receives observation $o$ that influences its b
 
 We replace this with environmental agents $\mathcal{E} = \{e_k\}$ that encode the observational information in their beliefs. Each environmental agent $e_k$ maintains a belief $q_{e_k}(c)$ that is sharp (low entropy) around the "true" state corresponding to observation $o_k$. Agent $i$ couples to environmental agents through standard information-theoretic terms:
 \begin{equation}
-\sum_{k \in \mathcal{E}} \beta_{i,e_k}  \mathrm{KL}\big(q_i(c) \| \Omega_{i,e_k}[q_{e_k}(c)]\big)
+\sum_{k \in \mathcal{E}} \beta_{i,e_k}  \mathrm{KL}\big(q_i(c) \| \Omega_{i,e_k}[q_{e_k}(c)]\big).
 \end{equation}
 
 When environmental agents have sharp beliefs concentrated on specific values (corresponding to definite observations), the coupling drives agent $i$ to align its beliefs with those values - exactly as observation terms would. The environmental agents play the role previously played by external observations, but now they are internal to the framework, subject to the same information-geometric dynamics as all other agents.
@@ -953,11 +952,11 @@ We establish formal equivalence between the observation-based and agent-based fo
 
 \textbf{Proposition:} For any system with observation terms
 \begin{equation}
-S_{\text{obs}} = S_{\text{internal}}[\{q_i\}] - \sum_i \int \chi_i(c)  \mathbb{E}_{q_i(c)}[\log p_i(o_i|c)]  dc
+S_{\text{obs}} = S_{\text{internal}}[\{q_i\}] - \sum_i \int \chi_i(c)  \mathbb{E}_{q_i(c)}[\log p_i(o_i|c)]  dc,
 \end{equation}
 there exists an equivalent system with environmental agents
 \begin{equation}
-S_{\text{agent}} = S_{\text{internal}}[\{q_i\}] + \sum_{i,k} \int \chi_{ik}(c)  \beta_{i,e_k}(c)  \mathrm{KL}\big(q_i(c) \| \Omega_{i,e_k}[q_{e_k}(c)]\big)  dc
+S_{\text{agent}} = S_{\text{internal}}[\{q_i\}] + \sum_{i,k} \int \chi_{ik}(c)  \beta_{i,e_k}(c)  \mathrm{KL}\big(q_i(c) \| \Omega_{i,e_k}[q_{e_k}(c)]\big)  dc,
 \end{equation}
 such that the gradient flows are equivalent: $\frac{\delta S_{\text{obs}}}{\delta q_i} = \frac{\delta S_{\text{agent}}}{\delta q_i}$.
 
@@ -983,9 +982,7 @@ This construction demonstrates that observations can be fully replaced by approp
 
 \subsubsection{Connection to Wheeler's "It From Bit"}
 
-This functional realizes Wheeler's vision mathematically. The "bit" appears through agents exchanging information via KL divergences and gauge-covariant transport - pure information-theoretic quantities without reference to physical substance. The "it" emerges as reality (geometric structure on $\mathcal{C}$) arising from pullbacks of this informational dynamics, developed in Section~\ref{sec:pullback}. The participatory aspect manifests through agents influencing each other (alignment terms) and being influenced back through prior updates (Section~\ref{sec:participatory}), creating bidirectional causation between levels.
-
-Minimizing $S$ drives the system toward states where agents achieve consensus while maintaining diversity through gauge freedom. This is not static equilibrium but perpetual dynamical balance - a self-organizing, participatory cosmos emerging from pure information geometry. The framework transforms Wheeler's poetic vision into a rigorous and self-contained variational principle.
+Wheeler's slogan that physical "it" derives from informational "bit"~\cite{Wheeler1990} motivates the present functional. The construction supplies a concrete mathematical realization in which geometric structure on $\mathcal{C}$ is induced by pullback of the agent belief dynamics rather than posited a priori. The technical derivation, including the explicit pullback metric and its gauge-theoretic interpretation, is developed in Section~\ref{sec:pullback}.
 
 \subsubsection{Comparison to Physical Action Principles}
 
@@ -1057,7 +1054,7 @@ At short timescales, agents update beliefs $q_i$ to explain new observations whi
 \begin{align}
 S_{\text{fast}}[\{q_i\}] = {}& \sum_i \int \chi_i(c)  \mathrm{KL}(q_i(c) \| p_i(c))  dc \nonumber\\
 &+ \sum_{ij} \int \chi_{ij}(c)  \beta_{ij}(c)  \mathrm{KL}(q_i(c) \| \Omega_{ij}[q_j(c)])  dc \nonumber\\
-&- \sum_i \int \chi_i(c)  \mathbb{E}_{q_i}[\log p(o(c) \mid q_i(c))]  dc
+&- \sum_i \int \chi_i(c)  \mathbb{E}_{q_i}[\log p(o(c) \mid q_i(c))]  dc.
 \end{align}
 
 We omit explicit base space integrals in subsequent equations for notational clarity, but they are understood to be present.
@@ -1070,7 +1067,7 @@ On longer timescales, agents update their generative models $s_i$ to reflect lon
 
 \begin{equation}
 S_{\text{slow}}[\{s_i\}] = \sum_i \int \chi_i(c)  \mathrm{KL}(s_i(c) \| r_i(c))  dc
-+ \sum_{ij} \int \chi_{ij}(c)  \gamma_{ij}(c)  \mathrm{KL}(s_i(c) \| \tilde{\Omega}_{ij}[s_j(c)])  dc
++ \sum_{ij} \int \chi_{ij}(c)  \gamma_{ij}(c)  \mathrm{KL}(s_i(c) \| \tilde{\Omega}_{ij}[s_j(c)])  dc,
 \end{equation}
 
 where $r_i$ are the per-agent model hyper-priors representing evolutionary or training-time structural defaults. Natural gradient descent on models follows $\partial s_i/\partial \tau = -\eta_s  \tilde{\nabla}_{s_i} S_{\text{slow}}$ with learning rate $\eta_s \ll \eta_q$, much slower than belief updates. This corresponds to learning and adaptation timescales where agents slowly adjust expectations about how the world works, coordinating with other agents to develop shared ontologies and common conceptual frameworks. Per-token priors $p_i$ also evolve on a learning timescale (in the transformer limit they appear as the PriorBank entries, updated by gradient descent over training data; Section~\ref{sec:transformers}), but their update is local to each agent and is not coupled across agents at this level.
@@ -1080,7 +1077,7 @@ where $r_i$ are the per-agent model hyper-priors representing evolutionary or tr
 Gauge frames $\phi_i(c)$ may evolve to minimize free energy with respect to frame choices.  In our current studies we do not consider regularizing terms such as
 
 \begin{equation}
-S_{\text{frame}}[\{\phi_i\}] = \lambda_\phi \sum_i \int \|\nabla \phi_i(c)\|^2  dc + \text{(coupling-dependent terms)}
+S_{\text{frame}}[\{\phi_i\}] = \lambda_\phi \sum_i \int \|\nabla \phi_i(c)\|^2  dc + \text{(coupling-dependent terms)},
 \end{equation}
 
 althought they are theoretically interesting and rich.
@@ -1124,7 +1121,7 @@ Each agent $i$ maintains a belief distribution $q_i = \mathcal{N}(\mu_i, \Sigma_
 \begin{align}
 \Lambda_{q_i} &= \Sigma_i^{-1} & &\text{(belief precision)} \\
 \bar{\Lambda}_{p_i} &= \bar{\Sigma}_i^{-1} & &\text{(prior precision)} \\
-\Lambda_{o_i} &= \Sigma_{o_i}^{-1} & &\text{(observation precision)}
+\Lambda_{o_i} &= \Sigma_{o_i}^{-1} & &\text{(observation precision)},
 \end{align}
 with transported quantities $\tilde{\mu}_k = \Omega_{ik}\mu_k$ and transported covariance $\tilde{\Sigma}_k = \Omega_{ik}\Sigma_k\Omega_{ik}^T$ under gauge transport $\Omega_{ik} = e^{\phi_i}e^{-\phi_k} \in \mathrm{GL}(d)$. The transported precision is the inverse of the transported covariance,
 \begin{equation}
@@ -1137,18 +1134,14 @@ which differs from the covariance transport law because precision is the inverse
 
 The complete variational free energy with explicit sensory evidence is:
 \begin{equation}
-\mathcal{F}[\{q_i\}] = \sum_i D_{\mathrm{KL}}(q_i \| p_i) + \sum_{i,k} \beta_{ik} D_{\mathrm{KL}}(q_i \| \Omega_{ik}[q_k]) - \sum_i \mathbb{E}_{q_i}[\log p(o_i | \theta)]
+\mathcal{F}[\{q_i\}] = \sum_i D_{\mathrm{KL}}(q_i \| p_i) + \sum_{i,k} \beta_{ik} D_{\mathrm{KL}}(q_i \| \Omega_{ik}[q_k]) - \sum_i \mathbb{E}_{q_i}[\log p(o_i | \theta)].
 \label{eq:extended_free_energy}
 \end{equation}
 The three terms represent prior anchoring (deviation from internal world-model), social consensus (alignment with other agents via gauge-covariant transport), and sensory evidence (grounding in observations).
 
 \subsection{Component Free Energies for Gaussians}
 
-For $q = \mathcal{N}(\mu_q, \Sigma_q)$ and $p = \mathcal{N}(\mu_p, \Sigma_p)$, the KL divergence is:
-\begin{equation}
-D_{\mathrm{KL}}(q \| p) = \frac{1}{2}\left[\mathrm{tr}(\Sigma_p^{-1}\Sigma_q) + (\mu_p - \mu_q)^T \Sigma_p^{-1}(\mu_p - \mu_q) - d + \ln\frac{|\Sigma_p|}{|\Sigma_q|}\right]
-\label{eq:kl_gaussian}
-\end{equation}
+For $q = \mathcal{N}(\mu_q, \Sigma_q)$ and $p = \mathcal{N}(\mu_p, \Sigma_p)$, the KL divergence is given by the closed-form expression of Eq.~\eqref{eq:gaussian_kl}, applied with the substitution $(\mu_1, \Sigma_1, \mu_2, \Sigma_2) \to (\mu_q, \Sigma_q, \mu_p, \Sigma_p)$.
 
 For the Gaussian likelihood $p(o_i | \theta) = \mathcal{N}(o_i; \theta, \Sigma_{o_i})$, the expected log-likelihood evaluates to:
 \begin{equation}
@@ -1160,7 +1153,7 @@ For the Gaussian likelihood $p(o_i | \theta) = \mathcal{N}(o_i; \theta, \Sigma_{
 \subsubsection{Prior Term}
 \begin{align}
 \frac{\partial D_{\mathrm{KL}}(q_i \| p_i)}{\partial \mu_i} &= \bar{\Lambda}_{p_i}(\mu_i - \bar{\mu}_i) \\
-\frac{\partial D_{\mathrm{KL}}(q_i \| p_i)}{\partial \Sigma_i} &= \frac{1}{2}(\bar{\Lambda}_{p_i} - \Lambda_{q_i})
+\frac{\partial D_{\mathrm{KL}}(q_i \| p_i)}{\partial \Sigma_i} &= \frac{1}{2}(\bar{\Lambda}_{p_i} - \Lambda_{q_i}).
 \end{align}
 
 \subsubsection{Consensus Term}
@@ -1168,7 +1161,7 @@ For the Gaussian likelihood $p(o_i | \theta) = \mathcal{N}(o_i; \theta, \Sigma_{
 With respect to receiver $i$:
 \begin{align}
 \frac{\partial D_{\mathrm{KL}}(q_i \| \tilde{q}_k)}{\partial \mu_i} &= \tilde{\Lambda}_{q_k}(\mu_i - \tilde{\mu}_k) \\
-\frac{\partial D_{\mathrm{KL}}(q_i \| \tilde{q}_k)}{\partial \Sigma_i} &= \frac{1}{2}(\tilde{\Lambda}_{q_k} - \Lambda_{q_i})
+\frac{\partial D_{\mathrm{KL}}(q_i \| \tilde{q}_k)}{\partial \Sigma_i} &= \frac{1}{2}(\tilde{\Lambda}_{q_k} - \Lambda_{q_i}).
 \end{align}
 
 With respect to sender $k$ (using the GL-correct precision transport of Eq.~\eqref{eq:precision_transport}):
@@ -1181,12 +1174,12 @@ where the covariance gradient retains its form because $\Omega_{ik}^T\tilde{\Lam
 \subsubsection{Sensory Term}
 \begin{align}
 \frac{\partial}{\partial \mu_i}\left[-\mathbb{E}_{q_i}[\log p(o_i | \theta)]\right] &= \Lambda_{o_i}(\mu_i - o_i) \\
-\frac{\partial}{\partial \Sigma_i}\left[-\mathbb{E}_{q_i}[\log p(o_i | \theta)]\right] &= \frac{1}{2}\Lambda_{o_i}
+\frac{\partial}{\partial \Sigma_i}\left[-\mathbb{E}_{q_i}[\log p(o_i | \theta)]\right] &= \frac{1}{2}\Lambda_{o_i}.
 \end{align}
 
 \subsubsection{Total Gradient}
 \begin{equation}
-\frac{\partial \mathcal{F}}{\partial \mu_i} = \bar{\Lambda}_{p_i}(\mu_i - \bar{\mu}_i) + \sum_k \beta_{ik}\tilde{\Lambda}_{q_k}(\mu_i - \tilde{\mu}_k) + \sum_j \beta_{ji}\Lambda_{q_i}\Omega_{ji}^{-1}(\tilde{\mu}_i^{(j)} - \mu_j) + \Lambda_{o_i}(\mu_i - o_i)
+\frac{\partial \mathcal{F}}{\partial \mu_i} = \bar{\Lambda}_{p_i}(\mu_i - \bar{\mu}_i) + \sum_k \beta_{ik}\tilde{\Lambda}_{q_k}(\mu_i - \tilde{\mu}_k) + \sum_j \beta_{ji}\Lambda_{q_i}\Omega_{ji}^{-1}(\tilde{\mu}_i^{(j)} - \mu_j) + \Lambda_{o_i}(\mu_i - o_i),
 \label{eq:total_gradient_mu}
 \end{equation}
 where $\tilde{\mu}_i^{(j)} = \Omega_{ji}\mu_i$ is agent $i$'s mean transported into agent $j$'s frame.
@@ -1195,7 +1188,7 @@ where $\tilde{\mu}_i^{(j)} = \Omega_{ji}\mu_i$ is agent $i$'s mean transported i
 
 The Hessian of the free energy $M = \partial^2 \mathcal{F}/\partial\xi\partial\xi$ defines a configuration-space metric on belief space. In the symmetric-attention or isolated-agent limits, this metric exhibits Newtonian-analogy scaling ($\omega^2 \propto m_{\text{eff}}^{-1}$), which justifies calling it a ``mass matrix'' for analogy with classical mechanics --- without claiming a full Lagrangian formalism. The full state vector is $\xi = (\mu_1, \ldots, \mu_N, \Sigma_1, \ldots, \Sigma_N)$, yielding the block structure
 \begin{equation}
-M = \begin{pmatrix} M_{\mu\mu} & C^{\mu\Sigma} \\ (C^{\mu\Sigma})^T & M_{\Sigma\Sigma} \end{pmatrix}
+M = \begin{pmatrix} M_{\mu\mu} & C^{\mu\Sigma} \\ (C^{\mu\Sigma})^T & M_{\Sigma\Sigma} \end{pmatrix},
 \label{eq:mass_block_structure}
 \end{equation}
 where each block is itself an $N \times N$ matrix of sub-blocks.
@@ -1210,7 +1203,7 @@ The second-variation expressions below treat the attention weights $\beta_{ij}$ 
 
 \paragraph{Diagonal blocks $(i = k)$:} From the prior we obtain $\partial^2 D_{\mathrm{KL}}(q_i \| p_i)/\partial \mu_i \partial \mu_i^T = \bar{\Lambda}_{p_i}$. From consensus as receiver, $\partial^2 D_{\mathrm{KL}}(q_i \| \tilde{q}_k)/\partial \mu_i \partial \mu_i^T = \tilde{\Lambda}_{q_k}$. From consensus as sender to agent $j$, $\partial^2 D_{\mathrm{KL}}(q_j \| \tilde{q}_i)/\partial \mu_i \partial \mu_i^T = \Omega_{ji}^T \tilde{\Lambda}_{q_i}^{(j)} \Omega_{ji} = \Lambda_{q_i}$. From sensory evidence, $\partial^2[-\mathbb{E}_{q_i}[\log p(o_i | \theta)]]/\partial \mu_i \partial \mu_i^T = \Lambda_{o_i}$. The total diagonal mass is:
 \begin{equation}
-\boxed{[M_{\mu\mu}]_{ii} = \bar{\Lambda}_{p_i} + \sum_k \beta_{ik} \tilde{\Lambda}_{q_k} + \sum_j \beta_{ji} \Lambda_{q_i} + \Lambda_{o_i}}
+\boxed{[M_{\mu\mu}]_{ii} = \bar{\Lambda}_{p_i} + \sum_k \beta_{ik} \tilde{\Lambda}_{q_k} + \sum_j \beta_{ji} \Lambda_{q_i} + \Lambda_{o_i}.}
 \label{eq:mass_mu_diagonal}
 \end{equation}
 
@@ -1235,13 +1228,13 @@ The mass matrix $M_{\mu\mu}$ is symmetric only when $\beta_{ik} = \beta_{ki}$ (r
 
 For matrix-valued variables, we use the directional derivative convention:
 \begin{equation}
-\frac{\partial^2 f}{\partial \Sigma \partial \Sigma}[V, W] = \lim_{\epsilon \to 0} \frac{1}{\epsilon}\left[\left.\frac{\partial f}{\partial \Sigma}\right|_{\Sigma + \epsilon W} - \left.\frac{\partial f}{\partial \Sigma}\right|_{\Sigma}\right][V]
+\frac{\partial^2 f}{\partial \Sigma \partial \Sigma}[V, W] = \lim_{\epsilon \to 0} \frac{1}{\epsilon}\left[\left.\frac{\partial f}{\partial \Sigma}\right|_{\Sigma + \epsilon W} - \left.\frac{\partial f}{\partial \Sigma}\right|_{\Sigma}\right][V],
 \end{equation}
 with the key identity $\partial(\Sigma^{-1})/\partial \Sigma = -\Sigma^{-1} \otimes \Sigma^{-1}$.
 
 \paragraph{Diagonal blocks $(i = k)$:} From the prior:
 \begin{equation}
-\frac{\partial^2 D_{\mathrm{KL}}(q_i \| p_i)}{\partial \Sigma_i \partial \Sigma_i}[V, W] = \frac{1}{2}\mathrm{tr}[\Lambda_{q_i} V \Lambda_{q_i} W]
+\frac{\partial^2 D_{\mathrm{KL}}(q_i \| p_i)}{\partial \Sigma_i \partial \Sigma_i}[V, W] = \frac{1}{2}\mathrm{tr}[\Lambda_{q_i} V \Lambda_{q_i} W].
 \end{equation}
 In tensor notation: $\partial^2 D_{\mathrm{KL}}(q_i \| p_i)/\partial \Sigma_i \partial \Sigma_i = \frac{1}{2}(\Lambda_{q_i} \otimes \Lambda_{q_i})$. From consensus as receiver and sender, identical contributions arise \emph{at consensus} (see remark below). The sensory term $\frac{1}{2}\mathrm{tr}(\Lambda_{o_i}\Sigma_i)$ is linear in $\Sigma_i$, so its second derivative vanishes. Therefore:
 \begin{equation}
@@ -1268,15 +1261,15 @@ The prior term gives $\partial^2 D_{\mathrm{KL}}(q_i \| p_i)/\partial \mu_i \par
 
 For the consensus term, from $\partial D_{\mathrm{KL}}(q_i \| \tilde{q}_k)/\partial \mu_i = \tilde{\Lambda}_{q_k}(\mu_i - \tilde{\mu}_k)$, varying $\Sigma_k$:
 \begin{equation}
-\frac{\partial^2 D_{\mathrm{KL}}(q_i \| \tilde{q}_k)}{\partial \mu_i \partial \Sigma_k}[V] = -\Omega_{ik}\Lambda_{q_k} V \Lambda_{q_k} \Omega_{ik}^T (\mu_i - \tilde{\mu}_k)
+\frac{\partial^2 D_{\mathrm{KL}}(q_i \| \tilde{q}_k)}{\partial \mu_i \partial \Sigma_k}[V] = -\Omega_{ik}\Lambda_{q_k} V \Lambda_{q_k} \Omega_{ik}^T (\mu_i - \tilde{\mu}_k).
 \end{equation}
 In components:
 \begin{equation}
-\frac{\partial^2 D_{\mathrm{KL}}}{\partial(\mu_i)_a \partial(\Sigma_k)_{bc}} = -[\Omega_{ik}\Lambda_{q_k}]_{ab}[\Lambda_{q_k}\Omega_{ik}^T(\mu_i - \tilde{\mu}_k)]_c
+\frac{\partial^2 D_{\mathrm{KL}}}{\partial(\mu_i)_a \partial(\Sigma_k)_{bc}} = -[\Omega_{ik}\Lambda_{q_k}]_{ab}[\Lambda_{q_k}\Omega_{ik}^T(\mu_i - \tilde{\mu}_k)]_c.
 \end{equation}
 This vanishes at consensus ($\mu_i = \tilde{\mu}_k$):
 \begin{equation}
-\boxed{[C^{\mu\Sigma}]_{ik} = 0 \quad \text{when } \mu_i = \tilde{\mu}_k}
+\boxed{[C^{\mu\Sigma}]_{ik} = 0 \quad \text{when } \mu_i = \tilde{\mu}_k.}
 \label{eq:cross_block}
 \end{equation}
 
@@ -1284,7 +1277,7 @@ This vanishes at consensus ($\mu_i = \tilde{\mu}_k$):
 
 The effective mass of agent $i$ in the mean sector is:
 \begin{equation}
-M_i = \underbrace{\bar{\Lambda}_{p_i}}_{\text{bare mass}} + \underbrace{\sum_k \beta_{ik}\tilde{\Lambda}_{q_k}}_{\text{incoming relational}} + \underbrace{\sum_j \beta_{ji}\Lambda_{q_i}}_{\text{outgoing recoil}} + \underbrace{\Lambda_{o_i}}_{\text{sensory}}
+M_i = \underbrace{\bar{\Lambda}_{p_i}}_{\text{bare mass}} + \underbrace{\sum_k \beta_{ik}\tilde{\Lambda}_{q_k}}_{\text{incoming relational}} + \underbrace{\sum_j \beta_{ji}\Lambda_{q_i}}_{\text{outgoing recoil}} + \underbrace{\Lambda_{o_i}}_{\text{sensory}}.
 \label{eq:effective_mass}
 \end{equation}
 The bare mass $\bar{\Lambda}_{p_i}$ provides inertia against deviation from the prior world-model. The incoming relational mass captures inertia from being pulled by neighbors. The outgoing relational mass represents inertia from pulling neighbors (recoil). The sensory mass grounds the agent in observations.
@@ -1531,7 +1524,7 @@ Recall that agent $i$ is characterized by smooth sections of associated bundles.
 The statistical fiber $\mathcal{B}$ carries a Riemannian metric known as the Fisher-Rao metric, denoted $g_{\mathcal{B}}$. For Gaussian distributions, this metric takes the form
 
 \begin{equation}
-g_{\mathcal{B}}(\delta q, \delta q) = \delta\mu^\top \Sigma^{-1} \delta\mu + \frac{1}{2}\mathrm{tr}(\Sigma^{-1}\delta\Sigma\Sigma^{-1}\delta\Sigma)
+g_{\mathcal{B}}(\delta q, \delta q) = \delta\mu^\top \Sigma^{-1} \delta\mu + \frac{1}{2}\mathrm{tr}(\Sigma^{-1}\delta\Sigma\Sigma^{-1}\delta\Sigma).
 \end{equation}
 
 This metric is intrinsic to the space of probability distributions, existing independently of any base manifold structure. It measures statistical distinguishability between nearby distributions through the Fisher information.
@@ -1551,7 +1544,7 @@ g_{E_q}\big|_{(c, q)}\big(X_H + X_V, Y_H + Y_V\big) := g_{\mathcal{C}}^{\mathrm{
 \end{equation}
 where $\pi: E_q \to \mathcal{C}$ is the bundle projection, $g_{\mathcal{B}}$ is the Fisher-Rao metric on the fiber, and the horizontal part is the gauge-connection kinetic form
 \begin{equation}
-g_{\mathcal{C},\mu\nu}^{\mathrm{YM}}(c) := \mathrm{tr}\big(A^{(i)}_\mu(c)A^{(i)}_\nu(c)\big)
+g_{\mathcal{C},\mu\nu}^{\mathrm{YM}}(c) := \mathrm{tr}\big(A^{(i)}_\mu(c)A^{(i)}_\nu(c)\big),
 \label{eq:horizontal_metric}
 \end{equation}
 already encountered in Sections~\ref{sec:cognitive_reference_frames} and~\ref{sec:signature_resolution}. Equation~\eqref{eq:bundle_metric} is a fiber-respecting metric on $E_q$: the vertical block is the standard Fisher-Rao metric, the horizontal block is agent-frame-dependent in the same sense as the section itself (see the gauge-invariance disclosure below), and the two blocks are gauge-orthogonal by construction.
@@ -1602,7 +1595,7 @@ This perspective aligns with Kant's phenomenal/noumenal distinction, where space
 Consider agents maintaining Gaussian beliefs $q_i(c) = \mathcal{N}(\mu_i(c), \Sigma_i(c))$ over a flat base manifold $\mathcal{C} = \mathbb{R}^2$. The induced metric components are
 
 \begin{equation}
-G^{(q)}_{i,\mu\nu}(c) = (\partial_\mu \mu_i)^\top \Sigma_i^{-1} (\partial_\nu \mu_i) + \frac{1}{2}\mathrm{tr}\left(\Sigma_i^{-1}(\partial_\mu \Sigma_i)\Sigma_i^{-1}(\partial_\nu \Sigma_i)\right)
+G^{(q)}_{i,\mu\nu}(c) = (\partial_\mu \mu_i)^\top \Sigma_i^{-1} (\partial_\nu \mu_i) + \frac{1}{2}\mathrm{tr}\left(\Sigma_i^{-1}(\partial_\mu \Sigma_i)\Sigma_i^{-1}(\partial_\nu \Sigma_i)\right).
 \end{equation}
 
 The first term captures mean gradient contributions. If the mean belief location $\mu_i(c)$ varies rapidly with base manifold position $c$, the metric component is large, corresponding to short information distances. The second term captures covariance gradient contributions. If the uncertainty structure itself varies rapidly across space, this also enlarges the metric.
@@ -1610,7 +1603,7 @@ The first term captures mean gradient contributions. If the mean belief location
 In the simple case where $\Sigma_i(c) = \sigma^2 I$ (isotropic covariance, constant across space), the metric reduces to
 
 \begin{equation}
-G^{(q)}_{i,\mu\nu}(c) = \frac{1}{\sigma^2}(\partial_\mu \mu_i) \cdot (\partial_\nu \mu_i)
+G^{(q)}_{i,\mu\nu}(c) = \frac{1}{\sigma^2}(\partial_\mu \mu_i) \cdot (\partial_\nu \mu_i).
 \end{equation}
 
 This is a conformal metric with conformal factor $1/\sigma^2$. High certainty (small $\sigma$) magnifies distances.  Regions where the agent is confident appear "larger" in information geometry. Conversely, high uncertainty (large $\sigma$) compresses distances - uncertain regions appear "smaller" because belief variations have less significance.
@@ -2053,7 +2046,7 @@ F_{\text{total}} = \sum_i \left[ \lambda_{\text{self}} F_{\text{self}}^{(i)} + \
 
 where $F_{\text{self}}^{(i)} = \text{KL}(q_i \| p_i)$ measures intrinsic energy, $F_{\text{belief}}^{(i)}$ measures lateral alignment with neighbors, $F_{\text{prior}}^{(i)}$ measures vertical alignment with parent meta-agents, and $F_{\text{obs}}^{(i)}$ measures fit to external observations. With all energy weights set to unity ($\lambda_{\text{self}} = \lambda_{\text{belief}} = \lambda_{\text{prior}} = \lambda_{\text{obs}} = 1.0$), the system balances individual identity, social coordination, hierarchical integration, and empirical grounding without imposed bias.
 
-Every 2 steps, the system checked for epistemic consensus by computing gauge-invariant KL divergences $\text{KL}(q_i \| \Omega_{ij}[q_j])$ and $\text{KL}(p_i \| \Omega_{ij}[p_j])$ between all agents at each scale, where $\Omega_{ij} = \exp(\phi_i) \exp(-\phi_j)$ is the gauge transport operator. When a cluster of agents achieved both belief consensus ($\text{KL}(q_i \| \Omega_{ij}[q_j]) < \tau_{\text{KL}} = 0.05$) and model consensus ($\text{KL}(p_i \| \Omega_{ij}[p_j]) < \tau_{\text{KL}}$), they underwent \textit{epistemic death} and condensed into a meta-agent at the next scale, which inherited a Gaussian prior synthesized from the cluster's belief distribution. This gauge-invariant consensus detection ensures that agents are truly aligned in their intrinsic beliefs, not merely appearing similar due to different gauge choices.
+Every 2 steps, the system checked for epistemic consensus by computing gauge-invariant KL divergences $\text{KL}(q_i \| \Omega_{ij}[q_j])$ and $\text{KL}(p_i \| \Omega_{ij}[p_j])$ between all agents at each scale, where $\Omega_{ij}$ is the gauge transport operator of~\eqref{eq:transport_def}. When a cluster of agents achieved both belief consensus ($\text{KL}(q_i \| \Omega_{ij}[q_j]) < \tau_{\text{KL}} = 0.05$) and model consensus ($\text{KL}(p_i \| \Omega_{ij}[p_j]) < \tau_{\text{KL}}$), they underwent \textit{epistemic death} and condensed into a meta-agent at the next scale, which inherited a Gaussian prior synthesized from the cluster's belief distribution. This gauge-invariant consensus detection ensures that agents are truly aligned in their intrinsic beliefs, not merely appearing similar due to different gauge choices.
 
 The Ouroboros Tower mechanism propagated priors down from ancestors up to 5 scales higher, weighted by exponential decay $\gamma^{\Delta\zeta}$ where $\Delta\zeta$ is the scale distance. This implements multi-level self-reference, allowing agents to be influenced by the emergent structure of the hierarchy itself.
 
@@ -2364,7 +2357,7 @@ The participatory dynamics are intrinsic to the mathematical structure. Wheeler'
 
 The complete cycle is:
 \begin{equation}
-\boxed{\text{Bit (beliefs)} \xrightarrow{\text{pullback}} \text{It (geometry)} \xrightarrow{\text{transport}} \text{Bit (updated beliefs)}}
+\boxed{\text{Bit (beliefs)} \xrightarrow{\text{pullback}} \text{It (geometry)} \xrightarrow{\text{transport}} \text{Bit (updated beliefs)}.}
 \end{equation}
 
 
@@ -2797,11 +2790,9 @@ probabilities as subjective degrees of belief. Our framework shares this spirit 
 
 \subsection{Realization of Wheeler's Program}
 
-John Wheeler proposed that physics might ultimately rest on information-theoretic foundations, captured in slogans such as "it from bit" and "law without law" \cite{Wheeler1990}. The present framework provides a concrete mathematical framework with falsifiable predictions for this vision.
+Beyond the pullback construction itself (Section~\ref{sec:pullback}), the framework speaks to two further strands of Wheeler's program~\cite{Wheeler1990} that bear on the broader physics-and-philosophy reading developed in this Discussion. The "participatory universe" thesis, that observers constitute rather than merely record reality, recurs in the relational and QBist readings discussed above and is given dynamical content here through the alignment couplings that drive agents to a shared geometry.
 
-In tandem Wheeler's "participatory universe" holds that observers constitute reality rather than merely measuring a pre-existing world. In our framework, spacetime structure is not ontologically prior to agents but emerges from their consensus. The coupling terms in the variational functional drive agents toward aligned beliefs; the geometry they collectively experience is this alignment made manifest.
-
-Finally, "law without law" suggests that physical regularities emerge from deeper principles rather than being axiomatic. Here, the laws of mechanics emerge from variational free energy minimization on a principal bundle. No dynamical laws are assumed; they arise from the geometry of inference. Furthermore, gauge invariance of physical law is manifestly a consequence of agent-agent alignment and consensus. Any agents which agree on reality must be gauge equivalent.  Our theory produces this as a consequence, rather than an assumption.
+The "law without law" thesis acquires a similarly concrete form. Dynamical laws are not posited; they arise as stationarity conditions of the variational functional on a principal bundle. Gauge invariance is then a consequence of consensus rather than an axiom: agents that agree on reality must be related by elements of the structure group. The remainder of this Discussion develops the concomitant implications for transformers (Section~\ref{sec:transformers}), language and cognition, and open problems in the physical interpretation.
 
 
 \subsection{Implications of Gauge-VFE Transformer}
@@ -2870,7 +2861,7 @@ For model alignment to succeed, we require:
 \mathrm{KL}\big(s_i \| \tilde{\Omega}_{ij}[s_j]\big) \to 0
 \end{equation}
 
-This demands that models transform covariantly under transport operators $\tilde{\Omega}_{ij} = \exp(\phi_i)\exp(-\phi_j)$ connecting different gauge frames. In other words, scientific models must be gauge-covariant to achieve human consensus. A theory formulated in a way that depends essentially on one researcher's arbitrary internal coordinates cannot be reliably communicated to and verified by other researchers with different internal coordinates.
+This demands that models transform covariantly under the transport operators $\tilde{\Omega}_{ij}$ that connect different gauge frames (the model-fiber analogue of~\eqref{eq:transport_def}). In other words, scientific models must be gauge-covariant to achieve human consensus. A theory formulated in a way that depends essentially on one researcher's arbitrary internal coordinates cannot be reliably communicated to and verified by other researchers with different internal coordinates.
 
 A gauge-invariant theory expressed in the form $\mathcal{L}[A_\mu, \psi]$ possesses the property that $\mathcal{L}[A_\mu, \psi] = \mathcal{L}[A_\mu + \partial_\mu\chi, e^{i\chi}\psi]$ under local gauge transformations. Such a theory can be transformed into any agent's reference frame and remain formally identical. This is why gauge theories prove so successful - they are cognitively shareable across humans with different internal frames. The theory's content is preserved under the transport operations necessary for inter-agent communication.
 
@@ -3032,7 +3023,7 @@ Our framework provides formal structure for Kuhn's informal analysis. Normal sci
 
 A scientific revolution occurs as collective gauge transformation $\phi_{\text{old}} \to \phi_{\text{new}}$ with accompanying model shift $s_{\text{old}} \to s_{\text{new}}$. Early adopters develop the new framework, demonstrating that $s_{\text{new}}$ better explains observations. If successful, model-alignment pressure drives transformation through the community. Scientists adopt $\phi_{\text{new}}$ because it enables lower free energy states than maintaining $\phi_{\text{old}}$ against mounting empirical tension.
 
-Kuhn's incommensurability thesis corresponds to large informational distance between transported beliefs across distant gauge frames. The transport operator $\Omega_{\text{old,new}} = \exp(\phi_{\text{old}})\exp(-\phi_{\text{new}})$ remains invertible by construction --- it does not ``approach zero'' in any operator-norm sense --- but when $\phi_{\text{old}}$ and $\phi_{\text{new}}$ are sufficiently different, the KL divergence between an old-paradigm belief $q_{\text{old}}$ and its transport $\Omega_{\text{old,new}}^{-1} q_{\text{old}}$ into the new frame can be made arbitrarily large, such that meaningful translation becomes nearly impossible: concepts that minimise free energy under one frame fail to do so under the other, and the operator that formally relates them takes coherent sentences to incoherent ones. Concepts natural in one paradigm lack direct counterparts in the other. This is not mere linguistic difficulty but reflects genuine structural differences in how the frameworks organize information. Scientists on opposite sides of a revolution literally inhabit different phenomenal realities despite observing the same noumenal substrate.
+Kuhn's incommensurability thesis corresponds to large informational distance between transported beliefs across distant gauge frames. The transport operator $\Omega_{\text{old,new}}$, given by~\eqref{eq:transport_def} with frames $\phi_{\text{old}}, \phi_{\text{new}}$, remains invertible by construction --- it does not ``approach zero'' in any operator-norm sense --- but when $\phi_{\text{old}}$ and $\phi_{\text{new}}$ are sufficiently different, the KL divergence between an old-paradigm belief $q_{\text{old}}$ and its transport $\Omega_{\text{old,new}}^{-1} q_{\text{old}}$ into the new frame can be made arbitrarily large, such that meaningful translation becomes nearly impossible: concepts that minimise free energy under one frame fail to do so under the other, and the operator that formally relates them takes coherent sentences to incoherent ones. Concepts natural in one paradigm lack direct counterparts in the other. This is not mere linguistic difficulty but reflects genuine structural differences in how the frameworks organize information. Scientists on opposite sides of a revolution literally inhabit different phenomenal realities despite observing the same noumenal substrate.
 
 This interpretation supports Kuhn's anti-realist tendencies while providing mathematical precision his informal account lacked~\cite{Hoyningen-Huene1993}. Scientific progress is real (we achieve better free energy minimization) but not necessarily truth-convergent (we may not approach objective reality, only optimized shared models).
 
