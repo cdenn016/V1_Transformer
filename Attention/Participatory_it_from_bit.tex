@@ -1325,7 +1325,7 @@ To prevent computational intractability, we impose a hard cap on hierarchical de
 
 Meta-agents emerge when scale-$s$ agents exhibit sufficient coherence and spatial overlap. We quantify this through three complementary measures. Belief coherence captures how similar agents' current beliefs are after accounting for gauge transformations:
 \begin{equation}
-C_{\mathrm{belief}}(\{i\}, x) = 1 - \frac{1}{|\{i\}|^2}\sum_{i,j \in \{i\}} \mathrm{KL}\big(q_i^{(s)}(x) \| \Omega_{ij}[q_j^{(s)}](x)\big)
+C_{\mathrm{belief}}(\{i\}, x) = 1 - \frac{1}{|\{i\}|^2}\sum_{i,j \in \{i\}} \mathrm{KL}\big(q_i^{(s)}(x) \| \Omega_{ij}[q_j^{(s)}](x)\big).
 \end{equation}
 
 Model coherence similarly measures alignment of generative models through $C_{\mathrm{model}}(\{i\}, x) = 1 - \frac{1}{|\{i\}|^2}\sum_{i,j \in \{i\}} \mathrm{KL}\big(s_i^{(s)}(x) \| \tilde{\Omega}_{ij}[s_j^{(s)}](x)\big)$, where $s_i^{(s)}$ denotes the generative model of agent $i$ at hierarchical scale $s$ (the superscript indexes scale, the subscript indexes agent). Presence measures spatial overlap via $P(\{i\}, x) = \frac{1}{|\{i\}|}\sum_{i \in \{i\}} \chi_i(x)$ where $\chi_i(x)$ is agent $i$'s support function indicating where it maintains beliefs.
@@ -1362,7 +1362,7 @@ The key distinction from spatial RG is that we coarse-grain over belief coherenc
 The free energy at scale $(s+1)$ has the same functional form as at scale $s$
 
 \begin{equation}
-S^{(s+1)}[\{q_I^{(s+1)}\}, \{p_I^{(s+1)}\}] = \sum_I \int \mathrm{KL}(q_I^{(s+1)} \| p_I^{(s+1)}) + \sum_{IJ} \beta_{IJ}^{(s+1)} \mathrm{KL}(q_I \| \Omega_{IJ}[q_J]) + \cdots
+S^{(s+1)}[\{q_I^{(s+1)}\}, \{p_I^{(s+1)}\}] = \sum_I \int \mathrm{KL}(q_I^{(s+1)} \| p_I^{(s+1)}) + \sum_{IJ} \beta_{IJ}^{(s+1)} \mathrm{KL}(q_I \| \Omega_{IJ}[q_J]) + \cdots.
 \end{equation}
 
 This scale invariance of the functional form suggests the framework may exhibit critical phenomena, fixed points, or universal behavior analogous to phase transitions in statistical mechanics~\cite{Wilson1974}. The investigation of RG fixed points and critical exponents in this information-theoretic setting constitutes an important direction for future work we are currently engaged in.
@@ -1372,7 +1372,7 @@ This scale invariance of the functional form suggests the framework may exhibit 
 We quantify cross-scale information propagation through mutual information between constituent and meta-agent beliefs
 
 \begin{equation}
-\mathcal{I}_{s \to s+1} = \sum_{I \in \mathrm{scale}(s+1)} \sum_{i \in I} \mathrm{MI}\big(q_i^{(s)}, q_I^{(s+1)}\big)
+\mathcal{I}_{s \to s+1} = \sum_{I \in \mathrm{scale}(s+1)} \sum_{i \in I} \mathrm{MI}\big(q_i^{(s)}, q_I^{(s+1)}\big).
 \end{equation}
 
 This measures how much information flows upward in the hierarchy. In a functioning participatory system, we expect $\mathcal{I}_{s \to s+1} > 0$ for all $s < s_{\max}$. Vanishing information flow would indicate failed emergence as meta-agents would be informationally disconnected from their constituents, existing as independent entities rather than emergent collective representations. The magnitude of $\mathcal{I}$ indicates how strongly meta-agent beliefs reflect constituent states.
@@ -1387,7 +1387,7 @@ These are hallmarks of genuine emergence in complex systems such that the whole 
 
 Meta-agents at scale $(s+1)$ evolve more slowly than their constituent agents at scale $s$. This creates a hierarchy of characteristic timescales:
 \begin{equation}
-\tau_{\text{belief}}^{(0)} < \tau_{\text{prior}}^{(0)} < \tau_{\text{belief}}^{(1)} < \tau_{\text{prior}}^{(1)} < \tau_{\text{belief}}^{(2)} < \cdots
+\tau_{\text{belief}}^{(0)} < \tau_{\text{prior}}^{(0)} < \tau_{\text{belief}}^{(1)} < \tau_{\text{prior}}^{(1)} < \tau_{\text{belief}}^{(2)} < \cdots.
 \end{equation}
 
 The slowing occurs for three interconnected reasons. First, meta-agents integrate over constituent beliefs, smoothing out fast fluctuations through spatial and informational averaging. Just as averaging many noisy measurements reduces variance, averaging many rapidly fluctuating beliefs produces slowly varying collective states. Second, changing meta-agent state requires changing multiple constituent agents coherently, introducing consensus energy barriers that resist rapid updates. A single agent can update its belief instantaneously, but coordinated updates across many agents take time to propagate. Third, larger effective "mass" measured by accumulated Fisher information resists rapid updates through increased informational inertia. Meta-agents with high collective Fisher information resist belief changes just as massive physical objects resist velocity changes.
@@ -1400,7 +1400,7 @@ This is directly analogous to well-known hierarchical phenomena across multiple 
 The participatory loop closes through top-down information flow from meta-agents back to constituents. When a meta-agent $I$ at scale $(s+1)$ forms and evolves, its belief becomes the prior for constituent lower-level agents through gauge-covariant transport
 
 \begin{equation}
-p_i^{(s)}(x) = \Omega_{i,I}[q_I^{(s+1)}](x)
+p_i^{(s)}(x) = \Omega_{i,I}[q_I^{(s+1)}](x),
 \end{equation}
 
 where $\Omega_{i,I} = \exp(\phi_i)\exp(-\phi_I)$ transports the meta-agent's belief into constituent $i$'s gauge frame. The meta-agent's collective belief—formed through bottom-up aggregation from constituent statistics—directly becomes the updated expectation (prior) for individual agents, creating a feedback loop as constituents inform meta-agents through their beliefs, while meta-agents shape constituent expectations through prior propagation.
@@ -1410,7 +1410,7 @@ where $\Omega_{i,I} = \exp(\phi_i)\exp(-\phi_I)$ transports the meta-agent's bel
 \begin{align}
 p_i^{(s)} &\leftarrow \Omega_{i,I_1}[q_{I_1}^{(s+1)}] \quad \text{(parent)} \\
 h_i^{(s,0)} &\leftarrow \Omega_{i,I_2}[q_{I_2}^{(s+2)}] \quad \text{(grandparent)} \\
-h_i^{(s,1)} &\leftarrow \Omega_{i,I_3}[q_{I_3}^{(s+3)}] \quad \text{(great-grandparent)}
+h_i^{(s,1)} &\leftarrow \Omega_{i,I_3}[q_{I_3}^{(s+3)}] \quad \text{(great-grandparent)}.
 \end{align}
 
 This creates information flow from ALL ancestral scales, with hyperpriors stored as additional fields that can be incorporated into the free energy functional with exponentially decaying weights $\lambda_k = \lambda_0 \cdot \rho^k$ where $k$ is the generational distance.
@@ -1418,7 +1418,7 @@ This creates information flow from ALL ancestral scales, with hyperpriors stored
 \textbf{Self-Referential Closure:} For agents at the top of the hierarchy (no parent meta-agent), priors are formed by observing the entire system state. Top-scale agent $i$ computes its prior as a coherence-weighted average of all active agents across all scales
 
 \begin{equation}
-p_i^{(\text{top})}(x) = \sum_{j \in \text{all scales}} w_j(x)  \Omega_{i,j}[q_j](x)
+p_i^{(\text{top})}(x) = \sum_{j \in \text{all scales}} w_j(x)  \Omega_{i,j}[q_j](x),
 \end{equation}
 
 where weights $w_j \propto \exp(-\overline{\text{KL}}_j)$ favor agents that are coherent with the collective. This creates Wheeler's "self-excited circuit".  The system observes itself, forms collective priors, which flow down the hierarchy to shape individual beliefs, whose evolution changes the collective state, which the top re-observes representing a genuinely participatory, self-organizing dynamic.
@@ -1429,7 +1429,7 @@ We formally track parent-child relationships through a dynamically evolving grap
 
 We measure top-down influence by tracking prior change:
 \begin{equation}
-\Delta p_i(t) = \int_{\mathcal{C}} \mathrm{KL}\big(p_i^{(s)}(x; t) \| p_i^{(s)}(x; t-1)\big)  dx
+\Delta p_i(t) = \int_{\mathcal{C}} \mathrm{KL}\big(p_i^{(s)}(x; t) \| p_i^{(s)}(x; t-1)\big)  dx.
 \end{equation}
 
 Significant prior changes ($\Delta p_i > \theta_{\min}$) indicate active top-down participation. In our experiments with direct assignment, this measures how much the meta-agent's evolved belief differs from the constituent's previous prior, quantifying the strength of participatory feedback.
@@ -1471,7 +1471,7 @@ Could this arise from a minimum information update in physical systems? If physi
 An agent following a belief trajectory $q(\tau)$ through the statistical manifold accumulates the Fisher-Rao arc length
 
 \begin{equation}
-\Delta \tau = \int_{\tau_1}^{\tau_2} \sqrt{g_{\mathcal{B}}(\dot{q}, \dot{q})}  d\tau
+\Delta \tau = \int_{\tau_1}^{\tau_2} \sqrt{g_{\mathcal{B}}(\dot{q}, \dot{q})}  d\tau,
 \end{equation}
 
 where $g_{\mathcal{B}}$ is the Fisher-Rao metric. This is the ``information distance'' traversed along the trajectory and is a positive-definite Riemannian length. Different agents following different trajectories accumulate different Fisher arc lengths, which we use as an internal information-geometric clock. We do not identify this quantity with relativistic proper time: as discussed in detail in Section~\ref{sec:fisher_arc_length}, Fisher arc length and special-relativistic proper time have opposite character (positive-definite Riemannian versus indefinite Lorentzian) and run in opposite directions with motion. The connection to physical time dilation, if there is one, requires the indefinite-metric extension of Section~\ref{sec:signature_resolution} and is not established here.
@@ -1485,10 +1485,10 @@ The formalism thus provides a natural notion of observer-dependent time arising 
 For Gaussian distributions $q = \mathcal{N}(\mu, \Sigma)$, the Fisher information has block-diagonal structure
 
 \begin{equation}
-F = \begin{pmatrix} 
-\Sigma^{-1} & 0 \\ 
+F = \begin{pmatrix}
+\Sigma^{-1} & 0 \\
 0 & \frac{1}{2}(\Sigma^{-1} \otimes \Sigma^{-1})
-\end{pmatrix}
+\end{pmatrix}.
 \end{equation}
 
 This block structure enables efficient computation. For mean updates, the natural gradient becomes $\tilde{\nabla}_\mu S = \Sigma (\nabla_\mu S)$, which is the Euclidean gradient pre-multiplied by the covariance matrix. For covariance updates, the natural gradient is $\tilde{\nabla}_\Sigma S = \Sigma (\nabla_\Sigma S) \Sigma$, a bilinear form sandwiching the Euclidean gradient between covariance matrices. This bilinear structure ensures that updated covariances remain positive-definite, preserving the manifold structure of $\mathbb{S}^+_K$ automatically.
@@ -1499,7 +1499,7 @@ The complete system evolves via natural gradient flow on the product manifold:
 \begin{align}
 \frac{d\mu_i}{dt} &= -\eta_\mu  \tilde{\nabla}_\mu S \label{eq:mean_flow} \\
 \frac{d\Sigma_i}{dt} &= -\eta_\Sigma  \tilde{\nabla}_\Sigma S = -\eta_\Sigma  \Sigma_i (\nabla_\Sigma S) \Sigma_i \label{eq:cov_flow} \\
-\frac{d\phi_i}{dt} &= -\eta_\phi  \nabla_\phi S \label{eq:gauge_flow}
+\frac{d\phi_i}{dt} &= -\eta_\phi  \nabla_\phi S, \label{eq:gauge_flow}
 \end{align}
 
 where $\eta_\mu, \eta_\Sigma, \eta_\phi$ are learning rates satisfying the timescale hierarchy discussed previously. The gauge covariance of these updates is essential for maintaining consistency. Under gauge transformation $g \in G$, covariances transform as $\Sigma_i \to \rho(g) \Sigma_i \rho(g)^\top$. The natural gradient update transforms covariantly as $\Sigma_i (\nabla_\Sigma S) \Sigma_i \to \rho(g)[\Sigma_i (\nabla_\Sigma S) \Sigma_i]\rho(g)^\top$, ensuring that dynamics respect gauge symmetry.
@@ -1691,13 +1691,13 @@ The central open question is whether a free-energy mechanism selects an imaginar
 The temporal direction may be additionally distinguished by belief dynamics. Consider an agent's belief trajectory through the fiber
 
 \begin{equation}
-q_i: \mathbb{R} \to \mathcal{B}, \quad \tau \mapsto q_i(\tau)
+q_i: \mathbb{R} \to \mathcal{B}, \quad \tau \mapsto q_i(\tau).
 \end{equation}
 
 The tangent vector $\dot{q}_i = \frac{dq_i}{d\tau}$ has Fisher-Rao norm $g_{\mathcal{B}}(\dot{q}_i, \dot{q}_i) = \|\dot{q}_i\|^2_{\text{Fisher}}$. Under the $\mathrm{GL}(K, \mathbb{C})$ extension, the temporal direction $\dot{q}$ naturally acquires the opposite signature from spatial directions $\dot{q}^\perp$, yielding
 
 \begin{equation}
-ds^2 = -g_{\mathcal{B}}(\dot{q}, \dot{q}) d\tau^2 + \sum_i g_{\mathcal{B}}(e_i, e_i) dx_i^2
+ds^2 = -g_{\mathcal{B}}(\dot{q}, \dot{q}) d\tau^2 + \sum_i g_{\mathcal{B}}(e_i, e_i) dx_i^2,
 \end{equation}
 
 where $\{e_i\}$ is a basis for $\dot{q}^\perp$. Under the $\mathrm{SO}(3)$ restriction, this signature assignment had to be postulated. Under $\mathrm{GL}(K, \mathbb{C})$, it can in principle be derived from the non-compact group structure, though the full derivation remains future work. The decomposition $T\mathcal{B} = \mathbb{R}\dot{q} \oplus \dot{q}^\perp$ is mathematically rigorous and naturally distinguishes a preferred direction corresponding to information flow.
@@ -1709,7 +1709,7 @@ where $\{e_i\}$ is a basis for $\dot{q}^\perp$. Under the $\mathrm{SO}(3)$ restr
 When multiple agents maintain beliefs about the same base manifold, each induces its own metric $G_i(c)$. How do these individual geometries combine to produce shared geometric structure? A naive approach would average the metrics directly
 
 \begin{equation}
-\bar{G}_{\mu\nu}(c) = \frac{1}{N}\sum_{i=1}^N w_i(c) G_{i,\mu\nu}(c)
+\bar{G}_{\mu\nu}(c) = \frac{1}{N}\sum_{i=1}^N w_i(c) G_{i,\mu\nu}(c),
 \end{equation}
 
 where $w_i(c)$ are weights such as presence functions $\chi_i(c)$.
@@ -1721,7 +1721,7 @@ This approach has a critical flaw: the average depends on each agent's arbitrary
 A solution is to average over gauge orbits before spatial averaging. For a single agent, we define the gauge-averaged metric
 
 \begin{equation}
-\langle G_i \rangle_{\mu\nu}(c) = \int_G dg  G_{i,\mu\nu}(c; \phi_i \to \phi_i + g)
+\langle G_i \rangle_{\mu\nu}(c) = \int_G dg  G_{i,\mu\nu}(c; \phi_i \to \phi_i + g),
 \end{equation}
 
 where the integral is over the gauge group $G$ with Haar measure $dg$. For the compact group $G = \mathrm{SO}(3)$ used in our simulations, this projects onto SO(3)-invariant components of the metric, yielding a result independent of the agent's gauge frame choice. For non-compact groups such as $\mathrm{SO}(1,3) \subset \mathrm{GL}(K, \mathbb{C})$, the Haar measure is non-compact and the gauge-averaged metric can acquire indefinite signature---a mechanism central to the resolution of the Lorentzian signature problem (Section~\ref{sec:signature_resolution}).
@@ -1729,7 +1729,7 @@ where the integral is over the gauge group $G$ with Haar measure $dg$. For the c
 The collective consensus metric is then
 
 \begin{equation}
-\bar{G}_{\mu\nu}^{\text{consensus}}(c) = \sum_i w_i(c) \langle G_i \rangle_{\mu\nu}(c)
+\bar{G}_{\mu\nu}^{\text{consensus}}(c) = \sum_i w_i(c) \langle G_i \rangle_{\mu\nu}(c).
 \end{equation}
 
 This construction is gauge-invariant by design as no agent's arbitrary frame choice affects the collective geometry. The consensus metric represents the gauge-invariant geometric structure that agents collectively construct through their aligned priors. This is the closest analog to "objective reality" in the framework. It is not a preexisting geometry, but an emergent, gauge-invariant structure arising from collective information processing.
@@ -1748,7 +1748,7 @@ Put simply: gauge invariance in physics may be a consequence of cognitive agents
 The induced metric $G_i(c)$ is a symmetric matrix admitting spectral decomposition
 
 \begin{equation}
-G_i(c) = \sum_{a=1}^n \lambda_a(c)  (e_a(c) \otimes e_a(c))
+G_i(c) = \sum_{a=1}^n \lambda_a(c)  (e_a(c) \otimes e_a(c)),
 \end{equation}
 
 where $\lambda_1 \geq \lambda_2 \geq \cdots \geq \lambda_n \geq 0$ are eigenvalues and $\{e_a\}$ are orthonormal eigenvectors.
@@ -1760,7 +1760,7 @@ Each eigenvalue $\lambda_a$ measures information flux in the corresponding direc
 The statistical manifold $\mathcal{B}$ is potentially very high-dimensional. For $K$-dimensional Gaussian distributions, the dimensionality is
 
 \begin{equation}
-\dim(\mathcal{B}) = K + \frac{K(K+1)}{2} = \frac{K(K+3)}{2}
+\dim(\mathcal{B}) = K + \frac{K(K+1)}{2} = \frac{K(K+3)}{2}.
 \end{equation}
 
 For $K=768$ (for example, a typical transformer embedding dimension), this gives approximately 295,000 dimensions. The eigenvalue spectrum of the induced Fisher metric naturally decomposes into three distinct sectors.
@@ -1768,7 +1768,7 @@ For $K=768$ (for example, a typical transformer embedding dimension), this gives
 \textbf{Observable sector.} We define
 
 \begin{equation}
-\mathcal{D}_{\text{obs}} = \{e_a : \lambda_a > \Lambda_{\text{obs}}\}
+\mathcal{D}_{\text{obs}} = \{e_a : \lambda_a > \Lambda_{\text{obs}}\}.
 \end{equation}
 
 These are directions where beliefs vary significantly - the perceived spacetime. For human agents, we conjecture this comprises approximately 4 dimensions (1 temporal + 3 spatial).
@@ -1776,7 +1776,7 @@ These are directions where beliefs vary significantly - the perceived spacetime.
 \textbf{Subthreshold informational sector.} Intermediate-eigenvalue directions
 
 \begin{equation}
-\mathcal{D}_{\text{subthresh}} = \{e_a : \Lambda_{\text{subthresh}} < \lambda_a \leq \Lambda_{\text{obs}}\}
+\mathcal{D}_{\text{subthresh}} = \{e_a : \Lambda_{\text{subthresh}} < \lambda_a \leq \Lambda_{\text{obs}}\}.
 \end{equation}
 
 These carry information but below the threshold of direct perception. This sector may comprise a large number of dimensions, depending on the complexity of the agent's information processing. While these directions may have non-negligible information flux, they may not generally manifest as perceptual spatial or temporal structure.
@@ -1784,7 +1784,7 @@ These carry information but below the threshold of direct perception. This secto
 \textbf{Internal sector.} Directions with negligible eigenvalues
 
 \begin{equation}
-\mathcal{D}_{\text{internal}} = \{e_a : \lambda_a \leq \Lambda_{\text{subthresh}}\}
+\mathcal{D}_{\text{internal}} = \{e_a : \lambda_a \leq \Lambda_{\text{subthresh}}\}.
 \end{equation}
 
 These represent internal degrees of freedom with essentially no information flux.  The belief field remains nearly constant along these directions. For high-dimensional representations, this sector contains the vast majority of dimensions (approximately $10^5$ for $K=768$).
@@ -1794,17 +1794,17 @@ The full induced metric invites the decomposition
 \begin{equation}
 G_i = \sum_{a \in \mathcal{D}_{\text{obs}}} \lambda_a (e_a \otimes e_a)
 + \sum_{a \in \mathcal{D}_{\text{subthresh}}} \lambda_a (e_a \otimes e_a)
-+ \sum_{a \in \mathcal{D}_{\text{internal}}} \lambda_a (e_a \otimes e_a)
++ \sum_{a \in \mathcal{D}_{\text{internal}}} \lambda_a (e_a \otimes e_a).
 \end{equation}
 
 The dimensional and eigenvalue hierarchies satisfy
 
 \begin{equation}
-|\mathcal{D}_{\text{obs}}| \ll |\mathcal{D}_{\text{subthresh}}| \ll |\mathcal{D}_{\text{internal}}|
+|\mathcal{D}_{\text{obs}}| \ll |\mathcal{D}_{\text{subthresh}}| \ll |\mathcal{D}_{\text{internal}}|,
 \end{equation}
 
 \begin{equation}
-\lambda_{\text{obs}} \gg \lambda_{\text{subthresh}} \gg \lambda_{\text{internal}} \approx 0
+\lambda_{\text{obs}} \gg \lambda_{\text{subthresh}} \gg \lambda_{\text{internal}} \approx 0.
 \end{equation}
 
 We may suppose that the observable sector corresponds to the $(1+3)$ dimensions we perceive as spacetime. The subthreshold informational sector carries additional informational structure that remains below the threshold of direct perception, bearing non-negligible information flux yet not manifesting as direct phenomenal structure. The internal sector represents the vast internal structure of the belief state with no spatial or temporal manifestation whatsoever. These are pure internal degrees of freedom that don't project onto an agent's phenomenal experience.
@@ -1826,7 +1826,7 @@ In this view the vast majority of the statistical manifold's dimensions remain i
 Different agents, maintaining different beliefs and operating in different gauge frames $\phi_i$, pull back different metrics
 
 \begin{equation}
-G_i \neq G_j \quad \text{for } i \neq j
+G_i \neq G_j \quad \text{for } i \neq j.
 \end{equation}
 
 These distinct metrics represent distinct perceived geometries. Agent $i$ experiences the geometric structure $G_i$, with its own notions of distance, proper time, and causal structure. Agent $j$ simultaneously experiences a different geometry $G_j$ over the same underlying substrate. Yet both are equally valid as there is no privileged "true" geometry that one agent perceives correctly while the other perceives incorrectly.
@@ -1834,7 +1834,7 @@ These distinct metrics represent distinct perceived geometries. Agent $i$ experi
 This is not solipsism. Agents remain informationally coupled through the attention mechanism
 
 \begin{equation}
-\beta_{ij}(x) \propto \exp\left[-\mathrm{KL}\big(q_i(x) \| \Omega_{ij}[q_j](x)\big)\right]
+\beta_{ij}(x) \propto \exp\left[-\mathrm{KL}\big(q_i(x) \| \Omega_{ij}[q_j](x)\big)\right].
 \end{equation}
 
 The transport operator $\Omega_{ij}$ enables meaningful comparison across different gauge frames, enforcing mutual consistency constraints without requiring identical perceptions. Agents can disagree about geometry while remaining informationally coordinated.  They inhabit different phenomenal spaces while coupled through a shared noumenal substrate - all perspectives are valid.
@@ -2688,7 +2688,7 @@ Our framework unifies Wheeler's participatory universe, Friston's Free Energy Pr
 The kinetic term $\frac{1}{2}d\mu^T \Sigma^{-1} d\mu$ is second-order in the belief update. Standard treatments of active inference and variational free energy minimization employ first-order gradient descent, implicitly taking the overdamped limit in which inertial terms are negligible. In the mechanical analogy, this corresponds to
 
 \begin{equation}
-m\ddot{q} + \gamma\dot{q} = -\nabla V \quad \xrightarrow{m/\gamma \to 0} \quad \gamma\dot{q} = -\nabla V
+m\ddot{q} + \gamma\dot{q} = -\nabla V \quad \xrightarrow{m/\gamma \to 0} \quad \gamma\dot{q} = -\nabla V,
 \end{equation}
 
 where the mass-to-damping ratio vanishes and acceleration becomes instantaneously yoked to the force. Furthermore, the framework allows agent priors to evolve dynamically.  In traditional approaches predictive models are consider fixed. 
@@ -2705,13 +2705,13 @@ $M_{\text{inertial}} = \kappa \cdot \mathrm{tr}(\Sigma_p^{-1})$. The same precis
 In our framework, agents have no direct access to the base manifold $\mathcal{C}$ itself, it remains noumenal in the Kantian sense. What agents experience is the pullback metric
 
 \begin{equation}
-g_{\mu\nu}^{(i)}(x) = \text{pullback of Fisher-Rao metric via agent } i\text{'s section}
+g_{\mu\nu}^{(i)}(x) = \text{pullback of Fisher-Rao metric via agent } i\text{'s section}.
 \end{equation}
 
 If gravitational effects emerge, they would manifest as curvature in this pullback geometry. Since the pullback metric is determined by $\Sigma_p^{-1}$, the same quantity that provides inertial mass would also source the curvature that the agent experiences as gravitational effects
 
 \begin{equation}
-R_{\mu\nu\rho\sigma}^{(i)}[g^{(i)}] \propto \text{functions of } \Sigma_{p,i}^{-1}
+R_{\mu\nu\rho\sigma}^{(i)}[g^{(i)}] \propto \text{functions of } \Sigma_{p,i}^{-1}.
 \end{equation}
 
 Under this identification, the equivalence principle would, if it could be derived, be consistent with the framework: inertial and gravitational mass would share a single origin in prior precision because both would be properties of the agent's experienced geometry, not of some external ``true'' spacetime. The conditional mood is deliberate. The argument requires (i) that gravitational effects emerge from pullback curvature (not yet shown), (ii) that this curvature couples to $\Sigma_p^{-1}$ rather than to some other functional of the section (an assumption, not a derivation), and (iii) that the scalar mass $m_{\text{eff},i} = \mathrm{tr}([M_{\mu\mu}]_{ii})/K$ used in Newtonian analogies coincides with the gravitational coupling in the same way (also assumed). The equivalence principle is therefore a possible consequence of the framework, not an automatic one.
