@@ -1497,9 +1497,9 @@ This block structure enables efficient computation. For mean updates, the natura
 
 The complete system evolves via natural gradient flow on the product manifold:
 \begin{align}
-\frac{d\mu_i}{dt} &= -\eta_\mu  \tilde{\nabla}_\mu S \label{eq:mean_flow} \\
-\frac{d\Sigma_i}{dt} &= -\eta_\Sigma  \tilde{\nabla}_\Sigma S = -\eta_\Sigma  \Sigma_i (\nabla_\Sigma S) \Sigma_i \label{eq:cov_flow} \\
-\frac{d\phi_i}{dt} &= -\eta_\phi  \nabla_\phi S, \label{eq:gauge_flow}
+\frac{d\mu_i}{dt} &= -\eta_\mu  \tilde{\nabla}_\mu S \\
+\frac{d\Sigma_i}{dt} &= -\eta_\Sigma  \tilde{\nabla}_\Sigma S = -\eta_\Sigma  \Sigma_i (\nabla_\Sigma S) \Sigma_i \\
+\frac{d\phi_i}{dt} &= -\eta_\phi  \nabla_\phi S,
 \end{align}
 
 where $\eta_\mu, \eta_\Sigma, \eta_\phi$ are learning rates satisfying the timescale hierarchy discussed previously. The gauge covariance of these updates is essential for maintaining consistency. Under gauge transformation $g \in G$, covariances transform as $\Sigma_i \to \rho(g) \Sigma_i \rho(g)^\top$. The natural gradient update transforms covariantly as $\Sigma_i (\nabla_\Sigma S) \Sigma_i \to \rho(g)[\Sigma_i (\nabla_\Sigma S) \Sigma_i]\rho(g)^\top$, ensuring that dynamics respect gauge symmetry.
@@ -1552,17 +1552,14 @@ already encountered in Sections~\ref{sec:cognitive_reference_frames} and~\ref{se
 Each smooth section $\sigma_i^{(q)}: \mathcal{C} \to E_q$ pulls $g_{E_q}$ back to a tensor on $\mathcal{C}$,
 \begin{equation}
 G_i^{(q)} := (\sigma_i^{(q)})^* g_{E_q},
-\label{eq:bundle_pullback}
 \end{equation}
 and this is the pullback the rest of the section uses. Decomposing the tangent map of the section into its horizontal and vertical components as $\sigma_{i,*}^{(q)}\partial_\mu = (\partial_\mu)^H + \nabla^{(i)}_\mu q_i$ (the second piece is the covariant derivative of the section in the bundle's connection), the bundle pullback evaluates to
 \begin{equation}
 G^{(q)}_{i,\mu\nu}(c) = g_{\mathcal{C},\mu\nu}^{\mathrm{YM}}(c) + g_{\mathcal{B}}\big(\nabla^{(i)}_\mu q_i, \nabla^{(i)}_\nu q_i\big),
-\label{eq:bundle_pullback_components}
 \end{equation}
 which separates cleanly into the gauge-connection contribution and the Fisher-information contribution. Working in components and using the fact that the Fisher-Rao metric on the fiber takes the score-function form, the vertical piece becomes
 \begin{equation}
 g_{\mathcal{B}}\big(\nabla^{(i)}_\mu q_i, \nabla^{(i)}_\nu q_i\big) = \mathbb{E}_{q_i(c)}\big[(\nabla^{(i)}_\mu \log q_i)(\nabla^{(i)}_\nu \log q_i)\big],
-\label{eq:fisher_pullback_score}
 \end{equation}
 and combining with Eq.~\eqref{eq:horizontal_metric} we obtain the boxed expression
 \begin{equation}
@@ -1665,9 +1662,9 @@ A_\tau = i(\partial_\tau \psi_\tau) \cdot T, \qquad A_x = (\partial_x \psi_x) \c
 \end{equation}
 The Yang-Mills kinetic form $G_{\mu\nu} = \mathrm{tr}(A_\mu A_\nu)$ evaluates to:
 \begin{align}
-G_{\tau\tau} &= \mathrm{tr}(A_\tau^2) = i^2 (\partial_\tau \psi_\tau)^2 \mathrm{tr}(T^2) = -2(\partial_\tau \psi_\tau)^2 < 0, \label{eq:G_tautau} \\
-G_{xx} &= \mathrm{tr}(A_x^2) = (\partial_x \psi_x)^2 \mathrm{tr}(T^2) = +2(\partial_x \psi_x)^2 > 0, \label{eq:G_xx_ym} \\
-G_{\tau x} &= \mathrm{tr}(A_\tau A_x) = i(\partial_\tau \psi_\tau)(\partial_x \psi_x)\mathrm{tr}(T^2) \in i\mathbb{R}. \label{eq:G_taux}
+G_{\tau\tau} &= \mathrm{tr}(A_\tau^2) = i^2 (\partial_\tau \psi_\tau)^2 \mathrm{tr}(T^2) = -2(\partial_\tau \psi_\tau)^2 < 0, \\
+G_{xx} &= \mathrm{tr}(A_x^2) = (\partial_x \psi_x)^2 \mathrm{tr}(T^2) = +2(\partial_x \psi_x)^2 > 0, \\
+G_{\tau x} &= \mathrm{tr}(A_\tau A_x) = i(\partial_\tau \psi_\tau)(\partial_x \psi_x)\mathrm{tr}(T^2) \in i\mathbb{R}.
 \end{align}
 With an imaginary temporal component, $G_{\mu\nu}$ is complex-valued: the diagonal entries are real (one negative, one positive), while $G_{\tau x}$ is purely imaginary. We therefore extract a real Lorentzian metric by taking the real part, $G^{\mathrm{Lor}}_{\mu\nu} := \mathrm{Re}(G_{\mu\nu})$, which sets $G^{\mathrm{Lor}}_{\tau x} = 0$ and leaves
 \begin{equation}
@@ -2463,12 +2460,10 @@ Rather than transporting the key belief into the query's frame via $\Omega_{ij}$
 The structural terms $\log\det(\Omega_{ij}\Omega_{ij}^\top)$, $\mathrm{Tr}((\Omega_{ij}\Omega_{ij}^\top)^{-1})$, and $d_k$ depend on the gauge transport but not on the belief means. Defining the geometric bias
 \begin{equation}
 S(\Omega_{ij}) := \frac{1}{2}\Big[\log\det(\Omega_{ij}\Omega_{ij}^\top) + \mathrm{Tr}\big((\Omega_{ij}\Omega_{ij}^\top)^{-1}\big) - d_k\Big],
-\label{eq:geometric_bias}
 \end{equation}
 the KL divergence under isotropic beliefs with general transport takes the form
 \begin{equation}
 D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j) = S(\Omega_{ij}) + \frac{1}{2\sigma^2}\|\Omega_{ij}^{-1}\mu_i - \mu_j\|^2.
-\label{eq:isotropic_general_omega}
 \end{equation}
 
 The attention weight
@@ -3522,7 +3517,6 @@ D_{\mathrm{KL}}\left(
   (\mu_2 - \mu_1)
 - d
 \Big].
-\label{eq:gaussian_KL}
 \end{align}
 
 
@@ -3676,11 +3670,10 @@ Local stability of the equilibrium \eqref{eq:sigma_fixed_point_beta} follows fro
 \begin{equation}
 \frac{\partial^2 D_{\mathrm{KL}}}{\partial \Sigma_1  \partial \Sigma_1}
 \sim
-\Sigma_1^{-1} \otimes \Sigma_1^{-1}
-+ \Sigma_2^{-1} \otimes \Sigma_2^{-1},
+\Sigma_1^{-1} \otimes \Sigma_1^{-1},
 \end{equation}
 
-which is manifestly positive definite for $\Sigma_1,\Sigma_2$.
+which is manifestly positive definite for any $\Sigma_1 \succ 0$.
 
 Hence the covariance alignment fixed-point is an attractor of the variational dynamics.
 
@@ -3872,22 +3865,23 @@ At the stationary value $q_i^*$, the envelope theorem implies
 such that the cost of increasing attention to $j$ equals the forward KL divergence between the updated belief $q_i^*$ and the transported neighbour $\Omega_{ij} q_j$. This identifies the attention cost with the KL.
 
 \subsection*{Conditional Uniqueness Theorem}
-\label{thm:uniqueness_app}
 
-\textbf{Theorem.} \textit{Let\/ $\mathcal{D}(q,p)$ be a convex $f$-divergence of the form
+\begin{theorem}\label{thm:uniqueness_app}
+Let\/ $\mathcal{D}(q,p)$ be a convex $f$-divergence of the form
 \[
 \mathcal{D}(q,p)
 = \int p(c)f\left(\frac{q(c)}{p(c)}\right)dc,
 \]
-with $f$ convex, $f(1)=0$, and, without loss of generality\footnote{Any $f$-divergence is invariant under $f(t)\mapsto f(t)+c(t-1)$ when $q$ and $p$ are normalized, so we may always choose the representative with $f'(1)=0$.}, $f'(1)=0$. Suppose $\mathcal{D}$ is linear inside the free energy \eqref{eq:F_i_app} and that the attention weights satisfy $\sum_j\beta_{ij}=1$. Then the stationary solution $q_i^*$ assumes the geometric-mean Boltzmann form}
+with $f$ convex, $f(1)=0$, and, without loss of generality\footnote{Any $f$-divergence is invariant under $f(t)\mapsto f(t)+c(t-1)$ when $q$ and $p$ are normalized, so we may always choose the representative with $f'(1)=0$.}, $f'(1)=0$. Suppose $\mathcal{D}$ is linear inside the free energy \eqref{eq:F_i_app} and that the attention weights satisfy $\sum_j\beta_{ij}=1$. Then the stationary solution $q_i^*$ assumes the geometric-mean Boltzmann form
 \begin{equation}
 q_i^*(c) \propto p_i(c)^{1/2}\prod_{j}\bigl[\Omega_{ij}(c)q_j(c)\bigr]^{\beta_{ij}/2}
 \label{eq:geometric_mean_target_app}
 \end{equation}
-\textit{for all choices of prior $p_i$ and neighbour beliefs $\{q_j\}$, if, and only if, $\mathcal{D}$ is the forward Kullback--Leibler divergence (up to the affine equivalence above):}
+for all choices of prior $p_i$ and neighbour beliefs $\{q_j\}$, if, and only if, $\mathcal{D}$ is the forward Kullback--Leibler divergence (up to the affine equivalence above):
 \[
 \mathcal{D}(q,p) = D_{\mathrm{KL}}(q\|p).
 \]
+\end{theorem}
 
 \paragraph{Proof.}
 
