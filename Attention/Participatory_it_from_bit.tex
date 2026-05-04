@@ -941,7 +941,7 @@ Consider a system where agent $i$ receives observation $o$ that influences its b
 
 We replace this with environmental agents $\mathcal{E} = \{e_k\}$ that encode the observational information in their beliefs. Each environmental agent $e_k$ maintains a belief $q_{e_k}(c)$ that is sharp (low entropy) around the "true" state corresponding to observation $o_k$. Agent $i$ couples to environmental agents through standard information-theoretic terms:
 \begin{equation}
-\sum_{k \in \mathcal{E}} \beta_{i,e_k}  \mathrm{KL}\big(q_i(c) \| \Omega_{i,e_k}[q_{e_k}(c)]\big)
+\sum_{k \in \mathcal{E}} \beta_{i,e_k}  \mathrm{KL}\big(q_i(c) \| \Omega_{i,e_k}[q_{e_k}(c)]\big).
 \end{equation}
 
 When environmental agents have sharp beliefs concentrated on specific values (corresponding to definite observations), the coupling drives agent $i$ to align its beliefs with those values - exactly as observation terms would. The environmental agents play the role previously played by external observations, but now they are internal to the framework, subject to the same information-geometric dynamics as all other agents.
@@ -952,11 +952,11 @@ We establish formal equivalence between the observation-based and agent-based fo
 
 \textbf{Proposition:} For any system with observation terms
 \begin{equation}
-S_{\text{obs}} = S_{\text{internal}}[\{q_i\}] - \sum_i \int \chi_i(c)  \mathbb{E}_{q_i(c)}[\log p_i(o_i|c)]  dc
+S_{\text{obs}} = S_{\text{internal}}[\{q_i\}] - \sum_i \int \chi_i(c)  \mathbb{E}_{q_i(c)}[\log p_i(o_i|c)]  dc,
 \end{equation}
 there exists an equivalent system with environmental agents
 \begin{equation}
-S_{\text{agent}} = S_{\text{internal}}[\{q_i\}] + \sum_{i,k} \int \chi_{ik}(c)  \beta_{i,e_k}(c)  \mathrm{KL}\big(q_i(c) \| \Omega_{i,e_k}[q_{e_k}(c)]\big)  dc
+S_{\text{agent}} = S_{\text{internal}}[\{q_i\}] + \sum_{i,k} \int \chi_{ik}(c)  \beta_{i,e_k}(c)  \mathrm{KL}\big(q_i(c) \| \Omega_{i,e_k}[q_{e_k}(c)]\big)  dc,
 \end{equation}
 such that the gradient flows are equivalent: $\frac{\delta S_{\text{obs}}}{\delta q_i} = \frac{\delta S_{\text{agent}}}{\delta q_i}$.
 
@@ -1054,7 +1054,7 @@ At short timescales, agents update beliefs $q_i$ to explain new observations whi
 \begin{align}
 S_{\text{fast}}[\{q_i\}] = {}& \sum_i \int \chi_i(c)  \mathrm{KL}(q_i(c) \| p_i(c))  dc \nonumber\\
 &+ \sum_{ij} \int \chi_{ij}(c)  \beta_{ij}(c)  \mathrm{KL}(q_i(c) \| \Omega_{ij}[q_j(c)])  dc \nonumber\\
-&- \sum_i \int \chi_i(c)  \mathbb{E}_{q_i}[\log p(o(c) \mid q_i(c))]  dc
+&- \sum_i \int \chi_i(c)  \mathbb{E}_{q_i}[\log p(o(c) \mid q_i(c))]  dc.
 \end{align}
 
 We omit explicit base space integrals in subsequent equations for notational clarity, but they are understood to be present.
@@ -1067,7 +1067,7 @@ On longer timescales, agents update their generative models $s_i$ to reflect lon
 
 \begin{equation}
 S_{\text{slow}}[\{s_i\}] = \sum_i \int \chi_i(c)  \mathrm{KL}(s_i(c) \| r_i(c))  dc
-+ \sum_{ij} \int \chi_{ij}(c)  \gamma_{ij}(c)  \mathrm{KL}(s_i(c) \| \tilde{\Omega}_{ij}[s_j(c)])  dc
++ \sum_{ij} \int \chi_{ij}(c)  \gamma_{ij}(c)  \mathrm{KL}(s_i(c) \| \tilde{\Omega}_{ij}[s_j(c)])  dc,
 \end{equation}
 
 where $r_i$ are the per-agent model hyper-priors representing evolutionary or training-time structural defaults. Natural gradient descent on models follows $\partial s_i/\partial \tau = -\eta_s  \tilde{\nabla}_{s_i} S_{\text{slow}}$ with learning rate $\eta_s \ll \eta_q$, much slower than belief updates. This corresponds to learning and adaptation timescales where agents slowly adjust expectations about how the world works, coordinating with other agents to develop shared ontologies and common conceptual frameworks. Per-token priors $p_i$ also evolve on a learning timescale (in the transformer limit they appear as the PriorBank entries, updated by gradient descent over training data; Section~\ref{sec:transformers}), but their update is local to each agent and is not coupled across agents at this level.
@@ -1077,7 +1077,7 @@ where $r_i$ are the per-agent model hyper-priors representing evolutionary or tr
 Gauge frames $\phi_i(c)$ may evolve to minimize free energy with respect to frame choices.  In our current studies we do not consider regularizing terms such as
 
 \begin{equation}
-S_{\text{frame}}[\{\phi_i\}] = \lambda_\phi \sum_i \int \|\nabla \phi_i(c)\|^2  dc + \text{(coupling-dependent terms)}
+S_{\text{frame}}[\{\phi_i\}] = \lambda_\phi \sum_i \int \|\nabla \phi_i(c)\|^2  dc + \text{(coupling-dependent terms)},
 \end{equation}
 
 althought they are theoretically interesting and rich.
@@ -1121,7 +1121,7 @@ Each agent $i$ maintains a belief distribution $q_i = \mathcal{N}(\mu_i, \Sigma_
 \begin{align}
 \Lambda_{q_i} &= \Sigma_i^{-1} & &\text{(belief precision)} \\
 \bar{\Lambda}_{p_i} &= \bar{\Sigma}_i^{-1} & &\text{(prior precision)} \\
-\Lambda_{o_i} &= \Sigma_{o_i}^{-1} & &\text{(observation precision)}
+\Lambda_{o_i} &= \Sigma_{o_i}^{-1} & &\text{(observation precision)},
 \end{align}
 with transported quantities $\tilde{\mu}_k = \Omega_{ik}\mu_k$ and transported covariance $\tilde{\Sigma}_k = \Omega_{ik}\Sigma_k\Omega_{ik}^T$ under gauge transport $\Omega_{ik} = e^{\phi_i}e^{-\phi_k} \in \mathrm{GL}(d)$. The transported precision is the inverse of the transported covariance,
 \begin{equation}
@@ -1134,7 +1134,7 @@ which differs from the covariance transport law because precision is the inverse
 
 The complete variational free energy with explicit sensory evidence is:
 \begin{equation}
-\mathcal{F}[\{q_i\}] = \sum_i D_{\mathrm{KL}}(q_i \| p_i) + \sum_{i,k} \beta_{ik} D_{\mathrm{KL}}(q_i \| \Omega_{ik}[q_k]) - \sum_i \mathbb{E}_{q_i}[\log p(o_i | \theta)]
+\mathcal{F}[\{q_i\}] = \sum_i D_{\mathrm{KL}}(q_i \| p_i) + \sum_{i,k} \beta_{ik} D_{\mathrm{KL}}(q_i \| \Omega_{ik}[q_k]) - \sum_i \mathbb{E}_{q_i}[\log p(o_i | \theta)].
 \label{eq:extended_free_energy}
 \end{equation}
 The three terms represent prior anchoring (deviation from internal world-model), social consensus (alignment with other agents via gauge-covariant transport), and sensory evidence (grounding in observations).
@@ -1153,7 +1153,7 @@ For the Gaussian likelihood $p(o_i | \theta) = \mathcal{N}(o_i; \theta, \Sigma_{
 \subsubsection{Prior Term}
 \begin{align}
 \frac{\partial D_{\mathrm{KL}}(q_i \| p_i)}{\partial \mu_i} &= \bar{\Lambda}_{p_i}(\mu_i - \bar{\mu}_i) \\
-\frac{\partial D_{\mathrm{KL}}(q_i \| p_i)}{\partial \Sigma_i} &= \frac{1}{2}(\bar{\Lambda}_{p_i} - \Lambda_{q_i})
+\frac{\partial D_{\mathrm{KL}}(q_i \| p_i)}{\partial \Sigma_i} &= \frac{1}{2}(\bar{\Lambda}_{p_i} - \Lambda_{q_i}).
 \end{align}
 
 \subsubsection{Consensus Term}
@@ -1161,7 +1161,7 @@ For the Gaussian likelihood $p(o_i | \theta) = \mathcal{N}(o_i; \theta, \Sigma_{
 With respect to receiver $i$:
 \begin{align}
 \frac{\partial D_{\mathrm{KL}}(q_i \| \tilde{q}_k)}{\partial \mu_i} &= \tilde{\Lambda}_{q_k}(\mu_i - \tilde{\mu}_k) \\
-\frac{\partial D_{\mathrm{KL}}(q_i \| \tilde{q}_k)}{\partial \Sigma_i} &= \frac{1}{2}(\tilde{\Lambda}_{q_k} - \Lambda_{q_i})
+\frac{\partial D_{\mathrm{KL}}(q_i \| \tilde{q}_k)}{\partial \Sigma_i} &= \frac{1}{2}(\tilde{\Lambda}_{q_k} - \Lambda_{q_i}).
 \end{align}
 
 With respect to sender $k$ (using the GL-correct precision transport of Eq.~\eqref{eq:precision_transport}):
@@ -1174,12 +1174,12 @@ where the covariance gradient retains its form because $\Omega_{ik}^T\tilde{\Lam
 \subsubsection{Sensory Term}
 \begin{align}
 \frac{\partial}{\partial \mu_i}\left[-\mathbb{E}_{q_i}[\log p(o_i | \theta)]\right] &= \Lambda_{o_i}(\mu_i - o_i) \\
-\frac{\partial}{\partial \Sigma_i}\left[-\mathbb{E}_{q_i}[\log p(o_i | \theta)]\right] &= \frac{1}{2}\Lambda_{o_i}
+\frac{\partial}{\partial \Sigma_i}\left[-\mathbb{E}_{q_i}[\log p(o_i | \theta)]\right] &= \frac{1}{2}\Lambda_{o_i}.
 \end{align}
 
 \subsubsection{Total Gradient}
 \begin{equation}
-\frac{\partial \mathcal{F}}{\partial \mu_i} = \bar{\Lambda}_{p_i}(\mu_i - \bar{\mu}_i) + \sum_k \beta_{ik}\tilde{\Lambda}_{q_k}(\mu_i - \tilde{\mu}_k) + \sum_j \beta_{ji}\Lambda_{q_i}\Omega_{ji}^{-1}(\tilde{\mu}_i^{(j)} - \mu_j) + \Lambda_{o_i}(\mu_i - o_i)
+\frac{\partial \mathcal{F}}{\partial \mu_i} = \bar{\Lambda}_{p_i}(\mu_i - \bar{\mu}_i) + \sum_k \beta_{ik}\tilde{\Lambda}_{q_k}(\mu_i - \tilde{\mu}_k) + \sum_j \beta_{ji}\Lambda_{q_i}\Omega_{ji}^{-1}(\tilde{\mu}_i^{(j)} - \mu_j) + \Lambda_{o_i}(\mu_i - o_i),
 \label{eq:total_gradient_mu}
 \end{equation}
 where $\tilde{\mu}_i^{(j)} = \Omega_{ji}\mu_i$ is agent $i$'s mean transported into agent $j$'s frame.
@@ -1188,7 +1188,7 @@ where $\tilde{\mu}_i^{(j)} = \Omega_{ji}\mu_i$ is agent $i$'s mean transported i
 
 The Hessian of the free energy $M = \partial^2 \mathcal{F}/\partial\xi\partial\xi$ defines a configuration-space metric on belief space. In the symmetric-attention or isolated-agent limits, this metric exhibits Newtonian-analogy scaling ($\omega^2 \propto m_{\text{eff}}^{-1}$), which justifies calling it a ``mass matrix'' for analogy with classical mechanics --- without claiming a full Lagrangian formalism. The full state vector is $\xi = (\mu_1, \ldots, \mu_N, \Sigma_1, \ldots, \Sigma_N)$, yielding the block structure
 \begin{equation}
-M = \begin{pmatrix} M_{\mu\mu} & C^{\mu\Sigma} \\ (C^{\mu\Sigma})^T & M_{\Sigma\Sigma} \end{pmatrix}
+M = \begin{pmatrix} M_{\mu\mu} & C^{\mu\Sigma} \\ (C^{\mu\Sigma})^T & M_{\Sigma\Sigma} \end{pmatrix},
 \label{eq:mass_block_structure}
 \end{equation}
 where each block is itself an $N \times N$ matrix of sub-blocks.
@@ -1228,13 +1228,13 @@ The mass matrix $M_{\mu\mu}$ is symmetric only when $\beta_{ik} = \beta_{ki}$ (r
 
 For matrix-valued variables, we use the directional derivative convention:
 \begin{equation}
-\frac{\partial^2 f}{\partial \Sigma \partial \Sigma}[V, W] = \lim_{\epsilon \to 0} \frac{1}{\epsilon}\left[\left.\frac{\partial f}{\partial \Sigma}\right|_{\Sigma + \epsilon W} - \left.\frac{\partial f}{\partial \Sigma}\right|_{\Sigma}\right][V]
+\frac{\partial^2 f}{\partial \Sigma \partial \Sigma}[V, W] = \lim_{\epsilon \to 0} \frac{1}{\epsilon}\left[\left.\frac{\partial f}{\partial \Sigma}\right|_{\Sigma + \epsilon W} - \left.\frac{\partial f}{\partial \Sigma}\right|_{\Sigma}\right][V],
 \end{equation}
 with the key identity $\partial(\Sigma^{-1})/\partial \Sigma = -\Sigma^{-1} \otimes \Sigma^{-1}$.
 
 \paragraph{Diagonal blocks $(i = k)$:} From the prior:
 \begin{equation}
-\frac{\partial^2 D_{\mathrm{KL}}(q_i \| p_i)}{\partial \Sigma_i \partial \Sigma_i}[V, W] = \frac{1}{2}\mathrm{tr}[\Lambda_{q_i} V \Lambda_{q_i} W]
+\frac{\partial^2 D_{\mathrm{KL}}(q_i \| p_i)}{\partial \Sigma_i \partial \Sigma_i}[V, W] = \frac{1}{2}\mathrm{tr}[\Lambda_{q_i} V \Lambda_{q_i} W].
 \end{equation}
 In tensor notation: $\partial^2 D_{\mathrm{KL}}(q_i \| p_i)/\partial \Sigma_i \partial \Sigma_i = \frac{1}{2}(\Lambda_{q_i} \otimes \Lambda_{q_i})$. From consensus as receiver and sender, identical contributions arise \emph{at consensus} (see remark below). The sensory term $\frac{1}{2}\mathrm{tr}(\Lambda_{o_i}\Sigma_i)$ is linear in $\Sigma_i$, so its second derivative vanishes. Therefore:
 \begin{equation}
@@ -1261,11 +1261,11 @@ The prior term gives $\partial^2 D_{\mathrm{KL}}(q_i \| p_i)/\partial \mu_i \par
 
 For the consensus term, from $\partial D_{\mathrm{KL}}(q_i \| \tilde{q}_k)/\partial \mu_i = \tilde{\Lambda}_{q_k}(\mu_i - \tilde{\mu}_k)$, varying $\Sigma_k$:
 \begin{equation}
-\frac{\partial^2 D_{\mathrm{KL}}(q_i \| \tilde{q}_k)}{\partial \mu_i \partial \Sigma_k}[V] = -\Omega_{ik}\Lambda_{q_k} V \Lambda_{q_k} \Omega_{ik}^T (\mu_i - \tilde{\mu}_k)
+\frac{\partial^2 D_{\mathrm{KL}}(q_i \| \tilde{q}_k)}{\partial \mu_i \partial \Sigma_k}[V] = -\Omega_{ik}\Lambda_{q_k} V \Lambda_{q_k} \Omega_{ik}^T (\mu_i - \tilde{\mu}_k).
 \end{equation}
 In components:
 \begin{equation}
-\frac{\partial^2 D_{\mathrm{KL}}}{\partial(\mu_i)_a \partial(\Sigma_k)_{bc}} = -[\Omega_{ik}\Lambda_{q_k}]_{ab}[\Lambda_{q_k}\Omega_{ik}^T(\mu_i - \tilde{\mu}_k)]_c
+\frac{\partial^2 D_{\mathrm{KL}}}{\partial(\mu_i)_a \partial(\Sigma_k)_{bc}} = -[\Omega_{ik}\Lambda_{q_k}]_{ab}[\Lambda_{q_k}\Omega_{ik}^T(\mu_i - \tilde{\mu}_k)]_c.
 \end{equation}
 This vanishes at consensus ($\mu_i = \tilde{\mu}_k$):
 \begin{equation}
@@ -1277,7 +1277,7 @@ This vanishes at consensus ($\mu_i = \tilde{\mu}_k$):
 
 The effective mass of agent $i$ in the mean sector is:
 \begin{equation}
-M_i = \underbrace{\bar{\Lambda}_{p_i}}_{\text{bare mass}} + \underbrace{\sum_k \beta_{ik}\tilde{\Lambda}_{q_k}}_{\text{incoming relational}} + \underbrace{\sum_j \beta_{ji}\Lambda_{q_i}}_{\text{outgoing recoil}} + \underbrace{\Lambda_{o_i}}_{\text{sensory}}
+M_i = \underbrace{\bar{\Lambda}_{p_i}}_{\text{bare mass}} + \underbrace{\sum_k \beta_{ik}\tilde{\Lambda}_{q_k}}_{\text{incoming relational}} + \underbrace{\sum_j \beta_{ji}\Lambda_{q_i}}_{\text{outgoing recoil}} + \underbrace{\Lambda_{o_i}}_{\text{sensory}}.
 \label{eq:effective_mass}
 \end{equation}
 The bare mass $\bar{\Lambda}_{p_i}$ provides inertia against deviation from the prior world-model. The incoming relational mass captures inertia from being pulled by neighbors. The outgoing relational mass represents inertia from pulling neighbors (recoil). The sensory mass grounds the agent in observations.
@@ -1524,7 +1524,7 @@ Recall that agent $i$ is characterized by smooth sections of associated bundles.
 The statistical fiber $\mathcal{B}$ carries a Riemannian metric known as the Fisher-Rao metric, denoted $g_{\mathcal{B}}$. For Gaussian distributions, this metric takes the form
 
 \begin{equation}
-g_{\mathcal{B}}(\delta q, \delta q) = \delta\mu^\top \Sigma^{-1} \delta\mu + \frac{1}{2}\mathrm{tr}(\Sigma^{-1}\delta\Sigma\Sigma^{-1}\delta\Sigma)
+g_{\mathcal{B}}(\delta q, \delta q) = \delta\mu^\top \Sigma^{-1} \delta\mu + \frac{1}{2}\mathrm{tr}(\Sigma^{-1}\delta\Sigma\Sigma^{-1}\delta\Sigma).
 \end{equation}
 
 This metric is intrinsic to the space of probability distributions, existing independently of any base manifold structure. It measures statistical distinguishability between nearby distributions through the Fisher information.
@@ -1544,7 +1544,7 @@ g_{E_q}\big|_{(c, q)}\big(X_H + X_V, Y_H + Y_V\big) := g_{\mathcal{C}}^{\mathrm{
 \end{equation}
 where $\pi: E_q \to \mathcal{C}$ is the bundle projection, $g_{\mathcal{B}}$ is the Fisher-Rao metric on the fiber, and the horizontal part is the gauge-connection kinetic form
 \begin{equation}
-g_{\mathcal{C},\mu\nu}^{\mathrm{YM}}(c) := \mathrm{tr}\big(A^{(i)}_\mu(c)A^{(i)}_\nu(c)\big)
+g_{\mathcal{C},\mu\nu}^{\mathrm{YM}}(c) := \mathrm{tr}\big(A^{(i)}_\mu(c)A^{(i)}_\nu(c)\big),
 \label{eq:horizontal_metric}
 \end{equation}
 already encountered in Sections~\ref{sec:cognitive_reference_frames} and~\ref{sec:signature_resolution}. Equation~\eqref{eq:bundle_metric} is a fiber-respecting metric on $E_q$: the vertical block is the standard Fisher-Rao metric, the horizontal block is agent-frame-dependent in the same sense as the section itself (see the gauge-invariance disclosure below), and the two blocks are gauge-orthogonal by construction.
@@ -1595,7 +1595,7 @@ This perspective aligns with Kant's phenomenal/noumenal distinction, where space
 Consider agents maintaining Gaussian beliefs $q_i(c) = \mathcal{N}(\mu_i(c), \Sigma_i(c))$ over a flat base manifold $\mathcal{C} = \mathbb{R}^2$. The induced metric components are
 
 \begin{equation}
-G^{(q)}_{i,\mu\nu}(c) = (\partial_\mu \mu_i)^\top \Sigma_i^{-1} (\partial_\nu \mu_i) + \frac{1}{2}\mathrm{tr}\left(\Sigma_i^{-1}(\partial_\mu \Sigma_i)\Sigma_i^{-1}(\partial_\nu \Sigma_i)\right)
+G^{(q)}_{i,\mu\nu}(c) = (\partial_\mu \mu_i)^\top \Sigma_i^{-1} (\partial_\nu \mu_i) + \frac{1}{2}\mathrm{tr}\left(\Sigma_i^{-1}(\partial_\mu \Sigma_i)\Sigma_i^{-1}(\partial_\nu \Sigma_i)\right).
 \end{equation}
 
 The first term captures mean gradient contributions. If the mean belief location $\mu_i(c)$ varies rapidly with base manifold position $c$, the metric component is large, corresponding to short information distances. The second term captures covariance gradient contributions. If the uncertainty structure itself varies rapidly across space, this also enlarges the metric.
@@ -1603,7 +1603,7 @@ The first term captures mean gradient contributions. If the mean belief location
 In the simple case where $\Sigma_i(c) = \sigma^2 I$ (isotropic covariance, constant across space), the metric reduces to
 
 \begin{equation}
-G^{(q)}_{i,\mu\nu}(c) = \frac{1}{\sigma^2}(\partial_\mu \mu_i) \cdot (\partial_\nu \mu_i)
+G^{(q)}_{i,\mu\nu}(c) = \frac{1}{\sigma^2}(\partial_\mu \mu_i) \cdot (\partial_\nu \mu_i).
 \end{equation}
 
 This is a conformal metric with conformal factor $1/\sigma^2$. High certainty (small $\sigma$) magnifies distances.  Regions where the agent is confident appear "larger" in information geometry. Conversely, high uncertainty (large $\sigma$) compresses distances - uncertain regions appear "smaller" because belief variations have less significance.
@@ -2357,7 +2357,7 @@ The participatory dynamics are intrinsic to the mathematical structure. Wheeler'
 
 The complete cycle is:
 \begin{equation}
-\boxed{\text{Bit (beliefs)} \xrightarrow{\text{pullback}} \text{It (geometry)} \xrightarrow{\text{transport}} \text{Bit (updated beliefs)}}
+\boxed{\text{Bit (beliefs)} \xrightarrow{\text{pullback}} \text{It (geometry)} \xrightarrow{\text{transport}} \text{Bit (updated beliefs)}.}
 \end{equation}
 
 
