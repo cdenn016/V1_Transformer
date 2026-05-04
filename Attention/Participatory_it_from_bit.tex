@@ -2040,7 +2040,7 @@ Simulations were initialized with $N_0 = 8$ scale-zero agents in a $K=13$ dimens
 %
 
 \begin{equation}
-F_{\text{total}} = \sum_i \left[ \lambda_{\text{self}} F_{\text{self}}^{(i)} + \lambda_{\text{belief}} F_{\text{belief}}^{(i)} + \lambda_{\text{prior}} F_{\text{prior}}^{(i)} + \lambda_{\text{obs}} F_{\text{obs}}^{(i)} \right]
+F_{\text{total}} = \sum_i \left[ \lambda_{\text{self}} F_{\text{self}}^{(i)} + \lambda_{\text{belief}} F_{\text{belief}}^{(i)} + \lambda_{\text{prior}} F_{\text{prior}}^{(i)} + \lambda_{\text{obs}} F_{\text{obs}}^{(i)} \right],
 \end{equation}
 
 
@@ -2473,7 +2473,7 @@ D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j) = S(\Omega_{ij}) + \frac{1}{2\sigma^2}\|
 
 The attention weight
 \begin{equation}
-\beta_{ij} = \operatorname{softmax}_j\left(-\frac{S(\Omega_{ij}) + \frac{1}{2\sigma^2}\|\Omega_{ij}^{-1}\mu_i - \mu_j\|^2}{\tau}\right)
+\beta_{ij} = \operatorname{softmax}_j\left(-\frac{S(\Omega_{ij}) + \frac{1}{2\sigma^2}\|\Omega_{ij}^{-1}\mu_i - \mu_j\|^2}{\tau}\right),
 \end{equation}
 combines a content-dependent term (the Mahalanobis distance between belief means, measured in the key's frame) with a pair-dependent geometric bias $S(\Omega_{ij})$ that encodes the distortion introduced by gauge transport. When $\Omega_{ij}$ is orthogonal, $S(\Omega_{ij}) = 0$; for general $\mathrm{GL}(K)$ transport, $S(\Omega_{ij}) \geq 0$ with equality iff $\Omega_{ij} \in \mathrm{O}(K)$. The geometric bias therefore penalises transport operators that distort volume or stretch directions, providing a geometric regulariser intrinsic to the KL divergence. This is the natural form of attention under a single simplifying limit (isotropic covariances); standard transformer attention requires a further specialisation.
 
@@ -2587,7 +2587,7 @@ identical to the standard transformer attention update $z_i = \sum_j \alpha_{ij}
 
 Under the assumptions above, the gauge-theoretic message-passing
 \begin{equation}
-\beta_{ij} \propto \exp\left(-\frac{1}{\tau}D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)\right), \quad m_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j
+\beta_{ij} \propto \exp\left(-\frac{1}{\tau}D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)\right), \quad m_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j,
 \end{equation}
 reduces to
 \begin{equation}
@@ -2851,14 +2851,14 @@ The standard answer treats gauge symmetry as a fundamental feature of physical r
 Recall the model alignment term in the free energy functional
 
 \begin{equation}
-S_{\text{model}} = \sum_{ij} \int_{\mathcal{C}} \gamma_{ij}(x)  \mathrm{KL}\big(s_i(x) \| \tilde{\Omega}_{ij}[s_j](x)\big)  dx
+S_{\text{model}} = \sum_{ij} \int_{\mathcal{C}} \gamma_{ij}(x)  \mathrm{KL}\big(s_i(x) \| \tilde{\Omega}_{ij}[s_j](x)\big)  dx.
 \end{equation}
 
 This term drives alignment of generative models $s_i$ across agents. When humans construct scientific theories, they are collectively building shared models $s_{\text{human}}(x)$ that multiple agents---different scientists with different backgrounds, conceptual frameworks, and measurement conventions---must agree upon. The success of science depends on achieving this consensus: theories must make predictions that all qualified observers agree upon, regardless of their individual perspectives.
 
 For model alignment to succeed, we require:
 \begin{equation}
-\mathrm{KL}\big(s_i \| \tilde{\Omega}_{ij}[s_j]\big) \to 0
+\mathrm{KL}\big(s_i \| \tilde{\Omega}_{ij}[s_j]\big) \to 0.
 \end{equation}
 
 This demands that models transform covariantly under the transport operators $\tilde{\Omega}_{ij}$ that connect different gauge frames (the model-fiber analogue of~\eqref{eq:transport_def}). In other words, scientific models must be gauge-covariant to achieve human consensus. A theory formulated in a way that depends essentially on one researcher's arbitrary internal coordinates cannot be reliably communicated to and verified by other researchers with different internal coordinates.
@@ -3034,7 +3034,7 @@ Quine's under-determination thesis~\cite{Quine1951,Quine1975} holds that empiric
 Our framework formalizes and explains under-determination. Multiple gauge-invariant models $\{p_1, p_2, \ldots\}$ may minimize empirical KL divergence equally
 
 \begin{equation}
-\mathrm{KL}(p_1 \| o) = \mathrm{KL}(p_2 \| o) = \cdots
+\mathrm{KL}(p_1 \| o) = \mathrm{KL}(p_2 \| o) = \cdots.
 \end{equation}
 
 Since empirical fit is only one component of the free energy functional, additional criteria determine theory choice. Model alignment considerations favor theories that achieve consensus more easily across diverse research communities. Simplicity preferences select theories with lower gauge field complexity $\|\nabla\phi\|^2$.  Unification motivations seek theories operating at higher hierarchical scales, integrating previously separate domains (e.g. the fields of biology, information, and physics are separate but overlapping meta-agents composed of myriad institutions, humans, etc). Historical and sociological factors influence which theories scientists explore and how quickly communities converge.
@@ -3215,7 +3215,7 @@ For the direct KL gradient:
 Substituting and simplifying:
 \begin{align}
 \nabla_{\mu_i} S_{\mathrm{belief}} &= \sum_j \beta_{ij} (\Omega_{ij}\Sigma_j\Omega_{ij}^T)^{-1}(\mu_i - \Omega_{ij}\mu_j) \left[1 - \frac{\mathrm{KL}_{ij}}{\kappa_\beta}\right] \nonumber \\
-&\quad + \frac{1}{\kappa_\beta}\left(\sum_j \beta_{ij}\mathrm{KL}_{ij}\right) \sum_k \beta_{ik} (\Omega_{ik}\Sigma_k\Omega_{ik}^T)^{-1}(\mu_i - \Omega_{ik}\mu_k)
+&\quad + \frac{1}{\kappa_\beta}\left(\sum_j \beta_{ij}\mathrm{KL}_{ij}\right) \sum_k \beta_{ik} (\Omega_{ik}\Sigma_k\Omega_{ik}^T)^{-1}(\mu_i - \Omega_{ik}\mu_k).
 \end{align}
 
 Including the self-term $\mathrm{KL}(q_i \| p_i)$:
@@ -3225,12 +3225,12 @@ Including the self-term $\mathrm{KL}(q_i \| p_i)$:
 
 where the reweighting term is:
 \begin{equation}
-R_\mu = \frac{1}{\kappa_\beta}\left(\sum_j \beta_{ij}\mathrm{KL}_{ij}\right) \sum_k \beta_{ik} (\Omega_{ik}\Sigma_k\Omega_{ik}^T)^{-1}(\mu_i - \Omega_{ik}\mu_k)
+R_\mu = \frac{1}{\kappa_\beta}\left(\sum_j \beta_{ij}\mathrm{KL}_{ij}\right) \sum_k \beta_{ik} (\Omega_{ik}\Sigma_k\Omega_{ik}^T)^{-1}(\mu_i - \Omega_{ik}\mu_k).
 \end{equation}
 
 The natural gradient is:
 \begin{equation}
-\tilde{\nabla}_{\mu_i} S = \Sigma_i \nabla_{\mu_i} S
+\tilde{\nabla}_{\mu_i} S = \Sigma_i \nabla_{\mu_i} S.
 \end{equation}
 
 \subsection*{Free Energy Gradient: Belief Covariances (Complete)}
@@ -3259,14 +3259,14 @@ The complete gradient including self-term is:
 
 The natural gradient on $\mathcal{S}_{++}^K$ is:
 \begin{equation}
-\tilde{\nabla}_{\Sigma_i} S = \Sigma_i (\nabla_{\Sigma_i} S) \Sigma_i
+\tilde{\nabla}_{\Sigma_i} S = \Sigma_i (\nabla_{\Sigma_i} S) \Sigma_i.
 \end{equation}
 
 \textbf{Gauge Covariance:} Under gauge transformation $g \in \mathrm{SO}(3)$:
 \begin{align}
 \Sigma_i &\mapsto g\Sigma_i g^T \\
 \nabla_{\Sigma_i} S &\mapsto g(\nabla_{\Sigma_i} S)g^T \\
-\tilde{\nabla}_{\Sigma_i} S &\mapsto g(\tilde{\nabla}_{\Sigma_i} S)g^T
+\tilde{\nabla}_{\Sigma_i} S &\mapsto g(\tilde{\nabla}_{\Sigma_i} S)g^T.
 \end{align}
 
 This bilinear form $\Sigma (\cdot) \Sigma$ is the unique gauge-covariant gradient structure on $\mathcal{S}_{++}^K$.
@@ -3275,12 +3275,12 @@ This bilinear form $\Sigma (\cdot) \Sigma$ is the unique gauge-covariant gradien
 
 After computing $\tilde{\nabla}_{\Sigma_i} S$, we update via retraction to ensure $\Sigma_i$ remains positive-definite:
 \begin{equation}
-\Sigma_i^{\mathrm{new}} = \mathcal{R}_{\Sigma_i}(-\eta_\Sigma \tilde{\nabla}_{\Sigma_i} S)
+\Sigma_i^{\mathrm{new}} = \mathcal{R}_{\Sigma_i}(-\eta_\Sigma \tilde{\nabla}_{\Sigma_i} S).
 \end{equation}
 
 We use the \textbf{affine-invariant exponential map}:
 \begin{equation}
-\mathcal{R}_{\Sigma}(\Delta) = \Sigma^{1/2} \exp\left(\Sigma^{-1/2} \Delta \Sigma^{-1/2}\right) \Sigma^{1/2}
+\mathcal{R}_{\Sigma}(\Delta) = \Sigma^{1/2} \exp\left(\Sigma^{-1/2} \Delta \Sigma^{-1/2}\right) \Sigma^{1/2},
 \end{equation}
 
 where $\exp(\cdot)$ is the matrix exponential. This retraction:
@@ -3292,7 +3292,7 @@ where $\exp(\cdot)$ is the matrix exponential. This retraction:
 
 \textbf{Computational Implementation:} Using eigendecomposition $\Sigma = V\Lambda V^T$:
 \begin{equation}
-\mathcal{R}_{\Sigma}(\Delta) = V \sqrt{\Lambda} \exp\left(\sqrt{\Lambda}^{-1} V^T \Delta V \sqrt{\Lambda}^{-1}\right) \sqrt{\Lambda} V^T
+\mathcal{R}_{\Sigma}(\Delta) = V \sqrt{\Lambda} \exp\left(\sqrt{\Lambda}^{-1} V^T \Delta V \sqrt{\Lambda}^{-1}\right) \sqrt{\Lambda} V^T.
 \end{equation}
 
 This is the Riemannian exponential map---the geodesic retraction following the unique geodesic from $\Sigma$ in direction $\Delta$ for unit parameter.
@@ -3802,7 +3802,7 @@ F_i[\beta_i]
 \Big\{
 D_{\mathrm{KL}}(q_i \| p_i)
 + \sum_{j\neq i} \beta_{ij}\mathcal{D}(q_i,q_j)
-\Big\},
+\Big\}.
 \label{eq:F_i_app}
 \end{equation}
 
