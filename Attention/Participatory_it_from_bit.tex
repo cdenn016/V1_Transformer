@@ -583,13 +583,13 @@ These extensions are natural within the framework and constitute an extensive re
 
 In classical mechanics, particle trajectories extremize the action $S = \int L  dt$ where $L$ is the Lagrangian. In general relativity, spacetime geometry extremizes the Einstein-Hilbert action. We propose an analogous principle for cognitive systems: agent beliefs evolve to minimize a variational free energy functional.
 
-This functional $S[q, p, \phi]$ encodes how well each agent's beliefs match its internal model (self-consistency), how well agents' beliefs align after accounting for different reference frames (inter-agent coherence), and how well beliefs explain observations (accuracy). Minimizing $S$ drives agents toward consensus while preserving diversity through gauge freedom, realizing the participatory dynamics Wheeler envisioned.
+This functional $\mathcal{F}[q, p, \phi]$ encodes how well each agent's beliefs match its internal model (self-consistency), how well agents' beliefs align after accounting for different reference frames (inter-agent coherence), and how well beliefs explain observations (accuracy). Minimizing $\mathcal{F}$ drives agents toward consensus while preserving diversity through gauge freedom, realizing the participatory dynamics Wheeler envisioned.
 
 \subsubsection{Foundation: The Variational Free Energy Principle}
 
 The variational free energy principle~\cite{Friston2010,Parr2022} provides a tractable approximation to intractable Bayesian inference. Given a generative model $p(o, x)$ over observations $o$ and latent states $x$, exact inference via Bayes' rule $p(x \mid o) = p(o, x)/p(o) = p(o, x)/\int p(o, x)  dx$ is typically intractable because the marginal likelihood (evidence) $p(o)$ requires integrating over all possible latent states.
 
-The variational free energy provides an upper bound $F[q] = \mathbb{E}_{q(x)}[\log q(x) - \log p(o, x)] \geq -\log p(o)$ for any approximate posterior $q(x)$. The inequality follows from non-negativity of KL divergence: $F[q] = \mathrm{KL}(q(x) \| p(x \mid o)) - \log p(o) \geq -\log p(o)$. Minimizing $F$ with respect to $q$ simultaneously maximizes the evidence lower bound (ELBO) giving $\log p(o) \geq -F[q]$ and minimizes KL divergence to the true posterior driving $\mathrm{KL}(q \| p(\cdot \mid o)) \to 0$.
+The variational free energy provides an upper bound $F[q] = \mathbb{E}_{q(x)}[\log q(x) - \log p(o, x)] \geq -\log p(o)$ for any approximate posterior $q(x)$. The inequality follows from non-negativity of KL divergence: $F[q] = \mathrm{KL}(q(x) \| p(x \mid o)) - \log p(o) \geq -\log p(o)$. Minimizing $\mathcal{F}$ with respect to $q$ simultaneously maximizes the evidence lower bound (ELBO) giving $\log p(o) \geq -F[q]$ and minimizes KL divergence to the true posterior driving $\mathrm{KL}(q \| p(\cdot \mid o)) \to 0$.
 
 The free energy decomposes into competing pressures: $F[q] = \mathrm{KL}(q(x) \| p(x)) - \mathbb{E}_{q(x)}[\log p(o \mid x)]$, where the first term is complexity penalizing beliefs that deviate from prior expectations (Occam's razor) and the second term is accuracy rewarding beliefs that explain observations well. Optimal beliefs balance these competing pressures, neither adhering rigidly to priors nor overfitting observations.
 
@@ -601,7 +601,7 @@ The multi-agent free energy must incorporate several distinct contributions. Sel
 
 \subsubsection{Challenge: Defining Gauge-Covariant Pairwise Couplings}
 
-A naive approach would define pairwise potentials ad hoc: $S_{\text{naive}} \propto \sum_{ij} \psi_{ij}(q_i, \Omega_{ij}[q_j])$ for some functions $\psi_{ij}$. This approach has severe problems. The potentials $\psi_{ij}$ are arbitrary with no principled choice, leading to unnormalized Markov random fields with intractable partition functions. There is no clear connection to variational inference or information geometry, making interpretation or physical justification difficult. We require a derivation that produces pairwise couplings from first principles.
+A naive approach would define pairwise potentials ad hoc: $\\mathcal{F}_{\\text{naive}} \propto \sum_{ij} \psi_{ij}(q_i, \Omega_{ij}[q_j])$ for some functions $\psi_{ij}$. This approach has severe problems. The potentials $\psi_{ij}$ are arbitrary with no principled choice, leading to unnormalized Markov random fields with intractable partition functions. There is no clear connection to variational inference or information geometry, making interpretation or physical justification difficult. We require a derivation that produces pairwise couplings from first principles.
 
 \subsubsection{Deriving Attention from a Mixture-of-Sources Generative Model}
 \label{sec:mixture_derivation}
@@ -830,7 +830,7 @@ Extending to continuous fields over the base manifold $\mathcal{C}$ and includin
 \begin{equation}
 \boxed{
 \begin{aligned}
-S[\{q_i\}, \{p_i\}, \{s_i\}, \{r_i\}, \{\phi_i\}]
+\mathcal{F}[\{q_i\}, \{p_i\}, \{s_i\}, \{r_i\}, \{\phi_i\}]
 &= \sum_i \int_{\mathcal{C}} \chi_i(c)  \mathrm{KL}(q_i(c) \| p_i(c))  dc \\
 &\quad + \sum_i \int_{\mathcal{C}} \chi_i(c)  \mathrm{KL}(s_i(c) \| r_i(c))  dc \\
 &\quad + \sum_{ij} \int_{\mathcal{C}} \chi_{ij}(c)  \beta_{ij}(c)  \mathrm{KL}(q_i(c) \| \Omega_{ij}(c)[q_j(c)])  dc \\
@@ -952,13 +952,13 @@ We establish formal equivalence between the observation-based and agent-based fo
 
 \textbf{Proposition:} For any system with observation terms
 \begin{equation}
-S_{\text{obs}} = S_{\text{internal}}[\{q_i\}] - \sum_i \int \chi_i(c)  \mathbb{E}_{q_i(c)}[\log p_i(o_i|c)]  dc,
+\\mathcal{F}_{\\text{obs}} = \\mathcal{F}_{\\text{internal}}[\{q_i\}] - \sum_i \int \chi_i(c)  \mathbb{E}_{q_i(c)}[\log p_i(o_i|c)]  dc,
 \end{equation}
 there exists an equivalent system with environmental agents
 \begin{equation}
-S_{\text{agent}} = S_{\text{internal}}[\{q_i\}] + \sum_{i,k} \int \chi_{ik}(c)  \beta_{i,e_k}(c)  \mathrm{KL}\big(q_i(c) \| \Omega_{i,e_k}[q_{e_k}(c)]\big)  dc,
+\\mathcal{F}_{\\text{agent}} = \\mathcal{F}_{\\text{internal}}[\{q_i\}] + \sum_{i,k} \int \chi_{ik}(c)  \beta_{i,e_k}(c)  \mathrm{KL}\big(q_i(c) \| \Omega_{i,e_k}[q_{e_k}(c)]\big)  dc,
 \end{equation}
-such that the gradient flows are equivalent: $\frac{\delta S_{\text{obs}}}{\delta q_i} = \frac{\delta S_{\text{agent}}}{\delta q_i}$.
+such that the gradient flows are equivalent: $\frac{\delta \\mathcal{F}_{\\text{obs}}}{\delta q_i} = \frac{\delta \\mathcal{F}_{\\text{agent}}}{\delta q_i}$.
 
 \textbf{Construction:} A Dirac choice $q_{e_k}(c) = \delta(c - c_k)$ is the singular limit of a finite-precision Gaussian sensory agent and gives an infinite KL whenever $q_i$ does not coincide pointwise with $\delta(c - c_k)$, since $\mathrm{KL}(q_i \| \delta(c - c_k)) = +\infty$ for any non-degenerate $q_i$ (cf.\ the absolute-continuity discussion at Eq.~\eqref{eq:dirac_kl}). We therefore define environmental agents with finite sensory precision and recover the standard active-inference identification in the small-precision limit. For each observation $o_k$ associated with the noumenal location $c_k$, let
 \begin{align}
@@ -974,7 +974,7 @@ In the small-$\Sigma_o$ limit relevant to active inference, the first term recov
 \begin{equation}
 \mathrm{KL}\big(q_i \| q_{e_k}\big) = -\mathbb{E}_{q_i}[\log p(o_k \mid c)] + \mathcal{O}(1),
 \end{equation}
-where $p(o_k \mid c) \propto \exp[-\tfrac{1}{2}(c - c_k)^\top \Lambda_o (c - c_k)]$ is the Gaussian likelihood implied by the sensory precision $\Lambda_o$. The Dirac limit $\Sigma_o \to 0$ pushes the leading constant to infinity but leaves the gradient with respect to $\mu_i$ finite and equal to the standard observation-driven pull $\Lambda_o (\mu_i - c_k)$. The gradient structures of $S_{\text{obs}}$ and $S_{\text{agent}}$ therefore match for any $\Sigma_o > 0$, and the equivalence is established at the level of dynamics rather than at the level of free-energy values, which differ by an $\Sigma_o$-dependent additive term that is constant under variations of the internal agents.
+where $p(o_k \mid c) \propto \exp[-\tfrac{1}{2}(c - c_k)^\top \Lambda_o (c - c_k)]$ is the Gaussian likelihood implied by the sensory precision $\Lambda_o$. The Dirac limit $\Sigma_o \to 0$ pushes the leading constant to infinity but leaves the gradient with respect to $\mu_i$ finite and equal to the standard observation-driven pull $\Lambda_o (\mu_i - c_k)$. The gradient structures of $\\mathcal{F}_{\\text{obs}}$ and $\\mathcal{F}_{\\text{agent}}$ therefore match for any $\Sigma_o > 0$, and the equivalence is established at the level of dynamics rather than at the level of free-energy values, which differ by an $\Sigma_o$-dependent additive term that is constant under variations of the internal agents.
 
 This construction demonstrates that observations can be fully replaced by appropriately configured environmental agents without changing the mathematical content of the theory. The observation-free formulation is more parsimonious ontologically - it requires only agents and their couplings, with no external reality providing special inputs. In this view our so-called Markov blankets  composed of sensory agents (cells, organs, etc) are themselves composed of sensory Markov blankets (receptors, proteins, molecules, etc), and onward down to single bits.
 
@@ -995,7 +995,7 @@ Wheeler's slogan that physical "it" derives from informational "bit"~\cite{Wheel
 Classical Mechanics & $S = \int L(\mathbf{q}, \dot{\mathbf{q}}, t)  dt$ & $\delta S = 0$ \\
 General Relativity & $S = \int R \sqrt{|g|}  d^4x$ & $\delta S = 0$ \\
 Gauge Theory & $S = -\frac{1}{4}\int F_{\mu\nu}F^{\mu\nu}  d^4x$ & $\delta S = 0$ \\
-\textbf{Our Framework} & $S[\{q\}, \{p\}, \{\phi\}]$ (Eq.~\ref{eq:free_energy_functional_final}) & $\delta S = 0$ (natural gradient flow) \\
+\textbf{Our Framework} & $\mathcal{F}[\{q\}, \{p\}, \{\phi\}]$ (Eq.~\ref{eq:free_energy_functional_final}) & $\delta \mathcal{F} = 0$ (natural gradient flow) \\
 \hline
 \end{tabular}
 \end{table}
@@ -1052,37 +1052,37 @@ The full system contains fast variables (beliefs $\{q_i(c)\}$ responding to obse
 At short timescales, agents update beliefs $q_i$ to explain new observations while keeping priors $p_i$ approximately fixed. The relevant free energy is:
 
 \begin{align}
-S_{\text{fast}}[\{q_i\}] = {}& \sum_i \int \chi_i(c)  \mathrm{KL}(q_i(c) \| p_i(c))  dc \nonumber\\
+\\mathcal{F}_{\\text{fast}}[\{q_i\}] = {}& \sum_i \int \chi_i(c)  \mathrm{KL}(q_i(c) \| p_i(c))  dc \nonumber\\
 &+ \sum_{ij} \int \chi_{ij}(c)  \beta_{ij}(c)  \mathrm{KL}(q_i(c) \| \Omega_{ij}[q_j(c)])  dc \nonumber\\
 &- \sum_i \int \chi_i(c)  \mathbb{E}_{q_i}[\log p(o(c) \mid q_i(c))]  dc.
 \end{align}
 
 We omit explicit base space integrals in subsequent equations for notational clarity, but they are understood to be present.
 
-Natural gradient descent on beliefs follows $\partial q_i/\partial \tau = -\eta_q  \tilde{\nabla}_{q_i} S_{\text{fast}}$ where $\tilde{\nabla}_{q_i} = g_{\mathcal{B}}^{-1} \nabla_{q_i}$ is the natural gradient with respect to the Fisher-Rao metric $g_{\mathcal{B}}$ on the statistical manifold. The learning rate $\eta_q \sim \mathcal{O}(1)$ is relatively large, corresponding to fast updates on perception and inference timescales. This subsystem implements variational inference as agents rapidly adjust beliefs to explain observations/interactions while respecting their current priors and coordinating with nearby agents.
+Natural gradient descent on beliefs follows $\partial q_i/\partial \tau = -\eta_q  \tilde{\nabla}_{q_i} \\mathcal{F}_{\\text{fast}}$ where $\tilde{\nabla}_{q_i} = g_{\mathcal{B}}^{-1} \nabla_{q_i}$ is the natural gradient with respect to the Fisher-Rao metric $g_{\mathcal{B}}$ on the statistical manifold. The learning rate $\eta_q \sim \mathcal{O}(1)$ is relatively large, corresponding to fast updates on perception and inference timescales. This subsystem implements variational inference as agents rapidly adjust beliefs to explain observations/interactions while respecting their current priors and coordinating with nearby agents.
 
 \subsubsection{Slow Subsystem: Model Learning}
 
 On longer timescales, agents update their generative models $s_i$ to reflect long-term statistical structure, regularised by the model hyper-priors $r_i$ and coupled to neighbours through the model-alignment term. The relevant free energy is
 
 \begin{equation}
-S_{\text{slow}}[\{s_i\}] = \sum_i \int \chi_i(c)  \mathrm{KL}(s_i(c) \| r_i(c))  dc
+\\mathcal{F}_{\\text{slow}}[\{s_i\}] = \sum_i \int \chi_i(c)  \mathrm{KL}(s_i(c) \| r_i(c))  dc
 + \sum_{ij} \int \chi_{ij}(c)  \gamma_{ij}(c)  \mathrm{KL}(s_i(c) \| \tilde{\Omega}_{ij}[s_j(c)])  dc,
 \end{equation}
 
-where $r_i$ are the per-agent model hyper-priors representing evolutionary or training-time structural defaults. Natural gradient descent on models follows $\partial s_i/\partial \tau = -\eta_s  \tilde{\nabla}_{s_i} S_{\text{slow}}$ with learning rate $\eta_s \ll \eta_q$, much slower than belief updates. This corresponds to learning and adaptation timescales where agents slowly adjust expectations about how the world works, coordinating with other agents to develop shared ontologies and common conceptual frameworks. Per-token priors $p_i$ also evolve on a learning timescale (in the transformer limit they appear as the PriorBank entries, updated by gradient descent over training data; Section~\ref{sec:transformers}), but their update is local to each agent and is not coupled across agents at this level.
+where $r_i$ are the per-agent model hyper-priors representing evolutionary or training-time structural defaults. Natural gradient descent on models follows $\partial s_i/\partial \tau = -\eta_s  \tilde{\nabla}_{s_i} \\mathcal{F}_{\\text{slow}}$ with learning rate $\eta_s \ll \eta_q$, much slower than belief updates. This corresponds to learning and adaptation timescales where agents slowly adjust expectations about how the world works, coordinating with other agents to develop shared ontologies and common conceptual frameworks. Per-token priors $p_i$ also evolve on a learning timescale (in the transformer limit they appear as the PriorBank entries, updated by gradient descent over training data; Section~\ref{sec:transformers}), but their update is local to each agent and is not coupled across agents at this level.
 
 \subsubsection{Gauge Frame Evolution}
 
 Gauge frames $\phi_i(c)$ may evolve to minimize free energy with respect to frame choices.  In our current studies we do not consider regularizing terms such as
 
 \begin{equation}
-S_{\text{frame}}[\{\phi_i\}] = \lambda_\phi \sum_i \int \|\nabla \phi_i(c)\|^2  dc + \text{(coupling-dependent terms)},
+\\mathcal{F}_{\\text{frame}}[\{\phi_i\}] = \lambda_\phi \sum_i \int \|\nabla \phi_i(c)\|^2  dc + \text{(coupling-dependent terms)},
 \end{equation}
 
 althought they are theoretically interesting and rich.
 
-Gradient descent on frames follows $\partial \phi_i/\partial \tau = -\eta_\phi  \nabla_{\phi_i} S_{\text{frame}}$ with learning rate $\eta_\phi \sim \eta_p \ll \eta_q$, corresponding to slow updates on coordinate system recalibration timescales. Agents gradually adjust their internal reference frames to minimize the effort of maintaining coordination with other agents. 
+Gradient descent on frames follows $\partial \phi_i/\partial \tau = -\eta_\phi  \nabla_{\phi_i} \\mathcal{F}_{\\text{frame}}$ with learning rate $\eta_\phi \sim \eta_p \ll \eta_q$, corresponding to slow updates on coordinate system recalibration timescales. Agents gradually adjust their internal reference frames to minimize the effort of maintaining coordination with other agents. 
 
 \subsubsection{Timescale Hierarchy and Adiabatic Approximation}
 
@@ -1283,7 +1283,7 @@ M_i = \underbrace{\bar{\Lambda}_{p_i}}_{\text{bare mass}} + \underbrace{\sum_k \
 \end{equation}
 The bare mass $\bar{\Lambda}_{p_i}$ provides inertia against deviation from the prior world-model. The incoming relational mass captures inertia from being pulled by neighbors. The outgoing relational mass represents inertia from pulling neighbors (recoil). The sensory mass grounds the agent in observations.
 
-A macroscopic object maintains extraordinarily precise self-localization: $\bar{\Sigma}_{\mathrm{rock}} \approx \ell_P^2 I$ yields enormous mass $M_{\mathrm{rock}} \sim \ell_P^{-2}$. Rocks are certain, thus massive, thus hard to move. Conversely, a quantum particle in spatial superposition has larger position uncertainty, lower precision, and reduced inertial mass.
+A macroscopic object maintains extraordinarily precise self-localization: $\bar{\Sigma}_{\mathrm{rock}} \approx \ell_P^2 I$ yields a large effective mass $M_{\mathrm{rock}} \sim \ell_P^{-2}$ in the Newtonian-analogy reading of Section~\ref{sec:mass}. Rocks are certain, thus exhibit large second-variation rigidity, thus are hard to move under the dynamics. Conversely, a quantum particle in spatial superposition has larger position uncertainty, lower precision, and a smaller effective mass.
 
 \subsection{Velocity-Quadratic Metric Form}
 
@@ -1333,7 +1333,7 @@ Model coherence similarly measures alignment of generative models through $C_{\m
 
 The consensus score combines these factors multiplicatively as $\Gamma(\{i\}, x) = C_{\mathrm{belief}} \cdot C_{\mathrm{model}} \cdot P(\{i\}, x)$. A meta-agent forms when both $\Gamma(\{i\}, x) > \Gamma_{\min}$ (sufficient consensus) and $|\{i\}| \geq N_{\min}$ (sufficient cluster size). We use $\Gamma_{\min} = 0.5$ and $N_{\min} = 2$ in our simulations. These are ad-hoc thresholds chosen for computational convenience; the theoretical framework does not prescribe specific values. Lower thresholds produce more meta-agents from weaker coherence, higher thresholds require stronger consensus before formation occurs.
 
-In a more principled implementation, meta-agent formation would be governed directly by free energy gradients: a potential meta-agent emerges when the free energy $S[\{q_i\}, \{p_i\}]$ of separate constituents exceeds the free energy $S[q_I, p_I]$ of the unified meta-agent by more than the entropic cost of maintaining the additional organizational structure. This would produce continuous, smooth emergence rather than discrete threshold-crossing events. Our discrete approach approximates this continuous process for computational tractability.
+In a more principled implementation, meta-agent formation would be governed directly by free energy gradients: a potential meta-agent emerges when the free energy $\mathcal{F}[\{q_i\}, \{p_i\}]$ of separate constituents exceeds the free energy $\mathcal{F}[q_I, p_I]$ of the unified meta-agent by more than the entropic cost of maintaining the additional organizational structure. This would produce continuous, smooth emergence rather than discrete threshold-crossing events. Our discrete approach approximates this continuous process for computational tractability.
 
 \subsubsection{Gauge-Covariant Belief Construction}
 
@@ -1422,7 +1422,7 @@ This creates information flow from ALL ancestral scales, with hyperpriors stored
 p_i^{(\text{top})}(x) = \sum_{j \in \text{all scales}} w_j(x)  \Omega_{i,j}[q_j](x),
 \end{equation}
 
-where weights $w_j \propto \exp(-\overline{\text{KL}}_j)$ favor agents that are coherent with the collective. This creates Wheeler's "self-excited circuit".  The system observes itself, forms collective priors, which flow down the hierarchy to shape individual beliefs, whose evolution changes the collective state, which the top re-observes representing a genuinely participatory, self-organizing dynamic.
+where weights $w_j \propto \exp(-\overline{\mathrm{KL}}_j)$ favor agents that are coherent with the collective. This creates Wheeler's "self-excited circuit".  The system observes itself, forms collective priors, which flow down the hierarchy to shape individual beliefs, whose evolution changes the collective state, which the top re-observes representing a genuinely participatory, self-organizing dynamic.
 
 \textbf{Implementation Note:} Our implementation uses direct prior assignment $p_i \leftarrow \Omega_{i,I}[q_I]$ rather than gradual updates, ensuring constituents immediately adopt their meta-agent's collective perspective. This realizes the participatory structure such that neither level is more fundamental and both constitute the system through bidirectional information exchange.
 
@@ -1439,7 +1439,7 @@ Significant prior changes ($\Delta p_i > \theta_{\min}$) indicate active top-dow
 
 A genuinely participatory system must remain far from equilibrium. At equilibrium, all agents would achieve perfect consensus and cease evolving - a static, non-participatory state representing the "information death" of the system. The perpetual tension between consensus seeking (driving toward equilibrium) and diversity preservation (driving away from equilibrium) maintains continued evolution.
 
-We monitor dis-equilibrium through three complementary indicators. Energy flux measures the rate of free energy change: $\Phi_E(t) = |dS/dt|$. Large energy flux indicates active dynamics where beliefs, priors, and gauge frames are evolving rapidly. Information flux tracks Shannon entropy evolution: $\Phi_I(t) = \sum_i \int_{\mathcal{C}} \partial_t[H[q_i(x)] + H[p_i(x)]] dx$. Changes in entropy indicate information gain or loss across the system. Gradient variance quantifies heterogeneity in free energy landscapes: $V_{\nabla}(t) = \frac{1}{N}\sum_i \mathrm{Var}(\|\nabla_{q_i} S\|^2)$. High variance means different agents experience different driving forces, maintaining diversity.
+We monitor dis-equilibrium through three complementary indicators. Energy flux measures the rate of free energy change: $\Phi_E(t) = |d\mathcal{F}/dt|$. Large energy flux indicates active dynamics where beliefs, priors, and gauge frames are evolving rapidly. Information flux tracks Shannon entropy evolution: $\Phi_I(t) = \sum_i \int_{\mathcal{C}} \partial_t[H[q_i(x)] + H[p_i(x)]] dx$. Changes in entropy indicate information gain or loss across the system. Gradient variance quantifies heterogeneity in free energy landscapes: $V_{\nabla}(t) = \frac{1}{N}\sum_i \mathrm{Var}(\|\nabla_{q_i} S\|^2)$. High variance means different agents experience different driving forces, maintaining diversity.
 
 We combine these into an equilibrium score: $E_{\mathrm{score}}(t) = (\Phi_E(t) + \Phi_I(t) + V_{\nabla}(t))/3$. Values near zero indicate equilibrium (undesirable for participatory dynamics), while $E_{\mathrm{score}} \gg 1$ indicates sustained far-from-equilibrium operation. For functioning participatory dynamics, we require $E_{\mathrm{score}}(t) > E_{\min}$ for all $t$, with typical threshold $E_{\min} = 1.0$. Systems falling below this threshold have effectively "died" informationally achieving static consensus without continued evolution or adaptation.
 
@@ -1492,18 +1492,18 @@ F = \begin{pmatrix}
 \end{pmatrix}.
 \end{equation}
 
-This block structure enables efficient computation. For mean updates, the natural gradient becomes $\tilde{\nabla}_\mu S = \Sigma (\nabla_\mu S)$, which is the Euclidean gradient pre-multiplied by the covariance matrix. For covariance updates, the natural gradient is $\tilde{\nabla}_\Sigma S = \Sigma (\nabla_\Sigma S) \Sigma$, a bilinear form sandwiching the Euclidean gradient between covariance matrices. This bilinear structure ensures that updated covariances remain positive-definite, preserving the manifold structure of $\mathbb{S}^+_K$ automatically.
+This block structure enables efficient computation. For mean updates, the natural gradient becomes $\tilde{\nabla}_\mu \mathcal{F} = \Sigma (\nabla_\mu \mathcal{F})$, which is the Euclidean gradient pre-multiplied by the covariance matrix. For covariance updates, the natural gradient is $\tilde{\nabla}_\Sigma \mathcal{F} = \Sigma (\nabla_\Sigma \mathcal{F}) \Sigma$, a bilinear form sandwiching the Euclidean gradient between covariance matrices. This bilinear structure ensures that updated covariances remain positive-definite, preserving the manifold structure of $\mathbb{S}^+_K$ automatically.
 
 \subsubsection{Gauge-Covariant Update Equations}
 
 The complete system evolves via natural gradient flow on the product manifold:
 \begin{align}
-\frac{d\mu_i}{dt} &= -\eta_\mu  \tilde{\nabla}_\mu S \\
-\frac{d\Sigma_i}{dt} &= -\eta_\Sigma  \tilde{\nabla}_\Sigma S = -\eta_\Sigma  \Sigma_i (\nabla_\Sigma S) \Sigma_i \\
-\frac{d\phi_i}{dt} &= -\eta_\phi  \nabla_\phi S,
+\frac{d\mu_i}{dt} &= -\eta_\mu  \tilde{\nabla}_\mu \mathcal{F} \\
+\frac{d\Sigma_i}{dt} &= -\eta_\Sigma  \tilde{\nabla}_\Sigma \mathcal{F} = -\eta_\Sigma  \Sigma_i (\nabla_\Sigma \mathcal{F}) \Sigma_i \\
+\frac{d\phi_i}{dt} &= -\eta_\phi  \nabla_\phi \mathcal{F},
 \end{align}
 
-where $\eta_\mu, \eta_\Sigma, \eta_\phi$ are learning rates satisfying the timescale hierarchy discussed previously. The gauge covariance of these updates is essential for maintaining consistency. Under gauge transformation $g \in G$, covariances transform as $\Sigma_i \to \rho(g) \Sigma_i \rho(g)^\top$. The natural gradient update transforms covariantly as $\Sigma_i (\nabla_\Sigma S) \Sigma_i \to \rho(g)[\Sigma_i (\nabla_\Sigma S) \Sigma_i]\rho(g)^\top$, ensuring that dynamics respect gauge symmetry.
+where $\eta_\mu, \eta_\Sigma, \eta_\phi$ are learning rates satisfying the timescale hierarchy discussed previously. The gauge covariance of these updates is essential for maintaining consistency. Under gauge transformation $g \in G$, covariances transform as $\Sigma_i \to \rho(g) \Sigma_i \rho(g)^\top$. The natural gradient update transforms covariantly as $\Sigma_i (\nabla_\Sigma \mathcal{F}) \Sigma_i \to \rho(g)[\Sigma_i (\nabla_\Sigma \mathcal{F}) \Sigma_i]\rho(g)^\top$, ensuring that dynamics respect gauge symmetry.
 
 These equations define a flow on the product manifold $\mathcal{M} = (\mathbb{R}^K \times \mathbb{S}^+_K \times \mathfrak{g})^N$ where $N$ is the number of agents, $\mathbb{R}^K$ is the flat mean parameter space, $\mathbb{S}^+_K$ is the curved covariance parameter space, and $\mathfrak{g} = \mathfrak{so}(3)$ is the gauge frame Lie algebra. This geometric structure ensures well-defined, coordinate-independent dynamics throughout the system's evolution, maintaining both statistical manifold structure and gauge symmetry.
 
@@ -1863,15 +1863,15 @@ Our framework exhibits structural parallels with physical quantities: time from 
 
 Different agents with different belief update rates experience different temporal flows. An agent processing information rapidly (large $\Delta I_i$ per unit external parameter) experiences subjectively more time than an agent processing information slowly. This is structurally analogous to proper time in relativity, where observers following different spacetime trajectories measure different elapsed times between events. However, we have not established quantitative correspondence with relativistic time dilation or derived the Lorentz transformation. The parallel remains qualitative.
 
-\textbf{Mass from informational rigidity.} The Fisher information matrix $\mathcal{M}_{ij}[q] = \mathbb{E}_{q}[(\partial_i \log q)(\partial_j \log q)]$ appears in the natural gradient update $d\theta/dt = -\mathcal{M}^{-1} \nabla_\theta S$. Large Fisher information (high certainty, sharp probability distributions) makes the inverse $\mathcal{M}^{-1}$ small, significantly slowing parameter updates. Confident beliefs resist change; uncertain beliefs update readily. This is formally analogous to inertial mass: massive objects resist changes in velocity while light objects accelerate easily under the same force.
+\textbf{Mass from informational rigidity.} The Fisher information matrix $\mathcal{M}_{ij}[q] = \mathbb{E}_{q}[(\partial_i \log q)(\partial_j \log q)]$ appears in the natural gradient update $d\theta/dt = -\mathcal{M}^{-1} \nabla_\theta \mathcal{F}$. Large Fisher information (high certainty, sharp probability distributions) makes the inverse $\mathcal{M}^{-1}$ small, significantly slowing parameter updates. Confident beliefs resist change; uncertain beliefs update readily. This is formally analogous to inertial mass: massive objects resist changes in velocity while light objects accelerate easily under the same force.
 
-We identify $\mathrm{tr}(\mathcal{M})$ with inertial mass, quantifying belief rigidity. This is not merely an analogy: in a framework where information is primal (Section~\ref{sec:phenomenological_interpretation}), the Fisher information \emph{is} what agents experience as mass. Objects we perceive as massive correspond to belief configurations with large characteristic Fisher information. The difficulty of accelerating massive objects reflects the information-theoretic difficulty of updating highly certain belief distributions. This identification is computationally validated: Panel A of Fig.~\ref{fig:mass_precision} confirms $M_{\mathrm{eff}} \propto \Sigma_p^{-1}$ with $R^2 = 0.9998$, and the harmonic oscillator frequency scaling $\omega^2 \propto 1/M$ follows exactly (Panel E). What remains open is not whether mass \emph{is} statistical precision (within the framework, it is, by construction) but whether the specific mass values of physical particles ($m_e$, $m_p$, etc.) can be derived as information-geometric invariants of the consensus hierarchy, and whether gravitational mass (coupling to spacetime curvature) shares this origin through the pullback mechanism (Section~\ref{sec:pullback}).
+We identify $\mathrm{tr}(\mathcal{M})$ with the effective mass quantifying belief rigidity. Within the framework, where information is primal (Section~\ref{sec:phenomenological_interpretation}), the Fisher information takes the structural role that inertial mass plays in classical mechanics: it controls the resistance of belief configurations to update. Objects we perceive as massive correspond to belief configurations with large characteristic Fisher information. The difficulty of accelerating massive objects reflects the information-theoretic difficulty of updating highly certain belief distributions. This identification is computationally validated: Panel A of Fig.~\ref{fig:mass_precision} confirms $M_{\mathrm{eff}} \propto \Sigma_p^{-1}$ with $R^2 = 0.9998$, and the harmonic oscillator frequency scaling $\omega^2 \propto 1/M$ follows exactly (Panel E). What remains open is not whether mass \emph{is} statistical precision (within the framework, it is, by construction) but whether the specific mass values of physical particles ($m_e$, $m_p$, etc.) can be derived as information-geometric invariants of the consensus hierarchy, and whether gravitational mass (coupling to spacetime curvature) shares this origin through the pullback mechanism (Section~\ref{sec:pullback}).
 
-\textbf{Energy and free energy.} Agent evolution minimizes the variational free energy functional $S[q, p, \phi]$. During natural gradient descent, the free energy decreases monotonically (except when observations arrive, injecting new information). The rate of free energy decrease $dS/dt$ measures how rapidly the system resolves informational tensions and achieves greater coherence.
+\textbf{Energy and free energy.} Agent evolution minimizes the variational free energy functional $\mathcal{F}[q, p, \phi]$. During natural gradient descent, the free energy decreases monotonically (except when observations arrive, injecting new information). The rate of free energy decrease $d\mathcal{F}/dt$ measures how rapidly the system resolves informational tensions and achieves greater coherence.
 
-This quantity is mathematically analogous to energy dissipation in physical systems. Systems naturally evolve toward lower free energy states, just as physical systems evolve toward lower potential energy configurations. The free energy functional plays a role similar to a Hamiltonian, with extremal trajectories corresponding to natural evolution. However, we have not established that $S$ has energy dimensions, derived thermodynamic relations, or connected to measured energies of physical systems.
+This quantity is mathematically analogous to energy dissipation in physical systems. Systems naturally evolve toward lower free energy states, just as physical systems evolve toward lower potential energy configurations. The free energy functional plays a role similar to a Hamiltonian, with extremal trajectories corresponding to natural evolution. However, we have not established that $\mathcal{F}$ has energy dimensions, derived thermodynamic relations, or connected to measured energies of physical systems.
 
-\textbf{Action principle structure.} The entire framework can be cast as a variational principle: agents follow trajectories that extremize the free energy functional $S[q,p,\phi] = \int_{\mathcal{C}} [\mathrm{KL}(q \| p) + \text{coupling terms} + \text{regularizers}] dx$. This is mathematically analogous to Hamilton's principle in classical mechanics, where physical systems follow trajectories extremizing the action integral. The Euler-Lagrange equations from $\delta S = 0$ become our natural gradient flow equations.
+\textbf{Action principle structure.} The entire framework can be cast as a variational principle: agents follow trajectories that extremize the free energy functional $\mathcal{F}[q,p,\phi] = \int_{\mathcal{C}} [\mathrm{KL}(q \| p) + \text{coupling terms} + \text{regularizers}] dx$. This is mathematically analogous to Hamilton's principle in classical mechanics, where physical systems follow trajectories extremizing the action integral. The Euler-Lagrange equations from $\delta \mathcal{F} = 0$ become our natural gradient flow equations.
 
 This suggests that variational principles, rather than being unique to physics, represent a general feature of optimal information processing. Physical trajectories extremize action; informational agents extremize free energy. Both emerge from the same mathematical structure. This aligns with Wheeler's vision that physics and information processing share common foundations. However, we have not derived Lagrangians for specific physical systems, recovered Newton's laws quantitatively, connected to quantum path integrals beyond formal similarity, or predicted measurable physical quantities.
 
@@ -1963,7 +1963,7 @@ Eigenvalue hierarchy in $\dot{q}^\perp = V_{\text{obs}} \oplus V_{\text{subthres
 
 \subsubsection{Philosophical Implications}
 
-The fully self-contained framework consists of agents at all scales (particles, atoms, molecules, organisms, societies) and even allows abstract informational systems (such as cultures, knowledge, economics, etc) typically indescribable by current theories.  Each agent is characterized by state $(q_i, p_i, \phi_i)$ and coupled through information exchange. There is no reality "out there" providing observations to agents "in here." Rather, reality consists entirely of the network of coupled agents evolving through natural gradient dynamics on the free energy functional $S[\text{all agents}]$.
+The fully self-contained framework consists of agents at all scales (particles, atoms, molecules, organisms, societies) and even allows abstract informational systems (such as cultures, knowledge, economics, etc) typically indescribable by current theories.  Each agent is characterized by state $(q_i, p_i, \phi_i)$ and coupled through information exchange. There is no reality "out there" providing observations to agents "in here." Rather, reality consists entirely of the network of coupled agents evolving through natural gradient dynamics on the free energy functional $\mathcal{F}[\text{all agents}]$.
 
 Several consequences follow. The observer/observed distinction is conventional rather than fundamental; all agents are ontologically equal, differing only in their states, couplings, and hierarchical positions. A photon observing a human is the same type of process as a human observing a photon, merely viewed from different agent perspectives. Physical reality becomes the dynamical network of agents with nodes representing states and edges representing coupling strengths. The network structure, with its patterns of strong and weak coupling, might constitute the emergent spacetime structure. There is no pre-existing spacetime manifold; what we perceive as space and time emerges from information-geometric relationships among agents. As this is determined by the $\beta_{ij}, \gamma_{ij}$ attention couplings then attention really might just be "all you need".
 
@@ -1992,7 +1992,7 @@ We conducted meta-agent emergence experiments using the configuration detailed t
 The configuration implements several key design choices:
 
 \paragraph{Emergence.}
-Consensus checks occur every 2 steps enabling rapid hierarchical condensation. The low consensus threshold ($\tau_{\text{KL}} = 0.05$) allows meta-agent formation when agents achieve sufficient epistemic alignment.
+Consensus checks occur every 2 steps enabling rapid hierarchical condensation. The low consensus threshold ($\tau_{\mathrm{KL}} = 0.05$) allows meta-agent formation when agents achieve sufficient epistemic alignment.
 
 \paragraph{Ouroboros Tower Architecture.}
 The 5-level hyperprior propagation implements Wheeler's "it from bit" concept extended to hierarchical systems. Each agent receives priors not only from its immediate parent meta-agent, but from ancestors up to 5 scales higher, with exponential decay $\gamma = 0.5$ to weight more recent ancestry.
@@ -2021,7 +2021,7 @@ $N_0$ (initial agents) & 8 & $\lambda_{\text{self}}$ & 1.0 \\
 $K$ (latent dim) & 13 & $\lambda_{\text{belief}}$ & 1.0 \\
 $D_x$ (obs dim) & 5 & $\lambda_{\text{prior}}$ & 1.0 \\
 Max steps & 500 & $\eta_{\mu_q}$ & 0.05 \\
-$\tau_{\text{KL}}$ threshold & 0.05 & $\eta_{\Sigma_q}$ & 0.0075 \\
+$\tau_{\mathrm{KL}}$ threshold & 0.05 & $\eta_{\Sigma_q}$ & 0.0075 \\
 Consensus check & 2 steps & $\eta_{\mu_p}$ & 0.02 \\
 $\zeta_{\max}$ (max scale) & 20 & $\eta_{\Sigma_p}$ & 0.0075 \\
 Hyperprior depth & 5 & Snapshot interval & 1 \\
@@ -2043,9 +2043,9 @@ F_{\text{total}} = \sum_i \left[ \lambda_{\text{self}} F_{\text{self}}^{(i)} + \
 \end{equation}
 
 
-where $F_{\text{self}}^{(i)} = \text{KL}(q_i \| p_i)$ measures intrinsic energy, $F_{\text{belief}}^{(i)}$ measures lateral alignment with neighbors, $F_{\text{prior}}^{(i)}$ measures vertical alignment with parent meta-agents, and $F_{\text{obs}}^{(i)}$ measures fit to external observations. With all energy weights set to unity ($\lambda_{\text{self}} = \lambda_{\text{belief}} = \lambda_{\text{prior}} = \lambda_{\text{obs}} = 1.0$), the system balances individual identity, social coordination, hierarchical integration, and empirical grounding without imposed bias.
+where $F_{\text{self}}^{(i)} = \mathrm{KL}(q_i \| p_i)$ measures intrinsic energy, $F_{\text{belief}}^{(i)}$ measures lateral alignment with neighbors, $F_{\text{prior}}^{(i)}$ measures vertical alignment with parent meta-agents, and $F_{\text{obs}}^{(i)}$ measures fit to external observations. With all energy weights set to unity ($\lambda_{\text{self}} = \lambda_{\text{belief}} = \lambda_{\text{prior}} = \lambda_{\text{obs}} = 1.0$), the system balances individual identity, social coordination, hierarchical integration, and empirical grounding without imposed bias.
 
-Every 2 steps, the system checked for epistemic consensus by computing gauge-invariant KL divergences $\text{KL}(q_i \| \Omega_{ij}[q_j])$ and $\text{KL}(p_i \| \Omega_{ij}[p_j])$ between all agents at each scale, where $\Omega_{ij}$ is the gauge transport operator of~\eqref{eq:transport_def}. When a cluster of agents achieved both belief consensus ($\text{KL}(q_i \| \Omega_{ij}[q_j]) < \tau_{\text{KL}} = 0.05$) and model consensus ($\text{KL}(p_i \| \Omega_{ij}[p_j]) < \tau_{\text{KL}}$), they underwent \textit{epistemic death} and condensed into a meta-agent at the next scale, which inherited a Gaussian prior synthesized from the cluster's belief distribution. This gauge-invariant consensus detection ensures that agents are truly aligned in their intrinsic beliefs, not merely appearing similar due to different gauge choices.
+Every 2 steps, the system checked for epistemic consensus by computing gauge-invariant KL divergences $\mathrm{KL}(q_i \| \Omega_{ij}[q_j])$ and $\mathrm{KL}(p_i \| \Omega_{ij}[p_j])$ between all agents at each scale, where $\Omega_{ij}$ is the gauge transport operator of~\eqref{eq:transport_def}. When a cluster of agents achieved both belief consensus ($\mathrm{KL}(q_i \| \Omega_{ij}[q_j]) < \tau_{\mathrm{KL}} = 0.05$) and model consensus ($\mathrm{KL}(p_i \| \Omega_{ij}[p_j]) < \tau_{\mathrm{KL}}$), they underwent \textit{epistemic death} and condensed into a meta-agent at the next scale, which inherited a Gaussian prior synthesized from the cluster's belief distribution. This gauge-invariant consensus detection ensures that agents are truly aligned in their intrinsic beliefs, not merely appearing similar due to different gauge choices.
 
 The Ouroboros Tower mechanism propagated priors down from ancestors up to 5 scales higher, weighted by exponential decay $\gamma^{\Delta\zeta}$ where $\Delta\zeta$ is the scale distance. This implements multi-level self-reference, allowing agents to be influenced by the emergent structure of the hierarchy itself.
 
@@ -2071,14 +2071,14 @@ We report spontaneous emergence of hierarchical meta-agent organisation from gau
 
 
 \paragraph{Energy Descent Dynamics (Fig.~\ref{fig:energy_flow}).}
-The system exhibited smooth, monotonic descent of the total free energy functional $S$ from initial value $S_0 \approx 70$ down to $S \approx 5$ over the first 140 steps. Energy flux analysis revealed independent descent trajectories for each scale, with $\mathrm{d}E/\mathrm{d}t < 0$ uniformly across all hierarchical levels. This phase is characterized by agents independently minimizing their local free energy terms without substantial inter-scale coordination.
+The system exhibited smooth, monotonic descent of the total free energy functional $\mathcal{F}$ from initial value $\mathcal{F}_0 \approx 70$ down to $\mathcal{F} \approx 5$ over the first 140 steps. Energy flux analysis revealed independent descent trajectories for each scale, with $\mathrm{d}E/\mathrm{d}t < 0$ uniformly across all hierarchical levels. This phase is characterized by agents independently minimizing their local free energy terms without substantial inter-scale coordination.
 
 
 
 \begin{figure}[htbp]
     \centering
     \includegraphics[width=0.95\linewidth]{Fig_5.png}
-    \caption{\textbf{Energy landscape decomposition for scales $\zeta = 0$--3.} Stacked area plots showing the relative contributions of three energy components to the total free energy functional $S$ at the four lowest hierarchical scales. Red regions indicate the self-term $E_{\text{self}} = \sum_i \int \alpha_i  \mathrm{KL}(q_i \| p_i)  \mathrm{d}x$ measuring belief-prior alignment within individual agents. Teal regions show belief alignment $E_{\text{belief\_align}} = \sum_{i,j} \int \beta_{ij}(x)  \mathrm{KL}(q_i \| \Omega_{ij}[q_j])  \mathrm{d}x$ across agent pairs. Blue regions indicate prior alignment $E_{\text{prior\_align}} = \sum_{i,j} \int \gamma_{ij}(x)  \mathrm{KL}(p_i \| \Omega_{ij}[p_j])  \mathrm{d}x$. During Phase I (steps 0--140), the self-term dominates the smooth descent. During Phase III (steps 160--200), inter-agent coordination terms increase in relative importance, reflecting the emergence of collective dynamics. The black line indicates total energy at each scale.}
+    \caption{\textbf{Energy landscape decomposition for scales $\zeta = 0$--3.} Stacked area plots showing the relative contributions of three energy components to the total free energy functional $\mathcal{F}$ at the four lowest hierarchical scales. Red regions indicate the self-term $E_{\text{self}} = \sum_i \int \alpha_i  \mathrm{KL}(q_i \| p_i)  \mathrm{d}x$ measuring belief-prior alignment within individual agents. Teal regions show belief alignment $E_{\text{belief\_align}} = \sum_{i,j} \int \beta_{ij}(x)  \mathrm{KL}(q_i \| \Omega_{ij}[q_j])  \mathrm{d}x$ across agent pairs. Blue regions indicate prior alignment $E_{\text{prior\_align}} = \sum_{i,j} \int \gamma_{ij}(x)  \mathrm{KL}(p_i \| \Omega_{ij}[p_j])  \mathrm{d}x$. During Phase I (steps 0--140), the self-term dominates the smooth descent. During Phase III (steps 160--200), inter-agent coordination terms increase in relative importance, reflecting the emergence of collective dynamics. The black line indicates total energy at each scale.}
     \label{fig:energy_landscape}
 \end{figure}
 
@@ -2202,7 +2202,7 @@ The edge weights (gray lines) in Fig.~\ref{fig:hierarchy} indicate the strength 
 \paragraph{Convergence Metrics.}
 At the final time step $t = 200$:
 \begin{itemize}
-\item Total free energy: $S_{\text{final}} = 3.2$ (95\% reduction from initialization)
+\item Total free energy: $\mathcal{F}_{\text{final}} = 3.2$ (95\% reduction from initialization)
 \item Mean inter-agent KL divergence: $\langle\mathrm{KL}(q_i\|\Omega_{ij}[q_j])\rangle = 0.034$ (97\% reduction)
 \item Hierarchical depth: 13 scales
 \item Total agent count: $N = 173$
@@ -2603,8 +2603,8 @@ Neural systems may well operate in this regime, where synaptic time constants do
 
 \subsection{Inertial Mass and Gravitational Effects in Pullback Geometry}
 
-We have demonstrated that the Fisher-Rao metric provides inertial mass:
-$M_{\text{inertial}} = \kappa \cdot \mathrm{tr}(\Sigma_p^{-1})$. The same precision tensor also determines the agent's pullback metric on the base manifold, which defines the geometry the agent experiences.
+We have demonstrated that the Fisher-Rao metric provides the effective mass:
+$M_{\text{eff}} = \kappa \cdot \mathrm{tr}(\Sigma_p^{-1})$. The same precision tensor also determines the agent's pullback metric on the base manifold, which defines the geometry the agent experiences.
 
 In our framework, agents have no direct access to the base manifold $\mathcal{C}$ itself, it remains noumenal in the Kantian sense. What agents experience is the pullback metric
 
@@ -2612,7 +2612,7 @@ In our framework, agents have no direct access to the base manifold $\mathcal{C}
 g_{\mu\nu}^{(i)}(x) = \text{pullback of Fisher-Rao metric via agent } i\text{'s section}.
 \end{equation}
 
-If gravitational effects emerge, they would manifest as curvature in this pullback geometry. Since the pullback metric is determined by $\Sigma_p^{-1}$, the same quantity that provides inertial mass would also source the curvature that the agent experiences as gravitational effects
+If gravitational effects emerge, they would manifest as curvature in this pullback geometry. Since the pullback metric is determined by $\Sigma_p^{-1}$, the same quantity that provides the effective mass would also source the curvature that the agent experiences as gravitational effects
 
 \begin{equation}
 R_{\mu\nu\rho\sigma}^{(i)}[g^{(i)}] \propto \text{functions of } \Sigma_{p,i}^{-1}.
@@ -2755,7 +2755,7 @@ The standard answer treats gauge symmetry as a fundamental feature of physical r
 Recall the model alignment term in the free energy functional
 
 \begin{equation}
-S_{\text{model}} = \sum_{ij} \int_{\mathcal{C}} \gamma_{ij}(x)  \mathrm{KL}\big(s_i(x) \| \tilde{\Omega}_{ij}[s_j](x)\big)  dx.
+\\mathcal{F}_{\\text{model}} = \sum_{ij} \int_{\mathcal{C}} \gamma_{ij}(x)  \mathrm{KL}\big(s_i(x) \| \tilde{\Omega}_{ij}[s_j](x)\big)  dx.
 \end{equation}
 
 This term drives alignment of generative models $s_i$ across agents. When humans construct scientific theories, they are collectively building shared models $s_{\text{human}}(x)$ that multiple agents (such as different scientists with different backgrounds, conceptual frameworks, and measurement conventions) must agree upon. The success of science depends on achieving this consensus: theories must make predictions that all qualified observers agree upon, regardless of their individual perspectives.
@@ -2890,7 +2890,7 @@ Alice's first-person phenomenal state is the section $\sigma_{\mathrm{Alice}}^{(
 where $\phi_i^{(N-k)}$ is the frame of an Alice-neuron and the cross-scale piece is fixed by the consensus-aggregation construction of $\phi_{\mathrm{Alice}}^{(N)}$ from its constituents (Section~\ref{sec:participatory}). The cross-scale factor is what relates Alice's first-person scale-$N$ section to the scale-$(N-k)$ neural substrate Bob actually probes; the inter-agent factor is what carries the result into Bob's frame. Lahav and Neemeh's single-scale Alice/Bob isomorphism is recovered as the special case in which both observers and the observed system are taken at the same scale and the cross-scale factor reduces to the identity. The structural map their account asserts is, in the present framework, a derived composition rather than a posited isomorphism, and the formalism specifies exactly which two transports it is built from.
 
 \paragraph{Three points of mathematical contact.}
-The transformation between cognitive frames is concrete: $\Omega_{ij}$ acts on belief means by left multiplication and on covariances by the sandwich product $\Omega_{ij} \Sigma_j \Omega_{ij}^\top$, and KL divergences are invariant under simultaneous push-forward by any element of $\mathrm{GL}(K)$. The analogue of a frame-invariant quantity (the role played by the spacetime interval in special relativity) is the gauge-equivariant free energy itself: $F$ is a scalar under the diagonal action of $\mathrm{GL}(K)$, even though its constituent KL terms transform between frames. The postulate that "identical neural dynamics imply identical experience" becomes, in our setting, the statement that two agents with identical $(\mu, \Sigma, \phi)$ at the relevant scale occupy the same section and therefore induce the same pullback metric; the postulate is recovered as a consequence of section identity rather than imposed.
+The transformation between cognitive frames is concrete: $\Omega_{ij}$ acts on belief means by left multiplication and on covariances by the sandwich product $\Omega_{ij} \Sigma_j \Omega_{ij}^\top$, and KL divergences are invariant under simultaneous push-forward by any element of $\mathrm{GL}(K)$. The analogue of a frame-invariant quantity (the role played by the spacetime interval in special relativity) is the gauge-equivariant free energy itself: $\mathcal{F}$ is a scalar under the diagonal action of $\mathrm{GL}(K)$, even though its constituent KL terms transform between frames. The postulate that "identical neural dynamics imply identical experience" becomes, in our setting, the statement that two agents with identical $(\mu, \Sigma, \phi)$ at the relevant scale occupy the same section and therefore induce the same pullback metric; the postulate is recovered as a consequence of section identity rather than imposed.
 
 We do not claim our gauge frames \emph{are} Lahav and Neemeh's cognitive frames in any stronger sense than that the two notions play the same conceptual role. Their cognitive frame is a measurement perspective taken as primitive; our gauge frame is a particular element of $\mathfrak{gl}(K)$ that determines a section of an associated bundle of belief tuples. The match is at the level of structural function, not ontological identity. Where we can offer mathematical content beyond what their published formalization provides  (an explicit non-compact transformation group, an explicit invariant scalar, an explicit covariance transport law, and an explicit account of why first-person and third-person measurements relate the way they do) we view this as complementary to rather than competitive with their proposal. The intellectual debt runs in the opposite direction: their reframing of phenomenal consciousness as a frame-relative quantity is the philosophical move that licenses the construction in this paper.
 
@@ -3350,11 +3350,11 @@ F = \begin{pmatrix}
 
 The natural gradient is then:
 \begin{align}
-\tilde{\nabla}_\mu S &= \Sigma (\nabla_\mu S) \\
-\tilde{\nabla}_\Sigma S &= \Sigma (\nabla_\Sigma S) \Sigma,
+\tilde{\nabla}_\mu \mathcal{F} &= \Sigma (\nabla_\mu \mathcal{F}) \\
+\tilde{\nabla}_\Sigma \mathcal{F} &= \Sigma (\nabla_\Sigma \mathcal{F}) \Sigma,
 \end{align}
 
-where $\nabla_\mu S$ and $\nabla_\Sigma S$ are standard Euclidean gradients.
+where $\nabla_\mu \mathcal{F}$ and $\nabla_\Sigma \mathcal{F}$ are standard Euclidean gradients.
 
 \subsection{SO(3) Generators and Transport Operators}
 
