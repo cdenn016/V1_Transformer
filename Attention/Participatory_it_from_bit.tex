@@ -165,22 +165,6 @@ All results are supported by open-source implementations with comprehensive nume
 \section{Theory}
 \label{sec:framework}
 
-\subsection{The Core Idea}
-
-The framework rests on a simple but powerful idea: agents are smooth probability distributions evolving over an abstract space, coupled through information exchange, with each agent viewing reality through its own internal reference frame.
-
-Consider multiple scientists studying the same physical system. Each maintains probabilistic beliefs about the system's state, informed by their prior knowledge and theoretical commitments. They exchange information through publications, conferences, and collaborations. each scientist uses their own conceptual framework, measurement conventions, and mathematical notation - their own "gauge frame." Scientific progress occurs when these diverse perspectives align through information-theoretic coupling, minimizing collective uncertainty while respecting individual frames.
-
-We formalize this intuition through three mathematical ingredients, each addressing a specific conceptual requirement:
-
-First: What are agents forming beliefs about? We need an abstract space $\mathcal{C}$ representing the underlying reality about which agents form beliefs. This is not physical spacetime (which will emerge from agent interactions) but rather the noumenal substrate - the domain of inquiry itself.
-
-Second: How do we represent probabilistic beliefs mathematically? We need manifolds of probability distributions equipped with information-geometric structure enabling us to measure distances between beliefs and compute optimal updates.
-
-Third: How do we handle the fact that different agents use different internal reference frames? We need gauge theory on principal bundles, allowing agents to maintain distinct perspectives while enabling meaningful comparison through transport operators.
-
-We now develop each component systematically.
-
 \subsection{The Base Manifold: Noumenal Space}
 
 Agents form beliefs about something. We call this underlying domain the base manifold $\mathcal{C}$, following Kant's distinction between phenomena (appearances to observers) and noumena (things-in-themselves). The base manifold represents what agents are trying to understand, not how they understand it.
