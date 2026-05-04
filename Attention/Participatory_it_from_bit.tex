@@ -202,7 +202,7 @@ At each point $c \in \mathcal{C}$, agents maintain probability distributions rep
 \begin{definition}[Statistical Manifolds]
 Let $\mathcal{B}_q$ denote the manifold of belief distributions and $\mathcal{B}_p$ the manifold of prior distributions. Each is equipped with the Fisher-Rao metric:
 \begin{equation}
-g_{\mathcal{B}}(\partial_i, \partial_j) = \mathbb{E}_{q}\left[(\partial_i \log q)(\partial_j \log q)\right]
+g_{\mathcal{B}}(\partial_i, \partial_j) = \mathbb{E}_{q}\left[(\partial_i \log q)(\partial_j \log q)\right],
 \end{equation}
 defining distances between probability distributions.
 \end{definition}
@@ -211,14 +211,14 @@ The Fisher-Rao metric provides natural Riemannian geometry on probability spaces
 
 Throughout this work, we primarily use Gaussian statistical manifolds:
 \begin{equation}
-\mathcal{B}_q = \mathcal{B}_p = \{\mathcal{N}(\mu, \Sigma) : \mu \in \mathbb{R}^K, \Sigma \succ 0\}
+\mathcal{B}_q = \mathcal{B}_p = \{\mathcal{N}(\mu, \Sigma) : \mu \in \mathbb{R}^K, \Sigma \succ 0\},
 \end{equation}
 the space of $K$-dimensional multivariate Gaussian distributions. These are parametrized by mean vectors $\mu$ and positive-definite covariance matrices $\Sigma$, forming a $(K + K(K+1)/2)$-dimensional manifold.
 
 The Fisher-Rao metric naturally induces several information-theoretic quantities. The Kullback-Leibler divergence between distributions $q$ and $p$ measures their relative entropy
 
 \begin{equation}
-\mathrm{KL}(q \| p) = \int q(x) \log\frac{q(x)}{p(x)} dx \geq 0
+\mathrm{KL}(q \| p) = \int q(x) \log\frac{q(x)}{p(x)} dx \geq 0.
 \end{equation}
 
 This divergence is not symmetric ($\mathrm{KL}(q \| p) \neq \mathrm{KL}(p \| q)$) but it generates the Fisher metric through its Hessian structure. The natural gradient, defined as $\tilde{\nabla}_q f = g^{-1}_{\mathcal{B}} \nabla_q f$, provides the steepest descent direction in this curved probability space.
@@ -270,7 +270,7 @@ where $(n \cdot g, b) \sim (n, \rho(g)b)$ identifies gauge-transformed pairs.
 
 For Gaussian distributions with $G = \mathrm{GL}(K)$ (or any subgroup such as $\mathrm{SO}(N)$), the representation acts by linear transformation of means and congruence of covariances:
 \begin{equation}
-\rho_q(g) \cdot \mathcal{N}(\mu, \Sigma) = \mathcal{N}(g\mu, g\Sigma g^\top)
+\rho_q(g) \cdot \mathcal{N}(\mu, \Sigma) = \mathcal{N}(g\mu, g\Sigma g^\top).
 \end{equation}
 
 This ensures that changing reference frame transforms probability distributions consistently. When $g \in \mathrm{SO}(N)$, this reduces to rotation; for general $g \in \mathrm{GL}(K)$, it includes scaling, shearing, and reflection. The associated bundles $\mathcal{E}_q$ and $\mathcal{E}_p$ are fiber bundles over $\mathcal{C}$ with fibers isomorphic to $\mathcal{B}_q$ and $\mathcal{B}_p$ respectively, carrying the gauge-covariant structure of beliefs and priors.
@@ -321,7 +321,7 @@ Reality in this framework emerges not from a single observer but from collective
 \begin{definition}[Multi-Agent System]
 A multi-agent system $\mathcal{M}$ over base manifold $\mathcal{C}$ consists of a finite collection of agents:
 \begin{equation}
-\mathcal{M} = \left\{\mathcal{A}^i = (q_i, p_i, s_i, r_i, \phi_i)\right\}_{i \in \mathcal{I}}
+\mathcal{M} = \left\{\mathcal{A}^i = (q_i, p_i, s_i, r_i, \phi_i)\right\}_{i \in \mathcal{I}},
 \end{equation}
 where $\mathcal{I}$ is an index set (typically $\mathcal{I} = \{1, 2, \ldots, N\}$), and each agent $\mathcal{A}^i$ operates over domain $\mathcal{U}_i \subseteq \mathcal{C}$. When the slow subsystem is held fixed, as in the simulations below, an agent is referred to by the abbreviated tuple $(q_i, p_i, \phi_i)$ without ambiguity.
 \end{definition}
@@ -337,7 +337,7 @@ When agents achieve sufficient alignment in their beliefs and models over shared
 \begin{definition}[Perfect Consensus]
 Agents $\{i, j, \ldots\} \subseteq \mathcal{I}$ are in perfect consensus over region $\mathcal{R} \subseteq \bigcap_k \mathcal{U}_k$ if, after gauge transport to a common frame:
 \begin{equation}
-\Omega_{ij}[q_j](c) = q_i(c), \quad \Omega_{ij}[p_j](c) = p_i(c), \quad \tilde{\Omega}_{ij}[s_j](c) = s_i(c) \quad \forall c \in \mathcal{R}
+\Omega_{ij}[q_j](c) = q_i(c), \quad \Omega_{ij}[p_j](c) = p_i(c), \quad \tilde{\Omega}_{ij}[s_j](c) = s_i(c) \quad \forall c \in \mathcal{R},
 \end{equation}
 where $\Omega_{ij}$ is the gauge transport operator connecting their frames (see~\eqref{eq:transport_def}) and $\tilde{\Omega}_{ij}$ is the corresponding transport on the model fiber. Agreement of the per-agent hyper-priors $r_i$ is not required for consensus, since $r_i$ is fixed and shared structurally.
 \end{definition}
@@ -391,7 +391,7 @@ This balance is maintained through several mechanisms. Observations from the nou
 
 Meta-agents at scale $(s+1)$ can themselves cohere into meta-meta-agents at scale $(s+2)$, continuing upward to some maximum scale $s_{\max}$. This creates hierarchical architecture where individuals form groups, groups form communities, communities form societies, and so forth:
 \begin{equation}
-\text{Scale 0 (individuals)} \to \text{Scale 1 (groups)} \to \text{Scale 2 (communities)} \to \cdots \to s_{\max}
+\text{Scale 0 (individuals)} \to \text{Scale 1 (groups)} \to \text{Scale 2 (communities)} \to \cdots \to s_{\max}.
 \end{equation}
 
 Information flows bidirectionally through this hierarchy. Bottom-up flow occurs through consensus formation and averaging - when agents at scale $s$ achieve coherence, their collective belief propagates upward to form scale $(s+1)$ meta-agent beliefs. Top-down flow occurs through prior propagation - meta-agents influence their constituents by providing high-level expectations that constrain lower-level beliefs. This bidirectional coupling realizes Wheeler's participatory loop: higher levels emerge from lower levels through coherence, then feed back to shape lower-level dynamics through expectation.
@@ -419,7 +419,7 @@ A concrete example. Consider two agents perceiving the same coloured surface. Ag
 
 When agents $i$ and $j$ overlap at point $c \in \mathcal{U}_i \cap \mathcal{U}_j$, the inter-agent transport operator is defined as:
 \begin{equation}
-\Omega_{ij}(c) = \exp[\phi_i(c)] \exp[-\phi_j(c)] \in G
+\Omega_{ij}(c) = \exp[\phi_i(c)] \exp[-\phi_j(c)] \in G.
 \label{eq:transport_def}
 \end{equation}
 
@@ -443,7 +443,7 @@ On overlapping regions $\mathcal{U}_i \cap \mathcal{U}_j$, the connections trans
 
 The field strength (curvature two-form) measures path-dependence of parallel transport:
 \begin{equation}
-F^{(i)}_{\mu\nu}(c) = \partial_\mu A^{(i)}_\nu - \partial_\nu A^{(i)}_\mu + [A^{(i)}_\mu, A^{(i)}_\nu] \in \mathfrak{g}
+F^{(i)}_{\mu\nu}(c) = \partial_\mu A^{(i)}_\nu - \partial_\nu A^{(i)}_\mu + [A^{(i)}_\mu, A^{(i)}_\nu] \in \mathfrak{g}.
 \end{equation}
 
 When $F^{(i)}_{\mu\nu} = 0$ (flat connection), parallel transporting a belief around any closed loop returns it unchanged - information transport is path-independent. When $F^{(i)}_{\mu\nu} \neq 0$ (curved connection), beliefs accumulate holonomy around closed loops - net transformations depending on the enclosed area. Information transport becomes path-dependent.
@@ -835,7 +835,7 @@ S[\{q_i\}, \{p_i\}, \{s_i\}, \{r_i\}, \{\phi_i\}]
 &\quad + \sum_i \int_{\mathcal{C}} \chi_i(c)  \mathrm{KL}(s_i(c) \| r_i(c))  dc \\
 &\quad + \sum_{ij} \int_{\mathcal{C}} \chi_{ij}(c)  \beta_{ij}(c)  \mathrm{KL}(q_i(c) \| \Omega_{ij}(c)[q_j(c)])  dc \\
 &\quad + \sum_{ij} \int_{\mathcal{C}} \chi_{ij}(c)  \gamma_{ij}(c)  \mathrm{KL}(s_i(c) \| \tilde{\Omega}_{ij}(c)[s_j(c)])  dc \\
-&\quad - \sum_i \int_{\mathcal{C}} \chi_i(c)  \mathbb{E}_{q_i(c)}[\log p(o(c) \mid k_i, m_i)]  dc \\
+&\quad - \sum_i \int_{\mathcal{C}} \chi_i(c)  \mathbb{E}_{q_i(c)}[\log p(o(c) \mid k_i, m_i)]  dc,
 \end{aligned}
 }
 \label{eq:free_energy_functional_final}
@@ -1203,7 +1203,7 @@ The second-variation expressions below treat the attention weights $\beta_{ij}$ 
 
 \paragraph{Diagonal blocks $(i = k)$:} From the prior we obtain $\partial^2 D_{\mathrm{KL}}(q_i \| p_i)/\partial \mu_i \partial \mu_i^T = \bar{\Lambda}_{p_i}$. From consensus as receiver, $\partial^2 D_{\mathrm{KL}}(q_i \| \tilde{q}_k)/\partial \mu_i \partial \mu_i^T = \tilde{\Lambda}_{q_k}$. From consensus as sender to agent $j$, $\partial^2 D_{\mathrm{KL}}(q_j \| \tilde{q}_i)/\partial \mu_i \partial \mu_i^T = \Omega_{ji}^T \tilde{\Lambda}_{q_i}^{(j)} \Omega_{ji} = \Lambda_{q_i}$. From sensory evidence, $\partial^2[-\mathbb{E}_{q_i}[\log p(o_i | \theta)]]/\partial \mu_i \partial \mu_i^T = \Lambda_{o_i}$. The total diagonal mass is:
 \begin{equation}
-\boxed{[M_{\mu\mu}]_{ii} = \bar{\Lambda}_{p_i} + \sum_k \beta_{ik} \tilde{\Lambda}_{q_k} + \sum_j \beta_{ji} \Lambda_{q_i} + \Lambda_{o_i}}
+\boxed{[M_{\mu\mu}]_{ii} = \bar{\Lambda}_{p_i} + \sum_k \beta_{ik} \tilde{\Lambda}_{q_k} + \sum_j \beta_{ji} \Lambda_{q_i} + \Lambda_{o_i}.}
 \label{eq:mass_mu_diagonal}
 \end{equation}
 
@@ -1269,7 +1269,7 @@ In components:
 \end{equation}
 This vanishes at consensus ($\mu_i = \tilde{\mu}_k$):
 \begin{equation}
-\boxed{[C^{\mu\Sigma}]_{ik} = 0 \quad \text{when } \mu_i = \tilde{\mu}_k}
+\boxed{[C^{\mu\Sigma}]_{ik} = 0 \quad \text{when } \mu_i = \tilde{\mu}_k.}
 \label{eq:cross_block}
 \end{equation}
 
