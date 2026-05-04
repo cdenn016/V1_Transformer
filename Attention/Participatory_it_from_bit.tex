@@ -2566,7 +2566,6 @@ recovering the standard transformer attention weighting rule, up to the key-norm
 The mixture-of-sources generative model (Section~\ref{sec:mixture_derivation}) specifies that the component distribution for source $j$ in agent $i$'s frame has mean $\Omega_{ij}\mu_j$. The posterior mean under mixture responsibilities $\beta_{ij}$ is therefore
 \begin{equation}
 m_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j,
-\label{eq:glk_mixture_aggregation}
 \end{equation}
 which is the standard mixture-of-Gaussians expectation. Defining the value projection
 \begin{equation}
@@ -3562,7 +3561,6 @@ The observation term contributes an $O(\Sigma_i^{-1})$ correction that we neglec
 (\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}
 \right].
 }
-\label{eq:Sigma_gradient_final}
 \end{equation}
 
 Because $\sum_j \beta_{ij} = 1$, there is no $(1 + \sum_j \beta_{ij})$ prefactor in front of $\Sigma_i^{-1}$.
@@ -3693,7 +3691,6 @@ For independent Gaussians $q_i = \mathcal{N}(\mu_{q,i},\Sigma_{q,i})$ and $q_j =
 where $\delta = k_i - \Omega_{ij}k_j$, $\bar{\delta} = \mathbb{E}[\delta] = \mu_{q,i} - \Omega_{ij}\mu_{q,j}$, and
 \begin{equation}
 \mathrm{Cov}(\delta) = \Sigma_{q,i} + \Omega_{ij}\Sigma_{q,j}\Omega_{ij}^\top.
-\label{eq:delta_covariance}
 \end{equation}
 Applying \eqref{eq:quadratic_expectation_formula} with $A = \Lambda_{ij}$:
 \begin{equation}
@@ -3716,7 +3713,6 @@ Specifically, we define
 \Lambda_{ij}:=\tau^{(q)}_{ij}(\Omega_{ij}\Sigma_{q,j}\Omega_{ij}^\top)^{-1},
 \qquad 
 \Gamma_{ij}:=\tau^{(p)}_{ij}(\tilde{\Omega}_{ij}\Sigma_{p,j}\tilde{\Omega}_{ij}^\top)^{-1},
-\label{eq:precision_choice}
 \end{equation}
 where $\tau^{(q)}_{ij}, \tau^{(p)}_{ij} > 0$ are dimensionless coupling strengths.
 
@@ -3734,7 +3730,6 @@ $$
 (\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}
 (\mu_i - \Omega_{ij}\mu_j)
 \Big].
-\label{eq:kl_full}
 $$
 When beliefs are approximately aligned (the regime enforced by the coupling itself), the covariances satisfy $\Sigma_i \approx \Omega_{ij}\Sigma_j\Omega_{ij}^\top$, and the trace and log-determinant terms approximately cancel. In this alignment regime, as shown in the appendix, the quadratic expectation becomes
 \begin{equation}
@@ -3742,7 +3737,6 @@ When beliefs are approximately aligned (the regime enforced by the coupling itse
 [(k_i-\Omega_{ij}k_j)^\top\Lambda_{ij}(k_i-\Omega_{ij}k_j)]
 \approx
 \frac{\tau^{(q)}_{ij}}{2}D_{\mathrm{KL}}(q_i\|\Omega_{ij}q_j)+\text{const},
-\label{eq:belief_kl_relation}
 \end{equation}
 where the constant absorbs dimension-dependent terms and $O(\|\Delta\|^2)$ covariance mismatch corrections.
 
@@ -3752,7 +3746,6 @@ Similarly for the model channel:
 [(m_i-\tilde{\Omega}_{ij}m_j)^\top\Gamma_{ij}(m_i-\tilde{\Omega}_{ij}m_j)]
 \approx
 \frac{\tau^{(p)}_{ij}}{2}D_{\mathrm{KL}}(s_i\|\tilde{\Omega}_{ij}s_j)+\text{const}.
-\label{eq:model_kl_relation}
 \end{equation}
 \subsection{Defining normalized alignment weights}
 To obtain the standard form, we define normalized alignment weights
@@ -3760,7 +3753,6 @@ To obtain the standard form, we define normalized alignment weights
 \beta_{ij}:=\frac{\tau^{(q)}_{ij}}{2},
 \qquad
 \gamma_{ij}:=\frac{\tau^{(p)}_{ij}}{2}.
-\label{eq:normalized_weights}
 \end{equation}
 These weights have a clear interpretation: $\beta_{ij}$ measures the strength of belief alignment between agents $i$ and $j$, while $\gamma_{ij}$ measures model alignment strength. In the limit $\beta_{ij} \to \infty$ with fixed $\gamma_{ij}$, agents' beliefs are forced to perfect agreement after transport, while their models may still differ. Conversely, $\gamma_{ij} = 0$ decouples model alignment entirely. In all subsequence equations we taked $\tau$ to be independent of each agent - a constant global value which we set to 1.
 
