@@ -3254,7 +3254,7 @@ The complete gradient including self-term is:
 \begin{align}
 \nabla_{\Sigma_i} S &= \frac{1}{2}\left[-\Sigma_i^{-1} + \Sigma_{p,i}^{-1}\right] \nonumber \\
 &\quad + \frac{1}{2}\sum_j \beta_{ij} \left[-\Sigma_i^{-1} + (\Omega_{ij}\Sigma_j\Omega_{ij}^T)^{-1}\right]\left[1 - \frac{\mathrm{KL}_{ij}}{\kappa_\beta}\right] \nonumber \\
-&\quad + \frac{1}{2\kappa_\beta}\left(\sum_j \beta_{ij}\mathrm{KL}_{ij}\right) \sum_k \beta_{ik} \left[-\Sigma_i^{-1} + (\Omega_{ik}\Sigma_k\Omega_{ik}^T)^{-1}\right]
+&\quad + \frac{1}{2\kappa_\beta}\left(\sum_j \beta_{ij}\mathrm{KL}_{ij}\right) \sum_k \beta_{ik} \left[-\Sigma_i^{-1} + (\Omega_{ik}\Sigma_k\Omega_{ik}^T)^{-1}\right].
 \end{align}
 
 The natural gradient on $\mathcal{S}_{++}^K$ is:
@@ -3301,31 +3301,31 @@ This is the Riemannian exponential map---the geodesic retraction following the u
 
 The free energy contains gauge frames $\phi_i$ through both transport operators and attention weights. For the belief alignment term:
 \begin{equation}
-S_{\mathrm{belief}} = \sum_j \beta_{ij}(\phi_i)  \mathrm{KL}(q_i \| \Omega_{ij}(\phi_i)[q_j])
+S_{\mathrm{belief}} = \sum_j \beta_{ij}(\phi_i)  \mathrm{KL}(q_i \| \Omega_{ij}(\phi_i)[q_j]).
 \end{equation}
 
 Applying the product rule:
 \begin{equation}
-\nabla_{\phi_i} S_{\mathrm{belief}} = \sum_j \left[ \frac{\partial \beta_{ij}}{\partial \phi_i} \mathrm{KL}(q_i \| \Omega_{ij}[q_j]) + \beta_{ij} \frac{\partial}{\partial \phi_i}\mathrm{KL}(q_i \| \Omega_{ij}[q_j]) \right]
+\nabla_{\phi_i} S_{\mathrm{belief}} = \sum_j \left[ \frac{\partial \beta_{ij}}{\partial \phi_i} \mathrm{KL}(q_i \| \Omega_{ij}[q_j]) + \beta_{ij} \frac{\partial}{\partial \phi_i}\mathrm{KL}(q_i \| \Omega_{ij}[q_j]) \right].
 \end{equation}
 
 \subsubsection*{Term 1: Direct KL Gradient}
 
 For the transported KL divergence, using $\frac{\partial \Omega_{ij}}{\partial \phi_i^a} = G_a \Omega_{ij}$ where $\{G_a\}$ are SO(3) generators:
 \begin{equation}
-\frac{\partial}{\partial \phi_i^a}\mathrm{KL}(q_i \| \Omega_{ij}[q_j]) = \mathrm{tr}\left[G_a \Omega_{ij} \frac{\partial}{\partial \Omega_{ij}}\mathrm{KL}(q_i \| \Omega_{ij}[q_j])\right]
+\frac{\partial}{\partial \phi_i^a}\mathrm{KL}(q_i \| \Omega_{ij}[q_j]) = \mathrm{tr}\left[G_a \Omega_{ij} \frac{\partial}{\partial \Omega_{ij}}\mathrm{KL}(q_i \| \Omega_{ij}[q_j])\right].
 \end{equation}
 
 For Gaussians, the functional derivative is:
 \begin{equation}
-\frac{\partial}{\partial \Omega_{ij}}\mathrm{KL}(q_i \| \Omega_{ij}[q_j]) = (\Omega_{ij}\Sigma_j\Omega_{ij}^T)^{-1}(\mu_i - \Omega_{ij}\mu_j)\mu_j^T + \mathrm{tr}\left[(\Omega_{ij}\Sigma_j\Omega_{ij}^T)^{-1}\Sigma_j\right]\Omega_{ij}
+\frac{\partial}{\partial \Omega_{ij}}\mathrm{KL}(q_i \| \Omega_{ij}[q_j]) = (\Omega_{ij}\Sigma_j\Omega_{ij}^T)^{-1}(\mu_i - \Omega_{ij}\mu_j)\mu_j^T + \mathrm{tr}\left[(\Omega_{ij}\Sigma_j\Omega_{ij}^T)^{-1}\Sigma_j\right]\Omega_{ij}.
 \end{equation}
 
 \subsubsection*{Term 2: Attention Weight Gradient (Softmax Derivative)}
 
 The softmax structure of $\beta_{ij}$ yields:
 \begin{equation}
-\frac{\partial \beta_{ij}}{\partial \phi_i^a} = -\frac{1}{\kappa_\beta} \beta_{ij} \left[\frac{\partial}{\partial \phi_i^a}\mathrm{KL}(q_i \| \Omega_{ij}[q_j]) - \sum_k \beta_{ik} \frac{\partial}{\partial \phi_i^a}\mathrm{KL}(q_i \| \Omega_{ik}[q_k])\right]
+\frac{\partial \beta_{ij}}{\partial \phi_i^a} = -\frac{1}{\kappa_\beta} \beta_{ij} \left[\frac{\partial}{\partial \phi_i^a}\mathrm{KL}(q_i \| \Omega_{ij}[q_j]) - \sum_k \beta_{ik} \frac{\partial}{\partial \phi_i^a}\mathrm{KL}(q_i \| \Omega_{ik}[q_k])\right].
 \end{equation}
 
 This follows from $\frac{\partial}{\partial x_i}\mathrm{softmax}(x)_j = \mathrm{softmax}(x)_j(\delta_{ij} - \mathrm{softmax}(x)_i)$ applied with $x_j = -\kappa_\beta^{-1}\mathrm{KL}_j$.
@@ -3358,7 +3358,7 @@ When $\kappa_\beta \to \infty$ (soft/uniform attention), the reweighting term va
 
 The prior alignment gradient has identical form:
 \begin{equation}
-\nabla_{\phi_i} S_{\mathrm{prior}} = \sum_j \gamma_{ij}\nabla_{\phi_i}\mathrm{KL}(p_i \| \tilde{\Omega}_{ij}[p_j]) + \frac{1}{\kappa_\gamma}\left(\sum_j \gamma_{ij}\mathrm{KL}(p_i \| \tilde{\Omega}_{ij}[p_j])\right)\left(\sum_k \gamma_{ik}\nabla_{\phi_i}\mathrm{KL}_{ik}^p\right)
+\nabla_{\phi_i} S_{\mathrm{prior}} = \sum_j \gamma_{ij}\nabla_{\phi_i}\mathrm{KL}(p_i \| \tilde{\Omega}_{ij}[p_j]) + \frac{1}{\kappa_\gamma}\left(\sum_j \gamma_{ij}\mathrm{KL}(p_i \| \tilde{\Omega}_{ij}[p_j])\right)\left(\sum_k \gamma_{ik}\nabla_{\phi_i}\mathrm{KL}_{ik}^p\right).
 \end{equation}
 
 \subsection*{Complete Update Equations}
@@ -3367,7 +3367,7 @@ The gauge-covariant update scheme is:
 \begin{align}
 \mu_i^{t+1} &= \mu_i^t - \eta_\mu \Sigma_i^t \nabla_{\mu_i} S \\
 \Sigma_i^{t+1} &= \left(\Sigma_i^t\right)^{1/2} \exp\left[\left(\Sigma_i^t\right)^{-1/2}\left(-\eta_\Sigma \tilde{\nabla}_{\Sigma_i} S\right)\left(\Sigma_i^t\right)^{-1/2}\right] \left(\Sigma_i^t\right)^{1/2} \\
-\phi_i^{t+1} &= \phi_i^t - \eta_\phi \nabla_{\phi_i} S
+\phi_i^{t+1} &= \phi_i^t - \eta_\phi \nabla_{\phi_i} S,
 \end{align}
 
 where learning rates satisfy timescale separation $\eta_\mu : \eta_p : \eta_\phi \sim 1 : \epsilon : \epsilon^2$ with $\epsilon \ll 1$.
@@ -3429,7 +3429,7 @@ This example illustrates several key principles. First, observation is not a spe
 
 For multivariate Gaussian distributions $q = \mathcal{N}(\mu_q, \Sigma_q)$ and $p = \mathcal{N}(\mu_p, \Sigma_p)$ in $\mathbb{R}^K$, the Kullback-Leibler divergence is:
 \begin{equation}
-\mathrm{KL}(q \| p) = \frac{1}{2}\left[\log\frac{|\Sigma_p|}{|\Sigma_q|} + \mathrm{tr}(\Sigma_p^{-1}\Sigma_q) + (\mu_p - \mu_q)^\top\Sigma_p^{-1}(\mu_p - \mu_q) - K\right]
+\mathrm{KL}(q \| p) = \frac{1}{2}\left[\log\frac{|\Sigma_p|}{|\Sigma_q|} + \mathrm{tr}(\Sigma_p^{-1}\Sigma_q) + (\mu_p - \mu_q)^\top\Sigma_p^{-1}(\mu_p - \mu_q) - K\right].
 \end{equation}
 
 This formula is used throughout for computing belief and prior alignment terms in the free energy functional.
@@ -3441,13 +3441,13 @@ The Fisher information matrix for Gaussian distributions parametrized by $\theta
 F = \begin{pmatrix}
 \Sigma^{-1} & 0 \\
 0 & \frac{1}{2}(\Sigma^{-1} \otimes \Sigma^{-1})
-\end{pmatrix}
+\end{pmatrix}.
 \end{equation}
 
 The natural gradient is then:
 \begin{align}
 \tilde{\nabla}_\mu S &= \Sigma (\nabla_\mu S) \\
-\tilde{\nabla}_\Sigma S &= \Sigma (\nabla_\Sigma S) \Sigma
+\tilde{\nabla}_\Sigma S &= \Sigma (\nabla_\Sigma S) \Sigma,
 \end{align}
 
 where $\nabla_\mu S$ and $\nabla_\Sigma S$ are standard Euclidean gradients.
@@ -3456,12 +3456,12 @@ where $\nabla_\mu S$ and $\nabla_\Sigma S$ are standard Euclidean gradients.
 
 For gauge group $G = \mathrm{SO}(3)$, we use irreducible representations of dimension $K = 2\ell + 1$ where $\ell$ is the spin quantum number. The generators $\{G_x, G_y, G_z\}$ are real skew-symmetric $K \times K$ matrices satisfying:
 \begin{equation}
-[G_i, G_j] = \epsilon_{ijk} G_k
+[G_i, G_j] = \epsilon_{ijk} G_k.
 \end{equation}
 
 Transport operators are computed via matrix exponential:
 \begin{equation}
-\Omega_{ij}(c) = \exp(\phi_i(c)) \exp(-\phi_j(c))
+\Omega_{ij}(c) = \exp(\phi_i(c)) \exp(-\phi_j(c)),
 \end{equation}
 
 where $\phi_i(c) = \phi_i^x(c) G_x + \phi_i^y(c) G_y + \phi_i^z(c) G_z \in \mathfrak{so}(3)$.
@@ -3472,7 +3472,7 @@ For computational efficiency, we use the Baker-Campbell-Hausdorff formula when g
 
 Covariance matrices $\Sigma_i$ must remain positive-definite throughout optimization. We enforce this through Cholesky parametrization:
 \begin{equation}
-\Sigma_i = L_i L_i^\top
+\Sigma_i = L_i L_i^\top,
 \end{equation}
 
 where $L_i$ is lower triangular with positive diagonal entries. Gradients are computed with respect to $L_i$ rather than $\Sigma_i$ directly, ensuring the positive-definite constraint is automatically satisfied. This approach proved essential for numerical stability in our implementations.
