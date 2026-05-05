@@ -276,6 +276,7 @@ For Gaussian distributions with $G = \mathrm{GL}(K)$ (or any subgroup such as $\
 and analogously for $\rho_{\mathrm{model}}$ acting on the model-parameter fiber. This ensures that changing reference frame transforms probability distributions consistently. When $g \in \mathrm{SO}(N)$, this reduces to rotation; for general $g \in \mathrm{GL}(K)$, it includes scaling, shearing, and reflection. The associated bundles $\mathcal{E}_{\mathrm{state}}$ and $\mathcal{E}_{\mathrm{model}}$ are fiber bundles over $\mathcal{C}$ with fibers isomorphic to $\mathcal{B}_{\mathrm{state}}$ and $\mathcal{B}_{\mathrm{model}}$ respectively, and the four agent fields $(q_i, p_i)$ and $(s_i, r_i)$ are sections of these two bundles, with the prior and hyper-prior derived from the meta-scale via Eq.~\eqref{eq:cross_scale_shadow}.
 
 \subsection{Agents as Smooth Sections}
+\label{sec:agent_definition}
 
 We can now define agents precisely as smooth sections of these associated bundles.
 
@@ -359,12 +360,12 @@ The construction of meta-agent beliefs from constituent beliefs requires careful
 The flip side of consensus formation is epistemic collapse - the pathological limit where agents become informationally indistinguishable, eliminating the diversity necessary for meaningful information exchange.
 
 \begin{definition}[Epistemic Death]
-A set of agents $\{i, j, \ldots\}$ is epistemically dead if their beliefs and priors are completely aligned under gauge transport:
+A set of agents $\{i, j, \ldots\}$ is epistemically dead if their beliefs and generative models are completely aligned under gauge transport on both timescale channels:
 \begin{align}
 \mathrm{KL}(q_i(c) \| \Omega_{ij}[q_j](c)) &= 0 \\
-\mathrm{KL}(p_i(c) \| \tilde{\Omega}_{ij}[p_j](c)) &= 0
+\mathrm{KL}(s_i(c) \| \tilde{\Omega}_{ij}[s_j](c)) &= 0
 \end{align}
-for all $c \in \mathcal{U}_i \cap \mathcal{U}_j$ and all pairs $(i,j)$.
+for all $c \in \mathcal{U}_i \cap \mathcal{U}_j$ and all pairs $(i,j)$. The two conditions correspond, respectively, to the vanishing of the fast-channel coupling term $\beta_{ij}\mathrm{KL}(q_i \| \Omega_{ij}q_j)$ and the slow-channel coupling term $\gamma_{ij}\mathrm{KL}(s_i \| \tilde{\Omega}_{ij}s_j)$ in the canonical free energy. Alignment of priors $p_i$ and hyper-priors $r_i$ follows as a corollary: by the cross-scale shadow relation~\eqref{eq:cross_scale_shadow}, $p_i^{(s)}$ and $r_i^{(s)}$ are determined by the meta-agent's belief and generative model at scale $s+1$, so once the constituent beliefs and models collapse to common values up to gauge transport, the priors and hyper-priors are forced to match likewise.
 \end{definition}
 
 \begin{remark}
@@ -372,7 +373,7 @@ Epistemic death represents complete informational consensus, not geometric ident
 
 In this state, no information gradients exist between agents, eliminating the driving force for learning or evolution. The free energy functional achieves a minimum with respect to inter-agent coupling terms. This is the informational analog of thermal equilibrium: maximum entropy configuration given constraints, with no further evolution possible.
 
-epistemic death is gauge-invariant. If all agents simultaneously undergo gauge transformation $\phi_i \mapsto \phi_i + \xi(c)$, the condition remains satisfied. This distinguishes epistemic death (informational equilibrium) from naive coordinate singularities (gauge-dependent artifacts).
+Epistemic death is gauge-invariant. Under the simultaneous group-level transformation $U_i \mapsto U_i g$ for all agents (Section~\ref{sec:transport}), both KL conditions are preserved because $q_i$ and $\Omega_{ij}[q_j]$ transform identically (and likewise $s_i$ and $\tilde{\Omega}_{ij}[s_j]$ on the model fiber), so each KL is invariant. The Lie-algebra additive shorthand $\phi_i \mapsto \phi_i + \xi(c)$ realises this for abelian gauge groups or commuting $\xi$, with the full non-abelian invariance captured at the group level. This distinguishes epistemic death (informational equilibrium) from naive coordinate singularities (gauge-dependent artifacts).
 \end{remark}
 
 
@@ -2050,7 +2051,7 @@ F_{\text{total}} = \sum_i \left[ \lambda_{\text{self}} F_{\text{self}}^{(i)} + \
 
 where $F_{\text{self}}^{(i)} = \mathrm{KL}(q_i \| p_i)$ measures intrinsic energy, $F_{\text{belief}}^{(i)}$ measures lateral alignment with neighbors, $F_{\text{prior}}^{(i)}$ measures vertical alignment with parent meta-agents, and $F_{\text{obs}}^{(i)}$ measures fit to external observations. With all energy weights set to unity ($\lambda_{\text{self}} = \lambda_{\text{belief}} = \lambda_{\text{prior}} = \lambda_{\text{obs}} = 1.0$), the system balances individual identity, social coordination, hierarchical integration, and empirical grounding without imposed bias.
 
-Every 2 steps, the system checked for epistemic consensus by computing gauge-invariant KL divergences $\mathrm{KL}(q_i \| \Omega_{ij}[q_j])$ and $\mathrm{KL}(p_i \| \Omega_{ij}[p_j])$ between all agents at each scale, where $\Omega_{ij}$ is the gauge transport operator of~\eqref{eq:transport_def}. When a cluster of agents achieved both belief consensus ($\mathrm{KL}(q_i \| \Omega_{ij}[q_j]) < \tau_{\mathrm{KL}} = 0.05$) and model consensus ($\mathrm{KL}(p_i \| \Omega_{ij}[p_j]) < \tau_{\mathrm{KL}}$), they underwent \textit{epistemic death} and condensed into a meta-agent at the next scale, which inherited a Gaussian prior synthesized from the cluster's belief distribution. This gauge-invariant consensus detection ensures that agents are truly aligned in their intrinsic beliefs, not merely appearing similar due to different gauge choices.
+Every 2 steps, the system checked for epistemic consensus by computing gauge-invariant KL divergences $\mathrm{KL}(q_i \| \Omega_{ij}[q_j])$ and $\mathrm{KL}(p_i \| \Omega_{ij}[p_j])$ between all agents at each scale, where $\Omega_{ij}$ is the gauge transport operator of~\eqref{eq:transport_def}. The slow subsystem $(s_i, r_i)$ is frozen in this simulation (Section~\ref{sec:agent_definition}), so the formal model-channel condition $\mathrm{KL}(s_i \| \tilde{\Omega}_{ij}[s_j]) = 0$ from the Epistemic Death definition is replaced by the operational single-scale proxy $\mathrm{KL}(p_i \| \Omega_{ij}[p_j]) < \tau_{\mathrm{KL}}$ on the dynamic prior field. When a cluster of agents achieved both belief consensus ($\mathrm{KL}(q_i \| \Omega_{ij}[q_j]) < \tau_{\mathrm{KL}} = 0.05$) and prior consensus ($\mathrm{KL}(p_i \| \Omega_{ij}[p_j]) < \tau_{\mathrm{KL}}$), they were treated as having undergone \textit{epistemic death} (in the operational sense above) and condensed into a meta-agent at the next scale, which inherited a Gaussian prior synthesized from the cluster's belief distribution. This gauge-invariant consensus detection ensures that agents are truly aligned in their intrinsic beliefs, not merely appearing similar due to different gauge choices.
 
 The Ouroboros Tower mechanism propagated priors down from ancestors up to 5 scales higher, weighted by exponential decay $\gamma^{\Delta\zeta}$ where $\Delta\zeta$ is the scale distance. This implements multi-level self-reference, allowing agents to be influenced by the emergent structure of the hierarchy itself.
 
