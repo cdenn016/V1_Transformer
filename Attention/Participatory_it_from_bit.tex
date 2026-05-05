@@ -338,9 +338,9 @@ When agents achieve sufficient alignment in their beliefs and models over shared
 \begin{definition}[Perfect Consensus]
 Agents $\{i, j, \ldots\} \subseteq \mathcal{I}$ are in perfect consensus over region $\mathcal{R} \subseteq \bigcap_k \mathcal{U}_k$ if, after gauge transport to a common frame:
 \begin{equation}
-\Omega_{ij}[q_j](c) = q_i(c), \quad \Omega_{ij}[p_j](c) = p_i(c), \quad \tilde{\Omega}_{ij}[s_j](c) = s_i(c) \quad \forall c \in \mathcal{R},
+\Omega_{ij}[q_j](c) = q_i(c), \quad \tilde{\Omega}_{ij}[s_j](c) = s_i(c) \quad \forall c \in \mathcal{R},
 \end{equation}
-where $\Omega_{ij}$ is the gauge transport operator connecting their frames (see~\eqref{eq:transport_def}) and $\tilde{\Omega}_{ij}$ is the corresponding transport on the model fiber. Agreement of the per-agent hyper-priors $r_i$ is not required for consensus, since $r_i$ is fixed and shared structurally.
+where $\Omega_{ij}$ is the gauge transport operator connecting their frames on the state fiber (see~\eqref{eq:transport_def}) and $\tilde{\Omega}_{ij}$ is the corresponding transport on the model fiber. Alignment of the cross-scale shadows $p_i, r_i$ follows automatically from belief and model consensus at the meta-scale via Eq.~\eqref{eq:cross_scale_shadow} and is not an independent condition.
 \end{definition}
 
 The gauge transport $\Omega_{ij}$ is essential here. Agents may describe the same beliefs using different internal coordinates (gauge frames), just as physicists in different laboratories describe the same spin state using rotated basis vectors. Perfect consensus means that after accounting for these frame differences through transport operations, the agents hold identical probabilistic beliefs and models about the shared region. They have achieved informational alignment despite maintaining distinct perspectives.
@@ -491,7 +491,7 @@ We restrict attention to five simplifications. Beliefs and priors share the late
 
 These choices are motivated by computational feasibility (closed-form KL divergences, efficient $\mathrm{SO}(3)$ operations), analytical tractability (known curvature properties of Gaussian manifolds), physical interpretability ($\mathrm{SO}(3)$ familiar from spatial rotations), and proof-of-concept scope (demonstrating emergence without maximum complexity). What is preserved includes gauge covariance with non-trivial transport operators, information-geometric dynamics via Fisher metrics, multi-scale hierarchical emergence, curved statistical manifolds (Gaussian manifolds have negative curvature), and non-commutative gauge group structure. What is sacrificed includes path-dependent parallel transport (holonomy effects), non-Gaussian belief structures (multimodal distributions), heterogeneous agent types (beliefs and priors in different manifolds), curved base manifold geometry, and strong gauge field curvature $F_{\mu\nu}$. We discuss each simplification in detail below.
 
-\subsubsection{Matched Belief and Prior Bundles}
+\subsubsection{Matched Bundles on the Two-Manifold Structure}
 
 By construction (Eq.~\eqref{eq:cross_scale_shadow}), beliefs and priors share the latent-state manifold $\mathcal{B}_{\mathrm{state}} =: \mathcal{B}$ and the latent-state representation $\rho_{\mathrm{state}} =: \rho$, with a single associated bundle $\mathcal{E}_{\mathrm{state}} =: \mathcal{E}$. Generative models and hyper-priors analogously share $\mathcal{B}_{\mathrm{model}}$ and $\mathcal{E}_{\mathrm{model}}$; in this section we set the slow subsystem aside and write only $(q_i, p_i)$ on $\mathcal{E}$. Each agent $i$ is now represented by a single section $\sigma^i: \mathcal{U}_i \to \mathcal{E}$ carrying both belief and prior as fiber coordinates: $\sigma^i(c) = (q_i(c), p_i(c)) \in \mathcal{B} \times \mathcal{B}$.
 
@@ -802,7 +802,7 @@ The gauge covariance property is preserved on arbitrary base manifolds: under th
 
 \subsubsection{Base Priors and the Full Generative Model}
 
-Each agent has independent Gaussian priors encoding its expectations: a belief prior $p_i(k_i; c) = \mathcal{N}(k_i; \mu_{0,i}^{(q)}(c), \Sigma_{0,i}^{(q)}(c))$ regularising the latent state $k_i$, and a model hyper-prior $r_i(m_i; c) = \mathcal{N}(m_i; \mu_{0,i}^{(s)}(c), \Sigma_{0,i}^{(s)}(c))$ regularising the generative-model parameters $m_i$. These are local fields living in each agent's own gauge frame. Different agents can have completely different priors reflecting different inductive biases, training histories, or evolutionary backgrounds. 
+Each agent's prior $p_i$ and hyper-prior $r_i$ are realised as cross-scale shadows of the meta-agent's belief and generative model via Eq.~\eqref{eq:cross_scale_shadow}. At intermediate scales they are not independent learned objects: $p_i^{(s)}(k_i; c) = \mathcal{N}(k_i; \mu_{0,i}^{(q)}(c), \Sigma_{0,i}^{(q)}(c))$ regularises the latent state $k_i$ with the parameters determined by $\Omega_{i,I}[q_I^{(s+1)}]$, and $r_i^{(s)}(m_i; c) = \mathcal{N}(m_i; \mu_{0,i}^{(s)}(c), \Sigma_{0,i}^{(s)}(c))$ regularises the generative-model parameters $m_i$ with parameters determined by $\tilde\Omega_{i,I}[s_I^{(s+1)}]$. Different agents inherit different prior parameters not from independent inductive biases but from different transport operators $\Omega_{i,I}$ and from the spatial profile of the meta-agent's belief field. At the top scale $r_i^{(s_{\max})}$ reduces to a fixed boundary condition encoding evolutionary or training-time defaults, and in the working framework with the slow subsystem frozen the per-token PriorBank role of $p_i$ in the transformer limit is local to each agent without violating the shadow relation.
 
 The full generative model at each point $c$ combines the single-agent free energy~\cite{Friston2010,Parr2022} with the mixture-of-sources alignment derived above. The belief channel posits that agent $i$'s latent state was generated by one of its neighbors according to the mixture model~\eqref{eq:mixture_joint}; the model channel has an identical structure with coupling weights $\gamma_{ij}(c)$ replacing $\beta_{ij}(c)$ and model-fiber transport $\tilde{\Omega}_{ij}(c)$ replacing belief-fiber transport $\Omega_{ij}(c)$.
 
@@ -920,7 +920,7 @@ The attention field $\beta_{ij}(c)$ is not a hand-crafted kernel but emerges fro
 
 \subsubsection{Interpretation of Each Term}
 
-The self-consistency term $\sum_i \int \chi_i(c)  \mathrm{KL}(q_i \| p_i)  dc$ encodes that each agent pays an energetic cost for beliefs deviating from priors. This enforces internal coherence: beliefs should align with the agent's prior expectations, which are themselves fixed by the slow-subsystem generative model $s_i$ acting through the prior $p_i$. An agent maintaining beliefs wildly inconsistent with its prior expectations accumulates high free energy, driving belief updates toward internal consistency.
+The self-consistency term $\sum_i \int \chi_i(c)  \mathrm{KL}(q_i \| p_i)  dc$ encodes that each agent pays an energetic cost for beliefs deviating from priors. This enforces internal coherence: beliefs align with the prior $p_i^{(s)}$, which is the meta-agent's belief $q_I^{(s+1)}$ transported into agent $i$'s frame via Eq.~\eqref{eq:cross_scale_shadow}. The agent's own generative model $s_i$ is regulated separately by its hyper-prior $r_i$ on the model fiber through the parallel term $\mathrm{KL}(s_i\|r_i)$; $s_i$ does not act through $p_i$ at the same scale. An agent maintaining beliefs wildly inconsistent with its prior expectations accumulates high free energy, driving belief updates toward internal consistency with the meta-agent's collective belief.
 
 The belief alignment term $\sum_{ij} \int \chi_{ij}(c)  \beta_{ij}(c)  \mathrm{KL}(q_i \| \Omega_{ij}[q_j])  dc$ captures that on overlapping regions, agents pay costs for disagreeing about beliefs after accounting for frame differences. The weight $\beta_{ij}(c)$ allocates attention dynamically - it is higher when $\mathrm{KL}(q_i \| \Omega_{ij}[q_j])$ is small, meaning agents already nearly agree. This creates a positive feedback loop: agreement increases attention, which further increases agreement, driving consensus formation.
 
@@ -1086,7 +1086,7 @@ Gradient descent on frames follows $\partial \phi_i/\partial \tau = -\eta_\phi  
 
 \subsubsection{Timescale Hierarchy and Adiabatic Approximation}
 
-The timescale separation enables an adiabatic approximation with characteristic ratio $\eta_q : \eta_p : \eta_\phi \sim 1 : \epsilon : \epsilon^2$ where $\epsilon \ll 1$. At the fastest timescale $\tau_q$, beliefs $q_i$ equilibrate while priors $p_i$ and frames $\phi_i$ remain effectively frozen. On the intermediate timescale $\tau_p \sim \epsilon^{-1} \tau_q$, priors $p_i$ adapt while averaging over fast belief fluctuations, with frames slowly evolving. On the slowest timescale $\tau_\phi \sim \epsilon^{-2} \tau_q$, frames $\phi_i$ evolve while averaging over both belief and prior fluctuations.
+The timescale separation enables an adiabatic approximation with characteristic ratio $\eta_q : \eta_s : \eta_\phi \sim 1 : \epsilon : \epsilon^2$ where $\epsilon \ll 1$ and the canonical slow primitive is the generative model $s$. At the fastest timescale $\tau_q$, beliefs $q_i$ equilibrate while models $s_i$ and frames $\phi_i$ remain effectively frozen. On the intermediate timescale $\tau_s \sim \epsilon^{-1} \tau_q$, generative models $s_i$ adapt while averaging over fast belief fluctuations, with frames slowly evolving. On the slowest timescale $\tau_\phi \sim \epsilon^{-2} \tau_q$, frames $\phi_i$ evolve while averaging over both belief and model fluctuations. The priors $p_i$ and hyper-priors $r_i$ inherit their effective timescales from the parent meta-agent's $q_I^{(s+1)}$ and $s_I^{(s+1)}$ via the cross-scale shadow relation, so they do not have independent timescales of their own.
 
 This is formally analogous to the Born-Oppenheimer approximation in molecular physics, which separates electronic from nuclear motion~\cite{Born1927}, or to center manifold theory in dynamical systems~\cite{Carr1981} where fast modes are slaved to slow variables. The separation enables systematic perturbative treatment where higher-order corrections are suppressed by powers of $\epsilon$.
 
@@ -1284,7 +1284,7 @@ The effective mass of agent $i$ in the mean sector is:
 M_i = \underbrace{\bar{\Lambda}_{p_i}}_{\text{bare mass}} + \underbrace{\sum_k \beta_{ik}\tilde{\Lambda}_{q_k}}_{\text{incoming relational}} + \underbrace{\sum_j \beta_{ji}\Lambda_{q_i}}_{\text{outgoing recoil}} + \underbrace{\Lambda_{o_i}}_{\text{sensory}}.
 \label{eq:effective_mass}
 \end{equation}
-The bare mass $\bar{\Lambda}_{p_i}$ provides inertia against deviation from the prior world-model. The incoming relational mass captures inertia from being pulled by neighbors. The outgoing relational mass represents inertia from pulling neighbors (recoil). The sensory mass grounds the agent in observations.
+The bare mass $\bar{\Lambda}_{p_i}$ provides inertia against deviation from the cross-scale prior shadow (the actual world-model lives in the slow-channel pair $(s_i, r_i)$). The incoming relational mass captures inertia from being pulled by neighbors. The outgoing relational mass represents inertia from pulling neighbors (recoil). The sensory mass grounds the agent in observations.
 
 A macroscopic object maintains extraordinarily precise self-localization: $\bar{\Sigma}_{\mathrm{rock}} \approx \ell_P^2 I$ yields a large effective mass $M_{\mathrm{rock}} \sim \ell_P^{-2}$ in the Newtonian-analogy reading of Section~\ref{sec:mass}. Rocks are certain, thus exhibit large second-variation rigidity, thus are hard to move under the dynamics. Conversely, a quantum particle in spatial superposition has larger position uncertainty, lower precision, and a smaller effective mass.
 
@@ -1317,9 +1317,9 @@ Wheeler's participatory universe~\cite{Wheeler1983} envisions reality as co-cons
 
 \subsection{Hierarchical Scale Structure}
 
-We organize agents into a hierarchical structure indexed by scale level $s \in \mathbb{N}$. Scale-0 comprises base agents $\{\sigma_i^{(0)}\}$ with their own beliefs, priors, and gauge frames. When clusters of scale-0 agents achieve sufficient coherence, they form scale-1 meta-agents $\{\sigma_I^{(1)}\}$. These meta-agents can themselves cluster to form scale-2 meta-meta-agents $\{\sigma_J^{(2)}\}$, continuing upward to form a hierarchical tower: individuals (scale-0) form groups (scale-1), groups form communities (scale-2), communities form societies (scale-3), potentially extending to civilizational scales (scale-4) and beyond.
+We organize agents into a hierarchical structure indexed by scale level $s \in \mathbb{N}$. Scale-0 comprises base agents $\{\sigma_i^{(0)}\}$ with their own beliefs, generative models, and gauge frames (priors and hyper-priors derived as cross-scale shadows from scale-1 above where applicable). When clusters of scale-0 agents achieve sufficient coherence, they form scale-1 meta-agents $\{\sigma_I^{(1)}\}$. These meta-agents can themselves cluster to form scale-2 meta-meta-agents $\{\sigma_J^{(2)}\}$, continuing upward to form a hierarchical tower: individuals (scale-0) form groups (scale-1), groups form communities (scale-2), communities form societies (scale-3), potentially extending to civilizational scales (scale-4) and beyond.
 
-each scale-$s$ agent is itself a full section $\sigma_I^{(s)}: \mathcal{C} \to E$ carrying beliefs $q_I^{(s)}$, priors $p_I^{(s)}$, and gauge frames $\phi_I^{(s)}$. Meta-agents are not mere abstractions or statistical summaries but rather autonomous agents with their own informational structure, capable of updating beliefs and influencing other agents through the same variational dynamics that govern base agents. This ontological equality between scales is essential: meta-agents are as "real" as their constituents, not epiphenomenal descriptions.
+Each scale-$s$ agent is itself a full section $\sigma_I^{(s)}$ carrying primitive beliefs $q_I^{(s)}$ and primitive generative models $s_I^{(s)}$ together with the gauge frame $\phi_I^{(s)}$, with derived priors $p_I^{(s)}$ and hyper-priors $r_I^{(s)}$ realized as cross-scale shadows of the level-$(s{+}1)$ meta-agent's primitives via Eq.~\eqref{eq:cross_scale_shadow} (Section~\ref{sec:agent_definition}). Meta-agents are not mere abstractions or statistical summaries but rather autonomous agents with their own informational structure, capable of updating beliefs and influencing other agents through the same variational dynamics that govern base agents. This ontological equality between scales is essential: meta-agents are as "real" as their constituents, not epiphenomenal descriptions.
 
 To prevent computational intractability, we impose a hard cap on hierarchical depth with $s \leq s_{\max}$. We set $s_{\max} = 25$. Beyond this cap, the participatory dynamics remain active but no new scales form. This practical limitation does not reflect theoretical principle but computational constraint.
 
@@ -1336,7 +1336,7 @@ Model coherence similarly measures alignment of generative models through $C_{\m
 
 The consensus score combines these factors multiplicatively as $\Gamma(\{i\}, x) = C_{\mathrm{belief}} \cdot C_{\mathrm{model}} \cdot P(\{i\}, x)$. A meta-agent forms when both $\Gamma(\{i\}, x) > \Gamma_{\min}$ (sufficient consensus) and $|\{i\}| \geq N_{\min}$ (sufficient cluster size). We use $\Gamma_{\min} = 0.5$ and $N_{\min} = 2$ in our simulations. These are ad-hoc thresholds chosen for computational convenience; the theoretical framework does not prescribe specific values. Lower thresholds produce more meta-agents from weaker coherence, higher thresholds require stronger consensus before formation occurs.
 
-In a more principled implementation, meta-agent formation would be governed directly by free energy gradients: a potential meta-agent emerges when the free energy $\mathcal{F}[\{q_i\}, \{p_i\}]$ of separate constituents exceeds the free energy $\mathcal{F}[q_I, p_I]$ of the unified meta-agent by more than the entropic cost of maintaining the additional organizational structure. This would produce continuous, smooth emergence rather than discrete threshold-crossing events. Our discrete approach approximates this continuous process for computational tractability.
+In a more principled implementation, meta-agent formation would be governed directly by free energy gradients: a potential meta-agent emerges when the free energy $\mathcal{F}[\{q_i\}, \{p_i\}, \{s_i\}, \{r_i\}]$ of separate constituents exceeds the free energy $\mathcal{F}[q_I, p_I, s_I, r_I]$ of the unified meta-agent by more than the entropic cost of maintaining the additional organizational structure. This would produce continuous, smooth emergence rather than discrete threshold-crossing events. Our discrete approach approximates this continuous process for computational tractability.
 
 \subsubsection{Gauge-Covariant Belief Construction}
 
@@ -1359,14 +1359,14 @@ The meta-agent's gauge frame is constructed similarly as a weighted average of c
 
 The formation of meta-agents can be understood through an analogy with renormalization group (RG) transformations from statistical physics~\cite{Wilson1971,Cardy1996}, although the present construction is RG-inspired rather than a literal RG analysis: we do not exhibit a $\beta$-function, locate fixed points, or demonstrate scale invariance beyond the parametric form, and the analogy is structural rather than computational. In standard RG procedures, microscopic degrees of freedom are coarse-grained into effective macroscopic variables, often by integrating out fast fluctuations or spatially averaging over blocks. Our framework implements a structurally analogous transformation, but in information space rather than physical space.
 
-The RG transformation proceeds through a systematic sequence of operations at each scale transition $s \to s+1$. Coarse-graining identifies coherent clusters through the consensus detection algorithm described above. Averaging constructs meta-agent states via gauge-covariant weighted averaging over constituent beliefs and priors. Renormalization updates coupling constants, with belief alignment strengths transforming as $\beta_{IJ}^{(s+1)} = f_\beta(\{\beta_{ij}^{(s)}\})$ and model alignment strengths as $\gamma_{IJ}^{(s+1)} = f_\gamma(\{\gamma_{ij}^{(s)}\})$ where the functions $f_\beta$ and $f_\gamma$ depend on how informational coupling aggregates across scales. Iteration repeats the process at the next scale until reaching $s = s_{\max}$ or until no new meta-agents form due to insufficient coherence.
+The RG transformation proceeds through a systematic sequence of operations at each scale transition $s \to s+1$. Coarse-graining identifies coherent clusters through the consensus detection algorithm described above. Averaging constructs meta-agent states via gauge-covariant weighted averaging over the constituent primitives (beliefs $q_i$ on the state fiber and generative models $s_i$ on the model fiber); the meta-agent's priors and hyper-priors are then determined at the next level up by Eq.~\eqref{eq:cross_scale_shadow}. Renormalization updates coupling constants, with belief alignment strengths transforming as $\beta_{IJ}^{(s+1)} = f_\beta(\{\beta_{ij}^{(s)}\})$ and model alignment strengths as $\gamma_{IJ}^{(s+1)} = f_\gamma(\{\gamma_{ij}^{(s)}\})$ where the functions $f_\beta$ and $f_\gamma$ depend on how informational coupling aggregates across scales. Iteration repeats the process at the next scale until reaching $s = s_{\max}$ or until no new meta-agents form due to insufficient coherence.
 
-The key distinction from spatial RG is that we coarse-grain over belief coherence rather than physical proximity. Agents separated spatially can form a meta-agent if their beliefs align, while spatially adjacent agents with divergent beliefs remain distinct. This makes our RG transformation information-theoretic rather than geometric. Emergent entities are not spatial averages but autonomous information-processing agents with their own beliefs, priors, and gauge frames. This distinction matters because spatial coarse-graining is mechanical and passive, while informational coarse-graining is dynamical and agent-dependent.
+The key distinction from spatial RG is that we coarse-grain over belief coherence rather than physical proximity. Agents separated spatially can form a meta-agent if their beliefs align, while spatially adjacent agents with divergent beliefs remain distinct. This makes our RG transformation information-theoretic rather than geometric. Emergent entities are not spatial averages but autonomous information-processing agents with their own beliefs, generative models, and gauge frames (and the priors and hyper-priors that follow as cross-scale shadows). This distinction matters because spatial coarse-graining is mechanical and passive, while informational coarse-graining is dynamical and agent-dependent.
 
 The free energy at scale $(s+1)$ has the same functional form as at scale $s$
 
 \begin{equation}
-S^{(s+1)}[\{q_I^{(s+1)}\}, \{p_I^{(s+1)}\}] = \sum_I \int \mathrm{KL}(q_I^{(s+1)} \| p_I^{(s+1)}) + \sum_{IJ} \beta_{IJ}^{(s+1)} \mathrm{KL}(q_I \| \Omega_{IJ}[q_J]) + \cdots.
+S^{(s+1)}[\{q_I^{(s+1)}\}, \{p_I^{(s+1)}\}, \{s_I^{(s+1)}\}, \{r_I^{(s+1)}\}] = \sum_I \int \big[\mathrm{KL}(q_I \| p_I) + \lambda_h\mathrm{KL}(s_I \| r_I)\big] + \sum_{IJ} \big[\beta_{IJ}^{(s+1)} \mathrm{KL}(q_I \| \Omega_{IJ}[q_J]) + \gamma_{IJ}^{(s+1)} \mathrm{KL}(s_I \| \tilde\Omega_{IJ}[s_J])\big] + \cdots.
 \end{equation}
 
 This scale invariance of the functional form suggests the framework may exhibit critical phenomena, fixed points, or universal behavior analogous to phase transitions in statistical mechanics~\cite{Wilson1974}. The investigation of RG fixed points and critical exponents in this information-theoretic setting constitutes an important direction for future work we are currently engaged in.
@@ -1391,7 +1391,7 @@ These are hallmarks of genuine emergence in complex systems such that the whole 
 
 Meta-agents at scale $(s+1)$ evolve more slowly than their constituent agents at scale $s$. This creates a hierarchy of characteristic timescales:
 \begin{equation}
-\tau_{\text{belief}}^{(0)} < \tau_{\text{prior}}^{(0)} < \tau_{\text{belief}}^{(1)} < \tau_{\text{prior}}^{(1)} < \tau_{\text{belief}}^{(2)} < \cdots.
+\tau_{\text{belief}}^{(0)} < \tau_{\text{model}}^{(0)} < \tau_{\text{belief}}^{(1)} < \tau_{\text{model}}^{(1)} < \tau_{\text{belief}}^{(2)} < \cdots.
 \end{equation}
 
 The slowing occurs for three interconnected reasons. First, meta-agents integrate over constituent beliefs, smoothing out fast fluctuations through spatial and informational averaging. Just as averaging many noisy measurements reduces variance, averaging many rapidly fluctuating beliefs produces slowly varying collective states. Second, changing meta-agent state requires changing multiple constituent agents coherently, introducing consensus energy barriers that resist rapid updates. A single agent can update its belief instantaneously, but coordinated updates across many agents take time to propagate. Third, larger effective "mass" measured by accumulated Fisher information resists rapid updates through increased informational inertia. Meta-agents with high collective Fisher information resist belief changes just as massive physical objects resist velocity changes.
@@ -1412,23 +1412,26 @@ r_i^{(s)}(x) = \tilde\Omega_{i,I}\big[s_I^{(s+1)}\big](x),
 
 where $\Omega_{i,I}$ acts on the latent-state fiber $\mathcal{B}_{\mathrm{state}}$ and $\tilde\Omega_{i,I}$ on the model-parameter fiber $\mathcal{B}_{\mathrm{model}}$, both written as products of gauge-frame exponentials in the canonical form $U_i U_I^{-1}$ with $U = \exp(\phi)$ (Section~\ref{sec:transport}). The meta-agent's collective belief, formed through bottom-up aggregation from constituent statistics, directly becomes the updated expectation (prior) for individual agents, and the meta-agent's collective generative model becomes the constituent's hyper-prior; this creates a feedback loop in which constituents inform meta-agents through their beliefs and models while meta-agents shape constituent expectations through prior and hyper-prior propagation. Equation~\eqref{eq:topdown_priors} is the formal content of the cross-scale shadow relation~\eqref{eq:cross_scale_shadow} introduced in Section~\ref{sec:statistical_manifolds}: the prior $p_i^{(s)}$ and hyper-prior $r_i^{(s)}$ at scale $s$ are not independent dynamical fields but are determined by the meta-agent at scale $s+1$, and the apparent four-field hierarchy $r \to s \to p \to q$ is in fact two primitive fields $(q, s)$ at each scale connected by cross-scale transport.
 
-\textbf{Ouroboros Tower Extension:} Optionally, constituents can receive priors from multiple ancestral scales simultaneously, not just their immediate parent: a form of epigenetic information transfer. In this non-Markovian extension, agent $i$ at scale $s$ maintains hyperpriors from all ancestors
-
+\textbf{Ouroboros Tower Extension:} Optionally, constituents can receive shadows from multiple ancestral scales simultaneously, not just their immediate parent: a form of epigenetic information transfer. In this non-Markovian extension, agent $i$ at scale $s$ inherits state-fiber shadows from each ancestral generation,
 \begin{align}
 p_i^{(s)} &\leftarrow \Omega_{i,I_1}[q_{I_1}^{(s+1)}] \quad \text{(parent)} \\
 h_i^{(s,0)} &\leftarrow \Omega_{i,I_2}[q_{I_2}^{(s+2)}] \quad \text{(grandparent)} \\
-h_i^{(s,1)} &\leftarrow \Omega_{i,I_3}[q_{I_3}^{(s+3)}] \quad \text{(great-grandparent)}.
+h_i^{(s,1)} &\leftarrow \Omega_{i,I_3}[q_{I_3}^{(s+3)}] \quad \text{(great-grandparent)},
 \end{align}
+and parallel model-fiber shadows obtained by replacing $(\Omega, q)$ with $(\tilde\Omega, s)$,
+\begin{align}
+r_i^{(s)} &\leftarrow \tilde\Omega_{i,I_1}[s_{I_1}^{(s+1)}] \quad \text{(parent)} \\
+\tilde h_i^{(s,0)} &\leftarrow \tilde\Omega_{i,I_2}[s_{I_2}^{(s+2)}] \quad \text{(grandparent)} \\
+\tilde h_i^{(s,1)} &\leftarrow \tilde\Omega_{i,I_3}[s_{I_3}^{(s+3)}] \quad \text{(great-grandparent)}.
+\end{align}
+This creates information flow from ALL ancestral scales on both fibers, with hyper-priors and their multi-generation analogues stored as additional fields that can be incorporated into the free energy functional with exponentially decaying weights $\lambda_k = \lambda_0 \cdot \rho^k$ where $k$ is the generational distance.
 
-This creates information flow from ALL ancestral scales, with hyperpriors stored as additional fields that can be incorporated into the free energy functional with exponentially decaying weights $\lambda_k = \lambda_0 \cdot \rho^k$ where $k$ is the generational distance.
-
-\textbf{Self-Referential Closure:} For agents at the top of the hierarchy (no parent meta-agent), priors are formed by observing the entire system state. Top-scale agent $i$ computes its prior as a coherence-weighted average of all active agents across all scales
-
-\begin{equation}
-p_i^{(\text{top})}(x) = \sum_{j \in \text{all scales}} w_j(x)  \Omega_{i,j}[q_j](x),
-\end{equation}
-
-where weights $w_j \propto \exp(-\overline{\mathrm{KL}}_j)$ favor agents that are coherent with the collective. This creates Wheeler's "self-excited circuit".  The system observes itself, forms collective priors, which flow down the hierarchy to shape individual beliefs, whose evolution changes the collective state, which the top re-observes representing a genuinely participatory, self-organizing dynamic.
+\textbf{Self-Referential Closure:} For agents at the top of the hierarchy (no parent meta-agent), the cross-scale shadows fold back across the entire active hierarchy. Top-scale agent $i$ closes both channels by coherence-weighted averaging over all active agents and scales,
+\begin{align}
+p_i^{(\text{top})}(x) &= \sum_{j \in \text{all scales}} w_j(x)  \Omega_{i,j}[q_j](x), \\
+r_i^{(\text{top})}(x) &= \sum_{j \in \text{all scales}} w_j(x)  \tilde\Omega_{i,j}[s_j](x),
+\end{align}
+where weights $w_j \propto \exp(-\overline{\mathrm{KL}}_j)$ favor agents that are coherent with the collective. The frozen-at-init top-scale hyper-prior of Section~\ref{sec:statistical_manifolds} is the special case in which $r_i^{(\text{top})}$ is held at its initial value rather than recomputed from the active hierarchy. This creates Wheeler's "self-excited circuit".  The system observes itself, forms collective priors, which flow down the hierarchy to shape individual beliefs, whose evolution changes the collective state, which the top re-observes representing a genuinely participatory, self-organizing dynamic.
 
 \textbf{Implementation Note:} Our implementation uses direct prior assignment $p_i \leftarrow \Omega_{i,I}[q_I]$ rather than gradual updates, ensuring constituents immediately adopt their meta-agent's collective perspective. This realizes the participatory structure such that neither level is more fundamental and both constitute the system through bidirectional information exchange.
 
@@ -1588,7 +1591,7 @@ The bundle-pullback formulation gives "it from bit" a precise sense: a metric on
 
 The two induced metrics carry qualitatively different interpretations. The belief pullback $G_i^{(q)}$ encodes epistemic geometry. It reflects agent $i$'s current posterior beliefs at each point in the base manifold. This geometry is highly dynamical, changing rapidly as new observations arrive and beliefs update. It encodes where the agent is uncertain, with regions of high belief gradient corresponding to short information distances. This epistemic metric is analogous to the instantaneous state of a system in phase space representing a snapshot of current knowledge that fluctuates on fast timescales.
 
-The prior pullback $G_i^{(p)}$ encodes ontological geometry. It reflects the structure of agent $i$'s prior expectations $p_i$, which are themselves shaped on a slower timescale by the generative model $s_i$. This geometry evolves quasi-statically, changing only as the agent learns and refines its prior. Rather than representing momentary belief states, it captures the agent's long-term expectations about the statistical structure of the environment. This ontological metric is analogous to a potential energy landscape or background geometry that shapes but does not directly constitute the dynamical state.
+The prior pullback $G_i^{(p)}$ encodes ontological geometry. It inherits its variability from the level-$(s{+}1)$ meta-agent's belief field via Eq.~\eqref{eq:cross_scale_shadow}: agents differ in $G_i^{(p)}$ only through their transport operator $\Omega_{i,I}$ and the spatial profile of $p_i$ thereby induced. The slow-channel generative model $s_i$ does not directly shape $p_i$; instead $s_i$ is regulated by its own dual $r_i$ on the model fiber, and $s_i$ enters the prior pullback only indirectly through whatever cross-scale dynamics produced the parent's $q_I^{(s+1)}$. A parallel pair of pullbacks $(G^{(s)}_{i,\mu\nu}, G^{(r)}_{i,\mu\nu})$ on $\mathcal{B}_{\mathrm{model}}$ exists by the same construction; in the working simulations of this paper the slow subsystem is frozen and these reduce to constants. This ontological metric is analogous to a potential energy landscape or background geometry that shapes but does not directly constitute the dynamical state.
 
 We conjecture that the prior-induced metric $G_i^{(p)}$ represents the agent's perceived geometry of reality. What the agent experiences as "spatial distance" or "spatial structure" is the information-geometric distance in its prior $p_i$ (and, indirectly, in the slower-timescale generative model $s_i$ that shapes $p_i$). This has a profound implication: different agents with different priors perceive different geometries on the same underlying noumenal base $\mathcal{C}$. There is no "true" metric on $\mathcal{C}$ independent of agents, only agent-dependent induced metrics arising from their information processing.
 
@@ -1993,7 +1996,10 @@ In our framework, this manifests as variational free energy driving complexity g
 \section{Results}
 \subsection{Meta-agent Emergence Simulations}
 
-We conducted meta-agent emergence experiments using the configuration detailed the repository. The experimental setup was designed to study deep hierarchical emergence across many scales with aggressive consensus dynamics and multi-level hyperprior propagation (a so-called Ouroboros Tower) while tracking energy components.
+We conducted meta-agent emergence experiments using the configuration detailed in the repository. The experimental setup was designed to study deep hierarchical emergence across many scales with aggressive consensus dynamics and multi-level hyper-prior propagation (a so-called Ouroboros Tower) while tracking energy components.
+
+\paragraph{Operational simplifications in the simulation regime.}
+Throughout the simulations of this section, the slow subsystem $(s_i, r_i)$ is frozen with $\gamma_{ij} = 0$, and the dynamic field is the operational pair $(q_i, p_i)$. Several diagnostic quantities below are accordingly the state-fiber operational proxies for what would otherwise be model-channel quantities: the run plots ``prior alignment'' rather than the canonical $\gamma\mathrm{KL}(s_i\|\tilde\Omega_{ij}s_j)$, learning-rate parameters $\eta_{\mu_p}, \eta_{\Sigma_p}$ govern the dynamic prior shadow rather than a primitive prior field, and ``model coherence'' $C_{\mathrm{model}}$ as deployed in clustering reduces to a constant under frozen $s$ (we instead detect clusters through the dynamic prior shadow). The canonical content remains as defined in Section~\ref{sec:agent_definition}: $p_i$ is a cross-scale shadow of the meta-agent's belief and $r_i$ a cross-scale shadow of its generative model, both via Eq.~\eqref{eq:cross_scale_shadow}. The single-scale truncation operationally treats $p_i$ as a primitive boundary condition for the duration of the simulation.
 
 The configuration implements several key design choices:
 
@@ -2004,7 +2010,7 @@ Consensus checks occur every 2 steps enabling rapid hierarchical condensation. T
 The 5-level hyperprior propagation implements Wheeler's "it from bit" concept extended to hierarchical systems. Each agent receives priors not only from its immediate parent meta-agent, but from ancestors up to 5 scales higher, with exponential decay $\gamma = 0.5$ to weight more recent ancestry.
 
 \paragraph{Balanced Energy Landscape.}
-All energy hyper-parameters are set to unity ($\lambda_{\text{self}} = \lambda_{\text{belief}} = \lambda_{\text{prior}} = \lambda_{\text{obs}} = 1.0$), creating an unbiased energy landscape. This allows the system to explore the natural balance between individual identity preservation (self-energy), lateral social coordination (belief alignment), vertical hierarchical integration (prior alignment), and empirical grounding (observation fit). The absence of hierarchical bias enables observation of emergent dynamics without imposed preferences.
+All energy hyper-parameters are set to unity ($\lambda_{\text{self}} = \lambda_{\text{belief}} = \lambda_{\text{prior}} = \lambda_{\text{obs}} = 1.0$), creating an unbiased energy landscape. This allows the system to explore the balance between individual identity preservation (self-energy), lateral social coordination (belief alignment), an operational prior-shadow alignment proxy (the slow subsystem $(s,r)$ is frozen in this run, so the canonical model-channel coupling $\gamma\mathrm{KL}(s_i\|\tilde\Omega s_j)$ is inactive and the visible vertical-integration channel is the dynamic-prior shadow $\mathrm{KL}(p_i\|\Omega p_j)$), and empirical grounding (observation fit). The absence of hierarchical bias enables observation of emergent dynamics without imposed preferences.
 
 \paragraph{Safety Constraints.}
 Early stopping conditions prevent computational runaway: evolution terminates upon reaching either 25 scales or 200 total active agents. These limits ensure tractable computation while allowing sufficient depth to observe multi-scale emergence dynamics.
@@ -2084,7 +2090,7 @@ The system exhibited smooth, monotonic descent of the total free energy function
 \begin{figure}[htbp]
     \centering
     \includegraphics[width=0.95\linewidth]{Fig_5.png}
-    \caption{\textbf{Energy landscape decomposition for scales $\zeta = 0$--3.} Stacked area plots showing the relative contributions of three energy components to the total free energy functional $\mathcal{F}$ at the four lowest hierarchical scales. Red regions indicate the self-term $E_{\text{self}} = \sum_i \int \alpha_i  \mathrm{KL}(q_i \| p_i)  \mathrm{d}x$ measuring belief-prior alignment within individual agents. Teal regions show belief alignment $E_{\text{belief\_align}} = \sum_{i,j} \int \beta_{ij}(x)  \mathrm{KL}(q_i \| \Omega_{ij}[q_j])  \mathrm{d}x$ across agent pairs. Blue regions indicate prior alignment $E_{\text{prior\_align}} = \sum_{i,j} \int \gamma_{ij}(x)  \mathrm{KL}(p_i \| \Omega_{ij}[p_j])  \mathrm{d}x$. During Phase I (steps 0--140), the self-term dominates the smooth descent. During Phase III (steps 160--200), inter-agent coordination terms increase in relative importance, reflecting the emergence of collective dynamics. The black line indicates total energy at each scale.}
+    \caption{\textbf{Energy landscape decomposition for scales $\zeta = 0$--3 (single-seed run, slow subsystem frozen).} Stacked area plots showing the relative contributions of three energy components to the total free energy functional $\mathcal{F}$ at the four lowest hierarchical scales. Red regions indicate the self-term $E_{\text{self}} = \sum_i \int \alpha_i  \mathrm{KL}(q_i \| p_i)  \mathrm{d}x$ measuring belief-prior alignment within individual agents. Teal regions show belief alignment $E_{\text{belief\_align}} = \sum_{i,j} \int \beta_{ij}(x)  \mathrm{KL}(q_i \| \Omega_{ij}[q_j])  \mathrm{d}x$ across agent pairs. Blue regions indicate the operational prior-shadow alignment proxy $E_{\text{prior\_proxy}} = \sum_{i,j} \int \beta^{(p)}_{ij}(x)  \mathrm{KL}(p_i \| \Omega_{ij}[p_j])  \mathrm{d}x$, with $\beta^{(p)}$ a state-fiber coupling distinct from the canonical model-channel weight $\gamma_{ij}$ (the latter couples generative models $s_i$ via $\tilde\Omega_{ij}$ on the model fiber and is inactive in this run because $(s,r)$ are frozen). During Phase I (steps 0--140), the self-term dominates the smooth descent. During Phase III (steps 160--200), inter-agent coordination terms increase in relative importance, reflecting the emergence of collective dynamics. The black line indicates total energy at each scale.}
     \label{fig:energy_landscape}
 \end{figure}
 
@@ -2295,7 +2301,7 @@ We have demonstrated computationally that
 \begin{enumerate}
 \item Meta-agents robustly form from coherent agent clusters
 \item Information flows upward across scales ($\mathcal{I}_{s \to s+1} > 0$)
-\item Meta-agents influence constituent priors ($\Delta p_i > 0$)
+\item Meta-agents propagate belief updates downward via the cross-scale shadow ($\Delta p_i > 0$ tracking $\Delta q_I^{(s+1)}$, with the parallel model-channel shadow $\Delta r_i$ active when the slow subsystem is unfrozen)
 \item The system remains out of equilibrium ($E_{\mathrm{score}} \gg 1$)
 \end{enumerate}
 
@@ -2620,7 +2626,7 @@ R_{\mu\nu\rho\sigma}^{(i)}[g^{(i)}] \propto \text{functions of } \Sigma_{p,i}^{-
 
 Under this identification, the equivalence principle would, if it could be derived, be consistent with the framework: inertial and gravitational mass would share a single origin in prior precision because both would be properties of the agent's experienced geometry, not of some external "true" spacetime. The conditional mood is deliberate. The argument requires (i) that gravitational effects emerge from pullback curvature (not yet shown), (ii) that this curvature couples to $\Sigma_p^{-1}$ rather than to some other functional of the section (an assumption, not a derivation), and (iii) that the scalar mass $m_{\text{eff},i} = \mathrm{tr}([M_{\mu\mu}]_{ii})/K$ used in Newtonian analogies coincides with the gravitational coupling in the same way (also assumed). The equivalence principle is therefore a possible consequence of the framework, not an automatic one.
 
-Before consensus, different agents with different priors $\Sigma_{p,i} \neq \Sigma_{p,j}$ would experience different pullback geometries $g^{(i)}_{\mu\nu} \neq g^{(j)}_{\mu\nu}$ and thus different gravitational fields. Consensus formation via the $\gamma_{ij}$ coupling drives prior alignment, causing the pullback metrics to converge: $g^{(i)}_{\mu\nu} \to g^{(j)}_{\mu\nu}$. Objective spacetime geometry emerges as the shared pullback metric at equilibrium.
+Before consensus, different agents with different priors $\Sigma_{p,i} \neq \Sigma_{p,j}$ would experience different pullback geometries $g^{(i)}_{\mu\nu} \neq g^{(j)}_{\mu\nu}$ and thus different gravitational fields. Consensus formation via the $\gamma_{ij}$ coupling drives generative-model alignment $\mathrm{KL}(s_i\|\tilde\Omega_{ij}s_j) \to 0$, which then forces the priors $p_i$ to align as cross-scale shadows of a common meta-agent belief, causing the pullback metrics to converge: $g^{(i)}_{\mu\nu} \to g^{(j)}_{\mu\nu}$. Objective spacetime geometry emerges as the shared pullback metric at equilibrium.
 
 Demonstrating this rigorously requires computing the induced curvature tensors in the pullback metrics; work that remains to be done. The mathematical structure is consistent with this pathway whereby the agents' experienced geometry is determined by their statistical structures, and $\Sigma_p^{-1}$ sets a characteristic scale. We do not claim the equivalence principle follows as a consequence of the present framework; we claim that no obvious obstruction within the framework prevents its derivation, and that the dependence of both inertial and metric structure on the same prior precision provides a candidate route worth investigating.
 
@@ -2631,7 +2637,7 @@ The biggest challenge is reproducing the Lorentz signature $(-,+,+,+)$ since the
 Objectivity therefore is an emergent aspect of inter-subjective consensus. What we call "universal physical laws," "shared spacetime," and "objective mass" are the gauge-invariant structures that persist at equilibrium when agents minimize their collective free energy.  Incidentally, this mechanism (if true) offers a straightforward explanation of gauge invariance in physics: we must have gauge invariance in order to agree on our observations.
 
 This framework naturally accounts for why human observers largely agree 
-on physical reality. We have evolved similar generative models $s_i$ and, through them, converged on consensus priors $p_i$ via shared sensory channels and cultural transmission. It also explains perceptual variations: altered states (psychedelics, sensory deprivation, meditation, neurological conditions) temporarily shift an individual's priors away from consensus, leading to experiences of modified spacetime structure, altered causal relations, or anomalous physics. These are not pathological "hallucinations" in the sense of perceiving non-existent entities, but rather genuine differences in the pullback geometry experienced by an agent operating with non-consensus priors.
+on physical reality. We have converged on shared generative models $s_i$ via the inter-agent slow-channel coupling $\gamma_{ij}\mathrm{KL}(s_i\|\tilde\Omega_{ij}s_j)$, with priors $p_i$ inheriting consensus structure as cross-scale shadows of the resulting meta-agent's belief. It also explains perceptual variations: altered states (psychedelics, sensory deprivation, meditation, neurological conditions) temporarily shift an individual's generative models $s_i$ away from consensus, with priors $p_i$ following derivatively, leading to experiences of modified spacetime structure, altered causal relations, or anomalous physics. These are not pathological "hallucinations" in the sense of perceiving non-existent entities, but rather genuine differences in the pullback geometry experienced by an agent operating with non-consensus models.
 
 The theory thus dissolves the hard boundary between "veridical perception" and "altered states". Both are valid geometries on the statistical manifold, differing only in their degree of alignment with the consensus equilibrium.
 
@@ -2722,7 +2728,7 @@ These extensions may prove relevant for several emerging research directions. Mu
 
 \subsubsection{Language as Multi-Agent Coordination}
 
-The success of gauge-theoretic transformers on language modeling suggests a potentially profound interpretation: language may be at root a multi-agent coordination problem solved through information-theoretic coupling. In this view, each token functions as an autonomous agent maintaining probabilistic beliefs $q_i$ about semantic content, linguistic priors $p_i$ encoding expectations about grammar and semantics, and an internal gauge frame $\phi_i$ defining its semantic coordinate system.
+The success of gauge-theoretic transformers on language modeling suggests a potentially profound interpretation: language may be at root a multi-agent coordination problem solved through information-theoretic coupling. In this view, each token functions as an autonomous agent maintaining probabilistic beliefs $q_i$ about semantic content, a linguistic generative model $s_i$ encoding grammar and semantic structure, and an internal gauge frame $\phi_i$ defining its semantic coordinate system. The token-level priors $p_i$ realised as PriorBank entries in the transformer limit are then the cross-scale shadows of the corpus-level meta-agent's belief field; the grammar-and-semantics structure that gets shared across speakers is carried by $s_i$ via the model-channel coupling $\gamma_{ij}\mathrm{KL}(s_i\|\tilde\Omega_{ij}s_j)$.
 
 Tokens attend to each other by computing coupling weights $\beta_{ij}$ to minimize collective free energy, arriving at mutually coherent interpretations. This resembles what linguists call pragmatic communication: agents coordinate to jointly minimize uncertainty and establish shared meaning. The framework thus provides a mathematical formalization of informal ideas about language as cooperative inference.
 
@@ -2941,7 +2947,7 @@ This interpretation supports Kuhn's anti-realist tendencies while providing math
 
 Quine's under-determination thesis~\cite{Quine1951,Quine1975} holds that empirical evidence alone cannot uniquely determine theory choice.  Multiple incompatible theories can fit the same observational data. This poses challenges for scientific realism, suggesting empirical adequacy is insufficient to establish theoretical truth.
 
-Our framework formalizes and explains under-determination. Multiple gauge-invariant models $\{p_1, p_2, \ldots\}$ may minimize empirical KL divergence equally
+Our framework formalizes and explains under-determination. Multiple gauge-invariant generative models $\{s_1, s_2, \ldots\}$ may minimize empirical KL divergence equally
 
 \begin{equation}
 \mathrm{KL}(p_1 \| o) = \mathrm{KL}(p_2 \| o) = \cdots.
@@ -3029,7 +3035,7 @@ Several fundamental problems must be resolved before this framework can claim to
 
 In 1990, John Archibald Wheeler asked: "How come existence?" He proposed that the answer lay in information, articulating his vision through "it from bit" and the participatory universe - the idea that observers play an active role in bringing reality into being. For over three decades, this vision remained largely philosophical, inspiring but lacking mathematical precision and empirical grounding.
 
-We have developed a gauge-theoretic active inference framework that provides mathematical structure for exploring Wheeler's ideas. Agents are represented as smooth sections of principal bundles, maintaining probabilistic beliefs $q_i(c)$, priors $p_i(c)$, and generative models $s_i(c)$ over a base manifold $\mathcal{C}$. These agents couple through information-theoretic interactions mediated by gauge-covariant transport operators $\Omega_{ij}$, minimizing collective variational free energy. The framework naturally generates hierarchical structure through consensus-driven meta-agent formation, creating bidirectional information flow between scales.
+We have developed a gauge-theoretic active inference framework that provides mathematical structure for exploring Wheeler's ideas. Agents are represented as smooth sections of associated bundles over two statistical manifolds, with two primitive fields (beliefs $q_i$ on $\mathcal{B}_{\mathrm{state}}$, generative models $s_i$ on $\mathcal{B}_{\mathrm{model}}$) and two derived cross-scale shadows (priors $p_i$ and hyper-priors $r_i$, obtained from the meta-agent's primitives via Eq.~\eqref{eq:cross_scale_shadow}) over a base manifold $\mathcal{C}$. These agents couple through information-theoretic interactions mediated by gauge-covariant transport operators $\Omega_{ij}$ on the state fiber and $\tilde\Omega_{ij}$ on the model fiber, minimizing collective variational free energy. The framework naturally generates hierarchical structure through consensus-driven meta-agent formation, creating bidirectional information flow between scales.
 
 The framework's most concrete achievement is demonstrating that transformer attention mechanisms emerge rigorously as the zero-dimensional limit of gauge-theoretic variational inference. We have implemented working gauge-theoretic transformers achieving competitive performance with standard architectures on language modeling tasks, with strong empirical correlation (r=0.821) between our information-theoretic attention weights and learned BERT patterns. This validates the framework's core mathematical structure in at least one domain and establishes that practical machine learning can be understood through sophisticated gauge theory.
 
@@ -3088,11 +3094,11 @@ We derive explicit natural gradient expressions for gauge-theoretic free energy 
 
 \subsection*{Setup and Notation}
 
-Agent $i$ maintains belief $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ and prior $p_i = \mathcal{N}(\mu_{p,i}, \Sigma_{p,i})$ over $K$-dimensional fiber. Transport operator $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j) \in \mathrm{SO}(3)$ acts via representation $\rho: \mathrm{SO}(3) \to \mathrm{GL}(K)$.
+Agent $i$ maintains primitive belief $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ and primitive generative model $s_i = \mathcal{N}(\mu_{s,i}, \Sigma_{s,i})$, with derived prior $p_i = \mathcal{N}(\mu_{p,i}, \Sigma_{p,i})$ on the state fiber and derived hyper-prior $r_i = \mathcal{N}(\mu_{r,i}, \Sigma_{r,i})$ on the model fiber, related to the meta-agent's primitives via the cross-scale shadows of Eq.~\eqref{eq:cross_scale_shadow}. The state-fiber transport $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j) \in G$ acts via representation $\rho_{\mathrm{state}}: G \to \mathrm{GL}(K)$, and the model-fiber transport $\tilde\Omega_{ij}$ acts via $\rho_{\mathrm{model}}$. This appendix computes the gradient flow on the state-fiber sector $(q_i, p_i, \phi_i)$; the model-fiber sector $(s_i, r_i)$ has parallel structure under the substitution $(\beta, \Omega, q, p) \to (\gamma, \tilde\Omega, s, r)$.
 
 The free energy decomposes as:
 \begin{equation}
-S = \sum_i \mathrm{KL}(q_i \| p_i) + \sum_{ij} \beta_{ij} \mathrm{KL}(q_i \| \Omega_{ij}[q_j]) + \sum_{ij} \gamma_{ij} \mathrm{KL}(p_i \| \tilde{\Omega}_{ij}[p_j])
+S = \sum_i \mathrm{KL}(q_i \| p_i) + \sum_i \lambda_h \mathrm{KL}(s_i \| r_i) + \sum_{ij} \beta_{ij} \mathrm{KL}(q_i \| \Omega_{ij}[q_j]) + \sum_{ij} \gamma_{ij} \mathrm{KL}(s_i \| \tilde{\Omega}_{ij}[s_j])
 \end{equation}
 
 Attention weights are defined by:
@@ -3264,12 +3270,14 @@ The complete gradient has two interpretable terms:
 
 When $\kappa_\beta \to \infty$ (soft/uniform attention), the reweighting term vanishes. When $\kappa_\beta \to 0$ (hard attention), reweighting dominates.
 
-\subsubsection*{Prior Alignment (Similar Structure)}
+\subsubsection*{Model Alignment (Parallel Structure on the Model Fiber)}
 
-The prior alignment gradient has identical form:
+The model-channel gauge-frame gradient has identical form on the model fiber, with $(\beta, \Omega, q, p) \to (\gamma, \tilde\Omega, s, r)$:
 \begin{equation}
-\nabla_{\phi_i} S_{\mathrm{prior}} = \sum_j \gamma_{ij}\nabla_{\phi_i}\mathrm{KL}(p_i \| \tilde{\Omega}_{ij}[p_j]) + \frac{1}{\kappa_\gamma}\left(\sum_j \gamma_{ij}\mathrm{KL}(p_i \| \tilde{\Omega}_{ij}[p_j])\right)\left(\sum_k \gamma_{ik}\nabla_{\phi_i}\mathrm{KL}_{ik}^p\right).
+\nabla_{\phi_i} S_{\mathrm{model}} = \sum_j \gamma_{ij}\nabla_{\phi_i}\mathrm{KL}(s_i \| \tilde{\Omega}_{ij}[s_j]) + \frac{1}{\kappa_\gamma}\left(\sum_j \gamma_{ij}\mathrm{KL}(s_i \| \tilde{\Omega}_{ij}[s_j])\right)\left(\sum_k \gamma_{ik}\nabla_{\phi_i}\mathrm{KL}_{ik}^s\right).
 \end{equation}
+
+(We assume tied gauge frames so that the same $\phi_i$ generates both $\Omega_{ij}$ on the state fiber and $\tilde\Omega_{ij}$ on the model fiber via the appropriate representation; under independent model-fiber gauge frames, the gradient is taken with respect to $\tilde\phi_i$ instead.)
 
 \subsection*{Complete Update Equations}
 
@@ -3280,7 +3288,7 @@ The gauge-covariant update scheme is:
 \phi_i^{t+1} &= \phi_i^t - \eta_\phi \nabla_{\phi_i} S,
 \end{align}
 
-where learning rates satisfy timescale separation $\eta_\mu : \eta_p : \eta_\phi \sim 1 : \epsilon : \epsilon^2$ with $\epsilon \ll 1$.
+where learning rates satisfy timescale separation $\eta_\mu : \eta_s : \eta_\phi \sim 1 : \epsilon : \epsilon^2$ with $\epsilon \ll 1$ (the canonical slow primitive is the generative model $s$; cross-scale shadows $p, r$ inherit their effective rates).
 
 \subsection*{Computational Complexity}
 
@@ -3628,9 +3636,9 @@ Specifically, we define
 \begin{equation}
 \Lambda_{ij}:=\tau^{(q)}_{ij}(\Omega_{ij}\Sigma_{q,j}\Omega_{ij}^\top)^{-1},
 \qquad 
-\Gamma_{ij}:=\tau^{(p)}_{ij}(\tilde{\Omega}_{ij}\Sigma_{p,j}\tilde{\Omega}_{ij}^\top)^{-1},
+\Gamma_{ij}:=\tau^{(s)}_{ij}(\tilde{\Omega}_{ij}\Sigma_{s,j}\tilde{\Omega}_{ij}^\top)^{-1},
 \end{equation}
-where $\tau^{(q)}_{ij}, \tau^{(p)}_{ij} > 0$ are dimensionless coupling strengths.
+where $\tau^{(q)}_{ij}, \tau^{(s)}_{ij} > 0$ are dimensionless coupling strengths.
 
 Recall that the KL divergence between two Gaussians $q_i = \mathcal{N}(\mu_i,\Sigma_i)$ and $\Omega_{ij}q_j = \mathcal{N}(\Omega_{ij}\mu_j, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$ is
 $$
@@ -3661,14 +3669,14 @@ Similarly for the model channel:
 \frac{1}{4}\mathbb{E}_{s_i s_j}
 [(m_i-\tilde{\Omega}_{ij}m_j)^\top\Gamma_{ij}(m_i-\tilde{\Omega}_{ij}m_j)]
 \approx
-\frac{\tau^{(p)}_{ij}}{2}D_{\mathrm{KL}}(s_i\|\tilde{\Omega}_{ij}s_j)+\text{const}.
+\frac{\tau^{(s)}_{ij}}{2}D_{\mathrm{KL}}(s_i\|\tilde{\Omega}_{ij}s_j)+\text{const}.
 \end{equation}
 \subsection{Defining normalized alignment weights}
 To obtain the standard form, we define normalized alignment weights
 \begin{equation}
 \beta_{ij}:=\frac{\tau^{(q)}_{ij}}{2},
 \qquad
-\gamma_{ij}:=\frac{\tau^{(p)}_{ij}}{2}.
+\gamma_{ij}:=\frac{\tau^{(s)}_{ij}}{2}.
 \end{equation}
 These weights have a clear interpretation: $\beta_{ij}$ measures the strength of belief alignment between agents $i$ and $j$, while $\gamma_{ij}$ measures model alignment strength. In the limit $\beta_{ij} \to \infty$ with fixed $\gamma_{ij}$, agents' beliefs are forced to perfect agreement after transport, while their models may still differ. Conversely, $\gamma_{ij} = 0$ decouples model alignment entirely. In all subsequence equations we taked $\tau$ to be independent of each agent - a constant global value which we set to 1.
 
