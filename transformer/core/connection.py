@@ -89,6 +89,23 @@ class GaugeConnection(nn.Module):
             # init_scale=0 → zero init (flat saddle point — no gradient signal!)
             # init_scale>0 → small random init breaks the flat saddle point so
             # the optimizer can discover useful curvature.  Recommended: 0.01.
+            #
+            # TODO(holonomy-W-regularization): W has no weight decay, no
+            # spectral clamp, and no penalty on its norm.  transport_ops.py
+            # clamps ‖scaled_delta‖ ≤ 5.0 at the forward pass, but that does
+            # NOT bound W itself — W can drift upward indefinitely while the
+            # forward clamp masks it.  The holonomy diagnostic
+            # (publication_metrics.py:_extract_exp_delta) recomputes δ
+            # without the training-time clamp and exposes the drift as
+            # delta_max_spec values in the hundreds, which then overflow
+            # exp(δ) in float32.  Fix options to consider:
+            #   (a) add weight_decay to W via the optimizer param-group,
+            #   (b) spectral clamp on W per step (project ‖W‖_2 ≤ W_max),
+            #   (c) wire up the existing holonomy_penalty hook so curvature
+            #       contributes to the loss and back-pressures W.
+            # Picking the right option requires deciding whether W
+            # divergence is a symptom (E-step pathology) or a cause
+            # (insufficient regularization).  See 2026-05-05_edits.md.
             W = torch.zeros(n_gen, d_head, d_head)
             if init_scale > 0:
                 W = W + init_scale * torch.randn_like(W) / math.sqrt(d_head)
