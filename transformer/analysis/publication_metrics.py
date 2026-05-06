@@ -2187,14 +2187,17 @@ class PublicationMetrics:
                 # does in training: scale the connection before exponentiating.
                 delta_matrix = delta_matrix * float(cocycle_scale)
             # matrix_exp in float64: stable to spectral radius > 1000 vs.
-            # ~150 for float32.  The holonomy diagnostic runs every 500
-            # steps on a small (1, N, N, K, K) tensor, so the 2x cost is
-            # negligible and it eliminates the dominant source of spurious
-            # NaNs on outlier (i,j,k) triples.  Residual NaNs after this
-            # upgrade are genuine connection pathology and surface via
+            # ~88 for float32 (since float32 max ≈ exp(88.7)).  The holonomy
+            # diagnostic runs every 500 steps on a small (1, N, N, K, K)
+            # tensor, so the 2x cost is negligible and it eliminates the
+            # dominant source of spurious NaNs on outlier (i,j,k) triples.
+            # We must keep exp_delta in float64 — casting back to the input
+            # dtype here defeats the upgrade because exp(δ) for per-edge
+            # spec norm > ~88 overflows float32 to inf even though it is
+            # finite in float64.  Residual NaNs after staying in float64
+            # are genuine connection pathology and surface via
             # HolonomySnapshot.nan_fraction.
-            _orig_dtype = delta_matrix.dtype
-            exp_delta = torch.linalg.matrix_exp(delta_matrix.double()).to(_orig_dtype)
+            exp_delta = torch.linalg.matrix_exp(delta_matrix.double())
             if not return_stats:
                 return exp_delta
             # Spectral-norm statistics per (i,j) edge.  This is what

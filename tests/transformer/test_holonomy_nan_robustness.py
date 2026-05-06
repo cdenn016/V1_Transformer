@@ -127,6 +127,59 @@ def test_scaled_variant_changes_log_keys():
     assert snap_scaled.delta_max_spec == 0.5
 
 
+def test_inf_in_exp_delta_counted_in_nan_fraction():
+    """An inf in exp_delta (e.g. from float32 matrix_exp overflow on
+    cocycle-scaled δ) must be treated like a NaN: counted in
+    nan_fraction, excluded from mean/max/median/std/wilson_trace, and
+    excluded from spectral_gap and frac_gt_*.  Without this, scaled-
+    variant runs report nan_fraction near 0 while mean_norm silently
+    goes to inf — masking numerical breakdown as healthy curvature."""
+    B, N, K = 1, 6, 3
+    torch.manual_seed(0)
+    exp_delta = torch.eye(K).reshape(1, 1, 1, K, K).expand(1, N, N, K, K).clone()
+    exp_delta = exp_delta + 0.01 * torch.randn_like(exp_delta)
+    # Poison ~25% of edges with +inf.
+    n_edges = N * N
+    n_poisoned = max(1, int(round(0.25 * n_edges)))
+    idx = torch.randperm(n_edges)[:n_poisoned]
+    flat = exp_delta.reshape(1, n_edges, K, K)
+    flat[0, idx] = float('inf')
+    exp_delta = flat.reshape(1, N, N, K, K)
+
+    snap = compute_holonomy_snapshot(exp_delta, sample_size=200, seed=0)
+
+    assert snap.nan_fraction > 0.0, "inf entries must register in nan_fraction"
+    if snap.nan_fraction < 1.0:
+        # All non-finite values must be excluded from the reductions.
+        assert math.isfinite(snap.mean_norm), f"mean_norm={snap.mean_norm}"
+        assert math.isfinite(snap.std_norm), f"std_norm={snap.std_norm}"
+        assert math.isfinite(snap.median_norm), f"median_norm={snap.median_norm}"
+        assert math.isfinite(snap.max_norm), f"max_norm={snap.max_norm}"
+        assert math.isfinite(snap.mean_wilson_trace), f"wilson_trace={snap.mean_wilson_trace}"
+        assert math.isfinite(snap.mean_spectral_gap), f"spectral_gap={snap.mean_spectral_gap}"
+    # frac_gt_* must remain probabilities even with inf contamination.
+    assert 0.0 <= snap.frac_gt_001 <= 1.0
+    assert 0.0 <= snap.frac_gt_01 <= 1.0
+
+
+def test_mixed_nan_and_inf_both_counted():
+    """Half-NaN, half-inf input: every triple is non-finite, so reductions
+    return NaN and nan_fraction == 1.0 without any silent inf leakage."""
+    B, N, K = 1, 6, 3
+    exp_delta = torch.full((B, N, N, K, K), float('nan'))
+    # Replace half of the edges with inf instead of NaN.
+    flat = exp_delta.reshape(1, N * N, K, K)
+    flat[0, : (N * N) // 2] = float('inf')
+    exp_delta = flat.reshape(1, N, N, K, K)
+
+    snap = compute_holonomy_snapshot(exp_delta, sample_size=50, seed=0)
+    assert snap.nan_fraction == pytest.approx(1.0)
+    assert math.isnan(snap.mean_norm)
+    assert math.isnan(snap.max_norm)
+    # mean_norm must NOT be inf — that was the original bug.
+    assert not math.isinf(snap.mean_norm)
+
+
 def test_holonomy_csv_written_independently(tmp_path: Path):
     """`PublicationMetrics.compute_holonomy_diagnostics` must append rows
     to its own CSV regardless of whether the main training CSV has an

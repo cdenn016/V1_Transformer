@@ -37,14 +37,17 @@ class HolonomySnapshot:
         std_norm: Standard deviation of holonomy norms (non-NaN only).
         median_norm: Median holonomy norm (non-NaN only).
         max_norm: Maximum holonomy norm observed (non-NaN only).
-        frac_gt_001: Fraction of triples with norm > 0.01 (NaN counted as False).
-        frac_gt_01: Fraction of triples with norm > 0.1 (NaN counted as False).
+        frac_gt_001: Fraction of triples with norm > 0.01 (non-finite counted as False).
+        frac_gt_01: Fraction of triples with norm > 0.1 (non-finite counted as False).
         mean_spectral_gap: Mean gap between largest and second-largest
             singular values of :math:`C_{ijk}`. Returns 0.0 if SVD fails.
-        mean_wilson_trace: Mean :math:`|\mathrm{tr}(C_{ijk})| / K` (non-NaN only).
-        nan_fraction: Fraction of sampled triples whose C contained NaN —
-            typically from matrix_exp instability on outlier (i,j,k) whose
-            delta spectral radius exceeds the float precision threshold.
+        mean_wilson_trace: Mean :math:`|\mathrm{tr}(C_{ijk})| / K` (finite only).
+        nan_fraction: Fraction of sampled triples whose C contained a
+            non-finite entry (NaN or inf) — typically from matrix_exp
+            instability on outlier (i,j,k) whose delta spectral radius
+            exceeds the float precision threshold (inf for float32 above
+            ~88, NaN at the boundary where 0·inf cancellations arise).
+            Despite the field name, both NaN and inf are counted.
         delta_max_spec: Max spectral norm of delta_matrix across ALL N²
             (i,j) edges — the quantity that governs matrix_exp stability.
         delta_p95_spec: 95th percentile of delta_matrix spectral norm.
@@ -151,13 +154,16 @@ def compute_holonomy_snapshot(
     norms_flat = norms.detach().cpu().float().reshape(-1)
     K = C.shape[-1]
 
-    # A NaN in C (typically from float32 matrix_exp on outlier triples)
-    # propagates to norms.  Compute reductions over the non-NaN subset only,
-    # and expose nan_fraction as a first-class diagnostic so the failure
-    # rate is visible rather than hidden behind NaN outputs.
-    nan_mask = torch.isnan(norms_flat)
-    nan_fraction = float(nan_mask.float().mean().item())
-    valid = norms_flat[~nan_mask]
+    # NaN OR inf in C (typically from float32 matrix_exp on outlier triples,
+    # or from cocycle-scaled δ overflowing exp) propagates to norms.  Both
+    # mean "no reliable norm measurement", so we mask non-finite entries
+    # uniformly and surface the rate via nan_fraction.  Without the inf
+    # mask, scaled-variant runs report nan_fraction near 0 while the mean
+    # silently goes to inf, and the field name nan_fraction misleadingly
+    # implies the data is clean.
+    bad_mask = ~torch.isfinite(norms_flat)
+    nan_fraction = float(bad_mask.float().mean().item())
+    valid = norms_flat[~bad_mask]
     if valid.numel() == 0:
         mean_norm = float('nan')
         std_norm = float('nan')
@@ -168,20 +174,24 @@ def compute_holonomy_snapshot(
         std_norm = float(valid.std(unbiased=False).item()) if valid.numel() > 1 else 0.0
         median_norm = float(valid.median().item())
         max_norm = float(valid.max().item())
-    # frac_gt_* treat NaN as False (survives the reduction); denominator
+    # frac_gt_* treat non-finite as False (survives the reduction); denominator
     # is the total triple count, matching the "fraction of all sampled
-    # triples that exceeded the threshold" semantics.
-    frac_gt_001 = float((norms_flat > 0.01).float().mean().item())
-    frac_gt_01 = float((norms_flat > 0.1).float().mean().item())
+    # triples that exceeded the threshold" semantics.  Without the isfinite
+    # guard, inf entries would inflate frac_gt_* to 1.0 and conflate
+    # numerical breakdown with genuinely curved holonomy.
+    finite_mask = torch.isfinite(norms_flat)
+    frac_gt_001 = float((finite_mask & (norms_flat > 0.01)).float().mean().item())
+    frac_gt_01 = float((finite_mask & (norms_flat > 0.1)).float().mean().item())
 
-    # Spectral gap: gap between top-2 singular values of C.  SVD on a NaN
-    # matrix raises; on a well-conditioned matrix it returns singular
-    # values.  We filter NaN-bearing C-slices out before calling svdvals
-    # so a single bad triple does not zero the mean_spectral_gap via the
-    # except-fallback.
+    # Spectral gap: gap between top-2 singular values of C.  SVD on a
+    # non-finite matrix returns inf/NaN singular values; we filter both
+    # NaN- and inf-bearing C-slices out before calling svdvals so a single
+    # bad triple does not poison the mean_spectral_gap (inf in the mean
+    # silently propagates to inf rather than triggering the except-
+    # fallback).
     C_flat = C.detach().cpu().float().reshape(-1, K, K)
-    C_nan_mask = torch.isnan(C_flat).any(dim=(-2, -1))
-    C_clean = C_flat[~C_nan_mask]
+    C_finite_mask = torch.isfinite(C_flat).all(dim=(-2, -1))
+    C_clean = C_flat[C_finite_mask]
     try:
         if C_clean.shape[0] == 0:
             mean_spectral_gap = float('nan')
