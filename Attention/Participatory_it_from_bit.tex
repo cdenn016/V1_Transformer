@@ -582,7 +582,7 @@ With the above simplifications, the gauge-aligned KL divergence between agents $
 
 \subsubsection{The Zero-Dimensional (Transformer) Limit}
 
-An important special case occurs when the base manifold collapses to a single point ($\dim\mathcal{C} = 0$) and the gauge connection becomes constant. In this limit, all gauge frames become position-independent $\phi_i(c) = \phi_i$ for all $c$, connections and curvature vanish $A_\mu = F_{\mu\nu} = 0$, and the integral over $\mathcal{C}$ reduces to evaluation at a single point. The framework reduces to a 0-dimensional gauge theory in this limit, where the mixture-of-sources derivation (Section~\ref{sec:mixture_derivation}) recovers standard transformer attention under successive limits: (1) isotropic covariances $\Sigma_i \to \sigma^2 I$, (2) constant gauge $\Omega_{ij} \to \Omega$ for all pairs, and (3) flat bundle $\Omega \to I$. This provides validation that the gauge-theoretic framework contains transformers as a special case, connecting the abstract geometric construction to empirically successful machine learning architectures. The unreduced $\mathrm{GL}(K)$ gauge theory on a single point is validated as a working language model in Section~\ref{sec:transformers}, trained without learned attention projections, MLPs, or pointwise activation functions.
+An important special case occurs when the base manifold collapses to a single point ($\dim\mathcal{C} = 0$) and the gauge connection becomes constant. In this limit, all gauge frames become position-independent $\phi_i(c) = \phi_i$ for all $c$, connections and curvature vanish $A_\mu = F_{\mu\nu} = 0$, and the integral over $\mathcal{C}$ reduces to evaluation at a single point. The framework reduces to a 0-dimensional gauge theory in this limit, where the mixture-of-sources derivation (Section~\ref{sec:mixture_derivation}) recovers standard transformer attention under three successive limits: (1) isotropic covariances $\Sigma_i \to \sigma^2 I$, (2) shared frames $U_i = U$ for all agents at the single base point (the only pair-independent transport consistent with $\Omega_{ij} = U_iU_j^{-1}$ is $\Omega_{ij} = I$, see Section~\ref{sec:transformers}), and (3) introduction of a learned shared bilinear compatibility $M = W_Q W_K^\top$ as the query-key similarity, distinct from the gauge transport. This provides validation that the gauge-theoretic framework contains transformers as a special case, connecting the abstract geometric construction to empirically successful machine learning architectures. The unreduced $\mathrm{GL}(K)$ gauge theory on a single point is validated as a working language model in Section~\ref{sec:transformers}, trained without learned attention projections, MLPs, or pointwise activation functions.
 
 \subsubsection{Summary: What This Framework Enables}
 
@@ -2316,7 +2316,7 @@ In the next section we extend the framework by showing that standard transformer
 \subsection{Transformer Architectures as the Zero-Dimensional Limit}
 \label{sec:transformers}
 
-We now show that standard dot-product attention is a degenerate limit of the construction. The reduction is exact under three explicit limits (isotropic covariances, orthogonal transport, constant gauge); the resulting architecture has been validated as a working language model in the companion paper~\cite{Dennis2025trans}.
+We now show that standard dot-product attention is a degenerate limit of the construction. The reduction is exact under three explicit limits (isotropic covariances, trivial gauge transport $\Omega_{ij} = I$ in the shared-frame limit, and a learned shared query-key bilinear compatibility $M$ replacing the role of pairwise transport in the cross term); the resulting architecture has been validated as a working language model in the companion paper~\cite{Dennis2025trans}.
 
 \subsubsection{The Zero-Dimensional Limit and Gauge Fixing}
 
@@ -2324,7 +2324,7 @@ The success of transformers on natural-language corpora is consistent with the h
 
 Consider the degenerate case where all agents exist at a single point $x_0 \in \mathcal{C}$ of the noumenal manifold, with $\mathrm{supp}(\sigma_i) = \{x_0\}$ for all agents $i$. The base manifold effectively becomes zero-dimensional, all spatial structure collapses, and agents interact purely through information-theoretic coupling at the single point. This is precisely the topology of standard transformers, where tokens (agents) are treated as an unordered set with no intrinsic spatial structure beyond sequence position.
 
-The remainder of this subsection follows the development in the gauge-theoretic transformer companion paper~\cite{Dennis2025trans}, where the reduction to standard dot-product attention is established as a sequence of explicit limits: isotropic covariances (separating the KL into a geometric bias and a Mahalanobis distance), $\mathrm{O}(K)$ transport (eliminating the bias), and constant gauge (yielding the familiar $QK^\top/\sqrt{d_k}$ form). The empirical experiments in Section~\ref{sec:empirical_validation} implement the general gauge model without these limits.
+The remainder of this subsection follows the development in the gauge-theoretic transformer companion paper~\cite{Dennis2025trans}, where the reduction to standard dot-product attention is established as a sequence of explicit limits: isotropic covariances (separating the KL into a geometric bias and a Mahalanobis distance), $\mathrm{O}(K)$ or trivial-frame transport (eliminating the bias), and the introduction of a shared learned bilinear compatibility $M = W_QW_K^\top$ in the role of the cross-coupling (yielding the familiar $QK^\top/\sqrt{d_k}$ form). The earlier framing in terms of a ``constant gauge transport'' $\Omega_{ij} = \Omega$ is structurally inconsistent with the cocycle parameterisation $\Omega_{ij} = U_iU_j^{-1}$ for any nontrivial $\Omega$; the corrected reading separates pairwise transport (which collapses to $I$ when frames are shared) from query-key compatibility (which is the learned bilinear form). The empirical experiments in Section~\ref{sec:empirical_validation} implement the general gauge model without these limits.
 
 \subsubsection{Setup: Agents as Gaussian Beliefs in Local Frames}
 
@@ -2346,7 +2346,7 @@ which is the gauge-theoretic analog of the attention aggregation $\sum_j \alpha_
 
 \subsubsection{Connection to Standard Transformers}
 
-The gauge-covariant attention $\beta_{ij} = \operatorname{softmax}(-D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)/\tau)$ derived in Section~\ref{sec:mixture_derivation} is already a complete attention mechanism. Standard transformer attention is a special case, obtained by taking two successive limits: isotropic covariances (which separates the KL into a geometric bias and a Mahalanobis distance) and constant gauge transport (which eliminates the bias and yields the familiar $QK^\top / \sqrt{d_k}$ form).
+The gauge-covariant attention $\beta_{ij} = \operatorname{softmax}(-D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)/\tau)$ derived in Section~\ref{sec:mixture_derivation} is already a complete attention mechanism. Standard transformer attention is a special case, obtained by taking three successive limits: isotropic covariances (which separates the KL into a geometric bias and a Mahalanobis distance), shared frames giving trivial pairwise transport $\Omega_{ij} = I$ (which eliminates the bias), and a learned shared bilinear compatibility $M = W_QW_K^\top$ acting on the means in the cross term (which yields the familiar $QK^\top / \sqrt{d_k}$ form). The bilinear $M$ is a separate object from the gauge transport: pair-independent nontrivial $\Omega$ is incompatible with the vertex-frame parameterisation, and the role earlier drafts assigned to ``constant $\Omega$'' is taken over here by $M$.
 
 \paragraph{Deterministic beliefs via scaled limit.}
 
@@ -2393,39 +2393,41 @@ combines a content-dependent term (the Mahalanobis distance between belief means
 
 The rescaled KL divergence $\widetilde{D}_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) := \sigma^2 \cdot D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) \to \frac{1}{2}\|\Omega_{ij}^{-1}\mu_i - \mu_j\|^2$ as $\sigma \to 0$ remains finite and equals half the squared distance between means as measured in the key's reference frame.
 
-\paragraph{Constant gauge specialization ($\Omega_{ij} = \Omega$).}
+\paragraph{From transport to query-key compatibility.}
 
-Standard transformer attention emerges when we further assume a single global frame shared by all agents, $\Omega_{ij} = \Omega$ for all $i,j$, corresponding to a flat connection with no position-dependent frame misalignment. The geometric bias $S(\Omega)$ becomes constant across all agent pairs and cancels under softmax, while $\Omega^{-1}$ is absorbed into learned projections.
+The standard transformer reduction is sometimes presented as a ``constant gauge'' limit $\Omega_{ij} = \Omega$ for all $i,j$. We want to flag that this presentation is structurally inconsistent with the vertex-frame parameterisation of this manuscript and replace it with the correct construction. Under $\Omega_{ij} = U_iU_j^{-1}$ the self-pair gives $\Omega_{ii} = I$, and the cocycle $\Omega_{ij}\Omega_{jk} = \Omega_{ik}$ at $i = k$ forces $\Omega_{ij}\Omega_{ji} = I$; pair-independence $\Omega_{ij} = \Omega$ then yields $\Omega^2 = \Omega$, and invertibility forces $\Omega = I$. The only constant pair-independent transport consistent with the vertex-frame law is the trivial one. The reduction below therefore separates two distinct objects:
+\begin{enumerate}
+\item The \emph{relative gauge transport} $\Omega_{ij} = U_iU_j^{-1}$, which carries the gauge-covariant content of the framework. The transformer reduction sets $U_i = U$ for all tokens (a single shared frame), giving $\Omega_{ij} = I$ on the relevant base point.
+\item A \emph{shared query-key bilinear compatibility} $M \in \mathrm{GL}(d_k)$ that encodes how query means are paired with key means at the level of the attention score. Standard transformer attention $\beta_{ij} \propto \exp\big(\mu_i^\top M \mu_j / \tau\big)$ corresponds to a learned bilinear form $M = W_Q W_K^\top$ acting on the shared representation, not to a non-trivial pair-independent gauge transport.
+\end{enumerate}
+With this separation, the geometric bias $S(\Omega_{ij}) = S(I) = 0$ is automatically constant and cancels under softmax; what remains is a Mahalanobis-style attention score whose bilinear part is identified with the learned compatibility $M$ rather than with $\Omega^{-\top}$. The role $\Omega^{-\top}$ played in earlier drafts -- a fixed bilinear coupling acting on means -- is taken over by $M$, and the $\Omega \to I$ specialisation removes the structural inconsistency above. Where the original calculation wrote $\Omega^{-\top}$ in the cross term $\mu_i^\top \Omega^{-\top}\mu_j$, the corrected reading substitutes $M$ from the start.
 
 \subsubsection{Derivation of Dot-Product Attention}
 \label{sec:dot_product_derivation}
 
 \paragraph{Expanding the KL Divergence.}
-Under constant gauge, the KL divergence reduces to
+Under the trivial-frame specialisation $\Omega_{ij} = I$ together with a shared bilinear compatibility $M$ acting on the means -- the substitution $\Omega^{-\top} \to M$ described in the previous paragraph -- the KL divergence reduces to a Mahalanobis attention score with $M$ in the cross term. Concretely, taking $\Omega_{ij} = I$ collapses the geometric bias $S(\Omega_{ij}) = 0$, and identifying the cross-coupling $\mu_i^\top M \mu_j$ as the learned query-key compatibility gives
 \begin{equation}
-s_{ij} = D_{\mathrm{KL}}(q_i \| \Omega q_j) = \frac{1}{2\sigma^2}\|\Omega^{-1}\mu_i - \mu_j\|^2 + C,
+s_{ij} = \frac{1}{2\sigma^2}\|\mu_i\|^2 + \frac{1}{2\sigma^2}\|\mu_j\|^2 - \frac{1}{\sigma^2}\mu_i^\top M \mu_j + C,
 \end{equation}
-where $C = S(\Omega)$ is independent of the belief means and cancels under softmax. Expanding the squared norm:
-\begin{equation}
-s_{ij} = \frac{1}{2\sigma^2}\|\Omega^{-1}\mu_i\|^2 + \frac{1}{2\sigma^2}\|\mu_j\|^2 - \frac{1}{\sigma^2}\mu_i^\top \Omega^{-\top}\mu_j + C.
-\end{equation}
+where $M = \sigma^2 W_Q W_K^\top \in \mathrm{GL}(d_k)$ is the shared bilinear similarity (replacing the $\Omega^{-\top}$ that earlier drafts placed in this slot). The constant $C$ is a $\mu$-independent normalisation absorbed by the softmax.
 
 \paragraph{Softmax cancellations.}
 For a fixed query agent $i$, the softmax over keys $j$ is
 \begin{equation}
 \beta_{ij} = \frac{\exp(-s_{ij}/\tau)}{\sum_k \exp(-s_{ik}/\tau)}.
 \end{equation}
-The $i$-terms $\frac{1}{2\sigma^2}\|\Omega^{-1}\mu_i\|^2 + C$ are independent of $j$ and cancel between numerator and denominator of the softmax, yielding
+The $i$-terms $\frac{1}{2\sigma^2}\|\mu_i\|^2 + C$ are independent of $j$ and cancel between numerator and denominator of the softmax, yielding
 \begin{equation}
-\beta_{ij} \propto \exp\left(\frac{1}{\tau}\left[\frac{1}{\sigma^2}\mu_i^\top\Omega^{-\top}\mu_j - \frac{1}{2\sigma^2}\|\mu_j\|^2\right]\right).
+\beta_{ij} \propto \exp\left(\frac{1}{\tau}\left[\frac{1}{\sigma^2}\mu_i^\top M \mu_j - \frac{1}{2\sigma^2}\|\mu_j\|^2\right]\right).
 \end{equation}
 Thus, the effective logit is
 \begin{equation}
-\tilde{s}_{ij} = \frac{1}{\sigma^2}\mu_i^\top\Omega^{-\top}\mu_j - \frac{1}{2\sigma^2}\|\mu_j\|^2.
+\tilde{s}_{ij} = \frac{1}{\sigma^2}\mu_i^\top M \mu_j - \frac{1}{2\sigma^2}\|\mu_j\|^2.
 \end{equation}
 
 \paragraph{Key bias cancellation.}
-The second term $-\frac{1}{2\sigma^2}\|\mu_j\|^2$ depends on key $j$ and is a key-dependent bias on the raw embedding norms. This bias involves $\|\mu_j\|^2$ rather than $\|\Omega\mu_j\|^2$ since the Mahalanobis metric \eqref{eq:mahalanobis_identity} already accounts for the gauge transport's effect on norms via the $(\Omega\Omega^\top)^{-1}$ factor in the distance measure. Two well-trodden mechanisms ensure approximate cancellation:
+The second term $-\frac{1}{2\sigma^2}\|\mu_j\|^2$ depends on key $j$ and is a key-dependent bias on the raw embedding norms. Two well-trodden mechanisms ensure approximate cancellation:
 
 \textbf{(1) High-Dimensional Concentration:}
 For embeddings in $\mathbb{R}^{d_k}$ with approximately independent components of per-component variance $\sigma_0^2$ (e.g., $\mu_j^{(i)} \sim \mathcal{N}(0, \sigma_0^2)$), concentration of measure implies
@@ -2444,13 +2446,13 @@ which cancels under softmax.
 \paragraph{Factorization into query-key dot product.}
 The leading term in $\tilde{s}_{ij}$ is
 \begin{equation}
-\frac{1}{\sigma^2}\mu_i^\top \Omega^{-\top} \mu_j.
+\frac{1}{\sigma^2}\mu_i^\top M \mu_j.
 \end{equation}
-We identify the product of $W_Q, W_K$ with the gauge transport:
+We factor the bilinear similarity $M$ as
 \begin{equation}
-W_Q W_K^\top = \frac{1}{\sigma^2} \Omega^{-\top} \in \mathrm{GL}(d_k).
+W_Q W_K^\top = \frac{1}{\sigma^2} M \in \mathrm{GL}(d_k).
 \end{equation}
-Such a factorisation always exists for any invertible $\Omega$: any $M \in \mathrm{GL}(d_k)$ can be written as $M = AB^\top$ for suitable $A, B \in \mathrm{GL}(d_k)$ (e.g., via SVD: $M = U\Lambda V^\top = (U\Lambda^{1/2})(V\Lambda^{1/2})^\top$, where invertibility of $M$ ensures all singular values are positive, so $A$ and $B$ are themselves invertible). The factorisation is unique only up to a right action $W_Q \to W_Q R$, $W_K \to W_K R$ for $R \in O(d_k)$, which corresponds to the residual orthogonal gauge freedom after fixing $\Omega^{-\top}$; this residual freedom is what learning fills in during training.
+Such a factorisation always exists for any invertible $M$: any $M \in \mathrm{GL}(d_k)$ can be written as $M = AB^\top$ for suitable $A, B \in \mathrm{GL}(d_k)$ (e.g., via SVD: $M = U\Lambda V^\top = (U\Lambda^{1/2})(V\Lambda^{1/2})^\top$, where invertibility of $M$ ensures all singular values are positive, so $A$ and $B$ are themselves invertible). The factorisation is unique only up to a right action $W_Q \to W_Q R$, $W_K \to W_K R$ for $R \in \mathrm{O}(d_k)$, which corresponds to the residual orthogonal freedom after fixing $M$; this residual freedom is what learning fills in during training.
 
 Define query and key vectors as
 \begin{equation}
@@ -2458,7 +2460,7 @@ Q_i \equiv \mu_i^\top W_Q \in \mathbb{R}^{1\times d_k}, \qquad K_j \equiv \mu_j^
 \end{equation}
 Then
 \begin{equation}
-Q_i K_j^\top = \mu_i^\top W_Q W_K^\top \mu_j = \frac{1}{\sigma^2}\mu_i^\top \Omega^{-\top} \mu_j.
+Q_i K_j^\top = \mu_i^\top W_Q W_K^\top \mu_j = \frac{1}{\sigma^2}\mu_i^\top M \mu_j.
 \end{equation}
 Thus the logit term reduces to a standard dot product:
 \begin{equation}
