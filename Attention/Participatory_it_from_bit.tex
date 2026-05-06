@@ -95,7 +95,7 @@ This framework produces several emergent phenomena:
 
 \item Causality emerges from gauge-covariant transport operators defining information flow between agents
 \item Physical laws emerge as information-theoretic necessities (e.g., the second law from non-negative KL divergence)
-\item Hierarchical structure emerges through multi-scale renormalization with validated participatory feedback
+\item Hierarchical structure emerges through multi-scale renormalization with participatory feedback (demonstrated under threshold-based detection; see Section~\ref{sec:meta_agent_threshold})
 \item Standard transformer attention emerges as the zero-dimensional limit, providing empirical validation
 \end{enumerate}
 
@@ -118,7 +118,9 @@ This work operates at three distinct epistemic levels:
 
 The reader should hold the claims that follow to a clearly delimited scope. The framework derives a transformer architecture from gauge-theoretic variational inference, validates it empirically as a working language model, and provides mathematical structure for several interpretive moves that have circulated as informal philosophy such as  Wheeler's participatory universe, Kant's phenomenal/noumenal distinction, observer-dependent reality, and the Lahav--Neemeh proposal that consciousness is a frame-relative quantity. We do not claim to have derived quantum mechanics or general relativity from first principles, and several of the speculative results are demonstrated only at the level of worked examples. The honest delimitation:
 
-\textbf{Validated.} The 0-dimensional gauge theory recovers standard transformer attention (Section~\ref{sec:transformers}); the resulting architecture is a working language model trained without learned attention projections, MLPs, or pointwise activation functions. The bidirectional Ouroboros Tower simulations of meta-agent emergence (Section~\ref{sec:participatory}) run in working code for hundreds of agents across tens of hierarchical scales.
+\textbf{Validated.} The 0-dimensional gauge theory recovers standard transformer attention (Section~\ref{sec:transformers}); the resulting architecture is a working language model trained without learned attention projections, MLPs, or pointwise activation functions, with multi-seed scaling on WikiText-103 fitting $\mathrm{PPL} = aK^b + c$ at $b = -1.05$.
+
+\textbf{Demonstrated in working code (single illustrative run).} The bidirectional Ouroboros Tower simulations of meta-agent emergence (Section~\ref{sec:participatory}) run in working code for hundreds of agents across tens of hierarchical scales, conditional on the threshold-based consensus detector of Section~\ref{sec:meta_agent_threshold}. The variational free-energy improvement criterion that this detector approximates (Section~\ref{sec:meta_agent_variational}) is not itself evaluated continuously in the simulation; whether the discrete detector and the continuous variational rule produce the same hierarchical organisation is open.
 
 \textbf{Worked example only.} The Lorentzian-signature construction (Section~\ref{sec:signature_resolution}) is established in a 2D linearized toy model with a constant generator. The extension to four-dimensional, fully nonlinear $\mathrm{GL}(K,\mathbb{C})$ Yang-Mills dynamics, and the question whether imaginary gauge-frame components emerge dynamically rather than by hand, are open.
 
@@ -1029,7 +1031,7 @@ The mechanism underlying this symmetry breaking connects directly to the free en
 
 This specialization exhibits striking parallels to representational learning in deep neural networks. Just as backpropagation gradient descent induces feature specialization where neurons respond selectively to distinct input patterns, variational free energy minimization with observations induces epistemic specialization where agents develop distinct probabilistic perspectives on the environment. The specialized modes emerging from the initially symmetric space correspond to learned features in neural architectures.
 
-The emergence of specialized agents enables hierarchical structure formation. As agents diverge under observation (or environmental) driven symmetry breaking, subpopulations with aligned beliefs can form coherent clusters. Monitoring attention fields $\beta_{ij}(c)$ during evolution reveals that agents with similar observational histories maintain strong mutual attention, while divergent agents decouple. This alignment-divergence dynamics provides the substrate for meta-agent emergence: clusters of mutually coherent agents satisfying the consensus criteria (Section~\ref{sec:participatory}) spontaneously organize into higher-scale collective entities. The symmetry breaking thus serves dual roles - it generates specialized individual agents through environmental coupling, and it creates the informational structure necessary for multi-scale hierarchical emergence. This connects the gauge-theoretic foundation to the participatory dynamics discussed previously, demonstrating how observations drive both individual specialization and collective organization within a unified variational framework.
+The emergence of specialized agents enables hierarchical structure formation. As agents diverge under observation (or environmental) driven symmetry breaking, subpopulations with aligned beliefs can form coherent clusters. Monitoring attention fields $\beta_{ij}(c)$ during evolution reveals that agents with similar observational histories maintain strong mutual attention, while divergent agents decouple. This alignment-divergence dynamics provides the substrate for meta-agent emergence: clusters of mutually coherent agents satisfying the consensus criteria (Section~\ref{sec:meta_agent_threshold}) are aggregated by the threshold-based detector into higher-scale collective entities. The symmetry breaking thus serves dual roles - it generates specialized individual agents through environmental coupling, and it creates the informational structure necessary for multi-scale hierarchical emergence. This connects the gauge-theoretic foundation to the participatory dynamics discussed previously, demonstrating how observations drive both individual specialization and collective organization within a unified variational framework.
 
 \subsection{Dynamical Structure and Emergent Timescales}
 
@@ -1302,7 +1304,7 @@ This represents kinetic correlation: when agent $k$ accelerates, agent $i$ feels
 \subsection{The Participatory Universe: Multi-Scale Emergence and Dynamics}
 \label{sec:participatory}
 
-Wheeler's participatory universe~\cite{Wheeler1983} envisions reality as co-constructed through feedback between observers and observed. We demonstrate that our gauge-theoretic framework supports structural parallels to this vision: agents spontaneously organize into hierarchical meta-agents that propagate information back to constituents, creating self-sustaining feedback loops. This section presents the mathematical framework for multi-scale emergence and establishes that participatory-like dynamics arise naturally from variational free energy minimization. We emphasize this is a toy model demonstrating possibility, not a claim about physical reality.
+Wheeler's participatory universe~\cite{Wheeler1983} envisions reality as co-constructed through feedback between observers and observed. We demonstrate that our gauge-theoretic framework supports structural parallels to this vision: when coherent agent clusters satisfy the variational free-energy improvement criterion of Section~\ref{sec:meta_agent_variational}, they aggregate into hierarchical meta-agents that propagate information back to constituents through the cross-scale shadow relation, producing the formal feedback loop the participatory picture requires. The simulations of this paper trigger the aggregation through the threshold-based surrogate of Section~\ref{sec:meta_agent_threshold} rather than through a continuous-time evaluation of the variational criterion; the threshold detector approximates the variational rule in the high-coherence regime, but whether the two produce identical hierarchical organisation is open. This section presents the mathematical framework for the feedback loop and demonstrates that participatory-like dynamics are consistent with variational free energy minimisation in the post-detection regime. We emphasize this is a toy model demonstrating possibility, not a claim about physical reality.
 
 \subsection{Hierarchical Scale Structure}
 
@@ -1312,36 +1314,73 @@ Each scale-$s$ agent is itself a full section $\sigma_I^{(s)}$ carrying primitiv
 
 To prevent computational intractability, we impose a hard cap on hierarchical depth with $s \leq s_{\max}$. We set $s_{\max} = 25$. Beyond this cap, the participatory dynamics remain active but no new scales form. This practical limitation does not reflect theoretical principle but computational constraint.
 
-\subsection{Consensus Detection and Meta-Agent Formation}
+\subsection{Meta-Agent Formation: Variational Principle and Threshold-Based Implementation}
+\label{sec:meta_agent_formation}
 
-\textbf{Computational Implementation Note:} In principle, meta-agent formation should emerge continuously from free energy minimization as agents naturally coalesce when doing so reduces collective free energy. Our implementation uses discrete threshold-based detection for computational tractability. The specific thresholds and measures below are pragmatic choices enabling proof-of-concept simulations, not fundamental theoretical requirements. Future work should develop continuous emergence mechanisms where meta-agents form smoothly through variational dynamics rather than discrete detection events.
+\subsubsection{Variational Principle}
+\label{sec:meta_agent_variational}
 
-Meta-agents emerge when scale-$s$ agents exhibit sufficient coherence and spatial overlap. We quantify this through three complementary measures. Belief coherence captures how similar agents' current beliefs are after accounting for gauge transformations:
+The principled rule for meta-agent formation is the variational free-energy improvement criterion: a candidate meta-agent $I$ is licensed when the optimised free energy with the parent inserted, plus an organisational overhead $C(I)$, falls below the optimised free energy of the disaggregated constituents,
+\begin{equation}
+\mathcal{F}^*[q_I, p_I, s_I, r_I, \{q_i, s_i\}_{i \in I}] + C(I) < \mathcal{F}^*[\{q_i, p_i, s_i, r_i\}_{i \in I}].
+\label{eq:meta_agent_FE_criterion}
+\end{equation}
+Here $C(I)$ is the cost of carrying the additional organisational structure (the parent's variational parameters and its place in the cross-scale hierarchy); the natural choices are an entropy or minimum-description-length term in the parent's primitive variables. When~\eqref{eq:meta_agent_FE_criterion} holds, merging the cluster into a meta-agent reduces the total free energy net of overhead; when it fails, the constituents remain separated.
+
+The savings on the left side of~\eqref{eq:meta_agent_FE_criterion} come from collapsing the $\mathcal{O}(|I|^2)$ pairwise alignment KL terms of $\mathcal{F}^*$ into the $|I|$ child-parent KL terms $\sum_{i \in I} \alpha_i \mathrm{KL}(\Omega_{Ii}q_i \| q_I)$ together with the parent's own self-consistency term. In the high-coherence limit where pairwise post-transport KLs are uniformly bounded by $\varepsilon \ll 1$, the savings scale as $\sim |I|(|I|-1)\varepsilon$, growing quadratically with cluster size, while $C(I)$ for an MDL-style choice grows much more slowly (sub-linearly for free-form primitives, logarithmically for parameter-counted ones). The criterion~\eqref{eq:meta_agent_FE_criterion} therefore licenses a parent once the cluster crosses a coherence/size combination at which the quadratic gain dominates the overhead. This is the principled object that the threshold detector defined below approximates.
+
+\paragraph{Parent state as gauge-covariant variational barycenter.} Conditional on a parent existing, its state is the variational minimiser of the alignment energy along the child-parent edges. Treating the parent as a variational distribution and minimising the alignment contribution to $\mathcal{F}^*$ over $q_I$ gives
+\begin{equation}
+q_I^* = \arg\min_{q_I} \sum_{i \in I} \alpha_i \mathrm{KL}(\Omega_{Ii} q_i \| q_I) + \lambda \mathrm{KL}(q_I \| p_I),
+\label{eq:meta_agent_barycenter}
+\end{equation}
+which is a forward-KL barycenter (with $q_I$ in the second slot, the variational convention used throughout this manuscript) regularised toward the parent's own prior shadow $p_I$. For Gaussian beliefs $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ with transported moments $\tilde{\mu}_i = \Omega_{Ii}\mu_i$ and $\tilde{\Sigma}_i = \Omega_{Ii}\Sigma_i\Omega_{Ii}^\top$, the closed form (with $A := \sum_i \alpha_i$ and $\lambda \to 0$ for legibility) is
+\begin{align}
+\mu_I^* &= \tfrac{1}{A}\textstyle\sum_i \alpha_i \tilde{\mu}_i,
+\label{eq:meta_agent_mu_barycenter}
+\\
+\Sigma_I^* &= \tfrac{1}{A}\textstyle\sum_i \alpha_i\big[\tilde{\Sigma}_i + (\mu_I^* - \tilde{\mu}_i)(\mu_I^* - \tilde{\mu}_i)^\top\big].
+\label{eq:meta_agent_sigma_barycenter}
+\end{align}
+The mean is the $\alpha$-weighted average of the transported constituent means; the covariance is the $\alpha$-weighted average of the transported covariances \emph{plus} a dispersion term that records how much the constituents disagree about the mean. The dispersion term vanishes at strict consensus, when all $\tilde{\mu}_i$ coincide; in the high-coherence regime where meta-agents form, it is $\mathcal{O}(\varepsilon)$ and is dropped in the implementation below as the leading-order approximation.
+
+\paragraph{Parent frame as group-valued barycenter.} The parent's gauge frame is the Riemannian centre of mass of the constituents on the gauge group,
+\begin{equation}
+U_I^* = \arg\min_{U \in G} \sum_{i \in I} w_i d_G(U, U_i)^2.
+\label{eq:meta_agent_frame_barycenter}
+\end{equation}
+For a compact gauge group ($G = \mathrm{SO}(N)$ in our simulations) with the bi-invariant metric $d_G(U, V)^2 = \|\log(U^{-1}V)\|_F^2$, the Karcher mean exists and is unique on convex normal balls of radius $< \pi/2$. For non-compact $G$ (such as $\mathrm{GL}^+(K)$, where the Killing form on $\mathfrak{gl}(K)$ is indefinite) no bi-invariant Riemannian metric exists, and~\eqref{eq:meta_agent_frame_barycenter} must be replaced by either a left-invariant alternative or a polar-decomposition / SPD-restricted construction; both substitutes break gauge symmetry partially, and the choice is a modelling decision the present implementation does not adjudicate. The Lie-algebra additive form $\phi_I = \sum_i w_i \phi_i$ used in the implementation is the first-order Baker--Campbell--Hausdorff approximation of~\eqref{eq:meta_agent_frame_barycenter}, exact for abelian $G$ and for commuting $\phi_i$, and accurate to $\mathcal{O}(\|\phi_i\|^2)$ when constituent frames are close in the compact case.
+
+\subsubsection{Threshold-Based Implementation}
+\label{sec:meta_agent_threshold}
+
+The criterion~\eqref{eq:meta_agent_FE_criterion} requires evaluating the optimised free energy under both configurations, which is computationally expensive. The simulations of this paper use a discrete threshold-based detector as a practical surrogate for~\eqref{eq:meta_agent_FE_criterion}, motivated by the observation that the variational savings depend on a coherence proxy combining post-transport belief alignment, post-transport model alignment, and spatial overlap. We quantify this through three complementary measures. Belief coherence captures how similar agents' current beliefs are after accounting for gauge transformations:
 \begin{equation}
 C_{\mathrm{belief}}(\{i\}, x) = 1 - \frac{1}{|\{i\}|^2}\sum_{i,j \in \{i\}} \mathrm{KL}\big(q_i^{(s)}(x) \| \Omega_{ij}[q_j^{(s)}](x)\big).
 \end{equation}
 
 Model coherence similarly measures alignment of generative models through $C_{\mathrm{model}}(\{i\}, x) = 1 - \frac{1}{|\{i\}|^2}\sum_{i,j \in \{i\}} \mathrm{KL}\big(s_i^{(s)}(x) \| \tilde{\Omega}_{ij}[s_j^{(s)}](x)\big)$, where $s_i^{(s)}$ denotes the generative model of agent $i$ at hierarchical scale $s$ (the superscript indexes scale, the subscript indexes agent). Presence measures spatial overlap via $P(\{i\}, x) = \frac{1}{|\{i\}|}\sum_{i \in \{i\}} \chi_i(x)$ where $\chi_i(x)$ is agent $i$'s support function indicating where it maintains beliefs.
 
-The consensus score combines these factors multiplicatively as $\Gamma(\{i\}, x) = C_{\mathrm{belief}} \cdot C_{\mathrm{model}} \cdot P(\{i\}, x)$. A meta-agent forms when both $\Gamma(\{i\}, x) > \Gamma_{\min}$ (sufficient consensus) and $|\{i\}| \geq N_{\min}$ (sufficient cluster size). We use $\Gamma_{\min} = 0.5$ and $N_{\min} = 2$ in our simulations. These are ad-hoc thresholds chosen for computational convenience; the theoretical framework does not prescribe specific values. Lower thresholds produce more meta-agents from weaker coherence, higher thresholds require stronger consensus before formation occurs.
-
-In a more principled implementation, meta-agent formation would be governed directly by free energy gradients: a potential meta-agent emerges when the free energy $\mathcal{F}[\{q_i\}, \{p_i\}, \{s_i\}, \{r_i\}]$ of separate constituents exceeds the free energy $\mathcal{F}[q_I, p_I, s_I, r_I]$ of the unified meta-agent by more than the entropic cost of maintaining the additional organizational structure. This would produce continuous, smooth emergence rather than discrete threshold-crossing events. Our discrete approach approximates this continuous process for computational tractability.
+The consensus score combines these factors multiplicatively as $\Gamma(\{i\}, x) = C_{\mathrm{belief}} \cdot C_{\mathrm{model}} \cdot P(\{i\}, x)$. A meta-agent forms when both $\Gamma(\{i\}, x) > \Gamma_{\min}$ (sufficient consensus) and $|\{i\}| \geq N_{\min}$ (sufficient cluster size). The simulations of this paper use $\Gamma_{\min} = 0.5$ and $N_{\min} = 2$. These thresholds are implementation details, not theoretical requirements: the theoretical content lives in~\eqref{eq:meta_agent_FE_criterion}. The relation between the detector and the variational criterion is that, in the high-coherence regime, the savings on the left of~\eqref{eq:meta_agent_FE_criterion} scale quadratically with $|I|$ while $\Gamma$ tracks the same coherence factor that controls the savings; the constants $\Gamma_{\min}, N_{\min}$ then play the role of a discrete approximation of the size-dependent threshold the variational criterion implies. Whether a continuous-time evaluation of~\eqref{eq:meta_agent_FE_criterion} reproduces the same hierarchical organisation that the threshold-based detector produces is open, and is the natural follow-up project to the simulations reported here.
 
 \subsubsection{Gauge-Covariant Belief Construction}
+\label{sec:meta_agent_state_construction}
 
-When a meta-agent $I$ forms from constituents $\{i\}$, its belief must be constructed from constituent beliefs in a gauge-covariant manner. We construct a Gaussian meta-belief $q_I^{(s+1)}(x) = \mathcal{N}(\bar{\mu}_I(x), \bar{\Sigma}_I(x))$ where the mean and covariance are weighted averages of transported constituent beliefs:
+When a meta-agent $I$ forms from constituents $\{i\}$, its belief is the gauge-covariant variational barycenter of~\eqref{eq:meta_agent_barycenter}. The implementation drops the dispersion term in~\eqref{eq:meta_agent_sigma_barycenter} as a leading-order approximation in the high-coherence regime where meta-agents form (the dropped term is $\mathcal{O}(\varepsilon)$ in the post-transport pairwise dispersion $\varepsilon$), giving the working formulae
 \begin{align}
-\bar{\mu}_I(x) &= \frac{\sum_{i \in I} w_i(x)  \Omega_{I,i}[\mu_i^{(s)}](x)}{\sum_{i \in I} w_i(x)} \\
-\bar{\Sigma}_I(x) &= \frac{\sum_{i \in I} w_i(x)  \Omega_{I,i}[\Sigma_i^{(s)}](x)  \Omega_{I,i}^T}{\sum_{i \in I} w_i(x)}
+\bar{\mu}_I(x) &= \frac{\sum_{i \in I} w_i(x)  \Omega_{I,i}[\mu_i^{(s)}](x)}{\sum_{i \in I} w_i(x)},
+\label{eq:meta_agent_mu_impl}
+\\
+\bar{\Sigma}_I(x) &= \frac{\sum_{i \in I} w_i(x)  \Omega_{I,i}[\Sigma_i^{(s)}](x)  \Omega_{I,i}^T}{\sum_{i \in I} w_i(x)}.
+\label{eq:meta_agent_sigma_impl}
 \end{align}
-
-The weights depend on presence and coherence through $w_i(x) = \chi_i(x) \exp[-\mathrm{KL}(q_i^{(s)} \| \bar{q}_I^{(s)})]$, ensuring agents more aligned with the emerging consensus contribute more strongly to the meta-agent state.
+The weights depend on presence and coherence through $w_i(x) = \chi_i(x) \exp[-\mathrm{KL}(q_i^{(s)} \| \bar{q}_I^{(s)})]$, which is the leading-order saddle-point approximation of the variational weights $\alpha_i$ in~\eqref{eq:meta_agent_barycenter} when the parent prior $p_I$ is taken to centre on the emerging consensus. The dispersion term that is dropped in $\bar{\Sigma}_I$ would re-introduce constituent-dispersion-dependent inflation of the parent covariance; this matters for parents that retain residual disagreement about $\mu$, which is by construction not the regime in which the threshold detector triggers. Reinstating the dispersion term gives the strict variational solution at modest computational cost and is the natural refinement once the threshold detector is replaced by a continuous-time evaluation of~\eqref{eq:meta_agent_FE_criterion}.
 
 The critical property is gauge covariance: all constituent beliefs are first transported to the meta-agent's frame via $\Omega_{I,i}$ before averaging. This ensures the result is independent of individual gauge choices such that the meta-agent's belief is a genuine consensus, not an artifact of coordinate conventions. Without gauge-covariant transport, the averaging would produce frame-dependent results lacking physical or cognitive meaning.
 
-The meta-agent's gauge frame is constructed similarly as a weighted average of constituent frames: $\phi_I^{(s+1)}(x) = \sum_{i \in I} w_i(x) \phi_i^{(s)}(x) / \sum_{i \in I} w_i(x)$. This defines the meta-agent's internal coordinate system as a consensus of constituent perspectives, providing the reference frame in which the meta-agent organizes its beliefs and models.
+The meta-agent's gauge frame is the Lie-algebra-additive average $\phi_I^{(s+1)}(x) = \sum_{i \in I} w_i(x) \phi_i^{(s)}(x) / \sum_{i \in I} w_i(x)$, which is the first-order Baker--Campbell--Hausdorff approximation of the group-valued Karcher barycenter of~\eqref{eq:meta_agent_frame_barycenter}. The approximation is exact for abelian gauge groups or when the constituent frames mutually commute, and is accurate to $\mathcal{O}(\|\phi_i\|^2)$ for compact $G$ when constituent frames are close on the convexity ball $\|\log(U_i^{-1}U_j)\| < \pi/2$. Outside that regime --- and for non-compact gauge groups such as $\mathrm{GL}^+(K)$, where no bi-invariant Riemannian metric exists --- the additive average is a heuristic rather than a barycenter, and the choice between left-invariant and polar-decomposition substitutes is a modelling decision we do not adjudicate here.
 
-\textbf{Remark on Continuous Coalescence:} In principle, meta-agent formation is not a discrete event but a continuous process. As constituents align, a proto-meta-agent gradually emerges with increasing coherence as consensus strengthens. Our implementation treats formation as a discrete threshold-crossing for computational simplicity, but the underlying theory suggests a smooth phase transition where organizational structure emerges continuously from free energy minimization. This parallels symmetry breaking in statistical mechanics: order parameters (consensus measures) vary continuously, while we computationally detect transitions at specific thresholds.
+\textbf{Remark on Continuous Coalescence:} The variational criterion~\eqref{eq:meta_agent_FE_criterion} produces a continuous emergence rule: a proto-meta-agent gradually becomes free-energetically favoured as constituents align. Our implementation triggers the merge at a discrete threshold for computational tractability, but the underlying object is a continuous process that parallels symmetry breaking in statistical mechanics, in which order parameters (consensus measures) vary continuously while observable structure changes at specific thresholds.
 
 \subsection{Bottom-Up Emergence and Renormalization Group Structure}
 
@@ -1977,7 +2016,7 @@ Consensus checks occur every 2 steps enabling rapid hierarchical condensation. T
 The 5-level hyperprior propagation implements Wheeler's "it from bit" concept extended to hierarchical systems. Each agent receives priors not only from its immediate parent meta-agent, but from ancestors up to 5 scales higher, with exponential decay $\gamma = 0.5$ to weight more recent ancestry.
 
 \paragraph{Balanced Energy Landscape.}
-All energy hyper-parameters are set to unity ($\lambda_{\text{self}} = \lambda_{\text{belief}} = \lambda_{\text{prior}} = \lambda_{\text{obs}} = 1.0$), creating an unbiased energy landscape. This allows the system to explore the balance between individual identity preservation (self-energy), lateral social coordination (belief alignment), an operational prior-shadow alignment proxy (the slow subsystem $(s,r)$ is frozen in this run, so the canonical model-channel coupling $\gamma\mathrm{KL}(s_i\|\tilde\Omega s_j)$ is inactive and the visible vertical-integration channel is the dynamic-prior shadow $\mathrm{KL}(p_i\|\Omega p_j)$), and empirical grounding (observation fit). The absence of hierarchical bias enables observation of emergent dynamics without imposed preferences.
+All energy hyper-parameters are set to unity ($\lambda_{\text{self}} = \lambda_{\text{belief}} = \lambda_{\text{prior}} = \lambda_{\text{obs}} = 1.0$), creating an unbiased energy landscape. This allows the system to explore the balance between individual identity preservation (self-energy), lateral social coordination (belief alignment), an operational prior-shadow alignment proxy (the slow subsystem $(s,r)$ is frozen in this run, so the canonical model-channel coupling $\gamma\mathrm{KL}(s_i\|\tilde\Omega s_j)$ is inactive and the visible vertical-integration channel is the dynamic-prior shadow $\mathrm{KL}(p_i\|\Omega p_j)$), and empirical grounding (observation fit). The unit lambda weights remove a per-channel bias from the energy landscape; meta-agent nucleation itself remains gated by the threshold detector of Section~\ref{sec:meta_agent_threshold}.
 
 \paragraph{Safety Constraints.}
 Early stopping conditions prevent computational runaway: evolution terminates upon reaching either 25 scales or 200 total active agents. These limits ensure tractable computation while allowing sufficient depth to observe multi-scale emergence dynamics.
@@ -2026,7 +2065,7 @@ Evolution continued until either (1) 25 scales emerged, (2) 200 total agents exi
 
 \subsection{Results}
 
-We report spontaneous emergence of hierarchical meta-agent organisation from gauge-theoretic multi-agent active inference dynamics in a single illustrative run (random seed 2; multi-seed reproducibility is not yet established and is flagged as a limitation in Section~\ref{sec:scope_limitations}). Starting from an ensemble of independent agents with randomly initialised beliefs, the system in this run undergoes a rapid reorganisation event around step 150 characterised by simultaneous spikes in four non-equilibrium diagnostics (energy variance, gradient variance, energy flux, and a composite score) and self-organises into a stable hierarchical structure spanning 13 scales ($\zeta = 0$ through $\zeta = 12$). The simultaneous spike across diagnostics is consistent with a phase-transition-like reorganisation, but a phase-transition claim in the statistical-mechanics sense (finite-size scaling collapse, universality, multi-seed reproducibility) is not made here; we describe the event as a reorganisation in a single run and reserve the phase-transition vocabulary for future multi-seed work.
+We report detector-mediated emergence of hierarchical meta-agent organisation from gauge-theoretic multi-agent active inference dynamics in a single illustrative run (random seed 2; multi-seed reproducibility is not yet established and is flagged as a limitation in Section~\ref{sec:scope_limitations}). Starting from an ensemble of independent agents with randomly initialised beliefs, the system in this run undergoes a rapid reorganisation event around step 150 characterised by simultaneous spikes in four non-equilibrium diagnostics (energy variance, gradient variance, energy flux, and a composite score) and reorganises into a stable hierarchical structure spanning 13 scales ($\zeta = 0$ through $\zeta = 12$) once the threshold detector of Section~\ref{sec:meta_agent_threshold} starts triggering. The simultaneous spike across diagnostics is consistent with a phase-transition-like reorganisation, but a phase-transition claim in the statistical-mechanics sense (finite-size scaling collapse, universality, multi-seed reproducibility) is not made here; we describe the event as a reorganisation in a single run and reserve the phase-transition vocabulary for future multi-seed work.
 
 \subsubsection{Phase I: Local Free Energy Minimization (Steps 0--140)}
 
@@ -2134,7 +2173,7 @@ The final system state exhibits a well-defined tree-like hierarchical meta-agent
 \begin{figure}[htbp]
     \centering
     \includegraphics[width=0.5\linewidth]{Fig_8.png}
-    \caption{\textbf{Hierarchical meta-agent structure at $t=200$.} Final configuration showing the emergent tree-like organization spanning 13 hierarchical scales ($\zeta = 0$--12). Nodes represent individual agents, color-coded by scale from purple (base scale $\zeta=0$) through intermediate blues and greens to yellow (apex scale $\zeta=12$). Edge thickness indicates gauge-covariant coupling strength $|\Omega_{ij}|$ between agents. The architecture exhibits: (i) 8 primitive agents at scale 0 representing fundamental observational units, (ii) progressive spatial/temporal coarse-graining through scales 1--11 with agent counts decreasing from 26 to 6, and (iii) a single unified meta-agent at scale 12 representing the fully integrated collective perspective. Dense intra-scale connectivity and systematic inter-scale connections enable bidirectional information flow. This hierarchical structure emerged spontaneously from gauge-theoretic dynamics without imposed architectural priors, demonstrating that the principal bundle framework generates complex multi-scale organization through gauge symmetry breaking at different scales.}
+    \caption{\textbf{Hierarchical meta-agent structure at $t=200$.} Final configuration showing the emergent tree-like organization spanning 13 hierarchical scales ($\zeta = 0$--12). Nodes represent individual agents, color-coded by scale from purple (base scale $\zeta=0$) through intermediate blues and greens to yellow (apex scale $\zeta=12$). Edge thickness indicates gauge-covariant coupling strength $|\Omega_{ij}|$ between agents. The architecture exhibits: (i) 8 primitive agents at scale 0 representing fundamental observational units, (ii) progressive spatial/temporal coarse-graining through scales 1--11 with agent counts decreasing from 26 to 6, and (iii) a single unified meta-agent at scale 12 representing the fully integrated collective perspective. Dense intra-scale connectivity and systematic inter-scale connections enable bidirectional information flow. This hierarchical structure was produced by the threshold-based consensus detector of Section~\ref{sec:meta_agent_threshold} acting on agent state variables driven by the gauge-theoretic dynamics; the energy functional and initialization do not hard-code a hierarchical depth, scale assignments, or a tree topology, but the detector that nucleates meta-agents is imposed. Whether a continuous-time evaluation of the variational criterion of Section~\ref{sec:meta_agent_variational} reproduces this structure is left for future work.}
     \label{fig:hierarchy}
 \end{figure}
 
@@ -2155,7 +2194,7 @@ At the final time step $t = 200$:
 \paragraph{Single-run scaling near the reorganisation.}
 Near the reorganisation point (step 150) in this single-seed run, the energy variance grows sharply and a power-law fit $\Delta E^2 \propto |t - t_c|^{-\alpha}$ to the rising portion gives $\alpha \approx 1.8$ with no error bar from a single trajectory. We do not interpret this as a critical exponent: a critical exponent in the statistical-mechanics sense requires multi-seed averaging, an independently-fit critical time $t_c$, and finite-size-scaling collapse, none of which we have established. We report the value as an empirical fit to one trajectory and reserve critical-exponent vocabulary for future multi-seed work.
 
-These results provide the first direct evidence that gauge-theoretic active inference with softmax coupling weights can spontaneously generate hierarchical meta-agent structures from initially independent agents. The emergence proceeds through three distinct phases:
+Conditional on the threshold-based consensus detector of Section~\ref{sec:meta_agent_threshold} ($\Gamma_{\min} = 0.5$, $N_{\min} = 2$), these results show that gauge-theoretic active inference with softmax coupling weights produces a stable thirteen-scale hierarchical organization from initially independent agents in a single illustrative run. We do not claim free-energy-driven spontaneous emergence at this resolution, since the detector is imposed rather than derived; whether the detector approximates the continuous variational rule of Section~\ref{sec:meta_agent_variational} remains open. The post-detection trajectory proceeds through three distinct phases:
 \begin{enumerate}
 \item \textbf{Independent optimization}: Agents minimize local free energy without coordination
 \item \textbf{Critical transition}: Coupling strength amplification triggers collective reorganization
@@ -2164,9 +2203,9 @@ These results provide the first direct evidence that gauge-theoretic active infe
 
 The progression from bottom-up (scales 1--2 first) to top-down (scales 11--12 last) suggests that hierarchical structure emerges through successive stages of spatial coarse-graining, with each scale nucleating once sufficient coherence is achieved at the scale below.
 
-No hierarchical structure was imposed by the energy functional or initialization. The architecture in Fig.~\ref{fig:hierarchy} emerged purely from the gauge-theoretic dynamics and softmax coupling (attention) mechanism. This demonstrates that the geometric structure of the principal bundle framework, combined with information-theoretic coupling, is sufficient to generate complex multi-scale organization without explicit architectural priors in the manner of a "participatory universe".
+The energy functional and the initialization do not encode a hierarchical depth, scale assignments, or a tree topology; in that restricted sense, no hierarchical \emph{architecture} is hard-coded. The hierarchy in Fig.~\ref{fig:hierarchy} is nucleated, however, by the threshold-based consensus detector ($\Gamma_{\min} = 0.5$, $N_{\min} = 2$): without this detector no meta-agents form. The contribution of the gauge-theoretic dynamics and softmax coupling is to drive the constituent state variables $(\mu_q, \Sigma, \phi)$ into configurations on which the detector then triggers. Whether the detector is the discrete approximation of the continuous variational rule of Section~\ref{sec:meta_agent_variational}, in which case the hierarchy could be said to emerge from the dynamics in a stronger sense, is the natural follow-up question that this single-seed run does not settle.
 
-The observed behavior bears striking resemblance to renormalization group flow in field theory, where successive integrations over degrees of freedom generate hierarchical effective descriptions. Here, the renormalization emerges dynamically from agent interactions rather than being imposed analytically, suggesting deep connections between active inference and scale-dependent emergent phenomena in physics.
+The observed behavior bears structural resemblance to renormalization group flow in field theory, where successive integrations over degrees of freedom generate hierarchical effective descriptions. Here the RG-like coarse-graining is performed by the consensus detector applied iteratively to the gauge-theoretic dynamics; this produces an RG-flavored cascade but is not a derived RG flow.
 
 \subsection{Theoretical Interpretation: The Self-Referential Bootstrap}
 
@@ -2174,7 +2213,7 @@ Having established the empirical dynamics of meta-agent emergence, we now interp
 
 \subsubsection{Reality Participates in Its Own Construction - an Ouroboros}
 
-The validated participatory loop realizes Wheeler's most radical claim: the universe as a self-excited circuit where observers and observed co-create reality.
+The participatory loop realises Wheeler's most radical claim under the demonstration regime described above: the universe as a self-excited circuit where observers and observed co-create reality.
 
 At scale-0, agents observe the noumenal manifold $\mathcal{C}$ through observations $o_i$ and construct beliefs $q_i(x)$. These beliefs induce geometric structure via pullback (Section~\ref{sec:pullback}) although this geometry is not static:
 
@@ -2225,18 +2264,18 @@ Law without law & Info-theoretic necessities \\
 \label{tab:wheeler_comparison}
 \end{table}
 
-\subsection{Summary: Participatory Structure Validated}
+\subsection{Summary: Participatory Loop Demonstrated under Threshold Detection}
 
 We have demonstrated computationally that
 
 \begin{enumerate}
-\item Meta-agents robustly form from coherent agent clusters
-\item Information flows upward across scales ($\mathcal{I}_{s \to s+1} > 0$)
+\item Once the threshold-based consensus detector triggers, meta-agents robustly form from coherent agent clusters and persist across the run
+\item Post-detection information flows upward across scales ($\mathcal{I}_{s \to s+1} > 0$)
 \item Meta-agents propagate belief updates downward via the cross-scale shadow ($\Delta p_i > 0$ tracking $\Delta q_I^{(s+1)}$, with the parallel model-channel shadow $\Delta r_i$ active when the slow subsystem is unfrozen)
 \item The system remains out of equilibrium ($E_{\mathrm{score}} \gg 1$)
 \end{enumerate}
 
-This validates the participatory structure: agents co-create reality through multi-scale feedback. The universe is not a pre-existing structure that agents observe, but an evolving informational system that agents perpetually construct.
+Conditional on the threshold-based consensus detector of Section~\ref{sec:meta_agent_threshold}, this demonstrates the participatory structure: agents co-create reality through multi-scale feedback. The universe, in this picture, is not a pre-existing structure that agents observe but an evolving informational system that agents perpetually construct. Whether the demonstration also obtains under a continuous-time evaluation of the variational criterion of Section~\ref{sec:meta_agent_variational} is open.
 
 In the next section, we further validate the framework by showing that standard transformer architectures and attention emerge as the zero-dimensional limit of our framework, connecting our foundational theory to standard neural architecture machine learning.  we will show we can achieve transformer operation and learning without the scaffolding of neural networks and learned neural weights.  This shows that neural networks are the biological and computational instantiation of the deeper underlying geometry.
 
