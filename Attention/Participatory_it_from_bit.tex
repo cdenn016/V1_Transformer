@@ -95,7 +95,7 @@ This framework produces several emergent phenomena:
 
 \item Causality emerges from gauge-covariant transport operators defining information flow between agents
 \item Physical laws emerge as information-theoretic necessities (e.g., the second law from non-negative KL divergence)
-\item Hierarchical structure emerges through multi-scale renormalization with validated participatory feedback
+\item Hierarchical structure emerges through multi-scale renormalization with participatory feedback (demonstrated under threshold-based detection; see Section~\ref{sec:meta_agent_threshold})
 \item Standard transformer attention emerges as the zero-dimensional limit, providing empirical validation
 \end{enumerate}
 
@@ -118,7 +118,9 @@ This work operates at three distinct epistemic levels:
 
 The reader should hold the claims that follow to a clearly delimited scope. The framework derives a transformer architecture from gauge-theoretic variational inference, validates it empirically as a working language model, and provides mathematical structure for several interpretive moves that have circulated as informal philosophy such as  Wheeler's participatory universe, Kant's phenomenal/noumenal distinction, observer-dependent reality, and the Lahav--Neemeh proposal that consciousness is a frame-relative quantity. We do not claim to have derived quantum mechanics or general relativity from first principles, and several of the speculative results are demonstrated only at the level of worked examples. The honest delimitation:
 
-\textbf{Validated.} The 0-dimensional gauge theory recovers standard transformer attention (Section~\ref{sec:transformers}); the resulting architecture is a working language model trained without learned attention projections, MLPs, or pointwise activation functions. The bidirectional Ouroboros Tower simulations of meta-agent emergence (Section~\ref{sec:participatory}) run in working code for hundreds of agents across tens of hierarchical scales.
+\textbf{Validated.} The 0-dimensional gauge theory recovers standard transformer attention (Section~\ref{sec:transformers}); the resulting architecture is a working language model trained without learned attention projections, MLPs, or pointwise activation functions, with multi-seed scaling on WikiText-103 fitting $\mathrm{PPL} = aK^b + c$ at $b = -1.05$.
+
+\textbf{Demonstrated in working code (single illustrative run).} The bidirectional Ouroboros Tower simulations of meta-agent emergence (Section~\ref{sec:participatory}) run in working code for hundreds of agents across tens of hierarchical scales, conditional on the threshold-based consensus detector of Section~\ref{sec:meta_agent_threshold}. The variational free-energy improvement criterion that this detector approximates (Section~\ref{sec:meta_agent_variational}) is not itself evaluated continuously in the simulation; whether the discrete detector and the continuous variational rule produce the same hierarchical organisation is open.
 
 \textbf{Worked example only.} The Lorentzian-signature construction (Section~\ref{sec:signature_resolution}) is established in a 2D linearized toy model with a constant generator. The extension to four-dimensional, fully nonlinear $\mathrm{GL}(K,\mathbb{C})$ Yang-Mills dynamics, and the question whether imaginary gauge-frame components emerge dynamically rather than by hand, are open.
 
@@ -357,6 +359,7 @@ Meta-agents represent emergent collective entities arising from coherent subsyst
 The construction of meta-agent beliefs from constituent beliefs requires careful gauge-covariant averaging procedures detailed in Section~\ref{sec:participatory}. Naively averaging beliefs from agents in different gauge frames produces meaningless results - we must first transport all beliefs to a common frame, compute the average, then assign an appropriate gauge frame to the resulting meta-agent. This ensures the meta-agent's beliefs remain well-defined geometric objects on the statistical manifold.
 
 \subsubsection{Epistemic Collapse and Information Death}
+\label{sec:epistemic_collapse}
 
 The flip side of consensus formation is epistemic collapse - the pathological limit where agents become informationally indistinguishable, eliminating the diversity necessary for meaningful information exchange.
 
@@ -437,9 +440,19 @@ The consequence is that only relative gauge frames matter. Writing the transport
 
 \paragraph{Two regimes for the gauge connection.} The framework admits two distinct regimes for the gauge connection, and the distinction matters for every subsequent claim about field strength, holonomy, and Yang-Mills structure. In \emph{Regime~I}, the connection is the pure-gauge object $A^{(i)}_\mu(c) = U_i^{-1}(c)\partial_\mu U_i(c)$ derived from the smooth agent frame $\phi_i$, the inter-agent transport $\Omega_{ij} = U_iU_j^{-1}$ is the cocycle of Theorem~\ref{thm:vanishing_holonomy}, and the curvature $F^{(i)}_{\mu\nu}$ vanishes identically (the Maurer--Cartan computation in Section~\ref{sec:gauge_transport_arbitrary} below). This regime is the one the present implementation realizes and the one the simulations of Sections~\ref{sec:participatory}--\ref{sec:transformers} compute. In \emph{Regime~II}, $A^{(i)}_\mu$ is promoted to an independent connection variable not constrained to factor as $U^{-1}dU$; transport along a path~$\gamma$ becomes the path-ordered exponential $\Omega_\gamma = \mathcal{P}\exp(-\int_\gamma A_\mu  dx^\mu)$ rather than a vertex-local product, and $F_{\mu\nu}$ becomes a genuine dynamical field with non-trivial holonomy. Several constructions in this manuscript -- Yang-Mills curvature regularizers, frame-twist holonomy, the Lorentzian-signature mechanism via $\mathrm{tr}(A_\mu A_\nu)$, and the gauge-curvature linguistic conjecture -- are formally meaningful only in Regime~II. We mark these passages as Regime~II content where they appear, and otherwise read the connection-form discussion below as developing the general gauge-theoretic vocabulary that becomes dynamically nontrivial only after the Regime~II promotion.
 
-The gauge frame $\phi_i$ induces a connection one-form on agent $i$'s domain defined by $A^{(i)}_\mu(c) = U_i^{-1}(c) \partial_\mu U_i(c) \in \mathfrak{g}$ where $U_i(c) = \exp[\phi_i(c)] \in G$ and $\partial_\mu = \partial/\partial c^\mu$. This connection defines parallel transport along curves in $\mathcal{C}$ within agent $i$'s frame. When moving from point $c$ to $c + dc^\mu$, the connection specifies how to parallel transport beliefs while maintaining consistency with agent $i$'s internal coordinates.
+The gauge frame $\phi_i$ induces a Lie-algebra-valued one-form on agent $i$'s domain,
+\begin{equation}
+\theta^{(i)}_\mu(c) := U_i^{-1}(c) \partial_\mu U_i(c) \in \mathfrak{g},
+\label{eq:connection_form}
+\end{equation}
+where $U_i(c) = \exp[\phi_i(c)] \in G$ and $\partial_\mu = \partial/\partial c^\mu$. This is the (left) Maurer--Cartan frame-gradient pulled back along the agent's section $U_i: \mathcal{C} \to G$, not a dynamical Yang-Mills connection: under the cocycle parameterisation $\Omega_{ij} = U_i U_j^{-1}$ the curvature $d\theta + \theta \wedge \theta$ vanishes identically (Section~\ref{sec:gauge_transport_arbitrary}). We retain the symbol $A^{(i)}_\mu$ for $\theta^{(i)}_\mu$ throughout the manuscript when the context is the frame-gradient reading; the Yang-Mills reading, in which $A$ is an independent connection variable, is the Regime~II extension introduced above.
 
-On overlapping regions $\mathcal{U}_i \cap \mathcal{U}_j$, the connections transform according to standard gauge transformation law from Yang-Mills theory: $A^{(i)}_\mu = \Omega_{ij} A^{(j)}_\mu \Omega_{ij}^{-1} + \Omega_{ij} \partial_\mu \Omega_{ij}^{-1}$. The inhomogeneous term (second term) arises because $\Omega_{ij}$ varies spatially - agents' relative orientations change across $\mathcal{C}$. This spatial variation of relative frames is essential for generating non-trivial gauge field dynamics.
+On overlapping regions $\mathcal{U}_i \cap \mathcal{U}_j$, the relation between the two agents' frame-gradients follows from $U_i = \Omega_{ij} U_j$ and the chain rule:
+\begin{equation}
+\theta^{(i)}_\mu = \mathrm{Ad}(U_j^{-1})\big[\Omega_{ij}^{-1} \partial_\mu \Omega_{ij}\big] + \theta^{(j)}_\mu,
+\label{eq:theta_overlap_relation}
+\end{equation}
+where $\mathrm{Ad}(U_j^{-1})$ denotes the adjoint action of $U_j^{-1}$ on $\mathfrak{g}$. Equation~\eqref{eq:theta_overlap_relation} is \emph{not} the standard Yang-Mills gauge-transformation law $A^{(i)} = g A^{(j)} g^{-1} - (dg) g^{-1}$, which holds for an independent connection variable under right-multiplication of the structure-group element. The mismatch reflects the fact that $\theta = U^{-1}dU$ is the pullback of a frame-gradient, not a section-independent gauge potential; under Regime~II the Yang-Mills law is recovered, but in Regime~I~\eqref{eq:theta_overlap_relation} is the correct overlap relation.
 
 \subsubsection{Gauge Field Strength: Path-Dependent Information Transport}
 \label{sec:field_strength}
@@ -471,7 +484,7 @@ More speculatively, cross-bundle morphisms might connect the latent-state and mo
 
 The framework involves four distinct notions of curvature, each playing different roles in the overall dynamics. Understanding their interplay is essential for grasping emergent spacetime structure.
 
-The statistical manifold curvature governs fiber geometry. The fiber $\mathcal{B}$ itself is a curved Riemannian manifold with intrinsic curvature tensor $R^\mathcal{B}(X,Y)Z = \nabla_X \nabla_Y Z - \nabla_Y \nabla_X Z - \nabla_{[X,Y]} Z$ measuring how geodesics diverge. The manifold of Gaussian distributions $\mathcal{N}(\mu, \Sigma)$ has constant negative sectional curvature (hyperbolic geometry), meaning uncertainty naturally grows as we move through belief space - geodesics diverge. This fiber curvature governs dynamics within each fiber and affects natural gradient flow.
+The statistical manifold curvature governs fiber geometry. The fiber $\mathcal{B}$ itself is a curved Riemannian manifold with intrinsic curvature tensor $R^\mathcal{B}(X,Y)Z = \nabla_X \nabla_Y Z - \nabla_Y \nabla_X Z - \nabla_{[X,Y]} Z$ measuring how geodesics diverge. The manifold of Gaussian distributions $\mathcal{N}(\mu, \Sigma)$ under the Fisher--Rao metric has \emph{nonpositive} sectional curvature: the SPD covariance sector $\mathbb{S}^+_K$ is a Riemannian symmetric space of nonpositive curvature, while certain low-dimensional Gaussian families -- the univariate case and the location-scale family with fixed correlation, for example -- reduce to hyperbolic geometry of constant negative curvature. The general multivariate Gaussian family does not have constant sectional curvature across all tangent planes; the qualitative consequence -- that uncertainty grows along geodesics and they diverge -- follows from nonpositivity. This fiber curvature governs dynamics within each fiber and affects natural gradient flow.
 
 The gauge group curvature reflects frame space geometry. The structure group $G$ is itself a curved manifold. For $G = \mathrm{SO}(3)$, the group has topology $\mathrm{SO}(3) \cong \mathbb{RP}^3$ (real projective 3-space) with constant positive curvature. The group is non-commutative, so the order of unrelated transports matters in the sense that $\Omega_{ab}\Omega_{cd} \neq \Omega_{cd}\Omega_{ab}$ for disjoint pairs. For chained transports through a common intermediate agent, however, the cocycle $\Omega_{ij}\Omega_{jk} = \Omega_{ik}$ holds identically by the algebraic collapse $U_j^{-1}U_j = I$ in $\Omega_{ij}\Omega_{jk} = U_iU_j^{-1}U_jU_k^{-1} = U_iU_k^{-1}$, regardless of commutativity (Theorem~\ref{thm:vanishing_holonomy}). Group curvature therefore affects the composition of unrelated gauge transformations and influences Wilson-loop calculations on more elaborate transport architectures, but the vertex-local parameterisation used here is automatically flat.
 
@@ -500,7 +513,7 @@ This simplification is reasonable because beliefs and priors are both probabilit
 
 \subsubsection{Gaussian Probability Manifold}
 
-The fiber is the manifold of $K$-dimensional Gaussian distributions: $\mathcal{B} = \{\mathcal{N}(\mu, \Sigma) : \mu \in \mathbb{R}^K, \Sigma \in \mathbb{S}^+_K\}$ where $\mathbb{S}^+_K$ denotes the space of $K \times K$ symmetric positive-definite matrices. The Gaussian manifold has constant negative sectional curvature under the Fisher-Rao metric~\cite{Amari2016}, dimension $\dim(\mathcal{B}) = K + K(K+1)/2 = K(K+3)/2$, and KL divergence between Gaussians has the closed form recorded in Eq.~\eqref{eq:gaussian_kl}.
+The fiber is the manifold of $K$-dimensional Gaussian distributions: $\mathcal{B} = \{\mathcal{N}(\mu, \Sigma) : \mu \in \mathbb{R}^K, \Sigma \in \mathbb{S}^+_K\}$ where $\mathbb{S}^+_K$ denotes the space of $K \times K$ symmetric positive-definite matrices. Under the Fisher--Rao metric, the Gaussian manifold has nonpositive sectional curvature~\cite{Amari2016} (the SPD covariance factor is a symmetric space of nonpositive curvature; specific low-dimensional Gaussian families reduce to hyperbolic geometry but the general case does not have constant sectional curvature across all tangent planes), dimension $\dim(\mathcal{B}) = K + K(K+1)/2 = K(K+3)/2$, and KL divergence between Gaussians has the closed form recorded in Eq.~\eqref{eq:gaussian_kl}.
 
 Gaussians are the maximum entropy distribution for given mean and covariance, making them natural for representing uncertainty in continuous spaces. The closed-form expressions enable efficient computation, and their information geometry is well-studied. We emphasize that multivariate Gaussians are a \emph{simplifying choice}, not a theoretical requirement: the gauge-theoretic framework applies to any exponential family distribution, since the $\mathrm{GL}(K)$ invariance of $f$-divergences holds for arbitrary bijective linear transformations of exponential family sufficient statistics. Extending to mixture models, heavy-tailed distributions, or complex-valued amplitudes (Section~\ref{sec:signature_resolution}) is straightforward in principle but computationally expensive, and is deferred to future work. The choice of distribution family has important consequences for the emergent geometry, as discussed in Section~\ref{sec:signature_resolution}.
 
@@ -757,14 +770,11 @@ This recovers relative position biases used in T5~\cite{raffel2020exploring} and
 
 The transport operators are pointwise gauge frame transformations defined as in~\eqref{eq:transport_def}, with $\Omega_{ij}(c) \in \mathrm{GL}^+(K)$ and $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ agent $i$'s gauge frame field. These operators act on latent vectors through the representation $\rho: \mathrm{GL}(K) \to \mathrm{GL}(V)$ giving $\Omega_{ij}[k_j] := \rho(\Omega_{ij})  k_j \in \mathbb{R}^{K}$ and $\tilde{\Omega}_{ij}[m_j] := \rho(\tilde{\Omega}_{ij})  m_j \in \mathbb{R}^{K_p}$. For the fundamental representation, this is matrix multiplication by an invertible matrix.
 
-On base manifolds of dimension $\dim(\mathcal{C}) \geq 1$, the gauge frame fields induce additional geometric structure absent in the 0-dimensional (transformer) limit. Each agent's frame field defines a local connection one-form
-
+On base manifolds of dimension $\dim(\mathcal{C}) \geq 1$, the gauge frame fields induce additional geometric structure absent in the 0-dimensional (transformer) limit. Each agent's frame field defines the local Maurer--Cartan one-form
 \begin{equation}
 A_\mu^{(i)}(c) = U_i^{-1}(c)  \partial_\mu U_i(c) \in \mathfrak{gl}(K),
-\label{eq:connection_form}
 \end{equation}
-
-where $U_i(c) = \exp[\phi_i(c)]$. The associated gauge curvature (field strength) is
+already introduced as Eq.~\eqref{eq:connection_form}, with $U_i(c) = \exp[\phi_i(c)]$. The associated gauge curvature (field strength) is
 
 \begin{equation}
 F_{\mu\nu}^{(i)}(c) = \partial_\mu A_\nu^{(i)} - \partial_\nu A_\mu^{(i)} + [A_\mu^{(i)}, A_\nu^{(i)}] \in \mathfrak{gl}(K).
@@ -872,7 +882,7 @@ $$
 
 and similarly for the $\gamma_{ij}(c)$ model-alignment attention weight (with $\tilde{\Omega}_{ij}$ in place of $\Omega_{ij}$ and $s_j$ in place of $q_j$), derived from the same mixture-of-sources principle (Section~\ref{sec:mixture_derivation}).
 As with the pointwise functional~\eqref{eq:pointwise_free_energy}, the boxed equation displays the joint free energy with $\beta_{ij}(c)$ and $\gamma_{ij}(c)$ left as variational parameters; substituting their softmax minimizers into both the energy and entropy terms of $\mathcal{F}_{\text{align}}$ (Eq.~\ref{eq:mixture_energy_entropy}) yields the reduced free energy~\eqref{eq:free_energy_reduced} of Section~\ref{sec:envelope_theorem}, in which each alignment block becomes $-\tau \log Z_i$. The boxed (autograd-convention) objective and the reduced free energy share critical points; their gradients agree at the optimum but differ off-equilibrium by the attention-entropy term $\tau \sum_j \beta^*_{ij}\log(\beta^*_{ij}/\pi_j)$.
-Here $\chi_i(c)$ represents agent $i$'s support (one where agent exists, zero elsewhere), $\chi_{ij}(c) = \chi_i(c) \chi_j(c)$ is the overlap region, $\beta_{ij}(c)$ and $\gamma_{ij}(c)$ are the belief-alignment and model-alignment weights computed via softmax over KL divergences (Eq.~\ref{eq:softmax_attention_general}), and $\Omega_{ij}(c) \in \mathrm{GL}^+(K)$ is the gauge transport operator defined in~\eqref{eq:transport_def}. In the simulations of this paper $\gamma_{ij} = 0$; the model-alignment term is retained in the canonical functional because it is the formal content of meta-cognitive consensus exercised in Section~\ref{sec:participatory}. On base manifolds of dimension $\geq 1$, the gauge frame fields additionally induce a connection one-form $A_\mu^{(i)}(c) = U_i^{-1}\partial_\mu U_i$ (Eq.~\ref{eq:connection_form}) and gauge curvature $F_{\mu\nu}^{(i)}$ (Eq.~\ref{eq:field_strength}). Optional regularizers include gauge field smoothness $\lambda_\phi \int \|\nabla \phi_i\|^2  \sqrt{g} dc$ and Fisher metric mass terms $\int \mathrm{tr}(G_{ij})  \sqrt{g} dc$. A Yang-Mills curvature penalty $\int \mathrm{tr}(F_{\mu\nu} F^{\mu\nu})  \sqrt{g} dc$ is sometimes invoked in the literature on gauge-theoretic active inference; in Regime~I (Section~\ref{sec:connection_forms}) the integrand vanishes identically by the Maurer--Cartan identity and the term is structurally inactive, so we list it under the Regime~II extension and not as a regularizer of the present implementation.
+Here $\chi_i(c) \in [0, 1]$ is agent $i$'s presence function, $\chi_{ij}(c) = \chi_i(c) \chi_j(c)$ is the soft overlap, and we adopt the smooth-section convention $\chi_i: \mathcal{C} \to [0, 1]$ rather than a hard $\{0, 1\}$ indicator: the bundle language of Section~\ref{sec:agents_as_sections} requires agents to be smooth sections over open domains, and discontinuous $\chi_i$ would make derivatives of the integrands distributional at support boundaries. In the simulations of this paper the supports are realised as smooth bump functions (compactly supported partitions of unity rather than indicator functions); we discuss the bump-function shape and width as implementation hyperparameters in Section~\ref{sec:participatory}. Earlier drafts wrote $\chi_i \in \{0, 1\}$; that should be read as a heuristic for the limit of a sharply localised bump, not as an indicator function in the strict sense, since the latter conflicts with the smooth-section assumption. $\beta_{ij}(c)$ and $\gamma_{ij}(c)$ are the belief-alignment and model-alignment weights computed via softmax over KL divergences (Eq.~\ref{eq:softmax_attention_general}), and $\Omega_{ij}(c) \in \mathrm{GL}^+(K)$ is the gauge transport operator defined in~\eqref{eq:transport_def}. In the simulations of this paper $\gamma_{ij} = 0$; the model-alignment term is retained in the canonical functional because it is the formal content of meta-cognitive consensus exercised in Section~\ref{sec:participatory}. On base manifolds of dimension $\geq 1$, the gauge frame fields additionally induce a connection one-form $A_\mu^{(i)}(c) = U_i^{-1}\partial_\mu U_i$ (Eq.~\ref{eq:connection_form}) and gauge curvature $F_{\mu\nu}^{(i)}$ (Eq.~\ref{eq:field_strength}). Optional regularizers include gauge field smoothness $\lambda_\phi \int \|\nabla \phi_i\|^2  \sqrt{g} dc$ and Fisher metric mass terms $\int \mathrm{tr}(G_{ij})  \sqrt{g} dc$. A Yang-Mills curvature penalty $\int \mathrm{tr}(F_{\mu\nu} F^{\mu\nu})  \sqrt{g} dc$ is sometimes invoked in the literature on gauge-theoretic active inference; in Regime~I (Section~\ref{sec:connection_forms}) the integrand vanishes identically by the Maurer--Cartan identity and the term is structurally inactive, so we list it under the Regime~II extension and not as a regularizer of the present implementation.
 
 \subsubsection{The Envelope Theorem and the Reduced Free Energy}
 \label{sec:envelope_theorem}
@@ -1029,7 +1039,7 @@ The mechanism underlying this symmetry breaking connects directly to the free en
 
 This specialization exhibits striking parallels to representational learning in deep neural networks. Just as backpropagation gradient descent induces feature specialization where neurons respond selectively to distinct input patterns, variational free energy minimization with observations induces epistemic specialization where agents develop distinct probabilistic perspectives on the environment. The specialized modes emerging from the initially symmetric space correspond to learned features in neural architectures.
 
-The emergence of specialized agents enables hierarchical structure formation. As agents diverge under observation (or environmental) driven symmetry breaking, subpopulations with aligned beliefs can form coherent clusters. Monitoring attention fields $\beta_{ij}(c)$ during evolution reveals that agents with similar observational histories maintain strong mutual attention, while divergent agents decouple. This alignment-divergence dynamics provides the substrate for meta-agent emergence: clusters of mutually coherent agents satisfying the consensus criteria (Section~\ref{sec:participatory}) spontaneously organize into higher-scale collective entities. The symmetry breaking thus serves dual roles - it generates specialized individual agents through environmental coupling, and it creates the informational structure necessary for multi-scale hierarchical emergence. This connects the gauge-theoretic foundation to the participatory dynamics discussed previously, demonstrating how observations drive both individual specialization and collective organization within a unified variational framework.
+The emergence of specialized agents enables hierarchical structure formation. As agents diverge under observation (or environmental) driven symmetry breaking, subpopulations with aligned beliefs can form coherent clusters. Monitoring attention fields $\beta_{ij}(c)$ during evolution reveals that agents with similar observational histories maintain strong mutual attention, while divergent agents decouple. This alignment-divergence dynamics provides the substrate for meta-agent emergence: clusters of mutually coherent agents satisfying the consensus criteria (Section~\ref{sec:meta_agent_threshold}) are aggregated by the threshold-based detector into higher-scale collective entities. The symmetry breaking thus serves dual roles - it generates specialized individual agents through environmental coupling, and it creates the informational structure necessary for multi-scale hierarchical emergence. This connects the gauge-theoretic foundation to the participatory dynamics discussed previously, demonstrating how observations drive both individual specialization and collective organization within a unified variational framework.
 
 \subsection{Dynamical Structure and Emergent Timescales}
 
@@ -1254,14 +1264,15 @@ where $\tilde{\Lambda}_{q_i}^{(k)} := \Omega_{ki}^{-T}\Lambda_{q_i}\Omega_{ki}^{
 
 The prior term gives $\partial^2 D_{\mathrm{KL}}(q_i \| p_i)/\partial \mu_i \partial \Sigma_i = 0$. The sensory free energy decomposes into a term quadratic in $\mu_i$ and a term linear in $\Sigma_i$; these are independent, so $[C^{\mu\Sigma}]_{ii}^{\mathrm{sensory}} = 0$.
 
-For the consensus term, from $\partial D_{\mathrm{KL}}(q_i \| \tilde{q}_k)/\partial \mu_i = \tilde{\Lambda}_{q_k}(\mu_i - \tilde{\mu}_k)$, varying $\Sigma_k$:
+For the consensus term, from $\partial D_{\mathrm{KL}}(q_i \| \tilde{q}_k)/\partial \mu_i = \tilde{\Lambda}_{q_k}(\mu_i - \tilde{\mu}_k)$ with $\tilde{\Lambda}_{q_k} = \Omega_{ik}^{-T}\Lambda_{q_k}\Omega_{ik}^{-1}$ (Eq.~\eqref{eq:precision_transport}), varying $\Sigma_k$ gives $\delta\tilde{\Lambda}_{q_k} = -\Omega_{ik}^{-T}\Lambda_{q_k} V \Lambda_{q_k}\Omega_{ik}^{-1}$ for $V = \delta\Sigma_k$, and therefore
 \begin{equation}
-\frac{\partial^2 D_{\mathrm{KL}}(q_i \| \tilde{q}_k)}{\partial \mu_i \partial \Sigma_k}[V] = -\Omega_{ik}\Lambda_{q_k} V \Lambda_{q_k} \Omega_{ik}^T (\mu_i - \tilde{\mu}_k).
+\frac{\partial^2 D_{\mathrm{KL}}(q_i \| \tilde{q}_k)}{\partial \mu_i \partial \Sigma_k}[V] = -\Omega_{ik}^{-T}\Lambda_{q_k} V \Lambda_{q_k} \Omega_{ik}^{-1} (\mu_i - \tilde{\mu}_k).
 \end{equation}
 In components:
 \begin{equation}
-\frac{\partial^2 D_{\mathrm{KL}}}{\partial(\mu_i)_a \partial(\Sigma_k)_{bc}} = -[\Omega_{ik}\Lambda_{q_k}]_{ab}[\Lambda_{q_k}\Omega_{ik}^T(\mu_i - \tilde{\mu}_k)]_c.
+\frac{\partial^2 D_{\mathrm{KL}}}{\partial(\mu_i)_a \partial(\Sigma_k)_{bc}} = -[\Omega_{ik}^{-T}\Lambda_{q_k}]_{ab}[\Lambda_{q_k}\Omega_{ik}^{-1}(\mu_i - \tilde{\mu}_k)]_c.
 \end{equation}
+Under $\mathrm{O}(d)$ this reduces to the form $-\Omega_{ik}\Lambda_{q_k} V \Lambda_{q_k}\Omega_{ik}^\top(\mu_i - \tilde{\mu}_k)$ used in earlier drafts; the general-linear expression above is the correct cross block whenever the gauge group is non-orthogonal.
 This vanishes at consensus ($\mu_i = \tilde{\mu}_k$):
 \begin{equation}
 \boxed{[C^{\mu\Sigma}]_{ik} = 0 \quad \text{when } \mu_i = \tilde{\mu}_k.}
@@ -1302,7 +1313,7 @@ This represents kinetic correlation: when agent $k$ accelerates, agent $i$ feels
 \subsection{The Participatory Universe: Multi-Scale Emergence and Dynamics}
 \label{sec:participatory}
 
-Wheeler's participatory universe~\cite{Wheeler1983} envisions reality as co-constructed through feedback between observers and observed. We demonstrate that our gauge-theoretic framework supports structural parallels to this vision: agents spontaneously organize into hierarchical meta-agents that propagate information back to constituents, creating self-sustaining feedback loops. This section presents the mathematical framework for multi-scale emergence and establishes that participatory-like dynamics arise naturally from variational free energy minimization. We emphasize this is a toy model demonstrating possibility, not a claim about physical reality.
+Wheeler's participatory universe~\cite{Wheeler1983} envisions reality as co-constructed through feedback between observers and observed. We demonstrate that our gauge-theoretic framework supports structural parallels to this vision: when coherent agent clusters satisfy the variational free-energy improvement criterion of Section~\ref{sec:meta_agent_variational}, they aggregate into hierarchical meta-agents that propagate information back to constituents through the cross-scale shadow relation, producing the formal feedback loop the participatory picture requires. The simulations of this paper trigger the aggregation through the threshold-based surrogate of Section~\ref{sec:meta_agent_threshold} rather than through a continuous-time evaluation of the variational criterion; the threshold detector approximates the variational rule in the high-coherence regime, but whether the two produce identical hierarchical organisation is open. This section presents the mathematical framework for the feedback loop and demonstrates that participatory-like dynamics are consistent with variational free energy minimisation in the post-detection regime. We emphasize this is a toy model demonstrating possibility, not a claim about physical reality.
 
 \subsection{Hierarchical Scale Structure}
 
@@ -1312,36 +1323,82 @@ Each scale-$s$ agent is itself a full section $\sigma_I^{(s)}$ carrying primitiv
 
 To prevent computational intractability, we impose a hard cap on hierarchical depth with $s \leq s_{\max}$. We set $s_{\max} = 25$. Beyond this cap, the participatory dynamics remain active but no new scales form. This practical limitation does not reflect theoretical principle but computational constraint.
 
-\subsection{Consensus Detection and Meta-Agent Formation}
+\subsection{Meta-Agent Formation: Variational Principle and Threshold-Based Implementation}
+\label{sec:meta_agent_formation}
 
-\textbf{Computational Implementation Note:} In principle, meta-agent formation should emerge continuously from free energy minimization as agents naturally coalesce when doing so reduces collective free energy. Our implementation uses discrete threshold-based detection for computational tractability. The specific thresholds and measures below are pragmatic choices enabling proof-of-concept simulations, not fundamental theoretical requirements. Future work should develop continuous emergence mechanisms where meta-agents form smoothly through variational dynamics rather than discrete detection events.
+\subsubsection{Variational Principle}
+\label{sec:meta_agent_variational}
 
-Meta-agents emerge when scale-$s$ agents exhibit sufficient coherence and spatial overlap. We quantify this through three complementary measures. Belief coherence captures how similar agents' current beliefs are after accounting for gauge transformations:
+The principled rule for meta-agent formation is the variational free-energy improvement criterion: a candidate meta-agent $I$ is licensed when the optimised free energy with the parent inserted, plus an organisational overhead $C(I)$, falls below the optimised free energy of the disaggregated constituents,
+\begin{equation}
+\mathcal{F}^*[q_I, p_I, s_I, r_I, \{q_i, s_i\}_{i \in I}] + C(I) < \mathcal{F}^*[\{q_i, p_i, s_i, r_i\}_{i \in I}].
+\label{eq:meta_agent_FE_criterion}
+\end{equation}
+Here $C(I)$ is the cost of carrying the additional organisational structure (the parent's variational parameters and its place in the cross-scale hierarchy); the natural choices are an entropy or minimum-description-length term in the parent's primitive variables. When~\eqref{eq:meta_agent_FE_criterion} holds, merging the cluster into a meta-agent reduces the total free energy net of overhead; when it fails, the constituents remain separated.
+
+The savings on the left side of~\eqref{eq:meta_agent_FE_criterion} come from collapsing the $\mathcal{O}(|I|^2)$ pairwise alignment KL terms of $\mathcal{F}^*$ into the $|I|$ child-parent KL terms $\sum_{i \in I} \alpha_i \mathrm{KL}(\Omega_{Ii}q_i \| q_I)$ together with the parent's own self-consistency term. In the high-coherence limit where pairwise post-transport KLs are uniformly bounded by $\varepsilon \ll 1$, the savings scale as $\sim |I|(|I|-1)\varepsilon$, growing quadratically with cluster size, while $C(I)$ for an MDL-style choice grows much more slowly (sub-linearly for free-form primitives, logarithmically for parameter-counted ones). The criterion~\eqref{eq:meta_agent_FE_criterion} therefore licenses a parent once the cluster crosses a coherence/size combination at which the quadratic gain dominates the overhead. This is the principled object that the threshold detector defined below approximates.
+
+\paragraph{Information-bottleneck refinement (research direction).} A natural strengthening of~\eqref{eq:meta_agent_FE_criterion} treats the parent state as a predictive sufficient statistic of its constituents in the sense of the information bottleneck~\cite{tishby1999information}. Let $X = \{q_i, s_i, U_i\}_{i \in I}$ denote the joint constituent state, $T = (q_I, s_I, U_I)$ the parent state regarded as a stochastic encoding of $X$, and $Y = X_{t+\Delta t}$ the future constituent state under one step of natural-gradient flow on $\mathcal{F}$. The IB Lagrangian
+\begin{equation}
+\mathcal{L}_{\mathrm{IB}}[T \mid X] = I(T;X) - \beta_{\mathrm{IB}}I(T;Y),
+\label{eq:meta_agent_IB}
+\end{equation}
+minimised over the encoder $p(T \mid X)$, selects the parent that compresses the joint constituent state ($I(T;X)$, the rate) while preserving information about how the constituents will evolve ($I(T;Y)$, the predictive content)~\cite{bialek2001predictability}. The sign convention is the standard one: rate minus $\beta$ times predictive information. Reading $C(I)$ in~\eqref{eq:meta_agent_FE_criterion} as the IB rate term $\beta_{\mathrm{IB}}^{-1}I(T;X)$ and the free-energy savings as a proxy for the predictive term $I(T;Y)$, the IB Lagrangian is the variational closure of the FE improvement criterion: it selects not just \emph{any} free-energetically favourable coarse-graining but the one that retains maximal predictive information at fixed rate.
+
+For linear-Gaussian dynamics around consensus, the IB problem~\eqref{eq:meta_agent_IB} admits the closed-form Gaussian-IB solution of~\cite{chechik2005information}, in which the optimal $T$ is a precision-weighted projection along the top canonical-correlation directions between $X$ and $Y$. Whether the resulting $T$ coincides with the variational barycenter~\eqref{eq:meta_agent_barycenter} below in this regime is an open question we do not settle here: the IB optimum is a strictly stronger object than the FE-improvement licensee, and a discrepancy would be a finding rather than a contradiction. Three ingredients remain to be supplied before~\eqref{eq:meta_agent_IB} is more than a research direction in this framework: a precise specification of the natural-gradient transition kernel that defines $X \to Y$ in the gauge-covariant setting; a treatment of the gauge-frame component of $T$ under encoder noise (the group-valued analogue of Gaussian-IB requires the Riemannian structure of Section~\ref{sec:meta_agent_variational}'s frame barycenter); and an empirical comparison of the IB-optimal coarse-graining with the threshold-detector hierarchy that the simulations of this paper produce. We flag IB as a refinement that would, if the comparison succeeds, license a strictly stronger emergence claim than~\eqref{eq:meta_agent_FE_criterion} alone supports; the present manuscript stands on the FE-improvement criterion.
+
+\paragraph{Parent state as gauge-covariant variational barycenter.} Conditional on a parent existing, its state is the variational minimiser of the alignment energy along the child-parent edges. Treating the parent as a variational distribution and minimising the alignment contribution to $\mathcal{F}^*$ over $q_I$ gives
+\begin{equation}
+q_I^* = \arg\min_{q_I} \sum_{i \in I} \alpha_i \mathrm{KL}(\Omega_{Ii} q_i \| q_I) + \lambda \mathrm{KL}(q_I \| p_I),
+\label{eq:meta_agent_barycenter}
+\end{equation}
+which is a forward-KL barycenter (with $q_I$ in the second slot, the variational convention used throughout this manuscript) regularised toward the parent's own prior shadow $p_I$. For Gaussian beliefs $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ with transported moments $\tilde{\mu}_i = \Omega_{Ii}\mu_i$ and $\tilde{\Sigma}_i = \Omega_{Ii}\Sigma_i\Omega_{Ii}^\top$, the closed form (with $A := \sum_i \alpha_i$ and $\lambda \to 0$ for legibility) is
+\begin{align}
+\mu_I^* &= \tfrac{1}{A}\textstyle\sum_i \alpha_i \tilde{\mu}_i,
+\label{eq:meta_agent_mu_barycenter}
+\\
+\Sigma_I^* &= \tfrac{1}{A}\textstyle\sum_i \alpha_i\big[\tilde{\Sigma}_i + (\mu_I^* - \tilde{\mu}_i)(\mu_I^* - \tilde{\mu}_i)^\top\big].
+\label{eq:meta_agent_sigma_barycenter}
+\end{align}
+The mean is the $\alpha$-weighted average of the transported constituent means; the covariance is the $\alpha$-weighted average of the transported covariances \emph{plus} a dispersion term that records how much the constituents disagree about the mean. The dispersion term vanishes at strict consensus, when all $\tilde{\mu}_i$ coincide; in the high-coherence regime where meta-agents form, it is $\mathcal{O}(\varepsilon)$ and is dropped in the implementation below as the leading-order approximation.
+
+\paragraph{Parent frame as group-valued barycenter.} The parent's gauge frame is the Riemannian centre of mass of the constituents on the gauge group,
+\begin{equation}
+U_I^* = \arg\min_{U \in G} \sum_{i \in I} w_i d_G(U, U_i)^2.
+\label{eq:meta_agent_frame_barycenter}
+\end{equation}
+For a compact gauge group ($G = \mathrm{SO}(N)$ in our simulations) with the bi-invariant metric $d_G(U, V)^2 = \|\log(U^{-1}V)\|_F^2$, the Karcher mean exists and is unique on convex normal balls of radius $< \pi/2$. For non-compact $G$ (such as $\mathrm{GL}^+(K)$, where the Killing form on $\mathfrak{gl}(K)$ is indefinite) no bi-invariant Riemannian metric exists, and~\eqref{eq:meta_agent_frame_barycenter} must be replaced by either a left-invariant alternative or a polar-decomposition / SPD-restricted construction; both substitutes break gauge symmetry partially, and the choice is a modelling decision the present implementation does not adjudicate. The Lie-algebra additive form $\phi_I = \sum_i w_i \phi_i$ used in the implementation is the first-order Baker--Campbell--Hausdorff approximation of~\eqref{eq:meta_agent_frame_barycenter}, exact for abelian $G$ and for commuting $\phi_i$, and accurate to $\mathcal{O}(\|\phi_i\|^2)$ when constituent frames are close in the compact case.
+
+\subsubsection{Threshold-Based Implementation}
+\label{sec:meta_agent_threshold}
+
+The criterion~\eqref{eq:meta_agent_FE_criterion} requires evaluating the optimised free energy under both configurations, which is computationally expensive. The simulations of this paper use a discrete threshold-based detector as a practical surrogate for~\eqref{eq:meta_agent_FE_criterion}, motivated by the observation that the variational savings depend on a coherence proxy combining post-transport belief alignment, post-transport model alignment, and spatial overlap. We quantify this through three complementary measures. Belief coherence captures how similar agents' current beliefs are after accounting for gauge transformations:
 \begin{equation}
 C_{\mathrm{belief}}(\{i\}, x) = 1 - \frac{1}{|\{i\}|^2}\sum_{i,j \in \{i\}} \mathrm{KL}\big(q_i^{(s)}(x) \| \Omega_{ij}[q_j^{(s)}](x)\big).
 \end{equation}
 
 Model coherence similarly measures alignment of generative models through $C_{\mathrm{model}}(\{i\}, x) = 1 - \frac{1}{|\{i\}|^2}\sum_{i,j \in \{i\}} \mathrm{KL}\big(s_i^{(s)}(x) \| \tilde{\Omega}_{ij}[s_j^{(s)}](x)\big)$, where $s_i^{(s)}$ denotes the generative model of agent $i$ at hierarchical scale $s$ (the superscript indexes scale, the subscript indexes agent). Presence measures spatial overlap via $P(\{i\}, x) = \frac{1}{|\{i\}|}\sum_{i \in \{i\}} \chi_i(x)$ where $\chi_i(x)$ is agent $i$'s support function indicating where it maintains beliefs.
 
-The consensus score combines these factors multiplicatively as $\Gamma(\{i\}, x) = C_{\mathrm{belief}} \cdot C_{\mathrm{model}} \cdot P(\{i\}, x)$. A meta-agent forms when both $\Gamma(\{i\}, x) > \Gamma_{\min}$ (sufficient consensus) and $|\{i\}| \geq N_{\min}$ (sufficient cluster size). We use $\Gamma_{\min} = 0.5$ and $N_{\min} = 2$ in our simulations. These are ad-hoc thresholds chosen for computational convenience; the theoretical framework does not prescribe specific values. Lower thresholds produce more meta-agents from weaker coherence, higher thresholds require stronger consensus before formation occurs.
-
-In a more principled implementation, meta-agent formation would be governed directly by free energy gradients: a potential meta-agent emerges when the free energy $\mathcal{F}[\{q_i\}, \{p_i\}, \{s_i\}, \{r_i\}]$ of separate constituents exceeds the free energy $\mathcal{F}[q_I, p_I, s_I, r_I]$ of the unified meta-agent by more than the entropic cost of maintaining the additional organizational structure. This would produce continuous, smooth emergence rather than discrete threshold-crossing events. Our discrete approach approximates this continuous process for computational tractability.
+The consensus score combines these factors multiplicatively as $\Gamma(\{i\}, x) = C_{\mathrm{belief}} \cdot C_{\mathrm{model}} \cdot P(\{i\}, x)$. A meta-agent forms when both $\Gamma(\{i\}, x) > \Gamma_{\min}$ (sufficient consensus) and $|\{i\}| \geq N_{\min}$ (sufficient cluster size). The simulations of this paper use $\Gamma_{\min} = 0.5$ and $N_{\min} = 2$. These thresholds are implementation details, not theoretical requirements: the theoretical content lives in~\eqref{eq:meta_agent_FE_criterion}. The relation between the detector and the variational criterion is that, in the high-coherence regime, the savings on the left of~\eqref{eq:meta_agent_FE_criterion} scale quadratically with $|I|$ while $\Gamma$ tracks the same coherence factor that controls the savings; the constants $\Gamma_{\min}, N_{\min}$ then play the role of a discrete approximation of the size-dependent threshold the variational criterion implies. Whether a continuous-time evaluation of~\eqref{eq:meta_agent_FE_criterion} reproduces the same hierarchical organisation that the threshold-based detector produces is open, and is the natural follow-up project to the simulations reported here.
 
 \subsubsection{Gauge-Covariant Belief Construction}
+\label{sec:meta_agent_state_construction}
 
-When a meta-agent $I$ forms from constituents $\{i\}$, its belief must be constructed from constituent beliefs in a gauge-covariant manner. We construct a Gaussian meta-belief $q_I^{(s+1)}(x) = \mathcal{N}(\bar{\mu}_I(x), \bar{\Sigma}_I(x))$ where the mean and covariance are weighted averages of transported constituent beliefs:
+When a meta-agent $I$ forms from constituents $\{i\}$, its belief is the gauge-covariant variational barycenter of~\eqref{eq:meta_agent_barycenter}. The implementation drops the dispersion term in~\eqref{eq:meta_agent_sigma_barycenter} as a leading-order approximation in the high-coherence regime where meta-agents form (the dropped term is $\mathcal{O}(\varepsilon)$ in the post-transport pairwise dispersion $\varepsilon$), giving the working formulae
 \begin{align}
-\bar{\mu}_I(x) &= \frac{\sum_{i \in I} w_i(x)  \Omega_{I,i}[\mu_i^{(s)}](x)}{\sum_{i \in I} w_i(x)} \\
-\bar{\Sigma}_I(x) &= \frac{\sum_{i \in I} w_i(x)  \Omega_{I,i}[\Sigma_i^{(s)}](x)  \Omega_{I,i}^T}{\sum_{i \in I} w_i(x)}
+\bar{\mu}_I(x) &= \frac{\sum_{i \in I} w_i(x)  \Omega_{I,i}[\mu_i^{(s)}](x)}{\sum_{i \in I} w_i(x)},
+\label{eq:meta_agent_mu_impl}
+\\
+\bar{\Sigma}_I(x) &= \frac{\sum_{i \in I} w_i(x)  \Omega_{I,i}[\Sigma_i^{(s)}](x)  \Omega_{I,i}^T}{\sum_{i \in I} w_i(x)}.
+\label{eq:meta_agent_sigma_impl}
 \end{align}
-
-The weights depend on presence and coherence through $w_i(x) = \chi_i(x) \exp[-\mathrm{KL}(q_i^{(s)} \| \bar{q}_I^{(s)})]$, ensuring agents more aligned with the emerging consensus contribute more strongly to the meta-agent state.
+The weights depend on presence and coherence through $w_i(x) = \chi_i(x) \exp[-\mathrm{KL}(q_i^{(s)} \| \bar{q}_I^{(s)})]$, which is the leading-order saddle-point approximation of the variational weights $\alpha_i$ in~\eqref{eq:meta_agent_barycenter} when the parent prior $p_I$ is taken to centre on the emerging consensus. Because $\bar{q}_I^{(s)}$ appears on the right-hand side through the weights, the formula is implicit and is solved by fixed-point iteration: in the simulations the previous-iteration estimate $\bar{q}_I^{(s),(t-1)}$ is used inside the weights at step $t$, which converges in the high-coherence regime and is taken as the working definition. The dispersion term that is dropped in $\bar{\Sigma}_I$ would re-introduce constituent-dispersion-dependent inflation of the parent covariance and would also recover the moment-matched mixture covariance $\bar{\Sigma}_I^{\mathrm{mix}} = \sum_i \tilde{w}_i[\tilde{\Sigma}_i + (\tilde{\mu}_i - \bar{\mu}_I)(\tilde{\mu}_i - \bar{\mu}_I)^\top]$; the precision-weighted product-of-experts form $\bar\Lambda_I = \sum_i \tilde{w}_i \tilde{\Lambda}_i$ is a different aggregation interpretation (consensus sharpening rather than pooled uncertainty) that the present construction does not adopt. The implementation formula~\eqref{eq:meta_agent_sigma_impl} corresponds to neither: it is an implementation heuristic that agrees with the variational forward-KL barycenter at $\mathcal{O}(\varepsilon)$ when constituent post-transport means coincide. Reinstating the dispersion term gives the strict moment-matched solution at modest computational cost and is the natural refinement once the threshold detector is replaced by a continuous-time evaluation of~\eqref{eq:meta_agent_FE_criterion}.
 
 The critical property is gauge covariance: all constituent beliefs are first transported to the meta-agent's frame via $\Omega_{I,i}$ before averaging. This ensures the result is independent of individual gauge choices such that the meta-agent's belief is a genuine consensus, not an artifact of coordinate conventions. Without gauge-covariant transport, the averaging would produce frame-dependent results lacking physical or cognitive meaning.
 
-The meta-agent's gauge frame is constructed similarly as a weighted average of constituent frames: $\phi_I^{(s+1)}(x) = \sum_{i \in I} w_i(x) \phi_i^{(s)}(x) / \sum_{i \in I} w_i(x)$. This defines the meta-agent's internal coordinate system as a consensus of constituent perspectives, providing the reference frame in which the meta-agent organizes its beliefs and models.
+The meta-agent's gauge frame is the Lie-algebra-additive average $\phi_I^{(s+1)}(x) = \sum_{i \in I} w_i(x) \phi_i^{(s)}(x) / \sum_{i \in I} w_i(x)$, which is the first-order Baker--Campbell--Hausdorff approximation of the group-valued Fr\'echet/Karcher barycenter of~\eqref{eq:meta_agent_frame_barycenter}. We emphasize that the principled construction is the group-valued one $U_I = \arg\min_{U \in G} \sum_i w_i d_G(U, U_i)^2$ followed by $\phi_I = \log U_I$ on a chosen branch; averaging in Lie-algebra coordinates is chart-dependent and is not gauge-covariant for nonabelian groups under arbitrary chart changes. The approximation we adopt is exact for abelian gauge groups or when the constituent frames mutually commute, and is accurate to $\mathcal{O}(\|\phi_i\|^2)$ for compact $G$ when constituent frames are close on the convexity ball $\|\log(U_i^{-1}U_j)\| < \pi/2$. Outside that regime -- and for non-compact gauge groups such as $\mathrm{GL}^+(K)$, where no bi-invariant Riemannian metric exists -- the additive average is a heuristic rather than a barycenter, and the choice between left-invariant and polar-decomposition substitutes is a modelling decision we do not adjudicate here. A reviewer who reads "Lie-algebra average" as globally gauge-covariant would object; we use it as a local computational shortcut whose chart-dependence is bounded by the BCH error term above.
 
-\textbf{Remark on Continuous Coalescence:} In principle, meta-agent formation is not a discrete event but a continuous process. As constituents align, a proto-meta-agent gradually emerges with increasing coherence as consensus strengthens. Our implementation treats formation as a discrete threshold-crossing for computational simplicity, but the underlying theory suggests a smooth phase transition where organizational structure emerges continuously from free energy minimization. This parallels symmetry breaking in statistical mechanics: order parameters (consensus measures) vary continuously, while we computationally detect transitions at specific thresholds.
+\textbf{Remark on Continuous Coalescence:} The variational criterion~\eqref{eq:meta_agent_FE_criterion} produces a continuous emergence rule: a proto-meta-agent gradually becomes free-energetically favoured as constituents align. Our implementation triggers the merge at a discrete threshold for computational tractability, but the underlying object is a continuous process that parallels symmetry breaking in statistical mechanics, in which order parameters (consensus measures) vary continuously while observable structure changes at specific thresholds.
 
 \subsection{Bottom-Up Emergence and Renormalization Group Structure}
 
@@ -1361,13 +1418,14 @@ This scale invariance of the functional form suggests the framework may exhibit 
 
 \subsubsection{Information Flow Across Scales}
 
-We quantify cross-scale information propagation through mutual information between constituent and meta-agent beliefs
-
+We quantify cross-scale information propagation through the gauge-covariant transported KL divergence between constituent and meta-agent beliefs,
 \begin{equation}
-\mathcal{I}_{s \to s+1} = \sum_{I \in \mathrm{scale}(s+1)} \sum_{i \in I} \mathrm{MI}\big(q_i^{(s)}, q_I^{(s+1)}\big).
+\mathcal{I}_{s \to s+1} = \sum_{I \in \mathrm{scale}(s+1)} \sum_{i \in I} \mathrm{KL}\big(q_i^{(s)} \big\| \Omega_{i,I}\big[q_I^{(s+1)}\big]\big),
+\label{eq:cross_scale_information_flow}
 \end{equation}
+which is well-defined as a divergence between two distributions on the same fiber after gauge-covariant transport of the meta-agent belief into the constituent's frame. (The mutual-information notation used in earlier drafts of this paragraph -- $\sum_i \mathrm{MI}(q_i, q_I)$ between two marginal distributions without a specified joint coupling $\pi(k_i, k_I)$ -- is undefined in the strict information-theoretic sense; the transported KL above is the natural well-defined replacement and tracks the same intuition: zero when constituents and meta-agent agree after transport, positive otherwise.)
 
-This measures how much information flows upward in the hierarchy. In a functioning participatory system, we expect $\mathcal{I}_{s \to s+1} > 0$ for all $s < s_{\max}$. Vanishing information flow would indicate failed emergence as meta-agents would be informationally disconnected from their constituents, existing as independent entities rather than emergent collective representations. The magnitude of $\mathcal{I}$ indicates how strongly meta-agent beliefs reflect constituent states.
+This measures how far the meta-agent belief, transported back into the constituent's frame, has drifted from each constituent's current belief. In a functioning participatory system, we expect $\mathcal{I}_{s \to s+1}$ to be small but nonzero for all $s < s_{\max}$: zero would indicate constituents and meta-agent are at perfect consensus (epistemic death of the cluster, Section~\ref{sec:epistemic_collapse}), while large values indicate a meta-agent that has decoupled from its constituents. The magnitude of $\mathcal{I}_{s \to s+1}$ tracks how strongly meta-agent beliefs are coupled to constituent states. Operationally, $\mathcal{I}_{s \to s+1}$ can also be reported as the reduction in the alignment portion of $\mathcal{F}$ when the meta-agent is inserted, which is an equivalent within-framework characterisation.
 
 \subsubsection{Emergent Properties at Higher Scales}
 
@@ -1481,14 +1539,14 @@ F = \begin{pmatrix}
 \end{pmatrix}.
 \end{equation}
 
-This block structure enables efficient computation. For mean updates, the natural gradient becomes $\tilde{\nabla}_\mu \mathcal{F} = \Sigma (\nabla_\mu \mathcal{F})$, which is the Euclidean gradient pre-multiplied by the covariance matrix. For covariance updates, the natural gradient is $\tilde{\nabla}_\Sigma \mathcal{F} = \Sigma (\nabla_\Sigma \mathcal{F}) \Sigma$, a bilinear form sandwiching the Euclidean gradient between covariance matrices. This bilinear structure ensures that updated covariances remain positive-definite, preserving the manifold structure of $\mathbb{S}^+_K$ automatically.
+This block structure enables efficient computation. For mean updates, the natural gradient becomes $\tilde{\nabla}_\mu \mathcal{F} = \Sigma (\nabla_\mu \mathcal{F})$, which is the Euclidean gradient pre-multiplied by the covariance matrix. For covariance updates, inverting the block $\frac{1}{2}(\Sigma^{-1} \otimes \Sigma^{-1})$ gives $2(\Sigma \otimes \Sigma)$, so the natural gradient is $\tilde{\nabla}_\Sigma \mathcal{F} = 2\Sigma (\nabla_\Sigma \mathcal{F}) \Sigma$, a bilinear form sandwiching the Euclidean gradient between covariance matrices with an explicit factor of two from the Fisher block normalisation. This bilinear structure ensures that updated covariances remain positive-definite, preserving the manifold structure of $\mathbb{S}^+_K$ automatically.
 
 \subsubsection{Gauge-Covariant Update Equations}
 
 The complete system evolves via natural gradient flow on the product manifold:
 \begin{align}
 \frac{d\mu_i}{dt} &= -\eta_\mu  \tilde{\nabla}_\mu \mathcal{F} \\
-\frac{d\Sigma_i}{dt} &= -\eta_\Sigma  \tilde{\nabla}_\Sigma \mathcal{F} = -\eta_\Sigma  \Sigma_i (\nabla_\Sigma \mathcal{F}) \Sigma_i \\
+\frac{d\Sigma_i}{dt} &= -\eta_\Sigma  \tilde{\nabla}_\Sigma \mathcal{F} = -2\eta_\Sigma  \Sigma_i (\nabla_\Sigma \mathcal{F}) \Sigma_i \\
 \frac{d\phi_i}{dt} &= -\eta_\phi  \nabla_\phi \mathcal{F},
 \end{align}
 
@@ -1612,7 +1670,7 @@ The $\mathrm{GL}(K)$ gauge invariance of KL divergence (Section~\ref{sec:gauge_g
 
 \paragraph{1. Non-compact real forms.} $\mathrm{GL}(K, \mathbb{R})$ contains non-compact subgroups that do not preserve positive-definiteness of the metric. While $\Omega \Sigma \Omega^\top$ remains positive-definite for real $\Omega$ and positive-definite $\Sigma$ (by Sylvester's law of inertia), the \emph{consensus metric} obtained by gauge-averaging over the group orbit need not inherit a definite signature when averaged over a non-compact subgroup. More tellingly, the effective inner product structure on the base manifold, which involves transported quantities from multiple agents, can acquire indefinite character when the transport operators span a non-compact group.
 
-\paragraph{2. Complexification and the Lorentz group.} The complexification $\mathrm{GL}(K, \mathbb{C})$ contains all real forms of the complex Lie algebra $\mathfrak{gl}(K, \mathbb{C})$, and contains the Lorentz group $\mathrm{SO}(1,3)$ as a subgroup via the covering $\mathrm{SL}(2, \mathbb{C}) \cong \mathrm{Spin}(1,3)$. The passage from compact $\mathrm{SO}(4)$ to non-compact $\mathrm{SO}(1,3)$ is the Wick rotation between different real forms of $\mathrm{SO}(4, \mathbb{C})$. With complex-valued gauge frames $\phi \in \mathfrak{gl}(K, \mathbb{C})$, transport operators $\Omega = \exp(\phi) \in \mathrm{GL}(K, \mathbb{C})$ can in principle distinguish timelike from spacelike directions through the group structure itself; whether the variational dynamics select such a distinction is not established here.
+\paragraph{2. Complexification and the Lorentz group.} The complexification $\mathrm{GL}(K, \mathbb{C})$ contains all real forms of the complex Lie algebra $\mathfrak{gl}(K, \mathbb{C})$. The vector representation of $\mathrm{SO}^+(1,3)$ embeds in $\mathrm{GL}(4,\mathbb{R}) \subset \mathrm{GL}(4,\mathbb{C})$ and is the representation used by the worked example below; the spinor double cover $\mathrm{SL}(2,\mathbb{C}) \cong \mathrm{Spin}^+(1,3)$ acts on two-component Weyl spinors and lives in $\mathrm{GL}(2,\mathbb{C})$ (it is available within the complexified gauge group but is not directly invoked in the present construction). The passage from compact $\mathrm{SO}(4)$ to non-compact $\mathrm{SO}(1,3)$ is the Wick rotation between different real forms of $\mathrm{SO}(4, \mathbb{C})$. With complex-valued gauge frames $\phi \in \mathfrak{gl}(K, \mathbb{C})$, transport operators $\Omega = \exp(\phi) \in \mathrm{GL}(K, \mathbb{C})$ can in principle distinguish timelike from spacelike directions through the group structure itself; whether the variational dynamics select such a distinction is not established here.
 
 \paragraph{3. The frame-twist metric.} On base manifolds of dimension $\geq 1$, the gauge frame field $\phi: \mathcal{C} \to \mathfrak{gl}(K, \mathbb{C})$ induces a connection $A_\mu = U^{-1}\partial_\mu U$ whose frame-twist quadratic form $G_{\mu\nu}^{\mathrm{tw}} = \mathrm{tr}(A_\mu A_\nu)$ contributes to the effective metric on $\mathcal{C}$. The choice of trace as a bilinear form, rather than the negative-trace inner product appropriate to compact $\mathfrak{so}(N)$, matters here: on a compact form $-\mathrm{tr}(AB)$ is positive-definite and $\mathrm{tr}(A^2) \le 0$, so the construction below requires non-compact generators where $\mathrm{tr}(T^2)$ can take either sign. If the gauge frame is taken to have imaginary components in one base direction (e.g., $\phi_\tau = i\psi_\tau \cdot T$ with $T$ a non-compact generator with $\mathrm{tr}(T^2) > 0$), the factor $i^2 = -1$ flips the sign of the corresponding metric component: $G_{\tau\tau}^{\mathrm{tw}} = -(\partial_\tau \psi_\tau)^2 \mathrm{tr}(T^2) < 0$. The worked example of Section~\ref{sec:worked_signature} demonstrates that this construction \emph{can exhibit} Lorentzian signature once such a complex-valued component is admitted; it does not derive the imaginary assignment from a free-energy mechanism. The mechanism operates through the gauge connection, not through the fiber metric: the Fisher-Rao metric on the belief fiber remains positive semi-definite throughout. The indefinite signature is a property of how gauge frames vary over the base manifold, not of the statistical geometry within a single fiber.
 
@@ -1644,7 +1702,7 @@ where $\psi_\tau, \psi_x$ are scalar fields and $T_\tau, T_x$ are generators. Fo
 \phi(\tau, x) = i\psi_\tau(\tau, x) \cdot T + \psi_x(\tau, x) \cdot T.
 \label{eq:complex_gauge_frame}
 \end{equation}
-This is the assignment that drives the signature in the calculation that follows; it is not derived. The linearized gauge connection is $A_\mu = \partial_\mu \phi$, giving
+This is the assignment that drives the signature in the calculation that follows; it is not derived. \emph{We further restrict to the separable ansatz $\psi_\tau = \psi_\tau(\tau)$ and $\psi_x = \psi_x(x)$ for the displayed calculation.} Without separability, the connection would carry cross-derivative terms $i(\partial_\tau \psi_x)T + (\partial_\tau \psi_\tau \cdot T)$ along the temporal direction (and similarly for the spatial direction), and the resulting bilinear form $\mathrm{tr}(A_\mu A_\nu)$ would acquire mixed-derivative contributions that the displayed result suppresses. With the separability assumption in place, the linearized connection is $A_\mu = \partial_\mu \phi$, giving
 \begin{equation}
 A_\tau = i(\partial_\tau \psi_\tau) \cdot T, \qquad A_x = (\partial_x \psi_x) \cdot T.
 \end{equation}
@@ -1667,7 +1725,7 @@ The subgroup of $\mathrm{GL}(2, \mathbb{C})$ preserving this indefinite metric i
 \Lambda(\xi) = \begin{pmatrix} \cosh\xi & \sinh\xi \\ \sinh\xi & \cosh\xi \end{pmatrix}, \qquad \Lambda^\top \eta\Lambda = \eta, \qquad \eta = \mathrm{diag}(-1, +1),
 \end{equation}
 
-which is verified symbolically: $\Lambda^\top \eta\Lambda - \eta = 0$ for all rapidity $\xi \in \mathbb{R}$. For four-dimensional base manifolds with one imaginary and three real gauge components, the preserved subgroup is the full Lorentz group $\mathrm{SO}(1,3)$, embedded via $\mathrm{SL}(2, \mathbb{C}) \cong \mathrm{Spin}(1,3) \subset \mathrm{GL}(4, \mathbb{C})$. The signature split $1{+}3$ is selected by the input choice (one imaginary direction); the construction does not currently distinguish $1{+}3$ from $2{+}2$ on dynamical grounds.
+which is verified symbolically: $\Lambda^\top \eta\Lambda - \eta = 0$ for all rapidity $\xi \in \mathbb{R}$. For four-dimensional base manifolds with one imaginary and three real gauge components, the preserved subgroup is the full proper orthochronous Lorentz group $\mathrm{SO}^+(1,3)$. Two distinct group-theoretic facts should be kept apart: the spinor double cover $\mathrm{SL}(2,\mathbb{C}) \cong \mathrm{Spin}^+(1,3)$ acts on two-component Weyl spinors and lives in $\mathrm{GL}(2,\mathbb{C})$, while the vector representation of the Lorentz group sits in $\mathrm{GL}(4,\mathbb{R}) \subset \mathrm{GL}(4,\mathbb{C})$. The construction here uses the vector representation on the four-dimensional base; the Spin / spinor representation is available but not directly invoked. The signature split $1{+}3$ is selected by the input choice (one imaginary direction); the construction does not currently distinguish $1{+}3$ from $2{+}2$ on dynamical grounds.
 
 Three features of this result merit explicit statement. First, the indefinite signature arises from the gauge connection (the frame-twist form $\mathrm{tr}(A_\mu A_\nu)$), not from the fiber metric, which remains the positive-definite Fisher-Rao metric throughout. Second, the construction is a structural existence proof, not a dynamical derivation: the assignment of an imaginary component along $\tau$ in Eq.~\eqref{eq:complex_gauge_frame} is a postulate, and the projection to the real part of $G_{\mu\nu}$ is a further postulate; neither follows from variational free-energy minimisation in the present formulation. Third, the result extends to the full belief-field metric $G_{\mu\nu}^{\mathrm{total}} = G_{\mu\nu}^{\mathrm{tw}} + G_{\mu\nu}^{\mathrm{Fisher}}$, where the Fisher-Rao contribution $G_{\mu\nu}^{\mathrm{Fisher}} = \sigma^{-2}(\partial_\mu \mu_i) \cdot (\partial_\nu \mu_i)$ is positive semi-definite. The total metric is indefinite when the negative frame-twist contribution dominates the temporal direction.
 
@@ -1977,7 +2035,7 @@ Consensus checks occur every 2 steps enabling rapid hierarchical condensation. T
 The 5-level hyperprior propagation implements Wheeler's "it from bit" concept extended to hierarchical systems. Each agent receives priors not only from its immediate parent meta-agent, but from ancestors up to 5 scales higher, with exponential decay $\gamma = 0.5$ to weight more recent ancestry.
 
 \paragraph{Balanced Energy Landscape.}
-All energy hyper-parameters are set to unity ($\lambda_{\text{self}} = \lambda_{\text{belief}} = \lambda_{\text{prior}} = \lambda_{\text{obs}} = 1.0$), creating an unbiased energy landscape. This allows the system to explore the balance between individual identity preservation (self-energy), lateral social coordination (belief alignment), an operational prior-shadow alignment proxy (the slow subsystem $(s,r)$ is frozen in this run, so the canonical model-channel coupling $\gamma\mathrm{KL}(s_i\|\tilde\Omega s_j)$ is inactive and the visible vertical-integration channel is the dynamic-prior shadow $\mathrm{KL}(p_i\|\Omega p_j)$), and empirical grounding (observation fit). The absence of hierarchical bias enables observation of emergent dynamics without imposed preferences.
+All energy hyper-parameters are set to unity ($\lambda_{\text{self}} = \lambda_{\text{belief}} = \lambda_{\text{prior}} = \lambda_{\text{obs}} = 1.0$), creating an unbiased energy landscape. This allows the system to explore the balance between individual identity preservation (self-energy), lateral social coordination (belief alignment), an operational prior-shadow alignment proxy (the slow subsystem $(s,r)$ is frozen in this run, so the canonical model-channel coupling $\gamma\mathrm{KL}(s_i\|\tilde\Omega s_j)$ is inactive and the visible vertical-integration channel is the dynamic-prior shadow $\mathrm{KL}(p_i\|\Omega p_j)$), and empirical grounding (observation fit). The unit lambda weights remove a per-channel bias from the energy landscape; meta-agent nucleation itself remains gated by the threshold detector of Section~\ref{sec:meta_agent_threshold}.
 
 \paragraph{Safety Constraints.}
 Early stopping conditions prevent computational runaway: evolution terminates upon reaching either 25 scales or 200 total active agents. These limits ensure tractable computation while allowing sufficient depth to observe multi-scale emergence dynamics.
@@ -2026,7 +2084,7 @@ Evolution continued until either (1) 25 scales emerged, (2) 200 total agents exi
 
 \subsection{Results}
 
-We report spontaneous emergence of hierarchical meta-agent organisation from gauge-theoretic multi-agent active inference dynamics in a single illustrative run (random seed 2; multi-seed reproducibility is not yet established and is flagged as a limitation in Section~\ref{sec:scope_limitations}). Starting from an ensemble of independent agents with randomly initialised beliefs, the system in this run undergoes a rapid reorganisation event around step 150 characterised by simultaneous spikes in four non-equilibrium diagnostics (energy variance, gradient variance, energy flux, and a composite score) and self-organises into a stable hierarchical structure spanning 13 scales ($\zeta = 0$ through $\zeta = 12$). The simultaneous spike across diagnostics is consistent with a phase-transition-like reorganisation, but a phase-transition claim in the statistical-mechanics sense (finite-size scaling collapse, universality, multi-seed reproducibility) is not made here; we describe the event as a reorganisation in a single run and reserve the phase-transition vocabulary for future multi-seed work.
+We report detector-mediated emergence of hierarchical meta-agent organisation from gauge-theoretic multi-agent active inference dynamics in a single illustrative run (random seed 2; multi-seed reproducibility is not yet established and is flagged as a limitation in Section~\ref{sec:scope_limitations}). Starting from an ensemble of independent agents with randomly initialised beliefs, the system in this run undergoes a rapid reorganisation event around step 150 characterised by simultaneous spikes in four non-equilibrium diagnostics (energy variance, gradient variance, energy flux, and a composite score) and reorganises into a stable hierarchical structure spanning 13 scales ($\zeta = 0$ through $\zeta = 12$) once the threshold detector of Section~\ref{sec:meta_agent_threshold} starts triggering. The simultaneous spike across diagnostics is consistent with a phase-transition-like reorganisation, but a phase-transition claim in the statistical-mechanics sense (finite-size scaling collapse, universality, multi-seed reproducibility) is not made here; we describe the event as a reorganisation in a single run and reserve the phase-transition vocabulary for future multi-seed work.
 
 \subsubsection{Phase I: Local Free Energy Minimization (Steps 0--140)}
 
@@ -2134,7 +2192,7 @@ The final system state exhibits a well-defined tree-like hierarchical meta-agent
 \begin{figure}[htbp]
     \centering
     \includegraphics[width=0.5\linewidth]{Fig_8.png}
-    \caption{\textbf{Hierarchical meta-agent structure at $t=200$.} Final configuration showing the emergent tree-like organization spanning 13 hierarchical scales ($\zeta = 0$--12). Nodes represent individual agents, color-coded by scale from purple (base scale $\zeta=0$) through intermediate blues and greens to yellow (apex scale $\zeta=12$). Edge thickness indicates gauge-covariant coupling strength $|\Omega_{ij}|$ between agents. The architecture exhibits: (i) 8 primitive agents at scale 0 representing fundamental observational units, (ii) progressive spatial/temporal coarse-graining through scales 1--11 with agent counts decreasing from 26 to 6, and (iii) a single unified meta-agent at scale 12 representing the fully integrated collective perspective. Dense intra-scale connectivity and systematic inter-scale connections enable bidirectional information flow. This hierarchical structure emerged spontaneously from gauge-theoretic dynamics without imposed architectural priors, demonstrating that the principal bundle framework generates complex multi-scale organization through gauge symmetry breaking at different scales.}
+    \caption{\textbf{Hierarchical meta-agent structure at $t=200$.} Final configuration showing the emergent tree-like organization spanning 13 hierarchical scales ($\zeta = 0$--12). Nodes represent individual agents, color-coded by scale from purple (base scale $\zeta=0$) through intermediate blues and greens to yellow (apex scale $\zeta=12$). Edge thickness indicates gauge-covariant coupling strength $|\Omega_{ij}|$ between agents. The architecture exhibits: (i) 8 primitive agents at scale 0 representing fundamental observational units, (ii) progressive spatial/temporal coarse-graining through scales 1--11 with agent counts decreasing from 26 to 6, and (iii) a single unified meta-agent at scale 12 representing the fully integrated collective perspective. Dense intra-scale connectivity and systematic inter-scale connections enable bidirectional information flow. This hierarchical structure was produced by the threshold-based consensus detector of Section~\ref{sec:meta_agent_threshold} acting on agent state variables driven by the gauge-theoretic dynamics; the energy functional and initialization do not hard-code a hierarchical depth, scale assignments, or a tree topology, but the detector that nucleates meta-agents is imposed. Whether a continuous-time evaluation of the variational criterion of Section~\ref{sec:meta_agent_variational} reproduces this structure is left for future work.}
     \label{fig:hierarchy}
 \end{figure}
 
@@ -2155,7 +2213,7 @@ At the final time step $t = 200$:
 \paragraph{Single-run scaling near the reorganisation.}
 Near the reorganisation point (step 150) in this single-seed run, the energy variance grows sharply and a power-law fit $\Delta E^2 \propto |t - t_c|^{-\alpha}$ to the rising portion gives $\alpha \approx 1.8$ with no error bar from a single trajectory. We do not interpret this as a critical exponent: a critical exponent in the statistical-mechanics sense requires multi-seed averaging, an independently-fit critical time $t_c$, and finite-size-scaling collapse, none of which we have established. We report the value as an empirical fit to one trajectory and reserve critical-exponent vocabulary for future multi-seed work.
 
-These results provide the first direct evidence that gauge-theoretic active inference with softmax coupling weights can spontaneously generate hierarchical meta-agent structures from initially independent agents. The emergence proceeds through three distinct phases:
+Conditional on the threshold-based consensus detector of Section~\ref{sec:meta_agent_threshold} ($\Gamma_{\min} = 0.5$, $N_{\min} = 2$), these results show that gauge-theoretic active inference with softmax coupling weights produces a stable thirteen-scale hierarchical organization from initially independent agents in a single illustrative run. We do not claim free-energy-driven spontaneous emergence at this resolution, since the detector is imposed rather than derived; whether the detector approximates the continuous variational rule of Section~\ref{sec:meta_agent_variational} remains open. The post-detection trajectory proceeds through three distinct phases:
 \begin{enumerate}
 \item \textbf{Independent optimization}: Agents minimize local free energy without coordination
 \item \textbf{Critical transition}: Coupling strength amplification triggers collective reorganization
@@ -2164,9 +2222,9 @@ These results provide the first direct evidence that gauge-theoretic active infe
 
 The progression from bottom-up (scales 1--2 first) to top-down (scales 11--12 last) suggests that hierarchical structure emerges through successive stages of spatial coarse-graining, with each scale nucleating once sufficient coherence is achieved at the scale below.
 
-No hierarchical structure was imposed by the energy functional or initialization. The architecture in Fig.~\ref{fig:hierarchy} emerged purely from the gauge-theoretic dynamics and softmax coupling (attention) mechanism. This demonstrates that the geometric structure of the principal bundle framework, combined with information-theoretic coupling, is sufficient to generate complex multi-scale organization without explicit architectural priors in the manner of a "participatory universe".
+The energy functional and the initialization do not encode a hierarchical depth, scale assignments, or a tree topology; in that restricted sense, no hierarchical \emph{architecture} is hard-coded. The hierarchy in Fig.~\ref{fig:hierarchy} is nucleated, however, by the threshold-based consensus detector ($\Gamma_{\min} = 0.5$, $N_{\min} = 2$): without this detector no meta-agents form. The contribution of the gauge-theoretic dynamics and softmax coupling is to drive the constituent state variables $(\mu_q, \Sigma, \phi)$ into configurations on which the detector then triggers. Whether the detector is the discrete approximation of the continuous variational rule of Section~\ref{sec:meta_agent_variational}, in which case the hierarchy could be said to emerge from the dynamics in a stronger sense, is the natural follow-up question that this single-seed run does not settle.
 
-The observed behavior bears striking resemblance to renormalization group flow in field theory, where successive integrations over degrees of freedom generate hierarchical effective descriptions. Here, the renormalization emerges dynamically from agent interactions rather than being imposed analytically, suggesting deep connections between active inference and scale-dependent emergent phenomena in physics.
+The observed behavior bears structural resemblance to renormalization group flow in field theory, where successive integrations over degrees of freedom generate hierarchical effective descriptions. Here the RG-like coarse-graining is performed by the consensus detector applied iteratively to the gauge-theoretic dynamics; this produces an RG-flavored cascade but is not a derived RG flow.
 
 \subsection{Theoretical Interpretation: The Self-Referential Bootstrap}
 
@@ -2174,7 +2232,7 @@ Having established the empirical dynamics of meta-agent emergence, we now interp
 
 \subsubsection{Reality Participates in Its Own Construction - an Ouroboros}
 
-The validated participatory loop realizes Wheeler's most radical claim: the universe as a self-excited circuit where observers and observed co-create reality.
+The participatory loop realises Wheeler's most radical claim under the demonstration regime described above: the universe as a self-excited circuit where observers and observed co-create reality.
 
 At scale-0, agents observe the noumenal manifold $\mathcal{C}$ through observations $o_i$ and construct beliefs $q_i(x)$. These beliefs induce geometric structure via pullback (Section~\ref{sec:pullback}) although this geometry is not static:
 
@@ -2194,9 +2252,9 @@ This is not circular reasoning but rather it is self-consistency. The structure 
 
 \subsubsection{No External Controller}
 
-there is no external controller directing this process. The free energy functional is not imposed from outside rather it is the definition of what agents minimize both locally and globally. Natural gradient descent is not a choice but rather it is the geodesic flow on the statistical manifold.
+there is no external controller directing this process. The free energy functional is not imposed from outside; it is the definition of what agents minimize both locally and globally. Natural gradient descent is the steepest-descent flow $\dot\theta = -\mathrm{grad}_g \mathcal{F}$ with respect to the Fisher--Rao metric $g$, which is a coordinate-invariant alternative to Euclidean gradient descent on parameter space. This is distinct from geodesic flow on the statistical manifold, which satisfies $\nabla_{\dot\theta}\dot\theta = 0$ and describes free motion under the connection rather than potential descent; conflating the two is a common informal slip we wish to avoid here.
 
-The participatory dynamics are intrinsic to the mathematical structure. Wheeler's universe creates itself because information geometry, when properly formulated, is self-organizing.
+The participatory dynamics described here are a property of the mathematical structure under the demonstration regime of Section~\ref{sec:meta_agent_threshold}; we offer this as an interpretive reading rather than a derivation. The reading is suggestive of Wheeler's "universe creating itself" only in the sense that the framework's information geometry, when run forward under the threshold-detector dynamics, generates a multi-scale organisation without an externally imposed hierarchical schedule. Whether this constitutes self-organisation in any stronger sense is open.
 
 \subsubsection{From Bit to It to Bit Again}
 
@@ -2225,20 +2283,20 @@ Law without law & Info-theoretic necessities \\
 \label{tab:wheeler_comparison}
 \end{table}
 
-\subsection{Summary: Participatory Structure Validated}
+\subsection{Summary: Participatory Loop Demonstrated under Threshold Detection}
 
 We have demonstrated computationally that
 
 \begin{enumerate}
-\item Meta-agents robustly form from coherent agent clusters
-\item Information flows upward across scales ($\mathcal{I}_{s \to s+1} > 0$)
+\item Once the threshold-based consensus detector triggers, meta-agents robustly form from coherent agent clusters and persist across the run
+\item Post-detection information flows upward across scales ($\mathcal{I}_{s \to s+1} > 0$)
 \item Meta-agents propagate belief updates downward via the cross-scale shadow ($\Delta p_i > 0$ tracking $\Delta q_I^{(s+1)}$, with the parallel model-channel shadow $\Delta r_i$ active when the slow subsystem is unfrozen)
 \item The system remains out of equilibrium ($E_{\mathrm{score}} \gg 1$)
 \end{enumerate}
 
-This validates the participatory structure: agents co-create reality through multi-scale feedback. The universe is not a pre-existing structure that agents observe, but an evolving informational system that agents perpetually construct.
+Conditional on the threshold-based consensus detector of Section~\ref{sec:meta_agent_threshold}, the simulation exhibits a computational mechanism consistent with the participatory-structure picture: agents form clusters whose statistics, once aggregated, propagate updates back to constituents via the cross-scale shadow relation. The picture in which the universe is "an evolving informational system that agents perpetually construct, rather than a pre-existing structure agents observe" is a reading we offer of this mechanism; it is not validated by the simulation, which establishes the post-detection mechanics, not the ontology. Whether the same dynamics obtain under a continuous-time evaluation of the variational criterion of Section~\ref{sec:meta_agent_variational}, and whether the participatory reading survives the more permissive multi-seed regime flagged in Section~\ref{sec:scope_limitations}, are open.
 
-In the next section, we further validate the framework by showing that standard transformer architectures and attention emerge as the zero-dimensional limit of our framework, connecting our foundational theory to standard neural architecture machine learning.  we will show we can achieve transformer operation and learning without the scaffolding of neural networks and learned neural weights.  This shows that neural networks are the biological and computational instantiation of the deeper underlying geometry.
+In the next section we extend the framework by showing that standard transformer architectures and attention arise as the zero-dimensional limit of the construction, connecting the gauge-theoretic theory to neural-architecture machine learning. We show that transformer operation and learning can be reproduced without the scaffolding of learned neural weights. We do not claim that neural networks are \emph{the} biological or computational instantiation of an underlying geometry; we claim only that the gauge-theoretic construction reproduces dot-product attention as an explicit limit, which is one principled derivation of attention among others. Whether biological neural systems implement anything like this construction is empirically open.
 
 \subsection{Transformer Architectures as the Zero-Dimensional Limit}
 \label{sec:transformers}
@@ -3257,13 +3315,13 @@ F = \begin{pmatrix}
 \end{pmatrix}.
 \end{equation}
 
-The natural gradient is then:
+The Fisher block on the covariance sector is $\tfrac{1}{2}(\Sigma^{-1} \otimes \Sigma^{-1})$; inverting gives $2(\Sigma \otimes \Sigma)$, and the natural gradient is therefore
 \begin{align}
 \tilde{\nabla}_\mu \mathcal{F} &= \Sigma (\nabla_\mu \mathcal{F}) \\
-\tilde{\nabla}_\Sigma \mathcal{F} &= \Sigma (\nabla_\Sigma \mathcal{F}) \Sigma,
+\tilde{\nabla}_\Sigma \mathcal{F} &= 2\Sigma (\nabla_\Sigma \mathcal{F}) \Sigma,
 \end{align}
 
-where $\nabla_\mu \mathcal{F}$ and $\nabla_\Sigma \mathcal{F}$ are standard Euclidean gradients.
+where $\nabla_\mu \mathcal{F}$ and $\nabla_\Sigma \mathcal{F}$ are the standard Euclidean gradients and the factor of two on the covariance sector arises from the block normalisation.
 
 \subsection{SO(3) Generators and Transport Operators}
 
@@ -3361,7 +3419,7 @@ D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)
 \right].
 \end{align}
 
-The observation term contributes an $O(\Sigma_i^{-1})$ correction that we neglect in the high-precision / strong-alignment regime. Thus
+The observation term, for the Gaussian likelihood $-\mathbb{E}_{q_i}[\log p(o_i \mid \theta)] = \tfrac{1}{2}(o_i - \mu_i)^\top \Lambda_{o_i}(o_i - \mu_i) + \tfrac{1}{2}\mathrm{tr}(\Lambda_{o_i}\Sigma_i) + \mathrm{const}$, contributes a constant precision correction $\partial[-\mathbb{E}_{q_i}\log p(o_i \mid \theta)]/\partial\Sigma_i = \tfrac{1}{2}\Lambda_{o_i}$ (independent of $\Sigma_i$, not $O(\Sigma_i^{-1})$). Earlier drafts of this appendix dropped this contribution as an $O(\Sigma_i^{-1})$ correction; that classification was wrong. Including it,
 
 \begin{equation}
 \boxed{
@@ -3372,6 +3430,7 @@ The observation term contributes an $O(\Sigma_i^{-1})$ correction that we neglec
 + \Sigma_{p,i}^{-1}
 + \sum_j \beta_{ij}
 (\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}
++ \Lambda_{o_i}
 \right].
 }
 \end{equation}
@@ -3389,9 +3448,11 @@ At equilibrium, we set $\partial \mathcal{F}_i / \partial \Sigma_i = 0$, giving
 \Sigma_{p,i}^{-1}
 + \sum_j \beta_{ij}
 (\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}
++ \Lambda_{o_i}
 \right].
 \label{eq:sigma_fixed_point_beta}
 \end{equation}
+The sensory precision $\Lambda_{o_i}$ enters with the same prefactor as the other precision contributions; setting $\Lambda_{o_i} = 0$ recovers the observation-free limit used in the earlier subsection.
 
 This is a matrix-valued fixed-point equation coupling all agents: each agent's precision is the $\beta$-weighted combination of its own prior precision and the transported neighbor precisions.
 
@@ -3578,11 +3639,11 @@ Why must the divergence measuring inter-agent communication cost be the forward 
 
 These three conditions, each individually nonrestrictive, are jointly restrictive. Alternative divergences violate at least one of the conditions. For example, the reverse KL introduces $1/q_i$ terms that break exponential-family closure, forcing transcendental equations solvable only via the Lambert $W$ function. The $\chi^2$-divergence produces algebraic (polynomial-ratio) rather than exponential solutions. Symmetric divergences like Jensen--Shannon mix logarithmic and reciprocal terms, destroying log-linearity. Only the forward KL (with generator $f(t) = t\log t - t + 1$ yields $f'(t) = \log t$) produces a stationarity condition that is linear in $\log q_i$, which is the condition for the solution to remain in the exponential family.
 
-Within a broad, but well-defined, class, the forward KL divergence $D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ is the only divergence that yields a closed-form Gibbs-type solution for the belief update and a consistent dual interpretation for the attention weights. Agents locally minimize their agent-specific variational free energy and the system of agents minimize their collective global free energies. This local-global coordination gives rise to the expected forward KL attention term.
+Within the conditional class delimited by assumptions (i)--(iii), the forward KL divergence $D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ is the only divergence that produces the geometric-mean Boltzmann stationarity~\eqref{eq:geometric_mean_target_app} for all priors and neighbour beliefs. We are not claiming that forward KL is uniquely required by "well-behaved coordination" in any broader sense: weakening the target form (allowing other Boltzmann-type stationary solutions, or allowing the minimiser to leave the exponential family) reopens the divergence choice. The result here pins forward KL given a specific target stationary form within a specific class.
 
 In what follows we restrict to the "matched-fiber" framework, where all agents share the same fiber dimension $K$ and representation $\rho$, so that gauge transport acts within a single vector space. The full generalization follows by applying the appropriate bundle morphisms/intertwiners.
 
-The uniqueness of the term is conditional and follows from three assumptions: (i) $\mathcal{D}$ is local in $c$, of f-divergence form $\displaystyle \int q_i(c) f\left(\frac{q_i(c)}{\Omega_{ij}(c) q_j(c)}\right) dc$; (ii) the coupling is linear; and (iii) the minimizing belief $q_i^*$ remains in the exponential-family (log-linear).
+The uniqueness of the term is conditional and follows from three assumptions: (i) $\mathcal{D}$ is local in $c$, of standard $f$-divergence form $\displaystyle \mathcal{D}(q_i, \Omega_{ij}q_j) = \int (\Omega_{ij}q_j)(c) f\left(\frac{q_i(c)}{\Omega_{ij}(c) q_j(c)}\right) dc$ with the second-argument density as the integration measure (this is the convention used by Theorem~\ref{thm:uniqueness_app} below; an earlier, less-careful pass of this appendix wrote the integrand against $q_i$ rather than against $\Omega_{ij}q_j$, which is non-standard and is corrected here); (ii) the coupling is linear; and (iii) the minimizing belief $q_i^*$ remains in the exponential-family (log-linear).
 
 \subsection*{The Coupled Variational Problem}
 
@@ -3670,15 +3731,16 @@ Let\/ $\mathcal{D}(q,p)$ be a convex $f$-divergence of the form
 \mathcal{D}(q,p)
 = \int p(c)f\left(\frac{q(c)}{p(c)}\right)dc,
 \]
-with $f$ convex, $f(1)=0$, and, without loss of generality\footnote{Any $f$-divergence is invariant under $f(t)\mapsto f(t)+c(t-1)$ when $q$ and $p$ are normalized, so we may always choose the representative with $f'(1)=0$.}, $f'(1)=0$. Suppose $\mathcal{D}$ is linear inside the free energy \eqref{eq:F_i_app} and that the attention weights satisfy $\sum_j\beta_{ij}=1$. Then the stationary solution $q_i^*$ assumes the geometric-mean Boltzmann form
+with $f$ convex, $f(1)=0$, and, without loss of generality\footnote{Any $f$-divergence is invariant under $f(t)\mapsto f(t)+c(t-1)$ when $q$ and $p$ are normalized, so we may always choose the representative with $f'(1)=0$.}, $f'(1)=0$. Let $B := \sum_j \beta_{ij}$ be the total alignment coupling for agent $i$. Suppose $\mathcal{D}$ is linear inside the free energy \eqref{eq:F_i_app}. Then the stationary solution $q_i^*$ assumes the geometric-mean Boltzmann form
 \begin{equation}
-q_i^*(c) \propto p_i(c)^{1/2}\prod_{j}\bigl[\Omega_{ij}(c)q_j(c)\bigr]^{\beta_{ij}/2}
+q_i^*(c) \propto p_i(c)^{1/(1+B)}\prod_{j}\bigl[\Omega_{ij}(c)q_j(c)\bigr]^{\beta_{ij}/(1+B)}
 \label{eq:geometric_mean_target_app}
 \end{equation}
 for all choices of prior $p_i$ and neighbour beliefs $\{q_j\}$, if, and only if, $\mathcal{D}$ is the forward Kullback--Leibler divergence (up to the affine equivalence above):
 \[
 \mathcal{D}(q,p) = D_{\mathrm{KL}}(q\|p).
 \]
+The familiar $1/2$ exponents are recovered when $B = 1$, the case used in the main text where $\beta$ is a probability distribution.
 \end{theorem}
 
 \paragraph{Proof.}
@@ -3702,11 +3764,11 @@ For $\mathcal{D}=D_{\mathrm{KL}}$, the generator is $f(t)=t\log t - t + 1$, yiel
 \[
 \log q_i - \log p_i + 1 + \sum_j \beta_{ij}\bigl(\log q_i - \log\Omega_{ij}q_j\bigr) = \lambda.
 \]
-Since $\sum_j\beta_{ij}=1$, the $\log q_i$ terms become $2\log q_i$:
+Collecting $\log q_i$ with $B = \sum_j \beta_{ij}$:
 \[
-2\log q_i = \log p_i + \sum_j\beta_{ij}\log(\Omega_{ij}q_j) + (\lambda - 1).
+(1+B)\log q_i = \log p_i + \sum_j\beta_{ij}\log(\Omega_{ij}q_j) + (\lambda - 1).
 \]
-Exponentiating gives the geometric-mean form \eqref{eq:geometric_mean_target_app}.
+Exponentiating gives the geometric-mean form \eqref{eq:geometric_mean_target_app}; the $1/(1+B)$ exponents reduce to $1/2$ in the $B = 1$ case used in the main text.
 
 \textbf{Step 3. Reverse implication (geometric mean $\Rightarrow D_{\mathrm{KL}}$).}
 
