@@ -2334,7 +2334,7 @@ In the general formulation, each agent $i$ (token) maintains a local MVG belief
 \begin{equation}
 q_i = \mathcal{N}(\mu_i, \Sigma_i),
 \end{equation}
-where $\mu_i \in \mathbb{R}^{d_k}$ is the agent's mean representation in its local gauge frame, and $\Sigma_i \in \mathbb{R}^{d_k\times d_k}$ is its belief covariance (symmetric positive definite). Note that we are embedding in $K=d_k$ dimensions in order to make contact with standard notation and, for now, the gauge group will be the fundamental $\mathrm{GL}(K=d_k)$.
+where $\mu_i \in \mathbb{R}^{d_k}$ is the agent's mean representation in its local gauge frame, and $\Sigma_i \in \mathbb{R}^{d_k\times d_k}$ is its belief covariance (symmetric positive definite). Note that we are embedding in $K=d_k$ dimensions in order to make contact with standard notation and, for now, the gauge group will be the fundamental $\mathrm{GL}(K=d_k)$. In modern multi-head transformer architectures the embedding dimension $d_{\text{model}}$ is partitioned into $H$ heads of dimension $d_{\text{head}} = d_{\text{model}}/H$ and each head carries its own gauge frame, so $K=d_k$ here corresponds to the per-head dimension $d_{\text{head}}$ rather than the full model width; the lift to the block-diagonal multi-head gauge group $\mathrm{GL}(d_{\text{head}})^H \subset \mathrm{GL}(d_{\text{model}})$ is treated in the companion paper~\cite{Dennis2025trans}.
 
 Communication between agents $i$ and $j$ is mediated by a gauge frame transport operator
 \begin{equation}
@@ -2400,7 +2400,7 @@ The rescaled KL divergence $\widetilde{D}_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) :
 The standard transformer reduction is sometimes presented as a ``constant gauge'' limit $\Omega_{ij} = \Omega$ for all $i,j$. We want to flag that this presentation is structurally inconsistent with the vertex-frame parameterisation of this manuscript and replace it with the correct construction. Under $\Omega_{ij} = U_iU_j^{-1}$ the self-pair gives $\Omega_{ii} = I$, and the cocycle $\Omega_{ij}\Omega_{jk} = \Omega_{ik}$ at $i = k$ forces $\Omega_{ij}\Omega_{ji} = I$; pair-independence $\Omega_{ij} = \Omega$ then yields $\Omega^2 = \Omega$, and invertibility forces $\Omega = I$. The only constant pair-independent transport consistent with the vertex-frame law is the trivial one. The reduction below therefore separates two distinct objects:
 \begin{enumerate}
 \item The \emph{relative gauge transport} $\Omega_{ij} = U_iU_j^{-1}$, which carries the gauge-covariant content of the framework. The transformer reduction sets $U_i = U$ for all tokens (a single shared frame), giving $\Omega_{ij} = I$ on the relevant base point.
-\item A \emph{shared query-key bilinear compatibility} $M \in \mathrm{GL}(d_k)$ that encodes how query means are paired with key means at the level of the attention score. Standard transformer attention $\beta_{ij} \propto \exp\big(\mu_i^\top M \mu_j / \tau\big)$ corresponds to a learned bilinear form $M = W_Q W_K^\top$ acting on the shared representation, not to a non-trivial pair-independent gauge transport.
+\item A \emph{shared query-key bilinear compatibility} $M \in \mathrm{GL}(d_k)$ that encodes how query means are paired with key means at the level of the attention score. Standard transformer attention $\beta_{ij} \propto \exp\big(\mu_i^\top M \mu_j / \tau\big)$ corresponds to a learned bilinear form $M$ acting on the shared representation in the head's $d_k$-dimensional subspace, not to a non-trivial pair-independent gauge transport. In the rectangular multi-head setting with projections $W_Q, W_K \in \mathbb{R}^{d_{\text{model}} \times d_{\text{head}}}$, the bilinear $W_Q W_K^\top \in \mathbb{R}^{d_{\text{model}}\times d_{\text{model}}}$ is rank-deficient ($\mathrm{rank} \le d_{\text{head}}$) and is not an element of $\mathrm{GL}(d_{\text{model}})$; the invertible kernel $M$ lives in the head's image subspace, and the per-head identification $M \in \mathrm{GL}(d_{\text{head}})$ is recovered via thin singular-value decomposition as detailed in the companion paper~\cite{Dennis2025trans}.
 \end{enumerate}
 With this separation, the geometric bias $S(\Omega_{ij}) = S(I) = 0$ is automatically constant and cancels under softmax; what remains is a Mahalanobis-style attention score whose bilinear part is the learned compatibility $M$. The cross term in the attention score takes the form $\mu_i^\top M \mu_j$, and the $\Omega \to I$ specialisation removes any structural inconsistency between pairwise transport and pair-independent compatibility.
 
@@ -2412,7 +2412,7 @@ Under the trivial-frame specialisation $\Omega_{ij} = I$ with a shared bilinear 
 \begin{equation}
 s_{ij} = \frac{1}{2\sigma^2}\|\mu_i\|^2 + \frac{1}{2\sigma^2}\|\mu_j\|^2 - \frac{1}{\sigma^2}\mu_i^\top M \mu_j + C,
 \end{equation}
-where $M = \sigma^2 W_Q W_K^\top \in \mathrm{GL}(d_k)$ is the shared bilinear similarity. The constant $C$ is a $\mu$-independent normalisation absorbed by the softmax.
+where $M \in \mathrm{GL}(d_k)$ is the shared bilinear similarity in the head's $d_k$-dimensional subspace, with the identification $M = \sigma^2 W_Q W_K^\top$ holding for the square per-head projections $W_Q, W_K \in \mathbb{R}^{d_k \times d_k}$; the rectangular multi-head case $W_Q, W_K \in \mathbb{R}^{d_{\text{model}}\times d_{\text{head}}}$ is recovered via thin SVD on the head subspace, as discussed below. The constant $C$ is a $\mu$-independent normalisation absorbed by the softmax.
 
 \paragraph{Softmax cancellations.}
 For a fixed query agent $i$, the softmax over keys $j$ is
@@ -2452,10 +2452,11 @@ The leading term in $\tilde{s}_{ij}$ is
 \begin{equation}
 \frac{1}{\sigma^2}\mu_i^\top M \mu_j.
 \end{equation}
-We factor the bilinear similarity $M$ as
+We factor the bilinear similarity $M$ in the head subspace as
 \begin{equation}
-W_Q W_K^\top = \frac{1}{\sigma^2} M \in \mathrm{GL}(d_k).
+W_Q W_K^\top = \frac{1}{\sigma^2} M \in \mathrm{GL}(d_k),
 \end{equation}
+which holds directly when $W_Q, W_K \in \mathbb{R}^{d_k \times d_k}$ are square per-head projections. For the standard rectangular multi-head case $W_Q, W_K \in \mathbb{R}^{d_{\text{model}}\times d_{\text{head}}}$ with $d_{\text{head}} = d_k < d_{\text{model}}$, the same identification is recovered by writing $M$ in its thin singular-value decomposition $M = A_Q A_K^\top$ with $A_Q, A_K \in \mathbb{R}^{d_{\text{model}}\times d_{\text{head}}}$ of full column rank, so that $A_Q^\top A_K \in \mathrm{GL}(d_{\text{head}})$ realises the invertible head-space kernel; the rank-deficient lift $W_Q W_K^\top \in \mathbb{R}^{d_{\text{model}}\times d_{\text{model}}}$ is not in $\mathrm{GL}(d_{\text{model}})$, and the gauge group of the multi-head architecture is the block-diagonal subgroup $\mathrm{GL}(d_{\text{head}})^H \subset \mathrm{GL}(d_{\text{model}})$~\cite{Dennis2025trans}.
 Such a factorisation always exists for any invertible $M$: any $M \in \mathrm{GL}(d_k)$ can be written as $M = AB^\top$ for suitable $A, B \in \mathrm{GL}(d_k)$ (e.g., via SVD: $M = U\Lambda V^\top = (U\Lambda^{1/2})(V\Lambda^{1/2})^\top$, where invertibility of $M$ ensures all singular values are positive, so $A$ and $B$ are themselves invertible). The factorisation is unique only up to a right action $W_Q \to W_Q R$, $W_K \to W_K R$ for $R \in \mathrm{O}(d_k)$, which corresponds to the residual orthogonal freedom after fixing $M$; this residual freedom is what learning fills in during training.
 
 Define query and key vectors as
