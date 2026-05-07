@@ -574,6 +574,8 @@ Let $\rho_{\mathrm{state}}: G \to \mathrm{Aut}(\mathcal{B}_{\mathrm{state}})$ an
 where the equivalence relation $(n \cdot g, b) \sim (n, \rho(g)b)$ identifies gauge-transformed pairs and the appropriate $\rho$ is determined by which manifold $b$ inhabits.
 \end{definition}
 
+\paragraph{Convention.} The equivalence relation $(n\cdot g, b) \sim (n, \rho(g)b)$ adopted above corresponds to treating $\rho: G \to \mathrm{Aut}(\mathcal{B})$ as a left action paired with the right principal action $n \mapsto n\cdot g$ on $\mathcal{N}$; this is the convention used in~\cite{Nakahara2003}. It is mathematically equivalent (under $g \mapsto g^{-1}$ and the homomorphism property $\rho(g^{-1}) = \rho(g)^{-1}$) to the alternative convention $(n\cdot g, b) \sim (n, \rho(g^{-1})b)$ found in some texts, in which $\rho$ is treated as the right action induced from the left action. Throughout this manuscript we use the $(n\cdot g, b) \sim (n, \rho(g)b)$ form consistently; transport laws, gauge-covariance arguments, and the lattice gauge transformation $\Omega_{ij} \mapsto g_i \Omega_{ij} g_j^{-1}$ in Section~\ref{sec:transport} are stated relative to this convention. A reader importing identities from a text with the inverse convention should substitute $\rho(g) \to \rho(g^{-1})$ everywhere.
+
 For Gaussian distributions with $G = \mathrm{GL}(K)$ (or any subgroup such as $\mathrm{SO}(N)$), the representation acts by linear transformation of means and congruence of covariances:
 \begin{equation}
 \rho_{\mathrm{state}}(g) \cdot \mathcal{N}(\mu, \Sigma) = \mathcal{N}(g\mu, g\Sigma g^\top),
@@ -1207,43 +1209,29 @@ Extending to continuous fields over the base manifold $\mathcal{C}$ and includin
 \label{eq:free_energy_functional_final}
 \end{equation}
 
-where
-
-$$
-\beta_{ij}(c) =
+where the attention weights, when minimised over the row-normalisation constraint $\sum_j \beta_{ij}(c) = 1$, take the closed-form softmax
+\begin{equation}
+\beta_{ij}^*(c) =
 \frac{
-  \exp\left[
-    -\tfrac{1}{\tau}
-    \mathrm{KL}\big(
-      q_i(c)
-      \big\|
-      \Omega_{ij}q_j(c)
-    \big)
+  \pi_{ij}(c)\exp\left[
+    -\tfrac{1}{\tau}\mathrm{KL}\big(q_i(c) \big\| \Omega_{ij}q_j(c)\big)
   \right]
-
 }{
-  \displaystyle
-  \sum_{k}
-  \exp\left[
-    -\tfrac{1}{\tau}
-    \mathrm{KL}\big(
-      q_i(c)
-      \big\|
-      \Omega_{ik}q_k(c)
-    \big)
+  \displaystyle\sum_{k}
+  \pi_{ik}(c)\exp\left[
+    -\tfrac{1}{\tau}\mathrm{KL}\big(q_i(c) \big\| \Omega_{ik}q_k(c)\big)
   \right]
-
-}
-$$
-
-and similarly for the $\gamma_{ij}(c)$ model-alignment attention weight (with $\tilde{\Omega}_{ij}$ in place of $\Omega_{ij}$ and $s_j$ in place of $q_j$), derived from the same mixture-of-sources principle (Section~\ref{sec:mixture_derivation}).
+},
+\label{eq:beta_optimal}
+\end{equation}
+in agreement with the general softmax solution~\eqref{eq:softmax_attention_general} now expressed in pair-indexed form $\pi_{ij}(c)$ to match the full functional. The uniform-prior special case $\pi_{ij}(c) = 1/N$ recovers the prior-free softmax of~\eqref{eq:mixture_softmax}; non-uniform $\pi_{ij}$ recover causal masking, ALiBi, and learned position biases as in Section~\ref{sec:nonuniform_priors}. An analogous expression holds for the model-channel weights $\gamma_{ij}^*(c)$, with $\tilde{\Omega}_{ij}$, $s_j$, and $\pi^{(s)}_{ij}$ in place of $\Omega_{ij}$, $q_j$, and $\pi_{ij}$.
 As with the pointwise functional~\eqref{eq:pointwise_free_energy}, the boxed equation is the full variational free energy with the attention entropy and prior terms included explicitly. Minimising over $\beta_{ij}, \gamma_{ij}$ subject to row-normalisation recovers the softmax weights of~\eqref{eq:softmax_attention_general}; substituting these back gives the reduced free energy~\eqref{eq:free_energy_reduced} of Section~\ref{sec:envelope_theorem}, in which each alignment block becomes $-\tau \log Z_i$. We do \emph{not} treat the entropy-suppressed surrogate $\sum_{ij} \beta^*_{ij}\mathrm{KL}(q_i \| \Omega_{ij}q_j)$ as equivalent to the full or reduced free energy: its gradient differs from $\nabla\mathcal{F}_{\mathrm{red}}$ by $-\tau^{-1}\mathrm{Cov}_{\beta^*}(\mathrm{KL}, \nabla \mathrm{KL})$, which is generally nonzero, so the surrogate and the reduced energy do not share stationary points off-equilibrium. The boxed form above is the canonical functional throughout this manuscript.
 Here $\chi_i(c) \in [0, 1]$ is agent $i$'s presence function, $\chi_{ij}(c) = \chi_i(c) \chi_j(c)$ is the soft overlap, and we adopt the smooth-section convention $\chi_i: \mathcal{C} \to [0, 1]$ rather than a hard $\{0, 1\}$ indicator: the bundle language of Section~\ref{sec:agents_as_sections} requires agents to be smooth sections over open domains, and discontinuous $\chi_i$ would make derivatives of the integrands distributional at support boundaries. In the simulations of this paper the supports are realised as smooth bump functions (compactly supported partitions of unity rather than indicator functions); we discuss the bump-function shape and width as implementation hyperparameters in Section~\ref{sec:participatory}. Where the prose elsewhere informally writes $\chi_i \in \{0, 1\}$, the meaning is the heuristic limit of a sharply localised bump, not a strict indicator function. $\beta_{ij}(c)$ and $\gamma_{ij}(c)$ are the belief-alignment and model-alignment weights computed via softmax over KL divergences (Eq.~\ref{eq:softmax_attention_general}), and $\Omega_{ij}(c) \in \mathrm{GL}^+(K)$ is the gauge transport operator defined in~\eqref{eq:transport_def}. In the simulations of this paper $\gamma_{ij} = 0$; the model-alignment term is retained in the canonical functional because it is the formal content of meta-cognitive consensus exercised in Section~\ref{sec:participatory}. On base manifolds of dimension $\geq 1$, the gauge frame fields additionally induce a connection one-form $A_\mu^{(i)}(c) = U_i^{-1}\partial_\mu U_i$ (Eq.~\ref{eq:connection_form}) and gauge curvature $F_{\mu\nu}^{(i)}$ (Eq.~\ref{eq:field_strength}). Optional regularizers include gauge field smoothness $\lambda_\phi \int \|\nabla \phi_i\|^2  \sqrt{g} dc$ and Fisher metric mass terms $\int \mathrm{tr}(G_{ij})  \sqrt{g} dc$. A Yang-Mills curvature penalty $\int \mathrm{tr}(F_{\mu\nu} F^{\mu\nu})  \sqrt{g} dc$ is sometimes invoked in the literature on gauge-theoretic active inference; in Regime~I (Section~\ref{sec:connection_forms}) the integrand vanishes identically by the Maurer--Cartan identity and the term is structurally inactive, so we list it under the Regime~II extension and not as a regularizer of the present implementation.
 
 \subsubsection{The Envelope Theorem and the Reduced Free Energy}
 \label{sec:envelope_theorem}
 
-The boxed functional~\eqref{eq:free_energy_functional_final} is the \emph{full} (un-minimized) free energy: $\beta_{ij}$ and $\gamma_{ij}$ appear as variational attention parameters that are optimized jointly with the belief and model fields. Substituting the optimal weights $\beta_{ij}^* = \softmax_j(-E_{ij}/\tau + \log\pi_j)$ from~\eqref{eq:softmax_attention_general} into the alignment free energy $\mathcal{F}_{\text{align}}$~\eqref{eq:mixture_energy_entropy} yields the reduced alignment energy $-\tau\log Z_i$, where $Z_i = \sum_j \pi_j\exp(-E_{ij}/\tau)$ is the partition function. Setting aside model-channel terms (which carry an analogous structure in $s_i$ and $\gamma_{ij}$), the \emph{reduced} (partially minimized) free energy at point $c$ is therefore
+The boxed functional~\eqref{eq:free_energy_functional_final} is the \emph{full} (un-minimized) free energy: $\beta_{ij}$ and $\gamma_{ij}$ appear as variational attention parameters that are optimized jointly with the belief and model fields. Substituting the optimal weights $\beta_{ij}^* = \softmax_j(-E_{ij}/\tau + \log\pi_{ij})$ from~\eqref{eq:beta_optimal} into the alignment free energy $\mathcal{F}_{\text{align}}$~\eqref{eq:mixture_energy_entropy} yields the reduced alignment energy $-\tau\log Z_i$, where $Z_i = \sum_j \pi_{ij}\exp(-E_{ij}/\tau)$ is the partition function. Setting aside model-channel terms (which carry an analogous structure in $s_i$ and $\gamma_{ij}$ with prior $\pi^{(s)}_{ij}$), the \emph{reduced} (partially minimized) free energy at point $c$ is therefore
 
 \begin{equation}
 \boxed{
@@ -1257,17 +1245,24 @@ The boxed functional~\eqref{eq:free_energy_functional_final} is the \emph{full} 
 \label{eq:free_energy_reduced}
 \end{equation}
 
-where $E_{ij} = D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ and $Z_i = \sum_j \pi_j \exp(-E_{ij}/\tau)$. The log-partition function $-\tau\log Z_i$ is the result of substituting $\beta_{ij}^*$ into both the energy term $\sum_j \beta_{ij} E_{ij}$ and the entropy term $\tau\sum_j \beta_{ij}\log(\beta_{ij}/\pi_j)$ of $\mathcal{F}_{\text{align}}$. The full (un-minimized) alignment energy includes the attention entropy/prior term, which is essential: it is this term that makes the $\beta$-optimization yield the softmax rather than an arg-min.
+where $E_{ij} = D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ and $Z_i = \sum_j \pi_{ij} \exp(-E_{ij}/\tau)$. The log-partition function $-\tau\log Z_i$ is the result of substituting $\beta_{ij}^*$ into both the energy term $\sum_j \beta_{ij} E_{ij}$ and the entropy term $\tau\sum_j \beta_{ij}\log(\beta_{ij}/\pi_{ij})$ of $\mathcal{F}_{\text{align}}$. The full (un-minimized) alignment energy includes the attention entropy/prior term, which is essential: it is this term that makes the $\beta$-optimization yield the softmax rather than an arg-min.
 
-The envelope theorem guarantees that the gradient of $\mathcal{F}_{\mathrm{red}}$ with respect to any belief parameter $x \in \{\mu_i, \Sigma_i, \phi_i\}$ takes the form
-
+The envelope theorem guarantees that the gradient of $\mathcal{F}_{\mathrm{red}}$ with respect to any belief parameter $x_i \in \{\mu_i, \Sigma_i, \phi_i\}$ of agent~$i$ contains contributions from every term in the full functional in which $x_i$ appears. Because agent~$i$ enters the alignment energies $E_{ij} = D_{\mathrm{KL}}(q_i \| \Omega_{ij}[q_j])$ both as a \emph{receiver} (pairs $(i,j)$ over which $i$ attends to neighbors $j$) and as a \emph{sender} (pairs $(\ell, i)$ over which other agents $\ell$ attend to $i$), the envelope expression carries both sums:
 \begin{equation}
-\frac{d\mathcal{F}_{\mathrm{red}}}{dx} = \frac{\partial\mathcal{F}}{\partial x}\bigg|_{\beta=\beta^*}
-= \text{(prior terms)} + \sum_j \beta_{ij}^*\frac{\partial E_{ij}}{\partial x} - \text{(observation terms)},
+\begin{aligned}
+\nabla_{x_i}\mathcal{F}_{\mathrm{red}}
+&= \chi_i(c) \nabla_{x_i} D_{\mathrm{KL}}(q_i \| p_i) \\
+&\quad + \sum_j \chi_{ij}(c) \beta_{ij}^* \nabla_{x_i} E_{ij}
+       + \sum_\ell \chi_{\ell i}(c) \beta_{\ell i}^* \nabla_{x_i} E_{\ell i} \\
+&\quad + \sum_j \chi_{ij}(c) \gamma_{ij}^* \nabla_{x_i} \tilde{E}_{ij}
+       + \sum_\ell \chi_{\ell i}(c) \gamma_{\ell i}^* \nabla_{x_i} \tilde{E}_{\ell i} \\
+&\quad - \chi_i(c) \nabla_{x_i} \mathbb{E}_{q_i}[\log p(o_i \mid k_i)],
+\end{aligned}
 \label{eq:envelope_gradient}
 \end{equation}
-
-with no explicit $\partial\beta^*/\partial x$ terms, since the cross-term $\sum_j(\partial\mathcal{F}/\partial\beta_{ij})(\partial\beta^*_{ij}/\partial x)$ vanishes at the optimal attention where $\partial\mathcal{F}/\partial\beta_{ij} = 0$.
+where $\tilde{E}_{ij} = D_{\mathrm{KL}}(s_i \| \tilde{\Omega}_{ij}[s_j])$ are the model-channel alignment energies and the support factors $\chi_i(c), \chi_{ij}(c)$ restrict each contribution to agent~$i$'s domain and to the overlap region of each pair, respectively (Section~\ref{sec:fast_subsystem}). No explicit $\partial\beta^*_{ij}/\partial x_i$ terms appear, because the cross term $\sum_{kl}(\partial\mathcal{F}/\partial\beta_{kl})(\partial\beta^*_{kl}/\partial x_i)$ vanishes at the optimal attention where $\partial\mathcal{F}/\partial\beta_{kl} = 0$ for every pair; the analogous cancellation holds for $\gamma^*_{kl}$. The schematic abbreviation
+$$\nabla_{x_i}\mathcal{F}_{\mathrm{red}} \approx (\text{prior terms}) + \sum_j \beta_{ij}^* \nabla_{x_i} E_{ij} - (\text{observation terms})$$
+is sometimes useful when only the receiver contribution is under discussion (e.g., the autograd-versus-reduced-free-energy distinction immediately below); this abbreviation drops the sender, model-channel, and support-factor contributions present in~\eqref{eq:envelope_gradient}, and the appendix~\eqref{eq:total_gradient_mu} works with the complete form. Both the sender and receiver sums are required for any gradient-descent update of $x_i$.
 
 \paragraph{Autograd versus reduced-free-energy gradients.}
 In practice, implementations differentiate the composition $\sum_j \beta_{ij}^*(x)E_{ij}(x)$ via automatic differentiation, which applies the product rule and produces additional $(\partial\beta_{ij}^*/\partial x)E_{ij}$ terms. This computes the gradient of the attention-weighted energy $\langle E \rangle_\beta = \sum_j \beta_{ij}^* E_{ij}$, which is a different surrogate from the reduced free energy $-\tau\log Z_i$. The two scalar functions agree in value up to a constant under the softmax (specifically, $-\tau \log Z_i = \sum_j\beta^*_{ij}E_{ij} + \tau\sum_j\beta^*_{ij}\log(\beta^*_{ij}/\pi_j)$), but their $x$-gradients differ by the cross-term $\sum_j E_{ij} \partial\beta^*_{ij}/\partial x$, which is generally nonzero and is not in the kernel of the envelope theorem because the autograd surrogate does not include the entropy term whose $\beta$-derivative would cancel it. Therefore the autograd surrogate and the reduced free energy do not share stationary points away from equilibrium; the discrepancy is a covariance, $\nabla\langle E\rangle_\beta - \nabla\mathcal{F}_{\mathrm{red}} = -\tau^{-1}\mathrm{Cov}_{\beta^*}(E, \nabla_x E)$, which vanishes only when energies and their gradients are uncorrelated under $\beta^*$. The full functional~\eqref{eq:free_energy_functional_final} (with the entropy term) and the reduced functional~\eqref{eq:free_energy_reduced} are the two principled choices; the autograd-on-the-surrogate route is not equivalent to either at the gradient level and we flag this when we use it. Standard transformer training follows the autograd convention (differentiating through the softmax) because the softmax-gradient cross-term is the desired nonlinearity for that application; we report this convention explicitly in the gradient expressions below rather than conflating it with the envelope-theorem reduction.
@@ -1277,7 +1272,7 @@ The attention field $\beta_{ij}(c)$ is not a hand-crafted kernel but emerges fro
 \begin{figure}[t]
     \centering
     \includegraphics[width=0.65\linewidth]{Fig_1.png}
-    \caption{Belief attention field $\beta_{ij}(c)$ between agents $i=0$ and $j=1$ (in a stack of 8 completely overlapping, identical agents) across the two-dimensional base manifold $\mathcal{C}$. The field is computed as $\beta_{ij}(c) = \exp[-\kappa_\beta^{-1} \mathrm{KL}(q_i(c) \| \Omega_{ij}(c)[q_j(c)])] / \sum_k \exp[-\kappa_\beta^{-1} \mathrm{KL}(q_i(c) \| \Omega_{ik}(c)[q_k(c)])]$ after gauge-covariant transport. Warm colors indicate high attention (strong informational alignment), cool colors indicate low attention (divergence). The spatial structure reflects how beliefs $q_i(c)$ and $q_j(c)$ vary across the base manifold, with attention naturally concentrating in regions of mutual coherence. This emergent pattern arises from variational free energy minimization rather than learned weights, demonstrating that attention mechanisms are geometric necessities rather than arbitrary architectural choices.}
+    \caption{Belief attention field $\beta_{ij}(c)$ between agents $i=0$ and $j=1$ (in a stack of 8 completely overlapping, identical agents) across the two-dimensional base manifold $\mathcal{C}$. The field is computed as $\beta_{ij}(c) = \pi_{ij}(c)\exp[-\kappa_\beta^{-1} \mathrm{KL}(q_i(c) \| \Omega_{ij}(c)[q_j(c)])] / \sum_k \pi_{ik}(c)\exp[-\kappa_\beta^{-1} \mathrm{KL}(q_i(c) \| \Omega_{ik}(c)[q_k(c)])]$ after gauge-covariant transport, with attention prior $\pi_{ij}(c)$ taken uniform in this figure so that the prior factors cancel in the softmax. Warm colors indicate high attention (strong informational alignment), cool colors indicate low attention (divergence). The spatial structure reflects how beliefs $q_i(c)$ and $q_j(c)$ vary across the base manifold, with attention naturally concentrating in regions of mutual coherence. This emergent pattern arises from variational free energy minimization rather than learned weights, demonstrating that attention mechanisms are geometric necessities rather than arbitrary architectural choices.}
     \label{fig:attention_field}
 \end{figure}
 
@@ -1978,16 +1973,17 @@ g_{\mathcal{B}}\big(\nabla^{(i)}_\mu q_i, \nabla^{(i)}_\nu q_i\big) = \mathbb{E}
 \end{equation}
 and combining with Eq.~\eqref{eq:horizontal_metric} we obtain the boxed expression
 \begin{equation}
-\boxed{G^{(q)}_{i,\mu\nu}(c) = \mathrm{tr}\big(A^{(i)}_\mu A^{(i)}_\nu\big) + \mathbb{E}_{q_i(c)}\big[(\nabla^{(i)}_\mu \log q_i)(\nabla^{(i)}_\nu \log q_i)\big].}
+\boxed{G^{(q)}_{i,\mu\nu}(c) = \kappa\big(A^{(i)}_\mu, A^{(i)}_\nu\big) + \mathbb{E}_{q_i(c)}\big[(\nabla^{(i)}_\mu \log q_i)(\nabla^{(i)}_\nu \log q_i)\big],}
 \label{eq:induced_metric_full}
 \end{equation}
+where the bilinear form $\kappa$ is the one fixed in the piecewise convention above: $\kappa(A,B) = -\mathrm{tr}(AB)$ for the compact real forms $\mathfrak{so}(N)$, $\mathfrak{su}(N)$ used in the body simulations (giving a positive-definite Riemannian horizontal block), and $\kappa(A,B) = +\mathrm{tr}(AB)$ for the non-compact $\mathfrak{gl}(K, \mathbb{C})$ setting of the worked signature example (giving an indefinite block consistent with Lorentzian signature). Writing the horizontal block as $\kappa$ rather than $+\mathrm{tr}$ is essential: for skew-symmetric $A^{(i)} \in \mathfrak{so}(N)$ one has $\mathrm{tr}(A^2) \le 0$, so a bare $+\mathrm{tr}(A^{(i)}_\mu A^{(i)}_\nu)$ would produce a negative-semidefinite horizontal contribution and break the Riemannian character of the body construction.
 
 \paragraph{Gauge-invariance disclosure for the horizontal block.}
-Under a local gauge transformation $U_i \to U_i g(c)$, the connection $A^{(i)} = U_i^{-1} dU_i$ acquires a Maurer-Cartan piece $A^{(i)} \to g^{-1} A^{(i)} g + g^{-1} dg$, and $\mathrm{tr}(A_\mu A_\nu)$ is therefore not invariant: it transforms with cross terms $\mathrm{tr}(A_\mu \partial_\nu g \cdot g^{-1}) + \mathrm{tr}(\partial_\mu g \cdot g^{-1} A_\nu) + \mathrm{tr}(g^{-1} \partial_\mu g \cdot g^{-1} \partial_\nu g)$. The horizontal block is consequently agent-frame-dependent whereby different gauge fixings of the same agent yield different horizontal contributions, which is consistent with the framework's treatment of distinct gauge frames as generating distinct pulled-back geometries. We do not attempt to absorb this non-invariance by appealing to the Yang-Mills invariant $\mathrm{tr}(F_{\mu\nu} F^{\mu\nu})$: under Regime~I (Section~\ref{sec:connection_forms}) the connection is pure gauge and $F_{\mu\nu} = 0$ identically, so $\mathrm{tr}(FF)$ vanishes and supplies no escape hatch in the present implementation. The genuinely gauge-invariant ontological content of the framework is instead routed through the consensus / Haar-averaged construction of Section~\ref{sec:consensus_metric} (the metric defined by gauge-orbit averaging across the agent population), which produces an invariant from the agent-frame-dependent pullbacks $G_i^{(q)}$ without invoking $\mathrm{tr}(FF)$. The bundle metric of Eq.~\eqref{eq:bundle_metric} is therefore best read as the metric pulled back \emph{within an agent's gauge fixing}, with agent-independent geometry on $\mathcal{C}$ recovered after consensus averaging rather than from a Yang-Mills invariant.
+Under a local gauge transformation $U_i \to U_i g(c)$, the connection $A^{(i)} = U_i^{-1} dU_i$ acquires a Maurer-Cartan piece $A^{(i)} \to g^{-1} A^{(i)} g + g^{-1} dg$, and $\kappa(A_\mu, A_\nu)$ is therefore not invariant: it transforms with cross terms involving $\kappa(A_\mu, \partial_\nu g \cdot g^{-1})$, $\kappa(\partial_\mu g \cdot g^{-1}, A_\nu)$, and $\kappa(g^{-1} \partial_\mu g, g^{-1} \partial_\nu g)$. The horizontal block is consequently agent-frame-dependent whereby different gauge fixings of the same agent yield different horizontal contributions, which is consistent with the framework's treatment of distinct gauge frames as generating distinct pulled-back geometries. We do not attempt to absorb this non-invariance by appealing to the Yang-Mills invariant $\mathrm{tr}(F_{\mu\nu} F^{\mu\nu})$: under Regime~I (Section~\ref{sec:connection_forms}) the connection is pure gauge and $F_{\mu\nu} = 0$ identically, so $\mathrm{tr}(FF)$ vanishes and supplies no escape hatch in the present implementation. The genuinely gauge-invariant ontological content of the framework is instead routed through the consensus / Haar-averaged construction of Section~\ref{sec:consensus_metric} (the metric defined by gauge-orbit averaging across the agent population), which produces an invariant from the agent-frame-dependent pullbacks $G_i^{(q)}$ without invoking $\mathrm{tr}(FF)$. The bundle metric of Eq.~\eqref{eq:bundle_metric} is therefore best read as the metric pulled back \emph{within an agent's gauge fixing}, with agent-independent geometry on $\mathcal{C}$ recovered after consensus averaging rather than from a Yang-Mills invariant.
 
 When the gauge frame is locally constant the connection contribution vanishes ($A^{(i)} = 0$), the covariant derivative reduces to the ordinary partial $\partial_\mu \log q_i$, and Eq.~\eqref{eq:induced_metric_full} collapses to the bare score-function expression. The score-only expression is therefore a special case of the bundle pullback, recovered when the gauge frame is gauge-fixed to a constant section. The Fisher-Rao $L^2$ inner product on log-densities is the vertical piece of $g_{E_q}$, not the whole metric, and the construction in this section is the pullback of $g_{E_q}$ rather than the $L^2$ pullback of score functions only. Similarly the prior-induced metric is
 \begin{equation}
-\boxed{G^{(p)}_{i,\mu\nu}(c) = \mathrm{tr}\big(A^{(i)}_\mu A^{(i)}_\nu\big) + \mathbb{E}_{p_i(c)}\big[(\nabla^{(i)}_\mu \log p_i)(\nabla^{(i)}_\nu \log p_i)\big].}
+\boxed{G^{(p)}_{i,\mu\nu}(c) = \kappa\big(A^{(i)}_\mu, A^{(i)}_\nu\big) + \mathbb{E}_{p_i(c)}\big[(\nabla^{(i)}_\mu \log p_i)(\nabla^{(i)}_\nu \log p_i)\big],}
 \end{equation}
 
 The bundle-pullback formulation gives "it from bit" a precise sense: a metric on the noumenal substrate is the pullback of a fiber-respecting metric on an information-bearing bundle along an agent's section, with the horizontal piece encoding how the agent's gauge frame varies across $\mathcal{C}$ and the vertical piece encoding how the agent's beliefs vary. Both pieces are agent-dependent because both the section $\sigma_i^{(q)}$ and the connection $A^{(i)}$ are. What appears as spatial distance under the agent's induced geometry is a sum of frame-twist length (how rapidly the agent's representational basis rotates between the two points) and information distance (how rapidly its beliefs distinguish them).
@@ -2145,9 +2141,10 @@ The collective consensus metric is then
 
 \begin{equation}
 \bar{G}_{\mu\nu}^{\text{consensus}}(c) = \sum_i w_i(c) \langle G_i \rangle_{\mu\nu}(c).
+\label{eq:consensus_metric}
 \end{equation}
 
-This construction is gauge-invariant by design as no agent's arbitrary frame choice affects the collective geometry. The consensus metric represents the gauge-invariant geometric structure that agents collectively construct through their aligned priors. This is the closest analog to "objective reality" in the framework. It is not a preexisting geometry, but an emergent, gauge-invariant structure arising from collective information processing.
+A regulated gauge-orbit average, if defined and finite, would by construction produce a metric on which no agent's frame choice has any effect, and would therefore qualify as a gauge-invariant consensus metric of the kind sought in the framework's ``objective reality'' interpretation. The present manuscript does not construct such a regulator: as flagged immediately above, the gauge-orbit average over local $g(c)$ is an infinite-dimensional functional integral that requires a gauge-fixing or regulator choice, and the non-compact $\mathrm{SO}(1,3)$ case carries the additional obstruction of an infinite Haar measure even for constant $g$. The consensus metric of Eq.~\eqref{eq:consensus_metric} therefore remains a heuristic target rather than a completed observable: it is the candidate gauge-invariant fallback for the agent-frame-dependent pullbacks $G_i^{(q)}, G_i^{(p)}$ used in Sections~\ref{sec:pullback} and~\ref{sec:qualia}, but its gauge-invariance is conditional on a regulator whose construction is left to future work. Where the prose elsewhere describes the consensus metric as ``the closest analog to objective reality'' or as ``the gauge-invariant geometric structure that agents collectively construct,'' those statements should be read in this conditional sense: the construction is what such a structure \emph{would} look like under a successful regulator, not a finite gauge-invariant observable that the present manuscript exhibits.
 
 \subsubsection{Connection to Physical Gauge Invariance}
 
@@ -4181,22 +4178,24 @@ Exponentiating gives the geometric-mean form \eqref{eq:geometric_mean_target_app
 
 \textbf{Step 3. Reverse implication (geometric mean $\Rightarrow D_{\mathrm{KL}}$).}
 
-Assume the minimizer has the geometric mean form \eqref{eq:geometric_mean_target_app} for all priors $p_i$ and neighbour beliefs $\{q_j\}$. Taking logarithms yields
+Assume the minimizer has the geometric mean form \eqref{eq:geometric_mean_target_app} for all priors $p_i$ and neighbour beliefs $\{q_j\}$, with general $B = \sum_j \beta_{ij}$ (not specialised to $B = 1$). Taking logarithms yields
 \begin{equation}
-2\log q_i^*(c) = \log p_i(c) + \sum_j\beta_{ij}\log\bigl(\Omega_{ij}(c)q_j(c)\bigr) + C.
+(1+B)\log q_i^*(c) = \log p_i(c) + \sum_j\beta_{ij}\log\bigl(\Omega_{ij}(c)q_j(c)\bigr) + C,
 \label{eq:log_target_app}
 \end{equation}
-Rearranging and using $\sum_j\beta_{ij}=1$:
+where the prefactor $(1+B)$ matches the forward derivation~\eqref{eq:rearranged_target_app}'s precursor, and reduces to $2$ in the special case $B = 1$ used in the main text. Rearranging:
 \begin{equation}
-\log\frac{q_i^*}{p_i} + \sum_j\beta_{ij}\log\frac{q_i^*}{\Omega_{ij}q_j} = C'.
+\log\frac{q_i^*}{p_i} + \sum_j\beta_{ij}\log\frac{q_i^*}{\Omega_{ij}q_j} = C',
 \label{eq:rearranged_target_app}
 \end{equation}
-Comparing \eqref{eq:rearranged_target_app} with the general stationarity condition \eqref{eq:general_stationarity_app} term-by-term, we then require
+where the algebraic step uses $(1+B)\log q_i^* - \log p_i - \sum_j\beta_{ij}\log(\Omega_{ij}q_j) = -C$ together with $(1+B)\log q_i^* = \log q_i^* + B\log q_i^*$ and $B = \sum_j\beta_{ij}$, so that $\log(q_i^*/p_i) + \sum_j\beta_{ij}\log(q_i^*/(\Omega_{ij}q_j)) = -C$ identically.
+
+\textbf{Richness lemma.} To pass from the term-by-term comparison
 \begin{equation}
 f'\left(\frac{q_i}{\Omega_{ij}q_j}\right) = \log\frac{q_i}{\Omega_{ij}q_j} + k
 \label{eq:ode_app}
 \end{equation}
-for some constant $k$, and for all values of the ratio $t = q_i(c)/[\Omega_{ij}(c)q_j(c)]$. Since the geometric-mean form holds for all choices of $p_i$ and $\{q_j\}$, the ratio $t$ ranges over all of $\mathbb{R}^+$, therefore \eqref{eq:ode_app} must hold globally: $f'(t)=\log t + k$ for all $t>0$. Integrating:
+for some constant $k$ and all configurations $(p_i, \{q_j\})$, to the conclusion $f'(t) = \log t + k$ as a functional identity on $t \in (0, \infty)$, the family of attainable ratios $\{q_i(c)/(\Omega_{ij}(c)q_j(c))\}_{i,j,c,p_i,\{q_j\}}$ must densely cover $(0, \infty)$. We verify this richness condition explicitly: fix any $i, j$ and any base point $c$; choose $p_i(c)$ to be any positive density and choose $q_j(c)$ to be any positive density that, together with $\beta_{ij}$ and the transports $\Omega_{ik}q_k$ for $k \neq j$, is consistent with the geometric-mean form via~\eqref{eq:geometric_mean_target_app}. Since $p_i(c)$ and $q_j(c)$ may be chosen independently and may take any positive values, the geometric-mean expression for $q_i^*(c)$ takes any positive value, and the ratio $q_i^*(c)/(\Omega_{ij}(c)q_j(c))$ ranges over all of $(0, \infty)$. The smoothness of $f'$ on its domain then forces~\eqref{eq:ode_app} to hold as a pointwise identity on $(0, \infty)$. Integrating:
 \[
 f(t) = t\log t - t + kt + C_0.
 \]
