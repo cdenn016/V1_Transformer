@@ -1973,16 +1973,17 @@ g_{\mathcal{B}}\big(\nabla^{(i)}_\mu q_i, \nabla^{(i)}_\nu q_i\big) = \mathbb{E}
 \end{equation}
 and combining with Eq.~\eqref{eq:horizontal_metric} we obtain the boxed expression
 \begin{equation}
-\boxed{G^{(q)}_{i,\mu\nu}(c) = \mathrm{tr}\big(A^{(i)}_\mu A^{(i)}_\nu\big) + \mathbb{E}_{q_i(c)}\big[(\nabla^{(i)}_\mu \log q_i)(\nabla^{(i)}_\nu \log q_i)\big].}
+\boxed{G^{(q)}_{i,\mu\nu}(c) = \kappa\big(A^{(i)}_\mu, A^{(i)}_\nu\big) + \mathbb{E}_{q_i(c)}\big[(\nabla^{(i)}_\mu \log q_i)(\nabla^{(i)}_\nu \log q_i)\big],}
 \label{eq:induced_metric_full}
 \end{equation}
+where the bilinear form $\kappa$ is the one fixed in the piecewise convention above: $\kappa(A,B) = -\mathrm{tr}(AB)$ for the compact real forms $\mathfrak{so}(N)$, $\mathfrak{su}(N)$ used in the body simulations (giving a positive-definite Riemannian horizontal block), and $\kappa(A,B) = +\mathrm{tr}(AB)$ for the non-compact $\mathfrak{gl}(K, \mathbb{C})$ setting of the worked signature example (giving an indefinite block consistent with Lorentzian signature). Writing the horizontal block as $\kappa$ rather than $+\mathrm{tr}$ is essential: for skew-symmetric $A^{(i)} \in \mathfrak{so}(N)$ one has $\mathrm{tr}(A^2) \le 0$, so a bare $+\mathrm{tr}(A^{(i)}_\mu A^{(i)}_\nu)$ would produce a negative-semidefinite horizontal contribution and break the Riemannian character of the body construction.
 
 \paragraph{Gauge-invariance disclosure for the horizontal block.}
-Under a local gauge transformation $U_i \to U_i g(c)$, the connection $A^{(i)} = U_i^{-1} dU_i$ acquires a Maurer-Cartan piece $A^{(i)} \to g^{-1} A^{(i)} g + g^{-1} dg$, and $\mathrm{tr}(A_\mu A_\nu)$ is therefore not invariant: it transforms with cross terms $\mathrm{tr}(A_\mu \partial_\nu g \cdot g^{-1}) + \mathrm{tr}(\partial_\mu g \cdot g^{-1} A_\nu) + \mathrm{tr}(g^{-1} \partial_\mu g \cdot g^{-1} \partial_\nu g)$. The horizontal block is consequently agent-frame-dependent whereby different gauge fixings of the same agent yield different horizontal contributions, which is consistent with the framework's treatment of distinct gauge frames as generating distinct pulled-back geometries. We do not attempt to absorb this non-invariance by appealing to the Yang-Mills invariant $\mathrm{tr}(F_{\mu\nu} F^{\mu\nu})$: under Regime~I (Section~\ref{sec:connection_forms}) the connection is pure gauge and $F_{\mu\nu} = 0$ identically, so $\mathrm{tr}(FF)$ vanishes and supplies no escape hatch in the present implementation. The genuinely gauge-invariant ontological content of the framework is instead routed through the consensus / Haar-averaged construction of Section~\ref{sec:consensus_metric} (the metric defined by gauge-orbit averaging across the agent population), which produces an invariant from the agent-frame-dependent pullbacks $G_i^{(q)}$ without invoking $\mathrm{tr}(FF)$. The bundle metric of Eq.~\eqref{eq:bundle_metric} is therefore best read as the metric pulled back \emph{within an agent's gauge fixing}, with agent-independent geometry on $\mathcal{C}$ recovered after consensus averaging rather than from a Yang-Mills invariant.
+Under a local gauge transformation $U_i \to U_i g(c)$, the connection $A^{(i)} = U_i^{-1} dU_i$ acquires a Maurer-Cartan piece $A^{(i)} \to g^{-1} A^{(i)} g + g^{-1} dg$, and $\kappa(A_\mu, A_\nu)$ is therefore not invariant: it transforms with cross terms involving $\kappa(A_\mu, \partial_\nu g \cdot g^{-1})$, $\kappa(\partial_\mu g \cdot g^{-1}, A_\nu)$, and $\kappa(g^{-1} \partial_\mu g, g^{-1} \partial_\nu g)$. The horizontal block is consequently agent-frame-dependent whereby different gauge fixings of the same agent yield different horizontal contributions, which is consistent with the framework's treatment of distinct gauge frames as generating distinct pulled-back geometries. We do not attempt to absorb this non-invariance by appealing to the Yang-Mills invariant $\mathrm{tr}(F_{\mu\nu} F^{\mu\nu})$: under Regime~I (Section~\ref{sec:connection_forms}) the connection is pure gauge and $F_{\mu\nu} = 0$ identically, so $\mathrm{tr}(FF)$ vanishes and supplies no escape hatch in the present implementation. The genuinely gauge-invariant ontological content of the framework is instead routed through the consensus / Haar-averaged construction of Section~\ref{sec:consensus_metric} (the metric defined by gauge-orbit averaging across the agent population), which produces an invariant from the agent-frame-dependent pullbacks $G_i^{(q)}$ without invoking $\mathrm{tr}(FF)$. The bundle metric of Eq.~\eqref{eq:bundle_metric} is therefore best read as the metric pulled back \emph{within an agent's gauge fixing}, with agent-independent geometry on $\mathcal{C}$ recovered after consensus averaging rather than from a Yang-Mills invariant.
 
 When the gauge frame is locally constant the connection contribution vanishes ($A^{(i)} = 0$), the covariant derivative reduces to the ordinary partial $\partial_\mu \log q_i$, and Eq.~\eqref{eq:induced_metric_full} collapses to the bare score-function expression. The score-only expression is therefore a special case of the bundle pullback, recovered when the gauge frame is gauge-fixed to a constant section. The Fisher-Rao $L^2$ inner product on log-densities is the vertical piece of $g_{E_q}$, not the whole metric, and the construction in this section is the pullback of $g_{E_q}$ rather than the $L^2$ pullback of score functions only. Similarly the prior-induced metric is
 \begin{equation}
-\boxed{G^{(p)}_{i,\mu\nu}(c) = \mathrm{tr}\big(A^{(i)}_\mu A^{(i)}_\nu\big) + \mathbb{E}_{p_i(c)}\big[(\nabla^{(i)}_\mu \log p_i)(\nabla^{(i)}_\nu \log p_i)\big].}
+\boxed{G^{(p)}_{i,\mu\nu}(c) = \kappa\big(A^{(i)}_\mu, A^{(i)}_\nu\big) + \mathbb{E}_{p_i(c)}\big[(\nabla^{(i)}_\mu \log p_i)(\nabla^{(i)}_\nu \log p_i)\big],}
 \end{equation}
 
 The bundle-pullback formulation gives "it from bit" a precise sense: a metric on the noumenal substrate is the pullback of a fiber-respecting metric on an information-bearing bundle along an agent's section, with the horizontal piece encoding how the agent's gauge frame varies across $\mathcal{C}$ and the vertical piece encoding how the agent's beliefs vary. Both pieces are agent-dependent because both the section $\sigma_i^{(q)}$ and the connection $A^{(i)}$ are. What appears as spatial distance under the agent's induced geometry is a sum of frame-twist length (how rapidly the agent's representational basis rotates between the two points) and information distance (how rapidly its beliefs distinguish them).
@@ -2140,9 +2141,10 @@ The collective consensus metric is then
 
 \begin{equation}
 \bar{G}_{\mu\nu}^{\text{consensus}}(c) = \sum_i w_i(c) \langle G_i \rangle_{\mu\nu}(c).
+\label{eq:consensus_metric}
 \end{equation}
 
-This construction is gauge-invariant by design as no agent's arbitrary frame choice affects the collective geometry. The consensus metric represents the gauge-invariant geometric structure that agents collectively construct through their aligned priors. This is the closest analog to "objective reality" in the framework. It is not a preexisting geometry, but an emergent, gauge-invariant structure arising from collective information processing.
+A regulated gauge-orbit average, if defined and finite, would by construction produce a metric on which no agent's frame choice has any effect, and would therefore qualify as a gauge-invariant consensus metric of the kind sought in the framework's ``objective reality'' interpretation. The present manuscript does not construct such a regulator: as flagged immediately above, the gauge-orbit average over local $g(c)$ is an infinite-dimensional functional integral that requires a gauge-fixing or regulator choice, and the non-compact $\mathrm{SO}(1,3)$ case carries the additional obstruction of an infinite Haar measure even for constant $g$. The consensus metric of Eq.~\eqref{eq:consensus_metric} therefore remains a heuristic target rather than a completed observable: it is the candidate gauge-invariant fallback for the agent-frame-dependent pullbacks $G_i^{(q)}, G_i^{(p)}$ used in Sections~\ref{sec:pullback} and~\ref{sec:qualia}, but its gauge-invariance is conditional on a regulator whose construction is left to future work. Where the prose elsewhere describes the consensus metric as ``the closest analog to objective reality'' or as ``the gauge-invariant geometric structure that agents collectively construct,'' those statements should be read in this conditional sense: the construction is what such a structure \emph{would} look like under a successful regulator, not a finite gauge-invariant observable that the present manuscript exhibits.
 
 \subsubsection{Connection to Physical Gauge Invariance}
 
@@ -4176,22 +4178,24 @@ Exponentiating gives the geometric-mean form \eqref{eq:geometric_mean_target_app
 
 \textbf{Step 3. Reverse implication (geometric mean $\Rightarrow D_{\mathrm{KL}}$).}
 
-Assume the minimizer has the geometric mean form \eqref{eq:geometric_mean_target_app} for all priors $p_i$ and neighbour beliefs $\{q_j\}$. Taking logarithms yields
+Assume the minimizer has the geometric mean form \eqref{eq:geometric_mean_target_app} for all priors $p_i$ and neighbour beliefs $\{q_j\}$, with general $B = \sum_j \beta_{ij}$ (not specialised to $B = 1$). Taking logarithms yields
 \begin{equation}
-2\log q_i^*(c) = \log p_i(c) + \sum_j\beta_{ij}\log\bigl(\Omega_{ij}(c)q_j(c)\bigr) + C.
+(1+B)\log q_i^*(c) = \log p_i(c) + \sum_j\beta_{ij}\log\bigl(\Omega_{ij}(c)q_j(c)\bigr) + C,
 \label{eq:log_target_app}
 \end{equation}
-Rearranging and using $\sum_j\beta_{ij}=1$:
+where the prefactor $(1+B)$ matches the forward derivation~\eqref{eq:rearranged_target_app}'s precursor, and reduces to $2$ in the special case $B = 1$ used in the main text. Rearranging:
 \begin{equation}
-\log\frac{q_i^*}{p_i} + \sum_j\beta_{ij}\log\frac{q_i^*}{\Omega_{ij}q_j} = C'.
+\log\frac{q_i^*}{p_i} + \sum_j\beta_{ij}\log\frac{q_i^*}{\Omega_{ij}q_j} = C',
 \label{eq:rearranged_target_app}
 \end{equation}
-Comparing \eqref{eq:rearranged_target_app} with the general stationarity condition \eqref{eq:general_stationarity_app} term-by-term, we then require
+where the algebraic step uses $(1+B)\log q_i^* - \log p_i - \sum_j\beta_{ij}\log(\Omega_{ij}q_j) = -C$ together with $(1+B)\log q_i^* = \log q_i^* + B\log q_i^*$ and $B = \sum_j\beta_{ij}$, so that $\log(q_i^*/p_i) + \sum_j\beta_{ij}\log(q_i^*/(\Omega_{ij}q_j)) = -C$ identically.
+
+\textbf{Richness lemma.} To pass from the term-by-term comparison
 \begin{equation}
 f'\left(\frac{q_i}{\Omega_{ij}q_j}\right) = \log\frac{q_i}{\Omega_{ij}q_j} + k
 \label{eq:ode_app}
 \end{equation}
-for some constant $k$, and for all values of the ratio $t = q_i(c)/[\Omega_{ij}(c)q_j(c)]$. Since the geometric-mean form holds for all choices of $p_i$ and $\{q_j\}$, the ratio $t$ ranges over all of $\mathbb{R}^+$, therefore \eqref{eq:ode_app} must hold globally: $f'(t)=\log t + k$ for all $t>0$. Integrating:
+for some constant $k$ and all configurations $(p_i, \{q_j\})$, to the conclusion $f'(t) = \log t + k$ as a functional identity on $t \in (0, \infty)$, the family of attainable ratios $\{q_i(c)/(\Omega_{ij}(c)q_j(c))\}_{i,j,c,p_i,\{q_j\}}$ must densely cover $(0, \infty)$. We verify this richness condition explicitly: fix any $i, j$ and any base point $c$; choose $p_i(c)$ to be any positive density and choose $q_j(c)$ to be any positive density that, together with $\beta_{ij}$ and the transports $\Omega_{ik}q_k$ for $k \neq j$, is consistent with the geometric-mean form via~\eqref{eq:geometric_mean_target_app}. Since $p_i(c)$ and $q_j(c)$ may be chosen independently and may take any positive values, the geometric-mean expression for $q_i^*(c)$ takes any positive value, and the ratio $q_i^*(c)/(\Omega_{ij}(c)q_j(c))$ ranges over all of $(0, \infty)$. The smoothness of $f'$ on its domain then forces~\eqref{eq:ode_app} to hold as a pointwise identity on $(0, \infty)$. Integrating:
 \[
 f(t) = t\log t - t + kt + C_0.
 \]
