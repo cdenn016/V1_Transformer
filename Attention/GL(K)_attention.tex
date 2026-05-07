@@ -653,7 +653,16 @@ Equivalently, the cocycle condition $\Omega_{ij}\,\Omega_{jk} = \Omega_{ik}$ hol
 Direct computation. The consecutive inverse--exponential pairs cancel identically: $g_j^{-1} g_j = I$ and $g_k^{-1} g_k = I$.
 \end{proof}
 
-This result is a theorem of the architecture, not an approximation. For our parameterization $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$, the holonomy vanishes for every closed loop regardless of the learned gauge frames $\phi_i$. The gauge bundle is automatically flat: semantic transport from token $i$ to token $k$ is path-independent, in the sense that the direct route via $\Omega_{ik}$ and the indirect route via $\Omega_{ij}\,\Omega_{jk}$ yield identical results. Architectures with non-trivial holonomy would require promoting $\Omega_{ij}$ to an independent edge variable unconstrained by the cocycle condition; we return to the implications of this geometric constraint in Section~\ref{sec:flat_bundle}.
+This result is a theorem of the architecture, not an approximation. For our parameterization $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$, the holonomy vanishes for every closed loop regardless of the learned gauge frames $\phi_i$. The gauge bundle is automatically flat: semantic transport from token $i$ to token $k$ is path-independent, in the sense that the direct route via $\Omega_{ik}$ and the indirect route via $\Omega_{ij}\,\Omega_{jk}$ yield identical results. Non-trivial holonomy is recovered without abandoning the vertex-frame skeleton by inserting an edge-local connection $\delta_{ij}$ between the vertex factors,
+\begin{equation}
+\Omega_{ij} = \exp(\phi_i) \exp(\delta_{ij}\cdot G) \exp(-\phi_j),
+\label{eq:edge_relaxed_omega_glk}
+\end{equation}
+which preserves the standard lattice gauge transformation law $\Omega_{ij} \mapsto g_i \Omega_{ij} g_j^{-1}$ under vertex-local actions and recovers the present theorem in the $\delta_{ij}=0$ limit. In this parameterization the holonomy around a 3-cycle equals
+\begin{equation}
+H_{ijk} = U_i \exp(\delta_{ij}\cdot G) \exp(\delta_{jk}\cdot G) \exp(\delta_{ki}\cdot G) U_i^{-1},
+\end{equation}
+with gauge-invariant Wilson observable $W_{ijk} = \operatorname{Re}\operatorname{Tr}(H_{ijk})$ and Wilson-style action $S_{\mathrm{YM}} = \beta\sum_{ijk}(1 - W_{ijk}/K)$~\citep{WilsonConfinement1974,KogutSusskind1975,Creutz1983}. The companion paper~\cite{Dennis2025it} develops this discrete Regime~II structure in detail, including the gauge-covariance proof, the data-dependent connection caveat, and the DAG-versus-cycle distinction relevant to autoregressive versus bidirectional attention. Section~\ref{sec:flat_bundle} of the present paper continues with the implications of the flat-bundle limit.
 
 
 \subsection{Single-Agent Free Energy Principle}
@@ -1634,6 +1643,14 @@ G_{\text{multi-head}} = \mathrm{GL}(d_{\text{head}})^H \subset \mathrm{GL}(d_k),
 
 a $(H \cdot d_{\text{head}}^2)$-dimensional subgroup of the $d_k^2$-dimensional $\mathrm{GL}(d_k)$.
 
+\paragraph{Per-head holonomy.} Under the discrete Regime~II construction of Theorem~\ref{thm:vanishing_holonomy}, the edge-relaxed transport \eqref{eq:edge_relaxed_omega_glk} factorises across heads: each head $a$ carries its own connection field $\delta_{ij}^{(a)}$ acting in its own irrep block, and the holonomy decomposes as a direct sum
+\begin{equation}
+H_{ijk} = \bigoplus_{a=1}^{H} H_{ijk}^{(a)},
+\qquad
+H_{ijk}^{(a)} = \exp(\delta_{ij}^{(a)}\cdot G_a) \exp(\delta_{jk}^{(a)}\cdot G_a) \exp(\delta_{ki}^{(a)}\cdot G_a),
+\end{equation}
+with the Wilson observable factorising additively, $W_{ijk} = \sum_{a=1}^H W_{ijk}^{(a)}$. Each per-head term is independently gauge-invariant under the per-head $\mathrm{GL}(d_{\text{head}})$ subgroup. Aggregate diagnostics that compute a single $\|H_{ijk} - I\|_F$ on the full block-diagonal representation report the sum of per-head deviations and discard the per-head decomposition; explicit per-head measurements require slicing the connection field by head before evaluating the holonomy.
+
 \paragraph{Per-head temperature from the belief covariance.}
 Since each head operates on an independent irrep block with its own $\mathrm{GL}(d_{\text{head}})$ gauge transport, each head possesses its own belief covariance $\Sigma^{(a)}$ which controls the scale of the KL divergence and thereby the effective attention temperature for that head. In the isotropic limit $\Sigma^{(a)} = \sigma_a^2 I$, the KL between beliefs in head $a$ reduces to $D_{\mathrm{KL}}^{(a)} = \frac{1}{2\sigma_a^2}\|\cdot\|^2$, so the per-head covariance $\sigma_a^2$ \emph{is} the per-head temperature. This is not an additional degree of freedom appended to the theory: it is intrinsic to the multi-head decomposition, since each $\mathrm{GL}(d_{\text{head}})$ block carries its own covariance structure.
 
@@ -2167,7 +2184,7 @@ The scaling dimensions in Eq.~\eqref{eq:rg_scaling} follow from CLT averaging of
 The ordering of the three limits in Section~\ref{sec:transformer_limit} is dictated by the RG hierarchy: holonomy vanishes fastest ($y_3 = -2$), then gauge variation ($y_2 = -1$), then anisotropy ($y_1 = -\tfrac{1}{2}$), matching Limit~3 $\to$ Limit~2 $\to$ Limit~1. The emergent anisotropy from part~(iv) provides a geometric interpretation of LayerNorm as a projection back toward the isotropic submanifold at each layer.
 \subsection{Limitations}
 
-The BERT validation (Supplementary Appendix~E) tested the flat bundle limit where all frames are globally aligned and the connection is trivial. This is the appropriate limit for comparison with standard transformers, which lack explicit gauge structure, but it does not probe the regime where the framework is most distinctive. Extending to autoregressive architectures (GPT, LLaMA), non-64 head dimensions, larger model scales, and non-English languages remains future work.
+The BERT validation (Supplementary Appendix~E) tested the flat bundle limit where all frames are globally aligned and the connection is trivial. This is the appropriate limit for comparison with standard transformers, which lack explicit gauge structure, but it does not probe the regime where the framework is most distinctive. The Regime~II edge-relaxed cocycle of Theorem~\ref{thm:vanishing_holonomy} (above) and the companion paper~\cite{Dennis2025it} acquires direct dynamical content under bidirectional attention, where closed loops in the data-flow graph make the Wilson observable a property of the message-passing pattern rather than a purely formal index-space invariant. Extending to autoregressive architectures (GPT, LLaMA), non-64 head dimensions, larger model scales, non-English languages, and to non-trivial-holonomy training configurations on bidirectional attention all remain future work.
 
 The gauge VFE language model uses 81.4M parameters yet achieves worse perplexity than a parameter-matched standard transformer (PPL~71.6 vs.\ 48.5 at 84.2M). The parameter overhead arises from per-token covariance matrices $\Sigma_i$ and gauge frame parameters $\phi_i$. At matched embedding dimension ($d_{\text{model}} = 90$), a standard transformer achieves only PPL~118.6 (4.6M params), and the gauge VFE outperforms it by $1.66\times$, indicating that gauge structure compensates for low embedding dimensionality at the cost of higher total parameter count. Whether architectural modifications (parameter sharing across tokens, low-rank covariance parameterizations) can close this efficiency gap while preserving the gauge-theoretic structure is an open question.
 
