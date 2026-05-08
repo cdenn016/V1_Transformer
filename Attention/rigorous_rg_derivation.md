@@ -133,7 +133,7 @@ $$
 The parent support is not allowed to grow into regions covered by only one child. Thus
 
 $$
-\chi_I(c)=\mathbf 1\!\left\{\sum_{i\in I}\chi_i(c)\ge 2\right\}.
+\chi_I(c)=\mathbf 1\!\{\sum_{i\in I}\chi_i(c)\ge 2\}.
 $$
 
 This encodes the rule that a parent lives strictly over genuine overlap regions.
