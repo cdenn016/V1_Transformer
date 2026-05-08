@@ -87,7 +87,7 @@ The exact RG construction does not require a specific free-energy functional. It
 A representative scale-$s$ multi-agent Gaussian KL functional is
 
 $$
-\mathcal F_s(X_s)=\sum_{i\in\mathcal I_s}\mathcal F_i(q_i,p_i)+\sum_{i,j\in\mathcal I_s}\beta_{ij}^{(q,s)}D_{ij}^{(q)}+\sum_{i,j\in\mathcal I_s}\beta_{ij}^{(p,s)}D_{ij}^{(p)}+\mathcalF_s^{\mathrm{higher}},
+\mathcal F_s(X_s)=\sum_{i\in\mathcal I_s}\mathcal F_i(q_i,p_i)+\sum_{i,j\in\mathcal I_s}\beta_{ij}^{(q,s)}D_{ij}^{(q)}+\sum_{i,j\in\mathcal I_s}\beta_{ij}^{(p,s)}D_{ij}^{(p)}+\mathcal{F_s^{\mathrm{higher}}},
 $$
 
 where
