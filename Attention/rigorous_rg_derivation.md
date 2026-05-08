@@ -424,19 +424,13 @@ This is a redundancy of the frame coordinates.
 For a smooth $h:\mathcal C\to G$, define
 
 $$
-U_i(c)\mapsto h(c)U_i(c),
-\qquad
-q_i(c)\mapsto h(c)_\# q_i(c),
-\qquad
-p_i(c)\mapsto h(c)_\# p_i(c).
+U_i(c)\mapsto h(c)U_i(c),\quadq_i(c)\mapsto h(c)_\# q_i(c),\quadp_i(c)\mapsto h(c)_{#} p_i(c).
 $$
 
 Then
 
 $$
-\Omega_{ij}(c)
-\mapsto
-h(c)U_i(c)U_j(c)^{-1}h(c)^{-1}.
+\Omega_{ij}(c) \mapsto h(c)U_i(c)U_j(c)^{-1}h(c)^{-1}.
 $$
 
 The transport is covariant, not invariant.
