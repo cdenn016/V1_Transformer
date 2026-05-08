@@ -30,9 +30,12 @@
 \newtheorem{definition}{Definition}
 \newtheorem{remark}{Remark}
 
+\providecommand{\KL}{\mathrm{KL}}
+\providecommand{\softmax}{\mathrm{softmax}}
+
 \begin{document}
 
-\title{A Theoretical and Computational Implementation of a Participatory ``It From Bit'' Universe}
+\title{A Gauge-Theoretic Framework Toward a Participatory ``It From Bit'' Program: Mathematical Foundations and Computational Implementation}
 
 \author{
   Robert C. Dennis\thanks{Corresponding author. Email: cdenn016@gmail.com}\\[0.3cm]
@@ -46,7 +49,11 @@
 \maketitle
 
 \begin{abstract}
-We construct a gauge theory of variational inference on a principal $G$-bundle and use it to give mathematical content to several proposals that have circulated as informal philosophy: Wheeler's "it from bit", Kant's phenomenal/noumenal distinction, and Lahav and Neemeh's recent argument that phenomenal consciousness is a frame-relative quantity. Agents are smooth sections of an associated bundle carrying beliefs $q(c)$, priors $p(c)$, and gauge frames $\phi(c)$ over a base manifold. Inter-agent interaction is mediated by gauge-covariant transport operators $\Omega_{ij} = e^{\phi_i}e^{-\phi_j}$, with coupling strengths given by a softmax over Kullback-Leibler divergences. Dynamics arise from natural-gradient descent on a global variational free energy. The construction yields four results. First, in the 0-dimensional limit it recovers standard transformer attention, and the resulting architecture is a working language model when trained without learned attention projections, MLPs, or pointwise activation functions; multi-seed validation on WikiText-103 across embedding dimensions $K \in [10, 120]$ and three independent seeds, at an iso-token budget of $122.9$M tokens, exhibits clean power-law scaling $\mathrm{PPL} = aK^b + c$ with $b = -1.05$ (95\% bootstrap CI $[-1.10, -1.00]$) and $R^2 = 1.000$ on the per-$K$ seed means. Second, agent gauge frames provide an explicit transformation law between cognitive reference frames in the sense of Lahav and Neemeh, supplying the group action and frame-invariant quantity their account requires but does not write down. Third, multi-scale meta-agent dynamics with bidirectional consensus run in working simulations. Fourth, in a linearized 2D worked example with an imposed imaginary temporal generator (acknowledged as a postulate, not a derivation), $\mathrm{GL}(K, \mathbb{C})$ gauge frames produce indefinite pullback metrics structurally compatible with a Lorentz subgroup $\mathrm{SO}(1,1)$, and a real-Lorentzian metric is recovered after a real-part projection; the four-dimensional, fully nonlinear extension and the dynamical selection of the imaginary generator are left open (see Section~\ref{sec:signature_resolution}). The framework does not yet predict physical constants, does not yet contain a rigorous quantum extension, and does not solve the hard problem of consciousness so much as relocate it; these limitations are stated explicitly in Section~\ref{sec:scope_limitations}. What it does provide is a mathematical setting in which observer-dependent reality, frame-relative experience, and information-theoretic emergence of geometric structure can be studied without leaving rigorous ground.
+We develop a gauge-covariant variational-inference framework on a principal $G$-bundle in which agents are smooth local sections carrying beliefs $q(c)$, priors $p(c)$, and gauge frames $\phi(c)$. Inter-agent interaction is mediated by transport operators $\Omega_{ij} = e^{\phi_i} e^{-\phi_j}$, and coupling weights arise from an entropy-regularized KL-consensus problem whose solution is a softmax over Kullback--Leibler divergences. Dynamics follow natural-gradient descent on a global variational free energy.
+
+We prove that, under a zero-dimensional isotropic-Gaussian limit, the KL-consensus weights reduce to scaled dot-product attention up to standard normalization and bias assumptions (Section~\ref{sec:transformers}). We implement the framework in two settings: (i) a working language model with no learned $W_Q/W_K/W_V$ projections, no MLPs, and no pointwise activations, trained on WikiText-103 at an iso-token budget of $122.9$M tokens across $K \in [10,120]$ and three seeds, fitting $\mathrm{PPL} = aK^b + c$ with $b \approx -1.05$ (95\% bootstrap CI $[-1.10, -1.00]$, $R^2 = 1.000$) on the per-$K$ seed means in an undertrained regime (Section~\ref{sec:scaling_validation}); and (ii) toy multi-agent simulations exhibiting threshold-based meta-agent formation (Section~\ref{sec:participatory}).
+
+Separately, we outline speculative extensions: a pullback information-geometric construction for cognitive reference frames in the Lahav--Neemeh sense (Section~\ref{sec:lahav_convergence}); a meta-agent renormalization scheme whose continuous variational criterion is not yet empirically validated against the discrete detector (Section~\ref{sec:meta_agent_threshold}); and a 2D linearized $\mathrm{GL}(K, \mathbb{C})$ worked example yielding an $\mathrm{SO}(1,1)$-compatible indefinite pullback metric under an imposed imaginary temporal generator and a real-part projection (Section~\ref{sec:signature_resolution}). The four-dimensional nonlinear extension, dynamical selection of the imaginary generator, dimensional analysis between informational and physical units, and a rigorous quantum extension are open. We state these limitations explicitly in Section~\ref{sec:scope_limitations}.
 \end{abstract}
 
 \noindent\textbf{Keywords:} Gauge theory $\cdot$ Active inference $\cdot$ Free energy principle $\cdot$ Information geometry $\cdot$ Emergent spacetime $\cdot$ Transformer architectures
@@ -91,17 +98,17 @@ This dichotomy suggests two radical possibilities: either \emph{physics produces
 
 We present a mathematical framework for multi-agent interaction that takes cognitive construction seriously. Building on gauge theory, information geometry, and variational free energy, we model agents as smooth sections of principal bundles carrying beliefs $q(x)$, priors $p(x)$, and gauge frames $\phi(x)$, together with a slow subsystem of generative models $s(x)$ and model hyper-priors $r(x)$ developed in Section~\ref{sec:framework}. These agents interact through information-theoretic couplings that minimize variational free energy.
 
-This framework produces several emergent phenomena:
+This framework provides mathematical structure for several phenomena that motivate the construction:
 \begin{enumerate}
-\item Spacetime-like structure emerges from pullbacks of agent beliefs to a noumenal base manifold, inducing Fisher information metrics that decompose into observable, subthreshold informational, and internal sectors
+\item Spacetime-like structure is represented via pullbacks of agent beliefs to a noumenal base manifold, inducing Fisher information metrics that decompose into observable, subthreshold informational, and internal sectors
 
-\item Causality emerges from gauge-covariant transport operators defining information flow between agents
-\item Physical laws emerge as information-theoretic necessities (e.g., the second law from non-negative KL divergence)
-\item Hierarchical structure emerges through multi-scale renormalization with participatory feedback (demonstrated under threshold-based detection; see Section~\ref{sec:meta_agent_threshold})
-\item Standard transformer attention emerges as the zero-dimensional limit, providing empirical validation
+\item Information flow between agents is modelled by gauge-covariant transport operators, supplying a mathematical analogue of causality rather than a derivation of it
+\item KL nonnegativity supplies a variational ordering principle for epistemic dynamics; we do not claim to derive physical law from it
+\item Hierarchical structure is exhibited through multi-scale renormalization with participatory feedback (demonstrated under threshold-based detection; see Section~\ref{sec:meta_agent_threshold})
+\item Standard transformer attention is recovered as the zero-dimensional limit, providing empirical validation
 \end{enumerate}
 
-The framework realizes Wheeler's "it from bit" vision mathematically. It bridges Kant's epistemological insight (that space and time are cognitive constructions) with modern physics and machine learning. Rather than deriving cognition from physics, we derive physics-like structures from information-processing agents.
+The framework provides a mathematical model in which shared effective structure is represented as consensus among interacting epistemic agents. It is compatible with Wheeler's ``it from bit'' reading and with Kant's epistemological insight that space and time are cognitive constructions, but it does not derive either. Rather than deriving cognition from physics, we exhibit information-geometric analogues of physics-like structures within an interacting-agent formalism.
 
 \subsection{Epistemic Status}
 
@@ -624,7 +631,7 @@ The framework is now mathematically complete: we have base manifold, statistical
 
 \subsubsection{The Multi-Agent Configuration}
 
-Reality in this framework emerges not from a single observer but from collective dynamics of multiple agents maintaining overlapping beliefs about the same underlying noumenal substrate. This multiplicity is essential - a single agent alone cannot generate the intersubjective structure we recognize as objective reality.
+Effective shared structure in this framework arises not from a single observer but from collective dynamics of multiple agents maintaining overlapping beliefs about the same underlying noumenal substrate. This multiplicity is essential within the framework: a single agent alone cannot generate the intersubjective structure that the construction takes as a formal correlate of objective reality.
 
 \begin{definition}[Multi-Agent System]
 A multi-agent system $\mathcal{M}$ over base manifold $\mathcal{C}$ consists of a finite collection of agents:
@@ -1533,9 +1540,9 @@ With respect to receiver $i$:
 With respect to sender $k$ (using the GL-correct precision transport of Eq.~\eqref{eq:precision_transport}):
 \begin{align}
 \frac{\partial D_{\mathrm{KL}}(q_i \| \tilde{q}_k)}{\partial \mu_k} &= \Lambda_{q_k}\Omega_{ik}^{-1}(\tilde{\mu}_k - \mu_i), \\
-\frac{\partial D_{\mathrm{KL}}(q_i \| \tilde{q}_k)}{\partial \Sigma_k} &= \frac{1}{2}\Omega_{ik}^T\left[\tilde{\Lambda}_{q_k} - \tilde{\Lambda}_{q_k}\Sigma_i\tilde{\Lambda}_{q_k}\right]\Omega_{ik},
+\frac{\partial D_{\mathrm{KL}}(q_i \| \tilde{q}_k)}{\partial \Sigma_k} &= \frac{1}{2}\Omega_{ik}^T\left[\tilde{\Lambda}_{q_k} - \tilde{\Lambda}_{q_k}\big(\Sigma_i + \tilde{d}_{ik}\tilde{d}_{ik}^\top\big)\tilde{\Lambda}_{q_k}\right]\Omega_{ik},
 \end{align}
-where the covariance gradient retains its form because $\Omega_{ik}^T\tilde{\Lambda}_{q_k}\Omega_{ik} = \Lambda_{q_k}$ holds algebraically for $\Omega \in \mathrm{GL}(d)$; only the mean gradient acquires the explicit inverse $\Omega_{ik}^{-1}$ that for orthogonal $\Omega$ would equal $\Omega_{ik}^T$.
+where $\tilde{d}_{ik} := \tilde{\mu}_k - \mu_i = \Omega_{ik}\mu_k - \mu_i$ is the receiver-frame mean residual. The quadratic-form contribution $-\tilde{\Lambda}_{q_k}\tilde{d}_{ik}\tilde{d}_{ik}^\top\tilde{\Lambda}_{q_k}$ originates in differentiating the Mahalanobis term $\tilde{d}_{ik}^\top \tilde{\Lambda}_{q_k}\tilde{d}_{ik}$ with respect to $\tilde{\Sigma}_k$ via $\partial \tilde{\Lambda}_{q_k}/\partial \tilde{\Sigma}_k = -\tilde{\Lambda}_{q_k}\otimes\tilde{\Lambda}_{q_k}$, then chain-ruled through $\tilde{\Sigma}_k = \Omega_{ik}\Sigma_k\Omega_{ik}^T$. The outer $\Omega_{ik}^T(\cdot)\Omega_{ik}$ structure follows from the same chain rule applied to the leading $\tilde{\Lambda}_{q_k}$ and $\tilde{\Lambda}_{q_k}\Sigma_i\tilde{\Lambda}_{q_k}$ contributions; for the mean gradient, the same chain rule yields the explicit inverse $\Omega_{ik}^{-1}$ that for orthogonal $\Omega$ would equal $\Omega_{ik}^T$. The $\tilde{d}_{ik}\tilde{d}_{ik}^\top$ term vanishes at consensus ($\tilde{d}_{ik} = 0$), so the boxed mass-matrix blocks of Eqs.~\eqref{eq:mass_mu_diagonal}--\eqref{eq:mass_sigma_offdiagonal}, evaluated at consensus, are unchanged. Off consensus the term contributes a rank-one stiffness aligned with $\tilde{d}_{ik}$, so any second-variation analysis away from the consensus minimum must retain it.
 
 \subsubsection{Sensory Term}
 \begin{align}
@@ -2490,7 +2497,7 @@ The configuration implements several key design choices:
 Consensus checks occur every 2 steps enabling rapid hierarchical condensation. The low consensus threshold ($\tau_{\mathrm{KL}} = 0.05$) allows meta-agent formation when agents achieve sufficient epistemic alignment.
 
 \paragraph{Ouroboros Tower Architecture.}
-The 5-level hyperprior propagation implements Wheeler's "it from bit" concept extended to hierarchical systems. Each agent receives priors not only from its immediate parent meta-agent, but from ancestors up to 5 scales higher, with exponential decay $\gamma = 0.5$ to weight more recent ancestry.
+The 5-level hyperprior propagation realizes one mathematical model compatible with Wheeler's ``it from bit'' reading, extended to hierarchical systems. Each agent receives priors not only from its immediate parent meta-agent, but from ancestors up to 5 scales higher, with exponential decay $\gamma = 0.5$ to weight more recent ancestry.
 
 \paragraph{Balanced Energy Landscape.}
 All energy hyper-parameters are set to unity ($\lambda_{\text{self}} = \lambda_{\text{belief}} = \lambda_{\text{prior}} = \lambda_{\text{obs}} = 1.0$), creating an unbiased energy landscape. This allows the system to explore the balance between individual identity preservation (self-energy), lateral social coordination (belief alignment), an operational prior-shadow alignment proxy (the slow subsystem $(s,r)$ is frozen in this run, so the canonical model-channel coupling $\gamma\mathrm{KL}(s_i\|\tilde\Omega s_j)$ is inactive and the visible vertical-integration channel is the dynamic-prior shadow $\mathrm{KL}(p_i\|\Omega p_j)$), and empirical grounding (observation fit). The unit lambda weights remove a per-channel bias from the energy landscape; meta-agent nucleation itself remains gated by the threshold detector of Section~\ref{sec:meta_agent_threshold}.
@@ -2690,7 +2697,7 @@ Having established the empirical dynamics of meta-agent emergence, we now interp
 
 \subsubsection{Reality Participates in Its Own Construction - an Ouroboros}
 
-The participatory loop realises Wheeler's most radical claim under the demonstration regime described above: the universe as a self-excited circuit where observers and observed co-create reality.
+The participatory loop provides a mathematical model compatible with Wheeler's self-excited-circuit metaphor under the demonstration regime described above. Whether this loop bears on physical reality is interpretive and beyond the formal results.
 
 At scale-0, agents observe the noumenal manifold $\mathcal{C}$ through observations $o_i$ and construct beliefs $q_i(x)$. These beliefs induce geometric structure via pullback (Section~\ref{sec:pullback}) although this geometry is not static:
 
@@ -3079,12 +3086,12 @@ Demonstrating this rigorously requires computing the induced curvature tensors i
 
 The biggest challenge is reproducing the Lorentz signature $(-,+,+,+)$ since the Fisher-Rao pullback under the $\mathrm{SO}(3)$ restriction is positive-definite. The compact-group constraint is one source of this restriction, and lifting it to $\mathrm{GL}(K)$ or $\mathrm{GL}(K, \mathbb{C})$ is a necessary first step: $\mathrm{GL}(K, \mathbb{C})$ contains the Lorentz group $\mathrm{SO}(1,3)$ as a subgroup, so a Lorentz-preserving structure is at least available. It is not by itself sufficient: the linearised 2D worked example of Section~\ref{sec:worked_signature} obtains an indefinite bilinear form only after additionally imposing an imaginary frame component along a designated temporal direction and discarding the resulting complex off-diagonal terms by a real-part projection. The construction complexifies the gauge frame, not the probability distributions; the belief fiber stays positive semi-definite throughout. We register this as an existence toy model rather than as a derivation that the framework selects Lorentzian signature.
 
-Objectivity therefore is an emergent aspect of inter-subjective consensus. What we call "universal physical laws," "shared spacetime," and "objective mass" are the gauge-invariant structures that persist at equilibrium when agents minimize their collective free energy.  Incidentally, this mechanism (if true) offers a straightforward explanation of gauge invariance in physics: we must have gauge invariance in order to agree on our observations.
+Within the framework, what is modelled as objectivity is the gauge-invariant structure that persists at equilibrium when agents minimize their collective free energy: ``universal physical laws,'' ``shared spacetime,'' and ``objective mass'' are formal correlates of these gauge-invariant structures, not reductions of physical law to consensus. As an interpretive observation, this mechanism (if it carries over to physical observers) offers a possible reading of why gauge invariance is so prevalent in physics: agents must factor through gauge-invariant content in order to agree on observations.
 
 This framework naturally accounts for why human observers largely agree
 on physical reality. We have converged on shared generative models $s_i$ via the inter-agent slow-channel coupling $\gamma_{ij}\mathrm{KL}(s_i\|\tilde\Omega_{ij}s_j)$, with priors $p_i$ inheriting consensus structure as cross-scale shadows of the resulting meta-agent's belief. It also explains perceptual variations: altered states (psychedelics, sensory deprivation, meditation, neurological conditions) temporarily shift an individual's generative models $s_i$ away from consensus, with priors $p_i$ following derivatively, leading to experiences of modified spacetime structure, altered causal relations, or anomalous physics. These are not pathological "hallucinations" in the sense of perceiving non-existent entities, but rather genuine differences in the pullback geometry experienced by an agent operating with non-consensus models.
 
-The theory thus dissolves the hard boundary between "veridical perception" and "altered states". Both are valid geometries on the statistical manifold, differing only in their degree of alignment with the consensus equilibrium.
+In this interpretive reading, the boundary between ``veridical perception'' and ``altered states'' is recast as a difference in alignment with the consensus equilibrium rather than as a categorical distinction. Both correspond to geometries on the statistical manifold; whether either corresponds to the phenomenology of veridical or altered perception is a philosophical interpretation beyond the formal results.
 
 Our theories of physics are predictable because, as humans, we share predictive models of reality, and what is ultimately responsible for that sharing is the dynamical law of information geometry; the same applies to all meta-agents. The institution of science, for example, is a meta-agent of the collective constituent humans. Under dynamical renormalization this meta-agent has integrated beliefs and generative models into representations of reality which we, as lower-scale agents, cannot perceive directly. Analogously, a single brain cell does not access the human agent's perspective, predictive models, or belief fluctuations; those are higher-level meta-cognitive structures.
 
@@ -3127,7 +3134,7 @@ Each observer assigns a different scalar effective mass via $m_{\text{eff}} = \m
 The particle has no observer-independent mass prior to consensus formation.
 
 Measurement is the dynamical process by which an apparatus (itself a
-high-precision macroscopic system) couples to the particle and dominates the free energy landscape, forcing all observers into agreement. What physics calls "wavefunction collapse" emerges as the transition from pre-consensus (perspectival, observer-dependent) to post-consensus (shared, objective) physics.
+high-precision macroscopic system) couples to the particle and dominates the free energy landscape, forcing all observers into agreement. What physics calls ``wavefunction collapse'' is modelled by the transition from pre-consensus (perspectival, observer-dependent) to post-consensus (shared, objective) physics.
 
 Our framework suggests a potential resolution to the measurement problem. What appears as discontinuous "collapse" may emerge from the continuous dynamics of precision-weighted consensus formation when a high-precision macroscopic apparatus couples to a low-precision quantum system. Demonstrating this rigorously requires extending the framework to include quantum superposition states, which remains future work.
 
@@ -3140,7 +3147,7 @@ traditions.
 "things in themselves" but forms of "sensuous intuition" through which the mind organizes experience \cite{Kant1781}. Our framework makes this precise: spacetime geometry is the pullback of the Fisher metric, determined by agent priors rather than existing independently.
 
 \paragraph{Relational Quantum Mechanics.} Rovelli \cite{Rovelli1996}
-argues quantum states are relative to observers. We extend this further and find that not only states but masses, geometry, temporal flow, and physical laws themselves are observer-dependent until consensus forms. Prior alignment is what creates the shared physics we mistake for objective reality.
+argues quantum states are relative to observers. We extend this further with a mathematical model in which not only states but the model representations of masses, geometry, temporal flow, and physical regularities are agent-frame-dependent until consensus forms. The model is compatible with the relational reading; it does not establish that physical laws themselves are observer-dependent. Prior alignment is the formal mechanism that produces the shared structure the framework treats as a correlate of objective reality.
 
 \paragraph{QBism.} Fuchs et al.\ \cite{Fuchs2014} interpret quantum
 probabilities as subjective degrees of belief. Our framework shares this spirit but provides the specific dynamical mechanism and geometry, variational free energy minimization on gauge-covariant principal bundles by which intersubjective agreement emerges from initially disparate beliefs.
@@ -3229,7 +3236,7 @@ Throughout the history of physics, successful theories have been selected based 
 
 Newtonian mechanics achieved consensus by formulating laws Galilean-covariant under the inertial-frame transformations relating different observers. Maxwell's electromagnetism succeeded partly because its equations maintain form under Lorentz transformations, enabling observers in different reference frames to agree on electromagnetic phenomena. Einstein's relativity made coordinate independence a foundational principle, explicitly requiring that physical laws take the same form in all reference frames. Quantum field theory elevated gauge invariance to the defining structural principle.
 
-We propose that this progression reveals not just mathematical elegance but cognitive necessity. Gauge invariance appears repeatedly in successful physics because only gauge-invariant theories can achieve stable consensus among human physicists operating with different internal reference frames. The selection pressure for gauge structure comes not from nature but from the requirements of human collaborative knowledge construction.
+We propose that this progression is consistent with a candidate cognitive-shareability constraint, not only with mathematical elegance. Gauge invariance appears repeatedly in successful physics because gauge-invariant theories admit stable consensus among observers operating with different internal reference frames. On this interpretive reading, the selection pressure for gauge structure includes the requirements of collaborative knowledge construction; the argument supplies an interpretive reading rather than a derivation. KL nonnegativity together with the gauge-equivariance requirement yields a variational ordering principle on epistemic dynamics, not a derivation of physical law.
 
 This suggests a revolutionary reinterpretation that gauge invariance is not a property of the noumenal substrate $\mathcal{C}$ but an emergent property of human collective cognition. We discover gauge theories because our generative models $s_{\text{human}}$ must align across individuals, and this alignment enforces gauge covariance. The noumenal reality may possess no intrinsic gauge structure whatsoever. Gauge structure appears in our scientific theories because it constitutes the mathematical form that our distributed cognitive architecture can construct and maintain consistently.
 
@@ -3237,7 +3244,7 @@ This suggests a revolutionary reinterpretation that gauge invariance is not a pr
 
 This cognitive interpretation finds striking support from altered states of consciousness. Psychedelic experiences induced by substances like psilocybin, LSD, or DMT as well as trauma (stroke, etc) frequently involve perceptions that violate standard physical laws~\cite{Carhart-Harris2014,Swanson2018}. Users report observations seemingly incompatible with gauge-invariant or Lorentz-invariant physics such as objects merging and separating, causality flowing backwards, spatial distances becoming meaningless, temporal ordering dissolving.
 
-The conventional view treats these as pathological - mere hallucinations reflecting disrupted brain function with no epistemic value. Our framework suggests a different interpretation. Psychedelic states may represent temporary shifts in cognitive gauge frames $\phi_{\text{human}}$ that break alignment with consensus reality. The altered perceptions are not necessarily "false" in an absolute sense but rather reflect belief states $q_{\text{altered}}(x)$ that fail to satisfy gauge covariance with the collective human prior $p_{\text{consensus}}(x)$.
+The conventional view treats these as pathological — mere hallucinations reflecting disrupted brain function with no epistemic value. Within the interpretive reading explored here, altered states are modelled as temporary shifts in agent-relative gauge frames $\phi_{\text{human}}$ that break alignment with the consensus pullback geometry, with belief states $q_{\text{altered}}(x)$ that fail to satisfy gauge covariance with the collective human prior $p_{\text{consensus}}(x)$. The model represents these states as different agent-relative geometries; it does not adjudicate their phenomenal status or their veridicality.
 
 Under psychedelics, an individual's gauge frame $\phi_{\text{altered}}$ may diverge significantly from the standard human gauge frame $\phi_{\text{normal}}$. The transport operator $\tilde{\Omega}_{\text{altered,normal}}$ connecting these frames develops large gauge field strength, making consistent communication nearly impossible. The psychedelic observer pulls back a radically different induced metric $G_{\text{altered}}$ that need not respect Lorentz invariance, conservation laws, or other symmetries we associate with physical law. From their phenomenal perspective, the non-gauge-invariant observations are entirely real and valid.
 
@@ -3276,6 +3283,9 @@ Whether this constitutes genuine explanation or merely relabeling remains debata
 \subsection{Consciousness and Hierarchical Information Integration}
 \label{sec:consciousness_section}
 
+\paragraph{Scope of this section.}
+The model represents different cognitive frames as inducing different agent-relative pullback geometries. Whether this corresponds to phenomenal experience is a philosophical interpretation beyond the formal results. The mathematical content is that gauge-frame-dependent pullback metrics are well defined and gauge-covariant; everything that follows about qualia, ``what it is like,'' and the hard problem is interpretive commentary on that mathematical content. Readers who reject the interpretive move retain the formal apparatus intact.
+
 \subsubsection{Meta-Agent Structure and Conscious Experience}
 
 Our multi-scale framework provides a formal approach to modeling aspects of consciousness, though we emphasize this remains highly speculative. In this interpretation, conscious systems correspond to meta-agents at scale $s$ that maintain explicit representations of their constituent agents at scale $s-1$. A meta-agent integrating information from multiple sensory modalities (vision, audition, proprioception) and cognitive subsystems (memory, attention, emotion) through free energy minimization exhibits the informational structure characteristic of unified conscious experience~\cite{Tononi2004,Dehaene2014}.
@@ -3289,9 +3299,9 @@ The unity of consciousness and the fact that diverse sensory inputs and cognitiv
 
 \emph{Throughout this subsection the gauge frame $\phi_i$ is invoked in Role B (frame-as-state, Section~\ref{sec:agents_as_sections}): individual frames carry phenomenal content rather than serving as redundant labels. The induced metrics $G_i$ used below are accordingly frame-dependent (gauge-covariant) rather than gauge-invariant; the gauge-invariant correlate of phenomenal geometry, when one is needed, is the consensus / Haar-averaged metric of Section~\ref{sec:consensus_metric}.}
 
-The framework suggests a formal and mathematical approach to qualia; the subjective, qualitative aspects of conscious experience that constitute "what it's like" to see red, taste coffee, or feel pain. Different gauge frames $\phi_i$ induce different metrics $G_i = \sigma_i^* g_{\mathcal{B}}$ through pullback from the same noumenal substrate $\mathcal{C}$. The phenomenal character of experience then corresponds to the specific geometric structure of this induced metric.
+The framework suggests a formal and mathematical approach to qualia; the subjective, qualitative aspects of conscious experience that constitute ``what it's like'' to see red, taste coffee, or feel pain. Different gauge frames $\phi_i$ induce different metrics $G_i = \sigma_i^* g_{\mathcal{B}}$ through pullback from the same noumenal substrate $\mathcal{C}$. On the interpretive reading explored here, the formal correlate of phenomenal character is the geometric structure of this induced metric. The correspondence is interpretive, not derived.
 
-Two agents (or two sensory modalities within one agent) operating with different gauge frames perceive different phenomenal geometries despite sampling the same underlying information. The redness of red is the phenomenological signature of how visual cortex pulls back color information using its particular gauge frame $\phi_{\text{visual}}$. The painfulness of pain reflects how nociceptive processing pulls back tissue damage information using $\phi_{\text{pain}}$. These experiences feel different because the induced geometries differ, not because they access qualitatively different noumenal content.
+Two agents (or two sensory modalities within one agent) operating with different gauge frames pull back different geometries despite sampling the same underlying information. Within the interpretive reading, agent-frame-dependent pullbacks of colour information are the formal correlate of cross-agent variation in colour phenomenology, and pullbacks through $\phi_{\text{pain}}$ play the analogous role for nociceptive processing. We do not assert identity between the pullback metric and the phenomenology itself; the framework supplies a structural correlate of phenomenal variation, not a derivation of phenomenal content.
 
 This approach parallels inverted spectrum thought experiments in philosophy of mind~\cite{Shoemaker1982}. Two individuals might pull back inverted colour geometries from identical physical wavelength information if their visual systems employ related but distinct gauge frames. The framework formalises this possibility where qualitative inversion corresponds to gauge transformations that preserve informational structure while altering phenomenal character.
 
