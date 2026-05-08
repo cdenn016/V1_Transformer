@@ -1728,6 +1728,67 @@ U_I^* = \arg\min_{U \in G} \sum_{i \in I} w_i d_G(U, U_i)^2.
 \end{equation}
 For a compact gauge group ($G = \mathrm{SO}(N)$ in our simulations) with the bi-invariant metric $d_G(U, V)^2 = \|\log(U^{-1}V)\|_F^2$, the Karcher mean exists and is unique on convex normal balls of radius $< \pi/2$. For non-compact $G$ (such as $\mathrm{GL}^+(K)$, where the Killing form on $\mathfrak{gl}(K)$ is indefinite) no bi-invariant Riemannian metric exists, and~\eqref{eq:meta_agent_frame_barycenter} must be replaced by either a left-invariant alternative or a polar-decomposition / SPD-restricted construction; both substitutes break gauge symmetry partially, and the choice is a modelling decision the present implementation does not adjudicate. The Lie-algebra additive form $\phi_I = \sum_i w_i \phi_i$ used in the implementation is the first-order Baker--Campbell--Hausdorff approximation of~\eqref{eq:meta_agent_frame_barycenter}, exact for abelian $G$ and for commuting $\phi_i$, and accurate to $\mathcal{O}(\|\phi_i\|^2)$ when constituent frames are close in the compact case.
 
+\subsubsection{Renormalization-group construction}
+\label{sec:meta_agent_rg}
+
+The free-energy improvement criterion~\eqref{eq:meta_agent_FE_criterion}, the variational barycenter~\eqref{eq:meta_agent_barycenter}, and the frame Karcher mean~\eqref{eq:meta_agent_frame_barycenter} can be promoted to a controlled renormalization-group construction~\cite{Wilson1971, Cardy1996} in which the parent state is the retained variable of an exact coarse-graining map. The construction makes explicit which steps require compactness of the gauge group, which closure assumptions enter, and which residual errors must be controlled. We sketch it in finite-dimensional form on a finite grid approximation of the base manifold $\mathcal{C}$; the continuum limit follows by mesh refinement under standard regularity assumptions. A complete derivation, with the supporting algebra, is given in the companion technical note \texttt{renormalization\_meta\_agent\_derivation.md}.
+
+Let $X_s = \{q_i, p_i, U_i, \chi_i\}_{i \in I_s}$ denote the microscopic state at scale $s$ and write the variational Gibbs measure as $d\mathbb{P}_s(X_s) = Z_s^{-1} \exp[-\mathcal{F}_s(X_s)/\tau] d\nu_s(X_s)$ with reference measure $\nu_s$ on the Gaussian parameters, masks, and gauge frames. For each admissible cluster $I \subset I_s$, defined as a connected component of the pairwise overlap graph, define the parent state $Y_I = (q_I, p_I, U_I, \chi_I)$ via the M-projection barycenter~\eqref{eq:meta_agent_barycenter}, the Karcher frame~\eqref{eq:meta_agent_frame_barycenter}, and the multi-child overlap mask $\chi_I(c) = \mathbb{1}\{\sum_{i \in I}\chi_i(c) \ge 2\}$. The coarse-graining map $\mathcal{R}_I : X_s \mapsto Y_I$ assembles into a global map $\mathcal{R}_s$ across the family of admissible clusters. The exact renormalized free energy is the Radon--Nikodym derivative of the pushforward measure,
+\begin{equation}
+\exp[-\mathcal{F}_{s+1}(Y)/\tau] = \frac{d\widetilde{\rho}_{s+1}}{d\nu_{s+1}}(Y), \qquad \widetilde{\rho}_{s+1} = (\mathcal{R}_s)_*\big(e^{-\mathcal{F}_s/\tau} d\nu_s\big), \qquad \nu_{s+1} = (\mathcal{R}_s)_*\nu_s,
+\label{eq:rg_exact_free_energy}
+\end{equation}
+which preserves the partition function ($Z_{s+1} = Z_s$) and every observable depending only on retained variables ($\mathbb{E}_{s+1}[A(Y)] = \mathbb{E}_s[A(\mathcal{R}_s(X))]$). The zero-temperature limit reduces~\eqref{eq:rg_exact_free_energy} to $\mathcal{F}_{s+1}(Y) = \inf_{X : \mathcal{R}_s(X) = Y} \mathcal{F}_s(X)$ up to subleading entropic corrections.
+
+Gauge equivariance of $\mathcal{R}_s$ holds for passive base-local transformations $h : \mathcal{C} \to G$ acting at the same base point on every agent ($q_i \mapsto h_\# q_i$, $U_i \mapsto h U_i$). Under this common pushforward both the Karcher frame barycenter and the M-projection belief barycenter are equivariant, giving $\mathcal{R}_I(h \cdot X) = h \cdot \mathcal{R}_I(X)$. Independent child-specific transformations $g_i(c) \neq g_j(c)$ at the same base point are not passive gauge redundancies but active changes of the epistemic configuration. The renormalized free energy inherits gauge invariance, $\mathcal{F}_{s+1}(h \cdot Y) = \mathcal{F}_{s+1}(Y)$, when the reference measure is gauge-invariant; for compact $G = \mathrm{SO}(N)$ the bi-invariant Haar measure provides this, while $\mathrm{GL}^+(K)$ requires an explicit gauge slice or Radon--Nikodym correction because the action is not unimodular on Lebesgue measure.
+
+Near a coherent cluster, write the transported child belief in Fisher-normal coordinates as $\widetilde{q}_i^I = q_I + \xi_i$ with the linearized barycentric constraint $\sum_i w_i \xi_i = 0$, valid to leading order in $\xi$. The intra-cluster alignment energy is
+\begin{equation}
+\mathcal{F}_I^{\mathrm{int}} = \tfrac{1}{2}\xi^\top H_I^\perp(q_I)\xi + O(\|\xi\|^3), \qquad H_I^\perp(q_I) \approx L_I \otimes F(q_I),
+\label{eq:rg_internal_hessian}
+\end{equation}
+where $L_I$ is the weighted graph Laplacian of the symmetrized internal couplings $(\beta_{ij} + \beta_{ji})/2$ and $F(q_I)$ is the Fisher information at the parent. The relevant stiffness on the constrained subspace is the weighted Rayleigh quotient
+\begin{equation}
+\lambda_{I,w} = \inf_{\xi \neq 0\ \text{with}\ \sum_i w_i \xi_i = 0} \frac{\xi^\top L_I \xi}{\xi^\top \xi}, \qquad m_I = \lambda_{I,w}\lambda_{\min}\big(F(q_I)\big),
+\label{eq:rg_constrained_gap}
+\end{equation}
+which reduces to the ordinary algebraic connectivity $\lambda_2(L_I)$ only for uniform weights; for concentrated weights $\lambda_{I,w}$ can be parametrically smaller because the constraint surface intersects directions of lower Rayleigh quotient than the unrestricted second eigenvector. Internal disagreement modes are massive when $m_I > 0$, and the parent variable is then the surviving collective coordinate.
+
+Integrating out the internal modes by Laplace approximation~\cite{Cardy1996} yields
+\begin{equation}
+\mathcal{F}_{s+1}(Y_I) = \mathcal{F}_{\mathrm{eff}}(Y_I) + \tfrac{\tau}{2}\log\det{}'H_I^\perp(Y_I) + \mathrm{const} + \mathcal{E}_{\mathrm{anh}},
+\label{eq:rg_laplace}
+\end{equation}
+with $\mathcal{E}_{\mathrm{anh}} = O(\tau^2 \|H^{-1}\|^3 \|T_3\|^2 + \tau^2 \|H^{-1}\|^2 \|T_4\|)$ controlled by the cubic and quartic derivative tensors $T_3, T_4$ of $\mathcal{F}_s$ at the saddle (the cubic enters squared by parity, the quartic linearly). The cluster-cluster coupling renormalizes as the unweighted sum
+\begin{equation}
+\beta_{IJ}^R = \sum_{i \in I}\sum_{j \in J} \beta_{ij},
+\label{eq:rg_inter_cluster}
+\end{equation}
+under the microscopic convention that the cross-cluster interaction term carries no additional weight factors. The weighted form $\sum_{ij} w_i^I w_j^J \beta_{ij}$ would be correct only if the microscopic functional itself carried those weights. The first-order residual $(\mu_I - \mu_J) \cdot [\sum_i r_i \xi_i - \sum_j s_j \eta_j]$, with row and column marginals $r_i = \sum_{j \in J} \beta_{ij}$ and $s_j = \sum_{i \in I} \beta_{ij}$, vanishes when the cluster weights are chosen as the edge-marginal proportions $w_i^I = r_i / \beta_{IJ}^R$ and $w_j^J = s_j / \beta_{IJ}^R$. A cluster typically interacts with several partners, so a single set of cluster weights satisfies the edge-marginal compatibility for all partners only when the partner-row marginals are colinear; otherwise the residual contributes to the closure error~\eqref{eq:rg_closure}.
+
+Two distinct retention principles apply. The Wilsonian relevance criterion~\cite{Wilson1971, wilson1975renormalization} linearizes the RG flow at a fixed point $\theta^* = R(\theta^*)$ and classifies eigendirections of $DR_{\theta^*}$ by their multipliers $|\lambda_a| > 1$ (relevant), $|\lambda_a| < 1$ (irrelevant), or $|\lambda_a| = 1$ (marginal). The MDL/Bayesian retention criterion~\cite{Schwarz1978, Rissanen1978} is the description-length gain
+\begin{equation}
+\Delta_I = \mathcal{L}_{\mathrm{micro}}(I) - \mathcal{L}_{\mathrm{parent}}(I), \qquad \mathcal{L}_{\mathrm{parent}}(I) = \mathcal{F}_{s+1}^*(I) + C(I) + \varepsilon_I,
+\label{eq:rg_retention_gain}
+\end{equation}
+with complexity penalty $C(I)$ chosen as a Bayesian evidence prior $-\tau \log P(I)$, a BIC penalty $\tfrac{\tau}{2} k_I \log n_I$, or a variational complexity $\mathrm{KL}(Q_I \| P_I)$. RG-relevant directions need not minimize description length, and MDL-preferred coarsenings need not be RG-relevant; the two criteria coincide only in favorable regimes. The free-energy improvement criterion~\eqref{eq:meta_agent_FE_criterion} of Section~\ref{sec:meta_agent_variational} is the special case $\Delta_I > 0$ at unspecified $C(I)$.
+
+Adiabatic elimination of the internal modes uses the Schur-complement effective metric on the slow manifold,
+\begin{equation}
+G_{\mathrm{eff}} = G_{YY} - G_{Y\xi}G_{\xi\xi}^{-1}G_{\xi Y},
+\label{eq:rg_schur}
+\end{equation}
+giving the autonomous parent flow $\dot{Y}_I = -\mathrm{grad}_{G_{\mathrm{eff}}}\mathcal{F}_{s+1}(Y_I) + O(m_I^{-1}) + O(\varepsilon_I)$. The amplitude of the internal modes on the slow manifold is $O(m_I^{-1})$, and the parent dynamics close on themselves at the same order whenever the timescale separation $t_{\mathrm{int}} \sim m_I^{-1}$ is short relative to the slow-mode evolution.
+
+The closure residual
+\begin{equation}
+\varepsilon_I = \big\|\mathcal{F}_{s+1}^{\mathrm{exact}} - \mathcal{F}_{s+1}^{\mathrm{agent}}\big\|
+\label{eq:rg_closure}
+\end{equation}
+collects every contribution ignored by the agent-form parent free energy: barycentric dispersion $V_I = \sum_i w_i \mathrm{KL}(\widetilde{q}_i^I \| q_I)$, transport and holonomy variation $\mathcal{H}_{IJ}$ across the cluster, edge-marginal weight mismatch, Laplace anharmonic corrections, non-Gaussian closure errors when the Gaussian family is only approximate, and gauge-fixing corrections for noncompact groups. A cluster is RG-closed when $\varepsilon_I \ll 1$, in which case the renormalized free energy retains the same agent-form structure as the microscopic functional and the parent is a stable, gauge-covariant, approximately autonomous coarse degree of freedom whose explicit retention is justified when $\Delta_I > 0$ for the chosen complexity penalty.
+
+The threshold-based detector developed in Section~\ref{sec:meta_agent_threshold} is then a candidate-selection surrogate for the diagnostic conditions of the RG construction: multi-child support ($U_I \neq \varnothing$), positive constrained weighted gap ($\lambda_{I,w} > 0$), small barycentric dispersion ($V_I < \theta_V$), small closure residual ($\varepsilon_I < \theta_\varepsilon$), and positive retention gain ($\Delta_I > 0$). Whether a continuous-time evaluation of the RG construction reproduces the same hierarchical organisation that the threshold detector produces is the natural follow-up to the simulations of Section~\ref{sec:meta_agent_emergence}.
+
 \subsubsection{Threshold-Based Implementation}
 \label{sec:meta_agent_threshold}
 
