@@ -365,9 +365,7 @@ $$
 Then the exact pushforward RG satisfies
 
 $$
-\boxed{
 (R_{s+1})_*(R_s)_*\mathbb P_s=(R_{s+1}\circ R_s)_*\mathbb P_s.
-}
 $$
 
 Thus the RG transformations compose as a discrete semigroup.
@@ -381,8 +379,7 @@ $$
 $$
 
 $$
-=
-\mathbb P_s(R_s^{-1}(R_{s+1}^{-1}(A)))=\mathbb P_s((R_{s+1}\circ R_s)^{-1}(A)).
+=\mathbb P_s(R_s^{-1}(R_{s+1}^{-1}(A)))=\mathbb P_s((R_{s+1}\circ R_s)^{-1}(A)).
 $$
 
 This is exactly $(R_{s+1}\circ R_s)_*\mathbb P_s(A)$. $\square$
