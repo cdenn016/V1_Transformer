@@ -35,9 +35,7 @@ Work first on a finite grid approximation of the base manifold $\mathcal C$. Let
 At scale $s$, let the index set of agents be $\mathcal I_s$. A scale-$s$ state is
 
 $$
-X_s
-=
-\{x_i^{(s)}\}_{i\in\mathcal I_s},
+X_s=\{x_i^{(s)}\}_{i\in\mathcal I_s},
 \qquad
 x_i^{(s)}=(q_i,p_i,U_i,\chi_i),
 $$
