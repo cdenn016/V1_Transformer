@@ -17,11 +17,11 @@ The resulting claim is stronger and more defensible than saying the simulation i
 A precise version of the renormalization claim is:
 
 Let $X_s$ denote the finite-dimensional state of all scale-$s$ agents on a finite grid approximation of the base $\mathcal C$, and let $\mathcal F_s(X_s)$ be the scale-$s$ variational free energy. Given a measurable gauge-covariant coarse-graining map $R_s:X_s\mapsto X_{s+1}$, the pushforward
+
 $$
-\mathbb P_{s+1}=(R_s)_*\mathbb P_s,
-\qquad
-d\mathbb P_s=Z_s^{-1}e^{-\mathcal F_s/\tau}\,d\nu_s,
+\mathbb P_{s+1}=(R_s)_*\mathbb P_s,\qquadd\mathbb P_s=Z_s^{-1}e^{-\mathcal F_s/\tau}\,d\nu_s,
 $$
+
 defines an exact renormalized free energy $\mathcal F_{s+1}^{\mathrm{exact}}$. This exact RG step preserves the partition function and all retained observables, and it satisfies the usual composition law under successive coarse-grainings. The nontrivial question is whether $\mathcal F_{s+1}^{\mathrm{exact}}$ lies in, or near, the original multi-agent Gaussian KL functional class. In the compact-gauge, linear-Gaussian, flat-transport, spectrally gapped high-coherence regime, closure holds up to additive constants and Schur-complement renormalization of the quadratic form. Away from this regime, the closure residual is controlled by barycentric dispersion, transport/holonomy variation, edge-marginal incompatibility, anharmonic Laplace corrections, and timescale-separation error. The simulation threshold detector is therefore best interpreted as a candidate-selection surrogate for the conditions under which a parent effective theory has positive variational retention gain.
 
 This statement gives a rigorous RG backbone while correctly classifying the threshold detector as an implementation surrogate rather than the fundamental mathematical operation.
@@ -35,23 +35,17 @@ Work first on a finite grid approximation of the base manifold $\mathcal C$. Let
 At scale $s$, let the index set of agents be $\mathcal I_s$. A scale-$s$ state is
 
 $$
-X_s=\{x_i^{(s)}\}_{i\in\mathcal I_s},
-\qquad
-x_i^{(s)}=(q_i,p_i,U_i,\chi_i),
+X_s=\{x_i^{(s)}\}_{i\in\mathcal I_s},\qquadx_i^{(s)}=(q_i,p_i,U_i,\chi_i),
 $$
 
 where, at each grid point $c\in\Lambda_s$,
 
 $$
-q_i(c)=\mathcal N(\mu_i(c),\Sigma_i(c)),
-\qquad
-p_i(c)=\mathcal N(m_i(c),\Pi_i(c)),
+q_i(c)=\mathcal N(\mu_i(c),\Sigma_i(c)),\qquadp_i(c)=\mathcal N(m_i(c),\Pi_i(c)),
 $$
 
 $$
-U_i(c)\in G,
-\qquad
-\chi_i(c)\in\{0,1\}.
+U_i(c)\in G,\qquad\chi_i(c)\in\{0,1\}.
 $$
 
 Here:
@@ -93,8 +87,7 @@ The exact RG construction does not require a specific free-energy functional. It
 A representative scale-$s$ multi-agent Gaussian KL functional is
 
 $$
-\mathcal F_s(X_s)=\sum_{i\in\mathcal I_s}\mathcal F_i(q_i,p_i)
-+\sum_{i,j\in\mathcal I_s}\beta_{ij}^{(q,s)}D_{ij}^{(q)}+\sum_{i,j\in\mathcal I_s}\beta_{ij}^{(p,s)}D_{ij}^{(p)}+\mathcal F_s^{\mathrm{higher}},
+\mathcal F_s(X_s)=\sum_{i\in\mathcal I_s}\mathcal F_i(q_i,p_i)+\sum_{i,j\in\mathcal I_s}\beta_{ij}^{(q,s)}D_{ij}^{(q)}+\sum_{i,j\in\mathcal I_s}\beta_{ij}^{(p,s)}D_{ij}^{(p)}+\mathcalF_s^{\mathrm{higher}},
 $$
 
 where
