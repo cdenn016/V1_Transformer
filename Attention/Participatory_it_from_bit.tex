@@ -1865,7 +1865,11 @@ The key distinction from spatial RG is that we coarse-grain over belief coherenc
 The free energy at scale $(s+1)$ has the same functional form as at scale $s$
 
 \begin{equation}
-S^{(s+1)}[\{q_I^{(s+1)}\}, \{p_I^{(s+1)}\}, \{s_I^{(s+1)}\}, \{r_I^{(s+1)}\}] = \sum_I \int \big[\mathrm{KL}(q_I \| p_I) + \lambda_h\mathrm{KL}(s_I \| r_I)\big] + \sum_{IJ} \big[\beta_{IJ}^{(s+1)} \mathrm{KL}(q_I \| \Omega_{IJ}[q_J]) + \gamma_{IJ}^{(s+1)} \mathrm{KL}(s_I \| \tilde\Omega_{IJ}[s_J])\big] + \cdots.
+S^{(s+1)}[\{q_I^{(s+1)}\}, \{p_I^{(s+1)}\}, \{s_I^{(s+1)}\}, \{r_I^{(s+1)}\}] = 
+\end{equation}
+
+\begin{equation}
+\sum_I \int \big[\mathrm{KL}(q_I \| p_I) + \lambda_h\mathrm{KL}(s_I \| r_I)\big] + \sum_{IJ} \big[\beta_{IJ}^{(s+1)} \mathrm{KL}(q_I \| \Omega_{IJ}[q_J]) + \gamma_{IJ}^{(s+1)} \mathrm{KL}(s_I \| \tilde\Omega_{IJ}[s_J])\big] + \cdots.
 \end{equation}
 
 This scale invariance of the functional form suggests the framework may exhibit critical phenomena, fixed points, or universal behavior analogous to phase transitions in statistical mechanics~\cite{Wilson1974}. The investigation of RG fixed points and critical exponents in this information-theoretic setting constitutes an important direction for future work we are currently engaged in.
