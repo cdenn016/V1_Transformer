@@ -79,9 +79,7 @@ $$
 For $G=\mathrm{SO}(K)$, the action on Gaussian moments is
 
 $$
-\Omega_{ij}q_j
-=
-\mathcal N(\Omega_{ij}\mu_j,\Omega_{ij}\Sigma_j\Omega_{ij}^\top).
+\Omega_{ij}q_j=\mathcal N(\Omega_{ij}\mu_j,\Omega_{ij}\Sigma_j\Omega_{ij}^\top).
 $$
 
 The same notation applies to the model sector $p_j$, possibly with a distinct representation of $G$ on the model fiber.
@@ -95,37 +93,18 @@ The exact RG construction does not require a specific free-energy functional. It
 A representative scale-$s$ multi-agent Gaussian KL functional is
 
 $$
-\mathcal F_s(X_s)
-=
-\sum_{i\in\mathcal I_s}\mathcal F_i(q_i,p_i)
-+
-\sum_{i,j\in\mathcal I_s}\beta_{ij}^{(q,s)}
-D_{ij}^{(q)}
-+
-\sum_{i,j\in\mathcal I_s}\beta_{ij}^{(p,s)}
-D_{ij}^{(p)}
-+
-\mathcal F_s^{\mathrm{higher}},
+\mathcal F_s(X_s)=\sum_{i\in\mathcal I_s}\mathcal F_i(q_i,p_i)
++\sum_{i,j\in\mathcal I_s}\beta_{ij}^{(q,s)}D_{ij}^{(q)}+\sum_{i,j\in\mathcal I_s}\beta_{ij}^{(p,s)}D_{ij}^{(p)}+\mathcal F_s^{\mathrm{higher}},
 $$
 
 where
 
 $$
-D_{ij}^{(q)}
-=
-\int_{\Lambda_s}
-\chi_i(c)\chi_j(c)
-\mathrm{KL}\!\left(q_i(c)\middle\|\Omega_{ij}(c)q_j(c)\right)
-\,dc,
+D_{ij}^{(q)}=\int_{\Lambda_s}\chi_i(c)\chi_j(c)\mathrm{KL}\!\left(q_i(c)\middle\|\Omega_{ij}(c)q_j(c)\right)\,dc,
 $$
 
 $$
-D_{ij}^{(p)}
-=
-\int_{\Lambda_s}
-\chi_i(c)\chi_j(c)
-\mathrm{KL}\!\left(p_i(c)\middle\|\Omega_{ij}^{(p)}(c)p_j(c)\right)
-\,dc.
+D_{ij}^{(p)}=\int_{\Lambda_s}\chi_i(c)\chi_j(c)\mathrm{KL}\!\left(p_i(c)\middle\|\Omega_{ij}^{(p)}(c)p_j(c)\right)\,dc.
 $$
 
 The term $\mathcal F_s^{\mathrm{higher}}$ may include observation terms, self-terms, cross-scale priors, curvature penalties, entropy penalties, or implementation-specific regularizers.
@@ -161,9 +140,7 @@ $$
 The parent support is not allowed to grow into regions covered by only one child. Thus
 
 $$
-\boxed{
-\chi_I(c)=\mathbf 1\!\left\{\sum_{i\in I}\chi_i(c)\ge 2\right\}.
-}
+\boxed{\chi_I(c)=\mathbf 1\!\left\{\sum_{i\in I}\chi_i(c)\ge 2\right\}.}
 $$
 
 This encodes the rule that a parent lives strictly over genuine overlap regions.
@@ -177,12 +154,7 @@ Let $\mathcal P_s=\{I_1,\ldots,I_{N_{s+1}}\}$ be the selected collection of clus
 For each admissible cluster $I$, define the parent frame as the Riemannian center of mass
 
 $$
-\boxed{
-U_I(c)
-=
-\arg\min_{U\in G}
-\sum_{i\in I}w_i^I(c)\,d_G(U,U_i(c))^2.
-}
+\boxed{U_I(c)=\arg\min_{U\in G}\sum_{i\in I}w_i^I(c)\,d_G(U,U_i(c))^2.}
 $$
 
 Here $w_i^I(c)\ge 0$, $\sum_{i\in I}w_i^I(c)=1$, and $d_G$ is the geodesic distance induced by a bi-invariant metric on the compact group $G$.
@@ -198,9 +170,7 @@ When all $U_i(c)$ lie in a geodesic ball of radius less than the injectivity rad
 Define child-to-parent transport by
 
 $$
-\boxed{
-\Omega_{Ii}(c)=U_I(c)U_i(c)^{-1}.
-}
+\boxed{\Omega_{Ii}(c)=U_I(c)U_i(c)^{-1}.}
 $$
 
 The transported child belief is
@@ -226,13 +196,7 @@ $$
 The parent belief is the minimizer of the transported child-parent alignment energy:
 
 $$
-\boxed{
-q_I(c)
-=
-\arg\min_{q\in\mathcal G_K}
-\sum_{i\in I}w_i^I(c)
-\mathrm{KL}\!\left(\widetilde q_i^I(c)\middle\|q\right),
-}
+\boxed{q_I(c)=\arg\min_{q\in\mathcal G_K}\sum_{i\in I}w_i^I(c)\mathrm{KL}\!\left(\widetilde q_i^I(c)\middle\|q\right),}
 $$
 
 where $\mathcal G_K$ is the family of $K$-dimensional Gaussian distributions.
@@ -255,13 +219,9 @@ and
 
 $$
 \boxed{
-\Sigma_I(c)
-=
-\sum_{i\in I}w_i^I(c)
+\Sigma_I(c)=\sum_{i\in I}w_i^I(c)
 \left[
-\widetilde\Sigma_i^I(c)
-+
-(\widetilde\mu_i^I(c)-\mu_I(c))(\widetilde\mu_i^I(c)-\mu_I(c))^\top
+\widetilde\Sigma_i^I(c)+(\widetilde\mu_i^I(c)-\mu_I(c))(\widetilde\mu_i^I(c)-\mu_I(c))^\top
 \right].
 }
 $$
@@ -271,11 +231,7 @@ The second term in $\Sigma_I$ is the between-child dispersion. It must be retain
 The same construction defines the parent model/prior state $p_I$:
 
 $$
-p_I(c)
-=
-\arg\min_{p\in\mathcal G_K}
-\sum_{i\in I}w_i^I(c)
-\mathrm{KL}\!\left(\widetilde p_i^I(c)\middle\|p\right).
+p_I(c)=\arg\min_{p\in\mathcal G_K}\sum_{i\in I}w_i^I(c)\mathrm{KL}\!\left(\widetilde p_i^I(c)\middle\|p\right).
 $$
 
 ---
@@ -305,9 +261,7 @@ $$
 Explicitly,
 
 $$
-R_s(X_s)
-=
-\left\{
+R_s(X_s)=\left\{
 (q_I,p_I,U_I,\chi_I)
 :
 I\in\mathcal P_s
@@ -326,9 +280,7 @@ Define the scale-$s$ variational Gibbs measure
 
 $$
 \boxed{
- d\mathbb P_s(X_s)
- =
- Z_s^{-1}e^{-\mathcal F_s(X_s)/\tau}\,d\nu_s(X_s),
+ d\mathbb P_s(X_s) = Z_s^{-1}e^{-\mathcal F_s(X_s)/\tau}\,d\nu_s(X_s),
 }
 $$
 
@@ -345,9 +297,7 @@ $$
 That is,
 
 $$
-\mathbb P_{s+1}(A)
-=
-\mathbb P_s(R_s^{-1}(A))
+\mathbb P_{s+1}(A)=\mathbb P_s(R_s^{-1}(A))
 $$
 
 for measurable sets $A$ in the parent state space.
@@ -356,9 +306,7 @@ If $\mathbb P_{s+1}$ is absolutely continuous with respect to a parent reference
 
 $$
 \boxed{
- d\mathbb P_{s+1}(Y)
- =
- Z_{s+1}^{-1}e^{-\mathcal F_{s+1}^{\mathrm{exact}}(Y)/\tau}\,d\nu_{s+1}(Y).
+ d\mathbb P_{s+1}(Y) = Z_{s+1}^{-1}e^{-\mathcal F_{s+1}^{\mathrm{exact}}(Y)/\tau}\,d\nu_{s+1}(Y).
 }
 $$
 
@@ -366,10 +314,7 @@ Equivalently,
 
 $$
 \boxed{
- e^{-\mathcal F_{s+1}^{\mathrm{exact}}(Y)/\tau}
- =
- \int_{R_s(X)=Y}
- e^{-\mathcal F_s(X)/\tau}\,d\nu_s(X\mid Y),
+ e^{-\mathcal F_{s+1}^{\mathrm{exact}}(Y)/\tau} = \int_{R_s(X)=Y} e^{-\mathcal F_s(X)/\tau}\,d\nu_s(X\mid Y),
 }
 $$
 
@@ -379,12 +324,7 @@ In delta-function notation,
 
 $$
 \boxed{
- e^{-\mathcal F_{s+1}^{\mathrm{exact}}(Y)/\tau}
- =
- \int
- \delta(Y-R_s(X))
- e^{-\mathcal F_s(X)/\tau}
- d\nu_s(X).
+ e^{-\mathcal F_{s+1}^{\mathrm{exact}}(Y)/\tau} = \int \delta(Y-R_s(X)) e^{-\mathcal F_s(X)/\tau} d\nu_s(X).
 }
 $$
 
@@ -404,11 +344,7 @@ Z_{s+1}=Z_s.
 $$
 2. For every bounded measurable parent observable $A:X_{s+1}\to\mathbb R$,
    $$
-\boxed{
-   \mathbb E_{s+1}[A(Y)]
-   =
-   \mathbb E_s[A(R_s(X))].
-   }
+\boxed{\mathbb E_{s+1}[A(Y)]   =   \mathbb E_s[A(R_s(X))].   }
 $$
 
 ### Proof
@@ -416,9 +352,7 @@ $$
 By definition of pushforward,
 
 $$
-\int_{X_{s+1}} A(Y)\,d\mathbb P_{s+1}(Y)
-=
-\int_{X_s} A(R_s(X))\,d\mathbb P_s(X).
+\int_{X_{s+1}} A(Y)\,d\mathbb P_{s+1}(Y)=\int_{X_s} A(R_s(X))\,d\mathbb P_s(X).
 $$
 
 Taking $A=1$ gives normalization preservation. If the unnormalized measures are used, the same calculation gives $Z_{s+1}=Z_s$ after integrating over all parent states.
@@ -441,9 +375,7 @@ Then the exact pushforward RG satisfies
 
 $$
 \boxed{
-(R_{s+1})_*(R_s)_*\mathbb P_s
-=
-(R_{s+1}\circ R_s)_*\mathbb P_s.
+(R_{s+1})_*(R_s)_*\mathbb P_s=(R_{s+1}\circ R_s)_*\mathbb P_s.
 }
 $$
 
@@ -454,16 +386,12 @@ Thus the RG transformations compose as a discrete semigroup.
 For any measurable set $A\subset X_{s+2}$,
 
 $$
-(R_{s+1})_*(R_s)_*\mathbb P_s(A)
-=
-(R_s)_*\mathbb P_s(R_{s+1}^{-1}(A))
+(R_{s+1})_*(R_s)_*\mathbb P_s(A)=(R_s)_*\mathbb P_s(R_{s+1}^{-1}(A))
 $$
 
 $$
 =
-\mathbb P_s(R_s^{-1}(R_{s+1}^{-1}(A)))
-=
-\mathbb P_s((R_{s+1}\circ R_s)^{-1}(A)).
+\mathbb P_s(R_s^{-1}(R_{s+1}^{-1}(A)))=\mathbb P_s((R_{s+1}\circ R_s)^{-1}(A)).
 $$
 
 This is exactly $(R_{s+1}\circ R_s)_*\mathbb P_s(A)$. $\square$
@@ -472,9 +400,7 @@ If the blocking scale is homogeneous and logarithmic scale is denoted by $\ell$,
 
 $$
 \boxed{
-\mathcal R_{\ell_2}\mathcal R_{\ell_1}
-=
-\mathcal R_{\ell_1+\ell_2}.
+\mathcal R_{\ell_2}\mathcal R_{\ell_1}=\mathcal R_{\ell_1+\ell_2}.
 }
 $$
 
@@ -590,9 +516,7 @@ The exact pushforward free energy $\mathcal F_{s+1}^{\mathrm{exact}}$ generally 
 Define the agent-form functional class
 
 $$
-\mathfrak M
-=
-\{\mathcal F_\theta:\theta\in\Theta\},
+\mathfrak M=\{\mathcal F_\theta:\theta\in\Theta\},
 $$
 
 where $\theta$ contains the parent means, covariances, frames, masks, raw couplings, transport parameters, curvature couplings, and any retained hyperparameters.
@@ -601,9 +525,7 @@ Define the projection of the exact free energy back into the ansatz class by
 
 $$
 \boxed{
-\Pi_{\mathfrak M}(\mathcal F)
-=
-\arg\min_{\theta\in\Theta}\inf_{a\in\mathbb R}
+\Pi_{\mathfrak M}(\mathcal F)=\arg\min_{\theta\in\Theta}\inf_{a\in\mathbb R}
 \|\mathcal F-\mathcal F_\theta-a\|_{\mathcal B}.
 }
 $$
@@ -619,9 +541,7 @@ The projected RG map is
 
 $$
 \boxed{
-\theta_{s+1}=R_{\mathfrak M}(\theta_s)
-:=
-\Pi_{\mathfrak M}(\mathcal F_{s+1}^{\mathrm{exact}}).
+\theta_{s+1}=R_{\mathfrak M}(\theta_s):=\Pi_{\mathfrak M}(\mathcal F_{s+1}^{\mathrm{exact}}).
 }
 $$
 
@@ -629,9 +549,7 @@ Define the closure residual
 
 $$
 \boxed{
-\varepsilon_{s+1}
-=
-\inf_{\theta\in\Theta}\inf_{a\in\mathbb R}
+\varepsilon_{s+1}=\inf_{\theta\in\Theta}\inf_{a\in\mathbb R}
 \frac{
 \|\mathcal F_{s+1}^{\mathrm{exact}}-\mathcal F_\theta-a\|_{\mathcal B}
 }{
@@ -706,9 +624,7 @@ $$
 The pairwise quadratic alignment energy inside $I$ has the form
 
 $$
-\mathcal F_I^{\mathrm{int}}
-=
-\frac12
+\mathcal F_I^{\mathrm{int}}=\frac12
 \sum_{i,j\in I}a_{ij}^I
 (\xi_i-\xi_j)^\top\Lambda_I(\xi_i-\xi_j),
 $$
@@ -727,9 +643,7 @@ Then
 
 $$
 \boxed{
-\mathcal F_I^{\mathrm{int}}
-=
-\frac12\xi_I^\top(L_I\otimes\Lambda_I)\xi_I.
+\mathcal F_I^{\mathrm{int}}=\frac12\xi_I^\top(L_I\otimes\Lambda_I)\xi_I.
 }
 $$
 
@@ -743,9 +657,7 @@ define the weighted internal gap
 
 $$
 \boxed{
-\lambda_{I,w}
-=
-\inf_{\xi\in\mathcal N_I,\xi\ne0}
+\lambda_{I,w}=\inf_{\xi\in\mathcal N_I,\xi\ne0}
 \frac{\xi^\top L_I\xi}{\xi^\top\xi}.
 }
 $$
@@ -775,10 +687,7 @@ If $m_I>0$, internal disagreement modes are massive and can be integrated out pe
 Let the parent/slow variables be $Y$ and the internal modes be $\xi$. Near a coherent cluster, write the microscopic free energy as a block quadratic form:
 
 $$
-\mathcal F_s(Y,\xi)
-=
-\mathcal F_0
-+
+\mathcal F_s(Y,\xi)=\mathcal F_0+
 \frac12
 \begin{bmatrix}
 Y-Y_0\\
@@ -806,11 +715,7 @@ Substituting back gives the effective free energy
 
 $$
 \boxed{
-\mathcal F_{\mathrm{eff}}(Y)
-=
-\mathcal F_0
-+
-\frac12(Y-Y_0)^\top
+\mathcal F_{\mathrm{eff}}(Y)=\mathcal F_0+\frac12(Y-Y_0)^\top
 A_{\mathrm{eff}}
 (Y-Y_0),
 }
@@ -829,23 +734,14 @@ This is the Schur complement.
 At finite temperature, integrating rather than minimizing yields
 
 $$
-\int e^{-\mathcal F_s(Y,\xi)/\tau}\,d\xi
-=
-C
-(\det A_{\xi\xi})^{-1/2}
-\exp[-\mathcal F_{\mathrm{eff}}(Y)/\tau].
+\int e^{-\mathcal F_s(Y,\xi)/\tau}\,d\xi=C(\det A_{\xi\xi})^{-1/2}\exp[-\mathcal F_{\mathrm{eff}}(Y)/\tau].
 $$
 
 Thus
 
 $$
 \boxed{
-\mathcal F_{s+1}^{\mathrm{exact}}(Y)
-=
-\mathcal F_{\mathrm{eff}}(Y)
-+
-\frac{\tau}{2}\log\det{}' A_{\xi\xi}(Y)
-+\mathrm{const}.
+\mathcal F_{s+1}^{\mathrm{exact}}(Y)=\mathcal F_{\mathrm{eff}}(Y)+\frac{\tau}{2}\log\det{}' A_{\xi\xi}(Y)+\mathrm{const}.
 }
 $$
 
@@ -874,13 +770,7 @@ This theorem is the rigorous core of the RG section.
 If $\mathcal F_s(Y,\xi)$ is not exactly quadratic, expand around the internal saddle $\xi^*(Y)$:
 
 $$
-\mathcal F_s(Y,\xi)
-=
-\mathcal F_s(Y,\xi^*)
-+
-\frac12\eta^\top H_I^\perp(Y)\eta
-+
-\frac{1}{3!}T_3(Y)[\eta^3]
+\mathcal F_s(Y,\xi)=\mathcal F_s(Y,\xi^*)+\frac12\eta^\top H_I^\perp(Y)\eta+\frac{1}{3!}T_3(Y)[\eta^3]
 +
 \frac{1}{4!}T_4(Y)[\eta^4]
 +\cdots,
@@ -892,11 +782,7 @@ Laplace integration gives
 
 $$
 \boxed{
-\mathcal F_{s+1}^{\mathrm{exact}}(Y)
-=
-\mathcal F_s(Y,\xi^*(Y))
-+
-\frac{\tau}{2}\log\det{}'H_I^\perp(Y)
+\mathcal F_{s+1}^{\mathrm{exact}}(Y)=\mathcal F_s(Y,\xi^*(Y))+\frac{\tau}{2}\log\det{}'H_I^\perp(Y)
 +
 \mathcal E_{\mathrm{anh}}(Y)
 +
@@ -908,9 +794,7 @@ A standard local bound has the form
 
 $$
 \boxed{
-\mathcal E_{\mathrm{anh}}
-=
-O\!\left(
+\mathcal E_{\mathrm{anh}}=O\!\left(
 \tau^2\|H^{-1}\|^3\|T_3\|^2
 +
 \tau^2\|H^{-1}\|^2\|T_4\|
@@ -964,9 +848,7 @@ For parent clusters $I,J$, define the renormalized conductance
 
 $$
 \boxed{
-\kappa_{IJ}^{R}
-=
-\sum_{i\in I}\sum_{j\in J}w_i^I w_j^J\kappa_{ij}.
+\kappa_{IJ}^{R}=\sum_{i\in I}\sum_{j\in J}w_i^I w_j^J\kappa_{ij}.
 }
 $$
 
@@ -974,9 +856,7 @@ Then the parent attention/coupling is
 
 $$
 \boxed{
-\beta_{IJ}^{R}
-=
-\frac{\kappa_{IJ}^{R}}{\sum_L\kappa_{IL}^{R}}.
+\beta_{IJ}^{R}=\frac{\kappa_{IJ}^{R}}{\sum_L\kappa_{IL}^{R}}.
 }
 $$
 
@@ -994,9 +874,7 @@ For $i\in I$, $j\in J$, transport the microscopic edge into parent coordinates:
 
 $$
 \boxed{
-\Theta_{ij}^{IJ}
-=
-\Omega_{Ii}\Omega_{ij}\Omega_{jJ}.
+\Theta_{ij}^{IJ}=\Omega_{Ii}\Omega_{ij}\Omega_{jJ}.
 }
 $$
 
@@ -1010,9 +888,7 @@ Define the parent transport by a weighted Karcher mean of these transported micr
 
 $$
 \boxed{
-\Omega_{IJ}^{R}
-=
-\arg\min_{\Omega\in G}
+\Omega_{IJ}^{R}=\arg\min_{\Omega\in G}
 \sum_{i\in I}\sum_{j\in J}
  w_i^I w_j^J\kappa_{ij}
  d_G(\Omega,\Theta_{ij}^{IJ})^2.
@@ -1029,9 +905,7 @@ If they do not coincide, define the transport-spread or holonomy residual
 
 $$
 \boxed{
-\mathcal H_{IJ}
-=
-\sum_{i\in I}\sum_{j\in J}
+\mathcal H_{IJ}=\sum_{i\in I}\sum_{j\in J}
  w_i^I w_j^J\kappa_{ij}
  d_G(\Omega_{IJ}^{R},\Theta_{ij}^{IJ})^2.
 }
@@ -1055,13 +929,9 @@ For first-order internal residuals to vanish, the cluster weights should match t
 
 $$
 \boxed{
- w_i^I
- =
- \frac{r_i^{I\to J}}{\sum_{i'\in I}r_{i'}^{I\to J}},
+ w_i^I = \frac{r_i^{I\to J}}{\sum_{i'\in I}r_{i'}^{I\to J}},
  \qquad
- w_j^J
- =
- \frac{s_j^{J\leftarrow I}}{\sum_{j'\in J}s_{j'}^{J\leftarrow I}}.
+ w_j^J = \frac{s_j^{J\leftarrow I}}{\sum_{j'\in J}s_{j'}^{J\leftarrow I}}.
 }
 $$
 
@@ -1069,14 +939,10 @@ A single cluster $I$ usually interacts with several partners $J_1,\ldots,J_m$. O
 
 $$
 \boxed{
-\delta_{I}^{\mathrm{marg}}
-=
-\sum_J \rho_{IJ}
+\delta_{I}^{\mathrm{marg}}=\sum_J \rho_{IJ}
 \sum_{i\in I}
 \left|
- w_i^I
- -
- \frac{r_i^{I\to J}}{\sum_{i'}r_{i'}^{I\to J}}
+ w_i^I - \frac{r_i^{I\to J}}{\sum_{i'}r_{i'}^{I\to J}}
 \right|,
 }
 $$
@@ -1091,9 +957,7 @@ Define the belief barycentric dispersion
 
 $$
 \boxed{
-V_I^{(q)}
-=
-\sum_{i\in I}w_i^I
+V_I^{(q)}=\sum_{i\in I}w_i^I
 \mathrm{KL}\!\left(\widetilde q_i^I\middle\|q_I\right).
 }
 $$
@@ -1102,9 +966,7 @@ Define the model-sector dispersion
 
 $$
 \boxed{
-V_I^{(p)}
-=
-\sum_{i\in I}w_i^I
+V_I^{(p)}=\sum_{i\in I}w_i^I
 \mathrm{KL}\!\left(\widetilde p_i^I\middle\|p_I\right).
 }
 $$
@@ -1202,9 +1064,7 @@ $$
 Linearize around $\theta^*$:
 
 $$
-\delta\theta_{s+1}
-=
-DR_{\mathfrak M}(\theta^*)\delta\theta_s.
+\delta\theta_{s+1}=DR_{\mathfrak M}(\theta^*)\delta\theta_s.
 $$
 
 Let
@@ -1319,9 +1179,7 @@ Define normalized presence/overlap
 
 $$
 \boxed{
-P_I
-=
-\frac{1}{|\Lambda_s|}
+P_I=\frac{1}{|\Lambda_s|}
 \sum_{c\in\Lambda_s}\chi_I(c)
 }
 $$
@@ -1380,9 +1238,7 @@ The variational retention gain is
 
 $$
 \boxed{
-\Delta_I
-=
-\mathcal L_{\mathrm{micro}}(I)-\mathcal L_{\mathrm{parent}}(I).
+\Delta_I=\mathcal L_{\mathrm{micro}}(I)-\mathcal L_{\mathrm{parent}}(I).
 }
 $$
 
@@ -1409,15 +1265,7 @@ Suppose that, for candidate cluster $I$, the parent approximation satisfies
 $$
 \mathcal F_{\mathrm{parent}}^*(I)
 \le
-\mathcal F_{\mathrm{micro}}^*(I)
--
-A_I
-+
-L_qV_I^{(q)}
-+
-L_pV_I^{(p)}
-+
-\varepsilon_I,
+\mathcal F_{\mathrm{micro}}^*(I)-A_I+L_qV_I^{(q)}+L_pV_I^{(p)}+\varepsilon_I,
 $$
 
 where:
@@ -1554,18 +1402,14 @@ A simple estimate is obtained by comparing the number of alignment terms.
 Suppose a coherent cluster has pairwise average transported KL
 
 $$
-\overline D_{\mathrm{pair}}
-=
-\frac{1}{|I|(|I|-1)}
+\overline D_{\mathrm{pair}}=\frac{1}{|I|(|I|-1)}
 \sum_{i\ne j}\mathrm{KL}(q_i\|\Omega_{ij}q_j),
 $$
 
 and child-parent average transported KL
 
 $$
-\overline D_{\mathrm{parent}}
-=
-\frac{1}{|I|}
+\overline D_{\mathrm{parent}}=\frac{1}{|I|}
 \sum_i\mathrm{KL}(\Omega_{Ii}q_i\|q_I).
 $$
 
@@ -1573,11 +1417,8 @@ If microscopic alignment uses all ordered pairs with weight $\lambda_{\mathrm{pa
 
 $$
 \boxed{
-A_I
-\approx
-\lambda_{\mathrm{pair}}|I|(|I|-1)\overline D_{\mathrm{pair}}
--
-\lambda_{\mathrm{parent}}|I|\overline D_{\mathrm{parent}}.
+A_I\approx\lambda_{\mathrm{pair}}|I|(|I|-1)\overline D_{\mathrm{pair}}
+-\lambda_{\mathrm{parent}}|I|\overline D_{\mathrm{parent}}.
 }
 $$
 
@@ -1587,9 +1428,7 @@ A more precise estimate uses the exact optimized free energies before and after 
 
 $$
 \boxed{
-A_I
-=
-\mathcal F_{\mathrm{micro}}^*(I)-\mathcal F_{\mathrm{parent},no\ overhead}^*(I).
+A_I=\mathcal F_{\mathrm{micro}}^*(I)-\mathcal F_{\mathrm{parent},no\ overhead}^*(I).
 }
 $$
 
@@ -1607,10 +1446,7 @@ $$
 \begin{bmatrix}
 \dot Y\\
 \dot\xi
-\end{bmatrix}
-=
--
-\begin{bmatrix}
+\end{bmatrix}=-\begin{bmatrix}
 G_{YY} & G_{Y\xi}\\
 G_{\xi Y} & G_{\xi\xi}
 \end{bmatrix}^{-1}
@@ -1644,13 +1480,9 @@ The effective parent flow is
 
 $$
 \boxed{
-\dot Y
-=
--\mathrm{grad}_{G_{\mathrm{eff}}}\mathcal F_{s+1}^{\mathrm{exact}}(Y)
-+
-O\!\left(m_I^{-1}\|A_{Y\xi}\|\|\dot Y\|\right)
-+
-O(\varepsilon_I).
+\dot Y=-\mathrm{grad}_{G_{\mathrm{eff}}}\mathcal F_{s+1}^{\mathrm{exact}}(Y)
++O\!\left(m_I^{-1}\|A_{Y\xi}\|\|\dot Y\|\right)
++O(\varepsilon_I).
 }
 $$
 
@@ -1743,9 +1575,7 @@ $$
 has exact renormalized free energy
 
 $$
-e^{-\mathcal F_{s+1}^{\mathrm{exact}}(Y)/\tau}
-=
-\int\delta(Y-R_s(X))e^{-\mathcal F_s(X)/\tau}d\nu_s(X),
+e^{-\mathcal F_{s+1}^{\mathrm{exact}}(Y)/\tau}=\int\delta(Y-R_s(X))e^{-\mathcal F_s(X)/\tau}d\nu_s(X),
 $$
 
 up to an additive constant. This step preserves retained observables and satisfies the composition law
