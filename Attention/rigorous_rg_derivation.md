@@ -35,13 +35,13 @@ Work first on a finite grid approximation of the base manifold $\mathcal C$. Let
 At scale $s$, let the index set of agents be $\mathcal I_s$. A scale-$s$ state is
 
 $$
-X_s=\{x_i^{(s)}\}_{i\in\mathcal I_s},\qquadx_i^{(s)}=(q_i,p_i,U_i,\chi_i),
+X_s=\{x_i^{(s)}\}_{i\in\mathcal I_s},\quad x_i^{(s)}=(q_i,p_i,U_i,\chi_i),
 $$
 
 where, at each grid point $c\in\Lambda_s$,
 
 $$
-q_i(c)=\mathcal N(\mu_i(c),\Sigma_i(c)),\qquadp_i(c)=\mathcal N(m_i(c),\Pi_i(c)),
+q_i(c)=\mathcal N(\mu_i(c),\Sigma_i(c)),\quad p_i(c)=\mathcal N(m_i(c),\Pi_i(c)),
 $$
 
 $$
