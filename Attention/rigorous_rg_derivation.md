@@ -19,7 +19,7 @@ A precise version of the renormalization claim is:
 Let $X_s$ denote the finite-dimensional state of all scale-$s$ agents on a finite grid approximation of the base $\mathcal C$, and let $\mathcal F_s(X_s)$ be the scale-$s$ variational free energy. Given a measurable gauge-covariant coarse-graining map $R_s:X_s\mapsto X_{s+1}$, the pushforward
 
 $$
-\mathbb P_{s+1}=(R_s)_*\mathbb P_s,\qquadd\mathbb P_s=Z_s^{-1}e^{-\mathcal F_s/\tau}\,d\nu_s,
+\mathbb P_{s+1}=(R_s)_*\mathbb P_s, /quad \mathbb P_s=Z_s^{-1}e^{-\mathcal F_s/\tau}\,d\nu_s,
 $$
 
 defines an exact renormalized free energy $\mathcal F_{s+1}^{\mathrm{exact}}$. This exact RG step preserves the partition function and all retained observables, and it satisfies the usual composition law under successive coarse-grainings. The nontrivial question is whether $\mathcal F_{s+1}^{\mathrm{exact}}$ lies in, or near, the original multi-agent Gaussian KL functional class. In the compact-gauge, linear-Gaussian, flat-transport, spectrally gapped high-coherence regime, closure holds up to additive constants and Schur-complement renormalization of the quadratic form. Away from this regime, the closure residual is controlled by barycentric dispersion, transport/holonomy variation, edge-marginal incompatibility, anharmonic Laplace corrections, and timescale-separation error. The simulation threshold detector is therefore best interpreted as a candidate-selection surrogate for the conditions under which a parent effective theory has positive variational retention gain.
