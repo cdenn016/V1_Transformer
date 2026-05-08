@@ -254,11 +254,9 @@ $$
 Explicitly,
 
 $$
-R_s(X_s)=\left\{
-(q_I,p_I,U_I,\chi_I)
-:
-I\in\mathcal P_s
-\right\},
+R_s(X_s)=\{
+(q_I,p_I,U_I,\chi_I):I\in\mathcal P_s
+\},
 $$
 
 with $q_I,p_I,U_I,\chi_I$ defined by the formulas above.
