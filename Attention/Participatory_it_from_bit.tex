@@ -643,7 +643,7 @@ Each agent represents an autonomous information-processing entity with its own b
 When agents achieve sufficient alignment in their beliefs and models over shared regions, they can be understood as forming higher-order collective entities - meta-agents. This emergence of hierarchical structure from informational coherence constitutes one of the framework's central mechanisms.
 
 \begin{definition}[Perfect Consensus]
-Agents $\{i, j, \ldots\} \subseteq \mathcal{I}$ are in perfect consensus over region $\mathcal{R} \subseteq \bigcap_k \mathcal{U}_k$ if, after gauge transport to a common frame:
+Agents $\{i, j, \ldots\} \subseteq \mathcal{I}$ are in perfect consensus over region $\mathcal{R} \subseteq U_I$ (the multi-child support region of Eq.~\eqref{eq:meta_agent_support}) if, after gauge transport to a common frame:
 \begin{equation}
 \Omega_{ij}[q_j](c) = q_i(c), \quad \tilde{\Omega}_{ij}[s_j](c) = s_i(c) \quad \forall c \in \mathcal{R},
 \end{equation}
@@ -655,7 +655,12 @@ The gauge transport $\Omega_{ij}$ is essential here. Agents may describe the sam
 Perfect consensus is an idealization rarely achieved exactly. More realistically, agents achieve approximate consensus characterized by small KL divergences between transported beliefs. When this approximate consensus is sufficiently strong and stable across a cluster of agents, meta-agent formation becomes possible.
 
 \begin{definition}[Meta-Agent]
-A meta-agent $\mathcal{A}^{(s+1)}$ at hierarchical scale $(s+1)$ forms from a cluster $\{i, j, \ldots\} \subseteq \mathcal{I}^{(s)}$ of scale-$s$ agents satisfying: (1) sufficient coherence $C_{\text{belief}} \cdot C_{\text{model}} > \Gamma_{\min}$ above some threshold, (2) overlapping support $\bigcap_k \mathcal{U}_k \neq \emptyset$, and (3) minimum cluster size $|\{i, j, \ldots\}| \geq N_{\min}$ (typically $N_{\min} = 2$). The meta-agent is itself a smooth section $(q^{(s+1)}, p^{(s+1)}, s^{(s+1)}, r^{(s+1)}, \phi^{(s+1)})$ constructed via gauge-covariant averaging of constituent fields. Belief coherence $C_{\text{belief}}$ measures alignment of $q$-fields and model coherence $C_{\text{model}}$ measures alignment of $s$-fields, the latter being the substantive content of meta-cognitive consensus.
+A meta-agent $\mathcal{A}^{(s+1)}$ at hierarchical scale $(s+1)$ forms from a cluster $I = \{i, j, \ldots\} \subseteq \mathcal{I}^{(s)}$ of scale-$s$ agents satisfying: (1) sufficient coherence $C_{\text{belief}} \cdot C_{\text{model}} > \Gamma_{\min}$ above some threshold, (2) non-empty multi-child support
+\begin{equation}
+U_I = \mathrm{ConnComp}\Big(\big\{c \in \mathcal{C}: \textstyle\sum_{i \in I} \chi_i(c) \ge 2\big\}\Big) \neq \varnothing,
+\label{eq:meta_agent_support}
+\end{equation}
+i.e.\ a connected region in which at least two constituents maintain beliefs simultaneously, and (3) minimum cluster size $|I| \geq N_{\min}$ (typically $N_{\min} = 2$). The meta-agent is itself a smooth section $(q^{(s+1)}, p^{(s+1)}, s^{(s+1)}, r^{(s+1)}, \phi^{(s+1)})$ constructed via gauge-covariant averaging of constituent fields. Belief coherence $C_{\text{belief}}$ measures alignment of $q$-fields and model coherence $C_{\text{model}}$ measures alignment of $s$-fields, the latter being the substantive content of meta-cognitive consensus. The stricter $m$-fold variant $\sum_{i \in I}\chi_i(c) \ge m$ for $m > 2$, up to the global-intersection limit $m = |I|$ that recovers $\bigcap_{i \in I}\mathcal{U}_i \neq \varnothing$, is available where applications require deeper simultaneous coverage.
 \end{definition}
 
 Meta-agents represent emergent collective entities arising from coherent subsystems. A family forms a household meta-agent, neurons form brain modules, individuals form communities, communities form societies. meta-agents are not mere abstractions or statistical summaries. They are dynamical agents in their own right with beliefs evolving according to the same free energy minimization principles governing base agents. The meta-agent can influence its constituents through top-down feedback, realizing Wheeler's participatory loop where higher-level structure affects lower-level dynamics.
@@ -1749,12 +1754,12 @@ Two distinct gauge actions are operative in this manuscript and the renormalizat
 so KL-based observables transform by common pushforward and are invariant by Theorem~\ref{thm:glk_invariance}, while $\Omega_{ij}$ itself transforms tensorially under~(b) (covariant, not invariant). Independent per-agent transformations $g_i(c) \neq g_j(c)$ are not gauge redundancies in either sense and represent active changes of the epistemic configuration. Under~(b), both the Karcher frame and M-projection belief barycenters commute with the diagonal pushforward, giving $\mathcal{R}_I(h \cdot X) = h \cdot \mathcal{R}_I(X)$ and the renormalized invariance $\mathcal{F}_{s+1}(h \cdot Y) = \mathcal{F}_{s+1}(Y)$ when the reference measure $\nu_s$ is gauge-invariant. For compact $G = \mathrm{SO}(N)$ the bi-invariant Haar measure provides this; for $\mathrm{GL}^+(K)$ a gauge slice or Radon--Nikodym correction is required because the Lebesgue density transforms by $|\det h|^{\dim}$ and the action is not unimodular.
 
 \paragraph{Closure ansatz on the multi-agent class.}
-The pushforward construction defines $\mathcal{F}^{\mathrm{exact}}_{s+1}$ exactly. Whether $\mathcal{F}^{\mathrm{exact}}_{s+1}$ retains the multi-agent functional form of $\mathcal{F}_s$ is a separate claim. Define the closure residual
+The pushforward construction defines $\mathcal{F}^{\mathrm{exact}}_{s+1}$ exactly. Whether $\mathcal{F}^{\mathrm{exact}}_{s+1}$ retains the multi-agent functional form of $\mathcal{F}_s$ is a separate claim. Because the pushforward Gibbs measure $e^{-\mathcal{F}_{s+1}/\tau} d\nu_{s+1}$ is invariant under $\mathcal{F}_{s+1} \mapsto \mathcal{F}_{s+1} + c$ for any $c \in \mathbb{R}$, the closure residual must be defined modulo an additive constant. We adopt the dimensionless quotient form
 \begin{equation}
-\varepsilon_I = \big\|\mathcal{F}_{s+1}^{\mathrm{exact}} - \mathcal{F}_{s+1}^{\mathrm{agent}}\big\|
+\varepsilon_I = \frac{\inf_{c \in \mathbb{R}}\big\|\mathcal{F}^{\mathrm{exact}}_{s+1} - \mathcal{F}^{\mathrm{agent}}_{s+1} - c\big\|_{L^\infty(\mathcal{N}_I)}}{\tau + \big\|\mathcal{F}^{\mathrm{exact}}_{s+1}\big\|_{L^\infty(\mathcal{N}_I)}},
 \label{eq:rg_closure}
 \end{equation}
-between the exact pushforward energy and the agent-form approximation $\mathcal{F}^{\mathrm{agent}}_{s+1}$ obtained by the steps below. Sufficient conditions for $\varepsilon_I$ to be small are (i)~Gaussian children, (ii)~coherent cluster, $V_I = \sum_i w_i^I \mathrm{KL}(\widetilde{q}_i^I \| q_I) \ll 1$, (iii)~positive constrained weighted gap $\lambda_{I,w} > 0$ defined below, (iv)~edge-marginal compatibility of cluster weights, and (v)~compact gauge group or explicit gauge-fixing/regulator for noncompact $G$. The remainder of this subsubsection is approximate: each of equations~\eqref{eq:rg_internal_hessian}--\eqref{eq:rg_schur} holds under conditions~(i)--(v), and any uncontrolled term is absorbed into $\varepsilon_I$.
+on a parent neighbourhood $\mathcal{N}_I$ of the slow-manifold patch where the agent ansatz is fitted; an equivalent typical-case formulation against the parent reference measure $\mu_{s+1}$ is $\varepsilon_I^2 = \inf_c \int_{\mathcal{N}_I}(\mathcal{F}^{\mathrm{exact}}_{s+1} - \mathcal{F}^{\mathrm{agent}}_{s+1} - c)^2 d\mu_{s+1}$. The $L^\infty$ form~\eqref{eq:rg_closure} is the working definition because the small-parameter regime $\varepsilon_I \ll 1$ is the object that controls the bounds invoked below. Sufficient conditions for $\varepsilon_I$ to be small are (i)~Gaussian children, (ii)~coherent cluster, $V_I = \sum_i w_i^I \mathrm{KL}(\widetilde{q}_i^I \| q_I) \ll 1$, (iii)~positive constrained weighted gap $\lambda_{I,w} > 0$ defined below, (iv)~edge-marginal compatibility of cluster weights, and (v)~compact gauge group or explicit gauge-fixing/regulator for noncompact $G$. The remainder of this subsubsection is approximate: each of equations~\eqref{eq:rg_internal_hessian}--\eqref{eq:rg_schur} holds under conditions~(i)--(v), and any uncontrolled term is absorbed into $\varepsilon_I$.
 
 Working in Fisher-normal coordinates around $q_I$, write the transported child belief as $\widetilde{q}_i^I = q_I + \xi_i$ with the linearized barycentric constraint $\sum_i w_i^I \xi_i = 0$, valid to leading order in $\xi$. When the surrounding microscopic functional carries fixed-parameter couplings $\beta_{ij}$, the intra-cluster alignment energy expands as
 \begin{equation}
@@ -1788,12 +1793,17 @@ The renormalised inter-cluster coupling must be constructed at the raw-conductan
 The convex weighting is required: under identical children ($\kappa_{ij}$ independent of $i \in I$) the parent reduced free energy $F_{\mathrm{red},I} = -\tau \log \sum_J \kappa_{IJ}^R$ collapses to the common child value, whereas an unweighted sum would introduce a spurious $-\tau \log |I|$ entropy-of-mixture offset, and summing $\beta_{ij}$ directly would yield $\sum_J \beta_{IJ}^R = |I|$ rather than $1$. The first-order energy residual $(\mu_I - \mu_J) \cdot \big[\sum_i r_i \xi_i - \sum_j s_j \eta_j\big]$, with row and column edge marginals $r_i = \sum_{j \in J} \kappa_{ij}$ and $s_j = \sum_{i \in I} \kappa_{ij}$, vanishes when the cluster weights satisfy the edge-marginal compatibility $w_i^I = r_i/\sum_{i'} r_{i'}$ and $w_j^J = s_j/\sum_{j'} s_{j'}$. A cluster typically interacts with several partners $\{J_k\}$, and a single set of cluster weights satisfies the compatibility for all partners only when the partner-row marginals are colinear; otherwise the residual contributes to $\varepsilon_I$.
 
 \paragraph{Adiabatic elimination.}
-Adiabatic elimination of the internal modes uses the Schur-complement effective metric on the slow manifold,
+Schur-complement elimination of the internal modes requires four hypotheses: (a) $G_{\xi\xi}$ is invertible on the internal-mode complement; (b) a spectral gap separates internal from retained modes, quantified by $\lambda_{I,w} > 0$ from~\eqref{eq:rg_constrained_gap}; (c) the internal equilibrium is normally hyperbolic, with the constrained internal Hessian $H_I^\perp$ having eigenvalues bounded away from zero on the constraint subspace; and (e) no near-critical soft mode within $\mathcal{N}_I$, that is, $\lambda_{I,w}$ is bounded below uniformly on the parent neighbourhood. Bounded slow forcing and smooth dependence of eliminated modes on retained modes follow from (a)--(c) under standard slow-manifold arguments and are not stated as independent hypotheses. Under (a)--(c), (e), and the timescale-separation hypothesis $t_{\mathrm{int}} \sim \lambda_{I,w}^{-1} \ll t_{\mathrm{slow}}$, the effective slow metric on the constrained manifold is the Schur complement
 \begin{equation}
 G_{\mathrm{eff}} = G_{YY} - G_{Y\xi}G_{\xi\xi}^{-1}G_{\xi Y},
 \label{eq:rg_schur}
 \end{equation}
-giving the autonomous parent flow $\dot{Y}_I = -\mathrm{grad}_{G_{\mathrm{eff}}}\mathcal{F}_{s+1}(Y_I) + O(m_I^{-1}) + O(\varepsilon_I)$ \emph{provided} the timescale-separation hypothesis $t_{\mathrm{int}} \sim m_I^{-1} \ll t_{\mathrm{slow}}$ holds; failure of this separation contributes to $\varepsilon_I$. The amplitude of the internal modes on the slow manifold is $O(m_I^{-1})$, and the parent dynamics close on themselves at the same order under conditions~(i)--(v) and the timescale-separation assumption.
+and the autonomous parent flow takes the form
+\begin{equation}
+\dot{Y}_I = -\mathrm{grad}_{G_{\mathrm{eff}}}\mathcal{F}_{s+1}(Y_I) + O\big(\lambda_{I,w}^{-1}\|\dot{Y}_I\| \|\nabla^2_{Y\xi}\mathcal{F}\|^2\big) + O\big(\lambda_{I,w}^{-2}\|\nabla_Y \mathcal{F}\|^2\big) + O(\varepsilon_I).
+\label{eq:rg_schur_flow}
+\end{equation}
+The first error term is the residual coupling force at leading order in the slaving expansion (slaved amplitude $\xi^*(t) = -[H_I^\perp]^{-1}\nabla^2_{\xi Y}\mathcal{F}\cdot \dot{Y}_I$ of size $\lambda_{I,w}^{-1}\|\nabla^2_{Y\xi}\mathcal{F}\| \|\dot{Y}_I\|$); the second is the Schur correction itself relative to $G_{YY}$, evaluated at the slow manifold; the third absorbs all non-Schur closure errors into~\eqref{eq:rg_closure}. Failure of any of (a)--(c), (e) or of timescale separation contributes to $\varepsilon_I$.
 
 \paragraph{Retention rules.}
 Two distinct retention principles apply to a closed parent. The Wilsonian relevance criterion~\cite{Wilson1971, wilson1975renormalization} linearises the RG flow at a fixed point $\theta^* = R(\theta^*)$ and classifies eigendirections of $DR_{\theta^*}$ by their multipliers $|\lambda_a| > 1$ (relevant), $|\lambda_a| < 1$ (irrelevant), or $|\lambda_a| = 1$ (marginal). The MDL/Bayesian retention criterion~\cite{Schwarz1978, Rissanen1978} is the description-length gain
@@ -3527,15 +3537,17 @@ We derive explicit natural gradient expressions for gauge-theoretic free energy 
 
 Agent $i$ maintains primitive belief $q_i = \mathcal{N}(\mu_i, \Sigma_i)$ and primitive generative model $s_i = \mathcal{N}(\mu_{s,i}, \Sigma_{s,i})$, with derived prior $p_i = \mathcal{N}(\mu_{p,i}, \Sigma_{p,i})$ on the state fiber and derived hyper-prior $r_i = \mathcal{N}(\mu_{r,i}, \Sigma_{r,i})$ on the model fiber, related to the meta-agent's primitives via the cross-scale shadows of Eq.~\eqref{eq:cross_scale_shadow}. The state-fiber transport $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j) \in G$ acts via representation $\rho_{\mathrm{state}}: G \to \mathrm{GL}(K)$, and the model-fiber transport $\tilde\Omega_{ij}$ acts via $\rho_{\mathrm{model}}$. This appendix computes the gradient flow on the state-fiber sector $(q_i, p_i, \phi_i)$; the model-fiber sector $(s_i, r_i)$ has parallel structure under the substitution $(\beta, \Omega, q, p) \to (\gamma, \tilde\Omega, s, r)$.
 
-The free energy decomposes as:
+The un-minimised variational free energy, with attention weights treated as functions of the belief parameters as in autograd-style implementations, decomposes as:
 \begin{equation}
-S = \sum_i \mathrm{KL}(q_i \| p_i) + \sum_i \lambda_h \mathrm{KL}(s_i \| r_i) + \sum_{ij} \beta_{ij} \mathrm{KL}(q_i \| \Omega_{ij}[q_j]) + \sum_{ij} \gamma_{ij} \mathrm{KL}(s_i \| \tilde{\Omega}_{ij}[s_j])
+S = \sum_i \mathrm{KL}(q_i \| p_i) + \sum_i \lambda_h \mathrm{KL}(s_i \| r_i) + \sum_{ij} \beta_{ij}(\mu_i, \Sigma_i, \phi_i) \mathrm{KL}(q_i \| \Omega_{ij}[q_j]) + \sum_{ij} \gamma_{ij}(\mu_i, \Sigma_i, \phi_i) \mathrm{KL}(s_i \| \tilde{\Omega}_{ij}[s_j])
 \end{equation}
 
 Attention weights are defined by:
 \begin{equation}
 \beta_{ij} = \frac{\exp\left[-\kappa_\beta^{-1}\mathrm{KL}(q_i \| \Omega_{ij}[q_j])\right]}{\sum_k \exp\left[-\kappa_\beta^{-1}\mathrm{KL}(q_i \| \Omega_{ik}[q_k])\right]}
 \end{equation}
+
+The gradients below are $\nabla_x S$ for $x \in \{\mu_i, \Sigma_i, \phi_i\}$, taken with the softmax-defined $\beta_{ij}(x), \gamma_{ij}(x)$ attached. They are not equal to $\nabla_x \mathcal{F}_{\mathrm{red}}$ from~\eqref{eq:envelope_gradient}; the difference is the entropy-correction covariance $-\kappa_\beta^{-1}\mathrm{Cov}_{\beta^*}(\mathrm{KL}, \nabla_x \mathrm{KL})$ derived in Section~\ref{sec:envelope_theorem}. We give $\nabla_x S$ here because the implementation differentiates through the softmax; the envelope-theorem expression~\eqref{eq:envelope_gradient} is obtained by dropping every $\partial \beta_{ij}/\partial x$ and $\partial \gamma_{ij}/\partial x$ contribution below.
 
 \subsection*{Free Energy Gradient: Belief Means (Complete)}
 
@@ -3716,12 +3728,15 @@ When $\kappa_\beta \to \infty$ (soft/uniform attention), the reweighting term va
 
 \subsubsection*{Model Alignment (Parallel Structure on the Model Fiber)}
 
-The model-channel gauge-frame gradient has identical form on the model fiber, with $(\beta, \Omega, q, p) \to (\gamma, \tilde\Omega, s, r)$:
+The model-channel gauge-frame gradient has identical form on the model fiber, with $(\beta, \Omega, q, p, \kappa_\beta) \to (\gamma, \tilde\Omega, s, r, \kappa_\gamma)$:
 \begin{equation}
-\nabla_{\phi_i} S_{\mathrm{model}} = \sum_j \gamma_{ij}\nabla_{\phi_i}\mathrm{KL}(s_i \| \tilde{\Omega}_{ij}[s_j]) + \frac{1}{\kappa_\gamma}\left(\sum_j \gamma_{ij}\mathrm{KL}(s_i \| \tilde{\Omega}_{ij}[s_j])\right)\left(\sum_k \gamma_{ik}\nabla_{\phi_i}\mathrm{KL}_{ik}^s\right).
+\begin{aligned}
+\nabla_{\phi_i} S_{\mathrm{model}}
+&= \sum_j \gamma_{ij}\left(1 - \frac{\mathrm{KL}^s_{ij}}{\kappa_\gamma}\right)\nabla_{\phi_i}\mathrm{KL}(s_i \| \tilde{\Omega}_{ij}[s_j]) \\
+&\quad + \frac{1}{\kappa_\gamma}\left(\sum_j \gamma_{ij}\mathrm{KL}^s_{ij}\right)\left(\sum_k \gamma_{ik}\nabla_{\phi_i}\mathrm{KL}^s_{ik}\right),
+\end{aligned}
 \end{equation}
-
-(We assume tied gauge frames so that the same $\phi_i$ generates both $\Omega_{ij}$ on the state fiber and $\tilde\Omega_{ij}$ on the model fiber via the appropriate representation; under independent model-fiber gauge frames, the gradient is taken with respect to $\tilde\phi_i$ instead.)
+where $\mathrm{KL}^s_{ij} := \mathrm{KL}(s_i \| \tilde{\Omega}_{ij}[s_j])$. The $(1 - \mathrm{KL}^s_{ij}/\kappa_\gamma)$ reweighting on the direct-alignment term is required by the product rule through $\gamma_{ij}$; omitting it would compute the envelope-theorem gradient on the model fiber while retaining the autograd-surrogate gradient on the belief fiber, which is structurally inconsistent. (We assume tied gauge frames so that the same $\phi_i$ generates both $\Omega_{ij}$ on the state fiber and $\tilde\Omega_{ij}$ on the model fiber via the appropriate representation; under independent model-fiber gauge frames, the gradient is taken with respect to $\tilde\phi_i$ instead.)
 
 \subsection*{Complete Update Equations}
 
@@ -3834,6 +3849,9 @@ where $L_i$ is lower triangular with positive diagonal entries. Gradients are co
 
 \section{Covariance Dynamics and Equilibrium Analysis}
 \label{app:covariance_dynamics}
+
+\paragraph{Scope of this appendix.}
+The analysis below is a local, fixed-attention, receiver-only surrogate. We treat the attention weights $\beta_{ij}$ as exogenous constants when differentiating with respect to $\Sigma_i$, vary only the receiver covariance, and never differentiate the sender covariances $\Sigma_j$ or the weights $\beta_{ij}$ themselves. The full reduced functional, obtained by envelope-eliminating $\beta_{ij}$ via its entropy-regularised softmax optimum and including sender-side and $\partial \beta_{ij}$ contributions, is not derived here. The fixed point characterised below is therefore a partial Euler--Lagrange stationarity condition, not a stationary point of the fully reduced free energy.
 
 \subsection{Covariance Gradient of the Generalized Free Energy}
 
@@ -3983,7 +4001,7 @@ D_{\mathrm{KL}}\big(q_i \| \Omega_{ik} q_k\big)
 \right]}.
 \end{equation}
 
-As $\tau \to 0$, $\beta_{ij}$ becomes sharply peaked on whichever neighbor $j$ best agrees (after transport). In that low-$\tau$ limit, the prior precision $\Sigma_{p,i}^{-1}$ becomes negligible relative to the socially enforced alignment term, and
+As $\tau \to 0$, $\beta_{ij}$ becomes sharply peaked on $j^\star = \arg\min_j D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$. Since $\sum_j \beta_{ij} = 1$ for every $\tau > 0$, sharpening $\beta$ by itself does not amplify the coefficient on the alignment block: in the limit, $\sum_j \beta_{ij}(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1} \to (\Omega_{ij^\star}\Sigma_{j^\star}\Omega_{ij^\star}^\top)^{-1}$, which is bounded. The prior precision $\Sigma_{p,i}^{-1}$ becomes negligible relative to the alignment term only under the additional conditions that either an external coupling strength $A$ multiplying the alignment block is large compared with $\|\Sigma_{p,i}^{-1}\|$, or the selected neighbour's transported precision $(\Omega_{ij^\star}\Sigma_{j^\star}\Omega_{ij^\star}^\top)^{-1}$ itself dominates $\Sigma_{p,i}^{-1}$. In this combined high-coupling, sharp-attention regime,
 
 \begin{equation}
 \boxed{
@@ -3998,7 +4016,7 @@ As $\tau \to 0$, $\beta_{ij}$ becomes sharply peaked on whichever neighbor $j$ b
 
 Here $\langle \cdot \rangle_{\beta}$ denotes a $\beta$-weighted expectation over neighbors.
 
-Therefore, in the strong-alignment (i.e. small $\tau$) regime, agent $i$'s precision matrix becomes the $\beta$-weighted average of its neighbors' transported precisions.
+Therefore, in the combined sharp-attention/high-coupling regime (small $\tau$ together with $A \gg P$, where $A$ denotes the alignment coupling and $P \sim \|\Sigma_{p,i}^{-1}\|$ the prior precision), agent $i$'s precision approaches the $\beta$-weighted average of its neighbours' transported precisions; small $\tau$ alone is not sufficient.
 
 When, additionally, all agents already have approximately equal covariances and the transports are near-identity, i.e. $\Sigma_i \approx \Sigma_j$ and $\Omega_{ij} \approx I$, then \eqref{eq:beta_weighted_precision} implies
 
