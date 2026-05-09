@@ -1357,15 +1357,15 @@ When environmental agents have sharp beliefs concentrated on specific values (co
 
 We establish formal equivalence between the observation-based and agent-based formulations through the following construction.
 
-\textbf{Proposition:} For any system with observation terms
+\textbf{Proposition (mean-gradient equivalence; conditional full equivalence):} For any system with observation terms
 \begin{equation}
 \mathcal{F}_{\text{obs}} = \mathcal{F}_{\text{internal}}[\{q_i\}] - \sum_i \int \chi_i(c)  \mathbb{E}_{q_i(c)}[\log p_i(o_i|c)]  dc,
 \end{equation}
-there exists an equivalent system with environmental agents
+there exists a system with environmental agents
 \begin{equation}
 \mathcal{F}_{\text{agent}} = \mathcal{F}_{\text{internal}}[\{q_i\}] + \sum_{i,k} \int \chi_{ik}(c)  \beta_{i,e_k}(c)  \mathrm{KL}\big(q_i(c) \| \Omega_{i,e_k}[q_{e_k}(c)]\big)  dc,
 \end{equation}
-such that the gradient flows are equivalent: $\frac{\delta \mathcal{F}_{\text{obs}}}{\delta q_i} = \frac{\delta \mathcal{F}_{\text{agent}}}{\delta q_i}$.
+whose mean-gradient flow agrees with that of $\mathcal{F}_{\text{obs}}$, $\partial_{\mu_i}\mathcal{F}_{\text{obs}} = \partial_{\mu_i}\mathcal{F}_{\text{agent}}$, for any environmental sensory precision $\Sigma_o > 0$. Full variational equivalence at the level of the joint $(\mu_i, \Sigma_i)$ gradient flow, $\delta \mathcal{F}_{\text{obs}}/\delta q_i = \delta \mathcal{F}_{\text{agent}}/\delta q_i$, requires an additional restriction: either replacing the environmental KL by a cross-entropy coupling $-\mathbb{E}_{q_i}[\log q_{e_k}]$, or restricting to fixed-covariance dynamics in which the entropy discrepancy is constant.
 
 \textbf{Construction:} A Dirac choice $q_{e_k}(c) = \delta(c - c_k)$ is the singular limit of a finite-precision Gaussian sensory agent and gives an infinite KL whenever $q_i$ does not coincide pointwise with $\delta(c - c_k)$, since $\mathrm{KL}(q_i \| \delta(c - c_k)) = +\infty$ for any non-degenerate $q_i$ (cf.\ the absolute-continuity discussion at Eq.~\eqref{eq:dirac_kl}). We therefore define environmental agents with finite sensory precision and recover the standard active-inference identification in the small-precision limit. For each observation $o_k$ associated with the noumenal location $c_k$, let
 \begin{align}
@@ -1516,11 +1516,11 @@ Gauge frame $\phi_i$ & Molecular rotation & $\sim 10^{-9}$ s \\
 The analogy to molecular physics is instructive. Just as electrons respond rapidly to nuclear motion while nuclei move slowly on massive inertial timescales, beliefs respond rapidly to observations while priors evolve slowly as accumulated statistical knowledge. The gauge frames play a role analogous to overall molecular orientation - rarely reconsidered, changing only when forced by persistent environmental pressure.
 
 %==============================================================================
-\section{Mass from Statistical Precision}
+\section{Statistical Precision as Configuration-Space Stiffness: A Mass Analogy}
 \label{sec:mass}
 %==============================================================================
 
-The framework presented in Section~\ref{sec:framework} defines a variational free energy $\mathcal{F}$ that serves as the potential for agent dynamics. We now investigate the second variation (Hessian) of $\mathcal{F}$, which defines a configuration-space metric on belief space. We show that this metric's spectrum scales inversely with statistical precision, giving an empirically observable mass-like scaling $\omega^2 \propto m_{\text{eff}}^{-1}$ in the isolated-agent harmonic limit.
+The framework presented in Section~\ref{sec:framework} defines a variational free energy $\mathcal{F}$ that serves as the potential for agent dynamics. We now investigate the second variation (Hessian) of $\mathcal{F}$, which defines a stiffness tensor on belief configuration space. We show that this tensor's spectrum scales inversely with statistical precision, giving an empirically observable mass-like scaling $\omega^2 \propto m_{\text{eff}}^{-1}$ in the isolated-agent harmonic limit, once the kinetic-metric postulate of Section~\ref{sec:velocity_quadratic} is in place. The construction is best read as a precision-induced configuration-space metric and a Newtonian-shaped harmonic analogy under that postulate, not as a derivation of physical inertial mass from statistical precision; physical mass requires a kinetic term, time parameterization, units, and a physical action principle that we do not establish here.
 
 \paragraph{What the Hessian gives, and what is added.} It is worth being explicit about which object the precision $\Sigma_p^{-1}$ plays in the harmonic-oscillator analogy. For a Lagrangian $L = \tfrac12 m \dot{x}^2 - \tfrac12 k x^2$, the dispersion is $\omega^2 = k/m$, so the Hessian of the \emph{potential} gives the stiffness $k$ and the kinetic-metric coefficient gives the mass $m$. The Hessian of $\mathcal{F}$ that we derive in this section is therefore, in the first instance, a \emph{stiffness} on belief configuration space, not a mass. The identification of $\Sigma_p^{-1}$ with an effective mass requires a separate kinetic-metric postulate: we take the kinetic form on belief velocities to be $\tfrac12 \dot{\mu}^\top M_{\mu\mu} \dot{\mu}$ with the same $M_{\mu\mu} = \Sigma_p^{-1}$ (Section~\ref{sec:velocity_quadratic} below). Under this postulate the precision plays both roles, and the empirical scaling $\omega^2 \propto 1/m_{\text{eff}}$ (Section~\ref{sec:mass}) reflects the postulated kinetic structure as well as the Hessian. We do \emph{not} claim to derive the kinetic structure from $\mathcal{F}$ alone: no explicit Lagrangian $L = T - V$ is constructed from first principles, no Euler--Lagrange equations are derived, and the Newtonian-shaped equation of motion $M\ddot\mu = -\nabla V$ is obtained empirically once the kinetic-metric postulate is in place. The asymmetric-attention case explicitly lacks a conservative-Hamiltonian reading (Section~\ref{sec:mass_block_caveats} below). The section is best read as a second-variation analysis plus a kinetic postulate, whose empirical scaling matches Newtonian phenomenology in a controlled limit, not as a derivation of mechanics from information geometry. We work in the quasi-static approximation where prior parameters $(\bar{\mu}_i, \bar{\Sigma}_i)$ evolve slowly relative to beliefs $(\mu_i, \Sigma_i)$.
 
@@ -1686,7 +1686,7 @@ This vanishes at consensus ($\mu_i = \tilde{\mu}_k$):
 \label{eq:cross_block}
 \end{equation}
 
-\subsection{Physical Interpretation: Mass as Precision (within the framework)}
+\subsection{Within-Framework Interpretation: Stiffness as Precision (Mass Analogy)}
 
 Throughout this subsection, the identification of the Hessian sector $[M_{\mu\mu}]$ with an "effective mass" is interpretive within the framework rather than a derivation of physical inertial mass. The construction in Section~\ref{sec:mass} computes the second variation of the variational free energy at the consensus point and reads it as a configuration-space metric on belief space; the identification with mass relies on the formal analogy with the second-order expansion of a classical potential at a minimum, where $\omega^2 = K/m$ for a harmonic oscillator. The effective mass we obtain has dimensions inherited from $\Sigma^{-1}$ (dimensionless on the framework's representational space) rather than the kilogram dimension of physical mass; bridging the two requires the consensus-label hypothesis of Section~\ref{sec:phenomenological_interpretation}. With those caveats, the precision-as-mass reading is a useful within-framework summary of the second-variation structure.
 
@@ -1697,7 +1697,7 @@ M_i = \underbrace{\bar{\Lambda}_{p_i}}_{\text{bare mass}} + \underbrace{\sum_k \
 \end{equation}
 The bare mass $\bar{\Lambda}_{p_i}$ provides inertia against deviation from the cross-scale prior shadow (the actual world-model lives in the slow-channel pair $(s_i, r_i)$). The incoming relational mass captures inertia from being pulled by neighbors. The outgoing relational mass represents inertia from pulling neighbors (recoil). The sensory mass grounds the agent in observations.
 
-A macroscopic object maintains extraordinarily precise self-localization: $\bar{\Sigma}_{\mathrm{rock}} \approx \epsilon I$ with $\epsilon \ll 1$ a small dimensionless precision (we make no claim that $\epsilon$ corresponds to specific physical units; cf.\ the dimensional caveat in Section~\ref{sec:scope_limitations}) yields a large effective mass $M_{\mathrm{rock}} \sim \epsilon^{-1}$ in the Newtonian-analogy reading of Section~\ref{sec:mass}. Rocks are certain, thus exhibit large second-variation rigidity, thus are hard to move under the dynamics. Conversely, a quantum particle in spatial superposition has larger position uncertainty, lower precision, and a smaller effective mass.
+A macroscopic object maintains extraordinarily precise self-localization: $\bar{\Sigma}_{\mathrm{rock}} \approx \epsilon I$ with $\epsilon \ll 1$ a small dimensionless precision (we make no claim that $\epsilon$ corresponds to specific physical units; cf.\ the dimensional caveat in Section~\ref{sec:scope_limitations}) yields a large effective stiffness $M_{\mathrm{rock}} \sim \epsilon^{-1}$ in the Newtonian-analogy reading of Section~\ref{sec:mass}. Rocks are certain, thus exhibit large second-variation rigidity, thus are hard to move under the dynamics. We do not extend this analogy to quantum-mechanical scenarios: spatial delocalization of a quantum particle does not imply lower inertial mass in standard quantum mechanics, and the framework's effective mass is a configuration-space stiffness that we are not equating with physical inertial mass here.
 
 \subsection{Velocity-Quadratic Metric Form}
 \label{sec:velocity_quadratic}
@@ -2868,7 +2868,7 @@ In the next section we extend the framework by showing that standard transformer
 \subsection{Transformer Architectures as the Zero-Dimensional Limit}
 \label{sec:transformers}
 
-We now show that standard dot-product attention is a degenerate limit of the construction. Two equivalent reductions are developed below: a per-token-frame route (Section~\ref{sec:untied_qk}) that retains $\Omega_{ij} = U_iU_j^{-1}$ non-trivially and produces untied query-key projections directly from the belief and frame fields without an externally inserted bilinear, and a trivial-frame route (Section~\ref{sec:dot_product_derivation}) exact under three explicit limits (isotropic covariances, trivial gauge transport $\Omega_{ij} = I$ in the shared-frame limit, and a learned shared query-key bilinear compatibility $M$ replacing the role of pairwise transport in the cross term). The resulting architecture is implemented and trained as a working language model, with full multi-seed scaling validation reported in Section~\ref{sec:scaling_validation} and the underlying construction developed in the companion paper~\cite{Dennis2025trans}.
+We now show that standard scaled dot-product attention is recovered as a gauge-fixed and isotropic-Gaussian limit of the construction, not derived uniquely from the gauge-theoretic framework. Two reductions are developed below: a per-token-frame route (Section~\ref{sec:untied_qk}) that retains $\Omega_{ij} = U_iU_j^{-1}$ non-trivially and produces untied query-key projections directly from the belief and frame fields, and a trivial-frame route (Section~\ref{sec:dot_product_derivation}) that takes three explicit limits (isotropic covariances, trivial gauge transport $\Omega_{ij} = I$ in the shared-frame limit, and a learned shared bilinear compatibility $M$ replacing pairwise transport in the cross term). Once a learned bilinear $M$ is introduced, factorisation $M = W_QW_K^\top$ into query-key maps is essentially algebraic; we therefore frame the result not as a derivation of $QK^\top$ attention from the gauge framework, but as a statement that standard attention is consistent with a broader gauge-covariant KL attention mechanism under these limits. The resulting architecture is implemented and trained as a working language model, with full multi-seed scaling validation reported in Section~\ref{sec:scaling_validation} and the underlying construction developed in the companion paper~\cite{Dennis2025trans}.
 
 \subsubsection{The Zero-Dimensional Limit and Gauge Fixing}
 
@@ -2997,7 +2997,7 @@ The remaining terms in Eq.~\eqref{eq:full_kl_general} fall into two groups under
 \paragraph{Identification with rotary positional structure.}
 The natural identification of the per-token frame $U_i$ with a real transformer architecture is the per-position rotational frame of rotary positional embeddings, in which $U_i \in \mathrm{O}(d_k)$ is a block-diagonal rotation depending on token position. In that case $U_i^{-1} = U_i^\top$ and the closure $\Sigma_j = U_j C U_j^\top$ holds automatically for any $C$ commuting with the rotation block structure. The carving in Eq.~\eqref{eq:gauge_qk} reduces to $Q_i = U_i^\top\mu_i$ and $K_j = U_j^\top\mu_j$, which is the rotation-modulated query-key projection used in rotary attention, with $\mu_i$ playing the role of the position-independent content vector. The trivial-frame specialisation $U_i = U$ for all $i$ removes the per-token positional variation; in that limit $\Omega_{ij} = I$ and the analysis of Section~\ref{sec:dot_product_derivation} below applies, with the learned bilinear $M$ replacing the structural role played by per-token frame variation.
 
-\subsubsection{Derivation of Dot-Product Attention}
+\subsubsection{Recovery of Dot-Product Attention as a Gauge-Fixed Limit}
 \label{sec:dot_product_derivation}
 
 \paragraph{Expanding the KL Divergence.}
@@ -4256,10 +4256,10 @@ To obtain the standard form, we define normalized alignment weights
 \end{equation}
 These weights have a clear interpretation: $\beta_{ij}$ measures the strength of belief alignment between agents $i$ and $j$, while $\gamma_{ij}$ measures model alignment strength. In the limit $\beta_{ij} \to \infty$ with fixed $\gamma_{ij}$, agents' beliefs are forced to perfect agreement after transport, while their models may still differ. Conversely, $\gamma_{ij} = 0$ decouples model alignment entirely. In all subsequent equations we take $\tau$ to be independent of each agent, a constant global value which we set to 1.
 
-\section*{Conditional Uniqueness of the Forward KL Divergence via Variational Duality}
+\section*{Conditional Representation Theorem for the Forward KL Divergence via Variational Duality}
 \label{app:conditional_uniqueness}
 
-This appendix develops, in the present notation, the conditional-uniqueness theorem from the supplementary treatment of the gauge-theoretic transformer companion paper~\cite{Dennis2025trans}. It establishes that, within a clearly delimited class of f-divergences, the forward KL divergence used throughout the main text is the unique divergence consistent with three jointly required properties: closed-form Gibbs-type belief updates, dual interpretation of the attention weights via the envelope theorem, and linear coupling preserving the softmax form.
+This appendix develops, in the present notation, the conditional representation theorem from the supplementary treatment of the gauge-theoretic transformer companion paper~\cite{Dennis2025trans}. The result is a representation theorem rather than an unconditional uniqueness theorem: under a richness assumption on the family of attainable likelihood ratios, together with three structural assumptions on the divergence (locality and $f$-divergence form, linear coupling, and exponential-family closure of the minimiser), the forward KL divergence used throughout the main text is the only $f$-divergence in the prescribed class consistent with closed-form Gibbs-type belief updates, the dual interpretation of attention weights via the envelope theorem, and linear coupling preserving the softmax form. Without the richness assumption the term-by-term comparison of generators does not extend to a functional identity, so the conclusion is a representation result conditional on richness, not a universal uniqueness statement.
 
 \paragraph{Intuition.}
 Why must the divergence measuring inter-agent communication cost be the forward KL, and not some other statistical distance? The answer emerges from the interplay of three requirements that any well-behaved multi-agent variational system must satisfy simultaneously. First, we want each agent's updated belief $q_i^*$ to remain a tractable exponential-family distribution (i.e.\ a Gaussian), so that the belief update has a closed-form Boltzmann/Gibbs structure. Second, the attention weights $\beta_{ij}$ should act as proper dual variables: the marginal cost of attending to neighbor $j$ should equal the divergence between the agent's belief and that neighbor's signal, consistent with the envelope theorem. Third, the divergence should be local and enter the free energy linearly in $\beta_{ij}$, preserving the softmax form of attention.
@@ -4350,9 +4350,9 @@ At the stationary value $q_i^*$, the envelope theorem implies
 \end{equation}
 such that the cost of increasing attention to $j$ equals the forward KL divergence between the updated belief $q_i^*$ and the transported neighbour $\Omega_{ij} q_j$. This identifies the attention cost with the KL.
 
-\subsection*{Conditional Uniqueness Theorem}
+\subsection*{Conditional Representation Theorem}
 
-\begin{theorem}\label{thm:uniqueness_app}
+\begin{theorem}[Conditional representation]\label{thm:uniqueness_app}
 Let\/ $\mathcal{D}(q,p)$ be a convex $f$-divergence of the form
 \[
 \mathcal{D}(q,p)
@@ -4427,7 +4427,7 @@ f(t) = t\log t - t + 1,
 which is the generator of $D_{\mathrm{KL}}(q\|p)$. \hfill $\square$
 
 \subsection*{Dual Cost Identification}
-Having established $D_{\mathrm{KL}}$ is the unique divergence, the envelope theorem applied to the $\beta_{ij}$ optimization confirms that the marginal attention cost is
+Conditional on the richness assumption above, $D_{\mathrm{KL}}$ is the unique $f$-divergence in the prescribed class that produces the geometric-mean stationarity~\eqref{eq:geometric_mean_target_app}. Granting that representation, the envelope theorem applied to the $\beta_{ij}$ optimization confirms that the marginal attention cost is
 \begin{equation}
 C_{ij} \equiv \frac{\partial F_i}{\partial\beta_{ij}}\bigg|_{q_i^*}
 = D_{\mathrm{KL}}(q_i^*\|\Omega_{ij}q_j),
