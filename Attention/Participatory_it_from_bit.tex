@@ -1406,7 +1406,7 @@ Wheeler's slogan that physical "it" derives from informational "bit"~\cite{Wheel
 Classical Mechanics & $S = \int L(\mathbf{q}, \dot{\mathbf{q}}, t)  dt$ & $\delta S = 0$ \\
 General Relativity & $S = \int R \sqrt{|g|}  d^4x$ & $\delta S = 0$ \\
 Gauge Theory & $S = -\frac{1}{4}\int F_{\mu\nu}F^{\mu\nu}  d^4x$ & $\delta S = 0$ \\
-\textbf{Our Framework} & $\mathcal{F}[\{q\}, \{p\}, \{\phi\}]$ (Eq.~\ref{eq:free_energy_functional_final}) & $\delta \mathcal{F} = 0$ (natural gradient flow) \\
+\textbf{Our Framework} & $\mathcal{F}[\{q\}, \{p\}, \{\phi\}]$ (Eq.~\ref{eq:free_energy_functional_final}) & $\delta \mathcal{F} = 0$ (Fisher-Rao on $(\mu,\Sigma)$; Lie-group natural gradient on $G$) \\
 \hline
 \end{tabular}
 \end{table}
@@ -1489,7 +1489,7 @@ Gauge frames $\phi_i(c)$ may evolve to minimize free energy with respect to fram
 
 although they are theoretically interesting and rich.
 
-Gradient descent on frames follows $\partial \phi_i/\partial \tau = -\eta_\phi  \nabla_{\phi_i} \mathcal{F}_{\text{frame}}$ with learning rate $\eta_\phi \ll \eta_s \ll \eta_q$, corresponding to slow updates on coordinate system recalibration timescales. Agents gradually adjust their internal reference frames to minimize the effort of maintaining coordination with other agents.
+Gauge frames evolve under the Lie-group natural-gradient flow $\dot U_i = -\eta_\phi U_i \tilde{\nabla}_{\phi_i}\mathcal{F}_{\text{frame}}$ (Eq.~\ref{eq:gauge_natural_gradient}) with learning rate $\eta_\phi \ll \eta_s \ll \eta_q$, corresponding to slow updates on coordinate system recalibration timescales. Agents gradually adjust their internal reference frames to minimize the effort of maintaining coordination with other agents. The chart-coordinate first-order form $\partial\phi_i/\partial\tau = -\eta_\phi \tilde{\nabla}_{\phi_i}\mathcal{F}_{\text{frame}}$ in the parameterisation $U_i = \exp(\phi_i)$ is the implementation specialisation discussed below.
 
 \subsubsection{Timescale Hierarchy and Adiabatic Approximation}
 
@@ -2037,16 +2037,42 @@ This block structure enables efficient computation. For mean updates, the natura
 
 \subsubsection{Gauge-Covariant Update Equations}
 
-The complete system evolves via natural gradient flow on the product manifold:
+The complete system evolves via natural-gradient flow on the product manifold of belief states and gauge frames. The canonical form combines the Fisher-Rao natural gradient on the Gaussian sector with a Lie-group natural gradient on the gauge-frame sector, written at the group level with a right-trivialised retraction:
 \begin{align}
-\frac{d\mu_i}{dt} &= -\eta_\mu  \tilde{\nabla}_\mu \mathcal{F} \\
-\frac{d\Sigma_i}{dt} &= -\eta_\Sigma  \tilde{\nabla}_\Sigma \mathcal{F} = -2\eta_\Sigma  \Sigma_i (\nabla_\Sigma \mathcal{F}) \Sigma_i \\
-\frac{d\phi_i}{dt} &= -\eta_\phi  \nabla_\phi \mathcal{F},
+\frac{d\mu_i}{dt} &= -\eta_\mu \tilde{\nabla}_\mu \mathcal{F}, \\
+\frac{d\Sigma_i}{dt} &= -\eta_\Sigma \tilde{\nabla}_\Sigma \mathcal{F} = -2\eta_\Sigma \Sigma_i (\nabla_\Sigma \mathcal{F}) \Sigma_i, \\
+\frac{dU_i}{dt} &= -\eta_\phi U_i \tilde{\nabla}_{\phi_i} \mathcal{F},
+\label{eq:gauge_natural_gradient}
 \end{align}
+where $\eta_\mu, \eta_\Sigma, \eta_\phi$ are learning rates satisfying the timescale hierarchy discussed previously and the gauge-frame natural gradient
+\begin{equation}
+\tilde{\nabla}_{\phi_i} \mathcal{F} := \mathcal{G}_\kappa^{-1}(\phi_i) \nabla_{\phi_i} \mathcal{F}.
+\label{eq:gauge_natural_gradient_def}
+\end{equation}
+is the parameter-space Euclidean gradient $\nabla_{\phi_i}\mathcal{F}$ preconditioned by the inverse of an invariant inner product $\mathcal{G}_\kappa$ on $\mathfrak{g}$. Two natural choices of $\mathcal{G}_\kappa$ are available. The Killing form $\kappa(X,Y) = c_G \mathrm{tr}(XY) + c'_G \mathrm{tr}(X)\mathrm{tr}(Y)$ (with $c_G, c'_G$ determined by the structure constants of $G$) is bi-invariant and provides a closed-form preconditioner that is non-degenerate for compact semisimple groups; for $\mathfrak{so}(K)$ with $K > 2$ the Killing form is $B(X,Y) = (K-2)\mathrm{tr}(XY)$, which restricted to skew-symmetric matrices is proportional to the standard positive-definite inner product $-\mathrm{tr}(XY)$ on the compact form, so the Killing-form natural gradient on $\mathfrak{so}(K)$ recovers the Frobenius natural gradient up to a scale factor. For non-compact $G$, the Killing form is indefinite and the pullback of a Gram inner product through $d\exp$,
+\begin{equation}
+\mathcal{G}_{ab}(\phi) = \langle \Psi(\mathrm{ad}_\phi)T_a, \Psi(\mathrm{ad}_\phi)T_b \rangle_G,
+\qquad
+\Psi(z) = \frac{e^z - 1}{z},
+\label{eq:pullback_metric}
+\end{equation}
+where $\{T_a\}$ is a basis of $\mathfrak{g}$ and $\mathrm{ad}_\phi(X) = [\phi, X]$, provides a position-dependent right-invariant metric that is positive definite for any choice of inner product $\langle\cdot,\cdot\rangle_G$ on $\mathfrak{g}$. The companion gauge-theoretic transformer paper~\cite{Dennis2025trans} develops both options together with a Cartan-dampened intermediate form and an isotropic norm-clipping reduction. The discrete-time analogue of Eq.~\eqref{eq:gauge_natural_gradient} is the group-level retraction
+\begin{equation}
+U_i^{t+1} = U_i^t \exp\big(-\eta_\phi \tilde{\nabla}_{\phi_i^t} \mathcal{F}\big),
+\label{eq:gauge_group_retraction}
+\end{equation}
+which preserves $U_i \in G$ exactly at every step.
 
-where $\eta_\mu, \eta_\Sigma, \eta_\phi$ are learning rates satisfying the timescale hierarchy discussed previously. The gauge covariance of these updates is essential for maintaining consistency. Under gauge transformation $g \in G$, covariances transform as $\Sigma_i \to \rho(g) \Sigma_i \rho(g)^\top$. The natural gradient update transforms covariantly as $\Sigma_i (\nabla_\Sigma \mathcal{F}) \Sigma_i \to \rho(g)[\Sigma_i (\nabla_\Sigma \mathcal{F}) \Sigma_i]\rho(g)^\top$, ensuring that dynamics respect gauge symmetry.
+The chart-coordinate update obtained by writing $U_i = \exp(\phi_i)$ and reading the $\phi$-component of Eq.~\eqref{eq:gauge_natural_gradient} is
+\begin{equation}
+\frac{d\phi_i}{dt} = -\eta_\phi \tilde{\nabla}_{\phi_i} \mathcal{F} + O(\|\eta_\phi \tilde{\nabla}_{\phi_i}\mathcal{F}\|^2).
+\label{eq:phi_chart_approx}
+\end{equation}
+where the higher-order term is the Baker-Campbell-Hausdorff correction to the additive Lie-algebra step. Truncating to first order recovers the Euclidean-in-$\mathfrak{g}$ form $\dot{\phi}_i = -\eta_\phi \tilde{\nabla}_{\phi_i}\mathcal{F}$ that has been written in earlier sections of this manuscript and is implemented in the working code; the chart-coordinate truncation is exact in the abelian sector and is a first-order approximation otherwise. The canonical theoretical update is the group-level form Eq.~\eqref{eq:gauge_natural_gradient}-\eqref{eq:gauge_group_retraction}, with the chart-coordinate truncation serving as the implementation specialisation. This restores symmetry between the gauge-frame and Gaussian sectors: each sector evolves under a natural-gradient flow on its own homogeneous space, with the appropriate invariant metric supplying the preconditioner.
 
-These equations define a flow on the product manifold $\mathcal{M} = (\mathbb{R}^K \times \mathbb{S}^+_K \times \mathfrak{g})^N$ where $N$ is the number of agents, $\mathbb{R}^K$ is the flat mean parameter space, $\mathbb{S}^+_K$ is the curved covariance parameter space, and $\mathfrak{g} = \mathfrak{so}(3)$ is the gauge frame Lie algebra. This geometric structure ensures well-defined, coordinate-independent dynamics throughout the system's evolution, maintaining both statistical manifold structure and gauge symmetry.
+The gauge covariance of these updates is essential for maintaining consistency. Under the gauge transformation $g \in G$ acting as $U_i \mapsto U_i g$ (Action (a) of Section~\ref{sec:meta_agent_rg}) covariances transform as $\Sigma_i \to \rho(g) \Sigma_i \rho(g)^\top$ and the Killing-form preconditioner $\mathcal{G}_\kappa^{-1}$ is invariant by bi-invariance of $\kappa$, so $\tilde{\nabla}_{\phi_i}\mathcal{F}$ transforms in the adjoint representation and the right-trivialised flow $\dot U_i = -\eta_\phi U_i \tilde{\nabla}_{\phi_i}\mathcal{F}$ is gauge-equivariant by construction. The Gaussian-sector natural-gradient update transforms covariantly as $\Sigma_i (\nabla_\Sigma \mathcal{F}) \Sigma_i \to \rho(g)[\Sigma_i (\nabla_\Sigma \mathcal{F}) \Sigma_i]\rho(g)^\top$, ensuring that dynamics respect gauge symmetry.
+
+These equations define a natural-gradient flow on the product manifold $\mathcal{M} = (\mathbb{R}^K \times \mathbb{S}^+_K \times G)^N$ where $N$ is the number of agents, $\mathbb{R}^K$ is the flat mean parameter space, $\mathbb{S}^+_K$ is the curved covariance parameter space, and $G$ is the gauge group (with $G = \mathrm{SO}(3)$ in the simulations reported here). This geometric structure ensures well-defined, coordinate-independent dynamics throughout the system's evolution, maintaining both statistical manifold structure and gauge symmetry.
 
 \subsection{It From Bit: The Pullback Construction}
 \label{sec:pullback}
@@ -2458,7 +2484,7 @@ We identify $\mathrm{tr}(\mathcal{M})$ with the effective mass quantifying belie
 
 This quantity is mathematically analogous to energy dissipation in physical systems. Systems naturally evolve toward lower free energy states, just as physical systems evolve toward lower potential energy configurations. The free energy functional plays a role similar to a Hamiltonian, with extremal trajectories corresponding to natural evolution. However, we have not established that $\mathcal{F}$ has energy dimensions, derived thermodynamic relations, or connected to measured energies of physical systems.
 
-\textbf{Action principle structure.} The entire framework can be cast as a variational principle: agents follow trajectories that extremize the free energy functional $\mathcal{F}[q,p,\phi] = \int_{\mathcal{C}} [\mathrm{KL}(q \| p) + \text{coupling terms} + \text{regularizers}] dx$. This is mathematically analogous to Hamilton's principle in classical mechanics, where physical systems follow trajectories extremizing the action integral. The Euler-Lagrange equations from $\delta \mathcal{F} = 0$ become our natural gradient flow equations.
+\textbf{Action principle structure.} The entire framework can be cast as a variational principle: agents follow trajectories that extremize the free energy functional $\mathcal{F}[q,p,\phi] = \int_{\mathcal{C}} [\mathrm{KL}(q \| p) + \text{coupling terms} + \text{regularizers}] dx$. This is mathematically analogous to Hamilton's principle in classical mechanics, where physical systems follow trajectories extremizing the action integral. The Euler-Lagrange equations from $\delta \mathcal{F} = 0$ become our natural-gradient flow equations: Fisher-Rao natural gradient on the Gaussian sector $(\mu, \Sigma)$ and Lie-group natural gradient on the gauge-frame sector $G$, the latter applied via the right-trivialised group retraction of Eq.~\ref{eq:gauge_group_retraction}.
 
 This suggests that variational principles, rather than being unique to physics, represent a general feature of optimal information processing. Physical trajectories extremize action; informational agents extremize free energy. Both emerge from the same mathematical structure. This aligns with Wheeler's vision that physics and information processing share common foundations. However, we have not derived Lagrangians for specific physical systems, recovered Newton's laws quantitatively, connected to quantum path integrals beyond formal similarity, or predicted measurable physical quantities.
 
@@ -3839,14 +3865,14 @@ where $\mathrm{KL}^s_{ij} := \mathrm{KL}(s_i \| \tilde{\Omega}_{ij}[s_j])$. The 
 
 \subsection*{Complete Update Equations}
 
-The gauge-covariant update scheme is:
+The gauge-covariant update scheme uses a Fisher-Rao natural-gradient step on the Gaussian sector and a right-trivialised group retraction on the gauge sector (cf.\ Eqs.~\ref{eq:gauge_natural_gradient}--\ref{eq:gauge_group_retraction}):
 \begin{align}
 \mu_i^{t+1} &= \mu_i^t - \eta_\mu \Sigma_i^t \nabla_{\mu_i} S \\
 \Sigma_i^{t+1} &= \left(\Sigma_i^t\right)^{1/2} \exp\left[\left(\Sigma_i^t\right)^{-1/2}\left(-\eta_\Sigma \tilde{\nabla}_{\Sigma_i} S\right)\left(\Sigma_i^t\right)^{-1/2}\right] \left(\Sigma_i^t\right)^{1/2} \\
-\phi_i^{t+1} &= \phi_i^t - \eta_\phi \nabla_{\phi_i} S,
+U_i^{t+1} &= U_i^t \exp\left(-\eta_\phi \tilde{\nabla}_{\phi_i} S\right),
 \end{align}
 
-where learning rates satisfy timescale separation $\eta_\mu : \eta_s : \eta_\phi \sim 1 : \epsilon : \epsilon^2$ with $\epsilon \ll 1$ (the canonical slow primitive is the generative model $s$; cross-scale shadows $p, r$ inherit their effective rates).
+where $\tilde{\nabla}_{\phi_i} S = \mathcal{G}_\kappa^{-1}(\phi_i)\nabla_{\phi_i} S$ is the Lie-group natural gradient defined in Eq.~\ref{eq:gauge_natural_gradient_def} and the learning rates satisfy timescale separation $\eta_\mu : \eta_s : \eta_\phi \sim 1 : \epsilon : \epsilon^2$ with $\epsilon \ll 1$ (the canonical slow primitive is the generative model $s$; cross-scale shadows $p, r$ inherit their effective rates). The exponential map $\exp : \mathfrak{g} \to G$ in the third line is the group-level retraction, which preserves $U_i \in G$ exactly. The chart-coordinate first-order specialisation $\phi_i^{t+1} = \phi_i^t - \eta_\phi \tilde{\nabla}_{\phi_i} S$ used in the working code is the Baker-Campbell-Hausdorff truncation of the group retraction in the parameterisation $U_i = \exp(\phi_i)$ and is exact in the abelian sector.
 
 \subsection*{Computational Complexity}
 
@@ -3864,7 +3890,7 @@ Total complexity: $O(N^2 K^3)$ per step, dominated by pairwise coupling.
 
 \textbf{Positive-Definiteness:} The exponential map retraction $\mathcal{R}_{\Sigma}(\Delta)$ maps to $\mathcal{S}_{++}^K$ for any symmetric $\Delta$, guaranteeing $\Sigma_i \succ 0$ throughout optimization.
 
-\textbf{Gauge Orbit Preservation:} Under simultaneous transformation $\mu_i \mapsto g\mu_i$, $\Sigma_i \mapsto g\Sigma_i g^T$, $\phi_i \mapsto \phi_i + \xi$ for all $i$, the gradients transform covariantly and updates preserve gauge invariance of the free energy functional.
+\textbf{Gauge Orbit Preservation:} Under the global diagonal right-translation $U_i \mapsto U_i g$ for a single $g \in G$ shared by all agents (Action~(a) of Section~\ref{sec:meta_agent_rg}), the link variables $\Omega_{ij} = U_iU_j^{-1} \mapsto U_i g g^{-1} U_j^{-1} = \Omega_{ij}$ are pointwise invariant and the natural-gradient updates of $(\mu_i, \Sigma_i, \phi_i)$ transform covariantly so as to preserve the gauge invariance of the free energy functional. The corresponding action on the Lie-algebra chart $\phi_i$ is given to first order in $\xi = \log g$ by the additive shift $\phi_i \mapsto \phi_i + \xi$, with Baker-Campbell-Hausdorff corrections of order $\tfrac{1}{2}[\phi_i, \xi]$ and higher required at finite $\xi$ when $\xi$ does not commute with $\phi_i$; the additive form is exact only in the abelian sector. The exact group-level statement $U_i \mapsto U_i g$ is the one that should be used to verify gauge orbit preservation in the non-abelian setting.
 
 \textbf{Gradient Verification:} All analytical gradients verified against:
 \begin{itemize}
