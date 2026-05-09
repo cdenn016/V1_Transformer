@@ -51,7 +51,7 @@
 \begin{abstract}
 We develop a gauge-covariant variational-inference framework on a principal $G$-bundle in which agents are smooth local sections carrying beliefs $q(c)$, priors $p(c)$, and gauge frames $\phi(c)$. Inter-agent interaction is mediated by transport operators $\Omega_{ij} = e^{\phi_i} e^{-\phi_j}$, and coupling weights arise from an entropy-regularized KL-consensus problem whose solution is a softmax over Kullback--Leibler divergences. Dynamics follow natural-gradient descent on a global variational free energy.
 
-We prove that, under a zero-dimensional isotropic-Gaussian limit, the KL-consensus weights reduce to scaled dot-product attention up to standard normalization and bias assumptions (Section~\ref{sec:transformers}). We implement the framework in two settings: (i) a working language model with no learned $W_Q/W_K/W_V$ projections, no MLPs, and no pointwise activations, trained on WikiText-103 at an iso-token budget of $122.9$M tokens across $K \in [10,120]$ and three seeds, fitting $\mathrm{PPL} = aK^b + c$ with $b \approx -1.05$ (95\% bootstrap CI $[-1.10, -1.00]$, $R^2 = 1.000$) on the per-$K$ seed means in an undertrained regime (Section~\ref{sec:scaling_validation}); and (ii) toy multi-agent simulations exhibiting threshold-based meta-agent formation (Section~\ref{sec:participatory}).
+We show that standard scaled dot-product attention is recovered as a gauge-fixed and isotropic-Gaussian limit of the KL-consensus construction, up to a separately introduced learned bilinear compatibility $M$ and the standard normalisation and bias assumptions; the result is a recovery in a limit, not a derivation of attention from gauge theory alone (Section~\ref{sec:transformers}). We implement the framework in two settings: (i) a working language model with no learned $W_Q/W_K/W_V$ projections, no MLPs, and no pointwise activations, trained on WikiText-103 at an iso-token budget of $122.9$M tokens (approximately $1.19$ epochs under GPT-2 BPE tokenisation) across $K \in [10,120]$ in an undertrained regime, with three seeds per $K$ except $K = 90$ which has two; the per-$K$ seed-mean fit $\mathrm{PPL} = aK^b + c$ gives $b \approx -1.05$ (95\% bootstrap CI $[-1.10, -1.00]$, $R^2 \approx 0.9998$ over a fit dominated by the floor parameter $c$), and the $b = -1$ restricted model fits the same data at $R^2 \approx 0.9996$, so the exponent is statistically indistinguishable from $-1$ within the present sweep; the achieved test PPL of $\approx 73$ at $K = 120$ is well above published WikiText-103 multi-layer baselines of PPL $\sim 18$--$25$, and the exponent describes scaling within this single-layer architecture rather than competition with state-of-the-art language modelling (Section~\ref{sec:scaling_validation}); and (ii) a single-seed multi-agent simulation with the slow subsystem frozen ($\gamma_{ij} = 0$, fast-subsystem-only) exhibiting threshold-based meta-agent formation across hierarchical scales, with multi-seed reproducibility and the simulator code release deferred to a follow-up (Section~\ref{sec:participatory}).
 
 Separately, we outline speculative extensions: a pullback information-geometric construction for cognitive reference frames in the Lahav--Neemeh sense (Section~\ref{sec:lahav_convergence}); a meta-agent renormalization scheme whose continuous variational criterion is not yet empirically validated against the discrete detector (Section~\ref{sec:meta_agent_threshold}); and a 2D linearized $\mathrm{GL}(K, \mathbb{C})$ worked example yielding an $\mathrm{SO}(1,1)$-compatible indefinite pullback metric under an imposed imaginary temporal generator and a real-part projection (Section~\ref{sec:signature_resolution}). The four-dimensional nonlinear extension, dynamical selection of the imaginary generator, dimensional analysis between informational and physical units, and a rigorous quantum extension are open. We state these limitations explicitly in Section~\ref{sec:scope_limitations}.
 \end{abstract}
@@ -396,7 +396,7 @@ All results are supported by open-source implementations with comprehensive nume
 \node[sectionred!70!black, font=\scriptsize,
       fill=white, fill opacity=0.9, text opacity=1,
       inner sep=1.5pt, rounded corners=1pt, anchor=east]
-  at ($(Ghost)+(-0.55,0)$) {$\Omega_{ij}\,q_j$};
+  at ($(Ghost)+(-0.55,0)$) {$\Omega_{ij} q_j$};
 
 % Transport arrow: curved arc WITHIN the fiber on the RIGHT side,
 % from q_j(c*) down to the ghost near q_i(c*).
@@ -450,8 +450,8 @@ The transport operator
 $\Omega_{ij}(c^*) = \exp(\phi_i)\exp(-\phi_j)$
 (green arrow) acts within this fiber,
 rotating $q_j$ from $j$'s frame into $i$'s frame
-to produce $\Omega_{ij}\,q_j$ (dotted red ellipse).
-The attention cost $D_{\mathrm{KL}}(q_i \| \Omega_{ij}\,q_j)$
+to produce $\Omega_{ij} q_j$ (dotted red ellipse).
+The attention cost $D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$
 is then the divergence between same-frame distributions within a single fiber.
 For transformers ($\dim\mathcal{C} = 0$),
 all tokens share one base point, the neighborhoods collapse to a single point,
@@ -469,8 +469,6 @@ The base space $\mathcal{C}$ is a smooth $n$-dimensional manifold representing t
 \end{definition}
 
 \textbf{Conceptual point:} $\mathcal{C}$ is not physical spacetime. Within an agent's gauge frame, agent-frame-dependent space-and-time-like structures arise as induced geometries when agents pull back metrics from their belief fields (Section~\ref{sec:pullback}), conditional on the regulator caveats discussed in Section~\ref{sec:consensus_metric}. The base manifold is logically prior to any such induced geometry: it is the abstract domain of inquiry upon which informational structure will be built.
-
-For concreteness, consider several examples. In physics applications, $\mathcal{C}$ might be a configuration space $\mathbb{R}^n$ where agents maintain beliefs about particle positions. In directional sensing, $\mathcal{C} = S^2$ represents spherical directions about which agents have probabilistic beliefs. In language modeling (Section~\ref{sec:transformers}), $\mathcal{C}$ can be discrete - a sequence of token positions - with agents maintaining beliefs about vocabulary distributions at each position.
 
 We use local coordinates $c = (c^1, \ldots, c^n)$ on $\mathcal{C}$, though the manifold structure exists independently of coordinate choice.
 
@@ -599,8 +597,8 @@ An agent $\mathcal{A}^i$ at scale $s$ with support domain $\mathcal{U}_i \subset
 \begin{align}
 q_i &: \mathcal{U}_i \to \mathcal{E}_{\mathrm{state}}|_{\mathcal{U}_i}, &&\text{(belief, primitive)} \\
 s_i &: \mathcal{U}_i \to \mathcal{E}_{\mathrm{model}}|_{\mathcal{U}_i}, &&\text{(generative model, primitive)} \\
-p_i &= \Omega_{i,I}\big[q_I^{(s+1)}\big] \in \Gamma\!\left(\mathcal{E}_{\mathrm{state}}|_{\mathcal{U}_i}\right), &&\text{(prior, derived)} \\
-r_i &= \tilde\Omega_{i,I}\big[s_I^{(s+1)}\big] \in \Gamma\!\left(\mathcal{E}_{\mathrm{model}}|_{\mathcal{U}_i}\right), &&\text{(hyper-prior, derived)} \\
+p_i &= \Omega_{i,I}\big[q_I^{(s+1)}\big] \in \Gamma\left(\mathcal{E}_{\mathrm{state}}|_{\mathcal{U}_i}\right), &&\text{(prior, derived)} \\
+r_i &= \tilde\Omega_{i,I}\big[s_I^{(s+1)}\big] \in \Gamma\left(\mathcal{E}_{\mathrm{model}}|_{\mathcal{U}_i}\right), &&\text{(hyper-prior, derived)} \\
 \phi_i &: \mathcal{U}_i \to \mathfrak{g}, &&\text{(gauge frame field)}
 \end{align}
 where $\mathfrak{g} = \mathrm{Lie}(G)$ is the Lie algebra of the gauge group and $I$ indexes the level-$(s{+}1)$ meta-agent that envelopes agent $i$ as a constituent. The four statistical sections are organized as the variational hierarchy
@@ -1178,7 +1176,7 @@ Direct computation. The consecutive inverse--exponential pairs cancel identicall
 
 This result is a theorem of the architecture, not an approximation. For our parameterisation~\eqref{eq:transport_def}, the holonomy vanishes for every closed loop regardless of the learned gauge frames $\phi_i$. The gauge bundle is automatically flat: semantic transport from agent $i$ to agent $k$ is path-independent, in the sense that the direct route via $\Omega_{ik}$ and the indirect route via $\Omega_{ij}\Omega_{jk}$ yield identical results. Architectures with non-trivial curvature and holonomy require an edge-local connection $\delta_{ij}$ inserted between the vertex factors as in Section~\ref{sec:discrete_regime_ii}; such architectures exhibit \emph{path-dependent meaning transport}, where the route through intermediate agents affects the result, while preserving the standard lattice gauge transformation law $\Omega_{ij} \mapsto g_i \Omega_{ij} g_j^{-1}$ for vertex-local gauge actions. The cocycle structure of the present subsection is the special case $\delta_{ij} = 0$ of that more general construction; the simultaneous group-level transformation $U_i \mapsto U_i g$ for all $i$ with the same $g \in G$ is the global-diagonal subgroup of the local gauge action and continues to leave \eqref{eq:transport_def} invariant.
 
-The gauge covariance property is preserved on arbitrary base manifolds: under the simultaneous group-level gauge transformation $U_i(c) \mapsto U_i(c)\, g(c)$ for all $i$ with arbitrary $g: \mathcal{C} \to G$, the transport operators satisfy $\Omega_{ij}(c) \mapsto U_i(c)\, g(c)\, g(c)^{-1}\, U_j(c)^{-1} = U_i(c)\, U_j(c)^{-1} = \Omega_{ij}(c)$, remaining invariant. The Lie-algebra additive form $\phi_i \mapsto \phi_i + \xi$ realises this transformation only when $\xi$ commutes with the $\phi_i$ (so that $\exp(\phi_i + \xi) = \exp(\phi_i)\exp(\xi)$), and the additive form is therefore an abelian shorthand. The full non-abelian invariance is captured at the group level. This is the information-theoretic analog of general covariance.
+The gauge covariance property is preserved on arbitrary base manifolds: under the simultaneous group-level gauge transformation $U_i(c) \mapsto U_i(c) g(c)$ for all $i$ with arbitrary $g: \mathcal{C} \to G$, the transport operators satisfy $\Omega_{ij}(c) \mapsto U_i(c) g(c) g(c)^{-1} U_j(c)^{-1} = U_i(c) U_j(c)^{-1} = \Omega_{ij}(c)$, remaining invariant. The Lie-algebra additive form $\phi_i \mapsto \phi_i + \xi$ realises this transformation only when $\xi$ commutes with the $\phi_i$ (so that $\exp(\phi_i + \xi) = \exp(\phi_i)\exp(\xi)$), and the additive form is therefore an abelian shorthand. The full non-abelian invariance is captured at the group level. This is the information-theoretic analog of general covariance.
 
 \subsubsection{Base Priors and the Full Generative Model}
 
@@ -2329,7 +2327,7 @@ This approach has a critical flaw: the average depends on each agent's arbitrary
 A solution is to average over gauge orbits before spatial averaging. For a single agent, we propose the gauge-averaged metric
 
 \begin{equation}
-\langle G_i \rangle_{\mu\nu}(c) = \int_G \mathrm{d}g  G_{i,\mu\nu}\big(c;\; U_i \mapsto U_i \cdot g\big),
+\langle G_i \rangle_{\mu\nu}(c) = \int_G \mathrm{d}g  G_{i,\mu\nu}\big(c; U_i \mapsto U_i \cdot g\big),
 \end{equation}
 
 where the integral is intended over the gauge group $G$ with Haar measure $\mathrm{d}g$, replacing the Lie-algebra additive shorthand $\phi_i \to \phi_i + \xi$ (correct only in the abelian case, Section~\ref{sec:transport}). This construction has substantive limitations we wish to flag in place rather than gloss. For \emph{constant} $g$, the connection transforms as $A \to g^{-1}Ag$ and $\mathrm{tr}(A_\mu A_\nu)$ is already invariant by cyclicity of the trace; the Haar average over a single copy of $G$ is then either trivial or unnecessary, and does not by itself rescue the non-invariance of the horizontal block. The non-invariance disclosed in Section~\ref{sec:cognitive_reference_frames} concerns \emph{local} $g(c)$, under which the connection picks up an inhomogeneous Maurer--Cartan piece $A \to g^{-1}Ag + g^{-1}dg$, and an honest gauge-orbit average would have to integrate over all maps $g: \mathcal{C} \to G$, not over a single copy of $G$. That is an infinite-dimensional functional integral over a space of gauge-group-valued fields and requires a gauge fixing or a regulator to be well-defined; in general no finite gauge-orbit average over local $g$ exists without such a choice. The non-compact $\mathrm{SO}(1,3) \subset \mathrm{GL}(K, \mathbb{C})$ case carries the additional obstruction that the Haar measure is infinite even for constant $g$. We therefore retain the construction below as a heuristic for what gauge-invariant content the horizontal block could be reduced to under a chosen regulator, but explicitly do not claim it produces a finite, regulator-free gauge-invariant metric. Whether a regulated version of the construction yields a useful gauge-invariant ontology is open and is the natural follow-up to the present manuscript.
