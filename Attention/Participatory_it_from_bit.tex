@@ -1743,7 +1743,7 @@ For a compact gauge group ($G = \mathrm{SO}(N)$ in our simulations) with the bi-
 \subsubsection{Renormalization-group construction}
 \label{sec:meta_agent_rg}
 
-The free-energy improvement criterion~\eqref{eq:meta_agent_FE_criterion}, the variational barycenter~\eqref{eq:meta_agent_barycenter}, and the frame Karcher mean~\eqref{eq:meta_agent_frame_barycenter} can be embedded in a renormalization-group construction~\cite{Wilson1971, Cardy1996} that separates two distinct claims. The pushforward step is exact and structural: any measurable coarse-graining map admits a renormalized free energy through its pushforward measure, with partition function and coarse observables preserved by construction. The closure step is approximate and conditional: the exact renormalized free energy lies near the multi-agent functional class only under explicit hypotheses on cluster coherence, edge-marginal compatibility, gauge-group regularity, and timescale separation. We state the two claims separately so that the closure ansatz is not mistaken for a derivation of equivalence. The construction is finite-dimensional, on a finite grid approximation of $\mathcal{C}$; the continuum limit follows by mesh refinement under standard regularity assumptions. Each step below uses standard identities cited in place: the pushforward Radon--Nikodym form is the Boltzmann projection of a Gibbs measure under a measurable map~\cite{Cardy1996}; the saddle-point step is the Laplace approximation around the parent configuration~\cite{Cardy1996}; the Schur-complement effective metric is the standard adiabatic elimination on a block-decomposed quadratic form~\cite{HornJohnson2013}; and the equivariance of the Karcher frame and M-projection belief barycenters under the gauge action below follows because both are defined by minimising $G$-bi-invariant divergences, with which the diagonal pushforward commutes.
+The free-energy improvement criterion~\eqref{eq:meta_agent_FE_criterion}, the variational barycenter~\eqref{eq:meta_agent_barycenter}, and the frame Karcher mean~\eqref{eq:meta_agent_frame_barycenter} can be embedded in a renormalization-group construction~\cite{Wilson1971, Cardy1996} that separates two distinct claims. Theorem-level statements (partition-function preservation, semigroup composition, gauge covariance of the coarse-graining map, exact Gaussian closure under the linear-Gaussian flat-transport hypotheses, the closure-residual bound, and the detector-retention link) with their proofs are in Appendix~\ref{app:rigorous_rg}; the body below states the working forms with their hypotheses and points to the appendix where the rigorous version is needed. The pushforward step is exact and structural: any measurable coarse-graining map admits a renormalized free energy through its pushforward measure, with partition function and coarse observables preserved by construction. The closure step is approximate and conditional: the exact renormalized free energy lies near the multi-agent functional class only under explicit hypotheses on cluster coherence, edge-marginal compatibility, gauge-group regularity, and timescale separation. We state the two claims separately so that the closure ansatz is not mistaken for a derivation of equivalence. The construction is finite-dimensional, on a finite grid approximation of $\mathcal{C}$; the continuum limit follows by mesh refinement under standard regularity assumptions. Each step below uses standard identities cited in place: the pushforward Radon--Nikodym form is the Boltzmann projection of a Gibbs measure under a measurable map~\cite{Cardy1996}; the saddle-point step is the Laplace approximation around the parent configuration~\cite{Cardy1996}; the Schur-complement effective metric is the standard adiabatic elimination on a block-decomposed quadratic form~\cite{HornJohnson2013}; and the equivariance of the Karcher frame and M-projection belief barycenters under the gauge action below follows because both are defined by minimising $G$-bi-invariant divergences, with which the diagonal pushforward commutes.
 
 \paragraph{Exact pushforward RG.}
 Let $X_s = \{q_i, p_i, U_i, \chi_i\}_{i \in I_s}$ denote the microscopic state at scale $s$ and write the variational Gibbs measure as $d\mathbb{P}_s(X_s) = Z_s^{-1} \exp[-\mathcal{F}_s(X_s)/\tau] d\nu_s(X_s)$ with reference measure $\nu_s$ on the Gaussian parameters, masks, and gauge frames. For each admissible cluster $I \subset I_s$, defined as a connected component of the pairwise overlap graph, define the parent state $Y_I = (q_I, p_I, U_I, \chi_I)$ via the M-projection barycenter~\eqref{eq:meta_agent_barycenter}, the Karcher frame~\eqref{eq:meta_agent_frame_barycenter}, and the multi-child overlap mask $\chi_I(c) = \mathbb{1}\{\sum_{i \in I}\chi_i(c) \ge 2\}$. The cluster maps $\mathcal{R}_I : X_s \mapsto Y_I$ assemble into a global coarse-graining map $\mathcal{R}_s$. The exact renormalized free energy is the Radon--Nikodym derivative of the pushforward measure,
@@ -4314,6 +4314,153 @@ Under the natural assumptions of locality, linear coupling, and exponential-fami
 C_{ij}=D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)}
 \]
 is a necessary consequence of the variational and geometric structure underlying agent-agent coordination. By the $\mathrm{GL}(K)$ invariance theorem (Theorem~\ref{thm:glk_invariance}), the KL divergence is invariant under the full general linear group $\mathrm{GL}(K)$, which includes compact subgroups such as $\mathrm{SO}(N)$ and $\mathrm{SU}(N)$ and more.
+
+\section*{Rigorous Construction of the Renormalization-Group Cascade}
+\label{app:rigorous_rg}
+
+This appendix gives the rigorous backbone for the body subsection~\ref{sec:meta_agent_rg}. It separates three logically distinct claims that prior treatments tended to conflate: an exact pushforward RG step under any measurable gauge-covariant coarse-graining, a closure question on whether the exact renormalized free energy lies in the original multi-agent Gaussian KL functional class, and an emergence/retention rule that the threshold detector of Section~\ref{sec:meta_agent_threshold} is supposed to surrogate. The construction is finite-dimensional throughout; the continuum limit on $\mathcal{C}$ follows by mesh refinement under the regularity assumptions in Section~\ref{sec:framework}. The rigorous theorem-level statements are proved on a compact gauge group $G = \mathrm{SO}(K)$ with a bi-invariant Riemannian metric; the noncompact $\mathrm{GL}^+(K)$ case requires a gauge slice or Radon--Nikodym correction, as flagged in the body.
+
+\paragraph{State and reference measure.}
+Fix a finite grid $\Lambda_s \subset \mathcal{C}$ at scale $s$ and an index set $\mathcal{I}_s$ of microscopic agents. The scale-$s$ state is $X_s = \{x_i\}_{i \in \mathcal{I}_s}$ with $x_i = (q_i, p_i, U_i, \chi_i)$ where $q_i(c) = \mathcal{N}(\mu_i(c), \Sigma_i(c))$, $p_i(c) = \mathcal{N}(m_i(c), \Pi_i(c))$, $U_i(c) \in G$, and $\chi_i(c) \in \{0, 1\}$. Inter-agent transport is $\Omega_{ij} = U_i U_j^{-1}$ with $\Omega_{ij} q_j = \mathcal{N}(\Omega_{ij}\mu_j, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$, and similarly on the model fiber with possibly distinct representation. The microscopic free energy $\mathcal{F}_s : X_s \to \mathbb{R} \cup \{+\infty\}$ takes the multi-agent KL form of Section~\ref{sec:framework}, and the variational Gibbs measure is $d\mathbb{P}_s = Z_s^{-1}\exp[-\mathcal{F}_s/\tau] d\nu_s$, with reference measure $\nu_s$ assembled from Haar on frames, Lebesgue on means and masks, and a chosen measure on positive-definite covariances.
+
+\paragraph{Coarse-graining map.}
+A candidate parent cluster $I \subset \mathcal{I}_s$ satisfies $|I| \ge 2$, connected overlap subgraph, nonempty multi-child support $\chi_I(c) = \mathbf{1}\{\sum_{i \in I}\chi_i(c) \ge 2\}$, local frame coherence on a convex normal ball of $G$, and finite belief and model dispersions. The selected partition is $\mathcal{P}_s = \{I_1, \ldots, I_{N_{s+1}}\}$. For each $I$, the parent frame is the Riemannian center of mass
+\begin{equation}
+U_I(c) = \arg\min_{U \in G} \sum_{i \in I} w_i^I(c) d_G(U, U_i(c))^2,
+\label{eq:rg_app_karcher}
+\end{equation}
+locally unique on convex balls of radius below the injectivity radius~\cite{karcher1977riemannian}; with $G = \mathrm{SO}(K)$, $d_G(U, V)^2 = \|\log(U^{-1}V)\|_F^2$ under the bi-invariant metric. Child-to-parent transport is $\Omega_{Ii}(c) = U_I(c)U_i(c)^{-1}$. The parent belief is the forward-KL (M-projection) barycenter of the transported children,
+\begin{equation}
+q_I(c) = \arg\min_{q \in \mathcal{G}_K} \sum_{i \in I} w_i^I(c) \mathrm{KL}\big(\Omega_{Ii}q_i \| q\big),
+\end{equation}
+which by moment matching has $\mu_I = \sum_i w_i^I \widetilde{\mu}_i^I$ and
+\begin{equation}
+\Sigma_I = \sum_{i \in I} w_i^I\big[\widetilde{\Sigma}_i^I + (\widetilde{\mu}_i^I - \mu_I)(\widetilde{\mu}_i^I - \mu_I)^\top\big],
+\label{eq:rg_app_sigma_barycenter}
+\end{equation}
+with the second term the between-child dispersion that must be retained in the exact Gaussian barycenter; dropping it is a high-coherence approximation, not an identity. The parent model state $p_I$ is defined analogously. The coarse-graining map is $\mathcal{R}_s : X_s \mapsto \{Y_I = (q_I, p_I, U_I, \chi_I) : I \in \mathcal{P}_s\}$.
+
+\paragraph{Exact pushforward.}
+The body subsection states the exact pushforward identity~\eqref{eq:rg_exact_free_energy}. The structural content is recorded as two theorems.
+
+\begin{theorem}[Partition function and observable preservation]
+\label{thm:rg_pushforward}
+Let $\mathcal{R}_s : X_s \to X_{s+1}$ be measurable, and define $\mathbb{P}_{s+1} = (\mathcal{R}_s)_*\mathbb{P}_s$. Then $Z_{s+1} = Z_s$ and, for every bounded measurable parent observable $A : X_{s+1} \to \mathbb{R}$, $\mathbb{E}_{s+1}[A(Y)] = \mathbb{E}_s[A(\mathcal{R}_s(X))]$.
+\end{theorem}
+
+\begin{proof}
+By definition of pushforward, $\int A d\mathbb{P}_{s+1} = \int A \circ \mathcal{R}_s d\mathbb{P}_s$. Taking $A = 1$ gives partition-function preservation; the general statement is immediate.
+\end{proof}
+
+\begin{theorem}[Discrete semigroup composition]
+\label{thm:rg_semigroup}
+For the exact pushforward RG, $(\mathcal{R}_{s+1})_*(\mathcal{R}_s)_*\mathbb{P}_s = (\mathcal{R}_{s+1} \circ \mathcal{R}_s)_*\mathbb{P}_s$. Thus the RG transformations compose as a discrete semigroup.
+\end{theorem}
+
+\begin{proof}
+For any measurable $A \subset X_{s+2}$, $\big[(\mathcal{R}_{s+1})_*(\mathcal{R}_s)_*\mathbb{P}_s\big](A) = (\mathcal{R}_s)_*\mathbb{P}_s\big(\mathcal{R}_{s+1}^{-1}(A)\big) = \mathbb{P}_s\big(\mathcal{R}_s^{-1}(\mathcal{R}_{s+1}^{-1}(A))\big) = \mathbb{P}_s\big((\mathcal{R}_{s+1} \circ \mathcal{R}_s)^{-1}(A)\big) = (\mathcal{R}_{s+1} \circ \mathcal{R}_s)_*\mathbb{P}_s(A)$.
+\end{proof}
+
+If the partition $\mathcal{P}_s$ is selected adaptively by a threshold detector, the exact pushforward still exists whenever the selection rule is measurable; the map is then state-dependent and not a homogeneous one-parameter flow. Fixed-point analysis should accordingly be performed either on a frozen deterministic blocking rule or on the induced stochastic/adaptive RG map.
+
+\paragraph{Gauge covariance.}
+The two distinct gauge actions of the body, the global diagonal right-translation $U_i \mapsto U_i g$ that leaves $\Omega_{ij}$ invariant and the base-local diagonal action $U_i(c) \mapsto h(c) U_i(c)$, $q_i(c) \mapsto h(c)_\# q_i(c)$ that conjugates $\Omega_{ij}$ tensorially, are both compatible with $\mathcal{R}_s$.
+
+\begin{theorem}[Gauge covariance of $\mathcal{R}_s$]
+\label{thm:rg_covariance}
+Assume $G$ is compact with locally unique Karcher means, the weights $w_i^I$ are gauge-invariant functions of gauge-invariant quantities such as transported KL divergences and support masks, and the belief and model parent states are defined by forward-KL minimization after transporting children to the parent frame. Then $\mathcal{R}_s(h \cdot X_s) = h \cdot \mathcal{R}_s(X_s)$ for the base-local diagonal action.
+\end{theorem}
+
+\begin{proof}
+Bi-invariance gives $d_G(hU, hU_i) = d_G(U, U_i)$, so $U_I \mapsto hU_I$ minimizes the transformed Karcher objective. Child-to-parent transport transforms as $\Omega_{Ii} \mapsto h\Omega_{Ii}h^{-1}$, transported children transform by common pushforward, and the forward-KL barycenter is invariant under common invertible pushforward by $\mathrm{KL}(h_\# a \| h_\# b) = \mathrm{KL}(a \| b)$. Uniqueness in the Gaussian family transfers $q_I \mapsto h_\# q_I$ and $p_I \mapsto h_\# p_I$. The support mask is unchanged. Hence $\mathcal{R}_s$ commutes with the diagonal action.
+\end{proof}
+
+\paragraph{Closure ansatz and projection.}
+The exact $\mathcal{F}_{s+1}^{\mathrm{exact}}$ generally contains all interactions allowed by symmetry, including higher-order parent interactions, non-Gaussian terms, long-range couplings, and memory. Whether it lies in the multi-agent Gaussian KL functional class $\mathfrak{M} = \{\mathcal{F}_\theta : \theta \in \Theta\}$ is a separate claim. The projection back to $\mathfrak{M}$ is $\Pi_\mathfrak{M}(\mathcal{F}) = \arg\min_{\theta \in \Theta} \inf_{a \in \mathbb{R}}\|\mathcal{F} - \mathcal{F}_\theta - a\|_\mathcal{B}$, with closure residual $\varepsilon_{s+1}$ as in~\eqref{eq:rg_closure}; the projected RG map is $R_\mathfrak{M}(\theta_s) := \Pi_\mathfrak{M}(\mathcal{F}_{s+1}^{\mathrm{exact}})$.
+
+\paragraph{Exact closure in the linear-Gaussian regime.}
+Decompose the slow-fast variables of the body around the parent barycenter. Let $\xi$ denote internal disagreement modes constrained by $\sum_{i \in I} w_i^I \xi_i = 0$ and let $Y$ denote retained parent variables; expand the microscopic free energy as a block quadratic
+\begin{equation}
+\mathcal{F}_s(Y, \xi) = \mathcal{F}_0 + \tfrac{1}{2}\begin{bmatrix} Y - Y_0 \\ \xi \end{bmatrix}^\top \begin{bmatrix} A_{YY} & A_{Y\xi} \\ A_{\xi Y} & A_{\xi\xi} \end{bmatrix} \begin{bmatrix} Y - Y_0 \\ \xi \end{bmatrix},
+\end{equation}
+with $A_{\xi\xi}$ positive definite on the constrained internal subspace.
+
+\begin{theorem}[Exact Gaussian closure]
+\label{thm:rg_exact_closure}
+Under the compact-gauge, flat-transport, Gaussian-quadratic, positive-gap assumptions of the body subsection conditions~(i)--(v), the exact renormalized free energy remains in the Gaussian quadratic KL functional class up to additive constants and a $Y$-dependent log-determinant local potential. The renormalized quadratic form is the Schur complement
+\begin{equation}
+A_{\mathrm{eff}} = A_{YY} - A_{Y\xi}A_{\xi\xi}^{-1}A_{\xi Y},
+\label{eq:rg_app_schur_complement}
+\end{equation}
+and the Laplace integration yields
+\begin{equation}
+\mathcal{F}_{s+1}^{\mathrm{exact}}(Y) = \mathcal{F}_0 + \tfrac{1}{2}(Y - Y_0)^\top A_{\mathrm{eff}}(Y - Y_0) + \tfrac{\tau}{2}\log\det{}'A_{\xi\xi}(Y) + \mathrm{const}.
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+Internal Gaussian integration produces another quadratic form in $Y$ with Schur-complement matrix~\eqref{eq:rg_app_schur_complement}, plus the log-determinant of the constrained internal Hessian $A_{\xi\xi}$. A quadratic form in Gaussian natural parameters is equivalent to a Gaussian KL/free-energy term with renormalized precision and couplings, so the class closes when $A_{\xi\xi}$ is independent of $Y$ (the log-determinant is then an additive constant); when $A_{\xi\xi}$ depends smoothly on $Y$, the log-determinant contributes a smooth local parent potential.
+\end{proof}
+
+\paragraph{Anharmonic remainder.}
+Outside the exactly quadratic regime, expand around the internal saddle $\xi^*(Y) = -A_{\xi\xi}^{-1}A_{\xi Y}(Y - Y_0)$ with $\eta = \xi - \xi^*(Y)$. Laplace integration~\cite{wong2001asymptotic} yields the anharmonic remainder $\mathcal{E}_{\mathrm{anh}}$ of~\eqref{eq:rg_laplace} with magnitude $O(\tau^2 \|H^{-1}\|^3 \|T_3\|^2 + \tau^2 \|H^{-1}\|^2 \|T_4\|)$ in the Frobenius norm, where $T_3, T_4$ are the cubic and quartic derivative tensors at the saddle and the cubic enters squared by parity. With $\|H^{-1}\| \le m_I^{-1}$ from~\eqref{eq:rg_constrained_gap}, the anharmonic error is small whenever $\tau \|T_3\| m_I^{-3/2} \ll 1$ and $\tau \|T_4\| m_I^{-2} \ll 1$. This formalizes the high-coherence, spectrally gapped, weakly anharmonic regime in which the body's body-level approximation is valid.
+
+\paragraph{Renormalized inter-cluster transport.}
+Beyond the renormalized raw conductance $\kappa_{IJ}^R$ of~\eqref{eq:rg_inter_cluster}, the full closure also requires a single renormalized transport $\Omega_{IJ}^R$ for each cluster pair. Transport the microscopic edge into parent coordinates as $\Theta_{ij}^{IJ} = \Omega_{Ii}\Omega_{ij}\Omega_{jJ}$ (with conventions chosen consistently for source and target frames). Define the parent transport by the weighted Karcher mean
+\begin{equation}
+\Omega_{IJ}^R = \arg\min_{\Omega \in G} \sum_{i \in I}\sum_{j \in J} w_i^I w_j^J \kappa_{ij} d_G(\Omega, \Theta_{ij}^{IJ})^2.
+\label{eq:rg_app_kappa_mean}
+\end{equation}
+When the microscopic transport is flat across the cluster pair, all $\Theta_{ij}^{IJ}$ coincide and $\Omega_{IJ}^R$ equals the common value; otherwise the residual
+\begin{equation}
+\mathcal{H}_{IJ} = \sum_{i \in I}\sum_{j \in J} w_i^I w_j^J \kappa_{ij} d_G(\Omega_{IJ}^R, \Theta_{ij}^{IJ})^2
+\label{eq:rg_app_holonomy_residual}
+\end{equation}
+quantifies how much pairwise microscopic transport fails to descend to a single parent--parent transport. This is one of the principal closure-error terms.
+
+\paragraph{Edge-marginal compatibility.}
+Let the row and column conductance marginals for a cluster pair $(I, J)$ be $r_i^{I \to J} = \sum_{j \in J}\kappa_{ij}$ and $s_j^{J \leftarrow I} = \sum_{i \in I}\kappa_{ij}$. The first-order energy residual identified in the body subsection vanishes when the cluster weights match these marginals, $w_i^I = r_i^{I \to J}/\sum_{i'}r_{i'}^{I \to J}$. A single cluster typically interacts with several partners $J_1, \ldots, J_m$, and one set of weights cannot satisfy every partner-specific marginal condition unless the marginals are colinear. The mismatch $\delta_I^{\mathrm{marg}} = \sum_J \rho_{IJ}\sum_{i \in I}|w_i^I - r_i^{I \to J}/\sum_{i'}r_{i'}^{I \to J}|$, with $\rho_{IJ}$ normalized partner weights, contributes to the closure residual.
+
+\paragraph{Controlled approximate closure.}
+The body's closure residual~\eqref{eq:rg_closure} is bounded above by an explicit sum of the geometric and dynamical residuals identified above.
+
+\begin{theorem}[Controlled approximate closure]
+\label{thm:rg_residual}
+Assume compact gauge group with locally unique Karcher means and barycenters; small belief and model dispersions $V_I^{(q)} = \sum_i w_i^I \mathrm{KL}(\Omega_{Ii}q_i \| q_I)$ and $V_I^{(p)}$; small inter-cluster transport spread $\mathcal{H}_{IJ}$; small edge-marginal mismatch $\delta_I^{\mathrm{marg}}$; uniformly positive constrained internal gap $\lambda_{I,w} > 0$ giving stiffness $m_I$ as in~\eqref{eq:rg_constrained_gap}; bounded anharmonic derivatives; small non-Gaussian cumulants beyond second order in the closure norm; and slow/parent modes separated from internal modes. Then the closure residual obeys
+\begin{equation}
+\varepsilon_{s+1} \le C_1\sum_I \big(V_I^{(q)} + V_I^{(p)}\big)^{3/2} + C_2\sum_{I,J}\mathcal{H}_{IJ} + C_3\sum_I \delta_I^{\mathrm{marg}} + C_4\sum_I m_I^{-1}\|A_{Y\xi}^{(I)}\|^2 + C_5\sum_I \mathcal{E}_{\mathrm{anh}}^{(I)} + C_6\sum_I \mathcal{E}_{\mathrm{nonG}}^{(I)},
+\label{eq:rg_app_residual_bound}
+\end{equation}
+with constants $C_1, \ldots, C_6$ depending on the closure norm $\|\cdot\|_\mathcal{B}$ and the regularity of the parent ansatz; the $V_I^{3/2}$ exponent is in the $L^\infty$ norm and follows from the Edgeworth correction at cubic order in small internal deviations after first two moments are matched.
+\end{theorem}
+
+The bound is schematic: the constants $C_k$ are not pinned down, and tightness is not established. The qualitative content is that small dispersion, small holonomy spread, compatible weights, large internal gap, weak anharmonicity, and approximate Gaussianity together imply small closure residual.
+
+\paragraph{Detector as sufficient surrogate.}
+The body subsection's threshold detector of Section~\ref{sec:meta_agent_threshold} can be replaced by a bounded exponential detector. With $C_q(I) = \exp[-V_I^{(q)}/\tau_q]$, $C_p(I) = \exp[-V_I^{(p)}/\tau_p]$, and presence $P_I = |\Lambda_s|^{-1}\sum_{c \in \Lambda_s}\chi_I(c) \in [0, 1]$, define $\Gamma_I = P_I C_q(I) C_p(I) \in [0, 1]$. The detector selects $I$ if $\Gamma_I > \Gamma_{\min}$, $|I| \ge N_{\min}$, and $m_I > m_{\min}$; the gap condition is what makes the detector approximate a closure rather than only a similarity threshold.
+
+\begin{theorem}[Detector implies positive retention gain]
+\label{thm:rg_detector_retention}
+Suppose, for candidate cluster $I$, the parent approximation satisfies the local Lipschitz bound $\mathcal{F}_{\mathrm{parent}}^*(I) \le \mathcal{F}_{\mathrm{micro}}^*(I) - A_I + L_q V_I^{(q)} + L_p V_I^{(p)} + \varepsilon_I$ with $A_I > 0$ the saving term, $L_q, L_p$ the local Lipschitz constants in belief and model dispersion, and $\varepsilon_I$ the closure residual. Let $C_I = C_{\mathrm{parent}}(I) - C_{\mathrm{micro}}(I)$. If
+\begin{equation}
+\max(L_q\tau_q, L_p\tau_p)\log(1/\Gamma_{\min}) + \varepsilon_I + C_I < A_I,
+\label{eq:rg_app_detector_retention}
+\end{equation}
+then $\Gamma_I > \Gamma_{\min}$ implies $\Delta_I = \mathcal{L}_{\mathrm{micro}}(I) - \mathcal{L}_{\mathrm{parent}}(I) > 0$.
+\end{theorem}
+
+\begin{proof}
+The Lipschitz bound and definition of $\Delta_I$ give $\Delta_I \ge A_I - L_q V_I^{(q)} - L_p V_I^{(p)} - \varepsilon_I - C_I$. The detector condition $\Gamma_I > \Gamma_{\min}$, with $P_I \le 1$, implies $V_I^{(q)}/\tau_q + V_I^{(p)}/\tau_p < \log(1/\Gamma_{\min})$, so $L_q V_I^{(q)} + L_p V_I^{(p)} \le \max(L_q\tau_q, L_p\tau_p)\log(1/\Gamma_{\min})$. Substituting and applying~\eqref{eq:rg_app_detector_retention} gives $\Delta_I > 0$.
+\end{proof}
+
+\paragraph{Adiabatic elimination and slow manifold.}
+The body's slow-manifold reduction~\eqref{eq:rg_schur} is justified by the standard normal-hyperbolicity argument~\cite{fenichel1979geometric}: with internal relaxation time $t_{\mathrm{int}} \sim m_I^{-1}$ and slow-mode timescale $t_{\mathrm{slow}}$, the slow manifold $\xi = \xi^*(Y) + O(t_{\mathrm{int}}/t_{\mathrm{slow}})$ is invariant up to exponentially small terms when $t_{\mathrm{int}} \ll t_{\mathrm{slow}}$, and the autonomous parent flow on the manifold is the gradient of $\mathcal{F}_{s+1}^{\mathrm{exact}}$ with respect to the Schur effective metric. The error terms in~\eqref{eq:rg_schur_flow} are the residual coupling force at leading order in the slaving expansion (size $\lambda_{I,w}^{-1}\|\nabla^2_{Y\xi}\mathcal{F}\|\|\dot Y\|$) and the absorbed closure residual.
+
+\paragraph{Finite-size scaling.}
+A stronger phase-transition or universality claim than the body subsection asserts would require finite-size scaling tests. Candidate observables include the mean cluster size $S_N = N^{-1}\sum_I |I|^2$, susceptibility $\chi_N = N(\mathbb{E}[S_N^2] - \mathbb{E}[S_N]^2)$, correlation length on the overlap graph, exponential coherence order parameter $M_N = N^{-2}\sum_{i,j}\exp[-\mathrm{KL}(q_i \| \Omega_{ij}q_j)/\tau_q]$, and largest meta-agent fraction $P_\infty = N^{-1}\max_I |I|$. A finite-size scaling ansatz takes the form $M_N(g) = N^{-\beta/\nu}\Phi_M((g - g_c)N^{1/\nu})$ and $\chi_N(g) = N^{\gamma/\nu}\Phi_\chi((g - g_c)N^{1/\nu})$ for a control parameter $g$. Evidence for universality requires curve collapse across $N$ and robustness across microscopic details; we register this as a future-work program rather than as a delivered result, and the body subsection accordingly speaks of ``reorganization event'' or ``phase-transition-like event'' rather than ``phase transition'' in the statistical-mechanical sense.
+
+\paragraph{Summary.}
+The rigorous RG route proceeds from the microscopic agent Gibbs measure through the gauge-covariant coarse-graining $\mathcal{R}_s$ to an exact pushforward parent measure (Theorems~\ref{thm:rg_pushforward}--\ref{thm:rg_covariance}), and then through the projection $\Pi_\mathfrak{M}$ to a closed Gaussian multi-agent parent theory. Closure is exact in the linear-Gaussian, flat-transport, positive-gap regime (Theorem~\ref{thm:rg_exact_closure}) and controlled by an explicit residual bound otherwise (Theorem~\ref{thm:rg_residual}). The threshold detector of the body subsection is a sufficient-condition surrogate for positive variational retention gain under explicit Lipschitz and coherence assumptions (Theorem~\ref{thm:rg_detector_retention}). The construction is rigorous on a compact gauge group; the noncompact case requires a gauge slice or regulator that the present manuscript does not provide.
 
 \bibliographystyle{unsrt}
 \bibliography{references}
