@@ -2219,7 +2219,7 @@ We propose the following pathway from the current $\mathrm{SO}(3)$ implementatio
 
 Each step in this pathway is mathematically well-defined; the dynamical content (whether free-energy minimisation actually selects step 2 over real-valued $\mathrm{GL}(K)$, and whether step 3 picks out $\mathrm{SO}(1,3)$ over other $\mathrm{SO}(p,q)$ subgroups) is unresolved. The compact-group restriction precludes Lorentzian signature, but lifting it does not by itself derive Lorentzian signature from information geometry. We now show step 2 with an explicit worked example, with the postulates needed to obtain indefinite signature stated as postulates.
 
-\subsubsection{Worked Example: Lorentzian Signature from $\mathrm{GL}(2, \mathbb{C})$ Gauge Frames}
+\subsubsection{Worked Example: Algebraic Compatibility of Lorentzian Signature with $\mathrm{GL}(2, \mathbb{C})$ Gauge Frames Under Two Postulates}
 \label{sec:worked_signature}
 
 We show that, once a $\mathrm{GL}(K, \mathbb{C})$ gauge frame is permitted to take an imaginary value along a distinguished base direction, the frame-twist quadratic form on the base manifold acquires indefinite signature. The construction is an existence demonstration, not a derivation of signature from variational dynamics: the imaginary assignment along the temporal direction is a postulate, equivalent to a Wick rotation performed inside the gauge frame rather than on the base coordinates. Where the standard physicist's prescription continues $\tau \to i\tau$ on the base manifold, the construction below continues $\phi_\tau \to i\phi_\tau$ in the Lie algebra. We make no claim that variational free-energy minimisation selects this configuration; the open question is precisely whether such a selection mechanism exists.
@@ -2420,7 +2420,7 @@ The dimensional and eigenvalue hierarchies satisfy
 
 We may suppose that the observable sector corresponds to the $(1+3)$ dimensions we perceive as spacetime. The subthreshold informational sector carries additional informational structure that remains below the threshold of direct perception, bearing non-negligible information flux yet not manifesting as direct phenomenal structure. The internal sector represents the vast internal structure of the belief state with no spatial or temporal manifestation whatsoever. These are pure internal degrees of freedom that don't project onto an agent's phenomenal experience.
 
-\subsubsection{Why Exactly $(3+1)$ Dimensions?}
+\subsubsection{Hypothesised $(3+1)$ Structure (Speculative)}
 
 For human cognitive agents, we hypothesize that $|\mathcal{D}_{\text{obs}}| = 4$, comprising one temporal and three spatial directions. This dimensional structure could arise through several mechanisms. Neural architecture constraints may limit human cortical representations to 4D manifolds due to developmental or anatomical factors. Alternatively, our sensory modalities may sample only 4D environmental structure, creating a sensory bottleneck that restricts which directions can have large eigenvalues. Finally, evolutionary optimization may have selected against processing higher-dimensional belief variations if such processing provided no fitness advantage.
 
@@ -2533,7 +2533,7 @@ $c$ & Information propagation speed & Unmeasured \\
 
 \subsubsection{Mathematical Results}
 
-We have shown rigorously that smooth sections of statistical bundles induce Riemannian metrics on base manifolds via Fisher-Rao pullback. These induced metrics are observer-dependent: different agents with different beliefs and gauge frames perceive different geometric structures on the same underlying noumenal substrate. Gauge-invariant collective metrics can be constructed through gauge averaging, providing a framework for consensus geometry. The eigenvalue hierarchies of these induced metrics naturally produce multi-sector dimensional structure, separating observable, subthreshold informational, and internal components.
+We have shown that smooth sections of statistical bundles induce Riemannian metrics on base manifolds via Fisher-Rao pullback. These induced metrics are agent-frame-dependent: different agents with different beliefs and gauge frames pull back different geometric structures on the same underlying noumenal substrate. A candidate gauge-invariant collective metric can be defined through gauge averaging (Section~\ref{sec:consensus_metric}), conditional on a regulator that the present manuscript does not construct (the non-compact gauge groups relevant here have infinite Haar measure). The eigenvalue hierarchies of these induced metrics permit, under additional eigenvalue-magnitude postulates, a multi-sector dimensional reading separating observable, subthreshold informational, and internal components; the dimensionality counts and the Lorentz signature are not derived from the framework alone.
 
 Several speculative extensions suggest themselves. The prior-induced metric $G^{(p)}$ may represent the phenomenal space perceived by agents (what we experience as "physical space" could be the information-geometric structure of our collective priors $p_i$, themselves shaped at the slower timescale by the generative models $s_i$). The temporal direction may emerge from belief trajectory tangent vectors, with proper time measuring information distance traveled. The connection to physical gauge invariance may arise from multi-agent consensus requirements such that gauge invariance in physics could be a consequence of agents requiring frame-independent descriptions of shared reality. The $(1+3)$ dimensional structure of observed spacetime may reflect an eigenvalue hierarchy in human cognitive systems.
 
@@ -2541,23 +2541,21 @@ Critical open problems remain. We have not derived the Lorentzian signature. The
 
 \begin{center}
 \fbox{\begin{minipage}{0.9\columnwidth}
-\textbf{Central Result: Spacetime from Information Geometry}
+\textbf{Belief Tangent-Space Decomposition and the Spacetime Reading: What Is Derived and What Is Postulated}
 
-\textbf{What we derive rigorously:}
-Belief trajectory $q(\tau)$ through fiber $\mathcal{B}$ has tangent $\dot{q} \in T_q\mathcal{B}$ with natural decomposition:
+\textbf{What is derived:}
+A belief trajectory $q(\tau)$ through fiber $\mathcal{B}$ has tangent $\dot{q} \in T_q\mathcal{B}$ with the Gram--Schmidt decomposition
 \[
 T_q\mathcal{B} = \underbrace{\mathbb{R}\dot{q}}_{\substack{\text{temporal} \\ \text{1 dim}}}
 \oplus \underbrace{V_{\text{obs}}}_{\substack{\text{obs spatial} \\ \text{3 dim}}}
 \oplus \underbrace{V_{\text{subthresh}}}_{\substack{\text{subthresh.} \\ }}
 \oplus \underbrace{V_{\text{internal}}}_{\substack{\text{internal} \\ }}
 \]
-Eigenvalue hierarchy in $\dot{q}^\perp = V_{\text{obs}} \oplus V_{\text{subthresh}} \oplus V_{\text{internal}}$: $\lambda_{\text{obs}} \gg \lambda_{\text{subthresh}} \gg \lambda_{\text{internal}} \approx 0$.
+under an assumed eigenvalue hierarchy $\lambda_{\text{obs}} \gg \lambda_{\text{subthresh}} \gg \lambda_{\text{internal}} \approx 0$ on $\dot{q}^\perp$.
 
-\textbf{What we postulate:} Under the $\mathrm{SO}(3)$ restriction, Lorentzian signature $(-,+,+,+)$ for $\mathbb{R}\dot{q} \oplus V_{\text{obs}}$ must be postulated. Under the $\mathrm{GL}(K, \mathbb{C})$ extension acting on the gauge connection only (Section~\ref{sec:signature_resolution}), this signature is conditional on additional postulates --- an imaginary frame component along a designated temporal direction and a real-part projection of the resulting complex bilinear form --- and is not derived from variational free-energy minimization in the present formulation. We postulate that the observable sector has exactly 3 large spatial eigenvalues.
+\textbf{What is postulated:} (i) the eigenvalue hierarchy itself, including the choice of three large eigenvalues in $V_{\text{obs}}$; (ii) under the $\mathrm{SO}(3)$ restriction, Lorentzian signature $(-,+,+,+)$ for $\mathbb{R}\dot{q} \oplus V_{\text{obs}}$ as a separate postulate; (iii) under the $\mathrm{GL}(K, \mathbb{C})$ extension acting on the gauge connection (Section~\ref{sec:signature_resolution}), an imaginary frame component along a designated temporal generator with $\mathrm{tr}(T^2) > 0$ and a real-part projection of the resulting complex bilinear form. None of (i)--(iii) is derived from variational free-energy minimization in the present formulation.
 
-\textbf{Three-sector structure:} (1) Spacetime $(1+3)$: temporal + observable spatial, (2) Subthreshold informational: moderate information flux, present but unperceived, (3) Internal: negligible flux, pure internal degrees of freedom.
-
-\textbf{The radical claim:} The statistical manifold $\mathcal{B}$ is enormous ($\dim(\mathcal{B}) \sim 10^5$ for $K=768$). Phenomenal spacetime is a tiny 4D subspace selected by eigenvalue magnitude. The vast majority of $\mathcal{B}$'s structure never manifests spatiotemporally. The base manifold $\mathcal{C}$ is merely an index space (noumena); all geometric structure comes from Fisher metric on $\mathcal{B}$.
+\textbf{An interpretive reading:} The above structure permits a three-sector reading consisting of a $(1+3)$ spacetime sector (temporal plus observable spatial), a subthreshold informational sector with moderate information flux, and an internal sector with negligible flux. We do not claim to have derived physical spacetime, the Lorentz signature, or the dimensionality count from the framework; the construction shows that the framework is compatible with such a reading under the postulates listed above.
 \end{minipage}}
 \end{center}
 
@@ -2573,13 +2571,13 @@ What does not exist in this ontology are external observations from reality outs
 
 This formulation is philosophically radical but mathematically conservative. We have not introduced exotic new physics but rather reinterpreted existing information-geometric structures, Kantian philosophy, and the scientific facts which neuroscience has been continually illuminating. Whether this represents genuine ontological insight or merely a shift in descriptive language remains an open question for philosophical debate and empirical investigation.
 
-\subsubsection{Self-Excited Perpetual Motion}
+\subsubsection{Sustained Non-Equilibrium under the Threshold-Detector Dynamics}
 
-The participatory loop sustains non-equilibrium dynamics through perpetual feedback. Scale-$s$ agents evolve beliefs via natural gradient descent, minimizing local free energy. These changing beliefs trigger meta-agent formation at scale $s+1$ when sufficient coherence develops. Meta-agents then propagate updated priors back to scale $s$, shifting the free energy landscape. Scale-$s$ agents respond to these new priors, beginning the cycle anew.
+The participatory loop sustains non-equilibrium dynamics through cross-scale feedback. Scale-$s$ agents evolve beliefs via natural gradient descent, minimizing local free energy. These changing beliefs trigger meta-agent formation at scale $s+1$ when the threshold detector of Section~\ref{sec:meta_agent_threshold} judges sufficient coherence to have developed. Meta-agents then propagate updated priors back to scale $s$, shifting the free energy landscape. Scale-$s$ agents respond to these new priors, and the cycle continues.
 
-This feedback prevents equilibration. Even when scale-$s$ agents reach local consensus, top-down information from scale $s+1$ perturbs them back into evolution. The system exhibits what Wheeler called a "self-excited circuit"~\cite{Wheeler1983}; i.e. a self-sustaining loop where observation and reality co-constitute each other through perpetual informational exchange. This is Wheeler's and Hofstadter's "strange loop" ~\cite{Hofstadter1979}. The system uses its output (geometry) as input (transport structure) to generate new output (updated geometry). The universe is not a passive arena but an active participant in its own evolution.
+This feedback delays equilibration. Even when scale-$s$ agents reach local consensus, top-down information from scale $s+1$ perturbs them back into evolution. The system implements what Wheeler called a "self-excited circuit"~\cite{Wheeler1983}: a self-sustaining loop in which observation and the observed structure co-evolve through informational exchange. This pattern is structurally adjacent to Hofstadter's "strange loop"~\cite{Hofstadter1979}. The system uses its output (geometry) as input (transport structure) to generate new output (updated geometry).
 
-In our framework, this manifests as variational free energy driving complexity generation rather than simple equilibration, maintaining the system in a dynamically stable yet perpetually evolving state. As free energy decreases locally through agent alignment, the complexity of the hierarchical wilderness increases globally through meta-agent formation. This may account for the observation of local areas of our universe exhibiting explosive complexity growth despite the second law's mandate toward increasing entropy. In this view the system trades local order for hierarchical complexity.
+In our framework, this manifests as variational free energy driving complexity generation rather than simple equilibration, maintaining the system in a dynamically stable yet perpetually evolving state in the simulation regime studied here. As free energy decreases locally through agent alignment, the complexity of the hierarchical structure increases through meta-agent formation. This is a within-framework observation about the threshold-detector single-seed dynamics of Section~\ref{sec:results}; we make no claim about thermodynamic perpetual motion or about cosmological complexity growth, both of which are outside the scope of the present construction.
 
 \section{Results}
 \label{sec:results}
@@ -2834,17 +2832,15 @@ The complete cycle is:
 \centering
 \begin{tabular}{|l|l|}
 \hline
-\textbf{Wheeler (1990)} & \textbf{Our Implementation} \\
+\textbf{Wheeler (1990)} & \textbf{Structural correspondence in this framework} \\
 \hline
-"It from bit" & Geometry via pullback \\
-Participatory universe & Multi-scale feedback loops \\
-Observer-dependent reality & Gauge-frame-dependent metrics \\
-Delayed choice & Transport operator dependence \\
-Self-excited circuit & Non-equilibrium dynamics \\
-Law without law & Info-theoretic necessities \\
+"It from bit" & Pullback metric induced from belief sections \\
+Participatory universe & Cross-scale meta-agent feedback loops \\
+Observer-dependent reality & Gauge-frame-dependent pullback metrics \\
+Self-excited circuit & Sustained non-equilibrium under threshold detection \\
 \hline
 \end{tabular}
-\caption{Correspondence between Wheeler's philosophical concepts and our mathematical realizations.}
+\caption{Structural map between Wheeler's philosophical vocabulary and constructions in the present framework. We do not claim to have derived mass, spacetime geometry, or quantum mechanics from the framework; this table is a structural correspondence, not a derivation summary. Wheeler's "delayed choice" and "law without law" are not tabulated because the framework does not contain a quantum-measurement formalism or a derivation of physical law from information.}
 \label{tab:wheeler_comparison}
 \end{table}
 
@@ -3164,7 +3160,7 @@ where the mass-to-damping ratio vanishes and acceleration becomes instantaneousl
 
 Neural systems may well operate in this regime, where synaptic time constants dominate over any inertial effects. But in our theory fundamental physics requires the full second-order structure. The oversight is natural: when modeling brain dynamics, one reasonably neglects terms that are small on biological timescales. The present work recovers these terms by treating the variational principle as fundamental rather than approximate, revealing structure that was always present but previously discarded.
 
-\subsection{Inertial Mass and Gravitational Effects in Pullback Geometry}
+\subsection{Toward a Pullback-Curvature Reading of Gravity (Speculative)}
 
 We have shown that within the framework the Fisher-Rao precision plays the role of effective mass:
 $M_{\text{eff}} = \kappa \cdot \mathrm{tr}(\Sigma_p^{-1})$. The same precision tensor also determines the agent's pullback metric on the base manifold, which defines the geometry the agent experiences.
@@ -3208,8 +3204,7 @@ The following is an interpretive extension of the formalism beyond what the simu
 
 If our perceptions and models of reality are tentative and contingent why then does everyday physics appear objective? Our answer is that macroscopic objects enforce consensus through precision dominance.
 
-A rock maintains extraordinarily precise self-localization with prior
-covariance $\Sigma_{\mathrm{rock}} \approx \epsilon I$ where $\epsilon \sim \ell_P^2$ approaches the Planck scale. When agent $i$ interacts with the rock, the coupling term
+A rock maintains extraordinarily precise self-localization with prior covariance $\Sigma_{\mathrm{rock}} \approx \epsilon I$ where $\epsilon \ll 1$ is a small dimensionless precision in the framework's representational space. We do not assign $\epsilon$ a physical-units value (in particular we are not claiming $\epsilon \sim \ell_P^2$); the dimensional bridge between informational precision and physical length scales is among the open problems of Section~\ref{sec:scope_limitations}. When agent $i$ interacts with the rock, the coupling term
 
 \begin{equation}
 \beta_{i,\mathrm{rock}}  \mathrm{KL}(q_i \| \Omega_{i,\mathrm{rock}}[q_{\mathrm{rock}}])
@@ -3222,7 +3217,7 @@ pre-existing external reality but from epistemic anchoring: high-precision syste
 appear "certainly there" because their extreme self-precision leaves
 No room for disagreement.
 
-\subsection{Quantum Systems: Pre-Consensus Dynamics}
+\subsection{An Inferential-Consensus Analogy for Measurement (Speculative)}
 
 The framework as constructed operates with classical probability distributions (Section~\ref{sec:scope_limitations}). The following sketch reads quantum measurement as pre-consensus dynamics in the agent picture, but the actual derivation of wavefunction collapse from classical Bayesian agents requires extending the framework to include quantum superposition states, which we have not done. Treat the following as a motivational reading awaiting a quantum extension rather than a derivation of measurement.
 
@@ -3438,7 +3433,7 @@ Conscious content richness might correlate with the effective dimensionality of 
 
 Altered states of consciousness provide particularly interesting test cases. As previously discussed, psychedelics, meditation, sensory deprivation, and other interventions might alter gauge frames $\phi$ while leaving certain noumenal neural states relatively preserved. Changes in information-geometric properties (Fisher metric structure, transport operators, coherence patterns) during altered states could illuminate the relationship between gauge structure and phenomenal character~\cite{Carhart-Harris2014,Milliere2018}.
 
-\subsection{Independent Convergence with Lahav and Neemeh's Relativistic Theory of Consciousness}
+\subsection{Gauge-Theoretic Realisation of the Cognitive-Frame Transformation Law (Following Lahav and Neemeh)}
 \label{sec:lahav_convergence}
 
 The conclusions reached in the preceding subsection share a structural overlap with the Relativistic Theory of Consciousness developed independently by Lahav and Neemeh~\cite{LahavNeemeh2022,LahavNeemeh2025}. Their starting point is that both dualism and illusionism tacitly assume phenomenal consciousness is an absolute property, frame-independent in the way Newtonian time was once held to be. They argue that consciousness should instead be treated as relativistic: a system has phenomenal consciousness with respect to a \emph{cognitive frame of reference}, and the question whether some external system is conscious has no observer-independent answer, much as the question whether an object is at rest has no observer-independent answer in special relativity. In their Alice/Bob thought experiment, each observer measures the other as "mere brain activity" from their own cognitive frame; both measurements are correct, and the two perspectives are claimed to be related by an isomorphism between (i) Alice's first-person phenomenal state in her own cognitive frame, and (ii) Bob's third-person measurement of Alice expressed in his cognitive frame. The hard problem is taken to dissolve, on their account, once the absolutist assumption is dropped.
