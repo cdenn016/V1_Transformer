@@ -18,19 +18,31 @@ $$
 }
 $$
 
-Under a clean frame-covariant Gaussian specialization, the KL-consensus weights reduce to scaled dot-product attention with
+With arbitrary SPD covariances $\Sigma_i$ (no frame-covariant closure imposed), the cross term in the KL-consensus logit factors as $Q_i^\top K_j$ with the untied projections
 
 $$
 \boxed{
-Q_i=C^{-1/2}U_i^{-1}\mu_i,
+Q_i=U_i^{-1}\mu_i,
 \qquad
-K_j=C^{-1/2}U_j^{-1}\mu_j,
+K_j=U_j^\top\Sigma_j^{-1}\mu_j,
 \qquad
 V_j=U_j^{-1}\nu_j.
 }
 $$
 
-No external learned bilinear matrix $M=W_QW_K^\top$ is required for the derivation.
+The implicit pair-dependent bilinear $\Omega_{ij}^{-\top}\Sigma_j^{-1}=U_i^{-\top}U_j^\top\Sigma_j^{-1}$ ranges over all of $\mathrm{GL}(K)$ as the per-token data $(U_i,U_j,\Sigma_j)$ varies, matching the expressive power of an independently learned $W_QW_K^\top$ in standard scaled dot-product attention. The carving uses only the existing belief and frame fields; no external learned bilinear $M$ and no extra query/key morphisms are required.
+
+Under the additional closure $\Sigma_j=U_jCU_j^\top$ for shared SPD $C$, the carving collapses to the symmetric tied form
+
+$$
+Q_i=C^{-1/2}U_i^{-1}\mu_i,
+\qquad
+K_j=C^{-1/2}U_j^{-1}\mu_j,
+\qquad
+V_j=U_j^{-1}\nu_j,
+$$
+
+recovering scaled dot-product attention with a single shared SPD bilinear $C^{-1}$ as a corollary.
 
 ---
 
@@ -1127,6 +1139,87 @@ Thus, for general $\mathrm{GL}(K)$ with locally isotropic covariance, the model 
 
 ---
 
+## 12.5 Untied query-key projections without extraneous structure
+
+A sharper reading of section 5 yields untied $W_Q, W_K$ directly from the existing belief and frame fields, without imposing the frame-covariant closure of section 8 and without introducing extra bundles or query/key morphisms.
+
+Return to the exact KL of section 5 with arbitrary SPD covariances $\Sigma_i, \Sigma_j$ (no closure):
+
+$$
+D_{ij}
+=
+\frac12
+\Big[
+\log\det\Sigma_j-\log\det\Sigma_i
++2\log|\det U_i|-2\log|\det U_j|
+-K
++\operatorname{tr}(H_jP_i)
++x_i^\top H_jx_i
+-2x_i^\top k_j
++r_j
+\Big].
+$$
+
+The cross term $-2x_i^\top k_j$ is the only term coupling query and key indices through the belief means. Substituting the definitions of $x_i$ and $k_j$,
+
+$$
+\boxed{
+x_i^\top k_j
+=
+(U_i^{-1}\mu_i)^\top(U_j^\top\Sigma_j^{-1}\mu_j)
+=
+\mu_i^\top\Omega_{ij}^{-\top}\Sigma_j^{-1}\mu_j
+=
+Q_i^\top K_j,
+}
+$$
+
+where the gauge-derived query and key projections are
+
+$$
+\boxed{
+Q_i=U_i^{-1}\mu_i,
+\qquad
+K_j=U_j^\top\Sigma_j^{-1}\mu_j.
+}
+$$
+
+These two projections are not inverse-transposes of each other at the same token: $W_Q^{(i)}=U_i^{-1}$ and $W_K^{(i)}=U_i^\top\Sigma_i^{-1}$, with the inverse-transpose relation broken by the precision factor $\Sigma_i^{-1}$. The carving is therefore genuinely untied; $W_Q$ and $W_K$ are different functions of the per-token belief state, not the same projection up to symmetry. Numerical verification at $K=4,5$ over twenty random trials gives median Frobenius distance $\|W_Q^{(i)}-(W_K^{(i)})^{-\top}\|_F$ on the order of 25 to 40, with no value below 5; tying would require $\Sigma_i=I$ in every frame.
+
+### 12.5.1 Surjectivity onto $\mathrm{GL}(K)$
+
+The implicit pair-dependent bilinear is
+
+$$
+M_{ij}
+:=
+\Omega_{ij}^{-\top}\Sigma_j^{-1}
+=
+U_i^{-\top}U_j^\top\Sigma_j^{-1}.
+$$
+
+As $(U_i,U_j)$ ranges over $\mathrm{GL}(K)^2$ and $\Sigma_j$ over $\mathrm{SPD}(K)$, $M_{ij}$ ranges over all of $\mathrm{GL}(K)$. To realise any target $T\in\mathrm{GL}(K)$, set $U_j=I$, $\Sigma_j=I$, $U_i=T^{-\top}$; then $M_{ij}=T$. The expressive power of the gauge-derived bilinear is therefore identical to that of an independently learned $W_QW_K^\top\in\mathrm{GL}(K)$ in standard scaled dot-product attention. In particular $M_{ij}$ is generically non-symmetric, recovering the asymmetry of $W_Q^\top W_K$ that the symmetric tied $C^{-1}$ closure of section 8 cannot.
+
+Although $M_{ij}$ depends on the pair $(i,j)$, its evaluation $\mu_i^\top M_{ij}\mu_j$ factorises through per-token vectors $Q_i, K_j$, exactly as in standard attention. Pair-independence of $M$ is not required for factorisation; what is required is that the dependence on $(i,j)$ enters only through the per-token data $(U_i,\mu_i)$ and $(U_j,\mu_j,\Sigma_j)$, which is the structure of the gauge-covariant carving.
+
+### 12.5.2 Status of the remaining KL terms
+
+The cross term carries the $W_QW_K^\top$ content of attention. The remaining terms in section 5 fall into two groups under the row-softmax over $j$.
+
+Terms depending on $j$ alone -- $r_j$, $\log\det\Sigma_j$, $\log|\det U_j|$ -- contribute a key-side prior bias. They are absorbed into $\log\pi_{ij}$ and shift the distribution over which keys to attend to without altering the bilinear coupling between query and key content.
+
+Terms coupling $i$ and $j$ through the belief covariances rather than the means -- $x_i^\top H_jx_i$ and $\operatorname{tr}(H_jP_i)$ -- are the gauge-theoretic uncertainty corrections beyond vanilla attention. They vanish under the closure $\Sigma_j=U_jCU_j^\top$ for shared SPD $C$, which collapses $H_j$ to the constant $C^{-1}$ and ties the carving to the symmetric form of section 8. They survive as legitimate uncertainty-aware terms when the closure is dropped; numerical experiments at $K=4,5$ show that without closure these terms are not row-constant in $i$ for fixed $j$, with cross-row variance $10^2$ to $10^4$ times that of the cross term, so they materially modify attention outside the closure.
+
+### 12.5.3 Identification with rotary positional structure
+
+The natural identification of $U_i$ with a real transformer architecture is the per-position rotational frame of rotary positional embeddings, in which $U_i\in\mathrm{O}(K)$ is a block-diagonal rotation depending on token position. Then $U_i^{-1}=U_i^\top$, the closure $\Sigma_j=U_jCU_j^\top$ holds for any $C$ commuting with the rotation block structure, and the carving reduces to $Q_i=U_i^\top\mu_i$, $K_j=U_j^\top\mu_j$. This is the rotation-modulated query-key projection used in rotary attention, with $\mu_i$ playing the role of the position-independent content vector. The trivial-frame specialisation $U_i=U$ removes per-token positional variation and reduces the framework to the constant-frame route of section 14 in which a learned bilinear $M$ replaces the structural role of frame variation.
+
+### 12.5.4 What the untied carving does and does not prove
+
+The carving establishes that nontrivial relative gauge transport produces untied scaled dot-product attention with a pair-dependent bilinear of full $\mathrm{GL}(K)$ expressive power, using only the existing belief field $(\mu,\Sigma)$ and per-token frames $U_i$, with no extra bundles or query/key morphisms. It does not by itself reduce the full Gaussian KL to bare $Q^\top K/\sqrt{d_k}$; the uncertainty corrections remain, and standard scaled dot-product attention is the limit in which either the closure $\Sigma_j=U_jCU_j^\top$ holds or those corrections are dominated by the cross term in the high-dimensional regime. What is recovered without further assumptions is untied $Q^\top K$ as the leading bilinear coupling.
+
+---
+
 ## 13. Corrected theorem statement
 
 A clean theorem for the manuscript is the following.
@@ -1297,22 +1390,22 @@ The transformer reduction should be stated approximately as follows.
 
 ## 16. Recommended claim calibration
 
-The strongest accurate claim is:
+The strongest accurate claim, sharper than the original frame-covariant version, is:
 
-> Nontrivial relative gauge transports $\Omega_{ij}=U_iU_j^{-1}$ generate attention-like source selection directly through transported Gaussian KL divergence. Under frame-covariant Gaussian closure and key-norm normalization, the resulting KL-consensus softmax reduces to scaled dot-product attention, with effective queries, keys, and values given by gauge-normalized belief and value coordinates.
+> Nontrivial relative gauge transports $\Omega_{ij}=U_iU_j^{-1}$ generate attention through transported Gaussian KL divergence, and the cross term in the resulting logit factors as $Q_i^\top K_j$ with $Q_i=U_i^{-1}\mu_i$ and $K_j=U_j^\top\Sigma_j^{-1}\mu_j$. The two projections are genuinely untied; the implicit pair-dependent bilinear ranges over all of $\mathrm{GL}(K)$ as the per-token frames and precisions vary, matching the expressive power of an independently learned $W_QW_K^\top$ in standard scaled dot-product attention. The construction uses only the existing belief and frame fields; no extra bundles or query/key morphisms are required.
 
 The manuscript should avoid the stronger claim:
 
-> Gauge transport always equals standard transformer attention.
+> Gauge transport always equals standard transformer attention as a complete identity.
 
-The fully general nontrivial-$\Omega_{ij}$ model is richer than standard attention because it contains transport-dependent covariance, volume, and norm corrections.
+The fully general nontrivial-$\Omega_{ij}$ model produces, in addition to the cross term that becomes $Q^\top K$, uncertainty corrections coupling query and key covariances that are absent from vanilla attention. Standard scaled dot-product attention is recovered when either those corrections are dominated by the cross term in the high-dimensional regime or the closure $\Sigma_j=U_jCU_j^\top$ is imposed; the closure additionally collapses the carving to the symmetric tied form.
 
 A precise hierarchy is:
 
-1. General $\mathrm{GL}(K)$ Gaussian case: quadratic gauge attention.
-2. Frame-covariant Gaussian covariance: Gaussian/RBF attention in common-frame coordinates.
-3. Key-norm normalized frame-covariant case: scaled dot-product attention.
-4. Orthogonal/unitary isotropic case: simplest exact realization of the scaled dot-product limit.
+1. General $\mathrm{GL}(K)$ Gaussian case with arbitrary SPD covariance: untied gauge attention with cross-coupling uncertainty corrections.
+2. General $\mathrm{GL}(K)$ Gaussian case, cross term only: untied scaled dot-product attention with implicit bilinear in $\mathrm{GL}(K)$.
+3. Frame-covariant Gaussian covariance $\Sigma_j=U_jCU_j^\top$: tied scaled dot-product attention with shared SPD bilinear $C^{-1}$.
+4. Orthogonal/unitary frames with isotropic covariance: rotary positional structure realised exactly.
 
 ---
 
