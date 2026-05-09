@@ -1011,7 +1011,7 @@ Q(k, z) = q_i(k) \cdot \beta(z),
 \label{eq:mixture_posterior}
 \end{equation}
 
-where $\beta(z = j) \equiv \beta_{ij} \geq 0$ are variational attention weights satisfying $\sum_j \beta_{ij} = 1$.
+where $\beta(z = j) \equiv \beta_{ij} \geq 0$ are variational attention weights satisfying $\sum_j \beta_{ij} = 1$. The factorisation $Q(k \mid z) = q_i(k)$ for all $z$ is a substantive structural assumption, not a tractability simplification: it imposes source-independence on the consensus belief, requiring that the same $q_i$ explain the data conditional on every candidate source $j$. The softmax form of the attention weights derived below follows from this source-independence constraint together with the entropy-regularised KL energy, not from the variational principle alone. Without source-independence the optimal $Q(k, z)$ does not in general decompose into a product, and the closed-form $\beta_{ij} \propto \exp(-D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)/\tau)$ result need not hold; we therefore flag the factorisation explicitly here rather than defer it to the post-hoc justification of Appendix~\ref{app:conditional_uniqueness}.
 
 \paragraph{Alignment free energy.}
 The free energy for the alignment component is the KL divergence between the variational posterior and the generative model:
@@ -1393,23 +1393,24 @@ This construction demonstrates that observations can be replaced by appropriatel
 
 Wheeler's slogan that physical "it" derives from informational "bit"~\cite{Wheeler1990} motivates the present functional. The construction supplies a concrete mathematical realization in which geometric structure on $\mathcal{C}$ is induced by pullback of the agent belief dynamics rather than posited a priori. The technical derivation, including the explicit pullback metric and its gauge-theoretic interpretation, is developed in Section~\ref{sec:pullback}.
 
-\subsubsection{Comparison to Physical Action Principles}
+\subsubsection{Structural Analogy with Variational Stationarity Principles}
 
 \begin{table}[h]
 \centering
 \begin{tabular}{|l|l|l|}
 \hline
-\textbf{Framework} & \textbf{Action/Functional} & \textbf{Extremal Principle} \\
+\textbf{Framework} & \textbf{Functional (units)} & \textbf{Stationarity condition} \\
 \hline
-Classical Mechanics & $S = \int L(\mathbf{q}, \dot{\mathbf{q}}, t)  dt$ & $\delta S = 0$ \\
-General Relativity & $S = \int R \sqrt{|g|}  d^4x$ & $\delta S = 0$ \\
-Gauge Theory & $S = -\frac{1}{4}\int F_{\mu\nu}F^{\mu\nu}  d^4x$ & $\delta S = 0$ \\
-\textbf{Our Framework} & $\mathcal{F}[\{q\}, \{p\}, \{\phi\}]$ (Eq.~\ref{eq:free_energy_functional_final}) & $\delta \mathcal{F} = 0$ (Fisher-Rao on $(\mu,\Sigma)$; Lie-group natural gradient on $G$) \\
+Classical Mechanics & $S = \int L(\mathbf{q}, \dot{\mathbf{q}}, t)  dt$ (action) & $\delta S = 0$ (Euler--Lagrange) \\
+General Relativity & $S = \int R \sqrt{|g|}  d^4x$ (action) & $\delta S = 0$ (Einstein equations) \\
+Gauge Theory & $S = -\frac{1}{4}\int F_{\mu\nu}F^{\mu\nu}  d^4x$ (action) & $\delta S = 0$ (Yang--Mills equations) \\
+\textbf{Our Framework} & $\mathcal{F}[\{q\}, \{p\}, \{\phi\}]$ (nats; Eq.~\ref{eq:free_energy_functional_final}) & $\delta \mathcal{F} = 0$ (natural-gradient flow; Fisher--Rao on $(\mu,\Sigma)$; Lie-group natural gradient on $G$) \\
 \hline
 \end{tabular}
+\caption{Structural analogy, not dimensional equivalence. The physical action functionals on the first three rows have units of action ($\mathrm{kg}\,\mathrm{m}^2\,\mathrm{s}^{-1}$, equivalently $J\,s$); the free energy $\mathcal{F}$ on the fourth row is dimensionless (in nats), and its variation produces a first-order natural-gradient flow rather than a second-order Euler--Lagrange system. The analogy is at the level of variational stationarity, not at the level of comparable physical content.}
 \end{table}
 
-Like physical action principles, our free energy functional is a scalar (coordinate-independent under gauge transformations), integrated over a manifold (here $\mathcal{C}$ rather than spacetime), extremized by dynamics (here natural gradient descent rather than classical trajectories), and contains kinetic-like (alignment) and potential-like (self-consistency) terms. The principal difference is that this is an action for information, not matter or geometry. We suspect that spacetime emerges as a derived structure (Section~\ref{sec:pullback}), not as input substrate. Information first, physics follows.
+Like physical action principles, the free energy functional is a scalar (coordinate-independent under gauge transformations), integrated over a manifold (here $\mathcal{C}$ rather than spacetime), and rendered stationary by the dynamics (here natural-gradient flow rather than Euler--Lagrange equations). It contains an alignment term and self-consistency terms whose roles are loosely analogous to kinetic and potential contributions. The principal difference is that the units are different: the physical actions above have units of action, while $\mathcal{F}$ is an information-theoretic functional measured in nats. We suspect that spacetime can be read as a derived structure within the framework (Section~\ref{sec:pullback}); we do not claim the framework derives matter, fields, or physical action from the variational principle alone.
 
 \subsection{Explicit Symmetry Breaking via Observations}
 \label{sec:symmetry_breaking}
@@ -4404,7 +4405,7 @@ where the prefactor $(1+B)$ matches the forward derivation~\eqref{eq:rearranged_
 \end{equation}
 where the algebraic step uses $(1+B)\log q_i^* - \log p_i - \sum_j\beta_{ij}\log(\Omega_{ij}q_j) = -C$ together with $(1+B)\log q_i^* = \log q_i^* + B\log q_i^*$ and $B = \sum_j\beta_{ij}$, so that $\log(q_i^*/p_i) + \sum_j\beta_{ij}\log(q_i^*/(\Omega_{ij}q_j)) = -C$ identically.
 
-\textbf{Richness lemma.} To pass from the term-by-term comparison
+\textbf{Richness lemma (conditional, with global-normaliser caveat).} The argument below is a representation result whose conclusion holds at the level of pointwise attainability and is then extended to a functional identity on $(0, \infty)$ by smoothness of $f'$. The pointwise sweep does not directly account for the coupling between local densities and the global normaliser $Z_i$; we therefore restrict $f$ to the real-analytic class so that density of attainability on any open subinterval of $(0, \infty)$ propagates to identity on $(0, \infty)$ by analytic continuation. Without this analyticity strengthening the conclusion would hold only on the attainable subinterval. To pass from the term-by-term comparison
 \begin{equation}
 f'\left(\frac{q_i}{\Omega_{ij}q_j}\right) = \log\frac{q_i}{\Omega_{ij}q_j} + k
 \label{eq:ode_app}
