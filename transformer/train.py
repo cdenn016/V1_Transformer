@@ -270,7 +270,8 @@ def compute_free_energy_loss(
     mass_phi: float = 0.0,        # Gauge prior weight: (mass_φ/2) Σ_i ||φ_i||²
     omega_det_penalty: float = 0.0,  # λ · mean_{i,h}(log|det Ω_{i,h}|)² regularizer (gauge_param='omega' only)
     aux_loss_weight: float = 0.0, # Weight for auxiliary per-layer CE losses (0 = disabled)
-    detach_beta_m_step: bool = True,  # True = correct EM (detach β). False = old behavior (grad through softmax)
+    detach_beta_m_step: bool = True,  # True = correct EM (detach β). False = old behavior
+    include_attention_entropy: bool = True,  # Add κ·Σβ·log(β/π) to F (manuscript eq:free_energy_functional_final). (grad through softmax)
     normalize_ce_by_dim: bool = False,  # Divide CE by sqrt(K) to match VFE dim_scale
     ce_label_smoothing: float = 0.0,  # Label smoothing on loss-path CE only; ce_loss_raw stays un-smoothed for PPL
     # Backward-compatible aliases (deprecated)
@@ -416,8 +417,34 @@ def compute_free_energy_loss(
             K = mu_q.shape[-1]
             dim_scale = math.sqrt(max(K, 1))
             belief_align_loss = M_beta * belief_align_loss / dim_scale
+            # Manuscript Eq. eq:free_energy_functional_final alignment-block entropy:
+            #   F_H = τ · Σ_ij β_ij log(β_ij / π_ij),   τ_eff = κ · √K (softmax temp).
+            # belief_align_loss above is normalized by /dim_scale (1/√K); for τ-consistent
+            # entropy in the SAME normalized space, F_H_normalized = κ · (β·log β).sum().
+            # Uniform prior π = 1/N (constant log N dropped). β.detach (envelope theorem
+            # at softmax fixed point → zero (μ,Σ,φ)-grad). Scalar κ here — κ-gradient flow
+            # for learnable κ lives in the E-step path (variational_ffn.py per-head).
+            if include_attention_entropy:
+                beta_safe = beta_final.clamp(min=1e-30)
+                entropy_per_row = (beta_safe * beta_safe.log()).sum(dim=(-2, -1)).mean()
+                kappa_attn_scalar = 1.0
+                try:
+                    _ffn0 = model.blocks[0].ffn
+                    _k = getattr(_ffn0, 'kappa', None)
+                    if _k is not None:
+                        kappa_attn_scalar = (
+                            float(_k.detach().item()) if hasattr(_k, 'detach')
+                            else float(_k)
+                        )
+                except (AttributeError, IndexError, TypeError):
+                    pass
+                # τ_eff · entropy / dim_scale = (κ·√K) · entropy / √K = κ · entropy
+                belief_entropy_loss = M_beta * kappa_attn_scalar * entropy_per_row
+            else:
+                belief_entropy_loss = torch.tensor(0.0, device=ce_loss.device)
     else:
         belief_align_loss = torch.tensor(0.0, device=ce_loss.device)
+        belief_entropy_loss = torch.tensor(0.0, device=ce_loss.device)
 
     # =================================================================
     # 3. Self-Coupling: α_i · KL(q_i || p_i) — beliefs toward PRIORS
@@ -645,7 +672,7 @@ def compute_free_energy_loss(
     # =================================================================
     # Total Training Loss (CE + optional auxiliary VFE regularizers)
     # =================================================================
-    total_loss = (ce_loss + belief_align_loss + self_consistency_loss
+    total_loss = (ce_loss + belief_align_loss + belief_entropy_loss + self_consistency_loss
                   + model_align_loss + hyper_prior_loss + gauge_prior_loss
                   + aux_loss + holonomy_loss + omega_det_loss)
 
@@ -688,6 +715,7 @@ def compute_free_energy_loss(
         'loss/ce': ce_loss.item(),
         'loss/ce_raw': ce_loss_raw.item(),
         'loss/belief_align': belief_align_loss.item(),
+        'loss/belief_entropy': belief_entropy_loss.item(),
         'loss/self_consistency': self_consistency_loss.item() if M_alpha > 0 else 0.0,
         'loss/model_coupling': model_align_loss.item() if lambda_gamma > 0 else 0.0,
         'loss/hyper_prior': hyper_prior_loss.item() if lambda_hyper > 0 else 0.0,

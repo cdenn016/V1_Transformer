@@ -50,6 +50,11 @@ class VFEConfig:
     prior_handoff_sigma: float = 0.0    # σ cross-layer handoff (0.0 = frozen at embedding, >0 = blends posterior)
     prior_handoff_phi: bool = False     # Deprecated no-op: priors.phi is never consumed by VFEEStep (phi flows via beliefs)
     learnable_kappa: bool = False        # Learn per-layer kappa via log-space parameter
+    include_attention_entropy: bool = True  # Add κ·Σβ·log(β/π) to alignment_loss (manuscript eq:free_energy_functional_final).
+                                            # Defaults ON for theoretical correctness; disable to recover
+                                            # entropy-suppressed surrogate behavior (β.detach used so envelope
+                                            # theorem gives zero (μ,Σ,φ)-gradient at softmax fixed point; live
+                                            # κ multiplier gives correct -H(β) gradient for learnable_kappa).
 
     # === Covariance ===
     # NOTE: The diagonal GL(K) regime is an approximation, not exact gauge-Gaussian
@@ -107,7 +112,7 @@ class VFEConfig:
     # Making it truly learnable requires restructuring the AI gradient computation.
 
     # === Normalization ===
-    norm_type: str = 'mahalnorm'         # 'mahalnorm', 'rmsnorm', 'none'
+    norm_type: str = 'mahalnorm'         # 'mahalnorm', 'centered_mahalnorm', 'rmsnorm', 'layernorm' (gauge-blind, ablation-only), 'none'
 
     # === Training ===
     learning_rate: float = 3e-4

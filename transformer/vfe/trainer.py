@@ -24,6 +24,24 @@ from transformer.vfe.model import VFEModel
 logger = logging.getLogger(__name__)
 
 
+def _format_duration(secs: float) -> str:
+    """Compact human-readable duration: '42s', '5m23s', '1h05m', '2d03h'."""
+    secs = max(0.0, float(secs))
+    if secs < 60.0:
+        return f"{secs:.0f}s"
+    if secs < 3600.0:
+        m = int(secs // 60)
+        s = int(secs - 60 * m)
+        return f"{m}m{s:02d}s"
+    if secs < 86400.0:
+        h = int(secs // 3600)
+        m = int((secs - 3600 * h) // 60)
+        return f"{h}h{m:02d}m"
+    d = int(secs // 86400)
+    h = int((secs - 86400 * d) // 3600)
+    return f"{d}d{h:02d}h"
+
+
 class VFETrainer:
     r"""Training loop for VFEModel with full metrics and diagnostics.
 
@@ -69,6 +87,10 @@ class VFETrainer:
         # Metrics infrastructure (lazy init in train())
         self._metrics_tracker = None
         self._pub_tracker = None
+
+        # Attention-plot scratch space — captured in evaluate(), consumed
+        # in _plot_attention_patterns(). None means no eval has run yet.
+        self._last_val_input_ids = None
 
     def _build_optimizer(self) -> torch.optim.Optimizer:
         """Build AdamW optimizer with parameter groups."""
@@ -229,6 +251,117 @@ class VFETrainer:
             'kappa_max': max(kappas),
         }
 
+    def _decode_first_sample_tokens(self) -> Optional[List[str]]:
+        r"""Decode the most recent val-batch sample 0 to per-position
+        token strings, for attention-heatmap axis labels.
+
+        Returns ``None`` if no eval has populated `self._last_val_input_ids`
+        yet, or if the dataset lacks a `.decode` method (e.g. synthetic
+        TensorDataset). Each label is truncated to 6 characters to fit on
+        tick marks.
+        """
+        ids = getattr(self, '_last_val_input_ids', None)
+        if ids is None:
+            return None
+        ds = getattr(self.val_loader, 'dataset', None) if self.val_loader else None
+        decode = getattr(ds, 'decode', None)
+        if decode is None:
+            return None
+        try:
+            # TODO(future): cl100k_base byte-pair tokens that span multiple
+            # chars may render replacement boxes when the [:6] slice cuts
+            # mid-codepoint. Acceptable visual artifact; not a correctness
+            # bug. Consider a sanitizer that truncates on grapheme clusters.
+            return [str(decode([int(t)]))[:6] for t in ids.tolist()]
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _plot_attention_patterns(self, step: int) -> None:
+        r"""Save a publication-quality β heatmap PNG into
+        ``output_dir/attention/attention_step_{step:08d}.png``.
+
+        One panel per layer, sample 0 of the most recent val batch.
+        Causal upper triangle is NaN-masked and rendered light grey.
+        Color scale is shared across panels. Failure to plot is logged
+        and swallowed so a matplotlib glitch never aborts training.
+
+        Reads from ``block.e_step._last_attention`` (populated in
+        ``vfe/e_step.py`` at the end of the final E-step iteration).
+        """
+        if self.output_dir is None:
+            return
+        try:
+            import numpy as np
+            import matplotlib.pyplot as plt
+            from transformer.visualization.pub_style import set_pub_style
+        except ImportError as exc:
+            logger.warning(f"  matplotlib unavailable, skipping attention plot: {exc}")
+            return
+
+        try:
+            blocks = list(self.model.stack.blocks)
+            panels = []
+            for layer_idx, block in enumerate(blocks):
+                beta_t = getattr(block.e_step, '_last_attention', None)
+                if beta_t is None:
+                    continue
+                panels.append((layer_idx, beta_t[0].detach().cpu().numpy()))
+            if not panels:
+                return
+
+            labels = self._decode_first_sample_tokens()
+
+            set_pub_style()
+            n = len(panels)
+            fig, axes = plt.subplots(
+                1, n,
+                figsize=(max(5.5, 4.0 * n), 4.8),
+                squeeze=False,
+            )
+            axes = axes[0]
+            vmax = float(max(p[1].max() for p in panels)) or 1.0
+            cmap = plt.get_cmap('viridis').copy()
+            cmap.set_bad('#dddddd')
+
+            im = None
+            for ax, (layer_idx, b) in zip(axes, panels):
+                masked = b.copy()
+                iu = np.triu_indices_from(masked, k=1)
+                masked[iu] = np.nan
+                im = ax.imshow(masked, cmap=cmap, vmin=0.0, vmax=vmax, aspect='equal')
+                ax.set_title(f'layer {layer_idx}')
+                ax.set_xlabel('key pos')
+                if ax is axes[0]:
+                    ax.set_ylabel('query pos')
+                if labels is not None:
+                    N = b.shape[0]
+                    stride = max(1, N // 16)
+                    ticks = list(range(0, N, stride))
+                    tlabels = [labels[t] for t in ticks if t < len(labels)]
+                    if len(tlabels) == len(ticks):
+                        ax.set_xticks(ticks)
+                        ax.set_yticks(ticks)
+                        ax.set_xticklabels(tlabels, rotation=45, ha='right', fontsize=7)
+                        ax.set_yticklabels(tlabels, fontsize=7)
+                ax.grid(False)
+
+            cbar = fig.colorbar(im, ax=list(axes), shrink=0.85, pad=0.02)
+            cbar.set_label(r'$\beta_{ij}$')
+            fig.suptitle(rf'Attention $\beta$  |  step {step}', y=1.02)
+
+            out_dir = self.output_dir / 'attention'
+            out_dir.mkdir(parents=True, exist_ok=True)
+            # TODO(future): for very long runs (>1M steps) consider a
+            # rotating "keep last K" policy or a stride-by-K scheme.
+            # At eval_interval=1000 / max_steps=30k this produces ~30
+            # files / ~5MB total — no rotation needed yet.
+            out_path = out_dir / f'attention_step_{step:08d}.png'
+            fig.savefig(out_path)
+            plt.close(fig)
+            logger.info(f"  attention plot saved: {out_path}")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"  attention plot failed: {exc}")
+
     def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
         r"""Single training step with full metrics collection.
 
@@ -249,7 +382,10 @@ class VFETrainer:
 
         # E-step: infer q* from context only (no target in E-step)
         # M-step: CE loss from q* → target
-        logits, loss = self.model(input_ids, targets=target_ids)
+        # ce_for_log is the unscaled, regularizer-free CE (used for PPL/BPC reporting);
+        # `loss` is the optimizer's combined target (may include 1/sqrt(K) scaling
+        # if normalize_ce_by_dim=True and/or 0.5·mass_phi·||phi||² regularizer).
+        logits, loss, ce_for_log = self.model(input_ids, targets=target_ids)
 
         # Backward
         self.optimizer.zero_grad()
@@ -269,9 +405,10 @@ class VFETrainer:
         self.global_step += 1
 
         step_time = time.time() - t0
-        loss_val = loss.item()
-        ppl = math.exp(min(loss_val, 20.0))
-        bpc = loss_val / math.log(2)
+        loss_val = loss.item()        # combined optimizer loss (CE_scaled + mass_phi reg)
+        ce_val = ce_for_log.item()    # unscaled, regularizer-free CE
+        ppl = math.exp(min(ce_val, 20.0))
+        bpc = ce_val / math.log(2)
         lr = self.scheduler.get_last_lr()[0]
 
         # Collect E-step diagnostics from model
@@ -281,7 +418,8 @@ class VFETrainer:
         B, N = input_ids.shape
         metrics = {
             # Core loss
-            'loss': loss_val,
+            'loss': loss_val,    # combined optimizer loss
+            'ce': ce_val,        # unscaled cross-entropy (PPL/BPC source of truth)
             'ppl': ppl,
             'bpc': bpc,
             'lr': lr,
@@ -324,10 +462,11 @@ class VFETrainer:
             return {}
 
         self.model.eval()
-        total_loss = 0.0
+        total_ce = 0.0   # accumulate unscaled CE for correct PPL/BPC at eval
         total_tokens = 0
         total_samples = 0
 
+        first_batch_seen = False
         for batch in loader:
             if total_samples >= max_samples:
                 break
@@ -339,17 +478,30 @@ class VFETrainer:
                 input_ids = batch['input_ids'].to(self.device)
                 target_ids = batch['target_ids'].to(self.device)
 
-            _, loss = self.model(input_ids, targets=target_ids)
+            # Capture sample 0 of the first val batch for attention-heatmap
+            # axis labels. Refreshed every evaluate() call so the heatmap
+            # always reflects what the most recent val batch saw.
+            # TODO(future): expose a `fixed_reference_batch` config so the
+            # plotted batch is held constant across eval intervals — that
+            # makes attention-pattern temporal comparison strictly visual
+            # (same input, evolving β).
+            if not first_batch_seen:
+                self._last_val_input_ids = input_ids[0].detach().cpu()
+                first_batch_seen = True
+
+            _, _, ce_for_log = self.model(input_ids, targets=target_ids)
             n_tokens = (target_ids != -100).sum().item()
-            total_loss += loss.item() * n_tokens
+            total_ce += ce_for_log.item() * n_tokens
             total_tokens += n_tokens
             total_samples += input_ids.shape[0]
 
-        avg_loss = total_loss / max(total_tokens, 1)
+        avg_ce = total_ce / max(total_tokens, 1)
+        # `val_loss` semantically means avg unscaled CE (matches val_ppl/val_bpc).
+        # Default configs (mass_phi=0, normalize_ce_by_dim=False) are unaffected.
         return {
-            'val_loss': avg_loss,
-            'val_ppl': math.exp(min(avg_loss, 20.0)),
-            'val_bpc': avg_loss / math.log(2),
+            'val_loss': avg_ce,
+            'val_ppl': math.exp(min(avg_ce, 20.0)),
+            'val_bpc': avg_ce / math.log(2),
         }
 
     def _init_metrics(self) -> None:
@@ -620,15 +772,21 @@ class VFETrainer:
             if (step + 1) % log_interval == 0:
                 elapsed = time.time() - t0
                 steps_per_sec = (step + 1) / elapsed
+                remaining_steps = max(0, num_steps - (step + 1))
+                eta = remaining_steps / steps_per_sec if steps_per_sec > 0 else 0.0
                 msg = (
                     f"step {step+1}/{num_steps} | "
                     f"loss {metrics['loss']:.4f} | "
                     f"ppl {metrics['ppl']:.1f} | "
                     f"lr {metrics['lr']:.2e} | "
-                    f"{steps_per_sec:.1f} steps/s"
+                    f"{steps_per_sec:.1f} steps/s | "
+                    f"elap {_format_duration(elapsed)} | "
+                    f"eta {_format_duration(eta)}"
                 )
                 if 'attention_entropy' in metrics:
                     msg += f" | H(β) {metrics['attention_entropy']:.2f}"
+                if 'attention_entropy_loss' in metrics:
+                    msg += f" | F_H {metrics['attention_entropy_loss']:.3f}"
                 if 'sigma_q_mean' in metrics:
                     msg += f" | σ_q {metrics['sigma_q_mean']:.3f}"
                 logger.info(msg)
@@ -636,11 +794,21 @@ class VFETrainer:
             # Periodic evaluation
             if self.val_loader is not None and (step + 1) % eval_interval == 0:
                 val_metrics = self.evaluate()
+                # Visual separation: blank line before and after the val block.
+                # print() bypasses the logging formatter so the blank line is
+                # truly empty (no timestamp prefix).
+                print()
                 logger.info(
                     f"  val_loss {val_metrics['val_loss']:.4f} | "
                     f"val_ppl {val_metrics['val_ppl']:.1f} | "
                     f"val_bpc {val_metrics['val_bpc']:.3f}"
                 )
+                # Save publication-quality attention β heatmap. β is fresh
+                # because evaluate() just ran the model forward, populating
+                # block.e_step._last_attention. Plot failures are caught
+                # internally; never aborts training.
+                self._plot_attention_patterns(step + 1)
+                print()
 
                 # Record validation in publication tracker
                 if self._pub_tracker is not None:
