@@ -422,6 +422,11 @@ class VFEEStep(nn.Module):
                         'kl_mean': kl_matrix.mean().item(),
                         'kl_max': kl_matrix.max().item(),
                         'attention_entropy': -(beta.clamp(min=1e-10) * beta.clamp(min=1e-10).log()).sum(-1).mean().item(),
+                        'attention_entropy_loss': (
+                            (_kappa * math.sqrt(max(self.cfg.embed_dim, 1))
+                             * (beta.clamp(min=1e-30) * beta.clamp(min=1e-30).log()).sum()).item()
+                            if self.cfg.include_attention_entropy else 0.0
+                        ),
                         'attention_concentration': beta.max(dim=-1)[0].mean().item(),
                         # Covariance health
                         'sigma_q_mean': sigma.mean().item(),
@@ -442,6 +447,18 @@ class VFEEStep(nn.Module):
                         self._last_diagnostics['prior_belief_kl_mean'] = kl_qp.sum(-1).mean().item()
                         self._last_diagnostics['prior_belief_kl_max'] = kl_qp.sum(-1).max().item()
                         self._last_diagnostics['prior_belief_kl_std'] = kl_qp.sum(-1).std().item()
+
+                    # Persist raw tensors for off-line visualization
+                    # (attention heatmaps in VFETrainer._plot_attention_patterns).
+                    # Detached + retained until next forward; cleared on
+                    # the next E-step pass.
+                    # TODO(future): capture per-head β when
+                    # ``rope_full_gauge != 'off'`` (the inner loop computes
+                    # per-head β_h in _compute_rope_full_gauge_gradient_per_head;
+                    # at this diagnostic point only the aggregate β is alive,
+                    # so multi-head heatmaps are not yet supported).
+                    self._last_attention = beta.detach()
+                    self._last_kl_matrix = kl_matrix.detach()
 
                     # Free-energy trajectory (diagonal covariance only; empty
                     # list on full-cov paths).  Downstream can assert
@@ -529,6 +546,20 @@ class VFEEStep(nn.Module):
                 self.lambda_align * (beta_phi.detach() * kl_h).sum()
                 + self.lambda_soft * (beta_phi * kl_h.detach()).sum()
             )
+            if self.cfg.include_attention_entropy:
+                # Manuscript Eq. eq:free_energy_functional_final alignment-block entropy:
+                #   F_H = τ · Σ_ij β_ij log(β_ij / π_ij),   τ = effective softmax temperature
+                # In code: β = softmax(-KL / (κ · √K)), so τ_eff = κ · √K. The √K factor is
+                # what makes β a stationary point of F by envelope theorem (without it, the
+                # β being computed is NOT the F-minimizer for the temperature κ alone).
+                # Uniform prior π = 1/N (constant log N dropped — affects F by additive const,
+                # not gradients). β.detach() → envelope theorem gives zero (μ,Σ,φ)-grad at
+                # softmax fixed point. Live _kappa (effective_kappa, gradient-bearing when
+                # learnable_kappa=True) gives the correct √K · (β·log β).sum() κ-gradient.
+                beta_safe = beta_phi.detach().clamp(min=1e-30)
+                entropy_value = (beta_safe * beta_safe.log()).sum()
+                _dim_scale = math.sqrt(max(self.cfg.embed_dim, 1))
+                alignment_loss = alignment_loss + _kappa * _dim_scale * entropy_value
 
             if alignment_loss.grad_fn is not None:
                 grad_phi = torch.autograd.grad(

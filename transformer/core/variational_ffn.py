@@ -28,6 +28,8 @@ Free Energy (E-STEP):
     F = alpha * Sum_i KL(q_i||p_i)                         # Prior consistency (self-coupling)
       + lambda_belief * Sum_{i,j} beta_ij * KL(q_i||Omega_{ij}q_j)  # Belief alignment (direct: beta * dKL/dtheta)
       + lambda_softmax * Sum_{i,j} KL_ij * d(beta_ij)/dtheta        # Attention-variance coupling (dbeta/dtheta * KL)
+      + kappa * Sum_{i,j} beta_ij * log(beta_ij / pi_ij)            # Attention entropy (manuscript eq:free_energy_functional_final);
+                                                                    # opt-in via include_attention_entropy (default True), uniform prior π=1/N.
 
 E-step: Minimize F w.r.t. mu, Sigma (does not see targets — outer CE loss
     in compute_free_energy_loss provides the likelihood term).
@@ -216,6 +218,7 @@ class VariationalFFNDynamic(nn.Module):
                                    # prediction quality (CE only, α_M = 0).
         lambda_belief: float =  1.0,  # Boltzmann GLU weight (direct: β·∇KL — GELU/SiLU analog)
         lambda_softmax: float = 1.0,  # Attention-variance coupling weight (∂β/∂θ · KL)
+        include_attention_entropy: bool = True,  # Add κ·Σβ·log(β/π) to alignment_loss (manuscript eq:free_energy_functional_final).
         kappa: float =          1.0,        # Attention temperature
         n_iterations: int =     1,    # VFE descent steps (more steps = deeper equilibration)
         
@@ -504,6 +507,7 @@ class VariationalFFNDynamic(nn.Module):
         self.alpha = alpha
         self.lambda_belief = lambda_belief
         self.lambda_softmax = lambda_softmax
+        self.include_attention_entropy = include_attention_entropy
         self.kappa = kappa
         self.learnable_head_kappa = learnable_head_kappa
 
@@ -1031,6 +1035,15 @@ class VariationalFFNDynamic(nn.Module):
                 self.lambda_belief * (beta_h.detach() * kl_h).sum()
                 + self.lambda_softmax * (beta_h * kl_h.detach()).sum()
             )
+            if self.include_attention_entropy:
+                # Manuscript eq:free_energy_functional_final entropy: τ·Σβ·log(β/π).
+                # In code, softmax uses τ_eff = κ_h · √d_h, so the entropy weight must
+                # match for β to be a stationary point of F (envelope theorem).
+                # Uniform prior π=1/N; constant log N dropped. β.detach() — zero
+                # (μ,Σ,φ)-grad at fixed point. Live kappa_h carries κ-gradient.
+                _beta_safe = beta_h.detach().clamp(min=1e-30)
+                _sqrt_dh = math.sqrt(max(d_h, 1))
+                alignment_loss = alignment_loss + kappa_h * _sqrt_dh * (_beta_safe * _beta_safe.log()).sum()
             block_start = block_end
 
         if alignment_loss.grad_fn is not None:
@@ -1221,6 +1234,13 @@ class VariationalFFNDynamic(nn.Module):
                     self.lambda_belief * (beta_phi_h.detach() * kl_h).sum()
                     + self.lambda_softmax * (beta_phi_h * kl_h.detach()).sum()
                 )
+                if self.include_attention_entropy:
+                    # Manuscript eq:free_energy_functional_final entropy: τ·Σβ·log(β/π),
+                    # τ_eff = κ_h · √d_h to match the softmax temperature. Live kappa_h
+                    # carries the κ-gradient when learnable_head_kappa=True.
+                    _beta_safe = beta_phi_h.detach().clamp(min=1e-30)
+                    _sqrt_dh = math.sqrt(max(d_h, 1))
+                    alignment_loss = alignment_loss + kappa_h * _sqrt_dh * (_beta_safe * _beta_safe.log()).sum()
                 block_start = block_end
         else:
             _detach_beliefs = not (self.amortized_inference and self.exact_phi_grad)
@@ -1253,6 +1273,26 @@ class VariationalFFNDynamic(nn.Module):
                 self.lambda_belief * (beta_phi.detach() * kl_matrix).sum()
                 + self.lambda_softmax * (beta_phi * kl_matrix.detach()).sum()
             )
+            if self.include_attention_entropy:
+                # Manuscript eq:free_energy_functional_final entropy: τ·Σβ·log(β/π),
+                # τ_eff = κ_h · √d_h to match the softmax temperature.
+                # Consolidated multi-head site: sum per-head with live κ_h × √d_h
+                # weighting so learnable_head_kappa receives a correct κ-gradient.
+                # Assumes uniform irrep_dims (typical case); for mixed dims add a
+                # per-head √d_h vector.
+                _beta_safe = beta_phi.detach().clamp(min=1e-30)
+                _d_h_canon = self.irrep_dims[0] if self.irrep_dims else 1
+                _sqrt_dh = math.sqrt(max(_d_h_canon, 1))
+                if self.learnable_head_kappa and _beta_safe.dim() >= 4:
+                    _n_heads = _beta_safe.shape[1]
+                    _entropy_per_head = (_beta_safe * _beta_safe.log()).sum(dim=(0, -2, -1))
+                    _kappas = torch.stack([
+                        self._get_kappa_h(h_idx, _d_h_canon)
+                        for h_idx in range(_n_heads)
+                    ])
+                    alignment_loss = alignment_loss + _sqrt_dh * (_kappas * _entropy_per_head).sum()
+                else:
+                    alignment_loss = alignment_loss + self.kappa * _sqrt_dh * (_beta_safe * _beta_safe.log()).sum()
 
         if alignment_loss.grad_fn is not None:
             grad_phi = torch.autograd.grad(
