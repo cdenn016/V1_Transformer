@@ -90,10 +90,11 @@ from pathlib import Path
 #        - 'sym2':   dim = N*(N+1)/2 - 1  (symmetric traceless Sym²₀V)
 
 DEFAULT_MODE = 'em'               # Which mode to run
-SEED = 23         #6,23,111
+SEED = 6         #6,23,111
 # Dataset
-DEFAULT_DATASET = 'wiki-ja'  
-# 'wikitext-2' (~2M tokens) or 'wikitext-103' (~103M tokens), 'wiki-ja' japanese (~1B tokens, 100k vocab)
+DEFAULT_DATASET = 'wikitext-103'  
+# 'wikitext-2' (~2M tokens), 'wikitext-103' (~103M tokens), 'wiki-ja' japanese (~190M tokens at default cap, 100k vocab),
+# or 'wiki-en' english (~5B tokens at full dump, 100k vocab — cross-lingual counterpart to wiki-ja)
 _DEBUG_VFE_GRADS = False
 # ============================================================================
 
@@ -119,26 +120,26 @@ _DEBUG_VFE_GRADS = False
 EM_CONFIG = {
     # === Architecture ===
     'vocab_size':                 50257,
-    'embed_dim':                  90,
+    'embed_dim':                  20,
     'max_seq_len':                128,
     
     'batch_size':                 16, 
-    'max_steps':                  240000,
+    'max_steps':                  60000,
      
     'stride':                     128,  
-    'eval_stride':                128,                                                                                              
+    #'eval_stride':                128,                                                                                              
     'random_offset_per_epoch':    True,
     'stride_base_seed':           6,
     
     'n_layers':                   1,
     'ffn_n_iterations':           1,
     
-    'alpha_divergence':           0.5,
+    'alpha_divergence':           0.3,
     #'grad_accumulation_steps': 1,
     #'gradient_checkpoint_vfe': False,
     
-    'gauge_dim':                   15,
-    'irrep_spec':       [('fund', 6, 15)],
+    'gauge_dim':                   10,
+    'irrep_spec':       [('fund', 2, 10)],
 
     'use_prior_bank':             False,
     'gauge_fixed_priors':         False,    
@@ -155,7 +156,7 @@ EM_CONFIG = {
     'e_step_sigma_floor':         0.01,   # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
     
     # === EM gradient-flow mode ===
-    'em_mode':                    'em_phi_p',  # φ∈q: E-step optimizes μ,Σ,φ; all detached at EM boundary
+    'em_mode':                    'straight_through',  # φ∈q: E-step optimizes μ,Σ,φ; all detached at EM boundary
                                                # - 'straight_through' (default) — mu_p, sigma_p attached, semi-gradient phi
                                                # - 'ift_phi' — same + full IFT phi gradient
                                                # - 'em_phi_q' — clean EM, phi in q, all detached at boundary
@@ -173,7 +174,7 @@ EM_CONFIG = {
     'active_inference':           False,   #requires priorbank true
     
     'cache_decode_priors':        False,
-    'skip_attention':             False,   #skips ad hoc attention sublayer
+    'skip_attention':             True,   #skips ad hoc attention sublayer
     
     # === M-step: Optimizer ===  
     'optimizer_type':             'riemannian_adam',# or 'natural_gradient' or 'adamw' or 'riemannian_adam'
@@ -198,9 +199,11 @@ EM_CONFIG = {
     'lr_decay':                   'cosine',   #'linear', 'cosine', 'constant'
     
     'norm_type':                  'layernorm',  # 'layernorm' | 'rmsnorm' | 'mahalnorm' | 'none'
+                                                #'centered_mahalnorm'
+                                                
     'residual_type':              'additive',    # 'additive': mu_q = mu_q + mu_sub 
                                          # 'delta':    mu_q = mu_q + (mu_sub - mu_normalized),
-    #'centered_mahalnorm'
+    
     # === E-step Weights ===
  
     'E_alpha':                    1,      # E-step prior coupling weight
@@ -210,7 +213,10 @@ EM_CONFIG = {
     # === E-step Learning Rates ===
     
     'E_mu_q_lr':                  0.3,    # E-step μ step size (whitened, within trust=2.0)
-    'E_sigma_q_lr':               0.015,   # E-step σ step size (conservative)    
+    'E_sigma_q_lr':               0.015,  # E-step σ step size — DECOUPLED from E_mu_q_lr.
+                                          # Drives the σ retraction directly:
+                                          # σ_new = σ · exp(E_sigma_q_lr · decay_t · clamp(δσ/σ, ±E_sigma_q_trust))
+    'E_sigma_q_trust':            5.0,    # E-step σ trust-region clamp on |δσ/σ| (separate from step size)
     'E_phi_lr':                   0.05,   # E-step φ step size
 
     # === M-step Weights ===        
@@ -222,7 +228,7 @@ EM_CONFIG = {
     'lambda_gamma':               0,
     # === M-step Learning Rates (AdamW parameter groups) ===
     
-    'M_mu_p_lr':                  0.05,   # M-step prior mean embeddings (μ_p) 0.05
+    'M_mu_p_lr':                  0.07,   # M-step prior mean embeddings (μ_p) 0.05
     'M_sigma_p_lr':               0.015,     # M-step prior covariance embeddings (log σ_p) 0.015
     'M_phi_lr':                   0.0036,    # M-step gauge frame embeddings (φ) 0.0075
     
@@ -230,7 +236,7 @@ EM_CONFIG = {
     'M_vfe_hyperparam_lr':        0.095,  # M-step VFE hyperparams (raw_c0, raw_b0, raw_lr) 0.05
     'M_attention_lr':             0.013,  # M-step attention params (W_O, constant_omega) was0.06
     'M_output_lr':                0.05,  # M-step output projection (vocab logits) 0.05
-    'embed_weight_decay':         0.01,   # L2 hyper-prior on embeddings (μ_p, σ_p, φ) via AdamW
+    'embed_weight_decay':         0.0016,   # L2 hyper-prior on embeddings (μ_p, σ_p, φ) via AdamW
     'non_embed_weight_decay':     0.0043,  # L2 on non-embedding params (attention, output)
 
     # === Gauge group: GL(K) with multi-head block-diagonal structure ===
@@ -253,13 +259,13 @@ EM_CONFIG = {
 
     # === Position encoding ===
     'use_rope':                   True,
-    'rope_base':                  75,   
+    'rope_base':                  100,   
     'rope_full_gauge':            'off', # 'off', 'both', 'vfe_only'
     'pos_encoding_mode':          'none',
 
     # === Embedding init ===
     'mu_init_std':                0.4,
-    'phi_scale':                  0.01,
+    'phi_scale':                  0.05,
     
     'mu_normalize':               False,
     'mu_max_norm':                None,
@@ -268,10 +274,10 @@ EM_CONFIG = {
     # === Logging ===
     'log_interval':               200,
     'eval_interval':              2000,
-    'checkpoint_interval':        50000,
-    'semantic_analysis_interval': 6000,
-    'gauge_geometry_interval':    6000,   # Gauge field Dirichlet energy + invariants
-    'fiber_trajectory_interval':  6000,   # Fisher-Rao E-step trajectory (requires ffn_n_iterations > 1)
+    'checkpoint_interval':        25000,
+    'semantic_analysis_interval': 4000,
+    'gauge_geometry_interval':    4000,   # Gauge field Dirichlet energy + invariants
+    'fiber_trajectory_interval':  4000,   # Fisher-Rao E-step trajectory (requires ffn_n_iterations > 1)
 
     # =================================================================
     # NON-FLAT GAUGE TRANSPORT (holonomy)
@@ -292,7 +298,7 @@ EM_CONFIG = {
 
     # === Cross Head Gauge Couplings ====
     #Option A: couple just 0↔1, head 2 stays independent
-    # 'cross_couplings': [(0, 1), (1, 0)],
+    #'cross_couplings': [(0, 1), (1, 0)],
     # → super-blocks: [20, 10]  (heads 0,1 merged into GL(20), head 2 alone)
     
     # === Layer/iteration diagnostics ===
@@ -308,7 +314,7 @@ EM_CONFIG = {
     'verbose_diagnostics':         False,
     
     # === Multi-layer depth signal ===
-    'aux_layer_loss':              False,   # Enable for multi-layer: per-layer M-step CE loss
+    'aux_layer_loss':              True,   # Enable for multi-layer: per-layer M-step CE loss
     'aux_loss_weight':             0.3,     # Weight for auxiliary per-layer CE losses
 
     # === Regularization ===
@@ -332,7 +338,7 @@ EM_CONFIG = {
     # ===== Active Inference =======
     'active_inference_pragmatic_weight':  2,   # start small
     'active_inference_epistemic_weight':  5,   # keep both ON to avoid feedback loop
-    'active_inference_epistemic_samples': 6,     # MC samples for BALD
+    'active_inference_epistemic_samples': 10,     # MC samples for BALD
 }
 
 
@@ -838,8 +844,10 @@ def main():
     parser.add_argument('--seed', type=int, default=None,
                         help='Random seed for reproducibility')
     parser.add_argument('--dataset', type=str, default=DEFAULT_DATASET,
-                        choices=['wikitext-2', 'wikitext-103', 'wiki-ja'],
-                        help='Dataset to use: wikitext-2 (~2M tokens), wikitext-103 (~103M tokens), or wiki-ja (Japanese Wikipedia)')
+                        choices=['wikitext-2', 'wikitext-103', 'wiki-ja', 'wiki-en'],
+                        help='Dataset: wikitext-2 (~2M tokens), wikitext-103 (~103M tokens), '
+                             'wiki-ja (Japanese Wikipedia, cl100k_base), or wiki-en '
+                             '(English Wikipedia, cl100k_base, full ~5B-token dump)')
     parser.add_argument('--semantic_analysis_interval', type=int, default=10000,
                         help='Run gauge frame semantic analysis every N steps (0 to disable)')
 
@@ -892,10 +900,10 @@ def main():
         config = PURE_VFE_CONFIG.copy()
         config['dataset'] = args.dataset
 
-        if args.dataset == 'wiki-ja' and config['vocab_size'] == 50257:
+        if args.dataset in ('wiki-ja', 'wiki-en') and config['vocab_size'] == 50257:
             config['vocab_size'] = 100277
             print(
-                f"\n[wiki-ja] Auto-adjusted vocab_size: 50257 -> 100277 (cl100k_base full vocab)")
+                f"\n[{args.dataset}] Auto-adjusted vocab_size: 50257 -> 100277 (cl100k_base full vocab)")
 
         result = run_pure_vfe_experiment(
             config=config,
@@ -924,18 +932,18 @@ def main():
     config['dataset'] = args.dataset
     config['debug_vfe_grads'] = _DEBUG_VFE_GRADS
 
-    if args.dataset == 'wiki-ja' and config['vocab_size'] == 50257:
+    if args.dataset in ('wiki-ja', 'wiki-en') and config['vocab_size'] == 50257:
         config['vocab_size'] = 100277
         print(
-            f"\n[wiki-ja] Auto-adjusted vocab_size: 50257 -> 100277 (cl100k_base full vocab)")
+            f"\n[{args.dataset}] Auto-adjusted vocab_size: 50257 -> 100277 (cl100k_base full vocab)")
 
-    if args.dataset == 'wiki-ja' and config.get('eval_stride') is None:
+    if args.dataset in ('wiki-ja', 'wiki-en') and config.get('eval_stride') is None:
         config['eval_stride'] = config.get('stride', 128)
         print(
-            f"\n[wiki-ja] Auto-set eval_stride={config['eval_stride']} to match training stride. "
+            f"\n[{args.dataset}] Auto-set eval_stride={config['eval_stride']} to match training stride. "
             f"Default eval_stride=None (stride-1 sliding) gives only ~13k unique tokens of "
             f"validation coverage at max_samples=12800, which pins val_ppl on a tiny "
-            f"non-representative prefix of the tail-sliced wiki-ja val split.")
+            f"non-representative prefix of the tail-sliced val split.")
 
     result = run_single_experiment(
         config=config,

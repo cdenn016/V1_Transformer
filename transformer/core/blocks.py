@@ -528,6 +528,7 @@ class GaugeTransformerBlock(nn.Module):
             learnable_lr=cfg.E_learnable_lr,
             mu_lr=cfg.E_mu_q_lr,
             sigma_lr=cfg.E_sigma_q_lr,
+            sigma_trust=cfg.E_sigma_q_trust,
             update_sigma=cfg.ffn_update_sigma,
             diagonal_covariance=cfg.diagonal_covariance,
             exact_diagonal_transport=cfg.exact_diagonal_transport,
