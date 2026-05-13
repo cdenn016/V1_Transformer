@@ -104,7 +104,8 @@ class BlockConfig:
     
     phi_lr: float =            0.05                # Learning rate for ∂F/∂φ descent
     E_mu_q_lr: float =         0.1             # E-step μ natural gradient step size
-    E_sigma_q_lr: float =      0.001        # E-step σ trust region scale
+    E_sigma_q_lr: float =      0.001        # E-step σ step size (decoupled from μ LR; drives the retraction directly)
+    E_sigma_q_trust: float =   5.0          # E-step σ trust-region clamp on |δσ/σ| (default 5.0 = historical retract default)
 
               
     phi_max_norm: Optional[float] = None # Max phi norm; None = auto (π for SO(N), 5.0 for GL(K))
@@ -505,6 +506,7 @@ class BlockConfig:
             E_learnable_lr=config.get('E_learnable_lr', config.get('ffn_learnable_lr', True)),
             E_mu_q_lr=config.get('E_mu_q_lr', config.get('e_step_mu_lr', 0.1)),
             E_sigma_q_lr=config.get('E_sigma_q_lr', config.get('e_step_sigma_lr', 0.001)),
+            E_sigma_q_trust=config.get('E_sigma_q_trust', config.get('e_step_sigma_trust', 5.0)),
             E_lambda_belief=config.get('E_lambda_belief', config.get('ffn_lambda_belief', 1.0)),
             E_lambda_softmax=config.get('E_lambda_softmax', config.get('ffn_lambda_softmax', 1.0)),
             ffn_update_sigma=config.get('ffn_update_sigma', True),

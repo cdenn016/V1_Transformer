@@ -223,7 +223,8 @@ class VariationalFFNDynamic(nn.Module):
         n_iterations: int =     1,    # VFE descent steps (more steps = deeper equilibration)
         
         mu_lr: float =          0.1,           # E-step μ step size (used when learnable_lr=False)
-        sigma_lr: float =       0.001,      # E-step σ trust region scale (used when learnable_lr=False)
+        sigma_lr: float =       0.001,      # E-step σ step size (DECOUPLED from μ LR — drives the retraction directly)
+        sigma_trust: float =    5.0,        # E-step σ trust-region clamp on the whitened tangent δσ/σ (clamp magnitude, not step)
         phi_lr: float =         0.05,      # Learning rate for phi updates
         
         learnable_lr: bool =              True, # Learn step size?
@@ -638,16 +639,23 @@ class VariationalFFNDynamic(nn.Module):
                 "double-counts the correction."
             )
 
-        # Learnable step size (stored in unconstrained space, apply softplus for positive LR)
+        # Learnable step sizes (stored in unconstrained space; softplus → positive LR).
+        # μ and σ are INDEPENDENT: separate raw parameters, separate softplus+clamp
+        # properties, separate gradients when learnable_lr=True. This is the
+        # decoupling that makes E_sigma_q_lr a real σ knob rather than coupled to
+        # the μ step size.
         if learnable_lr:
             self.raw_lr = nn.Parameter(torch.tensor(self._softplus_inverse(mu_lr)))
+            self.raw_sigma_lr = nn.Parameter(torch.tensor(self._softplus_inverse(sigma_lr)))
         else:
-            # Fixed per-variable E-step rates from config
             self.register_buffer('raw_lr', torch.tensor(self._softplus_inverse(mu_lr)))
-
-        # Always store the configured sigma LR so _get_sigma_trust() returns
-        # the user's value instead of the legacy coupled ratio (lr * 0.01).
-        self._fixed_sigma_lr = sigma_lr
+            self.register_buffer('raw_sigma_lr', torch.tensor(self._softplus_inverse(sigma_lr)))
+        # σ trust-region clamp on the whitened tangent (semantically separate
+        # from the step size). Caps |δσ/σ| so the multiplicative update
+        # exp(step·whitened) stays bounded. Default 5.0 matches the historical
+        # vfe_utils.retract_spd_diagonal_torch default; full-cov path applies
+        # an internal ×0.5 factor.
+        self.e_step_sigma_trust = sigma_trust
 
         # torch.compile the VFE iteration inner loop (Finding 25).
         # Fuses small element-wise ops and reduces kernel launch overhead.
@@ -669,6 +677,16 @@ class VariationalFFNDynamic(nn.Module):
     def lr(self) -> torch.Tensor:
         """E-step μ learning rate, constrained to (0, 0.5] via softplus + clamp."""
         return F.softplus(self.raw_lr).clamp(max=0.5)
+
+    @property
+    def sigma_lr(self) -> torch.Tensor:
+        """E-step σ learning rate, constrained to (0, 0.5] via softplus + clamp.
+
+        Independent of ``self.lr`` (μ LR): backed by ``raw_sigma_lr``, which is
+        an ``nn.Parameter`` when ``learnable_lr=True`` and a buffer otherwise.
+        Drives the σ retraction step size directly — see ``_retract_sigma``.
+        """
+        return F.softplus(self.raw_sigma_lr).clamp(max=0.5)
 
     def _get_kappa_h(self, head_idx: int, d_h: int):
         r"""Get per-head temperature κ_h.
@@ -746,14 +764,19 @@ class VariationalFFNDynamic(nn.Module):
         return snapshots
 
     def _get_sigma_trust(self, effective_lr: torch.Tensor) -> float:
-        r"""E-step σ trust region scale.
+        r"""E-step σ trust region clamp (caps the whitened tangent δσ/σ).
 
-        When learnable_lr=False, returns the user-specified sigma_lr directly,
-        decoupled from the μ step size. When learnable_lr=True, falls back to
-        the legacy coupled ratio effective_lr * 0.01.
+        Separate from the σ step size (sigma_lr). The trust region only
+        clamps the per-iteration tangent magnitude; the step size is the
+        actual multiplier applied to the clamped tangent before exp.
+
+        Decoupled from effective_lr (the μ step size). The fallback path
+        (`effective_lr * 0.01`) is retained only for very old checkpoints
+        whose VFE module was instantiated before e_step_sigma_trust existed.
         """
-        if hasattr(self, '_fixed_sigma_lr'):
-            return self._fixed_sigma_lr
+        if hasattr(self, 'e_step_sigma_trust'):
+            return self.e_step_sigma_trust
+        # Legacy fallback (pre-2026-05-13 checkpoints)
         return effective_lr * 0.01
 
     @staticmethod
@@ -1753,7 +1776,17 @@ class VariationalFFNDynamic(nn.Module):
     ) -> torch.Tensor:
         r"""Apply the SPD-preserving retraction to ``sigma_current``.
 
-        Delegates to :func:`vfe_utils.retract_sigma_e_step`.
+        Step size is ``self.sigma_lr`` (independent of μ LR, backed by
+        ``raw_sigma_lr`` — Parameter when learnable_lr=True, buffer
+        otherwise) modulated by the same per-iteration cosine ``decay_factor``
+        that the caller's ``effective_lr`` carries (= ``self.lr * decay_factor``).
+        We recover the decay factor by dividing out ``self.lr`` so μ and σ
+        share the in-loop annealing schedule but remain independent in
+        magnitude — when learnable, they receive separate autograd gradients.
+
+        Trust region is ``self.e_step_sigma_trust`` (clamp on the whitened
+        tangent δσ/σ before exp). Delegates to
+        :func:`vfe_utils.retract_sigma_e_step`.
         """
         # F4: thread e_step_sigma_floor as the retraction eps for full-cov
         # so the Σ_q eigenvalue floor matches the Σ_p floor in magnitude.
@@ -1762,8 +1795,13 @@ class VariationalFFNDynamic(nn.Module):
         _retract_eps = self.e_step_sigma_floor if (
             not is_diagonal and self.spd_floor_mode == 'eigclamp'
         ) else eps
+        # Recover the cosine decay factor from effective_lr / self.lr so σ
+        # follows the same annealing schedule across E-step iterations
+        # without being coupled to the μ step magnitude.
+        _decay_factor = effective_lr / self.lr.detach().clamp(min=eps)
+        _sigma_step = self.sigma_lr * _decay_factor
         return _retract_sigma_impl(
-            sigma_current, nat_grad_sigma, effective_lr,
+            sigma_current, nat_grad_sigma, _sigma_step,
             is_diagonal, _retract_eps,
             update_sigma=self.update_sigma,
             sigma_trust=self._get_sigma_trust(effective_lr),
