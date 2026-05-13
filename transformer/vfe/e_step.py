@@ -548,15 +548,17 @@ class VFEEStep(nn.Module):
             )
             if self.cfg.include_attention_entropy:
                 # Manuscript Eq. eq:free_energy_functional_final alignment-block entropy:
-                #   F_H = τ · Σ_ij β_ij log(β_ij / π_ij),   τ = effective softmax temperature
-                # In code: β = softmax(-KL / (κ · √K)), so τ_eff = κ · √K. The √K factor is
-                # what makes β a stationary point of F by envelope theorem (without it, the
-                # β being computed is NOT the F-minimizer for the temperature κ alone).
-                # Uniform prior π = 1/N (constant log N dropped — affects F by additive const,
-                # not gradients). β.detach() → envelope theorem gives zero (μ,Σ,φ)-grad at
-                # softmax fixed point. Live _kappa (effective_kappa, gradient-bearing when
-                # learnable_kappa=True) gives the correct √K · (β·log β).sum() κ-gradient.
-                beta_safe = beta_phi.detach().clamp(min=1e-30)
+                #   F_H = τ · Σ_ij β_ij log(β_ij / π_ij),   τ_eff = κ · √K (softmax temp).
+                # ATTACHED β: autograd flows through the softmax. This is the LITERAL
+                # manuscript F functional. The lambda_soft · (β · KL.detach()).sum()
+                # term above contributes −τ⁻¹·Cov_β(KL, ∇KL) (manuscript's "entropy-
+                # suppressed surrogate offset", line 1261); the attached-β entropy
+                # term contributes the canceling +τ⁻¹·Cov so the net gradient reduces
+                # to the envelope prediction Σ β·∂KL/∂θ at the softmax fixed point.
+                # Verified by tests/test_entropy_envelope.py — λ_soft=1, β.attached →
+                # MATCH to ~1e-18.
+                # Uniform prior π = 1/N (constant log N dropped).
+                beta_safe = beta_phi.clamp(min=1e-30)
                 entropy_value = (beta_safe * beta_safe.log()).sum()
                 _dim_scale = math.sqrt(max(self.cfg.embed_dim, 1))
                 alignment_loss = alignment_loss + _kappa * _dim_scale * entropy_value
