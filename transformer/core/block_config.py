@@ -234,6 +234,30 @@ class BlockConfig:
         if self._em_phi_mode == 'M_phi_p':
             self.evolve_phi = False
             self.evolve_phi_e_step = False
+
+        # Detaching EM modes are incompatible with skip_attention=True. These
+        # modes (em_phi_p, em_phi_q, implicit_ift) detach σ_p and/or φ inside
+        # the FFN's E-step and rely on the attention sublayer as the sole
+        # autograd path back to σ_embed and φ_embed. With skip_attention=True
+        # there is no attention sublayer, so σ and φ embeddings receive no
+        # gradient and stay frozen at initialization — a silent failure that
+        # produces zero-variance Σ across tokens and overlapping φ/Ω clusters
+        # in token-level visualizations.
+        # Compatible modes for skip_attention=True: 'straight_through', 'ift_phi'.
+        _detaching_modes = {'em_phi_p', 'em_phi_q', 'implicit_ift'}
+        if getattr(self, 'skip_attention', False) and self.em_mode in _detaching_modes:
+            import warnings as _warnings
+            _warnings.warn(
+                f"em_mode={self.em_mode!r} combined with skip_attention=True will "
+                f"silently freeze σ_embed and φ_embed at initialization: the FFN's "
+                f"E-step detaches σ_p and/or φ, and the attention sublayer (the only "
+                f"remaining autograd path to those embeddings) is disabled. Use "
+                f"em_mode='straight_through' or 'ift_phi' for a clean skip_attention=True "
+                f"configuration where the FFN E-step itself provides the M-step "
+                f"gradients for σ and φ.",
+                UserWarning,
+                stacklevel=2,
+            )
         # Constant/trivial gauge: phi is not used for transport
         if self.gauge_mode in ('constant', 'trivial'):
             self.evolve_phi = False
