@@ -1040,6 +1040,16 @@ class GaugeTransformerBlock(nn.Module):
             mu_q = mu_ffn
 
         if return_attention:
+            # When skip_attention=True the attention sublayer was bypassed
+            # (β and kl_matrix initialized to None at the top of forward()
+            # stayed None). Surface the FFN's own final-iteration β so
+            # downstream visualization (attention heatmaps, recorder) still
+            # gets a meaningful per-token attention pattern from the VFE
+            # E-step. kl_matrix stays None — the FFN does not retain per-
+            # iteration KL for plotting and the standard heatmap consumer
+            # needs only β.
+            if self.skip_attention and beta is None:
+                beta = getattr(self.ffn, '_last_beta', None)
             return mu_q, sigma_q, phi_out, beta, kl_matrix
         return mu_q, sigma_q, phi_out
 

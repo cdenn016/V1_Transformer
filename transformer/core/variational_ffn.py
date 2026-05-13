@@ -1484,6 +1484,19 @@ class VariationalFFNDynamic(nn.Module):
         # Omega for multi-layer propagation
         self._last_omega = omega_current
 
+        # Latest-iteration β for downstream attention-pattern visualization,
+        # always stored regardless of return_beta_history. When the enclosing
+        # block has skip_attention=True there is no attention sublayer β to
+        # plot, but the FFN's own β is the meaningful per-token attention
+        # pattern and downstream plotting code reads this attribute via the
+        # block. Detached so it doesn't keep the E-step graph alive past here.
+        if beta_heads:
+            self._last_beta = torch.stack(beta_heads, dim=1).detach()
+        elif beta_current is not None:
+            self._last_beta = beta_current.detach()
+        else:
+            self._last_beta = None
+
     # =================================================================
     # Helper: Prepare E-step inputs (sigma init, prior setup, alpha)
     # =================================================================
