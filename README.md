@@ -58,18 +58,22 @@ Each agent (token) carries a Gaussian belief `q_i = N(mu_i, Sigma_i)` in a local
 ```
 F = sum_i  alpha D_KL(q_i || p_i)                         [self-coupling: beliefs to priors]
   + sum_i  lambda_h D_KL(s_i || h)                        [hyper-prior: models to centroid]
-  + sum_ij beta_ij D_KL(q_i || Omega_ij q_j)              [belief coupling / attention]
-  + sum_ij gamma_ij D_KL(s_i || Omega_ij s_j)             [model coupling / meta-cognition]
+  + sum_ij [ beta_ij  D_KL(q_i || Omega_ij q_j)
+            + tau beta_ij  log(beta_ij / pi_ij) ]         [belief coupling + attention entropy]
+  + sum_ij [ gamma_ij D_KL(s_i || Omega_ij s_j)
+            + tau gamma_ij log(gamma_ij / pi^(s)_ij) ]    [model coupling + meta entropy]
   - E_q[log p(o | x)]                                     [observation likelihood]
 ```
 
-Attention weights emerge from information geometry:
+The `tau beta_ij log(beta_ij / pi_ij)` term is the attention-distribution entropy with prior `pi_ij` (uniform `1/N` over valid positions in code). It is constitutive of the variational stationarity that produces the softmax β below — minimizing a pure linear functional of β on the simplex would give a delta function, not a softmax. Manuscript reference: `\label{eq:free_energy_functional_final}` in `Attention/Participatory_it_from_bit.tex`.
+
+Attention weights emerge as the row-Lagrangian stationary point of F:
 
 ```
 beta_ij = softmax_j(-D_KL(q_i || Omega_ij q_j) / tau)
 ```
 
-where `Omega_ij = exp(phi_i) exp(-phi_j)` is the gauge transport between agents. **No W_Q, W_K, W_V projections are used**---attention arises from the geometry of belief distributions.
+where `Omega_ij = exp(phi_i) exp(-phi_j)` is the gauge transport between agents and `tau = kappa * sqrt(K)` is the effective softmax temperature (κ is a learnable scalar; the √K factor normalizes the KL magnitude across head dimensions). **No W_Q, W_K, W_V projections are used**---attention arises from the geometry of belief distributions.
 
 
 ### Forward Pass (Actual Code Flow)
@@ -108,7 +112,9 @@ FOR EACH LAYER:
 Final LayerNorm → Output Projection → Logits
 ```
 
-**Architectural note:** The separate attention sublayer is an engineering heuristic, not derived from the VFE theory. The theory (Algorithm 1) identifies each layer with a single E-step iteration where attention (β computation) and belief updates are unified. The E-step recomputes β internally and discards the attention sublayer's β entirely. The attention sublayer's only contribution is the message aggregation residual (μ ← μ + W_O · μ_agg), which approximates one step of the alignment gradient but uses a learned projection W_O instead of the Fisher metric, and lacks step-size control. Setting `skip_attention=True` recovers the pure VFE architecture.
+**Architectural note: the attention sublayer is optional, not mathematically required.** The theory (Algorithm 1) identifies each layer with a single E-step iteration where attention (β computation) and belief updates are unified. The E-step recomputes β internally and discards any attention-sublayer β. The attention sublayer's only forward-pass contribution is the message-aggregation residual (μ ← μ + W_O · μ_agg), which approximates one step of the alignment gradient but uses a learned projection W_O instead of the Fisher metric and lacks step-size control. Setting `skip_attention=True` recovers the pure VFE architecture (clean E-step + M-step, no separate attention layer).
+
+**When `skip_attention=True` requires care: `em_mode` selection.** The detaching EM modes `em_phi_p`, `em_phi_q`, and `implicit_ift` (rows with σ_p detached or φ detached or both — see the EM modes table below) detach σ_p and/or φ inside the FFN's E-step. In those modes the attention sublayer is the *sole* autograd path back to `sigma_embed` and `phi_embed`. Combining any of them with `skip_attention=True` will silently freeze σ_embed and φ_embed at initialization — Σ gets zero variance across tokens, φ/Ω cluster overlap completely in token visualizations. Use `em_mode='straight_through'` (default) or `em_mode='ift_phi'` for a clean `skip_attention=True` configuration where the FFN's E-step itself provides the M-step gradients for σ and φ. `BlockConfig.__post_init__` warns when an incompatible combination is detected.
 
 
 ## Training Modes
