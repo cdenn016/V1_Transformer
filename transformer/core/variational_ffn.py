@@ -1036,12 +1036,12 @@ class VariationalFFNDynamic(nn.Module):
                 + self.lambda_softmax * (beta_h * kl_h.detach()).sum()
             )
             if self.include_attention_entropy:
-                # Manuscript eq:free_energy_functional_final entropy: τ·Σβ·log(β/π).
-                # In code, softmax uses τ_eff = κ_h · √d_h, so the entropy weight must
-                # match for β to be a stationary point of F (envelope theorem).
-                # Uniform prior π=1/N; constant log N dropped. β.detach() — zero
-                # (μ,Σ,φ)-grad at fixed point. Live kappa_h carries κ-gradient.
-                _beta_safe = beta_h.detach().clamp(min=1e-30)
+                # Manuscript eq:free_energy_functional_final entropy: τ·Σβ·log(β/π),
+                # τ_eff = κ_h · √d_h to match the softmax temperature. ATTACHED β:
+                # the +τ⁻¹·Cov from the entropy term cancels the lambda_softmax term's
+                # −τ⁻¹·Cov so the net gradient matches manuscript ∇F_red at softmax β.
+                # See tests/test_entropy_envelope.py.
+                _beta_safe = beta_h.clamp(min=1e-30)
                 _sqrt_dh = math.sqrt(max(d_h, 1))
                 alignment_loss = alignment_loss + kappa_h * _sqrt_dh * (_beta_safe * _beta_safe.log()).sum()
             block_start = block_end
@@ -1236,9 +1236,9 @@ class VariationalFFNDynamic(nn.Module):
                 )
                 if self.include_attention_entropy:
                     # Manuscript eq:free_energy_functional_final entropy: τ·Σβ·log(β/π),
-                    # τ_eff = κ_h · √d_h to match the softmax temperature. Live kappa_h
-                    # carries the κ-gradient when learnable_head_kappa=True.
-                    _beta_safe = beta_phi_h.detach().clamp(min=1e-30)
+                    # τ_eff = κ_h · √d_h. ATTACHED β so the entropy gradient cancels
+                    # the lambda_softmax surrogate offset → net = ∇F_red at softmax β.
+                    _beta_safe = beta_phi_h.clamp(min=1e-30)
                     _sqrt_dh = math.sqrt(max(d_h, 1))
                     alignment_loss = alignment_loss + kappa_h * _sqrt_dh * (_beta_safe * _beta_safe.log()).sum()
                 block_start = block_end
@@ -1275,12 +1275,11 @@ class VariationalFFNDynamic(nn.Module):
             )
             if self.include_attention_entropy:
                 # Manuscript eq:free_energy_functional_final entropy: τ·Σβ·log(β/π),
-                # τ_eff = κ_h · √d_h to match the softmax temperature.
-                # Consolidated multi-head site: sum per-head with live κ_h × √d_h
-                # weighting so learnable_head_kappa receives a correct κ-gradient.
-                # Assumes uniform irrep_dims (typical case); for mixed dims add a
-                # per-head √d_h vector.
-                _beta_safe = beta_phi.detach().clamp(min=1e-30)
+                # τ_eff = κ_h · √d_h. ATTACHED β so autograd through softmax produces
+                # the canceling +τ⁻¹·Cov that pairs with the lambda_softmax term's
+                # −τ⁻¹·Cov. Per-head live kappa_h carries the κ-gradient when
+                # learnable_head_kappa=True. Assumes uniform irrep_dims.
+                _beta_safe = beta_phi.clamp(min=1e-30)
                 _d_h_canon = self.irrep_dims[0] if self.irrep_dims else 1
                 _sqrt_dh = math.sqrt(max(_d_h_canon, 1))
                 if self.learnable_head_kappa and _beta_safe.dim() >= 4:
