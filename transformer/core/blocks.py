@@ -768,6 +768,65 @@ class GaugeTransformerBlock(nn.Module):
         kl_matrix = None  # Set by attention sublayer; stays None when skip_attention=True
         delta_ij = None  # Non-flat connection (frozen E-step constant when passed to FFN)
         _shared_bep = None  # Shared block exp pairs for attention + FFN
+
+        # =====================================================================
+        # skip_attention M-step gradient bridge (STE ghost attention)
+        # =====================================================================
+        # When skip_attention=True AND the FFN is in a gradient-detaching EM
+        # mode (em_phi_p / em_phi_q / implicit_ift), the bypassed attention
+        # sublayer is the only autograd path that would carry M-step gradients
+        # back into sigma_embed (log_sigma_diag) and phi_embed. The FFN's
+        # E-step detaches sigma_p (variational_ffn.py:1541 when
+        # amortize_sigma=False) and phi (line 1614 when em_phi_mode='M_phi_p'),
+        # so without the attention sublayer those gradients stay None.
+        #
+        # Fix: compute a "ghost" attention output under autograd with sigma
+        # and phi attached, then inject it via the straight-through estimator
+        #
+        #     mu_q = mu_q + (mu_attn_ghost - mu_attn_ghost.detach())
+        #
+        # The forward value is bitwise unchanged (the (x - x.detach()) term
+        # is numerically zero). The backward path carries
+        # (∂L/∂μ_q) · (∂μ_attn_ghost/∂{σ,φ}) into sigma_embed / phi_embed,
+        # matching the gradient the real attention sublayer would have
+        # produced. Sigma is NOT bridged — the CLAUDE.md gauge-equivariance
+        # constraint Σ → Ω·Σ·Ωᵀ would be violated by a μ-only STE on Σ.
+        _bridge_active = (
+            self.skip_attention
+            and self.training
+            and self.attention.gauge_mode != 'trivial'
+            and self.attention.irrep_dims is not None
+            and (
+                (not self.ffn.amortize_sigma)
+                or (self.ffn.em_phi_mode == 'M_phi_p')
+                or self.ffn.implicit_em
+            )
+        )
+        if _bridge_active:
+            # Pre-norm the input the same way the real attention sublayer
+            # would (norm1, with optional sigma / mu_prior arguments).
+            if isinstance(self.norm1, CenteredMahalanobisNorm):
+                _ghost_mu_n = self.norm1(mu_q, sigma_q, mu_prior=mu_prior)
+            elif isinstance(self.norm1, MahalanobisNorm):
+                _ghost_mu_n = self.norm1(mu_q, sigma_q)
+            else:
+                _ghost_mu_n = self.norm1(mu_q)
+
+            # Ghost attention: same callable, same inputs, no cached transports
+            # so autograd reaches phi (and through aggregate_messages, sigma_q
+            # which is the prior covariance for σ_embed).
+            _mu_attn_ghost, _, _, _ = self.attention(
+                _ghost_mu_n,
+                sigma_q,
+                phi,
+                generators,
+                mask=mask,
+                return_attention=False,
+                cached_head_transports=None,
+            )
+            # Straight-through estimator: zero on forward, real ∂/∂{σ,φ} on backward.
+            mu_q = mu_q + (_mu_attn_ghost - _mu_attn_ghost.detach())
+
         if not self.skip_attention:
             # Pre-layer normalization on means
             # MahalanobisNorm requires sigma; CenteredMahalanobisNorm additionally
