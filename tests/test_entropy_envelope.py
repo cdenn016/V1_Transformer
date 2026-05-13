@@ -76,24 +76,29 @@ def assemble_code_loss(
     lambda_soft: float = 1.0,
     include_entropy: bool = True,
     entropy_attached: bool = False,
+    direct_form: bool = False,
 ) -> torch.Tensor:
-    """Mimic the code's alignment_loss expression."""
+    """Mimic the code's alignment_loss expression.
+
+    direct_form=True replicates the post-2026-05-12 production path: when entropy
+    is enabled, replace the product-rule split with the manuscript F functional
+    scaled by lambda_align. lambda_soft is ignored.
+    """
     kl = kl_matrix_all_pairs(mu, sigma)
     beta = softmax_attention(kl, kappa, K)
     tau_eff = kappa * math.sqrt(K)
 
-    # The product-rule split used in e_step.py / variational_ffn.py:
+    if direct_form and include_entropy:
+        beta_safe = beta.clamp(min=1e-30)
+        F_manuscript = (beta * kl).sum() + tau_eff * (beta_safe * beta_safe.log()).sum()
+        return lambda_align * F_manuscript
+
     align_term = lambda_align * (beta.detach() * kl).sum()
     soft_term = lambda_soft * (beta * kl.detach()).sum()
     loss = align_term + soft_term
 
     if include_entropy:
-        if entropy_attached:
-            # Attached β — autograd flows through softmax into μ, Σ, κ
-            beta_for_h = beta
-        else:
-            # Detached β — envelope-theorem path
-            beta_for_h = beta.detach()
+        beta_for_h = beta if entropy_attached else beta.detach()
         beta_safe = beta_for_h.clamp(min=1e-30)
         h_term = tau_eff * (beta_safe * beta_safe.log()).sum()
         loss = loss + h_term
@@ -204,20 +209,44 @@ def run_test() -> None:
         print(f"{name:<35} {d_mu:<12.2e} {d_sigma:<12.2e} {d_kappa:<12.2e}{match_mark}")
 
     print()
-    # Hard assertion: production config must match envelope theorem
-    prod_g_mu, prod_g_sigma, prod_g_kappa = autograd_code_gradients(
-        mu, sigma, kappa, K, lambda_soft=1.0, entropy_attached=True,
-    )
+    # Hard assertion: production direct-form is λ_soft-independent and gives
+    # λ_align × manuscript-envelope gradient for any λ_soft.
+    print("Production direct-form assertion (λ_align=1, any λ_soft) tolerance 1e-10:")
     tol = 1e-10
-    d_mu = (prod_g_mu - env_mu).norm().item()
-    d_sigma = (prod_g_sigma - env_sigma).norm().item()
-    d_kappa = (prod_g_kappa - env_kappa).abs().item()
-    print(f"Production-config assertion (λ_soft=1, β.attached) tolerance {tol:.0e}:")
-    print(f"  ||Δ μ|| = {d_mu:.2e}    ||Δ Σ|| = {d_sigma:.2e}    |Δ κ| = {d_kappa:.2e}")
-    assert d_mu < tol and d_sigma < tol and d_kappa < tol, (
-        f"PRODUCTION CONFIG MISMATCH: μ={d_mu:.2e}, Σ={d_sigma:.2e}, κ={d_kappa:.2e}"
-    )
-    print("  PASS — production code matches manuscript envelope-theorem gradient.")
+    for lam_soft in (0.0, 0.5, 1.0, 7.3):
+        g_mu, g_sigma, g_kappa = autograd_code_gradients(
+            mu, sigma, kappa, K,
+            lambda_align=1.0, lambda_soft=lam_soft,
+            direct_form=True,
+        )
+        d_mu = (g_mu - env_mu).norm().item()
+        d_sigma = (g_sigma - env_sigma).norm().item()
+        d_kappa = (g_kappa - env_kappa).abs().item()
+        print(f"  λ_soft={lam_soft}: ||Δμ||={d_mu:.2e}  ||ΔΣ||={d_sigma:.2e}  |Δκ|={d_kappa:.2e}")
+        assert d_mu < tol and d_sigma < tol and d_kappa < tol, (
+            f"DIRECT-FORM MISMATCH at λ_soft={lam_soft}: μ={d_mu:.2e}, Σ={d_sigma:.2e}, κ={d_kappa:.2e}"
+        )
+
+    # Also verify λ_align scaling: gradient should be λ_align × envelope.
+    print("\nλ_align scaling assertion (direct-form should produce λ_align × envelope):")
+    for lam_align in (0.5, 2.0, 10.0):
+        g_mu, g_sigma, g_kappa = autograd_code_gradients(
+            mu, sigma, kappa, K,
+            lambda_align=lam_align, lambda_soft=0.0,
+            direct_form=True,
+        )
+        scaled_env_mu = lam_align * env_mu
+        scaled_env_sigma = lam_align * env_sigma
+        scaled_env_kappa = lam_align * env_kappa
+        d_mu = (g_mu - scaled_env_mu).norm().item()
+        d_sigma = (g_sigma - scaled_env_sigma).norm().item()
+        d_kappa = (g_kappa - scaled_env_kappa).abs().item()
+        print(f"  λ_align={lam_align}: ||Δμ||={d_mu:.2e}  ||ΔΣ||={d_sigma:.2e}  |Δκ|={d_kappa:.2e}")
+        assert d_mu < tol and d_sigma < tol and d_kappa < tol, (
+            f"SCALING MISMATCH at λ_align={lam_align}"
+        )
+
+    print("\nPASS — direct-form production code is λ_soft-independent and λ_align-scaled.")
 
 
 if __name__ == "__main__":

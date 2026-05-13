@@ -1031,19 +1031,19 @@ class VariationalFFNDynamic(nn.Module):
             else:
                 beta_h = beta_kl_h
                 kl_h = beta_h
-            alignment_loss = alignment_loss + (
-                self.lambda_belief * (beta_h.detach() * kl_h).sum()
-                + self.lambda_softmax * (beta_h * kl_h.detach()).sum()
-            )
             if self.include_attention_entropy:
-                # Manuscript eq:free_energy_functional_final entropy: τ·Σβ·log(β/π),
-                # τ_eff = κ_h · √d_h to match the softmax temperature. ATTACHED β:
-                # the +τ⁻¹·Cov from the entropy term cancels the lambda_softmax term's
-                # −τ⁻¹·Cov so the net gradient matches manuscript ∇F_red at softmax β.
-                # See tests/test_entropy_envelope.py.
+                # Manuscript F = β·KL + τ_eff·β·log(β/π), τ_eff = κ_h·√d_h. All attached →
+                # envelope-correct gradient at softmax β. lambda_belief scales the whole F.
+                # lambda_softmax is IGNORED in this branch (see vfe/e_step.py for rationale).
                 _beta_safe = beta_h.clamp(min=1e-30)
                 _sqrt_dh = math.sqrt(max(d_h, 1))
-                alignment_loss = alignment_loss + kappa_h * _sqrt_dh * (_beta_safe * _beta_safe.log()).sum()
+                _F_h = (beta_h * kl_h).sum() + kappa_h * _sqrt_dh * (_beta_safe * _beta_safe.log()).sum()
+                alignment_loss = alignment_loss + self.lambda_belief * _F_h
+            else:
+                alignment_loss = alignment_loss + (
+                    self.lambda_belief * (beta_h.detach() * kl_h).sum()
+                    + self.lambda_softmax * (beta_h * kl_h.detach()).sum()
+                )
             block_start = block_end
 
         if alignment_loss.grad_fn is not None:
@@ -1230,17 +1230,17 @@ class VariationalFFNDynamic(nn.Module):
                 # Direct term (beta * dKL/dphi) gets lambda_belief.
                 # Softmax coupling (dBeta/dphi * KL) gets lambda_softmax.
                 # Achieved via stop-gradient: detach the factor NOT being differentiated.
-                alignment_loss = alignment_loss + (
-                    self.lambda_belief * (beta_phi_h.detach() * kl_h).sum()
-                    + self.lambda_softmax * (beta_phi_h * kl_h.detach()).sum()
-                )
                 if self.include_attention_entropy:
-                    # Manuscript eq:free_energy_functional_final entropy: τ·Σβ·log(β/π),
-                    # τ_eff = κ_h · √d_h. ATTACHED β so the entropy gradient cancels
-                    # the lambda_softmax surrogate offset → net = ∇F_red at softmax β.
+                    # Manuscript F direct form; lambda_softmax ignored. See e_step.py.
                     _beta_safe = beta_phi_h.clamp(min=1e-30)
                     _sqrt_dh = math.sqrt(max(d_h, 1))
-                    alignment_loss = alignment_loss + kappa_h * _sqrt_dh * (_beta_safe * _beta_safe.log()).sum()
+                    _F_h = (beta_phi_h * kl_h).sum() + kappa_h * _sqrt_dh * (_beta_safe * _beta_safe.log()).sum()
+                    alignment_loss = alignment_loss + self.lambda_belief * _F_h
+                else:
+                    alignment_loss = alignment_loss + (
+                        self.lambda_belief * (beta_phi_h.detach() * kl_h).sum()
+                        + self.lambda_softmax * (beta_phi_h * kl_h.detach()).sum()
+                    )
                 block_start = block_end
         else:
             _detach_beliefs = not (self.amortized_inference and self.exact_phi_grad)
@@ -1269,19 +1269,14 @@ class VariationalFFNDynamic(nn.Module):
             else:
                 beta_phi = beta_for_phi_result
                 kl_matrix = beta_phi
-            alignment_loss = (
-                self.lambda_belief * (beta_phi.detach() * kl_matrix).sum()
-                + self.lambda_softmax * (beta_phi * kl_matrix.detach()).sum()
-            )
             if self.include_attention_entropy:
-                # Manuscript eq:free_energy_functional_final entropy: τ·Σβ·log(β/π),
-                # τ_eff = κ_h · √d_h. ATTACHED β so autograd through softmax produces
-                # the canceling +τ⁻¹·Cov that pairs with the lambda_softmax term's
-                # −τ⁻¹·Cov. Per-head live kappa_h carries the κ-gradient when
-                # learnable_head_kappa=True. Assumes uniform irrep_dims.
+                # Manuscript F = β·KL + τ_eff·β·log(β/π) direct form; lambda_softmax ignored.
+                # Per-head live kappa_h carries the κ-gradient when learnable_head_kappa=True.
+                # Uniform-irrep assumption: uses irrep_dims[0] for √d_h.
                 _beta_safe = beta_phi.clamp(min=1e-30)
                 _d_h_canon = self.irrep_dims[0] if self.irrep_dims else 1
                 _sqrt_dh = math.sqrt(max(_d_h_canon, 1))
+                _bk_term = (beta_phi * kl_matrix).sum()
                 if self.learnable_head_kappa and _beta_safe.dim() >= 4:
                     _n_heads = _beta_safe.shape[1]
                     _entropy_per_head = (_beta_safe * _beta_safe.log()).sum(dim=(0, -2, -1))
@@ -1289,9 +1284,15 @@ class VariationalFFNDynamic(nn.Module):
                         self._get_kappa_h(h_idx, _d_h_canon)
                         for h_idx in range(_n_heads)
                     ])
-                    alignment_loss = alignment_loss + _sqrt_dh * (_kappas * _entropy_per_head).sum()
+                    _entropy_term = _sqrt_dh * (_kappas * _entropy_per_head).sum()
                 else:
-                    alignment_loss = alignment_loss + self.kappa * _sqrt_dh * (_beta_safe * _beta_safe.log()).sum()
+                    _entropy_term = self.kappa * _sqrt_dh * (_beta_safe * _beta_safe.log()).sum()
+                alignment_loss = self.lambda_belief * (_bk_term + _entropy_term)
+            else:
+                alignment_loss = (
+                    self.lambda_belief * (beta_phi.detach() * kl_matrix).sum()
+                    + self.lambda_softmax * (beta_phi * kl_matrix.detach()).sum()
+                )
 
         if alignment_loss.grad_fn is not None:
             grad_phi = torch.autograd.grad(

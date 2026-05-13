@@ -81,6 +81,8 @@ class VFEEStep(nn.Module):
             self.raw_b0 = nn.Parameter(torch.full((K,), self._softplus_inverse(b0_init)))
         self.lambda_align = cfg.lambda_align
         self.lambda_soft = cfg.lambda_soft
+        self.include_attention_entropy = cfg.include_attention_entropy
+        self.embed_dim = cfg.embed_dim
         self._learnable_kappa = cfg.learnable_kappa
         if cfg.learnable_kappa:
             self.log_kappa = nn.Parameter(torch.tensor(math.log(cfg.kappa)))
@@ -423,9 +425,9 @@ class VFEEStep(nn.Module):
                         'kl_max': kl_matrix.max().item(),
                         'attention_entropy': -(beta.clamp(min=1e-10) * beta.clamp(min=1e-10).log()).sum(-1).mean().item(),
                         'attention_entropy_loss': (
-                            (_kappa * math.sqrt(max(self.cfg.embed_dim, 1))
+                            (_kappa * math.sqrt(max(self.embed_dim, 1))
                              * (beta.clamp(min=1e-30) * beta.clamp(min=1e-30).log()).sum()).item()
-                            if self.cfg.include_attention_entropy else 0.0
+                            if self.include_attention_entropy else 0.0
                         ),
                         'attention_concentration': beta.max(dim=-1)[0].mean().item(),
                         # Covariance health
@@ -541,27 +543,29 @@ class VFEEStep(nn.Module):
                 exact_diagonal_transport=self.exact_diagonal_transport,
             )
 
-            # Product rule: d/dphi [sum(beta * KL)] = beta * dKL/dphi + KL * dbeta/dphi
-            alignment_loss = (
-                self.lambda_align * (beta_phi.detach() * kl_h).sum()
-                + self.lambda_soft * (beta_phi * kl_h.detach()).sum()
-            )
-            if self.cfg.include_attention_entropy:
-                # Manuscript Eq. eq:free_energy_functional_final alignment-block entropy:
-                #   F_H = τ · Σ_ij β_ij log(β_ij / π_ij),   τ_eff = κ · √K (softmax temp).
-                # ATTACHED β: autograd flows through the softmax. This is the LITERAL
-                # manuscript F functional. The lambda_soft · (β · KL.detach()).sum()
-                # term above contributes −τ⁻¹·Cov_β(KL, ∇KL) (manuscript's "entropy-
-                # suppressed surrogate offset", line 1261); the attached-β entropy
-                # term contributes the canceling +τ⁻¹·Cov so the net gradient reduces
-                # to the envelope prediction Σ β·∂KL/∂θ at the softmax fixed point.
-                # Verified by tests/test_entropy_envelope.py — λ_soft=1, β.attached →
-                # MATCH to ~1e-18.
-                # Uniform prior π = 1/N (constant log N dropped).
+            if self.include_attention_entropy:
+                # Manuscript Eq. eq:free_energy_functional_final F functional, direct form:
+                #   F = (β · KL).sum() + τ_eff · (β · log(β/π)).sum(),  τ_eff = κ · √K
+                # All attached so autograd produces the envelope-correct gradient at
+                # the softmax β stationary point: ∂F/∂θ = Σ β·∂KL/∂θ for θ ∈ (μ,Σ,φ),
+                # and ∂F/∂κ = √K · (β·log β).sum(). lambda_align scales the entire F
+                # uniformly; lambda_soft is IGNORED in this branch because the manuscript
+                # F has no separate "softmax-coupling" knob — the product-rule split is
+                # an autograd convenience for the entropy-suppressed surrogate path only.
+                # Uniform prior π = 1/N; constant log N dropped (additive const in F).
+                # Verified by tests/test_entropy_envelope.py: production config matches
+                # the envelope prediction to ~1e-18 for any λ_soft.
                 beta_safe = beta_phi.clamp(min=1e-30)
-                entropy_value = (beta_safe * beta_safe.log()).sum()
-                _dim_scale = math.sqrt(max(self.cfg.embed_dim, 1))
-                alignment_loss = alignment_loss + _kappa * _dim_scale * entropy_value
+                _dim_scale = math.sqrt(max(self.embed_dim, 1))
+                _F = (beta_phi * kl_h).sum() + _kappa * _dim_scale * (beta_safe * beta_safe.log()).sum()
+                alignment_loss = self.lambda_align * _F
+            else:
+                # Legacy product-rule decomposition — entropy-suppressed surrogate path.
+                # d/dphi [sum(beta * KL)] = beta * dKL/dphi + KL * dbeta/dphi
+                alignment_loss = (
+                    self.lambda_align * (beta_phi.detach() * kl_h).sum()
+                    + self.lambda_soft * (beta_phi * kl_h.detach()).sum()
+                )
 
             if alignment_loss.grad_fn is not None:
                 grad_phi = torch.autograd.grad(
