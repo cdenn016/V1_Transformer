@@ -51,14 +51,18 @@ Minimal equations for code review — see `README.md` for full derivations.
 
 **VFE hierarchy**: `h → s → p → q → observations` (hyper-prior → models → priors → beliefs → data)
 
-**Free energy**:
+**Free energy** (canonical form, manuscript `\label{eq:free_energy_functional_final}`):
 ```
-F = alpha * KL(q_i || p_i)                    # self-coupling: beliefs to priors
-  + lambda_h * KL(s_i || h)                   # hyper-prior: models to centroid
-  + beta_ij * KL(q_i || Omega_ij * q_j)       # belief coupling (attention)
-  + gamma_ij * KL(s_i || Omega_ij * s_j)      # model coupling (meta-cognition)
-  - E_q[log p(o | x)]                         # observation likelihood
+F = alpha * KL(q_i || p_i)                                          # self-coupling: beliefs to priors
+  + lambda_h * KL(s_i || h)                                         # hyper-prior: models to centroid
+  + sum_ij [ beta_ij  * KL(q_i || Omega_ij * q_j)
+             + tau * beta_ij  * log(beta_ij  / pi_ij) ]             # belief coupling + attention entropy
+  + sum_ij [ gamma_ij * KL(s_i || Omega_ij * s_j)
+             + tau * gamma_ij * log(gamma_ij / pi^(s)_ij) ]         # model coupling + meta entropy
+  - E_q[log p(o | x)]                                               # observation likelihood
 ```
+
+`tau = kappa * sqrt(K)` is the effective softmax temperature. The `tau * beta_ij * log(beta_ij/pi_ij)` term is the attention-distribution entropy with uniform prior `pi_ij = 1/N`; it is required for the softmax β to be a stationary point of F (without it the row-Lagrangian gives a delta, not softmax). Manuscript line 1261 explicitly distinguishes the canonical F from the "entropy-suppressed surrogate" `sum β KL` — their gradients differ by `-tau^{-1} Cov_β(KL, ∇KL)`.
 
 **Attention**: `beta_ij = softmax(-KL(q_i || Omega_ij * q_j) / (kappa * sqrt(K)))` — `kappa` is a learnable hyperparameter; the `sqrt(K)` factor is intentional dimension scaling on top of `kappa` (analogous to scaled dot-product attention).
 
@@ -68,6 +72,8 @@ F = alpha * KL(q_i || p_i)                    # self-coupling: beliefs to priors
 
 
 **Timescales**: Fast E-step (belief q inference per forward pass) / Slow M-step (prior/model s,p parameter learning via backprop) / Static hyper-prior h (frozen at init, never learned). sigma_p is an M-step parameter — the E-step reads it but must not write gradients to it (detached in VFE iterations). sigma_ce_scale controls the residual CE→sigma_p gradient in decode (0.0 = fully detached).
+
+**Attention sublayer is OPTIONAL.** The pure VFE architecture (`skip_attention=True`) is the theoretically clean form: the FFN's E-step computes its own β internally and updates beliefs. The separate attention sublayer at the top of `GaugeTransformerBlock.forward` is an engineering heuristic (β-weighted message aggregation through `W_O · μ_agg` residual). `skip_attention=True` works cleanly with `em_mode='straight_through'` (default) or `em_mode='ift_phi'`. It is INCOMPATIBLE with the detaching EM modes `em_phi_p`, `em_phi_q`, `implicit_ift` — those modes detach σ_p and/or φ inside the FFN, so the attention sublayer is their sole autograd path back to `sigma_embed` and `phi_embed`. With `skip_attention=True` AND a detaching mode, σ_embed and φ_embed silently stay frozen at initialization. `BlockConfig.__post_init__` warns when this combination is detected.
 
 **EM modes** (`em_mode`): Single string selector controlling gradient flow at the EM boundary. Replaces the old 5-flag system (`amortized_inference`, `amortize_sigma`, `exact_phi_grad`, `implicit_em`, `em_phi_mode`). Prior covariance sigma_p is always attached in amortized modes. Cross-layer cascade: mu_q flows to next layer's mu_prior; sigma_prior stays at embedding value.
 
