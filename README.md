@@ -371,9 +371,9 @@ The most general form of the theory---no simplifying limits taken. Full non-isot
 
 | Configuration | K | Layers | Gauge Mode | Train PPL | Test PPL | Parameters |
 |---|---|---|---|---|---|---|
-| **Best (1 epoch)** | **80** | **1** | **Ω ∈ GL(10)** | **63** | **76** | **~50M** |
+| **Best (1 epoch)** | **90** | **1** | **Ω ∈ GL(15)** | **59** | **61** | **~80M** |
 
-For context: random-chance perplexity is ~50,000. The K=80, GL(10) configuration (8 heads, seq-length 128, RoPE) achieves **~600x improvement** over random chance with purely geometric attention.
+For context: random-chance perplexity is ~50,000. The K=90, GL(15) configuration (6 heads, seq-length 128, RoPE) achieves **~600x improvement** over random chance with purely geometric attention.
 
 **Emergent semantic structure**: Learned gauge frames develop interpretable categorical organization---punctuation, content words, and letters cluster separately in both belief space (μ) and gauge frame space (φ) without category supervision.
 
