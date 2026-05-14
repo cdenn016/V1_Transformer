@@ -761,7 +761,12 @@ For a uniform attention prior $\pi_k = 1/N$, the prior factors cancel, yielding:
 \label{eq:mixture_softmax}
 \end{equation}
 
-Without loss of generality we may include a temperature parameter $\tau > 0$ by rescaling the alignment energy $E_{ik} \to E_{ik}/\tau$. Additionally, as discussed in the appendix, the forward KL divergence is the unique $f$-divergence that preserves exponential-family closure under this linear coupling structure and yields a consistent dual interpretation for the attention weights (see Appendix~A).
+Without loss of generality we may include a temperature parameter $\tau > 0$ by rescaling the alignment energy $E_{ik} \to E_{ik}/\tau$. This rescaling, together with multiplication of $\mathcal{F}_{\text{align}}$ by $\tau$, is equivalent to writing the un-minimized alignment free energy in the canonical row-Lagrangian form
+\begin{equation}
+\mathcal{F}_{\text{align}}^{(\tau)} = \sum_j \big[\beta_{ij}\,E_{ij} + \tau\,\beta_{ij}\log(\beta_{ij}/\pi_j)\big],
+\label{eq:F_align_canonical_tau}
+\end{equation}
+where $\tau$ couples explicitly to the attention entropy/prior term. The softmax stationary point $\beta_{ij}^* = \pi_j \exp(-E_{ij}/\tau)/Z_i$ is unchanged, while the substituted value becomes $\mathcal{F}_{\text{align}}^{(\tau)*} = -\tau\log Z_i$, matching the $-\tau\log Z_i$ reduction used in \eqref{eq:free_energy_final}. Additionally, as discussed in the appendix, the forward KL divergence is the unique $f$-divergence that preserves exponential-family closure under this linear coupling structure and yields a consistent dual interpretation for the attention weights (see Appendix~A).
 
 \subsubsection{Non-Uniform Attention Priors: Masking and Positional Biases}
 \label{sec:nonuniform_priors}
@@ -858,7 +863,13 @@ $$
 
 with no explicit $\partial\beta^*/\partial x$ terms, since the cross-term $\sum_j(\partial\mathcal{F}/\partial\beta_{ij})(\partial\beta^*_{ij}/\partial x)$ vanishes at the optimal attention where $\partial\mathcal{F}/\partial\beta_{ij} = 0$.
 
-\paragraph{Autograd versus reduced-free-energy gradients.} In practice, implementations differentiate the composition $\sum_j \beta_{ij}^*(x)\,E_{ij}(x)$ via automatic differentiation, which applies the product rule and produces additional $(\partial\beta_{ij}^*/\partial x)\,E_{ij}$ terms. This computes the gradient of the attention-weighted energy $\langle E \rangle_\beta = \sum_j \beta_{ij}^* E_{ij}$, which differs from the reduced free energy $-\tau\log Z_i$ by the entropy term $\tau\sum_j \beta_{ij}^* \log(\beta_{ij}^*/\pi_j)$. These two objectives share the same critical points but have different gradient fields away from equilibrium. The $\partial\beta/\partial x$ terms, which vanish in the reduced-free-energy gradient by the envelope theorem, are present in the autograd gradient and provide a softmax-gradient nonlinearity (Section~\ref{sec:ffn_nonlinearity}). Standard transformer training follows the autograd convention (differentiating through the softmax), and we adopt the same convention in the gradient expressions and algorithm below. The gradient expressions below are therefore gradients of the attention-weighted energy $\sum_j\beta_{ij}^* E_{ij}$ (equivalently, derivatives of $\mathcal{F}$ before the $\beta$-minimization is performed, evaluated at $\beta = \beta^*$), not of the reduced free energy $\mathcal{F}_{\mathrm{red}}$.
+\paragraph{Autograd versus reduced-free-energy gradients.} In practice, implementations differentiate the composition $\sum_j \beta_{ij}^*(x)\,E_{ij}(x)$ via automatic differentiation, which applies the product rule and produces additional $(\partial\beta_{ij}^*/\partial x)\,E_{ij}$ terms. This computes the gradient of the attention-weighted energy $\langle E \rangle_{\beta^*} = \sum_j \beta_{ij}^* E_{ij}$, which differs from the reduced free energy $-\tau\log Z_i$ by the attention-entropy term $\tau\sum_j \beta_{ij}^* \log(\beta_{ij}^*/\pi_j)$. Using the softmax sensitivity $\partial \beta_{ij}^*/\partial x = -\tau^{-1}\beta_{ij}^*\big(\partial E_{ij}/\partial x - \langle \partial E/\partial x\rangle_{\beta^*}\big)$, the difference between the two gradients takes the covariance form
+\begin{equation}
+\nabla_x\langle E\rangle_{\beta^*} - \nabla_x\mathcal{F}_{\mathrm{red}}
+= -\tau^{-1}\,\mathrm{Cov}_{\beta^*}\!\big(E_{ij},\,\partial E_{ij}/\partial x\big).
+\label{eq:autograd_envelope_gap}
+\end{equation}
+The two objectives therefore share critical points only where this covariance vanishes; this holds at the joint stationary point of $\mathcal{F}_{\mathrm{red}}$ in $x$ and in the high-temperature limit $\tau \to \infty$, but not generically off-equilibrium. The $\partial\beta/\partial x$ terms, which vanish in the reduced-free-energy gradient by the envelope theorem, are present in the autograd gradient and provide a softmax-gradient nonlinearity (Section~\ref{sec:ffn_nonlinearity}). Standard transformer training follows the autograd convention (differentiating through the softmax), and we adopt the same convention in the gradient expressions and algorithm below. The gradient expressions below are therefore gradients of the attention-weighted energy $\sum_j\beta_{ij}^* E_{ij}$ (equivalently, derivatives of $\mathcal{F}$ before the $\beta$-minimization is performed, evaluated at $\beta = \beta^*$), not of the reduced free energy $\mathcal{F}_{\mathrm{red}}$; the two differ by \eqref{eq:autograd_envelope_gap}.
 
 
 \subsection{Interpretation}
