@@ -1457,14 +1457,26 @@ class IrrepMultiHeadAttention(nn.Module):
                     # quantities downstream (e.g. learnable kappa) are therefore
                     # per-super-block, not per-original-head.
                     self.irrep_dims = list(irrep_dims_override)
-                    self.irrep_labels = [f'glk_superblock_{i}' for i in range(len(irrep_dims_override))]
                     self.glk_multihead = True
-                    logger.info(
-                        "[GL(K) cross-head] super-blocks=%s d_head=%d "
-                        "(merged from %d original heads; per-block params are "
-                        "per-super-block, not per-original-head).",
-                        irrep_dims_override, d_head, n_heads,
-                    )
+                    # irrep_dims_override == [d_head]*n_heads means plain multi-head with
+                    # use_block_diagonal_kl=True, NOT cross-head coupling. True cross-coupling
+                    # produces merged super-blocks of differing dims (set by model.py via
+                    # merge_coupled_heads when config['cross_couplings'] is non-empty).
+                    if list(irrep_dims_override) == [d_head] * n_heads:
+                        self.irrep_labels = [f'glk_head_{h}' for h in range(n_heads)]
+                        logger.info(
+                            "[GL(K) multi-head] %d heads x GL(%d), block_dims=%s "
+                            "(no cross-coupling)",
+                            n_heads, d_head, list(irrep_dims_override),
+                        )
+                    else:
+                        self.irrep_labels = [f'glk_superblock_{i}' for i in range(len(irrep_dims_override))]
+                        logger.info(
+                            "[GL(K) cross-head] super-blocks=%s d_head=%d "
+                            "(merged from %d original heads; per-block params are "
+                            "per-super-block, not per-original-head).",
+                            list(irrep_dims_override), d_head, n_heads,
+                        )
                 else:
                     self.irrep_dims = [d_head] * n_heads
                     self.irrep_labels = [f'glk_head_{h}' for h in range(n_heads)]
@@ -1684,10 +1696,18 @@ class IrrepMultiHeadAttention(nn.Module):
 
         # Print attention configuration
         if gauge_group == 'GLK':
-            # GL(K) mode: single head with full generators
             n_gen = global_generators.shape[0] if global_generators is not None else embed_dim**2
-            logger.info(f"[GL(K) Attention] Single head, dim={embed_dim}, n_generators={n_gen}")
-            logger.info(f"  -> Full GL({embed_dim}) transport on entire embedding space")
+            if getattr(self, 'glk_multihead', False):
+                logger.info(
+                    f"[GL(K) Attention] {self.n_heads} head(s), irrep_dims={self.irrep_dims}, "
+                    f"n_generators={n_gen} (block-diagonal over heads)"
+                )
+                logger.info(
+                    f"  -> Per-head GL(d) transport; total embed_dim={embed_dim}"
+                )
+            else:
+                logger.info(f"[GL(K) Attention] Single head, dim={embed_dim}, n_generators={n_gen}")
+                logger.info(f"  -> Full GL({embed_dim}) transport on entire embedding space")
         else:
             # SO(3) / SO(N) mode: count scalar vs non-scalar heads
             n_scalar_heads = sum(1 for d in self.irrep_dims if d == 1)
