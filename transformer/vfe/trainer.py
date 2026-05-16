@@ -2,7 +2,7 @@
 VFETrainer: training loop with full metrics, diagnostics, and publication output.
 
     E-step: model.forward(token_ids) — infer q* from context only (no target leak)
-    M-step: loss.backward() — gradients flow through E-step via straight_through
+    M-step: loss.backward() — gradients flow through E-step via semi-gradient backprop
 
 Reuses PublicationMetricsTracker (CSV) and TrainingTracker/PublicationFigures
 from the legacy training infrastructure for full diagnostic parity.

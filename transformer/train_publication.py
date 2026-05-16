@@ -123,8 +123,8 @@ EM_CONFIG = {
     'embed_dim':                  20,
     'max_seq_len':                128,
     
-    'batch_size':                 16, 
-    'max_steps':                  60000,
+    'batch_size':                 32, 
+    'max_steps':                  30000,
      
     'stride':                     128,  
     #'eval_stride':                128,                                                                                              
@@ -139,7 +139,7 @@ EM_CONFIG = {
     #'gradient_checkpoint_vfe': False,
     
     'gauge_dim':                   10,
-    'irrep_spec':       [('fund', 2, 10)],
+    'irrep_spec':        [('fund', 2, 10)],
 
     'use_prior_bank':             False,
     'gauge_fixed_priors':         False,    
@@ -152,21 +152,20 @@ EM_CONFIG = {
     'kappa_beta':                 1,
     'kappa_warmup_steps':         7500,  # freeze kappa for first n steps
     'learnable_head_kappa':       False, # If True, learn per-head κ_h via log_kappa_per_head
-
+    'include_attention_entropy':  True,
+    
     'e_step_sigma_floor':         0.01,   # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
     
     # === EM gradient-flow mode ===
-    'em_mode':                    'straight_through',  # φ∈q: E-step optimizes μ,Σ,φ; all detached at EM boundary
-                                               # - 'straight_through' (default) — mu_p, sigma_p attached, semi-gradient phi
-                                               # - 'ift_phi' — same + full IFT phi gradient
+    'em_mode':                    'ift_phi',  # - 'ift_phi' (default) — mu_p, sigma_p attached, full IFT phi gradient
                                                # - 'em_phi_q' — clean EM, phi in q, all detached at boundary
                                                # - 'em_phi_p' — clean EM, phi frozen in E-step
-                                               # - 'implicit_ift' — experimental IFT-scaled M-step
 
     # === GL(K) determinant control (off by default; pick at most one) ===
     # GL(K) has an unbounded trace direction that L2-norm clamping does not
     # constrain — det(Ω_ij) = exp(tr(φ_i − φ_j)) blows up on outlier tokens.
     # Recommended for gauge_group='GLK' with phi_max_norm > ~3.
+    
     'phi_project_slk':            False,   # Hard project φ → sl(K): det(Ω) ≡ 1 always
     'phi_trace_clamp':            0.75,    # Soft cap |tr(φ·G)| ≤ T (e.g., 0.35 → det ∈ [0.5, 2])
 
@@ -183,9 +182,12 @@ EM_CONFIG = {
     'fisher_damping':             1e-2,              # for natural_gradient
 
 
-    'use_layernorm':              True,   #breaks gauge equivariance
-    'use_residual':               True,  #set False if skip-attention=True
+    'use_layernorm':              True,  #breaks gauge equivariance unless mahal
+    'use_residual':               False,  #set False if skip-attention=True
     'use_output_projection':      True,
+    'use_equivariant_head_mixer': False,  # Opt-in principled replacement for W_o
+    
+    
     'evolve_sigma':               True,
     'evolve_phi':                 True,  #M-step phi evolution
     'evolve_phi_e_step':          True,
@@ -204,10 +206,13 @@ EM_CONFIG = {
     'residual_type':              'additive',    # 'additive': mu_q = mu_q + mu_sub 
                                          # 'delta':    mu_q = mu_q + (mu_sub - mu_normalized),
     
+    'closed_form_e_step':         False,
+    'n_picard_steps':             0,
+    
     # === E-step Weights ===
  
     'E_alpha':                    1,      # E-step prior coupling weight
-    'E_lambda_belief':            10,    # E-step belief alignment weight
+    'E_lambda_belief':            15,    # E-step belief alignment weight
     'E_lambda_softmax':           0,
        
     # === E-step Learning Rates ===
@@ -221,15 +226,15 @@ EM_CONFIG = {
 
     # === M-step Weights ===        
     
-    'M_alpha':                    0.00,   # M-step KL(q||p) self-consistency
-    'M_beta':                     0.0,    # M-step belief alignment
-    'mass_phi':                   0.00,    # Gauge prior: (mass_φ/2)||φ||²
-    'lambda_hyper':               0.0,    # KL(s||h) explicit loss (pulls tokens toward centroid)
+    'M_alpha':                    0,   # M-step KL(q||p) self-consistency
+    'M_beta':                     0,    # M-step belief alignment
+    'mass_phi':                   0,    # Gauge prior: (mass_φ/2)||φ||²
+    'lambda_hyper':               0,    # KL(s||h) explicit loss (pulls tokens toward centroid)
     'lambda_gamma':               0,
     # === M-step Learning Rates (AdamW parameter groups) ===
     
-    'M_mu_p_lr':                  0.07,   # M-step prior mean embeddings (μ_p) 0.05
-    'M_sigma_p_lr':               0.015,     # M-step prior covariance embeddings (log σ_p) 0.015
+    'M_mu_p_lr':                  0.05,   # M-step prior mean embeddings (μ_p) 0.05
+    'M_sigma_p_lr':               0.025,     # M-step prior covariance embeddings (log σ_p) 0.015
     'M_phi_lr':                   0.0036,    # M-step gauge frame embeddings (φ) 0.0075
     
     # === M-step Other LR's (AdamW parameter groups) ===
@@ -399,7 +404,7 @@ HEBBIAN_CONFIG = {
     'diagonal_covariance': True,
 
     # === Hebbian M-step: no backprop ===
-    'em_mode':              'implicit_ift',  # Detach beliefs; Hebbian path uses P-flow instead of IFT scaling
+    'em_mode':              'em_phi_q',  # Detach beliefs at EM boundary; Hebbian uses P-flow + delta-rule for M-step
 
     # EMA update of embeddings toward successful beliefs
     'use_p_flow':           True,

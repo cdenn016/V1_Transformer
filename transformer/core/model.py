@@ -1036,20 +1036,6 @@ class GaugeTransformerLM(nn.Module):
         if self.use_prior_bank and self.prior_bank is not None:
             self.prior_bank.clear_decode_cache()
 
-        # Block forward() when em_mode='implicit_ift' is active during training.
-        # Without ImplicitEMGradient re-attachment (only in forward_with_attention),
-        # embedding gradients are silently broken while loss still decreases from
-        # other parameters — making the failure invisible.
-        # (The `implicit_em` attribute is set on the FFN from em_mode='implicit_ift';
-        # the getattr default keeps this safe if the attribute is ever renamed.)
-        if (getattr(self.transformer.blocks[-1].ffn, 'implicit_em', False)
-                and self.training and torch.is_grad_enabled()):
-            raise RuntimeError(
-                "forward() called with em_mode='implicit_ift' during training. "
-                "Gradient path to embeddings is broken — use "
-                "forward_with_attention() for training."
-            )
-
         # =================================================================
         # Trajectory Recording: Start forward pass
         # =================================================================
@@ -1362,29 +1348,6 @@ class GaugeTransformerLM(nn.Module):
         last_block = self.transformer.blocks[-1]
         implicit_mu_scale = getattr(last_block.ffn, '_last_implicit_mu_scale', None)
         implicit_sigma_scale = getattr(last_block.ffn, '_last_implicit_sigma_scale', None)
-
-        # implicit_em / 'implicit_ift' currently re-attaches the IFT-corrected
-        # gradient only at the embedding boundary using the LAST block's
-        # fixed-point scale. For depth > 1, intermediate blocks compute
-        # _last_implicit_*_scale but those corrections are not propagated
-        # (their cross-layer mu handoff already detached). The math is exact
-        # for single-layer models; multi-layer use is research-only and the
-        # gradient is missing the intermediate IFT terms.
-        if implicit_mu_scale is not None and len(self.transformer.blocks) > 1:
-            if not getattr(self, '_implicit_em_depth_warned', False):
-                import warnings
-                warnings.warn(
-                    f"implicit_em / em_mode='implicit_ift' is being used with "
-                    f"n_layers={len(self.transformer.blocks)} > 1. The IFT scale "
-                    "is applied only at the embedding boundary using the last "
-                    "block's fixed-point scale; intermediate layers' IFT "
-                    "corrections are not propagated. Prefer "
-                    "em_mode='straight_through' or 'ift_phi' for multi-layer "
-                    "training, or restrict implicit_ift to single-layer models.",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-                self._implicit_em_depth_warned = True
 
         if implicit_mu_scale is not None:
             # Detach mu_q to remove the residual+attention gradient path.

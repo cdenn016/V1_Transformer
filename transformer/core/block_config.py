@@ -30,11 +30,10 @@ _ROPE_FULL_GAUGE_VALUES = ('off', 'vfe_only', 'both')
 import torch
 import torch.nn as nn
 
-from transformer.core.em_modes import EM_MODE_TABLE, infer_em_mode
+from transformer.core.em_modes import EM_MODE_TABLE
 
-# Backward-compatible aliases (external code may import these underscore-prefixed names)
+# Backward-compatible alias (external code may import the underscore-prefixed name)
 _EM_MODE_TABLE = EM_MODE_TABLE
-_infer_em_mode = infer_em_mode
 
 
 @dataclass
@@ -78,7 +77,7 @@ class BlockConfig:
     attention_pattern: str =      'full'     # 'full' (only supported pattern)
     attention_window: int =       64          # Window size (unused, kept for API compat)
     
-    mask_self_attention: bool =   True   # Prevent KL(q_i||q_i)=0 collapse
+    mask_self_attention: bool =   False   # Prevent KL(q_i||q_i)=0 collapse
     use_output_projection: bool = False  # W_O ∈ R^{K×K} after multi-head concat.
                                          # Default False: the PriorBank decode
                                          # expects a gauge-covariant belief, and
@@ -86,12 +85,14 @@ class BlockConfig:
                                          # to μ only (Σ unchanged) breaks that
                                          # invariance. See VFE_Transformer_Idea.md
                                          # §18.2. Set True only for ablation.
+                                         
     use_equivariant_head_mixer: bool = False  # Opt-in principled replacement for
                                               # W_O: n² scalars forming the
                                               # commutant of the irrep decomp,
                                               # applied symmetrically to μ and Σ
                                               # (Σ → M·Σ·Mᵀ). Preserves gauge
                                               # equivariance by Schur's lemma.
+                                              
     # === 3. E-STEP DYNAMICS (belief evolution) ===
     E_learnable_lr: bool =     True    # Learn step size η for variational descent
     evolve_sigma: bool =       True    # Update covariances Σ via natural gradient
@@ -125,12 +126,10 @@ class BlockConfig:
     
     
     
-    em_mode: str = 'straight_through'   # EM gradient-flow mode. Options:
-                                        #   'straight_through' — μ_p,σ_p attached, semi-gradient φ (default)
-                                        #   'ift_phi'          — μ_p,σ_p attached, full IFT φ gradient
-                                        #   'em_phi_q'         — φ∈q: E-step optimizes μ,Σ,φ; all detached at EM boundary
-                                        #   'em_phi_p'         — φ∈θ: φ frozen in E-step; M-step only
-                                        #   'implicit_ift'     — (experimental) IFT-scaled M-step, beliefs detached
+    em_mode: str = 'ift_phi'            # EM gradient-flow mode. Options:
+                                        #   'ift_phi'  — μ_p,σ_p attached, full IFT φ gradient (default)
+                                        #   'em_phi_q' — φ∈q: E-step optimizes μ,Σ,φ; all detached at EM boundary
+                                        #   'em_phi_p' — φ∈θ: φ frozen in E-step; M-step only
     detach_phi: bool =          False   # Detach phi from backprop (Hebbian/P-flow only)
 
     # === 3b. E-STEP DYNAMICS (VFE weights and iterations) ===
@@ -162,6 +161,7 @@ class BlockConfig:
                                         # before clamping. Prevents nat_grad_sigma = 2σ²·∇σ blowup.
                                         # Matches VariationalFFNDynamic.__init__ default and the
                                         # from_config() dict default.
+                                        
     # Gauge-covariant numerical ridge. When True, ε·I regularizers on
     # sandwich-transforming covariances Σ are replaced by ε·(gg^T) built from
     # the local frame g = exp(φ), preserving Σ → hΣh^T covariance exactly.
@@ -173,6 +173,7 @@ class BlockConfig:
     propagate_kl_nonfinite: bool = False  # If True, safe_kl_clamp lets NaN/±inf propagate
                                            # through the softmax so divergence is visible.
                                            # Diagnostic use; default preserves masking.
+    
     spd_floor_mode: str = 'eigclamp'   # How the full-cov σ_p floor is enforced:
                                         #   'eigclamp' — λ_min(Σ_p) clamped via eigendecomposition
                                         #                (bounds the condition number; the
@@ -184,12 +185,14 @@ class BlockConfig:
                                         #   'none'     — no floor (diagonal-only path or research).
                                         # Diagonal covariance always uses elementwise clamp(min=floor)
                                         # regardless of this flag — it is already per-dim bounded.
+    
     n_picard_steps: int = 0            # Picard corrections after closed-form E-step.
                                         # Preconditioned Picard iteration on the nonlinear VFE
                                         # residual: mu^(n+1) = mu_0 - sigma_0 * ∇F_softmax(mu^(n))
                                         # where mu_0, sigma_0 are the closed-form linear fixed point.
                                         # 0 = pure closed-form (no softmax coupling).
                                         # 1-3 = recommended range. Requires closed_form_e_step=True.
+    
     picard_trust_region: float = 5.0   # Whitened trust region for Picard corrections.
     e_step_early_exit_tol: Optional[float] = None  # Relative change threshold for E-step early exit.
                                         # When set, breaks the E-step loop if
@@ -237,15 +240,15 @@ class BlockConfig:
             self.evolve_phi_e_step = False
 
         # Detaching EM modes are incompatible with skip_attention=True. These
-        # modes (em_phi_p, em_phi_q, implicit_ift) detach σ_p and/or φ inside
-        # the FFN's E-step and rely on the attention sublayer as the sole
-        # autograd path back to σ_embed and φ_embed. With skip_attention=True
-        # there is no attention sublayer, so σ and φ embeddings receive no
-        # gradient and stay frozen at initialization — a silent failure that
-        # produces zero-variance Σ across tokens and overlapping φ/Ω clusters
-        # in token-level visualizations.
-        # Compatible modes for skip_attention=True: 'straight_through', 'ift_phi'.
-        _detaching_modes = {'em_phi_p', 'em_phi_q', 'implicit_ift'}
+        # modes (em_phi_p, em_phi_q) detach σ_p and/or φ inside the FFN's
+        # E-step and rely on the attention sublayer as the sole autograd path
+        # back to σ_embed and φ_embed. With skip_attention=True there is no
+        # attention sublayer, so σ and φ embeddings receive no gradient and
+        # stay frozen at initialization — a silent failure that produces
+        # zero-variance Σ across tokens and overlapping φ/Ω clusters in
+        # token-level visualizations.
+        # Compatible mode for skip_attention=True: 'ift_phi'.
+        _detaching_modes = {'em_phi_p', 'em_phi_q'}
         if getattr(self, 'skip_attention', False) and self.em_mode in _detaching_modes:
             import warnings as _warnings
             _warnings.warn(
@@ -253,9 +256,9 @@ class BlockConfig:
                 f"silently freeze σ_embed and φ_embed at initialization: the FFN's "
                 f"E-step detaches σ_p and/or φ, and the attention sublayer (the only "
                 f"remaining autograd path to those embeddings) is disabled. Use "
-                f"em_mode='straight_through' or 'ift_phi' for a clean skip_attention=True "
-                f"configuration where the FFN E-step itself provides the M-step "
-                f"gradients for σ and φ.",
+                f"em_mode='ift_phi' for a clean skip_attention=True configuration "
+                f"where the FFN E-step itself provides the M-step gradients for σ "
+                f"and φ.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -496,7 +499,7 @@ class BlockConfig:
             diagonal_covariance=config.get('diagonal_covariance', False),
             exact_diagonal_transport=config.get('exact_diagonal_transport', False),
             sigma_aggregation=config.get('sigma_aggregation', 'mixture'),
-            em_mode=_infer_em_mode(config),
+            em_mode=config.get('em_mode', 'ift_phi'),
             detach_phi=config.get('detach_phi', False),
             # VFE dynamics (E-step) — new names with old-name fallbacks
             ffn_mode=config.get('ffn_mode', 'VFE_dynamic'),

@@ -42,12 +42,9 @@ em_phi_p_CONFIG = {
     'e_step_sigma_floor':         0.01,   # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
     
     # === EM gradient-flow mode ===
-    'em_mode':                    'em_phi_p',  # φ∈q: E-step optimizes μ,Σ,φ; all detached at EM boundary
-                                                # - 'straight_through' (default) — mu_p, sigma_p attached, semi-gradient phi
-                                                # - 'ift_phi' — same + full IFT phi gradient
+    'em_mode':                    'em_phi_p',  # - 'ift_phi' (default) — mu_p, sigma_p attached, full IFT phi gradient
                                                 # - 'em_phi_q' — clean EM, phi in q, all detached at boundary
                                                 # - 'em_phi_p' — clean EM, phi frozen in E-step
-                                                # - 'implicit_ift' — experimental IFT-scaled M-step
 
     # === GL(K) determinant control (off by default; pick at most one) ===
     # GL(K) has an unbounded trace direction that L2-norm clamping does not

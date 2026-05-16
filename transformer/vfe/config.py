@@ -2,7 +2,7 @@
 VFEConfig: clean configuration for the gauge-theoretic VFE transformer.
 
 ~25 fields in 5 semantic groups. No EM mode branching, no DEQ/hebbian/closed-form.
-Only the iterative natural-gradient E-step with straight_through gradient flow.
+Only the iterative natural-gradient E-step with semi-gradient flow at the EM boundary.
 """
 
 from dataclasses import dataclass, field

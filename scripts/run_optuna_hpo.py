@@ -97,7 +97,7 @@ BASE_CONFIG = {
    'e_step_sigma_floor':         0.01,   # Floor on σ_p inside E-step (caps 1/σ_p at 1/floor)
    
    # === EM gradient-flow mode ===
-   'em_mode':                    'straight_through',
+   'em_mode':                    'ift_phi',
    'active_inference':           False,    #requires priorbank true
    
    'cache_decode_priors':        True,
