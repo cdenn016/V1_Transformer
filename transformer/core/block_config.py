@@ -142,6 +142,11 @@ class BlockConfig:
     E_alpha: float =           1.0               # E-step prior self-coupling weight α
     E_lambda_belief: float =   1.0       # E-step belief alignment weight λ (direct: β·∇KL)
     E_lambda_softmax: float =  1.0      # E-step attention-variance coupling weight (∂β/∂θ · KL)
+    include_attention_entropy: bool = True  # Add τ·Σβ·log(β/π) to alignment loss
+                                        # (manuscript eq:free_energy_functional_final).
+                                        # Required for softmax β to be a stationary
+                                        # point of F; False reverts to the
+                                        # entropy-suppressed surrogate Σβ·KL.
     alpha_divergence: float =  1.0      # Renyi alpha-divergence parameter for attention
                                         # 1.0 = KL divergence (default, backward-compatible)
                                         # 0.5 = Bhattacharyya distance (symmetric, bounded)
@@ -512,6 +517,7 @@ class BlockConfig:
             E_sigma_q_trust=config.get('E_sigma_q_trust', config.get('e_step_sigma_trust', 5.0)),
             E_lambda_belief=config.get('E_lambda_belief', config.get('ffn_lambda_belief', 1.0)),
             E_lambda_softmax=config.get('E_lambda_softmax', config.get('ffn_lambda_softmax', 1.0)),
+            include_attention_entropy=config.get('include_attention_entropy', True),
             ffn_update_sigma=config.get('ffn_update_sigma', True),
             # Default matches the dataclass declaration (True) and the
             # production training configs.  Previous default of False was
