@@ -60,7 +60,7 @@ TRAIN_CONFIG = {
     'learnable_head_kappa':     True, # If True, learn per-head κ_h via log_kappa_per_head
     
     # === EM gradient-flow mode ===
-    'em_mode':               'straight_through',
+    'em_mode':               'ift_phi',
 
     # === M-step: Optimizer ===
     'optimizer_type':        'riemannian_adam',# or 'natural_gradient' or 'adamw' or 'riemannian_adam'
@@ -84,9 +84,7 @@ TRAIN_CONFIG = {
     'E_alpha':               1,      # E-step prior coupling weight
     'E_lambda_belief':       1,    # E-step belief alignment weight
     'E_lambda_softmax':      1,
-    
-    'detach_beta_m_step':    True, #if false need M_beta >0
-    
+
     'E_learnable_alpha':     True,   # Adaptive α_i = c0/(b0 + KL) per dimension
 
     

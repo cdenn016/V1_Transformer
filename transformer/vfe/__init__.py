@@ -3,7 +3,7 @@ Clean gauge-theoretic VFE transformer.
 
 Imports stateless math from transformer/core/, owns model logic.
 No BlockConfig, no EM modes, no DEQ/closed-form/hebbian.
-Single E-step path: iterative natural gradient with straight_through.
+Single E-step path: iterative natural gradient with semi-gradient flow at the EM boundary.
 """
 
 from transformer.vfe.config import VFEConfig

@@ -318,7 +318,7 @@ A principled gauge-VFE transformer is a deep amortized variational model in whic
 
 The existing `transformer/core/` implementation (~19k LOC, 22 files) contains all the mechanisms described above but is heavily entangled. `BlockConfig` has 60+ fields. `variational_ffn.py` alone is 2,893 lines with five EM modes, DEQ, closed-form, hebbian, and implicit EM paths interleaved. Every module depends on `BlockConfig`. A separate `transformer/pure_vfe/` package (~3.3k LOC) takes the opposite approach — no autograd, no backprop, no `nn.Module` — but lacks active inference, cross-layer handoff, and BCH composition.
 
-The `transformer/vfe/` package bridges these two worlds. It uses PyTorch autograd for the M-step (backprop through the E-step to update priors and embeddings) but has a single clean E-step path: iterative natural gradient with `straight_through` gradient flow. It imports stateless math utilities from `core/` without inheriting the entanglement. Target: ~2,400 LOC with all features from Sections 1--16.
+The `transformer/vfe/` package bridges these two worlds. It uses PyTorch autograd for the M-step (backprop through the E-step to update priors and embeddings) but has a single clean E-step path: iterative natural gradient with semi-gradient flow at the EM boundary. It imports stateless math utilities from `core/` without inheriting the entanglement. Target: ~2,400 LOC with all features from Sections 1--16.
 
 Excluded by design: DEQ, closed-form E-step, hebbian paths. Only the iterative natural-gradient E-step with `straight_through` gradient flow is implemented. No EM mode branching.
 

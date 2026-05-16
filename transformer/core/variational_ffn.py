@@ -272,7 +272,7 @@ class VariationalFFNDynamic(nn.Module):
         isotropic_covariance: bool = False,   # If True, force Σ = σ²I after each E-step update
         # EM gradient-flow mode — replaces individual amortized_inference / amortize_sigma /
         # exact_phi_grad / implicit_em / em_phi_mode flags (all derived from em_mode).
-        em_mode: str = 'straight_through',
+        em_mode: str = 'ift_phi',
         
         # Rotary Position Embeddings (RoPE) — must match attention sublayer setting
         use_rope: bool =             True,
@@ -395,6 +395,8 @@ class VariationalFFNDynamic(nn.Module):
         self.closed_form_e_step = closed_form_e_step
         self.e_step_early_exit_tol = e_step_early_exit_tol
         self.gradient_checkpoint_vfe = gradient_checkpoint_vfe
+        self.n_picard_steps = n_picard_steps
+        self.picard_trust_region = picard_trust_region
         self._last_implicit_mu_scale = None   # (B, N, K) stored after E-step for model.py
         self._last_implicit_sigma_scale = None
         if self.implicit_em:
@@ -630,15 +632,6 @@ class VariationalFFNDynamic(nn.Module):
         self.use_deq = use_deq
         self.deq_neumann_terms = deq_neumann_terms
         self.deq_include_phi = deq_include_phi
-        if use_deq and self.implicit_em:
-            raise ValueError(
-                "use_deq=True and implicit_em (via em_mode='implicit_ift') "
-                "are mutually exclusive. Both correct the M-step gradient for "
-                "E-step dynamics: DEQ via Neumann-series (I-J)^{-1}, "
-                "implicit_em via per-dimension IFT scale s_k. Using both "
-                "double-counts the correction."
-            )
-
         # Learnable step sizes (stored in unconstrained space; softplus → positive LR).
         # μ and σ are INDEPENDENT: separate raw parameters, separate softplus+clamp
         # properties, separate gradients when learnable_lr=True. This is the
