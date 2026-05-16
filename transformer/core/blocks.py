@@ -523,6 +523,7 @@ class GaugeTransformerBlock(nn.Module):
             alpha=cfg.E_alpha,
             lambda_belief=cfg.E_lambda_belief,
             lambda_softmax=cfg.E_lambda_softmax,
+            include_attention_entropy=cfg.include_attention_entropy,
             kappa=cfg.ffn_kappa,
             n_iterations=cfg.ffn_n_iterations,
             learnable_lr=cfg.E_learnable_lr,
