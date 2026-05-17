@@ -8,6 +8,7 @@ iteration (dynamic beta).
 
 from __future__ import annotations
 
+import warnings
 from typing import Optional, Callable, TYPE_CHECKING
 
 import torch
@@ -17,8 +18,68 @@ if TYPE_CHECKING:
     from transformer.vfe.config import VFEConfig
 
 from transformer.core.types import BeliefState
-from transformer.core.blocks import MahalanobisNorm, RMSNorm
+from transformer.core.blocks import MahalanobisNorm, CenteredMahalanobisNorm, RMSNorm
 from transformer.vfe.e_step import VFEEStep
+
+
+class _LayerNormSigmaAdapter(nn.Module):
+    r"""Adapter wrapping ``nn.LayerNorm`` with the VFE-internal
+    ``forward(mu, sigma) → mu_normed`` signature.
+
+    This is a **gauge-blind** normalization: it operates on ``mu`` only and
+    discards the covariance ``sigma`` argument entirely. Use only as an
+    explicit ablation against the gauge-equivariant ``mahalnorm`` /
+    ``centered_mahalnorm`` paths. Mirrors the documented-exception pattern
+    used for ``attention.py::use_output_projection`` (see CLAUDE.md).
+    """
+
+    def __init__(self, dim: int) -> None:
+        super().__init__()
+        warnings.warn(
+            "VFE norm_type='layernorm' is gauge-blind: nn.LayerNorm operates "
+            "on mu only and ignores sigma, breaking strict gauge equivariance. "
+            "Use 'mahalnorm' (default) or 'centered_mahalnorm' for the "
+            "gauge-aware path; 'layernorm' is intended for ablation only.",
+            UserWarning,
+            stacklevel=2,
+        )
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(self, mu: torch.Tensor, sigma: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.norm(mu)
+
+
+def _resolve_vfe_norm(norm_type: str, dim: int) -> Optional[nn.Module]:
+    r"""Resolve a VFE ``norm_type`` string to a normalization module.
+
+    All returned modules expose the VFE-internal signature
+    ``forward(mu, sigma) → mu_normed``. ``CenteredMahalanobisNorm`` also
+    accepts an optional ``mu_prior=`` kwarg at the call site (see
+    :class:`VFEBlock` and :class:`VFEModel` forward methods). ``None`` is
+    returned for ``norm_type='none'`` so callers can short-circuit.
+
+    Args:
+        norm_type: One of ``'mahalnorm'``, ``'centered_mahalnorm'``,
+            ``'rmsnorm'``, ``'layernorm'``, or ``'none'``.
+        dim: Embedding dimension (K).
+
+    Raises:
+        ValueError: If ``norm_type`` is not one of the five accepted values.
+    """
+    if norm_type == 'mahalnorm':
+        return MahalanobisNorm(dim)
+    if norm_type == 'centered_mahalnorm':
+        return CenteredMahalanobisNorm(dim)
+    if norm_type == 'rmsnorm':
+        return RMSNorm(dim)
+    if norm_type == 'layernorm':
+        return _LayerNormSigmaAdapter(dim)
+    if norm_type == 'none':
+        return None
+    raise ValueError(
+        f"VFEConfig.norm_type={norm_type!r} not recognized; expected "
+        "'mahalnorm', 'centered_mahalnorm', 'rmsnorm', 'layernorm', or 'none'."
+    )
 
 
 class VFEBlock(nn.Module):
@@ -38,18 +99,8 @@ class VFEBlock(nn.Module):
         super().__init__()
         self.e_step = VFEEStep(cfg, generators)
 
-        # Normalization
-        if cfg.norm_type == 'mahalnorm':
-            self.norm = MahalanobisNorm(cfg.embed_dim)
-        elif cfg.norm_type == 'rmsnorm':
-            self.norm = RMSNorm(cfg.embed_dim)
-        elif cfg.norm_type == 'none':
-            self.norm = None
-        else:
-            raise ValueError(
-                f"VFEConfig.norm_type={cfg.norm_type!r} not recognized; "
-                "expected 'mahalnorm', 'rmsnorm', or 'none'."
-            )
+        # Normalization (resolves all five accepted norm_type values)
+        self.norm = _resolve_vfe_norm(cfg.norm_type, cfg.embed_dim)
 
     def forward(
         self,
@@ -72,7 +123,12 @@ class VFEBlock(nn.Module):
         beliefs = self.e_step(beliefs, priors, mask, active_inference_fn)
 
         if self.norm is not None:
-            mu_normed = self.norm(beliefs.mu, beliefs.sigma)
+            # CenteredMahalanobisNorm needs mu_prior to actually center the
+            # residual delta = mu - mu_prior. Other norms ignore mu_prior.
+            if isinstance(self.norm, CenteredMahalanobisNorm):
+                mu_normed = self.norm(beliefs.mu, beliefs.sigma, mu_prior=priors.mu)
+            else:
+                mu_normed = self.norm(beliefs.mu, beliefs.sigma)
             beliefs = beliefs._replace(mu=mu_normed)
 
         return beliefs

@@ -388,7 +388,7 @@ class VFETrainer:
         logits, loss, ce_for_log = self.model(input_ids, targets=target_ids)
 
         # Backward
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
 
         # Collect gradient norms BEFORE clipping

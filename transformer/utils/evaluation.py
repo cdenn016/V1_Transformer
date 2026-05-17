@@ -6,12 +6,11 @@ Quick validation-set evaluation of a trained checkpoint.  Computes
 cross-entropy loss and perplexity with all VFE regularisation terms
 disabled (alpha, lambda_beta, lambda_gamma = 0).
 
-Usage:
-    python -m transformer.utils.evaluation --checkpoint path/to/best_model.pt
+Click-to-run: edit ``CONFIG`` near the bottom of this file, then press
+Run. No CLI arguments (per CLAUDE.md).
 """
 
 import torch
-import argparse
 from pathlib import Path
 import numpy as np
 
@@ -20,7 +19,7 @@ from transformer.data import create_dataloaders
 from transformer.train import compute_free_energy_loss
 
 
-def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
+def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50, trusted: bool = True):
     """
     Load a GaugeTransformerLM checkpoint and evaluate on the validation split.
 
@@ -37,7 +36,7 @@ def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
 
     # Load checkpoint
     print(f"\nLoading checkpoint: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=not trusted)
 
     config = checkpoint['config']
     step = checkpoint.get('step', 0)
@@ -205,19 +204,16 @@ def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
     print(f"\n{'='*70}\n")
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Evaluate checkpoint')
-    parser.add_argument('--checkpoint', type=str,
-                       default='checkpoints_realistic/best_model.pt',
-                       help='Path to checkpoint file')
-    parser.add_argument('--max_batches', type=int, default=50,
-                       help='Number of validation batches to evaluate')
+CONFIG = {
+    'checkpoint':  'checkpoints_realistic/best_model.pt',
+    'max_batches': 50,
+}
 
-    args = parser.parse_args()
 
-    checkpoint_path = Path(args.checkpoint)
+def main() -> None:
+    checkpoint_path = Path(CONFIG['checkpoint'])
     if not checkpoint_path.exists():
-        print(f"❌ Checkpoint not found: {checkpoint_path}")
+        print(f"Checkpoint not found: {checkpoint_path}")
         print(f"\nAvailable checkpoints:")
         checkpoint_dir = checkpoint_path.parent
         if checkpoint_dir.exists():
@@ -225,7 +221,7 @@ def main():
                 print(f"  - {f}")
         return
 
-    evaluate_checkpoint(str(checkpoint_path), args.max_batches)
+    evaluate_checkpoint(str(checkpoint_path), CONFIG['max_batches'])
 
 
 if __name__ == '__main__':

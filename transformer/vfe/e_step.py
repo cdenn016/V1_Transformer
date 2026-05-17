@@ -91,6 +91,7 @@ class VFEEStep(nn.Module):
             self.kappa = cfg.kappa
         self.e_mu_lr = cfg.e_mu_lr
         self.e_sigma_lr = cfg.e_sigma_lr
+        self.e_sigma_q_trust = cfg.e_sigma_q_trust
         self.e_phi_lr = cfg.e_phi_lr
         self.sigma_max = cfg.sigma_max
         self.diagonal_covariance = cfg.diagonal_covariance
@@ -104,6 +105,7 @@ class VFEEStep(nn.Module):
         self.enforce_orthogonal = cfg.enforce_orthogonal
         self.mask_self_attention = cfg.mask_self_attention
         self.gauge_covariant_ridge = getattr(cfg, 'gauge_covariant_ridge', False)
+        self.track_layer_diagnostics = getattr(cfg, 'track_layer_diagnostics', False)
         self.gauge_group = cfg.gauge_group
         self.phi_preconditioner_mode = cfg.phi_preconditioner
         self.phi_project_slk = cfg.phi_project_slk
@@ -373,10 +375,27 @@ class VFEEStep(nn.Module):
                         _alpha_scalar = float(alpha_eff.detach().mean().item())
                     else:
                         _alpha_scalar = float(alpha_eff)
-                    f_align_sum = (beta.detach() * kl_matrix.detach()).sum()
+                    _beta_det = beta.detach()
+                    f_align_sum = (_beta_det * kl_matrix.detach()).sum()
+                    # Manuscript Eq. eq:free_energy_functional_final:
+                    #   F_align = lambda * [(beta * KL).sum() + tau * (beta * log(beta/pi)).sum()]
+                    # The entropy term must enter the monotone monitor when
+                    # include_attention_entropy=True; otherwise the monitor
+                    # tracks a different objective than the one being descended
+                    # and emits false-positive monotonicity violations.
+                    # Uniform prior pi = 1/N; log N is an additive constant
+                    # dropped here to match the alignment_loss in _update_phi.
+                    if self.include_attention_entropy:
+                        _kappa_scalar = float(_kappa.detach().item()) if isinstance(_kappa, torch.Tensor) else float(_kappa)
+                        _dim_scale = math.sqrt(max(self.embed_dim, 1))
+                        _beta_safe = _beta_det.clamp(min=1e-30)
+                        f_ent_sum = (_beta_safe * _beta_safe.log()).sum()
+                        f_align_total = float(f_align_sum.item()) + _kappa_scalar * _dim_scale * float(f_ent_sum.item())
+                    else:
+                        f_align_total = float(f_align_sum.item())
                     f_t = (
                         _alpha_scalar * float(kl_qp_sum.item())
-                        + float(self.lambda_align) * float(f_align_sum.item())
+                        + float(self.lambda_align) * f_align_total
                     )
                     f_history.append(f_t)
                     if f_prev is not None:
@@ -409,8 +428,15 @@ class VFEEStep(nn.Module):
                 grad_mu, grad_sigma, sigma, eps=eps,
             )
 
-            # Collect diagnostics on last iteration (no overhead on inner iters)
+            # On the final iteration we always store the raw `_last_attention`
+            # and `_last_kl_matrix` tensor references (cheap; trainer plots
+            # consume them). The expensive `.item()`-heavy diagnostics dict is
+            # gated behind `track_layer_diagnostics` because each `.item()`
+            # call is a CUDA sync that stalls the stream on every forward.
             if t == self.n_e_steps - 1:
+                self._last_attention = beta.detach()
+                self._last_kl_matrix = kl_matrix.detach()
+            if t == self.n_e_steps - 1 and self.track_layer_diagnostics:
                 with torch.no_grad():
                     self._last_diagnostics = {
                         # Gradient norms (E-step)
@@ -450,18 +476,6 @@ class VFEEStep(nn.Module):
                         self._last_diagnostics['prior_belief_kl_max'] = kl_qp.sum(-1).max().item()
                         self._last_diagnostics['prior_belief_kl_std'] = kl_qp.sum(-1).std().item()
 
-                    # Persist raw tensors for off-line visualization
-                    # (attention heatmaps in VFETrainer._plot_attention_patterns).
-                    # Detached + retained until next forward; cleared on
-                    # the next E-step pass.
-                    # TODO(future): capture per-head β when
-                    # ``rope_full_gauge != 'off'`` (the inner loop computes
-                    # per-head β_h in _compute_rope_full_gauge_gradient_per_head;
-                    # at this diagnostic point only the aggregate β is alive,
-                    # so multi-head heatmaps are not yet supported).
-                    self._last_attention = beta.detach()
-                    self._last_kl_matrix = kl_matrix.detach()
-
                     # Free-energy trajectory (diagonal covariance only; empty
                     # list on full-cov paths).  Downstream can assert
                     # monotonicity as a hard correctness gate in unit tests.
@@ -490,7 +504,7 @@ class VFEEStep(nn.Module):
                 is_diagonal=is_diagonal,
                 eps=eps,
                 update_sigma=True,
-                sigma_trust=self.e_sigma_lr,
+                sigma_trust=self.e_sigma_q_trust,
                 sigma_max=self.sigma_max,
                 isotropic_covariance=self.isotropic_covariance,
             )
@@ -525,13 +539,19 @@ class VFEEStep(nn.Module):
         # force-enable grad tracking here to match the defensive pattern in
         # _compute_rope_full_gauge_gradient_per_head (vfe_gradients.py:2106).
         with torch.enable_grad():
-            phi_for_grad = phi.clone().requires_grad_(True)
+            phi_for_grad = phi.detach().requires_grad_(True)
 
             # Single forward through compute_kl_attention; both beta and
             # kl_matrix share the same autograd subgraph through phi_for_grad.
             # The product rule decomposition below uses .detach() to route
             # gradients along exactly one of the two paths per term.
             _kappa = kappa if kappa is not None else self.effective_kappa
+            # NOTE: cached_block_exp_pairs is intentionally NOT forwarded
+            # here. The cache was built from `phi` (not `phi_for_grad`) so
+            # passing it would detach Omega from the phi autograd path and
+            # zero out d/dphi alignment_loss. compute_kl_attention must
+            # recompute the exponentials from `phi_for_grad` to keep the
+            # gradient subgraph live.
             beta_phi, kl_h = compute_kl_attention(
                 mu.detach(), sigma.detach() if sigma is not None else None,
                 phi_for_grad, self.generators,

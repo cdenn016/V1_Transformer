@@ -389,6 +389,7 @@ class TestComputeVFEGradientsGPUDiagonal:
         """
         from transformer.core.gauge_utils import stable_matrix_exp_pair
 
+        torch.manual_seed(20260517)
         B, N, K = 1, 3, 4
         n_gen = K * K
         mu_q, sigma_q, mu_p, sigma_p, beta, phi, gen = _make_diagonal_vfe_inputs(

@@ -10,6 +10,7 @@ plus gauge frames Ω_v ∈ GL(K_h) per head. Position encoding via RoPE.
 """
 
 import math
+from typing import Optional
 
 import torch
 
@@ -236,13 +237,22 @@ class PureVFETransformer:
         torch.save(state, path)
 
     @classmethod
-    def load(cls, path, device=None):
+    def load(cls, path: str, device: Optional[str] = None, trusted: bool = True) -> "PureFEPModel":
         """Load model from disk.
 
         Legacy checkpoints with pos_Omega/pos_phi/m1_pos_Omega keys are
         loaded without error — those keys are silently ignored.
+
+        Args:
+            path: Path to checkpoint file.
+            device: Optional device override for the loaded config.
+            trusted: If True (default), uses ``weights_only=False`` which
+                permits pickle-based deserialization of the bundled config
+                dataclass. Set False to refuse arbitrary code execution
+                from a hostile checkpoint, at the cost of failing on
+                non-tensor fields.
         """
-        data = torch.load(path, weights_only=False)
+        data = torch.load(path, weights_only=not trusted)
         config = data['config']
         if device is not None:
             config.device = device

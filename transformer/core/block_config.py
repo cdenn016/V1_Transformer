@@ -126,7 +126,8 @@ class BlockConfig:
     
     
     
-    em_mode: str = 'ift_phi'            # EM gradient-flow mode. Options:
+    em_mode: Literal['ift_phi', 'em_phi_q', 'em_phi_p'] = 'ift_phi'
+                                        # EM gradient-flow mode. Options:
                                         #   'ift_phi'  — μ_p,σ_p attached, full IFT φ gradient (default)
                                         #   'em_phi_q' — φ∈q: E-step optimizes μ,Σ,φ; all detached at EM boundary
                                         #   'em_phi_p' — φ∈θ: φ frozen in E-step; M-step only
@@ -315,21 +316,12 @@ class BlockConfig:
                 f"closed_form_e_step=True or set n_picard_steps=0."
             )
 
-    @property
-    def amortized_inference(self) -> bool:
-        return self._amortized_inference
-
-    @property
-    def amortize_sigma(self) -> bool:
-        return self._amortize_sigma
-
-    @property
-    def exact_phi_grad(self) -> bool:
-        return self._exact_phi_grad
-
-    @property
-    def em_phi_mode(self) -> str:
-        return self._em_phi_mode
+    # The old 5-flag system (amortized_inference / amortize_sigma /
+    # exact_phi_grad / em_phi_mode / implicit_em) is fully internalized.
+    # External callers should configure via ``em_mode`` only; the per-mode
+    # gradient flags are derived inside ``__post_init__`` via
+    # ``em_modes.EM_MODE_TABLE`` and stored as private ``_amortized_inference``
+    # etc. attributes consumed by ``VariationalFFNDynamic.__init__``.
 
     # === Non-flat gauge transport (flat bundle experiments) ===
     # When non_flat_transport=True, the transport becomes:
@@ -438,12 +430,10 @@ class BlockConfig:
     generators: Optional[torch.Tensor] = field(default=None, repr=False)   # (n_gen, K, K) Lie algebra generators
     ffn_prior_bank: Optional[nn.Module] = field(default=None, repr=False)  # Token-dependent PriorBank module
     ffn_use_prior_bank: bool = False   # If True, FFN uses PriorBank for token-dependent priors
-    cross_head_perm: Optional[object] = field(default=None, repr=False)    # Cross-head coupling permutation
 
     @classmethod
     def from_config(cls, config: dict, generators: Optional[torch.Tensor] = None,
                     prior_bank: Optional[nn.Module] = None,
-                    cross_head_perm=None,
                     ffn_irrep_dims: Optional[List[int]] = None) -> 'BlockConfig':
         """Build BlockConfig from the flat config dict used by train_publication.py.
 
@@ -452,8 +442,13 @@ class BlockConfig:
                     irrep_spec, hidden_dim, n_layers, kappa_beta. All others optional.
             generators: (n_gen, K, K) Lie algebra generators for gauge transport.
             prior_bank: Optional PriorBank nn.Module for token-dependent priors.
-            cross_head_perm: Optional cross-head coupling permutation.
             ffn_irrep_dims: Optional flat list of block dimensions [d₁, d₂, ...].
+
+        Note:
+            Cross-head coupling permutations live on the LM module
+            (``GaugeTransformerLM._cross_head_perm``) and are applied inside
+            ``_apply_cross_head_perm`` before/after the stack call. They are
+            no longer threaded through the BlockConfig dataclass.
         """
         kappa_beta = config['kappa_beta']
         return cls(
@@ -571,5 +566,4 @@ class BlockConfig:
             generators=generators,
             ffn_prior_bank=prior_bank,
             ffn_use_prior_bank=config.get('use_prior_bank', False),
-            cross_head_perm=cross_head_perm,
         )

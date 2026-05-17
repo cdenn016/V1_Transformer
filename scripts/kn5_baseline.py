@@ -14,17 +14,14 @@ transformer is commensurable.
 
 No C++ compilation required -- runs on any platform with Python 3.8+.
 
-Usage:
-    python scripts/kn5_baseline.py
-    python scripts/kn5_baseline.py --order 3
-    python scripts/kn5_baseline.py --no-install
+Click-to-run: edit ``CONFIG`` below, then press Run.
+No CLI arguments (per CLAUDE.md).
 
 Requirements (auto-installed if missing):
     - tiktoken (GPT-2 BPE tokenizer)
     - datasets (HuggingFace, for loading WikiText-103)
 """
 
-import argparse
 import gc
 import math
 import os
@@ -415,27 +412,26 @@ class ModifiedKneserNey:
 # 4. Main
 # ===================================================================
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="KN-5 baseline on WikiText-103 with matched BPE tokenization"
-    )
-    parser.add_argument("--order", type=int, default=5,
-                        help="N-gram order (default: 5)")
-    parser.add_argument("--no-install", action="store_true",
-                        help="Skip automatic dependency installation")
-    parser.add_argument("--sent-len", type=int, default=512,
-                        help="Pseudo-sentence length for n-gram boundaries "
-                             "(default: 512)")
-    args = parser.parse_args()
+CONFIG = {
+    'order':      5,      # N-gram order
+    'no_install': False,  # If True, skip automatic dependency installation
+    'sent_len':   512,    # Pseudo-sentence length for n-gram boundaries
+}
+
+
+def main() -> None:
+    order = CONFIG['order']
+    sent_len = CONFIG['sent_len']
+    no_install = CONFIG['no_install']
 
     print("=" * 70)
-    print(f"KN-{args.order} BASELINE -- WikiText-103 (GPT-2 BPE, vocab 50,257)")
+    print(f"KN-{order} BASELINE -- WikiText-103 (GPT-2 BPE, vocab 50,257)")
     print("=" * 70)
     print(f"Pure-Python Modified Kneser-Ney (Chen & Goodman, 1998)")
     print()
 
     # Step 0: Install dependencies
-    if not args.no_install:
+    if not no_install:
         install_deps()
 
     # Step 1: Load data
@@ -446,19 +442,19 @@ def main():
     tokenized = tokenize_splits(splits)
 
     # Step 3: Make pseudo-sentences
-    print(f"\nSplitting into pseudo-sentences (len={args.sent_len})...")
-    train_sents = make_sentences(tokenized["train"], args.sent_len)
-    valid_sents = make_sentences(tokenized["valid"], args.sent_len)
-    test_sents = make_sentences(tokenized["test"], args.sent_len)
+    print(f"\nSplitting into pseudo-sentences (len={sent_len})...")
+    train_sents = make_sentences(tokenized["train"], sent_len)
+    valid_sents = make_sentences(tokenized["valid"], sent_len)
+    test_sents = make_sentences(tokenized["test"], sent_len)
     print(f"  train: {len(train_sents):,} sentences")
     print(f"  valid: {len(valid_sents):,} sentences")
     print(f"  test:  {len(test_sents):,} sentences")
 
     # Step 4: Build model
     print(f"\n{'='*70}")
-    print(f"BUILDING MODIFIED KNESER-NEY {args.order}-GRAM MODEL")
+    print(f"BUILDING MODIFIED KNESER-NEY {order}-GRAM MODEL")
     print(f"{'='*70}")
-    model = ModifiedKneserNey(order=args.order)
+    model = ModifiedKneserNey(order=order)
     model.train(train_sents)
     model.build()
 
@@ -477,7 +473,7 @@ def main():
 
     # Step 6: Report
     print(f"\n{'='*70}")
-    print(f"RESULTS: Modified KN-{args.order} on WikiText-103 (BPE vocab 50,257)")
+    print(f"RESULTS: Modified KN-{order} on WikiText-103 (BPE vocab 50,257)")
     print(f"{'='*70}")
 
     for name in ["valid", "test"]:
@@ -503,7 +499,7 @@ def main():
     print(f"{'='*70}")
     print(f"{'Model':<35} {'Val PPL':>10} {'Test PPL':>10}")
     print(f"{'-'*35} {'-'*10} {'-'*10}")
-    print(f"{'MKN-' + str(args.order) + ' (this script)':<35} "
+    print(f"{'MKN-' + str(order) + ' (this script)':<35} "
           f"{kn_val:>10.1f} {kn_test:>10.1f}")
     print(f"{'Gauge VFE (GL(20), K=80)':<35} "
           f"{gauge_val:>10.1f} {gauge_test:>10.1f}")
@@ -513,17 +509,17 @@ def main():
 
     if kn_test > gauge_test:
         ratio = kn_test / gauge_test
-        print(f"\n  ** Gauge VFE beats MKN-{args.order} by "
+        print(f"\n  ** Gauge VFE beats MKN-{order} by "
               f"{kn_test - gauge_test:.1f} PPL ({ratio:.2f}x) **")
     else:
         ratio = gauge_test / kn_test
-        print(f"\n  ** MKN-{args.order} beats Gauge VFE by "
+        print(f"\n  ** MKN-{order} beats Gauge VFE by "
               f"{gauge_test - kn_test:.1f} PPL ({ratio:.2f}x) **")
         print(f"  (Under matched tokenization, the n-gram baseline is stronger)")
 
     print(f"\n  Reference:")
     print(f"    Merity et al. (2017) KN-5 (word-level, ~267K vocab): ~153-156 PPL")
-    print(f"    This script MKN-{args.order} (BPE, 50K vocab):       "
+    print(f"    This script MKN-{order} (BPE, 50K vocab):       "
           f"{kn_test:.1f} PPL")
     if kn_test < 153:
         print(f"    Vocab reduction accounts for ~{153 - kn_test:.0f} PPL drop")

@@ -6,7 +6,7 @@ Only the iterative natural-gradient E-step with semi-gradient flow at the EM bou
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Literal
 import torch
 
 from transformer.core.block_config import (
@@ -39,6 +39,9 @@ class VFEConfig:
     n_e_steps: int = 3                   # T_E: inner loop iterations per layer
     e_mu_lr: float = 0.1                 # eta_mu: mean natural gradient step size
     e_sigma_lr: float = 0.001            # eta_sigma: covariance retraction step size
+    e_sigma_q_trust: float = 5.0         # Trust-region clamp on whitened |delta_sigma/sigma|
+                                         # for the diagonal-sigma retraction. Independent of
+                                         # the step LR (CLAUDE.md, 2026-05-13 onward).
     e_phi_lr: float = 0.05              # eta_phi: gauge frame step size
     alpha: float = 1.0                   # KL(q||p) prior self-coupling weight
     alpha_divergence: float = 1.0        # Rényi α (1.0=KL, 0.5=Bhattacharyya)

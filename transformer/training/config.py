@@ -13,7 +13,7 @@ trivialized (gauge_mode='trivial') to recover standard KL-attention.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 
 
 @dataclass
@@ -39,7 +39,7 @@ class TrainingConfig:
     # ==========================================================================
     # Training Mode
     # ==========================================================================
-    training_mode: str = 'vfe_dynamic'  # 'standard', 'vfe_dynamic', 'pure_fep'
+    training_mode: Literal['standard', 'vfe_dynamic', 'pure_fep'] = 'vfe_dynamic'
 
     # ==========================================================================
     # Parameter Grouping Strategy
@@ -68,7 +68,7 @@ class TrainingConfig:
     #   'adamw': Standard AdamW (default). Diagonal Fisher approximation via EMA.
     #   'riemannian_adam': AdamW + gauge metric for phi + Fisher metric for mu.
     #   'natural_gradient': Per-token block-diagonal empirical Fisher.
-    optimizer_type: str =   'adamw'
+    optimizer_type: Literal['adamw', 'riemannian_adam', 'natural_gradient'] = 'adamw'
 
     # RiemannianAdamW phi/omega metric (only used when optimizer_type='riemannian_adam'):
     #   'killing' (default): Position-independent Cartan-modified Killing form.
