@@ -106,6 +106,7 @@ class VFEEStep(nn.Module):
         self.mask_self_attention = cfg.mask_self_attention
         self.gauge_covariant_ridge = getattr(cfg, 'gauge_covariant_ridge', False)
         self.track_layer_diagnostics = getattr(cfg, 'track_layer_diagnostics', False)
+        self.use_autograd_mu_sigma = getattr(cfg, 'use_autograd_mu_sigma', False)
         self.gauge_group = cfg.gauge_group
         self.phi_preconditioner_mode = cfg.phi_preconditioner
         self.phi_project_slk = cfg.phi_project_slk
@@ -335,31 +336,48 @@ class VFEEStep(nn.Module):
                     exact_diagonal_transport=self.exact_diagonal_transport,
                 )
 
-                grad_mu, grad_sigma = compute_vfe_gradients_gpu(
-                    mu_q=mu,
-                    sigma_q=sigma,
-                    mu_p=mu_p,
-                    sigma_p=sigma_p,
-                    beta=beta,
-                    phi=phi,
-                    generators=self.generators,
-                    alpha=alpha_eff,
-                    alpha_c0=alpha_c0_full,
-                    alpha_div=self.alpha_divergence,
-                    lambda_belief=self.lambda_align,
-                    # See rope-branch envelope-identity comment above.
-                    lambda_softmax=0.0 if self.include_attention_entropy else self.lambda_soft,
-                    kappa=_kappa,
-                    eps=eps,
-                    compute_sigma_align_grad=True,
-                    irrep_dims=self.irrep_dims,
-                    enforce_orthogonal=self.enforce_orthogonal,
-                    cached_block_exp_pairs=block_exp_pairs,
-                    use_rope=self.use_rope,
-                    rope_base=self.rope_base,
-                    exact_diagonal_transport=self.exact_diagonal_transport,
-                    gauge_covariant_ridge=self.gauge_covariant_ridge,
-                )
+                if self.use_autograd_mu_sigma:
+                    # Total-derivative path: autograd through compute_kl_attention
+                    # captures BOTH query-side and key-side contributions to
+                    # dF/dmu_k, matching the phi-update mechanism. See
+                    # _compute_mu_sigma_grad_autograd docstring.
+                    grad_mu, grad_sigma = self._compute_mu_sigma_grad_autograd(
+                        mu=mu, sigma=sigma,
+                        mu_p=mu_p, sigma_p=sigma_p,
+                        phi=phi,
+                        alpha_eff=alpha_eff,
+                        block_exp_pairs=block_exp_pairs,
+                        mask=mask,
+                        kappa=_kappa,
+                        eps=eps,
+                        is_diagonal=is_diagonal,
+                    )
+                else:
+                    grad_mu, grad_sigma = compute_vfe_gradients_gpu(
+                        mu_q=mu,
+                        sigma_q=sigma,
+                        mu_p=mu_p,
+                        sigma_p=sigma_p,
+                        beta=beta,
+                        phi=phi,
+                        generators=self.generators,
+                        alpha=alpha_eff,
+                        alpha_c0=alpha_c0_full,
+                        alpha_div=self.alpha_divergence,
+                        lambda_belief=self.lambda_align,
+                        # See rope-branch envelope-identity comment above.
+                        lambda_softmax=0.0 if self.include_attention_entropy else self.lambda_soft,
+                        kappa=_kappa,
+                        eps=eps,
+                        compute_sigma_align_grad=True,
+                        irrep_dims=self.irrep_dims,
+                        enforce_orthogonal=self.enforce_orthogonal,
+                        cached_block_exp_pairs=block_exp_pairs,
+                        use_rope=self.use_rope,
+                        rope_base=self.rope_base,
+                        exact_diagonal_transport=self.exact_diagonal_transport,
+                        gauge_covariant_ridge=self.gauge_covariant_ridge,
+                    )
 
             # 2b. Monotone free-energy check (diagonal covariance only).
             # F(t) is measured at the belief state AT THE START of this
@@ -619,3 +637,126 @@ class VFEEStep(nn.Module):
                 )
 
         return phi
+
+    def _compute_mu_sigma_grad_autograd(
+        self,
+        mu: torch.Tensor,
+        sigma: torch.Tensor,
+        mu_p: torch.Tensor,
+        sigma_p: torch.Tensor,
+        phi: torch.Tensor,
+        alpha_eff,
+        block_exp_pairs: Optional[list],
+        mask: Optional[torch.Tensor],
+        kappa,
+        eps: float,
+        is_diagonal: bool,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        r"""Compute dF/dmu, dF/dsigma via autograd through compute_kl_attention.
+
+        Total-derivative path: autograd over the manuscript F functional
+        captures BOTH contributions to dF/dmu_k:
+
+        - **Query-side** (k = i): mu_k appears as the first argument's mean
+          in KL(q_k || Omega_kj q_j) for all j.
+        - **Key-side** (k = j): mu_k appears as the second argument's mean
+          (via Omega_ik mu_k) and its covariance (Omega_ik Sigma_k Omega_ik^T)
+          in KL(q_i || Omega_ik q_k) for all i.
+
+        The analytic kernel compute_vfe_gradients_gpu computes the query-side
+        partial only (mean-field convention). This method computes the total
+        derivative, matching the F monitor at e_step.py:370-407 and the phi
+        update at _update_phi.
+
+        Envelope at softmax stationary point: beta is detached so autograd
+        produces dF/dtheta = Sum beta . dKL/dtheta directly, exactly the
+        envelope-correct gradient. The entropy term has no (mu, sigma)
+        dependence under beta.detach() and is therefore omitted.
+
+        Returns:
+            grad_mu: (B, N, K) total derivative dF/dmu.
+            grad_sigma: (B, N, K) (diagonal) total derivative dF/dsigma.
+        """
+        if not is_diagonal:
+            # Self-KL requires full-cov logdet (eigendecomposition through
+            # autograd). Out of scope for this fix; restrict to diagonal.
+            raise NotImplementedError(
+                "use_autograd_mu_sigma=True is currently only supported for "
+                "diagonal_covariance=True (full-cov self-KL via autograd "
+                "needs logdet through eigendecomposition; not yet wired). "
+                "Set diagonal_covariance=True or disable the toggle."
+            )
+
+        with torch.enable_grad():
+            mu_g = mu.detach().requires_grad_(True)
+            sigma_g = sigma.detach().requires_grad_(True)
+            phi_d = phi.detach()
+            mu_p_d = mu_p.detach()
+            sigma_p_d = sigma_p.detach()
+            _kappa_d = kappa.detach() if isinstance(kappa, torch.Tensor) else kappa
+
+            # Self-coupling: alpha * KL(q_i || p_i), diagonal Gaussians.
+            _sp = sigma_p_d.clamp(min=eps)
+            _sq = sigma_g.clamp(min=eps)
+            kl_qp_per_dim = 0.5 * (
+                _sq / _sp
+                + (mu_g - mu_p_d) ** 2 / _sp
+                - 1.0
+                + _sp.log()
+                - _sq.log()
+            )  # (B, N, K)
+
+            if self.E_learnable_alpha:
+                # Reconstruct alpha inside the autograd graph so the product-rule
+                # term d(alpha_k)/d(mu,sigma) = -(alpha_k^2 / c0) * d(KL_k)/dtheta
+                # is captured automatically (matches the analytic path's
+                # alpha_c0 correction in compute_vfe_gradients_gpu).
+                alpha_in_graph = self.get_bayesian_alpha(
+                    mu_g, mu_p_d, sigma_g, sigma_p_d
+                )
+                self_kl_term = (alpha_in_graph * kl_qp_per_dim).sum()
+            elif isinstance(alpha_eff, torch.Tensor):
+                self_kl_term = (alpha_eff.detach() * kl_qp_per_dim).sum()
+            else:
+                self_kl_term = float(alpha_eff) * kl_qp_per_dim.sum()
+
+            # Alignment: lambda_align * Sum beta_ij . KL(q_i || Omega_ij q_j).
+            # Reuse the same block_exp_pairs cache built from current phi (the
+            # cache is detached from autograd; mu_g and sigma_g flow through
+            # the KL computation itself, which is what we differentiate).
+            beta_g, kl_g = compute_kl_attention(
+                mu_g, sigma_g, phi_d, self.generators,
+                self.irrep_dims, _kappa_d, mask,
+                use_rope=self.use_rope,
+                rope_base=self.rope_base,
+                cached_block_exp_pairs=block_exp_pairs,
+                enforce_orthogonal=self.enforce_orthogonal,
+                mask_self_attention=self.mask_self_attention,
+                exact_diagonal_transport=self.exact_diagonal_transport,
+            )
+
+            # Envelope: detach beta so the entropy gradient vanishes and only
+            # Sum beta . dKL/dtheta survives. The entropy term itself has no
+            # (mu, sigma) dependence under beta.detach() and is omitted.
+            beta_d = beta_g.detach()
+
+            if self.include_attention_entropy:
+                alignment_term = self.lambda_align * (beta_d * kl_g).sum()
+            else:
+                # Legacy product-rule decomposition for the entropy-suppressed
+                # surrogate path: split the d/dtheta [Sum beta . KL] derivative
+                # into a beta.detach() branch (lambda_align weight) and a
+                # kl.detach() branch (lambda_soft weight). Mirrors _update_phi.
+                alignment_term = (
+                    self.lambda_align * (beta_g.detach() * kl_g).sum()
+                    + self.lambda_soft * (beta_g * kl_g.detach()).sum()
+                )
+
+            F_total = self_kl_term + alignment_term
+
+            grad_mu, grad_sigma = torch.autograd.grad(
+                F_total, [mu_g, sigma_g],
+                create_graph=False, retain_graph=False,
+            )
+
+        return grad_mu, grad_sigma
