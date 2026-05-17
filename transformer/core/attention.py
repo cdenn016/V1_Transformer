@@ -1669,10 +1669,16 @@ class IrrepMultiHeadAttention(nn.Module):
                 f"{total_params} scalar parameter(s) (commutant of irrep decomp)"
             )
             # Check for independent per-head gauge and warn.
+            # NOTE: the previous `irrep_dims_override is None` clause was dead:
+            # model.py auto-populates ffn_irrep_dims whenever use_block_diagonal_kl=True
+            # (the default), so the override is never None in production. The label-based
+            # check fires for both irrep_dims_override=None AND the auto-populated
+            # [d_head]*n_heads case (both produce 'glk_head_*' labels at lines 1466 / 1482),
+            # while staying silent for true cross-coupled super-blocks ('glk_superblock_*').
             _independent_glk = (
                 gauge_group == 'GLK'
                 and getattr(self, 'glk_multihead', False)
-                and irrep_dims_override is None
+                and any(lbl.startswith('glk_head_') for lbl in self.irrep_labels)
                 and any(len(h) > 1 for _, _, h in self._mixer_groups)
             )
             if _independent_glk:

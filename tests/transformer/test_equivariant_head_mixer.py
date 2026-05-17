@@ -247,3 +247,154 @@ def test_block_config_default_use_output_projection_is_false():
     assert fields.get('use_equivariant_head_mixer') is False, (
         "Default use_equivariant_head_mixer must be False (opt-in only)."
     )
+
+
+# =============================================================================
+# T6 — Warning fires when irrep_dims_override is auto-populated (model.py path)
+# =============================================================================
+
+def test_mixer_warns_under_auto_populated_irrep_dims_override():
+    """Production configs reach IrrepMultiHeadAttention with irrep_dims_override
+    auto-populated to [d_head]*n_heads by model.py (use_block_diagonal_kl=True
+    default). The pre-fix predicate required irrep_dims_override is None and
+    therefore stayed silent in every production config. This test pins the
+    label-based detection in place: when labels are 'glk_head_*' (i.e. plain
+    multi-head, not cross-coupled super-blocks), the warning MUST fire even
+    though irrep_dims_override is non-None.
+    """
+    torch.manual_seed(0)
+    embed_dim, n_heads, d_head = 20, 2, 10
+    n_gen = n_heads * d_head * d_head
+    generators = torch.randn(n_gen, embed_dim, embed_dim) * 0.1
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        IrrepMultiHeadAttention(
+            embed_dim=embed_dim,
+            irrep_spec=[('fund', n_heads, d_head)],
+            kappa_beta=1.0,
+            diagonal_covariance=False,
+            gauge_group='GLK',
+            gauge_dim=d_head,
+            global_generators=generators,
+            use_output_projection=False,
+            use_equivariant_head_mixer=True,
+            # Simulate model.py:338 auto-populating ffn_irrep_dims.
+            irrep_dims_override=[d_head] * n_heads,
+        )
+    msgs = [str(w.message) for w in caught if issubclass(w.category, RuntimeWarning)]
+    assert any(
+        "commutant mixer" in m.lower() or "tied gauge" in m.lower() for m in msgs
+    ), (
+        "Expected RuntimeWarning to fire when irrep_dims_override=[d_head]*n_heads "
+        "(the model.py auto-populate path) — labels are 'glk_head_*', gauges are "
+        "independent per-head. Without this, the warning is dead in every "
+        f"production config. Got: {msgs}"
+    )
+
+
+def test_mixer_silent_under_cross_coupled_super_blocks():
+    """Sanity counterpart: when irrep_dims_override produces non-uniform super-blocks
+    (true cross-coupled gauges via merge_coupled_heads), labels are 'glk_superblock_*'
+    and the warning must STAY silent — those configs have tied gauges within each
+    super-block, making the mixer principled.
+    """
+    torch.manual_seed(0)
+    embed_dim, n_heads, d_head = 20, 2, 10
+    n_gen = n_heads * d_head * d_head
+    generators = torch.randn(n_gen, embed_dim, embed_dim) * 0.1
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        attn = IrrepMultiHeadAttention(
+            embed_dim=embed_dim,
+            irrep_spec=[('fund', n_heads, d_head)],
+            kappa_beta=1.0,
+            diagonal_covariance=False,
+            gauge_group='GLK',
+            gauge_dim=d_head,
+            global_generators=generators,
+            use_output_projection=False,
+            use_equivariant_head_mixer=True,
+            # Single super-block of size 20 — mimics merge_coupled_heads output
+            # when two heads are coupled together into one shared GL(20) gauge.
+            irrep_dims_override=[embed_dim],
+        )
+    mixer_msgs = [
+        str(w.message)
+        for w in caught
+        if issubclass(w.category, RuntimeWarning)
+        and ("commutant mixer" in str(w.message).lower() or "tied gauge" in str(w.message).lower())
+    ]
+    assert not mixer_msgs, (
+        f"Mixer warning should be silent under cross-coupled super-blocks "
+        f"(labels are 'glk_superblock_*'). Got: {mixer_msgs}"
+    )
+    assert attn.irrep_labels[0].startswith('glk_superblock_'), (
+        f"Expected super-block labels; got {attn.irrep_labels}"
+    )
+
+
+# =============================================================================
+# T7 — Mutual exclusion: use_output_projection AND use_equivariant_head_mixer
+# =============================================================================
+
+def test_block_config_mutual_exclusion_errors():
+    """Setting both flags True silently allocated mixer_params as dead weight
+    (W_O wins the forward dispatch). BlockConfig.__post_init__ now raises
+    ValueError to fail fast on this misconfiguration.
+    """
+    from transformer.core.block_config import BlockConfig
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        BlockConfig(
+            use_output_projection=True,
+            use_equivariant_head_mixer=True,
+        )
+
+
+# =============================================================================
+# T8 — skip_attention force-disables the mixer
+# =============================================================================
+
+def test_block_config_skip_attention_warns_and_force_disables_mixer():
+    """Under skip_attention=True the attention forward is bypassed, so any
+    mixer_params would be dead weight. BlockConfig.__post_init__ warns; the
+    block-construction path (blocks.py:501) gates the flag on
+    `not self.skip_attention` so mixer_params are not allocated.
+    """
+    from transformer.core.block_config import BlockConfig
+    from transformer.core.blocks import GaugeTransformerBlock
+
+    torch.manual_seed(0)
+    embed_dim, n_heads, d_head = 20, 2, 10
+    n_gen = n_heads * d_head * d_head
+    generators = torch.randn(n_gen, embed_dim, embed_dim) * 0.1
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        cfg = BlockConfig(
+            embed_dim=embed_dim,
+            irrep_spec=[('fund', n_heads, d_head)],
+            hidden_dim=64,
+            n_layers=1,
+            skip_attention=True,
+            use_equivariant_head_mixer=True,
+            generators=generators,
+        )
+    msgs = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+    assert any("force-disabled" in m and "skip_attention" in m for m in msgs), (
+        f"Expected UserWarning about force-disable under skip_attention; got: {msgs}"
+    )
+
+    # Build the block and confirm the mixer is not active inside the attention
+    # submodule (allocated but inert if force-disable did not propagate would be
+    # `_mixer_active=True` with mixer_params populated).
+    block = GaugeTransformerBlock(cfg)
+    assert getattr(block.attention, '_mixer_active', False) is False, (
+        "skip_attention=True must force-disable the mixer in IrrepMultiHeadAttention; "
+        f"_mixer_active={block.attention._mixer_active}"
+    )
+    assert block.attention.mixer_params is None, (
+        "skip_attention=True must skip mixer_params allocation; "
+        f"got {block.attention.mixer_params}"
+    )

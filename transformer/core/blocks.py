@@ -498,7 +498,14 @@ class GaugeTransformerBlock(nn.Module):
             mask_self_attention=cfg.mask_self_attention,
             enforce_orthogonal=cfg.enforce_orthogonal,
             use_output_projection=cfg.use_output_projection,
-            use_equivariant_head_mixer=getattr(cfg, 'use_equivariant_head_mixer', False),
+            # Force-disable mixer under skip_attention: the attention forward is
+            # bypassed (see `if not self.skip_attention:` below), so mixer_params
+            # would be allocated but never participate in math or backprop.
+            # BlockConfig.__post_init__ warns when this combination is detected.
+            use_equivariant_head_mixer=(
+                getattr(cfg, 'use_equivariant_head_mixer', False)
+                and not self.skip_attention
+            ),
             irrep_dims_override=cfg.ffn_irrep_dims if (gauge_group == 'GLK' and cfg.ffn_irrep_dims is not None) else None,
             use_rope=cfg.use_rope,
             rope_base=cfg.rope_base,
