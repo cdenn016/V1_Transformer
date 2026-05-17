@@ -1297,6 +1297,19 @@ In the deterministic limit with isotropic prior covariance $\bar\Sigma_{p,i} = \
 
 The envelope reduction below applies to the adaptive functional Eq.~\eqref{eq:free_energy_adaptive} in the same way it applies to Eq.~\eqref{eq:free_energy_functional_final}, with the inner optimum over $\alpha_i$ contributing an additional $\alpha_i$-dependence inside $\mathcal{F}_{\mathrm{red}}$ that the envelope theorem absorbs. The closed-form solution Eq.~\eqref{eq:state_dependent_alpha} then makes $\mathcal{F}_{\mathrm{red}}$ available for downstream gradient computation without an explicit Lagrange multiplier on $\alpha_i$. The simulations reported here run with the constant-$\alpha$ limit $\alpha_i = 1$; the state-dependent form is recorded as the natural variational generalisation that the reduced functional admits.
 
+\paragraph{Product-rule chain at autograd time.}
+The closed-form Eq.~\eqref{eq:state_dependent_alpha} makes $\alpha_i^*$ a function of the belief through $D_{\mathrm{KL}}(q_i \| p_i)$. Differentiating with respect to any belief parameter $\theta \in \{\mu_i, \Sigma_i\}$ gives
+\begin{equation}
+\frac{\partial \alpha_i^*}{\partial \theta} = -\frac{(\alpha_i^*)^2}{c_0} \frac{\partial D_{\mathrm{KL}}(q_i \| p_i)}{\partial \theta}.
+\label{eq:alpha_chain_rule_itfb}
+\end{equation}
+Applying the product rule to the self-coupling term $\alpha_i^* D_{\mathrm{KL}}(q_i \| p_i)$ gives
+\begin{equation}
+\frac{\partial}{\partial \theta}\bigl(\alpha_i^* D_{\mathrm{KL}}(q_i \| p_i)\bigr) = \alpha_i^* \frac{\partial D_{\mathrm{KL}}}{\partial \theta} - \frac{(\alpha_i^*)^2}{c_0} D_{\mathrm{KL}} \frac{\partial D_{\mathrm{KL}}}{\partial \theta} = (\alpha_i^*)^2 \frac{b_0}{c_0} \frac{\partial D_{\mathrm{KL}}}{\partial \theta},
+\label{eq:alpha_product_rule_itfb}
+\end{equation}
+where the second equality uses $\alpha_i^*/c_0 = 1/(b_0 + D_{\mathrm{KL}})$ to collapse the bracket $1 - (\alpha_i^*/c_0) D_{\mathrm{KL}}$ to $b_0/(b_0 + D_{\mathrm{KL}})$. The effective autograd prefactor on $\partial D_{\mathrm{KL}}/\partial \theta$ is therefore $(\alpha_i^*)^2 b_0/c_0$ rather than the envelope-form $\alpha_i^*$ alone. The envelope theorem cancels this correction when the closed-form $\alpha_i^*$ is held fixed during the gradient evaluation; autograd-based implementations that differentiate through $\alpha_i^*(\mu_i, \Sigma_i)$ along with $D_{\mathrm{KL}}$ pick up the Eq.~\eqref{eq:alpha_product_rule_itfb} correction. The companion paper~\cite{Dennis2025trans} carries the corresponding chain-rule slot in its non-isotropic mean-gradient equation.
+
 \subsubsection{The Envelope Theorem and the Reduced Free Energy}
 \label{sec:envelope_theorem}
 
@@ -2960,6 +2973,19 @@ The Mahalanobis quadratic form simplifies via the identity $(\Omega_{ij}\Omega_{
 
 Rather than transporting the key belief into the query's frame via $\Omega_{ij}$ and measuring with the induced metric, the KL divergence equivalently transports the query into the key's frame via $\Omega_{ij}^{-1}$ and measures the Euclidean distance there. Either perspective is appropriate; the Mahalanobis metric automatically accounts for the distortion introduced by gauge transport.
 
+\paragraph{Generalisation to R\'enyi $\alpha$-divergence.}
+The construction uses the KL divergence as the alignment functional. The framework extends without change to the one-parameter R\'enyi family $D_\alpha(q \| p)$ with order $\alpha \in (0, \infty) \setminus \{1\}$, and the $\alpha \to 1$ limit recovers the KL. For independent diagonal Gaussians the R\'enyi divergence admits the closed form
+\begin{equation}
+D_\alpha(q \| p) = \frac{1}{2}\left[ \alpha \sum_k \frac{(\mu_p^k - \mu_q^k)^2}{\tilde\sigma_k} + \frac{1}{\alpha - 1} \sum_k \left((1-\alpha)\log \sigma_q^k + \alpha \log \sigma_p^k - \log \tilde\sigma_k\right) \right],
+\label{eq:renyi_diagonal_itfb}
+\end{equation}
+with the blended variance $\tilde\sigma_k = (1-\alpha)\sigma_q^k + \alpha\sigma_p^k$. The full-covariance generalisation follows by replacing the per-coordinate blend with the matrix blend $\tilde\Sigma = (1-\alpha)\Sigma_q + \alpha \Sigma_p$, and the transported-key version is obtained by substituting $(\mu_p, \Sigma_p) \to (\Omega_{ij}\mu_j, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$. The attention construction
+\begin{equation}
+\beta_{ij}^{(\alpha)} = \mathrm{softmax}_j\left(-\frac{D_\alpha(q_i \| \Omega_{ij} q_j)}{\tau}\right)
+\label{eq:renyi_attention_itfb}
+\end{equation}
+is unchanged in form; the KL row $\alpha = 1$ is the standard limit and other values select different mass/coverage trade-offs (the choice $\alpha = 1/2$ recovers the Bhattacharyya coefficient up to a sign). Every gradient derivation in this section and in the appendix carries over by replacing $\partial D_{\mathrm{KL}}/\partial \theta$ with $\partial D_\alpha/\partial \theta$; in particular the product-rule chain Eq.~\eqref{eq:alpha_product_rule_itfb} for the state-dependent prior coupling retains its form with $D_{\mathrm{KL}} \to D_\alpha$. The companion paper~\cite{Dennis2025trans} carries the reference implementation in which the order $\alpha$ is exposed as a per-block configuration parameter.
+
 \paragraph{Isotropic attention with general gauge transport.}
 
 The structural terms $\log\det(\Omega_{ij}\Omega_{ij}^\top)$, $\mathrm{Tr}((\Omega_{ij}\Omega_{ij}^\top)^{-1})$, and $d_k$ depend on the gauge transport but not on the belief means. Defining the geometric bias
@@ -4213,9 +4239,9 @@ Hence the covariance alignment fixed-point is an attractor of the variational dy
 Therefore, we find that $\Sigma_i \approx\Omega_{ij}\Sigma_j\Omega_{ij}^\top$ emerges from the dynamics itself rather than as an imposed constraint.
 
 \paragraph{Collapse to attention-weighted message passing.}
-The Fisher-preconditioned mean update derived in Section~\ref{sec:transformers} carries the per-edge alignment term $\beta_{ij}\,\Sigma_i\,(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}(\mu_i - \Omega_{ij}\mu_j)$. Substituting the covariance-alignment fixed point above into this expression cancels the inner $(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$ factor against the outer $\Sigma_i$, so the per-edge contribution collapses to
+The Fisher-preconditioned mean update derived in Section~\ref{sec:transformers} carries the per-edge alignment term $\beta_{ij} \Sigma_i (\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}(\mu_i - \Omega_{ij}\mu_j)$. Substituting the covariance-alignment fixed point above into this expression cancels the inner $(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}$ factor against the outer $\Sigma_i$, so the per-edge contribution collapses to
 \begin{equation}
-\beta_{ij}\,\Sigma_i\,(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}(\mu_i - \Omega_{ij}\mu_j)\;\longrightarrow\;\beta_{ij}\,(\mu_i - \Omega_{ij}\mu_j),
+\beta_{ij} \Sigma_i (\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}(\mu_i - \Omega_{ij}\mu_j) \longrightarrow \beta_{ij}(\mu_i - \Omega_{ij}\mu_j),
 \label{eq:fisher_aligned_collapse}
 \end{equation}
 the non-isotropic generalisation of the value aggregation $\sum_j \alpha_{ij} V_j$. The mean and covariance dynamics therefore cooperate at equilibrium to produce clean attention-weighted message passing with geometric transport: the per-edge update is proportional to the residual $\mu_i - \Omega_{ij}\mu_j$ alone, with no surviving covariance precision factor.
