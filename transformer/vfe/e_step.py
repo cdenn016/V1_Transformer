@@ -285,7 +285,13 @@ class VFEEStep(nn.Module):
                         phi=phi, gen_h=self.generators[:, block_start:block_end, block_start:block_end],
                         alpha=alpha_eff if not isinstance(alpha_eff, torch.Tensor) else alpha_eff[:, :, block_start:block_end],
                         lambda_belief=self.lambda_align,
-                        lambda_softmax=self.lambda_soft,
+                        # Envelope identity: at the softmax fixed point of beta,
+                        # the manuscript F gradient is just sum_j beta * dKL/dtheta
+                        # — the softmax-coupling term sum_j KL * dbeta/dtheta
+                        # cancels exactly against the entropy-gradient term
+                        # tau * sum_j log(beta) * dbeta/dtheta. So when the
+                        # entropy term is included in F, pass lambda_softmax=0.
+                        lambda_softmax=0.0 if self.include_attention_entropy else self.lambda_soft,
                         kappa=_kappa,
                         eps=eps,
                         rope_base=self.rope_base,
@@ -341,7 +347,8 @@ class VFEEStep(nn.Module):
                     alpha_c0=alpha_c0_full,
                     alpha_div=self.alpha_divergence,
                     lambda_belief=self.lambda_align,
-                    lambda_softmax=self.lambda_soft,
+                    # See rope-branch envelope-identity comment above.
+                    lambda_softmax=0.0 if self.include_attention_entropy else self.lambda_soft,
                     kappa=_kappa,
                     eps=eps,
                     compute_sigma_align_grad=True,
