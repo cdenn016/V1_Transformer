@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 from transformer.core.types import BeliefState
 from transformer.core.blocks import MahalanobisNorm, CenteredMahalanobisNorm, RMSNorm
 from transformer.vfe.e_step import VFEEStep
+from transformer.vfe.head_mixer import VFEHeadMixer, maybe_warn_independent_gauges
 
 
 class _LayerNormSigmaAdapter(nn.Module):
@@ -99,6 +100,15 @@ class VFEBlock(nn.Module):
         super().__init__()
         self.e_step = VFEEStep(cfg, generators)
 
+        # Optional Schur-commutant head mixer. Applied AFTER the E-step and
+        # BEFORE normalization so it sees the converged belief and feeds the
+        # norm/handoff path. None when the flag is off — zero compute cost.
+        if cfg.use_equivariant_head_mixer:
+            maybe_warn_independent_gauges(cfg.irrep_dims)
+            self.head_mixer = VFEHeadMixer(cfg.irrep_spec, cfg.embed_dim)
+        else:
+            self.head_mixer = None
+
         # Normalization (resolves all five accepted norm_type values)
         self.norm = _resolve_vfe_norm(cfg.norm_type, cfg.embed_dim)
 
@@ -121,6 +131,15 @@ class VFEBlock(nn.Module):
             Updated BeliefState.
         """
         beliefs = self.e_step(beliefs, priors, mask, active_inference_fn)
+
+        # Head mixer (optional, opt-in). Applies (μ, Σ) ↦ (Mμ, MΣM^T) per type.
+        # Skipped when disabled; mixer.is_identity() short-circuit isn't used
+        # here because we want autograd to flow through mixer_delta even when
+        # it's at its init value (otherwise gradients would be silently zeroed
+        # from a Python-side branch).
+        if self.head_mixer is not None:
+            mu_mixed, sigma_mixed = self.head_mixer(beliefs.mu, beliefs.sigma)
+            beliefs = beliefs._replace(mu=mu_mixed, sigma=sigma_mixed)
 
         if self.norm is not None:
             # CenteredMahalanobisNorm needs mu_prior to actually center the

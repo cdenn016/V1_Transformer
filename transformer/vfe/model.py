@@ -59,7 +59,22 @@ class VFEModel(nn.Module):
         cfg.generators = generators
 
         # Modules
+        # PriorBank is always used for ENCODE (gauge-orbit token initialization).
+        # cfg.use_prior_bank controls only whether DECODE is the KL-to-prior
+        # readout (True, Law 3) or a plain nn.Linear(K, V) projection on mu_final
+        # (False, the one documented neural exception in CLAUDE.md).
         self.prior_bank = VFEPriorBank(cfg, generators)
+        self.use_prior_bank = cfg.use_prior_bank
+        if not cfg.use_prior_bank:
+            # Linear output projection. Initialize Xavier-uniform — matches
+            # nn.Linear default but documented for the reader. No bias: bias
+            # is a constant additive shift in V and doesn't change softmax /
+            # cross-entropy gradients meaningfully under cross-entropy training
+            # with a balanced vocabulary; keeping it parameter-free matches
+            # the "minimal neural exception" framing in CLAUDE.md.
+            self.output_proj = nn.Linear(cfg.embed_dim, cfg.vocab_size, bias=False)
+        else:
+            self.output_proj = None
         self.pos_enc = VFEPositionalEncoding(
             cfg, generators.shape[0], generators, irrep_dims=cfg.irrep_dims,
         )
@@ -106,8 +121,11 @@ class VFEModel(nn.Module):
         """
         B, N = token_ids.shape
 
-        # Invalidate decode cache from prior forward pass
-        self.prior_bank.invalidate_cache()
+        # Invalidate decode cache from prior forward pass. The cache is only
+        # populated by PriorBank.decode; harmless to call when use_prior_bank
+        # is False, but skip to avoid the no-op write.
+        if self.use_prior_bank:
+            self.prior_bank.invalidate_cache()
 
         # 1. Encode: tokens → Gaussian beliefs (Section 2)
         beliefs = self.prior_bank.encode(token_ids)
@@ -116,6 +134,19 @@ class VFEModel(nn.Module):
         beliefs = beliefs._replace(
             phi=self.pos_enc(beliefs.phi, N)
         )
+
+        # 2b. Omega-direct initialization. After positional BCH, compute the
+        # per-block (Ω_i, Ω_i^{-1}) pair from φ and stash it in beliefs.omega.
+        # The E-step then iterates Ω directly, leaving φ at its encode-time
+        # value (used only by RoPE if active, by the mass_φ penalty, and by
+        # downstream diagnostics). One-time cost per forward pass; reuses the
+        # fused matrix-exp kernel that the φ-mode path already calls.
+        if self.cfg.gauge_parameterization == 'omega_direct':
+            from transformer.vfe.omega_direct import init_omega_from_phi
+            omega_pairs = init_omega_from_phi(
+                beliefs.phi, self.generators, self.cfg.irrep_dims,
+            )
+            beliefs = beliefs._replace(omega=omega_pairs)
 
         # 3. Store initial beliefs as priors for cross-layer handoff.
         # Clone sigma/phi to defend against any downstream in-place mutation
@@ -141,8 +172,15 @@ class VFEModel(nn.Module):
         if self.final_norm is not None:
             mu_final = self.final_norm(mu_final, beliefs.sigma)
 
-        # 7. Decode: beliefs → logits via KL-to-prior (Section 9)
-        logits = self.prior_bank.decode(mu_final, beliefs.sigma)
+        # 7. Decode: beliefs → logits. Two paths gated by cfg.use_prior_bank.
+        if self.use_prior_bank:
+            # Law-3 decode: KL-to-prior on the gauge manifold.
+            logits = self.prior_bank.decode(mu_final, beliefs.sigma)
+        else:
+            # Linear projection ablation: mu_final → logits, sigma discarded.
+            # No KL geometry at the decode boundary; only the encode + E-step
+            # paths remain gauge-aware.
+            logits = self.output_proj(mu_final)
 
         if targets is not None:
             ce_loss = F.cross_entropy(

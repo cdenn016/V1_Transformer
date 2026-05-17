@@ -78,7 +78,11 @@ class VFEConfig:
     phi_project_slk: bool = False        # Hard project φ → sl(K) ⇒ det(Ω) ≡ 1
     phi_trace_clamp: Optional[float] = None  # Soft cap |tr(φ·G)| ≤ T ⇒ det(Ω_ij) ∈ [exp(-2T), exp(2T)]
     enforce_orthogonal: bool = False     # Project Omega to SO(K)
-    mask_self_attention: bool = True     # Mask diagonal in attention (prevents KL=0 collapse)
+    mask_self_attention: bool = False    # Default: self-attention allowed. Per-user 2026-05-17:
+                                         # unmasking matches the active train_vfe.py configs and
+                                         # keeps row-0 well-defined under causal masking without
+                                         # the "fully-masked row" edge case. Set True to revert
+                                         # to the previous KL=0-collapse-suppression behavior.
     mass_phi: float = 0.0               # Gauge prior: (mass_φ/2)||φ||²
 
     # Gauge-covariant numerical ridge. When True, ε·I regularizers on
@@ -116,6 +120,71 @@ class VFEConfig:
 
     # === Normalization ===
     norm_type: str = 'mahalnorm'         # 'mahalnorm', 'centered_mahalnorm', 'rmsnorm', 'layernorm' (gauge-blind, ablation-only), 'none'
+
+    # === Gauge parameterization ===
+    # 'phi' (default): per-token φ ∈ g is the state; Ω is recomputed via
+    #     exp(φ·G) at every use. Updates flow as Killing-preconditioned
+    #     natural gradient on the Lie algebra.
+    # 'omega_direct': per-token Ω ∈ G is the state, stored as a per-block
+    #     (Ω_h, Ω_h^{-1}) pair on BeliefState.omega. Updates use the
+    #     right-invariant Riemannian gradient on the group manifold:
+    #         Ω_new = Ω · exp(-η · X_proj),  X = proj_span(G^a)(Ω^{-1} · dF/dΩ)
+    #     The proj_span step preserves block-diagonal structure; the Killing
+    #     form on R·I ⊂ gl(K) is degenerate, so omega_normalize_every > 0
+    #     should be used to periodically rescale det(Ω_h) = 1 in GL(K).
+    # Validation: omega_direct currently requires diagonal_covariance=True,
+    # rope_full_gauge='off', and use_autograd_mu_sigma=True (the analytic
+    # gradient kernel is φ-only). __post_init__ enforces all three.
+    gauge_parameterization: str = 'phi'
+    omega_normalize_every: int = 0     # 0 = never; >0 = renormalize det every N E-steps
+    omega_project_slk: bool = False    # True = renormalize per-block det → 1 (controls trace drift on R·I)
+
+    # === Non-flat parallel transport ===
+    # When True, transport becomes Ω_ij = exp(φ_i·G) · exp(δ_ij·G) · exp(-φ_j·G)
+    # with a per-edge connection δ_ij computed by an antisymmetric bilinear
+    # form on (μ_i, μ_j); see transformer/vfe/non_flat.py for the full math.
+    # Holonomy around closed loops is non-trivial when the connection learns
+    # away from zero. All gates start at zero — fresh model with the flag on
+    # is bitwise-equivalent to the flag-off path at step 0.
+    #
+    # Constraints when use_non_flat_transport=True:
+    #   1. use_autograd_mu_sigma is forced to True (the analytic gradient
+    #      kernel compute_vfe_gradients_gpu does not support non-flat
+    #      transport). __post_init__ promotes it and warns if the user set it
+    #      to False.
+    #   2. rope_full_gauge must be 'off'. RoPE × non-flat × per-pair Σ is a
+    #      coupling we have not yet derived; __post_init__ rejects it.
+    #   3. diagonal_covariance must be True. Full-cov pairwise KL needs a
+    #      per-pair logdet path that is not yet implemented; __post_init__
+    #      rejects it.
+    use_non_flat_transport: bool = False
+    non_flat_max_strength: float = 1.0       # s_max in s = s_max·tanh(ρ)
+    non_flat_per_edge_delta_max: float = 1.0  # δ_max bound on ‖δ_ij·G‖_F
+    non_flat_tile_size: int = 0               # 0 = no tiling; >0 = j-axis chunk size
+
+    # === Head mixer ===
+    # Schur-commutant per-irrep-type mixer applied after the E-step (and
+    # before normalization) inside every VFEBlock. Per type t with multiplicity
+    # n_t and dim d_t the parameter is A_t ∈ R^{n_t × n_t}; the action is
+    # μ ↦ kron(A_t, I_{d_t}) · μ and Σ ↦ M · Σ · M^T applied symmetrically.
+    # Initialized at identity (mixer_delta=0), so a fresh model with the
+    # mixer enabled is bitwise-equivalent to the mixer-disabled path at step 0.
+    # The mixer is strictly gauge-equivariant only under tied per-token
+    # gauges; /vfe satisfies this by construction (one φ_i per token, shared
+    # across heads via block-diagonal generators) — see CLAUDE.md.
+    use_equivariant_head_mixer: bool = False
+
+    # === Decode head ===
+    # True (default): PriorBank.decode computes logits = -KL(q || π_v) / τ,
+    #   reusing the same gauge-orbit prior used for encode (Law 3 — same
+    #   manifold for encode/infer/decode). No additional decode parameters.
+    # False: replace the decode head with a plain nn.Linear(K, V) projection
+    #   on mu_final only (sigma is ignored). This is the one documented
+    #   "neural" exception in CLAUDE.md ("The only retained neural component
+    #   is a linear output projection from K dimensions to vocabulary size").
+    #   Encode still uses the gauge-orbit PriorBank — the toggle controls
+    #   only the decode side.
+    use_prior_bank: bool = True
 
     # === Training ===
     learning_rate: float = 3e-4
@@ -198,6 +267,70 @@ class VFEConfig:
                 "rope_full_gauge='vfe_only' or 'both'. "
                 "Silent promotion was removed; set the flag explicitly."
             )
+
+        # --- Omega-direct parameterization constraints ---------------------
+        if self.gauge_parameterization not in ('phi', 'omega_direct'):
+            raise ValueError(
+                f"gauge_parameterization must be 'phi' or 'omega_direct'; "
+                f"got {self.gauge_parameterization!r}."
+            )
+        if self.gauge_parameterization == 'omega_direct':
+            if not self.diagonal_covariance:
+                raise ValueError(
+                    "gauge_parameterization='omega_direct' currently requires "
+                    "diagonal_covariance=True (the omega-direct path uses the "
+                    "same pairwise-Omega KL kernel as use_non_flat_transport, "
+                    "which is diagonal-σ only)."
+                )
+            if self.rope_full_gauge != 'off':
+                raise ValueError(
+                    "gauge_parameterization='omega_direct' is incompatible "
+                    f"with rope_full_gauge={self.rope_full_gauge!r}. RoPE × "
+                    "omega-direct on per-pair Σ is not derived."
+                )
+            if not self.use_autograd_mu_sigma:
+                import warnings
+                warnings.warn(
+                    "gauge_parameterization='omega_direct' forced "
+                    "use_autograd_mu_sigma=True (the analytic gradient kernel "
+                    "is φ-only; omega-direct needs autograd through the "
+                    "pairwise Ω construction). E-step iterations will be "
+                    "~40-60% slower than the φ + analytic kernel baseline.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                self.use_autograd_mu_sigma = True
+
+        # --- Non-flat transport constraints --------------------------------
+        if self.use_non_flat_transport:
+            if not self.diagonal_covariance:
+                raise ValueError(
+                    "use_non_flat_transport=True currently requires "
+                    "diagonal_covariance=True. Per-pair full-cov KL with "
+                    "logdet is not implemented for the non-flat path."
+                )
+            if self.rope_full_gauge != 'off':
+                raise ValueError(
+                    "use_non_flat_transport=True is incompatible with "
+                    f"rope_full_gauge={self.rope_full_gauge!r}. The RoPE × "
+                    "non-flat coupling on per-pair Σ has not been derived; "
+                    "set rope_full_gauge='off' or disable non-flat transport."
+                )
+            if not self.use_autograd_mu_sigma:
+                # Promote rather than reject — the analytic kernel simply
+                # doesn't have a non-flat path, but the autograd path does.
+                # Promotion is the unique correct behavior; warn so the user
+                # is aware of the cost (~+40-60% per E-step iteration).
+                import warnings
+                warnings.warn(
+                    "use_non_flat_transport=True forced "
+                    "use_autograd_mu_sigma=True (the analytic gradient kernel "
+                    "does not support non-flat transport). E-step iterations "
+                    "will be ~40-60% slower.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                self.use_autograd_mu_sigma = True
 
     @property
     def irrep_dims(self) -> List[int]:
