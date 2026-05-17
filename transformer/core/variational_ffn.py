@@ -1427,10 +1427,12 @@ class VariationalFFNDynamic(nn.Module):
         self,
         alpha_effective,
         omega_current: Optional[torch.Tensor],
+        beta_current: Optional[torch.Tensor],
+        beta_heads: Optional[list],
     ) -> None:
         r"""Store post-E-step state on ``self`` for the M-step.
 
-        Writes: ``_last_alpha_i``, ``_last_omega``.
+        Writes: ``_last_alpha_i``, ``_last_omega``, ``_last_beta``.
         """
         # Alpha
         if self.learnable_alpha:
@@ -2665,7 +2667,7 @@ class VariationalFFNDynamic(nn.Module):
             phi_current = phi_current.to(dtype)
 
         # Store post-E-step state for M-step
-        self._finalize_e_step(alpha_effective, omega_current)
+        self._finalize_e_step(alpha_effective, omega_current, beta_current, beta_heads)
 
         # ── EM boundary ──────────────────────────────────────────────────
         # In principled EM modes, q* is held fixed during the M-step.

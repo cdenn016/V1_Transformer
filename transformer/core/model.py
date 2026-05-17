@@ -1302,6 +1302,7 @@ class GaugeTransformerLM(nn.Module):
         stacked_kl = torch.stack(valid_kls, dim=0) if valid_kls else None
 
         # Retrieve adaptive alpha_i from last block's FFN (if learnable_alpha enabled)
+        last_block = self.transformer.blocks[-1]
         alpha_i = getattr(last_block.ffn, '_last_alpha_i', None)
 
         # =====================================================================
