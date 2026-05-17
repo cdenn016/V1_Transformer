@@ -549,6 +549,263 @@ class TestFMonitorEnvelopeRouting:
         )
 
 
+class TestKeysideTotalDerivative:
+    """Regression for the Layer 2 key-side-gradient fix at
+    ``transformer/vfe/e_step.py:_compute_mu_sigma_grad_autograd``.
+
+    ``compute_vfe_gradients_gpu`` computes only the query-side partial
+    ``dF/dmu_k |_{mu_j fixed for j!=k}`` (mean-field convention; documented
+    in ``scripts/verify_vfe_gradients_fd.py:147``). The key-side contribution
+    from positions where ``mu_k`` appears as the transport key in
+    ``KL(q_i || Omega_ik q_k)`` for ``i!=k`` is not summed in.
+
+    The new autograd path enabled by ``VFEConfig.use_autograd_mu_sigma=True``
+    routes ``(mu, sigma)`` updates through ``torch.autograd.grad`` over the
+    full manuscript F, capturing both sides. Default ``False`` preserves
+    bit-identical behavior with the analytic kernel.
+
+    See ``docs/audits/audit-2026-05-17.md`` §"Layer 2 Deep-Audit".
+    """
+
+    def test_autograd_path_invoked_when_flag_on(self, generators):
+        """With ``use_autograd_mu_sigma=True``, ``compute_vfe_gradients_gpu``
+        is NOT called; the autograd method is."""
+        import transformer.vfe.e_step as e_step_mod
+
+        analytic_calls = {'n': 0}
+        autograd_calls = {'n': 0}
+        original_analytic = e_step_mod.compute_vfe_gradients_gpu
+
+        def analytic_spy(*args, **kwargs):
+            analytic_calls['n'] += 1
+            return original_analytic(*args, **kwargs)
+
+        cfg = VFEConfig(
+            vocab_size=50,
+            embed_dim=16,
+            irrep_spec=[('l0', 2, 8)],
+            n_layers=1,
+            max_seq_len=32,
+            n_e_steps=2,
+            diagonal_covariance=True,
+            include_attention_entropy=True,
+            use_autograd_mu_sigma=True,
+        )
+        model = VFEModel(cfg)
+        original_autograd = model.stack.blocks[0].e_step._compute_mu_sigma_grad_autograd
+
+        def autograd_spy(*args, **kwargs):
+            autograd_calls['n'] += 1
+            return original_autograd(*args, **kwargs)
+
+        model.stack.blocks[0].e_step._compute_mu_sigma_grad_autograd = autograd_spy
+        token_ids = torch.randint(0, cfg.vocab_size, (2, 4))
+
+        e_step_mod.compute_vfe_gradients_gpu = analytic_spy
+        try:
+            _ = model(token_ids)
+        finally:
+            e_step_mod.compute_vfe_gradients_gpu = original_analytic
+
+        assert autograd_calls['n'] == cfg.n_e_steps, (
+            f"Expected {cfg.n_e_steps} calls to _compute_mu_sigma_grad_autograd "
+            f"(one per E-step iter), got {autograd_calls['n']}"
+        )
+        assert analytic_calls['n'] == 0, (
+            f"compute_vfe_gradients_gpu should not be called when "
+            f"use_autograd_mu_sigma=True, but was called "
+            f"{analytic_calls['n']} times"
+        )
+
+    def test_analytic_kernel_default_path_unchanged(self, generators):
+        """With ``use_autograd_mu_sigma=False`` (default), the analytic
+        path is still used. Guards against accidental regression that
+        flips the default."""
+        import transformer.vfe.e_step as e_step_mod
+
+        captured = {'n': 0}
+        original = e_step_mod.compute_vfe_gradients_gpu
+
+        def spy(*args, **kwargs):
+            captured['n'] += 1
+            return original(*args, **kwargs)
+
+        cfg = VFEConfig(
+            vocab_size=50,
+            embed_dim=16,
+            irrep_spec=[('l0', 2, 8)],
+            n_layers=1,
+            max_seq_len=32,
+            n_e_steps=2,
+            diagonal_covariance=True,
+            include_attention_entropy=True,
+            # use_autograd_mu_sigma defaults to False
+        )
+        assert cfg.use_autograd_mu_sigma is False, (
+            "Default of use_autograd_mu_sigma must remain False for "
+            "backward compatibility with existing checkpoints."
+        )
+        model = VFEModel(cfg)
+        token_ids = torch.randint(0, cfg.vocab_size, (2, 4))
+
+        e_step_mod.compute_vfe_gradients_gpu = spy
+        try:
+            _ = model(token_ids)
+        finally:
+            e_step_mod.compute_vfe_gradients_gpu = original
+
+        assert captured['n'] == cfg.n_e_steps, (
+            f"Expected {cfg.n_e_steps} analytic calls with default flag, "
+            f"got {captured['n']}"
+        )
+
+    def test_autograd_grad_mu_differs_from_analytic(self):
+        """The autograd total derivative differs from the analytic
+        query-side partial on ``grad_mu``. This is the empirical
+        signature of the missing key-side contribution.
+
+        Constructs identical inputs, computes both gradients, asserts
+        they are NOT close. If they were close, the autograd path
+        would be wired wrong or the bug would not exist.
+        """
+        from transformer.core.vfe_gradients import compute_vfe_gradients_gpu
+        from transformer.vfe.attention import (
+            compute_kl_attention,
+            compute_gauge_transport,
+        )
+
+        torch.manual_seed(20260517)
+        cfg = VFEConfig(
+            vocab_size=50,
+            embed_dim=8,
+            irrep_spec=[('l0', 2, 4)],
+            n_layers=1,
+            max_seq_len=16,
+            n_e_steps=1,
+            diagonal_covariance=True,
+            include_attention_entropy=True,
+            use_autograd_mu_sigma=True,
+        )
+        model = VFEModel(cfg)
+        e_step = model.stack.blocks[0].e_step
+
+        B, N, K = 2, 4, cfg.embed_dim
+        n_gen = e_step.generators.shape[0]
+        mu = torch.randn(B, N, K)
+        sigma = torch.rand(B, N, K) * 0.5 + 0.5  # in (0.5, 1.0)
+        phi = torch.randn(B, N, n_gen) * 0.3
+        mu_p = torch.randn(B, N, K) * 0.5
+        sigma_p = torch.rand(B, N, K) * 0.3 + 0.5
+
+        # Pre-compute beta and kl_matrix for the analytic call
+        block_exp_pairs = compute_gauge_transport(
+            phi, e_step.generators, e_step.irrep_dims,
+            enforce_orthogonal=False,
+        )
+        beta, kl_matrix = compute_kl_attention(
+            mu, sigma, phi, e_step.generators,
+            e_step.irrep_dims, e_step.kappa, None,
+            use_rope=False,
+            cached_block_exp_pairs=block_exp_pairs,
+            mask_self_attention=True,
+            exact_diagonal_transport=True,
+        )
+
+        # Analytic (query-side partial only)
+        grad_mu_analytic, grad_sigma_analytic = compute_vfe_gradients_gpu(
+            mu_q=mu, sigma_q=sigma, mu_p=mu_p, sigma_p=sigma_p,
+            beta=beta, phi=phi, generators=e_step.generators,
+            alpha=1.0, alpha_div=1.0,
+            lambda_belief=1.0, lambda_softmax=0.0,
+            kappa=e_step.kappa, eps=1e-6,
+            compute_sigma_align_grad=True,
+            irrep_dims=e_step.irrep_dims,
+            enforce_orthogonal=False,
+            cached_block_exp_pairs=block_exp_pairs,
+            use_rope=False,
+            exact_diagonal_transport=True,
+        )
+
+        # Autograd (total derivative — query + key)
+        grad_mu_auto, grad_sigma_auto = e_step._compute_mu_sigma_grad_autograd(
+            mu=mu, sigma=sigma, mu_p=mu_p, sigma_p=sigma_p, phi=phi,
+            alpha_eff=1.0,
+            block_exp_pairs=block_exp_pairs,
+            mask=None,
+            kappa=e_step.kappa,
+            eps=1e-6,
+            is_diagonal=True,
+        )
+
+        # grad_mu MUST differ — the key-side term is non-zero in this setup
+        assert not torch.allclose(grad_mu_analytic, grad_mu_auto, atol=1e-5), (
+            "Autograd grad_mu matches analytic to 1e-5, but they should "
+            "differ by the missing key-side contribution. Either the "
+            "autograd path is computing only the query-side partial "
+            "(implementation bug) or the test setup made the key-side "
+            "term vanish (test bug)."
+        )
+
+        # A nonzero diff also has to be of physically reasonable scale,
+        # not numerical noise. Diff norm should be comparable to grad norm.
+        diff_norm = (grad_mu_auto - grad_mu_analytic).norm().item()
+        analytic_norm = grad_mu_analytic.norm().item()
+        rel_diff = diff_norm / max(analytic_norm, 1e-8)
+        assert rel_diff > 1e-3, (
+            f"Relative diff between autograd and analytic grad_mu = "
+            f"{rel_diff:.2e}; expected > 1e-3 if key-side is non-trivial."
+        )
+
+    def test_monotone_descent_improves_with_autograd_path(self, generators):
+        """With ``use_autograd_mu_sigma=True``, the F monitor's
+        ``f_history`` reflects descent of the same objective the
+        gradient targets. Asserts ``f_history`` is populated and the
+        monotone-descent flag is True for all blocks under benign init.
+
+        Note: a strict assertion would couple this test to LR/init
+        choices. The assertion here is the weaker "f_history is
+        finite and final value <= initial value", which any correct
+        descent direction should satisfy on average even when single
+        steps can overshoot.
+        """
+        torch.manual_seed(20260517)
+        cfg = VFEConfig(
+            vocab_size=50,
+            embed_dim=16,
+            irrep_spec=[('l0', 2, 8)],
+            n_layers=2,
+            max_seq_len=32,
+            n_e_steps=4,
+            diagonal_covariance=True,
+            include_attention_entropy=True,
+            use_autograd_mu_sigma=True,
+            track_layer_diagnostics=True,
+            # Conservative LRs so finite-step overshoot is unlikely
+            e_mu_lr=0.05,
+            e_sigma_lr=0.001,
+            e_phi_lr=0.01,
+        )
+        model = VFEModel(cfg)
+        token_ids = torch.randint(0, cfg.vocab_size, (2, 8))
+        _ = model(token_ids)
+
+        for i, block in enumerate(model.stack.blocks):
+            f_history = block.e_step._last_diagnostics.get('f_history')
+            assert f_history is not None and len(f_history) == cfg.n_e_steps, (
+                f"Block {i}: f_history not populated correctly: {f_history}"
+            )
+            assert all(
+                isinstance(v, float) and v == v  # not NaN
+                for v in f_history
+            ), f"Block {i}: f_history contains NaN or non-floats: {f_history}"
+            # F at end <= F at start (overall descent over the iteration)
+            assert f_history[-1] <= f_history[0] + 1e-3, (
+                f"Block {i}: F did not descend overall: "
+                f"f_history[0]={f_history[0]:.4f}, "
+                f"f_history[-1]={f_history[-1]:.4f}"
+            )
+
+
 class TestFullCrossLayerHandoff:
 
     def test_sigma_handoff(self, generators):

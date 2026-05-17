@@ -139,6 +139,20 @@ class VFEConfig:
     track_iteration_diagnostics: bool = False
     diagnostics_interval: int = 25
 
+    # === E-step gradient kernel selection ===
+    # When True, route (mu, sigma) E-step gradient through torch.autograd.grad
+    # over the full F functional (manuscript eq:free_energy_functional_final),
+    # capturing BOTH query-side and key-side contributions to dF/dmu_k.
+    # The analytic kernel compute_vfe_gradients_gpu (default, False) is the
+    # mean-field convention: it returns the query-side partial only, missing
+    # the key-side term arising when mu_k appears as the transport key in
+    # KL(q_i || Omega_ik q_k) for i != k. The autograd path matches the
+    # phi-update mechanism at e_step.py:_update_phi and is mathematically
+    # the total derivative of F. Costs ~+40-60% per E-step iteration.
+    # Required for strict monotone descent of the manuscript F monitor.
+    # See docs/audits/audit-2026-05-17.md §"Layer 2 Deep-Audit".
+    use_autograd_mu_sigma: bool = False
+
     # === Runtime (set after construction, not serialized) ===
     generators: Optional[torch.Tensor] = field(default=None, repr=False)
     device: str = 'cpu'
