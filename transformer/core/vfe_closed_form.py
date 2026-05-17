@@ -117,6 +117,22 @@ def run_closed_form_e_step(
     Returns:
         (mu_current, sigma_current, phi_current, omega_current, beta_heads, beta_history_list)
     """
+    # 0. Exact diagonal transport: lift sigma to full (B,N,K,K) and route
+    # through the full-cov branch below. The diagonal CF branch extracts
+    # diag(Omega @ diag(sigma) @ Omega^T) correctly but then takes its
+    # element-wise inverse at line 184 — which discards off-diagonal
+    # information that the full-cov branch's Cholesky inverse preserves.
+    # When the caller sets `exact_diagonal_transport=True` on the FFN,
+    # honour the documented contract: lift, run the matrix-inverse path,
+    # then extract the diagonal at exit. Mirrors the iterative dispatch in
+    # `attention.py:283-285`.
+    _lifted_for_exact = False
+    if is_diagonal and getattr(ffn, 'exact_diagonal_transport', False) and sigma_current is not None:
+        sigma_current = torch.diag_embed(sigma_current)        # (B, N, K) -> (B, N, K, K)
+        sigma_p = torch.diag_embed(sigma_p)
+        is_diagonal = False
+        _lifted_for_exact = True
+
     # 1. Compute block exp pairs for transport
     _cf_bep = ffn._build_block_exp_pairs(
         phi_current, omega_current, B, N, device, dtype,
@@ -176,15 +192,32 @@ def run_closed_form_e_step(
             prior_prec_h = alpha_h * inv_sigma_p_h                # (B, N, d_h)
             prior_info_h = alpha_h * mu_p_h * inv_sigma_p_h       # (B, N, d_h)
 
-            # Alignment: precision-weighted transported aggregation
-            Omega_h_cf = torch.einsum('bikl,bjlm->bijkm', exp_phi_h, exp_neg_phi_h)  # (B, N, N, d_h, d_h)
+            # Alignment: precision-weighted transported aggregation.
+            #
+            # Both mu_j_t = Omega_ij @ mu_j and sigma_j_t_diag = diag(Omega_ij @
+            # diag(sigma_j) @ Omega_ij^T) are computed without materialising the
+            # full (B, N, N, d_h, d_h) Omega tensor. The mu path uses two
+            # sequential contractions; the sigma path uses a (m1, m2) outer
+            # product `S` that is O(B, N, d_h^2) instead. Peak memory in either
+            # path is (B, N, N, d_h) rather than (B, N, N, d_h^2), saving a
+            # factor of d_h vs. forming Omega explicitly.
+
+            # Transported means: rotate j into neutral frame, then into frame i.
+            rotated_mu_h = torch.einsum('bjkl,bjl->bjk', exp_neg_phi_h, mu_h)  # (B, N, d_h)
+            mu_j_t_cf = torch.einsum('bikl,bjl->bijk', exp_phi_h, rotated_mu_h)  # (B, N, N, d_h)
+
+            # Transported covariance diagonal:
+            #   diag(Omega_ij @ diag(sigma_j) @ Omega_ij^T)_k
+            #   = sum_{m1,m2} exp_phi_h[i,k,m1] * exp_phi_h[i,k,m2] *
+            #                 (sum_l exp_neg_phi_h[j,m1,l] * exp_neg_phi_h[j,m2,l] * sigma_j[l])
+            # Reduce over l first into the per-token (d_h, d_h) tensor S_j.
+            S_h = torch.einsum(
+                'bjml,bjnl,bjl->bjmn', exp_neg_phi_h, exp_neg_phi_h, sigma_h,
+            )  # (B, N, d_h, d_h)
             sigma_j_t_diag = torch.einsum(
-                'bijkl,bijkl,bjl->bijk', Omega_h_cf, Omega_h_cf, sigma_h
+                'bikm,bikn,bjmn->bijk', exp_phi_h, exp_phi_h, S_h,
             ).clamp(min=eps)  # (B, N, N, d_h)
             inv_sigma_j_t = 1.0 / sigma_j_t_diag  # (B, N, N, d_h)
-
-            # Transported means: Omega_ij @ mu_j
-            mu_j_t_cf = torch.einsum('bijkl,bjl->bijk', Omega_h_cf, mu_h)  # (B, N, N, d_h)
 
             # Information per pair: (Omega mu_j) / sigma_j_transported
             info_per_pair = mu_j_t_cf * inv_sigma_j_t  # (B, N, N, d_h)
@@ -222,7 +255,7 @@ def run_closed_form_e_step(
                 c_mu_h = 0.0
                 S_sigma_h = 0.0
 
-            del Omega_h_cf, sigma_j_t_diag, inv_sigma_j_t, mu_j_t_cf, info_per_pair
+            del S_h, sigma_j_t_diag, inv_sigma_j_t, mu_j_t_cf, info_per_pair
 
             # Enhanced fixed point
             total_prec_h = prior_prec_h + align_prec_h + S_mu_h    # A + S
@@ -410,12 +443,17 @@ def run_closed_form_e_step(
                     prior_prec_h = alpha_h_iter * inv_sigma_p_h
                     prior_info_h = alpha_h_iter * mu_p_h * inv_sigma_p_h
 
-                    Omega_h_cf = torch.einsum('bikl,bjlm->bijkm', exp_phi_h, exp_neg_phi_h)
+                    # Same Omega-free contraction pattern as the outer block;
+                    # see comments at the diagonal CF construction above.
+                    rotated_mu_h = torch.einsum('bjkl,bjl->bjk', exp_neg_phi_h, mu_h)
+                    mu_j_t_cf = torch.einsum('bikl,bjl->bijk', exp_phi_h, rotated_mu_h)
+                    S_h = torch.einsum(
+                        'bjml,bjnl,bjl->bjmn', exp_neg_phi_h, exp_neg_phi_h, sigma_h,
+                    )
                     sigma_j_t_diag = torch.einsum(
-                        'bijkl,bijkl,bjl->bijk', Omega_h_cf, Omega_h_cf, sigma_h
+                        'bikm,bikn,bjmn->bijk', exp_phi_h, exp_phi_h, S_h,
                     ).clamp(min=eps)
                     inv_sigma_j_t = 1.0 / sigma_j_t_diag
-                    mu_j_t_cf = torch.einsum('bijkl,bjl->bijk', Omega_h_cf, mu_h)
                     info_per_pair = mu_j_t_cf * inv_sigma_j_t
 
                     align_info_h = ffn.lambda_belief * torch.einsum('bij,bijk->bik', beta_h, info_per_pair)
@@ -446,7 +484,7 @@ def run_closed_form_e_step(
                         c_mu_h = 0.0
                         S_sigma_h = 0.0
 
-                    del Omega_h_cf, sigma_j_t_diag, inv_sigma_j_t, mu_j_t_cf, info_per_pair
+                    del S_h, sigma_j_t_diag, inv_sigma_j_t, mu_j_t_cf, info_per_pair
 
                     total_prec_h = prior_prec_h + align_prec_h + S_mu_h
                     total_info_h = prior_info_h + align_info_h - c_mu_h
@@ -656,5 +694,11 @@ def run_closed_form_e_step(
                     trace_clamp=getattr(ffn, 'phi_trace_clamp', None),
                     irrep_dims=getattr(ffn, 'irrep_dims', None),
                 )
+
+    # If we lifted diagonal sigma to a full (K,K) matrix at entry to honour
+    # `exact_diagonal_transport=True`, extract the diagonal so the caller's
+    # contract is preserved (the FFN expects diagonal sigma in diagonal mode).
+    if _lifted_for_exact and sigma_current is not None:
+        sigma_current = torch.diagonal(sigma_current, dim1=-2, dim2=-1).clamp(min=eps)
 
     return mu_current, sigma_current, phi_current, omega_current, beta_heads, beta_history_out

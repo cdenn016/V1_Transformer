@@ -284,6 +284,11 @@ class VariationalFFNDynamic(nn.Module):
         gradient_checkpoint_vfe: bool = False,  # Activation checkpointing for VFE loop (Finding 26)
         alpha_divergence: float = 1.0,   # Renyi alpha-divergence parameter (1.0 = KL)
         enforce_orthogonal: bool = False,  # If True, project Omega to SO(K) via Newton-Schulz
+        track_iteration_diagnostics: bool = False,  # Populate self._e_step_grad_norms on the final E-step
+                                                    # iteration. Defaults False because the dict-population
+                                                    # block costs several CUDA syncs (.cpu()/.item()) per
+                                                    # forward; trainers read self._e_step_grad_norms via
+                                                    # getattr-with-default so an empty dict is a safe no-op.
     ):
         """
         Initialize dynamic-beta VFE FFN.
@@ -370,6 +375,7 @@ class VariationalFFNDynamic(nn.Module):
         self.spd_floor_mode = spd_floor_mode
         self.propagate_kl_nonfinite = propagate_kl_nonfinite
         self.enforce_orthogonal = enforce_orthogonal
+        self.track_iteration_diagnostics = track_iteration_diagnostics
         self.detach_phi = detach_phi
         self.closed_form_e_step = closed_form_e_step
         self.e_step_early_exit_tol = e_step_early_exit_tol
@@ -592,6 +598,12 @@ class VariationalFFNDynamic(nn.Module):
             'nat_grad_mu': 0.0, 'nat_grad_sigma': 0.0, 'grad_phi': 0.0,
             'nat_grad_mu_clipped': 0.0, 'nat_grad_sigma_clipped': 0.0,
         }
+
+        # Identity-matrix cache for the per-head ridge regulariser inside
+        # `_compute_omega_grad_direct` / `_retract_omega`. Without this cache
+        # every hot-path call allocates a fresh `torch.eye(d, ...)` on the GPU,
+        # multiplied by `n_layers x n_iter x n_heads` per forward.
+        self._eye_cache: Dict[Tuple[int, torch.device, torch.dtype], torch.Tensor] = {}
 
         # Debug: set to True to print per-component gradient breakdown each E-step iteration.
         # Shows self-coupling, alignment, softmax, obs, Euclidean total, nat_grad amplification.
@@ -913,6 +925,21 @@ class VariationalFFNDynamic(nn.Module):
                 grad_phi
             )
 
+    def _get_eye(self, d: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        r"""Return a cached ``torch.eye(d)`` on ``(device, dtype)``.
+
+        Hot-path callers (per-head ridge regulariser inside
+        ``_compute_omega_grad_direct`` / ``_retract_omega``) execute
+        ``n_layers x n_iter x n_heads`` times per forward pass; without
+        this cache each invocation allocates a fresh GPU tensor.
+        """
+        key = (d, device, dtype)
+        eye = self._eye_cache.get(key)
+        if eye is None:
+            eye = torch.eye(d, device=device, dtype=dtype)
+            self._eye_cache[key] = eye
+        return eye
+
     # =================================================================
     # Direct Omega Gradient (No Lie Algebra / No matrix_exp)
     # =================================================================
@@ -958,7 +985,7 @@ class VariationalFFNDynamic(nn.Module):
         for d in irrep_dims:
             block_end = block_start + d
             om_blk = omega_for_grad[:, :, block_start:block_end, block_start:block_end]
-            _eye_d = torch.eye(d, device=om_blk.device, dtype=om_blk.dtype)
+            _eye_d = self._get_eye(d, om_blk.device, om_blk.dtype)
             om_blk_reg = om_blk + _ridge * _eye_d
             try:
                 om_inv_blk = torch.linalg.inv(om_blk_reg)
@@ -1104,7 +1131,7 @@ class VariationalFFNDynamic(nn.Module):
                 # Left-invariant pullback via solve instead of explicit inv for
                 # numerical stability.  ridge·I prevents catastrophic failure if
                 # om_blk drifts toward singular during training.
-                _eye = torch.eye(d, device=om_blk.device, dtype=om_blk.dtype)
+                _eye = self._get_eye(d, om_blk.device, om_blk.dtype)
                 om_reg = om_blk + _ridge * _eye
                 try:
                     xi_blk = torch.linalg.solve(om_reg, gr_blk)
@@ -1125,7 +1152,7 @@ class VariationalFFNDynamic(nn.Module):
 
         # Fallback: full K×K retraction (no irrep structure)
         K = omega.shape[-1]
-        _eye = torch.eye(K, device=omega.device, dtype=omega.dtype)
+        _eye = self._get_eye(K, omega.device, omega.dtype)
         om_reg = omega + _ridge * _eye
         try:
             xi = torch.linalg.solve(om_reg, grad_omega)
@@ -2213,8 +2240,12 @@ class VariationalFFNDynamic(nn.Module):
         grad_sigma = _ng['grad_sigma_clipped']
         mu_current = mu_current + _ng['mu_delta']
 
-        # Store E-step gradient norms (final iteration only to avoid CUDA sync)
-        if _is_final_iter:
+        # Store E-step gradient norms (final iteration only to avoid CUDA sync).
+        # Gated behind `track_iteration_diagnostics` because the body issues
+        # four .cpu()/.item() syncs per forward; trainers read
+        # self._e_step_grad_norms via .get(key, 0.0) so an unpopulated dict
+        # is a safe no-op for downstream consumers.
+        if _is_final_iter and self.track_iteration_diagnostics:
             _mu_norm = nat_grad_mu.detach().norm()
             _sig_norm = nat_grad_sigma.detach().norm()
             if is_diagonal:

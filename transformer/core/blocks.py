@@ -575,6 +575,7 @@ class GaugeTransformerBlock(nn.Module):
             gradient_checkpoint_vfe=cfg.gradient_checkpoint_vfe,
             alpha_divergence=getattr(cfg, 'alpha_divergence', 1.0),
             enforce_orthogonal=cfg.enforce_orthogonal,
+            track_iteration_diagnostics=getattr(cfg, 'track_iteration_diagnostics', False),
         )
         # EXPERIMENTAL: rope_full_gauge rotates Σ as well as μ in the KL.
         # Dispatch lives in the per-head VFE loop (_compute_multihead_vfe_gradients).
@@ -835,7 +836,7 @@ class GaugeTransformerBlock(nn.Module):
                 _omega_ridge = 1e-6
                 for d_h in irrep_dims:
                     omega_h = omega[:, :, block_start:block_start+d_h, block_start:block_start+d_h]
-                    _eye_dh = torch.eye(d_h, device=omega_h.device, dtype=omega_h.dtype)
+                    _eye_dh = self.ffn._get_eye(d_h, omega_h.device, omega_h.dtype)
                     omega_h_reg = omega_h + _omega_ridge * _eye_dh
                     try:
                         omega_h_inv = torch.linalg.inv(omega_h_reg)  # (B, N, d_h, d_h)

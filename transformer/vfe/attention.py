@@ -212,11 +212,18 @@ def aggregate_beliefs(
         if is_diagonal:
             sigma_h = sigma[:, :, block_start:block_end]  # (B, N, d_h)
 
-            # Transported covariance diagonal: diag(Omega @ diag(sigma) @ Omega^T)
-            # = sum_l Omega_kl^2 * sigma_l
-            omega_ij = torch.einsum('bikm,bjml->bijkl', exp_h, exp_neg_h)  # (B, N, N, d_h, d_h)
+            # Transported covariance diagonal: diag(Omega @ diag(sigma) @ Omega^T)_k
+            #   = sum_l Omega_kl^2 * sigma_l
+            #   = sum_{m1,m2} exp_h[i,k,m1] * exp_h[i,k,m2] *
+            #     (sum_l exp_neg_h[j,m1,l] * exp_neg_h[j,m2,l] * sigma_h[j,l])
+            # The (m1,m2) factorisation avoids materialising the full
+            # (B, N, N, d_h, d_h) pairwise Omega tensor; the (B, N, d_h, d_h)
+            # S_h intermediate is O(N) smaller than the full Omega.
+            S_h = torch.einsum(
+                'bjml,bjnl,bjl->bjmn', exp_neg_h, exp_neg_h, sigma_h,
+            )  # (B, N, d_h, d_h)
             sigma_transported_ij = torch.einsum(
-                'bijkl,bjl->bijk', omega_ij ** 2, sigma_h,
+                'bikm,bikn,bjmn->bijk', exp_h, exp_h, S_h,
             )  # (B, N, N, d_h)
 
             if mode == 'precision':
