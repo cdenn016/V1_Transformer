@@ -993,15 +993,15 @@ Communication between agents $i$ and $j$ is mediated by a gauge frame transport 
 
 which maps representations from agent $j$'s local frame into agent $i$'s frame. 
 
-The message (update) received by agent $i$ is then
+The value-aggregation output received by agent $i$ is the posterior mean of the mixture variational model under responsibilities $\beta_{ij}$ (derived formally in Section~\ref{sec:value_aggregation}):
 
 \begin{equation}
-m_i = \sum_j \beta_{ij} \,\Omega_{ij}\mu_j,
+\hat\mu_i = \sum_j \beta_{ij} \,\Omega_{ij}\mu_j,
 \end{equation}
 
-which is the gauge-theoretic analog of the attention aggregation $\sum_j \alpha_{ij} V_j$ in standard transformers.
+the gauge-theoretic analog of the attention aggregation $\sum_j \alpha_{ij} V_j$ in standard transformers.
 
-\subsection{Connection to Standard Transformers}
+\subsection{Connection to Standard Transformers}\label{sec:transformer_limit}
 
 The gauge-covariant attention $\beta_{ij} = \operatorname{softmax}(-D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)/\tau)$ derived in the preceding section is already a complete attention mechanism. Standard transformer attention is a special case, obtained by taking two successive limits: isotropic covariances (which separates the KL into a geometric bias and a Mahalanobis distance) and constant gauge transport (which eliminates the bias and yields the familiar $QK^\top / \sqrt{d_k}$ form). Our experiments (Section~\ref{sec:glk_lm}) implement the general model without these limits.
 
@@ -1215,12 +1215,12 @@ Combining all simplifications we have:
 
 recovering the standard transformer attention weighting rule, up to the key-norm bias term that cancels under the layer normalization or high-dimensional concentration conditions established above.
 
-\subsubsection{Value Aggregation}
+\subsubsection{Value Aggregation}\label{sec:value_aggregation}
 
 The mixture-of-sources generative model (Section~\ref{sec:mixture_derivation}) specifies that the component distribution for source $j$ in agent $i$'s frame has mean $\Omega_{ij}\mu_j$. The posterior mean under mixture responsibilities $\beta_{ij}$ is therefore:
 
 \begin{equation}
-m_i = \sum_j \beta_{ij}\, \Omega_{ij}\mu_j,
+\hat\mu_i = \sum_j \beta_{ij}\, \Omega_{ij}\mu_j,
 \label{eq:glk_mixture_aggregation}
 \end{equation}
 
@@ -1240,7 +1240,7 @@ where we absorb the gauge transport $\Omega$ into the learned matrix $W_V$.
 Then:
 
 \begin{equation}
-\boxed{m_i = \sum_j \beta_{ij} V_j},
+\boxed{\hat\mu_i = \sum_j \beta_{ij} V_j},
 \end{equation}
 
 identical to the standard transformer attention update $z_i = \sum_j \alpha_{ij} V_j$.
@@ -1250,7 +1250,7 @@ identical to the standard transformer attention update $z_i = \sum_j \alpha_{ij}
 Under our assumptions, framework, and limits, our gauge-theoretic message communication:
 
 \begin{equation}
-\beta_{ij} \propto \exp\left(-\frac{1}{\tau}D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)\right), \quad m_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j,
+\beta_{ij} \propto \exp\left(-\frac{1}{\tau}D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)\right), \quad \hat\mu_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j,
 \end{equation}
 
 reduces to:
@@ -1366,7 +1366,7 @@ In the limit $\lambda_{p,i} = \lambda_p$ the gradient of the free energy with re
 }
 \end{equation}
 
-The first term, $\lambda_p(\mu_i - \mu_{\text{prior}})$, as discussed, matches weight decay or L2 regularization. The second term, $\sum_j \frac{\beta_{ij}}{\sigma^2}(\Omega\Omega^\top)^{-1}(\mu_i - \Omega\mu_j)$, is attention-weighted message aggregation that pulls $\mu_i$ toward gauge-transported neighbors. The third term, $\sum_j \frac{\partial \beta_{ij}}{\partial \mu_i}\|\Omega^{-1}\mu_i - \mu_j\|^2/(2\sigma^2)$, represents gradient flow through the attention weights themselves---a manifestly non-linear ``activation'' that arises from differentiating the attention-weighted energy $\sum_j \beta_{ij} E_{ij}$ via the product rule (the autograd gradient). This term is absent from the gradient of the reduced free energy $\mathcal{F}_{\mathrm{red}}$ by the envelope theorem (Section~\ref{sec:final_free_energy}), but is present in standard autograd-based implementations that differentiate through the softmax. The fourth term, $-\frac{\partial \log p(o_i \mid \mu_i)}{\partial \mu_i}$, is the gradient of the loss function (i.e.\ the supervised learning signal).
+The first term, $\lambda_p(\mu_i - \mu_{\text{prior}})$, as discussed, matches weight decay or L2 regularization. The second term, $\sum_j \frac{\beta_{ij}}{\sigma^2}(\Omega\Omega^\top)^{-1}(\mu_i - \Omega\mu_j)$, is the gradient of the attention-weighted alignment energy with respect to $\mu_i$: it pulls $\mu_i$ toward its gauge-transported neighbors $\Omega_{ij}\mu_j$, and under natural-gradient preconditioning together with the covariance-alignment fixed point (Eq.~\ref{eq:natural_gradient_general} and the discussion following) the resulting step direction targets the mixture-posterior aggregation $\hat\mu_i$ of Eq.~\ref{eq:glk_mixture_aggregation}. The third term, $\sum_j \frac{\partial \beta_{ij}}{\partial \mu_i}\|\Omega^{-1}\mu_i - \mu_j\|^2/(2\sigma^2)$, represents gradient flow through the attention weights themselves---a manifestly non-linear ``activation'' that arises from differentiating the attention-weighted energy $\sum_j \beta_{ij} E_{ij}$ via the product rule (the autograd gradient). This term is absent from the gradient of the reduced free energy $\mathcal{F}_{\mathrm{red}}$ by the envelope theorem (Section~\ref{sec:final_free_energy}), but is present in standard autograd-based implementations that differentiate through the softmax. The fourth term, $-\frac{\partial \log p(o_i \mid \mu_i)}{\partial \mu_i}$, is the gradient of the loss function (i.e.\ the supervised learning signal).
 
 Since beliefs $q_i$ live on the Gaussian statistical manifold, the geometrically correct dynamics uses the natural gradient. The Euclidean gradient must be pre-conditioned by the inverse Fisher information metric which, for MVGs is $G_\mu^{-1} = \Sigma_i$ (see Supplementary Appendix~D for derivation). The natural gradient flow is:
 
@@ -1396,7 +1396,7 @@ In the isotropic limit $\Sigma_i = \sigma^2 I$, the Fisher preconditioning absor
 }
 \end{equation}
 
-The natural gradient recovers the standard transformer update rule. The alignment term $\sum_j \beta_{ij}\,\Omega\mu_j$ maps directly to the value aggregation $\sum_j \alpha_{ij} V_j$ without spurious $\sigma^{-2}$ factors. This is consistent with the E-step algorithm we implement, which applies Fisher preconditioning $\tilde{\nabla}_\mu \leftarrow \Sigma_i \cdot \nabla_\mu \mathcal{F}$.
+The natural gradient recovers the standard transformer update rule under a chain of limits. Fisher preconditioning with $\Sigma_i = \sigma^2 I$ cancels the scalar $\sigma^{-2}$ factors in the boxed update (Eq.~\ref{eq:residual_gradient_flow} above), leaving $\beta_{ij}(\Omega\Omega^\top)^{-1}(\mu_i - \Omega\mu_j)$. Absorbing $(\Omega\Omega^\top)^{-1}$ into the learned key/query projection $W_Q W_K^\top$ (Limit~2 of Section~\ref{sec:transformer_limit}) and the constant gauge $\Omega$ into $W_V$ (Limit~3) further reduces the step direction to $\sum_j \beta_{ij} V_j$, identifying it with the value aggregation $\sum_j \alpha_{ij} V_j$. This is consistent with the E-step algorithm we implement, which applies Fisher preconditioning $\tilde{\nabla}_\mu \leftarrow \Sigma_i \cdot \nabla_\mu \mathcal{F}$ without imposing the additional projection-absorption limits.
 
 \paragraph{General (non-isotropic) mean gradient.}
 The preceding expressions assumed isotropic covariances $\Sigma_i = \sigma^2 I$ and a shared gauge connection $\Omega$. We now state the fully general gradient, valid for arbitrary covariances $\Sigma_i$, edge-dependent gauge connections $\Omega_{ij}$, general prior precision $\Sigma_{p,i}^{-1}$, and state-dependent prior coupling $\alpha_i$ (Section~\ref{sec:state_dependent_precision}).
@@ -1576,7 +1576,7 @@ The identification $\ell \leftrightarrow$ gradient step makes the notion of ``de
 $\beta_{ij} \!=\! \softmax(-D_{\KL}/\tau)$ & Exact (Sec.~\ref{sec:mixture_derivation}) & $\softmax(QK^\top\!/\!\sqrt{d_k})$ & D \\
 $\Omega_{ij}\!=\!e^{\phi_i}e^{-\phi_j}\!\in\!\mathrm{GL}^+(K)$ & Constant $\Omega$ (Limit 2) & $W_Q W_K^\top\!=\!\sigma^{-2}\Omega^{-\top}$ & D \\
 Forward KL uniqueness & Thm.\ (Supp.~App.~H) & Why dot-product attention & D \\
-$m_i \!=\! \sum_j \beta_{ij}\Omega_{ij}\mu_j$ & $\Omega$ absorbed into $W_V$ & $\sum_j \alpha_{ij} V_j$ (value agg.) & D \\
+$\hat\mu_i \!=\! \sum_j \beta_{ij}\Omega_{ij}\mu_j$ & $\Omega$ absorbed into $W_V$ & $\sum_j \alpha_{ij} V_j$ (value agg.) & D \\
 $\mathrm{GL}(d_{\text{head}})^H \!\subset\! \mathrm{GL}(d_k)$ & Irrep decomposition & Multi-head attention & D \\
 \hline
 \multicolumn{4}{|l|}{\textit{Positional Structure}} \\
@@ -1787,7 +1787,7 @@ RoPE occupies an intermediate position in the gauge-theoretic framework:
 
 where each expression is the logit kernel $\sigma^{-2}\Omega_{ij}^{-\top}$ appearing in $\tilde{s}_{ij} = \mu_i^\top(\cdot)\mu_j$. Standard attention uses a constant, learned gauge with $W_Q W_K^\top = \sigma^{-2}\Omega^{-\top}$ (Limit~2 fully imposed). RoPE augments this with a fixed, position-dependent $\mathrm{SO}(2)^{d_k/2}$ rotation sandwiched between the projections (Limit~2 partially relaxed for positional information). The full gauge-theoretic framework allows the complete transport $\Omega_{ij}$ to be agent-pair-dependent and learned (Limit~2 fully relaxed). This hierarchy clarifies the design space such that positional encoding methods can be understood as choices about which subgroup of $\mathrm{GL}(K)$ carries position-dependent structure, and which components remain position-independent and learned from data.
 
-An important distinction is that RoPE applies the position-dependent gauge only to the attention computation (queries and keys) and not to the value aggregation. In our framework, the full gauge transport $\Omega_{ij}$ mediates both the attention score $D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ and the message aggregation $m_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j$. The asymmetry in RoPE with position-dependent attention but position-independent values corresponds to factoring the gauge transport into an attention gauge and a value gauge that need not coincide. This decomposition is supported (but not required) by the full framework.
+An important distinction is that RoPE applies the position-dependent gauge only to the attention computation (queries and keys) and not to the value aggregation. In our framework, the full gauge transport $\Omega_{ij}$ mediates both the attention score $D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ and the value aggregation $\hat\mu_i = \sum_j \beta_{ij} \Omega_{ij}\mu_j$. The asymmetry in RoPE with position-dependent attention but position-independent values corresponds to factoring the gauge transport into an attention gauge and a value gauge that need not coincide. This decomposition is supported (but not required) by the full framework.
 
 
 \subsection{Further Architectural Correspondences}
@@ -1802,7 +1802,7 @@ Standard transformers interleave attention sublayers with feedforward networks (
 
 \paragraph{Message passing as a gated linear unit.}
 
-Consider the message contribution of neighbor $j$ to the mean update (Eq.~\ref{eq:mu_gradient_general}):
+Consider the per-edge contribution of neighbor $j$ to the mean update (Eq.~\ref{eq:mu_gradient_general}):
 %
 \begin{equation}
 \Delta\mu_i\big|_j \;=\; -\tilde{\eta}\,\Sigma_i\,\beta_{ij}\,(\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1}\bigl(\mu_i - \Omega_{ij}\mu_j\bigr).
@@ -1810,14 +1810,14 @@ Consider the message contribution of neighbor $j$ to the mean update (Eq.~\ref{e
 \end{equation}
 %
 
-The message $e_{ij} \equiv \mu_i - \Omega_{ij}\mu_j$ is linear in the beliefs. The attention gate $\beta_{ij} = \operatorname{softmax}_j\!\bigl(-D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)/\tau\bigr)$ is manifestly a Boltzmann weight: each neighbor's contribution is weighted by $\exp(-E_{ij}/\tau)/Z_i$, where the energy $E_{ij} = D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ depends on the message magnitude through the Gaussian KL as:
+The residual $e_{ij} \equiv \mu_i - \Omega_{ij}\mu_j$ is linear in the beliefs. The attention gate $\beta_{ij} = \operatorname{softmax}_j\!\bigl(-D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)/\tau\bigr)$ is manifestly a Boltzmann weight: each neighbor's contribution is weighted by $\exp(-E_{ij}/\tau)/Z_i$, where the energy $E_{ij} = D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j)$ depends on the residual magnitude through the Gaussian KL as:
 %
 \begin{equation}
 D_{\mathrm{KL}}(q_i \| \Omega_{ij}q_j) = \tfrac{1}{2}\,e_{ij}^\top (\Omega_{ij}\Sigma_j\Omega_{ij}^\top)^{-1} e_{ij} + \text{(covariance terms)}.
 \label{eq:dkl_quadratic}
 \end{equation}
 %
-Each message's contribution therefore has the general structure:
+Each per-edge contribution therefore has the general structure:
 %
 \begin{equation}
 \boxed{\Delta\mu_i\big|_j \;\propto\; \underbrace{e_{ij}}_{\text{linear}} \;\cdot\; \underbrace{\frac{\exp\!\bigl(-\tfrac{1}{2\tau}\|e_{ij}\|^2_{\Sigma_j^{-1}} + \cdots\bigr)}{\sum_k \exp\!\bigl(-\tfrac{1}{2\tau}\|e_{ik}\|^2_{\Sigma_k^{-1}} + \cdots\bigr)}}_{\text{Boltzmann gate}},}
