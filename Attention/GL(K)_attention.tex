@@ -943,6 +943,22 @@ $b_0$ controls the sensitivity such that large $b_0$ yield approximately constan
 
 In our experiments we study both $R(\alpha_i) \neq 0$ and $R(\alpha_i) = 0$ with $\alpha_i = \alpha = 1$.
 
+\paragraph{Product-rule chain at autograd time.}
+
+The closed-form Eq.~\eqref{eq:state_dependent_alpha} makes $\alpha_i^*$ a function of the belief through $D_{\mathrm{KL}}(q_i \| p_i)$. Differentiating with respect to any belief parameter $\theta \in \{\mu_i, \Sigma_i\}$ gives
+\begin{equation}
+\frac{\partial \alpha_i^*}{\partial \theta} = -\frac{(\alpha_i^*)^2}{c_0} \frac{\partial D_{\mathrm{KL}}(q_i \| p_i)}{\partial \theta}.
+\label{eq:alpha_chain_rule}
+\end{equation}
+Applying the product rule to the self-coupling term $\alpha_i^* D_{\mathrm{KL}}(q_i \| p_i)$ gives
+\begin{equation}
+\frac{\partial}{\partial \theta}\bigl(\alpha_i^* D_{\mathrm{KL}}(q_i \| p_i)\bigr) = \alpha_i^* \frac{\partial D_{\mathrm{KL}}}{\partial \theta} - \frac{(\alpha_i^*)^2}{c_0} D_{\mathrm{KL}} \frac{\partial D_{\mathrm{KL}}}{\partial \theta} = (\alpha_i^*)^2 \frac{b_0}{c_0} \frac{\partial D_{\mathrm{KL}}}{\partial \theta},
+\label{eq:alpha_product_rule}
+\end{equation}
+where the second equality uses $\alpha_i^*/c_0 = 1/(b_0 + D_{\mathrm{KL}})$ to collapse the bracket $1 - (\alpha_i^*/c_0) D_{\mathrm{KL}}$ to $b_0/(b_0 + D_{\mathrm{KL}})$. The effective autograd prefactor on $\partial D_{\mathrm{KL}}/\partial \theta$ is therefore $(\alpha_i^*)^2 b_0/c_0$ rather than the envelope-form $\alpha_i^*$ alone.
+
+By the envelope theorem (Section~\ref{sec:final_free_energy}) the explicit $\partial \alpha_i/\partial \theta$ contribution vanishes from the gradient of the reduced free energy $\mathcal{F}_{\mathrm{red}}$ when $\alpha_i$ is held at $\alpha_i^*$. Autograd-based implementations that differentiate through $\alpha_i^*(\mu_i, \Sigma_i)$ along with $D_{\mathrm{KL}}$ pick up the correction in Eq.~\eqref{eq:alpha_product_rule}, which closes the chain rule on the $\partial \alpha_i/\partial \mu_i$ and $\partial \alpha_i/\partial \Sigma_i$ slots in Eq.~\eqref{eq:natural_gradient_general}. Our reference implementation evaluates the corrected form (`transformer/core/vfe_gradients.py`); the constant-$\alpha$ specialisation $\alpha_i = 1$ collapses both the closed-form and the chain-rule correction.
+
 
 \subsection{Belief Dynamics}
 
@@ -1003,7 +1019,7 @@ the gauge-theoretic analog of the attention aggregation $\sum_j \alpha_{ij} V_j$
 
 \subsection{Connection to Standard Transformers}\label{sec:transformer_limit}
 
-The gauge-covariant attention $\beta_{ij} = \operatorname{softmax}(-D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)/\tau)$ derived in the preceding section is already a complete attention mechanism. Standard transformer attention is recovered as a special case along either of two equivalent routes. The first route (Section~\ref{sec:untied_qk}) retains $\Omega_{ij} = U_iU_j^{-1}$ non-trivially throughout and exposes untied query-key projections $Q_i = U_i^{-1}\mu_i$, $K_j = U_j^\top\Sigma_j^{-1}\mu_j$ directly from the transported KL, with the implicit pair-dependent bilinear ranging over $\mathrm{GL}(d_k)$ as the per-token frames and precisions vary; this route is structurally minimal in the sense that no object beyond the existing belief and frame fields is introduced. The second route (Section~\ref{sec:dot_product_derivation}) takes three successive limits---isotropic covariances, shared frames giving trivial pairwise transport $\Omega_{ij} = I$, and a learned shared bilinear compatibility $M = W_QW_K^\top$ acting on the means---which yields the familiar $QK^\top / \sqrt{d_k}$ form with $M$ as a separate object that fills the cross-coupling slot vacated by the trivial transport. The two routes coincide on standard scaled dot-product attention; the first additionally captures the rotary positional structure of modern transformers without introducing extraneous fields. Our experiments (Section~\ref{sec:glk_lm}) implement the general gauge model without these limits.
+The gauge-covariant attention $\beta_{ij} = \operatorname{softmax}(-D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)/\tau)$ derived in the preceding section is already a complete attention mechanism. Standard transformer attention is recovered as a special case along either of two equivalent routes. The first route (Section~\ref{sec:untied_qk}) retains $\Omega_{ij} = U_iU_j^{-1}$ non-trivially throughout and exposes untied query-key projections $Q_i = U_i^{-1}\mu_i$, $K_j = U_j^\top\Sigma_j^{-1}\mu_j$ directly from the transported KL, with the implicit pair-dependent bilinear ranging over $\mathrm{GL}(d_k)$ as the per-token frames and precisions vary; this route is structurally minimal in the sense that no object beyond the existing belief and frame fields is introduced. The second route (Section~\ref{sec:dot_product_derivation}) takes three successive limits: isotropic covariances, shared frames giving trivial pairwise transport $\Omega_{ij} = I$, and a learned shared bilinear compatibility $M = W_QW_K^\top$ acting on the means. This yields the familiar $QK^\top / \sqrt{d_k}$ form with $M$ as a separate object that fills the cross-coupling slot vacated by the trivial transport. The two routes coincide on standard scaled dot-product attention; the first additionally captures the rotary positional structure of modern transformers without introducing extraneous fields. Our experiments (Section~\ref{sec:glk_lm}) implement the general gauge model without these limits.
 
 \paragraph{Deterministic Beliefs via Scaled Limit.}
 
@@ -1034,7 +1050,23 @@ The Mahalanobis quadratic form can be simplified using the identity $(\Omega_{ij
 \label{eq:mahalanobis_identity}
 \end{equation}
 
-This identity has the interpretation that rather than transporting the key belief into the query's frame via $\Omega_{ij}$ and measuring with the induced metric, the KL divergence equivalently transports the query into the key's frame via $\Omega_{ij}^{-1}$ and measures the Euclidean distance there. Either perspective is appropriate.  The Mahalanobis metric automatically accounts for the distortion introduced by gauge transport. 
+This identity has the interpretation that rather than transporting the key belief into the query's frame via $\Omega_{ij}$ and measuring with the induced metric, the KL divergence equivalently transports the query into the key's frame via $\Omega_{ij}^{-1}$ and measures the Euclidean distance there. Either perspective is appropriate.  The Mahalanobis metric automatically accounts for the distortion introduced by gauge transport.
+
+\paragraph{Generalisation to R\'enyi $\alpha$-divergence.}
+
+The construction above uses the KL divergence as the alignment functional. The framework extends without change to the one-parameter R\'enyi family $D_\alpha(q \| p)$ with order $\alpha \in (0, \infty) \setminus \{1\}$, and the $\alpha \to 1$ limit recovers the KL. For independent diagonal Gaussians with $q = \mathcal{N}(\mu_q, \mathrm{diag}(\sigma_q))$ and $p = \mathcal{N}(\mu_p, \mathrm{diag}(\sigma_p))$, the R\'enyi divergence admits the closed form
+\begin{equation}
+D_\alpha(q \| p) = \frac{1}{2}\left[ \alpha \sum_k \frac{(\mu_p^k - \mu_q^k)^2}{\tilde\sigma_k} + \frac{1}{\alpha - 1} \sum_k \left((1-\alpha)\log \sigma_q^k + \alpha \log \sigma_p^k - \log \tilde\sigma_k\right) \right],
+\label{eq:renyi_diagonal}
+\end{equation}
+with the blended variance $\tilde\sigma_k = (1-\alpha)\sigma_q^k + \alpha\sigma_p^k$. The full-covariance generalisation follows by replacing the per-coordinate blend with the matrix blend $\tilde\Sigma = (1-\alpha)\Sigma_q + \alpha \Sigma_p$ and reading the log-determinant and Mahalanobis terms off the analogous closed form. The transported-key version is obtained by substituting $(\mu_p, \Sigma_p) \to (\Omega_{ij}\mu_j, \Omega_{ij}\Sigma_j\Omega_{ij}^\top)$, exactly as in the KL case.
+
+The attention construction is unchanged in form:
+\begin{equation}
+\beta_{ij}^{(\alpha)} = \mathrm{softmax}_j\left(-\frac{D_\alpha(q_i \| \Omega_{ij} q_j)}{\tau}\right),
+\label{eq:renyi_attention}
+\end{equation}
+with the KL row $\alpha = 1$ as the standard limit and other values selecting different mass/coverage trade-offs (e.g., $\alpha = 1/2$ recovers the Bhattacharyya coefficient up to a sign). All gradient derivations above carry over by replacing $\partial D_{\mathrm{KL}}/\partial \theta$ with $\partial D_\alpha/\partial \theta$; the additional product-rule term in Eq.~\eqref{eq:alpha_product_rule} retains its form with $D_{\mathrm{KL}} \to D_\alpha$. Our reference implementation exposes the order $\alpha$ through the per-block configuration option (\texttt{alpha\_divergence} in \texttt{transformer/core/block\_config.py}); the diagonal closed form Eq.~\eqref{eq:renyi_diagonal} is the kernel evaluated inside the attention path and the iterative belief updates, with a Taylor branch near $\alpha = 1$ for numerical stability.
 
 \paragraph{Isotropic attention with general gauge transport.}
 
